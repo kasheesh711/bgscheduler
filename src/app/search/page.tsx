@@ -4,10 +4,9 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { SlotInput } from "@/components/search/slot-input";
+import { SlotBuilder } from "@/components/search/slot-builder";
 import { SlotChips } from "@/components/search/slot-chips";
 import { ResultsView } from "@/components/search/results-view";
-import { parseSlotInput } from "@/lib/search/parser";
 import type { SearchSlot, SearchResponse, SearchMode } from "@/lib/search/types";
 
 export default function SearchPage() {
@@ -20,12 +19,9 @@ export default function SearchPage() {
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [parseWarnings, setParseWarnings] = useState<string[]>([]);
 
-  const handleParse = (input: string) => {
-    const result = parseSlotInput(input, modeFilter);
-    setSlots((prev) => [...prev, ...result.slots]);
-    setParseWarnings(result.warnings);
+  const handleAddSlot = (slot: SearchSlot) => {
+    setSlots((prev) => [...prev, slot]);
   };
 
   const handleRemoveSlot = (id: string) => {
@@ -85,31 +81,28 @@ export default function SearchPage() {
           <div className="flex gap-2">
             <Button
               variant={searchMode === "recurring" ? "default" : "outline"}
-              onClick={() => setSearchMode("recurring")}
+              onClick={() => {
+                setSearchMode("recurring");
+                setSlots([]);
+              }}
               size="sm"
             >
               Recurring Weekly
             </Button>
             <Button
               variant={searchMode === "one_time" ? "default" : "outline"}
-              onClick={() => setSearchMode("one_time")}
+              onClick={() => {
+                setSearchMode("one_time");
+                setSlots([]);
+              }}
               size="sm"
             >
               One-Time
             </Button>
           </div>
 
-          {/* Slot input */}
-          <SlotInput onParse={handleParse} />
-
-          {/* Parse warnings */}
-          {parseWarnings.length > 0 && (
-            <div className="text-sm text-yellow-700">
-              {parseWarnings.map((w, i) => (
-                <div key={i}>{w}</div>
-              ))}
-            </div>
-          )}
+          {/* Structured slot builder */}
+          <SlotBuilder searchMode={searchMode} onAdd={handleAddSlot} />
 
           {/* Slot chips */}
           <SlotChips slots={slots} onRemove={handleRemoveSlot} />
