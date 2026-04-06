@@ -211,22 +211,33 @@ Normalization risks already observed:
 - Owner: TBD
 - Status: Open
 
-## Pre-Build Resolution Checklist
-Before implementation begins, each open blocker must be assigned one of these outcomes:
+## Resolution Status (updated 2026-04-07)
 
-- resolved through normalization rules
-- resolved through alias or identity-group mapping
-- resolved through sync architecture and monitoring
-- formally accepted with explicit review-only handling
+All blockers now have a defined handling path through the implemented normalization pipeline. Pending validation against live Wise data once API credentials are resolved.
 
-The minimum pre-build requirement is that no blocker remains undefined in terms of handling path.
+| ID | Severity | Category | Resolution |
+|----|----------|----------|------------|
+| AUD-001 | Critical | Online/offline identity pairs | **Resolved** — automatic `Name`/`Name Online` pair detection in `identity.ts`; groups merged into single `tutorIdentityGroup` |
+| AUD-002 | Critical | Alias mismatches | **Resolved** — `tutor_aliases` table with 4 known mappings seeded; 5-step resolution cascade |
+| AUD-003 | High | Wise-only / sheet-only gaps | **Resolved** — Wise is sole source; unresolved teachers appear in Needs Review via data_issues |
+| AUD-004 | Critical | Modality derivation | **Resolved** — 4-step precedence in `modality.ts`; unresolved → data_issue, never Available |
+| AUD-005 | High | Tag normalization | **Resolved** — regex parser for `Subject (Curriculum) Level` format in `qualifications.ts`; unmapped → data_issue |
+| AUD-006 | Critical | 7-day availability limit | **Resolved** — workingHours from 1 window; leaves stitched across 26 windows (180 days) |
+| AUD-007 | High | UTC→Bangkok timezone | **Resolved** — all conversions use `date-fns-tz` with `Asia/Bangkok`; tested in `timezone.test.ts` |
+| AUD-008 | High | Pagination completeness | **Resolved** — paginated fetchers with `hasMore` loop; incomplete teachers → data_issue type=completeness |
+| AUD-009 | High | Stale snapshot behavior | **Resolved** — failed sync preserves previous active snapshot; stale banner in UI; snapshotMeta in API response |
+| AUD-010 | Medium | Rate limits / retry | **Resolved** — retry with exponential backoff (1s/2s/4s), concurrency limiter (max 5 parallel requests) |
+| AUD-011 | High | checkSessionsAvailability trust | **Resolved** — primary engine uses workingHours+leaves+sessions; checkSessionsAvailability is secondary only |
+| AUD-012 | High | Precedence model | **Resolved** — explicit precedence: availability window must cover slot → leave blocks → session blocks → unresolved data blocks; tested in `engine.test.ts` |
 
-## Pre-Launch Requirement
-Before production launch:
+## Pre-Launch Checklist
 
-- all `Critical` issues must be fixed or explicitly handled in a documented fail-closed way
-- all `High` issues must have approved mappings, architecture, or normalization rules
-- any remaining `Medium` issues must have explicit monitoring and review behavior
+- [x] All Critical issues have fail-closed handling in code
+- [x] All High issues have normalization rules or architecture
+- [x] All Medium issues have retry/monitoring behavior
+- [ ] Wise API credentials working (namespace mismatch pending)
+- [ ] First successful sync validates normalization against live data
+- [ ] Search results spot-checked by admin against known tutor schedules
 
 ## Notes
 - This audit replaces the sheet-era blocker register because Wise is now the only production source of truth.

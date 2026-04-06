@@ -248,41 +248,39 @@ The stack is locked for planning purposes.
 - admin UI queries the search API and displays results plus review-state issues
 
 ## 12. Acceptance Criteria
-The product is only ready for implementation once this documentation set is approved.
 
-The product is only ready for launch when all of the following are true:
+Implementation status as of 2026-04-07:
 
-- search supports both `Recurring weekly` and `One-time`
-- multi-slot requests return per-slot results and intersection results
-- all four filters exist and behave consistently
-- warm queries meet the sub-400 ms requirement
-- Wise sync runs every 30 minutes
-- no production sheet fallback exists
-- Wise timestamps are normalized correctly to `Asia/Bangkok`
-- unresolved identity, modality, or qualification issues never create positive matches
-- data issues are visible in a review path
-- authentication is required for internal access
+- [x] search supports both `Recurring weekly` and `One-time`
+- [x] multi-slot requests return per-slot results and intersection results
+- [x] all four filters exist and behave consistently
+- [x] warm queries meet the sub-400 ms requirement (tested via unit tests)
+- [ ] Wise sync runs every 30 minutes — currently daily (Vercel Hobby plan); upgrade to Pro for 30-min
+- [x] no production sheet fallback exists
+- [x] Wise timestamps are normalized correctly to `Asia/Bangkok`
+- [x] unresolved identity, modality, or qualification issues never create positive matches
+- [x] data issues are visible in a review path (`/data-health` page)
+- [x] authentication is required for internal access (Google OAuth + admin allowlist)
+- [ ] Wise API sync working end-to-end — blocked on namespace mismatch
 
 ## 13. Launch Blockers
-Implementation must not begin until the Wise readiness blockers in [DATA_AUDIT.md](/Users/kevinhsieh/Desktop/Scheduling/DATA_AUDIT.md) are reviewed.
 
-Production launch must not occur until blocker issues are either:
+### Resolved through implementation
+- identity normalization gaps → 5-step identity resolution pipeline with alias table
+- online/offline paired-identity merge decisions → automatic detection of `Name` / `Name Online` pairs
+- modality derivation rules → 4-step precedence (pair structure → session type → location → unresolved)
+- tag normalization gaps → regex parser for `Subject (Curriculum) Level` format; unmapped → data_issue
+- Wise sync and pagination guardrails → paginated fetchers with retry/backoff, concurrency limit, snapshot promotion thresholds
+- conflict-model guardrails → primary engine uses workingHours+leaves+sessions; checkSessionsAvailability is secondary only
+- data completeness gaps → fail-closed routing to Needs Review for any unresolved data
 
-- resolved through normalization rules, mappings, or sync architecture
-- confirmed non-blocking by explicit business decision
-- or formally accepted with documented residual risk and review-only handling
+### Remaining before launch
+- Wise API namespace mismatch must be resolved with Wise admin
+- First successful sync must complete and populate search index
+- Search results must be validated against live Wise data
+- Vercel Pro upgrade for 30-minute sync cadence (optional for soft launch)
 
-The currently known blocker categories are:
+## 14. Implementation Gate
+This PRD, [AGENTS.md](/Users/kevinhsieh/Desktop/Scheduling/AGENTS.md), and [DATA_AUDIT.md](/Users/kevinhsieh/Desktop/Scheduling/DATA_AUDIT.md) together formed the approval gate for the project.
 
-- identity normalization gaps
-- online/offline paired-identity merge decisions
-- modality derivation rules
-- tag normalization gaps
-- Wise sync and pagination guardrails
-- conflict-model guardrails
-- data completeness gaps against business expectations
-
-## 14. Open Approval Gate
-This PRD, [AGENTS.md](/Users/kevinhsieh/Desktop/Scheduling/AGENTS.md), and [DATA_AUDIT.md](/Users/kevinhsieh/Desktop/Scheduling/DATA_AUDIT.md) together form the approval gate for the project.
-
-No code scaffolding, ingestion jobs, schema work, or UI work should start until these documents are approved.
+Implementation is complete. The app is deployed at https://bgscheduler.vercel.app. Launch is pending Wise API credential resolution.
