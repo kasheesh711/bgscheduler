@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/internal/sync-wise",
-      "schedule": "*/30 * * * *"
+      "schedule": "0 */6 * * *"
     }
   ]
 }
