@@ -29,7 +29,7 @@ export class WiseClient {
     this.userId = config.userId;
     this.apiKey = config.apiKey;
     this.namespace = config.namespace;
-    this.baseUrl = config.baseUrl ?? "https://api.wiseattend.com/api/v1";
+    this.baseUrl = config.baseUrl ?? "https://api.wiseapp.live/api/v1";
     this.maxConcurrency = config.maxConcurrency ?? 5;
     this.maxRetries = config.maxRetries ?? 3;
   }
