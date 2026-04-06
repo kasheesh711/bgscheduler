@@ -5,13 +5,13 @@
 - **Production URL**: https://bgscheduler.vercel.app
 - **Repo**: https://github.com/kasheesh711/bgscheduler
 - **Database**: Neon Postgres (ap-southeast-1)
-- **Wise API**: https://api.wiseapp.live/api/v1 (Basic Auth + x-api-key)
+- **Wise API**: https://api.wiseapp.live
 - **Wise namespace**: `begifted-education`
 - **Wise institute**: `696e1f4d90102225641cc413`
 
-## Current Blocker
+## Current Status
 
-Wise API returns "Namespace mismatch" despite confirmed namespace `begifted-education`. Auth headers (Basic Auth base64 of userId:apiKey, x-api-key, user-agent VendorIntegrations/namespace) pass authentication (401→400) but namespace validation fails. Waiting on Wise admin to resolve credential-namespace binding.
+Wise credentials and namespace are valid. The previous blocker was client-side contract drift: the app was using the wrong base path, outdated header names, outdated availability/session query params, and outdated response parsing. The remaining task is to verify a repaired live sync and confirm snapshot promotion.
 
 ## Running Commands
 

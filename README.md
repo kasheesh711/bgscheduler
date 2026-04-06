@@ -1,36 +1,93 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Tutor Availability Search Tool
 
-## Getting Started
+Internal admin app for searching tutor availability from normalized Wise snapshots.
 
-First, run the development server:
+## Current Status
+
+- Production app: [https://bgscheduler.vercel.app](https://bgscheduler.vercel.app)
+- Repo: [https://github.com/kasheesh711/bgscheduler](https://github.com/kasheesh711/bgscheduler)
+- Stack: Next.js 16 App Router, TypeScript, Tailwind, shadcn/ui, Auth.js, Drizzle, Neon Postgres, Vercel
+- Test status: 70 passing Vitest tests
+- Wise status: credentials and namespace are valid; the client contract drift has been repaired locally
+- Remaining launch work:
+  - run a successful DB-backed Wise sync
+  - validate live search results against Wise data
+  - upgrade Vercel to Pro for 30-minute cron cadence if needed
+
+## Product Rules
+
+- Wise is the only production source of truth.
+- Search runs on normalized, persisted Wise snapshots plus a warm in-memory index.
+- Never return a tutor as available unless availability is provable from Wise-derived data.
+- Unresolved identity, modality, or qualification must route to `Needs Review`, never `Available`.
+- Cancelled sessions must not block availability.
+- All times are normalized to `Asia/Bangkok`.
+
+## Wise API Contract
+
+The live Wise integration currently expects:
+
+- Base URL: `https://api.wiseapp.live`
+- Headers:
+  - `Authorization: Basic <base64(userId:apiKey)>`
+  - `x-api-key: <apiKey>`
+  - `x-wise-namespace: begifted-education`
+  - `user-agent: VendorIntegrations/begifted-education`
+
+Important live payload details:
+
+- `GET /institutes/{centerId}/teachers` returns `data.teachers`
+- teacher identity is nested under `teacher.userId._id` and `teacher.userId.name`
+- `GET /institutes/{centerId}/teachers/{wiseUserId}/availability` expects `startTime` and `endTime`
+- availability is returned under `data.workingHours` and `data.leaves`
+- `workingHours.slots[].day` can be weekday strings like `"Sunday"`
+- `GET /institutes/{centerId}/sessions` expects `paginateBy=COUNT&page_number=...&page_size=...`
+- sessions are returned under `data.sessions`
+
+## Local Development
+
+Install dependencies and run the app:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Required environment variables:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+DATABASE_URL=
+AUTH_GOOGLE_ID=
+AUTH_GOOGLE_SECRET=
+AUTH_SECRET=
+WISE_USER_ID=
+WISE_API_KEY=
+WISE_NAMESPACE=begifted-education
+WISE_INSTITUTE_ID=696e1f4d90102225641cc413
+CRON_SECRET=
+```
 
-## Learn More
+## Useful Commands
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm test
+npm run db:generate
+npm run db:migrate
+npm run db:seed
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Manual sync trigger:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+curl -X POST https://bgscheduler.vercel.app/api/internal/sync-wise \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
 
-## Deploy on Vercel
+## Documentation
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [AGENTS.md](/Users/kevinhsieh/Desktop/Scheduling/AGENTS.md): current implementation inventory and operating rules
+- [PRD.md](/Users/kevinhsieh/Desktop/Scheduling/PRD.md): product requirements and launch status
+- [DATA_AUDIT.md](/Users/kevinhsieh/Desktop/Scheduling/DATA_AUDIT.md): Wise readiness and blocker resolution status
+- [WISE_COMPARISON.md](/Users/kevinhsieh/Desktop/Scheduling/WISE_COMPARISON.md): migration decision record from sheets to Wise

@@ -11,6 +11,8 @@ It is not the active production specification. The active production-spec docume
 
 This comparison explains why production truth has been moved to the Wise API and why Google Sheets and local `.xlsx` exports are now reference material only.
 
+As of 2026-04-07, the live Wise credentials and namespace have been re-validated against the current Wise API contract. The remaining operational work is rollout and live sync verification, not tenant-side namespace resolution.
+
 ## Purpose
 This document records a read-only comparison between the former spreadsheet-based workflow and the Wise API for tutor availability search.
 

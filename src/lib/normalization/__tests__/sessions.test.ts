@@ -75,4 +75,26 @@ describe("normalizeSessions", () => {
     const result = normalizeSessions(sessions, () => null);
     expect(result).toHaveLength(0);
   });
+
+  it("supports resolving the teacher from a nested Wise user object", () => {
+    const sessions: WiseSession[] = [
+      {
+        _id: "s1",
+        userId: {
+          _id: "u1",
+          name: "Teacher Name",
+        },
+        scheduledStartTime: "2024-01-15T02:00:00Z",
+        scheduledEndTime: "2024-01-15T03:00:00Z",
+        meetingStatus: "CANCELLED",
+      },
+    ];
+
+    const result = normalizeSessions(sessions, (s) =>
+      typeof s.userId === "object" ? s.userId._id : null
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].wiseTeacherId).toBe("u1");
+    expect(result[0].isBlocking).toBe(false);
+  });
 });

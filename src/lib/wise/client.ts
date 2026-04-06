@@ -29,17 +29,19 @@ export class WiseClient {
     this.userId = config.userId;
     this.apiKey = config.apiKey;
     this.namespace = config.namespace;
-    this.baseUrl = config.baseUrl ?? "https://api.wiseapp.live/api/v1";
+    this.baseUrl = config.baseUrl ?? "https://api.wiseapp.live";
     this.maxConcurrency = config.maxConcurrency ?? 5;
     this.maxRetries = config.maxRetries ?? 3;
   }
 
   private get headers(): Record<string, string> {
+    const credentials = Buffer.from(`${this.userId}:${this.apiKey}`).toString("base64");
     return {
       "Content-Type": "application/json",
-      "x-user-id": this.userId,
+      Authorization: `Basic ${credentials}`,
       "x-api-key": this.apiKey,
-      "x-namespace": this.namespace,
+      "x-wise-namespace": this.namespace,
+      "user-agent": `VendorIntegrations/${this.namespace}`,
     };
   }
 
@@ -66,7 +68,10 @@ export class WiseClient {
     try {
       const response = await fetch(url, {
         ...init,
-        headers: this.headers,
+        headers: {
+          ...this.headers,
+          ...(init.headers as Record<string, string> | undefined),
+        },
       });
 
       if (!response.ok) {

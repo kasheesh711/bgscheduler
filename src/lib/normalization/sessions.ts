@@ -16,15 +16,6 @@ export interface NormalizedSessionBlock {
   location?: string;
 }
 
-// Statuses that block availability
-const BLOCKING_STATUSES = new Set([
-  "CONFIRMED",
-  "SCHEDULED",
-  "ACTIVE",
-  "PENDING",
-  "UPCOMING",
-]);
-
 // Statuses that do NOT block
 const NON_BLOCKING_STATUSES = new Set([
   "CANCELLED",
@@ -42,7 +33,7 @@ export function isBlockingStatus(status: string | undefined): boolean {
   if (!status) return true; // fail-closed
   const upper = status.toUpperCase();
   if (NON_BLOCKING_STATUSES.has(upper)) return false;
-  return true; // BLOCKING_STATUSES or unknown → blocking
+  return true; // Unknown statuses remain blocking (fail-closed)
 }
 
 /**

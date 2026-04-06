@@ -20,6 +20,18 @@ describe("normalizeWorkingHours", () => {
     expect(normalizeWorkingHours([])).toEqual([]);
   });
 
+  it("maps weekday strings from Wise responses", () => {
+    const slots: WiseWorkingHourSlot[] = [
+      { day: "Sunday", startTime: "09:00", endTime: "11:00" },
+      { day: "Wednesday", startTime: "13:00", endTime: "15:00" },
+    ];
+
+    expect(normalizeWorkingHours(slots)).toEqual([
+      { weekday: 0, startMinute: 540, endMinute: 660 },
+      { weekday: 3, startMinute: 780, endMinute: 900 },
+    ]);
+  });
+
   it("skips zero-length windows", () => {
     const slots: WiseWorkingHourSlot[] = [
       { day: 1, startTime: "09:00", endTime: "09:00" },

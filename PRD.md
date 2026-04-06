@@ -261,7 +261,8 @@ Implementation status as of 2026-04-07:
 - [x] unresolved identity, modality, or qualification issues never create positive matches
 - [x] data issues are visible in a review path (`/data-health` page)
 - [x] authentication is required for internal access (Google OAuth + admin allowlist)
-- [ ] Wise API sync working end-to-end — blocked on namespace mismatch
+- [x] Wise API credentials and namespace validated against the live API contract
+- [ ] Wise API sync working end-to-end — pending DB-backed live sync verification
 
 ## 13. Launch Blockers
 
@@ -275,12 +276,12 @@ Implementation status as of 2026-04-07:
 - data completeness gaps → fail-closed routing to Needs Review for any unresolved data
 
 ### Remaining before launch
-- Wise API namespace mismatch must be resolved with Wise admin
 - First successful sync must complete and populate search index
 - Search results must be validated against live Wise data
 - Vercel Pro upgrade for 30-minute sync cadence (optional for soft launch)
+- Current Wise client contract repair must be pushed to GitHub and deployed to Vercel
 
 ## 14. Implementation Gate
 This PRD, [AGENTS.md](/Users/kevinhsieh/Desktop/Scheduling/AGENTS.md), and [DATA_AUDIT.md](/Users/kevinhsieh/Desktop/Scheduling/DATA_AUDIT.md) together formed the approval gate for the project.
 
-Implementation is complete. The app is deployed at https://bgscheduler.vercel.app. Launch is pending Wise API credential resolution.
+Implementation is functionally complete. The app is deployed at https://bgscheduler.vercel.app. Launch is now pending live sync verification and production rollout of the repaired Wise client.

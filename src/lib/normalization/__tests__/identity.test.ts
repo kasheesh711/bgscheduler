@@ -59,6 +59,14 @@ describe("resolveIdentities", () => {
     name,
   });
 
+  const makeNestedTeacher = (id: string, userId: string, name: string): WiseTeacher => ({
+    _id: id,
+    userId: {
+      _id: userId,
+      name,
+    },
+  });
+
   it("groups teachers by extracted nickname", () => {
     const teachers = [
       makeTeacher("t1", "Usanee (Aey) Tortermpun"),
@@ -133,5 +141,27 @@ describe("resolveIdentities", () => {
     expect(result.groups).toHaveLength(2);
     expect(result.issues).toHaveLength(1);
     expect(result.issues[0].entityId).toBe("t2");
+  });
+
+  it("uses nested Wise user identity fields when present", () => {
+    const teachers = [
+      makeNestedTeacher("t1", "u1", "Usanee (Aey) Tortermpun"),
+      makeNestedTeacher("t2", "u2", "Usanee (Aey) Tortermpun Online"),
+    ];
+
+    const result = resolveIdentities(teachers, []);
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0].members).toEqual([
+      expect.objectContaining({
+        wiseTeacherId: "t1",
+        wiseUserId: "u1",
+        wiseDisplayName: "Usanee (Aey) Tortermpun",
+      }),
+      expect.objectContaining({
+        wiseTeacherId: "t2",
+        wiseUserId: "u2",
+        wiseDisplayName: "Usanee (Aey) Tortermpun Online",
+      }),
+    ]);
   });
 });

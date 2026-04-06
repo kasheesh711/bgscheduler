@@ -12,6 +12,7 @@ This is a Wise blocker register, not a historical spreadsheet defect log.
 - Target institute: `696e1f4d90102225641cc413`
 - Timezone policy: normalize all production scheduling data to `Asia/Bangkok`
 - Production model: Wise-only with normalized persisted snapshots and no sheet fallback
+- Current integration status: live Wise credentials verified on 2026-04-07; local client contract repaired; DB-backed sync still needs end-to-end validation
 - Known blocker categories:
   - identity normalization gaps
   - paired online/offline Wise identity gaps
@@ -213,7 +214,7 @@ Normalization risks already observed:
 
 ## Resolution Status (updated 2026-04-07)
 
-All blockers now have a defined handling path through the implemented normalization pipeline. Pending validation against live Wise data once API credentials are resolved.
+All blockers now have a defined handling path through the implemented normalization pipeline. Live credentials are verified. Remaining validation is focused on a successful DB-backed sync and search-result spot checks against live Wise data.
 
 | ID | Severity | Category | Resolution |
 |----|----------|----------|------------|
@@ -224,7 +225,7 @@ All blockers now have a defined handling path through the implemented normalizat
 | AUD-005 | High | Tag normalization | **Resolved** — regex parser for `Subject (Curriculum) Level` format in `qualifications.ts`; unmapped → data_issue |
 | AUD-006 | Critical | 7-day availability limit | **Resolved** — workingHours from 1 window; leaves stitched across 26 windows (180 days) |
 | AUD-007 | High | UTC→Bangkok timezone | **Resolved** — all conversions use `date-fns-tz` with `Asia/Bangkok`; tested in `timezone.test.ts` |
-| AUD-008 | High | Pagination completeness | **Resolved** — paginated fetchers with `hasMore` loop; incomplete teachers → data_issue type=completeness |
+| AUD-008 | High | Pagination completeness | **Resolved** — live contract-aligned teacher and session pagination parsing; incomplete teachers → data_issue type=completeness |
 | AUD-009 | High | Stale snapshot behavior | **Resolved** — failed sync preserves previous active snapshot; stale banner in UI; snapshotMeta in API response |
 | AUD-010 | Medium | Rate limits / retry | **Resolved** — retry with exponential backoff (1s/2s/4s), concurrency limiter (max 5 parallel requests) |
 | AUD-011 | High | checkSessionsAvailability trust | **Resolved** — primary engine uses workingHours+leaves+sessions; checkSessionsAvailability is secondary only |
@@ -235,7 +236,7 @@ All blockers now have a defined handling path through the implemented normalizat
 - [x] All Critical issues have fail-closed handling in code
 - [x] All High issues have normalization rules or architecture
 - [x] All Medium issues have retry/monitoring behavior
-- [ ] Wise API credentials working (namespace mismatch pending)
+- [x] Wise API credentials working (client contract drift fixed on 2026-04-07)
 - [ ] First successful sync validates normalization against live data
 - [ ] Search results spot-checked by admin against known tutor schedules
 

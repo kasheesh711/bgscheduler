@@ -1,4 +1,8 @@
-import { WiseTeacher } from "@/lib/wise/types";
+import {
+  WiseTeacher,
+  getWiseTeacherDisplayName,
+  getWiseTeacherUserId,
+} from "@/lib/wise/types";
 
 export interface IdentityGroup {
   canonicalKey: string;
@@ -83,8 +87,9 @@ export function resolveIdentities(
   }[] = [];
 
   for (const teacher of wiseTeachers) {
-    const nickname = extractNickname(teacher.name);
-    const online = isOnlineVariant(teacher.name);
+    const displayName = getWiseTeacherDisplayName(teacher);
+    const nickname = extractNickname(displayName);
+    const online = isOnlineVariant(displayName);
 
     let canonicalKey: string | null = null;
 
@@ -119,18 +124,21 @@ export function resolveIdentities(
   const issues: IdentityIssue[] = [];
   const resolved = new Set<string>();
 
-  for (const [key, entries] of keyGroups) {
+  for (const [, entries] of keyGroups) {
     // Pick display name from the non-online variant if available
     const baseEntry = entries.find((e) => !e.isOnline) ?? entries[0];
-    const displayName = baseEntry.canonicalKey ?? baseEntry.nickname ?? baseEntry.teacher.name;
+    const displayName =
+      baseEntry.canonicalKey ??
+      baseEntry.nickname ??
+      getWiseTeacherDisplayName(baseEntry.teacher);
 
     const group: IdentityGroup = {
       canonicalKey: displayName,
       displayName,
       members: entries.map((e) => ({
         wiseTeacherId: e.teacher._id,
-        wiseUserId: e.teacher.userId,
-        wiseDisplayName: e.teacher.name,
+        wiseUserId: getWiseTeacherUserId(e.teacher),
+        wiseDisplayName: getWiseTeacherDisplayName(e.teacher),
         isOnlineVariant: e.isOnline,
       })),
     };
@@ -144,25 +152,26 @@ export function resolveIdentities(
   // Step 4: Any teacher without a nickname or canonical key → data issue
   for (const entry of teacherKeys) {
     if (resolved.has(entry.teacher._id)) continue;
+    const displayName = getWiseTeacherDisplayName(entry.teacher);
 
     // Teacher couldn't be grouped — create an issue and a solo group
     issues.push({
       type: "alias",
       entityType: "teacher",
       entityId: entry.teacher._id,
-      entityName: entry.teacher.name,
-      message: `Unable to resolve identity for teacher "${entry.teacher.name}" — no nickname extracted and no alias match`,
+      entityName: displayName,
+      message: `Unable to resolve identity for teacher "${displayName}" — no nickname extracted and no alias match`,
     });
 
     // Still create a group so the teacher shows up in Needs Review
     groups.push({
-      canonicalKey: entry.teacher.name,
-      displayName: entry.teacher.name,
+      canonicalKey: displayName,
+      displayName,
       members: [
         {
           wiseTeacherId: entry.teacher._id,
-          wiseUserId: entry.teacher.userId,
-          wiseDisplayName: entry.teacher.name,
+          wiseUserId: getWiseTeacherUserId(entry.teacher),
+          wiseDisplayName: displayName,
           isOnlineVariant: false,
         },
       ],

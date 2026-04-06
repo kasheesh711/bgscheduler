@@ -2,11 +2,16 @@ import { eq, and, sql } from "drizzle-orm";
 import { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { WiseClient } from "@/lib/wise/client";
+import {
+  getWiseSessionTeacherUserId,
+  getWiseTeacherDisplayName,
+  getWiseTeacherUserId,
+} from "@/lib/wise/types";
 import { fetchAllTeachers, fetchTeacherFullAvailability, fetchAllFutureSessions } from "@/lib/wise/fetchers";
 import { resolveIdentities, AliasMapping } from "@/lib/normalization/identity";
 import { normalizeWorkingHours } from "@/lib/normalization/availability";
 import { normalizeLeaves } from "@/lib/normalization/leaves";
-import { normalizeSessions, NormalizedSessionBlock } from "@/lib/normalization/sessions";
+import { normalizeSessions } from "@/lib/normalization/sessions";
 import { normalizeTeacherTags } from "@/lib/normalization/qualifications";
 import { deriveModality } from "@/lib/normalization/modality";
 
@@ -118,12 +123,27 @@ export async function runFullSync(
     for (const teacher of wiseTeachers) {
       const groupId = teacherToGroupId.get(teacher._id);
       if (!groupId) continue;
+      const teacherName = getWiseTeacherDisplayName(teacher);
+      const teacherUserId = getWiseTeacherUserId(teacher);
+
+      if (!teacherUserId) {
+        allIssues.push({
+          snapshotId,
+          type: "completeness",
+          severity: "high",
+          entityType: "teacher",
+          entityId: teacher._id,
+          entityName: teacherName,
+          message: `Failed to fetch availability for teacher "${teacherName}": missing Wise user id`,
+        });
+        continue;
+      }
 
       try {
         const { workingHours, leaves } = await fetchTeacherFullAvailability(
           client,
           instituteId,
-          teacher._id
+          teacherUserId
         );
 
         // Normalize and store working hours
@@ -167,7 +187,7 @@ export async function runFullSync(
         const { qualifications, issues: tagIssues } = normalizeTeacherTags(
           tags,
           teacher._id,
-          teacher.name
+          teacherName
         );
 
         for (const q of qualifications) {
@@ -200,18 +220,25 @@ export async function runFullSync(
           severity: "high",
           entityType: "teacher",
           entityId: teacher._id,
-          entityName: teacher.name,
-          message: `Failed to fetch availability for teacher "${teacher.name}": ${err instanceof Error ? err.message : String(err)}`,
+          entityName: teacherName,
+          message: `Failed to fetch availability for teacher "${teacherName}": ${err instanceof Error ? err.message : String(err)}`,
         });
       }
     }
 
     // 8. Fetch and normalize future sessions
     const wiseSessions = await fetchAllFutureSessions(client, instituteId);
+    const wiseUserIdToTeacherId = new Map<string, string>();
+    for (const teacher of wiseTeachers) {
+      const teacherUserId = getWiseTeacherUserId(teacher);
+      if (teacherUserId) {
+        wiseUserIdToTeacherId.set(teacherUserId, teacher._id);
+      }
+    }
 
     const sessionBlocks = normalizeSessions(wiseSessions, (session) => {
-      // Map session to teacher ID — Wise may use teacherId or a nested reference
-      return session.teacherId ?? null;
+      const wiseUserId = getWiseSessionTeacherUserId(session);
+      return wiseUserId ? (wiseUserIdToTeacherId.get(wiseUserId) ?? null) : null;
     });
 
     for (const block of sessionBlocks) {
@@ -324,7 +351,6 @@ export async function runFullSync(
     });
 
     // 12. Validate and promote
-    const criticalIssueCount = allIssues.filter((i) => i.severity === "critical").length;
     const unresolvedRatio = identityIssues.length / Math.max(groups.length, 1);
 
     // Promote if not catastrophically broken (>50% unresolved = fail)

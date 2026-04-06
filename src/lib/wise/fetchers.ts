@@ -3,35 +3,23 @@ import {
   WiseTeacher,
   WiseAvailabilityResponse,
   WiseSession,
-  WisePaginatedResponse,
+  WiseTeachersResponse,
+  WiseAvailabilityEnvelope,
+  WiseSessionsResponse,
 } from "./types";
-import { addDays, formatISO } from "date-fns";
+import { addDays } from "date-fns";
 
 const PAGE_LIMIT = 100;
 
 /**
- * Fetch all teachers from a Wise institute, handling pagination.
+ * Fetch all teachers from a Wise institute.
  */
 export async function fetchAllTeachers(
   client: WiseClient,
   instituteId: string
 ): Promise<WiseTeacher[]> {
-  const all: WiseTeacher[] = [];
-  let page = 1;
-  let hasMore = true;
-
-  while (hasMore) {
-    const res = await client.get<WisePaginatedResponse<WiseTeacher>>(
-      `/institutes/${instituteId}/teachers`,
-      { page: String(page), limit: String(PAGE_LIMIT) }
-    );
-
-    all.push(...(res.data ?? []));
-    hasMore = res.hasMore === true && (res.data?.length ?? 0) > 0;
-    page++;
-  }
-
-  return all;
+  const res = await client.get<WiseTeachersResponse>(`/institutes/${instituteId}/teachers`);
+  return res.data?.teachers ?? [];
 }
 
 /**
@@ -40,17 +28,18 @@ export async function fetchAllTeachers(
 export async function fetchTeacherAvailability(
   client: WiseClient,
   instituteId: string,
-  teacherId: string,
+  teacherUserId: string,
   startDate: Date,
   endDate: Date
 ): Promise<WiseAvailabilityResponse> {
-  return client.get<WiseAvailabilityResponse>(
-    `/institutes/${instituteId}/teachers/${teacherId}/availability`,
+  const res = await client.get<WiseAvailabilityEnvelope>(
+    `/institutes/${instituteId}/teachers/${teacherUserId}/availability`,
     {
-      startDate: formatISO(startDate, { representation: "date" }),
-      endDate: formatISO(endDate, { representation: "date" }),
+      startTime: startDate.toISOString(),
+      endTime: endDate.toISOString(),
     }
   );
+  return res.data ?? {};
 }
 
 /**
@@ -60,7 +49,7 @@ export async function fetchTeacherAvailability(
 export async function fetchTeacherFullAvailability(
   client: WiseClient,
   instituteId: string,
-  teacherId: string,
+  teacherUserId: string,
   horizonDays: number = 180
 ): Promise<{
   workingHours: WiseAvailabilityResponse["workingHours"];
@@ -73,7 +62,7 @@ export async function fetchTeacherFullAvailability(
   const firstWindow = await fetchTeacherAvailability(
     client,
     instituteId,
-    teacherId,
+    teacherUserId,
     now,
     addDays(now, 7)
   );
@@ -87,7 +76,7 @@ export async function fetchTeacherFullAvailability(
     const start = addDays(now, i * 7);
     const end = addDays(start, 7);
     leavePromises.push(
-      fetchTeacherAvailability(client, instituteId, teacherId, start, end)
+      fetchTeacherAvailability(client, instituteId, teacherUserId, start, end)
     );
   }
 
@@ -110,16 +99,23 @@ export async function fetchAllFutureSessions(
 ): Promise<WiseSession[]> {
   const all: WiseSession[] = [];
   let page = 1;
-  let hasMore = true;
+  let pageCount = 1;
 
-  while (hasMore) {
-    const res = await client.get<WisePaginatedResponse<WiseSession>>(
+  while (page <= pageCount) {
+    const res = await client.get<WiseSessionsResponse>(
       `/institutes/${instituteId}/sessions`,
-      { status: "FUTURE", page: String(page), limit: String(PAGE_LIMIT) }
+      {
+        status: "FUTURE",
+        paginateBy: "COUNT",
+        page_number: String(page),
+        page_size: String(PAGE_LIMIT),
+      }
     );
 
-    all.push(...(res.data ?? []));
-    hasMore = res.hasMore === true && (res.data?.length ?? 0) > 0;
+    const sessions = res.data?.sessions ?? [];
+    all.push(...sessions);
+    pageCount = res.data?.page_count ?? page;
+    if (sessions.length === 0) break;
     page++;
   }
 

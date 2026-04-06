@@ -6,9 +6,9 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 # AGENTS.md — Tutor Availability Search Tool
 
-## Status: Deployed — Wise API integration pending
+## Status: Deployed — Wise API contract repaired, live sync verification pending
 
-The application is fully built, tested, deployed, and accessible at https://bgscheduler.vercel.app. Google OAuth login works. The Wise API sync is blocked on a namespace mismatch error that requires Wise admin resolution.
+The application is fully built, tested, deployed, and accessible at https://bgscheduler.vercel.app. Google OAuth login works. Wise credentials and namespace are valid. The remaining work is to verify the repaired Wise client against live syncs and confirm production snapshots promote successfully.
 
 ## What Is Built
 
@@ -17,7 +17,7 @@ The application is fully built, tested, deployed, and accessible at https://bgsc
 - Auth.js with Google provider + `admin_users` table for explicit email allowlisting
 - Drizzle ORM + Neon Postgres (ap-southeast-1) with 14 tables
 - Vercel hosting with daily cron (Hobby plan limit; upgrade to Pro for 30-min cadence)
-- Vitest with 63 passing unit tests
+- Vitest with 70 passing unit tests
 
 ### Database schema (complete, migrated, seeded)
 - `snapshots` — versioned snapshot records with atomic `active` flag promotion
@@ -35,11 +35,11 @@ The application is fully built, tested, deployed, and accessible at https://bgsc
 - `data_issues` — all unresolved normalization issues by type and severity
 - `snapshot_stats` — counts for data-health dashboard
 
-### Wise API client (complete, pending credential fix)
+### Wise API client (repaired)
 - HTTP client with retry/backoff (3 retries, 1s/2s/4s) and concurrency limiter (max 5)
-- Base URL: `https://api.wiseapp.live/api/v1`
-- Auth: Basic Auth (base64 of userId:apiKey) + `x-api-key` + `user-agent: VendorIntegrations/{namespace}`
-- Paginated fetchers for teachers, availability (7-day window limit), and future sessions
+- Base URL: `https://api.wiseapp.live`
+- Auth: Basic Auth (base64 of userId:apiKey) + `x-api-key` + `x-wise-namespace` + `user-agent: VendorIntegrations/{namespace}`
+- Fetchers aligned to the live Wise request/response contracts for teachers, availability, and future sessions
 - 180-day leave stitching across 26 seven-day windows
 
 ### Normalization pipeline (complete)
@@ -78,28 +78,30 @@ The application is fully built, tested, deployed, and accessible at https://bgsc
 - `/search` — structured slot builder (day/date dropdowns, 15-min time pickers), mode toggle (recurring/one-time), modality/subject/curriculum/level filters, tabbed results with per-slot + intersection views, Needs Review section with reason badges, stale snapshot banner
 - `/data-health` — sync status cards, snapshot stats, issues by type, unresolved aliases table, unresolved modality table, unmapped tags table, recent sync history
 
-### Tests (63 passing)
+### Tests
 - Identity: nickname extraction, alias resolution, online/offline pairs, unresolved → data_issue
 - Timezone: UTC→Asia/Bangkok conversion, weekday derivation, minute-of-day
-- Availability: workingHours normalization, window de-duplication, merge overlapping
+- Availability: workingHours normalization, string weekday mapping, window de-duplication, merge overlapping
 - Leaves: UTC conversion, overlapping merge
-- Sessions: blocking vs non-blocking status, cancelled exclusion
+- Sessions: blocking vs non-blocking status, cancelled exclusion, nested user mapping
 - Modality: pair derivation, session type evidence, unresolved → data_issue
 - Qualifications: tag parsing (Int./Thai/ExamPrep), unmapped → data_issue
 - Search engine: recurring blocking, one-time blocking, cancelled non-blocking, mode filtering, qualification filtering, multi-slot intersection, Needs Review routing
+- Wise contract: auth headers, teacher list parsing, availability envelope parsing, sessions pagination parsing
 - Parser: single/multi slot parsing, abbreviated days, ambiguous input warnings
 
 ## Current Blocker
 
-**Wise API namespace mismatch.** The Wise API at `api.wiseapp.live` returns `400 Namespace mismatch` despite using the confirmed namespace `begifted-education`. Authentication passes (401→400 after adding Basic Auth). The namespace is sent via `user-agent: VendorIntegrations/begifted-education`. Wise admin needs to verify the credential-namespace binding on their side.
+**Live sync verification.** The previous namespace blocker was caused by client-side contract drift. Live calls now authenticate successfully when sent to `https://api.wiseapp.live` with `Authorization: Basic ...`, `x-api-key`, `x-wise-namespace`, and `user-agent: VendorIntegrations/begifted-education`. The remaining task is to verify a full sync against production data and confirm snapshot promotion.
 
 ## What Remains After Blocker Is Resolved
 
-1. Confirm Wise API credentials work end-to-end
-2. Trigger first successful sync
-3. Verify search results against live Wise data
-4. Add Vercel production redirect URI to Google OAuth if not done
-5. Upgrade Vercel to Pro plan for 30-minute cron cadence (currently daily on Hobby)
+1. Trigger a successful live sync with the repaired Wise client
+2. Verify search results against live Wise data
+3. Push the current Wise contract repair to GitHub
+4. Deploy the current repair to Vercel production
+5. Add Vercel production redirect URI to Google OAuth if not done
+6. Upgrade Vercel to Pro plan for 30-minute cron cadence (currently daily on Hobby)
 
 ## Source of Truth Rules
 - Production truth comes from the Wise API only (tenant: `begifted-education`, institute: `696e1f4d90102225641cc413`).

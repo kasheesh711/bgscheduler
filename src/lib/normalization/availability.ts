@@ -7,6 +7,24 @@ export interface RecurringWindow {
   endMinute: number;
 }
 
+const WEEKDAY_MAP: Record<string, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+
+function normalizeWeekday(day: number | string): number | null {
+  if (typeof day === "number") {
+    return day >= 0 && day <= 6 ? day : null;
+  }
+
+  return WEEKDAY_MAP[day.trim().toLowerCase()] ?? null;
+}
+
 /**
  * Normalize Wise workingHours slots into recurring availability windows.
  * Wise slots use day (0=Sun..6=Sat) and HH:mm format times.
@@ -20,13 +38,16 @@ export function normalizeWorkingHours(
   const windows: RecurringWindow[] = [];
 
   for (const slot of slots) {
+    const weekday = normalizeWeekday(slot.day);
+    if (weekday === null) continue;
+
     const startMinute = parseTimeToMinutes(slot.startTime);
     const endMinute = parseTimeToMinutes(slot.endTime);
 
     if (startMinute >= endMinute) continue; // Skip invalid/zero-length windows
 
     windows.push({
-      weekday: slot.day,
+      weekday,
       startMinute,
       endMinute,
     });
