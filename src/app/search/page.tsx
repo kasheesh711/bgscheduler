@@ -1,13 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { SlotBuilder } from "@/components/search/slot-builder";
 import { SlotChips } from "@/components/search/slot-chips";
 import { ResultsView } from "@/components/search/results-view";
 import type { SearchSlot, SearchResponse, SearchMode } from "@/lib/search/types";
+
+interface FilterOptions {
+  subjects: string[];
+  curriculums: string[];
+  levels: string[];
+}
 
 export default function SearchPage() {
   const [slots, setSlots] = useState<SearchSlot[]>([]);
@@ -16,6 +21,14 @@ export default function SearchPage() {
   const [subjectFilter, setSubjectFilter] = useState("");
   const [curriculumFilter, setCurriculumFilter] = useState("");
   const [levelFilter, setLevelFilter] = useState("");
+  const [filterOptions, setFilterOptions] = useState<FilterOptions | null>(null);
+
+  useEffect(() => {
+    fetch("/api/filters")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (data) setFilterOptions(data); })
+      .catch(() => {});
+  }, []);
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,30 +136,42 @@ export default function SearchPage() {
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Subject</label>
-              <Input
-                placeholder="e.g. Math"
+              <select
+                className="w-full rounded-md border px-2 py-1.5 text-sm"
                 value={subjectFilter}
                 onChange={(e) => setSubjectFilter(e.target.value)}
-                className="h-8"
-              />
+              >
+                <option value="">Any</option>
+                {filterOptions?.subjects.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Curriculum</label>
-              <Input
-                placeholder="e.g. International"
+              <select
+                className="w-full rounded-md border px-2 py-1.5 text-sm"
                 value={curriculumFilter}
                 onChange={(e) => setCurriculumFilter(e.target.value)}
-                className="h-8"
-              />
+              >
+                <option value="">Any</option>
+                {filterOptions?.curriculums.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Level</label>
-              <Input
-                placeholder="e.g. Y2-8"
+              <select
+                className="w-full rounded-md border px-2 py-1.5 text-sm"
                 value={levelFilter}
                 onChange={(e) => setLevelFilter(e.target.value)}
-                className="h-8"
-              />
+              >
+                <option value="">Any</option>
+                {filterOptions?.levels.map((l) => (
+                  <option key={l} value={l}>{l}</option>
+                ))}
+              </select>
             </div>
           </div>
 

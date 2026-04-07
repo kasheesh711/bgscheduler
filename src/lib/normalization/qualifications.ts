@@ -34,6 +34,7 @@ const CURRICULUM_MAP: Record<string, string> = {
   "int.": "International",
   "int": "International",
   "international": "International",
+  "th": "Thai",
   "thai": "Thai",
   "examprep": "ExamPrep",
   "exam prep": "ExamPrep",
