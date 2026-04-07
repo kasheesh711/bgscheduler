@@ -37,6 +37,7 @@ describe("Wise fetchers", () => {
                   _id: "wise-user-1",
                   name: "Teacher One",
                 },
+                tags: ["Math (Int.) Y2-8"],
               },
             ],
           },
@@ -55,6 +56,7 @@ describe("Wise fetchers", () => {
           _id: "wise-user-1",
           name: "Teacher One",
         }),
+        tags: ["Math (Int.) Y2-8"],
       }),
     ]);
   });

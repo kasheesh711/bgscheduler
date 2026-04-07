@@ -1,4 +1,4 @@
-import { WiseTag } from "@/lib/wise/types";
+import { WiseTag, getWiseTagName } from "@/lib/wise/types";
 
 export interface NormalizedQualification {
   subject: string;
@@ -40,7 +40,8 @@ const CURRICULUM_MAP: Record<string, string> = {
 };
 
 export function normalizeTag(tag: WiseTag): NormalizedQualification | null {
-  const match = tag.name.match(TAG_PATTERN);
+  const tagName = getWiseTagName(tag);
+  const match = tagName.match(TAG_PATTERN);
   if (!match) return null;
 
   const [, rawSubject, rawCurriculum, rawLevel] = match;
@@ -53,7 +54,7 @@ export function normalizeTag(tag: WiseTag): NormalizedQualification | null {
     subject,
     curriculum,
     level,
-    sourceTag: tag.name,
+    sourceTag: tagName,
   };
 
   if (curriculum === "ExamPrep") {
@@ -87,7 +88,7 @@ export function normalizeTeacherTags(
         entityType: "teacher",
         entityId: wiseTeacherId,
         entityName: wiseTeacherName,
-        message: `Unmapped Wise tag: "${tag.name}"`,
+        message: `Unmapped Wise tag: "${getWiseTagName(tag)}"`,
       });
     }
   }

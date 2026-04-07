@@ -38,6 +38,7 @@ Important live payload details:
 
 - `GET /institutes/{centerId}/teachers` returns `data.teachers`
 - teacher identity is nested under `teacher.userId._id` and `teacher.userId.name`
+- teacher tags in the live tenant are plain strings, not `{ name }` objects
 - `GET /institutes/{centerId}/teachers/{wiseUserId}/availability` expects `startTime` and `endTime`
 - availability is returned under `data.workingHours` and `data.leaves`
 - `workingHours.slots[].day` can be weekday strings like `"Sunday"`

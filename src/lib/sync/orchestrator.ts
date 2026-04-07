@@ -4,6 +4,7 @@ import * as schema from "@/lib/db/schema";
 import { WiseClient } from "@/lib/wise/client";
 import {
   getWiseSessionTeacherUserId,
+  getWiseTagName,
   getWiseTeacherDisplayName,
   getWiseTeacherUserId,
 } from "@/lib/wise/types";
@@ -179,7 +180,7 @@ export async function runFullSync(
             snapshotId,
             groupId,
             wiseTeacherId: teacher._id,
-            tagValue: tag.name,
+            tagValue: getWiseTagName(tag),
             tagRaw: tag,
           });
         }

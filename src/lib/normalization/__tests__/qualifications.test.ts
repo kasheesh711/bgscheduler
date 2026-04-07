@@ -42,6 +42,17 @@ describe("normalizeTag", () => {
     const tag: WiseTag = { _id: "5", name: "SomeRandomTag" };
     expect(normalizeTag(tag)).toBeNull();
   });
+
+  it("parses live Wise string tags", () => {
+    const tag: WiseTag = "Math (Int.) Y2-8";
+    const result = normalizeTag(tag);
+    expect(result).toEqual({
+      subject: "Math",
+      curriculum: "International",
+      level: "Y2-8",
+      sourceTag: "Math (Int.) Y2-8",
+    });
+  });
 });
 
 describe("normalizeTeacherTags", () => {
@@ -55,5 +66,17 @@ describe("normalizeTeacherTags", () => {
     expect(result.qualifications).toHaveLength(1);
     expect(result.issues).toHaveLength(1);
     expect(result.issues[0].type).toBe("tag");
+  });
+
+  it("accepts live Wise string tag arrays", () => {
+    const tags: WiseTag[] = [
+      "Math (Int.) Y2-8",
+      "UnknownTag",
+    ];
+
+    const result = normalizeTeacherTags(tags, "t1", "Teacher 1");
+    expect(result.qualifications).toHaveLength(1);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0].message).toContain("UnknownTag");
   });
 });

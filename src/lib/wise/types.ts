@@ -14,11 +14,13 @@ export interface WiseTeacher {
   [key: string]: unknown;
 }
 
-export interface WiseTag {
+export interface WiseTagObject {
   _id: string;
   name: string;
   [key: string]: unknown;
 }
+
+export type WiseTag = string | WiseTagObject;
 
 export interface WiseAvailabilityResponse {
   workingHours?: {
@@ -104,4 +106,8 @@ export function getWiseSessionTeacherUserId(
   session: WiseSession
 ): string | undefined {
   return getWiseUserId(session.userId) ?? session.teacherId;
+}
+
+export function getWiseTagName(tag: WiseTag): string {
+  return typeof tag === "string" ? tag : tag.name;
 }
