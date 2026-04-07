@@ -7,7 +7,7 @@ Internal admin app for searching tutor availability from normalized Wise snapsho
 - Production app: [https://bgscheduler.vercel.app](https://bgscheduler.vercel.app)
 - Repo: [https://github.com/kasheesh711/bgscheduler](https://github.com/kasheesh711/bgscheduler)
 - Stack: Next.js 16 App Router, TypeScript, Tailwind, shadcn/ui, Auth.js, Drizzle, Neon Postgres, Vercel
-- Test status: 70 passing Vitest tests
+- Test status: 72 passing Vitest tests
 - Wise status: production sync live since 2026-04-07 (131 teachers, 72 groups, daily cron)
 - Optional: upgrade Vercel to Pro for 30-minute sync cadence (currently daily on Hobby)
 

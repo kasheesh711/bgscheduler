@@ -56,3 +56,33 @@ export interface SearchResponse {
   latencyMs: number;
   warnings: string[];
 }
+
+// ── Range search types ──────────────────────────────────────────────
+
+export interface RangeSearchRequest {
+  searchMode: SearchMode;
+  dayOfWeek?: number;
+  date?: string;
+  startTime: string; // "HH:mm"
+  endTime: string;   // "HH:mm"
+  durationMinutes: number; // 60, 90, or 120
+  mode: "online" | "onsite" | "either";
+  filters?: SearchFilters;
+}
+
+export interface RangeGridRow {
+  tutorGroupId: string;
+  displayName: string;
+  supportedModes: string[];
+  qualifications: { subject: string; curriculum: string; level: string; examPrep?: string }[];
+  availability: boolean[]; // parallel to subSlots
+}
+
+export interface RangeSearchResponse {
+  snapshotMeta: SnapshotMeta;
+  subSlots: { start: string; end: string }[];
+  grid: RangeGridRow[];
+  needsReview: TutorReviewResult[];
+  latencyMs: number;
+  warnings: string[];
+}

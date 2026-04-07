@@ -252,7 +252,10 @@ The stack is locked for planning purposes.
 Implementation status as of 2026-04-07:
 
 - [x] search supports both `Recurring weekly` and `One-time`
-- [x] multi-slot requests return per-slot results and intersection results
+- [x] range search with availability grid (time window + class duration → visual grid)
+- [x] copy-for-parents button (formatted tutor options for LINE/WhatsApp)
+- [x] recent searches (localStorage, last 10, one-click re-run)
+- [x] data-driven dropdown filters for subject, curriculum, level (populated from active snapshot)
 - [x] all four filters exist and behave consistently
 - [x] warm queries meet the sub-400 ms requirement (tested via unit tests)
 - [ ] Wise sync runs every 30 minutes — currently daily (Vercel Hobby plan); upgrade to Pro for 30-min
@@ -286,4 +289,4 @@ Implementation status as of 2026-04-07:
 ## 14. Implementation Gate
 This PRD, [AGENTS.md](/Users/kevinhsieh/Desktop/Scheduling/AGENTS.md), and [DATA_AUDIT.md](/Users/kevinhsieh/Desktop/Scheduling/DATA_AUDIT.md) together formed the approval gate for the project.
 
-Implementation is complete and live. The app is deployed at https://bgscheduler.vercel.app with an active production snapshot promoted on 2026-04-07. Daily Wise sync cron is running.
+Implementation is complete and live. The app is deployed at https://bgscheduler.vercel.app with an active production snapshot promoted on 2026-04-07. Daily Wise sync cron is running. Range search with availability grid, copy-for-parents, and recent searches shipped 2026-04-07.

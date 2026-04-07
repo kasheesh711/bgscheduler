@@ -17,7 +17,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - Auth.js with Google provider + `admin_users` table for explicit email allowlisting
 - Drizzle ORM + Neon Postgres (ap-southeast-1) with 14 tables
 - Vercel hosting with daily cron (Hobby plan limit; upgrade to Pro for 30-min cadence)
-- Vitest with 70 passing unit tests
+- Vitest with 72 passing unit tests
 
 ### Database schema (complete, migrated, seeded)
 - `snapshots` — versioned snapshot records with atomic `active` flag promotion
@@ -60,22 +60,24 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 ### Search engine (complete)
 - In-memory index singleton loaded from active Postgres snapshot
 - Stale detection: compares index snapshotId against DB on each request
+- **Range search**: admin enters time window + class duration → backend generates sub-slots → availability grid
 - **Recurring mode**: tutor blocked if any future session overlaps same weekday+time
-- **One-time mode**: tutor blocked only if session overlaps exact date+time
+- **One-time mode**: tutor blocked only if session overlaps exact date+time (supports drop-in classes via cancelled slots)
 - Leaves block in both modes
-- Multi-slot intersection: tutors available in ALL requested slots
-- Qualification filtering by subject/curriculum/level
+- Qualification filtering by subject/curriculum/level (data-driven dropdowns)
 - Modality filtering: online/onsite/either
 - Fail-closed: unresolved identity/modality/qualification → Needs Review, never Available
 
 ### API routes (complete)
-- `POST /api/search` — zod-validated search request, auth-protected, returns perSlotResults + intersection + snapshotMeta + latencyMs
+- `POST /api/search/range` — range search: time window + duration → availability grid with sub-slots
+- `POST /api/search` — legacy slot-based search (kept for backward compatibility)
+- `GET /api/filters` — distinct subjects, curriculums, levels from active snapshot for dropdown population
 - `GET /api/data-health` — sync status, issue counts by type, unresolved aliases/modality/tags, recent sync history
 - `POST /api/internal/sync-wise` — cron-triggered sync, CRON_SECRET auth
 
 ### Frontend (complete)
 - `/login` — Google sign-in with access-denied error handling
-- `/search` — structured slot builder (day/date dropdowns, 15-min time pickers), mode toggle (recurring/one-time), modality/subject/curriculum/level filters, tabbed results with per-slot + intersection views, Needs Review section with reason badges, stale snapshot banner
+- `/search` — range search with time window + class duration (1hr/1.5hr/2hr), mode toggle (recurring/one-time), data-driven dropdown filters (subject/curriculum/level), availability grid results (rows=tutors, columns=time slots), row selection with copy-for-parents button, recent searches (localStorage, last 10), Needs Review section with reason badges, stale snapshot banner
 - `/data-health` — sync status cards, snapshot stats, issues by type, unresolved aliases table, unresolved modality table, unmapped tags table, recent sync history
 
 ### Tests
