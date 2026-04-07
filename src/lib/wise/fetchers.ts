@@ -9,7 +9,7 @@ import {
 } from "./types";
 import { addDays } from "date-fns";
 
-const PAGE_LIMIT = 100;
+const PAGE_LIMIT = 1000;
 
 /**
  * Fetch all teachers from a Wise institute.

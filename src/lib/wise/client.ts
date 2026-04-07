@@ -118,5 +118,6 @@ export function createWiseClient(): WiseClient {
     userId: process.env.WISE_USER_ID!,
     apiKey: process.env.WISE_API_KEY!,
     namespace: process.env.WISE_NAMESPACE ?? "begifted-education",
+    maxConcurrency: 15,
   });
 }

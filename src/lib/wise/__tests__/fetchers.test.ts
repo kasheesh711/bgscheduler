@@ -150,6 +150,6 @@ describe("Wise fetchers", () => {
     const firstUrl = new URL(fetchMock.mock.calls[0][0] as string);
     expect(firstUrl.searchParams.get("paginateBy")).toBe("COUNT");
     expect(firstUrl.searchParams.get("page_number")).toBe("1");
-    expect(firstUrl.searchParams.get("page_size")).toBe("100");
+    expect(firstUrl.searchParams.get("page_size")).toBe("1000");
   });
 });
