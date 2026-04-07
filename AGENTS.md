@@ -6,9 +6,9 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 # AGENTS.md — Tutor Availability Search Tool
 
-## Status: Deployed — Wise API contract repaired, live sync verification pending
+## Status: Live — production sync active, daily cron running
 
-The application is fully built, tested, deployed, and accessible at https://bgscheduler.vercel.app. Google OAuth login works. Wise credentials and namespace are valid. The remaining work is to verify the repaired Wise client against live syncs and confirm production snapshots promote successfully.
+The application is fully built, tested, deployed, and live at https://bgscheduler.vercel.app. Google OAuth login works. Production Wise sync is active with daily cron.
 
 ## What Is Built
 
@@ -90,18 +90,17 @@ The application is fully built, tested, deployed, and accessible at https://bgsc
 - Wise contract: auth headers, teacher list parsing, availability envelope parsing, sessions pagination parsing
 - Parser: single/multi slot parsing, abbreviated days, ambiguous input warnings
 
-## Current Blocker
+## Production Status
 
-**Live sync verification.** The previous namespace blocker was caused by client-side contract drift. Live calls now authenticate successfully when sent to `https://api.wiseapp.live` with `Authorization: Basic ...`, `x-api-key`, `x-wise-namespace`, and `user-agent: VendorIntegrations/begifted-education`. The remaining task is to verify a full sync against production data and confirm snapshot promotion.
+First successful production sync completed 2026-04-07 on commit `c673999`:
+- Snapshot `d70608b0-0f2d-4738-b9b4-1f3fd5210fea` promoted successfully
+- 131 teachers fetched, 72 identity groups resolved, 251 data issues logged
+- Sync duration: ~4m26s (Vercel function ceiling is 5m)
+- Daily cron active (`0 0 * * *`)
 
-## What Remains After Blocker Is Resolved
-
-1. Trigger a successful live sync with the repaired Wise client
-2. Verify search results against live Wise data
-3. Push the current Wise contract repair to GitHub
-4. Deploy the current repair to Vercel production
-5. Add Vercel production redirect URI to Google OAuth if not done
-6. Upgrade Vercel to Pro plan for 30-minute cron cadence (currently daily on Hobby)
+### Optional improvements
+- Upgrade Vercel to Pro for 30-minute sync cadence (currently daily on Hobby)
+- Monitor sync duration headroom — ~34s margin before function timeout at current data volume
 
 ## Source of Truth Rules
 - Production truth comes from the Wise API only (tenant: `begifted-education`, institute: `696e1f4d90102225641cc413`).

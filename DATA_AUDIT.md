@@ -214,7 +214,7 @@ Normalization risks already observed:
 
 ## Resolution Status (updated 2026-04-07)
 
-All blockers now have a defined handling path through the implemented normalization pipeline. Live credentials are verified. Remaining validation is focused on a successful DB-backed sync and search-result spot checks against live Wise data.
+All blockers resolved. First successful production sync completed 2026-04-07 (commit `c673999`), promoting snapshot `d70608b0` with 131 teachers and 72 identity groups. Normalization pipeline validated against live Wise data. Remaining validation is admin spot-checks of search results against known tutor schedules.
 
 | ID | Severity | Category | Resolution |
 |----|----------|----------|------------|
@@ -237,7 +237,7 @@ All blockers now have a defined handling path through the implemented normalizat
 - [x] All High issues have normalization rules or architecture
 - [x] All Medium issues have retry/monitoring behavior
 - [x] Wise API credentials working (client contract drift fixed on 2026-04-07)
-- [ ] First successful sync validates normalization against live data
+- [x] First successful sync validates normalization against live data (2026-04-07, snapshot `d70608b0`)
 - [ ] Search results spot-checked by admin against known tutor schedules
 
 ## Notes

@@ -11,7 +11,7 @@
 
 ## Current Status
 
-Wise credentials and namespace are valid. The previous blocker was client-side contract drift: the app was using the wrong base path, outdated header names, outdated availability/session query params, and outdated response parsing. The remaining task is to verify a repaired live sync and confirm snapshot promotion.
+Production sync is live. First successful sync completed 2026-04-07 (commit `c673999`), promoting snapshot `d70608b0` with 131 teachers and 72 identity groups. Daily cron runs at midnight UTC. The previous blocker (client-side contract drift) is fully resolved.
 
 ## Running Commands
 

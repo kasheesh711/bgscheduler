@@ -262,7 +262,7 @@ Implementation status as of 2026-04-07:
 - [x] data issues are visible in a review path (`/data-health` page)
 - [x] authentication is required for internal access (Google OAuth + admin allowlist)
 - [x] Wise API credentials and namespace validated against the live API contract
-- [ ] Wise API sync working end-to-end — pending DB-backed live sync verification
+- [x] Wise API sync working end-to-end — first production sync succeeded 2026-04-07 (131 teachers, 72 groups)
 
 ## 13. Launch Blockers
 
@@ -275,13 +275,15 @@ Implementation status as of 2026-04-07:
 - conflict-model guardrails → primary engine uses workingHours+leaves+sessions; checkSessionsAvailability is secondary only
 - data completeness gaps → fail-closed routing to Needs Review for any unresolved data
 
-### Remaining before launch
-- First successful sync must complete and populate search index
-- Search results must be validated against live Wise data
-- Vercel Pro upgrade for 30-minute sync cadence (optional for soft launch)
-- Current Wise client contract repair must be pushed to GitHub and deployed to Vercel
+### Resolved since implementation
+- First successful production sync completed 2026-04-07 (commit `c673999`, snapshot `d70608b0`)
+- Wise client contract repair pushed to GitHub and deployed to Vercel production
+
+### Optional post-launch
+- Search results spot-checked by admin against known tutor schedules
+- Vercel Pro upgrade for 30-minute sync cadence (currently daily on Hobby)
 
 ## 14. Implementation Gate
 This PRD, [AGENTS.md](/Users/kevinhsieh/Desktop/Scheduling/AGENTS.md), and [DATA_AUDIT.md](/Users/kevinhsieh/Desktop/Scheduling/DATA_AUDIT.md) together formed the approval gate for the project.
 
-Implementation is functionally complete. The app is deployed at https://bgscheduler.vercel.app. Launch is now pending live sync verification and production rollout of the repaired Wise client.
+Implementation is complete and live. The app is deployed at https://bgscheduler.vercel.app with an active production snapshot promoted on 2026-04-07. Daily Wise sync cron is running.

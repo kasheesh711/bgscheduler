@@ -8,11 +8,8 @@ Internal admin app for searching tutor availability from normalized Wise snapsho
 - Repo: [https://github.com/kasheesh711/bgscheduler](https://github.com/kasheesh711/bgscheduler)
 - Stack: Next.js 16 App Router, TypeScript, Tailwind, shadcn/ui, Auth.js, Drizzle, Neon Postgres, Vercel
 - Test status: 70 passing Vitest tests
-- Wise status: credentials and namespace are valid; the client contract drift has been repaired locally
-- Remaining launch work:
-  - run a successful DB-backed Wise sync
-  - validate live search results against Wise data
-  - upgrade Vercel to Pro for 30-minute cron cadence if needed
+- Wise status: production sync live since 2026-04-07 (131 teachers, 72 groups, daily cron)
+- Optional: upgrade Vercel to Pro for 30-minute sync cadence (currently daily on Hobby)
 
 ## Product Rules
 
@@ -90,5 +87,5 @@ curl -X POST https://bgscheduler.vercel.app/api/internal/sync-wise \
 
 - [AGENTS.md](/Users/kevinhsieh/Desktop/Scheduling/AGENTS.md): current implementation inventory and operating rules
 - [PRD.md](/Users/kevinhsieh/Desktop/Scheduling/PRD.md): product requirements and launch status
-- [DATA_AUDIT.md](/Users/kevinhsieh/Desktop/Scheduling/DATA_AUDIT.md): Wise readiness and blocker resolution status
+- [DATA_AUDIT.md](/Users/kevinhsieh/Desktop/Scheduling/DATA_AUDIT.md): data audit and normalization status
 - [WISE_COMPARISON.md](/Users/kevinhsieh/Desktop/Scheduling/WISE_COMPARISON.md): migration decision record from sheets to Wise
