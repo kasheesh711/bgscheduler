@@ -28,6 +28,18 @@ export interface SyncResult {
   durationMs: number;
 }
 
+const INSERT_CHUNK_SIZE = 250;
+
+async function insertInChunks<T>(
+  rows: T[],
+  insertChunk: (chunk: T[]) => Promise<unknown>,
+  chunkSize: number = INSERT_CHUNK_SIZE
+) {
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    await insertChunk(rows.slice(i, i + chunkSize));
+  }
+}
+
 export async function runFullSync(
   db: Database,
   client: WiseClient,
@@ -84,6 +96,7 @@ export async function runFullSync(
 
     // 6. Persist identity groups and members
     const groupIdMap = new Map<string, string>(); // canonicalKey → db group id
+    const memberRows: typeof schema.tutorIdentityGroupMembers.$inferInsert[] = [];
 
     for (const group of groups) {
       const [dbGroup] = await db
@@ -98,9 +111,9 @@ export async function runFullSync(
 
       groupIdMap.set(group.canonicalKey, dbGroup.id);
 
-      // Insert members
+      // Queue members for batch insert
       for (const member of group.members) {
-        await db.insert(schema.tutorIdentityGroupMembers).values({
+        memberRows.push({
           groupId: dbGroup.id,
           snapshotId,
           wiseTeacherId: member.wiseTeacherId,
@@ -111,6 +124,10 @@ export async function runFullSync(
       }
     }
 
+    await insertInChunks(memberRows, async (chunk) => {
+      await db.insert(schema.tutorIdentityGroupMembers).values(chunk);
+    });
+
     // 7. Fetch availability and leaves for each teacher
     const teacherToGroupId = new Map<string, string>();
     for (const group of groups) {
@@ -119,6 +136,11 @@ export async function runFullSync(
         teacherToGroupId.set(member.wiseTeacherId, gId);
       }
     }
+
+    const recurringAvailabilityRows: typeof schema.recurringAvailabilityWindows.$inferInsert[] = [];
+    const datedLeaveRows: typeof schema.datedLeaves.$inferInsert[] = [];
+    const rawTagRows: typeof schema.rawTeacherTags.$inferInsert[] = [];
+    const qualificationRows: typeof schema.subjectLevelQualifications.$inferInsert[] = [];
 
     // Process teachers with availability
     for (const teacher of wiseTeachers) {
@@ -150,7 +172,7 @@ export async function runFullSync(
         // Normalize and store working hours
         const windows = normalizeWorkingHours(workingHours?.slots);
         for (const w of windows) {
-          await db.insert(schema.recurringAvailabilityWindows).values({
+          recurringAvailabilityRows.push({
             snapshotId,
             groupId,
             wiseTeacherId: teacher._id,
@@ -164,7 +186,7 @@ export async function runFullSync(
         // Normalize and store leaves
         const normalizedLeaves = normalizeLeaves(leaves ?? []);
         for (const l of normalizedLeaves) {
-          await db.insert(schema.datedLeaves).values({
+          datedLeaveRows.push({
             snapshotId,
             groupId,
             wiseTeacherId: teacher._id,
@@ -176,7 +198,7 @@ export async function runFullSync(
         // Store raw tags and normalize qualifications
         const tags = teacher.tags ?? [];
         for (const tag of tags) {
-          await db.insert(schema.rawTeacherTags).values({
+          rawTagRows.push({
             snapshotId,
             groupId,
             wiseTeacherId: teacher._id,
@@ -192,7 +214,7 @@ export async function runFullSync(
         );
 
         for (const q of qualifications) {
-          await db.insert(schema.subjectLevelQualifications).values({
+          qualificationRows.push({
             snapshotId,
             groupId,
             subject: q.subject,
@@ -242,11 +264,12 @@ export async function runFullSync(
       return wiseUserId ? (wiseUserIdToTeacherId.get(wiseUserId) ?? null) : null;
     });
 
+    const futureSessionBlockRows: typeof schema.futureSessionBlocks.$inferInsert[] = [];
     for (const block of sessionBlocks) {
       const groupId = teacherToGroupId.get(block.wiseTeacherId);
       if (!groupId) continue;
 
-      await db.insert(schema.futureSessionBlocks).values({
+      futureSessionBlockRows.push({
         snapshotId,
         groupId,
         wiseTeacherId: block.wiseTeacherId,
@@ -265,6 +288,9 @@ export async function runFullSync(
     }
 
     // 9. Derive modality for each group
+    const teacherModalities = new Map<string, typeof schema.modalityEnum.enumValues[number]>();
+    const tutorRows: typeof schema.tutors.$inferInsert[] = [];
+
     for (const group of groups) {
       const gId = groupIdMap.get(group.canonicalKey)!;
       const groupSessions = sessionBlocks.filter((s) =>
@@ -278,25 +304,12 @@ export async function runFullSync(
         .set({ supportedModality: modality })
         .where(eq(schema.tutorIdentityGroups.id, gId));
 
-      // Update availability windows with modality
-      const memberModalities = new Map<string, typeof schema.modalityEnum.enumValues[number]>();
+      // Record per-teacher modality so windows can be inserted once with final values.
       for (const member of group.members) {
-        memberModalities.set(
+        teacherModalities.set(
           member.wiseTeacherId,
           member.isOnlineVariant ? "online" : modality === "both" ? "onsite" : modality
         );
-      }
-
-      for (const [teacherId, mod] of memberModalities) {
-        await db
-          .update(schema.recurringAvailabilityWindows)
-          .set({ modality: mod })
-          .where(
-            and(
-              eq(schema.recurringAvailabilityWindows.snapshotId, snapshotId),
-              eq(schema.recurringAvailabilityWindows.wiseTeacherId, teacherId)
-            )
-          );
       }
 
       if (issue) {
@@ -316,7 +329,7 @@ export async function runFullSync(
       if (modality === "both") modes.push("online", "onsite");
       else if (modality !== "unresolved") modes.push(modality);
 
-      await db.insert(schema.tutors).values({
+      tutorRows.push({
         snapshotId,
         groupId: gId,
         displayName: group.displayName,
@@ -324,11 +337,36 @@ export async function runFullSync(
       });
     }
 
+    for (const row of recurringAvailabilityRows) {
+      row.modality = teacherModalities.get(row.wiseTeacherId) ?? "unresolved";
+    }
+
+    await Promise.all([
+      insertInChunks(recurringAvailabilityRows, async (chunk) => {
+        await db.insert(schema.recurringAvailabilityWindows).values(chunk);
+      }),
+      insertInChunks(datedLeaveRows, async (chunk) => {
+        await db.insert(schema.datedLeaves).values(chunk);
+      }),
+      insertInChunks(rawTagRows, async (chunk) => {
+        await db.insert(schema.rawTeacherTags).values(chunk);
+      }),
+      insertInChunks(qualificationRows, async (chunk) => {
+        await db.insert(schema.subjectLevelQualifications).values(chunk);
+      }),
+      insertInChunks(futureSessionBlockRows, async (chunk) => {
+        await db.insert(schema.futureSessionBlocks).values(chunk);
+      }),
+      insertInChunks(tutorRows, async (chunk) => {
+        await db.insert(schema.tutors).values(chunk);
+      }),
+    ]);
+
     // 10. Store all issues
     if (allIssues.length > 0) {
-      for (const issue of allIssues) {
-        await db.insert(schema.dataIssues).values(issue);
-      }
+      await insertInChunks(allIssues, async (chunk) => {
+        await db.insert(schema.dataIssues).values(chunk);
+      });
     }
 
     // 11. Compute and store snapshot stats
@@ -343,9 +381,9 @@ export async function runFullSync(
       totalIdentityGroups: groups.length,
       resolvedGroups: groups.filter((g) => !identityIssues.some((i) => i.entityId === g.canonicalKey)).length,
       unresolvedGroups: identityIssues.length,
-      totalQualifications: 0, // will be computed below
-      totalAvailabilityWindows: 0,
-      totalLeaves: 0,
+      totalQualifications: qualificationRows.length,
+      totalAvailabilityWindows: recurringAvailabilityRows.length,
+      totalLeaves: datedLeaveRows.length,
       totalFutureSessions: sessionBlocks.length,
       totalDataIssues: allIssues.length,
       issuesByType,
