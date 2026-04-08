@@ -107,6 +107,7 @@ export interface CompareRequest {
   mode: "recurring" | "one_time";
   dayOfWeek?: number;               // for recurring (0-6)
   date?: string;                    // ISO date for one_time
+  weekStart?: string;               // ISO date (Monday) — filters sessions to this week
 }
 
 export interface CompareSessionBlock {
@@ -120,6 +121,7 @@ export interface CompareSessionBlock {
   modality: "online" | "onsite" | "unknown";
   startTime: string;    // "HH:mm"
   endTime: string;      // "HH:mm"
+  date?: string;        // ISO date "YYYY-MM-DD" when dateRange filtering is active
   weekday: number;
   startMinute: number;
   endMinute: number;
@@ -158,6 +160,8 @@ export interface CompareResponse {
   tutors: CompareTutor[];
   conflicts: Conflict[];
   sharedFreeSlots: SharedFreeSlot[];
+  weekStart: string;     // ISO date (Monday of displayed week)
+  weekEnd: string;       // ISO date (Sunday end of displayed week)
   latencyMs: number;
   warnings: string[];
 }

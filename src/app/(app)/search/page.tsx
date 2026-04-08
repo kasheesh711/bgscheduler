@@ -59,6 +59,47 @@ const DAY_OPTIONS = [
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+function getCurrentMonday(): string {
+  const now = new Date();
+  // Use Asia/Bangkok local date
+  const bkk = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
+  const day = bkk.getDay(); // 0=Sun
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(bkk.getFullYear(), bkk.getMonth(), bkk.getDate() + diff);
+  return formatIsoDate(monday);
+}
+
+function shiftWeek(current: string, delta: number): string {
+  const [y, m, d] = current.split("-").map(Number);
+  const date = new Date(y, m - 1, d + delta * 7);
+  return formatIsoDate(date);
+}
+
+function formatIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function formatWeekLabel(weekStart: string): string {
+  const [y, m, d] = weekStart.split("-").map(Number);
+  const start = new Date(y, m - 1, d);
+  const end = new Date(y, m - 1, d + 6);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const s = `${months[start.getMonth()]} ${start.getDate()}`;
+  const e = `${months[end.getMonth()]} ${end.getDate()}, ${end.getFullYear()}`;
+  return `${s} – ${e}`;
+}
+
+function getWeekDate(weekStart: string, dayOfWeek: number): string {
+  const [y, m, d] = weekStart.split("-").map(Number);
+  // weekStart is Monday (day 1). Offset: Mon=0, Tue=1, ..., Sat=5, Sun=6
+  const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const date = new Date(y, m - 1, d + offset);
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
 const DURATION_OPTIONS = [
   { value: 60, label: "1 hr" },
   { value: 90, label: "1.5 hr" },
@@ -119,6 +160,7 @@ function SearchPageInner() {
   const [activeDay, setActiveDay] = useState<number | null>(null);
   const [discoveryOpen, setDiscoveryOpen] = useState(false);
   const [prefillConflict, setPrefillConflict] = useState<Conflict | null>(null);
+  const [weekStart, setWeekStart] = useState<string>(getCurrentMonday);
 
   // --- Init ---
   useEffect(() => {
@@ -135,7 +177,7 @@ function SearchPageInner() {
     const tutorIds =
       searchParams.get("tutors")?.split(",").filter(Boolean) ?? [];
     if (tutorIds.length > 0) {
-      fetchCompare(tutorIds);
+      fetchCompare(tutorIds, weekStart);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -222,7 +264,7 @@ function SearchPageInner() {
   };
 
   // --- Compare handlers ---
-  const fetchCompare = useCallback(async (ids: string[]) => {
+  const fetchCompare = useCallback(async (ids: string[], week: string) => {
     if (ids.length === 0) {
       setCompareResponse(null);
       return;
@@ -233,7 +275,7 @@ function SearchPageInner() {
       const res = await fetch("/api/compare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tutorGroupIds: ids, mode: "recurring" }),
+        body: JSON.stringify({ tutorGroupIds: ids, mode: "recurring", weekStart: week }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -257,13 +299,13 @@ function SearchPageInner() {
 
   const handleCompareSelected = () => {
     const ids = [...selectedIds];
-    fetchCompare(ids);
+    fetchCompare(ids, weekStart);
   };
 
   const handleRemoveTutor = (id: string) => {
     const remaining = compareTutors.filter((t) => t.tutorGroupId !== id);
     setCompareTutors(remaining);
-    fetchCompare(remaining.map((t) => t.tutorGroupId));
+    fetchCompare(remaining.map((t) => t.tutorGroupId), weekStart);
   };
 
   const handleAddTutor = (id: string, name: string) => {
@@ -278,7 +320,14 @@ function SearchPageInner() {
     ];
     setCompareTutors(updated);
     setDiscoveryOpen(false);
-    fetchCompare(updated.map((t) => t.tutorGroupId));
+    fetchCompare(updated.map((t) => t.tutorGroupId), weekStart);
+  };
+
+  const handleWeekChange = (newWeek: string) => {
+    setWeekStart(newWeek);
+    if (compareTutors.length > 0) {
+      fetchCompare(compareTutors.map((t) => t.tutorGroupId), newWeek);
+    }
   };
 
   const isValid =
@@ -621,14 +670,41 @@ function SearchPageInner() {
 
         {compareResponse && !compareLoading && (
           <>
-            {/* Snapshot meta */}
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground mb-1 flex-shrink-0">
-              <span>{compareResponse.snapshotMeta.snapshotId.slice(0, 8)}</span>
-              <span>·</span>
-              <span>{compareResponse.latencyMs}ms</span>
-              {compareResponse.snapshotMeta.stale && (
-                <Badge variant="destructive" className="text-[10px]">Stale</Badge>
-              )}
+            {/* Week picker + snapshot meta */}
+            <div className="flex items-center gap-2 mb-1 flex-shrink-0">
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => handleWeekChange(shiftWeek(weekStart, -1))}
+                  className="px-1.5 py-0.5 text-xs rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                >
+                  &lt;
+                </button>
+                <span className="text-xs font-medium min-w-[140px] text-center">
+                  {formatWeekLabel(weekStart)}
+                </span>
+                <button
+                  onClick={() => handleWeekChange(shiftWeek(weekStart, 1))}
+                  className="px-1.5 py-0.5 text-xs rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                >
+                  &gt;
+                </button>
+                {weekStart !== getCurrentMonday() && (
+                  <button
+                    onClick={() => handleWeekChange(getCurrentMonday())}
+                    className="px-1.5 py-0.5 text-[10px] rounded border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground ml-1"
+                  >
+                    Today
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground ml-auto">
+                <span>{compareResponse.snapshotMeta.snapshotId.slice(0, 8)}</span>
+                <span>·</span>
+                <span>{compareResponse.latencyMs}ms</span>
+                {compareResponse.snapshotMeta.stale && (
+                  <Badge variant="destructive" className="text-[10px]">Stale</Badge>
+                )}
+              </div>
             </div>
 
             {/* Day tabs */}
@@ -656,7 +732,7 @@ function SearchPageInner() {
                   }`}
                   onClick={() => setActiveDay(day)}
                 >
-                  {DAY_NAMES[day]}
+                  {DAY_NAMES[day]} {getWeekDate(weekStart, day)}
                   {activeDay === day && (
                     <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
                   )}

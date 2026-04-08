@@ -6,10 +6,22 @@ const ONSITE_SESSION_TYPES = new Set(["onsite", "in-person", "offline"]);
 const ONLINE_LOCATION_PATTERNS = ["http", "zoom", "google meet", "meet.google", "virtual", "online"];
 const ONSITE_LOCATION_PATTERNS = ["onsite", "in person"];
 
+export interface DateRange {
+  start: Date;
+  end: Date;
+}
+
 function formatMinute(minute: number): string {
   const h = Math.floor(minute / 60);
   const m = minute % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function formatDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function resolveSessionModality(
@@ -57,33 +69,33 @@ function resolveSessionModality(
   return "unknown";
 }
 
-export function buildCompareTutor(group: IndexedTutorGroup, weekdays?: number[]): CompareTutor {
+export function buildCompareTutor(
+  group: IndexedTutorGroup,
+  weekdays?: number[],
+  dateRange?: DateRange,
+): CompareTutor {
   const weekdaySet = weekdays ? new Set(weekdays) : null;
 
-  // Deduplicate recurring sessions: keep only the earliest instance per recurrenceId
-  const seenRecurrence = new Map<string, Date>();
-  const deduped = group.sessionBlocks.filter((s) => {
+  const filtered = group.sessionBlocks.filter((s) => {
     if (!s.isBlocking) return false;
-    if (s.recurrenceId) {
-      const prev = seenRecurrence.get(s.recurrenceId);
-      if (prev && s.startTime >= prev) return false;
-      seenRecurrence.set(s.recurrenceId, s.startTime);
+    if (dateRange) {
+      if (s.startTime < dateRange.start || s.startTime >= dateRange.end) return false;
     }
+    if (weekdaySet && !weekdaySet.has(s.weekday)) return false;
     return true;
   });
 
-  const sessions: CompareSessionBlock[] = deduped
-    .filter((s) => !weekdaySet || weekdaySet.has(s.weekday))
-    .map((s) => ({
-      title: s.title, studentName: s.studentName, subject: s.subject,
-      classType: s.classType, sessionType: s.sessionType, recurrenceId: s.recurrenceId, location: s.location,
-      modality: resolveSessionModality(group, s),
-      startTime: formatMinute(s.startMinute), endTime: formatMinute(s.endMinute),
-      weekday: s.weekday, startMinute: s.startMinute, endMinute: s.endMinute,
-    }));
+  const sessions: CompareSessionBlock[] = filtered.map((s) => ({
+    title: s.title, studentName: s.studentName, subject: s.subject,
+    classType: s.classType, sessionType: s.sessionType, recurrenceId: s.recurrenceId, location: s.location,
+    modality: resolveSessionModality(group, s),
+    startTime: formatMinute(s.startMinute), endTime: formatMinute(s.endMinute),
+    date: dateRange ? formatDate(s.startTime) : undefined,
+    weekday: s.weekday, startMinute: s.startMinute, endMinute: s.endMinute,
+  }));
 
-  const totalMinutes = deduped.reduce((sum, s) => sum + (s.endMinute - s.startMinute), 0);
-  const studentNames = new Set(deduped.map((s) => s.studentName).filter(Boolean));
+  const totalMinutes = filtered.reduce((sum, s) => sum + (s.endMinute - s.startMinute), 0);
+  const studentNames = new Set(filtered.map((s) => s.studentName).filter(Boolean));
 
   return {
     tutorGroupId: group.id, displayName: group.displayName,
@@ -136,7 +148,11 @@ export function detectConflicts(compareTutors: CompareTutor[], indexedGroups: In
   return conflicts;
 }
 
-export function findSharedFreeSlots(groups: IndexedTutorGroup[], weekdays: number[]): SharedFreeSlot[] {
+export function findSharedFreeSlots(
+  groups: IndexedTutorGroup[],
+  weekdays: number[],
+  dateRange?: DateRange,
+): SharedFreeSlot[] {
   if (groups.length === 0) return [];
   const results: SharedFreeSlot[] = [];
 
@@ -145,7 +161,15 @@ export function findSharedFreeSlots(groups: IndexedTutorGroup[], weekdays: numbe
     for (const group of groups) {
       const windows = group.availabilityWindows.filter((w) => w.weekday === weekday);
       if (windows.length === 0) { freePerTutor.push([]); continue; }
-      const blocks = group.sessionBlocks.filter((s) => s.isBlocking && s.weekday === weekday).sort((a, b) => a.startMinute - b.startMinute);
+      const blocks = group.sessionBlocks
+        .filter((s) => {
+          if (!s.isBlocking || s.weekday !== weekday) return false;
+          if (dateRange) {
+            if (s.startTime < dateRange.start || s.startTime >= dateRange.end) return false;
+          }
+          return true;
+        })
+        .sort((a, b) => a.startMinute - b.startMinute);
       const free: { start: number; end: number }[] = [];
       for (const w of windows) {
         let cursor = w.startMinute;

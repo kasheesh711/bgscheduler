@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { ensureIndex } from "@/lib/search/index";
 import { buildCompareTutor, detectConflicts, findSharedFreeSlots } from "@/lib/search/compare";
+import type { DateRange } from "@/lib/search/compare";
 import type { CompareResponse, SnapshotMeta } from "@/lib/search/types";
 
 const compareRequestSchema = z.object({
@@ -11,7 +12,35 @@ const compareRequestSchema = z.object({
   mode: z.enum(["recurring", "one_time"]),
   dayOfWeek: z.number().min(0).max(6).optional(),
   date: z.string().optional(),
+  weekStart: z.string().optional(),
 });
+
+/** Get the Monday of the current week in Asia/Bangkok. */
+function getCurrentMonday(): Date {
+  const now = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }),
+  );
+  const day = now.getDay(); // 0=Sun
+  const diff = day === 0 ? -6 : 1 - day; // shift to Monday
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diff);
+  return monday;
+}
+
+function parseMondayDate(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function addDays(date: Date, days: number): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+}
+
+function formatIsoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -34,7 +63,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { tutorGroupIds, mode, dayOfWeek, date } = parsed.data;
+  const { tutorGroupIds, mode, dayOfWeek, date, weekStart: weekStartParam } = parsed.data;
   const db = getDb();
 
   try {
@@ -63,6 +92,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Compute week range
+    const mondayDate = weekStartParam ? parseMondayDate(weekStartParam) : getCurrentMonday();
+    const sundayEnd = addDays(mondayDate, 7);
+    const dateRange: DateRange = { start: mondayDate, end: sundayEnd };
+
     const weekdays: number[] | undefined =
       dayOfWeek !== undefined
         ? [dayOfWeek]
@@ -70,11 +104,12 @@ export async function POST(request: NextRequest) {
           ? [new Date(date).getDay()]
           : undefined;
 
-    const compareTutors = indexedGroups.map((g) => buildCompareTutor(g, weekdays));
+    const compareTutors = indexedGroups.map((g) => buildCompareTutor(g, weekdays, dateRange));
     const conflicts = detectConflicts(compareTutors, indexedGroups);
     const sharedFreeSlots = findSharedFreeSlots(
       indexedGroups,
       weekdays ?? [0, 1, 2, 3, 4, 5, 6],
+      dateRange,
     );
 
     const response: CompareResponse = {
@@ -82,6 +117,8 @@ export async function POST(request: NextRequest) {
       tutors: compareTutors,
       conflicts,
       sharedFreeSlots,
+      weekStart: formatIsoDate(mondayDate),
+      weekEnd: formatIsoDate(addDays(mondayDate, 6)),
       latencyMs: Date.now() - startTime,
       warnings,
     };
