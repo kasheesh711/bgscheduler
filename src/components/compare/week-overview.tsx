@@ -7,7 +7,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
-import type { CompareTutor, Conflict, SharedFreeSlot, CompareSessionBlock } from "@/lib/search/types";
+import type { CompareTutor, Conflict, SharedFreeSlot } from "@/lib/search/types";
 import type { TutorChip } from "./tutor-selector";
 
 const HOUR_HEIGHT = 48;
@@ -35,95 +35,6 @@ function formatClassType(ct?: string): string {
   return ct ?? "";
 }
 
-// ── Overlap layout algorithm (Google Calendar style) ──────────────
-
-interface LayoutBlock {
-  session: CompareSessionBlock;
-  tutorIdx: number;
-  tutorGroupId: string;
-  displayName: string;
-  col: number;     // column index within overlap group
-  totalCols: number; // total columns in overlap group
-}
-
-/**
- * Lay out sessions within a day column like Google Calendar:
- * - Non-overlapping sessions get full width
- * - Overlapping sessions split the width equally
- */
-function layoutSessions(
-  tutors: CompareTutor[],
-  day: number,
-): LayoutBlock[] {
-  // Collect all sessions for this day with tutor metadata
-  const items: { session: CompareSessionBlock; tutorIdx: number; tutorGroupId: string; displayName: string }[] = [];
-  for (let i = 0; i < tutors.length; i++) {
-    for (const s of tutors[i].sessions) {
-      if (s.weekday === day) {
-        items.push({ session: s, tutorIdx: i, tutorGroupId: tutors[i].tutorGroupId, displayName: tutors[i].displayName });
-      }
-    }
-  }
-
-  // Sort by start time, then by tutor index for stability
-  items.sort((a, b) => a.session.startMinute - b.session.startMinute || a.tutorIdx - b.tutorIdx);
-
-  if (items.length === 0) return [];
-
-  // Group overlapping sessions using a sweep-line approach
-  const results: LayoutBlock[] = [];
-  let groupStart = 0;
-
-  while (groupStart < items.length) {
-    // Find all items that form a connected overlap group
-    let groupEnd = groupStart;
-    let maxEnd = items[groupStart].session.endMinute;
-
-    while (groupEnd + 1 < items.length && items[groupEnd + 1].session.startMinute < maxEnd) {
-      groupEnd++;
-      maxEnd = Math.max(maxEnd, items[groupEnd].session.endMinute);
-    }
-
-    // Assign columns within this group using greedy column assignment
-    const group = items.slice(groupStart, groupEnd + 1);
-    const colEnds: number[] = []; // tracks the end minute of each column
-
-    for (const item of group) {
-      // Find the first column where this session fits (doesn't overlap)
-      let col = -1;
-      for (let c = 0; c < colEnds.length; c++) {
-        if (item.session.startMinute >= colEnds[c]) {
-          col = c;
-          break;
-        }
-      }
-      if (col === -1) {
-        col = colEnds.length;
-        colEnds.push(0);
-      }
-      colEnds[col] = item.session.endMinute;
-
-      results.push({
-        ...item,
-        col,
-        totalCols: 0, // will fill in below
-      });
-    }
-
-    // Set totalCols for all items in this group
-    const totalCols = colEnds.length;
-    for (let i = results.length - group.length; i < results.length; i++) {
-      results[i].totalCols = totalCols;
-    }
-
-    groupStart = groupEnd + 1;
-  }
-
-  return results;
-}
-
-// ── Component ─────────────────────────────────────────────────────
-
 interface WeekOverviewProps {
   tutors: CompareTutor[];
   tutorChips: TutorChip[];
@@ -142,14 +53,6 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
     }
     return map;
   }, [conflicts]);
-
-  const layoutsByDay = useMemo(() => {
-    const map = new Map<number, LayoutBlock[]>();
-    for (const day of DISPLAY_DAYS) {
-      map.set(day, layoutSessions(tutors, day));
-    }
-    return map;
-  }, [tutors]);
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -173,7 +76,6 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
       <div className="flex-1 flex overflow-hidden">
         {DISPLAY_DAYS.map((day) => {
           const dayConflicts = conflictsByDay.get(day) ?? [];
-          const blocks = layoutsByDay.get(day) ?? [];
           return (
             <div key={day} className="flex-1 min-w-0 border-r border-border/30 last:border-r-0 flex flex-col">
               {/* Day header */}
@@ -212,77 +114,75 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                   );
                 })}
 
-                {/* Session blocks — full-width with overlap splitting */}
-                {blocks.map((block, bIdx) => {
-                  const { session: s, tutorIdx, col, totalCols } = block;
+                {/* Session blocks — full width, stacked by tutor */}
+                {tutors.map((t, tutorIdx) => {
                   const chip = tutorChips[tutorIdx];
-                  const top = minuteToY(s.startMinute);
-                  const height = ((s.endMinute - s.startMinute) / 60) * HOUR_HEIGHT;
-                  const isConflict = dayConflicts.some(
-                    (c) =>
-                      s.studentName &&
-                      c.studentName.toLowerCase() === s.studentName?.toLowerCase() &&
-                      s.startMinute < c.endMinute &&
-                      s.endMinute > c.startMinute,
-                  );
-                  const bgColor = isConflict
-                    ? "rgba(239, 68, 68, 0.2)"
-                    : `${chip?.color}30`;
-                  const borderColor = isConflict ? "#ef4444" : chip?.color;
+                  const sessions = t.sessions.filter((s) => s.weekday === day);
+                  // Inset each tutor slightly so overlapping sessions show both colors
+                  const insetLeft = tutorIdx * 3;
+                  const insetRight = (tutors.length - 1 - tutorIdx) * 3;
 
-                  // Position: col/totalCols within the day column width
-                  const colWidthPct = 100 / totalCols;
-                  const leftPct = col * colWidthPct;
+                  return sessions.map((s, sIdx) => {
+                    const top = minuteToY(s.startMinute);
+                    const height = ((s.endMinute - s.startMinute) / 60) * HOUR_HEIGHT;
+                    const isConflict = dayConflicts.some(
+                      (c) =>
+                        s.studentName &&
+                        c.studentName.toLowerCase() === s.studentName?.toLowerCase() &&
+                        s.startMinute < c.endMinute &&
+                        s.endMinute > c.startMinute,
+                    );
+                    const bgColor = isConflict
+                      ? "rgba(239, 68, 68, 0.25)"
+                      : `${chip?.color}40`;
+                    const borderColor = isConflict ? "#ef4444" : chip?.color;
 
-                  return (
-                    <Popover key={`block-${day}-${bIdx}`}>
-                      <PopoverTrigger
-                        className="absolute rounded-sm cursor-pointer overflow-hidden z-[1] text-left"
-                        style={{
-                          top: top + 1,
-                          left: `calc(${leftPct}% + 1px)`,
-                          width: `calc(${colWidthPct}% - 2px)`,
-                          height: Math.max(height - 2, 14),
-                          background: bgColor,
-                          borderLeft: `3px solid ${borderColor}`,
-                        }}
-                      >
-                        <div className="px-1 py-0.5 overflow-hidden">
-                          <div
-                            className="text-[11px] leading-tight font-semibold truncate"
-                            style={{ color: isConflict ? "#fca5a5" : `${chip?.color}` }}
-                          >
-                            {minuteToLabel(s.startMinute)}
+                    return (
+                      <Popover key={`${t.tutorGroupId}-${day}-${sIdx}`}>
+                        <PopoverTrigger
+                          className="absolute rounded-sm cursor-pointer overflow-hidden text-left"
+                          style={{
+                            top: top + 1,
+                            left: insetLeft + 1,
+                            right: insetRight + 1,
+                            height: Math.max(height - 2, 14),
+                            background: bgColor,
+                            borderLeft: `3px solid ${borderColor}`,
+                            zIndex: tutorIdx + 1,
+                          }}
+                        >
+                          <div className="px-1 py-0.5 overflow-hidden">
+                            <div
+                              className="text-[11px] leading-tight font-semibold truncate"
+                              style={{ color: isConflict ? "#dc2626" : `${chip?.color}` }}
+                            >
+                              {minuteToLabel(s.startMinute)} {s.subject ?? ""}
+                            </div>
+                            {height > 28 && s.studentName && (
+                              <div className="text-[10px] leading-tight text-foreground/60 truncate">
+                                {s.studentName}
+                              </div>
+                            )}
                           </div>
-                          {height > 24 && (
-                            <div className="text-[10px] leading-tight text-foreground/70 truncate">
-                              {s.subject ?? ""}
-                            </div>
+                        </PopoverTrigger>
+                        <PopoverContent side="top" className="w-56 p-3 text-xs space-y-1 z-50">
+                          <p className="font-semibold text-sm" style={{ color: chip?.color }}>
+                            {t.displayName}
+                          </p>
+                          {s.studentName && <p className="font-medium">{s.studentName}</p>}
+                          {s.subject && <p className="text-muted-foreground">{s.subject}</p>}
+                          <p>{minuteToLabel(s.startMinute)}–{minuteToLabel(s.endMinute)}</p>
+                          <div className="flex gap-1 flex-wrap">
+                            {s.classType && <Badge variant="outline" className="text-[10px] px-1 py-0">{formatClassType(s.classType)}</Badge>}
+                            {s.location && <Badge variant="outline" className="text-[10px] px-1 py-0">{s.location}</Badge>}
+                          </div>
+                          {isConflict && (
+                            <p className="text-conflict text-[10px] font-medium">Conflict detected</p>
                           )}
-                          {height > 38 && s.studentName && (
-                            <div className="text-[9px] leading-tight text-muted-foreground truncate">
-                              {s.studentName}
-                            </div>
-                          )}
-                        </div>
-                      </PopoverTrigger>
-                      <PopoverContent side="top" className="w-56 p-3 text-xs space-y-1 z-50">
-                        <p className="font-semibold text-sm" style={{ color: chip?.color }}>
-                          {block.displayName}
-                        </p>
-                        {s.studentName && <p className="font-medium">{s.studentName}</p>}
-                        {s.subject && <p className="text-muted-foreground">{s.subject}</p>}
-                        <p>{minuteToLabel(s.startMinute)}–{minuteToLabel(s.endMinute)}</p>
-                        <div className="flex gap-1 flex-wrap">
-                          {s.classType && <Badge variant="outline" className="text-[10px] px-1 py-0">{formatClassType(s.classType)}</Badge>}
-                          {s.location && <Badge variant="outline" className="text-[10px] px-1 py-0">{s.location}</Badge>}
-                        </div>
-                        {isConflict && (
-                          <p className="text-conflict text-[10px] font-medium">Conflict detected</p>
-                        )}
-                      </PopoverContent>
-                    </Popover>
-                  );
+                        </PopoverContent>
+                      </Popover>
+                    );
+                  });
                 })}
               </div>
             </div>
