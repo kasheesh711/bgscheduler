@@ -17,7 +17,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - Auth.js with Google provider + `admin_users` table for explicit email allowlisting
 - Drizzle ORM + Neon Postgres (ap-southeast-1) with 14 tables
 - Vercel hosting with daily cron (Hobby plan limit; upgrade to Pro for 30-min cadence)
-- Vitest with 72 passing unit tests
+- Vitest with 80 passing unit tests
 
 ### Database schema (complete, migrated, seeded)
 - `snapshots` — versioned snapshot records with atomic `active` flag promotion
@@ -68,16 +68,26 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - Modality filtering: online/onsite/either
 - Fail-closed: unresolved identity/modality/qualification → Needs Review, never Available
 
+### Compare engine (complete)
+- Reads from the same in-memory SearchIndex singleton — no additional DB queries
+- **Schedule assembly** (`buildCompareTutor`) — transforms IndexedTutorGroup into CompareTutor with sessions filtered by weekday, weekly hours booked, distinct student count
+- **Conflict detection** (`detectConflicts`) — finds same student with overlapping sessions across different selected tutors (case-insensitive name matching, deduped by student+day+tutor pair)
+- **Shared free slots** (`findSharedFreeSlots`) — computes time ranges where ALL selected tutors are simultaneously free by subtracting blocking sessions from availability windows and intersecting intervals across tutors (minimum 30-minute threshold)
+- **Discovery** — filters all tutors by subject/level/mode/time, pre-computes conflict status against existing selected tutors, sorts by conflicts then availability
+
 ### API routes (complete)
 - `POST /api/search/range` — range search: time window + duration → availability grid with sub-slots
 - `POST /api/search` — legacy slot-based search (kept for backward compatibility)
 - `GET /api/filters` — distinct subjects, curriculums, levels from active snapshot for dropdown population
 - `GET /api/data-health` — sync status, issue counts by type, unresolved aliases/modality/tags, recent sync history
 - `POST /api/internal/sync-wise` — cron-triggered sync, CRON_SECRET auth
+- `POST /api/compare` — compare 1-3 tutors: returns schedules, student-level conflicts, shared free slots
+- `POST /api/compare/discover` — find candidate tutors with subject/level/mode/time filters and pre-computed conflict status against existing selected tutors
 
 ### Frontend (complete)
 - `/login` — Google sign-in with access-denied error handling
-- `/search` — range search with time window + class duration (1hr/1.5hr/2hr), mode toggle (recurring/one-time), data-driven dropdown filters (subject/curriculum/level), availability grid results (rows=tutors, columns=time slots), row selection with copy-for-parents button, recent searches (localStorage, last 10), Needs Review section with reason badges, stale snapshot banner
+- `/search` — range search with time window + class duration (1hr/1.5hr/2hr), mode toggle (recurring/one-time), data-driven dropdown filters (subject/curriculum/level), availability grid results (rows=tutors, columns=time slots), row selection with copy-for-parents button, "Compare schedules" button (appears when 2-3 tutors selected, links to /compare), Compare nav link in header, recent searches (localStorage, last 10), Needs Review section with reason badges, stale snapshot banner
+- `/compare` — dedicated tutor schedule comparison page with: tutor selector chips (max 3, color-coded, removable), week overview (compressed Mon-Sun table with session chips and conflict warnings), day drill-down (GCal-style side-by-side columns with positioned session blocks at actual time positions), automated conflict detection (red highlight bands when same student has overlapping sessions across tutors), shared free slot indicators (green dashed "All free" labels), discovery panel (slide-out from right with name search, subject/level/mode filters, "only show tutors free at" time filter, candidate cards with conflict/free-slot badges), "Find alternatives" button on conflicts (pre-fills discovery panel with conflicting slot's subject and time), tutor profile popover (click tutor name for weekly hours, student count, subjects, data issues), URL param support (`?tutors=id1,id2` for pre-loading from search)
 - `/data-health` — sync status cards, snapshot stats, issues by type, unresolved aliases table, unresolved modality table, unmapped tags table, recent sync history
 
 ### Tests
@@ -89,6 +99,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - Modality: pair derivation, session type evidence, unresolved → data_issue
 - Qualifications: tag parsing (Int./Thai/ExamPrep), unmapped → data_issue
 - Search engine: recurring blocking, one-time blocking, cancelled non-blocking, mode filtering, qualification filtering, multi-slot intersection, Needs Review routing
+- Compare engine: buildCompareTutor (weekday filtering, full week, weekly hours, student count), detectConflicts (same student overlap, different students, non-overlapping times), findSharedFreeSlots (interval intersection across tutors)
 - Wise contract: auth headers, teacher list parsing, availability envelope parsing, sessions pagination parsing
 - Parser: single/multi slot parsing, abbreviated days, ambiguous input warnings
 
