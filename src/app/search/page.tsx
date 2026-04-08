@@ -168,9 +168,14 @@ export default function SearchPage() {
     <div className="mx-auto max-w-6xl p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Tutor Availability Search</h1>
-        <a href="/data-health" className="text-sm text-blue-600 hover:underline">
-          Data Health
-        </a>
+        <div className="flex items-center gap-4">
+          <a href="/compare" className="text-sm text-blue-600 hover:underline">
+            Compare
+          </a>
+          <a href="/data-health" className="text-sm text-blue-600 hover:underline">
+            Data Health
+          </a>
+        </div>
       </div>
 
       {/* Recent searches */}
