@@ -38,7 +38,7 @@ export function WeekOverview({ tutors, tutorChips, conflicts, onDayClick }: Week
                 >
                   {DAY_NAMES[day]}
                   {dayConflicts.length > 0 && (
-                    <span className="ml-1 text-red-400">⚠</span>
+                    <span className="ml-1 text-conflict">⚠</span>
                   )}
                   <span className="block text-[10px] text-muted-foreground font-normal">click to expand</span>
                 </th>

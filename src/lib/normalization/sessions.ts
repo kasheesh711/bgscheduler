@@ -14,6 +14,10 @@ export interface NormalizedSessionBlock {
   title?: string;
   sessionType?: string;
   location?: string;
+  studentName?: string;
+  subject?: string;
+  classType?: string;
+  recurrenceId?: string;
 }
 
 // Statuses that do NOT block
@@ -66,6 +70,10 @@ export function normalizeSessions(
       title: session.title,
       sessionType: session.type,
       location: session.location,
+      studentName: session.classId?.name,
+      subject: session.classId?.subject,
+      classType: session.classId?.classType,
+      recurrenceId: session.metadata?.recurrenceId,
     });
   }
 

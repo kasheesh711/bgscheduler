@@ -284,6 +284,10 @@ export async function runFullSync(
         title: block.title,
         sessionType: block.sessionType,
         location: block.location,
+        studentName: block.studentName,
+        subject: block.subject,
+        classType: block.classType,
+        recurrenceId: block.recurrenceId,
       });
     }
 

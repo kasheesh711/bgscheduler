@@ -133,10 +133,10 @@ export function CalendarGrid({
         {conflictRanges.map((cr, i) => (
           <div
             key={`conflict-${i}`}
-            className="absolute left-0 right-0 bg-red-500/5 border-y border-red-500/20 z-0"
+            className="absolute left-0 right-0 bg-conflict/5 border-y border-conflict/20 z-0"
             style={{ top: cr.top, height: cr.height }}
           >
-            <div className="absolute right-0 top-1/2 -translate-y-1/2 bg-red-500 text-white text-[9px] px-2 py-0.5 rounded-l font-semibold whitespace-nowrap flex items-center gap-1">
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 bg-conflict text-white text-[9px] px-2 py-0.5 rounded-l font-semibold whitespace-nowrap flex items-center gap-1">
               <span>⚠ {cr.conflict.studentName}</span>
               {onFindAlternatives && (
                 <button
@@ -223,7 +223,7 @@ export function CalendarGrid({
               className="absolute left-0 right-0 flex items-center justify-center z-[1] pointer-events-none"
               style={{ top, height }}
             >
-              <div className="bg-green-500/5 border border-dashed border-green-500/20 rounded px-3 py-0.5 text-green-400 text-[10px]">
+              <div className="bg-free-slot/5 border border-dashed border-free-slot/20 rounded px-3 py-0.5 text-free-slot text-[10px]">
                 {minuteToLabel(slot.startMinute)}–{minuteToLabel(slot.endMinute)} · All free
               </div>
             </div>

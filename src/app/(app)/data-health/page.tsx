@@ -51,18 +51,11 @@ export default function DataHealthPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <div className="p-6">Loading...</div>;
-  if (!data) return <div className="p-6">Failed to load health data</div>;
+  if (loading) return <div className="py-8 text-center text-muted-foreground">Loading...</div>;
+  if (!data) return <div className="py-8 text-center text-muted-foreground">Failed to load health data</div>;
 
   return (
-    <div className="mx-auto max-w-6xl p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Data Health</h1>
-        <a href="/search" className="text-sm text-blue-600 hover:underline">
-          Back to Search
-        </a>
-      </div>
-
+    <div className="space-y-6">
       {/* Sync status */}
       <div className="grid grid-cols-3 gap-4">
         <Card>
@@ -111,7 +104,7 @@ export default function DataHealthPage() {
                 : "None"}
             </p>
             {data.lastFailureError && (
-              <p className="text-xs text-red-600 mt-1 truncate">{data.lastFailureError}</p>
+              <p className="text-xs text-destructive mt-1 truncate">{data.lastFailureError}</p>
             )}
           </CardContent>
         </Card>
@@ -277,7 +270,7 @@ export default function DataHealthPage() {
                     {s.finishedAt ? new Date(s.finishedAt).toLocaleString() : "-"}
                   </TableCell>
                   <TableCell>{s.teacherCount ?? "-"}</TableCell>
-                  <TableCell className="text-xs text-red-600 max-w-xs truncate">
+                  <TableCell className="text-xs text-destructive max-w-xs truncate">
                     {s.errorSummary ?? "-"}
                   </TableCell>
                 </TableRow>

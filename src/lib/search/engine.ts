@@ -11,6 +11,7 @@ import {
   TutorReviewResult,
   SnapshotMeta,
   SearchFilters,
+  BlockingSessionInfo,
 } from "./types";
 import { parseTimeToMinutes } from "@/lib/normalization/timezone";
 
@@ -181,6 +182,55 @@ function isBlockedOneTime(
     if (sessionDay !== targetDay) return false;
     return s.startMinute < endMinute && s.endMinute > startMinute;
   });
+}
+
+function formatMinuteToHHMM(minute: number): string {
+  const h = Math.floor(minute / 60);
+  const m = minute % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/**
+ * Get blocking session details for a tutor group in a given slot.
+ * Returns metadata for each overlapping blocking session.
+ */
+export function getBlockingSessions(
+  group: IndexedTutorGroup,
+  mode: "recurring" | "one_time",
+  weekday: number,
+  startMinute: number,
+  endMinute: number,
+  dateStr?: string,
+): BlockingSessionInfo[] {
+  const results: BlockingSessionInfo[] = [];
+
+  for (const s of group.sessionBlocks) {
+    if (!s.isBlocking) continue;
+
+    let overlaps = false;
+    if (mode === "recurring") {
+      overlaps = s.weekday === weekday && s.startMinute < endMinute && s.endMinute > startMinute;
+    } else if (dateStr) {
+      const targetDay = new Date(dateStr).toISOString().slice(0, 10);
+      const sessionDay = s.startTime.toISOString().slice(0, 10);
+      overlaps = sessionDay === targetDay && s.startMinute < endMinute && s.endMinute > startMinute;
+    }
+
+    if (overlaps) {
+      results.push({
+        title: s.title,
+        studentName: s.studentName,
+        subject: s.subject,
+        classType: s.classType,
+        recurrenceId: s.recurrenceId,
+        location: s.location,
+        startTime: formatMinuteToHHMM(s.startMinute),
+        endTime: formatMinuteToHHMM(s.endMinute),
+      });
+    }
+  }
+
+  return results;
 }
 
 /**

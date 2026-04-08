@@ -1,7 +1,12 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import type { RangeGridRow, TutorReviewResult } from "@/lib/search/types";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import type { RangeGridRow, TutorReviewResult, BlockingSessionInfo } from "@/lib/search/types";
 
 function formatSlotLabel(start: string, end: string): string {
   const fmt = (t: string) => {
@@ -11,6 +16,52 @@ function formatSlotLabel(start: string, end: string): string {
     return m === 0 ? `${h12}${suffix}` : `${h12}:${String(m).padStart(2, "0")}${suffix}`;
   };
   return `${fmt(start)}-${fmt(end)}`;
+}
+
+function formatClassType(classType: string): string {
+  if (classType === "ONE_TO_ONE") return "1:1";
+  if (classType === "GROUP") return "Group";
+  return classType;
+}
+
+function BlockingSessionPopover({ sessions }: { sessions: BlockingSessionInfo[] }) {
+  if (sessions.length === 0) return null;
+
+  return (
+    <div className="space-y-2 text-xs">
+      {sessions.map((s, i) => (
+        <div key={i}>
+          {i > 0 && <div className="border-t border-border my-2" />}
+          {s.studentName && (
+            <p className="font-semibold text-foreground">{s.studentName}</p>
+          )}
+          {s.subject && (
+            <p className="text-muted-foreground">{s.subject}</p>
+          )}
+          <p className="text-muted-foreground">
+            {formatSlotLabel(s.startTime, s.endTime)}
+          </p>
+          <div className="flex gap-1 flex-wrap mt-1">
+            {s.classType && (
+              <Badge variant="outline" className="text-[10px] px-1 py-0">
+                {formatClassType(s.classType)}
+              </Badge>
+            )}
+            {s.location && (
+              <Badge variant="outline" className="text-[10px] px-1 py-0">
+                {s.location}
+              </Badge>
+            )}
+            {s.recurrenceId && (
+              <Badge variant="secondary" className="text-[10px] px-1 py-0">
+                recurring
+              </Badge>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 interface AvailabilityGridProps {
@@ -60,7 +111,7 @@ export function AvailabilityGrid({
                   <tr
                     key={row.tutorGroupId}
                     className={`border-b cursor-pointer transition-colors ${
-                      isSelected ? "bg-blue-950/30" : "hover:bg-muted/30"
+                      isSelected ? "bg-primary/10" : "hover:bg-muted/30"
                     }`}
                     onClick={() => onToggleSelect(row.tutorGroupId)}
                   >
@@ -73,18 +124,53 @@ export function AvailabilityGrid({
                       />
                     </td>
                     <td className="px-3 py-2 font-medium">{row.displayName}</td>
-                    {row.availability.map((avail, i) => (
-                      <td
-                        key={i}
-                        className={`px-2 py-2 text-center ${
-                          avail
-                            ? "bg-green-950/40 text-green-400"
-                            : "text-muted-foreground/30"
-                        }`}
-                      >
-                        {avail ? "\u2713" : "\u2014"}
-                      </td>
-                    ))}
+                    {row.availability.map((cell, i) => {
+                      const isAvailable = cell === true;
+                      const blockingSessions = isAvailable ? [] : (cell as BlockingSessionInfo[]);
+                      const hasDetails = blockingSessions.length > 0;
+
+                      if (isAvailable) {
+                        return (
+                          <td
+                            key={i}
+                            className="px-2 py-2 text-center bg-available/15 text-available"
+                          >
+                            {"\u2713"}
+                          </td>
+                        );
+                      }
+
+                      if (hasDetails) {
+                        return (
+                          <td key={i} className="px-2 py-2 text-center">
+                            <Popover>
+                              <PopoverTrigger
+                                onClick={(e) => e.stopPropagation()}
+                                className="cursor-help text-blocked/60 hover:text-blocked transition-colors"
+                              >
+                                {"\u2022"}
+                              </PopoverTrigger>
+                              <PopoverContent
+                                side="top"
+                                className="w-56 p-3"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <BlockingSessionPopover sessions={blockingSessions} />
+                              </PopoverContent>
+                            </Popover>
+                          </td>
+                        );
+                      }
+
+                      return (
+                        <td
+                          key={i}
+                          className="px-2 py-2 text-center text-muted-foreground/30"
+                        >
+                          {"\u2014"}
+                        </td>
+                      );
+                    })}
                     <td className="px-3 py-2">
                       <div className="flex gap-1 flex-wrap">
                         {row.supportedModes.map((m) => (

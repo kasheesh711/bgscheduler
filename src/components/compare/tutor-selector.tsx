@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 
-const TUTOR_COLORS = ["#3b82f6", "#f472b6", "#a78bfa"];
+const TUTOR_COLORS = ["#0d9488", "#e67e22", "#7c3aed"];
 
 interface TutorChip {
   tutorGroupId: string;

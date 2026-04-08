@@ -44,6 +44,14 @@ export interface WiseLeave {
   [key: string]: unknown;
 }
 
+export interface WiseSessionClassId {
+  _id?: string;
+  name?: string;
+  subject?: string;
+  classType?: string;
+  [key: string]: unknown;
+}
+
 export interface WiseSession {
   _id: string;
   userId?: string | WiseUserReference;
@@ -55,6 +63,8 @@ export interface WiseSession {
   type?: string;
   title?: string;
   location?: string;
+  classId?: WiseSessionClassId;
+  metadata?: { recurrenceId?: string; [key: string]: unknown };
   [key: string]: unknown;
 }
 

@@ -38,6 +38,12 @@ export interface IndexedSessionBlock {
   endMinute: number;
   isBlocking: boolean;
   wiseTeacherId: string;
+  title?: string;
+  studentName?: string;
+  subject?: string;
+  classType?: string;
+  recurrenceId?: string;
+  location?: string;
 }
 
 export interface IndexedDataIssue {
@@ -201,6 +207,12 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
         endMinute: s.endMinute,
         isBlocking: s.isBlocking,
         wiseTeacherId: s.wiseTeacherId,
+        title: s.title ?? undefined,
+        studentName: s.studentName ?? undefined,
+        subject: s.subject ?? undefined,
+        classType: s.classType ?? undefined,
+        recurrenceId: s.recurrenceId ?? undefined,
+        location: s.location ?? undefined,
       })),
       dataIssues: gIssues.map((i) => ({
         type: i.type,

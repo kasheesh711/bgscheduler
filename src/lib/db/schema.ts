@@ -190,6 +190,10 @@ export const futureSessionBlocks = pgTable("future_session_blocks", {
   title: text("title"),
   sessionType: text("session_type"),
   location: text("location"),
+  studentName: text("student_name"),
+  subject: text("subject"),
+  classType: text("class_type"),
+  recurrenceId: text("recurrence_id"),
 }, (table) => [
   index("fsb_snapshot_idx").on(table.snapshotId),
   index("fsb_weekday_idx").on(table.snapshotId, table.weekday),

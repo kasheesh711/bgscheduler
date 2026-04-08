@@ -3,8 +3,9 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { ensureIndex } from "@/lib/search/index";
-import { executeSearch } from "@/lib/search/engine";
-import type { RangeSearchResponse, RangeGridRow, TutorReviewResult } from "@/lib/search/types";
+import { executeSearch, getBlockingSessions } from "@/lib/search/engine";
+import { parseTimeToMinutes } from "@/lib/normalization/timezone";
+import type { RangeSearchResponse, RangeGridRow, TutorReviewResult, BlockingSessionInfo } from "@/lib/search/types";
 
 const rangeRequestSchema = z.object({
   searchMode: z.enum(["recurring", "one_time"]),
@@ -104,7 +105,7 @@ export async function POST(request: NextRequest) {
     // Reshape per-slot results into grid
     const tutorMap = new Map<
       string,
-      { row: Omit<RangeGridRow, "availability">; available: boolean[] }
+      { row: Omit<RangeGridRow, "availability">; availability: (true | BlockingSessionInfo[])[] }
     >();
     const reviewMap = new Map<string, TutorReviewResult>();
 
@@ -120,10 +121,10 @@ export async function POST(request: NextRequest) {
               supportedModes: tutor.supportedModes,
               qualifications: tutor.qualifications,
             },
-            available: new Array(subSlots.length).fill(false),
+            availability: new Array<true | BlockingSessionInfo[]>(subSlots.length).fill([]),
           });
         }
-        tutorMap.get(tutor.tutorGroupId)!.available[i] = true;
+        tutorMap.get(tutor.tutorGroupId)!.availability[i] = true;
       }
 
       for (const tutor of slotResult.needsReview) {
@@ -133,14 +134,42 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Fill in blocking session details for non-available cells
+    for (const [tutorGroupId, entry] of tutorMap) {
+      const group = index.tutorGroups.find((g) => g.id === tutorGroupId);
+      if (!group) continue;
+
+      for (let i = 0; i < subSlots.length; i++) {
+        if (entry.availability[i] === true) continue;
+
+        const ss = subSlots[i];
+        const slotStartMin = parseTimeToMinutes(ss.start);
+        const slotEndMin = parseTimeToMinutes(ss.end);
+        const weekday = searchMode === "recurring"
+          ? dayOfWeek!
+          : new Date(date!).getDay();
+
+        const blockingSessions = getBlockingSessions(
+          group,
+          searchMode,
+          weekday,
+          slotStartMin,
+          slotEndMin,
+          date,
+        );
+
+        entry.availability[i] = blockingSessions.length > 0 ? blockingSessions : [];
+      }
+    }
+
     // Sort grid by number of available slots (descending)
     const grid: RangeGridRow[] = [...tutorMap.values()]
       .sort((a, b) => {
-        const aCount = a.available.filter(Boolean).length;
-        const bCount = b.available.filter(Boolean).length;
+        const aCount = a.availability.filter((c) => c === true).length;
+        const bCount = b.availability.filter((c) => c === true).length;
         return bCount - aCount;
       })
-      .map((entry) => ({ ...entry.row, availability: entry.available }));
+      .map((entry) => ({ ...entry.row, availability: entry.availability }));
 
     const response: RangeSearchResponse = {
       snapshotMeta: result.snapshotMeta,

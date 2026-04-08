@@ -59,7 +59,7 @@ export function CopyButton({
     const lines = selectedRows.map((row, i) => {
       const modeLabel = row.supportedModes.join("/");
       const times = row.availability
-        .map((avail, j) => (avail ? formatSlotTime(subSlots[j].start, subSlots[j].end) : null))
+        .map((avail, j) => (avail === true ? formatSlotTime(subSlots[j].start, subSlots[j].end) : null))
         .filter(Boolean)
         .join(", ");
       return `${i + 1}. ${row.displayName} (${modeLabel}): ${times}`;

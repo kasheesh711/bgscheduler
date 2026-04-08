@@ -12,17 +12,17 @@ function LoginForm() {
   const error = searchParams.get("error");
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background via-secondary to-accent/30">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Tutor Availability Search</CardTitle>
+          <CardTitle className="text-2xl text-primary">Tutor Availability Search</CardTitle>
           <CardDescription>
             Internal admin tool. Sign in with your company Google account.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {error && (
-            <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">
+            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
               {error === "AccessDenied"
                 ? "Access denied. Your email is not on the admin allowlist."
                 : `Authentication error: ${error}`}
