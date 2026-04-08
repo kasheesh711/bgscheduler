@@ -13,6 +13,7 @@ const compareRequestSchema = z.object({
   dayOfWeek: z.number().min(0).max(6).optional(),
   date: z.string().optional(),
   weekStart: z.string().optional(),
+  fetchOnly: z.array(z.string()).optional(),
 });
 
 /** Get the Monday of the current week in Asia/Bangkok. */
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { tutorGroupIds, mode, dayOfWeek, date, weekStart: weekStartParam } = parsed.data;
+  const { tutorGroupIds, mode, dayOfWeek, date, weekStart: weekStartParam, fetchOnly } = parsed.data;
   const db = getDb();
 
   try {
@@ -104,17 +105,24 @@ export async function POST(request: NextRequest) {
           ? [new Date(date).getDay()]
           : undefined;
 
-    const compareTutors = indexedGroups.map((g) => buildCompareTutor(g, weekdays, dateRange));
-    const conflicts = detectConflicts(compareTutors, indexedGroups);
+    const allCompareTutors = indexedGroups.map((g) => buildCompareTutor(g, weekdays, dateRange));
+    const conflicts = detectConflicts(allCompareTutors, indexedGroups);
     const sharedFreeSlots = findSharedFreeSlots(
       indexedGroups,
       weekdays ?? [0, 1, 2, 3, 4, 5, 6],
       dateRange,
     );
 
+    // When fetchOnly is provided, only serialize the requested subset of tutors.
+    // The full set is still used above for conflict/free-slot detection.
+    const fetchOnlySet = fetchOnly ? new Set(fetchOnly) : null;
+    const responseTutors = fetchOnlySet
+      ? allCompareTutors.filter((t) => fetchOnlySet.has(t.tutorGroupId))
+      : allCompareTutors;
+
     const response: CompareResponse = {
       snapshotMeta,
-      tutors: compareTutors,
+      tutors: responseTutors,
       conflicts,
       sharedFreeSlots,
       weekStart: formatIsoDate(mondayDate),

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,7 @@ import type {
   SearchMode,
   RangeSearchResponse,
   CompareResponse,
+  CompareTutor,
   Conflict,
 } from "@/lib/search/types";
 
@@ -162,6 +163,11 @@ function SearchPageInner() {
   const [prefillConflict, setPrefillConflict] = useState<Conflict | null>(null);
   const [weekStart, setWeekStart] = useState<string>(getCurrentMonday);
 
+  // Client-side cache: avoids refetching tutor schedules already loaded for the same week
+  const tutorCache = useRef(new Map<string, CompareTutor>());
+  const lastSnapshotId = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
   // --- Init ---
   useEffect(() => {
     fetch("/api/filters")
@@ -264,33 +270,73 @@ function SearchPageInner() {
   };
 
   // --- Compare handlers ---
-  const fetchCompare = useCallback(async (ids: string[], week: string) => {
+  const fetchCompare = useCallback(async (
+    ids: string[],
+    week: string,
+    opts?: { fetchOnly?: string[] },
+  ) => {
     if (ids.length === 0) {
       setCompareResponse(null);
       return;
     }
+
+    // Abort any in-flight request
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setCompareLoading(true);
     setCompareError(null);
     try {
       const res = await fetch("/api/compare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tutorGroupIds: ids, mode: "recurring", weekStart: week }),
+        body: JSON.stringify({
+          tutorGroupIds: ids,
+          mode: "recurring",
+          weekStart: week,
+          fetchOnly: opts?.fetchOnly,
+        }),
+        signal: controller.signal,
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? `Compare failed (${res.status})`);
       }
       const data: CompareResponse = await res.json();
-      setCompareResponse(data);
+
+      // If server snapshot changed, our cache is stale — refetch everything
+      if (lastSnapshotId.current && lastSnapshotId.current !== data.snapshotMeta.snapshotId) {
+        tutorCache.current.clear();
+        // Recursive full refetch (no fetchOnly)
+        setCompareLoading(false);
+        return fetchCompare(ids, week);
+      }
+      lastSnapshotId.current = data.snapshotMeta.snapshotId;
+
+      // Merge returned tutors into cache
+      for (const t of data.tutors) {
+        tutorCache.current.set(`${t.tutorGroupId}:${week}`, t);
+      }
+
+      // Build full tutor list from cache
+      const mergedTutors = ids
+        .map((id) => tutorCache.current.get(`${id}:${week}`))
+        .filter((t): t is CompareTutor => t !== undefined);
+
+      setCompareResponse({
+        ...data,
+        tutors: mergedTutors,
+      });
       setCompareTutors(
-        data.tutors.map((t, i) => ({
+        mergedTutors.map((t, i) => ({
           tutorGroupId: t.tutorGroupId,
           displayName: t.displayName,
           color: TUTOR_COLORS[i % TUTOR_COLORS.length],
         })),
       );
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setCompareError(err instanceof Error ? err.message : "Compare failed");
     } finally {
       setCompareLoading(false);
@@ -299,13 +345,20 @@ function SearchPageInner() {
 
   const handleCompareSelected = () => {
     const ids = [...selectedIds];
+    tutorCache.current.clear();
     fetchCompare(ids, weekStart);
   };
 
   const handleRemoveTutor = (id: string) => {
     const remaining = compareTutors.filter((t) => t.tutorGroupId !== id);
     setCompareTutors(remaining);
-    fetchCompare(remaining.map((t) => t.tutorGroupId), weekStart);
+    tutorCache.current.delete(`${id}:${weekStart}`);
+    if (remaining.length === 0) {
+      setCompareResponse(null);
+      return;
+    }
+    // Fetch zero tutors — only recompute conflicts/free-slots on server
+    fetchCompare(remaining.map((t) => t.tutorGroupId), weekStart, { fetchOnly: [] });
   };
 
   const handleAddTutor = (id: string, name: string) => {
@@ -320,11 +373,13 @@ function SearchPageInner() {
     ];
     setCompareTutors(updated);
     setDiscoveryOpen(false);
-    fetchCompare(updated.map((t) => t.tutorGroupId), weekStart);
+    // Only fetch the newly added tutor
+    fetchCompare(updated.map((t) => t.tutorGroupId), weekStart, { fetchOnly: [id] });
   };
 
   const handleWeekChange = (newWeek: string) => {
     setWeekStart(newWeek);
+    tutorCache.current.clear();
     if (compareTutors.length > 0) {
       fetchCompare(compareTutors.map((t) => t.tutorGroupId), newWeek);
     }
