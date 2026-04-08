@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,14 @@ import type { CompareResponse, Conflict } from "@/lib/search/types";
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export default function ComparePage() {
+  return (
+    <Suspense fallback={<div className="mx-auto max-w-6xl p-6 text-center text-muted-foreground">Loading...</div>}>
+      <ComparePageInner />
+    </Suspense>
+  );
+}
+
+function ComparePageInner() {
   const searchParams = useSearchParams();
   const [tutors, setTutors] = useState<TutorChip[]>([]);
   const [activeDay, setActiveDay] = useState<number | null>(null);
