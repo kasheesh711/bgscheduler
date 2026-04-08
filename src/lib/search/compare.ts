@@ -85,6 +85,37 @@ export function buildCompareTutor(
     return true;
   });
 
+  // Fallback: for weekdays with no sessions in the dateRange (e.g. past days
+  // where Wise's "FUTURE" API didn't return data), pull in the nearest future
+  // occurrence so the week view still shows a representative schedule.
+  if (dateRange) {
+    const coveredWeekdays = new Set(filtered.map((s) => s.weekday));
+    const targetWeekdays = weekdaySet
+      ? new Set(weekdaySet)
+      : new Set([0, 1, 2, 3, 4, 5, 6]);
+
+    for (const wd of targetWeekdays) {
+      if (coveredWeekdays.has(wd)) continue;
+
+      const seenRecurrence = new Set<string>();
+      const fallback = group.sessionBlocks
+        .filter((s) => s.isBlocking && s.weekday === wd && s.startTime >= dateRange.end)
+        .sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
+        .filter((s) => {
+          if (s.recurrenceId) {
+            if (seenRecurrence.has(s.recurrenceId)) return false;
+            seenRecurrence.add(s.recurrenceId);
+          }
+          return true;
+        });
+
+      if (fallback.length > 0) {
+        const firstDate = fallback[0].startTime.toDateString();
+        filtered.push(...fallback.filter((s) => s.startTime.toDateString() === firstDate));
+      }
+    }
+  }
+
   const sessions: CompareSessionBlock[] = filtered.map((s) => ({
     title: s.title, studentName: s.studentName, subject: s.subject,
     classType: s.classType, sessionType: s.sessionType, recurrenceId: s.recurrenceId, location: s.location,

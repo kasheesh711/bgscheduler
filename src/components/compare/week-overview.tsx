@@ -43,6 +43,33 @@ function formatClassType(ct?: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Free-gap computation — subtract sessions from availability windows
+// ---------------------------------------------------------------------------
+
+function computeFreeGaps(
+  windows: { startMinute: number; endMinute: number }[],
+  sessions: { startMinute: number; endMinute: number }[],
+): { startMinute: number; endMinute: number }[] {
+  const gaps: { startMinute: number; endMinute: number }[] = [];
+  for (const w of windows) {
+    let cursor = w.startMinute;
+    const overlapping = sessions
+      .filter((s) => s.startMinute < w.endMinute && s.endMinute > w.startMinute)
+      .sort((a, b) => a.startMinute - b.startMinute);
+    for (const s of overlapping) {
+      if (s.startMinute > cursor) {
+        gaps.push({ startMinute: cursor, endMinute: s.startMinute });
+      }
+      cursor = Math.max(cursor, s.endMinute);
+    }
+    if (cursor < w.endMinute) {
+      gaps.push({ startMinute: cursor, endMinute: w.endMinute });
+    }
+  }
+  return gaps;
+}
+
+// ---------------------------------------------------------------------------
 // Overlap detection — GCal-style sub-column layout for overlapping sessions
 // ---------------------------------------------------------------------------
 
@@ -299,26 +326,25 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                     );
                   })}
 
-                  {/* Availability windows (behind sessions) */}
+                  {/* Free availability gaps (availability minus sessions) */}
                   {tutors.map((t, tutorIdx) => {
-                    const chip = tutorChips[tutorIdx];
                     const windows = t.availabilityWindows.filter((w) => w.weekday === day);
+                    const sessions = t.sessions.filter((s) => s.weekday === day);
+                    const freeGaps = computeFreeGaps(windows, sessions);
                     const laneLeftPct = multiTutorLayout ? tutorIdx * laneWidth : 0;
                     const laneWidthPct = multiTutorLayout ? laneWidth : 100;
-                    return windows.map((w, wIdx) => {
-                      const wTop = minuteToY(w.startMinute);
-                      const wHeight = ((w.endMinute - w.startMinute) / 60) * HOUR_HEIGHT;
+                    return freeGaps.map((g, gIdx) => {
+                      const top = minuteToY(g.startMinute);
+                      const height = ((g.endMinute - g.startMinute) / 60) * HOUR_HEIGHT;
                       return (
                         <div
-                          key={`avail-${tutorIdx}-${day}-${wIdx}`}
-                          className="absolute z-0 pointer-events-none"
+                          key={`free-${tutorIdx}-${day}-${gIdx}`}
+                          className="absolute z-0 pointer-events-none rounded-sm bg-available/8"
                           style={{
-                            top: wTop,
-                            height: Math.max(wHeight, 2),
+                            top,
+                            height: Math.max(height, 2),
                             left: `${laneLeftPct}%`,
                             width: `${laneWidthPct}%`,
-                            backgroundColor: rgba(chip?.color ?? "#888", 0.06),
-                            borderLeft: `2px solid ${rgba(chip?.color ?? "#888", 0.15)}`,
                           }}
                         />
                       );

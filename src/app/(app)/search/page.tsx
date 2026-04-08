@@ -87,8 +87,8 @@ function formatWeekLabel(weekStart: string): string {
   const start = new Date(y, m - 1, d);
   const end = new Date(y, m - 1, d + 6);
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const s = `${months[start.getMonth()]} ${start.getDate()}`;
-  const e = `${months[end.getMonth()]} ${end.getDate()}, ${end.getFullYear()}`;
+  const s = `${start.getDate()} ${months[start.getMonth()]}`;
+  const e = `${end.getDate()} ${months[end.getMonth()]}, ${end.getFullYear()}`;
   return `${s} – ${e}`;
 }
 
@@ -97,7 +97,7 @@ function getWeekDate(weekStart: string, dayOfWeek: number): string {
   // weekStart is Monday (day 1). Offset: Mon=0, Tue=1, ..., Sat=5, Sun=6
   const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
   const date = new Date(y, m - 1, d + offset);
-  return `${date.getMonth() + 1}/${date.getDate()}`;
+  return `${date.getDate()}/${date.getMonth() + 1}`;
 }
 
 const DURATION_OPTIONS = [
