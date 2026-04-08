@@ -85,7 +85,7 @@ export function CalendarGrid({
                   {t.displayName}
                 </button>
               </TutorProfilePopover>
-              <div className="text-[10px] text-muted-foreground">
+              <div className="text-xs text-muted-foreground">
                 {t.supportedModes.join(" · ")} · {t.qualifications.map((q) => q.subject).filter((v, i, a) => a.indexOf(v) === i).join(", ")}
               </div>
             </div>
@@ -102,8 +102,8 @@ export function CalendarGrid({
             return (
               <div
                 key={hour}
-                className="absolute text-[10px] text-muted-foreground text-right pr-2"
-                style={{ top: i * HOUR_HEIGHT - 6, width: 45 }}
+                className="absolute text-xs font-medium text-muted-foreground text-right pr-2"
+                style={{ top: i * HOUR_HEIGHT - 7, width: 45 }}
               >
                 {hour === 0 ? "12 AM" : hour < 12 ? `${hour} AM` : hour === 12 ? "12 PM" : `${hour - 12} PM`}
               </div>
@@ -136,8 +136,8 @@ export function CalendarGrid({
             className="absolute left-0 right-0 bg-conflict/5 border-y border-conflict/20 z-0"
             style={{ top: cr.top, height: cr.height }}
           >
-            <div className="absolute right-0 top-1/2 -translate-y-1/2 bg-conflict text-white text-[9px] px-2 py-0.5 rounded-l font-semibold whitespace-nowrap flex items-center gap-1">
-              <span>⚠ {cr.conflict.studentName}</span>
+            <div className="absolute right-0 top-1/2 -translate-y-1/2 bg-conflict text-white text-[10px] px-2 py-0.5 rounded-l font-semibold whitespace-nowrap flex items-center gap-1">
+              <span>! {cr.conflict.studentName}</span>
               {onFindAlternatives && (
                 <button
                   className="underline ml-1"
@@ -181,31 +181,31 @@ export function CalendarGrid({
                       top: top + 2,
                       left: `calc(${colLeft}% + 4px)`,
                       width: `calc(${colWidth}% - 8px)`,
-                      height: height - 4,
+                      height: Math.max(height - 4, 28),
                       background: bgColor,
                       borderLeft: `3px solid ${borderColor}`,
                     }}
                   >
-                    <div className="p-1.5 text-[11px] leading-tight">
-                      <div className="font-semibold" style={{ color: isConflict ? "#fca5a5" : `${chip?.color}dd` }}>
+                    <div className="p-2 leading-tight">
+                      <div className="text-sm font-semibold truncate" style={{ color: isConflict ? "#fca5a5" : `${chip?.color}dd` }}>
                         {s.subject ?? "Session"} — {s.studentName ?? "Unknown"}
-                        {isConflict && " ⚠️"}
+                        {isConflict && " !"}
                       </div>
-                      <div className="text-muted-foreground text-[10px]">
+                      <div className="text-xs text-muted-foreground mt-0.5">
                         {minuteToLabel(s.startMinute)}–{minuteToLabel(s.endMinute)}
                         {s.classType && ` · ${formatClassType(s.classType)}`}
                         {s.location && ` · ${s.location}`}
                       </div>
                     </div>
                   </PopoverTrigger>
-                  <PopoverContent side="top" className="w-56 p-3 text-xs space-y-1">
-                    {s.studentName && <p className="font-semibold">{s.studentName}</p>}
+                  <PopoverContent side="top" className="w-60 p-3 text-xs space-y-1">
+                    {s.studentName && <p className="font-semibold text-sm">{s.studentName}</p>}
                     {s.subject && <p className="text-muted-foreground">{s.subject}</p>}
                     <p>{minuteToLabel(s.startMinute)}–{minuteToLabel(s.endMinute)}</p>
                     <div className="flex gap-1 flex-wrap">
-                      {s.classType && <Badge variant="outline" className="text-[10px] px-1 py-0">{formatClassType(s.classType)}</Badge>}
-                      {s.location && <Badge variant="outline" className="text-[10px] px-1 py-0">{s.location}</Badge>}
-                      {s.recurrenceId && <Badge variant="secondary" className="text-[10px] px-1 py-0">recurring</Badge>}
+                      {s.classType && <Badge variant="outline" className="text-xs px-1.5 py-0">{formatClassType(s.classType)}</Badge>}
+                      {s.location && <Badge variant="outline" className="text-xs px-1.5 py-0">{s.location}</Badge>}
+                      {s.recurrenceId && <Badge variant="secondary" className="text-xs px-1.5 py-0">recurring</Badge>}
                     </div>
                   </PopoverContent>
                 </Popover>
@@ -223,7 +223,7 @@ export function CalendarGrid({
               className="absolute left-0 right-0 flex items-center justify-center z-[1] pointer-events-none"
               style={{ top, height }}
             >
-              <div className="bg-free-slot/5 border border-dashed border-free-slot/20 rounded px-3 py-0.5 text-free-slot text-[10px]">
+              <div className="bg-free-slot/5 border border-dashed border-free-slot/20 rounded px-3 py-0.5 text-free-slot text-xs">
                 {minuteToLabel(slot.startMinute)}–{minuteToLabel(slot.endMinute)} · All free
               </div>
             </div>

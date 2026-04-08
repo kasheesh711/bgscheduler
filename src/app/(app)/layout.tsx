@@ -4,7 +4,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
       <AppNav />
-      <main className="flex-1 px-6 lg:px-10 py-6">{children}</main>
+      <main className="flex-1 flex flex-col overflow-hidden px-4 lg:px-6 py-3">{children}</main>
     </>
   );
 }

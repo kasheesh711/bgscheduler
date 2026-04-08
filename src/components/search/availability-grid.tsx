@@ -90,18 +90,18 @@ export function AvailabilityGrid({
   return (
     <div className="space-y-4">
       {grid.length > 0 && (
-        <div className="overflow-x-auto rounded-md border">
-          <table className="w-full text-sm">
+        <div className="rounded-md border overflow-hidden">
+          <table className="w-full text-sm table-fixed">
             <thead>
               <tr className="border-b bg-muted/50">
-                <th className="w-8 px-3 py-2 text-left" />
-                <th className="min-w-[120px] px-3 py-2 text-left font-medium">Tutor</th>
+                <th className="w-8 px-2 py-2 text-left" />
+                <th className="w-28 px-2 py-2 text-left font-medium">Tutor</th>
                 {subSlots.map((ss, i) => (
-                  <th key={i} className="min-w-[70px] px-2 py-2 text-center font-medium text-xs">
+                  <th key={i} className="px-1 py-2 text-center font-medium text-xs truncate">
                     {formatSlotLabel(ss.start, ss.end)}
                   </th>
                 ))}
-                <th className="min-w-[100px] px-3 py-2 text-left font-medium">Mode</th>
+                <th className="w-20 px-2 py-2 text-left font-medium">Mode</th>
               </tr>
             </thead>
             <tbody>
@@ -193,12 +193,12 @@ export function AvailabilityGrid({
           <h3 className="text-sm font-medium text-muted-foreground mb-2">
             Needs Review ({needsReview.length})
           </h3>
-          <div className="overflow-x-auto rounded-md border">
-            <table className="w-full text-sm">
+          <div className="rounded-md border overflow-hidden">
+            <table className="w-full text-sm table-fixed">
               <thead>
                 <tr className="border-b bg-muted/50">
-                  <th className="px-3 py-2 text-left font-medium">Tutor</th>
-                  <th className="px-3 py-2 text-left font-medium">Reasons</th>
+                  <th className="w-28 px-2 py-2 text-left font-medium">Tutor</th>
+                  <th className="px-2 py-2 text-left font-medium">Reasons</th>
                 </tr>
               </thead>
               <tbody>

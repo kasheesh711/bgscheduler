@@ -3,6 +3,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogOverlay,
+  DialogPortal,
+  DialogClose,
+} from "@/components/ui/dialog";
 import type { DiscoverResponse, DiscoverCandidate, Conflict } from "@/lib/search/types";
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -98,114 +107,110 @@ export function DiscoveryPanel({
     }
   }, [open, handleSearch, existingTutorGroupIds.length]);
 
-  if (!open) return null;
-
   const filteredCandidates = response?.candidates.filter((c) =>
     !nameSearch || c.displayName.toLowerCase().includes(nameSearch.toLowerCase()),
   ) ?? [];
 
   return (
-    <div className="fixed inset-0 z-50 flex">
-      <div className="flex-1 bg-black/30" onClick={onClose} />
+    <Dialog open={open} onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}>
+      <DialogPortal>
+        <DialogOverlay />
+        <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Find Tutors</DialogTitle>
+          </DialogHeader>
 
-      <div className="w-[360px] bg-background border-l flex flex-col h-full">
-        <div className="flex items-center justify-between px-4 py-3 border-b">
-          <span className="font-semibold">Add Tutor</span>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-sm">
-            ✕ Close
-          </button>
-        </div>
-
-        <div className="px-4 py-3 space-y-3">
-          <input
-            className="w-full rounded-md border px-3 py-2 text-sm"
-            placeholder="Search by name..."
-            value={nameSearch}
-            onChange={(e) => setNameSearch(e.target.value)}
-          />
-
-          <div className="flex gap-2 flex-wrap">
-            <select
-              className="rounded-md border px-2 py-1 text-xs"
-              value={subjectFilter}
-              onChange={(e) => setSubjectFilter(e.target.value)}
-            >
-              <option value="">Subject</option>
-              {filterOptions?.subjects.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-            <select
-              className="rounded-md border px-2 py-1 text-xs"
-              value={modeFilter}
-              onChange={(e) => setModeFilter(e.target.value as "online" | "onsite" | "either")}
-            >
-              <option value="either">Mode</option>
-              <option value="online">Online</option>
-              <option value="onsite">Onsite</option>
-            </select>
-          </div>
-
-          <div className="rounded-md border p-2 space-y-1">
-            <label className="flex items-center gap-2 text-xs">
-              <input
-                type="checkbox"
-                checked={filterByTime}
-                onChange={(e) => setFilterByTime(e.target.checked)}
-              />
-              Only show tutors free at:
-            </label>
-            {filterByTime && (
-              <div className="flex gap-2 items-center pl-5 text-xs">
-                <select
-                  className="rounded border px-1 py-0.5"
-                  value={dayOfWeek ?? ""}
-                  onChange={(e) => setDayOfWeek(e.target.value ? Number(e.target.value) : undefined)}
-                >
-                  <option value="">Day</option>
-                  {DAY_NAMES.map((d, i) => (
-                    <option key={i} value={i}>{d.slice(0, 3)}</option>
-                  ))}
-                </select>
-                <input
-                  type="time"
-                  className="rounded border px-1 py-0.5"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                />
-                <span>–</span>
-                <input
-                  type="time"
-                  className="rounded border px-1 py-0.5"
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                />
-              </div>
-            )}
-          </div>
-
-          <Button size="sm" onClick={handleSearch} disabled={loading} className="w-full">
-            {loading ? "Searching..." : "Search"}
-          </Button>
-        </div>
-
-        {response && (
-          <div className="px-4 pb-2 text-[10px] text-muted-foreground uppercase tracking-wide">
-            {filteredCandidates.length} tutors
-          </div>
-        )}
-
-        <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-2">
-          {filteredCandidates.map((c) => (
-            <CandidateCard
-              key={c.tutorGroupId}
-              candidate={c}
-              onAdd={() => onAdd(c.tutorGroupId, c.displayName)}
+          <div className="space-y-3 flex-shrink-0">
+            <input
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
+              placeholder="Search by name..."
+              value={nameSearch}
+              onChange={(e) => setNameSearch(e.target.value)}
             />
-          ))}
-        </div>
-      </div>
-    </div>
+
+            <div className="flex gap-2 flex-wrap">
+              <select
+                className="rounded-md border border-input bg-background px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-ring/50"
+                value={subjectFilter}
+                onChange={(e) => setSubjectFilter(e.target.value)}
+              >
+                <option value="">Subject</option>
+                {filterOptions?.subjects.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <select
+                className="rounded-md border border-input bg-background px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-ring/50"
+                value={modeFilter}
+                onChange={(e) => setModeFilter(e.target.value as "online" | "onsite" | "either")}
+              >
+                <option value="either">Mode</option>
+                <option value="online">Online</option>
+                <option value="onsite">Onsite</option>
+              </select>
+            </div>
+
+            <div className="rounded-md border border-input p-2 space-y-1">
+              <label className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={filterByTime}
+                  onChange={(e) => setFilterByTime(e.target.checked)}
+                />
+                Only show tutors free at:
+              </label>
+              {filterByTime && (
+                <div className="flex gap-2 items-center pl-5 text-xs">
+                  <select
+                    className="rounded border border-input bg-background px-1 py-0.5"
+                    value={dayOfWeek ?? ""}
+                    onChange={(e) => setDayOfWeek(e.target.value ? Number(e.target.value) : undefined)}
+                  >
+                    <option value="">Day</option>
+                    {DAY_NAMES.map((d, i) => (
+                      <option key={i} value={i}>{d.slice(0, 3)}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="time"
+                    className="rounded border border-input bg-background px-1 py-0.5"
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                  />
+                  <span>–</span>
+                  <input
+                    type="time"
+                    className="rounded border border-input bg-background px-1 py-0.5"
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+
+            <Button size="sm" onClick={handleSearch} disabled={loading} className="w-full">
+              {loading ? "Searching..." : "Search"}
+            </Button>
+          </div>
+
+          {response && (
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wide mt-2">
+              {filteredCandidates.length} tutors
+            </div>
+          )}
+
+          <div className="flex-1 overflow-y-auto space-y-2 mt-2 min-h-0">
+            {filteredCandidates.map((c) => (
+              <CandidateCard
+                key={c.tutorGroupId}
+                candidate={c}
+                onAdd={() => onAdd(c.tutorGroupId, c.displayName)}
+              />
+            ))}
+          </div>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }
 
@@ -242,7 +247,7 @@ function CandidateCard({ candidate, onAdd }: { candidate: DiscoverCandidate; onA
         <div className="flex gap-1 flex-wrap">
           {c.freeSlots.map((s, i) => (
             <span key={i} className="text-[10px] bg-green-500/10 text-green-400 px-1.5 py-0.5 rounded">
-              {s.start}–{s.end} free ✓
+              {s.start}–{s.end} free
             </span>
           ))}
         </div>

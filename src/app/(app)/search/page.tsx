@@ -14,6 +14,7 @@ import {
 } from "@/components/search/recent-searches";
 import { TutorSelector, TUTOR_COLORS } from "@/components/compare/tutor-selector";
 import type { TutorChip } from "@/components/compare/tutor-selector";
+import { TutorCombobox } from "@/components/compare/tutor-combobox";
 import { CalendarGrid } from "@/components/compare/calendar-grid";
 import { WeekOverview } from "@/components/compare/week-overview";
 import { DiscoveryPanel } from "@/components/compare/discovery-panel";
@@ -59,9 +60,9 @@ const DAY_OPTIONS = [
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const DURATION_OPTIONS = [
-  { value: 60, label: "1 hour" },
-  { value: 90, label: "1.5 hours" },
-  { value: 120, label: "2 hours" },
+  { value: 60, label: "1 hr" },
+  { value: 90, label: "1.5 hr" },
+  { value: 120, label: "2 hr" },
 ];
 
 function generateTimeOptions(): string[] {
@@ -78,17 +79,15 @@ function generateTimeOptions(): string[] {
 
 const TIME_OPTIONS = generateTimeOptions();
 
+const selectClass =
+  "w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50";
+
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
-type WorkspaceTab = "search" | "compare";
-
 function SearchPageInner() {
   const searchParams = useSearchParams();
-
-  // --- Workspace tab ---
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("search");
 
   // --- Search state ---
   const [searchMode, setSearchMode] = useState<SearchMode>("recurring");
@@ -136,7 +135,6 @@ function SearchPageInner() {
     const tutorIds =
       searchParams.get("tutors")?.split(",").filter(Boolean) ?? [];
     if (tutorIds.length > 0) {
-      setActiveTab("compare");
       fetchCompare(tutorIds);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -259,7 +257,6 @@ function SearchPageInner() {
 
   const handleCompareSelected = () => {
     const ids = [...selectedIds];
-    setActiveTab("compare");
     fetchCompare(ids);
   };
 
@@ -288,484 +285,453 @@ function SearchPageInner() {
     searchMode === "recurring" || (searchMode === "one_time" && date !== "");
 
   // ---------------------------------------------------------------------------
-  // Render
+  // Render — side-by-side layout
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="space-y-6">
-      {/* Workspace tabs */}
-      <div className="flex items-center gap-1 border-b border-border">
-        <button
-          className={`px-4 py-2.5 text-sm font-medium transition-colors relative ${
-            activeTab === "search"
-              ? "text-primary"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-          onClick={() => setActiveTab("search")}
-        >
-          Search
-          {activeTab === "search" && (
-            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
-          )}
-        </button>
-        <button
-          className={`px-4 py-2.5 text-sm font-medium transition-colors relative flex items-center gap-2 ${
-            activeTab === "compare"
-              ? "text-primary"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-          onClick={() => setActiveTab("compare")}
-        >
-          Compare
-          {compareTutors.length > 0 && (
-            <span className="inline-flex items-center justify-center h-5 min-w-5 px-1.5 rounded-full bg-primary/15 text-primary text-xs font-medium">
-              {compareTutors.length}
-            </span>
-          )}
-          {activeTab === "compare" && (
-            <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
-          )}
-        </button>
-      </div>
-
+    <div className="flex-1 flex gap-3 overflow-hidden min-h-0">
       {/* ================================================================= */}
-      {/* SEARCH TAB                                                         */}
+      {/* LEFT PANEL — Search                                                */}
       {/* ================================================================= */}
-      {activeTab === "search" && (
-        <>
+      <div className="w-1/2 flex flex-col overflow-hidden min-w-0 border-r border-border/50 pr-3">
+        <div className="flex items-center justify-between mb-2 flex-shrink-0">
+          <h2 className="text-sm font-semibold text-foreground">Search</h2>
           <RecentSearches onSelect={handleSelectRecent} />
+        </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Search Criteria</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Search mode toggle */}
-              <div className="flex gap-2">
-                <Button
-                  variant={searchMode === "recurring" ? "default" : "outline"}
-                  onClick={() => setSearchMode("recurring")}
-                  size="sm"
+        {/* Search form */}
+        <div className="flex-shrink-0 space-y-2">
+          {/* Search mode toggle */}
+          <div className="flex gap-1.5">
+            <Button
+              variant={searchMode === "recurring" ? "default" : "outline"}
+              onClick={() => setSearchMode("recurring")}
+              size="sm"
+              className="text-xs h-7"
+            >
+              Recurring
+            </Button>
+            <Button
+              variant={searchMode === "one_time" ? "default" : "outline"}
+              onClick={() => setSearchMode("one_time")}
+              size="sm"
+              className="text-xs h-7"
+            >
+              One-Time
+            </Button>
+          </div>
+
+          {/* Row 1: Day/Date, From, To */}
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="text-[10px] font-medium text-muted-foreground">
+                {searchMode === "recurring" ? "Day" : "Date"}
+              </label>
+              {searchMode === "recurring" ? (
+                <select
+                  className={selectClass}
+                  value={dayOfWeek}
+                  onChange={(e) => setDayOfWeek(Number(e.target.value))}
                 >
-                  Recurring Weekly
-                </Button>
-                <Button
-                  variant={searchMode === "one_time" ? "default" : "outline"}
-                  onClick={() => setSearchMode("one_time")}
-                  size="sm"
-                >
-                  One-Time
-                </Button>
-              </div>
-
-              {/* Range input row */}
-              <div className="grid grid-cols-5 gap-3 max-w-5xl">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {searchMode === "recurring" ? "Day" : "Date"}
-                  </label>
-                  {searchMode === "recurring" ? (
-                    <select
-                      className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
-                      value={dayOfWeek}
-                      onChange={(e) => setDayOfWeek(Number(e.target.value))}
-                    >
-                      {DAY_OPTIONS.map((d) => (
-                        <option key={d.value} value={d.value}>
-                          {d.label}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type="date"
-                      className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
-                      value={date}
-                      min={new Date().toISOString().slice(0, 10)}
-                      onChange={(e) => setDate(e.target.value)}
-                    />
-                  )}
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">
-                    From
-                  </label>
-                  <select
-                    className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
-                    value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
-                  >
-                    {TIME_OPTIONS.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">
-                    To
-                  </label>
-                  <select
-                    className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
-                    value={endTime}
-                    onChange={(e) => setEndTime(e.target.value)}
-                  >
-                    {TIME_OPTIONS.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">
-                    Class Duration
-                  </label>
-                  <select
-                    className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
-                    value={durationMinutes}
-                    onChange={(e) =>
-                      setDurationMinutes(Number(e.target.value))
-                    }
-                  >
-                    {DURATION_OPTIONS.map((d) => (
-                      <option key={d.value} value={d.value}>
-                        {d.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">
-                    Mode
-                  </label>
-                  <select
-                    className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
-                    value={modeFilter}
-                    onChange={(e) =>
-                      setModeFilter(
-                        e.target.value as "online" | "onsite" | "either",
-                      )
-                    }
-                  >
-                    <option value="either">Either</option>
-                    <option value="online">Online</option>
-                    <option value="onsite">Onsite</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Qualification filters */}
-              <div className="grid grid-cols-3 gap-3 max-w-5xl">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">
-                    Subject
-                  </label>
-                  <select
-                    className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
-                    value={subjectFilter}
-                    onChange={(e) => setSubjectFilter(e.target.value)}
-                  >
-                    <option value="">Any</option>
-                    {filterOptions?.subjects.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">
-                    Curriculum
-                  </label>
-                  <select
-                    className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
-                    value={curriculumFilter}
-                    onChange={(e) => setCurriculumFilter(e.target.value)}
-                  >
-                    <option value="">Any</option>
-                    {filterOptions?.curriculums.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground">
-                    Level
-                  </label>
-                  <select
-                    className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50"
-                    value={levelFilter}
-                    onChange={(e) => setLevelFilter(e.target.value)}
-                  >
-                    <option value="">Any</option>
-                    {filterOptions?.levels.map((l) => (
-                      <option key={l} value={l}>
-                        {l}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="max-w-5xl">
-                <Button
-                  id="search-btn"
-                  onClick={handleSearch}
-                  disabled={loading || !isValid}
-                  className="w-full"
-                >
-                  {loading ? "Searching..." : "Search"}
-                </Button>
-              </div>
-
-              {error && (
-                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                  {error}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Results */}
-          {response && (
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>Results</CardTitle>
-                  <div className="flex items-center gap-3">
-                    <CopyButton
-                      grid={response.grid}
-                      subSlots={response.subSlots}
-                      selectedIds={selectedIds}
-                      dayOfWeek={
-                        searchMode === "recurring" ? dayOfWeek : undefined
-                      }
-                      date={searchMode === "one_time" ? date : undefined}
-                      filters={{
-                        subject: subjectFilter || undefined,
-                        curriculum: curriculumFilter || undefined,
-                        level: levelFilter || undefined,
-                      }}
-                    />
-                    {selectedIds.size >= 2 && selectedIds.size <= 3 && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleCompareSelected}
-                      >
-                        Compare selected ({selectedIds.size})
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>
-                    Snapshot:{" "}
-                    {response.snapshotMeta.snapshotId.slice(0, 8)}
-                  </span>
-                  <span>|</span>
-                  <span>
-                    Synced:{" "}
-                    {new Date(
-                      response.snapshotMeta.syncedAt,
-                    ).toLocaleString()}
-                  </span>
-                  <span>|</span>
-                  <span>{response.latencyMs}ms</span>
-                  {response.snapshotMeta.stale && (
-                    <Badge variant="destructive" className="text-xs">
-                      Stale Data
-                    </Badge>
-                  )}
-                </div>
-                {response.warnings.length > 0 && (
-                  <div className="space-y-1 mt-2">
-                    {response.warnings.map((w, i) => (
-                      <div
-                        key={i}
-                        className="rounded-md bg-accent/60 p-2 text-xs text-accent-foreground"
-                      >
-                        {w}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardHeader>
-              <CardContent>
-                <AvailabilityGrid
-                  subSlots={response.subSlots}
-                  grid={response.grid}
-                  needsReview={response.needsReview}
-                  selectedIds={selectedIds}
-                  onToggleSelect={handleToggleSelect}
+                  {DAY_OPTIONS.map((d) => (
+                    <option key={d.value} value={d.value}>
+                      {d.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="date"
+                  className={selectClass}
+                  value={date}
+                  min={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setDate(e.target.value)}
                 />
-              </CardContent>
-            </Card>
-          )}
-        </>
-      )}
-
-      {/* ================================================================= */}
-      {/* COMPARE TAB                                                        */}
-      {/* ================================================================= */}
-      {activeTab === "compare" && (
-        <>
-          <Card>
-            <CardContent className="pt-6">
-              <TutorSelector
-                tutors={compareTutors}
-                onRemove={handleRemoveTutor}
-                onOpenDiscovery={() => setDiscoveryOpen(true)}
-              />
-            </CardContent>
-          </Card>
-
-          {compareError && (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-              {compareError}
+              )}
             </div>
-          )}
-
-          {compareLoading && (
-            <div className="text-center text-sm text-muted-foreground py-8">
-              Loading schedules...
+            <div>
+              <label className="text-[10px] font-medium text-muted-foreground">
+                From
+              </label>
+              <select
+                className={selectClass}
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+              >
+                {TIME_OPTIONS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
             </div>
-          )}
+            <div>
+              <label className="text-[10px] font-medium text-muted-foreground">
+                To
+              </label>
+              <select
+                className={selectClass}
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+              >
+                {TIME_OPTIONS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-          {compareResponse && !compareLoading && (
-            <>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {/* Row 2: Duration, Mode, Search */}
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="text-[10px] font-medium text-muted-foreground">
+                Duration
+              </label>
+              <select
+                className={selectClass}
+                value={durationMinutes}
+                onChange={(e) =>
+                  setDurationMinutes(Number(e.target.value))
+                }
+              >
+                {DURATION_OPTIONS.map((d) => (
+                  <option key={d.value} value={d.value}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-medium text-muted-foreground">
+                Mode
+              </label>
+              <select
+                className={selectClass}
+                value={modeFilter}
+                onChange={(e) =>
+                  setModeFilter(
+                    e.target.value as "online" | "onsite" | "either",
+                  )
+                }
+              >
+                <option value="either">Either</option>
+                <option value="online">Online</option>
+                <option value="onsite">Onsite</option>
+              </select>
+            </div>
+            <div className="flex items-end">
+              <Button
+                id="search-btn"
+                onClick={handleSearch}
+                disabled={loading || !isValid}
+                className="w-full h-[34px] text-xs"
+                size="sm"
+              >
+                {loading ? "Searching..." : "Search"}
+              </Button>
+            </div>
+          </div>
+
+          {/* Row 3: Qualification filters */}
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="text-[10px] font-medium text-muted-foreground">
+                Subject
+              </label>
+              <select
+                className={selectClass}
+                value={subjectFilter}
+                onChange={(e) => setSubjectFilter(e.target.value)}
+              >
+                <option value="">Any</option>
+                {filterOptions?.subjects.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-medium text-muted-foreground">
+                Curriculum
+              </label>
+              <select
+                className={selectClass}
+                value={curriculumFilter}
+                onChange={(e) => setCurriculumFilter(e.target.value)}
+              >
+                <option value="">Any</option>
+                {filterOptions?.curriculums.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-medium text-muted-foreground">
+                Level
+              </label>
+              <select
+                className={selectClass}
+                value={levelFilter}
+                onChange={(e) => setLevelFilter(e.target.value)}
+              >
+                <option value="">Any</option>
+                {filterOptions?.levels.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {error && (
+          <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive mt-2 flex-shrink-0">
+            {error}
+          </div>
+        )}
+
+        {/* Results */}
+        {response && (
+          <div className="flex-1 overflow-y-auto mt-2 min-h-0">
+            <div className="flex items-center justify-between mb-1 sticky top-0 bg-background z-10 pb-1">
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
                 <span>
-                  Snapshot:{" "}
-                  {compareResponse.snapshotMeta.snapshotId.slice(0, 8)}
+                  {response.snapshotMeta.snapshotId.slice(0, 8)}
                 </span>
-                <span>|</span>
-                <span>
-                  Synced:{" "}
-                  {new Date(
-                    compareResponse.snapshotMeta.syncedAt,
-                  ).toLocaleString()}
-                </span>
-                <span>|</span>
-                <span>{compareResponse.latencyMs}ms</span>
-                {compareResponse.snapshotMeta.stale && (
-                  <Badge variant="destructive" className="text-xs">
-                    Stale Data
+                <span>·</span>
+                <span>{response.latencyMs}ms</span>
+                {response.snapshotMeta.stale && (
+                  <Badge variant="destructive" className="text-[10px]">
+                    Stale
                   </Badge>
                 )}
               </div>
+              <div className="flex items-center gap-2">
+                <CopyButton
+                  grid={response.grid}
+                  subSlots={response.subSlots}
+                  selectedIds={selectedIds}
+                  dayOfWeek={
+                    searchMode === "recurring" ? dayOfWeek : undefined
+                  }
+                  date={searchMode === "one_time" ? date : undefined}
+                  filters={{
+                    subject: subjectFilter || undefined,
+                    curriculum: curriculumFilter || undefined,
+                    level: levelFilter || undefined,
+                  }}
+                />
+                {selectedIds.size >= 2 && selectedIds.size <= 3 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-7"
+                    onClick={handleCompareSelected}
+                  >
+                    Compare ({selectedIds.size})
+                  </Button>
+                )}
+              </div>
+            </div>
+            {response.warnings.length > 0 && (
+              <div className="space-y-1 mb-2">
+                {response.warnings.map((w, i) => (
+                  <div
+                    key={i}
+                    className="rounded-md bg-accent/60 p-1.5 text-[10px] text-accent-foreground"
+                  >
+                    {w}
+                  </div>
+                ))}
+              </div>
+            )}
+            <AvailabilityGrid
+              subSlots={response.subSlots}
+              grid={response.grid}
+              needsReview={response.needsReview}
+              selectedIds={selectedIds}
+              onToggleSelect={handleToggleSelect}
+            />
+          </div>
+        )}
 
-              {/* Day tabs */}
-              <div className="flex border-b border-border">
+        {!response && !loading && (
+          <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
+            Search for available tutors
+          </div>
+        )}
+      </div>
+
+      {/* ================================================================= */}
+      {/* RIGHT PANEL — Compare                                              */}
+      {/* ================================================================= */}
+      <div className="w-1/2 flex flex-col overflow-hidden min-w-0 pl-1">
+        {/* Tutor selector */}
+        <div className="flex items-center gap-2 flex-wrap mb-2 flex-shrink-0">
+          {compareTutors.map((t) => (
+            <div
+              key={t.tutorGroupId}
+              className="flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs"
+              style={{ borderColor: t.color }}
+            >
+              <div className="h-2 w-2 rounded-full" style={{ background: t.color }} />
+              <span className="font-medium">{t.displayName}</span>
+              <button
+                onClick={() => handleRemoveTutor(t.tutorGroupId)}
+                className="text-muted-foreground hover:text-foreground text-[10px] ml-0.5"
+              >
+                x
+              </button>
+            </div>
+          ))}
+          {compareTutors.length < 3 && (
+            <TutorCombobox
+              existingTutorGroupIds={compareTutors.map((t) => t.tutorGroupId)}
+              onAdd={handleAddTutor}
+            />
+          )}
+          <button
+            onClick={() => setDiscoveryOpen(true)}
+            className="text-[10px] text-muted-foreground hover:text-foreground"
+          >
+            Advanced search
+          </button>
+          <span className="text-[10px] text-muted-foreground ml-auto">
+            {compareTutors.length}/3
+          </span>
+        </div>
+
+        {compareError && (
+          <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive mb-2 flex-shrink-0">
+            {compareError}
+          </div>
+        )}
+
+        {compareLoading && (
+          <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
+            Loading schedules...
+          </div>
+        )}
+
+        {compareResponse && !compareLoading && (
+          <>
+            {/* Snapshot meta */}
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground mb-1 flex-shrink-0">
+              <span>{compareResponse.snapshotMeta.snapshotId.slice(0, 8)}</span>
+              <span>·</span>
+              <span>{compareResponse.latencyMs}ms</span>
+              {compareResponse.snapshotMeta.stale && (
+                <Badge variant="destructive" className="text-[10px]">Stale</Badge>
+              )}
+            </div>
+
+            {/* Day tabs */}
+            <div className="flex border-b border-border flex-shrink-0">
+              <button
+                className={`px-3 py-1.5 text-xs font-medium transition-colors relative ${
+                  activeDay === null
+                    ? "text-primary"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                onClick={() => setActiveDay(null)}
+              >
+                Week
+                {activeDay === null && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
+                )}
+              </button>
+              {[1, 2, 3, 4, 5, 6, 0].map((day) => (
                 <button
-                  className={`px-4 py-2 text-sm font-medium transition-colors relative ${
-                    activeDay === null
+                  key={day}
+                  className={`px-3 py-1.5 text-xs font-medium transition-colors relative ${
+                    activeDay === day
                       ? "text-primary"
                       : "text-muted-foreground hover:text-foreground"
                   }`}
-                  onClick={() => setActiveDay(null)}
+                  onClick={() => setActiveDay(day)}
                 >
-                  Week
-                  {activeDay === null && (
+                  {DAY_NAMES[day]}
+                  {activeDay === day && (
                     <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
                   )}
                 </button>
-                {[1, 2, 3, 4, 5, 6, 0].map((day) => (
-                  <button
-                    key={day}
-                    className={`px-4 py-2 text-sm font-medium transition-colors relative ${
-                      activeDay === day
-                        ? "text-primary"
-                        : "text-muted-foreground hover:text-foreground"
-                    }`}
-                    onClick={() => setActiveDay(day)}
-                  >
-                    {DAY_NAMES[day]}
-                    {activeDay === day && (
-                      <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
-                    )}
-                  </button>
-                ))}
-              </div>
-
-              <Card>
-                <CardContent className="pt-6">
-                  {activeDay !== null && compareResponse ? (
-                    <CalendarGrid
-                      tutors={compareResponse.tutors}
-                      tutorChips={compareTutors}
-                      conflicts={compareResponse.conflicts}
-                      sharedFreeSlots={compareResponse.sharedFreeSlots}
-                      dayOfWeek={activeDay}
-                      onFindAlternatives={(conflict) => {
-                        setPrefillConflict(conflict);
-                        setDiscoveryOpen(true);
-                      }}
-                    />
-                  ) : compareResponse ? (
-                    <WeekOverview
-                      tutors={compareResponse.tutors}
-                      tutorChips={compareTutors}
-                      conflicts={compareResponse.conflicts}
-                      onDayClick={(day) => setActiveDay(day)}
-                    />
-                  ) : null}
-                </CardContent>
-              </Card>
-
-              {compareResponse.conflicts.length > 0 && (
-                <div className="rounded-md border border-conflict/30 bg-conflict/10 p-3 text-sm">
-                  <span className="font-semibold text-conflict">
-                    {compareResponse.conflicts.length} conflict
-                    {compareResponse.conflicts.length > 1 ? "s" : ""} detected
-                  </span>
-                  <ul className="mt-1 space-y-1 text-conflict/80 text-xs">
-                    {compareResponse.conflicts.map((c, i) => (
-                      <li key={i}>
-                        {c.studentName} — {DAY_NAMES[c.dayOfWeek]}{" "}
-                        {formatMinute(c.startMinute)}–
-                        {formatMinute(c.endMinute)} —{" "}
-                        {c.tutorA.displayName} vs {c.tutorB.displayName}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </>
-          )}
-
-          {compareTutors.length === 0 && !compareLoading && (
-            <div className="text-center py-16 text-muted-foreground">
-              <p className="text-lg font-medium">No tutors selected</p>
-              <p className="text-sm mt-1">
-                Select 2-3 tutors from the Search tab, or use the{" "}
-                <button
-                  className="text-primary hover:underline"
-                  onClick={() => setDiscoveryOpen(true)}
-                >
-                  discovery panel
-                </button>{" "}
-                to find tutors.
-              </p>
+              ))}
             </div>
-          )}
 
-          <DiscoveryPanel
-            open={discoveryOpen}
-            onClose={() => {
-              setDiscoveryOpen(false);
-              setPrefillConflict(null);
-            }}
-            existingTutorGroupIds={compareTutors.map((t) => t.tutorGroupId)}
-            onAdd={handleAddTutor}
-            prefillConflict={prefillConflict}
-          />
-        </>
-      )}
+            {/* Calendar view */}
+            <div className="flex-1 overflow-y-auto min-h-0 mt-1">
+              {activeDay !== null ? (
+                <CalendarGrid
+                  tutors={compareResponse.tutors}
+                  tutorChips={compareTutors}
+                  conflicts={compareResponse.conflicts}
+                  sharedFreeSlots={compareResponse.sharedFreeSlots}
+                  dayOfWeek={activeDay}
+                  onFindAlternatives={(conflict) => {
+                    setPrefillConflict(conflict);
+                    setDiscoveryOpen(true);
+                  }}
+                />
+              ) : (
+                <WeekOverview
+                  tutors={compareResponse.tutors}
+                  tutorChips={compareTutors}
+                  conflicts={compareResponse.conflicts}
+                  sharedFreeSlots={compareResponse.sharedFreeSlots}
+                  onDayClick={(day) => setActiveDay(day)}
+                />
+              )}
+            </div>
+
+            {/* Conflicts summary */}
+            {compareResponse.conflicts.length > 0 && (
+              <div className="rounded-md border border-conflict/30 bg-conflict/10 p-2 text-xs mt-2 flex-shrink-0">
+                <span className="font-semibold text-conflict">
+                  {compareResponse.conflicts.length} conflict{compareResponse.conflicts.length > 1 ? "s" : ""}
+                </span>
+                <ul className="mt-0.5 space-y-0.5 text-conflict/80 text-[10px]">
+                  {compareResponse.conflicts.slice(0, 5).map((c, i) => (
+                    <li key={i}>
+                      {c.studentName} — {DAY_NAMES[c.dayOfWeek]}{" "}
+                      {formatMinute(c.startMinute)}–{formatMinute(c.endMinute)} —{" "}
+                      {c.tutorA.displayName} vs {c.tutorB.displayName}
+                    </li>
+                  ))}
+                  {compareResponse.conflicts.length > 5 && (
+                    <li>+{compareResponse.conflicts.length - 5} more</li>
+                  )}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+
+        {compareTutors.length === 0 && !compareLoading && (
+          <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
+            <p className="text-sm font-medium">Compare tutors</p>
+            <p className="text-xs mt-1">
+              Use the dropdown above or select 2-3 tutors from search results.
+            </p>
+          </div>
+        )}
+
+        <DiscoveryPanel
+          open={discoveryOpen}
+          onClose={() => {
+            setDiscoveryOpen(false);
+            setPrefillConflict(null);
+          }}
+          existingTutorGroupIds={compareTutors.map((t) => t.tutorGroupId)}
+          onAdd={handleAddTutor}
+          prefillConflict={prefillConflict}
+        />
+      </div>
     </div>
   );
 }

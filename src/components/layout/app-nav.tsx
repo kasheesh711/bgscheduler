@@ -12,8 +12,8 @@ export function AppNav() {
   const pathname = usePathname();
 
   return (
-    <nav className="flex items-center justify-between border-b border-border bg-card px-6 lg:px-10 h-12">
-      <div className="flex items-center gap-8">
+    <nav className="flex items-center justify-between border-b border-border bg-card px-4 lg:px-6 h-11 flex-shrink-0">
+      <div className="flex items-center gap-6">
         <Link href="/search" className="text-sm font-semibold text-primary tracking-tight">
           BeGifted Tutor Search
         </Link>
