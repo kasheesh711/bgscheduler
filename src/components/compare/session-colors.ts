@@ -18,7 +18,7 @@ function hexToRgb(color: string): [number, number, number] {
   ];
 }
 
-function rgba(color: string, alpha: number): string {
+export function rgba(color: string, alpha: number): string {
   const [r, g, b] = hexToRgb(color);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }

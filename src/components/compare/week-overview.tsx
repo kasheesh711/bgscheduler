@@ -14,6 +14,7 @@ import {
   sessionBorderStyle,
   sessionFrameColor,
   sessionTextColor,
+  rgba,
 } from "./session-colors";
 
 const HOUR_HEIGHT = 48;
@@ -123,6 +124,70 @@ function computeOverlapColumns(
   }));
 }
 
+interface CappedLayoutInfo extends LayoutInfo {
+  hidden: boolean;
+  overflowCount: number;
+}
+
+function applyColumnCap(
+  sessions: { startMinute: number; endMinute: number }[],
+  layout: LayoutInfo[],
+  maxCols: number,
+): CappedLayoutInfo[] {
+  if (sessions.length === 0) return [];
+
+  const result: CappedLayoutInfo[] = layout.map((l) => ({
+    ...l,
+    hidden: false,
+    overflowCount: 0,
+  }));
+
+  // Find overlap groups (sessions sharing the same totalColumns value from union-find)
+  // Group by the original totalColumns — sessions in the same overlap cluster share this
+  const groups = new Map<number, number[]>(); // totalColumns -> indices
+  for (let i = 0; i < layout.length; i++) {
+    // Use a composite key: sessions in the same overlap group have identical totalColumns
+    // AND they actually overlap temporally. We can use the column assignment to identify groups.
+    const key = layout[i].totalColumns;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(i);
+  }
+
+  for (const [totalCols, indices] of groups) {
+    if (totalCols <= maxCols) continue;
+
+    // Hide sessions in columns >= maxCols
+    const hiddenIndices: number[] = [];
+    for (const idx of indices) {
+      if (result[idx].column >= maxCols) {
+        result[idx].hidden = true;
+        hiddenIndices.push(idx);
+      }
+      // Cap totalColumns for visible sessions
+      result[idx].totalColumns = maxCols;
+    }
+
+    // Count overflow for visible sessions in the last visible column
+    for (const idx of indices) {
+      if (result[idx].column === maxCols - 1 && !result[idx].hidden) {
+        // Count hidden sessions that overlap with this one
+        let count = 0;
+        for (const hIdx of hiddenIndices) {
+          if (
+            sessions[hIdx].startMinute < sessions[idx].endMinute &&
+            sessions[hIdx].endMinute > sessions[idx].startMinute
+          ) {
+            count++;
+          }
+        }
+        result[idx].overflowCount = count;
+      }
+    }
+  }
+
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 
 interface WeekOverviewProps {
@@ -147,6 +212,7 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
   const multiTutorLayout = tutors.length > 1;
   const laneCount = multiTutorLayout ? tutors.length : 1;
   const laneWidth = 100 / laneCount;
+  const maxCols = multiTutorLayout ? 2 : 3;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -233,18 +299,48 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                     );
                   })}
 
+                  {/* Availability windows (behind sessions) */}
+                  {tutors.map((t, tutorIdx) => {
+                    const chip = tutorChips[tutorIdx];
+                    const windows = t.availabilityWindows.filter((w) => w.weekday === day);
+                    const laneLeftPct = multiTutorLayout ? tutorIdx * laneWidth : 0;
+                    const laneWidthPct = multiTutorLayout ? laneWidth : 100;
+                    return windows.map((w, wIdx) => {
+                      const wTop = minuteToY(w.startMinute);
+                      const wHeight = ((w.endMinute - w.startMinute) / 60) * HOUR_HEIGHT;
+                      return (
+                        <div
+                          key={`avail-${tutorIdx}-${day}-${wIdx}`}
+                          className="absolute z-0 pointer-events-none"
+                          style={{
+                            top: wTop,
+                            height: Math.max(wHeight, 2),
+                            left: `${laneLeftPct}%`,
+                            width: `${laneWidthPct}%`,
+                            backgroundColor: rgba(chip?.color ?? "#888", 0.06),
+                            borderLeft: `2px solid ${rgba(chip?.color ?? "#888", 0.15)}`,
+                          }}
+                        />
+                      );
+                    });
+                  })}
+
                   {/* Session blocks */}
                   {tutors.map((t, tutorIdx) => {
                     const chip = tutorChips[tutorIdx];
                     const sessions = t.sessions.filter((s) => s.weekday === day);
                     const layout = computeOverlapColumns(sessions);
+                    const cappedLayout = applyColumnCap(sessions, layout, maxCols);
 
                     // Base lane geometry
                     const laneLeftPct = multiTutorLayout ? tutorIdx * laneWidth : 0;
                     const laneWidthPct = multiTutorLayout ? laneWidth : 100;
 
                     return sessions.map((s, sIdx) => {
-                      const { column, totalColumns } = layout[sIdx];
+                      const cl = cappedLayout[sIdx];
+                      if (cl.hidden) return null;
+
+                      const { column, totalColumns, overflowCount } = cl;
                       const subWidth = laneWidthPct / totalColumns;
                       const leftPct = laneLeftPct + column * subWidth;
 
@@ -261,7 +357,9 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                       const textColor = sessionTextColor(chip?.color, isConflict);
                       const frameColor = sessionFrameColor(chip?.color, isConflict);
                       const border = sessionBorderStyle(chip?.color, isConflict);
-                      const showSecondaryLine = height >= (multiTutorLayout ? 40 : 30);
+                      const isTooNarrow = totalColumns >= 3 && multiTutorLayout;
+                      const isCompact = totalColumns >= 2;
+                      const showSecondaryLine = !isCompact && height >= (multiTutorLayout ? 40 : 30);
 
                       return (
                         <Popover key={`${t.tutorGroupId}-${day}-${sIdx}`}>
@@ -275,28 +373,45 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                                   top: top + 1,
                                   left: `calc(${leftPct}% + 1px)`,
                                   width: `calc(${subWidth}% - 2px)`,
-                                  height: Math.max(height - 2, 14),
+                                  height: Math.max(height - 2, 18),
                                   backgroundColor: bgColor,
                                   borderLeft: border,
                                   boxShadow: `inset 0 0 0 1px ${frameColor}`,
                                   zIndex: multiTutorLayout ? 1 : tutorIdx + 1,
                                 }}
                               >
-                                <div className="px-1 py-0.5 overflow-hidden">
-                                  <div
-                                    className={`leading-tight font-semibold truncate ${
-                                      multiTutorLayout ? "text-[10px]" : "text-[11px]"
-                                    }`}
-                                    style={{ color: textColor }}
-                                  >
-                                    {minuteToLabel(s.startMinute)} {s.subject ?? ""}
-                                  </div>
-                                  {showSecondaryLine && s.studentName && (
-                                    <div className="text-[10px] leading-tight text-foreground/60 truncate">
-                                      {s.studentName}
+                                {!isTooNarrow && (
+                                  <div className="px-1 py-0.5 overflow-hidden">
+                                    <div
+                                      className={`leading-tight font-semibold truncate ${
+                                        isCompact ? "text-[9px]" : multiTutorLayout ? "text-[10px]" : "text-[11px]"
+                                      }`}
+                                      style={{ color: textColor }}
+                                    >
+                                      {minuteToLabel(s.startMinute)}{!isCompact ? ` ${s.subject ?? ""}` : ""}
                                     </div>
-                                  )}
-                                </div>
+                                    {showSecondaryLine && s.studentName && (
+                                      <div className="text-[10px] leading-tight text-foreground/60 truncate">
+                                        {s.studentName}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                {overflowCount > 0 && (
+                                  <div
+                                    className="absolute bottom-0.5 right-0.5 text-[8px] font-semibold rounded px-1 cursor-pointer"
+                                    style={{
+                                      backgroundColor: rgba(chip?.color ?? "#888", 0.18),
+                                      color: textColor,
+                                    }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onDayClick(day);
+                                    }}
+                                  >
+                                    +{overflowCount}
+                                  </div>
+                                )}
                               </button>
                             )}
                           />

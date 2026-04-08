@@ -15,6 +15,7 @@ import {
   sessionBorderStyle,
   sessionFrameColor,
   sessionTextColor,
+  rgba,
 } from "./session-colors";
 
 const HOUR_HEIGHT = 60;
@@ -155,6 +156,32 @@ export function CalendarGrid({
             </div>
           </div>
         ))}
+
+        {/* Availability windows (behind sessions) */}
+        {tutors.map((t, tutorIdx) => {
+          const chip = tutorChips[tutorIdx];
+          const colWidth = 100 / tutors.length;
+          const colLeft = tutorIdx * colWidth;
+          const windows = t.availabilityWindows.filter((w) => w.weekday === dayOfWeek);
+          return windows.map((w, wIdx) => {
+            const wTop = minuteToY(w.startMinute);
+            const wHeight = ((w.endMinute - w.startMinute) / 60) * HOUR_HEIGHT;
+            return (
+              <div
+                key={`avail-${tutorIdx}-${wIdx}`}
+                className="absolute z-0 pointer-events-none"
+                style={{
+                  top: wTop,
+                  height: Math.max(wHeight, 2),
+                  left: `${colLeft}%`,
+                  width: `${colWidth}%`,
+                  backgroundColor: rgba(chip?.color ?? "#888", 0.06),
+                  borderLeft: `2px solid ${rgba(chip?.color ?? "#888", 0.15)}`,
+                }}
+              />
+            );
+          });
+        })}
 
         {/* Session blocks per tutor */}
         {tutors.map((t, tutorIdx) => {
