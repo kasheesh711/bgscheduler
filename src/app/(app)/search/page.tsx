@@ -665,7 +665,7 @@ function SearchPageInner() {
             </div>
 
             {/* Calendar view */}
-            <div className="flex-1 overflow-y-auto min-h-0 mt-1">
+            <div className={`flex-1 min-h-0 mt-1 ${activeDay !== null ? "overflow-y-auto" : ""}`}>
               {activeDay !== null ? (
                 <CalendarGrid
                   tutors={compareResponse.tutors}

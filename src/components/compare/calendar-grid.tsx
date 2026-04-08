@@ -177,13 +177,7 @@ export function CalendarGrid({
               const bgColor = sessionBgColor(chip?.color, isConflict);
               const textColor = sessionTextColor(chip?.color, isConflict);
               const frameColor = sessionFrameColor(chip?.color, isConflict);
-              const border = sessionBorderStyle(
-                chip?.color,
-                isConflict,
-                s.modality,
-                s.sessionType,
-                s.location,
-              );
+              const border = sessionBorderStyle(chip?.color, isConflict);
 
               return (
                 <Popover key={`${t.tutorGroupId}-${sIdx}`}>

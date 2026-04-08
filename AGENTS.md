@@ -93,19 +93,19 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - **Layout**: Side-by-side split — search (left 50%) + compare (right 50%). Viewport-height with `overflow-hidden` on body, panels scroll internally. No page-level or horizontal scroll. `px-4 lg:px-6` padding.
 - **Shared navigation**: `AppNav` component in `(app)` route group layout — persistent top bar with sky blue brand name, active link indicators. Login page excluded (no nav).
 - **Fonts**: Inter + JetBrains Mono. Dark mode supported.
-- **Session block colors**: Shared `session-colors.ts` module provides explicit RGBA fills, text colors, frame colors, and dashed/solid borders. Online styling now prefers compare-session modality derived from Wise identity/session evidence and only falls back to location text when needed.
+- **Session block colors**: Shared `session-colors.ts` module provides RGBA fills (28% bg opacity, 35% frame opacity), solid text colors, and solid 3px left borders. All cards use consistent solid styling — unreliable online/onsite detection removed from visual rendering.
 - **Tutor colors**: `TUTOR_COLORS = ["#3b82f6", "#e67e22", "#7c3aed"]` (sky blue, amber, purple)
 
 #### Pages
 - `/login` — Google sign-in with warm gradient background, sky blue title, access-denied error handling
 - `/search` — side-by-side workspace:
   - **Left panel (Search)**: compact 3-column search form, mode toggle (recurring/one-time), data-driven dropdown filters (subject/curriculum/level), availability grid results (table-fixed, no horizontal scroll), row selection with copy-for-parents button, "Compare (N)" button (sends selected tutors to right panel), recent searches (localStorage, last 10), Needs Review section
-  - **Right panel (Compare)**: tutor selector chips (max 3, color-coded, removable) + searchable tutor combobox dropdown (shadcn Command+Popover, fetches from `GET /api/tutors`), "Advanced search" link opens discovery modal (shadcn Dialog), week/day sub-tabs, GCal-style weekly time grid (7AM–9PM vertical axis, Mon–Sun columns, full-width cards for single-tutor view and per-tutor lanes for 2-3 tutor view), day drill-down (side-by-side tutor columns with positioned session blocks), conflict bands + summary, shared free slot indicators, tutor profile popover, URL param support (`?tutors=id1,id2`)
+  - **Right panel (Compare)**: tutor selector chips (max 3, color-coded, removable) + searchable tutor combobox dropdown (shadcn Command+Popover, fetches from `GET /api/tutors`), "Advanced search" link opens discovery modal (shadcn Dialog), week/day sub-tabs, GCal-style weekly time grid (7AM–9PM vertical axis, Mon–Sun sticky headers, full-width cards for single-tutor view and per-tutor lanes for 2-3 tutor view, GCal-style overlap detection with sub-columns for overlapping sessions, vertical scrolling), day drill-down (side-by-side tutor columns with positioned session blocks), conflict bands + summary, shared free slot indicators, tutor profile popover, URL param support (`?tutors=id1,id2`)
 - `/compare` — redirects to `/search` (backward compatibility for bookmarked URLs, preserves `?tutors=` param)
 - `/data-health` — full-width sync status cards, snapshot stats, issues by type, unresolved aliases/modality/unmapped tags tables, recent sync history
 
 #### Known UX Issues
-- No compare-specific regressions are currently tracked in documentation after the 2026-04-08 week-view lane and modality-evidence fixes. Continue visual QA on dense weekly schedules after future compare changes.
+- No compare-specific regressions are currently tracked after the 2026-04-08 overlap layout, card consistency, and sticky header fixes. Continue visual QA on dense weekly schedules after future compare changes.
 
 ### Tests
 - Identity: nickname extraction, alias resolution, online/offline pairs, unresolved → data_issue
