@@ -10,7 +10,7 @@ import {
 import type { CompareTutor, Conflict, SharedFreeSlot } from "@/lib/search/types";
 import type { TutorChip } from "./tutor-selector";
 import { TutorProfilePopover } from "./tutor-profile-popover";
-import { sessionBgColor, sessionTextColor } from "./session-colors";
+import { sessionBgColor, sessionTextColor, sessionBorderStyle } from "./session-colors";
 
 const HOUR_HEIGHT = 60;
 const START_HOUR = 7;
@@ -169,9 +169,9 @@ export function CalendarGrid({
                   s.startMinute < c.endMinute &&
                   s.endMinute > c.startMinute,
               );
-              const bgColor = sessionBgColor(chip?.color, isConflict, s.location);
-              const borderColor = isConflict ? "#ef4444" : chip?.color;
+              const bgColor = sessionBgColor(chip?.color, isConflict);
               const textColor = sessionTextColor(chip?.color, isConflict);
+              const border = sessionBorderStyle(chip?.color, isConflict, s.location);
 
               return (
                 <Popover key={`${t.tutorGroupId}-${sIdx}`}>
@@ -183,7 +183,7 @@ export function CalendarGrid({
                       width: `calc(${colWidth}% - 8px)`,
                       height: Math.max(height - 4, 28),
                       background: bgColor,
-                      borderLeft: `3px solid ${borderColor}`,
+                      borderLeft: border,
                     }}
                   >
                     <div className="p-2 leading-tight">

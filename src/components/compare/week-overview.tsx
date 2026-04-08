@@ -9,7 +9,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import type { CompareTutor, Conflict, SharedFreeSlot } from "@/lib/search/types";
 import type { TutorChip } from "./tutor-selector";
-import { sessionBgColor, sessionTextColor } from "./session-colors";
+import { sessionBgColor, sessionTextColor, sessionBorderStyle } from "./session-colors";
 
 const HOUR_HEIGHT = 48;
 const START_HOUR = 7;
@@ -132,9 +132,9 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                         s.startMinute < c.endMinute &&
                         s.endMinute > c.startMinute,
                     );
-                    const bgColor = sessionBgColor(chip?.color, isConflict, s.location);
-                    const borderColor = isConflict ? "#ef4444" : chip?.color;
+                    const bgColor = sessionBgColor(chip?.color, isConflict);
                     const textColor = sessionTextColor(chip?.color, isConflict);
+                    const border = sessionBorderStyle(chip?.color, isConflict, s.location);
 
                     return (
                       <Popover key={`${t.tutorGroupId}-${day}-${sIdx}`}>
@@ -146,7 +146,7 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                             right: insetRight + 1,
                             height: Math.max(height - 4, 14),
                             background: bgColor,
-                            borderLeft: `3px solid ${borderColor}`,
+                            borderLeft: border,
                             zIndex: tutorIdx + 1,
                           }}
                         >
