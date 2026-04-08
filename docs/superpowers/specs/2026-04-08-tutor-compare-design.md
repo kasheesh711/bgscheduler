@@ -1,16 +1,26 @@
 # Tutor Schedule Compare & Quick Wins
 
+## Implementation Update (2026-04-08)
+
+The compare workflow is now shipped, but the final implementation differs from the original concept in a few important ways:
+
+- Compare is embedded in the right half of `/search`, while `/compare` redirects there for backward compatibility.
+- Tutor discovery uses a modal dialog, not a persistent slide-out panel.
+- Weekly compare now renders a single tutor as full-width cards and 2-3 tutors in fixed per-tutor lanes to avoid overlap.
+- Session modality cues now prefer Wise identity/session evidence exposed through the compare payload, with location text used only as a fallback hint.
+- Session card fills are normalized via explicit RGBA helpers shared between weekly and day views.
+
 ## Context
 
 Admins scheduling students often need to validate that a new tutor (Teacher B) doesn't conflict with the student's existing tutor (Teacher A), and if there is a conflict, quickly find alternatives. Today this requires multiple search queries, mental tracking of parameters, and no side-by-side view — leading to slow decisions and excessive context switching.
 
-This spec covers:
-1. **Compare page** — dedicated `/compare` page with Google Calendar-style side-by-side tutor schedule view, automated conflict detection, and a built-in discovery panel
+This spec covers the shipped compare workflow:
+1. **Embedded compare workspace** — Google Calendar-style tutor schedule view inside `/search`, with `/compare` redirect support
 2. **Search → Compare bridge** — entry point from the existing `/search` results page
 3. **Quick Win: Find alternatives** — one-click button from compare conflicts to search for replacement tutors
 4. **Quick Win: Tutor profile popover** — quick-view tutor stats on click
 
-## 1. Compare Page (`/compare`)
+## 1. Compare Workspace (`/search` + `/compare` redirect)
 
 ### 1.1 Layout
 
@@ -18,7 +28,7 @@ Google Calendar-style layout with side-by-side tutor columns:
 
 - **Top bar**: Tutor chips (color-coded, removable) + "+ Add tutor" button. Max 3 tutors.
 - **Day tabs**: Mon–Sun tabs for day-by-day drill-down. Active day shows detailed view. "← Week overview" link toggles back to compressed weekly grid.
-- **Calendar grid**: Each tutor gets their own column. Sessions rendered as positioned blocks at actual time positions (not table rows). Time labels on the left gutter.
+- **Calendar grid**: Each tutor gets their own column in day view. Sessions render as positioned blocks at actual time positions (not table rows). Time labels stay in the left gutter.
 - **Legend**: Color-coded per tutor + conflict + "both free" indicators.
 
 ### 1.2 Weekly Overview vs Day Drill-Down
@@ -26,6 +36,8 @@ Google Calendar-style layout with side-by-side tutor columns:
 **Weekly overview** (default):
 - Compressed grid: days as columns, hourly rows
 - Session blocks shown as compact chips (tutor color + subject)
+- Single-tutor view uses full-width cards
+- Multi-tutor view uses fixed per-tutor lanes inside each day column
 - Conflicts highlighted with red background band
 - Click any day header to drill down
 
@@ -48,7 +60,7 @@ Data source: `future_session_blocks` table already stores `student_name`, `start
 
 ### 1.4 Discovery Panel ("+ Add tutor")
 
-Slide-out panel from the right. Calendar stays visible (dimmed) on the left.
+Modal dialog opened from the compare toolbar.
 
 **Search & filter**:
 - Name search (autocomplete against all tutor display names in active snapshot)
@@ -64,7 +76,7 @@ Slide-out panel from the right. Calendar stays visible (dimmed) on the left.
 - Action button: "Add to compare" (blue) for conflict-free, "Add anyway" (gray) for conflicted
 - Needs Review tutors shown at bottom, dimmed, consistent with fail-closed rule
 
-**Discovery API**: New `POST /api/compare/discover` endpoint that accepts subject/level/mode/time filters and returns tutor candidates with pre-computed conflict status against the currently selected tutors' students.
+**Discovery API**: `POST /api/compare/discover` accepts subject/level/mode/time filters and returns tutor candidates with pre-computed conflict status against the currently selected tutors' students.
 
 ### 1.5 Compare API
 
@@ -95,8 +107,7 @@ CompareTutor: {
   displayName: string
   supportedModes: string[]
   qualifications: Qualification[]
-  color: string                    // assigned by backend for consistency
-  sessions: BlockingSessionInfo[]   // reuses existing type from types.ts, plus weekday/startMinute/endMinute
+  sessions: BlockingSessionInfo[]   // includes weekday/startMinute/endMinute plus compare-specific modality evidence
   availabilityWindows: Window[]    // recurring availability
   leaves: Leave[]                  // active leaves
 }
@@ -125,14 +136,14 @@ For the week overview, the same `/api/compare` endpoint is called without `dayOf
 
 On the existing `/search` availability grid:
 - When 2-3 tutors are selected via row checkboxes, a **"Compare schedules"** button appears in the action bar next to "Copy for parents"
-- Clicking navigates to `/compare?tutors=id1,id2,id3`
-- Search context (day, time, filters) carries over as default "free at" filter on the compare page
+- Clicking loads the compare workspace on the right and deep links support `?tutors=id1,id2,id3`
+- Search context stays in the left panel while compare context loads in the right panel
 
-Implementation: Add a button to the existing action bar in `availability-grid.tsx`. No changes to the search API.
+Implementation: The current UI loads compare in-place on `/search`; `/compare` preserves old bookmarks by redirecting.
 
 ## 3. Quick Win: Find Alternatives
 
-When a conflict is detected on the compare page:
+When a conflict is detected in compare:
 - A **"Find alternatives"** link appears on the conflict tag
 - Clicking opens the discovery panel with filters pre-populated:
   - Subject: from the conflicting session
@@ -156,10 +167,9 @@ Data source: all derived from the compare API response (sessions, qualifications
 ## Key Files to Modify/Create
 
 ### New files
-- `src/app/(app)/compare/page.tsx` — compare page
-- `src/components/compare/calendar-grid.tsx` — GCal-style calendar component
+- `src/components/compare/calendar-grid.tsx` — GCal-style day calendar component
 - `src/components/compare/tutor-selector.tsx` — top bar tutor chips + add button
-- `src/components/compare/discovery-panel.tsx` — slide-out discovery panel
+- `src/components/compare/discovery-panel.tsx` — discovery modal
 - `src/components/compare/conflict-indicator.tsx` — conflict highlighting
 - `src/components/compare/tutor-profile-popover.tsx` — quick stats popover
 - `src/components/compare/week-overview.tsx` — compressed weekly grid
@@ -168,9 +178,11 @@ Data source: all derived from the compare API response (sessions, qualifications
 - `src/lib/search/compare.ts` — compare engine logic (conflict detection, free slot computation)
 
 ### Modified files
+- `src/app/(app)/search/page.tsx` — side-by-side search/compare workspace
 - `src/components/search/availability-grid.tsx` — add "Compare schedules" button
 - `src/lib/search/types.ts` — add compare-related types
 - `src/lib/search/engine.ts` — extract shared helpers for the compare engine to reuse
+- `src/components/compare/session-colors.ts` — shared compare session styling and modality-based border treatment
 
 ## Non-Functional Requirements
 
@@ -182,11 +194,11 @@ Data source: all derived from the compare API response (sessions, qualifications
 
 ## Verification
 
-1. **Compare page renders**: Navigate to `/compare`, add 2 tutors via search, verify GCal-style grid shows their sessions side-by-side
+1. **Compare workspace renders**: Open `/search`, add 2 tutors, verify the right panel shows their schedules side-by-side
 2. **Conflict detection**: Add two tutors who share a student at overlapping times → verify red highlight band appears with student name
 3. **Discovery panel**: Click "+ Add tutor" → set filters → verify results show conflict badges and availability chips
-4. **Search bridge**: On `/search`, select 2 tutors, click "Compare schedules" → verify redirects to `/compare` with tutors pre-loaded
+4. **Search bridge**: On `/search`, select 2 tutors, click "Compare schedules" → verify compare loads in the right panel and `?tutors=` deep links still hydrate
 5. **Find alternatives**: Click "Find alternatives" on a conflict → verify discovery panel opens with pre-filled filters
 6. **Tutor profile popover**: Click tutor name in column header → verify popover shows hours, student count, subjects
-7. **Week overview ↔ day drill-down**: Toggle between views, verify data consistency
+7. **Week overview ↔ day drill-down**: Toggle between views, verify data consistency and lane-based weekly layout for 2-3 tutors
 8. **Edge cases**: Single tutor (no conflicts possible), 3 tutors (columns scale), tutor with Needs Review status

@@ -10,7 +10,12 @@ import {
 import type { CompareTutor, Conflict, SharedFreeSlot } from "@/lib/search/types";
 import type { TutorChip } from "./tutor-selector";
 import { TutorProfilePopover } from "./tutor-profile-popover";
-import { sessionBgColor, sessionTextColor, sessionBorderStyle } from "./session-colors";
+import {
+  sessionBgColor,
+  sessionBorderStyle,
+  sessionFrameColor,
+  sessionTextColor,
+} from "./session-colors";
 
 const HOUR_HEIGHT = 60;
 const START_HOUR = 7;
@@ -171,33 +176,47 @@ export function CalendarGrid({
               );
               const bgColor = sessionBgColor(chip?.color, isConflict);
               const textColor = sessionTextColor(chip?.color, isConflict);
-              const border = sessionBorderStyle(chip?.color, isConflict, s.location);
+              const frameColor = sessionFrameColor(chip?.color, isConflict);
+              const border = sessionBorderStyle(
+                chip?.color,
+                isConflict,
+                s.modality,
+                s.sessionType,
+                s.location,
+              );
 
               return (
                 <Popover key={`${t.tutorGroupId}-${sIdx}`}>
                   <PopoverTrigger
-                    className="absolute rounded cursor-pointer overflow-hidden z-[1] text-left"
-                    style={{
-                      top: top + 2,
-                      left: `calc(${colLeft}% + 4px)`,
-                      width: `calc(${colWidth}% - 8px)`,
-                      height: Math.max(height - 4, 28),
-                      background: bgColor,
-                      borderLeft: border,
-                    }}
-                  >
-                    <div className="p-2 leading-tight">
-                      <div className="text-sm font-semibold truncate" style={{ color: textColor }}>
-                        {s.subject ?? "Session"} — {s.studentName ?? "Unknown"}
-                        {isConflict && " !"}
-                      </div>
-                      <div className="text-xs text-muted-foreground mt-0.5">
-                        {minuteToLabel(s.startMinute)}–{minuteToLabel(s.endMinute)}
-                        {s.classType && ` · ${formatClassType(s.classType)}`}
-                        {s.location && ` · ${s.location}`}
-                      </div>
-                    </div>
-                  </PopoverTrigger>
+                    render={(props) => (
+                      <button
+                        type="button"
+                        {...props}
+                        className="absolute z-[1] cursor-pointer overflow-hidden rounded border-0 bg-transparent p-0 text-left shadow-none outline-none appearance-none"
+                        style={{
+                          top: top + 2,
+                          left: `calc(${colLeft}% + 4px)`,
+                          width: `calc(${colWidth}% - 8px)`,
+                          height: Math.max(height - 4, 28),
+                          backgroundColor: bgColor,
+                          borderLeft: border,
+                          boxShadow: `inset 0 0 0 1px ${frameColor}`,
+                        }}
+                      >
+                        <div className="p-2 leading-tight">
+                          <div className="text-sm font-semibold truncate" style={{ color: textColor }}>
+                            {s.subject ?? "Session"} — {s.studentName ?? "Unknown"}
+                            {isConflict && " !"}
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            {minuteToLabel(s.startMinute)}–{minuteToLabel(s.endMinute)}
+                            {s.classType && ` · ${formatClassType(s.classType)}`}
+                            {s.location && ` · ${s.location}`}
+                          </div>
+                        </div>
+                      </button>
+                    )}
+                  />
                   <PopoverContent side="top" className="w-60 p-3 text-xs space-y-1">
                     {s.studentName && <p className="font-semibold text-sm">{s.studentName}</p>}
                     {s.subject && <p className="text-muted-foreground">{s.subject}</p>}

@@ -114,8 +114,10 @@ export interface CompareSessionBlock {
   studentName?: string;
   subject?: string;
   classType?: string;
+  sessionType?: string;
   recurrenceId?: string;
   location?: string;
+  modality: "online" | "onsite" | "unknown";
   startTime: string;    // "HH:mm"
   endTime: string;      // "HH:mm"
   weekday: number;

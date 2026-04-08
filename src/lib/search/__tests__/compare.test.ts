@@ -66,6 +66,34 @@ describe("buildCompareTutor", () => {
     const result = buildCompareTutor(tutor);
     expect(result.studentCount).toBe(2);
   });
+
+  it("marks sessions from an online variant as online", () => {
+    const tutor = makeTutor({
+      supportedModes: ["online", "onsite"],
+      wiseRecords: [
+        { wiseTeacherId: "t1", wiseDisplayName: "Test Tutor", isOnline: false },
+        { wiseTeacherId: "t2", wiseDisplayName: "Test Tutor Online", isOnline: true },
+      ],
+      sessionBlocks: [
+        { startTime: new Date("2024-01-15T09:00:00"), endTime: new Date("2024-01-15T10:00:00"), weekday: 1, startMinute: 540, endMinute: 600, isBlocking: true, wiseTeacherId: "t2", studentName: "Ava T.", subject: "Math" },
+      ],
+    });
+
+    const result = buildCompareTutor(tutor);
+    expect(result.sessions[0].modality).toBe("online");
+  });
+
+  it("falls back to session type evidence when no online variant exists", () => {
+    const tutor = makeTutor({
+      supportedModes: [],
+      sessionBlocks: [
+        { startTime: new Date("2024-01-15T09:00:00"), endTime: new Date("2024-01-15T10:00:00"), weekday: 1, startMinute: 540, endMinute: 600, isBlocking: true, wiseTeacherId: "t1", studentName: "Ava T.", subject: "Math", sessionType: "online" },
+      ],
+    });
+
+    const result = buildCompareTutor(tutor);
+    expect(result.sessions[0].modality).toBe("online");
+  });
 });
 
 describe("detectConflicts", () => {

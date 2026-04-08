@@ -1,5 +1,14 @@
 # Tutor Schedule Compare Implementation Plan
 
+## Status Update (2026-04-08)
+
+This plan has been implemented. The shipped UI differs slightly from the original execution plan:
+
+- Compare is embedded in `/search` with `/compare` redirect compatibility.
+- Discovery shipped as a modal dialog instead of a persistent side panel.
+- Weekly compare now uses lane-based rendering for 2-3 tutors and full-width cards for a single tutor.
+- Compare session styling now uses explicit RGBA fills plus per-session modality evidence carried from Wise-derived identity/session data.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a dedicated `/compare` page with Google Calendar-style side-by-side tutor schedule view, automated student-level conflict detection, a discovery panel for finding candidate tutors, and a bridge from the existing search page.

@@ -9,7 +9,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import type { CompareTutor, Conflict, SharedFreeSlot } from "@/lib/search/types";
 import type { TutorChip } from "./tutor-selector";
-import { sessionBgColor, sessionTextColor, sessionBorderStyle } from "./session-colors";
+import {
+  sessionBgColor,
+  sessionBorderStyle,
+  sessionFrameColor,
+  sessionTextColor,
+} from "./session-colors";
 
 const HOUR_HEIGHT = 48;
 const START_HOUR = 7;
@@ -54,6 +59,10 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
     }
     return map;
   }, [conflicts]);
+
+  const multiTutorLayout = tutors.length > 1;
+  const laneCount = multiTutorLayout ? tutors.length : 1;
+  const laneWidth = 100 / laneCount;
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -102,6 +111,15 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                   />
                 ))}
 
+                {multiTutorLayout &&
+                  tutors.slice(0, -1).map((_, tutorIdx) => (
+                    <div
+                      key={`lane-${tutorIdx}`}
+                      className="absolute top-0 bottom-0 border-r border-border/20"
+                      style={{ left: `${(tutorIdx + 1) * laneWidth}%` }}
+                    />
+                  ))}
+
                 {/* Conflict bands */}
                 {dayConflicts.map((c, ci) => {
                   const top = minuteToY(c.startMinute);
@@ -119,8 +137,12 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                 {tutors.map((t, tutorIdx) => {
                   const chip = tutorChips[tutorIdx];
                   const sessions = t.sessions.filter((s) => s.weekday === day);
-                  const insetLeft = tutorIdx * 3;
-                  const insetRight = (tutors.length - 1 - tutorIdx) * 3;
+                  const left = multiTutorLayout
+                    ? `calc(${tutorIdx * laneWidth}% + 2px)`
+                    : "1px";
+                  const width = multiTutorLayout
+                    ? `calc(${laneWidth}% - 4px)`
+                    : "calc(100% - 2px)";
 
                   return sessions.map((s, sIdx) => {
                     const top = minuteToY(s.startMinute);
@@ -134,36 +156,53 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                     );
                     const bgColor = sessionBgColor(chip?.color, isConflict);
                     const textColor = sessionTextColor(chip?.color, isConflict);
-                    const border = sessionBorderStyle(chip?.color, isConflict, s.location);
+                    const frameColor = sessionFrameColor(chip?.color, isConflict);
+                    const border = sessionBorderStyle(
+                      chip?.color,
+                      isConflict,
+                      s.modality,
+                      s.sessionType,
+                      s.location,
+                    );
+                    const showSecondaryLine = height >= (multiTutorLayout ? 40 : 30);
 
                     return (
                       <Popover key={`${t.tutorGroupId}-${day}-${sIdx}`}>
                         <PopoverTrigger
-                          className="absolute rounded-sm cursor-pointer overflow-hidden text-left"
-                          style={{
-                            top: top + 2,
-                            left: insetLeft + 1,
-                            right: insetRight + 1,
-                            height: Math.max(height - 4, 14),
-                            background: bgColor,
-                            borderLeft: border,
-                            zIndex: tutorIdx + 1,
-                          }}
-                        >
-                          <div className="px-1 py-0.5 overflow-hidden">
-                            <div
-                              className="text-[11px] leading-tight font-semibold truncate"
-                              style={{ color: textColor }}
+                          render={(props) => (
+                            <button
+                              type="button"
+                              {...props}
+                              className="absolute cursor-pointer overflow-hidden rounded-sm border-0 bg-transparent p-0 text-left shadow-none outline-none appearance-none"
+                              style={{
+                                top: top + 2,
+                                left,
+                                width,
+                                height: Math.max(height - 4, 14),
+                                backgroundColor: bgColor,
+                                borderLeft: border,
+                                boxShadow: `inset 0 0 0 1px ${frameColor}`,
+                                zIndex: multiTutorLayout ? 1 : tutorIdx + 1,
+                              }}
                             >
-                              {minuteToLabel(s.startMinute)} {s.subject ?? ""}
-                            </div>
-                            {height > 28 && s.studentName && (
-                              <div className="text-[10px] leading-tight text-foreground/60 truncate">
-                                {s.studentName}
+                              <div className="px-1 py-0.5 overflow-hidden">
+                                <div
+                                  className={`leading-tight font-semibold truncate ${
+                                    multiTutorLayout ? "text-[10px]" : "text-[11px]"
+                                  }`}
+                                  style={{ color: textColor }}
+                                >
+                                  {minuteToLabel(s.startMinute)} {s.subject ?? ""}
+                                </div>
+                                {showSecondaryLine && s.studentName && (
+                                  <div className="text-[10px] leading-tight text-foreground/60 truncate">
+                                    {s.studentName}
+                                  </div>
+                                )}
                               </div>
-                            )}
-                          </div>
-                        </PopoverTrigger>
+                            </button>
+                          )}
+                        />
                         <PopoverContent side="top" className="w-56 p-3 text-xs space-y-1 z-50">
                           <p className="font-semibold text-sm" style={{ color: chip?.color }}>
                             {t.displayName}

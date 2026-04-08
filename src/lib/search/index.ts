@@ -42,6 +42,7 @@ export interface IndexedSessionBlock {
   studentName?: string;
   subject?: string;
   classType?: string;
+  sessionType?: string;
   recurrenceId?: string;
   location?: string;
 }
@@ -211,6 +212,7 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
         studentName: s.studentName ?? undefined,
         subject: s.subject ?? undefined,
         classType: s.classType ?? undefined,
+        sessionType: s.sessionType ?? undefined,
         recurrenceId: s.recurrenceId ?? undefined,
         location: s.location ?? undefined,
       })),

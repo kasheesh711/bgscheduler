@@ -1,10 +1,60 @@
 import type { IndexedTutorGroup } from "./index";
 import type { CompareTutor, CompareSessionBlock, Conflict, SharedFreeSlot } from "./types";
 
+const ONLINE_SESSION_TYPES = new Set(["online", "virtual"]);
+const ONSITE_SESSION_TYPES = new Set(["onsite", "in-person", "offline"]);
+const ONLINE_LOCATION_PATTERNS = ["http", "zoom", "google meet", "meet.google", "virtual", "online"];
+const ONSITE_LOCATION_PATTERNS = ["onsite", "in person"];
+
 function formatMinute(minute: number): string {
   const h = Math.floor(minute / 60);
   const m = minute % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function resolveSessionModality(
+  group: IndexedTutorGroup,
+  session: IndexedTutorGroup["sessionBlocks"][number],
+): CompareSessionBlock["modality"] {
+  const teacherRecord = group.wiseRecords.find(
+    (record) => record.wiseTeacherId === session.wiseTeacherId,
+  );
+
+  if (teacherRecord?.isOnline) {
+    return "online";
+  }
+
+  if (teacherRecord && group.supportedModes.includes("onsite")) {
+    return "onsite";
+  }
+
+  const normalizedType = session.sessionType?.trim().toLowerCase();
+  if (normalizedType && ONLINE_SESSION_TYPES.has(normalizedType)) {
+    return "online";
+  }
+  if (normalizedType && ONSITE_SESSION_TYPES.has(normalizedType)) {
+    return "onsite";
+  }
+
+  const normalizedLocation = session.location?.trim().toLowerCase();
+  if (
+    normalizedLocation &&
+    ONLINE_LOCATION_PATTERNS.some((pattern) => normalizedLocation.includes(pattern))
+  ) {
+    return "online";
+  }
+  if (
+    normalizedLocation &&
+    ONSITE_LOCATION_PATTERNS.some((pattern) => normalizedLocation.includes(pattern))
+  ) {
+    return "onsite";
+  }
+
+  if (group.supportedModes.length === 1) {
+    return group.supportedModes[0] as CompareSessionBlock["modality"];
+  }
+
+  return "unknown";
 }
 
 export function buildCompareTutor(group: IndexedTutorGroup, weekdays?: number[]): CompareTutor {
@@ -13,7 +63,8 @@ export function buildCompareTutor(group: IndexedTutorGroup, weekdays?: number[])
     .filter((s) => s.isBlocking && (!weekdaySet || weekdaySet.has(s.weekday)))
     .map((s) => ({
       title: s.title, studentName: s.studentName, subject: s.subject,
-      classType: s.classType, recurrenceId: s.recurrenceId, location: s.location,
+      classType: s.classType, sessionType: s.sessionType, recurrenceId: s.recurrenceId, location: s.location,
+      modality: resolveSessionModality(group, s),
       startTime: formatMinute(s.startMinute), endTime: formatMinute(s.endMinute),
       weekday: s.weekday, startMinute: s.startMinute, endMinute: s.endMinute,
     }));

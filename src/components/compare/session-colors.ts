@@ -1,53 +1,110 @@
-/**
- * Shared session block styling for calendar-grid and week-overview.
- *
- * All sessions use the same background opacity for visual consistency.
- * Online vs onsite is distinguished by border style:
- * - Onsite: solid left border
- * - Online: dashed left border
- */
+import type { CompareSessionBlock } from "@/lib/search/types";
 
-const ONLINE_PATTERNS = ["http", "online", "learn.", "zoom", "meet.google", "virtual"];
+const ONLINE_PATTERNS = ["http", "online", "learn.", "zoom", "meet.google", "google meet", "virtual"];
+const ONSITE_PATTERNS = ["onsite", "in person"];
 
-export function isOnlineSession(location?: string): boolean {
-  if (!location) return false;
-  const lower = location.toLowerCase();
-  return ONLINE_PATTERNS.some((p) => lower.includes(p));
+function hexToRgb(color: string): [number, number, number] {
+  const normalized = color.replace("#", "");
+  const hex = normalized.length === 3
+    ? normalized
+        .split("")
+        .map((char) => `${char}${char}`)
+        .join("")
+    : normalized;
+
+  if (!/^[0-9a-f]{6}$/i.test(hex)) {
+    return [136, 136, 136];
+  }
+
+  return [
+    Number.parseInt(hex.slice(0, 2), 16),
+    Number.parseInt(hex.slice(2, 4), 16),
+    Number.parseInt(hex.slice(4, 6), 16),
+  ];
 }
 
-/**
- * Background color for a session block.
- * Single consistent opacity (18%) for all non-conflict sessions.
- */
+function rgba(color: string, alpha: number): string {
+  const [r, g, b] = hexToRgb(color);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function fallbackSessionMode(
+  sessionType?: string,
+  location?: string,
+): CompareSessionBlock["modality"] {
+  const normalizedType = sessionType?.trim().toLowerCase();
+  if (normalizedType === "online" || normalizedType === "virtual") {
+    return "online";
+  }
+  if (
+    normalizedType === "onsite" ||
+    normalizedType === "in-person" ||
+    normalizedType === "offline"
+  ) {
+    return "onsite";
+  }
+
+  const normalizedLocation = location?.trim().toLowerCase();
+  if (
+    normalizedLocation &&
+    ONLINE_PATTERNS.some((pattern) => normalizedLocation.includes(pattern))
+  ) {
+    return "online";
+  }
+  if (
+    normalizedLocation &&
+    ONSITE_PATTERNS.some((pattern) => normalizedLocation.includes(pattern))
+  ) {
+    return "onsite";
+  }
+
+  return "unknown";
+}
+
+export function sessionDisplayMode(
+  modality: CompareSessionBlock["modality"],
+  sessionType?: string,
+  location?: string,
+): CompareSessionBlock["modality"] {
+  return modality === "unknown"
+    ? fallbackSessionMode(sessionType, location)
+    : modality;
+}
+
 export function sessionBgColor(
   tutorColor: string | undefined,
   isConflict: boolean,
 ): string {
   if (isConflict) return "rgba(239, 68, 68, 0.18)";
-  return `${tutorColor ?? "#888"}2e`;
+  return rgba(tutorColor ?? "#888888", 0.18);
 }
 
-/**
- * Text color for the primary label in a session block.
- */
+export function sessionFrameColor(
+  tutorColor: string | undefined,
+  isConflict: boolean,
+): string {
+  if (isConflict) return "rgba(239, 68, 68, 0.22)";
+  return rgba(tutorColor ?? "#888888", 0.22);
+}
+
 export function sessionTextColor(
   tutorColor: string | undefined,
   isConflict: boolean,
 ): string {
   if (isConflict) return "#dc2626";
-  return tutorColor ?? "#888";
+  return tutorColor ?? "#888888";
 }
 
-/**
- * Border style string for the left border of a session block.
- * Onsite = solid, Online = dashed.
- */
 export function sessionBorderStyle(
   tutorColor: string | undefined,
   isConflict: boolean,
+  modality: CompareSessionBlock["modality"],
+  sessionType?: string,
   location?: string,
 ): string {
-  const color = isConflict ? "#ef4444" : (tutorColor ?? "#888");
-  const style = isOnlineSession(location) ? "dashed" : "solid";
+  const color = isConflict ? "#ef4444" : (tutorColor ?? "#888888");
+  const style = sessionDisplayMode(modality, sessionType, location) === "online"
+    ? "dashed"
+    : "solid";
   return `3px ${style} ${color}`;
 }

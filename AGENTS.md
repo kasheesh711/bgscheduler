@@ -70,7 +70,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 
 ### Compare engine (complete)
 - Reads from the same in-memory SearchIndex singleton — no additional DB queries
-- **Schedule assembly** (`buildCompareTutor`) — transforms IndexedTutorGroup into CompareTutor with sessions filtered by weekday, weekly hours booked, distinct student count
+- **Schedule assembly** (`buildCompareTutor`) — transforms IndexedTutorGroup into CompareTutor with sessions filtered by weekday, weekly hours booked, distinct student count, and per-session modality resolved from Wise teacher/session evidence
 - **Conflict detection** (`detectConflicts`) — finds same student with overlapping sessions across different selected tutors (case-insensitive name matching, deduped by student+day+tutor pair)
 - **Shared free slots** (`findSharedFreeSlots`) — computes time ranges where ALL selected tutors are simultaneously free by subtracting blocking sessions from availability windows and intersecting intervals across tutors (minimum 30-minute threshold)
 - **Discovery** — filters all tutors by subject/level/mode/time, pre-computes conflict status against existing selected tutors, sorts by conflicts then availability
@@ -93,21 +93,19 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - **Layout**: Side-by-side split — search (left 50%) + compare (right 50%). Viewport-height with `overflow-hidden` on body, panels scroll internally. No page-level or horizontal scroll. `px-4 lg:px-6` padding.
 - **Shared navigation**: `AppNav` component in `(app)` route group layout — persistent top bar with sky blue brand name, active link indicators. Login page excluded (no nav).
 - **Fonts**: Inter + JetBrains Mono. Dark mode supported.
-- **Session block colors**: Shared `session-colors.ts` module provides `sessionBgColor` (18% opacity), `sessionTextColor`, `sessionBorderStyle` (solid=onsite, dashed=online). Used by both `week-overview.tsx` and `calendar-grid.tsx`.
+- **Session block colors**: Shared `session-colors.ts` module provides explicit RGBA fills, text colors, frame colors, and dashed/solid borders. Online styling now prefers compare-session modality derived from Wise identity/session evidence and only falls back to location text when needed.
 - **Tutor colors**: `TUTOR_COLORS = ["#3b82f6", "#e67e22", "#7c3aed"]` (sky blue, amber, purple)
 
 #### Pages
 - `/login` — Google sign-in with warm gradient background, sky blue title, access-denied error handling
 - `/search` — side-by-side workspace:
   - **Left panel (Search)**: compact 3-column search form, mode toggle (recurring/one-time), data-driven dropdown filters (subject/curriculum/level), availability grid results (table-fixed, no horizontal scroll), row selection with copy-for-parents button, "Compare (N)" button (sends selected tutors to right panel), recent searches (localStorage, last 10), Needs Review section
-  - **Right panel (Compare)**: tutor selector chips (max 3, color-coded, removable) + searchable tutor combobox dropdown (shadcn Command+Popover, fetches from `GET /api/tutors`), "Advanced search" link opens discovery modal (shadcn Dialog), week/day sub-tabs, GCal-style weekly time grid (7AM–9PM vertical axis, Mon–Sun columns, full-width session blocks with per-tutor z-index stacking and 3px inset), day drill-down (side-by-side tutor columns with positioned session blocks), conflict bands + summary, shared free slot indicators, tutor profile popover, URL param support (`?tutors=id1,id2`)
+  - **Right panel (Compare)**: tutor selector chips (max 3, color-coded, removable) + searchable tutor combobox dropdown (shadcn Command+Popover, fetches from `GET /api/tutors`), "Advanced search" link opens discovery modal (shadcn Dialog), week/day sub-tabs, GCal-style weekly time grid (7AM–9PM vertical axis, Mon–Sun columns, full-width cards for single-tutor view and per-tutor lanes for 2-3 tutor view), day drill-down (side-by-side tutor columns with positioned session blocks), conflict bands + summary, shared free slot indicators, tutor profile popover, URL param support (`?tutors=id1,id2`)
 - `/compare` — redirects to `/search` (backward compatibility for bookmarked URLs, preserves `?tutors=` param)
 - `/data-health` — full-width sync status cards, snapshot stats, issues by type, unresolved aliases/modality/unmapped tags tables, recent sync history
 
 #### Known UX Issues
-- **Week view card inconsistency**: session blocks appear with different visual weight despite using the same opacity value. Needs investigation — may be hex-to-rendered-color differences, CSS stacking, or browser rendering.
-- **Multi-tutor week view overlap**: full-width blocks with z-index stacking obscure lower-z tutors on busy days. Needs a layout strategy that shows both tutors clearly (e.g., side-by-side columns for multi-tutor, full-width for single tutor).
-- **Online/onsite detection**: relies on `location` field string matching which misses most sessions. Needs a more reliable data source.
+- No compare-specific regressions are currently tracked in documentation after the 2026-04-08 week-view lane and modality-evidence fixes. Continue visual QA on dense weekly schedules after future compare changes.
 
 ### Tests
 - Identity: nickname extraction, alias resolution, online/offline pairs, unresolved → data_issue
