@@ -8,7 +8,8 @@ import { TutorSelector, TUTOR_COLORS } from "@/components/compare/tutor-selector
 import type { TutorChip } from "@/components/compare/tutor-selector";
 import { CalendarGrid } from "@/components/compare/calendar-grid";
 import { WeekOverview } from "@/components/compare/week-overview";
-import type { CompareResponse } from "@/lib/search/types";
+import { DiscoveryPanel } from "@/components/compare/discovery-panel";
+import type { CompareResponse, Conflict } from "@/lib/search/types";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -20,6 +21,7 @@ export default function ComparePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [discoveryOpen, setDiscoveryOpen] = useState(false);
+  const [prefillConflict, setPrefillConflict] = useState<Conflict | null>(null);
 
   useEffect(() => {
     const tutorIds = searchParams.get("tutors")?.split(",").filter(Boolean) ?? [];
@@ -146,6 +148,7 @@ export default function ComparePage() {
                   sharedFreeSlots={response.sharedFreeSlots}
                   dayOfWeek={activeDay}
                   onFindAlternatives={(conflict) => {
+                    setPrefillConflict(conflict);
                     setDiscoveryOpen(true);
                   }}
                   onTutorNameClick={(id) => {
@@ -182,18 +185,13 @@ export default function ComparePage() {
         </>
       )}
 
-      {/* Discovery panel placeholder — replaced in Task 8 */}
-      {discoveryOpen && (
-        <div className="rounded-md border p-4 text-sm text-muted-foreground">
-          Discovery panel — coming in Task 8.{" "}
-          <button
-            className="underline"
-            onClick={() => handleAddTutor("placeholder-id", "Placeholder")}
-          >
-            (stub)
-          </button>
-        </div>
-      )}
+      <DiscoveryPanel
+        open={discoveryOpen}
+        onClose={() => { setDiscoveryOpen(false); setPrefillConflict(null); }}
+        existingTutorGroupIds={tutors.map((t) => t.tutorGroupId)}
+        onAdd={handleAddTutor}
+        prefillConflict={prefillConflict}
+      />
     </div>
   );
 }
