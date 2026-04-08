@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { TutorSelector, TUTOR_COLORS } from "@/components/compare/tutor-selector";
 import type { TutorChip } from "@/components/compare/tutor-selector";
+import { CalendarGrid } from "@/components/compare/calendar-grid";
 import type { CompareResponse } from "@/lib/search/types";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -134,18 +135,27 @@ export default function ComparePage() {
             ))}
           </div>
 
-          {/* Calendar grid placeholder — replaced in Task 6 */}
           <Card>
             <CardContent className="pt-6">
-              {activeDay !== null ? (
+              {activeDay !== null && response ? (
+                <CalendarGrid
+                  tutors={response.tutors}
+                  tutorChips={tutors}
+                  conflicts={response.conflicts}
+                  sharedFreeSlots={response.sharedFreeSlots}
+                  dayOfWeek={activeDay}
+                  onFindAlternatives={(conflict) => {
+                    setDiscoveryOpen(true);
+                  }}
+                  onTutorNameClick={(id) => {
+                    // Will wire to profile popover in Task 9
+                  }}
+                />
+              ) : response ? (
                 <div className="text-center text-sm text-muted-foreground py-12">
-                  Day view for {DAY_NAMES[activeDay]} — calendar grid renders here
+                  Week overview — click a day tab to see detailed schedules
                 </div>
-              ) : (
-                <div className="text-center text-sm text-muted-foreground py-12">
-                  Week overview — compressed grid renders here
-                </div>
-              )}
+              ) : null}
             </CardContent>
           </Card>
 
