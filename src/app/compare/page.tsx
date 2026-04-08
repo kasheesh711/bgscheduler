@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { TutorSelector, TUTOR_COLORS } from "@/components/compare/tutor-selector";
 import type { TutorChip } from "@/components/compare/tutor-selector";
 import { CalendarGrid } from "@/components/compare/calendar-grid";
+import { WeekOverview } from "@/components/compare/week-overview";
 import type { CompareResponse } from "@/lib/search/types";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -152,9 +153,12 @@ export default function ComparePage() {
                   }}
                 />
               ) : response ? (
-                <div className="text-center text-sm text-muted-foreground py-12">
-                  Week overview — click a day tab to see detailed schedules
-                </div>
+                <WeekOverview
+                  tutors={response.tutors}
+                  tutorChips={tutors}
+                  conflicts={response.conflicts}
+                  onDayClick={(day) => setActiveDay(day)}
+                />
               ) : null}
             </CardContent>
           </Card>
