@@ -83,23 +83,31 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - `POST /api/internal/sync-wise` — cron-triggered sync, CRON_SECRET auth
 - `POST /api/compare` — compare 1-3 tutors: returns schedules, student-level conflicts, shared free slots
 - `POST /api/compare/discover` — find candidate tutors with subject/level/mode/time filters and pre-computed conflict status against existing selected tutors
+- `GET /api/tutors` — all tutor names/IDs/modes/subjects from active snapshot (used by tutor combobox)
 
 ### Frontend (complete)
 
 #### Design system
-- **Color palette**: Warm teal primary (OKLCH hue 185) + amber accent (hue 75), cream backgrounds — replaces the original achromatic gray tokens
+- **Color palette**: Sky blue primary (OKLCH hue 230) + amber accent (hue 75), cream backgrounds
 - **Semantic color tokens**: `--available` (green), `--blocked` (amber), `--conflict` (red), `--free-slot` (green) mapped in Tailwind as `bg-available`, `text-conflict`, etc.
-- **Layout**: Full-width viewport (no `max-w-6xl`), `px-6 lg:px-10` padding. Search filters constrained at `max-w-5xl`, results/calendar grids full-width.
-- **Shared navigation**: `AppNav` component in `(app)` route group layout — persistent top bar with teal brand name, active link indicators. Login page excluded (no nav).
-- **Fonts**: Geist Sans + Geist Mono. Dark mode supported.
+- **Layout**: Side-by-side split — search (left 50%) + compare (right 50%). Viewport-height with `overflow-hidden` on body, panels scroll internally. No page-level or horizontal scroll. `px-4 lg:px-6` padding.
+- **Shared navigation**: `AppNav` component in `(app)` route group layout — persistent top bar with sky blue brand name, active link indicators. Login page excluded (no nav).
+- **Fonts**: Inter + JetBrains Mono. Dark mode supported.
+- **Session block colors**: Shared `session-colors.ts` module provides `sessionBgColor` (18% opacity), `sessionTextColor`, `sessionBorderStyle` (solid=onsite, dashed=online). Used by both `week-overview.tsx` and `calendar-grid.tsx`.
+- **Tutor colors**: `TUTOR_COLORS = ["#3b82f6", "#e67e22", "#7c3aed"]` (sky blue, amber, purple)
 
 #### Pages
-- `/login` — Google sign-in with warm gradient background, teal title, access-denied error handling
-- `/search` — unified tabbed workspace with two tabs:
-  - **Search tab**: range search with time window + class duration (1hr/1.5hr/2hr), mode toggle (recurring/one-time), data-driven dropdown filters (subject/curriculum/level), full-width availability grid results (rows=tutors, columns=time slots), row selection with copy-for-parents button, "Compare selected" button (appears when 2-3 tutors selected, switches to Compare tab), recent searches (localStorage, last 10), Needs Review section with reason badges, stale snapshot banner
-  - **Compare tab**: integrated tutor schedule comparison with tutor selector chips (max 3, color-coded teal/amber/purple, removable), week overview (compressed Mon-Sun table with session chips and conflict warnings), day drill-down (GCal-style side-by-side columns with positioned session blocks), automated conflict detection (highlight bands when same student has overlapping sessions across tutors), shared free slot indicators ("All free" labels), discovery panel (slide-out from right with name search, subject/level/mode filters, time filter, candidate cards with conflict/free-slot badges), "Find alternatives" button on conflicts, tutor profile popover (click tutor name for weekly hours, student count, subjects, data issues), URL param support (`?tutors=id1,id2` auto-switches to Compare tab)
+- `/login` — Google sign-in with warm gradient background, sky blue title, access-denied error handling
+- `/search` — side-by-side workspace:
+  - **Left panel (Search)**: compact 3-column search form, mode toggle (recurring/one-time), data-driven dropdown filters (subject/curriculum/level), availability grid results (table-fixed, no horizontal scroll), row selection with copy-for-parents button, "Compare (N)" button (sends selected tutors to right panel), recent searches (localStorage, last 10), Needs Review section
+  - **Right panel (Compare)**: tutor selector chips (max 3, color-coded, removable) + searchable tutor combobox dropdown (shadcn Command+Popover, fetches from `GET /api/tutors`), "Advanced search" link opens discovery modal (shadcn Dialog), week/day sub-tabs, GCal-style weekly time grid (7AM–9PM vertical axis, Mon–Sun columns, full-width session blocks with per-tutor z-index stacking and 3px inset), day drill-down (side-by-side tutor columns with positioned session blocks), conflict bands + summary, shared free slot indicators, tutor profile popover, URL param support (`?tutors=id1,id2`)
 - `/compare` — redirects to `/search` (backward compatibility for bookmarked URLs, preserves `?tutors=` param)
 - `/data-health` — full-width sync status cards, snapshot stats, issues by type, unresolved aliases/modality/unmapped tags tables, recent sync history
+
+#### Known UX Issues
+- **Week view card inconsistency**: session blocks appear with different visual weight despite using the same opacity value. Needs investigation — may be hex-to-rendered-color differences, CSS stacking, or browser rendering.
+- **Multi-tutor week view overlap**: full-width blocks with z-index stacking obscure lower-z tutors on busy days. Needs a layout strategy that shows both tutors clearly (e.g., side-by-side columns for multi-tutor, full-width for single tutor).
+- **Online/onsite detection**: relies on `location` field string matching which misses most sessions. Needs a more reliable data source.
 
 ### Tests
 - Identity: nickname extraction, alias resolution, online/offline pairs, unresolved → data_issue
