@@ -59,8 +59,21 @@ function resolveSessionModality(
 
 export function buildCompareTutor(group: IndexedTutorGroup, weekdays?: number[]): CompareTutor {
   const weekdaySet = weekdays ? new Set(weekdays) : null;
-  const sessions: CompareSessionBlock[] = group.sessionBlocks
-    .filter((s) => s.isBlocking && (!weekdaySet || weekdaySet.has(s.weekday)))
+
+  // Deduplicate recurring sessions: keep only the earliest instance per recurrenceId
+  const seenRecurrence = new Map<string, Date>();
+  const deduped = group.sessionBlocks.filter((s) => {
+    if (!s.isBlocking) return false;
+    if (s.recurrenceId) {
+      const prev = seenRecurrence.get(s.recurrenceId);
+      if (prev && s.startTime >= prev) return false;
+      seenRecurrence.set(s.recurrenceId, s.startTime);
+    }
+    return true;
+  });
+
+  const sessions: CompareSessionBlock[] = deduped
+    .filter((s) => !weekdaySet || weekdaySet.has(s.weekday))
     .map((s) => ({
       title: s.title, studentName: s.studentName, subject: s.subject,
       classType: s.classType, sessionType: s.sessionType, recurrenceId: s.recurrenceId, location: s.location,
@@ -69,9 +82,8 @@ export function buildCompareTutor(group: IndexedTutorGroup, weekdays?: number[])
       weekday: s.weekday, startMinute: s.startMinute, endMinute: s.endMinute,
     }));
 
-  const allBlockingSessions = group.sessionBlocks.filter((s) => s.isBlocking);
-  const totalMinutes = allBlockingSessions.reduce((sum, s) => sum + (s.endMinute - s.startMinute), 0);
-  const studentNames = new Set(allBlockingSessions.map((s) => s.studentName).filter(Boolean));
+  const totalMinutes = deduped.reduce((sum, s) => sum + (s.endMinute - s.startMinute), 0);
+  const studentNames = new Set(deduped.map((s) => s.studentName).filter(Boolean));
 
   return {
     tutorGroupId: group.id, displayName: group.displayName,
