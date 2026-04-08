@@ -151,9 +151,6 @@ export default function ComparePage() {
                     setPrefillConflict(conflict);
                     setDiscoveryOpen(true);
                   }}
-                  onTutorNameClick={(id) => {
-                    // Will wire to profile popover in Task 9
-                  }}
                 />
               ) : response ? (
                 <WeekOverview

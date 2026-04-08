@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/popover";
 import type { CompareTutor, Conflict, SharedFreeSlot } from "@/lib/search/types";
 import type { TutorChip } from "./tutor-selector";
+import { TutorProfilePopover } from "./tutor-profile-popover";
 
 const HOUR_HEIGHT = 60;
 const START_HOUR = 7;
@@ -40,7 +41,6 @@ interface CalendarGridProps {
   sharedFreeSlots: SharedFreeSlot[];
   dayOfWeek: number;
   onFindAlternatives?: (conflict: Conflict) => void;
-  onTutorNameClick?: (tutorGroupId: string) => void;
 }
 
 export function CalendarGrid({
@@ -50,7 +50,6 @@ export function CalendarGrid({
   sharedFreeSlots,
   dayOfWeek,
   onFindAlternatives,
-  onTutorNameClick,
 }: CalendarGridProps) {
   const dayConflicts = useMemo(
     () => conflicts.filter((c) => c.dayOfWeek === dayOfWeek),
@@ -78,13 +77,14 @@ export function CalendarGrid({
           const chip = tutorChips[i];
           return (
             <div key={t.tutorGroupId} className="flex-1 px-3 py-2 text-center border-r last:border-r-0">
-              <button
-                className="font-semibold text-sm hover:underline"
-                style={{ color: chip?.color }}
-                onClick={() => onTutorNameClick?.(t.tutorGroupId)}
-              >
-                {t.displayName}
-              </button>
+              <TutorProfilePopover tutor={t} color={chip?.color ?? "#888"}>
+                <button
+                  className="font-semibold text-sm hover:underline"
+                  style={{ color: chip?.color }}
+                >
+                  {t.displayName}
+                </button>
+              </TutorProfilePopover>
               <div className="text-[10px] text-muted-foreground">
                 {t.supportedModes.join(" · ")} · {t.qualifications.map((q) => q.subject).filter((v, i, a) => a.indexOf(v) === i).join(", ")}
               </div>

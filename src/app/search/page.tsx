@@ -369,6 +369,14 @@ export default function SearchPage() {
                     level: levelFilter || undefined,
                   }}
                 />
+                {selectedIds.size >= 2 && selectedIds.size <= 3 && (
+                  <a
+                    href={`/compare?tutors=${[...selectedIds].join(",")}`}
+                    className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted transition-colors"
+                  >
+                    Compare schedules ({selectedIds.size})
+                  </a>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
