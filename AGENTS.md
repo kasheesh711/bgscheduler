@@ -17,7 +17,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - Auth.js with Google provider + `admin_users` table for explicit email allowlisting
 - Drizzle ORM + Neon Postgres (ap-southeast-1) with 14 tables
 - Vercel hosting with daily cron (Hobby plan limit; upgrade to Pro for 30-min cadence)
-- Vitest with 80 passing unit tests
+- Vitest with 82 passing unit tests
 
 ### Database schema (complete, migrated, seeded)
 - `snapshots` — versioned snapshot records with atomic `active` flag promotion
@@ -70,9 +70,10 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 
 ### Compare engine (complete)
 - Reads from the same in-memory SearchIndex singleton — no additional DB queries
-- **Schedule assembly** (`buildCompareTutor`) — transforms IndexedTutorGroup into CompareTutor with sessions filtered by weekday, weekly hours booked, distinct student count, and per-session modality resolved from Wise teacher/session evidence
+- **Date-range filtering** — all compare queries are scoped to a specific week (Monday–Sunday). The `weekStart` parameter defaults to the current week in Asia/Bangkok. Sessions are filtered by actual `startTime` date, eliminating duplicate recurring instances
+- **Schedule assembly** (`buildCompareTutor`) — transforms IndexedTutorGroup into CompareTutor with sessions filtered by date range + weekday, weekly hours booked, distinct student count, and per-session modality resolved from Wise teacher/session evidence
 - **Conflict detection** (`detectConflicts`) — finds same student with overlapping sessions across different selected tutors (case-insensitive name matching, deduped by student+day+tutor pair)
-- **Shared free slots** (`findSharedFreeSlots`) — computes time ranges where ALL selected tutors are simultaneously free by subtracting blocking sessions from availability windows and intersecting intervals across tutors (minimum 30-minute threshold)
+- **Shared free slots** (`findSharedFreeSlots`) — computes time ranges where ALL selected tutors are simultaneously free by subtracting blocking sessions (within the date range) from availability windows and intersecting intervals across tutors (minimum 30-minute threshold)
 - **Discovery** — filters all tutors by subject/level/mode/time, pre-computes conflict status against existing selected tutors, sorts by conflicts then availability
 
 ### API routes (complete)
@@ -81,7 +82,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - `GET /api/filters` — distinct subjects, curriculums, levels from active snapshot for dropdown population
 - `GET /api/data-health` — sync status, issue counts by type, unresolved aliases/modality/tags, recent sync history
 - `POST /api/internal/sync-wise` — cron-triggered sync, CRON_SECRET auth
-- `POST /api/compare` — compare 1-3 tutors: returns schedules, student-level conflicts, shared free slots
+- `POST /api/compare` — compare 1-3 tutors: accepts optional `weekStart` (ISO date, defaults to current week), returns week-scoped schedules, student-level conflicts, shared free slots, and `weekStart`/`weekEnd` in response
 - `POST /api/compare/discover` — find candidate tutors with subject/level/mode/time filters and pre-computed conflict status against existing selected tutors
 - `GET /api/tutors` — all tutor names/IDs/modes/subjects from active snapshot (used by tutor combobox)
 
@@ -93,19 +94,20 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - **Layout**: Side-by-side split — search (left 50%) + compare (right 50%). Viewport-height with `overflow-hidden` on body, panels scroll internally. No page-level or horizontal scroll. `px-4 lg:px-6` padding.
 - **Shared navigation**: `AppNav` component in `(app)` route group layout — persistent top bar with sky blue brand name, active link indicators. Login page excluded (no nav).
 - **Fonts**: Inter + JetBrains Mono. Dark mode supported.
-- **Session block colors**: Shared `session-colors.ts` module provides RGBA fills (28% bg opacity, 35% frame opacity), solid text colors, and solid 3px left borders. All cards use consistent solid styling — unreliable online/onsite detection removed from visual rendering.
+- **Session block colors**: Shared `session-colors.ts` module provides RGBA fills (28% bg opacity, 35% frame opacity), solid text colors, and solid 3px left borders. All cards use consistent solid styling — unreliable online/onsite detection removed from visual rendering. Exports `rgba()` helper for availability window tinting.
+- **Availability window shading**: Subtle background blocks (6% opacity fill + 15% opacity left border) rendered behind session cards in both week and day views to show when tutors are available.
 - **Tutor colors**: `TUTOR_COLORS = ["#3b82f6", "#e67e22", "#7c3aed"]` (sky blue, amber, purple)
 
 #### Pages
 - `/login` — Google sign-in with warm gradient background, sky blue title, access-denied error handling
 - `/search` — side-by-side workspace:
   - **Left panel (Search)**: compact 3-column search form, mode toggle (recurring/one-time), data-driven dropdown filters (subject/curriculum/level), availability grid results (table-fixed, no horizontal scroll), row selection with copy-for-parents button, "Compare (N)" button (sends selected tutors to right panel), recent searches (localStorage, last 10), Needs Review section
-  - **Right panel (Compare)**: tutor selector chips (max 3, color-coded, removable) + searchable tutor combobox dropdown (shadcn Command+Popover, fetches from `GET /api/tutors`), "Advanced search" link opens discovery modal (shadcn Dialog), week/day sub-tabs, GCal-style weekly time grid (7AM–9PM vertical axis, Mon–Sun sticky headers, full-width cards for single-tutor view and per-tutor lanes for 2-3 tutor view, GCal-style overlap detection with sub-columns for overlapping sessions, vertical scrolling), day drill-down (side-by-side tutor columns with positioned session blocks), conflict bands + summary, shared free slot indicators, tutor profile popover, URL param support (`?tutors=id1,id2`)
+  - **Right panel (Compare)**: tutor selector chips (max 3, color-coded, removable) + searchable tutor combobox dropdown (shadcn Command+Popover, fetches from `GET /api/tutors`), "Advanced search" link opens discovery modal (shadcn Dialog), **week picker** (prev/next arrows, week label "Apr 7 – Apr 13, 2026", Today button to reset to current week), week/day sub-tabs with actual dates (e.g. "Mon 4/7"), GCal-style weekly time grid (7AM–9PM vertical axis, Mon–Sun sticky headers, full-width cards for single-tutor view and per-tutor lanes for 2-3 tutor view, sub-column cap at 3 single-tutor / 2 multi-tutor with "+N more" overflow badges, availability window background shading, vertical scrolling), day drill-down (side-by-side tutor columns with positioned session blocks + availability shading), conflict bands + summary, shared free slot indicators, tutor profile popover, URL param support (`?tutors=id1,id2`)
 - `/compare` — redirects to `/search` (backward compatibility for bookmarked URLs, preserves `?tutors=` param)
 - `/data-health` — full-width sync status cards, snapshot stats, issues by type, unresolved aliases/modality/unmapped tags tables, recent sync history
 
 #### Known UX Issues
-- No compare-specific regressions are currently tracked after the 2026-04-08 overlap layout, card consistency, and sticky header fixes. Continue visual QA on dense weekly schedules after future compare changes.
+- No compare-specific regressions are currently tracked after the 2026-04-08 week picker, overlap cap, and availability shading deployment. Continue visual QA on dense weekly schedules after future compare changes.
 
 ### Tests
 - Identity: nickname extraction, alias resolution, online/offline pairs, unresolved → data_issue
@@ -116,7 +118,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - Modality: pair derivation, session type evidence, unresolved → data_issue
 - Qualifications: tag parsing (Int./Thai/ExamPrep), unmapped → data_issue
 - Search engine: recurring blocking, one-time blocking, cancelled non-blocking, mode filtering, qualification filtering, multi-slot intersection, Needs Review routing
-- Compare engine: buildCompareTutor (weekday filtering, full week, weekly hours, student count), detectConflicts (same student overlap, different students, non-overlapping times), findSharedFreeSlots (interval intersection across tutors)
+- Compare engine: buildCompareTutor (date range + weekday filtering, weekly hours, student count), detectConflicts (same student overlap, different students, non-overlapping times), findSharedFreeSlots (date-range-scoped interval intersection across tutors)
 - Wise contract: auth headers, teacher list parsing, availability envelope parsing, sessions pagination parsing
 - Parser: single/multi slot parsing, abbreviated days, ambiguous input warnings
 

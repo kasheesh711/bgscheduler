@@ -17,6 +17,8 @@ UX/UI refresh v2 deployed 2026-04-08 (commits `38b4688`–`b11734d`): side-by-si
 
 Week view QA fixes deployed 2026-04-08: GCal-style overlap detection (sub-columns for overlapping sessions), consistent card styling (28% bg opacity, solid borders), sticky day headers with vertical scrolling.
 
+Compare calendar v3 deployed 2026-04-08 (commits `c52deb8`–`9c6d637`): week picker with date-range session filtering (prev/next arrows, Today button, dated day tabs), sub-column cap (max 3 single-tutor / 2 multi-tutor with "+N more" overflow badges), availability window background shading, improved card readability for narrow sub-columns.
+
 ### Known Issues (open)
 - **Online/onsite detection heuristic**: uses `location` field pattern matching (http/online/learn./zoom/meet.google/virtual). Most sessions have venue names like "Think Outside the Box", "Tesla", "Nerd" which don't match → all treated as onsite. Needs a more reliable data source (possibly `sessionType` from Wise or the `isOnlineVariant` flag on the tutor's underlying Wise records). Visual distinction (dashed vs solid border) removed from cards pending reliable detection; modality info still shown in popover.
 
