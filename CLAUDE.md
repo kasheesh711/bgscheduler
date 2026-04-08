@@ -11,7 +11,9 @@
 
 ## Current Status
 
-Production sync is live. First successful sync completed 2026-04-07 (commit `c673999`), promoting snapshot `d70608b0` with 131 teachers and 72 identity groups. Daily cron runs at midnight UTC. The previous blocker (client-side contract drift) is fully resolved.
+Production sync is live. First successful sync completed 2026-04-07 (commit `c673999`), promoting snapshot `d70608b0` with 131 teachers and 72 identity groups. Daily cron runs at midnight UTC.
+
+UX/UI refresh deployed 2026-04-08 (commit `70cfa06`): warm teal/amber color palette, integrated compare into search page as tabbed workspace, shared AppNav, full-width layout. `/compare` now redirects to `/search`.
 
 ## Running Commands
 

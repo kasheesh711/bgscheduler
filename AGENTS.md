@@ -85,10 +85,21 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - `POST /api/compare/discover` — find candidate tutors with subject/level/mode/time filters and pre-computed conflict status against existing selected tutors
 
 ### Frontend (complete)
-- `/login` — Google sign-in with access-denied error handling
-- `/search` — range search with time window + class duration (1hr/1.5hr/2hr), mode toggle (recurring/one-time), data-driven dropdown filters (subject/curriculum/level), availability grid results (rows=tutors, columns=time slots), row selection with copy-for-parents button, "Compare schedules" button (appears when 2-3 tutors selected, links to /compare), Compare nav link in header, recent searches (localStorage, last 10), Needs Review section with reason badges, stale snapshot banner
-- `/compare` — dedicated tutor schedule comparison page with: tutor selector chips (max 3, color-coded, removable), week overview (compressed Mon-Sun table with session chips and conflict warnings), day drill-down (GCal-style side-by-side columns with positioned session blocks at actual time positions), automated conflict detection (red highlight bands when same student has overlapping sessions across tutors), shared free slot indicators (green dashed "All free" labels), discovery panel (slide-out from right with name search, subject/level/mode filters, "only show tutors free at" time filter, candidate cards with conflict/free-slot badges), "Find alternatives" button on conflicts (pre-fills discovery panel with conflicting slot's subject and time), tutor profile popover (click tutor name for weekly hours, student count, subjects, data issues), URL param support (`?tutors=id1,id2` for pre-loading from search)
-- `/data-health` — sync status cards, snapshot stats, issues by type, unresolved aliases table, unresolved modality table, unmapped tags table, recent sync history
+
+#### Design system
+- **Color palette**: Warm teal primary (OKLCH hue 185) + amber accent (hue 75), cream backgrounds — replaces the original achromatic gray tokens
+- **Semantic color tokens**: `--available` (green), `--blocked` (amber), `--conflict` (red), `--free-slot` (green) mapped in Tailwind as `bg-available`, `text-conflict`, etc.
+- **Layout**: Full-width viewport (no `max-w-6xl`), `px-6 lg:px-10` padding. Search filters constrained at `max-w-5xl`, results/calendar grids full-width.
+- **Shared navigation**: `AppNav` component in `(app)` route group layout — persistent top bar with teal brand name, active link indicators. Login page excluded (no nav).
+- **Fonts**: Geist Sans + Geist Mono. Dark mode supported.
+
+#### Pages
+- `/login` — Google sign-in with warm gradient background, teal title, access-denied error handling
+- `/search` — unified tabbed workspace with two tabs:
+  - **Search tab**: range search with time window + class duration (1hr/1.5hr/2hr), mode toggle (recurring/one-time), data-driven dropdown filters (subject/curriculum/level), full-width availability grid results (rows=tutors, columns=time slots), row selection with copy-for-parents button, "Compare selected" button (appears when 2-3 tutors selected, switches to Compare tab), recent searches (localStorage, last 10), Needs Review section with reason badges, stale snapshot banner
+  - **Compare tab**: integrated tutor schedule comparison with tutor selector chips (max 3, color-coded teal/amber/purple, removable), week overview (compressed Mon-Sun table with session chips and conflict warnings), day drill-down (GCal-style side-by-side columns with positioned session blocks), automated conflict detection (highlight bands when same student has overlapping sessions across tutors), shared free slot indicators ("All free" labels), discovery panel (slide-out from right with name search, subject/level/mode filters, time filter, candidate cards with conflict/free-slot badges), "Find alternatives" button on conflicts, tutor profile popover (click tutor name for weekly hours, student count, subjects, data issues), URL param support (`?tutors=id1,id2` auto-switches to Compare tab)
+- `/compare` — redirects to `/search` (backward compatibility for bookmarked URLs, preserves `?tutors=` param)
+- `/data-health` — full-width sync status cards, snapshot stats, issues by type, unresolved aliases/modality/unmapped tags tables, recent sync history
 
 ### Tests
 - Identity: nickname extraction, alias resolution, online/offline pairs, unresolved → data_issue
