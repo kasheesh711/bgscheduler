@@ -9,6 +9,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import type { CompareTutor, Conflict, SharedFreeSlot } from "@/lib/search/types";
 import type { TutorChip } from "./tutor-selector";
+import { sessionBgColor, sessionTextColor } from "./session-colors";
 
 const HOUR_HEIGHT = 48;
 const START_HOUR = 7;
@@ -118,7 +119,6 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                 {tutors.map((t, tutorIdx) => {
                   const chip = tutorChips[tutorIdx];
                   const sessions = t.sessions.filter((s) => s.weekday === day);
-                  // Inset each tutor slightly so overlapping sessions show both colors
                   const insetLeft = tutorIdx * 3;
                   const insetRight = (tutors.length - 1 - tutorIdx) * 3;
 
@@ -132,20 +132,19 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                         s.startMinute < c.endMinute &&
                         s.endMinute > c.startMinute,
                     );
-                    const bgColor = isConflict
-                      ? "rgba(239, 68, 68, 0.25)"
-                      : `${chip?.color}40`;
+                    const bgColor = sessionBgColor(chip?.color, isConflict, s.location);
                     const borderColor = isConflict ? "#ef4444" : chip?.color;
+                    const textColor = sessionTextColor(chip?.color, isConflict);
 
                     return (
                       <Popover key={`${t.tutorGroupId}-${day}-${sIdx}`}>
                         <PopoverTrigger
                           className="absolute rounded-sm cursor-pointer overflow-hidden text-left"
                           style={{
-                            top: top + 1,
+                            top: top + 2,
                             left: insetLeft + 1,
                             right: insetRight + 1,
-                            height: Math.max(height - 2, 14),
+                            height: Math.max(height - 4, 14),
                             background: bgColor,
                             borderLeft: `3px solid ${borderColor}`,
                             zIndex: tutorIdx + 1,
@@ -154,7 +153,7 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                           <div className="px-1 py-0.5 overflow-hidden">
                             <div
                               className="text-[11px] leading-tight font-semibold truncate"
-                              style={{ color: isConflict ? "#dc2626" : `${chip?.color}` }}
+                              style={{ color: textColor }}
                             >
                               {minuteToLabel(s.startMinute)} {s.subject ?? ""}
                             </div>

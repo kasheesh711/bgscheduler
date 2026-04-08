@@ -10,6 +10,7 @@ import {
 import type { CompareTutor, Conflict, SharedFreeSlot } from "@/lib/search/types";
 import type { TutorChip } from "./tutor-selector";
 import { TutorProfilePopover } from "./tutor-profile-popover";
+import { sessionBgColor, sessionTextColor } from "./session-colors";
 
 const HOUR_HEIGHT = 60;
 const START_HOUR = 7;
@@ -168,10 +169,9 @@ export function CalendarGrid({
                   s.startMinute < c.endMinute &&
                   s.endMinute > c.startMinute,
               );
-              const bgColor = isConflict
-                ? "rgba(239, 68, 68, 0.25)"
-                : `${chip?.color}33`;
+              const bgColor = sessionBgColor(chip?.color, isConflict, s.location);
               const borderColor = isConflict ? "#ef4444" : chip?.color;
+              const textColor = sessionTextColor(chip?.color, isConflict);
 
               return (
                 <Popover key={`${t.tutorGroupId}-${sIdx}`}>
@@ -187,7 +187,7 @@ export function CalendarGrid({
                     }}
                   >
                     <div className="p-2 leading-tight">
-                      <div className="text-sm font-semibold truncate" style={{ color: isConflict ? "#fca5a5" : `${chip?.color}dd` }}>
+                      <div className="text-sm font-semibold truncate" style={{ color: textColor }}>
                         {s.subject ?? "Session"} — {s.studentName ?? "Unknown"}
                         {isConflict && " !"}
                       </div>
