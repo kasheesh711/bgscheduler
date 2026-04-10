@@ -47,7 +47,7 @@ Plans:
 **UI hint**: yes
 
 Plans:
-- [ ] 02-01: TBD
+- [x] 02-01: TBD
 
 ### Phase 3: Calendar Readability & Workflow Polish
 **Goal**: Tutors visually distinguishable, compare workflow is one-click
