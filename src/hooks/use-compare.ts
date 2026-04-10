@@ -26,6 +26,13 @@ export function getCurrentMonday(): string {
   return formatIsoDate(monday);
 }
 
+export function getMondayForDate(date: Date): string {
+  const day = date.getDay(); // 0=Sun
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate() + diff);
+  return formatIsoDate(monday);
+}
+
 export function shiftWeek(current: string, delta: number): string {
   const [y, m, d] = current.split("-").map(Number);
   const date = new Date(y, m - 1, d + delta * 7);

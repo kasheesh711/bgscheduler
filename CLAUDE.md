@@ -23,6 +23,8 @@ Compare calendar v3.1 deployed 2026-04-08 (commit `f689edb`): weekday fallback f
 
 Compare performance v4 deployed 2026-04-08 (commit `f4cd925`): client-side tutor cache with incremental fetch. Adding a tutor only fetches the new tutor's schedule (`fetchOnly` param); removing a tutor reuses cached data and only recomputes conflicts/free-slots server-side. AbortController for request cancellation, automatic cache invalidation on snapshot change.
 
+Calendar date picker deployed 2026-04-10: click the week label to open a month-grid calendar popup (custom `WeekCalendar` component, no new dependencies). Full-week highlight band, week-row hover preview, today indicator. Click any date to jump to that week. Prev/next arrows and Today button unchanged.
+
 ### Known Issues (open)
 - **Online/onsite detection heuristic**: uses `location` field pattern matching (http/online/learn./zoom/meet.google/virtual). Most sessions have venue names like "Think Outside the Box", "Tesla", "Nerd" which don't match → all treated as onsite. Needs a more reliable data source (possibly `sessionType` from Wise or the `isOnlineVariant` flag on the tutor's underlying Wise records). Visual distinction (dashed vs solid border) removed from cards pending reliable detection; modality info still shown in popover.
 - **Past-day session data**: Wise's `status: "FUTURE"` API does not return past sessions. For days earlier than the last sync, the compare view shows the nearest future occurrence of recurring sessions as a representative. One-time past sessions cannot be recovered.

@@ -1,8 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import type { TutorListItem } from "@/lib/data/tutors";
 import { TutorCombobox } from "@/components/compare/tutor-combobox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { WeekCalendar } from "@/components/compare/week-calendar";
 import dynamic from "next/dynamic";
 import { CalendarSkeleton } from "@/components/skeletons/calendar-skeleton";
 import { DAY_NAMES } from "@/components/search/search-form";
@@ -43,6 +46,7 @@ export interface ComparePanelProps {
 // ---------------------------------------------------------------------------
 
 export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const {
     compareTutors,
     compareResponse,
@@ -122,9 +126,27 @@ export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
               >
                 &lt;
               </button>
-              <span className="text-xs font-medium min-w-[140px] text-center">
-                {formatWeekLabel(weekStart)}
-              </span>
+              <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+                <PopoverTrigger
+                  render={(props) => (
+                    <button
+                      {...props}
+                      className="text-xs font-medium min-w-[140px] text-center hover:bg-muted rounded px-1.5 py-0.5 transition-colors cursor-pointer"
+                    >
+                      {formatWeekLabel(weekStart)}
+                    </button>
+                  )}
+                />
+                <PopoverContent align="start" className="w-auto p-2">
+                  <WeekCalendar
+                    weekStart={weekStart}
+                    onWeekSelect={(monday) => {
+                      changeWeek(monday);
+                      setCalendarOpen(false);
+                    }}
+                  />
+                </PopoverContent>
+              </Popover>
               <button
                 onClick={() => changeWeek(shiftWeek(weekStart, 1))}
                 className="px-1.5 py-0.5 text-xs rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
