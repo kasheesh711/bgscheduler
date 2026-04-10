@@ -11,13 +11,19 @@ function createDb() {
   return drizzle({ client: sql, schema });
 }
 
-let _db: ReturnType<typeof createDb> | undefined;
+type DbInstance = ReturnType<typeof createDb>;
 
-export function getDb() {
-  if (!_db) {
-    _db = createDb();
+declare global {
+  // eslint-disable-next-line no-var
+  var __bgscheduler_db: DbInstance | undefined;
+}
+
+/** Get or create the DB singleton (survives HMR in dev). */
+export function getDb(): DbInstance {
+  if (!globalThis.__bgscheduler_db) {
+    globalThis.__bgscheduler_db = createDb();
   }
-  return _db;
+  return globalThis.__bgscheduler_db;
 }
 
 export type Database = ReturnType<typeof getDb>;
