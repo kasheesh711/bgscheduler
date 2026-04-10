@@ -3,10 +3,24 @@
 import { Badge } from "@/components/ui/badge";
 import type { TutorListItem } from "@/lib/data/tutors";
 import { TutorCombobox } from "@/components/compare/tutor-combobox";
-import { CalendarGrid } from "@/components/compare/calendar-grid";
-import { WeekOverview } from "@/components/compare/week-overview";
-import { DiscoveryPanel } from "@/components/compare/discovery-panel";
+import dynamic from "next/dynamic";
+import { CalendarSkeleton } from "@/components/skeletons/calendar-skeleton";
 import { DAY_NAMES } from "@/components/search/search-form";
+
+const WeekOverview = dynamic(
+  () => import("@/components/compare/week-overview").then((mod) => mod.WeekOverview),
+  { loading: () => <CalendarSkeleton /> }
+);
+
+const CalendarGrid = dynamic(
+  () => import("@/components/compare/calendar-grid").then((mod) => mod.CalendarGrid),
+  { loading: () => <CalendarSkeleton /> }
+);
+
+const DiscoveryPanel = dynamic(
+  () => import("@/components/compare/discovery-panel").then((mod) => mod.DiscoveryPanel),
+  { loading: () => null }
+);
 import {
   shiftWeek,
   formatWeekLabel,
