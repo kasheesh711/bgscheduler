@@ -30,9 +30,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans:** 3 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Anchor DB and SearchIndex singletons on globalThis
-- [ ] 01-02-PLAN.md — Extract useCompare hook, SearchForm, and SearchResults components
-- [ ] 01-03-PLAN.md — Extract ComparePanel, create SearchWorkspace, rewrite page.tsx
+- [x] 01-01-PLAN.md — Anchor DB and SearchIndex singletons on globalThis
+- [x] 01-02-PLAN.md — Extract useCompare hook, SearchForm, and SearchResults components
+- [x] 01-03-PLAN.md — Extract ComparePanel, create SearchWorkspace, rewrite page.tsx
 
 ### Phase 2: Streaming & Lazy Loading
 **Goal**: Near-instant page load with progressive data streaming
