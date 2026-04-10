@@ -71,17 +71,37 @@ export interface SearchIndex {
   byWeekday: Map<number, IndexedTutorGroup[]>;
 }
 
-// ── Module-level singleton ──────────────────────────────────────────
+// ── globalThis-anchored singleton (survives HMR in dev) ────────────
 
-let currentIndex: SearchIndex | null = null;
-let buildingPromise: Promise<SearchIndex> | null = null;
+declare global {
+  // eslint-disable-next-line no-var
+  var __bgscheduler_searchIndex: SearchIndex | null;
+  // eslint-disable-next-line no-var
+  var __bgscheduler_searchIndexBuildPromise: Promise<SearchIndex> | null;
+}
+
+function getCurrentIndex(): SearchIndex | null {
+  return globalThis.__bgscheduler_searchIndex ?? null;
+}
+
+function setCurrentIndex(index: SearchIndex | null): void {
+  globalThis.__bgscheduler_searchIndex = index;
+}
+
+function getBuildingPromise(): Promise<SearchIndex> | null {
+  return globalThis.__bgscheduler_searchIndexBuildPromise ?? null;
+}
+
+function setBuildingPromise(promise: Promise<SearchIndex> | null): void {
+  globalThis.__bgscheduler_searchIndexBuildPromise = promise;
+}
 
 export function getSearchIndex(): SearchIndex | null {
-  return currentIndex;
+  return getCurrentIndex();
 }
 
 export function getActiveSnapshotId(): string | null {
-  return currentIndex?.snapshotId ?? null;
+  return getCurrentIndex()?.snapshotId ?? null;
 }
 
 /**
@@ -242,7 +262,7 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
     byWeekday,
   };
 
-  currentIndex = index;
+  setCurrentIndex(index);
   return index;
 }
 
@@ -250,7 +270,8 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
  * Ensure index is loaded and fresh. Rebuilds if stale.
  */
 export async function ensureIndex(db: Database): Promise<SearchIndex> {
-  if (currentIndex) {
+  const cached = getCurrentIndex();
+  if (cached) {
     // Check if still the active snapshot
     const [activeSnapshot] = await db
       .select({ id: schema.snapshots.id })
@@ -258,19 +279,20 @@ export async function ensureIndex(db: Database): Promise<SearchIndex> {
       .where(eq(schema.snapshots.active, true))
       .limit(1);
 
-    if (activeSnapshot && activeSnapshot.id === currentIndex.snapshotId) {
-      return currentIndex;
+    if (activeSnapshot && activeSnapshot.id === cached.snapshotId) {
+      return cached;
     }
   }
 
   // Need to rebuild
-  if (!buildingPromise) {
-    buildingPromise = buildIndex(db).finally(() => {
-      buildingPromise = null;
+  if (!getBuildingPromise()) {
+    const p = buildIndex(db).finally(() => {
+      setBuildingPromise(null);
     });
+    setBuildingPromise(p);
   }
 
-  return buildingPromise;
+  return getBuildingPromise()!;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
