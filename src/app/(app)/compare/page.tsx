@@ -1,14 +1,28 @@
-import { redirect } from "next/navigation";
+"use client";
 
-export default async function CompareRedirect({
-  searchParams,
-}: {
-  searchParams: Promise<{ tutors?: string }>;
-}) {
-  const params = await searchParams;
-  const tutors = params.tutors;
-  if (tutors) {
-    redirect(`/search?tutors=${tutors}`);
-  }
-  redirect("/search");
+import { useSearchParams, useRouter } from "next/navigation";
+import { Suspense, useEffect } from "react";
+
+function CompareRedirectInner() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  useEffect(() => {
+    const tutors = searchParams.get("tutors");
+    if (tutors) {
+      router.replace(`/search?tutors=${tutors}`);
+    } else {
+      router.replace("/search");
+    }
+  }, [searchParams, router]);
+
+  return null;
+}
+
+export default function CompareRedirect() {
+  return (
+    <Suspense>
+      <CompareRedirectInner />
+    </Suspense>
+  );
 }
