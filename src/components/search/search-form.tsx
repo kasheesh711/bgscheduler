@@ -13,11 +13,8 @@ import type { SearchMode, RangeSearchResponse } from "@/lib/search/types";
 // Types
 // ---------------------------------------------------------------------------
 
-export interface FilterOptions {
-  subjects: string[];
-  curriculums: string[];
-  levels: string[];
-}
+import type { FilterOptions } from "@/lib/data/filters";
+export type { FilterOptions };
 
 export interface SearchContext {
   searchMode: SearchMode;
@@ -27,7 +24,7 @@ export interface SearchContext {
 }
 
 export interface SearchFormProps {
-  filterOptions: FilterOptions | null;
+  filterOptions: FilterOptions;
   onSearchResponse: (response: RangeSearchResponse, context: SearchContext) => void;
   onError: (error: string | null) => void;
 }
@@ -325,7 +322,7 @@ export function SearchForm({ filterOptions, onSearchResponse, onError }: SearchF
               onChange={(e) => setSubjectFilter(e.target.value)}
             >
               <option value="">Any</option>
-              {filterOptions?.subjects.map((s) => (
+              {filterOptions.subjects.map((s) => (
                 <option key={s} value={s}>
                   {s}
                 </option>
@@ -342,7 +339,7 @@ export function SearchForm({ filterOptions, onSearchResponse, onError }: SearchF
               onChange={(e) => setCurriculumFilter(e.target.value)}
             >
               <option value="">Any</option>
-              {filterOptions?.curriculums.map((c) => (
+              {filterOptions.curriculums.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
@@ -359,7 +356,7 @@ export function SearchForm({ filterOptions, onSearchResponse, onError }: SearchF
               onChange={(e) => setLevelFilter(e.target.value)}
             >
               <option value="">Any</option>
-              {filterOptions?.levels.map((l) => (
+              {filterOptions.levels.map((l) => (
                 <option key={l} value={l}>
                   {l}
                 </option>

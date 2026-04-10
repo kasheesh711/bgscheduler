@@ -1,6 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
+import type { TutorListItem } from "@/lib/data/tutors";
 import { TutorCombobox } from "@/components/compare/tutor-combobox";
 import { CalendarGrid } from "@/components/compare/calendar-grid";
 import { WeekOverview } from "@/components/compare/week-overview";
@@ -20,13 +21,14 @@ import type { UseCompareReturn } from "@/hooks/use-compare";
 
 export interface ComparePanelProps {
   compare: UseCompareReturn;
+  tutorList: TutorListItem[];
 }
 
 // ---------------------------------------------------------------------------
 // ComparePanel component
 // ---------------------------------------------------------------------------
 
-export function ComparePanel({ compare }: ComparePanelProps) {
+export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
   const {
     compareTutors,
     compareResponse,
@@ -69,6 +71,7 @@ export function ComparePanel({ compare }: ComparePanelProps) {
           <TutorCombobox
             existingTutorGroupIds={compareTutors.map((t) => t.tutorGroupId)}
             onAdd={addTutor}
+            tutors={tutorList}
           />
         )}
         <button

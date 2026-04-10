@@ -3,34 +3,34 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { SearchForm } from "@/components/search/search-form";
-import type { FilterOptions, SearchContext } from "@/components/search/search-form";
+import type { SearchContext } from "@/components/search/search-form";
+import type { FilterOptions } from "@/lib/data/filters";
+import type { TutorListItem } from "@/lib/data/tutors";
 import { SearchResults } from "@/components/search/search-results";
 import { ComparePanel } from "@/components/compare/compare-panel";
 import { useCompare } from "@/hooks/use-compare";
 import type { RangeSearchResponse } from "@/lib/search/types";
 
 // ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface SearchWorkspaceProps {
+  filterOptions: FilterOptions;
+  tutorList: TutorListItem[];
+}
+
+// ---------------------------------------------------------------------------
 // SearchWorkspace component
 // ---------------------------------------------------------------------------
 
-export function SearchWorkspace() {
+export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspaceProps) {
   const searchParams = useSearchParams();
   const compare = useCompare();
 
-  const [filterOptions, setFilterOptions] = useState<FilterOptions | null>(null);
   const [response, setResponse] = useState<RangeSearchResponse | null>(null);
   const [searchContext, setSearchContext] = useState<SearchContext | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  // --- Init ---
-  useEffect(() => {
-    fetch("/api/filters")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data) setFilterOptions(data);
-      })
-      .catch(() => {});
-  }, []);
 
   // Handle ?tutors= deep link
   useEffect(() => {
@@ -74,7 +74,7 @@ export function SearchWorkspace() {
         />
       </div>
       <div className="w-1/2 flex flex-col overflow-hidden min-w-0 pl-1">
-        <ComparePanel compare={compare} />
+        <ComparePanel compare={compare} tutorList={tutorList} />
       </div>
     </div>
   );

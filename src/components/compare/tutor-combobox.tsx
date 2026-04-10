@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   Popover,
   PopoverContent,
@@ -16,36 +16,17 @@ import {
 } from "@/components/ui/command";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-
-interface TutorOption {
-  tutorGroupId: string;
-  displayName: string;
-  supportedModes: string[];
-  subjects: string[];
-}
+import type { TutorListItem } from "@/lib/data/tutors";
 
 interface TutorComboboxProps {
   existingTutorGroupIds: string[];
   onAdd: (id: string, name: string) => void;
   disabled?: boolean;
+  tutors: TutorListItem[];
 }
 
-export function TutorCombobox({ existingTutorGroupIds, onAdd, disabled }: TutorComboboxProps) {
+export function TutorCombobox({ existingTutorGroupIds, onAdd, disabled, tutors }: TutorComboboxProps) {
   const [open, setOpen] = useState(false);
-  const [tutors, setTutors] = useState<TutorOption[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!open || tutors.length > 0) return;
-    setLoading(true);
-    fetch("/api/tutors")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data?.tutors) setTutors(data.tutors);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [open, tutors.length]);
 
   const available = tutors.filter(
     (t) => !existingTutorGroupIds.includes(t.tutorGroupId),
@@ -70,9 +51,7 @@ export function TutorCombobox({ existingTutorGroupIds, onAdd, disabled }: TutorC
         <Command>
           <CommandInput placeholder="Search tutors..." />
           <CommandList>
-            <CommandEmpty>
-              {loading ? "Loading tutors..." : "No tutors found."}
-            </CommandEmpty>
+            <CommandEmpty>No tutors found.</CommandEmpty>
             <CommandGroup>
               {available.map((t) => (
                 <CommandItem
