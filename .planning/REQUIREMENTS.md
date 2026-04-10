@@ -14,7 +14,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [ ] **PERF-03**: Anchor SearchIndex and DB singletons on `globalThis` instead of module-level variables
 - [x] **PERF-04**: Convert search page to async Server Component that streams filter/tutor data via Suspense (eliminate client fetch waterfalls for `/api/filters` and `/api/tutors`)
 - [x] **PERF-05**: Add skeleton loading states matching real component dimensions for search form, calendar grid, and tutor combobox
-- [ ] **PERF-06**: Lazy-load WeekOverview (~471 lines), CalendarGrid (~275 lines), DiscoveryPanel (~274 lines) via React.lazy()
+- [x] **PERF-06**: Lazy-load WeekOverview (~471 lines), CalendarGrid (~275 lines), DiscoveryPanel (~274 lines) via React.lazy()
 - [x] **PERF-07**: Enable `cacheComponents: true` in next.config.ts and use `'use cache'` directive with `cacheTag('snapshot')` for filter options and tutor list data
 
 ### Calendar Readability
@@ -74,7 +74,7 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | PERF-03 | Phase 1 | Pending |
 | PERF-04 | Phase 2 | Complete |
 | PERF-05 | Phase 2 | Complete |
-| PERF-06 | Phase 2 | Pending |
+| PERF-06 | Phase 2 | Complete |
 | PERF-07 | Phase 2 | Complete |
 | INFRA-01 | Phase 2 | Complete |
 | CAL-01 | Phase 3 | Pending |
