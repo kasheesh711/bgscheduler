@@ -47,6 +47,9 @@ export function sessionTextColor(
   return tutorColor ?? "#888888";
 }
 
+/** Tutor lane colors: sky blue, amber, purple */
+export const TUTOR_COLORS = ["#3b82f6", "#e67e22", "#7c3aed"];
+
 export function sessionBorderStyle(
   tutorColor: string | undefined,
   isConflict: boolean,

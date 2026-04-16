@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { WeekCalendar } from "@/components/compare/week-calendar";
 import dynamic from "next/dynamic";
 import { CalendarSkeleton } from "@/components/skeletons/calendar-skeleton";
+import { X } from "lucide-react";
 import { DAY_NAMES } from "@/components/search/search-form";
 
 const WeekOverview = dynamic(
@@ -79,9 +80,10 @@ export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
             <span className="font-medium">{t.displayName}</span>
             <button
               onClick={() => removeTutor(t.tutorGroupId)}
-              className="text-muted-foreground hover:text-foreground text-[10px] ml-0.5"
+              className="text-muted-foreground hover:text-foreground ml-0.5"
+              aria-label={`Remove ${t.displayName}`}
             >
-              x
+              <X className="h-3 w-3" />
             </button>
           </div>
         ))}
@@ -123,6 +125,7 @@ export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
               <button
                 onClick={() => changeWeek(shiftWeek(weekStart, -1))}
                 className="px-1.5 py-0.5 text-xs rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                aria-label="Previous week"
               >
                 &lt;
               </button>
@@ -150,6 +153,7 @@ export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
               <button
                 onClick={() => changeWeek(shiftWeek(weekStart, 1))}
                 className="px-1.5 py-0.5 text-xs rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                aria-label="Next week"
               >
                 &gt;
               </button>
@@ -157,6 +161,7 @@ export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
                 <button
                   onClick={() => changeWeek(getCurrentMonday())}
                   className="px-1.5 py-0.5 text-[10px] rounded border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground ml-1"
+                  aria-label="Go to current week"
                 >
                   Today
                 </button>

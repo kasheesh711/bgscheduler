@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
-import { TUTOR_COLORS } from "@/components/compare/tutor-selector";
+import { TUTOR_COLORS } from "@/components/compare/session-colors";
 import type { TutorChip } from "@/components/compare/tutor-selector";
 import type { CompareResponse, CompareTutor, Conflict } from "@/lib/search/types";
 

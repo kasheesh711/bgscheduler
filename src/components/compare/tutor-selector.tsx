@@ -1,8 +1,8 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-
-const TUTOR_COLORS = ["#3b82f6", "#e67e22", "#7c3aed"];
+import { TUTOR_COLORS } from "./session-colors";
+import { X } from "lucide-react";
 
 interface TutorChip {
   tutorGroupId: string;
@@ -30,8 +30,9 @@ export function TutorSelector({ tutors, onRemove, onOpenDiscovery }: TutorSelect
           <button
             onClick={() => onRemove(t.tutorGroupId)}
             className="text-muted-foreground hover:text-foreground text-xs ml-1"
+            aria-label={`Remove ${t.displayName}`}
           >
-            ✕
+            <X className="h-3 w-3" />
           </button>
         </div>
       ))}

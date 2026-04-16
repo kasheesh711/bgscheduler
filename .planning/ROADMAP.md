@@ -15,7 +15,6 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 1: Component Architecture** - Break monolithic search page into focused components and extract shared state
 - [ ] **Phase 2: Streaming & Lazy Loading** - Near-instant page load with progressive data streaming and code splitting
 - [ ] **Phase 3: Calendar Readability & Workflow Polish** - Tutor visual distinction, calendar indicators, and one-click compare workflow
-- [ ] **Phase 4: UI Audit Polish** - Accessibility, semantic color consistency, error feedback, typography standardization from full-app UI review
 
 ## Phase Details
 
@@ -66,33 +65,13 @@ Plans:
 Plans:
 - [ ] 03-01: TBD
 
-### Phase 4: UI Audit Polish
-**Goal**: Fix accessibility gaps, color inconsistencies, silent errors, and typography issues from full-app UI review
-**Depends on**: Phase 3
-**Requirements**: UIFIX-01, UIFIX-02, UIFIX-03, UIFIX-04, UIFIX-05, UIFIX-06, UIFIX-07
-**Success Criteria** (what must be TRUE):
-  1. All interactive controls have aria-labels (week picker nav, tutor chip remove buttons)
-  2. Zero hardcoded Tailwind color classes in discovery-panel, slot-builder, and results-view — all use semantic tokens
-  3. DiscoveryPanel shows user-visible error message on API failure (no silent catch)
-  4. No text-[8px] or text-[9px] anywhere; text-[10px] documented as intentional dense-UI tier or replaced with text-xs
-  5. Data-health error state includes retry guidance
-  6. TUTOR_COLORS defined in exactly one file
-  7. All 82+ existing unit tests pass
-**Plans:** 2 plans
-**UI hint**: yes
-
-Plans:
-- [ ] 04-01-PLAN.md — Aria-labels, semantic colors, error feedback, TUTOR_COLORS consolidation
-- [ ] 04-02-PLAN.md — Typography standardization, inline style cleanup, data-health UX
-
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4
+Phases execute in numeric order: 1 -> 2 -> 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Component Architecture | 3/3 | Complete | 2026-04-10 |
-| 2. Streaming & Lazy Loading | 3/3 | Complete | 2026-04-10 |
+| 1. Component Architecture | 0/3 | Not started | - |
+| 2. Streaming & Lazy Loading | 0/? | Not started | - |
 | 3. Calendar Readability & Workflow Polish | 0/? | Not started | - |
-| 4. UI Audit Polish | 0/2 | Not started | - |

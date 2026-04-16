@@ -2,6 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { X } from "lucide-react";
 import type { SearchSlot } from "@/lib/search/types";
 
 const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -28,8 +29,9 @@ export function SlotChips({ slots, onRemove }: SlotChipsProps) {
           <button
             onClick={() => onRemove(slot.id)}
             className="ml-1 text-muted-foreground hover:text-foreground"
+            aria-label={`Remove ${slot.dayOfWeek !== undefined ? WEEKDAY_NAMES[slot.dayOfWeek] : slot.date} ${slot.start}-${slot.end} slot`}
           >
-            x
+            <X className="h-3 w-3" />
           </button>
         </Badge>
       ))}
