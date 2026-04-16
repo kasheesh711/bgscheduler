@@ -82,7 +82,8 @@ None yet.
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
-| 260416-jrb | Add tutor name search to left search panel | 2026-04-16 | 9443093 | [260416-jrb-add-tutor-name-search-to-left-search-pan](./quick/260416-jrb-add-tutor-name-search-to-left-search-pan/) |
+| 260416-jrb | Add tutor name search to left search panel | 2026-04-16 | 5816d55 | [260416-jrb-add-tutor-name-search-to-left-search-pan](./quick/260416-jrb-add-tutor-name-search-to-left-search-pan/) |
+| 260416-klm | Polish tutor dropdown UX - idiot proof | 2026-04-16 | 5816d55 | [260416-klm-polish-tutor-dropdown-ux-make-it-idiot-p](./quick/260416-klm-polish-tutor-dropdown-ux-make-it-idiot-p/) |
 
 ## Session Continuity
 
