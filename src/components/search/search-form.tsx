@@ -217,14 +217,14 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
         {/* Tutor name filter */}
         <div>
           <div className="flex items-center justify-between">
-            <label className="text-[10px] font-medium text-muted-foreground">
+            <label className="text-xs font-medium text-muted-foreground">
               Tutor (optional)
             </label>
             {selectedTutorIds.length > 0 && (
               <button
                 type="button"
                 onClick={() => setSelectedTutorIds([])}
-                className="text-[10px] text-muted-foreground hover:text-destructive"
+                className="text-xs text-muted-foreground hover:text-destructive"
               >
                 Clear all
               </button>
@@ -324,7 +324,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
         {/* Row 1: Day/Date, From, To */}
         <div className="grid grid-cols-3 gap-2">
           <div>
-            <label className="text-[10px] font-medium text-muted-foreground">
+            <label className="text-xs font-medium text-muted-foreground">
               {searchMode === "recurring" ? "Day" : "Date"}
             </label>
             {searchMode === "recurring" ? (
@@ -350,7 +350,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
             )}
           </div>
           <div>
-            <label className="text-[10px] font-medium text-muted-foreground">
+            <label className="text-xs font-medium text-muted-foreground">
               From
             </label>
             <select
@@ -366,7 +366,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
             </select>
           </div>
           <div>
-            <label className="text-[10px] font-medium text-muted-foreground">
+            <label className="text-xs font-medium text-muted-foreground">
               To
             </label>
             <select
@@ -386,7 +386,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
         {/* Row 2: Duration, Mode, Search */}
         <div className="grid grid-cols-3 gap-2">
           <div>
-            <label className="text-[10px] font-medium text-muted-foreground">
+            <label className="text-xs font-medium text-muted-foreground">
               Duration
             </label>
             <select
@@ -404,7 +404,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
             </select>
           </div>
           <div>
-            <label className="text-[10px] font-medium text-muted-foreground">
+            <label className="text-xs font-medium text-muted-foreground">
               Mode
             </label>
             <select
@@ -426,7 +426,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
               id="search-btn"
               onClick={handleSearch}
               disabled={loading || !isValid}
-              className="w-full h-[34px] text-xs"
+              className="w-full h-8 text-xs"
               size="sm"
             >
               {loading ? "Searching..." : "Search"}
@@ -437,7 +437,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
         {/* Row 3: Qualification filters */}
         <div className="grid grid-cols-3 gap-2">
           <div>
-            <label className="text-[10px] font-medium text-muted-foreground">
+            <label className="text-xs font-medium text-muted-foreground">
               Subject
             </label>
             <select
@@ -454,7 +454,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
             </select>
           </div>
           <div>
-            <label className="text-[10px] font-medium text-muted-foreground">
+            <label className="text-xs font-medium text-muted-foreground">
               Curriculum
             </label>
             <select
@@ -471,7 +471,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
             </select>
           </div>
           <div>
-            <label className="text-[10px] font-medium text-muted-foreground">
+            <label className="text-xs font-medium text-muted-foreground">
               Level
             </label>
             <select

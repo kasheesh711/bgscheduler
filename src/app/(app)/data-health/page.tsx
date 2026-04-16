@@ -39,6 +39,41 @@ interface HealthData {
   }[];
 }
 
+/** Shimmer skeleton matching the DataHealthPage card layout. */
+function DataHealthSkeleton() {
+  return (
+    <div className="space-y-6">
+      {/* Sync status cards */}
+      <div className="grid grid-cols-3 gap-4">
+        {Array.from({ length: 3 }, (_, i) => (
+          <div key={i} className="rounded-xl border bg-card p-6 space-y-3">
+            <div className="h-3 w-32 bg-muted animate-pulse rounded" />
+            <div className="h-6 w-24 bg-muted animate-pulse rounded" />
+          </div>
+        ))}
+      </div>
+      {/* Stats cards */}
+      <div className="grid grid-cols-5 gap-4">
+        {Array.from({ length: 5 }, (_, i) => (
+          <div key={i} className="rounded-xl border bg-card p-6 space-y-3">
+            <div className="h-3 w-20 bg-muted animate-pulse rounded" />
+            <div className="h-8 w-12 bg-muted animate-pulse rounded" />
+          </div>
+        ))}
+      </div>
+      {/* Table placeholder */}
+      <div className="rounded-xl border bg-card p-6 space-y-4">
+        <div className="h-5 w-40 bg-muted animate-pulse rounded" />
+        <div className="space-y-2">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="h-4 bg-muted/50 animate-pulse rounded" />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function DataHealthPage() {
   const [data, setData] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -51,8 +86,13 @@ export default function DataHealthPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <div className="py-8 text-center text-muted-foreground">Loading...</div>;
-  if (!data) return <div className="py-8 text-center text-muted-foreground">Failed to load health data</div>;
+  if (loading) return <DataHealthSkeleton />;
+  if (!data) return (
+    <div className="py-12 text-center space-y-2">
+      <p className="text-muted-foreground">Failed to load health data.</p>
+      <p className="text-sm text-muted-foreground">Refresh the page to try again.</p>
+    </div>
+  );
 
   return (
     <div className="space-y-6">

@@ -77,7 +77,7 @@ export function CalendarGrid({
   }, [dayConflicts]);
 
   return (
-    <div className="relative" style={{ marginLeft: 50 }}>
+    <div className="relative ml-[50px]">
       {/* Column headers */}
       <div className="flex border-b sticky top-0 bg-background z-10">
         {tutors.map((t, i) => {
@@ -103,14 +103,14 @@ export function CalendarGrid({
       {/* Time grid */}
       <div className="relative" style={{ height: TOTAL_HOURS * HOUR_HEIGHT }}>
         {/* Time labels */}
-        <div className="absolute top-0 h-full" style={{ left: -50, width: 45 }}>
+        <div className="absolute top-0 h-full -left-[50px] w-[45px]">
           {Array.from({ length: TOTAL_HOURS + 1 }, (_, i) => {
             const hour = START_HOUR + i;
             return (
               <div
                 key={hour}
-                className="absolute text-xs font-medium text-muted-foreground text-right pr-2"
-                style={{ top: i * HOUR_HEIGHT - 7, width: 45 }}
+                className="absolute text-xs font-medium text-muted-foreground text-right pr-2 w-[45px]"
+                style={{ top: i * HOUR_HEIGHT - 7 }}
               >
                 {hour === 0 ? "12 AM" : hour < 12 ? `${hour} AM` : hour === 12 ? "12 PM" : `${hour - 12} PM`}
               </div>
