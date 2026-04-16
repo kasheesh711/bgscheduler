@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 Phase: 02 (streaming-lazy-loading) — EXECUTING
 Plan: 3 of 3
 Status: Phase complete — ready for verification
-Last activity: 2026-04-10
+Last activity: 2026-04-16 - Completed quick task 260416-jrb: Add tutor name search to left search panel
 
 Progress: [..........] 0%
 
@@ -77,6 +77,12 @@ None yet.
 ### Blockers/Concerns
 
 None yet.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260416-jrb | Add tutor name search to left search panel | 2026-04-16 | 9443093 | [260416-jrb-add-tutor-name-search-to-left-search-pan](./quick/260416-jrb-add-tutor-name-search-to-left-search-pan/) |
 
 ## Session Continuity
 
