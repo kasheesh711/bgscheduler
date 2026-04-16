@@ -82,8 +82,8 @@ Plans:
 **UI hint**: yes
 
 Plans:
-- [ ] 04-01-PLAN.md — Aria-labels, semantic colors, error feedback, TUTOR_COLORS consolidation
-- [ ] 04-02-PLAN.md — Typography standardization, inline style cleanup, data-health UX
+- [x] 04-01-PLAN.md — Aria-labels, semantic colors, error feedback, TUTOR_COLORS consolidation
+- [x] 04-02-PLAN.md — Typography standardization, inline style cleanup, data-health UX
 
 ## Progress
 
