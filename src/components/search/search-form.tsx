@@ -2,12 +2,17 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Badge } from "@/components/ui/badge";
+import { X, Search, Check } from "lucide-react";
 import {
   RecentSearches,
   saveRecent,
   type RecentSearch,
 } from "@/components/search/recent-searches";
 import type { SearchMode, RangeSearchResponse } from "@/lib/search/types";
+import type { TutorListItem } from "@/lib/data/tutors";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,6 +30,7 @@ export interface SearchContext {
 
 export interface SearchFormProps {
   filterOptions: FilterOptions;
+  tutorList: TutorListItem[];
   onSearchResponse: (response: RangeSearchResponse, context: SearchContext) => void;
   onError: (error: string | null) => void;
 }
@@ -72,7 +78,7 @@ const selectClass =
 // SearchForm component
 // ---------------------------------------------------------------------------
 
-export function SearchForm({ filterOptions, onSearchResponse, onError }: SearchFormProps) {
+export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError }: SearchFormProps) {
   const [searchMode, setSearchMode] = useState<SearchMode>("recurring");
   const [dayOfWeek, setDayOfWeek] = useState(1);
   const [date, setDate] = useState("");
@@ -84,6 +90,16 @@ export function SearchForm({ filterOptions, onSearchResponse, onError }: SearchF
   const [curriculumFilter, setCurriculumFilter] = useState("");
   const [levelFilter, setLevelFilter] = useState("");
   const [loading, setLoading] = useState(false);
+  const [selectedTutorIds, setSelectedTutorIds] = useState<string[]>([]);
+  const [tutorPopoverOpen, setTutorPopoverOpen] = useState(false);
+
+  const handleAddTutor = (id: string) => {
+    setSelectedTutorIds((prev) => prev.includes(id) ? prev : [...prev, id]);
+  };
+
+  const handleRemoveTutor = (id: string) => {
+    setSelectedTutorIds((prev) => prev.filter((x) => x !== id));
+  };
 
   const isValid =
     searchMode === "recurring" || (searchMode === "one_time" && date !== "");
@@ -105,6 +121,7 @@ export function SearchForm({ filterOptions, onSearchResponse, onError }: SearchF
         curriculum: curriculumFilter || undefined,
         level: levelFilter || undefined,
       },
+      tutorGroupIds: selectedTutorIds.length > 0 ? selectedTutorIds : undefined,
     };
 
     try {
@@ -195,6 +212,113 @@ export function SearchForm({ filterOptions, onSearchResponse, onError }: SearchF
           >
             One-Time
           </Button>
+        </div>
+
+        {/* Tutor name filter */}
+        <div>
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] font-medium text-muted-foreground">
+              Tutor (optional)
+            </label>
+            {selectedTutorIds.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectedTutorIds([])}
+                className="text-[10px] text-muted-foreground hover:text-destructive"
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+          {selectedTutorIds.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 mt-0.5 mb-1">
+              {selectedTutorIds.map((id) => {
+                const tutor = tutorList.find((t) => t.tutorGroupId === id);
+                return tutor ? (
+                  <Badge key={id} variant="secondary" className="text-xs px-1.5 py-0 gap-0.5">
+                    {tutor.displayName}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTutor(id)}
+                      className="ml-0.5 hover:text-destructive"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ) : null;
+              })}
+            </div>
+          )}
+          <Popover open={tutorPopoverOpen} onOpenChange={setTutorPopoverOpen}>
+            <PopoverTrigger
+              render={(props) => (
+                <button
+                  {...props}
+                  type="button"
+                  className={`${selectClass} flex items-center gap-2 text-left`}
+                >
+                  <Search className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                  <span className="text-muted-foreground">
+                    {selectedTutorIds.length === 0
+                      ? "Search by tutor name..."
+                      : `${selectedTutorIds.length} tutor${selectedTutorIds.length > 1 ? "s" : ""} selected`}
+                  </span>
+                </button>
+              )}
+            />
+            <PopoverContent className="w-[var(--reference-width)] p-0" align="start">
+              <Command>
+                <CommandInput placeholder="Type a name..." />
+                <CommandList>
+                  <CommandEmpty>No tutors found.</CommandEmpty>
+                  <CommandGroup>
+                    {tutorList.map((t) => {
+                      const isSelected = selectedTutorIds.includes(t.tutorGroupId);
+                      return (
+                        <CommandItem
+                          key={t.tutorGroupId}
+                          value={t.displayName}
+                          onSelect={() => {
+                            if (isSelected) {
+                              handleRemoveTutor(t.tutorGroupId);
+                            } else {
+                              handleAddTutor(t.tutorGroupId);
+                            }
+                          }}
+                        >
+                          <div className="flex items-start gap-2 w-full">
+                            <div className={`flex h-4 w-4 items-center justify-center rounded border mt-0.5 flex-shrink-0 ${isSelected ? "bg-primary border-primary text-primary-foreground" : "border-input"}`}>
+                              {isSelected && <Check className="h-3 w-3" />}
+                            </div>
+                            <div className="flex flex-col gap-0.5 min-w-0">
+                              <span className="text-sm font-medium">{t.displayName}</span>
+                              <div className="flex gap-1 flex-wrap">
+                                {t.supportedModes.map((m) => (
+                                  <Badge key={m} variant="secondary" className="text-[10px] px-1 py-0">
+                                    {m}
+                                  </Badge>
+                                ))}
+                                {t.subjects.slice(0, 3).map((s) => (
+                                  <Badge key={s} variant="outline" className="text-[10px] px-1 py-0">
+                                    {s}
+                                  </Badge>
+                                ))}
+                                {t.subjects.length > 3 && (
+                                  <span className="text-[10px] text-muted-foreground">
+                                    +{t.subjects.length - 3}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
         </div>
 
         {/* Row 1: Day/Date, From, To */}

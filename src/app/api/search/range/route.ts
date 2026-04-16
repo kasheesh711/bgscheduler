@@ -22,6 +22,7 @@ const rangeRequestSchema = z.object({
       level: z.string().optional(),
     })
     .optional(),
+  tutorGroupIds: z.array(z.string()).optional(),
 });
 
 function generateSubSlots(
@@ -74,7 +75,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { searchMode, dayOfWeek, date, startTime, endTime, durationMinutes, mode, filters } =
+  const { searchMode, dayOfWeek, date, startTime, endTime, durationMinutes, mode, filters, tutorGroupIds } =
     parsed.data;
 
   const subSlots = generateSubSlots(startTime, endTime, durationMinutes);
@@ -159,6 +160,17 @@ export async function POST(request: NextRequest) {
         );
 
         entry.availability[i] = blockingSessions.length > 0 ? blockingSessions : [];
+      }
+    }
+
+    // Filter to specific tutors if requested
+    if (tutorGroupIds && tutorGroupIds.length > 0) {
+      const idSet = new Set(tutorGroupIds);
+      for (const [id] of tutorMap) {
+        if (!idSet.has(id)) tutorMap.delete(id);
+      }
+      for (const [id] of reviewMap) {
+        if (!idSet.has(id)) reviewMap.delete(id);
       }
     }
 

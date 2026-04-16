@@ -58,6 +58,7 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
       <div className="w-1/2 flex flex-col overflow-hidden min-w-0 border-r border-border/50 pr-3">
         <SearchForm
           filterOptions={filterOptions}
+          tutorList={tutorList}
           onSearchResponse={handleSearchResponse}
           onError={setError}
         />
