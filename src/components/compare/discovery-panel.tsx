@@ -48,6 +48,7 @@ export function DiscoveryPanel({
 
   const [response, setResponse] = useState<DiscoverResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -68,6 +69,7 @@ export function DiscoveryPanel({
 
   const handleSearch = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const body: Record<string, unknown> = {
         existingTutorGroupIds,
@@ -95,7 +97,7 @@ export function DiscoveryPanel({
         setResponse(data);
       }
     } catch {
-      // Silently fail — user can retry
+      setError("Search failed. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -191,6 +193,12 @@ export function DiscoveryPanel({
             <Button size="sm" onClick={handleSearch} disabled={loading} className="w-full">
               {loading ? "Searching..." : "Search"}
             </Button>
+
+            {error && (
+              <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">
+                {error}
+              </div>
+            )}
           </div>
 
           {response && (
@@ -229,15 +237,15 @@ function CandidateCard({ candidate, onAdd }: { candidate: DiscoverCandidate; onA
           </div>
         </div>
         {c.hasDataIssues ? (
-          <Badge variant="outline" className="text-[10px] text-yellow-500 border-yellow-500/30">
+          <Badge variant="outline" className="text-[10px] text-blocked border-blocked/30">
             Needs review
           </Badge>
         ) : c.conflictCount > 0 ? (
-          <Badge variant="outline" className="text-[10px] text-red-400 border-red-400/30">
+          <Badge variant="outline" className="text-[10px] text-conflict border-conflict/30">
             {c.conflictCount} conflict{c.conflictCount > 1 ? "s" : ""}
           </Badge>
         ) : (
-          <Badge variant="outline" className="text-[10px] text-green-400 border-green-400/30">
+          <Badge variant="outline" className="text-[10px] text-available border-available/30">
             No conflicts
           </Badge>
         )}
@@ -246,7 +254,7 @@ function CandidateCard({ candidate, onAdd }: { candidate: DiscoverCandidate; onA
       {c.freeSlots.length > 0 && (
         <div className="flex gap-1 flex-wrap">
           {c.freeSlots.map((s, i) => (
-            <span key={i} className="text-[10px] bg-green-500/10 text-green-400 px-1.5 py-0.5 rounded">
+            <span key={i} className="text-[10px] bg-available/10 text-available px-1.5 py-0.5 rounded">
               {s.start}–{s.end} free
             </span>
           ))}

@@ -141,7 +141,7 @@ export function SlotBuilder({ searchMode, onAdd }: SlotBuilderProps) {
       </div>
 
       {error && (
-        <p className="text-sm text-red-600">{error}</p>
+        <p className="text-sm text-destructive">{error}</p>
       )}
     </div>
   );

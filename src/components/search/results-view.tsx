@@ -36,7 +36,7 @@ export function ResultsView({ response }: ResultsViewProps) {
       </div>
 
       {warnings.map((w, i) => (
-        <div key={i} className="rounded-md bg-yellow-50 p-2 text-sm text-yellow-800">
+        <div key={i} className="rounded-md bg-accent/60 p-2 text-sm text-accent-foreground">
           {w}
         </div>
       ))}
