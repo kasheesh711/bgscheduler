@@ -410,7 +410,7 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                                   <div className="px-1 py-0.5 overflow-hidden">
                                     <div
                                       className={`leading-tight font-semibold truncate ${
-                                        isCompact ? "text-[9px]" : multiTutorLayout ? "text-[10px]" : "text-[11px]"
+                                        isCompact ? "text-[10px]" : multiTutorLayout ? "text-[10px]" : "text-[11px]"
                                       }`}
                                       style={{ color: textColor }}
                                     >
@@ -425,7 +425,7 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                                 )}
                                 {overflowCount > 0 && (
                                   <div
-                                    className="absolute bottom-0.5 right-0.5 text-[8px] font-semibold rounded px-1 cursor-pointer"
+                                    className="absolute bottom-0.5 right-0.5 text-[10px] font-semibold rounded px-1 cursor-pointer"
                                     style={{
                                       backgroundColor: rgba(chip?.color ?? "#888", 0.18),
                                       color: textColor,
