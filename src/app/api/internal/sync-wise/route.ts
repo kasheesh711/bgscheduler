@@ -6,7 +6,8 @@ import { runFullSync } from "@/lib/sync/orchestrator";
 
 export const maxDuration = 300; // 5 minutes for Vercel
 
-export async function POST(request: NextRequest) {
+/** Shared sync handler for both GET (Vercel cron) and POST (manual curl) */
+async function handleSync(request: NextRequest) {
   // Validate cron secret
   const authHeader = request.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
@@ -28,4 +29,14 @@ export async function POST(request: NextRequest) {
   return NextResponse.json(result, {
     status: result.success ? 200 : 500,
   });
+}
+
+/** Vercel cron triggers via GET */
+export async function GET(request: NextRequest) {
+  return handleSync(request);
+}
+
+/** Manual trigger via curl -X POST (backward compatible) */
+export async function POST(request: NextRequest) {
+  return handleSync(request);
 }
