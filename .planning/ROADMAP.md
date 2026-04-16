@@ -60,11 +60,13 @@ Plans:
   3. Conflict indicators show a numbered count badge (not a generic icon)
   4. Admin can add a tutor to compare with one click from search results
   5. All 82+ existing unit tests pass after all changes
-**Plans**: TBD
+**Plans:** 3 plans
 **UI hint**: yes
 
 Plans:
-- [ ] 03-01: TBD
+- [ ] 03-01-PLAN.md — Lane tint backgrounds, sticky lane headers, today indicator, conflict count badges
+- [ ] 03-02-PLAN.md — Quick-add button from search results, session hover tooltips
+- [ ] 03-03-PLAN.md — Fullscreen compare mode, URL week sharing, keyboard navigation, test verification
 
 ### Phase 4: UI Audit Polish
 **Goal**: Fix accessibility gaps, color inconsistencies, silent errors, and typography issues from full-app UI review
@@ -94,5 +96,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 |-------|----------------|--------|-----------|
 | 1. Component Architecture | 3/3 | Complete | 2026-04-10 |
 | 2. Streaming & Lazy Loading | 3/3 | Complete | 2026-04-10 |
-| 3. Calendar Readability & Workflow Polish | 0/? | Not started | - |
+| 3. Calendar Readability & Workflow Polish | 0/3 | Not started | - |
 | 4. UI Audit Polish | 0/2 | Not started | - |
