@@ -64,9 +64,9 @@ Plans:
 **UI hint**: yes
 
 Plans:
-- [ ] 03-01-PLAN.md — Lane tint backgrounds, sticky lane headers, today indicator, conflict count badges
-- [ ] 03-02-PLAN.md — Quick-add button from search results, session hover tooltips
-- [ ] 03-03-PLAN.md — Fullscreen compare mode, URL week sharing, keyboard navigation, test verification
+- [ ] 03-01-PLAN.md — Lane tints, sticky lane headers, today indicator, week-overview conflict badge, session hover tooltips
+- [ ] 03-02-PLAN.md — Quick-add "+" button on search results and Needs Review rows
+- [ ] 03-03-PLAN.md — Fullscreen compare, day-tab conflict badges, URL week sync, keyboard nav, test verification
 
 ### Phase 4: UI Audit Polish
 **Goal**: Fix accessibility gaps, color inconsistencies, silent errors, and typography issues from full-app UI review
