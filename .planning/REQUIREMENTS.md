@@ -36,6 +36,16 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [x] **INFRA-01**: Add `loading.tsx` skeleton file for search route (instant feedback on navigation)
 - [ ] **INFRA-02**: All 82 existing unit tests continue to pass after all changes
 
+### UI Audit Fixes
+
+- [ ] **UIFIX-01**: Add aria-labels to all interactive controls missing them (week picker prev/next/today buttons, tutor chip remove buttons)
+- [ ] **UIFIX-02**: Replace hardcoded Tailwind color classes with semantic tokens in discovery-panel.tsx (text-yellow-500→text-blocked, text-red-400→text-conflict, text-green-400→text-available), slot-builder.tsx (text-red-600→text-destructive), and results-view.tsx (bg-yellow-50→bg-accent)
+- [ ] **UIFIX-03**: Add user-visible error feedback to DiscoveryPanel API failure (replace empty catch block with inline error message)
+- [ ] **UIFIX-04**: Standardize typography — remove text-[8px] and text-[9px], align inconsistent label sizes (text-[10px] vs text-xs) across SearchForm and SlotBuilder
+- [ ] **UIFIX-05**: Improve data-health error/loading states with actionable guidance (retry prompt on failure)
+- [ ] **UIFIX-06**: Consolidate TUTOR_COLORS to a single source of truth (one file, re-exported where needed)
+- [ ] **UIFIX-07**: Replace inline style pixels in calendar-grid.tsx with Tailwind classes and standardize h-[34px] search button to h-8
+
 ## v2 Requirements
 
 Deferred to future milestone. Tracked but not in current roadmap.
@@ -87,9 +97,17 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | FLOW-04 | Phase 3 | Pending |
 | INFRA-02 | Phase 3 | Pending |
 
+| UIFIX-01 | Phase 4 | Pending |
+| UIFIX-02 | Phase 4 | Pending |
+| UIFIX-03 | Phase 4 | Pending |
+| UIFIX-04 | Phase 4 | Pending |
+| UIFIX-05 | Phase 4 | Pending |
+| UIFIX-06 | Phase 4 | Pending |
+| UIFIX-07 | Phase 4 | Pending |
+
 **Coverage:**
-- v1 requirements: 17 total
-- Mapped to phases: 17
+- v1 requirements: 24 total
+- Mapped to phases: 24
 - Unmapped: 0
 
 ---
