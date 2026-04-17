@@ -455,22 +455,25 @@ const conflictCountByDay = useMemo(() => {
 
 **All non-assumed claims verified against codebase grep, npm registry, or direct code inspection.**
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Sticky header nesting depth**
    - What we know: `overflow-y-auto` is on the scrollable body container. Lane headers must be children of that container.
    - What's unclear: Whether inserting a sticky row before the time grid `<div>` disrupts the existing flex layout.
    - Recommendation: Implement and visually verify. If sticky fails, fall back to absolute positioning with scroll listener.
+   - **RESOLVED:** Use CSS `position: sticky` on the lane header row inserted as the first child of the existing `overflow-y-auto` scroll container in `week-overview.tsx`. Verify visually during implementation; if sticky fails due to flex nesting, fall back to absolute positioning with a scroll listener.
 
 2. **Fullscreen and dynamic imports**
    - What we know: `WeekOverview` and `CalendarGrid` are loaded via `next/dynamic`. When fullscreen expands, they re-render at wider width.
    - What's unclear: Whether the wider render causes a visible layout shift or skeleton flash.
    - Recommendation: Test fullscreen toggle with loaded components. The dynamic import cache should prevent re-loading.
+   - **RESOLVED:** Rely on Next.js `next/dynamic` module-level cache to prevent re-loading on fullscreen toggle -- no additional preloading or memoization required. Components re-render at new width in-place. Verify no skeleton flash during fullscreen enter/exit in manual QA.
 
 3. **Session card text in wider fullscreen lanes**
    - What we know: D-12 says "Session cards get wider and show more text. No structural layout change."
    - What's unclear: Exactly which text fields to un-truncate in wider mode.
    - Recommendation: The existing `isTooNarrow` and `isCompact` booleans in `week-overview.tsx` (lines 386-388) already adapt to column width. Wider lanes will naturally show more text. No code change needed -- verify visually.
+   - **RESOLVED:** No code change required. The existing `isTooNarrow` / `isCompact` width-adaptive booleans in `week-overview.tsx` (lines 386-388) already un-truncate text as columns widen. Fullscreen mode gets wider lanes for free through this existing logic. Verify visually.
 
 ## Project Constraints (from CLAUDE.md)
 
