@@ -17,6 +17,8 @@ export interface SearchResultsProps {
   loading: boolean;
   searchContext: SearchContext | null;
   onCompareSelected: (ids: string[]) => void;
+  onAddSingle: (id: string, name: string) => void;
+  disableAdd: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -28,6 +30,8 @@ export function SearchResults({
   loading,
   searchContext,
   onCompareSelected,
+  onAddSingle,
+  disableAdd,
 }: SearchResultsProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -104,6 +108,8 @@ export function SearchResults({
           needsReview={response.needsReview}
           selectedIds={selectedIds}
           onToggleSelect={handleToggleSelect}
+          onAddSingle={onAddSingle}
+          disableAdd={disableAdd}
         />
       </div>
     );
