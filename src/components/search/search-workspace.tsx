@@ -8,8 +8,9 @@ import type { FilterOptions } from "@/lib/data/filters";
 import type { TutorListItem } from "@/lib/data/tutors";
 import { SearchResults } from "@/components/search/search-results";
 import { ComparePanel } from "@/components/compare/compare-panel";
-import { useCompare } from "@/hooks/use-compare";
+import { useCompare, shiftWeek } from "@/hooks/use-compare";
 import type { RangeSearchResponse } from "@/lib/search/types";
+import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,15 +32,66 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
   const [response, setResponse] = useState<RangeSearchResponse | null>(null);
   const [searchContext, setSearchContext] = useState<SearchContext | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // Handle ?tutors= deep link
+  // Handle ?tutors= and ?week= deep links on mount
   useEffect(() => {
-    const tutorIds =
-      searchParams.get("tutors")?.split(",").filter(Boolean) ?? [];
+    const weekParam = searchParams.get("week");
+    const tutorIds = searchParams.get("tutors")?.split(",").filter(Boolean) ?? [];
+    if (weekParam && /^\d{4}-\d{2}-\d{2}$/.test(weekParam)) {
+      compare.changeWeek(weekParam);
+    }
     if (tutorIds.length > 0) {
-      compare.fetchCompare(tutorIds, compare.weekStart);
+      compare.fetchCompare(tutorIds, weekParam ?? compare.weekStart);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync weekStart and selected tutors to URL (non-navigating)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const tutorIds = compare.compareTutors.map((t) => t.tutorGroupId).join(",");
+    if (tutorIds) url.searchParams.set("tutors", tutorIds);
+    else url.searchParams.delete("tutors");
+    if (compare.weekStart !== compare.getCurrentMonday()) {
+      url.searchParams.set("week", compare.weekStart);
+    } else {
+      url.searchParams.delete("week");
+    }
+    window.history.replaceState({}, "", url.toString());
+  }, [compare.compareTutors, compare.weekStart, compare]);
+
+  // ArrowLeft/ArrowRight navigate weeks (guard against text input focus)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+      if (target.isContentEditable) return;
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        compare.changeWeek(shiftWeek(compare.weekStart, -1));
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        compare.changeWeek(shiftWeek(compare.weekStart, 1));
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [compare]);
+
+  // Esc exits fullscreen
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setIsFullscreen(false);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isFullscreen]);
 
   // --- Communication wiring ---
   const handleSearchResponse = useCallback((data: RangeSearchResponse, context: SearchContext) => {
@@ -57,7 +109,14 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
 
   return (
     <div className="flex-1 flex gap-3 overflow-hidden min-h-0">
-      <div className="w-1/2 flex flex-col overflow-hidden min-w-0 border-r border-border/50 pr-3">
+      <div
+        className={cn(
+          "flex flex-col overflow-hidden min-w-0 transition-all duration-300 ease-in-out",
+          isFullscreen
+            ? "w-0 opacity-0 pr-0 border-r-0"
+            : "w-1/2 border-r border-border/50 pr-3",
+        )}
+      >
         <SearchForm
           filterOptions={filterOptions}
           tutorList={tutorList}
@@ -78,8 +137,18 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
           disableAdd={disableAdd}
         />
       </div>
-      <div className="w-1/2 flex flex-col overflow-hidden min-w-0 pl-1">
-        <ComparePanel compare={compare} tutorList={tutorList} />
+      <div
+        className={cn(
+          "flex flex-col overflow-hidden min-w-0 transition-all duration-300 ease-in-out",
+          isFullscreen ? "w-full pl-0" : "w-1/2 pl-1",
+        )}
+      >
+        <ComparePanel
+          compare={compare}
+          tutorList={tutorList}
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={() => setIsFullscreen((v) => !v)}
+        />
       </div>
     </div>
   );
