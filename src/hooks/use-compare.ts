@@ -88,7 +88,7 @@ export function useCompare() {
   const fetchCompare = useCallback(async (
     ids: string[],
     week: string,
-    opts?: { fetchOnly?: string[] },
+    opts?: { fetchOnly?: string[]; _retried?: boolean },
   ) => {
     if (ids.length === 0) {
       setCompareResponse(null);
@@ -123,9 +123,14 @@ export function useCompare() {
       // If server snapshot changed, our cache is stale -- refetch everything
       if (lastSnapshotId.current && lastSnapshotId.current !== data.snapshotMeta.snapshotId) {
         tutorCache.current.clear();
-        // Recursive full refetch (no fetchOnly)
-        setCompareLoading(false);
-        return fetchCompare(ids, week);
+        if (opts?._retried) {
+          // Already retried once; surface the error rather than recurse again.
+          setCompareError("Snapshot changed during fetch. Please retry.");
+          return;
+        }
+        // Recursive full refetch (no fetchOnly). Do NOT clear loading here;
+        // the recursive call's finally{} block will clear it.
+        return fetchCompare(ids, week, { _retried: true });
       }
       lastSnapshotId.current = data.snapshotMeta.snapshotId;
 
