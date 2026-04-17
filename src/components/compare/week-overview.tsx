@@ -267,6 +267,40 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
 
       {/* ── Scrollable body ── */}
       <div className="flex-1 overflow-y-auto min-h-0">
+        {/* Sticky lane headers — CAL-02 (only in multi-tutor layout) */}
+        {multiTutorLayout && (
+          <div
+            className="sticky top-0 z-[5] flex bg-background/90 backdrop-blur-sm"
+            style={{ height: 20 }}
+          >
+            <div className="flex-shrink-0 w-10" />
+            <div className="flex-1 flex">
+              {DISPLAY_DAYS.map((day) => (
+                <div
+                  key={`lane-hdr-${day}`}
+                  className="flex-1 min-w-0 flex border-r border-border/20 last:border-r-0"
+                >
+                  {multiTutorLayout && tutors.map((t, tutorIdx) => {
+                    const chip = tutorChips[tutorIdx];
+                    return (
+                      <div
+                        key={`lane-hdr-${day}-${tutorIdx}`}
+                        className="flex items-center gap-1 px-1 text-[10px] font-medium truncate"
+                        style={{ width: `${laneWidth}%`, color: chip?.color ?? "#888888" }}
+                      >
+                        <div
+                          className="h-1.5 w-1.5 rounded-full flex-shrink-0"
+                          style={{ background: chip?.color ?? "#888888" }}
+                        />
+                        <span className="truncate">{t.displayName}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="flex" style={{ height: TOTAL_HOURS * HOUR_HEIGHT }}>
           {/* Time axis */}
           <div className="flex-shrink-0 w-10 relative">
@@ -294,6 +328,22 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                   className="flex-1 min-w-0 border-r border-border/30 last:border-r-0 relative"
                   style={{ height: TOTAL_HOURS * HOUR_HEIGHT }}
                 >
+                  {/* Lane tint backgrounds — CAL-01 */}
+                  {multiTutorLayout && tutors.map((_, tutorIdx) => {
+                    const chip = tutorChips[tutorIdx];
+                    return (
+                      <div
+                        key={`lane-bg-${day}-${tutorIdx}`}
+                        className="absolute top-0 bottom-0 z-0 pointer-events-none"
+                        style={{
+                          left: `${tutorIdx * laneWidth}%`,
+                          width: `${laneWidth}%`,
+                          backgroundColor: rgba(chip?.color ?? "#888888", 0.05),
+                        }}
+                      />
+                    );
+                  })}
+
                   {/* Grid lines */}
                   {Array.from({ length: TOTAL_HOURS + 1 }, (_, i) => (
                     <div
