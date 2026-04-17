@@ -45,9 +45,10 @@ export function ResultsView({ response }: ResultsViewProps) {
         <TabsList>
           {perSlotResults.map((sr, i) => {
             const slot = response.normalizedSlots[i];
-            const label = slot?.dayOfWeek !== undefined
+            if (!slot) return null;
+            const label = slot.dayOfWeek !== undefined
               ? `${WEEKDAY_NAMES[slot.dayOfWeek]} ${slot.start}-${slot.end}`
-              : `${slot?.date} ${slot?.start}-${slot?.end}`;
+              : `${slot.date} ${slot.start}-${slot.end}`;
             return (
               <TabsTrigger key={sr.slotId} value={sr.slotId}>
                 {label} ({sr.available.length})
