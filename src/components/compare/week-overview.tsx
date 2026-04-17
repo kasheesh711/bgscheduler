@@ -278,7 +278,11 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, w
                 onClick={() => onDayClick(day)}
               >
                 {DAY_NAMES[day]}
-                {dayConflicts.length > 0 && <span className="ml-1 text-conflict">!</span>}
+                {dayConflicts.length > 0 && (
+                  <span className="ml-1 inline-flex items-center justify-center h-4 min-w-[16px] rounded-full bg-conflict text-white text-[10px] font-semibold px-1">
+                    {dayConflicts.length}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -456,6 +460,10 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, w
                       const isTooNarrow = totalColumns >= 3 && multiTutorLayout;
                       const isCompact = totalColumns >= 2;
                       const showSecondaryLine = !isCompact && height >= (multiTutorLayout ? 40 : 30);
+                      const tooltipTitle = [
+                        [s.studentName, s.subject].filter(Boolean).join(" - "),
+                        `${s.startTime}-${s.endTime}`,
+                      ].filter((line) => line.length > 0).join("\n");
 
                       return (
                         <Popover key={`${t.tutorGroupId}-${day}-${sIdx}`}>
@@ -464,6 +472,7 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, w
                               <button
                                 type="button"
                                 {...props}
+                                title={tooltipTitle}
                                 className="absolute cursor-pointer overflow-hidden rounded-sm border-0 bg-transparent p-0 text-left shadow-none outline-none appearance-none"
                                 style={{
                                   top: top + 1,

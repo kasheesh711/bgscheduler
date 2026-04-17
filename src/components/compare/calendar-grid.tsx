@@ -226,6 +226,10 @@ export function CalendarGrid({
               const textColor = sessionTextColor(chip?.color, isConflict);
               const frameColor = sessionFrameColor(chip?.color, isConflict);
               const border = sessionBorderStyle(chip?.color, isConflict);
+              const tooltipTitle = [
+                [s.studentName, s.subject].filter(Boolean).join(" - "),
+                `${s.startTime}-${s.endTime}`,
+              ].filter((line) => line.length > 0).join("\n");
 
               return (
                 <Popover key={`${t.tutorGroupId}-${sIdx}`}>
@@ -234,6 +238,7 @@ export function CalendarGrid({
                       <button
                         type="button"
                         {...props}
+                        title={tooltipTitle}
                         className="absolute z-[1] cursor-pointer overflow-hidden rounded border-0 bg-transparent p-0 text-left shadow-none outline-none appearance-none"
                         style={{
                           top: top + 2,
