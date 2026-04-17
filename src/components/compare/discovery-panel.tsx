@@ -55,7 +55,9 @@ export function DiscoveryPanel({
     fetch("/api/filters")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (data) setFilterOptions(data); })
-      .catch(() => {});
+      .catch((err) => {
+        console.error("Failed to load filter options:", err);
+      });
   }, [open]);
 
   useEffect(() => {
@@ -95,6 +97,9 @@ export function DiscoveryPanel({
       if (res.ok) {
         const data: DiscoverResponse = await res.json();
         setResponse(data);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setError(errData.error ?? `Search failed (${res.status})`);
       }
     } catch {
       setError("Search failed. Please try again.");
