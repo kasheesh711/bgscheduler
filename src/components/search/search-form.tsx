@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
@@ -92,6 +92,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
   const [loading, setLoading] = useState(false);
   const [selectedTutorIds, setSelectedTutorIds] = useState<string[]>([]);
   const [tutorPopoverOpen, setTutorPopoverOpen] = useState(false);
+  const [pendingSearch, setPendingSearch] = useState(false);
 
   const handleAddTutor = (id: string) => {
     setSelectedTutorIds((prev) => prev.includes(id) ? prev : [...prev, id]);
@@ -180,10 +181,19 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
     setSubjectFilter(search.filters?.subject ?? "");
     setCurriculumFilter(search.filters?.curriculum ?? "");
     setLevelFilter(search.filters?.level ?? "");
-    setTimeout(() => {
-      document.getElementById("search-btn")?.click();
-    }, 0);
+    // Defer the search until after React commits the state updates above.
+    setPendingSearch(true);
   };
+
+  // Trigger a search once state from a recent-search restore has been applied.
+  useEffect(() => {
+    if (!pendingSearch) return;
+    setPendingSearch(false);
+    handleSearch();
+    // We intentionally only run when pendingSearch flips true; handleSearch
+    // reads the latest state via closure on each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSearch]);
 
   return (
     <>
