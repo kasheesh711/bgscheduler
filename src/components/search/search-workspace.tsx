@@ -53,6 +53,8 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
     compare.fetchCompare(ids, compare.weekStart);
   }, [compare]);
 
+  const disableAdd = compare.compareTutors.length >= 3;
+
   return (
     <div className="flex-1 flex gap-3 overflow-hidden min-h-0">
       <div className="w-1/2 flex flex-col overflow-hidden min-w-0 border-r border-border/50 pr-3">
@@ -72,6 +74,8 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
           loading={false}
           searchContext={searchContext}
           onCompareSelected={handleCompareSelected}
+          onAddSingle={compare.addTutor}
+          disableAdd={disableAdd}
         />
       </div>
       <div className="w-1/2 flex flex-col overflow-hidden min-w-0 pl-1">
