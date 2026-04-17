@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+import { Plus, Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
   Popover,
@@ -70,6 +72,8 @@ interface AvailabilityGridProps {
   needsReview: TutorReviewResult[];
   selectedIds: Set<string>;
   onToggleSelect: (id: string) => void;
+  onAddSingle: (id: string, name: string) => void;
+  disableAdd: boolean;
 }
 
 export function AvailabilityGrid({
@@ -78,7 +82,21 @@ export function AvailabilityGrid({
   needsReview,
   selectedIds,
   onToggleSelect,
+  onAddSingle,
+  disableAdd,
 }: AvailabilityGridProps) {
+  const [flashedId, setFlashedId] = useState<string | null>(null);
+
+  const handleQuickAdd = (e: React.MouseEvent, id: string, name: string) => {
+    e.stopPropagation();
+    if (disableAdd) return;
+    onAddSingle(id, name);
+    setFlashedId(id);
+    window.setTimeout(() => {
+      setFlashedId((current) => (current === id ? null : current));
+    }, 800);
+  };
+
   if (grid.length === 0 && needsReview.length === 0) {
     return (
       <div className="rounded-md border p-6 text-center text-sm text-muted-foreground">
@@ -102,6 +120,7 @@ export function AvailabilityGrid({
                   </th>
                 ))}
                 <th className="w-20 px-2 py-2 text-left font-medium">Mode</th>
+                <th className="w-8 px-1 py-2 text-center" aria-label="Add to compare" />
               </tr>
             </thead>
             <tbody>
@@ -180,6 +199,26 @@ export function AvailabilityGrid({
                         ))}
                       </div>
                     </td>
+                    <td className="w-8 px-1 py-2 text-center">
+                      <button
+                        type="button"
+                        onClick={(e) => handleQuickAdd(e, row.tutorGroupId, row.displayName)}
+                        disabled={disableAdd}
+                        title={disableAdd ? "Remove a tutor first (max 3)" : "Add to compare"}
+                        aria-label={disableAdd ? "Maximum 3 tutors — remove one first" : `Add ${row.displayName} to compare`}
+                        className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors ${
+                          disableAdd
+                            ? "opacity-40 cursor-not-allowed"
+                            : "text-muted-foreground hover:bg-muted hover:text-primary cursor-pointer"
+                        }`}
+                      >
+                        {flashedId === row.tutorGroupId ? (
+                          <Check className="h-3.5 w-3.5 text-available" />
+                        ) : (
+                          <Plus className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -199,6 +238,7 @@ export function AvailabilityGrid({
                 <tr className="border-b bg-muted/50">
                   <th className="w-28 px-2 py-2 text-left font-medium">Tutor</th>
                   <th className="px-2 py-2 text-left font-medium">Reasons</th>
+                  <th className="w-8 px-1 py-2 text-center" aria-label="Add to compare" />
                 </tr>
               </thead>
               <tbody>
@@ -213,6 +253,26 @@ export function AvailabilityGrid({
                           </Badge>
                         ))}
                       </div>
+                    </td>
+                    <td className="w-8 px-1 py-2 text-center">
+                      <button
+                        type="button"
+                        onClick={(e) => handleQuickAdd(e, t.tutorGroupId, t.displayName)}
+                        disabled={disableAdd}
+                        title={disableAdd ? "Remove a tutor first (max 3)" : "Add to compare"}
+                        aria-label={disableAdd ? "Maximum 3 tutors — remove one first" : `Add ${t.displayName} to compare`}
+                        className={`inline-flex h-6 w-6 items-center justify-center rounded transition-colors ${
+                          disableAdd
+                            ? "opacity-40 cursor-not-allowed"
+                            : "text-muted-foreground hover:bg-muted hover:text-primary cursor-pointer"
+                        }`}
+                      >
+                        {flashedId === t.tutorGroupId ? (
+                          <Check className="h-3.5 w-3.5 text-available" />
+                        ) : (
+                          <Plus className="h-3.5 w-3.5" />
+                        )}
+                      </button>
                     </td>
                   </tr>
                 ))}
