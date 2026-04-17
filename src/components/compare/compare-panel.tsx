@@ -219,6 +219,7 @@ export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
                 conflicts={compareResponse.conflicts}
                 sharedFreeSlots={compareResponse.sharedFreeSlots}
                 dayOfWeek={activeDay}
+                weekStart={weekStart}
                 onFindAlternatives={(conflict) => {
                   setPrefillConflict(conflict);
                   setDiscoveryOpen(true);
@@ -230,6 +231,7 @@ export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
                 tutorChips={compareTutors}
                 conflicts={compareResponse.conflicts}
                 sharedFreeSlots={compareResponse.sharedFreeSlots}
+                weekStart={weekStart}
                 onDayClick={(day) => setActiveDay(day)}
               />
             )}

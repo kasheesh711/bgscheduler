@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   Popover,
@@ -17,6 +17,7 @@ import {
   sessionTextColor,
   rgba,
 } from "./session-colors";
+import { getCurrentMonday } from "@/hooks/use-compare";
 
 const HOUR_HEIGHT = 60;
 const START_HOUR = 7;
@@ -47,6 +48,7 @@ interface CalendarGridProps {
   conflicts: Conflict[];
   sharedFreeSlots: SharedFreeSlot[];
   dayOfWeek: number;
+  weekStart: string;
   onFindAlternatives?: (conflict: Conflict) => void;
 }
 
@@ -56,8 +58,27 @@ export function CalendarGrid({
   conflicts,
   sharedFreeSlots,
   dayOfWeek,
+  weekStart,
   onFindAlternatives,
 }: CalendarGridProps) {
+  // Today indicator state — CAL-03
+  const [nowSnapshot, setNowSnapshot] = useState(() => {
+    const bkk = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
+    return { minutes: bkk.getHours() * 60 + bkk.getMinutes(), dow: bkk.getDay() };
+  });
+
+  const isCurrentWeek = weekStart === getCurrentMonday();
+
+  useEffect(() => {
+    if (!isCurrentWeek) return;
+    const tick = () => {
+      const bkk = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
+      setNowSnapshot({ minutes: bkk.getHours() * 60 + bkk.getMinutes(), dow: bkk.getDay() });
+    };
+    const id = setInterval(tick, 60_000);
+    return () => clearInterval(id);
+  }, [isCurrentWeek]);
+
   const dayConflicts = useMemo(
     () => conflicts.filter((c) => c.dayOfWeek === dayOfWeek),
     [conflicts, dayOfWeek],
@@ -269,6 +290,20 @@ export function CalendarGrid({
             </div>
           );
         })}
+
+        {/* Today indicator — CAL-03 */}
+        {isCurrentWeek && nowSnapshot.dow === dayOfWeek && nowSnapshot.minutes >= START_HOUR * 60 && nowSnapshot.minutes <= END_HOUR * 60 && (
+          <>
+            <div
+              className="absolute left-0 right-0 bg-red-500 z-[3] pointer-events-none"
+              style={{ top: minuteToY(nowSnapshot.minutes), height: 2 }}
+            />
+            <div
+              className="absolute h-2 w-2 rounded-full bg-red-500 z-[3] pointer-events-none"
+              style={{ top: minuteToY(nowSnapshot.minutes) - 3, left: -4 }}
+            />
+          </>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Popover,
   PopoverContent,
@@ -16,6 +16,7 @@ import {
   sessionTextColor,
   rgba,
 } from "./session-colors";
+import { getCurrentMonday } from "@/hooks/use-compare";
 
 const HOUR_HEIGHT = 48;
 const START_HOUR = 7;
@@ -222,10 +223,29 @@ interface WeekOverviewProps {
   tutorChips: TutorChip[];
   conflicts: Conflict[];
   sharedFreeSlots?: SharedFreeSlot[];
+  weekStart: string;
   onDayClick: (day: number) => void;
 }
 
-export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, onDayClick }: WeekOverviewProps) {
+export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, weekStart, onDayClick }: WeekOverviewProps) {
+  // Today indicator state — CAL-03
+  const [nowSnapshot, setNowSnapshot] = useState(() => {
+    const bkk = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
+    return { minutes: bkk.getHours() * 60 + bkk.getMinutes(), dow: bkk.getDay() };
+  });
+
+  const isCurrentWeek = weekStart === getCurrentMonday();
+
+  useEffect(() => {
+    if (!isCurrentWeek) return;
+    const tick = () => {
+      const bkk = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
+      setNowSnapshot({ minutes: bkk.getHours() * 60 + bkk.getMinutes(), dow: bkk.getDay() });
+    };
+    const id = setInterval(tick, 60_000);
+    return () => clearInterval(id);
+  }, [isCurrentWeek]);
+
   const conflictsByDay = useMemo(() => {
     const map = new Map<number, Conflict[]>();
     for (const c of conflicts) {
@@ -510,6 +530,20 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, o
                       );
                     });
                   })}
+
+                  {/* Today indicator — CAL-03 */}
+                  {isCurrentWeek && nowSnapshot.dow === day && nowSnapshot.minutes >= START_HOUR * 60 && nowSnapshot.minutes <= END_HOUR * 60 && (
+                    <>
+                      <div
+                        className="absolute left-0 right-0 bg-red-500 z-[3] pointer-events-none"
+                        style={{ top: minuteToY(nowSnapshot.minutes), height: 2 }}
+                      />
+                      <div
+                        className="absolute h-2 w-2 rounded-full bg-red-500 z-[3] pointer-events-none"
+                        style={{ top: minuteToY(nowSnapshot.minutes) - 3, left: -4 }}
+                      />
+                    </>
+                  )}
                 </div>
               );
             })}
