@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import type { TutorListItem } from "@/lib/data/tutors";
 import { TutorCombobox } from "@/components/compare/tutor-combobox";
@@ -8,7 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { WeekCalendar } from "@/components/compare/week-calendar";
 import dynamic from "next/dynamic";
 import { CalendarSkeleton } from "@/components/skeletons/calendar-skeleton";
-import { X } from "lucide-react";
+import { X, Maximize2, Minimize2 } from "lucide-react";
 import { DAY_NAMES } from "@/components/search/search-form";
 
 const WeekOverview = dynamic(
@@ -40,13 +40,20 @@ import type { UseCompareReturn } from "@/hooks/use-compare";
 export interface ComparePanelProps {
   compare: UseCompareReturn;
   tutorList: TutorListItem[];
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
 }
 
 // ---------------------------------------------------------------------------
 // ComparePanel component
 // ---------------------------------------------------------------------------
 
-export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
+export function ComparePanel({
+  compare,
+  tutorList,
+  isFullscreen,
+  onToggleFullscreen,
+}: ComparePanelProps) {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const {
     compareTutors,
@@ -65,6 +72,15 @@ export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
     setPrefillConflict,
     getCurrentMonday,
   } = compare;
+
+  const conflictCountByDay = useMemo(() => {
+    const map = new Map<number, number>();
+    if (!compareResponse) return map;
+    for (const c of compareResponse.conflicts) {
+      map.set(c.dayOfWeek, (map.get(c.dayOfWeek) ?? 0) + 1);
+    }
+    return map;
+  }, [compareResponse]);
 
   return (
     <>
@@ -103,6 +119,19 @@ export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
         <span className="text-[10px] text-muted-foreground ml-auto">
           {compareTutors.length}/3
         </span>
+        <button
+          type="button"
+          onClick={onToggleFullscreen}
+          className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+          aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+          title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+        >
+          {isFullscreen ? (
+            <Minimize2 className="h-3.5 w-3.5" />
+          ) : (
+            <Maximize2 className="h-3.5 w-3.5" />
+          )}
+        </button>
       </div>
 
       {compareError && (
@@ -203,6 +232,11 @@ export function ComparePanel({ compare, tutorList }: ComparePanelProps) {
                 onClick={() => setActiveDay(day)}
               >
                 {DAY_NAMES[day]} {getWeekDate(weekStart, day)}
+                {(conflictCountByDay.get(day) ?? 0) > 0 && (
+                  <span className="ml-1 inline-flex items-center justify-center h-4 min-w-[16px] rounded-full bg-conflict text-white text-[10px] font-semibold px-1">
+                    {conflictCountByDay.get(day)}
+                  </span>
+                )}
                 {activeDay === day && (
                   <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
                 )}
