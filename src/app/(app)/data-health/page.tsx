@@ -80,7 +80,10 @@ export default function DataHealthPage() {
 
   useEffect(() => {
     fetch("/api/data-health")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then(setData)
       .catch(console.error)
       .finally(() => setLoading(false));
