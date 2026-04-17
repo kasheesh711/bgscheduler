@@ -1,100 +1,49 @@
-# Roadmap: BGScheduler Performance & UX Improvement
+# Roadmap: BGScheduler
 
-## Overview
+## Milestones
 
-This milestone transforms BGScheduler from a functional but sluggish scheduling tool into a snappy, intuitive workspace. Phase 1 untangles the monolithic search page into clean components that enable server-side rendering. Phase 2 adds streaming and lazy loading for near-instant perceived load times. Phase 3 polishes calendar readability and streamlines the search-to-compare workflow into fewer clicks.
+- ✅ **v1.0 Performance & UX Improvement** — Phases 1–4 (shipped 2026-04-17) — see [MILESTONES.md](MILESTONES.md)
 
 ## Phases
 
-**Phase Numbering:**
-- Integer phases (1, 2, 3): Planned milestone work
-- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+<details>
+<summary>✅ v1.0 Performance & UX Improvement (Phases 1–4) — SHIPPED 2026-04-17</summary>
 
-Decimal phases appear between their surrounding integers in numeric order.
+- [x] Phase 1: Component Architecture (3/3 plans) — completed 2026-04-10
+- [x] Phase 2: Streaming & Lazy Loading (3/3 plans) — completed 2026-04-10
+- [x] Phase 3: Calendar Readability & Workflow Polish (3/3 plans) — completed 2026-04-17
+- [x] Phase 4: UI Audit Polish (2/2 plans) — completed 2026-04-17
 
-- [ ] **Phase 1: Component Architecture** - Break monolithic search page into focused components and extract shared state
-- [ ] **Phase 2: Streaming & Lazy Loading** - Near-instant page load with progressive data streaming and code splitting
-- [ ] **Phase 3: Calendar Readability & Workflow Polish** - Tutor visual distinction, calendar indicators, and one-click compare workflow
-- [ ] **Phase 4: UI Audit Polish** - Accessibility, semantic color consistency, error feedback, typography standardization from full-app UI review
+Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 
-## Phase Details
+</details>
 
-### Phase 1: Component Architecture
-**Goal**: Clean component boundaries enable RSC conversion
-**Depends on**: Nothing (first phase)
-**Requirements**: PERF-01, PERF-02, PERF-03
-**Success Criteria** (what must be TRUE):
-  1. Search page renders identically to current production (no visual regression)
-  2. ComparePanel, SearchForm, SearchResults, and SearchWorkspace exist as separate importable components
-  3. All compare state (tutors, cache, abort, snapshot, week) lives in a single useCompare hook
-  4. SearchIndex and DB singletons survive across server-side module reloads (globalThis anchored)
-**Plans:** 3 plans
+## Next Milestone
 
-Plans:
-- [x] 01-01-PLAN.md — Anchor DB and SearchIndex singletons on globalThis
-- [x] 01-02-PLAN.md — Extract useCompare hook, SearchForm, and SearchResults components
-- [x] 01-03-PLAN.md — Extract ComparePanel, create SearchWorkspace, rewrite page.tsx
+No milestone in progress. Start the next one with:
 
-### Phase 2: Streaming & Lazy Loading
-**Goal**: Near-instant page load with progressive data streaming
-**Depends on**: Phase 1
-**Requirements**: PERF-04, PERF-05, PERF-06, PERF-07, INFRA-01
-**Success Criteria** (what must be TRUE):
-  1. Search page shows a skeleton shell within 200ms of navigation (no blank white screen)
-  2. Filter dropdowns and tutor combobox populate without client-side fetch waterfalls (data streamed from server)
-  3. WeekOverview, CalendarGrid, and DiscoveryPanel JS bundles load only when their tab/modal is activated
-  4. Filter options and tutor list data are served from cache and invalidated only on snapshot change
-**Plans**: TBD
-**UI hint**: yes
+```
+/gsd-new-milestone
+```
 
-Plans:
-- [x] 02-01: TBD
+This will guide questioning → research → requirements → new roadmap.
 
-### Phase 3: Calendar Readability & Workflow Polish
-**Goal**: Tutors visually distinguishable, compare workflow is one-click
-**Depends on**: Phase 2
-**Requirements**: CAL-01, CAL-02, CAL-03, CAL-04, FLOW-01, FLOW-02, FLOW-03, FLOW-04, INFRA-02
-**Success Criteria** (what must be TRUE):
-  1. In multi-tutor week view, each tutor's lane has a visually distinct tinted background and a labeled header
-  2. Today's column shows a horizontal time indicator line at the current time
-  3. Conflict indicators show a numbered count badge (not a generic icon)
-  4. Admin can add a tutor to compare with one click from search results
-  5. All 82+ existing unit tests pass after all changes
-**Plans:** 3 plans
-**UI hint**: yes
+### v1.1 Candidate Backlog
 
-Plans:
-- [x] 03-01-PLAN.md — Lane tints, sticky lane headers, today indicator, week-overview conflict badge, session hover tooltips
-- [x] 03-02-PLAN.md — Quick-add "+" button on search results and Needs Review rows
-- [x] 03-03-PLAN.md — Fullscreen compare, day-tab conflict badges, URL week sync, keyboard nav, test verification
+Sourced from the v1.0 audit (tech debt) and the v2 requirements section of `milestones/v1.0-REQUIREMENTS.md`. None are committed until `/gsd-new-milestone` produces a fresh REQUIREMENTS.md.
 
-### Phase 4: UI Audit Polish
-**Goal**: Fix accessibility gaps, color inconsistencies, silent errors, and typography issues from full-app UI review
-**Depends on**: Phase 3
-**Requirements**: UIFIX-01, UIFIX-02, UIFIX-03, UIFIX-04, UIFIX-05, UIFIX-06, UIFIX-07
-**Success Criteria** (what must be TRUE):
-  1. All interactive controls have aria-labels (week picker nav, tutor chip remove buttons)
-  2. Zero hardcoded Tailwind color classes in discovery-panel, slot-builder, and results-view — all use semantic tokens
-  3. DiscoveryPanel shows user-visible error message on API failure (no silent catch)
-  4. No text-[8px] or text-[9px] anywhere; text-[10px] documented as intentional dense-UI tier or replaced with text-xs
-  5. Data-health error state includes retry guidance
-  6. TUTOR_COLORS defined in exactly one file
-  7. All 82+ existing unit tests pass
-**Plans:** 2 plans
-**UI hint**: yes
-
-Plans:
-- [x] 04-01-PLAN.md — Aria-labels, semantic colors, error feedback, TUTOR_COLORS consolidation
-- [x] 04-02-PLAN.md — Typography standardization, inline style cleanup, data-health UX
+- Phase 04 human QA sign-off — screen-reader announcement (VoiceOver/NVDA), discovery-panel browser error state, semantic-color rendering light/dark, data-health skeleton proportions, text-[10px] legibility
+- Phase 02 retroactive `VERIFICATION.md` (process cleanup)
+- Phase 03 polish findings — URL-sync effect memoization (M1), midnight crossover for today indicator (M2), strict `?week=` validation (M3), semantic token for today line (L1), `useCallback` for `addTutor` (L3), drop duplicate multiTutorLayout guard (L2), mount-effect stale-closure fix (L4)
+- Remove unused `TutorSelector` component body at `src/components/compare/tutor-selector.tsx:19`
+- v2 visual polish carry-forward — VPOL-01 view transitions, VPOL-02 sticky tutor legend, VPOL-03 mini-map density overview
+- v2 advanced workflow carry-forward — AWRK-01 inline free-slot actions, AWRK-02 conflict resolution suggestions, AWRK-03 drag-to-select
 
 ## Progress
 
-**Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4
-
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. Component Architecture | 3/3 | Complete | 2026-04-10 |
-| 2. Streaming & Lazy Loading | 3/3 | Complete | 2026-04-10 |
-| 3. Calendar Readability & Workflow Polish | 0/3 | Not started | - |
-| 4. UI Audit Polish | 0/2 | Not started | - |
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 1. Component Architecture | v1.0 | 3/3 | Complete | 2026-04-10 |
+| 2. Streaming & Lazy Loading | v1.0 | 3/3 | Complete | 2026-04-10 |
+| 3. Calendar Readability & Workflow Polish | v1.0 | 3/3 | Complete | 2026-04-17 |
+| 4. UI Audit Polish | v1.0 | 2/2 | Complete | 2026-04-17 |

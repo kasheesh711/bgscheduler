@@ -1,86 +1,138 @@
-# BGScheduler — Performance & UX Improvement
+# BGScheduler
 
 ## What This Is
 
-A performance and UX overhaul of the existing BGScheduler tutor scheduling tool (bgscheduler.vercel.app). The goal is to make data loading near-instant across all views, streamline the search-to-compare workflow into a seamless experience with fewer clicks, and improve calendar readability when multiple tutors are displayed — all without regressing any current functionality. The primary users are non-technical admin staff who need to self-serve tutor comparisons without asking for help.
+A tutor scheduling tool for BG Education admin staff that searches tutor availability from Wise API snapshots and surfaces side-by-side compare views for up to 3 tutors at once. After v1.0, BGScheduler is a snappy GCal-style workspace with server-streamed data, lazy-loaded calendar components, one-click compare workflow, and an accessibility-audited UI. Primary users are 8 allowlisted non-technical admin staff who self-serve tutor comparisons without engineering support.
 
 ## Core Value
 
 Admin staff can find, compare, and schedule tutors instantly and independently — no waiting, no confusion, no handholding.
 
+## Current State
+
+**Shipped version:** v1.0 (2026-04-17)
+**Production URL:** https://bgscheduler.vercel.app
+**Status:** Live, daily Wise sync active, 246 tests passing
+
+### What's live in v1.0
+- Google OAuth login with admin email allowlisting (8 users)
+- Daily Wise API sync with atomic snapshot promotion (first successful sync 2026-04-07)
+- In-memory search index singleton with stale detection, anchored on `globalThis` (HMR-safe)
+- Range search with recurring / one-time modes, qualification and modality filtering
+- Side-by-side search (left) + compare (right) workspace on `/search`
+- Compare up to 3 tutors with week-scoped schedules, same-student conflict detection, shared free slot computation
+- Async Server Component streaming with `cacheComponents: true` + `cacheTag('snapshot')` invalidation
+- Lazy-loaded WeekOverview, CalendarGrid, DiscoveryPanel via `next/dynamic`
+- Client-side tutor cache with incremental fetch (AbortController race safety)
+- GCal-style weekly calendar grid with per-tutor lane tints, sticky lane headers, today indicator line, numbered conflict count badges, hover tooltips
+- Quick-add "+" button on search results (3 clicks → 1)
+- Fullscreen compare toggle, `?week=YYYY-MM-DD` URL sync, ArrowLeft/Right keyboard nav
+- aria-labels on all interactive controls, semantic color tokens, visible DiscoveryPanel error feedback
+- Discovery modal for finding candidate tutors
+- Data health dashboard with skeleton loading + retry guidance
+- Fail-closed safety (unresolved identity/modality/qualification → Needs Review, never Available)
+
 ## Requirements
 
 ### Validated
 
-- ✓ Google OAuth login with admin email allowlisting — existing
-- ✓ Daily Wise API sync with atomic snapshot promotion — existing
-- ✓ In-memory search index with stale detection — existing
-- ✓ Range search with recurring/one-time modes — existing
-- ✓ Qualification and modality filtering — existing
-- ✓ Compare up to 3 tutors with week-scoped schedules — existing
-- ✓ Conflict detection (same student overlap) — existing
-- ✓ Shared free slot computation — existing
-- ✓ Client-side tutor cache with incremental fetch — existing
-- ✓ GCal-style weekly calendar grid — existing
-- ✓ Discovery modal for finding candidate tutors — existing
-- ✓ Data health dashboard — existing
-- ✓ Fail-closed safety (unresolved → Needs Review) — existing
+**v1.0 milestone (shipped 2026-04-17):**
+- ✓ PERF-01..03 — Component decomposition + `useCompare` hook + `globalThis` singletons — v1.0
+- ✓ PERF-04..07 — Async RSC streaming + `cacheComponents` + lazy loading + snapshot-tagged cache — v1.0
+- ✓ CAL-01..04 — Per-tutor lane tints, headers, today indicator, numeric conflict badges — v1.0
+- ✓ FLOW-01..04 — Quick-add "+" button, hover tooltips, `?week=` URL sync, keyboard nav — v1.0
+- ✓ UIFIX-01..07 — aria-labels, semantic tokens, error feedback, typography, TUTOR_COLORS consolidation, data-health UX — v1.0 (5 items pending human QA)
+- ✓ INFRA-01..02 — `loading.tsx` skeleton + 82+ tests passing — v1.0 (246 tests now passing)
+
+**Pre-v1 (existing):**
+- ✓ Google OAuth + admin allowlist
+- ✓ Daily Wise sync + atomic snapshot promotion
+- ✓ Range search (recurring / one-time)
+- ✓ Qualification + modality filtering
+- ✓ Compare up to 3 tutors, conflict detection, shared free slots
+- ✓ GCal-style weekly grid
+- ✓ Discovery modal
+- ✓ Data health dashboard
+- ✓ Fail-closed safety
 
 ### Active
 
-- [ ] Near-instant data loading across initial page load, search results, and compare view
-- [ ] Unified search+compare workspace that reduces clicks to compare tutors
-- [ ] Clear visual separation between days when multiple tutors are displayed in the calendar
-- [ ] Calendar readability improvements for admin staff (tutor lanes distinguishable at a glance)
+Next milestone goals — to be scoped via `/gsd-new-milestone`. Candidates rolling forward:
+
+- Complete 5 outstanding Phase 04 human-QA items (screen-reader AT, discovery error state in browser, light/dark semantic colors, skeleton proportions, text-[10px] legibility)
+- Address Phase 03 polish findings: M1 (URL-sync dep stability), M2 (midnight crossover), M3 (`?week=` regex strictness), L1–L4 (semantic today indicator, dead-code cleanup, `useCallback` on `addTutor`, mount-effect closure)
+- Retroactive Phase 02 VERIFICATION.md attestation (or accept integration-check as verification of record)
+- Remove unused `TutorSelector` component body at `src/components/compare/tutor-selector.tsx:19`
+- Reliable online/onsite detection (current heuristic under-matches — most sessions appear as onsite)
+- Past-day session visibility (Wise FUTURE API does not return past sessions)
 
 ### Out of Scope
 
-- Mobile/tablet responsive redesign — web-first for admin staff on desktop
-- Color palette changes — sky blue palette stays per user preference
-- Calendar grid layout overhaul — GCal-style weekly grid stays per user preference
-- Wise API or sync pipeline changes — data layer is working and not the bottleneck
-- New feature additions (notifications, reporting, etc.) — this is a polish/perf milestone
+| Feature | Reason | Still Valid? |
+|---------|--------|--------------|
+| Mobile/tablet responsive redesign | Admin staff desktop-only | ✓ |
+| Color palette changes | Sky blue palette stays (user preference) | ✓ |
+| Calendar grid layout overhaul | GCal-style stays (user preference) | ✓ |
+| Wise API / sync pipeline changes | Data layer is stable, not a bottleneck | ✓ |
+| React Query / SWR integration | Existing client cache works for 3 fetch patterns | ✓ |
+| Drag-and-drop rescheduling | Read-only tool; write-back creates integrity risk | ✓ |
+| Real-time collaborative viewing | Only 8 users; WebSocket overkill | ✓ |
+| FullCalendar library | Custom grid lighter and fits exact use case | ✓ |
+| Dark mode polish | Low ROI for office-hours admin tool | ✓ |
 
 ## Context
 
-- **Live production app** at bgscheduler.vercel.app with 8 allowlisted admin users
-- **Stack**: Next.js 16 App Router, TypeScript, Tailwind, shadcn/ui, Drizzle ORM, Neon Postgres, Vercel hosting
-- **Current architecture**: In-memory search index singleton, all search/compare queries run against it. Client-side tutor cache with incremental fetch already exists.
-- **User feedback**: Admin staff find the calendar hard to read when multiple tutors are shown — tutor lanes within each day blur together visually. The workflow from search to compare involves too many clicks. Everything feels sluggish.
-- **Brownfield**: Extensive existing codebase with 82 passing tests. All changes must be backward-compatible.
+- **Live production app** at bgscheduler.vercel.app (8 allowlisted admin users)
+- **Stack:** Next.js 16 App Router, TypeScript, Tailwind, shadcn/ui, Drizzle ORM, Neon Postgres (ap-southeast-1), Vercel hosting
+- **Architecture:** In-memory search index singleton (globalThis-anchored), all search/compare queries run against it. Async RSC with `'use cache'` + `cacheTag('snapshot')` for filter/tutor data. Client-side tutor cache with incremental fetch.
+- **Codebase state after v1.0:** `/search` page is a 16-line Suspense wrapper delegating to `SearchWorkspace` composition root (was 878 lines pre-v1.0). `useCompare` hook centralizes compare state. Skeleton convention: `src/components/skeletons/{feature}-skeleton.tsx`. Canonical data functions in `src/lib/data/` with `'use cache'`.
+- **Tests:** 246 passing (82 pre-v1.0 baseline preserved; v1.0 added 164)
+- **Known limits:** Online/onsite detection heuristic under-matches (visual distinction removed from cards; modality info still shown in popover). Past-day sessions unavailable from Wise FUTURE API — compare view falls back to nearest future occurrence.
 
 ## Constraints
 
-- **Stack**: No stack changes — Next.js 16, Tailwind, shadcn/ui, Drizzle, Neon Postgres
-- **Deployment**: Vercel Hobby plan (daily cron, 300s function timeout)
-- **Data integrity**: Fail-closed safety rules are non-negotiable
-- **Visual**: Keep GCal-style calendar grid and sky blue color palette
-- **Regression**: All 82 existing tests must continue to pass
+- **Stack:** No stack changes — Next.js 16, Tailwind, shadcn/ui, Drizzle, Neon Postgres
+- **Deployment:** Vercel Hobby plan (daily cron, 300s function timeout). Upgrade to Pro for 30-min sync cadence.
+- **Data integrity:** Fail-closed safety rules are non-negotiable — unresolved identity/modality/qualification → Needs Review, never Available
+- **Visual:** Keep GCal-style calendar grid and sky blue color palette
+- **Regression:** All 246 existing tests must continue to pass
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Keep GCal-style grid | User preference, familiar to staff | — Pending |
-| Keep sky blue palette | User preference, already polished | — Pending |
-| Target near-instant feel | Admin staff self-service requires zero friction | — Pending |
+| Keep GCal-style grid | User preference, familiar to staff | ✓ Good — shipped in v1.0, lane tints added |
+| Keep sky blue palette | User preference, already polished | ✓ Good — preserved through v1.0 |
+| Target near-instant feel | Admin staff self-service requires zero friction | ✓ Good — async RSC + cacheComponents + lazy loading shipped |
+| Component extraction before streaming | Phase 1 blocker for Phase 2 RSC conversion | ✓ Good — clean boundaries enabled Phase 2 |
+| Linear dependency chain (1 → 2 → 3 → 4) | Each phase builds on prior's clean boundaries | ✓ Good — zero cross-phase rework |
+| Canonical types in `src/lib/data/` | Server-boundary reuse of `FilterOptions`, tutor list | ✓ Good — clean RSC → client prop streaming |
+| `revalidateTag('snapshot', { expire: 0 })` over `'max'` | Immediate invalidation without serving stale | ✓ Good — sync endpoint works as intended |
+| Skeleton convention: Server Components | Zero JS overhead on loading states | ✓ Good — matches Phase 2 streaming model |
+| next/dynamic at module scope with `.then(mod => mod.Name)` | Named-export pattern for lazy loading | ✓ Good — DiscoveryPanel, WeekOverview, CalendarGrid all split cleanly |
+| TUTOR_COLORS canonical in `session-colors.ts` | Alongside other color utilities | ✓ Good — single source of truth achieved |
+| Today indicator literal `bg-red-500` (not token) | GCal convention | ⚠️ Revisit — accepted as L1 tech debt, candidate for semantic token |
+| URL sync via `replaceState` (omit current week) | Avoid URL noise for default state | ⚠️ Revisit — effect deps include unmemoized `compare` (M1) |
+| Keyboard nav guarded against input/contentEditable | T-03-11 mitigation | ✓ Good — no hijack |
+| Discovery error message generic | No server detail leakage | ✓ Good |
+| Accept Phase 02 verification via integration check | Integration-checker covers same ground, formal artifact skipped | ⚠️ Revisit — consider retroactive VERIFICATION.md |
 
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
 
 **After each phase transition** (via `/gsd-transition`):
-1. Requirements invalidated? → Move to Out of Scope with reason
+1. Requirements invalidated? → Move to Out of Scope
 2. Requirements validated? → Move to Validated with phase reference
 3. New requirements emerged? → Add to Active
 4. Decisions to log? → Add to Key Decisions
-5. "What This Is" still accurate? → Update if drifted
+5. "What This Is" drift? → Update
 
 **After each milestone** (via `/gsd-complete-milestone`):
-1. Full review of all sections
-2. Core Value check — still the right priority?
-3. Audit Out of Scope — reasons still valid?
-4. Update Context with current state
+1. Full section review
+2. Core Value check
+3. Out of Scope audit
+4. Context update
 
 ---
-*Last updated: 2026-04-16 after Phase 4 completion*
+*Last updated: 2026-04-17 after v1.0 milestone*

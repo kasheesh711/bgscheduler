@@ -1,84 +1,64 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: executing
-stopped_at: Phase 3 UI-SPEC approved
-last_updated: "2026-04-17T05:22:46.702Z"
+milestone: null
+milestone_name: null
+status: milestone_complete
+stopped_at: v1.0 milestone archived
+last_updated: "2026-04-17T12:30:00.000Z"
 last_activity: 2026-04-17
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 11
-  completed_plans: 11
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-10)
+See: .planning/PROJECT.md (updated 2026-04-17 after v1.0 milestone)
 
 **Core value:** Admin staff can find, compare, and schedule tutors instantly and independently
-**Current focus:** Phase 02 — streaming-lazy-loading
+**Current focus:** Between milestones — v1.0 shipped 2026-04-17, v1.1 not yet scoped
 
 ## Current Position
 
-Phase: 04
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-04-17
+Milestone: — (v1.0 complete, v1.1 not started)
+Phase: —
+Plan: —
+Status: Awaiting `/gsd-new-milestone` to scope v1.1
 
-Progress: [..........] 0%
+Progress: ██████████ 100% (v1.0)
 
-## Performance Metrics
+## Last Completed Milestone
 
-**Velocity:**
+**v1.0 — Performance & UX Improvement** (shipped 2026-04-17)
 
-- Total plans completed: 8
-- Average duration: -
-- Total execution time: 0 hours
-
-**By Phase:**
-
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| 01 | 3 | - | - |
-| 04 | 2 | - | - |
-| 03 | 3 | - | - |
-
-**Recent Trend:**
-
-- Last 5 plans: -
-- Trend: -
-
-*Updated after each plan completion*
-| Phase 02 P01 | 140s | 2 tasks | 4 files |
-| Phase 02 P02 | 182 | 2 tasks | 9 files |
-| Phase 02 P03 | 57 | 1 tasks | 1 files |
+- 4 phases, 11 plans, 24/24 requirements satisfied
+- Integration check: 7/7 wiring points + 5/5 E2E flows PASS
+- Audit status: `tech_debt` (no functional blockers; 13 accepted debt items rolled forward)
+- Tag: `v1.0`
+- Archive: `.planning/milestones/v1.0-*.md`
 
 ## Accumulated Context
 
-### Decisions
+### Decisions (recent)
 
-Decisions are logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work:
+Full log in PROJECT.md Key Decisions table. Last-mile decisions from v1.0:
 
-- [Roadmap]: 3 phases (coarse granularity) -- component extraction first, then streaming, then visual polish
-- [Roadmap]: Linear dependency chain (1 -> 2 -> 3) since RSC conversion requires clean component boundaries first
-- [Phase 02]: Skeleton convention: src/components/skeletons/{feature}-skeleton.tsx, named export, no use client, bg-muted animate-pulse
-- [Phase 02]: FilterOptions canonical type in src/lib/data/filters.ts, re-exported from search-form.tsx
-- [Phase 02]: revalidateTag with { expire: 0 } for immediate invalidation in Route Handlers (not 'max')
-- [Phase 02]: DiscoveryPanel uses null loading fallback (renders inside modal, brief flash acceptable)
+- Accept Phase 02 integration-check as verification of record (missing VERIFICATION.md is process gap, not functional)
+- Roll Phase 04 human-QA items forward to v1.1 rather than blocking milestone
+- Today indicator uses literal `bg-red-500` (GCal convention) — flagged as L1 polish candidate
 
 ### Pending Todos
 
-None yet.
+None from v1.0 workflow. v1.1 candidate backlog lives in `.planning/ROADMAP.md` § v1.1 Candidate Backlog.
 
 ### Blockers/Concerns
 
-None yet.
+None blocking. Phase 04 carries `human_needed` verification status (5 manual QA items) — rolled to v1.1.
 
 ### Quick Tasks Completed
 
@@ -89,6 +69,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-16T13:11:37.461Z
-Stopped at: Phase 3 UI-SPEC approved
-Resume file: .planning/phases/03-calendar-readability-workflow-polish/03-UI-SPEC.md
+Last session: 2026-04-17 — v1.0 milestone completion
+Stopped at: Milestone archived, tag v1.0 pending push to remote
+Resume: Run `/gsd-new-milestone` to scope v1.1
