@@ -1,10 +1,10 @@
 ---
 gsd_state_version: 1.0
-milestone: null
-milestone_name: null
-status: between_milestones
-stopped_at: v1.0.1 out-of-band ship recorded, v1.1 not yet scoped
-last_updated: "2026-04-20T09:45:00.000Z"
+milestone: v1.1
+milestone_name: Data Fidelity & Depth
+status: defining_requirements
+stopped_at: v1.1 scoped — awaiting requirements + roadmap
+last_updated: "2026-04-20T10:00:00.000Z"
 last_activity: 2026-04-20
 progress:
   total_phases: 0
@@ -18,19 +18,18 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-20 after v1.0.1 out-of-band ship)
+See: .planning/PROJECT.md (updated 2026-04-20 — milestone v1.1 Data Fidelity & Depth scoped)
 
 **Core value:** Admin staff can find, compare, and schedule tutors instantly and independently
-**Current focus:** Between milestones — v1.0 + v1.0.1 shipped, v1.1 not yet scoped
+**Current focus:** v1.1 Data Fidelity & Depth — close data-truth gaps, ship visual polish, drain v1.0 polish backlog
 
 ## Current Position
 
-Milestone: — (v1.0 + v1.0.1 complete, v1.1 not started)
-Phase: —
+Milestone: v1.1 Data Fidelity & Depth
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting `/gsd-new-milestone` to scope v1.1
-
-Progress: ██████████ 100% (v1.0 + v1.0.1 shipped)
+Status: Defining requirements
+Last activity: 2026-04-20 — Milestone v1.1 started
 
 ## Last Completed Milestone
 
@@ -46,38 +45,50 @@ Progress: ██████████ 100% (v1.0 + v1.0.1 shipped)
 
 **v1.0.1 (out-of-band, 2026-04-20)** — commit `9e3e4ad`
 
-- Implemented a design deck the user provided (~/Downloads/BeGifted Scheduling/)
-- Recommended-slots hero + Copy-for-parent drawer + idiot-proof search defaults
-- 5 files changed, +632/-7; zero backend changes (pure client-side derivation from existing range response)
-- Live at bgscheduler.vercel.app (Vercel alias `bgscheduler-lbctueew8-kevins-projects-6ebb4efc.vercel.app`)
+- Recommended-slots hero + copy-for-parent drawer + idiot-proof search defaults
+- 5 files changed, +632/-7; zero backend changes (client-side derivation from existing range response)
+- Live at bgscheduler.vercel.app
 - Shipped outside GSD phase workflow — acknowledged as a Key Decision in PROJECT.md
-- Handoff file at `.planning/.continue-here.md` (archived) captured the full context
+- UAT pending (will be covered by POLISH-15 in v1.1)
+
+## v1.1 Scope Summary
+
+**Goal:** Close data-truth gaps, ship v2 visual polish, drain v1.0 polish backlog.
+
+**Features:**
+- MOD-01 Reliable online/onsite detection (`isOnlineVariant` + sessionType, fail-closed)
+- PAST-01 Past-day session visibility (Wise historical endpoint; fallback = snapshot-based DB storage)
+- VPOL-01 View transitions
+- VPOL-02 Sticky tutor legend
+- VPOL-03 Density overview / mini-map (shape TBD)
+- POLISH-01..16 (v1.0 polish backlog drain — QA, M/L findings, VERIFICATION.md, TutorSelector cleanup, UAT, recommend.test.ts)
+
+**Deferred to v1.2:** AWRK-01 inline free-slot actions, AWRK-02 conflict resolution suggestions, AWRK-03 drag-to-select, recommended-slots telemetry, recurring-mode calendar date labels.
+
+**Phase numbering:** Continues from Phase 4 (v1.0). v1.1 starts at Phase 5.
 
 ## Accumulated Context
 
 ### Decisions (recent)
 
-Full log in PROJECT.md Key Decisions table. Last-mile decisions from v1.0.1:
+Full log in PROJECT.md Key Decisions table. Milestone-scoping decisions from v1.1:
 
-- v1.0.1 shipped out-of-band (no /gsd-new-milestone, no PLAN.md) — work was small + user provided full design deck
-- Derive recommended slots client-side from existing `RangeSearchResponse` — no Wise/DB/index changes
-- Reject design deck's density calendar view — would have broken the GCal grid principles users prefer
-- Reject design deck's pill/unified query bar — dropdowns are more idiot-proof for non-technical staff
-- Default search window shifted to 15:00–20:00 / 90 min to match tutor working hours
-- Direct push to main (no PR) — no CI / no branch protection / solo contributor
+- Modality detection stays fail-closed (no admin override UI) — matches existing safety rules
+- Past-day REQ has a fallback plan baked in (DB-snapshot storage) so Wise endpoint absence doesn't block the milestone
+- VPOL-03 density-overview shape deferred to phase planning (3 candidate shapes: sidebar strip / month strip / floating widget)
+- v1.1 bundles v1.0 polish/tech-debt so v1.2 starts with a clean backlog
+- Advanced workflow (AWRK-*) deferred to v1.2 to keep v1.1 tight
 
 ### Pending Todos
 
-- **Human UAT on production** for v1.0.1: sign in, verify recommended slots + copy drawer + unchanged calendar grid
 - Orphan working-tree noise still untouched: duplicate `route 2.ts` files, `.planning/debug/`, `04-CONTEXT.md`, `FULL-APP-UI-REVIEW.md`, `.planning/ui-reviews/`
-- Optional v1.0.1 follow-ups: add `recommend.test.ts`, telemetry on which rank tier gets copied most, explicit calendar date in recurring-mode recommended-slot cards
-- v1.1 backlog still lives in `.planning/ROADMAP.md` § v1.1 Candidate Backlog
+- Human UAT on production for v1.0.1 (now tracked as POLISH-15)
 
 ### Blockers/Concerns
 
-None blocking. Phase 04 carries `human_needed` verification status (5 manual QA items). v1.0.1 UAT is pending but non-blocking — feature is live and reversible via `npx vercel rollback`.
+None blocking. PAST-01 has dependency on Wise API surface (historical endpoint existence) — research phase or phase planning will confirm; fallback path already agreed.
 
-### Anti-patterns discovered this session (advisory)
+### Anti-patterns (advisory, preserved from v1.0.1 session)
 
 - `git checkout main -- .` inside a feature branch silently reverts working-tree files that exist on main — use `git worktree add` or a second clone when comparing across branches
 - `tsc --noEmit | tail -N && echo OK` hides tsc's exit code (tail always exits 0) — run tsc without piping, or check exit code separately
@@ -92,6 +103,6 @@ None blocking. Phase 04 carries `human_needed` verification status (5 manual QA 
 
 ## Session Continuity
 
-Last session: 2026-04-20 — v1.0.1 ship + docs update
-Stopped at: PROJECT.md + AGENTS.md + STATE.md updated to reflect v1.0.1; HANDOFF.json + `.continue-here.md` archived
-Resume: Run `/gsd-new-milestone` to scope v1.1, or do UAT on prod first
+Last session: 2026-04-20 — /gsd-new-milestone scoping v1.1 Data Fidelity & Depth
+Stopped at: PROJECT.md + STATE.md updated; awaiting research decision + requirements + roadmap
+Resume: Continue /gsd-new-milestone workflow (research decision → REQUIREMENTS.md → ROADMAP.md)

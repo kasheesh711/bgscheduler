@@ -38,6 +38,20 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 - Data health dashboard with skeleton loading + retry guidance
 - Fail-closed safety (unresolved identity/modality/qualification → Needs Review, never Available)
 
+## Current Milestone: v1.1 Data Fidelity & Depth
+
+**Goal:** Close the data-truth gaps (reliable online/onsite, past-day session visibility), deliver v2 visual polish (view transitions, sticky tutor legend, density overview), and drain the v1.0 polish backlog so v1.2 starts clean.
+
+**Target features:**
+- Reliable online/onsite detection via `isOnlineVariant` + sessionType; fail-closed Needs Review when ambiguous
+- Past-day session visibility — try Wise historical endpoint; fallback to DB-snapshot storage of past FUTURE sessions
+- View transitions (VPOL-01) across calendar / week / tutor navigation
+- Sticky tutor legend (VPOL-02) during calendar scroll
+- Density overview / mini-map (VPOL-03) — shape TBD in phase planning
+- v1.0 polish & tech-debt drain: Phase 04 human QA (5 items), Phase 03 M1–M3 + L1–L4 findings, retroactive Phase 02 VERIFICATION.md, TutorSelector cleanup, v1.0.1 UAT + `recommend.test.ts`
+
+**Deferred to v1.2:** AWRK-01 inline free-slot actions, AWRK-02 conflict resolution suggestions, AWRK-03 drag-to-select.
+
 ## Requirements
 
 ### Validated
@@ -68,16 +82,21 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 
 ### Active
 
-Next milestone goals — to be scoped via `/gsd-new-milestone`. Candidates rolling forward:
+v1.1 scope (committed 2026-04-20, roadmap pending):
 
-- **Human UAT of v1.0.1 ship** (recommended-slots cards, copy-for-parent drawer, defaults — production browser check still pending at time of ship)
-- Complete 5 outstanding Phase 04 human-QA items (screen-reader AT, discovery error state in browser, light/dark semantic colors, skeleton proportions, text-[10px] legibility)
-- Address Phase 03 polish findings: M1 (URL-sync dep stability), M2 (midnight crossover), M3 (`?week=` regex strictness), L1–L4 (semantic today indicator, dead-code cleanup, `useCallback` on `addTutor`, mount-effect closure)
-- Retroactive Phase 02 VERIFICATION.md attestation (or accept integration-check as verification of record)
-- Remove unused `TutorSelector` component body at `src/components/compare/tutor-selector.tsx:19`
-- Reliable online/onsite detection (current heuristic under-matches — most sessions appear as onsite)
-- Past-day session visibility (Wise FUTURE API does not return past sessions)
-- Optional v1.0.1 follow-ups: recommended-slots tests (`recommend.test.ts`), recommended-slots telemetry (which tier gets copied most), day/date label for recurring-mode cards (currently shows "every week" without calendar date)
+- **MOD-01** Reliable online/onsite detection — `isOnlineVariant` + sessionType primary signals; unresolved → Needs Review (fail-closed)
+- **PAST-01** Past-day session visibility — prefer Wise historical endpoint; fallback = snapshot-based DB storage of what was FUTURE at sync time
+- **VPOL-01** View transitions — smooth calendar/week/tutor navigation
+- **VPOL-02** Sticky tutor legend during calendar scroll
+- **VPOL-03** Density overview / mini-map (shape TBD)
+- **POLISH-01..05** Phase 04 human-QA items (screen-reader AT, discovery error state, light/dark semantic colors, skeleton proportions, text-[10px] legibility)
+- **POLISH-06..12** Phase 03 findings: M1 URL-sync dep stability, M2 midnight crossover, M3 `?week=` regex strictness, L1 semantic today indicator, L2 dead-code cleanup, L3 `useCallback` on `addTutor`, L4 mount-effect closure
+- **POLISH-13** Retroactive Phase 02 `VERIFICATION.md` attestation
+- **POLISH-14** Remove unused `TutorSelector` component body at `src/components/compare/tutor-selector.tsx:19`
+- **POLISH-15** Human UAT of v1.0.1 ship on production
+- **POLISH-16** `recommend.test.ts` for v1.0.1 ranking logic
+
+Deferred to v1.2: AWRK-01 inline free-slot actions, AWRK-02 conflict resolution suggestions, AWRK-03 drag-to-select, recommended-slots telemetry, recurring-mode calendar date labels.
 
 ### Out of Scope
 
@@ -154,4 +173,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Context update
 
 ---
-*Last updated: 2026-04-20 after v1.0.1 out-of-band ship (`9e3e4ad`)*
+*Last updated: 2026-04-20 — milestone v1.1 Data Fidelity & Depth scoped via /gsd-new-milestone*
