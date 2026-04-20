@@ -1,206 +1,204 @@
-# Technology Stack: Performance & UX Improvements
+# Stack Research — v1.1 Data Fidelity & Depth
 
-**Project:** BGScheduler Performance & UX Overhaul
-**Researched:** 2026-04-10
+**Domain:** Next.js 16 / React 19.2 production web app — additive features only
+**Researched:** 2026-04-20
+**Confidence:** HIGH for (a) view transitions + (b) sticky/density viz, MEDIUM for (c) Wise historical endpoint
 
-## Recommended Stack
+## TL;DR
 
-The existing stack is locked (Next.js 16, Tailwind, shadcn/ui, Drizzle, Neon Postgres). This document focuses on **which features within that stack to adopt** for near-instant performance.
+1. **View transitions (VPOL-01): use the native CSS `startViewTransition()` browser API directly.** Do NOT add `motion` / `framer-motion`. Do NOT enable `experimental.viewTransition` in `next.config.ts`. The React 19.2 `<ViewTransition>` component and the Next.js `experimental.viewTransition` flag are both still experimental and have a known conflict with `cacheComponents: true` (Vercel/next.js #85693, Nov 2025, unresolved at time of writing). Our calendar/week/tutor transitions are same-page state swaps — they don't need router-integrated view transitions at all.
+2. **Sticky legend (VPOL-02) + density overview (VPOL-03): zero new dependencies.** Pure `position: sticky` + Tailwind + inline SVG. We already use `sticky top-0` in `week-overview.tsx:297` and `calendar-grid.tsx:103`.
+3. **Past-day sessions (PAST-01): the Wise public API docs DO NOT document a historical-session endpoint in any public source we could reach.** The safe v1.1 plan is the DB-snapshot fallback (already named in PROJECT.md); confirm the `status` parameter options via the Wise Postman collection or `devs@wiseapp.live` as a P0 spike before sinking engineering time into the historical path.
+4. **Online/onsite detection (MOD-01): no stack change.** `WiseTeacher.isOnlineVariant` and `WiseSession.type` both already exist on our loosely-typed Wise response shapes (`[key: string]: unknown` index signatures in `src/lib/wise/types.ts`). We just need to tighten the types and wire them into `normalization/modality.ts`.
 
-### Core Performance Features to Enable
+## Recommended Stack (NEW additions only)
 
-| Feature | Config/Version | Purpose | Why |
-|---------|---------------|---------|-----|
-| `cacheComponents: true` | next.config.ts | Enables PPR + `use cache` + `<Activity>` state preservation | Single flag that unlocks the entire Next.js 16 caching/streaming model. Without it, every request is fully dynamic with no prerendering. This is the highest-impact single change. |
-| `<Suspense>` boundaries | React 19.2 (built-in) | Granular streaming of dynamic content | Lets the static shell (nav, layout, form skeleton) paint instantly while data-dependent sections stream in independently. The search page currently blocks on filter data before rendering anything. |
-| `loading.tsx` files | Next.js file convention | Page-level skeleton fallback | Automatic Suspense wrapping at the route level. The simplest way to show instant feedback on navigation. |
-| `unstable_instant` export | Next.js 16 route config | Validates instant navigation structure | Dev-time and build-time validation that Suspense boundaries are correctly placed for client-side navigations. Catches regressions before production. |
-| React `<Activity>` | React 19.2 via `cacheComponents` | Preserves component state during navigation | When navigating away and back, form inputs, scroll position, and selected state are preserved automatically. Critical for the search+compare workflow where users switch between pages. |
-| Turbopack FS cache | `experimental.turbopackFileSystemCacheForDev` | Faster dev rebuilds | Already the default bundler in Next.js 16. FS caching speeds up restarts for iterative development. |
+### Core Technologies (NEW)
 
-### Caching Strategy
+**None.** No new dependencies are required for v1.1. All NEW capabilities (view transitions, sticky legend, density overview, modality detection, historical sessions) are achievable with the existing stack.
 
-| Technology | Scope | Purpose | Why |
-|------------|-------|---------|-----|
-| `'use cache'` directive | Server Components, functions | Cache stable data (filters, tutor list, snapshot metadata) | Filters and tutor lists change only when a new snapshot is promoted (daily). Caching these at the component/function level eliminates redundant DB queries and makes the static shell instant. |
-| `cacheTag()` | Inside `'use cache'` scopes | Tag cached entries for targeted invalidation | Tag all snapshot-derived caches with `'snapshot'`. When a new sync runs, invalidate all stale data with a single call. |
-| `cacheLife()` | Inside `'use cache'` scopes | Set TTL profiles | Use `'hours'` for filter/tutor list data (changes daily), `'max'` for layout/navigation shells. |
-| Client-side `Map` cache | React `useRef` | Avoid refetching tutor schedules already loaded | Already implemented. Keep as-is -- incremental fetch with `fetchOnly` is already well-designed. |
-| `revalidateTag(tag, 'max')` | Sync endpoint | Invalidate snapshot-derived caches after sync | SWR behavior: serve stale immediately, revalidate in background. Users see cached data instantly while fresh data loads. |
+### Supporting Libraries (NEW)
 
-### Streaming Architecture
+**None.** The existing stack covers all v1.1 needs:
 
-| Pattern | Where | Purpose | Why |
-|---------|-------|---------|-----|
-| Server Component for filter data | `/search` page | Fetch filters on the server, no client `useEffect` | Eliminates the flash of empty dropdowns. Server fetches filters from the in-memory index, streams them as part of the initial HTML. No client-side `fetch('/api/filters')` waterfall. |
-| Server Component for tutor list | Tutor combobox data | Fetch tutor names on the server | Same rationale: eliminates the client-side fetch that blocks the combobox from being usable on first load. |
-| Client Component for search/compare interaction | Search form, compare panel | Handle user interactions, state, AbortController | Keep interactive elements as client components. The form, week picker, tutor selector, and calendar grid must remain `'use client'`. |
-| Sibling `<Suspense>` boundaries | Search results, compare panel | Independent streaming | Search results and compare panel should be in separate Suspense boundaries so one doesn't block the other. |
+| Existing | Version | Already covers v1.1 need |
+|----------|---------|--------------------------|
+| Browser (Chrome 115+ / Safari 18+ / Firefox 144+) | native | `document.startViewTransition()` — VPOL-01 |
+| Tailwind CSS | ^4 | `sticky top-0 z-[N]` — VPOL-02 |
+| React + inline SVG | 19.2.4 | Density mini-map (VPOL-03) via `<svg>` with rect bars |
+| `date-fns` | ^4.1.0 | Week/day arithmetic already in use |
+| `drizzle-orm` + Neon | ^0.45.2 / ^1.0.2 | Snapshot-stored past FUTURE sessions (PAST-01 fallback) |
+| `zod` | ^4.3.6 | Tighten `WiseTeacher.isOnlineVariant` / `WiseSession.type` parsing (MOD-01) |
 
-### Supporting Libraries (already installed, no new deps needed)
+### Development Tools (NEW)
 
-| Library | Version | Purpose | Performance Role |
-|---------|---------|---------|-----------------|
-| shadcn/ui `Skeleton` | Built-in | Skeleton loading states | Use for search form, calendar grid, and filter dropdown placeholders |
-| shadcn/ui `Tooltip` | Built-in | Session hover info | Already available |
-| `date-fns` | 4.x | Date manipulation | Already used. No change needed. |
-| `cmdk` | 1.x | Combobox search | Already used for tutor search. No change needed. |
+None. Vitest 4.1.2 + the existing test conventions cover the added test surface (expected ~15–30 new tests across `modality.test.ts` updates, a historical-sessions snapshot path, and density-overview unit tests).
 
-## Architecture Shift: From Client-Fetch to Server-Stream
+## Installation
 
-### Current Pattern (slow)
-
-```
-Browser navigates to /search
-  -> Server sends empty HTML shell (entire page is "use client")
-  -> Browser downloads JS bundle
-  -> Browser hydrates the empty shell
-  -> useEffect fires fetch('/api/filters')     <-- WATERFALL #1
-  -> Filters arrive, dropdowns populate
-  -> useEffect fires fetch('/api/tutors')      <-- WATERFALL #2
-  -> Tutors arrive, combobox populates
-  -> User can finally interact with a populated UI
+```bash
+# No new packages.
+# v1.1 ships entirely on the v1.0 dependency set.
 ```
 
-**Problem:** 3-4 sequential round trips before the user can interact. The entire search page is one giant `"use client"` component (879 lines). Nothing renders on the server.
+## Feature-by-Feature Stack Decisions
 
-### Target Pattern (near-instant)
+### (a) View Transitions (VPOL-01) — use `document.startViewTransition()`
 
-```
-Browser navigates to /search
-  -> Server renders static shell instantly (nav, form layout, skeleton placeholders)
-  -> Server streams filter data inline (embedded in RSC payload, no separate fetch)
-  -> Server streams tutor list inline (same)
-  -> Browser hydrates progressively
-  -> User sees populated dropdowns on first paint
-```
+**Decision:** Use the browser-native CSS View Transitions API directly, gated behind a feature check. Do NOT install `motion` / `framer-motion`. Do NOT set `experimental.viewTransition: true` in `next.config.ts`.
 
-**Key change:** Move filter and tutor data fetching from client-side `useEffect` to Server Components with `'use cache'`. The search form itself stays as a Client Component but receives pre-fetched data as props.
+**Why:**
 
-### Concrete Refactoring Pattern
+1. **React 19.2.4 stable does NOT export `<ViewTransition>`.** It lives in `react/canary` behind `@enableViewTransition` (confirmed by inspecting `node_modules/@types/react/canary.d.ts` lines 38–109 and `experimental.d.ts` line 37). The Next.js 16 built-in doc `node_modules/next/dist/docs/01-app/03-api-reference/05-config/01-next-config-js/viewTransition.md` literally says: *"for now, we strongly advise against using this feature in production."*
+2. **Known Next.js 16 + cacheComponents conflict.** [Vercel/next.js #85693](https://github.com/vercel/next.js/issues/85693) (opened Nov 2025, reproducible in 16.0.1 + 19.2.0) documents that `experimental.viewTransition` + `cacheComponents: true` together produce a broken, "blurred, abrupt" animation instead of a smooth transition. Our v1.0 app relies on `cacheComponents: true` — enabling `viewTransition` is a regression risk, not a win.
+3. **Our transitions are same-page state swaps, not router navigations.** Week picker, tutor add/remove, calendar/day drill-down all happen inside `/search`. Router-integrated view transitions (the thing `experimental.viewTransition` enables) give us nothing — we need DOM-mutation transitions. Those work today via the plain `document.startViewTransition(callback)` browser API, which is Baseline Newly Available as of Oct 2025 (Chrome 115+, Edge 115+, Safari 18+, Firefox 144+). ([MDN View Transition API](https://developer.mozilla.org/en-US/docs/Web/API/View_Transition_API))
+4. **`motion` / `framer-motion` is 34 kb gzipped minimum** for the `motion` component and requires `"use client"` everywhere or the `motion/react-client` shim. The native API is 0 kb, and it composes naturally with React 19.2's existing `startTransition` / `useDeferredValue`.
+5. **Graceful degradation is free.** Browsers without support just skip the animation — no feature flag, no polyfill, no runtime cost.
+
+**Integration pattern:**
 
 ```tsx
-// BEFORE: Everything in one "use client" file (current state)
-// src/app/(app)/search/page.tsx
 "use client";
-export default function SearchPage() {
-  const [filters, setFilters] = useState(null);
-  useEffect(() => {
-    fetch("/api/filters").then(...)  // Client-side waterfall
-  }, []);
-  // ... 850 more lines
-}
 
-// AFTER: Server Component parent, Client Component child
-// src/app/(app)/search/page.tsx (Server Component -- no directive)
-import { Suspense } from "react";
-import { SearchWorkspace } from "@/components/search/search-workspace";
-import { SearchSkeleton } from "@/components/search/skeletons";
-
-export default function SearchPage() {
-  return (
-    <Suspense fallback={<SearchSkeleton />}>
-      <SearchDataLoader />
-    </Suspense>
-  );
-}
-
-async function SearchDataLoader() {
-  "use cache";
-  cacheLife("hours");
-  cacheTag("snapshot");
-  const filters = await getFilters();   // Direct index call, no HTTP
-  const tutors = await getTutorList();   // Direct index call, no HTTP
-  return <SearchWorkspace filters={filters} tutors={tutors} />;
-}
-
-// src/components/search/search-workspace.tsx
-"use client";
-export function SearchWorkspace({ filters, tutors }: Props) {
-  // All existing interactive logic unchanged,
-  // but filters/tutors arrive as serialized props
-  // instead of via useEffect fetch
+// src/lib/view-transitions.ts
+export function withViewTransition(update: () => void) {
+  if (typeof document === "undefined") return update();
+  const api = (document as Document & { startViewTransition?: (cb: () => void) => unknown })
+    .startViewTransition;
+  if (!api) return update();
+  api.call(document, update);
 }
 ```
 
-### Cache Invalidation After Sync
+Call sites (`use-compare.ts`, calendar day drill-down, tutor add/remove):
 
 ```tsx
-// In the sync-wise API route, after promoting a new snapshot:
-import { revalidateTag } from "next/cache";
-
-// After successful sync promotion:
-revalidateTag("snapshot", "max");
-// All cached filter/tutor data will be refreshed in background
-// Users see stale data instantly, fresh data arrives shortly after
+withViewTransition(() => setWeekStart(nextMonday));
 ```
 
-## What NOT to Do
+Mark transitioning DOM with `view-transition-name: tutor-{id}` in `globals.css` (or inline `style`) — the API cross-fades by name. This keeps all transition logic declarative, CSS-driven, and removable by just unsetting the `view-transition-name`.
 
-| Anti-Pattern | Why It's Bad | What to Do Instead |
-|-------------|-------------|-------------------|
-| Wrap entire page in single `<Suspense>` | Defeats streaming -- nothing shows until everything resolves. On client navigation, root Suspense is above the shared layout and has no effect. | Use sibling Suspense boundaries for independent data sections |
-| Use `'use cache'` on search/compare API routes | These return user-specific filtered results that change per request | Keep API routes dynamic. Cache only the underlying data (filters, tutor list, snapshot metadata) |
-| Add `loading.tsx` to every route | Creates jarring loading states for routes that already load fast | Only add to routes with meaningful async data (`/search`, `/data-health`). Login loads instantly already. |
-| Use `router.push()` for internal navigation | Loses prefetching benefits and layout deduplication | Use `<Link>` component which auto-prefetches on viewport entry and deduplicates shared layouts |
-| Fetch data in `useEffect` when Server Components could provide it | Creates client-side waterfalls, shows empty states, requires loading spinners | Move data fetching to Server Components, pass as props to Client Components |
-| Cache search results or compare responses | User-specific, filtered by time/subject/mode -- infinite cache key space | Only cache the underlying index data and filter options |
-| Disable Turbopack | Slower builds and dev refresh for no benefit | Keep Turbopack (default in Next.js 16) |
-| Put `'use cache'` on components that read cookies/headers | Cached scopes cannot access request-specific data | Read cookies outside cached scope and pass values as arguments |
+**Compatibility with `cacheComponents: true`:** The native `document.startViewTransition()` runs entirely in the client browser after React has committed the DOM update. It has zero interaction with the server-streaming pipeline or the `'use cache'` directive. It does NOT trigger the #85693 issue, which is specifically about Next.js's React-integrated `<Link>` + `ViewTransition` router bridge.
 
-## Configuration Changes
+### (b) Sticky Tutor Legend (VPOL-02) + Density Overview (VPOL-03)
 
-```ts
-// next.config.ts -- target configuration
-import type { NextConfig } from "next";
+**Decision:** Zero new dependencies. Pure Tailwind + inline SVG.
 
-const nextConfig: NextConfig = {
-  cacheComponents: true,  // Enables PPR + use cache + Activity
-  // Consider after core work is done:
-  // reactCompiler: true,  // Auto-memoization (adds build time)
-  // experimental: {
-  //   turbopackFileSystemCacheForDev: true,
-  // },
-};
+**Why sticky legend needs no library:**
 
-export default nextConfig;
-```
+We already use `className="sticky top-0 z-[5] flex bg-background/90 backdrop-blur-sm"` in `week-overview.tsx:297` and `sticky top-0 bg-background z-10` in `calendar-grid.tsx:103`. These are plain CSS `position: sticky` — works in every target browser without any wrapper. The VPOL-02 work is pattern extension, not a new capability.
 
-## Skeleton Component Strategy
+The only common pitfall is sticky + ancestor `overflow-hidden` (which breaks sticky). Our calendar scroll container uses `overflow-y-auto` on the inner grid and `overflow-hidden` only on `body`, so sticky works end-to-end. Any sticky-library candidate (`react-stickynode`, `react-sticky-el`, `react-sticky-box`) is pure overkill for our use case.
 
-Use shadcn/ui `Skeleton` component (already installed) to create matching skeletons:
+**Why density overview needs no library:**
 
-| Component | Skeleton Design |
-|-----------|----------------|
-| Search form | 3x3 grid of skeleton rectangles matching the filter dropdown layout |
-| Availability grid | Table skeleton with header row + 5-6 body rows of skeleton cells |
-| Compare calendar | 7-column week header skeletons + vertical time grid skeleton bars |
-| Tutor combobox | Single skeleton line with rounded pill shape |
-| Week picker | Skeleton bar with left/right arrow placeholders |
-| Tutor selector chips | 3 skeleton pills in a row |
+The v1.1 density mini-map is bounded scope: show per-day / per-hour session density for the visible week in a compact strip or sidebar. Three native options cover every likely shape:
 
-Skeletons should match the exact dimensions and layout of the real components to prevent layout shift (CLS = 0).
+- **Tailwind `bg-*/{opacity}` bars** — for a simple heatmap strip (7 days × 15 hours = 105 cells, trivial). Zero deps.
+- **Inline `<svg>`** — for a sparkline-style density curve or a month-strip overview. React-rendered rects/paths, fully reactive to state. Zero deps.
+- **CSS conic/linear gradient** — for a floating-widget circular density indicator, if we pick that shape. Zero deps.
 
-## Confidence Assessment
+`recharts` / `visx` / `d3` are all overkill for 105 data points. `react-window` / `@tanstack/react-virtual` are irrelevant (we're not virtualizing a long list). We should NOT add a viz library.
 
-| Recommendation | Confidence | Source |
-|---------------|------------|--------|
-| `cacheComponents: true` | HIGH | Official Next.js 16 docs bundled in `node_modules/next/dist/docs/`, blog post |
-| `'use cache'` for filters/tutor list | HIGH | Official `use-cache.md` docs, exact syntax verified |
-| Server Component data loading pattern | HIGH | Core Next.js App Router pattern since v13, extensively documented |
-| Sibling `<Suspense>` boundaries | HIGH | Official streaming guide with explicit examples |
-| `<Activity>` state preservation | HIGH | Ships automatically with `cacheComponents: true`, documented in `cacheComponents.md` |
-| `unstable_instant` export | MEDIUM | Documented but `version: draft` in bundled docs. API has `unstable_` prefix. Adopt for validation but expect rename. |
-| `revalidateTag(tag, profile)` | HIGH | Documented with new 2-argument signature in Next.js 16 |
-| React Compiler (`reactCompiler: true`) | MEDIUM | Stable in Next.js 16 but adds build time via Babel. Not priority for this milestone -- evaluate after core perf work. |
+**Decision on shape:** Defer to Phase 01 design review. The research position is: *any* shape can be implemented with the existing stack. Pick based on UX, not on what a library makes easy.
+
+### (c) Wise Historical Sessions Endpoint (PAST-01)
+
+**Decision:** Treat as UNCONFIRMED. Ship the DB-snapshot fallback in v1.1; schedule a Wise-docs spike to confirm whether a historical endpoint exists before v1.2.
+
+**What we know:**
+
+- Our current fetcher (`src/lib/wise/fetchers.ts:96`) calls `GET /institutes/{instituteId}/sessions` with `status=FUTURE` as the only documented value we've used.
+- `WiseSession` has `scheduledStartTime` (ISO UTC), `scheduledEndTime`, `meetingStatus`, and `type` fields. Pagination is `paginateBy=COUNT` + `page_number` + `page_size`.
+- `WiseSessionsResponse` envelope includes `page_count` + `totalRecords`.
+
+**What we do NOT know (confidence LOW for all negative claims):**
+
+- Whether `status` accepts other values like `PAST`, `COMPLETED`, `ALL`, `HISTORICAL`. Public Wise docs (`docs.wise.live`, `wise-app.gitbook.io`) point to a private Postman collection for details; the enum isn't in any indexed public source I could reach.
+- Whether a separate endpoint (e.g. `/sessions/history`, `/sessions?startDate=...&endDate=...`) exists.
+- Whether there are rate limits on historical queries.
+
+**Recommended v1.1 approach (ordered):**
+
+1. **P0 spike (≤30 min): email `devs@wiseapp.live` with these 3 questions and also check the in-product Postman link if available:**
+   - Does `GET /institutes/{instituteId}/sessions` accept `status` values other than `FUTURE`?
+   - Is there an endpoint that returns sessions with `scheduledStartTime` in the past?
+   - Are there pagination or rate-limit differences for historical queries?
+2. **Ship the fallback unconditionally.** Add a `historical_sessions` table (snapshot-scoped) that captures the set of FUTURE sessions at each nightly sync. When the nightly sync runs, any session whose `scheduledStartTime` is now in the past that was FUTURE in a previous snapshot gets persisted to `historical_sessions`. This is a ≤200-line Drizzle migration + orchestrator hook, entirely within the existing stack.
+3. **If the spike returns a YES:** add a second fetcher in `src/lib/wise/fetchers.ts`, guard it behind a feature flag, and prefer it over the snapshot fallback when available. Snapshot fallback becomes a resilience net.
+
+**Why we build the fallback even if the endpoint exists:** historical Wise data only goes as far back as their retention policy; admins may want weeks we didn't sync, and the snapshot fallback is the only source of truth for "what was scheduled when we looked on day X."
+
+### (d) Online/Onsite Detection (MOD-01) — no stack change
+
+**Decision:** No dependency changes. Tighten `WiseTeacher` and `WiseSession` type definitions in `src/lib/wise/types.ts` to surface the existing `isOnlineVariant` and `sessionType` fields, then fold them into the existing modality cascade in `src/lib/normalization/modality.ts`.
+
+**Current state:**
+- `WiseTeacher` in `src/lib/wise/types.ts:9` uses `[key: string]: unknown` as an escape hatch — `isOnlineVariant` is addressable today but not typed.
+- `WiseSession` in `src/lib/wise/types.ts:55` declares `type?: string` and `[key: string]: unknown` — `sessionType` is addressable today but not typed.
+- The current modality cascade uses *location-string pattern matching* which the CLAUDE.md "Known Issues" section already flags as unreliable.
+
+**Work:** Add `isOnlineVariant?: boolean` to `WiseTeacher`, promote `WiseSession.type` to a discriminated union `"ONLINE" | "OFFLINE" | "HYBRID" | string`, extend `normalizeModality()` to check those fields FIRST (before the location heuristic), and keep the fail-closed default. No library, no migration.
+
+## Alternatives Considered
+
+| Recommended | Alternative | When to Use Alternative |
+|-------------|-------------|-------------------------|
+| Native `document.startViewTransition()` | `motion` (`motion/react`) | If we wanted complex choreography (shared-element layouts across unrelated DOM subtrees, spring physics, drag gestures). We don't — calendar transitions are cross-fades and position animations that CSS view-transitions handle natively. |
+| Native `document.startViewTransition()` | React `<ViewTransition>` (`react/canary`) + `experimental.viewTransition` flag | If Vercel/next.js #85693 is resolved AND React promotes `<ViewTransition>` to stable AND we drop `cacheComponents: true`. All three are unlikely in the v1.1 window. |
+| Pure Tailwind `sticky` | `react-stickynode` / `react-sticky-el` / `react-sticky-box` | If we needed sticky-until-a-sentinel-scrolls-past behavior with custom easing. We don't — standard `position: sticky` meets VPOL-02 literally and has shipped in two components already. |
+| Inline SVG / Tailwind bars for density | `recharts`, `visx`, `@tanstack/react-charts` | If the density overview evolved into a full analytics dashboard. For a 105-cell heatmap or a 30-bar strip, React + SVG is 10 lines and 0 bytes. |
+| Wise DB-snapshot fallback | Wise historical endpoint (if it exists) | If the `devs@wiseapp.live` spike confirms a real endpoint AND data retention covers our full use window. Even then, we keep the snapshot fallback as a resilience layer. |
+
+## What NOT to Use
+
+| Avoid | Why | Use Instead |
+|-------|-----|-------------|
+| `motion` / `framer-motion` | 34 kb gzipped minimum; requires `"use client"` for every animated subtree; duplicates what native CSS view-transitions now do for free; bundle cost hits search page directly. | Native `document.startViewTransition()` + CSS `view-transition-name`. |
+| `experimental.viewTransition: true` in `next.config.ts` | Experimental in Next.js 16.2 (Mar 2026 release); known conflict with `cacheComponents: true` per Vercel/next.js #85693 (unresolved Nov 2025); explicit "do not use in production" in the built-in docs. | Client-only native API — doesn't touch the framework integration. |
+| `react/canary` or `react@experimental` upgrade to get `<ViewTransition>` | Breaks our supply chain (`@auth/drizzle-adapter`, `@base-ui/react`, `shadcn`, `cmdk` all target stable 19.x); `@enableViewTransition` feature flag is a moving target; canary isn't covered by the `next-auth` beta contract either. | Stay on React 19.2.4 stable; use the browser API. |
+| `react-stickynode` / `react-sticky-el` / `react-sticky-box` | Solves a 2018-era problem — `position: sticky` has had universal support since ~2020. Adds weight and an abstraction the browser already provides. | Tailwind `sticky top-0 z-[N]`. |
+| `recharts` / `d3` / `visx` for density overview | Wrong tool for ≤200 data points; pulls in `d3-scale`, `d3-shape`, or React component overhead (`recharts` is ~70 kb); we would use <5% of the API surface. | Inline `<svg>` rects or Tailwind-styled `<div>` bars. |
+| New HTTP client (`ky`, `ofetch`, `axios`) for the historical-sessions fetch | Our `WiseClient` in `src/lib/wise/client.ts` already has retry + backoff + concurrency. Duplicating infra for one endpoint is net-negative. | Extend the existing `WiseClient.get()` with a new fetcher. |
+| Client-side storage library (`zustand`, `jotai`, `valtio`) for density overview state | Current compare state lives in `useCompare`; VPOL-03 is a derivation of the same data. State library adds import-order complexity without solving a real problem. | Derived `useMemo` in the existing hook. |
+
+## Stack Patterns by Feature
+
+**If view transitions need more than fade/slide (drag, springs, gestures):**
+- Revisit `motion` / `framer-motion`. Research says we don't need this; ship native first and validate.
+
+**If density overview grows into a multi-panel analytics dashboard:**
+- Revisit a charting library. Out of v1.1 scope per PROJECT.md Out-of-Scope table.
+
+**If Wise `devs@wiseapp.live` confirms a historical endpoint:**
+- Implement `fetchHistoricalSessions(client, instituteId, startDate, endDate)` alongside `fetchAllFutureSessions`. Add orchestrator branch that prefers historical when available, falls back to snapshot.
+
+## Version Compatibility
+
+| Package / API | Compatible With | Notes |
+|---------------|-----------------|-------|
+| `document.startViewTransition()` | Next.js 16.2.2 + React 19.2.4 + `cacheComponents: true` | Client-only; runs after React commit. Independent of framework animation features. Does not trigger Vercel/next.js #85693. |
+| `position: sticky` | Tailwind CSS ^4 | Works with existing `sticky top-0 z-[N]` classes. Ancestor chain must NOT have `overflow-hidden` between sticky element and scroll container. |
+| React 19.2.4 | `<ViewTransition>` from `react` | **NOT compatible.** `<ViewTransition>` is only in `react@canary` under `@enableViewTransition`. Confirmed by `@types/react@19.2.14` canary.d.ts. |
+| Next.js 16.2.2 `experimental.viewTransition` | `cacheComponents: true` | **Conflicting** per Vercel/next.js #85693. Do not enable together in v1.1. |
+| `motion` / `motion/react` | React 19.2.4 | Compatible, but adds 34 kb gzipped floor; requires `"use client"` or `motion/react-client` for RSC trees. |
+| `date-fns` ^4.1.0 | Existing timezone utils | Already in use; no changes needed for v1.1. |
 
 ## Sources
 
-- Next.js 16 blog post: https://nextjs.org/blog/next-16
-- Bundled docs: `node_modules/next/dist/docs/01-app/03-api-reference/01-directives/use-cache.md`
-- Bundled docs: `node_modules/next/dist/docs/01-app/03-api-reference/05-config/01-next-config-js/cacheComponents.md`
-- Bundled docs: `node_modules/next/dist/docs/01-app/02-guides/streaming.md`
-- Bundled docs: `node_modules/next/dist/docs/01-app/02-guides/instant-navigation.md`
-- Next.js prefetching guide: https://nextjs.org/docs/app/guides/prefetching
-- Next.js loading.js reference: https://nextjs.org/docs/app/api-reference/file-conventions/loading
-- shadcn/ui Skeleton: https://ui.shadcn.com/docs/components/radix/skeleton
+- **Next.js built-in docs** (`node_modules/next/dist/docs/01-app/03-api-reference/05-config/01-next-config-js/viewTransition.md`) — HIGH confidence. Explicit "strongly advise against using this feature in production." Version: 16.2.2 shipped with our install.
+- **Next.js built-in docs** (`node_modules/next/dist/docs/01-app/02-guides/preserving-ui-state.md`) — HIGH confidence. Confirms `<Activity>` is stable in React 19.2 and is the sanctioned state-preservation primitive alongside `cacheComponents`.
+- **`@types/react@19.2.14`** (`node_modules/@types/react/canary.d.ts` lines 38–109, `experimental.d.ts` line 37) — HIGH confidence. `<ViewTransition>` is typed only under `@enableViewTransition` feature flag in canary types, not stable.
+- **[React 19.2 release blog](https://react.dev/blog/2025/10/01/react-19-2)** — HIGH confidence. Activity is stable; ViewTransition is mentioned only as a future Suspense-SSR integration target.
+- **[Vercel/next.js #85693](https://github.com/vercel/next.js/issues/85693)** — MEDIUM confidence (unresolved at time of research, last checked via WebSearch 2026-04-20). `viewTransition` + `cacheComponents` conflict reported in 16.0.1 + 19.2.0; need to re-check before phase implementation.
+- **[MDN View Transition API](https://developer.mozilla.org/en-US/docs/Web/API/View_Transition_API)** — HIGH confidence. Native `document.startViewTransition()` is Baseline Newly Available (Oct 2025, Firefox 144 + Chrome 115 + Safari 18+).
+- **[LogRocket: Comparing React animation libraries](https://blog.logrocket.com/best-react-animation-libraries/)** / **[motion.dev](https://motion.dev/docs/react-installation)** — MEDIUM confidence. Confirms Motion rebrand from `framer-motion` to `motion`; 34 kb minimum gzipped; `motion/react-client` pattern for RSC.
+- **[`docs.wise.live/wise-api-integration/api-endpoints`](https://docs.wise.live/wise-api-integration/api-endpoints)** — LOW confidence (public doc surface; detailed Postman collection is auth-gated). No historical-sessions endpoint found in public docs. Needs `devs@wiseapp.live` confirmation before Phase 01 commits to a direction.
+- **`src/lib/wise/types.ts`** (this repo) — HIGH confidence. `WiseTeacher` and `WiseSession` shapes include `[key: string]: unknown` escape hatches, so `isOnlineVariant` / `sessionType` are addressable today without schema changes.
+- **`src/lib/wise/fetchers.ts`** (this repo) — HIGH confidence. Current code calls `GET /institutes/{instituteId}/sessions?status=FUTURE` with `paginateBy=COUNT` pagination; no historical path exercised yet.
+- **`src/components/compare/week-overview.tsx:297`** and **`src/components/compare/calendar-grid.tsx:103`** (this repo) — HIGH confidence. Prior art for `sticky top-0 z-[N]` already shipping in production — VPOL-02 is a pattern extension.
+
+---
+
+*Stack research for: v1.1 Data Fidelity & Depth (subsequent milestone)*
+*Researched: 2026-04-20*
