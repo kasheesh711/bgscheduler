@@ -10,9 +10,15 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 
 ## Current State
 
-**Shipped version:** v1.0 (2026-04-17)
+**Shipped version:** v1.0 (2026-04-17) + v1.0.1 hotfeature (2026-04-20, commit `9e3e4ad`)
 **Production URL:** https://bgscheduler.vercel.app
 **Status:** Live, daily Wise sync active, 246 tests passing
+
+### What's live after v1.0.1 (2026-04-20)
+- **Recommended slots hero** — top of search results shows up to 3 auto-ranked time slots (sub-slot with most qualified tutors free), each with avatar stack, checkmark reasons, "Copy for parent" action, and a "Show in calendar" quick-add; select multiple slots to bundle into one message
+- **Copy-for-parent drawer** — slide-in right drawer with Friendly/Terse tone toggle, tutor-name inclusion toggle, editable message preview, and clipboard copy
+- **Idiot-proof search defaults** — default time window is 15:00–20:00 / 90 min (tutor working window) so staff get sensible results on first click; explicit "Any subject / curriculum / level" dropdown labels; inline "N filters active · Clear all" summary
+- Calendar grid and compare panel unchanged from v1.0 (explicit user decision to preserve GCal principles and avoid the design deck's density-view overlap issues)
 
 ### What's live in v1.0
 - Google OAuth login with admin email allowlisting (8 users)
@@ -44,6 +50,11 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 - ✓ UIFIX-01..07 — aria-labels, semantic tokens, error feedback, typography, TUTOR_COLORS consolidation, data-health UX — v1.0 (5 items pending human QA)
 - ✓ INFRA-01..02 — `loading.tsx` skeleton + 82+ tests passing — v1.0 (246 tests now passing)
 
+**v1.0.1 out-of-band ship (2026-04-20, commit `9e3e4ad`):**
+- ✓ RECS-01 — Recommended-slots hero (auto-rank sub-slots by qualified-tutor count, 3 tiers) — `src/lib/search/recommend.ts` + `recommended-slots.tsx`
+- ✓ RECS-02 — Copy-for-parent drawer (Friendly/Terse tone, tutor-name toggle, editable preview, clipboard) — `copy-for-parent-drawer.tsx`
+- ✓ RECS-03 — Idiot-proof search defaults (15:00–20:00 / 90min window, "Any X" labels, active filter count + Clear all) — `search-form.tsx`
+
 **Pre-v1 (existing):**
 - ✓ Google OAuth + admin allowlist
 - ✓ Daily Wise sync + atomic snapshot promotion
@@ -59,12 +70,14 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 
 Next milestone goals — to be scoped via `/gsd-new-milestone`. Candidates rolling forward:
 
+- **Human UAT of v1.0.1 ship** (recommended-slots cards, copy-for-parent drawer, defaults — production browser check still pending at time of ship)
 - Complete 5 outstanding Phase 04 human-QA items (screen-reader AT, discovery error state in browser, light/dark semantic colors, skeleton proportions, text-[10px] legibility)
 - Address Phase 03 polish findings: M1 (URL-sync dep stability), M2 (midnight crossover), M3 (`?week=` regex strictness), L1–L4 (semantic today indicator, dead-code cleanup, `useCallback` on `addTutor`, mount-effect closure)
 - Retroactive Phase 02 VERIFICATION.md attestation (or accept integration-check as verification of record)
 - Remove unused `TutorSelector` component body at `src/components/compare/tutor-selector.tsx:19`
 - Reliable online/onsite detection (current heuristic under-matches — most sessions appear as onsite)
 - Past-day session visibility (Wise FUTURE API does not return past sessions)
+- Optional v1.0.1 follow-ups: recommended-slots tests (`recommend.test.ts`), recommended-slots telemetry (which tier gets copied most), day/date label for recurring-mode cards (currently shows "every week" without calendar date)
 
 ### Out of Scope
 
@@ -116,6 +129,12 @@ Next milestone goals — to be scoped via `/gsd-new-milestone`. Candidates rolli
 | Keyboard nav guarded against input/contentEditable | T-03-11 mitigation | ✓ Good — no hijack |
 | Discovery error message generic | No server detail leakage | ✓ Good |
 | Accept Phase 02 verification via integration check | Integration-checker covers same ground, formal artifact skipped | ⚠️ Revisit — consider retroactive VERIFICATION.md |
+| **v1.0.1 shipped out-of-band** (no /gsd-new-milestone, no PLAN.md) | User provided a high-fidelity design deck and asked to implement immediately; work was small (5 files, +632/-7) and fully client-side | ✓ Good — preview + prod deployed cleanly; handoff file recorded the decisions for next session |
+| **Derive recommended slots client-side** from existing `RangeSearchResponse` | Avoids any backend/API/index change; keeps blast radius minimal; feature is a pure re-presentation of data already on the wire | ✓ Good — no Wise/DB changes, zero risk to sync pipeline |
+| **Keep GCal grid, reject design deck's density view** | Density view (free=figure, busy=ground) caused student-data overlap that the user disliked | ✓ Good — preserved v1.0 calendar principles |
+| **Keep dropdown-based search, reject pill/unified query bar** | Admin staff are non-technical; dropdowns are more idiot-proof than a pill input that assumes users know subject/curriculum/level vocabulary | ✓ Good — just tightened defaults and added filter count |
+| **Search defaults 15:00–20:00 / 90min** (was 09:00–17:00 / 60min) | Matches tutor working window so staff don't need to know it; sensible first-search results without any tweaking | ✓ Good — ships as v1.0.1 |
+| **Direct push to main, no PR** | Repo has no CI / no branch protection / solo contributor; PR adds ceremony without benefit | ✓ Good — fast-forward `51c05c1 → 9e3e4ad` |
 
 ## Evolution
 
@@ -135,4 +154,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Context update
 
 ---
-*Last updated: 2026-04-17 after v1.0 milestone*
+*Last updated: 2026-04-20 after v1.0.1 out-of-band ship (`9e3e4ad`)*

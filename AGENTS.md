@@ -103,7 +103,8 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 #### Pages
 - `/login` — Google sign-in with warm gradient background, sky blue title, access-denied error handling
 - `/search` — side-by-side workspace:
-  - **Left panel (Search)**: compact 3-column search form, mode toggle (recurring/one-time), data-driven dropdown filters (subject/curriculum/level), availability grid results (table-fixed, no horizontal scroll), row selection with copy-for-parents button, "Compare (N)" button (sends selected tutors to right panel), recent searches (localStorage, last 10), Needs Review section
+  - **Left panel (Search)**: compact 3-column search form, mode toggle (recurring/one-time), data-driven dropdown filters (subject/curriculum/level), **idiot-proof defaults** (15:00–20:00 time window / 90 min duration matching the tutor working window; explicit "Any subject/curriculum/level" labels; inline "N filters active · Clear all" summary), **recommended-slots hero** (up to 3 auto-ranked sub-slot cards derived client-side from the range response: avatar stack of top qualified tutors, checkmark reason bullets, "Copy for parent" button opens the drawer, calendar icon quick-adds those tutors to compare; selecting 2+ cards surfaces a "Bundle & copy" action), availability grid results (table-fixed, no horizontal scroll), row selection with copy-for-parents button, "Compare (N)" button (sends selected tutors to right panel), recent searches (localStorage, last 10), Needs Review section
+  - **Copy-for-parent drawer**: slide-in right panel with Friendly/Terse tone toggle, tutor-name inclusion toggle, editable message preview (resettable to the auto-generated text), and clipboard copy; built from the search context (subject/curriculum/level) and the selected slots (ranking helper at `src/lib/search/recommend.ts`)
   - **Right panel (Compare)**: tutor selector chips (max 3, color-coded, removable) + searchable tutor combobox dropdown (shadcn Command+Popover, fetches from `GET /api/tutors`), "Advanced search" link opens discovery modal (shadcn Dialog), **week picker** (prev/next arrows, clickable week label "6 Apr – 12 Apr, 2026" opens month-grid calendar popup for direct date jumping, Today button to reset to current week), week/day sub-tabs with D/M dates (e.g. "Mon 6/4"), GCal-style weekly time grid (7AM–9PM vertical axis, Mon–Sun sticky headers, full-width cards for single-tutor view and per-tutor lanes for 2-3 tutor view, sub-column cap at 3 single-tutor / 2 multi-tutor with "+N more" overflow badges, free-gap green indicators for available-but-unbooked time, vertical scrolling), day drill-down (side-by-side tutor columns with positioned session blocks), conflict bands + summary, shared free slot indicators, tutor profile popover, URL param support (`?tutors=id1,id2`), **client-side tutor cache** (`Map<tutorGroupId:weekStart, CompareTutor>`) with incremental fetch (add → `fetchOnly: [newId]`, remove → `fetchOnly: []` reuses cache, week change → cache clear + full fetch), AbortController for race-condition safety, automatic cache invalidation on snapshot change
 - `/compare` — redirects to `/search` (backward compatibility for bookmarked URLs, preserves `?tutors=` param)
 - `/data-health` — full-width sync status cards, snapshot stats, issues by type, unresolved aliases/modality/unmapped tags tables, recent sync history
@@ -174,8 +175,9 @@ First successful production sync completed 2026-04-07 on commit `c673999`:
 | `WISE_INSTITUTE_ID` | `696e1f4d90102225641cc413` |
 | `CRON_SECRET` | Protects sync endpoint from unauthorized calls |
 
-## Admin Users (8 allowlisted)
+## Admin Users (9 allowlisted)
 - aoengnatchasmith@gmail.com
+- chiraya.work@gmail.com
 - k.waritpariya@gmail.com
 - kevhsh7@gmail.com
 - kevinhsieh711@gmail.com
