@@ -136,52 +136,60 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MOD-01 | TBD | Pending |
-| MOD-02 | TBD | Pending |
-| MOD-03 | TBD | Pending |
-| MOD-04 | TBD | Pending |
-| MOD-05 | TBD | Pending |
-| PAST-01 | TBD | Pending |
-| PAST-02 | TBD | Pending |
-| PAST-03 | TBD | Pending |
-| PAST-04 | TBD | Pending |
-| PAST-05 | TBD | Pending |
-| PAST-06 | TBD | Pending |
-| STICKY-01 | TBD | Pending |
-| STICKY-02 | TBD | Pending |
-| STICKY-03 | TBD | Pending |
-| STICKY-04 | TBD | Pending |
-| DENS-01 | TBD | Pending |
-| DENS-02 | TBD | Pending |
-| DENS-03 | TBD | Pending |
-| DENS-04 | TBD | Pending |
-| TRANS-01 | TBD | Pending |
-| TRANS-02 | TBD | Pending |
-| TRANS-03 | TBD | Pending |
-| TRANS-04 | TBD | Pending |
-| TRANS-05 | TBD | Pending |
-| POLISH-01 | TBD | Pending |
-| POLISH-02 | TBD | Pending |
-| POLISH-03 | TBD | Pending |
-| POLISH-04 | TBD | Pending |
-| POLISH-05 | TBD | Pending |
-| POLISH-06 | TBD | Pending |
-| POLISH-07 | TBD | Pending |
-| POLISH-08 | TBD | Pending |
-| POLISH-09 | TBD | Pending |
-| POLISH-10 | TBD | Pending |
-| POLISH-11 | TBD | Pending |
-| POLISH-12 | TBD | Pending |
-| POLISH-13 | TBD | Pending |
-| POLISH-14 | TBD | Pending |
-| POLISH-15 | TBD | Pending |
-| POLISH-16 | TBD | Pending |
+| MOD-01 | Phase 6 | Pending |
+| MOD-02 | Phase 6 | Pending |
+| MOD-03 | Phase 6 | Pending |
+| MOD-04 | Phase 6 | Pending |
+| MOD-05 | Phase 6 | Pending |
+| PAST-01 | Phase 7 | Pending |
+| PAST-02 | Phase 7 | Pending |
+| PAST-03 | Phase 7 | Pending |
+| PAST-04 | Phase 7 | Pending |
+| PAST-05 | Phase 7 | Pending |
+| PAST-06 | Phase 7 | Pending |
+| STICKY-01 | Phase 8 | Pending |
+| STICKY-02 | Phase 8 | Pending |
+| STICKY-03 | Phase 8 | Pending |
+| STICKY-04 | Phase 8 | Pending |
+| DENS-01 | Phase 9 | Pending |
+| DENS-02 | Phase 9 | Pending |
+| DENS-03 | Phase 9 | Pending |
+| DENS-04 | Phase 9 | Pending |
+| TRANS-01 | Phase 10 | Pending |
+| TRANS-02 | Phase 10 | Pending |
+| TRANS-03 | Phase 10 | Pending |
+| TRANS-04 | Phase 10 | Pending |
+| TRANS-05 | Phase 10 | Pending |
+| POLISH-01 | Phase 5 | Pending |
+| POLISH-02 | Phase 5 | Pending |
+| POLISH-03 | Phase 5 | Pending |
+| POLISH-04 | Phase 5 | Pending |
+| POLISH-05 | Phase 5 | Pending |
+| POLISH-06 | Phase 5 | Pending |
+| POLISH-07 | Phase 5 | Pending |
+| POLISH-08 | Phase 5 | Pending |
+| POLISH-09 | Phase 5 | Pending |
+| POLISH-10 | Phase 5 | Pending |
+| POLISH-11 | Phase 5 | Pending |
+| POLISH-12 | Phase 5 | Pending |
+| POLISH-13 | Phase 5 | Pending |
+| POLISH-14 | Phase 5 | Pending |
+| POLISH-15 | Phase 5 | Pending |
+| POLISH-16 | Phase 5 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 40 total
-- Mapped to phases: 0 (roadmap pending)
-- Unmapped: 40 ⚠️ (populated during roadmap creation)
+- Mapped to phases: 40 ✓
+- Unmapped: 0
+
+**Phase distribution:**
+- Phase 5 POLISH Drain: 16 requirements (POLISH-01..16)
+- Phase 6 MOD-01: 5 requirements (MOD-01..05)
+- Phase 7 PAST-01: 6 requirements (PAST-01..06)
+- Phase 8 VPOL-02: 4 requirements (STICKY-01..04)
+- Phase 9 VPOL-03: 4 requirements (DENS-01..04)
+- Phase 10 VPOL-01: 5 requirements (TRANS-01..05)
 
 ---
 *Requirements defined: 2026-04-20*
-*Last updated: 2026-04-20 after /gsd-new-milestone scoping*
+*Last updated: 2026-04-20 after /gsd-roadmap — all 40 v1.1 requirements mapped to Phases 5–10*
