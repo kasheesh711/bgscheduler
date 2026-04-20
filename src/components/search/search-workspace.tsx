@@ -7,6 +7,9 @@ import type { SearchContext } from "@/components/search/search-form";
 import type { FilterOptions } from "@/lib/data/filters";
 import type { TutorListItem } from "@/lib/data/tutors";
 import { SearchResults } from "@/components/search/search-results";
+import { RecommendedSlots } from "@/components/search/recommended-slots";
+import { CopyForParentDrawer } from "@/components/search/copy-for-parent-drawer";
+import type { RecommendedSlot } from "@/lib/search/recommend";
 import { ComparePanel } from "@/components/compare/compare-panel";
 import { useCompare, shiftWeek } from "@/hooks/use-compare";
 import type { RangeSearchResponse } from "@/lib/search/types";
@@ -33,6 +36,7 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
   const [searchContext, setSearchContext] = useState<SearchContext | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [drawerSlots, setDrawerSlots] = useState<RecommendedSlot[] | null>(null);
 
   // Handle ?tutors= and ?week= deep links on mount
   useEffect(() => {
@@ -101,11 +105,20 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
   }, []);
 
   const handleCompareSelected = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
     compare.tutorCache.current.clear();
-    compare.fetchCompare(ids, compare.weekStart);
+    compare.fetchCompare(ids.slice(0, 3), compare.weekStart);
   }, [compare]);
 
   const disableAdd = compare.compareTutors.length >= 3;
+
+  const handleOpenDrawer = useCallback((slots: RecommendedSlot[]) => {
+    setDrawerSlots(slots);
+  }, []);
+
+  const handleCloseDrawer = useCallback(() => {
+    setDrawerSlots(null);
+  }, []);
 
   return (
     <div className="flex-1 flex gap-3 overflow-hidden min-h-0">
@@ -126,6 +139,17 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
         {error && (
           <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive mt-2 flex-shrink-0">
             {error}
+          </div>
+        )}
+        {response && (
+          <div className="mt-2">
+            <RecommendedSlots
+              response={response}
+              searchContext={searchContext}
+              onOpenDrawer={handleOpenDrawer}
+              onAddToCompare={handleCompareSelected}
+              disableAdd={disableAdd}
+            />
           </div>
         )}
         <SearchResults
@@ -150,6 +174,12 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
           onToggleFullscreen={() => setIsFullscreen((v) => !v)}
         />
       </div>
+      <CopyForParentDrawer
+        open={drawerSlots !== null}
+        onClose={handleCloseDrawer}
+        slots={drawerSlots ?? []}
+        searchContext={searchContext}
+      />
     </div>
   );
 }

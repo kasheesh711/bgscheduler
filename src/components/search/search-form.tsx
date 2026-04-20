@@ -82,9 +82,11 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
   const [searchMode, setSearchMode] = useState<SearchMode>("recurring");
   const [dayOfWeek, setDayOfWeek] = useState(1);
   const [date, setDate] = useState("");
-  const [startTime, setStartTime] = useState("09:00");
-  const [endTime, setEndTime] = useState("17:00");
-  const [durationMinutes, setDurationMinutes] = useState(60);
+  // Defaults reflect the tutor working window (3–8pm) so staff don't have to
+  // know it — they hit Search and get sensible results immediately.
+  const [startTime, setStartTime] = useState("15:00");
+  const [endTime, setEndTime] = useState("20:00");
+  const [durationMinutes, setDurationMinutes] = useState(90);
   const [modeFilter, setModeFilter] = useState<"online" | "onsite" | "either">("either");
   const [subjectFilter, setSubjectFilter] = useState("");
   const [curriculumFilter, setCurriculumFilter] = useState("");
@@ -104,6 +106,13 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
 
   const isValid =
     searchMode === "recurring" || (searchMode === "one_time" && date !== "");
+
+  const activeFilterCount =
+    (subjectFilter ? 1 : 0) +
+    (curriculumFilter ? 1 : 0) +
+    (levelFilter ? 1 : 0) +
+    (modeFilter !== "either" ? 1 : 0) +
+    selectedTutorIds.length;
 
   const handleSearch = async () => {
     setLoading(true);
@@ -455,7 +464,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
               value={subjectFilter}
               onChange={(e) => setSubjectFilter(e.target.value)}
             >
-              <option value="">Any</option>
+              <option value="">Any subject</option>
               {filterOptions.subjects.map((s) => (
                 <option key={s} value={s}>
                   {s}
@@ -472,7 +481,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
               value={curriculumFilter}
               onChange={(e) => setCurriculumFilter(e.target.value)}
             >
-              <option value="">Any</option>
+              <option value="">Any curriculum</option>
               {filterOptions.curriculums.map((c) => (
                 <option key={c} value={c}>
                   {c}
@@ -489,7 +498,7 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
               value={levelFilter}
               onChange={(e) => setLevelFilter(e.target.value)}
             >
-              <option value="">Any</option>
+              <option value="">Any level</option>
               {filterOptions.levels.map((l) => (
                 <option key={l} value={l}>
                   {l}
@@ -498,6 +507,29 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
             </select>
           </div>
         </div>
+
+        {/* Active filter summary + reset */}
+        {activeFilterCount > 0 && (
+          <div className="flex items-center justify-between px-0.5 text-[10.5px] text-muted-foreground">
+            <span>
+              <span className="font-semibold text-foreground">{activeFilterCount}</span>{" "}
+              filter{activeFilterCount !== 1 ? "s" : ""} active
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setSubjectFilter("");
+                setCurriculumFilter("");
+                setLevelFilter("");
+                setModeFilter("either");
+                setSelectedTutorIds([]);
+              }}
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              Clear all
+            </button>
+          </div>
+        )}
       </div>
     </>
   );
