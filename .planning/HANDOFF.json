@@ -1,0 +1,38 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-04-21T13:53:01.438Z",
+  "phase": "06",
+  "phase_name": "mod-01-reliable-modality-detection",
+  "phase_dir": ".planning/phases/06-mod-01-reliable-modality-detection",
+  "plan": "06-05",
+  "task": 1,
+  "total_tasks": 1,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": "06-01", "name": "CACHE_VERSION bootstrap", "status": "done", "commits": ["17daef1", "ae5d0cb", "be9956f"]},
+    {"id": "06-02", "name": "Reliable session modality resolver", "status": "done", "commits": ["d6d0a88", "e99e3db", "a4efaec", "7efa683"]},
+    {"id": "06-03", "name": "/data-health modality counter widening", "status": "done", "commits": ["e7a78a1", "e5eea24", "6b51abc"]},
+    {"id": "06-04", "name": "Modality display helper + wiring", "status": "done", "commits": ["956aff3", "83694d5", "d7917c5", "97fdda0"]}
+  ],
+  "remaining_tasks": [
+    {"id": "06-05", "name": "D-21 fail-closed regression matrix in compare.test.ts", "status": "not_started"}
+  ],
+  "blockers": [
+    {
+      "description": "8 stale locked worktrees in .git/worktrees/ block new `git worktree add` calls (config.lock timeout)",
+      "type": "technical",
+      "workaround": "Prune with `git worktree prune` and/or remove lockfiles: `rm -rf .git/worktrees/agent-*/locked` then `git worktree prune`"
+    }
+  ],
+  "human_actions_pending": [],
+  "decisions": [
+    {
+      "decision": "Stashed pre-existing uncommitted 06-03 changes as stash@{0}",
+      "rationale": "Worktree agent produced canonical 06-03 output; old interrupted run was superseded and would have blocked the merge",
+      "phase": "06"
+    }
+  ],
+  "uncommitted_files": [],
+  "next_action": "Clean up stale worktrees, then spawn gsd-executor for plan 06-05 with EXPECTED_BASE = current HEAD (97fdda0 at pause time)",
+  "context_notes": "Waves 1-4 of phase 6 complete. Full test suite passes 150 files / 1055 tests. Wave 4 (plan 06-05, fail-closed regression matrix) is the last remaining plan. After it executes, run the full post-phase sequence: code review → regression → schema drift → verify_phase_goal → update_roadmap → PROJECT.md evolve → present next steps."
+}
