@@ -4,6 +4,33 @@ import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
+/**
+ * Filter raw data_issues into the page-consumed "unresolvedModality" list.
+ *
+ * MOD-03 / D-10: includes BOTH legacy group-level `modality` issues (emitted
+ * by `deriveModality` per-tutor-group) AND session-level `conflict_model`
+ * issues (emitted by `detectSessionModalityConflict` during sync
+ * orchestration). Surfaced as one admin-facing "Modality issues" number.
+ *
+ * The counter is expected to rise after MOD-01 ships — surface-of-reality
+ * per D-11, not a regression.
+ *
+ * Exported for unit testing.
+ */
+export function selectModalityIssues<
+  T extends { type: string; entityName: string | null; message: string },
+>(
+  issues: T[],
+): { entityName: string; message: string; issueType: string }[] {
+  return issues
+    .filter((i) => i.type === "modality" || i.type === "conflict_model")
+    .map((i) => ({
+      entityName: i.entityName ?? "",
+      message: i.message,
+      issueType: i.type,
+    }));
+}
+
 export async function GET() {
   const session = await auth();
   if (!session) {
@@ -38,7 +65,7 @@ export async function GET() {
   let stats = null;
   let issuesByType: Record<string, number> = {};
   let unresolvedAliases: { entityName: string; message: string }[] = [];
-  let unresolvedModality: { entityName: string; message: string }[] = [];
+  let unresolvedModality: { entityName: string; message: string; issueType: string }[] = [];
   let unmappedTags: { entityName: string; message: string }[] = [];
 
   if (activeSnapshot) {
@@ -61,9 +88,13 @@ export async function GET() {
       .filter((i) => i.type === "alias")
       .map((i) => ({ entityName: i.entityName ?? "", message: i.message }));
 
-    unresolvedModality = issues
-      .filter((i) => i.type === "modality")
-      .map((i) => ({ entityName: i.entityName ?? "", message: i.message }));
+    // MOD-03 / D-10: modality counter now includes BOTH legacy group-level
+    // `modality` issues (from deriveModality) AND session-level `conflict_model`
+    // issues (from detectSessionModalityConflict in the sync orchestrator).
+    // Surfaced as one admin-facing "Modality issues" number per D-10.
+    // Post-deploy the count is expected to rise — surface-of-reality per D-11,
+    // not a regression.
+    unresolvedModality = selectModalityIssues(issues);
 
     unmappedTags = issues
       .filter((i) => i.type === "tag")

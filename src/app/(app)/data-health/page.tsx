@@ -27,7 +27,14 @@ interface HealthData {
   } | null;
   issuesByType: Record<string, number>;
   unresolvedAliases: { entityName: string; message: string }[];
-  unresolvedModality: { entityName: string; message: string }[];
+  // MOD-03 / D-10: modality issues now include both legacy group-level
+  // `modality` issues and session-level `conflict_model` issues. The
+  // `issueType` field lets the UI distinguish "group" from "session" rows.
+  unresolvedModality: {
+    entityName: string;
+    message: string;
+    issueType: string; // "modality" | "conflict_model"
+  }[];
   unmappedTags: { entityName: string; message: string }[];
   recentSyncs: {
     id: string;
@@ -222,24 +229,46 @@ export default function DataHealthPage() {
         </Card>
       )}
 
-      {/* Unresolved modality */}
+      {/* Modality issues — MOD-03 / D-10: combined group-level + session-level counter */}
       {data.unresolvedModality.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Unresolved Modality ({data.unresolvedModality.length})</CardTitle>
+            <CardTitle
+              title="Includes unresolved group modality + per-session signal contradictions"
+            >
+              Modality issues ({data.unresolvedModality.length})
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Includes unresolved group modality + per-session signal contradictions.
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Note: Post-MOD-01 deploy, this counter is expected to rise as session-level contradictions are now surfaced. The rise is surface-of-reality, not a regression.
+            </p>
           </CardHeader>
           <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Group</TableHead>
+                  <TableHead>Group / Session</TableHead>
                   <TableHead>Issue</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {data.unresolvedModality.map((m, i) => (
                   <TableRow key={i}>
-                    <TableCell className="font-medium">{m.entityName}</TableCell>
+                    <TableCell className="font-medium">
+                      {m.entityName}
+                      <span
+                        className="ml-2 inline-block text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground align-middle"
+                        title={
+                          m.issueType === "conflict_model"
+                            ? "Session-level signal contradiction (conflict_model)"
+                            : "Group-level unresolved modality"
+                        }
+                      >
+                        {m.issueType === "conflict_model" ? "session" : "group"}
+                      </span>
+                    </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{m.message}</TableCell>
                   </TableRow>
                 ))}
