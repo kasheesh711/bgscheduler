@@ -1,8 +1,8 @@
 ---
 phase: 06-mod-01-reliable-modality-detection
 verified: 2026-04-21T22:52:00Z
-status: human_needed
-score: 16/16 must-haves verified
+status: gaps_found
+score: 16/16 must-haves verified (code) — 1 UAT-discovered gap (tenant sessionType vocabulary)
 overrides_applied: 0
 ---
 
@@ -243,19 +243,23 @@ Automated checks confirm the code satisfies every plan-level must-have. Three it
 
 ### Gaps
 
-One informational documentation gap. The underlying implementation work is complete; this is a STATE.md record that should be present per the plan's acceptance criteria but is missing.
+Two gaps: one UAT-discovered data gap (blocking) and one documentation gap (non-blocking).
 
 | Gap | Severity | Evidence |
 |-----|----------|----------|
+| **MOD-UAT-01 (blocking): `ONLINE_SESSION_TYPES` / `ONSITE_SESSION_TYPES` do not match the tenant's actual Wise sessionType vocabulary.** The active snapshot contains only two distinct `future_session_blocks.sessionType` values: `"OFFLINE"` (24,415 rows) and `"SCHEDULED"` (9,677 rows). `"OFFLINE"` lowercases to `"offline"` and matches `ONSITE_SESSION_TYPES` ✓. `"SCHEDULED"` does NOT match either set — so every one of the 9,677 online sessions falls through the type-signal branch into the weaker pair-structure branch and renders as `"Likely online — unconfirmed"` instead of `"Online"` (high confidence). Staff refer to these sessions as "Live" internally; the Wise API value is `"SCHEDULED"`. | Blocking — incorrect UX on ~28% of sessions | Discovered during post-deploy UAT on `bgscheduler.vercel.app`. DB query: `SELECT session_type, COUNT(*) FROM future_session_blocks WHERE snapshot_id = (SELECT id FROM snapshots WHERE active=true) GROUP BY session_type;` → `OFFLINE=24415, SCHEDULED=9677`. Resolver constants at `src/lib/search/compare.ts:4-5`. |
 | Plan 02's Task 1 acceptance required recording the `future_session_blocks.sessionType` NULL-rate measurement in `.planning/STATE.md` under §"Decisions (recent)". The plan's SUMMARY (`06-02-SUMMARY.md`) reports `0.00% NULL (0/34092 rows, snapshot 25c31629)` and the Self-Check claims STATE.md line 90 contains the match — but the main-branch STATE.md has no such line. `grep "NULL rate" .planning/STATE.md` returns zero matches. | Documentation — non-blocking | The resolver/orchestrator/UI work all shipped correctly; the missing STATE.md line does not affect correctness. It may have been recorded in a worktree but not merged, or dropped during a squash. |
 
-Recommendation: Append the measurement record to STATE.md to close the documentation loop. Suggested entry:
+**Recommended fix paths:**
 
-```
-- **Phase 6 MOD-01 kickoff validation (2026-04-21):** `future_session_blocks.sessionType` NULL rate measured: 0.00% (0/34092 rows in snapshot 25c31629). Scope retained.
-```
+1. **MOD-UAT-01 (primary)** — Add `"scheduled"` to `ONLINE_SESSION_TYPES`. Add regression test cases covering the tenant's actual vocabulary (`OFFLINE`, `SCHEDULED`) so the cascade never silently degrades again when Wise vocabulary evolves. Consider a small data-assertion at sync time: any unrecognized sessionType → emit a `data_issue` of type `unknown_session_type` so the next vocabulary shift surfaces in `/data-health` within one sync cycle rather than after UAT.
 
-This is the only gap found. Because the gap is documentation-only and the phase goal is achieved, status remains `human_needed` rather than `gaps_found`.
+2. **STATE.md doc gap (secondary)** — Append the measurement record:
+   ```
+   - **Phase 6 MOD-01 kickoff validation (2026-04-21):** `future_session_blocks.sessionType` NULL rate measured: 0.00% (0/34092 rows in snapshot 25c31629). Scope retained.
+   ```
+
+**Status is `gaps_found`** because gap 1 materially degrades the phase goal ("trustworthy online/onsite label on every session card"). Route through `/gsd-plan-phase 6 --gaps`.
 
 ### Gaps Summary
 
