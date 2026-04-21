@@ -320,7 +320,7 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, w
                   key={`lane-hdr-${day}`}
                   className="flex-1 min-w-0 flex border-r border-border/20 last:border-r-0"
                 >
-                  {multiTutorLayout && tutors.map((t, tutorIdx) => {
+                  {tutors.map((t, tutorIdx) => {
                     const chip = tutorChips[tutorIdx];
                     return (
                       <div
