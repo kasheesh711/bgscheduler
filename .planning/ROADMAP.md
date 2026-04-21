@@ -60,7 +60,12 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   3. Admin can see modality confidence (high / medium / low) surfaced on the session popover, with low-confidence cases visually indistinguishable from unresolved
   4. `compare.test.ts` test matrix asserts `"unknown"` for every contradiction case across `{isOnlineVariant, sessionType, supportedModes}` combinations and blocks merges on regression
   5. `/data-health` dashboard modality-issue counts reflect the tightened detection (higher numbers post-deploy are surface-of-reality, not regression)
-**Plans**: TBD
+**Plans**: 5 plans
+  - [ ] 06-01-PLAN.md — CACHE_VERSION constant + tutorCache namespace bump (D-17/18/19)
+  - [ ] 06-02-PLAN.md — Session modality resolver refactor returning {modality, confidence}; eliminate supportedModes[0] fallback; emit conflict_model data_issue through sync orchestrator (MOD-01, MOD-02)
+  - [ ] 06-03-PLAN.md — /data-health modality counter widened to include conflict_model + expected-rise note (MOD-03)
+  - [ ] 06-04-PLAN.md — Icon + popover UX on session cards (Video/MapPin/HelpCircle; D-12..D-16); shared modality-display.ts (MOD-04)
+  - [ ] 06-05-PLAN.md — MOD-05 test matrix + regression lock (D-21/D-22)
 **UI hint**: yes
 
 ### Phase 7: PAST-01 Past-Day Session Visibility
@@ -126,7 +131,7 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 3. Calendar Readability & Workflow Polish | v1.0 | 3/3 | Complete | 2026-04-17 |
 | 4. UI Audit Polish | v1.0 | 2/2 | Complete | 2026-04-17 |
 | 5. POLISH Drain | v1.1 | 0/7 | Planned | - |
-| 6. MOD-01 Reliable Modality Detection | v1.1 | 0/? | Not started | - |
+| 6. MOD-01 Reliable Modality Detection | v1.1 | 0/5 | Planned | - |
 | 7. PAST-01 Past-Day Session Visibility | v1.1 | 0/? | Not started | - |
 | 8. VPOL-02 Sticky Tutor Legend | v1.1 | 0/? | Not started | - |
 | 9. VPOL-03 Density Overview | v1.1 | 0/? | Not started | - |
