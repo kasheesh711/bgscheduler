@@ -22,7 +22,7 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 ### v1.1 Data Fidelity & Depth (in progress)
 
 - [ ] **Phase 5: POLISH Drain** — Clear v1.0 backlog (human QA, Phase 03 M1–M3 / L1–L4, retroactive VERIFICATION.md, TutorSelector cleanup, v1.0.1 UAT + recommend.test.ts) to establish a11y baseline before feature churn
-- [x] **Phase 6: MOD-01 Reliable Modality Detection** — Upgrade resolver to `isOnlineVariant` + `sessionType` primary signals with `modalityConfidence` grading; eliminate silent `supportedModes[0]` fallback; fail-closed test matrix (completed 2026-04-21)
+- [ ] **Phase 6: MOD-01 Reliable Modality Detection** — Upgrade resolver to `isOnlineVariant` + `sessionType` primary signals with `modalityConfidence` grading; eliminate silent `supportedModes[0]` fallback; fail-closed test matrix (completed 2026-04-21, gap closure 06-06 pending — MOD-UAT-01 tenant vocabulary fix)
 - [ ] **Phase 7: PAST-01 Past-Day Session Visibility** — Capture past sessions via orchestrator diff-hook into dedicated `past_session_blocks` table with stable canonical keys; dedicated `cacheTag('past-sessions')`; disable weekday-fallback for historical ranges; Wise historical-endpoint spike in parallel
 - [ ] **Phase 8: VPOL-02 Sticky Tutor Legend** — Pure-CSS `position: sticky` legend in compare panel with documented z-index scale constant and stacking-context audit artifact; preserved across fullscreen
 - [ ] **Phase 9: VPOL-03 Density Overview** — Client-side density aggregation via `useMemo` over existing `CompareResponse.tutors[].sessions[]`; shape (A aggregate / B per-tutor / C heatmap) chosen via phase-local design review; `prefers-reduced-motion` + a11y text equivalents
@@ -60,12 +60,13 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   3. Admin can see modality confidence (high / medium / low) surfaced on the session popover, with low-confidence cases visually indistinguishable from unresolved
   4. `compare.test.ts` test matrix asserts `"unknown"` for every contradiction case across `{isOnlineVariant, sessionType, supportedModes}` combinations and blocks merges on regression
   5. `/data-health` dashboard modality-issue counts reflect the tightened detection (higher numbers post-deploy are surface-of-reality, not regression)
-**Plans**: 5 plans
+**Plans**: 6 plans (5 complete, 1 gap closure pending)
   - [x] 06-01-PLAN.md — CACHE_VERSION constant + tutorCache namespace bump (D-17/18/19)
   - [x] 06-02-PLAN.md — Session modality resolver refactor returning {modality, confidence}; eliminate supportedModes[0] fallback; emit conflict_model data_issue through sync orchestrator (MOD-01, MOD-02)
   - [x] 06-03-PLAN.md — /data-health modality counter widened to include conflict_model + expected-rise note (MOD-03)
   - [x] 06-04-PLAN.md — Icon + popover UX on session cards (Video/MapPin/HelpCircle; D-12..D-16); shared modality-display.ts (MOD-04)
   - [x] 06-05-PLAN.md — MOD-05 test matrix + regression lock (D-21/D-22)
+  - [ ] 06-06-PLAN.md — Gap closure: widen ONLINE_SESSION_TYPES to include "scheduled" for tenant MOD-UAT-01 (~28% of sessions) + tenant-vocab regression matrix cases + STATE.md NULL-rate doc append
 **UI hint**: yes
 
 ### Phase 7: PAST-01 Past-Day Session Visibility
@@ -131,7 +132,7 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 3. Calendar Readability & Workflow Polish | v1.0 | 3/3 | Complete | 2026-04-17 |
 | 4. UI Audit Polish | v1.0 | 2/2 | Complete | 2026-04-17 |
 | 5. POLISH Drain | v1.1 | 0/7 | Planned | - |
-| 6. MOD-01 Reliable Modality Detection | v1.1 | 5/5 | Complete   | 2026-04-21 |
+| 6. MOD-01 Reliable Modality Detection | v1.1 | 5/6 | Gap closure | 2026-04-21 |
 | 7. PAST-01 Past-Day Session Visibility | v1.1 | 0/? | Not started | - |
 | 8. VPOL-02 Sticky Tutor Legend | v1.1 | 0/? | Not started | - |
 | 9. VPOL-03 Density Overview | v1.1 | 0/? | Not started | - |
