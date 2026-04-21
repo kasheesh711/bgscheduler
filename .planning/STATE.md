@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Data Fidelity & Depth
 status: planning
-stopped_at: v1.1 roadmap drafted — awaiting phase planning
-last_updated: "2026-04-20T12:00:00.000Z"
-last_activity: 2026-04-20
+stopped_at: Phase 5 context gathered
+last_updated: "2026-04-21T01:44:48.272Z"
+last_activity: 2026-04-20 — ROADMAP.md v1.1 phases appended (Phases 5–10)
 progress:
   total_phases: 6
   completed_phases: 0
@@ -108,6 +108,7 @@ Full log in PROJECT.md Key Decisions table. Roadmap-scoping decisions from v1.1:
 None blocking roadmap execution.
 
 **Advisory flags for phase planning:**
+
 - Phase 6 (MOD-01): validate `WiseSession.type` presence rate in production data at phase kickoff — if <50%, MOD-01 reduces to "icon + Needs Review" without confident labels
 - Phase 7 (PAST-01): Wise historical endpoint existence is unknown; DB-snapshot fallback ships unconditionally regardless of spike outcome
 - Phase 9 (VPOL-03): shape A/B/C decision via phase-local design review + a11y strategy for density visualization; Phase 5 POLISH-01..05 sign-off is a prerequisite
@@ -128,6 +129,6 @@ None blocking roadmap execution.
 
 ## Session Continuity
 
-Last session: 2026-04-20 — /gsd-new-milestone → research → requirements → roadmap
-Stopped at: ROADMAP.md v1.1 Phases 5–10 appended; REQUIREMENTS.md traceability filled; STATE.md set to planning
+Last session: 2026-04-21T01:44:48.268Z
+Stopped at: Phase 5 context gathered
 Resume: `/gsd-plan-phase 5` to begin Phase 5 POLISH Drain planning
