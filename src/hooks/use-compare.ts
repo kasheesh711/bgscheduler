@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef } from "react";
 import { TUTOR_COLORS } from "@/components/compare/session-colors";
 import type { TutorChip } from "@/components/compare/tutor-selector";
+import { CACHE_VERSION } from "@/lib/search/cache-version";
 import type { CompareResponse, CompareTutor, Conflict } from "@/lib/search/types";
 
 // ---------------------------------------------------------------------------
@@ -136,12 +137,12 @@ export function useCompare() {
 
       // Merge returned tutors into cache
       for (const t of data.tutors) {
-        tutorCache.current.set(`${t.tutorGroupId}:${week}`, t);
+        tutorCache.current.set(`${t.tutorGroupId}:${week}:${CACHE_VERSION}`, t);
       }
 
       // Build full tutor list from cache
       const mergedTutors = ids
-        .map((id) => tutorCache.current.get(`${id}:${week}`))
+        .map((id) => tutorCache.current.get(`${id}:${week}:${CACHE_VERSION}`))
         .filter((t): t is CompareTutor => t !== undefined);
 
       setCompareResponse({
@@ -166,7 +167,7 @@ export function useCompare() {
   const removeTutor = (id: string) => {
     const remaining = compareTutors.filter((t) => t.tutorGroupId !== id);
     setCompareTutors(remaining);
-    tutorCache.current.delete(`${id}:${weekStart}`);
+    tutorCache.current.delete(`${id}:${weekStart}:${CACHE_VERSION}`);
     if (remaining.length === 0) {
       setCompareResponse(null);
       return;
