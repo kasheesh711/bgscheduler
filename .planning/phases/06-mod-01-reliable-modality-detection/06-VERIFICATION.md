@@ -1,9 +1,14 @@
 ---
 phase: 06-mod-01-reliable-modality-detection
 verified: 2026-04-21T22:52:00Z
-status: gaps_found
-score: 16/16 must-haves verified (code) — 1 UAT-discovered gap (tenant sessionType vocabulary)
+reverified: 2026-04-22
+status: gaps_closed_pending_uat
+score: 16/16 must-haves + 2 gap closures landed (MOD-UAT-01 fixed, STATE.md doc gap fixed); items 2+3 of HUMAN-UAT remain pending post-deploy
 overrides_applied: 0
+gap_closure_plan: 06-06
+gap_closure_commits:
+  - c9d9aee  # fix(06-06): widen ONLINE_SESSION_TYPES (Tasks 1+2)
+  - 3975394  # docs(06-06): record Plan 02 NULL-rate measurement (Task 3)
 ---
 
 # Phase 6 — MOD-01 Reliable Modality Detection: Verification Notes
@@ -260,6 +265,25 @@ Two gaps: one UAT-discovered data gap (blocking) and one documentation gap (non-
    ```
 
 **Status is `gaps_found`** because gap 1 materially degrades the phase goal ("trustworthy online/onsite label on every session card"). Route through `/gsd-plan-phase 6 --gaps`.
+
+---
+
+## Gap Closure Re-Verification (Plan 06-06, 2026-04-22)
+
+Both gaps identified above are now CLOSED in code. Post-deploy UAT remains to confirm the fix renders correctly in production.
+
+| Gap | Severity | Status | Evidence |
+|-----|----------|--------|----------|
+| MOD-UAT-01 | Blocking | **CLOSED (code)** | `"scheduled"` added to `ONLINE_SESSION_TYPES` at `src/lib/search/compare.ts:5`. `grep -cE '^const ONLINE_SESSION_TYPES = new Set\(\["online", "virtual", "scheduled"\]\);$' src/lib/search/compare.ts` → `1`. Two new regression tests (`case 18` SCHEDULED→online/high, `case 19` OFFLINE→onsite/high) added to D-21 matrix — compare.test.ts 28→30, full suite 118→120. All tests green. Post-deploy UAT pending per HUMAN-UAT items 1–3. |
+| STATE.md doc gap | Non-blocking | **CLOSED** | Bullet appended under §"Decisions (recent)". `grep -c "NULL rate" .planning/STATE.md` → `1`; regex `sessionType.*NULL rate measured: [0-9]+\.?[0-9]*% \([0-9]+/[0-9]+ rows` → `1`. Measurement values verbatim from 06-02-SUMMARY.md. |
+
+Scope preservation (all confirmed):
+- `git diff HEAD~2 src/lib/db/schema.ts` → empty (no schema migration).
+- `git diff HEAD~2 src/lib/search/cache-version.ts | wc -l` → `0` (no CACHE_VERSION bump — shape unchanged).
+- `git diff HEAD~2 src/components/compare/session-colors.ts | wc -l` → `0` (Pitfall 3 preserved).
+- `grep -c "supportedModes\[0\]" src/lib/search/compare.ts` → `0` (MOD-02 silent-fallback regression gate holds).
+
+**Status now `gaps_closed_pending_uat`** — code fixes have landed and tests pass; the 3 HUMAN-UAT items (visual icon render, D-14 parity, /data-health counter rise) remain pending normal post-deploy UAT and are NOT re-opened by the gap closure. HUMAN-UAT item 1's ISSUE has been downgraded to "FIX LANDED — pending post-deploy re-check" per the commit chain above.
 
 ### Gaps Summary
 
