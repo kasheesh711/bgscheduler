@@ -544,11 +544,11 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, w
                   {isCurrentWeek && nowSnapshot.dow === day && nowSnapshot.minutes >= START_HOUR * 60 && nowSnapshot.minutes <= END_HOUR * 60 && (
                     <>
                       <div
-                        className="absolute left-0 right-0 bg-red-500 z-[3] pointer-events-none"
+                        className="absolute left-0 right-0 bg-today-indicator z-[3] pointer-events-none"
                         style={{ top: minuteToY(nowSnapshot.minutes), height: 2 }}
                       />
                       <div
-                        className="absolute h-2 w-2 rounded-full bg-red-500 z-[3] pointer-events-none"
+                        className="absolute h-2 w-2 rounded-full bg-today-indicator z-[3] pointer-events-none"
                         style={{ top: minuteToY(nowSnapshot.minutes) - 3, left: -4 }}
                       />
                     </>
