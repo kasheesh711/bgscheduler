@@ -25,6 +25,28 @@ interface SearchWorkspaceProps {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// Strict YYYY-MM-DD validator. Rejects calendar-impossible dates like 2026-02-31
+// by round-tripping through Date.UTC and comparing back to the input. Shape-only
+// regex was M3 finding in v1.0-MILESTONE-AUDIT.md:135 (POLISH-08).
+function isValidWeekParam(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [y, m, d] = value.split("-").map(Number);
+  // Reject obviously out-of-range components before building a Date (Date.UTC
+  // silently normalizes negatives and overflow).
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+  const ts = Date.UTC(y, m - 1, d);
+  const back = new Date(ts);
+  return (
+    back.getUTCFullYear() === y &&
+    back.getUTCMonth() === m - 1 &&
+    back.getUTCDate() === d
+  );
+}
+
+// ---------------------------------------------------------------------------
 // SearchWorkspace component
 // ---------------------------------------------------------------------------
 
@@ -42,7 +64,7 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
   useEffect(() => {
     const weekParam = searchParams.get("week");
     const tutorIds = searchParams.get("tutors")?.split(",").filter(Boolean) ?? [];
-    if (weekParam && /^\d{4}-\d{2}-\d{2}$/.test(weekParam)) {
+    if (weekParam && isValidWeekParam(weekParam)) {
       compare.changeWeek(weekParam);
     }
     if (tutorIds.length > 0) {
