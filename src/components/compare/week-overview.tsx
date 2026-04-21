@@ -231,20 +231,36 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, w
   // Today indicator state — CAL-03
   const [nowSnapshot, setNowSnapshot] = useState(() => {
     const bkk = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
-    return { minutes: bkk.getHours() * 60 + bkk.getMinutes(), dow: bkk.getDay() };
+    return {
+      minutes: bkk.getHours() * 60 + bkk.getMinutes(),
+      dow: bkk.getDay(),
+      dateKey: bkk.toDateString(),
+    };
   });
 
   const isCurrentWeek = weekStart === getCurrentMonday();
 
+  // Tick every minute. Always runs (not gated on isCurrentWeek) so a tab left
+  // open across midnight re-evaluates the week by updating dateKey → triggers
+  // a re-render → isCurrentWeek recomputes via getCurrentMonday(). POLISH-07/M2
+  // fix from v1.0-MILESTONE-AUDIT.md:134.
   useEffect(() => {
-    if (!isCurrentWeek) return;
     const tick = () => {
       const bkk = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
-      setNowSnapshot({ minutes: bkk.getHours() * 60 + bkk.getMinutes(), dow: bkk.getDay() });
+      const next = {
+        minutes: bkk.getHours() * 60 + bkk.getMinutes(),
+        dow: bkk.getDay(),
+        dateKey: bkk.toDateString(),
+      };
+      setNowSnapshot((prev) =>
+        prev.minutes === next.minutes && prev.dow === next.dow && prev.dateKey === next.dateKey
+          ? prev
+          : next,
+      );
     };
     const id = setInterval(tick, 60_000);
     return () => clearInterval(id);
-  }, [isCurrentWeek]);
+  }, []);
 
   const conflictsByDay = useMemo(() => {
     const map = new Map<number, Conflict[]>();
@@ -304,7 +320,7 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, w
                   key={`lane-hdr-${day}`}
                   className="flex-1 min-w-0 flex border-r border-border/20 last:border-r-0"
                 >
-                  {multiTutorLayout && tutors.map((t, tutorIdx) => {
+                  {tutors.map((t, tutorIdx) => {
                     const chip = tutorChips[tutorIdx];
                     return (
                       <div
@@ -544,11 +560,11 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, w
                   {isCurrentWeek && nowSnapshot.dow === day && nowSnapshot.minutes >= START_HOUR * 60 && nowSnapshot.minutes <= END_HOUR * 60 && (
                     <>
                       <div
-                        className="absolute left-0 right-0 bg-red-500 z-[3] pointer-events-none"
+                        className="absolute left-0 right-0 bg-today-indicator z-[3] pointer-events-none"
                         style={{ top: minuteToY(nowSnapshot.minutes), height: 2 }}
                       />
                       <div
-                        className="absolute h-2 w-2 rounded-full bg-red-500 z-[3] pointer-events-none"
+                        className="absolute h-2 w-2 rounded-full bg-today-indicator z-[3] pointer-events-none"
                         style={{ top: minuteToY(nowSnapshot.minutes) - 3, left: -4 }}
                       />
                     </>
