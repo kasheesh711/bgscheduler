@@ -1,7 +1,8 @@
 import type { IndexedTutorGroup } from "./index";
 import type { CompareTutor, CompareSessionBlock, Conflict, SharedFreeSlot } from "./types";
 
-const ONLINE_SESSION_TYPES = new Set(["online", "virtual"]);
+// "scheduled" covers tenant "SCHEDULED"/"Live" online-session vocabulary (MOD-UAT-01, 2026-04-21).
+const ONLINE_SESSION_TYPES = new Set(["online", "virtual", "scheduled"]);
 const ONSITE_SESSION_TYPES = new Set(["onsite", "in-person", "offline"]);
 
 export interface DateRange {

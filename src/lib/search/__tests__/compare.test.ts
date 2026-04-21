@@ -370,6 +370,47 @@ describe("resolveSessionModality matrix (MOD-05 / D-21)", () => {
       expect(resolverResult.confidence, `confidence for ${JSON.stringify(c)}`).not.toBe("medium");
     }
   });
+
+  // --- Tenant-vocabulary anchors (MOD-UAT-01, 2026-04-21) ---
+  // The active Wise snapshot emits exactly two distinct sessionType values:
+  // "OFFLINE" (24,415 rows) and "SCHEDULED" (9,677 rows). These tests lock the
+  // real production vocabulary into the matrix so any future Wise vocabulary
+  // drift (e.g. Wise emitting "LIVE" or "IN_PERSON" next) breaks a test before
+  // it silently degrades ~28% of sessions back to "Likely online — unconfirmed".
+  // The resolver lowercases + trims on compare.ts:66, so uppercase inputs from
+  // the Wise API normalize through .trim().toLowerCase() into Set.has() checks.
+
+  it("case 18: paired + isOnlineVariant=true + sessionType=\"SCHEDULED\" (uppercase, tenant vocab) → online/high (MOD-UAT-01)", () => {
+    const { resolverResult, compareResult, conflictResult } = runCase({
+      supportedModes: ["online", "onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Live Tutor", isOnline: true }],
+      sessionType: "SCHEDULED",
+    });
+    // Before MOD-UAT-01 fix: "SCHEDULED" lowercased to "scheduled" matched neither Set,
+    // so this case fell into the paired+missing-type branch and returned {online, low}.
+    // Post-fix: "scheduled" ∈ ONLINE_SESSION_TYPES → agreeing-signals → {online, high}.
+    expect(resolverResult.modality).toBe("online");
+    expect(resolverResult.confidence).toBe("high");
+    expect(compareResult.sessions[0].modality).toBe("online");
+    expect(compareResult.sessions[0].modalityConfidence).toBe("high");
+    expect(conflictResult).toBeNull();
+  });
+
+  it("case 19: paired + isOnlineVariant=false + sessionType=\"OFFLINE\" (uppercase, tenant vocab) → onsite/high (MOD-UAT-01)", () => {
+    const { resolverResult, compareResult, conflictResult } = runCase({
+      supportedModes: ["online", "onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Onsite Tutor", isOnline: false }],
+      sessionType: "OFFLINE",
+    });
+    // "OFFLINE" lowercased to "offline" is already in ONSITE_SESSION_TYPES; this test
+    // anchors the tenant's onsite vocabulary alongside case 18's online vocabulary so
+    // the production data distribution is explicit in the matrix.
+    expect(resolverResult.modality).toBe("onsite");
+    expect(resolverResult.confidence).toBe("high");
+    expect(compareResult.sessions[0].modality).toBe("onsite");
+    expect(compareResult.sessions[0].modalityConfidence).toBe("high");
+    expect(conflictResult).toBeNull();
+  });
 });
 
 describe("detectConflicts", () => {
