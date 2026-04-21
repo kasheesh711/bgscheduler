@@ -3,8 +3,6 @@ import type { CompareTutor, CompareSessionBlock, Conflict, SharedFreeSlot } from
 
 const ONLINE_SESSION_TYPES = new Set(["online", "virtual"]);
 const ONSITE_SESSION_TYPES = new Set(["onsite", "in-person", "offline"]);
-const ONLINE_LOCATION_PATTERNS = ["http", "zoom", "google meet", "meet.google", "virtual", "online"];
-const ONSITE_LOCATION_PATTERNS = ["onsite", "in person"];
 
 export interface DateRange {
   start: Date;
@@ -24,49 +22,115 @@ function formatDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-function resolveSessionModality(
+/**
+ * Resolved modality for a single session, with confidence grading.
+ *
+ * Confidence rubric (see `.planning/phases/06-mod-01-reliable-modality-detection/06-CONTEXT.md` D-01..D-08):
+ * - `"high"`  — group is single-record (only one modality possible) OR paired group
+ *               where `sessionType` agrees with `teacherRecord.isOnlineVariant`.
+ * - `"medium"` — reserved for future phases (no emission in MOD-01).
+ * - `"low"`  — paired group where `sessionType` is missing (inferred from
+ *               `isOnlineVariant` only; data layer keeps the inference, UI renders
+ *               this identical to `"unknown"` per D-14).
+ *
+ * Contradictions (D-07, D-08):
+ * - Paired group + `sessionType` disagrees with `teacherRecord.isOnlineVariant`
+ *   → `{ modality: "unknown", confidence: "low", contradiction: ... }`.
+ * - Single-record group + `sessionType` disagrees with the group's modality
+ *   → same treatment (fail-closed wins over pragmatism).
+ *
+ * The silent single-element `supportedModes` fallback from the pre-MOD-01
+ * cascade is intentionally deleted (MOD-02) — fail-closed rule per
+ * AGENTS.md:146-149.
+ */
+export interface SessionModalityResolution {
+  modality: CompareSessionBlock["modality"];
+  confidence: CompareSessionBlock["modalityConfidence"];
+  contradiction?: {
+    /** Human-readable description naming both disagreeing signals. */
+    message: string;
+    /** isOnlineVariant the session's teacherRecord reported (or null if no record). */
+    isOnlineVariant: boolean | null;
+    /** Normalized sessionType string (lowercase, trimmed). */
+    sessionType: string;
+  };
+}
+
+export function resolveSessionModality(
   group: IndexedTutorGroup,
   session: IndexedTutorGroup["sessionBlocks"][number],
-): CompareSessionBlock["modality"] {
+): SessionModalityResolution {
   const teacherRecord = group.wiseRecords.find(
     (record) => record.wiseTeacherId === session.wiseTeacherId,
   );
-
-  if (teacherRecord?.isOnline) {
-    return "online";
-  }
-
-  if (teacherRecord && group.supportedModes.includes("onsite")) {
-    return "onsite";
-  }
-
   const normalizedType = session.sessionType?.trim().toLowerCase();
-  if (normalizedType && ONLINE_SESSION_TYPES.has(normalizedType)) {
-    return "online";
-  }
-  if (normalizedType && ONSITE_SESSION_TYPES.has(normalizedType)) {
-    return "onsite";
+  const typeSaysOnline = !!normalizedType && ONLINE_SESSION_TYPES.has(normalizedType);
+  const typeSaysOnsite = !!normalizedType && ONSITE_SESSION_TYPES.has(normalizedType);
+  const hasType = typeSaysOnline || typeSaysOnsite;
+
+  const modes = group.supportedModes;
+  const isPaired = modes.includes("online") && modes.includes("onsite");
+  const isSingleOnline = modes.length === 1 && modes[0] === "online";
+  const isSingleOnsite = modes.length === 1 && modes[0] === "onsite";
+  const recordIsOnline = teacherRecord?.isOnline ?? null;
+
+  // 1. Paired groups — require sessionType corroboration for high confidence.
+  if (isPaired && teacherRecord) {
+    if (hasType) {
+      const typeModality: "online" | "onsite" = typeSaysOnline ? "online" : "onsite";
+      const recordModality: "online" | "onsite" = recordIsOnline ? "online" : "onsite";
+      if (typeModality === recordModality) {
+        // Both signals agree → high confidence.
+        return { modality: recordModality, confidence: "high" };
+      }
+      // Contradiction (D-07): unknown + emit conflict_model.
+      return {
+        modality: "unknown",
+        confidence: "low",
+        contradiction: {
+          message: `Paired group "${group.displayName}" has contradicting modality signals: teacher record isOnlineVariant=${recordIsOnline} but session sessionType="${normalizedType}"`,
+          isOnlineVariant: recordIsOnline,
+          sessionType: normalizedType ?? "",
+        },
+      };
+    }
+    // Paired + sessionType missing → inferred from isOnlineVariant; confidence low (D-04).
+    const inferred: "online" | "onsite" = recordIsOnline ? "online" : "onsite";
+    return { modality: inferred, confidence: "low" };
   }
 
-  const normalizedLocation = session.location?.trim().toLowerCase();
-  if (
-    normalizedLocation &&
-    ONLINE_LOCATION_PATTERNS.some((pattern) => normalizedLocation.includes(pattern))
-  ) {
-    return "online";
+  // 2. Single-record groups — contradiction if sessionType disagrees with the group's only mode.
+  if (isSingleOnline) {
+    if (typeSaysOnsite) {
+      return {
+        modality: "unknown",
+        confidence: "low",
+        contradiction: {
+          message: `Single-record online group "${group.displayName}" has contradicting sessionType="${normalizedType}"`,
+          isOnlineVariant: recordIsOnline,
+          sessionType: normalizedType ?? "",
+        },
+      };
+    }
+    return { modality: "online", confidence: "high" };
   }
-  if (
-    normalizedLocation &&
-    ONSITE_LOCATION_PATTERNS.some((pattern) => normalizedLocation.includes(pattern))
-  ) {
-    return "onsite";
+  if (isSingleOnsite) {
+    if (typeSaysOnline) {
+      return {
+        modality: "unknown",
+        confidence: "low",
+        contradiction: {
+          message: `Single-record onsite group "${group.displayName}" has contradicting sessionType="${normalizedType}"`,
+          isOnlineVariant: recordIsOnline,
+          sessionType: normalizedType ?? "",
+        },
+      };
+    }
+    return { modality: "onsite", confidence: "high" };
   }
 
-  if (group.supportedModes.length === 1) {
-    return group.supportedModes[0] as CompareSessionBlock["modality"];
-  }
-
-  return "unknown";
+  // 3. Unresolved group (supportedModes is empty) — fail-closed. No silent single-mode fallback (MOD-02).
+  return { modality: "unknown", confidence: "low" };
 }
 
 export function buildCompareTutor(
@@ -116,14 +180,18 @@ export function buildCompareTutor(
     }
   }
 
-  const sessions: CompareSessionBlock[] = filtered.map((s) => ({
-    title: s.title, studentName: s.studentName, subject: s.subject,
-    classType: s.classType, sessionType: s.sessionType, recurrenceId: s.recurrenceId, location: s.location,
-    modality: resolveSessionModality(group, s),
-    startTime: formatMinute(s.startMinute), endTime: formatMinute(s.endMinute),
-    date: dateRange ? formatDate(s.startTime) : undefined,
-    weekday: s.weekday, startMinute: s.startMinute, endMinute: s.endMinute,
-  }));
+  const sessions: CompareSessionBlock[] = filtered.map((s) => {
+    const { modality, confidence } = resolveSessionModality(group, s);
+    return {
+      title: s.title, studentName: s.studentName, subject: s.subject,
+      classType: s.classType, sessionType: s.sessionType, recurrenceId: s.recurrenceId, location: s.location,
+      modality,
+      modalityConfidence: confidence,
+      startTime: formatMinute(s.startMinute), endTime: formatMinute(s.endMinute),
+      date: dateRange ? formatDate(s.startTime) : undefined,
+      weekday: s.weekday, startMinute: s.startMinute, endMinute: s.endMinute,
+    };
+  });
 
   const totalMinutes = filtered.reduce((sum, s) => sum + (s.endMinute - s.startMinute), 0);
   const studentNames = new Set(filtered.map((s) => s.studentName).filter(Boolean));

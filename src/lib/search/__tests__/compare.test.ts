@@ -83,7 +83,11 @@ describe("buildCompareTutor", () => {
     expect(result.sessions[0].modality).toBe("online");
   });
 
-  it("falls back to session type evidence when no online variant exists", () => {
+  it("returns unknown for an unresolved group even with sessionType evidence (MOD-01 fail-closed)", () => {
+    // Pre-MOD-01 this used location/sessionType as standalone fallback and returned "online".
+    // MOD-01 restricts the resolver to isOnlineVariant + sessionType corroboration — an
+    // unresolved group (supportedModes: []) has no isOnlineVariant signal to corroborate,
+    // so the session falls into the fail-closed branch (AGENTS.md:146-149 / D-01 / D-05).
     const tutor = makeTutor({
       supportedModes: [],
       sessionBlocks: [
@@ -92,7 +96,8 @@ describe("buildCompareTutor", () => {
     });
 
     const result = buildCompareTutor(tutor);
-    expect(result.sessions[0].modality).toBe("online");
+    expect(result.sessions[0].modality).toBe("unknown");
+    expect(result.sessions[0].modalityConfidence).toBe("low");
   });
 });
 

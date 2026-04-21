@@ -119,6 +119,7 @@ export interface CompareSessionBlock {
   recurrenceId?: string;
   location?: string;
   modality: "online" | "onsite" | "unknown";
+  modalityConfidence: "high" | "medium" | "low";
   startTime: string;    // "HH:mm"
   endTime: string;      // "HH:mm"
   date?: string;        // ISO date "YYYY-MM-DD" when dateRange filtering is active
