@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { SearchForm } from "@/components/search/search-form";
 import type { SearchContext } from "@/components/search/search-form";
@@ -54,23 +54,35 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
   const searchParams = useSearchParams();
   const compare = useCompare();
 
+  // Stable ref to latest compare hook. Prevents stale-closure fragility if
+  // compare state mutates between render and mount-effect execution
+  // (POLISH-12 / L4 from v1.0-MILESTONE-AUDIT.md:139).
+  const compareRef = useRef(compare);
+  compareRef.current = compare;
+
   const [response, setResponse] = useState<RangeSearchResponse | null>(null);
   const [searchContext, setSearchContext] = useState<SearchContext | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [drawerSlots, setDrawerSlots] = useState<RecommendedSlot[] | null>(null);
 
-  // Handle ?tutors= and ?week= deep links on mount
+  // Handle ?tutors= and ?week= deep links on mount. Reads via compareRef so
+  // the effect always sees the current hook, not the stale render-0 closure.
   useEffect(() => {
+    const current = compareRef.current;
     const weekParam = searchParams.get("week");
     const tutorIds = searchParams.get("tutors")?.split(",").filter(Boolean) ?? [];
     if (weekParam && isValidWeekParam(weekParam)) {
-      compare.changeWeek(weekParam);
+      current.changeWeek(weekParam);
     }
     if (tutorIds.length > 0) {
-      compare.fetchCompare(tutorIds, weekParam ?? compare.weekStart);
+      current.fetchCompare(tutorIds, weekParam ?? current.weekStart);
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // Mount-only effect (by design). compareRef is stable (ref identity never
+    // changes across renders). searchParams is from Next useSearchParams and is
+    // snapshot at mount; re-running on param change would nuke user state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Derive the primitive the effect actually depends on (joined IDs string) so
   // the effect re-runs only when the set of selected tutor IDs changes, not when
