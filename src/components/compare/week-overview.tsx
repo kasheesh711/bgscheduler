@@ -16,6 +16,7 @@ import {
   sessionTextColor,
   rgba,
 } from "./session-colors";
+import { modalityDisplay } from "./modality-display";
 import { getCurrentMonday } from "@/hooks/use-compare";
 
 const HOUR_HEIGHT = 48;
@@ -533,6 +534,15 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, w
                                     +{overflowCount}
                                   </div>
                                 )}
+                                {(() => {
+                                  const { Icon, ariaLabel } = modalityDisplay(s.modality, s.modalityConfidence);
+                                  return (
+                                    <Icon
+                                      aria-label={ariaLabel}
+                                      className="absolute top-0.5 right-0.5 w-3 h-3 text-muted-foreground/70 pointer-events-none"
+                                    />
+                                  );
+                                })()}
                               </button>
                             )}
                           />
@@ -547,6 +557,12 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, w
                               {s.classType && <Badge variant="outline" className="text-[10px] px-1 py-0">{formatClassType(s.classType)}</Badge>}
                               {s.location && <Badge variant="outline" className="text-[10px] px-1 py-0">{s.location}</Badge>}
                             </div>
+                            <p className="text-[10px] text-muted-foreground pt-0.5">
+                              {(() => {
+                                const { label } = modalityDisplay(s.modality, s.modalityConfidence);
+                                return label;
+                              })()}
+                            </p>
                             {isConflict && (
                               <p className="text-conflict text-[10px] font-medium">Conflict detected</p>
                             )}
