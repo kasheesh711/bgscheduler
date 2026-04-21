@@ -87,7 +87,6 @@ Progress: [░░░░░░░░░░] 0/6 phases (0%)
 
 Full log in PROJECT.md Key Decisions table. Roadmap-scoping decisions from v1.1:
 
-- **Phase 6 MOD-01 kickoff validation (2026-04-21):** `future_session_blocks.sessionType` NULL rate measured: 0.00% (0/34092 rows in snapshot 25c31629). Scope retained.
 - **Phase 5 first (POLISH drain)** — prevents POLISH-scatter anti-pattern (pitfall 15); establishes a11y baseline required by Phase 9 VPOL-03
 - **Phase 10 last (VPOL-01)** — animates a frozen visual baseline; lowest reversibility cost if pullback needed; highest cross-browser risk
 - **Phase 8 before Phase 10** — sticky positioning is foundational; transitions animate a known-good sticky setup rather than a moving target
