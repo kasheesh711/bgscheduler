@@ -64,20 +64,36 @@ export function CalendarGrid({
   // Today indicator state — CAL-03
   const [nowSnapshot, setNowSnapshot] = useState(() => {
     const bkk = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
-    return { minutes: bkk.getHours() * 60 + bkk.getMinutes(), dow: bkk.getDay() };
+    return {
+      minutes: bkk.getHours() * 60 + bkk.getMinutes(),
+      dow: bkk.getDay(),
+      dateKey: bkk.toDateString(),
+    };
   });
 
   const isCurrentWeek = weekStart === getCurrentMonday();
 
+  // Tick every minute. Always runs (not gated on isCurrentWeek) so a tab left
+  // open across midnight re-evaluates the week by updating dateKey → triggers
+  // a re-render → isCurrentWeek recomputes via getCurrentMonday(). POLISH-07/M2
+  // fix from v1.0-MILESTONE-AUDIT.md:134.
   useEffect(() => {
-    if (!isCurrentWeek) return;
     const tick = () => {
       const bkk = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
-      setNowSnapshot({ minutes: bkk.getHours() * 60 + bkk.getMinutes(), dow: bkk.getDay() });
+      const next = {
+        minutes: bkk.getHours() * 60 + bkk.getMinutes(),
+        dow: bkk.getDay(),
+        dateKey: bkk.toDateString(),
+      };
+      setNowSnapshot((prev) =>
+        prev.minutes === next.minutes && prev.dow === next.dow && prev.dateKey === next.dateKey
+          ? prev
+          : next,
+      );
     };
     const id = setInterval(tick, 60_000);
     return () => clearInterval(id);
-  }, [isCurrentWeek]);
+  }, []);
 
   const dayConflicts = useMemo(
     () => conflicts.filter((c) => c.dayOfWeek === dayOfWeek),
