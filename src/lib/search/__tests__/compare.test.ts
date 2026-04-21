@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildCompareTutor, detectConflicts, findSharedFreeSlots } from "../compare";
+import { buildCompareTutor, detectConflicts, findSharedFreeSlots, resolveSessionModality, detectSessionModalityConflict } from "../compare";
 import type { IndexedTutorGroup, SearchIndex } from "../index";
 
 function makeTutor(overrides: Partial<IndexedTutorGroup> = {}): IndexedTutorGroup {
@@ -98,6 +98,277 @@ describe("buildCompareTutor", () => {
     const result = buildCompareTutor(tutor);
     expect(result.sessions[0].modality).toBe("unknown");
     expect(result.sessions[0].modalityConfidence).toBe("low");
+  });
+});
+
+describe("resolveSessionModality matrix (MOD-05 / D-21)", () => {
+  // Merge-gate regression matrix per 06-CONTEXT.md D-21/D-22 and research Pitfall 1.
+  // Covers every combination of {group shape × isOnlineVariant × sessionType} with
+  // explicit expected {modality, confidence} outputs. Every contradiction case (#4, 5,
+  // 9, 10, 15, 16) asserts BOTH modality === "unknown" AND detectSessionModalityConflict
+  // returns a non-null payload whose message names both disagreeing signals. Any future
+  // refactor that silently replaces a fail-closed "unknown" branch with a concrete value
+  // breaks this matrix and blocks the merge.
+  function runCase(args: {
+    supportedModes: string[];
+    wiseRecords: { wiseTeacherId: string; wiseDisplayName: string; isOnline: boolean }[];
+    sessionType?: string;
+  }) {
+    const tutor = makeTutor({
+      supportedModes: args.supportedModes,
+      wiseRecords: args.wiseRecords,
+      sessionBlocks: [
+        {
+          startTime: new Date("2024-01-15T09:00:00"),
+          endTime: new Date("2024-01-15T10:00:00"),
+          weekday: 1,
+          startMinute: 540,
+          endMinute: 600,
+          isBlocking: true,
+          wiseTeacherId: args.wiseRecords[0]?.wiseTeacherId ?? "t1",
+          studentName: "Test Student",
+          subject: "Math",
+          sessionType: args.sessionType,
+        },
+      ],
+    });
+    const resolverResult = resolveSessionModality(tutor, tutor.sessionBlocks[0]);
+    const compareResult = buildCompareTutor(tutor);
+    const supportedModality: "online" | "onsite" | "both" | "unresolved" =
+      args.supportedModes.length === 0
+        ? "unresolved"
+        : args.supportedModes.length === 2
+        ? "both"
+        : (args.supportedModes[0] as "online" | "onsite");
+    const conflictResult = detectSessionModalityConflict({
+      supportedModality,
+      isOnlineVariant: args.wiseRecords[0]?.isOnline ?? false,
+      sessionType: args.sessionType,
+      groupDisplayName: tutor.displayName,
+    });
+    return { resolverResult, compareResult, conflictResult };
+  }
+
+  // --- Single-online group (supportedModes: ["online"]) ---
+  it("case 1: single-online + isOnlineVariant=true + sessionType=missing → online/high", () => {
+    const { resolverResult, compareResult, conflictResult } = runCase({
+      supportedModes: ["online"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Online Tutor", isOnline: true }],
+    });
+    expect(resolverResult.modality).toBe("online");
+    expect(resolverResult.confidence).toBe("high");
+    expect(compareResult.sessions[0].modality).toBe("online");
+    expect(compareResult.sessions[0].modalityConfidence).toBe("high");
+    expect(conflictResult).toBeNull();
+  });
+
+  it("case 2: single-online + isOnlineVariant=true + sessionType=online → online/high", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["online"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Online Tutor", isOnline: true }],
+      sessionType: "online",
+    });
+    expect(resolverResult.modality).toBe("online");
+    expect(resolverResult.confidence).toBe("high");
+    expect(conflictResult).toBeNull();
+  });
+
+  it("case 3: single-online + isOnlineVariant=true + sessionType=virtual → online/high (virtual ∈ ONLINE_SESSION_TYPES)", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["online"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Online Tutor", isOnline: true }],
+      sessionType: "virtual",
+    });
+    expect(resolverResult.modality).toBe("online");
+    expect(resolverResult.confidence).toBe("high");
+    expect(conflictResult).toBeNull();
+  });
+
+  it("case 4: single-online + isOnlineVariant=true + sessionType=onsite → unknown/low + CONTRADICTION (D-08)", () => {
+    const { resolverResult, compareResult, conflictResult } = runCase({
+      supportedModes: ["online"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Online Tutor", isOnline: true }],
+      sessionType: "onsite",
+    });
+    expect(resolverResult.modality).toBe("unknown");
+    expect(resolverResult.confidence).toBe("low");
+    expect(compareResult.sessions[0].modality).toBe("unknown");
+    expect(conflictResult).not.toBeNull();
+    expect(conflictResult?.message).toMatch(/onsite/);
+    expect(conflictResult?.sessionType).toBe("onsite");
+    expect(conflictResult?.isOnlineVariant).toBe(true);
+  });
+
+  it("case 5: single-online + isOnlineVariant=true + sessionType=in-person → unknown/low + CONTRADICTION (D-08)", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["online"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Online Tutor", isOnline: true }],
+      sessionType: "in-person",
+    });
+    expect(resolverResult.modality).toBe("unknown");
+    expect(resolverResult.confidence).toBe("low");
+    expect(conflictResult).not.toBeNull();
+    expect(conflictResult?.sessionType).toBe("in-person");
+  });
+
+  // --- Single-onsite group (supportedModes: ["onsite"]) ---
+  it("case 6: single-onsite + isOnlineVariant=false + sessionType=missing → onsite/high", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Onsite Tutor", isOnline: false }],
+    });
+    expect(resolverResult.modality).toBe("onsite");
+    expect(resolverResult.confidence).toBe("high");
+    expect(conflictResult).toBeNull();
+  });
+
+  it("case 7: single-onsite + isOnlineVariant=false + sessionType=onsite → onsite/high", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Onsite Tutor", isOnline: false }],
+      sessionType: "onsite",
+    });
+    expect(resolverResult.modality).toBe("onsite");
+    expect(resolverResult.confidence).toBe("high");
+    expect(conflictResult).toBeNull();
+  });
+
+  it("case 8: single-onsite + isOnlineVariant=false + sessionType=in-person → onsite/high (in-person ∈ ONSITE_SESSION_TYPES)", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Onsite Tutor", isOnline: false }],
+      sessionType: "in-person",
+    });
+    expect(resolverResult.modality).toBe("onsite");
+    expect(resolverResult.confidence).toBe("high");
+    expect(conflictResult).toBeNull();
+  });
+
+  it("case 9: single-onsite + isOnlineVariant=false + sessionType=online → unknown/low + CONTRADICTION (D-08)", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Onsite Tutor", isOnline: false }],
+      sessionType: "online",
+    });
+    expect(resolverResult.modality).toBe("unknown");
+    expect(resolverResult.confidence).toBe("low");
+    expect(conflictResult).not.toBeNull();
+    expect(conflictResult?.sessionType).toBe("online");
+    expect(conflictResult?.isOnlineVariant).toBe(false);
+  });
+
+  it("case 10: single-onsite + isOnlineVariant=false + sessionType=virtual → unknown/low + CONTRADICTION (D-08)", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Onsite Tutor", isOnline: false }],
+      sessionType: "virtual",
+    });
+    expect(resolverResult.modality).toBe("unknown");
+    expect(resolverResult.confidence).toBe("low");
+    expect(conflictResult).not.toBeNull();
+    expect(conflictResult?.sessionType).toBe("virtual");
+  });
+
+  // --- Paired group (supportedModes: ["online", "onsite"]) ---
+  it("case 11: paired + isOnlineVariant=true + sessionType=online → online/high (agree)", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["online", "onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Paired Online", isOnline: true }],
+      sessionType: "online",
+    });
+    expect(resolverResult.modality).toBe("online");
+    expect(resolverResult.confidence).toBe("high");
+    expect(conflictResult).toBeNull();
+  });
+
+  it("case 12: paired + isOnlineVariant=false + sessionType=onsite → onsite/high (agree)", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["online", "onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Paired Onsite", isOnline: false }],
+      sessionType: "onsite",
+    });
+    expect(resolverResult.modality).toBe("onsite");
+    expect(resolverResult.confidence).toBe("high");
+    expect(conflictResult).toBeNull();
+  });
+
+  it("case 13: paired + isOnlineVariant=true + sessionType=missing → online/low (inferred, D-04)", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["online", "onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Paired Online", isOnline: true }],
+    });
+    expect(resolverResult.modality).toBe("online");
+    expect(resolverResult.confidence).toBe("low");
+    expect(conflictResult).toBeNull();
+  });
+
+  it("case 14: paired + isOnlineVariant=false + sessionType=missing → onsite/low (inferred, D-04)", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["online", "onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Paired Onsite", isOnline: false }],
+    });
+    expect(resolverResult.modality).toBe("onsite");
+    expect(resolverResult.confidence).toBe("low");
+    expect(conflictResult).toBeNull();
+  });
+
+  it("case 15: paired + isOnlineVariant=true + sessionType=onsite → unknown/low + CONTRADICTION (D-07)", () => {
+    const { resolverResult, compareResult, conflictResult } = runCase({
+      supportedModes: ["online", "onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Paired Online", isOnline: true }],
+      sessionType: "onsite",
+    });
+    expect(resolverResult.modality).toBe("unknown");
+    expect(resolverResult.confidence).toBe("low");
+    expect(compareResult.sessions[0].modality).toBe("unknown");
+    expect(compareResult.sessions[0].modalityConfidence).toBe("low");
+    expect(conflictResult).not.toBeNull();
+    expect(conflictResult?.message).toMatch(/isOnlineVariant=true/);
+    expect(conflictResult?.message).toMatch(/"onsite"/);
+  });
+
+  it("case 16: paired + isOnlineVariant=false + sessionType=online → unknown/low + CONTRADICTION (D-07)", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: ["online", "onsite"],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Paired Onsite", isOnline: false }],
+      sessionType: "online",
+    });
+    expect(resolverResult.modality).toBe("unknown");
+    expect(resolverResult.confidence).toBe("low");
+    expect(conflictResult).not.toBeNull();
+    expect(conflictResult?.message).toMatch(/isOnlineVariant=false/);
+    expect(conflictResult?.message).toMatch(/"online"/);
+  });
+
+  // --- Unresolved group ---
+  it("case 17: unresolved group (supportedModes=[]) + any signal → unknown/low (fail-closed, MOD-02)", () => {
+    const { resolverResult, conflictResult } = runCase({
+      supportedModes: [],
+      wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Unresolved", isOnline: false }],
+      sessionType: "online",
+    });
+    expect(resolverResult.modality).toBe("unknown");
+    expect(resolverResult.confidence).toBe("low");
+    // No contradiction because supportedModality=unresolved has no baseline to contradict against:
+    expect(conflictResult).toBeNull();
+  });
+
+  // --- Aggregate: medium is never emitted in MOD-01 (D-03) ---
+  it("never emits `medium` confidence tier in MOD-01 (D-03)", () => {
+    const allCases: Array<Parameters<typeof runCase>[0]> = [
+      { supportedModes: ["online"], wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "T", isOnline: true }] },
+      { supportedModes: ["online"], wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "T", isOnline: true }], sessionType: "online" },
+      { supportedModes: ["online"], wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "T", isOnline: true }], sessionType: "onsite" },
+      { supportedModes: ["onsite"], wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "T", isOnline: false }] },
+      { supportedModes: ["onsite"], wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "T", isOnline: false }], sessionType: "online" },
+      { supportedModes: ["online", "onsite"], wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "T", isOnline: true }] },
+      { supportedModes: ["online", "onsite"], wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "T", isOnline: true }], sessionType: "onsite" },
+      { supportedModes: [], wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "T", isOnline: false }] },
+    ];
+    for (const c of allCases) {
+      const { resolverResult } = runCase(c);
+      expect(resolverResult.confidence, `confidence for ${JSON.stringify(c)}`).not.toBe("medium");
+    }
   });
 });
 
