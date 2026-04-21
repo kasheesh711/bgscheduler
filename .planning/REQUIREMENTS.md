@@ -49,28 +49,28 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Backlog Drain — Phase 04 human QA
 
-- [ ] **POLISH-01**: Screen-reader AT QA signed off on VoiceOver for search + compare flows (NVDA deferred to v1.2 as NVDA-v12 per Phase 5 CONTEXT.md D-02, 2026-04-21)
-- [ ] **POLISH-02**: DiscoveryPanel error state verified in production browser (real failure + visible message)
-- [ ] **POLISH-03**: Semantic color tokens verified rendering correctly in light + dark mode
-- [ ] **POLISH-04**: Data-health skeleton proportions match post-load content (no layout shift)
-- [ ] **POLISH-05**: `text-[10px]` legibility verified on production displays and sign-off captured
+- [x] **POLISH-01**: Screen-reader AT QA signed off on VoiceOver for search + compare flows (NVDA deferred to v1.2 as NVDA-v12 per Phase 5 CONTEXT.md D-02, 2026-04-21)
+- [x] **POLISH-02**: DiscoveryPanel error state verified in production browser (real failure + visible message)
+- [x] **POLISH-03**: Semantic color tokens verified rendering correctly in light + dark mode
+- [x] **POLISH-04**: Data-health skeleton proportions match post-load content (no layout shift)
+- [x] **POLISH-05**: `text-[10px]` legibility verified on production displays and sign-off captured
 
 ### Backlog Drain — Phase 03 findings
 
-- [ ] **POLISH-06**: URL-sync effect dependencies stabilized / memoized (Phase 03 M1)
-- [ ] **POLISH-07**: Today-indicator midnight crossover corrected (Phase 03 M2)
-- [ ] **POLISH-08**: `?week=YYYY-MM-DD` URL param validation is regex-strict, not shape-only (Phase 03 M3)
-- [ ] **POLISH-09**: Today-indicator uses semantic color token instead of literal `bg-red-500` (Phase 03 L1)
-- [ ] **POLISH-10**: Dead-code guard `multiTutorLayout` removed (Phase 03 L2)
-- [ ] **POLISH-11**: `addTutor` wrapped in `useCallback` (Phase 03 L3)
-- [ ] **POLISH-12**: Mount-effect stale-closure fix applied (Phase 03 L4)
+- [x] **POLISH-06**: URL-sync effect dependencies stabilized / memoized (Phase 03 M1)
+- [x] **POLISH-07**: Today-indicator midnight crossover corrected (Phase 03 M2)
+- [x] **POLISH-08**: `?week=YYYY-MM-DD` URL param validation is regex-strict, not shape-only (Phase 03 M3)
+- [x] **POLISH-09**: Today-indicator uses semantic color token instead of literal `bg-red-500` (Phase 03 L1)
+- [x] **POLISH-10**: Dead-code guard `multiTutorLayout` removed (Phase 03 L2)
+- [x] **POLISH-11**: `addTutor` wrapped in `useCallback` (Phase 03 L3)
+- [x] **POLISH-12**: Mount-effect stale-closure fix applied (Phase 03 L4)
 
 ### Backlog Drain — Cross-phase tech debt
 
-- [ ] **POLISH-13**: Retroactive `.planning/phases/02-*/02-VERIFICATION.md` attestation
-- [ ] **POLISH-14**: Unused `TutorSelector` component body removed (`src/components/compare/tutor-selector.tsx:19`)
-- [ ] **POLISH-15**: v1.0.1 production UAT signed off (recommended-slots hero, copy-for-parent drawer, idiot-proof defaults)
-- [ ] **POLISH-16**: `recommend.test.ts` unit tests added for v1.0.1 ranking logic (`src/lib/search/recommend.ts`)
+- [x] **POLISH-13**: Retroactive `.planning/phases/02-*/02-VERIFICATION.md` attestation
+- [x] **POLISH-14**: Unused `TutorSelector` component body removed (`src/components/compare/tutor-selector.tsx:19`)
+- [x] **POLISH-15**: v1.0.1 production UAT signed off (recommended-slots hero, copy-for-parent drawer, idiot-proof defaults)
+- [x] **POLISH-16**: `recommend.test.ts` unit tests added for v1.0.1 ranking logic (`src/lib/search/recommend.ts`)
 
 ## v1.2+ Requirements
 
@@ -164,22 +164,22 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TRANS-03 | Phase 10 | Pending |
 | TRANS-04 | Phase 10 | Pending |
 | TRANS-05 | Phase 10 | Pending |
-| POLISH-01 | Phase 5 | Pending |
-| POLISH-02 | Phase 5 | Pending |
-| POLISH-03 | Phase 5 | Pending |
-| POLISH-04 | Phase 5 | Pending |
-| POLISH-05 | Phase 5 | Pending |
-| POLISH-06 | Phase 5 | Pending |
-| POLISH-07 | Phase 5 | Pending |
-| POLISH-08 | Phase 5 | Pending |
-| POLISH-09 | Phase 5 | Pending |
-| POLISH-10 | Phase 5 | Pending |
-| POLISH-11 | Phase 5 | Pending |
-| POLISH-12 | Phase 5 | Pending |
-| POLISH-13 | Phase 5 | Pending |
-| POLISH-14 | Phase 5 | Pending |
-| POLISH-15 | Phase 5 | Pending |
-| POLISH-16 | Phase 5 | Pending |
+| POLISH-01 | Phase 5 | Complete |
+| POLISH-02 | Phase 5 | Complete |
+| POLISH-03 | Phase 5 | Complete |
+| POLISH-04 | Phase 5 | Complete |
+| POLISH-05 | Phase 5 | Complete |
+| POLISH-06 | Phase 5 | Complete |
+| POLISH-07 | Phase 5 | Complete |
+| POLISH-08 | Phase 5 | Complete |
+| POLISH-09 | Phase 5 | Complete |
+| POLISH-10 | Phase 5 | Complete |
+| POLISH-11 | Phase 5 | Complete |
+| POLISH-12 | Phase 5 | Complete |
+| POLISH-13 | Phase 5 | Complete |
+| POLISH-14 | Phase 5 | Complete |
+| POLISH-15 | Phase 5 | Complete |
+| POLISH-16 | Phase 5 | Complete |
 | NVDA-v12 | v1.2+ (deferred) | Pending |
 
 **Coverage:**

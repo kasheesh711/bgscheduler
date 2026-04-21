@@ -41,13 +41,13 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   4. v1.0.1 recommended-slots hero ranking logic has automated unit-test coverage and the `TutorSelector` dead-code body + M2/M3/L1–L4 findings are removed/corrected in `src/`
   5. Retroactive `.planning/phases/02-*/02-VERIFICATION.md` attestation is committed, closing the v1.0 audit chain
 **Plans**: 7 plans
-  - [ ] 05-01-PLAN.md — Prep commit: clean working tree + commit phase archival deletions (D-09/D-10)
-  - [ ] 05-02-PLAN.md — search-workspace.tsx fixes: POLISH-06 URL-sync deps / POLISH-08 week validator / POLISH-12 stale closure
-  - [ ] 05-03-PLAN.md — Calendar/week-overview: POLISH-09 today-indicator token / POLISH-07 midnight tick / POLISH-10 dead-code removal
-  - [ ] 05-04-PLAN.md — Compare hooks + cleanup: POLISH-11 addTutor useCallback / POLISH-14 TutorSelector body removal
-  - [ ] 05-05-PLAN.md — Test authoring: POLISH-16 recommend.test.ts for v1.0.1 ranking logic
-  - [ ] 05-06-PLAN.md — POLISH-13 retroactive Phase 02 verification attestation
-  - [ ] 05-07-PLAN.md — D-02 REQUIREMENTS.md amendment + human-QA walkthrough: POLISH-01/02/03/04/05/15
+  - [x] 05-01-PLAN.md — Prep commit: clean working tree + commit phase archival deletions (D-09/D-10)
+  - [x] 05-02-PLAN.md — search-workspace.tsx fixes: POLISH-06 URL-sync deps / POLISH-08 week validator / POLISH-12 stale closure
+  - [x] 05-03-PLAN.md — Calendar/week-overview: POLISH-09 today-indicator token / POLISH-07 midnight tick / POLISH-10 dead-code removal
+  - [x] 05-04-PLAN.md — Compare hooks + cleanup: POLISH-11 addTutor useCallback / POLISH-14 TutorSelector body removal
+  - [x] 05-05-PLAN.md — Test authoring: POLISH-16 recommend.test.ts for v1.0.1 ranking logic
+  - [x] 05-06-PLAN.md — POLISH-13 retroactive Phase 02 verification attestation
+  - [x] 05-07-PLAN.md — D-02 REQUIREMENTS.md amendment + human-QA walkthrough: POLISH-01/02/03/04/05/15
 **UI hint**: yes
 
 ### Phase 6: MOD-01 Reliable Modality Detection
