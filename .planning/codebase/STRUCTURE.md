@@ -1,323 +1,375 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-04-16
+**Analysis Date:** 2026-04-21
 
 ## Directory Layout
 
 ```
 Scheduling/
-├── src/
-│   ├── app/                              # Next.js App Router
-│   │   ├── layout.tsx                    # Root layout (fonts, html shell)
-│   │   ├── page.tsx                      # Root redirect to /search
-│   │   ├── globals.css                   # Tailwind + CSS custom properties
-│   │   ├── favicon.ico
-│   │   ├── login/
-│   │   │   └── page.tsx                  # Google sign-in page
-│   │   ├── (app)/                        # Route group (shared AppNav layout)
-│   │   │   ├── layout.tsx                # AppNav + main wrapper
-│   │   │   ├── search/
-│   │   │   │   ├── page.tsx              # Side-by-side search + compare workspace
-│   │   │   │   └── loading.tsx           # Search page loading skeleton
+├── .planning/                     # GSD planning artifacts (docs, phases, roadmap)
+│   ├── codebase/                  # Auto-generated codebase maps (this directory)
+│   ├── phases/                    # Per-phase context + plans
+│   ├── milestones/                # Milestone tracking
+│   ├── research/                  # Research artifacts (PITFALLS.md)
+│   ├── quick/                     # `/gsd-quick` outputs
+│   ├── debug/                     # `/gsd-debug` outputs
+│   ├── ROADMAP.md, STATE.md, ...  # Top-level planning docs
+├── docs/                          # Human documentation (superpowers notes)
+├── drizzle/                       # Drizzle-generated SQL migrations
+│   ├── 0000_tidy_black_bolt.sql   # Initial schema
+│   ├── 0001_tough_plazm.sql       # Follow-up migration
+│   └── meta/                      # Drizzle journal + snapshots
+├── node_modules/                  # Dependencies (gitignored)
+├── public/                        # Static assets served at root
+├── src/                           # Application source
+│   ├── app/                       # Next.js 16 App Router
+│   │   ├── (app)/                 # Authenticated route group (uses AppNav layout)
+│   │   │   ├── layout.tsx         # Shared nav + main container
+│   │   │   ├── search/            # /search — primary workspace
+│   │   │   │   ├── page.tsx       # RSC entry; loads filterOptions + tutorList
+│   │   │   │   └── loading.tsx    # Suspense fallback
 │   │   │   ├── compare/
-│   │   │   │   └── page.tsx              # Redirect to /search (backward compat)
+│   │   │   │   └── page.tsx       # Client-side redirect to /search
 │   │   │   └── data-health/
-│   │   │       └── page.tsx              # Sync status + data issues dashboard
-│   │   └── api/
-│   │       ├── auth/
-│   │       │   └── [...nextauth]/
-│   │       │       └── route.ts          # Auth.js catch-all handler
-│   │       ├── search/
-│   │       │   ├── route.ts              # POST: slot-based search
-│   │       │   └── range/
-│   │       │       └── route.ts          # POST: range search with sub-slots
-│   │       ├── compare/
-│   │       │   ├── route.ts              # POST: compare 1-3 tutors
-│   │       │   └── discover/
-│   │       │       └── route.ts          # POST: find candidate tutors
-│   │       ├── filters/
-│   │       │   └── route.ts              # GET: dropdown filter options
-│   │       ├── tutors/
-│   │       │   └── route.ts              # GET: all tutor names/IDs
-│   │       ├── data-health/
-│   │       │   └── route.ts              # GET: sync status + issue counts
-│   │       └── internal/
-│   │           └── sync-wise/
-│   │               └── route.ts          # POST: cron-triggered full sync
-│   ├── components/
-│   │   ├── compare/                      # Compare panel components
-│   │   │   ├── calendar-grid.tsx         # GCal-style weekly time grid
-│   │   │   ├── compare-panel.tsx         # Right panel container
-│   │   │   ├── discovery-panel.tsx       # "Advanced search" modal content
-│   │   │   ├── session-colors.ts         # Shared color logic (RGBA fills, borders)
-│   │   │   ├── tutor-combobox.tsx        # Searchable tutor dropdown (cmdk)
-│   │   │   ├── tutor-profile-popover.tsx # Tutor detail popover
-│   │   │   ├── tutor-selector.tsx        # Color-coded tutor chips (max 3)
-│   │   │   ├── week-calendar.tsx         # Month-grid date picker popup
-│   │   │   └── week-overview.tsx         # Week view with free-gap indicators
-│   │   ├── search/                       # Search panel components
-│   │   │   ├── availability-grid.tsx     # Table-based availability results
-│   │   │   ├── copy-button.tsx           # Copy-for-parents clipboard button
-│   │   │   ├── recent-searches.tsx       # localStorage recent search list
-│   │   │   ├── results-view.tsx          # Search results container
-│   │   │   ├── search-form.tsx           # Compact 3-column search form
-│   │   │   ├── search-results.tsx        # Results with Needs Review section
-│   │   │   ├── search-workspace.tsx      # Left panel orchestrator
-│   │   │   ├── slot-builder.tsx          # Multi-slot search builder
-│   │   │   ├── slot-chips.tsx            # Visual slot tag display
-│   │   │   └── slot-input.tsx            # Time slot input controls
+│   │   │       └── page.tsx       # /data-health dashboard
+│   │   ├── api/                   # Route handlers
+│   │   │   ├── auth/[...nextauth]/route.ts
+│   │   │   ├── compare/
+│   │   │   │   ├── route.ts
+│   │   │   │   └── discover/route.ts
+│   │   │   ├── data-health/
+│   │   │   │   ├── route.ts
+│   │   │   │   ├── modality-counter.ts
+│   │   │   │   └── __tests__/modality-counter.test.ts
+│   │   │   ├── filters/route.ts
+│   │   │   ├── internal/
+│   │   │   │   └── sync-wise/route.ts
+│   │   │   ├── search/
+│   │   │   │   ├── route.ts
+│   │   │   │   └── range/route.ts
+│   │   │   └── tutors/route.ts
+│   │   ├── login/page.tsx         # Outside (app) group — no AppNav
+│   │   ├── layout.tsx             # Root html + fonts
+│   │   ├── page.tsx               # Redirects to /search
+│   │   └── globals.css            # Tailwind v4 + CSS custom properties
+│   ├── components/                # UI — organized by feature
+│   │   ├── ui/                    # shadcn primitives (badge, button, card,
+│   │   │                          # command, dialog, input, popover, select,
+│   │   │                          # separator, table, tabs, textarea, ...)
 │   │   ├── layout/
-│   │   │   └── app-nav.tsx               # Top navigation bar
-│   │   ├── skeletons/
-│   │   │   ├── calendar-skeleton.tsx     # Compare panel loading state
-│   │   │   ├── form-skeleton.tsx         # Search form loading state
-│   │   │   └── search-skeleton.tsx       # Full search page loading state
-│   │   └── ui/                           # shadcn/ui primitives
-│   │       ├── badge.tsx
-│   │       ├── button.tsx
-│   │       ├── card.tsx
-│   │       ├── command.tsx               # cmdk-based command palette
-│   │       ├── dialog.tsx
-│   │       ├── input-group.tsx
-│   │       ├── input.tsx
-│   │       ├── popover.tsx
-│   │       ├── select.tsx
-│   │       ├── separator.tsx
-│   │       ├── table.tsx
-│   │       ├── tabs.tsx
-│   │       └── textarea.tsx
+│   │   │   └── app-nav.tsx        # Persistent nav bar
+│   │   ├── search/                # Search-left-panel components
+│   │   │   ├── search-workspace.tsx
+│   │   │   ├── search-form.tsx
+│   │   │   ├── search-results.tsx / results-view.tsx / availability-grid.tsx
+│   │   │   ├── recommended-slots.tsx
+│   │   │   ├── copy-for-parent-drawer.tsx / copy-button.tsx
+│   │   │   ├── recent-searches.tsx
+│   │   │   └── slot-*.tsx         # slot-builder, slot-chips, slot-input
+│   │   ├── compare/               # Compare-right-panel components
+│   │   │   ├── compare-panel.tsx
+│   │   │   ├── week-overview.tsx
+│   │   │   ├── calendar-grid.tsx
+│   │   │   ├── week-calendar.tsx  # Month-grid date picker
+│   │   │   ├── tutor-combobox.tsx
+│   │   │   ├── tutor-selector.tsx
+│   │   │   ├── tutor-profile-popover.tsx
+│   │   │   ├── discovery-panel.tsx
+│   │   │   ├── session-colors.ts
+│   │   │   └── modality-display.ts
+│   │   ├── data-health/           # Data-health dashboard widgets
+│   │   └── skeletons/             # Suspense fallbacks
 │   ├── hooks/
-│   │   └── use-compare.ts                # Compare state + cache management hook
+│   │   └── use-compare.ts         # Compare state machine + tutor cache
 │   ├── lib/
-│   │   ├── auth.ts                       # Auth.js config (Google provider + allowlist)
-│   │   ├── env.ts                        # Zod env var validation (9 vars)
-│   │   ├── utils.ts                      # cn() class merge utility
-│   │   ├── data/
-│   │   │   ├── filters.ts                # Cached filter options ("use cache")
-│   │   │   └── tutors.ts                 # Cached tutor list ("use cache")
-│   │   ├── db/
-│   │   │   ├── index.ts                  # Neon serverless singleton (getDb)
-│   │   │   ├── schema.ts                 # 14 Drizzle table definitions + 4 enums
-│   │   │   └── seed.ts                   # Admin users + alias seeding
-│   │   ├── normalization/
-│   │   │   ├── identity.ts               # 5-step identity resolution cascade
-│   │   │   ├── availability.ts           # Working hours normalization
-│   │   │   ├── leaves.ts                 # Leave normalization (UTC->Bangkok)
-│   │   │   ├── sessions.ts              # Session blocking classification
-│   │   │   ├── qualifications.ts         # Tag parsing (subject/curriculum/level)
-│   │   │   ├── modality.ts               # Online/onsite derivation
-│   │   │   ├── timezone.ts               # Asia/Bangkok conversion utilities
+│   │   ├── auth.ts                # NextAuth config + allowlist callback
+│   │   ├── env.ts                 # Zod-validated process.env
+│   │   ├── utils.ts               # cn() class merger
+│   │   ├── data/                  # RSC-cached read helpers (tagged "snapshot")
+│   │   │   ├── filters.ts
+│   │   │   └── tutors.ts
+│   │   ├── db/                    # Database layer
+│   │   │   ├── index.ts           # getDb() singleton
+│   │   │   ├── schema.ts          # 14 tables + 4 enums
+│   │   │   └── seed.ts            # Aliases + admin users seeder
+│   │   ├── wise/                  # External API client
+│   │   │   ├── client.ts          # HTTP + retry + concurrency limiter
+│   │   │   ├── fetchers.ts
+│   │   │   ├── types.ts
 │   │   │   └── __tests__/
-│   │   │       ├── identity.test.ts
-│   │   │       ├── availability.test.ts
-│   │   │       ├── leaves.test.ts
-│   │   │       ├── sessions.test.ts
-│   │   │       ├── modality.test.ts
-│   │   │       ├── qualifications.test.ts
-│   │   │       └── timezone.test.ts
-│   │   ├── search/
-│   │   │   ├── index.ts                  # In-memory SearchIndex singleton
-│   │   │   ├── engine.ts                 # Availability search execution
-│   │   │   ├── compare.ts                # Compare engine (schedule, conflicts, free slots)
-│   │   │   ├── parser.ts                 # Natural language slot parser
-│   │   │   ├── types.ts                  # All search/compare type definitions
+│   │   ├── normalization/         # 6 domain modules + tests
+│   │   │   ├── identity.ts
+│   │   │   ├── availability.ts
+│   │   │   ├── leaves.ts
+│   │   │   ├── sessions.ts
+│   │   │   ├── qualifications.ts
+│   │   │   ├── modality.ts
+│   │   │   ├── timezone.ts
 │   │   │   └── __tests__/
-│   │   │       ├── engine.test.ts
-│   │   │       ├── compare.test.ts
-│   │   │       └── parser.test.ts
 │   │   ├── sync/
-│   │   │   └── orchestrator.ts           # Full ETL pipeline (runFullSync)
-│   │   └── wise/
-│   │       ├── client.ts                 # WiseClient class (retry, concurrency)
-│   │       ├── fetchers.ts               # Domain-specific API fetchers
-│   │       ├── types.ts                  # Wise API type definitions
+│   │   │   └── orchestrator.ts    # runFullSync() — full ETL pipeline
+│   │   └── search/
+│   │       ├── index.ts           # SearchIndex singleton
+│   │       ├── engine.ts          # executeSearch()
+│   │       ├── compare.ts         # buildCompareTutor/detect/findShared
+│   │       ├── recommend.ts       # Client-derived top slots
+│   │       ├── parser.ts          # Natural-language slot parsing
+│   │       ├── types.ts           # Shared wire types
+│   │       ├── cache-version.ts   # CACHE_VERSION = "v1"
 │   │       └── __tests__/
-│   │           ├── client.test.ts
-│   │           └── fetchers.test.ts
-│   └── middleware.ts                     # Auth gate (session check + redirects)
-├── drizzle/                              # Database migrations
-│   ├── 0000_tidy_black_bolt.sql          # Initial schema migration
-│   ├── 0001_tough_plazm.sql              # Second migration
-│   └── meta/
-│       ├── 0000_snapshot.json
-│       ├── 0001_snapshot.json
-│       └── _journal.json
-├── .planning/                            # Project planning artifacts
-│   ├── PROJECT.md
-│   ├── REQUIREMENTS.md
-│   ├── ROADMAP.md
-│   ├── STATE.md
-│   ├── config.json
-│   ├── codebase/                         # Auto-generated codebase docs
-│   │   ├── ARCHITECTURE.md
-│   │   ├── CONCERNS.md
-│   │   ├── CONVENTIONS.md
-│   │   ├── INTEGRATIONS.md
-│   │   ├── STACK.md
-│   │   ├── STRUCTURE.md
-│   │   └── TESTING.md
-│   ├── phases/                           # Phase planning directories
-│   └── research/                         # Research artifacts
-├── CLAUDE.md                             # Claude Code project instructions
-├── AGENTS.md                             # Agent behavior instructions
-├── drizzle.config.ts                     # Drizzle Kit config (schema + output paths)
-├── eslint.config.mjs                     # ESLint 9 flat config
-├── next.config.ts                        # Next.js config (default)
-├── package.json
-├── package-lock.json
-├── postcss.config.mjs                    # Tailwind PostCSS plugin
-├── tsconfig.json                         # TypeScript strict config
-└── vitest.config.ts                      # Vitest config (node env, globals)
+│   └── middleware.ts              # Auth gate
+├── .env.example                   # Documented required env vars
+├── .env.local                     # Local secrets (gitignored)
+├── AGENTS.md                      # Agent-facing project brief
+├── CLAUDE.md                      # Project instructions (imports AGENTS.md)
+├── DATA_AUDIT.md / PRD.md / README.md / WISE_COMPARISON.md
+├── components.json                # shadcn config (base-nova style)
+├── drizzle.config.ts              # Drizzle-kit config (points at schema.ts)
+├── eslint.config.mjs              # Flat config: next/core-web-vitals + typescript
+├── next-env.d.ts                  # Next.js type ambient
+├── next.config.ts                 # Default config
+├── package.json / package-lock.json
+├── postcss.config.mjs             # @tailwindcss/postcss plugin
+├── tsconfig.json                  # strict, ES2017, bundler, @/* -> ./src/*
+├── vercel.json                    # Cron schedule (0 0 * * *)
+└── vitest.config.ts               # Node environment, @/* alias
 ```
+
+## Directory Purposes
+
+**`src/app/`:**
+- Purpose: Next.js 16 App Router — server components, route handlers, layouts
+- Contains: Pages, API routes, `globals.css`
+- Key files: `src/app/(app)/search/page.tsx` (primary entry), `src/app/layout.tsx` (root html + fonts), `src/app/globals.css` (Tailwind + CSS custom properties for `--available`, `--blocked`, `--conflict`, `--free-slot`)
+
+**`src/app/(app)/`:**
+- Purpose: Route group for authenticated pages; shared `AppNav` layout
+- Contains: `search/`, `compare/`, `data-health/`, and the group `layout.tsx`
+- Key files: `src/app/(app)/layout.tsx` (nav + main container with `overflow-hidden px-4 lg:px-6 py-3`)
+
+**`src/app/api/`:**
+- Purpose: HTTP route handlers under `/api/*`
+- Contains: `auth/`, `compare/`, `data-health/`, `filters/`, `internal/`, `search/`, `tutors/`
+- Key files: `src/app/api/compare/route.ts`, `src/app/api/search/range/route.ts`, `src/app/api/internal/sync-wise/route.ts`
+
+**`src/components/ui/`:**
+- Purpose: shadcn-generated primitives wrapping `@base-ui/react` + `cmdk`
+- Contains: `badge.tsx`, `button.tsx`, `card.tsx`, `command.tsx`, `dialog.tsx`, `input.tsx`, `input-group.tsx`, `popover.tsx`, `select.tsx`, `separator.tsx`, `table.tsx`, `tabs.tsx`, `textarea.tsx`
+- Key files: All tracked in `components.json` (registry `base-nova`, `rsc: true`, `tsx: true`, icons `lucide`)
+
+**`src/components/search/`, `src/components/compare/`, `src/components/layout/`, `src/components/data-health/`, `src/components/skeletons/`:**
+- Purpose: Feature-organized client components
+- Contains: `"use client"` modules with domain-specific logic
+- Key files: `search-workspace.tsx`, `compare-panel.tsx`, `week-overview.tsx`, `tutor-combobox.tsx`, `week-calendar.tsx`, `discovery-panel.tsx`, `copy-for-parent-drawer.tsx`, `recommended-slots.tsx`, `app-nav.tsx`
+
+**`src/lib/`:**
+- Purpose: Backend logic — DB, auth, normalization pipeline, search, external API client
+- Contains: `auth.ts`, `env.ts`, `utils.ts`, `data/`, `db/`, `wise/`, `normalization/`, `sync/`, `search/`
+- Key files: `src/lib/db/schema.ts` (14 tables), `src/lib/search/index.ts` (in-memory index), `src/lib/sync/orchestrator.ts` (ETL)
+
+**`src/lib/normalization/`:**
+- Purpose: Pure functions that convert raw Wise responses into canonical domain objects
+- Contains: 6 domain modules + `timezone.ts` + `__tests__/`
+- Key files: `identity.ts`, `availability.ts`, `leaves.ts`, `sessions.ts`, `qualifications.ts`, `modality.ts`, `timezone.ts`
+
+**`src/lib/search/`:**
+- Purpose: In-memory index + query engines
+- Contains: Singleton builder, search engine, compare engine, recommend helper, parser, types, cache-version constant
+- Key files: `index.ts` (index + `ensureIndex`), `engine.ts` (`executeSearch`), `compare.ts` (`buildCompareTutor`/`detectConflicts`/`findSharedFreeSlots`/`resolveSessionModality`)
+
+**`src/lib/wise/`:**
+- Purpose: Wise API HTTP client + fetchers + types
+- Contains: `client.ts` (WiseClient class with retry/backoff/concurrency), `fetchers.ts` (domain calls), `types.ts` (response shapes), `__tests__/`
+- Key files: `createWiseClient()` factory in `client.ts`; `fetchAllTeachers`, `fetchTeacherFullAvailability`, `fetchAllFutureSessions` in `fetchers.ts`
+
+**`src/lib/data/`:**
+- Purpose: RSC-side cached read helpers (tagged `"snapshot"` for revalidation)
+- Contains: `filters.ts` (subjects/curriculums/levels), `tutors.ts` (tutor list)
+- Key files: Used by `src/app/(app)/search/page.tsx`
+
+**`src/hooks/`:**
+- Purpose: Client-side React hooks
+- Contains: `use-compare.ts` — owns compare state machine, tutor cache, week navigation, AbortController, snapshot mismatch recovery
+
+**`drizzle/`:**
+- Purpose: Drizzle-generated migration SQL (committed)
+- Generated: Yes (by `npm run db:generate`)
+- Committed: Yes
+- Key files: `0000_tidy_black_bolt.sql`, `0001_tough_plazm.sql`, `meta/_journal.json`
+
+**`.planning/`:**
+- Purpose: GSD workflow artifacts (plans, phases, milestones, codebase maps)
+- Contains: ROADMAP, STATE, PROJECT, MILESTONES, HANDOFF, REQUIREMENTS, RETROSPECTIVE markdown files + per-phase context directories
+- Generated: Partially (codebase/ is auto-generated)
+- Committed: Yes
+
+**`node_modules/`, `.next/`, `.vercel/`:**
+- Purpose: Dependency + build caches
+- Generated: Yes
+- Committed: No (gitignored)
 
 ## Key File Locations
 
-### Configuration Files
+**Entry Points:**
+- `src/app/page.tsx` — root redirect to `/search`
+- `src/app/(app)/search/page.tsx` — primary workspace (RSC)
+- `src/app/(app)/data-health/page.tsx` — ops dashboard
+- `src/app/login/page.tsx` — Google sign-in
+- `src/middleware.ts` — auth gate
+- `src/app/api/internal/sync-wise/route.ts` — sync entry (cron + manual)
 
-| File | Purpose |
-|------|---------|
-| `tsconfig.json` | TypeScript: strict, ES2017 target, bundler resolution, `@/*` -> `./src/*` |
-| `next.config.ts` | Next.js: default config (no custom settings) |
-| `drizzle.config.ts` | Drizzle Kit: PostgreSQL dialect, schema at `./src/lib/db/schema.ts`, output `./drizzle/` |
-| `vitest.config.ts` | Vitest: node environment, globals enabled, `@/*` path alias |
-| `postcss.config.mjs` | PostCSS: `@tailwindcss/postcss` plugin only |
-| `eslint.config.mjs` | ESLint 9: flat config, core-web-vitals + typescript presets |
-| `src/lib/env.ts` | Runtime env validation: 9 vars via Zod schema |
+**Configuration:**
+- `tsconfig.json` — strict, ES2017, `@/*` → `./src/*`
+- `next.config.ts` — default
+- `vercel.json` — daily cron `0 0 * * *`
+- `drizzle.config.ts` — schema path + Postgres dialect
+- `eslint.config.mjs` — flat config extending next presets
+- `postcss.config.mjs` — `@tailwindcss/postcss` only
+- `components.json` — shadcn `base-nova` style
+- `vitest.config.ts` — node env, `@/*` alias
+- `.env.example` — documents 9 required env vars
+- `src/lib/env.ts` — Zod-validated accessor (fails loudly at startup)
 
-### Core Business Logic
+**Core Logic:**
+- `src/lib/db/schema.ts` — 14 tables: `snapshots`, `sync_runs`, `admin_users`, `tutor_identity_groups`, `tutor_identity_group_members`, `tutor_aliases`, `tutors`, `raw_teacher_tags`, `subject_level_qualifications`, `recurring_availability_windows`, `dated_leaves`, `future_session_blocks`, `data_issues`, `snapshot_stats`
+- `src/lib/db/index.ts` — `getDb()` + `Database` type export
+- `src/lib/auth.ts` — NextAuth config with Google + `admin_users` allowlist
+- `src/lib/search/index.ts` — `SearchIndex`, `IndexedTutorGroup`, `buildIndex`, `ensureIndex`
+- `src/lib/search/engine.ts` — `executeSearch`, `getBlockingSessions`
+- `src/lib/search/compare.ts` — `buildCompareTutor`, `detectConflicts`, `findSharedFreeSlots`, `resolveSessionModality`, `detectSessionModalityConflict`
+- `src/lib/search/types.ts` — wire types (`SearchRequest`, `CompareResponse`, `DiscoverCandidate`, etc.)
+- `src/lib/sync/orchestrator.ts` — `runFullSync()`
+- `src/lib/wise/client.ts` — `WiseClient` class + `createWiseClient()`
+- `src/lib/normalization/timezone.ts` — Asia/Bangkok helpers + `parseTimeToMinutes`
+- `src/hooks/use-compare.ts` — client-side compare state + tutor cache
 
-| File | Purpose |
-|------|---------|
-| `src/lib/sync/orchestrator.ts` | Full ETL pipeline entry point (`runFullSync`) |
-| `src/lib/search/index.ts` | In-memory index singleton (`buildIndex`, `ensureIndex`) |
-| `src/lib/search/engine.ts` | Availability search execution (`executeSearch`) |
-| `src/lib/search/compare.ts` | Compare engine (`buildCompareTutor`, `detectConflicts`, `findSharedFreeSlots`) |
-| `src/lib/search/types.ts` | All search/compare TypeScript type definitions |
-| `src/lib/db/schema.ts` | Database schema (14 tables, 4 enums) |
-| `src/lib/auth.ts` | Auth.js config (Google provider, admin allowlist callback) |
-
-### Normalization Modules
-
-| File | Purpose |
-|------|---------|
-| `src/lib/normalization/identity.ts` | Teacher identity resolution (5-step cascade) |
-| `src/lib/normalization/availability.ts` | Working hours normalization |
-| `src/lib/normalization/leaves.ts` | Leave normalization (UTC -> Bangkok) |
-| `src/lib/normalization/sessions.ts` | Session blocking classification |
-| `src/lib/normalization/qualifications.ts` | Tag parsing into subject/curriculum/level |
-| `src/lib/normalization/modality.ts` | Online/onsite derivation |
-| `src/lib/normalization/timezone.ts` | Asia/Bangkok timezone utilities |
-
-### External API Integration
-
-| File | Purpose |
-|------|---------|
-| `src/lib/wise/client.ts` | `WiseClient` class (retry, concurrency, auth headers) |
-| `src/lib/wise/fetchers.ts` | Domain fetchers (teachers, availability, sessions) |
-| `src/lib/wise/types.ts` | Wise API response shapes + accessor helpers |
-
-### Frontend Entry Points
-
-| File | Purpose |
-|------|---------|
-| `src/app/(app)/search/page.tsx` | Main workspace (search + compare side-by-side) |
-| `src/hooks/use-compare.ts` | Compare state management hook with client cache |
-| `src/components/compare/compare-panel.tsx` | Compare panel container |
-| `src/components/search/search-workspace.tsx` | Search panel orchestrator |
-| `src/components/compare/calendar-grid.tsx` | GCal-style weekly time grid |
-| `src/components/compare/session-colors.ts` | Shared color logic module |
+**Testing:**
+- `src/lib/normalization/__tests__/` — identity, timezone, availability, leaves, sessions, modality, qualifications
+- `src/lib/search/__tests__/` — engine, compare, parser, recommend
+- `src/lib/wise/__tests__/` — client, fetchers
+- `src/lib/sync/__tests__/` — orchestrator unit tests
+- `src/app/api/data-health/__tests__/modality-counter.test.ts`
 
 ## Naming Conventions
 
-### Files
+**Files:**
+- kebab-case for all source files: `session-colors.ts`, `week-overview.tsx`, `app-nav.tsx`, `use-compare.ts`, `copy-for-parent-drawer.tsx`
+- Tests co-located in `__tests__/` directories: `{module}.test.ts`
+- Next.js reserved names lowercased: `page.tsx`, `layout.tsx`, `loading.tsx`, `route.ts`, `middleware.ts`
 
-- **kebab-case** for all files: `session-colors.ts`, `week-overview.tsx`, `app-nav.tsx`
-- **React components** use `.tsx`, logic/types use `.ts`
-- **Test files:** `{module}.test.ts` inside `__tests__/` directories co-located with source
-- **Schema:** singular `schema.ts`
-- **Type definitions:** `types.ts` per module
+**Directories:**
+- kebab-case feature directories: `data-health/`, `search/`, `compare/`, `layout/`
+- Route-group directory in parentheses: `(app)/` (does not appear in URL)
+- Dynamic segment brackets: `[...nextauth]/`
 
-### Functions
+**Functions:**
+- camelCase: `executeSearch`, `buildCompareTutor`, `detectConflicts`, `resolveSessionModality`
+- `get` prefix for getters: `getDb`, `getEnv`, `getSearchIndex`, `getCurrentMonday`, `getBaseName`
+- `is`/`has` prefix for booleans: `isBlockingStatus`, `isOnlineVariant`, `hasRecurringLeaveConflict`
+- `make`/`create` prefix for factories: `createWiseClient`, `createDb`
+- `parse`/`normalize` prefix for transformers: `parseTimeToMinutes`, `normalizeWorkingHours`, `normalizeLeaves`
+- `fetch` prefix for API calls: `fetchAllTeachers`, `fetchAllFutureSessions`
+- `use` prefix for React hooks: `useCompare`, `useSearchParams`
 
-- **camelCase** for all functions: `executeSearch`, `buildCompareTutor`, `detectConflicts`
-- **Prefix `get`** for getters: `getDb()`, `getEnv()`, `getBaseName()`
-- **Prefix `is`/`has`** for booleans: `isBlockingStatus()`, `isOnlineVariant()`
-- **Prefix `create`** for factories: `createWiseClient()`, `createDb()`
-- **Prefix `parse`/`normalize`** for transforms: `parseTimeToMinutes()`, `normalizeLeaves()`
-- **Prefix `fetch`** for API calls: `fetchAllTeachers()`, `fetchAllFutureSessions()`
+**Types & interfaces:**
+- PascalCase: `SearchRequest`, `CompareTutor`, `IndexedTutorGroup`
+- Prefix `Wise` for external shapes: `WiseTeacher`, `WiseSession`, `WiseAvailabilityResponse`
+- Prefix `Indexed` for in-memory shapes: `IndexedTutorGroup`, `IndexedSessionBlock`
+- `interface` for object shapes; `type` for unions/aliases: `type SearchMode = "recurring" | "one_time"`
+- Database enums defined via Drizzle `pgEnum` (not TypeScript `enum`): `syncStatusEnum`, `modalityEnum`, `dataIssueTypeEnum`, `dataIssueSeverityEnum`
 
-### Variables and Constants
+**Database identifiers:**
+- snake_case table names: `tutor_identity_groups`, `future_session_blocks`, `snapshot_stats`
+- snake_case column names: `snapshot_id`, `created_at`, `wise_teacher_id`, `is_online_variant`
+- camelCase Drizzle schema exports: `tutorIdentityGroups`, `futureSessionBlocks`
+- Index names prefixed by table abbreviation: `tig_snapshot_idx`, `fsb_weekday_idx`, `slq_group_idx`
 
-- **camelCase** for variables: `snapshotMeta`, `tutorGroupIds`
-- **UPPER_SNAKE_CASE** for constants: `TUTOR_COLORS`, `HOUR_HEIGHT`, `DAY_NAMES`
-- **Prefix `_`** for module singletons: `let _db`, `let _cachedIndex`
+**Constants:**
+- UPPER_SNAKE_CASE: `TUTOR_COLORS`, `HOUR_HEIGHT`, `START_HOUR`, `DAY_NAMES`, `DISPLAY_DAYS`, `ONLINE_SESSION_TYPES`, `INSERT_CHUNK_SIZE`, `TIMEZONE`, `PAGE_LIMIT`, `CACHE_VERSION`
+- Singleton private state: `globalThis.__bgscheduler_*` (prefixed to avoid collisions)
 
-### Types
+## Where to Add New Code
 
-- **PascalCase** for types/interfaces: `SearchRequest`, `CompareTutor`
-- **Prefix `Wise`** for external API types: `WiseTeacher`, `WiseSession`
-- **Prefix `Indexed`** for in-memory index types: `IndexedTutorGroup`, `IndexedSessionBlock`
-- **Prefix `Normalized`** for pipeline outputs: `NormalizedSessionBlock`
-- **`interface`** for object shapes, **`type`** for unions/aliases
+**New API endpoint:**
+- Route handler: `src/app/api/{feature}/route.ts` (or `src/app/api/{feature}/{sub-action}/route.ts`)
+- Follow the canonical pattern: `auth()` gate → `.safeParse()` on body → `ensureIndex(getDb())` → business logic → typed response
+- Wire types: add to `src/lib/search/types.ts` (or a new `{feature}/types.ts` if cleanly separable)
+- Tests: `src/app/api/{feature}/__tests__/*.test.ts` co-located (see `data-health/__tests__/modality-counter.test.ts` for the ESM-safe pattern that avoids transitively importing `next-auth`)
 
-### Database
+**New search / compare logic:**
+- Pure functions in `src/lib/search/{name}.ts`
+- Export named functions (no default exports); expose types through `src/lib/search/types.ts` if consumed across modules
+- Tests: `src/lib/search/__tests__/{name}.test.ts`
 
-- **snake_case** for table/column names: `tutor_identity_groups`, `snapshot_id`
-- **camelCase** for Drizzle schema objects: `tutorIdentityGroups`, `snapshotId`
-- **Enums** via `pgEnum`, not TypeScript `enum`
+**New normalization step:**
+- Module in `src/lib/normalization/{domain}.ts`
+- Input: Wise types from `@/lib/wise/types`; output: canonical domain types + `{issues: ...}` tuple for fail-closed reporting
+- Wire into `src/lib/sync/orchestrator.ts` between fetch and persist steps
+- Tests: `src/lib/normalization/__tests__/{domain}.test.ts`
 
-## Route Structure
+**New DB table / column:**
+- Edit `src/lib/db/schema.ts` (Drizzle `pgTable` + `pgEnum` definitions)
+- Run `npm run db:generate` — new SQL lands in `drizzle/000N_*.sql`
+- Apply with `DATABASE_URL=... npm run db:migrate`
+- If snapshot-scoped, include `snapshotId: uuid("snapshot_id").notNull().references(() => snapshots.id)` + `index("{tab}_snapshot_idx")`
+- Update `src/lib/search/index.ts` `buildIndex()` if the new data needs to be loaded into the in-memory index
 
-### Page Routes
+**New UI page:**
+- Authenticated: `src/app/(app)/{route}/page.tsx` (inherits `AppNav`)
+- Unauthenticated: `src/app/{route}/page.tsx` (outside `(app)` group; add to middleware allowlist if needed)
+- Server-side data: create cached helper in `src/lib/data/{name}.ts` with `"use cache"` + `cacheTag("snapshot")`
+- Suspense fallback: `src/app/{path}/loading.tsx` or wrap in `<Suspense fallback={...}>` inline
 
-| Route | File | Rendering | Auth |
-|-------|------|-----------|------|
-| `/` | `src/app/page.tsx` | Server (redirect) | Middleware |
-| `/login` | `src/app/login/page.tsx` | Server | Public |
-| `/search` | `src/app/(app)/search/page.tsx` | Client (`"use client"`) | Middleware |
-| `/compare` | `src/app/(app)/compare/page.tsx` | Client (redirect) | Middleware |
-| `/data-health` | `src/app/(app)/data-health/page.tsx` | Server | Middleware |
+**New UI component:**
+- Feature-local: `src/components/{feature}/{name}.tsx`
+- Reusable primitive: add via `npx shadcn add {component}` (lands in `src/components/ui/`)
+- Skeleton for suspense: `src/components/skeletons/{name}-skeleton.tsx`
+- Use `"use client"` for interactive components; server-render by default when possible
+- Use `cn()` from `@/lib/utils` for class merging; use `@/components/compare/session-colors` helpers for tutor/session styling
 
-### API Routes
+**New React hook:**
+- `src/hooks/use-{name}.ts` with a `"use client"` directive at the top
+- Follow `useCompare` pattern when adding cached async state (AbortController in `useRef`, cache in `useRef<Map>`, snapshot-mismatch recovery)
 
-| Method | Route | Auth Mechanism |
-|--------|-------|----------------|
-| GET/POST | `/api/auth/[...nextauth]` | Public (Auth.js internal) |
-| POST | `/api/search` | Session (auth()) |
-| POST | `/api/search/range` | Session (auth()) |
-| GET | `/api/filters` | Session (auth()) |
-| GET | `/api/tutors` | Session (auth()) |
-| POST | `/api/compare` | Session (auth()) |
-| POST | `/api/compare/discover` | Session (auth()) |
-| GET | `/api/data-health` | Session (auth()) |
-| POST | `/api/internal/sync-wise` | CRON_SECRET Bearer |
+**New shared constant:**
+- UPPER_SNAKE_CASE in the most specific module that needs it; lift to `src/components/compare/session-colors.ts` or `src/lib/search/types.ts` only when 2+ consumers appear
+- Bump `src/lib/search/cache-version.ts` (`CACHE_VERSION`) whenever you change the shape of any client-cached server response (currently `CompareTutor`)
 
-### Route Groups
+## Special Directories
 
-- `(app)` -- shared layout with `AppNav` navigation bar. Contains `/search`, `/compare`, `/data-health`.
-- `/login` -- standalone page outside the `(app)` group (no nav bar).
-- `/api/internal/` -- internal endpoints with CRON_SECRET auth, excluded from middleware session check.
+**`(app)/` route group:**
+- Purpose: Next.js App Router group that shares the `AppNav` layout without affecting the URL path
+- Generated: No
+- Committed: Yes
+- Notes: The parentheses are route-group syntax, not a literal URL segment. Login page intentionally sits outside this group so it has no nav.
 
-## Test File Locations
+**`__tests__/`:**
+- Purpose: Co-located Vitest test files
+- Generated: No
+- Committed: Yes
+- Notes: Keep tests close to the module under test. The `data-health` route uses a separate `modality-counter.ts` helper specifically so Vitest can import it without pulling `next-auth`'s ESM subpath.
 
-```
-src/lib/normalization/__tests__/
-├── identity.test.ts          # Identity resolution tests
-├── availability.test.ts      # Working hours normalization tests
-├── leaves.test.ts            # Leave normalization tests
-├── sessions.test.ts          # Session blocking tests
-├── modality.test.ts          # Modality derivation tests
-├── qualifications.test.ts    # Tag parsing tests
-└── timezone.test.ts          # Timezone conversion tests
+**`drizzle/`:**
+- Purpose: Auto-generated SQL migrations + Drizzle journal metadata
+- Generated: Yes (`npm run db:generate`)
+- Committed: Yes
+- Notes: Never edit generated SQL by hand. Edit `src/lib/db/schema.ts` and regenerate.
 
-src/lib/search/__tests__/
-├── engine.test.ts            # Search engine tests
-├── compare.test.ts           # Compare engine tests
-└── parser.test.ts            # Slot parser tests
+**`.next/`, `node_modules/`, `.vercel/`, `tsconfig.tsbuildinfo`:**
+- Purpose: Build artifacts and dependency cache
+- Generated: Yes
+- Committed: No (gitignored)
 
-src/lib/wise/__tests__/
-├── client.test.ts            # Wise API client tests
-└── fetchers.test.ts          # Wise fetcher contract tests
-```
+**`.planning/`:**
+- Purpose: GSD workflow artifacts
+- Generated: Partial (`.planning/codebase/` is regenerated by `/gsd-map-codebase`; other subdirs are human-edited)
+- Committed: Yes
 
-Total: 12 test files across 3 `__tests__/` directories.
+**`.env.local`:**
+- Purpose: Local-only secrets
+- Committed: No (gitignored)
+- Documented in: `.env.example` (9 required vars — see STACK.md)
+
+---
+
+*Structure analysis: 2026-04-21*

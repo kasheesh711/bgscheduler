@@ -1,165 +1,161 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-04-16
+**Analysis Date:** 2026-04-21
 
 ## Test Framework
 
-**Runner:** Vitest 4.x
+**Runner:**
+- **Vitest ^4.1.2** — single test runner for the whole repo.
+- Config: `vitest.config.ts`
+  ```ts
+  import { defineConfig } from "vitest/config";
+  import path from "path";
 
-**Configuration (`vitest.config.ts`):**
-```typescript
-import { defineConfig } from "vitest/config";
-import path from "path";
-
-export default defineConfig({
-  test: {
-    globals: true,        // describe/it/expect available without import
-    environment: "node",  // No DOM environment
-  },
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),  // Matches tsconfig paths
+  export default defineConfig({
+    test: {
+      globals: true,
+      environment: "node",
     },
-  },
-});
+    resolve: {
+      alias: {
+        "@": path.resolve(__dirname, "./src"),
+      },
+    },
+  });
+  ```
+- `globals: true` — `describe`, `it`, `expect`, `vi` are ambient, but tests still import them explicitly for clarity:
+  ```ts
+  import { describe, it, expect } from "vitest";
+  import { afterEach, describe, expect, it, vi } from "vitest";
+  ```
+- `environment: "node"` — no jsdom. All suites are Node-land; no DOM/component rendering tests exist.
+
+**Assertion library:**
+- Vitest built-in `expect` with Jest-compatible matchers (`toBe`, `toEqual`, `toHaveLength`, `toBeDefined`, `toBeNull`, `toMatch`, `toContain`, `objectContaining`, `not.toBeNull()`).
+
+**Run commands** (from `package.json`):
+```bash
+npm test              # vitest run — one-shot CI-style run
+npm run test:watch    # vitest — interactive watch mode
 ```
 
-**Run Commands (`package.json`):**
-```bash
-npm test              # vitest run (single pass)
-npm run test:watch    # vitest (watch mode)
-```
+There is no dedicated `test:coverage` script; Vitest's built-in `--coverage` flag works but is not wired into package.json.
 
 ## Test File Organization
 
-### Directory Structure
-
-Tests are co-located in `__tests__/` directories next to their source modules:
+**Location:** colocated with source inside `__tests__/` directories — never in a top-level `tests/` or `test/` folder.
 
 ```
-src/lib/
-  normalization/
-    __tests__/
-      availability.test.ts    # normalizeWorkingHours, deduplicateWindows
-      identity.test.ts        # extractNickname, isOnlineVariant, getBaseName, resolveIdentities
-      leaves.test.ts          # normalizeLeaves, deduplicateLeaves
-      modality.test.ts        # deriveModality
-      qualifications.test.ts  # normalizeTag, normalizeTeacherTags
-      sessions.test.ts        # isBlockingStatus, normalizeSessions
-      timezone.test.ts        # parseTimeToMinutes, toLocalTime, getLocalWeekday, getLocalMinuteOfDay
-    availability.ts
-    identity.ts
-    leaves.ts
-    modality.ts
-    qualifications.ts
-    sessions.ts
-    timezone.ts
-  search/
-    __tests__/
-      compare.test.ts         # buildCompareTutor, detectConflicts, findSharedFreeSlots
-      engine.test.ts          # executeSearch (recurring, one-time, filtering, intersection)
-      parser.test.ts          # parseSlotInput
-    compare.ts
-    engine.ts
-    parser.ts
-  wise/
-    __tests__/
-      client.test.ts          # WiseClient auth headers
-      fetchers.test.ts        # fetchAllTeachers, fetchTeacherAvailability, fetchAllFutureSessions
-    client.ts
-    fetchers.ts
+src/
+├── app/api/data-health/
+│   └── __tests__/
+│       └── modality-counter.test.ts
+├── lib/
+│   ├── normalization/
+│   │   └── __tests__/
+│   │       ├── availability.test.ts
+│   │       ├── identity.test.ts
+│   │       ├── leaves.test.ts
+│   │       ├── modality.test.ts
+│   │       ├── qualifications.test.ts
+│   │       ├── sessions.test.ts
+│   │       └── timezone.test.ts
+│   ├── search/
+│   │   └── __tests__/
+│   │       ├── compare.test.ts
+│   │       ├── engine.test.ts
+│   │       ├── parser.test.ts
+│   │       └── recommend.test.ts
+│   └── wise/
+│       └── __tests__/
+│           ├── client.test.ts
+│           └── fetchers.test.ts
+└── lib/sync/
+    └── __tests__/                 # (sync orchestrator integration tests)
 ```
 
-### Naming Convention
+**Naming:**
+- `{module}.test.ts` — singular, matches the module it exercises.
+- No `.test.tsx` in the repo (no component rendering tests).
+- No `.spec.ts` alternate convention — always `.test.ts`.
 
-- File: `{module-name}.test.ts` (kebab-case matching source file)
-- Suite: one `describe` per exported function or class
-- Test: plain English behavior description starting with a verb
+**Import from the sibling file** using relative path (`../identity`, `../client`, `../compare`), and from other modules via `@/*`:
+```ts
+import { resolveIdentities } from "../identity";
+import type { WiseTeacher } from "@/lib/wise/types";
+```
 
-### Coverage by Domain
+## Test Structure
 
-| Domain | Test Files | Test Count | Key Areas |
-|--------|-----------|------------|-----------|
-| Normalization | 7 files | ~35 tests | Identity resolution, timezone conversion, availability windows, leaves, sessions, modality derivation, qualification parsing |
-| Search | 3 files | ~20 tests | Recurring/one-time search, mode filtering, qualification filtering, multi-slot intersection, conflict detection, shared free slots, slot parsing |
-| Wise API | 2 files | ~5 tests | Auth headers, response parsing, pagination |
-| Sync | 0 files | 0 tests | Orchestrator untested |
-| Components | 0 files | 0 tests | No React component tests |
-| API Routes | 0 files | 0 tests | No route handler tests |
+**Suite organization — one `describe` per public function:**
 
-**Total: 12 test files, 82 passing tests**
+```ts
+import { describe, it, expect } from "vitest";
+import { extractNickname, isOnlineVariant, resolveIdentities } from "../identity";
+import type { WiseTeacher } from "@/lib/wise/types";
 
-## Test Structure Pattern
+describe("extractNickname", () => {
+  it("extracts nickname from parenthetical", () => {
+    expect(extractNickname("Chinnakrit (Celeste) Channiti")).toBe("Celeste");
+  });
 
-Every test file follows this structure:
+  it("returns null when no parenthetical", () => {
+    expect(extractNickname("John Smith")).toBeNull();
+  });
+});
 
-```typescript
-import { describe, it, expect } from "vitest";           // 1. Vitest imports (explicit despite globals)
-import { functionUnderTest } from "../module";             // 2. Module under test
-import type { SomeType } from "@/lib/some/types";          // 3. Type imports
-
-// 4. Factory functions (if needed)
-function makeTestData(overrides: Partial<SomeType> = {}): SomeType {
-  return { ...defaults, ...overrides };
-}
-
-// 5. Test suites - one describe per exported function
-describe("functionUnderTest", () => {
-  it("describes expected behavior in plain English", () => {
-    const input = makeTestData();                          // Arrange
-    const result = functionUnderTest(input);                // Act
-    expect(result).toHaveLength(1);                        // Assert
+describe("isOnlineVariant", () => {
+  it("detects Online suffix", () => {
+    expect(isOnlineVariant("Usanee (Aey) Tortermpun Online")).toBe(true);
   });
 });
 ```
 
-**Key conventions:**
-- Flat `describe`/`it` structure (no deeply nested `describe` blocks)
-- Arrange-Act-Assert pattern (implicit, no comments separating phases)
-- No `beforeEach` for most tests -- each test builds its own data inline
-- `afterEach` only in tests that stub `global.fetch` (Wise client/fetcher tests)
-- Explicit `import { describe, it, expect } from "vitest"` even though globals are enabled
+**Patterns:**
+- **`it` titles read as behavior sentences** — "extracts nickname from parenthetical", "treats CANCELLED as non-blocking", "excludes tutor blocked by future session (recurring)". Avoids the `should` prefix.
+- **Flat test bodies** — arrange / act / assert inline; no `beforeEach` for shared state in most suites. The parallelism of Vitest plus the purely functional nature of the code under test makes global state unnecessary.
+- **Phase/decision tags in titles** for tests that enforce design decisions from planning docs, e.g. `"returns unknown for an unresolved group even with sessionType evidence (MOD-01 fail-closed)"`, `"case 4: single-online + isOnlineVariant=true + sessionType=onsite → unknown/low + CONTRADICTION (D-08)"`, `"selectModalityIssues (MOD-03 / D-10)"`.
+- **`afterEach` only when needed** — exclusively in the HTTP-mocking suites (`wise/__tests__/*.test.ts`) to restore `global.fetch` and call `vi.restoreAllMocks()`.
 
-## Mock Patterns
+## Mocking
 
-### Global Fetch Mocking (Wise API tests only)
+**Framework:** Vitest's `vi.fn()` / `vi.restoreAllMocks()` — no separate mocking library.
 
-Pattern used in `src/lib/wise/__tests__/client.test.ts` and `fetchers.test.ts`:
+**HTTP mocking pattern** — swap `global.fetch` with a `vi.fn()` returning a real `Response` object, then restore in `afterEach`:
 
-```typescript
+```ts
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WiseClient } from "../client";
 
 describe("WiseClient", () => {
-  const originalFetch = global.fetch;             // Save original
+  const originalFetch = global.fetch;
 
   afterEach(() => {
-    global.fetch = originalFetch;                  // Restore after each test
+    global.fetch = originalFetch;
     vi.restoreAllMocks();
   });
 
-  it("sends correct auth headers", async () => {
+  it("sends the live Wise auth headers to the correct base URL", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          status: 200,
-          message: "Success",
-          data: { /* mock response body */ },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
+      new Response(JSON.stringify({ status: 200, message: "Success", data: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
     );
-    global.fetch = fetchMock as typeof fetch;       // Override global
+    global.fetch = fetchMock as typeof fetch;
 
-    await client.get("/some/path");
+    const client = new WiseClient({ userId: "user-123", apiKey: "api-key-456", namespace: "begifted-education", maxRetries: 0 });
+    await client.get("/user/getUser");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.wiseapp.live/some/path",
+      "https://api.wiseapp.live/user/getUser",
       expect.objectContaining({
         method: "GET",
         headers: expect.objectContaining({
           Authorization: `Basic ${Buffer.from("user-123:api-key-456").toString("base64")}`,
           "x-api-key": "api-key-456",
           "x-wise-namespace": "begifted-education",
+          "user-agent": "VendorIntegrations/begifted-education",
         }),
       })
     );
@@ -167,49 +163,36 @@ describe("WiseClient", () => {
 });
 ```
 
-### Pagination Mocking (chained responses)
-
-```typescript
+**Pagination mocking** uses `mockResolvedValueOnce` in sequence for multi-page APIs (`src/lib/wise/__tests__/fetchers.test.ts:100+`):
+```ts
 const fetchMock = vi.fn()
-  .mockResolvedValueOnce(
-    new Response(JSON.stringify({
-      status: 200, message: "Success",
-      data: { sessions: [{ _id: "s1", ... }], page_number: 1, page_count: 2, totalRecords: 2 },
-    }), { status: 200, headers: { "Content-Type": "application/json" } })
-  )
-  .mockResolvedValueOnce(
-    new Response(JSON.stringify({
-      status: 200, message: "Success",
-      data: { sessions: [{ _id: "s2", ... }], page_number: 2, page_count: 2, totalRecords: 2 },
-    }), { status: 200, headers: { "Content-Type": "application/json" } })
-  );
+  .mockResolvedValueOnce(new Response(JSON.stringify({ ..., page_number: 1, page_count: 2 }), ...))
+  .mockResolvedValueOnce(new Response(JSON.stringify({ ..., page_number: 2, page_count: 2 }), ...));
 ```
 
-### What Is NOT Mocked
+**What to mock:**
+- `global.fetch` for Wise API calls.
+- Nothing else. Most of the codebase is pure normalization/transform logic that needs no mocks.
 
-- **Database** -- tests don't touch DB; search engine tests use in-memory `SearchIndex` built by `makeIndex()`
-- **Internal modules** -- no module-level mocking; tests call real functions
-- **Date/time** -- tests use fixed date strings like `"2024-01-15T02:00:00Z"` (a Monday in UTC, Tuesday in Bangkok at 20:00 UTC)
-- **File system** -- no file I/O in tested modules
+**What NOT to mock:**
+- The database — search engine / compare tests build in-memory `SearchIndex` fixtures directly.
+- `date-fns-tz` / timezone helpers — tests pick UTC values whose Bangkok offset is deterministic (`2024-01-15T02:00:00Z` → 09:00 Bangkok).
+- Zod schemas — validated via the real API handler behavior.
+- Auth — route-handler tests that would require this do not exist; the pattern is tested indirectly via integration.
 
-## Factory Functions
+## Fixtures and Factories
 
-### `makeTutor()` -- Indexed Tutor Group
+**Local factory functions** defined inside each test file — no shared fixture directory. Named `make*`:
 
-Used in `engine.test.ts` and `compare.test.ts`:
-
-```typescript
+```ts
+// src/lib/search/__tests__/compare.test.ts
 function makeTutor(overrides: Partial<IndexedTutorGroup> = {}): IndexedTutorGroup {
   return {
     id: "g1",
     displayName: "Test Tutor",
     supportedModes: ["online", "onsite"],
-    qualifications: [
-      { subject: "Math", curriculum: "International", level: "Y2-8" },
-    ],
-    wiseRecords: [
-      { wiseTeacherId: "t1", wiseDisplayName: "Test (Test) Tutor", isOnline: false },
-    ],
+    qualifications: [{ subject: "Math", curriculum: "International", level: "Y2-8" }],
+    wiseRecords: [{ wiseTeacherId: "t1", wiseDisplayName: "Test Tutor", isOnline: false }],
     availabilityWindows: [
       { weekday: 1, startMinute: 540, endMinute: 1020, modality: "both", wiseTeacherId: "t1" },
     ],
@@ -219,13 +202,8 @@ function makeTutor(overrides: Partial<IndexedTutorGroup> = {}): IndexedTutorGrou
     ...overrides,
   };
 }
-```
 
-### `makeIndex()` -- Search Index
-
-Used in `engine.test.ts`:
-
-```typescript
+// src/lib/search/__tests__/engine.test.ts
 function makeIndex(tutors: IndexedTutorGroup[]): SearchIndex {
   const byWeekday = new Map<number, IndexedTutorGroup[]>();
   for (const t of tutors) {
@@ -234,204 +212,94 @@ function makeIndex(tutors: IndexedTutorGroup[]): SearchIndex {
       byWeekday.get(w.weekday)!.push(t);
     }
   }
-  return {
-    snapshotId: "snap-1",
-    builtAt: new Date(),
-    tutorGroups: tutors,
-    byWeekday,
-  };
+  return { snapshotId: "snap-1", builtAt: new Date(), tutorGroups: tutors, byWeekday };
 }
-```
 
-### `makeTeacher()` -- Wise API Teacher
-
-Used in `identity.test.ts`:
-
-```typescript
-const makeTeacher = (id: string, name: string): WiseTeacher => ({
-  _id: id,
-  name,
-});
-
+// src/lib/normalization/__tests__/identity.test.ts
+const makeTeacher = (id: string, name: string): WiseTeacher => ({ _id: id, name });
 const makeNestedTeacher = (id: string, userId: string, name: string): WiseTeacher => ({
   _id: id,
   userId: { _id: userId, name },
 });
 ```
 
-### `makeGroup()` -- Identity Group
+Pattern: sensible defaults + `...overrides` spread so each test adjusts only the fields it cares about. Keeps tests readable and decoupled.
 
-Used in `modality.test.ts`:
+**Parameterized matrices** — when enforcing a combinatorial contract, the test file defines a local `runCase` helper that takes the dimensions and returns `{ resolverResult, compareResult, conflictResult }` (see `src/lib/search/__tests__/compare.test.ts:104+` — MOD-05 / D-21 regression matrix covering every `{group shape × isOnlineVariant × sessionType}` combination).
 
-```typescript
-function makeGroup(overrides: Partial<IdentityGroup> = {}): IdentityGroup {
-  return {
-    canonicalKey: "Test",
-    displayName: "Test",
-    members: [
-      { wiseTeacherId: "t1", wiseDisplayName: "Test Tutor", isOnlineVariant: false },
-    ],
-    ...overrides,
-  };
-}
+## Coverage
+
+**Requirement:** No enforced coverage threshold. `AGENTS.md` tracks raw test count: **82 passing unit tests** spread across identity, timezone, availability, leaves, sessions, modality, qualifications, search engine, compare engine, Wise contract, parser, modality counter, recommend, and the D-21 regression matrix.
+
+**Coverage by area** (count of `.test.ts` files under each `__tests__/`):
+
+| Area | Files | Focus |
+|------|-------|-------|
+| `src/lib/normalization/` | 7 | `availability`, `identity`, `leaves`, `modality`, `qualifications`, `sessions`, `timezone` |
+| `src/lib/search/` | 4 | `compare`, `engine`, `parser`, `recommend` |
+| `src/lib/wise/` | 2 | `client` (auth headers), `fetchers` (teacher/availability/session parsing + pagination) |
+| `src/app/api/data-health/` | 1 | `modality-counter` (D-10) |
+| `src/lib/sync/` | — | orchestrator integration tests present |
+
+**View coverage:**
+```bash
+npx vitest run --coverage   # uses Vitest's v8 coverage provider by default
 ```
 
-### `makeClient()` -- Wise API Client
+## Test Types
 
-Used in `fetchers.test.ts`:
+**Unit tests** (dominant):
+- Pure function verification — input → output with no I/O.
+- Target: every exported function in `src/lib/normalization/*`, `src/lib/search/{engine,compare,parser,recommend}.ts`, `src/lib/wise/client.ts`.
 
-```typescript
-function makeClient() {
-  return new WiseClient({
-    userId: "user-123",
-    apiKey: "api-key-456",
-    namespace: "begifted-education",
-    maxRetries: 0,  // Disable retries in tests for speed
-  });
-}
+**Contract tests** (`src/lib/wise/__tests__/*.test.ts`):
+- Assert HTTP shape of outgoing requests (headers, URL, query params, pagination params).
+- Assert parsing of real-world Wise response envelopes (`data.teachers`, `data.workingHours.slots`, `data.sessions` with `page_number`/`page_count`).
+
+**Regression matrix tests** (`src/lib/search/__tests__/compare.test.ts` — MOD-05 / D-21):
+- Enumerate every branch of a domain decision (16+ cases for modality resolution).
+- Each contradiction case asserts **both** `modality === "unknown"` **and** a non-null conflict payload naming both signals — preventing silent removal of fail-closed branches.
+
+**Integration tests:** sync orchestrator tests under `src/lib/sync/__tests__/`. No e2e / browser tests.
+
+**E2E tests:** Not used. There is no Playwright / Cypress setup.
+
+## Common Patterns
+
+**Timezone-sensitive testing** — pick UTC inputs whose Bangkok equivalent is unambiguous:
+```ts
+// 2024-01-15 02:00 UTC = 2024-01-15 09:00 Bangkok (UTC+7)
+const local = toLocalTime("2024-01-15T02:00:00Z");
+expect(local.getHours()).toBe(9);
+
+// 20:00 UTC on Monday = 03:00 Tuesday in Bangkok
+const weekday = getLocalWeekday("2024-01-15T20:00:00Z");
+expect(weekday).toBe(2); // Tuesday
 ```
 
-**Key conventions:**
-- Factory functions defined at top of test file, before `describe` blocks
-- Use `Partial<T>` with object spread for overrides
-- Provide sensible defaults that make tests pass without specifying every field
-- Disable retries (`maxRetries: 0`) in HTTP client tests
-- Use deterministic dates (`"2024-01-15"` = Monday) for predictable weekday calculations
-- All factories are **inline** in test files (no shared fixtures directory)
+**Fail-closed testing** — explicit assertions that unknown / missing inputs produce a safe-but-restrictive result:
+```ts
+it("treats unknown status as blocking (fail-closed)", () => {
+  expect(isBlockingStatus("SOMETHING_NEW")).toBe(true);
+});
 
-## Test Coverage Areas
-
-### Identity Resolution (`identity.test.ts`)
-
-- Nickname extraction from parenthetical names
-- Online variant detection (case-insensitive suffix matching)
-- Base name extraction (stripping Online suffix)
-- Identity grouping by extracted nickname
-- Online/offline pair merging into single group
-- Alias override application
-- Data issue creation for unresolvable teachers
-- Nested Wise user identity fields (userId as object)
-- Resolution order: nickname -> alias -> unresolved -> data_issue
-
-### Timezone Conversion (`timezone.test.ts`)
-
-- UTC to Asia/Bangkok conversion (+7 hours)
-- Weekday derivation accounting for timezone offset (UTC Monday evening -> Bangkok Tuesday)
-- Minute-of-day calculation in local timezone
-- Time string parsing ("HH:mm" -> minutes since midnight)
-
-### Availability Normalization (`availability.test.ts`)
-
-- Wise working hour slot conversion to recurring windows
-- Empty/undefined input handling
-- String weekday mapping from Wise responses ("Sunday" -> 0, "Wednesday" -> 3)
-- Zero-length window filtering
-- Overlapping window merging on same weekday
-- Non-overlapping window preservation
-- Cross-weekday separation
-
-### Leave Normalization (`leaves.test.ts`)
-
-- UTC to local time conversion for leave windows
-- Empty input handling
-- Overlapping leave merging
-- Non-overlapping leave preservation (different dates)
-
-### Session Classification (`sessions.test.ts`)
-
-- CONFIRMED/SCHEDULED -> blocking
-- CANCELLED/CANCELED -> non-blocking (both spellings)
-- Unknown status -> blocking (fail-closed)
-- Undefined status -> blocking (fail-closed)
-- Session normalization with teacher ID resolution
-- Cancelled session non-blocking flag
-- Teacher-less session skipping
-- Nested Wise user object resolution for teacher ID
-
-### Modality Derivation (`modality.test.ts`)
-
-- Online/offline pair -> "both"
-- Online-only group -> "online"
-- Session type evidence ("online" type) -> "online"
-- Single offline member with no evidence -> "unresolved" with data issue
-
-### Qualification Parsing (`qualifications.test.ts`)
-
-- International curriculum tag parsing: `"Math (Int.) Y2-8"` -> subject/curriculum/level
-- Thai curriculum tag parsing
-- ExamPrep tag with exam type
-- EFL subject parsing
-- Unparseable tag -> null return
-- Live Wise string tag support (tags as plain strings, not objects)
-- Batch tag normalization with issue collection for unmapped tags
-
-### Search Engine (`engine.test.ts`)
-
-- Available tutor matching for recurring slot
-- Session blocking in recurring mode (any future overlap)
-- Cancelled session non-blocking
-- Data issue routing to Needs Review
-- Unresolved modality routing to Needs Review
-- Mode filtering (online/onsite/either)
-- Subject/curriculum/level qualification filtering
-- Multi-slot intersection computation
-- One-time mode: exact date blocking (same date blocked, different date available)
-
-### Compare Engine (`compare.test.ts`)
-
-- Weekday-filtered session assembly
-- Full week session assembly (no weekday filter)
-- Weekly hours booked calculation
-- Distinct student count computation
-- Online variant modality marking on sessions
-- Session type evidence fallback for modality
-- Same-student overlap conflict detection across tutors
-- No conflict for different students at same time
-- No conflict for same student at non-overlapping times
-- Shared free slot computation (interval intersection minus blocking sessions)
-
-### Slot Parser (`parser.test.ts`)
-
-- Single slot parsing ("Monday 11:00-12:00")
-- Multiple comma-separated slots
-- Abbreviated day names ("Mon")
-- Unparseable input warning
-- Default mode application
-- En-dash separator support
-
-### Wise API Contract (`client.test.ts`, `fetchers.test.ts`)
-
-- Auth header format (Basic Auth base64, x-api-key, x-wise-namespace, user-agent)
-- Base URL correctness (https://api.wiseapp.live)
-- Teacher list response parsing (nested userId object)
-- Availability response unwrapping (workingHours.slots, leaves)
-- Query parameter passing (startTime, endTime as ISO strings)
-- Session pagination (COUNT mode, page_number/page_size params)
-- Multi-page session aggregation
-
-## Assertion Patterns
-
-### Exact Match
-```typescript
-expect(result).toBe(true);
-expect(result).toBe(540);           // minutes
-expect(result).toBe("Celeste");
+it("treats undefined as blocking (fail-closed)", () => {
+  expect(isBlockingStatus(undefined)).toBe(true);
+});
 ```
 
-### Length Check
-```typescript
-expect(result).toHaveLength(1);
-expect(result.slots).toHaveLength(2);
+**Async testing** — `async` `it` + `await` on the subject:
+```ts
+it("sends the live Wise auth headers to the correct base URL", async () => {
+  // ... set up fetchMock ...
+  await client.get("/user/getUser");
+  expect(fetchMock).toHaveBeenCalledWith(...);
+});
 ```
 
-### Deep Equality
-```typescript
-expect(result[0]).toEqual({ weekday: 1, startMinute: 540, endMinute: 1020 });
-```
-
-### Partial Object Matching
-```typescript
-expect(result).toEqual([
+**Partial-match assertions** for objects with non-deterministic fields (e.g. timestamps):
+```ts
+expect(result.groups[0].members).toEqual([
   expect.objectContaining({
     wiseTeacherId: "t1",
     wiseUserId: "u1",
@@ -440,82 +308,36 @@ expect(result).toEqual([
 ]);
 ```
 
-### Null / Defined Checks
-```typescript
-expect(extractNickname("John Smith")).toBeNull();
-expect(result.groups.find((g) => g.canonicalKey === "Aey")).toBeDefined();
-expect(issue).not.toBeNull();
+**Set-based assertions** for unordered collections:
+```ts
+expect(result.map((r) => r.issueType).sort()).toEqual(["conflict_model", "modality"]);
 ```
 
-### Greater Than / Range
-```typescript
-expect(slots.length).toBeGreaterThanOrEqual(1);
+**Test-file comments that cite decisions** — the D-21 matrix header in `compare.test.ts` explains *why* every contradiction case must stay green, naming the source doc:
+```ts
+// Merge-gate regression matrix per 06-CONTEXT.md D-21/D-22 and research Pitfall 1.
+// Covers every combination of {group shape × isOnlineVariant × sessionType} with
+// explicit expected {modality, confidence} outputs. ... Any future refactor that
+// silently replaces a fail-closed "unknown" branch with a concrete value
+// breaks this matrix and blocks the merge.
 ```
 
-### Called With (mock assertions)
-```typescript
-expect(fetchMock).toHaveBeenCalledWith(
-  "https://api.wiseapp.live/some/path",
-  expect.objectContaining({
-    method: "GET",
-    headers: expect.objectContaining({ "x-api-key": "api-key-456" }),
-  })
-);
+**Avoiding Next.js ESM import issues in tests** — when a route module transitively imports `next-auth` (whose ESM subpath `next/server` cannot be resolved by Vitest's bare Node resolver), extract the testable helper into a dedicated file and re-export it from the route. See `src/app/api/data-health/__tests__/modality-counter.test.ts:1-7`:
+```ts
+// Import from the dedicated helper module rather than `../route` — the route
+// module transitively imports `next-auth`, whose ESM subpath `next/server`
+// cannot be resolved by Vitest's bare Node resolver. `route.ts` re-exports the
+// same `selectModalityIssues` as a thin wrapper so acceptance greps on the
+// route module still pass; this test targets the canonical implementation.
+import { selectModalityIssues } from "../modality-counter";
 ```
 
-### URL Parameter Verification
-```typescript
-const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
-expect(calledUrl.pathname).toBe("/institutes/center-1/teachers/wise-user-1/availability");
-expect(calledUrl.searchParams.get("startTime")).toBe(startTime.toISOString());
-```
+## CI Integration
 
-## Adding New Tests
-
-### For a new normalization module:
-
-1. Create `src/lib/normalization/__tests__/{module}.test.ts`
-2. Import `describe, it, expect` from `vitest`
-3. Import functions under test from `../{module}`
-4. Import types with `import type` from relevant type files
-5. Create a factory function if needed (`make{Thing}()` with `Partial<T>` overrides)
-6. Write one `describe` per exported function
-7. Test happy path, edge cases (empty/undefined input), and fail-closed behavior
-
-### For a new search feature:
-
-1. Create test in `src/lib/search/__tests__/{feature}.test.ts`
-2. Reuse `makeTutor()` and `makeIndex()` patterns from `engine.test.ts`
-3. Build minimal `SearchRequest` objects for each scenario
-4. Test availability, blocking, filtering, and intersection separately
-
-### For a new Wise API endpoint:
-
-1. Create test in `src/lib/wise/__tests__/{feature}.test.ts`
-2. Import `afterEach, vi` from `vitest`
-3. Save `global.fetch` in `const originalFetch = global.fetch`
-4. Restore in `afterEach(() => { global.fetch = originalFetch; vi.restoreAllMocks(); })`
-5. Mock with `vi.fn().mockResolvedValue(new Response(JSON.stringify({...})))`
-6. Create client with `maxRetries: 0` to avoid slow test runs
-7. Verify both response parsing and request construction (URL, params, headers)
-
-## Coverage Configuration
-
-- No coverage thresholds configured
-- No coverage tool explicitly set up (available via `npx vitest run --coverage`)
-- Current test count: **82 passing**
-- No CI enforcement of coverage minimums
-
-## Test Types Present
-
-| Type | Present | Notes |
-|------|---------|-------|
-| Unit tests | Yes (12 files) | Pure function tests, no I/O dependencies |
-| Integration tests | No | No request/response cycle tests |
-| E2E tests | No | No Playwright/Cypress |
-| Component tests | No | No React Testing Library |
-| Snapshot tests | No | Not used |
+- **No GitHub Actions workflow** checked into the repo (no `.github/workflows/`).
+- **Vercel deploy** triggered on push to `main`. `vercel.json` controls the daily cron (`0 0 * * *`) at `/api/internal/sync-wise`.
+- **Local enforcement** only: `npm test` before deploy. The `AGENTS.md` constraint **"All 82 existing tests must continue to pass"** is treated as a merge gate in planning docs rather than an automated check.
 
 ---
 
-*Testing analysis: 2026-04-16 (updated from 2026-04-10)*
+*Testing analysis: 2026-04-21*
