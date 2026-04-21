@@ -133,6 +133,57 @@ export function resolveSessionModality(
   return { modality: "unknown", confidence: "low" };
 }
 
+/**
+ * Detect a modality contradiction for a single Wise session during sync
+ * time, without requiring an IndexedTutorGroup. Mirrors the paired-group
+ * and single-record-group contradiction branches of resolveSessionModality.
+ * Returns `null` when no contradiction is present.
+ *
+ * Called from `src/lib/sync/orchestrator.ts` during the per-session iteration
+ * so contradictions land in the `data_issues` table as `conflict_model` rows,
+ * which flow through to /data-health via the existing counter (extended in
+ * Plan 03).
+ */
+export function detectSessionModalityConflict(input: {
+  supportedModality: "online" | "onsite" | "both" | "unresolved";
+  isOnlineVariant: boolean;
+  sessionType: string | null | undefined;
+  groupDisplayName: string;
+}): { message: string; sessionType: string; isOnlineVariant: boolean } | null {
+  const normalizedType = input.sessionType?.trim().toLowerCase();
+  const typeSaysOnline = !!normalizedType && ONLINE_SESSION_TYPES.has(normalizedType);
+  const typeSaysOnsite = !!normalizedType && ONSITE_SESSION_TYPES.has(normalizedType);
+  if (!typeSaysOnline && !typeSaysOnsite) return null; // no sessionType → nothing to contradict
+  const recordModality: "online" | "onsite" = input.isOnlineVariant ? "online" : "onsite";
+
+  if (input.supportedModality === "both") {
+    const typeModality = typeSaysOnline ? "online" : "onsite";
+    if (typeModality !== recordModality) {
+      return {
+        message: `Paired group "${input.groupDisplayName}" has contradicting modality signals: teacher record isOnlineVariant=${input.isOnlineVariant} but session sessionType="${normalizedType}"`,
+        sessionType: normalizedType ?? "",
+        isOnlineVariant: input.isOnlineVariant,
+      };
+    }
+    return null;
+  }
+  if (input.supportedModality === "online" && typeSaysOnsite) {
+    return {
+      message: `Single-record online group "${input.groupDisplayName}" has contradicting sessionType="${normalizedType}"`,
+      sessionType: normalizedType ?? "",
+      isOnlineVariant: input.isOnlineVariant,
+    };
+  }
+  if (input.supportedModality === "onsite" && typeSaysOnline) {
+    return {
+      message: `Single-record onsite group "${input.groupDisplayName}" has contradicting sessionType="${normalizedType}"`,
+      sessionType: normalizedType ?? "",
+      isOnlineVariant: input.isOnlineVariant,
+    };
+  }
+  return null;
+}
+
 export function buildCompareTutor(
   group: IndexedTutorGroup,
   weekdays?: number[],

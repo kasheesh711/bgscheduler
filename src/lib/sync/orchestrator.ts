@@ -15,6 +15,7 @@ import { normalizeLeaves } from "@/lib/normalization/leaves";
 import { normalizeSessions } from "@/lib/normalization/sessions";
 import { normalizeTeacherTags } from "@/lib/normalization/qualifications";
 import { deriveModality } from "@/lib/normalization/modality";
+import { detectSessionModalityConflict } from "@/lib/search/compare";
 
 export interface SyncResult {
   success: boolean;
@@ -293,6 +294,10 @@ export async function runFullSync(
 
     // 9. Derive modality for each group
     const teacherModalities = new Map<string, typeof schema.modalityEnum.enumValues[number]>();
+    // Hoisted for the MOD-01 per-session contradiction loop below — read-only
+    // lookup keyed by group.canonicalKey so the contradiction pass can resolve
+    // the group's supportedModality from memory without a per-session SELECT.
+    const groupSupportedModality = new Map<string, "online" | "onsite" | "both" | "unresolved">();
     const tutorRows: typeof schema.tutors.$inferInsert[] = [];
 
     for (const group of groups) {
@@ -302,6 +307,9 @@ export async function runFullSync(
       );
 
       const { modality, issue } = deriveModality(group, groupSessions);
+
+      // Hoist for Task 3's contradiction loop — avoids per-session SELECT.
+      groupSupportedModality.set(group.canonicalKey, modality as "online" | "onsite" | "both" | "unresolved");
 
       await db
         .update(schema.tutorIdentityGroups)
@@ -339,6 +347,42 @@ export async function runFullSync(
         displayName: group.displayName,
         supportedModes: modes,
       });
+    }
+
+    // MOD-01 (D-07/D-08): detect per-session modality contradictions and emit
+    // `conflict_model` data_issues. Reads supportedModality from the
+    // `groupSupportedModality` Map hoisted above — NO per-session DB SELECT.
+    for (const group of groups) {
+      const memberByTeacherId = new Map(group.members.map((m) => [m.wiseTeacherId, m]));
+      const groupSessions = sessionBlocks.filter((s) => memberByTeacherId.has(s.wiseTeacherId));
+      const supportedModality = groupSupportedModality.get(group.canonicalKey) ?? "unresolved";
+
+      for (const session of groupSessions) {
+        const member = memberByTeacherId.get(session.wiseTeacherId);
+        if (!member) continue;
+        const conflict = detectSessionModalityConflict({
+          supportedModality,
+          isOnlineVariant: member.isOnlineVariant,
+          sessionType: session.sessionType,
+          groupDisplayName: group.displayName,
+        });
+        if (conflict) {
+          allIssues.push({
+            snapshotId,
+            type: "conflict_model",
+            severity: "high",
+            entityType: "future_session_block",
+            entityId: session.wiseSessionId,
+            entityName: group.displayName,
+            message: conflict.message,
+            metadata: {
+              isOnlineVariant: conflict.isOnlineVariant,
+              sessionType: conflict.sessionType,
+              groupCanonicalKey: group.canonicalKey,
+            },
+          });
+        }
+      }
     }
 
     for (const row of recurringAvailabilityRows) {
