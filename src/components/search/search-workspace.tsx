@@ -72,12 +72,17 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Derive the primitive the effect actually depends on (joined IDs string) so
+  // the effect re-runs only when the set of selected tutor IDs changes, not when
+  // the `compare` object identity changes every render. POLISH-06 / M1 fix from
+  // v1.0-MILESTONE-AUDIT.md:133.
+  const tutorIdsKey = compare.compareTutors.map((t) => t.tutorGroupId).join(",");
+
   // Sync weekStart and selected tutors to URL (non-navigating)
   useEffect(() => {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
-    const tutorIds = compare.compareTutors.map((t) => t.tutorGroupId).join(",");
-    if (tutorIds) url.searchParams.set("tutors", tutorIds);
+    if (tutorIdsKey) url.searchParams.set("tutors", tutorIdsKey);
     else url.searchParams.delete("tutors");
     if (compare.weekStart !== compare.getCurrentMonday()) {
       url.searchParams.set("week", compare.weekStart);
@@ -85,7 +90,10 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
       url.searchParams.delete("week");
     }
     window.history.replaceState({}, "", url.toString());
-  }, [compare.compareTutors, compare.weekStart, compare]);
+    // `compare.weekStart` and `tutorIdsKey` are primitives; `compare.getCurrentMonday`
+    // is a stable module-level function — safe to omit from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tutorIdsKey, compare.weekStart]);
 
   // ArrowLeft/ArrowRight navigate weeks (guard against text input focus)
   useEffect(() => {
