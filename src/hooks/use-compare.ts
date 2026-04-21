@@ -175,21 +175,24 @@ export function useCompare() {
     fetchCompare(remaining.map((t) => t.tutorGroupId), weekStart, { fetchOnly: [] });
   };
 
-  const addTutor = (id: string, name: string) => {
-    if (compareTutors.length >= 3) return;
-    const updated = [
-      ...compareTutors,
-      {
-        tutorGroupId: id,
-        displayName: name,
-        color: TUTOR_COLORS[compareTutors.length],
-      },
-    ];
-    setCompareTutors(updated);
-    setDiscoveryOpen(false);
-    // Only fetch the newly added tutor
-    fetchCompare(updated.map((t) => t.tutorGroupId), weekStart, { fetchOnly: [id] });
-  };
+  const addTutor = useCallback(
+    (id: string, name: string) => {
+      if (compareTutors.length >= 3) return;
+      const updated = [
+        ...compareTutors,
+        {
+          tutorGroupId: id,
+          displayName: name,
+          color: TUTOR_COLORS[compareTutors.length],
+        },
+      ];
+      setCompareTutors(updated);
+      setDiscoveryOpen(false);
+      // Only fetch the newly added tutor
+      fetchCompare(updated.map((t) => t.tutorGroupId), weekStart, { fetchOnly: [id] });
+    },
+    [compareTutors, weekStart, fetchCompare],
+  );
 
   const changeWeek = (newWeek: string) => {
     setWeekStart(newWeek);
