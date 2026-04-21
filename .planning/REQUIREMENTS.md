@@ -49,7 +49,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Backlog Drain — Phase 04 human QA
 
-- [ ] **POLISH-01**: Screen-reader AT QA signed off on VoiceOver + NVDA for search + compare flows
+- [ ] **POLISH-01**: Screen-reader AT QA signed off on VoiceOver for search + compare flows (NVDA deferred to v1.2 as NVDA-v12 per Phase 5 CONTEXT.md D-02, 2026-04-21)
 - [ ] **POLISH-02**: DiscoveryPanel error state verified in production browser (real failure + visible message)
 - [ ] **POLISH-03**: Semantic color tokens verified rendering correctly in light + dark mode
 - [ ] **POLISH-04**: Data-health skeleton proportions match post-load content (no layout shift)
@@ -111,6 +111,10 @@ Deferred to future release. Tracked but not in current roadmap.
 
 - **TELEM-01**: Telemetry on which recommended-slot tier gets copied most (logged to existing infra)
 - **RECURDATE-01**: Recurring-mode recommended-slot cards show explicit calendar date alongside "every week"
+
+### Accessibility (deferred)
+
+- **NVDA-v12**: Screen-reader AT QA signed off on NVDA for search + compare flows (Windows-only; deferred from v1.1 POLISH-01 per Phase 5 CONTEXT.md D-02 — user has macOS-only access)
 
 ## Out of Scope
 
@@ -176,6 +180,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | POLISH-14 | Phase 5 | Pending |
 | POLISH-15 | Phase 5 | Pending |
 | POLISH-16 | Phase 5 | Pending |
+| NVDA-v12 | v1.2+ (deferred) | Pending |
 
 **Coverage:**
 - v1.1 requirements: 40 total
@@ -192,4 +197,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-04-20*
-*Last updated: 2026-04-20 after /gsd-roadmap — all 40 v1.1 requirements mapped to Phases 5–10*
+*Last updated: 2026-04-21 — Phase 5 CONTEXT.md D-02 amendment: POLISH-01 scoped to VoiceOver-only; NVDA-v12 added to v1.2+ deferred list*
