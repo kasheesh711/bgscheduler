@@ -95,6 +95,7 @@ Full log in PROJECT.md Key Decisions table. Roadmap-scoping decisions from v1.1:
 - **VPOL-03 shape (A/B/C) deferred to Phase 9 planning** — user explicitly requested shape decision happen at phase-local design review, not roadmap time
 - **MOD-01 and PAST-01 can swap order** (logically independent) — kept suggested 6→7 per research convergence; swappable if execution capacity demands
 - **v1.0 polish bundled into v1.1 Phase 5** rather than scattered across feature phases — prevents tech-debt re-scatter across future milestones
+- **Phase 6 MOD-01 kickoff validation (2026-04-21):** `future_session_blocks.sessionType` NULL rate measured: 0.00% (0/34092 rows in snapshot 25c31629). Scope retained.
 
 ### Pending Todos
 
