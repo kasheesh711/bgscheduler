@@ -17,6 +17,7 @@ import {
   sessionTextColor,
   rgba,
 } from "./session-colors";
+import { modalityDisplay } from "./modality-display";
 import { getCurrentMonday } from "@/hooks/use-compare";
 
 const HOUR_HEIGHT = 60;
@@ -277,6 +278,15 @@ export function CalendarGrid({
                             {s.location && ` · ${s.location}`}
                           </div>
                         </div>
+                        {(() => {
+                          const { Icon, ariaLabel } = modalityDisplay(s.modality, s.modalityConfidence);
+                          return (
+                            <Icon
+                              aria-label={ariaLabel}
+                              className="absolute top-0.5 right-0.5 w-3 h-3 text-muted-foreground/70 pointer-events-none"
+                            />
+                          );
+                        })()}
                       </button>
                     )}
                   />
@@ -289,6 +299,12 @@ export function CalendarGrid({
                       {s.location && <Badge variant="outline" className="text-xs px-1.5 py-0">{s.location}</Badge>}
                       {s.recurrenceId && <Badge variant="secondary" className="text-xs px-1.5 py-0">recurring</Badge>}
                     </div>
+                    <p className="text-[10px] text-muted-foreground pt-0.5">
+                      {(() => {
+                        const { label } = modalityDisplay(s.modality, s.modalityConfidence);
+                        return label;
+                      })()}
+                    </p>
                   </PopoverContent>
                 </Popover>
               );
