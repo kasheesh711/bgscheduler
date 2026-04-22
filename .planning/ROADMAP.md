@@ -98,7 +98,12 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   2. Admin clicking a session near the top of the visible calendar area sees the popover render ABOVE the sticky legend (z-index scale constant is applied consistently across content, legend, lane headers, day-header, popovers)
   3. Stacking-context audit document is committed alongside the code change (proving every ancestor's `overflow`, `transform`, `filter`, `backdrop-blur`, and `z-index` were reviewed)
   4. Admin toggling fullscreen compare mode sees the sticky legend preserved at full width with no regression in behavior
-**Plans**: TBD
+**Plans**: 5 plans
+  - [ ] 08-01-PLAN.md — Pre-implementation stacking-context audit (08-STACKING-AUDIT.md) + REQUIREMENTS.md §STICKY-02 amendment recording the simplified 3-tier scale (D-11..D-13, D-10; STICKY-02, STICKY-03)
+  - [ ] 08-02-PLAN.md — Create `src/lib/ui/z-index.ts` exporting `Z_INDEX = { content: 1, legend: 6, popover: 50 } as const` (D-08..D-09; STICKY-02)
+  - [ ] 08-03-PLAN.md — WeekOverview refactor: replace per-day sticky lane headers (lines 311-344) with single global sticky legend using `Z_INDEX.legend`; remove `multiTutorLayout &&` gate from sticky path; display-only per D-07 (D-01..D-05; STICKY-01, STICKY-02, STICKY-04)
+  - [ ] 08-04-PLAN.md — CalendarGrid z-index normalization: replace `z-10` at line 120 with `zIndex: Z_INDEX.legend` while preserving TutorProfilePopover click affordance (D-06..D-07; STICKY-02)
+  - [ ] 08-05-PLAN.md — Verification walkthrough scaffold (08-VERIFICATION.md) + human-QA checkpoint covering all 4 ROADMAP success criteria; REQUIREMENTS.md §Traceability flip to Complete (D-14; STICKY-01..04)
 **UI hint**: yes
 
 ### Phase 9: VPOL-03 Density Overview
@@ -141,6 +146,6 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 5. POLISH Drain | v1.1 | 0/7 | Planned | - |
 | 6. MOD-01 Reliable Modality Detection | v1.1 | 5/6 | Gap closure | 2026-04-21 |
 | 7. PAST-01 Past-Day Session Visibility | v1.1 | 0/? | Not started | - |
-| 8. VPOL-02 Sticky Tutor Legend | v1.1 | 0/? | Not started | - |
+| 8. VPOL-02 Sticky Tutor Legend | v1.1 | 0/5 | Planned | - |
 | 9. VPOL-03 Density Overview | v1.1 | 0/? | Not started | - |
 | 10. VPOL-01 View Transitions | v1.1 | 0/? | Not started | - |
