@@ -3,18 +3,18 @@ status: partial
 phase: 07-past-01-past-day-session-visibility
 source: [07-VERIFICATION.md]
 started: 2026-04-22T15:25:00Z
-updated: 2026-04-22T15:25:00Z
+updated: 2026-04-22T15:45:00Z
 ---
 
 ## Current Test
 
-[awaiting human testing]
+Tests 2–5 await next daily-sync cycle (diff-hook populates past_session_blocks); Test 6 awaits user email send.
 
 ## Tests
 
 ### 1. Apply Drizzle migration 0002_past_session_blocks to Neon Postgres [BLOCKING]
 expected: `DATABASE_URL=<neon-url> npm run db:migrate` runs cleanly; information_schema query returns 20 columns and 3 named indexes; `SELECT count(*) FROM past_session_blocks` returns 0 on creation
-result: [pending]
+result: passed 2026-04-22T15:45:00Z — migration applied via `npm run db:migrate` ("migrations applied successfully!"); information_schema query confirmed 20 columns with D-04 shape (group_canonical_key NOT NULL, captured_in_snapshot_id nullable without FK, captured_at defaultNow); pg_indexes listed psb_wise_session_id_idx (UNIQUE for PAST-05), psb_group_key_start_idx, psb_start_time_idx + primary-key index; row count 0 (empty on creation per D-02)
 
 ### 2. End-to-end historical compare smoke test after migration applied
 expected: `/compare` with `weekStart=<prior-Monday>` shows at least one real captured past session for a tutor with known past bookings (once a daily sync has run post-migration); honest-empty cells render for past weekdays with no captured data
@@ -39,9 +39,9 @@ result: [pending]
 ## Summary
 
 total: 6
-passed: 0
+passed: 1
 issues: 0
-pending: 6
+pending: 5
 skipped: 0
 blocked: 0
 
