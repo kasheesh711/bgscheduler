@@ -200,6 +200,66 @@ export const futureSessionBlocks = pgTable("future_session_blocks", {
   index("fsb_group_idx").on(table.groupId),
 ]);
 
+// ── Past Sessions (cross-snapshot capture) ──────────────────────────────
+//
+// PAST-01 (Phase 7): sessions that were FUTURE in the prior snapshot but
+// have dropped out of Wise's FUTURE response and whose startTime is in the
+// past are captured into this table by the daily-sync diff-hook.
+//
+// DEVIATION from project convention: this is the ONLY cross-snapshot table
+// (all other data tables are snapshot-scoped via `snapshot_id`). Per D-04,
+// `group_canonical_key` denormalizes the stable `tutor_identity_groups.canonical_key`
+// so rows survive snapshot rotation — THE cross-snapshot identity anchor
+// required by PAST-05. `captured_in_snapshot_id` is nullable (non-FK) because
+// snapshots may be pruned in principle without cascading.
+//
+// Retention: unbounded in v1.1 (admin-scale ~40k rows/year is trivial for Neon).
+// Pruning policy deferred to v1.2+ if the table ever exceeds ~1M rows.
+//
+// Edge case (D-03 discretion): if a later sync observes a captured session as
+// retroactively cancelled (via `wise_status` change), the past row stays as
+// originally captured. First-observation-wins, no drift detection in v1.1.
+export const pastSessionBlocks = pgTable("past_session_blocks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+
+  // D-04: cross-snapshot identity anchor. Read path resolves tutor via
+  // `tutor_identity_groups.canonical_key` lookup against the active snapshot.
+  groupCanonicalKey: text("group_canonical_key").notNull(),
+
+  // D-04: provenance — which snapshot first captured this row. Nullable and
+  // intentionally NOT a foreign key (snapshots may be pruned independently).
+  capturedInSnapshotId: uuid("captured_in_snapshot_id"),
+
+  // First-observation-wins canonical fields (D-03). Columns mirror
+  // futureSessionBlocks minus the snapshot-scoped `snapshotId`/`groupId`.
+  wiseTeacherId: text("wise_teacher_id").notNull(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+  endTime: timestamp("end_time", { withTimezone: true }).notNull(),
+  weekday: integer("weekday").notNull(),
+  startMinute: integer("start_minute").notNull(),
+  endMinute: integer("end_minute").notNull(),
+  wiseStatus: text("wise_status").notNull(),
+  isBlocking: boolean("is_blocking").notNull().default(true),
+  title: text("title"),
+  sessionType: text("session_type"),
+  location: text("location"),
+  studentName: text("student_name"),
+  subject: text("subject"),
+  classType: text("class_type"),
+  recurrenceId: text("recurrence_id"),
+
+  // First-observation audit timestamp (D-04; foundation for v1.2 drift-detection).
+  capturedAt: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  // PAST-05 / D-03: idempotency — only one row per Wise session, ever.
+  uniqueIndex("psb_wise_session_id_idx").on(table.wiseSessionId),
+  // D-06 read-path index: buildCompareTutor queries (group_canonical_key, dateRange).
+  index("psb_group_key_start_idx").on(table.groupCanonicalKey, table.startTime),
+  // Time-range scans (admin retention queries, v1.2 pruning).
+  index("psb_start_time_idx").on(table.startTime),
+]);
+
 // ── Data Issues ─────────────────────────────────────────────────────────
 
 export const dataIssues = pgTable("data_issues", {
