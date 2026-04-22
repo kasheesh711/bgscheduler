@@ -1,10 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { buildCompareTutor, detectConflicts, findSharedFreeSlots, resolveSessionModality, detectSessionModalityConflict } from "../compare";
-import type { IndexedTutorGroup, SearchIndex } from "../index";
+import type { IndexedSessionBlock, IndexedTutorGroup, SearchIndex } from "../index";
 
 function makeTutor(overrides: Partial<IndexedTutorGroup> = {}): IndexedTutorGroup {
   return {
     id: "g1",
+    canonicalKey: "test-tutor",
     displayName: "Test Tutor",
     supportedModes: ["online", "onsite"],
     qualifications: [{ subject: "Math", curriculum: "International", level: "Y2-8" }],
@@ -454,5 +455,295 @@ describe("findSharedFreeSlots", () => {
     expect(slots[0].dayOfWeek).toBe(1);
     expect(slots[0].startMinute).toBe(600);
     expect(slots[0].endMinute).toBe(720);
+  });
+});
+
+describe("buildCompareTutor past+future merge + per-weekday historical flag (Phase 7)", () => {
+  // Freeze system time for deterministic "today" comparisons in getStartOfTodayBkk.
+  // Simulate today = 2026-04-15 (Wednesday) in Asia/Bangkok. Given weekday
+  // encoding Mon=1..Sun=0, this makes weekdays 1 (Mon 04-13) and 2 (Tue 04-14)
+  // historical; weekday 3 (Wed 04-15) is today; weekdays 4..0 (Thu..Sun) future.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-15T00:00:00+07:00"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Current-week dateRange (Mon 2026-04-13 through end-of-Sun 2026-04-19).
+  // Using local-TZ constructors so computeDateForWeekdayInRange's arithmetic is
+  // consistent regardless of the host's wall-clock zone (avoids off-by-one).
+  function currentWeek(): { start: Date; end: Date } {
+    return {
+      start: new Date(2026, 3, 13), // Mon 2026-04-13 00:00 local
+      end: new Date(2026, 3, 20), // Mon 2026-04-20 00:00 local (exclusive)
+    };
+  }
+
+  function futureWeek(): { start: Date; end: Date } {
+    return {
+      start: new Date(2026, 3, 27), // Mon 2026-04-27 00:00 local
+      end: new Date(2026, 4, 4), // Mon 2026-05-04 00:00 local (exclusive)
+    };
+  }
+
+  function oldHistoricalWeek(): { start: Date; end: Date } {
+    // Mon 2026-04-06 through end-of-Sun 2026-04-12 — entirely before today.
+    return {
+      start: new Date(2026, 3, 6),
+      end: new Date(2026, 3, 13),
+    };
+  }
+
+  function makePastMondaySession(): IndexedSessionBlock {
+    // Captured Monday session 10:00-11:00 BKK on 2026-04-13 (past relative to
+    // frozen today). Uses wiseTeacherId "t1" (onsite variant) per makeTutor().
+    return {
+      startTime: new Date(2026, 3, 13, 10, 0, 0),
+      endTime: new Date(2026, 3, 13, 11, 0, 0),
+      weekday: 1,
+      startMinute: 600,
+      endMinute: 660,
+      isBlocking: true,
+      wiseTeacherId: "t1",
+      studentName: "Alex P.",
+      subject: "Math",
+      title: "Math - Alex P.",
+      classType: "ONE_TO_ONE",
+    };
+  }
+
+  it("historical week: returns captured past data, no weekday-fallback for empty past days", () => {
+    // Tutor has no future sessionBlocks at all (oldHistoricalWeek is entirely
+    // past; also verifies that the weekday-fallback for empty past days is
+    // disabled — tutor should NOT inherit any nearest-future occurrence on Tue.
+    const tutor = makeTutor({ sessionBlocks: [] });
+    const past: IndexedSessionBlock[] = [
+      // Captured past session on 2026-04-06 (Monday of oldHistoricalWeek).
+      {
+        startTime: new Date(2026, 3, 6, 10, 0, 0),
+        endTime: new Date(2026, 3, 6, 11, 0, 0),
+        weekday: 1,
+        startMinute: 600,
+        endMinute: 660,
+        isBlocking: true,
+        wiseTeacherId: "t1",
+        studentName: "Alex P.",
+        subject: "Math",
+      },
+    ];
+
+    const result = buildCompareTutor(tutor, undefined, oldHistoricalWeek(), past);
+
+    // Exactly the captured past Monday session — no Tuesday fallback.
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].weekday).toBe(1);
+    expect(result.sessions[0].studentName).toBe("Alex P.");
+    // Explicit absence of any Tuesday/Wednesday/etc. fallback: no other weekdays present.
+    const weekdaysPresent = new Set(result.sessions.map((s) => s.weekday));
+    expect(weekdaysPresent.has(2)).toBe(false);
+    expect(weekdaysPresent.has(3)).toBe(false);
+  });
+
+  it("historical week + no past data: returns empty sessions (honest empty per D-09)", () => {
+    // Tutor has future recurring Monday session, but because the requested
+    // week is entirely historical every weekday's fallback is disabled.
+    const tutor = makeTutor({
+      sessionBlocks: [
+        {
+          // A future Monday occurrence that WOULD satisfy the fallback predicate
+          // (startTime >= dateRange.end) if the fallback were enabled.
+          startTime: new Date(2026, 4, 11, 9, 0, 0),
+          endTime: new Date(2026, 4, 11, 10, 0, 0),
+          weekday: 1,
+          startMinute: 540,
+          endMinute: 600,
+          isBlocking: true,
+          wiseTeacherId: "t1",
+          studentName: "Ava T.",
+          subject: "Math",
+          recurrenceId: "r-mon-recur",
+        },
+      ],
+    });
+
+    const result = buildCompareTutor(tutor, undefined, oldHistoricalWeek(), []);
+
+    // All 7 weekdays are historical → fallback disabled everywhere → honest empty.
+    expect(result.sessions).toHaveLength(0);
+  });
+
+  it("future week + no past data: preserves existing weekday-fallback behavior", () => {
+    // Tutor has a recurring Monday session in the distant future (after the
+    // requested future week). The fallback MUST kick in because no day in the
+    // range is historical.
+    const tutor = makeTutor({
+      sessionBlocks: [
+        {
+          startTime: new Date(2026, 4, 11, 9, 0, 0), // Mon 2026-05-11 — after futureWeek.end (2026-05-04)
+          endTime: new Date(2026, 4, 11, 10, 0, 0),
+          weekday: 1,
+          startMinute: 540,
+          endMinute: 600,
+          isBlocking: true,
+          wiseTeacherId: "t1",
+          studentName: "Ben K.",
+          subject: "English",
+          recurrenceId: "r-mon-recur",
+        },
+      ],
+    });
+
+    const result = buildCompareTutor(tutor, undefined, futureWeek());
+
+    // Fallback should fill in Monday from the nearest-future occurrence.
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].weekday).toBe(1);
+    expect(result.sessions[0].studentName).toBe("Ben K.");
+  });
+
+  it("current week: past weekdays respect captured-or-empty, future weekdays keep fallback (D-05 per-weekday)", () => {
+    // Today = Wed 2026-04-15 BKK. currentWeek = Mon 04-13 → Sun 04-19.
+    //   Mon (wd=1): historical — fallback OFF. We provide captured past data.
+    //   Tue (wd=2): historical — fallback OFF. No data → empty.
+    //   Wed (wd=3): today — fallback ON (no matching weekday=3 in allBlocks → empty).
+    //   Thu (wd=4): future — fallback ON. We provide a future Thursday recurring.
+    //   Fri..Sun: future — fallback ON, but no matching data → empty.
+    const tutor = makeTutor({
+      sessionBlocks: [
+        // Future Thursday recurring after currentWeek.end (will be pulled by Thu fallback).
+        {
+          startTime: new Date(2026, 4, 14, 9, 0, 0), // Thu 2026-05-14
+          endTime: new Date(2026, 4, 14, 10, 0, 0),
+          weekday: 4,
+          startMinute: 540,
+          endMinute: 600,
+          isBlocking: true,
+          wiseTeacherId: "t1",
+          studentName: "Thu Student",
+          subject: "Math",
+          recurrenceId: "r-thu",
+        },
+      ],
+    });
+
+    const past: IndexedSessionBlock[] = [makePastMondaySession()];
+
+    const result = buildCompareTutor(tutor, undefined, currentWeek(), past);
+
+    // Expected: Mon (captured) + Thu (fallback) = 2 sessions total.
+    expect(result.sessions).toHaveLength(2);
+
+    const mondaySessions = result.sessions.filter((s) => s.weekday === 1);
+    const thursdaySessions = result.sessions.filter((s) => s.weekday === 4);
+    expect(mondaySessions).toHaveLength(1);
+    expect(mondaySessions[0].studentName).toBe("Alex P.");
+    expect(thursdaySessions).toHaveLength(1);
+    expect(thursdaySessions[0].studentName).toBe("Thu Student");
+
+    // Explicit PER-WEEKDAY enforcement: Tue (historical, no data) and Wed
+    // (today, no matching weekday data) MUST NOT inherit any fallback.
+    expect(result.sessions.some((s) => s.weekday === 2)).toBe(false);
+    expect(result.sessions.some((s) => s.weekday === 3)).toBe(false);
+  });
+
+  it("backward-compat: calling without pastBlocks behaves identically to pre-Phase-7", () => {
+    // Same shape as the existing weekday-fallback test in `buildCompareTutor`
+    // above but asserts the NEW signature still honors the OLD behavior when
+    // pastBlocks is omitted.
+    const tutor = makeTutor({
+      sessionBlocks: [
+        {
+          startTime: new Date(2026, 4, 11, 9, 0, 0), // Mon 2026-05-11 — future
+          endTime: new Date(2026, 4, 11, 10, 0, 0),
+          weekday: 1,
+          startMinute: 540,
+          endMinute: 600,
+          isBlocking: true,
+          wiseTeacherId: "t1",
+          studentName: "Backward Compat",
+          subject: "Math",
+          recurrenceId: "r-mon-bc",
+        },
+      ],
+    });
+
+    // 3-arg call (no pastBlocks param) — must match pre-Phase-7 fallback behavior
+    // for the future week.
+    const result = buildCompareTutor(tutor, undefined, futureWeek());
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].studentName).toBe("Backward Compat");
+
+    // Sanity: passing `undefined` explicitly is also fine.
+    const resultUndefined = buildCompareTutor(tutor, undefined, futureWeek(), undefined);
+    expect(resultUndefined.sessions).toHaveLength(1);
+    expect(resultUndefined.sessions[0].studentName).toBe("Backward Compat");
+  });
+
+  it("detectConflicts sees merged past+future sessions for same student (Pitfall 13)", () => {
+    // Historical week. Tutor A has the "past" session via pastBlocks. Tutor B
+    // has a session on the same Monday via regular sessionBlocks (a captured
+    // future_session_block whose startTime is within the past-week range — this
+    // is how the live /api/compare route passes past-week data through the
+    // existing filter pipeline). After merge, both appear in their respective
+    // CompareTutor.sessions and detectConflicts finds the same-student overlap.
+    const historicalRange = oldHistoricalWeek(); // Mon 2026-04-06 → Mon 2026-04-13
+
+    const tutorA = makeTutor({
+      id: "g1",
+      displayName: "Kevin H.",
+      sessionBlocks: [],
+    });
+    const tutorB = makeTutor({
+      id: "g2",
+      displayName: "Samantha W.",
+      sessionBlocks: [
+        {
+          startTime: new Date(2026, 3, 6, 10, 0, 0),
+          endTime: new Date(2026, 3, 6, 11, 0, 0),
+          weekday: 1,
+          startMinute: 600,
+          endMinute: 660,
+          isBlocking: true,
+          wiseTeacherId: "t1",
+          studentName: "Alex P.",
+          subject: "English",
+          title: "English - Alex P.",
+        },
+      ],
+    });
+
+    const pastForA: IndexedSessionBlock[] = [
+      {
+        startTime: new Date(2026, 3, 6, 10, 0, 0),
+        endTime: new Date(2026, 3, 6, 11, 0, 0),
+        weekday: 1,
+        startMinute: 600,
+        endMinute: 660,
+        isBlocking: true,
+        wiseTeacherId: "t1",
+        studentName: "Alex P.",
+        subject: "Math",
+        title: "Math - Alex P.",
+      },
+    ];
+
+    const compareA = buildCompareTutor(tutorA, undefined, historicalRange, pastForA);
+    const compareB = buildCompareTutor(tutorB, undefined, historicalRange);
+
+    expect(compareA.sessions).toHaveLength(1);
+    expect(compareB.sessions).toHaveLength(1);
+    expect(compareA.sessions[0].studentName).toBe("Alex P.");
+    expect(compareB.sessions[0].studentName).toBe("Alex P.");
+
+    const conflicts = detectConflicts([compareA, compareB], [tutorA, tutorB]);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].studentName).toBe("Alex P.");
+    expect(conflicts[0].dayOfWeek).toBe(1);
+    const tutorNames = new Set([conflicts[0].tutorA.displayName, conflicts[0].tutorB.displayName]);
+    expect(tutorNames.has("Kevin H.")).toBe(true);
+    expect(tutorNames.has("Samantha W.")).toBe(true);
   });
 });
