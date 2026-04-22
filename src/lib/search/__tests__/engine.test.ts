@@ -6,6 +6,7 @@ import type { SearchRequest } from "../types";
 function makeTutor(overrides: Partial<IndexedTutorGroup> = {}): IndexedTutorGroup {
   return {
     id: "g1",
+    canonicalKey: "test-tutor",
     displayName: "Test Tutor",
     supportedModes: ["online", "onsite"],
     qualifications: [

@@ -16,6 +16,7 @@ import { normalizeSessions } from "@/lib/normalization/sessions";
 import { normalizeTeacherTags } from "@/lib/normalization/qualifications";
 import { deriveModality } from "@/lib/normalization/modality";
 import { detectSessionModalityConflict } from "@/lib/search/compare";
+import { runPastSessionsDiffHook } from "@/lib/sync/past-sessions-diff-hook";
 
 export interface SyncResult {
   success: boolean;
@@ -385,6 +386,26 @@ export async function runFullSync(
       }
     }
 
+    // ── 9.5. PAST-01 diff-hook ──
+    // Capture sessions dropped from Wise FUTURE into past_session_blocks.
+    // MUST run BEFORE atomic promotion (step 12) — the prior snapshot must
+    // still be active=true when the hook reads it.
+    //
+    // Per-group errors emit completeness data_issues but do not abort the
+    // sync (error-isolation matches the MOD-01 loop above).
+    const diffHookResult = await runPastSessionsDiffHook(db, sessionBlocks, snapshotId);
+    allIssues.push(
+      ...diffHookResult.issues.map((i) => ({
+        snapshotId: i.snapshotId,
+        type: i.type,
+        severity: i.severity,
+        entityType: i.entityType,
+        entityId: i.entityId,
+        entityName: i.entityName,
+        message: i.message,
+      })),
+    );
+
     for (const row of recurringAvailabilityRows) {
       row.modality = teacherModalities.get(row.wiseTeacherId) ?? "unresolved";
     }
@@ -470,6 +491,10 @@ export async function runFullSync(
         finishedAt: new Date(),
         promotedSnapshotId,
         teacherCount: wiseTeachers.length,
+        metadata: {
+          diffHookDurationMs: diffHookResult.durationMs,
+          pastSessionsCapturedCount: diffHookResult.capturedCount,
+        },
       })
       .where(eq(schema.syncRuns.id, syncRunId));
 

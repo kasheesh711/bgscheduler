@@ -1,4 +1,5 @@
-import type { IndexedTutorGroup } from "./index";
+import { toZonedTime } from "date-fns-tz";
+import type { IndexedSessionBlock, IndexedTutorGroup } from "./index";
 import type { CompareTutor, CompareSessionBlock, Conflict, SharedFreeSlot } from "./types";
 
 // "scheduled" covers tenant "SCHEDULED"/"Live" online-session vocabulary (MOD-UAT-01, 2026-04-21).
@@ -21,6 +22,42 @@ function formatDate(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+/**
+ * Start of today (00:00) in Asia/Bangkok, returned as a Date representing
+ * that BKK instant. Used by buildCompareTutor (D-05) to decide whether a
+ * calendar date in the requested dateRange is "historical" (→ disable
+ * weekday-fallback) or "today-or-future" (→ keep existing fallback).
+ *
+ * Extracted as a helper so tests can mock `Date.now()` deterministically.
+ * Thailand has no DST (stable UTC+7 since 1941) per PITFALLS.md §Assumptions A7.
+ */
+export function getStartOfTodayBkk(now: Date = new Date()): Date {
+  const nowInBkk = toZonedTime(now, "Asia/Bangkok");
+  return new Date(nowInBkk.getFullYear(), nowInBkk.getMonth(), nowInBkk.getDate());
+}
+
+/**
+ * Given a weekday (0=Sunday..6=Saturday) and a dateRange whose `start` is the
+ * Monday of the requested week, return the calendar date within the range
+ * that corresponds to that weekday, or null if the weekday falls outside the
+ * range. Mirrors the client-side `getWeekDate` helper in use-compare.ts:53-59
+ * to avoid off-by-one divergence.
+ *
+ * Weekday→offset mapping (Monday as first day of week in dateRange):
+ *   Mon(1) → offset 0, Tue(2) → 1, Wed(3) → 2, Thu(4) → 3, Fri(5) → 4,
+ *   Sat(6) → 5, Sun(0) → 6.
+ */
+export function computeDateForWeekdayInRange(weekday: number, dateRange: DateRange): Date | null {
+  const offset = weekday === 0 ? 6 : weekday - 1;
+  const date = new Date(
+    dateRange.start.getFullYear(),
+    dateRange.start.getMonth(),
+    dateRange.start.getDate() + offset,
+  );
+  if (date < dateRange.start || date >= dateRange.end) return null;
+  return date;
 }
 
 /**
@@ -189,10 +226,20 @@ export function buildCompareTutor(
   group: IndexedTutorGroup,
   weekdays?: number[],
   dateRange?: DateRange,
+  pastBlocks?: IndexedSessionBlock[],
 ): CompareTutor {
   const weekdaySet = weekdays ? new Set(weekdays) : null;
 
-  const filtered = group.sessionBlocks.filter((s) => {
+  // D-06: Merge past blocks into the filter input BEFORE filtering. Past
+  // blocks have already been date-range-filtered by the Plan 03 fetcher; the
+  // concat is safe and does not duplicate sessions (past and future are
+  // disjoint by definition — future session blocks have startTime >= now,
+  // captured past rows have startTime < now at capture time).
+  const allBlocks = pastBlocks && pastBlocks.length > 0
+    ? [...group.sessionBlocks, ...pastBlocks]
+    : group.sessionBlocks;
+
+  const filtered = allBlocks.filter((s) => {
     if (!s.isBlocking) return false;
     if (dateRange) {
       if (s.startTime < dateRange.start || s.startTime >= dateRange.end) return false;
@@ -201,10 +248,12 @@ export function buildCompareTutor(
     return true;
   });
 
-  // Fallback: for weekdays with no sessions in the dateRange (e.g. past days
-  // where Wise's "FUTURE" API didn't return data), pull in the nearest future
-  // occurrence so the week view still shows a representative schedule.
+  // D-05 / PAST-04: per-weekday `isHistoricalRange` evaluation. The
+  // nearest-future-occurrence fallback runs only for weekdays whose calendar
+  // date is today or in the future. Past weekdays render honest empty (D-09)
+  // unless we captured real past data in pastBlocks.
   if (dateRange) {
+    const startOfTodayBkk = getStartOfTodayBkk();
     const coveredWeekdays = new Set(filtered.map((s) => s.weekday));
     const targetWeekdays = weekdaySet
       ? new Set(weekdaySet)
@@ -213,8 +262,17 @@ export function buildCompareTutor(
     for (const wd of targetWeekdays) {
       if (coveredWeekdays.has(wd)) continue;
 
+      // D-05: calendar date for this weekday within dateRange. If it's before
+      // today (BKK), disable the fallback for this weekday only — honest empty.
+      const dateForWeekday = computeDateForWeekdayInRange(wd, dateRange);
+      if (dateForWeekday && dateForWeekday < startOfTodayBkk) continue;
+
+      // Existing nearest-future-occurrence fallback (unchanged semantics for
+      // today + future days — uses `allBlocks` so future blocks are candidates;
+      // past blocks cannot satisfy `startTime >= dateRange.end` since they
+      // have startTime < now).
       const seenRecurrence = new Set<string>();
-      const fallback = group.sessionBlocks
+      const fallback = allBlocks
         .filter((s) => s.isBlocking && s.weekday === wd && s.startTime >= dateRange.end)
         .sort((a, b) => a.startTime.getTime() - b.startTime.getTime())
         .filter((s) => {
