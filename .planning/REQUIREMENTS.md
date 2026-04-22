@@ -29,6 +29,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 - [ ] **STICKY-01**: Tutor legend (chip strip in compare panel) remains visible during calendar vertical scroll via `position: sticky`
 - [ ] **STICKY-02**: Z-index scale constant is introduced (`z-[2]` content, `z-[4]` legend, `z-[5]` lane headers, `z-[6]` sticky day-header, `z-50` popovers) and applied consistently
+  - *Amendment (2026-04-22, Phase 8 CONTEXT D-08..D-10):* Scale simplified at CONTEXT time to a 3-tier scale `Z_CONTENT = 1`, `Z_LEGEND = 6`, `Z_POPOVER = 50` because Phase 8 D-01 consolidates per-day lane headers INTO the single sticky legend — the separate `z-[5]` lane-headers slot is no longer a live surface. CalendarGrid's existing sticky day-header reuses `Z_LEGEND = 6`. Constant ships at `src/lib/ui/z-index.ts` (`export const Z_INDEX = { content: 1, legend: 6, popover: 50 } as const;`). Same class as Phase 5 D-02's NVDA relaxation — no new requirement ID, §Traceability row for STICKY-02 unchanged.
 - [ ] **STICKY-03**: Pre-implementation stacking-context audit artifact committed alongside the change
 - [ ] **STICKY-04**: Fullscreen compare mode preserves sticky legend behavior (no regression)
 
@@ -198,3 +199,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 ---
 *Requirements defined: 2026-04-20*
 *Last updated: 2026-04-21 — Phase 5 CONTEXT.md D-02 amendment: POLISH-01 scoped to VoiceOver-only; NVDA-v12 added to v1.2+ deferred list*
+*Phase 8 D-10 amendment: 2026-04-22 — STICKY-02 scale simplified from 5-slot to 3-tier post-consolidation (see 08-CONTEXT.md D-08..D-10).*
