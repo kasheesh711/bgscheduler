@@ -54,6 +54,11 @@ export interface IndexedDataIssue {
 
 export interface IndexedTutorGroup {
   id: string;
+  // D-04 cross-snapshot anchor, denormalized from tutor_identity_groups.canonical_key.
+  // Additive single-field change (D-18 permits): past data stays OUT of SearchIndex,
+  // but the /api/compare route (Plan 05) needs canonicalKey to pass into the
+  // past-sessions fetcher without an extra DB query (research Pitfall 17).
+  canonicalKey: string;
   displayName: string;
   supportedModes: string[];
   qualifications: IndexedQualification[];
@@ -191,6 +196,10 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
 
     return {
       id: group.id,
+      // D-04: denormalize the stable canonical_key onto the in-memory group so
+      // downstream consumers (/api/compare historical trigger, Plan 05) can
+      // resolve the cross-snapshot anchor without an extra DB round-trip.
+      canonicalKey: group.canonicalKey,
       displayName: group.displayName,
       supportedModes:
         group.supportedModality === "both"
