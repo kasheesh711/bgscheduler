@@ -79,7 +79,14 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   3. Daily Wise sync populates the `past_session_blocks` table idempotently via `UNIQUE(wise_session_id)` and a stable `group_canonical_key` that survives snapshot rotation
   4. Queries for historical weeks hit a dedicated `cacheTag('past-sessions')` so the daily snapshot promotion does not refetch immutable past data
   5. Wise historical-sessions endpoint discovery spike to `devs@wiseapp.live` is completed and its result is either wired into the capture path or documented as unavailable; DB-snapshot fallback ships unconditionally
-**Plans**: TBD
+**Plans**: 7 plans
+  - [ ] 07-01-PLAN.md — Schema + migration: add `past_session_blocks` table with `UNIQUE(wise_session_id)` + `group_canonical_key` (D-04, PAST-05); apply to Neon [BLOCKING]
+  - [ ] 07-02-PLAN.md — Orchestrator diff-hook: capture dropped-from-FUTURE sessions via prior-snapshot diff before atomic promotion (D-01, PAST-02)
+  - [ ] 07-03-PLAN.md — Cached past-sessions fetcher at `src/lib/data/past-sessions.ts` with `cacheTag("past-sessions")` + `cacheLife("days")` (D-08, PAST-03)
+  - [ ] 07-04-PLAN.md — `buildCompareTutor` per-weekday historical flag + past/future merge; expose `canonicalKey` on `IndexedTutorGroup` (D-05, D-06, PAST-01, PAST-04)
+  - [ ] 07-05-PLAN.md — `/api/compare` server-side historical-range trigger; pre-merge past blocks into `findSharedFreeSlots` (D-07, PAST-01, PAST-04)
+  - [ ] 07-06-PLAN.md — `CACHE_VERSION` bump v1→v2 (D-17)
+  - [ ] 07-07-PLAN.md — Wise historical-endpoint spike email draft at `07-WISE-SPIKE.md`; user sends from kevhsh7@gmail.com (D-13, PAST-06)
 **UI hint**: yes
 
 ### Phase 8: VPOL-02 Sticky Tutor Legend
