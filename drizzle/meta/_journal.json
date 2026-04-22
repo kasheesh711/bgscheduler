@@ -15,6 +15,13 @@
       "when": 1775543237280,
       "tag": "0001_tough_plazm",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1776833276656,
+      "tag": "0002_past_session_blocks",
+      "breakpoints": true
     }
   ]
 }
