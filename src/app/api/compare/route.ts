@@ -3,8 +3,15 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { ensureIndex } from "@/lib/search/index";
-import { buildCompareTutor, detectConflicts, findSharedFreeSlots } from "@/lib/search/compare";
+import {
+  buildCompareTutor,
+  detectConflicts,
+  findSharedFreeSlots,
+  getStartOfTodayBkk,
+} from "@/lib/search/compare";
 import type { DateRange } from "@/lib/search/compare";
+import { fetchPastSessionBlocks } from "@/lib/data/past-sessions";
+import type { IndexedSessionBlock } from "@/lib/search/index";
 import type { CompareResponse, SnapshotMeta } from "@/lib/search/types";
 
 const compareRequestSchema = z.object({
@@ -105,10 +112,51 @@ export async function POST(request: NextRequest) {
           ? [new Date(date).getDay()]
           : undefined;
 
-    const allCompareTutors = indexedGroups.map((g) => buildCompareTutor(g, weekdays, dateRange));
+    // D-07 / PAST-01: historical-range trigger. If ANY day in the requested
+    // dateRange is before startOfToday (BKK), fetch captured past_session_blocks
+    // for the selected tutors' canonical keys and merge them into both
+    // buildCompareTutor (via pastBlocks param) and findSharedFreeSlots (via a
+    // cloned group with sessionBlocks extended — closes research Pitfall 16).
+    const startOfTodayBkk = getStartOfTodayBkk();
+    const isHistoricalRange = dateRange.start < startOfTodayBkk;
+
+    let pastBlocksByCanonicalKey = new Map<string, IndexedSessionBlock[]>();
+    if (isHistoricalRange) {
+      // Sort canonical keys for stable cache-key ordering (Plan 03 fetcher
+      // relies on argument-hash determinism for efficient cache reuse).
+      const canonicalKeys = [...new Set(indexedGroups.map((g) => g.canonicalKey))].sort();
+      pastBlocksByCanonicalKey = await fetchPastSessionBlocks(
+        canonicalKeys,
+        dateRange.start,
+        dateRange.end,
+      );
+    }
+
+    const allCompareTutors = indexedGroups.map((g) =>
+      buildCompareTutor(
+        g,
+        weekdays,
+        dateRange,
+        pastBlocksByCanonicalKey.get(g.canonicalKey),
+      ),
+    );
     const conflicts = detectConflicts(allCompareTutors, indexedGroups);
+
+    // For findSharedFreeSlots: pre-merge past blocks into each group's
+    // sessionBlocks so the function's existing `group.sessionBlocks` read (line
+    // 315 of compare.ts) sees the full set. Closes Pitfall 16: without this
+    // merge, historical-range compare would mark a tutor as "free" during a past
+    // captured session. Non-historical ranges skip this extra allocation.
+    const groupsForFreeSlots = isHistoricalRange
+      ? indexedGroups.map((g) => {
+          const past = pastBlocksByCanonicalKey.get(g.canonicalKey);
+          if (!past || past.length === 0) return g;
+          return { ...g, sessionBlocks: [...g.sessionBlocks, ...past] };
+        })
+      : indexedGroups;
+
     const sharedFreeSlots = findSharedFreeSlots(
-      indexedGroups,
+      groupsForFreeSlots,
       weekdays ?? [0, 1, 2, 3, 4, 5, 6],
       dateRange,
     );
