@@ -14,6 +14,21 @@ interface QueuedRequest<T> {
 }
 
 export class WiseClient {
+  // REL-05: only these HTTP status codes are considered transient and worth
+  // retrying. Permanent 4xx (401/403/404/422) fail fast — no retry budget
+  // wasted on errors that won't fix themselves.
+  // Sources:
+  // - oneuptime.com/blog/post/2026-01-06-nodejs-retry-exponential-backoff
+  // - 1xapi.com/blog/resilient-api-circuit-breaker-bulkhead-retry-nodejs-2026
+  private static readonly RETRYABLE_STATUS_CODES: ReadonlySet<number> = new Set([
+    408, // Request Timeout
+    429, // Too Many Requests
+    500, // Internal Server Error
+    502, // Bad Gateway
+    503, // Service Unavailable
+    504, // Gateway Timeout
+  ]);
+
   private userId: string;
   private apiKey: string;
   private namespace: string;
@@ -64,30 +79,49 @@ export class WiseClient {
     );
   }
 
-  private async fetchWithRetry<T>(url: string, init: RequestInit, attempt = 0): Promise<T> {
+  private async fetchWithRetry<T>(
+    url: string,
+    init: RequestInit,
+    attempt = 0,
+  ): Promise<T> {
+    let response: Response;
     try {
-      const response = await fetch(url, {
+      response = await fetch(url, {
         ...init,
         headers: {
           ...this.headers,
           ...(init.headers as Record<string, string> | undefined),
         },
       });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        throw new Error(`Wise API ${response.status}: ${text} (${url})`);
-      }
-
-      return (await response.json()) as T;
-    } catch (error) {
+    } catch (networkErr) {
+      // Network-level failure (DNS / ECONNRESET / fetch TypeError) — retry.
       if (attempt < this.maxRetries) {
         const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
         await new Promise((r) => setTimeout(r, delay));
         return this.fetchWithRetry<T>(url, init, attempt + 1);
       }
-      throw error;
+      throw networkErr;
     }
+
+    if (response.ok) {
+      return (await response.json()) as T;
+    }
+
+    const text = await response.text().catch(() => "");
+
+    // Permanent error path — 4xx (except 429) and any other non-retryable
+    // status. Fail fast; no retry budget wasted.
+    if (!WiseClient.RETRYABLE_STATUS_CODES.has(response.status)) {
+      throw new Error(`Wise API ${response.status}: ${text} (${url})`);
+    }
+
+    // Retryable error path — 5xx, 408, 429.
+    if (attempt < this.maxRetries) {
+      const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+      await new Promise((r) => setTimeout(r, delay));
+      return this.fetchWithRetry<T>(url, init, attempt + 1);
+    }
+    throw new Error(`Wise API ${response.status}: ${text} (${url})`);
   }
 
   private withConcurrency<T>(fn: () => Promise<T>): Promise<T> {
