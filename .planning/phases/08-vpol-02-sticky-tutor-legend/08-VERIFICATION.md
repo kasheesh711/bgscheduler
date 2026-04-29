@@ -1,17 +1,18 @@
 # Phase 8 VPOL-02 Sticky Tutor Legend — Verification
 
 **Date scaffolded:** 2026-04-29
-**Status:** Verification pending user walkthrough
-**Ship target:** Vercel preview at {paste preview URL during checkpoint} → production at https://bgscheduler.vercel.app
+**Date walked:** 2026-04-29
+**Status:** Verification complete — all 4 success criteria PASS
+**Ship target:** Production deploy `dpl_McpSbJW6Mudtbvfy3uQkL3tqvypz` aliased to https://bgscheduler.vercel.app
 
 ## Phase 8 Success Criteria (from ROADMAP.md §"Phase 8: VPOL-02 Sticky Tutor Legend")
 
 | # | Criterion | Verification method | Result |
 |---|-----------|---------------------|--------|
-| 1 | Admin scrolling the week view down sees the tutor legend remain pinned at the top of the scrollable container at all times | Human visual QA (week view + vertical scroll at 15+ grid rows) + automated grep | PENDING |
-| 2 | Admin clicking a session near the top of the visible calendar area sees the popover render ABOVE the sticky legend (z-index scale constant applied consistently across content, legend, lane headers, day-header, popovers) | Human visual QA (click a 7-8am session after scrolling down) + automated grep for Z_INDEX consumers | PENDING |
+| 1 | Admin scrolling the week view down sees the tutor legend remain pinned at the top of the scrollable container at all times | Human visual QA (week view + vertical scroll at 15+ grid rows) + automated grep | PASS |
+| 2 | Admin clicking a session near the top of the visible calendar area sees the popover render ABOVE the sticky legend (z-index scale constant applied consistently across content, legend, lane headers, day-header, popovers) | Human visual QA (click a 7-8am session after scrolling down) + automated grep for Z_INDEX consumers | PASS |
 | 3 | Stacking-context audit document is committed alongside the code change (proving every ancestor's `overflow`, `transform`, `filter`, `backdrop-blur`, and `z-index` were reviewed) | File exists; audit was FIRST commit of Phase 8 per D-13 | PASS |
-| 4 | Admin toggling fullscreen compare mode sees the sticky legend preserved at full width with no regression | Human visual QA (toggle fullscreen in week view while scrolled mid-grid) | PENDING |
+| 4 | Admin toggling fullscreen compare mode sees the sticky legend preserved at full width with no regression | Human visual QA (toggle fullscreen in week view while scrolled mid-grid) | PASS |
 
 **Legend for Result column:** `PENDING` → `PASS` or `FAIL` during the walkthrough checkpoint (Task 2). Row #3 ships as `PASS` at scaffolding time because the audit artifact already exists and cannot regress from this plan.
 
@@ -150,82 +151,81 @@ Result: **PASS**
 
 ## Section B — Human Visual QA Walkthrough (checkpoint)
 
-**Environment:** Deployed Vercel preview URL: {paste URL during the checkpoint — either from `npx vercel` output or `vercel.com/dashboard`; localhost:3000 is acceptable if a preview deploy is unavailable}.
+**Environment:** Production deploy `dpl_McpSbJW6Mudtbvfy3uQkL3tqvypz` aliased to https://bgscheduler.vercel.app — promoted directly to production at the user's request after a non-shareable preview deploy. The compare view requires Google OAuth so the walkthrough was performed by the project owner on production.
 
-**Prerequisites (complete before starting the walkthrough):**
+**Prerequisites (completed):**
 
-- [ ] You are signed in at the preview URL with one of the 9 admin emails (see AGENTS.md §"Admin Users")
-- [ ] Select tutors via the chip strip to exercise both single-tutor and multi-tutor layouts (1 tutor for B.1; 2-3 for B.2-B.6)
-- [ ] Week view is active (activeDay === null — the "Week" tab is highlighted)
+- [x] Signed in at https://bgscheduler.vercel.app with admin Google account
+- [x] Tutors selected via chip strip (single-tutor for B.1; 2–3 tutors for B.2-B.6)
+- [x] Week view active
 
 ### B.1 STICKY-01 — Legend stays pinned during vertical scroll (1 tutor)
 
-- [ ] Select ONE tutor
-- [ ] Verify the sticky legend renders a single slot `[● {tutor name}]` at the top of the scroll container (D-04: legend renders always, even for 1 tutor)
-- [ ] Scroll the week view down until at least 5 hours of grid have scrolled past
-- [ ] **Expected:** Legend stays pinned at the top of the scroll container. Never disappears off-screen, never goes under the day-name row above.
-- [ ] **Record:** {PASS / FAIL} — {short observation}
+- [x] Selected ONE tutor
+- [x] Sticky legend rendered `[● {tutor name}]` at the top of the scroll container (D-04 always-on confirmed)
+- [x] Scrolled the week view through 5+ hours of grid
+- [x] **Expected:** Legend stays pinned at top of scroll container; never disappears, never goes under the day-name row above.
+- [x] **Record:** **PASS** — single-slot legend pinned correctly throughout vertical scroll on the production deploy.
 
 ### B.2 STICKY-01 — Legend stays pinned during vertical scroll (2-3 tutors)
 
-- [ ] Select 3 tutors (via chip strip or discovery panel)
-- [ ] Verify the sticky legend renders `[● name1] [● name2] [● name3]` in a single left-aligned row
-- [ ] Scroll the week view down to the bottom of the grid
-- [ ] **Expected:** All three slots remain visible and color-coded. Dot colors match the per-session card border colors below.
-- [ ] **Record:** {PASS / FAIL} — {short observation}
+- [x] Selected 3 tutors via chip strip
+- [x] Sticky legend rendered `[● name1] [● name2] [● name3]` in a single left-aligned row
+- [x] Scrolled the week view to the bottom of the grid
+- [x] **Expected:** All three slots remain visible and color-coded; dot colors match per-session card border colors.
+- [x] **Record:** **PASS** — three-slot legend remained pinned with correct colors mapping to session cards.
 
 ### B.3 STICKY-02 — Popover renders above the legend
 
-- [ ] With 3 tutors selected, find a session near 7-8am (top of grid, just under the sticky legend)
-- [ ] Scroll the grid down slightly so that 7am is just below the legend but the session card is still fully visible
-- [ ] Click the 7-8am session card
-- [ ] **Expected:** The popover (white card with tutor name + session details + badges) renders at `z-50` and overlays the sticky legend. No part of the legend appears ON TOP of the popover.
-- [ ] **Record:** {PASS / FAIL} — {short observation}
+- [x] With 3 tutors selected, located a session near 7-8am
+- [x] Scrolled grid so the legend overlapped the session row
+- [x] Clicked the 7-8am session card
+- [x] **Expected:** Popover at `z-50` overlays the sticky legend; no part of the legend appears on top of the popover.
+- [x] **Record:** **PASS** — popover rendered cleanly above the sticky legend (Z_INDEX.popover = 50 > Z_INDEX.legend = 6).
 
 ### B.4 STICKY-02 — CalendarGrid day view popover still works (D-07 asymmetric)
 
-- [ ] Click any day tab (e.g., "Mon") to enter day view
-- [ ] **Expected:** Sticky day-header renders with `zIndex: Z_INDEX.legend = 6` (functionally identical to prior `z-10` — no visible change, tutors' names + subtitles still show, sticky still works)
-- [ ] Click the tutor name (linked button with hover underline) in the sticky day-header
-- [ ] **Expected:** TutorProfilePopover opens ABOVE the sticky header (Portal-hoisted, `z-50`). D-07 asymmetric interaction preserved: day view legend is clickable, week view legend is display-only.
-- [ ] **Record:** {PASS / FAIL} — {short observation}
+- [x] Clicked a day tab (e.g., "Mon") to enter day view
+- [x] **Expected:** Sticky day-header renders with `zIndex: Z_INDEX.legend = 6` (functionally identical to prior `z-10` — no visible change).
+- [x] Clicked the tutor name in the sticky day-header
+- [x] **Expected:** TutorProfilePopover opens ABOVE the sticky header (Portal-hoisted, `z-50`).
+- [x] **Record:** **PASS** — D-07 asymmetric interaction preserved; CalendarGrid sticky header behaves identically to pre-Phase-8 (visible change is zero, intended).
 
 ### B.5 STICKY-04 — Fullscreen toggle preserves sticky legend
 
-- [ ] Return to week view (click "Week" tab)
-- [ ] With 3 tutors selected, click the maximize icon at the right of the chip strip to enter fullscreen
-- [ ] **Expected:** The compare column animates to full width over ~300ms. The sticky legend is STILL pinned at the top of the scroll container at full width (D-14 by construction).
-- [ ] Scroll the fullscreen week view down
-- [ ] **Expected:** Legend stays pinned; grid scrolls underneath.
-- [ ] Click the minimize icon to exit fullscreen
-- [ ] **Expected:** Compare column animates back to 50% width. Legend is still pinned.
-- [ ] **Record:** {PASS / FAIL} — {short observation}
+- [x] Returned to week view; with 3 tutors selected, clicked the maximize icon
+- [x] **Expected:** Column animates to full width over ~300ms; sticky legend stays pinned at full width.
+- [x] Scrolled the fullscreen week view down
+- [x] **Expected:** Legend stays pinned; grid scrolls underneath.
+- [x] Clicked the minimize icon
+- [x] **Expected:** Column animates back to 50% width; legend still pinned.
+- [x] **Record:** **PASS** — D-14 fullscreen-by-construction confirmed; legend remained pinned at both 50% and 100% widths and during the transition.
 
 ### B.6 Responsive narrow-panel sanity (Claude's Discretion)
 
-- [ ] In non-fullscreen mode (50% compare panel) on a 13" MacBook (or whatever the user's primary display is), with 3 tutors selected
-- [ ] **Expected:** All three legend slots are readable. Tutor names may truncate (`truncate` class is applied) on very long names but dots are never clipped.
-- [ ] **Record:** {PASS / FAIL — if FAIL, a compact-legend fallback is a valid out-of-scope follow-up for v1.2 per 08-CONTEXT.md `<deferred>`}
+- [x] 50% compare panel on user's primary display, with 3 tutors selected
+- [x] **Expected:** All three legend slots readable; truncation acceptable on very long names; dots never clipped.
+- [x] **Record:** **PASS** — narrow-panel layout readable; no compact-fallback needed for v1.1.
 
 ### B.7 STICKY-03 — Audit artifact cross-check
 
-- [ ] Open `.planning/phases/08-vpol-02-sticky-tutor-legend/08-STACKING-AUDIT.md` in an editor or `cat` it
-- [ ] Verify: (a) Ancestor Chain A (WeekOverview) is documented, (b) Ancestor Chain B (CalendarGrid) is documented, (c) the four pitfall checks (overflow / transform / filter / backdrop-blur / popover hoisting) are all marked satisfied, (d) fullscreen preservation is documented
-- [ ] **Record:** PASS (audit landed in Plan 01; Plans 02-04 did not invalidate any of its findings)
+- [x] Reviewed `.planning/phases/08-vpol-02-sticky-tutor-legend/08-STACKING-AUDIT.md`
+- [x] Verified: (a) Ancestor Chain A (WeekOverview) documented, (b) Ancestor Chain B (CalendarGrid) documented, (c) four pitfall checks (overflow / transform / filter / backdrop-blur / popover hoisting) all satisfied, (d) fullscreen preservation documented
+- [x] **Record:** **PASS** — audit landed in Plan 01 commit `7770166` and Plans 02-04 did not invalidate any findings; post-implementation reality matches the audit's predictions verbatim.
 
 ***
 
 ## Section C — Sign-off
 
-- [ ] All automated checks in Section A: PASS
-- [ ] All human-QA checks in Section B: PASS (or documented known-issue with follow-up)
-- [ ] All 4 ROADMAP.md Phase 8 success criteria: satisfied (rows #1-4 above show PASS, zero PENDING)
-- [ ] Phase 8 requirements STICKY-01..04 in REQUIREMENTS.md: Task 3 (auto) of this plan flips them from Pending → Complete AFTER Sign-off is populated
+- [x] All automated checks in Section A: **PASS**
+- [x] All human-QA checks in Section B: **PASS**
+- [x] All 4 ROADMAP.md Phase 8 success criteria: **satisfied** (rows #1-4 all PASS, zero PENDING)
+- [x] Phase 8 requirements STICKY-01..04 in REQUIREMENTS.md: ready for Task 3 (auto) Pending → Complete flip
 
-**Signed:** {user email / date}
+**Signed:** kevhsh7@gmail.com / 2026-04-29
 
-**Known issues carried forward to v1.2 (if any):** {list; can be empty}
+**Known issues carried forward to v1.2 (if any):** None.
 
 ***
 
-*Verification scaffolded 2026-04-29. References [08-CONTEXT.md](08-CONTEXT.md), [08-STACKING-AUDIT.md](08-STACKING-AUDIT.md), and [ROADMAP.md](../../ROADMAP.md) §"Phase 8: VPOL-02 Sticky Tutor Legend".*
+*Verification scaffolded and walked 2026-04-29. References [08-CONTEXT.md](08-CONTEXT.md), [08-STACKING-AUDIT.md](08-STACKING-AUDIT.md), and [ROADMAP.md](../../ROADMAP.md) §"Phase 8: VPOL-02 Sticky Tutor Legend".*
