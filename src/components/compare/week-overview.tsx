@@ -18,6 +18,7 @@ import {
 } from "./session-colors";
 import { modalityDisplay } from "./modality-display";
 import { getCurrentMonday } from "@/hooks/use-compare";
+import { Z_INDEX } from "@/lib/ui/z-index";
 
 const HOUR_HEIGHT = 48;
 const START_HOUR = 7;
@@ -308,40 +309,40 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, w
 
       {/* ── Scrollable body ── */}
       <div className="flex-1 overflow-y-auto min-h-0">
-        {/* Sticky lane headers — CAL-02 (only in multi-tutor layout) */}
-        {multiTutorLayout && (
-          <div
-            className="sticky top-0 z-[5] flex bg-background/90 backdrop-blur-sm"
-            style={{ height: 20 }}
-          >
-            <div className="flex-shrink-0 w-10" />
-            <div className="flex-1 flex">
-              {DISPLAY_DAYS.map((day) => (
+        {/* STICKY-01/02/04: Consolidated sticky tutor legend — single row of
+            [● displayName] slots pinned to the top of the scroll container.
+            Renders always (1, 2, or 3 tutors). Display-only per 08-CONTEXT.md
+            D-05/D-07 — click affordances live on per-session cards and, in
+            day view, on CalendarGrid's sticky header. Solid `bg-background`
+            (no `backdrop-blur-sm`) creates no backdrop-filter stacking
+            context. See 08-STACKING-AUDIT.md Chain A. */}
+        <div
+          className="sticky top-0 flex items-center gap-3 bg-background border-b border-border/30 px-2"
+          style={{ height: 24, zIndex: Z_INDEX.legend }}
+          role="list"
+          aria-label="Tutor legend"
+        >
+          <div className="flex-shrink-0 w-10" />
+          <div className="flex-1 flex items-center gap-3 min-w-0">
+            {tutors.map((t, tutorIdx) => {
+              const chip = tutorChips[tutorIdx];
+              return (
                 <div
-                  key={`lane-hdr-${day}`}
-                  className="flex-1 min-w-0 flex border-r border-border/20 last:border-r-0"
+                  key={`legend-${t.tutorGroupId}`}
+                  role="listitem"
+                  className="flex items-center gap-1.5 min-w-0 text-[11px] font-medium truncate"
+                  style={{ color: chip?.color ?? "#888888" }}
                 >
-                  {tutors.map((t, tutorIdx) => {
-                    const chip = tutorChips[tutorIdx];
-                    return (
-                      <div
-                        key={`lane-hdr-${day}-${tutorIdx}`}
-                        className="flex items-center gap-1 px-1 text-[10px] font-medium truncate"
-                        style={{ width: `${laneWidth}%`, color: chip?.color ?? "#888888" }}
-                      >
-                        <div
-                          className="h-1.5 w-1.5 rounded-full flex-shrink-0"
-                          style={{ background: chip?.color ?? "#888888" }}
-                        />
-                        <span className="truncate">{t.displayName}</span>
-                      </div>
-                    );
-                  })}
+                  <div
+                    className="h-1.5 w-1.5 rounded-full flex-shrink-0"
+                    style={{ background: chip?.color ?? "#888888" }}
+                  />
+                  <span className="truncate">{t.displayName}</span>
                 </div>
-              ))}
-            </div>
+              );
+            })}
           </div>
-        )}
+        </div>
         <div className="flex" style={{ height: TOTAL_HOURS * HOUR_HEIGHT }}>
           {/* Time axis */}
           <div className="flex-shrink-0 w-10 relative">
