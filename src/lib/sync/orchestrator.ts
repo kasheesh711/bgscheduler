@@ -527,7 +527,19 @@ export async function runFullSync(
           errorSummary: errorMessage,
         })
         .where(eq(schema.syncRuns.id, syncRunId))
-        .catch(() => {}); // Don't throw on cleanup
+        .catch((cleanupErr) => {
+          // REL-06: surface the cleanup failure in Vercel logs so an operator
+          // can see WHY the sync_runs row is stuck in `running` state. We
+          // still swallow (don't re-throw) because the primary errorMessage
+          // is what matters for the SyncResult — masking it with a cleanup
+          // error would be worse than the current behavior.
+          const cleanupMsg =
+            cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+          console.error(
+            `[sync-orchestrator] cleanup failed for syncRunId=${syncRunId} after primary error "${errorMessage}":`,
+            cleanupMsg,
+          );
+        });
     }
 
     return {
