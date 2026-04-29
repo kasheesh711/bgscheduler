@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v1.0 Performance & UX Improvement** — Phases 1–4 (shipped 2026-04-17) — see [MILESTONES.md](MILESTONES.md)
-- 🚧 **v1.1 Data Fidelity & Depth** — Phases 5–10 (planning 2026-04-20)
+- 🚧 **v1.1 Data Fidelity & Depth** — Phases 5–10 + reliability remediation 8.5–8.7 (planning 2026-04-20; remediation phases inserted 2026-04-29 from codebase audit)
 
 ## Phases
 
@@ -25,6 +25,9 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 6: MOD-01 Reliable Modality Detection** — Upgrade resolver to `isOnlineVariant` + `sessionType` primary signals with `modalityConfidence` grading; eliminate silent `supportedModes[0]` fallback; fail-closed test matrix (completed 2026-04-21, gap closure 06-06 completed 2026-04-22 — MOD-UAT-01 fixed in code; post-deploy re-UAT pending)
 - [ ] **Phase 7: PAST-01 Past-Day Session Visibility** — Capture past sessions via orchestrator diff-hook into dedicated `past_session_blocks` table with stable canonical keys; dedicated `cacheTag('past-sessions')`; disable weekday-fallback for historical ranges; Wise historical-endpoint spike in parallel
 - [ ] **Phase 8: VPOL-02 Sticky Tutor Legend** — Pure-CSS `position: sticky` legend in compare panel with documented z-index scale constant and stacking-context audit artifact; preserved across fullscreen
+- [ ] **Phase 8.5: Reliability Hardening** — Atomic snapshot promotion, race-condition fixes, identity-collision detection, retry-policy correctness, leave-overlap minute-of-day fix, timezone-idiom unification, cron-secret timing-safe compare (inserted 2026-04-29 from codebase audit)
+- [ ] **Phase 8.6: Test Coverage Hardening** — Close HIGH-risk gaps: search-index unit tests, sync-orchestrator integration tests, all 7 API route handler tests, past-sessions diff-hook integration, timezone DST/UTC-boundary, auth flow, modality contradiction emission (inserted 2026-04-29 from codebase audit)
+- [ ] **Phase 8.7: Operational Maturity** — Snapshot pruning (retention), sync failure alerts, stale-snapshot banner, threshold raise to 26h, manual sync UI, dependency cleanup, version pinning (inserted 2026-04-29 from codebase audit)
 - [ ] **Phase 9: VPOL-03 Density Overview** — Client-side density aggregation via `useMemo` over existing `CompareResponse.tutors[].sessions[]`; shape (A aggregate / B per-tutor / C heatmap) chosen via phase-local design review; `prefers-reduced-motion` + a11y text equivalents
 - [ ] **Phase 10: VPOL-01 View Transitions** — Native `document.startViewTransition()` helper in `src/lib/ui/view-transitions.ts` wired into week prev/next/today + day-tab switches with manual scroll capture/restore and `prefers-reduced-motion` CSS skip
 
@@ -106,9 +109,58 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   - [ ] 08-05-PLAN.md — Verification walkthrough scaffold (08-VERIFICATION.md) + human-QA checkpoint covering all 4 ROADMAP success criteria; REQUIREMENTS.md §Traceability flip to Complete (D-14; STICKY-01..04)
 **UI hint**: yes
 
+### Phase 8.5: Reliability Hardening
+**Goal**: Eliminate data-integrity, race-condition, and error-path defects surfaced by the 2026-04-29 codebase audit so v1.1 features ship on a verified-reliable backend baseline
+**Depends on**: Phase 8 (sticky legend completed; remediation runs after Phase 8 finishes 03/04/05)
+**Requirements**: REL-01, REL-02, REL-03, REL-04, REL-05, REL-06, REL-07, REL-08
+**Source**: `.planning/codebase/CONCERNS.md` (2026-04-29) — HIGH/MEDIUM severity items only
+**Success Criteria** (what must be TRUE):
+  1. Snapshot promotion in `runFullSync` is atomic — a single SQL statement (`UPDATE snapshots SET active = (id = $newId)`) replaces the two-UPDATE sequence at `src/lib/sync/orchestrator.ts:471-481`; no window where zero rows match `WHERE active = true`
+  2. `ensureIndex` in `src/lib/search/index.ts:281-305` coalesces concurrent rebuilds correctly — atomic check-and-set on the building promise; concurrent first-time callers cannot both kick off rebuilds; reproducer test asserts single rebuild invocation
+  3. Identity resolver in `src/lib/normalization/identity.ts:111-150` emits an `identity_collision` `data_issue` when a nickname maps to 3+ teachers without explicit online/offline pair structure (no silent triple-merge)
+  4. `hasRecurringLeaveConflict` in `src/lib/search/engine.ts:240-269` computes leave start/end minutes from the day-cursor's date for each iteration, not from `leaveStart` (or always treats multi-day leaves as full-day blocks with documented assumption)
+  5. Wise client retry loop at `src/lib/wise/client.ts:67-91` does NOT retry on 4xx (except 429) — only retries on 5xx, network errors, and 429; permanent-error path returns within first response, not after 3 retries
+  6. Outer error handler in `src/lib/sync/orchestrator.ts:512-525` logs cleanup failures via `console.error` (no silent `.catch(() => {})`)
+  7. `src/app/api/internal/sync-wise/route.ts:11-17` uses `crypto.timingSafeEqual` against equal-length buffers for CRON_SECRET comparison; non-constant-time string equality removed
+  8. All "now in Bangkok" derivations use `toZonedTime(new Date(), TIMEZONE)` from `src/lib/normalization/timezone.ts` — the `new Date(new Date().toLocaleString("en-US", { timeZone: ... }))` pattern is removed from `src/app/api/compare/route.ts:28-30`, `src/hooks/use-compare.ts:22-26`, `src/components/compare/week-overview.tsx:235`, `src/components/compare/calendar-grid.tsx:67`, and any other call site
+**Plans**: TBD
+**UI hint**: no
+
+### Phase 8.6: Test Coverage Hardening
+**Goal**: Close HIGH-risk test gaps for modules whose silent regression would surface only under production load, so reliability fixes from Phase 8.5 stay locked-in and future changes are merge-gated
+**Depends on**: Phase 8.5 (asserts the fixed behavior; tests authored against post-fix code)
+**Requirements**: TCOV-01, TCOV-02, TCOV-03, TCOV-04, TCOV-05, TCOV-06, TCOV-07
+**Source**: `.planning/codebase/CONCERNS.md` §Test Coverage Gaps + §Fragile Areas (2026-04-29)
+**Success Criteria** (what must be TRUE):
+  1. `src/lib/search/__tests__/index.test.ts` exists and covers `buildIndex` (parallel table loads, denormalization), `ensureIndex` (lazy init, stale detection, concurrent rebuild coalescing), and the snapshot-active race (cached fallback when zero rows match)
+  2. `src/lib/sync/__tests__/orchestrator.integration.test.ts` exists and exercises `runFullSync` end-to-end against a real Postgres (Neon test branch or local Docker) — fetch → normalize → persist → promote — with at least one happy-path and one fail-mid-promotion case
+  3. All 7 API route handlers have route-level tests: `compare`, `compare/discover`, `filters`, `tutors`, `search`, `search/range`, `data-health`, `internal/sync-wise` — covering auth (200/401), validation (400 with Zod errors), success (200 with shape), and 500 error path
+  4. `src/lib/sync/__tests__/past-sessions-diff-hook.integration.test.ts` covers the prior-snapshot diff hook against a real DB — prior snapshot has session X, new sync drops X, X dated in past → captured into `past_session_blocks` with idempotent UNIQUE
+  5. Timezone tests cover UTC/Bangkok day-boundary (sync at 17:00 UTC = 00:00 next-day Bangkok) — assert weekday derivation, `getDay()`, and slot-time arithmetic remain consistent across the boundary
+  6. Auth tests cover `signIn` callback's allowlist read (`src/lib/auth.ts:18-30`) and middleware bypass paths (`src/middleware.ts:7-14`) — assert that non-admin email is rejected and that internal routes self-check
+  7. Modality contradiction emission test verifies orchestrator persists `conflict_model` rows to `data_issues` table when `detectSessionModalityConflict` fires (`src/lib/sync/orchestrator.ts:356-387`); not just the in-isolation unit test
+**Plans**: TBD
+**UI hint**: no
+
+### Phase 8.7: Operational Maturity
+**Goal**: Add the operational features and lower-priority cleanups required to run BGScheduler reliably in production for the next 12+ months — retention, alerting, observability, and dependency hygiene
+**Depends on**: Phase 8.6 (ops changes ride on top of fixed + tested baseline)
+**Requirements**: OPS-01, OPS-02, OPS-03, OPS-04, OPS-05, OPS-06, OPS-07
+**Source**: `.planning/codebase/CONCERNS.md` §Missing Critical Features + §Dependencies at Risk + low-severity §Tech Debt items (2026-04-29)
+**Success Criteria** (what must be TRUE):
+  1. Sync orchestrator prunes snapshots — keeps the last 30 by `createdAt`, cascades delete across all snapshot-scoped tables; `past_session_blocks` (cross-snapshot) unaffected; pruning runs after successful promote
+  2. Failed sync runs trigger an alert — Slack incoming-webhook (or equivalent) on `result.success === false`; webhook URL in `.env.example` and validated in `src/lib/env.ts`
+  3. Stale-snapshot banner displays on `/search` and `/compare` (not just `/data-health`) when `staleAgeMs > 48h` — banner is dismissible per session and links to `/data-health`
+  4. `staleThresholdMs` raised to 26h to match daily Hobby cron cadence in `src/lib/search/engine.ts:24`, `src/app/api/compare/route.ts:85`, `src/app/api/compare/discover/route.ts:60` — comment notes 26h matches Hobby cron + 2h grace
+  5. Manual "Sync now" button in `/data-health` UI calls `/api/internal/sync-wise` via authenticated session (Auth.js session cookie) — alternate auth path documented; 401 fallback if session missing
+  6. `@auth/drizzle-adapter` removed from `package.json` (unused — auth uses custom callback against `admin_users`); `shadcn` moved to `devDependencies` (CLI-only, not shipped at runtime); bundle size delta documented in PR
+  7. `next-auth`, `@base-ui/react`, and `drizzle-orm` are pinned to exact versions (no caret) until each library reaches stable v1.x or v5 GA; `detectConflicts` unused `indexedGroups` parameter removed (`src/lib/search/compare.ts:321`); modality medium-tier TODO at `src/components/compare/modality-display.ts:9-11` is either implemented or documented as intentionally unimplemented
+**Plans**: TBD
+**UI hint**: yes
+
 ### Phase 9: VPOL-03 Density Overview
 **Goal**: Admin can see at-a-glance per-tutor booking density across the visible week without leaving the calendar, with a11y-compliant affordances and zero new server work
-**Depends on**: Phase 5 (POLISH-01..05 a11y baseline verified) and Phase 8 (sticky layout established)
+**Depends on**: Phase 5 (POLISH-01..05 a11y baseline verified), Phase 8 (sticky layout established), Phase 8.7 (reliability remediation cleared)
 **Requirements**: DENS-01, DENS-02, DENS-03, DENS-04
 **Success Criteria** (what must be TRUE):
   1. Admin viewing the compare panel sees a density overview component that renders aggregated per-tutor booking density across the visible week without an additional network request
@@ -147,5 +199,8 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 6. MOD-01 Reliable Modality Detection | v1.1 | 5/6 | Gap closure | 2026-04-21 |
 | 7. PAST-01 Past-Day Session Visibility | v1.1 | 0/? | Not started | - |
 | 8. VPOL-02 Sticky Tutor Legend | v1.1 | 0/5 | Planned | - |
+| 8.5. Reliability Hardening | v1.1 | 0/? | Not started | - |
+| 8.6. Test Coverage Hardening | v1.1 | 0/? | Not started | - |
+| 8.7. Operational Maturity | v1.1 | 0/? | Not started | - |
 | 9. VPOL-03 Density Overview | v1.1 | 0/? | Not started | - |
 | 10. VPOL-01 View Transitions | v1.1 | 0/? | Not started | - |

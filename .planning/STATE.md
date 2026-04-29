@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Data Fidelity & Depth
 status: executing
-stopped_at: Phase 8 context gathered
-last_updated: "2026-04-22T10:10:55.950Z"
-last_activity: 2026-04-22 -- Phase 8 planning complete
+stopped_at: Reliability remediation phases 8.5/8.6/8.7 added from codebase audit; ready to plan Phase 8.5
+last_updated: "2026-04-29T11:40:00.000+07:00"
+last_activity: 2026-04-29 -- Reliability remediation phases 8.5/8.6/8.7 inserted into v1.1 roadmap from codebase audit
 progress:
-  total_phases: 6
+  total_phases: 9
   completed_phases: 3
   total_plans: 25
   completed_plans: 20
-  percent: 80
+  percent: 33
 ---
 
 # Project State
@@ -21,17 +21,17 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20 — milestone v1.1 Data Fidelity & Depth scoped)
 
 **Core value:** Admin staff can find, compare, and schedule tutors instantly and independently
-**Current focus:** Phase 07 — past-01-past-day-session-visibility
+**Current focus:** Phase 08 — vpol-02-sticky-tutor-legend
 
 ## Current Position
 
 Milestone: v1.1 Data Fidelity & Depth
-Phase: 8
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-04-22 -- Phase 8 planning complete
+Phase: 08 VPOL-02 Sticky Tutor Legend — EXECUTING (3 plans pending: 08-03/04/05)
+Next: Phase 8.5 Reliability Hardening — PLANNING (inserted 2026-04-29 from codebase audit)
+Status: Executing Phase 8 → planning Phase 8.5
+Last activity: 2026-04-29 -- Reliability remediation phases 8.5/8.6/8.7 inserted into v1.1 roadmap
 
-Progress: [███░░░░░░░] 2/6 phases (33%)
+Progress: [███░░░░░░░] 3/9 phases (33%)
 
 ## Last Completed Milestone
 
@@ -56,9 +56,9 @@ Progress: [███░░░░░░░] 2/6 phases (33%)
 
 ## v1.1 Scope Summary
 
-**Goal:** Close data-truth gaps, ship v2 visual polish, drain v1.0 polish backlog.
+**Goal:** Close data-truth gaps, ship v2 visual polish, drain v1.0 polish backlog, remediate reliability/test/operational concerns surfaced by 2026-04-29 codebase audit.
 
-**Phase structure (6 phases, 40 requirements):**
+**Phase structure (9 phases, 62 requirements):**
 
 | Phase | Name | Requirements | Blocker / gating |
 |-------|------|--------------|------------------|
@@ -66,10 +66,13 @@ Progress: [███░░░░░░░] 2/6 phases (33%)
 | 6 | MOD-01 Reliable Modality Detection | MOD-01..05 (5) | First shape-changing phase; introduces CACHE_VERSION constant; drives visual rules VPOL touches later |
 | 7 | PAST-01 Past-Day Session Visibility | PAST-01..06 (6) | Data-layer only; parallel Wise historical endpoint spike (≤30 min, non-blocking) |
 | 8 | VPOL-02 Sticky Tutor Legend | STICKY-01..04 (4) | Unlocks VPOL-03 layout; must precede VPOL-01 |
-| 9 | VPOL-03 Density Overview | DENS-01..04 (4) | Blocked on Phase 5 POLISH-01..05 a11y baseline; shape decision deferred to phase planning |
+| 8.5 | Reliability Hardening | REL-01..08 (8) | Backend reliability fixes (atomic promotion, race conditions, retry policy, timezone idiom) — runs after Phase 8 completes; must precede Phase 9 |
+| 8.6 | Test Coverage Hardening | TCOV-01..07 (7) | Locks in Phase 8.5 fixes; closes HIGH-risk gaps for sync/index/API routes |
+| 8.7 | Operational Maturity | OPS-01..07 (7) | Snapshot pruning, alerting, ops UI, dependency hygiene; rides on top of fixed + tested baseline |
+| 9 | VPOL-03 Density Overview | DENS-01..04 (4) | Blocked on Phase 5 POLISH-01..05 a11y baseline + Phase 8.7 cleared; shape decision deferred to phase planning |
 | 10 | VPOL-01 View Transitions | TRANS-01..05 (5) | LAST — animates frozen baseline; highest cross-browser risk |
 
-**Coverage:** 40/40 requirements mapped ✓
+**Coverage:** 62/62 requirements mapped ✓ (40 original + 22 reliability remediation)
 
 **Deferred to v1.2:** AWRK-01 inline free-slot actions, AWRK-02 conflict resolution suggestions, AWRK-03 drag-to-select, MOD-06/07, PAST-07/08, TRANS-06/07, STICKY-05/06, DENS-05/06, TELEM-01, RECURDATE-01.
 
@@ -130,6 +133,7 @@ None blocking roadmap execution.
 
 ## Session Continuity
 
-Last session: 2026-04-22T09:05:02.757Z
-Stopped at: Phase 8 context gathered
-Resume: `/gsd-discuss-phase 7` or `/gsd-plan-phase 7` to begin Phase 7 PAST-01 Past-Day Session Visibility
+Last session: 2026-04-29T00:00:00.000+07:00
+Stopped at: Milestone v1.1 summary generated
+Resume file: `.planning/reports/MILESTONE_SUMMARY-v1.1.md`
+Resume: continue Phase 8 VPOL-02 Sticky Tutor Legend execution from plan 08-03, or resolve Phase 7 production migration/UAT gates before milestone close.
