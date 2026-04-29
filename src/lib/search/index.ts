@@ -277,31 +277,48 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
 
 /**
  * Ensure index is loaded and fresh. Rebuilds if stale.
+ *
+ * Race coalescing (REL-02): assigns the in-flight build promise to the
+ * globalThis singleton SYNCHRONOUSLY (before any await) so that concurrent
+ * first-time callers reuse the same promise instead of both kicking off a
+ * rebuild. Pattern: jonmellman.com/posts/singleton-promises.
  */
 export async function ensureIndex(db: Database): Promise<SearchIndex> {
+  // Fast path: an in-flight rebuild exists — return its promise immediately.
+  // This MUST be checked before any other work so that a concurrent caller
+  // arriving during another caller's await will short-circuit here.
+  const inFlight = getBuildingPromise();
+  if (inFlight) return inFlight;
+
   const cached = getCurrentIndex();
-  if (cached) {
-    // Check if still the active snapshot
-    const [activeSnapshot] = await db
-      .select({ id: schema.snapshots.id })
-      .from(schema.snapshots)
-      .where(eq(schema.snapshots.active, true))
-      .limit(1);
 
-    if (activeSnapshot && activeSnapshot.id === cached.snapshotId) {
-      return cached;
+  // Build the work-doing async closure but don't invoke it until we have
+  // assigned the resulting promise to the singleton — see below.
+  const buildAndCheck = async (): Promise<SearchIndex> => {
+    if (cached) {
+      // Check if still the active snapshot
+      const [activeSnapshot] = await db
+        .select({ id: schema.snapshots.id })
+        .from(schema.snapshots)
+        .where(eq(schema.snapshots.active, true))
+        .limit(1);
+      if (activeSnapshot && activeSnapshot.id === cached.snapshotId) {
+        return cached;
+      }
     }
-  }
+    return buildIndex(db);
+  };
 
-  // Need to rebuild
-  if (!getBuildingPromise()) {
-    const p = buildIndex(db).finally(() => {
-      setBuildingPromise(null);
-    });
-    setBuildingPromise(p);
-  }
-
-  return getBuildingPromise()!;
+  // Synchronous prelude — kicks off the work AND assigns the promise to the
+  // singleton in the same tick, before any await yields to the microtask
+  // queue. A concurrent caller arriving during the await chain inside
+  // `buildAndCheck` will see this assignment via getBuildingPromise() and
+  // return early at the top of this function.
+  const p = buildAndCheck().finally(() => {
+    setBuildingPromise(null);
+  });
+  setBuildingPromise(p);
+  return p;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
