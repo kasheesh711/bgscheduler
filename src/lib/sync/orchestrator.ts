@@ -1,4 +1,4 @@
-import { eq, and, sql } from "drizzle-orm";
+import { eq, or, sql } from "drizzle-orm";
 import { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { WiseClient } from "@/lib/wise/client";
@@ -467,18 +467,24 @@ export async function runFullSync(
     let promotedSnapshotId: string | null = null;
 
     if (shouldPromote) {
-      // Atomic promotion: deactivate old, activate new
+      // Atomic promotion via a single UPDATE: PostgreSQL MVCC + the row-level
+      // lock held for the duration of one statement guarantee that concurrent
+      // readers see either the prior-active row or the new-active row — never
+      // a moment with zero matches on `active = true`. The bounded WHERE
+      // restricts the rewrite to (a) the previous active row(s) and (b) the
+      // candidate snapshot, avoiding a full-table rewrite per promote.
+      // Replaces the prior two-UPDATE sequence (REL-01).
       await db
         .update(schema.snapshots)
-        .set({ active: false })
+        .set({
+          active: sql`(${schema.snapshots.id} = ${snapshotId})`,
+        })
         .where(
-          and(eq(schema.snapshots.active, true), sql`${schema.snapshots.id} != ${snapshotId}`)
+          or(
+            eq(schema.snapshots.active, true),
+            eq(schema.snapshots.id, snapshotId),
+          ),
         );
-
-      await db
-        .update(schema.snapshots)
-        .set({ active: true })
-        .where(eq(schema.snapshots.id, snapshotId));
 
       promotedSnapshotId = snapshotId;
     }
