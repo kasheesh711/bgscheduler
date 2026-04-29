@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Data Fidelity & Depth
-status: executing
-stopped_at: Milestone v1.1 summary generated
-last_updated: "2026-04-29T15:40:12.203Z"
-last_activity: 2026-04-29 -- Phase 08.5 execution started
+status: phase_complete
+stopped_at: Phase 08.5 complete (8/8 plans, all REL-01..08 verified PASS)
+last_updated: "2026-04-30T01:30:00.000+07:00"
+last_activity: 2026-04-30 -- Phase 08.5 reliability-hardening complete; 154/154 tests pass
 progress:
   total_phases: 9
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 33
-  completed_plans: 25
-  percent: 76
+  completed_plans: 33
+  percent: 100
 ---
 
 # Project State
@@ -21,18 +21,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20 — milestone v1.1 Data Fidelity & Depth scoped)
 
 **Core value:** Admin staff can find, compare, and schedule tutors instantly and independently
-**Current focus:** Phase 08.5 — reliability-hardening
+**Current focus:** Phase 08.6 — Test Coverage Hardening (next gating phase)
 
 ## Current Position
 
 Milestone: v1.1 Data Fidelity & Depth
-Phase: 08.5 (reliability-hardening) — EXECUTING
-Plan: 1 of 8
-Next: `/gsd-execute-phase 8.5` — atomic snapshot promotion, race-condition fixes, identity-collision detection, retry policy, leave-overlap fix, timezone idiom unification, cron-secret timing-safe compare
-Status: Executing Phase 08.5
-Last activity: 2026-04-29 -- Phase 08.5 execution started
+Phase: 08.5 (reliability-hardening) — COMPLETE (8/8 plans, REL-01..08 verified PASS)
+Plan: 8 of 8 complete
+Next: `/gsd-discuss-phase 8.6` — Test Coverage Hardening (locks in 8.5 fixes; closes HIGH-risk gaps for sync/index/API routes)
+Status: Phase 08.5 complete; ready to discuss Phase 08.6
+Last activity: 2026-04-30 -- Phase 08.5 reliability-hardening shipped to main; 154/154 tests pass; +18 new tests across REL-02/03/04/05/08
 
-Progress: [████░░░░░░] 4/9 phases (44%)
+Progress: [█████░░░░░] 5/9 phases (56%)
 
 ## Last Completed Milestone
 
@@ -134,7 +134,7 @@ None blocking roadmap execution.
 
 ## Session Continuity
 
-Last session: 2026-04-29T00:00:00.000+07:00
-Stopped at: Milestone v1.1 summary generated
-Resume file: `.planning/reports/MILESTONE_SUMMARY-v1.1.md`
-Resume: continue Phase 8 VPOL-02 Sticky Tutor Legend execution from plan 08-03, or resolve Phase 7 production migration/UAT gates before milestone close.
+Last session: 2026-04-30T01:30:00.000+07:00
+Stopped at: Phase 08.5 complete — 8/8 plans merged; verifier+code-review subagents quota-limited (verification done inline)
+Resume file: `.planning/phases/08.5-reliability-hardening/08.5-VERIFICATION.md`
+Resume: run `/gsd-discuss-phase 8.6` to begin Test Coverage Hardening, or `/gsd-code-review 8.5` to retroactively run the code review skill that was skipped at end of execution due to subagent quota.
