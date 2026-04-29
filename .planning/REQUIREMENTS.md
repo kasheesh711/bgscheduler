@@ -28,11 +28,11 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Visual Polish — Sticky Tutor Legend (VPOL-02)
 
-- [ ] **STICKY-01**: Tutor legend (chip strip in compare panel) remains visible during calendar vertical scroll via `position: sticky`
-- [ ] **STICKY-02**: Z-index scale constant is introduced (`z-[2]` content, `z-[4]` legend, `z-[5]` lane headers, `z-[6]` sticky day-header, `z-50` popovers) and applied consistently
+- [x] **STICKY-01**: Tutor legend (chip strip in compare panel) remains visible during calendar vertical scroll via `position: sticky` — verified 2026-04-29 in 08-VERIFICATION.md §B.1-B.2
+- [x] **STICKY-02**: Z-index scale constant is introduced (`z-[2]` content, `z-[4]` legend, `z-[5]` lane headers, `z-[6]` sticky day-header, `z-50` popovers) and applied consistently — verified 2026-04-29 in 08-VERIFICATION.md §A.3, B.3-B.4
   - *Amendment (2026-04-22, Phase 8 CONTEXT D-08..D-10):* Scale simplified at CONTEXT time to a 3-tier scale `Z_CONTENT = 1`, `Z_LEGEND = 6`, `Z_POPOVER = 50` because Phase 8 D-01 consolidates per-day lane headers INTO the single sticky legend — the separate `z-[5]` lane-headers slot is no longer a live surface. CalendarGrid's existing sticky day-header reuses `Z_LEGEND = 6`. Constant ships at `src/lib/ui/z-index.ts` (`export const Z_INDEX = { content: 1, legend: 6, popover: 50 } as const;`). Same class as Phase 5 D-02's NVDA relaxation — no new requirement ID, §Traceability row for STICKY-02 unchanged.
-- [ ] **STICKY-03**: Pre-implementation stacking-context audit artifact committed alongside the change
-- [ ] **STICKY-04**: Fullscreen compare mode preserves sticky legend behavior (no regression)
+- [x] **STICKY-03**: Pre-implementation stacking-context audit artifact committed alongside the change — verified 2026-04-29 in 08-VERIFICATION.md §A.6, B.7 (audit at `7770166`)
+- [x] **STICKY-04**: Fullscreen compare mode preserves sticky legend behavior (no regression) — verified 2026-04-29 in 08-VERIFICATION.md §B.5
 
 ### Reliability Hardening (Phase 8.5)
 
@@ -190,10 +190,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PAST-04 | Phase 7 | Pending |
 | PAST-05 | Phase 7 | Pending |
 | PAST-06 | Phase 7 | Pending |
-| STICKY-01 | Phase 8 | Pending |
-| STICKY-02 | Phase 8 | Pending |
-| STICKY-03 | Phase 8 | Pending |
-| STICKY-04 | Phase 8 | Pending |
+| STICKY-01 | Phase 8 | Complete |
+| STICKY-02 | Phase 8 | Complete |
+| STICKY-03 | Phase 8 | Complete |
+| STICKY-04 | Phase 8 | Complete |
 | REL-01 | Phase 8.5 | Pending |
 | REL-02 | Phase 8.5 | Pending |
 | REL-03 | Phase 8.5 | Pending |
