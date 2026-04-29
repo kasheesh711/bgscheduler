@@ -24,7 +24,7 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [ ] **Phase 5: POLISH Drain** — Clear v1.0 backlog (human QA, Phase 03 M1–M3 / L1–L4, retroactive VERIFICATION.md, TutorSelector cleanup, v1.0.1 UAT + recommend.test.ts) to establish a11y baseline before feature churn
 - [x] **Phase 6: MOD-01 Reliable Modality Detection** — Upgrade resolver to `isOnlineVariant` + `sessionType` primary signals with `modalityConfidence` grading; eliminate silent `supportedModes[0]` fallback; fail-closed test matrix (completed 2026-04-21, gap closure 06-06 completed 2026-04-22 — MOD-UAT-01 fixed in code; post-deploy re-UAT pending)
 - [ ] **Phase 7: PAST-01 Past-Day Session Visibility** — Capture past sessions via orchestrator diff-hook into dedicated `past_session_blocks` table with stable canonical keys; dedicated `cacheTag('past-sessions')`; disable weekday-fallback for historical ranges; Wise historical-endpoint spike in parallel
-- [ ] **Phase 8: VPOL-02 Sticky Tutor Legend** — Pure-CSS `position: sticky` legend in compare panel with documented z-index scale constant and stacking-context audit artifact; preserved across fullscreen
+- [x] **Phase 8: VPOL-02 Sticky Tutor Legend** — Pure-CSS `position: sticky` legend in compare panel with documented z-index scale constant and stacking-context audit artifact; preserved across fullscreen (completed 2026-04-29)
 - [ ] **Phase 8.5: Reliability Hardening** — Atomic snapshot promotion, race-condition fixes, identity-collision detection, retry-policy correctness, leave-overlap minute-of-day fix, timezone-idiom unification, cron-secret timing-safe compare (inserted 2026-04-29 from codebase audit)
 - [ ] **Phase 8.6: Test Coverage Hardening** — Close HIGH-risk gaps: search-index unit tests, sync-orchestrator integration tests, all 7 API route handler tests, past-sessions diff-hook integration, timezone DST/UTC-boundary, auth flow, modality contradiction emission (inserted 2026-04-29 from codebase audit)
 - [ ] **Phase 8.7: Operational Maturity** — Snapshot pruning (retention), sync failure alerts, stale-snapshot banner, threshold raise to 26h, manual sync UI, dependency cleanup, version pinning (inserted 2026-04-29 from codebase audit)
@@ -106,7 +106,7 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   - [x] 08-02-PLAN.md — Create `src/lib/ui/z-index.ts` exporting `Z_INDEX = { content: 1, legend: 6, popover: 50 } as const` (D-08..D-09; STICKY-02) — completed 2026-04-22 (`d8494a1`)
   - [x] 08-03-PLAN.md — WeekOverview refactor: replace per-day sticky lane headers (lines 311-344) with single global sticky legend using `Z_INDEX.legend`; remove `multiTutorLayout &&` gate from sticky path; display-only per D-07 (D-01..D-05; STICKY-01, STICKY-02, STICKY-04) — completed 2026-04-29 (`376fa47`)
   - [x] 08-04-PLAN.md — CalendarGrid z-index normalization: replace `z-10` at line 120 with `zIndex: Z_INDEX.legend` while preserving TutorProfilePopover click affordance (D-06..D-07; STICKY-02) — completed 2026-04-29 (`d9c729f`)
-  - [ ] 08-05-PLAN.md — Verification walkthrough scaffold (08-VERIFICATION.md) + human-QA checkpoint covering all 4 ROADMAP success criteria; REQUIREMENTS.md §Traceability flip to Complete (D-14; STICKY-01..04)
+  - [x] 08-05-PLAN.md — Verification walkthrough scaffold (08-VERIFICATION.md) + human-QA checkpoint covering all 4 ROADMAP success criteria; REQUIREMENTS.md §Traceability flip to Complete (D-14; STICKY-01..04)
 **UI hint**: yes
 
 ### Phase 8.5: Reliability Hardening
@@ -206,7 +206,7 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 5. POLISH Drain | v1.1 | 0/7 | Planned | - |
 | 6. MOD-01 Reliable Modality Detection | v1.1 | 5/6 | Gap closure | 2026-04-21 |
 | 7. PAST-01 Past-Day Session Visibility | v1.1 | 0/? | Not started | - |
-| 8. VPOL-02 Sticky Tutor Legend | v1.1 | 4/5 | In progress | - |
+| 8. VPOL-02 Sticky Tutor Legend | v1.1 | 5/5 | Complete    | 2026-04-29 |
 | 8.5. Reliability Hardening | v1.1 | 0/8 | Planned | - |
 | 8.6. Test Coverage Hardening | v1.1 | 0/? | Not started | - |
 | 8.7. Operational Maturity | v1.1 | 0/? | Not started | - |

@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Data Fidelity & Depth
-status: executing
+status: ready_to_plan
 stopped_at: Phase 08 Wave 3 complete (08-03 + 08-04 shipped); Wave 4 pending (08-05 human-verify checkpoint)
 last_updated: "2026-04-29T15:05:00.000+07:00"
 last_activity: 2026-04-29 -- Phase 08 Wave 3 complete (376fa47, d9c729f); Wave 4 awaiting human visual QA
 progress:
   total_phases: 9
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 33
   completed_plans: 24
-  percent: 73
+  percent: 44
 ---
 
 # Project State
@@ -21,18 +21,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20 — milestone v1.1 Data Fidelity & Depth scoped)
 
 **Core value:** Admin staff can find, compare, and schedule tutors instantly and independently
-**Current focus:** Phase 08 — vpol-02-sticky-tutor-legend
+**Current focus:** Phase 8.5 — Reliability Hardening (already planned; 8 plans / 2 waves)
 
 ## Current Position
 
 Milestone: v1.1 Data Fidelity & Depth
-Phase: 08 (vpol-02-sticky-tutor-legend) — EXECUTING (Wave 3 complete; Wave 4 pending)
-Plan: 4 of 5 complete (08-01, 08-02, 08-03, 08-04)
-Next: 08-05 verification scaffold + human-verify checkpoint, then Phase 8.5 Reliability Hardening (already planned, 8 plans / 2 waves)
-Status: Wave 3 shipped; awaiting human visual QA walkthrough on Wave 4
-Last activity: 2026-04-29 -- Phase 08 Wave 3 complete (376fa47 feat 08-03; d9c729f feat 08-04)
+Phase: 08.5 (reliability-hardening) — READY TO EXECUTE
+Plan: Not started (8 plans verified PASS by plan-checker)
+Next: `/gsd-execute-phase 8.5` — atomic snapshot promotion, race-condition fixes, identity-collision detection, retry policy, leave-overlap fix, timezone idiom unification, cron-secret timing-safe compare
+Status: Ready to plan
+Last activity: 2026-04-29 -- Phase 08 complete (5/5 plans, all 4 STICKY-* requirements verified PASS, production deploy `dpl_McpSbJW6Mudtbvfy3uQkL3tqvypz` aliased to bgscheduler.vercel.app)
 
-Progress: [███░░░░░░░] 3/9 phases (33%)
+Progress: [████░░░░░░] 4/9 phases (44%)
 
 ## Last Completed Milestone
 
