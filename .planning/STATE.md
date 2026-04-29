@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Data Fidelity & Depth
-status: ready_to_execute
-stopped_at: Phase 8.5 Reliability Hardening planned (8 plans verified PASS); ready to execute after Phase 8 completes
-last_updated: "2026-04-29T14:35:00.000+07:00"
-last_activity: 2026-04-29 -- Phase 8.5 planned — 8 plans, 2 waves, plan-checker PASS on first iteration
+status: executing
+stopped_at: Phase 08 Wave 3 complete (08-03 + 08-04 shipped); Wave 4 pending (08-05 human-verify checkpoint)
+last_updated: "2026-04-29T15:05:00.000+07:00"
+last_activity: 2026-04-29 -- Phase 08 Wave 3 complete (376fa47, d9c729f); Wave 4 awaiting human visual QA
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 33
-  completed_plans: 20
-  percent: 33
+  completed_plans: 24
+  percent: 73
 ---
 
 # Project State
@@ -26,10 +26,11 @@ See: .planning/PROJECT.md (updated 2026-04-20 — milestone v1.1 Data Fidelity &
 ## Current Position
 
 Milestone: v1.1 Data Fidelity & Depth
-Phase: 08 VPOL-02 Sticky Tutor Legend — EXECUTING (3 plans pending: 08-03/04/05)
-Next: Phase 8.5 Reliability Hardening — READY TO EXECUTE (8 plans verified, 2 waves)
-Status: Phase 8 in flight → Phase 8.5 planned and queued
-Last activity: 2026-04-29 -- Phase 8.5 planned (8 plans, plan-checker PASS first iteration)
+Phase: 08 (vpol-02-sticky-tutor-legend) — EXECUTING (Wave 3 complete; Wave 4 pending)
+Plan: 4 of 5 complete (08-01, 08-02, 08-03, 08-04)
+Next: 08-05 verification scaffold + human-verify checkpoint, then Phase 8.5 Reliability Hardening (already planned, 8 plans / 2 waves)
+Status: Wave 3 shipped; awaiting human visual QA walkthrough on Wave 4
+Last activity: 2026-04-29 -- Phase 08 Wave 3 complete (376fa47 feat 08-03; d9c729f feat 08-04)
 
 Progress: [███░░░░░░░] 3/9 phases (33%)
 
