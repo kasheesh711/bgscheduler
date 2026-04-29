@@ -165,3 +165,72 @@ describe("resolveIdentities", () => {
     ]);
   });
 });
+
+describe("resolveIdentities — REL-03 identity collision detection", () => {
+  const teacher = (id: string, name: string): WiseTeacher => ({
+    _id: id,
+    name,
+  });
+
+  it("emits identity_collision issue when 3 teachers share a nickname (none online)", () => {
+    const teachers = [
+      teacher("t1", "Alice (Kev) Smith"),
+      teacher("t2", "Bob (Kev) Jones"),
+      teacher("t3", "Carol (Kev) Lee"),
+    ];
+    const { issues } = resolveIdentities(teachers, []);
+    const collisions = issues.filter((i) =>
+      i.message.startsWith("identity_collision:")
+    );
+    expect(collisions).toHaveLength(1);
+    expect(collisions[0].type).toBe("alias");
+    expect(collisions[0].message).toContain("Kev");
+    expect(collisions[0].message).toContain("3 teachers");
+  });
+
+  it("does NOT emit collision for legitimate online/offline pair (1 online + 1 offline)", () => {
+    const teachers = [
+      teacher("t1", "Alice (Kev) Smith"),
+      teacher("t2", "Alice (Kev) Smith Online"),
+    ];
+    const { issues } = resolveIdentities(teachers, []);
+    const collisions = issues.filter((i) =>
+      i.message.startsWith("identity_collision:")
+    );
+    expect(collisions).toHaveLength(0);
+  });
+
+  it("does NOT emit collision for a solo teacher", () => {
+    const teachers = [teacher("t1", "Alice (Kev) Smith")];
+    const { issues } = resolveIdentities(teachers, []);
+    const collisions = issues.filter((i) =>
+      i.message.startsWith("identity_collision:")
+    );
+    expect(collisions).toHaveLength(0);
+  });
+
+  it("emits collision when 3 teachers share nickname with mixed online/offline (not a legitimate pair)", () => {
+    const teachers = [
+      teacher("t1", "Alice (Kev) Smith"),
+      teacher("t2", "Bob (Kev) Jones Online"),
+      teacher("t3", "Carol (Kev) Lee Online"),
+    ];
+    const { issues } = resolveIdentities(teachers, []);
+    const collisions = issues.filter((i) =>
+      i.message.startsWith("identity_collision:")
+    );
+    expect(collisions).toHaveLength(1);
+  });
+
+  it("emits collision for 2 teachers with same nickname that are NOT online/offline pair (e.g. both offline)", () => {
+    const teachers = [
+      teacher("t1", "Alice (Kev) Smith"),
+      teacher("t2", "Bob (Kev) Jones"),
+    ];
+    const { issues } = resolveIdentities(teachers, []);
+    const collisions = issues.filter((i) =>
+      i.message.startsWith("identity_collision:")
+    );
+    expect(collisions).toHaveLength(1);
+  });
+});

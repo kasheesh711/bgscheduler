@@ -144,6 +144,31 @@ export function resolveIdentities(
     };
 
     groups.push(group);
+
+    // REL-03 identity_collision detection: a canonicalKey grouping that
+    // contains more than 2 entries — or 2 entries that are NOT a clean
+    // 1-online + 1-offline pair — is treated as an ambiguous merge and
+    // emits a high-severity data_issue. The group is still kept (members
+    // visible in Needs Review) so admins can disambiguate manually.
+    const onlineCount = entries.filter((e) => e.isOnline).length;
+    const offlineCount = entries.length - onlineCount;
+    const isLegitimatePair =
+      entries.length === 2 && onlineCount === 1 && offlineCount === 1;
+    const isSoloEntry = entries.length === 1;
+
+    if (!isLegitimatePair && !isSoloEntry) {
+      const memberNames = entries
+        .map((e) => getWiseTeacherDisplayName(e.teacher))
+        .join(", ");
+      issues.push({
+        type: "alias",
+        entityType: "tutor_identity_group",
+        entityId: group.canonicalKey,
+        entityName: group.displayName,
+        message: `identity_collision: nickname "${group.displayName}" matched ${entries.length} teachers (${onlineCount} online, ${offlineCount} offline) — needs manual disambiguation. Members: ${memberNames}`,
+      });
+    }
+
     for (const e of entries) {
       resolved.add(e.teacher._id);
     }
