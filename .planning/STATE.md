@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Data Fidelity & Depth
-status: executing
-stopped_at: Reliability remediation phases 8.5/8.6/8.7 added from codebase audit; ready to plan Phase 8.5
-last_updated: "2026-04-29T11:40:00.000+07:00"
-last_activity: 2026-04-29 -- Reliability remediation phases 8.5/8.6/8.7 inserted into v1.1 roadmap from codebase audit
+status: ready_to_execute
+stopped_at: Phase 8.5 Reliability Hardening planned (8 plans verified PASS); ready to execute after Phase 8 completes
+last_updated: "2026-04-29T14:35:00.000+07:00"
+last_activity: 2026-04-29 -- Phase 8.5 planned — 8 plans, 2 waves, plan-checker PASS on first iteration
 progress:
   total_phases: 9
   completed_phases: 3
-  total_plans: 25
+  total_plans: 33
   completed_plans: 20
   percent: 33
 ---
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md (updated 2026-04-20 — milestone v1.1 Data Fidelity &
 
 Milestone: v1.1 Data Fidelity & Depth
 Phase: 08 VPOL-02 Sticky Tutor Legend — EXECUTING (3 plans pending: 08-03/04/05)
-Next: Phase 8.5 Reliability Hardening — PLANNING (inserted 2026-04-29 from codebase audit)
-Status: Executing Phase 8 → planning Phase 8.5
-Last activity: 2026-04-29 -- Reliability remediation phases 8.5/8.6/8.7 inserted into v1.1 roadmap
+Next: Phase 8.5 Reliability Hardening — READY TO EXECUTE (8 plans verified, 2 waves)
+Status: Phase 8 in flight → Phase 8.5 planned and queued
+Last activity: 2026-04-29 -- Phase 8.5 planned (8 plans, plan-checker PASS first iteration)
 
 Progress: [███░░░░░░░] 3/9 phases (33%)
 

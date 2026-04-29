@@ -123,7 +123,15 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   6. Outer error handler in `src/lib/sync/orchestrator.ts:512-525` logs cleanup failures via `console.error` (no silent `.catch(() => {})`)
   7. `src/app/api/internal/sync-wise/route.ts:11-17` uses `crypto.timingSafeEqual` against equal-length buffers for CRON_SECRET comparison; non-constant-time string equality removed
   8. All "now in Bangkok" derivations use `toZonedTime(new Date(), TIMEZONE)` from `src/lib/normalization/timezone.ts` — the `new Date(new Date().toLocaleString("en-US", { timeZone: ... }))` pattern is removed from `src/app/api/compare/route.ts:28-30`, `src/hooks/use-compare.ts:22-26`, `src/components/compare/week-overview.tsx:235`, `src/components/compare/calendar-grid.tsx:67`, and any other call site
-**Plans**: TBD
+**Plans**: 8 plans
+  - [ ] 08.5-01-PLAN.md — REL-01 atomic snapshot promotion (single-statement UPDATE with bounded WHERE)
+  - [ ] 08.5-02-PLAN.md — REL-02 ensureIndex race-free coalescing (synchronous singleton-promise) + reproducer test
+  - [ ] 08.5-03-PLAN.md — REL-03 identity_collision data_issue emission for triple-merges + 5 unit tests
+  - [ ] 08.5-04-PLAN.md — REL-04 hasRecurringLeaveConflict refactor (multi-day full-day-block, documented assumption) + 2 lock-in tests
+  - [ ] 08.5-05-PLAN.md — REL-05 status-code-aware retry policy in WiseClient + 5 retry tests
+  - [ ] 08.5-06-PLAN.md — REL-06 cleanup-error console.error logging (depends on 08.5-01: same file)
+  - [ ] 08.5-07-PLAN.md — REL-07 crypto.timingSafeEqual for CRON_SECRET with length guard
+  - [ ] 08.5-08-PLAN.md — REL-08 timezone idiom unification at 4 call sites + 3 round-trip tests
 **UI hint**: no
 
 ### Phase 8.6: Test Coverage Hardening
@@ -199,7 +207,7 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 6. MOD-01 Reliable Modality Detection | v1.1 | 5/6 | Gap closure | 2026-04-21 |
 | 7. PAST-01 Past-Day Session Visibility | v1.1 | 0/? | Not started | - |
 | 8. VPOL-02 Sticky Tutor Legend | v1.1 | 0/5 | Planned | - |
-| 8.5. Reliability Hardening | v1.1 | 0/? | Not started | - |
+| 8.5. Reliability Hardening | v1.1 | 0/8 | Planned | - |
 | 8.6. Test Coverage Hardening | v1.1 | 0/? | Not started | - |
 | 8.7. Operational Maturity | v1.1 | 0/? | Not started | - |
 | 9. VPOL-03 Density Overview | v1.1 | 0/? | Not started | - |
