@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
+import { toZonedTime } from "date-fns-tz";
 import { TUTOR_COLORS } from "@/components/compare/session-colors";
 import type { TutorChip } from "@/components/compare/tutor-selector";
 import { CACHE_VERSION } from "@/lib/search/cache-version";
+import { TIMEZONE } from "@/lib/normalization/timezone";
 import type { CompareResponse, CompareTutor, Conflict } from "@/lib/search/types";
 
 // ---------------------------------------------------------------------------
@@ -18,9 +20,8 @@ function formatIsoDate(d: Date): string {
 }
 
 export function getCurrentMonday(): string {
-  const now = new Date();
-  // Use Asia/Bangkok local date
-  const bkk = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
+  // REL-08: canonical "now in Bangkok" via date-fns-tz toZonedTime.
+  const bkk = toZonedTime(new Date(), TIMEZONE);
   const day = bkk.getDay(); // 0=Sun
   const diff = day === 0 ? -6 : 1 - day;
   const monday = new Date(bkk.getFullYear(), bkk.getMonth(), bkk.getDate() + diff);

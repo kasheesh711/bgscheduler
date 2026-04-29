@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { toZonedTime } from "date-fns-tz";
 import { Badge } from "@/components/ui/badge";
 import {
   Popover,
@@ -19,6 +20,7 @@ import {
 } from "./session-colors";
 import { modalityDisplay } from "./modality-display";
 import { getCurrentMonday } from "@/hooks/use-compare";
+import { TIMEZONE } from "@/lib/normalization/timezone";
 import { Z_INDEX } from "@/lib/ui/z-index";
 
 const HOUR_HEIGHT = 60;
@@ -65,7 +67,8 @@ export function CalendarGrid({
 }: CalendarGridProps) {
   // Today indicator state — CAL-03
   const [nowSnapshot, setNowSnapshot] = useState(() => {
-    const bkk = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
+    // REL-08: canonical "now in Bangkok" via date-fns-tz toZonedTime.
+    const bkk = toZonedTime(new Date(), TIMEZONE);
     return {
       minutes: bkk.getHours() * 60 + bkk.getMinutes(),
       dow: bkk.getDay(),
@@ -81,7 +84,8 @@ export function CalendarGrid({
   // fix from v1.0-MILESTONE-AUDIT.md:134.
   useEffect(() => {
     const tick = () => {
-      const bkk = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }));
+      // REL-08: canonical "now in Bangkok" via date-fns-tz toZonedTime.
+      const bkk = toZonedTime(new Date(), TIMEZONE);
       const next = {
         minutes: bkk.getHours() * 60 + bkk.getMinutes(),
         dow: bkk.getDay(),
