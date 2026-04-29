@@ -41,3 +41,130 @@ describe("WiseClient", () => {
     );
   });
 });
+
+describe("WiseClient — REL-05 status-code-aware retry policy", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  // Helper: builds a client with maxRetries=3 (default). Tests use
+  // vi.useFakeTimers() so the 1s/2s/4s exponential backoff doesn't add
+  // ~7 seconds of real wall-clock time to each retry test.
+  function makeClient(maxRetries = 3) {
+    return new WiseClient({
+      userId: "user-123",
+      apiKey: "api-key-456",
+      namespace: "begifted-education",
+      maxRetries,
+    });
+  }
+
+  function jsonResponse(status: number, body: unknown = {}): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  it("REL-05: 401 (permanent 4xx) does NOT retry — throws on first response", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(401, { error: "unauthorized" }));
+      global.fetch = fetchMock as typeof fetch;
+
+      const client = makeClient(3);
+      const promise = client.get("/test");
+      const expectation = expect(promise).rejects.toThrow(/401/);
+      await vi.runAllTimersAsync();
+      await expectation;
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("REL-05: 404 (permanent 4xx) does NOT retry — throws on first response", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(404, { error: "not found" }));
+      global.fetch = fetchMock as typeof fetch;
+
+      const client = makeClient(3);
+      const promise = client.get("/test");
+      const expectation = expect(promise).rejects.toThrow(/404/);
+      await vi.runAllTimersAsync();
+      await expectation;
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("REL-05: 500 (transient 5xx) retries maxRetries times then throws", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse(500, { error: "server" }));
+      global.fetch = fetchMock as typeof fetch;
+
+      const client = makeClient(3);
+      const promise = client.get("/test");
+      // attach catch handler immediately so the rejection is observed,
+      // then advance through 1s/2s/4s backoffs.
+      const expectation = expect(promise).rejects.toThrow(/500/);
+      await vi.runAllTimersAsync();
+      await expectation;
+
+      // 1 initial + 3 retries = 4 total fetch calls
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("REL-05: 429 (rate limit) retries and succeeds on second try", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(429, { error: "too many" }))
+        .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+      global.fetch = fetchMock as typeof fetch;
+
+      const client = makeClient(3);
+      const promise = client.get<{ ok: boolean }>("/test");
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result).toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("REL-05: network error (fetch throws TypeError) retries and succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi
+        .fn()
+        .mockRejectedValueOnce(new TypeError("fetch failed"))
+        .mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+      global.fetch = fetchMock as typeof fetch;
+
+      const client = makeClient(3);
+      const promise = client.get<{ ok: boolean }>("/test");
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result).toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
