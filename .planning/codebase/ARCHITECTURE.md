@@ -1,304 +1,300 @@
 # Architecture
 
-**Analysis Date:** 2026-04-21
+**Analysis Date:** 2026-04-29
 
 ## Pattern Overview
 
-**Overall:** Snapshot-based ETL pipeline with in-memory query index served by Next.js 16 App Router (RSC + Client Components) over Neon Postgres.
+**Overall:** Snapshot-versioned ETL + in-memory query index.
+
+The system fetches tutor data from the Wise scheduling platform, normalizes it through six domain-specific modules, persists it to Postgres tables keyed by an immutable `snapshot_id`, and serves search/compare queries from a singleton in-memory index loaded from the active snapshot. Reads never touch the DB after the index is warm.
 
 **Key Characteristics:**
-- **Snapshot-based data model** — all tutor data is versioned under a `snapshotId`. Exactly one snapshot has `active = true` at any instant; promotion is atomic. Failed syncs preserve the previous active snapshot.
-- **Server-memory search index singleton** — the entire active snapshot is hydrated into a `SearchIndex` on the Node process and anchored on `globalThis` so it survives HMR in dev. All search/compare/filter/tutor queries run against this index with zero additional DB round-trips at request time.
-- **Fail-closed safety** — unresolved identity, modality, qualification, or unknown session status routes tutors to "Needs Review", never "Available". Cancelled sessions are explicitly non-blocking.
-- **Snapshot-scoped data invalidation** — `cacheTag("snapshot")` on server-cached helpers (`src/lib/data/filters.ts`, `src/lib/data/tutors.ts`); sync endpoint calls `revalidateTag("snapshot", { expire: 0 })` after a successful promote.
-- **Incremental client cache** — the compare panel maintains a `Map<tutorGroupId:weekStart:version, CompareTutor>` so adding/removing a tutor avoids refetching the full selection.
+- **Snapshot-based persistence** — every write is scoped to a `snapshot_id`. Atomic flag-flip promotes a candidate snapshot to `active = true` after successful sync. Failed syncs preserve the prior active snapshot. Definition: `src/lib/db/schema.ts:47-51`. Promotion: `src/lib/sync/orchestrator.ts:469-484`.
+- **Single in-memory index** — entire active snapshot loaded into a `globalThis`-anchored singleton (`__bgscheduler_searchIndex`) once, then queried in-process for all `/api/search`, `/api/compare`, `/api/filters`, `/api/tutors` requests. `src/lib/search/index.ts:81-86`.
+- **ETL orchestrator pattern** — single `runFullSync()` function in `src/lib/sync/orchestrator.ts:45-539` performs fetch -> normalize -> persist -> validate -> promote sequentially.
+- **Fail-closed safety** — unresolved identity, modality, or qualification routes tutors to "Needs Review", never to "Available". `src/lib/search/engine.ts:78-96`.
+- **App Router server-first** — Next.js 16 server components fetch via cached server functions (`src/lib/data/*.ts`) using the `"use cache"` directive; client components hydrate from props.
+- **Per-request cache invalidation by tag** — sync success calls `revalidateTag("snapshot")` to invalidate cached server functions. `src/app/api/internal/sync-wise/route.ts:26`.
 
 ## Layers
 
-**Wise API Client Layer:**
-- Purpose: HTTP communication with the Wise scheduling platform
+**Wise API client:**
+- Purpose: HTTP communication with the Wise scheduling platform (api.wiseapp.live)
 - Location: `src/lib/wise/`
-- Contains: `src/lib/wise/client.ts` (HTTP client with retry/backoff/concurrency limiter, Basic Auth + `x-api-key` + `x-wise-namespace` headers), `src/lib/wise/fetchers.ts` (domain fetchers: `fetchAllTeachers`, `fetchTeacherFullAvailability`, `fetchAllFutureSessions`), `src/lib/wise/types.ts` (Wise API response shapes, `WiseTag` union)
-- Depends on: Nothing internal (pure HTTP + env vars)
+- Contains: `client.ts` (HTTP client with retry/backoff/concurrency), `fetchers.ts` (domain fetchers for teachers, availability, sessions), `types.ts` (Wise API response shapes + accessor helpers `getWiseTeacherDisplayName`/`getWiseTeacherUserId`/`getWiseTagName`)
+- Depends on: Nothing internal — pure HTTP plus env vars (`WISE_USER_ID`, `WISE_API_KEY`, `WISE_NAMESPACE`)
 - Used by: Sync orchestrator only
+- Key behaviors: queue-based concurrency limiter (max 5 default, 15 in production sync via `createWiseClient()`), exponential backoff (1s/2s/4s, 3 retries), Basic Auth + `x-api-key` + `x-wise-namespace` headers
 
-**Normalization Layer:**
-- Purpose: Transform raw Wise API data into canonical internal representations keyed to Asia/Bangkok
+**Normalization (domain layer):**
+- Purpose: Transform raw Wise API data into canonical internal representations. All times anchored to Asia/Bangkok.
 - Location: `src/lib/normalization/`
 - Contains:
-  - `src/lib/normalization/identity.ts` — 5-step cascade (nickname regex → alias lookup → online/offline pair → unresolved → data_issue)
-  - `src/lib/normalization/availability.ts` — `workingHours` → recurring windows with de-dup + overlap merge
-  - `src/lib/normalization/leaves.ts` — UTC → Asia/Bangkok conversion, overlap merge over 180-day horizon
-  - `src/lib/normalization/sessions.ts` — blocking classification (CANCELLED/CANCELED non-blocking, unknown = blocking)
-  - `src/lib/normalization/qualifications.ts` — tag parsing into `{subject, curriculum, level, examPrep}`
-  - `src/lib/normalization/modality.ts` — derived from pair structure → session type → location → unresolved
-  - `src/lib/normalization/timezone.ts` — `TIMEZONE = "Asia/Bangkok"`, `toLocalTime`, `getLocalWeekday`, `getLocalMinuteOfDay`, `parseTimeToMinutes`
-- Depends on: `@/lib/wise/types`
-- Used by: Sync orchestrator and (for `parseTimeToMinutes`) search engine
+  - `identity.ts` — 5-step cascade: nickname extraction (`extractNickname`) -> alias table lookup -> online/offline pair detection (`isOnlineVariant`/`getBaseName`) -> unresolved -> data_issue. Returns `{ groups, issues }`.
+  - `availability.ts` — `normalizeWorkingHours` converts Wise `workingHours.slots` into `{ weekday, startMinute, endMinute }` windows with overlap merge and de-duplication.
+  - `leaves.ts` — `normalizeLeaves` converts Wise leaves from UTC to Asia/Bangkok and merges overlaps.
+  - `sessions.ts` — `normalizeSessions` classifies blocking status. CANCELLED/CANCELED is non-blocking. Unknown status is blocking (fail-closed).
+  - `qualifications.ts` — `normalizeTeacherTags` parses Wise tags via regex into `{ subject, curriculum, level, examPrep }`. Unmapped tags emit `tag` data_issues.
+  - `modality.ts` — `deriveModality` returns one of `online`/`onsite`/`both`/`unresolved` from pair structure -> session type evidence -> location -> unresolved. Never guesses.
+  - `timezone.ts` — `toLocalTime`, `getLocalWeekday`, `getLocalMinuteOfDay`, `parseTimeToMinutes`. `TIMEZONE = "Asia/Bangkok"`.
+- Depends on: Wise types only
+- Used by: Sync orchestrator + a small leak into `compare.ts` (uses `toZonedTime` + `parseTimeToMinutes`)
 
-**Sync Orchestrator:**
+**Sync orchestrator:**
 - Purpose: Full ETL pipeline — fetch, normalize, persist, validate, promote
-- Location: `src/lib/sync/orchestrator.ts`
-- Contains: `runFullSync(db, client, instituteId)` — single entry point. Creates `sync_runs` row → creates candidate `snapshots` row → fetches teachers → resolves identities → per-teacher fetches availability/leaves → fetches all future sessions → normalizes qualifications → derives modality per group → detects per-session modality contradictions (`conflict_model`) → chunks inserts at 250 rows → stores `snapshot_stats` → atomic promote if `unresolvedRatio < 0.5` → updates `sync_runs`
-- Depends on: Wise client, every normalization module, `@/lib/search/compare` (for `detectSessionModalityConflict`), DB layer
-- Used by: `POST/GET /api/internal/sync-wise`
+- Location: `src/lib/sync/`
+- Contains:
+  - `orchestrator.ts:45-539` — `runFullSync()` is the single entry point. 12 numbered steps: create sync run -> create candidate snapshot -> fetch teachers -> load aliases -> resolve identities -> persist groups + members -> per-teacher fetch availability/leaves/tags + normalize qualifications -> fetch + normalize future sessions -> derive modality + emit per-session contradiction issues -> run past-sessions diff-hook -> bulk insert (parallel) availability/leaves/tags/quals/sessions/tutors -> store data_issues -> store snapshot_stats -> validate (fail if >50% unresolved identity) -> atomic promotion.
+  - `past-sessions-diff-hook.ts:1-50` — `runPastSessionsDiffHook()` captures sessions that were FUTURE in the prior snapshot but have dropped out of Wise's response and now lie in the past. Writes to cross-snapshot `past_session_blocks` table. Idempotent via `UNIQUE(wise_session_id) ON CONFLICT DO NOTHING`. Must run BEFORE atomic promotion.
+- Depends on: Wise client, all normalization modules, DB layer
+- Used by: `POST/GET /api/internal/sync-wise` route handler only
 
-**Database Layer:**
-- Purpose: Postgres connection and schema definition
+**Database (persistence):**
+- Purpose: Postgres connection and Drizzle ORM schema definition
 - Location: `src/lib/db/`
 - Contains:
-  - `src/lib/db/index.ts` — `getDb()` returns a `globalThis.__bgscheduler_db`-anchored Drizzle/Neon HTTP client singleton
-  - `src/lib/db/schema.ts` — 14 Drizzle ORM tables + 4 enums (see STRUCTURE.md)
-  - `src/lib/db/seed.ts` — admin users and aliases seeder (`npm run db:seed`)
+  - `index.ts:1-29` — `getDb()` returns a `globalThis`-anchored Drizzle client (`__bgscheduler_db`). HTTP-mode Neon serverless driver.
+  - `schema.ts:1-299` — 14 Drizzle table definitions plus 4 `pgEnum`s (`syncStatusEnum`, `dataIssueTypeEnum`, `dataIssueSeverityEnum`, `modalityEnum`).
+  - `seed.ts` — Seeds 4 tutor aliases (Kev->Kevin, Paoju->Paojuu, Poi->Nacha (Poi), Sam->Samantha) and admin emails from `SEED_ADMIN_EMAILS` env var.
 - Depends on: `@neondatabase/serverless`, `drizzle-orm`
 - Used by: All server-side code
 
-**Search Index Layer:**
-- Purpose: In-memory data structure for fast query execution
+**Search index (denormalized in-memory):**
+- Purpose: In-memory data structure for sub-400ms warm queries
 - Location: `src/lib/search/index.ts`
-- Contains: `SearchIndex` interface, `IndexedTutorGroup`, `buildIndex()` (parallel `Promise.all` over 6 tables for the active `snapshotId`), `ensureIndex()` (lazy init + stale detection against DB), `getSearchIndex()`, `getActiveSnapshotId()`. Singleton anchored on `globalThis.__bgscheduler_searchIndex`; concurrent rebuilds coalesced via `globalThis.__bgscheduler_searchIndexBuildPromise`
-- Depends on: DB layer + schema
-- Used by: Search engine, compare engine, every API route, server-cached helpers in `src/lib/data/`
+- Contains:
+  - `globalThis.__bgscheduler_searchIndex: SearchIndex | null` — singleton.
+  - `globalThis.__bgscheduler_searchIndexBuildPromise` — concurrent-build deduplication.
+  - `buildIndex(db)` — loads all 6 snapshot-scoped tables in parallel (`tutorIdentityGroupMembers`, `subjectLevelQualifications`, `recurringAvailabilityWindows`, `datedLeaves`, `futureSessionBlocks`, `dataIssues`), groups by `groupId`, and constructs `IndexedTutorGroup[]` + `byWeekday: Map<number, IndexedTutorGroup[]>`.
+  - `ensureIndex(db)` — staleness check: compares `cached.snapshotId` against the DB's current `active` snapshot. Rebuilds via build-promise singleton if changed.
+  - Indexed types: `IndexedTutorGroup`, `IndexedQualification`, `IndexedWiseRecord`, `IndexedAvailabilityWindow`, `IndexedLeave`, `IndexedSessionBlock`, `IndexedDataIssue`.
+- Depends on: DB layer
+- Used by: Search engine, compare engine, all read API routes, server cached functions in `src/lib/data/`
 
-**Search Engine:**
+**Search engine:**
 - Purpose: Execute availability searches against the in-memory index
 - Location: `src/lib/search/engine.ts`
-- Contains: `executeSearch(index, request)` (entry), `searchSlot()` (per-slot), `isBlockedRecurring()` (weekday+minute overlap across ALL future sessions on that weekday), `isBlockedOneTime()` (exact date+minute overlap), `hasRecurringLeaveConflict()`/`hasOneTimeLeaveConflict()` (leave overlap with multi-day awareness), `matchesFilters()` (case-insensitive subject/curriculum/level), `computeIntersection()` (multi-slot AND), `getBlockingSessions()` (used by range route to decorate blocked cells). Stale threshold: 35 minutes
-- Depends on: `@/lib/search/index`, `@/lib/normalization/timezone`
-- Used by: `POST /api/search`, `POST /api/search/range`
+- Contains:
+  - `executeSearch(index, request)` (`engine.ts:21-57`) — slot-based search. Supports `recurring` and `one_time` modes. Computes per-slot results plus multi-slot intersection.
+  - `searchSlot(index, slot, mode, filters)` (`engine.ts:59+`) — checks data_issues, modality, availability windows, blocking sessions, leaves, qualifications. Routes unresolved tutors to `needsReview`.
+  - `getBlockingSessions()` — used by range search to enrich blocked grid cells with session details.
+- Depends on: Search index, normalization/timezone
+- Used by: `POST /api/search` (legacy), `POST /api/search/range` (range grid)
 
-**Compare Engine:**
-- Purpose: Build side-by-side tutor schedules, detect conflicts, find shared free slots, resolve per-session modality
+**Compare engine:**
+- Purpose: Build side-by-side tutor schedules, detect conflicts, find shared free slots
 - Location: `src/lib/search/compare.ts`
 - Contains:
-  - `buildCompareTutor(group, weekdays?, dateRange?)` — filters `sessionBlocks` to `[dateRange.start, dateRange.end)` + weekday, computes `weeklyHoursBooked`/`studentCount`, applies **weekday fallback** for days with no data in the range (pulls nearest future occurrence, deduped by `recurrenceId`)
-  - `detectConflicts(compareTutors, indexedGroups)` — case-insensitive `studentName` overlap across different tutor indices, deduped by `studentName|weekday|min(i)|max(j)`
-  - `findSharedFreeSlots(groups, weekdays, dateRange?)` — subtracts blocking sessions from availability windows per tutor, sweep-line intersects across tutors, emits intervals ≥ 30 minutes
-  - `resolveSessionModality(group, session)` — confidence rubric: paired group + sessionType agrees with `isOnlineVariant` = `high`; paired with missing sessionType = `low` (inferred); single-record = `high`; contradictions = `unknown`/`low` with `conflict_model` metadata
-  - `detectSessionModalityConflict(input)` — sync-time variant that doesn't require an `IndexedTutorGroup`
-- Depends on: `@/lib/search/index` types only
-- Used by: `POST /api/compare`, `POST /api/compare/discover`, sync orchestrator
+  - `buildCompareTutor(group, weekdays?, dateRange?, pastBlocks?)` — date-range filtered schedule assembly with weekday fallback for past days lacking session data. Per-session modality resolution via `resolveSessionModality()` (`compare.ts:97-150+`).
+  - `detectConflicts(allCompareTutors, indexedGroups)` — same-student overlap detection across selected tutors (case-insensitive name match, deduped by student+day+tutor pair).
+  - `findSharedFreeSlots(groups, weekdays, dateRange)` — interval intersection across tutors with 30-minute minimum threshold.
+  - `detectSessionModalityConflict()` — used by sync orchestrator to emit `conflict_model` data_issues.
+  - `getStartOfTodayBkk(now?)` — Asia/Bangkok start-of-today helper for historical-range detection.
+  - `computeDateForWeekdayInRange(weekday, dateRange)` — mirrors client `getWeekDate` to avoid off-by-one drift.
+- Depends on: Search index types only
+- Used by: `POST /api/compare`, `POST /api/compare/discover`, sync orchestrator (for conflict detection)
 
-**API Routes:**
-- Purpose: HTTP endpoints consumed by the frontend + Vercel cron
+**API routes:**
+- Purpose: HTTP endpoints consumed by the frontend
 - Location: `src/app/api/`
-- Route map:
-  - `src/app/api/search/route.ts` — legacy slot-based search (`POST`)
-  - `src/app/api/search/range/route.ts` — time-window + duration → availability grid with sub-slots + blocking session details (`POST`)
-  - `src/app/api/compare/route.ts` — 1–3 tutors, week-scoped, accepts `weekStart` and `fetchOnly` (incremental serialization — conflicts/free-slots always use the full set) (`POST`)
-  - `src/app/api/compare/discover/route.ts` — candidate tutor discovery with pre-computed conflict counts against existing selection (`POST`)
-  - `src/app/api/tutors/route.ts` — all tutor names/IDs/modes/subjects (`GET`)
-  - `src/app/api/filters/route.ts` — distinct subjects/curriculums/levels (`GET`)
-  - `src/app/api/data-health/route.ts` — sync status, issue counts, unresolved aliases/modality/tags (`GET`)
-  - `src/app/api/internal/sync-wise/route.ts` — CRON_SECRET-guarded full sync, `maxDuration = 300` (`GET`+`POST`, both route to shared `handleSync`)
-  - `src/app/api/auth/[...nextauth]/route.ts` — Auth.js handlers (`GET`+`POST`)
-- Depends on: Auth (`@/lib/auth`), `getDb()`, `ensureIndex()`, search/compare engines
-- Used by: Frontend client components via `fetch()`; `api/internal/*` by Vercel cron
+- Contains: Next.js App Router route handlers (`route.ts`)
+- Auth: `auth()` from `src/lib/auth.ts` first; return 401 if unauthorized. `/api/internal/*` is exempt and uses `CRON_SECRET` instead.
+- Validation: All POST routes use Zod `.safeParse()` against an inline `const xxxSchema = z.object(...)` defined at module scope.
+- Endpoints:
+  - `POST /api/search` — `src/app/api/search/route.ts:1-62` — slot-based search.
+  - `POST /api/search/range` — `src/app/api/search/range/route.ts:1-201` — range search with sub-slot grid.
+  - `GET /api/filters` — distinct subjects/curriculums/levels.
+  - `GET /api/tutors` — all tutor names/ids/modes/subjects.
+  - `POST /api/compare` — `src/app/api/compare/route.ts:53-187` — multi-tutor compare with `weekStart` + `fetchOnly` incremental fetch.
+  - `POST /api/compare/discover` — candidate tutors filtered by qualifications/mode/time with conflict pre-computation.
+  - `GET /api/data-health` — sync status + issue counts.
+  - `GET/POST /api/internal/sync-wise` — `src/app/api/internal/sync-wise/route.ts:7` — `maxDuration = 300` (5 min). Both methods call shared `handleSync()`.
+  - `GET/POST /api/auth/[...nextauth]` — Auth.js handlers.
 
-**Frontend — Server Components:**
-- Purpose: Server-side data fetching for initial page load
-- Location: `src/app/` (page.tsx files without `"use client"`)
-- Contains: `src/app/page.tsx` (redirects to `/search`), `src/app/(app)/search/page.tsx` (awaits `getFilterOptions()` + `getTutorList()`, renders `<SearchWorkspace>`), `src/app/layout.tsx` (root html + Inter/JetBrains Mono fonts), `src/app/(app)/layout.tsx` (renders `<AppNav>` + main container)
-- Depends on: `src/lib/data/filters.ts` + `src/lib/data/tutors.ts` (both `"use cache"` tagged `"snapshot"`)
-- Used by: Next.js routing
+**Server data layer (cached functions):**
+- Purpose: Server-only cached read helpers consumed by Next.js Server Components
+- Location: `src/lib/data/`
+- Contains:
+  - `filters.ts` — `getFilterOptions()` with `"use cache"` + `cacheTag("snapshot")` + `cacheLife("hours")`
+  - `tutors.ts` — `getTutorList()` with same cache discipline
+  - `past-sessions.ts` — `fetchPastSessionBlocks(canonicalKeys, rangeStart, rangeEnd)` with `cacheTag("past-sessions")` + `cacheLife("days")`. EXPLICITLY separate from `"snapshot"` tag because past data is immutable (D-03 first-observation wins). Uncached variant `fetchPastSessionBlocksUncached` exported for Vitest.
+- Used by: Server components in `src/app/(app)/search/page.tsx`, `/api/compare` route
 
-**Frontend — Client Components:**
-- Purpose: Interactive admin UI
-- Location: `src/components/` organized by feature + `src/app/(app)/` client pages
-- Key modules:
-  - `src/components/search/search-workspace.tsx` — orchestrator client component; owns `RangeSearchResponse`, `SearchContext`, drawer state, `?tutors=`/`?week=` URL sync, ArrowLeft/ArrowRight week shortcuts, Esc-exits-fullscreen
-  - `src/components/search/search-form.tsx` — 3-column form, idiot-proof defaults
-  - `src/components/search/recommended-slots.tsx` — derives top 3 sub-slots via `getRecommendedSlots` (`src/lib/search/recommend.ts`)
-  - `src/components/search/copy-for-parent-drawer.tsx` — Friendly/Terse tone toggle + clipboard copy
-  - `src/components/compare/compare-panel.tsx` — drives `useCompare()` hook, lazy-loads `WeekOverview`/`CalendarGrid`/`DiscoveryPanel` via `next/dynamic`
-  - `src/components/compare/week-overview.tsx` — GCal-style 7AM–9PM grid, `HOUR_HEIGHT=48`, `DISPLAY_DAYS=[1,2,3,4,5,6,0]`, sub-column cap (3 single / 2 multi) with "+N more"
-  - `src/components/compare/week-calendar.tsx` — month-grid date picker popover
-  - `src/components/compare/tutor-combobox.tsx` — shadcn `Command`+`Popover` searchable picker
-  - `src/components/compare/discovery-panel.tsx` — shadcn `Dialog` with advanced filters
-  - `src/components/compare/session-colors.ts` — shared RGBA helpers + `TUTOR_COLORS`
-  - `src/components/compare/modality-display.ts` — modality chip renderer
-  - `src/components/layout/app-nav.tsx` — persistent nav bar with active link indicator
-  - `src/components/ui/*` — shadcn primitives wrapped over `@base-ui/react` + `cmdk`
-  - `src/components/skeletons/*` — `CalendarSkeleton`, `FormSkeleton`, `SearchSkeleton` for suspense fallbacks
-- Depends on: API routes (via `fetch`), `src/hooks/use-compare.ts`, shared types from `@/lib/search/types`
-- Used by: End users (admin staff)
+**Frontend:**
+- Purpose: Admin UI for searching and comparing tutor availability
+- Location: `src/app/(app)/` (pages with route group), `src/components/` (reusable components)
+- Pages:
+  - `/search` (`src/app/(app)/search/page.tsx`) — async Server Component fetches `getFilterOptions()` + `getTutorList()` then renders `<SearchWorkspace>` inside `<Suspense fallback={<SearchSkeleton />}>`.
+  - `/compare` (`src/app/(app)/compare/page.tsx`) — client redirect to `/search` (preserves `?tutors=` param).
+  - `/data-health` — client-rendered admin dashboard.
+  - `/login` — Google sign-in.
+- Layouts:
+  - `src/app/layout.tsx` — root: `<html lang="en">` with Inter + JetBrains Mono fonts, body `flex flex-col overflow-hidden`.
+  - `src/app/(app)/layout.tsx` — wraps app routes with `<AppNav />` + `<main>`.
+- Component organization:
+  - `src/components/ui/` — shadcn/ui primitives wrapping `@base-ui/react` (button, card, popover, dialog, command, table, tabs, etc.)
+  - `src/components/compare/` — calendar grid, week overview, week calendar (date picker), tutor combobox, discovery panel, session-colors
+  - `src/components/search/` — search form, availability grid, results, recent searches, recommended slots, copy-for-parent drawer
+  - `src/components/layout/` — `AppNav`
+  - `src/components/skeletons/` — loading skeletons (calendar, form, search)
+- Hooks:
+  - `src/hooks/use-compare.ts:75-227` — `useCompare()` owns compare state: `tutorCache: useRef(new Map<string, CompareTutor>())` keyed by `${tutorGroupId}:${weekStart}:${CACHE_VERSION}`, `abortRef` for in-flight cancellation, `lastSnapshotId.current` for cache invalidation.
 
 ## Data Flow
 
-**Sync flow (write path):**
+**Sync flow (orchestrator pipeline):**
+1. Vercel cron `GET /api/internal/sync-wise` (or manual `curl -X POST` with `Bearer $CRON_SECRET`).
+2. `handleSync()` calls `runFullSync(db, client, instituteId)`.
+3. Orchestrator inserts `sync_runs` row (status=running) and `snapshots` row (active=false).
+4. `fetchAllTeachers` -> `resolveIdentities` (with aliases from DB) -> persist `tutor_identity_groups` + `tutor_identity_group_members`.
+5. Per teacher (parallel up to concurrency=15): `fetchTeacherFullAvailability` (1 working-hours window + 25 leave windows over 180-day horizon). Normalize and queue rows for: `recurring_availability_windows`, `dated_leaves`, `raw_teacher_tags`, `subject_level_qualifications`. Per-teacher errors emit `completeness` data_issues but don't abort.
+6. `fetchAllFutureSessions` (paginated) -> `normalizeSessions` -> queue `future_session_blocks` rows.
+7. Per group: `deriveModality(group, groupSessions)` updates `tutorIdentityGroups.supportedModality`. Records each teacher's modality.
+8. MOD-01 contradiction loop: per session, run `detectSessionModalityConflict` and emit `conflict_model` data_issues.
+9. PAST-01 diff-hook: capture dropped-future-now-past sessions into `past_session_blocks` (cross-snapshot table).
+10. `Promise.all` bulk inserts in 250-row chunks: availability + leaves + tags + qualifications + sessions + tutors.
+11. Insert all `data_issues` and `snapshot_stats`.
+12. If unresolved-identity ratio < 50%, atomic promotion: `UPDATE snapshots SET active=false WHERE active=true AND id != snapshotId; UPDATE snapshots SET active=true WHERE id = snapshotId`. Update sync_run with `status=success`.
+13. On success, `revalidateTag("snapshot")` invalidates cached server functions.
 
-1. Vercel cron (`vercel.json` schedule `0 0 * * *`) → `GET /api/internal/sync-wise` with `Authorization: Bearer $CRON_SECRET`.
-2. `runFullSync()` in `src/lib/sync/orchestrator.ts`:
-   - Insert `sync_runs` (status `running`) and a new `snapshots` row with `active = false`.
-   - `fetchAllTeachers()` → `resolveIdentities()` (loads `tutor_aliases`) → persist `tutor_identity_groups` + `tutor_identity_group_members`.
-   - For each teacher: `fetchTeacherFullAvailability()` + normalize working hours/leaves/tags → buffer rows.
-   - `fetchAllFutureSessions()` across 180-day window → `normalizeSessions()` + `detectSessionModalityConflict()` per session.
-   - `deriveModality()` per group → update `supportedModality`.
-   - Chunked (250-row) inserts in parallel for availability/leaves/tags/qualifications/sessions/tutors, then `data_issues`.
-   - Write `snapshot_stats`.
-   - If `unresolvedRatio < 0.5` → atomic promote (`UPDATE snapshots SET active=false WHERE active=true AND id!=$new; UPDATE snapshots SET active=true WHERE id=$new`).
-   - Update `sync_runs` status.
-3. Route handler calls `revalidateTag("snapshot", { expire: 0 })`; next request to a `"use cache"` helper refetches.
+**Search flow (range):**
+1. Client posts `{ searchMode, dayOfWeek/date, startTime, endTime, durationMinutes, mode, filters }` to `/api/search/range`.
+2. Route validates with Zod, calls `auth()`.
+3. `getDb()` -> `ensureIndex(db)` returns warm singleton (rebuilds if snapshot changed).
+4. Generate sub-slots (e.g. 15:00-20:00 with 90-min duration -> 15:00-16:30, 16:30-18:00, 18:00-19:30).
+5. Build synthetic `SearchRequest` with all sub-slots, call `executeSearch(index, request)`.
+6. Reshape per-slot results into `RangeGridRow[]` with `availability: (true | BlockingSessionInfo[])[]`.
+7. For non-available cells, `getBlockingSessions(group, mode, weekday, slotStart, slotEnd, date?)` enriches the cell.
+8. Sort grid by available-slot count descending, return.
 
-**Read flow (search):**
+**Compare flow (incremental fetch):**
+1. Client `useCompare.addTutor(id, name)` updates state and calls `fetchCompare(allIds, weekStart, { fetchOnly: [newId] })`.
+2. POST `/api/compare` with `{ tutorGroupIds, mode, weekStart?, fetchOnly? }`.
+3. Server resolves week range (`weekStart` or current Monday in BKK), `ensureIndex`, finds `IndexedTutorGroup` for each id.
+4. If `dateRange.start < startOfTodayBkk`, fetch `pastSessionBlocks` keyed by `canonicalKey` (cached, separate tag).
+5. Build all `CompareTutor[]` (always, for full conflict/free-slot detection), then merge past blocks for `findSharedFreeSlots` group clones.
+6. Detect conflicts on full set; serialize only `fetchOnly` subset in response.
+7. Client merges into `tutorCache: Map<"id:week:CACHE_VERSION", CompareTutor>`. Builds final `mergedTutors` from cache for all selected ids.
+8. If server `snapshotMeta.snapshotId !== lastSnapshotId.current`, clear cache and retry once.
 
-1. Browser `POST /api/search/range` (from `SearchWorkspace`).
-2. `auth()` gate → Zod `.safeParse()`.
-3. `ensureIndex(db)` — if cached singleton matches the current active `snapshotId`, reuse; otherwise deduped `buildIndex()` (loads all 6 snapshot tables in parallel).
-4. `generateSubSlots()` → synthetic `SearchSlot[]` → `executeSearch()` per slot → decorate blocked cells with `getBlockingSessions()`.
-5. `RangeSearchResponse` returned; client renders `<SearchResults>` (availability grid) + `<RecommendedSlots>` (top 3 sub-slots via `getRecommendedSlots`).
+**Auth flow:**
+1. Every non-asset request hits `src/middleware.ts:1-28`.
+2. Middleware calls `auth()` (Auth.js v5 wrapper). Allows `/login`, `/api/auth/*`, `/api/internal/*` without auth.
+3. Unauthenticated users redirected to `/login?callbackUrl={original}`.
+4. `/login` calls `signIn("google", { callbackUrl })` from `next-auth/react`.
+5. Auth.js `signIn` callback (`src/lib/auth.ts:18-30`) checks `admin_users` table; rejects if email not in allowlist.
 
-**Read flow (compare):**
-
-1. Tutor selection triggers `useCompare().fetchCompare(ids, weekStart, { fetchOnly })`.
-2. `POST /api/compare` with `{ tutorGroupIds, mode: "recurring", weekStart, fetchOnly }`.
-3. Server computes Monday-to-Sunday `DateRange`, builds `CompareTutor[]` for **all** selected IDs (conflicts/free-slots need the full set), then filters serialized `tutors` to `fetchOnly`.
-4. Client merges response tutors into `tutorCache: Map<"${id}:${week}:${CACHE_VERSION}", CompareTutor>`; if `data.snapshotMeta.snapshotId !== lastSnapshotId`, clears cache and retries once (`_retried` flag prevents infinite recursion).
-5. Adding a tutor → `fetchOnly: [newId]`; removing → `fetchOnly: []` (server still recomputes conflicts/free-slots, client reuses cached tutors); week change → cache clear + full fetch.
-
-**State Management:**
-- **Server state:** `globalThis.__bgscheduler_searchIndex` (searchable) + `globalThis.__bgscheduler_db` (Drizzle client) — both HMR-safe singletons.
-- **Client state:** React `useState`/`useCallback`/`useRef` in `useCompare()` (`src/hooks/use-compare.ts`) + `SearchWorkspace`. `AbortController` per `fetchCompare` invocation via `abortRef`. `compareRef` guards mount-effect stale closures.
-- **Persistent client state:** Recent searches in `localStorage` (last 10, helper in `src/components/search/recent-searches.tsx`).
-- **URL state:** `?tutors=id1,id2,id3` and `?week=YYYY-MM-DD` on `/search`, written via `history.replaceState` (non-navigating).
-- **Server-cached:** `"use cache"` + `cacheTag("snapshot")` + `cacheLife("hours")` on `getFilterOptions()` and `getTutorList()`.
+**State management:**
+- **Server state**: `globalThis`-anchored singletons survive HMR in dev — `__bgscheduler_db`, `__bgscheduler_searchIndex`, `__bgscheduler_searchIndexBuildPromise`.
+- **Client state (compare)**: React `useState` + `useRef` in `src/hooks/use-compare.ts`. `tutorCache: useRef(new Map<string, CompareTutor>())`. `abortRef: useRef<AbortController | null>` for race-condition safety.
+- **Client persistent**: Recent searches in `localStorage` (last 10) via `src/components/search/recent-searches.tsx`.
+- **URL state**: `?tutors=id1,id2&week=2026-04-29` synced via `window.history.replaceState` in `src/components/search/search-workspace.tsx:94-108`.
 
 ## Key Abstractions
 
-**Snapshot:**
-- Purpose: Versioned point-in-time capture of all tutor data
-- Examples: `src/lib/db/schema.ts` (`snapshots` table + `snapshotId` FK on every data table), `src/lib/sync/orchestrator.ts` (creation/promotion)
-- Pattern: Exactly one row has `active = true`. Promotion runs as two serialized `UPDATE`s against the `active` column. All reads filter `WHERE snapshot_id = activeSnapshot.id`.
+**Snapshot (versioned data point):**
+- Purpose: Immutable point-in-time capture of all tutor data
+- Examples: `src/lib/db/schema.ts:47-51` (table), `src/lib/sync/orchestrator.ts:62-67` (creation), `src/lib/sync/orchestrator.ts:469-484` (atomic promotion)
+- Pattern: Only one snapshot is `active = true` at a time. All snapshot-scoped data tables FK to `snapshot_id`. The cross-snapshot `past_session_blocks` table is the sole exception — it uses `group_canonical_key` (denormalized) instead.
 
-**SearchIndex / IndexedTutorGroup:**
-- Purpose: Denormalized in-memory aggregate of one snapshot
-- Examples: `src/lib/search/index.ts` (`SearchIndex` interface lines 67–72, `IndexedTutorGroup` lines 55–65)
-- Pattern: Loaded once per active snapshot; O(1) weekday lookup via `byWeekday: Map<number, IndexedTutorGroup[]>`. All query paths consume indexed shapes (not DB rows).
+**IndexedTutorGroup (in-memory aggregate):**
+- Purpose: Denormalized read-side representation
+- Examples: `src/lib/search/index.ts:55-70`, built in `buildIndex()` `src/lib/search/index.ts:189-253`
+- Pattern: Eagerly loaded once with parallel queries, queried thousands of times. The `byWeekday: Map<number, IndexedTutorGroup[]>` map provides O(1) weekday lookup. `canonicalKey` field denormalized from `tutor_identity_groups.canonical_key` to support cross-snapshot past-session lookups without extra DB roundtrip.
 
-**IdentityGroup:**
-- Purpose: Logical grouping of multiple Wise teacher records that represent the same real person (online + onsite variants, nickname variants)
-- Examples: `src/lib/normalization/identity.ts` (`IdentityGroup` interface), `src/lib/db/schema.ts` (`tutorIdentityGroups` + `tutorIdentityGroupMembers` tables)
-- Pattern: 5-step cascade resolution keyed on `canonicalKey`. Unresolved → `data_issue` of type `alias`, tutor routes to Needs Review.
+**IdentityGroup (5-step cascade resolution):**
+- Purpose: Logical merging of multiple Wise teacher records into one real person
+- Examples: `src/lib/normalization/identity.ts:7-18` (interface), `src/lib/db/schema.ts:78-100` (`tutor_identity_groups` + `tutor_identity_group_members` tables)
+- Pattern: nickname extraction (parenthetical regex) -> alias table override -> online/offline pair detection by base name -> unresolved -> emit `alias` data_issue with severity=critical
 
-**WiseClient:**
-- Purpose: Rate-limited, retry-capable HTTP client for the Wise API
-- Examples: `src/lib/wise/client.ts` (class definition), `createWiseClient()` factory
-- Pattern: Queue-based concurrency limiter (default `maxConcurrency = 5`, `15` for sync), exponential backoff `1s/2s/4s` with `maxRetries = 3`. Headers: Basic Auth of `userId:apiKey` + `x-api-key` + `x-wise-namespace` + `user-agent: VendorIntegrations/{namespace}`.
+**WiseClient (rate-limited HTTP):**
+- Purpose: Retry-capable, concurrency-limited Wise API client
+- Examples: `src/lib/wise/client.ts:16-114`
+- Pattern: Queue-based concurrency limiter (`processQueue` `client.ts:100-113`), exponential backoff (`fetchWithRetry` `client.ts:67-91`), Basic Auth + API key + tenant headers. Factory `createWiseClient()` for production sync (concurrency=15).
 
-**CompareTutor / Conflict / SharedFreeSlot:**
-- Purpose: Wire-format types for the compare workspace, week-scoped
-- Examples: `src/lib/search/types.ts` (definitions), `src/lib/search/compare.ts` (producers), `src/hooks/use-compare.ts` (client consumer)
-- Pattern: All session times stored as both `startMinute`/`endMinute` (for math) and `"HH:mm"` strings (for display). `modalityConfidence` drives UI styling (per MOD-01 rubric).
+**SearchIndex singleton (lazy + stale-detected):**
+- Purpose: Global in-process cache for the active snapshot
+- Examples: `src/lib/search/index.ts:81-86` (`globalThis` declarations), `ensureIndex()` `src/lib/search/index.ts:281-305`
+- Pattern: Lazy initialization on first request; `ensureIndex` rebuilds if cached `snapshotId !== active.id`. Build-promise deduplication prevents thundering-herd on cold start.
 
-**RecommendedSlot:**
-- Purpose: Client-side derived view model for the recommended-slots hero
-- Examples: `src/lib/search/recommend.ts`
-- Pattern: Ranks `subSlots` by count of fully-available qualified tutors; tiered by `"Best fit" | "Strong fit" | "Good fit"`; returns up to 3.
+**CompareTutor cache (client-side, version-keyed):**
+- Purpose: Avoid refetching unchanged tutors when adding/removing in compare view
+- Examples: `src/hooks/use-compare.ts:85-87`, `src/lib/search/cache-version.ts:22`
+- Pattern: `Map<"tutorGroupId:weekStart:CACHE_VERSION", CompareTutor>`. Adding tutor sends `fetchOnly: [newId]`; removing uses `fetchOnly: []` (server still recomputes conflicts). `CACHE_VERSION = "v2"` (bumped on `CompareTutor` shape change). Snapshot mismatch from server triggers full clear + retry.
 
 ## Entry Points
 
-**Root Page:**
-- Location: `src/app/page.tsx`
+**Root redirect:**
+- Location: `src/app/page.tsx:1-5`
 - Triggers: User navigates to `/`
 - Responsibilities: `redirect("/search")`
 
-**Search Workspace (primary UI):**
-- Location: `src/app/(app)/search/page.tsx`
+**Search workspace (primary UI):**
+- Location: `src/app/(app)/search/page.tsx:1-19`
 - Triggers: User navigates to `/search`
-- Responsibilities: Server component — resolves `filterOptions` + `tutorList` via cached helpers → renders `<SearchWorkspace>` in `<Suspense fallback={<SearchSkeleton />}>`. Side-by-side layout: search (left 50%) + compare (right 50%).
+- Responsibilities: Async Server Component. Fetches `getFilterOptions()` + `getTutorList()` (cached, snapshot-tagged). Renders `<SearchWorkspace>` inside `<Suspense>`. SearchWorkspace owns the side-by-side layout with `useCompare()` hook for the right panel.
 
-**Compare Redirect (backward compat):**
-- Location: `src/app/(app)/compare/page.tsx`
-- Triggers: `/compare?tutors=...` (bookmarked URLs)
-- Responsibilities: Client component that `router.replace()`s to `/search`, preserving the `?tutors=` param.
+**Sync endpoint (cron):**
+- Location: `src/app/api/internal/sync-wise/route.ts:1-42`
+- Triggers: Vercel cron daily at `0 0 * * *` UTC (defined in `vercel.json:3-7`) via GET; manual `curl -X POST` with `Authorization: Bearer $CRON_SECRET` for ad-hoc runs
+- Responsibilities: Both GET and POST call shared `handleSync()`. `maxDuration = 300` for 5-minute timeout. Calls `runFullSync(db, client, instituteId)`. On success, `revalidateTag("snapshot", { expire: 0 })`.
 
-**Data Health Dashboard:**
-- Location: `src/app/(app)/data-health/page.tsx`
-- Triggers: User navigates to `/data-health`
-- Responsibilities: Client component that `fetch`es `/api/data-health`; renders sync status, snapshot stats, issues by type, unresolved aliases/modality/tags tables, recent sync history.
+**Auth middleware:**
+- Location: `src/middleware.ts:1-28`
+- Triggers: Every request (except `_next/static`, `_next/image`, `favicon.ico` per matcher)
+- Responsibilities: Allowlist `/login`, `/api/auth/*`, `/api/internal/*`. All other paths require `req.auth`; redirect to `/login?callbackUrl={pathname}` otherwise.
 
-**Login:**
-- Location: `src/app/login/page.tsx`
-- Triggers: Redirect from middleware when unauthenticated
-- Responsibilities: Google sign-in via `next-auth/react`'s `signIn("google", { callbackUrl })`. Renders access-denied error when email is not on the allowlist.
-
-**Sync Endpoint:**
-- Location: `src/app/api/internal/sync-wise/route.ts`
-- Triggers: Vercel cron (`0 0 * * *`, configured in `vercel.json`) or manual `curl -X POST` with `Authorization: Bearer $CRON_SECRET`
-- Responsibilities: Validate secret → `runFullSync()` → `revalidateTag("snapshot")` on success. `maxDuration = 300`.
-
-**Auth Handlers:**
-- Location: `src/app/api/auth/[...nextauth]/route.ts`
-- Triggers: Auth.js redirects
-- Responsibilities: Re-exports `{ GET, POST }` from `src/lib/auth.ts` (`NextAuth({ providers: [Google], pages, callbacks })`).
-
-**Middleware Auth Gate:**
-- Location: `src/middleware.ts`
-- Triggers: Every request (matcher excludes `_next/static`, `_next/image`, `favicon.ico`)
-- Responsibilities: Allowlist `/login`, `/api/auth/*`, `/api/internal/*` without auth. Otherwise require session; redirect unauthenticated users to `/login?callbackUrl={pathname}`.
+**Auth handlers:**
+- Location: `src/app/api/auth/[...nextauth]/route.ts` + `src/lib/auth.ts:1-35`
+- Triggers: NextAuth.js routes (signIn/signOut/callback)
+- Responsibilities: Google OAuth + admin allowlist check via `admin_users` table.
 
 ## Error Handling
 
-**Sync errors:**
-- Per-teacher fetch errors are caught and pushed as `data_issues` of type `completeness` (severity `high`) without aborting the sync (`src/lib/sync/orchestrator.ts` lines 239–249).
-- Top-level sync errors mark the `sync_runs` row as `failed` and preserve the previous `active = true` snapshot (no promotion branch reached).
-- Completeness gate: if `unresolvedRatio >= 0.5`, the candidate snapshot is kept on disk but never promoted.
+**Strategy:** Fail-closed at the data integrity boundary, fail-loud at the API boundary, fail-isolated inside the sync.
 
-**API route errors:**
-- All handlers wrap logic in `try`/`catch` and return `{ error: string }` with HTTP status.
-- Status convention:
-  - `401` — no session (`!session` check after `auth()`)
-  - `400` — malformed JSON or Zod `.safeParse()` failure (body: `{ error, details: parsed.error.flatten() }`)
-  - `404` — `POST /api/compare` when no requested `tutorGroupId` exists in the active snapshot
-  - `500` — caught exception; body: `{ error: err instanceof Error ? err.message : "<op> failed" }`
+**Sync error handling:**
+- Per-teacher errors caught and stored as `completeness` data_issues without aborting (`src/lib/sync/orchestrator.ts:241-251`). Mirrored by the per-group MOD-01 loop and the past-sessions diff-hook.
+- Top-level sync errors mark `sync_runs.status = "failed"`, store `errorSummary`, and preserve the prior active snapshot (`src/lib/sync/orchestrator.ts:512-538`).
+- Promotion gate: if `unresolvedRatio >= 0.5`, the new snapshot is persisted but NOT promoted (`src/lib/sync/orchestrator.ts:462-465`).
 
-**Search index staleness:**
-- `ensureIndex()` (`src/lib/search/index.ts` lines 272–296) re-queries the active snapshot ID on every call; if it differs from the cached `snapshotId`, a single in-flight rebuild `Promise` is shared across concurrent callers.
-- Stale age flagged in response: `snapshotMeta.stale = Date.now() - index.builtAt.getTime() > 35 * 60 * 1000` (35 minutes) and a warning is pushed to `warnings[]`.
+**API route error handling (uniform pattern):**
+1. `auth()` -> 401 if no session.
+2. `await request.json()` in try/catch -> 400 on invalid JSON.
+3. `schema.safeParse(body)` -> 400 with `parsed.error.flatten()` on validation failure.
+4. Business logic in try/catch -> 500 with `err instanceof Error ? err.message : "..."`.
+- Reference: `src/app/api/compare/route.ts:53-72`, `src/app/api/search/route.ts:30-60`.
 
-**Client-side race handling:**
-- `useCompare()` (`src/hooks/use-compare.ts`) stores an `AbortController` in `abortRef` and aborts the previous fetch before issuing a new one.
-- `DOMException` with `name === "AbortError"` is swallowed silently.
-- On snapshot-ID mismatch mid-fetch: clears `tutorCache` and retries once (guarded by `_retried` flag to prevent infinite recursion); second mismatch surfaces `"Snapshot changed during fetch. Please retry."`.
+**Search/Compare data-integrity rules (fail-closed):**
+- Unresolved identity, modality, or qualification routes tutors to `needsReview`, never `available` (`src/lib/search/engine.ts:78-96`).
+- Cancelled sessions (`CANCELLED`/`CANCELED`) explicitly non-blocking (`src/lib/normalization/sessions.ts`).
+- Unknown session statuses are blocking (fail-closed default).
+- Stale index detection: `Date.now() - index.builtAt.getTime() > 35 * 60 * 1000` -> push warning + set `snapshotMeta.stale = true`. Reference: `src/lib/search/engine.ts:30-37`.
 
-**Data integrity (fail-closed):**
-- Unresolved identity/modality/qualification → `Needs Review`, never `Available` (`src/lib/search/engine.ts` lines 83–93).
-- Cancelled sessions explicitly `isBlocking = false`; unknown statuses default to `isBlocking = true` (`src/lib/normalization/sessions.ts`).
-- Modality contradiction between teacher-record `isOnlineVariant` and session `sessionType` → `modality: "unknown"`, `confidence: "low"`, + `conflict_model` data_issue (`src/lib/search/compare.ts` — `resolveSessionModality`, `detectSessionModalityConflict`).
-
-**Env validation:**
-- Missing env vars → throw at startup via Zod in `src/lib/env.ts` (`getEnv()` evaluated at module load).
+**Client error handling (compare):**
+- AbortController cancels in-flight fetches when user adds/removes tutor (`src/hooks/use-compare.ts:99-102`).
+- Snapshot mismatch -> clear cache + retry once with `_retried: true` flag; second mismatch surfaces error (`src/hooks/use-compare.ts:124-135`).
+- DOMException AbortError silently ignored.
 
 ## Cross-Cutting Concerns
 
-**Authentication:**
-- Auth.js v5 beta (`next-auth ^5.0.0-beta.30`) with Google provider; email allowlisting against `admin_users` in `signIn` callback (`src/lib/auth.ts`).
-- Middleware gate: `src/middleware.ts` exports `auth` as middleware; all routes except `/login`, `/api/auth/*`, `/api/internal/*` require `req.auth`.
-- API route gate: every non-internal handler calls `await auth()` and returns 401 if `!session`.
+**Authentication:** Auth.js v5 beta with Google provider. Admin allowlist enforced in `src/lib/auth.ts:18-30` via `admin_users` table lookup. Middleware (`src/middleware.ts`) guards all non-public routes.
 
-**Validation:**
-- Zod schemas at API route boundaries, module-scoped `const`, `.safeParse()` pattern (never `.parse()`).
-- Env-level validation centralized in `src/lib/env.ts`.
+**Validation:** Zod schemas defined as `const xxxSchema = z.object(...)` at module scope above POST handlers. Always `.safeParse()`, never `.parse()`. Env validation centralized in `src/lib/env.ts:1-26`.
 
-**Timezone:**
-- All business times locked to `Asia/Bangkok` via `src/lib/normalization/timezone.ts`. Minutes since midnight is the canonical time unit. Weeks start Monday (helpers `getCurrentMonday`, `shiftWeek`, `getMondayForDate` in `src/hooks/use-compare.ts` and `src/app/api/compare/route.ts`).
+**Logging:** `console.error()` for caught errors. No structured logging or request middleware. Sync orchestrator does not log to console (returns `SyncResult` summary instead).
+
+**Timezone:** All times anchored to `Asia/Bangkok` via `src/lib/normalization/timezone.ts`. Thailand has no DST. Compare-side helper `getStartOfTodayBkk()` (`src/lib/search/compare.ts:36-39`) computes BKK midnight for historical-range detection.
 
 **Caching:**
-- Server-cached RSC helpers with `"use cache"` + `cacheTag("snapshot")` + `cacheLife("hours")` (`src/lib/data/filters.ts`, `src/lib/data/tutors.ts`); invalidated via `revalidateTag("snapshot", { expire: 0 })` after successful sync promote.
-- In-memory index with stale detection (`src/lib/search/index.ts`).
-- Client tutor cache keyed by `${tutorGroupId}:${weekStart}:${CACHE_VERSION}` (`src/lib/search/cache-version.ts` = `"v1"`). Bump `CACHE_VERSION` whenever `CompareTutor` shape changes.
+- Next.js `"use cache"` server functions tagged with `"snapshot"` (revalidated on sync) or `"past-sessions"` (revalidated on schema migration).
+- In-memory search index lives in `globalThis` (per server instance). Stale detection on every `ensureIndex` call.
+- Client tutor cache version-keyed by `CACHE_VERSION` constant in `src/lib/search/cache-version.ts:22` (current: `"v2"`).
 
-**Logging:**
-- `console.error()` on Zod failures and caught exceptions.
-- No request-logging middleware; Vercel platform logs cover HTTP.
+**Z-index discipline:** 3-tier scale defined in `src/lib/ui/z-index.ts:50` — `Z_INDEX = { content: 1, legend: 6, popover: 50 }`. Sticky surfaces use `legend`; portal-hoisted popovers default to `popover`.
 
-**Performance:**
-- Single in-memory index eliminates DB round-trips on the query path.
-- Parallel `Promise.all` over 6 tables in `buildIndex()`.
-- Chunked (250-row) inserts in `insertInChunks()` during sync.
-- Lazy dynamic imports for heavy compare components (`WeekOverview`, `CalendarGrid`, `DiscoveryPanel`) via `next/dynamic` in `src/components/compare/compare-panel.tsx`.
-- Incremental `fetchOnly` on `/api/compare` avoids re-serializing already-cached tutors.
+**Color tokens:** Semantic tokens in `src/app/globals.css:13-17` — `--available`, `--blocked`, `--conflict`, `--free-slot`, `--today-indicator`. Tutor lane colors in `src/components/compare/session-colors.ts:51` — `TUTOR_COLORS = ["#3b82f6", "#e67e22", "#7c3aed"]`.
 
 ---
 
-*Architecture analysis: 2026-04-21*
+*Architecture analysis: 2026-04-29*

@@ -1,169 +1,166 @@
 # Technology Stack
 
-**Analysis Date:** 2026-04-21
+**Analysis Date:** 2026-04-29
 
 ## Languages
 
 **Primary:**
-- TypeScript `^5.9.3` — All application code (`src/**/*.ts`, `src/**/*.tsx`)
-- SQL (PostgreSQL) — Migrations in `drizzle/0000_tidy_black_bolt.sql`, `drizzle/0001_tough_plazm.sql`; schema defined in `src/lib/db/schema.ts`
+- TypeScript ^5.9.3 - All application code in `src/**/*.ts` and `src/**/*.tsx`
+- SQL (PostgreSQL) - Database schema migrations in `drizzle/` (`0000_tidy_black_bolt.sql`, `0001_tough_plazm.sql`, `0002_past_session_blocks.sql`)
 
 **Secondary:**
-- CSS (via Tailwind 4 utility classes) — `src/app/globals.css` (single global file, rest is inline utility classes)
+- JavaScript (config only) - Module config files (`postcss.config.mjs`, `eslint.config.mjs`)
 
 ## Runtime
 
 **Environment:**
-- Node.js (no `.nvmrc`; `tsconfig.json` targets `ES2017` with `lib: ["dom", "dom.iterable", "esnext"]`)
-- Vercel Serverless Functions — `maxDuration = 300` seconds configured at `src/app/api/internal/sync-wise/route.ts:7` for the sync endpoint
-- Module system: ESM (`"module": "esnext"`, `"moduleResolution": "bundler"` in `tsconfig.json`)
+- Node.js (no `.nvmrc` present) - Local development and Vercel build
+- Vercel Serverless Functions - Production runtime
+- TypeScript target: ES2017 (`tsconfig.json` line 3)
+- Module: esnext, moduleResolution: bundler (`tsconfig.json` lines 10-11)
 
 **Package Manager:**
 - npm
-- Lockfile: `package-lock.json` present (~469 KB)
+- Lockfile: `package-lock.json` present
 
 ## Frameworks
 
 **Core:**
-- `next` `16.2.2` — App Router, full-stack React framework
-  - Uses `cacheComponents: true` (Next 16 feature) in `next.config.ts`
-  - `"use client"` directive used throughout `src/components/**/*.tsx` and `src/app/(app)/**/page.tsx`
-  - Middleware at `src/middleware.ts` using Auth.js `auth()` wrapper
-  - Dynamic route segments: `src/app/api/auth/[...nextauth]/route.ts`
-  - Route groups: `src/app/(app)/` (app shell layout)
-  - NOTE: Next.js 16 has breaking changes vs prior training data — consult `node_modules/next/dist/docs/` before editing route or config patterns
-- `react` `19.2.4`
-- `react-dom` `19.2.4`
+- Next.js 16.2.2 - App Router framework (`package.json` line 27)
+  - `cacheComponents: true` enabled in `next.config.ts` line 4
+  - Uses `next/cache` `cacheTag`/`cacheLife`/`revalidateTag` APIs (`src/lib/data/filters.ts`, `src/lib/data/tutors.ts`, `src/lib/data/past-sessions.ts`)
+  - App Router structure under `src/app/` with route groups `(app)` and dynamic routes
+- React 19.2.4 - UI library (`package.json` line 29)
+- React DOM 19.2.4 - Browser rendering (`package.json` line 30)
 
 **Testing:**
-- `vitest` `^4.1.2` — Unit test runner
-  - Config: `vitest.config.ts` (environment: `node`, `globals: true`, alias `@` → `./src`)
-  - Tests co-located in `__tests__/` directories (e.g., `src/lib/wise/__tests__/`, `src/lib/search/__tests__/`, `src/app/api/data-health/__tests__/`)
-  - 82 passing tests per AGENTS.md
+- Vitest ^4.1.2 - Unit test runner (`package.json` line 48)
+  - Config: `vitest.config.ts` (line 1-15)
+  - Environment: `node` (line 7)
+  - Globals enabled (line 6)
+  - Path alias `@` → `./src` (lines 9-13)
 
 **Build/Dev:**
-- `next` CLI for `dev`/`build`/`start`
-- `tsx` (implicit peer of `drizzle-kit`) used for `db:seed` script
-- `drizzle-kit` `^0.31.10` — Schema migrations (`db:generate`, `db:migrate`)
-
-**Styling:**
-- `tailwindcss` `^4` — Utility-first CSS (devDep)
-- `@tailwindcss/postcss` `^4` — PostCSS plugin (the only plugin in `postcss.config.mjs`)
-- `tw-animate-css` `^1.4.0` — Animation utility classes
-- `tailwind-merge` `^3.5.0` — Deduplicates conflicting Tailwind classes (used by `cn()` in `src/lib/utils.ts`)
-- `class-variance-authority` `^0.7.1` — Variant-based component styling (used in `src/components/ui/*`)
-- `clsx` `^2.1.1` — Conditional class helper
-
-**Linting:**
-- `eslint` `^9` (flat config at `eslint.config.mjs`)
-- `eslint-config-next` `16.2.2` — Extends `core-web-vitals` + `typescript` presets; default ignores re-declared via `globalIgnores` in `eslint.config.mjs`
+- Tailwind CSS ^4 - Styling framework via `@tailwindcss/postcss` plugin (`package.json` lines 38, 46)
+- PostCSS - CSS processing (`postcss.config.mjs`)
+- ESLint ^9 - Linting (`package.json` line 44)
+  - Config: `eslint.config.mjs` (flat config)
+  - Extends `eslint-config-next/core-web-vitals` and `eslint-config-next/typescript`
+- TypeScript ^5.9.3 - Type checking (`package.json` line 47, `tsconfig.json`)
+  - Strict mode enabled (line 7)
+  - JSX: react-jsx (line 14)
+  - Incremental compilation (line 16)
 
 ## Key Dependencies
 
 **Critical:**
-- `next-auth` `^5.0.0-beta.30` — Auth.js v5 beta (replaces NextAuth v4). Used at `src/lib/auth.ts` with Google provider and admin allowlist gate. Middleware wrapper: `export default auth((req) => {...})` at `src/middleware.ts`.
-- `@auth/drizzle-adapter` `^1.11.1` — Drizzle adapter for Auth.js (present as dependency, though `src/lib/auth.ts` currently uses JWT session strategy with custom `signIn` callback querying `admin_users` directly)
-- `drizzle-orm` `^0.45.2` — Type-safe ORM. Schema at `src/lib/db/schema.ts` uses `pgTable`, `pgEnum`, `uuid`, `text`, `boolean`, `timestamp`, `integer`, `jsonb`, `uniqueIndex`, `index` from `drizzle-orm/pg-core`
-- `drizzle-kit` `^0.31.10` (devDep) — Migration generator; config at `drizzle.config.ts` (`dialect: "postgresql"`, schema `./src/lib/db/schema.ts`, output `./drizzle`)
-- `@neondatabase/serverless` `^1.0.2` — HTTP-based Postgres driver; instantiated at `src/lib/db/index.ts` via `neon(databaseUrl)` then wrapped by `drizzle({ client: sql, schema })` from `drizzle-orm/neon-http`
-- `zod` `^4.3.6` — Runtime validation. Env schema at `src/lib/env.ts`; API route body validation (e.g., `src/app/api/compare/route.ts`)
+- `next-auth` ^5.0.0-beta.30 - Authentication via Auth.js v5 beta with Google provider (`src/lib/auth.ts`)
+- `@auth/drizzle-adapter` ^1.11.1 - Drizzle adapter for Auth.js (declared in `package.json` line 17, not currently imported in `src/`)
+- `drizzle-orm` ^0.45.2 - Type-safe ORM for PostgreSQL (`src/lib/db/schema.ts`, `src/lib/db/index.ts`)
+- `drizzle-kit` ^0.31.10 - Schema generation/migrations (`drizzle.config.ts`, `package.json` line 43)
+- `@neondatabase/serverless` ^1.0.2 - Neon serverless Postgres HTTP driver (`src/lib/db/index.ts` line 1)
+- `zod` ^4.3.6 - Runtime schema validation (`src/lib/env.ts`, API route bodies)
 
-**UI Primitives & Components:**
-- `shadcn` `^4.1.2` — CLI/registry tool; config at `components.json` (style `base-nova`, icon library `lucide`, base color `neutral`, CSS vars enabled, RSC enabled)
-- `@base-ui/react` `^1.3.0` — Base UI primitives (Popover, Dialog, etc.) wrapped by shadcn components in `src/components/ui/`
-- `cmdk` `^1.1.1` — Command palette / searchable combobox (used by tutor search combobox in compare panel)
-- `lucide-react` `^1.7.0` — Icon set
+**UI Component System:**
+- `shadcn` ^4.1.2 - shadcn CLI (`package.json` line 31)
+  - Config: `components.json` (style: `base-nova`, baseColor: `neutral`)
+  - RSC support enabled
+- `@base-ui/react` ^1.3.0 - Base UI primitives wrapping shadcn components (`src/components/ui/*.tsx`)
+- `cmdk` ^1.1.1 - Command palette / searchable combobox (`src/components/ui/command.tsx`)
+- `lucide-react` ^1.7.0 - Icon library (`src/components/ui/dialog.tsx`, `src/components/ui/select.tsx`, etc.)
+- `class-variance-authority` ^0.7.1 - Variant-based component styling (`src/components/ui/button.tsx`, `tabs.tsx`, `badge.tsx`)
+- `clsx` ^2.1.1 - Conditional className utility (`src/lib/utils.ts` line 1)
+- `tailwind-merge` ^3.5.0 - Tailwind class deduplication (`src/lib/utils.ts` line 2)
+- `tw-animate-css` ^1.4.0 - Tailwind animation utilities
 
-**Date/Time & Utilities:**
-- `date-fns` `^4.1.0` — Date manipulation (e.g., `addDays` in `src/lib/wise/fetchers.ts`)
-- `date-fns-tz` `^3.2.0` — Timezone-aware conversions (used in `src/lib/normalization/timezone.ts` for Asia/Bangkok)
-- `uuid` `^13.0.0` — UUID generation
-- `@types/uuid` `^10.0.0` (devDep)
+**Data/Date Utilities:**
+- `date-fns` ^4.1.0 - Date manipulation (`src/lib/wise/fetchers.ts` line 10)
+- `date-fns-tz` ^3.2.0 - Timezone-aware operations for Asia/Bangkok (`src/lib/normalization/timezone.ts`)
+- `uuid` ^13.0.0 - UUID generation
+- `@types/uuid` ^10.0.0 - Type definitions
 
-**Type Definitions (devDeps):**
-- `@types/node` `^20`
-- `@types/react` `^19`
-- `@types/react-dom` `^19`
+**Type Definitions (devDependencies):**
+- `@types/node` ^20
+- `@types/react` ^19
+- `@types/react-dom` ^19
 
 ## Configuration
 
-**TypeScript — `tsconfig.json`:**
-- `strict: true`, `noEmit: true`, `isolatedModules: true`
-- `target: "ES2017"`, `module: "esnext"`, `moduleResolution: "bundler"`
-- `jsx: "react-jsx"`, `incremental: true`
-- `plugins: [{ "name": "next" }]` — Next.js TS plugin
-- Path alias: `"@/*": ["./src/*"]`
-- Includes: `next-env.d.ts`, `**/*.ts`, `**/*.tsx`, `.next/types/**/*.ts`, `.next/dev/types/**/*.ts`, `**/*.mts`
+**TypeScript (`tsconfig.json`):**
+- Strict mode enabled
+- Target: ES2017
+- Module: esnext, moduleResolution: bundler
+- Path alias: `@/*` → `./src/*` (line 22)
+- JSX: react-jsx
+- Incremental: true
+- Includes `.next/types/**/*.ts` and `.next/dev/types/**/*.ts`
 
-**Next.js — `next.config.ts`:**
-- `cacheComponents: true` (Next 16 caching feature)
+**Next.js (`next.config.ts`):**
+- `cacheComponents: true` - Enables Next.js 16 cache components feature
+- No custom Webpack/Turbopack overrides
 
-**PostCSS — `postcss.config.mjs`:**
-- `@tailwindcss/postcss` plugin only (no autoprefixer; Tailwind 4 handles this)
+**Drizzle (`drizzle.config.ts`):**
+- Dialect: postgresql
+- Schema: `./src/lib/db/schema.ts`
+- Migrations output: `./drizzle/`
+- Credentials sourced from `DATABASE_URL` env var
 
-**ESLint — `eslint.config.mjs`:**
-- Flat config using `defineConfig` from `eslint/config`
-- Extends `eslint-config-next/core-web-vitals` + `eslint-config-next/typescript`
-- `globalIgnores`: `.next/**`, `out/**`, `build/**`, `next-env.d.ts`
+**Vercel (`vercel.json`):**
+- Cron: `path: /api/internal/sync-wise`, `schedule: 0 0 * * *` (daily at midnight UTC)
+- Function `maxDuration: 300` set in `src/app/api/internal/sync-wise/route.ts` line 7
 
-**Drizzle — `drizzle.config.ts`:**
-- `schema: "./src/lib/db/schema.ts"`
-- `out: "./drizzle"`
-- `dialect: "postgresql"`
-- `dbCredentials.url: process.env.DATABASE_URL`
+**Environment (`src/lib/env.ts`):**
+- 9 env vars validated via Zod schema at startup
+- `WISE_NAMESPACE` defaults to `begifted-education`
+- `WISE_INSTITUTE_ID` defaults to `696e1f4d90102225641cc413`
+- `.env.local` present (gitignored, contents not inspected)
+- `.env.example` documents all 9 required vars
 
-**Vitest — `vitest.config.ts`:**
-- `test.globals: true`, `test.environment: "node"`
-- `resolve.alias: { "@": path.resolve(__dirname, "./src") }`
+**ESLint (`eslint.config.mjs`):**
+- Flat config format
+- Extends `eslint-config-next/core-web-vitals` and `eslint-config-next/typescript`
+- Global ignores: `.next/**`, `out/**`, `build/**`, `next-env.d.ts`
 
-**shadcn — `components.json`:**
-- Style: `base-nova`, RSC: `true`, TSX: `true`
-- Tailwind CSS file: `src/app/globals.css`, baseColor `neutral`, CSS variables enabled
-- Aliases: `@/components`, `@/lib/utils`, `@/components/ui`, `@/lib`, `@/hooks`
-- Icon library: `lucide`
+**PostCSS (`postcss.config.mjs`):**
+- Single plugin: `@tailwindcss/postcss`
 
-**Vercel — `vercel.json`:**
-- Single cron: `path: "/api/internal/sync-wise"`, `schedule: "0 0 * * *"` (daily at midnight UTC)
-
-**Environment:**
-- `.env.example` present at repo root — documents 9 required variables
-- `.env.local` present (gitignored; contents not inspected)
-- Variables loaded via `process.env.*`; centrally validated at startup by `src/lib/env.ts` using Zod
-- `.gitignore` present
+**shadcn (`components.json`):**
+- Style: `base-nova`
+- Base color: neutral
+- CSS variables enabled
+- Icon library: lucide
+- Aliases: `@/components`, `@/components/ui`, `@/lib`, `@/hooks`, `@/lib/utils`
 
 ## NPM Scripts
 
-Defined in `package.json:5-15`:
-
-```bash
-npm run dev            # next dev
-npm run build          # next build
-npm run start          # next start
-npm run lint           # eslint
-npm test               # vitest run
-npm run test:watch     # vitest
-npm run db:generate    # drizzle-kit generate
-npm run db:migrate     # drizzle-kit migrate
-npm run db:seed        # tsx src/lib/db/seed.ts
-```
+| Script | Command | Purpose |
+|--------|---------|---------|
+| `dev` | `next dev` | Local dev server |
+| `build` | `next build` | Production build |
+| `start` | `next start` | Production server |
+| `lint` | `eslint` | Lint codebase |
+| `test` | `vitest run` | Run all tests once |
+| `test:watch` | `vitest` | Run tests in watch mode |
+| `db:generate` | `drizzle-kit generate` | Generate SQL migrations from schema |
+| `db:migrate` | `drizzle-kit migrate` | Apply migrations |
+| `db:seed` | `tsx src/lib/db/seed.ts` | Seed admin users and tutor aliases |
 
 ## Platform Requirements
 
 **Development:**
-- Node.js (ES2017+ compatible; Next 16 typically requires Node 18.18+ or 20+)
+- Node.js (ES2017+ compatible, no specific version pinned)
 - npm
-- PostgreSQL connection (Neon or local) exposed via `DATABASE_URL`
-- Google OAuth credentials for auth testing (`AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`)
-- All 9 env vars present (see `src/lib/env.ts`) — app throws at import time if any are missing
+- PostgreSQL connection (Neon or compatible)
+- Google OAuth credentials for auth testing
+- All 9 environment variables set (validated at startup by `src/lib/env.ts`)
 
 **Production:**
-- Vercel (Hobby plan — daily cron; upgrade to Pro for 30-minute cron cadence)
-- Neon Postgres (region `ap-southeast-1`, host `ep-calm-mud-a1d7pmsi.ap-southeast-1.aws.neon.tech`)
-- Vercel Cron — daily `0 0 * * *` at `/api/internal/sync-wise`
-- Vercel Serverless Function budget: 300s max duration for sync endpoint
-- Production URL: `https://bgscheduler.vercel.app`
-- Repo: `https://github.com/kasheesh711/bgscheduler`
+- Vercel Hobby plan (current) - Daily cron, 300s function timeout
+- Neon Postgres (ap-southeast-1 region)
+- Vercel Cron for scheduled sync (`vercel.json`)
+- Vercel Serverless Functions (300s max duration for sync endpoint)
+- Production URL: https://bgscheduler.vercel.app
 
 ---
 
-*Stack analysis: 2026-04-21*
+*Stack analysis: 2026-04-29*
