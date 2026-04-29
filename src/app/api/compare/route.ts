@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { toZonedTime } from "date-fns-tz";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
@@ -12,6 +13,7 @@ import {
 import type { DateRange } from "@/lib/search/compare";
 import { fetchPastSessionBlocks } from "@/lib/data/past-sessions";
 import type { IndexedSessionBlock } from "@/lib/search/index";
+import { TIMEZONE } from "@/lib/normalization/timezone";
 import type { CompareResponse, SnapshotMeta } from "@/lib/search/types";
 
 const compareRequestSchema = z.object({
@@ -25,9 +27,8 @@ const compareRequestSchema = z.object({
 
 /** Get the Monday of the current week in Asia/Bangkok. */
 function getCurrentMonday(): Date {
-  const now = new Date(
-    new Date().toLocaleString("en-US", { timeZone: "Asia/Bangkok" }),
-  );
+  // REL-08: canonical "now in Bangkok" via date-fns-tz toZonedTime.
+  const now = toZonedTime(new Date(), TIMEZONE);
   const day = now.getDay(); // 0=Sun
   const diff = day === 0 ? -6 : 1 - day; // shift to Monday
   const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diff);
