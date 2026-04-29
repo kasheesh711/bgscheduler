@@ -19,6 +19,7 @@ import {
 } from "./session-colors";
 import { modalityDisplay } from "./modality-display";
 import { getCurrentMonday } from "@/hooks/use-compare";
+import { Z_INDEX } from "@/lib/ui/z-index";
 
 const HOUR_HEIGHT = 60;
 const START_HOUR = 7;
@@ -117,7 +118,10 @@ export function CalendarGrid({
   return (
     <div className="relative ml-[50px]">
       {/* Column headers */}
-      <div className="flex border-b sticky top-0 bg-background z-10">
+      <div
+        className="flex border-b sticky top-0 bg-background"
+        style={{ zIndex: Z_INDEX.legend }}
+      >
         {tutors.map((t, i) => {
           const chip = tutorChips[i];
           return (
