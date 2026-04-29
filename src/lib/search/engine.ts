@@ -235,35 +235,50 @@ export function getBlockingSessions(
 
 /**
  * Check if any leave overlaps with a recurring weekday/time.
- * For recurring, we check any leave that falls on the same weekday.
+ *
+ * REL-04 documented assumption: a leave spanning more than 24 hours blocks
+ * EVERY weekday it touches in full-day form. The leaveStart's HH:MM and the
+ * leaveEnd's HH:MM are NOT used for minute-of-day math on multi-day leaves
+ * because middle days are wholly inside the leave (and using either bound's
+ * HH:MM for a middle day would lie about the day's coverage). For single-day
+ * leaves, leaveStart and leaveEnd are by definition on the same calendar day,
+ * so minute-of-day math against leaveStart's weekday is correct.
  */
 function hasRecurringLeaveConflict(
   group: IndexedTutorGroup,
   weekday: number,
   startMinute: number,
-  endMinute: number
+  endMinute: number,
 ): boolean {
   for (const leave of group.leaves) {
-    // Check each day of the leave range
     const leaveStart = leave.startTime;
     const leaveEnd = leave.endTime;
-    const current = new Date(leaveStart);
+    const isMultiDay =
+      leaveEnd.getTime() - leaveStart.getTime() > 24 * 60 * 60 * 1000;
 
-    while (current <= leaveEnd) {
-      if (current.getDay() === weekday) {
-        // Leave is on this weekday — check time overlap
-        const leaveStartMin = leaveStart.getHours() * 60 + leaveStart.getMinutes();
-        const leaveEndMin = leaveEnd.getHours() * 60 + leaveEnd.getMinutes();
-
-        // For multi-day leaves, the whole day is blocked
-        const isMultiDay =
-          leaveEnd.getTime() - leaveStart.getTime() > 24 * 60 * 60 * 1000;
-
-        if (isMultiDay || (leaveStartMin < endMinute && leaveEndMin > startMinute)) {
+    if (isMultiDay) {
+      // Multi-day branch — walk each calendar day in [leaveStart, leaveEnd];
+      // block if ANY day matches the requested weekday. No minute-of-day math:
+      // every touched weekday is blocked in full.
+      const cursor = new Date(leaveStart);
+      while (cursor <= leaveEnd) {
+        if (cursor.getDay() === weekday) {
           return true;
         }
+        cursor.setDate(cursor.getDate() + 1);
       }
-      current.setDate(current.getDate() + 1);
+      continue;
+    }
+
+    // Single-day branch — leaveStart and leaveEnd share a calendar day.
+    // Use leaveStart's weekday and minute-of-day directly.
+    if (leaveStart.getDay() !== weekday) {
+      continue;
+    }
+    const leaveStartMin = leaveStart.getHours() * 60 + leaveStart.getMinutes();
+    const leaveEndMin = leaveEnd.getHours() * 60 + leaveEnd.getMinutes();
+    if (leaveStartMin < endMinute && leaveEndMin > startMinute) {
+      return true;
     }
   }
   return false;

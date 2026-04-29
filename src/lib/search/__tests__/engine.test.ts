@@ -249,3 +249,98 @@ describe("executeSearch", () => {
     expect(executeSearch(index, freeReq).perSlotResults[0].available).toHaveLength(1);
   });
 });
+
+describe("executeSearch — REL-04 leave overlap (recurring mode)", () => {
+  // Helper: build a tutor with availability covering Mon and Tue 09:00-17:00,
+  // plus a single leave window. Reuses the makeTutor fixture above so leaves
+  // can be isolated as the only blocking factor.
+  function makeTutorWithLeave(opts: {
+    leaveStart: Date;
+    leaveEnd: Date;
+  }): IndexedTutorGroup {
+    return makeTutor({
+      // Cover Mon (1) and Tue (2) so the leave is the only thing that can block.
+      availabilityWindows: [
+        {
+          weekday: 1,
+          startMinute: 540, // 09:00
+          endMinute: 1020, // 17:00
+          modality: "both",
+          wiseTeacherId: "t1",
+        },
+        {
+          weekday: 2,
+          startMinute: 540,
+          endMinute: 1020,
+          modality: "both",
+          wiseTeacherId: "t1",
+        },
+      ],
+      leaves: [
+        {
+          startTime: opts.leaveStart,
+          endTime: opts.leaveEnd,
+        },
+      ],
+    });
+  }
+
+  // Bangkok-local Date construction matches the existing test pattern (e.g.,
+  // line 63: `new Date("2024-01-15T09:00:00")`). For multi-day vs single-day
+  // behavior the only relevant Date methods are .getDay()/.getHours()/
+  // .getMinutes() which all read local-time fields, so the constructor form
+  // here (Mon 6 Apr 2026 = local time) is equivalent.
+  it("REL-04: multi-day leave (Mon 14:00 → Wed 10:00) blocks Tue 14:00-16:00 slot", () => {
+    const tutor = makeTutorWithLeave({
+      leaveStart: new Date(2026, 3, 6, 14, 0), // Mon 6 Apr 14:00
+      leaveEnd: new Date(2026, 3, 8, 10, 0), // Wed 8 Apr 10:00
+    });
+    const index = makeIndex([tutor]);
+    const req: SearchRequest = {
+      searchMode: "recurring",
+      slots: [
+        { id: "s1", dayOfWeek: 2, start: "14:00", end: "16:00", mode: "either" },
+      ],
+    };
+
+    const result = executeSearch(index, req);
+    // Tutor must NOT appear as Available — the multi-day leave touches Tuesday
+    // and the documented assumption blocks every weekday it touches in full.
+    expect(result.perSlotResults[0].available).toHaveLength(0);
+  });
+
+  it("REL-04: single-day leave (Mon 14:00 → Mon 16:00) blocks Mon 15:00 but NOT Tue 14:00 or Mon 13:00", () => {
+    const tutor = makeTutorWithLeave({
+      leaveStart: new Date(2026, 3, 6, 14, 0), // Mon 6 Apr 14:00
+      leaveEnd: new Date(2026, 3, 6, 16, 0), // Mon 6 Apr 16:00
+    });
+    const index = makeIndex([tutor]);
+
+    // Sub-case A: Mon 15:00-15:30 (within leave) → blocked
+    const aReq: SearchRequest = {
+      searchMode: "recurring",
+      slots: [
+        { id: "s1", dayOfWeek: 1, start: "15:00", end: "15:30", mode: "either" },
+      ],
+    };
+    expect(executeSearch(index, aReq).perSlotResults[0].available).toHaveLength(0);
+
+    // Sub-case B: Mon 13:00-13:30 (before leave on same weekday) → NOT blocked
+    const bReq: SearchRequest = {
+      searchMode: "recurring",
+      slots: [
+        { id: "s1", dayOfWeek: 1, start: "13:00", end: "13:30", mode: "either" },
+      ],
+    };
+    expect(executeSearch(index, bReq).perSlotResults[0].available).toHaveLength(1);
+
+    // Sub-case C: Tue 14:00-16:00 (different weekday from single-day leave) → NOT blocked
+    const cReq: SearchRequest = {
+      searchMode: "recurring",
+      slots: [
+        { id: "s1", dayOfWeek: 2, start: "14:00", end: "16:00", mode: "either" },
+      ],
+    };
+    expect(executeSearch(index, cReq).perSlotResults[0].available).toHaveLength(1);
+  });
+});
