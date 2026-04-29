@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Data Fidelity & Depth
-status: ready_to_plan
-stopped_at: Phase 08 Wave 3 complete (08-03 + 08-04 shipped); Wave 4 pending (08-05 human-verify checkpoint)
-last_updated: "2026-04-29T15:05:00.000+07:00"
-last_activity: 2026-04-29 -- Phase 08 Wave 3 complete (376fa47, d9c729f); Wave 4 awaiting human visual QA
+status: executing
+stopped_at: Milestone v1.1 summary generated
+last_updated: "2026-04-29T15:40:12.203Z"
+last_activity: 2026-04-29 -- Phase 08.5 execution started
 progress:
   total_phases: 9
   completed_phases: 4
   total_plans: 33
-  completed_plans: 24
-  percent: 44
+  completed_plans: 25
+  percent: 76
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20 — milestone v1.1 Data Fidelity & Depth scoped)
 
 **Core value:** Admin staff can find, compare, and schedule tutors instantly and independently
-**Current focus:** Phase 8.5 — Reliability Hardening (already planned; 8 plans / 2 waves)
+**Current focus:** Phase 08.5 — reliability-hardening
 
 ## Current Position
 
 Milestone: v1.1 Data Fidelity & Depth
-Phase: 08.5 (reliability-hardening) — READY TO EXECUTE
-Plan: Not started (8 plans verified PASS by plan-checker)
+Phase: 08.5 (reliability-hardening) — EXECUTING
+Plan: 1 of 8
 Next: `/gsd-execute-phase 8.5` — atomic snapshot promotion, race-condition fixes, identity-collision detection, retry policy, leave-overlap fix, timezone idiom unification, cron-secret timing-safe compare
-Status: Ready to plan
-Last activity: 2026-04-29 -- Phase 08 complete (5/5 plans, all 4 STICKY-* requirements verified PASS, production deploy `dpl_McpSbJW6Mudtbvfy3uQkL3tqvypz` aliased to bgscheduler.vercel.app)
+Status: Executing Phase 08.5
+Last activity: 2026-04-29 -- Phase 08.5 execution started
 
 Progress: [████░░░░░░] 4/9 phases (44%)
 
