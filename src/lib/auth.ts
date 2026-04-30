@@ -9,13 +9,14 @@ export async function signInCallback({
 }: {
   user: { email?: string | null };
 }): Promise<boolean> {
-  if (!user.email) return false;
+  const email = user.email?.trim().toLowerCase();
+  if (!email) return false;
 
   const db = getDb();
   const allowed = await db
     .select()
     .from(adminUsers)
-    .where(eq(adminUsers.email, user.email))
+    .where(eq(adminUsers.email, email))
     .limit(1);
 
   return allowed.length > 0;

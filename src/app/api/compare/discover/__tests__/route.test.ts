@@ -106,6 +106,51 @@ describe("POST /api/compare/discover", () => {
     });
   });
 
+  it("does not block one-time discovery for same-weekday sessions on different dates", async () => {
+    const group = makeTutorGroup({
+      sessionBlocks: [
+        {
+          startTime: new Date("2026-04-13T08:00:00.000Z"),
+          endTime: new Date("2026-04-13T09:30:00.000Z"),
+          weekday: 1,
+          startMinute: 900,
+          endMinute: 990,
+          isBlocking: true,
+          wiseTeacherId: "wise-1",
+        },
+      ],
+    });
+    vi.mocked(ensureIndex).mockResolvedValue(makeIndex([group]) as never);
+
+    const res = await POST(
+      makeRequest({
+        existingTutorGroupIds: [],
+        mode: "one_time",
+        date: "2026-04-06",
+        startTime: "15:00",
+        endTime: "16:30",
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.candidates[0].freeSlots).toEqual([{ start: "15:00", end: "16:30" }]);
+
+    const blockedRes = await POST(
+      makeRequest({
+        existingTutorGroupIds: [],
+        mode: "one_time",
+        date: "2026-04-13",
+        startTime: "15:00",
+        endTime: "16:30",
+      }),
+    );
+
+    expect(blockedRes.status).toBe(200);
+    const blockedBody = await blockedRes.json();
+    expect(blockedBody.candidates[0].freeSlots).toEqual([]);
+  });
+
   it("returns 500 when ensureIndex throws", async () => {
     vi.mocked(ensureIndex).mockRejectedValue(new Error("DB exploded") as never);
 

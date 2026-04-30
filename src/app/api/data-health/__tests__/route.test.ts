@@ -132,11 +132,14 @@ describe("GET /api/data-health", () => {
     expect(body.staleMinutes === null || typeof body.staleMinutes === "number").toBe(true);
   });
 
-  it("propagates data errors for the Next.js runtime 500 path", async () => {
+  it("returns 500 JSON when data loading fails", async () => {
     vi.mocked(getDb).mockImplementation(() => {
       throw new Error("DB exploded");
     });
 
-    await expect(GET()).rejects.toThrow("DB exploded");
+    const res = await GET();
+
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
   });
 });

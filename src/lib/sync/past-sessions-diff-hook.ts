@@ -1,5 +1,4 @@
 import { and, eq, sql } from "drizzle-orm";
-import { toZonedTime } from "date-fns-tz";
 import { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { NormalizedSessionBlock } from "@/lib/normalization/sessions";
@@ -110,14 +109,14 @@ export async function runPastSessionsDiffHook(
   // 4. Build O(1) lookup of wiseSessionIds present in the new Wise response.
   const newWiseSessionIds = new Set(newWiseSessions.map((s) => s.wiseSessionId));
 
-  // 5. "Now" in Asia/Bangkok — used to test if a prior session has already started.
-  const nowBkk = toZonedTime(new Date(), "Asia/Bangkok");
+  // 5. "Now" as an instant — used to test if a prior session has already started.
+  const now = new Date();
 
   // 6. Compute the "dropped" set: in prior, not in new, and startTime < now.
   const droppedRows: typeof schema.pastSessionBlocks.$inferInsert[] = [];
   for (const prior of priorBlocks) {
     if (newWiseSessionIds.has(prior.wiseSessionId)) continue; // still future — not dropped
-    if (prior.startTime >= nowBkk) continue; // hasn't started yet
+    if (prior.startTime >= now) continue; // hasn't started yet
     const canonicalKey = priorGroupIdToCanonicalKey.get(prior.groupId);
     if (!canonicalKey) {
       issues.push({

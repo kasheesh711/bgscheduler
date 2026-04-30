@@ -16,9 +16,18 @@ vi.mock("next-auth/providers/google", () => ({
     type: "oauth",
   }),
 }));
+vi.mock("drizzle-orm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("drizzle-orm")>();
+
+  return {
+    ...actual,
+    eq: vi.fn((column: unknown, value: unknown) => ({ column, value })),
+  };
+});
 
 import { signInCallback } from "@/lib/auth";
 import { getDb } from "@/lib/db";
+import { eq } from "drizzle-orm";
 
 describe("signInCallback — TCOV-06 part 1 (allowlist)", () => {
   beforeEach(() => {
@@ -38,6 +47,13 @@ describe("signInCallback — TCOV-06 part 1 (allowlist)", () => {
     const ok = await signInCallback({ user: { email: "kevhsh7@gmail.com" } });
 
     expect(ok).toBe(true);
+  });
+
+  it("normalizes email casing and surrounding whitespace before allowlist lookup", async () => {
+    const ok = await signInCallback({ user: { email: "  KevHSH7@Gmail.Com  " } });
+
+    expect(ok).toBe(true);
+    expect(eq).toHaveBeenCalledWith(expect.anything(), "kevhsh7@gmail.com");
   });
 
   it("rejects a non-allowlisted user", async () => {

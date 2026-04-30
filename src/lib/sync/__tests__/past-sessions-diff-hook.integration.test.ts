@@ -33,6 +33,7 @@ async function seedPriorSnapshot(opts: {
   pastWiseSessionIds: string[];
   futureWiseSessionIds: string[];
   orphanPastWiseSessionIds?: string[];
+  startTimeByWiseSessionId?: Map<string, Date>;
 }): Promise<{ snapshotId: string; groupId: string }> {
   const [snap] = await handle.db
     .insert(schema.snapshots)
@@ -56,26 +57,30 @@ async function seedPriorSnapshot(opts: {
     wiseSessionId: string,
     startTime: Date,
     groupId: string,
-  ): typeof schema.futureSessionBlocks.$inferInsert => ({
-    snapshotId: snap.id,
-    groupId,
-    wiseTeacherId: "t1",
-    wiseSessionId,
-    startTime,
-    endTime: new Date(startTime.getTime() + 3600_000),
-    weekday: startTime.getDay(),
-    startMinute: 600,
-    endMinute: 660,
-    wiseStatus: "CONFIRMED",
-    isBlocking: true,
-    title: null,
-    sessionType: null,
-    location: null,
-    studentName: null,
-    subject: null,
-    classType: null,
-    recurrenceId: null,
-  });
+  ): typeof schema.futureSessionBlocks.$inferInsert => {
+    const effectiveStartTime = opts.startTimeByWiseSessionId?.get(wiseSessionId) ?? startTime;
+
+    return {
+      snapshotId: snap.id,
+      groupId,
+      wiseTeacherId: "t1",
+      wiseSessionId,
+      startTime: effectiveStartTime,
+      endTime: new Date(effectiveStartTime.getTime() + 3600_000),
+      weekday: effectiveStartTime.getDay(),
+      startMinute: 600,
+      endMinute: 660,
+      wiseStatus: "CONFIRMED",
+      isBlocking: true,
+      title: null,
+      sessionType: null,
+      location: null,
+      studentName: null,
+      subject: null,
+      classType: null,
+      recurrenceId: null,
+    };
+  };
 
   const rows = [
     ...opts.pastWiseSessionIds.map((id) => makeRow(id, past, group.id)),
@@ -178,6 +183,31 @@ describe("runPastSessionsDiffHook — TCOV-04 integration (real Postgres)", () =
       groupCanonicalKey: "tutor-a",
       pastWiseSessionIds: [],
       futureWiseSessionIds: ["S-future-cancelled"],
+    });
+    const [newSnap] = await handle.db
+      .insert(schema.snapshots)
+      .values({ active: false })
+      .returning({ id: schema.snapshots.id });
+
+    const result = await runPastSessionsDiffHook(
+      handle.db as unknown as Database,
+      [],
+      newSnap.id,
+    );
+
+    expect(result.capturedCount).toBe(0);
+    expect(result.issues).toHaveLength(0);
+    const captured = await handle.db.select().from(schema.pastSessionBlocks);
+    expect(captured).toHaveLength(0);
+  });
+
+  it("does not capture near-future sessions later today", async () => {
+    const nearFuture = new Date(Date.now() + 60 * 60_000);
+    await seedPriorSnapshot({
+      groupCanonicalKey: "tutor-a",
+      pastWiseSessionIds: [],
+      futureWiseSessionIds: ["S-near-future"],
+      startTimeByWiseSessionId: new Map([["S-near-future", nearFuture]]),
     });
     const [newSnap] = await handle.db
       .insert(schema.snapshots)

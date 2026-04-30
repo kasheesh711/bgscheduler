@@ -7,10 +7,11 @@ vi.mock("@/lib/auth", () => ({
 
 import middleware from "@/middleware";
 
-function makeReq(pathname: string, isAuth = false) {
+function makeReq(pathname: string, isAuth = false, search = "") {
+  const prefixedSearch = search ? `?${search}` : "";
   return {
-    nextUrl: { pathname, searchParams: new URLSearchParams() },
-    url: `http://localhost${pathname}`,
+    nextUrl: { pathname, search: prefixedSearch, searchParams: new URLSearchParams(search) },
+    url: `http://localhost${pathname}${prefixedSearch}`,
     auth: isAuth ? { user: { email: "kevhsh7@gmail.com" } } : null,
   };
 }
@@ -41,6 +42,15 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toContain("/login");
     expect(res.headers.get("location")).toContain("callbackUrl=%2Fsearch");
+  });
+
+  it("preserves query string in callbackUrl when redirecting to login", async () => {
+    const res = await middleware(makeReq("/search", false, "tutors=g1,g2") as never, {} as never) as Response;
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain(
+      "callbackUrl=%2Fsearch%3Ftutors%3Dg1%2Cg2",
+    );
   });
 
   it("non-public route /search passes through when authenticated", async () => {

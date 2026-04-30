@@ -95,13 +95,18 @@ export async function POST(request: NextRequest) {
         const hasWindow = group.availabilityWindows.some(
           (w) => w.weekday === weekday && w.startMinute <= slotStartMin && w.endMinute >= slotEndMin,
         );
-        const isBlocked = group.sessionBlocks.some(
-          (s) =>
-            s.isBlocking &&
-            s.weekday === weekday &&
-            s.startMinute < slotEndMin &&
-            s.endMinute > slotStartMin,
-        );
+        const isBlocked = group.sessionBlocks.some((s) => {
+          if (!s.isBlocking || s.startMinute >= slotEndMin || s.endMinute <= slotStartMin) {
+            return false;
+          }
+
+          if (mode === "one_time" && date) {
+            const targetDay = new Date(date).toISOString().slice(0, 10);
+            return s.startTime.toISOString().slice(0, 10) === targetDay;
+          }
+
+          return s.weekday === weekday;
+        });
         if (hasWindow && !isBlocked) {
           freeSlots.push({ start: startTime!, end: endTime! });
         }
