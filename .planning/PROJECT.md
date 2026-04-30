@@ -10,9 +10,9 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 
 ## Current State
 
-**Shipped version:** v1.0 (2026-04-17) + v1.0.1 hotfeature (2026-04-20, commit `9e3e4ad`) + v1.1 Phase 5 POLISH Drain (2026-04-21, commit `303dcf6`) + v1.1 Phase 7 PAST-01 code-complete (2026-04-22, commit `bcc2268`, pending operator migration to Neon)
+**Shipped version:** v1.0 (2026-04-17) + v1.0.1 hotfeature (2026-04-20, commit `9e3e4ad`) + v1.1 Phase 5 POLISH Drain (2026-04-21, commit `303dcf6`) + v1.1 Phase 7 PAST-01 code-complete (2026-04-22, commit `bcc2268`, pending operator migration to Neon) + v1.1 Phase 8.6 Test Coverage Hardening (2026-04-30, verified PASS)
 **Production URL:** https://bgscheduler.vercel.app
-**Status:** Live, daily Wise sync active, 141 tests passing across 16 test files (prior phase suites excluded from this count — see Phase 5 milestone note)
+**Status:** Live, daily Wise sync active, 208 unit tests + 8 integration tests passing
 
 ### What's live after v1.0.1 (2026-04-20)
 - **Recommended slots hero** — top of search results shows up to 3 auto-ranked time slots (sub-slot with most qualified tutors free), each with avatar stack, checkmark reasons, "Copy for parent" action, and a "Show in calendar" quick-add; select multiple slots to bundle into one message
@@ -104,12 +104,13 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 **v1.1 Phase 8 VPOL-02 Sticky Tutor Legend (shipped 2026-04-29, production deploy `dpl_McpSbJW6Mudtbvfy3uQkL3tqvypz`):**
 - ✓ STICKY-01..04 — Pre-implementation `08-STACKING-AUDIT.md` (94 lines, both ancestor chains documented) + REQUIREMENTS.md §STICKY-02 simplified to 3-tier scale (`Z_INDEX = { content: 1, legend: 6, popover: 50 } as const`) at `src/lib/ui/z-index.ts` + WeekOverview consolidated `[● displayName]` sticky legend (always-on, display-only, `aria-label="Tutor legend"`) replacing per-day lane headers + CalendarGrid sticky day-header normalized from `z-10` to `Z_INDEX.legend` (D-07 asymmetric click affordance preserved) + completed walkthrough on production (B.1–B.7 all PASS, signed off `kevhsh7@gmail.com / 2026-04-29`). 5 plans / 4 waves / 11 commits / 0 code-review findings / 4/4 success criteria PASS / 136/136 tests passing.
 
+**v1.1 Phase 8.6 Test Coverage Hardening (verified 2026-04-30):**
+- ✓ TCOV-01..07 — Search-index construction/cache tests, real-Postgres sync orchestrator integration tests, route-handler tests for 8 API routes, real-Postgres past-session diff-hook tests, Bangkok day-boundary timezone tests, auth/middleware tests, and orchestrator modality-conflict persistence coverage. Verification passed 7/7 must-haves, code review clean, 208 unit tests + 8 integration tests + coverage + TypeScript passing.
+
 ### Active
 
-v1.1 scope remaining after Phase 8 VPOL-02:
+v1.1 scope remaining after Phase 8.6 Test Coverage Hardening:
 
-- **REL-01..08** Reliability hardening — atomic snapshot promotion, race-condition fixes, identity collision detection, retry policy, leave-overlap fix, timezone idiom unification, cron-secret timing-safe compare — **Phase 8.5** (already planned, 8 plans / 2 waves, plan-checker PASS)
-- **TCOV-01..07** Test coverage hardening — search-index, sync orchestrator, API routes, past-sessions diff-hook, timezone DST, auth flow, modality contradictions — **Phase 8.6**
 - **OPS-01..07** Operational maturity — snapshot pruning, sync alerts, stale-snapshot banner, threshold raise, manual sync UI, dependency cleanup, version pinning — **Phase 8.7**
 - **DENS-01..04** Density overview (VPOL-03) — client-side `useMemo` aggregation, shape A/B/C chosen via design review, `prefers-reduced-motion` + a11y text equivalents — **Phase 9**
 - **TRANS-01..05** View transitions (VPOL-01) — native `document.startViewTransition()` on week prev/next/today + day-tab switches; scroll capture/restore; reduced-motion CSS skip — **Phase 10**
@@ -195,4 +196,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Context update
 
 ---
-*Last updated: 2026-04-29 — Phase 8 VPOL-02 Sticky Tutor Legend shipped to production (5/5 plans, 4/4 STICKY-* requirements verified PASS, 136/136 tests passing, 0 code-review findings, deploy `dpl_McpSbJW6Mudtbvfy3uQkL3tqvypz` aliased to bgscheduler.vercel.app); ready for Phase 8.5 Reliability Hardening (already planned, 8 plans / 2 waves)*
+*Last updated: 2026-04-30 — Phase 8.6 Test Coverage Hardening complete (8/8 plans, TCOV-01..07 verified PASS, clean code review, 208 unit tests + 8 integration tests passing); ready for Phase 8.7 Operational Maturity.*
