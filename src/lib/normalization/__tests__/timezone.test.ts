@@ -70,3 +70,42 @@ describe("toZonedTime round-trip — REL-08 lock-in", () => {
     expect(a.toDateString()).not.toBe(b.toDateString());
   });
 });
+
+describe("Day boundary — UTC 17:00 = Bangkok 00:00 next day", () => {
+  it("getLocalWeekday returns NEXT day's weekday at UTC 17:00", () => {
+    // 2026-04-29T17:00:00Z is Wed at UTC, Thu at Bangkok (UTC+7)
+    expect(getLocalWeekday("2026-04-29T17:00:00Z")).toBe(4); // Thursday
+  });
+
+  it("getLocalWeekday returns SAME day's weekday at UTC 16:59", () => {
+    // 1 minute before midnight crossover — still Wednesday in Bangkok
+    expect(getLocalWeekday("2026-04-29T16:59:00Z")).toBe(3); // Wednesday
+  });
+
+  it("getLocalMinuteOfDay is 0 at the BKK midnight crossover", () => {
+    // BKK 00:00 = UTC 17:00 of previous day
+    expect(getLocalMinuteOfDay("2026-04-29T17:00:00Z")).toBe(0);
+  });
+
+  it("getLocalMinuteOfDay is 1439 at the BKK pre-midnight tick", () => {
+    // BKK 23:59 = UTC 16:59 of same day
+    expect(getLocalMinuteOfDay("2026-04-29T16:59:00Z")).toBe(23 * 60 + 59);
+  });
+
+  it("date arithmetic across UTC midnight stays consistent in BKK", () => {
+    // Two timestamps 9 hours apart in UTC; toZonedTime should preserve the
+    // elapsed time when converted to BKK.
+    const a = toZonedTime(new Date("2026-04-29T16:00:00Z"), TIMEZONE); // 23:00 BKK Wed
+    const b = toZonedTime(new Date("2026-04-30T01:00:00Z"), TIMEZONE); // 08:00 BKK Thu
+    expect(b.getTime() - a.getTime()).toBe(9 * 3600_000); // exactly 9 hours
+  });
+
+  it("slot-time arithmetic: 90-min slot starting at BKK 00:00 ends at 01:30 same day", () => {
+    // The slot crosses no further boundaries — both endpoints are on Thursday in BKK.
+    const slotStart = toZonedTime(new Date("2026-04-29T17:00:00Z"), TIMEZONE);
+    const slotEnd = new Date(slotStart.getTime() + 90 * 60_000);
+    expect(slotEnd.getHours()).toBe(1);
+    expect(slotEnd.getMinutes()).toBe(30);
+    expect(slotEnd.getDay()).toBe(slotStart.getDay()); // still Thursday
+  });
+});
