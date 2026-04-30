@@ -1,0 +1,117 @@
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
+import { NextRequest } from "next/server";
+import type { IndexedTutorGroup, SearchIndex } from "@/lib/search/index";
+
+vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
+vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
+vi.mock("@/lib/search/index", () => ({ ensureIndex: vi.fn() }));
+
+import { auth } from "@/lib/auth";
+import { getDb } from "@/lib/db";
+import { ensureIndex } from "@/lib/search/index";
+import { POST } from "@/app/api/compare/discover/route";
+
+const authMock = auth as unknown as Mock;
+
+function makeTutorGroup(overrides: Partial<IndexedTutorGroup> = {}): IndexedTutorGroup {
+  return {
+    id: "g1",
+    canonicalKey: "test",
+    displayName: "Test Tutor",
+    supportedModes: ["online"],
+    qualifications: [{ subject: "Math", curriculum: "IB", level: "Grade 10" }],
+    wiseRecords: [{ wiseTeacherId: "wise-1", wiseDisplayName: "Test Tutor", isOnline: true }],
+    availabilityWindows: [
+      { weekday: 1, startMinute: 900, endMinute: 1020, modality: "online", wiseTeacherId: "wise-1" },
+    ],
+    leaves: [],
+    sessionBlocks: [],
+    dataIssues: [],
+    ...overrides,
+  };
+}
+
+function makeIndex(groups: IndexedTutorGroup[] = [makeTutorGroup()]): SearchIndex {
+  return {
+    snapshotId: "snap-1",
+    builtAt: new Date("2026-04-06T00:00:00.000Z"),
+    tutorGroups: groups,
+    byWeekday: new Map([[1, groups]]),
+  };
+}
+
+describe("POST /api/compare/discover", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    authMock.mockResolvedValue({ user: { email: "kevhsh7@gmail.com" } });
+    vi.mocked(getDb).mockReturnValue({} as never);
+    vi.mocked(ensureIndex).mockResolvedValue(makeIndex() as never);
+  });
+
+  function makeRequest(body: unknown): NextRequest {
+    return new NextRequest("http://localhost/api/compare/discover", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("returns 401 when unauthenticated", async () => {
+    authMock.mockResolvedValue(null);
+
+    const res = await POST(makeRequest({ existingTutorGroupIds: [], mode: "recurring" }));
+
+    expect(res.status).toBe(401);
+    await expect(res.json()).resolves.toEqual({ error: "Unauthorized" });
+  });
+
+  it("returns 400 when body fails Zod validation", async () => {
+    const res = await POST(
+      makeRequest({ existingTutorGroupIds: ["g1", "g2", "g3"], mode: "recurring" }),
+    );
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe("Invalid request");
+    expect(body.details).toBeDefined();
+  });
+
+  it("returns 200 with discovery response shape on success", async () => {
+    const res = await POST(
+      makeRequest({
+        existingTutorGroupIds: [],
+        mode: "recurring",
+        dayOfWeek: 1,
+        startTime: "15:00",
+        endTime: "16:30",
+        modeFilter: "online",
+        filters: { subject: "Math" },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      snapshotMeta: expect.objectContaining({ snapshotId: "snap-1", stale: expect.any(Boolean) }),
+      candidates: [
+        expect.objectContaining({
+          tutorGroupId: "g1",
+          displayName: "Test Tutor",
+          conflictCount: 0,
+          freeSlots: [{ start: "15:00", end: "16:30" }],
+          hasDataIssues: false,
+        }),
+      ],
+      latencyMs: expect.any(Number),
+    });
+  });
+
+  it("returns 500 when ensureIndex throws", async () => {
+    vi.mocked(ensureIndex).mockRejectedValue(new Error("DB exploded") as never);
+
+    const res = await POST(makeRequest({ existingTutorGroupIds: [], mode: "recurring" }));
+
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+  });
+});
