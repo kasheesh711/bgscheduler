@@ -147,7 +147,15 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   5. Timezone tests cover UTC/Bangkok day-boundary (sync at 17:00 UTC = 00:00 next-day Bangkok) — assert weekday derivation, `getDay()`, and slot-time arithmetic remain consistent across the boundary
   6. Auth tests cover `signIn` callback's allowlist read (`src/lib/auth.ts:18-30`) and middleware bypass paths (`src/middleware.ts:7-14`) — assert that non-admin email is rejected and that internal routes self-check
   7. Modality contradiction emission test verifies orchestrator persists `conflict_model` rows to `data_issues` table when `detectSessionModalityConflict` fires (`src/lib/sync/orchestrator.ts:356-387`); not just the in-isolation unit test
-**Plans**: TBD
+**Plans**: 8 plans
+  - [ ] 08.6-01-PLAN.md — Test infrastructure setup: testcontainers + node-postgres + db-helper.ts + vitest.config.ts projects pattern + npm scripts
+  - [ ] 08.6-02-PLAN.md — TCOV-01: Search-index tests (buildIndex denormalization, byWeekday map, snapshot-active race fallback)
+  - [ ] 08.6-03-PLAN.md — TCOV-02: Orchestrator runFullSync integration test against real Postgres (depends on 08.6-01)
+  - [ ] 08.6-04-PLAN.md — TCOV-03: All 8 API route handler tests (compare, compare/discover, search, search/range, data-health, filters, tutors, internal/sync-wise)
+  - [ ] 08.6-05-PLAN.md — TCOV-04: Past-sessions diff-hook integration test + delete broken unit test (depends on 08.6-01)
+  - [ ] 08.6-06-PLAN.md — TCOV-05: Timezone day-boundary tests (UTC 17:00 = BKK 00:00 next day)
+  - [ ] 08.6-07-PLAN.md — TCOV-06: Auth signIn callback + middleware bypass tests (with tiny additive auth.ts refactor)
+  - [ ] 08.6-08-PLAN.md — TCOV-07: Orchestrator modality-conflict persistence test (db.insert stub, no DB)
 **UI hint**: no
 
 ### Phase 8.7: Operational Maturity
