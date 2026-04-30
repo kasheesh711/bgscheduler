@@ -151,6 +151,91 @@ describe("POST /api/compare/discover", () => {
     expect(blockedBody.candidates[0].freeSlots).toEqual([]);
   });
 
+  it("matches one-time session blocks by Bangkok calendar date", async () => {
+    const group = makeTutorGroup({
+      availabilityWindows: [
+        { weekday: 1, startMinute: 0, endMinute: 120, modality: "online", wiseTeacherId: "wise-1" },
+      ],
+      sessionBlocks: [
+        {
+          startTime: new Date("2026-04-05T17:30:00.000Z"),
+          endTime: new Date("2026-04-05T18:30:00.000Z"),
+          weekday: 1,
+          startMinute: 30,
+          endMinute: 90,
+          isBlocking: true,
+          wiseTeacherId: "wise-1",
+        },
+      ],
+    });
+    vi.mocked(ensureIndex).mockResolvedValue(makeIndex([group]) as never);
+
+    const res = await POST(
+      makeRequest({
+        existingTutorGroupIds: [],
+        mode: "one_time",
+        date: "2026-04-06",
+        startTime: "00:00",
+        endTime: "01:00",
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.candidates[0].freeSlots).toEqual([]);
+  });
+
+  it("requires availability window modality to match the requested mode", async () => {
+    const group = makeTutorGroup({
+      supportedModes: ["online", "onsite"],
+      availabilityWindows: [
+        { weekday: 1, startMinute: 900, endMinute: 1020, modality: "onsite", wiseTeacherId: "wise-1" },
+      ],
+    });
+    vi.mocked(ensureIndex).mockResolvedValue(makeIndex([group]) as never);
+
+    const res = await POST(
+      makeRequest({
+        existingTutorGroupIds: [],
+        mode: "recurring",
+        dayOfWeek: 1,
+        startTime: "15:00",
+        endTime: "16:30",
+        modeFilter: "online",
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.candidates[0].freeSlots).toEqual([]);
+  });
+
+  it("does not offer free slots that overlap leaves", async () => {
+    const group = makeTutorGroup({
+      leaves: [
+        {
+          startTime: new Date("2026-04-06T08:15:00.000Z"),
+          endTime: new Date("2026-04-06T09:00:00.000Z"),
+        },
+      ],
+    });
+    vi.mocked(ensureIndex).mockResolvedValue(makeIndex([group]) as never);
+
+    const res = await POST(
+      makeRequest({
+        existingTutorGroupIds: [],
+        mode: "one_time",
+        date: "2026-04-06",
+        startTime: "15:00",
+        endTime: "16:30",
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.candidates[0].freeSlots).toEqual([]);
+  });
+
   it("returns 500 when ensureIndex throws", async () => {
     vi.mocked(ensureIndex).mockRejectedValue(new Error("DB exploded") as never);
 

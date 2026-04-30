@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { ensureIndex } from "@/lib/search/index";
 import { buildCompareTutor, detectConflicts } from "@/lib/search/compare";
 import { parseTimeToMinutes } from "@/lib/normalization/timezone";
+import type { IndexedTutorGroup } from "@/lib/search/index";
 import type { DiscoverResponse, DiscoverCandidate, SnapshotMeta } from "@/lib/search/types";
 
 const discoverRequestSchema = z.object({
@@ -69,6 +70,7 @@ export async function POST(request: NextRequest) {
     const weekday = dayOfWeek ?? (date ? new Date(date).getDay() : undefined);
     const slotStartMin = startTime ? parseTimeToMinutes(startTime) : undefined;
     const slotEndMin = endTime ? parseTimeToMinutes(endTime) : undefined;
+    const requestedMode = modeFilter ?? "either";
 
     const candidates: DiscoverCandidate[] = [];
 
@@ -92,22 +94,31 @@ export async function POST(request: NextRequest) {
       const freeSlots: { start: string; end: string }[] = [];
 
       if (weekday !== undefined && slotStartMin !== undefined && slotEndMin !== undefined) {
-        const hasWindow = group.availabilityWindows.some(
-          (w) => w.weekday === weekday && w.startMinute <= slotStartMin && w.endMinute >= slotEndMin,
+        const hasWindow = hasAvailabilityWindow(
+          group,
+          weekday,
+          slotStartMin,
+          slotEndMin,
+          requestedMode,
         );
-        const isBlocked = group.sessionBlocks.some((s) => {
-          if (!s.isBlocking || s.startMinute >= slotEndMin || s.endMinute <= slotStartMin) {
-            return false;
-          }
+        const isBlocked = hasBlockingSession(
+          group,
+          mode,
+          weekday,
+          slotStartMin,
+          slotEndMin,
+          date,
+        );
+        const onLeave = hasLeaveConflict(
+          group,
+          mode,
+          weekday,
+          slotStartMin,
+          slotEndMin,
+          date,
+        );
 
-          if (mode === "one_time" && date) {
-            const targetDay = new Date(date).toISOString().slice(0, 10);
-            return s.startTime.toISOString().slice(0, 10) === targetDay;
-          }
-
-          return s.weekday === weekday;
-        });
-        if (hasWindow && !isBlocked) {
+        if (hasWindow && !isBlocked && !onLeave) {
           freeSlots.push({ start: startTime!, end: endTime! });
         }
       }
@@ -156,4 +167,89 @@ export async function POST(request: NextRequest) {
     const message = err instanceof Error ? err.message : "Discover failed";
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+function hasAvailabilityWindow(
+  group: IndexedTutorGroup,
+  weekday: number,
+  startMinute: number,
+  endMinute: number,
+  requestedMode: "online" | "onsite" | "either",
+): boolean {
+  return group.availabilityWindows.some((w) => {
+    if (w.weekday !== weekday || w.startMinute > startMinute || w.endMinute < endMinute) {
+      return false;
+    }
+    if (requestedMode === "either") return true;
+    return w.modality === "both" || w.modality === requestedMode;
+  });
+}
+
+function hasBlockingSession(
+  group: IndexedTutorGroup,
+  mode: "recurring" | "one_time",
+  weekday: number,
+  startMinute: number,
+  endMinute: number,
+  date?: string,
+): boolean {
+  const targetDay = date ? localDateKey(date) : null;
+
+  return group.sessionBlocks.some((s) => {
+    if (!s.isBlocking || s.startMinute >= endMinute || s.endMinute <= startMinute) {
+      return false;
+    }
+    if (mode === "one_time") {
+      return targetDay !== null && localDateKey(s.startTime) === targetDay;
+    }
+    return s.weekday === weekday;
+  });
+}
+
+function hasLeaveConflict(
+  group: IndexedTutorGroup,
+  mode: "recurring" | "one_time",
+  weekday: number,
+  startMinute: number,
+  endMinute: number,
+  date?: string,
+): boolean {
+  if (mode === "one_time" && date) {
+    const targetStart = dateAtMinute(date, startMinute);
+    const targetEnd = dateAtMinute(date, endMinute);
+    return group.leaves.some((l) => l.startTime < targetEnd && l.endTime > targetStart);
+  }
+
+  return group.leaves.some((leave) => {
+    const leaveStart = leave.startTime;
+    const leaveEnd = leave.endTime;
+    const isMultiDay = leaveEnd.getTime() - leaveStart.getTime() > 24 * 60 * 60 * 1000;
+
+    if (isMultiDay) {
+      const cursor = new Date(leaveStart);
+      while (cursor <= leaveEnd) {
+        if (cursor.getDay() === weekday) return true;
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return false;
+    }
+
+    if (leaveStart.getDay() !== weekday) return false;
+    const leaveStartMin = leaveStart.getHours() * 60 + leaveStart.getMinutes();
+    const leaveEndMin = leaveEnd.getHours() * 60 + leaveEnd.getMinutes();
+    return leaveStartMin < endMinute && leaveEndMin > startMinute;
+  });
+}
+
+function dateAtMinute(date: string, minute: number): Date {
+  const [year, month, day] = localDateKey(date).split("-").map(Number);
+  return new Date(year, month - 1, day, Math.floor(minute / 60), minute % 60, 0, 0);
+}
+
+function localDateKey(value: Date | string): string {
+  const date = typeof value === "string" ? new Date(value) : value;
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
