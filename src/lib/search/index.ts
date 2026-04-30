@@ -305,6 +305,9 @@ export async function ensureIndex(db: Database): Promise<SearchIndex> {
       if (activeSnapshot && activeSnapshot.id === cached.snapshotId) {
         return cached;
       }
+      if (!activeSnapshot) {
+        return cached;
+      }
     }
     return buildIndex(db);
   };

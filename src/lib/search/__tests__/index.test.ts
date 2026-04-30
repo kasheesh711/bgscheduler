@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as indexModule from "../index";
+import * as schema from "@/lib/db/schema";
 import type { Database } from "@/lib/db";
 import type { SearchIndex } from "../index";
 
@@ -29,6 +30,46 @@ interface FakeDbState {
   // Optional micro-yield inserted before each chain resolves so concurrent
   // callers actually interleave at await boundaries.
   yieldBeforeResolve: boolean;
+}
+
+interface FakeTablesState {
+  // The active snapshot id returned by the snapshots active lookup.
+  activeSnapshotId: string | null;
+  // Counts every db.select() invocation across the chain.
+  selectCallCount: number;
+  // Per-table row fixtures keyed by the schema table reference passed to .from().
+  rowsByTable: Map<unknown, unknown[]>;
+}
+
+function makeFakeDbWithTables(state: FakeTablesState): Database {
+  const selectFn = vi.fn().mockImplementation(() => {
+    state.selectCallCount += 1;
+    const api = {
+      _target: null as unknown,
+      from(target: unknown) {
+        api._target = target;
+        return api;
+      },
+      where(_condition: unknown) {
+        return api;
+      },
+      limit(_n: number) {
+        return Promise.resolve(api._resolve());
+      },
+      then(onFulfilled: (rows: unknown[]) => unknown) {
+        return Promise.resolve(api._resolve()).then(onFulfilled);
+      },
+      _resolve(): unknown[] {
+        if (api._target === schema.snapshots) {
+          return state.activeSnapshotId ? [{ id: state.activeSnapshotId }] : [];
+        }
+        return state.rowsByTable.get(api._target) ?? [];
+      },
+    };
+    return api;
+  });
+
+  return { select: selectFn } as unknown as Database;
 }
 
 function makeFakeDb(state: FakeDbState): Database {
@@ -168,5 +209,454 @@ describe("ensureIndex — REL-02 race-free coalescing", () => {
     expect(state.selectCallCount).toBeLessThanOrEqual(9);
     expect(a).toBe(b);
     expect(a.snapshotId).toBe("snap-NEW");
+  });
+});
+
+describe("buildIndex — TCOV-01 denormalization", () => {
+  beforeEach(() => {
+    resetGlobals();
+  });
+  afterEach(() => {
+    resetGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("produces one tutor group per group row and attaches child rows by groupId", async () => {
+    const rows = new Map<unknown, unknown[]>([
+      [
+        schema.tutorIdentityGroups,
+        [
+          {
+            id: "g1",
+            snapshotId: "snap-1",
+            canonicalKey: "alice",
+            displayName: "Alice",
+            supportedModality: "online",
+          },
+          {
+            id: "g2",
+            snapshotId: "snap-1",
+            canonicalKey: "bob",
+            displayName: "Bob",
+            supportedModality: "onsite",
+          },
+        ],
+      ],
+      [
+        schema.tutorIdentityGroupMembers,
+        [
+          {
+            groupId: "g1",
+            wiseTeacherId: "teacher-1",
+            wiseDisplayName: "Alice Online",
+            isOnlineVariant: true,
+          },
+          {
+            groupId: "g2",
+            wiseTeacherId: "teacher-2",
+            wiseDisplayName: "Bob Onsite",
+            isOnlineVariant: false,
+          },
+        ],
+      ],
+      [
+        schema.subjectLevelQualifications,
+        [
+          {
+            groupId: "g1",
+            subject: "Math",
+            curriculum: "IB",
+            level: "HL",
+            examPrep: null,
+          },
+          {
+            groupId: "g2",
+            subject: "Physics",
+            curriculum: "AP",
+            level: "Y10",
+            examPrep: "SAT",
+          },
+        ],
+      ],
+      [
+        schema.recurringAvailabilityWindows,
+        [
+          {
+            groupId: "g1",
+            wiseTeacherId: "teacher-1",
+            weekday: 1,
+            startMinute: 600,
+            endMinute: 720,
+            modality: "online",
+          },
+          {
+            groupId: "g2",
+            wiseTeacherId: "teacher-2",
+            weekday: 3,
+            startMinute: 540,
+            endMinute: 660,
+            modality: "onsite",
+          },
+        ],
+      ],
+      [
+        schema.datedLeaves,
+        [
+          {
+            groupId: "g1",
+            wiseTeacherId: "teacher-1",
+            startTime: new Date("2026-05-01T00:00:00Z"),
+            endTime: new Date("2026-05-02T00:00:00Z"),
+          },
+        ],
+      ],
+      [
+        schema.futureSessionBlocks,
+        [
+          {
+            groupId: "g2",
+            wiseTeacherId: "teacher-2",
+            wiseSessionId: "session-1",
+            startTime: new Date("2026-05-15T03:00:00Z"),
+            endTime: new Date("2026-05-15T04:00:00Z"),
+            weekday: 5,
+            startMinute: 600,
+            endMinute: 660,
+            wiseStatus: "CONFIRMED",
+            isBlocking: true,
+          },
+        ],
+      ],
+      [schema.dataIssues, []],
+    ]);
+    const state: FakeTablesState = {
+      activeSnapshotId: "snap-1",
+      selectCallCount: 0,
+      rowsByTable: rows,
+    };
+    const db = makeFakeDbWithTables(state);
+
+    const index = await indexModule.buildIndex(db);
+
+    expect(index.snapshotId).toBe("snap-1");
+    expect(index.tutorGroups).toHaveLength(2);
+    expect(state.selectCallCount).toBe(8);
+
+    const g1 = index.tutorGroups.find((group) => group.id === "g1");
+    const g2 = index.tutorGroups.find((group) => group.id === "g2");
+    expect(g1).toBeDefined();
+    expect(g2).toBeDefined();
+
+    expect(g1!.qualifications).toEqual([
+      { subject: "Math", curriculum: "IB", level: "HL", examPrep: undefined },
+    ]);
+    expect(g2!.qualifications).toEqual([
+      { subject: "Physics", curriculum: "AP", level: "Y10", examPrep: "SAT" },
+    ]);
+
+    expect(g1!.wiseRecords).toEqual([
+      { wiseTeacherId: "teacher-1", wiseDisplayName: "Alice Online", isOnline: true },
+    ]);
+    expect(g2!.wiseRecords).toEqual([
+      { wiseTeacherId: "teacher-2", wiseDisplayName: "Bob Onsite", isOnline: false },
+    ]);
+
+    expect(g1!.availabilityWindows).toEqual([
+      {
+        weekday: 1,
+        startMinute: 600,
+        endMinute: 720,
+        modality: "online",
+        wiseTeacherId: "teacher-1",
+      },
+    ]);
+    expect(g2!.availabilityWindows).toEqual([
+      {
+        weekday: 3,
+        startMinute: 540,
+        endMinute: 660,
+        modality: "onsite",
+        wiseTeacherId: "teacher-2",
+      },
+    ]);
+
+    expect(g1!.leaves).toEqual([
+      {
+        startTime: new Date("2026-05-01T00:00:00Z"),
+        endTime: new Date("2026-05-02T00:00:00Z"),
+      },
+    ]);
+    expect(g2!.leaves).toHaveLength(0);
+    expect(g1!.sessionBlocks).toHaveLength(0);
+    expect(g2!.sessionBlocks).toEqual([
+      {
+        startTime: new Date("2026-05-15T03:00:00Z"),
+        endTime: new Date("2026-05-15T04:00:00Z"),
+        weekday: 5,
+        startMinute: 600,
+        endMinute: 660,
+        isBlocking: true,
+        wiseTeacherId: "teacher-2",
+        title: undefined,
+        studentName: undefined,
+        subject: undefined,
+        classType: undefined,
+        sessionType: undefined,
+        recurrenceId: undefined,
+        location: undefined,
+      },
+    ]);
+  });
+
+  it("maps supported modes and data issues from the documented parallel load order", async () => {
+    const rows = new Map<unknown, unknown[]>([
+      [
+        schema.tutorIdentityGroups,
+        [
+          {
+            id: "g1",
+            snapshotId: "snap-1",
+            canonicalKey: "alice",
+            displayName: "Alice",
+            supportedModality: "both",
+          },
+          {
+            id: "g2",
+            snapshotId: "snap-1",
+            canonicalKey: "bob",
+            displayName: "Bob",
+            supportedModality: "unresolved",
+          },
+        ],
+      ],
+      [schema.tutorIdentityGroupMembers, []],
+      [schema.subjectLevelQualifications, []],
+      [schema.recurringAvailabilityWindows, []],
+      [schema.datedLeaves, []],
+      [schema.futureSessionBlocks, []],
+      [
+        schema.dataIssues,
+        [
+          {
+            entityId: "alice",
+            entityName: "ignored",
+            type: "tag",
+            message: "Unmapped tag",
+          },
+          {
+            entityId: "ignored",
+            entityName: "Bob",
+            type: "modality",
+            message: "Unresolved modality",
+          },
+        ],
+      ],
+    ]);
+    const state: FakeTablesState = {
+      activeSnapshotId: "snap-1",
+      selectCallCount: 0,
+      rowsByTable: rows,
+    };
+    const db = makeFakeDbWithTables(state);
+
+    const index = await indexModule.buildIndex(db);
+
+    const g1 = index.tutorGroups.find((group) => group.id === "g1");
+    const g2 = index.tutorGroups.find((group) => group.id === "g2");
+    expect(g1!.supportedModes).toEqual(["online", "onsite"]);
+    expect(g2!.supportedModes).toEqual([]);
+    expect(g1!.dataIssues).toEqual([{ type: "tag", message: "Unmapped tag" }]);
+    expect(g2!.dataIssues).toEqual([
+      { type: "modality", message: "Unresolved modality" },
+    ]);
+  });
+});
+
+describe("buildIndex — TCOV-01 byWeekday map", () => {
+  beforeEach(() => {
+    resetGlobals();
+  });
+  afterEach(() => {
+    resetGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("populates byWeekday with entries for every weekday a group has windows on", async () => {
+    const rows = new Map<unknown, unknown[]>([
+      [
+        schema.tutorIdentityGroups,
+        [
+          {
+            id: "g1",
+            snapshotId: "snap-1",
+            canonicalKey: "alice",
+            displayName: "Alice",
+            supportedModality: "online",
+          },
+        ],
+      ],
+      [
+        schema.tutorIdentityGroupMembers,
+        [
+          {
+            groupId: "g1",
+            wiseTeacherId: "teacher-1",
+            wiseDisplayName: "Alice Online",
+            isOnlineVariant: true,
+          },
+        ],
+      ],
+      [schema.subjectLevelQualifications, []],
+      [
+        schema.recurringAvailabilityWindows,
+        [
+          {
+            groupId: "g1",
+            wiseTeacherId: "teacher-1",
+            weekday: 1,
+            startMinute: 600,
+            endMinute: 720,
+            modality: "online",
+          },
+          {
+            groupId: "g1",
+            wiseTeacherId: "teacher-1",
+            weekday: 3,
+            startMinute: 540,
+            endMinute: 660,
+            modality: "online",
+          },
+        ],
+      ],
+      [schema.datedLeaves, []],
+      [schema.futureSessionBlocks, []],
+      [schema.dataIssues, []],
+    ]);
+    const state: FakeTablesState = {
+      activeSnapshotId: "snap-1",
+      selectCallCount: 0,
+      rowsByTable: rows,
+    };
+    const db = makeFakeDbWithTables(state);
+
+    const index = await indexModule.buildIndex(db);
+
+    expect(index.byWeekday.get(1)?.map((group) => group.id)).toEqual(["g1"]);
+    expect(index.byWeekday.get(3)?.map((group) => group.id)).toEqual(["g1"]);
+    expect(index.byWeekday.get(2) ?? []).toHaveLength(0);
+  });
+
+  it("adds a group only once per weekday even when multiple windows share that weekday", async () => {
+    const rows = new Map<unknown, unknown[]>([
+      [
+        schema.tutorIdentityGroups,
+        [
+          {
+            id: "g1",
+            snapshotId: "snap-1",
+            canonicalKey: "alice",
+            displayName: "Alice",
+            supportedModality: "online",
+          },
+        ],
+      ],
+      [schema.tutorIdentityGroupMembers, []],
+      [schema.subjectLevelQualifications, []],
+      [
+        schema.recurringAvailabilityWindows,
+        [
+          {
+            groupId: "g1",
+            wiseTeacherId: "teacher-1",
+            weekday: 1,
+            startMinute: 540,
+            endMinute: 600,
+            modality: "online",
+          },
+          {
+            groupId: "g1",
+            wiseTeacherId: "teacher-1",
+            weekday: 1,
+            startMinute: 660,
+            endMinute: 720,
+            modality: "online",
+          },
+        ],
+      ],
+      [schema.datedLeaves, []],
+      [schema.futureSessionBlocks, []],
+      [schema.dataIssues, []],
+    ]);
+    const state: FakeTablesState = {
+      activeSnapshotId: "snap-1",
+      selectCallCount: 0,
+      rowsByTable: rows,
+    };
+    const db = makeFakeDbWithTables(state);
+
+    const index = await indexModule.buildIndex(db);
+
+    expect(index.byWeekday.get(1)?.map((group) => group.id)).toEqual(["g1"]);
+  });
+
+  it("does not add a group to byWeekday if it has no availability windows", async () => {
+    const rows = new Map<unknown, unknown[]>([
+      [
+        schema.tutorIdentityGroups,
+        [
+          {
+            id: "g1",
+            snapshotId: "snap-1",
+            canonicalKey: "alice",
+            displayName: "Alice",
+            supportedModality: "online",
+          },
+        ],
+      ],
+      [schema.tutorIdentityGroupMembers, []],
+      [schema.subjectLevelQualifications, []],
+      [schema.recurringAvailabilityWindows, []],
+      [schema.datedLeaves, []],
+      [schema.futureSessionBlocks, []],
+      [schema.dataIssues, []],
+    ]);
+    const state: FakeTablesState = {
+      activeSnapshotId: "snap-1",
+      selectCallCount: 0,
+      rowsByTable: rows,
+    };
+    const db = makeFakeDbWithTables(state);
+
+    const index = await indexModule.buildIndex(db);
+
+    expect(index.byWeekday.size).toBe(0);
+  });
+});
+
+describe("ensureIndex — TCOV-01 snapshot-active race fallback", () => {
+  beforeEach(() => {
+    resetGlobals();
+  });
+  afterEach(() => {
+    resetGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("returns cached index without throwing when zero rows match WHERE active=true", async () => {
+    const cached = makeIndex("snap-A");
+    globalThis.__bgscheduler_searchIndex = cached;
+
+    const state: FakeDbState = {
+      activeSnapshotId: null,
+      selectCallCount: 0,
+      yieldBeforeResolve: false,
+    };
+    const db = makeFakeDb(state);
+
+    const result = await indexModule.ensureIndex(db);
+
+    expect(result).toBe(cached);
+    expect(result.snapshotId).toBe("snap-A");
+    expect(state.selectCallCount).toBe(1);
   });
 });
