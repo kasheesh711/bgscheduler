@@ -4,6 +4,23 @@ import { getDb } from "@/lib/db";
 import { adminUsers } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
+export async function signInCallback({
+  user,
+}: {
+  user: { email?: string | null };
+}): Promise<boolean> {
+  if (!user.email) return false;
+
+  const db = getDb();
+  const allowed = await db
+    .select()
+    .from(adminUsers)
+    .where(eq(adminUsers.email, user.email))
+    .limit(1);
+
+  return allowed.length > 0;
+}
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [
     Google({
@@ -16,18 +33,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     error: "/login",
   },
   callbacks: {
-    async signIn({ user }) {
-      if (!user.email) return false;
-
-      const db = getDb();
-      const allowed = await db
-        .select()
-        .from(adminUsers)
-        .where(eq(adminUsers.email, user.email))
-        .limit(1);
-
-      return allowed.length > 0;
-    },
+    signIn: signInCallback,
     async session({ session }) {
       return session;
     },
