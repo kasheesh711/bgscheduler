@@ -39,7 +39,9 @@ export default defineConfig({
           globals: true,
           include: ["src/**/*.integration.test.ts"],
           pool: "forks",
-          poolOptions: { forks: { singleFork: true } },
+          // Vitest 4 removed poolOptions; this is the singleFork: true equivalent.
+          fileParallelism: false,
+          maxWorkers: 1,
           testTimeout: 60_000,
           hookTimeout: 60_000,
         },
