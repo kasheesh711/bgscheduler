@@ -228,28 +228,30 @@ function hasLeaveConflict(
     if (isMultiDay) {
       const cursor = new Date(leaveStart);
       while (cursor <= leaveEnd) {
-        if (cursor.getDay() === weekday) return true;
-        cursor.setDate(cursor.getDate() + 1);
+        if (cursor.getUTCDay() === weekday) return true;
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
       }
       return false;
     }
 
-    if (leaveStart.getDay() !== weekday) return false;
-    const leaveStartMin = leaveStart.getHours() * 60 + leaveStart.getMinutes();
-    const leaveEndMin = leaveEnd.getHours() * 60 + leaveEnd.getMinutes();
+    if (leaveStart.getUTCDay() !== weekday) return false;
+    const leaveStartMin = leaveStart.getUTCHours() * 60 + leaveStart.getUTCMinutes();
+    const leaveEndMin = leaveEnd.getUTCHours() * 60 + leaveEnd.getUTCMinutes();
     return leaveStartMin < endMinute && leaveEndMin > startMinute;
   });
 }
 
 function dateAtMinute(date: string, minute: number): Date {
   const [year, month, day] = localDateKey(date).split("-").map(Number);
-  return new Date(year, month - 1, day, Math.floor(minute / 60), minute % 60, 0, 0);
+  return new Date(Date.UTC(year, month - 1, day, Math.floor(minute / 60), minute % 60, 0, 0));
 }
 
 function localDateKey(value: Date | string): string {
   const date = typeof value === "string" ? new Date(value) : value;
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  // SearchIndex timestamps are normalized to Bangkok wall-clock values before
+  // indexing. UTC accessors keep that normalized date stable under any host TZ.
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }

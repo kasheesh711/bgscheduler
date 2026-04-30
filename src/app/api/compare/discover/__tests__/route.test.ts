@@ -158,8 +158,8 @@ describe("POST /api/compare/discover", () => {
       ],
       sessionBlocks: [
         {
-          startTime: new Date("2026-04-05T17:30:00.000Z"),
-          endTime: new Date("2026-04-05T18:30:00.000Z"),
+          startTime: new Date("2026-04-06T00:30:00.000Z"),
+          endTime: new Date("2026-04-06T01:30:00.000Z"),
           weekday: 1,
           startMinute: 30,
           endMinute: 90,
@@ -214,8 +214,8 @@ describe("POST /api/compare/discover", () => {
     const group = makeTutorGroup({
       leaves: [
         {
-          startTime: new Date("2026-04-06T08:15:00.000Z"),
-          endTime: new Date("2026-04-06T09:00:00.000Z"),
+          startTime: new Date("2026-04-06T15:15:00.000Z"),
+          endTime: new Date("2026-04-06T16:00:00.000Z"),
         },
       ],
     });
