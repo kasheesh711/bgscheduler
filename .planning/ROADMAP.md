@@ -25,8 +25,8 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 6: MOD-01 Reliable Modality Detection** — Upgrade resolver to `isOnlineVariant` + `sessionType` primary signals with `modalityConfidence` grading; eliminate silent `supportedModes[0]` fallback; fail-closed test matrix (completed 2026-04-21, gap closure 06-06 completed 2026-04-22 — MOD-UAT-01 fixed in code; post-deploy re-UAT pending)
 - [ ] **Phase 7: PAST-01 Past-Day Session Visibility** — Capture past sessions via orchestrator diff-hook into dedicated `past_session_blocks` table with stable canonical keys; dedicated `cacheTag('past-sessions')`; disable weekday-fallback for historical ranges; Wise historical-endpoint spike in parallel
 - [x] **Phase 8: VPOL-02 Sticky Tutor Legend** — Pure-CSS `position: sticky` legend in compare panel with documented z-index scale constant and stacking-context audit artifact; preserved across fullscreen (completed 2026-04-29)
-- [ ] **Phase 8.5: Reliability Hardening** — Atomic snapshot promotion, race-condition fixes, identity-collision detection, retry-policy correctness, leave-overlap minute-of-day fix, timezone-idiom unification, cron-secret timing-safe compare (inserted 2026-04-29 from codebase audit)
-- [ ] **Phase 8.6: Test Coverage Hardening** — Close HIGH-risk gaps: search-index unit tests, sync-orchestrator integration tests, all 7 API route handler tests, past-sessions diff-hook integration, timezone DST/UTC-boundary, auth flow, modality contradiction emission (inserted 2026-04-29 from codebase audit)
+- [x] **Phase 8.5: Reliability Hardening** — Atomic snapshot promotion, race-condition fixes, identity-collision detection, retry-policy correctness, leave-overlap minute-of-day fix, timezone-idiom unification, cron-secret timing-safe compare (completed 2026-04-30)
+- [x] **Phase 8.6: Test Coverage Hardening** — Close HIGH-risk gaps: search-index unit tests, sync-orchestrator integration tests, all 7 API route handler tests, past-sessions diff-hook integration, timezone DST/UTC-boundary, auth flow, modality contradiction emission (completed 2026-04-30)
 - [ ] **Phase 8.7: Operational Maturity** — Snapshot pruning (retention), sync failure alerts, stale-snapshot banner, threshold raise to 26h, manual sync UI, dependency cleanup, version pinning (inserted 2026-04-29 from codebase audit)
 - [ ] **Phase 9: VPOL-03 Density Overview** — Client-side density aggregation via `useMemo` over existing `CompareResponse.tutors[].sessions[]`; shape (A aggregate / B per-tutor / C heatmap) chosen via phase-local design review; `prefers-reduced-motion` + a11y text equivalents
 - [ ] **Phase 10: VPOL-01 View Transitions** — Native `document.startViewTransition()` helper in `src/lib/ui/view-transitions.ts` wired into week prev/next/today + day-tab switches with manual scroll capture/restore and `prefers-reduced-motion` CSS skip
@@ -148,14 +148,14 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   6. Auth tests cover `signIn` callback's allowlist read (`src/lib/auth.ts:18-30`) and middleware bypass paths (`src/middleware.ts:7-14`) — assert that non-admin email is rejected and that internal routes self-check
   7. Modality contradiction emission test verifies orchestrator persists `conflict_model` rows to `data_issues` table when `detectSessionModalityConflict` fires (`src/lib/sync/orchestrator.ts:356-387`); not just the in-isolation unit test
 **Plans**: 8 plans
-  - [ ] 08.6-01-PLAN.md — Test infrastructure setup: testcontainers + node-postgres + db-helper.ts + vitest.config.ts projects pattern + npm scripts
-  - [ ] 08.6-02-PLAN.md — TCOV-01: Search-index tests (buildIndex denormalization, byWeekday map, snapshot-active race fallback)
-  - [ ] 08.6-03-PLAN.md — TCOV-02: Orchestrator runFullSync integration test against real Postgres (depends on 08.6-01)
-  - [ ] 08.6-04-PLAN.md — TCOV-03: All 8 API route handler tests (compare, compare/discover, search, search/range, data-health, filters, tutors, internal/sync-wise)
-  - [ ] 08.6-05-PLAN.md — TCOV-04: Past-sessions diff-hook integration test + delete broken unit test (depends on 08.6-01)
-  - [ ] 08.6-06-PLAN.md — TCOV-05: Timezone day-boundary tests (UTC 17:00 = BKK 00:00 next day)
-  - [ ] 08.6-07-PLAN.md — TCOV-06: Auth signIn callback + middleware bypass tests (with tiny additive auth.ts refactor)
-  - [ ] 08.6-08-PLAN.md — TCOV-07: Orchestrator modality-conflict persistence test (db.insert stub, no DB)
+  - [x] 08.6-01-PLAN.md — Test infrastructure setup: testcontainers + node-postgres + db-helper.ts + vitest.config.ts projects pattern + npm scripts
+  - [x] 08.6-02-PLAN.md — TCOV-01: Search-index tests (buildIndex denormalization, byWeekday map, snapshot-active race fallback)
+  - [x] 08.6-03-PLAN.md — TCOV-02: Orchestrator runFullSync integration test against real Postgres (depends on 08.6-01)
+  - [x] 08.6-04-PLAN.md — TCOV-03: All 8 API route handler tests (compare, compare/discover, search, search/range, data-health, filters, tutors, internal/sync-wise)
+  - [x] 08.6-05-PLAN.md — TCOV-04: Past-sessions diff-hook integration test + delete broken unit test (depends on 08.6-01)
+  - [x] 08.6-06-PLAN.md — TCOV-05: Timezone day-boundary tests (UTC 17:00 = BKK 00:00 next day)
+  - [x] 08.6-07-PLAN.md — TCOV-06: Auth signIn callback + middleware bypass tests (with tiny additive auth.ts refactor)
+  - [x] 08.6-08-PLAN.md — TCOV-07: Orchestrator modality-conflict persistence test (db.insert stub, no DB)
 **UI hint**: no
 
 ### Phase 8.7: Operational Maturity
@@ -215,8 +215,8 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 6. MOD-01 Reliable Modality Detection | v1.1 | 5/6 | Gap closure | 2026-04-21 |
 | 7. PAST-01 Past-Day Session Visibility | v1.1 | 0/? | Not started | - |
 | 8. VPOL-02 Sticky Tutor Legend | v1.1 | 5/5 | Complete    | 2026-04-29 |
-| 8.5. Reliability Hardening | v1.1 | 0/8 | Planned | - |
-| 8.6. Test Coverage Hardening | v1.1 | 0/? | Not started | - |
+| 8.5. Reliability Hardening | v1.1 | 8/8 | Complete | 2026-04-30 |
+| 8.6. Test Coverage Hardening | v1.1 | 8/8 | Complete | 2026-04-30 |
 | 8.7. Operational Maturity | v1.1 | 0/? | Not started | - |
 | 9. VPOL-03 Density Overview | v1.1 | 0/? | Not started | - |
 | 10. VPOL-01 View Transitions | v1.1 | 0/? | Not started | - |
