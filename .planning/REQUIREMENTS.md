@@ -64,7 +64,7 @@ Added 2026-04-29 from codebase audit. Closes HIGH-risk gaps where silent regress
 Added 2026-04-29 from codebase audit. Operational features and dependency hygiene required to run BGScheduler reliably for 12+ months.
 
 - [ ] **OPS-01**: Sync orchestrator prunes snapshots — keeps the last 30 by `createdAt`, cascades delete across all snapshot-scoped tables; `past_session_blocks` (cross-snapshot) unaffected; pruning runs after successful promote
-- [ ] **OPS-02**: Failed sync runs trigger an alert — Slack incoming-webhook (or equivalent) on `result.success === false`; webhook URL in `.env.example` and validated in `src/lib/env.ts`
+- [ ] **OPS-02**: Failed sync runs are surfaced through in-app operational visibility only — `/data-health`, stale-snapshot banner, and manual sync feedback; external notification providers are out of scope and no notification env var is added
 - [ ] **OPS-03**: Stale-snapshot banner displays on `/search` and `/compare` (not just `/data-health`) when `staleAgeMs > 48h` — banner is dismissible per session and links to `/data-health`
 - [ ] **OPS-04**: `staleThresholdMs` raised to 26h to match daily Hobby cron cadence in `src/lib/search/engine.ts:24`, `src/app/api/compare/route.ts:85`, `src/app/api/compare/discover/route.ts:60` — comment notes 26h matches Hobby cron + 2h grace
 - [ ] **OPS-05**: Manual "Sync now" button in `/data-health` UI calls `/api/internal/sync-wise` via authenticated session (Auth.js session cookie) — alternate auth path documented; 401 fallback if session missing

@@ -27,7 +27,7 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 8: VPOL-02 Sticky Tutor Legend** — Pure-CSS `position: sticky` legend in compare panel with documented z-index scale constant and stacking-context audit artifact; preserved across fullscreen (completed 2026-04-29)
 - [x] **Phase 8.5: Reliability Hardening** — Atomic snapshot promotion, race-condition fixes, identity-collision detection, retry-policy correctness, leave-overlap minute-of-day fix, timezone-idiom unification, cron-secret timing-safe compare (completed 2026-04-30)
 - [x] **Phase 8.6: Test Coverage Hardening** — Close HIGH-risk gaps: search-index unit tests, sync-orchestrator integration tests, all 7 API route handler tests, past-sessions diff-hook integration, timezone DST/UTC-boundary, auth flow, modality contradiction emission (completed 2026-04-30)
-- [ ] **Phase 8.7: Operational Maturity** — Snapshot pruning (retention), sync failure alerts, stale-snapshot banner, threshold raise to 26h, manual sync UI, dependency cleanup, version pinning (inserted 2026-04-29 from codebase audit)
+- [ ] **Phase 8.7: Operational Maturity** — Snapshot pruning (retention), sync failure visibility, stale-snapshot banner, threshold raise to 26h, manual sync UI, dependency cleanup, version pinning (inserted 2026-04-29 from codebase audit)
 - [ ] **Phase 9: VPOL-03 Density Overview** — Client-side density aggregation via `useMemo` over existing `CompareResponse.tutors[].sessions[]`; shape (A aggregate / B per-tutor / C heatmap) chosen via phase-local design review; `prefers-reduced-motion` + a11y text equivalents
 - [ ] **Phase 10: VPOL-01 View Transitions** — Native `document.startViewTransition()` helper in `src/lib/ui/view-transitions.ts` wired into week prev/next/today + day-tab switches with manual scroll capture/restore and `prefers-reduced-motion` CSS skip
 
@@ -159,13 +159,13 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 **UI hint**: no
 
 ### Phase 8.7: Operational Maturity
-**Goal**: Add the operational features and lower-priority cleanups required to run BGScheduler reliably in production for the next 12+ months — retention, alerting, observability, and dependency hygiene
+**Goal**: Add the operational features and lower-priority cleanups required to run BGScheduler reliably in production for the next 12+ months — retention, in-app failure visibility, observability, and dependency hygiene
 **Depends on**: Phase 8.6 (ops changes ride on top of fixed + tested baseline)
 **Requirements**: OPS-01, OPS-02, OPS-03, OPS-04, OPS-05, OPS-06, OPS-07
 **Source**: `.planning/codebase/CONCERNS.md` §Missing Critical Features + §Dependencies at Risk + low-severity §Tech Debt items (2026-04-29)
 **Success Criteria** (what must be TRUE):
   1. Sync orchestrator prunes snapshots — keeps the last 30 by `createdAt`, cascades delete across all snapshot-scoped tables; `past_session_blocks` (cross-snapshot) unaffected; pruning runs after successful promote
-  2. Failed sync runs trigger an alert — Slack incoming-webhook (or equivalent) on `result.success === false`; webhook URL in `.env.example` and validated in `src/lib/env.ts`
+  2. Failed sync runs are surfaced through in-app operational visibility only — `/data-health`, stale-snapshot banner, and manual sync feedback; external notification providers are out of scope and no notification env var is added
   3. Stale-snapshot banner displays on `/search` and `/compare` (not just `/data-health`) when `staleAgeMs > 48h` — banner is dismissible per session and links to `/data-health`
   4. `staleThresholdMs` raised to 26h to match daily Hobby cron cadence in `src/lib/search/engine.ts:24`, `src/app/api/compare/route.ts:85`, `src/app/api/compare/discover/route.ts:60` — comment notes 26h matches Hobby cron + 2h grace
   5. Manual "Sync now" button in `/data-health` UI calls `/api/internal/sync-wise` via authenticated session (Auth.js session cookie) — alternate auth path documented; 401 fallback if session missing

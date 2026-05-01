@@ -236,11 +236,11 @@
 - Blocks: Long-running operation — every day adds ~131 teachers × all related rows. 1 year = ~365 snapshots × ~2-5MB = ~1-2 GB. Neon free tier is 0.5GB.
 - Approach: Add a snapshot-pruning step at end of sync: keep last N=30 snapshots, delete older. Cascade deletes all snapshot-scoped tables. `past_session_blocks` is intentionally cross-snapshot (per `src/lib/db/schema.ts:213-214`) and unaffected.
 
-**Sync run alerting / notification on failure:**
-- Problem: Cron failures land in Vercel logs. No email, Slack, or other notification.
+**Sync failure visibility:**
+- Problem: Cron failures land in Vercel logs and are visible on `/data-health`, but admins do not get a proactive in-app signal on the main scheduling surface.
 - Files: `src/app/api/internal/sync-wise/route.ts`
 - Blocks: Silent stale data — admins only notice when Compare results look wrong.
-- Approach: Add a webhook / email notification when `result.success === false`. Even a simple Slack incoming-webhook would close the gap.
+- Approach: Surface failed/stale sync state in the app itself via `/search`, `/compare`, `/data-health`, and manual sync feedback. External notification integrations are out of scope for Phase 8.7.
 
 **Tutor add/remove without full sync:**
 - Problem: Wise API changes (new tutor, removed tutor, changed availability) only propagate after the next daily sync.

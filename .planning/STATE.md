@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Data Fidelity & Depth
-status: phase_complete
-stopped_at: Phase 08.6 complete (8/8 plans, TCOV-01..07 verified PASS)
-last_updated: "2026-04-30T10:18:04.849Z"
+status: completed
+stopped_at: Phase 8.7 context gathered
+last_updated: "2026-05-01T10:35:30.737Z"
 last_activity: 2026-04-30 -- Phase 08.6 test-coverage-hardening complete; 208 unit + 8 integration tests pass
 progress:
   total_phases: 9
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-20 — milestone v1.1 Data Fidelity &
 Milestone: v1.1 Data Fidelity & Depth
 Phase: 08.6 (test-coverage-hardening) — COMPLETE (8/8 plans, TCOV-01..07 verified PASS)
 Plan: 8 of 8 complete
-Next: `/gsd-discuss-phase 8.7` — Operational Maturity (snapshot pruning, alerting, stale-snapshot banner, manual sync UI, dependency hygiene)
+Next: `/gsd-discuss-phase 8.7` — Operational Maturity (snapshot pruning, sync failure visibility, stale-snapshot banner, manual sync UI, dependency hygiene)
 Status: Phase 08.6 complete; ready to discuss Phase 08.7
 Last activity: 2026-04-30 -- Phase 08.6 test-coverage-hardening complete; 208 unit + 8 integration tests pass
 
@@ -69,7 +69,7 @@ Progress: [██████░░░░] 6/9 phases (67%)
 | 8 | VPOL-02 Sticky Tutor Legend | STICKY-01..04 (4) | Unlocks VPOL-03 layout; must precede VPOL-01 |
 | 8.5 | Reliability Hardening | REL-01..08 (8) | Backend reliability fixes (atomic promotion, race conditions, retry policy, timezone idiom) — runs after Phase 8 completes; must precede Phase 9 |
 | 8.6 | Test Coverage Hardening | TCOV-01..07 (7) | Locks in Phase 8.5 fixes; closes HIGH-risk gaps for sync/index/API routes |
-| 8.7 | Operational Maturity | OPS-01..07 (7) | Snapshot pruning, alerting, ops UI, dependency hygiene; rides on top of fixed + tested baseline |
+| 8.7 | Operational Maturity | OPS-01..07 (7) | Snapshot pruning, sync failure visibility, ops UI, dependency hygiene; rides on top of fixed + tested baseline |
 | 9 | VPOL-03 Density Overview | DENS-01..04 (4) | Blocked on Phase 5 POLISH-01..05 a11y baseline + Phase 8.7 cleared; shape decision deferred to phase planning |
 | 10 | VPOL-01 View Transitions | TRANS-01..05 (5) | LAST — animates frozen baseline; highest cross-browser risk |
 
@@ -134,9 +134,9 @@ None blocking roadmap execution.
 
 ## Session Continuity
 
-Last session: 2026-04-30T01:30:00.000+07:00
-Stopped at: Phase 08.5 complete — 8/8 plans merged; verifier+code-review subagents quota-limited (verification done inline)
-Resume file: `.planning/phases/08.6-test-coverage-hardening/08.6-VERIFICATION.md`
-Resume: run `/gsd-discuss-phase 8.7` to begin Operational Maturity, or `/gsd-secure-phase 8.6` to add the optional security audit artifact before advancing.
+Last session: 2026-05-01T10:35:30.730Z
+Stopped at: Phase 8.7 context gathered
+Resume file: .planning/phases/08.7-operational-maturity/08.7-CONTEXT.md
+Resume: run `/gsd-plan-phase 8.7` to plan Operational Maturity, or review `.planning/phases/08.7-operational-maturity/08.7-CONTEXT.md` first.
 
 **Completed Phase:** 08.6 (Test Coverage Hardening) — 8 plans — 2026-04-30T10:16:04Z

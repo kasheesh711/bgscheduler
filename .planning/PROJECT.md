@@ -111,7 +111,7 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 
 v1.1 scope remaining after Phase 8.6 Test Coverage Hardening:
 
-- **OPS-01..07** Operational maturity — snapshot pruning, sync alerts, stale-snapshot banner, threshold raise, manual sync UI, dependency cleanup, version pinning — **Phase 8.7**
+- **OPS-01..07** Operational maturity — snapshot pruning, sync failure visibility, stale-snapshot banner, threshold raise, manual sync UI, dependency cleanup, version pinning — **Phase 8.7**
 - **DENS-01..04** Density overview (VPOL-03) — client-side `useMemo` aggregation, shape A/B/C chosen via design review, `prefers-reduced-motion` + a11y text equivalents — **Phase 9**
 - **TRANS-01..05** View transitions (VPOL-01) — native `document.startViewTransition()` on week prev/next/today + day-tab switches; scroll capture/restore; reduced-motion CSS skip — **Phase 10**
 
