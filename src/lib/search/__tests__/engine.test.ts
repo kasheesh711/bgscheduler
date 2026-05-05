@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { executeSearch } from "../engine";
 import type { SearchIndex, IndexedTutorGroup } from "../index";
 import type { SearchRequest } from "../types";
@@ -42,6 +42,10 @@ function makeIndex(tutors: IndexedTutorGroup[]): SearchIndex {
 }
 
 describe("executeSearch", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns available tutor for matching recurring slot", () => {
     const index = makeIndex([makeTutor()]);
     const req: SearchRequest = {
@@ -247,6 +251,32 @@ describe("executeSearch", () => {
       ],
     };
     expect(executeSearch(index, freeReq).perSlotResults[0].available).toHaveLength(1);
+  });
+
+  it("marks default search metadata stale only after the 26-hour API threshold", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-07T02:00:00.000Z"));
+
+    const req: SearchRequest = {
+      searchMode: "recurring",
+      slots: [
+        { id: "s1", dayOfWeek: 1, start: "09:00", end: "10:00", mode: "either" },
+      ],
+    };
+    const freshIndex = makeIndex([makeTutor()]);
+    freshIndex.builtAt = new Date(Date.now() - (25 * 60 * 60 * 1000 + 59 * 60 * 1000));
+    const staleIndex = makeIndex([makeTutor()]);
+    staleIndex.builtAt = new Date(Date.now() - (26 * 60 * 60 * 1000 + 1));
+
+    const freshResult = executeSearch(freshIndex, req);
+    const staleResult = executeSearch(staleIndex, req);
+
+    expect(freshResult.snapshotMeta.stale).toBe(false);
+    expect(freshResult.warnings).toEqual([]);
+    expect(staleResult.snapshotMeta.stale).toBe(true);
+    expect(staleResult.warnings).toContain(
+      "Search data may be stale — last sync was more than 26 hours ago",
+    );
   });
 });
 

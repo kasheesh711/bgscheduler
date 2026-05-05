@@ -53,6 +53,10 @@ describe("POST /api/compare", () => {
     vi.mocked(ensureIndex).mockResolvedValue(makeIndex() as never);
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   function makeRequest(body: unknown): NextRequest {
     return new NextRequest("http://localhost/api/compare", {
       method: "POST",
@@ -102,6 +106,35 @@ describe("POST /api/compare", () => {
       latencyMs: expect.any(Number),
       warnings: expect.any(Array),
     });
+  });
+
+  it("marks snapshot metadata stale only after the 26-hour API threshold", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-07T02:00:00.000Z"));
+    const freshIndex = makeIndex();
+    freshIndex.builtAt = new Date(Date.now() - (25 * 60 * 60 * 1000 + 59 * 60 * 1000));
+    vi.mocked(ensureIndex).mockResolvedValueOnce(freshIndex as never);
+
+    const freshRes = await POST(
+      makeRequest({ tutorGroupIds: ["g1"], mode: "recurring", weekStart: "2026-04-06" }),
+    );
+    const freshBody = await freshRes.json();
+
+    const staleIndex = makeIndex();
+    staleIndex.builtAt = new Date(Date.now() - (26 * 60 * 60 * 1000 + 1));
+    vi.mocked(ensureIndex).mockResolvedValueOnce(staleIndex as never);
+
+    const staleRes = await POST(
+      makeRequest({ tutorGroupIds: ["g1"], mode: "recurring", weekStart: "2026-04-06" }),
+    );
+    const staleBody = await staleRes.json();
+
+    expect(freshBody.snapshotMeta.stale).toBe(false);
+    expect(freshBody.warnings).toEqual([]);
+    expect(staleBody.snapshotMeta.stale).toBe(true);
+    expect(staleBody.warnings).toContain(
+      "Search data may be stale — last sync was more than 26 hours ago",
+    );
   });
 
   it("returns 500 when ensureIndex throws", async () => {

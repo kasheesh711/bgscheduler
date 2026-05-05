@@ -48,6 +48,10 @@ describe("POST /api/compare/discover", () => {
     vi.mocked(ensureIndex).mockResolvedValue(makeIndex() as never);
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   function makeRequest(body: unknown): NextRequest {
     return new NextRequest("http://localhost/api/compare/discover", {
       method: "POST",
@@ -104,6 +108,43 @@ describe("POST /api/compare/discover", () => {
       ],
       latencyMs: expect.any(Number),
     });
+  });
+
+  it("marks snapshot metadata stale only after the 26-hour API threshold", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-07T02:00:00.000Z"));
+    const freshIndex = makeIndex();
+    freshIndex.builtAt = new Date(Date.now() - (25 * 60 * 60 * 1000 + 59 * 60 * 1000));
+    vi.mocked(ensureIndex).mockResolvedValueOnce(freshIndex as never);
+
+    const freshRes = await POST(
+      makeRequest({
+        existingTutorGroupIds: [],
+        mode: "recurring",
+        dayOfWeek: 1,
+        startTime: "15:00",
+        endTime: "16:30",
+      }),
+    );
+    const freshBody = await freshRes.json();
+
+    const staleIndex = makeIndex();
+    staleIndex.builtAt = new Date(Date.now() - (26 * 60 * 60 * 1000 + 1));
+    vi.mocked(ensureIndex).mockResolvedValueOnce(staleIndex as never);
+
+    const staleRes = await POST(
+      makeRequest({
+        existingTutorGroupIds: [],
+        mode: "recurring",
+        dayOfWeek: 1,
+        startTime: "15:00",
+        endTime: "16:30",
+      }),
+    );
+    const staleBody = await staleRes.json();
+
+    expect(freshBody.snapshotMeta.stale).toBe(false);
+    expect(staleBody.snapshotMeta.stale).toBe(true);
   });
 
   it("does not block one-time discovery for same-weekday sessions on different dates", async () => {
