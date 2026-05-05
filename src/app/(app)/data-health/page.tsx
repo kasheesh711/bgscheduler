@@ -11,11 +11,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { isApiSnapshotStale } from "@/lib/ops/stale";
 
 interface HealthData {
   lastSuccessfulSync: string | null;
   lastFailedSync: string | null;
   lastFailureError: string | null;
+  staleAgeMs: number | null;
   staleMinutes: number | null;
   activeSnapshotId: string | null;
   stats: {
@@ -104,6 +106,10 @@ export default function DataHealthPage() {
     </div>
   );
 
+  const isSnapshotStale = data.staleAgeMs !== null && isApiSnapshotStale(data.staleAgeMs);
+  const staleMinutes =
+    data.staleMinutes ?? (data.staleAgeMs === null ? null : Math.round(data.staleAgeMs / 60000));
+
   return (
     <div className="space-y-6">
       {/* Sync status */}
@@ -120,9 +126,9 @@ export default function DataHealthPage() {
                 ? new Date(data.lastSuccessfulSync).toLocaleString()
                 : "Never"}
             </p>
-            {data.staleMinutes !== null && data.staleMinutes > 35 && (
+            {isSnapshotStale && staleMinutes !== null && (
               <Badge variant="destructive" className="mt-1">
-                Stale ({data.staleMinutes}m ago)
+                Stale ({staleMinutes}m ago)
               </Badge>
             )}
           </CardContent>
