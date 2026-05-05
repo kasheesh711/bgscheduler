@@ -178,6 +178,21 @@ function unresolvedIdentityClient(): FakeWiseClient {
   });
 }
 
+async function seedExistingSnapshots(count: number) {
+  const snapshots: { id: string; createdAt: Date }[] = [];
+
+  for (let i = 0; i < count; i += 1) {
+    const createdAt = new Date(Date.UTC(2026, 0, i + 1, 0, 0, 0));
+    const [snapshot] = await handle.db
+      .insert(schema.snapshots)
+      .values({ active: i === 0, createdAt })
+      .returning({ id: schema.snapshots.id });
+    snapshots.push({ id: snapshot.id, createdAt });
+  }
+
+  return snapshots;
+}
+
 describe("runFullSync — TCOV-02 integration (real Postgres)", () => {
   it("persists a happy-path sync and promotes exactly one active snapshot", async () => {
     const result = await runFullSync(
@@ -219,6 +234,38 @@ describe("runFullSync — TCOV-02 integration (real Postgres)", () => {
     expect(syncRun.promotedSnapshotId).toBe(result.promotedSnapshotId);
   });
 
+  it("prunes older inactive snapshots after a successful promoted sync", async () => {
+    const existingSnapshots = await seedExistingSnapshots(33);
+
+    const result = await runFullSync(
+      handle.db as unknown as Database,
+      happyPathClient() as never,
+      instituteId,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.promotedSnapshotId).toBe(result.snapshotId);
+
+    const activeSnapshots = await handle.db
+      .select()
+      .from(schema.snapshots)
+      .where(eq(schema.snapshots.active, true));
+    expect(activeSnapshots).toHaveLength(1);
+    expect(activeSnapshots[0].id).toBe(result.promotedSnapshotId);
+
+    const remainingSnapshots = await handle.db.select().from(schema.snapshots);
+    expect(remainingSnapshots).toHaveLength(30);
+    expect(remainingSnapshots.some((snapshot) => snapshot.id === existingSnapshots[0].id)).toBe(false);
+    expect(remainingSnapshots.some((snapshot) => snapshot.id === result.promotedSnapshotId)).toBe(true);
+
+    const [syncRun] = await handle.db
+      .select()
+      .from(schema.syncRuns)
+      .where(eq(schema.syncRuns.id, result.syncRunId));
+    const metadata = syncRun.metadata as { pruning?: { deletedSnapshots?: number } } | null;
+    expect(metadata?.pruning?.deletedSnapshots).toBeGreaterThan(0);
+  });
+
   it("does not promote when unresolved identity ratio is at least 50 percent", async () => {
     const [prior] = await handle.db
       .insert(schema.snapshots)
@@ -254,5 +301,12 @@ describe("runFullSync — TCOV-02 integration (real Postgres)", () => {
       .from(schema.dataIssues)
       .where(eq(schema.dataIssues.snapshotId, result.snapshotId!));
     expect(issues.some((issue) => issue.type === "alias")).toBe(true);
+
+    const [syncRun] = await handle.db
+      .select()
+      .from(schema.syncRuns)
+      .where(eq(schema.syncRuns.id, result.syncRunId));
+    const metadata = syncRun.metadata as { pruning?: unknown } | null;
+    expect(metadata?.pruning).toBeUndefined();
   });
 });
