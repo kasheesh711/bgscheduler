@@ -5,11 +5,13 @@ vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 vi.mock("@/lib/wise/client", () => ({ createWiseClient: vi.fn() }));
 vi.mock("@/lib/sync/orchestrator", () => ({ runFullSync: vi.fn() }));
+vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 
 import { revalidateTag } from "next/cache";
 import { getDb } from "@/lib/db";
 import { createWiseClient } from "@/lib/wise/client";
 import { runFullSync } from "@/lib/sync/orchestrator";
+import { auth } from "@/lib/auth";
 import { GET, POST } from "@/app/api/internal/sync-wise/route";
 
 const successResult = {
@@ -42,6 +44,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
     vi.mocked(getDb).mockReturnValue({ db: true } as never);
     vi.mocked(createWiseClient).mockReturnValue({ client: true } as never);
     vi.mocked(runFullSync).mockResolvedValue(successResult as never);
+    vi.mocked(auth).mockResolvedValue(null as never);
   });
 
   afterEach(() => {
@@ -63,7 +66,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
     return new NextRequest("http://localhost/api/internal/sync-wise", { method, headers });
   }
 
-  it("returns 401 when Authorization is missing", async () => {
+  it("returns 401 when POST Authorization is missing and no session exists", async () => {
     const res = await POST(makeRequest(undefined));
 
     expect(res.status).toBe(401);
@@ -71,7 +74,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
     expect(runFullSync).not.toHaveBeenCalled();
   });
 
-  it("returns 401 when CRON_SECRET does not match", async () => {
+  it("returns 401 when POST CRON_SECRET does not match and no session exists", async () => {
     const res = await POST(makeRequest("wrong-secret"));
 
     expect(res.status).toBe(401);
@@ -102,6 +105,39 @@ describe("GET/POST /api/internal/sync-wise", () => {
     expect(revalidateTag).toHaveBeenCalledWith("snapshot", { expire: 0 });
   });
 
+  it("returns 200 when POST has no Authorization header but has a valid session", async () => {
+    vi.mocked(auth).mockResolvedValue({
+      user: { email: "kevinhsieh711@gmail.com" },
+      expires: "2026-05-06T00:00:00.000Z",
+    } as never);
+
+    const res = await POST(makeRequest(undefined));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      success: true,
+      syncRunId: "run-1",
+    });
+    expect(runFullSync).toHaveBeenCalledWith({ db: true }, { client: true }, "institute-1");
+    expect(revalidateTag).toHaveBeenCalledWith("snapshot", { expire: 0 });
+  });
+
+  it("returns 200 when POST has an invalid cron secret but has a valid session", async () => {
+    vi.mocked(auth).mockResolvedValue({
+      user: { email: "kevinhsieh711@gmail.com" },
+      expires: "2026-05-06T00:00:00.000Z",
+    } as never);
+
+    const res = await POST(makeRequest("wrong-secret"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      success: true,
+      syncRunId: "run-1",
+    });
+    expect(runFullSync).toHaveBeenCalledWith({ db: true }, { client: true }, "institute-1");
+  });
+
   it("returns 500 and skips revalidation when runFullSync reports failure", async () => {
     vi.mocked(runFullSync).mockResolvedValue(failedResult as never);
 
@@ -121,5 +157,18 @@ describe("GET/POST /api/internal/sync-wise", () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({ success: true, syncRunId: "run-1" });
     expect(runFullSync).toHaveBeenCalledWith({ db: true }, { client: true }, "institute-1");
+  });
+
+  it("returns 401 when GET has no Authorization header even with a valid session", async () => {
+    vi.mocked(auth).mockResolvedValue({
+      user: { email: "kevinhsieh711@gmail.com" },
+      expires: "2026-05-06T00:00:00.000Z",
+    } as never);
+
+    const res = await GET(makeRequest(undefined, "GET"));
+
+    expect(res.status).toBe(401);
+    await expect(res.json()).resolves.toEqual({ error: "Unauthorized" });
+    expect(runFullSync).not.toHaveBeenCalled();
   });
 });
