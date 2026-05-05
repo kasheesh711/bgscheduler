@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
@@ -86,17 +87,63 @@ function DataHealthSkeleton() {
 export default function DataHealthPage() {
   const [data, setData] = useState<HealthData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
+  const loadHealthData = useCallback(async ({ showLoading = false } = {}) => {
+    if (showLoading) setLoading(true);
+
+    try {
+      const response = await fetch("/api/data-health");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const healthData = (await response.json()) as HealthData;
+      setData(healthData);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      if (showLoading) setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    fetch("/api/data-health")
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(setData)
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, []);
+    void loadHealthData({ showLoading: true });
+  }, [loadHealthData]);
+
+  async function handleSyncNow() {
+    if (syncing) return;
+
+    const confirmed = window.confirm(
+      "Sync can take several minutes and will contact Wise heavily. Start sync now?",
+    );
+
+    if (!confirmed) return;
+
+    setSyncing(true);
+    setSyncMessage(null);
+
+    try {
+      const response = await fetch("/api/internal/sync-wise", { method: "POST" });
+      let body: { error?: string; errorSummary?: string | null } = {};
+
+      try {
+        body = (await response.json()) as { error?: string; errorSummary?: string | null };
+      } catch {
+        body = {};
+      }
+
+      if (response.ok) {
+        setSyncMessage("Sync completed successfully.");
+      } else {
+        setSyncMessage(`Sync failed: ${body.errorSummary || body.error || "Unknown error"}`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setSyncMessage(`Sync failed: ${message}`);
+    } finally {
+      await loadHealthData();
+      setSyncing(false);
+    }
+  }
 
   if (loading) return <DataHealthSkeleton />;
   if (!data) return (
@@ -130,6 +177,22 @@ export default function DataHealthPage() {
               <Badge variant="destructive" className="mt-1">
                 Stale ({staleMinutes}m ago)
               </Badge>
+            )}
+            <div className="mt-3 flex items-center gap-3">
+              <Button size="sm" onClick={handleSyncNow} disabled={syncing}>
+                {syncing ? "Syncing..." : "Sync now"}
+              </Button>
+            </div>
+            {syncMessage && (
+              <p
+                className={`mt-2 text-sm ${
+                  syncMessage.startsWith("Sync failed:")
+                    ? "text-destructive"
+                    : "text-available"
+                }`}
+              >
+                {syncMessage}
+              </p>
             )}
           </CardContent>
         </Card>
