@@ -5,9 +5,8 @@ import { Video, MapPin, HelpCircle } from "lucide-react";
  * Icon choice: high+online → Video; high+onsite → MapPin; low OR unknown → HelpCircle.
  * Popover label follows D-15 exactly; no corroboration-suffix on high per D-16.
  * Low-confidence renders identical to unknown per D-14 (Pitfall 3 hard rule).
- *
- * TODO(future phase): when `medium` tier is first emitted (per 06-CONTEXT.md D-03),
- * extend this helper to branch on `confidence === "medium"` with corroborated-signal phrasing.
+ * Medium confidence is type-reserved by Phase 6 but no resolver emits it today; until a producer exists,
+ * medium intentionally follows the high-confidence display branch.
  */
 export function modalityDisplay(
   modality: "online" | "onsite" | "unknown",
