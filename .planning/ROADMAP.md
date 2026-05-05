@@ -171,7 +171,12 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   5. Manual "Sync now" button in `/data-health` UI calls `/api/internal/sync-wise` via authenticated session (Auth.js session cookie) — alternate auth path documented; 401 fallback if session missing
   6. `@auth/drizzle-adapter` removed from `package.json` (unused — auth uses custom callback against `admin_users`); `shadcn` moved to `devDependencies` (CLI-only, not shipped at runtime); bundle size delta documented in PR
   7. `next-auth`, `@base-ui/react`, and `drizzle-orm` are pinned to exact versions (no caret) until each library reaches stable v1.x or v5 GA; `detectConflicts` unused `indexedGroups` parameter removed (`src/lib/search/compare.ts:321`); modality medium-tier TODO at `src/components/compare/modality-display.ts:9-11` is either implemented or documented as intentionally unimplemented
-**Plans**: TBD
+**Plans**:
+  - [ ] 08.7-01-PLAN.md — OPS-01: Snapshot pruning helper + orchestrator integration
+  - [ ] 08.7-02-PLAN.md — OPS-02/03/04: In-app sync visibility, 26h stale threshold, app-level stale banner
+  - [ ] 08.7-03-PLAN.md — OPS-05: Manual Sync now via authenticated admin-session POST
+  - [ ] 08.7-04-PLAN.md — OPS-06/07: Dependency cleanup, exact version pinning, package and bundle impact note
+  - [ ] 08.7-05-PLAN.md — OPS-07: `detectConflicts` and modality medium-tier TODO hygiene
 **UI hint**: yes
 
 ### Phase 9: VPOL-03 Density Overview
