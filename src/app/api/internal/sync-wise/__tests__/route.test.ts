@@ -92,6 +92,37 @@ describe("GET/POST /api/internal/sync-wise", () => {
     expect(runFullSync).not.toHaveBeenCalled();
   });
 
+  it("returns 200 when POST has a valid session and CRON_SECRET is missing", async () => {
+    delete process.env.CRON_SECRET;
+    vi.mocked(auth).mockResolvedValue({
+      user: { email: "kevinhsieh711@gmail.com" },
+      expires: "2026-05-06T00:00:00.000Z",
+    } as never);
+
+    const res = await POST(makeRequest(undefined));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      success: true,
+      syncRunId: "run-1",
+    });
+    expect(runFullSync).toHaveBeenCalledWith({ db: true }, { client: true }, "institute-1");
+  });
+
+  it("keeps GET blocked when CRON_SECRET is missing even with a valid session", async () => {
+    delete process.env.CRON_SECRET;
+    vi.mocked(auth).mockResolvedValue({
+      user: { email: "kevinhsieh711@gmail.com" },
+      expires: "2026-05-06T00:00:00.000Z",
+    } as never);
+
+    const res = await GET(makeRequest(undefined, "GET"));
+
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toEqual({ error: "Server misconfigured" });
+    expect(runFullSync).not.toHaveBeenCalled();
+  });
+
   it("returns 200 and revalidates snapshot data when POST sync succeeds", async () => {
     const res = await POST(makeRequest("test-secret"));
 

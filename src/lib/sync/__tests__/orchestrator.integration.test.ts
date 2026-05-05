@@ -29,7 +29,7 @@
 // === End discovery ===
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
 import { runFullSync } from "@/lib/sync/orchestrator";
 import type { Database } from "@/lib/db";
@@ -264,6 +264,51 @@ describe("runFullSync — TCOV-02 integration (real Postgres)", () => {
       .where(eq(schema.syncRuns.id, result.syncRunId));
     const metadata = syncRun.metadata as { pruning?: { deletedSnapshots?: number } } | null;
     expect(metadata?.pruning?.deletedSnapshots).toBeGreaterThan(0);
+  });
+
+  it("keeps a promoted sync successful when pruning metadata update fails", async () => {
+    await seedExistingSnapshots(33);
+    await handle.db.execute(sql`
+      CREATE OR REPLACE FUNCTION fail_pruning_metadata_update()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'metadata write failed';
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
+    await handle.db.execute(sql`
+      CREATE TRIGGER fail_pruning_metadata_update_trigger
+      BEFORE UPDATE ON sync_runs
+      FOR EACH ROW
+      WHEN (NEW.metadata ? 'pruning')
+      EXECUTE FUNCTION fail_pruning_metadata_update();
+    `);
+
+    try {
+      const result = await runFullSync(
+        handle.db as unknown as Database,
+        happyPathClient() as never,
+        instituteId,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.promotedSnapshotId).toBe(result.snapshotId);
+
+      const [syncRun] = await handle.db
+        .select()
+        .from(schema.syncRuns)
+        .where(eq(schema.syncRuns.id, result.syncRunId));
+      expect(syncRun.status).toBe("success");
+      expect(syncRun.errorSummary).toBeNull();
+      expect(syncRun.promotedSnapshotId).toBe(result.promotedSnapshotId);
+    } finally {
+      await handle.db.execute(sql`
+        DROP TRIGGER IF EXISTS fail_pruning_metadata_update_trigger ON sync_runs;
+      `);
+      await handle.db.execute(sql`
+        DROP FUNCTION IF EXISTS fail_pruning_metadata_update();
+      `);
+    }
   });
 
   it("does not promote when unresolved identity ratio is at least 50 percent", async () => {

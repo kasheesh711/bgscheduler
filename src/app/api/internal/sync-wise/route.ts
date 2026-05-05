@@ -57,16 +57,16 @@ async function handleSync(
     return runSync();
   }
 
-  if (cronSecretStatus === "missing-secret") {
-    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
-  }
-
   if (options.allowSessionAuth) {
     const session = await auth();
 
     if (session) {
       return runSync();
     }
+  }
+
+  if (cronSecretStatus === "missing-secret") {
+    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
   }
 
   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

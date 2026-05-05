@@ -508,22 +508,32 @@ export async function runFullSync(
       .where(eq(schema.syncRuns.id, syncRunId));
 
     if (promotedSnapshotId) {
+      let pruning:
+        | Awaited<ReturnType<typeof pruneOldSnapshots>>
+        | { attempted: true; failed: true; error: string };
+
       try {
-        const pruningResult = await pruneOldSnapshots(db);
-        await db
-          .update(schema.syncRuns)
-          .set({ metadata: { ...successMetadata, pruning: pruningResult } })
-          .where(eq(schema.syncRuns.id, syncRunId));
+        pruning = await pruneOldSnapshots(db);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(
           `[sync-orchestrator] snapshot pruning failed for syncRunId=${syncRunId}:`,
           message,
         );
+        pruning = { attempted: true, failed: true, error: message };
+      }
+
+      try {
         await db
           .update(schema.syncRuns)
-          .set({ metadata: { ...successMetadata, pruning: { attempted: true, failed: true, error: message } } })
+          .set({ metadata: { ...successMetadata, pruning } })
           .where(eq(schema.syncRuns.id, syncRunId));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(
+          `[sync-orchestrator] pruning metadata update failed for syncRunId=${syncRunId}:`,
+          message,
+        );
       }
     }
 
