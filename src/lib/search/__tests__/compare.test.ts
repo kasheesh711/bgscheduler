@@ -415,6 +415,10 @@ describe("resolveSessionModality matrix (MOD-05 / D-21)", () => {
 });
 
 describe("detectConflicts", () => {
+  it("exposes a one-argument public API", () => {
+    expect(detectConflicts.length).toBe(1);
+  });
+
   it("detects conflict when same student appears in overlapping slots across tutors", () => {
     const tutorA = makeTutor({
       id: "g1", displayName: "Kevin H.",
