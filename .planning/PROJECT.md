@@ -10,9 +10,9 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 
 ## Current State
 
-**Shipped version:** v1.0 (2026-04-17) + v1.0.1 hotfeature (2026-04-20, commit `9e3e4ad`) + v1.1 Phase 5 POLISH Drain (2026-04-21, commit `303dcf6`) + v1.1 Phase 7 PAST-01 code-complete (2026-04-22, commit `bcc2268`, pending operator migration to Neon) + v1.1 Phase 8.6 Test Coverage Hardening (2026-04-30, verified PASS)
+**Shipped version:** v1.0 (2026-04-17) + v1.0.1 hotfeature (2026-04-20, commit `9e3e4ad`) + v1.1 Phase 5 POLISH Drain (2026-04-21, commit `303dcf6`) + v1.1 Phase 7 PAST-01 code-complete (2026-04-22, commit `bcc2268`, pending operator migration to Neon) + v1.1 Phase 8.7 Operational Maturity (2026-05-05, verified PASS)
 **Production URL:** https://bgscheduler.vercel.app
-**Status:** Live, daily Wise sync active, 208 unit tests + 8 integration tests passing
+**Status:** Live, daily Wise sync active, 225 unit tests + 11 integration tests passing
 
 ### What's live after v1.0.1 (2026-04-20)
 - **Recommended slots hero** — top of search results shows up to 3 auto-ranked time slots (sub-slot with most qualified tutors free), each with avatar stack, checkmark reasons, "Copy for parent" action, and a "Show in calendar" quick-add; select multiple slots to bundle into one message
@@ -107,11 +107,13 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 **v1.1 Phase 8.6 Test Coverage Hardening (verified 2026-04-30):**
 - ✓ TCOV-01..07 — Search-index construction/cache tests, real-Postgres sync orchestrator integration tests, route-handler tests for 8 API routes, real-Postgres past-session diff-hook tests, Bangkok day-boundary timezone tests, auth/middleware tests, and orchestrator modality-conflict persistence coverage. Verification passed 7/7 must-haves, code review clean, 208 unit tests + 8 integration tests + coverage + TypeScript passing.
 
+**v1.1 Phase 8.7 Operational Maturity (verified 2026-05-05):**
+- ✓ OPS-01..07 — Snapshot pruning keeps latest 30 snapshots plus active snapshot and leaves `past_session_blocks` untouched; sync failures surface in-app only through `/data-health`, stale banner, and manual sync feedback; stale API threshold is 26h while app banner triggers only after 48h and is session-dismissible; `/data-health` has authenticated manual Sync now POST; unused/runtime-risky dependency declarations were cleaned and exact-pinned; `detectConflicts` and modality medium-tier TODO hygiene complete. Verification passed 7/7 must-haves, code review clean, 225 unit tests + 11 integration tests + TypeScript + build passing.
+
 ### Active
 
-v1.1 scope remaining after Phase 8.6 Test Coverage Hardening:
+v1.1 scope remaining after Phase 8.7 Operational Maturity:
 
-- **OPS-01..07** Operational maturity — snapshot pruning, sync failure visibility, stale-snapshot banner, threshold raise, manual sync UI, dependency cleanup, version pinning — **Phase 8.7**
 - **DENS-01..04** Density overview (VPOL-03) — client-side `useMemo` aggregation, shape A/B/C chosen via design review, `prefers-reduced-motion` + a11y text equivalents — **Phase 9**
 - **TRANS-01..05** View transitions (VPOL-01) — native `document.startViewTransition()` on week prev/next/today + day-tab switches; scroll capture/restore; reduced-motion CSS skip — **Phase 10**
 
@@ -196,4 +198,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Context update
 
 ---
-*Last updated: 2026-04-30 — Phase 8.6 Test Coverage Hardening complete (8/8 plans, TCOV-01..07 verified PASS, clean code review, 208 unit tests + 8 integration tests passing); ready for Phase 8.7 Operational Maturity.*
+*Last updated: 2026-05-05 — Phase 8.7 Operational Maturity complete (5/5 plans, OPS-01..07 verified PASS, clean code review, 225 unit tests + 11 integration tests passing); ready for Phase 9 Density Overview.*

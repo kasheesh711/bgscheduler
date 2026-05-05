@@ -63,13 +63,13 @@ Added 2026-04-29 from codebase audit. Closes HIGH-risk gaps where silent regress
 
 Added 2026-04-29 from codebase audit. Operational features and dependency hygiene required to run BGScheduler reliably for 12+ months.
 
-- [ ] **OPS-01**: Sync orchestrator prunes snapshots — keeps the last 30 by `createdAt`, cascades delete across all snapshot-scoped tables; `past_session_blocks` (cross-snapshot) unaffected; pruning runs after successful promote
-- [ ] **OPS-02**: Failed sync runs are surfaced through in-app operational visibility only — `/data-health`, stale-snapshot banner, and manual sync feedback; external notification providers are out of scope and no notification env var is added
-- [ ] **OPS-03**: Stale-snapshot banner displays on `/search` and `/compare` (not just `/data-health`) when `staleAgeMs > 48h` — banner is dismissible per session and links to `/data-health`
-- [ ] **OPS-04**: `staleThresholdMs` raised to 26h to match daily Hobby cron cadence in `src/lib/search/engine.ts:24`, `src/app/api/compare/route.ts:85`, `src/app/api/compare/discover/route.ts:60` — comment notes 26h matches Hobby cron + 2h grace
-- [ ] **OPS-05**: Manual "Sync now" button in `/data-health` UI calls `/api/internal/sync-wise` via authenticated session (Auth.js session cookie) — alternate auth path documented; 401 fallback if session missing
-- [ ] **OPS-06**: `@auth/drizzle-adapter` removed from `package.json` (unused — auth uses custom callback against `admin_users`); `shadcn` moved to `devDependencies` (CLI-only, not shipped at runtime); bundle size delta documented in PR
-- [ ] **OPS-07**: `next-auth`, `@base-ui/react`, and `drizzle-orm` are pinned to exact versions (no caret) until each library reaches stable v1.x or v5 GA; `detectConflicts` unused `indexedGroups` parameter removed (`src/lib/search/compare.ts:321`); modality medium-tier TODO at `src/components/compare/modality-display.ts:9-11` is either implemented or documented as intentionally unimplemented
+- [x] **OPS-01**: Sync orchestrator prunes snapshots — keeps the last 30 by `createdAt`, cascades delete across all snapshot-scoped tables; `past_session_blocks` (cross-snapshot) unaffected; pruning runs after successful promote
+- [x] **OPS-02**: Failed sync runs are surfaced through in-app operational visibility only — `/data-health`, stale-snapshot banner, and manual sync feedback; external notification providers are out of scope and no notification env var is added
+- [x] **OPS-03**: Stale-snapshot banner displays on `/search` and `/compare` (not just `/data-health`) when `staleAgeMs > 48h` — banner is dismissible per session and links to `/data-health`
+- [x] **OPS-04**: `staleThresholdMs` raised to 26h to match daily Hobby cron cadence in `src/lib/search/engine.ts:24`, `src/app/api/compare/route.ts:85`, `src/app/api/compare/discover/route.ts:60` — comment notes 26h matches Hobby cron + 2h grace
+- [x] **OPS-05**: Manual "Sync now" button in `/data-health` UI calls `/api/internal/sync-wise` via authenticated session (Auth.js session cookie) — alternate auth path documented; 401 fallback if session missing
+- [x] **OPS-06**: `@auth/drizzle-adapter` removed from `package.json` (unused — auth uses custom callback against `admin_users`); `shadcn` moved to `devDependencies` (CLI-only, not shipped at runtime); bundle size delta documented in PR
+- [x] **OPS-07**: `next-auth`, `@base-ui/react`, and `drizzle-orm` are pinned to exact versions (no caret) until each library reaches stable v1.x or v5 GA; `detectConflicts` unused `indexedGroups` parameter removed (`src/lib/search/compare.ts:321`); modality medium-tier TODO at `src/components/compare/modality-display.ts:9-11` is either implemented or documented as intentionally unimplemented
 
 ### Visual Polish — Density Overview (VPOL-03)
 
@@ -209,13 +209,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TCOV-05 | Phase 8.6 | Pending |
 | TCOV-06 | Phase 8.6 | Pending |
 | TCOV-07 | Phase 8.6 | Pending |
-| OPS-01 | Phase 8.7 | Pending |
-| OPS-02 | Phase 8.7 | Pending |
-| OPS-03 | Phase 8.7 | Pending |
-| OPS-04 | Phase 8.7 | Pending |
-| OPS-05 | Phase 8.7 | Pending |
-| OPS-06 | Phase 8.7 | Pending |
-| OPS-07 | Phase 8.7 | Pending |
+| OPS-01 | Phase 8.7 | Complete |
+| OPS-02 | Phase 8.7 | Complete |
+| OPS-03 | Phase 8.7 | Complete |
+| OPS-04 | Phase 8.7 | Complete |
+| OPS-05 | Phase 8.7 | Complete |
+| OPS-06 | Phase 8.7 | Complete |
+| OPS-07 | Phase 8.7 | Complete |
 | DENS-01 | Phase 9 | Pending |
 | DENS-02 | Phase 9 | Pending |
 | DENS-03 | Phase 9 | Pending |

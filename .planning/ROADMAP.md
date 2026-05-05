@@ -27,7 +27,7 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 8: VPOL-02 Sticky Tutor Legend** — Pure-CSS `position: sticky` legend in compare panel with documented z-index scale constant and stacking-context audit artifact; preserved across fullscreen (completed 2026-04-29)
 - [x] **Phase 8.5: Reliability Hardening** — Atomic snapshot promotion, race-condition fixes, identity-collision detection, retry-policy correctness, leave-overlap minute-of-day fix, timezone-idiom unification, cron-secret timing-safe compare (completed 2026-04-30)
 - [x] **Phase 8.6: Test Coverage Hardening** — Close HIGH-risk gaps: search-index unit tests, sync-orchestrator integration tests, all 7 API route handler tests, past-sessions diff-hook integration, timezone DST/UTC-boundary, auth flow, modality contradiction emission (completed 2026-04-30)
-- [ ] **Phase 8.7: Operational Maturity** — Snapshot pruning (retention), sync failure visibility, stale-snapshot banner, threshold raise to 26h, manual sync UI, dependency cleanup, version pinning (inserted 2026-04-29 from codebase audit)
+- [x] **Phase 8.7: Operational Maturity** — Snapshot pruning (retention), sync failure visibility, stale-snapshot banner, threshold raise to 26h, manual sync UI, dependency cleanup, version pinning (completed 2026-05-05)
 - [ ] **Phase 9: VPOL-03 Density Overview** — Client-side density aggregation via `useMemo` over existing `CompareResponse.tutors[].sessions[]`; shape (A aggregate / B per-tutor / C heatmap) chosen via phase-local design review; `prefers-reduced-motion` + a11y text equivalents
 - [ ] **Phase 10: VPOL-01 View Transitions** — Native `document.startViewTransition()` helper in `src/lib/ui/view-transitions.ts` wired into week prev/next/today + day-tab switches with manual scroll capture/restore and `prefers-reduced-motion` CSS skip
 
@@ -172,11 +172,11 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   6. `@auth/drizzle-adapter` removed from `package.json` (unused — auth uses custom callback against `admin_users`); `shadcn` moved to `devDependencies` (CLI-only, not shipped at runtime); bundle size delta documented in PR
   7. `next-auth`, `@base-ui/react`, and `drizzle-orm` are pinned to exact versions (no caret) until each library reaches stable v1.x or v5 GA; `detectConflicts` unused `indexedGroups` parameter removed (`src/lib/search/compare.ts:321`); modality medium-tier TODO at `src/components/compare/modality-display.ts:9-11` is either implemented or documented as intentionally unimplemented
 **Plans**:
-  - [ ] 08.7-01-PLAN.md — OPS-01: Snapshot pruning helper + orchestrator integration
-  - [ ] 08.7-02-PLAN.md — OPS-02/03/04: In-app sync visibility, 26h stale threshold, app-level stale banner
-  - [ ] 08.7-03-PLAN.md — OPS-05: Manual Sync now via authenticated admin-session POST
-  - [ ] 08.7-04-PLAN.md — OPS-06/07: Dependency cleanup, exact version pinning, package and bundle impact note
-  - [ ] 08.7-05-PLAN.md — OPS-07: `detectConflicts` and modality medium-tier TODO hygiene
+  - [x] 08.7-01-PLAN.md — OPS-01: Snapshot pruning helper + orchestrator integration
+  - [x] 08.7-02-PLAN.md — OPS-02/03/04: In-app sync visibility, 26h stale threshold, app-level stale banner
+  - [x] 08.7-03-PLAN.md — OPS-05: Manual Sync now via authenticated admin-session POST
+  - [x] 08.7-04-PLAN.md — OPS-06/07: Dependency cleanup, exact version pinning, package and bundle impact note
+  - [x] 08.7-05-PLAN.md — OPS-07: `detectConflicts` and modality medium-tier TODO hygiene
 **UI hint**: yes
 
 ### Phase 9: VPOL-03 Density Overview
@@ -222,6 +222,6 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 8. VPOL-02 Sticky Tutor Legend | v1.1 | 5/5 | Complete    | 2026-04-29 |
 | 8.5. Reliability Hardening | v1.1 | 8/8 | Complete | 2026-04-30 |
 | 8.6. Test Coverage Hardening | v1.1 | 8/8 | Complete | 2026-04-30 |
-| 8.7. Operational Maturity | v1.1 | 0/? | Not started | - |
+| 8.7. Operational Maturity | v1.1 | 5/5 | Complete | 2026-05-05 |
 | 9. VPOL-03 Density Overview | v1.1 | 0/? | Not started | - |
 | 10. VPOL-01 View Transitions | v1.1 | 0/? | Not started | - |
