@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 import { NextRequest } from "next/server";
 import type { IndexedTutorGroup, SearchIndex } from "@/lib/search/index";
 
