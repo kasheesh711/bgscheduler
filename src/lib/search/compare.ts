@@ -318,7 +318,7 @@ export function buildCompareTutor(
   };
 }
 
-export function detectConflicts(compareTutors: CompareTutor[], indexedGroups: IndexedTutorGroup[]): Conflict[] {
+export function detectConflicts(compareTutors: CompareTutor[]): Conflict[] {
   const conflicts: Conflict[] = [];
   const studentSessions = new Map<string, { tutorIdx: number; session: CompareSessionBlock }[]>();
 

@@ -142,7 +142,7 @@ export async function POST(request: NextRequest) {
         pastBlocksByCanonicalKey.get(g.canonicalKey),
       ),
     );
-    const conflicts = detectConflicts(allCompareTutors, indexedGroups);
+    const conflicts = detectConflicts(allCompareTutors);
 
     // For findSharedFreeSlots: pre-merge past blocks into each group's
     // sessionBlocks so the function's existing `group.sessionBlocks` read (line

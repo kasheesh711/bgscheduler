@@ -428,7 +428,7 @@ describe("detectConflicts", () => {
       id: "g2", displayName: "Samantha W.",
       sessionBlocks: [{ startTime: new Date("2024-01-15T11:00:00"), endTime: new Date("2024-01-15T12:00:00"), weekday: 1, startMinute: 660, endMinute: 720, isBlocking: true, wiseTeacherId: "t2", studentName: "Ava T.", subject: "Math", title: "Math - Ava T." }],
     });
-    const conflicts = detectConflicts([buildCompareTutor(tutorA), buildCompareTutor(tutorB)], [tutorA, tutorB]);
+    const conflicts = detectConflicts([buildCompareTutor(tutorA), buildCompareTutor(tutorB)]);
     expect(conflicts).toHaveLength(1);
     expect(conflicts[0].studentName).toBe("Ava T.");
     expect(conflicts[0].tutorA.displayName).toBe("Kevin H.");
@@ -438,14 +438,14 @@ describe("detectConflicts", () => {
   it("returns no conflicts when students are different", () => {
     const tutorA = makeTutor({ id: "g1", displayName: "Kevin H.", sessionBlocks: [{ startTime: new Date("2024-01-15T11:00:00"), endTime: new Date("2024-01-15T12:00:00"), weekday: 1, startMinute: 660, endMinute: 720, isBlocking: true, wiseTeacherId: "t1", studentName: "Ava T.", subject: "English" }] });
     const tutorB = makeTutor({ id: "g2", displayName: "Samantha W.", sessionBlocks: [{ startTime: new Date("2024-01-15T11:00:00"), endTime: new Date("2024-01-15T12:00:00"), weekday: 1, startMinute: 660, endMinute: 720, isBlocking: true, wiseTeacherId: "t2", studentName: "Ben K.", subject: "Math" }] });
-    const conflicts = detectConflicts([buildCompareTutor(tutorA), buildCompareTutor(tutorB)], [tutorA, tutorB]);
+    const conflicts = detectConflicts([buildCompareTutor(tutorA), buildCompareTutor(tutorB)]);
     expect(conflicts).toHaveLength(0);
   });
 
   it("returns no conflicts when times don't overlap", () => {
     const tutorA = makeTutor({ id: "g1", displayName: "Kevin H.", sessionBlocks: [{ startTime: new Date("2024-01-15T09:00:00"), endTime: new Date("2024-01-15T10:00:00"), weekday: 1, startMinute: 540, endMinute: 600, isBlocking: true, wiseTeacherId: "t1", studentName: "Ava T.", subject: "Math" }] });
     const tutorB = makeTutor({ id: "g2", displayName: "Samantha W.", sessionBlocks: [{ startTime: new Date("2024-01-15T11:00:00"), endTime: new Date("2024-01-15T12:00:00"), weekday: 1, startMinute: 660, endMinute: 720, isBlocking: true, wiseTeacherId: "t2", studentName: "Ava T.", subject: "English" }] });
-    const conflicts = detectConflicts([buildCompareTutor(tutorA), buildCompareTutor(tutorB)], [tutorA, tutorB]);
+    const conflicts = detectConflicts([buildCompareTutor(tutorA), buildCompareTutor(tutorB)]);
     expect(conflicts).toHaveLength(0);
   });
 });
@@ -742,7 +742,7 @@ describe("buildCompareTutor past+future merge + per-weekday historical flag (Pha
     expect(compareA.sessions[0].studentName).toBe("Alex P.");
     expect(compareB.sessions[0].studentName).toBe("Alex P.");
 
-    const conflicts = detectConflicts([compareA, compareB], [tutorA, tutorB]);
+    const conflicts = detectConflicts([compareA, compareB]);
     expect(conflicts).toHaveLength(1);
     expect(conflicts[0].studentName).toBe("Alex P.");
     expect(conflicts[0].dayOfWeek).toBe(1);

@@ -126,8 +126,7 @@ export async function POST(request: NextRequest) {
 
       const candidateCompareTutor = buildCompareTutor(group);
       const allCompareTutors = [...existingCompareTutors, candidateCompareTutor];
-      const allIndexedGroups = [...existingGroups, group];
-      const conflicts = detectConflicts(allCompareTutors, allIndexedGroups);
+      const conflicts = detectConflicts(allCompareTutors);
       const candidateConflicts = conflicts.filter(
         (c) => c.tutorA.tutorGroupId === group.id || c.tutorB.tutorGroupId === group.id,
       );
