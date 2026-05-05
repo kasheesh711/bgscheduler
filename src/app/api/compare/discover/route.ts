@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db";
 import { ensureIndex } from "@/lib/search/index";
 import { buildCompareTutor, detectConflicts } from "@/lib/search/compare";
 import { parseTimeToMinutes } from "@/lib/normalization/timezone";
+import { API_STALE_THRESHOLD_MS } from "@/lib/ops/stale";
 import type { IndexedTutorGroup } from "@/lib/search/index";
 import type { DiscoverResponse, DiscoverCandidate, SnapshotMeta } from "@/lib/search/types";
 
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest) {
     const snapshotMeta: SnapshotMeta = {
       snapshotId: index.snapshotId,
       syncedAt: index.builtAt.toISOString(),
-      stale: Date.now() - index.builtAt.getTime() > 35 * 60 * 1000,
+      stale: Date.now() - index.builtAt.getTime() > API_STALE_THRESHOLD_MS,
     };
 
     const existingSet = new Set(existingTutorGroupIds);

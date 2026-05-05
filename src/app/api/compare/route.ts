@@ -14,6 +14,7 @@ import type { DateRange } from "@/lib/search/compare";
 import { fetchPastSessionBlocks } from "@/lib/data/past-sessions";
 import type { IndexedSessionBlock } from "@/lib/search/index";
 import { TIMEZONE } from "@/lib/normalization/timezone";
+import { API_STALE_THRESHOLD_MS } from "@/lib/ops/stale";
 import type { CompareResponse, SnapshotMeta } from "@/lib/search/types";
 
 const compareRequestSchema = z.object({
@@ -83,11 +84,11 @@ export async function POST(request: NextRequest) {
     const snapshotMeta: SnapshotMeta = {
       snapshotId: index.snapshotId,
       syncedAt: index.builtAt.toISOString(),
-      stale: Date.now() - index.builtAt.getTime() > 35 * 60 * 1000,
+      stale: Date.now() - index.builtAt.getTime() > API_STALE_THRESHOLD_MS,
     };
 
     if (snapshotMeta.stale) {
-      warnings.push("Search data may be stale — last sync was more than 35 minutes ago");
+      warnings.push("Search data may be stale — last sync was more than 26 hours ago");
     }
 
     const indexedGroups = tutorGroupIds
