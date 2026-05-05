@@ -491,17 +491,17 @@ This test pattern works with the existing node Vitest environment and does not r
 
 All claims in this research were verified or cited; no `[ASSUMED]` claims are used. [VERIFIED: this research session source log]
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Exact visual row height and per-cell text density**
    - What we know: The overview must be compact, per-tutor stacked, visible in week/day views, and readable at 3 tutors on a 13-inch display. [VERIFIED: `.planning/phases/09-vpol-03-density-overview/09-CONTEXT.md`; `.planning/phases/05-polish-drain/05-PHASE-VERIFICATION.md`]
-   - What's unclear: Whether visible per-cell hour labels fit cleanly at 50% compare-panel width with three tutors. [VERIFIED: `.planning/phases/09-vpol-03-density-overview/09-CONTEXT.md`]
-   - Recommendation: Plan a design-review/implementation checkpoint that screenshots one-, two-, and three-tutor states before final polish. [VERIFIED: `.planning/phases/09-vpol-03-density-overview/09-CONTEXT.md`]
+   - RESOLVED: Use the approved UI contract's compact Shape B geometry: a 96px tutor-label column, 32px day segments, seven equal day columns, 4px segment gaps, and max three tutor rows with total density strip height at or below 120px. The existing Plan 03 manual/browser verification checkpoint remains the final visual-fit gate for one-, two-, and three-tutor states at 50% compare-panel width. [VERIFIED: `.planning/phases/09-vpol-03-density-overview/09-UI-SPEC.md`; `.planning/phases/09-vpol-03-density-overview/09-01-PLAN.md`; `.planning/phases/09-vpol-03-density-overview/09-03-PLAN.md`]
+   - Implementation marker: Plan 01 Task 2 requires `grid grid-cols-[96px_1fr]`, `h-8` 32px segments, and compact row styling; Plan 03 verifies the max-three-row <=120px visual requirement before phase sign-off. [VERIFIED: `.planning/phases/09-vpol-03-density-overview/09-01-PLAN.md`; `.planning/phases/09-vpol-03-density-overview/09-03-PLAN.md`]
 
 2. **Whether to include availability in the visible fill formula**
    - What we know: The user-facing values must stay booked hours and session count, and utilization percentage is deferred. [VERIFIED: `.planning/phases/09-vpol-03-density-overview/09-CONTEXT.md`]
-   - What's unclear: Whether the visual fill should be raw booked-minutes density or availability-normalized density. [VERIFIED: `.planning/phases/09-vpol-03-density-overview/09-CONTEXT.md`]
-   - Recommendation: Use raw booked-minutes density normalized across the visible week for Phase 9, compute availability minutes only as a guard/context field, and avoid visible `%` copy. [VERIFIED: `.planning/phases/09-vpol-03-density-overview/09-CONTEXT.md`; `src/lib/search/types.ts:131-141`]
+   - RESOLVED: Use raw booked-minutes fill normalized against the maximum booked tutor/day cell in the visible week, with a 60-minute minimum denominator and a 12% minimum visible fill only for nonzero booked time. Availability windows remain available to the helper as guard/context data, but they are not part of the visible utilization/capacity formula and must not produce percentage, capacity, free-slot, or availability claims. [VERIFIED: `.planning/phases/09-vpol-03-density-overview/09-UI-SPEC.md`; `.planning/phases/09-vpol-03-density-overview/09-01-PLAN.md`]
+   - Implementation marker: Plan 01 Task 2 locks `Math.max(60, ...allCells.map((cell) => cell.bookedMinutes))`, `fillRatio`, and `Math.max(fillRatio * 100, 12)` while preserving `availableMinutes` as returned data only; Plan 02/03 guardrails keep server/cache/schema surfaces and misleading availability copy out of scope. [VERIFIED: `.planning/phases/09-vpol-03-density-overview/09-01-PLAN.md`; `.planning/phases/09-vpol-03-density-overview/09-02-PLAN.md`; `.planning/phases/09-vpol-03-density-overview/09-03-PLAN.md`]
 
 ## Environment Availability
 
