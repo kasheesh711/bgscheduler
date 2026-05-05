@@ -188,7 +188,10 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   2. Shape (A aggregate day-bar / B per-tutor stacked / C GitHub-heatmap) is chosen and documented via a phase-local design review with a captured rationale
   3. Density data derives entirely from existing `CompareResponse.tutors[].sessions[]` via `useMemo` — no new API endpoint, no SearchIndex change, no schema change
   4. Admin with `prefers-reduced-motion: reduce` sees no animated transitions in the density view, and screen-reader users receive text-equivalent affordances (aria-label, aria-describedby, or equivalent per cell / region)
-**Plans**: TBD
+**Plans**: 3 plans
+  - [ ] 09-01-PLAN.md - Density design artifact plus tested DensityOverview component
+  - [ ] 09-02-PLAN.md - ComparePanel integration plus frontend-only guardrail verification
+  - [ ] 09-03-PLAN.md - Automated evidence plus human visual/a11y verification checkpoint
 **UI hint**: yes
 
 ### Phase 10: VPOL-01 View Transitions
@@ -223,5 +226,5 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 8.5. Reliability Hardening | v1.1 | 8/8 | Complete | 2026-04-30 |
 | 8.6. Test Coverage Hardening | v1.1 | 8/8 | Complete | 2026-04-30 |
 | 8.7. Operational Maturity | v1.1 | 5/5 | Complete | 2026-05-05 |
-| 9. VPOL-03 Density Overview | v1.1 | 0/? | Not started | - |
+| 9. VPOL-03 Density Overview | v1.1 | 0/3 | Planned | - |
 | 10. VPOL-01 View Transitions | v1.1 | 0/? | Not started | - |
