@@ -17,6 +17,7 @@ import { normalizeTeacherTags } from "@/lib/normalization/qualifications";
 import { deriveModality } from "@/lib/normalization/modality";
 import { detectSessionModalityConflict } from "@/lib/search/compare";
 import { runPastSessionsDiffHook } from "@/lib/sync/past-sessions-diff-hook";
+import { pruneOldSnapshots } from "@/lib/sync/snapshot-pruning";
 
 export interface SyncResult {
   success: boolean;
@@ -489,6 +490,11 @@ export async function runFullSync(
       promotedSnapshotId = snapshotId;
     }
 
+    const successMetadata = {
+      diffHookDurationMs: diffHookResult.durationMs,
+      pastSessionsCapturedCount: diffHookResult.capturedCount,
+    };
+
     // Update sync run
     await db
       .update(schema.syncRuns)
@@ -497,12 +503,29 @@ export async function runFullSync(
         finishedAt: new Date(),
         promotedSnapshotId,
         teacherCount: wiseTeachers.length,
-        metadata: {
-          diffHookDurationMs: diffHookResult.durationMs,
-          pastSessionsCapturedCount: diffHookResult.capturedCount,
-        },
+        metadata: successMetadata,
       })
       .where(eq(schema.syncRuns.id, syncRunId));
+
+    if (promotedSnapshotId) {
+      try {
+        const pruningResult = await pruneOldSnapshots(db);
+        await db
+          .update(schema.syncRuns)
+          .set({ metadata: { ...successMetadata, pruning: pruningResult } })
+          .where(eq(schema.syncRuns.id, syncRunId));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(
+          `[sync-orchestrator] snapshot pruning failed for syncRunId=${syncRunId}:`,
+          message,
+        );
+        await db
+          .update(schema.syncRuns)
+          .set({ metadata: { ...successMetadata, pruning: { attempted: true, failed: true, error: message } } })
+          .where(eq(schema.syncRuns.id, syncRunId));
+      }
+    }
 
     return {
       success: true,
