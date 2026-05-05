@@ -101,17 +101,6 @@ async function seedSnapshots(count: number, opts?: { activeIndex?: number }) {
   return snapshots;
 }
 
-async function tableSnapshotIds<T extends { snapshotId: string }>(
-  table: { _: { name: string } },
-  snapshotIds: string[],
-) {
-  if (snapshotIds.length === 0) return [];
-  return handle.db
-    .select()
-    .from(table as never)
-    .where(inArray((table as never as { snapshotId: unknown }).snapshotId, snapshotIds as never));
-}
-
 describe("pruneOldSnapshots — OPS-01 integration (real Postgres)", () => {
   it("retains the latest 30 snapshots and the active snapshot while pruning older inactive rows", async () => {
     const snapshots = await seedSnapshots(33, { activeIndex: 0 });
@@ -164,12 +153,42 @@ describe("pruneOldSnapshots — OPS-01 integration (real Postgres)", () => {
     expect(syncRun.snapshotId).toBeNull();
     expect(syncRun.promotedSnapshotId).toBeNull();
 
-    expect(await tableSnapshotIds(schema.snapshotStats, prunedIds)).toHaveLength(0);
-    expect(await tableSnapshotIds(schema.dataIssues, prunedIds)).toHaveLength(0);
-    expect(await tableSnapshotIds(schema.futureSessionBlocks, prunedIds)).toHaveLength(0);
-    expect(await tableSnapshotIds(schema.tutors, prunedIds)).toHaveLength(0);
-    expect(await tableSnapshotIds(schema.tutorIdentityGroupMembers, prunedIds)).toHaveLength(0);
-    expect(await tableSnapshotIds(schema.tutorIdentityGroups, prunedIds)).toHaveLength(0);
+    expect(
+      await handle.db
+        .select()
+        .from(schema.snapshotStats)
+        .where(inArray(schema.snapshotStats.snapshotId, prunedIds)),
+    ).toHaveLength(0);
+    expect(
+      await handle.db
+        .select()
+        .from(schema.dataIssues)
+        .where(inArray(schema.dataIssues.snapshotId, prunedIds)),
+    ).toHaveLength(0);
+    expect(
+      await handle.db
+        .select()
+        .from(schema.futureSessionBlocks)
+        .where(inArray(schema.futureSessionBlocks.snapshotId, prunedIds)),
+    ).toHaveLength(0);
+    expect(
+      await handle.db
+        .select()
+        .from(schema.tutors)
+        .where(inArray(schema.tutors.snapshotId, prunedIds)),
+    ).toHaveLength(0);
+    expect(
+      await handle.db
+        .select()
+        .from(schema.tutorIdentityGroupMembers)
+        .where(inArray(schema.tutorIdentityGroupMembers.snapshotId, prunedIds)),
+    ).toHaveLength(0);
+    expect(
+      await handle.db
+        .select()
+        .from(schema.tutorIdentityGroups)
+        .where(inArray(schema.tutorIdentityGroups.snapshotId, prunedIds)),
+    ).toHaveLength(0);
 
     const pastAfter = await handle.db.select().from(schema.pastSessionBlocks);
     expect(pastAfter).toHaveLength(pastBefore.length);
