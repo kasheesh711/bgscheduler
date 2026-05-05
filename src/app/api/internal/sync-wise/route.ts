@@ -4,11 +4,13 @@ import { timingSafeEqual } from "node:crypto";
 import { getDb } from "@/lib/db";
 import { createWiseClient } from "@/lib/wise/client";
 import { runFullSync } from "@/lib/sync/orchestrator";
+import { auth } from "@/lib/auth";
 
 export const maxDuration = 300; // 5 minutes for Vercel
 
-/** Shared sync handler for both GET (Vercel cron) and POST (manual curl) */
-async function handleSync(request: NextRequest) {
+type CronSecretStatus = "valid" | "invalid" | "missing-secret";
+
+function hasValidCronSecret(request: NextRequest): CronSecretStatus {
   // REL-07: constant-time CRON_SECRET comparison. The length-pre-check
   // avoids the RangeError that crypto.timingSafeEqual throws on
   // length-mismatched Buffers, and is itself O(1) — it does not leak
@@ -17,7 +19,7 @@ async function handleSync(request: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
 
   if (!cronSecret) {
-    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
+    return "missing-secret";
   }
 
   const received = Buffer.from(authHeader);
@@ -25,10 +27,10 @@ async function handleSync(request: NextRequest) {
   const valid =
     received.length === known.length && timingSafeEqual(received, known);
 
-  if (!valid) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  return valid ? "valid" : "invalid";
+}
 
+async function runSync() {
   const db = getDb();
   const client = createWiseClient();
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
@@ -44,12 +46,38 @@ async function handleSync(request: NextRequest) {
   });
 }
 
-/** Vercel cron triggers via GET */
-export async function GET(request: NextRequest) {
-  return handleSync(request);
+/** Shared sync handler for both GET (Vercel cron) and POST (manual admin/curl) */
+async function handleSync(
+  request: NextRequest,
+  options: { allowSessionAuth: boolean },
+) {
+  const cronSecretStatus = hasValidCronSecret(request);
+
+  if (cronSecretStatus === "valid") {
+    return runSync();
+  }
+
+  if (cronSecretStatus === "missing-secret") {
+    return NextResponse.json({ error: "Server misconfigured" }, { status: 500 });
+  }
+
+  if (options.allowSessionAuth) {
+    const session = await auth();
+
+    if (session) {
+      return runSync();
+    }
+  }
+
+  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 }
 
-/** Manual trigger via curl -X POST (backward compatible) */
+/** Vercel cron triggers via GET */
+export async function GET(request: NextRequest) {
+  return handleSync(request, { allowSessionAuth: false });
+}
+
+/** Manual trigger via Auth.js session or curl -X POST (backward compatible) */
 export async function POST(request: NextRequest) {
-  return handleSync(request);
+  return handleSync(request, { allowSessionAuth: true });
 }
