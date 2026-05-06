@@ -190,7 +190,7 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   4. Admin with `prefers-reduced-motion: reduce` sees no animated transitions in the density view, and screen-reader users receive text-equivalent affordances (aria-label, aria-describedby, or equivalent per cell / region)
 **Plans**: 3 plans
   - [x] 09-01-PLAN.md - Density design artifact plus tested DensityOverview component
-  - [ ] 09-02-PLAN.md - ComparePanel integration plus frontend-only guardrail verification
+  - [x] 09-02-PLAN.md - ComparePanel integration plus frontend-only guardrail verification
   - [ ] 09-03-PLAN.md - Automated evidence plus human visual/a11y verification checkpoint
 **UI hint**: yes
 
