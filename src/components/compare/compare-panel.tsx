@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useCallback, useState, useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import type { TutorListItem } from "@/lib/data/tutors";
 import { TutorCombobox } from "@/components/compare/tutor-combobox";
+import { DensityOverview } from "@/components/compare/density-overview";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { WeekCalendar } from "@/components/compare/week-calendar";
 import dynamic from "next/dynamic";
@@ -81,6 +82,13 @@ export function ComparePanel({
     }
     return map;
   }, [compareResponse]);
+
+  const handleDensityDayClick = useCallback(
+    (day: number) => {
+      setActiveDay(day);
+    },
+    [setActiveDay],
+  );
 
   return (
     <>
@@ -244,6 +252,13 @@ export function ComparePanel({
             ))}
           </div>
 
+          <DensityOverview
+            tutors={compareResponse.tutors}
+            tutorChips={compareTutors}
+            activeDay={activeDay}
+            onDayClick={handleDensityDayClick}
+          />
+
           {/* Calendar view */}
           <div className={`flex-1 min-h-0 mt-1 ${activeDay !== null ? "overflow-y-auto" : ""}`}>
             {activeDay !== null ? (
@@ -266,7 +281,7 @@ export function ComparePanel({
                 conflicts={compareResponse.conflicts}
                 sharedFreeSlots={compareResponse.sharedFreeSlots}
                 weekStart={weekStart}
-                onDayClick={(day) => setActiveDay(day)}
+                onDayClick={handleDensityDayClick}
               />
             )}
           </div>
