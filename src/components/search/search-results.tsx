@@ -37,6 +37,7 @@ export function SearchResults({
 
   // Reset selection when response changes
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedIds(new Set());
   }, [response]);
 

@@ -88,6 +88,7 @@ export function CopyForParentDrawer({
 
   // Reset editable textarea when slots / tone / toggle change
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEdited(null);
     setCopied(false);
   }, [open, slots, tone, includeTutorNames]);

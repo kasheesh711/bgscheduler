@@ -33,6 +33,7 @@ export function StaleSnapshotBanner() {
 
   useEffect(() => {
     if (!isWorkspace) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowBanner(false);
       return;
     }

@@ -32,6 +32,7 @@ export function WeekCalendar({ weekStart, onWeekSelect }: WeekCalendarProps) {
 
   // Sync viewMonth when weekStart changes externally (arrows)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setViewMonth(new Date(selectedMonday.getFullYear(), selectedMonday.getMonth(), 1));
   }, [weekStart]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -112,7 +113,7 @@ export function WeekCalendar({ weekStart, onWeekSelect }: WeekCalendarProps) {
                 !isInSelectedWeek && !isInHoverWeek ? "hover:bg-muted/40" : "",
               ].filter(Boolean).join(" ")}
               aria-label={cell.toLocaleDateString("en-US", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
-              aria-selected={isInSelectedWeek}
+              aria-pressed={isInSelectedWeek}
             >
               {cell.getDate()}
             </button>

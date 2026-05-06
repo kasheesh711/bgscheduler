@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { NextResponse } from "next/server";
 
 vi.mock("@/lib/auth", () => ({
-  auth: (handler: (req: any) => any) => handler,
+  auth: <T>(handler: T) => handler,
 }));
 
 import middleware from "@/middleware";
