@@ -73,10 +73,10 @@ Added 2026-04-29 from codebase audit. Operational features and dependency hygien
 
 ### Visual Polish — Density Overview (VPOL-03)
 
-- [ ] **DENS-01**: Density overview component renders aggregated per-tutor booking density across the visible week
-- [ ] **DENS-02**: Shape A (aggregate day-bar) / B (per-tutor stacked) / C (heatmap) chosen via phase-local design review
-- [ ] **DENS-03**: Density data derived client-side from existing `CompareResponse.tutors[].sessions[]` via `useMemo` (zero server work)
-- [ ] **DENS-04**: Density overview respects `prefers-reduced-motion` and has text-equivalent a11y affordances
+- [x] **DENS-01**: Density overview component renders aggregated per-tutor booking density across the visible week
+- [x] **DENS-02**: Shape A (aggregate day-bar) / B (per-tutor stacked) / C (heatmap) chosen via phase-local design review
+- [x] **DENS-03**: Density data derived client-side from existing `CompareResponse.tutors[].sessions[]` via `useMemo` (zero server work)
+- [x] **DENS-04**: Density overview respects `prefers-reduced-motion` and has text-equivalent a11y affordances
 
 ### Visual Polish — View Transitions (VPOL-01)
 
@@ -216,10 +216,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OPS-05 | Phase 8.7 | Complete |
 | OPS-06 | Phase 8.7 | Complete |
 | OPS-07 | Phase 8.7 | Complete |
-| DENS-01 | Phase 9 | Pending |
-| DENS-02 | Phase 9 | Pending |
-| DENS-03 | Phase 9 | Pending |
-| DENS-04 | Phase 9 | Pending |
+| DENS-01 | Phase 9 | Complete |
+| DENS-02 | Phase 9 | Complete |
+| DENS-03 | Phase 9 | Complete |
+| DENS-04 | Phase 9 | Complete |
 | TRANS-01 | Phase 10 | Pending |
 | TRANS-02 | Phase 10 | Pending |
 | TRANS-03 | Phase 10 | Pending |
