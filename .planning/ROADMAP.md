@@ -191,7 +191,7 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 **Plans**: 3 plans
   - [x] 09-01-PLAN.md - Density design artifact plus tested DensityOverview component
   - [x] 09-02-PLAN.md - ComparePanel integration plus frontend-only guardrail verification
-  - [ ] 09-03-PLAN.md - Automated evidence plus human visual/a11y verification checkpoint
+  - [x] 09-03-PLAN.md - Automated evidence plus human visual/a11y verification checkpoint
 **UI hint**: yes
 
 ### Phase 10: VPOL-01 View Transitions
