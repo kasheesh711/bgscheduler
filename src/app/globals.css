@@ -143,3 +143,126 @@
     @apply font-sans;
   }
 }
+
+.compare-calendar-transition-surface {
+  view-transition-name: compare-calendar;
+  contain: layout paint;
+}
+
+::view-transition-group(compare-calendar) {
+  animation-duration: 160ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+::view-transition-old(compare-calendar),
+::view-transition-new(compare-calendar) {
+  animation-duration: 160ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes compare-week-forward-old {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0.88;
+    transform: translateX(-16px);
+  }
+}
+
+@keyframes compare-week-forward-new {
+  from {
+    opacity: 0.88;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes compare-week-back-old {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0.88;
+    transform: translateX(16px);
+  }
+}
+
+@keyframes compare-week-back-new {
+  from {
+    opacity: 0.88;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes compare-day-old {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes compare-day-new {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+:active-view-transition-type(week-forward)::view-transition-old(compare-calendar) {
+  animation-name: compare-week-forward-old;
+}
+
+:active-view-transition-type(week-forward)::view-transition-new(compare-calendar) {
+  animation-name: compare-week-forward-new;
+}
+
+:active-view-transition-type(week-back)::view-transition-old(compare-calendar) {
+  animation-name: compare-week-back-old;
+}
+
+:active-view-transition-type(week-back)::view-transition-new(compare-calendar) {
+  animation-name: compare-week-back-new;
+}
+
+:active-view-transition-type(day)::view-transition-old(compare-calendar) {
+  animation-name: compare-day-old;
+}
+
+:active-view-transition-type(day)::view-transition-new(compare-calendar) {
+  animation-name: compare-day-new;
+}
+
+:active-view-transition-type(week-forward)::view-transition-old(root),
+:active-view-transition-type(week-forward)::view-transition-new(root),
+:active-view-transition-type(week-back)::view-transition-old(root),
+:active-view-transition-type(week-back)::view-transition-new(root),
+:active-view-transition-type(day)::view-transition-old(root),
+:active-view-transition-type(day)::view-transition-new(root) {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+
+  .compare-calendar-transition-surface {
+    view-transition-name: none;
+  }
+}
