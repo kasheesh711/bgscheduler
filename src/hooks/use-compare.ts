@@ -209,11 +209,27 @@ export function useCompare() {
     }
   }, [commitPreparedCompare, fetchCompareData]);
 
+  const cancelCompareFetch = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }, []);
+
+  const pruneCacheToWeek = useCallback((committedWeek: string) => {
+    const targetSuffix = `:${committedWeek}:${CACHE_VERSION}`;
+    for (const key of Array.from(tutorCache.current.keys())) {
+      if (!key.endsWith(targetSuffix)) {
+        tutorCache.current.delete(key);
+      }
+    }
+  }, []);
+
   const removeTutor = (id: string) => {
     const remaining = compareTutors.filter((t) => t.tutorGroupId !== id);
     setCompareTutors(remaining);
     tutorCache.current.delete(`${id}:${weekStart}:${CACHE_VERSION}`);
     if (remaining.length === 0) {
+      cancelCompareFetch();
+      tutorCache.current.clear();
       setCompareResponse(null);
       return;
     }
@@ -242,6 +258,7 @@ export function useCompare() {
 
   const changeWeek = useCallback(async (newWeek: string, options: WeekChangeOptions = {}) => {
     if (newWeek === weekStart) {
+      cancelCompareFetch();
       return;
     }
 
@@ -250,7 +267,6 @@ export function useCompare() {
       return;
     }
 
-    tutorCache.current.clear();
     const prepared = await fetchCompareData(
       compareTutors.map((t) => t.tutorGroupId),
       newWeek,
@@ -266,6 +282,7 @@ export function useCompare() {
         setWeekStart(newWeek);
         commitPreparedCompare(prepared);
       });
+      pruneCacheToWeek(newWeek);
       if (
         typeof options.restoreScrollTop === "function" &&
         typeof options.capturedScrollTop === "number"
@@ -283,7 +300,14 @@ export function useCompare() {
     }
 
     commitLoadedWeek();
-  }, [commitPreparedCompare, compareTutors, fetchCompareData, weekStart]);
+  }, [
+    cancelCompareFetch,
+    commitPreparedCompare,
+    compareTutors,
+    fetchCompareData,
+    pruneCacheToWeek,
+    weekStart,
+  ]);
 
   return {
     // State
@@ -301,6 +325,7 @@ export function useCompare() {
     addTutor,
     removeTutor,
     changeWeek,
+    cancelCompareFetch,
     setActiveDay,
     setDiscoveryOpen,
     setPrefillConflict,

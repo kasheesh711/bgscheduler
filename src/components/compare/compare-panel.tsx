@@ -78,6 +78,7 @@ export function ComparePanel({
     addTutor,
     removeTutor,
     changeWeek,
+    cancelCompareFetch,
     setActiveDay,
     setDiscoveryOpen,
     setPrefillConflict,
@@ -88,6 +89,7 @@ export function ComparePanel({
   const dayScrollRef = useRef<HTMLDivElement | null>(null);
   const calendarChunksReady = useRef(false);
   const lastWeekNavigationStartedAt = useRef<number | null>(null);
+  const pendingWeekRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!compareResponse) {
@@ -170,6 +172,14 @@ export function ComparePanel({
 
   const handleWeekChange = useCallback(
     (targetWeek: string) => {
+      if (targetWeek === weekStart) {
+        if (pendingWeekRef.current !== null) {
+          pendingWeekRef.current = null;
+          cancelCompareFetch();
+        }
+        return;
+      }
+
       const kind = getWeekTransitionKind(weekStart, targetWeek);
       if (kind === null) {
         return;
@@ -180,20 +190,34 @@ export function ComparePanel({
       lastWeekNavigationStartedAt.current = now;
       const sameViewScrollTop = getScrollElementForDay(activeDay)?.scrollTop ?? 0;
 
+      pendingWeekRef.current = targetWeek;
       void changeWeek(targetWeek, {
         kind,
         skipTransition: rapid,
         capturedScrollTop: sameViewScrollTop,
         restoreScrollTop: (top) => restoreSameViewScrollTop(activeDay, top),
+      }).finally(() => {
+        if (pendingWeekRef.current === targetWeek) {
+          pendingWeekRef.current = null;
+        }
       });
     },
     [
       activeDay,
+      cancelCompareFetch,
       changeWeek,
       getScrollElementForDay,
       restoreSameViewScrollTop,
       weekStart,
     ],
+  );
+
+  const handleWeekDelta = useCallback(
+    (delta: number) => {
+      const baseWeek = pendingWeekRef.current ?? weekStart;
+      handleWeekChange(shiftWeek(baseWeek, delta));
+    },
+    [handleWeekChange, weekStart],
   );
 
   const handleDayChange = useCallback(
@@ -296,7 +320,7 @@ export function ComparePanel({
           <div className="flex items-center gap-2 mb-1 flex-shrink-0">
             <div className="flex items-center gap-1">
               <button
-                onClick={() => handleWeekChange(shiftWeek(weekStart, -1))}
+                onClick={() => handleWeekDelta(-1)}
                 className="px-1.5 py-0.5 text-xs rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
                 aria-label="Previous week"
               >
@@ -324,7 +348,7 @@ export function ComparePanel({
                 </PopoverContent>
               </Popover>
               <button
-                onClick={() => handleWeekChange(shiftWeek(weekStart, 1))}
+                onClick={() => handleWeekDelta(1)}
                 className="px-1.5 py-0.5 text-xs rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
                 aria-label="Next week"
               >

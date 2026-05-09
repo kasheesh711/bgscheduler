@@ -78,6 +78,28 @@ describe("Phase 10 view transition source guardrails", () => {
     expect(source).not.toContain("next/navigation");
   });
 
+  it("keeps fetch-first week navigation cache and abort handling safe", () => {
+    const source = read("src/hooks/use-compare.ts");
+
+    expect(source).toContain("cancelCompareFetch");
+    expect(source).toContain("abortRef.current?.abort();");
+    expect(source).toContain("pruneCacheToWeek");
+    expect(source).toContain("const targetSuffix = `:${committedWeek}:${CACHE_VERSION}`;");
+    expect(source).toContain("pruneCacheToWeek(newWeek);");
+    expect(source).not.toContain("tutorCache.current.clear();\n    const prepared = await fetchCompareData");
+  });
+
+  it("bases rapid week arrows on the pending target week", () => {
+    const source = read("src/components/compare/compare-panel.tsx");
+
+    expect(source).toContain("const pendingWeekRef = useRef<string | null>(null);");
+    expect(source).toContain("pendingWeekRef.current = targetWeek;");
+    expect(source).toContain("const handleWeekDelta = useCallback");
+    expect(source).toContain("const baseWeek = pendingWeekRef.current ?? weekStart;");
+    expect(source).toContain("handleWeekChange(shiftWeek(baseWeek, delta));");
+    expect(source).toContain("cancelCompareFetch();");
+  });
+
   it("keeps compare cache version stable", () => {
     const source = read("src/lib/search/cache-version.ts");
 
