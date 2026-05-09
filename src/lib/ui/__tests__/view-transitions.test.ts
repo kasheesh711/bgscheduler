@@ -106,4 +106,40 @@ describe("runCalendarViewTransition", () => {
       types: ["day"],
     });
   });
+
+  it("awaits native finished promise and calls update once", async () => {
+    const update = vi.fn();
+    let resolveFinished: () => void = () => {};
+    const finished = new Promise<void>((resolve) => {
+      resolveFinished = resolve;
+    });
+    const fakeDocument = {
+      startViewTransition: vi.fn((options) => {
+        options.update();
+
+        return {
+          finished,
+        };
+      }),
+    } as unknown as Document;
+
+    let completed = false;
+    const run = runCalendarViewTransition(update, {
+      kind: "week-forward",
+      documentRef: fakeDocument,
+    }).then(() => {
+      completed = true;
+    });
+
+    await Promise.resolve();
+
+    expect(update).toHaveBeenCalledOnce();
+    expect(completed).toBe(false);
+
+    resolveFinished();
+    await run;
+
+    expect(update).toHaveBeenCalledOnce();
+    expect(completed).toBe(true);
+  });
 });

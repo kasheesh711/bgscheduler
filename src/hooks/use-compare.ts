@@ -1,16 +1,28 @@
 "use client";
 
 import { useState, useCallback, useRef } from "react";
+import { flushSync } from "react-dom";
 import { toZonedTime } from "date-fns-tz";
 import { TUTOR_COLORS } from "@/components/compare/session-colors";
 import type { TutorChip } from "@/components/compare/tutor-selector";
 import { CACHE_VERSION } from "@/lib/search/cache-version";
 import { TIMEZONE } from "@/lib/normalization/timezone";
 import type { CompareResponse, CompareTutor, Conflict } from "@/lib/search/types";
+import {
+  type CalendarViewTransitionKind,
+  runCalendarViewTransition,
+} from "@/lib/ui/view-transitions";
 
 interface PreparedCompareState {
   response: CompareResponse;
   tutorChips: TutorChip[];
+}
+
+interface WeekChangeOptions {
+  kind?: CalendarViewTransitionKind | null;
+  skipTransition?: boolean;
+  capturedScrollTop?: number;
+  restoreScrollTop?: (scrollTop: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,13 +240,50 @@ export function useCompare() {
     [compareTutors, weekStart, fetchCompare],
   );
 
-  const changeWeek = (newWeek: string) => {
-    setWeekStart(newWeek);
-    tutorCache.current.clear();
-    if (compareTutors.length > 0) {
-      fetchCompare(compareTutors.map((t) => t.tutorGroupId), newWeek);
+  const changeWeek = useCallback(async (newWeek: string, options: WeekChangeOptions = {}) => {
+    if (newWeek === weekStart) {
+      return;
     }
-  };
+
+    if (compareTutors.length === 0) {
+      setWeekStart(newWeek);
+      return;
+    }
+
+    tutorCache.current.clear();
+    const prepared = await fetchCompareData(
+      compareTutors.map((t) => t.tutorGroupId),
+      newWeek,
+      { keepCurrentVisible: true },
+    );
+
+    if (prepared === null) {
+      return;
+    }
+
+    const commitLoadedWeek = () => {
+      flushSync(() => {
+        setWeekStart(newWeek);
+        commitPreparedCompare(prepared);
+      });
+      if (
+        typeof options.restoreScrollTop === "function" &&
+        typeof options.capturedScrollTop === "number"
+      ) {
+        options.restoreScrollTop(options.capturedScrollTop);
+      }
+    };
+
+    if (options.kind) {
+      await runCalendarViewTransition(commitLoadedWeek, {
+        kind: options.kind,
+        skip: options.skipTransition,
+      });
+      return;
+    }
+
+    commitLoadedWeek();
+  }, [commitPreparedCompare, compareTutors, fetchCompareData, weekStart]);
 
   return {
     // State
