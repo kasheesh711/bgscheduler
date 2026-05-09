@@ -34,16 +34,16 @@ No API/schema/SearchIndex scope drift: PASS
 
 ## Browser QA
 
-Week prev/next directional slide: PENDING
-Today/calendar-popup directional slide: PENDING
-Day-tab crossfade: PENDING
-Reduced motion instant mode: PENDING
-Same-view week 5pm scroll preservation: PENDING
-Week-to-Day 5pm normalized scroll preservation: PENDING
-Day-to-Week 5pm normalized scroll preservation: PENDING
-Rapid week navigation skip: PENDING
-No loading-state or skeleton capture: PENDING
+Week prev/next directional slide: PASS
+Today/calendar-popup directional slide: PASS
+Day-tab crossfade: PASS
+Reduced motion instant mode: PASS
+Same-view week 5pm scroll preservation: PASS
+Week-to-Day 5pm normalized scroll preservation: PASS
+Day-to-Week 5pm normalized scroll preservation: PASS
+Rapid week navigation skip: PASS
+No loading-state or skeleton capture: PASS
 
 ## Human Approval
 
-Approved by user: PENDING
+Approved by user: YES
