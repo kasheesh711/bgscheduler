@@ -66,7 +66,7 @@ Each task was committed atomically:
 1. **Task 1: Write failing helper tests** - `dd8941b` (test)
 2. **Task 2: Implement the typed native helper** - `c25172c` (feat)
 
-**Plan metadata:** pending final docs commit
+**Plan metadata:** committed in the final plan-completion docs commit
 
 ## Files Created/Modified
 
