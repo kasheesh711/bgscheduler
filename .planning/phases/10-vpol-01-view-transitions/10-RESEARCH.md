@@ -360,17 +360,15 @@ The existing `weekStart` and `shiftWeek()` values use ISO-like `YYYY-MM-DD` stri
 
 **This table is empty:** All planning-critical claims in this research were verified in local files, local package docs, registry output, or cited official/current docs. [VERIFIED: local command outputs; CITED: Sources section]
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Should the implementation show a small pending affordance while week data fetches?** [VERIFIED: .planning/phases/10-vpol-01-view-transitions/10-CONTEXT.md]
+1. **Should the implementation show a small pending affordance while week data fetches? — RESOLVED** [VERIFIED: .planning/phases/10-vpol-01-view-transitions/10-CONTEXT.md]
    - What we know: Current full-panel loading must not replace the calendar during animated week changes. [VERIFIED: .planning/phases/10-vpol-01-view-transitions/10-CONTEXT.md; VERIFIED: src/components/compare/compare-panel.tsx:151-157]
-   - What's unclear: Whether staff need a subtle non-disruptive pending indicator during the fetch window. [VERIFIED: .planning/phases/10-vpol-01-view-transitions/10-CONTEXT.md]
-   - Recommendation: Plan no new pending affordance unless QA shows week fetch latency feels ambiguous; if added, keep it outside the named transition surface. [VERIFIED: src/components/compare/compare-panel.tsx:207-214]
+   - RESOLVED: Use the existing plan choice: add no new pending affordance by default, keep the current calendar content visible during the fetch window, and only add a subtle pending affordance if implementation QA shows the fetch state is ambiguous. If added later, keep it outside the named transition surface. [VERIFIED: src/components/compare/compare-panel.tsx:207-214]
 
-2. **Should first-ever day-view chunk load animate or bypass?** [VERIFIED: src/components/compare/compare-panel.tsx:15-23]
+2. **Should first-ever day-view chunk load animate or bypass? — RESOLVED** [VERIFIED: src/components/compare/compare-panel.tsx:15-23]
    - What we know: `CalendarGrid` and `WeekOverview` are dynamic imports with skeleton fallbacks. [VERIFIED: src/components/compare/compare-panel.tsx:15-23]
-   - What's unclear: Whether chunks are already loaded in normal production sessions by the time a staff user first switches views. [VERIFIED: src/components/compare/compare-panel.tsx:15-23]
-   - Recommendation: Preload both chunks once compare data is visible, and bypass animation if preload has not resolved. [CITED: https://developer.chrome.com/docs/web-platform/view-transitions/same-document; VERIFIED: src/components/compare/compare-panel.tsx:157-287]
+   - RESOLVED: Use the existing plan choice: preload dynamic calendar chunks where practical once compare data is visible, and bypass animation if the target chunk is not ready so the transition never captures `CalendarSkeleton`. [CITED: https://developer.chrome.com/docs/web-platform/view-transitions/same-document; VERIFIED: src/components/compare/compare-panel.tsx:157-287]
 
 ## Environment Availability
 
