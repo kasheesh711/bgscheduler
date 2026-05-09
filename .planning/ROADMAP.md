@@ -204,7 +204,11 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   3. Admin with `prefers-reduced-motion: reduce` gets instant navigation with zero animation (CSS media query skips all view-transition keyframes)
   4. Admin returning to a previously-scrolled time-of-day position in the calendar after a week change finds the scroll position preserved (manual `scrollTop` capture/restore honoring the internal calendar container, not the document)
   5. View-transition helper lives in `src/lib/ui/view-transitions.ts`, is called from client-state handlers (week change, day switch), and explicitly does NOT wrap the RSC streaming boundary or `cacheComponents`-tagged server data
-**Plans**: TBD
+**Plans**: 4 plans
+  - [ ] 10-01-PLAN.md - Typed native view-transition helper plus unit tests
+  - [ ] 10-02-PLAN.md - Fetch-first week timing path in `useCompare`
+  - [ ] 10-03-PLAN.md - ComparePanel week/day wiring, scroll preservation, and CSS
+  - [ ] 10-04-PLAN.md - Automated evidence plus browser QA checkpoint
 **UI hint**: yes
 
 ## Next Milestone
