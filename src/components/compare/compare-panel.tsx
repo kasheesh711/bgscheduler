@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import type { TutorListItem } from "@/lib/data/tutors";
 import { TutorCombobox } from "@/components/compare/tutor-combobox";
@@ -11,6 +12,18 @@ import dynamic from "next/dynamic";
 import { CalendarSkeleton } from "@/components/skeletons/calendar-skeleton";
 import { X, Maximize2, Minimize2 } from "lucide-react";
 import { DAY_NAMES } from "@/components/search/search-form";
+import {
+  shiftWeek,
+  formatWeekLabel,
+  getWeekDate,
+  formatMinute,
+} from "@/hooks/use-compare";
+import type { UseCompareReturn } from "@/hooks/use-compare";
+import {
+  getWeekTransitionKind,
+  isRapidWeekNavigation,
+  runCalendarViewTransition,
+} from "@/lib/ui/view-transitions";
 
 const WeekOverview = dynamic(
   () => import("@/components/compare/week-overview").then((mod) => mod.WeekOverview),
@@ -26,13 +39,10 @@ const DiscoveryPanel = dynamic(
   () => import("@/components/compare/discovery-panel").then((mod) => mod.DiscoveryPanel),
   { loading: () => null }
 );
-import {
-  shiftWeek,
-  formatWeekLabel,
-  getWeekDate,
-  formatMinute,
-} from "@/hooks/use-compare";
-import type { UseCompareReturn } from "@/hooks/use-compare";
+
+const CALENDAR_START_HOUR = 7;
+const WEEK_PIXELS_PER_HOUR = 48;
+const DAY_PIXELS_PER_HOUR = 60;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -74,6 +84,132 @@ export function ComparePanel({
     getCurrentMonday,
   } = compare;
 
+  const weekScrollRef = useRef<HTMLDivElement | null>(null);
+  const dayScrollRef = useRef<HTMLDivElement | null>(null);
+  const calendarChunksReady = useRef(false);
+  const lastWeekNavigationStartedAt = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!compareResponse) {
+      calendarChunksReady.current = false;
+      return;
+    }
+
+    let cancelled = false;
+    calendarChunksReady.current = false;
+    void Promise.all([
+      import("@/components/compare/week-overview"),
+      import("@/components/compare/calendar-grid"),
+    ]).then(() => {
+      if (!cancelled) {
+        calendarChunksReady.current = true;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [compareResponse]);
+
+  const getScrollElementForDay = useCallback((day: number | null) => {
+    return day === null ? weekScrollRef.current : dayScrollRef.current;
+  }, []);
+
+  const getPixelsPerHourForDay = useCallback((day: number | null) => {
+    return day === null ? WEEK_PIXELS_PER_HOUR : DAY_PIXELS_PER_HOUR;
+  }, []);
+
+  const captureCalendarMinuteOfDay = useCallback(
+    (day: number | null = activeDay) => {
+      const el = getScrollElementForDay(day);
+      const sourcePixelsPerHour = getPixelsPerHourForDay(day);
+      const minuteOfDay = CALENDAR_START_HOUR * 60 + ((el?.scrollTop ?? 0) / sourcePixelsPerHour) * 60;
+
+      return minuteOfDay;
+    },
+    [activeDay, getPixelsPerHourForDay, getScrollElementForDay],
+  );
+
+  const restoreCalendarMinuteOfDay = useCallback(
+    (day: number | null, minuteOfDay: number) => {
+      const restore = () => {
+        const el = getScrollElementForDay(day);
+        if (!el) return;
+
+        const targetPixelsPerHour = getPixelsPerHourForDay(day);
+        const scrollTop = ((minuteOfDay - CALENDAR_START_HOUR * 60) / 60) * targetPixelsPerHour;
+        const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+        el.scrollTop = Math.max(0, Math.min(scrollTop, maxScrollTop));
+      };
+
+      restore();
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(restore);
+      }
+    },
+    [getPixelsPerHourForDay, getScrollElementForDay],
+  );
+
+  const restoreSameViewScrollTop = useCallback(
+    (day: number | null, scrollTop: number) => {
+      const restore = () => {
+        const el = getScrollElementForDay(day);
+        if (!el) return;
+
+        const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+        el.scrollTop = Math.max(0, Math.min(scrollTop, maxScrollTop));
+      };
+
+      restore();
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(restore);
+      }
+    },
+    [getScrollElementForDay],
+  );
+
+  const handleWeekChange = useCallback(
+    (targetWeek: string) => {
+      const kind = getWeekTransitionKind(weekStart, targetWeek);
+      if (kind === null) {
+        return;
+      }
+
+      const now = performance.now();
+      const rapid = isRapidWeekNavigation(lastWeekNavigationStartedAt.current, now);
+      lastWeekNavigationStartedAt.current = now;
+      const sameViewScrollTop = getScrollElementForDay(activeDay)?.scrollTop ?? 0;
+
+      void changeWeek(targetWeek, {
+        kind,
+        skipTransition: rapid,
+        capturedScrollTop: sameViewScrollTop,
+        restoreScrollTop: (top) => restoreSameViewScrollTop(activeDay, top),
+      });
+    },
+    [
+      activeDay,
+      changeWeek,
+      getScrollElementForDay,
+      restoreSameViewScrollTop,
+      weekStart,
+    ],
+  );
+
+  const handleDayChange = useCallback(
+    (targetDay: number | null) => {
+      const minuteOfDay = captureCalendarMinuteOfDay(activeDay);
+
+      // 5pm conversion guardrail: WeekOverview raw 480px -> 1020 minutes ->
+      // CalendarGrid raw 600px; inverse Day-to-Week maps 600px back to 480px.
+      void runCalendarViewTransition(() => {
+        flushSync(() => setActiveDay(targetDay));
+        restoreCalendarMinuteOfDay(targetDay, minuteOfDay);
+      }, { kind: "day", skip: !calendarChunksReady.current });
+    },
+    [activeDay, captureCalendarMinuteOfDay, restoreCalendarMinuteOfDay, setActiveDay],
+  );
+
   const conflictCountByDay = useMemo(() => {
     const map = new Map<number, number>();
     if (!compareResponse) return map;
@@ -85,9 +221,9 @@ export function ComparePanel({
 
   const handleDensityDayClick = useCallback(
     (day: number) => {
-      setActiveDay(day);
+      handleDayChange(day);
     },
-    [setActiveDay],
+    [handleDayChange],
   );
 
   return (
@@ -160,7 +296,7 @@ export function ComparePanel({
           <div className="flex items-center gap-2 mb-1 flex-shrink-0">
             <div className="flex items-center gap-1">
               <button
-                onClick={() => changeWeek(shiftWeek(weekStart, -1))}
+                onClick={() => handleWeekChange(shiftWeek(weekStart, -1))}
                 className="px-1.5 py-0.5 text-xs rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
                 aria-label="Previous week"
               >
@@ -181,14 +317,14 @@ export function ComparePanel({
                   <WeekCalendar
                     weekStart={weekStart}
                     onWeekSelect={(monday) => {
-                      changeWeek(monday);
+                      handleWeekChange(monday);
                       setCalendarOpen(false);
                     }}
                   />
                 </PopoverContent>
               </Popover>
               <button
-                onClick={() => changeWeek(shiftWeek(weekStart, 1))}
+                onClick={() => handleWeekChange(shiftWeek(weekStart, 1))}
                 className="px-1.5 py-0.5 text-xs rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
                 aria-label="Next week"
               >
@@ -196,7 +332,7 @@ export function ComparePanel({
               </button>
               {weekStart !== getCurrentMonday() && (
                 <button
-                  onClick={() => changeWeek(getCurrentMonday())}
+                  onClick={() => handleWeekChange(getCurrentMonday())}
                   className="px-1.5 py-0.5 text-[10px] rounded border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground ml-1"
                   aria-label="Go to current week"
                 >
@@ -222,7 +358,7 @@ export function ComparePanel({
                   ? "text-primary"
                   : "text-muted-foreground hover:text-foreground"
               }`}
-              onClick={() => setActiveDay(null)}
+              onClick={() => handleDayChange(null)}
             >
               Week
               {activeDay === null && (
@@ -237,7 +373,7 @@ export function ComparePanel({
                     ? "text-primary"
                     : "text-muted-foreground hover:text-foreground"
                 }`}
-                onClick={() => setActiveDay(day)}
+                onClick={() => handleDayChange(day)}
               >
                 {DAY_NAMES[day]} {getWeekDate(weekStart, day)}
                 {(conflictCountByDay.get(day) ?? 0) > 0 && (
@@ -260,7 +396,10 @@ export function ComparePanel({
           />
 
           {/* Calendar view */}
-          <div className={`flex-1 min-h-0 mt-1 ${activeDay !== null ? "overflow-y-auto" : ""}`}>
+          <div
+            ref={activeDay !== null ? dayScrollRef : undefined}
+            className={`compare-calendar-transition-surface flex-1 min-h-0 mt-1 ${activeDay !== null ? "overflow-y-auto" : ""}`}
+          >
             {activeDay !== null ? (
               <CalendarGrid
                 tutors={compareResponse.tutors}
@@ -281,7 +420,8 @@ export function ComparePanel({
                 conflicts={compareResponse.conflicts}
                 sharedFreeSlots={compareResponse.sharedFreeSlots}
                 weekStart={weekStart}
-                onDayClick={handleDensityDayClick}
+                onDayClick={handleDayChange}
+                scrollContainerRef={weekScrollRef}
               />
             )}
           </div>

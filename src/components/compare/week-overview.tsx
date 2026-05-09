@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type Ref } from "react";
 import { toZonedTime } from "date-fns-tz";
 import {
   Popover,
@@ -229,9 +229,18 @@ interface WeekOverviewProps {
   sharedFreeSlots?: SharedFreeSlot[];
   weekStart: string;
   onDayClick: (day: number) => void;
+  scrollContainerRef?: Ref<HTMLDivElement>;
 }
 
-export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, weekStart, onDayClick }: WeekOverviewProps) {
+export function WeekOverview({
+  tutors,
+  tutorChips,
+  conflicts,
+  sharedFreeSlots,
+  weekStart,
+  onDayClick,
+  scrollContainerRef,
+}: WeekOverviewProps) {
   // Today indicator state — CAL-03
   const [nowSnapshot, setNowSnapshot] = useState(() => {
     // REL-08: canonical "now in Bangkok" via date-fns-tz toZonedTime.
@@ -312,7 +321,7 @@ export function WeekOverview({ tutors, tutorChips, conflicts, sharedFreeSlots, w
       </div>
 
       {/* ── Scrollable body ── */}
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto min-h-0">
         {/* STICKY-01/02/04: Consolidated sticky tutor legend — single row of
             [● displayName] slots pinned to the top of the scroll container.
             Renders always (1, 2, or 3 tutors). Display-only per 08-CONTEXT.md
