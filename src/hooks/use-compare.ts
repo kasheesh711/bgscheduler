@@ -8,6 +8,11 @@ import { CACHE_VERSION } from "@/lib/search/cache-version";
 import { TIMEZONE } from "@/lib/normalization/timezone";
 import type { CompareResponse, CompareTutor, Conflict } from "@/lib/search/types";
 
+interface PreparedCompareState {
+  response: CompareResponse;
+  tutorChips: TutorChip[];
+}
+
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
@@ -87,14 +92,18 @@ export function useCompare() {
   const lastSnapshotId = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const fetchCompare = useCallback(async (
+  const commitPreparedCompare = useCallback((prepared: PreparedCompareState) => {
+    setCompareResponse(prepared.response);
+    setCompareTutors(prepared.tutorChips);
+  }, []);
+
+  const fetchCompareData = useCallback(async (
     ids: string[],
     week: string,
-    opts?: { fetchOnly?: string[]; _retried?: boolean },
-  ) => {
+    opts?: { fetchOnly?: string[]; _retried?: boolean; keepCurrentVisible?: boolean },
+  ): Promise<PreparedCompareState | null> => {
     if (ids.length === 0) {
-      setCompareResponse(null);
-      return;
+      return null;
     }
 
     // Abort any in-flight request
@@ -102,7 +111,9 @@ export function useCompare() {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    setCompareLoading(true);
+    if (!opts?.keepCurrentVisible) {
+      setCompareLoading(true);
+    }
     setCompareError(null);
     try {
       const res = await fetch("/api/compare", {
@@ -128,11 +139,13 @@ export function useCompare() {
         if (opts?._retried) {
           // Already retried once; surface the error rather than recurse again.
           setCompareError("Snapshot changed during fetch. Please retry.");
-          return;
+          return null;
         }
-        // Recursive full refetch (no fetchOnly). Do NOT clear loading here;
-        // the recursive call's finally{} block will clear it.
-        return fetchCompare(ids, week, { _retried: true });
+        // Recursive full refetch (no fetchOnly).
+        return await fetchCompareData(ids, week, {
+          _retried: true,
+          keepCurrentVisible: opts?.keepCurrentVisible,
+        });
       }
       lastSnapshotId.current = data.snapshotMeta.snapshotId;
 
@@ -146,24 +159,43 @@ export function useCompare() {
         .map((id) => tutorCache.current.get(`${id}:${week}:${CACHE_VERSION}`))
         .filter((t): t is CompareTutor => t !== undefined);
 
-      setCompareResponse({
-        ...data,
-        tutors: mergedTutors,
-      });
-      setCompareTutors(
-        mergedTutors.map((t, i) => ({
+      return {
+        response: {
+          ...data,
+          tutors: mergedTutors,
+        },
+        tutorChips: mergedTutors.map((t, i) => ({
           tutorGroupId: t.tutorGroupId,
           displayName: t.displayName,
           color: TUTOR_COLORS[i % TUTOR_COLORS.length],
         })),
-      );
+      };
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (err instanceof DOMException && err.name === "AbortError") return null;
       setCompareError(err instanceof Error ? err.message : "Compare failed");
+      return null;
     } finally {
-      setCompareLoading(false);
+      if (!opts?.keepCurrentVisible) {
+        setCompareLoading(false);
+      }
     }
   }, []);
+
+  const fetchCompare = useCallback(async (
+    ids: string[],
+    week: string,
+    opts?: { fetchOnly?: string[]; _retried?: boolean },
+  ) => {
+    if (ids.length === 0) {
+      setCompareResponse(null);
+      return;
+    }
+
+    const prepared = await fetchCompareData(ids, week, opts);
+    if (prepared) {
+      commitPreparedCompare(prepared);
+    }
+  }, [commitPreparedCompare, fetchCompareData]);
 
   const removeTutor = (id: string) => {
     const remaining = compareTutors.filter((t) => t.tutorGroupId !== id);
