@@ -4,11 +4,11 @@
 
 Focused helper/source tests: PASS
 - Command: `npm test -- src/lib/ui/__tests__/view-transitions.test.ts src/components/compare/__tests__/view-transitions-source.test.ts`
-- Result: 2 files passed, 19 tests passed.
+- Result: 2 files passed, 21 tests passed.
 
 Full unit suite: PASS
 - Command: `npm test`
-- Result: 32 files passed, 254 tests passed.
+- Result: 32 files passed, 256 tests passed.
 
 Lint: PASS
 - Command: `npm run lint`

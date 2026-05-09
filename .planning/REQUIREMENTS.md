@@ -261,6 +261,6 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-04-20*
-*Last updated: 2026-04-21 — Phase 5 CONTEXT.md D-02 amendment: POLISH-01 scoped to VoiceOver-only; NVDA-v12 added to v1.2+ deferred list*
+*Last updated: 2026-05-09 — Phase 10 VPOL-01 View Transitions verified PASS; TRANS-01..05 complete.*
 *Phase 8 D-10 amendment: 2026-04-22 — STICKY-02 scale simplified from 5-slot to 3-tier post-consolidation (see 08-CONTEXT.md D-08..D-10).*
 *Reliability remediation amendment: 2026-04-29 — Phases 8.5/8.6/8.7 inserted from `.planning/codebase/CONCERNS.md` (REL-01..08, TCOV-01..07, OPS-01..07).*

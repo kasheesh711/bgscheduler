@@ -29,7 +29,7 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 8.6: Test Coverage Hardening** — Close HIGH-risk gaps: search-index unit tests, sync-orchestrator integration tests, all 7 API route handler tests, past-sessions diff-hook integration, timezone DST/UTC-boundary, auth flow, modality contradiction emission (completed 2026-04-30)
 - [x] **Phase 8.7: Operational Maturity** — Snapshot pruning (retention), sync failure visibility, stale-snapshot banner, threshold raise to 26h, manual sync UI, dependency cleanup, version pinning (completed 2026-05-05)
 - [x] **Phase 9: VPOL-03 Density Overview** — Client-side density aggregation via `useMemo` over existing `CompareResponse.tutors[].sessions[]`; shape (A aggregate / B per-tutor / C heatmap) chosen via phase-local design review; `prefers-reduced-motion` + a11y text equivalents
-- [ ] **Phase 10: VPOL-01 View Transitions** — Native `document.startViewTransition()` helper in `src/lib/ui/view-transitions.ts` wired into week prev/next/today + day-tab switches with manual scroll capture/restore and `prefers-reduced-motion` CSS skip
+- [x] **Phase 10: VPOL-01 View Transitions** — Native `document.startViewTransition()` helper in `src/lib/ui/view-transitions.ts` wired into week prev/next/today + day-tab switches with manual scroll capture/restore and `prefers-reduced-motion` CSS skip (completed 2026-05-09)
 
 ## Phase Details
 
@@ -208,7 +208,7 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   - [x] 10-01-PLAN.md - Typed native view-transition helper plus unit tests
   - [x] 10-02-PLAN.md - Fetch-first week timing path in `useCompare`
   - [x] 10-03-PLAN.md - ComparePanel week/day wiring, scroll preservation, and CSS
-  - [ ] 10-04-PLAN.md - Automated evidence plus browser QA checkpoint
+  - [x] 10-04-PLAN.md - Automated evidence plus browser QA checkpoint
 **UI hint**: yes
 
 ## Next Milestone
@@ -231,4 +231,4 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 8.6. Test Coverage Hardening | v1.1 | 8/8 | Complete | 2026-04-30 |
 | 8.7. Operational Maturity | v1.1 | 5/5 | Complete | 2026-05-05 |
 | 9. VPOL-03 Density Overview | v1.1 | 3/3 | Complete | 2026-05-08 |
-| 10. VPOL-01 View Transitions | v1.1 | 3/4 | In Progress|  |
+| 10. VPOL-01 View Transitions | v1.1 | 4/4 | Complete    | 2026-05-09 |

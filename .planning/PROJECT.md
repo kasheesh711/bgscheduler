@@ -10,9 +10,9 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 
 ## Current State
 
-**Shipped version:** v1.0 (2026-04-17) + v1.0.1 hotfeature (2026-04-20, commit `9e3e4ad`) + v1.1 Phase 5 POLISH Drain (2026-04-21, commit `303dcf6`) + v1.1 Phase 7 PAST-01 code-complete (2026-04-22, commit `bcc2268`, pending operator migration to Neon) + v1.1 Phase 8.7 Operational Maturity (2026-05-05, verified PASS) + v1.1 Phase 9 VPOL-03 Density Overview (2026-05-08, verified PASS)
+**Shipped version:** v1.0 (2026-04-17) + v1.0.1 hotfeature (2026-04-20, commit `9e3e4ad`) + v1.1 Phase 5 POLISH Drain (2026-04-21, commit `303dcf6`) + v1.1 Phase 7 PAST-01 code-complete (2026-04-22, commit `bcc2268`, pending operator migration to Neon) + v1.1 Phase 8.7 Operational Maturity (2026-05-05, verified PASS) + v1.1 Phase 9 VPOL-03 Density Overview (2026-05-08, verified PASS) + v1.1 Phase 10 VPOL-01 View Transitions (2026-05-09, verified PASS)
 **Production URL:** https://bgscheduler.vercel.app
-**Status:** Live, daily Wise sync active, 225 unit tests + 11 integration tests passing
+**Status:** Live, daily Wise sync active, Phase 10 verification passing with 256 unit tests and lint exit 0
 
 ### What's live after v1.0.1 (2026-04-20)
 - **Recommended slots hero** — top of search results shows up to 3 auto-ranked time slots (sub-slot with most qualified tutors free), each with avatar stack, checkmark reasons, "Copy for parent" action, and a "Show in calendar" quick-add; select multiple slots to bundle into one message
@@ -45,7 +45,7 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 **Target features:**
 - Reliable online/onsite detection via `isOnlineVariant` + sessionType; fail-closed Needs Review when ambiguous
 - Past-day session visibility — try Wise historical endpoint; fallback to DB-snapshot storage of past FUTURE sessions
-- View transitions (VPOL-01) across calendar / week / tutor navigation
+- View transitions (VPOL-01) across calendar / week / day navigation — completed in Phase 10
 - Sticky tutor legend (VPOL-02) during calendar scroll
 - Density overview / mini-map (VPOL-03) — completed as Shape B per-tutor stacked density rows in Phase 9
 - v1.0 polish & tech-debt drain: Phase 04 human QA (5 items), Phase 03 M1–M3 + L1–L4 findings, retroactive Phase 02 VERIFICATION.md, TutorSelector cleanup, v1.0.1 UAT + `recommend.test.ts`
@@ -113,11 +113,12 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 **v1.1 Phase 9 VPOL-03 Density Overview (verified 2026-05-08):**
 - ✓ DENS-01..04 — Shape B per-tutor stacked density rows added to the compare panel between day tabs and the calendar body; density derives client-side from existing `CompareResponse.tutors[].sessions[]`, `availabilityWindows`, and `weeklyHoursBooked` via `useMemo`; no API, schema, SearchIndex, cache-version, or localStorage work added; native button segments expose day/tutor/booked-hours/session-count labels and open the existing day view only; manual visual, keyboard, VoiceOver, and reduced-motion checks passed. Verification passed 16/16 must-haves, code review clean, 30 unit test files / 235 tests passing, lint exits 0 with warnings.
 
+**v1.1 Phase 10 VPOL-01 View Transitions (verified 2026-05-09):**
+- ✓ TRANS-01..05 — Native `document.startViewTransition()` helper at `src/lib/ui/view-transitions.ts` wired into compare week prev/next/Today/calendar-popup navigation and day-tab/density navigation; week changes fetch target data before committing the final loaded response inside the transition update; unsupported browsers and reduced-motion users get instant changes; scroll preservation converts through normalized minute-of-day between the 48 px/hour week view and 60 px/hour day view; browser QA signed off all nine rendered checks including 5pm Week-to-Day/Day-to-Week preservation and no skeleton/loading capture. Verification passed 20/20 must-haves, code review clean after post-review client-state fixes, 32 unit test files / 256 tests passing, lint exits 0 with warnings.
+
 ### Active
 
-v1.1 scope remaining after Phase 9 VPOL-03 Density Overview:
-
-- **TRANS-01..05** View transitions (VPOL-01) — native `document.startViewTransition()` on week prev/next/today + day-tab switches; scroll capture/restore; reduced-motion CSS skip — **Phase 10**
+v1.1 roadmap scope is complete after Phase 10 VPOL-01 View Transitions. No active v1.1 requirements remain in the current roadmap.
 
 Deferred to v1.2:
 - **NVDA-v12** — NVDA screen-reader sign-off (Windows-only; deferred from POLISH-01 per Phase 5 D-02 — user has macOS-only access)
@@ -200,4 +201,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Context update
 
 ---
-*Last updated: 2026-05-08 — Phase 9 VPOL-03 Density Overview complete (3/3 plans, DENS-01..04 verified PASS, clean code review, 30 unit test files / 235 tests passing, lint exits 0 with warnings); ready for Phase 10 View Transitions.*
+*Last updated: 2026-05-09 — Phase 10 VPOL-01 View Transitions complete (4/4 plans, TRANS-01..05 verified PASS, clean code review after post-review fix, 32 unit test files / 256 tests passing, lint exits 0 with warnings); v1.1 roadmap scope complete.*
