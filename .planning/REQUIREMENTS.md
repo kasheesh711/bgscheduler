@@ -81,7 +81,7 @@ Added 2026-04-29 from codebase audit. Operational features and dependency hygien
 ### Visual Polish — View Transitions (VPOL-01)
 
 - [x] **TRANS-01**: Week prev/next/today navigation animates via native `document.startViewTransition()`
-- [ ] **TRANS-02**: Day-tab switches in compare view animate via view transition
+- [x] **TRANS-02**: Day-tab switches in compare view animate via view transition
 - [x] **TRANS-03**: `@media (prefers-reduced-motion: reduce)` CSS skips all view-transition animations
 - [x] **TRANS-04**: Calendar scroll position is preserved across view transitions (manual `scrollTop` capture/restore)
 - [x] **TRANS-05**: View-transition helper lives in `src/lib/ui/view-transitions.ts` and does NOT wrap the RSC streaming boundary
@@ -221,7 +221,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DENS-03 | Phase 9 | Complete |
 | DENS-04 | Phase 9 | Complete |
 | TRANS-01 | Phase 10 | Complete |
-| TRANS-02 | Phase 10 | Pending |
+| TRANS-02 | Phase 10 | Complete |
 | TRANS-03 | Phase 10 | Complete |
 | TRANS-04 | Phase 10 | Complete |
 | TRANS-05 | Phase 10 | Complete |

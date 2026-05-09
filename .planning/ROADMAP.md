@@ -207,7 +207,7 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 **Plans**: 4 plans
   - [x] 10-01-PLAN.md - Typed native view-transition helper plus unit tests
   - [x] 10-02-PLAN.md - Fetch-first week timing path in `useCompare`
-  - [ ] 10-03-PLAN.md - ComparePanel week/day wiring, scroll preservation, and CSS
+  - [x] 10-03-PLAN.md - ComparePanel week/day wiring, scroll preservation, and CSS
   - [ ] 10-04-PLAN.md - Automated evidence plus browser QA checkpoint
 **UI hint**: yes
 
@@ -231,4 +231,4 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 8.6. Test Coverage Hardening | v1.1 | 8/8 | Complete | 2026-04-30 |
 | 8.7. Operational Maturity | v1.1 | 5/5 | Complete | 2026-05-05 |
 | 9. VPOL-03 Density Overview | v1.1 | 3/3 | Complete | 2026-05-08 |
-| 10. VPOL-01 View Transitions | v1.1 | 2/4 | In Progress|  |
+| 10. VPOL-01 View Transitions | v1.1 | 3/4 | In Progress|  |
