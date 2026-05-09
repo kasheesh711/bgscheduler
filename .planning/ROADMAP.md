@@ -205,7 +205,7 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   4. Admin returning to a previously-scrolled time-of-day position in the calendar after a week change finds the scroll position preserved (manual `scrollTop` capture/restore honoring the internal calendar container, not the document)
   5. View-transition helper lives in `src/lib/ui/view-transitions.ts`, is called from client-state handlers (week change, day switch), and explicitly does NOT wrap the RSC streaming boundary or `cacheComponents`-tagged server data
 **Plans**: 4 plans
-  - [ ] 10-01-PLAN.md - Typed native view-transition helper plus unit tests
+  - [x] 10-01-PLAN.md - Typed native view-transition helper plus unit tests
   - [ ] 10-02-PLAN.md - Fetch-first week timing path in `useCompare`
   - [ ] 10-03-PLAN.md - ComparePanel week/day wiring, scroll preservation, and CSS
   - [ ] 10-04-PLAN.md - Automated evidence plus browser QA checkpoint
@@ -231,4 +231,4 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 8.6. Test Coverage Hardening | v1.1 | 8/8 | Complete | 2026-04-30 |
 | 8.7. Operational Maturity | v1.1 | 5/5 | Complete | 2026-05-05 |
 | 9. VPOL-03 Density Overview | v1.1 | 3/3 | Complete | 2026-05-08 |
-| 10. VPOL-01 View Transitions | v1.1 | 0/? | Not started | - |
+| 10. VPOL-01 View Transitions | v1.1 | 1/4 | In Progress|  |

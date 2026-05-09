@@ -82,9 +82,9 @@ Added 2026-04-29 from codebase audit. Operational features and dependency hygien
 
 - [ ] **TRANS-01**: Week prev/next/today navigation animates via native `document.startViewTransition()`
 - [ ] **TRANS-02**: Day-tab switches in compare view animate via view transition
-- [ ] **TRANS-03**: `@media (prefers-reduced-motion: reduce)` CSS skips all view-transition animations
+- [x] **TRANS-03**: `@media (prefers-reduced-motion: reduce)` CSS skips all view-transition animations
 - [ ] **TRANS-04**: Calendar scroll position is preserved across view transitions (manual `scrollTop` capture/restore)
-- [ ] **TRANS-05**: View-transition helper lives in `src/lib/ui/view-transitions.ts` and does NOT wrap the RSC streaming boundary
+- [x] **TRANS-05**: View-transition helper lives in `src/lib/ui/view-transitions.ts` and does NOT wrap the RSC streaming boundary
 
 ### Backlog Drain — Phase 04 human QA
 
@@ -222,9 +222,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DENS-04 | Phase 9 | Complete |
 | TRANS-01 | Phase 10 | Pending |
 | TRANS-02 | Phase 10 | Pending |
-| TRANS-03 | Phase 10 | Pending |
+| TRANS-03 | Phase 10 | Complete |
 | TRANS-04 | Phase 10 | Pending |
-| TRANS-05 | Phase 10 | Pending |
+| TRANS-05 | Phase 10 | Complete |
 | POLISH-01 | Phase 5 | Complete |
 | POLISH-02 | Phase 5 | Complete |
 | POLISH-03 | Phase 5 | Complete |
