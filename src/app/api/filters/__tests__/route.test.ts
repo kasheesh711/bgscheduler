@@ -1,52 +1,20 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
-import type { IndexedTutorGroup, SearchIndex } from "@/lib/search/index";
+import type { FilterOptions } from "@/lib/data/filters";
 
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
-vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
-vi.mock("@/lib/search/index", () => ({ ensureIndex: vi.fn() }));
+vi.mock("@/lib/data/filters", () => ({ getFilterOptions: vi.fn() }));
 
 import { auth } from "@/lib/auth";
-import { getDb } from "@/lib/db";
-import { ensureIndex } from "@/lib/search/index";
+import { getFilterOptions } from "@/lib/data/filters";
 import { GET } from "@/app/api/filters/route";
 
 const authMock = auth as unknown as Mock;
 
-function makeTutorGroup(overrides: Partial<IndexedTutorGroup>): IndexedTutorGroup {
+function makeFilterOptions(): FilterOptions {
   return {
-    id: "g1",
-    canonicalKey: "test",
-    displayName: "Test Tutor",
-    supportedModes: ["online"],
-    qualifications: [],
-    wiseRecords: [],
-    availabilityWindows: [],
-    leaves: [],
-    sessionBlocks: [],
-    dataIssues: [],
-    ...overrides,
-  };
-}
-
-function makeIndex(): SearchIndex {
-  const groups = [
-    makeTutorGroup({
-      id: "g1",
-      qualifications: [
-        { subject: "Physics", curriculum: "IB", level: "Grade 11" },
-        { subject: "Math", curriculum: "AP", level: "Grade 10" },
-      ],
-    }),
-    makeTutorGroup({
-      id: "g2",
-      qualifications: [{ subject: "Biology", curriculum: "IB", level: "Grade 10" }],
-    }),
-  ];
-  return {
-    snapshotId: "snap-1",
-    builtAt: new Date("2026-04-06T00:00:00.000Z"),
-    tutorGroups: groups,
-    byWeekday: new Map(),
+    subjects: ["Biology", "Math", "Physics"],
+    curriculums: ["AP", "IB"],
+    levels: ["Grade 10", "Grade 11"],
   };
 }
 
@@ -54,8 +22,7 @@ describe("GET /api/filters", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     authMock.mockResolvedValue({ user: { email: "kevhsh7@gmail.com" } });
-    vi.mocked(getDb).mockReturnValue({} as never);
-    vi.mocked(ensureIndex).mockResolvedValue(makeIndex() as never);
+    vi.mocked(getFilterOptions).mockResolvedValue(makeFilterOptions());
   });
 
   it("returns 401 when unauthenticated", async () => {
@@ -78,8 +45,8 @@ describe("GET /api/filters", () => {
     });
   });
 
-  it("returns 500 when ensureIndex throws", async () => {
-    vi.mocked(ensureIndex).mockRejectedValue(new Error("DB exploded") as never);
+  it("returns 500 when filter loading throws", async () => {
+    vi.mocked(getFilterOptions).mockRejectedValue(new Error("DB exploded"));
 
     const res = await GET();
 
