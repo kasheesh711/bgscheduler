@@ -90,7 +90,7 @@ export default function DataHealthPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
-  const loadHealthData = useCallback(async ({ showLoading = false } = {}) => {
+  const loadHealthData = useCallback(async ({ showLoading = false } = {}): Promise<HealthData | null> => {
     if (showLoading) setLoading(true);
 
     try {
@@ -98,8 +98,10 @@ export default function DataHealthPage() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const healthData = (await response.json()) as HealthData;
       setData(healthData);
+      return healthData;
     } catch (err) {
       console.error(err);
+      return null;
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -120,13 +122,22 @@ export default function DataHealthPage() {
 
     setSyncing(true);
     setSyncMessage(null);
+    const startedAtMs = Date.now();
+    let refreshed = false;
+
+    const completedAfterStart = (healthData: HealthData | null) => {
+      const lastSuccess = healthData?.lastSuccessfulSync;
+      if (!lastSuccess) return false;
+      return new Date(lastSuccess).getTime() >= startedAtMs - 30_000;
+    };
 
     try {
       const response = await fetch("/api/admin/sync-wise", { method: "POST" });
       let body: { error?: string; errorSummary?: string | null } = {};
+      const text = await response.text();
 
       try {
-        body = (await response.json()) as { error?: string; errorSummary?: string | null };
+        body = text ? JSON.parse(text) as { error?: string; errorSummary?: string | null } : {};
       } catch {
         body = {};
       }
@@ -134,13 +145,26 @@ export default function DataHealthPage() {
       if (response.ok) {
         setSyncMessage("Sync completed successfully.");
       } else {
-        setSyncMessage(`Sync failed: ${body.errorSummary || body.error || "Unknown error"}`);
+        const healthData = await loadHealthData();
+        refreshed = true;
+        if (completedAfterStart(healthData)) {
+          setSyncMessage("Sync completed successfully. The browser request ended before the final response was received.");
+        } else {
+          const fallback = `HTTP ${response.status}${text && !body.error && !body.errorSummary ? `: ${text.slice(0, 160)}` : ""}`;
+          setSyncMessage(`Sync failed: ${body.errorSummary || body.error || fallback}`);
+        }
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      setSyncMessage(`Sync failed: ${message}`);
+      const healthData = await loadHealthData();
+      refreshed = true;
+      if (completedAfterStart(healthData)) {
+        setSyncMessage("Sync completed successfully. The browser request ended before the final response was received.");
+      } else {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        setSyncMessage(`Sync failed: ${message}`);
+      }
     } finally {
-      await loadHealthData();
+      if (!refreshed) await loadHealthData();
       setSyncing(false);
     }
   }
