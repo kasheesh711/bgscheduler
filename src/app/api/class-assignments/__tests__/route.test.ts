@@ -13,6 +13,10 @@ vi.mock("@/lib/classrooms/data", () => ({
   updateClassroomAssignmentOverride: vi.fn(),
   publishClassroomAssignmentRun: vi.fn(),
 }));
+vi.mock("@/lib/classrooms/schedule-email", () => ({
+  getScheduleEmailPreview: vi.fn(),
+  sendScheduleEmailsForRun: vi.fn(),
+}));
 
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
@@ -22,10 +26,16 @@ import {
   runClassroomAssignment,
   updateClassroomAssignmentOverride,
 } from "@/lib/classrooms/data";
+import {
+  getScheduleEmailPreview,
+  sendScheduleEmailsForRun,
+} from "@/lib/classrooms/schedule-email";
 import { GET as getAssignments } from "../route";
 import { POST as runAssignments } from "../run/route";
 import { PATCH as patchOverride } from "../runs/[runId]/rows/[rowId]/route";
 import { POST as publishAssignments } from "../runs/[runId]/publish/route";
+import { GET as previewScheduleEmail } from "../runs/[runId]/schedule-email/preview/route";
+import { POST as sendScheduleEmail } from "../runs/[runId]/schedule-email/send/route";
 
 const authMock = auth as unknown as Mock;
 
@@ -33,6 +43,16 @@ const detail = {
   run: { id: "run-1", assignmentDate: "2026-05-14" },
   rows: [],
   rooms: [],
+};
+
+const schedulePreview = {
+  ready: true,
+  assignmentRunId: "run-1",
+  assignmentDate: "2026-05-14",
+  subject: "BeGifted schedule for 14/5/2026",
+  blockers: [],
+  recipients: [],
+  previews: [],
 };
 
 describe("class assignment routes", () => {
@@ -46,6 +66,12 @@ describe("class assignment routes", () => {
     vi.mocked(publishClassroomAssignmentRun).mockResolvedValue({
       detail,
       summary: { attempted: 1, success: 1, skipped: 0, failed: 0 },
+    } as never);
+    vi.mocked(getScheduleEmailPreview).mockResolvedValue(schedulePreview as never);
+    vi.mocked(sendScheduleEmailsForRun).mockResolvedValue({
+      summary: { attempted: 1, success: 1, failed: 0, blocked: 0 },
+      recipients: [],
+      preview: schedulePreview,
     } as never);
   });
 
@@ -112,5 +138,54 @@ describe("class assignment routes", () => {
       detail,
       summary: { attempted: 1, success: 1, skipped: 0, failed: 0 },
     });
+  });
+
+  it("previews teacher schedule emails", async () => {
+    const res = await previewScheduleEmail(
+      new Request("http://test.local/api/class-assignments/runs/run-1/schedule-email/preview"),
+      { params: Promise.resolve({ runId: "run-1" }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(getScheduleEmailPreview).toHaveBeenCalledWith({ db: true }, "run-1");
+    await expect(res.json()).resolves.toEqual(schedulePreview);
+  });
+
+  it("sends teacher schedule emails with the signed-in admin as creator", async () => {
+    const res = await sendScheduleEmail(
+      new Request("http://test.local/api/class-assignments/runs/run-1/schedule-email/send", {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ runId: "run-1" }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(sendScheduleEmailsForRun).toHaveBeenCalledWith(
+      { db: true },
+      "run-1",
+      "admin@example.com",
+    );
+    await expect(res.json()).resolves.toEqual({
+      summary: { attempted: 1, success: 1, failed: 0, blocked: 0 },
+      recipients: [],
+      preview: schedulePreview,
+    });
+  });
+
+  it("returns conflict when schedule email send is blocked", async () => {
+    vi.mocked(sendScheduleEmailsForRun).mockResolvedValue({
+      summary: { attempted: 0, success: 0, failed: 0, blocked: 1 },
+      recipients: [],
+      preview: { ...schedulePreview, ready: false, blockers: [{ type: "missing_recipient_email", message: "Missing email" }] },
+    } as never);
+
+    const res = await sendScheduleEmail(
+      new Request("http://test.local/api/class-assignments/runs/run-1/schedule-email/send", {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ runId: "run-1" }) },
+    );
+
+    expect(res.status).toBe(409);
   });
 });

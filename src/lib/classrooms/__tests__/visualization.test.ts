@@ -13,6 +13,7 @@ import {
   type ClassroomVisualizationRow,
   REVIEW_LANE_ROOM_NAME,
 } from "../visualization";
+import { REMOTE_NO_ROOM_NEEDED } from "../assignment-engine";
 
 function rooms(): ClassroomVisualizationRoom[] {
   return DEFAULT_CLASSROOM_ROOMS.map((room, index) => ({
@@ -114,6 +115,39 @@ describe("classroom visualization helpers", () => {
       "unknown",
       "warning",
     ]);
+  });
+
+  it("excludes remote online rows from occupancy, heat maps, review lanes, and timeline bounds", () => {
+    const remote = row({
+      id: "remote",
+      assignedRoom: REMOTE_NO_ROOM_NEEDED,
+      status: "remote",
+      sessionType: "SCHEDULED",
+      startMinute: 23 * 60,
+      endMinute: 24 * 60,
+    });
+    const onsite = row({
+      id: "onsite",
+      assignedRoom: "Focus",
+      startMinute: 9 * 60,
+      endMinute: 10 * 60,
+    });
+
+    const state = buildRoomOccupancyState([remote], rooms(), 23 * 60 + 15);
+    const cells = buildHeatmapCells([remote], rooms(), {
+      startMinute: 23 * 60,
+      endMinute: 24 * 60,
+      initialMinute: 23 * 60,
+    });
+    const events = buildRoomCalendarEvents([remote], rooms());
+    const bounds = buildTimelineBounds([remote, onsite]);
+
+    expect(state.reviewRows).toHaveLength(0);
+    expect(state.rooms.every((room) => room.activeRows.length === 0)).toBe(true);
+    expect(cells.every((cell) => !cell.active)).toBe(true);
+    expect(events).toHaveLength(0);
+    expect(bounds.initialMinute).toBe(9 * 60);
+    expect(bounds.endMinute).toBe(21 * 60);
   });
 
   it("marks every 15-minute heat-map bin crossed by a session", () => {

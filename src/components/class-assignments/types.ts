@@ -7,6 +7,7 @@ export interface ClassroomRun {
   assignedCount: number;
   needsReviewCount: number;
   noRoomCount: number;
+  remoteCount: number;
   publishedCount: number;
   failedPublishCount: number;
   createdAt: string;
@@ -49,7 +50,7 @@ export interface ClassroomRow {
   preferredRoom: string | null;
   overrideRoom: string | null;
   assignedRoom: string;
-  status: "assigned" | "needs_review" | "no_room";
+  status: "assigned" | "needs_review" | "no_room" | "remote";
   warnings: string[];
   publishStatus: "not_published" | "skipped" | "success" | "failed";
   publishError: string | null;

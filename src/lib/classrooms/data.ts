@@ -11,6 +11,7 @@ import {
   type AssignmentResultRow,
   type AssignmentSession,
   isOfflineSession,
+  REMOTE_NO_ROOM_NEEDED,
 } from "./assignment-engine";
 import {
   DEFAULT_CLASSROOM_ROOMS,
@@ -77,6 +78,13 @@ function dateRangeForBangkokDate(value: string): { start: Date; end: Date } {
 
 function formatTime(date: Date): string {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function classroomRoomLabel(row: Pick<ClassroomRow, "status" | "assignedRoom">): string {
+  if (row.status === "remote" || row.assignedRoom === REMOTE_NO_ROOM_NEEDED) {
+    return "Remote / no room needed";
+  }
+  return row.assignedRoom;
 }
 
 export async function ensureDefaultClassroomRooms(db: Database): Promise<void> {
@@ -294,6 +302,7 @@ async function persistAssignmentRun(
     assignedCount: assignmentRows.filter((row) => row.status === "assigned").length,
     needsReviewCount: assignmentRows.filter((row) => row.status === "needs_review").length,
     noRoomCount: assignmentRows.filter((row) => row.status === "no_room").length,
+    remoteCount: assignmentRows.filter((row) => row.status === "remote").length,
   };
 
   const [run] = await db
@@ -408,6 +417,7 @@ async function updateRunRowsFromAssignment(
       assignedCount: result.counts.assignedCount,
       needsReviewCount: result.counts.needsReviewCount,
       noRoomCount: result.counts.noRoomCount,
+      remoteCount: result.counts.remoteCount,
       publishedCount: 0,
       failedPublishCount: 0,
       status: "completed",
@@ -481,6 +491,9 @@ export function isClassroomPublishEligible(
     "status" | "assignedRoom" | "sessionType" | "wiseClassId" | "wiseSessionId" | "warnings"
   >,
 ): { eligible: true } | { eligible: false; reason: string } {
+  if (row.status === "remote" || row.assignedRoom === REMOTE_NO_ROOM_NEEDED) {
+    return { eligible: false, reason: "Remote online session has no Wise location to publish" };
+  }
   if (row.status !== "assigned") return { eligible: false, reason: "Only assigned rows can publish" };
   if (!row.assignedRoom || row.assignedRoom === NO_ROOM_AVAILABLE) {
     return { eligible: false, reason: "No assigned room to publish" };
@@ -608,7 +621,7 @@ export async function getTeacherScheduleForRun(
       date: row.startTime.toISOString().slice(0, 10),
       startTime: formatTime(new Date(row.startTime)),
       endTime: formatTime(new Date(row.endTime)),
-      room: row.assignedRoom,
+      room: classroomRoomLabel(row),
       studentName: row.studentName,
       subject: row.subject,
       classType: row.classType,

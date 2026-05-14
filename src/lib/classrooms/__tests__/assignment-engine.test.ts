@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { assignClassrooms, type AssignmentSession } from "../assignment-engine";
+import {
+  assignClassrooms,
+  REMOTE_NO_ROOM_NEEDED,
+  type AssignmentSession,
+} from "../assignment-engine";
 import { DEFAULT_CLASSROOM_ROOMS, NO_ROOM_AVAILABLE } from "../rooms";
 
 function session(overrides: Partial<AssignmentSession> = {}): AssignmentSession {
@@ -50,7 +54,7 @@ describe("assignClassrooms", () => {
     expect(DEFAULT_CLASSROOM_ROOMS.find((room) => room.name === result.rows[0].assignedRoom)?.hasTv).toBe(true);
   });
 
-  it("keeps online-only rooms for online sessions and blocks them for offline sessions", () => {
+  it("marks online-only days remote and blocks online-only rooms for offline sessions", () => {
     const online = assignClassrooms([
       session({ sessionType: "ONLINE", studentCount: 1 }),
     ], DEFAULT_CLASSROOM_ROOMS);
@@ -58,8 +62,115 @@ describe("assignClassrooms", () => {
       session({ sessionType: "OFFLINE", studentCount: 1 }),
     ], DEFAULT_CLASSROOM_ROOMS);
 
-    expect(online.rows[0].assignedRoom).toBe("I learned (online)");
+    expect(online.rows[0].assignedRoom).toBe(REMOTE_NO_ROOM_NEEDED);
+    expect(online.rows[0].status).toBe("remote");
     expect(offline.rows[0].assignedRoom).not.toMatch(/online/i);
+  });
+
+  it("treats Wise SCHEDULED sessions as online and marks online-only days remote", () => {
+    const result = assignClassrooms([
+      session({ sessionType: "SCHEDULED", studentCount: 1 }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    expect(result.rows[0]).toMatchObject({
+      assignedRoom: REMOTE_NO_ROOM_NEEDED,
+      status: "remote",
+    });
+    expect(result.counts.remoteCount).toBe(1);
+  });
+
+  it("assigns an online room when an online class starts less than 60 minutes before onsite", () => {
+    const result = assignClassrooms([
+      session({
+        wiseSessionId: "online",
+        sessionType: "SCHEDULED",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        wiseSessionId: "onsite",
+        sessionType: "OFFLINE",
+        startMinute: 10 * 60 + 59,
+        endMinute: 12 * 60,
+      }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    const online = result.rows.find((row) => row.wiseSessionId === "online")!;
+    expect(online.status).toBe("assigned");
+    expect(online.assignedRoom).not.toBe(REMOTE_NO_ROOM_NEEDED);
+  });
+
+  it("marks an online class remote when the gap to onsite is exactly 60 minutes", () => {
+    const result = assignClassrooms([
+      session({
+        wiseSessionId: "online",
+        sessionType: "SCHEDULED",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        wiseSessionId: "onsite",
+        sessionType: "OFFLINE",
+        startMinute: 11 * 60,
+        endMinute: 12 * 60,
+      }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    const online = result.rows.find((row) => row.wiseSessionId === "online")!;
+    expect(online.status).toBe("remote");
+    expect(online.assignedRoom).toBe(REMOTE_NO_ROOM_NEEDED);
+  });
+
+  it("marks later online classes remote after a 60-minute gap with no later onsite class", () => {
+    const result = assignClassrooms([
+      session({
+        wiseSessionId: "onsite",
+        sessionType: "OFFLINE",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        wiseSessionId: "connected-online",
+        sessionType: "SCHEDULED",
+        startMinute: 10 * 60 + 30,
+        endMinute: 11 * 60 + 30,
+      }),
+      session({
+        wiseSessionId: "remote-online",
+        sessionType: "SCHEDULED",
+        startMinute: 12 * 60 + 30,
+        endMinute: 13 * 60 + 30,
+      }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    expect(result.rows.find((row) => row.wiseSessionId === "connected-online")?.status).toBe("assigned");
+    expect(result.rows.find((row) => row.wiseSessionId === "remote-online")).toMatchObject({
+      status: "remote",
+      assignedRoom: REMOTE_NO_ROOM_NEEDED,
+    });
+  });
+
+  it("prefers the tutor's same room for center-required online sessions", () => {
+    const result = assignClassrooms([
+      session({
+        wiseSessionId: "onsite",
+        tutorDisplayName: "Tutor One",
+        sessionType: "OFFLINE",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        wiseSessionId: "online",
+        tutorDisplayName: "Tutor One",
+        sessionType: "SCHEDULED",
+        startMinute: 10 * 60 + 30,
+        endMinute: 11 * 60 + 30,
+      }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    const onsite = result.rows.find((row) => row.wiseSessionId === "onsite")!;
+    const online = result.rows.find((row) => row.wiseSessionId === "online")!;
+    expect(online.assignedRoom).toBe(onsite.assignedRoom);
   });
 
   it("hard-fixes Gift to Joy and routes overlapping non-Gift work elsewhere", () => {

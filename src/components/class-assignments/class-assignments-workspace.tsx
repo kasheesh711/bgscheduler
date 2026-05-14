@@ -1,7 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, Grid3X3, Map as MapIcon, Play, RefreshCw, Table2, UploadCloud, Users } from "lucide-react";
+import {
+  CalendarDays,
+  Grid3X3,
+  Mail,
+  Map as MapIcon,
+  Play,
+  RefreshCw,
+  Send,
+  Table2,
+  UploadCloud,
+  Users,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +41,53 @@ import { RoomOccupancyHeatmap } from "./room-occupancy-heatmap";
 import type { AssignmentDetail, ClassroomRow } from "./types";
 
 const NO_ROOM_AVAILABLE = "NO_ROOM_AVAILABLE";
+const REMOTE_NO_ROOM_NEEDED = "REMOTE_NO_ROOM_NEEDED";
+
+interface ScheduleEmailPreview {
+  ready: boolean;
+  assignmentRunId: string;
+  assignmentDate: string;
+  subject: string;
+  blockers: Array<{ type: string; message: string; tutorDisplayName?: string }>;
+  recipients: Array<{
+    groupId: string;
+    canonicalKey: string;
+    tutorDisplayName: string;
+    email: string | null;
+    status: "ready" | "blocked";
+    blockReason: string | null;
+  }>;
+  previews: Array<{
+    recipient: {
+      tutorDisplayName: string;
+      email: string | null;
+      status: "ready" | "blocked";
+      blockReason: string | null;
+    };
+    subject: string;
+    text: string;
+    blocks: Array<{
+      rowId: string;
+      time: string;
+      studentOrClass: string;
+      subject: string;
+      mode: string;
+      room: string;
+    }>;
+  }>;
+}
+
+interface ScheduleEmailSendResult {
+  summary: { attempted: number; success: number; failed: number; blocked: number };
+  recipients: Array<{
+    tutorDisplayName: string;
+    email: string | null;
+    sendStatus: "sent" | "failed" | "blocked";
+    resendEmailId: string | null;
+    error: string | null;
+  }>;
+  preview: ScheduleEmailPreview;
+}
 
 function todayBangkok(): string {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -55,10 +113,18 @@ function classLabel(row: ClassroomRow): string {
   return row.subject || row.classType || row.title || "";
 }
 
+function roomLabel(row: ClassroomRow): string {
+  if (row.status === "remote" || row.assignedRoom === REMOTE_NO_ROOM_NEEDED) {
+    return "Remote / no room needed";
+  }
+  return row.assignedRoom;
+}
+
 function isPublishEligible(row: ClassroomRow): boolean {
   return (
     row.status === "assigned" &&
     row.assignedRoom !== NO_ROOM_AVAILABLE &&
+    row.assignedRoom !== REMOTE_NO_ROOM_NEEDED &&
     row.sessionType?.toUpperCase() === "OFFLINE" &&
     Boolean(row.wiseClassId) &&
     !row.warnings.includes("needs_review_missing_capacity")
@@ -67,6 +133,7 @@ function isPublishEligible(row: ClassroomRow): boolean {
 
 function StatusBadge({ status }: { status: ClassroomRow["status"] }) {
   if (status === "assigned") return <Badge className="bg-available text-white">Assigned</Badge>;
+  if (status === "remote") return <Badge variant="secondary">Remote</Badge>;
   if (status === "no_room") return <Badge variant="destructive">No room</Badge>;
   return <Badge className="bg-amber-100 text-amber-900">Needs review</Badge>;
 }
@@ -85,9 +152,14 @@ export function ClassAssignmentsWorkspace() {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [loadingSchedulePreview, setLoadingSchedulePreview] = useState(false);
+  const [sendingScheduleEmails, setSendingScheduleEmails] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [scheduleEmailOpen, setScheduleEmailOpen] = useState(false);
+  const [scheduleEmailPreview, setScheduleEmailPreview] = useState<ScheduleEmailPreview | null>(null);
+  const [scheduleEmailResult, setScheduleEmailResult] = useState<ScheduleEmailSendResult | null>(null);
   const [selectedTutors, setSelectedTutors] = useState<Set<string>>(new Set());
   const [currentMinute, setCurrentMinute] = useState(7 * 60);
   const [playing, setPlaying] = useState(false);
@@ -263,6 +335,54 @@ export function ClassAssignmentsWorkspace() {
     }
   }
 
+  async function openScheduleEmailPreview() {
+    if (!run) return;
+    setLoadingSchedulePreview(true);
+    setError(null);
+    setMessage(null);
+    setScheduleEmailResult(null);
+    try {
+      const response = await fetch(`/api/class-assignments/runs/${run.id}/schedule-email/preview`);
+      const body = (await response.json()) as ScheduleEmailPreview | { error?: string };
+      if (!response.ok) throw new Error("error" in body ? body.error : `HTTP ${response.status}`);
+      setScheduleEmailPreview(body as ScheduleEmailPreview);
+      setScheduleEmailOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load schedule email preview");
+    } finally {
+      setLoadingSchedulePreview(false);
+    }
+  }
+
+  async function sendScheduleEmails() {
+    if (!run) return;
+    setSendingScheduleEmails(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/class-assignments/runs/${run.id}/schedule-email/send`, {
+        method: "POST",
+      });
+      const body = (await response.json()) as ScheduleEmailSendResult | { error?: string };
+      if (!response.ok && !("summary" in body)) {
+        throw new Error("error" in body ? body.error : `HTTP ${response.status}`);
+      }
+      if ("summary" in body) {
+        setScheduleEmailResult(body);
+        setScheduleEmailPreview(body.preview);
+        if (response.ok) {
+          setMessage(
+            `Schedule emails sent: ${body.summary.success} succeeded, ${body.summary.failed} failed.`,
+          );
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send schedule emails");
+    } finally {
+      setSendingScheduleEmails(false);
+    }
+  }
+
   function toggleTutor(tutor: string, checked: boolean) {
     setSelectedTutors((current) => {
       const next = new Set(current);
@@ -330,6 +450,14 @@ export function ClassAssignmentsWorkspace() {
             <UploadCloud />
             Publish to Wise
           </Button>
+          <Button
+            variant="secondary"
+            onClick={openScheduleEmailPreview}
+            disabled={!run || rows.length === 0 || loadingSchedulePreview}
+          >
+            <Mail />
+            {loadingSchedulePreview ? "Loading email" : "Email schedules"}
+          </Button>
         </div>
       </div>
 
@@ -345,7 +473,7 @@ export function ClassAssignmentsWorkspace() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-7">
         <div className="rounded-lg border bg-card p-3">
           <div className="text-xs text-muted-foreground">Run</div>
           <div className="mt-1 text-sm font-medium">{run ? run.status : "Not generated"}</div>
@@ -365,6 +493,10 @@ export function ClassAssignmentsWorkspace() {
         <div className="rounded-lg border bg-card p-3">
           <div className="text-xs text-muted-foreground">No room</div>
           <div className="mt-1 text-lg font-semibold">{run?.noRoomCount ?? 0}</div>
+        </div>
+        <div className="rounded-lg border bg-card p-3">
+          <div className="text-xs text-muted-foreground">Remote</div>
+          <div className="mt-1 text-lg font-semibold">{run?.remoteCount ?? 0}</div>
         </div>
         <div className="rounded-lg border bg-card p-3">
           <div className="text-xs text-muted-foreground">Wise publish</div>
@@ -512,7 +644,7 @@ export function ClassAssignmentsWorkspace() {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-1">
-                          <span className="font-medium">{row.assignedRoom}</span>
+                          <span className="font-medium">{roomLabel(row)}</span>
                           <StatusBadge status={row.status} />
                         </div>
                       </TableCell>
@@ -566,7 +698,7 @@ export function ClassAssignmentsWorkspace() {
                           {tutorRows.map((row) => (
                             <div key={row.id} className="rounded-md border-l-4 border-primary bg-muted/40 p-2 text-xs">
                               <div className="font-mono">
-                                {formatTime(row.startTime)}-{formatTime(row.endTime)} - {row.assignedRoom}
+                                {formatTime(row.startTime)}-{formatTime(row.endTime)} - {roomLabel(row)}
                               </div>
                               <div className="mt-1 font-medium">{row.studentName || row.title || "Untitled class"}</div>
                               <div className="text-muted-foreground">
@@ -605,6 +737,125 @@ export function ClassAssignmentsWorkspace() {
             </Button>
             <Button onClick={publishToWise} disabled={publishing || publishCounts.eligible === 0}>
               {publishing ? "Publishing" : "Publish to Wise"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={scheduleEmailOpen} onOpenChange={setScheduleEmailOpen}>
+        <DialogContent className="max-h-[86vh] max-w-4xl overflow-hidden">
+          <DialogHeader>
+            <DialogTitle>Email teacher schedules</DialogTitle>
+            <DialogDescription>
+              Sends each tutor one combined onsite and online schedule to their non-online email address.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="min-h-0 space-y-3 overflow-auto pr-1">
+            {scheduleEmailPreview && (
+              <>
+                <div className="grid gap-2 rounded-lg border bg-muted/30 p-3 text-sm md:grid-cols-3">
+                  <div>
+                    <div className="text-xs text-muted-foreground">Status</div>
+                    <div className="font-medium">
+                      {scheduleEmailPreview.ready ? "Ready to send" : "Blocked"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">Recipients</div>
+                    <div className="font-medium">{scheduleEmailPreview.recipients.length}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">Subject</div>
+                    <div className="font-medium">{scheduleEmailPreview.subject}</div>
+                  </div>
+                </div>
+
+                {scheduleEmailPreview.blockers.length > 0 && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/30 dark:text-amber-100">
+                    <div className="font-medium">Resolve before sending</div>
+                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                      {scheduleEmailPreview.blockers.map((blocker, index) => (
+                        <li key={`${blocker.type}-${index}`}>{blocker.message}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {scheduleEmailResult && (
+                  <div className="rounded-lg border bg-card p-3 text-sm">
+                    <div className="font-medium">
+                      {scheduleEmailResult.summary.success} sent / {scheduleEmailResult.summary.failed} failed
+                    </div>
+                    <div className="mt-2 grid gap-1">
+                      {scheduleEmailResult.recipients.map((recipient) => (
+                        <div key={`${recipient.tutorDisplayName}-${recipient.email}`} className="flex items-center justify-between gap-3">
+                          <span>{recipient.tutorDisplayName}</span>
+                          <span className={recipient.sendStatus === "failed" ? "text-destructive" : "text-muted-foreground"}>
+                            {recipient.sendStatus}
+                            {recipient.error ? ` - ${recipient.error}` : ""}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  {scheduleEmailPreview.previews.map((preview) => (
+                    <div key={preview.recipient.tutorDisplayName} className="rounded-lg border bg-card p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-semibold">{preview.recipient.tutorDisplayName}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {preview.recipient.email || "Missing non-online email"}
+                          </div>
+                        </div>
+                        <Badge variant={preview.recipient.status === "ready" ? "outline" : "secondary"}>
+                          {preview.recipient.status === "ready" ? "Ready" : "Blocked"}
+                        </Badge>
+                      </div>
+                      <div className="mt-3 overflow-auto rounded-md border">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Time</TableHead>
+                              <TableHead>Student/Class</TableHead>
+                              <TableHead>Subject</TableHead>
+                              <TableHead>Mode</TableHead>
+                              <TableHead>Room</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {preview.blocks.map((block) => (
+                              <TableRow key={block.rowId}>
+                                <TableCell className="font-mono text-xs">{block.time}</TableCell>
+                                <TableCell>{block.studentOrClass}</TableCell>
+                                <TableCell>{block.subject}</TableCell>
+                                <TableCell>{block.mode}</TableCell>
+                                <TableCell className="font-medium">{block.room}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setScheduleEmailOpen(false)} disabled={sendingScheduleEmails}>
+              Close
+            </Button>
+            <Button
+              onClick={sendScheduleEmails}
+              disabled={!scheduleEmailPreview?.ready || sendingScheduleEmails}
+            >
+              <Send />
+              {sendingScheduleEmails ? "Sending" : "Send schedules"}
             </Button>
           </DialogFooter>
         </DialogContent>
