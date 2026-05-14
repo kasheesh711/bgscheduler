@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classroomTimestampToWiseIso,
   estimatePublishRemainingMs,
+  findPublishRoomBlockers,
   isClassroomPublishEligible,
   toPublishJobProgress,
 } from "../data";
@@ -100,5 +101,49 @@ describe("publish job progress", () => {
     expect(progress.remainingCount).toBe(0);
     expect(progress.elapsedMs).toBe(12_000);
     expect(progress.estimatedRemainingMs).toBeNull();
+  });
+});
+
+describe("findPublishRoomBlockers", () => {
+  it("detects overlapping rows currently occupying the target physical room", () => {
+    const row = {
+      id: "target",
+      tutorDisplayName: "Target",
+      currentWiseLocation: "Doubt",
+      assignedRoom: "Remember",
+      startMinute: 600,
+      endMinute: 660,
+    };
+    const blocker = {
+      id: "blocker",
+      tutorDisplayName: "Blocker",
+      currentWiseLocation: "Remember (TV)",
+      assignedRoom: "Cool",
+      startMinute: 630,
+      endMinute: 690,
+    };
+
+    expect(findPublishRoomBlockers(row, [row, blocker])).toEqual([blocker]);
+  });
+
+  it("ignores rows that do not overlap the target time", () => {
+    const row = {
+      id: "target",
+      tutorDisplayName: "Target",
+      currentWiseLocation: "Doubt",
+      assignedRoom: "Remember",
+      startMinute: 600,
+      endMinute: 660,
+    };
+    const later = {
+      id: "later",
+      tutorDisplayName: "Later",
+      currentWiseLocation: "Remember",
+      assignedRoom: "Cool",
+      startMinute: 660,
+      endMinute: 720,
+    };
+
+    expect(findPublishRoomBlockers(row, [later])).toEqual([]);
   });
 });
