@@ -84,6 +84,7 @@ export interface PublishJobStatusResponse {
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PUBLISH_ROW_CONCURRENCY = 10;
+const PUBLISH_JOB_STALE_AFTER_MS = 6 * 60 * 1000;
 
 export function assertIsoDate(value: string): string {
   if (!ISO_DATE_RE.test(value)) {
@@ -181,6 +182,18 @@ export function findTemporaryPublishLocation(
   roomNames: string[],
 ): string | null {
   return roomNames.find((roomName) => !isPublishRoomInUse(roomName, row, candidates)) ?? null;
+}
+
+export function orderTemporaryPublishCandidates<T extends PublishDependencyRow>(rows: T[]): T[] {
+  const blockerCounts = new Map<string, number>();
+  for (const row of rows) {
+    for (const blocker of findPublishRoomBlockers(row, rows)) {
+      blockerCounts.set(blocker.id, (blockerCounts.get(blocker.id) ?? 0) + 1);
+    }
+  }
+  return rows
+    .filter((row) => (blockerCounts.get(row.id) ?? 0) > 0)
+    .sort((left, right) => (blockerCounts.get(right.id) ?? 0) - (blockerCounts.get(left.id) ?? 0));
 }
 
 export async function ensureDefaultClassroomRooms(db: Database): Promise<void> {
@@ -819,6 +832,26 @@ function wiseAvailabilityConflictMessage(availability: Awaited<ReturnType<typeof
   return reason ? `Wise availability conflict: ${reason}` : "Wise availability check reported a room/teacher conflict";
 }
 
+function isStaleRunningPublishJob(job: ClassroomPublishJob, now = new Date()): boolean {
+  if (job.status !== "running" || !job.startedAt || job.finishedAt) return false;
+  return now.getTime() - job.startedAt.getTime() > PUBLISH_JOB_STALE_AFTER_MS;
+}
+
+async function failStalePublishJob(db: Database, job: ClassroomPublishJob): Promise<ClassroomPublishJob> {
+  const [updatedJob] = await db
+    .update(schema.classroomPublishJobs)
+    .set({
+      status: "failed",
+      lastError: "Publish job timed out before completing. Retry publishing after refreshing the assignment.",
+      finishedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.classroomPublishJobs.id, job.id))
+    .returning();
+  await updateRunPublishStatus(db, job.runId).catch(() => undefined);
+  return updatedJob ?? job;
+}
+
 async function checkAvailabilityForPublishRow(
   client: WiseClient,
   instituteId: string,
@@ -913,9 +946,11 @@ async function moveCycleRowToTemporaryLocation(
   rows: ClassroomRow[],
   allRows: ClassroomRow[],
   temporaryLocations: string[],
+  temporaryMovedRowIds: Set<string>,
 ): Promise<{ moved: true } | { moved: false; error: string }> {
   const attemptedErrors: string[] = [];
-  for (const row of rows) {
+  const moveCandidates = orderTemporaryPublishCandidates(rows).filter((row) => !temporaryMovedRowIds.has(row.id));
+  for (const row of moveCandidates) {
     const candidates = temporaryLocations.filter((location) => (
       normalizedPhysicalLocation(location) !== normalizedPhysicalLocation(row.currentWiseLocation) &&
       normalizedPhysicalLocation(location) !== normalizedPhysicalLocation(row.assignedRoom)
@@ -935,6 +970,7 @@ async function moveCycleRowToTemporaryLocation(
     try {
       await updateSessionLocation(client, row.wiseClassId!, row.wiseSessionId, temporaryLocation);
       row.currentWiseLocation = temporaryLocation;
+      temporaryMovedRowIds.add(row.id);
       await updateRowCurrentWiseLocation(db, row.id, temporaryLocation);
       return { moved: true };
     } catch (error) {
@@ -945,7 +981,7 @@ async function moveCycleRowToTemporaryLocation(
 
   return {
     moved: false,
-    error: attemptedErrors[0] ?? "No temporary room was available to break the Wise room swap cycle",
+    error: attemptedErrors[0] ?? "No untried blocking row had an available temporary room",
   };
 }
 
@@ -997,6 +1033,7 @@ export async function runClassroomPublishJob(
     const skippedSummary = await markSkippedRows(db, jobId, skippedRows);
     summary.skipped += skippedSummary.skipped;
     const temporaryLocations = await loadTemporaryPublishLocations(db, client, instituteId);
+    const temporaryMovedRowIds = new Set<string>();
 
     const pendingRows = new Map<string, ClassroomRow>();
     const failedRows = new Map<string, ClassroomRow>();
@@ -1045,6 +1082,7 @@ export async function runClassroomPublishJob(
           stillPending,
           rows,
           temporaryLocations,
+          temporaryMovedRowIds,
         );
         if (temporaryMove.moved) continue;
 
@@ -1127,7 +1165,10 @@ export async function getClassroomPublishJobProgress(
   runId: string,
   jobId: string,
 ): Promise<PublishJobStatusResponse> {
-  const job = await loadPublishJob(db, jobId, runId);
+  let job = await loadPublishJob(db, jobId, runId);
+  if (isStaleRunningPublishJob(job)) {
+    job = await failStalePublishJob(db, job);
+  }
   const response: PublishJobStatusResponse = {
     progress: toPublishJobProgress(job),
   };

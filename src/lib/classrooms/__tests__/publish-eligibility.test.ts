@@ -5,6 +5,7 @@ import {
   findPublishRoomBlockers,
   findTemporaryPublishLocation,
   isClassroomPublishEligible,
+  orderTemporaryPublishCandidates,
   toPublishJobProgress,
 } from "../data";
 import { REMOTE_NO_ROOM_NEEDED } from "../assignment-engine";
@@ -181,5 +182,39 @@ describe("findTemporaryPublishLocation", () => {
       "Joy",
       "Iconic",
     ])).toBe("Iconic");
+  });
+});
+
+describe("orderTemporaryPublishCandidates", () => {
+  it("only chooses rows currently blocking another pending row", () => {
+    const passiveBlockedRow = {
+      id: "passive-blocked",
+      tutorDisplayName: "Passive",
+      currentWiseLocation: "Cool",
+      assignedRoom: "Do It",
+      startMinute: 720,
+      endMinute: 780,
+    };
+    const actualBlocker = {
+      id: "actual-blocker",
+      tutorDisplayName: "Blocker",
+      currentWiseLocation: "Do It",
+      assignedRoom: "Here There",
+      startMinute: 750,
+      endMinute: 840,
+    };
+    const downstream = {
+      id: "downstream",
+      tutorDisplayName: "Downstream",
+      currentWiseLocation: "Here There",
+      assignedRoom: "Remember",
+      startMinute: 780,
+      endMinute: 840,
+    };
+
+    expect(orderTemporaryPublishCandidates([passiveBlockedRow, actualBlocker, downstream]).map((row) => row.id)).toEqual([
+      "actual-blocker",
+      "downstream",
+    ]);
   });
 });
