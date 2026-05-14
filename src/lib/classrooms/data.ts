@@ -82,7 +82,6 @@ export interface PublishJobStatusResponse {
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const PUBLISH_AVAILABILITY_BATCH_SIZE = 25;
 const PUBLISH_ROW_CONCURRENCY = 10;
 
 export function assertIsoDate(value: string): string {
@@ -719,76 +718,38 @@ async function updateRunPublishStatus(db: Database, runId: string): Promise<void
     .where(eq(schema.classroomAssignmentRuns.id, runId));
 }
 
-function chunkRows<T>(rows: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let i = 0; i < rows.length; i += size) {
-    chunks.push(rows.slice(i, i + size));
-  }
-  return chunks;
-}
-
 async function checkAvailabilityForPublishRows(
   client: WiseClient,
   instituteId: string,
   rows: ClassroomRow[],
 ): Promise<Map<string, string>> {
   const failures = new Map<string, string>();
-  const byRoom = new Map<string, ClassroomRow[]>();
-  for (const row of rows) {
-    if (!row.wiseTeacherUserId) continue;
-    byRoom.set(row.assignedRoom, [...(byRoom.get(row.assignedRoom) ?? []), row]);
-  }
-
-  const batches = [...byRoom.entries()].flatMap(([room, roomRows]) =>
-    chunkRows(roomRows, PUBLISH_AVAILABILITY_BATCH_SIZE).map((chunk) => ({ room, rows: chunk })),
-  );
-
-  await runLimited(batches, 5, async (batch) => {
+  await runLimited(rows.filter((row) => row.wiseTeacherUserId), PUBLISH_ROW_CONCURRENCY, async (row) => {
     try {
       const availability = await checkTeacherAvailabilityForSessions(client, instituteId, {
-        sessions: batch.rows.map((row) => ({
-          teacherId: row.wiseTeacherUserId ?? undefined,
-          sessionId: row.wiseSessionId,
-          scheduledStartTime: new Date(row.startTime).toISOString(),
-          scheduledEndTime: new Date(row.endTime).toISOString(),
-          type: row.sessionType ?? "OFFLINE",
-        })),
-        locationToCheck: batch.room,
-        sessionsToSkip: batch.rows.map((row) => ({
+        teacherId: row.wiseTeacherUserId ?? undefined,
+        sessions: [
+          {
+            teacherId: row.wiseTeacherUserId ?? undefined,
+            sessionId: row.wiseSessionId,
+            scheduledStartTime: new Date(row.startTime).toISOString(),
+            scheduledEndTime: new Date(row.endTime).toISOString(),
+            type: row.sessionType ?? "OFFLINE",
+          },
+        ],
+        locationToCheck: row.assignedRoom,
+        sessionsToSkip: {
           sessionId: row.wiseSessionId,
           skipUpcoming: false,
-        })),
+        },
       });
 
-      const sessions = availability.sessions ?? [];
-      const conflictingSessions = sessions.filter((session) => session.hasConflict || session.conflict);
-      if (conflictingSessions.length === 0) return;
-
-      const rowsBySessionId = new Map(batch.rows.map((row) => [row.wiseSessionId, row]));
-      let ambiguousConflict = false;
-      for (const session of conflictingSessions) {
-        if (typeof session.sessionId === "string" && rowsBySessionId.has(session.sessionId)) {
-          failures.set(rowsBySessionId.get(session.sessionId)!.id, "Wise availability check reported a room/teacher conflict");
-          continue;
-        }
-
-        const sessionIndex = sessions.indexOf(session);
-        if (sessions.length === batch.rows.length && sessionIndex >= 0) {
-          failures.set(batch.rows[sessionIndex].id, "Wise availability check reported a room/teacher conflict");
-          continue;
-        }
-
-        ambiguousConflict = true;
-      }
-
-      if (ambiguousConflict) {
-        for (const row of batch.rows) {
-          failures.set(row.id, "Wise availability check returned an ambiguous conflict response");
-        }
+      if (availability.sessions?.some((session) => session.hasConflict || session.conflict)) {
+        failures.set(row.id, "Wise availability check reported a room/teacher conflict");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wise availability check failed";
-      for (const row of batch.rows) failures.set(row.id, message);
+      failures.set(row.id, message);
     }
   });
 
