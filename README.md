@@ -7,9 +7,10 @@ Internal admin app for searching tutor availability from normalized Wise snapsho
 - Production app: [https://bgscheduler.vercel.app](https://bgscheduler.vercel.app)
 - Repo: [https://github.com/kasheesh711/bgscheduler](https://github.com/kasheesh711/bgscheduler)
 - Stack: Next.js 16 App Router, TypeScript, Tailwind, shadcn/ui, Auth.js, Drizzle, Neon Postgres, Vercel
-- Test status: 82 passing Vitest tests
+- Test status: 281 passing Vitest unit tests
 - Wise status: production sync live since 2026-04-07 (131 teachers, 72 groups, daily cron)
 - Compare UI: side-by-side search and compare workspace with weekly/day schedule views, tutor combobox, discovery modal, and student-level conflict detection
+- Class assignments: native `/class-assignments` workspace for local room assignment, admin overrides, teacher schedules, and explicit Wise OFFLINE location publishing
 - Latest compare fixes: week view uses per-tutor lanes for 2-3 tutors, session cards use normalized RGBA fills, and online/onsite styling now prefers Wise identity/session evidence over raw location strings
 - Optional: upgrade Vercel to Pro for 30-minute sync cadence (currently daily on Hobby)
 
@@ -43,6 +44,16 @@ Important live payload details:
 - `workingHours.slots[].day` can be weekday strings like `"Sunday"`
 - `GET /institutes/{centerId}/sessions` expects `paginateBy=COUNT&page_number=...&page_size=...`
 - sessions are returned under `data.sessions`
+- `GET /institutes/{centerId}/locations` returns Wise location strings under `data.locations`
+- `PUT /teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` updates one session; the app only uses it to publish `location` for eligible `OFFLINE` rows after admin confirmation
+
+## Classroom Assignments
+
+- `/class-assignments` generates room assignments locally from the active Wise snapshot for one Bangkok date.
+- Assignment runs preserve admin override rooms unless the admin chooses force reassign.
+- Local rooms are stored in `classroom_rooms` and seeded from the 24-room BeGifted catalog.
+- Wise writeback is deliberately conservative: `Publish to Wise` updates only eligible `OFFLINE` session locations with reliable capacity and Wise class/session IDs. Online booth assignments stay local.
+- Run `npm run db:migrate` before using this feature in production so the classroom tables and new Wise session columns exist.
 
 ## Local Development
 
@@ -73,6 +84,7 @@ CRON_SECRET=
 
 ```bash
 npm test
+npm run build
 npm run db:generate
 npm run db:migrate
 npm run db:seed

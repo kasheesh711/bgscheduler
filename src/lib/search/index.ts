@@ -38,8 +38,12 @@ export interface IndexedSessionBlock {
   endMinute: number;
   isBlocking: boolean;
   wiseTeacherId: string;
+  wiseTeacherUserId?: string;
+  wiseClassId?: string;
+  wiseSessionId?: string;
   title?: string;
   studentName?: string;
+  studentCount?: number;
   subject?: string;
   classType?: string;
   sessionType?: string;
@@ -151,7 +155,27 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
       .from(schema.datedLeaves)
       .where(eq(schema.datedLeaves.snapshotId, snapshotId)),
     db
-      .select()
+      .select({
+        id: schema.futureSessionBlocks.id,
+        snapshotId: schema.futureSessionBlocks.snapshotId,
+        groupId: schema.futureSessionBlocks.groupId,
+        wiseTeacherId: schema.futureSessionBlocks.wiseTeacherId,
+        wiseSessionId: schema.futureSessionBlocks.wiseSessionId,
+        startTime: schema.futureSessionBlocks.startTime,
+        endTime: schema.futureSessionBlocks.endTime,
+        weekday: schema.futureSessionBlocks.weekday,
+        startMinute: schema.futureSessionBlocks.startMinute,
+        endMinute: schema.futureSessionBlocks.endMinute,
+        wiseStatus: schema.futureSessionBlocks.wiseStatus,
+        isBlocking: schema.futureSessionBlocks.isBlocking,
+        title: schema.futureSessionBlocks.title,
+        sessionType: schema.futureSessionBlocks.sessionType,
+        location: schema.futureSessionBlocks.location,
+        studentName: schema.futureSessionBlocks.studentName,
+        subject: schema.futureSessionBlocks.subject,
+        classType: schema.futureSessionBlocks.classType,
+        recurrenceId: schema.futureSessionBlocks.recurrenceId,
+      })
       .from(schema.futureSessionBlocks)
       .where(eq(schema.futureSessionBlocks.snapshotId, snapshotId)),
     db
@@ -237,8 +261,12 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
         endMinute: s.endMinute,
         isBlocking: s.isBlocking,
         wiseTeacherId: s.wiseTeacherId,
+        wiseTeacherUserId: undefined,
+        wiseClassId: undefined,
+        wiseSessionId: s.wiseSessionId,
         title: s.title ?? undefined,
         studentName: s.studentName ?? undefined,
+        studentCount: undefined,
         subject: s.subject ?? undefined,
         classType: s.classType ?? undefined,
         sessionType: s.sessionType ?? undefined,

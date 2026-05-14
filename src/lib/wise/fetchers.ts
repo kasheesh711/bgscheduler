@@ -6,6 +6,8 @@ import {
   WiseTeachersResponse,
   WiseAvailabilityEnvelope,
   WiseSessionsResponse,
+  WiseLocationsResponse,
+  WiseSessionUpdateResponse,
 } from "./types";
 import { addDays } from "date-fns";
 
@@ -120,4 +122,78 @@ export async function fetchAllFutureSessions(
   }
 
   return all;
+}
+
+/**
+ * Fetch the institute-level room/location strings used by Wise's webapp.
+ */
+export async function fetchInstituteLocations(
+  client: WiseClient,
+  instituteId: string
+): Promise<string[]> {
+  const res = await client.get<WiseLocationsResponse>(`/institutes/${instituteId}/locations`);
+  return res.data?.locations ?? [];
+}
+
+export interface WiseSessionAvailabilityInput {
+  teacherId?: string;
+  sessions: {
+    teacherId?: string;
+    sessionId?: string;
+    scheduledStartTime: string | Date;
+    scheduledEndTime: string | Date;
+    type?: string;
+  }[];
+  locationToCheck?: string;
+  studentId?: string;
+  sessionsToSkip?: {
+    sessionId: string;
+    skipUpcoming: boolean;
+    classId?: string;
+    startTime?: string | Date;
+  } | Array<{
+    sessionId: string;
+    skipUpcoming?: boolean;
+    classId?: string;
+    startTime?: string | Date;
+  }>;
+}
+
+export interface WiseSessionAvailabilityResponse {
+  sessions?: { sessionId?: string; conflict?: boolean; hasConflict?: boolean; [key: string]: unknown }[];
+  availability?: unknown;
+  totalSessions?: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Wise webapp uses this institute endpoint to validate teacher/time/location
+ * conflicts before scheduling or editing offline sessions.
+ */
+export async function checkTeacherAvailabilityForSessions(
+  client: WiseClient,
+  instituteId: string,
+  body: WiseSessionAvailabilityInput
+): Promise<WiseSessionAvailabilityResponse> {
+  const res = await client.post<{ data?: WiseSessionAvailabilityResponse }>(
+    `/institutes/${instituteId}/checkSessionsAvailability`,
+    body
+  );
+  return res.data ?? {};
+}
+
+/**
+ * Update the Wise location field for one scheduled session.
+ * V1 callers only invoke this for OFFLINE sessions.
+ */
+export async function updateSessionLocation(
+  client: WiseClient,
+  classId: string,
+  sessionId: string,
+  location: string
+): Promise<WiseSessionUpdateResponse> {
+  return client.put<WiseSessionUpdateResponse>(
+    `/teacher/classes/${classId}/sessions/${sessionId}?updateType=SINGLE`,
+    { location }
+  );
 }

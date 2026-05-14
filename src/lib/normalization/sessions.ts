@@ -1,9 +1,18 @@
-import { WiseSession } from "@/lib/wise/types";
+import {
+  WiseSession,
+  getWiseSessionClassId,
+  getWiseSessionClassName,
+  getWiseSessionClassSubject,
+  getWiseSessionClassType,
+  getWiseSessionTeacherUserId,
+} from "@/lib/wise/types";
 import { toLocalTime, getLocalWeekday, getLocalMinuteOfDay } from "./timezone";
 
 export interface NormalizedSessionBlock {
   wiseSessionId: string;
   wiseTeacherId: string;
+  wiseTeacherUserId?: string;
+  wiseClassId?: string;
   startTime: Date;
   endTime: Date;
   weekday: number;
@@ -15,6 +24,7 @@ export interface NormalizedSessionBlock {
   sessionType?: string;
   location?: string;
   studentName?: string;
+  studentCount?: number;
   subject?: string;
   classType?: string;
   recurrenceId?: string;
@@ -60,6 +70,8 @@ export function normalizeSessions(
     blocks.push({
       wiseSessionId: session._id,
       wiseTeacherId: teacherId,
+      wiseTeacherUserId: getWiseSessionTeacherUserId(session),
+      wiseClassId: getWiseSessionClassId(session),
       startTime: startLocal,
       endTime: endLocal,
       weekday: getLocalWeekday(session.scheduledStartTime),
@@ -70,9 +82,10 @@ export function normalizeSessions(
       title: session.title,
       sessionType: session.type,
       location: session.location,
-      studentName: session.classId?.name,
-      subject: session.classId?.subject,
-      classType: session.classId?.classType,
+      studentName: getWiseSessionClassName(session),
+      studentCount: typeof session.studentCount === "number" ? session.studentCount : undefined,
+      subject: getWiseSessionClassSubject(session),
+      classType: getWiseSessionClassType(session),
       recurrenceId: session.metadata?.recurrenceId,
     });
   }

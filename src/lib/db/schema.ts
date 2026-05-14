@@ -5,6 +5,7 @@ import {
   boolean,
   timestamp,
   integer,
+  date,
   pgEnum,
   jsonb,
   uniqueIndex,
@@ -40,6 +41,32 @@ export const modalityEnum = pgEnum("modality", [
   "onsite",
   "both",
   "unresolved",
+]);
+
+export const classroomRoomCategoryEnum = pgEnum("classroom_room_category", [
+  "standard",
+  "overflow_only",
+  "online_only",
+]);
+
+export const classroomAssignmentRunStatusEnum = pgEnum("classroom_assignment_run_status", [
+  "completed",
+  "published",
+  "partial",
+  "failed",
+]);
+
+export const classroomAssignmentRowStatusEnum = pgEnum("classroom_assignment_row_status", [
+  "assigned",
+  "needs_review",
+  "no_room",
+]);
+
+export const classroomPublishStatusEnum = pgEnum("classroom_publish_status", [
+  "not_published",
+  "skipped",
+  "success",
+  "failed",
 ]);
 
 // ── Snapshots & Sync ───────────────────────────────────────────────────
@@ -179,7 +206,9 @@ export const futureSessionBlocks = pgTable("future_session_blocks", {
   snapshotId: uuid("snapshot_id").notNull().references(() => snapshots.id),
   groupId: uuid("group_id").notNull().references(() => tutorIdentityGroups.id),
   wiseTeacherId: text("wise_teacher_id").notNull(),
+  wiseTeacherUserId: text("wise_teacher_user_id"),
   wiseSessionId: text("wise_session_id").notNull(),
+  wiseClassId: text("wise_class_id"),
   startTime: timestamp("start_time", { withTimezone: true }).notNull(),
   endTime: timestamp("end_time", { withTimezone: true }).notNull(),
   weekday: integer("weekday").notNull(),
@@ -191,6 +220,7 @@ export const futureSessionBlocks = pgTable("future_session_blocks", {
   sessionType: text("session_type"),
   location: text("location"),
   studentName: text("student_name"),
+  studentCount: integer("student_count"),
   subject: text("subject"),
   classType: text("class_type"),
   recurrenceId: text("recurrence_id"),
@@ -198,6 +228,85 @@ export const futureSessionBlocks = pgTable("future_session_blocks", {
   index("fsb_snapshot_idx").on(table.snapshotId),
   index("fsb_weekday_idx").on(table.snapshotId, table.weekday),
   index("fsb_group_idx").on(table.groupId),
+]);
+
+// ── Classroom Assignment ────────────────────────────────────────────────
+
+export const classroomRooms = pgTable("classroom_rooms", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  hasTv: boolean("has_tv").notNull().default(false),
+  capacity: integer("capacity").notNull(),
+  category: classroomRoomCategoryEnum("category").notNull().default("standard"),
+  active: boolean("active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("classroom_rooms_name_idx").on(table.name),
+  index("classroom_rooms_active_idx").on(table.active),
+]);
+
+export const classroomAssignmentRuns = pgTable("classroom_assignment_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  assignmentDate: date("assignment_date", { mode: "string" }).notNull(),
+  snapshotId: uuid("snapshot_id").notNull().references(() => snapshots.id),
+  status: classroomAssignmentRunStatusEnum("status").notNull().default("completed"),
+  forceReassign: boolean("force_reassign").notNull().default(false),
+  totalSessions: integer("total_sessions").notNull().default(0),
+  assignedCount: integer("assigned_count").notNull().default(0),
+  needsReviewCount: integer("needs_review_count").notNull().default(0),
+  noRoomCount: integer("no_room_count").notNull().default(0),
+  publishedCount: integer("published_count").notNull().default(0),
+  failedPublishCount: integer("failed_publish_count").notNull().default(0),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("car_date_idx").on(table.assignmentDate),
+  index("car_snapshot_idx").on(table.snapshotId),
+]);
+
+export const classroomAssignmentRows = pgTable("classroom_assignment_rows", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => classroomAssignmentRuns.id),
+  snapshotId: uuid("snapshot_id").notNull().references(() => snapshots.id),
+  groupId: uuid("group_id").notNull().references(() => tutorIdentityGroups.id),
+  tutorDisplayName: text("tutor_display_name").notNull(),
+  wiseTeacherId: text("wise_teacher_id").notNull(),
+  wiseTeacherUserId: text("wise_teacher_user_id"),
+  wiseSessionId: text("wise_session_id").notNull(),
+  wiseClassId: text("wise_class_id"),
+  startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+  endTime: timestamp("end_time", { withTimezone: true }).notNull(),
+  weekday: integer("weekday").notNull(),
+  startMinute: integer("start_minute").notNull(),
+  endMinute: integer("end_minute").notNull(),
+  wiseStatus: text("wise_status").notNull(),
+  sessionType: text("session_type"),
+  currentWiseLocation: text("current_wise_location"),
+  studentName: text("student_name"),
+  studentCount: integer("student_count"),
+  subject: text("subject"),
+  classType: text("class_type"),
+  title: text("title"),
+  minCapacity: integer("min_capacity").notNull(),
+  needsTv: boolean("needs_tv").notNull().default(false),
+  preferredRoom: text("preferred_room"),
+  overrideRoom: text("override_room"),
+  assignedRoom: text("assigned_room").notNull(),
+  status: classroomAssignmentRowStatusEnum("status").notNull().default("assigned"),
+  warnings: jsonb("warnings").$type<string[]>().notNull().default([]),
+  ruleTrace: jsonb("rule_trace").$type<string[]>().notNull().default([]),
+  publishStatus: classroomPublishStatusEnum("publish_status").notNull().default("not_published"),
+  publishError: text("publish_error"),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("car_rows_run_idx").on(table.runId),
+  index("car_rows_snapshot_idx").on(table.snapshotId),
+  uniqueIndex("car_rows_run_session_idx").on(table.runId, table.wiseSessionId),
 ]);
 
 // ── Past Sessions (cross-snapshot capture) ──────────────────────────────

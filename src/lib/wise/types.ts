@@ -63,7 +63,8 @@ export interface WiseSession {
   type?: string;
   title?: string;
   location?: string;
-  classId?: WiseSessionClassId;
+  classId?: string | WiseSessionClassId;
+  studentCount?: number;
   metadata?: { recurrenceId?: string; [key: string]: unknown };
   [key: string]: unknown;
 }
@@ -87,6 +88,20 @@ export interface WiseSessionsResponse {
     page_count?: number;
     totalRecords?: number;
   };
+  [key: string]: unknown;
+}
+
+export interface WiseLocationsResponse {
+  data?: {
+    locations?: string[];
+  };
+  [key: string]: unknown;
+}
+
+export interface WiseSessionUpdateResponse {
+  status?: number;
+  message?: string;
+  data?: unknown;
   [key: string]: unknown;
 }
 
@@ -116,6 +131,26 @@ export function getWiseSessionTeacherUserId(
   session: WiseSession
 ): string | undefined {
   return getWiseUserId(session.userId) ?? session.teacherId;
+}
+
+export function getWiseSessionClassId(session: WiseSession): string | undefined {
+  if (!session.classId) return undefined;
+  return typeof session.classId === "string" ? session.classId : session.classId._id;
+}
+
+export function getWiseSessionClassName(session: WiseSession): string | undefined {
+  if (!session.classId || typeof session.classId === "string") return undefined;
+  return session.classId.name;
+}
+
+export function getWiseSessionClassSubject(session: WiseSession): string | undefined {
+  if (!session.classId || typeof session.classId === "string") return undefined;
+  return session.classId.subject;
+}
+
+export function getWiseSessionClassType(session: WiseSession): string | undefined {
+  if (!session.classId || typeof session.classId === "string") return undefined;
+  return session.classId.classType;
 }
 
 export function getWiseTagName(tag: WiseTag): string {
