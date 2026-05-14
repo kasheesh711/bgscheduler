@@ -1,65 +1,37 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
-import type { IndexedTutorGroup, SearchIndex } from "@/lib/search/index";
+import type { TutorListItem } from "@/lib/data/tutors";
 
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
-vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
-vi.mock("@/lib/search/index", () => ({ ensureIndex: vi.fn() }));
+vi.mock("@/lib/data/tutors", () => ({ getTutorList: vi.fn() }));
 
 import { auth } from "@/lib/auth";
-import { getDb } from "@/lib/db";
-import { ensureIndex } from "@/lib/search/index";
+import { getTutorList } from "@/lib/data/tutors";
 import { GET } from "@/app/api/tutors/route";
 
 const authMock = auth as unknown as Mock;
 
-function makeTutorGroup(overrides: Partial<IndexedTutorGroup>): IndexedTutorGroup {
-  return {
-    id: "g1",
-    canonicalKey: "test",
-    displayName: "Test Tutor",
-    supportedModes: ["online"],
-    qualifications: [],
-    wiseRecords: [],
-    availabilityWindows: [],
-    leaves: [],
-    sessionBlocks: [],
-    dataIssues: [],
-    ...overrides,
-  };
-}
-
-function makeIndex(): SearchIndex {
-  const groups = [
-    makeTutorGroup({
-      id: "g2",
-      displayName: "Zed Tutor",
-      supportedModes: ["onsite"],
-      qualifications: [{ subject: "Physics", curriculum: "IB", level: "Grade 11" }],
-    }),
-    makeTutorGroup({
-      id: "g1",
+function makeTutorList(): TutorListItem[] {
+  return [
+    {
+      tutorGroupId: "g1",
       displayName: "Ada Tutor",
       supportedModes: ["online"],
-      qualifications: [
-        { subject: "Math", curriculum: "IB", level: "Grade 10" },
-        { subject: "Math", curriculum: "AP", level: "Grade 11" },
-      ],
-    }),
+      subjects: ["Math"],
+    },
+    {
+      tutorGroupId: "g2",
+      displayName: "Zed Tutor",
+      supportedModes: ["onsite"],
+      subjects: ["Physics"],
+    },
   ];
-  return {
-    snapshotId: "snap-1",
-    builtAt: new Date("2026-04-06T00:00:00.000Z"),
-    tutorGroups: groups,
-    byWeekday: new Map(),
-  };
 }
 
 describe("GET /api/tutors", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     authMock.mockResolvedValue({ user: { email: "kevhsh7@gmail.com" } });
-    vi.mocked(getDb).mockReturnValue({} as never);
-    vi.mocked(ensureIndex).mockResolvedValue(makeIndex() as never);
+    vi.mocked(getTutorList).mockResolvedValue(makeTutorList());
   });
 
   it("returns 401 when unauthenticated", async () => {
@@ -93,8 +65,8 @@ describe("GET /api/tutors", () => {
     });
   });
 
-  it("returns 500 when ensureIndex throws", async () => {
-    vi.mocked(ensureIndex).mockRejectedValue(new Error("DB exploded") as never);
+  it("returns 500 when tutor list loading throws", async () => {
+    vi.mocked(getTutorList).mockRejectedValue(new Error("DB exploded"));
 
     const res = await GET();
 
