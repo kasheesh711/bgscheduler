@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { WiseClient } from "@/lib/wise/client";
@@ -22,6 +22,7 @@ import {
 export type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
 export type ClassroomRow = typeof schema.classroomAssignmentRows.$inferSelect;
 export type ClassroomRoom = typeof schema.classroomRooms.$inferSelect;
+export type ClassroomPublishJob = typeof schema.classroomPublishJobs.$inferSelect;
 
 export interface ClassroomAssignmentDetail {
   run: ClassroomRun | null;
@@ -55,7 +56,34 @@ export interface PublishSummary {
   failed: number;
 }
 
+export interface PublishJobProgress {
+  jobId: string;
+  runId: string;
+  status: ClassroomPublishJob["status"];
+  totalCount: number;
+  eligibleCount: number;
+  completedCount: number;
+  successCount: number;
+  failedCount: number;
+  skippedCount: number;
+  remainingCount: number;
+  elapsedMs: number | null;
+  estimatedRemainingMs: number | null;
+  lastError: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PublishJobStatusResponse {
+  progress: PublishJobProgress;
+  detail?: ClassroomAssignmentDetail;
+}
+
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const PUBLISH_AVAILABILITY_BATCH_SIZE = 25;
+const PUBLISH_ROW_CONCURRENCY = 10;
 
 export function assertIsoDate(value: string): string {
   if (!ISO_DATE_RE.test(value)) {
@@ -160,6 +188,92 @@ async function loadRowsForRun(db: Database, runId: string): Promise<ClassroomRow
       schema.classroomAssignmentRows.startTime,
       schema.classroomAssignmentRows.tutorDisplayName,
     );
+}
+
+export function isPublishJobTerminal(status: ClassroomPublishJob["status"]): boolean {
+  return status === "succeeded" || status === "partial" || status === "failed";
+}
+
+export function estimatePublishRemainingMs(
+  input: {
+    startedAt: Date | null;
+    finishedAt: Date | null;
+    eligibleCount: number;
+    successCount: number;
+    failedCount: number;
+  },
+  now = new Date(),
+): number | null {
+  if (!input.startedAt || input.finishedAt) return null;
+  const attemptedDone = input.successCount + input.failedCount;
+  const remainingAttempts = input.eligibleCount - attemptedDone;
+  if (attemptedDone <= 0 || remainingAttempts <= 0) return null;
+  const elapsedMs = Math.max(0, now.getTime() - input.startedAt.getTime());
+  return Math.round((elapsedMs / attemptedDone) * remainingAttempts);
+}
+
+export function toPublishJobProgress(
+  job: ClassroomPublishJob,
+  now = new Date(),
+): PublishJobProgress {
+  const terminal = isPublishJobTerminal(job.status);
+  const end = job.finishedAt ?? (terminal ? now : null);
+  const elapsedMs = job.startedAt
+    ? Math.max(0, (end ?? now).getTime() - job.startedAt.getTime())
+    : null;
+  return {
+    jobId: job.id,
+    runId: job.runId,
+    status: job.status,
+    totalCount: job.totalCount,
+    eligibleCount: job.eligibleCount,
+    completedCount: job.completedCount,
+    successCount: job.successCount,
+    failedCount: job.failedCount,
+    skippedCount: job.skippedCount,
+    remainingCount: Math.max(0, job.totalCount - job.completedCount),
+    elapsedMs,
+    estimatedRemainingMs: estimatePublishRemainingMs(job, now),
+    lastError: job.lastError,
+    startedAt: job.startedAt?.toISOString() ?? null,
+    finishedAt: job.finishedAt?.toISOString() ?? null,
+    createdAt: job.createdAt.toISOString(),
+    updatedAt: job.updatedAt.toISOString(),
+  };
+}
+
+async function loadPublishJob(
+  db: Database,
+  jobId: string,
+  runId?: string,
+): Promise<ClassroomPublishJob> {
+  const where = runId
+    ? and(eq(schema.classroomPublishJobs.id, jobId), eq(schema.classroomPublishJobs.runId, runId))
+    : eq(schema.classroomPublishJobs.id, jobId);
+  const [job] = await db
+    .select()
+    .from(schema.classroomPublishJobs)
+    .where(where)
+    .limit(1);
+  if (!job) throw new Error("Publish job not found");
+  return job;
+}
+
+async function runLimited<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      await worker(items[index], index);
+    }
+  }));
 }
 
 export async function getClassroomAssignmentForDate(
@@ -509,60 +623,75 @@ export function isClassroomPublishEligible(
   return { eligible: true };
 }
 
-export async function publishClassroomAssignmentRun(
+export async function createClassroomPublishJob(
   db: Database,
-  runId: string,
-  client = createWiseClientFromEnv(),
-): Promise<{ detail: ClassroomAssignmentDetail; summary: PublishSummary }> {
-  const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
+  input: { runId: string; createdBy?: string | null },
+): Promise<PublishJobProgress> {
   const [run] = await db
     .select()
     .from(schema.classroomAssignmentRuns)
-    .where(eq(schema.classroomAssignmentRuns.id, runId))
+    .where(eq(schema.classroomAssignmentRuns.id, input.runId))
     .limit(1);
   if (!run) throw new Error("Assignment run not found");
 
-  const rows = await loadRowsForRun(db, runId);
-  const summary: PublishSummary = { attempted: 0, success: 0, skipped: 0, failed: 0 };
+  const rows = await loadRowsForRun(db, input.runId);
+  const eligibleCount = rows.filter((row) => isClassroomPublishEligible(row).eligible).length;
+  const [job] = await db
+    .insert(schema.classroomPublishJobs)
+    .values({
+      runId: input.runId,
+      totalCount: rows.length,
+      eligibleCount,
+      createdBy: input.createdBy ?? null,
+    })
+    .returning();
 
-  for (const row of rows) {
-    const eligibility = isClassroomPublishEligible(row);
-    if (!eligibility.eligible) {
-      summary.skipped += 1;
-      await markPublishResult(db, row.id, "skipped", eligibility.reason);
-      continue;
-    }
+  return toPublishJobProgress(job);
+}
 
-    summary.attempted += 1;
-    try {
-      if (row.wiseTeacherUserId) {
-        const availability = await checkTeacherAvailabilityForSessions(client, instituteId, {
-          sessions: [
-            {
-              teacherId: row.wiseTeacherUserId,
-              scheduledStartTime: new Date(row.startTime).toISOString(),
-              scheduledEndTime: new Date(row.endTime).toISOString(),
-              type: row.sessionType ?? "OFFLINE",
-            },
-          ],
-          locationToCheck: row.assignedRoom,
-          sessionsToSkip: [{ sessionId: row.wiseSessionId, skipUpcoming: false }],
-        });
-        if (availability.sessions?.some((session) => session.hasConflict || session.conflict)) {
-          throw new Error("Wise availability check reported a room/teacher conflict");
-        }
-      }
-
-      await updateSessionLocation(client, row.wiseClassId!, row.wiseSessionId, row.assignedRoom);
-      summary.success += 1;
-      await markPublishResult(db, row.id, "success", null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Wise publish failed";
-      summary.failed += 1;
-      await markPublishResult(db, row.id, "failed", message);
-    }
+async function incrementPublishJobCounters(
+  db: Database,
+  jobId: string,
+  counts: Partial<Pick<PublishSummary, "success" | "failed" | "skipped">> & { completed?: number },
+): Promise<void> {
+  const set: Record<string, unknown> = { updatedAt: new Date() };
+  if (counts.completed) {
+    set.completedCount = sql`${schema.classroomPublishJobs.completedCount} + ${counts.completed}`;
+  }
+  if (counts.success) {
+    set.successCount = sql`${schema.classroomPublishJobs.successCount} + ${counts.success}`;
+  }
+  if (counts.failed) {
+    set.failedCount = sql`${schema.classroomPublishJobs.failedCount} + ${counts.failed}`;
+  }
+  if (counts.skipped) {
+    set.skippedCount = sql`${schema.classroomPublishJobs.skippedCount} + ${counts.skipped}`;
   }
 
+  await db
+    .update(schema.classroomPublishJobs)
+    .set(set)
+    .where(eq(schema.classroomPublishJobs.id, jobId));
+}
+
+async function markPublishJobFailed(
+  db: Database,
+  jobId: string,
+  error: unknown,
+): Promise<void> {
+  const message = error instanceof Error ? error.message : "Wise publish job failed";
+  await db
+    .update(schema.classroomPublishJobs)
+    .set({
+      status: "failed",
+      lastError: message,
+      finishedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.classroomPublishJobs.id, jobId));
+}
+
+async function updateRunPublishStatus(db: Database, runId: string): Promise<void> {
   const publishedRows = await db
     .select({
       id: schema.classroomAssignmentRows.id,
@@ -588,9 +717,248 @@ export async function publishClassroomAssignmentRun(
       updatedAt: new Date(),
     })
     .where(eq(schema.classroomAssignmentRuns.id, runId));
+}
 
-  const detail = await getClassroomAssignmentByRunId(db, runId);
-  return { detail, summary };
+function chunkRows<T>(rows: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < rows.length; i += size) {
+    chunks.push(rows.slice(i, i + size));
+  }
+  return chunks;
+}
+
+async function checkAvailabilityForPublishRows(
+  client: WiseClient,
+  instituteId: string,
+  rows: ClassroomRow[],
+): Promise<Map<string, string>> {
+  const failures = new Map<string, string>();
+  const byRoom = new Map<string, ClassroomRow[]>();
+  for (const row of rows) {
+    if (!row.wiseTeacherUserId) continue;
+    byRoom.set(row.assignedRoom, [...(byRoom.get(row.assignedRoom) ?? []), row]);
+  }
+
+  const batches = [...byRoom.entries()].flatMap(([room, roomRows]) =>
+    chunkRows(roomRows, PUBLISH_AVAILABILITY_BATCH_SIZE).map((chunk) => ({ room, rows: chunk })),
+  );
+
+  await runLimited(batches, 5, async (batch) => {
+    try {
+      const availability = await checkTeacherAvailabilityForSessions(client, instituteId, {
+        sessions: batch.rows.map((row) => ({
+          teacherId: row.wiseTeacherUserId ?? undefined,
+          sessionId: row.wiseSessionId,
+          scheduledStartTime: new Date(row.startTime).toISOString(),
+          scheduledEndTime: new Date(row.endTime).toISOString(),
+          type: row.sessionType ?? "OFFLINE",
+        })),
+        locationToCheck: batch.room,
+        sessionsToSkip: batch.rows.map((row) => ({
+          sessionId: row.wiseSessionId,
+          skipUpcoming: false,
+        })),
+      });
+
+      const sessions = availability.sessions ?? [];
+      const conflictingSessions = sessions.filter((session) => session.hasConflict || session.conflict);
+      if (conflictingSessions.length === 0) return;
+
+      const rowsBySessionId = new Map(batch.rows.map((row) => [row.wiseSessionId, row]));
+      let ambiguousConflict = false;
+      for (const session of conflictingSessions) {
+        if (typeof session.sessionId === "string" && rowsBySessionId.has(session.sessionId)) {
+          failures.set(rowsBySessionId.get(session.sessionId)!.id, "Wise availability check reported a room/teacher conflict");
+          continue;
+        }
+
+        const sessionIndex = sessions.indexOf(session);
+        if (sessions.length === batch.rows.length && sessionIndex >= 0) {
+          failures.set(batch.rows[sessionIndex].id, "Wise availability check reported a room/teacher conflict");
+          continue;
+        }
+
+        ambiguousConflict = true;
+      }
+
+      if (ambiguousConflict) {
+        for (const row of batch.rows) {
+          failures.set(row.id, "Wise availability check returned an ambiguous conflict response");
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wise availability check failed";
+      for (const row of batch.rows) failures.set(row.id, message);
+    }
+  });
+
+  return failures;
+}
+
+async function publishRowResult(
+  db: Database,
+  jobId: string,
+  row: ClassroomRow,
+  result: { status: "success" } | { status: "failed"; error: string },
+): Promise<PublishSummary> {
+  if (result.status === "success") {
+    await markPublishResult(db, row.id, "success", null);
+    await incrementPublishJobCounters(db, jobId, { completed: 1, success: 1 });
+    return { attempted: 1, success: 1, skipped: 0, failed: 0 };
+  }
+
+  await markPublishResult(db, row.id, "failed", result.error);
+  await incrementPublishJobCounters(db, jobId, { completed: 1, failed: 1 });
+  return { attempted: 1, success: 0, skipped: 0, failed: 1 };
+}
+
+async function markSkippedRows(
+  db: Database,
+  jobId: string,
+  rows: Array<{ row: ClassroomRow; reason: string }>,
+): Promise<PublishSummary> {
+  const summary: PublishSummary = { attempted: 0, success: 0, skipped: 0, failed: 0 };
+  await runLimited(rows, PUBLISH_ROW_CONCURRENCY, async ({ row, reason }) => {
+    await markPublishResult(db, row.id, "skipped", reason);
+    await incrementPublishJobCounters(db, jobId, { completed: 1, skipped: 1 });
+    summary.skipped += 1;
+  });
+  return summary;
+}
+
+export async function runClassroomPublishJob(
+  db: Database,
+  jobId: string,
+  client = createWiseClientFromEnv(),
+): Promise<PublishJobStatusResponse> {
+  const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
+  const existingJob = await loadPublishJob(db, jobId);
+  if (isPublishJobTerminal(existingJob.status)) {
+    return getClassroomPublishJobProgress(db, existingJob.runId, jobId);
+  }
+
+  await db
+    .update(schema.classroomPublishJobs)
+    .set({
+      status: "running",
+      startedAt: existingJob.startedAt ?? new Date(),
+      lastError: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.classroomPublishJobs.id, jobId));
+
+  try {
+    const rows = await loadRowsForRun(db, existingJob.runId);
+    const skippedRows: Array<{ row: ClassroomRow; reason: string }> = [];
+    const eligibleRows: ClassroomRow[] = [];
+
+    for (const row of rows) {
+      const eligibility = isClassroomPublishEligible(row);
+      if (!eligibility.eligible) {
+        skippedRows.push({ row, reason: eligibility.reason });
+      } else {
+        eligibleRows.push(row);
+      }
+    }
+
+    await db
+      .update(schema.classroomPublishJobs)
+      .set({
+        totalCount: rows.length,
+        eligibleCount: eligibleRows.length,
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.classroomPublishJobs.id, jobId));
+
+    const summary: PublishSummary = { attempted: 0, success: 0, skipped: 0, failed: 0 };
+    const skippedSummary = await markSkippedRows(db, jobId, skippedRows);
+    summary.skipped += skippedSummary.skipped;
+
+    const availabilityFailures = await checkAvailabilityForPublishRows(client, instituteId, eligibleRows);
+    await runLimited(eligibleRows, PUBLISH_ROW_CONCURRENCY, async (row) => {
+      const availabilityFailure = availabilityFailures.get(row.id);
+      if (availabilityFailure) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: availabilityFailure,
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        return;
+      }
+
+      try {
+        await updateSessionLocation(client, row.wiseClassId!, row.wiseSessionId, row.assignedRoom);
+        const result = await publishRowResult(db, jobId, row, { status: "success" });
+        summary.attempted += result.attempted;
+        summary.success += result.success;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Wise publish failed";
+        const result = await publishRowResult(db, jobId, row, { status: "failed", error: message });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+      }
+    });
+
+    await updateRunPublishStatus(db, existingJob.runId);
+
+    const terminalStatus: ClassroomPublishJob["status"] =
+      summary.failed > 0
+        ? summary.success > 0
+          ? "partial"
+          : "failed"
+        : "succeeded";
+    await db
+      .update(schema.classroomPublishJobs)
+      .set({
+        status: terminalStatus,
+        lastError: terminalStatus === "failed" ? "No Wise locations were published" : null,
+        finishedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.classroomPublishJobs.id, jobId));
+
+    return getClassroomPublishJobProgress(db, existingJob.runId, jobId);
+  } catch (error) {
+    await markPublishJobFailed(db, jobId, error);
+    await updateRunPublishStatus(db, existingJob.runId).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function getClassroomPublishJobProgress(
+  db: Database,
+  runId: string,
+  jobId: string,
+): Promise<PublishJobStatusResponse> {
+  const job = await loadPublishJob(db, jobId, runId);
+  const response: PublishJobStatusResponse = {
+    progress: toPublishJobProgress(job),
+  };
+  if (isPublishJobTerminal(job.status)) {
+    response.detail = await getClassroomAssignmentByRunId(db, runId);
+  }
+  return response;
+}
+
+export async function publishClassroomAssignmentRun(
+  db: Database,
+  runId: string,
+  client = createWiseClientFromEnv(),
+): Promise<{ detail: ClassroomAssignmentDetail; summary: PublishSummary }> {
+  const progress = await createClassroomPublishJob(db, { runId });
+  const result = await runClassroomPublishJob(db, progress.jobId, client);
+  const finalProgress = result.progress;
+  const detail = result.detail ?? await getClassroomAssignmentByRunId(db, runId);
+  return {
+    detail,
+    summary: {
+      attempted: finalProgress.successCount + finalProgress.failedCount,
+      success: finalProgress.successCount,
+      skipped: finalProgress.skippedCount,
+      failed: finalProgress.failedCount,
+    },
+  };
 }
 
 export async function getClassroomAssignmentByRunId(

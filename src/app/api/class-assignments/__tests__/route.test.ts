@@ -8,10 +8,13 @@ vi.mock("@/lib/classrooms/data", () => ({
     if (value === "bad-date") throw new Error("Invalid date. Expected YYYY-MM-DD.");
     return value;
   }),
+  createClassroomPublishJob: vi.fn(),
+  getClassroomPublishJobProgress: vi.fn(),
   getClassroomAssignmentForDate: vi.fn(),
   runClassroomAssignment: vi.fn(),
   updateClassroomAssignmentOverride: vi.fn(),
   publishClassroomAssignmentRun: vi.fn(),
+  runClassroomPublishJob: vi.fn(),
 }));
 vi.mock("@/lib/classrooms/schedule-email", () => ({
   getScheduleEmailPreview: vi.fn(),
@@ -21,9 +24,11 @@ vi.mock("@/lib/classrooms/schedule-email", () => ({
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import {
+  createClassroomPublishJob,
+  getClassroomPublishJobProgress,
   getClassroomAssignmentForDate,
-  publishClassroomAssignmentRun,
   runClassroomAssignment,
+  runClassroomPublishJob,
   updateClassroomAssignmentOverride,
 } from "@/lib/classrooms/data";
 import {
@@ -34,6 +39,7 @@ import { GET as getAssignments } from "../route";
 import { POST as runAssignments } from "../run/route";
 import { PATCH as patchOverride } from "../runs/[runId]/rows/[rowId]/route";
 import { POST as publishAssignments } from "../runs/[runId]/publish/route";
+import { GET as getPublishProgress } from "../runs/[runId]/publish/[jobId]/route";
 import { GET as previewScheduleEmail } from "../runs/[runId]/schedule-email/preview/route";
 import { POST as sendScheduleEmail } from "../runs/[runId]/schedule-email/send/route";
 
@@ -47,12 +53,36 @@ const detail = {
 
 const schedulePreview = {
   ready: true,
+  sendable: true,
   assignmentRunId: "run-1",
   assignmentDate: "2026-05-14",
   subject: "BeGifted schedule for 14/5/2026",
+  hardBlockers: [],
   blockers: [],
+  readyCount: 1,
+  blockedCount: 0,
   recipients: [],
   previews: [],
+};
+
+const publishProgress = {
+  jobId: "job-1",
+  runId: "run-1",
+  status: "pending",
+  totalCount: 1,
+  eligibleCount: 1,
+  completedCount: 0,
+  successCount: 0,
+  failedCount: 0,
+  skippedCount: 0,
+  remainingCount: 1,
+  elapsedMs: null,
+  estimatedRemainingMs: null,
+  lastError: null,
+  startedAt: null,
+  finishedAt: null,
+  createdAt: "2026-05-14T00:00:00.000Z",
+  updatedAt: "2026-05-14T00:00:00.000Z",
 };
 
 describe("class assignment routes", () => {
@@ -63,10 +93,9 @@ describe("class assignment routes", () => {
     vi.mocked(getClassroomAssignmentForDate).mockResolvedValue(detail as never);
     vi.mocked(runClassroomAssignment).mockResolvedValue(detail as never);
     vi.mocked(updateClassroomAssignmentOverride).mockResolvedValue(detail as never);
-    vi.mocked(publishClassroomAssignmentRun).mockResolvedValue({
-      detail,
-      summary: { attempted: 1, success: 1, skipped: 0, failed: 0 },
-    } as never);
+    vi.mocked(createClassroomPublishJob).mockResolvedValue(publishProgress as never);
+    vi.mocked(getClassroomPublishJobProgress).mockResolvedValue({ progress: publishProgress, detail } as never);
+    vi.mocked(runClassroomPublishJob).mockResolvedValue({ progress: publishProgress, detail } as never);
     vi.mocked(getScheduleEmailPreview).mockResolvedValue(schedulePreview as never);
     vi.mocked(sendScheduleEmailsForRun).mockResolvedValue({
       summary: { attempted: 1, success: 1, failed: 0, blocked: 0 },
@@ -127,17 +156,31 @@ describe("class assignment routes", () => {
     );
   });
 
-  it("publishes a run through the service and returns per-row results", async () => {
+  it("starts a publish job and returns progress", async () => {
     const res = await publishAssignments(new Request("http://test.local/api/class-assignments/runs/run-1/publish"), {
       params: Promise.resolve({ runId: "run-1" }),
     });
 
-    expect(res.status).toBe(200);
-    expect(publishClassroomAssignmentRun).toHaveBeenCalledWith({ db: true }, "run-1");
+    expect(res.status).toBe(202);
+    expect(createClassroomPublishJob).toHaveBeenCalledWith(
+      { db: true },
+      { runId: "run-1", createdBy: "admin@example.com" },
+    );
     await expect(res.json()).resolves.toEqual({
-      detail,
-      summary: { attempted: 1, success: 1, skipped: 0, failed: 0 },
+      jobId: "job-1",
+      progress: publishProgress,
     });
+  });
+
+  it("returns publish job progress", async () => {
+    const res = await getPublishProgress(
+      new Request("http://test.local/api/class-assignments/runs/run-1/publish/job-1"),
+      { params: Promise.resolve({ runId: "run-1", jobId: "job-1" }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(getClassroomPublishJobProgress).toHaveBeenCalledWith({ db: true }, "run-1", "job-1");
+    await expect(res.json()).resolves.toEqual({ progress: publishProgress, detail });
   });
 
   it("previews teacher schedule emails", async () => {
@@ -176,7 +219,13 @@ describe("class assignment routes", () => {
     vi.mocked(sendScheduleEmailsForRun).mockResolvedValue({
       summary: { attempted: 0, success: 0, failed: 0, blocked: 1 },
       recipients: [],
-      preview: { ...schedulePreview, ready: false, blockers: [{ type: "missing_recipient_email", message: "Missing email" }] },
+      preview: {
+        ...schedulePreview,
+        ready: false,
+        sendable: false,
+        blockedCount: 1,
+        blockers: [{ type: "missing_recipient_email", message: "Missing email" }],
+      },
     } as never);
 
     const res = await sendScheduleEmail(

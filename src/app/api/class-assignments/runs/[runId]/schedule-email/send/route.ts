@@ -19,7 +19,7 @@ export async function POST(
       runId,
       session.user?.email ?? null,
     );
-    const status = result.preview.ready ? 200 : 409;
+    const status = result.summary.attempted > 0 ? 200 : 409;
     return NextResponse.json(result, { status });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to send schedule emails";

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isClassroomPublishEligible } from "../data";
+import {
+  estimatePublishRemainingMs,
+  isClassroomPublishEligible,
+  toPublishJobProgress,
+} from "../data";
 import { REMOTE_NO_ROOM_NEEDED } from "../assignment-engine";
 
 const baseRow = {
@@ -50,5 +54,44 @@ describe("isClassroomPublishEligible", () => {
       eligible: false,
       reason: "Missing Wise class id",
     });
+  });
+});
+
+describe("publish job progress", () => {
+  it("estimates remaining time from completed Wise attempts only", () => {
+    const startedAt = new Date("2026-05-15T00:00:00.000Z");
+    const now = new Date("2026-05-15T00:00:10.000Z");
+
+    expect(estimatePublishRemainingMs({
+      startedAt,
+      finishedAt: null,
+      eligibleCount: 6,
+      successCount: 2,
+      failedCount: 0,
+    }, now)).toBe(20_000);
+  });
+
+  it("reports remaining row counts and terminal elapsed time", () => {
+    const progress = toPublishJobProgress({
+      id: "job-1",
+      runId: "run-1",
+      status: "partial",
+      totalCount: 5,
+      eligibleCount: 3,
+      completedCount: 5,
+      successCount: 2,
+      failedCount: 1,
+      skippedCount: 2,
+      lastError: null,
+      createdBy: "admin@example.com",
+      startedAt: new Date("2026-05-15T00:00:00.000Z"),
+      finishedAt: new Date("2026-05-15T00:00:12.000Z"),
+      createdAt: new Date("2026-05-15T00:00:00.000Z"),
+      updatedAt: new Date("2026-05-15T00:00:12.000Z"),
+    });
+
+    expect(progress.remainingCount).toBe(0);
+    expect(progress.elapsedMs).toBe(12_000);
+    expect(progress.estimatedRemainingMs).toBeNull();
   });
 });

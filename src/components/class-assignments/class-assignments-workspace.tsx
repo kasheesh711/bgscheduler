@@ -45,10 +45,14 @@ const REMOTE_NO_ROOM_NEEDED = "REMOTE_NO_ROOM_NEEDED";
 
 interface ScheduleEmailPreview {
   ready: boolean;
+  sendable: boolean;
   assignmentRunId: string;
   assignmentDate: string;
   subject: string;
+  hardBlockers: Array<{ type: string; message: string; tutorDisplayName?: string }>;
   blockers: Array<{ type: string; message: string; tutorDisplayName?: string }>;
+  readyCount: number;
+  blockedCount: number;
   recipients: Array<{
     groupId: string;
     canonicalKey: string;
@@ -77,6 +81,26 @@ interface ScheduleEmailPreview {
   }>;
 }
 
+interface PublishJobProgress {
+  jobId: string;
+  runId: string;
+  status: "pending" | "running" | "succeeded" | "partial" | "failed";
+  totalCount: number;
+  eligibleCount: number;
+  completedCount: number;
+  successCount: number;
+  failedCount: number;
+  skippedCount: number;
+  remainingCount: number;
+  elapsedMs: number | null;
+  estimatedRemainingMs: number | null;
+  lastError: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface ScheduleEmailSendResult {
   summary: { attempted: number; success: number; failed: number; blocked: number };
   recipients: Array<{
@@ -87,6 +111,16 @@ interface ScheduleEmailSendResult {
     error: string | null;
   }>;
   preview: ScheduleEmailPreview;
+}
+
+interface PublishStartResult {
+  jobId: string;
+  progress: PublishJobProgress;
+}
+
+interface PublishPollResult {
+  progress: PublishJobProgress;
+  detail?: AssignmentDetail;
 }
 
 function todayBangkok(): string {
@@ -118,6 +152,19 @@ function roomLabel(row: ClassroomRow): string {
     return "Remote / no room needed";
   }
   return row.assignedRoom;
+}
+
+function isPublishJobTerminal(status: PublishJobProgress["status"]): boolean {
+  return status === "succeeded" || status === "partial" || status === "failed";
+}
+
+function formatDuration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return "-";
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
 }
 
 function isPublishEligible(row: ClassroomRow): boolean {
@@ -157,9 +204,12 @@ export function ClassAssignmentsWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [publishProgress, setPublishProgress] = useState<PublishJobProgress | null>(null);
   const [scheduleEmailOpen, setScheduleEmailOpen] = useState(false);
   const [scheduleEmailPreview, setScheduleEmailPreview] = useState<ScheduleEmailPreview | null>(null);
   const [scheduleEmailResult, setScheduleEmailResult] = useState<ScheduleEmailSendResult | null>(null);
+  const [scheduleSendStartedAt, setScheduleSendStartedAt] = useState<number | null>(null);
+  const [operationTick, setOperationTick] = useState(0);
   const [selectedTutors, setSelectedTutors] = useState<Set<string>>(new Set());
   const [currentMinute, setCurrentMinute] = useState(7 * 60);
   const [playing, setPlaying] = useState(false);
@@ -244,6 +294,20 @@ export function ClassAssignmentsWorkspace() {
     };
   }, [playing, playbackSpeed, rows.length, timelineBounds.endMinute]);
 
+  useEffect(() => {
+    setPublishProgress(null);
+    setScheduleEmailPreview(null);
+    setScheduleEmailResult(null);
+  }, [run?.id]);
+
+  const publishActive = Boolean(publishProgress && !isPublishJobTerminal(publishProgress.status));
+  useEffect(() => {
+    if (!publishActive && !sendingScheduleEmails) return;
+    setOperationTick(Date.now());
+    const interval = window.setInterval(() => setOperationTick(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [publishActive, sendingScheduleEmails]);
+
   const publishCounts = useMemo(() => {
     const eligible = rows.filter(isPublishEligible).length;
     return {
@@ -311,6 +375,7 @@ export function ClassAssignmentsWorkspace() {
   async function publishToWise() {
     if (!run) return;
     setPublishing(true);
+    setPublishProgress(null);
     setError(null);
     setMessage(null);
     try {
@@ -318,22 +383,64 @@ export function ClassAssignmentsWorkspace() {
         method: "POST",
       });
       const body = (await response.json()) as
-        | { detail: AssignmentDetail; summary: { attempted: number; success: number; skipped: number; failed: number } }
+        | PublishStartResult
         | { error?: string };
       if (!response.ok) throw new Error("error" in body ? body.error : `HTTP ${response.status}`);
-      if ("detail" in body) {
-        setDetail(body.detail);
-        setMessage(
-          `Publish complete: ${body.summary.success} succeeded, ${body.summary.failed} failed, ${body.summary.skipped} skipped.`,
-        );
+      if ("progress" in body) {
+        setPublishProgress(body.progress);
       }
-      setPublishOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to publish to Wise");
-    } finally {
       setPublishing(false);
+      setPublishProgress(null);
     }
   }
+
+  const pollPublishProgress = useCallback(async (runId: string, jobId: string) => {
+    try {
+      const response = await fetch(`/api/class-assignments/runs/${runId}/publish/${jobId}`);
+      const body = (await response.json()) as PublishPollResult | { error?: string };
+      if (!response.ok) throw new Error("error" in body ? body.error : `HTTP ${response.status}`);
+      if ("progress" in body) {
+        setPublishProgress(body.progress);
+        if (body.detail) setDetail(body.detail);
+        if (isPublishJobTerminal(body.progress.status)) {
+          setPublishing(false);
+          setMessage(
+            `Publish complete: ${body.progress.successCount} succeeded, ${body.progress.failedCount} failed, ${body.progress.skippedCount} skipped.`,
+          );
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load publish progress");
+      setPublishing(false);
+    }
+  }, []);
+
+  const publishJobId = publishProgress?.jobId;
+  const publishStatus = publishProgress?.status;
+  useEffect(() => {
+    if (!run?.id || !publishJobId || !publishStatus || isPublishJobTerminal(publishStatus)) return;
+    void pollPublishProgress(run.id, publishJobId);
+    const interval = window.setInterval(() => {
+      void pollPublishProgress(run.id, publishJobId);
+    }, 1500);
+    return () => window.clearInterval(interval);
+  }, [pollPublishProgress, publishJobId, publishStatus, run?.id]);
+
+  useEffect(() => {
+    if (!publishProgress || !isPublishJobTerminal(publishProgress.status)) return;
+    setPublishing(false);
+  }, [publishProgress]);
+
+  useEffect(() => {
+    if (sendingScheduleEmails && scheduleSendStartedAt === null) {
+      setScheduleSendStartedAt(Date.now());
+    }
+    if (!sendingScheduleEmails && scheduleSendStartedAt !== null) {
+      setScheduleSendStartedAt(null);
+    }
+  }, [scheduleSendStartedAt, sendingScheduleEmails]);
 
   async function openScheduleEmailPreview() {
     if (!run) return;
@@ -372,7 +479,7 @@ export function ClassAssignmentsWorkspace() {
         setScheduleEmailPreview(body.preview);
         if (response.ok) {
           setMessage(
-            `Schedule emails sent: ${body.summary.success} succeeded, ${body.summary.failed} failed.`,
+            `Schedule emails sent: ${body.summary.success} succeeded, ${body.summary.failed} failed, ${body.summary.blocked} skipped.`,
           );
         }
       }
@@ -394,6 +501,26 @@ export function ClassAssignmentsWorkspace() {
 
   const selectedTutorRows = rows.filter((row) => selectedTutors.has(row.tutorDisplayName));
   const hasRows = rows.length > 0;
+  const publishPercent = publishProgress?.totalCount
+    ? Math.round((publishProgress.completedCount / publishProgress.totalCount) * 100)
+    : 0;
+  const publishElapsedMs = publishProgress?.startedAt && !isPublishJobTerminal(publishProgress.status)
+    ? operationTick > 0
+      ? operationTick - new Date(publishProgress.startedAt).getTime()
+      : publishProgress.elapsedMs
+    : publishProgress?.elapsedMs ?? null;
+  const publishEtaMs = publishProgress && !isPublishJobTerminal(publishProgress.status)
+    ? publishProgress.estimatedRemainingMs
+    : null;
+  const scheduleSendElapsedMs = sendingScheduleEmails && scheduleSendStartedAt
+    ? operationTick - scheduleSendStartedAt
+    : null;
+  const scheduleReadyCount = scheduleEmailPreview?.readyCount ?? 0;
+  const scheduleBlockedCount = scheduleEmailPreview?.blockedCount ?? 0;
+  const schedulePendingCount = sendingScheduleEmails ? scheduleReadyCount : 0;
+  const scheduleSentCount = scheduleEmailResult?.summary.success ?? 0;
+  const scheduleFailedCount = scheduleEmailResult?.summary.failed ?? 0;
+  const scheduleSkippedCount = scheduleEmailResult?.summary.blocked ?? scheduleBlockedCount;
 
   function handleTimelineMinuteChange(minute: number) {
     const nextMinute = Math.min(timelineBounds.endMinute, Math.max(timelineBounds.startMinute, minute));
@@ -718,32 +845,87 @@ export function ClassAssignmentsWorkspace() {
       </Tabs>
 
       <Dialog open={publishOpen} onOpenChange={setPublishOpen}>
-        <DialogContent>
+        <DialogContent className="flex max-h-[82vh] flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Publish locations to Wise?</DialogTitle>
             <DialogDescription>
               This writes Wise location only for eligible OFFLINE rows. Online room assignments remain local.
             </DialogDescription>
           </DialogHeader>
-          <div className="rounded-lg border bg-muted/40 p-3 text-sm">
-            <div>{publishCounts.eligible} rows eligible for Wise location update.</div>
-            <div>{publishCounts.skipped} rows will be skipped.</div>
-            <div>{publishCounts.success} rows are already marked published; publishing will retry eligible rows.</div>
-            <div>{publishCounts.failed} rows currently show a failed publish status.</div>
+          <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
+            <div className="rounded-lg border bg-muted/40 p-3 text-sm">
+              <div>{publishCounts.eligible} rows eligible for Wise location update.</div>
+              <div>{publishCounts.skipped} rows will be skipped.</div>
+              <div>{publishCounts.success} rows are already marked published; publishing will retry eligible rows.</div>
+              <div>{publishCounts.failed} rows currently show a failed publish status.</div>
+            </div>
+
+            {publishProgress && (
+              <div className="space-y-3 rounded-lg border bg-card p-3 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs text-muted-foreground">Publish status</div>
+                    <div className="font-medium capitalize">{publishProgress.status}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs text-muted-foreground">Elapsed / ETA</div>
+                    <div className="font-medium">
+                      {formatDuration(publishElapsedMs)} / {formatDuration(publishEtaMs)}
+                    </div>
+                  </div>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all"
+                    style={{ width: `${publishPercent}%` }}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-5">
+                  <div className="rounded-md border bg-muted/30 p-2">
+                    <div className="text-muted-foreground">Done</div>
+                    <div className="font-semibold">{publishProgress.completedCount}/{publishProgress.totalCount}</div>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-2">
+                    <div className="text-muted-foreground">Eligible</div>
+                    <div className="font-semibold">{publishProgress.eligibleCount}</div>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-2">
+                    <div className="text-muted-foreground">Succeeded</div>
+                    <div className="font-semibold text-available">{publishProgress.successCount}</div>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-2">
+                    <div className="text-muted-foreground">Failed</div>
+                    <div className="font-semibold text-destructive">{publishProgress.failedCount}</div>
+                  </div>
+                  <div className="rounded-md border bg-muted/30 p-2">
+                    <div className="text-muted-foreground">Skipped</div>
+                    <div className="font-semibold">{publishProgress.skippedCount}</div>
+                  </div>
+                </div>
+                {publishProgress.lastError && (
+                  <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
+                    {publishProgress.lastError}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPublishOpen(false)} disabled={publishing}>
-              Cancel
+          <DialogFooter className="shrink-0">
+            <Button variant="outline" onClick={() => setPublishOpen(false)}>
+              Close
             </Button>
-            <Button onClick={publishToWise} disabled={publishing || publishCounts.eligible === 0}>
-              {publishing ? "Publishing" : "Publish to Wise"}
+            <Button
+              onClick={publishToWise}
+              disabled={publishing || publishCounts.eligible === 0 || Boolean(publishProgress && !isPublishJobTerminal(publishProgress.status))}
+            >
+              {publishing || publishActive ? "Publishing" : "Publish to Wise"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={scheduleEmailOpen} onOpenChange={setScheduleEmailOpen}>
-        <DialogContent className="max-h-[86vh] max-w-4xl overflow-hidden">
+        <DialogContent className="flex max-h-[86vh] max-w-4xl flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Email teacher schedules</DialogTitle>
             <DialogDescription>
@@ -751,19 +933,25 @@ export function ClassAssignmentsWorkspace() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="min-h-0 space-y-3 overflow-auto pr-1">
+          <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
             {scheduleEmailPreview && (
               <>
                 <div className="grid gap-2 rounded-lg border bg-muted/30 p-3 text-sm md:grid-cols-3">
                   <div>
                     <div className="text-xs text-muted-foreground">Status</div>
                     <div className="font-medium">
-                      {scheduleEmailPreview.ready ? "Ready to send" : "Blocked"}
+                      {scheduleEmailPreview.sendable
+                        ? scheduleEmailPreview.ready
+                          ? "Ready to send"
+                          : "Partially ready"
+                        : "Blocked"}
                     </div>
                   </div>
                   <div>
-                    <div className="text-xs text-muted-foreground">Recipients</div>
-                    <div className="font-medium">{scheduleEmailPreview.recipients.length}</div>
+                    <div className="text-xs text-muted-foreground">Ready / blocked</div>
+                    <div className="font-medium">
+                      {scheduleEmailPreview.readyCount} / {scheduleEmailPreview.blockedCount}
+                    </div>
                   </div>
                   <div>
                     <div className="text-xs text-muted-foreground">Subject</div>
@@ -771,9 +959,36 @@ export function ClassAssignmentsWorkspace() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                  <div className="rounded-md border bg-card p-2">
+                    <div className="text-muted-foreground">Pending</div>
+                    <div className="font-semibold">{schedulePendingCount}</div>
+                  </div>
+                  <div className="rounded-md border bg-card p-2">
+                    <div className="text-muted-foreground">Sent</div>
+                    <div className="font-semibold text-available">{scheduleSentCount}</div>
+                  </div>
+                  <div className="rounded-md border bg-card p-2">
+                    <div className="text-muted-foreground">Failed</div>
+                    <div className="font-semibold text-destructive">{scheduleFailedCount}</div>
+                  </div>
+                  <div className="rounded-md border bg-card p-2">
+                    <div className="text-muted-foreground">Skipped</div>
+                    <div className="font-semibold">{scheduleSkippedCount}</div>
+                  </div>
+                </div>
+
+                {sendingScheduleEmails && (
+                  <div className="rounded-lg border bg-primary/5 p-3 text-sm">
+                    Sending {scheduleReadyCount} schedule{scheduleReadyCount === 1 ? "" : "s"} · elapsed {formatDuration(scheduleSendElapsedMs)}
+                  </div>
+                )}
+
                 {scheduleEmailPreview.blockers.length > 0 && (
                   <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/30 dark:text-amber-100">
-                    <div className="font-medium">Resolve before sending</div>
+                    <div className="font-medium">
+                      {scheduleEmailPreview.sendable ? "Skipped until resolved" : "Resolve before sending"}
+                    </div>
                     <ul className="mt-2 list-disc space-y-1 pl-5">
                       {scheduleEmailPreview.blockers.map((blocker, index) => (
                         <li key={`${blocker.type}-${index}`}>{blocker.message}</li>
@@ -846,16 +1061,16 @@ export function ClassAssignmentsWorkspace() {
             )}
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button variant="outline" onClick={() => setScheduleEmailOpen(false)} disabled={sendingScheduleEmails}>
               Close
             </Button>
             <Button
               onClick={sendScheduleEmails}
-              disabled={!scheduleEmailPreview?.ready || sendingScheduleEmails}
+              disabled={!scheduleEmailPreview?.sendable || sendingScheduleEmails}
             >
               <Send />
-              {sendingScheduleEmails ? "Sending" : "Send schedules"}
+              {sendingScheduleEmails ? `Sending ${scheduleReadyCount}` : "Send schedules"}
             </Button>
           </DialogFooter>
         </DialogContent>

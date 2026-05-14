@@ -64,10 +64,14 @@ export interface ScheduleEmailBlocker {
 
 export interface ScheduleEmailPreview {
   ready: boolean;
+  sendable: boolean;
   assignmentRunId: string;
   assignmentDate: string;
   subject: string;
+  hardBlockers: ScheduleEmailBlocker[];
   blockers: ScheduleEmailBlocker[];
+  readyCount: number;
+  blockedCount: number;
   recipients: ScheduleEmailRecipient[];
   previews: ScheduleEmailPreviewItem[];
 }
@@ -327,22 +331,16 @@ export async function getScheduleEmailPreview(
   const run = await loadRun(db, runId);
   const rows = await loadRows(db, runId);
   const subject = `BeGifted schedule for ${formatRunDate(run.assignmentDate)}`;
-  const blockers: ScheduleEmailBlocker[] = [...emailConfigBlockers()];
+  const hardBlockers: ScheduleEmailBlocker[] = [...emailConfigBlockers()];
+  const blockers: ScheduleEmailBlocker[] = [...hardBlockers];
 
   if (rows.length === 0) {
-    blockers.push({
+    const blocker: ScheduleEmailBlocker = {
       type: "no_rows",
       message: "This assignment run has no schedule rows to email.",
-    });
-  }
-
-  const unfinalizedRows = rows.filter((row) => row.status === "needs_review" || row.status === "no_room");
-  if (unfinalizedRows.length > 0) {
-    blockers.push({
-      type: "unfinalized_rows",
-      message: `${unfinalizedRows.length} non-remote row${unfinalizedRows.length === 1 ? "" : "s"} still need assignment review.`,
-      rowIds: unfinalizedRows.map((row) => row.id),
-    });
+    };
+    hardBlockers.push(blocker);
+    blockers.push(blocker);
   }
 
   const rowsByGroup = new Map<string, AssignmentEmailRow[]>();
@@ -361,6 +359,10 @@ export async function getScheduleEmailPreview(
     const contact = contacts.get(first.canonicalKey);
     const email = contact?.onsiteEmail?.trim() || null;
     const missingEmail = !email;
+    const groupUnfinalizedRows = groupRows.filter((row) => row.status === "needs_review" || row.status === "no_room");
+    const rowBlockReason = groupUnfinalizedRows.length > 0
+      ? `${groupUnfinalizedRows.length} schedule row${groupUnfinalizedRows.length === 1 ? "" : "s"} still need assignment review`
+      : null;
     if (missingEmail) {
       blockers.push({
         type: "missing_recipient_email",
@@ -369,14 +371,27 @@ export async function getScheduleEmailPreview(
         message: `${first.tutorDisplayName} has no non-online email address configured.`,
       });
     }
+    if (rowBlockReason) {
+      blockers.push({
+        type: "unfinalized_rows",
+        groupId,
+        tutorDisplayName: first.tutorDisplayName,
+        message: `${first.tutorDisplayName}: ${rowBlockReason}.`,
+        rowIds: groupUnfinalizedRows.map((row) => row.id),
+      });
+    }
+
+    const blockReason = missingEmail
+      ? "Missing non-online email address"
+      : rowBlockReason;
 
     const recipient: ScheduleEmailRecipient = {
       groupId,
       canonicalKey: first.canonicalKey,
       tutorDisplayName: first.tutorDisplayName,
       email,
-      status: missingEmail ? "blocked" : "ready",
-      blockReason: missingEmail ? "Missing non-online email address" : null,
+      status: blockReason ? "blocked" : "ready",
+      blockReason,
     };
     const blocks = groupRows.sort((a, b) => a.startMinute - b.startMinute).map(toBlock);
     previews.push({
@@ -391,13 +406,19 @@ export async function getScheduleEmailPreview(
 
   recipients.sort((a, b) => a.tutorDisplayName.localeCompare(b.tutorDisplayName));
   previews.sort((a, b) => a.recipient.tutorDisplayName.localeCompare(b.recipient.tutorDisplayName));
+  const readyCount = recipients.filter((recipient) => recipient.status === "ready").length;
+  const blockedCount = recipients.length - readyCount;
 
   return {
     ready: blockers.length === 0,
+    sendable: hardBlockers.length === 0 && readyCount > 0,
     assignmentRunId: run.id,
     assignmentDate: run.assignmentDate,
     subject,
+    hardBlockers,
     blockers,
+    readyCount,
+    blockedCount,
     recipients,
     previews,
   };
@@ -481,32 +502,34 @@ export async function sendScheduleEmailsForRun(
     .insert(schema.classroomScheduleEmailRuns)
     .values({
       assignmentRunId: runId,
-      status: preview.ready ? "pending" : "blocked",
+      status: preview.sendable ? "pending" : "blocked",
       subject: preview.subject,
       createdBy,
-      blockedCount: preview.ready ? 0 : preview.blockers.length,
+      blockedCount: preview.blockedCount,
     })
     .returning();
 
   const recipients: ScheduleEmailSendResult["recipients"] = [];
-  if (!preview.ready) {
+  if (!preview.sendable) {
     for (const item of preview.previews) {
+      const hardBlockerText = preview.hardBlockers.map((blocker) => blocker.message).join(" ");
+      const error = item.recipient.blockReason || hardBlockerText || "Schedule email preview is blocked";
       await insertRecipientResult(db, {
         emailRunId: emailRun.id,
         assignmentRunId: runId,
         recipient: item.recipient,
         status: "blocked",
-        error: item.recipient.blockReason ?? "Schedule email preview is blocked",
+        error,
       });
       recipients.push({
         ...item.recipient,
         sendStatus: "blocked",
         resendEmailId: null,
-        error: item.recipient.blockReason ?? "Schedule email preview is blocked",
+        error,
       });
     }
     return {
-      summary: { attempted: 0, success: 0, failed: 0, blocked: preview.blockers.length },
+      summary: { attempted: 0, success: 0, failed: 0, blocked: preview.previews.length },
       recipients,
       preview,
     };
@@ -514,25 +537,29 @@ export async function sendScheduleEmailsForRun(
 
   let success = 0;
   let failed = 0;
+  let blocked = 0;
+  let attempted = 0;
   for (const item of preview.previews) {
-    if (!item.recipient.email) {
-      failed += 1;
+    if (item.recipient.status === "blocked" || !item.recipient.email) {
+      blocked += 1;
+      const error = item.recipient.blockReason ?? "Recipient is blocked";
       await insertRecipientResult(db, {
         emailRunId: emailRun.id,
         assignmentRunId: runId,
         recipient: item.recipient,
-        status: "failed",
-        error: "Missing recipient email",
+        status: "blocked",
+        error,
       });
       recipients.push({
         ...item.recipient,
-        sendStatus: "failed",
+        sendStatus: "blocked",
         resendEmailId: null,
-        error: "Missing recipient email",
+        error,
       });
       continue;
     }
 
+    attempted += 1;
     try {
       const sent = await sender.sendEmail({
         to: item.recipient.email,
@@ -574,25 +601,32 @@ export async function sendScheduleEmailsForRun(
     }
   }
 
-  const status = failed > 0 ? (success > 0 ? "partial" : "failed") : "sent";
+  const status =
+    failed > 0
+      ? success > 0
+        ? "partial"
+        : "failed"
+      : blocked > 0
+        ? "partial"
+        : "sent";
   await db
     .update(schema.classroomScheduleEmailRuns)
     .set({
       status,
-      attemptedCount: preview.previews.length,
+      attemptedCount: attempted,
       successCount: success,
       failedCount: failed,
-      blockedCount: 0,
+      blockedCount: blocked,
       updatedAt: new Date(),
     })
     .where(eq(schema.classroomScheduleEmailRuns.id, emailRun.id));
 
   return {
     summary: {
-      attempted: preview.previews.length,
+      attempted,
       success,
       failed,
-      blocked: 0,
+      blocked,
     },
     recipients,
     preview,

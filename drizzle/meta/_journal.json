@@ -36,6 +36,13 @@
       "when": 1778784326558,
       "tag": "0004_round_rage",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1778786369734,
+      "tag": "0005_rich_newton_destine",
+      "breakpoints": true
     }
   ]
 }

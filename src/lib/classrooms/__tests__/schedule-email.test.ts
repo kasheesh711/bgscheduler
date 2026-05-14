@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createResendScheduleEmailSender,
   getScheduleEmailPreview,
+  sendScheduleEmailsForRun,
 } from "../schedule-email";
 import { REMOTE_NO_ROOM_NEEDED } from "../assignment-engine";
 
@@ -48,7 +49,9 @@ function makePreviewDb(input: {
   contacts: Array<Record<string, unknown>>;
 }) {
   let selectCall = 0;
+  const insertedRecipients: unknown[] = [];
   return {
+    insertedRecipients,
     select: vi.fn(() => {
       const call = selectCall;
       selectCall += 1;
@@ -79,8 +82,19 @@ function makePreviewDb(input: {
       };
     }),
     insert: vi.fn(() => ({
-      values: vi.fn(() => ({
+      values: vi.fn((value: unknown) => {
+        if (value && typeof value === "object" && "recipientEmail" in value) {
+          insertedRecipients.push(value);
+        }
+        return {
         onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+        returning: vi.fn().mockResolvedValue([{ id: "email-run-1" }]),
+      };
+      }),
+    })),
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn().mockResolvedValue(undefined),
       })),
     })),
   };
@@ -120,6 +134,9 @@ describe("schedule email preview", () => {
     const preview = await getScheduleEmailPreview(db as never, "run-1");
 
     expect(preview.ready).toBe(true);
+    expect(preview.sendable).toBe(true);
+    expect(preview.readyCount).toBe(1);
+    expect(preview.blockedCount).toBe(0);
     expect(preview.recipients).toHaveLength(1);
     expect(preview.previews[0].blocks.map((block) => block.room)).toContain("Remote / no room needed");
   });
@@ -133,7 +150,48 @@ describe("schedule email preview", () => {
     const preview = await getScheduleEmailPreview(db as never, "run-1");
 
     expect(preview.ready).toBe(false);
+    expect(preview.sendable).toBe(false);
     expect(preview.blockers.map((blocker) => blocker.type)).toContain("missing_recipient_email");
+  });
+
+  it("is sendable when at least one tutor is ready and another tutor is blocked", async () => {
+    const db = makePreviewDb({
+      rows: [
+        row({ id: "ready-row", groupId: "ready-group", canonicalKey: "Kevin", tutorDisplayName: "Kevin" }),
+        row({ id: "blocked-row", groupId: "blocked-group", canonicalKey: "Pearcha", tutorDisplayName: "Pearcha" }),
+      ],
+      contacts: [
+        { canonicalKey: "Kevin", onsiteEmail: "kevhsh7@gmail.com", active: true },
+        { canonicalKey: "Pearcha", onsiteEmail: null, onlineEmail: "online@example.com", active: true },
+      ],
+    });
+
+    const preview = await getScheduleEmailPreview(db as never, "run-1");
+
+    expect(preview.ready).toBe(false);
+    expect(preview.sendable).toBe(true);
+    expect(preview.readyCount).toBe(1);
+    expect(preview.blockedCount).toBe(1);
+  });
+
+  it("sends ready tutors and skips blocked tutors", async () => {
+    const db = makePreviewDb({
+      rows: [
+        row({ id: "ready-row", groupId: "ready-group", canonicalKey: "Kevin", tutorDisplayName: "Kevin" }),
+        row({ id: "blocked-row", groupId: "blocked-group", canonicalKey: "Pearcha", tutorDisplayName: "Pearcha" }),
+      ],
+      contacts: [
+        { canonicalKey: "Kevin", onsiteEmail: "kevhsh7@gmail.com", active: true },
+        { canonicalKey: "Pearcha", onsiteEmail: null, onlineEmail: "online@example.com", active: true },
+      ],
+    });
+    const sender = { sendEmail: vi.fn().mockResolvedValue({ id: "email-1" }) };
+
+    const result = await sendScheduleEmailsForRun(db as never, "run-1", "admin@example.com", sender);
+
+    expect(sender.sendEmail).toHaveBeenCalledTimes(1);
+    expect(result.summary).toEqual({ attempted: 1, success: 1, failed: 0, blocked: 1 });
+    expect(result.recipients.map((recipient) => recipient.sendStatus).sort()).toEqual(["blocked", "sent"]);
   });
 });
 

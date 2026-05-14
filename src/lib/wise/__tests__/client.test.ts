@@ -167,4 +167,30 @@ describe("WiseClient — REL-05 status-code-aware retry policy", () => {
       vi.useRealTimers();
     }
   });
+
+  it("limits concurrent requests", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const fetchMock = vi.fn(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      return jsonResponse(200, { ok: true });
+    });
+    global.fetch = fetchMock as typeof fetch;
+
+    const client = new WiseClient({
+      userId: "user-123",
+      apiKey: "api-key-456",
+      namespace: "begifted-education",
+      maxConcurrency: 2,
+      maxRetries: 0,
+    });
+
+    await Promise.all(Array.from({ length: 6 }, () => client.get<{ ok: boolean }>("/test")));
+
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(maxActive).toBeLessThanOrEqual(2);
+  });
 });

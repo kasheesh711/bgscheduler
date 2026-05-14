@@ -70,6 +70,14 @@ export const classroomPublishStatusEnum = pgEnum("classroom_publish_status", [
   "failed",
 ]);
 
+export const classroomPublishJobStatusEnum = pgEnum("classroom_publish_job_status", [
+  "pending",
+  "running",
+  "succeeded",
+  "partial",
+  "failed",
+]);
+
 // ── Snapshots & Sync ───────────────────────────────────────────────────
 
 export const snapshots = pgTable("snapshots", {
@@ -309,6 +317,27 @@ export const classroomAssignmentRows = pgTable("classroom_assignment_rows", {
   index("car_rows_run_idx").on(table.runId),
   index("car_rows_snapshot_idx").on(table.snapshotId),
   uniqueIndex("car_rows_run_session_idx").on(table.runId, table.wiseSessionId),
+]);
+
+export const classroomPublishJobs = pgTable("classroom_publish_jobs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => classroomAssignmentRuns.id),
+  status: classroomPublishJobStatusEnum("status").notNull().default("pending"),
+  totalCount: integer("total_count").notNull().default(0),
+  eligibleCount: integer("eligible_count").notNull().default(0),
+  completedCount: integer("completed_count").notNull().default(0),
+  successCount: integer("success_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+  skippedCount: integer("skipped_count").notNull().default(0),
+  lastError: text("last_error"),
+  createdBy: text("created_by"),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("classroom_publish_jobs_run_idx").on(table.runId),
+  index("classroom_publish_jobs_status_idx").on(table.status),
 ]);
 
 export const tutorContacts = pgTable("tutor_contacts", {
