@@ -122,7 +122,7 @@ export default function DataHealthPage() {
     setSyncMessage(null);
 
     try {
-      const response = await fetch("/api/internal/sync-wise", { method: "POST" });
+      const response = await fetch("/api/admin/sync-wise", { method: "POST" });
       let body: { error?: string; errorSummary?: string | null } = {};
 
       try {

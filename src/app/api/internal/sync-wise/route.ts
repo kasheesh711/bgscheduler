@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { revalidateTag } from "next/cache";
 import { timingSafeEqual } from "node:crypto";
-import { getDb } from "@/lib/db";
-import { createWiseClient } from "@/lib/wise/client";
-import { runFullSync } from "@/lib/sync/orchestrator";
 import { auth } from "@/lib/auth";
+import { runWiseSyncRequest } from "@/lib/sync/run-wise-sync";
 
 export const maxDuration = 300; // 5 minutes for Vercel
 
@@ -30,22 +27,6 @@ function hasValidCronSecret(request: NextRequest): CronSecretStatus {
   return valid ? "valid" : "invalid";
 }
 
-async function runSync() {
-  const db = getDb();
-  const client = createWiseClient();
-  const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
-
-  const result = await runFullSync(db, client, instituteId);
-
-  if (result.success) {
-    revalidateTag("snapshot", { expire: 0 });
-  }
-
-  return NextResponse.json(result, {
-    status: result.success ? 200 : 500,
-  });
-}
-
 /** Shared sync handler for both GET (Vercel cron) and POST (manual admin/curl) */
 async function handleSync(
   request: NextRequest,
@@ -54,14 +35,14 @@ async function handleSync(
   const cronSecretStatus = hasValidCronSecret(request);
 
   if (cronSecretStatus === "valid") {
-    return runSync();
+    return runWiseSyncRequest();
   }
 
   if (options.allowSessionAuth) {
     const session = await auth();
 
     if (session) {
-      return runSync();
+      return runWiseSyncRequest();
     }
   }
 
