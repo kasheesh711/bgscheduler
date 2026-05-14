@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isClassroomPublishEligible } from "../data";
+import { REMOTE_NO_ROOM_NEEDED } from "../assignment-engine";
 
 const baseRow = {
   status: "assigned" as const,
@@ -16,9 +17,21 @@ describe("isClassroomPublishEligible", () => {
   });
 
   it("skips online rows in v1", () => {
-    expect(isClassroomPublishEligible({ ...baseRow, sessionType: "ONLINE" })).toEqual({
+    expect(isClassroomPublishEligible({ ...baseRow, sessionType: "SCHEDULED" })).toEqual({
       eligible: false,
       reason: "V1 publishes Wise locations for OFFLINE sessions only",
+    });
+  });
+
+  it("skips remote rows", () => {
+    expect(isClassroomPublishEligible({
+      ...baseRow,
+      status: "remote",
+      assignedRoom: REMOTE_NO_ROOM_NEEDED,
+      sessionType: "SCHEDULED",
+    })).toEqual({
+      eligible: false,
+      reason: "Remote online session has no Wise location to publish",
     });
   });
 

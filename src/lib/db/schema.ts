@@ -60,6 +60,7 @@ export const classroomAssignmentRowStatusEnum = pgEnum("classroom_assignment_row
   "assigned",
   "needs_review",
   "no_room",
+  "remote",
 ]);
 
 export const classroomPublishStatusEnum = pgEnum("classroom_publish_status", [
@@ -257,6 +258,7 @@ export const classroomAssignmentRuns = pgTable("classroom_assignment_runs", {
   assignedCount: integer("assigned_count").notNull().default(0),
   needsReviewCount: integer("needs_review_count").notNull().default(0),
   noRoomCount: integer("no_room_count").notNull().default(0),
+  remoteCount: integer("remote_count").notNull().default(0),
   publishedCount: integer("published_count").notNull().default(0),
   failedPublishCount: integer("failed_publish_count").notNull().default(0),
   createdBy: text("created_by"),
@@ -307,6 +309,58 @@ export const classroomAssignmentRows = pgTable("classroom_assignment_rows", {
   index("car_rows_run_idx").on(table.runId),
   index("car_rows_snapshot_idx").on(table.snapshotId),
   uniqueIndex("car_rows_run_session_idx").on(table.runId, table.wiseSessionId),
+]);
+
+export const tutorContacts = pgTable("tutor_contacts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  canonicalKey: text("canonical_key").notNull(),
+  displayName: text("display_name").notNull(),
+  onsiteEmail: text("onsite_email"),
+  onlineEmail: text("online_email"),
+  onsitePhone: text("onsite_phone"),
+  onlinePhone: text("online_phone"),
+  sourceNames: jsonb("source_names").$type<string[]>().notNull().default([]),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("tutor_contacts_canonical_key_idx").on(table.canonicalKey),
+  index("tutor_contacts_active_idx").on(table.active),
+]);
+
+export const classroomScheduleEmailRuns = pgTable("classroom_schedule_email_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  assignmentRunId: uuid("assignment_run_id").notNull().references(() => classroomAssignmentRuns.id),
+  status: text("status").notNull().default("pending"),
+  subject: text("subject").notNull(),
+  createdBy: text("created_by"),
+  attemptedCount: integer("attempted_count").notNull().default(0),
+  successCount: integer("success_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+  blockedCount: integer("blocked_count").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("cser_assignment_run_idx").on(table.assignmentRunId),
+]);
+
+export const classroomScheduleEmailRecipients = pgTable("classroom_schedule_email_recipients", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  emailRunId: uuid("email_run_id").notNull().references(() => classroomScheduleEmailRuns.id),
+  assignmentRunId: uuid("assignment_run_id").notNull().references(() => classroomAssignmentRuns.id),
+  groupId: uuid("group_id").notNull().references(() => tutorIdentityGroups.id),
+  canonicalKey: text("canonical_key").notNull(),
+  tutorDisplayName: text("tutor_display_name").notNull(),
+  recipientEmail: text("recipient_email"),
+  status: text("status").notNull().default("pending"),
+  resendEmailId: text("resend_email_id"),
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("cser_recipients_email_run_idx").on(table.emailRunId),
+  index("cser_recipients_assignment_run_idx").on(table.assignmentRunId),
+  index("cser_recipients_group_idx").on(table.groupId),
 ]);
 
 // ── Past Sessions (cross-snapshot capture) ──────────────────────────────

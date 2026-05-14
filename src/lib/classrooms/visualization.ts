@@ -1,5 +1,6 @@
 import { getFloorPlanGeometry, sortRoomsByFloorPlan } from "./floor-plan";
 import { NO_ROOM_AVAILABLE } from "./rooms";
+import { REMOTE_NO_ROOM_NEEDED } from "./assignment-engine";
 
 export interface ClassroomVisualizationRoom {
   id: string;
@@ -25,7 +26,7 @@ export interface ClassroomVisualizationRow {
   minCapacity: number;
   overrideRoom: string | null;
   assignedRoom: string;
-  status: "assigned" | "needs_review" | "no_room";
+  status: "assigned" | "needs_review" | "no_room" | "remote";
   warnings: string[];
   publishStatus?: "not_published" | "skipped" | "success" | "failed";
 }
@@ -85,7 +86,8 @@ export function buildTimelineBounds(
 ): TimelineBounds {
   const defaultStart = defaults.startMinute ?? DEFAULT_TIMELINE_START_MINUTE;
   const defaultEnd = defaults.endMinute ?? DEFAULT_TIMELINE_END_MINUTE;
-  if (rows.length === 0) {
+  const roomRows = rows.filter((row) => !shouldSkipRoomOccupancy(row));
+  if (roomRows.length === 0) {
     return {
       startMinute: defaultStart,
       endMinute: defaultEnd,
@@ -93,8 +95,8 @@ export function buildTimelineBounds(
     };
   }
 
-  const minStart = Math.min(...rows.map((row) => row.startMinute));
-  const maxEnd = Math.max(...rows.map((row) => row.endMinute));
+  const minStart = Math.min(...roomRows.map((row) => row.startMinute));
+  const maxEnd = Math.max(...roomRows.map((row) => row.endMinute));
   return {
     startMinute: Math.min(defaultStart, minStart),
     endMinute: Math.max(defaultEnd, maxEnd),
@@ -129,11 +131,16 @@ export function shouldRouteRowToReview(
   row: ClassroomVisualizationRow,
   activeRoomNames: Set<string>,
 ): boolean {
+  if (shouldSkipRoomOccupancy(row)) return false;
   if (row.status !== "assigned") return true;
   if (row.assignedRoom === NO_ROOM_AVAILABLE) return true;
   if (!activeRoomNames.has(row.assignedRoom)) return true;
   if (!getFloorPlanGeometry(row.assignedRoom)) return true;
   return row.warnings.length > 0;
+}
+
+export function shouldSkipRoomOccupancy(row: ClassroomVisualizationRow): boolean {
+  return row.status === "remote" || row.assignedRoom === REMOTE_NO_ROOM_NEEDED;
 }
 
 function activeRoomNameForRow(
@@ -172,6 +179,7 @@ export function buildRoomOccupancyState<TRow extends ClassroomVisualizationRow>(
   const reviewRows: TRow[] = [];
 
   for (const row of rows) {
+    if (shouldSkipRoomOccupancy(row)) continue;
     if (!overlapsMinute(row, currentMinute)) continue;
     const roomName = activeRoomNameForRow(row, activeRoomNames);
     if (!roomName) {
@@ -213,6 +221,7 @@ export function buildHeatmapCells<TRow extends ClassroomVisualizationRow>(
       const endMinute = Math.min(minute + binMinutes, bounds.endMinute);
       const roomRows = rows.filter(
         (row) =>
+          !shouldSkipRoomOccupancy(row) &&
           activeRoomNameForRow(row, activeRoomNames) === room.name &&
           overlapsRange(row, minute, endMinute),
       );
@@ -231,7 +240,9 @@ export function buildHeatmapCells<TRow extends ClassroomVisualizationRow>(
     }
   }
 
-  const reviewRows = rows.filter((row) => shouldRouteRowToReview(row, activeRoomNames));
+  const reviewRows = rows.filter(
+    (row) => !shouldSkipRoomOccupancy(row) && shouldRouteRowToReview(row, activeRoomNames),
+  );
   if (reviewRows.length > 0) {
     for (let minute = bounds.startMinute; minute < bounds.endMinute; minute += binMinutes) {
       const endMinute = Math.min(minute + binMinutes, bounds.endMinute);
@@ -270,6 +281,7 @@ export function buildRoomCalendarEvents<TRow extends ClassroomVisualizationRow>(
     const isReview = roomName === REVIEW_LANE_ROOM_NAME;
     const roomRows = rows
       .filter((row) => {
+        if (shouldSkipRoomOccupancy(row)) return false;
         const resolvedRoom = activeRoomNameForRow(row, activeRoomNames);
         return isReview ? resolvedRoom === null : resolvedRoom === roomName;
       })

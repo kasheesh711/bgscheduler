@@ -8,8 +8,15 @@ import {
   TV_REQUIRED_TUTORS,
   normalizeTutorName,
 } from "./rooms";
+import {
+  isOnlineSessionType,
+  isOnsiteSessionType,
+} from "./session-mode";
 
-export type AssignmentRowStatus = "assigned" | "needs_review" | "no_room";
+export const REMOTE_NO_ROOM_NEEDED = "REMOTE_NO_ROOM_NEEDED";
+export const ONLINE_CENTER_CONNECTION_GAP_MINUTES = 60;
+
+export type AssignmentRowStatus = "assigned" | "needs_review" | "no_room" | "remote";
 
 export interface AssignmentSession {
   groupId: string;
@@ -49,6 +56,7 @@ export interface AssignmentCounts {
   assignedCount: number;
   needsReviewCount: number;
   noRoomCount: number;
+  remoteCount: number;
 }
 
 export interface AssignmentResult {
@@ -62,16 +70,12 @@ interface OccupancyInterval {
   sessionId: string;
 }
 
-function normalizeSessionType(value: string | null | undefined): string {
-  return String(value ?? "").trim().toUpperCase();
-}
-
 export function isOfflineSession(value: string | null | undefined): boolean {
-  return normalizeSessionType(value) === "OFFLINE";
+  return isOnsiteSessionType(value);
 }
 
 export function isOnlineSession(value: string | null | undefined): boolean {
-  return normalizeSessionType(value) === "ONLINE";
+  return isOnlineSessionType(value);
 }
 
 function hasReliableOneToOneCapacity(session: AssignmentSession): boolean {
@@ -145,6 +149,72 @@ function sessionPriority(session: AssignmentSession): number {
   return 3;
 }
 
+function tutorKey(session: AssignmentSession): string {
+  return session.groupId || normalizeTutorName(session.tutorDisplayName);
+}
+
+function sortedTutorSessions(sessions: AssignmentSession[]): AssignmentSession[] {
+  return [...sessions].sort((a, b) => {
+    if (a.startMinute !== b.startMinute) return a.startMinute - b.startMinute;
+    if (a.endMinute !== b.endMinute) return a.endMinute - b.endMinute;
+    return a.wiseSessionId.localeCompare(b.wiseSessionId);
+  });
+}
+
+function isConnectedGap(gapMinutes: number): boolean {
+  return gapMinutes < ONLINE_CENTER_CONNECTION_GAP_MINUTES;
+}
+
+function onlineSessionRequiresCenterRoom(
+  session: AssignmentSession,
+  tutorSessions: AssignmentSession[],
+): boolean {
+  if (!isOnlineSession(session.sessionType)) return true;
+
+  const sorted = sortedTutorSessions(tutorSessions);
+  const index = sorted.findIndex((candidate) => candidate.wiseSessionId === session.wiseSessionId);
+  if (index === -1) return false;
+
+  let cursorStart = session.startMinute;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const previous = sorted[i];
+    const gap = cursorStart - previous.endMinute;
+    if (!isConnectedGap(gap)) break;
+    if (isOfflineSession(previous.sessionType)) return true;
+    cursorStart = previous.startMinute;
+  }
+
+  let cursorEnd = session.endMinute;
+  for (let i = index + 1; i < sorted.length; i += 1) {
+    const next = sorted[i];
+    const gap = next.startMinute - cursorEnd;
+    if (!isConnectedGap(gap)) break;
+    if (isOfflineSession(next.sessionType)) return true;
+    cursorEnd = next.endMinute;
+  }
+
+  return false;
+}
+
+function buildCenterRoomRequirementMap(sessions: AssignmentSession[]): Map<string, boolean> {
+  const byTutor = new Map<string, AssignmentSession[]>();
+  for (const session of sessions) {
+    const key = tutorKey(session);
+    byTutor.set(key, [...(byTutor.get(key) ?? []), session]);
+  }
+
+  const requirements = new Map<string, boolean>();
+  for (const tutorSessions of byTutor.values()) {
+    for (const session of tutorSessions) {
+      requirements.set(
+        session.wiseSessionId,
+        !isOnlineSession(session.sessionType) || onlineSessionRequiresCenterRoom(session, tutorSessions),
+      );
+    }
+  }
+  return requirements;
+}
+
 export function assignClassrooms(
   sessions: AssignmentSession[],
   rooms: ClassroomRoomDefinition[],
@@ -156,6 +226,7 @@ export function assignClassrooms(
   for (const room of activeRooms) occupancy.set(room.name, []);
 
   const lastByTutor = new Map<string, { endMinute: number; room: string }>();
+  const centerRoomRequiredBySessionId = buildCenterRoomRequirementMap(sessions);
   const sortedSessions = [...sessions].sort((a, b) => {
     if (a.startMinute !== b.startMinute) return a.startMinute - b.startMinute;
     const priorityDiff = sessionPriority(a) - sessionPriority(b);
@@ -173,6 +244,8 @@ export function assignClassrooms(
     const isGift = isGiftTutor(session.tutorDisplayName);
     const overrideRoom = normalizeTutorName(overrideBySessionId.get(session.wiseSessionId) ?? "") || null;
     const ruleTrace: string[] = [];
+    const requiresCenterRoom =
+      Boolean(overrideRoom) || centerRoomRequiredBySessionId.get(session.wiseSessionId) !== false;
 
     const roomOk = (roomName: string): boolean =>
       roomPassesConstraints(roomByName.get(roomName), session, minCapacity, needsTv);
@@ -184,6 +257,11 @@ export function assignClassrooms(
     };
 
     let assignedRoom = "";
+
+    if (!requiresCenterRoom && isOnlineSession(session.sessionType)) {
+      assignedRoom = REMOTE_NO_ROOM_NEEDED;
+      ruleTrace.push("remote online class: no center room needed");
+    }
 
     if (overrideRoom) {
       if (!roomByName.has(overrideRoom)) {
@@ -198,6 +276,17 @@ export function assignClassrooms(
       } else {
         assignedRoom = overrideRoom;
         ruleTrace.push(`assigned by override: ${overrideRoom}`);
+      }
+    }
+
+    if (!assignedRoom && isOnlineSession(session.sessionType)) {
+      const last = lastByTutor.get(tutorNorm);
+      if (last) {
+        const gap = session.startMinute - last.endMinute;
+        if (gap >= 0 && gap < ONLINE_CENTER_CONNECTION_GAP_MINUTES && roomOk(last.room) && roomAvailable(last.room)) {
+          assignedRoom = last.room;
+          ruleTrace.push(`assigned by online continuity: ${last.room}`);
+        }
       }
     }
 
@@ -286,10 +375,14 @@ export function assignClassrooms(
       });
     }
 
-    lastByTutor.set(tutorNorm, { endMinute: session.endMinute, room: assignedRoom });
+    if (assignedRoom !== NO_ROOM_AVAILABLE && assignedRoom !== REMOTE_NO_ROOM_NEEDED) {
+      lastByTutor.set(tutorNorm, { endMinute: session.endMinute, room: assignedRoom });
+    }
 
     const status: AssignmentRowStatus =
-      assignedRoom === NO_ROOM_AVAILABLE
+      assignedRoom === REMOTE_NO_ROOM_NEEDED
+        ? "remote"
+        : assignedRoom === NO_ROOM_AVAILABLE
         ? "no_room"
         : warnings.includes("needs_review_missing_capacity")
           ? "needs_review"
@@ -320,6 +413,7 @@ export function assignClassrooms(
       assignedCount: rows.filter((row) => row.status === "assigned").length,
       needsReviewCount: rows.filter((row) => row.status === "needs_review").length,
       noRoomCount: rows.filter((row) => row.status === "no_room").length,
+      remoteCount: rows.filter((row) => row.status === "remote").length,
     },
   };
 }
