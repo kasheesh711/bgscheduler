@@ -3,7 +3,6 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { WiseClient } from "@/lib/wise/client";
 import {
-  checkTeacherAvailabilityForSessions,
   fetchInstituteLocations,
   updateSessionLocation,
 } from "@/lib/wise/fetchers";
@@ -820,18 +819,6 @@ async function updateRunPublishStatus(db: Database, runId: string): Promise<void
     .where(eq(schema.classroomAssignmentRuns.id, runId));
 }
 
-function wiseAvailabilityConflictMessage(availability: Awaited<ReturnType<typeof checkTeacherAvailabilityForSessions>>): string | null {
-  const conflict = availability.sessions?.find((session) => session.hasConflict || session.conflict);
-  if (!conflict) return null;
-  const reason =
-    typeof conflict.reason === "string"
-      ? conflict.reason
-      : typeof conflict.conflictReason === "string"
-        ? conflict.conflictReason
-        : null;
-  return reason ? `Wise availability conflict: ${reason}` : "Wise availability check reported a room/teacher conflict";
-}
-
 function isStaleRunningPublishJob(job: ClassroomPublishJob, now = new Date()): boolean {
   if (job.status !== "running" || !job.startedAt || job.finishedAt) return false;
   return now.getTime() - job.startedAt.getTime() > PUBLISH_JOB_STALE_AFTER_MS;
@@ -852,41 +839,20 @@ async function failStalePublishJob(db: Database, job: ClassroomPublishJob): Prom
   return updatedJob ?? job;
 }
 
-async function checkAvailabilityForPublishRow(
-  client: WiseClient,
-  instituteId: string,
-  row: ClassroomRow,
-  location = row.assignedRoom,
+type WiseLocationUpdater = (classId: string, sessionId: string, location: string) => Promise<unknown>;
+
+export async function updateWiseLocationOnly(
+  updateLocation: WiseLocationUpdater,
+  row: Pick<ClassroomRow, "wiseClassId" | "wiseSessionId">,
+  location: string,
 ): Promise<string | null> {
-  if (!row.wiseTeacherUserId) return "Missing Wise teacher user id";
-
+  if (!row.wiseClassId) return "Missing Wise class id";
+  if (!row.wiseSessionId) return "Missing Wise session id";
   try {
-    const scheduledStartTime = classroomTimestampToWiseIso(row.startTime);
-    const scheduledEndTime = classroomTimestampToWiseIso(row.endTime);
-    const availability = await checkTeacherAvailabilityForSessions(client, instituteId, {
-      teacherId: row.wiseTeacherUserId ?? undefined,
-      sessions: [
-        {
-          teacherId: row.wiseTeacherUserId ?? undefined,
-          classId: row.wiseClassId ?? undefined,
-          sessionId: row.wiseSessionId,
-          scheduledStartTime,
-          scheduledEndTime,
-          type: row.sessionType ?? "OFFLINE",
-        },
-      ],
-      locationToCheck: location,
-      sessionsToSkip: {
-        sessionId: row.wiseSessionId,
-        classId: row.wiseClassId ?? undefined,
-        startTime: scheduledStartTime,
-        skipUpcoming: false,
-      },
-    });
-
-    return wiseAvailabilityConflictMessage(availability);
+    await updateLocation(row.wiseClassId, row.wiseSessionId, location);
+    return null;
   } catch (error) {
-    return error instanceof Error ? error.message : "Wise availability check failed";
+    return error instanceof Error ? error.message : "Wise publish failed";
   }
 }
 
@@ -942,7 +908,6 @@ async function loadTemporaryPublishLocations(
 async function moveCycleRowToTemporaryLocation(
   db: Database,
   client: WiseClient,
-  instituteId: string,
   rows: ClassroomRow[],
   allRows: ClassroomRow[],
   temporaryLocations: string[],
@@ -961,22 +926,20 @@ async function moveCycleRowToTemporaryLocation(
       continue;
     }
 
-    const availabilityFailure = await checkAvailabilityForPublishRow(client, instituteId, row, temporaryLocation);
-    if (availabilityFailure) {
-      attemptedErrors.push(`${row.tutorDisplayName}: ${temporaryLocation} unavailable (${availabilityFailure})`);
+    const updateError = await updateWiseLocationOnly(
+      (classId, sessionId, location) => updateSessionLocation(client, classId, sessionId, location),
+      row,
+      temporaryLocation,
+    );
+    if (updateError) {
+      attemptedErrors.push(`${row.tutorDisplayName}: ${updateError}`);
       continue;
     }
 
-    try {
-      await updateSessionLocation(client, row.wiseClassId!, row.wiseSessionId, temporaryLocation);
-      row.currentWiseLocation = temporaryLocation;
-      temporaryMovedRowIds.add(row.id);
-      await updateRowCurrentWiseLocation(db, row.id, temporaryLocation);
-      return { moved: true };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Wise temporary room move failed";
-      attemptedErrors.push(`${row.tutorDisplayName}: ${message}`);
-    }
+    row.currentWiseLocation = temporaryLocation;
+    temporaryMovedRowIds.add(row.id);
+    await updateRowCurrentWiseLocation(db, row.id, temporaryLocation);
+    return { moved: true };
   }
 
   return {
@@ -1078,7 +1041,6 @@ export async function runClassroomPublishJob(
         const temporaryMove = await moveCycleRowToTemporaryLocation(
           db,
           client,
-          instituteId,
           stillPending,
           rows,
           temporaryLocations,
@@ -1104,11 +1066,15 @@ export async function runClassroomPublishJob(
       }
 
       await runLimited(readyRows, PUBLISH_ROW_CONCURRENCY, async (row) => {
-        const availabilityFailure = await checkAvailabilityForPublishRow(client, instituteId, row);
-        if (availabilityFailure) {
+        const updateError = await updateWiseLocationOnly(
+          (classId, sessionId, location) => updateSessionLocation(client, classId, sessionId, location),
+          row,
+          row.assignedRoom,
+        );
+        if (updateError) {
           const result = await publishRowResult(db, jobId, row, {
             status: "failed",
-            error: availabilityFailure,
+            error: updateError,
           });
           summary.attempted += result.attempted;
           summary.failed += result.failed;
@@ -1117,20 +1083,10 @@ export async function runClassroomPublishJob(
           return;
         }
 
-        try {
-          await updateSessionLocation(client, row.wiseClassId!, row.wiseSessionId, row.assignedRoom);
-          const result = await publishRowResult(db, jobId, row, { status: "success" });
-          summary.attempted += result.attempted;
-          summary.success += result.success;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Wise publish failed";
-          const result = await publishRowResult(db, jobId, row, { status: "failed", error: message });
-          summary.attempted += result.attempted;
-          summary.failed += result.failed;
-          failedRows.set(row.id, row);
-        } finally {
-          pendingRows.delete(row.id);
-        }
+        const result = await publishRowResult(db, jobId, row, { status: "success" });
+        summary.attempted += result.attempted;
+        summary.success += result.success;
+        pendingRows.delete(row.id);
       });
     }
 

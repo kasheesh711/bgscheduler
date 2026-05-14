@@ -849,7 +849,8 @@ export function ClassAssignmentsWorkspace() {
           <DialogHeader>
             <DialogTitle>Publish locations to Wise?</DialogTitle>
             <DialogDescription>
-              This writes Wise location only for eligible OFFLINE rows. Online room assignments remain local.
+              This writes location only for eligible OFFLINE rows using Wise&apos;s session update response. Teacher
+              availability conflicts are not prechecked. Online room assignments remain local.
             </DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">

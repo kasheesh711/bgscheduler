@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import {
   classroomTimestampToWiseIso,
   estimatePublishRemainingMs,
@@ -7,6 +8,7 @@ import {
   isClassroomPublishEligible,
   orderTemporaryPublishCandidates,
   toPublishJobProgress,
+  updateWiseLocationOnly,
 } from "../data";
 import { REMOTE_NO_ROOM_NEEDED } from "../assignment-engine";
 
@@ -216,5 +218,36 @@ describe("orderTemporaryPublishCandidates", () => {
       "actual-blocker",
       "downstream",
     ]);
+  });
+});
+
+describe("updateWiseLocationOnly", () => {
+  it("treats a successful Wise location PUT as publishable without availability preflight", async () => {
+    const updateLocation = vi.fn().mockResolvedValue({ ok: true });
+
+    await expect(updateWiseLocationOnly(
+      updateLocation,
+      { wiseClassId: "class-1", wiseSessionId: "session-1" },
+      "Remember",
+    )).resolves.toBeNull();
+
+    expect(updateLocation).toHaveBeenCalledWith("class-1", "session-1", "Remember");
+  });
+
+  it("returns the raw Wise PUT error when location update is rejected", async () => {
+    const updateLocation = vi.fn().mockRejectedValue(new Error("Wise API 422: invalid location"));
+
+    await expect(updateWiseLocationOnly(
+      updateLocation,
+      { wiseClassId: "class-1", wiseSessionId: "session-1" },
+      "Remember",
+    )).resolves.toBe("Wise API 422: invalid location");
+  });
+
+  it("does not use Wise availability preflight from the classroom publisher", () => {
+    const source = readFileSync(new URL("../data.ts", import.meta.url), "utf8");
+
+    expect(source).not.toContain("checkTeacherAvailabilityForSessions");
+    expect(source).not.toContain("Wise availability conflict");
   });
 });
