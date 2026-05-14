@@ -3,6 +3,7 @@ import {
   classroomTimestampToWiseIso,
   estimatePublishRemainingMs,
   findPublishRoomBlockers,
+  findTemporaryPublishLocation,
   isClassroomPublishEligible,
   toPublishJobProgress,
 } from "../data";
@@ -145,5 +146,40 @@ describe("findPublishRoomBlockers", () => {
     };
 
     expect(findPublishRoomBlockers(row, [later])).toEqual([]);
+  });
+});
+
+describe("findTemporaryPublishLocation", () => {
+  it("chooses a room with no current or assigned overlap", () => {
+    const row = {
+      id: "target",
+      tutorDisplayName: "Target",
+      currentWiseLocation: "Cool",
+      assignedRoom: "Remember",
+      startMinute: 600,
+      endMinute: 660,
+    };
+    const occupiedCurrent = {
+      id: "current",
+      tutorDisplayName: "Current",
+      currentWiseLocation: "Dream. Plan. Do.",
+      assignedRoom: "Nerd",
+      startMinute: 600,
+      endMinute: 660,
+    };
+    const occupiedAssigned = {
+      id: "assigned",
+      tutorDisplayName: "Assigned",
+      currentWiseLocation: "Doubt",
+      assignedRoom: "Joy",
+      startMinute: 630,
+      endMinute: 690,
+    };
+
+    expect(findTemporaryPublishLocation(row, [row, occupiedCurrent, occupiedAssigned], [
+      "Dream. Plan. Do.",
+      "Joy",
+      "Iconic",
+    ])).toBe("Iconic");
   });
 });
