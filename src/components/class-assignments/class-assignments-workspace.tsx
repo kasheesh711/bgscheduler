@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { CalendarDays, Play, RefreshCw, UploadCloud } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CalendarDays, Grid3X3, Map as MapIcon, Play, RefreshCw, Table2, UploadCloud, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,65 +21,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-
-interface ClassroomRun {
-  id: string;
-  assignmentDate: string;
-  status: "completed" | "published" | "partial" | "failed";
-  forceReassign: boolean;
-  totalSessions: number;
-  assignedCount: number;
-  needsReviewCount: number;
-  noRoomCount: number;
-  publishedCount: number;
-  failedPublishCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface ClassroomRoom {
-  id: string;
-  name: string;
-  hasTv: boolean;
-  capacity: number;
-  category: "standard" | "overflow_only" | "online_only";
-  active: boolean;
-  sortOrder: number;
-}
-
-interface ClassroomRow {
-  id: string;
-  runId: string;
-  tutorDisplayName: string;
-  wiseTeacherId: string;
-  wiseTeacherUserId: string | null;
-  wiseSessionId: string;
-  wiseClassId: string | null;
-  startTime: string;
-  endTime: string;
-  sessionType: string | null;
-  currentWiseLocation: string | null;
-  studentName: string | null;
-  studentCount: number | null;
-  subject: string | null;
-  classType: string | null;
-  title: string | null;
-  minCapacity: number;
-  needsTv: boolean;
-  preferredRoom: string | null;
-  overrideRoom: string | null;
-  assignedRoom: string;
-  status: "assigned" | "needs_review" | "no_room";
-  warnings: string[];
-  publishStatus: "not_published" | "skipped" | "success" | "failed";
-  publishError: string | null;
-}
-
-interface AssignmentDetail {
-  run: ClassroomRun | null;
-  rows: ClassroomRow[];
-  rooms: ClassroomRoom[];
-}
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { buildTimelineBounds } from "@/lib/classrooms/visualization";
+import { AssignmentTimelineControls } from "./assignment-timeline-controls";
+import { FloorPlanOccupancy } from "./floor-plan-occupancy";
+import { RoomCalendarView } from "./room-calendar-view";
+import { RoomOccupancyHeatmap } from "./room-occupancy-heatmap";
+import type { AssignmentDetail, ClassroomRow } from "./types";
 
 const NO_ROOM_AVAILABLE = "NO_ROOM_AVAILABLE";
 
@@ -141,6 +89,12 @@ export function ClassAssignmentsWorkspace() {
   const [message, setMessage] = useState<string | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
   const [selectedTutors, setSelectedTutors] = useState<Set<string>>(new Set());
+  const [currentMinute, setCurrentMinute] = useState(7 * 60);
+  const [playing, setPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(15);
+  const playbackMinuteRef = useRef(currentMinute);
+  const frameRef = useRef<number | null>(null);
+  const lastFrameAtRef = useRef<number | null>(null);
 
   const loadAssignments = useCallback(async (targetDate: string, showLoading = false) => {
     if (showLoading) setLoading(true);
@@ -165,9 +119,58 @@ export function ClassAssignmentsWorkspace() {
     void loadAssignments(date, true);
   }, [date, loadAssignments]);
 
-  const rooms = detail?.rooms.filter((room) => room.active) ?? [];
-  const rows = detail?.rows ?? [];
+  const rooms = useMemo(() => (detail?.rooms ?? []).filter((room) => room.active), [detail?.rooms]);
+  const rows = useMemo(() => detail?.rows ?? [], [detail?.rows]);
   const run = detail?.run ?? null;
+  const timelineBounds = useMemo(() => buildTimelineBounds(rows), [rows]);
+  const timelineResetKey = `${run?.id ?? "no-run"}:${timelineBounds.initialMinute}:${timelineBounds.endMinute}`;
+
+  useEffect(() => {
+    setPlaying(false);
+    setCurrentMinute(timelineBounds.initialMinute);
+    playbackMinuteRef.current = timelineBounds.initialMinute;
+  }, [timelineResetKey, timelineBounds.initialMinute]);
+
+  useEffect(() => {
+    playbackMinuteRef.current = currentMinute;
+  }, [currentMinute]);
+
+  useEffect(() => {
+    if (!playing || rows.length === 0) return;
+
+    lastFrameAtRef.current = null;
+
+    const tick = (timestamp: number) => {
+      if (lastFrameAtRef.current === null) {
+        lastFrameAtRef.current = timestamp;
+      }
+      const elapsedSeconds = (timestamp - lastFrameAtRef.current) / 1000;
+      lastFrameAtRef.current = timestamp;
+
+      const nextMinute = Math.min(
+        timelineBounds.endMinute,
+        playbackMinuteRef.current + elapsedSeconds * playbackSpeed,
+      );
+      playbackMinuteRef.current = nextMinute;
+      setCurrentMinute(Math.round(nextMinute));
+
+      if (nextMinute >= timelineBounds.endMinute) {
+        setPlaying(false);
+        frameRef.current = null;
+        return;
+      }
+
+      frameRef.current = requestAnimationFrame(tick);
+    };
+
+    frameRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+    };
+  }, [playing, playbackSpeed, rows.length, timelineBounds.endMinute]);
 
   const publishCounts = useMemo(() => {
     const eligible = rows.filter(isPublishEligible).length;
@@ -270,6 +273,19 @@ export function ClassAssignmentsWorkspace() {
   }
 
   const selectedTutorRows = rows.filter((row) => selectedTutors.has(row.tutorDisplayName));
+  const hasRows = rows.length > 0;
+
+  function handleTimelineMinuteChange(minute: number) {
+    const nextMinute = Math.min(timelineBounds.endMinute, Math.max(timelineBounds.startMinute, minute));
+    playbackMinuteRef.current = nextMinute;
+    setCurrentMinute(nextMinute);
+  }
+
+  function resetTimeline() {
+    setPlaying(false);
+    playbackMinuteRef.current = timelineBounds.initialMinute;
+    setCurrentMinute(timelineBounds.initialMinute);
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-4 lg:p-6">
@@ -358,147 +374,216 @@ export function ClassAssignmentsWorkspace() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card">
-        <div className="flex items-center gap-2 border-b px-3 py-2 text-sm font-medium">
-          <CalendarDays className="size-4" />
-          Assignment rows
+      <Tabs defaultValue="floor-plan" className="min-h-0 flex-1 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <TabsList>
+            <TabsTrigger value="floor-plan">
+              <MapIcon />
+              Floor Plan
+            </TabsTrigger>
+            <TabsTrigger value="room-calendar">
+              <CalendarDays />
+              Room Calendar
+            </TabsTrigger>
+            <TabsTrigger value="rows">
+              <Table2 />
+              Rows
+            </TabsTrigger>
+            <TabsTrigger value="tutors" disabled={!hasRows}>
+              <Users />
+              Tutor Schedule
+            </TabsTrigger>
+          </TabsList>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Grid3X3 className="size-4" />
+            {hasRows ? `${rows.length} sessions from local run` : "No generated run"}
+          </div>
         </div>
-        <div className="h-[52vh] overflow-auto">
-          <Table className="min-w-[1320px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Time</TableHead>
-                <TableHead>Tutor</TableHead>
-                <TableHead>Student/Class</TableHead>
-                <TableHead>Mode</TableHead>
-                <TableHead>Wise location</TableHead>
-                <TableHead>Min cap</TableHead>
-                <TableHead>TV</TableHead>
-                <TableHead>Preferred</TableHead>
-                <TableHead>Override</TableHead>
-                <TableHead>Assigned</TableHead>
-                <TableHead>Warnings</TableHead>
-                <TableHead>Publish</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
+
+        <TabsContent value="floor-plan" className="min-h-0 overflow-hidden">
+          <div className="flex h-full min-h-0 flex-col gap-3">
+            <AssignmentTimelineControls
+              bounds={timelineBounds}
+              currentMinute={currentMinute}
+              playing={playing}
+              speed={playbackSpeed}
+              disabled={!hasRows}
+              onMinuteChange={handleTimelineMinuteChange}
+              onPlayingChange={setPlaying}
+              onReset={resetTimeline}
+              onSpeedChange={setPlaybackSpeed}
+            />
+            <div className="grid min-h-0 flex-1 gap-3 2xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.55fr)]">
+              <FloorPlanOccupancy
+                rows={rows}
+                rooms={rooms}
+                currentMinute={currentMinute}
+                onUpdateOverride={updateOverride}
+              />
+              <RoomOccupancyHeatmap
+                rows={rows}
+                rooms={rooms}
+                bounds={timelineBounds}
+                currentMinute={currentMinute}
+                onMinuteSelect={handleTimelineMinuteChange}
+              />
+            </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="room-calendar" className="min-h-0 overflow-hidden">
+          <RoomCalendarView
+            rows={rows}
+            rooms={rooms}
+            bounds={timelineBounds}
+            onUpdateOverride={updateOverride}
+          />
+        </TabsContent>
+
+        <TabsContent value="rows" className="min-h-0 overflow-hidden rounded-lg border bg-card">
+          <div className="flex items-center gap-2 border-b px-3 py-2 text-sm font-medium">
+            <CalendarDays className="size-4" />
+            Assignment rows
+          </div>
+          <div className="h-full overflow-auto">
+            <Table className="min-w-[1320px]">
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={12} className="py-10 text-center text-muted-foreground">
-                    Loading assignments...
-                  </TableCell>
+                  <TableHead>Time</TableHead>
+                  <TableHead>Tutor</TableHead>
+                  <TableHead>Student/Class</TableHead>
+                  <TableHead>Mode</TableHead>
+                  <TableHead>Wise location</TableHead>
+                  <TableHead>Min cap</TableHead>
+                  <TableHead>TV</TableHead>
+                  <TableHead>Preferred</TableHead>
+                  <TableHead>Override</TableHead>
+                  <TableHead>Assigned</TableHead>
+                  <TableHead>Warnings</TableHead>
+                  <TableHead>Publish</TableHead>
                 </TableRow>
-              ) : rows.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={12} className="py-10 text-center text-muted-foreground">
-                    No assignment run for this date yet.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                rows.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell className="font-mono text-xs">
-                      {formatTime(row.startTime)}-{formatTime(row.endTime)}
-                    </TableCell>
-                    <TableCell className="max-w-[220px] whitespace-normal font-medium">
-                      {row.tutorDisplayName}
-                    </TableCell>
-                    <TableCell className="max-w-[220px] whitespace-normal">
-                      <div>{row.studentName || row.title || "Untitled class"}</div>
-                      <div className="text-xs text-muted-foreground">{classLabel(row)}</div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{row.sessionType || "Unknown"}</Badge>
-                    </TableCell>
-                    <TableCell>{row.currentWiseLocation || "-"}</TableCell>
-                    <TableCell>{row.minCapacity}</TableCell>
-                    <TableCell>{row.needsTv ? "YES" : "NO"}</TableCell>
-                    <TableCell>{row.preferredRoom || "-"}</TableCell>
-                    <TableCell>
-                      <select
-                        className="h-8 w-[180px] rounded-md border bg-background px-2 text-sm"
-                        value={row.overrideRoom ?? ""}
-                        onChange={(event) => updateOverride(row, event.target.value)}
-                      >
-                        <option value="">No override</option>
-                        {rooms.map((room) => (
-                          <option key={room.id} value={room.name}>
-                            {room.name}
-                          </option>
-                        ))}
-                      </select>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <span className="font-medium">{row.assignedRoom}</span>
-                        <StatusBadge status={row.status} />
-                      </div>
-                    </TableCell>
-                    <TableCell className="max-w-[220px] whitespace-normal text-xs text-muted-foreground">
-                      {row.warnings.length ? row.warnings.join(", ") : "-"}
-                    </TableCell>
-                    <TableCell className="max-w-[220px] whitespace-normal">
-                      <div className="flex flex-col gap-1">
-                        <PublishBadge status={row.publishStatus} />
-                        {row.publishError && (
-                          <span className="text-xs text-destructive">{row.publishError}</span>
-                        )}
-                      </div>
+              </TableHeader>
+              <TableBody>
+                {loading ? (
+                  <TableRow>
+                    <TableCell colSpan={12} className="py-10 text-center text-muted-foreground">
+                      Loading assignments...
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
-      </div>
-
-      {rows.length > 0 && (
-        <div className="grid min-h-0 grid-cols-[280px_1fr] gap-3">
-          <div className="rounded-lg border bg-card p-3">
-            <div className="mb-2 text-sm font-medium">Teacher schedule</div>
-            <div className="max-h-48 space-y-1 overflow-auto pr-1">
-              {tutors.map((tutor) => (
-                <label key={tutor} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selectedTutors.has(tutor)}
-                    onChange={(event) => toggleTutor(tutor, event.target.checked)}
-                  />
-                  <span className="truncate">{tutor}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="min-h-0 overflow-auto rounded-lg border bg-card p-3">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {[...selectedTutors].sort((a, b) => a.localeCompare(b)).map((tutor) => {
-                const tutorRows = selectedTutorRows
-                  .filter((row) => row.tutorDisplayName === tutor)
-                  .sort((a, b) => a.startTime.localeCompare(b.startTime));
-                return (
-                  <div key={tutor} className="rounded-lg border p-3">
-                    <div className="mb-2 text-sm font-semibold">{tutor}</div>
-                    <div className="space-y-2">
-                      {tutorRows.map((row) => (
-                        <div key={row.id} className="rounded-md border-l-4 border-primary bg-muted/40 p-2 text-xs">
-                          <div className="font-mono">
-                            {formatTime(row.startTime)}-{formatTime(row.endTime)} - {row.assignedRoom}
-                          </div>
-                          <div className="mt-1 font-medium">{row.studentName || row.title || "Untitled class"}</div>
-                          <div className="text-muted-foreground">
-                            {[classLabel(row), row.sessionType].filter(Boolean).join(" - ")}
-                          </div>
+                ) : rows.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={12} className="py-10 text-center text-muted-foreground">
+                      No assignment run for this date yet.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  rows.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="font-mono text-xs">
+                        {formatTime(row.startTime)}-{formatTime(row.endTime)}
+                      </TableCell>
+                      <TableCell className="max-w-[220px] whitespace-normal font-medium">
+                        {row.tutorDisplayName}
+                      </TableCell>
+                      <TableCell className="max-w-[220px] whitespace-normal">
+                        <div>{row.studentName || row.title || "Untitled class"}</div>
+                        <div className="text-xs text-muted-foreground">{classLabel(row)}</div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{row.sessionType || "Unknown"}</Badge>
+                      </TableCell>
+                      <TableCell>{row.currentWiseLocation || "-"}</TableCell>
+                      <TableCell>{row.minCapacity}</TableCell>
+                      <TableCell>{row.needsTv ? "YES" : "NO"}</TableCell>
+                      <TableCell>{row.preferredRoom || "-"}</TableCell>
+                      <TableCell>
+                        <select
+                          className="h-8 w-[180px] rounded-md border bg-background px-2 text-sm"
+                          value={row.overrideRoom ?? ""}
+                          onChange={(event) => updateOverride(row, event.target.value)}
+                        >
+                          <option value="">No override</option>
+                          {rooms.map((room) => (
+                            <option key={room.id} value={room.name}>
+                              {room.name}
+                            </option>
+                          ))}
+                        </select>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-1">
+                          <span className="font-medium">{row.assignedRoom}</span>
+                          <StatusBadge status={row.status} />
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                      </TableCell>
+                      <TableCell className="max-w-[220px] whitespace-normal text-xs text-muted-foreground">
+                        {row.warnings.length ? row.warnings.join(", ") : "-"}
+                      </TableCell>
+                      <TableCell className="max-w-[220px] whitespace-normal">
+                        <div className="flex flex-col gap-1">
+                          <PublishBadge status={row.publishStatus} />
+                          {row.publishError && (
+                            <span className="text-xs text-destructive">{row.publishError}</span>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
           </div>
-        </div>
-      )}
+        </TabsContent>
+
+        <TabsContent value="tutors" className="min-h-0 overflow-hidden">
+          {rows.length > 0 && (
+            <div className="grid h-full min-h-0 grid-cols-[280px_1fr] gap-3">
+              <div className="rounded-lg border bg-card p-3">
+                <div className="mb-2 text-sm font-medium">Teacher schedule</div>
+                <div className="max-h-[56vh] space-y-1 overflow-auto pr-1">
+                  {tutors.map((tutor) => (
+                    <label key={tutor} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={selectedTutors.has(tutor)}
+                        onChange={(event) => toggleTutor(tutor, event.target.checked)}
+                      />
+                      <span className="truncate">{tutor}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="min-h-0 overflow-auto rounded-lg border bg-card p-3">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {[...selectedTutors].sort((a, b) => a.localeCompare(b)).map((tutor) => {
+                    const tutorRows = selectedTutorRows
+                      .filter((row) => row.tutorDisplayName === tutor)
+                      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+                    return (
+                      <div key={tutor} className="rounded-lg border p-3">
+                        <div className="mb-2 text-sm font-semibold">{tutor}</div>
+                        <div className="space-y-2">
+                          {tutorRows.map((row) => (
+                            <div key={row.id} className="rounded-md border-l-4 border-primary bg-muted/40 p-2 text-xs">
+                              <div className="font-mono">
+                                {formatTime(row.startTime)}-{formatTime(row.endTime)} - {row.assignedRoom}
+                              </div>
+                              <div className="mt-1 font-medium">{row.studentName || row.title || "Untitled class"}</div>
+                              <div className="text-muted-foreground">
+                                {[classLabel(row), row.sessionType].filter(Boolean).join(" - ")}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={publishOpen} onOpenChange={setPublishOpen}>
         <DialogContent>
