@@ -108,6 +108,37 @@ describe("POST /api/compare", () => {
     });
   });
 
+  it("resolves stale tutor group ids through canonical keys after a snapshot promotion", async () => {
+    const staleId = "11111111-1111-4111-8111-111111111111";
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([{ id: staleId, canonicalKey: "test" }]),
+        })),
+      })),
+    };
+    vi.mocked(getDb).mockReturnValue(db as never);
+
+    const res = await POST(
+      makeRequest({
+        tutorGroupIds: [staleId],
+        mode: "recurring",
+        weekStart: "2026-04-06",
+        fetchOnly: [staleId],
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.tutors).toEqual([
+      expect.objectContaining({
+        tutorGroupId: "g1",
+        displayName: "Test Tutor",
+      }),
+    ]);
+    expect(body.warnings).toContain("Tutor selection was refreshed after the latest Wise sync");
+  });
+
   it("marks snapshot metadata stale only after the 26-hour API threshold", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-07T02:00:00.000Z"));

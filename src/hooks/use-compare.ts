@@ -167,9 +167,17 @@ export function useCompare() {
       }
 
       // Build full tutor list from cache
-      const mergedTutors = ids
+      let mergedTutors = ids
         .map((id) => tutorCache.current.get(`${id}:${week}:${CACHE_VERSION}`))
         .filter((t): t is CompareTutor => t !== undefined);
+
+      // Tutor group UUIDs are snapshot-scoped. After a Wise sync, the server may
+      // resolve stale URL/cache IDs to the active snapshot and return tutors
+      // under new IDs. Treat those returned IDs as authoritative so old
+      // /search?tutors=... links recover instead of keeping an empty cache.
+      if (mergedTutors.length < data.tutors.length) {
+        mergedTutors = data.tutors;
+      }
 
       return {
         response: {
