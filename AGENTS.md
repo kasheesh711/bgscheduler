@@ -15,9 +15,9 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 ### Infrastructure (complete)
 - Next.js 16 App Router + TypeScript + Tailwind + shadcn/ui
 - Auth.js with Google provider + `admin_users` table for explicit email allowlisting
-- Drizzle ORM + Neon Postgres (ap-southeast-1) with 14 tables
+- Drizzle ORM + Neon Postgres (ap-southeast-1) with 18 tables
 - Vercel hosting with daily cron (Hobby plan limit; upgrade to Pro for 30-min cadence)
-- Vitest with 82 passing unit tests
+- Vitest with 281 passing unit tests
 
 ### Database schema (complete, migrated, seeded)
 - `snapshots` — versioned snapshot records with atomic `active` flag promotion
@@ -32,6 +32,10 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - `recurring_availability_windows` — weekday + time + modality per group
 - `dated_leaves` — exact leave windows for 180-day horizon
 - `future_session_blocks` — blocking windows from Wise sessions
+- `classroom_rooms` — native room catalog for class assignment, seeded from the 24-room BeGifted list
+- `classroom_assignment_runs` — per-date local assignment runs with publish counts and override policy
+- `classroom_assignment_rows` — denormalized session assignment rows, overrides, warnings, publish audit status
+- `past_session_blocks` — cross-snapshot capture for historical compare fallback
 - `data_issues` — all unresolved normalization issues by type and severity
 - `snapshot_stats` — counts for data-health dashboard
 
@@ -40,6 +44,8 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - Base URL: `https://api.wiseapp.live`
 - Auth: Basic Auth (base64 of userId:apiKey) + `x-api-key` + `x-wise-namespace` + `user-agent: VendorIntegrations/{namespace}`
 - Fetchers aligned to the live Wise request/response contracts for teachers, availability, and future sessions
+- Location helpers: `GET /institutes/{instituteId}/locations`, `POST /institutes/{instituteId}/checkSessionsAvailability`, and `PUT /teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE`
+- Wise writeback policy: class assignment publishing updates only `location` for eligible `OFFLINE` sessions after explicit admin confirmation; online room/booth assignments remain local in v1
 - 180-day leave stitching across 26 seven-day windows
 
 ### Normalization pipeline (complete)
@@ -48,6 +54,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - **Availability** — workingHours → recurring windows with overlapping merge and de-duplication
 - **Leaves** — UTC→Asia/Bangkok conversion, overlapping leave merge
 - **Sessions** — blocking status classification (CANCELLED/CANCELED=non-blocking, unknown=blocking fail-closed)
+- **Assignment fields** — future session blocks persist Wise class ID, Wise teacher user ID, and student count where Wise exposes them
 - **Modality** — derived from pair structure → session type → location → unresolved; never guessed
 - **Timezone** — all conversions locked to Asia/Bangkok
 
@@ -86,6 +93,12 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - `POST /api/compare` — compare 1-3 tutors: accepts optional `weekStart` (ISO date, defaults to current week) and optional `fetchOnly` (array of tutor IDs to include in response — omit for all). Returns week-scoped schedules, student-level conflicts, shared free slots, and `weekStart`/`weekEnd` in response. Conflicts and free slots always computed on full tutor set regardless of `fetchOnly`
 - `POST /api/compare/discover` — find candidate tutors with subject/level/mode/time filters and pre-computed conflict status against existing selected tutors
 - `GET /api/tutors` — all tutor names/IDs/modes/subjects from active snapshot (used by tutor combobox)
+- `GET /api/classrooms/rooms` — classroom room catalog
+- `GET /api/class-assignments?date=YYYY-MM-DD` — latest run for a Bangkok date
+- `POST /api/class-assignments/run` — generate a local assignment run
+- `PATCH /api/class-assignments/runs/{runId}/rows/{rowId}` — update override room and recalculate the run
+- `POST /api/class-assignments/runs/{runId}/publish` — publish eligible OFFLINE room locations to Wise
+- `GET /api/class-assignments/runs/{runId}/teacher-schedule` — grouped teacher schedule for a run
 
 ### Frontend (complete)
 
@@ -107,6 +120,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
   - **Copy-for-parent drawer**: slide-in right panel with Friendly/Terse tone toggle, tutor-name inclusion toggle, editable message preview (resettable to the auto-generated text), and clipboard copy; built from the search context (subject/curriculum/level) and the selected slots (ranking helper at `src/lib/search/recommend.ts`)
   - **Right panel (Compare)**: tutor selector chips (max 3, color-coded, removable) + searchable tutor combobox dropdown (shadcn Command+Popover, fetches from `GET /api/tutors`), "Advanced search" link opens discovery modal (shadcn Dialog), **week picker** (prev/next arrows, clickable week label "6 Apr – 12 Apr, 2026" opens month-grid calendar popup for direct date jumping, Today button to reset to current week), week/day sub-tabs with D/M dates (e.g. "Mon 6/4"), GCal-style weekly time grid (7AM–9PM vertical axis, Mon–Sun sticky headers, full-width cards for single-tutor view and per-tutor lanes for 2-3 tutor view, sub-column cap at 3 single-tutor / 2 multi-tutor with "+N more" overflow badges, free-gap green indicators for available-but-unbooked time, vertical scrolling), day drill-down (side-by-side tutor columns with positioned session blocks), conflict bands + summary, shared free slot indicators, tutor profile popover, URL param support (`?tutors=id1,id2`), **client-side tutor cache** (`Map<tutorGroupId:weekStart, CompareTutor>`) with incremental fetch (add → `fetchOnly: [newId]`, remove → `fetchOnly: []` reuses cache, week change → cache clear + full fetch), AbortController for race-condition safety, automatic cache invalidation on snapshot change
 - `/compare` — redirects to `/search` (backward compatibility for bookmarked URLs, preserves `?tutors=` param)
+- `/class-assignments` — full-width operational room assignment workspace with date picker, keep/force override control, assignment table, per-row override dropdowns, publish confirmation, and teacher schedule blocks
 - `/data-health` — full-width sync status cards, snapshot stats, issues by type, unresolved aliases/modality/unmapped tags tables, recent sync history
 
 #### Known UX Issues
@@ -123,6 +137,8 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - Search engine: recurring blocking, one-time blocking, cancelled non-blocking, mode filtering, qualification filtering, multi-slot intersection, Needs Review routing
 - Compare engine: buildCompareTutor (date range + weekday filtering, weekday fallback for missing data, weekly hours, student count), detectConflicts (same student overlap, different students, non-overlapping times), findSharedFreeSlots (date-range-scoped interval intersection across tutors)
 - Wise contract: auth headers, teacher list parsing, availability envelope parsing, sessions pagination parsing
+- Classroom assignment: capacity, TV, online-only rooms, Gift/Joy, preferred rooms, continuity, overflow, invalid overrides, no-room cases, publish eligibility
+- Wise class assignment helpers: location fetch, availability check payload, session-location PUT body, permanent 4xx no-retry behavior
 - Parser: single/multi slot parsing, abbreviated days, ambiguous input warnings
 
 ## Production Status
@@ -141,6 +157,7 @@ First successful production sync completed 2026-04-07 on commit `c673999`:
 - Production truth comes from the Wise API only (tenant: `begifted-education`, institute: `696e1f4d90102225641cc413`).
 - Search runs against precomputed normalized Wise snapshots + warm in-memory index.
 - No production fallback to Google Sheets or `.xlsx` files.
+- Classroom assignment writeback is opt-in per run: local generation never updates Wise; only the explicit publish action writes eligible `OFFLINE` `location` values.
 
 ## Non-Negotiable Product Rules
 - Never return a tutor as available unless the system can prove availability from normalized Wise data.

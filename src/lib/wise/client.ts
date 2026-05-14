@@ -79,6 +79,15 @@ export class WiseClient {
     );
   }
 
+  async put<T>(path: string, body: unknown): Promise<T> {
+    return this.withConcurrency(() =>
+      this.fetchWithRetry<T>(`${this.baseUrl}${path}`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      })
+    );
+  }
+
   private async fetchWithRetry<T>(
     url: string,
     init: RequestInit,

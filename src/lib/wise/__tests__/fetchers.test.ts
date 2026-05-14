@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WiseClient } from "../client";
 import {
+  checkTeacherAvailabilityForSessions,
   fetchAllFutureSessions,
   fetchAllTeachers,
+  fetchInstituteLocations,
   fetchTeacherAvailability,
+  updateSessionLocation,
 } from "../fetchers";
 
 describe("Wise fetchers", () => {
@@ -151,5 +154,78 @@ describe("Wise fetchers", () => {
     expect(firstUrl.searchParams.get("paginateBy")).toBe("COUNT");
     expect(firstUrl.searchParams.get("page_number")).toBe("1");
     expect(firstUrl.searchParams.get("page_size")).toBe("1000");
+  });
+
+  it("fetches institute location strings from data.locations", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: 200,
+          data: { locations: ["Joy", "Relax"] },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    global.fetch = fetchMock as typeof fetch;
+
+    const locations = await fetchInstituteLocations(makeClient(), "center-1");
+
+    expect(locations).toEqual(["Joy", "Relax"]);
+    expect(new URL(fetchMock.mock.calls[0][0] as string).pathname).toBe("/institutes/center-1/locations");
+  });
+
+  it("checks teacher availability for sessions with the Wise webapp endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: 200,
+          data: { sessions: [{ sessionId: "session-1", conflict: false }] },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+    global.fetch = fetchMock as typeof fetch;
+
+    const body = {
+      sessions: [
+        {
+          teacherId: "teacher-user-1",
+          sessionId: "session-1",
+          scheduledStartTime: "2026-05-14T09:00:00.000Z",
+          scheduledEndTime: "2026-05-14T10:00:00.000Z",
+          type: "OFFLINE",
+        },
+      ],
+      locationToCheck: "Joy",
+    };
+    const result = await checkTeacherAvailabilityForSessions(makeClient(), "center-1", body);
+
+    expect(result.sessions?.[0]).toEqual({ sessionId: "session-1", conflict: false });
+    expect(new URL(fetchMock.mock.calls[0][0] as string).pathname).toBe(
+      "/institutes/center-1/checkSessionsAvailability",
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual(body);
+  });
+
+  it("updates a single session location with PUT body { location }", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: 200, data: { ok: true } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    global.fetch = fetchMock as typeof fetch;
+
+    await updateSessionLocation(makeClient(), "class-1", "session-1", "Joy");
+
+    const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(calledUrl.pathname).toBe("/teacher/classes/class-1/sessions/session-1");
+    expect(calledUrl.searchParams.get("updateType")).toBe("SINGLE");
+    expect(fetchMock.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ location: "Joy" }),
+      }),
+    );
   });
 });

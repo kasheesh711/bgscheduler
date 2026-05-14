@@ -45,6 +45,9 @@ export async function truncateAll(db: TestDb): Promise<void> {
     TRUNCATE TABLE
       data_issues,
       snapshot_stats,
+      classroom_assignment_rows,
+      classroom_assignment_runs,
+      classroom_rooms,
       future_session_blocks,
       past_session_blocks,
       dated_leaves,

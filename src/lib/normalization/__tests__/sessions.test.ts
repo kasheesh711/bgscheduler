@@ -97,4 +97,37 @@ describe("normalizeSessions", () => {
     expect(result[0].wiseTeacherId).toBe("u1");
     expect(result[0].isBlocking).toBe(false);
   });
+
+  it("preserves Wise class id, teacher user id, class metadata, and student count", () => {
+    const sessions: WiseSession[] = [
+      {
+        _id: "s1",
+        userId: { _id: "u1", name: "Teacher Name" },
+        classId: {
+          _id: "class-1",
+          name: "Student Group",
+          subject: "Physics",
+          classType: "GROUP",
+        },
+        studentCount: 3,
+        scheduledStartTime: "2024-01-15T02:00:00Z",
+        scheduledEndTime: "2024-01-15T03:00:00Z",
+        meetingStatus: "CONFIRMED",
+        type: "OFFLINE",
+      },
+    ];
+
+    const result = normalizeSessions(sessions, (s) =>
+      typeof s.userId === "object" ? s.userId._id : null
+    );
+
+    expect(result[0]).toMatchObject({
+      wiseTeacherUserId: "u1",
+      wiseClassId: "class-1",
+      studentName: "Student Group",
+      studentCount: 3,
+      subject: "Physics",
+      classType: "GROUP",
+    });
+  });
 });
