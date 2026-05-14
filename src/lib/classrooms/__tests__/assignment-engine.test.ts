@@ -89,6 +89,16 @@ describe("assignClassrooms", () => {
     expect(result.rows[0].assignedRoom).toBe("OMG");
   });
 
+  it("matches preferred room rules against Wise nickname display names", () => {
+    const result = assignClassrooms([
+      session({ tutorDisplayName: "Da" }),
+      session({ tutorDisplayName: "Gift", wiseSessionId: "gift" }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    expect(result.rows.find((row) => row.tutorDisplayName === "Da")?.assignedRoom).toBe("Do It");
+    expect(result.rows.find((row) => row.tutorDisplayName === "Gift")?.assignedRoom).toBe("Joy");
+  });
+
   it("keeps continuity for the same tutor with a 15-minute gap", () => {
     const result = assignClassrooms([
       session({

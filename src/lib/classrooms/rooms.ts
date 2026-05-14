@@ -16,6 +16,16 @@ export function normalizeTutorName(value: string | null | undefined): string {
   return String(value ?? "").trim().replace(/\s+/g, " ");
 }
 
+function tutorRuleAliases(value: string): string[] {
+  const normalized = normalizeTutorName(value).replace(/\s+Online$/i, "");
+  const aliases = new Set([normalizeTutorName(value), normalized]);
+  const nickname = normalized.match(/\(([^)]+)\)/)?.[1];
+  if (nickname) aliases.add(normalizeTutorName(nickname));
+  const firstName = normalized.split(/\s+/)[0];
+  if (firstName) aliases.add(firstName);
+  return [...aliases].filter(Boolean);
+}
+
 export const DEFAULT_CLASSROOM_ROOMS: ClassroomRoomDefinition[] = [
   { name: "Cool", hasTv: false, capacity: 3, category: "standard", active: true, sortOrder: 1 },
   { name: "Do It", hasTv: false, capacity: 3, category: "standard", active: true, sortOrder: 2 },
@@ -49,7 +59,7 @@ export const TV_REQUIRED_TUTORS = new Set(
     "Rachata (Mek) Sakpuaram",
     "Roger (Roger) Tang",
     "Patcharida (Nan) Penpakkul",
-  ].map(normalizeTutorName),
+  ].flatMap(tutorRuleAliases).map(normalizeTutorName),
 );
 
 export const PREFERRED_BY_TUTOR = new Map<string, string>(
@@ -91,7 +101,7 @@ export const PREFERRED_BY_TUTOR = new Map<string, string>(
     ["Nonthawat (Rew) Lertprasitchok Online", "Go All In"],
     ["Porntawan (Lookpear) Maneechote", "Tesla"],
     ["Porntawan (Lookpear) Maneechote Online", "Tesla"],
-  ].map(([name, room]) => [normalizeTutorName(name), room]),
+  ].flatMap(([name, room]) => tutorRuleAliases(name).map((alias) => [normalizeTutorName(alias), room])),
 );
 
 export const PREFERRED_ROOMS = new Set(PREFERRED_BY_TUTOR.values());
@@ -99,6 +109,7 @@ export const PREFERRED_ROOMS = new Set(PREFERRED_BY_TUTOR.values());
 export function isGiftTutor(tutorName: string): boolean {
   const tutorNorm = normalizeTutorName(tutorName);
   return (
+    getPreferredRoom(tutorNorm) === ROOM_JOY ||
     tutorNorm === normalizeTutorName("Wanwisa (Gift) Montrikittiphant") ||
     tutorNorm === normalizeTutorName("Wanwisa (Gift) Montrikittiphant Online")
   );
