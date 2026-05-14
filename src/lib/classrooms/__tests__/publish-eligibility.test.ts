@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  classroomTimestampToWiseIso,
   estimatePublishRemainingMs,
   isClassroomPublishEligible,
   toPublishJobProgress,
@@ -58,6 +59,12 @@ describe("isClassroomPublishEligible", () => {
 });
 
 describe("publish job progress", () => {
+  it("converts stored Bangkok wall-clock timestamps to Wise UTC instants", () => {
+    expect(classroomTimestampToWiseIso(new Date("2026-05-16T18:00:00.000Z"))).toBe(
+      "2026-05-16T11:00:00.000Z",
+    );
+  });
+
   it("estimates remaining time from completed Wise attempts only", () => {
     const startedAt = new Date("2026-05-15T00:00:00.000Z");
     const now = new Date("2026-05-15T00:00:10.000Z");

@@ -139,6 +139,7 @@ export interface WiseSessionAvailabilityInput {
   teacherId?: string;
   sessions: {
     teacherId?: string;
+    classId?: string;
     sessionId?: string;
     scheduledStartTime: string | Date;
     scheduledEndTime: string | Date;

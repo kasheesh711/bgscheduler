@@ -114,6 +114,24 @@ function classroomRoomLabel(row: Pick<ClassroomRow, "status" | "assignedRoom">):
   return row.assignedRoom;
 }
 
+function normalizedLocation(value: string | null): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+export function classroomTimestampToWiseIso(value: Date | string): string {
+  const date = typeof value === "string" ? new Date(value) : value;
+  const utcMillis = Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate(),
+    date.getUTCHours() - 7,
+    date.getUTCMinutes(),
+    date.getUTCSeconds(),
+    date.getUTCMilliseconds(),
+  );
+  return new Date(utcMillis).toISOString();
+}
+
 export async function ensureDefaultClassroomRooms(db: Database): Promise<void> {
   const existingRows = await db.select().from(schema.classroomRooms);
   const existingNames = new Set(existingRows.map((row) => row.name));
@@ -726,20 +744,25 @@ async function checkAvailabilityForPublishRows(
   const failures = new Map<string, string>();
   await runLimited(rows.filter((row) => row.wiseTeacherUserId), PUBLISH_ROW_CONCURRENCY, async (row) => {
     try {
+      const scheduledStartTime = classroomTimestampToWiseIso(row.startTime);
+      const scheduledEndTime = classroomTimestampToWiseIso(row.endTime);
       const availability = await checkTeacherAvailabilityForSessions(client, instituteId, {
         teacherId: row.wiseTeacherUserId ?? undefined,
         sessions: [
           {
             teacherId: row.wiseTeacherUserId ?? undefined,
+            classId: row.wiseClassId ?? undefined,
             sessionId: row.wiseSessionId,
-            scheduledStartTime: new Date(row.startTime).toISOString(),
-            scheduledEndTime: new Date(row.endTime).toISOString(),
+            scheduledStartTime,
+            scheduledEndTime,
             type: row.sessionType ?? "OFFLINE",
           },
         ],
         locationToCheck: row.assignedRoom,
         sessionsToSkip: {
           sessionId: row.wiseSessionId,
+          classId: row.wiseClassId ?? undefined,
+          startTime: scheduledStartTime,
           skipUpcoming: false,
         },
       });
@@ -835,8 +858,18 @@ export async function runClassroomPublishJob(
     const skippedSummary = await markSkippedRows(db, jobId, skippedRows);
     summary.skipped += skippedSummary.skipped;
 
-    const availabilityFailures = await checkAvailabilityForPublishRows(client, instituteId, eligibleRows);
+    const rowsNeedingWiseUpdate = eligibleRows.filter(
+      (row) => normalizedLocation(row.currentWiseLocation) !== normalizedLocation(row.assignedRoom),
+    );
+    const availabilityFailures = await checkAvailabilityForPublishRows(client, instituteId, rowsNeedingWiseUpdate);
     await runLimited(eligibleRows, PUBLISH_ROW_CONCURRENCY, async (row) => {
+      if (normalizedLocation(row.currentWiseLocation) === normalizedLocation(row.assignedRoom)) {
+        const result = await publishRowResult(db, jobId, row, { status: "success" });
+        summary.attempted += result.attempted;
+        summary.success += result.success;
+        return;
+      }
+
       const availabilityFailure = availabilityFailures.get(row.id);
       if (availabilityFailure) {
         const result = await publishRowResult(db, jobId, row, {
