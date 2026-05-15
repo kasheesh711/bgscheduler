@@ -12,7 +12,13 @@ import {
   findUnmatchedCurrentAllocations,
 } from "./analysis";
 import { addBangkokDays, bangkokDateKey, bangkokDateStartUtc, defaultRoomCapacityRange, endOfBangkokMonth } from "./dates";
-import { driversForScenario, seededDemandMixFromSchedule, simulateSaturation, simulateWeekendDemandBreakpoint } from "./forecast";
+import {
+  buildWeekendDemandCaptureReadiness,
+  driversForScenario,
+  seededDemandMixFromSchedule,
+  simulateSaturation,
+  simulateWeekendDemandBreakpoint,
+} from "./forecast";
 import type {
   RoomCapacityDemandMixRow,
   RoomCapacityForecastDriver,
@@ -371,6 +377,7 @@ function missingForecastResponse(scenario: string): RoomCapacityForecastResponse
       roomTutorReason: null,
     })),
     weekendDemandBreakpoint: null,
+    weekendDemandCaptureReadiness: null,
     monthlyDrivers: [],
   };
 }
@@ -408,12 +415,14 @@ export async function getRoomCapacityForecast(
     drivers: scenarioDrivers,
     searchIndex,
   });
-  const weekendDemandBreakpoint = simulateWeekendDemandBreakpoint({
+  const weekendDemandInput = {
     rooms,
     seedSessions: projectedSeedSessions,
     packageMix,
     drivers: scenarioDrivers,
-  });
+  };
+  const weekendDemandCaptureReadiness = buildWeekendDemandCaptureReadiness(weekendDemandInput);
+  const weekendDemandBreakpoint = simulateWeekendDemandBreakpoint(weekendDemandInput);
 
   return {
     model: {
@@ -429,6 +438,7 @@ export async function getRoomCapacityForecast(
     generatedAt: new Date().toISOString(),
     weekdayResults,
     weekendDemandBreakpoint,
+    weekendDemandCaptureReadiness,
     monthlyDrivers: scenarioDrivers,
   };
 }

@@ -218,6 +218,27 @@ export interface WeekendDemandBreakpoint {
   byDay: WeekendDemandBreakpointResult[];
 }
 
+export type WeekendDemandCaptureReadinessReasonCode =
+  | "missing_package_mix"
+  | "missing_scenario_drivers"
+  | "no_active_physical_rooms"
+  | "missing_seed_sessions"
+  | "no_weekend_onsite_schedule"
+  | "zero_weekend_preference_distribution";
+
+export interface WeekendDemandCaptureReadiness {
+  ready: boolean;
+  reasonCodes: WeekendDemandCaptureReadinessReasonCode[];
+  packageMixRows: number;
+  scenarioDriverRows: number;
+  activePhysicalRooms: number;
+  seedSessionRows: number;
+  weekendOnsiteSessionRows: number;
+  weekendPreferenceBuckets: number;
+  weekendDemandShare: number;
+  generatedAt: string;
+}
+
 export interface RoomCapacityForecastResponse {
   model: {
     status: "ready" | "missing";
@@ -232,5 +253,6 @@ export interface RoomCapacityForecastResponse {
   generatedAt: string;
   weekdayResults: WeekdaySaturationResult[];
   weekendDemandBreakpoint: WeekendDemandBreakpoint | null;
+  weekendDemandCaptureReadiness: WeekendDemandCaptureReadiness | null;
   monthlyDrivers: RoomCapacityForecastDriver[];
 }

@@ -18,6 +18,8 @@ import type {
   RoomCapacitySession,
   WeekendDemandBreakpoint,
   WeekendDemandBreakpointResult,
+  WeekendDemandCaptureReadiness,
+  WeekendDemandCaptureReadinessReasonCode,
   WeekendDemandSlotSummary,
   WeekdaySaturationResult,
 } from "./types";
@@ -332,6 +334,43 @@ export function weekendPreferenceDistributionFromSchedule(
   return {
     preferenceMix,
     weekendDemandShare: onsiteTotalMinutes > 0 ? weekendMinutes / onsiteTotalMinutes : 0,
+  };
+}
+
+function weekendOnsiteSessionCount(rows: RoomCapacitySession[], rooms: RoomCapacityRoom[]): number {
+  const roomsByName = roomByNormalizedName(rooms);
+  return rows.filter((row) => WEEKEND_WEEKDAYS.includes(row.weekday) && onsiteStudentMinutes(row, roomsByName) > 0).length;
+}
+
+export function buildWeekendDemandCaptureReadiness(input: WeekendDemandBreakpointInput): WeekendDemandCaptureReadiness {
+  const activeRooms = activePhysicalRooms(input.rooms);
+  const scenarioDrivers = input.drivers.filter((driver) => driver.month.length > 0);
+  const { preferenceMix, weekendDemandShare } = weekendPreferenceDistributionFromSchedule(input.seedSessions, input.rooms);
+  const weekendRows = weekendOnsiteSessionCount(input.seedSessions, input.rooms);
+  const reasonCodes: WeekendDemandCaptureReadinessReasonCode[] = [];
+
+  if (input.packageMix.length === 0) reasonCodes.push("missing_package_mix");
+  if (scenarioDrivers.length === 0) reasonCodes.push("missing_scenario_drivers");
+  if (activeRooms.length === 0) reasonCodes.push("no_active_physical_rooms");
+  if (input.seedSessions.length === 0) reasonCodes.push("missing_seed_sessions");
+  if (activeRooms.length > 0 && input.seedSessions.length > 0 && weekendRows === 0) {
+    reasonCodes.push("no_weekend_onsite_schedule");
+  }
+  if (activeRooms.length > 0 && weekendRows > 0 && (preferenceMix.length === 0 || weekendDemandShare <= 0)) {
+    reasonCodes.push("zero_weekend_preference_distribution");
+  }
+
+  return {
+    ready: reasonCodes.length === 0,
+    reasonCodes,
+    packageMixRows: input.packageMix.length,
+    scenarioDriverRows: scenarioDrivers.length,
+    activePhysicalRooms: activeRooms.length,
+    seedSessionRows: input.seedSessions.length,
+    weekendOnsiteSessionRows: weekendRows,
+    weekendPreferenceBuckets: preferenceMix.length,
+    weekendDemandShare: roundPct(weekendDemandShare),
+    generatedAt: new Date().toISOString(),
   };
 }
 
@@ -712,12 +751,12 @@ function extrapolatedDriver(
 }
 
 export function simulateWeekendDemandBreakpoint(input: WeekendDemandBreakpointInput): WeekendDemandBreakpoint | null {
+  const readiness = buildWeekendDemandCaptureReadiness(input);
+  if (!readiness.ready) return null;
+
   const rooms = activePhysicalRooms(input.rooms);
   const drivers = [...input.drivers].sort((left, right) => left.month.localeCompare(right.month));
-  if (rooms.length === 0 || drivers.length === 0 || input.packageMix.length === 0) return null;
-
   const { preferenceMix, weekendDemandShare } = weekendPreferenceDistributionFromSchedule(input.seedSessions, input.rooms);
-  if (preferenceMix.length === 0 || weekendDemandShare <= 0) return null;
 
   const occupancy = buildWeekendSeedOccupancy(input.seedSessions, input.rooms);
   const growthRate = averageTrailingGrowth(drivers);

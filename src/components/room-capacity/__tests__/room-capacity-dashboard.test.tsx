@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ForecastPanel, OvercapTable, WeeklyHeatmap } from "../room-capacity-dashboard";
-import type { RoomCapacityForecastResponse, RoomCapacityMonthResponse } from "@/lib/room-capacity/types";
+import type {
+  RoomCapacityForecastResponse,
+  RoomCapacityMonthResponse,
+  WeekendDemandCaptureReadiness,
+} from "@/lib/room-capacity/types";
 
 function monthData(): RoomCapacityMonthResponse {
   return {
@@ -60,7 +64,23 @@ function monthData(): RoomCapacityMonthResponse {
   };
 }
 
-function forecast(status: "ready" | "missing" = "ready"): RoomCapacityForecastResponse {
+function readiness(overrides: Partial<WeekendDemandCaptureReadiness> = {}): WeekendDemandCaptureReadiness {
+  return {
+    ready: true,
+    reasonCodes: [],
+    packageMixRows: 36,
+    scenarioDriverRows: 12,
+    activePhysicalRooms: 24,
+    seedSessionRows: 400,
+    weekendOnsiteSessionRows: 150,
+    weekendPreferenceBuckets: 18,
+    weekendDemandShare: 0.42,
+    generatedAt: "2026-05-15T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function forecast(status: "ready" | "missing" = "ready", overrides: Partial<RoomCapacityForecastResponse> = {}): RoomCapacityForecastResponse {
   return {
     model: {
       status,
@@ -140,7 +160,9 @@ function forecast(status: "ready" | "missing" = "ready"): RoomCapacityForecastRe
         },
       ],
     } : null,
+    weekendDemandCaptureReadiness: status === "ready" ? readiness() : null,
     monthlyDrivers: [],
+    ...overrides,
   };
 }
 
@@ -176,9 +198,74 @@ describe("room capacity dashboard components", () => {
 
     expect(readyHtml).toContain("Weekend demand capture");
     expect(readyHtml).toContain("Breakpoint month");
+    expect(readyHtml).toContain("Model inputs");
+    expect(readyHtml).toContain("Package mix rows");
     expect(readyHtml).toContain("Sept 2026");
     expect(readyHtml).toContain("Preferred slots losing the most revenue");
     expect(readyHtml).toContain("Saturday 10:00-11:00");
     expect(missingHtml).toContain("Forecast aggregates have not been imported yet");
+  });
+
+  it("renders not-reached weekend capture as metrics instead of fallback", () => {
+    const data = forecast("ready", {
+      weekendDemandBreakpoint: {
+        preferenceSource: "current_wise_schedule",
+        policy: "preferred_slot_only",
+        openHours: { startMinute: 420, endMinute: 1260 },
+        weekendDemandShare: 0.42,
+        combined: {
+          breakpointMonth: null,
+          status: "not_reached",
+          capturedRevenueThb: 100_000,
+          lostRevenueThb: 0,
+          lostRevenuePct: 0,
+          capturedStudents: 10,
+          lostStudents: 0,
+          remainingOpenCapacityMinutes: 0,
+          topLostPreferredSlots: [],
+          topOpenNonCapturedSlots: [],
+        },
+        byDay: [],
+      },
+      weekendDemandCaptureReadiness: readiness(),
+    });
+    const html = renderToStaticMarkup(<ForecastPanel forecast={data} scenario="Base" onScenarioChange={vi.fn()} />);
+
+    expect(html).toContain("Breakpoint month");
+    expect(html).toContain("Captured revenue");
+    expect(html).not.toContain("Weekend demand capture is not ready");
+  });
+
+  it("renders package-mix readiness diagnostics", () => {
+    const data = forecast("ready", {
+      weekendDemandBreakpoint: null,
+      weekendDemandCaptureReadiness: readiness({
+        ready: false,
+        reasonCodes: ["missing_package_mix"],
+        packageMixRows: 0,
+      }),
+    });
+    const html = renderToStaticMarkup(<ForecastPanel forecast={data} scenario="Base" onScenarioChange={vi.fn()} />);
+
+    expect(html).toContain("Weekend demand capture is not ready");
+    expect(html).toContain("Package mix rows are missing");
+    expect(html).toContain("Package mix rows");
+  });
+
+  it("renders weekend schedule readiness diagnostics", () => {
+    const data = forecast("ready", {
+      weekendDemandBreakpoint: null,
+      weekendDemandCaptureReadiness: readiness({
+        ready: false,
+        reasonCodes: ["no_weekend_onsite_schedule"],
+        weekendOnsiteSessionRows: 0,
+        weekendPreferenceBuckets: 0,
+        weekendDemandShare: 0,
+      }),
+    });
+    const html = renderToStaticMarkup(<ForecastPanel forecast={data} scenario="Base" onScenarioChange={vi.fn()} />);
+
+    expect(html).toContain("No Saturday/Sunday onsite schedule frequency was found");
+    expect(html).toContain("Weekend onsite rows");
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SearchIndex } from "@/lib/search/index";
 import {
+  buildWeekendDemandCaptureReadiness,
   expandDemandForMonth,
   expandWeekendDemandForMonth,
   simulateSaturation,
@@ -157,6 +158,76 @@ describe("room capacity forecast simulation", () => {
     expect(preferenceMix).toHaveLength(2);
     expect(preferenceMix[0]).toMatchObject({ weekday: 6, startMinute: 9 * 60, share: expect.closeTo(2 / 3) });
     expect(preferenceMix[1]).toMatchObject({ weekday: 0, startMinute: 10 * 60, share: expect.closeTo(1 / 3) });
+  });
+
+  it("reports weekend demand capture readiness when all inputs are present", () => {
+    const readiness = buildWeekendDemandCaptureReadiness({
+      rooms: [room],
+      seedSessions: [session()],
+      packageMix: [packageMix()],
+      drivers: [driver()],
+    });
+
+    expect(readiness).toMatchObject({
+      ready: true,
+      reasonCodes: [],
+      packageMixRows: 1,
+      scenarioDriverRows: 1,
+      activePhysicalRooms: 1,
+      seedSessionRows: 1,
+      weekendOnsiteSessionRows: 1,
+      weekendPreferenceBuckets: 1,
+      weekendDemandShare: 1,
+    });
+  });
+
+  it("reports missing package mix readiness", () => {
+    const readiness = buildWeekendDemandCaptureReadiness({
+      rooms: [room],
+      seedSessions: [session()],
+      packageMix: [],
+      drivers: [driver()],
+    });
+
+    expect(readiness.ready).toBe(false);
+    expect(readiness.reasonCodes).toContain("missing_package_mix");
+  });
+
+  it("reports missing scenario driver readiness", () => {
+    const readiness = buildWeekendDemandCaptureReadiness({
+      rooms: [room],
+      seedSessions: [session()],
+      packageMix: [packageMix()],
+      drivers: [],
+    });
+
+    expect(readiness.ready).toBe(false);
+    expect(readiness.reasonCodes).toContain("missing_scenario_drivers");
+  });
+
+  it("reports no active physical room readiness", () => {
+    const readiness = buildWeekendDemandCaptureReadiness({
+      rooms: [{ ...room, active: false }],
+      seedSessions: [session()],
+      packageMix: [packageMix()],
+      drivers: [driver()],
+    });
+
+    expect(readiness.ready).toBe(false);
+    expect(readiness.reasonCodes).toContain("no_active_physical_rooms");
+  });
+
+  it("reports missing weekend onsite schedule readiness", () => {
+    const readiness = buildWeekendDemandCaptureReadiness({
+      rooms: [room],
+      seedSessions: [session({ weekday: 1, date: "2026-06-08" })],
+      packageMix: [packageMix()],
+      drivers: [driver()],
+    });
+
+    expect(readiness.ready).toBe(false);
+    expect(readiness.reasonCodes).toContain("no_weekend_onsite_schedule");
+    expect(readiness.weekendPreferenceBuckets).toBe(0);
   });
 
   it("expands new paid students into deterministic package and preferred-slot demand", () => {

@@ -63,6 +63,18 @@ const forecastResponse = {
     },
     byDay: [],
   },
+  weekendDemandCaptureReadiness: {
+    ready: true,
+    reasonCodes: [],
+    packageMixRows: 12,
+    scenarioDriverRows: 12,
+    activePhysicalRooms: 24,
+    seedSessionRows: 500,
+    weekendOnsiteSessionRows: 200,
+    weekendPreferenceBuckets: 20,
+    weekendDemandShare: 0.42,
+    generatedAt: "2026-05-15T00:00:00.000Z",
+  },
   monthlyDrivers: [],
 };
 
@@ -113,6 +125,7 @@ describe("room capacity API routes", () => {
       scenario: "Base",
       model: { status: "ready" },
       weekendDemandBreakpoint: { combined: { breakpointMonth: "2026-09-01" } },
+      weekendDemandCaptureReadiness: { ready: true, packageMixRows: 12 },
     });
   });
 
@@ -123,7 +136,13 @@ describe("room capacity API routes", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toMatchObject({ scenario: "Bull", model: { status: "missing" }, weekendDemandBreakpoint: null, monthlyDrivers: [] });
+    expect(body).toMatchObject({
+      scenario: "Bull",
+      model: { status: "missing" },
+      weekendDemandBreakpoint: null,
+      weekendDemandCaptureReadiness: null,
+      monthlyDrivers: [],
+    });
     expect(body.weekdayResults).toHaveLength(7);
   });
 });

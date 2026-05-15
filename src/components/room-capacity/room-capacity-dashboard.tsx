@@ -29,6 +29,8 @@ import type {
   RoomCapacityHeatmapCell,
   RoomCapacityMonthResponse,
   RoomCapacitySource,
+  WeekendDemandCaptureReadiness,
+  WeekendDemandCaptureReadinessReasonCode,
   WeekendDemandBreakpointResult,
   WeekendDemandSlotSummary,
 } from "@/lib/room-capacity/types";
@@ -384,6 +386,70 @@ function ForecastMetric({
   );
 }
 
+const READINESS_MESSAGES: Record<WeekendDemandCaptureReadinessReasonCode, string> = {
+  missing_package_mix: "Package mix rows are missing. Re-run the room-capacity model import from the salesrecord workbooks.",
+  missing_scenario_drivers: "No forecast drivers exist for the selected scenario.",
+  no_active_physical_rooms: "No active physical rooms are available for the weekend capture simulation.",
+  missing_seed_sessions: "No current Wise/projected schedule rows were loaded for the forecast window.",
+  no_weekend_onsite_schedule: "No Saturday/Sunday onsite schedule frequency was found in the current Wise/projected schedule.",
+  zero_weekend_preference_distribution: "Weekend schedule rows were found, but the weighted preference distribution is zero.",
+};
+
+function ModelInputsRow({ readiness }: { readiness: WeekendDemandCaptureReadiness | null | undefined }) {
+  if (!readiness) return null;
+  return (
+    <div className="rounded-md border bg-background p-3 text-xs">
+      <div className="font-semibold">Model inputs</div>
+      <div className="mt-2 grid gap-2 md:grid-cols-4">
+        <div>
+          <div className="text-muted-foreground">Package mix rows</div>
+          <div className="font-semibold">{readiness.packageMixRows}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Weekend buckets</div>
+          <div className="font-semibold">{readiness.weekendPreferenceBuckets}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Weekend onsite rows</div>
+          <div className="font-semibold">{readiness.weekendOnsiteSessionRows}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Weekend demand share</div>
+          <div className="font-semibold">{formatPercentDecimal(readiness.weekendDemandShare)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReadinessFallback({ readiness }: { readiness: WeekendDemandCaptureReadiness | null | undefined }) {
+  const reasonCodes = readiness?.reasonCodes ?? [];
+  return (
+    <div className="space-y-3 p-4 text-sm">
+      <div>
+        <div className="font-semibold">Weekend demand capture is not ready</div>
+        <div className="mt-1 text-muted-foreground">
+          The forecast needs package mix, scenario drivers, active physical rooms, and Saturday/Sunday onsite schedule frequency.
+        </div>
+      </div>
+      {reasonCodes.length > 0 ? (
+        <div className="rounded-md border bg-background">
+          {reasonCodes.map((code) => (
+            <div key={code} className="border-b px-3 py-2 last:border-b-0">
+              {READINESS_MESSAGES[code]}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-md border bg-background px-3 py-2 text-muted-foreground">
+          No readiness details were returned by the forecast API.
+        </div>
+      )}
+      <ModelInputsRow readiness={readiness} />
+    </div>
+  );
+}
+
 function SlotList({ title, rows, empty }: { title: string; rows: WeekendDemandSlotSummary[]; empty: string }) {
   return (
     <div className="rounded-md border bg-background">
@@ -455,6 +521,7 @@ export function ForecastPanel({
 }) {
   const availableScenarios = forecast?.scenarios.length ? forecast.scenarios : SCENARIO_ORDER;
   const breakpoint = forecast?.weekendDemandBreakpoint;
+  const readiness = forecast?.weekendDemandCaptureReadiness;
   const combined = breakpoint?.combined;
   return (
     <section className="rounded-lg border bg-card">
@@ -485,11 +552,10 @@ export function ForecastPanel({
           <span className="font-mono"> scripts/import-room-capacity-model.ts</span>.
         </div>
       ) : !breakpoint || !combined ? (
-        <div className="p-4 text-sm text-muted-foreground">
-          Weekend demand capture needs imported package mix plus current Saturday/Sunday onsite schedule frequency.
-        </div>
+        <ReadinessFallback readiness={readiness} />
       ) : (
         <div className="space-y-3 p-3">
+          <ModelInputsRow readiness={readiness} />
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <ForecastMetric label="Breakpoint month" value={formatMonth(combined.breakpointMonth)} tone={combined.status === "reached" ? "danger" : "warn"} />
             <ForecastMetric label="Lost demand" value={formatPercentDecimal(combined.lostRevenuePct)} tone={combined.lostRevenuePct > 0.5 ? "danger" : "default"} />

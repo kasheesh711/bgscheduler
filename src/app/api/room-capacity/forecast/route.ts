@@ -35,6 +35,7 @@ function missingForecastBody(scenario: string) {
       roomTutorReason: null,
     })),
     weekendDemandBreakpoint: null,
+    weekendDemandCaptureReadiness: null,
     monthlyDrivers: [],
   };
 }
