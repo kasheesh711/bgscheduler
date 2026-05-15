@@ -6,9 +6,9 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 # AGENTS.md — Tutor Availability Search Tool
 
-## Status: Live — production sync active, daily cron running
+## Status: Live — production sync active, 30-minute cron running
 
-The application is fully built, tested, deployed, and live at https://bgscheduler.vercel.app. Google OAuth login works. Production Wise sync is active with daily cron.
+The application is fully built, tested, deployed, and live at https://bgscheduler.vercel.app. Google OAuth login works. Production Wise sync is active with a 30-minute cron.
 
 ## What Is Built
 
@@ -16,7 +16,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - Next.js 16 App Router + TypeScript + Tailwind + shadcn/ui
 - Auth.js with Google provider + `admin_users` table for explicit email allowlisting
 - Drizzle ORM + Neon Postgres (ap-southeast-1) with 18 tables
-- Vercel hosting with daily cron (Hobby plan limit; upgrade to Pro for 30-min cadence)
+- Vercel hosting with 30-minute cron on Pro plan
 - Vitest with 281 passing unit tests
 
 ### Database schema (complete, migrated, seeded)
@@ -146,12 +146,11 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 First successful production sync completed 2026-04-07 on commit `c673999`:
 - Snapshot `d70608b0-0f2d-4738-b9b4-1f3fd5210fea` promoted successfully
 - 131 teachers fetched, 72 identity groups resolved, 251 data issues logged
-- Sync duration: ~4m26s (Vercel function ceiling is 5m)
-- Daily cron active (`0 0 * * *`)
+- Sync duration: ~4m26s on first production sync; Wise sync routes now allow up to 800s on Vercel Pro/Fluid Compute
+- 30-minute cron active (`*/30 * * * *`)
 
 ### Optional improvements
-- Upgrade Vercel to Pro for 30-minute sync cadence (currently daily on Hobby)
-- Monitor sync duration headroom — ~34s margin before function timeout at current data volume
+- Monitor sync duration headroom as Wise data volume grows
 
 ## Source of Truth Rules
 - Production truth comes from the Wise API only (tenant: `begifted-education`, institute: `696e1f4d90102225641cc413`).
@@ -169,7 +168,7 @@ First successful production sync completed 2026-04-07 on commit `c673999`:
 - Next.js 16 App Router + TypeScript + Tailwind + shadcn/ui
 - Auth.js with Google provider + admin allowlisting in Postgres
 - Drizzle ORM + Neon Postgres (ap-southeast-1)
-- Vercel hosting + Vercel Cron (daily on Hobby; 30-min on Pro)
+- Vercel hosting + Vercel Cron (30-min on Pro)
 - In-memory search index (< 400ms warm queries)
 - Vitest for unit testing
 

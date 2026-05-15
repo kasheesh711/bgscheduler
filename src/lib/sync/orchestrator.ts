@@ -31,7 +31,7 @@ export interface SyncResult {
   durationMs: number;
 }
 
-const INSERT_CHUNK_SIZE = 250;
+const INSERT_CHUNK_SIZE = 1000;
 
 async function insertInChunks<T>(
   rows: T[],

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
@@ -33,7 +34,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { buildTimelineBounds, snapTimelinePlaybackMinute } from "@/lib/classrooms/visualization";
+import {
+  buildTimelineBounds,
+  minuteToTimeLabel,
+  snapTimelinePlaybackMinute,
+} from "@/lib/classrooms/visualization";
 import { AssignmentTimelineControls } from "./assignment-timeline-controls";
 import { FloorPlanOccupancy } from "./floor-plan-occupancy";
 import { RoomCalendarView } from "./room-calendar-view";
@@ -63,6 +68,7 @@ interface ScheduleEmailPreview {
   }>;
   previews: Array<{
     recipient: {
+      groupId: string;
       tutorDisplayName: string;
       email: string | null;
       status: "ready" | "blocked";
@@ -70,6 +76,12 @@ interface ScheduleEmailPreview {
     };
     subject: string;
     text: string;
+    roomSteps: Array<{
+      order: number;
+      time: string;
+      room: string;
+    }>;
+    mapImageUrl: string;
     blocks: Array<{
       rowId: string;
       time: string;
@@ -132,15 +144,6 @@ function todayBangkok(): string {
   }).formatToParts(new Date());
   const byType = new Map(parts.map((part) => [part.type, part.value]));
   return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
-}
-
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Bangkok",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(value));
 }
 
 function classLabel(row: ClassroomRow): string {
@@ -208,6 +211,7 @@ export function ClassAssignmentsWorkspace() {
   const [scheduleEmailOpen, setScheduleEmailOpen] = useState(false);
   const [scheduleEmailPreview, setScheduleEmailPreview] = useState<ScheduleEmailPreview | null>(null);
   const [scheduleEmailResult, setScheduleEmailResult] = useState<ScheduleEmailSendResult | null>(null);
+  const [selectedScheduleEmailGroupIds, setSelectedScheduleEmailGroupIds] = useState<Set<string>>(new Set());
   const [scheduleSendStartedAt, setScheduleSendStartedAt] = useState<number | null>(null);
   const [operationTick, setOperationTick] = useState(0);
   const [selectedTutors, setSelectedTutors] = useState<Set<string>>(new Set());
@@ -298,6 +302,7 @@ export function ClassAssignmentsWorkspace() {
     setPublishProgress(null);
     setScheduleEmailPreview(null);
     setScheduleEmailResult(null);
+    setSelectedScheduleEmailGroupIds(new Set());
   }, [run?.id]);
 
   const publishActive = Boolean(publishProgress && !isPublishJobTerminal(publishProgress.status));
@@ -452,7 +457,9 @@ export function ClassAssignmentsWorkspace() {
       const response = await fetch(`/api/class-assignments/runs/${run.id}/schedule-email/preview`);
       const body = (await response.json()) as ScheduleEmailPreview | { error?: string };
       if (!response.ok) throw new Error("error" in body ? body.error : `HTTP ${response.status}`);
-      setScheduleEmailPreview(body as ScheduleEmailPreview);
+      const preview = body as ScheduleEmailPreview;
+      setScheduleEmailPreview(preview);
+      setSelectedScheduleEmailGroupIds(new Set());
       setScheduleEmailOpen(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load schedule email preview");
@@ -462,13 +469,20 @@ export function ClassAssignmentsWorkspace() {
   }
 
   async function sendScheduleEmails() {
-    if (!run) return;
+    if (!run || !scheduleEmailPreview) return;
+    const recipientGroupIds = [...selectedScheduleEmailGroupIds];
+    if (recipientGroupIds.length === 0) {
+      setError("Select at least one ready tutor before sending schedules.");
+      return;
+    }
     setSendingScheduleEmails(true);
     setError(null);
     setMessage(null);
     try {
       const response = await fetch(`/api/class-assignments/runs/${run.id}/schedule-email/send`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipientGroupIds }),
       });
       const body = (await response.json()) as ScheduleEmailSendResult | { error?: string };
       if (!response.ok && !("summary" in body)) {
@@ -477,6 +491,7 @@ export function ClassAssignmentsWorkspace() {
       if ("summary" in body) {
         setScheduleEmailResult(body);
         setScheduleEmailPreview(body.preview);
+        setSelectedScheduleEmailGroupIds(new Set(recipientGroupIds));
         if (response.ok) {
           setMessage(
             `Schedule emails sent: ${body.summary.success} succeeded, ${body.summary.failed} failed, ${body.summary.blocked} skipped.`,
@@ -499,6 +514,28 @@ export function ClassAssignmentsWorkspace() {
     });
   }
 
+  function toggleScheduleEmailRecipient(groupId: string, checked: boolean) {
+    setSelectedScheduleEmailGroupIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(groupId);
+      else next.delete(groupId);
+      return next;
+    });
+  }
+
+  function selectAllScheduleEmailRecipients() {
+    if (!scheduleEmailPreview) return;
+    setSelectedScheduleEmailGroupIds(new Set(
+      scheduleEmailPreview.previews
+        .filter((item) => item.recipient.status === "ready")
+        .map((item) => item.recipient.groupId),
+    ));
+  }
+
+  function clearScheduleEmailRecipients() {
+    setSelectedScheduleEmailGroupIds(new Set());
+  }
+
   const selectedTutorRows = rows.filter((row) => selectedTutors.has(row.tutorDisplayName));
   const hasRows = rows.length > 0;
   const publishPercent = publishProgress?.totalCount
@@ -517,7 +554,17 @@ export function ClassAssignmentsWorkspace() {
     : null;
   const scheduleReadyCount = scheduleEmailPreview?.readyCount ?? 0;
   const scheduleBlockedCount = scheduleEmailPreview?.blockedCount ?? 0;
-  const schedulePendingCount = sendingScheduleEmails ? scheduleReadyCount : 0;
+  const selectedScheduleReadyCount = scheduleEmailPreview
+    ? scheduleEmailPreview.previews.filter((item) =>
+      item.recipient.status === "ready" && selectedScheduleEmailGroupIds.has(item.recipient.groupId)
+    ).length
+    : 0;
+  const allScheduleReadySelected = scheduleEmailPreview
+    ? scheduleReadyCount > 0 && scheduleEmailPreview.previews
+      .filter((item) => item.recipient.status === "ready")
+      .every((item) => selectedScheduleEmailGroupIds.has(item.recipient.groupId))
+    : false;
+  const schedulePendingCount = sendingScheduleEmails ? selectedScheduleReadyCount : 0;
   const scheduleSentCount = scheduleEmailResult?.summary.success ?? 0;
   const scheduleFailedCount = scheduleEmailResult?.summary.failed ?? 0;
   const scheduleSkippedCount = scheduleEmailResult?.summary.blocked ?? scheduleBlockedCount;
@@ -739,7 +786,7 @@ export function ClassAssignmentsWorkspace() {
                   rows.map((row) => (
                     <TableRow key={row.id}>
                       <TableCell className="font-mono text-xs">
-                        {formatTime(row.startTime)}-{formatTime(row.endTime)}
+                        {minuteToTimeLabel(row.startMinute)}-{minuteToTimeLabel(row.endMinute)}
                       </TableCell>
                       <TableCell className="max-w-[220px] whitespace-normal font-medium">
                         {row.tutorDisplayName}
@@ -817,7 +864,10 @@ export function ClassAssignmentsWorkspace() {
                   {[...selectedTutors].sort((a, b) => a.localeCompare(b)).map((tutor) => {
                     const tutorRows = selectedTutorRows
                       .filter((row) => row.tutorDisplayName === tutor)
-                      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+                      .sort((a, b) => {
+                        if (a.startMinute !== b.startMinute) return a.startMinute - b.startMinute;
+                        return a.endMinute - b.endMinute;
+                      });
                     return (
                       <div key={tutor} className="rounded-lg border p-3">
                         <div className="mb-2 text-sm font-semibold">{tutor}</div>
@@ -825,7 +875,7 @@ export function ClassAssignmentsWorkspace() {
                           {tutorRows.map((row) => (
                             <div key={row.id} className="rounded-md border-l-4 border-primary bg-muted/40 p-2 text-xs">
                               <div className="font-mono">
-                                {formatTime(row.startTime)}-{formatTime(row.endTime)} - {roomLabel(row)}
+                                {minuteToTimeLabel(row.startMinute)}-{minuteToTimeLabel(row.endMinute)} - {roomLabel(row)}
                               </div>
                               <div className="mt-1 font-medium">{row.studentName || row.title || "Untitled class"}</div>
                               <div className="text-muted-foreground">
@@ -960,6 +1010,35 @@ export function ClassAssignmentsWorkspace() {
                   </div>
                 </div>
 
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-3 text-sm">
+                  <div>
+                    <div className="font-medium">Recipients</div>
+                    <div className="text-xs text-muted-foreground">
+                      {selectedScheduleReadyCount} selected / {scheduleReadyCount} ready
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={selectAllScheduleEmailRecipients}
+                      disabled={sendingScheduleEmails || scheduleReadyCount === 0 || allScheduleReadySelected}
+                    >
+                      Select all ready
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={clearScheduleEmailRecipients}
+                      disabled={sendingScheduleEmails || selectedScheduleReadyCount === 0}
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
                   <div className="rounded-md border bg-card p-2">
                     <div className="text-muted-foreground">Pending</div>
@@ -981,7 +1060,7 @@ export function ClassAssignmentsWorkspace() {
 
                 {sendingScheduleEmails && (
                   <div className="rounded-lg border bg-primary/5 p-3 text-sm">
-                    Sending {scheduleReadyCount} schedule{scheduleReadyCount === 1 ? "" : "s"} · elapsed {formatDuration(scheduleSendElapsedMs)}
+                    Sending {selectedScheduleReadyCount} schedule{selectedScheduleReadyCount === 1 ? "" : "s"} · elapsed {formatDuration(scheduleSendElapsedMs)}
                   </div>
                 )}
 
@@ -1027,9 +1106,58 @@ export function ClassAssignmentsWorkspace() {
                             {preview.recipient.email || "Missing non-online email"}
                           </div>
                         </div>
-                        <Badge variant={preview.recipient.status === "ready" ? "outline" : "secondary"}>
-                          {preview.recipient.status === "ready" ? "Ready" : "Blocked"}
-                        </Badge>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          {preview.recipient.status === "blocked" && preview.recipient.blockReason && (
+                            <span className="text-xs text-muted-foreground">{preview.recipient.blockReason}</span>
+                          )}
+                          <Badge variant={preview.recipient.status === "ready" ? "outline" : "secondary"}>
+                            {preview.recipient.status === "ready" ? "Ready" : "Blocked"}
+                          </Badge>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={selectedScheduleEmailGroupIds.has(preview.recipient.groupId) ? "default" : "outline"}
+                            disabled={sendingScheduleEmails || preview.recipient.status !== "ready"}
+                            onClick={() =>
+                              toggleScheduleEmailRecipient(
+                                preview.recipient.groupId,
+                                !selectedScheduleEmailGroupIds.has(preview.recipient.groupId),
+                              )
+                            }
+                          >
+                            {selectedScheduleEmailGroupIds.has(preview.recipient.groupId) ? "Selected" : "Select"}
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid gap-3 md:grid-cols-[220px_1fr]">
+                        <div className="rounded-md border bg-muted/20 p-2">
+                          <div className="text-xs font-medium text-muted-foreground">Room route</div>
+                          <div className="mt-2 space-y-1">
+                            {preview.roomSteps.length > 0 ? (
+                              preview.roomSteps.map((step) => (
+                                <div key={`${step.order}-${step.room}-${step.time}`} className="flex items-center gap-2 text-xs">
+                                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+                                    {step.order}
+                                  </span>
+                                  <span>
+                                    <span className="font-medium">{step.room}</span>
+                                    <span className="text-muted-foreground"> · {step.time}</span>
+                                  </span>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="text-xs text-muted-foreground">No physical room needed.</div>
+                            )}
+                          </div>
+                        </div>
+                        <Image
+                          src={preview.mapImageUrl}
+                          alt={`BeGifted floor plan for ${preview.recipient.tutorDisplayName}`}
+                          width={640}
+                          height={360}
+                          unoptimized
+                          className="w-full rounded-md border bg-white"
+                        />
                       </div>
                       <div className="mt-3 overflow-auto rounded-md border">
                         <Table>
@@ -1068,10 +1196,10 @@ export function ClassAssignmentsWorkspace() {
             </Button>
             <Button
               onClick={sendScheduleEmails}
-              disabled={!scheduleEmailPreview?.sendable || sendingScheduleEmails}
+              disabled={!scheduleEmailPreview?.sendable || sendingScheduleEmails || selectedScheduleReadyCount === 0}
             >
               <Send />
-              {sendingScheduleEmails ? `Sending ${scheduleReadyCount}` : "Send schedules"}
+              {sendingScheduleEmails ? `Sending ${selectedScheduleReadyCount}` : "Send selected"}
             </Button>
           </DialogFooter>
         </DialogContent>
