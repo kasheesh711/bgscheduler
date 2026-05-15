@@ -16,10 +16,24 @@ Production must have these values configured in Vercel:
 - `WISE_INSTITUTE_ID=696e1f4d90102225641cc413`
 - `CRON_SECRET`
 
+Classroom schedule email sending also requires:
+
+- `SCHEDULE_EMAIL_APPS_SCRIPT_URL`
+- `SCHEDULE_EMAIL_APPS_SCRIPT_SECRET`
+- `SCHEDULE_EMAIL_SENDER_NAME=BeGifted`
+- `SCHEDULE_EMAIL_REPLY_TO` (optional)
+
 Check them with:
 
 ```bash
 npx vercel env ls production
+```
+
+If the Apps Script relay has been deployed and tested, remove the old Resend
+key from Vercel because schedule email sending no longer uses it:
+
+```bash
+npx vercel env rm RESEND_API_KEY production
 ```
 
 ## 2. Deploy production
@@ -76,9 +90,9 @@ From an authenticated session:
 
 ## 6. Check cron continuity
 
-Current production cron is daily:
+Current production cron runs every 30 minutes:
 
 - `/api/internal/sync-wise`
-- `0 0 * * *`
+- `*/30 * * * *`
 
-If the team upgrades Vercel from Hobby to Pro, update the cadence only after production syncs are stable.
+This requires Vercel Pro or higher. Hobby deployments reject cron expressions that run more than once per day.

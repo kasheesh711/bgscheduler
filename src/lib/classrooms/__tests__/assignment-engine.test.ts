@@ -231,6 +231,114 @@ describe("assignClassrooms", () => {
     expect(second.assignedRoom).toBe(first.assignedRoom);
   });
 
+  it("reuses a tutor's previous room after a long gap when hard constraints allow it", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          wiseSessionId: "first",
+          tutorDisplayName: "Tutor One",
+          startMinute: 9 * 60,
+          endMinute: 10 * 60,
+        }),
+        session({
+          wiseSessionId: "second",
+          tutorDisplayName: "Tutor One",
+          startMinute: 14 * 60,
+          endMinute: 15 * 60,
+        }),
+      ],
+      DEFAULT_CLASSROOM_ROOMS,
+      new Map([["first", "Turn The Page"]]),
+    );
+
+    const second = result.rows.find((row) => row.wiseSessionId === "second")!;
+    expect(second.assignedRoom).toBe("Turn The Page");
+    expect(second.ruleTrace).toContain("assigned by tutor room stability: Turn The Page");
+  });
+
+  it("does not reuse a tutor room that is occupied by another session", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          wiseSessionId: "first",
+          tutorDisplayName: "Tutor One",
+          startMinute: 9 * 60,
+          endMinute: 10 * 60,
+        }),
+        session({
+          wiseSessionId: "blocker",
+          tutorDisplayName: "Tutor Two",
+          startMinute: 13 * 60,
+          endMinute: 15 * 60,
+        }),
+        session({
+          wiseSessionId: "second",
+          tutorDisplayName: "Tutor One",
+          startMinute: 14 * 60,
+          endMinute: 15 * 60,
+        }),
+      ],
+      DEFAULT_CLASSROOM_ROOMS,
+      new Map([
+        ["first", "Turn The Page"],
+        ["blocker", "Turn The Page"],
+      ]),
+    );
+
+    expect(result.rows.find((row) => row.wiseSessionId === "blocker")?.assignedRoom).toBe("Turn The Page");
+    expect(result.rows.find((row) => row.wiseSessionId === "second")?.assignedRoom).not.toBe("Turn The Page");
+  });
+
+  it("does not reuse a tutor room when capacity constraints no longer fit", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          wiseSessionId: "first",
+          tutorDisplayName: "Tutor One",
+          studentCount: 1,
+          startMinute: 9 * 60,
+          endMinute: 10 * 60,
+        }),
+        session({
+          wiseSessionId: "second",
+          tutorDisplayName: "Tutor One",
+          studentCount: 3,
+          classType: "GROUP",
+          startMinute: 14 * 60,
+          endMinute: 15 * 60,
+        }),
+      ],
+      DEFAULT_CLASSROOM_ROOMS,
+      new Map([["first", "Turn The Page"]]),
+    );
+
+    const second = result.rows.find((row) => row.wiseSessionId === "second")!;
+    expect(second.assignedRoom).not.toBe("Turn The Page");
+    expect(DEFAULT_CLASSROOM_ROOMS.find((room) => room.name === second.assignedRoom)?.capacity).toBeGreaterThanOrEqual(3);
+  });
+
+  it("does not reuse an online-only room for a later offline session", () => {
+    const result = assignClassrooms([
+      session({
+        wiseSessionId: "online",
+        tutorDisplayName: "Tutor One",
+        sessionType: "SCHEDULED",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        wiseSessionId: "offline",
+        tutorDisplayName: "Tutor One",
+        sessionType: "OFFLINE",
+        startMinute: 10 * 60 + 30,
+        endMinute: 11 * 60 + 30,
+      }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    expect(result.rows.find((row) => row.wiseSessionId === "online")?.assignedRoom).toMatch(/online/i);
+    expect(result.rows.find((row) => row.wiseSessionId === "offline")?.assignedRoom).not.toMatch(/online/i);
+  });
+
   it("rejects invalid overrides and falls back to a valid room", () => {
     const result = assignClassrooms(
       [session()],

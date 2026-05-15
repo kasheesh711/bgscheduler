@@ -8,6 +8,7 @@ export default auth((req) => {
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth") ||
+    pathname === "/api/classrooms/floor-plan-map" ||
     pathname.startsWith("/api/internal/")
   ) {
     return NextResponse.next();

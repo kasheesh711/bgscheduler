@@ -9,6 +9,7 @@ import { REMOTE_NO_ROOM_NEEDED } from "./assignment-engine";
 import { sessionModeLabel } from "./session-mode";
 
 type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
+const DEFAULT_PUBLIC_BASE_URL = "https://bgscheduler.vercel.app";
 
 interface AssignmentEmailRow {
   id: string;
@@ -37,6 +38,12 @@ export interface ScheduleEmailBlock {
   room: string;
 }
 
+export interface ScheduleEmailRoomStep {
+  order: number;
+  time: string;
+  room: string;
+}
+
 export interface ScheduleEmailRecipient {
   groupId: string;
   canonicalKey: string;
@@ -52,6 +59,8 @@ export interface ScheduleEmailPreviewItem {
   html: string;
   text: string;
   blocks: ScheduleEmailBlock[];
+  roomSteps: ScheduleEmailRoomStep[];
+  mapImageUrl: string;
 }
 
 export interface ScheduleEmailBlocker {
@@ -86,6 +95,17 @@ export interface ScheduleEmailSendInput {
 
 export interface ScheduleEmailSender {
   sendEmail(input: ScheduleEmailSendInput): Promise<{ id: string }>;
+}
+
+export interface ScheduleEmailSendOptions {
+  recipientGroupIds?: string[];
+}
+
+interface AppsScriptEmailResponse {
+  ok?: boolean;
+  id?: string;
+  remainingQuota?: number;
+  error?: string;
 }
 
 export interface ScheduleEmailSendResult {
@@ -148,13 +168,10 @@ function formatRunDate(date: string): string {
   return `${day}/${month}/${year}`;
 }
 
-function formatBangkokTime(date: Date): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Bangkok",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
+function formatBangkokMinute(minute: number): string {
+  const hours = Math.floor(minute / 60);
+  const minutes = minute % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 function escapeHtml(value: string): string {
@@ -181,10 +198,16 @@ function roomLabel(row: Pick<AssignmentEmailRow, "status" | "assignedRoom">): st
   return row.assignedRoom;
 }
 
+function physicalRoomLabel(row: Pick<AssignmentEmailRow, "status" | "assignedRoom">): string | null {
+  if (row.status !== "assigned") return null;
+  if (row.assignedRoom === REMOTE_NO_ROOM_NEEDED) return null;
+  return row.assignedRoom.trim() || null;
+}
+
 function toBlock(row: AssignmentEmailRow): ScheduleEmailBlock {
   return {
     rowId: row.id,
-    time: `${formatBangkokTime(row.startTime)}-${formatBangkokTime(row.endTime)}`,
+    time: `${formatBangkokMinute(row.startMinute)}-${formatBangkokMinute(row.endMinute)}`,
     studentOrClass: studentOrClass(row),
     subject: classLabel(row),
     mode: sessionModeLabel(row.sessionType),
@@ -192,39 +215,118 @@ function toBlock(row: AssignmentEmailRow): ScheduleEmailBlock {
   };
 }
 
+function toRoomSteps(rows: AssignmentEmailRow[]): ScheduleEmailRoomStep[] {
+  return rows
+    .map((row) => ({
+      time: `${formatBangkokMinute(row.startMinute)}-${formatBangkokMinute(row.endMinute)}`,
+      room: physicalRoomLabel(row),
+    }))
+    .filter((step): step is { time: string; room: string } => Boolean(step.room))
+    .map((step, index) => ({
+      order: index + 1,
+      time: step.time,
+      room: step.room,
+    }));
+}
+
+function withProtocol(value: string): string {
+  return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+}
+
+function publicBaseUrl(): string {
+  const configured = process.env.SCHEDULE_EMAIL_PUBLIC_BASE_URL?.trim();
+  if (configured) return withProtocol(configured).replace(/\/+$/, "");
+
+  const production = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  if (production) return withProtocol(production).replace(/\/+$/, "");
+
+  const deployment = process.env.VERCEL_URL?.trim();
+  if (deployment) return withProtocol(deployment).replace(/\/+$/, "");
+
+  return DEFAULT_PUBLIC_BASE_URL;
+}
+
+function floorPlanMapUrl(roomSteps: ScheduleEmailRoomStep[]): string {
+  const rooms = [...new Set(roomSteps.map((step) => step.room))];
+  const url = new URL("/api/classrooms/floor-plan-map", publicBaseUrl());
+  if (rooms.length > 0) {
+    url.searchParams.set("rooms", rooms.join("|"));
+  }
+  return url.toString();
+}
+
 function renderHtmlEmail(input: {
   tutorDisplayName: string;
   dateLabel: string;
   blocks: ScheduleEmailBlock[];
+  roomSteps: ScheduleEmailRoomStep[];
+  mapImageUrl: string;
 }): string {
+  const roomRows = input.roomSteps.length > 0
+    ? input.roomSteps.map((step) => `
+      <tr>
+        <td style="width:48px;padding:8px 8px 8px 0;vertical-align:top;">
+          <div style="width:30px;height:30px;border-radius:999px;background:#2563eb;color:#ffffff;text-align:center;line-height:30px;font-weight:700;">${step.order}</div>
+        </td>
+        <td style="padding:8px 0;vertical-align:top;">
+          <div style="font-family:Arial,sans-serif;font-size:14px;color:#0f172a;font-weight:700;">${escapeHtml(step.room)}</div>
+          <div style="font-family:Arial,sans-serif;font-size:13px;color:#475569;">${escapeHtml(step.time)}</div>
+        </td>
+      </tr>
+    `).join("")
+    : `
+      <tr>
+        <td style="padding:10px 0;color:#475569;font-size:14px;">No physical room needed for this schedule.</td>
+      </tr>
+    `;
   const rows = input.blocks.map((block) => `
     <tr>
-      <td style="padding:8px;border-bottom:1px solid #e5e7eb;font-family:monospace;white-space:nowrap;">${escapeHtml(block.time)}</td>
-      <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(block.studentOrClass)}</td>
-      <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(block.subject)}</td>
-      <td style="padding:8px;border-bottom:1px solid #e5e7eb;">${escapeHtml(block.mode)}</td>
-      <td style="padding:8px;border-bottom:1px solid #e5e7eb;font-weight:600;">${escapeHtml(block.room)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #dbeafe;font-family:Menlo,Consolas,monospace;white-space:nowrap;color:#1e40af;font-weight:700;">${escapeHtml(block.time)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #dbeafe;">${escapeHtml(block.studentOrClass)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #dbeafe;">${escapeHtml(block.subject)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #dbeafe;">${escapeHtml(block.mode)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid #dbeafe;font-weight:700;color:#f97316;">${escapeHtml(block.room)}</td>
     </tr>
   `).join("");
 
   return `<!doctype html>
 <html>
-  <body style="margin:0;background:#f8fafc;color:#0f172a;font-family:Arial,sans-serif;">
-    <div style="max-width:760px;margin:0 auto;padding:24px;">
-      <h1 style="font-size:20px;margin:0 0 4px;">BeGifted schedule</h1>
-      <p style="margin:0 0 20px;color:#475569;">${escapeHtml(input.tutorDisplayName)} - ${escapeHtml(input.dateLabel)}</p>
-      <table style="width:100%;border-collapse:collapse;background:#ffffff;border:1px solid #e5e7eb;">
+  <body style="margin:0;background:#eff6ff;color:#0f172a;font-family:Arial,sans-serif;">
+    <div style="max-width:780px;margin:0 auto;padding:24px;">
+      <div style="background:#2563eb;border-radius:18px 18px 0 0;padding:24px 26px;border-bottom:6px solid #f97316;">
+        <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#ffedd5;">BeGifted</div>
+        <h1 style="font-size:26px;line-height:1.2;margin:6px 0 4px;color:#ffffff;">Teaching schedule</h1>
+        <p style="margin:0;color:#dbeafe;font-size:15px;">${escapeHtml(input.tutorDisplayName)} - ${escapeHtml(input.dateLabel)}</p>
+      </div>
+
+      <div style="background:#ffffff;border:1px solid #bfdbfe;border-top:0;padding:20px 24px;">
+        <table role="presentation" style="width:100%;border-collapse:collapse;">
+          <tr>
+            <td style="vertical-align:top;padding-right:18px;width:38%;">
+              <div style="font-size:15px;font-weight:800;color:#1e40af;margin-bottom:8px;">Room route</div>
+              <table role="presentation" style="width:100%;border-collapse:collapse;">${roomRows}</table>
+            </td>
+            <td style="vertical-align:top;width:62%;">
+              <div style="font-size:15px;font-weight:800;color:#1e40af;margin-bottom:8px;">School map</div>
+              <img src="${escapeHtml(input.mapImageUrl)}" width="440" alt="BeGifted floor plan with assigned rooms highlighted" style="display:block;width:100%;max-width:440px;border:1px solid #bfdbfe;border-radius:12px;background:#ffffff;" />
+            </td>
+          </tr>
+        </table>
+      </div>
+
+      <table style="width:100%;border-collapse:collapse;background:#ffffff;border:1px solid #bfdbfe;border-top:0;border-radius:0 0 18px 18px;overflow:hidden;">
         <thead>
-          <tr style="background:#f1f5f9;text-align:left;">
-            <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Time</th>
-            <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Student/Class</th>
-            <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Subject</th>
-            <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Mode</th>
-            <th style="padding:8px;border-bottom:1px solid #e5e7eb;">Room</th>
+          <tr style="background:#f97316;text-align:left;color:#ffffff;">
+            <th style="padding:11px 12px;border-bottom:1px solid #ea580c;">Time</th>
+            <th style="padding:11px 12px;border-bottom:1px solid #ea580c;">Student/Class</th>
+            <th style="padding:11px 12px;border-bottom:1px solid #ea580c;">Subject</th>
+            <th style="padding:11px 12px;border-bottom:1px solid #ea580c;">Mode</th>
+            <th style="padding:11px 12px;border-bottom:1px solid #ea580c;">Room</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
+      <div style="font-size:12px;color:#64748b;margin-top:12px;text-align:center;">Room numbers on the map match the room route order above.</div>
     </div>
   </body>
 </html>`;
@@ -234,9 +336,17 @@ function renderTextEmail(input: {
   tutorDisplayName: string;
   dateLabel: string;
   blocks: ScheduleEmailBlock[];
+  roomSteps: ScheduleEmailRoomStep[];
+  mapImageUrl: string;
 }): string {
   const lines = [
     `BeGifted schedule for ${input.tutorDisplayName} - ${input.dateLabel}`,
+    "",
+    "Room route:",
+    ...(input.roomSteps.length > 0
+      ? input.roomSteps.map((step) => `${step.order}. ${step.time} - ${step.room}`)
+      : ["No physical room needed for this schedule."]),
+    `Map: ${input.mapImageUrl}`,
     "",
     "Time | Student/Class | Subject | Mode | Room",
     ...input.blocks.map((block) =>
@@ -308,16 +418,16 @@ async function loadContactByCanonicalKey(
 
 function emailConfigBlockers(): ScheduleEmailBlocker[] {
   const blockers: ScheduleEmailBlocker[] = [];
-  if (!process.env.RESEND_API_KEY?.trim()) {
+  if (!process.env.SCHEDULE_EMAIL_APPS_SCRIPT_URL?.trim()) {
     blockers.push({
       type: "missing_email_config",
-      message: "RESEND_API_KEY is not configured.",
+      message: "SCHEDULE_EMAIL_APPS_SCRIPT_URL is not configured.",
     });
   }
-  if (!process.env.SCHEDULE_EMAIL_FROM?.trim()) {
+  if (!process.env.SCHEDULE_EMAIL_APPS_SCRIPT_SECRET?.trim()) {
     blockers.push({
       type: "missing_email_config",
-      message: "SCHEDULE_EMAIL_FROM is not configured.",
+      message: "SCHEDULE_EMAIL_APPS_SCRIPT_SECRET is not configured.",
     });
   }
   return blockers;
@@ -393,13 +503,30 @@ export async function getScheduleEmailPreview(
       status: blockReason ? "blocked" : "ready",
       blockReason,
     };
-    const blocks = groupRows.sort((a, b) => a.startMinute - b.startMinute).map(toBlock);
+    const sortedGroupRows = groupRows.sort((a, b) => a.startMinute - b.startMinute);
+    const blocks = sortedGroupRows.map(toBlock);
+    const roomSteps = toRoomSteps(sortedGroupRows);
+    const mapImageUrl = floorPlanMapUrl(roomSteps);
     previews.push({
       recipient,
       subject,
-      html: renderHtmlEmail({ tutorDisplayName: first.tutorDisplayName, dateLabel, blocks }),
-      text: renderTextEmail({ tutorDisplayName: first.tutorDisplayName, dateLabel, blocks }),
+      html: renderHtmlEmail({
+        tutorDisplayName: first.tutorDisplayName,
+        dateLabel,
+        blocks,
+        roomSteps,
+        mapImageUrl,
+      }),
+      text: renderTextEmail({
+        tutorDisplayName: first.tutorDisplayName,
+        dateLabel,
+        blocks,
+        roomSteps,
+        mapImageUrl,
+      }),
       blocks,
+      roomSteps,
+      mapImageUrl,
     });
     recipients.push(recipient);
   }
@@ -424,47 +551,47 @@ export async function getScheduleEmailPreview(
   };
 }
 
-export function createResendScheduleEmailSender(): ScheduleEmailSender {
+export function createAppsScriptScheduleEmailSender(): ScheduleEmailSender {
   return {
     async sendEmail(input) {
-      const apiKey = process.env.RESEND_API_KEY?.trim();
-      const from = process.env.SCHEDULE_EMAIL_FROM?.trim();
-      if (!apiKey) throw new Error("RESEND_API_KEY is not configured");
-      if (!from) throw new Error("SCHEDULE_EMAIL_FROM is not configured");
+      const url = process.env.SCHEDULE_EMAIL_APPS_SCRIPT_URL?.trim();
+      const secret = process.env.SCHEDULE_EMAIL_APPS_SCRIPT_SECRET?.trim();
+      if (!url) throw new Error("SCHEDULE_EMAIL_APPS_SCRIPT_URL is not configured");
+      if (!secret) throw new Error("SCHEDULE_EMAIL_APPS_SCRIPT_SECRET is not configured");
 
-      const body: Record<string, unknown> = {
-        from,
-        to: [input.to],
-        subject: input.subject,
-        html: input.html,
-        text: input.text,
-      };
-      const replyTo = process.env.SCHEDULE_EMAIL_REPLY_TO?.trim();
-      if (replyTo) body.reply_to = replyTo;
-
-      const response = await fetch("https://api.resend.com/emails", {
+      const senderName = process.env.SCHEDULE_EMAIL_SENDER_NAME?.trim() || "BeGifted";
+      const replyTo = process.env.SCHEDULE_EMAIL_REPLY_TO?.trim() || "kevhsh7@gmail.com";
+      const response = await fetch(url, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "Idempotency-Key": input.idempotencyKey,
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          secret,
+          to: input.to,
+          subject: input.subject,
+          text: input.text,
+          html: input.html,
+          senderName,
+          replyTo,
+          idempotencyKey: input.idempotencyKey,
+        }),
       });
-      const json = await response.json().catch(() => null) as { id?: string; message?: string; error?: string } | null;
+
+      const json = await response.json().catch(() => null) as AppsScriptEmailResponse | null;
       if (!response.ok) {
-        throw new Error(json?.message ?? json?.error ?? `Resend returned HTTP ${response.status}`);
+        throw new Error(json?.error ?? `Apps Script returned HTTP ${response.status}`);
       }
-      if (!json?.id) {
-        throw new Error("Resend response did not include an email id");
+      if (!json?.ok) {
+        throw new Error(json?.error ?? "Apps Script email send failed");
       }
-      return { id: json.id };
+      return { id: json.id ?? `apps-script:${input.idempotencyKey}` };
     },
   };
 }
 
-function idempotencyKey(runId: string, canonicalKey: string): string {
-  return `classroom-schedule:${runId}:${canonicalKey}`.slice(0, 256);
+function idempotencyKey(emailRunId: string, canonicalKey: string): string {
+  return `classroom-schedule:${emailRunId}:${canonicalKey}`.slice(0, 256);
 }
 
 async function insertRecipientResult(
@@ -495,25 +622,37 @@ export async function sendScheduleEmailsForRun(
   db: Database,
   runId: string,
   createdBy: string | null,
-  sender: ScheduleEmailSender = createResendScheduleEmailSender(),
+  sender: ScheduleEmailSender = createAppsScriptScheduleEmailSender(),
+  options: ScheduleEmailSendOptions = {},
 ): Promise<ScheduleEmailSendResult> {
   const preview = await getScheduleEmailPreview(db, runId);
+  const selectedGroupIds = options.recipientGroupIds === undefined
+    ? null
+    : new Set(options.recipientGroupIds);
+  const previewItems = selectedGroupIds
+    ? preview.previews.filter((item) => selectedGroupIds.has(item.recipient.groupId))
+    : preview.previews;
+  const selectedReadyCount = previewItems.filter((item) => item.recipient.status === "ready" && item.recipient.email).length;
+  const selectedBlockedCount = previewItems.length - selectedReadyCount;
+  const hasHardBlockers = preview.hardBlockers.length > 0;
+  const sendable = !hasHardBlockers && selectedReadyCount > 0;
+
   const [emailRun] = await db
     .insert(schema.classroomScheduleEmailRuns)
     .values({
       assignmentRunId: runId,
-      status: preview.sendable ? "pending" : "blocked",
+      status: sendable ? "pending" : "blocked",
       subject: preview.subject,
       createdBy,
-      blockedCount: preview.blockedCount,
+      blockedCount: selectedBlockedCount,
     })
     .returning();
 
   const recipients: ScheduleEmailSendResult["recipients"] = [];
-  if (!preview.sendable) {
-    for (const item of preview.previews) {
+  if (!sendable) {
+    for (const item of previewItems) {
       const hardBlockerText = preview.hardBlockers.map((blocker) => blocker.message).join(" ");
-      const error = item.recipient.blockReason || hardBlockerText || "Schedule email preview is blocked";
+      const error = item.recipient.blockReason || hardBlockerText || "No selected ready schedule emails to send";
       await insertRecipientResult(db, {
         emailRunId: emailRun.id,
         assignmentRunId: runId,
@@ -529,7 +668,7 @@ export async function sendScheduleEmailsForRun(
       });
     }
     return {
-      summary: { attempted: 0, success: 0, failed: 0, blocked: preview.previews.length },
+      summary: { attempted: 0, success: 0, failed: 0, blocked: previewItems.length },
       recipients,
       preview,
     };
@@ -539,7 +678,7 @@ export async function sendScheduleEmailsForRun(
   let failed = 0;
   let blocked = 0;
   let attempted = 0;
-  for (const item of preview.previews) {
+  for (const item of previewItems) {
     if (item.recipient.status === "blocked" || !item.recipient.email) {
       blocked += 1;
       const error = item.recipient.blockReason ?? "Recipient is blocked";
@@ -566,7 +705,7 @@ export async function sendScheduleEmailsForRun(
         subject: item.subject,
         html: item.html,
         text: item.text,
-        idempotencyKey: idempotencyKey(runId, item.recipient.canonicalKey),
+        idempotencyKey: idempotencyKey(emailRun.id, item.recipient.canonicalKey),
       });
       success += 1;
       await insertRecipientResult(db, {

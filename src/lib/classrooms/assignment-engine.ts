@@ -70,6 +70,11 @@ interface OccupancyInterval {
   sessionId: string;
 }
 
+interface TutorRoomUse {
+  endMinute: number;
+  room: string;
+}
+
 export function isOfflineSession(value: string | null | undefined): boolean {
   return isOnsiteSessionType(value);
 }
@@ -153,6 +158,21 @@ function tutorKey(session: AssignmentSession): string {
   return session.groupId || normalizeTutorName(session.tutorDisplayName);
 }
 
+function roomHistoryCandidates(
+  history: TutorRoomUse[],
+  roomByName: Map<string, ClassroomRoomDefinition>,
+): ClassroomRoomDefinition[] {
+  const seen = new Set<string>();
+  return [...history]
+    .reverse()
+    .flatMap((item) => {
+      if (seen.has(item.room)) return [];
+      seen.add(item.room);
+      const room = roomByName.get(item.room);
+      return room ? [room] : [];
+    });
+}
+
 function sortedTutorSessions(sessions: AssignmentSession[]): AssignmentSession[] {
   return [...sessions].sort((a, b) => {
     if (a.startMinute !== b.startMinute) return a.startMinute - b.startMinute;
@@ -225,7 +245,8 @@ export function assignClassrooms(
   const occupancy = new Map<string, OccupancyInterval[]>();
   for (const room of activeRooms) occupancy.set(room.name, []);
 
-  const lastByTutor = new Map<string, { endMinute: number; room: string }>();
+  const lastByTutor = new Map<string, TutorRoomUse>();
+  const roomHistoryByTutor = new Map<string, TutorRoomUse[]>();
   const centerRoomRequiredBySessionId = buildCenterRoomRequirementMap(sessions);
   const sortedSessions = [...sessions].sort((a, b) => {
     if (a.startMinute !== b.startMinute) return a.startMinute - b.startMinute;
@@ -251,8 +272,14 @@ export function assignClassrooms(
       roomPassesConstraints(roomByName.get(roomName), session, minCapacity, needsTv);
     const roomAvailable = (roomName: string): boolean =>
       isAvailable(occupancy, roomName, session);
-    const pickRoom = (candidates: ClassroomRoomDefinition[]): string | null => {
-      const picked = candidates.find((room) => roomOk(room.name) && roomAvailable(room.name));
+    const pickRoom = (
+      candidates: ClassroomRoomDefinition[],
+      options: { allowJoyForNonGift?: boolean } = {},
+    ): string | null => {
+      const picked = candidates.find((room) => {
+        if (!options.allowJoyForNonGift && room.name === ROOM_JOY && !isGift) return false;
+        return roomOk(room.name) && roomAvailable(room.name);
+      });
       return picked?.name ?? null;
     };
 
@@ -296,15 +323,10 @@ export function assignClassrooms(
     }
 
     if (!assignedRoom) {
-      const last = lastByTutor.get(tutorNorm);
-      if (last) {
-        const gap = session.startMinute - last.endMinute;
-        if (gap >= 0 && gap <= 15 && roomOk(last.room) && roomAvailable(last.room)) {
-          if (!(last.room === ROOM_JOY && !isGift)) {
-            assignedRoom = last.room;
-            ruleTrace.push(`assigned by continuity: ${last.room}`);
-          }
-        }
+      const picked = pickRoom(roomHistoryCandidates(roomHistoryByTutor.get(tutorNorm) ?? [], roomByName));
+      if (picked) {
+        assignedRoom = picked;
+        ruleTrace.push(`assigned by tutor room stability: ${picked}`);
       }
     }
 
@@ -376,7 +398,9 @@ export function assignClassrooms(
     }
 
     if (assignedRoom !== NO_ROOM_AVAILABLE && assignedRoom !== REMOTE_NO_ROOM_NEEDED) {
-      lastByTutor.set(tutorNorm, { endMinute: session.endMinute, room: assignedRoom });
+      const roomUse = { endMinute: session.endMinute, room: assignedRoom };
+      lastByTutor.set(tutorNorm, roomUse);
+      roomHistoryByTutor.set(tutorNorm, [...(roomHistoryByTutor.get(tutorNorm) ?? []), roomUse]);
     }
 
     const status: AssignmentRowStatus =

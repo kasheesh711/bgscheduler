@@ -11,7 +11,7 @@
 
 ## Current Status
 
-Production sync is live. First successful sync completed 2026-04-07 (commit `c673999`), promoting snapshot `d70608b0` with 131 teachers and 72 identity groups. Daily cron runs at midnight UTC.
+Production sync is live. First successful sync completed 2026-04-07 (commit `c673999`), promoting snapshot `d70608b0` with 131 teachers and 72 identity groups. Cron runs every 30 minutes.
 
 UX/UI refresh v2 deployed 2026-04-08 (commits `38b4688`–`b11734d`): side-by-side layout (search left, compare right), sky blue palette, Inter font, GCal-style week view, searchable tutor combobox, discovery modal. `/compare` redirects to `/search`.
 
@@ -64,7 +64,7 @@ A performance and UX overhaul of the existing BGScheduler tutor scheduling tool 
 ### Constraints
 
 - **Stack**: No stack changes — Next.js 16, Tailwind, shadcn/ui, Drizzle, Neon Postgres
-- **Deployment**: Vercel Hobby plan (daily cron, 300s function timeout)
+- **Deployment**: Vercel Pro plan (30-minute cron, 800s sync function timeout)
 - **Data integrity**: Fail-closed safety rules are non-negotiable
 - **Visual**: Keep GCal-style calendar grid and sky blue color palette
 - **Regression**: All 82 existing tests must continue to pass
@@ -78,7 +78,7 @@ A performance and UX overhaul of the existing BGScheduler tutor scheduling tool 
 - SQL (PostgreSQL) - Database schema via Drizzle ORM migrations (`drizzle/`)
 ## Runtime
 - Node.js (no `.nvmrc` detected; target ES2017 in `tsconfig.json`)
-- Vercel Serverless Functions (max 300s duration configured in `src/app/api/internal/sync-wise/route.ts`)
+- Vercel Serverless Functions (max 800s duration configured in Wise sync routes)
 - npm
 - Lockfile: `package-lock.json` present
 ## Frameworks
@@ -125,10 +125,10 @@ A performance and UX overhaul of the existing BGScheduler tutor scheduling tool 
 - npm
 - PostgreSQL connection (Neon or local)
 - Google OAuth credentials for auth testing
-- Vercel (Hobby plan, daily cron; Pro plan for 30-min cron)
+- Vercel (Pro plan, 30-minute cron)
 - Neon Postgres (ap-southeast-1 region)
 - Vercel Cron for scheduled sync
-- Vercel Serverless Functions (300s max duration for sync endpoint)
+- Vercel Serverless Functions (800s max duration for sync endpoint)
 <!-- GSD:stack-end -->
 
 <!-- GSD:conventions-start source:CONVENTIONS.md -->
@@ -318,8 +318,8 @@ A performance and UX overhaul of the existing BGScheduler tutor scheduling tool 
 - Triggers: User navigates to `/search`
 - Responsibilities: Renders the side-by-side search + compare workspace. Client component with `"use client"` directive. All data fetching via `fetch()` to API routes.
 - Location: `src/app/api/internal/sync-wise/route.ts`
-- Triggers: Vercel cron (daily at midnight UTC) or manual `curl` with CRON_SECRET
-- Responsibilities: Runs the full sync pipeline. `maxDuration = 300` (5 minutes).
+- Triggers: Vercel cron (every 30 minutes) or manual `curl` with CRON_SECRET
+- Responsibilities: Runs the full sync pipeline. `maxDuration = 800`.
 - Location: `src/middleware.ts`
 - Triggers: Every request (except static assets)
 - Responsibilities: Auth gate. Allows `/login`, `/api/auth/*`, `/api/internal/*` without auth. Redirects unauthenticated users to `/login`.
