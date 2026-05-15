@@ -8,7 +8,8 @@ function isMissingForecastTableError(error: unknown): boolean {
   return (
     message.includes("room_capacity_model_runs") ||
     message.includes("room_capacity_forecast_drivers") ||
-    message.includes("room_capacity_demand_mix")
+    message.includes("room_capacity_demand_mix") ||
+    message.includes("room_capacity_package_mix")
   );
 }
 
@@ -33,6 +34,7 @@ function missingForecastBody(scenario: string) {
       roomSlotReason: null,
       roomTutorReason: null,
     })),
+    weekendDemandBreakpoint: null,
     monthlyDrivers: [],
   };
 }

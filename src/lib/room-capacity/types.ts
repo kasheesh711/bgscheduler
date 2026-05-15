@@ -141,11 +141,22 @@ export interface RoomCapacityMonthResponse {
 export interface RoomCapacityForecastDriver {
   scenario: string;
   month: string;
+  newPaidStudents: number;
   forecastConsumedHours: number;
   scheduledHours: number;
   capacityUtilizationPct: number;
   capacityExceeded: boolean;
   projectedRevenueThb: number;
+}
+
+export interface RoomCapacityPackageMixRow {
+  packageHourBucket: string;
+  packageHours: number;
+  averageRevenueThb: number;
+  share: number;
+  observedSaleCount: number;
+  observedStudentCount: number;
+  sourceLabel: string;
 }
 
 export interface RoomCapacityDemandMixRow {
@@ -169,6 +180,44 @@ export interface WeekdaySaturationResult {
   roomTutorReason: string | null;
 }
 
+export interface WeekendDemandSlotSummary {
+  weekday: number;
+  weekdayName: string;
+  startMinute: number;
+  endMinute: number;
+  label: string;
+  lostRevenueThb: number;
+  lostStudents: number;
+  attempts: number;
+  remainingOpenCapacityMinutes?: number;
+}
+
+export type WeekendDemandBreakpointStatus = "reached" | "reached_extrapolated" | "not_reached";
+
+export interface WeekendDemandBreakpointResult {
+  weekday?: number;
+  weekdayName?: string;
+  breakpointMonth: string | null;
+  status: WeekendDemandBreakpointStatus;
+  capturedRevenueThb: number;
+  lostRevenueThb: number;
+  lostRevenuePct: number;
+  capturedStudents: number;
+  lostStudents: number;
+  remainingOpenCapacityMinutes: number;
+  topLostPreferredSlots: WeekendDemandSlotSummary[];
+  topOpenNonCapturedSlots: WeekendDemandSlotSummary[];
+}
+
+export interface WeekendDemandBreakpoint {
+  preferenceSource: "current_wise_schedule";
+  policy: "preferred_slot_only";
+  openHours: { startMinute: number; endMinute: number };
+  weekendDemandShare: number;
+  combined: WeekendDemandBreakpointResult;
+  byDay: WeekendDemandBreakpointResult[];
+}
+
 export interface RoomCapacityForecastResponse {
   model: {
     status: "ready" | "missing";
@@ -182,5 +231,6 @@ export interface RoomCapacityForecastResponse {
   scenarios: string[];
   generatedAt: string;
   weekdayResults: WeekdaySaturationResult[];
+  weekendDemandBreakpoint: WeekendDemandBreakpoint | null;
   monthlyDrivers: RoomCapacityForecastDriver[];
 }

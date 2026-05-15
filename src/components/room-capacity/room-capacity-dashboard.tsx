@@ -29,6 +29,8 @@ import type {
   RoomCapacityHeatmapCell,
   RoomCapacityMonthResponse,
   RoomCapacitySource,
+  WeekendDemandBreakpointResult,
+  WeekendDemandSlotSummary,
 } from "@/lib/room-capacity/types";
 
 const SCENARIO_ORDER = ["Base", "Bear", "Bull"];
@@ -56,6 +58,28 @@ function formatDateLong(date: string | null): string {
     month: "short",
     year: "numeric",
   }).format(parsed);
+}
+
+function formatMonth(date: string | null): string {
+  if (!date) return "-";
+  const parsed = new Date(`${date}T00:00:00+07:00`);
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Bangkok",
+    month: "short",
+    year: "numeric",
+  }).format(parsed);
+}
+
+function formatCurrencyThb(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "THB",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function formatPercentDecimal(value: number): string {
+  return `${Math.round(value * 100)}%`;
 }
 
 function ratioColor(loadRatio: number): string {
@@ -198,7 +222,7 @@ export function MonthlyHeatmap({ data, source }: { data: RoomCapacityMonthRespon
     <section className="rounded-lg border bg-card">
       <div className="border-b px-4 py-3">
         <h2 className="text-sm font-semibold">Monthly heatmap</h2>
-        <p className="text-xs text-muted-foreground">Today through month end</p>
+        <p className="text-xs text-muted-foreground">Peak room pressure from today through month end</p>
       </div>
       <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-3 xl:grid-cols-5">
         {summaries.map((summary) => (
@@ -341,6 +365,85 @@ export function NoRoomTable({ data }: { data: RoomCapacityMonthResponse }) {
   );
 }
 
+function ForecastMetric({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  tone?: "default" | "danger" | "warn";
+}) {
+  return (
+    <div className="rounded-md border bg-background p-3">
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <div className={`mt-2 text-xl font-semibold ${tone === "danger" ? "text-conflict" : tone === "warn" ? "text-amber-700" : ""}`}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function SlotList({ title, rows, empty }: { title: string; rows: WeekendDemandSlotSummary[]; empty: string }) {
+  return (
+    <div className="rounded-md border bg-background">
+      <div className="border-b px-3 py-2 text-xs font-semibold">{title}</div>
+      {rows.length === 0 ? (
+        <div className="px-3 py-5 text-center text-xs text-muted-foreground">{empty}</div>
+      ) : (
+        <div className="divide-y">
+          {rows.slice(0, 5).map((row) => (
+            <div key={`${row.weekday}-${row.startMinute}-${row.endMinute}`} className="grid grid-cols-[1fr_auto] gap-3 px-3 py-2 text-xs">
+              <div>
+                <div className="font-medium">{row.label}</div>
+                <div className="text-muted-foreground">
+                  {row.lostStudents > 0
+                    ? `${row.lostStudents} lost students`
+                    : `${row.remainingOpenCapacityMinutes ?? 0} open capacity-min`}
+                </div>
+              </div>
+              <div className="text-right font-semibold">
+                {row.lostRevenueThb > 0 ? formatCurrencyThb(row.lostRevenueThb) : `${row.remainingOpenCapacityMinutes ?? 0}`}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DayBreakpointCard({ result }: { result: WeekendDemandBreakpointResult }) {
+  return (
+    <div className="rounded-md border bg-background p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-semibold">{result.weekdayName ?? "Weekend"}</div>
+        <Badge variant={result.status === "reached" ? "destructive" : result.status === "reached_extrapolated" ? "secondary" : "outline"}>
+          {result.status === "reached_extrapolated" ? "extrapolated" : result.status.replace("_", " ")}
+        </Badge>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <div>
+          <div className="text-muted-foreground">Breakpoint</div>
+          <div className="font-medium">{formatMonth(result.breakpointMonth)}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Lost demand</div>
+          <div className="font-medium text-conflict">{formatPercentDecimal(result.lostRevenuePct)}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Captured</div>
+          <div className="font-medium">{formatCurrencyThb(result.capturedRevenueThb)}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Lost</div>
+          <div className="font-medium text-conflict">{formatCurrencyThb(result.lostRevenueThb)}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ForecastPanel({
   forecast,
   scenario,
@@ -351,13 +454,15 @@ export function ForecastPanel({
   onScenarioChange: (scenario: string) => void;
 }) {
   const availableScenarios = forecast?.scenarios.length ? forecast.scenarios : SCENARIO_ORDER;
+  const breakpoint = forecast?.weekendDemandBreakpoint;
+  const combined = breakpoint?.combined;
   return (
     <section className="rounded-lg border bg-card">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
         <div>
-          <h2 className="text-sm font-semibold">Saturation forecast</h2>
+          <h2 className="text-sm font-semibold">Weekend demand capture</h2>
           <p className="text-xs text-muted-foreground">
-            Room-slot full and room+tutor full, by weekday
+            Revenue lost when preferred Saturday/Sunday slots cannot be fulfilled exactly
           </p>
         </div>
         <div className="flex items-center gap-1">
@@ -379,23 +484,50 @@ export function ForecastPanel({
           Forecast aggregates have not been imported yet. Import a projection JSON with
           <span className="font-mono"> scripts/import-room-capacity-model.ts</span>.
         </div>
+      ) : !breakpoint || !combined ? (
+        <div className="p-4 text-sm text-muted-foreground">
+          Weekend demand capture needs imported package mix plus current Saturday/Sunday onsite schedule frequency.
+        </div>
       ) : (
-        <div className="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-4">
-          {(forecast?.weekdayResults ?? []).map((row) => (
-            <div key={row.weekday} className="rounded-md border bg-background p-3">
-              <div className="text-sm font-semibold">{row.weekdayName}</div>
-              <div className="mt-3 space-y-2 text-xs">
-                <div className="flex items-center justify-between gap-2">
+        <div className="space-y-3 p-3">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <ForecastMetric label="Breakpoint month" value={formatMonth(combined.breakpointMonth)} tone={combined.status === "reached" ? "danger" : "warn"} />
+            <ForecastMetric label="Lost demand" value={formatPercentDecimal(combined.lostRevenuePct)} tone={combined.lostRevenuePct > 0.5 ? "danger" : "default"} />
+            <ForecastMetric label="Captured revenue" value={formatCurrencyThb(combined.capturedRevenueThb)} />
+            <ForecastMetric label="Lost revenue" value={formatCurrencyThb(combined.lostRevenueThb)} tone={combined.lostRevenueThb > 0 ? "danger" : "default"} />
+            <ForecastMetric label="Open capacity-min" value={String(combined.remainingOpenCapacityMinutes)} />
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            {(breakpoint.byDay ?? []).map((result) => (
+              <DayBreakpointCard key={result.weekdayName ?? result.breakpointMonth ?? result.status} result={result} />
+            ))}
+          </div>
+          <div className="grid gap-3 lg:grid-cols-2">
+            <SlotList
+              title="Preferred slots losing the most revenue"
+              rows={combined.topLostPreferredSlots}
+              empty="No lost preferred slots in the reported month."
+            />
+            <SlotList
+              title="Open capacity not captured"
+              rows={combined.topOpenNonCapturedSlots}
+              empty="No unmatched open weekend capacity in the reported month."
+            />
+          </div>
+          <div className="rounded-md border bg-background p-3 text-xs text-muted-foreground">
+            Monthly heatmap percentage is peak room pressure in an occupied 30-minute bin. Weekend breakpoint is the month when preferred-slot revenue lost is greater than preferred-slot revenue captured.
+          </div>
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {(forecast?.weekdayResults ?? []).map((row) => (
+              <div key={row.weekday} className="rounded-md border bg-background p-3">
+                <div className="text-xs font-semibold">{row.weekdayName}</div>
+                <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
                   <span className="text-muted-foreground">Room slot full</span>
                   <span className="font-medium">{formatDateLong(row.roomSlotFullDate)}</span>
                 </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-muted-foreground">Room + tutor full</span>
-                  <span className="font-medium">{formatDateLong(row.roomTutorFullDate)}</span>
-                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
     </section>
@@ -446,12 +578,8 @@ export function RoomCapacityDashboard() {
     if (!loading) void loadForecast(scenario).catch((err) => setError(err instanceof Error ? err.message : "Failed to load forecast"));
   }, [scenario]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const firstSaturation = useMemo(() => {
-    const dates = (forecast?.weekdayResults ?? [])
-      .flatMap((row) => [row.roomSlotFullDate, row.roomTutorFullDate])
-      .filter((date): date is string => Boolean(date))
-      .sort();
-    return dates[0] ?? null;
+  const weekendBreakpointMonth = useMemo(() => {
+    return forecast?.weekendDemandBreakpoint?.combined.breakpointMonth ?? null;
   }, [forecast]);
 
   if (loading && !monthData) {
@@ -521,7 +649,7 @@ export function RoomCapacityDashboard() {
         <StatCard icon={Layers3} label="Impacted rooms" value={String(monthData.kpis.impactedRooms)} tone={monthData.kpis.impactedRooms ? "warn" : "default"} />
         <StatCard icon={UsersRound} label="Projected no-room" value={String(monthData.kpis.projectedNoRoomSessions)} tone={monthData.kpis.projectedNoRoomSessions ? "danger" : "default"} />
         <StatCard icon={Gauge} label="Peak current load" value={formatRatio(monthData.kpis.peakLoadRatio)} tone={monthData.kpis.peakLoadRatio > 1 ? "danger" : "default"} />
-        <StatCard icon={CalendarDays} label="First saturation" value={firstSaturation ? formatDate(firstSaturation) : "-"} tone={firstSaturation ? "warn" : "default"} />
+        <StatCard icon={CalendarDays} label="Weekend breakpoint" value={weekendBreakpointMonth ? formatMonth(weekendBreakpointMonth) : "-"} tone={weekendBreakpointMonth ? "warn" : "default"} />
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">

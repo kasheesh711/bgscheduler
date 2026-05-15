@@ -12,12 +12,13 @@ import {
   findUnmatchedCurrentAllocations,
 } from "./analysis";
 import { addBangkokDays, bangkokDateKey, bangkokDateStartUtc, defaultRoomCapacityRange, endOfBangkokMonth } from "./dates";
-import { driversForScenario, seededDemandMixFromSchedule, simulateSaturation } from "./forecast";
+import { driversForScenario, seededDemandMixFromSchedule, simulateSaturation, simulateWeekendDemandBreakpoint } from "./forecast";
 import type {
   RoomCapacityDemandMixRow,
   RoomCapacityForecastDriver,
   RoomCapacityForecastResponse,
   RoomCapacityMonthResponse,
+  RoomCapacityPackageMixRow,
   RoomCapacityRoom,
   RoomCapacitySession,
 } from "./types";
@@ -301,6 +302,7 @@ async function loadForecastDrivers(db: Database, modelRunId: string): Promise<Ro
   return rows.map((row) => ({
     scenario: row.scenario,
     month: row.month,
+    newPaidStudents: row.newPaidStudents,
     forecastConsumedHours: row.forecastConsumedHours,
     scheduledHours: row.scheduledHours,
     capacityUtilizationPct: row.capacityUtilizationPct,
@@ -328,6 +330,25 @@ async function loadDemandMix(db: Database, modelRunId: string): Promise<RoomCapa
   }));
 }
 
+async function loadPackageMix(db: Database, modelRunId: string): Promise<RoomCapacityPackageMixRow[]> {
+  const rows = await db
+    .select()
+    .from(schema.roomCapacityPackageMix)
+    .where(eq(schema.roomCapacityPackageMix.modelRunId, modelRunId))
+    .orderBy(schema.roomCapacityPackageMix.share);
+  return rows
+    .map((row) => ({
+      packageHourBucket: row.packageHourBucket,
+      packageHours: row.packageHours,
+      averageRevenueThb: row.averageRevenueThb,
+      share: row.share,
+      observedSaleCount: row.observedSaleCount,
+      observedStudentCount: row.observedStudentCount,
+      sourceLabel: row.sourceLabel,
+    }))
+    .sort((left, right) => right.share - left.share || left.packageHours - right.packageHours);
+}
+
 function missingForecastResponse(scenario: string): RoomCapacityForecastResponse {
   return {
     model: {
@@ -349,6 +370,7 @@ function missingForecastResponse(scenario: string): RoomCapacityForecastResponse
       roomSlotReason: null,
       roomTutorReason: null,
     })),
+    weekendDemandBreakpoint: null,
     monthlyDrivers: [],
   };
 }
@@ -372,7 +394,10 @@ export async function getRoomCapacityForecast(
   const activeSnapshot = await getActiveSnapshot(db);
   const rooms = (await listClassroomRooms(db)).map(toRoomCapacityRoom);
   const seedSessions = await loadSessionsForRange(db, activeSnapshot.id, modelRun.forecastStart, seedEndDate);
+  const overridesByDate = await loadLatestOverridesByDate(db, modelRun.forecastStart, seedEndDate);
+  const projectedSeedSessions = buildProjectedSessions(seedSessions, rooms, overridesByDate);
   const importedDemandMix = await loadDemandMix(db, modelRun.id);
+  const packageMix = await loadPackageMix(db, modelRun.id);
   const demandMix = importedDemandMix.length > 0 ? importedDemandMix : seededDemandMixFromSchedule(seedSessions);
   const searchIndex = await ensureIndex(db);
 
@@ -382,6 +407,12 @@ export async function getRoomCapacityForecast(
     demandMix,
     drivers: scenarioDrivers,
     searchIndex,
+  });
+  const weekendDemandBreakpoint = simulateWeekendDemandBreakpoint({
+    rooms,
+    seedSessions: projectedSeedSessions,
+    packageMix,
+    drivers: scenarioDrivers,
   });
 
   return {
@@ -397,6 +428,7 @@ export async function getRoomCapacityForecast(
     scenarios,
     generatedAt: new Date().toISOString(),
     weekdayResults,
+    weekendDemandBreakpoint,
     monthlyDrivers: scenarioDrivers,
   };
 }

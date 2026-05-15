@@ -609,3 +609,19 @@ export const roomCapacityDemandMix = pgTable("room_capacity_demand_mix", {
   index("rcdm_model_run_idx").on(table.modelRunId),
   index("rcdm_weekday_idx").on(table.modelRunId, table.weekday),
 ]);
+
+export const roomCapacityPackageMix = pgTable("room_capacity_package_mix", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  modelRunId: uuid("model_run_id").notNull().references(() => roomCapacityModelRuns.id),
+  packageHourBucket: text("package_hour_bucket").notNull(),
+  packageHours: doublePrecision("package_hours").notNull(),
+  averageRevenueThb: doublePrecision("average_revenue_thb").notNull(),
+  share: doublePrecision("share").notNull(),
+  observedSaleCount: integer("observed_sale_count").notNull().default(0),
+  observedStudentCount: doublePrecision("observed_student_count").notNull().default(0),
+  sourceLabel: text("source_label").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("rcpm_model_run_idx").on(table.modelRunId),
+  index("rcpm_bucket_idx").on(table.modelRunId, table.packageHourBucket),
+]);

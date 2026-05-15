@@ -44,6 +44,25 @@ const forecastResponse = {
   scenarios: ["Base"],
   generatedAt: "2026-05-15T00:00:00.000Z",
   weekdayResults: [],
+  weekendDemandBreakpoint: {
+    preferenceSource: "current_wise_schedule",
+    policy: "preferred_slot_only",
+    openHours: { startMinute: 420, endMinute: 1260 },
+    weekendDemandShare: 0.4,
+    combined: {
+      breakpointMonth: "2026-09-01",
+      status: "reached",
+      capturedRevenueThb: 100_000,
+      lostRevenueThb: 120_000,
+      lostRevenuePct: 0.545,
+      capturedStudents: 10,
+      lostStudents: 12,
+      remainingOpenCapacityMinutes: 3000,
+      topLostPreferredSlots: [],
+      topOpenNonCapturedSlots: [],
+    },
+    byDay: [],
+  },
   monthlyDrivers: [],
 };
 
@@ -90,7 +109,11 @@ describe("room capacity API routes", () => {
 
     expect(res.status).toBe(200);
     expect(getRoomCapacityForecast).toHaveBeenCalledWith({ db: true }, { scenario: "Base" });
-    await expect(res.json()).resolves.toMatchObject({ scenario: "Base", model: { status: "ready" } });
+    await expect(res.json()).resolves.toMatchObject({
+      scenario: "Base",
+      model: { status: "ready" },
+      weekendDemandBreakpoint: { combined: { breakpointMonth: "2026-09-01" } },
+    });
   });
 
   it("returns a missing forecast response before aggregate tables exist", async () => {
@@ -100,7 +123,7 @@ describe("room capacity API routes", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toMatchObject({ scenario: "Bull", model: { status: "missing" }, monthlyDrivers: [] });
+    expect(body).toMatchObject({ scenario: "Bull", model: { status: "missing" }, weekendDemandBreakpoint: null, monthlyDrivers: [] });
     expect(body.weekdayResults).toHaveLength(7);
   });
 });

@@ -53,6 +53,7 @@
     "tailwindcss": "^4",
     "testcontainers": "^11.14.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.2",
+    "xlsx": "^0.18.5"
   }
 }

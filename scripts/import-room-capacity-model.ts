@@ -2,10 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { and, eq, gte, lt } from "drizzle-orm";
+import * as XLSX from "xlsx";
 import { getDb } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { buildDemandMixFromSessions } from "@/lib/room-capacity/analysis";
 import { addBangkokDays, bangkokDateKey, bangkokDateStartUtc, endOfBangkokMonth } from "@/lib/room-capacity/dates";
+import { buildPackageMixFromSales, type RawPackageSaleAggregate } from "@/lib/room-capacity/package-mix";
 import type { RoomCapacitySession } from "@/lib/room-capacity/types";
 
 interface ProjectionPayload {
@@ -32,6 +34,170 @@ function numberValue(value: unknown): number {
 
 function booleanValue(value: unknown): boolean {
   return value === true || value === "true" || value === 1;
+}
+
+function normalizedHeader(value: unknown): string {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[().?]/g, "")
+    .trim();
+}
+
+function compactHeader(value: unknown): string {
+  return normalizedHeader(value).replace(/[^a-z0-9ก-๙]/g, "");
+}
+
+function moneyValue(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const cleaned = String(value ?? "")
+    .replace(/[฿,\s]/g, "")
+    .replace(/[()]/g, "")
+    .trim();
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function present(value: unknown): boolean {
+  return String(value ?? "").trim().length > 0;
+}
+
+function paidValue(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  const normalized = normalizedHeader(value);
+  return normalized === "true" || normalized === "yes" || normalized === "paid" || normalized.includes("ชำระ");
+}
+
+function findColumn(headers: unknown[], aliases: string[]): number {
+  const compactAliases = aliases.map(compactHeader);
+  return headers.findIndex((header) => compactAliases.includes(compactHeader(header)));
+}
+
+function findHeaderRow(rows: unknown[][]): number {
+  return rows.findIndex((row) => {
+    const headers = row.map(compactHeader);
+    return headers.includes("transactionno") && headers.includes("totalnoofhrs") && headers.includes("noofstudent");
+  });
+}
+
+function rowValue(row: unknown[], index: number): unknown {
+  return index >= 0 ? row[index] : null;
+}
+
+function parseSalesRecordMonth(fileName: string): string | null {
+  const match = fileName.match(/(\d{4})\s+(\d{2})/);
+  return match ? `${match[1]}-${match[2]}` : null;
+}
+
+function salesRecordDirForProjection(projectionPath: string): string {
+  const outputIndex = projectionPath.indexOf(`${path.sep}outputs${path.sep}`);
+  const datasetRoot = outputIndex >= 0 ? projectionPath.slice(0, outputIndex) : path.dirname(path.dirname(path.dirname(projectionPath)));
+  return path.join(datasetRoot, "salesrecord");
+}
+
+function listSalesRecordFiles(salesDir: string): string[] {
+  const files = fs
+    .readdirSync(salesDir)
+    .filter((file) => file.endsWith(".xlsx") && !file.startsWith("~$"))
+    .sort();
+  const snapshotMonths = new Set(
+    files
+      .filter((file) => file.toLowerCase().includes("snapshot"))
+      .map(parseSalesRecordMonth)
+      .filter((month): month is string => Boolean(month)),
+  );
+
+  return files.filter((file) => {
+    const month = parseSalesRecordMonth(file);
+    return !month || !snapshotMonths.has(month) || file.toLowerCase().includes("snapshot");
+  });
+}
+
+function isResidualPackage(value: unknown): boolean {
+  const normalized = normalizedHeader(value);
+  return normalized.includes("deposit") || normalized.includes("ยอดคงค้าง");
+}
+
+function packageSalesFromWorkbook(filePath: string): RawPackageSaleAggregate[] {
+  const workbook = XLSX.readFile(filePath, { cellDates: true });
+  const fileLabel = path.basename(filePath);
+  const sales: RawPackageSaleAggregate[] = [];
+
+  for (const sheetName of workbook.SheetNames) {
+    const normalizedSheet = sheetName.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (normalizedSheet !== "1packagesales" && normalizedSheet !== "salesrecord") continue;
+
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], {
+      header: 1,
+      raw: false,
+      defval: null,
+    });
+    const headerIndex = findHeaderRow(rows);
+    if (headerIndex < 0) continue;
+
+    const headers = rows[headerIndex];
+    const salesTypeIndex = findColumn(headers, ["Sales Type"]);
+    const packageIndex = findColumn(headers, ["Package"]);
+    const hoursIndex = findColumn(headers, ["Total No. of Hrs"]);
+    const studentCountIndex = findColumn(headers, ["No. of Student"]);
+    const revenueIndex = findColumn(headers, ["ยอดชำระสุทธิ", "Total Price"]);
+    const paidIndex = findColumn(headers, ["สถานะการชำระเงิน", "Already Paid?"]);
+    const paymentDateIndex = findColumn(headers, ["วันที่ชำระเงิน", "Payment Date"]);
+
+    for (const row of rows.slice(headerIndex + 1)) {
+      if (salesTypeIndex >= 0 && !normalizedHeader(rowValue(row, salesTypeIndex)).includes("package")) continue;
+      if (isResidualPackage(rowValue(row, packageIndex))) continue;
+
+      const packageHours = moneyValue(rowValue(row, hoursIndex));
+      const revenueThb = moneyValue(rowValue(row, revenueIndex));
+      const studentCount = moneyValue(rowValue(row, studentCountIndex)) || 1;
+      const paid = paidIndex < 0 || paidValue(rowValue(row, paidIndex)) || present(rowValue(row, paymentDateIndex));
+      if (!paid || packageHours <= 0 || revenueThb <= 0) continue;
+
+      sales.push({
+        packageHours,
+        revenueThb,
+        studentCount,
+        sourceLabel: fileLabel,
+      });
+    }
+  }
+
+  return sales;
+}
+
+function loadPackageSales(salesDir: string): RawPackageSaleAggregate[] {
+  if (!fs.existsSync(salesDir)) return [];
+  return listSalesRecordFiles(salesDir).flatMap((file) => packageSalesFromWorkbook(path.join(salesDir, file)));
+}
+
+async function ensurePackageMixForRun(modelRunId: string, projectionPath: string): Promise<number> {
+  const db = getDb();
+  const [existing] = await db
+    .select({ id: schema.roomCapacityPackageMix.id })
+    .from(schema.roomCapacityPackageMix)
+    .where(eq(schema.roomCapacityPackageMix.modelRunId, modelRunId))
+    .limit(1);
+  if (existing) return 0;
+
+  const salesDir = salesRecordDirForProjection(projectionPath);
+  const sales = loadPackageSales(salesDir);
+  const packageMix = buildPackageMixFromSales(sales);
+  if (packageMix.length === 0) return 0;
+
+  await db.insert(schema.roomCapacityPackageMix).values(
+    packageMix.map((row) => ({
+      modelRunId,
+      packageHourBucket: row.packageHourBucket,
+      packageHours: row.packageHours,
+      averageRevenueThb: row.averageRevenueThb,
+      share: row.share,
+      observedSaleCount: row.observedSaleCount,
+      observedStudentCount: row.observedStudentCount,
+      sourceLabel: row.sourceLabel,
+    })),
+  );
+  return packageMix.length;
 }
 
 async function loadActiveSnapshotSessions(startDate: string, endDate: string): Promise<RoomCapacitySession[]> {
@@ -117,7 +283,9 @@ async function main(): Promise<void> {
     .where(eq(schema.roomCapacityModelRuns.sourceFingerprint, fingerprint))
     .limit(1);
   if (existing) {
+    const insertedPackageMixRows = await ensurePackageMixForRun(existing.id, absolutePath);
     console.log(`Model run already imported: ${existing.id}`);
+    if (insertedPackageMixRows > 0) console.log(`Backfilled package mix rows: ${insertedPackageMixRows}`);
     return;
   }
 
@@ -178,9 +346,12 @@ async function main(): Promise<void> {
     );
   }
 
+  const packageMixRows = await ensurePackageMixForRun(run.id, absolutePath);
+
   console.log(`Imported room capacity model run ${run.id}`);
   console.log(`Forecast drivers: ${driverRows.length}`);
   console.log(`Demand mix rows: ${demandMix.length}`);
+  console.log(`Package mix rows: ${packageMixRows}`);
 }
 
 main().catch((error) => {

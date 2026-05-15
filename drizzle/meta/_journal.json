@@ -57,6 +57,13 @@
       "when": 1778839589525,
       "tag": "0007_purple_daredevil",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1778842897089,
+      "tag": "0008_reflective_shadowcat",
+      "breakpoints": true
     }
   ]
 }

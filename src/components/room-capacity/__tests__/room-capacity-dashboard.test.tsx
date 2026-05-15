@@ -83,6 +83,63 @@ function forecast(status: "ready" | "missing" = "ready"): RoomCapacityForecastRe
         roomTutorReason: "No qualified available tutor",
       },
     ],
+    weekendDemandBreakpoint: status === "ready" ? {
+      preferenceSource: "current_wise_schedule",
+      policy: "preferred_slot_only",
+      openHours: { startMinute: 420, endMinute: 1260 },
+      weekendDemandShare: 0.42,
+      combined: {
+        breakpointMonth: "2026-09-01",
+        status: "reached",
+        capturedRevenueThb: 240_000,
+        lostRevenueThb: 300_000,
+        lostRevenuePct: 0.556,
+        capturedStudents: 20,
+        lostStudents: 25,
+        remainingOpenCapacityMinutes: 4800,
+        topLostPreferredSlots: [
+          {
+            weekday: 6,
+            weekdayName: "Saturday",
+            startMinute: 600,
+            endMinute: 660,
+            label: "Saturday 10:00-11:00",
+            lostRevenueThb: 120_000,
+            lostStudents: 10,
+            attempts: 10,
+          },
+        ],
+        topOpenNonCapturedSlots: [
+          {
+            weekday: 0,
+            weekdayName: "Sunday",
+            startMinute: 420,
+            endMinute: 450,
+            label: "Sunday 07:00-07:30",
+            lostRevenueThb: 0,
+            lostStudents: 0,
+            attempts: 0,
+            remainingOpenCapacityMinutes: 900,
+          },
+        ],
+      },
+      byDay: [
+        {
+          weekday: 6,
+          weekdayName: "Saturday",
+          breakpointMonth: "2026-09-01",
+          status: "reached",
+          capturedRevenueThb: 120_000,
+          lostRevenueThb: 180_000,
+          lostRevenuePct: 0.6,
+          capturedStudents: 10,
+          lostStudents: 15,
+          remainingOpenCapacityMinutes: 1200,
+          topLostPreferredSlots: [],
+          topOpenNonCapturedSlots: [],
+        },
+      ],
+    } : null,
     monthlyDrivers: [],
   };
 }
@@ -117,10 +174,11 @@ describe("room capacity dashboard components", () => {
       <ForecastPanel forecast={forecast("missing")} scenario="Base" onScenarioChange={vi.fn()} />,
     );
 
-    expect(readyHtml).toContain("Saturation forecast");
-    expect(readyHtml).toContain("Monday");
-    expect(readyHtml).toContain("Room slot full");
-    expect(readyHtml).toContain("Mon, 1 Jun 2026");
+    expect(readyHtml).toContain("Weekend demand capture");
+    expect(readyHtml).toContain("Breakpoint month");
+    expect(readyHtml).toContain("Sept 2026");
+    expect(readyHtml).toContain("Preferred slots losing the most revenue");
+    expect(readyHtml).toContain("Saturday 10:00-11:00");
     expect(missingHtml).toContain("Forecast aggregates have not been imported yet");
   });
 });
