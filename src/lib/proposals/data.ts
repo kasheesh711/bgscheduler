@@ -65,6 +65,23 @@ export class ProposalValidationError extends Error {
   }
 }
 
+function isDatabaseOverlapError(error: unknown): boolean {
+  const candidate = error as {
+    code?: string;
+    constraint?: string;
+    cause?: { code?: string; constraint?: string };
+  };
+  const message = error instanceof Error ? error.message : String(error);
+  const code = candidate.code ?? candidate.cause?.code;
+  const constraint = candidate.constraint ?? candidate.cause?.constraint ?? "";
+
+  return code === "23P01" ||
+    constraint === "proposal_items_no_recurring_overlap" ||
+    constraint === "proposal_items_no_one_time_overlap" ||
+    message.includes("proposal_items_no_recurring_overlap") ||
+    message.includes("proposal_items_no_one_time_overlap");
+}
+
 function addPendingHoldWindow(now: Date): Date {
   return new Date(now.getTime() + PENDING_HOLD_MS);
 }
@@ -298,20 +315,21 @@ export async function createProposalBundle(
   }
 
   const expiresAt = addPendingHoldWindow(now);
-  const inserted = await db.transaction(async (tx) => {
-    const [bundle] = await tx
-      .insert(schema.proposalBundles)
-      .values({
-        studentLabel: input.studentLabel.trim(),
-        notes: input.notes?.trim() || null,
-        createdByEmail: actor.email ?? null,
-        createdByName: actor.name ?? null,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .returning({ id: schema.proposalBundles.id });
+  const [bundle] = await db
+    .insert(schema.proposalBundles)
+    .values({
+      studentLabel: input.studentLabel.trim(),
+      notes: input.notes?.trim() || null,
+      createdByEmail: actor.email ?? null,
+      createdByName: actor.name ?? null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning({ id: schema.proposalBundles.id });
 
-    const items = await tx
+  let itemIds: string[];
+  try {
+    const items = await db
       .insert(schema.proposalItems)
       .values(
         input.items.map((item) => ({
@@ -338,13 +356,30 @@ export async function createProposalBundle(
       )
       .returning({ id: schema.proposalItems.id });
 
-    return { bundleId: bundle.id, itemIds: items.map((item) => item.id) };
-  });
+    itemIds = items.map((item) => item.id);
+  } catch (error) {
+    await db
+      .delete(schema.proposalBundles)
+      .where(eq(schema.proposalBundles.id, bundle.id))
+      .catch(() => undefined);
+
+    if (isDatabaseOverlapError(error)) {
+      const refreshedActiveHolds = await listActiveProposalHolds(db, { reconcile: false, now });
+      const conflict = input.items
+        .map((item) => findConflictingProposal(item, refreshedActiveHolds))
+        .find((item): item is ProposalHoldSummary => Boolean(item));
+      if (conflict) {
+        throw new ProposalConflictError(conflict);
+      }
+    }
+
+    throw error;
+  }
 
   const active = await listActiveProposalHolds(db, { reconcile: false, now });
   return {
-    bundleId: inserted.bundleId,
-    items: active.filter((item) => inserted.itemIds.includes(item.itemId)),
+    bundleId: bundle.id,
+    items: active.filter((item) => itemIds.includes(item.itemId)),
   };
 }
 
@@ -381,32 +416,30 @@ export async function patchProposalItem(
       throw new ProposalValidationError("Only active proposal holds can be confirmed");
     }
 
-    await db.transaction(async (tx) => {
-      await tx
-        .update(schema.proposalItems)
-        .set({
-          status: "confirmed",
-          expiresAt: null,
-          confirmedAt: now,
-          ...actorPatch,
-        })
-        .where(eq(schema.proposalItems.id, itemId));
+    await db
+      .update(schema.proposalItems)
+      .set({
+        status: "confirmed",
+        expiresAt: null,
+        confirmedAt: now,
+        ...actorPatch,
+      })
+      .where(eq(schema.proposalItems.id, itemId));
 
-      await tx
-        .update(schema.proposalItems)
-        .set({
-          status: "released",
-          releasedAt: now,
-          ...actorPatch,
-        })
-        .where(
-          and(
-            eq(schema.proposalItems.bundleId, current.bundleId),
-            ne(schema.proposalItems.id, itemId),
-            eq(schema.proposalItems.status, "pending"),
-          ),
-        );
-    });
+    await db
+      .update(schema.proposalItems)
+      .set({
+        status: "released",
+        releasedAt: now,
+        ...actorPatch,
+      })
+      .where(
+        and(
+          eq(schema.proposalItems.bundleId, current.bundleId),
+          ne(schema.proposalItems.id, itemId),
+          eq(schema.proposalItems.status, "pending"),
+        ),
+      );
   } else if (action === "release") {
     if (current.status !== "pending" && current.status !== "confirmed") {
       throw new ProposalValidationError("Only active proposal holds can be released");
