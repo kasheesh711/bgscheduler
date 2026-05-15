@@ -78,6 +78,7 @@ export interface HeatmapCell<TRow extends ClassroomVisualizationRow = ClassroomV
 export const DEFAULT_TIMELINE_START_MINUTE = 7 * 60;
 export const DEFAULT_TIMELINE_END_MINUTE = 21 * 60;
 export const HEATMAP_BIN_MINUTES = 15;
+export const TIMELINE_PLAYBACK_STEP_MINUTES = 30;
 export const REVIEW_LANE_ROOM_NAME = "Needs review";
 
 export function buildTimelineBounds(
@@ -109,6 +110,20 @@ export function minuteToTimeLabel(minute: number): string {
   const hours = Math.floor(clamped / 60);
   const minutes = clamped % 60;
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+export function snapTimelinePlaybackMinute(
+  minute: number,
+  bounds: Pick<TimelineBounds, "startMinute" | "endMinute">,
+  stepMinutes = TIMELINE_PLAYBACK_STEP_MINUTES,
+): number {
+  if (!Number.isFinite(minute)) return bounds.startMinute;
+
+  const clamped = Math.min(bounds.endMinute, Math.max(bounds.startMinute, minute));
+  if (clamped >= bounds.endMinute || stepMinutes <= 0) return clamped;
+
+  const stepsSinceStart = Math.floor((clamped - bounds.startMinute) / stepMinutes);
+  return bounds.startMinute + stepsSinceStart * stepMinutes;
 }
 
 export function overlapsMinute(row: Pick<ClassroomVisualizationRow, "startMinute" | "endMinute">, minute: number): boolean {

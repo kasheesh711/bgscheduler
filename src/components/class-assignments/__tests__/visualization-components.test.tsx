@@ -74,6 +74,7 @@ describe("class assignment visualization components", () => {
 
     expect(html).toContain("Play");
     expect(html).toContain("09:00");
+    expect(html).toContain("step=\"30\"");
     expect(html).toContain("aria-label=\"Schedule playback time\"");
     expect(html).toContain("15m/s");
   });

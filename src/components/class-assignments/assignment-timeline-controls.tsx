@@ -2,8 +2,11 @@
 
 import { Pause, Play, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { TimelineBounds } from "@/lib/classrooms/visualization";
-import { minuteToTimeLabel } from "@/lib/classrooms/visualization";
+import {
+  TIMELINE_PLAYBACK_STEP_MINUTES,
+  minuteToTimeLabel,
+  type TimelineBounds,
+} from "@/lib/classrooms/visualization";
 
 interface AssignmentTimelineControlsProps {
   bounds: TimelineBounds;
@@ -66,7 +69,7 @@ export function AssignmentTimelineControls({
           type="range"
           min={bounds.startMinute}
           max={bounds.endMinute}
-          step={5}
+          step={TIMELINE_PLAYBACK_STEP_MINUTES}
           value={currentMinute}
           disabled={disabled}
           onChange={(event) => onMinuteChange(Number(event.target.value))}

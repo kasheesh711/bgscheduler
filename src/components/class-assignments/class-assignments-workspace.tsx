@@ -33,7 +33,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { buildTimelineBounds } from "@/lib/classrooms/visualization";
+import { buildTimelineBounds, snapTimelinePlaybackMinute } from "@/lib/classrooms/visualization";
 import { AssignmentTimelineControls } from "./assignment-timeline-controls";
 import { FloorPlanOccupancy } from "./floor-plan-occupancy";
 import { RoomCalendarView } from "./room-calendar-view";
@@ -274,7 +274,7 @@ export function ClassAssignmentsWorkspace() {
         playbackMinuteRef.current + elapsedSeconds * playbackSpeed,
       );
       playbackMinuteRef.current = nextMinute;
-      setCurrentMinute(Math.round(nextMinute));
+      setCurrentMinute(snapTimelinePlaybackMinute(nextMinute, timelineBounds));
 
       if (nextMinute >= timelineBounds.endMinute) {
         setPlaying(false);
@@ -292,7 +292,7 @@ export function ClassAssignmentsWorkspace() {
         frameRef.current = null;
       }
     };
-  }, [playing, playbackSpeed, rows.length, timelineBounds.endMinute]);
+  }, [playing, playbackSpeed, rows.length, timelineBounds]);
 
   useEffect(() => {
     setPublishProgress(null);

@@ -9,6 +9,7 @@ import {
   buildRoomCalendarEvents,
   buildRoomOccupancyState,
   buildTimelineBounds,
+  snapTimelinePlaybackMinute,
   type ClassroomVisualizationRoom,
   type ClassroomVisualizationRow,
   REVIEW_LANE_ROOM_NAME,
@@ -76,6 +77,16 @@ describe("classroom visualization helpers", () => {
 
     expect(bounds.startMinute).toBe(6 * 60 + 30);
     expect(bounds.endMinute).toBe(21 * 60 + 15);
+  });
+
+  it("snaps playback display to half-hour increments", () => {
+    const bounds = { startMinute: 7 * 60, endMinute: 21 * 60 };
+
+    expect(snapTimelinePlaybackMinute(7 * 60, bounds)).toBe(7 * 60);
+    expect(snapTimelinePlaybackMinute(7 * 60 + 29, bounds)).toBe(7 * 60);
+    expect(snapTimelinePlaybackMinute(7 * 60 + 30, bounds)).toBe(7 * 60 + 30);
+    expect(snapTimelinePlaybackMinute(20 * 60 + 59, bounds)).toBe(20 * 60 + 30);
+    expect(snapTimelinePlaybackMinute(21 * 60, bounds)).toBe(21 * 60);
   });
 
   it("treats active occupancy as start inclusive and end exclusive", () => {
