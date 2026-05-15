@@ -104,8 +104,11 @@ function dateRangeForBangkokDate(value: string): { start: Date; end: Date } {
   return { start, end };
 }
 
-function formatTime(date: Date): string {
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+function formatMinute(minute: number): string {
+  const normalized = Math.max(0, minute);
+  const hours = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 function classroomRoomLabel(row: Pick<ClassroomRow, "status" | "assignedRoom">): string {
@@ -1173,15 +1176,22 @@ export async function getTeacherScheduleForRun(
   db: Database,
   runId: string,
 ): Promise<TeacherSchedule> {
+  const [run] = await db
+    .select({ assignmentDate: schema.classroomAssignmentRuns.assignmentDate })
+    .from(schema.classroomAssignmentRuns)
+    .where(eq(schema.classroomAssignmentRuns.id, runId))
+    .limit(1);
+  if (!run) throw new Error("Assignment run not found");
+
   const rows = await loadRowsForRun(db, runId);
   const byTutor = new Map<string, TeacherScheduleBlock[]>();
   for (const row of rows) {
     const blocks = byTutor.get(row.tutorDisplayName) ?? [];
     blocks.push({
       rowId: row.id,
-      date: row.startTime.toISOString().slice(0, 10),
-      startTime: formatTime(new Date(row.startTime)),
-      endTime: formatTime(new Date(row.endTime)),
+      date: run.assignmentDate,
+      startTime: formatMinute(row.startMinute),
+      endTime: formatMinute(row.endMinute),
       room: classroomRoomLabel(row),
       studentName: row.studentName,
       subject: row.subject,
@@ -1196,7 +1206,10 @@ export async function getTeacherScheduleForRun(
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([tutorDisplayName, blocks]) => ({
         tutorDisplayName,
-        blocks: blocks.sort((a, b) => a.startTime.localeCompare(b.startTime)),
+        blocks: blocks.sort((a, b) => {
+          if (a.startTime !== b.startTime) return a.startTime.localeCompare(b.startTime);
+          return a.rowId.localeCompare(b.rowId);
+        }),
       })),
   };
 }

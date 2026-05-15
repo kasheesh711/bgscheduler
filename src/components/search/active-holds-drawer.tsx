@@ -3,6 +3,7 @@
 import { Clock, LockKeyhole, RefreshCw, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
 import type { ProposalHoldSummary, ProposalPatchAction } from "@/lib/proposals/types";
 import { cn } from "@/lib/utils";
 
@@ -27,13 +28,7 @@ function formatHoldWhen(hold: ProposalHoldSummary): string {
 
 function formatExpiry(value?: string): string {
   if (!value) return "No expiry";
-  const date = new Date(value);
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return formatBangkokShortDateTime(value);
 }
 
 function statusVariant(status: ProposalHoldSummary["status"]): "secondary" | "outline" {

@@ -129,4 +129,13 @@ describe("class assignment visualization components", () => {
     expect(packageJson).not.toContain('"motion"');
     expect(packageJson).not.toContain("@react-spring");
   });
+
+  it("renders class-assignment row times from Bangkok minute fields", () => {
+    const workspace = read("src/components/class-assignments/class-assignments-workspace.tsx");
+
+    expect(workspace).toContain("minuteToTimeLabel(row.startMinute)");
+    expect(workspace).toContain("formatRowTime(row)");
+    expect(workspace).not.toContain("formatTime(row.startTime)");
+    expect(workspace).not.toContain("startTime.localeCompare");
+  });
 });

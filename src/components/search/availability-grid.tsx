@@ -8,6 +8,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
 import type { RangeGridRow, TutorReviewResult, BlockingSessionInfo } from "@/lib/search/types";
 
 function formatSlotLabel(start: string, end: string): string {
@@ -49,12 +50,7 @@ function BlockingSessionPopover({ sessions }: { sessions: BlockingSessionInfo[] 
                 </Badge>
                 {s.proposalHold.expiresAt && (
                   <Badge variant="outline" className="text-[10px] px-1 py-0">
-                    expires {new Date(s.proposalHold.expiresAt).toLocaleString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })}
+                    expires {formatBangkokShortDateTime(s.proposalHold.expiresAt)}
                   </Badge>
                 )}
               </div>

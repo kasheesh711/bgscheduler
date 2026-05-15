@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { X, Copy, Check, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { formatBangkokIsoDate, getBangkokWeekdayForIsoDate } from "@/lib/bangkok-time";
 import { formatSlotTime, type RecommendedSlot } from "@/lib/search/recommend";
 import { DAY_NAMES } from "@/components/search/search-form";
 import type { SearchContext } from "@/components/search/search-form";
@@ -20,8 +21,7 @@ type Tone = "friendly" | "terse";
 function formatDayForSlot(searchContext: SearchContext | null): string {
   if (!searchContext) return "";
   if (searchContext.searchMode === "one_time" && searchContext.date) {
-    const d = new Date(searchContext.date + "T00:00:00");
-    return `${DAY_NAMES[d.getDay()]} ${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
+    return `${DAY_NAMES[getBangkokWeekdayForIsoDate(searchContext.date)]} ${formatBangkokIsoDate(searchContext.date)}`;
   }
   if (searchContext.searchMode === "recurring" && searchContext.dayOfWeek !== undefined) {
     const longDays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];

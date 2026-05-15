@@ -15,8 +15,6 @@ interface AssignmentEmailRow {
   groupId: string;
   canonicalKey: string;
   tutorDisplayName: string;
-  startTime: Date;
-  endTime: Date;
   startMinute: number;
   endMinute: number;
   sessionType: string | null;
@@ -148,13 +146,11 @@ function formatRunDate(date: string): string {
   return `${day}/${month}/${year}`;
 }
 
-function formatBangkokTime(date: Date): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Bangkok",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
+function formatMinute(minute: number): string {
+  const normalized = Math.max(0, minute);
+  const hours = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 function escapeHtml(value: string): string {
@@ -184,7 +180,7 @@ function roomLabel(row: Pick<AssignmentEmailRow, "status" | "assignedRoom">): st
 function toBlock(row: AssignmentEmailRow): ScheduleEmailBlock {
   return {
     rowId: row.id,
-    time: `${formatBangkokTime(row.startTime)}-${formatBangkokTime(row.endTime)}`,
+    time: `${formatMinute(row.startMinute)}-${formatMinute(row.endMinute)}`,
     studentOrClass: studentOrClass(row),
     subject: classLabel(row),
     mode: sessionModeLabel(row.sessionType),
@@ -263,8 +259,6 @@ async function loadRows(db: Database, runId: string): Promise<AssignmentEmailRow
       groupId: schema.classroomAssignmentRows.groupId,
       canonicalKey: schema.tutorIdentityGroups.canonicalKey,
       tutorDisplayName: schema.classroomAssignmentRows.tutorDisplayName,
-      startTime: schema.classroomAssignmentRows.startTime,
-      endTime: schema.classroomAssignmentRows.endTime,
       startMinute: schema.classroomAssignmentRows.startMinute,
       endMinute: schema.classroomAssignmentRows.endMinute,
       sessionType: schema.classroomAssignmentRows.sessionType,
@@ -283,11 +277,6 @@ async function loadRows(db: Database, runId: string): Promise<AssignmentEmailRow
     .where(eq(schema.classroomAssignmentRows.runId, runId));
 
   return rows
-    .map((row) => ({
-      ...row,
-      startTime: new Date(row.startTime),
-      endTime: new Date(row.endTime),
-    }))
     .sort((a, b) => {
       if (a.startMinute !== b.startMinute) return a.startMinute - b.startMinute;
       return a.tutorDisplayName.localeCompare(b.tutorDisplayName);

@@ -33,7 +33,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { buildTimelineBounds, snapTimelinePlaybackMinute } from "@/lib/classrooms/visualization";
+import { buildTimelineBounds, minuteToTimeLabel, snapTimelinePlaybackMinute } from "@/lib/classrooms/visualization";
 import { AssignmentTimelineControls } from "./assignment-timeline-controls";
 import { FloorPlanOccupancy } from "./floor-plan-occupancy";
 import { RoomCalendarView } from "./room-calendar-view";
@@ -134,13 +134,8 @@ function todayBangkok(): string {
   return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
 }
 
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Bangkok",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(value));
+function formatRowTime(row: Pick<ClassroomRow, "startMinute" | "endMinute">): string {
+  return `${minuteToTimeLabel(row.startMinute)}-${minuteToTimeLabel(row.endMinute)}`;
 }
 
 function classLabel(row: ClassroomRow): string {
@@ -739,7 +734,7 @@ export function ClassAssignmentsWorkspace() {
                   rows.map((row) => (
                     <TableRow key={row.id}>
                       <TableCell className="font-mono text-xs">
-                        {formatTime(row.startTime)}-{formatTime(row.endTime)}
+                        {formatRowTime(row)}
                       </TableCell>
                       <TableCell className="max-w-[220px] whitespace-normal font-medium">
                         {row.tutorDisplayName}
@@ -817,7 +812,11 @@ export function ClassAssignmentsWorkspace() {
                   {[...selectedTutors].sort((a, b) => a.localeCompare(b)).map((tutor) => {
                     const tutorRows = selectedTutorRows
                       .filter((row) => row.tutorDisplayName === tutor)
-                      .sort((a, b) => a.startTime.localeCompare(b.startTime));
+                      .sort((a, b) => {
+                        if (a.startMinute !== b.startMinute) return a.startMinute - b.startMinute;
+                        if (a.endMinute !== b.endMinute) return a.endMinute - b.endMinute;
+                        return a.id.localeCompare(b.id);
+                      });
                     return (
                       <div key={tutor} className="rounded-lg border p-3">
                         <div className="mb-2 text-sm font-semibold">{tutor}</div>
@@ -825,7 +824,7 @@ export function ClassAssignmentsWorkspace() {
                           {tutorRows.map((row) => (
                             <div key={row.id} className="rounded-md border-l-4 border-primary bg-muted/40 p-2 text-xs">
                               <div className="font-mono">
-                                {formatTime(row.startTime)}-{formatTime(row.endTime)} - {roomLabel(row)}
+                                {formatRowTime(row)} - {roomLabel(row)}
                               </div>
                               <div className="mt-1 font-medium">{row.studentName || row.title || "Untitled class"}</div>
                               <div className="text-muted-foreground">

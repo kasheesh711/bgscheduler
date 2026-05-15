@@ -141,6 +141,28 @@ describe("schedule email preview", () => {
     expect(preview.previews[0].blocks.map((block) => block.room)).toContain("Remote / no room needed");
   });
 
+  it("formats schedule blocks from Bangkok minute columns", async () => {
+    const db = makePreviewDb({
+      rows: [
+        row({
+          startTime: new Date("2026-05-15T09:00:00.000Z"),
+          endTime: new Date("2026-05-15T10:00:00.000Z"),
+          startMinute: 9 * 60,
+          endMinute: 10 * 60,
+        }),
+      ],
+      contacts: [{
+        canonicalKey: "Kevin",
+        onsiteEmail: "kevhsh7@gmail.com",
+        active: true,
+      }],
+    });
+
+    const preview = await getScheduleEmailPreview(db as never, "run-1");
+
+    expect(preview.previews[0].blocks[0].time).toBe("09:00-10:00");
+  });
+
   it("blocks sending when the non-online email is missing", async () => {
     const db = makePreviewDb({
       rows: [row({ canonicalKey: "Pearcha", tutorDisplayName: "Pearcha" })],

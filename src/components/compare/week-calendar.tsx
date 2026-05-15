@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { getMondayForDate } from "@/hooks/use-compare";
+import { formatBangkokDateTime } from "@/lib/bangkok-time";
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -112,7 +113,12 @@ export function WeekCalendar({ weekStart, onWeekSelect }: WeekCalendarProps) {
                 isToday ? "ring-1 ring-primary/40 rounded-sm" : "",
                 !isInSelectedWeek && !isInHoverWeek ? "hover:bg-muted/40" : "",
               ].filter(Boolean).join(" ")}
-              aria-label={cell.toLocaleDateString("en-US", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+              aria-label={formatBangkokDateTime(cell, {
+                weekday: "long",
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+              }, "en-US")}
               aria-pressed={isInSelectedWeek}
             >
               {cell.getDate()}

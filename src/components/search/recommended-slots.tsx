@@ -5,6 +5,7 @@ import { Sparkles, Check, Copy, Calendar, Send, LockKeyhole } from "lucide-react
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { TUTOR_COLORS } from "@/components/compare/session-colors";
+import { formatBangkokIsoDate, getBangkokWeekdayForIsoDate } from "@/lib/bangkok-time";
 import { getRecommendedSlots, formatSlotTime, type RecommendedSlot } from "@/lib/search/recommend";
 import { DAY_NAMES } from "@/components/search/search-form";
 import { cn } from "@/lib/utils";
@@ -27,9 +28,8 @@ function getDayLabel(searchContext: SearchContext | null): {
 } {
   if (!searchContext) return { dayLabel: "", dateLabel: "" };
   if (searchContext.searchMode === "one_time" && searchContext.date) {
-    const d = new Date(searchContext.date + "T00:00:00");
-    const dayLabel = DAY_NAMES[d.getDay()];
-    const dateLabel = d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    const dayLabel = DAY_NAMES[getBangkokWeekdayForIsoDate(searchContext.date)];
+    const dateLabel = formatBangkokIsoDate(searchContext.date);
     return { dayLabel, dateLabel };
   }
   if (searchContext.searchMode === "recurring" && searchContext.dayOfWeek !== undefined) {

@@ -11,6 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { formatBangkokDateTime } from "@/lib/bangkok-time";
 import type { SearchResponse, TutorResult, TutorReviewResult, SlotResult } from "@/lib/search/types";
 
 const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -28,7 +29,7 @@ export function ResultsView({ response }: ResultsViewProps) {
       <div className="flex items-center justify-between text-sm text-muted-foreground">
         <span>
           Snapshot: {snapshotMeta.snapshotId.slice(0, 8)}... | Synced:{" "}
-          {new Date(snapshotMeta.syncedAt).toLocaleString()} | {latencyMs}ms
+          {formatBangkokDateTime(snapshotMeta.syncedAt)} | {latencyMs}ms
         </span>
         {snapshotMeta.stale && (
           <Badge variant="destructive">Stale Data</Badge>

@@ -12,6 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatBangkokDateTime } from "@/lib/bangkok-time";
 import { isApiSnapshotStale } from "@/lib/ops/stale";
 
 interface HealthData {
@@ -194,7 +195,7 @@ export default function DataHealthPage() {
           <CardContent>
             <p className="text-lg font-semibold">
               {data.lastSuccessfulSync
-                ? new Date(data.lastSuccessfulSync).toLocaleString()
+                ? formatBangkokDateTime(data.lastSuccessfulSync)
                 : "Never"}
             </p>
             {isSnapshotStale && staleMinutes !== null && (
@@ -243,7 +244,7 @@ export default function DataHealthPage() {
           <CardContent>
             <p className="text-lg font-semibold">
               {data.lastFailedSync
-                ? new Date(data.lastFailedSync).toLocaleString()
+                ? formatBangkokDateTime(data.lastFailedSync)
                 : "None"}
             </p>
             {data.lastFailureError && (
@@ -430,9 +431,9 @@ export default function DataHealthPage() {
                       {s.status}
                     </Badge>
                   </TableCell>
-                  <TableCell>{new Date(s.startedAt).toLocaleString()}</TableCell>
+                  <TableCell>{formatBangkokDateTime(s.startedAt)}</TableCell>
                   <TableCell>
-                    {s.finishedAt ? new Date(s.finishedAt).toLocaleString() : "-"}
+                    {s.finishedAt ? formatBangkokDateTime(s.finishedAt) : "-"}
                   </TableCell>
                   <TableCell>{s.teacherCount ?? "-"}</TableCell>
                   <TableCell className="text-xs text-destructive max-w-xs truncate">
