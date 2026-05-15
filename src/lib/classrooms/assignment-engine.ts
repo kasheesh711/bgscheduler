@@ -2,9 +2,11 @@ import {
   type ClassroomRoomDefinition,
   getPreferredRoom,
   isGiftTutor,
+  isKevinPriorityTutor,
   NO_ROOM_AVAILABLE,
   PREFERRED_ROOMS,
   ROOM_JOY,
+  ROOM_THINK_OUTSIDE_THE_BOX,
   TV_REQUIRED_TUTORS,
   normalizeTutorName,
 } from "./rooms";
@@ -70,6 +72,17 @@ interface OccupancyInterval {
   sessionId: string;
 }
 
+interface AssignmentSessionFacts {
+  minCapacity: number;
+  capacityWarnings: string[];
+  needsTv: boolean;
+  preferredRoom: string | null;
+  isGift: boolean;
+  isKevinPriority: boolean;
+  overrideRoom: string | null;
+  requiresCenterRoom: boolean;
+}
+
 export function isOfflineSession(value: string | null | undefined): boolean {
   return isOnsiteSessionType(value);
 }
@@ -114,11 +127,25 @@ function isAvailable(
   occupancy: Map<string, OccupancyInterval[]>,
   roomName: string,
   session: AssignmentSession,
+  ignoreSessionId?: string,
 ): boolean {
   const intervals = occupancy.get(roomName) ?? [];
   return !intervals.some((interval) =>
+    interval.sessionId !== ignoreSessionId &&
     overlaps(session.startMinute, session.endMinute, interval.startMinute, interval.endMinute),
   );
+}
+
+function addRoomInterval(
+  occupancy: Map<string, OccupancyInterval[]>,
+  roomName: string,
+  session: AssignmentSession,
+): void {
+  occupancy.get(roomName)?.push({
+    startMinute: session.startMinute,
+    endMinute: session.endMinute,
+    sessionId: session.wiseSessionId,
+  });
 }
 
 function sortByCapacityThenOrder(
@@ -215,6 +242,27 @@ function buildCenterRoomRequirementMap(sessions: AssignmentSession[]): Map<strin
   return requirements;
 }
 
+function buildSessionFacts(
+  session: AssignmentSession,
+  centerRoomRequiredBySessionId: Map<string, boolean>,
+  overrideBySessionId: Map<string, string | null | undefined>,
+): AssignmentSessionFacts {
+  const tutorNorm = normalizeTutorName(session.tutorDisplayName);
+  const { minCapacity, warnings } = inferCapacity(session);
+  const overrideRoom = normalizeTutorName(overrideBySessionId.get(session.wiseSessionId) ?? "") || null;
+
+  return {
+    minCapacity,
+    capacityWarnings: warnings,
+    needsTv: TV_REQUIRED_TUTORS.has(tutorNorm),
+    preferredRoom: getPreferredRoom(session.tutorDisplayName) ?? null,
+    isGift: isGiftTutor(session.tutorDisplayName),
+    isKevinPriority: isKevinPriorityTutor(session.tutorDisplayName),
+    overrideRoom,
+    requiresCenterRoom: Boolean(overrideRoom) || centerRoomRequiredBySessionId.get(session.wiseSessionId) !== false,
+  };
+}
+
 export function assignClassrooms(
   sessions: AssignmentSession[],
   rooms: ClassroomRoomDefinition[],
@@ -227,6 +275,12 @@ export function assignClassrooms(
 
   const lastByTutor = new Map<string, { endMinute: number; room: string }>();
   const centerRoomRequiredBySessionId = buildCenterRoomRequirementMap(sessions);
+  const factsBySessionId = new Map(
+    sessions.map((session) => [
+      session.wiseSessionId,
+      buildSessionFacts(session, centerRoomRequiredBySessionId, overrideBySessionId),
+    ]),
+  );
   const sortedSessions = [...sessions].sort((a, b) => {
     if (a.startMinute !== b.startMinute) return a.startMinute - b.startMinute;
     const priorityDiff = sessionPriority(a) - sessionPriority(b);
@@ -234,23 +288,62 @@ export function assignClassrooms(
     return normalizeTutorName(a.tutorDisplayName).localeCompare(normalizeTutorName(b.tutorDisplayName));
   });
 
+  const protectedClaims = new Map<string, OccupancyInterval[]>();
+  for (const room of activeRooms) protectedClaims.set(room.name, []);
+
+  const validOverrideBySessionId = new Set<string>();
+  for (const session of sortedSessions) {
+    const facts = factsBySessionId.get(session.wiseSessionId);
+    if (!facts?.overrideRoom) continue;
+    if (!roomByName.has(facts.overrideRoom)) continue;
+    if (!roomPassesConstraints(roomByName.get(facts.overrideRoom), session, facts.minCapacity, facts.needsTv)) continue;
+    if (!isAvailable(protectedClaims, facts.overrideRoom, session, session.wiseSessionId)) continue;
+
+    addRoomInterval(protectedClaims, facts.overrideRoom, session);
+    validOverrideBySessionId.add(session.wiseSessionId);
+  }
+
+  const kevinPriorityClaimBySessionId = new Set<string>();
+  for (const session of sortedSessions) {
+    const facts = factsBySessionId.get(session.wiseSessionId);
+    if (!facts?.isKevinPriority) continue;
+    if (validOverrideBySessionId.has(session.wiseSessionId)) continue;
+    if (!facts.requiresCenterRoom) continue;
+    if (
+      !roomPassesConstraints(
+        roomByName.get(ROOM_THINK_OUTSIDE_THE_BOX),
+        session,
+        facts.minCapacity,
+        facts.needsTv,
+      )
+    ) {
+      continue;
+    }
+    if (!isAvailable(protectedClaims, ROOM_THINK_OUTSIDE_THE_BOX, session, session.wiseSessionId)) continue;
+
+    addRoomInterval(protectedClaims, ROOM_THINK_OUTSIDE_THE_BOX, session);
+    kevinPriorityClaimBySessionId.add(session.wiseSessionId);
+  }
+
   const rows: AssignmentResultRow[] = [];
 
   for (const session of sortedSessions) {
     const tutorNorm = normalizeTutorName(session.tutorDisplayName);
-    const { minCapacity, warnings } = inferCapacity(session);
-    const needsTv = TV_REQUIRED_TUTORS.has(tutorNorm);
-    const preferredRoom = getPreferredRoom(session.tutorDisplayName) ?? null;
-    const isGift = isGiftTutor(session.tutorDisplayName);
-    const overrideRoom = normalizeTutorName(overrideBySessionId.get(session.wiseSessionId) ?? "") || null;
+    const facts = factsBySessionId.get(session.wiseSessionId)!;
+    const minCapacity = facts.minCapacity;
+    const warnings = [...facts.capacityWarnings];
+    const needsTv = facts.needsTv;
+    const preferredRoom = facts.preferredRoom;
+    const isGift = facts.isGift;
+    const overrideRoom = facts.overrideRoom;
     const ruleTrace: string[] = [];
-    const requiresCenterRoom =
-      Boolean(overrideRoom) || centerRoomRequiredBySessionId.get(session.wiseSessionId) !== false;
+    const requiresCenterRoom = facts.requiresCenterRoom;
 
     const roomOk = (roomName: string): boolean =>
       roomPassesConstraints(roomByName.get(roomName), session, minCapacity, needsTv);
     const roomAvailable = (roomName: string): boolean =>
-      isAvailable(occupancy, roomName, session);
+      isAvailable(occupancy, roomName, session, session.wiseSessionId) &&
+      isAvailable(protectedClaims, roomName, session, session.wiseSessionId);
     const pickRoom = (candidates: ClassroomRoomDefinition[]): string | null => {
       const picked = candidates.find((room) => roomOk(room.name) && roomAvailable(room.name));
       return picked?.name ?? null;
@@ -277,6 +370,16 @@ export function assignClassrooms(
         assignedRoom = overrideRoom;
         ruleTrace.push(`assigned by override: ${overrideRoom}`);
       }
+    }
+
+    if (
+      !assignedRoom &&
+      kevinPriorityClaimBySessionId.has(session.wiseSessionId) &&
+      roomOk(ROOM_THINK_OUTSIDE_THE_BOX) &&
+      roomAvailable(ROOM_THINK_OUTSIDE_THE_BOX)
+    ) {
+      assignedRoom = ROOM_THINK_OUTSIDE_THE_BOX;
+      ruleTrace.push(`assigned Kevin priority room: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
     }
 
     if (!assignedRoom && isOnlineSession(session.sessionType)) {
@@ -368,11 +471,7 @@ export function assignClassrooms(
     }
 
     if (assignedRoom !== NO_ROOM_AVAILABLE && roomByName.has(assignedRoom)) {
-      occupancy.get(assignedRoom)?.push({
-        startMinute: session.startMinute,
-        endMinute: session.endMinute,
-        sessionId: session.wiseSessionId,
-      });
+      addRoomInterval(occupancy, assignedRoom, session);
     }
 
     if (assignedRoom !== NO_ROOM_AVAILABLE && assignedRoom !== REMOTE_NO_ROOM_NEEDED) {

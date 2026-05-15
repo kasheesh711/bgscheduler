@@ -11,6 +11,7 @@ export interface ClassroomRoomDefinition {
 
 export const NO_ROOM_AVAILABLE = "NO_ROOM_AVAILABLE";
 export const ROOM_JOY = "Joy";
+export const ROOM_THINK_OUTSIDE_THE_BOX = "Think Outside the Box";
 
 export function normalizeTutorName(value: string | null | undefined): string {
   return String(value ?? "").trim().replace(/\s+/g, " ");
@@ -42,7 +43,7 @@ export const DEFAULT_CLASSROOM_ROOMS: ClassroomRoomDefinition[] = [
   { name: "Relax", hasTv: true, capacity: 8, category: "standard", active: true, sortOrder: 13 },
   { name: "Take Action", hasTv: false, capacity: 3, category: "standard", active: true, sortOrder: 14 },
   { name: "Tesla", hasTv: false, capacity: 3, category: "standard", active: true, sortOrder: 15 },
-  { name: "Think Outside the Box", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 16 },
+  { name: ROOM_THINK_OUTSIDE_THE_BOX, hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 16 },
   { name: "Turn The Page", hasTv: true, capacity: 2, category: "standard", active: true, sortOrder: 17 },
   { name: "Remember", hasTv: true, capacity: 2, category: "standard", active: true, sortOrder: 18 },
   { name: "Here There", hasTv: true, capacity: 2, category: "standard", active: true, sortOrder: 19 },
@@ -80,9 +81,9 @@ export const PREFERRED_BY_TUTOR = new Map<string, string>(
     ["Thanit (Mimi) Montrikittiphant Online", "Take Action"],
     ["Pornnapha (Mint) Montrikittiphant", "Isaac Newton"],
     ["Pornnapha (Mint) Montrikittiphant Online", "Isaac Newton"],
-    ["Smit (Tito) Kanjanapas", "Think Outside the Box"],
-    ["Kevin (Kev) Y. Hsieh", "Think Outside the Box"],
-    ["Kevin (Kev) Y. Hsieh Online", "Think Outside the Box"],
+    ["Smit (Tito) Kanjanapas", ROOM_THINK_OUTSIDE_THE_BOX],
+    ["Kevin (Kev) Y. Hsieh", ROOM_THINK_OUTSIDE_THE_BOX],
+    ["Kevin (Kev) Y. Hsieh Online", ROOM_THINK_OUTSIDE_THE_BOX],
     ["Menika (Menika) Ratnakovit", "Iconic"],
     ["Menika (Menika) Ratnakovit Online", "Iconic"],
     ["Kasidej (Peat) Jungrakangthong", "Hakuna Matata"],
@@ -106,6 +107,13 @@ export const PREFERRED_BY_TUTOR = new Map<string, string>(
 
 export const PREFERRED_ROOMS = new Set(PREFERRED_BY_TUTOR.values());
 
+const KEVIN_PRIORITY_TUTORS = new Set(
+  [
+    "Kevin (Kev) Y. Hsieh",
+    "Kevin (Kev) Y. Hsieh Online",
+  ].flatMap(tutorRuleAliases).map(normalizeTutorName),
+);
+
 export function isGiftTutor(tutorName: string): boolean {
   const tutorNorm = normalizeTutorName(tutorName);
   return (
@@ -113,6 +121,10 @@ export function isGiftTutor(tutorName: string): boolean {
     tutorNorm === normalizeTutorName("Wanwisa (Gift) Montrikittiphant") ||
     tutorNorm === normalizeTutorName("Wanwisa (Gift) Montrikittiphant Online")
   );
+}
+
+export function isKevinPriorityTutor(tutorName: string): boolean {
+  return KEVIN_PRIORITY_TUTORS.has(normalizeTutorName(tutorName));
 }
 
 export function getPreferredRoom(tutorName: string): string | undefined {
