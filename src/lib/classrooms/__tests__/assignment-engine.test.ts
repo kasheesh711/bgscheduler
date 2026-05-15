@@ -4,7 +4,7 @@ import {
   REMOTE_NO_ROOM_NEEDED,
   type AssignmentSession,
 } from "../assignment-engine";
-import { DEFAULT_CLASSROOM_ROOMS, NO_ROOM_AVAILABLE } from "../rooms";
+import { DEFAULT_CLASSROOM_ROOMS, NO_ROOM_AVAILABLE, ROOM_THINK_OUTSIDE_THE_BOX } from "../rooms";
 
 function session(overrides: Partial<AssignmentSession> = {}): AssignmentSession {
   const startMinute = overrides.startMinute ?? 9 * 60;
@@ -208,6 +208,93 @@ describe("assignClassrooms", () => {
 
     expect(result.rows.find((row) => row.tutorDisplayName === "Da")?.assignedRoom).toBe("Do It");
     expect(result.rows.find((row) => row.tutorDisplayName === "Gift")?.assignedRoom).toBe("Joy");
+  });
+
+  it("gives Kevin Think Outside the Box over overlapping automatic preferred-room sessions", () => {
+    const result = assignClassrooms([
+      session({
+        groupId: "tito",
+        wiseSessionId: "tito",
+        tutorDisplayName: "Smit (Tito) Kanjanapas",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60 + 30,
+      }),
+      session({
+        groupId: "kevin",
+        wiseSessionId: "kevin",
+        tutorDisplayName: "Kev",
+        startMinute: 9 * 60 + 30,
+        endMinute: 10 * 60 + 30,
+      }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    const kevin = result.rows.find((row) => row.wiseSessionId === "kevin")!;
+    const tito = result.rows.find((row) => row.wiseSessionId === "tito")!;
+    expect(kevin.preferredRoom).toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+    expect(kevin.assignedRoom).toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+    expect(kevin.ruleTrace).toContain(`assigned Kevin priority room: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
+    expect(tito.preferredRoom).toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+    expect(tito.assignedRoom).not.toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+  });
+
+  it("honors Kevin's own valid room override instead of the automatic priority room", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          groupId: "kevin",
+          wiseSessionId: "kevin",
+          tutorDisplayName: "Kevin",
+        }),
+      ],
+      DEFAULT_CLASSROOM_ROOMS,
+      new Map([["kevin", "Turn The Page"]]),
+    );
+
+    expect(result.rows[0].assignedRoom).toBe("Turn The Page");
+    expect(result.rows[0].ruleTrace).toContain("assigned by override: Turn The Page");
+  });
+
+  it("lets a valid non-Kevin override to Think Outside the Box force an exception", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          groupId: "kevin",
+          wiseSessionId: "kevin",
+          tutorDisplayName: "Kevin (Kev) Y. Hsieh",
+        }),
+        session({
+          groupId: "other",
+          wiseSessionId: "other",
+          tutorDisplayName: "Tutor Two",
+        }),
+      ],
+      DEFAULT_CLASSROOM_ROOMS,
+      new Map([["other", ROOM_THINK_OUTSIDE_THE_BOX]]),
+    );
+
+    const kevin = result.rows.find((row) => row.wiseSessionId === "kevin")!;
+    const other = result.rows.find((row) => row.wiseSessionId === "other")!;
+    expect(other.assignedRoom).toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+    expect(kevin.assignedRoom).not.toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+    expect(kevin.ruleTrace).not.toContain(`assigned Kevin priority room: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
+  });
+
+  it("does not claim Think Outside the Box for Kevin when capacity constraints fail", () => {
+    const result = assignClassrooms([
+      session({
+        groupId: "kevin",
+        wiseSessionId: "kevin",
+        tutorDisplayName: "Kev",
+        studentCount: 3,
+        classType: "GROUP",
+      }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    const kevin = result.rows[0];
+    expect(kevin.preferredRoom).toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+    expect(kevin.assignedRoom).not.toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+    expect(DEFAULT_CLASSROOM_ROOMS.find((room) => room.name === kevin.assignedRoom)?.capacity).toBeGreaterThanOrEqual(3);
+    expect(kevin.ruleTrace).not.toContain(`assigned Kevin priority room: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
   });
 
   it("keeps continuity for the same tutor with a 15-minute gap", () => {
