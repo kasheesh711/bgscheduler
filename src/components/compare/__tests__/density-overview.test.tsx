@@ -35,6 +35,7 @@ function makeSession(overrides: Partial<CompareSessionBlock>): CompareSessionBlo
 function makeTutor(overrides: Partial<CompareTutor> = {}): CompareTutor {
   return {
     tutorGroupId: "tutor-1",
+    tutorCanonicalKey: "tutor-1",
     displayName: "Kevin",
     supportedModes: ["online"],
     qualifications: [],

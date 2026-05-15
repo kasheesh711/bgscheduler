@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { LockKeyhole } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { AvailabilityGrid } from "@/components/search/availability-grid";
 import { CopyButton } from "@/components/search/copy-button";
 import type { SearchContext } from "@/components/search/search-form";
 import type { RangeSearchResponse } from "@/lib/search/types";
+import type { ProposalDraft, ProposalDraftItem } from "@/components/search/proposal-hold-modal";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -18,7 +20,13 @@ export interface SearchResultsProps {
   searchContext: SearchContext | null;
   onCompareSelected: (ids: string[]) => void;
   onAddSingle: (id: string, name: string) => void;
+  onMarkProposed: (draft: ProposalDraft) => void;
   disableAdd: boolean;
+}
+
+function parseTimeToMinutes(time: string): number {
+  const [h, m] = time.split(":").map(Number);
+  return h * 60 + (m ?? 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -31,6 +39,7 @@ export function SearchResults({
   searchContext,
   onCompareSelected,
   onAddSingle,
+  onMarkProposed,
   disableAdd,
 }: SearchResultsProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -53,6 +62,39 @@ export function SearchResults({
   const handleCompareSelected = () => {
     onCompareSelected([...selectedIds]);
   };
+
+  const buildSelectedProposalDraft = (): ProposalDraft | null => {
+    if (!response || !searchContext) return null;
+
+    const items: ProposalDraftItem[] = [];
+    for (const row of response.grid) {
+      if (!selectedIds.has(row.tutorGroupId)) continue;
+      row.availability.forEach((cell, index) => {
+        if (cell !== true) return;
+        const slot = response.subSlots[index];
+        items.push({
+          tutorGroupId: row.tutorGroupId,
+          tutorDisplayName: row.displayName,
+          scope: searchContext.searchMode,
+          weekday: searchContext.dayOfWeek,
+          date: searchContext.date,
+          startMinute: parseTimeToMinutes(slot.start),
+          endMinute: parseTimeToMinutes(slot.end),
+          subject: searchContext.filters.subject,
+          curriculum: searchContext.filters.curriculum,
+          level: searchContext.filters.level,
+        });
+      });
+    }
+
+    if (items.length === 0) return null;
+    return {
+      sourceLabel: `Selected search results (${selectedIds.size} tutor${selectedIds.size !== 1 ? "s" : ""})`,
+      items,
+    };
+  };
+
+  const selectedProposalDraft = buildSelectedProposalDraft();
 
   if (response) {
     return (
@@ -87,6 +129,20 @@ export function SearchResults({
                 onClick={handleCompareSelected}
               >
                 Compare ({selectedIds.size})
+              </Button>
+            )}
+            {selectedIds.size > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs h-7 gap-1"
+                disabled={!selectedProposalDraft}
+                onClick={() => {
+                  if (selectedProposalDraft) onMarkProposed(selectedProposalDraft);
+                }}
+              >
+                <LockKeyhole className="h-3 w-3" aria-hidden />
+                Mark proposed
               </Button>
             )}
           </div>

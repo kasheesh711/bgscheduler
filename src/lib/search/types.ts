@@ -1,3 +1,5 @@
+import type { ProposalHoldSummary } from "@/lib/proposals/types";
+
 // ── Search request/response types ────────────────────────────────────
 
 export type SearchMode = "recurring" | "one_time";
@@ -32,6 +34,7 @@ export interface SnapshotMeta {
 
 export interface TutorResult {
   tutorGroupId: string;
+  tutorCanonicalKey: string;
   displayName: string;
   supportedModes: string[];
   qualifications: { subject: string; curriculum: string; level: string; examPrep?: string }[];
@@ -60,6 +63,7 @@ export interface SearchResponse {
 // ── Blocking session info ───────────────────────────────────────────
 
 export interface BlockingSessionInfo {
+  kind?: "wise_session" | "proposal_hold";
   title?: string;
   studentName?: string;
   subject?: string;
@@ -68,6 +72,7 @@ export interface BlockingSessionInfo {
   location?: string;
   startTime: string; // "HH:mm"
   endTime: string;   // "HH:mm"
+  proposalHold?: ProposalHoldSummary;
 }
 
 // ── Range search types ──────────────────────────────────────────────
@@ -85,6 +90,7 @@ export interface RangeSearchRequest {
 
 export interface RangeGridRow {
   tutorGroupId: string;
+  tutorCanonicalKey: string;
   displayName: string;
   supportedModes: string[];
   qualifications: { subject: string; curriculum: string; level: string; examPrep?: string }[];
@@ -130,6 +136,7 @@ export interface CompareSessionBlock {
 
 export interface CompareTutor {
   tutorGroupId: string;
+  tutorCanonicalKey: string;
   displayName: string;
   supportedModes: string[];
   qualifications: { subject: string; curriculum: string; level: string; examPrep?: string }[];

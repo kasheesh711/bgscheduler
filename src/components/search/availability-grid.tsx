@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Check } from "lucide-react";
+import { Plus, Check, LockKeyhole } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
   Popover,
@@ -34,6 +34,38 @@ function BlockingSessionPopover({ sessions }: { sessions: BlockingSessionInfo[] 
       {sessions.map((s, i) => (
         <div key={i}>
           {i > 0 && <div className="border-t border-border my-2" />}
+          {s.kind === "proposal_hold" && s.proposalHold ? (
+            <>
+              <p className="font-semibold text-foreground">Held for {s.proposalHold.studentLabel}</p>
+              <p className="text-muted-foreground">
+                {s.proposalHold.tutorDisplayName}
+              </p>
+              <p className="text-muted-foreground">
+                {s.proposalHold.startTime}-{s.proposalHold.endTime}
+              </p>
+              <div className="mt-1 flex flex-wrap gap-1">
+                <Badge variant="secondary" className="text-[10px] px-1 py-0 capitalize">
+                  {s.proposalHold.status}
+                </Badge>
+                {s.proposalHold.expiresAt && (
+                  <Badge variant="outline" className="text-[10px] px-1 py-0">
+                    expires {new Date(s.proposalHold.expiresAt).toLocaleString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </Badge>
+                )}
+              </div>
+              {s.proposalHold.createdByEmail && (
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  Held by {s.proposalHold.createdByName || s.proposalHold.createdByEmail}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
           {s.studentName && (
             <p className="font-semibold text-foreground">{s.studentName}</p>
           )}
@@ -60,6 +92,8 @@ function BlockingSessionPopover({ sessions }: { sessions: BlockingSessionInfo[] 
               </Badge>
             )}
           </div>
+            </>
+          )}
         </div>
       ))}
     </div>
@@ -147,6 +181,7 @@ export function AvailabilityGrid({
                       const isAvailable = cell === true;
                       const blockingSessions = isAvailable ? [] : (cell as BlockingSessionInfo[]);
                       const hasDetails = blockingSessions.length > 0;
+                      const hasProposalHold = blockingSessions.some((s) => s.kind === "proposal_hold");
 
                       if (isAvailable) {
                         return (
@@ -161,13 +196,24 @@ export function AvailabilityGrid({
 
                       if (hasDetails) {
                         return (
-                          <td key={i} className="px-2 py-2 text-center">
+                          <td
+                            key={i}
+                            className={`px-2 py-2 text-center ${hasProposalHold ? "bg-blocked/10" : ""}`}
+                          >
                             <Popover>
                               <PopoverTrigger
                                 onClick={(e) => e.stopPropagation()}
-                                className="cursor-help text-blocked/60 hover:text-blocked transition-colors"
+                                className={`inline-flex cursor-help items-center justify-center transition-colors ${
+                                  hasProposalHold
+                                    ? "text-blocked hover:text-blocked"
+                                    : "text-blocked/60 hover:text-blocked"
+                                }`}
                               >
-                                {"\u2022"}
+                                {hasProposalHold ? (
+                                  <LockKeyhole className="h-3.5 w-3.5" aria-label="Held proposal" />
+                                ) : (
+                                  "\u2022"
+                                )}
                               </PopoverTrigger>
                               <PopoverContent
                                 side="top"

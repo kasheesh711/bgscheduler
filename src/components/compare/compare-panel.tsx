@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import type { TutorListItem } from "@/lib/data/tutors";
+import type { ProposalHoldSummary } from "@/lib/proposals/types";
 import { TutorCombobox } from "@/components/compare/tutor-combobox";
 import { DensityOverview } from "@/components/compare/density-overview";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -53,6 +54,7 @@ export interface ComparePanelProps {
   tutorList: TutorListItem[];
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
+  proposalHolds?: ProposalHoldSummary[];
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +66,7 @@ export function ComparePanel({
   tutorList,
   isFullscreen,
   onToggleFullscreen,
+  proposalHolds = [],
 }: ComparePanelProps) {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const {
@@ -432,6 +435,7 @@ export function ComparePanel({
                 sharedFreeSlots={compareResponse.sharedFreeSlots}
                 dayOfWeek={activeDay}
                 weekStart={weekStart}
+                proposalHolds={proposalHolds}
                 onFindAlternatives={(conflict) => {
                   setPrefillConflict(conflict);
                   setDiscoveryOpen(true);
@@ -444,6 +448,7 @@ export function ComparePanel({
                 conflicts={compareResponse.conflicts}
                 sharedFreeSlots={compareResponse.sharedFreeSlots}
                 weekStart={weekStart}
+                proposalHolds={proposalHolds}
                 onDayClick={handleDayChange}
                 scrollContainerRef={weekScrollRef}
               />

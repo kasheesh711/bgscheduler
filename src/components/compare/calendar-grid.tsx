@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toZonedTime } from "date-fns-tz";
+import { LockKeyhole } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
   Popover,
@@ -9,6 +10,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import type { CompareTutor, Conflict, SharedFreeSlot } from "@/lib/search/types";
+import type { ProposalHoldSummary } from "@/lib/proposals/types";
 import type { TutorChip } from "./tutor-selector";
 import { TutorProfilePopover } from "./tutor-profile-popover";
 import {
@@ -53,6 +55,7 @@ interface CalendarGridProps {
   sharedFreeSlots: SharedFreeSlot[];
   dayOfWeek: number;
   weekStart: string;
+  proposalHolds?: ProposalHoldSummary[];
   onFindAlternatives?: (conflict: Conflict) => void;
 }
 
@@ -63,6 +66,7 @@ export function CalendarGrid({
   sharedFreeSlots,
   dayOfWeek,
   weekStart,
+  proposalHolds = [],
   onFindAlternatives,
 }: CalendarGridProps) {
   // Today indicator state — CAL-03
@@ -118,6 +122,17 @@ export function CalendarGrid({
       conflict: c,
     }));
   }, [dayConflicts]);
+
+  const dateForDay = useMemo(() => {
+    const [y, m, d] = weekStart.split("-").map(Number);
+    const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const date = new Date(y, m - 1, d + offset);
+    return [
+      date.getFullYear(),
+      String(date.getMonth() + 1).padStart(2, "0"),
+      String(date.getDate()).padStart(2, "0"),
+    ].join("-");
+  }, [dayOfWeek, weekStart]);
 
   return (
     <div className="relative ml-[50px]">
@@ -225,6 +240,67 @@ export function CalendarGrid({
                   borderLeft: `2px solid ${rgba(chip?.color ?? "#888", 0.15)}`,
                 }}
               />
+            );
+          });
+        })}
+
+        {/* Local proposal holds per tutor */}
+        {tutors.map((t, tutorIdx) => {
+          const chip = tutorChips[tutorIdx];
+          const colWidth = 100 / tutors.length;
+          const colLeft = tutorIdx * colWidth;
+          const holds = proposalHolds.filter((hold) => {
+            if (hold.tutorCanonicalKey !== t.tutorCanonicalKey) return false;
+            if (hold.scope === "recurring") return hold.weekday === dayOfWeek;
+            return hold.date === dateForDay;
+          });
+
+          return holds.map((hold) => {
+            const top = minuteToY(hold.startMinute);
+            const height = ((hold.endMinute - hold.startMinute) / 60) * HOUR_HEIGHT;
+            return (
+              <Popover key={`hold-${hold.itemId}`}>
+                <PopoverTrigger
+                  render={(props) => (
+                    <button
+                      type="button"
+                      {...props}
+                      className="absolute z-[2] cursor-help overflow-hidden rounded border border-blocked/35 bg-blocked/12 p-0 text-left shadow-none outline-none appearance-none"
+                      style={{
+                        top: top + 3,
+                        left: `calc(${colLeft}% + 6px)`,
+                        width: `calc(${colWidth}% - 12px)`,
+                        height: Math.max(height - 6, 28),
+                        boxShadow: `inset 3px 0 0 ${rgba(chip?.color ?? "#888888", 0.35)}`,
+                      }}
+                    >
+                      <div className="p-1.5 leading-tight">
+                        <div className="flex items-center gap-1 truncate text-xs font-semibold text-blocked">
+                          <LockKeyhole className="h-3 w-3 shrink-0" aria-hidden />
+                          <span className="truncate">Held: {hold.studentLabel}</span>
+                        </div>
+                        <div className="truncate text-[10px] text-muted-foreground">
+                          {minuteToLabel(hold.startMinute)}–{minuteToLabel(hold.endMinute)}
+                        </div>
+                      </div>
+                    </button>
+                  )}
+                />
+                <PopoverContent side="top" className="w-60 p-3 text-xs space-y-1">
+                  <p className="font-semibold text-blocked">Proposal hold</p>
+                  <p className="font-medium">{hold.studentLabel}</p>
+                  <p className="text-muted-foreground">{t.displayName}</p>
+                  <p>{minuteToLabel(hold.startMinute)}–{minuteToLabel(hold.endMinute)}</p>
+                  <Badge variant="secondary" className="text-xs px-1.5 py-0 capitalize">
+                    {hold.status}
+                  </Badge>
+                  {hold.createdByEmail && (
+                    <p className="text-[10px] text-muted-foreground">
+                      Held by {hold.createdByName || hold.createdByEmail}
+                    </p>
+                  )}
+                </PopoverContent>
+              </Popover>
             );
           });
         })}

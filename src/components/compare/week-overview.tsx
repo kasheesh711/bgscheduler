@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type Ref } from "react";
 import { toZonedTime } from "date-fns-tz";
+import { LockKeyhole } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -9,6 +10,7 @@ import {
 } from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
 import type { CompareTutor, Conflict, SharedFreeSlot } from "@/lib/search/types";
+import type { ProposalHoldSummary } from "@/lib/proposals/types";
 import type { TutorChip } from "./tutor-selector";
 import {
   sessionBgColor,
@@ -39,6 +41,17 @@ function minuteToLabel(minute: number): string {
   const suffix = h >= 12 ? "pm" : "am";
   const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
   return m === 0 ? `${h12}${suffix}` : `${h12}:${String(m).padStart(2, "0")}${suffix}`;
+}
+
+function isoDateForWeekday(weekStart: string, weekday: number): string {
+  const [y, m, d] = weekStart.split("-").map(Number);
+  const offset = weekday === 0 ? 6 : weekday - 1;
+  const date = new Date(y, m - 1, d + offset);
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
 }
 
 function formatClassType(ct?: string): string {
@@ -228,6 +241,7 @@ interface WeekOverviewProps {
   conflicts: Conflict[];
   sharedFreeSlots?: SharedFreeSlot[];
   weekStart: string;
+  proposalHolds?: ProposalHoldSummary[];
   onDayClick: (day: number) => void;
   scrollContainerRef?: Ref<HTMLDivElement>;
 }
@@ -238,6 +252,7 @@ export function WeekOverview({
   conflicts,
   sharedFreeSlots,
   weekStart,
+  proposalHolds = [],
   onDayClick,
   scrollContainerRef,
 }: WeekOverviewProps) {
@@ -457,6 +472,59 @@ export function WeekOverview({
                   })}
 
                   {/* Session blocks */}
+                  {/* Local proposal holds */}
+                  {tutors.map((t, tutorIdx) => {
+                    const chip = tutorChips[tutorIdx];
+                    const laneLeftPct = multiTutorLayout ? tutorIdx * laneWidth : 0;
+                    const laneWidthPct = multiTutorLayout ? laneWidth : 100;
+                    const dateForDay = isoDateForWeekday(weekStart, day);
+                    const holds = proposalHolds.filter((hold) => {
+                      if (hold.tutorCanonicalKey !== t.tutorCanonicalKey) return false;
+                      if (hold.scope === "recurring") return hold.weekday === day;
+                      return hold.date === dateForDay;
+                    });
+
+                    return holds.map((hold) => {
+                      const top = minuteToY(hold.startMinute);
+                      const height = ((hold.endMinute - hold.startMinute) / 60) * HOUR_HEIGHT;
+                      return (
+                        <Popover key={`hold-${hold.itemId}-${day}`}>
+                          <PopoverTrigger
+                            render={(props) => (
+                              <button
+                                type="button"
+                                {...props}
+                                className="absolute cursor-help overflow-hidden rounded-sm border border-blocked/35 bg-blocked/12 px-1 text-left shadow-none outline-none"
+                                style={{
+                                  top: top + 2,
+                                  left: `calc(${laneLeftPct}% + 2px)`,
+                                  width: `calc(${laneWidthPct}% - 4px)`,
+                                  height: Math.max(height - 4, 18),
+                                  zIndex: 2,
+                                  boxShadow: `inset 3px 0 0 ${rgba(chip?.color ?? "#888888", 0.35)}`,
+                                }}
+                              >
+                                <div className="flex items-center gap-1 truncate text-[10px] font-semibold text-blocked">
+                                  <LockKeyhole className="h-3 w-3 shrink-0" aria-hidden />
+                                  <span className="truncate">Held {hold.studentLabel}</span>
+                                </div>
+                              </button>
+                            )}
+                          />
+                          <PopoverContent side="top" className="w-56 p-3 text-xs space-y-1 z-50">
+                            <p className="font-semibold text-blocked">Proposal hold</p>
+                            <p className="font-medium">{hold.studentLabel}</p>
+                            <p className="text-muted-foreground">{t.displayName}</p>
+                            <p>{minuteToLabel(hold.startMinute)}–{minuteToLabel(hold.endMinute)}</p>
+                            <Badge variant="secondary" className="text-[10px] px-1 py-0 capitalize">
+                              {hold.status}
+                            </Badge>
+                          </PopoverContent>
+                        </Popover>
+                      );
+                    });
+                  })}
+
                   {tutors.map((t, tutorIdx) => {
                     const chip = tutorChips[tutorIdx];
                     const sessions = t.sessions.filter((s) => s.weekday === day);

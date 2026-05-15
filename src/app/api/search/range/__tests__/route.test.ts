@@ -9,9 +9,13 @@ vi.mock("@/lib/search/engine", () => ({
   executeSearch: vi.fn(),
   getBlockingSessions: vi.fn().mockReturnValue([]),
 }));
+vi.mock("@/lib/proposals/data", () => ({
+  listActiveProposalHolds: vi.fn().mockResolvedValue([]),
+}));
 
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
+import { listActiveProposalHolds } from "@/lib/proposals/data";
 import { ensureIndex } from "@/lib/search/index";
 import { executeSearch } from "@/lib/search/engine";
 import { POST } from "@/app/api/search/range/route";
@@ -52,6 +56,7 @@ const rangeEngineResponse = {
       available: [
         {
           tutorGroupId: "g1",
+          tutorCanonicalKey: "test",
           displayName: "Test Tutor",
           supportedModes: ["online"],
           qualifications: [{ subject: "Math", curriculum: "IB", level: "Grade 10" }],
@@ -65,6 +70,7 @@ const rangeEngineResponse = {
       available: [
         {
           tutorGroupId: "g1",
+          tutorCanonicalKey: "test",
           displayName: "Test Tutor",
           supportedModes: ["online"],
           qualifications: [{ subject: "Math", curriculum: "IB", level: "Grade 10" }],
@@ -85,6 +91,7 @@ describe("POST /api/search/range", () => {
     authMock.mockResolvedValue({ user: { email: "kevhsh7@gmail.com" } });
     vi.mocked(getDb).mockReturnValue({} as never);
     vi.mocked(ensureIndex).mockResolvedValue(makeIndex() as never);
+    vi.mocked(listActiveProposalHolds).mockResolvedValue([] as never);
     vi.mocked(executeSearch).mockReturnValue(rangeEngineResponse as never);
   });
 
@@ -155,6 +162,39 @@ describe("POST /api/search/range", () => {
       latencyMs: expect.any(Number),
       warnings: [],
     });
+  });
+
+  it("marks active proposal holds as blocked cells", async () => {
+    vi.mocked(listActiveProposalHolds).mockResolvedValue([
+      {
+        itemId: "hold-1",
+        bundleId: "bundle-1",
+        studentLabel: "Beam",
+        tutorCanonicalKey: "test",
+        tutorDisplayName: "Test Tutor",
+        scope: "recurring",
+        weekday: 1,
+        startMinute: 900,
+        endMinute: 990,
+        startTime: "15:00",
+        endTime: "16:30",
+        status: "pending",
+        createdAt: "2026-05-15T00:00:00.000Z",
+        expiresAt: "2026-05-17T00:00:00.000Z",
+      },
+    ] as never);
+
+    const res = await POST(makeRequest(validBody()));
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.grid[0].availability[0]).toEqual([
+      expect.objectContaining({
+        kind: "proposal_hold",
+        proposalHold: expect.objectContaining({ itemId: "hold-1" }),
+      }),
+    ]);
+    expect(body.grid[0].availability[1]).toBe(true);
   });
 
   it("returns 500 when ensureIndex throws", async () => {

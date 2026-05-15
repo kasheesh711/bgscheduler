@@ -307,7 +307,7 @@ export function buildCompareTutor(
   const studentNames = new Set(filtered.map((s) => s.studentName).filter(Boolean));
 
   return {
-    tutorGroupId: group.id, displayName: group.displayName,
+    tutorGroupId: group.id, tutorCanonicalKey: group.canonicalKey, displayName: group.displayName,
     supportedModes: group.supportedModes, qualifications: group.qualifications,
     sessions,
     availabilityWindows: group.availabilityWindows.map((w) => ({ weekday: w.weekday, startMinute: w.startMinute, endMinute: w.endMinute, modality: w.modality })),

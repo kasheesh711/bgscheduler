@@ -14,9 +14,11 @@
  *   Pitfall 14). Shape is additive, but semantic content changed — bumping
  *   ensures old-shape cached tutors cannot mix with new-shape fetched tutors
  *   on long-lived tabs.
+ * - v3: `CompareTutor` includes `tutorCanonicalKey` so local proposal holds
+ *   can overlay across snapshot-scoped tutor group ids.
  *
  * Future v1.1 phases (VPOL-03) MUST bump this alongside their shape change.
  *
  * See `.planning/research/PITFALLS.md` Pitfall 14 for rationale.
  */
-export const CACHE_VERSION = "v2";
+export const CACHE_VERSION = "v3";

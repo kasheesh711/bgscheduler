@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Sparkles, Check, Copy, Calendar, Send } from "lucide-react";
+import { Sparkles, Check, Copy, Calendar, Send, LockKeyhole } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { TUTOR_COLORS } from "@/components/compare/session-colors";
@@ -10,12 +10,14 @@ import { DAY_NAMES } from "@/components/search/search-form";
 import { cn } from "@/lib/utils";
 import type { RangeSearchResponse } from "@/lib/search/types";
 import type { SearchContext } from "@/components/search/search-form";
+import type { ProposalDraft, ProposalDraftItem } from "@/components/search/proposal-hold-modal";
 
 interface RecommendedSlotsProps {
   response: RangeSearchResponse;
   searchContext: SearchContext | null;
   onOpenDrawer: (slots: RecommendedSlot[]) => void;
   onAddToCompare: (tutorIds: string[]) => void;
+  onMarkProposed: (draft: ProposalDraft) => void;
   disableAdd: boolean;
 }
 
@@ -69,11 +71,17 @@ function initialsOf(name: string): string {
     .toUpperCase();
 }
 
+function parseTimeToMinutes(time: string): number {
+  const [h, m] = time.split(":").map(Number);
+  return h * 60 + (m ?? 0);
+}
+
 export function RecommendedSlots({
   response,
   searchContext,
   onOpenDrawer,
   onAddToCompare,
+  onMarkProposed,
   disableAdd,
 }: RecommendedSlotsProps) {
   const slots = useMemo(() => getRecommendedSlots(response, 3), [response]);
@@ -93,6 +101,32 @@ export function RecommendedSlots({
   };
 
   const pickedSlots = slots.filter((s) => picked.has(s.id));
+
+  const buildDraft = (draftSlots: RecommendedSlot[]): ProposalDraft | null => {
+    if (!searchContext) return null;
+    const items: ProposalDraftItem[] = [];
+    for (const slot of draftSlots) {
+      for (const tutor of slot.availableTutors.slice(0, 3)) {
+        items.push({
+          tutorGroupId: tutor.tutorGroupId,
+          tutorDisplayName: tutor.displayName,
+          scope: searchContext.searchMode,
+          weekday: searchContext.dayOfWeek,
+          date: searchContext.date,
+          startMinute: parseTimeToMinutes(slot.start),
+          endMinute: parseTimeToMinutes(slot.end),
+          subject: searchContext.filters.subject,
+          curriculum: searchContext.filters.curriculum,
+          level: searchContext.filters.level,
+        });
+      }
+    }
+    if (items.length === 0) return null;
+    return {
+      sourceLabel: draftSlots.length === 1 ? "Recommended slot" : "Recommended slot bundle",
+      items,
+    };
+  };
 
   return (
     <div className="mb-2 flex-shrink-0">
@@ -207,6 +241,20 @@ export function RecommendedSlots({
                 >
                   <Calendar className="h-3 w-3" aria-hidden />
                 </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const draft = buildDraft([slot]);
+                    if (draft) onMarkProposed(draft);
+                  }}
+                  title="Hold these tutor options"
+                  aria-label="Mark proposed"
+                  className="h-7 w-7 p-0"
+                >
+                  <LockKeyhole className="h-3 w-3" aria-hidden />
+                </Button>
               </div>
             </div>
           );
@@ -227,6 +275,17 @@ export function RecommendedSlots({
             onClick={() => onOpenDrawer(pickedSlots)}
           >
             <Send className="h-3 w-3" aria-hidden /> Bundle & copy
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 gap-1 text-[11px]"
+            onClick={() => {
+              const draft = buildDraft(pickedSlots);
+              if (draft) onMarkProposed(draft);
+            }}
+          >
+            <LockKeyhole className="h-3 w-3" aria-hidden /> Mark proposed
           </Button>
         </div>
       )}

@@ -6,6 +6,7 @@ import {
   timestamp,
   integer,
   date,
+  doublePrecision,
   pgEnum,
   jsonb,
   uniqueIndex,
@@ -76,6 +77,19 @@ export const classroomPublishJobStatusEnum = pgEnum("classroom_publish_job_statu
   "succeeded",
   "partial",
   "failed",
+]);
+
+export const proposalScopeEnum = pgEnum("proposal_scope", [
+  "recurring",
+  "one_time",
+]);
+
+export const proposalStatusEnum = pgEnum("proposal_status", [
+  "pending",
+  "confirmed",
+  "released",
+  "expired",
+  "auto_resolved",
 ]);
 
 // ── Snapshots & Sync ───────────────────────────────────────────────────
@@ -452,6 +466,52 @@ export const pastSessionBlocks = pgTable("past_session_blocks", {
   index("psb_start_time_idx").on(table.startTime),
 ]);
 
+// ── Admin Proposal Holds ────────────────────────────────────────────────
+//
+// Local-only admin holds for parent proposals. These rows intentionally do
+// not write to Wise; Wise remains the source of truth for actual bookings.
+export const proposalBundles = pgTable("proposal_bundles", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  studentLabel: text("student_label").notNull(),
+  notes: text("notes"),
+  createdByEmail: text("created_by_email"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("proposal_bundles_created_at_idx").on(table.createdAt),
+]);
+
+export const proposalItems = pgTable("proposal_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  bundleId: uuid("bundle_id").notNull().references(() => proposalBundles.id),
+  tutorGroupId: uuid("tutor_group_id"),
+  tutorCanonicalKey: text("tutor_canonical_key").notNull(),
+  tutorDisplayName: text("tutor_display_name").notNull(),
+  scope: proposalScopeEnum("scope").notNull(),
+  weekday: integer("weekday").notNull(),
+  proposalDate: date("proposal_date", { mode: "string" }),
+  startMinute: integer("start_minute").notNull(),
+  endMinute: integer("end_minute").notNull(),
+  subject: text("subject"),
+  curriculum: text("curriculum"),
+  level: text("level"),
+  status: proposalStatusEnum("status").notNull().default("pending"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+  releasedAt: timestamp("released_at", { withTimezone: true }),
+  autoResolvedAt: timestamp("auto_resolved_at", { withTimezone: true }),
+  lastActionByEmail: text("last_action_by_email"),
+  lastActionByName: text("last_action_by_name"),
+  lastActionAt: timestamp("last_action_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("proposal_items_bundle_idx").on(table.bundleId),
+  index("proposal_items_active_lookup_idx").on(table.tutorCanonicalKey, table.status, table.weekday),
+  index("proposal_items_date_idx").on(table.proposalDate),
+]);
+
 // ── Data Issues ─────────────────────────────────────────────────────────
 
 export const dataIssues = pgTable("data_issues", {
@@ -488,4 +548,64 @@ export const snapshotStats = pgTable("snapshot_stats", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("ss_snapshot_idx").on(table.snapshotId),
+]);
+
+// ── Room Capacity Forecast Aggregates ──────────────────────────────────
+//
+// These tables intentionally store only aggregate forecast/model inputs from
+// the private BeGifted datasets workspace. Vercel runtime must not read local
+// workbook paths such as /Users/kevinhsieh/Developer/BeGifted Datasets.
+export const roomCapacityModelRuns = pgTable("room_capacity_model_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sourceLabel: text("source_label").notNull(),
+  sourceFingerprint: text("source_fingerprint").notNull(),
+  forecastStart: date("forecast_start", { mode: "string" }).notNull(),
+  forecastEnd: date("forecast_end", { mode: "string" }).notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("rcmr_created_at_idx").on(table.createdAt),
+  uniqueIndex("rcmr_source_fingerprint_idx").on(table.sourceFingerprint),
+]);
+
+export const roomCapacityForecastDrivers = pgTable("room_capacity_forecast_drivers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  modelRunId: uuid("model_run_id").notNull().references(() => roomCapacityModelRuns.id),
+  scenario: text("scenario").notNull(),
+  month: date("month", { mode: "string" }).notNull(),
+  leads: doublePrecision("leads").notNull().default(0),
+  leadToPaidConversion: doublePrecision("lead_to_paid_conversion").notNull().default(0),
+  newPaidStudents: doublePrecision("new_paid_students").notNull().default(0),
+  activeBasePriorMonth: doublePrecision("active_base_prior_month").notNull().default(0),
+  projectedRevenueThb: doublePrecision("projected_revenue_thb").notNull().default(0),
+  uncappedRevenueThb: doublePrecision("uncapped_revenue_thb").notNull().default(0),
+  forecastConsumedHours: doublePrecision("forecast_consumed_hours").notNull().default(0),
+  scheduledHours: doublePrecision("scheduled_hours").notNull().default(0),
+  teacherCapacityHours: doublePrecision("teacher_capacity_hours").notNull().default(0),
+  capacityUtilizationPct: doublePrecision("capacity_utilization_pct").notNull().default(0),
+  capacityExceeded: boolean("capacity_exceeded").notNull().default(false),
+  seasonalityIndex: doublePrecision("seasonality_index").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("rcfd_model_run_idx").on(table.modelRunId),
+  index("rcfd_scenario_month_idx").on(table.modelRunId, table.scenario, table.month),
+]);
+
+export const roomCapacityDemandMix = pgTable("room_capacity_demand_mix", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  modelRunId: uuid("model_run_id").notNull().references(() => roomCapacityModelRuns.id),
+  weekday: integer("weekday").notNull(),
+  startMinute: integer("start_minute").notNull(),
+  durationMinutes: integer("duration_minutes").notNull(),
+  mode: text("mode").notNull(),
+  studentCount: integer("student_count").notNull().default(1),
+  subject: text("subject"),
+  classType: text("class_type"),
+  share: doublePrecision("share").notNull(),
+  observedSessions: integer("observed_sessions").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("rcdm_model_run_idx").on(table.modelRunId),
+  index("rcdm_weekday_idx").on(table.modelRunId, table.weekday),
 ]);

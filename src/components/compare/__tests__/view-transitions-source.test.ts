@@ -103,6 +103,6 @@ describe("Phase 10 view transition source guardrails", () => {
   it("keeps compare cache version stable", () => {
     const source = read("src/lib/search/cache-version.ts");
 
-    expect(source).toContain('export const CACHE_VERSION = "v2";');
+    expect(source).toContain('export const CACHE_VERSION = "v3";');
   });
 });

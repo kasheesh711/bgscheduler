@@ -18,6 +18,7 @@ function makeRow(
 ): RangeGridRow {
   return {
     tutorGroupId: id,
+    tutorCanonicalKey: id,
     displayName: `Tutor ${id}`,
     supportedModes,
     qualifications: [{ subject: "Math", curriculum: "International", level: "Y7" }],

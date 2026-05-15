@@ -9,10 +9,17 @@ import type { TutorListItem } from "@/lib/data/tutors";
 import { SearchResults } from "@/components/search/search-results";
 import { RecommendedSlots } from "@/components/search/recommended-slots";
 import { CopyForParentDrawer } from "@/components/search/copy-for-parent-drawer";
+import {
+  ProposalHoldModal,
+  type ProposalDraft,
+} from "@/components/search/proposal-hold-modal";
+import { ActiveHoldsDrawer } from "@/components/search/active-holds-drawer";
 import type { RecommendedSlot } from "@/lib/search/recommend";
 import { ComparePanel } from "@/components/compare/compare-panel";
 import { useCompare, shiftWeek } from "@/hooks/use-compare";
-import type { RangeSearchResponse } from "@/lib/search/types";
+import type { BlockingSessionInfo, RangeSearchResponse } from "@/lib/search/types";
+import type { ProposalHoldSummary, ProposalPatchAction } from "@/lib/proposals/types";
+import { proposalHoldBlocksSearchSlot } from "@/lib/proposals/overlap";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -46,6 +53,23 @@ function isValidWeekParam(value: string): boolean {
   );
 }
 
+function parseTimeToMinutes(time: string): number {
+  const [h, m] = time.split(":").map(Number);
+  return h * 60 + (m ?? 0);
+}
+
+function proposalHoldToBlockingInfo(hold: ProposalHoldSummary): BlockingSessionInfo {
+  return {
+    kind: "proposal_hold",
+    title: `Held for ${hold.studentLabel}`,
+    studentName: hold.studentLabel,
+    subject: [hold.subject, hold.curriculum, hold.level].filter(Boolean).join(" ") || undefined,
+    startTime: hold.startTime,
+    endTime: hold.endTime,
+    proposalHold: hold,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // SearchWorkspace component
 // ---------------------------------------------------------------------------
@@ -65,6 +89,11 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
   const [error, setError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [drawerSlots, setDrawerSlots] = useState<RecommendedSlot[] | null>(null);
+  const [proposalDraft, setProposalDraft] = useState<ProposalDraft | null>(null);
+  const [activeHolds, setActiveHolds] = useState<ProposalHoldSummary[]>([]);
+  const [holdsDrawerOpen, setHoldsDrawerOpen] = useState(false);
+  const [holdsLoading, setHoldsLoading] = useState(false);
+  const [proposalActionLoadingId, setProposalActionLoadingId] = useState<string | null>(null);
 
   // Handle ?tutors= and ?week= deep links on mount. Reads via compareRef so
   // the effect always sees the current hook, not the stale render-0 closure.
@@ -162,6 +191,96 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
     setDrawerSlots(null);
   }, []);
 
+  const applyProposalHoldsToResponse = useCallback((
+    current: RangeSearchResponse | null,
+    holds: ProposalHoldSummary[],
+  ): RangeSearchResponse | null => {
+    if (!current || !searchContext) return current;
+
+    const nextGrid = current.grid.map((row) => {
+      const availability = row.availability.map((cell, index) => {
+        const hasWiseDetails = Array.isArray(cell) && cell.some((entry) => entry.kind !== "proposal_hold");
+        if (hasWiseDetails) return cell;
+        const hadProposalHold = Array.isArray(cell) && cell.some((entry) => entry.kind === "proposal_hold");
+        if (cell !== true && !hadProposalHold) return cell;
+
+        const slot = current.subSlots[index];
+        const weekday = searchContext.searchMode === "recurring"
+          ? searchContext.dayOfWeek
+          : searchContext.date
+            ? new Date(`${searchContext.date}T00:00:00+07:00`).getDay()
+            : undefined;
+        if (weekday === undefined) return cell;
+
+        const startMinute = parseTimeToMinutes(slot.start);
+        const endMinute = parseTimeToMinutes(slot.end);
+        const hold = holds.find((candidate) => (
+          candidate.tutorCanonicalKey === row.tutorCanonicalKey &&
+          proposalHoldBlocksSearchSlot(candidate, {
+            searchMode: searchContext.searchMode,
+            weekday,
+            date: searchContext.date,
+            startMinute,
+            endMinute,
+          })
+        ));
+
+        return hold ? [proposalHoldToBlockingInfo(hold)] : true;
+      });
+
+      return { ...row, availability };
+    });
+
+    return { ...current, grid: nextGrid };
+  }, [searchContext]);
+
+  const refreshProposalHolds = useCallback(async () => {
+    setHoldsLoading(true);
+    try {
+      const res = await fetch("/api/proposals/active");
+      if (!res.ok) return;
+      const data = await res.json();
+      const holds = (data.holds ?? []) as ProposalHoldSummary[];
+      setActiveHolds(holds);
+      setResponse((current) => applyProposalHoldsToResponse(current, holds));
+    } finally {
+      setHoldsLoading(false);
+    }
+  }, [applyProposalHoldsToResponse]);
+
+  useEffect(() => {
+    void refreshProposalHolds();
+  }, [refreshProposalHolds]);
+
+  const handleProposalCreated = useCallback((items: ProposalHoldSummary[]) => {
+    setActiveHolds((prev) => {
+      const byId = new Map(prev.map((hold) => [hold.itemId, hold]));
+      for (const item of items) byId.set(item.itemId, item);
+      const merged = [...byId.values()];
+      setResponse((current) => applyProposalHoldsToResponse(current, merged));
+      return merged;
+    });
+    void refreshProposalHolds();
+  }, [applyProposalHoldsToResponse, refreshProposalHolds]);
+
+  const handleProposalAction = useCallback(async (itemId: string, action: ProposalPatchAction) => {
+    setProposalActionLoadingId(itemId);
+    try {
+      const res = await fetch(`/api/proposals/items/${itemId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const holds = (data.holds ?? []) as ProposalHoldSummary[];
+      setActiveHolds(holds);
+      setResponse((current) => applyProposalHoldsToResponse(current, holds));
+    } finally {
+      setProposalActionLoadingId(null);
+    }
+  }, [applyProposalHoldsToResponse]);
+
   return (
     <div className="flex-1 flex gap-3 overflow-hidden min-h-0">
       <div
@@ -190,16 +309,32 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
               searchContext={searchContext}
               onOpenDrawer={handleOpenDrawer}
               onAddToCompare={handleCompareSelected}
+              onMarkProposed={setProposalDraft}
               disableAdd={disableAdd}
             />
           </div>
         )}
+        <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground">
+          <span>
+            {activeHolds.length > 0
+              ? `${activeHolds.length} active proposal hold${activeHolds.length !== 1 ? "s" : ""}`
+              : "No active proposal holds"}
+          </span>
+          <button
+            type="button"
+            onClick={() => setHoldsDrawerOpen(true)}
+            className="rounded-md border border-border px-2 py-0.5 text-[10px] font-medium text-foreground hover:bg-muted"
+          >
+            Active holds
+          </button>
+        </div>
         <SearchResults
           response={response}
           loading={false}
           searchContext={searchContext}
           onCompareSelected={handleCompareSelected}
           onAddSingle={compare.addTutor}
+          onMarkProposed={setProposalDraft}
           disableAdd={disableAdd}
         />
       </div>
@@ -214,6 +349,7 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
           tutorList={tutorList}
           isFullscreen={isFullscreen}
           onToggleFullscreen={() => setIsFullscreen((v) => !v)}
+          proposalHolds={activeHolds}
         />
       </div>
       <CopyForParentDrawer
@@ -221,6 +357,20 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
         onClose={handleCloseDrawer}
         slots={drawerSlots ?? []}
         searchContext={searchContext}
+      />
+      <ProposalHoldModal
+        draft={proposalDraft}
+        onClose={() => setProposalDraft(null)}
+        onCreated={handleProposalCreated}
+      />
+      <ActiveHoldsDrawer
+        open={holdsDrawerOpen}
+        holds={activeHolds}
+        loading={holdsLoading}
+        actionLoadingId={proposalActionLoadingId}
+        onClose={() => setHoldsDrawerOpen(false)}
+        onRefresh={refreshProposalHolds}
+        onAction={handleProposalAction}
       />
     </div>
   );

@@ -5,7 +5,10 @@ import { getDb } from "@/lib/db";
 import { ensureIndex } from "@/lib/search/index";
 import { executeSearch, getBlockingSessions } from "@/lib/search/engine";
 import { parseTimeToMinutes } from "@/lib/normalization/timezone";
+import { listActiveProposalHolds } from "@/lib/proposals/data";
+import { proposalHoldBlocksSearchSlot, weekdayForIsoDate } from "@/lib/proposals/overlap";
 import type { RangeSearchResponse, RangeGridRow, TutorReviewResult, BlockingSessionInfo } from "@/lib/search/types";
+import type { ProposalHoldSummary } from "@/lib/proposals/types";
 
 const rangeRequestSchema = z.object({
   searchMode: z.enum(["recurring", "one_time"]),
@@ -54,6 +57,39 @@ function generateSubSlots(
   return slots;
 }
 
+function proposalHoldToBlockingInfo(hold: ProposalHoldSummary): BlockingSessionInfo {
+  return {
+    kind: "proposal_hold",
+    title: `Held for ${hold.studentLabel}`,
+    studentName: hold.studentLabel,
+    subject: [hold.subject, hold.curriculum, hold.level].filter(Boolean).join(" ") || undefined,
+    startTime: hold.startTime,
+    endTime: hold.endTime,
+    proposalHold: hold,
+  };
+}
+
+function findProposalHoldForSlot(
+  holds: ProposalHoldSummary[],
+  tutorCanonicalKey: string,
+  searchMode: "recurring" | "one_time",
+  weekday: number,
+  startMinute: number,
+  endMinute: number,
+  date?: string,
+): ProposalHoldSummary | null {
+  return holds.find((hold) => (
+    hold.tutorCanonicalKey === tutorCanonicalKey &&
+    proposalHoldBlocksSearchSlot(hold, {
+      searchMode,
+      weekday,
+      date,
+      startMinute,
+      endMinute,
+    })
+  )) ?? null;
+}
+
 export async function POST(request: NextRequest) {
   const session = await auth();
   if (!session) {
@@ -90,6 +126,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const index = await ensureIndex(db);
+    const activeProposalHolds = await listActiveProposalHolds(db);
 
     // Build synthetic search request with all sub-slots
     const slots = subSlots.map((ss, i) => ({
@@ -114,18 +151,37 @@ export async function POST(request: NextRequest) {
       const slotResult = result.perSlotResults[i];
 
       for (const tutor of slotResult.available) {
+        const ss = subSlots[i];
+        const slotStartMin = parseTimeToMinutes(ss.start);
+        const slotEndMin = parseTimeToMinutes(ss.end);
+        const weekday = searchMode === "recurring"
+          ? dayOfWeek!
+          : weekdayForIsoDate(date!);
+        const proposalHold = findProposalHoldForSlot(
+          activeProposalHolds,
+          tutor.tutorCanonicalKey,
+          searchMode,
+          weekday,
+          slotStartMin,
+          slotEndMin,
+          date,
+        );
+
         if (!tutorMap.has(tutor.tutorGroupId)) {
           tutorMap.set(tutor.tutorGroupId, {
             row: {
               tutorGroupId: tutor.tutorGroupId,
+              tutorCanonicalKey: tutor.tutorCanonicalKey,
               displayName: tutor.displayName,
               supportedModes: tutor.supportedModes,
               qualifications: tutor.qualifications,
             },
-            availability: new Array<true | BlockingSessionInfo[]>(subSlots.length).fill([]),
+            availability: Array.from({ length: subSlots.length }, () => [] as BlockingSessionInfo[]),
           });
         }
-        tutorMap.get(tutor.tutorGroupId)!.availability[i] = true;
+        tutorMap.get(tutor.tutorGroupId)!.availability[i] = proposalHold
+          ? [proposalHoldToBlockingInfo(proposalHold)]
+          : true;
       }
 
       for (const tutor of slotResult.needsReview) {
@@ -141,14 +197,16 @@ export async function POST(request: NextRequest) {
       if (!group) continue;
 
       for (let i = 0; i < subSlots.length; i++) {
-        if (entry.availability[i] === true) continue;
+        const availability = entry.availability[i];
+        if (availability === true) continue;
+        if (availability.length > 0) continue;
 
         const ss = subSlots[i];
         const slotStartMin = parseTimeToMinutes(ss.start);
         const slotEndMin = parseTimeToMinutes(ss.end);
         const weekday = searchMode === "recurring"
           ? dayOfWeek!
-          : new Date(date!).getDay();
+          : weekdayForIsoDate(date!);
 
         const blockingSessions = getBlockingSessions(
           group,

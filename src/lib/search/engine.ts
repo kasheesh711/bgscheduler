@@ -127,6 +127,7 @@ function searchSlot(
     // Decide: Available or Needs Review
     const result: TutorResult = {
       tutorGroupId: group.id,
+      tutorCanonicalKey: group.canonicalKey,
       displayName: group.displayName,
       supportedModes: group.supportedModes,
       qualifications: group.qualifications,
@@ -219,6 +220,7 @@ export function getBlockingSessions(
 
     if (overlaps) {
       results.push({
+        kind: "wise_session",
         title: s.title,
         studentName: s.studentName,
         subject: s.subject,
