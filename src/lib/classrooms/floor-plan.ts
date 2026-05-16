@@ -1,4 +1,17 @@
-import type { ClassroomRoomDefinition } from "./rooms";
+import {
+  ROOM_BIG_MEMORIES_TV,
+  ROOM_DOUBT_TV,
+  ROOM_GO_ALL_IN_TV,
+  ROOM_HERE_THERE_TV,
+  ROOM_ICONIC_TV,
+  ROOM_JOY,
+  ROOM_KEEP_GOING_TV,
+  ROOM_NEVER_EVER_TV,
+  ROOM_RELAX_TV,
+  ROOM_REMEMBER_TV,
+  ROOM_TURN_THE_PAGE_TV,
+  type ClassroomRoomDefinition,
+} from "./rooms";
 
 export interface FloorPlanRoomGeometry {
   roomName: string;
@@ -39,7 +52,7 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
     section: "left",
   },
   {
-    roomName: "Never Ever",
+    roomName: ROOM_NEVER_EVER_TV,
     label: "Never Ever",
     labelLines: ["Never", "Ever"],
     d: rectPath(470, 70, 220, 125),
@@ -49,7 +62,7 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
     section: "left",
   },
   {
-    roomName: "Keep Going",
+    roomName: ROOM_KEEP_GOING_TV,
     label: "Keep Going",
     labelLines: ["Keep", "Going"],
     d: rectPath(690, 70, 235, 125),
@@ -59,7 +72,7 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
     section: "left",
   },
   {
-    roomName: "Relax",
+    roomName: ROOM_RELAX_TV,
     label: "Relax",
     labelLines: ["Relax"],
     d: rectPath(95, 225, 285, 180),
@@ -69,7 +82,7 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
     section: "left",
   },
   {
-    roomName: "Big Memories",
+    roomName: ROOM_BIG_MEMORIES_TV,
     label: "Big Memories",
     labelLines: ["Big", "Memories"],
     d: rectPath(95, 405, 95, 105),
@@ -79,7 +92,7 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
     section: "left",
   },
   {
-    roomName: "Remember",
+    roomName: ROOM_REMEMBER_TV,
     label: "Remember",
     labelLines: ["Remember"],
     d: rectPath(190, 405, 95, 105),
@@ -109,7 +122,7 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
     section: "left",
   },
   {
-    roomName: "Doubt",
+    roomName: ROOM_DOUBT_TV,
     label: "Doubt",
     labelLines: ["Doubt"],
     d: rectPath(190, 560, 85, 110),
@@ -119,7 +132,7 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
     section: "left",
   },
   {
-    roomName: "Here There",
+    roomName: ROOM_HERE_THERE_TV,
     label: "Here There",
     labelLines: ["Here", "There"],
     d: rectPath(275, 560, 80, 110),
@@ -189,7 +202,7 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
     section: "center",
   },
   {
-    roomName: "Iconic",
+    roomName: ROOM_ICONIC_TV,
     label: "Iconic",
     labelLines: ["Iconic"],
     d: "M750 460h160v90c0 12-8 20-20 20H750z",
@@ -199,7 +212,7 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
     section: "center",
   },
   {
-    roomName: "Go All In",
+    roomName: ROOM_GO_ALL_IN_TV,
     label: "Go All In",
     labelLines: ["Go All In"],
     d: rectPath(635, 570, 145, 85),
@@ -209,7 +222,7 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
     section: "center",
   },
   {
-    roomName: "Turn The Page",
+    roomName: ROOM_TURN_THE_PAGE_TV,
     label: "Turn The Page",
     labelLines: ["Turn The", "Page"],
     d: rectPath(635, 655, 145, 100),
@@ -219,7 +232,7 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
     section: "center",
   },
   {
-    roomName: "Joy",
+    roomName: ROOM_JOY,
     label: "Joy",
     labelLines: ["Joy"],
     d: "M1145 30h180v155h-180V60z",

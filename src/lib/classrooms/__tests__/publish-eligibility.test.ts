@@ -1,25 +1,30 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   classroomTimestampToWiseIso,
   estimatePublishRemainingMs,
   findPublishRoomBlockers,
-  findTemporaryPublishLocation,
+  intendedTvRepairLocation,
   isClassroomPublishEligible,
-  orderTemporaryPublishCandidates,
+  isWiseClassroomWritebackEnabled,
   toPublishJobProgress,
   updateWiseLocationOnly,
 } from "../data";
 import { REMOTE_NO_ROOM_NEEDED } from "../assignment-engine";
+import { ROOM_JOY, ROOM_REMEMBER_TV } from "../rooms";
 
 const baseRow = {
   status: "assigned" as const,
-  assignedRoom: "Joy",
+  assignedRoom: ROOM_JOY,
   sessionType: "OFFLINE",
   wiseClassId: "class-1",
   wiseSessionId: "session-1",
   warnings: [] as string[],
 };
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("isClassroomPublishEligible", () => {
   it("allows assigned offline rows with Wise ids", () => {
@@ -109,19 +114,19 @@ describe("publish job progress", () => {
 });
 
 describe("findPublishRoomBlockers", () => {
-  it("detects overlapping rows currently occupying the target physical room", () => {
+  it("detects overlapping rows currently occupying the exact target Wise room", () => {
     const row = {
       id: "target",
       tutorDisplayName: "Target",
       currentWiseLocation: "Doubt",
-      assignedRoom: "Remember",
+      assignedRoom: ROOM_REMEMBER_TV,
       startMinute: 600,
       endMinute: 660,
     };
     const blocker = {
       id: "blocker",
       tutorDisplayName: "Blocker",
-      currentWiseLocation: "Remember (TV)",
+      currentWiseLocation: ROOM_REMEMBER_TV,
       assignedRoom: "Cool",
       startMinute: 630,
       endMinute: 690,
@@ -130,19 +135,40 @@ describe("findPublishRoomBlockers", () => {
     expect(findPublishRoomBlockers(row, [row, blocker])).toEqual([blocker]);
   });
 
+  it("does not collapse plain and TV Wise room names", () => {
+    const row = {
+      id: "target",
+      tutorDisplayName: "Target",
+      currentWiseLocation: "Doubt",
+      assignedRoom: ROOM_REMEMBER_TV,
+      startMinute: 600,
+      endMinute: 660,
+    };
+    const plainRoom = {
+      id: "plain-room",
+      tutorDisplayName: "Plain",
+      currentWiseLocation: "Remember",
+      assignedRoom: "Cool",
+      startMinute: 630,
+      endMinute: 690,
+    };
+
+    expect(findPublishRoomBlockers(row, [plainRoom])).toEqual([]);
+  });
+
   it("ignores rows that do not overlap the target time", () => {
     const row = {
       id: "target",
       tutorDisplayName: "Target",
       currentWiseLocation: "Doubt",
-      assignedRoom: "Remember",
+      assignedRoom: ROOM_REMEMBER_TV,
       startMinute: 600,
       endMinute: 660,
     };
     const later = {
       id: "later",
       tutorDisplayName: "Later",
-      currentWiseLocation: "Remember",
+      currentWiseLocation: ROOM_REMEMBER_TV,
       assignedRoom: "Cool",
       startMinute: 660,
       endMinute: 720,
@@ -152,86 +178,17 @@ describe("findPublishRoomBlockers", () => {
   });
 });
 
-describe("findTemporaryPublishLocation", () => {
-  it("chooses a room with no current or assigned overlap", () => {
-    const row = {
-      id: "target",
-      tutorDisplayName: "Target",
-      currentWiseLocation: "Cool",
-      assignedRoom: "Remember",
-      startMinute: 600,
-      endMinute: 660,
-    };
-    const occupiedCurrent = {
-      id: "current",
-      tutorDisplayName: "Current",
-      currentWiseLocation: "Dream. Plan. Do.",
-      assignedRoom: "Nerd",
-      startMinute: 600,
-      endMinute: 660,
-    };
-    const occupiedAssigned = {
-      id: "assigned",
-      tutorDisplayName: "Assigned",
-      currentWiseLocation: "Doubt",
-      assignedRoom: "Joy",
-      startMinute: 630,
-      endMinute: 690,
-    };
-
-    expect(findTemporaryPublishLocation(row, [row, occupiedCurrent, occupiedAssigned], [
-      "Dream. Plan. Do.",
-      "Joy",
-      "Iconic",
-    ])).toBe("Iconic");
-  });
-});
-
-describe("orderTemporaryPublishCandidates", () => {
-  it("only chooses rows currently blocking another pending row", () => {
-    const passiveBlockedRow = {
-      id: "passive-blocked",
-      tutorDisplayName: "Passive",
-      currentWiseLocation: "Cool",
-      assignedRoom: "Do It",
-      startMinute: 720,
-      endMinute: 780,
-    };
-    const actualBlocker = {
-      id: "actual-blocker",
-      tutorDisplayName: "Blocker",
-      currentWiseLocation: "Do It",
-      assignedRoom: "Here There",
-      startMinute: 750,
-      endMinute: 840,
-    };
-    const downstream = {
-      id: "downstream",
-      tutorDisplayName: "Downstream",
-      currentWiseLocation: "Here There",
-      assignedRoom: "Remember",
-      startMinute: 780,
-      endMinute: 840,
-    };
-
-    expect(orderTemporaryPublishCandidates([passiveBlockedRow, actualBlocker, downstream]).map((row) => row.id)).toEqual([
-      "actual-blocker",
-      "downstream",
-    ]);
-  });
-});
-
 describe("updateWiseLocationOnly", () => {
-  it("treats a successful Wise location PUT as publishable without availability preflight", async () => {
+  it("sends the exact Wise room string for a successful location PUT", async () => {
     const updateLocation = vi.fn().mockResolvedValue({ ok: true });
 
     await expect(updateWiseLocationOnly(
       updateLocation,
       { wiseClassId: "class-1", wiseSessionId: "session-1" },
-      "Remember",
+      ROOM_REMEMBER_TV,
     )).resolves.toBeNull();
 
-    expect(updateLocation).toHaveBeenCalledWith("class-1", "session-1", "Remember");
+    expect(updateLocation).toHaveBeenCalledWith("class-1", "session-1", ROOM_REMEMBER_TV);
   });
 
   it("returns the raw Wise PUT error when location update is rejected", async () => {
@@ -240,14 +197,33 @@ describe("updateWiseLocationOnly", () => {
     await expect(updateWiseLocationOnly(
       updateLocation,
       { wiseClassId: "class-1", wiseSessionId: "session-1" },
-      "Remember",
+      ROOM_REMEMBER_TV,
     )).resolves.toBe("Wise API 422: invalid location");
   });
 
-  it("does not use Wise availability preflight from the classroom publisher", () => {
+  it("does not use Wise availability preflight or temporary room swaps from the classroom publisher", () => {
     const source = readFileSync(new URL("../data.ts", import.meta.url), "utf8");
 
     expect(source).not.toContain("checkTeacherAvailabilityForSessions");
     expect(source).not.toContain("Wise availability conflict");
+    expect(source).not.toContain("moveCycleRowToTemporaryLocation");
+    expect(source).not.toContain("temporaryLocations");
+  });
+});
+
+describe("Wise classroom writeback safety", () => {
+  it("is disabled unless the explicit env flag is true", () => {
+    vi.stubEnv("ENABLE_WISE_CLASSROOM_WRITEBACK", "false");
+    expect(isWiseClassroomWritebackEnabled()).toBe(false);
+
+    vi.stubEnv("ENABLE_WISE_CLASSROOM_WRITEBACK", "true");
+    expect(isWiseClassroomWritebackEnabled()).toBe(true);
+  });
+
+  it("maps only known invalid plain TV room names to exact repair locations", () => {
+    expect(intendedTvRepairLocation("Joy")).toBe(ROOM_JOY);
+    expect(intendedTvRepairLocation("Remember")).toBe(ROOM_REMEMBER_TV);
+    expect(intendedTvRepairLocation("Focus")).toBeNull();
+    expect(intendedTvRepairLocation("Storage Closet")).toBeNull();
   });
 });

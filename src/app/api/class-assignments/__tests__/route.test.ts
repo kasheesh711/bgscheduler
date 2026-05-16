@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { NextRequest } from "next/server";
 
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
@@ -9,12 +9,15 @@ vi.mock("@/lib/classrooms/data", () => ({
     return value;
   }),
   createClassroomPublishJob: vi.fn(),
+  getPlainTvLocationRepairAudit: vi.fn(),
   getClassroomPublishJobProgress: vi.fn(),
   getClassroomAssignmentForDate: vi.fn(),
+  isWiseClassroomWritebackEnabled: vi.fn(() => process.env.ENABLE_WISE_CLASSROOM_WRITEBACK === "true"),
   runClassroomAssignment: vi.fn(),
   updateClassroomAssignmentOverride: vi.fn(),
   publishClassroomAssignmentRun: vi.fn(),
   runClassroomPublishJob: vi.fn(),
+  wiseClassroomWritebackDisabledMessage: vi.fn(() => "Wise classroom writeback is disabled."),
 }));
 vi.mock("@/lib/classrooms/schedule-email", () => ({
   getScheduleEmailPreview: vi.fn(),
@@ -25,17 +28,21 @@ import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import {
   createClassroomPublishJob,
+  getPlainTvLocationRepairAudit,
   getClassroomPublishJobProgress,
   getClassroomAssignmentForDate,
+  isWiseClassroomWritebackEnabled,
   runClassroomAssignment,
   runClassroomPublishJob,
   updateClassroomAssignmentOverride,
+  wiseClassroomWritebackDisabledMessage,
 } from "@/lib/classrooms/data";
 import {
   getScheduleEmailPreview,
   sendScheduleEmailsForRun,
 } from "@/lib/classrooms/schedule-email";
 import { GET as getAssignments } from "../route";
+import { GET as getRepairAudit } from "../repair-audit/route";
 import { POST as runAssignments } from "../run/route";
 import { PATCH as patchOverride } from "../runs/[runId]/rows/[rowId]/route";
 import { POST as publishAssignments } from "../runs/[runId]/publish/route";
@@ -49,6 +56,7 @@ const detail = {
   run: { id: "run-1", assignmentDate: "2026-05-14" },
   rows: [],
   rooms: [],
+  wiseWritebackEnabled: false,
 };
 
 const schedulePreview = {
@@ -90,10 +98,15 @@ describe("class assignment routes", () => {
     vi.resetAllMocks();
     authMock.mockResolvedValue({ user: { email: "admin@example.com" } });
     vi.mocked(getDb).mockReturnValue({ db: true } as never);
+    vi.mocked(isWiseClassroomWritebackEnabled).mockImplementation(
+      () => process.env.ENABLE_WISE_CLASSROOM_WRITEBACK === "true",
+    );
+    vi.mocked(wiseClassroomWritebackDisabledMessage).mockReturnValue("Wise classroom writeback is disabled.");
     vi.mocked(getClassroomAssignmentForDate).mockResolvedValue(detail as never);
     vi.mocked(runClassroomAssignment).mockResolvedValue(detail as never);
     vi.mocked(updateClassroomAssignmentOverride).mockResolvedValue(detail as never);
     vi.mocked(createClassroomPublishJob).mockResolvedValue(publishProgress as never);
+    vi.mocked(getPlainTvLocationRepairAudit).mockResolvedValue([] as never);
     vi.mocked(getClassroomPublishJobProgress).mockResolvedValue({ progress: publishProgress, detail } as never);
     vi.mocked(runClassroomPublishJob).mockResolvedValue({ progress: publishProgress, detail } as never);
     vi.mocked(getScheduleEmailPreview).mockResolvedValue(schedulePreview as never);
@@ -102,6 +115,11 @@ describe("class assignment routes", () => {
       recipients: [],
       preview: schedulePreview,
     } as never);
+    vi.stubEnv("ENABLE_WISE_CLASSROOM_WRITEBACK", "false");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("requires auth", async () => {
@@ -142,7 +160,7 @@ describe("class assignment routes", () => {
   it("updates an override and recalculates the run", async () => {
     const req = new NextRequest("http://test.local/api/class-assignments/runs/run-1/rows/row-1", {
       method: "PATCH",
-      body: JSON.stringify({ overrideRoom: "Joy" }),
+      body: JSON.stringify({ overrideRoom: "Joy (TV)" }),
     });
 
     const res = await patchOverride(req, {
@@ -152,11 +170,23 @@ describe("class assignment routes", () => {
     expect(res.status).toBe(200);
     expect(updateClassroomAssignmentOverride).toHaveBeenCalledWith(
       { db: true },
-      { runId: "run-1", rowId: "row-1", overrideRoom: "Joy" },
+      { runId: "run-1", rowId: "row-1", overrideRoom: "Joy (TV)" },
     );
   });
 
-  it("starts a publish job and returns progress", async () => {
+  it("blocks publish unless Wise writeback is explicitly enabled", async () => {
+    const res = await publishAssignments(new Request("http://test.local/api/class-assignments/runs/run-1/publish"), {
+      params: Promise.resolve({ runId: "run-1" }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(createClassroomPublishJob).not.toHaveBeenCalled();
+    await expect(res.json()).resolves.toEqual({ error: "Wise classroom writeback is disabled." });
+  });
+
+  it("starts a publish job and returns progress when Wise writeback is enabled", async () => {
+    vi.stubEnv("ENABLE_WISE_CLASSROOM_WRITEBACK", "true");
+
     const res = await publishAssignments(new Request("http://test.local/api/class-assignments/runs/run-1/publish"), {
       params: Promise.resolve({ runId: "run-1" }),
     });
@@ -170,6 +200,35 @@ describe("class assignment routes", () => {
       jobId: "job-1",
       progress: publishProgress,
     });
+  });
+
+  it("returns the plain TV location repair audit as csv", async () => {
+    vi.mocked(getPlainTvLocationRepairAudit).mockResolvedValue([
+      {
+        publishJobId: "job-1",
+        publishJobStatus: "succeeded",
+        publishedBy: "admin@example.com",
+        runId: "run-1",
+        assignmentDate: "2026-05-16",
+        rowId: "row-1",
+        wiseClassId: "class-1",
+        wiseSessionId: "session-1",
+        studentName: "Student One",
+        tutorDisplayName: "Gift",
+        startTimeBangkok: "2026-05-16 16:00",
+        wrongLocation: "Joy",
+        intendedLocation: "Joy (TV)",
+        publishedAt: "2026-05-15T20:00:00.000Z",
+      },
+    ] as never);
+
+    const res = await getRepairAudit(
+      new NextRequest("http://test.local/api/class-assignments/repair-audit?format=csv"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/csv");
+    await expect(res.text()).resolves.toContain("job-1,succeeded,admin@example.com");
   });
 
   it("returns publish job progress", async () => {

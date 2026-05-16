@@ -8,6 +8,7 @@ import {
   ROOM_JOY,
   ROOM_THINK_OUTSIDE_THE_BOX,
   TV_REQUIRED_TUTORS,
+  exactWiseRoomName,
   normalizeTutorName,
 } from "./rooms";
 import {
@@ -249,7 +250,7 @@ function buildSessionFacts(
 ): AssignmentSessionFacts {
   const tutorNorm = normalizeTutorName(session.tutorDisplayName);
   const { minCapacity, warnings } = inferCapacity(session);
-  const overrideRoom = normalizeTutorName(overrideBySessionId.get(session.wiseSessionId) ?? "") || null;
+  const overrideRoom = exactWiseRoomName(overrideBySessionId.get(session.wiseSessionId) ?? "") || null;
 
   return {
     minCapacity,

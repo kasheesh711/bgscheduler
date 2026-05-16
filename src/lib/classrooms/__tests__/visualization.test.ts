@@ -3,7 +3,7 @@ import {
   FLOOR_PLAN_ASSIGNABLE_ROOM_NAMES,
   getFloorPlanGeometry,
 } from "../floor-plan";
-import { DEFAULT_CLASSROOM_ROOMS, NO_ROOM_AVAILABLE } from "../rooms";
+import { DEFAULT_CLASSROOM_ROOMS, NO_ROOM_AVAILABLE, ROOM_RELAX_TV } from "../rooms";
 import {
   buildHeatmapCells,
   buildRoomCalendarEvents,
@@ -99,12 +99,12 @@ describe("classroom visualization helpers", () => {
 
   it("uses studentCount before minCapacity for room load ratio", () => {
     const state = buildRoomOccupancyState(
-      [row({ assignedRoom: "Relax", studentCount: 4, minCapacity: 1 })],
+      [row({ assignedRoom: ROOM_RELAX_TV, studentCount: 4, minCapacity: 1 })],
       rooms(),
       9 * 60 + 15,
     );
 
-    const relax = state.rooms.find((room) => room.room.name === "Relax");
+    const relax = state.rooms.find((room) => room.room.name === ROOM_RELAX_TV);
     expect(relax?.load).toBe(4);
     expect(relax?.loadRatio).toBe(0.5);
   });

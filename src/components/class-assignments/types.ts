@@ -60,4 +60,5 @@ export interface AssignmentDetail {
   run: ClassroomRun | null;
   rows: ClassroomRow[];
   rooms: ClassroomRoom[];
+  wiseWritebackEnabled: boolean;
 }

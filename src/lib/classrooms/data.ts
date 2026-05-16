@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { WiseClient } from "@/lib/wise/client";
@@ -15,7 +15,11 @@ import {
 } from "./assignment-engine";
 import {
   DEFAULT_CLASSROOM_ROOMS,
+  LEGACY_PLAIN_TV_ROOM_NAMES,
   NO_ROOM_AVAILABLE,
+  exactWiseRoomName,
+  isLegacyPlainTvRoomName,
+  tvRoomRepairLocation,
   type ClassroomRoomDefinition,
 } from "./rooms";
 
@@ -28,6 +32,7 @@ export interface ClassroomAssignmentDetail {
   run: ClassroomRun | null;
   rows: ClassroomRow[];
   rooms: ClassroomRoom[];
+  wiseWritebackEnabled: boolean;
 }
 
 export interface TeacherScheduleBlock {
@@ -81,9 +86,29 @@ export interface PublishJobStatusResponse {
   detail?: ClassroomAssignmentDetail;
 }
 
+export interface PlainTvLocationRepairAuditRow {
+  publishJobId: string | null;
+  publishJobStatus: ClassroomPublishJob["status"] | null;
+  publishedBy: string | null;
+  runId: string;
+  assignmentDate: string;
+  rowId: string;
+  wiseClassId: string | null;
+  wiseSessionId: string;
+  tutorDisplayName: string;
+  studentName: string | null;
+  startTimeBangkok: string;
+  wrongLocation: string;
+  intendedLocation: string;
+  publishedAt: string | null;
+}
+
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PUBLISH_ROW_CONCURRENCY = 10;
 const PUBLISH_JOB_STALE_AFTER_MS = 6 * 60 * 1000;
+const WISE_CLASSROOM_WRITEBACK_DISABLED_MESSAGE =
+  "Wise classroom writeback is disabled. Set ENABLE_WISE_CLASSROOM_WRITEBACK=true only after explicit approval.";
+const PLAIN_TV_REPAIR_AUDIT_START = new Date("2026-05-15T00:00:00+07:00");
 
 export function assertIsoDate(value: string): string {
   if (!ISO_DATE_RE.test(value)) {
@@ -94,6 +119,33 @@ export function assertIsoDate(value: string): string {
     throw new Error("Invalid date. Expected YYYY-MM-DD.");
   }
   return value;
+}
+
+export function isWiseClassroomWritebackEnabled(): boolean {
+  return process.env.ENABLE_WISE_CLASSROOM_WRITEBACK === "true";
+}
+
+export function wiseClassroomWritebackDisabledMessage(): string {
+  return WISE_CLASSROOM_WRITEBACK_DISABLED_MESSAGE;
+}
+
+function assertWiseClassroomWritebackEnabled(): void {
+  if (!isWiseClassroomWritebackEnabled()) {
+    throw new Error(WISE_CLASSROOM_WRITEBACK_DISABLED_MESSAGE);
+  }
+}
+
+function assignmentDetail(
+  run: ClassroomRun | null,
+  rows: ClassroomRow[],
+  rooms: ClassroomRoom[],
+): ClassroomAssignmentDetail {
+  return {
+    run,
+    rows,
+    rooms,
+    wiseWritebackEnabled: isWiseClassroomWritebackEnabled(),
+  };
 }
 
 function dateRangeForBangkokDate(value: string): { start: Date; end: Date } {
@@ -123,7 +175,7 @@ function normalizedLocation(value: string | null): string {
 }
 
 function normalizedPhysicalLocation(value: string | null): string {
-  return normalizedLocation(value).replace(/\s+\(tv\)$/, "");
+  return normalizedLocation(value);
 }
 
 export function classroomTimestampToWiseIso(value: Date | string): string {
@@ -162,42 +214,6 @@ export function findPublishRoomBlockers(
   ));
 }
 
-function isPublishRoomInUse(
-  roomName: string,
-  row: PublishDependencyRow,
-  candidates: PublishDependencyRow[],
-): boolean {
-  const target = normalizedPhysicalLocation(roomName);
-  return candidates.some((candidate) => (
-    candidate.id !== row.id &&
-    rowsOverlap(row, candidate) &&
-    (
-      normalizedPhysicalLocation(candidate.currentWiseLocation) === target ||
-      normalizedPhysicalLocation(candidate.assignedRoom) === target
-    )
-  ));
-}
-
-export function findTemporaryPublishLocation(
-  row: PublishDependencyRow,
-  candidates: PublishDependencyRow[],
-  roomNames: string[],
-): string | null {
-  return roomNames.find((roomName) => !isPublishRoomInUse(roomName, row, candidates)) ?? null;
-}
-
-export function orderTemporaryPublishCandidates<T extends PublishDependencyRow>(rows: T[]): T[] {
-  const blockerCounts = new Map<string, number>();
-  for (const row of rows) {
-    for (const blocker of findPublishRoomBlockers(row, rows)) {
-      blockerCounts.set(blocker.id, (blockerCounts.get(blocker.id) ?? 0) + 1);
-    }
-  }
-  return rows
-    .filter((row) => (blockerCounts.get(row.id) ?? 0) > 0)
-    .sort((left, right) => (blockerCounts.get(right.id) ?? 0) - (blockerCounts.get(left.id) ?? 0));
-}
-
 export async function ensureDefaultClassroomRooms(db: Database): Promise<void> {
   const existingRows = await db.select().from(schema.classroomRooms);
   const existingNames = new Set(existingRows.map((row) => row.name));
@@ -220,6 +236,16 @@ export async function ensureDefaultClassroomRooms(db: Database): Promise<void> {
     await db.insert(schema.classroomRooms).values(missingRows).onConflictDoNothing({
       target: schema.classroomRooms.name,
     });
+  }
+
+  const legacyPlainTvNames = existingRows
+    .filter((row) => row.active && isLegacyPlainTvRoomName(row.name))
+    .map((row) => row.name);
+  if (legacyPlainTvNames.length) {
+    await db
+      .update(schema.classroomRooms)
+      .set({ active: false, updatedAt: now })
+      .where(inArray(schema.classroomRooms.name, legacyPlainTvNames));
   }
 }
 
@@ -366,9 +392,9 @@ export async function getClassroomAssignmentForDate(
   assertIsoDate(date);
   const rooms = await listClassroomRooms(db);
   const run = await loadLatestRunForDate(db, date);
-  if (!run) return { run: null, rows: [], rooms };
+  if (!run) return assignmentDetail(null, [], rooms);
   const rows = await loadRowsForRun(db, run.id);
-  return { run, rows, rooms };
+  return assignmentDetail(run, rows, rooms);
 }
 
 async function loadPreviousOverrides(
@@ -391,7 +417,7 @@ async function loadPreviousOverrides(
     .where(eq(schema.classroomAssignmentRows.runId, previousRun.id));
 
   for (const row of rows) {
-    if (row.overrideRoom) overrides.set(row.wiseSessionId, row.overrideRoom);
+    if (row.overrideRoom) overrides.set(row.wiseSessionId, exactWiseRoomName(row.overrideRoom));
   }
   return overrides;
 }
@@ -544,7 +570,7 @@ export async function runClassroomAssignment(
   );
 
   const rows = await loadRowsForRun(db, run.id);
-  return { run, rows, rooms };
+  return assignmentDetail(run, rows, rooms);
 }
 
 function rowToSession(row: ClassroomRow): AssignmentSession {
@@ -653,7 +679,7 @@ export async function updateClassroomAssignmentOverride(
     .where(eq(schema.classroomAssignmentRuns.id, input.runId))
     .limit(1);
   const rows = await loadRowsForRun(db, input.runId);
-  return { run: freshRun ?? run, rows, rooms };
+  return assignmentDetail(freshRun ?? run, rows, rooms);
 }
 
 function createWiseClientFromEnv(): WiseClient {
@@ -689,20 +715,6 @@ async function markPublishResult(
     .where(eq(schema.classroomAssignmentRows.id, rowId));
 }
 
-async function updateRowCurrentWiseLocation(
-  db: Database,
-  rowId: string,
-  currentWiseLocation: string,
-): Promise<void> {
-  await db
-    .update(schema.classroomAssignmentRows)
-    .set({
-      currentWiseLocation,
-      updatedAt: new Date(),
-    })
-    .where(eq(schema.classroomAssignmentRows.id, rowId));
-}
-
 export function isClassroomPublishEligible(
   row: Pick<ClassroomRow,
     "status" | "assignedRoom" | "sessionType" | "wiseClassId" | "wiseSessionId" | "warnings"
@@ -730,6 +742,8 @@ export async function createClassroomPublishJob(
   db: Database,
   input: { runId: string; createdBy?: string | null },
 ): Promise<PublishJobProgress> {
+  assertWiseClassroomWritebackEnabled();
+
   const [run] = await db
     .select()
     .from(schema.classroomAssignmentRuns)
@@ -892,71 +906,23 @@ async function markSkippedRows(
   return summary;
 }
 
-async function loadTemporaryPublishLocations(
-  db: Database,
+async function loadApprovedWiseLocations(
   client: WiseClient,
   instituteId: string,
-): Promise<string[]> {
-  const [rooms, wiseLocations] = await Promise.all([
-    listClassroomRooms(db),
-    fetchInstituteLocations(client, instituteId).catch(() => []),
-  ]);
-  const wiseLocationNames = new Set(wiseLocations);
-  return rooms
-    .filter((room) => room.active && room.category !== "online_only")
-    .map((room) => room.name)
-    .filter((roomName) => wiseLocationNames.size === 0 || wiseLocationNames.has(roomName));
-}
-
-async function moveCycleRowToTemporaryLocation(
-  db: Database,
-  client: WiseClient,
-  rows: ClassroomRow[],
-  allRows: ClassroomRow[],
-  temporaryLocations: string[],
-  temporaryMovedRowIds: Set<string>,
-): Promise<{ moved: true } | { moved: false; error: string }> {
-  const attemptedErrors: string[] = [];
-  const moveCandidates = orderTemporaryPublishCandidates(rows).filter((row) => !temporaryMovedRowIds.has(row.id));
-  for (const row of moveCandidates) {
-    const candidates = temporaryLocations.filter((location) => (
-      normalizedPhysicalLocation(location) !== normalizedPhysicalLocation(row.currentWiseLocation) &&
-      normalizedPhysicalLocation(location) !== normalizedPhysicalLocation(row.assignedRoom)
-    ));
-    const temporaryLocation = findTemporaryPublishLocation(row, allRows, candidates);
-    if (!temporaryLocation) {
-      attemptedErrors.push(`${row.tutorDisplayName}: no temporary room available`);
-      continue;
-    }
-
-    const updateError = await updateWiseLocationOnly(
-      (classId, sessionId, location) => updateSessionLocation(client, classId, sessionId, location),
-      row,
-      temporaryLocation,
-    );
-    if (updateError) {
-      attemptedErrors.push(`${row.tutorDisplayName}: ${updateError}`);
-      continue;
-    }
-
-    row.currentWiseLocation = temporaryLocation;
-    temporaryMovedRowIds.add(row.id);
-    await updateRowCurrentWiseLocation(db, row.id, temporaryLocation);
-    return { moved: true };
-  }
-
-  return {
-    moved: false,
-    error: attemptedErrors[0] ?? "No untried blocking row had an available temporary room",
-  };
+): Promise<Set<string>> {
+  const locations = await fetchInstituteLocations(client, instituteId);
+  return new Set(locations.map((location) => location.trim()).filter(Boolean));
 }
 
 export async function runClassroomPublishJob(
   db: Database,
   jobId: string,
-  client = createWiseClientFromEnv(),
+  client?: WiseClient,
 ): Promise<PublishJobStatusResponse> {
+  assertWiseClassroomWritebackEnabled();
+
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
+  const wiseClient = client ?? createWiseClientFromEnv();
   const existingJob = await loadPublishJob(db, jobId);
   if (isPublishJobTerminal(existingJob.status)) {
     return getClassroomPublishJobProgress(db, existingJob.runId, jobId);
@@ -998,100 +964,48 @@ export async function runClassroomPublishJob(
     const summary: PublishSummary = { attempted: 0, success: 0, skipped: 0, failed: 0 };
     const skippedSummary = await markSkippedRows(db, jobId, skippedRows);
     summary.skipped += skippedSummary.skipped;
-    const temporaryLocations = await loadTemporaryPublishLocations(db, client, instituteId);
-    const temporaryMovedRowIds = new Set<string>();
+    const approvedWiseLocations = await loadApprovedWiseLocations(wiseClient, instituteId);
 
-    const pendingRows = new Map<string, ClassroomRow>();
-    const failedRows = new Map<string, ClassroomRow>();
-    for (const row of eligibleRows) {
-      if (
-        row.publishStatus === "success" ||
-        normalizedPhysicalLocation(row.currentWiseLocation) === normalizedPhysicalLocation(row.assignedRoom)
-      ) {
-        const result = await publishRowResult(db, jobId, row, {
-          status: "success",
-          publishedLocation: row.currentWiseLocation ?? row.assignedRoom,
-        });
-        summary.attempted += result.attempted;
-        summary.success += result.success;
-      } else {
-        pendingRows.set(row.id, row);
-      }
-    }
-
-    while (pendingRows.size > 0) {
-      const pending = [...pendingRows.values()];
-      let dependencyFailures = 0;
-      for (const row of pending) {
-        const blockers = findPublishRoomBlockers(row, [...failedRows.values()]);
-        if (blockers.length === 0) continue;
-        const blockerNames = blockers.map((blocker) => blocker.tutorDisplayName).join(", ");
+    await runLimited(eligibleRows, PUBLISH_ROW_CONCURRENCY, async (row) => {
+      if (!approvedWiseLocations.has(row.assignedRoom)) {
         const result = await publishRowResult(db, jobId, row, {
           status: "failed",
-          error: `Wise room still occupied because ${blockerNames} could not be moved`,
+          error: `Assigned room "${row.assignedRoom}" is not in the Wise location catalog`,
         });
         summary.attempted += result.attempted;
         summary.failed += result.failed;
-        failedRows.set(row.id, row);
-        pendingRows.delete(row.id);
-        dependencyFailures += 1;
+        return;
       }
-      if (dependencyFailures > 0) continue;
 
-      const stillPending = [...pendingRows.values()];
-      const readyRows = stillPending.filter((row) => findPublishRoomBlockers(row, stillPending).length === 0);
-      if (readyRows.length === 0) {
-        const temporaryMove = await moveCycleRowToTemporaryLocation(
-          db,
-          client,
-          stillPending,
-          rows,
-          temporaryLocations,
-          temporaryMovedRowIds,
-        );
-        if (temporaryMove.moved) continue;
-
-        await runLimited(stillPending, PUBLISH_ROW_CONCURRENCY, async (row) => {
-          const blockers = findPublishRoomBlockers(row, stillPending);
-          const blockerNames = blockers.map((blocker) => blocker.tutorDisplayName).join(", ");
-          const result = await publishRowResult(db, jobId, row, {
-            status: "failed",
-            error: blockerNames
-              ? `Wise room swap cycle; blocked by ${blockerNames}; ${temporaryMove.error}`
-              : temporaryMove.error,
-          });
-          summary.attempted += result.attempted;
-          summary.failed += result.failed;
-          failedRows.set(row.id, row);
-          pendingRows.delete(row.id);
+      if (normalizedLocation(row.currentWiseLocation) === normalizedLocation(row.assignedRoom)) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "success",
+          publishedLocation: row.assignedRoom,
         });
-        break;
-      }
-
-      await runLimited(readyRows, PUBLISH_ROW_CONCURRENCY, async (row) => {
-        const updateError = await updateWiseLocationOnly(
-          (classId, sessionId, location) => updateSessionLocation(client, classId, sessionId, location),
-          row,
-          row.assignedRoom,
-        );
-        if (updateError) {
-          const result = await publishRowResult(db, jobId, row, {
-            status: "failed",
-            error: updateError,
-          });
-          summary.attempted += result.attempted;
-          summary.failed += result.failed;
-          failedRows.set(row.id, row);
-          pendingRows.delete(row.id);
-          return;
-        }
-
-        const result = await publishRowResult(db, jobId, row, { status: "success" });
         summary.attempted += result.attempted;
         summary.success += result.success;
-        pendingRows.delete(row.id);
-      });
-    }
+        return;
+      }
+
+      const updateError = await updateWiseLocationOnly(
+        (classId, sessionId, location) => updateSessionLocation(wiseClient, classId, sessionId, location),
+        row,
+        row.assignedRoom,
+      );
+      if (updateError) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: updateError,
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        return;
+      }
+
+      const result = await publishRowResult(db, jobId, row, { status: "success" });
+      summary.attempted += result.attempted;
+      summary.success += result.success;
+    });
 
     await updateRunPublishStatus(db, existingJob.runId);
 
@@ -1140,7 +1054,7 @@ export async function getClassroomPublishJobProgress(
 export async function publishClassroomAssignmentRun(
   db: Database,
   runId: string,
-  client = createWiseClientFromEnv(),
+  client?: WiseClient,
 ): Promise<{ detail: ClassroomAssignmentDetail; summary: PublishSummary }> {
   const progress = await createClassroomPublishJob(db, { runId });
   const result = await runClassroomPublishJob(db, progress.jobId, client);
@@ -1169,7 +1083,94 @@ export async function getClassroomAssignmentByRunId(
     .limit(1);
   if (!run) throw new Error("Assignment run not found");
   const rows = await loadRowsForRun(db, runId);
-  return { run, rows, rooms };
+  return assignmentDetail(run, rows, rooms);
+}
+
+function formatBangkokTimestamp(value: Date): string {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(value);
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")} ${byType.get("hour")}:${byType.get("minute")}`;
+}
+
+export function intendedTvRepairLocation(location: string | null | undefined): string | null {
+  return tvRoomRepairLocation(location);
+}
+
+export async function getPlainTvLocationRepairAudit(
+  db: Database,
+): Promise<PlainTvLocationRepairAuditRow[]> {
+  const rows = await db
+    .select({
+      publishJobId: schema.classroomPublishJobs.id,
+      publishJobStatus: schema.classroomPublishJobs.status,
+      publishedBy: schema.classroomPublishJobs.createdBy,
+      runId: schema.classroomAssignmentRuns.id,
+      assignmentDate: schema.classroomAssignmentRuns.assignmentDate,
+      rowId: schema.classroomAssignmentRows.id,
+      wiseClassId: schema.classroomAssignmentRows.wiseClassId,
+      wiseSessionId: schema.classroomAssignmentRows.wiseSessionId,
+      tutorDisplayName: schema.classroomAssignmentRows.tutorDisplayName,
+      studentName: schema.classroomAssignmentRows.studentName,
+      startTime: schema.classroomAssignmentRows.startTime,
+      wrongLocation: schema.classroomAssignmentRows.currentWiseLocation,
+      assignedRoom: schema.classroomAssignmentRows.assignedRoom,
+      publishedAt: schema.classroomAssignmentRows.publishedAt,
+    })
+    .from(schema.classroomAssignmentRows)
+    .innerJoin(
+      schema.classroomAssignmentRuns,
+      eq(schema.classroomAssignmentRows.runId, schema.classroomAssignmentRuns.id),
+    )
+    .leftJoin(
+      schema.classroomPublishJobs,
+      and(
+        eq(schema.classroomPublishJobs.runId, schema.classroomAssignmentRuns.id),
+        lte(schema.classroomPublishJobs.startedAt, schema.classroomAssignmentRows.publishedAt),
+        gte(schema.classroomPublishJobs.finishedAt, schema.classroomAssignmentRows.publishedAt),
+      ),
+    )
+    .where(
+      and(
+        eq(schema.classroomAssignmentRows.publishStatus, "success"),
+        gte(schema.classroomAssignmentRows.publishedAt, PLAIN_TV_REPAIR_AUDIT_START),
+        inArray(schema.classroomAssignmentRows.assignedRoom, LEGACY_PLAIN_TV_ROOM_NAMES),
+        eq(schema.classroomAssignmentRows.currentWiseLocation, schema.classroomAssignmentRows.assignedRoom),
+      ),
+    )
+    .orderBy(
+      schema.classroomAssignmentRuns.assignmentDate,
+      schema.classroomAssignmentRows.startTime,
+      schema.classroomAssignmentRows.tutorDisplayName,
+    );
+
+  return rows.flatMap((row) => {
+    const intendedLocation = intendedTvRepairLocation(row.assignedRoom);
+    if (!intendedLocation || !row.wrongLocation) return [];
+    return [{
+      publishJobId: row.publishJobId,
+      publishJobStatus: row.publishJobStatus,
+      publishedBy: row.publishedBy,
+      runId: row.runId,
+      assignmentDate: row.assignmentDate,
+      rowId: row.rowId,
+      wiseClassId: row.wiseClassId,
+      wiseSessionId: row.wiseSessionId,
+      tutorDisplayName: row.tutorDisplayName,
+      studentName: row.studentName,
+      startTimeBangkok: formatBangkokTimestamp(new Date(row.startTime)),
+      wrongLocation: row.wrongLocation,
+      intendedLocation,
+      publishedAt: row.publishedAt?.toISOString() ?? null,
+    }];
+  });
 }
 
 export async function getTeacherScheduleForRun(

@@ -4,7 +4,14 @@ import {
   REMOTE_NO_ROOM_NEEDED,
   type AssignmentSession,
 } from "../assignment-engine";
-import { DEFAULT_CLASSROOM_ROOMS, NO_ROOM_AVAILABLE, ROOM_THINK_OUTSIDE_THE_BOX } from "../rooms";
+import {
+  DEFAULT_CLASSROOM_ROOMS,
+  NO_ROOM_AVAILABLE,
+  ROOM_JOY,
+  ROOM_RELAX_TV,
+  ROOM_THINK_OUTSIDE_THE_BOX,
+  ROOM_TURN_THE_PAGE_TV,
+} from "../rooms";
 
 function session(overrides: Partial<AssignmentSession> = {}): AssignmentSession {
   const startMinute = overrides.startMinute ?? 9 * 60;
@@ -40,7 +47,7 @@ describe("assignClassrooms", () => {
 
     expect(result.rows[0]).toMatchObject({
       minCapacity: 8,
-      assignedRoom: "Relax",
+      assignedRoom: ROOM_RELAX_TV,
       status: "assigned",
     });
   });
@@ -173,7 +180,7 @@ describe("assignClassrooms", () => {
     expect(online.assignedRoom).toBe(onsite.assignedRoom);
   });
 
-  it("hard-fixes Gift to Joy and routes overlapping non-Gift work elsewhere", () => {
+  it("hard-fixes Gift to Joy (TV) and routes overlapping non-Gift work elsewhere", () => {
     const result = assignClassrooms([
       session({
         wiseSessionId: "gift",
@@ -187,8 +194,8 @@ describe("assignClassrooms", () => {
       }),
     ], DEFAULT_CLASSROOM_ROOMS);
 
-    expect(result.rows.find((row) => row.wiseSessionId === "gift")?.assignedRoom).toBe("Joy");
-    expect(result.rows.find((row) => row.wiseSessionId === "other")?.assignedRoom).not.toBe("Joy");
+    expect(result.rows.find((row) => row.wiseSessionId === "gift")?.assignedRoom).toBe(ROOM_JOY);
+    expect(result.rows.find((row) => row.wiseSessionId === "other")?.assignedRoom).not.toBe(ROOM_JOY);
   });
 
   it("honors preferred rooms before general rooms when valid", () => {
@@ -207,7 +214,7 @@ describe("assignClassrooms", () => {
     ], DEFAULT_CLASSROOM_ROOMS);
 
     expect(result.rows.find((row) => row.tutorDisplayName === "Da")?.assignedRoom).toBe("Do It");
-    expect(result.rows.find((row) => row.tutorDisplayName === "Gift")?.assignedRoom).toBe("Joy");
+    expect(result.rows.find((row) => row.tutorDisplayName === "Gift")?.assignedRoom).toBe(ROOM_JOY);
   });
 
   it("gives Kevin Think Outside the Box over overlapping automatic preferred-room sessions", () => {
@@ -247,11 +254,11 @@ describe("assignClassrooms", () => {
         }),
       ],
       DEFAULT_CLASSROOM_ROOMS,
-      new Map([["kevin", "Turn The Page"]]),
+      new Map([["kevin", ROOM_TURN_THE_PAGE_TV]]),
     );
 
-    expect(result.rows[0].assignedRoom).toBe("Turn The Page");
-    expect(result.rows[0].ruleTrace).toContain("assigned by override: Turn The Page");
+    expect(result.rows[0].assignedRoom).toBe(ROOM_TURN_THE_PAGE_TV);
+    expect(result.rows[0].ruleTrace).toContain(`assigned by override: ${ROOM_TURN_THE_PAGE_TV}`);
   });
 
   it("lets a valid non-Kevin override to Think Outside the Box force an exception", () => {

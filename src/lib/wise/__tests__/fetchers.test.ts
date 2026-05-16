@@ -196,7 +196,7 @@ describe("Wise fetchers", () => {
           type: "OFFLINE",
         },
       ],
-      locationToCheck: "Joy",
+      locationToCheck: "Joy (TV)",
     };
     const result = await checkTeacherAvailabilityForSessions(makeClient(), "center-1", body);
 
@@ -216,7 +216,7 @@ describe("Wise fetchers", () => {
     );
     global.fetch = fetchMock as typeof fetch;
 
-    await updateSessionLocation(makeClient(), "class-1", "session-1", "Joy");
+    await updateSessionLocation(makeClient(), "class-1", "session-1", "Joy (TV)");
 
     const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
     expect(calledUrl.pathname).toBe("/teacher/classes/class-1/sessions/session-1");
@@ -224,7 +224,7 @@ describe("Wise fetchers", () => {
     expect(fetchMock.mock.calls[0][1]).toEqual(
       expect.objectContaining({
         method: "PUT",
-        body: JSON.stringify({ location: "Joy" }),
+        body: JSON.stringify({ location: "Joy (TV)" }),
       }),
     );
   });

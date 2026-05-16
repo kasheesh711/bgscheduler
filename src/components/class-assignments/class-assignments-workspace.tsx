@@ -239,6 +239,7 @@ export function ClassAssignmentsWorkspace() {
   const rooms = useMemo(() => (detail?.rooms ?? []).filter((room) => room.active), [detail?.rooms]);
   const rows = useMemo(() => detail?.rows ?? [], [detail?.rows]);
   const run = detail?.run ?? null;
+  const wiseWritebackEnabled = detail?.wiseWritebackEnabled === true;
   const timelineBounds = useMemo(() => buildTimelineBounds(rows), [rows]);
   const timelineResetKey = `${run?.id ?? "no-run"}:${timelineBounds.initialMinute}:${timelineBounds.endMinute}`;
 
@@ -368,7 +369,7 @@ export function ClassAssignmentsWorkspace() {
   }
 
   async function publishToWise() {
-    if (!run) return;
+    if (!run || !wiseWritebackEnabled) return;
     setPublishing(true);
     setPublishProgress(null);
     setError(null);
@@ -535,7 +536,7 @@ export function ClassAssignmentsWorkspace() {
         <div className="space-y-1">
           <h1 className="text-xl font-semibold tracking-tight">Class Assignments</h1>
           <p className="text-sm text-muted-foreground">
-            Generate local room assignments first, then publish eligible OFFLINE locations to Wise.
+            Generate local room assignments. Wise room writeback is disabled by default.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -567,10 +568,11 @@ export function ClassAssignmentsWorkspace() {
           <Button
             variant="secondary"
             onClick={() => setPublishOpen(true)}
-            disabled={!run || rows.length === 0 || publishing}
+            disabled={!wiseWritebackEnabled || !run || rows.length === 0 || publishing}
+            title={wiseWritebackEnabled ? undefined : "Wise room writeback is disabled"}
           >
             <UploadCloud />
-            Publish to Wise
+            {wiseWritebackEnabled ? "Publish to Wise" : "Wise writeback disabled"}
           </Button>
           <Button
             variant="secondary"
@@ -621,9 +623,13 @@ export function ClassAssignmentsWorkspace() {
           <div className="mt-1 text-lg font-semibold">{run?.remoteCount ?? 0}</div>
         </div>
         <div className="rounded-lg border bg-card p-3">
-          <div className="text-xs text-muted-foreground">Wise publish</div>
+          <div className="text-xs text-muted-foreground">Wise writeback</div>
           <div className="mt-1 text-sm font-medium">
-            {run ? `${run.publishedCount} ok / ${run.failedPublishCount} failed` : "No run"}
+            {wiseWritebackEnabled
+              ? run
+                ? `${run.publishedCount} ok / ${run.failedPublishCount} failed`
+                : "No run"
+              : "Disabled"}
           </div>
         </div>
       </div>
@@ -848,11 +854,16 @@ export function ClassAssignmentsWorkspace() {
           <DialogHeader>
             <DialogTitle>Publish locations to Wise?</DialogTitle>
             <DialogDescription>
-              This writes location only for eligible OFFLINE rows using Wise&apos;s session update response. Teacher
-              availability conflicts are not prechecked. Online room assignments remain local.
+              Wise room writeback is disabled by default after the plain-room incident. Local assignments and schedule
+              emails remain available.
             </DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
+            {!wiseWritebackEnabled && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+                Wise classroom writeback is disabled. No session location updates will be sent.
+              </div>
+            )}
             <div className="rounded-lg border bg-muted/40 p-3 text-sm">
               <div>{publishCounts.eligible} rows eligible for Wise location update.</div>
               <div>{publishCounts.skipped} rows will be skipped.</div>
@@ -916,7 +927,12 @@ export function ClassAssignmentsWorkspace() {
             </Button>
             <Button
               onClick={publishToWise}
-              disabled={publishing || publishCounts.eligible === 0 || Boolean(publishProgress && !isPublishJobTerminal(publishProgress.status))}
+              disabled={
+                !wiseWritebackEnabled ||
+                publishing ||
+                publishCounts.eligible === 0 ||
+                Boolean(publishProgress && !isPublishJobTerminal(publishProgress.status))
+              }
             >
               {publishing || publishActive ? "Publishing" : "Publish to Wise"}
             </Button>

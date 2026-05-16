@@ -4,7 +4,9 @@ import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import {
   createClassroomPublishJob,
+  isWiseClassroomWritebackEnabled,
   runClassroomPublishJob,
+  wiseClassroomWritebackDisabledMessage,
 } from "@/lib/classrooms/data";
 
 export const maxDuration = 300;
@@ -32,6 +34,9 @@ export async function POST(
   const session = await auth();
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (!isWiseClassroomWritebackEnabled()) {
+    return NextResponse.json({ error: wiseClassroomWritebackDisabledMessage() }, { status: 403 });
   }
 
   const { runId } = await params;
