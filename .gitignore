@@ -39,6 +39,15 @@ yarn-error.log*
 # superpowers brainstorm artifacts
 .superpowers/
 
+# local agent/worktree artifacts
+.claude/worktrees/
+
+# Wise incident/audit outputs
+plain-tv-location-repair-audit-*.csv
+wise-live-*.csv
+wise-location-catalog-cleanup-checklist-*.md
+wise-plain-tv-repair-plan-*.json
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

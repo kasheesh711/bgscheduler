@@ -110,11 +110,11 @@ describe("POST /api/compare/discover", () => {
     });
   });
 
-  it("marks snapshot metadata stale only after the 26-hour API threshold", async () => {
+  it("marks snapshot metadata stale only after the 2-hour API threshold", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-07T02:00:00.000Z"));
     const freshIndex = makeIndex();
-    freshIndex.builtAt = new Date(Date.now() - (25 * 60 * 60 * 1000 + 59 * 60 * 1000));
+    freshIndex.builtAt = new Date(Date.now() - (119 * 60 * 1000));
     vi.mocked(ensureIndex).mockResolvedValueOnce(freshIndex as never);
 
     const freshRes = await POST(
@@ -129,7 +129,7 @@ describe("POST /api/compare/discover", () => {
     const freshBody = await freshRes.json();
 
     const staleIndex = makeIndex();
-    staleIndex.builtAt = new Date(Date.now() - (26 * 60 * 60 * 1000 + 1));
+    staleIndex.builtAt = new Date(Date.now() - (2 * 60 * 60 * 1000 + 1));
     vi.mocked(ensureIndex).mockResolvedValueOnce(staleIndex as never);
 
     const staleRes = await POST(

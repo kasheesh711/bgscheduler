@@ -38,6 +38,7 @@ export async function PATCH(
       runId,
       rowId,
       overrideRoom: parsed.data.overrideRoom?.trim() || null,
+      updatedBy: session.user?.email ?? null,
     });
     return NextResponse.json(detail);
   } catch (error) {

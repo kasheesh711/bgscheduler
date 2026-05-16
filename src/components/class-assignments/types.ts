@@ -61,4 +61,6 @@ export interface AssignmentDetail {
   rows: ClassroomRow[];
   rooms: ClassroomRoom[];
   wiseWritebackEnabled: boolean;
+  wiseWritebackEnabledForUser: boolean;
+  wiseWritebackBlockedReason: string | null;
 }

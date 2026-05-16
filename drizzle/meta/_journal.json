@@ -64,6 +64,20 @@
       "when": 1778842897089,
       "tag": "0008_reflective_shadowcat",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1778910000000,
+      "tag": "0009_guarded_wise_writeback",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1778913600000,
+      "tag": "0010_natural_language_search_parses",
+      "breakpoints": true
     }
   ]
 }

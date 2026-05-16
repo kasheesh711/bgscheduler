@@ -14,7 +14,12 @@ export async function GET(
 
   const { runId, jobId } = await params;
   try {
-    const result = await getClassroomPublishJobProgress(getDb(), runId, jobId);
+    const result = await getClassroomPublishJobProgress(
+      getDb(),
+      runId,
+      jobId,
+      session.user?.email ?? null,
+    );
     return NextResponse.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load publish progress";

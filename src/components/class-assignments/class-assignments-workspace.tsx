@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { buildTimelineBounds, minuteToTimeLabel, snapTimelinePlaybackMinute } from "@/lib/classrooms/visualization";
+import { LEGACY_PLAIN_TV_ROOM_NAMES } from "@/lib/classrooms/rooms";
 import { AssignmentTimelineControls } from "./assignment-timeline-controls";
 import { FloorPlanOccupancy } from "./floor-plan-occupancy";
 import { RoomCalendarView } from "./room-calendar-view";
@@ -91,6 +92,7 @@ interface PublishJobProgress {
   successCount: number;
   failedCount: number;
   skippedCount: number;
+  preflightWarningCount: number;
   remainingCount: number;
   elapsedMs: number | null;
   estimatedRemainingMs: number | null;
@@ -167,6 +169,7 @@ function isPublishEligible(row: ClassroomRow): boolean {
     row.status === "assigned" &&
     row.assignedRoom !== NO_ROOM_AVAILABLE &&
     row.assignedRoom !== REMOTE_NO_ROOM_NEEDED &&
+    !LEGACY_PLAIN_TV_ROOM_NAMES.includes(row.assignedRoom) &&
     row.sessionType?.toUpperCase() === "OFFLINE" &&
     Boolean(row.wiseClassId) &&
     !row.warnings.includes("needs_review_missing_capacity")
@@ -199,6 +202,7 @@ export function ClassAssignmentsWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [publishConfirmation, setPublishConfirmation] = useState("");
   const [publishProgress, setPublishProgress] = useState<PublishJobProgress | null>(null);
   const [scheduleEmailOpen, setScheduleEmailOpen] = useState(false);
   const [scheduleEmailPreview, setScheduleEmailPreview] = useState<ScheduleEmailPreview | null>(null);
@@ -239,7 +243,8 @@ export function ClassAssignmentsWorkspace() {
   const rooms = useMemo(() => (detail?.rooms ?? []).filter((room) => room.active), [detail?.rooms]);
   const rows = useMemo(() => detail?.rows ?? [], [detail?.rows]);
   const run = detail?.run ?? null;
-  const wiseWritebackEnabled = detail?.wiseWritebackEnabled === true;
+  const wiseWritebackEnabled = detail?.wiseWritebackEnabledForUser === true;
+  const wiseWritebackBlockedReason = detail?.wiseWritebackBlockedReason ?? "Wise classroom writeback is disabled.";
   const timelineBounds = useMemo(() => buildTimelineBounds(rows), [rows]);
   const timelineResetKey = `${run?.id ?? "no-run"}:${timelineBounds.initialMinute}:${timelineBounds.endMinute}`;
 
@@ -292,6 +297,7 @@ export function ClassAssignmentsWorkspace() {
 
   useEffect(() => {
     setPublishProgress(null);
+    setPublishConfirmation("");
     setScheduleEmailPreview(null);
     setScheduleEmailResult(null);
   }, [run?.id]);
@@ -305,14 +311,18 @@ export function ClassAssignmentsWorkspace() {
   }, [publishActive, sendingScheduleEmails]);
 
   const publishCounts = useMemo(() => {
-    const eligible = rows.filter(isPublishEligible).length;
+    const eligibleRows = rows.filter(isPublishEligible);
     return {
-      eligible,
-      skipped: rows.length - eligible,
+      eligible: eligibleRows.length,
+      skipped: rows.length - eligibleRows.length,
+      changed: eligibleRows.filter((row) => (
+        (row.currentWiseLocation ?? "").trim().toLowerCase() !== row.assignedRoom.trim().toLowerCase()
+      )).length,
       success: rows.filter((row) => row.publishStatus === "success").length,
       failed: rows.filter((row) => row.publishStatus === "failed").length,
     };
   }, [rows]);
+  const publishConfirmationExpected = `PUBLISH WISE ${publishCounts.eligible}`;
 
   const tutors = useMemo(() => {
     return [...new Set(rows.map((row) => row.tutorDisplayName))].sort((a, b) => a.localeCompare(b));
@@ -377,6 +387,8 @@ export function ClassAssignmentsWorkspace() {
     try {
       const response = await fetch(`/api/class-assignments/runs/${run.id}/publish`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmation: publishConfirmation }),
       });
       const body = (await response.json()) as
         | PublishStartResult
@@ -569,7 +581,7 @@ export function ClassAssignmentsWorkspace() {
             variant="secondary"
             onClick={() => setPublishOpen(true)}
             disabled={!wiseWritebackEnabled || !run || rows.length === 0 || publishing}
-            title={wiseWritebackEnabled ? undefined : "Wise room writeback is disabled"}
+            title={wiseWritebackEnabled ? undefined : wiseWritebackBlockedReason}
           >
             <UploadCloud />
             {wiseWritebackEnabled ? "Publish to Wise" : "Wise writeback disabled"}
@@ -629,8 +641,13 @@ export function ClassAssignmentsWorkspace() {
               ? run
                 ? `${run.publishedCount} ok / ${run.failedPublishCount} failed`
                 : "No run"
-              : "Disabled"}
+              : "Blocked"}
           </div>
+          {!wiseWritebackEnabled && (
+            <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+              {wiseWritebackBlockedReason}
+            </div>
+          )}
         </div>
       </div>
 
@@ -861,12 +878,13 @@ export function ClassAssignmentsWorkspace() {
           <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
             {!wiseWritebackEnabled && (
               <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-                Wise classroom writeback is disabled. No session location updates will be sent.
+                {wiseWritebackBlockedReason}
               </div>
             )}
             <div className="rounded-lg border bg-muted/40 p-3 text-sm">
-              <div>{publishCounts.eligible} rows eligible for Wise location update.</div>
+              <div>{publishCounts.eligible} rows eligible for guarded Wise location update.</div>
               <div>{publishCounts.skipped} rows will be skipped.</div>
+              <div>{publishCounts.changed} eligible rows would change location.</div>
               <div>{publishCounts.success} rows are already marked published; publishing will retry eligible rows.</div>
               <div>{publishCounts.failed} rows currently show a failed publish status.</div>
             </div>
@@ -891,7 +909,7 @@ export function ClassAssignmentsWorkspace() {
                     style={{ width: `${publishPercent}%` }}
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-5">
+                <div className="grid grid-cols-2 gap-2 text-xs md:grid-cols-6">
                   <div className="rounded-md border bg-muted/30 p-2">
                     <div className="text-muted-foreground">Done</div>
                     <div className="font-semibold">{publishProgress.completedCount}/{publishProgress.totalCount}</div>
@@ -912,13 +930,36 @@ export function ClassAssignmentsWorkspace() {
                     <div className="text-muted-foreground">Skipped</div>
                     <div className="font-semibold">{publishProgress.skippedCount}</div>
                   </div>
+                  <div className="rounded-md border bg-muted/30 p-2">
+                    <div className="text-muted-foreground">Warnings</div>
+                    <div className="font-semibold">{publishProgress.preflightWarningCount}</div>
+                  </div>
                 </div>
+                {publishProgress.preflightWarningCount > 0 && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950 dark:bg-amber-950/30 dark:text-amber-100">
+                    Wise reported known non-location warnings for {publishProgress.preflightWarningCount} row{publishProgress.preflightWarningCount === 1 ? "" : "s"}.
+                  </div>
+                )}
                 {publishProgress.lastError && (
                   <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
                     {publishProgress.lastError}
                   </div>
                 )}
               </div>
+            )}
+            {wiseWritebackEnabled && (
+              <label className="grid gap-2 rounded-lg border p-3 text-sm">
+                <span className="font-medium">Typed confirmation</span>
+                <span className="text-xs text-muted-foreground">
+                  Type {publishConfirmationExpected} to start the guarded Wise publish.
+                </span>
+                <Input
+                  value={publishConfirmation}
+                  onChange={(event) => setPublishConfirmation(event.target.value)}
+                  placeholder={publishConfirmationExpected}
+                  disabled={publishing || publishActive}
+                />
+              </label>
             )}
           </div>
           <DialogFooter className="shrink-0">
@@ -931,6 +972,7 @@ export function ClassAssignmentsWorkspace() {
                 !wiseWritebackEnabled ||
                 publishing ||
                 publishCounts.eligible === 0 ||
+                publishConfirmation !== publishConfirmationExpected ||
                 Boolean(publishProgress && !isPublishJobTerminal(publishProgress.status))
               }
             >

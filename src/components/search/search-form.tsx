@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
-import { X, Search, Check } from "lucide-react";
+import { X, Search, Check, Sparkles, AlertCircle } from "lucide-react";
 import {
   RecentSearches,
   saveRecent,
@@ -13,6 +13,7 @@ import {
 } from "@/components/search/recent-searches";
 import type { SearchMode, RangeSearchResponse } from "@/lib/search/types";
 import type { TutorListItem } from "@/lib/data/tutors";
+import type { NaturalLanguageSearchResponse } from "@/lib/search/natural-language";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,6 +32,7 @@ export interface SearchContext {
 export interface SearchFormProps {
   filterOptions: FilterOptions;
   tutorList: TutorListItem[];
+  naturalLanguageEnabled: boolean;
   onSearchResponse: (response: RangeSearchResponse, context: SearchContext) => void;
   onError: (error: string | null) => void;
 }
@@ -74,11 +76,37 @@ const TIME_OPTIONS = generateTimeOptions();
 const selectClass =
   "w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50";
 
+function summarizeNaturalLanguageResult(data: Extract<NaturalLanguageSearchResponse, { status: "parsed" }>): string {
+  const parsed = data.parsed;
+  const dayLabel = parsed.searchMode === "recurring"
+    ? parsed.dayOfWeek !== undefined
+      ? DAY_NAMES[parsed.dayOfWeek]
+      : "Recurring"
+    : parsed.date ?? "One-time";
+  const filters = [parsed.filters.subject, parsed.filters.curriculum, parsed.filters.level]
+    .filter(Boolean)
+    .join(" / ");
+  const tutors = data.parsed.matchedTutors.map((tutor) => tutor.displayName).join(", ");
+  return [
+    `${dayLabel} ${parsed.startTime}-${parsed.endTime}`,
+    `${parsed.durationMinutes} min`,
+    parsed.mode,
+    filters || "Any qualification",
+    tutors ? `Tutors: ${tutors}` : null,
+  ].filter(Boolean).join(" · ");
+}
+
 // ---------------------------------------------------------------------------
 // SearchForm component
 // ---------------------------------------------------------------------------
 
-export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError }: SearchFormProps) {
+export function SearchForm({
+  filterOptions,
+  tutorList,
+  naturalLanguageEnabled,
+  onSearchResponse,
+  onError,
+}: SearchFormProps) {
   const [searchMode, setSearchMode] = useState<SearchMode>("recurring");
   const [dayOfWeek, setDayOfWeek] = useState(1);
   const [date, setDate] = useState("");
@@ -95,6 +123,12 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
   const [selectedTutorIds, setSelectedTutorIds] = useState<string[]>([]);
   const [tutorPopoverOpen, setTutorPopoverOpen] = useState(false);
   const [pendingSearch, setPendingSearch] = useState(false);
+  const [naturalInput, setNaturalInput] = useState("");
+  const [naturalLoading, setNaturalLoading] = useState(false);
+  const [naturalError, setNaturalError] = useState<string | null>(null);
+  const [naturalParsedSummary, setNaturalParsedSummary] = useState<string | null>(null);
+  const [naturalWarnings, setNaturalWarnings] = useState<string[]>([]);
+  const [naturalClarifications, setNaturalClarifications] = useState<string[]>([]);
 
   const handleAddTutor = (id: string) => {
     setSelectedTutorIds((prev) => prev.includes(id) ? prev : [...prev, id]);
@@ -113,6 +147,54 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
     (levelFilter ? 1 : 0) +
     (modeFilter !== "either" ? 1 : 0) +
     selectedTutorIds.length;
+
+  const handleNaturalLanguageParse = async () => {
+    const input = naturalInput.trim();
+    if (!naturalLanguageEnabled || !input || naturalLoading) return;
+
+    setNaturalLoading(true);
+    setNaturalError(null);
+    setNaturalParsedSummary(null);
+    setNaturalWarnings([]);
+    setNaturalClarifications([]);
+
+    try {
+      const res = await fetch("/api/search/natural-language", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error ?? `Natural language parse failed (${res.status})`);
+      }
+
+      const parsed = data as NaturalLanguageSearchResponse;
+      setNaturalWarnings(parsed.warnings ?? []);
+
+      if (parsed.status === "needs_clarification") {
+        setNaturalClarifications(parsed.clarifyingQuestions);
+        return;
+      }
+
+      setSearchMode(parsed.parsed.searchMode);
+      if (parsed.parsed.dayOfWeek !== undefined) setDayOfWeek(parsed.parsed.dayOfWeek);
+      setDate(parsed.parsed.date ?? "");
+      setStartTime(parsed.parsed.startTime);
+      setEndTime(parsed.parsed.endTime);
+      setDurationMinutes(parsed.parsed.durationMinutes);
+      setModeFilter(parsed.parsed.mode);
+      setSubjectFilter(parsed.parsed.filters.subject ?? "");
+      setCurriculumFilter(parsed.parsed.filters.curriculum ?? "");
+      setLevelFilter(parsed.parsed.filters.level ?? "");
+      setSelectedTutorIds(parsed.parsed.tutorGroupIds);
+      setNaturalParsedSummary(summarizeNaturalLanguageResult(parsed));
+    } catch (err) {
+      setNaturalError(err instanceof Error ? err.message : "Natural language parse failed");
+    } finally {
+      setNaturalLoading(false);
+    }
+  };
 
   const handleSearch = async () => {
     setLoading(true);
@@ -213,6 +295,76 @@ export function SearchForm({ filterOptions, tutorList, onSearchResponse, onError
 
       {/* Search form */}
       <div className="flex-shrink-0 space-y-2">
+        {/* Natural language intake */}
+        <div className="rounded-md border border-border bg-card/80 p-2.5">
+          <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <Sparkles className="h-3 w-3 text-primary" aria-hidden />
+            Natural language intake
+          </div>
+          <div className="flex gap-2">
+            <textarea
+              value={naturalInput}
+              onChange={(e) => setNaturalInput(e.target.value)}
+              rows={2}
+              maxLength={1000}
+              placeholder="e.g. Parent wants Year 5 English online next Tuesday after 5pm for 90 minutes with Kevin"
+              disabled={!naturalLanguageEnabled}
+              className="min-h-[54px] flex-1 resize-none rounded-md border border-input bg-background px-2 py-1.5 text-xs leading-relaxed outline-none focus:ring-2 focus:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60"
+              aria-label="Natural language search request"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={handleNaturalLanguageParse}
+              disabled={!naturalLanguageEnabled || naturalLoading || naturalInput.trim().length === 0}
+              className="h-[54px] w-[88px] shrink-0 gap-1 text-xs"
+            >
+              {naturalLoading ? "Parsing..." : "Parse"}
+            </Button>
+          </div>
+
+          {!naturalLanguageEnabled && (
+            <div className="mt-2 rounded-md border border-border bg-muted/40 px-2 py-1.5 text-[11px] text-muted-foreground">
+              AI intake is not configured. Manual search still works.
+            </div>
+          )}
+
+          {naturalParsedSummary && (
+            <div className="mt-2 rounded-md border border-primary/25 bg-primary/5 px-2 py-1.5 text-[11px] text-foreground">
+              <span className="font-medium">Filled form:</span> {naturalParsedSummary}. Review below, then click Search.
+            </div>
+          )}
+
+          {naturalClarifications.length > 0 && (
+            <div className="mt-2 rounded-md border border-amber-300/40 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900 dark:bg-amber-950/20 dark:text-amber-200">
+              <div className="mb-1 flex items-center gap-1 font-medium">
+                <AlertCircle className="h-3 w-3" aria-hidden />
+                Needs clarification
+              </div>
+              <ul className="space-y-0.5">
+                {naturalClarifications.map((question, index) => (
+                  <li key={index}>{question}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {naturalWarnings.length > 0 && (
+            <div className="mt-1.5 space-y-0.5 text-[10.5px] text-muted-foreground">
+              {naturalWarnings.map((warning, index) => (
+                <div key={index}>{warning}</div>
+              ))}
+            </div>
+          )}
+
+          {naturalError && (
+            <div className="mt-2 rounded-md bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive">
+              {naturalError}. Manual search still works.
+            </div>
+          )}
+        </div>
+
         {/* Search mode toggle */}
         <div className="flex gap-1.5">
           <Button

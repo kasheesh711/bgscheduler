@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 interface SearchWorkspaceProps {
   filterOptions: FilterOptions;
   tutorList: TutorListItem[];
+  naturalLanguageEnabled: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,7 +75,11 @@ function proposalHoldToBlockingInfo(hold: ProposalHoldSummary): BlockingSessionI
 // SearchWorkspace component
 // ---------------------------------------------------------------------------
 
-export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspaceProps) {
+export function SearchWorkspace({
+  filterOptions,
+  tutorList,
+  naturalLanguageEnabled,
+}: SearchWorkspaceProps) {
   const searchParams = useSearchParams();
   const compare = useCompare();
 
@@ -294,6 +299,7 @@ export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspacePro
         <SearchForm
           filterOptions={filterOptions}
           tutorList={tutorList}
+          naturalLanguageEnabled={naturalLanguageEnabled}
           onSearchResponse={handleSearchResponse}
           onError={setError}
         />

@@ -5,6 +5,18 @@ import { getDb } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { selectModalityIssues as _selectModalityIssues } from "./modality-counter";
 
+const SYNC_RUN_TIMEOUT_MS = 6 * 60 * 1000;
+
+function jsonNoStore(body: unknown, init?: ResponseInit) {
+  const response = NextResponse.json(body, init);
+  response.headers.set("Cache-Control", "no-store, no-cache, max-age=0, must-revalidate");
+  return response;
+}
+
+function hasTimedOut(startedAt: Date, status: string, nowMs: number) {
+  return status === "running" && nowMs - new Date(startedAt).getTime() > SYNC_RUN_TIMEOUT_MS;
+}
+
 /**
  * Re-export of the MOD-03 / D-10 modality-counter helper.
  *
@@ -33,7 +45,7 @@ export function selectModalityIssues<
 export async function GET() {
   const session = await auth();
   if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return jsonNoStore({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
@@ -113,7 +125,9 @@ export async function GET() {
       .orderBy(desc(schema.syncRuns.startedAt))
       .limit(10);
 
-    return NextResponse.json({
+    const nowMs = Date.now();
+
+    return jsonNoStore({
       lastSuccessfulSync: lastSuccess?.finishedAt ?? null,
       lastFailedSync: lastFailure?.finishedAt ?? null,
       lastFailureError: lastFailure?.errorSummary ?? null,
@@ -135,7 +149,9 @@ export async function GET() {
       unmappedTags,
       recentSyncs: recentSyncs.map((s) => ({
         id: s.id,
-        status: s.status,
+        status: hasTimedOut(s.startedAt, s.status, nowMs) ? "timed_out" : s.status,
+        rawStatus: s.status,
+        timedOut: hasTimedOut(s.startedAt, s.status, nowMs),
         startedAt: s.startedAt,
         finishedAt: s.finishedAt,
         teacherCount: s.teacherCount,
@@ -144,6 +160,6 @@ export async function GET() {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Data health failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonNoStore({ error: message }, { status: 500 });
   }
 }

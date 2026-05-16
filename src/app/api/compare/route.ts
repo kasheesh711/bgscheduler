@@ -145,7 +145,7 @@ export async function POST(request: NextRequest) {
     };
 
     if (snapshotMeta.stale) {
-      warnings.push("Search data may be stale — last sync was more than 26 hours ago");
+      warnings.push("Search data may be stale — last sync was more than 2 hours ago");
     }
 
     const {

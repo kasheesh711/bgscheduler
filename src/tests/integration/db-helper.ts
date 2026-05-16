@@ -43,6 +43,7 @@ export async function stopTestDb(h: Handle): Promise<void> {
 export async function truncateAll(db: TestDb): Promise<void> {
   await db.execute(sql`
     TRUNCATE TABLE
+      natural_language_search_parses,
       data_issues,
       snapshot_stats,
       classroom_assignment_rows,

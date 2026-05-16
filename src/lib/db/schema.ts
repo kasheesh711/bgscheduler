@@ -343,7 +343,10 @@ export const classroomPublishJobs = pgTable("classroom_publish_jobs", {
   successCount: integer("success_count").notNull().default(0),
   failedCount: integer("failed_count").notNull().default(0),
   skippedCount: integer("skipped_count").notNull().default(0),
+  preflightWarningCount: integer("preflight_warning_count").notNull().default(0),
   lastError: text("last_error"),
+  liveCatalogCheckedAt: timestamp("live_catalog_checked_at", { withTimezone: true }),
+  finalVerification: jsonb("final_verification").$type<Record<string, unknown> | null>(),
   createdBy: text("created_by"),
   startedAt: timestamp("started_at", { withTimezone: true }),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -510,6 +513,24 @@ export const proposalItems = pgTable("proposal_items", {
   index("proposal_items_bundle_idx").on(table.bundleId),
   index("proposal_items_active_lookup_idx").on(table.tutorCanonicalKey, table.status, table.weekday),
   index("proposal_items_date_idx").on(table.proposalDate),
+]);
+
+// ── Natural Language Search Intake Audit ───────────────────────────────
+
+export const naturalLanguageSearchParses = pgTable("natural_language_search_parses", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  createdByEmail: text("created_by_email"),
+  status: text("status").notNull(),
+  inputPreviewRedacted: text("input_preview_redacted").notNull(),
+  model: text("model"),
+  latencyMs: integer("latency_ms"),
+  parsedPayload: jsonb("parsed_payload").$type<Record<string, unknown> | null>(),
+  warnings: jsonb("warnings").$type<string[]>().notNull().default([]),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("nlsp_created_at_idx").on(table.createdAt),
+  index("nlsp_status_idx").on(table.status),
 ]);
 
 // ── Data Issues ─────────────────────────────────────────────────────────

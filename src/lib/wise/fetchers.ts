@@ -152,12 +152,7 @@ export interface WiseSessionAvailabilityInput {
     skipUpcoming: boolean;
     classId?: string;
     startTime?: string | Date;
-  } | Array<{
-    sessionId: string;
-    skipUpcoming?: boolean;
-    classId?: string;
-    startTime?: string | Date;
-  }>;
+  };
 }
 
 export interface WiseSessionAvailabilityResponse {

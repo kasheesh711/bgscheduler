@@ -3,9 +3,17 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { WiseClient } from "@/lib/wise/client";
 import {
+  checkTeacherAvailabilityForSessions,
+  fetchAllFutureSessions,
   fetchInstituteLocations,
   updateSessionLocation,
+  type WiseSessionAvailabilityInput,
 } from "@/lib/wise/fetchers";
+import {
+  getWiseSessionClassId,
+  getWiseSessionTeacherUserId,
+  type WiseSession,
+} from "@/lib/wise/types";
 import {
   assignClassrooms,
   type AssignmentResultRow,
@@ -22,6 +30,10 @@ import {
   tvRoomRepairLocation,
   type ClassroomRoomDefinition,
 } from "./rooms";
+import {
+  invalidPlainTvSessionCount,
+  isWiseSessionBlockingForPlainTvCleanup,
+} from "./plain-tv-cleanup";
 
 export type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
 export type ClassroomRow = typeof schema.classroomAssignmentRows.$inferSelect;
@@ -33,6 +45,8 @@ export interface ClassroomAssignmentDetail {
   rows: ClassroomRow[];
   rooms: ClassroomRoom[];
   wiseWritebackEnabled: boolean;
+  wiseWritebackEnabledForUser: boolean;
+  wiseWritebackBlockedReason: string | null;
 }
 
 export interface TeacherScheduleBlock {
@@ -71,6 +85,7 @@ export interface PublishJobProgress {
   successCount: number;
   failedCount: number;
   skippedCount: number;
+  preflightWarningCount: number;
   remainingCount: number;
   elapsedMs: number | null;
   estimatedRemainingMs: number | null;
@@ -104,11 +119,14 @@ export interface PlainTvLocationRepairAuditRow {
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const PUBLISH_ROW_CONCURRENCY = 10;
+const PUBLISH_ROW_CONCURRENCY = 1;
 const PUBLISH_JOB_STALE_AFTER_MS = 6 * 60 * 1000;
 const WISE_CLASSROOM_WRITEBACK_DISABLED_MESSAGE =
   "Wise classroom writeback is disabled. Set ENABLE_WISE_CLASSROOM_WRITEBACK=true only after explicit approval.";
+const WISE_CLASSROOM_WRITEBACK_ALLOWED_EMAILS_MESSAGE =
+  "Wise classroom writeback is restricted to explicitly approved admin emails.";
 const PLAIN_TV_REPAIR_AUDIT_START = new Date("2026-05-15T00:00:00+07:00");
+const KNOWN_NON_LOCATION_PREFLIGHT_REASONS = new Set(["TEACHER_SESSION", "TEACHER_WORKING_HOURS"]);
 
 export function assertIsoDate(value: string): string {
   if (!ISO_DATE_RE.test(value)) {
@@ -125,13 +143,61 @@ export function isWiseClassroomWritebackEnabled(): boolean {
   return process.env.ENABLE_WISE_CLASSROOM_WRITEBACK === "true";
 }
 
+export function wiseClassroomWritebackAllowedEmails(): Set<string> {
+  return new Set(
+    String(process.env.WISE_CLASSROOM_WRITEBACK_ALLOWED_EMAILS ?? "")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+export function wiseClassroomWritebackPolicy(email: string | null | undefined): {
+  wiseWritebackEnabled: boolean;
+  wiseWritebackEnabledForUser: boolean;
+  wiseWritebackBlockedReason: string | null;
+} {
+  if (!isWiseClassroomWritebackEnabled()) {
+    return {
+      wiseWritebackEnabled: false,
+      wiseWritebackEnabledForUser: false,
+      wiseWritebackBlockedReason: WISE_CLASSROOM_WRITEBACK_DISABLED_MESSAGE,
+    };
+  }
+
+  const allowedEmails = wiseClassroomWritebackAllowedEmails();
+  if (allowedEmails.size === 0) {
+    return {
+      wiseWritebackEnabled: true,
+      wiseWritebackEnabledForUser: false,
+      wiseWritebackBlockedReason: "WISE_CLASSROOM_WRITEBACK_ALLOWED_EMAILS is not configured.",
+    };
+  }
+
+  const normalizedEmail = String(email ?? "").trim().toLowerCase();
+  if (!normalizedEmail || !allowedEmails.has(normalizedEmail)) {
+    return {
+      wiseWritebackEnabled: true,
+      wiseWritebackEnabledForUser: false,
+      wiseWritebackBlockedReason: WISE_CLASSROOM_WRITEBACK_ALLOWED_EMAILS_MESSAGE,
+    };
+  }
+
+  return {
+    wiseWritebackEnabled: true,
+    wiseWritebackEnabledForUser: true,
+    wiseWritebackBlockedReason: null,
+  };
+}
+
 export function wiseClassroomWritebackDisabledMessage(): string {
   return WISE_CLASSROOM_WRITEBACK_DISABLED_MESSAGE;
 }
 
-function assertWiseClassroomWritebackEnabled(): void {
-  if (!isWiseClassroomWritebackEnabled()) {
-    throw new Error(WISE_CLASSROOM_WRITEBACK_DISABLED_MESSAGE);
+export function assertWiseClassroomWritebackAllowed(email: string | null | undefined): void {
+  const policy = wiseClassroomWritebackPolicy(email);
+  if (!policy.wiseWritebackEnabledForUser) {
+    throw new Error(policy.wiseWritebackBlockedReason ?? WISE_CLASSROOM_WRITEBACK_DISABLED_MESSAGE);
   }
 }
 
@@ -139,12 +205,16 @@ function assignmentDetail(
   run: ClassroomRun | null,
   rows: ClassroomRow[],
   rooms: ClassroomRoom[],
+  viewerEmail?: string | null,
 ): ClassroomAssignmentDetail {
+  const policy = wiseClassroomWritebackPolicy(viewerEmail);
   return {
     run,
     rows,
     rooms,
-    wiseWritebackEnabled: isWiseClassroomWritebackEnabled(),
+    wiseWritebackEnabled: policy.wiseWritebackEnabledForUser,
+    wiseWritebackEnabledForUser: policy.wiseWritebackEnabledForUser,
+    wiseWritebackBlockedReason: policy.wiseWritebackBlockedReason,
   };
 }
 
@@ -175,7 +245,11 @@ function normalizedLocation(value: string | null): string {
 }
 
 function normalizedPhysicalLocation(value: string | null): string {
-  return normalizedLocation(value);
+  return normalizedLocation(exactWiseRoomName(value).replace(/\s+\(TV\)$/i, ""));
+}
+
+function wiseIso(value: string | Date): string {
+  return new Date(value).toISOString();
 }
 
 export function classroomTimestampToWiseIso(value: Date | string): string {
@@ -340,6 +414,7 @@ export function toPublishJobProgress(
     successCount: job.successCount,
     failedCount: job.failedCount,
     skippedCount: job.skippedCount,
+    preflightWarningCount: job.preflightWarningCount,
     remainingCount: Math.max(0, job.totalCount - job.completedCount),
     elapsedMs,
     estimatedRemainingMs: estimatePublishRemainingMs(job, now),
@@ -388,13 +463,14 @@ async function runLimited<T>(
 export async function getClassroomAssignmentForDate(
   db: Database,
   date: string,
+  viewerEmail?: string | null,
 ): Promise<ClassroomAssignmentDetail> {
   assertIsoDate(date);
   const rooms = await listClassroomRooms(db);
   const run = await loadLatestRunForDate(db, date);
-  if (!run) return assignmentDetail(null, [], rooms);
+  if (!run) return assignmentDetail(null, [], rooms, viewerEmail);
   const rows = await loadRowsForRun(db, run.id);
-  return assignmentDetail(run, rows, rooms);
+  return assignmentDetail(run, rows, rooms, viewerEmail);
 }
 
 async function loadPreviousOverrides(
@@ -570,7 +646,7 @@ export async function runClassroomAssignment(
   );
 
   const rows = await loadRowsForRun(db, run.id);
-  return assignmentDetail(run, rows, rooms);
+  return assignmentDetail(run, rows, rooms, input.createdBy ?? null);
 }
 
 function rowToSession(row: ClassroomRow): AssignmentSession {
@@ -651,7 +727,7 @@ async function updateRunRowsFromAssignment(
 
 export async function updateClassroomAssignmentOverride(
   db: Database,
-  input: { runId: string; rowId: string; overrideRoom: string | null },
+  input: { runId: string; rowId: string; overrideRoom: string | null; updatedBy?: string | null },
 ): Promise<ClassroomAssignmentDetail> {
   const [run] = await db
     .select()
@@ -664,11 +740,17 @@ export async function updateClassroomAssignmentOverride(
   const target = sourceRows.find((row) => row.id === input.rowId);
   if (!target) throw new Error("Assignment row not found");
 
+  const overrideRoom = input.overrideRoom?.trim() || null;
+  if (overrideRoom && isLegacyPlainTvRoomName(overrideRoom)) {
+    const exactRoom = exactWiseRoomName(overrideRoom);
+    throw new Error(`Legacy plain TV room overrides are not allowed. Use "${exactRoom}" instead.`);
+  }
+
   const overrideBySessionId = new Map<string, string | null>();
   for (const row of sourceRows) {
     overrideBySessionId.set(row.wiseSessionId, row.overrideRoom);
   }
-  overrideBySessionId.set(target.wiseSessionId, input.overrideRoom?.trim() || null);
+  overrideBySessionId.set(target.wiseSessionId, overrideRoom);
 
   await updateRunRowsFromAssignment(db, run, sourceRows, overrideBySessionId);
 
@@ -679,7 +761,7 @@ export async function updateClassroomAssignmentOverride(
     .where(eq(schema.classroomAssignmentRuns.id, input.runId))
     .limit(1);
   const rows = await loadRowsForRun(db, input.runId);
-  return assignmentDetail(freshRun ?? run, rows, rooms);
+  return assignmentDetail(freshRun ?? run, rows, rooms, input.updatedBy ?? null);
 }
 
 function createWiseClientFromEnv(): WiseClient {
@@ -727,6 +809,12 @@ export function isClassroomPublishEligible(
   if (!row.assignedRoom || row.assignedRoom === NO_ROOM_AVAILABLE) {
     return { eligible: false, reason: "No assigned room to publish" };
   }
+  if (isLegacyPlainTvRoomName(row.assignedRoom)) {
+    return {
+      eligible: false,
+      reason: `Legacy plain TV room "${row.assignedRoom}" cannot be published; use "${exactWiseRoomName(row.assignedRoom)}"`,
+    };
+  }
   if (!isOfflineSession(row.sessionType)) {
     return { eligible: false, reason: "V1 publishes Wise locations for OFFLINE sessions only" };
   }
@@ -740,9 +828,9 @@ export function isClassroomPublishEligible(
 
 export async function createClassroomPublishJob(
   db: Database,
-  input: { runId: string; createdBy?: string | null },
+  input: { runId: string; createdBy?: string | null; confirmation?: string | null },
 ): Promise<PublishJobProgress> {
-  assertWiseClassroomWritebackEnabled();
+  assertWiseClassroomWritebackAllowed(input.createdBy ?? null);
 
   const [run] = await db
     .select()
@@ -753,6 +841,10 @@ export async function createClassroomPublishJob(
 
   const rows = await loadRowsForRun(db, input.runId);
   const eligibleCount = rows.filter((row) => isClassroomPublishEligible(row).eligible).length;
+  const expectedConfirmation = `PUBLISH WISE ${eligibleCount}`;
+  if (input.confirmation !== expectedConfirmation) {
+    throw new Error(`Publish confirmation mismatch. Type "${expectedConfirmation}" to publish Wise locations.`);
+  }
   const [job] = await db
     .insert(schema.classroomPublishJobs)
     .values({
@@ -788,6 +880,35 @@ async function incrementPublishJobCounters(
   await db
     .update(schema.classroomPublishJobs)
     .set(set)
+    .where(eq(schema.classroomPublishJobs.id, jobId));
+}
+
+async function incrementPublishJobPreflightWarnings(
+  db: Database,
+  jobId: string,
+  count = 1,
+): Promise<void> {
+  if (count <= 0) return;
+  await db
+    .update(schema.classroomPublishJobs)
+    .set({
+      preflightWarningCount: sql`${schema.classroomPublishJobs.preflightWarningCount} + ${count}`,
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.classroomPublishJobs.id, jobId));
+}
+
+async function updatePublishJobFinalVerification(
+  db: Database,
+  jobId: string,
+  finalVerification: Record<string, unknown>,
+): Promise<void> {
+  await db
+    .update(schema.classroomPublishJobs)
+    .set({
+      finalVerification,
+      updatedAt: new Date(),
+    })
     .where(eq(schema.classroomPublishJobs.id, jobId));
 }
 
@@ -858,6 +979,218 @@ async function failStalePublishJob(db: Database, job: ClassroomPublishJob): Prom
 
 type WiseLocationUpdater = (classId: string, sessionId: string, location: string) => Promise<unknown>;
 
+export interface WisePreflightResult {
+  conflict: boolean;
+  conflictReasons: string[];
+  response: unknown;
+}
+
+interface WisePublishValidationContext {
+  liveSessions: WiseSession[];
+  liveSessionsById: Map<string, WiseSession>;
+}
+
+export function wisePreflightResponseHasConflict(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(wisePreflightResponseHasConflict);
+  const record = value as Record<string, unknown>;
+  if (
+    record.conflict === true ||
+    record.hasConflict === true ||
+    record.isConflict === true ||
+    record.isConflicting === true
+  ) {
+    return true;
+  }
+  return Object.values(record).some(wisePreflightResponseHasConflict);
+}
+
+export function collectWisePreflightConflictReasons(value: unknown, reasons = new Set<string>()): string[] {
+  if (!value || typeof value !== "object") return [...reasons].sort();
+  if (Array.isArray(value)) {
+    for (const item of value) collectWisePreflightConflictReasons(item, reasons);
+    return [...reasons].sort();
+  }
+
+  const record = value as Record<string, unknown>;
+  const hasConflict =
+    record.conflict === true ||
+    record.hasConflict === true ||
+    record.isConflict === true ||
+    record.isConflicting === true;
+  if (hasConflict && typeof record.reason === "string") {
+    reasons.add(record.reason);
+  }
+  for (const item of Object.values(record)) collectWisePreflightConflictReasons(item, reasons);
+  return [...reasons].sort();
+}
+
+export function isKnownNonLocationWisePreflightWarning(preflight: Pick<WisePreflightResult, "conflict" | "conflictReasons">): boolean {
+  return (
+    preflight.conflict &&
+    preflight.conflictReasons.length > 0 &&
+    preflight.conflictReasons.every((reason) => KNOWN_NON_LOCATION_PREFLIGHT_REASONS.has(reason))
+  );
+}
+
+function rowWiseStartIso(row: Pick<ClassroomRow, "startTime">): string {
+  return classroomTimestampToWiseIso(row.startTime);
+}
+
+function rowWiseEndIso(row: Pick<ClassroomRow, "endTime">): string {
+  return classroomTimestampToWiseIso(row.endTime);
+}
+
+function liveSessionsById(sessions: WiseSession[]): Map<string, WiseSession> {
+  return new Map(sessions.map((session) => [session._id, session]));
+}
+
+function wiseSessionsOverlap(left: WiseSession, right: WiseSession): boolean {
+  return new Date(left.scheduledStartTime) < new Date(right.scheduledEndTime) &&
+    new Date(right.scheduledStartTime) < new Date(left.scheduledEndTime);
+}
+
+function liveSessionRoomBlockersForRow(
+  row: Pick<ClassroomRow, "wiseSessionId" | "assignedRoom">,
+  liveSessions: Iterable<WiseSession>,
+): WiseSession[] {
+  const sessions = [...liveSessions];
+  const targetSession = sessions.find((session) => session._id === row.wiseSessionId);
+  if (!targetSession) return [];
+  const targetLocation = normalizedPhysicalLocation(row.assignedRoom);
+  if (!targetLocation) return [];
+
+  return sessions.filter((candidate) => (
+    candidate._id !== row.wiseSessionId &&
+    isWiseSessionBlockingForPlainTvCleanup(candidate) &&
+    normalizedPhysicalLocation(candidate.location ?? null) === targetLocation &&
+    wiseSessionsOverlap(targetSession, candidate)
+  ));
+}
+
+function validateLiveWiseSessionForPublish(
+  row: ClassroomRow,
+  liveSession: WiseSession | undefined,
+): string | null {
+  if (!liveSession) return `Live Wise session ${row.wiseSessionId} was not found in FUTURE sessions`;
+
+  const liveClassId = getWiseSessionClassId(liveSession);
+  if (row.wiseClassId && liveClassId && liveClassId !== row.wiseClassId) {
+    return `Stale row: Wise class changed from ${row.wiseClassId} to ${liveClassId}`;
+  }
+  if (!liveClassId) return "Live Wise session is missing class id";
+
+  if (wiseIso(liveSession.scheduledStartTime) !== rowWiseStartIso(row)) {
+    return `Stale row: Wise start time changed from ${rowWiseStartIso(row)} to ${wiseIso(liveSession.scheduledStartTime)}`;
+  }
+  if (wiseIso(liveSession.scheduledEndTime) !== rowWiseEndIso(row)) {
+    return `Stale row: Wise end time changed from ${rowWiseEndIso(row)} to ${wiseIso(liveSession.scheduledEndTime)}`;
+  }
+  if (!isOfflineSession(liveSession.type)) {
+    return `Live Wise session type is not OFFLINE: ${liveSession.type ?? "unknown"}`;
+  }
+  if (
+    row.currentWiseLocation &&
+    normalizedLocation(liveSession.location ?? null) !== normalizedLocation(row.currentWiseLocation) &&
+    normalizedLocation(liveSession.location ?? null) !== normalizedLocation(row.assignedRoom)
+  ) {
+    return `Stale row: Wise location changed from ${row.currentWiseLocation} to ${liveSession.location ?? "empty"}`;
+  }
+
+  return null;
+}
+
+export function buildWiseLocationPreflightBody(
+  row: ClassroomRow,
+  liveSession: WiseSession,
+  toLocation: string,
+): WiseSessionAvailabilityInput {
+  const teacherId = getWiseSessionTeacherUserId(liveSession) ?? row.wiseTeacherUserId ?? undefined;
+  if (!teacherId) {
+    throw new Error("Missing Wise teacher user id for preflight");
+  }
+
+  return {
+    teacherId,
+    sessions: [{
+      teacherId,
+      classId: row.wiseClassId ?? getWiseSessionClassId(liveSession),
+      sessionId: row.wiseSessionId,
+      scheduledStartTime: liveSession.scheduledStartTime,
+      scheduledEndTime: liveSession.scheduledEndTime,
+      type: liveSession.type ?? row.sessionType ?? undefined,
+    }],
+    locationToCheck: toLocation,
+    sessionsToSkip: {
+      sessionId: row.wiseSessionId,
+      skipUpcoming: false,
+      classId: row.wiseClassId ?? getWiseSessionClassId(liveSession),
+      startTime: liveSession.scheduledStartTime,
+    },
+  };
+}
+
+async function runWiseLocationPreflight(
+  client: WiseClient,
+  instituteId: string,
+  row: ClassroomRow,
+  liveSession: WiseSession,
+): Promise<WisePreflightResult> {
+  const response = await checkTeacherAvailabilityForSessions(
+    client,
+    instituteId,
+    buildWiseLocationPreflightBody(row, liveSession, row.assignedRoom),
+  );
+  return {
+    conflict: wisePreflightResponseHasConflict(response),
+    conflictReasons: collectWisePreflightConflictReasons(response),
+    response,
+  };
+}
+
+function preflightRejection(preflight: WisePreflightResult): string | null {
+  if (!preflight.conflict) return null;
+  if (isKnownNonLocationWisePreflightWarning(preflight)) return null;
+  const reasons = preflight.conflictReasons.length ? preflight.conflictReasons.join(", ") : "unknown conflict";
+  return `Wise availability preflight rejected the location update: ${reasons}`;
+}
+
+async function refetchWiseSessionsForVerification(
+  client: WiseClient,
+  instituteId: string,
+): Promise<WisePublishValidationContext> {
+  const liveSessions = await fetchAllFutureSessions(client, instituteId);
+  return { liveSessions, liveSessionsById: liveSessionsById(liveSessions) };
+}
+
+function verifyFinalPublishedRows(
+  rows: ClassroomRow[],
+  liveSessions: WiseSession[],
+): { stalePublishedRows: string[]; roomConflictRows: string[] } {
+  const liveById = liveSessionsById(liveSessions);
+  const stalePublishedRows: string[] = [];
+  const roomConflictRows: string[] = [];
+
+  for (const row of rows) {
+    const liveSession = liveById.get(row.wiseSessionId);
+    if (!liveSession) {
+      stalePublishedRows.push(`${row.wiseSessionId}: missing from live FUTURE sessions`);
+      continue;
+    }
+    if (normalizedLocation(liveSession.location ?? null) !== normalizedLocation(row.assignedRoom)) {
+      stalePublishedRows.push(`${row.wiseSessionId}: live location is ${liveSession.location ?? "empty"}, expected ${row.assignedRoom}`);
+      continue;
+    }
+
+    const blockers = liveSessionRoomBlockersForRow(row, liveSessions);
+    if (blockers.length) {
+      roomConflictRows.push(`${row.wiseSessionId}: ${row.assignedRoom} blocked by ${blockers.map((session) => session._id).join(", ")}`);
+    }
+  }
+
+  return { stalePublishedRows, roomConflictRows };
+}
+
 export async function updateWiseLocationOnly(
   updateLocation: WiseLocationUpdater,
   row: Pick<ClassroomRow, "wiseClassId" | "wiseSessionId">,
@@ -919,13 +1252,12 @@ export async function runClassroomPublishJob(
   jobId: string,
   client?: WiseClient,
 ): Promise<PublishJobStatusResponse> {
-  assertWiseClassroomWritebackEnabled();
-
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const wiseClient = client ?? createWiseClientFromEnv();
   const existingJob = await loadPublishJob(db, jobId);
+  assertWiseClassroomWritebackAllowed(existingJob.createdBy);
   if (isPublishJobTerminal(existingJob.status)) {
-    return getClassroomPublishJobProgress(db, existingJob.runId, jobId);
+    return getClassroomPublishJobProgress(db, existingJob.runId, jobId, existingJob.createdBy);
   }
 
   await db
@@ -964,7 +1296,23 @@ export async function runClassroomPublishJob(
     const summary: PublishSummary = { attempted: 0, success: 0, skipped: 0, failed: 0 };
     const skippedSummary = await markSkippedRows(db, jobId, skippedRows);
     summary.skipped += skippedSummary.skipped;
-    const approvedWiseLocations = await loadApprovedWiseLocations(wiseClient, instituteId);
+    const [approvedWiseLocations, initialSessions] = await Promise.all([
+      loadApprovedWiseLocations(wiseClient, instituteId),
+      fetchAllFutureSessions(wiseClient, instituteId),
+    ]);
+    await db
+      .update(schema.classroomPublishJobs)
+      .set({
+        liveCatalogCheckedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.classroomPublishJobs.id, jobId));
+
+    let liveContext: WisePublishValidationContext = {
+      liveSessions: initialSessions,
+      liveSessionsById: liveSessionsById(initialSessions),
+    };
+    const successfullyVerifiedRows: ClassroomRow[] = [];
 
     await runLimited(eligibleRows, PUBLISH_ROW_CONCURRENCY, async (row) => {
       if (!approvedWiseLocations.has(row.assignedRoom)) {
@@ -977,13 +1325,75 @@ export async function runClassroomPublishJob(
         return;
       }
 
-      if (normalizedLocation(row.currentWiseLocation) === normalizedLocation(row.assignedRoom)) {
+      if (isLegacyPlainTvRoomName(row.assignedRoom)) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: `Legacy plain TV room "${row.assignedRoom}" cannot be published; use "${exactWiseRoomName(row.assignedRoom)}"`,
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        return;
+      }
+
+      const liveSession = liveContext.liveSessionsById.get(row.wiseSessionId);
+      const staleReason = validateLiveWiseSessionForPublish(row, liveSession);
+      if (staleReason || !liveSession) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: staleReason ?? "Live Wise session validation failed",
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        return;
+      }
+
+      const blockers = liveSessionRoomBlockersForRow(row, liveContext.liveSessions);
+      if (blockers.length) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: `Target physical room is occupied by live Wise session(s): ${blockers.map((session) => session._id).join(", ")}`,
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        return;
+      }
+
+      let preflight: WisePreflightResult;
+      try {
+        preflight = await runWiseLocationPreflight(wiseClient, instituteId, row, liveSession);
+      } catch (error) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: error instanceof Error ? error.message : "Wise availability preflight failed",
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        return;
+      }
+
+      const preflightError = preflightRejection(preflight);
+      if (preflightError) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: preflightError,
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        return;
+      }
+
+      if (isKnownNonLocationWisePreflightWarning(preflight)) {
+        await incrementPublishJobPreflightWarnings(db, jobId);
+      }
+
+      if (normalizedLocation(liveSession.location ?? null) === normalizedLocation(row.assignedRoom)) {
         const result = await publishRowResult(db, jobId, row, {
           status: "success",
           publishedLocation: row.assignedRoom,
         });
         summary.attempted += result.attempted;
         summary.success += result.success;
+        successfullyVerifiedRows.push(row);
         return;
       }
 
@@ -1002,10 +1412,51 @@ export async function runClassroomPublishJob(
         return;
       }
 
+      liveContext = await refetchWiseSessionsForVerification(wiseClient, instituteId);
+      const verifiedSession = liveContext.liveSessionsById.get(row.wiseSessionId);
+      if (normalizedLocation(verifiedSession?.location ?? null) !== normalizedLocation(row.assignedRoom)) {
+        const error = `Post-write verification failed: live location is ${verifiedSession?.location ?? "empty"}, expected ${row.assignedRoom}`;
+        const result = await publishRowResult(db, jobId, row, { status: "failed", error });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        return;
+      }
+
       const result = await publishRowResult(db, jobId, row, { status: "success" });
       summary.attempted += result.attempted;
       summary.success += result.success;
+      successfullyVerifiedRows.push(row);
     });
+
+    liveContext = await refetchWiseSessionsForVerification(wiseClient, instituteId);
+    const finalInvalidPlainTvSessionCount = invalidPlainTvSessionCount(liveContext.liveSessions);
+    const finalRowVerification = verifyFinalPublishedRows(successfullyVerifiedRows, liveContext.liveSessions);
+    const finalVerification = {
+      invalidPlainTvSessionCount: finalInvalidPlainTvSessionCount,
+      verifiedSuccessCount: successfullyVerifiedRows.length,
+      stalePublishedRows: finalRowVerification.stalePublishedRows,
+      roomConflictRows: finalRowVerification.roomConflictRows,
+    };
+    await updatePublishJobFinalVerification(db, jobId, finalVerification);
+
+    if (
+      finalInvalidPlainTvSessionCount !== 0 ||
+      finalRowVerification.stalePublishedRows.length > 0 ||
+      finalRowVerification.roomConflictRows.length > 0
+    ) {
+      const failures = [
+        finalInvalidPlainTvSessionCount !== 0
+          ? `${finalInvalidPlainTvSessionCount} future blocking session(s) still occupy invalid plain TV rooms`
+          : null,
+        finalRowVerification.stalePublishedRows.length
+          ? `${finalRowVerification.stalePublishedRows.length} published row(s) failed final location verification`
+          : null,
+        finalRowVerification.roomConflictRows.length
+          ? `${finalRowVerification.roomConflictRows.length} published row(s) have final physical room conflicts`
+          : null,
+      ].filter(Boolean).join("; ");
+      throw new Error(`Final Wise verification failed: ${failures}`);
+    }
 
     await updateRunPublishStatus(db, existingJob.runId);
 
@@ -1025,7 +1476,7 @@ export async function runClassroomPublishJob(
       })
       .where(eq(schema.classroomPublishJobs.id, jobId));
 
-    return getClassroomPublishJobProgress(db, existingJob.runId, jobId);
+    return getClassroomPublishJobProgress(db, existingJob.runId, jobId, existingJob.createdBy);
   } catch (error) {
     await markPublishJobFailed(db, jobId, error);
     await updateRunPublishStatus(db, existingJob.runId).catch(() => undefined);
@@ -1037,6 +1488,7 @@ export async function getClassroomPublishJobProgress(
   db: Database,
   runId: string,
   jobId: string,
+  viewerEmail?: string | null,
 ): Promise<PublishJobStatusResponse> {
   let job = await loadPublishJob(db, jobId, runId);
   if (isStaleRunningPublishJob(job)) {
@@ -1046,7 +1498,7 @@ export async function getClassroomPublishJobProgress(
     progress: toPublishJobProgress(job),
   };
   if (isPublishJobTerminal(job.status)) {
-    response.detail = await getClassroomAssignmentByRunId(db, runId);
+    response.detail = await getClassroomAssignmentByRunId(db, runId, viewerEmail);
   }
   return response;
 }
@@ -1055,11 +1507,16 @@ export async function publishClassroomAssignmentRun(
   db: Database,
   runId: string,
   client?: WiseClient,
+  input: { createdBy?: string | null; confirmation?: string | null } = {},
 ): Promise<{ detail: ClassroomAssignmentDetail; summary: PublishSummary }> {
-  const progress = await createClassroomPublishJob(db, { runId });
+  const progress = await createClassroomPublishJob(db, {
+    runId,
+    createdBy: input.createdBy ?? null,
+    confirmation: input.confirmation ?? null,
+  });
   const result = await runClassroomPublishJob(db, progress.jobId, client);
   const finalProgress = result.progress;
-  const detail = result.detail ?? await getClassroomAssignmentByRunId(db, runId);
+  const detail = result.detail ?? await getClassroomAssignmentByRunId(db, runId, input.createdBy ?? null);
   return {
     detail,
     summary: {
@@ -1074,6 +1531,7 @@ export async function publishClassroomAssignmentRun(
 export async function getClassroomAssignmentByRunId(
   db: Database,
   runId: string,
+  viewerEmail?: string | null,
 ): Promise<ClassroomAssignmentDetail> {
   const rooms = await listClassroomRooms(db);
   const [run] = await db
@@ -1083,7 +1541,7 @@ export async function getClassroomAssignmentByRunId(
     .limit(1);
   if (!run) throw new Error("Assignment run not found");
   const rows = await loadRowsForRun(db, runId);
-  return assignmentDetail(run, rows, rooms);
+  return assignmentDetail(run, rows, rooms, viewerEmail);
 }
 
 function formatBangkokTimestamp(value: Date): string {

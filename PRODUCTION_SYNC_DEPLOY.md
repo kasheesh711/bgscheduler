@@ -15,6 +15,7 @@ Production must have these values configured in Vercel:
 - `WISE_NAMESPACE=begifted-education`
 - `WISE_INSTITUTE_ID=696e1f4d90102225641cc413`
 - `CRON_SECRET`
+- `WISE_CLASSROOM_WRITEBACK_ALLOWED_EMAILS=kevinhsieh711@gmail.com,kevhsh7@gmail.com` if `ENABLE_WISE_CLASSROOM_WRITEBACK=true`
 
 Check them with:
 
@@ -64,6 +65,7 @@ Confirm:
 - `activeSnapshotId` is non-null
 - the latest sync run status is `success`
 - `lastFailureError` is null or older than the successful sync
+- no recent cron sync is shown as `timed out`; Wise sync routes use `maxDuration = 800` and should not hit the old 300s ceiling on Pro
 
 ## 5. Verify search behavior
 
@@ -76,9 +78,13 @@ From an authenticated session:
 
 ## 6. Check cron continuity
 
-Current production cron is daily:
+Current production cron cadence requires Vercel Pro or Enterprise. Hobby only supports daily cron and will reject this schedule at deploy time.
 
-- `/api/internal/sync-wise`
-- `0 0 * * *`
+- `/api/internal/sync-wise/daytime` — `0,30 0-11 * * *` (07:00-18:30 Bangkok, every 30 minutes)
+- `/api/internal/sync-wise/overnight` — `0 12-23 * * *` (19:00-06:00 Bangkok, hourly)
 
-If the team upgrades Vercel from Hobby to Pro, update the cadence only after production syncs are stable.
+After deployment, verify with:
+
+```bash
+npx vercel crons ls
+```

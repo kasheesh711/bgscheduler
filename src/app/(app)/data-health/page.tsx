@@ -43,6 +43,8 @@ interface HealthData {
   recentSyncs: {
     id: string;
     status: string;
+    rawStatus?: string;
+    timedOut?: boolean;
     startedAt: string;
     finishedAt: string | null;
     teacherCount: number | null;
@@ -95,7 +97,7 @@ export default function DataHealthPage() {
     if (showLoading) setLoading(true);
 
     try {
-      const response = await fetch("/api/data-health");
+      const response = await fetch("/api/data-health", { cache: "no-store" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const healthData = (await response.json()) as HealthData;
       setData(healthData);
@@ -111,6 +113,14 @@ export default function DataHealthPage() {
   useEffect(() => {
     void loadHealthData({ showLoading: true });
   }, [loadHealthData]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (!syncing) void loadHealthData();
+    }, 60_000);
+
+    return () => window.clearInterval(interval);
+  }, [loadHealthData, syncing]);
 
   async function handleSyncNow() {
     if (syncing) return;
@@ -423,12 +433,12 @@ export default function DataHealthPage() {
                       variant={
                         s.status === "success"
                           ? "default"
-                          : s.status === "failed"
+                          : s.status === "failed" || s.timedOut
                             ? "destructive"
                             : "secondary"
                       }
                     >
-                      {s.status}
+                      {s.timedOut ? "timed out" : s.status}
                     </Badge>
                   </TableCell>
                   <TableCell>{formatBangkokDateTime(s.startedAt)}</TableCell>
@@ -437,7 +447,9 @@ export default function DataHealthPage() {
                   </TableCell>
                   <TableCell>{s.teacherCount ?? "-"}</TableCell>
                   <TableCell className="text-xs text-destructive max-w-xs truncate">
-                    {s.errorSummary ?? "-"}
+                    {s.timedOut
+                      ? "Function exceeded the 5 minute sync window before recording completion."
+                      : (s.errorSummary ?? "-")}
                   </TableCell>
                 </TableRow>
               ))}

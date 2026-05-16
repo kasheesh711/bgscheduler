@@ -8,11 +8,11 @@ Internal admin app for searching tutor availability from normalized Wise snapsho
 - Repo: [https://github.com/kasheesh711/bgscheduler](https://github.com/kasheesh711/bgscheduler)
 - Stack: Next.js 16 App Router, TypeScript, Tailwind, shadcn/ui, Auth.js, Drizzle, Neon Postgres, Vercel
 - Test status: 281 passing Vitest unit tests
-- Wise status: production sync live since 2026-04-07 (131 teachers, 72 groups, daily cron)
+- Wise status: production sync live since 2026-04-07 (131 teachers, 72 groups, Pro cron cadence: every 30 min from 07:00-19:00 Bangkok, hourly overnight)
 - Compare UI: side-by-side search and compare workspace with weekly/day schedule views, tutor combobox, discovery modal, and student-level conflict detection
-- Class assignments: native `/class-assignments` workspace for local room assignment, admin overrides, teacher schedules, and explicit Wise OFFLINE location publishing
+- Class assignments: native `/class-assignments` workspace for local room assignment, admin overrides, teacher schedules, and disabled-by-default Wise OFFLINE location publishing
 - Latest compare fixes: week view uses per-tutor lanes for 2-3 tutors, session cards use normalized RGBA fills, and online/onsite styling now prefers Wise identity/session evidence over raw location strings
-- Optional: upgrade Vercel to Pro for 30-minute sync cadence (currently daily on Hobby)
+- Vercel Pro is required for the configured hourly/half-hourly sync cadence; Hobby only supports daily cron.
 
 ## Product Rules
 
@@ -45,14 +45,16 @@ Important live payload details:
 - `GET /institutes/{centerId}/sessions` expects `paginateBy=COUNT&page_number=...&page_size=...`
 - sessions are returned under `data.sessions`
 - `GET /institutes/{centerId}/locations` returns Wise location strings under `data.locations`
-- `PUT /teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` updates one session; the app only uses it to publish `location` for eligible `OFFLINE` rows after admin confirmation
+- `PUT /teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` updates one session; the app only uses it when `ENABLE_WISE_CLASSROOM_WRITEBACK=true` and the signed-in admin is listed in `WISE_CLASSROOM_WRITEBACK_ALLOWED_EMAILS` to publish exact Wise catalog `location` strings for eligible `OFFLINE` rows after typed admin confirmation and live Wise preflight
 
 ## Classroom Assignments
 
 - `/class-assignments` generates room assignments locally from the active Wise snapshot for one Bangkok date.
 - Assignment runs preserve admin override rooms unless the admin chooses force reassign.
-- Local rooms are stored in `classroom_rooms` and seeded from the 24-room BeGifted catalog.
-- Wise writeback is deliberately conservative: `Publish to Wise` updates only eligible `OFFLINE` session locations with reliable capacity and Wise class/session IDs. Online booth assignments stay local.
+- Local rooms are stored in `classroom_rooms` and seeded from exact Wise catalog names. TV rooms use their `(TV)` names; legacy plain TV-room rows are deactivated locally.
+- Wise writeback is deliberately disabled by default. `Publish to Wise` is unavailable unless `ENABLE_WISE_CLASSROOM_WRITEBACK=true` and the admin email is listed in `WISE_CLASSROOM_WRITEBACK_ALLOWED_EMAILS`; when enabled it updates only eligible `OFFLINE` session locations with reliable capacity, Wise class/session IDs, approved Wise catalog locations, live room preflight, and post-write verification. Online booth assignments stay local.
+- `GET /api/class-assignments/repair-audit?format=csv` exports successful plain TV-room publishes from May 15, 2026 onward for explicit repair approval.
+- Emergency room conflict repair is separate from normal publishing: dry-run with `npm run wise:room-conflict-repair -- --date YYYY-MM-DD`; apply requires `ENABLE_WISE_EMERGENCY_REPAIR=true`, `--apply`, `--confirm YYYY-MM-DD:<change-count>`, and the exact proposed `--session-ids`.
 - Run `npm run db:migrate` before using this feature in production so the classroom tables and new Wise session columns exist.
 
 ## Local Development
@@ -78,6 +80,9 @@ WISE_API_KEY=
 WISE_NAMESPACE=begifted-education
 WISE_INSTITUTE_ID=696e1f4d90102225641cc413
 CRON_SECRET=
+ENABLE_WISE_CLASSROOM_WRITEBACK=false
+WISE_CLASSROOM_WRITEBACK_ALLOWED_EMAILS=kevinhsieh711@gmail.com,kevhsh7@gmail.com
+ENABLE_WISE_EMERGENCY_REPAIR=false
 ```
 
 ## Useful Commands
@@ -88,6 +93,7 @@ npm run build
 npm run db:generate
 npm run db:migrate
 npm run db:seed
+npm run wise:room-conflict-repair -- --date 2026-05-16
 ```
 
 Manual sync trigger:

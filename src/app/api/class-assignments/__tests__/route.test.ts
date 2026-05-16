@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 vi.mock("@/lib/classrooms/data", () => ({
+  assertWiseClassroomWritebackAllowed: vi.fn(),
   assertIsoDate: vi.fn((value: string) => {
     if (value === "bad-date") throw new Error("Invalid date. Expected YYYY-MM-DD.");
     return value;
@@ -12,12 +13,10 @@ vi.mock("@/lib/classrooms/data", () => ({
   getPlainTvLocationRepairAudit: vi.fn(),
   getClassroomPublishJobProgress: vi.fn(),
   getClassroomAssignmentForDate: vi.fn(),
-  isWiseClassroomWritebackEnabled: vi.fn(() => process.env.ENABLE_WISE_CLASSROOM_WRITEBACK === "true"),
   runClassroomAssignment: vi.fn(),
   updateClassroomAssignmentOverride: vi.fn(),
   publishClassroomAssignmentRun: vi.fn(),
   runClassroomPublishJob: vi.fn(),
-  wiseClassroomWritebackDisabledMessage: vi.fn(() => "Wise classroom writeback is disabled."),
 }));
 vi.mock("@/lib/classrooms/schedule-email", () => ({
   getScheduleEmailPreview: vi.fn(),
@@ -27,15 +26,14 @@ vi.mock("@/lib/classrooms/schedule-email", () => ({
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import {
+  assertWiseClassroomWritebackAllowed,
   createClassroomPublishJob,
   getPlainTvLocationRepairAudit,
   getClassroomPublishJobProgress,
   getClassroomAssignmentForDate,
-  isWiseClassroomWritebackEnabled,
   runClassroomAssignment,
   runClassroomPublishJob,
   updateClassroomAssignmentOverride,
-  wiseClassroomWritebackDisabledMessage,
 } from "@/lib/classrooms/data";
 import {
   getScheduleEmailPreview,
@@ -57,6 +55,8 @@ const detail = {
   rows: [],
   rooms: [],
   wiseWritebackEnabled: false,
+  wiseWritebackEnabledForUser: false,
+  wiseWritebackBlockedReason: "Wise classroom writeback is disabled.",
 };
 
 const schedulePreview = {
@@ -83,6 +83,7 @@ const publishProgress = {
   successCount: 0,
   failedCount: 0,
   skippedCount: 0,
+  preflightWarningCount: 0,
   remainingCount: 1,
   elapsedMs: null,
   estimatedRemainingMs: null,
@@ -98,10 +99,15 @@ describe("class assignment routes", () => {
     vi.resetAllMocks();
     authMock.mockResolvedValue({ user: { email: "admin@example.com" } });
     vi.mocked(getDb).mockReturnValue({ db: true } as never);
-    vi.mocked(isWiseClassroomWritebackEnabled).mockImplementation(
-      () => process.env.ENABLE_WISE_CLASSROOM_WRITEBACK === "true",
-    );
-    vi.mocked(wiseClassroomWritebackDisabledMessage).mockReturnValue("Wise classroom writeback is disabled.");
+    vi.mocked(assertWiseClassroomWritebackAllowed).mockImplementation((email: string | null | undefined) => {
+      if (process.env.ENABLE_WISE_CLASSROOM_WRITEBACK !== "true") {
+        throw new Error("Wise classroom writeback is disabled.");
+      }
+      const normalizedEmail = String(email ?? "").trim().toLowerCase();
+      if (!["kevinhsieh711@gmail.com", "kevhsh7@gmail.com"].includes(normalizedEmail)) {
+        throw new Error("Wise classroom writeback is restricted to explicitly approved admin emails.");
+      }
+    });
     vi.mocked(getClassroomAssignmentForDate).mockResolvedValue(detail as never);
     vi.mocked(runClassroomAssignment).mockResolvedValue(detail as never);
     vi.mocked(updateClassroomAssignmentOverride).mockResolvedValue(detail as never);
@@ -170,7 +176,12 @@ describe("class assignment routes", () => {
     expect(res.status).toBe(200);
     expect(updateClassroomAssignmentOverride).toHaveBeenCalledWith(
       { db: true },
-      { runId: "run-1", rowId: "row-1", overrideRoom: "Joy (TV)" },
+      {
+        runId: "run-1",
+        rowId: "row-1",
+        overrideRoom: "Joy (TV)",
+        updatedBy: "admin@example.com",
+      },
     );
   });
 
@@ -184,17 +195,42 @@ describe("class assignment routes", () => {
     await expect(res.json()).resolves.toEqual({ error: "Wise classroom writeback is disabled." });
   });
 
-  it("starts a publish job and returns progress when Wise writeback is enabled", async () => {
+  it("blocks publish for non-allowed admins even when Wise writeback is enabled", async () => {
     vi.stubEnv("ENABLE_WISE_CLASSROOM_WRITEBACK", "true");
 
-    const res = await publishAssignments(new Request("http://test.local/api/class-assignments/runs/run-1/publish"), {
+    const res = await publishAssignments(new Request("http://test.local/api/class-assignments/runs/run-1/publish", {
+      method: "POST",
+      body: JSON.stringify({ confirmation: "PUBLISH WISE 1" }),
+    }), {
+      params: Promise.resolve({ runId: "run-1" }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(createClassroomPublishJob).not.toHaveBeenCalled();
+    await expect(res.json()).resolves.toEqual({
+      error: "Wise classroom writeback is restricted to explicitly approved admin emails.",
+    });
+  });
+
+  it("starts a publish job and returns progress when Wise writeback is enabled for an allowed admin", async () => {
+    vi.stubEnv("ENABLE_WISE_CLASSROOM_WRITEBACK", "true");
+    authMock.mockResolvedValue({ user: { email: "kevinhsieh711@gmail.com" } });
+
+    const res = await publishAssignments(new Request("http://test.local/api/class-assignments/runs/run-1/publish", {
+      method: "POST",
+      body: JSON.stringify({ confirmation: "PUBLISH WISE 1" }),
+    }), {
       params: Promise.resolve({ runId: "run-1" }),
     });
 
     expect(res.status).toBe(202);
     expect(createClassroomPublishJob).toHaveBeenCalledWith(
       { db: true },
-      { runId: "run-1", createdBy: "admin@example.com" },
+      {
+        runId: "run-1",
+        createdBy: "kevinhsieh711@gmail.com",
+        confirmation: "PUBLISH WISE 1",
+      },
     );
     await expect(res.json()).resolves.toEqual({
       jobId: "job-1",
@@ -238,7 +274,12 @@ describe("class assignment routes", () => {
     );
 
     expect(res.status).toBe(200);
-    expect(getClassroomPublishJobProgress).toHaveBeenCalledWith({ db: true }, "run-1", "job-1");
+    expect(getClassroomPublishJobProgress).toHaveBeenCalledWith(
+      { db: true },
+      "run-1",
+      "job-1",
+      "admin@example.com",
+    );
     await expect(res.json()).resolves.toEqual({ progress: publishProgress, detail });
   });
 

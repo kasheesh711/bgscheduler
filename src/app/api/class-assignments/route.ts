@@ -18,7 +18,11 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const detail = await getClassroomAssignmentForDate(getDb(), assertIsoDate(date));
+    const detail = await getClassroomAssignmentForDate(
+      getDb(),
+      assertIsoDate(date),
+      session.user?.email ?? null,
+    );
     return NextResponse.json(detail);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load class assignments";

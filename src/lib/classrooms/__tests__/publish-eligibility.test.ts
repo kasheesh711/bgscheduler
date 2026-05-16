@@ -1,17 +1,25 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  assertWiseClassroomWritebackAllowed,
+  buildWiseLocationPreflightBody,
   classroomTimestampToWiseIso,
+  collectWisePreflightConflictReasons,
   estimatePublishRemainingMs,
   findPublishRoomBlockers,
   intendedTvRepairLocation,
   isClassroomPublishEligible,
+  isKnownNonLocationWisePreflightWarning,
   isWiseClassroomWritebackEnabled,
   toPublishJobProgress,
   updateWiseLocationOnly,
+  wiseClassroomWritebackPolicy,
+  wisePreflightResponseHasConflict,
 } from "../data";
 import { REMOTE_NO_ROOM_NEEDED } from "../assignment-engine";
 import { ROOM_JOY, ROOM_REMEMBER_TV } from "../rooms";
+import type { ClassroomRow } from "../data";
+import type { WiseSession } from "@/lib/wise/types";
 
 const baseRow = {
   status: "assigned" as const,
@@ -66,6 +74,13 @@ describe("isClassroomPublishEligible", () => {
       reason: "Missing Wise class id",
     });
   });
+
+  it("rejects legacy plain TV room names", () => {
+    expect(isClassroomPublishEligible({ ...baseRow, assignedRoom: "Joy" })).toEqual({
+      eligible: false,
+      reason: 'Legacy plain TV room "Joy" cannot be published; use "Joy (TV)"',
+    });
+  });
 });
 
 describe("publish job progress", () => {
@@ -99,6 +114,9 @@ describe("publish job progress", () => {
       successCount: 2,
       failedCount: 1,
       skippedCount: 2,
+      preflightWarningCount: 1,
+      liveCatalogCheckedAt: new Date("2026-05-15T00:00:01.000Z"),
+      finalVerification: { invalidPlainTvSessionCount: 0 },
       lastError: null,
       createdBy: "admin@example.com",
       startedAt: new Date("2026-05-15T00:00:00.000Z"),
@@ -110,6 +128,7 @@ describe("publish job progress", () => {
     expect(progress.remainingCount).toBe(0);
     expect(progress.elapsedMs).toBe(12_000);
     expect(progress.estimatedRemainingMs).toBeNull();
+    expect(progress.preflightWarningCount).toBe(1);
   });
 });
 
@@ -135,7 +154,7 @@ describe("findPublishRoomBlockers", () => {
     expect(findPublishRoomBlockers(row, [row, blocker])).toEqual([blocker]);
   });
 
-  it("does not collapse plain and TV Wise room names", () => {
+  it("treats legacy plain and exact TV names as the same physical room", () => {
     const row = {
       id: "target",
       tutorDisplayName: "Target",
@@ -153,7 +172,7 @@ describe("findPublishRoomBlockers", () => {
       endMinute: 690,
     };
 
-    expect(findPublishRoomBlockers(row, [plainRoom])).toEqual([]);
+    expect(findPublishRoomBlockers(row, [plainRoom])).toEqual([plainRoom]);
   });
 
   it("ignores rows that do not overlap the target time", () => {
@@ -201,11 +220,11 @@ describe("updateWiseLocationOnly", () => {
     )).resolves.toBe("Wise API 422: invalid location");
   });
 
-  it("does not use Wise availability preflight or temporary room swaps from the classroom publisher", () => {
+  it("uses Wise availability preflight without emergency blocker moves or temporary swaps", () => {
     const source = readFileSync(new URL("../data.ts", import.meta.url), "utf8");
 
-    expect(source).not.toContain("checkTeacherAvailabilityForSessions");
-    expect(source).not.toContain("Wise availability conflict");
+    expect(source).toContain("checkTeacherAvailabilityForSessions");
+    expect(source).not.toContain("move_blocker_to_alternate_room");
     expect(source).not.toContain("moveCycleRowToTemporaryLocation");
     expect(source).not.toContain("temporaryLocations");
   });
@@ -218,6 +237,76 @@ describe("Wise classroom writeback safety", () => {
 
     vi.stubEnv("ENABLE_WISE_CLASSROOM_WRITEBACK", "true");
     expect(isWiseClassroomWritebackEnabled()).toBe(true);
+  });
+
+  it("blocks non-allowed admins even when the env flag is enabled", () => {
+    vi.stubEnv("ENABLE_WISE_CLASSROOM_WRITEBACK", "true");
+    vi.stubEnv("WISE_CLASSROOM_WRITEBACK_ALLOWED_EMAILS", "kevinhsieh711@gmail.com,kevhsh7@gmail.com");
+
+    expect(wiseClassroomWritebackPolicy("admin@example.com")).toEqual({
+      wiseWritebackEnabled: true,
+      wiseWritebackEnabledForUser: false,
+      wiseWritebackBlockedReason: "Wise classroom writeback is restricted to explicitly approved admin emails.",
+    });
+    expect(() => assertWiseClassroomWritebackAllowed("admin@example.com")).toThrow(
+      "Wise classroom writeback is restricted to explicitly approved admin emails.",
+    );
+  });
+
+  it("allows both approved Kevin emails when the env flag is enabled", () => {
+    vi.stubEnv("ENABLE_WISE_CLASSROOM_WRITEBACK", "true");
+    vi.stubEnv("WISE_CLASSROOM_WRITEBACK_ALLOWED_EMAILS", "kevinhsieh711@gmail.com,kevhsh7@gmail.com");
+
+    expect(wiseClassroomWritebackPolicy("kevinhsieh711@gmail.com").wiseWritebackEnabledForUser).toBe(true);
+    expect(wiseClassroomWritebackPolicy("kevhsh7@gmail.com").wiseWritebackEnabledForUser).toBe(true);
+  });
+
+  it("builds Wise preflight with a single sessionsToSkip object", () => {
+    const row = {
+      wiseTeacherUserId: "teacher-user-1",
+      wiseSessionId: "session-1",
+      wiseClassId: "class-1",
+      assignedRoom: ROOM_JOY,
+      sessionType: "OFFLINE",
+    } as ClassroomRow;
+    const liveSession = {
+      _id: "session-1",
+      userId: "teacher-user-1",
+      classId: "class-1",
+      scheduledStartTime: "2026-05-16T11:00:00.000Z",
+      scheduledEndTime: "2026-05-16T12:00:00.000Z",
+      type: "OFFLINE",
+    } as WiseSession;
+
+    const body = buildWiseLocationPreflightBody(row, liveSession, ROOM_JOY);
+
+    expect(body.sessionsToSkip).toEqual({
+      sessionId: "session-1",
+      skipUpcoming: false,
+      classId: "class-1",
+      startTime: "2026-05-16T11:00:00.000Z",
+    });
+    expect(Array.isArray(body.sessionsToSkip)).toBe(false);
+  });
+
+  it("allows only known non-location Wise preflight warnings", () => {
+    const teacherWarning = {
+      sessions: [{ conflict: true, reason: "TEACHER_SESSION" }],
+    };
+    const locationConflict = {
+      sessions: [{ conflict: true, reason: "LOCATION_SESSION" }],
+    };
+
+    expect(wisePreflightResponseHasConflict(teacherWarning)).toBe(true);
+    expect(collectWisePreflightConflictReasons(teacherWarning)).toEqual(["TEACHER_SESSION"]);
+    expect(isKnownNonLocationWisePreflightWarning({
+      conflict: true,
+      conflictReasons: ["TEACHER_SESSION", "TEACHER_WORKING_HOURS"],
+    })).toBe(true);
+    expect(isKnownNonLocationWisePreflightWarning({
+      conflict: true,
+      conflictReasons: collectWisePreflightConflictReasons(locationConflict),
+    })).toBe(false);
   });
 
   it("maps only known invalid plain TV room names to exact repair locations", () => {

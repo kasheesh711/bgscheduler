@@ -34,6 +34,14 @@ function makeDataHealthDb() {
     teacherCount: 0,
     errorSummary: "Wise failed",
   };
+  const staleRunning = {
+    id: "sync-running",
+    status: "running",
+    startedAt: new Date("2026-04-05T00:00:00.000Z"),
+    finishedAt: null,
+    teacherCount: null,
+    errorSummary: null,
+  };
   const activeSnapshot = { id: "snap-1", active: true };
   const snapshotStat = {
     snapshotId: "snap-1",
@@ -57,7 +65,7 @@ function makeDataHealthDb() {
     { kind: "where-limit", rows: [activeSnapshot] },
     { kind: "where-limit", rows: [snapshotStat] },
     { kind: "where-promise", rows: issues },
-    { kind: "order-limit", rows: [lastSuccess, lastFailure] },
+    { kind: "order-limit", rows: [staleRunning, lastSuccess, lastFailure] },
   ];
 
   const select = vi.fn().mockImplementation(() => {
@@ -124,6 +132,12 @@ describe("GET /api/data-health", () => {
       ],
       unmappedTags: [{ entityName: "Biology", message: "Unmapped tag" }],
       recentSyncs: [
+        expect.objectContaining({
+          id: "sync-running",
+          status: "timed_out",
+          rawStatus: "running",
+          timedOut: true,
+        }),
         expect.objectContaining({ id: "sync-success", status: "success" }),
         expect.objectContaining({ id: "sync-failed", status: "failed" }),
       ],
