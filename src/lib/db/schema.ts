@@ -536,6 +536,25 @@ export const proposalItems = pgTable("proposal_items", {
   index("proposal_items_date_idx").on(table.proposalDate),
 ]);
 
+// ── AI Scheduler Audit ─────────────────────────────────────────────────
+
+export const aiSchedulerRuns = pgTable("ai_scheduler_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  createdByEmail: text("created_by_email"),
+  status: text("status").notNull(),
+  inputPreviewRedacted: text("input_preview_redacted").notNull(),
+  model: text("model"),
+  latencyMs: integer("latency_ms"),
+  parsedPayload: jsonb("parsed_payload").$type<Record<string, unknown> | null>(),
+  solverPayload: jsonb("solver_payload").$type<Record<string, unknown> | null>(),
+  warnings: jsonb("warnings").$type<string[]>().notNull().default([]),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("ai_scheduler_runs_created_at_idx").on(table.createdAt),
+  index("ai_scheduler_runs_status_idx").on(table.status),
+]);
+
 // ── Data Issues ─────────────────────────────────────────────────────────
 
 export const dataIssues = pgTable("data_issues", {

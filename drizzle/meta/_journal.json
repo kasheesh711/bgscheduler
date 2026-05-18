@@ -78,6 +78,13 @@
       "when": 1779123600000,
       "tag": "0012_adopt_tv_room_names",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1779129600000,
+      "tag": "0015_ai_scheduler_runs",
+      "breakpoints": true
     }
   ]
 }

@@ -36,6 +36,12 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     expect(res.headers.get("location")).toBeNull();
   });
 
+  it("/api/search/assistant bypasses middleware so the route can return API auth errors", async () => {
+    const res = await middleware(makeReq("/api/search/assistant") as never, {} as never) as Response;
+
+    expect(res.headers.get("location")).toBeNull();
+  });
+
   it("non-public route /search redirects to /login when unauthenticated, with callbackUrl preserved", async () => {
     const res = await middleware(makeReq("/search", false) as never, {} as never) as Response;
 

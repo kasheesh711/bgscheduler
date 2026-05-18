@@ -1,0 +1,233 @@
+import { z } from "zod";
+import type { Database } from "@/lib/db";
+import { listActiveProposalHolds } from "@/lib/proposals/data";
+import type { ProposalHoldSummary } from "@/lib/proposals/types";
+import { proposalHoldBlocksSearchSlot, weekdayForIsoDate } from "@/lib/proposals/overlap";
+import { parseTimeToMinutes } from "@/lib/normalization/timezone";
+import { ensureIndex } from "@/lib/search/index";
+import { executeSearch, getBlockingSessions } from "@/lib/search/engine";
+import type {
+  BlockingSessionInfo,
+  RangeGridRow,
+  RangeSearchResponse,
+  TutorReviewResult,
+} from "@/lib/search/types";
+
+export const rangeRequestSchema = z.object({
+  searchMode: z.enum(["recurring", "one_time"]),
+  dayOfWeek: z.number().min(0).max(6).optional(),
+  date: z.string().optional(),
+  startTime: z.string().regex(/^\d{2}:\d{2}$/),
+  endTime: z.string().regex(/^\d{2}:\d{2}$/),
+  durationMinutes: z
+    .enum(["60", "90", "120"])
+    .transform(Number)
+    .or(z.literal(60))
+    .or(z.literal(90))
+    .or(z.literal(120)),
+  mode: z.enum(["online", "onsite", "either"]),
+  filters: z
+    .object({
+      subject: z.string().optional(),
+      curriculum: z.string().optional(),
+      level: z.string().optional(),
+    })
+    .optional(),
+  tutorGroupIds: z.array(z.string()).optional(),
+});
+
+export type RangeSearchInput = z.infer<typeof rangeRequestSchema>;
+
+export function generateSubSlots(
+  startTime: string,
+  endTime: string,
+  durationMinutes: number,
+): { start: string; end: string }[] {
+  const [startH, startM] = startTime.split(":").map(Number);
+  const [endH, endM] = endTime.split(":").map(Number);
+  const startTotal = startH * 60 + startM;
+  const endTotal = endH * 60 + endM;
+
+  const slots: { start: string; end: string }[] = [];
+  let cursor = startTotal;
+
+  while (cursor + durationMinutes <= endTotal) {
+    const slotEnd = cursor + durationMinutes;
+    const sh = Math.floor(cursor / 60);
+    const sm = cursor % 60;
+    const eh = Math.floor(slotEnd / 60);
+    const em = slotEnd % 60;
+    slots.push({
+      start: `${String(sh).padStart(2, "0")}:${String(sm).padStart(2, "0")}`,
+      end: `${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`,
+    });
+    cursor = slotEnd;
+  }
+
+  return slots;
+}
+
+function proposalHoldToBlockingInfo(hold: ProposalHoldSummary): BlockingSessionInfo {
+  return {
+    kind: "proposal_hold",
+    title: `Held for ${hold.studentLabel}`,
+    studentName: hold.studentLabel,
+    subject: [hold.subject, hold.curriculum, hold.level].filter(Boolean).join(" ") || undefined,
+    startTime: hold.startTime,
+    endTime: hold.endTime,
+    proposalHold: hold,
+  };
+}
+
+function findProposalHoldForSlot(
+  holds: ProposalHoldSummary[],
+  tutorCanonicalKey: string,
+  searchMode: "recurring" | "one_time",
+  weekday: number,
+  startMinute: number,
+  endMinute: number,
+  date?: string,
+): ProposalHoldSummary | null {
+  return holds.find((hold) => (
+    hold.tutorCanonicalKey === tutorCanonicalKey &&
+    proposalHoldBlocksSearchSlot(hold, {
+      searchMode,
+      weekday,
+      date,
+      startMinute,
+      endMinute,
+    })
+  )) ?? null;
+}
+
+export async function executeRangeSearch(
+  db: Database,
+  input: RangeSearchInput,
+): Promise<RangeSearchResponse> {
+  const { searchMode, dayOfWeek, date, startTime, endTime, durationMinutes, mode, filters, tutorGroupIds } =
+    input;
+
+  const subSlots = generateSubSlots(startTime, endTime, durationMinutes);
+  if (subSlots.length === 0) {
+    throw new Error("Time range is too short for the selected class duration");
+  }
+
+  const index = await ensureIndex(db);
+  const activeProposalHolds = await listActiveProposalHolds(db);
+
+  const slots = subSlots.map((ss, i) => ({
+    id: `range-${i}`,
+    dayOfWeek: searchMode === "recurring" ? dayOfWeek : undefined,
+    date: searchMode === "one_time" ? date : undefined,
+    start: ss.start,
+    end: ss.end,
+    mode,
+  }));
+
+  const result = executeSearch(index, { searchMode, slots, filters });
+  const tutorMap = new Map<
+    string,
+    { row: Omit<RangeGridRow, "availability">; availability: (true | BlockingSessionInfo[])[] }
+  >();
+  const reviewMap = new Map<string, TutorReviewResult>();
+
+  for (let i = 0; i < result.perSlotResults.length; i++) {
+    const slotResult = result.perSlotResults[i];
+
+    for (const tutor of slotResult.available) {
+      const ss = subSlots[i];
+      const slotStartMin = parseTimeToMinutes(ss.start);
+      const slotEndMin = parseTimeToMinutes(ss.end);
+      const weekday = searchMode === "recurring"
+        ? dayOfWeek!
+        : weekdayForIsoDate(date!);
+      const proposalHold = findProposalHoldForSlot(
+        activeProposalHolds,
+        tutor.tutorCanonicalKey,
+        searchMode,
+        weekday,
+        slotStartMin,
+        slotEndMin,
+        date,
+      );
+
+      if (!tutorMap.has(tutor.tutorGroupId)) {
+        tutorMap.set(tutor.tutorGroupId, {
+          row: {
+            tutorGroupId: tutor.tutorGroupId,
+            tutorCanonicalKey: tutor.tutorCanonicalKey,
+            displayName: tutor.displayName,
+            supportedModes: tutor.supportedModes,
+            qualifications: tutor.qualifications,
+          },
+          availability: Array.from({ length: subSlots.length }, () => [] as BlockingSessionInfo[]),
+        });
+      }
+      tutorMap.get(tutor.tutorGroupId)!.availability[i] = proposalHold
+        ? [proposalHoldToBlockingInfo(proposalHold)]
+        : true;
+    }
+
+    for (const tutor of slotResult.needsReview) {
+      if (!reviewMap.has(tutor.tutorGroupId)) {
+        reviewMap.set(tutor.tutorGroupId, tutor);
+      }
+    }
+  }
+
+  for (const [tutorGroupId, entry] of tutorMap) {
+    const group = index.tutorGroups.find((g) => g.id === tutorGroupId);
+    if (!group) continue;
+
+    for (let i = 0; i < subSlots.length; i++) {
+      const availability = entry.availability[i];
+      if (availability === true) continue;
+      if (availability.length > 0) continue;
+
+      const ss = subSlots[i];
+      const slotStartMin = parseTimeToMinutes(ss.start);
+      const slotEndMin = parseTimeToMinutes(ss.end);
+      const weekday = searchMode === "recurring"
+        ? dayOfWeek!
+        : weekdayForIsoDate(date!);
+
+      const blockingSessions = getBlockingSessions(
+        group,
+        searchMode,
+        weekday,
+        slotStartMin,
+        slotEndMin,
+        date,
+      );
+
+      entry.availability[i] = blockingSessions.length > 0 ? blockingSessions : [];
+    }
+  }
+
+  if (tutorGroupIds && tutorGroupIds.length > 0) {
+    const idSet = new Set(tutorGroupIds);
+    for (const [id] of tutorMap) {
+      if (!idSet.has(id)) tutorMap.delete(id);
+    }
+    for (const [id] of reviewMap) {
+      if (!idSet.has(id)) reviewMap.delete(id);
+    }
+  }
+
+  const grid: RangeGridRow[] = [...tutorMap.values()]
+    .sort((a, b) => {
+      const aCount = a.availability.filter((c) => c === true).length;
+      const bCount = b.availability.filter((c) => c === true).length;
+      return bCount - aCount;
+    })
+    .map((entry) => ({ ...entry.row, availability: entry.availability }));
+
+  return {
+    snapshotMeta: result.snapshotMeta,
+    subSlots,
+    grid,
+    needsReview: [...reviewMap.values()],
+    latencyMs: result.latencyMs,
+    warnings: result.warnings,
+  };
+}

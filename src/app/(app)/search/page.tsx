@@ -7,12 +7,16 @@ import { SearchSkeleton } from "@/components/skeletons/search-skeleton";
 export default async function SearchPage() {
   const filterOptions = await getFilterOptions();
   const tutorList = await getTutorList();
+  const aiSchedulerEnabled =
+    process.env.ENABLE_AI_SCHEDULER !== "false" &&
+    Boolean(process.env.OPENAI_API_KEY?.trim());
 
   return (
     <Suspense fallback={<SearchSkeleton />}>
       <SearchWorkspace
         filterOptions={filterOptions}
         tutorList={tutorList}
+        aiSchedulerEnabled={aiSchedulerEnabled}
       />
     </Suspense>
   );
