@@ -34,6 +34,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
 import { buildTimelineBounds, minuteToTimeLabel, snapTimelinePlaybackMinute } from "@/lib/classrooms/visualization";
 import { AssignmentTimelineControls } from "./assignment-timeline-controls";
 import { FloorPlanOccupancy } from "./floor-plan-occupancy";
@@ -131,6 +132,13 @@ interface PublishPollResult {
   detail?: AssignmentDetail;
 }
 
+interface WiseSyncResult {
+  success?: boolean;
+  promotedSnapshotId?: string | null;
+  error?: string;
+  errorSummary?: string | null;
+}
+
 function todayBangkok(): string {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Bangkok",
@@ -170,6 +178,14 @@ function formatDuration(ms: number | null | undefined): string {
   return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
 }
 
+function formatAge(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return "unknown";
+  const minutes = Math.max(0, Math.round(ms / 60000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
 function isPublishEligible(row: ClassroomRow): boolean {
   return (
     row.status === "assigned" &&
@@ -201,6 +217,7 @@ export function ClassAssignmentsWorkspace() {
   const [detail, setDetail] = useState<AssignmentDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [runStep, setRunStep] = useState<"idle" | "syncing" | "assigning">("idle");
   const [publishing, setPublishing] = useState(false);
   const [loadingSchedulePreview, setLoadingSchedulePreview] = useState(false);
   const [sendingScheduleEmails, setSendingScheduleEmails] = useState(false);
@@ -338,9 +355,21 @@ export function ClassAssignmentsWorkspace() {
 
   async function runAssignments() {
     setRunning(true);
+    setRunStep("syncing");
     setError(null);
-    setMessage(null);
+    setMessage("Syncing Wise before assignment generation...");
     try {
+      const syncResponse = await fetch("/api/admin/sync-wise", { method: "POST" });
+      const syncBody = (await syncResponse.json()) as WiseSyncResult;
+      if (!syncResponse.ok) {
+        throw new Error(syncBody.error || `Wise sync failed with HTTP ${syncResponse.status}`);
+      }
+      if (!syncBody.success || !syncBody.promotedSnapshotId) {
+        throw new Error(syncBody.errorSummary || "Wise sync did not promote a fresh snapshot.");
+      }
+
+      setRunStep("assigning");
+      setMessage("Generating assignments from the fresh Wise snapshot...");
       const response = await fetch("/api/class-assignments/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -349,11 +378,17 @@ export function ClassAssignmentsWorkspace() {
       const body = (await response.json()) as AssignmentDetail | { error?: string };
       if (!response.ok) throw new Error("error" in body ? body.error : `HTTP ${response.status}`);
       setDetail(body as AssignmentDetail);
-      setMessage("Assignments generated locally. Wise has not been updated.");
+      const liveBlockCount = (body as AssignmentDetail).liveRoomBlocks.length;
+      setMessage(
+        liveBlockCount > 0
+          ? `Assignments generated from fresh Wise data. ${liveBlockCount} live Wise room blockers were reserved.`
+          : "Assignments generated from fresh Wise data. Wise has not been updated.",
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to run assignments");
     } finally {
       setRunning(false);
+      setRunStep("idle");
     }
   }
 
@@ -571,6 +606,15 @@ export function ClassAssignmentsWorkspace() {
   const scheduleSentCount = scheduleEmailResult?.summary.success ?? 0;
   const scheduleFailedCount = scheduleEmailResult?.summary.failed ?? 0;
   const scheduleSkippedCount = scheduleEmailResult?.summary.blocked ?? scheduleBlockedCount;
+  const runButtonLabel =
+    runStep === "syncing"
+      ? "Syncing Wise"
+      : runStep === "assigning"
+        ? "Generating"
+        : "Sync Wise, then run";
+  const snapshotMeta = detail?.snapshotMeta ?? null;
+  const liveRoomBlocks = detail?.liveRoomBlocks ?? [];
+  const roomConflictWarnings = detail?.roomConflictWarnings ?? [];
 
   function handleTimelineMinuteChange(minute: number) {
     const nextMinute = Math.min(timelineBounds.endMinute, Math.max(timelineBounds.startMinute, minute));
@@ -590,7 +634,7 @@ export function ClassAssignmentsWorkspace() {
         <div className="space-y-1">
           <h1 className="text-xl font-semibold tracking-tight">Class Assignments</h1>
           <p className="text-sm text-muted-foreground">
-            Generate local room assignments first, then publish eligible OFFLINE locations to Wise.
+            Sync Wise first, generate local room assignments, then publish eligible OFFLINE locations.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -617,7 +661,7 @@ export function ClassAssignmentsWorkspace() {
           </Button>
           <Button onClick={runAssignments} disabled={running || !date}>
             <Play />
-            {running ? "Running" : "Run assignments"}
+            {runButtonLabel}
           </Button>
           <Button
             variant="secondary"
@@ -647,6 +691,45 @@ export function ClassAssignmentsWorkspace() {
           }`}
         >
           {error || message}
+        </div>
+      )}
+
+      {snapshotMeta && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
+          <Badge variant={snapshotMeta.fresh ? "default" : "destructive"}>
+            {snapshotMeta.fresh ? "Fresh Wise data" : "Stale Wise data"}
+          </Badge>
+          <span className="text-muted-foreground">
+            Last sync{" "}
+            {snapshotMeta.latestSyncFinishedAt
+              ? `${formatBangkokShortDateTime(snapshotMeta.latestSyncFinishedAt)} (${formatAge(snapshotMeta.staleAgeMs)} ago)`
+              : "unknown"}
+          </span>
+          {snapshotMeta.snapshotId && (
+            <span className="font-mono text-xs text-muted-foreground">
+              {snapshotMeta.snapshotId.slice(0, 8)}
+            </span>
+          )}
+        </div>
+      )}
+
+      {(liveRoomBlocks.length > 0 || roomConflictWarnings.length > 0) && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+          <div className="font-medium">
+            {liveRoomBlocks.length} live Wise room blockers detected
+            {roomConflictWarnings.length > 0 ? `, ${roomConflictWarnings.length} conflicts still visible` : ""}
+          </div>
+          <div className="mt-1 grid gap-1 text-xs">
+            {liveRoomBlocks.slice(0, 4).map((block) => (
+              <div key={block.wiseSessionId}>
+                {minuteToTimeLabel(block.startMinute)}-{minuteToTimeLabel(block.endMinute)} · {block.location} ·{" "}
+                {block.className || block.wiseSessionId}
+              </div>
+            ))}
+            {liveRoomBlocks.length > 4 && (
+              <div>{liveRoomBlocks.length - 4} more live blockers reserved during assignment.</div>
+            )}
+          </div>
         </div>
       )}
 
@@ -903,8 +986,8 @@ export function ClassAssignmentsWorkspace() {
           <DialogHeader>
             <DialogTitle>Publish locations to Wise?</DialogTitle>
             <DialogDescription>
-              This writes location only for eligible OFFLINE rows using Wise&apos;s session update response. Teacher
-              availability conflicts are not prechecked. Online room assignments remain local.
+              This writes location only for eligible OFFLINE rows. Live Wise room conflicts fail closed per row.
+              Online room assignments remain local.
             </DialogDescription>
           </DialogHeader>
           <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">

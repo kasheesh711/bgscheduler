@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { runClassroomAssignment } from "@/lib/classrooms/data";
+import {
+  runClassroomAssignment,
+  StaleClassroomAssignmentSnapshotError,
+} from "@/lib/classrooms/data";
+
+export const maxDuration = 300;
 
 const runRequestSchema = z.object({
   date: z.string(),
@@ -38,6 +43,17 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json(detail);
   } catch (error) {
+    if (error instanceof StaleClassroomAssignmentSnapshotError) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          code: error.code,
+          latestSyncFinishedAt: error.latestSyncFinishedAt,
+          staleAgeMs: error.staleAgeMs,
+        },
+        { status: 409 },
+      );
+    }
     const message = error instanceof Error ? error.message : "Failed to run class assignments";
     const status = message.startsWith("Invalid date") ? 400 : 500;
     return NextResponse.json({ error: message }, { status });

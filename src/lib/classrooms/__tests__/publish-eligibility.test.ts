@@ -2,10 +2,13 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildWisePublishLocationCatalog,
+  buildRoomConflictWarnings,
   classroomTimestampToWiseIso,
   estimatePublishRemainingMs,
+  findExternalRoomBlocker,
   findPublishRoomBlockers,
   findTemporaryPublishLocation,
+  liveRoomBlocksForDate,
   isCurrentWisePublishLocation,
   isClassroomPublishEligible,
   orderTemporaryPublishCandidates,
@@ -200,6 +203,103 @@ describe("Wise publish location catalog", () => {
       ok: false,
       reason: "Verified Wise location Focus is missing for assigned room Focus",
     });
+  });
+});
+
+describe("live Wise room conflict helpers", () => {
+  it("builds date-scoped offline room blocks from live Wise sessions", () => {
+    const blocks = liveRoomBlocksForDate([
+      {
+        _id: "offline",
+        scheduledStartTime: "2026-05-23T03:00:00.000Z",
+        scheduledEndTime: "2026-05-23T04:00:00.000Z",
+        meetingStatus: "CONFIRMED",
+        type: "OFFLINE",
+        location: "Remember (TV)",
+        classId: { _id: "class-1", name: "External Student" },
+      },
+      {
+        _id: "online",
+        scheduledStartTime: "2026-05-23T03:00:00.000Z",
+        scheduledEndTime: "2026-05-23T04:00:00.000Z",
+        meetingStatus: "CONFIRMED",
+        type: "SCHEDULED",
+        location: "Remember (TV)",
+      },
+      {
+        _id: "cancelled",
+        scheduledStartTime: "2026-05-23T03:00:00.000Z",
+        scheduledEndTime: "2026-05-23T04:00:00.000Z",
+        meetingStatus: "CANCELLED",
+        type: "OFFLINE",
+        location: "Remember (TV)",
+      },
+    ], "2026-05-23");
+
+    expect(blocks).toEqual([{
+      wiseSessionId: "offline",
+      wiseClassId: "class-1",
+      className: "External Student",
+      location: "Remember (TV)",
+      startMinute: 10 * 60,
+      endMinute: 11 * 60,
+      sessionType: "OFFLINE",
+      wiseStatus: "CONFIRMED",
+    }]);
+  });
+
+  it("finds external live blockers by physical room, including plain TV names", () => {
+    const blocker = {
+      wiseSessionId: "external",
+      wiseClassId: "class-2",
+      className: "External Student",
+      location: "Remember",
+      startMinute: 10 * 60,
+      endMinute: 11 * 60,
+      sessionType: "OFFLINE",
+      wiseStatus: "CONFIRMED",
+    };
+
+    expect(findExternalRoomBlocker(
+      { startMinute: 10 * 60 + 30, endMinute: 11 * 60 + 30 },
+      "Remember (TV)",
+      [blocker],
+    )).toBe(blocker);
+    expect(findExternalRoomBlocker(
+      { startMinute: 11 * 60, endMinute: 12 * 60 },
+      "Remember (TV)",
+      [blocker],
+    )).toBeNull();
+  });
+
+  it("returns concrete room conflict warning messages", () => {
+    const blocker = {
+      wiseSessionId: "external",
+      wiseClassId: "class-2",
+      className: "External Student",
+      location: "Go All In",
+      startMinute: 12 * 60,
+      endMinute: 13 * 60,
+      sessionType: "OFFLINE",
+      wiseStatus: "CONFIRMED",
+    };
+
+    expect(buildRoomConflictWarnings(
+      [{
+        wiseSessionId: "local",
+        assignedRoom: "Go All In (TV)",
+        startMinute: 12 * 60 + 30,
+        endMinute: 13 * 60 + 30,
+      }],
+      [blocker],
+      (assignedRoom) => assignedRoom,
+    )).toEqual([{
+      wiseSessionId: "local",
+      assignedRoom: "Go All In (TV)",
+      desiredLocation: "Go All In (TV)",
+      blocker,
+      message: "Blocked by live Wise class External Student in Go All In 12:00-13:00",
+    }]);
   });
 });
 

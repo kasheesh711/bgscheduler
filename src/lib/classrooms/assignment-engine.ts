@@ -72,6 +72,18 @@ interface OccupancyInterval {
   sessionId: string;
 }
 
+export interface ExternalRoomBlock {
+  wiseSessionId: string;
+  className: string | null;
+  location: string;
+  startMinute: number;
+  endMinute: number;
+}
+
+export interface AssignmentOptions {
+  externalRoomBlocks?: ExternalRoomBlock[];
+}
+
 interface AssignmentSessionFacts {
   minCapacity: number;
   capacityWarnings: string[];
@@ -123,13 +135,17 @@ function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): b
   return aStart < bEnd && bStart < aEnd;
 }
 
+function normalizedPhysicalRoom(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+\(tv\)$/, "");
+}
+
 function isAvailable(
   occupancy: Map<string, OccupancyInterval[]>,
   roomName: string,
   session: AssignmentSession,
   ignoreSessionId?: string,
 ): boolean {
-  const intervals = occupancy.get(roomName) ?? [];
+  const intervals = occupancy.get(normalizedPhysicalRoom(roomName)) ?? [];
   return !intervals.some((interval) =>
     interval.sessionId !== ignoreSessionId &&
     overlaps(session.startMinute, session.endMinute, interval.startMinute, interval.endMinute),
@@ -139,9 +155,9 @@ function isAvailable(
 function addRoomInterval(
   occupancy: Map<string, OccupancyInterval[]>,
   roomName: string,
-  session: AssignmentSession,
+  session: Pick<AssignmentSession, "wiseSessionId" | "startMinute" | "endMinute">,
 ): void {
-  occupancy.get(roomName)?.push({
+  occupancy.get(normalizedPhysicalRoom(roomName))?.push({
     startMinute: session.startMinute,
     endMinute: session.endMinute,
     sessionId: session.wiseSessionId,
@@ -267,11 +283,22 @@ export function assignClassrooms(
   sessions: AssignmentSession[],
   rooms: ClassroomRoomDefinition[],
   overrideBySessionId: Map<string, string | null | undefined> = new Map(),
+  options: AssignmentOptions = {},
 ): AssignmentResult {
   const activeRooms = rooms.filter((room) => room.active).sort(sortByCapacityThenOrder);
   const roomByName = new Map(activeRooms.map((room) => [room.name, room]));
   const occupancy = new Map<string, OccupancyInterval[]>();
-  for (const room of activeRooms) occupancy.set(room.name, []);
+  for (const room of activeRooms) occupancy.set(normalizedPhysicalRoom(room.name), []);
+
+  for (const block of options.externalRoomBlocks ?? []) {
+    const roomKey = normalizedPhysicalRoom(block.location);
+    if (!occupancy.has(roomKey)) continue;
+    addRoomInterval(occupancy, block.location, {
+      wiseSessionId: block.wiseSessionId,
+      startMinute: block.startMinute,
+      endMinute: block.endMinute,
+    });
+  }
 
   const lastByTutor = new Map<string, { endMinute: number; room: string }>();
   const centerRoomRequiredBySessionId = buildCenterRoomRequirementMap(sessions);
@@ -289,7 +316,7 @@ export function assignClassrooms(
   });
 
   const protectedClaims = new Map<string, OccupancyInterval[]>();
-  for (const room of activeRooms) protectedClaims.set(room.name, []);
+  for (const room of activeRooms) protectedClaims.set(normalizedPhysicalRoom(room.name), []);
 
   const validOverrideBySessionId = new Set<string>();
   for (const session of sortedSessions) {

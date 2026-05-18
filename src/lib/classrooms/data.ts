@@ -3,11 +3,21 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { WiseClient } from "@/lib/wise/client";
 import {
+  fetchAllFutureSessions,
   fetchInstituteLocations,
   updateSessionLocation,
 } from "@/lib/wise/fetchers";
 import {
+  getWiseSessionClassId,
+  getWiseSessionClassName,
+  type WiseSession,
+} from "@/lib/wise/types";
+import { bangkokDateKey } from "@/lib/room-capacity/dates";
+import { getLocalMinuteOfDay } from "@/lib/normalization/timezone";
+import { isBlockingStatus } from "@/lib/normalization/sessions";
+import {
   assignClassrooms,
+  type ExternalRoomBlock,
   type AssignmentResultRow,
   type AssignmentSession,
   isOfflineSession,
@@ -29,6 +39,30 @@ export interface ClassroomAssignmentDetail {
   run: ClassroomRun | null;
   rows: ClassroomRow[];
   rooms: ClassroomRoom[];
+  snapshotMeta: ClassroomSnapshotMeta;
+  liveRoomBlocks: LiveRoomBlock[];
+  roomConflictWarnings: RoomConflictWarning[];
+}
+
+export interface ClassroomSnapshotMeta {
+  snapshotId: string | null;
+  latestSyncFinishedAt: string | null;
+  staleAgeMs: number | null;
+  fresh: boolean;
+}
+
+export interface LiveRoomBlock extends ExternalRoomBlock {
+  wiseClassId: string | null;
+  sessionType: string | null;
+  wiseStatus: string | null;
+}
+
+export interface RoomConflictWarning {
+  wiseSessionId: string;
+  assignedRoom: string;
+  desiredLocation: string;
+  message: string;
+  blocker: LiveRoomBlock;
 }
 
 export interface TeacherScheduleBlock {
@@ -85,6 +119,25 @@ export interface PublishJobStatusResponse {
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PUBLISH_ROW_CONCURRENCY = 10;
 const PUBLISH_JOB_STALE_AFTER_MS = 6 * 60 * 1000;
+export const CLASSROOM_ASSIGNMENT_FRESHNESS_MS = 15 * 60 * 1000;
+
+export class StaleClassroomAssignmentSnapshotError extends Error {
+  readonly code = "STALE_ASSIGNMENT_SNAPSHOT";
+  readonly latestSyncFinishedAt: string | null;
+  readonly staleAgeMs: number | null;
+
+  constructor(meta: ClassroomSnapshotMeta) {
+    const minutes = meta.staleAgeMs === null ? null : Math.round(meta.staleAgeMs / 60000);
+    super(
+      minutes === null
+        ? "Class assignment data is not fresh. Run Wise sync before generating assignments."
+        : `Class assignment data is stale (${minutes} minutes old). Run Wise sync before generating assignments.`,
+    );
+    this.name = "StaleClassroomAssignmentSnapshotError";
+    this.latestSyncFinishedAt = meta.latestSyncFinishedAt;
+    this.staleAgeMs = meta.staleAgeMs;
+  }
+}
 
 export function assertIsoDate(value: string): string {
   if (!ISO_DATE_RE.test(value)) {
@@ -129,6 +182,90 @@ function normalizedPhysicalLocation(value: string | null): string {
 
 function normalizedExactLocation(value: string | null | undefined): string {
   return String(value ?? "").trim();
+}
+
+function intervalsOverlap(
+  left: Pick<ClassroomRow | AssignmentSession | LiveRoomBlock, "startMinute" | "endMinute">,
+  right: Pick<ClassroomRow | AssignmentSession | LiveRoomBlock, "startMinute" | "endMinute">,
+): boolean {
+  return left.startMinute < right.endMinute && right.startMinute < left.endMinute;
+}
+
+function liveRoomBlockLabel(block: Pick<LiveRoomBlock, "className" | "location" | "startMinute" | "endMinute">): string {
+  const className = block.className?.trim() || "unknown class";
+  return `${className} in ${block.location} ${formatMinute(block.startMinute)}-${formatMinute(block.endMinute)}`;
+}
+
+function isLiveWiseRoomBlock(session: WiseSession, date: string): boolean {
+  const location = normalizedExactLocation(session.location);
+  return (
+    Boolean(location) &&
+    bangkokDateKey(new Date(session.scheduledStartTime)) === date &&
+    isBlockingStatus(session.meetingStatus) &&
+    isOfflineSession(session.type)
+  );
+}
+
+function wiseSessionToLiveRoomBlock(session: WiseSession): LiveRoomBlock {
+  return {
+    wiseSessionId: session._id,
+    wiseClassId: getWiseSessionClassId(session) ?? null,
+    className: getWiseSessionClassName(session) ?? null,
+    location: normalizedExactLocation(session.location),
+    startMinute: getLocalMinuteOfDay(session.scheduledStartTime),
+    endMinute: getLocalMinuteOfDay(session.scheduledEndTime),
+    sessionType: session.type ?? null,
+    wiseStatus: session.meetingStatus ?? null,
+  };
+}
+
+export function liveRoomBlocksForDate(sessions: WiseSession[], date: string): LiveRoomBlock[] {
+  return sessions
+    .filter((session) => isLiveWiseRoomBlock(session, date))
+    .map(wiseSessionToLiveRoomBlock);
+}
+
+function externalLiveRoomBlocks(
+  liveBlocks: LiveRoomBlock[],
+  localWiseSessionIds: Set<string>,
+): LiveRoomBlock[] {
+  return liveBlocks.filter((block) => !localWiseSessionIds.has(block.wiseSessionId));
+}
+
+export function findExternalRoomBlocker(
+  row: Pick<ClassroomRow | AssignmentResultRow, "startMinute" | "endMinute">,
+  desiredLocation: string,
+  blocks: LiveRoomBlock[],
+): LiveRoomBlock | null {
+  const target = normalizedPhysicalLocation(desiredLocation);
+  return blocks.find((block) => (
+    normalizedPhysicalLocation(block.location) === target &&
+    intervalsOverlap(row, block)
+  )) ?? null;
+}
+
+export function buildRoomConflictWarnings(
+  rows: Array<Pick<ClassroomRow, "wiseSessionId" | "assignedRoom" | "startMinute" | "endMinute">>,
+  externalBlocks: LiveRoomBlock[],
+  publishLocationByAssignedRoom: (assignedRoom: string) => string | null,
+): RoomConflictWarning[] {
+  const warnings: RoomConflictWarning[] = [];
+  for (const row of rows) {
+    if (!row.assignedRoom || row.assignedRoom === NO_ROOM_AVAILABLE || row.assignedRoom === REMOTE_NO_ROOM_NEEDED) {
+      continue;
+    }
+    const desiredLocation = publishLocationByAssignedRoom(row.assignedRoom) ?? row.assignedRoom;
+    const blocker = findExternalRoomBlocker(row, desiredLocation, externalBlocks);
+    if (!blocker) continue;
+    warnings.push({
+      wiseSessionId: row.wiseSessionId,
+      assignedRoom: row.assignedRoom,
+      desiredLocation,
+      blocker,
+      message: `Blocked by live Wise class ${liveRoomBlockLabel(blocker)}`,
+    });
+  }
+  return warnings;
 }
 
 type PublishLocationRoom = Pick<
@@ -357,14 +494,75 @@ function toEngineRoom(room: ClassroomRoom): ClassroomRoomDefinition {
   };
 }
 
-async function getActiveSnapshot(db: Database): Promise<{ id: string }> {
+async function getActiveSnapshot(db: Database): Promise<{ id: string; createdAt: Date }> {
   const [activeSnapshot] = await db
-    .select({ id: schema.snapshots.id })
+    .select({ id: schema.snapshots.id, createdAt: schema.snapshots.createdAt })
     .from(schema.snapshots)
     .where(eq(schema.snapshots.active, true))
     .limit(1);
   if (!activeSnapshot) throw new Error("No active Wise snapshot found");
   return activeSnapshot;
+}
+
+async function loadSnapshotById(db: Database, snapshotId: string): Promise<{ id: string; createdAt: Date } | null> {
+  const [snapshot] = await db
+    .select({ id: schema.snapshots.id, createdAt: schema.snapshots.createdAt })
+    .from(schema.snapshots)
+    .where(eq(schema.snapshots.id, snapshotId))
+    .limit(1);
+  return snapshot ?? null;
+}
+
+async function loadLatestSuccessfulSyncForSnapshot(
+  db: Database,
+  snapshotId: string,
+): Promise<{ finishedAt: Date | null } | null> {
+  const [syncRun] = await db
+    .select({ finishedAt: schema.syncRuns.finishedAt })
+    .from(schema.syncRuns)
+    .where(
+      and(
+        eq(schema.syncRuns.status, "success"),
+        eq(schema.syncRuns.promotedSnapshotId, snapshotId),
+      ),
+    )
+    .orderBy(desc(schema.syncRuns.finishedAt))
+    .limit(1);
+  return syncRun ?? null;
+}
+
+async function loadClassroomSnapshotMeta(
+  db: Database,
+  snapshotId?: string,
+  now = new Date(),
+): Promise<ClassroomSnapshotMeta> {
+  const snapshot = snapshotId ? await loadSnapshotById(db, snapshotId) : await getActiveSnapshot(db);
+  if (!snapshot) {
+    return {
+      snapshotId: snapshotId ?? null,
+      latestSyncFinishedAt: null,
+      staleAgeMs: null,
+      fresh: false,
+    };
+  }
+
+  const latestSync = await loadLatestSuccessfulSyncForSnapshot(db, snapshot.id);
+  const finishedAt = latestSync?.finishedAt ?? null;
+  const staleAgeMs = finishedAt ? Math.max(0, now.getTime() - finishedAt.getTime()) : null;
+  return {
+    snapshotId: snapshot.id,
+    latestSyncFinishedAt: finishedAt?.toISOString() ?? null,
+    staleAgeMs,
+    fresh: staleAgeMs !== null && staleAgeMs <= CLASSROOM_ASSIGNMENT_FRESHNESS_MS,
+  };
+}
+
+async function assertFreshClassroomSnapshot(db: Database, snapshotId: string): Promise<ClassroomSnapshotMeta> {
+  const meta = await loadClassroomSnapshotMeta(db, snapshotId);
+  if (!meta.fresh) {
+    throw new StaleClassroomAssignmentSnapshotError(meta);
+  }
+  return meta;
 }
 
 async function loadLatestRunForDate(db: Database, date: string): Promise<ClassroomRun | null> {
@@ -481,9 +679,13 @@ export async function getClassroomAssignmentForDate(
   assertIsoDate(date);
   const rooms = await listClassroomRooms(db);
   const run = await loadLatestRunForDate(db, date);
-  if (!run) return { run: null, rows: [], rooms };
+  if (!run) {
+    const snapshotMeta = await loadClassroomSnapshotMeta(db);
+    return { run: null, rows: [], rooms, snapshotMeta, liveRoomBlocks: [], roomConflictWarnings: [] };
+  }
   const rows = await loadRowsForRun(db, run.id);
-  return { run, rows, rooms };
+  const snapshotMeta = await loadClassroomSnapshotMeta(db, run.snapshotId);
+  return { run, rows, rooms, snapshotMeta, liveRoomBlocks: [], roomConflictWarnings: [] };
 }
 
 async function loadPreviousOverrides(
@@ -644,10 +846,23 @@ export async function runClassroomAssignment(
 ): Promise<ClassroomAssignmentDetail> {
   const date = assertIsoDate(input.date);
   const activeSnapshot = await getActiveSnapshot(db);
+  const snapshotMeta = await assertFreshClassroomSnapshot(db, activeSnapshot.id);
   const rooms = await listClassroomRooms(db);
   const overrideBySessionId = await loadPreviousOverrides(db, date, input.forceReassign);
   const sessions = await loadAssignmentSessions(db, activeSnapshot.id, date);
-  const result = assignClassrooms(sessions, rooms.map(toEngineRoom), overrideBySessionId);
+  const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
+  const liveBlocks = liveRoomBlocksForDate(
+    await fetchAllFutureSessions(createWiseClientFromEnv(), instituteId),
+    date,
+  );
+  const localWiseSessionIds = new Set(sessions.map((session) => session.wiseSessionId));
+  const externalBlocks = externalLiveRoomBlocks(liveBlocks, localWiseSessionIds);
+  const result = assignClassrooms(
+    sessions,
+    rooms.map(toEngineRoom),
+    overrideBySessionId,
+    { externalRoomBlocks: externalBlocks },
+  );
 
   const run = await persistAssignmentRun(
     db,
@@ -659,7 +874,14 @@ export async function runClassroomAssignment(
   );
 
   const rows = await loadRowsForRun(db, run.id);
-  return { run, rows, rooms };
+  return {
+    run,
+    rows,
+    rooms,
+    snapshotMeta,
+    liveRoomBlocks: externalBlocks,
+    roomConflictWarnings: buildRoomConflictWarnings(rows, externalBlocks, (assignedRoom) => assignedRoom),
+  };
 }
 
 function rowToSession(row: ClassroomRow): AssignmentSession {
@@ -768,7 +990,9 @@ export async function updateClassroomAssignmentOverride(
     .where(eq(schema.classroomAssignmentRuns.id, input.runId))
     .limit(1);
   const rows = await loadRowsForRun(db, input.runId);
-  return { run: freshRun ?? run, rows, rooms };
+  const nextRun = freshRun ?? run;
+  const snapshotMeta = await loadClassroomSnapshotMeta(db, nextRun.snapshotId);
+  return { run: nextRun, rows, rooms, snapshotMeta, liveRoomBlocks: [], roomConflictWarnings: [] };
 }
 
 function createWiseClientFromEnv(): WiseClient {
@@ -807,7 +1031,7 @@ async function markPublishResult(
 async function updateRowCurrentWiseLocation(
   db: Database,
   rowId: string,
-  currentWiseLocation: string,
+  currentWiseLocation: string | null,
 ): Promise<void> {
   await db
     .update(schema.classroomAssignmentRows)
@@ -816,6 +1040,21 @@ async function updateRowCurrentWiseLocation(
       updatedAt: new Date(),
     })
     .where(eq(schema.classroomAssignmentRows.id, rowId));
+}
+
+async function refreshRowsCurrentWiseLocations(
+  db: Database,
+  rows: ClassroomRow[],
+  liveBySessionId: Map<string, WiseSession>,
+): Promise<void> {
+  for (const row of rows) {
+    const live = liveBySessionId.get(row.wiseSessionId);
+    if (!live) continue;
+    const liveLocation = live.location ? normalizedExactLocation(live.location) : null;
+    if ((row.currentWiseLocation ?? null) === liveLocation) continue;
+    row.currentWiseLocation = liveLocation;
+    await updateRowCurrentWiseLocation(db, row.id, liveLocation);
+  }
 }
 
 export function isClassroomPublishEligible(
@@ -1087,7 +1326,24 @@ export async function runClassroomPublishJob(
     .where(eq(schema.classroomPublishJobs.id, jobId));
 
   try {
+    const [run] = await db
+      .select()
+      .from(schema.classroomAssignmentRuns)
+      .where(eq(schema.classroomAssignmentRuns.id, existingJob.runId))
+      .limit(1);
+    if (!run) throw new Error("Assignment run not found");
+
     const rows = await loadRowsForRun(db, existingJob.runId);
+    const liveSessions = await fetchAllFutureSessions(client, instituteId);
+    const liveBySessionId = new Map(liveSessions.map((session) => [session._id, session]));
+    await refreshRowsCurrentWiseLocations(db, rows, liveBySessionId);
+
+    const localWiseSessionIds = new Set(rows.map((row) => row.wiseSessionId));
+    const externalBlocks = externalLiveRoomBlocks(
+      liveRoomBlocksForDate(liveSessions, run.assignmentDate),
+      localWiseSessionIds,
+    );
+
     const skippedRows: Array<{ row: ClassroomRow; reason: string }> = [];
     const eligibleRows: ClassroomRow[] = [];
 
@@ -1155,6 +1411,29 @@ export async function runClassroomPublishJob(
       }
 
       publishLocationByRowId.set(row.id, resolvedLocation.location);
+      if (!liveBySessionId.has(row.wiseSessionId)) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: `Live Wise session ${row.wiseSessionId} was not found; refusing to publish a stale assignment`,
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        failedRows.set(row.id, row);
+        continue;
+      }
+
+      const externalBlocker = findExternalRoomBlocker(row, resolvedLocation.location, externalBlocks);
+      if (externalBlocker) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: `Live Wise room conflict: ${resolvedLocation.location} overlaps ${liveRoomBlockLabel(externalBlocker)}`,
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        failedRows.set(row.id, row);
+        continue;
+      }
+
       if (isCurrentWisePublishLocation(row.currentWiseLocation, resolvedLocation.location)) {
         const result = await publishRowResult(db, jobId, row, {
           status: "success",
@@ -1333,7 +1612,8 @@ export async function getClassroomAssignmentByRunId(
     .limit(1);
   if (!run) throw new Error("Assignment run not found");
   const rows = await loadRowsForRun(db, runId);
-  return { run, rows, rooms };
+  const snapshotMeta = await loadClassroomSnapshotMeta(db, run.snapshotId);
+  return { run, rows, rooms, snapshotMeta, liveRoomBlocks: [], roomConflictWarnings: [] };
 }
 
 export async function getTeacherScheduleForRun(

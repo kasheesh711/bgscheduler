@@ -4,7 +4,13 @@ import {
   REMOTE_NO_ROOM_NEEDED,
   type AssignmentSession,
 } from "../assignment-engine";
-import { DEFAULT_CLASSROOM_ROOMS, NO_ROOM_AVAILABLE, ROOM_JOY, ROOM_THINK_OUTSIDE_THE_BOX } from "../rooms";
+import {
+  DEFAULT_CLASSROOM_ROOMS,
+  NO_ROOM_AVAILABLE,
+  ROOM_JOY,
+  ROOM_THINK_OUTSIDE_THE_BOX,
+  type ClassroomRoomDefinition,
+} from "../rooms";
 
 function session(overrides: Partial<AssignmentSession> = {}): AssignmentSession {
   const startMinute = overrides.startMinute ?? 9 * 60;
@@ -32,6 +38,15 @@ function session(overrides: Partial<AssignmentSession> = {}): AssignmentSession 
   };
 }
 
+const rememberOnlyRoom: ClassroomRoomDefinition[] = [{
+  name: "Remember (TV)",
+  hasTv: true,
+  capacity: 2,
+  category: "standard",
+  active: true,
+  sortOrder: 1,
+}];
+
 describe("assignClassrooms", () => {
   it("uses Wise studentCount for capacity and selects the smallest sufficient room", () => {
     const result = assignClassrooms([
@@ -52,6 +67,69 @@ describe("assignClassrooms", () => {
 
     expect(result.rows[0].needsTv).toBe(true);
     expect(DEFAULT_CLASSROOM_ROOMS.find((room) => room.name === result.rows[0].assignedRoom)?.hasTv).toBe(true);
+  });
+
+  it("treats overlapping live Wise room blocks as unavailable", () => {
+    const result = assignClassrooms(
+      [session({ wiseSessionId: "local", startMinute: 9 * 60, endMinute: 10 * 60 })],
+      rememberOnlyRoom,
+      new Map(),
+      {
+        externalRoomBlocks: [{
+          wiseSessionId: "external",
+          className: "External class",
+          location: "Remember (TV)",
+          startMinute: 9 * 60 + 30,
+          endMinute: 10 * 60 + 30,
+        }],
+      },
+    );
+
+    expect(result.rows[0]).toMatchObject({
+      assignedRoom: NO_ROOM_AVAILABLE,
+      status: "no_room",
+    });
+  });
+
+  it("normalizes plain live Wise TV room blocks to the canonical physical room", () => {
+    const result = assignClassrooms(
+      [session({ wiseSessionId: "local", startMinute: 9 * 60, endMinute: 10 * 60 })],
+      rememberOnlyRoom,
+      new Map(),
+      {
+        externalRoomBlocks: [{
+          wiseSessionId: "external",
+          className: "External class",
+          location: "Remember",
+          startMinute: 9 * 60 + 30,
+          endMinute: 10 * 60 + 30,
+        }],
+      },
+    );
+
+    expect(result.rows[0].assignedRoom).toBe(NO_ROOM_AVAILABLE);
+  });
+
+  it("ignores non-overlapping live Wise room blocks", () => {
+    const result = assignClassrooms(
+      [session({ wiseSessionId: "local", startMinute: 9 * 60, endMinute: 10 * 60 })],
+      rememberOnlyRoom,
+      new Map(),
+      {
+        externalRoomBlocks: [{
+          wiseSessionId: "external",
+          className: "External class",
+          location: "Remember (TV)",
+          startMinute: 10 * 60,
+          endMinute: 11 * 60,
+        }],
+      },
+    );
+
+    expect(result.rows[0]).toMatchObject({
+      assignedRoom: "Remember (TV)",
+      status: "assigned",
+    });
   });
 
   it("marks online-only days remote and blocks online-only rooms for offline sessions", () => {

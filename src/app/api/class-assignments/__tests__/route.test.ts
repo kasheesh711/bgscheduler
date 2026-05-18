@@ -8,6 +8,17 @@ vi.mock("@/lib/classrooms/data", () => ({
     if (value === "bad-date") throw new Error("Invalid date. Expected YYYY-MM-DD.");
     return value;
   }),
+  StaleClassroomAssignmentSnapshotError: class StaleClassroomAssignmentSnapshotError extends Error {
+    code = "STALE_ASSIGNMENT_SNAPSHOT";
+    latestSyncFinishedAt: string | null;
+    staleAgeMs: number | null;
+
+    constructor(meta: { latestSyncFinishedAt: string | null; staleAgeMs: number | null }) {
+      super("Class assignment data is stale");
+      this.latestSyncFinishedAt = meta.latestSyncFinishedAt;
+      this.staleAgeMs = meta.staleAgeMs;
+    }
+  },
   createClassroomPublishJob: vi.fn(),
   getClassroomPublishJobProgress: vi.fn(),
   getClassroomAssignmentForDate: vi.fn(),
@@ -28,6 +39,7 @@ import {
   getClassroomPublishJobProgress,
   getClassroomAssignmentForDate,
   runClassroomAssignment,
+  StaleClassroomAssignmentSnapshotError,
   runClassroomPublishJob,
   updateClassroomAssignmentOverride,
 } from "@/lib/classrooms/data";
@@ -49,6 +61,14 @@ const detail = {
   run: { id: "run-1", assignmentDate: "2026-05-14" },
   rows: [],
   rooms: [],
+  snapshotMeta: {
+    snapshotId: "snap-1",
+    latestSyncFinishedAt: "2026-05-14T00:00:00.000Z",
+    staleAgeMs: 0,
+    fresh: true,
+  },
+  liveRoomBlocks: [],
+  roomConflictWarnings: [],
 };
 
 const schedulePreview = {
@@ -137,6 +157,27 @@ describe("class assignment routes", () => {
         createdBy: "admin@example.com",
       },
     );
+  });
+
+  it("returns 409 when the classroom snapshot is stale", async () => {
+    vi.mocked(runClassroomAssignment).mockRejectedValue(new StaleClassroomAssignmentSnapshotError({
+      latestSyncFinishedAt: "2026-05-14T00:00:00.000Z",
+      staleAgeMs: 16 * 60 * 1000,
+    }) as never);
+    const req = new NextRequest("http://test.local/api/class-assignments/run", {
+      method: "POST",
+      body: JSON.stringify({ date: "2026-05-14", forceReassign: true }),
+    });
+
+    const res = await runAssignments(req);
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({
+      error: "Class assignment data is stale",
+      code: "STALE_ASSIGNMENT_SNAPSHOT",
+      latestSyncFinishedAt: "2026-05-14T00:00:00.000Z",
+      staleAgeMs: 16 * 60 * 1000,
+    });
   });
 
   it("updates an override and recalculates the run", async () => {

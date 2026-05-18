@@ -56,8 +56,37 @@ export interface ClassroomRow {
   publishError: string | null;
 }
 
+export interface AssignmentSnapshotMeta {
+  snapshotId: string | null;
+  latestSyncFinishedAt: string | null;
+  staleAgeMs: number | null;
+  fresh: boolean;
+}
+
+export interface AssignmentLiveRoomBlock {
+  wiseSessionId: string;
+  wiseClassId: string | null;
+  className: string | null;
+  location: string;
+  startMinute: number;
+  endMinute: number;
+  sessionType: string | null;
+  wiseStatus: string | null;
+}
+
+export interface AssignmentRoomConflictWarning {
+  wiseSessionId: string;
+  assignedRoom: string;
+  desiredLocation: string;
+  message: string;
+  blocker: AssignmentLiveRoomBlock;
+}
+
 export interface AssignmentDetail {
   run: ClassroomRun | null;
   rows: ClassroomRow[];
   rooms: ClassroomRoom[];
+  snapshotMeta: AssignmentSnapshotMeta;
+  liveRoomBlocks: AssignmentLiveRoomBlock[];
+  roomConflictWarnings: AssignmentRoomConflictWarning[];
 }
