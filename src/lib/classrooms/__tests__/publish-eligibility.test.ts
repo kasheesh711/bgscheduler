@@ -1,16 +1,21 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildWisePublishLocationCatalog,
   classroomTimestampToWiseIso,
   estimatePublishRemainingMs,
   findPublishRoomBlockers,
   findTemporaryPublishLocation,
+  isCurrentWisePublishLocation,
   isClassroomPublishEligible,
   orderTemporaryPublishCandidates,
+  resolveWisePublishLocation,
   toPublishJobProgress,
   updateWiseLocationOnly,
+  wisePublishLocationName,
 } from "../data";
 import { REMOTE_NO_ROOM_NEEDED } from "../assignment-engine";
+import { DEFAULT_CLASSROOM_ROOMS } from "../rooms";
 
 const baseRow = {
   status: "assigned" as const,
@@ -105,6 +110,96 @@ describe("publish job progress", () => {
     expect(progress.remainingCount).toBe(0);
     expect(progress.elapsedMs).toBe(12_000);
     expect(progress.estimatedRemainingMs).toBeNull();
+  });
+});
+
+describe("Wise publish location catalog", () => {
+  it("resolves TV rooms to exact Wise (TV) locations before calling Wise", async () => {
+    const catalog = buildWisePublishLocationCatalog(DEFAULT_CLASSROOM_ROOMS, ["Remember (TV)"]);
+    const resolved = resolveWisePublishLocation(catalog, "Remember");
+    expect(resolved).toEqual({ ok: true, location: "Remember (TV)" });
+    expect(wisePublishLocationName({ name: "Remember (TV)", hasTv: true })).toBe("Remember (TV)");
+
+    const updateLocation = vi.fn().mockResolvedValue({ ok: true });
+    if (resolved.ok) {
+      await expect(updateWiseLocationOnly(
+        updateLocation,
+        { wiseClassId: "class-1", wiseSessionId: "session-1" },
+        resolved.location,
+      )).resolves.toBeNull();
+    }
+
+    expect(updateLocation).toHaveBeenCalledWith("class-1", "session-1", "Remember (TV)");
+    expect(updateLocation).not.toHaveBeenCalledWith("class-1", "session-1", "Remember");
+  });
+
+  it("resolves non-TV rooms to plain Wise locations", () => {
+    const catalog = buildWisePublishLocationCatalog(DEFAULT_CLASSROOM_ROOMS, ["Focus"]);
+
+    expect(resolveWisePublishLocation(catalog, "Focus")).toEqual({
+      ok: true,
+      location: "Focus",
+    });
+    expect(wisePublishLocationName({ name: "Focus", hasTv: false })).toBe("Focus");
+  });
+
+  it("does not treat a plain TV-room Wise location as already published", () => {
+    expect(isCurrentWisePublishLocation("Go All In", "Go All In (TV)")).toBe(false);
+    expect(isCurrentWisePublishLocation("Go All In (TV)", "Go All In (TV)")).toBe(true);
+  });
+
+  it("uses verified Wise publish names for temporary swap candidates", () => {
+    const catalog = buildWisePublishLocationCatalog(
+      [
+        { name: "Remember", hasTv: true, capacity: 2, category: "standard", active: true, sortOrder: 1 },
+        { name: "Focus", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 2 },
+        { name: "Doubt", hasTv: true, capacity: 2, category: "standard", active: true, sortOrder: 3 },
+      ],
+      ["Remember (TV)", "Focus"],
+    );
+
+    expect(catalog.temporaryLocations).toEqual(["Remember (TV)", "Focus"]);
+    expect(catalog.temporaryLocations).not.toContain("Remember");
+    expect(catalog.temporaryLocations).not.toContain("Doubt");
+    expect(resolveWisePublishLocation(catalog, "Doubt")).toEqual({
+      ok: false,
+      reason: "Verified Wise location Doubt (TV) is missing for assigned room Doubt",
+    });
+  });
+
+  it("fails closed when the exact Wise location is missing", async () => {
+    const catalog = buildWisePublishLocationCatalog(
+      [{ name: "Joy", hasTv: true, capacity: 3, category: "standard", active: true, sortOrder: 1 }],
+      ["Joy"],
+    );
+    const updateLocation = vi.fn();
+    const resolved = resolveWisePublishLocation(catalog, "Joy");
+
+    expect(resolved).toEqual({
+      ok: false,
+      reason: "Verified Wise location Joy (TV) is missing for assigned room Joy",
+    });
+    if (resolved.ok) {
+      await updateWiseLocationOnly(
+        updateLocation,
+        { wiseClassId: "class-1", wiseSessionId: "session-1" },
+        resolved.location,
+      );
+    }
+    expect(updateLocation).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the Wise location catalog cannot verify any locations", () => {
+    const catalog = buildWisePublishLocationCatalog(
+      [{ name: "Focus", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 1 }],
+      [],
+    );
+
+    expect(catalog.temporaryLocations).toEqual([]);
+    expect(resolveWisePublishLocation(catalog, "Focus")).toEqual({
+      ok: false,
+      reason: "Verified Wise location Focus is missing for assigned room Focus",
+    });
   });
 });
 

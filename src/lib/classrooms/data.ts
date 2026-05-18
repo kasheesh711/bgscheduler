@@ -126,6 +126,86 @@ function normalizedPhysicalLocation(value: string | null): string {
   return normalizedLocation(value).replace(/\s+\(tv\)$/, "");
 }
 
+function normalizedExactLocation(value: string | null | undefined): string {
+  return String(value ?? "").trim();
+}
+
+type PublishLocationRoom = Pick<
+  ClassroomRoomDefinition,
+  "name" | "hasTv" | "category" | "active"
+>;
+
+export interface WisePublishLocationCatalog {
+  publishLocationByPhysicalRoom: Map<string, string>;
+  missingLocationByPhysicalRoom: Map<string, string>;
+  temporaryLocations: string[];
+}
+
+export function wisePublishLocationName(room: Pick<ClassroomRoomDefinition, "name" | "hasTv">): string {
+  const roomName = normalizedExactLocation(room.name);
+  if (!room.hasTv) return roomName;
+  return `${roomName.replace(/\s+\(tv\)$/i, "")} (TV)`;
+}
+
+export function buildWisePublishLocationCatalog(
+  rooms: PublishLocationRoom[],
+  wiseLocations: string[],
+): WisePublishLocationCatalog {
+  const exactWiseLocations = new Set(wiseLocations.map(normalizedExactLocation).filter(Boolean));
+  const publishLocationByPhysicalRoom = new Map<string, string>();
+  const missingLocationByPhysicalRoom = new Map<string, string>();
+  const temporaryLocations: string[] = [];
+
+  for (const room of rooms) {
+    if (!room.active || room.category === "online_only") continue;
+
+    const expectedLocation = wisePublishLocationName(room);
+    const physicalRoom = normalizedPhysicalLocation(room.name);
+    if (exactWiseLocations.has(expectedLocation)) {
+      publishLocationByPhysicalRoom.set(physicalRoom, expectedLocation);
+      temporaryLocations.push(expectedLocation);
+    } else {
+      missingLocationByPhysicalRoom.set(physicalRoom, expectedLocation);
+    }
+  }
+
+  return {
+    publishLocationByPhysicalRoom,
+    missingLocationByPhysicalRoom,
+    temporaryLocations,
+  };
+}
+
+export function resolveWisePublishLocation(
+  catalog: WisePublishLocationCatalog,
+  assignedRoom: string,
+): { ok: true; location: string } | { ok: false; reason: string } {
+  const physicalRoom = normalizedPhysicalLocation(assignedRoom);
+  const location = catalog.publishLocationByPhysicalRoom.get(physicalRoom);
+  if (location) return { ok: true, location };
+
+  const missingLocation = catalog.missingLocationByPhysicalRoom.get(physicalRoom);
+  if (missingLocation) {
+    return {
+      ok: false,
+      reason: `Verified Wise location ${missingLocation} is missing for assigned room ${assignedRoom}`,
+    };
+  }
+
+  return {
+    ok: false,
+    reason: `Assigned room ${assignedRoom} is not an active publishable classroom`,
+  };
+}
+
+export function isCurrentWisePublishLocation(
+  currentWiseLocation: string | null | undefined,
+  desiredPublishLocation: string,
+): boolean {
+  const current = normalizedExactLocation(currentWiseLocation);
+  return Boolean(current) && current === normalizedExactLocation(desiredPublishLocation);
+}
+
 export function classroomTimestampToWiseIso(value: Date | string): string {
   const date = typeof value === "string" ? new Date(value) : value;
   const utcMillis = Date.UTC(
@@ -892,20 +972,19 @@ async function markSkippedRows(
   return summary;
 }
 
-async function loadTemporaryPublishLocations(
+async function loadWisePublishLocationCatalog(
   db: Database,
   client: WiseClient,
   instituteId: string,
-): Promise<string[]> {
+): Promise<WisePublishLocationCatalog> {
   const [rooms, wiseLocations] = await Promise.all([
     listClassroomRooms(db),
-    fetchInstituteLocations(client, instituteId).catch(() => []),
+    fetchInstituteLocations(client, instituteId),
   ]);
-  const wiseLocationNames = new Set(wiseLocations);
-  return rooms
-    .filter((room) => room.active && room.category !== "online_only")
-    .map((room) => room.name)
-    .filter((roomName) => wiseLocationNames.size === 0 || wiseLocationNames.has(roomName));
+  if (wiseLocations.map(normalizedExactLocation).filter(Boolean).length === 0) {
+    throw new Error("Wise location catalog is empty; refusing to publish locations");
+  }
+  return buildWisePublishLocationCatalog(rooms, wiseLocations);
 }
 
 async function moveCycleRowToTemporaryLocation(
@@ -998,19 +1077,53 @@ export async function runClassroomPublishJob(
     const summary: PublishSummary = { attempted: 0, success: 0, skipped: 0, failed: 0 };
     const skippedSummary = await markSkippedRows(db, jobId, skippedRows);
     summary.skipped += skippedSummary.skipped;
-    const temporaryLocations = await loadTemporaryPublishLocations(db, client, instituteId);
+
+    let publishCatalog: WisePublishLocationCatalog | null = null;
+    let catalogError: string | null = null;
+    if (eligibleRows.length > 0) {
+      try {
+        publishCatalog = await loadWisePublishLocationCatalog(db, client, instituteId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Wise location catalog unavailable";
+        catalogError = `Wise location catalog unavailable: ${message}`;
+      }
+    }
+
+    const temporaryLocations = publishCatalog?.temporaryLocations ?? [];
     const temporaryMovedRowIds = new Set<string>();
 
     const pendingRows = new Map<string, ClassroomRow>();
     const failedRows = new Map<string, ClassroomRow>();
+    const publishLocationByRowId = new Map<string, string>();
     for (const row of eligibleRows) {
-      if (
-        row.publishStatus === "success" ||
-        normalizedPhysicalLocation(row.currentWiseLocation) === normalizedPhysicalLocation(row.assignedRoom)
-      ) {
+      if (catalogError) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: catalogError,
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        failedRows.set(row.id, row);
+        continue;
+      }
+
+      const resolvedLocation = resolveWisePublishLocation(publishCatalog!, row.assignedRoom);
+      if (!resolvedLocation.ok) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: resolvedLocation.reason,
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        failedRows.set(row.id, row);
+        continue;
+      }
+
+      publishLocationByRowId.set(row.id, resolvedLocation.location);
+      if (isCurrentWisePublishLocation(row.currentWiseLocation, resolvedLocation.location)) {
         const result = await publishRowResult(db, jobId, row, {
           status: "success",
-          publishedLocation: row.currentWiseLocation ?? row.assignedRoom,
+          publishedLocation: resolvedLocation.location,
         });
         summary.attempted += result.attempted;
         summary.success += result.success;
@@ -1069,10 +1182,23 @@ export async function runClassroomPublishJob(
       }
 
       await runLimited(readyRows, PUBLISH_ROW_CONCURRENCY, async (row) => {
+        const publishLocation = publishLocationByRowId.get(row.id);
+        if (!publishLocation) {
+          const result = await publishRowResult(db, jobId, row, {
+            status: "failed",
+            error: `No verified Wise publish location for assigned room ${row.assignedRoom}`,
+          });
+          summary.attempted += result.attempted;
+          summary.failed += result.failed;
+          failedRows.set(row.id, row);
+          pendingRows.delete(row.id);
+          return;
+        }
+
         const updateError = await updateWiseLocationOnly(
           (classId, sessionId, location) => updateSessionLocation(client, classId, sessionId, location),
           row,
-          row.assignedRoom,
+          publishLocation,
         );
         if (updateError) {
           const result = await publishRowResult(db, jobId, row, {
@@ -1086,7 +1212,10 @@ export async function runClassroomPublishJob(
           return;
         }
 
-        const result = await publishRowResult(db, jobId, row, { status: "success" });
+        const result = await publishRowResult(db, jobId, row, {
+          status: "success",
+          publishedLocation: publishLocation,
+        });
         summary.attempted += result.attempted;
         summary.success += result.success;
         pendingRows.delete(row.id);
