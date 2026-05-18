@@ -270,7 +270,7 @@ export function buildRoomConflictWarnings(
 
 type PublishLocationRoom = Pick<
   ClassroomRoomDefinition,
-  "name" | "hasTv" | "category" | "active"
+  "name" | "hasTv" | "capacity" | "category" | "active" | "sortOrder"
 >;
 
 export interface WisePublishLocationCatalog {

@@ -161,8 +161,10 @@ describe("class assignment routes", () => {
 
   it("returns 409 when the classroom snapshot is stale", async () => {
     vi.mocked(runClassroomAssignment).mockRejectedValue(new StaleClassroomAssignmentSnapshotError({
+      snapshotId: "snapshot-1",
       latestSyncFinishedAt: "2026-05-14T00:00:00.000Z",
       staleAgeMs: 16 * 60 * 1000,
+      fresh: false,
     }) as never);
     const req = new NextRequest("http://test.local/api/class-assignments/run", {
       method: "POST",

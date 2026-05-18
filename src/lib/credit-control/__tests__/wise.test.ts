@@ -19,8 +19,8 @@ import {
 } from "@/lib/credit-control/packages";
 import type { SheetSnapshot } from "@/lib/credit-control/domain";
 
-function fakeClient(get: WiseClient["get"]): WiseClient {
-  return { get } as WiseClient;
+function fakeClient(get: unknown): WiseClient {
+  return { get: get as WiseClient["get"] } as WiseClient;
 }
 
 function snapshot(header: string[], rows: unknown[][]): SheetSnapshot {
