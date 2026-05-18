@@ -33,6 +33,49 @@ const failedResult = {
   errorSummary: "Wise failed",
 };
 
+function makeDbMock(options: {
+  runningRows?: { id: string; startedAt: Date }[];
+  staleRows?: { id: string }[];
+  insertError?: Error & { code?: string };
+  duplicateRaceRows?: { id: string; startedAt: Date }[];
+} = {}) {
+  const runningRows = options.runningRows ?? [];
+  const staleRows = options.staleRows ?? [];
+  const insertRows = [{ id: "guard-run-1" }];
+  const selectResponses = [runningRows, options.duplicateRaceRows ?? runningRows];
+
+  const updateReturning = vi.fn().mockResolvedValue(staleRows);
+  const db = {
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn(() => ({
+          returning: updateReturning,
+        })),
+      })),
+    })),
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          orderBy: vi.fn(() => ({
+            limit: vi.fn().mockImplementation(() => (
+              Promise.resolve(selectResponses.shift() ?? runningRows)
+            )),
+          })),
+        })),
+      })),
+    })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({
+        returning: options.insertError
+          ? vi.fn().mockRejectedValue(options.insertError)
+          : vi.fn().mockResolvedValue(insertRows),
+      })),
+    })),
+  };
+
+  return db;
+}
+
 describe("GET/POST /api/internal/sync-wise", () => {
   const originalCronSecret = process.env.CRON_SECRET;
   const originalInstituteId = process.env.WISE_INSTITUTE_ID;
@@ -41,7 +84,7 @@ describe("GET/POST /api/internal/sync-wise", () => {
     vi.resetAllMocks();
     process.env.CRON_SECRET = "test-secret";
     process.env.WISE_INSTITUTE_ID = "institute-1";
-    vi.mocked(getDb).mockReturnValue({ db: true } as never);
+    vi.mocked(getDb).mockReturnValue(makeDbMock() as never);
     vi.mocked(createWiseClient).mockReturnValue({ client: true } as never);
     vi.mocked(runFullSync).mockResolvedValue(successResult as never);
     vi.mocked(auth).mockResolvedValue(null as never);
@@ -106,7 +149,9 @@ describe("GET/POST /api/internal/sync-wise", () => {
       success: true,
       syncRunId: "run-1",
     });
-    expect(runFullSync).toHaveBeenCalledWith({ db: true }, { client: true }, "institute-1");
+    expect(runFullSync).toHaveBeenCalledWith(expect.any(Object), { client: true }, "institute-1", {
+      syncRunId: "guard-run-1",
+    });
   });
 
   it("keeps GET blocked when CRON_SECRET is missing even with a valid session", async () => {
@@ -132,7 +177,9 @@ describe("GET/POST /api/internal/sync-wise", () => {
       syncRunId: "run-1",
       promotedSnapshotId: "snap-1",
     });
-    expect(runFullSync).toHaveBeenCalledWith({ db: true }, { client: true }, "institute-1");
+    expect(runFullSync).toHaveBeenCalledWith(expect.any(Object), { client: true }, "institute-1", {
+      syncRunId: "guard-run-1",
+    });
     expect(revalidateTag).toHaveBeenCalledWith("snapshot", { expire: 0 });
   });
 
@@ -149,7 +196,9 @@ describe("GET/POST /api/internal/sync-wise", () => {
       success: true,
       syncRunId: "run-1",
     });
-    expect(runFullSync).toHaveBeenCalledWith({ db: true }, { client: true }, "institute-1");
+    expect(runFullSync).toHaveBeenCalledWith(expect.any(Object), { client: true }, "institute-1", {
+      syncRunId: "guard-run-1",
+    });
     expect(revalidateTag).toHaveBeenCalledWith("snapshot", { expire: 0 });
   });
 
@@ -166,7 +215,9 @@ describe("GET/POST /api/internal/sync-wise", () => {
       success: true,
       syncRunId: "run-1",
     });
-    expect(runFullSync).toHaveBeenCalledWith({ db: true }, { client: true }, "institute-1");
+    expect(runFullSync).toHaveBeenCalledWith(expect.any(Object), { client: true }, "institute-1", {
+      syncRunId: "guard-run-1",
+    });
   });
 
   it("returns 500 and skips revalidation when runFullSync reports failure", async () => {
@@ -187,7 +238,63 @@ describe("GET/POST /api/internal/sync-wise", () => {
 
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({ success: true, syncRunId: "run-1" });
-    expect(runFullSync).toHaveBeenCalledWith({ db: true }, { client: true }, "institute-1");
+    expect(runFullSync).toHaveBeenCalledWith(expect.any(Object), { client: true }, "institute-1", {
+      syncRunId: "guard-run-1",
+    });
+  });
+
+  it("returns 202 and skips the sync when a fresh run is already active", async () => {
+    vi.mocked(getDb).mockReturnValue(makeDbMock({
+      runningRows: [{ id: "running-1", startedAt: new Date("2026-05-18T15:00:00.000Z") }],
+    }) as never);
+
+    const res = await GET(makeRequest("test-secret", "GET"));
+
+    expect(res.status).toBe(202);
+    await expect(res.json()).resolves.toMatchObject({
+      success: true,
+      skipped: true,
+      alreadyRunning: true,
+      syncRunId: "running-1",
+      runningStartedAt: "2026-05-18T15:00:00.000Z",
+    });
+    expect(runFullSync).not.toHaveBeenCalled();
+    expect(revalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("returns the stale-running cleanup count when stale rows were failed before sync", async () => {
+    vi.mocked(getDb).mockReturnValue(makeDbMock({
+      staleRows: [{ id: "stale-1" }, { id: "stale-2" }],
+    }) as never);
+
+    const res = await GET(makeRequest("test-secret", "GET"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      success: true,
+      staleRunningSyncsFailed: 2,
+    });
+    expect(runFullSync).toHaveBeenCalledWith(expect.any(Object), { client: true }, "institute-1", {
+      syncRunId: "guard-run-1",
+    });
+  });
+
+  it("returns 202 when the database unique lock is won by another request", async () => {
+    const duplicate = Object.assign(new Error("duplicate"), { code: "23505" });
+    vi.mocked(getDb).mockReturnValue(makeDbMock({
+      insertError: duplicate,
+      duplicateRaceRows: [{ id: "running-after-race", startedAt: new Date("2026-05-18T15:03:00.000Z") }],
+    }) as never);
+
+    const res = await GET(makeRequest("test-secret", "GET"));
+
+    expect(res.status).toBe(202);
+    await expect(res.json()).resolves.toMatchObject({
+      skipped: true,
+      alreadyRunning: true,
+      syncRunId: "running-after-race",
+    });
+    expect(runFullSync).not.toHaveBeenCalled();
   });
 
   it("returns 401 when GET has no Authorization header even with a valid session", async () => {

@@ -12,6 +12,7 @@ import {
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // ── Enums ──────────────────────────────────────────────────────────────
 
@@ -110,7 +111,12 @@ export const syncRuns = pgTable("sync_runs", {
   teacherCount: integer("teacher_count"),
   errorSummary: text("error_summary"),
   metadata: jsonb("metadata"),
-});
+}, (table) => [
+  uniqueIndex("sync_runs_single_running_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'running'`),
+  index("sync_runs_status_started_idx").on(table.status, table.startedAt),
+]);
 
 // ── Auth ────────────────────────────────────────────────────────────────
 
@@ -121,6 +127,167 @@ export const adminUsers = pgTable("admin_users", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("admin_users_email_idx").on(table.email),
+]);
+
+// ── Credit Control ──────────────────────────────────────────────────────
+
+export const creditControlSnapshots = pgTable("credit_control_snapshots", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  active: boolean("active").notNull().default(false),
+  source: text("source").notNull().default("wise"),
+  generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("ccs_active_idx").on(table.active),
+  index("ccs_generated_at_idx").on(table.generatedAt),
+]);
+
+export const creditControlSyncRuns = pgTable("credit_control_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  snapshotId: uuid("snapshot_id").references(() => creditControlSnapshots.id),
+  promotedSnapshotId: uuid("promoted_snapshot_id").references(() => creditControlSnapshots.id),
+  studentCount: integer("student_count").notNull().default(0),
+  packageCount: integer("package_count").notNull().default(0),
+  sessionCount: integer("session_count").notNull().default(0),
+  errorSummary: text("error_summary"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+}, (table) => [
+  index("ccsr_status_idx").on(table.status),
+  index("ccsr_started_at_idx").on(table.startedAt),
+]);
+
+export const creditControlStudents = pgTable("credit_control_students", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  snapshotId: uuid("snapshot_id").notNull().references(() => creditControlSnapshots.id),
+  wiseStudentId: text("wise_student_id").notNull(),
+  studentKey: text("student_key").notNull(),
+  studentName: text("student_name").notNull(),
+  parentName: text("parent_name").notNull().default(""),
+  email: text("email"),
+  activated: boolean("activated").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("cc_students_snapshot_wise_idx").on(table.snapshotId, table.wiseStudentId),
+  index("cc_students_snapshot_key_idx").on(table.snapshotId, table.studentKey),
+]);
+
+export const creditControlPackages = pgTable("credit_control_packages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  snapshotId: uuid("snapshot_id").notNull().references(() => creditControlSnapshots.id),
+  wiseStudentId: text("wise_student_id").notNull(),
+  wiseClassId: text("wise_class_id").notNull(),
+  studentKey: text("student_key").notNull(),
+  packageKey: text("package_key").notNull(),
+  studentName: text("student_name").notNull(),
+  parentName: text("parent_name").notNull().default(""),
+  packageName: text("package_name").notNull(),
+  subject: text("subject").notNull().default(""),
+  classType: text("class_type"),
+  totalCredits: doublePrecision("total_credits").notNull().default(0),
+  consumedCredits: doublePrecision("consumed_credits").notNull().default(0),
+  remainingCredits: doublePrecision("remaining_credits").notNull().default(0),
+  availableCredits: doublePrecision("available_credits").notNull().default(0),
+  bookedSessions: doublePrecision("booked_sessions").notNull().default(0),
+  excludedReason: text("excluded_reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("cc_packages_snapshot_pair_idx").on(table.snapshotId, table.wiseClassId, table.wiseStudentId),
+  index("cc_packages_snapshot_key_idx").on(table.snapshotId, table.packageKey),
+  index("cc_packages_student_key_idx").on(table.snapshotId, table.studentKey),
+]);
+
+export const creditControlSessions = pgTable("credit_control_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  snapshotId: uuid("snapshot_id").notNull().references(() => creditControlSnapshots.id),
+  wiseSessionId: text("wise_session_id").notNull(),
+  wiseClassId: text("wise_class_id").notNull(),
+  wiseStudentId: text("wise_student_id").notNull(),
+  studentKey: text("student_key").notNull(),
+  packageKey: text("package_key").notNull(),
+  studentName: text("student_name").notNull(),
+  packageName: text("package_name").notNull(),
+  subject: text("subject").notNull().default(""),
+  scheduledStartTime: timestamp("scheduled_start_time", { withTimezone: true }).notNull(),
+  scheduledEndTime: timestamp("scheduled_end_time", { withTimezone: true }),
+  durationMinutes: integer("duration_minutes").notNull().default(0),
+  meetingStatus: text("meeting_status").notNull(),
+  sessionKind: text("session_kind").notNull(),
+  teacherFeedback: text("teacher_feedback"),
+  creditApplied: doublePrecision("credit_applied").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("cc_sessions_snapshot_session_student_idx").on(table.snapshotId, table.wiseSessionId, table.wiseStudentId),
+  index("cc_sessions_snapshot_kind_idx").on(table.snapshotId, table.sessionKind),
+  index("cc_sessions_package_idx").on(table.snapshotId, table.packageKey),
+  index("cc_sessions_start_idx").on(table.snapshotId, table.scheduledStartTime),
+]);
+
+export const creditControlCreditHistory = pgTable("credit_control_credit_history", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  snapshotId: uuid("snapshot_id").notNull().references(() => creditControlSnapshots.id),
+  wiseCreditHistoryId: text("wise_credit_history_id").notNull(),
+  wiseStudentId: text("wise_student_id").notNull(),
+  wiseClassId: text("wise_class_id").notNull(),
+  packageKey: text("package_key").notNull(),
+  credit: doublePrecision("credit").notNull().default(0),
+  type: text("type"),
+  meetingStatus: text("meeting_status"),
+  durationMinutes: integer("duration_minutes").notNull().default(0),
+  createdAtWise: timestamp("created_at_wise", { withTimezone: true }),
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("cc_history_snapshot_history_idx").on(table.snapshotId, table.wiseCreditHistoryId, table.wiseStudentId, table.wiseClassId),
+  index("cc_history_package_idx").on(table.snapshotId, table.packageKey),
+]);
+
+export const creditControlFollowUpState = pgTable("credit_control_follow_up_state", {
+  studentKey: text("student_key").primaryKey(),
+  studentName: text("student_name").notNull(),
+  parentName: text("parent_name").notNull(),
+  status: text("status").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedByEmail: text("updated_by_email").notNull(),
+  updatedByName: text("updated_by_name").notNull(),
+}, (table) => [
+  index("cc_follow_up_state_updated_at_idx").on(table.updatedAt),
+]);
+
+export const creditControlFollowUpLog = pgTable("credit_control_follow_up_log", {
+  eventId: uuid("event_id").primaryKey().defaultRandom(),
+  studentKey: text("student_key").notNull(),
+  studentName: text("student_name").notNull(),
+  parentName: text("parent_name").notNull(),
+  actionType: text("action_type").notNull(),
+  status: text("status"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  actorEmail: text("actor_email").notNull(),
+  actorName: text("actor_name").notNull(),
+}, (table) => [
+  index("cc_follow_up_log_student_created_idx").on(table.studentKey, table.createdAt),
+  index("cc_follow_up_log_created_idx").on(table.createdAt),
+]);
+
+export const creditControlInactiveStudents = pgTable("credit_control_inactive_students", {
+  studentKey: text("student_key").primaryKey(),
+  studentName: text("student_name").notNull(),
+  parentName: text("parent_name").notNull(),
+  markedAt: timestamp("marked_at", { withTimezone: true }).notNull().defaultNow(),
+  markedByEmail: text("marked_by_email").notNull(),
+});
+
+export const creditControlAdminOwnership = pgTable("credit_control_admin_ownership", {
+  studentKey: text("student_key").primaryKey(),
+  adminKey: text("admin_key").notNull(),
+  assignedAt: timestamp("assigned_at", { withTimezone: true }).notNull().defaultNow(),
+  assignedByEmail: text("assigned_by_email").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("cc_admin_ownership_admin_idx").on(table.adminKey),
 ]);
 
 // ── Tutor Identity ──────────────────────────────────────────────────────

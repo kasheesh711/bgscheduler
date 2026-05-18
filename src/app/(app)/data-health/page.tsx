@@ -134,17 +134,27 @@ export default function DataHealthPage() {
 
     try {
       const response = await fetch("/api/admin/sync-wise", { method: "POST" });
-      let body: { error?: string; errorSummary?: string | null } = {};
+      let body: {
+        error?: string;
+        errorSummary?: string | null;
+        skipped?: boolean;
+        alreadyRunning?: boolean;
+        message?: string;
+      } = {};
       const text = await response.text();
 
       try {
-        body = text ? JSON.parse(text) as { error?: string; errorSummary?: string | null } : {};
+        body = text ? JSON.parse(text) as typeof body : {};
       } catch {
         body = {};
       }
 
       if (response.ok) {
-        setSyncMessage("Sync completed successfully.");
+        if (body.skipped && body.alreadyRunning) {
+          setSyncMessage(body.message ?? "Wise sync is already running. Data will refresh when that run finishes.");
+        } else {
+          setSyncMessage("Sync completed successfully.");
+        }
       } else {
         const healthData = await loadHealthData();
         refreshed = true;

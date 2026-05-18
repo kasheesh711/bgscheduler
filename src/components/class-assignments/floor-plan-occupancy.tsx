@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  FLOOR_PLAN_GUIDE_PATH,
   FLOOR_PLAN_ROOMS,
   FLOOR_PLAN_VIEWBOX,
   type FloorPlanRoomGeometry,
@@ -71,7 +72,7 @@ export function FloorPlanOccupancy({
         >
           <rect x="0" y="0" width="1600" height="900" rx="18" fill="var(--background)" />
           <path
-            d="M245 220h855M430 815h620M470 220v260M1090 220v540"
+            d={FLOOR_PLAN_GUIDE_PATH}
             fill="none"
             stroke="var(--border)"
             strokeWidth="3"

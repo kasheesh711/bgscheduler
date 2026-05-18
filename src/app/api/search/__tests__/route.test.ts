@@ -56,6 +56,7 @@ describe("POST /api/search", () => {
     vi.mocked(ensureIndex).mockResolvedValue({
       snapshotId: "snap-1",
       builtAt: new Date("2026-04-06T00:00:00.000Z"),
+      syncedAt: new Date("2026-04-06T00:00:00.000Z"),
       tutorGroups: [],
       byWeekday: new Map(),
     } satisfies SearchIndex as never);

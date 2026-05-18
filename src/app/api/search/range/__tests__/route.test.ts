@@ -42,6 +42,7 @@ function makeIndex(): SearchIndex {
   return {
     snapshotId: "snap-1",
     builtAt: new Date("2026-04-06T00:00:00.000Z"),
+    syncedAt: new Date("2026-04-06T00:00:00.000Z"),
     tutorGroups: [group],
     byWeekday: new Map([[1, [group]]]),
   };

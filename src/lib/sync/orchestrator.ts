@@ -31,6 +31,10 @@ export interface SyncResult {
   durationMs: number;
 }
 
+export interface RunFullSyncOptions {
+  syncRunId?: string;
+}
+
 const INSERT_CHUNK_SIZE = 250;
 
 async function insertInChunks<T>(
@@ -46,19 +50,22 @@ async function insertInChunks<T>(
 export async function runFullSync(
   db: Database,
   client: WiseClient,
-  instituteId: string
+  instituteId: string,
+  options: RunFullSyncOptions = {},
 ): Promise<SyncResult> {
   const startTime = Date.now();
-  let syncRunId = "";
+  let syncRunId = options.syncRunId ?? "";
   let snapshotId = "";
 
   try {
-    // 1. Create sync run
-    const [syncRun] = await db
-      .insert(schema.syncRuns)
-      .values({ status: "running" })
-      .returning({ id: schema.syncRuns.id });
-    syncRunId = syncRun.id;
+    // 1. Create sync run unless the caller already acquired a guard row.
+    if (!syncRunId) {
+      const [syncRun] = await db
+        .insert(schema.syncRuns)
+        .values({ status: "running" })
+        .returning({ id: schema.syncRuns.id });
+      syncRunId = syncRun.id;
+    }
 
     // 2. Create candidate snapshot
     const [snapshot] = await db

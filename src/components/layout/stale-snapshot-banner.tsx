@@ -90,7 +90,7 @@ export function StaleSnapshotBanner() {
   return (
     <div
       role="status"
-      aria-label="Tutor data may be outdated. Last successful sync was over 48 hours ago."
+      aria-label="Tutor data may be outdated. Last successful sync was over 2 hours ago."
       className="flex flex-shrink-0 items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100 lg:px-6"
     >
       <AlertTriangle className="h-4 w-4 flex-shrink-0" aria-hidden="true" />

@@ -58,8 +58,8 @@ export async function POST(request: NextRequest) {
 
     const snapshotMeta: SnapshotMeta = {
       snapshotId: index.snapshotId,
-      syncedAt: index.builtAt.toISOString(),
-      stale: Date.now() - index.builtAt.getTime() > API_STALE_THRESHOLD_MS,
+      syncedAt: index.syncedAt.toISOString(),
+      stale: Date.now() - index.syncedAt.getTime() > API_STALE_THRESHOLD_MS,
     };
 
     const existingSet = new Set(existingTutorGroupIds);

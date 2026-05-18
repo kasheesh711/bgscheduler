@@ -36,6 +36,7 @@ function makeIndex(tutors: IndexedTutorGroup[]): SearchIndex {
   return {
     snapshotId: "snap-1",
     builtAt: new Date(),
+    syncedAt: new Date(),
     tutorGroups: tutors,
     byWeekday,
   };
@@ -253,7 +254,7 @@ describe("executeSearch", () => {
     expect(executeSearch(index, freeReq).perSlotResults[0].available).toHaveLength(1);
   });
 
-  it("marks default search metadata stale only after the 26-hour API threshold", () => {
+  it("marks default search metadata stale only after the 90-minute API threshold", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-07T02:00:00.000Z"));
 
@@ -264,18 +265,20 @@ describe("executeSearch", () => {
       ],
     };
     const freshIndex = makeIndex([makeTutor()]);
-    freshIndex.builtAt = new Date(Date.now() - (25 * 60 * 60 * 1000 + 59 * 60 * 1000));
+    freshIndex.syncedAt = new Date(Date.now() - (90 * 60 * 1000));
     const staleIndex = makeIndex([makeTutor()]);
-    staleIndex.builtAt = new Date(Date.now() - (26 * 60 * 60 * 1000 + 1));
+    staleIndex.syncedAt = new Date(Date.now() - (90 * 60 * 1000 + 1));
 
     const freshResult = executeSearch(freshIndex, req);
     const staleResult = executeSearch(staleIndex, req);
 
+    expect(freshResult.snapshotMeta.syncedAt).toBe(freshIndex.syncedAt.toISOString());
     expect(freshResult.snapshotMeta.stale).toBe(false);
     expect(freshResult.warnings).toEqual([]);
+    expect(staleResult.snapshotMeta.syncedAt).toBe(staleIndex.syncedAt.toISOString());
     expect(staleResult.snapshotMeta.stale).toBe(true);
     expect(staleResult.warnings).toContain(
-      "Search data may be stale — last sync was more than 26 hours ago",
+      "Search data may be stale — last sync was more than 90 minutes ago",
     );
   });
 });

@@ -9,15 +9,15 @@ import {
 } from "../stale";
 
 describe("ops stale helpers", () => {
-  it("uses a 26-hour API stale threshold", () => {
-    expect(API_STALE_THRESHOLD_MS).toBe(26 * 60 * 60 * 1000);
-    expect(isApiSnapshotStale(25 * 60 * 60 * 1000 + 59 * 60 * 1000)).toBe(false);
+  it("uses a 90-minute API stale threshold", () => {
+    expect(API_STALE_THRESHOLD_MS).toBe(90 * 60 * 1000);
+    expect(isApiSnapshotStale(90 * 60 * 1000)).toBe(false);
     expect(isApiSnapshotStale(API_STALE_THRESHOLD_MS)).toBe(false);
     expect(isApiSnapshotStale(API_STALE_THRESHOLD_MS + 1)).toBe(true);
   });
 
-  it("uses a 48-hour app banner threshold", () => {
-    expect(APP_STALE_BANNER_THRESHOLD_MS).toBe(48 * 60 * 60 * 1000);
+  it("uses a 2-hour app banner threshold", () => {
+    expect(APP_STALE_BANNER_THRESHOLD_MS).toBe(2 * 60 * 60 * 1000);
     expect(shouldShowStaleBanner(null)).toBe(false);
     expect(shouldShowStaleBanner(APP_STALE_BANNER_THRESHOLD_MS)).toBe(false);
     expect(shouldShowStaleBanner(APP_STALE_BANNER_THRESHOLD_MS + 1)).toBe(true);
@@ -40,7 +40,7 @@ describe("stale snapshot banner integration", () => {
   it("uses exact stale banner copy, data-health link, session dismissal, and health fetch", () => {
     const banner = readProjectFile("src/components/layout/stale-snapshot-banner.tsx");
 
-    expect(banner).toContain("Tutor data may be outdated. Last successful sync was over 48 hours ago.");
+    expect(banner).toContain("Tutor data may be outdated. Last successful sync was over 2 hours ago.");
     expect(banner).toContain("View data health");
     expect(banner).toContain('href="/data-health"');
     expect(banner).toContain('fetch("/api/data-health"');

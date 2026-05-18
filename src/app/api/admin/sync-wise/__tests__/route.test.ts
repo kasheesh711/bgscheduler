@@ -32,6 +32,40 @@ const failedResult = {
   errorSummary: "Wise failed",
 };
 
+function makeDbMock(options: {
+  runningRows?: { id: string; startedAt: Date }[];
+  staleRows?: { id: string }[];
+} = {}) {
+  const runningRows = options.runningRows ?? [];
+  const selectResponses = [runningRows];
+
+  return {
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn(() => ({
+          returning: vi.fn().mockResolvedValue(options.staleRows ?? []),
+        })),
+      })),
+    })),
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          orderBy: vi.fn(() => ({
+            limit: vi.fn().mockImplementation(() => (
+              Promise.resolve(selectResponses.shift() ?? runningRows)
+            )),
+          })),
+        })),
+      })),
+    })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({
+        returning: vi.fn().mockResolvedValue([{ id: "guard-run-1" }]),
+      })),
+    })),
+  };
+}
+
 describe("POST /api/admin/sync-wise", () => {
   const originalInstituteId = process.env.WISE_INSTITUTE_ID;
 
@@ -42,7 +76,7 @@ describe("POST /api/admin/sync-wise", () => {
       user: { email: "kevinhsieh711@gmail.com" },
       expires: "2026-05-14T00:00:00.000Z",
     } as never);
-    vi.mocked(getDb).mockReturnValue({ db: true } as never);
+    vi.mocked(getDb).mockReturnValue(makeDbMock() as never);
     vi.mocked(createWiseClient).mockReturnValue({ client: true } as never);
     vi.mocked(runFullSync).mockResolvedValue(successResult as never);
   });
@@ -74,7 +108,9 @@ describe("POST /api/admin/sync-wise", () => {
       syncRunId: "run-1",
       promotedSnapshotId: "snap-1",
     });
-    expect(runFullSync).toHaveBeenCalledWith({ db: true }, { client: true }, "institute-1");
+    expect(runFullSync).toHaveBeenCalledWith(expect.any(Object), { client: true }, "institute-1", {
+      syncRunId: "guard-run-1",
+    });
     expect(revalidateTag).toHaveBeenCalledWith("snapshot", { expire: 0 });
   });
 
@@ -88,6 +124,23 @@ describe("POST /api/admin/sync-wise", () => {
       success: false,
       errorSummary: "Wise failed",
     });
+    expect(revalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("returns 202 when a sync is already running", async () => {
+    vi.mocked(getDb).mockReturnValue(makeDbMock({
+      runningRows: [{ id: "running-1", startedAt: new Date("2026-05-18T15:00:00.000Z") }],
+    }) as never);
+
+    const res = await POST();
+
+    expect(res.status).toBe(202);
+    await expect(res.json()).resolves.toMatchObject({
+      skipped: true,
+      alreadyRunning: true,
+      syncRunId: "running-1",
+    });
+    expect(runFullSync).not.toHaveBeenCalled();
     expect(revalidateTag).not.toHaveBeenCalled();
   });
 });

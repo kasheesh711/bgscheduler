@@ -143,11 +143,11 @@ describe("schedule email preview", () => {
     expect(preview.previews[0].roomSteps).toEqual([
       { order: 1, time: "16:00-17:00", room: "Focus" },
     ]);
-    expect(preview.previews[0].mapImageUrl).toBe("https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus");
+    expect(preview.previews[0].mapImageUrl).toBe("https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&v=2026-05-18-corridor");
     expect(preview.previews[0].html).toContain("School map");
-    expect(preview.previews[0].html).toContain("https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus");
+    expect(preview.previews[0].html).toContain("https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&amp;v=2026-05-18-corridor");
     expect(preview.previews[0].text).toContain("Room route:");
-    expect(preview.previews[0].text).toContain("Map: https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus");
+    expect(preview.previews[0].text).toContain("Map: https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&v=2026-05-18-corridor");
   });
 
   it("formats schedule blocks from Bangkok minute columns", async () => {

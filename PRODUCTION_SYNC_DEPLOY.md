@@ -76,9 +76,9 @@ From an authenticated session:
 
 ## 6. Check cron continuity
 
-Current production cron is daily:
+Current production cron runs every 30 minutes on Vercel Pro:
 
 - `/api/internal/sync-wise`
-- `0 0 * * *`
+- `*/30 * * * *`
 
-If the team upgrades Vercel from Hobby to Pro, update the cadence only after production syncs are stable.
+Confirm recent `sync_runs` rows complete successfully and that no fresh overlapping `running` rows remain. Old abandoned `running` rows should be marked failed by the single-flight guard after 20 minutes.

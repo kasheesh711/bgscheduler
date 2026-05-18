@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
@@ -76,6 +76,7 @@ export interface IndexedTutorGroup {
 export interface SearchIndex {
   snapshotId: string;
   builtAt: Date;
+  syncedAt: Date;
   tutorGroups: IndexedTutorGroup[];
   byWeekday: Map<number, IndexedTutorGroup[]>;
 }
@@ -83,9 +84,7 @@ export interface SearchIndex {
 // ── globalThis-anchored singleton (survives HMR in dev) ────────────
 
 declare global {
-  // eslint-disable-next-line no-var
   var __bgscheduler_searchIndex: SearchIndex | null;
-  // eslint-disable-next-line no-var
   var __bgscheduler_searchIndexBuildPromise: Promise<SearchIndex> | null;
 }
 
@@ -129,6 +128,18 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
   }
 
   const snapshotId = activeSnapshot.id;
+  const [lastPromotedSync] = await db
+    .select({ finishedAt: schema.syncRuns.finishedAt })
+    .from(schema.syncRuns)
+    .where(
+      and(
+        eq(schema.syncRuns.status, "success"),
+        eq(schema.syncRuns.promotedSnapshotId, snapshotId),
+      ),
+    )
+    .orderBy(desc(schema.syncRuns.finishedAt))
+    .limit(1);
+  const syncedAt = lastPromotedSync?.finishedAt ?? activeSnapshot.createdAt ?? new Date();
 
   // Load all groups for this snapshot
   const groups = await db
@@ -295,6 +306,7 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
   const index: SearchIndex = {
     snapshotId,
     builtAt: new Date(),
+    syncedAt,
     tutorGroups,
     byWeekday,
   };

@@ -7,6 +7,8 @@ export interface FloorPlanRoomGeometry {
   d: string;
   labelX: number;
   labelY: number;
+  markerX?: number;
+  markerY?: number;
   assignable: boolean;
   section: "left" | "center" | "right" | "context";
 }
@@ -16,6 +18,7 @@ function rectPath(x: number, y: number, width: number, height: number): string {
 }
 
 export const FLOOR_PLAN_VIEWBOX = "0 0 1600 900";
+export const FLOOR_PLAN_GUIDE_PATH = "M245 220H1145M430 815H1050M470 220V480M1090 220V760";
 
 export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
   {
@@ -152,9 +155,11 @@ export const FLOOR_PLAN_ROOMS: FloorPlanRoomGeometry[] = [
     roomName: "Do It",
     label: "Do It",
     labelLines: ["Do It"],
-    d: "M600 245c0-70 45-105 155-105h0c110 0 155 35 155 105v105H600z",
+    d: "M600 300c0-37 45-55 155-55h0c110 0 155 18 155 55v50H600z",
     labelX: 755,
-    labelY: 275,
+    labelY: 300,
+    markerX: 650,
+    markerY: 315,
     assignable: true,
     section: "center",
   },

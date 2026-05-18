@@ -82,6 +82,20 @@
     {
       "idx": 11,
       "version": "7",
+      "when": 1779127200000,
+      "tag": "0013_sync_run_single_flight",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1779128400000,
+      "tag": "0014_credit_control_dashboard",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
       "when": 1779129600000,
       "tag": "0015_ai_scheduler_runs",
       "breakpoints": true

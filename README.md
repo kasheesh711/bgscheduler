@@ -8,11 +8,11 @@ Internal admin app for searching tutor availability from normalized Wise snapsho
 - Repo: [https://github.com/kasheesh711/bgscheduler](https://github.com/kasheesh711/bgscheduler)
 - Stack: Next.js 16 App Router, TypeScript, Tailwind, shadcn/ui, Auth.js, Drizzle, Neon Postgres, Vercel
 - Test status: 281 passing Vitest unit tests
-- Wise status: production sync live since 2026-04-07 (131 teachers, 72 groups, daily cron)
+- Wise status: production sync live since 2026-04-07 (138 teachers, 30-minute cron on Vercel Pro)
 - Compare UI: side-by-side search and compare workspace with weekly/day schedule views, tutor combobox, discovery modal, and student-level conflict detection
 - Class assignments: native `/class-assignments` workspace for local room assignment, admin overrides, teacher schedules, and explicit Wise OFFLINE location publishing
 - Latest compare fixes: week view uses per-tutor lanes for 2-3 tutors, session cards use normalized RGBA fills, and online/onsite styling now prefers Wise identity/session evidence over raw location strings
-- Optional: upgrade Vercel to Pro for 30-minute sync cadence (currently daily on Hobby)
+- Sync reliability: single-flight guard prevents overlapping Wise syncs and marks abandoned runs failed after 20 minutes
 
 ## Product Rules
 

@@ -1,4 +1,5 @@
 import {
+  FLOOR_PLAN_GUIDE_PATH,
   FLOOR_PLAN_ROOMS,
   FLOOR_PLAN_VIEWBOX,
   type FloorPlanRoomGeometry,
@@ -43,11 +44,12 @@ function roomText(geometry: FloorPlanRoomGeometry, highlighted: boolean): string
 }
 
 function roomMarker(geometry: FloorPlanRoomGeometry, order: number): string {
-  const cy = Math.max(geometry.labelY - 72, 65);
+  const cx = geometry.markerX ?? geometry.labelX;
+  const cy = geometry.markerY ?? Math.max(geometry.labelY - 72, 65);
   return `
     <g>
-      <circle cx="${geometry.labelX}" cy="${cy}" r="33" fill="${BRAND_BLUE_DARK}" stroke="${BRAND_WHITE}" stroke-width="7" />
-      <text x="${geometry.labelX}" y="${cy + 11}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="800" fill="${BRAND_WHITE}">${order}</text>
+      <circle cx="${cx}" cy="${cy}" r="33" fill="${BRAND_BLUE_DARK}" stroke="${BRAND_WHITE}" stroke-width="7" />
+      <text x="${cx}" y="${cy + 11}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="31" font-weight="800" fill="${BRAND_WHITE}">${order}</text>
     </g>`;
 }
 
@@ -76,7 +78,7 @@ export function renderFloorPlanMapSvg(roomNames: string[] = []): string {
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="${FLOOR_PLAN_VIEWBOX}" width="1600" height="900" role="img" aria-label="BeGifted floor plan">
   <rect x="0" y="0" width="1600" height="900" rx="26" fill="${BRAND_WHITE}" />
   <rect x="28" y="28" width="1544" height="844" rx="24" fill="#eff6ff" stroke="${BRAND_BLUE}" stroke-width="4" />
-  <path d="M245 220h855M430 815h620M470 220v260M1090 220v540" fill="none" stroke="${BRAND_BLUE}" stroke-width="5" stroke-dasharray="14 14" opacity="0.35" />
+  <path d="${FLOOR_PLAN_GUIDE_PATH}" fill="none" stroke="${BRAND_BLUE}" stroke-width="5" stroke-dasharray="14 14" opacity="0.35" />
   ${rooms}
 </svg>`;
 }

@@ -127,6 +127,7 @@ describe("room capacity forecast simulation", () => {
     const emptyIndex: SearchIndex = {
       snapshotId: "snapshot-1",
       builtAt: new Date("2026-05-15T00:00:00.000Z"),
+      syncedAt: new Date("2026-05-15T00:00:00.000Z"),
       tutorGroups: [],
       byWeekday: new Map(),
     };

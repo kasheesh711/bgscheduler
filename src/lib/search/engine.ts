@@ -14,7 +14,7 @@ import {
   BlockingSessionInfo,
 } from "./types";
 import { parseTimeToMinutes } from "@/lib/normalization/timezone";
-import { API_STALE_THRESHOLD_MS } from "@/lib/ops/stale";
+import { API_STALE_THRESHOLD_MS, STALE_SEARCH_WARNING } from "@/lib/ops/stale";
 
 /**
  * Execute a search against the in-memory index.
@@ -29,12 +29,12 @@ export function executeSearch(
 
   const snapshotMeta: SnapshotMeta = {
     snapshotId: index.snapshotId,
-    syncedAt: index.builtAt.toISOString(),
-    stale: Date.now() - index.builtAt.getTime() > staleThresholdMs,
+    syncedAt: index.syncedAt.toISOString(),
+    stale: Date.now() - index.syncedAt.getTime() > staleThresholdMs,
   };
 
   if (snapshotMeta.stale) {
-    warnings.push("Search data may be stale — last sync was more than 26 hours ago");
+    warnings.push(STALE_SEARCH_WARNING);
   }
 
   const perSlotResults: SlotResult[] = [];

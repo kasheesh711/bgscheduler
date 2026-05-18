@@ -10,6 +10,7 @@ import { sessionModeLabel } from "./session-mode";
 
 type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
 const DEFAULT_PUBLIC_BASE_URL = "https://bgscheduler.vercel.app";
+const FLOOR_PLAN_MAP_VERSION = "2026-05-18-corridor";
 
 interface AssignmentEmailRow {
   id: string;
@@ -251,6 +252,7 @@ function floorPlanMapUrl(roomSteps: ScheduleEmailRoomStep[]): string {
   if (rooms.length > 0) {
     url.searchParams.set("rooms", rooms.join("|"));
   }
+  url.searchParams.set("v", FLOOR_PLAN_MAP_VERSION);
   return url.toString();
 }
 

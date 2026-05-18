@@ -16,7 +16,7 @@ import type { DateRange } from "@/lib/search/compare";
 import { fetchPastSessionBlocks } from "@/lib/data/past-sessions";
 import type { IndexedSessionBlock } from "@/lib/search/index";
 import { TIMEZONE } from "@/lib/normalization/timezone";
-import { API_STALE_THRESHOLD_MS } from "@/lib/ops/stale";
+import { API_STALE_THRESHOLD_MS, STALE_SEARCH_WARNING } from "@/lib/ops/stale";
 import type { CompareResponse, SnapshotMeta } from "@/lib/search/types";
 import type { Database } from "@/lib/db";
 import type { IndexedTutorGroup, SearchIndex } from "@/lib/search/index";
@@ -130,7 +130,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { tutorGroupIds, mode, dayOfWeek, date, weekStart: weekStartParam, fetchOnly } = parsed.data;
+  const { tutorGroupIds, dayOfWeek, date, weekStart: weekStartParam, fetchOnly } = parsed.data;
   const db = getDb();
 
   try {
@@ -140,12 +140,12 @@ export async function POST(request: NextRequest) {
 
     const snapshotMeta: SnapshotMeta = {
       snapshotId: index.snapshotId,
-      syncedAt: index.builtAt.toISOString(),
-      stale: Date.now() - index.builtAt.getTime() > API_STALE_THRESHOLD_MS,
+      syncedAt: index.syncedAt.toISOString(),
+      stale: Date.now() - index.syncedAt.getTime() > API_STALE_THRESHOLD_MS,
     };
 
     if (snapshotMeta.stale) {
-      warnings.push("Search data may be stale — last sync was more than 26 hours ago");
+      warnings.push(STALE_SEARCH_WARNING);
     }
 
     const {
