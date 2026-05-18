@@ -333,6 +333,30 @@ export const classroomAssignmentRows = pgTable("classroom_assignment_rows", {
   uniqueIndex("car_rows_run_session_idx").on(table.runId, table.wiseSessionId),
 ]);
 
+// ── Room Utilization Sessions ──────────────────────────────────────────
+
+export const roomUtilizationSessions = pgTable("room_utilization_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+  endTime: timestamp("end_time", { withTimezone: true }).notNull(),
+  utilizationDate: date("utilization_date", { mode: "string" }).notNull(),
+  weekday: integer("weekday").notNull(),
+  startMinute: integer("start_minute").notNull(),
+  endMinute: integer("end_minute").notNull(),
+  wiseStatus: text("wise_status").notNull(),
+  sessionType: text("session_type"),
+  rawLocation: text("raw_location"),
+  normalizedRoomLabel: text("normalized_room_label"),
+  studentCount: integer("student_count"),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("rus_wise_session_id_idx").on(table.wiseSessionId),
+  index("rus_date_idx").on(table.utilizationDate),
+  index("rus_room_date_idx").on(table.normalizedRoomLabel, table.utilizationDate),
+]);
+
 export const classroomPublishJobs = pgTable("classroom_publish_jobs", {
   id: uuid("id").primaryKey().defaultRandom(),
   runId: uuid("run_id").notNull().references(() => classroomAssignmentRuns.id),

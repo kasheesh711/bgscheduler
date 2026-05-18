@@ -99,19 +99,29 @@ export async function fetchAllFutureSessions(
   client: WiseClient,
   instituteId: string
 ): Promise<WiseSession[]> {
+  return fetchAllInstituteSessions(client, instituteId, { status: "FUTURE" });
+}
+
+export async function fetchAllInstituteSessions(
+  client: WiseClient,
+  instituteId: string,
+  params: { status?: string } = {},
+): Promise<WiseSession[]> {
   const all: WiseSession[] = [];
   let page = 1;
   let pageCount = 1;
 
   while (page <= pageCount) {
+    const requestParams: Record<string, string> = {
+      paginateBy: "COUNT",
+      page_number: String(page),
+      page_size: String(PAGE_LIMIT),
+    };
+    if (params.status) requestParams.status = params.status;
+
     const res = await client.get<WiseSessionsResponse>(
       `/institutes/${instituteId}/sessions`,
-      {
-        status: "FUTURE",
-        paginateBy: "COUNT",
-        page_number: String(page),
-        page_size: String(PAGE_LIMIT),
-      }
+      requestParams,
     );
 
     const sessions = res.data?.sessions ?? [];

@@ -64,6 +64,13 @@
       "when": 1778842897089,
       "tag": "0008_reflective_shadowcat",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1779120000000,
+      "tag": "0011_room_utilization_sessions",
+      "breakpoints": true
     }
   ]
 }

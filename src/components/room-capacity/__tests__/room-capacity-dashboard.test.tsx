@@ -1,271 +1,96 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
-import { ForecastPanel, OvercapTable, WeeklyHeatmap } from "../room-capacity-dashboard";
+import { describe, expect, it } from "vitest";
+import { DailyTrend, MonthlySummary, RoomTable } from "../room-capacity-dashboard";
 import type {
-  RoomCapacityForecastResponse,
-  RoomCapacityMonthResponse,
-  WeekendDemandCaptureReadiness,
+  RoomUtilizationDailyRow,
+  RoomUtilizationMonthlyRow,
+  RoomUtilizationRoomRow,
 } from "@/lib/room-capacity/types";
 
-function monthData(): RoomCapacityMonthResponse {
+function dailyRow(overrides: Partial<RoomUtilizationDailyRow> = {}): RoomUtilizationDailyRow {
   return {
-    range: { startDate: "2026-05-15", endDate: "2026-05-21", generatedAt: "2026-05-15T00:00:00.000Z" },
-    snapshotMeta: { snapshotId: "snapshot-1", syncedAt: "2026-05-15T00:00:00.000Z" },
-    rooms: [{ id: "room-1", name: "Focus", capacity: 1, hasTv: false, category: "standard", active: true, sortOrder: 1 }],
-    kpis: {
-      currentOvercapIntervals: 1,
-      impactedRooms: 1,
-      projectedNoRoomSessions: 0,
-      unmatchedCurrentAllocations: 0,
-      peakLoadRatio: 2,
-    },
-    current: {
-      overcaps: [
-        {
-          id: "overcap-1",
-          source: "current",
-          date: "2026-05-15",
-          weekday: 5,
-          roomName: "Focus",
-          startMinute: 9 * 60,
-          endMinute: 10 * 60,
-          load: 2,
-          capacity: 1,
-          sessionCount: 2,
-          tutors: ["Tutor A", "Tutor B"],
-          classes: ["Math A", "Science B"],
-        },
-      ],
-      unmatchedAllocations: [],
-      heatmapCells: [
-        {
-          id: "cell-1",
-          source: "current",
-          date: "2026-05-15",
-          weekday: 5,
-          roomName: "Focus",
-          startMinute: 9 * 60,
-          endMinute: 9 * 60 + 30,
-          load: 2,
-          capacity: 1,
-          loadRatio: 2,
-          sessionCount: 2,
-          status: "over_capacity",
-        },
-      ],
-      daySummaries: [],
-    },
-    projected: {
-      overcaps: [],
-      noRoomRows: [],
-      heatmapCells: [],
-      daySummaries: [],
-    },
+    date: overrides.date ?? "2026-03-02",
+    weekday: overrides.weekday ?? 1,
+    occupiedMinutes: overrides.occupiedMinutes ?? 120,
+    availableMinutes: overrides.availableMinutes ?? 1_000,
+    utilizationPct: overrides.utilizationPct ?? 12,
+    sessionCount: overrides.sessionCount ?? 2,
+    missingLocationCount: overrides.missingLocationCount ?? 0,
+    unknownRoomCount: overrides.unknownRoomCount ?? 0,
+    excludedStatusCount: overrides.excludedStatusCount ?? 0,
+    overlapMinutes: overrides.overlapMinutes ?? 0,
   };
 }
 
-function readiness(overrides: Partial<WeekendDemandCaptureReadiness> = {}): WeekendDemandCaptureReadiness {
+function monthlyRow(overrides: Partial<RoomUtilizationMonthlyRow> = {}): RoomUtilizationMonthlyRow {
   return {
-    ready: true,
-    reasonCodes: [],
-    packageMixRows: 36,
-    scenarioDriverRows: 12,
-    activePhysicalRooms: 24,
-    seedSessionRows: 400,
-    weekendOnsiteSessionRows: 150,
-    weekendPreferenceBuckets: 18,
-    weekendDemandShare: 0.42,
-    generatedAt: "2026-05-15T00:00:00.000Z",
-    ...overrides,
+    month: overrides.month ?? "2026-03",
+    startDate: overrides.startDate ?? "2026-03-01",
+    endDate: overrides.endDate ?? "2026-03-31",
+    occupiedMinutes: overrides.occupiedMinutes ?? 12_000,
+    availableMinutes: overrides.availableMinutes ?? 48_000,
+    utilizationPct: overrides.utilizationPct ?? 25,
+    sessionCount: overrides.sessionCount ?? 200,
+    missingLocationCount: overrides.missingLocationCount ?? 2,
+    unknownRoomCount: overrides.unknownRoomCount ?? 1,
+    excludedStatusCount: overrides.excludedStatusCount ?? 5,
+    overlapMinutes: overrides.overlapMinutes ?? 60,
   };
 }
 
-function forecast(status: "ready" | "missing" = "ready", overrides: Partial<RoomCapacityForecastResponse> = {}): RoomCapacityForecastResponse {
+function roomRow(overrides: Partial<RoomUtilizationRoomRow> = {}): RoomUtilizationRoomRow {
   return {
-    model: {
-      status,
-      modelRunId: status === "ready" ? "model-1" : null,
-      sourceLabel: status === "ready" ? "Projection" : null,
-      forecastStart: status === "ready" ? "2026-06-01" : null,
-      forecastEnd: status === "ready" ? "2027-05-01" : null,
-      importedAt: status === "ready" ? "2026-05-15T00:00:00.000Z" : null,
-    },
-    scenario: "Base",
-    scenarios: ["Base", "Bear", "Bull"],
-    generatedAt: "2026-05-15T00:00:00.000Z",
-    weekdayResults: [
-      {
-        weekday: 1,
-        weekdayName: "Monday",
-        roomSlotFullDate: "2026-06-01",
-        roomTutorFullDate: "2026-06-08",
-        roomSlotReason: "No room slot",
-        roomTutorReason: "No qualified available tutor",
-      },
-    ],
-    weekendDemandBreakpoint: status === "ready" ? {
-      preferenceSource: "current_wise_schedule",
-      policy: "preferred_slot_only",
-      openHours: { startMinute: 420, endMinute: 1260 },
-      weekendDemandShare: 0.42,
-      combined: {
-        breakpointMonth: "2026-09-01",
-        status: "reached",
-        capturedRevenueThb: 240_000,
-        lostRevenueThb: 300_000,
-        lostRevenuePct: 0.556,
-        capturedStudents: 20,
-        lostStudents: 25,
-        remainingOpenCapacityMinutes: 4800,
-        topLostPreferredSlots: [
-          {
-            weekday: 6,
-            weekdayName: "Saturday",
-            startMinute: 600,
-            endMinute: 660,
-            label: "Saturday 10:00-11:00",
-            lostRevenueThb: 120_000,
-            lostStudents: 10,
-            attempts: 10,
-          },
-        ],
-        topOpenNonCapturedSlots: [
-          {
-            weekday: 0,
-            weekdayName: "Sunday",
-            startMinute: 420,
-            endMinute: 450,
-            label: "Sunday 07:00-07:30",
-            lostRevenueThb: 0,
-            lostStudents: 0,
-            attempts: 0,
-            remainingOpenCapacityMinutes: 900,
-          },
-        ],
-      },
-      byDay: [
-        {
-          weekday: 6,
-          weekdayName: "Saturday",
-          breakpointMonth: "2026-09-01",
-          status: "reached",
-          capturedRevenueThb: 120_000,
-          lostRevenueThb: 180_000,
-          lostRevenuePct: 0.6,
-          capturedStudents: 10,
-          lostStudents: 15,
-          remainingOpenCapacityMinutes: 1200,
-          topLostPreferredSlots: [],
-          topOpenNonCapturedSlots: [],
-        },
-      ],
-    } : null,
-    weekendDemandCaptureReadiness: status === "ready" ? readiness() : null,
-    monthlyDrivers: [],
-    ...overrides,
+    roomName: overrides.roomName ?? "Focus",
+    capacity: overrides.capacity ?? 2,
+    category: overrides.category ?? "standard",
+    occupiedMinutes: overrides.occupiedMinutes ?? 600,
+    availableMinutes: overrides.availableMinutes ?? 2_000,
+    utilizationPct: overrides.utilizationPct ?? 30,
+    sessionCount: overrides.sessionCount ?? 10,
+    overlapMinutes: overrides.overlapMinutes ?? 30,
   };
 }
 
-describe("room capacity dashboard components", () => {
-  it("renders weekly heatmap labels and load titles", () => {
+describe("room utilization dashboard components", () => {
+  it("renders daily macro utilization instead of a weekly load heatmap", () => {
     const html = renderToStaticMarkup(
-      <WeeklyHeatmap data={monthData()} source="current" weekOffset={0} onWeekOffsetChange={vi.fn()} />,
+      <DailyTrend rows={[
+        dailyRow({ date: "2026-03-02", weekday: 1, utilizationPct: 12 }),
+        dailyRow({ date: "2026-03-03", weekday: 2, utilizationPct: 115 }),
+      ]} />,
     );
 
-    expect(html).toContain("Weekly heatmap");
-    expect(html).toContain("Fri 15 May");
-    expect(html).toContain("09:00");
-    expect(html).toContain("2026-05-15 09:00 2/1");
+    expect(html).toContain("Daily utilization");
+    expect(html).toContain("2 Mar");
+    expect(html).toContain("3 Mar");
+    expect(html).not.toContain("Weekly heatmap");
+    expect(html).not.toContain("Peak room load");
   });
 
-  it("renders overcap drilldown without student names", () => {
-    const html = renderToStaticMarkup(<OvercapTable data={monthData()} />);
+  it("renders monthly utilization summary with occupied and available room-hours", () => {
+    const html = renderToStaticMarkup(<MonthlySummary rows={[monthlyRow()]} />);
 
-    expect(html).toContain("Current Wise overcaps");
-    expect(html).toContain("Tutor A, Tutor B");
-    expect(html).toContain("Math A, Science B");
-    expect(html).toContain("2/1");
-    expect(html).not.toContain("Student");
+    expect(html).toContain("Monthly utilization");
+    expect(html).toContain("Mar 2026");
+    expect(html).toContain("25%");
+    expect(html).toContain("200h");
+    expect(html).toContain("800h");
+    expect(html).toContain("200");
   });
 
-  it("renders forecast ready and missing states", () => {
-    const readyHtml = renderToStaticMarkup(
-      <ForecastPanel forecast={forecast()} scenario="Base" onScenarioChange={vi.fn()} />,
+  it("renders per-room utilization sorted table data and overlap minutes", () => {
+    const html = renderToStaticMarkup(
+      <RoomTable rows={[
+        roomRow({ roomName: "Relax (TV)", category: "standard", utilizationPct: 80, overlapMinutes: 120 }),
+        roomRow({ roomName: "I learned (online)", category: "online_only", utilizationPct: 10 }),
+      ]} />,
     );
-    const missingHtml = renderToStaticMarkup(
-      <ForecastPanel forecast={forecast("missing")} scenario="Base" onScenarioChange={vi.fn()} />,
-    );
 
-    expect(readyHtml).toContain("Weekend demand capture");
-    expect(readyHtml).toContain("Breakpoint month");
-    expect(readyHtml).toContain("Model inputs");
-    expect(readyHtml).toContain("Package mix rows");
-    expect(readyHtml).toContain("Sept 2026");
-    expect(readyHtml).toContain("Preferred slots losing the most revenue");
-    expect(readyHtml).toContain("Saturday 10:00-11:00");
-    expect(missingHtml).toContain("Forecast aggregates have not been imported yet");
-  });
-
-  it("renders not-reached weekend capture as metrics instead of fallback", () => {
-    const data = forecast("ready", {
-      weekendDemandBreakpoint: {
-        preferenceSource: "current_wise_schedule",
-        policy: "preferred_slot_only",
-        openHours: { startMinute: 420, endMinute: 1260 },
-        weekendDemandShare: 0.42,
-        combined: {
-          breakpointMonth: null,
-          status: "not_reached",
-          capturedRevenueThb: 100_000,
-          lostRevenueThb: 0,
-          lostRevenuePct: 0,
-          capturedStudents: 10,
-          lostStudents: 0,
-          remainingOpenCapacityMinutes: 0,
-          topLostPreferredSlots: [],
-          topOpenNonCapturedSlots: [],
-        },
-        byDay: [],
-      },
-      weekendDemandCaptureReadiness: readiness(),
-    });
-    const html = renderToStaticMarkup(<ForecastPanel forecast={data} scenario="Base" onScenarioChange={vi.fn()} />);
-
-    expect(html).toContain("Breakpoint month");
-    expect(html).toContain("Captured revenue");
-    expect(html).not.toContain("Weekend demand capture is not ready");
-  });
-
-  it("renders package-mix readiness diagnostics", () => {
-    const data = forecast("ready", {
-      weekendDemandBreakpoint: null,
-      weekendDemandCaptureReadiness: readiness({
-        ready: false,
-        reasonCodes: ["missing_package_mix"],
-        packageMixRows: 0,
-      }),
-    });
-    const html = renderToStaticMarkup(<ForecastPanel forecast={data} scenario="Base" onScenarioChange={vi.fn()} />);
-
-    expect(html).toContain("Weekend demand capture is not ready");
-    expect(html).toContain("Package mix rows are missing");
-    expect(html).toContain("Package mix rows");
-  });
-
-  it("renders weekend schedule readiness diagnostics", () => {
-    const data = forecast("ready", {
-      weekendDemandBreakpoint: null,
-      weekendDemandCaptureReadiness: readiness({
-        ready: false,
-        reasonCodes: ["no_weekend_onsite_schedule"],
-        weekendOnsiteSessionRows: 0,
-        weekendPreferenceBuckets: 0,
-        weekendDemandShare: 0,
-      }),
-    });
-    const html = renderToStaticMarkup(<ForecastPanel forecast={data} scenario="Base" onScenarioChange={vi.fn()} />);
-
-    expect(html).toContain("No Saturday/Sunday onsite schedule frequency was found");
-    expect(html).toContain("Weekend onsite rows");
+    expect(html).toContain("Per-room utilization");
+    expect(html).toContain("Relax (TV)");
+    expect(html).toContain("I learned (online)");
+    expect(html).toContain("online only");
+    expect(html).toContain("80%");
+    expect(html).toContain("2h");
   });
 });

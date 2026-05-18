@@ -218,6 +218,67 @@ export interface WeekendDemandBreakpoint {
   byDay: WeekendDemandBreakpointResult[];
 }
 
+export interface RoomUtilizationMetric {
+  occupiedMinutes: number;
+  availableMinutes: number;
+  utilizationPct: number;
+  sessionCount: number;
+}
+
+export interface RoomUtilizationDailyRow extends RoomUtilizationMetric {
+  date: string;
+  weekday: number;
+  missingLocationCount: number;
+  unknownRoomCount: number;
+  excludedStatusCount: number;
+  overlapMinutes: number;
+}
+
+export interface RoomUtilizationMonthlyRow extends RoomUtilizationMetric {
+  month: string;
+  startDate: string;
+  endDate: string;
+  missingLocationCount: number;
+  unknownRoomCount: number;
+  excludedStatusCount: number;
+  overlapMinutes: number;
+}
+
+export interface RoomUtilizationRoomRow extends RoomUtilizationMetric {
+  roomName: string;
+  capacity: number;
+  category: "standard" | "overflow_only" | "online_only";
+  overlapMinutes: number;
+}
+
+export interface RoomUtilizationDataQuality {
+  missingLocationCount: number;
+  missingLocationMinutes: number;
+  unknownRoomCount: number;
+  unknownRoomMinutes: number;
+  excludedStatusCount: number;
+  excludedStatusMinutes: number;
+  overlapMinutes: number;
+}
+
+export interface RoomUtilizationResponse {
+  range: {
+    startDate: string;
+    endDate: string;
+    generatedAt: string;
+    openStartMinute: number;
+    openEndMinute: number;
+  };
+  lastSyncedAt: string | null;
+  summary: RoomUtilizationMetric & {
+    activeRoomCount: number;
+  };
+  daily: RoomUtilizationDailyRow[];
+  monthly: RoomUtilizationMonthlyRow[];
+  rooms: RoomUtilizationRoomRow[];
+  dataQuality: RoomUtilizationDataQuality;
+}
+
 export type WeekendDemandCaptureReadinessReasonCode =
   | "missing_package_mix"
   | "missing_scenario_drivers"

@@ -3,6 +3,7 @@ import { WiseClient } from "../client";
 import {
   checkTeacherAvailabilityForSessions,
   fetchAllFutureSessions,
+  fetchAllInstituteSessions,
   fetchAllTeachers,
   fetchInstituteLocations,
   fetchTeacherAvailability,
@@ -154,6 +155,48 @@ describe("Wise fetchers", () => {
     expect(firstUrl.searchParams.get("paginateBy")).toBe("COUNT");
     expect(firstUrl.searchParams.get("page_number")).toBe("1");
     expect(firstUrl.searchParams.get("page_size")).toBe("1000");
+  });
+
+  it("paginates all institute sessions without status filter", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            status: 200,
+            data: {
+              sessions: [{ _id: "feb", scheduledStartTime: "2026-02-28T17:00:00.000Z" }],
+              page_number: 1,
+              page_count: 2,
+              totalRecords: 2,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            status: 200,
+            data: {
+              sessions: [{ _id: "mar", scheduledStartTime: "2026-03-01T03:00:00.000Z" }],
+              page_number: 2,
+              page_count: 2,
+              totalRecords: 2,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    global.fetch = fetchMock as typeof fetch;
+
+    const sessions = await fetchAllInstituteSessions(makeClient(), "center-1");
+
+    expect(sessions.map((session) => session._id)).toEqual(["feb", "mar"]);
+    const firstUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(firstUrl.pathname).toBe("/institutes/center-1/sessions");
+    expect(firstUrl.searchParams.get("status")).toBeNull();
+    expect(firstUrl.searchParams.get("paginateBy")).toBe("COUNT");
   });
 
   it("fetches institute location strings from data.locations", async () => {
