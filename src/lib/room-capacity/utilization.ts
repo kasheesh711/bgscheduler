@@ -24,6 +24,33 @@ export const ROOM_UTILIZATION_OPEN_MINUTES =
   ROOM_UTILIZATION_OPEN_END_MINUTE - ROOM_UTILIZATION_OPEN_START_MINUTE;
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const ALL_WEEKDAYS = [0, 1, 2, 3, 4, 5, 6] as const;
+const WEEKDAY_TOKEN_TO_VALUE = new Map<string, number>([
+  ["0", 0],
+  ["sun", 0],
+  ["sunday", 0],
+  ["1", 1],
+  ["mon", 1],
+  ["monday", 1],
+  ["2", 2],
+  ["tue", 2],
+  ["tues", 2],
+  ["tuesday", 2],
+  ["3", 3],
+  ["wed", 3],
+  ["wednesday", 3],
+  ["4", 4],
+  ["thu", 4],
+  ["thur", 4],
+  ["thurs", 4],
+  ["thursday", 4],
+  ["5", 5],
+  ["fri", 5],
+  ["friday", 5],
+  ["6", 6],
+  ["sat", 6],
+  ["saturday", 6],
+]);
 const INSERT_CHUNK_SIZE = 500;
 const COUNTED_STATUSES = new Set(["ENDED", "IN_PROGRESS", "UPCOMING"]);
 const EXCLUDED_STATUSES = new Set(["CANCELLED", "CANCELED", "MISSED", "NO_SHOW"]);
@@ -82,6 +109,25 @@ export function normalizeUtilizationRoomLabel(value: string | null | undefined):
   return normalized || null;
 }
 
+export function parseUtilizationWeekdays(value: string | null | undefined): number[] | undefined {
+  const raw = String(value ?? "").trim();
+  if (!raw) return undefined;
+  const weekdays = new Set<number>();
+  for (const token of raw.split(",")) {
+    const normalized = token.trim().toLowerCase();
+    if (!normalized) continue;
+    const weekday = WEEKDAY_TOKEN_TO_VALUE.get(normalized);
+    if (weekday === undefined) {
+      throw new Error("Invalid weekdays. Expected comma-separated weekday numbers 0-6 or names.");
+    }
+    weekdays.add(weekday);
+  }
+  if (weekdays.size === 0) {
+    throw new Error("Invalid weekdays. Expected at least one weekday.");
+  }
+  return [...weekdays].sort((left, right) => left - right);
+}
+
 export function isCountedUtilizationStatus(value: string | null | undefined): boolean {
   return COUNTED_STATUSES.has(String(value ?? "").toUpperCase());
 }
@@ -112,6 +158,15 @@ function emptyMetric(availableMinutes = 0): RoomUtilizationMetric {
 function finalizeMetric<T extends RoomUtilizationMetric>(metric: T): T {
   metric.utilizationPct = percentage(metric.occupiedMinutes, metric.availableMinutes);
   return metric;
+}
+
+function selectedWeekdays(weekdays: number[] | null | undefined): number[] {
+  if (!weekdays?.length) return [...ALL_WEEKDAYS];
+  const unique = [...new Set(weekdays)];
+  if (unique.some((weekday) => !Number.isInteger(weekday) || weekday < 0 || weekday > 6)) {
+    throw new Error("Invalid weekdays. Expected weekday values from 0 to 6.");
+  }
+  return unique.sort((left, right) => left - right);
 }
 
 function clippedInterval(row: Pick<RoomUtilizationSession, "startMinute" | "endMinute">): { startMinute: number; endMinute: number; minutes: number } {
@@ -174,6 +229,7 @@ export function aggregateRoomUtilization(input: {
   rooms: Pick<ClassroomRoom, "name" | "capacity" | "category" | "active" | "sortOrder">[];
   startDate: string;
   endDate: string;
+  weekdays?: number[] | null;
   lastSyncedAt?: Date | string | null;
   generatedAt?: Date;
 }): RoomUtilizationResponse {
@@ -183,7 +239,9 @@ export function aggregateRoomUtilization(input: {
     throw new Error("Invalid date range. startDate must be before or equal to endDate.");
   }
 
-  const dates = datesBetweenBangkok(startDate, endDate);
+  const weekdays = selectedWeekdays(input.weekdays);
+  const weekdaySet = new Set(weekdays);
+  const dates = datesBetweenBangkok(startDate, endDate).filter((date) => weekdaySet.has(bangkokWeekday(date)));
   const activeRooms = activeRoomEntries(input.rooms);
   const activeRoomCount = activeRooms.length;
   const availablePerDay = activeRoomCount * ROOM_UTILIZATION_OPEN_MINUTES;
@@ -326,6 +384,7 @@ export function aggregateRoomUtilization(input: {
       generatedAt: (input.generatedAt ?? new Date()).toISOString(),
       openStartMinute: ROOM_UTILIZATION_OPEN_START_MINUTE,
       openEndMinute: ROOM_UTILIZATION_OPEN_END_MINUTE,
+      weekdays,
     },
     lastSyncedAt: input.lastSyncedAt ? new Date(input.lastSyncedAt).toISOString() : null,
     summary,
@@ -414,7 +473,7 @@ export async function syncRoomUtilizationSessions(
 
 export async function getRoomUtilization(
   db: Database,
-  input: { startDate?: string | null; endDate?: string | null } = {},
+  input: { startDate?: string | null; endDate?: string | null; weekdays?: number[] | null } = {},
 ): Promise<RoomUtilizationResponse> {
   const defaults = defaultRoomUtilizationRange();
   const startDate = assertUtilizationDate(input.startDate ?? defaults.startDate, "startDate");
@@ -442,6 +501,7 @@ export async function getRoomUtilization(
     rooms,
     startDate,
     endDate,
+    weekdays: input.weekdays,
     lastSyncedAt: lastSyncRows[0]?.lastSyncedAt ?? null,
   });
 }

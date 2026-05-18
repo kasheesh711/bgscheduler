@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { DailyTrend, MonthlySummary, RoomTable } from "../room-capacity-dashboard";
+import { DailyTrend, MonthlySummary, RoomTable, WeekdayFilter } from "../room-capacity-dashboard";
 import type {
   RoomUtilizationDailyRow,
   RoomUtilizationMonthlyRow,
@@ -92,5 +92,18 @@ describe("room utilization dashboard components", () => {
     expect(html).toContain("online only");
     expect(html).toContain("80%");
     expect(html).toContain("2h");
+  });
+
+  it("renders weekday filter controls", () => {
+    const html = renderToStaticMarkup(
+      <WeekdayFilter selectedWeekdays={[1, 3, 6]} onChange={() => undefined} />,
+    );
+
+    expect(html).toContain("Days");
+    expect(html).toContain("All");
+    expect(html).toContain("Mon");
+    expect(html).toContain("Wed");
+    expect(html).toContain("Sat");
+    expect(html).toContain("aria-pressed=\"true\"");
   });
 });

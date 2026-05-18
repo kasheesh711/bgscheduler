@@ -7,9 +7,15 @@ vi.mock("@/lib/room-capacity/data", () => ({
   getRoomCapacityMonth: vi.fn(),
   getRoomCapacityForecast: vi.fn(),
 }));
-vi.mock("@/lib/room-capacity/utilization", () => ({
-  getRoomUtilization: vi.fn(),
-}));
+vi.mock("@/lib/room-capacity/utilization", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/room-capacity/utilization")>(
+    "@/lib/room-capacity/utilization",
+  );
+  return {
+    ...actual,
+    getRoomUtilization: vi.fn(),
+  };
+});
 
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
@@ -90,6 +96,7 @@ const utilizationResponse = {
     generatedAt: "2026-05-18T00:00:00.000Z",
     openStartMinute: 420,
     openEndMinute: 1260,
+    weekdays: [0, 1, 2, 3, 4, 5, 6],
   },
   lastSyncedAt: "2026-05-18T00:00:00.000Z",
   summary: {
@@ -195,7 +202,7 @@ describe("room capacity API routes", () => {
     const res = await getUtilization(new NextRequest("http://test.local/api/room-capacity/utilization"));
 
     expect(res.status).toBe(200);
-    expect(getRoomUtilization).toHaveBeenCalledWith({ db: true }, { startDate: null, endDate: null });
+    expect(getRoomUtilization).toHaveBeenCalledWith({ db: true }, { startDate: null, endDate: null, weekdays: undefined });
     await expect(res.json()).resolves.toMatchObject({
       summary: { utilizationPct: 25, activeRoomCount: 24 },
       dataQuality: { missingLocationCount: 1, overlapMinutes: 30 },
@@ -210,7 +217,19 @@ describe("room capacity API routes", () => {
     expect(res.status).toBe(200);
     expect(getRoomUtilization).toHaveBeenCalledWith(
       { db: true },
-      { startDate: "2026-03-01", endDate: "2026-03-31" },
+      { startDate: "2026-03-01", endDate: "2026-03-31", weekdays: undefined },
+    );
+  });
+
+  it("passes utilization weekday filters", async () => {
+    const res = await getUtilization(
+      new NextRequest("http://test.local/api/room-capacity/utilization?weekdays=mon,wed,6"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(getRoomUtilization).toHaveBeenCalledWith(
+      { db: true },
+      { startDate: null, endDate: null, weekdays: [1, 3, 6] },
     );
   });
 
@@ -224,6 +243,17 @@ describe("room capacity API routes", () => {
     expect(res.status).toBe(400);
     await expect(res.json()).resolves.toEqual({
       error: "Invalid date range. startDate must be before or equal to endDate.",
+    });
+  });
+
+  it("returns 400 for invalid utilization weekdays", async () => {
+    const res = await getUtilization(
+      new NextRequest("http://test.local/api/room-capacity/utilization?weekdays=mon,funday"),
+    );
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      error: "Invalid weekdays. Expected comma-separated weekday numbers 0-6 or names.",
     });
   });
 });

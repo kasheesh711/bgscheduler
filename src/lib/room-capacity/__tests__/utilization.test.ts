@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateRoomUtilization,
+  parseUtilizationWeekdays,
   ROOM_UTILIZATION_OPEN_MINUTES,
   wiseSessionToUtilizationRow,
   type RoomUtilizationSession,
@@ -47,6 +48,7 @@ describe("room utilization aggregation", () => {
     expect(result.summary.availableMinutes).toBe(3 * ROOM_UTILIZATION_OPEN_MINUTES);
     expect(result.summary.occupiedMinutes).toBe(60);
     expect(result.summary.utilizationPct).toBe(2.4);
+    expect(result.range.weekdays).toEqual([0, 1, 2, 3, 4, 5, 6]);
   });
 
   it("excludes cancelled and missed statuses from occupied minutes", () => {
@@ -113,6 +115,31 @@ describe("room utilization aggregation", () => {
     expect(result.summary.occupiedMinutes).toBe(180);
     expect(result.dataQuality.overlapMinutes).toBe(60);
     expect(result.rooms.find((roomResult) => roomResult.roomName === "Focus")?.overlapMinutes).toBe(60);
+  });
+
+  it("filters denominator and sessions by selected weekdays", () => {
+    const result = aggregateRoomUtilization({
+      rows: [
+        row({ wiseSessionId: "monday" }),
+        row({ wiseSessionId: "saturday", utilizationDate: "2026-03-07", weekday: 6 }),
+      ],
+      rooms,
+      startDate: "2026-03-02",
+      endDate: "2026-03-07",
+      weekdays: [1],
+    });
+
+    expect(result.range.weekdays).toEqual([1]);
+    expect(result.daily.map((day) => day.date)).toEqual(["2026-03-02"]);
+    expect(result.summary.availableMinutes).toBe(3 * ROOM_UTILIZATION_OPEN_MINUTES);
+    expect(result.summary.occupiedMinutes).toBe(60);
+    expect(result.summary.sessionCount).toBe(1);
+  });
+
+  it("parses weekday filter tokens", () => {
+    expect(parseUtilizationWeekdays("mon,3,sunday")).toEqual([0, 1, 3]);
+    expect(parseUtilizationWeekdays(null)).toBeUndefined();
+    expect(() => parseUtilizationWeekdays("monday,funday")).toThrow("Invalid weekdays");
   });
 
   it("derives Bangkok date and room label from Wise sessions without keeping PII fields", () => {

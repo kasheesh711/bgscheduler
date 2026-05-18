@@ -29,6 +29,17 @@ import type {
   RoomUtilizationRoomRow,
 } from "@/lib/room-capacity/types";
 
+const WEEKDAY_FILTER_OPTIONS = [
+  { value: 1, label: "Mon" },
+  { value: 2, label: "Tue" },
+  { value: 3, label: "Wed" },
+  { value: 4, label: "Thu" },
+  { value: 5, label: "Fri" },
+  { value: 6, label: "Sat" },
+  { value: 0, label: "Sun" },
+];
+const ALL_WEEKDAY_FILTER_VALUES = [0, 1, 2, 3, 4, 5, 6];
+
 function formatPercent(value: number): string {
   return `${value.toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
 }
@@ -120,7 +131,11 @@ function UtilizationBar({ value }: { value: number }) {
 }
 
 function metricRangeLabel(data: RoomUtilizationResponse): string {
-  return `${formatDate(data.range.startDate)} to ${formatDate(data.range.endDate)} · ${minuteToTimeLabel(data.range.openStartMinute)}-${minuteToTimeLabel(data.range.openEndMinute)} daily`;
+  const selectedWeekdays = new Set(data.range.weekdays);
+  const dayLabel = data.range.weekdays.length === 7
+    ? "All days"
+    : WEEKDAY_FILTER_OPTIONS.filter((option) => selectedWeekdays.has(option.value)).map((option) => option.label).join(", ");
+  return `${formatDate(data.range.startDate)} to ${formatDate(data.range.endDate)} · ${minuteToTimeLabel(data.range.openStartMinute)}-${minuteToTimeLabel(data.range.openEndMinute)} · ${dayLabel}`;
 }
 
 export function DailyTrend({ rows }: { rows: RoomUtilizationDailyRow[] }) {
@@ -264,19 +279,83 @@ function overallDetail(metric: RoomUtilizationMetric): string {
   return `${formatHours(metric.occupiedMinutes)} used of ${formatHours(metric.availableMinutes)}`;
 }
 
+function sortWeekdays(values: number[]): number[] {
+  return [...new Set(values)].sort((left, right) => left - right);
+}
+
+export function WeekdayFilter({
+  selectedWeekdays,
+  onChange,
+  disabled = false,
+}: {
+  selectedWeekdays: number[];
+  onChange: (weekdays: number[]) => void;
+  disabled?: boolean;
+}) {
+  const selected = new Set(selectedWeekdays);
+  const allSelected = selected.size === 7;
+
+  function toggleWeekday(weekday: number) {
+    if (selected.has(weekday)) {
+      const next = selectedWeekdays.filter((value) => value !== weekday);
+      onChange(next.length ? sortWeekdays(next) : ALL_WEEKDAY_FILTER_VALUES);
+    } else {
+      onChange(sortWeekdays([...selectedWeekdays, weekday]));
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border bg-card px-2 py-1.5">
+      <span className="px-1 text-xs font-medium text-muted-foreground">Days</span>
+      <Button
+        type="button"
+        size="xs"
+        variant={allSelected ? "default" : "outline"}
+        aria-pressed={allSelected}
+        disabled={disabled}
+        onClick={() => onChange(ALL_WEEKDAY_FILTER_VALUES)}
+      >
+        All
+      </Button>
+      {WEEKDAY_FILTER_OPTIONS.map((option) => {
+        const isSelected = selected.has(option.value);
+        return (
+          <Button
+            key={option.value}
+            type="button"
+            size="xs"
+            variant={isSelected && !allSelected ? "secondary" : "outline"}
+            aria-pressed={isSelected}
+            disabled={disabled}
+            onClick={() => toggleWeekday(option.value)}
+          >
+            {option.label}
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function RoomCapacityDashboard() {
   const [data, setData] = useState<RoomUtilizationResponse | null>(null);
+  const [selectedWeekdays, setSelectedWeekdays] = useState<number[]>(ALL_WEEKDAY_FILTER_VALUES);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     setError(null);
-    const response = await fetch("/api/room-capacity/utilization");
+    const params = new URLSearchParams();
+    if (selectedWeekdays.length !== 7) {
+      params.set("weekdays", selectedWeekdays.join(","));
+    }
+    const query = params.toString();
+    const response = await fetch(`/api/room-capacity/utilization${query ? `?${query}` : ""}`);
     const body = await response.json();
     if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
     setData(body as RoomUtilizationResponse);
-  }, []);
+  }, [selectedWeekdays]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -349,7 +428,12 @@ export function RoomCapacityDashboard() {
             <span>Last synced {formatDateTime(data.lastSyncedAt)}</span>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <WeekdayFilter
+            selectedWeekdays={selectedWeekdays}
+            onChange={setSelectedWeekdays}
+            disabled={loading || syncing}
+          />
           <Button type="button" variant="outline" size="sm" onClick={() => void refresh()} disabled={loading || syncing}>
             <RefreshCw className={`mr-2 size-4 ${loading ? "animate-spin" : ""}`} />
             Refresh

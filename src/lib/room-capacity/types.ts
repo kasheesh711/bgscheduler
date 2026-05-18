@@ -268,6 +268,7 @@ export interface RoomUtilizationResponse {
     generatedAt: string;
     openStartMinute: number;
     openEndMinute: number;
+    weekdays: number[];
   };
   lastSyncedAt: string | null;
   summary: RoomUtilizationMetric & {
