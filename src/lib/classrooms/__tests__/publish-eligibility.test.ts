@@ -19,7 +19,7 @@ import { DEFAULT_CLASSROOM_ROOMS } from "../rooms";
 
 const baseRow = {
   status: "assigned" as const,
-  assignedRoom: "Joy",
+  assignedRoom: "Joy (TV)",
   sessionType: "OFFLINE",
   wiseClassId: "class-1",
   wiseSessionId: "session-1",
@@ -116,7 +116,7 @@ describe("publish job progress", () => {
 describe("Wise publish location catalog", () => {
   it("resolves TV rooms to exact Wise (TV) locations before calling Wise", async () => {
     const catalog = buildWisePublishLocationCatalog(DEFAULT_CLASSROOM_ROOMS, ["Remember (TV)"]);
-    const resolved = resolveWisePublishLocation(catalog, "Remember");
+    const resolved = resolveWisePublishLocation(catalog, "Remember (TV)");
     expect(resolved).toEqual({ ok: true, location: "Remember (TV)" });
     expect(wisePublishLocationName({ name: "Remember (TV)", hasTv: true })).toBe("Remember (TV)");
 
@@ -151,9 +151,9 @@ describe("Wise publish location catalog", () => {
   it("uses verified Wise publish names for temporary swap candidates", () => {
     const catalog = buildWisePublishLocationCatalog(
       [
-        { name: "Remember", hasTv: true, capacity: 2, category: "standard", active: true, sortOrder: 1 },
+        { name: "Remember (TV)", hasTv: true, capacity: 2, category: "standard", active: true, sortOrder: 1 },
         { name: "Focus", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 2 },
-        { name: "Doubt", hasTv: true, capacity: 2, category: "standard", active: true, sortOrder: 3 },
+        { name: "Doubt (TV)", hasTv: true, capacity: 2, category: "standard", active: true, sortOrder: 3 },
       ],
       ["Remember (TV)", "Focus"],
     );
@@ -161,23 +161,23 @@ describe("Wise publish location catalog", () => {
     expect(catalog.temporaryLocations).toEqual(["Remember (TV)", "Focus"]);
     expect(catalog.temporaryLocations).not.toContain("Remember");
     expect(catalog.temporaryLocations).not.toContain("Doubt");
-    expect(resolveWisePublishLocation(catalog, "Doubt")).toEqual({
+    expect(resolveWisePublishLocation(catalog, "Doubt (TV)")).toEqual({
       ok: false,
-      reason: "Verified Wise location Doubt (TV) is missing for assigned room Doubt",
+      reason: "Verified Wise location Doubt (TV) is missing for assigned room Doubt (TV)",
     });
   });
 
   it("fails closed when the exact Wise location is missing", async () => {
     const catalog = buildWisePublishLocationCatalog(
-      [{ name: "Joy", hasTv: true, capacity: 3, category: "standard", active: true, sortOrder: 1 }],
+      [{ name: "Joy (TV)", hasTv: true, capacity: 3, category: "standard", active: true, sortOrder: 1 }],
       ["Joy"],
     );
     const updateLocation = vi.fn();
-    const resolved = resolveWisePublishLocation(catalog, "Joy");
+    const resolved = resolveWisePublishLocation(catalog, "Joy (TV)");
 
     expect(resolved).toEqual({
       ok: false,
-      reason: "Verified Wise location Joy (TV) is missing for assigned room Joy",
+      reason: "Verified Wise location Joy (TV) is missing for assigned room Joy (TV)",
     });
     if (resolved.ok) {
       await updateWiseLocationOnly(
@@ -209,7 +209,7 @@ describe("findPublishRoomBlockers", () => {
       id: "target",
       tutorDisplayName: "Target",
       currentWiseLocation: "Doubt",
-      assignedRoom: "Remember",
+      assignedRoom: "Remember (TV)",
       startMinute: 600,
       endMinute: 660,
     };
@@ -230,7 +230,7 @@ describe("findPublishRoomBlockers", () => {
       id: "target",
       tutorDisplayName: "Target",
       currentWiseLocation: "Doubt",
-      assignedRoom: "Remember",
+      assignedRoom: "Remember (TV)",
       startMinute: 600,
       endMinute: 660,
     };
@@ -253,7 +253,7 @@ describe("findTemporaryPublishLocation", () => {
       id: "target",
       tutorDisplayName: "Target",
       currentWiseLocation: "Cool",
-      assignedRoom: "Remember",
+      assignedRoom: "Remember (TV)",
       startMinute: 600,
       endMinute: 660,
     };
@@ -269,16 +269,16 @@ describe("findTemporaryPublishLocation", () => {
       id: "assigned",
       tutorDisplayName: "Assigned",
       currentWiseLocation: "Doubt",
-      assignedRoom: "Joy",
+      assignedRoom: "Joy (TV)",
       startMinute: 630,
       endMinute: 690,
     };
 
     expect(findTemporaryPublishLocation(row, [row, occupiedCurrent, occupiedAssigned], [
       "Dream. Plan. Do.",
-      "Joy",
-      "Iconic",
-    ])).toBe("Iconic");
+      "Joy (TV)",
+      "Iconic (TV)",
+    ])).toBe("Iconic (TV)");
   });
 });
 
@@ -296,7 +296,7 @@ describe("orderTemporaryPublishCandidates", () => {
       id: "actual-blocker",
       tutorDisplayName: "Blocker",
       currentWiseLocation: "Do It",
-      assignedRoom: "Here There",
+      assignedRoom: "Here There (TV)",
       startMinute: 750,
       endMinute: 840,
     };
@@ -304,7 +304,7 @@ describe("orderTemporaryPublishCandidates", () => {
       id: "downstream",
       tutorDisplayName: "Downstream",
       currentWiseLocation: "Here There",
-      assignedRoom: "Remember",
+      assignedRoom: "Remember (TV)",
       startMinute: 780,
       endMinute: 840,
     };
@@ -323,10 +323,10 @@ describe("updateWiseLocationOnly", () => {
     await expect(updateWiseLocationOnly(
       updateLocation,
       { wiseClassId: "class-1", wiseSessionId: "session-1" },
-      "Remember",
+      "Remember (TV)",
     )).resolves.toBeNull();
 
-    expect(updateLocation).toHaveBeenCalledWith("class-1", "session-1", "Remember");
+    expect(updateLocation).toHaveBeenCalledWith("class-1", "session-1", "Remember (TV)");
   });
 
   it("returns the raw Wise PUT error when location update is rejected", async () => {
@@ -335,7 +335,7 @@ describe("updateWiseLocationOnly", () => {
     await expect(updateWiseLocationOnly(
       updateLocation,
       { wiseClassId: "class-1", wiseSessionId: "session-1" },
-      "Remember",
+      "Remember (TV)",
     )).resolves.toBe("Wise API 422: invalid location");
   });
 

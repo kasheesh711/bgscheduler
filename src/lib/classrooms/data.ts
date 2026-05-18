@@ -16,6 +16,7 @@ import {
 import {
   DEFAULT_CLASSROOM_ROOMS,
   NO_ROOM_AVAILABLE,
+  TV_ROOM_NAME_BY_PHYSICAL_NAME,
   type ClassroomRoomDefinition,
 } from "./rooms";
 
@@ -280,7 +281,8 @@ export function orderTemporaryPublishCandidates<T extends PublishDependencyRow>(
 
 export async function ensureDefaultClassroomRooms(db: Database): Promise<void> {
   const existingRows = await db.select().from(schema.classroomRooms);
-  const existingNames = new Set(existingRows.map((row) => row.name));
+  const existingByName = new Map(existingRows.map((row) => [row.name, row]));
+  const existingNames = new Set(existingByName.keys());
   const now = new Date();
 
   const missingRows: Array<typeof schema.classroomRooms.$inferInsert> = DEFAULT_CLASSROOM_ROOMS
@@ -300,6 +302,39 @@ export async function ensureDefaultClassroomRooms(db: Database): Promise<void> {
     await db.insert(schema.classroomRooms).values(missingRows).onConflictDoNothing({
       target: schema.classroomRooms.name,
     });
+  }
+
+  for (const room of DEFAULT_CLASSROOM_ROOMS) {
+    const existing = existingByName.get(room.name);
+    if (!existing) continue;
+    if (
+      existing.hasTv !== room.hasTv ||
+      existing.capacity !== room.capacity ||
+      existing.category !== room.category ||
+      existing.active !== room.active ||
+      existing.sortOrder !== room.sortOrder
+    ) {
+      await db
+        .update(schema.classroomRooms)
+        .set({
+          hasTv: room.hasTv,
+          capacity: room.capacity,
+          category: room.category,
+          active: room.active,
+          sortOrder: room.sortOrder,
+          updatedAt: now,
+        })
+        .where(eq(schema.classroomRooms.name, room.name));
+    }
+  }
+
+  for (const physicalRoom of TV_ROOM_NAME_BY_PHYSICAL_NAME.keys()) {
+    const existing = existingByName.get(physicalRoom);
+    if (!existing?.active) continue;
+    await db
+      .update(schema.classroomRooms)
+      .set({ active: false, updatedAt: now })
+      .where(eq(schema.classroomRooms.name, physicalRoom));
   }
 }
 

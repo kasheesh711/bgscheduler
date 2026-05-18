@@ -71,6 +71,13 @@
       "when": 1779120000000,
       "tag": "0011_room_utilization_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1779123600000,
+      "tag": "0012_adopt_tv_room_names",
+      "breakpoints": true
     }
   ]
 }

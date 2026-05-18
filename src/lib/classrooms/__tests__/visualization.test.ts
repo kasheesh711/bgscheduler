@@ -99,14 +99,25 @@ describe("classroom visualization helpers", () => {
 
   it("uses studentCount before minCapacity for room load ratio", () => {
     const state = buildRoomOccupancyState(
-      [row({ assignedRoom: "Relax", studentCount: 4, minCapacity: 1 })],
+      [row({ assignedRoom: "Relax (TV)", studentCount: 4, minCapacity: 1 })],
       rooms(),
       9 * 60 + 15,
     );
 
-    const relax = state.rooms.find((room) => room.room.name === "Relax");
+    const relax = state.rooms.find((room) => room.room.name === "Relax (TV)");
     expect(relax?.load).toBe(4);
     expect(relax?.loadRatio).toBe(0.5);
+  });
+
+  it("keeps canonical TV rooms in their physical room lanes", () => {
+    const state = buildRoomOccupancyState(
+      [row({ assignedRoom: "Remember (TV)" })],
+      rooms(),
+      9 * 60 + 15,
+    );
+
+    expect(state.rooms.find((room) => room.room.name === "Remember (TV)")?.activeRows).toHaveLength(1);
+    expect(state.reviewRows).toHaveLength(0);
   });
 
   it("routes no-room, unknown-room, and warning rows to review instead of physical rooms", () => {
