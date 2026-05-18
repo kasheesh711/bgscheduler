@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  createResendScheduleEmailSender,
+  createAppsScriptScheduleEmailSender,
   getScheduleEmailPreview,
   sendScheduleEmailsForRun,
 } from "../schedule-email";
@@ -102,8 +102,9 @@ function makePreviewDb(input: {
 
 describe("schedule email preview", () => {
   beforeEach(() => {
-    vi.stubEnv("RESEND_API_KEY", "re_test");
-    vi.stubEnv("SCHEDULE_EMAIL_FROM", "BeGifted <schedule@example.com>");
+    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_URL", "https://script.google.com/macros/s/test/exec");
+    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_SECRET", "secret-1");
+    vi.stubEnv("SCHEDULE_EMAIL_PUBLIC_BASE_URL", "https://schedule.example.com");
   });
 
   afterEach(() => {
@@ -139,6 +140,14 @@ describe("schedule email preview", () => {
     expect(preview.blockedCount).toBe(0);
     expect(preview.recipients).toHaveLength(1);
     expect(preview.previews[0].blocks.map((block) => block.room)).toContain("Remote / no room needed");
+    expect(preview.previews[0].roomSteps).toEqual([
+      { order: 1, time: "16:00-17:00", room: "Focus" },
+    ]);
+    expect(preview.previews[0].mapImageUrl).toBe("https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus");
+    expect(preview.previews[0].html).toContain("School map");
+    expect(preview.previews[0].html).toContain("https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus");
+    expect(preview.previews[0].text).toContain("Room route:");
+    expect(preview.previews[0].text).toContain("Map: https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus");
   });
 
   it("formats schedule blocks from Bangkok minute columns", async () => {
@@ -161,6 +170,31 @@ describe("schedule email preview", () => {
     const preview = await getScheduleEmailPreview(db as never, "run-1");
 
     expect(preview.previews[0].blocks[0].time).toBe("09:00-10:00");
+  });
+
+  it("blocks on missing Apps Script config without requiring Resend config", async () => {
+    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_URL", "");
+    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_SECRET", "");
+    vi.stubEnv("RESEND_API_KEY", "");
+    vi.stubEnv("SCHEDULE_EMAIL_FROM", "");
+    const db = makePreviewDb({
+      rows: [row()],
+      contacts: [{
+        canonicalKey: "Kevin",
+        onsiteEmail: "kevhsh7@gmail.com",
+        active: true,
+      }],
+    });
+
+    const preview = await getScheduleEmailPreview(db as never, "run-1");
+
+    const messages = preview.hardBlockers.map((blocker) => blocker.message);
+    expect(messages).toEqual([
+      "SCHEDULE_EMAIL_APPS_SCRIPT_URL is not configured.",
+      "SCHEDULE_EMAIL_APPS_SCRIPT_SECRET is not configured.",
+    ]);
+    expect(messages.join(" ")).not.toContain("RESEND_API_KEY");
+    expect(messages.join(" ")).not.toContain("SCHEDULE_EMAIL_FROM");
   });
 
   it("blocks sending when the non-online email is missing", async () => {
@@ -215,12 +249,61 @@ describe("schedule email preview", () => {
     expect(result.summary).toEqual({ attempted: 1, success: 1, failed: 0, blocked: 1 });
     expect(result.recipients.map((recipient) => recipient.sendStatus).sort()).toEqual(["blocked", "sent"]);
   });
+
+  it("sends only selected ready tutors", async () => {
+    const db = makePreviewDb({
+      rows: [
+        row({ id: "kevin-row", groupId: "kevin-group", canonicalKey: "Kevin", tutorDisplayName: "Kevin" }),
+        row({ id: "sam-row", groupId: "sam-group", canonicalKey: "Samantha", tutorDisplayName: "Samantha" }),
+      ],
+      contacts: [
+        { canonicalKey: "Kevin", onsiteEmail: "kevhsh7@gmail.com", active: true },
+        { canonicalKey: "Samantha", onsiteEmail: "sam@example.com", active: true },
+      ],
+    });
+    const sender = { sendEmail: vi.fn().mockResolvedValue({ id: "email-1" }) };
+
+    const result = await sendScheduleEmailsForRun(db as never, "run-1", "admin@example.com", sender, {
+      recipientGroupIds: ["sam-group"],
+    });
+
+    expect(sender.sendEmail).toHaveBeenCalledTimes(1);
+    expect(sender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: "sam@example.com",
+      idempotencyKey: "classroom-schedule:email-run-1:Samantha",
+    }));
+    expect(result.summary).toEqual({ attempted: 1, success: 1, failed: 0, blocked: 0 });
+    expect(result.recipients.map((recipient) => recipient.tutorDisplayName)).toEqual(["Samantha"]);
+  });
+
+  it("sends nothing and records no recipients for an empty selected list", async () => {
+    const db = makePreviewDb({
+      rows: [row()],
+      contacts: [{
+        canonicalKey: "Kevin",
+        onsiteEmail: "kevhsh7@gmail.com",
+        active: true,
+      }],
+    });
+    const sender = { sendEmail: vi.fn().mockResolvedValue({ id: "email-1" }) };
+
+    const result = await sendScheduleEmailsForRun(db as never, "run-1", "admin@example.com", sender, {
+      recipientGroupIds: [],
+    });
+
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+    expect(result.summary).toEqual({ attempted: 0, success: 0, failed: 0, blocked: 0 });
+    expect(result.recipients).toEqual([]);
+    expect(db.insertedRecipients).toEqual([]);
+  });
 });
 
-describe("Resend schedule email sender", () => {
+describe("Apps Script schedule email sender", () => {
   beforeEach(() => {
-    vi.stubEnv("RESEND_API_KEY", "re_test");
-    vi.stubEnv("SCHEDULE_EMAIL_FROM", "BeGifted <schedule@example.com>");
+    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_URL", "https://script.google.com/macros/s/test/exec");
+    vi.stubEnv("SCHEDULE_EMAIL_APPS_SCRIPT_SECRET", "secret-1");
+    vi.stubEnv("SCHEDULE_EMAIL_SENDER_NAME", "BeGifted Team");
+    vi.stubEnv("SCHEDULE_EMAIL_REPLY_TO", "reply@example.com");
   });
 
   afterEach(() => {
@@ -228,13 +311,13 @@ describe("Resend schedule email sender", () => {
     vi.restoreAllMocks();
   });
 
-  it("posts email payloads to the Resend API", async () => {
+  it("posts email payloads to the Apps Script relay", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
-      json: async () => ({ id: "email-1" }),
+      json: async () => ({ ok: true, id: "apps-script-email-1" }),
     } as Response);
 
-    const result = await createResendScheduleEmailSender().sendEmail({
+    const result = await createAppsScriptScheduleEmailSender().sendEmail({
       to: "teacher@example.com",
       subject: "BeGifted schedule for 15/5/2026",
       html: "<p>Schedule</p>",
@@ -242,16 +325,39 @@ describe("Resend schedule email sender", () => {
       idempotencyKey: "classroom-schedule:run-1:Kevin",
     });
 
-    expect(result).toEqual({ id: "email-1" });
+    expect(result).toEqual({ id: "apps-script-email-1" });
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.resend.com/emails",
+      "https://script.google.com/macros/s/test/exec",
       expect.objectContaining({
         method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer re_test",
-          "Idempotency-Key": "classroom-schedule:run-1:Kevin",
-        }),
+        headers: { "Content-Type": "application/json" },
       }),
     );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).toEqual({
+      secret: "secret-1",
+      to: "teacher@example.com",
+      subject: "BeGifted schedule for 15/5/2026",
+      html: "<p>Schedule</p>",
+      text: "Schedule",
+      senderName: "BeGifted Team",
+      replyTo: "reply@example.com",
+      idempotencyKey: "classroom-schedule:run-1:Kevin",
+    });
+  });
+
+  it("throws Apps Script relay errors", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: false, error: "Bad secret" }),
+    } as Response);
+
+    await expect(createAppsScriptScheduleEmailSender().sendEmail({
+      to: "teacher@example.com",
+      subject: "Subject",
+      html: "<p>Schedule</p>",
+      text: "Schedule",
+      idempotencyKey: "classroom-schedule:run-1:Kevin",
+    })).rejects.toThrow("Bad secret");
   });
 });

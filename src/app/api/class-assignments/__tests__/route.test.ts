@@ -207,12 +207,49 @@ describe("class assignment routes", () => {
       { db: true },
       "run-1",
       "admin@example.com",
+      undefined,
+      {},
     );
     await expect(res.json()).resolves.toEqual({
       summary: { attempted: 1, success: 1, failed: 0, blocked: 0 },
       recipients: [],
       preview: schedulePreview,
     });
+  });
+
+  it("sends teacher schedule emails only for selected recipient group ids", async () => {
+    const res = await sendScheduleEmail(
+      new Request("http://test.local/api/class-assignments/runs/run-1/schedule-email/send", {
+        method: "POST",
+        body: JSON.stringify({ recipientGroupIds: ["group-1", "group-2"] }),
+      }),
+      { params: Promise.resolve({ runId: "run-1" }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(sendScheduleEmailsForRun).toHaveBeenCalledWith(
+      { db: true },
+      "run-1",
+      "admin@example.com",
+      undefined,
+      { recipientGroupIds: ["group-1", "group-2"] },
+    );
+  });
+
+  it("rejects invalid selected recipient group ids", async () => {
+    const res = await sendScheduleEmail(
+      new Request("http://test.local/api/class-assignments/runs/run-1/schedule-email/send", {
+        method: "POST",
+        body: JSON.stringify({ recipientGroupIds: ["group-1", 123] }),
+      }),
+      { params: Promise.resolve({ runId: "run-1" }) },
+    );
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      error: "recipientGroupIds must be an array of strings.",
+    });
+    expect(sendScheduleEmailsForRun).not.toHaveBeenCalled();
   });
 
   it("returns conflict when schedule email send is blocked", async () => {
