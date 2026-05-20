@@ -13,8 +13,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Tutor Availability Search",
-  description: "Internal admin tool for tutor availability search",
+  title: "BeGifted Ops",
+  description: "Internal operations platform for BeGifted tools",
 };
 
 export default function RootLayout({

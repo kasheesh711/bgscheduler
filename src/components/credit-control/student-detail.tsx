@@ -1,3 +1,4 @@
+import { Check, Clock3, MessageCircle, Phone, UserX } from "lucide-react";
 import React, { useMemo, useState } from "react";
 
 import type { PackageRecord, StudentActionStatus, StudentRecord } from "@/types/credit-control";
@@ -117,16 +118,20 @@ export const StudentDetail = React.memo(function StudentDetail({
               type="button"
               style={{ padding: "4px 10px", fontSize: "0.78rem" }}
             >
+              <MessageCircle aria-hidden="true" />
               Contact via LINE
             </button>
           )}
-          <button disabled={submitting} onClick={() => onSubmitAction(student, "contacted")} type="button" style={{ padding: "4px 8px", fontSize: "0.75rem" }}>
+          <button className="ghost-button" disabled={submitting} onClick={() => onSubmitAction(student, "contacted")} type="button" style={{ padding: "4px 8px", fontSize: "0.75rem" }}>
+            <Phone aria-hidden="true" />
             Contacted <kbd style={{ fontSize: "0.65rem", opacity: 0.6 }}>c</kbd>
           </button>
-          <button disabled={submitting} onClick={() => onSubmitAction(student, "pending-callback")} type="button" style={{ padding: "4px 8px", fontSize: "0.75rem" }}>
+          <button className="ghost-button" disabled={submitting} onClick={() => onSubmitAction(student, "pending-callback")} type="button" style={{ padding: "4px 8px", fontSize: "0.75rem" }}>
+            <Clock3 aria-hidden="true" />
             Pending <kbd style={{ fontSize: "0.65rem", opacity: 0.6 }}>p</kbd>
           </button>
-          <button disabled={submitting} onClick={() => onSubmitAction(student, "resolved")} type="button" style={{ padding: "4px 8px", fontSize: "0.75rem" }}>
+          <button className="ghost-button" disabled={submitting} onClick={() => onSubmitAction(student, "resolved")} type="button" style={{ padding: "4px 8px", fontSize: "0.75rem" }}>
+            <Check aria-hidden="true" />
             Resolved <kbd style={{ fontSize: "0.65rem", opacity: 0.6 }}>r</kbd>
           </button>
           <button
@@ -152,8 +157,9 @@ export const StudentDetail = React.memo(function StudentDetail({
               }
             }}
             type="button"
-            style={{ padding: "4px 8px", fontSize: "0.75rem", color: "var(--tone-notify, #c44)" }}
+            style={{ padding: "4px 8px", fontSize: "0.75rem", color: "var(--notify)" }}
           >
+            <UserX aria-hidden="true" />
             No Longer Active
           </button>
         </div>
@@ -197,12 +203,13 @@ export const StudentDetail = React.memo(function StudentDetail({
       {activePkg && (
         <section className="panel" style={{ padding: 10 }}>
           {/* "What to do now" block */}
-          <div style={{ marginBottom: 8, padding: "6px 8px", borderRadius: 8, background: "rgba(156,79,34,0.04)", border: "1px solid rgba(156,79,34,0.08)" }}>
+          <div style={{ marginBottom: 8, padding: "8px 10px", borderRadius: 8, background: "var(--blue-50)", border: "1px solid var(--panel-border)" }}>
             <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--accent)", marginBottom: 2 }}>What to do now</div>
             <div className="table-primary" style={{ fontSize: "0.85rem" }}>{activePkg.recommendedAction}</div>
             <div className="table-subtle" style={{ fontSize: "0.75rem" }}>{activePkg.whyNow}</div>
             <div style={{ marginTop: 4 }}>
               <button
+                className="ghost-button"
                 onClick={() =>
                   onPreviewLine({
                     student,
@@ -213,6 +220,7 @@ export const StudentDetail = React.memo(function StudentDetail({
                 type="button"
                 style={{ padding: "3px 8px", fontSize: "0.72rem" }}
               >
+                <MessageCircle aria-hidden="true" />
                 Preview LINE message
               </button>
             </div>

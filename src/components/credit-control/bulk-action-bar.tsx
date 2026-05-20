@@ -1,3 +1,4 @@
+import { Check, Clock3, Phone, X } from "lucide-react";
 import type { StudentActionStatus } from "@/types/credit-control";
 
 export function BulkActionBar({
@@ -43,6 +44,7 @@ export function BulkActionBar({
       {visibleSelectedRows.length > 0 ? (
         <div className="action-row">
           <button disabled={submitting} onClick={() => onBulkAction("contacted")} type="button">
+            <Phone aria-hidden="true" />
             Contacted
           </button>
           <button
@@ -50,9 +52,11 @@ export function BulkActionBar({
             onClick={() => onBulkAction("pending-callback")}
             type="button"
           >
+            <Clock3 aria-hidden="true" />
             Pending callback
           </button>
           <button disabled={submitting} onClick={() => onBulkAction("resolved")} type="button">
+            <Check aria-hidden="true" />
             Resolved
           </button>
           <button
@@ -65,6 +69,7 @@ export function BulkActionBar({
             }}
             type="button"
           >
+            <X aria-hidden="true" />
             Clear
           </button>
         </div>

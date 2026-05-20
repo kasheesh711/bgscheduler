@@ -207,7 +207,7 @@ export const CalendarPanel = React.memo(function CalendarPanel({
               <span style={{ fontWeight: 700, fontSize: "0.88rem" }}>{formatLongDate(selectedDay.date)}</span>
               <span className="mini-pill" style={{ padding: "2px 6px", fontSize: "0.7rem" }}>{selectedDay.totalStudents} total</span>
               {selectedDay.urgentStudents > 0 && (
-                <span className="mini-pill" style={{ padding: "2px 6px", fontSize: "0.7rem", background: "rgba(196,73,45,0.12)", color: "var(--notify)" }}>{selectedDay.urgentStudents} urgent</span>
+                <span className="mini-pill tone-notify" style={{ padding: "2px 6px", fontSize: "0.7rem" }}>{selectedDay.urgentStudents} urgent</span>
               )}
             </div>
             <div style={{ display: "flex", gap: 4 }}>

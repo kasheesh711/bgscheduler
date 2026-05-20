@@ -1,3 +1,4 @@
+import { Copy, MessageCircle, X } from "lucide-react";
 import type { LinePreview } from "@/lib/credit-control/ui-helpers";
 
 export function LinePreviewDrawer({
@@ -32,7 +33,7 @@ export function LinePreviewDrawer({
             <h3>{linePreview.pkg.name}</h3>
           </div>
           <button className="icon-button" onClick={onClose} type="button">
-            ×
+            <X aria-hidden="true" />
           </button>
         </div>
         <div className="drawer-context">
@@ -45,9 +46,11 @@ export function LinePreviewDrawer({
         <pre className="message-preview">{linePreview.message}</pre>
         <div className="action-row drawer-actions">
           <button onClick={onCopyAndMark} type="button">
+            <MessageCircle aria-hidden="true" />
             Copy + Mark Contacted
           </button>
           <button onClick={onCopy} type="button">
+            <Copy aria-hidden="true" />
             Copy message
           </button>
           <button className="ghost-button" onClick={onClose} type="button">

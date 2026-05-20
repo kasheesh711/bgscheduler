@@ -1,3 +1,4 @@
+import { Check, Clock3, Phone } from "lucide-react";
 import React, { forwardRef, useImperativeHandle, useRef, useState, useCallback } from "react";
 
 import { formatShortTimestamp } from "@/lib/credit-control/helpers";
@@ -165,31 +166,34 @@ export const QueuePanel = React.memo(
                     ) : null}
                     <div className="quick-action-icons" style={{ display: "flex" }} onClick={(e) => e.stopPropagation()}>
                       <button
+                        aria-label={`Mark ${row.student} contacted`}
                         className="quick-action-btn"
                         disabled={submitting}
                         onClick={() => onSubmitAction(row.studentKey, "contacted")}
                         title="Contacted"
                         type="button"
                       >
-                        📞
+                        <Phone aria-hidden="true" />
                       </button>
                       <button
+                        aria-label={`Mark ${row.student} pending callback`}
                         className="quick-action-btn"
                         disabled={submitting}
                         onClick={() => onSubmitAction(row.studentKey, "pending-callback")}
                         title="Pending callback"
                         type="button"
                       >
-                        &#9203;
+                        <Clock3 aria-hidden="true" />
                       </button>
                       <button
+                        aria-label={`Mark ${row.student} resolved`}
                         className="quick-action-btn"
                         disabled={submitting}
                         onClick={() => onSubmitAction(row.studentKey, "resolved")}
                         title="Resolved"
                         type="button"
                       >
-                        &#10004;
+                        <Check aria-hidden="true" />
                       </button>
                     </div>
                   </div>
@@ -292,31 +296,34 @@ export const QueuePanel = React.memo(
                         ) : null}
                         <div className="quick-action-icons" onClick={(e) => e.stopPropagation()}>
                           <button
+                            aria-label={`Mark ${row.student} contacted`}
                             className="quick-action-btn"
                             disabled={submitting}
                             onClick={() => onSubmitAction(row.studentKey, "contacted")}
                             title="Contacted (c)"
                             type="button"
                           >
-                            📞
+                            <Phone aria-hidden="true" />
                           </button>
                           <button
+                            aria-label={`Mark ${row.student} pending callback`}
                             className="quick-action-btn"
                             disabled={submitting}
                             onClick={() => onSubmitAction(row.studentKey, "pending-callback")}
                             title="Pending (p)"
                             type="button"
                           >
-                            ⏳
+                            <Clock3 aria-hidden="true" />
                           </button>
                           <button
+                            aria-label={`Mark ${row.student} resolved`}
                             className="quick-action-btn"
                             disabled={submitting}
                             onClick={() => onSubmitAction(row.studentKey, "resolved")}
                             title="Resolved (r)"
                             type="button"
                           >
-                            ✔
+                            <Check aria-hidden="true" />
                           </button>
                         </div>
                       </td>

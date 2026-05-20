@@ -1,5 +1,6 @@
 "use client";
 
+import { CircleHelp, LogOut, Search, X } from "lucide-react";
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import { formatShortTimestamp } from "@/lib/credit-control/helpers";
@@ -41,7 +42,6 @@ import { SummaryBar } from "./summary-bar";
 import { ToastNotification } from "./toast-notification";
 import { useKeyboardShortcuts, SHORTCUT_LIST } from "@/hooks/use-keyboard-shortcuts";
 import { useResizableSplit } from "@/hooks/use-resizable-split";
-import { useTheme } from "@/hooks/use-theme";
 
 export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser }) {
   // ---------------------------------------------------------------------------
@@ -77,6 +77,10 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   const [actionHistory, setActionHistory] = useState<ActionHistoryEntry[]>([]);
   const actionHistoryCache = useRef<Record<string, ActionHistoryEntry[]>>({});
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
+
+  useEffect(() => {
+    document.documentElement.removeAttribute("data-theme");
+  }, []);
 
   const queuePanelRef = useRef<QueuePanelHandle>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -680,7 +684,6 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   );
 
   const { ratio: splitRatio, containerRef: splitContainerRef, dividerProps } = useResizableSplit();
-  const { theme, toggleTheme } = useTheme();
 
   const { showHelp, setShowHelp } = useKeyboardShortcuts({
     onNextStudent: () => moveStudent(1),
@@ -746,12 +749,12 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   const adminRailItems = useMemo(() => {
     if (!data) return [];
     return [
-      { key: "all", label: "All", icon: "\u2630" },
+      { key: "all", label: "All owners", icon: "\u2630" },
       ...data.adminViews
         .filter((v) => v.key !== "all")
         .map((v) => ({
           key: v.key,
-          label: v.label.length > 5 ? v.label.slice(0, 4) + "\u2026" : v.label,
+          label: v.label,
           icon: v.label.charAt(0).toUpperCase(),
         })),
     ];
@@ -772,20 +775,12 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
         </div>
         <div className="header-meta">
           <button
-            className="theme-toggle"
-            onClick={toggleTheme}
-            title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
-            type="button"
-          >
-            {theme === "light" ? "\u263E" : "\u2600"}
-          </button>
-          <button
             className="help-pill"
             onClick={() => setShowHelp((prev) => !prev)}
             title="Keyboard shortcuts"
             type="button"
           >
-            ?
+            <CircleHelp aria-hidden="true" size={14} />
           </button>
           <span className="meta-chip" style={{ padding: "4px 10px", fontSize: "0.78rem" }}>
             {refreshing
@@ -805,6 +800,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
             style={{ padding: "4px 10px", fontSize: "0.78rem" }}
             type="button"
           >
+            <LogOut aria-hidden="true" size={13} />
             Sign out
           </button>
         </div>
@@ -835,7 +831,8 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
           <div className="workspace-center">
             {/* Compact merged filter bar */}
             <div className="workspace-controls">
-              <div className="search-wrap" style={{ flex: "0 1 260px" }}>
+              <div className="search-wrap" style={{ flex: "0 1 330px" }}>
+                <Search aria-hidden="true" size={15} style={{ color: "var(--muted)", marginLeft: 10 }} />
                 <input
                   ref={searchInputRef}
                   aria-label="Search students"
@@ -847,7 +844,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
                 />
                 {search ? (
                   <button className="icon-button" onClick={() => setSearch("")} type="button" style={{ padding: "4px 8px" }}>
-                    ×
+                    <X aria-hidden="true" size={14} />
                   </button>
                 ) : null}
               </div>
@@ -975,7 +972,9 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
           <div className="shortcut-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
             <div className="panel-header">
               <h3>Keyboard Shortcuts</h3>
-              <button className="icon-button" onClick={() => setShowHelp(false)} type="button">×</button>
+              <button className="icon-button" onClick={() => setShowHelp(false)} type="button">
+                <X aria-hidden="true" size={14} />
+              </button>
             </div>
             <div className="shortcut-list">
               {SHORTCUT_LIST.map((item) => (

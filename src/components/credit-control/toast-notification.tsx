@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import type { Toast } from "@/lib/credit-control/ui-helpers";
 
 export function ToastNotification({
@@ -21,7 +22,7 @@ export function ToastNotification({
       ) : null}
       {toast.tone === "error" ? (
         <button className="toast-close" onClick={onDismiss} type="button">
-          ×
+          <X aria-hidden="true" size={14} />
         </button>
       ) : null}
     </div>

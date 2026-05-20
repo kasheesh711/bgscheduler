@@ -15,9 +15,9 @@ function LoginForm() {
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background via-secondary to-accent/30">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl text-primary">Tutor Availability Search</CardTitle>
+          <CardTitle className="text-2xl text-primary">BeGifted Ops</CardTitle>
           <CardDescription>
-            Internal admin tool. Sign in with your company Google account.
+            Internal operations platform. Sign in with your company Google account.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

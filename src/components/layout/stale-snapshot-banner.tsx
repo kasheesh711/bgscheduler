@@ -20,6 +20,8 @@ function isWorkspacePath(pathname: string | null): boolean {
   return (
     path === "/search" ||
     path.startsWith("/search/") ||
+    path === "/scheduler" ||
+    path.startsWith("/scheduler/") ||
     path === "/compare" ||
     path.startsWith("/compare/")
   );
