@@ -132,7 +132,7 @@ describe("AI scheduler helpers", () => {
   it("uses the Responses API with store disabled", async () => {
     process.env.OPENAI_API_KEY = "test-key";
     process.env.ENABLE_AI_SCHEDULER = "true";
-    process.env.OPENAI_SCHEDULER_MODEL = "gpt-5-mini";
+    process.env.OPENAI_SCHEDULER_MODEL = "gpt-5.4-mini";
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ output_text: JSON.stringify(modelParsed()) }),
@@ -148,7 +148,7 @@ describe("AI scheduler helpers", () => {
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(fetchMock.mock.calls[0][0]).toBe("https://api.openai.com/v1/responses");
-    expect(body.model).toBe("gpt-5-mini");
+    expect(body.model).toBe("gpt-5.4-mini");
     expect(body.store).toBe(false);
     expect(body.text.format.type).toBe("json_schema");
   });

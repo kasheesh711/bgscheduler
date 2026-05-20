@@ -25,6 +25,10 @@ interface WeekChangeOptions {
   restoreScrollTop?: (scrollTop: number) => void;
 }
 
+interface ReplaceCompareOptions {
+  activeDay?: number | null;
+}
+
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
@@ -231,6 +235,35 @@ export function useCompare() {
     }
   }, []);
 
+  const replaceCompare = useCallback(async (
+    ids: string[],
+    week: string,
+    options: ReplaceCompareOptions = {},
+  ) => {
+    cancelCompareFetch();
+    tutorCache.current.clear();
+    setActiveDay(options.activeDay ?? null);
+
+    if (ids.length === 0) {
+      setWeekStart(week);
+      setCompareResponse(null);
+      setCompareTutors([]);
+      return;
+    }
+
+    const prepared = await fetchCompareData(ids, week);
+    if (!prepared) return;
+
+    setWeekStart(week);
+    commitPreparedCompare(prepared);
+    pruneCacheToWeek(week);
+  }, [
+    cancelCompareFetch,
+    commitPreparedCompare,
+    fetchCompareData,
+    pruneCacheToWeek,
+  ]);
+
   const removeTutor = (id: string) => {
     const remaining = compareTutors.filter((t) => t.tutorGroupId !== id);
     setCompareTutors(remaining);
@@ -330,6 +363,7 @@ export function useCompare() {
     tutorCache,
     // Actions
     fetchCompare,
+    replaceCompare,
     addTutor,
     removeTutor,
     changeWeek,

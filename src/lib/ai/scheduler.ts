@@ -3,7 +3,7 @@ import type { FilterOptions } from "@/lib/data/filters";
 import type { TutorListItem } from "@/lib/data/tutors";
 import type { SnapshotMeta } from "@/lib/search/types";
 
-export const DEFAULT_AI_SCHEDULER_MODEL = "gpt-5-mini";
+export const DEFAULT_AI_SCHEDULER_MODEL = "gpt-5.4-mini";
 
 export type AiSchedulerSearchMode = "recurring" | "one_time";
 export type AiSchedulerDeliveryMode = "online" | "onsite" | "either";
@@ -472,7 +472,10 @@ export function isAiSchedulerConfigured(): boolean {
     Boolean(process.env.OPENAI_API_KEY?.trim());
 }
 
-function extractOutputText(payload: OpenAiResponsePayload): string {
+export function extractOutputText(payload: OpenAiResponsePayload | null): string {
+  if (!payload) {
+    throw new Error("OpenAI response was empty");
+  }
   if (typeof payload.output_text === "string" && payload.output_text.trim()) {
     return payload.output_text;
   }

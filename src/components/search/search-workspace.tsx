@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { SearchForm } from "@/components/search/search-form";
-import { AiSchedulerPanel } from "@/components/search/ai-scheduler-panel";
 import type { SearchContext } from "@/components/search/search-form";
 import type { FilterOptions } from "@/lib/data/filters";
 import type { TutorListItem } from "@/lib/data/tutors";
@@ -30,7 +29,6 @@ import { cn } from "@/lib/utils";
 interface SearchWorkspaceProps {
   filterOptions: FilterOptions;
   tutorList: TutorListItem[];
-  aiSchedulerEnabled: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,7 +74,7 @@ function proposalHoldToBlockingInfo(hold: ProposalHoldSummary): BlockingSessionI
 // SearchWorkspace component
 // ---------------------------------------------------------------------------
 
-export function SearchWorkspace({ filterOptions, tutorList, aiSchedulerEnabled }: SearchWorkspaceProps) {
+export function SearchWorkspace({ filterOptions, tutorList }: SearchWorkspaceProps) {
   const searchParams = useSearchParams();
   const compare = useCompare();
 
@@ -293,11 +291,6 @@ export function SearchWorkspace({ filterOptions, tutorList, aiSchedulerEnabled }
             : "w-1/2 border-r border-border/50 pr-3",
         )}
       >
-        <AiSchedulerPanel
-          enabled={aiSchedulerEnabled}
-          onAddToCompare={handleCompareSelected}
-          disableAdd={disableAdd}
-        />
         <SearchForm
           filterOptions={filterOptions}
           tutorList={tutorList}

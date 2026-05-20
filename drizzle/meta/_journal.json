@@ -99,6 +99,13 @@
       "when": 1779129600000,
       "tag": "0015_ai_scheduler_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1779133200000,
+      "tag": "0016_ai_scheduler_conversations",
+      "breakpoints": true
     }
   ]
 }

@@ -93,6 +93,17 @@ export const proposalStatusEnum = pgEnum("proposal_status", [
   "auto_resolved",
 ]);
 
+export const aiSchedulerConversationStatusEnum = pgEnum("ai_scheduler_conversation_status", [
+  "active",
+  "archived",
+]);
+
+export const aiSchedulerMessageRoleEnum = pgEnum("ai_scheduler_message_role", [
+  "admin",
+  "assistant",
+  "system",
+]);
+
 // ── Snapshots & Sync ───────────────────────────────────────────────────
 
 export const snapshots = pgTable("snapshots", {
@@ -703,10 +714,51 @@ export const proposalItems = pgTable("proposal_items", {
   index("proposal_items_date_idx").on(table.proposalDate),
 ]);
 
-// ── AI Scheduler Audit ─────────────────────────────────────────────────
+// ── AI Scheduler Conversations & Audit ─────────────────────────────────
+
+export const aiSchedulerConversations = pgTable("ai_scheduler_conversations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  title: text("title").notNull().default("Untitled scheduler chat"),
+  status: aiSchedulerConversationStatusEnum("status").notNull().default("active"),
+  customerParentName: text("customer_parent_name"),
+  customerStudentName: text("customer_student_name"),
+  customerContact: text("customer_contact"),
+  notes: text("notes").notNull().default(""),
+  extractedState: jsonb("extracted_state").$type<Record<string, unknown>>().notNull().default({}),
+  createdByEmail: text("created_by_email"),
+  createdByName: text("created_by_name"),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  lastMessageAt: timestamp("last_message_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("ai_scheduler_conversations_status_idx").on(table.status, table.lastMessageAt),
+  index("ai_scheduler_conversations_created_by_idx").on(table.createdByEmail, table.lastMessageAt),
+  index("ai_scheduler_conversations_last_message_idx").on(table.lastMessageAt),
+]);
+
+export const aiSchedulerMessages = pgTable("ai_scheduler_messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  conversationId: uuid("conversation_id")
+    .notNull()
+    .references(() => aiSchedulerConversations.id, { onDelete: "cascade" }),
+  role: aiSchedulerMessageRoleEnum("role").notNull(),
+  content: text("content").notNull(),
+  structuredPayload: jsonb("structured_payload").$type<Record<string, unknown> | null>(),
+  model: text("model"),
+  latencyMs: integer("latency_ms"),
+  createdByEmail: text("created_by_email"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("ai_scheduler_messages_conversation_idx").on(table.conversationId, table.createdAt),
+  index("ai_scheduler_messages_created_at_idx").on(table.createdAt),
+]);
 
 export const aiSchedulerRuns = pgTable("ai_scheduler_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
+  conversationId: uuid("conversation_id").references(() => aiSchedulerConversations.id, { onDelete: "set null" }),
+  messageId: uuid("message_id").references(() => aiSchedulerMessages.id, { onDelete: "set null" }),
   createdByEmail: text("created_by_email"),
   status: text("status").notNull(),
   inputPreviewRedacted: text("input_preview_redacted").notNull(),
@@ -718,6 +770,8 @@ export const aiSchedulerRuns = pgTable("ai_scheduler_runs", {
   errorMessage: text("error_message"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
+  index("ai_scheduler_runs_conversation_idx").on(table.conversationId),
+  index("ai_scheduler_runs_message_idx").on(table.messageId),
   index("ai_scheduler_runs_created_at_idx").on(table.createdAt),
   index("ai_scheduler_runs_status_idx").on(table.status),
 ]);
