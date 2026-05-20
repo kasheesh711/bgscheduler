@@ -100,8 +100,29 @@ export const aiSchedulerConversationStatusEnum = pgEnum("ai_scheduler_conversati
 
 export const aiSchedulerMessageRoleEnum = pgEnum("ai_scheduler_message_role", [
   "admin",
+  "parent",
   "assistant",
   "system",
+]);
+
+export const lineMessageDirectionEnum = pgEnum("line_message_direction", [
+  "inbound",
+  "outbound",
+]);
+
+export const lineSchedulerClassifierCategoryEnum = pgEnum("line_scheduler_classifier_category", [
+  "scheduling_request",
+  "scheduling_change",
+  "non_scheduling",
+  "unclear",
+]);
+
+export const lineSchedulerReviewStatusEnum = pgEnum("line_scheduler_review_status", [
+  "pending_review",
+  "approved_sent",
+  "accepted_no_send",
+  "rejected",
+  "dismissed",
 ]);
 
 // ── Snapshots & Sync ───────────────────────────────────────────────────
@@ -774,6 +795,108 @@ export const aiSchedulerRuns = pgTable("ai_scheduler_runs", {
   index("ai_scheduler_runs_message_idx").on(table.messageId),
   index("ai_scheduler_runs_created_at_idx").on(table.createdAt),
   index("ai_scheduler_runs_status_idx").on(table.status),
+]);
+
+// ── LINE Scheduler Review ───────────────────────────────────────────────
+
+export const lineContacts = pgTable("line_contacts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  lineUserId: text("line_user_id").notNull(),
+  displayName: text("display_name"),
+  pictureUrl: text("picture_url"),
+  statusMessage: text("status_message"),
+  linkedParentLabel: text("linked_parent_label"),
+  linkedStudentLabel: text("linked_student_label"),
+  profileRaw: jsonb("profile_raw").$type<Record<string, unknown>>().notNull().default({}),
+  firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("line_contacts_user_id_idx").on(table.lineUserId),
+  index("line_contacts_last_seen_idx").on(table.lastSeenAt),
+]);
+
+export const lineThreads = pgTable("line_threads", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  contactId: uuid("contact_id").notNull().references(() => lineContacts.id, { onDelete: "cascade" }),
+  lineUserId: text("line_user_id").notNull(),
+  aiSchedulerConversationId: uuid("ai_scheduler_conversation_id")
+    .references(() => aiSchedulerConversations.id, { onDelete: "set null" }),
+  status: text("status").notNull().default("active"),
+  lastMessageAt: timestamp("last_message_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("line_threads_user_id_idx").on(table.lineUserId),
+  index("line_threads_conversation_idx").on(table.aiSchedulerConversationId),
+  index("line_threads_last_message_idx").on(table.lastMessageAt),
+]);
+
+export const lineMessages = pgTable("line_messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  threadId: uuid("thread_id").notNull().references(() => lineThreads.id, { onDelete: "cascade" }),
+  contactId: uuid("contact_id").notNull().references(() => lineContacts.id, { onDelete: "cascade" }),
+  direction: lineMessageDirectionEnum("direction").notNull(),
+  lineMessageId: text("line_message_id"),
+  webhookEventId: text("webhook_event_id"),
+  sourceType: text("source_type").notNull().default("user"),
+  messageType: text("message_type").notNull(),
+  text: text("text"),
+  replyToken: text("reply_token"),
+  eventTimestamp: timestamp("event_timestamp", { withTimezone: true }),
+  isRedelivery: boolean("is_redelivery").notNull().default(false),
+  isRetracted: boolean("is_retracted").notNull().default(false),
+  retractedAt: timestamp("retracted_at", { withTimezone: true }),
+  classifierCategory: lineSchedulerClassifierCategoryEnum("classifier_category"),
+  classifierConfidence: doublePrecision("classifier_confidence"),
+  classifierSummary: text("classifier_summary"),
+  classifierPayload: jsonb("classifier_payload").$type<Record<string, unknown> | null>(),
+  classifiedAt: timestamp("classified_at", { withTimezone: true }),
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("line_messages_webhook_event_idx").on(table.webhookEventId),
+  uniqueIndex("line_messages_line_message_idx").on(table.lineMessageId),
+  index("line_messages_thread_created_idx").on(table.threadId, table.createdAt),
+  index("line_messages_classifier_idx").on(table.classifierCategory, table.classifiedAt),
+]);
+
+export const lineSchedulerReviews = pgTable("line_scheduler_reviews", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  threadId: uuid("thread_id").notNull().references(() => lineThreads.id, { onDelete: "cascade" }),
+  contactId: uuid("contact_id").notNull().references(() => lineContacts.id, { onDelete: "cascade" }),
+  inboundMessageId: uuid("inbound_message_id")
+    .notNull()
+    .references(() => lineMessages.id, { onDelete: "cascade" }),
+  conversationId: uuid("conversation_id")
+    .references(() => aiSchedulerConversations.id, { onDelete: "set null" }),
+  schedulerMessageId: uuid("scheduler_message_id")
+    .references(() => aiSchedulerMessages.id, { onDelete: "set null" }),
+  schedulerRunId: uuid("scheduler_run_id")
+    .references(() => aiSchedulerRuns.id, { onDelete: "set null" }),
+  classifierCategory: lineSchedulerClassifierCategoryEnum("classifier_category").notNull(),
+  classifierConfidence: doublePrecision("classifier_confidence"),
+  classifierSummary: text("classifier_summary"),
+  classifierPayload: jsonb("classifier_payload").$type<Record<string, unknown> | null>(),
+  status: lineSchedulerReviewStatusEnum("status").notNull().default("pending_review"),
+  proposedDraft: text("proposed_draft").notNull().default(""),
+  selectedSuggestion: jsonb("selected_suggestion").$type<Record<string, unknown> | null>(),
+  finalText: text("final_text"),
+  rejectionReason: text("rejection_reason"),
+  staffCorrection: text("staff_correction"),
+  sendLineMessageId: text("send_line_message_id"),
+  sendResponse: jsonb("send_response").$type<Record<string, unknown> | null>(),
+  sendError: text("send_error"),
+  reviewedByEmail: text("reviewed_by_email"),
+  reviewedByName: text("reviewed_by_name"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("line_scheduler_reviews_inbound_message_idx").on(table.inboundMessageId),
+  index("line_scheduler_reviews_status_idx").on(table.status, table.createdAt),
+  index("line_scheduler_reviews_conversation_idx").on(table.conversationId),
 ]);
 
 // ── Data Issues ─────────────────────────────────────────────────────────

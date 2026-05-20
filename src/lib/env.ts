@@ -10,6 +10,9 @@ const envSchema = z.object({
   WISE_NAMESPACE: z.string().default("begifted-education"),
   WISE_INSTITUTE_ID: z.string().default("696e1f4d90102225641cc413"),
   CRON_SECRET: z.string().min(1),
+  LINE_CHANNEL_SECRET: z.string().min(1).optional(),
+  LINE_CHANNEL_ACCESS_TOKEN: z.string().min(1).optional(),
+  ENABLE_LINE_SCHEDULER: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

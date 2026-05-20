@@ -114,7 +114,7 @@ interface SchedulerCandidateSlot {
 }
 
 export interface SchedulerConversationMessageForPrompt {
-  role: "admin" | "assistant" | "system";
+  role: "admin" | "parent" | "assistant" | "system";
   content: string;
 }
 
@@ -1024,7 +1024,9 @@ export function buildSchedulerExtractionPrompt(input: {
   filterOptions: FilterOptions;
   tutorList: TutorListItem[];
 }): string {
-  const newestAdminMessage = [...input.messages].reverse().find((message) => message.role === "admin")?.content ?? "";
+  const newestAdminMessage = [...input.messages]
+    .reverse()
+    .find((message) => message.role === "admin" || message.role === "parent")?.content ?? "";
   const transcript = input.messages
     .slice(-12)
     .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
@@ -1035,9 +1037,10 @@ export function buildSchedulerExtractionPrompt(input: {
     `Today in Asia/Bangkok is ${input.todayBangkok}. Resolve explicit relative dates against this date.`,
     "",
     "Behavior rules:",
-    "- Return newly known or still-valid scheduling state. Preserve prior state when the newest admin message does not contradict it.",
-    "- The newest admin message is authoritative. If it names a different student, subject, or day/time from the saved state, return only the newest request's scheduling state.",
-    "- Never return the saved state unchanged when the newest admin message contains a different student/class request.",
+    "- Return newly known or still-valid scheduling state. Preserve prior state when the newest parent/admin message does not contradict it.",
+    "- Admin messages are authoritative over parent messages. The newest parent message is authoritative over older parent context.",
+    "- If the newest parent/admin message names a different student, subject, or day/time from the saved state, return only the newest request's scheduling state.",
+    "- Never return the saved state unchanged when the newest parent/admin message contains a different student/class request.",
     "- If a bare weekday appears without an exact date, treat it as recurring weekly and add an assumption.",
     "- Put every explicit requested day/date + time window into requestedSlots. For multiple days/times, include one requestedSlots item per requested slot.",
     "- If the admin gives a start time and duration but no end time, set requestedSlots.endTime to start plus duration.",
@@ -1059,7 +1062,7 @@ export function buildSchedulerExtractionPrompt(input: {
     "",
     `Current saved state JSON:\n${JSON.stringify(input.currentState)}`,
     "",
-    `Newest admin message:\n${newestAdminMessage}`,
+    `Newest parent/admin message:\n${newestAdminMessage}`,
     "",
     `Transcript:\n${transcript}`,
   ].join("\n");

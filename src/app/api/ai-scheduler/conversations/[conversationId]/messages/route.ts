@@ -44,7 +44,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function messagesForPrompt(
-  messages: { role: "admin" | "assistant" | "system"; content: string }[],
+  messages: { role: "admin" | "parent" | "assistant" | "system"; content: string }[],
 ): SchedulerConversationMessageForPrompt[] {
   return messages.map((message) => ({
     role: message.role,

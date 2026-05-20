@@ -9,7 +9,7 @@ export interface SchedulerActor {
 }
 
 export type SchedulerConversationStatus = "active" | "archived";
-export type SchedulerMessageRole = "admin" | "assistant" | "system";
+export type SchedulerMessageRole = "admin" | "parent" | "assistant" | "system";
 
 export interface SchedulerConversationDto {
   id: string;

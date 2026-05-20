@@ -4,15 +4,20 @@ import Link from "next/link";
 import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import {
   Archive,
+  BarChart3,
   Calendar,
   Check,
+  CheckCircle2,
   Clipboard,
   ExternalLink,
+  Inbox,
   MessageSquarePlus,
   RefreshCw,
   Search,
   Send,
+  SendHorizontal,
   Sparkles,
+  XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,7 +30,7 @@ import { cn } from "@/lib/utils";
 import { buildSchedulerCompareFocusTarget } from "./scheduler-compare-focus";
 
 type SchedulerConversationStatus = "active" | "archived";
-type SchedulerMessageRole = "admin" | "assistant" | "system";
+type SchedulerMessageRole = "admin" | "parent" | "assistant" | "system";
 
 interface SchedulerExtractedState {
   searchMode?: "recurring" | "one_time";
@@ -122,6 +127,42 @@ interface SchedulerWorkspaceProps {
   };
   aiSchedulerEnabled: boolean;
   tutorList: TutorListItem[];
+}
+
+interface LineSchedulerReview {
+  id: string;
+  lineUserId: string;
+  contactDisplayName: string | null;
+  inboundMessageId: string;
+  conversationId: string | null;
+  classifierCategory: string;
+  classifierConfidence: number | null;
+  classifierSummary: string | null;
+  status: "pending_review" | "approved_sent" | "accepted_no_send" | "rejected" | "dismissed";
+  proposedDraft: string;
+  finalText: string | null;
+  rejectionReason: string | null;
+  staffCorrection: string | null;
+  sendLineMessageId: string | null;
+  reviewedByName: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+}
+
+interface LineSchedulerAnalytics {
+  classifiedMessages: number;
+  schedulingMessages: number;
+  nonSchedulingMessages: number;
+  unclearMessages: number;
+  pendingReviews: number;
+  approvedSent: number;
+  acceptedNoSend: number;
+  rejected: number;
+  dismissed: number;
+  rejectionRate: number;
+  averageEditDistance: number | null;
+  averageModelLatencyMs: number | null;
+  commonRejectionReasons: Array<{ reason: string; count: number }>;
 }
 
 interface DetailsState {
@@ -297,12 +338,171 @@ function ParentDraft({
   );
 }
 
+function LineReviewPanel({
+  review,
+  onUpdated,
+}: {
+  review: LineSchedulerReview;
+  onUpdated: (review: LineSchedulerReview) => void;
+}) {
+  const [draft, setDraft] = useState(review.finalText ?? review.proposedDraft);
+  const [reason, setReason] = useState(review.rejectionReason ?? "");
+  const [correction, setCorrection] = useState(review.staffCorrection ?? "");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraft(review.finalText ?? review.proposedDraft);
+    setReason(review.rejectionReason ?? "");
+    setCorrection(review.staffCorrection ?? "");
+    setError(null);
+  }, [review]);
+
+  const patchReview = async (body: Record<string, unknown>, busyKey: string) => {
+    setBusy(busyKey);
+    setError(null);
+    try {
+      const data = await jsonOrThrow<{ review: LineSchedulerReview }>(
+        await fetch(`/api/line/scheduler-reviews/${review.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      onUpdated(data.review);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update LINE review");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const locked = review.status !== "pending_review";
+  const statusLabel = review.status.replace(/_/g, " ");
+
+  return (
+    <div className="rounded-md border border-primary/20 bg-primary/5 p-3">
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+            <Inbox className="h-3.5 w-3.5 text-primary" aria-hidden />
+            LINE review
+            <Badge variant={locked ? "secondary" : "outline"} className="h-5 capitalize">
+              {statusLabel}
+            </Badge>
+          </div>
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            {review.contactDisplayName || review.lineUserId} · {review.classifierCategory.replace(/_/g, " ")}
+            {typeof review.classifierConfidence === "number" ? ` · ${Math.round(review.classifierConfidence * 100)}%` : ""}
+          </div>
+          {review.classifierSummary && (
+            <div className="mt-1 text-xs text-muted-foreground">{review.classifierSummary}</div>
+          )}
+        </div>
+        {review.sendLineMessageId && (
+          <Badge variant="secondary" className="h-5 text-[10px]">
+            Sent
+          </Badge>
+        )}
+      </div>
+
+      <label className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Reply draft
+        <Textarea
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          rows={5}
+          disabled={locked || busy !== null}
+          className="mt-1 min-h-[116px] resize-none bg-background text-xs leading-relaxed"
+        />
+      </label>
+
+      {!locked && (
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          <label className="block text-[11px] font-medium text-muted-foreground">
+            Reject reason
+            <Input
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              placeholder="What was wrong?"
+              className="mt-1 text-xs"
+            />
+          </label>
+          <label className="block text-[11px] font-medium text-muted-foreground">
+            Staff correction
+            <Input
+              value={correction}
+              onChange={(event) => setCorrection(event.target.value)}
+              placeholder="What should staff send/do?"
+              className="mt-1 text-xs"
+            />
+          </label>
+        </div>
+      )}
+
+      {error && (
+        <div className="mt-2 rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive">{error}</div>
+      )}
+
+      {!locked ? (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => patchReview({ action: "approve_send", finalText: draft }, "approve")}
+            disabled={busy !== null || !draft.trim()}
+          >
+            <SendHorizontal className="h-3.5 w-3.5" aria-hidden />
+            {busy === "approve" ? "Sending" : "Approve & send"}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => patchReview({ action: "accept_no_send", finalText: draft }, "accept")}
+            disabled={busy !== null}
+          >
+            <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+            {busy === "accept" ? "Saving" : "Accept, already handled"}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => patchReview({ action: "reject", rejectionReason: reason, staffCorrection: correction }, "reject")}
+            disabled={busy !== null || !reason.trim() || !correction.trim()}
+          >
+            <XCircle className="h-3.5 w-3.5" aria-hidden />
+            {busy === "reject" ? "Saving" : "Reject"}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => patchReview({ action: "dismiss", rejectionReason: reason || undefined }, "dismiss")}
+            disabled={busy !== null}
+          >
+            Dismiss
+          </Button>
+        </div>
+      ) : (
+        <div className="mt-2 text-[11px] text-muted-foreground">
+          Reviewed by {review.reviewedByName || "admin"}{review.reviewedAt ? ` · ${formatShortDate(review.reviewedAt)}` : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList }: SchedulerWorkspaceProps) {
   const compare = useCompare();
   const [conversations, setConversations] = useState<SchedulerConversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<SchedulerConversation | null>(null);
   const [messages, setMessages] = useState<SchedulerMessage[]>([]);
+  const [pendingLineReviews, setPendingLineReviews] = useState<LineSchedulerReview[]>([]);
+  const [selectedLineReviews, setSelectedLineReviews] = useState<LineSchedulerReview[]>([]);
+  const [lineAnalytics, setLineAnalytics] = useState<LineSchedulerAnalytics | null>(null);
   const [scope, setScope] = useState<"all" | "mine">("all");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [query, setQuery] = useState("");
@@ -317,6 +517,32 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
   const [rightWorkspace, setRightWorkspace] = useState<"compare" | "notes">("notes");
   const [compareFullscreen, setCompareFullscreen] = useState(false);
   const detailsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const refreshLineReviews = async (conversationId = selectedId) => {
+    const pendingParams = new URLSearchParams({ status: "pending_review", analytics: "true" });
+    const pendingData = await jsonOrThrow<{
+      reviews: LineSchedulerReview[];
+      analytics: LineSchedulerAnalytics | null;
+    }>(await fetch(`/api/line/scheduler-reviews?${pendingParams.toString()}`));
+    setPendingLineReviews(pendingData.reviews);
+    setLineAnalytics(pendingData.analytics);
+
+    if (conversationId) {
+      const selectedParams = new URLSearchParams({ conversationId });
+      const selectedData = await jsonOrThrow<{ reviews: LineSchedulerReview[] }>(
+        await fetch(`/api/line/scheduler-reviews?${selectedParams.toString()}`),
+      );
+      setSelectedLineReviews(selectedData.reviews);
+    } else {
+      setSelectedLineReviews([]);
+    }
+  };
+
+  const replaceLineReview = (updated: LineSchedulerReview) => {
+    setSelectedLineReviews((current) => current.map((review) => review.id === updated.id ? updated : review));
+    setPendingLineReviews((current) => current.filter((review) => review.id !== updated.id));
+    void refreshLineReviews(selectedId);
+  };
 
   const loadConversations = async (nextSelectedId?: string | null) => {
     setLoadingList(true);
@@ -349,9 +575,19 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
   }, [scope, includeArchived, deferredQuery]);
 
   useEffect(() => {
+    void refreshLineReviews();
+    const interval = window.setInterval(() => {
+      void refreshLineReviews();
+    }, 60_000);
+    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
     if (!selectedId) {
       setSelectedConversation(null);
       setMessages([]);
+      setSelectedLineReviews([]);
       setDetails(emptyDetails());
       setDetailsDirty(false);
       return;
@@ -359,12 +595,17 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
     const controller = new AbortController();
     setLoadingConversation(true);
     setError(null);
-    fetch(`/api/ai-scheduler/conversations/${selectedId}`, { signal: controller.signal })
-      .then((response) => jsonOrThrow<{ conversation: SchedulerConversation; messages: SchedulerMessage[] }>(response))
-      .then((data) => {
-        setSelectedConversation(data.conversation);
-        setMessages(data.messages);
-        setDetails(detailsFromConversation(data.conversation));
+    Promise.all([
+      fetch(`/api/ai-scheduler/conversations/${selectedId}`, { signal: controller.signal })
+        .then((response) => jsonOrThrow<{ conversation: SchedulerConversation; messages: SchedulerMessage[] }>(response)),
+      fetch(`/api/line/scheduler-reviews?conversationId=${encodeURIComponent(selectedId)}`, { signal: controller.signal })
+        .then((response) => jsonOrThrow<{ reviews: LineSchedulerReview[] }>(response)),
+    ])
+      .then(([conversationData, reviewData]) => {
+        setSelectedConversation(conversationData.conversation);
+        setMessages(conversationData.messages);
+        setSelectedLineReviews(reviewData.reviews);
+        setDetails(detailsFromConversation(conversationData.conversation));
         setDetailsDirty(false);
       })
       .catch((err) => {
@@ -514,6 +755,7 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
       setDetailsDirty(false);
       focusLatestAssistantSuggestion(data.messages);
       await loadConversations(data.conversation.id);
+      await refreshLineReviews(data.conversation.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send message");
       setComposer(content);
@@ -576,6 +818,63 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
           >
             <Archive className="h-3 w-3" aria-hidden />
           </Button>
+        </div>
+        <div className="mb-2 rounded-md border border-border bg-card/70 p-2">
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <Inbox className="h-3.5 w-3.5" aria-hidden />
+              LINE reviews
+            </div>
+            <Badge variant={pendingLineReviews.length > 0 ? "default" : "outline"} className="h-5 px-1.5 text-[10px]">
+              {pendingLineReviews.length}
+            </Badge>
+          </div>
+          {lineAnalytics && (
+            <div className="mb-2 grid grid-cols-3 gap-1 text-center">
+              <div className="rounded bg-background px-1 py-1">
+                <div className="text-xs font-semibold">{lineAnalytics.classifiedMessages}</div>
+                <div className="text-[9px] text-muted-foreground">Classified</div>
+              </div>
+              <div className="rounded bg-background px-1 py-1">
+                <div className="text-xs font-semibold">{lineAnalytics.approvedSent + lineAnalytics.acceptedNoSend}</div>
+                <div className="text-[9px] text-muted-foreground">Good</div>
+              </div>
+              <div className="rounded bg-background px-1 py-1">
+                <div className="text-xs font-semibold">{Math.round(lineAnalytics.rejectionRate * 100)}%</div>
+                <div className="text-[9px] text-muted-foreground">Reject</div>
+              </div>
+            </div>
+          )}
+          {pendingLineReviews.length === 0 ? (
+            <div className="text-[11px] text-muted-foreground">No pending LINE scheduling reviews.</div>
+          ) : (
+            <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+              {pendingLineReviews.map((review) => (
+                <button
+                  key={review.id}
+                  type="button"
+                  onClick={() => {
+                    if (review.conversationId) setSelectedId(review.conversationId);
+                  }}
+                  disabled={!review.conversationId}
+                  className="w-full rounded border border-border bg-background px-2 py-1.5 text-left hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <div className="truncate text-[11px] font-semibold text-foreground">
+                    {review.contactDisplayName || review.lineUserId}
+                  </div>
+                  <div className="truncate text-[10px] text-muted-foreground">
+                    {review.classifierSummary || review.classifierCategory.replace(/_/g, " ")}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+          {lineAnalytics?.averageModelLatencyMs !== null && lineAnalytics?.averageModelLatencyMs !== undefined && (
+            <div className="mt-1.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+              <BarChart3 className="h-3 w-3" aria-hidden />
+              Avg model {Math.round(lineAnalytics.averageModelLatencyMs)}ms
+            </div>
+          )}
         </div>
         <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
           {loadingList && conversations.length === 0 ? (
@@ -678,16 +977,21 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
                 const suggestions = payload?.suggestions ?? [];
                 const parentDraft = payload?.parentMessageDraft;
                 const isAdmin = message.role === "admin";
+                const isParent = message.role === "parent";
                 return (
                   <div
                     key={message.id}
                     className={cn(
                       "rounded-md border p-3",
-                      isAdmin ? "ml-auto max-w-[78%] border-primary/20 bg-primary/5" : "mr-auto max-w-[88%] border-border bg-background",
+                      isAdmin
+                        ? "ml-auto max-w-[78%] border-primary/20 bg-primary/5"
+                        : isParent
+                          ? "mr-auto max-w-[84%] border-available/30 bg-available/8"
+                          : "mr-auto max-w-[88%] border-border bg-background",
                     )}
                   >
                     <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-muted-foreground">
-                      <span>{isAdmin ? message.createdByName || "Admin" : "AI Scheduler"}</span>
+                      <span>{isAdmin ? message.createdByName || "Admin" : isParent ? message.createdByName || "Parent via LINE" : "AI Scheduler"}</span>
                       <span>{formatShortDate(message.createdAt)}</span>
                     </div>
                     <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{message.content}</div>
@@ -716,6 +1020,17 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
                   </div>
                 );
               })}
+              {selectedLineReviews.length > 0 && (
+                <div className="space-y-2">
+                  {selectedLineReviews.map((review) => (
+                    <LineReviewPanel
+                      key={review.id}
+                      review={review}
+                      onUpdated={replaceLineReview}
+                    />
+                  ))}
+                </div>
+              )}
               {sending && (
                 <div className="rounded-md border border-border bg-background p-3 text-xs text-muted-foreground">
                   Searching Wise-backed availability...
