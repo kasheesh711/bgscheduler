@@ -10,6 +10,7 @@ export default auth((req) => {
     pathname.startsWith("/api/auth") ||
     pathname === "/api/search/assistant" ||
     pathname === "/api/classrooms/floor-plan-map" ||
+    pathname === "/api/line/webhook" ||
     pathname.startsWith("/api/internal/")
   ) {
     return NextResponse.next();

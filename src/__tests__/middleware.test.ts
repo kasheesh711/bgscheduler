@@ -42,6 +42,12 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     expect(res.headers.get("location")).toBeNull();
   });
 
+  it("/api/line/webhook bypasses middleware so LINE can post signed webhook events", async () => {
+    const res = await middleware(makeReq("/api/line/webhook") as never, {} as never) as Response;
+
+    expect(res.headers.get("location")).toBeNull();
+  });
+
   it("non-public route /search redirects to /login when unauthenticated, with callbackUrl preserved", async () => {
     const res = await middleware(makeReq("/search", false) as never, {} as never) as Response;
 
