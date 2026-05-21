@@ -55,6 +55,15 @@ function asSourceRecord(row: typeof schema.salesDashboardSources.$inferSelect): 
   return row as SalesDashboardSourceRecord;
 }
 
+function revalidateSalesDashboardCache() {
+  try {
+    revalidateTag(SALES_DASHBOARD_CACHE_TAG, "max");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!message.includes("static generation store missing")) throw error;
+  }
+}
+
 function toSummary(source: SalesDashboardSourceRecord): SalesDashboardSourceSummary {
   return {
     id: source.id,
@@ -135,7 +144,7 @@ export async function upsertSalesDashboardSource(input: SourceInput, db: Databas
       },
     })
     .returning();
-  revalidateTag(SALES_DASHBOARD_CACHE_TAG, "max");
+  revalidateSalesDashboardCache();
   return asSourceRecord(row);
 }
 
@@ -173,7 +182,7 @@ export async function updateSalesDashboardSourceStatus(
     })
     .where(eq(schema.salesDashboardSources.id, id))
     .returning();
-  revalidateTag(SALES_DASHBOARD_CACHE_TAG, "max");
+  revalidateSalesDashboardCache();
   return row ? asSourceRecord(row) : null;
 }
 
@@ -182,7 +191,7 @@ export async function deleteSalesDashboardSource(id: string, db: Database = getD
   await db.delete(schema.salesDashboardAdditionalRows).where(eq(schema.salesDashboardAdditionalRows.sourceId, id));
   await db.delete(schema.salesDashboardImportRuns).where(eq(schema.salesDashboardImportRuns.sourceId, id));
   await db.delete(schema.salesDashboardSources).where(eq(schema.salesDashboardSources.id, id));
-  revalidateTag(SALES_DASHBOARD_CACHE_TAG, "max");
+  revalidateSalesDashboardCache();
 }
 
 async function getSourceOrThrow(sourceId: string, db: Database): Promise<SalesDashboardSourceRecord> {
@@ -304,7 +313,7 @@ export async function importSalesDashboardSource(
         updatedAt: new Date(),
       })
       .where(eq(schema.salesDashboardSources.id, source.id));
-    revalidateTag(SALES_DASHBOARD_CACHE_TAG, "max");
+    revalidateSalesDashboardCache();
     return { sourceId: source.id, runId: run.id, normalRows: normalRows.length, additionalRows: additionalRows.length };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sales dashboard import failed";
