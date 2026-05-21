@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { listTutorBusinessProfiles } from "@/lib/tutor-business-profiles";
+import {
+  listTutorBusinessProfiles,
+  listTutorProfileImportAliases,
+  listTutorProfileImportIdentities,
+} from "@/lib/tutor-business-profiles";
 import {
   buildTutorProfileImportPreview,
   parseTutorProfileImportWorkbooks,
@@ -32,10 +36,13 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const [educationWorkbook, availabilityWorkbook, activeProfiles] = await Promise.all([
+    const db = getDb();
+    const [educationWorkbook, availabilityWorkbook, activeProfiles, activeIdentities, aliases] = await Promise.all([
       fileBuffer(formData, "educationFile"),
       fileBuffer(formData, "availabilityFile"),
-      listTutorBusinessProfiles(getDb()),
+      listTutorBusinessProfiles(db),
+      listTutorProfileImportIdentities(db),
+      listTutorProfileImportAliases(db),
     ]);
 
     if (!educationWorkbook && !availabilityWorkbook) {
@@ -50,6 +57,8 @@ export async function POST(request: NextRequest) {
       educationRows,
       availabilityRows,
       activeProfiles,
+      activeIdentities,
+      aliases,
       verifiedBy: nullableFormValue(formData, "verifiedBy"),
       lastReviewedAt: nullableFormValue(formData, "lastReviewedAt"),
     });

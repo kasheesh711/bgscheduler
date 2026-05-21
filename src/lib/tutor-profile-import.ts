@@ -45,10 +45,41 @@ export interface TutorAvailabilityImportRow extends TutorProfileImportSourceRow 
   teachingStyleNotes?: string;
 }
 
+export interface TutorProfileImportAlias {
+  fromKey: string;
+  toKey: string;
+}
+
+export interface TutorProfileImportActiveIdentity {
+  canonicalKey: string;
+  displayName: string;
+  wiseDisplayNames: string[];
+}
+
+export type TutorProfileImportMatchType =
+  | "canonicalKey"
+  | "displayName"
+  | "nickname"
+  | "fullName"
+  | "alias"
+  | "wiseDisplayName"
+  | "wiseFullName"
+  | "wiseNickname"
+  | "wiseNicknameLastName";
+
+export interface TutorProfileImportMatchEvidence {
+  matchType: TutorProfileImportMatchType;
+  sourceField: string;
+  sourceValue: string;
+  matchedValue: string;
+}
+
 export interface TutorProfileImportMatchedRow {
   canonicalKey: string;
   displayName: string;
-  matchedBy: "canonicalKey" | "nickname" | "fullName";
+  matchedBy: TutorProfileImportMatchType;
+  matchMethod: string;
+  matchEvidence: TutorProfileImportMatchEvidence;
   sourceName: string;
   patch: TutorBusinessProfilePatch;
   warnings: string[];
@@ -60,6 +91,12 @@ export interface TutorProfileImportUnmatchedRow {
   rowNumber: number;
   sourceName: string;
   reason: string;
+  tried: string[];
+  candidates?: Array<{
+    canonicalKey: string;
+    displayName: string;
+    matchedBy: TutorProfileImportMatchType;
+  }>;
 }
 
 export interface TutorProfileImportPreview {
@@ -71,9 +108,11 @@ export interface TutorProfileImportPreview {
     duplicateSourceRows: number;
     availabilityOnlyRows: number;
     invalidRows: number;
+    ambiguousRows: number;
   };
   rows: TutorProfileImportMatchedRow[];
   unmatchedRows: TutorProfileImportUnmatchedRow[];
+  ambiguousRows: TutorProfileImportUnmatchedRow[];
   duplicateSourceRows: string[];
   availabilityOnlyRows: string[];
   invalidRows: string[];
@@ -87,6 +126,8 @@ interface BuildPreviewInput {
   educationRows: TutorEducationImportRow[];
   availabilityRows: TutorAvailabilityImportRow[];
   activeProfiles: TutorBusinessProfileListItem[];
+  activeIdentities?: TutorProfileImportActiveIdentity[];
+  aliases?: TutorProfileImportAlias[];
   verifiedBy?: string | null;
   lastReviewedAt?: string | null;
 }
@@ -98,6 +139,24 @@ interface CombinedSource {
   availability?: TutorAvailabilityImportRow;
   sources: string[];
   warnings: string[];
+}
+
+interface ActiveProfileMatchTarget {
+  profile: TutorBusinessProfileListItem;
+  canonicalKey: string;
+  displayName: string;
+  wiseDisplayNames: string[];
+}
+
+interface LookupMatch {
+  target: ActiveProfileMatchTarget;
+  matchedBy: TutorProfileImportMatchType;
+  matchedValue: string;
+}
+
+interface CandidateKey {
+  field: string;
+  value: string;
 }
 
 const ENGLISH_RANK: Record<EnglishProficiency, number> = {
@@ -122,7 +181,13 @@ function compactSpaces(value: string): string {
 }
 
 function normalizeKey(value: string): string {
-  return compactSpaces(value).toLowerCase();
+  return compactSpaces(value)
+    .toLowerCase()
+    .replace(/\bonline\b/g, "")
+    .replace(/[()]/g, " ")
+    .replace(/[^a-z0-9+]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 function sourceName(row: TutorProfileImportSourceRow): string {
@@ -137,12 +202,54 @@ function fullName(row: TutorProfileImportSourceRow): string {
   return compactSpaces([row.firstName, row.lastName].filter(Boolean).join(" "));
 }
 
+function sourceFullName(row: TutorProfileImportSourceRow | undefined): string {
+  return row ? fullName(row) : "";
+}
+
 function sourceKey(row: TutorProfileImportSourceRow): string {
   if (row.canonicalKey) return `canonical:${normalizeKey(row.canonicalKey)}`;
   const name = fullName(row);
   if (name) return `name:${normalizeKey(name)}`;
   if (row.nickname) return `nickname:${normalizeKey(row.nickname)}`;
   return `row:${row.rowNumber}`;
+}
+
+function displayNormalize(value: string): string {
+  return compactSpaces(value)
+    .replace(/\bonline\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseWiseDisplayName(value: string): {
+  displayName: string;
+  nickname: string;
+  legalFullName: string;
+  nicknameLastName: string;
+  legalNicknameLastName: string;
+} {
+  const displayName = displayNormalize(value);
+  const match = displayName.match(/^(.+?)\s*\(([^)]+)\)\s*(.+)$/);
+  if (!match) {
+    return {
+      displayName,
+      nickname: "",
+      legalFullName: displayName,
+      nicknameLastName: "",
+      legalNicknameLastName: "",
+    };
+  }
+
+  const legalFirst = compactSpaces(match[1]);
+  const nickname = compactSpaces(match[2]);
+  const lastName = compactSpaces(match[3]);
+  return {
+    displayName,
+    nickname,
+    legalFullName: compactSpaces(`${legalFirst} ${lastName}`),
+    nicknameLastName: compactSpaces(`${nickname} ${lastName}`),
+    legalNicknameLastName: compactSpaces(`${legalFirst} ${nickname} ${lastName}`),
+  };
 }
 
 function headerKey(value: unknown): string {
@@ -542,43 +649,160 @@ function combineRows(
   };
 }
 
-function buildActiveLookup(activeProfiles: TutorBusinessProfileListItem[]) {
-  const byCanonicalKey = new Map<string, TutorBusinessProfileListItem>();
-  const byDisplayName = new Map<string, TutorBusinessProfileListItem>();
-  for (const profile of activeProfiles) {
-    byCanonicalKey.set(normalizeKey(profile.canonicalKey), profile);
-    byDisplayName.set(normalizeKey(profile.displayName), profile);
+function activeTargets(
+  activeProfiles: TutorBusinessProfileListItem[],
+  activeIdentities: TutorProfileImportActiveIdentity[] | undefined,
+): ActiveProfileMatchTarget[] {
+  const identityByKey = new Map((activeIdentities ?? []).map((identity) => [identity.canonicalKey, identity]));
+  return activeProfiles.map((profile) => {
+    const identity = identityByKey.get(profile.canonicalKey);
+    return {
+      profile,
+      canonicalKey: profile.canonicalKey,
+      displayName: identity?.displayName || profile.displayName,
+      wiseDisplayNames: identity?.wiseDisplayNames ?? [],
+    };
+  });
+}
+
+function addLookup(
+  lookup: Map<string, LookupMatch[]>,
+  value: string | undefined,
+  target: ActiveProfileMatchTarget,
+  matchedBy: TutorProfileImportMatchType,
+): void {
+  const normalized = normalizeKey(value ?? "");
+  if (!normalized) return;
+  const matches = lookup.get(normalized) ?? [];
+  matches.push({ target, matchedBy, matchedValue: compactSpaces(value ?? "") });
+  lookup.set(normalized, matches);
+}
+
+function buildActiveLookup(
+  activeProfiles: TutorBusinessProfileListItem[],
+  activeIdentities: TutorProfileImportActiveIdentity[] | undefined,
+  aliases: TutorProfileImportAlias[] | undefined,
+) {
+  const targets = activeTargets(activeProfiles, activeIdentities);
+  const lookup = new Map<string, LookupMatch[]>();
+  const targetByCanonicalKey = new Map<string, ActiveProfileMatchTarget>();
+  const targetByDisplayName = new Map<string, ActiveProfileMatchTarget>();
+
+  for (const target of targets) {
+    targetByCanonicalKey.set(normalizeKey(target.canonicalKey), target);
+    targetByDisplayName.set(normalizeKey(target.displayName), target);
+    addLookup(lookup, target.canonicalKey, target, "canonicalKey");
+    addLookup(lookup, target.displayName, target, "displayName");
+
+    for (const wiseDisplayName of target.wiseDisplayNames) {
+      const parsed = parseWiseDisplayName(wiseDisplayName);
+      addLookup(lookup, parsed.displayName, target, "wiseDisplayName");
+      addLookup(lookup, parsed.nickname, target, "wiseNickname");
+      addLookup(lookup, parsed.legalFullName, target, "wiseFullName");
+      addLookup(lookup, parsed.nicknameLastName, target, "wiseNicknameLastName");
+      addLookup(lookup, parsed.legalNicknameLastName, target, "wiseFullName");
+    }
   }
-  return { byCanonicalKey, byDisplayName };
+
+  for (const alias of aliases ?? []) {
+    const target = targetByCanonicalKey.get(normalizeKey(alias.toKey))
+      ?? targetByDisplayName.get(normalizeKey(alias.toKey));
+    if (!target) continue;
+    addLookup(lookup, alias.fromKey, target, "alias");
+    addLookup(lookup, alias.toKey, target, "alias");
+  }
+
+  return { lookup };
+}
+
+function distinctMatches(matches: LookupMatch[]): LookupMatch[] {
+  const byCanonicalKey = new Map<string, LookupMatch>();
+  for (const match of matches) {
+    if (!byCanonicalKey.has(match.target.canonicalKey)) {
+      byCanonicalKey.set(match.target.canonicalKey, match);
+    }
+  }
+  return [...byCanonicalKey.values()];
+}
+
+function resolveLookup(
+  lookup: Map<string, LookupMatch[]>,
+  candidate: CandidateKey,
+): { status: "matched"; match: LookupMatch } | { status: "ambiguous"; matches: LookupMatch[] } | null {
+  const matches = distinctMatches(lookup.get(normalizeKey(candidate.value)) ?? []);
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return { status: "matched", match: matches[0] };
+  return { status: "ambiguous", matches };
+}
+
+function candidateKeys(entry: CombinedSource): CandidateKey[] {
+  const keys: CandidateKey[] = [];
+  const educationCanonicalKey = entry.education?.canonicalKey;
+  const availabilityCanonicalKey = entry.availability?.canonicalKey;
+  const availabilityNickname = entry.availability?.nickname;
+  const availabilityFullName = sourceFullName(entry.availability);
+  const educationFullName = sourceFullName(entry.education);
+
+  if (educationCanonicalKey) keys.push({ field: "education.canonicalKey", value: educationCanonicalKey });
+  if (availabilityCanonicalKey) keys.push({ field: "availability.canonicalKey", value: availabilityCanonicalKey });
+  if (availabilityNickname) keys.push({ field: "availability.nickname", value: availabilityNickname });
+  if (availabilityFullName) keys.push({ field: "availability.fullName", value: availabilityFullName });
+  if (educationFullName) keys.push({ field: "education.fullName", value: educationFullName });
+
+  return keys;
 }
 
 function resolveProfile(
   entry: CombinedSource,
-  activeProfiles: TutorBusinessProfileListItem[],
-): { profile: TutorBusinessProfileListItem; matchedBy: TutorProfileImportMatchedRow["matchedBy"] } | null {
-  const { byCanonicalKey, byDisplayName } = buildActiveLookup(activeProfiles);
-  const explicitKey = entry.education?.canonicalKey ?? entry.availability?.canonicalKey;
-  if (explicitKey) {
-    const profile = byCanonicalKey.get(normalizeKey(explicitKey));
-    return profile ? { profile, matchedBy: "canonicalKey" } : null;
+  lookup: Map<string, LookupMatch[]>,
+): {
+  profile: TutorBusinessProfileListItem;
+  matchedBy: TutorProfileImportMatchType;
+  matchMethod: string;
+  evidence: TutorProfileImportMatchEvidence;
+} | {
+  ambiguous: true;
+  tried: string[];
+  candidates: Array<{ canonicalKey: string; displayName: string; matchedBy: TutorProfileImportMatchType }>;
+} | null {
+  const tried: string[] = [];
+
+  for (const candidate of candidateKeys(entry)) {
+    tried.push(`${candidate.field}: ${candidate.value}`);
+    const resolved = resolveLookup(lookup, candidate);
+    if (!resolved) continue;
+    if (resolved.status === "ambiguous") {
+      return {
+        ambiguous: true,
+        tried,
+        candidates: resolved.matches.map((match) => ({
+          canonicalKey: match.target.canonicalKey,
+          displayName: match.target.displayName,
+          matchedBy: match.matchedBy,
+        })),
+      };
+    }
+
+    return {
+      profile: resolved.match.target.profile,
+      matchedBy: resolved.match.matchedBy,
+      matchMethod: `${candidate.field} -> ${resolved.match.matchedBy}`,
+      evidence: {
+        matchType: resolved.match.matchedBy,
+        sourceField: candidate.field,
+        sourceValue: candidate.value,
+        matchedValue: resolved.match.matchedValue,
+      },
+    };
   }
-  const nickname = entry.availability?.nickname;
-  if (nickname) {
-    const profile = byDisplayName.get(normalizeKey(nickname)) ?? byCanonicalKey.get(normalizeKey(nickname));
-    if (profile) return { profile, matchedBy: "nickname" };
-  }
-  const name = fullName(entry.availability ?? entry.education ?? { rowNumber: 0 });
-  if (name) {
-    const profile = byDisplayName.get(normalizeKey(name));
-    if (profile) return { profile, matchedBy: "fullName" };
-  }
+
   return null;
 }
 
-function sourceWarnings(entry: CombinedSource, matchType: TutorProfileImportMatchedRow["matchedBy"]): string[] {
+function sourceWarnings(entry: CombinedSource, matchMethod: string): string[] {
   const warnings = [...entry.warnings];
   if (!entry.education?.canonicalKey && !entry.availability?.canonicalKey) {
-    warnings.push(`Missing canonicalKey; matched by ${matchType} for this import preview.`);
+    warnings.push(`Missing canonicalKey; matched by ${matchMethod} for this import preview.`);
   }
   if (entry.availability && !entry.education) {
     warnings.push("Availability/profile row has no matching education row.");
@@ -588,12 +812,14 @@ function sourceWarnings(entry: CombinedSource, matchType: TutorProfileImportMatc
 
 export function buildTutorProfileImportPreview(input: BuildPreviewInput): TutorProfileImportPreview {
   const { combined, duplicateSourceRows, availabilityOnlyRows } = combineRows(input.educationRows, input.availabilityRows);
+  const { lookup } = buildActiveLookup(input.activeProfiles, input.activeIdentities, input.aliases);
   const rows: TutorProfileImportMatchedRow[] = [];
   const unmatchedRows: TutorProfileImportUnmatchedRow[] = [];
+  const ambiguousRows: TutorProfileImportUnmatchedRow[] = [];
   const invalidRows: string[] = [];
 
   for (const entry of combined) {
-    const resolved = resolveProfile(entry, input.activeProfiles);
+    const resolved = resolveProfile(entry, lookup);
     if (!resolved) {
       const row = entry.education ?? entry.availability;
       unmatchedRows.push({
@@ -601,6 +827,19 @@ export function buildTutorProfileImportPreview(input: BuildPreviewInput): TutorP
         rowNumber: row?.rowNumber ?? 0,
         sourceName: entry.sourceName,
         reason: "No active tutor matched by canonicalKey, nickname, or full name.",
+        tried: candidateKeys(entry).map((candidate) => `${candidate.field}: ${candidate.value}`),
+      });
+      continue;
+    }
+    if ("ambiguous" in resolved) {
+      const row = entry.education ?? entry.availability;
+      ambiguousRows.push({
+        source: entry.education ? "education" : "availability",
+        rowNumber: row?.rowNumber ?? 0,
+        sourceName: entry.sourceName,
+        reason: "Multiple active tutors matched this source row; add canonicalKey before committing.",
+        tried: resolved.tried,
+        candidates: resolved.candidates,
       });
       continue;
     }
@@ -614,9 +853,11 @@ export function buildTutorProfileImportPreview(input: BuildPreviewInput): TutorP
       canonicalKey: resolved.profile.canonicalKey,
       displayName: resolved.profile.displayName,
       matchedBy: resolved.matchedBy,
+      matchMethod: resolved.matchMethod,
+      matchEvidence: resolved.evidence,
       sourceName: entry.sourceName,
       patch,
-      warnings: sourceWarnings(entry, resolved.matchedBy),
+      warnings: sourceWarnings(entry, resolved.matchMethod),
       sources: [...new Set(entry.sources)],
     });
   }
@@ -630,9 +871,11 @@ export function buildTutorProfileImportPreview(input: BuildPreviewInput): TutorP
       duplicateSourceRows: duplicateSourceRows.length,
       availabilityOnlyRows: availabilityOnlyRows.length,
       invalidRows: invalidRows.length,
+      ambiguousRows: ambiguousRows.length,
     },
     rows: rows.sort((a, b) => a.displayName.localeCompare(b.displayName)),
     unmatchedRows,
+    ambiguousRows,
     duplicateSourceRows,
     availabilityOnlyRows,
     invalidRows,

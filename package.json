@@ -16,6 +16,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "tsx src/lib/db/seed.ts",
     "credit-control:seed-admin-ownership": "tsx scripts/seed-credit-control-admin-ownership.ts",
+    "tutor-profiles:seed": "tsx scripts/seed-tutor-business-profiles.ts",
     "room-capacity:import-model": "tsx scripts/import-room-capacity-model.ts",
     "room-utilization:sync": "tsx scripts/sync-room-utilization.ts"
   },
