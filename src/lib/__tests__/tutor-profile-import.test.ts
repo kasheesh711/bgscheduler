@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTutorProfileImportPreview,
+  type TutorProfileImportActiveIdentity,
+  type TutorProfileImportAlias,
   type TutorAvailabilityImportRow,
   type TutorEducationImportRow,
 } from "@/lib/tutor-profile-import";
 import type { TutorBusinessProfileListItem } from "@/lib/tutor-business-profiles";
 
-function activeProfile(index: number): TutorBusinessProfileListItem {
+function activeProfile(index: number, overrides: Partial<TutorBusinessProfileListItem> = {}): TutorBusinessProfileListItem {
   return {
-    canonicalKey: `nick-${index}`,
-    displayName: `Nick${index}`,
+    canonicalKey: overrides.canonicalKey ?? `nick-${index}`,
+    displayName: overrides.displayName ?? `Nick${index}`,
     tutorGroupId: `group-${index}`,
     supportedModes: ["online", "onsite"],
     subjects: ["Math"],
@@ -31,6 +33,7 @@ function activeProfile(index: number): TutorBusinessProfileListItem {
     lastReviewedAt: null,
     active: true,
     updatedAt: "2026-05-21T00:00:00.000Z",
+    ...overrides,
   };
 }
 
@@ -97,5 +100,77 @@ describe("tutor profile import preview", () => {
     expect(preview.rows[0].patch.youngLearnerFit).toBe("comfortable");
     expect(preview.rows[0].patch.youngestComfortableAge).toBe(6);
     expect(preview.rows[0].patch.teachingStyleTags).toEqual(expect.arrayContaining(["patient", "structured"]));
+  });
+
+  it("uses active aliases to stabilize canonicalKey matching", () => {
+    const aliases: TutorProfileImportAlias[] = [{ fromKey: "Kev", toKey: "Kevin" }];
+    const preview = buildTutorProfileImportPreview({
+      educationRows: [{ ...educationRow(1), firstName: "Kevin", lastName: "Hsieh" }],
+      availabilityRows: [{ ...availabilityRow(1), nickname: "Kev", firstName: "Kevin", lastName: "Hsieh" }],
+      activeProfiles: [activeProfile(1, { canonicalKey: "Kevin", displayName: "Kevin" })],
+      aliases,
+    });
+
+    expect(preview.rows).toHaveLength(1);
+    expect(preview.rows[0]).toMatchObject({
+      canonicalKey: "Kevin",
+      matchedBy: "alias",
+      matchMethod: "availability.nickname -> alias",
+    });
+    expect(preview.rows[0].warnings.join(" ")).toMatch(/Missing canonicalKey/);
+  });
+
+  it("matches swapped legal first name and Wise nickname plus last name deterministically", () => {
+    const activeIdentities: TutorProfileImportActiveIdentity[] = [{
+      canonicalKey: "Key",
+      displayName: "Key",
+      wiseDisplayNames: ["Kieran (Key) Wilkinson Online", "Kieran (Key) Wilkinson"],
+    }];
+    const preview = buildTutorProfileImportPreview({
+      educationRows: [],
+      availabilityRows: [{
+        ...availabilityRow(1),
+        nickname: "Kieran",
+        firstName: "Key",
+        lastName: "Wilkinson",
+      }],
+      activeProfiles: [activeProfile(1, { canonicalKey: "Key", displayName: "Key" })],
+      activeIdentities,
+    });
+
+    expect(preview.rows).toHaveLength(1);
+    expect(preview.rows[0]).toMatchObject({
+      canonicalKey: "Key",
+      matchedBy: "wiseNicknameLastName",
+      matchMethod: "availability.fullName -> wiseNicknameLastName",
+    });
+    expect(preview.rows[0].warnings).toContain("Availability/profile row has no matching education row.");
+  });
+
+  it("blocks ambiguous deterministic matches from commit rows", () => {
+    const activeIdentities: TutorProfileImportActiveIdentity[] = [
+      { canonicalKey: "Alex-One", displayName: "Alex One", wiseDisplayNames: ["Tutor (Alex) One"] },
+      { canonicalKey: "Alex-Two", displayName: "Alex Two", wiseDisplayNames: ["Tutor (Alex) Two"] },
+    ];
+    const preview = buildTutorProfileImportPreview({
+      educationRows: [],
+      availabilityRows: [{ ...availabilityRow(1), nickname: "Alex", firstName: "Alex", lastName: "Tutor" }],
+      activeProfiles: [
+        activeProfile(1, { canonicalKey: "Alex-One", displayName: "Alex One" }),
+        activeProfile(2, { canonicalKey: "Alex-Two", displayName: "Alex Two" }),
+      ],
+      activeIdentities,
+    });
+
+    expect(preview.rows).toHaveLength(0);
+    expect(preview.summary.ambiguousRows).toBe(1);
+    expect(preview.ambiguousRows[0]).toMatchObject({
+      sourceName: "Alex | Alex Tutor",
+      reason: expect.stringMatching(/Multiple active tutors/),
+    });
+    expect(preview.ambiguousRows[0].candidates?.map((candidate) => candidate.canonicalKey)).toEqual([
+      "Alex-One",
+      "Alex-Two",
+    ]);
   });
 });

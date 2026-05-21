@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import {
@@ -82,6 +82,7 @@ export interface IndexedTutorGroup {
 
 export interface SearchIndex {
   snapshotId: string;
+  profileVersion: string;
   builtAt: Date;
   syncedAt: Date;
   tutorGroups: IndexedTutorGroup[];
@@ -124,6 +125,17 @@ export function clearSearchIndex(): void {
   setBuildingPromise(null);
 }
 
+async function getTutorProfileVersion(db: Database): Promise<string> {
+  const [version] = await db
+    .select({
+      count: sql<string>`count(*)::text`,
+      maxUpdatedAt: sql<string | null>`max(${schema.tutorBusinessProfiles.updatedAt})::text`,
+    })
+    .from(schema.tutorBusinessProfiles);
+
+  return `${version?.count ?? "0"}:${version?.maxUpdatedAt ?? ""}`;
+}
+
 /**
  * Build the search index from the active Postgres snapshot.
  */
@@ -160,7 +172,7 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
     .where(eq(schema.tutorIdentityGroups.snapshotId, snapshotId));
 
   // Load all data in parallel
-  const [members, qualifications, windows, leaves, sessions, issues, businessProfiles] = await Promise.all([
+  const [members, qualifications, windows, leaves, sessions, issues, businessProfiles, profileVersion] = await Promise.all([
     db
       .select()
       .from(schema.tutorIdentityGroupMembers)
@@ -206,6 +218,7 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
       .from(schema.dataIssues)
       .where(eq(schema.dataIssues.snapshotId, snapshotId)),
     loadTutorBusinessProfileMap(db),
+    getTutorProfileVersion(db),
   ]);
 
   // Index by groupId
@@ -319,6 +332,7 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
 
   const index: SearchIndex = {
     snapshotId,
+    profileVersion,
     builtAt: new Date(),
     syncedAt,
     tutorGroups,
@@ -351,12 +365,20 @@ export async function ensureIndex(db: Database): Promise<SearchIndex> {
   const buildAndCheck = async (): Promise<SearchIndex> => {
     if (cached) {
       // Check if still the active snapshot
-      const [activeSnapshot] = await db
-        .select({ id: schema.snapshots.id })
-        .from(schema.snapshots)
-        .where(eq(schema.snapshots.active, true))
-        .limit(1);
-      if (activeSnapshot && activeSnapshot.id === cached.snapshotId) {
+      const [activeSnapshotRows, profileVersion] = await Promise.all([
+        db
+          .select({ id: schema.snapshots.id })
+          .from(schema.snapshots)
+          .where(eq(schema.snapshots.active, true))
+          .limit(1),
+        getTutorProfileVersion(db),
+      ]);
+      const activeSnapshot = activeSnapshotRows[0];
+      if (
+        activeSnapshot
+        && activeSnapshot.id === cached.snapshotId
+        && profileVersion === cached.profileVersion
+      ) {
         return cached;
       }
       if (!activeSnapshot) {

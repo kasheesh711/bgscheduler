@@ -96,6 +96,17 @@ export interface TutorBusinessProfileListItem extends TutorBusinessProfile {
   subjects: string[];
 }
 
+export interface TutorProfileImportIdentity {
+  canonicalKey: string;
+  displayName: string;
+  wiseDisplayNames: string[];
+}
+
+export interface TutorProfileImportAliasRow {
+  fromKey: string;
+  toKey: string;
+}
+
 type ProfileRow = typeof schema.tutorBusinessProfiles.$inferSelect;
 
 function normalizeList(values: string[] | undefined): string[] {
@@ -263,6 +274,50 @@ export async function listTutorBusinessProfiles(db: Database): Promise<TutorBusi
       };
     })
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+export async function listTutorProfileImportIdentities(db: Database): Promise<TutorProfileImportIdentity[]> {
+  const snapshotId = await getActiveSnapshotIdOrThrow(db);
+  const [groups, members] = await Promise.all([
+    db
+      .select({
+        id: schema.tutorIdentityGroups.id,
+        canonicalKey: schema.tutorIdentityGroups.canonicalKey,
+        displayName: schema.tutorIdentityGroups.displayName,
+      })
+      .from(schema.tutorIdentityGroups)
+      .where(eq(schema.tutorIdentityGroups.snapshotId, snapshotId)),
+    db
+      .select({
+        groupId: schema.tutorIdentityGroupMembers.groupId,
+        wiseDisplayName: schema.tutorIdentityGroupMembers.wiseDisplayName,
+      })
+      .from(schema.tutorIdentityGroupMembers)
+      .where(eq(schema.tutorIdentityGroupMembers.snapshotId, snapshotId)),
+  ]);
+
+  const membersByGroup = new Map<string, string[]>();
+  for (const member of members) {
+    membersByGroup.set(member.groupId, [
+      ...(membersByGroup.get(member.groupId) ?? []),
+      member.wiseDisplayName,
+    ]);
+  }
+
+  return groups.map((group) => ({
+    canonicalKey: group.canonicalKey,
+    displayName: group.displayName,
+    wiseDisplayNames: membersByGroup.get(group.id) ?? [],
+  }));
+}
+
+export async function listTutorProfileImportAliases(db: Database): Promise<TutorProfileImportAliasRow[]> {
+  return db
+    .select({
+      fromKey: schema.tutorAliases.fromKey,
+      toKey: schema.tutorAliases.toKey,
+    })
+    .from(schema.tutorAliases);
 }
 
 export async function loadTutorBusinessProfileMap(db: Database): Promise<Map<string, TutorBusinessProfile>> {

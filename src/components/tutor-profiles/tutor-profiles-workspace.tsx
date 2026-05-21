@@ -404,13 +404,30 @@ export function TutorProfilesWorkspace() {
                   <div className="text-[9px] text-muted-foreground">profile-only</div>
                 </div>
               </div>
-              {(importPreview.unmatchedRows.length > 0 || importPreview.duplicateSourceRows.length > 0 || importPreview.invalidRows.length > 0) && (
+              {importPreview.rows.length > 0 && (
+                <div className="max-h-20 overflow-y-auto rounded-md border border-border bg-muted/40 p-2 text-[10px] text-muted-foreground">
+                  {importPreview.rows.slice(0, 6).map((row) => (
+                    <div key={`${row.canonicalKey}-${row.sourceName}`} className="truncate">
+                      {row.sourceName} -&gt; {row.displayName} · {row.matchMethod}
+                    </div>
+                  ))}
+                  {importPreview.rows.length > 6 ? (
+                    <div className="text-[9px]">+{importPreview.rows.length - 6} more matched rows</div>
+                  ) : null}
+                </div>
+              )}
+              {(importPreview.unmatchedRows.length > 0 || importPreview.ambiguousRows.length > 0 || importPreview.duplicateSourceRows.length > 0 || importPreview.invalidRows.length > 0) && (
                 <div className="max-h-24 overflow-y-auto rounded-md border border-amber-300/50 bg-amber-500/10 p-2 text-[10px] text-amber-900 dark:text-amber-200">
                   <div className="mb-1 flex items-center gap-1 font-semibold">
                     <AlertTriangle className="h-3 w-3" aria-hidden />
                     Review before commit
                   </div>
-                  {[...importPreview.unmatchedRows.map((row) => `${row.sourceName}: ${row.reason}`), ...importPreview.duplicateSourceRows, ...importPreview.invalidRows].slice(0, 8).map((item) => (
+                  {[
+                    ...importPreview.ambiguousRows.map((row) => `${row.sourceName}: ${row.reason}`),
+                    ...importPreview.unmatchedRows.map((row) => `${row.sourceName}: ${row.reason}`),
+                    ...importPreview.duplicateSourceRows,
+                    ...importPreview.invalidRows,
+                  ].slice(0, 8).map((item) => (
                     <div key={item} className="truncate">{item}</div>
                   ))}
                 </div>

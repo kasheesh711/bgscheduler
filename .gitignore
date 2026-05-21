@@ -39,6 +39,10 @@ yarn-error.log*
 # superpowers brainstorm artifacts
 .superpowers/
 
+# local seed/audit reports
+seed-reports/
+.playwright-mcp/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
