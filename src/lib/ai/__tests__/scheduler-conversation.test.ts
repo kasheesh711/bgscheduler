@@ -29,6 +29,7 @@ function group(overrides: Partial<IndexedTutorGroup> = {}): IndexedTutorGroup {
     leaves: overrides.leaves ?? [],
     sessionBlocks: overrides.sessionBlocks ?? [],
     dataIssues: overrides.dataIssues ?? [],
+    businessProfile: overrides.businessProfile,
   };
 }
 
@@ -83,7 +84,7 @@ function hold(overrides: Partial<ProposalHoldSummary> = {}): ProposalHoldSummary
 const filters = {
   subjects: ["English", "Math", "Econ", "NonVR"],
   curriculums: ["International"],
-  levels: ["Year 5", "Y9-11"],
+  levels: ["Y2-8", "Y9-11", "G10-12", "11+/13+"],
 };
 
 const tutors = [
@@ -103,8 +104,17 @@ function modelExtraction(overrides: Record<string, unknown> = {}) {
     durationMinutes: null,
     mode: null,
     filters: { subject: null, curriculum: null, level: null },
+    businessRequirements: {
+      englishProficiency: null,
+      youngLearnerAge: null,
+      strengthTags: [],
+      curriculumExperience: [],
+      teachingStyleTags: [],
+      schoolKeywords: [],
+    },
     requestedSlots: [],
     explicitUnknownFilters: [],
+    explicitUnknownBusinessRequirements: [],
     tutorNames: [],
     tutorExclusions: [],
     parentName: null,
@@ -282,6 +292,265 @@ describe("conversational scheduler helpers", () => {
       { dayOfWeek: 6, start: "13:00", end: "14:00" },
     ]);
     expect(result.parentMessageDraft).not.toMatch(/Tuesday/);
+  });
+
+  it("maps raw Y10 scheduler filters to the active Y9-11 Wise level", () => {
+    const result = solveSchedulerTurn({
+      index: index([
+        group({
+          id: "econ-fri",
+          canonicalKey: "econ-fri",
+          displayName: "Friday Econ",
+          qualifications: [{ subject: "Econ", curriculum: "International", level: "Y9-11" }],
+          availabilityWindows: [
+            { weekday: 5, startMinute: 18 * 60, endMinute: 20 * 60, modality: "both", wiseTeacherId: "wise-fri" },
+          ],
+        }),
+      ]),
+      extractedState: {
+        searchMode: "recurring",
+        durationMinutes: 60,
+        filters: { subject: "Econ", curriculum: "International", level: "Y10" },
+        requestedSlots: [
+          { searchMode: "recurring", dayOfWeek: 5, startTime: "18:30", endTime: "19:30", durationMinutes: 60 },
+        ],
+      },
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.parentReady).toBe(true);
+    expect(result.state.filters.level).toBe("Y9-11");
+    expect(result.state.academicLevelResolution).toMatchObject({
+      rawLevelLabel: "Y10",
+      wiseLevel: "Y9-11",
+      status: "mapped",
+    });
+    expect(result.questions.join(" ")).not.toMatch(/Y10.*not an active Wise qualification/);
+  });
+
+  it("asks for curriculum when Grade 10 could be International or Thai", () => {
+    const result = solveSchedulerTurn({
+      index: index(),
+      extractedState: {
+        searchMode: "recurring",
+        dayOfWeek: 1,
+        startTime: "15:00",
+        endTime: "16:00",
+        filters: { subject: "Econ", level: "Grade 10" },
+      },
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.parentReady).toBe(false);
+    expect(result.questions.join(" ")).toMatch(/Y9-11 or G10-12/);
+  });
+
+  it("filters by verified fluent English tutor profile requirements", () => {
+    const fluentTutor = group({
+      id: "fluent",
+      canonicalKey: "fluent",
+      displayName: "Fluent Tutor",
+      businessProfile: {
+        canonicalKey: "fluent",
+        displayName: "Fluent Tutor",
+        parentSafeSummary: "Confident English communicator.",
+        internalNotes: "",
+        education: [],
+        languages: [{ language: "English", proficiency: "Fluent", verificationSource: "admin" }],
+        englishProficiency: "fluent",
+        youngLearnerFit: "unknown",
+        youngestComfortableAge: null,
+        youngLearnerNotes: "",
+        teachingStyleTags: [],
+        teachingStyleNotes: "",
+        strengthTags: ["writing"],
+        curriculumExperience: ["International"],
+        studentFitNotes: "",
+        doNotUseForNotes: "",
+        verifiedBy: "Kevin",
+        lastReviewedAt: "2026-05-20T00:00:00.000Z",
+        active: true,
+        updatedAt: "2026-05-20T00:00:00.000Z",
+      },
+    });
+    const unknownTutor = group({
+      id: "unknown",
+      canonicalKey: "unknown",
+      displayName: "Unknown Tutor",
+    });
+
+    const result = solveSchedulerTurn({
+      index: index([fluentTutor, unknownTutor]),
+      extractedState: {
+        searchMode: "recurring",
+        dayOfWeek: 1,
+        startTime: "15:00",
+        endTime: "16:00",
+        businessRequirements: { englishProficiency: "fluent" },
+      },
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.suggestions[0].tutors.map((tutor) => tutor.displayName)).toEqual(["Fluent Tutor"]);
+  });
+
+  it("does not return missing tutor profile context as a positive match", () => {
+    const result = solveSchedulerTurn({
+      index: index([
+        group({
+          id: "unknown",
+          canonicalKey: "unknown",
+          displayName: "Unknown Tutor",
+        }),
+      ]),
+      extractedState: {
+        searchMode: "recurring",
+        dayOfWeek: 1,
+        startTime: "15:00",
+        endTime: "16:00",
+        businessRequirements: { englishProficiency: "fluent" },
+      },
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.suggestions).toHaveLength(0);
+    expect(result.warnings.join(" ")).toMatch(/verified tutor profile requirements/);
+  });
+
+  it("hard-filters young learner requests only against verified compatible age profile data", () => {
+    const youngLearnerTutor = group({
+      id: "young-fit",
+      canonicalKey: "young-fit",
+      displayName: "Young Fit Tutor",
+      businessProfile: {
+        canonicalKey: "young-fit",
+        displayName: "Young Fit Tutor",
+        parentSafeSummary: "",
+        internalNotes: "",
+        education: [],
+        languages: [],
+        englishProficiency: "unknown",
+        youngLearnerFit: "comfortable",
+        youngestComfortableAge: 6,
+        youngLearnerNotes: "Verified primary learner fit.",
+        teachingStyleTags: [],
+        teachingStyleNotes: "",
+        strengthTags: [],
+        curriculumExperience: [],
+        studentFitNotes: "",
+        doNotUseForNotes: "",
+        verifiedBy: "Kevin",
+        lastReviewedAt: "2026-05-20T00:00:00.000Z",
+        active: true,
+        updatedAt: "2026-05-20T00:00:00.000Z",
+      },
+    });
+    const olderOnlyTutor = group({
+      id: "older-only",
+      canonicalKey: "older-only",
+      displayName: "Older Only Tutor",
+      businessProfile: {
+        canonicalKey: "older-only",
+        displayName: "Older Only Tutor",
+        parentSafeSummary: "",
+        internalNotes: "",
+        education: [],
+        languages: [],
+        englishProficiency: "unknown",
+        youngLearnerFit: "comfortable",
+        youngestComfortableAge: 12,
+        youngLearnerNotes: "",
+        teachingStyleTags: [],
+        teachingStyleNotes: "",
+        strengthTags: [],
+        curriculumExperience: [],
+        studentFitNotes: "",
+        doNotUseForNotes: "",
+        verifiedBy: "Kevin",
+        lastReviewedAt: "2026-05-20T00:00:00.000Z",
+        active: true,
+        updatedAt: "2026-05-20T00:00:00.000Z",
+      },
+    });
+
+    const result = solveSchedulerTurn({
+      index: index([olderOnlyTutor, youngLearnerTutor, group({ id: "missing-profile", canonicalKey: "missing-profile", displayName: "Missing Profile" })]),
+      extractedState: {
+        searchMode: "recurring",
+        dayOfWeek: 1,
+        startTime: "15:00",
+        endTime: "16:00",
+        businessRequirements: { youngLearnerAge: 8 },
+      },
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.suggestions[0].tutors.map((tutor) => tutor.displayName)).toEqual(["Young Fit Tutor"]);
+  });
+
+  it("uses teaching style as ranking context without filtering unmatched tutors", () => {
+    const structuredTutor = group({
+      id: "structured",
+      canonicalKey: "structured",
+      displayName: "Structured Tutor",
+      businessProfile: {
+        canonicalKey: "structured",
+        displayName: "Structured Tutor",
+        parentSafeSummary: "",
+        internalNotes: "",
+        education: [],
+        languages: [],
+        englishProficiency: "unknown",
+        youngLearnerFit: "unknown",
+        youngestComfortableAge: null,
+        youngLearnerNotes: "",
+        teachingStyleTags: ["patient", "structured"],
+        teachingStyleNotes: "",
+        strengthTags: [],
+        curriculumExperience: [],
+        studentFitNotes: "",
+        doNotUseForNotes: "",
+        verifiedBy: "Kevin",
+        lastReviewedAt: "2026-05-20T00:00:00.000Z",
+        active: true,
+        updatedAt: "2026-05-20T00:00:00.000Z",
+      },
+    });
+    const genericTutor = group({
+      id: "generic",
+      canonicalKey: "generic",
+      displayName: "Generic Tutor",
+    });
+
+    const result = solveSchedulerTurn({
+      index: index([genericTutor, structuredTutor]),
+      extractedState: {
+        searchMode: "recurring",
+        dayOfWeek: 1,
+        startTime: "15:00",
+        endTime: "16:00",
+        businessRequirements: { teachingStyleTags: ["patient", "structured"] },
+      },
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.suggestions[0].tutors.map((tutor) => tutor.displayName)).toEqual([
+      "Structured Tutor",
+      "Generic Tutor",
+    ]);
+    expect(result.suggestions[0].reasons.join(" ")).toMatch(/Teaching style/);
   });
 
   it("splits a requested time window into bounded sub-slots only inside that window", () => {

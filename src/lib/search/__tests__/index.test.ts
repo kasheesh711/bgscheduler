@@ -15,13 +15,13 @@ import type { SearchIndex } from "../index";
 //
 // We instrument the fake Database so every `db.select()` call increments
 // a counter. ensureIndex's cached-check path makes 1 select. buildIndex
-// makes 9 selects (1 active-snapshot + 1 promoted-sync lookup +
-// 1 tutor groups + 6 parallel loads).
+// makes 10 selects (1 active-snapshot + 1 promoted-sync lookup +
+// 1 tutor groups + 7 parallel loads).
 // So:
 //   • cached + matches  → 1 select  (Test 2)
-//   • no cache + build  → 9 selects (Test 1)
-//   • stale cache + 2 concurrent + fixed → 1 + 9 = 10 selects (Test 3)
-//   • stale cache + 2 concurrent + buggy → 2 + 9 = 11 selects (Test 3 RED)
+//   • no cache + build  → 10 selects (Test 1)
+//   • stale cache + 2 concurrent + fixed → 1 + 10 = 11 selects (Test 3)
+//   • stale cache + 2 concurrent + buggy → 2 + 10 = 12 selects (Test 3 RED)
 
 interface FakeDbState {
   // The active snapshot id returned by `where(eq(active, true)).limit(1)`.
@@ -146,8 +146,8 @@ describe("ensureIndex — REL-02 race-free coalescing", () => {
 
   it("coalesces two concurrent first-time callers into a single buildIndex pipeline", async () => {
     // No cached index — both callers must converge on ONE buildIndex run.
-    // buildIndex makes 9 db.select calls (1 active-snapshot + 1 promoted-sync
-    // lookup + 1 tutor groups + 6 parallel data loads). Expected: exactly 9 selects across
+    // buildIndex makes 10 db.select calls (1 active-snapshot + 1 promoted-sync
+    // lookup + 1 tutor groups + 7 parallel data loads). Expected: exactly 10 selects across
     // both concurrent callers, and both receive the same SearchIndex
     // instance. Note: the no-cache path of ensureIndex is fully synchronous
     // up to setBuildingPromise(p), so this assertion holds for both the
@@ -165,7 +165,7 @@ describe("ensureIndex — REL-02 race-free coalescing", () => {
       indexModule.ensureIndex(db),
     ]);
 
-    expect(state.selectCallCount).toBe(9);
+    expect(state.selectCallCount).toBe(10);
     expect(a).toBe(b);
     expect(a.snapshotId).toBe("snap-A");
   });
@@ -195,12 +195,12 @@ describe("ensureIndex — REL-02 race-free coalescing", () => {
     // The race-detector. With the singleton-promise fix in place, the
     // second concurrent caller sees the in-flight promise BEFORE it
     // performs its own active-snapshot lookup, so only ONE cached-check
-    // select happens. Total: 1 cached-check + 9 buildIndex = 10 selects.
+    // select happens. Total: 1 cached-check + 10 buildIndex = 11 selects.
     //
     // Against the buggy code (lines 281-305) the second caller also runs
     // its own active-snapshot await before checking getBuildingPromise(),
-    // producing 2 cached-check selects + 9 buildIndex selects = 11 selects.
-    // This test fails RED against the buggy code at toBeLessThanOrEqual(10).
+    // producing 2 cached-check selects + 10 buildIndex selects = 12 selects.
+    // This test fails RED against the buggy code at toBeLessThanOrEqual(11).
     const cached = makeIndex("snap-OLD");
     globalThis.__bgscheduler_searchIndex = cached;
 
@@ -216,7 +216,7 @@ describe("ensureIndex — REL-02 race-free coalescing", () => {
       indexModule.ensureIndex(db),
     ]);
 
-    expect(state.selectCallCount).toBeLessThanOrEqual(10);
+    expect(state.selectCallCount).toBeLessThanOrEqual(11);
     expect(a).toBe(b);
     expect(a.snapshotId).toBe("snap-NEW");
   });
@@ -350,7 +350,7 @@ describe("buildIndex — TCOV-01 denormalization", () => {
 
     expect(index.snapshotId).toBe("snap-1");
     expect(index.tutorGroups).toHaveLength(2);
-    expect(state.selectCallCount).toBe(9);
+    expect(state.selectCallCount).toBe(10);
 
     const g1 = index.tutorGroups.find((group) => group.id === "g1");
     const g2 = index.tutorGroups.find((group) => group.id === "g2");

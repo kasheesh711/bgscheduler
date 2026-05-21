@@ -594,6 +594,42 @@ export const tutorContacts = pgTable("tutor_contacts", {
   index("tutor_contacts_active_idx").on(table.active),
 ]);
 
+export const tutorBusinessProfiles = pgTable("tutor_business_profiles", {
+  canonicalKey: text("canonical_key").primaryKey(),
+  displayName: text("display_name").notNull(),
+  parentSafeSummary: text("parent_safe_summary").notNull().default(""),
+  internalNotes: text("internal_notes").notNull().default(""),
+  education: jsonb("education").$type<Array<{
+    institution: string;
+    country?: string;
+    program?: string;
+    notes?: string;
+  }>>().notNull().default([]),
+  languages: jsonb("languages").$type<Array<{
+    language: string;
+    proficiency: string;
+    verificationSource?: string;
+  }>>().notNull().default([]),
+  englishProficiency: text("english_proficiency").notNull().default("unknown"),
+  youngLearnerFit: text("young_learner_fit").notNull().default("unknown"),
+  youngestComfortableAge: integer("youngest_comfortable_age"),
+  youngLearnerNotes: text("young_learner_notes").notNull().default(""),
+  teachingStyleTags: jsonb("teaching_style_tags").$type<string[]>().notNull().default([]),
+  teachingStyleNotes: text("teaching_style_notes").notNull().default(""),
+  strengthTags: jsonb("strength_tags").$type<string[]>().notNull().default([]),
+  curriculumExperience: jsonb("curriculum_experience").$type<string[]>().notNull().default([]),
+  studentFitNotes: text("student_fit_notes").notNull().default(""),
+  doNotUseForNotes: text("do_not_use_for_notes").notNull().default(""),
+  verifiedBy: text("verified_by"),
+  lastReviewedAt: timestamp("last_reviewed_at", { withTimezone: true }),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("tutor_business_profiles_display_name_idx").on(table.displayName),
+  index("tutor_business_profiles_active_idx").on(table.active),
+]);
+
 export const classroomScheduleEmailRuns = pgTable("classroom_schedule_email_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
   assignmentRunId: uuid("assignment_run_id").notNull().references(() => classroomAssignmentRuns.id),

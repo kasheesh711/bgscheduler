@@ -218,7 +218,7 @@ export async function POST(request: NextRequest) {
             ...parsedFields,
             filters: filterResolution.filters,
           },
-          clarifyingQuestions: issues.map((issue) => `${issue} Please clarify.`),
+          clarifyingQuestions: issues.map((issue) => issue.includes("Please clarify") ? issue : `${issue} Please clarify.`),
           warnings,
         };
       } else {

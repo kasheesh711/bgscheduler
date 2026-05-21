@@ -112,7 +112,7 @@ describe("AI scheduler helpers", () => {
   it("rejects inactive filters and ambiguous tutor names for clarification", () => {
     const filterResult = resolveAiSchedulerFilters({ subject: "Physics", level: "year 5" }, filterOptions);
     expect(filterResult.filters).toEqual({ level: "Year 5" });
-    expect(filterResult.issues[0]).toMatch(/not an active filter option/);
+    expect(filterResult.issues[0]).toMatch(/not an active Wise qualification/);
 
     expect(resolveAiSchedulerTutorNames(["Ann"], tutorList).issues[0]).toMatch(/matched multiple/);
     expect(resolveAiSchedulerTutorNames(["Missing"], tutorList).issues[0]).toMatch(/did not match/);

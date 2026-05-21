@@ -41,6 +41,19 @@ interface SchedulerExtractedState {
   durationMinutes?: 60 | 90 | 120;
   mode?: "online" | "onsite" | "either";
   filters?: { subject?: string; curriculum?: string; level?: string };
+  academicLevelResolution?: {
+    rawLevelLabel: string;
+    wiseLevel?: string;
+    status: "mapped" | "ambiguous" | "unknown";
+    candidates: string[];
+    message: string;
+  };
+  businessRequirements?: {
+    englishProficiency?: "native" | "near-native" | "fluent" | "conversational" | "basic" | "unknown";
+    strengthTags?: string[];
+    curriculumExperience?: string[];
+    schoolKeywords?: string[];
+  };
   requestedSlots?: {
     id?: string;
     searchMode?: "recurring" | "one_time";
@@ -51,6 +64,7 @@ interface SchedulerExtractedState {
     durationMinutes?: 60 | 90 | 120;
   }[];
   explicitUnknownFilters?: string[];
+  explicitUnknownBusinessRequirements?: string[];
   tutorNames?: string[];
   tutorExclusions?: string[];
   parentName?: string;
@@ -766,6 +780,15 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
 
   const state = selectedConversation?.extractedState ?? {};
   const filters = state.filters ?? {};
+  const businessRequirements = state.businessRequirements ?? {};
+  const businessRequirementText = [
+    businessRequirements.englishProficiency && businessRequirements.englishProficiency !== "unknown"
+      ? `English ${businessRequirements.englishProficiency}`
+      : undefined,
+    ...(businessRequirements.strengthTags ?? []),
+    ...(businessRequirements.curriculumExperience ?? []),
+    ...(businessRequirements.schoolKeywords ?? []).map((keyword) => `School: ${keyword}`),
+  ].filter(Boolean).join(", ");
   const questions = state.unresolvedQuestions ?? [];
   const assumptions = state.assumptions ?? [];
 
@@ -1175,10 +1198,17 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
                 <RequirementPill label="Tutor" value={state.tutorNames?.join(", ")} />
                 <RequirementPill label="Subject" value={filters.subject} />
                 <RequirementPill label="Level" value={filters.level} />
+                <RequirementPill label="Requested level" value={state.academicLevelResolution?.rawLevelLabel} />
+                <RequirementPill label="Tutor context" value={businessRequirementText} />
               </div>
+              {state.academicLevelResolution && (
+                <div className="mt-2 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground">
+                  {state.academicLevelResolution.message}
+                </div>
+              )}
             </div>
 
-            {(questions.length > 0 || assumptions.length > 0 || (state.explicitUnknownFilters?.length ?? 0) > 0) && (
+            {(questions.length > 0 || assumptions.length > 0 || (state.explicitUnknownFilters?.length ?? 0) > 0 || (state.explicitUnknownBusinessRequirements?.length ?? 0) > 0) && (
               <div className="rounded-md border border-border bg-card/70 p-2">
                 {questions.length > 0 && (
                   <>
@@ -1201,6 +1231,14 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
                     <div className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Unmapped</div>
                     <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
                       {state.explicitUnknownFilters.map((item) => <li key={item}>{item}</li>)}
+                    </ul>
+                  </>
+                )}
+                {state.explicitUnknownBusinessRequirements && state.explicitUnknownBusinessRequirements.length > 0 && (
+                  <>
+                    <div className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Unmapped tutor context</div>
+                    <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
+                      {state.explicitUnknownBusinessRequirements.map((item) => <li key={item}>{item}</li>)}
                     </ul>
                   </>
                 )}

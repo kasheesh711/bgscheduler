@@ -1,6 +1,10 @@
 import { and, desc, eq } from "drizzle-orm";
 import { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import {
+  loadTutorBusinessProfileMap,
+  type TutorBusinessProfile,
+} from "@/lib/tutor-business-profiles";
 
 // ── Index data structures ───────────────────────────────────────────
 
@@ -56,6 +60,8 @@ export interface IndexedDataIssue {
   message: string;
 }
 
+export type IndexedTutorBusinessProfile = TutorBusinessProfile;
+
 export interface IndexedTutorGroup {
   id: string;
   // D-04 cross-snapshot anchor, denormalized from tutor_identity_groups.canonical_key.
@@ -71,6 +77,7 @@ export interface IndexedTutorGroup {
   leaves: IndexedLeave[];
   sessionBlocks: IndexedSessionBlock[];
   dataIssues: IndexedDataIssue[];
+  businessProfile?: IndexedTutorBusinessProfile;
 }
 
 export interface SearchIndex {
@@ -112,6 +119,11 @@ export function getActiveSnapshotId(): string | null {
   return getCurrentIndex()?.snapshotId ?? null;
 }
 
+export function clearSearchIndex(): void {
+  setCurrentIndex(null);
+  setBuildingPromise(null);
+}
+
 /**
  * Build the search index from the active Postgres snapshot.
  */
@@ -148,7 +160,7 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
     .where(eq(schema.tutorIdentityGroups.snapshotId, snapshotId));
 
   // Load all data in parallel
-  const [members, qualifications, windows, leaves, sessions, issues] = await Promise.all([
+  const [members, qualifications, windows, leaves, sessions, issues, businessProfiles] = await Promise.all([
     db
       .select()
       .from(schema.tutorIdentityGroupMembers)
@@ -193,6 +205,7 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
       .select()
       .from(schema.dataIssues)
       .where(eq(schema.dataIssues.snapshotId, snapshotId)),
+    loadTutorBusinessProfileMap(db),
   ]);
 
   // Index by groupId
@@ -288,6 +301,7 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
         type: i.type,
         message: i.message,
       })),
+      businessProfile: businessProfiles.get(group.canonicalKey),
     };
   });
 

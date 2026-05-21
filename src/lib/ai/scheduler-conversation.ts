@@ -11,6 +11,12 @@ import {
   extractOutputText,
   isAiSchedulerConfigured,
 } from "@/lib/ai/scheduler";
+import {
+  recoverFiltersFromUnknowns,
+  resolveAcademicFilters,
+  type AcademicLevelResolution,
+} from "@/lib/ai/academic-levels";
+import { TEACHING_STYLE_VOCABULARY } from "@/lib/tutor-profile-vocabulary";
 import type { SearchFilters, SnapshotMeta, TutorResult } from "@/lib/search/types";
 
 export const DEFAULT_CONVERSATIONAL_DURATION = 60;
@@ -40,8 +46,11 @@ export interface SchedulerExtractedState {
   durationMinutes?: SchedulerDuration;
   mode?: SchedulerDeliveryMode;
   filters?: SearchFilters;
+  academicLevelResolution?: AcademicLevelResolution;
+  businessRequirements?: SchedulerBusinessRequirements;
   requestedSlots?: SchedulerRequestedSlot[];
   explicitUnknownFilters?: string[];
+  explicitUnknownBusinessRequirements?: string[];
   tutorNames?: string[];
   tutorExclusions?: string[];
   parentName?: string;
@@ -57,13 +66,32 @@ export interface SchedulerResolvedState extends SchedulerExtractedState {
   durationMinutes: SchedulerDuration;
   mode: SchedulerDeliveryMode;
   filters: SearchFilters;
+  businessRequirements: SchedulerBusinessRequirements;
   requestedSlots: SchedulerRequestedSlot[];
   explicitUnknownFilters: string[];
+  explicitUnknownBusinessRequirements: string[];
   tutorNames: string[];
   tutorExclusions: string[];
   negativeFeedback: boolean;
   assumptions: string[];
   unresolvedQuestions: string[];
+}
+
+export type SchedulerEnglishProficiency =
+  | "native"
+  | "near-native"
+  | "fluent"
+  | "conversational"
+  | "basic"
+  | "unknown";
+
+export interface SchedulerBusinessRequirements {
+  englishProficiency?: SchedulerEnglishProficiency;
+  youngLearnerAge?: number;
+  strengthTags?: string[];
+  curriculumExperience?: string[];
+  teachingStyleTags?: string[];
+  schoolKeywords?: string[];
 }
 
 export interface SchedulerSuggestionTutor {
@@ -127,6 +155,15 @@ const nullableFilterSchema = z.object({
   level: z.string().nullable(),
 }).strict();
 
+const modelBusinessRequirementsSchema = z.object({
+  englishProficiency: z.enum(["native", "near-native", "fluent", "conversational", "basic", "unknown"]).nullable(),
+  youngLearnerAge: z.number().int().min(3).max(20).nullable(),
+  strengthTags: z.array(z.string()),
+  curriculumExperience: z.array(z.string()),
+  teachingStyleTags: z.array(z.string()),
+  schoolKeywords: z.array(z.string()),
+}).strict();
+
 const modelRequestedSlotSchema = z.object({
   id: z.string().nullable(),
   searchMode: z.enum(["recurring", "one_time"]).nullable(),
@@ -146,8 +183,10 @@ const modelSchedulerExtractionSchema = z.object({
   durationMinutes: z.union([z.literal(60), z.literal(90), z.literal(120)]).nullable(),
   mode: z.enum(["online", "onsite", "either"]).nullable(),
   filters: nullableFilterSchema,
+  businessRequirements: modelBusinessRequirementsSchema,
   requestedSlots: z.array(modelRequestedSlotSchema),
   explicitUnknownFilters: z.array(z.string()),
+  explicitUnknownBusinessRequirements: z.array(z.string()),
   tutorNames: z.array(z.string()),
   tutorExclusions: z.array(z.string()),
   parentName: z.string().nullable(),
@@ -174,8 +213,10 @@ export const openAiSchedulerExtractionJsonSchema = {
     "durationMinutes",
     "mode",
     "filters",
+    "businessRequirements",
     "requestedSlots",
     "explicitUnknownFilters",
+    "explicitUnknownBusinessRequirements",
     "tutorNames",
     "tutorExclusions",
     "parentName",
@@ -223,6 +264,25 @@ export const openAiSchedulerExtractionJsonSchema = {
       },
     },
     explicitUnknownFilters: { type: "array", items: { type: "string" } },
+    businessRequirements: {
+      type: "object",
+      additionalProperties: false,
+      required: ["englishProficiency", "youngLearnerAge", "strengthTags", "curriculumExperience", "teachingStyleTags", "schoolKeywords"],
+      properties: {
+        englishProficiency: {
+          anyOf: [
+            { type: "string", enum: ["native", "near-native", "fluent", "conversational", "basic", "unknown"] },
+            { type: "null" },
+          ],
+        },
+        youngLearnerAge: { anyOf: [{ type: "integer", minimum: 3, maximum: 20 }, { type: "null" }] },
+        strengthTags: { type: "array", items: { type: "string" } },
+        curriculumExperience: { type: "array", items: { type: "string" } },
+        teachingStyleTags: { type: "array", items: { type: "string" } },
+        schoolKeywords: { type: "array", items: { type: "string" } },
+      },
+    },
+    explicitUnknownBusinessRequirements: { type: "array", items: { type: "string" } },
     tutorNames: { type: "array", items: { type: "string" } },
     tutorExclusions: { type: "array", items: { type: "string" } },
     parentName: { anyOf: [{ type: "string" }, { type: "null" }] },
@@ -302,6 +362,33 @@ function nullableFiltersToState(filters: ModelSchedulerExtraction["filters"]): S
   };
 }
 
+function businessRequirementsToState(
+  businessRequirements: ModelSchedulerExtraction["businessRequirements"] | undefined,
+): SchedulerBusinessRequirements {
+  return {
+    englishProficiency: businessRequirements?.englishProficiency ?? undefined,
+    youngLearnerAge: businessRequirements?.youngLearnerAge ?? undefined,
+    strengthTags: uniqueStrings(businessRequirements?.strengthTags ?? []),
+    curriculumExperience: uniqueStrings(businessRequirements?.curriculumExperience ?? []),
+    teachingStyleTags: uniqueStrings(businessRequirements?.teachingStyleTags ?? []),
+    schoolKeywords: uniqueStrings(businessRequirements?.schoolKeywords ?? []),
+  };
+}
+
+function mergeBusinessRequirements(
+  existing: SchedulerBusinessRequirements | undefined,
+  incoming: SchedulerBusinessRequirements | undefined,
+): SchedulerBusinessRequirements {
+  return {
+    englishProficiency: incoming?.englishProficiency ?? existing?.englishProficiency,
+    youngLearnerAge: incoming?.youngLearnerAge ?? existing?.youngLearnerAge,
+    strengthTags: mergeList(existing?.strengthTags, incoming?.strengthTags),
+    curriculumExperience: mergeList(existing?.curriculumExperience, incoming?.curriculumExperience),
+    teachingStyleTags: mergeList(existing?.teachingStyleTags, incoming?.teachingStyleTags),
+    schoolKeywords: mergeList(existing?.schoolKeywords, incoming?.schoolKeywords),
+  };
+}
+
 export function normalizeSchedulerExtraction(raw: unknown): {
   state: SchedulerExtractedState;
   title?: string;
@@ -317,8 +404,10 @@ export function normalizeSchedulerExtraction(raw: unknown): {
       durationMinutes: parsed.durationMinutes ?? undefined,
       mode: parsed.mode ?? undefined,
       filters: nullableFiltersToState(parsed.filters),
+      businessRequirements: businessRequirementsToState(parsed.businessRequirements),
       requestedSlots: normalizeRequestedSlots(parsed.requestedSlots),
       explicitUnknownFilters: uniqueStrings(parsed.explicitUnknownFilters),
+      explicitUnknownBusinessRequirements: uniqueStrings(parsed.explicitUnknownBusinessRequirements),
       tutorNames: uniqueStrings(parsed.tutorNames),
       tutorExclusions: uniqueStrings(parsed.tutorExclusions),
       parentName: compactString(parsed.parentName),
@@ -376,6 +465,8 @@ export function mergeSchedulerState(
       contact: incoming.contact ?? existing?.contact,
       requestedSlots: incoming.requestedSlots ?? [],
       explicitUnknownFilters: incoming.explicitUnknownFilters ?? [],
+      explicitUnknownBusinessRequirements: incoming.explicitUnknownBusinessRequirements ?? [],
+      businessRequirements: incoming.businessRequirements ?? {},
       tutorNames: incoming.tutorNames ?? [],
       tutorExclusions: incoming.tutorExclusions ?? [],
       assumptions: incoming.assumptions ?? [],
@@ -390,8 +481,10 @@ export function mergeSchedulerState(
       ...(existing?.filters ?? {}),
       ...(incoming.filters ?? {}),
     },
+    businessRequirements: mergeBusinessRequirements(existing?.businessRequirements, incoming.businessRequirements),
     requestedSlots: incoming.requestedSlots?.length ? incoming.requestedSlots : existing?.requestedSlots,
     explicitUnknownFilters: mergeList(existing?.explicitUnknownFilters, incoming.explicitUnknownFilters),
+    explicitUnknownBusinessRequirements: mergeList(existing?.explicitUnknownBusinessRequirements, incoming.explicitUnknownBusinessRequirements),
     tutorNames: mergeList(existing?.tutorNames, incoming.tutorNames),
     tutorExclusions: mergeList(existing?.tutorExclusions, incoming.tutorExclusions),
     assumptions: mergeList(existing?.assumptions, incoming.assumptions),
@@ -505,6 +598,7 @@ export function resolveSchedulerState(state: SchedulerExtractedState): Scheduler
     durationMinutes: state.durationMinutes ?? DEFAULT_CONVERSATIONAL_DURATION,
     mode: state.mode ?? DEFAULT_CONVERSATIONAL_MODE,
     filters: state.filters ?? {},
+    businessRequirements: state.businessRequirements ?? {},
     requestedSlots: resolveRequestedSlots(
       state,
       searchMode,
@@ -512,6 +606,7 @@ export function resolveSchedulerState(state: SchedulerExtractedState): Scheduler
       assumptions,
     ),
     explicitUnknownFilters: state.explicitUnknownFilters ?? [],
+    explicitUnknownBusinessRequirements: state.explicitUnknownBusinessRequirements ?? [],
     tutorNames: state.tutorNames ?? [],
     tutorExclusions: state.tutorExclusions ?? [],
     negativeFeedback: state.negativeFeedback ?? false,
@@ -549,32 +644,11 @@ export function tutorListFromIndex(index: SearchIndex): TutorListItem[] {
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
-function findCaseInsensitiveOption(value: string | undefined, options: string[]): string | undefined {
-  if (!value) return undefined;
-  const normalized = normalizeLookup(value);
-  return options.find((option) => normalizeLookup(option) === normalized);
-}
-
 export function resolveSchedulerFilters(
   filters: SearchFilters,
   options: FilterOptions,
-): { filters: SearchFilters; issues: string[] } {
-  const resolved: SearchFilters = {};
-  const issues: string[] = [];
-
-  const subject = findCaseInsensitiveOption(filters.subject, options.subjects);
-  if (filters.subject && !subject) issues.push(`Subject "${filters.subject}" is not an active Wise qualification.`);
-  if (subject) resolved.subject = subject;
-
-  const curriculum = findCaseInsensitiveOption(filters.curriculum, options.curriculums);
-  if (filters.curriculum && !curriculum) issues.push(`Curriculum "${filters.curriculum}" is not an active Wise qualification.`);
-  if (curriculum) resolved.curriculum = curriculum;
-
-  const level = findCaseInsensitiveOption(filters.level, options.levels);
-  if (filters.level && !level) issues.push(`Level "${filters.level}" is not an active Wise qualification.`);
-  if (level) resolved.level = level;
-
-  return { filters: resolved, issues };
+): ReturnType<typeof resolveAcademicFilters> {
+  return resolveAcademicFilters(filters, options);
 }
 
 export function resolveSchedulerTutorNames(
@@ -795,17 +869,104 @@ function groupHasDataIssue(group: IndexedTutorGroup, tutorGroupId: string): bool
   return group.id === tutorGroupId && group.dataIssues.length > 0;
 }
 
+const ENGLISH_PROFICIENCY_RANK: Record<SchedulerEnglishProficiency, number> = {
+  unknown: 0,
+  basic: 1,
+  conversational: 2,
+  fluent: 3,
+  "near-native": 4,
+  native: 5,
+};
+
+function normalizeRequirement(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function hasBusinessRequirements(requirements: SchedulerBusinessRequirements): boolean {
+  return Boolean(
+    requirements.englishProficiency && requirements.englishProficiency !== "unknown" ||
+    requirements.youngLearnerAge ||
+    requirements.strengthTags?.length ||
+    requirements.curriculumExperience?.length ||
+    requirements.schoolKeywords?.length
+  );
+}
+
+function includesAll(profileValues: string[] | undefined, requiredValues: string[] | undefined): boolean {
+  const profileSet = new Set((profileValues ?? []).map(normalizeRequirement));
+  return (requiredValues ?? []).every((value) => profileSet.has(normalizeRequirement(value)));
+}
+
+function educationMatchesKeywords(group: IndexedTutorGroup, keywords: string[] | undefined): boolean {
+  if (!keywords?.length) return true;
+  const education = group.businessProfile?.education ?? [];
+  if (education.length === 0) return false;
+  const haystack = education
+    .map((entry) => [
+      entry.institution,
+      entry.country,
+      entry.program,
+      entry.notes,
+    ].filter(Boolean).join(" "))
+    .join(" ")
+    .toLowerCase();
+  return keywords.every((keyword) => haystack.includes(normalizeRequirement(keyword)));
+}
+
+function matchesBusinessRequirements(
+  group: IndexedTutorGroup,
+  requirements: SchedulerBusinessRequirements,
+): boolean {
+  if (!hasBusinessRequirements(requirements)) return true;
+  const profile = group.businessProfile;
+  if (!profile) return false;
+
+  if (requirements.englishProficiency && requirements.englishProficiency !== "unknown") {
+    const profileRank = ENGLISH_PROFICIENCY_RANK[profile.englishProficiency] ?? 0;
+    const requiredRank = ENGLISH_PROFICIENCY_RANK[requirements.englishProficiency] ?? 0;
+    if (profileRank < requiredRank) return false;
+  }
+
+  if (requirements.youngLearnerAge) {
+    if (profile.youngLearnerFit !== "comfortable") return false;
+    if (profile.youngestComfortableAge === null) return false;
+    if (profile.youngestComfortableAge > requirements.youngLearnerAge) return false;
+  }
+
+  if (!includesAll(profile.strengthTags, requirements.strengthTags)) return false;
+  if (!includesAll(profile.curriculumExperience, requirements.curriculumExperience)) return false;
+  if (!educationMatchesKeywords(group, requirements.schoolKeywords)) return false;
+  return true;
+}
+
+function teachingStyleScore(
+  group: IndexedTutorGroup,
+  requirements: SchedulerBusinessRequirements,
+): number {
+  const requested = requirements.teachingStyleTags ?? [];
+  if (requested.length === 0) return 0;
+  const profileTags = new Set((group.businessProfile?.teachingStyleTags ?? []).map(normalizeRequirement));
+  return requested.reduce((score, tag) => (
+    profileTags.has(normalizeRequirement(tag)) ? score + 1 : score
+  ), 0);
+}
+
 function suggestionDayScore(slot: { dayOfWeek?: number; date?: string }): number {
   const day = slot.dayOfWeek ?? (slot.date ? weekdayForIsoDate(slot.date) : 0);
   return day === 0 ? 7 : day;
 }
 
-function buildReasons(tutors: SchedulerSuggestionTutor[], parentReady: boolean): string[] {
+function buildReasons(
+  tutors: SchedulerSuggestionTutor[],
+  parentReady: boolean,
+  teachingStyleTags: string[] | undefined,
+): string[] {
   const reasons = [`${tutors.length} proven available tutor${tutors.length === 1 ? "" : "s"}`];
   const modes = new Set(tutors.flatMap((tutor) => tutor.supportedModes));
   if (modes.has("online") && modes.has("onsite")) reasons.push("Online and onsite choices");
   else if (modes.has("online")) reasons.push("Online options");
   else if (modes.has("onsite")) reasons.push("Onsite options");
+  if (teachingStyleTags?.length) reasons.push("Teaching style preference considered");
   if (!parentReady) reasons.push("Needs clarification before sending to parent");
   return reasons;
 }
@@ -854,6 +1015,8 @@ export function runSchedulerSearch(input: {
   };
 
   const groupById = new Map(input.index.tutorGroups.map((group) => [group.id, group]));
+  const businessContextRequired = hasBusinessRequirements(input.state.businessRequirements);
+  let businessFilteredCount = 0;
   const entries = searches
     .map(({ slot, response }) => {
       const result = response.perSlotResults[0];
@@ -867,8 +1030,22 @@ export function runSchedulerSearch(input: {
           }
           const group = groupById.get(tutor.tutorGroupId);
           if (!group || groupHasDataIssue(group, tutor.tutorGroupId)) return false;
+          if (!matchesBusinessRequirements(group, input.state.businessRequirements)) {
+            businessFilteredCount += 1;
+            return false;
+          }
           return !input.activeProposalHolds.some((hold) => slotBlockedByProposalHold(hold, tutor, slot, slot.searchMode));
         })
+        .map((tutor) => ({
+          tutorGroupId: tutor.tutorGroupId,
+          displayName: tutor.displayName,
+          supportedModes: tutor.supportedModes,
+          styleScore: teachingStyleScore(groupById.get(tutor.tutorGroupId)!, input.state.businessRequirements),
+        }))
+        .sort((a, b) => (
+          b.styleScore - a.styleScore ||
+          a.displayName.localeCompare(b.displayName)
+        ))
         .map((tutor) => ({
           tutorGroupId: tutor.tutorGroupId,
           displayName: tutor.displayName,
@@ -878,6 +1055,9 @@ export function runSchedulerSearch(input: {
       return {
         slot,
         tutors,
+        styleScore: tutors.reduce((score, tutor) => (
+          score + teachingStyleScore(groupById.get(tutor.tutorGroupId)!, input.state.businessRequirements)
+        ), 0),
       };
     })
     .filter((entry) => entry.tutors.length > 0);
@@ -885,6 +1065,7 @@ export function runSchedulerSearch(input: {
   const sortedEntries = input.state.requestedSlots.length > 0
     ? entries
     : entries.sort((a, b) => (
+      b.styleScore - a.styleScore ||
       b.tutors.length - a.tutors.length ||
       suggestionDayScore(a.slot) - suggestionDayScore(b.slot) ||
       a.slot.start.localeCompare(b.slot.start)
@@ -908,7 +1089,7 @@ export function runSchedulerSearch(input: {
         confidence,
         tutors: entry.tutors.slice(0, 4),
         availableTutorCount: entry.tutors.length,
-        reasons: buildReasons(entry.tutors, input.parentReady),
+        reasons: buildReasons(entry.tutors, input.parentReady, input.state.businessRequirements.teachingStyleTags),
         parentReady: input.parentReady,
         requestedSlotId: input.state.requestedSlots.length > 0 ? entry.slot.requestedSlotId ?? entry.slot.id : undefined,
       };
@@ -916,6 +1097,9 @@ export function runSchedulerSearch(input: {
 
   if (suggestions.length === 0) {
     warnings.push("No proven available tutors were found after applying Wise data and active proposal holds.");
+  }
+  if (businessContextRequired && businessFilteredCount > 0 && suggestions.length === 0) {
+    warnings.push("No tutors matched the verified tutor profile requirements.");
   }
 
   return { suggestions, snapshotMeta, warnings };
@@ -1031,6 +1215,7 @@ export function buildSchedulerExtractionPrompt(input: {
     .slice(-12)
     .map((message) => `${message.role.toUpperCase()}: ${message.content}`)
     .join("\n\n");
+  const teachingStyleTags = TEACHING_STYLE_VOCABULARY.map((entry) => entry.tag).join(", ");
 
   return [
     "Extract BeGifted scheduling details from this ongoing admin-parent scheduling chat.",
@@ -1047,8 +1232,14 @@ export function buildSchedulerExtractionPrompt(input: {
     "- Do not mention times only in assumptions; structured requestedSlots must contain the same day/date/time facts.",
     "- Missing duration should be null; the app will default to 60 minutes.",
     "- Missing delivery mode should be null; the app will default to either.",
-    "- Missing subject/curriculum/level is allowed. Unknown explicit academic filters go in explicitUnknownFilters.",
-    "- Use only valid subject/curriculum/level values when there is a clear match. Do not invent filter values.",
+    "- Missing subject/curriculum/level is allowed. Preserve raw admin/parent level phrases such as Y10, Year 5, Grade 10, 11+, or ม.4 in filters.level. The app maps them to Wise levels safely.",
+    "- Use only valid subject/curriculum values when there is a clear match. Do not invent canonical Wise levels; keep the raw requested level instead.",
+    "- Unknown explicit academic filters go in explicitUnknownFilters, but do not put known subjects like English, Math, or English writing there when the subject is clear.",
+    `- Supported teachingStyleTags are: ${teachingStyleTags}.`,
+    "- Put non-Wise tutor fit requirements into businessRequirements: English ability, school background, writing strength, exam-prep fit, young learner age, teaching style, or curriculum experience.",
+    "- If the request gives a specific young learner age, put it in businessRequirements.youngLearnerAge. If it only says younger kids with no age, ask for the age instead of guessing.",
+    "- Put teaching style preferences such as patient, structured, interactive, exam-focused, concept-first, practice-heavy, gentle, high-accountability, or writing-feedback in businessRequirements.teachingStyleTags. These influence ranking only.",
+    "- If a tutor fit requirement is real but cannot fit englishProficiency, youngLearnerAge, strengthTags, curriculumExperience, teachingStyleTags, or schoolKeywords, put it in explicitUnknownBusinessRequirements.",
     "- tutorNames should contain names the parent/admin explicitly requested; the app resolves ambiguity.",
     "- tutorExclusions should contain tutor names that should not be suggested. Thai replacement wording like 'แทนครูจูน' means exclude June, not request June.",
     "- Set negativeFeedback true for feedback-only messages such as 'ไม่เริ่ด', 'not good', or 'wrong'; ask what to change instead of repeating suggestions.",
@@ -1168,24 +1359,34 @@ export function solveSchedulerTurn(input: {
   activeProposalHolds: ProposalHoldSummary[];
 }): SchedulerAssistantResult {
   const state = resolveSchedulerState(input.extractedState);
-  const filterResolution = resolveSchedulerFilters(state.filters, input.filterOptions);
+  const recovered = recoverFiltersFromUnknowns({
+    filters: state.filters,
+    explicitUnknownFilters: state.explicitUnknownFilters,
+    options: input.filterOptions,
+  });
+  const filterResolution = resolveSchedulerFilters(recovered.filters, input.filterOptions);
+  const academicLevelResolution = filterResolution.academicLevelResolution ?? recovered.academicLevelResolution;
   const tutorResolution = resolveSchedulerTutorNames(state.tutorNames, input.tutorList, state.tutorExclusions);
   const questions = uniqueStrings([
     ...state.unresolvedQuestions,
     ...schedulerGuardQuestions(state),
-    ...filterResolution.issues.map((issue) => `${issue} Please clarify the exact requirement.`),
-    ...state.explicitUnknownFilters.map((issue) => `${issue} is not mapped to an active Wise qualification. Please clarify.`),
+    ...filterResolution.issues,
+    ...recovered.remainingUnknowns.map((issue) => `${issue} is not mapped to an active Wise qualification. Please clarify.`),
+    ...state.explicitUnknownBusinessRequirements.map((issue) => `${issue} is not mapped to a verified tutor profile field. Please clarify.`),
     ...tutorResolution.questions,
   ]);
   const warnings = uniqueStrings([
     ...filterResolution.issues,
-    ...state.explicitUnknownFilters,
+    ...recovered.remainingUnknowns,
+    ...state.explicitUnknownBusinessRequirements,
     ...tutorResolution.warnings,
   ]);
   const parentReady = questions.length === 0;
   const resolvedState: SchedulerResolvedState = {
     ...state,
     filters: filterResolution.filters,
+    academicLevelResolution,
+    explicitUnknownFilters: recovered.remainingUnknowns,
     unresolvedQuestions: questions,
   };
 

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { FilterOptions } from "@/lib/data/filters";
 import type { TutorListItem } from "@/lib/data/tutors";
 import type { SnapshotMeta } from "@/lib/search/types";
+import { resolveAcademicFilters } from "@/lib/ai/academic-levels";
 
 export const DEFAULT_AI_SCHEDULER_MODEL = "gpt-5.4-mini";
 
@@ -373,12 +374,6 @@ function normalizeLookup(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-function findCaseInsensitiveOption(value: string | undefined, options: string[]): string | undefined {
-  if (!value) return undefined;
-  const normalized = normalizeLookup(value);
-  return options.find((option) => normalizeLookup(option) === normalized);
-}
-
 export function resolveAiSchedulerFilters(
   filters: AiSchedulerParsedRequest["filters"] | undefined,
   options: FilterOptions,
@@ -386,22 +381,7 @@ export function resolveAiSchedulerFilters(
   filters: AiSchedulerParsedRequest["filters"];
   issues: string[];
 } {
-  const issues: string[] = [];
-  const resolved: AiSchedulerParsedRequest["filters"] = {};
-
-  const subject = findCaseInsensitiveOption(filters?.subject, options.subjects);
-  if (filters?.subject && !subject) issues.push(`Subject "${filters.subject}" is not an active filter option.`);
-  if (subject) resolved.subject = subject;
-
-  const curriculum = findCaseInsensitiveOption(filters?.curriculum, options.curriculums);
-  if (filters?.curriculum && !curriculum) issues.push(`Curriculum "${filters.curriculum}" is not an active filter option.`);
-  if (curriculum) resolved.curriculum = curriculum;
-
-  const level = findCaseInsensitiveOption(filters?.level, options.levels);
-  if (filters?.level && !level) issues.push(`Level "${filters.level}" is not an active filter option.`);
-  if (level) resolved.level = level;
-
-  return { filters: resolved, issues };
+  return resolveAcademicFilters(filters ?? {}, options);
 }
 
 export function resolveAiSchedulerTutorNames(
@@ -510,7 +490,7 @@ export function buildAiSchedulerPrompt(input: {
     "- A concrete search needs day/date, start time, end time, and class duration.",
     "- Supported durations are 60, 90, and 120 minutes only; unsupported or missing duration needs clarification.",
     "- If delivery mode is missing, set mode to null. The app will default to either and show a warning.",
-    "- Only use subject, curriculum, and level values from the valid lists. Leave unknown filters null.",
+    "- Use only subject and curriculum values from the valid lists. Preserve raw level phrases like Y10, Year 5, Grade 10, 11+, or ม.4 in filters.level; the app maps them safely.",
     "- tutorNames may include requested tutor names, but IDs are resolved by the server.",
     "- Support English and Thai parent text.",
     "",

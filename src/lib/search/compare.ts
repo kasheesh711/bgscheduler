@@ -313,6 +313,7 @@ export function buildCompareTutor(
     availabilityWindows: group.availabilityWindows.map((w) => ({ weekday: w.weekday, startMinute: w.startMinute, endMinute: w.endMinute, modality: w.modality })),
     leaves: group.leaves.map((l) => ({ startTime: l.startTime.toISOString(), endTime: l.endTime.toISOString() })),
     dataIssues: group.dataIssues,
+    businessProfile: group.businessProfile,
     weeklyHoursBooked: Math.round((totalMinutes / 60) * 100) / 100,
     studentCount: studentNames.size,
   };

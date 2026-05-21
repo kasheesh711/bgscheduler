@@ -16,6 +16,7 @@ interface TutorProfilePopoverProps {
 
 export function TutorProfilePopover({ tutor, color, children }: TutorProfilePopoverProps) {
   const subjects = [...new Set(tutor.qualifications.map((q) => q.subject))];
+  const profile = tutor.businessProfile;
 
   return (
     <Popover>
@@ -48,6 +49,31 @@ export function TutorProfilePopover({ tutor, color, children }: TutorProfilePopo
             ))}
           </div>
         </div>
+
+        {profile && (
+          <div className="space-y-2">
+            {profile.parentSafeSummary && (
+              <div className="text-xs leading-relaxed text-foreground">{profile.parentSafeSummary}</div>
+            )}
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Context</div>
+              <div className="flex gap-1 flex-wrap">
+                <Badge variant="outline" className="text-[10px]">English: {profile.englishProficiency}</Badge>
+                {profile.youngLearnerFit !== "unknown" && (
+                  <Badge variant="outline" className="text-[10px]">
+                    Young learners: {profile.youngLearnerFit}{profile.youngestComfortableAge ? ` ${profile.youngestComfortableAge}+` : ""}
+                  </Badge>
+                )}
+                {profile.strengthTags.slice(0, 4).map((tag) => (
+                  <Badge key={tag} variant="outline" className="text-[10px]">{tag}</Badge>
+                ))}
+                {profile.teachingStyleTags.slice(0, 4).map((tag) => (
+                  <Badge key={tag} variant="outline" className="text-[10px]">{tag}</Badge>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {tutor.dataIssues.length > 0 && (
           <div>

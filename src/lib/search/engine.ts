@@ -136,6 +136,7 @@ function searchSlot(
         wiseDisplayName: r.wiseDisplayName,
         isOnline: r.isOnline,
       })),
+      businessProfile: group.businessProfile,
     };
 
     if (reviewReasons.length > 0) {

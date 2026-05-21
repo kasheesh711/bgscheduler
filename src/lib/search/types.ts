@@ -1,4 +1,5 @@
 import type { ProposalHoldSummary } from "@/lib/proposals/types";
+import type { TutorBusinessProfile } from "@/lib/tutor-business-profiles";
 
 // ── Search request/response types ────────────────────────────────────
 
@@ -39,6 +40,7 @@ export interface TutorResult {
   supportedModes: string[];
   qualifications: { subject: string; curriculum: string; level: string; examPrep?: string }[];
   underlyingWiseRecords: { wiseTeacherId: string; wiseDisplayName: string; isOnline: boolean }[];
+  businessProfile?: TutorBusinessProfile;
 }
 
 export interface TutorReviewResult extends TutorResult {
@@ -144,6 +146,7 @@ export interface CompareTutor {
   availabilityWindows: { weekday: number; startMinute: number; endMinute: number; modality: string }[];
   leaves: { startTime: string; endTime: string }[];
   dataIssues: { type: string; message: string }[];
+  businessProfile?: TutorBusinessProfile;
   weeklyHoursBooked: number;
   studentCount: number;
 }
