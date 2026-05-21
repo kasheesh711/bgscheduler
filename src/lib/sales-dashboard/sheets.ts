@@ -1,0 +1,59 @@
+import { getGoogleSheetsAccessToken } from "./google-oauth";
+
+interface GoogleSheetsValuesResponse {
+  values?: unknown[][];
+  error?: { message?: string };
+}
+
+interface GoogleSheetsMetadataResponse {
+  sheets?: Array<{ properties?: { title?: string } }>;
+  error?: { message?: string };
+}
+
+function quoteSheetName(sheetName: string): string {
+  return `'${sheetName.replace(/'/g, "''")}'`;
+}
+
+async function googleSheetsGet<T>(path: string, accessToken: string, params: Record<string, string> = {}): Promise<T> {
+  const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${path}`);
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const body = (await response.json()) as T & { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(body.error?.message || `Google Sheets request failed (${response.status})`);
+  }
+  return body;
+}
+
+export async function listGoogleSheetTitles(email: string, spreadsheetId: string): Promise<string[]> {
+  const accessToken = await getGoogleSheetsAccessToken(email);
+  const body = await googleSheetsGet<GoogleSheetsMetadataResponse>(
+    `${spreadsheetId}`,
+    accessToken,
+    { fields: "sheets.properties.title" },
+  );
+  return (body.sheets ?? [])
+    .map((sheet) => sheet.properties?.title)
+    .filter((title): title is string => Boolean(title));
+}
+
+export async function fetchGoogleSheetRows(
+  email: string,
+  spreadsheetId: string,
+  sheetName: string,
+): Promise<unknown[][]> {
+  const accessToken = await getGoogleSheetsAccessToken(email);
+  const range = encodeURIComponent(quoteSheetName(sheetName));
+  const body = await googleSheetsGet<GoogleSheetsValuesResponse>(
+    `${spreadsheetId}/values/${range}`,
+    accessToken,
+    {
+      majorDimension: "ROWS",
+      valueRenderOption: "UNFORMATTED_VALUE",
+      dateTimeRenderOption: "SERIAL_NUMBER",
+    },
+  );
+  return body.values ?? [];
+}

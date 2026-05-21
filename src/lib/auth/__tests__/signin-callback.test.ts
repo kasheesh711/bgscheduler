@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
+vi.mock("@/lib/sales-dashboard/google-oauth", () => ({
+  storeGoogleOAuthTokenForUser: vi.fn(),
+}));
 vi.mock("next-auth", () => ({
   default: () => ({
     handlers: {},

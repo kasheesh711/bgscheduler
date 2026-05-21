@@ -27,6 +27,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     Google({
       clientId: process.env.AUTH_GOOGLE_ID,
       clientSecret: process.env.AUTH_GOOGLE_SECRET,
+      authorization: {
+        params: {
+          scope: "openid email profile https://www.googleapis.com/auth/spreadsheets.readonly",
+          access_type: "offline",
+        },
+      },
     }),
   ],
   pages: {
@@ -34,7 +40,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     error: "/login",
   },
   callbacks: {
-    signIn: signInCallback,
+    async signIn({ user, account }) {
+      const allowed = await signInCallback({ user });
+      if (allowed && user.email) {
+        const { storeGoogleOAuthTokenForUser } = await import("@/lib/sales-dashboard/google-oauth");
+        await storeGoogleOAuthTokenForUser(user.email, account);
+      }
+      return allowed;
+    },
     async session({ session }) {
       return session;
     },

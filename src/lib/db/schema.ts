@@ -125,6 +125,13 @@ export const lineSchedulerReviewStatusEnum = pgEnum("line_scheduler_review_statu
   "dismissed",
 ]);
 
+export const salesDashboardSourceStatusEnum = pgEnum("sales_dashboard_source_status", [
+  "active",
+  "refreshing",
+  "finalized",
+  "reopened",
+]);
+
 // ── Snapshots & Sync ───────────────────────────────────────────────────
 
 export const snapshots = pgTable("snapshots", {
@@ -159,6 +166,112 @@ export const adminUsers = pgTable("admin_users", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("admin_users_email_idx").on(table.email),
+]);
+
+export const googleOAuthTokens = pgTable("google_oauth_tokens", {
+  email: text("email").primaryKey(),
+  accessTokenCiphertext: text("access_token_ciphertext"),
+  refreshTokenCiphertext: text("refresh_token_ciphertext"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  scope: text("scope"),
+  tokenType: text("token_type"),
+  lastError: text("last_error"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ── Sales Dashboard ────────────────────────────────────────────────────
+
+export const salesDashboardSources = pgTable("sales_dashboard_sources", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sourceMonth: date("source_month", { mode: "string" }).notNull(),
+  label: text("label").notNull(),
+  spreadsheetId: text("spreadsheet_id").notNull(),
+  spreadsheetUrl: text("spreadsheet_url").notNull(),
+  normalSheetName: text("normal_sheet_name"),
+  additionalSheetName: text("additional_sheet_name"),
+  status: salesDashboardSourceStatusEnum("status").notNull().default("active"),
+  lastSuccessfulImportRunId: uuid("last_successful_import_run_id"),
+  lastImportedAt: timestamp("last_imported_at", { withTimezone: true }),
+  lastImportError: text("last_import_error"),
+  lastNormalRowCount: integer("last_normal_row_count").notNull().default(0),
+  lastAdditionalRowCount: integer("last_additional_row_count").notNull().default(0),
+  finalizedAt: timestamp("finalized_at", { withTimezone: true }),
+  reopenedAt: timestamp("reopened_at", { withTimezone: true }),
+  connectedEmail: text("connected_email").notNull(),
+  createdByEmail: text("created_by_email").notNull(),
+  updatedByEmail: text("updated_by_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("sds_source_month_idx").on(table.sourceMonth),
+  index("sds_status_month_idx").on(table.status, table.sourceMonth),
+  index("sds_connected_email_idx").on(table.connectedEmail),
+]);
+
+export const salesDashboardImportRuns = pgTable("sales_dashboard_import_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sourceId: uuid("source_id").references(() => salesDashboardSources.id),
+  status: syncStatusEnum("status").notNull().default("running"),
+  triggerType: text("trigger_type").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  sourceCount: integer("source_count").notNull().default(0),
+  normalRowCount: integer("normal_row_count").notNull().default(0),
+  additionalRowCount: integer("additional_row_count").notNull().default(0),
+  errorSummary: text("error_summary"),
+  actorEmail: text("actor_email"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+}, (table) => [
+  index("sdir_source_started_idx").on(table.sourceId, table.startedAt),
+  index("sdir_status_started_idx").on(table.status, table.startedAt),
+]);
+
+export const salesDashboardNormalRows = pgTable("sales_dashboard_normal_rows", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sourceId: uuid("source_id").notNull().references(() => salesDashboardSources.id),
+  importRunId: uuid("import_run_id").notNull().references(() => salesDashboardImportRuns.id),
+  sourceMonth: date("source_month", { mode: "string" }).notNull(),
+  rowNumber: integer("row_number").notNull(),
+  studentNickname: text("student_nickname").notNull(),
+  program: text("program").notNull().default(""),
+  packageHours: text("package_hours").notNull().default(""),
+  numberOfStudents: doublePrecision("number_of_students").notNull().default(0),
+  paymentAmount: doublePrecision("payment_amount").notNull().default(0),
+  salesRepresentative: text("sales_representative").notNull().default(""),
+  paymentDate: date("payment_date", { mode: "string" }).notNull(),
+  enrollmentType: text("enrollment_type").notNull().default(""),
+  programWiseName: text("program_wise_name").notNull().default(""),
+  packageHoursClean: text("package_hours_clean").notNull().default(""),
+  validUntil: date("valid_until", { mode: "string" }),
+  churnStatus: text("churn_status").notNull().default(""),
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("sdnr_run_row_idx").on(table.importRunId, table.rowNumber),
+  index("sdnr_source_run_idx").on(table.sourceId, table.importRunId),
+  index("sdnr_payment_date_idx").on(table.paymentDate),
+  index("sdnr_source_month_idx").on(table.sourceMonth),
+]);
+
+export const salesDashboardAdditionalRows = pgTable("sales_dashboard_additional_rows", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sourceId: uuid("source_id").notNull().references(() => salesDashboardSources.id),
+  importRunId: uuid("import_run_id").notNull().references(() => salesDashboardImportRuns.id),
+  sourceMonth: date("source_month", { mode: "string" }).notNull(),
+  rowNumber: integer("row_number").notNull(),
+  studentNickname: text("student_nickname").notNull(),
+  salesType: text("sales_type").notNull().default(""),
+  packageName: text("package_name").notNull().default(""),
+  paymentAmount: doublePrecision("payment_amount").notNull().default(0),
+  paymentDate: date("payment_date", { mode: "string" }).notNull(),
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("sdar_run_row_idx").on(table.importRunId, table.rowNumber),
+  index("sdar_source_run_idx").on(table.sourceId, table.importRunId),
+  index("sdar_payment_date_idx").on(table.paymentDate),
+  index("sdar_source_month_idx").on(table.sourceMonth),
 ]);
 
 // ── Credit Control ──────────────────────────────────────────────────────
