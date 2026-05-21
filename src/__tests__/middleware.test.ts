@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { NextResponse } from "next/server";
 
-vi.mock("@/lib/auth", () => ({
-  auth: <T>(handler: T) => handler,
+vi.mock("@/lib/auth-edge", () => ({
+  edgeAuth: <T>(handler: T) => handler,
 }));
 
 import middleware from "@/middleware";

@@ -1,7 +1,7 @@
-import { auth } from "@/lib/auth";
+import { edgeAuth } from "@/lib/auth-edge";
 import { NextResponse } from "next/server";
 
-export default auth((req) => {
+export default edgeAuth((req) => {
   const { pathname, search } = req.nextUrl;
 
   // Allow public routes

@@ -1,0 +1,148 @@
+export type SalesSourceStatus = "active" | "refreshing" | "finalized" | "reopened";
+export type SalesImportTrigger = "manual" | "backfill" | "cron";
+
+export interface SalesDashboardSourceRecord {
+  id: string;
+  sourceMonth: string;
+  label: string;
+  spreadsheetId: string;
+  spreadsheetUrl: string;
+  normalSheetName: string | null;
+  additionalSheetName: string | null;
+  status: SalesSourceStatus;
+  lastSuccessfulImportRunId: string | null;
+  lastImportedAt: Date | null;
+  lastImportError: string | null;
+  lastNormalRowCount: number;
+  lastAdditionalRowCount: number;
+  finalizedAt: Date | null;
+  reopenedAt: Date | null;
+  connectedEmail: string;
+  createdByEmail: string;
+  updatedByEmail: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ParsedNormalSaleRow {
+  sourceMonth: string;
+  sourceLabel: string;
+  rowNumber: number;
+  studentNickname: string;
+  program: string;
+  packageHours: string;
+  numberOfStudents: number;
+  paymentAmount: number;
+  salesRepresentative: string;
+  paymentDate: string;
+  enrollmentType: string;
+  programWiseName: string;
+  packageHoursClean: string;
+  validUntil: string | null;
+  churnStatus: string;
+  raw: Record<string, unknown>;
+}
+
+export interface ParsedAdditionalSaleRow {
+  sourceMonth: string;
+  sourceLabel: string;
+  rowNumber: number;
+  studentNickname: string;
+  salesType: string;
+  packageName: string;
+  paymentAmount: number;
+  paymentDate: string;
+  raw: Record<string, unknown>;
+}
+
+export interface SalesDashboardPayload {
+  normalDays: SalesDayAggregate[];
+  addDays: SalesAdditionalDayAggregate[];
+  pkgCount: Record<string, number>;
+  progCount: Record<string, number>;
+  addPkgCount: Record<string, number>;
+  repArr: SalesRepAggregate[];
+  dayCount: Record<string, number>;
+  totalTxn: number;
+  totalAddTxn: number;
+  uniqueTrials: number;
+  uniqueNewStudents: number;
+  uniqueRenewals: number;
+  churnedStudents: number;
+  eligibleStudents: number;
+  completionRate: Record<string, number>;
+  completionMonths: number;
+  weekBandPct: number[];
+  churnList: SalesChurnListEntry[];
+  lastUpdated: string | null;
+  sources: SalesDashboardSourceSummary[];
+  token: {
+    connected: boolean;
+    email: string | null;
+    expiresAt: string | null;
+    lastError: string | null;
+  };
+}
+
+export interface SalesDashboardSourceSummary {
+  id: string;
+  sourceMonth: string;
+  label: string;
+  spreadsheetId: string;
+  spreadsheetUrl: string;
+  normalSheetName: string | null;
+  additionalSheetName: string | null;
+  status: SalesSourceStatus;
+  lastImportedAt: string | null;
+  lastImportError: string | null;
+  lastNormalRowCount: number;
+  lastAdditionalRowCount: number;
+  connectedEmail: string;
+}
+
+export interface SalesDayAggregate {
+  d: string;
+  m: string;
+  rev: number;
+  trial: number;
+  newS: number;
+  renew: number;
+  count: number;
+  revT: number;
+  revN: number;
+  revR: number;
+  pkgs: Record<string, number>;
+  prgs: Record<string, number>;
+  reps: Record<string, SalesDayRepAggregate>;
+  dow: string;
+}
+
+export interface SalesAdditionalDayAggregate {
+  d: string;
+  m: string;
+  rev: number;
+  count: number;
+}
+
+export interface SalesDayRepAggregate {
+  rev: number;
+  count: number;
+  revT: number;
+  revN: number;
+  revR: number;
+  cntT: number;
+  cntN: number;
+  cntR: number;
+}
+
+export interface SalesRepAggregate {
+  name: string;
+  revenue: number;
+  count: number;
+}
+
+export interface SalesChurnListEntry {
+  nick: string;
+  validUntil: string;
+  status: "Churned" | "Retained" | "Active";
+}

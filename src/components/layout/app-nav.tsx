@@ -21,6 +21,7 @@ const SCHEDULING_ITEMS = [
 ];
 
 const NAV_ITEMS = [
+  { href: "/sales-dashboard", label: "Sales Dashboard" },
   { href: "/credit-control", label: "Credit Control" },
   { href: "/data-health", label: "Data Health" },
 ];
