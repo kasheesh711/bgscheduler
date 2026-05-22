@@ -3,28 +3,18 @@ import { z } from "zod";
 import { auth } from "@/lib/auth";
 import {
   aiSchedulerModel,
-  bangkokTodayIso,
   isAiSchedulerConfigured,
   redactAiSchedulerInput,
 } from "@/lib/ai/scheduler";
-import {
-  buildConversationTitle,
-  extractSchedulerStateWithOpenAi,
-  filterOptionsFromIndex,
-  mergeSchedulerState,
-  solveSchedulerTurn,
-  tutorListFromIndex,
-  type SchedulerConversationMessageForPrompt,
-} from "@/lib/ai/scheduler-conversation";
+import { buildConversationTitle, type SchedulerConversationMessageForPrompt } from "@/lib/ai/scheduler-conversation";
 import {
   createSchedulerMessage,
   getSchedulerConversationWithMessages,
   logSchedulerRun,
   touchSchedulerConversationAfterMessage,
 } from "@/lib/ai/scheduler-data";
+import { executeSchedulerTurn, schedulerRunMetadata } from "@/lib/ai/scheduler-service";
 import { getDb } from "@/lib/db";
-import { ensureIndex } from "@/lib/search/index";
-import { listActiveProposalHolds } from "@/lib/proposals/data";
 
 const sendMessageSchema = z.object({
   content: z.string().trim().min(1).max(8000),
@@ -106,29 +96,16 @@ export async function POST(
   });
 
   try {
-    const index = await ensureIndex(db);
-    const activeProposalHoldsPromise = listActiveProposalHolds(db);
-    const filterOptions = filterOptionsFromIndex(index);
-    const tutorList = tutorListFromIndex(index);
-    const extraction = await extractSchedulerStateWithOpenAi({
+    const execution = await executeSchedulerTurn({
+      db,
       currentState: existing.conversation.extractedState,
       messages: messagesForPrompt([
         ...existing.messages,
         adminMessage,
       ]),
-      todayBangkok: bangkokTodayIso(),
-      filterOptions,
-      tutorList,
+      sourceText: parsed.data.content,
     });
-    const mergedState = mergeSchedulerState(existing.conversation.extractedState, extraction.state);
-    const activeProposalHolds = await activeProposalHoldsPromise;
-    const assistantResult = solveSchedulerTurn({
-      index,
-      extractedState: mergedState,
-      filterOptions,
-      tutorList,
-      activeProposalHolds,
-    });
+    const { extraction, assistantResult, latencyBreakdownMs } = execution;
     const assistantPayload = asRecord({
       ...assistantResult,
       extractedState: extraction.state,
@@ -161,6 +138,7 @@ export async function POST(
       inputPreviewRedacted: redactAiSchedulerInput(parsed.data.content),
       model,
       latencyMs: Date.now() - startedAt,
+      ...schedulerRunMetadata(latencyBreakdownMs),
       parsedPayload: asRecord(extraction),
       solverPayload: assistantPayload,
       warnings: assistantResult.warnings,
@@ -192,6 +170,12 @@ export async function POST(
       inputPreviewRedacted: redactAiSchedulerInput(parsed.data.content),
       model,
       latencyMs: Date.now() - startedAt,
+      ...schedulerRunMetadata({
+        totalMs: Date.now() - startedAt,
+        dbMs: 0,
+        modelMs: 0,
+        searchMs: 0,
+      }),
       errorMessage: message,
     });
     return NextResponse.json(

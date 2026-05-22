@@ -11,11 +11,6 @@ vi.mock("@/lib/ai/scheduler", () => ({
 }));
 vi.mock("@/lib/ai/scheduler-conversation", () => ({
   buildConversationTitle: vi.fn(() => "Ava English"),
-  extractSchedulerStateWithOpenAi: vi.fn(),
-  filterOptionsFromIndex: vi.fn(() => ({ subjects: ["English"], curriculums: ["International"], levels: ["Year 5"] })),
-  mergeSchedulerState: vi.fn((_existing, incoming) => incoming),
-  solveSchedulerTurn: vi.fn(),
-  tutorListFromIndex: vi.fn(() => [{ tutorGroupId: "tutor-1", displayName: "Kevin", supportedModes: ["online"], subjects: ["English"] }]),
 }));
 vi.mock("@/lib/ai/scheduler-data", () => ({
   createSchedulerMessage: vi.fn(),
@@ -23,22 +18,23 @@ vi.mock("@/lib/ai/scheduler-data", () => ({
   logSchedulerRun: vi.fn(),
   touchSchedulerConversationAfterMessage: vi.fn(),
 }));
-vi.mock("@/lib/search/index", () => ({ ensureIndex: vi.fn() }));
-vi.mock("@/lib/proposals/data", () => ({ listActiveProposalHolds: vi.fn() }));
+vi.mock("@/lib/ai/scheduler-service", () => ({
+  executeSchedulerTurn: vi.fn(),
+  schedulerRunMetadata: vi.fn((latencyBreakdownMs) => ({
+    schedulerVersion: "scheduler-test",
+    promptVersion: "prompt-test",
+    latencyBreakdownMs,
+  })),
+}));
 
 import { auth } from "@/lib/auth";
-import {
-  extractSchedulerStateWithOpenAi,
-  solveSchedulerTurn,
-} from "@/lib/ai/scheduler-conversation";
 import {
   createSchedulerMessage,
   getSchedulerConversationWithMessages,
   logSchedulerRun,
   touchSchedulerConversationAfterMessage,
 } from "@/lib/ai/scheduler-data";
-import { ensureIndex } from "@/lib/search/index";
-import { listActiveProposalHolds } from "@/lib/proposals/data";
+import { executeSchedulerTurn } from "@/lib/ai/scheduler-service";
 import { POST } from "@/app/api/ai-scheduler/conversations/[conversationId]/messages/route";
 
 const authMock = auth as unknown as Mock;
@@ -75,42 +71,50 @@ describe("POST /api/ai-scheduler/conversations/[conversationId]/messages", () =>
     vi.resetAllMocks();
     authMock.mockResolvedValue({ user: { email: "admin@example.com", name: "Admin" } });
     vi.mocked(getSchedulerConversationWithMessages).mockResolvedValue({ conversation, messages: [] });
-    vi.mocked(ensureIndex).mockResolvedValue({
-      snapshotId: "snap-1",
-      builtAt: new Date("2026-05-18T00:00:00.000Z"),
-      syncedAt: new Date("2026-05-18T00:00:00.000Z"),
-      tutorGroups: [],
-      byWeekday: new Map(),
-    });
-    vi.mocked(listActiveProposalHolds).mockResolvedValue([]);
-    vi.mocked(extractSchedulerStateWithOpenAi).mockResolvedValue({
-      state: { dayOfWeek: 1, filters: { subject: "English" } },
-      title: "Ava English",
-    });
-    vi.mocked(solveSchedulerTurn).mockReturnValue({
-      state: {
-        searchMode: "recurring",
-        dayOfWeek: 1,
-        durationMinutes: 60,
-        mode: "either",
-        filters: { subject: "English" },
-        businessRequirements: {},
-        requestedSlots: [],
-        explicitUnknownFilters: [],
-        explicitUnknownBusinessRequirements: [],
-        tutorNames: [],
-        tutorExclusions: [],
-        negativeFeedback: false,
-        assumptions: [],
-        unresolvedQuestions: [],
+    vi.mocked(executeSchedulerTurn).mockResolvedValue({
+      index: {
+        snapshotId: "snap-1",
+        profileVersion: "0:",
+        builtAt: new Date("2026-05-18T00:00:00.000Z"),
+        syncedAt: new Date("2026-05-18T00:00:00.000Z"),
+        tutorGroups: [],
+        byWeekday: new Map(),
       },
-      suggestions: [],
-      parentMessageDraft: "Draft",
-      assistantMessage: "I found options.",
-      snapshotMeta: { snapshotId: "snap-1", syncedAt: "2026-05-18T00:00:00.000Z", stale: false },
-      warnings: [],
-      questions: [],
-      parentReady: true,
+      extraction: {
+        state: { dayOfWeek: 1, filters: { subject: "English" } },
+        title: "Ava English",
+      },
+      mergedState: { dayOfWeek: 1, filters: { subject: "English" } },
+      latencyBreakdownMs: { totalMs: 11, dbMs: 1, modelMs: 8, searchMs: 2 },
+      assistantResult: {
+        state: {
+          searchMode: "recurring",
+          dayOfWeek: 1,
+          durationMinutes: 60,
+          mode: "either",
+          filters: { subject: "English" },
+          subjectRequests: [],
+          businessRequirements: {},
+          dateRange: undefined,
+          requestedSlots: [],
+          explicitUnknownFilters: [],
+          explicitUnknownBusinessRequirements: [],
+          tutorNames: [],
+          tutorExclusions: [],
+          negativeFeedback: false,
+          assumptions: [],
+          unresolvedQuestions: [],
+        },
+        suggestions: [],
+        constraintLedger: [],
+        latencyBreakdownMs: { totalMs: 11, dbMs: 1, modelMs: 8, searchMs: 2 },
+        parentMessageDraft: "Draft",
+        assistantMessage: "I found options.",
+        snapshotMeta: { snapshotId: "snap-1", syncedAt: "2026-05-18T00:00:00.000Z", stale: false },
+        warnings: [],
+        questions: [],
+        parentReady: true,
+      },
     });
     vi.mocked(createSchedulerMessage)
       .mockResolvedValueOnce({
@@ -161,6 +165,9 @@ describe("POST /api/ai-scheduler/conversations/[conversationId]/messages", () =>
       conversationId: "conv-1",
       messageId: "msg-assistant",
       status: "solved",
+      schedulerVersion: "scheduler-test",
+      promptVersion: "prompt-test",
+      latencyBreakdownMs: { totalMs: 11, dbMs: 1, modelMs: 8, searchMs: 2 },
     }));
     await expect(response.json()).resolves.toMatchObject({
       logId: "run-1",

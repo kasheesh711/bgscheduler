@@ -77,6 +77,8 @@ export interface LineSchedulerAnalytics {
   averageEditDistance: number | null;
   averageModelLatencyMs: number | null;
   commonRejectionReasons: Array<{ reason: string; count: number }>;
+  commonRejectionCategories: Array<{ category: string; count: number }>;
+  feedbackLabels: Array<{ label: "accepted" | "edited" | "rejected" | "dismissed"; count: number }>;
 }
 
 type ContactRow = typeof schema.lineContacts.$inferSelect;
@@ -584,6 +586,25 @@ function levenshtein(a: string, b: string): number {
   return matrix[a.length][b.length];
 }
 
+function categorizeRejectionReason(reason: string): string {
+  const normalized = reason.trim().toLowerCase();
+  if (/time|date|day|slot|เวลา|วัน/.test(normalized)) return "wrong_date_time";
+  if (/subject|level|course|วิชา|ระดับ|y\d|grade/.test(normalized)) return "wrong_subject_level";
+  if (/tutor|teacher|ครู/.test(normalized)) return "unsafe_or_wrong_tutor";
+  if (/draft|word|message|unclear|tone|ข้อความ|ไม่ชัด/.test(normalized)) return "unclear_draft";
+  if (/option|available|no useful|ไม่มี|ไม่เริ่ด/.test(normalized)) return "no_useful_options";
+  return "other";
+}
+
+function feedbackLabelForReview(review: LineSchedulerReviewDto): "accepted" | "edited" | "rejected" | "dismissed" | null {
+  if (review.status === "dismissed") return "dismissed";
+  if (review.status === "rejected") return "rejected";
+  if (review.status !== "approved_sent" && review.status !== "accepted_no_send") return null;
+  const final = review.finalText?.trim();
+  if (!final || final === review.proposedDraft.trim()) return "accepted";
+  return "edited";
+}
+
 export async function getLineSchedulerAnalytics(db: Database): Promise<LineSchedulerAnalytics> {
   const [messages, reviews] = await Promise.all([
     db
@@ -630,11 +651,17 @@ export async function getLineSchedulerAnalytics(db: Database): Promise<LineSched
     .map((run) => run.latencyMs)
     .filter((value): value is number => typeof value === "number");
   const rejectionCounts = new Map<string, number>();
+  const rejectionCategoryCounts = new Map<string, number>();
+  const feedbackLabelCounts = new Map<"accepted" | "edited" | "rejected" | "dismissed", number>();
   for (const review of reviews) {
+    const label = feedbackLabelForReview(review);
+    if (label) feedbackLabelCounts.set(label, (feedbackLabelCounts.get(label) ?? 0) + 1);
     if (review.status !== "rejected" || !review.rejectionReason) continue;
     const reason = review.rejectionReason.trim();
     if (!reason) continue;
     rejectionCounts.set(reason, (rejectionCounts.get(reason) ?? 0) + 1);
+    const category = categorizeRejectionReason(reason);
+    rejectionCategoryCounts.set(category, (rejectionCategoryCounts.get(category) ?? 0) + 1);
   }
 
   return {
@@ -658,5 +685,11 @@ export async function getLineSchedulerAnalytics(db: Database): Promise<LineSched
       .map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 5),
+    commonRejectionCategories: [...rejectionCategoryCounts.entries()]
+      .map(([category, count]) => ({ category, count }))
+      .sort((a, b) => b.count - a.count),
+    feedbackLabels: [...feedbackLabelCounts.entries()]
+      .map(([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count),
   };
 }

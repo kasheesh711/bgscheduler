@@ -41,6 +41,13 @@ export interface SchedulerMessageDto {
   createdAt: string;
 }
 
+export interface SchedulerLatencyBreakdown {
+  totalMs: number;
+  dbMs: number;
+  modelMs: number;
+  searchMs: number;
+}
+
 type ConversationRow = typeof schema.aiSchedulerConversations.$inferSelect;
 type MessageRow = typeof schema.aiSchedulerMessages.$inferSelect;
 
@@ -294,6 +301,9 @@ export async function logSchedulerRun(
     inputPreviewRedacted: string;
     model?: string | null;
     latencyMs?: number | null;
+    schedulerVersion?: string | null;
+    promptVersion?: string | null;
+    latencyBreakdownMs?: SchedulerLatencyBreakdown | null;
     parsedPayload?: Record<string, unknown> | null;
     solverPayload?: Record<string, unknown> | null;
     warnings?: string[];
@@ -311,6 +321,9 @@ export async function logSchedulerRun(
         inputPreviewRedacted: input.inputPreviewRedacted,
         model: input.model ?? null,
         latencyMs: input.latencyMs ?? null,
+        schedulerVersion: input.schedulerVersion ?? null,
+        promptVersion: input.promptVersion ?? null,
+        latencyBreakdown: input.latencyBreakdownMs ? { ...input.latencyBreakdownMs } : null,
         parsedPayload: input.parsedPayload ?? null,
         solverPayload: input.solverPayload ?? null,
         warnings: input.warnings ?? [],

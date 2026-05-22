@@ -126,6 +126,7 @@ describe("room capacity forecast simulation", () => {
   it("marks room+tutor saturation when no strict qualified tutor is available", () => {
     const emptyIndex: SearchIndex = {
       snapshotId: "snapshot-1",
+      profileVersion: "0:",
       builtAt: new Date("2026-05-15T00:00:00.000Z"),
       syncedAt: new Date("2026-05-15T00:00:00.000Z"),
       tutorGroups: [],

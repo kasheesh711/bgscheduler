@@ -35,6 +35,7 @@ function makeIndex(tutors: IndexedTutorGroup[]): SearchIndex {
   }
   return {
     snapshotId: "snap-1",
+    profileVersion: "0:",
     builtAt: new Date(),
     syncedAt: new Date(),
     tutorGroups: tutors,

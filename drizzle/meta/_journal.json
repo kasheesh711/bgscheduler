@@ -134,6 +134,13 @@
       "when": 1779359382861,
       "tag": "0020_sales_dashboard",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1779429070999,
+      "tag": "0021_ai_scheduler_observability",
+      "breakpoints": true
     }
   ]
 }

@@ -38,6 +38,7 @@ function makeTutorGroup(overrides: Partial<IndexedTutorGroup> = {}): IndexedTuto
 function makeIndex(groups: IndexedTutorGroup[] = [makeTutorGroup()]): SearchIndex {
   return {
     snapshotId: "snap-1",
+    profileVersion: "0:",
     builtAt: new Date("2026-04-06T00:00:00.000Z"),
     syncedAt: new Date("2026-04-06T00:00:00.000Z"),
     tutorGroups: groups,

@@ -124,9 +124,46 @@ interface SchedulerSuggestion {
   requestedSlotId?: string;
 }
 
+interface SchedulerAvailabilityWindowSummary {
+  date: string;
+  weekday: number;
+  start: string;
+  end: string;
+  mode: "online" | "onsite" | "either";
+}
+
+interface SchedulerAvailabilityTutorSummary {
+  tutorGroupId: string;
+  displayName: string;
+  supportedModes: string[];
+  matchedSubjects: string[];
+  windows: SchedulerAvailabilityWindowSummary[];
+}
+
+interface SchedulerAvailabilitySummary {
+  dateRange: { startDate: string; endDate: string };
+  searchedFilters: Array<{ subject?: string; curriculum?: string; level?: string }>;
+  durationMinutes: 60 | 90 | 120;
+  mode: "online" | "onsite" | "either";
+  tutors: SchedulerAvailabilityTutorSummary[];
+  needsReview: Array<{ tutorGroupId: string; displayName: string; reasons: string[] }>;
+}
+
+interface SchedulerConstraintLedgerItem {
+  key: string;
+  label: string;
+  requested: string | null;
+  normalized: string | null;
+  evidence: "model" | "deterministic" | "default" | "not_provided";
+  status: "proven" | "needs_clarification" | "not_applicable";
+  message: string;
+}
+
 interface SchedulerPayload {
   state?: SchedulerExtractedState;
   suggestions?: SchedulerSuggestion[];
+  availabilitySummary?: SchedulerAvailabilitySummary;
+  constraintLedger?: SchedulerConstraintLedgerItem[];
   parentMessageDraft?: string;
   warnings?: string[];
   questions?: string[];
@@ -177,6 +214,8 @@ interface LineSchedulerAnalytics {
   averageEditDistance: number | null;
   averageModelLatencyMs: number | null;
   commonRejectionReasons: Array<{ reason: string; count: number }>;
+  commonRejectionCategories: Array<{ category: string; count: number }>;
+  feedbackLabels: Array<{ label: "accepted" | "edited" | "rejected" | "dismissed"; count: number }>;
 }
 
 interface DetailsState {
@@ -214,7 +253,7 @@ function detailsFromConversation(conversation: SchedulerConversation | null): De
 function payloadFromMessage(message: SchedulerMessage): SchedulerPayload | null {
   const payload = message.structuredPayload as SchedulerPayload | null;
   if (!payload || typeof payload !== "object") return null;
-  if (!("suggestions" in payload) && !("parentMessageDraft" in payload) && !("error" in payload)) return null;
+  if (!("suggestions" in payload) && !("availabilitySummary" in payload) && !("parentMessageDraft" in payload) && !("error" in payload)) return null;
   return payload;
 }
 
@@ -238,6 +277,53 @@ function formatSuggestionDay(suggestion: SchedulerSuggestion): string {
   if (suggestion.searchMode === "one_time" && suggestion.date) return suggestion.date;
   if (typeof suggestion.dayOfWeek === "number") return `Every ${DAY_NAMES[suggestion.dayOfWeek]}`;
   return "Requested day";
+}
+
+function formatAvailabilityDate(date: string, weekday: number): string {
+  const [, monthRaw, dayRaw] = date.split("-");
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${DAY_NAMES[weekday]?.slice(0, 3) ?? "Day"} ${day} ${monthNames[month - 1] ?? monthRaw}`;
+}
+
+function timeToMinutes(time: string): number {
+  const [hour, minute] = time.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+function minutesToTime(minutes: number): string {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+function compactAvailabilityWindows(windows: SchedulerAvailabilityWindowSummary[], dateLimit = 2): string {
+  const byDate = new Map<string, { weekday: number; ranges: Array<{ start: number; end: number }> }>();
+  for (const window of windows) {
+    const entry = byDate.get(window.date) ?? { weekday: window.weekday, ranges: [] };
+    entry.ranges.push({ start: timeToMinutes(window.start), end: timeToMinutes(window.end) });
+    byDate.set(window.date, entry);
+  }
+
+  const grouped = [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, entry]) => {
+      const merged: Array<{ start: number; end: number }> = [];
+      for (const range of entry.ranges.sort((a, b) => a.start - b.start || a.end - b.end)) {
+        const current = merged[merged.length - 1];
+        if (current && range.start <= current.end) {
+          current.end = Math.max(current.end, range.end);
+        } else {
+          merged.push({ ...range });
+        }
+      }
+      return { date, weekday: entry.weekday, ranges: merged };
+    });
+
+  const visible = grouped.slice(0, dateLimit).map((entry) => (
+    `${formatAvailabilityDate(entry.date, entry.weekday)} ${entry.ranges.map((range) => `${minutesToTime(range.start)}-${minutesToTime(range.end)}`).join(", ")}`
+  ));
+  const remaining = grouped.length - visible.length;
+  return `${visible.join("; ")}${remaining > 0 ? `; +${remaining} more day${remaining === 1 ? "" : "s"}` : ""}`;
 }
 
 function formatMode(mode?: string): string {
@@ -346,8 +432,95 @@ function ParentDraft({
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         rows={6}
-        className="min-h-[124px] resize-none bg-muted/30 text-xs leading-relaxed"
+        className="min-h-[124px] max-h-[260px] resize-y overflow-y-auto bg-muted/30 text-xs leading-relaxed [field-sizing:fixed]"
       />
+    </div>
+  );
+}
+
+function AvailabilitySummaryPanel({ summary }: { summary: SchedulerAvailabilitySummary }) {
+  const searched = summary.searchedFilters
+    .map((filters) => [filters.subject, filters.level, filters.curriculum].filter(Boolean).join(" "))
+    .filter(Boolean)
+    .join(", ");
+  const visibleTutors = summary.tutors.slice(0, 6);
+  const remainingTutorCount = Math.max(0, summary.tutors.length - visibleTutors.length);
+
+  return (
+    <div className="mt-3 rounded-md border border-primary/15 bg-primary/5 p-2.5">
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+        <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+          {summary.tutors.length} tutors
+        </Badge>
+        <span>{summary.dateRange.startDate} to {summary.dateRange.endDate}</span>
+        <span>{summary.durationMinutes} min</span>
+        {searched && <span className="min-w-0 truncate">Checked {searched}</span>}
+      </div>
+      <div className="mt-2 grid gap-2 md:grid-cols-2">
+        {visibleTutors.map((tutor) => (
+          <div key={tutor.tutorGroupId} className="rounded-md border border-border bg-background/80 p-2">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="truncate text-xs font-semibold text-foreground">{tutor.displayName}</div>
+                <div className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {tutor.matchedSubjects.join(" / ") || "Matched"}
+                </div>
+              </div>
+              <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">
+                {tutor.windows.length}
+              </Badge>
+            </div>
+            <div className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+              {compactAvailabilityWindows(tutor.windows)}
+            </div>
+          </div>
+        ))}
+      </div>
+      {remainingTutorCount > 0 && (
+        <div className="mt-2 text-[11px] text-muted-foreground">
+          +{remainingTutorCount} more available tutor{remainingTutorCount === 1 ? "" : "s"} included in the parent draft.
+        </div>
+      )}
+      {summary.needsReview.length > 0 && (
+        <div className="mt-1 text-[11px] text-muted-foreground">
+          {summary.needsReview.length} tutor{summary.needsReview.length === 1 ? "" : "s"} kept in Needs Review.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConstraintLedgerPanel({ ledger }: { ledger: SchedulerConstraintLedgerItem[] }) {
+  const visible = ledger.filter((item) => item.status !== "not_applicable");
+  if (visible.length === 0) return null;
+
+  return (
+    <div className="mt-3 rounded-md border border-border bg-muted/25 p-2.5">
+      <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <CheckCircle2 className="h-3.5 w-3.5 text-available" aria-hidden />
+        Safety proof
+      </div>
+      <div className="grid gap-1.5 md:grid-cols-2">
+        {visible.slice(0, 8).map((item) => (
+          <div key={`${item.key}-${item.label}`} className="rounded-md border border-border bg-background/80 px-2 py-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 truncate text-[11px] font-medium text-foreground">{item.label}</span>
+              <Badge
+                variant={item.status === "proven" ? "secondary" : "outline"}
+                className={cn(
+                  "h-5 shrink-0 px-1.5 text-[9px]",
+                  item.status === "needs_clarification" && "border-amber-400 text-amber-700 dark:text-amber-300",
+                )}
+              >
+                {item.status === "proven" ? "Proven" : "Check"}
+              </Badge>
+            </div>
+            <div className="mt-0.5 truncate text-[10.5px] text-muted-foreground">
+              {item.normalized ?? item.message}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -998,6 +1171,8 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
               {messages.map((message) => {
                 const payload = payloadFromMessage(message);
                 const suggestions = payload?.suggestions ?? [];
+                const availabilitySummary = payload?.availabilitySummary;
+                const constraintLedger = payload?.constraintLedger ?? [];
                 const parentDraft = payload?.parentMessageDraft;
                 const isAdmin = message.role === "admin";
                 const isParent = message.role === "parent";
@@ -1036,6 +1211,12 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
                       <div className="mt-2 rounded-md border border-amber-300/40 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:bg-amber-950/20 dark:text-amber-200">
                         {payload.questions[0]}
                       </div>
+                    )}
+                    {availabilitySummary && (
+                      <AvailabilitySummaryPanel summary={availabilitySummary} />
+                    )}
+                    {constraintLedger.length > 0 && (
+                      <ConstraintLedgerPanel ledger={constraintLedger} />
                     )}
                     {parentDraft && (
                       <ParentDraft messageId={message.id} initialDraft={parentDraft} />
