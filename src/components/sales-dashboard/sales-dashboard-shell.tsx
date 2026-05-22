@@ -36,6 +36,13 @@ type SourceForm = {
   normalSheetName: string;
   additionalSheetName: string;
 };
+type ImportSummary = {
+  message?: string;
+  sourceCount?: number;
+  importedSourceCount?: number;
+  normalRows?: number;
+  additionalRows?: number;
+};
 
 const SHEETS_SCOPE = "openid email profile https://www.googleapis.com/auth/spreadsheets.readonly";
 const PERIODS = [
@@ -313,6 +320,31 @@ export function SalesDashboardShell() {
     return payload;
   }
 
+  async function seedHistoricalSources() {
+    await runAction("seed", async () => {
+      const payload = await postJson("/api/sales-dashboard/sources/seed") as { count?: number };
+      setMessage(`Seeded ${payload.count ?? 0} historical sources. Run Backfill all next to import rows.`);
+    });
+  }
+
+  async function backfillAllSources() {
+    await runAction("backfill", async () => {
+      const payload = await postJson("/api/sales-dashboard/import", { mode: "backfill" }) as ImportSummary;
+      setMessage(payload.message ?? "Backfill completed.");
+    });
+  }
+
+  async function refreshLiveMonths() {
+    if (!data?.sources.length) {
+      setMessage("No sources configured. Seed historical sources first.");
+      return;
+    }
+    await runAction("refresh", async () => {
+      const payload = await postJson("/api/sales-dashboard/import", { mode: "refreshable" }) as ImportSummary;
+      setMessage(payload.message ?? "Refresh completed.");
+    });
+  }
+
   async function addSource() {
     await runAction("source-add", async () => {
       await postJson("/api/sales-dashboard/sources", {
@@ -478,6 +510,9 @@ export function SalesDashboardShell() {
   const paid = aggregates.newStudents + aggregates.renewals;
   const renewalRate = paid > 0 ? Math.round((aggregates.renewals / paid) * 100) : 0;
   const replacement = aggregates.churned > 0 ? (aggregates.newStudents / aggregates.churned).toFixed(2) : "—";
+  const sourceCount = data?.sources.length ?? 0;
+  const hasSources = sourceCount > 0;
+  const hasImportedRows = (data?.totalTxn ?? 0) + (data?.totalAddTxn ?? 0) > 0;
 
   return (
     <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
@@ -502,10 +537,12 @@ export function SalesDashboardShell() {
           ) : (
             <Badge variant="secondary">{data.token.email}</Badge>
           )}
-          <Button variant="outline" onClick={() => void runAction("refresh", async () => {
-            await postJson("/api/sales-dashboard/import", { mode: "refreshable" });
-            setMessage("Refresh completed.");
-          })}>
+          <Button
+            variant="outline"
+            disabled={!hasSources || busyAction === "refresh"}
+            title={!hasSources ? "No sources configured. Seed historical sources first." : undefined}
+            onClick={() => void refreshLiveMonths()}
+          >
             {busyAction === "refresh" ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
             Refresh live months
           </Button>
@@ -535,6 +572,22 @@ export function SalesDashboardShell() {
       <div className="min-h-0 flex-1 overflow-auto px-4 py-4 lg:px-6">
         {error ? <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div> : null}
         {message ? <div className="mb-3 rounded-md border border-available/30 bg-available/10 px-3 py-2 text-sm text-available">{message}</div> : null}
+
+        {!hasSources || !hasImportedRows ? (
+          <SalesDashboardSetupState
+            connected={Boolean(data?.token.connected)}
+            hasSources={hasSources}
+            sourceCount={sourceCount}
+            busyAction={busyAction}
+            onConnect={() => signIn("google", { callbackUrl: "/sales-dashboard" }, {
+              prompt: "consent",
+              access_type: "offline",
+              scope: SHEETS_SCOPE,
+            })}
+            onSeed={seedHistoricalSources}
+            onBackfill={backfillAllSources}
+          />
+        ) : null}
 
         <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
           <KpiCard label="Normal Sales" value={formatCurrency(aggregates.normalRevenue)} detail={`${aggregates.normalTxn.toLocaleString("en-US")} transactions`} tone="sky" />
@@ -586,9 +639,64 @@ export function SalesDashboardShell() {
           runAction={runAction}
           postJson={postJson}
           addSource={addSource}
+          seedHistoricalSources={seedHistoricalSources}
+          backfillAllSources={backfillAllSources}
         />
       </div>
     </main>
+  );
+}
+
+function SalesDashboardSetupState({
+  connected,
+  hasSources,
+  sourceCount,
+  busyAction,
+  onConnect,
+  onSeed,
+  onBackfill,
+}: {
+  connected: boolean;
+  hasSources: boolean;
+  sourceCount: number;
+  busyAction: string;
+  onConnect: () => void;
+  onSeed: () => Promise<void>;
+  onBackfill: () => Promise<void>;
+}) {
+  return (
+    <section className="mb-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-4 shadow-sm">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-sky-950">
+            {hasSources ? "Sources are configured, but no rows have been imported" : "No monthly sources configured"}
+          </h2>
+          <p className="mt-1 max-w-3xl text-sm text-sky-900/80">
+            {hasSources
+              ? `${sourceCount} monthly sources are ready. Run Backfill all to load historical rows into Postgres.`
+              : connected
+                ? "Google Sheets is connected, but the dashboard has no monthly sheet sources yet. Seed the historical source list, then run Backfill all."
+                : "Connect Google Sheets first, then seed the historical source list and run Backfill all."}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {!connected ? (
+            <Button variant="outline" onClick={onConnect}>
+              <ShieldCheck className="size-4" />
+              Connect Google Sheets
+            </Button>
+          ) : null}
+          <Button onClick={() => void onSeed()} disabled={!connected || busyAction === "seed"}>
+            {busyAction === "seed" ? <Loader2 className="size-4 animate-spin" /> : <Database className="size-4" />}
+            Seed historical sources
+          </Button>
+          <Button variant="outline" onClick={() => void onBackfill()} disabled={!hasSources || busyAction === "backfill"}>
+            {busyAction === "backfill" ? <Loader2 className="size-4 animate-spin" /> : <CalendarClock className="size-4" />}
+            Backfill all
+          </Button>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -662,6 +770,8 @@ function SourceManager({
   runAction,
   postJson,
   addSource,
+  seedHistoricalSources,
+  backfillAllSources,
 }: {
   sources: SalesDashboardSourceSummary[];
   form: SourceForm;
@@ -670,6 +780,8 @@ function SourceManager({
   runAction: (actionName: string, action: () => Promise<void>) => Promise<void>;
   postJson: (url: string, body?: unknown) => Promise<unknown>;
   addSource: () => Promise<void>;
+  seedHistoricalSources: () => Promise<void>;
+  backfillAllSources: () => Promise<void>;
 }) {
   return (
     <section className="mt-4 rounded-lg border bg-card p-4 shadow-sm">
@@ -679,11 +791,11 @@ function SourceManager({
           <p className="text-xs text-muted-foreground">{sources.length} configured Google Sheet sources</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => void runAction("seed", async () => { await postJson("/api/sales-dashboard/sources/seed"); })}>
+          <Button variant="outline" onClick={() => void seedHistoricalSources()}>
             {busyAction === "seed" ? <Loader2 className="size-4 animate-spin" /> : <Database className="size-4" />}
             Seed historical
           </Button>
-          <Button variant="outline" onClick={() => void runAction("backfill", async () => { await postJson("/api/sales-dashboard/import", { mode: "backfill" }); })}>
+          <Button variant="outline" onClick={() => void backfillAllSources()}>
             {busyAction === "backfill" ? <Loader2 className="size-4 animate-spin" /> : <CalendarClock className="size-4" />}
             Backfill all
           </Button>
