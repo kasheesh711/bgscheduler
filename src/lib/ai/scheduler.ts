@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { FilterOptions } from "@/lib/data/filters";
 import type { TutorListItem } from "@/lib/data/tutors";
 import type { SnapshotMeta } from "@/lib/search/types";
+import type { SchedulerAvailabilitySummary, SchedulerResolvedState } from "@/lib/ai/scheduler-conversation";
 import { resolveAcademicFilters } from "@/lib/ai/academic-levels";
 
 export const DEFAULT_AI_SCHEDULER_MODEL = "gpt-5.4-mini";
@@ -76,6 +77,16 @@ export type AiSchedulerResponse =
       status: "solved";
       parsedRequest: AiSchedulerSolvedRequest;
       options: AiSchedulerOption[];
+      parentMessageDraft: string;
+      snapshotMeta: SnapshotMeta;
+      warnings: string[];
+      logId: string;
+    }
+  | {
+      status: "availability_summary";
+      state: SchedulerResolvedState;
+      availabilitySummary: SchedulerAvailabilitySummary;
+      assistantMessage: string;
       parentMessageDraft: string;
       snapshotMeta: SnapshotMeta;
       warnings: string[];

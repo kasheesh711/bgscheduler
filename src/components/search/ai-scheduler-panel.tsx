@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatSlotTime } from "@/lib/search/recommend";
 import type { AiSchedulerOption, AiSchedulerResponse, AiSchedulerSolvedRequest } from "@/lib/ai/scheduler";
+import type { SchedulerAvailabilitySummary } from "@/lib/ai/scheduler-conversation";
 import { cn } from "@/lib/utils";
 
 interface AiSchedulerPanelProps {
@@ -36,6 +37,29 @@ function formatParsedRequest(parsed: AiSchedulerSolvedRequest): string {
 
 function optionTutorIds(option: AiSchedulerOption): string[] {
   return option.tutors.slice(0, 3).map((tutor) => tutor.tutorGroupId);
+}
+
+function summaryTutorIds(summary: SchedulerAvailabilitySummary): string[] {
+  return summary.tutors.slice(0, 3).map((tutor) => tutor.tutorGroupId);
+}
+
+function formatSummarySearch(summary: SchedulerAvailabilitySummary): string {
+  const searched = summary.searchedFilters
+    .map((filters) => [filters.subject, filters.level, filters.curriculum].filter(Boolean).join(" / "))
+    .join(", ");
+  return [
+    `${summary.dateRange.startDate}-${summary.dateRange.endDate}`,
+    `${summary.durationMinutes} min`,
+    summary.mode,
+    searched,
+  ].filter(Boolean).join(" · ");
+}
+
+function formatWindowPreview(tutor: SchedulerAvailabilitySummary["tutors"][number]): string {
+  const first = tutor.windows[0];
+  if (!first) return "No windows";
+  const remaining = tutor.windows.length - 1;
+  return `${first.date} ${formatSlotTime(first.start, first.end)}${remaining > 0 ? ` · +${remaining} more` : ""}`;
 }
 
 export function AiSchedulerPanel({ enabled, onAddToCompare, disableAdd }: AiSchedulerPanelProps) {
@@ -77,7 +101,7 @@ export function AiSchedulerPanel({ enabled, onAddToCompare, disableAdd }: AiSche
     }
   };
 
-  const message = response?.status === "solved"
+  const message = response?.status === "solved" || response?.status === "availability_summary"
     ? editedMessage ?? response.parentMessageDraft
     : "";
 
@@ -262,6 +286,107 @@ export function AiSchedulerPanel({ enabled, onAddToCompare, disableAdd }: AiSche
                 ) : (
                   <>
                     <Copy className="h-3 w-3" aria-hidden /> Copy for parent
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {response?.status === "availability_summary" && (
+        <div className="mt-2 space-y-2">
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-2 py-1.5 text-[11px] text-foreground">
+            <span className="font-medium">Searched:</span> {formatSummarySearch(response.availabilitySummary)}
+          </div>
+
+          <div className="divide-y divide-border rounded-md border border-border">
+            {response.availabilitySummary.tutors.length === 0 ? (
+              <div className="px-2 py-2 text-[11px] text-muted-foreground">
+                No proven available tutors in this date range.
+              </div>
+            ) : (
+              response.availabilitySummary.tutors.slice(0, 8).map((tutor) => (
+                <div key={tutor.tutorGroupId} className="flex items-start gap-2 px-2 py-2">
+                  <Badge variant="secondary" className="mt-0.5 h-5 px-1.5 text-[9px]">
+                    {tutor.windows.length}
+                  </Badge>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs font-semibold text-foreground">
+                      {tutor.displayName}
+                    </div>
+                    <div className="truncate text-[11px] text-muted-foreground">
+                      {formatWindowPreview(tutor)}
+                    </div>
+                    <div className="mt-0.5 flex flex-wrap gap-1">
+                      {tutor.matchedSubjects.slice(0, 3).map((subject) => (
+                        <span key={subject} className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground">
+                          <Check className="h-2.5 w-2.5 text-available" aria-hidden />
+                          {subject}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {response.warnings.length > 0 && (
+            <div className="space-y-0.5 text-[10.5px] text-muted-foreground">
+              {response.warnings.map((warning, index) => (
+                <div key={index}>{warning}</div>
+              ))}
+            </div>
+          )}
+
+          <div>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Parent message
+            </div>
+            <textarea
+              value={message}
+              onChange={(e) => setEditedMessage(e.target.value)}
+              rows={6}
+              className={cn(
+                "min-h-[132px] w-full resize-none rounded-md border border-border bg-muted/30 p-2 text-xs leading-relaxed text-foreground outline-none focus:ring-2 focus:ring-ring/50",
+              )}
+              aria-label="Editable AI parent message"
+            />
+            <div className="mt-1.5 flex items-center gap-2">
+              {editedMessage !== null && editedMessage !== response.parentMessageDraft && (
+                <button
+                  type="button"
+                  onClick={() => setEditedMessage(null)}
+                  className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                >
+                  Reset
+                </button>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => onAddToCompare(summaryTutorIds(response.availabilitySummary))}
+                disabled={disableAdd || response.availabilitySummary.tutors.length === 0}
+                className="ml-auto h-7 gap-1.5 text-[11px]"
+              >
+                <Calendar className="h-3 w-3" aria-hidden /> Compare
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="default"
+                onClick={handleCopy}
+                className="h-7 gap-1.5 text-[11px]"
+              >
+                {copied ? (
+                  <>
+                    <Check className="h-3 w-3" aria-hidden /> Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3 w-3" aria-hidden /> Copy
                   </>
                 )}
               </Button>

@@ -77,6 +77,7 @@ describe("POST /api/ai-scheduler/conversations/[conversationId]/messages", () =>
     vi.mocked(getSchedulerConversationWithMessages).mockResolvedValue({ conversation, messages: [] });
     vi.mocked(ensureIndex).mockResolvedValue({
       snapshotId: "snap-1",
+      profileVersion: "0:",
       builtAt: new Date("2026-05-18T00:00:00.000Z"),
       syncedAt: new Date("2026-05-18T00:00:00.000Z"),
       tutorGroups: [],
@@ -94,7 +95,9 @@ describe("POST /api/ai-scheduler/conversations/[conversationId]/messages", () =>
         durationMinutes: 60,
         mode: "either",
         filters: { subject: "English" },
+        subjectRequests: [],
         businessRequirements: {},
+        dateRange: undefined,
         requestedSlots: [],
         explicitUnknownFilters: [],
         explicitUnknownBusinessRequirements: [],

@@ -46,6 +46,7 @@ function index(groups: IndexedTutorGroup[] = [group()]): SearchIndex {
   }
   return {
     snapshotId: "snap-1",
+    profileVersion: "0:",
     builtAt: new Date("2026-05-18T00:00:00.000Z"),
     syncedAt: new Date("2026-05-18T00:00:00.000Z"),
     tutorGroups: groups,
@@ -82,7 +83,7 @@ function hold(overrides: Partial<ProposalHoldSummary> = {}): ProposalHoldSummary
 }
 
 const filters = {
-  subjects: ["English", "Math", "Econ", "NonVR"],
+  subjects: ["English", "EnglishVR", "EFL", "ESL", "Literature", "Math", "Econ", "NonVR", "Science"],
   curriculums: ["International"],
   levels: ["Y2-8", "Y9-11", "G10-12", "11+/13+"],
 };
@@ -92,6 +93,7 @@ const tutors = [
   { tutorGroupId: "tutor-2", displayName: "Anna", supportedModes: ["online"], subjects: ["Math"] },
   { tutorGroupId: "tutor-3", displayName: "Anne", supportedModes: ["onsite"], subjects: ["English"] },
   { tutorGroupId: "tutor-4", displayName: "June", supportedModes: ["onsite"], subjects: ["NonVR"] },
+  { tutorGroupId: "science-1", displayName: "Science Tutor", supportedModes: ["onsite"], subjects: ["Science"] },
 ];
 
 function modelExtraction(overrides: Record<string, unknown> = {}) {
@@ -104,6 +106,7 @@ function modelExtraction(overrides: Record<string, unknown> = {}) {
     durationMinutes: null,
     mode: null,
     filters: { subject: null, curriculum: null, level: null },
+    subjectRequests: [],
     businessRequirements: {
       englishProficiency: null,
       youngLearnerAge: null,
@@ -112,6 +115,7 @@ function modelExtraction(overrides: Record<string, unknown> = {}) {
       teachingStyleTags: [],
       schoolKeywords: [],
     },
+    dateRange: null,
     requestedSlots: [],
     explicitUnknownFilters: [],
     explicitUnknownBusinessRequirements: [],
@@ -781,5 +785,380 @@ describe("conversational scheduler helpers", () => {
     expect(result.parentReady).toBe(false);
     expect(result.suggestions).toHaveLength(0);
     expect(result.questions[0]).toMatch(/What should I change/);
+  });
+
+  it("expands first-week July prose to 2026-07-01 through 2026-07-07", () => {
+    const state = resolveSchedulerState({
+      parentRequestSummary: "หาครูสอนวิชา writing y6 ช่วง Week แรกของ July",
+      filters: { subject: "Writing", level: "Y6" },
+    });
+
+    expect(state.dateRange).toEqual({ startDate: "2026-07-01", endDate: "2026-07-07" });
+    expect(state.durationMinutes).toBe(60);
+    expect(state.requestedSlots).toEqual([]);
+  });
+
+  it("maps Writing Y6 to English-family International Y2-8 for scheduler searches", () => {
+    const result = solveSchedulerTurn({
+      index: index([
+        group({
+          id: "efl-available",
+          canonicalKey: "efl-available",
+          displayName: "Available EFL",
+          qualifications: [{ subject: "EFL", curriculum: "International", level: "Y2-8" }],
+          availabilityWindows: [
+            { weekday: 3, startMinute: 10 * 60, endMinute: 11 * 60, modality: "both", wiseTeacherId: "wise-english" },
+          ],
+        }),
+        group({
+          id: "esl-available",
+          canonicalKey: "esl-available",
+          displayName: "Available ESL",
+          qualifications: [{ subject: "ESL", curriculum: "International", level: "Y2-8" }],
+          availabilityWindows: [
+            { weekday: 3, startMinute: 10 * 60, endMinute: 11 * 60, modality: "both", wiseTeacherId: "wise-esl" },
+          ],
+        }),
+      ]),
+      extractedState: {
+        searchMode: "one_time",
+        mode: "either",
+        filters: { subject: "Writing", level: "Y6" },
+        dateRange: { startDate: "2026-07-01", endDate: "2026-07-07" },
+      },
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.state.filters).toMatchObject({ subject: "EFL", curriculum: "International", level: "Y2-8" });
+    expect(result.state.subjectIntent).toMatchObject({
+      family: "english",
+      label: "English-family",
+      canonicalSubjects: ["EFL", "ESL"],
+      skillTags: ["writing"],
+      curriculum: "International",
+      level: "Y2-8",
+    });
+    expect(result.state.subjectRequests).toEqual([
+      { subject: "EFL", curriculum: "International", level: "Y2-8" },
+      { subject: "ESL", curriculum: "International", level: "Y2-8" },
+    ]);
+    expect(result.availabilitySummary?.searchedFilters).toEqual(result.state.subjectRequests);
+    expect(result.availabilitySummary?.tutors.map((tutor) => tutor.displayName)).toEqual(["Available EFL", "Available ESL"]);
+    expect(result.assistantMessage).toMatch(/EFL, ESL Y2-8 International/);
+  });
+
+  it("handles the Thai Writing Y6 first-week July request without model-provided filters", () => {
+    const result = solveSchedulerTurn({
+      index: index([
+        group({
+          id: "efl-available",
+          canonicalKey: "efl-available",
+          displayName: "Available EFL",
+          qualifications: [{ subject: "EFL", curriculum: "International", level: "Y2-8" }],
+          availabilityWindows: [
+            { weekday: 3, startMinute: 10 * 60, endMinute: 11 * 60, modality: "both", wiseTeacherId: "wise-english" },
+          ],
+        }),
+      ]),
+      extractedState: {
+        searchMode: "one_time",
+      },
+      sourceText: "หาครูสอนวิชา writing y6 ช่วง Week แรกของ July",
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.parentReady).toBe(true);
+    expect(result.questions).toEqual([]);
+    expect(result.state.dateRange).toEqual({ startDate: "2026-07-01", endDate: "2026-07-07" });
+    expect(result.state.subjectIntent).toMatchObject({
+      label: "English-family",
+      canonicalSubjects: ["EFL"],
+      curriculum: "International",
+      level: "Y2-8",
+      skillTags: ["writing"],
+    });
+    expect(result.availabilitySummary?.tutors.map((tutor) => tutor.displayName)).toEqual(["Available EFL"]);
+  });
+
+  it("recovers Mon-Sun 10:00 AM-6:00 PM prose into structured recurring slots", () => {
+    const state = resolveSchedulerState({
+      parentRequestSummary: "Need a writing tutor for Y6 in July 2026, available Mon-Sun 10:00 AM-6:00 PM.",
+      filters: { subject: "Writing", level: "Y6" },
+      dateRange: { startDate: "2026-07-01", endDate: "2026-07-31" },
+    });
+
+    expect(state.requestedSlots).toHaveLength(7);
+    expect(state.requestedSlots.map((slot) => slot.dayOfWeek)).toEqual([1, 2, 3, 4, 5, 6, 0]);
+    expect(state.requestedSlots[0]).toMatchObject({ startTime: "10:00", endTime: "18:00", durationMinutes: 60 });
+  });
+
+  it("recovers date-range time-window prose into one-time slots", () => {
+    const state = resolveSchedulerState({
+      searchMode: "one_time",
+      parentRequestSummary: "Ellen Emma onsite Math/English/Science, May 30-June 3, 09:00-12:00.",
+      filters: { subject: "Math" },
+      dateRange: { startDate: "2026-05-30", endDate: "2026-06-03" },
+    });
+
+    expect(state.requestedSlots).toHaveLength(5);
+    expect(state.requestedSlots.map((slot) => slot.date)).toEqual([
+      "2026-05-30",
+      "2026-05-31",
+      "2026-06-01",
+      "2026-06-02",
+      "2026-06-03",
+    ]);
+    expect(state.requestedSlots[0]).toMatchObject({ searchMode: "one_time", startTime: "09:00", endTime: "12:00" });
+  });
+
+  it("summarizes proven tutor availability for first-week July Writing Y6 requests", () => {
+    const availableEnglishTutor = group({
+      id: "efl-available",
+      canonicalKey: "efl-available",
+      displayName: "Available EFL",
+      qualifications: [{ subject: "EFL", curriculum: "International", level: "Y2-8" }],
+      availabilityWindows: [
+        { weekday: 3, startMinute: 10 * 60, endMinute: 12 * 60, modality: "both", wiseTeacherId: "wise-english" },
+      ],
+    });
+    const reviewTutor = group({
+      id: "esl-review",
+      canonicalKey: "esl-review",
+      displayName: "Review English",
+      qualifications: [{ subject: "ESL", curriculum: "International", level: "Y2-8" }],
+      availabilityWindows: [
+        { weekday: 3, startMinute: 10 * 60, endMinute: 12 * 60, modality: "both", wiseTeacherId: "wise-review" },
+      ],
+      dataIssues: [{ type: "modality", message: "Unresolved mode" }],
+    });
+    const blockedTutor = group({
+      id: "literature-held",
+      canonicalKey: "literature-held",
+      displayName: "Held English",
+      qualifications: [{ subject: "Literature", curriculum: "International", level: "Y2-8" }],
+      availabilityWindows: [
+        { weekday: 3, startMinute: 10 * 60, endMinute: 11 * 60, modality: "both", wiseTeacherId: "wise-held" },
+      ],
+    });
+
+    const result = solveSchedulerTurn({
+      index: index([availableEnglishTutor, reviewTutor, blockedTutor]),
+      extractedState: {
+        searchMode: "one_time",
+        mode: "either",
+        durationMinutes: 60,
+        filters: { subject: "Writing", level: "Y6" },
+        dateRange: { startDate: "2026-07-01", endDate: "2026-07-07" },
+        parentRequestSummary: "Need a Writing Y6 tutor in the first week of July.",
+      } as SchedulerExtractedState,
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [
+        hold({
+          tutorGroupId: "literature-held",
+          tutorCanonicalKey: "literature-held",
+          tutorDisplayName: "Held English",
+          scope: "one_time",
+          weekday: 3,
+          date: "2026-07-01",
+          startMinute: 10 * 60,
+          endMinute: 11 * 60,
+          startTime: "10:00",
+          endTime: "11:00",
+        }),
+      ],
+    });
+
+    expect(result.parentReady).toBe(true);
+    expect(result.questions).toEqual([]);
+    expect(result.availabilitySummary).toMatchObject({
+      dateRange: { startDate: "2026-07-01", endDate: "2026-07-07" },
+      durationMinutes: 60,
+      filters: { subject: "EFL", curriculum: "International", level: "Y2-8" },
+      searchedFilters: [
+        { subject: "EFL", curriculum: "International", level: "Y2-8" },
+        { subject: "ESL", curriculum: "International", level: "Y2-8" },
+        { subject: "Literature", curriculum: "International", level: "Y2-8" },
+      ],
+    });
+    expect(result.availabilitySummary?.subjectIntent).toMatchObject({ label: "English-family" });
+    expect(result.availabilitySummary?.tutors.map((tutor) => tutor.displayName)).toEqual(["Available EFL"]);
+    expect(result.availabilitySummary?.tutors[0].matchedSubjects).toEqual(["EFL"]);
+    expect(result.availabilitySummary?.tutors[0].windows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ date: "2026-07-01", weekday: 3, start: "10:00", end: "11:00" }),
+      ]),
+    );
+    expect(result.assistantMessage).toMatch(/Available EFL/);
+    expect(result.parentMessageDraft).toMatch(/Search checked: EFL, ESL, Literature Y2-8 International/);
+  });
+
+  it("excludes active sessions and leaves from broad date-range availability summaries", () => {
+    const freeTutor = group({
+      id: "free-english",
+      canonicalKey: "free-english",
+      displayName: "Free English",
+      qualifications: [{ subject: "EFL", curriculum: "International", level: "Y2-8" }],
+      availabilityWindows: [
+        { weekday: 3, startMinute: 10 * 60, endMinute: 11 * 60, modality: "both", wiseTeacherId: "wise-free" },
+      ],
+    });
+    const sessionBlockedTutor = group({
+      id: "session-blocked",
+      canonicalKey: "session-blocked",
+      displayName: "Session Blocked",
+      qualifications: [{ subject: "EFL", curriculum: "International", level: "Y2-8" }],
+      availabilityWindows: [
+        { weekday: 3, startMinute: 10 * 60, endMinute: 11 * 60, modality: "both", wiseTeacherId: "wise-session" },
+      ],
+      sessionBlocks: [
+        {
+          startTime: new Date("2026-07-01T03:00:00.000Z"),
+          endTime: new Date("2026-07-01T04:00:00.000Z"),
+          weekday: 3,
+          startMinute: 10 * 60,
+          endMinute: 11 * 60,
+          isBlocking: true,
+          wiseTeacherId: "wise-session",
+        },
+      ],
+    });
+    const leaveBlockedTutor = group({
+      id: "leave-blocked",
+      canonicalKey: "leave-blocked",
+      displayName: "Leave Blocked",
+      qualifications: [{ subject: "EFL", curriculum: "International", level: "Y2-8" }],
+      availabilityWindows: [
+        { weekday: 3, startMinute: 10 * 60, endMinute: 11 * 60, modality: "both", wiseTeacherId: "wise-leave" },
+      ],
+      leaves: [
+        {
+          startTime: new Date("2026-07-01T00:00:00.000Z"),
+          endTime: new Date("2026-07-02T00:00:00.000Z"),
+        },
+      ],
+    });
+
+    const result = solveSchedulerTurn({
+      index: index([freeTutor, sessionBlockedTutor, leaveBlockedTutor]),
+      extractedState: {
+        searchMode: "one_time",
+        filters: { subject: "Writing", level: "Y6" },
+        parentRequestSummary: "Need Writing Y6.",
+        dateRange: { startDate: "2026-07-01", endDate: "2026-07-01" },
+      },
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.availabilitySummary?.tutors.map((tutor) => tutor.displayName)).toEqual(["Free English"]);
+  });
+
+  it("clears stale day/date questions when a follow-up supplies the requested slot", () => {
+    const merged = mergeSchedulerState(
+      {
+        searchMode: "one_time",
+        startTime: "13:00",
+        endTime: "14:00",
+        durationMinutes: 60,
+        filters: { subject: "EnglishVR", level: "11+/13+" },
+        studentName: "maze",
+        unresolvedQuestions: ["Which weekday or exact date should I search for that time?"],
+      },
+      {
+        searchMode: "recurring",
+        dayOfWeek: 6,
+        startTime: "13:00",
+        endTime: "14:00",
+        requestedSlots: [
+          { searchMode: "recurring", dayOfWeek: 6, startTime: "13:00", endTime: "14:00", durationMinutes: 60 },
+        ],
+      },
+    );
+
+    const result = solveSchedulerTurn({
+      index: index([
+        group({
+          id: "english-sat",
+          canonicalKey: "english-sat",
+          displayName: "Saturday English",
+          qualifications: [{ subject: "EnglishVR", curriculum: "International", level: "11+/13+" }],
+          availabilityWindows: [
+            { weekday: 6, startMinute: 13 * 60, endMinute: 14 * 60, modality: "both", wiseTeacherId: "wise-sat" },
+          ],
+        }),
+      ]),
+      extractedState: merged,
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.parentReady).toBe(true);
+    expect(result.questions.join(" ")).not.toMatch(/Which weekday or exact date/);
+    expect(result.suggestions[0]).toMatchObject({ dayOfWeek: 6, start: "13:00", end: "14:00" });
+  });
+
+  it("runs subject-specific searches for Math English Science requests", () => {
+    const result = solveSchedulerTurn({
+      index: index([
+        group({
+          id: "math-tutor",
+          canonicalKey: "math-tutor",
+          displayName: "Math Tutor",
+          qualifications: [{ subject: "Math", curriculum: "International", level: "Y2-8" }],
+          availabilityWindows: [
+            { weekday: 3, startMinute: 9 * 60, endMinute: 12 * 60, modality: "onsite", wiseTeacherId: "wise-math" },
+          ],
+        }),
+        group({
+          id: "english-tutor",
+          canonicalKey: "english-tutor",
+          displayName: "English Tutor",
+          qualifications: [{ subject: "EnglishVR", curriculum: "International", level: "Y2-8" }],
+          availabilityWindows: [
+            { weekday: 3, startMinute: 9 * 60, endMinute: 12 * 60, modality: "onsite", wiseTeacherId: "wise-english" },
+          ],
+        }),
+        group({
+          id: "science-tutor",
+          canonicalKey: "science-tutor",
+          displayName: "Science Tutor",
+          qualifications: [{ subject: "Science", curriculum: "International", level: "Y2-8" }],
+          availabilityWindows: [
+            { weekday: 3, startMinute: 9 * 60, endMinute: 12 * 60, modality: "onsite", wiseTeacherId: "wise-science" },
+          ],
+        }),
+      ]),
+      extractedState: {
+        searchMode: "one_time",
+        mode: "onsite",
+        durationMinutes: 60,
+        filters: { subject: "Math", level: "Y2-8" },
+        subjectRequests: [
+          { subject: "Math", level: "Y2-8" },
+          { subject: "EnglishVR", level: "Y2-8" },
+          { subject: "Science", level: "Y2-8" },
+        ],
+        requestedSlots: [
+          { searchMode: "one_time", date: "2026-07-01", startTime: "09:00", endTime: "12:00", durationMinutes: 60 },
+        ],
+      } as SchedulerExtractedState,
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.parentReady).toBe(true);
+    expect(new Set(result.suggestions.map((suggestion) => suggestion.subject))).toEqual(new Set(["Math", "EnglishVR", "Science"]));
+    expect(result.assistantMessage).toMatch(/3 subjects/);
+    expect(result.parentMessageDraft).toMatch(/Math/);
+    expect(result.parentMessageDraft).toMatch(/EnglishVR/);
+    expect(result.parentMessageDraft).toMatch(/Science/);
   });
 });

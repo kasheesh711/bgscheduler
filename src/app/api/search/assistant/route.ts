@@ -4,7 +4,15 @@ import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { loadFilterOptions } from "@/lib/data/filters";
 import { loadTutorList } from "@/lib/data/tutors";
+import {
+  filterOptionsFromIndex,
+  solveSchedulerTurn,
+  tutorListFromIndex,
+  type SchedulerAssistantResult,
+} from "@/lib/ai/scheduler-conversation";
+import { listActiveProposalHolds } from "@/lib/proposals/data";
 import { executeRangeSearch } from "@/lib/search/range-search";
+import { ensureIndex } from "@/lib/search/index";
 import { formatSlotTime, getRecommendedSlots } from "@/lib/search/recommend";
 import {
   aiSchedulerModel,
@@ -25,7 +33,8 @@ import {
 type LogStatus = "solved" | "needs_clarification" | "failed";
 type AiSchedulerResponseWithoutLog =
   | Omit<Extract<AiSchedulerResponse, { status: "needs_clarification" }>, "logId">
-  | Omit<Extract<AiSchedulerResponse, { status: "solved" }>, "logId">;
+  | Omit<Extract<AiSchedulerResponse, { status: "solved" }>, "logId">
+  | Omit<Extract<AiSchedulerResponse, { status: "availability_summary" }>, "logId">;
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -151,6 +160,32 @@ function clarificationResponse(
   };
 }
 
+function shouldReturnAvailabilitySummary(result: SchedulerAssistantResult): result is SchedulerAssistantResult & {
+  availabilitySummary: NonNullable<SchedulerAssistantResult["availabilitySummary"]>;
+} {
+  return Boolean(
+    result.parentReady &&
+    result.availabilitySummary &&
+    (result.state.subjectIntent || result.state.filters.subject),
+  );
+}
+
+function availabilitySummaryResponse(
+  result: SchedulerAssistantResult & {
+    availabilitySummary: NonNullable<SchedulerAssistantResult["availabilitySummary"]>;
+  },
+): Extract<AiSchedulerResponseWithoutLog, { status: "availability_summary" }> {
+  return {
+    status: "availability_summary",
+    state: result.state,
+    availabilitySummary: result.availabilitySummary,
+    assistantMessage: result.assistantMessage,
+    parentMessageDraft: result.parentMessageDraft,
+    snapshotMeta: result.snapshotMeta,
+    warnings: result.warnings,
+  };
+}
+
 export async function POST(request: NextRequest) {
   const session = await auth();
   if (!session) {
@@ -185,6 +220,34 @@ export async function POST(request: NextRequest) {
   const model = aiSchedulerModel();
 
   try {
+    const index = await ensureIndex(db);
+    const deterministicFilterOptions = filterOptionsFromIndex(index);
+    const deterministicTutorList = tutorListFromIndex(index);
+    const activeProposalHolds = await listActiveProposalHolds(db);
+    const deterministicResult = solveSchedulerTurn({
+      index,
+      extractedState: {},
+      sourceText: parsedBody.data.input,
+      filterOptions: deterministicFilterOptions,
+      tutorList: deterministicTutorList,
+      activeProposalHolds,
+    });
+
+    if (shouldReturnAvailabilitySummary(deterministicResult)) {
+      const responseBody = availabilitySummaryResponse(deterministicResult);
+      const logId = await writeAiSchedulerRun(db, {
+        createdByEmail: session.user?.email,
+        status: "solved",
+        inputPreviewRedacted,
+        model,
+        latencyMs: Date.now() - startedAt,
+        parsedPayload: { state: deterministicResult.state, source: "deterministic_conversation_solver" },
+        solverPayload: deterministicResult,
+        warnings: deterministicResult.warnings,
+      });
+      return NextResponse.json({ ...responseBody, logId });
+    }
+
     const [filterOptions, tutorList] = await Promise.all([
       loadFilterOptions(db),
       loadTutorList(db),

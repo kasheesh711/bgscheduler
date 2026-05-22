@@ -37,6 +37,21 @@ export interface SchedulerRequestedSlot {
   durationMinutes?: SchedulerDuration;
 }
 
+export interface SchedulerDateRange {
+  startDate: string;
+  endDate: string;
+}
+
+export interface SchedulerSubjectIntent {
+  family: "english" | "single";
+  label: string;
+  canonicalSubjects: string[];
+  skillTags: string[];
+  curriculum?: string;
+  level?: string;
+  source: "deterministic" | "model";
+}
+
 export interface SchedulerExtractedState {
   searchMode?: SchedulerSearchMode;
   dayOfWeek?: number;
@@ -47,7 +62,10 @@ export interface SchedulerExtractedState {
   mode?: SchedulerDeliveryMode;
   filters?: SearchFilters;
   academicLevelResolution?: AcademicLevelResolution;
+  subjectIntent?: SchedulerSubjectIntent;
+  subjectRequests?: SearchFilters[];
   businessRequirements?: SchedulerBusinessRequirements;
+  dateRange?: SchedulerDateRange;
   requestedSlots?: SchedulerRequestedSlot[];
   explicitUnknownFilters?: string[];
   explicitUnknownBusinessRequirements?: string[];
@@ -66,7 +84,10 @@ export interface SchedulerResolvedState extends SchedulerExtractedState {
   durationMinutes: SchedulerDuration;
   mode: SchedulerDeliveryMode;
   filters: SearchFilters;
+  subjectIntent?: SchedulerSubjectIntent;
+  subjectRequests: SearchFilters[];
   businessRequirements: SchedulerBusinessRequirements;
+  dateRange?: SchedulerDateRange;
   requestedSlots: SchedulerRequestedSlot[];
   explicitUnknownFilters: string[];
   explicitUnknownBusinessRequirements: string[];
@@ -110,6 +131,7 @@ export interface SchedulerSuggestion {
   end: string;
   durationMinutes: SchedulerDuration;
   mode: SchedulerDeliveryMode;
+  subject?: string;
   confidence: "Best fit" | "Strong fit" | "Good fit";
   tutors: SchedulerSuggestionTutor[];
   availableTutorCount: number;
@@ -118,9 +140,48 @@ export interface SchedulerSuggestion {
   requestedSlotId?: string;
 }
 
+export interface SchedulerAvailabilityWindowSummary {
+  date: string;
+  weekday: number;
+  start: string;
+  end: string;
+  mode: SchedulerDeliveryMode;
+}
+
+export interface SchedulerAvailabilityTutorSummary {
+  tutorGroupId: string;
+  displayName: string;
+  supportedModes: string[];
+  matchedSubjects: string[];
+  windows: SchedulerAvailabilityWindowSummary[];
+}
+
+export interface SchedulerAvailabilityReviewSummary {
+  tutorGroupId: string;
+  displayName: string;
+  reasons: string[];
+}
+
+export interface SchedulerAvailabilitySummary {
+  dateRange: SchedulerDateRange;
+  filters: SearchFilters;
+  searchedFilters: SearchFilters[];
+  subjectIntent?: SchedulerSubjectIntent;
+  durationMinutes: SchedulerDuration;
+  mode: SchedulerDeliveryMode;
+  searchProvenance: {
+    snapshotId: string;
+    profileVersion: string;
+    activeProposalHoldCount: number;
+  };
+  tutors: SchedulerAvailabilityTutorSummary[];
+  needsReview: SchedulerAvailabilityReviewSummary[];
+}
+
 export interface SchedulerAssistantResult {
   state: SchedulerResolvedState;
   suggestions: SchedulerSuggestion[];
+  availabilitySummary?: SchedulerAvailabilitySummary;
   parentMessageDraft: string;
   assistantMessage: string;
   snapshotMeta: SnapshotMeta;
@@ -155,6 +216,11 @@ const nullableFilterSchema = z.object({
   level: z.string().nullable(),
 }).strict();
 
+const modelDateRangeSchema = z.object({
+  startDate: z.string().nullable(),
+  endDate: z.string().nullable(),
+}).strict();
+
 const modelBusinessRequirementsSchema = z.object({
   englishProficiency: z.enum(["native", "near-native", "fluent", "conversational", "basic", "unknown"]).nullable(),
   youngLearnerAge: z.number().int().min(3).max(20).nullable(),
@@ -183,7 +249,9 @@ const modelSchedulerExtractionSchema = z.object({
   durationMinutes: z.union([z.literal(60), z.literal(90), z.literal(120)]).nullable(),
   mode: z.enum(["online", "onsite", "either"]).nullable(),
   filters: nullableFilterSchema,
+  subjectRequests: z.array(nullableFilterSchema),
   businessRequirements: modelBusinessRequirementsSchema,
+  dateRange: modelDateRangeSchema.nullable(),
   requestedSlots: z.array(modelRequestedSlotSchema),
   explicitUnknownFilters: z.array(z.string()),
   explicitUnknownBusinessRequirements: z.array(z.string()),
@@ -213,7 +281,9 @@ export const openAiSchedulerExtractionJsonSchema = {
     "durationMinutes",
     "mode",
     "filters",
+    "subjectRequests",
     "businessRequirements",
+    "dateRange",
     "requestedSlots",
     "explicitUnknownFilters",
     "explicitUnknownBusinessRequirements",
@@ -245,6 +315,33 @@ export const openAiSchedulerExtractionJsonSchema = {
         curriculum: { anyOf: [{ type: "string" }, { type: "null" }] },
         level: { anyOf: [{ type: "string" }, { type: "null" }] },
       },
+    },
+    subjectRequests: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["subject", "curriculum", "level"],
+        properties: {
+          subject: { anyOf: [{ type: "string" }, { type: "null" }] },
+          curriculum: { anyOf: [{ type: "string" }, { type: "null" }] },
+          level: { anyOf: [{ type: "string" }, { type: "null" }] },
+        },
+      },
+    },
+    dateRange: {
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["startDate", "endDate"],
+          properties: {
+            startDate: { anyOf: [{ type: "string" }, { type: "null" }] },
+            endDate: { anyOf: [{ type: "string" }, { type: "null" }] },
+          },
+        },
+        { type: "null" },
+      ],
     },
     requestedSlots: {
       type: "array",
@@ -362,6 +459,251 @@ function nullableFiltersToState(filters: ModelSchedulerExtraction["filters"]): S
   };
 }
 
+function normalizeSubjectRequests(requests: ModelSchedulerExtraction["subjectRequests"]): SearchFilters[] {
+  return requests
+    .map(nullableFiltersToState)
+    .filter((filters) => filters.subject || filters.curriculum || filters.level);
+}
+
+function normalizeDateRange(range: ModelSchedulerExtraction["dateRange"] | undefined): SchedulerDateRange | undefined {
+  const startDate = normalizeDate(range?.startDate);
+  const endDate = normalizeDate(range?.endDate);
+  if (!startDate || !endDate || endDate < startDate) return undefined;
+  return { startDate, endDate };
+}
+
+function canonicalSchedulerSubject(rawSubject: string | undefined, options: FilterOptions): string | undefined {
+  const compacted = rawSubject?.trim();
+  if (!compacted) return undefined;
+
+  const exact = options.subjects.find((subject) => normalizeLookup(subject) === normalizeLookup(compacted));
+  if (exact) return exact;
+  return compacted;
+}
+
+function applySchedulerFilterAliases(filters: SearchFilters, options: FilterOptions): SearchFilters {
+  const subject = canonicalSchedulerSubject(filters.subject, options);
+  return {
+    ...filters,
+    subject,
+  };
+}
+
+function recoverSchedulerFilters(input: {
+  filters: SearchFilters;
+  explicitUnknownFilters: string[];
+  options: FilterOptions;
+}): {
+  filters: SearchFilters;
+  academicLevelResolution?: AcademicLevelResolution;
+  remainingUnknowns: string[];
+} {
+  const filters = applySchedulerFilterAliases(input.filters, input.options);
+  const remainingUnknowns: string[] = [];
+
+  for (const unknown of input.explicitUnknownFilters) {
+    const subject = canonicalSchedulerSubject(unknown, input.options);
+    if (!filters.subject && subject && subject !== unknown) {
+      filters.subject = subject;
+      continue;
+    }
+    remainingUnknowns.push(unknown);
+  }
+
+  const recovered = recoverFiltersFromUnknowns({
+    filters,
+    explicitUnknownFilters: remainingUnknowns,
+    options: input.options,
+  });
+
+  return {
+    ...recovered,
+    filters: applySchedulerFilterAliases(recovered.filters, input.options),
+  };
+}
+
+const ENGLISH_FAMILY_SUBJECTS = ["EFL", "ESL", "Literature", "EnglishVR"];
+
+function schedulerIntentText(state: SchedulerExtractedState): string {
+  return [
+    state.filters?.subject,
+    state.filters?.level,
+    state.parentRequestSummary,
+    ...(state.explicitUnknownFilters ?? []),
+    ...(state.assumptions ?? []),
+  ].filter(Boolean).join(" ");
+}
+
+function stateWithSchedulerSourceText(
+  state: SchedulerExtractedState,
+  sourceText: string | undefined,
+): SchedulerExtractedState {
+  const compactedSourceText = compactString(sourceText);
+  if (!compactedSourceText) return state;
+  const summary = compactString(state.parentRequestSummary);
+  if (summary && normalizeLookup(summary).includes(normalizeLookup(compactedSourceText))) return state;
+  return {
+    ...state,
+    parentRequestSummary: [summary, compactedSourceText].filter(Boolean).join("\n"),
+  };
+}
+
+function inferRawLevelFromText(text: string): string | undefined {
+  const year = text.match(/\b(?:y|year)\s*(\d{1,2})\b/i);
+  if (year) return `Y${Number(year[1])}`;
+  const plus = text.match(/\b(11|13|16)\s*\+/);
+  if (plus?.[1] === "11" || plus?.[1] === "13") return "11+/13+";
+  if (plus?.[1] === "16") return "16+";
+  return undefined;
+}
+
+function mentionsEnglishFamily(text: string): boolean {
+  const normalized = normalizeLookup(text);
+  return /\b(?:english|eng|writing|literature|efl|esl)\b/i.test(text) ||
+    normalized.includes("วิชา writing");
+}
+
+function mentionsExamEnglish(text: string, level: string | undefined): boolean {
+  const normalized = normalizeLookup(text);
+  return level === "11+/13+" ||
+    level === "16+" ||
+    normalized.includes("englishvr") ||
+    normalized.includes("nonvr") ||
+    normalized.includes("11+") ||
+    normalized.includes("13+") ||
+    normalized.includes("16+") ||
+    normalized.includes("entrance") ||
+    normalized.includes("exam prep");
+}
+
+function activeSubjectsForLevel(input: {
+  index: SearchIndex;
+  subjects: string[];
+  level?: string;
+  curriculum?: string;
+}): string[] {
+  const wanted = new Set(input.subjects.map(normalizeLookup));
+  const seen = new Set<string>();
+  const active = new Set<string>();
+  for (const group of input.index.tutorGroups) {
+    for (const qualification of group.qualifications) {
+      if (!wanted.has(normalizeLookup(qualification.subject))) continue;
+      if (input.level && normalizeLookup(qualification.level) !== normalizeLookup(input.level)) continue;
+      if (input.curriculum && normalizeLookup(qualification.curriculum) !== normalizeLookup(input.curriculum)) continue;
+      const key = normalizeLookup(qualification.subject);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      active.add(qualification.subject);
+    }
+  }
+  return input.subjects
+    .map((subject) => [...active].find((activeSubject) => normalizeLookup(activeSubject) === normalizeLookup(subject)))
+    .filter((subject): subject is string => Boolean(subject));
+}
+
+function buildEnglishSubjectIntent(input: {
+  state: SchedulerExtractedState;
+  filters: SearchFilters;
+  index: SearchIndex;
+  options: FilterOptions;
+}): SchedulerSubjectIntent | undefined {
+  const text = schedulerIntentText(input.state);
+  if (!mentionsEnglishFamily(text)) return undefined;
+
+  const levelResolution = resolveAcademicFilters({ level: input.filters.level }, input.options);
+  const level = levelResolution.filters.level ?? input.filters.level;
+  const curriculum = input.filters.curriculum ?? (
+    level === "Y2-8" || level === "Y9-11" || level === "Y12-13" ? "International" : undefined
+  );
+  const skillTags = normalizeLookup(text).includes("writing") ? ["writing"] : [];
+
+  if (mentionsExamEnglish(text, level)) {
+    const englishVr = activeSubjectsForLevel({
+      index: input.index,
+      subjects: ["EnglishVR"],
+      level,
+    });
+    if (englishVr.length === 0) return undefined;
+    return {
+      family: "english",
+      label: "English exam-prep",
+      canonicalSubjects: englishVr,
+      skillTags,
+      curriculum: input.filters.curriculum,
+      level,
+      source: "deterministic",
+    };
+  }
+
+  const canonicalSubjects = activeSubjectsForLevel({
+    index: input.index,
+    subjects: ENGLISH_FAMILY_SUBJECTS,
+    level,
+    curriculum,
+  });
+  if (canonicalSubjects.length === 0) return undefined;
+  return {
+    family: "english",
+    label: "English-family",
+    canonicalSubjects,
+    skillTags,
+    curriculum,
+    level,
+    source: "deterministic",
+  };
+}
+
+function applyDeterministicSchedulerIntent(input: {
+  state: SchedulerResolvedState;
+  index: SearchIndex;
+  options: FilterOptions;
+}): SchedulerResolvedState {
+  const text = schedulerIntentText(input.state);
+  const inferredLevel = input.state.filters.level ?? inferRawLevelFromText(text);
+  const provisionalFilters = {
+    ...input.state.filters,
+    level: inferredLevel,
+  };
+  const provisionalLevel = resolveAcademicFilters({ level: inferredLevel }, input.options).filters.level ?? inferredLevel;
+  const provisionalCurriculum = provisionalFilters.curriculum ?? (
+    provisionalLevel === "Y2-8" || provisionalLevel === "Y9-11" || provisionalLevel === "Y12-13" ? "International" : undefined
+  );
+  const subjectIntent = buildEnglishSubjectIntent({
+    state: { ...input.state, filters: { ...provisionalFilters, curriculum: provisionalCurriculum } },
+    filters: { ...provisionalFilters, curriculum: provisionalCurriculum },
+    index: input.index,
+    options: input.options,
+  }) ?? input.state.subjectIntent;
+
+  if (!subjectIntent || subjectIntent.canonicalSubjects.length === 0) {
+    return {
+      ...input.state,
+      filters: provisionalFilters,
+    };
+  }
+
+  const subjectRequests = subjectIntent.canonicalSubjects.map((subject) => ({
+    subject,
+    curriculum: subjectIntent.curriculum,
+    level: subjectIntent.level,
+  }));
+  const existingNonEnglishSubjectRequests = (input.state.subjectRequests ?? [])
+    .filter((request) => !mentionsEnglishFamily(request.subject ?? ""));
+
+  return {
+    ...input.state,
+    subjectIntent,
+    filters: {
+      ...input.state.filters,
+      subject: subjectRequests[0]?.subject,
+      curriculum: subjectIntent.curriculum ?? input.state.filters.curriculum,
+      level: subjectIntent.level ?? input.state.filters.level ?? inferredLevel,
+    },
+    subjectRequests: mergeSubjectRequests(undefined, [...subjectRequests, ...existingNonEnglishSubjectRequests]),
+    explicitUnknownFilters: (input.state.explicitUnknownFilters ?? []).filter((unknown) => !mentionsEnglishFamily(unknown)),
+  };
+}
+
 function businessRequirementsToState(
   businessRequirements: ModelSchedulerExtraction["businessRequirements"] | undefined,
 ): SchedulerBusinessRequirements {
@@ -404,7 +746,9 @@ export function normalizeSchedulerExtraction(raw: unknown): {
       durationMinutes: parsed.durationMinutes ?? undefined,
       mode: parsed.mode ?? undefined,
       filters: nullableFiltersToState(parsed.filters),
+      subjectRequests: normalizeSubjectRequests(parsed.subjectRequests),
       businessRequirements: businessRequirementsToState(parsed.businessRequirements),
+      dateRange: normalizeDateRange(parsed.dateRange),
       requestedSlots: normalizeRequestedSlots(parsed.requestedSlots),
       explicitUnknownFilters: uniqueStrings(parsed.explicitUnknownFilters),
       explicitUnknownBusinessRequirements: uniqueStrings(parsed.explicitUnknownBusinessRequirements),
@@ -436,6 +780,28 @@ function differs(existing: string | undefined, incoming: string | undefined): bo
   return Boolean(existing && incoming && normalizeLookup(existing) !== normalizeLookup(incoming));
 }
 
+function filtersKey(filters: SearchFilters | undefined): string {
+  return [
+    filters?.subject ?? "",
+    filters?.curriculum ?? "",
+    filters?.level ?? "",
+  ].map(normalizeLookup).join(":");
+}
+
+function mergeSubjectRequests(existing: SearchFilters[] | undefined, incoming: SearchFilters[] | undefined): SearchFilters[] {
+  const source = incoming?.length ? incoming : existing ?? [];
+  const seen = new Set<string>();
+  const result: SearchFilters[] = [];
+  for (const filters of source) {
+    const key = filtersKey(filters);
+    if (!key.replace(/:/g, "")) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(filters);
+  }
+  return result;
+}
+
 function isIndependentSchedulingRequest(
   existing: SchedulerExtractedState | null | undefined,
   incoming: SchedulerExtractedState,
@@ -463,6 +829,8 @@ export function mergeSchedulerState(
       ...incoming,
       parentName: incoming.parentName ?? existing?.parentName,
       contact: incoming.contact ?? existing?.contact,
+      subjectRequests: incoming.subjectRequests ?? [],
+      dateRange: incoming.dateRange,
       requestedSlots: incoming.requestedSlots ?? [],
       explicitUnknownFilters: incoming.explicitUnknownFilters ?? [],
       explicitUnknownBusinessRequirements: incoming.explicitUnknownBusinessRequirements ?? [],
@@ -481,6 +849,8 @@ export function mergeSchedulerState(
       ...(existing?.filters ?? {}),
       ...(incoming.filters ?? {}),
     },
+    subjectRequests: mergeSubjectRequests(existing?.subjectRequests, incoming.subjectRequests),
+    dateRange: incoming.dateRange ?? existing?.dateRange,
     businessRequirements: mergeBusinessRequirements(existing?.businessRequirements, incoming.businessRequirements),
     requestedSlots: incoming.requestedSlots?.length ? incoming.requestedSlots : existing?.requestedSlots,
     explicitUnknownFilters: mergeList(existing?.explicitUnknownFilters, incoming.explicitUnknownFilters),
@@ -488,7 +858,16 @@ export function mergeSchedulerState(
     tutorNames: mergeList(existing?.tutorNames, incoming.tutorNames),
     tutorExclusions: mergeList(existing?.tutorExclusions, incoming.tutorExclusions),
     assumptions: mergeList(existing?.assumptions, incoming.assumptions),
-    unresolvedQuestions: mergeList(existing?.unresolvedQuestions, incoming.unresolvedQuestions),
+    unresolvedQuestions: pruneStaleQuestions(
+      mergeList(existing?.unresolvedQuestions, incoming.unresolvedQuestions),
+      {
+        ...existing,
+        ...incoming,
+        requestedSlots: incoming.requestedSlots?.length ? incoming.requestedSlots : existing?.requestedSlots,
+        dateRange: incoming.dateRange ?? existing?.dateRange,
+        subjectRequests: mergeSubjectRequests(existing?.subjectRequests, incoming.subjectRequests),
+      },
+    ),
   };
 
   if (merged.searchMode === "one_time") {
@@ -499,6 +878,37 @@ export function mergeSchedulerState(
   }
 
   return merged;
+}
+
+function pruneStaleQuestions(questions: string[], state: SchedulerExtractedState): string[] {
+  const hasCompleteSlots = (state.requestedSlots ?? []).some((slot) => (
+    slot.startTime &&
+    slot.endTime &&
+    (typeof slot.dayOfWeek === "number" || slot.date)
+  ));
+  const hasDateRange = Boolean(state.dateRange?.startDate && state.dateRange?.endDate);
+  const hasMultipleSubjects = (state.subjectRequests ?? []).length > 1;
+
+  return questions.filter((question) => {
+    const normalized = normalizeLookup(question);
+    if ((hasCompleteSlots || hasDateRange) && (
+      normalized.includes("which weekday or exact date") ||
+      normalized.includes("which day/time") ||
+      normalized.includes("what exact day/time") ||
+      normalized.includes("what start time should i search") ||
+      normalized.includes("could not safely structure")
+    )) {
+      return false;
+    }
+    if (hasMultipleSubjects && (
+      normalized.includes("all 3 subjects") ||
+      normalized.includes("all three subjects") ||
+      normalized.includes("separate tutors by subject")
+    )) {
+      return false;
+    }
+    return true;
+  });
 }
 
 function addMinutes(time: string, minutes: number): string | undefined {
@@ -540,6 +950,87 @@ function resolveRequestedSlot(
   };
 }
 
+function parseProseTimeRange(text: string): { startTime: string; endTime: string } | undefined {
+  const toMinute = (rawHour: string, rawMinute: string | undefined, suffix: string | undefined) => {
+    let hour = Number(rawHour);
+    const minute = Number(rawMinute ?? 0);
+    const normalizedSuffix = suffix?.toLowerCase();
+    if (normalizedSuffix === "pm" && hour < 12) hour += 12;
+    if (normalizedSuffix === "am" && hour === 12) hour = 0;
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+    return hour * 60 + minute;
+  };
+
+  const pattern = /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:-|–|—|\bto\b|\band\b|ถึง|และ)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/gi;
+  for (const match of text.matchAll(pattern)) {
+    if (!match[2] && !match[3] && !match[5] && !match[6]) continue;
+    const startMinute = toMinute(match[1], match[2], match[3]);
+    let endMinute = toMinute(match[4], match[5], match[6]);
+    if (startMinute === null || endMinute === null) continue;
+    if (!match[6] && match[3]?.toLowerCase() === "pm" && endMinute < 12 * 60) {
+      endMinute += 12 * 60;
+    }
+    if (endMinute <= startMinute && !match[6] && endMinute < 12 * 60) {
+      endMinute += 12 * 60;
+    }
+    if (endMinute <= startMinute || endMinute > 24 * 60) continue;
+    return { startTime: formatMinute(startMinute), endTime: formatMinute(endMinute) };
+  }
+  return undefined;
+}
+
+function recoverAllWeekRequestedSlotsFromText(
+  state: SchedulerExtractedState,
+  durationMinutes: SchedulerDuration,
+  assumptions: string[],
+): SchedulerRequestedSlot[] {
+  const text = [
+    state.parentRequestSummary,
+    ...(state.assumptions ?? []),
+  ].filter(Boolean).join(" ");
+  if (!text) return [];
+  const normalized = normalizeLookup(text);
+  const allWeek = /\bmon(?:day)?\s*(?:-|–|—|\bto\b|\bthrough\b)\s*sun(?:day)?\b/i.test(text) ||
+    normalized.includes("monday through sunday") ||
+    normalized.includes("mon-sun");
+  if (!allWeek) return [];
+  const timeRange = parseProseTimeRange(text);
+  if (!timeRange) return [];
+  assumptions.push("Mon-Sun prose time range was recovered into structured recurring weekday slots.");
+  return [1, 2, 3, 4, 5, 6, 0].map((dayOfWeek, index) => ({
+    id: `requested-${index + 1}`,
+    searchMode: "recurring",
+    dayOfWeek,
+    startTime: timeRange.startTime,
+    endTime: timeRange.endTime,
+    durationMinutes,
+  }));
+}
+
+function recoverDateRangeRequestedSlotsFromText(
+  state: SchedulerExtractedState,
+  durationMinutes: SchedulerDuration,
+  assumptions: string[],
+): SchedulerRequestedSlot[] {
+  if (!state.dateRange) return [];
+  const text = [
+    state.parentRequestSummary,
+    ...(state.assumptions ?? []),
+  ].filter(Boolean).join(" ");
+  if (!text) return [];
+  const timeRange = parseProseTimeRange(text);
+  if (!timeRange) return [];
+  assumptions.push("Date-range prose time range was recovered into structured one-time slots.");
+  return isoDatesInRange(state.dateRange).map((date, index) => ({
+    id: `requested-${index + 1}`,
+    searchMode: "one_time",
+    date,
+    startTime: timeRange.startTime,
+    endTime: timeRange.endTime,
+    durationMinutes,
+  }));
+}
+
 function resolveRequestedSlots(
   state: SchedulerExtractedState,
   searchMode: SchedulerSearchMode,
@@ -550,7 +1041,11 @@ function resolveRequestedSlots(
     .map((slot, index) => resolveRequestedSlot(slot, { searchMode, durationMinutes, assumptions }, index))
     .filter((slot): slot is SchedulerRequestedSlot => Boolean(slot));
 
+  const recoveredAllWeekSlots = recoverAllWeekRequestedSlotsFromText(state, durationMinutes, assumptions);
+  if (recoveredAllWeekSlots.length > 0 && resolved.length < recoveredAllWeekSlots.length) return recoveredAllWeekSlots;
   if (resolved.length > 0) return resolved;
+  const recoveredDateRangeSlots = recoverDateRangeRequestedSlotsFromText(state, durationMinutes, assumptions);
+  if (recoveredDateRangeSlots.length > 0) return recoveredDateRangeSlots;
   if (!state.startTime) return [];
   if (typeof state.dayOfWeek !== "number" && !state.date) return [];
 
@@ -566,10 +1061,64 @@ function resolveRequestedSlots(
   return scalarSlot ? [scalarSlot] : [];
 }
 
+const MONTH_NAME_TO_NUMBER: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
+
+function inferFirstWeekDateRange(state: SchedulerExtractedState): SchedulerDateRange | undefined {
+  const text = [
+    state.parentRequestSummary,
+    ...(state.assumptions ?? []),
+  ].filter(Boolean).join(" ");
+  if (!text) return undefined;
+  const normalized = normalizeLookup(text);
+  const mentionsFirstWeek = /\bfirst\s+week\b/i.test(text) || normalized.includes("week แรก");
+  if (!mentionsFirstWeek) return undefined;
+  const monthEntry = Object.entries(MONTH_NAME_TO_NUMBER)
+    .sort((a, b) => b[0].length - a[0].length)
+    .find(([name]) => new RegExp(`\\b${name}\\b`, "i").test(text));
+  if (!monthEntry) return undefined;
+  const yearMatch = text.match(/\b(20\d{2})\b/);
+  const year = yearMatch ? Number(yearMatch[1]) : new Date().getFullYear();
+  const month = monthEntry[1];
+  const monthText = String(month).padStart(2, "0");
+  return {
+    startDate: `${year}-${monthText}-01`,
+    endDate: `${year}-${monthText}-07`,
+  };
+}
+
 export function resolveSchedulerState(state: SchedulerExtractedState): SchedulerResolvedState {
   const assumptions = [...(state.assumptions ?? [])];
   const unresolvedQuestions = [...(state.unresolvedQuestions ?? [])];
   let searchMode = state.searchMode;
+  const dateRange = state.dateRange ?? inferFirstWeekDateRange(state);
+  if (dateRange && !state.dateRange) {
+    assumptions.push(`First week date range was interpreted as ${dateRange.startDate} through ${dateRange.endDate}.`);
+  }
 
   if (!searchMode && typeof state.dayOfWeek === "number") {
     searchMode = "recurring";
@@ -598,7 +1147,9 @@ export function resolveSchedulerState(state: SchedulerExtractedState): Scheduler
     durationMinutes: state.durationMinutes ?? DEFAULT_CONVERSATIONAL_DURATION,
     mode: state.mode ?? DEFAULT_CONVERSATIONAL_MODE,
     filters: state.filters ?? {},
+    subjectRequests: mergeSubjectRequests(undefined, state.subjectRequests),
     businessRequirements: state.businessRequirements ?? {},
+    dateRange,
     requestedSlots: resolveRequestedSlots(
       state,
       searchMode,
@@ -611,7 +1162,7 @@ export function resolveSchedulerState(state: SchedulerExtractedState): Scheduler
     tutorExclusions: state.tutorExclusions ?? [],
     negativeFeedback: state.negativeFeedback ?? false,
     assumptions: uniqueStrings(assumptions),
-    unresolvedQuestions: uniqueStrings(unresolvedQuestions),
+    unresolvedQuestions: uniqueStrings(pruneStaleQuestions(unresolvedQuestions, { ...state, dateRange })),
   };
 }
 
@@ -1105,6 +1656,212 @@ export function runSchedulerSearch(input: {
   return { suggestions, snapshotMeta, warnings };
 }
 
+function isoDatesInRange(range: SchedulerDateRange): string[] {
+  const dates: string[] = [];
+  const start = new Date(`${range.startDate}T00:00:00.000Z`);
+  const end = new Date(`${range.endDate}T00:00:00.000Z`);
+  for (let cursor = start; cursor <= end; cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000)) {
+    dates.push(cursor.toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
+function generateDateRangeAvailabilitySlots(
+  index: SearchIndex,
+  state: SchedulerResolvedState,
+): SchedulerCandidateSlot[] {
+  if (!state.dateRange) return [];
+  const duration = state.durationMinutes;
+  const explicitStart = state.startTime ? parseTimeToMinutes(state.startTime) : null;
+  const explicitEnd = state.endTime ? parseTimeToMinutes(state.endTime) : null;
+  const slots: SchedulerCandidateSlot[] = [];
+  const seen = new Set<string>();
+
+  for (const date of isoDatesInRange(state.dateRange)) {
+    const weekday = weekdayForIsoDate(date);
+    const windows = index.tutorGroups.flatMap((group) => group.availabilityWindows.filter((window) => window.weekday === weekday));
+    for (const window of windows) {
+      if (state.mode !== "either" && window.modality !== "both" && window.modality !== state.mode) continue;
+      const lower = Math.max(window.startMinute, explicitStart ?? 0);
+      const upper = Math.min(window.endMinute, explicitEnd ?? 24 * 60);
+      if (upper - lower < duration) continue;
+      const firstStart = Math.ceil(lower / 30) * 30;
+      for (let cursor = firstStart; cursor + duration <= upper; cursor += 30) {
+        const start = formatMinute(cursor);
+        const end = formatMinute(cursor + duration);
+        const key = `${date}:${start}:${end}:${state.mode}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        slots.push({
+          id: `range-${slots.length + 1}`,
+          searchMode: "one_time",
+          date,
+          start,
+          end,
+          durationMinutes: duration,
+          mode: state.mode,
+        });
+      }
+    }
+  }
+
+  return slots.sort((a, b) => (
+    (a.date ?? "").localeCompare(b.date ?? "") ||
+    a.start.localeCompare(b.start)
+  ));
+}
+
+function searchFiltersForState(state: SchedulerResolvedState): SearchFilters[] {
+  if (state.subjectIntent?.canonicalSubjects.length) {
+    return state.subjectIntent.canonicalSubjects.map((subject) => ({
+      subject,
+      curriculum: state.subjectIntent?.curriculum ?? state.filters.curriculum,
+      level: state.subjectIntent?.level ?? state.filters.level,
+    }));
+  }
+  if (state.subjectRequests.length > 1) return state.subjectRequests;
+  return [state.filters];
+}
+
+function buildDateRangeAvailabilitySummary(input: {
+  index: SearchIndex;
+  state: SchedulerResolvedState;
+  activeProposalHolds: ProposalHoldSummary[];
+  matchedTutorIds?: Set<string>;
+  excludedTutorIds?: Set<string>;
+}): {
+  availabilitySummary?: SchedulerAvailabilitySummary;
+  snapshotMeta: SnapshotMeta;
+  warnings: string[];
+} {
+  const snapshotMeta = {
+    snapshotId: input.index.snapshotId,
+    syncedAt: input.index.syncedAt.toISOString(),
+    stale: false,
+  };
+  if (!input.state.dateRange) {
+    return { snapshotMeta, warnings: [] };
+  }
+
+  const slots = generateDateRangeAvailabilitySlots(input.index, input.state);
+  const searchedFilters = searchFiltersForState(input.state);
+  const warnings: string[] = [];
+  const groupById = new Map(input.index.tutorGroups.map((group) => [group.id, group]));
+  const tutorWindows = new Map<string, SchedulerAvailabilityTutorSummary & { windowKeys: Set<string>; matchedSubjectKeys: Set<string> }>();
+  const reviewMap = new Map<string, SchedulerAvailabilityReviewSummary>();
+  let businessFilteredCount = 0;
+
+  for (const slot of slots) {
+    for (const filters of searchedFilters) {
+      const response = executeSearch(input.index, {
+        searchMode: "one_time",
+        slots: [slot],
+        filters,
+      });
+      warnings.push(...response.warnings);
+      const result = response.perSlotResults[0];
+
+      for (const tutor of result.available) {
+        if (input.matchedTutorIds && input.matchedTutorIds.size > 0 && !input.matchedTutorIds.has(tutor.tutorGroupId)) {
+          continue;
+        }
+        if (input.excludedTutorIds?.has(tutor.tutorGroupId)) continue;
+        const group = groupById.get(tutor.tutorGroupId);
+        if (!group || groupHasDataIssue(group, tutor.tutorGroupId)) continue;
+        if (!matchesBusinessRequirements(group, input.state.businessRequirements)) {
+          businessFilteredCount += 1;
+          continue;
+        }
+        if (input.activeProposalHolds.some((hold) => slotBlockedByProposalHold(hold, tutor, slot, "one_time"))) {
+          continue;
+        }
+
+        const entry = tutorWindows.get(tutor.tutorGroupId) ?? {
+          tutorGroupId: tutor.tutorGroupId,
+          displayName: tutor.displayName,
+          supportedModes: tutor.supportedModes,
+          matchedSubjects: [],
+          windows: [],
+          windowKeys: new Set<string>(),
+          matchedSubjectKeys: new Set<string>(),
+        };
+        const subject = filters.subject ?? "Any subject";
+        const subjectKey = normalizeLookup(subject);
+        if (!entry.matchedSubjectKeys.has(subjectKey)) {
+          entry.matchedSubjectKeys.add(subjectKey);
+          entry.matchedSubjects.push(subject);
+        }
+        const date = slot.date!;
+        const windowKey = `${date}:${slot.start}:${slot.end}:${input.state.mode}`;
+        if (!entry.windowKeys.has(windowKey)) {
+          entry.windowKeys.add(windowKey);
+          entry.windows.push({
+            date,
+            weekday: weekdayForIsoDate(date),
+            start: slot.start,
+            end: slot.end,
+            mode: input.state.mode,
+          });
+        }
+        tutorWindows.set(tutor.tutorGroupId, entry);
+      }
+
+      for (const tutor of result.needsReview) {
+        if (input.matchedTutorIds && input.matchedTutorIds.size > 0 && !input.matchedTutorIds.has(tutor.tutorGroupId)) {
+          continue;
+        }
+        if (input.excludedTutorIds?.has(tutor.tutorGroupId)) continue;
+        const entry = reviewMap.get(tutor.tutorGroupId) ?? {
+          tutorGroupId: tutor.tutorGroupId,
+          displayName: tutor.displayName,
+          reasons: [],
+        };
+        entry.reasons = uniqueStrings([...entry.reasons, ...tutor.reasons.map((reason) => `${filters.subject ?? "Subject"}: ${reason}`)]);
+        reviewMap.set(tutor.tutorGroupId, entry);
+      }
+    }
+  }
+
+  const tutors = [...tutorWindows.values()]
+    .map((entry) => ({
+      tutorGroupId: entry.tutorGroupId,
+      displayName: entry.displayName,
+      supportedModes: entry.supportedModes,
+      matchedSubjects: entry.matchedSubjects.sort(),
+      windows: entry.windows.sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start)),
+    }))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+  if (slots.length === 0) {
+    warnings.push("No candidate availability windows could be generated for the requested date range.");
+  } else if (tutors.length === 0) {
+    warnings.push("No proven available tutors were found for the requested date range after applying Wise data and active proposal holds.");
+  }
+  if (hasBusinessRequirements(input.state.businessRequirements) && businessFilteredCount > 0 && tutors.length === 0) {
+    warnings.push("No tutors matched the verified tutor profile requirements.");
+  }
+
+  return {
+    availabilitySummary: {
+      dateRange: input.state.dateRange,
+      filters: input.state.filters,
+      searchedFilters,
+      subjectIntent: input.state.subjectIntent,
+      durationMinutes: input.state.durationMinutes,
+      mode: input.state.mode,
+      searchProvenance: {
+        snapshotId: input.index.snapshotId,
+        profileVersion: input.index.profileVersion,
+        activeProposalHoldCount: input.activeProposalHolds.length,
+      },
+      tutors,
+      needsReview: [...reviewMap.values()].sort((a, b) => a.displayName.localeCompare(b.displayName)),
+    },
+    snapshotMeta,
+    warnings: uniqueStrings(warnings),
+  };
+}
+
 function dayName(day: number): string {
   return ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day] ?? "the requested day";
 }
@@ -1126,16 +1883,73 @@ function formatSlotTime(start: string, end: string): string {
 }
 
 function subjectLabel(state: SchedulerResolvedState): string {
+  if (state.subjectIntent) {
+    return [
+      state.subjectIntent.label,
+      state.subjectIntent.level,
+      state.subjectIntent.curriculum,
+    ].filter(Boolean).join(" ");
+  }
   return [state.filters.subject, state.filters.curriculum, state.filters.level].filter(Boolean).join(" ") || "tuition";
+}
+
+function searchedFiltersLabel(filters: SearchFilters[]): string {
+  const subjects = [...new Set(filters.map((filter) => filter.subject).filter(Boolean))];
+  const level = filters.find((filter) => filter.level)?.level;
+  const curriculum = filters.find((filter) => filter.curriculum)?.curriculum;
+  return [
+    subjects.length ? subjects.join(", ") : undefined,
+    level,
+    curriculum,
+  ].filter(Boolean).join(" ");
+}
+
+function formatAvailabilityWindows(windows: SchedulerAvailabilityWindowSummary[], limit = 8): string {
+  const grouped = new Map<string, string[]>();
+  for (const window of windows.slice(0, limit)) {
+    const label = `${window.date} (${dayName(window.weekday)})`;
+    grouped.set(label, [...(grouped.get(label) ?? []), `${window.start}-${window.end}`]);
+  }
+  const parts = [...grouped.entries()].map(([date, times]) => `${date}: ${times.join(", ")}`);
+  const remaining = windows.length - Math.min(windows.length, limit);
+  return `${parts.join("; ")}${remaining > 0 ? `; +${remaining} more` : ""}`;
+}
+
+function subjectLabelForSuggestion(state: SchedulerResolvedState, suggestion: SchedulerSuggestion): string {
+  if (!suggestion.subject) return subjectLabel(state);
+  return [suggestion.subject, state.filters.curriculum, state.filters.level].filter(Boolean).join(" ");
 }
 
 export function buildSchedulerParentDraft(input: {
   state: SchedulerResolvedState;
   suggestions: SchedulerSuggestion[];
+  availabilitySummary?: SchedulerAvailabilitySummary;
   questions: string[];
   parentReady: boolean;
 }): string {
   const subject = subjectLabel(input.state);
+  if (input.availabilitySummary) {
+    const summary = input.availabilitySummary;
+    if (summary.tutors.length === 0) {
+      return [
+        `Hi! I checked ${subject} availability from ${summary.dateRange.startDate} to ${summary.dateRange.endDate}, but could not find a confirmed matching tutor yet.`,
+        `Search checked: ${searchedFiltersLabel(summary.searchedFilters)}. Wise snapshot ${summary.searchProvenance.snapshotId}; profile version ${summary.searchProvenance.profileVersion}; active holds applied: ${summary.searchProvenance.activeProposalHoldCount}.`,
+        "Could you share another date range or a narrower time preference?",
+      ].join("\n");
+    }
+    const lines = summary.tutors.slice(0, 10).map((tutor) => (
+      `- ${tutor.displayName}: ${formatAvailabilityWindows(tutor.windows)}`
+    ));
+    return [
+      `Hi! I found confirmed ${subject} availability from ${summary.dateRange.startDate} to ${summary.dateRange.endDate}:`,
+      `Search checked: ${searchedFiltersLabel(summary.searchedFilters)}. Wise snapshot ${summary.searchProvenance.snapshotId}; profile version ${summary.searchProvenance.profileVersion}; active holds applied: ${summary.searchProvenance.activeProposalHoldCount}.`,
+      "",
+      ...lines,
+      "",
+      "Let me know which tutor and time works best and I will confirm.",
+    ].join("\n");
+  }
+
   if (input.suggestions.length === 0) {
     return [
       `Hi! I checked ${subject} availability but could not find a confirmed matching tutor yet.`,
@@ -1145,7 +1959,8 @@ export function buildSchedulerParentDraft(input: {
 
   const lines = input.suggestions.slice(0, 4).map((suggestion) => {
     const tutors = suggestion.tutors.slice(0, 3).map((tutor) => tutor.displayName).join(" or ");
-    return `- ${formatSuggestionDay(suggestion)}, ${formatSlotTime(suggestion.start, suggestion.end)}${tutors ? ` with ${tutors}` : ""}`;
+    const suggestionSubject = suggestion.subject ? `${subjectLabelForSuggestion(input.state, suggestion)}: ` : "";
+    return `- ${suggestionSubject}${formatSuggestionDay(suggestion)}, ${formatSlotTime(suggestion.start, suggestion.end)}${tutors ? ` with ${tutors}` : ""}`;
   });
 
   if (!input.parentReady) {
@@ -1169,17 +1984,32 @@ export function buildSchedulerParentDraft(input: {
 
 export function buildSchedulerAssistantMessage(input: {
   suggestions: SchedulerSuggestion[];
+  availabilitySummary?: SchedulerAvailabilitySummary;
   questions: string[];
   warnings: string[];
   parentReady: boolean;
 }): string {
+  if (input.availabilitySummary) {
+    const summary = input.availabilitySummary;
+    if (summary.tutors.length === 0) {
+      const question = input.questions[0] ? ` ${input.questions[0]}` : "";
+      return `I searched ${searchedFiltersLabel(summary.searchedFilters)} from ${summary.dateRange.startDate} to ${summary.dateRange.endDate} and found no proven available tutors.${question}`;
+    }
+    const names = summary.tutors.slice(0, 5).map((tutor) => tutor.displayName).join(", ");
+    const more = summary.tutors.length > 5 ? `, +${summary.tutors.length - 5} more` : "";
+    return `I searched ${searchedFiltersLabel(summary.searchedFilters)} and found ${summary.tutors.length} qualified tutor${summary.tutors.length === 1 ? "" : "s"} with proven availability from ${summary.dateRange.startDate} to ${summary.dateRange.endDate}: ${names}${more}.`;
+  }
+
   if (input.suggestions.length === 0) {
     const question = input.questions[0] ?? "Could you share another day or time range?";
     return `I could not find a proven available option yet. ${question}`;
   }
 
+  const representedSubjects = new Set(input.suggestions.map((suggestion) => suggestion.subject).filter(Boolean));
   const lead = input.parentReady
-    ? `I found ${input.suggestions.length} proven option${input.suggestions.length === 1 ? "" : "s"}.`
+    ? representedSubjects.size > 1
+      ? `I found proven options across ${representedSubjects.size} subjects.`
+      : `I found ${input.suggestions.length} proven option${input.suggestions.length === 1 ? "" : "s"}.`
     : `I found tentative timing options, but one detail still needs confirmation.`;
   const top = input.suggestions[0];
   const tutorNames = top.tutors.slice(0, 3).map((tutor) => tutor.displayName).join(", ");
@@ -1228,12 +2058,17 @@ export function buildSchedulerExtractionPrompt(input: {
     "- Never return the saved state unchanged when the newest parent/admin message contains a different student/class request.",
     "- If a bare weekday appears without an exact date, treat it as recurring weekly and add an assumption.",
     "- Put every explicit requested day/date + time window into requestedSlots. For multiple days/times, include one requestedSlots item per requested slot.",
+    "- For broad date-range requests without an exact time, set dateRange and leave requestedSlots empty so the app can summarize all proven tutor availability.",
+    "- Interpret 'first week of July' / 'Week แรกของ July' as July 1 through July 7. Use the year implied by today unless the message explicitly gives another year.",
     "- If the admin gives a start time and duration but no end time, set requestedSlots.endTime to start plus duration.",
     "- Do not mention times only in assumptions; structured requestedSlots must contain the same day/date/time facts.",
     "- Missing duration should be null; the app will default to 60 minutes.",
     "- Missing delivery mode should be null; the app will default to either.",
     "- Missing subject/curriculum/level is allowed. Preserve raw admin/parent level phrases such as Y10, Year 5, Grade 10, 11+, or ม.4 in filters.level. The app maps them to Wise levels safely.",
     "- Use only valid subject/curriculum values when there is a clear match. Do not invent canonical Wise levels; keep the raw requested level instead.",
+    "- For school-level English, English writing, and writing requests, preserve the raw subject in filters if unsure; the app maps it to the active English-family Wise subjects for that level. Example: writing Y6 means English/writing for International Y2-8.",
+    "- Use EnglishVR for explicit exam-prep English such as 11+/13+, 16+, VR, entrance exam, or exam-prep wording.",
+    "- When the request asks for multiple subjects such as Math/English/Science, put each subject as a separate subjectRequests entry. Keep filters as the primary or first subject for backward compatibility.",
     "- Unknown explicit academic filters go in explicitUnknownFilters, but do not put known subjects like English, Math, or English writing there when the subject is clear.",
     `- Supported teachingStyleTags are: ${teachingStyleTags}.`,
     "- Put non-Wise tutor fit requirements into businessRequirements: English ability, school background, writing strength, exam-prep fit, young learner age, teaching style, or curriculum experience.",
@@ -1330,7 +2165,7 @@ function schedulerGuardQuestions(state: SchedulerResolvedState): string[] {
   if (state.requestedSlots.length === 0 && state.startTime && typeof state.dayOfWeek !== "number" && !state.date) {
     questions.push("Which weekday or exact date should I search for that time?");
   }
-  if (state.requestedSlots.length === 0 && !state.startTime && (typeof state.dayOfWeek === "number" || state.date)) {
+  if (!state.dateRange && state.requestedSlots.length === 0 && !state.startTime && (typeof state.dayOfWeek === "number" || state.date)) {
     questions.push("What start time should I search for that day?");
   }
   if (hasUnstructuredSlotEvidence(state)) {
@@ -1351,32 +2186,141 @@ function emptySearchResult(index: SearchIndex, warnings: string[]) {
   };
 }
 
+function hasFilterValue(filters: SearchFilters): boolean {
+  return Boolean(filters.subject || filters.curriculum || filters.level);
+}
+
+function resolveSubjectRequestFilters(input: {
+  subjectRequests: SearchFilters[];
+  fallbackFilters: SearchFilters;
+  options: FilterOptions;
+}): {
+  filters: SearchFilters[];
+  issues: string[];
+} {
+  const issues: string[] = [];
+  const seen = new Set<string>();
+  const filters: SearchFilters[] = [];
+
+  for (const request of input.subjectRequests) {
+    const rawFilters = {
+      ...input.fallbackFilters,
+      ...request,
+    };
+    const recovered = recoverSchedulerFilters({
+      filters: rawFilters,
+      explicitUnknownFilters: [],
+      options: input.options,
+    });
+    const resolved = resolveSchedulerFilters(recovered.filters, input.options);
+    issues.push(...resolved.issues, ...recovered.remainingUnknowns.map((issue) => `${issue} is not mapped to an active Wise qualification. Please clarify.`));
+    if (!hasFilterValue(resolved.filters)) continue;
+    const key = filtersKey(resolved.filters);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    filters.push(resolved.filters);
+  }
+
+  return { filters, issues: uniqueStrings(issues) };
+}
+
+function runSubjectSpecificSchedulerSearch(input: {
+  index: SearchIndex;
+  state: SchedulerResolvedState;
+  subjectRequests: SearchFilters[];
+  activeProposalHolds: ProposalHoldSummary[];
+  matchedTutorIds?: Set<string>;
+  excludedTutorIds?: Set<string>;
+  parentReady: boolean;
+}): {
+  suggestions: SchedulerSuggestion[];
+  snapshotMeta: SnapshotMeta;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const searches = input.subjectRequests.map((filters) => ({
+    filters,
+    search: runSchedulerSearch({
+      index: input.index,
+      state: { ...input.state, filters },
+      activeProposalHolds: input.activeProposalHolds,
+      matchedTutorIds: input.matchedTutorIds,
+      excludedTutorIds: input.excludedTutorIds,
+      parentReady: input.parentReady,
+    }),
+  }));
+
+  for (const entry of searches) {
+    warnings.push(...entry.search.warnings);
+  }
+
+  const firstBySubject: SchedulerSuggestion[] = [];
+  const rest: SchedulerSuggestion[] = [];
+  for (const entry of searches) {
+    const tagged = entry.search.suggestions.map((suggestion) => ({
+      ...suggestion,
+      subject: entry.filters.subject,
+    }));
+    if (tagged[0]) firstBySubject.push(tagged[0]);
+    rest.push(...tagged.slice(1));
+  }
+
+  const selected = [...firstBySubject, ...rest]
+    .slice(0, MAX_SCHEDULER_SUGGESTIONS)
+    .map((suggestion, index) => ({
+      ...suggestion,
+      id: `suggestion-${index + 1}`,
+      rank: index + 1,
+      confidence: index === 0 ? "Best fit" as const : index < 3 ? "Strong fit" as const : "Good fit" as const,
+    }));
+
+  const snapshotMeta = searches[0]?.search.snapshotMeta ?? {
+    snapshotId: input.index.snapshotId,
+    syncedAt: input.index.syncedAt.toISOString(),
+    stale: false,
+  };
+
+  return { suggestions: selected, snapshotMeta, warnings: uniqueStrings(warnings) };
+}
+
 export function solveSchedulerTurn(input: {
   index: SearchIndex;
   extractedState: SchedulerExtractedState;
+  sourceText?: string;
   filterOptions: FilterOptions;
   tutorList: TutorListItem[];
   activeProposalHolds: ProposalHoldSummary[];
 }): SchedulerAssistantResult {
-  const state = resolveSchedulerState(input.extractedState);
-  const recovered = recoverFiltersFromUnknowns({
+  const state = applyDeterministicSchedulerIntent({
+    state: resolveSchedulerState(stateWithSchedulerSourceText(input.extractedState, input.sourceText)),
+    index: input.index,
+    options: input.filterOptions,
+  });
+  const recovered = recoverSchedulerFilters({
     filters: state.filters,
     explicitUnknownFilters: state.explicitUnknownFilters,
     options: input.filterOptions,
   });
   const filterResolution = resolveSchedulerFilters(recovered.filters, input.filterOptions);
   const academicLevelResolution = filterResolution.academicLevelResolution ?? recovered.academicLevelResolution;
+  const subjectRequestResolution = resolveSubjectRequestFilters({
+    subjectRequests: state.subjectRequests,
+    fallbackFilters: filterResolution.filters,
+    options: input.filterOptions,
+  });
   const tutorResolution = resolveSchedulerTutorNames(state.tutorNames, input.tutorList, state.tutorExclusions);
   const questions = uniqueStrings([
     ...state.unresolvedQuestions,
     ...schedulerGuardQuestions(state),
     ...filterResolution.issues,
+    ...subjectRequestResolution.issues,
     ...recovered.remainingUnknowns.map((issue) => `${issue} is not mapped to an active Wise qualification. Please clarify.`),
     ...state.explicitUnknownBusinessRequirements.map((issue) => `${issue} is not mapped to a verified tutor profile field. Please clarify.`),
     ...tutorResolution.questions,
   ]);
   const warnings = uniqueStrings([
     ...filterResolution.issues,
+    ...subjectRequestResolution.issues,
     ...recovered.remainingUnknowns,
     ...state.explicitUnknownBusinessRequirements,
     ...tutorResolution.warnings,
@@ -1385,6 +2329,8 @@ export function solveSchedulerTurn(input: {
   const resolvedState: SchedulerResolvedState = {
     ...state,
     filters: filterResolution.filters,
+    subjectIntent: state.subjectIntent,
+    subjectRequests: subjectRequestResolution.filters,
     academicLevelResolution,
     explicitUnknownFilters: recovered.remainingUnknowns,
     unresolvedQuestions: questions,
@@ -1392,11 +2338,43 @@ export function solveSchedulerTurn(input: {
 
   const shouldSuppressBroadSearch = state.negativeFeedback ||
     (state.requestedSlots.length === 0 && state.startTime && typeof state.dayOfWeek !== "number" && !state.date) ||
-    (state.requestedSlots.length === 0 && !state.startTime && (typeof state.dayOfWeek === "number" || Boolean(state.date))) ||
+    (!state.dateRange && state.requestedSlots.length === 0 && !state.startTime && (typeof state.dayOfWeek === "number" || Boolean(state.date))) ||
     hasUnstructuredSlotEvidence(state);
+  const shouldBuildAvailabilitySummary = !shouldSuppressBroadSearch &&
+    Boolean(resolvedState.dateRange) &&
+    resolvedState.requestedSlots.length === 0;
+  const availabilitySearch = shouldBuildAvailabilitySummary
+    ? buildDateRangeAvailabilitySummary({
+      index: input.index,
+      state: resolvedState,
+      activeProposalHolds: input.activeProposalHolds,
+      matchedTutorIds: tutorResolution.matchedTutorIds,
+      excludedTutorIds: tutorResolution.excludedTutorIds,
+    })
+    : undefined;
   const search = shouldSuppressBroadSearch
     ? emptySearchResult(input.index, ["Skipped broad scheduler search because explicit constraints were not safely structured."])
-    : runSchedulerSearch({
+    : shouldBuildAvailabilitySummary
+      ? {
+        suggestions: [],
+        snapshotMeta: availabilitySearch?.snapshotMeta ?? {
+          snapshotId: input.index.snapshotId,
+          syncedAt: input.index.syncedAt.toISOString(),
+          stale: false,
+        },
+        warnings: availabilitySearch?.warnings ?? [],
+      }
+      : resolvedState.subjectRequests.length > 1
+        ? runSubjectSpecificSchedulerSearch({
+          index: input.index,
+          state: resolvedState,
+          subjectRequests: resolvedState.subjectRequests,
+          activeProposalHolds: input.activeProposalHolds,
+          matchedTutorIds: tutorResolution.matchedTutorIds,
+          excludedTutorIds: tutorResolution.excludedTutorIds,
+          parentReady,
+        })
+        : runSchedulerSearch({
       index: input.index,
       state: resolvedState,
       activeProposalHolds: input.activeProposalHolds,
@@ -1408,11 +2386,13 @@ export function solveSchedulerTurn(input: {
   const parentMessageDraft = buildSchedulerParentDraft({
     state: resolvedState,
     suggestions: search.suggestions,
+    availabilitySummary: availabilitySearch?.availabilitySummary,
     questions,
     parentReady,
   });
   const assistantMessage = buildSchedulerAssistantMessage({
     suggestions: search.suggestions,
+    availabilitySummary: availabilitySearch?.availabilitySummary,
     questions,
     warnings: allWarnings,
     parentReady,
@@ -1421,6 +2401,7 @@ export function solveSchedulerTurn(input: {
   return {
     state: resolvedState,
     suggestions: search.suggestions,
+    availabilitySummary: availabilitySearch?.availabilitySummary,
     parentMessageDraft,
     assistantMessage,
     snapshotMeta: search.snapshotMeta,

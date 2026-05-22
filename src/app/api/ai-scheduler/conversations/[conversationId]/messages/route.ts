@@ -125,6 +125,7 @@ export async function POST(
     const assistantResult = solveSchedulerTurn({
       index,
       extractedState: mergedState,
+      sourceText: parsed.data.content,
       filterOptions,
       tutorList,
       activeProposalHolds,
