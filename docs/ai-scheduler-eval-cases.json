@@ -1,0 +1,46 @@
+[
+  {
+    "id": "writing-y6-first-week-july",
+    "label": "Writing Y6 first week of July broad summary",
+    "messages": [
+      { "role": "admin", "content": "หาครูสอนวิชา writing y6 ช่วง Week แรกของ July" }
+    ],
+    "expect": {
+      "parentReady": true,
+      "requiresAvailabilitySummary": true,
+      "dateRange": { "startDate": "2026-07-01", "endDate": "2026-07-07" },
+      "subjects": ["EFL", "ESL", "Literature"],
+      "level": "Y2-8"
+    }
+  },
+  {
+    "id": "econ-y10-fri-sat",
+    "label": "Econ Y10 exact Friday and Saturday slots",
+    "messages": [
+      { "role": "admin", "content": "หา tutor Econ Y10 for เอิง Fri 18:30-19:30 and Sat 13:00-14:00" }
+    ],
+    "expect": {
+      "parentReady": true,
+      "subjects": ["Econ"],
+      "level": "Y9-11",
+      "slots": [
+        { "searchMode": "recurring", "dayOfWeek": 5, "start": "18:30", "end": "19:30" },
+        { "searchMode": "recurring", "dayOfWeek": 6, "start": "13:00", "end": "14:00" }
+      ]
+    }
+  },
+  {
+    "id": "maze-english-missing-day",
+    "label": "Maze 11+/13+ English missing weekday",
+    "messages": [
+      { "role": "admin", "content": "maze 11+ english ว่าง 13.00-14.00 มีครูไรบ้าง" }
+    ],
+    "expect": {
+      "parentReady": false,
+      "requiresClarification": true,
+      "noSuggestions": true,
+      "subjects": ["EnglishVR"],
+      "level": "11+/13+"
+    }
+  }
+]

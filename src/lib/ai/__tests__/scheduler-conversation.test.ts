@@ -624,6 +624,10 @@ describe("conversational scheduler helpers", () => {
     expect(result.parentReady).toBe(false);
     expect(result.suggestions).toHaveLength(0);
     expect(result.questions.join(" ")).toMatch(/could not safely structure/);
+    expect(result.constraintLedger).toContainEqual(expect.objectContaining({
+      key: "slot",
+      status: "needs_clarification",
+    }));
   });
 
   it("does not broad-search a day-only request without a start time", () => {
@@ -896,6 +900,28 @@ describe("conversational scheduler helpers", () => {
     expect(state.requestedSlots[0]).toMatchObject({ startTime: "10:00", endTime: "18:00", durationMinutes: 60 });
   });
 
+  it("prefers explicit Mon-Sun recurring prose over stale one-time date-range slots", () => {
+    const state = resolveSchedulerState({
+      searchMode: "one_time",
+      parentRequestSummary: "Need a writing tutor for Y6 in July 2026, available Mon-Sun 10:00 AM-6:00 PM.",
+      filters: { subject: "Writing", level: "Y6" },
+      dateRange: { startDate: "2026-07-01", endDate: "2026-07-07" },
+      requestedSlots: [
+        { searchMode: "one_time", date: "2026-07-01", startTime: "10:00", endTime: "18:00" },
+        { searchMode: "one_time", date: "2026-07-02", startTime: "10:00", endTime: "18:00" },
+        { searchMode: "one_time", date: "2026-07-03", startTime: "10:00", endTime: "18:00" },
+        { searchMode: "one_time", date: "2026-07-04", startTime: "10:00", endTime: "18:00" },
+        { searchMode: "one_time", date: "2026-07-05", startTime: "10:00", endTime: "18:00" },
+        { searchMode: "one_time", date: "2026-07-06", startTime: "10:00", endTime: "18:00" },
+        { searchMode: "one_time", date: "2026-07-07", startTime: "10:00", endTime: "18:00" },
+      ],
+    });
+
+    expect(state.requestedSlots).toHaveLength(7);
+    expect(state.requestedSlots.every((slot) => slot.searchMode === "recurring")).toBe(true);
+    expect(state.requestedSlots.map((slot) => slot.dayOfWeek)).toEqual([1, 2, 3, 4, 5, 6, 0]);
+  });
+
   it("recovers date-range time-window prose into one-time slots", () => {
     const state = resolveSchedulerState({
       searchMode: "one_time",
@@ -994,7 +1020,9 @@ describe("conversational scheduler helpers", () => {
       ]),
     );
     expect(result.assistantMessage).toMatch(/Available EFL/);
-    expect(result.parentMessageDraft).toMatch(/Search checked: EFL, ESL, Literature Y2-8 International/);
+    expect(result.parentMessageDraft).toMatch(/Checked: EFL, ESL, Literature Y2-8 International/);
+    expect(result.parentMessageDraft).toMatch(/1\. Available EFL \(EFL\) - Wed 1 Jul: 10:00-12:00/);
+    expect(result.parentMessageDraft).not.toMatch(/Wise snapshot/);
   });
 
   it("excludes active sessions and leaves from broad date-range availability summaries", () => {
@@ -1100,7 +1128,47 @@ describe("conversational scheduler helpers", () => {
     });
 
     expect(result.parentReady).toBe(true);
+    expect(result.constraintLedger).toContainEqual(expect.objectContaining({
+      key: "slot",
+      status: "proven",
+      normalized: expect.stringContaining("Saturday 13:00-14:00"),
+    }));
     expect(result.questions.join(" ")).not.toMatch(/Which weekday or exact date/);
+    expect(result.suggestions[0]).toMatchObject({ dayOfWeek: 6, start: "13:00", end: "14:00" });
+  });
+
+  it("recovers a Saturday follow-up from raw text when the model leaves dayOfWeek empty", () => {
+    const result = solveSchedulerTurn({
+      index: index([
+        group({
+          id: "english-sat",
+          canonicalKey: "english-sat",
+          displayName: "Saturday English",
+          qualifications: [{ subject: "EnglishVR", curriculum: "International", level: "11+/13+" }],
+          availabilityWindows: [
+            { weekday: 6, startMinute: 13 * 60, endMinute: 14 * 60, modality: "both", wiseTeacherId: "wise-sat" },
+          ],
+        }),
+      ]),
+      extractedState: {
+        searchMode: "one_time",
+        startTime: "13:00",
+        endTime: "14:00",
+        durationMinutes: 60,
+        filters: { subject: "EnglishVR", level: "11+/13+" },
+        studentName: "maze",
+        unresolvedQuestions: ["Which weekday or exact date should I search for that time?"],
+      },
+      sourceText: "Saturday",
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.parentReady).toBe(true);
+    expect(result.state.dayOfWeek).toBe(6);
+    expect(result.state.searchMode).toBe("recurring");
+    expect(result.questions).toEqual([]);
     expect(result.suggestions[0]).toMatchObject({ dayOfWeek: 6, start: "13:00", end: "14:00" });
   });
 

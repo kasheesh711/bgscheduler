@@ -258,7 +258,7 @@ export function AiSchedulerPanel({ enabled, onAddToCompare, disableAdd }: AiSche
               onChange={(e) => setEditedMessage(e.target.value)}
               rows={6}
               className={cn(
-                "min-h-[132px] w-full resize-none rounded-md border border-border bg-muted/30 p-2 text-xs leading-relaxed text-foreground outline-none focus:ring-2 focus:ring-ring/50",
+                "min-h-[132px] max-h-[260px] w-full resize-y overflow-y-auto rounded-md border border-border bg-muted/30 p-2 text-xs leading-relaxed text-foreground outline-none focus:ring-2 focus:ring-ring/50 [field-sizing:fixed]",
               )}
               aria-label="Editable AI parent message"
             />
@@ -349,7 +349,7 @@ export function AiSchedulerPanel({ enabled, onAddToCompare, disableAdd }: AiSche
               onChange={(e) => setEditedMessage(e.target.value)}
               rows={6}
               className={cn(
-                "min-h-[132px] w-full resize-none rounded-md border border-border bg-muted/30 p-2 text-xs leading-relaxed text-foreground outline-none focus:ring-2 focus:ring-ring/50",
+                "min-h-[132px] max-h-[260px] w-full resize-y overflow-y-auto rounded-md border border-border bg-muted/30 p-2 text-xs leading-relaxed text-foreground outline-none focus:ring-2 focus:ring-ring/50 [field-sizing:fixed]",
               )}
               aria-label="Editable AI parent message"
             />

@@ -178,10 +178,41 @@ export interface SchedulerAvailabilitySummary {
   needsReview: SchedulerAvailabilityReviewSummary[];
 }
 
+export type SchedulerConstraintStatus = "proven" | "needs_clarification" | "not_applicable";
+export type SchedulerConstraintEvidence = "model" | "deterministic" | "default" | "not_provided";
+
+export interface SchedulerConstraintLedgerItem {
+  key:
+    | "search_mode"
+    | "slot"
+    | "date_range"
+    | "duration"
+    | "delivery_mode"
+    | "academic_filter"
+    | "subject_requests"
+    | "tutor_include"
+    | "tutor_exclude"
+    | "business_requirement"
+    | "negative_feedback";
+  label: string;
+  requested: string | null;
+  normalized: string | null;
+  evidence: SchedulerConstraintEvidence;
+  status: SchedulerConstraintStatus;
+  message: string;
+}
+
 export interface SchedulerAssistantResult {
   state: SchedulerResolvedState;
   suggestions: SchedulerSuggestion[];
   availabilitySummary?: SchedulerAvailabilitySummary;
+  constraintLedger: SchedulerConstraintLedgerItem[];
+  latencyBreakdownMs?: {
+    totalMs: number;
+    dbMs: number;
+    modelMs: number;
+    searchMs: number;
+  };
   parentMessageDraft: string;
   assistantMessage: string;
   snapshotMeta: SnapshotMeta;
@@ -885,7 +916,11 @@ function pruneStaleQuestions(questions: string[], state: SchedulerExtractedState
     slot.startTime &&
     slot.endTime &&
     (typeof slot.dayOfWeek === "number" || slot.date)
-  ));
+  )) || Boolean(
+    state.startTime &&
+    state.endTime &&
+    (typeof state.dayOfWeek === "number" || state.date),
+  );
   const hasDateRange = Boolean(state.dateRange?.startDate && state.dateRange?.endDate);
   const hasMultipleSubjects = (state.subjectRequests ?? []).length > 1;
 
@@ -1042,7 +1077,11 @@ function resolveRequestedSlots(
     .filter((slot): slot is SchedulerRequestedSlot => Boolean(slot));
 
   const recoveredAllWeekSlots = recoverAllWeekRequestedSlotsFromText(state, durationMinutes, assumptions);
-  if (recoveredAllWeekSlots.length > 0 && resolved.length < recoveredAllWeekSlots.length) return recoveredAllWeekSlots;
+  if (recoveredAllWeekSlots.length > 0) {
+    const resolvedIsRecurringAllWeek = resolved.length >= recoveredAllWeekSlots.length &&
+      resolved.every((slot) => slot.searchMode === "recurring" && typeof slot.dayOfWeek === "number");
+    if (!resolvedIsRecurringAllWeek) return recoveredAllWeekSlots;
+  }
   if (resolved.length > 0) return resolved;
   const recoveredDateRangeSlots = recoverDateRangeRequestedSlotsFromText(state, durationMinutes, assumptions);
   if (recoveredDateRangeSlots.length > 0) return recoveredDateRangeSlots;
@@ -1088,6 +1127,25 @@ const MONTH_NAME_TO_NUMBER: Record<string, number> = {
   december: 12,
 };
 
+const WEEKDAY_PATTERNS: Array<{ dayOfWeek: number; pattern: RegExp }> = [
+  { dayOfWeek: 0, pattern: /\b(?:sun|sunday)\b|วันอาทิตย์/i },
+  { dayOfWeek: 1, pattern: /\b(?:mon|monday)\b|วันจันทร์/i },
+  { dayOfWeek: 2, pattern: /\b(?:tue|tues|tuesday)\b|วันอังคาร/i },
+  { dayOfWeek: 3, pattern: /\b(?:wed|weds|wednesday)\b|วันพุธ/i },
+  { dayOfWeek: 4, pattern: /\b(?:thu|thur|thurs|thursday)\b|วันพฤหัส/i },
+  { dayOfWeek: 5, pattern: /\b(?:fri|friday)\b|วันศุกร์/i },
+  { dayOfWeek: 6, pattern: /\b(?:sat|saturday)\b|วันเสาร์/i },
+];
+
+function inferWeekdayFromText(state: SchedulerExtractedState): number | undefined {
+  const text = [
+    state.parentRequestSummary,
+    ...(state.assumptions ?? []),
+  ].filter(Boolean).join(" ");
+  if (!text) return undefined;
+  return WEEKDAY_PATTERNS.find((entry) => entry.pattern.test(text))?.dayOfWeek;
+}
+
 function inferFirstWeekDateRange(state: SchedulerExtractedState): SchedulerDateRange | undefined {
   const text = [
     state.parentRequestSummary,
@@ -1115,15 +1173,20 @@ export function resolveSchedulerState(state: SchedulerExtractedState): Scheduler
   const assumptions = [...(state.assumptions ?? [])];
   const unresolvedQuestions = [...(state.unresolvedQuestions ?? [])];
   let searchMode = state.searchMode;
+  const dayOfWeek = typeof state.dayOfWeek === "number" ? state.dayOfWeek : inferWeekdayFromText(state);
   const dateRange = state.dateRange ?? inferFirstWeekDateRange(state);
+  const stateWithInferredDay = { ...state, dayOfWeek };
+  if (typeof dayOfWeek === "number" && typeof state.dayOfWeek !== "number") {
+    assumptions.push(`${dayName(dayOfWeek)} was recovered from the request text.`);
+  }
   if (dateRange && !state.dateRange) {
     assumptions.push(`First week date range was interpreted as ${dateRange.startDate} through ${dateRange.endDate}.`);
   }
 
-  if (!searchMode && typeof state.dayOfWeek === "number") {
+  if (!searchMode && typeof dayOfWeek === "number") {
     searchMode = "recurring";
     assumptions.push("Bare weekday was treated as a recurring weekly request.");
-  } else if (searchMode === "one_time" && !state.date && typeof state.dayOfWeek === "number") {
+  } else if (searchMode === "one_time" && !state.date && typeof dayOfWeek === "number") {
     searchMode = "recurring";
     assumptions.push("A weekday without an exact date cannot be a one-time search, so I treated it as recurring weekly.");
   } else if (!searchMode && state.date) {
@@ -1142,7 +1205,7 @@ export function resolveSchedulerState(state: SchedulerExtractedState): Scheduler
   }
 
   return {
-    ...state,
+    ...stateWithInferredDay,
     searchMode,
     durationMinutes: state.durationMinutes ?? DEFAULT_CONVERSATIONAL_DURATION,
     mode: state.mode ?? DEFAULT_CONVERSATIONAL_MODE,
@@ -1151,7 +1214,7 @@ export function resolveSchedulerState(state: SchedulerExtractedState): Scheduler
     businessRequirements: state.businessRequirements ?? {},
     dateRange,
     requestedSlots: resolveRequestedSlots(
-      state,
+      stateWithInferredDay,
       searchMode,
       state.durationMinutes ?? DEFAULT_CONVERSATIONAL_DURATION,
       assumptions,
@@ -1162,7 +1225,7 @@ export function resolveSchedulerState(state: SchedulerExtractedState): Scheduler
     tutorExclusions: state.tutorExclusions ?? [],
     negativeFeedback: state.negativeFeedback ?? false,
     assumptions: uniqueStrings(assumptions),
-    unresolvedQuestions: uniqueStrings(pruneStaleQuestions(unresolvedQuestions, { ...state, dateRange })),
+    unresolvedQuestions: uniqueStrings(pruneStaleQuestions(unresolvedQuestions, { ...stateWithInferredDay, dateRange })),
   };
 }
 
@@ -1904,15 +1967,68 @@ function searchedFiltersLabel(filters: SearchFilters[]): string {
   ].filter(Boolean).join(" ");
 }
 
-function formatAvailabilityWindows(windows: SchedulerAvailabilityWindowSummary[], limit = 8): string {
-  const grouped = new Map<string, string[]>();
-  for (const window of windows.slice(0, limit)) {
-    const label = `${window.date} (${dayName(window.weekday)})`;
-    grouped.set(label, [...(grouped.get(label) ?? []), `${window.start}-${window.end}`]);
+function formatAvailabilityDate(date: string, weekday: number): string {
+  const [, monthRaw, dayRaw] = date.split("-");
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${dayName(weekday).slice(0, 3)} ${day} ${monthNames[month - 1] ?? monthRaw}`;
+}
+
+function mergeAvailabilityRanges(windows: SchedulerAvailabilityWindowSummary[]): Array<{
+  date: string;
+  weekday: number;
+  ranges: Array<{ start: string; end: string }>;
+}> {
+  const byDate = new Map<string, { weekday: number; ranges: Array<{ start: number; end: number }> }>();
+  for (const window of windows) {
+    const entry = byDate.get(window.date) ?? { weekday: window.weekday, ranges: [] };
+    entry.ranges.push({
+      start: parseTimeToMinutes(window.start),
+      end: parseTimeToMinutes(window.end),
+    });
+    byDate.set(window.date, entry);
   }
-  const parts = [...grouped.entries()].map(([date, times]) => `${date}: ${times.join(", ")}`);
-  const remaining = windows.length - Math.min(windows.length, limit);
-  return `${parts.join("; ")}${remaining > 0 ? `; +${remaining} more` : ""}`;
+
+  return [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, entry]) => {
+      const merged: Array<{ start: number; end: number }> = [];
+      for (const range of entry.ranges.sort((a, b) => a.start - b.start || a.end - b.end)) {
+        const current = merged[merged.length - 1];
+        if (current && range.start <= current.end) {
+          current.end = Math.max(current.end, range.end);
+        } else {
+          merged.push({ ...range });
+        }
+      }
+      return {
+        date,
+        weekday: entry.weekday,
+        ranges: merged.map((range) => ({
+          start: formatMinute(range.start),
+          end: formatMinute(range.end),
+        })),
+      };
+    });
+}
+
+function formatAvailabilityWindows(windows: SchedulerAvailabilityWindowSummary[], dateLimit = 3): string {
+  const grouped = mergeAvailabilityRanges(windows);
+  const visible = grouped.slice(0, dateLimit);
+  const parts = visible.map((entry) => (
+    `${formatAvailabilityDate(entry.date, entry.weekday)}: ${entry.ranges.map((range) => `${range.start}-${range.end}`).join(", ")}`
+  ));
+  const remainingDates = grouped.length - visible.length;
+  return `${parts.join("; ")}${remainingDates > 0 ? `; +${remainingDates} more day${remainingDates === 1 ? "" : "s"}` : ""}`;
+}
+
+function formatTutorAvailabilityLine(
+  tutor: SchedulerAvailabilityTutorSummary,
+  index: number,
+): string {
+  const subjects = tutor.matchedSubjects.length > 0 ? ` (${tutor.matchedSubjects.join("/")})` : "";
+  return `${index + 1}. ${tutor.displayName}${subjects} - ${formatAvailabilityWindows(tutor.windows)}`;
 }
 
 function subjectLabelForSuggestion(state: SchedulerResolvedState, suggestion: SchedulerSuggestion): string {
@@ -1937,16 +2053,20 @@ export function buildSchedulerParentDraft(input: {
         "Could you share another date range or a narrower time preference?",
       ].join("\n");
     }
-    const lines = summary.tutors.slice(0, 10).map((tutor) => (
-      `- ${tutor.displayName}: ${formatAvailabilityWindows(tutor.windows)}`
-    ));
+    const visibleTutors = summary.tutors.slice(0, 8);
+    const lines = visibleTutors.map(formatTutorAvailabilityLine);
+    const remainingTutors = summary.tutors.slice(visibleTutors.length);
     return [
-      `Hi! I found confirmed ${subject} availability from ${summary.dateRange.startDate} to ${summary.dateRange.endDate}:`,
-      `Search checked: ${searchedFiltersLabel(summary.searchedFilters)}. Wise snapshot ${summary.searchProvenance.snapshotId}; profile version ${summary.searchProvenance.profileVersion}; active holds applied: ${summary.searchProvenance.activeProposalHoldCount}.`,
+      `Hi! I found ${summary.tutors.length} confirmed ${subject} tutor${summary.tutors.length === 1 ? "" : "s"} from ${summary.dateRange.startDate} to ${summary.dateRange.endDate}.`,
+      `Checked: ${searchedFiltersLabel(summary.searchedFilters)}.`,
       "",
+      "Available options:",
       ...lines,
+      ...(remainingTutors.length > 0
+        ? ["", `More available tutors: ${remainingTutors.map((tutor) => tutor.displayName).join(", ")}.`]
+        : []),
       "",
-      "Let me know which tutor and time works best and I will confirm.",
+      "Let me know which tutor and time you prefer and I will confirm.",
     ].join("\n");
   }
 
@@ -2174,6 +2294,171 @@ function schedulerGuardQuestions(state: SchedulerResolvedState): string[] {
   return questions;
 }
 
+function ledgerItem(input: Omit<SchedulerConstraintLedgerItem, "message"> & { message?: string }): SchedulerConstraintLedgerItem {
+  return {
+    ...input,
+    message: input.message ?? (
+      input.status === "proven"
+        ? "Constraint is represented in normalized scheduler state."
+        : input.status === "needs_clarification"
+          ? "Constraint is missing, ambiguous, or not safely structured."
+          : "Constraint was not part of the request."
+    ),
+  };
+}
+
+function formatFiltersForLedger(filters: SearchFilters | undefined): string | null {
+  const value = [filters?.subject, filters?.curriculum, filters?.level].filter(Boolean).join(" / ");
+  return value || null;
+}
+
+function formatSlotForLedger(slot: SchedulerRequestedSlot): string {
+  const day = slot.searchMode === "one_time"
+    ? slot.date ?? "one-time"
+    : typeof slot.dayOfWeek === "number"
+      ? dayName(slot.dayOfWeek)
+      : "recurring";
+  return [
+    day,
+    slot.startTime && slot.endTime ? `${slot.startTime}-${slot.endTime}` : undefined,
+    slot.durationMinutes ? `${slot.durationMinutes} min` : undefined,
+  ].filter(Boolean).join(" ");
+}
+
+function buildConstraintLedger(input: {
+  state: SchedulerResolvedState;
+  questions: string[];
+  filterIssues: string[];
+  subjectRequestIssues: string[];
+  unknownFilters: string[];
+  unknownBusinessRequirements: string[];
+  tutorQuestions: string[];
+}): SchedulerConstraintLedgerItem[] {
+  const state = input.state;
+  const questionText = normalizeLookup(input.questions.join(" "));
+  const hasSlotQuestion = questionText.includes("weekday") ||
+    questionText.includes("exact date") ||
+    questionText.includes("start time") ||
+    questionText.includes("day/time") ||
+    questionText.includes("safely structure");
+  const hasCompleteSlot = state.requestedSlots.some((slot) => (
+    slot.searchMode &&
+    (typeof slot.dayOfWeek === "number" || slot.date) &&
+    slot.startTime &&
+    slot.endTime &&
+    slot.durationMinutes
+  ));
+  const hasDateRange = Boolean(state.dateRange?.startDate && state.dateRange?.endDate);
+  const filtersLabel = formatFiltersForLedger(state.filters);
+  const hasSubjectRequests = state.subjectRequests.length > 0;
+  const hasBusinessRequirementsRequested = hasBusinessRequirements(state.businessRequirements) ||
+    state.explicitUnknownBusinessRequirements.length > 0;
+
+  return [
+    ledgerItem({
+      key: "search_mode",
+      label: "Search mode",
+      requested: state.searchMode ?? null,
+      normalized: state.searchMode ?? null,
+      evidence: state.assumptions.some((assumption) => /recurring|one-time|exact date/i.test(assumption)) ? "deterministic" : "model",
+      status: state.searchMode ? "proven" : "needs_clarification",
+    }),
+    ledgerItem({
+      key: "slot",
+      label: "Day/date and time",
+      requested: state.parentRequestSummary ?? null,
+      normalized: hasCompleteSlot
+        ? state.requestedSlots.map(formatSlotForLedger).join("; ")
+        : state.startTime && state.endTime
+          ? `${state.startTime}-${state.endTime}`
+          : null,
+      evidence: state.requestedSlots.length > 0 ? "model" : hasSlotQuestion ? "not_provided" : "deterministic",
+      status: hasCompleteSlot || hasDateRange ? "proven" : hasSlotQuestion ? "needs_clarification" : "not_applicable",
+      message: hasDateRange && !hasCompleteSlot
+        ? "Broad date range is proven; exact slot selection is intentionally deferred."
+        : undefined,
+    }),
+    ledgerItem({
+      key: "date_range",
+      label: "Date range",
+      requested: state.parentRequestSummary ?? null,
+      normalized: hasDateRange ? `${state.dateRange!.startDate} to ${state.dateRange!.endDate}` : null,
+      evidence: hasDateRange && state.assumptions.some((assumption) => /date range|first week/i.test(assumption)) ? "deterministic" : "model",
+      status: hasDateRange ? "proven" : "not_applicable",
+    }),
+    ledgerItem({
+      key: "duration",
+      label: "Duration",
+      requested: state.durationMinutes ? `${state.durationMinutes} min` : null,
+      normalized: `${state.durationMinutes} min`,
+      evidence: state.assumptions.some((assumption) => /duration was not specified/i.test(assumption)) ? "default" : "model",
+      status: state.durationMinutes ? "proven" : "needs_clarification",
+    }),
+    ledgerItem({
+      key: "delivery_mode",
+      label: "Delivery mode",
+      requested: state.mode,
+      normalized: state.mode,
+      evidence: state.assumptions.some((assumption) => /delivery mode was not specified/i.test(assumption)) ? "default" : "model",
+      status: state.mode ? "proven" : "needs_clarification",
+    }),
+    ledgerItem({
+      key: "academic_filter",
+      label: "Academic filter",
+      requested: state.parentRequestSummary ?? null,
+      normalized: filtersLabel,
+      evidence: state.academicLevelResolution ? "deterministic" : filtersLabel ? "model" : "not_provided",
+      status: input.filterIssues.length > 0 || input.unknownFilters.length > 0 ? "needs_clarification" : filtersLabel ? "proven" : "not_applicable",
+      message: input.filterIssues[0] ?? input.unknownFilters[0] ?? undefined,
+    }),
+    ledgerItem({
+      key: "subject_requests",
+      label: "Subject requests",
+      requested: state.parentRequestSummary ?? null,
+      normalized: hasSubjectRequests ? state.subjectRequests.map(formatFiltersForLedger).filter(Boolean).join("; ") : null,
+      evidence: state.subjectIntent ? "deterministic" : hasSubjectRequests ? "model" : "not_provided",
+      status: input.subjectRequestIssues.length > 0 ? "needs_clarification" : hasSubjectRequests ? "proven" : "not_applicable",
+      message: input.subjectRequestIssues[0] ?? undefined,
+    }),
+    ledgerItem({
+      key: "tutor_include",
+      label: "Tutor include",
+      requested: state.tutorNames.join(", ") || null,
+      normalized: state.tutorNames.join(", ") || null,
+      evidence: state.tutorNames.length > 0 ? "model" : "not_provided",
+      status: state.tutorNames.length === 0 ? "not_applicable" : input.tutorQuestions.length > 0 ? "needs_clarification" : "proven",
+      message: input.tutorQuestions[0] ?? undefined,
+    }),
+    ledgerItem({
+      key: "tutor_exclude",
+      label: "Tutor exclude",
+      requested: state.tutorExclusions.join(", ") || null,
+      normalized: state.tutorExclusions.join(", ") || null,
+      evidence: state.tutorExclusions.length > 0 ? "model" : "not_provided",
+      status: state.tutorExclusions.length === 0 ? "not_applicable" : input.tutorQuestions.length > 0 ? "needs_clarification" : "proven",
+      message: input.tutorQuestions[0] ?? undefined,
+    }),
+    ledgerItem({
+      key: "business_requirement",
+      label: "Tutor profile fit",
+      requested: hasBusinessRequirementsRequested ? JSON.stringify(state.businessRequirements) : null,
+      normalized: hasBusinessRequirements(state.businessRequirements) ? JSON.stringify(state.businessRequirements) : null,
+      evidence: hasBusinessRequirementsRequested ? "model" : "not_provided",
+      status: input.unknownBusinessRequirements.length > 0 ? "needs_clarification" : hasBusinessRequirements(state.businessRequirements) ? "proven" : "not_applicable",
+      message: input.unknownBusinessRequirements[0] ?? undefined,
+    }),
+    ledgerItem({
+      key: "negative_feedback",
+      label: "Negative feedback",
+      requested: state.negativeFeedback ? "yes" : null,
+      normalized: state.negativeFeedback ? "ask what to change" : null,
+      evidence: state.negativeFeedback ? "model" : "not_provided",
+      status: state.negativeFeedback ? "needs_clarification" : "not_applicable",
+      message: state.negativeFeedback ? "Feedback-only messages must clarify what to change before producing new parent-ready output." : undefined,
+    }),
+  ];
+}
+
 function emptySearchResult(index: SearchIndex, warnings: string[]) {
   return {
     suggestions: [],
@@ -2325,7 +2610,6 @@ export function solveSchedulerTurn(input: {
     ...state.explicitUnknownBusinessRequirements,
     ...tutorResolution.warnings,
   ]);
-  const parentReady = questions.length === 0;
   const resolvedState: SchedulerResolvedState = {
     ...state,
     filters: filterResolution.filters,
@@ -2335,6 +2619,17 @@ export function solveSchedulerTurn(input: {
     explicitUnknownFilters: recovered.remainingUnknowns,
     unresolvedQuestions: questions,
   };
+  const constraintLedger = buildConstraintLedger({
+    state: resolvedState,
+    questions,
+    filterIssues: filterResolution.issues,
+    subjectRequestIssues: subjectRequestResolution.issues,
+    unknownFilters: recovered.remainingUnknowns,
+    unknownBusinessRequirements: state.explicitUnknownBusinessRequirements,
+    tutorQuestions: tutorResolution.questions,
+  });
+  const parentReady = questions.length === 0 &&
+    constraintLedger.every((item) => item.status !== "needs_clarification");
 
   const shouldSuppressBroadSearch = state.negativeFeedback ||
     (state.requestedSlots.length === 0 && state.startTime && typeof state.dayOfWeek !== "number" && !state.date) ||
@@ -2402,6 +2697,7 @@ export function solveSchedulerTurn(input: {
     state: resolvedState,
     suggestions: search.suggestions,
     availabilitySummary: availabilitySearch?.availabilitySummary,
+    constraintLedger,
     parentMessageDraft,
     assistantMessage,
     snapshotMeta: search.snapshotMeta,

@@ -1,19 +1,10 @@
 import type { Database } from "@/lib/db";
 import {
   aiSchedulerModel,
-  bangkokTodayIso,
   isAiSchedulerConfigured,
   redactAiSchedulerInput,
 } from "@/lib/ai/scheduler";
-import {
-  buildConversationTitle,
-  extractSchedulerStateWithOpenAi,
-  filterOptionsFromIndex,
-  mergeSchedulerState,
-  solveSchedulerTurn,
-  tutorListFromIndex,
-  type SchedulerConversationMessageForPrompt,
-} from "@/lib/ai/scheduler-conversation";
+import { buildConversationTitle, type SchedulerConversationMessageForPrompt } from "@/lib/ai/scheduler-conversation";
 import {
   createSchedulerConversation,
   createSchedulerMessage,
@@ -21,8 +12,7 @@ import {
   logSchedulerRun,
   touchSchedulerConversationAfterMessage,
 } from "@/lib/ai/scheduler-data";
-import { listActiveProposalHolds } from "@/lib/proposals/data";
-import { ensureIndex } from "@/lib/search/index";
+import { executeSchedulerTurn, schedulerRunMetadata } from "@/lib/ai/scheduler-service";
 import { fetchLineProfile, pushLineTextMessage } from "@/lib/line/client";
 import { classifyLineSchedulerMessage } from "@/lib/line/classifier";
 import {
@@ -127,29 +117,16 @@ export async function processLineMessageForScheduler(
   });
 
   try {
-    const index = await ensureIndex(db);
-    const activeProposalHoldsPromise = listActiveProposalHolds(db);
-    const filterOptions = filterOptionsFromIndex(index);
-    const tutorList = tutorListFromIndex(index);
-    const extraction = await extractSchedulerStateWithOpenAi({
+    const execution = await executeSchedulerTurn({
+      db,
       currentState: existing.conversation.extractedState,
       messages: messagesForPrompt([
         ...existing.messages,
         parentMessage,
       ]),
-      todayBangkok: bangkokTodayIso(),
-      filterOptions,
-      tutorList,
+      sourceText: lineMessage.text,
     });
-    const mergedState = mergeSchedulerState(existing.conversation.extractedState, extraction.state);
-    const activeProposalHolds = await activeProposalHoldsPromise;
-    const assistantResult = solveSchedulerTurn({
-      index,
-      extractedState: mergedState,
-      filterOptions,
-      tutorList,
-      activeProposalHolds,
-    });
+    const { extraction, assistantResult, latencyBreakdownMs } = execution;
     const assistantPayload = asRecord({
       ...assistantResult,
       extractedState: extraction.state,
@@ -186,6 +163,7 @@ export async function processLineMessageForScheduler(
       inputPreviewRedacted: redactAiSchedulerInput(lineMessage.text),
       model,
       latencyMs: Date.now() - startedAt,
+      ...schedulerRunMetadata(latencyBreakdownMs),
       parsedPayload: asRecord(extraction),
       solverPayload: assistantPayload,
       warnings: assistantResult.warnings,
@@ -223,6 +201,12 @@ export async function processLineMessageForScheduler(
       inputPreviewRedacted: redactAiSchedulerInput(lineMessage.text),
       model,
       latencyMs: Date.now() - startedAt,
+      ...schedulerRunMetadata({
+        totalMs: Date.now() - startedAt,
+        dbMs: 0,
+        modelMs: 0,
+        searchMs: 0,
+      }),
       errorMessage: message,
     });
     const review = await createLineSchedulerReview(db, {

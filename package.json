@@ -18,7 +18,8 @@
     "credit-control:seed-admin-ownership": "tsx scripts/seed-credit-control-admin-ownership.ts",
     "tutor-profiles:seed": "tsx scripts/seed-tutor-business-profiles.ts",
     "room-capacity:import-model": "tsx scripts/import-room-capacity-model.ts",
-    "room-utilization:sync": "tsx scripts/sync-room-utilization.ts"
+    "room-utilization:sync": "tsx scripts/sync-room-utilization.ts",
+    "ai-scheduler:evaluate": "tsx scripts/evaluate-ai-scheduler.ts"
   },
   "dependencies": {
     "@base-ui/react": "1.3.0",

@@ -545,6 +545,8 @@ function resultFromProductionRun(run: SchedulerRunRow): SchedulerAssistantResult
     questions: solver.questions ?? [],
     parentReady: solver.parentReady ?? run.status === "solved",
     availabilitySummary: solver.availabilitySummary,
+    constraintLedger: solver.constraintLedger ?? [],
+    latencyBreakdownMs: solver.latencyBreakdownMs,
   };
 }
 
