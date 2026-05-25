@@ -2,9 +2,14 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import {
+  type ScheduleEmailSendMode,
   type ScheduleEmailSendOptions,
+  type ScheduleEmailSenderKey,
   sendScheduleEmailsForRun,
 } from "@/lib/classrooms/schedule-email";
+
+const SENDER_KEYS = new Set<ScheduleEmailSenderKey>(["primary", "backup"]);
+const SEND_MODES = new Set<ScheduleEmailSendMode>(["selected", "failed_only"]);
 
 async function parseSendOptions(request: Request): Promise<ScheduleEmailSendOptions> {
   const raw = await request.text();
@@ -22,12 +27,33 @@ async function parseSendOptions(request: Request): Promise<ScheduleEmailSendOpti
   }
 
   const recipientGroupIds = (body as { recipientGroupIds?: unknown }).recipientGroupIds;
-  if (recipientGroupIds === undefined) return {};
+  const senderKey = (body as { senderKey?: unknown }).senderKey;
+  const mode = (body as { mode?: unknown }).mode;
+  const options: ScheduleEmailSendOptions = {};
+
   if (!Array.isArray(recipientGroupIds) || recipientGroupIds.some((value) => typeof value !== "string")) {
-    throw new Error("recipientGroupIds must be an array of strings.");
+    if (recipientGroupIds !== undefined) {
+      throw new Error("recipientGroupIds must be an array of strings.");
+    }
+  } else {
+    options.recipientGroupIds = recipientGroupIds;
   }
 
-  return { recipientGroupIds };
+  if (senderKey !== undefined) {
+    if (typeof senderKey !== "string" || !SENDER_KEYS.has(senderKey as ScheduleEmailSenderKey)) {
+      throw new Error("senderKey must be primary or backup.");
+    }
+    options.senderKey = senderKey as ScheduleEmailSenderKey;
+  }
+
+  if (mode !== undefined) {
+    if (typeof mode !== "string" || !SEND_MODES.has(mode as ScheduleEmailSendMode)) {
+      throw new Error("mode must be selected or failed_only.");
+    }
+    options.mode = mode as ScheduleEmailSendMode;
+  }
+
+  return options;
 }
 
 export async function POST(
@@ -57,7 +83,9 @@ export async function POST(
       ? 404
       : message === "Invalid JSON body." ||
           message === "Request body must be an object." ||
-          message === "recipientGroupIds must be an array of strings."
+          message === "recipientGroupIds must be an array of strings." ||
+          message === "senderKey must be primary or backup." ||
+          message === "mode must be selected or failed_only."
         ? 400
         : 500;
     return NextResponse.json({ error: message }, { status });

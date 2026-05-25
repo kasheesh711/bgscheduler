@@ -260,6 +260,53 @@ describe("class assignment routes", () => {
     });
   });
 
+  it("returns automatic backup failover metadata from normal schedule email sends", async () => {
+    const failoverResult = {
+      summary: { attempted: 3, success: 3, failed: 0, blocked: 1 },
+      recipients: [{
+        groupId: "group-1",
+        canonicalKey: "Nithit",
+        tutorDisplayName: "Nithit",
+        email: "nsinghsachthep@gmail.com",
+        status: "ready",
+        blockReason: null,
+        sendStatus: "sent",
+        resendEmailId: "backup-email-1",
+        error: null,
+        senderKey: "backup",
+        emailRunId: "email-run-2",
+      }],
+      preview: schedulePreview,
+      failover: {
+        triggered: true,
+        fromEmailRunId: "email-run-1",
+        toEmailRunId: "email-run-2",
+        reason: "MailApp daily recipient quota is exhausted",
+        attempted: 2,
+        sent: 2,
+        failed: 0,
+      },
+    };
+    vi.mocked(sendScheduleEmailsForRun).mockResolvedValue(failoverResult as never);
+
+    const res = await sendScheduleEmail(
+      new Request("http://test.local/api/class-assignments/runs/run-1/schedule-email/send", {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ runId: "run-1" }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(sendScheduleEmailsForRun).toHaveBeenCalledWith(
+      { db: true },
+      "run-1",
+      "admin@example.com",
+      undefined,
+      {},
+    );
+    await expect(res.json()).resolves.toEqual(failoverResult);
+  });
+
   it("sends teacher schedule emails only for selected recipient group ids", async () => {
     const res = await sendScheduleEmail(
       new Request("http://test.local/api/class-assignments/runs/run-1/schedule-email/send", {
@@ -279,6 +326,33 @@ describe("class assignment routes", () => {
     );
   });
 
+  it("sends failed-only teacher schedule emails through the backup sender", async () => {
+    const res = await sendScheduleEmail(
+      new Request("http://test.local/api/class-assignments/runs/run-1/schedule-email/send", {
+        method: "POST",
+        body: JSON.stringify({
+          recipientGroupIds: ["group-1", "group-2"],
+          senderKey: "backup",
+          mode: "failed_only",
+        }),
+      }),
+      { params: Promise.resolve({ runId: "run-1" }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(sendScheduleEmailsForRun).toHaveBeenCalledWith(
+      { db: true },
+      "run-1",
+      "admin@example.com",
+      undefined,
+      {
+        recipientGroupIds: ["group-1", "group-2"],
+        senderKey: "backup",
+        mode: "failed_only",
+      },
+    );
+  });
+
   it("rejects invalid selected recipient group ids", async () => {
     const res = await sendScheduleEmail(
       new Request("http://test.local/api/class-assignments/runs/run-1/schedule-email/send", {
@@ -291,6 +365,22 @@ describe("class assignment routes", () => {
     expect(res.status).toBe(400);
     await expect(res.json()).resolves.toEqual({
       error: "recipientGroupIds must be an array of strings.",
+    });
+    expect(sendScheduleEmailsForRun).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid schedule email retry options", async () => {
+    const res = await sendScheduleEmail(
+      new Request("http://test.local/api/class-assignments/runs/run-1/schedule-email/send", {
+        method: "POST",
+        body: JSON.stringify({ senderKey: "other", mode: "retry" }),
+      }),
+      { params: Promise.resolve({ runId: "run-1" }) },
+    );
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      error: "senderKey must be primary or backup.",
     });
     expect(sendScheduleEmailsForRun).not.toHaveBeenCalled();
   });
