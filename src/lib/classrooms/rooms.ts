@@ -12,6 +12,25 @@ export interface ClassroomRoomDefinition {
 export const NO_ROOM_AVAILABLE = "NO_ROOM_AVAILABLE";
 export const ROOM_JOY = "Joy (TV)";
 export const ROOM_THINK_OUTSIDE_THE_BOX = "Think Outside the Box";
+export const CORE_TEACHING_ROOM_PRIORITY = [
+  ROOM_THINK_OUTSIDE_THE_BOX,
+  "Hakuna Matata",
+  "Never Ever (TV)",
+  "Keep Going (TV)",
+  "Isaac Newton",
+  "OMG",
+  "Nerd",
+  "Do It",
+  "Take Action",
+  "Tesla",
+  "Cool",
+  "Iconic (TV)",
+  "Dream. Plan. Do.",
+  "Focus",
+] as const;
+export const CORE_TEACHING_ROOM_RANK = new Map<string, number>(
+  CORE_TEACHING_ROOM_PRIORITY.map((roomName, index) => [roomName, index]),
+);
 export const TV_ROOM_NAME_BY_PHYSICAL_NAME = new Map<string, string>([
   ["Iconic", "Iconic (TV)"],
   ["Joy", ROOM_JOY],
@@ -43,7 +62,7 @@ function tutorRuleAliases(value: string): string[] {
 export const DEFAULT_CLASSROOM_ROOMS: ClassroomRoomDefinition[] = [
   { name: "Cool", hasTv: false, capacity: 3, category: "standard", active: true, sortOrder: 1 },
   { name: "Do It", hasTv: false, capacity: 3, category: "standard", active: true, sortOrder: 2 },
-  { name: "Dream. Plan. Do.", hasTv: false, capacity: 3, category: "overflow_only", active: true, sortOrder: 3 },
+  { name: "Dream. Plan. Do.", hasTv: false, capacity: 3, category: "standard", active: true, sortOrder: 3 },
   { name: "Focus", hasTv: false, capacity: 2, category: "standard", active: true, sortOrder: 4 },
   { name: "Hakuna Matata", hasTv: false, capacity: 3, category: "standard", active: true, sortOrder: 5 },
   { name: "Iconic (TV)", hasTv: true, capacity: 2, category: "standard", active: true, sortOrder: 6 },
@@ -73,6 +92,8 @@ export const TV_REQUIRED_TUTORS = new Set(
     "Rachata (Mek) Sakpuaram",
     "Roger (Roger) Tang",
     "Patcharida (Nan) Penpakkul",
+    "Rasna (Ras) Rajkitkul",
+    "Rasna (Ras) Rajkitkul Online",
   ].flatMap(tutorRuleAliases).map(normalizeTutorName),
 );
 
@@ -115,6 +136,12 @@ export const PREFERRED_BY_TUTOR = new Map<string, string>(
     ["Nonthawat (Rew) Lertprasitchok Online", "Go All In (TV)"],
     ["Porntawan (Lookpear) Maneechote", "Tesla"],
     ["Porntawan (Lookpear) Maneechote Online", "Tesla"],
+    ["Hassakol (Buzz) Panaspraipong", "Tesla"],
+    ["Hassakol (Buzz) Panaspraipong Online", "Tesla"],
+    ["Ruke (Lukas) Ogan", "Keep Going (TV)"],
+    ["Ruke (Lukas) Ogan Online", "Keep Going (TV)"],
+    ["Phurit (Mookie) Bovornchutichai", "Nerd"],
+    ["Phurit (Mookie) Bovornchutichai Online", "Nerd"],
   ].flatMap(([name, room]) => tutorRuleAliases(name).map((alias) => [normalizeTutorName(alias), room])),
 );
 

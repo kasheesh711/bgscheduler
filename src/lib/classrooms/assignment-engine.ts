@@ -1,10 +1,10 @@
 import {
+  CORE_TEACHING_ROOM_RANK,
   type ClassroomRoomDefinition,
   getPreferredRoom,
   isGiftTutor,
   isKevinPriorityTutor,
   NO_ROOM_AVAILABLE,
-  PREFERRED_ROOMS,
   ROOM_JOY,
   ROOM_THINK_OUTSIDE_THE_BOX,
   TV_REQUIRED_TUTORS,
@@ -170,6 +170,17 @@ function sortByCapacityThenOrder(
 ): number {
   if (a.capacity !== b.capacity) return a.capacity - b.capacity;
   return a.sortOrder - b.sortOrder;
+}
+
+function isRelaxRoom(roomName: string): boolean {
+  return normalizedPhysicalRoom(roomName) === "relax";
+}
+
+function roomPriorityScore(room: ClassroomRoomDefinition, minCapacity: number): number {
+  const coreRank = CORE_TEACHING_ROOM_RANK.get(room.name);
+  if (coreRank !== undefined) return coreRank;
+  if (isRelaxRoom(room.name) && minCapacity <= 3) return 2_000;
+  return 1_000;
 }
 
 function roomPassesConstraints(
@@ -352,6 +363,20 @@ export function assignClassrooms(
     kevinPriorityClaimBySessionId.add(session.wiseSessionId);
   }
 
+  const preferredRoomClaimBySessionId = new Set<string>();
+  for (const session of sortedSessions) {
+    const facts = factsBySessionId.get(session.wiseSessionId);
+    if (!facts?.preferredRoom) continue;
+    if (facts.isKevinPriority) continue;
+    if (validOverrideBySessionId.has(session.wiseSessionId)) continue;
+    if (!facts.requiresCenterRoom) continue;
+    if (!roomPassesConstraints(roomByName.get(facts.preferredRoom), session, facts.minCapacity, facts.needsTv)) continue;
+    if (!isAvailable(protectedClaims, facts.preferredRoom, session, session.wiseSessionId)) continue;
+
+    addRoomInterval(protectedClaims, facts.preferredRoom, session);
+    preferredRoomClaimBySessionId.add(session.wiseSessionId);
+  }
+
   const rows: AssignmentResultRow[] = [];
 
   for (const session of sortedSessions) {
@@ -373,6 +398,17 @@ export function assignClassrooms(
       isAvailable(protectedClaims, roomName, session, session.wiseSessionId);
     const pickRoom = (candidates: ClassroomRoomDefinition[]): string | null => {
       const picked = candidates.find((room) => roomOk(room.name) && roomAvailable(room.name));
+      return picked?.name ?? null;
+    };
+    const pickBestRoom = (candidates: ClassroomRoomDefinition[]): string | null => {
+      const picked = candidates
+        .filter((room) => roomOk(room.name) && roomAvailable(room.name))
+        .sort((a, b) => {
+          const priorityDiff = roomPriorityScore(a, minCapacity) - roomPriorityScore(b, minCapacity);
+          if (priorityDiff !== 0) return priorityDiff;
+          if (a.capacity !== b.capacity) return a.capacity - b.capacity;
+          return a.sortOrder - b.sortOrder;
+        })[0];
       return picked?.name ?? null;
     };
 
@@ -438,7 +474,13 @@ export function assignClassrooms(
       }
     }
 
-    if (!assignedRoom && preferredRoom && roomOk(preferredRoom) && roomAvailable(preferredRoom)) {
+    if (
+      !assignedRoom &&
+      preferredRoom &&
+      preferredRoomClaimBySessionId.has(session.wiseSessionId) &&
+      roomOk(preferredRoom) &&
+      roomAvailable(preferredRoom)
+    ) {
       if (!(preferredRoom === ROOM_JOY && !isGift)) {
         assignedRoom = preferredRoom;
         ruleTrace.push(`assigned preferred room: ${preferredRoom}`);
@@ -454,17 +496,12 @@ export function assignClassrooms(
     }
 
     if (!assignedRoom) {
-      const picked = pickRoom(
-        activeRooms.filter(
-          (room) =>
-            room.category === "standard" &&
-            room.name !== ROOM_JOY &&
-            !PREFERRED_ROOMS.has(room.name),
-        ),
+      const picked = pickBestRoom(
+        activeRooms.filter((room) => room.category === "standard" && room.name !== ROOM_JOY),
       );
       if (picked) {
         assignedRoom = picked;
-        ruleTrace.push(`assigned standard non-preferred room: ${picked}`);
+        ruleTrace.push(`assigned priority-scored standard room: ${picked}`);
       }
     }
 

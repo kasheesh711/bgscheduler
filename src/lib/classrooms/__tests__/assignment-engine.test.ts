@@ -47,6 +47,16 @@ const rememberOnlyRoom: ClassroomRoomDefinition[] = [{
   sortOrder: 1,
 }];
 
+function roomByName(name: string): ClassroomRoomDefinition {
+  const room = DEFAULT_CLASSROOM_ROOMS.find((candidate) => candidate.name === name);
+  if (!room) throw new Error(`Missing default room ${name}`);
+  return { ...room };
+}
+
+function roomsFor(...names: string[]): ClassroomRoomDefinition[] {
+  return names.map((name, index) => ({ ...roomByName(name), sortOrder: index + 1 }));
+}
+
 describe("assignClassrooms", () => {
   it("uses Wise studentCount for capacity and selects the smallest sufficient room", () => {
     const result = assignClassrooms([
@@ -288,6 +298,74 @@ describe("assignClassrooms", () => {
     expect(result.rows.find((row) => row.tutorDisplayName === "Gift")?.assignedRoom).toBe(ROOM_JOY);
   });
 
+  it("uses core teaching rooms before non-priority rooms for generic sessions", () => {
+    const result = assignClassrooms(
+      [session({ studentCount: 1 })],
+      [
+        { name: "Side Room", hasTv: false, capacity: 1, category: "standard", active: true, sortOrder: 1 },
+        { ...roomByName(ROOM_THINK_OUTSIDE_THE_BOX), sortOrder: 2 },
+      ],
+    );
+
+    expect(result.rows[0].assignedRoom).toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+    expect(result.rows[0].ruleTrace).toContain(`assigned priority-scored standard room: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
+  });
+
+  it.each([
+    { tutorDisplayName: "Buzz", preferredRoom: "Tesla" },
+    { tutorDisplayName: "Lukas", preferredRoom: "Keep Going (TV)" },
+    { tutorDisplayName: "Mookie", preferredRoom: "Nerd" },
+    { tutorDisplayName: "Tito", preferredRoom: ROOM_THINK_OUTSIDE_THE_BOX },
+    { tutorDisplayName: "Ek", preferredRoom: "OMG" },
+  ])("protects $tutorDisplayName's preferred room from an earlier overlapping generic session", ({ tutorDisplayName, preferredRoom }) => {
+    const result = assignClassrooms(
+      [
+        session({
+          wiseSessionId: "generic",
+          tutorDisplayName: "Generic Tutor",
+          startMinute: 9 * 60,
+          endMinute: 11 * 60,
+        }),
+        session({
+          wiseSessionId: "preferred",
+          tutorDisplayName,
+          startMinute: 10 * 60,
+          endMinute: 11 * 60,
+        }),
+      ],
+      roomsFor(preferredRoom, "Remember (TV)"),
+    );
+
+    const generic = result.rows.find((row) => row.wiseSessionId === "generic")!;
+    const preferred = result.rows.find((row) => row.wiseSessionId === "preferred")!;
+    expect(generic.assignedRoom).not.toBe(preferredRoom);
+    expect(preferred.preferredRoom).toBe(preferredRoom);
+    expect(preferred.assignedRoom).toBe(preferredRoom);
+  });
+
+  it("requires a TV-capable room for Rasna without pinning her to one exact room", () => {
+    const result = assignClassrooms(
+      [session({ tutorDisplayName: "Rasna", studentCount: 1 })],
+      roomsFor("Focus", "Iconic (TV)"),
+    );
+
+    expect(result.rows[0].needsTv).toBe(true);
+    expect(result.rows[0].preferredRoom).toBeNull();
+    expect(result.rows[0].assignedRoom).toBe("Iconic (TV)");
+  });
+
+  it("treats Dream. Plan. Do. as a priority standard room before non-core rooms", () => {
+    const result = assignClassrooms(
+      [session({ studentCount: 1 })],
+      [
+        { name: "Side Room", hasTv: false, capacity: 1, category: "standard", active: true, sortOrder: 1 },
+        { ...roomByName("Dream. Plan. Do."), sortOrder: 2 },
+      ],
+    );
+
+    expect(result.rows[0].assignedRoom).toBe("Dream. Plan. Do.");
+  });
+
   it("gives Kevin Think Outside the Box over overlapping automatic preferred-room sessions", () => {
     const result = assignClassrooms([
       session({
@@ -427,28 +505,19 @@ describe("assignClassrooms", () => {
   });
 
   it("uses overflow only after standard rooms are exhausted", () => {
-    const sessions = DEFAULT_CLASSROOM_ROOMS
-      .filter((room) => room.category === "standard" && room.capacity >= 3)
-      .map((_, index) =>
-        session({
-          wiseSessionId: `standard-${index}`,
-          tutorDisplayName: `Tutor ${index}`,
-          studentName: `Student ${index}`,
-          studentCount: 3,
-          classType: "GROUP",
-        }),
-      );
-    sessions.push(session({
-      wiseSessionId: "overflow",
-      tutorDisplayName: "ZZZ Overflow Tutor",
-      studentName: "Overflow Student",
-      studentCount: 3,
-      classType: "GROUP",
-    }));
+    const result = assignClassrooms(
+      [
+        session({ wiseSessionId: "standard", tutorDisplayName: "Tutor A" }),
+        session({ wiseSessionId: "overflow", tutorDisplayName: "Tutor B" }),
+      ],
+      [
+        { name: "Standard Room", hasTv: false, capacity: 1, category: "standard", active: true, sortOrder: 1 },
+        { name: "Overflow Room", hasTv: false, capacity: 1, category: "overflow_only", active: true, sortOrder: 2 },
+      ],
+    );
 
-    const result = assignClassrooms(sessions, DEFAULT_CLASSROOM_ROOMS);
-
-    expect(result.rows.find((row) => row.wiseSessionId === "overflow")?.assignedRoom).toBe("Dream. Plan. Do.");
+    expect(result.rows.find((row) => row.wiseSessionId === "standard")?.assignedRoom).toBe("Standard Room");
+    expect(result.rows.find((row) => row.wiseSessionId === "overflow")?.assignedRoom).toBe("Overflow Room");
   });
 
   it("marks no room when constraints cannot be met", () => {
