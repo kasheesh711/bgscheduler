@@ -40,6 +40,7 @@ import { AssignmentTimelineControls } from "./assignment-timeline-controls";
 import { FloorPlanOccupancy } from "./floor-plan-occupancy";
 import { RoomCalendarView } from "./room-calendar-view";
 import { RoomOccupancyHeatmap } from "./room-occupancy-heatmap";
+import { syncWiseBeforeAssignment } from "./sync-flow";
 import type { AssignmentDetail, ClassroomRow } from "./types";
 
 const NO_ROOM_AVAILABLE = "NO_ROOM_AVAILABLE";
@@ -141,13 +142,6 @@ interface PublishStartResult {
 interface PublishPollResult {
   progress: PublishJobProgress;
   detail?: AssignmentDetail;
-}
-
-interface WiseSyncResult {
-  success?: boolean;
-  promotedSnapshotId?: string | null;
-  error?: string;
-  errorSummary?: string | null;
 }
 
 function todayBangkok(): string {
@@ -370,13 +364,12 @@ export function ClassAssignmentsWorkspace() {
     setError(null);
     setMessage("Syncing Wise before assignment generation...");
     try {
-      const syncResponse = await fetch("/api/admin/sync-wise", { method: "POST" });
-      const syncBody = (await syncResponse.json()) as WiseSyncResult;
-      if (!syncResponse.ok) {
-        throw new Error(syncBody.error || `Wise sync failed with HTTP ${syncResponse.status}`);
-      }
-      if (!syncBody.success || !syncBody.promotedSnapshotId) {
-        throw new Error(syncBody.errorSummary || "Wise sync did not promote a fresh snapshot.");
+      const syncResult = await syncWiseBeforeAssignment({
+        date,
+        onMessage: setMessage,
+      });
+      if (syncResult.latestDetail) {
+        setDetail(syncResult.latestDetail);
       }
 
       setRunStep("assigning");
