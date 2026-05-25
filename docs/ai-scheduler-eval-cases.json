@@ -1,46 +1,681 @@
 [
   {
-    "id": "writing-y6-first-week-july",
-    "label": "Writing Y6 first week of July broad summary",
+    "id": "2026-05-20-6950b017-physics-sundays",
+    "label": "Audit May 20: Physics Sundays 17:00-19:00",
     "messages": [
-      { "role": "admin", "content": "หาครูสอนวิชา writing y6 ช่วง Week แรกของ July" }
+      {
+        "role": "admin",
+        "content": "Need a Physics tutor Sundays 5-7pm"
+      }
     ],
     "expect": {
-      "parentReady": true,
-      "requiresAvailabilitySummary": true,
-      "dateRange": { "startDate": "2026-07-01", "endDate": "2026-07-07" },
-      "subjects": ["EFL", "ESL", "Literature"],
-      "level": "Y2-8"
-    }
-  },
-  {
-    "id": "econ-y10-fri-sat",
-    "label": "Econ Y10 exact Friday and Saturday slots",
-    "messages": [
-      { "role": "admin", "content": "หา tutor Econ Y10 for เอิง Fri 18:30-19:30 and Sat 13:00-14:00" }
-    ],
-    "expect": {
-      "parentReady": true,
-      "subjects": ["Econ"],
-      "level": "Y9-11",
+      "parentReady": false,
+      "requiresClarification": true,
       "slots": [
-        { "searchMode": "recurring", "dayOfWeek": 5, "start": "18:30", "end": "19:30" },
-        { "searchMode": "recurring", "dayOfWeek": 6, "start": "13:00", "end": "14:00" }
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 0,
+          "start": "17:00",
+          "end": "19:00"
+        }
       ]
     }
   },
   {
-    "id": "maze-english-missing-day",
-    "label": "Maze 11+/13+ English missing weekday",
+    "id": "2026-05-20-407a50cc-physics-around-1pm",
+    "label": "Audit May 20: Physics Sunday around 13:00 needs precision",
     "messages": [
-      { "role": "admin", "content": "maze 11+ english ว่าง 13.00-14.00 มีครูไรบ้าง" }
+      {
+        "role": "admin",
+        "content": "Physics tutor Sunday around 1pm"
+      }
+    ],
+    "expect": {
+      "parentReady": false,
+      "requiresClarification": true,
+      "noSuggestions": true
+    }
+  },
+  {
+    "id": "2026-05-20-241e185f-physics-recurring-24-may",
+    "label": "Audit May 20: Physics 24 May recurring 60 minutes",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "Physics, 24 May Sunday, recurring, 60 min, around 1pm"
+      }
+    ],
+    "expect": {
+      "requiresClarification": true,
+      "dateRange": {
+        "startDate": "2026-05-24",
+        "endDate": "2026-05-24"
+      },
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 0,
+          "start": "13:00",
+          "end": "14:00"
+        }
+      ]
+    }
+  },
+  {
+    "id": "2026-05-20-caf4c429-chemistry-urgent",
+    "label": "Audit May 20: urgent Chemistry tonight/tomorrow should clarify",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "ด่วน หา Chemistry คืนนี้หรือพรุ่งนี้ได้ไหม"
+      }
+    ],
+    "expect": {
+      "parentReady": false,
+      "requiresClarification": true,
+      "noSuggestions": true
+    }
+  },
+  {
+    "id": "2026-05-20-841efaff-chemistry-followup",
+    "label": "Audit May 20: Chemistry follow-up with exact onsite recurring slot",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "ด่วน หา Chemistry คืนนี้หรือพรุ่งนี้ได้ไหม"
+      },
+      {
+        "role": "admin",
+        "content": "60 min onsite 24 May 6pm recurring/continuous"
+      }
+    ],
+    "expect": {
+      "mode": "onsite",
+      "dateRange": {
+        "startDate": "2026-05-24",
+        "endDate": "2026-05-24"
+      },
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 0,
+          "start": "18:00",
+          "end": "19:00"
+        }
+      ],
+      "mustNotAsk": [
+        "tonight or tomorrow"
+      ]
+    }
+  },
+  {
+    "id": "2026-05-20-05bd5e6e-student-alpha-exact-18",
+    "label": "Audit May 20: N' Student Alpha exact Sunday 18:00",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "N' Student Alpha every Sunday at 6pm"
+      }
+    ],
+    "expect": {
+      "studentName": "Student Alpha",
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 0,
+          "start": "18:00",
+          "end": "19:00"
+        }
+      ]
+    }
+  },
+  {
+    "id": "2026-05-20-643f05ad-student-beta-y5-math",
+    "label": "Audit May 20: Student Beta Year 5 Math Saturday 10-11",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "Student Beta Year 5 Math Saturday 10-11"
+      }
+    ],
+    "expect": {
+      "studentName": "Student Beta",
+      "subjects": [
+        "Math"
+      ],
+      "level": "Y2-8",
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 6,
+          "start": "10:00",
+          "end": "11:00"
+        }
+      ]
+    }
+  },
+  {
+    "id": "2026-05-20-2649f228-student-beta-onsite-followup",
+    "label": "Audit May 20: Student Beta follow-up onsite only",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "Student Beta Year 5 Math Saturday 10-11"
+      },
+      {
+        "role": "admin",
+        "content": "on site only"
+      }
+    ],
+    "expect": {
+      "mode": "onsite",
+      "subjects": [
+        "Math"
+      ],
+      "level": "Y2-8",
+      "mustNotAsk": [
+        "delivery mode"
+      ]
+    }
+  },
+  {
+    "id": "2026-05-20-50edd166-student-gamma-writing-reset",
+    "label": "Audit May 20: new Student Gamma English writing request should reset stale Math state",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "Student Beta Year 5 Math Saturday 10-11"
+      },
+      {
+        "role": "admin",
+        "content": "on site only"
+      },
+      {
+        "role": "admin",
+        "content": "Student Gamma English writing Sat/Sun 9-12 onsite"
+      }
+    ],
+    "expect": {
+      "studentName": "Student Gamma",
+      "mode": "onsite",
+      "subjects": [
+        "EFL",
+        "ESL",
+        "Literature"
+      ],
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 6,
+          "start": "09:00",
+          "end": "12:00"
+        },
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 0,
+          "start": "09:00",
+          "end": "12:00"
+        }
+      ],
+      "mustNotAsk": [
+        "Student Beta",
+        "Math"
+      ]
+    }
+  },
+  {
+    "id": "2026-05-20-9aa6bcf6-student-delta-english-missing-day",
+    "label": "Audit May 20: Student Delta 11+/13+ English missing weekday",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "student-delta 11+ english ว่าง 13.00-14.00 มีครูไรบ้าง"
+      }
     ],
     "expect": {
       "parentReady": false,
       "requiresClarification": true,
       "noSuggestions": true,
-      "subjects": ["EnglishVR"],
+      "subjects": [
+        "EnglishVR"
+      ],
       "level": "11+/13+"
+    }
+  },
+  {
+    "id": "2026-05-20-ccccb44a-student-delta-recurring-followup",
+    "label": "Audit May 20: Student Delta recurring follow-up still needs day",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "student-delta 11+ english ว่าง 13.00-14.00 มีครูไรบ้าง"
+      },
+      {
+        "role": "admin",
+        "content": "recurring"
+      }
+    ],
+    "expect": {
+      "parentReady": false,
+      "requiresClarification": true,
+      "noSuggestions": true,
+      "subjects": [
+        "EnglishVR"
+      ],
+      "level": "11+/13+",
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "start": "13:00",
+          "end": "14:00"
+        }
+      ]
+    }
+  },
+  {
+    "id": "2026-05-20-4ec80617-student-epsilon-replace-teacher-one",
+    "label": "Audit May 20: Student Epsilon Math replacing Teacher One",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "Student Epsilon Math แทนครู Teacher One Thu 5-6 online"
+      }
+    ],
+    "expect": {
+      "mode": "online",
+      "subjects": [
+        "Math"
+      ],
+      "tutorExclusions": [
+        "Teacher One"
+      ],
+      "forbiddenTutorNames": [
+        "Teacher One"
+      ],
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 4,
+          "start": "17:00",
+          "end": "18:00"
+        }
+      ]
+    }
+  },
+  {
+    "id": "2026-05-20-91b86850-student-zeta-nonvr-replace-teacher-one",
+    "label": "Audit May 20: Student Zeta NonVR replacing Teacher One",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "Student Zeta NonVR แทนครู Teacher One Saturday onsite"
+      }
+    ],
+    "expect": {
+      "mode": "onsite",
+      "subjects": [
+        "NonVR"
+      ],
+      "tutorExclusions": [
+        "Teacher One"
+      ],
+      "forbiddenTutorNames": [
+        "Teacher One"
+      ],
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 6,
+          "start": "15:00",
+          "end": "20:00"
+        }
+      ]
+    }
+  },
+  {
+    "id": "2026-05-20-2b6a0c0c-student-eta-math-reset",
+    "label": "Audit May 20: Student Eta Math Sunday reset from stale Teacher One replacement",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "Student Zeta NonVR แทนครู Teacher One Saturday onsite"
+      },
+      {
+        "role": "admin",
+        "content": "Student Eta Math Sunday 12:00"
+      }
+    ],
+    "expect": {
+      "subjects": [
+        "Math"
+      ],
+      "forbiddenTutorNames": [
+        "Teacher One"
+      ],
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 0,
+          "start": "12:00",
+          "end": "13:00"
+        }
+      ]
+    }
+  },
+  {
+    "id": "2026-05-20-e41c2a25-econ-y10-fri-sat",
+    "label": "Audit May 20: Econ Y10 exact Friday and Saturday slots",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "หา tutor Econ Y10 for Student Theta Fri 18:30-19:30 and Sat 13:00-14:00"
+      }
+    ],
+    "expect": {
+      "parentReady": true,
+      "studentName": "Student Theta",
+      "subjects": [
+        "Econ"
+      ],
+      "level": "Y9-11",
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 5,
+          "start": "18:30",
+          "end": "19:30"
+        },
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 6,
+          "start": "13:00",
+          "end": "14:00"
+        }
+      ],
+      "requiresEvidence": true
+    }
+  },
+  {
+    "id": "2026-05-20-0a56281f-negative-feedback",
+    "label": "Audit May 20: negative feedback asks for correction",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "หา tutor Econ Y10 for Student Theta Fri 18:30-19:30 and Sat 13:00-14:00"
+      },
+      {
+        "role": "admin",
+        "content": "ไม่เริ่ด"
+      }
+    ],
+    "expect": {
+      "parentReady": false,
+      "requiresClarification": true,
+      "noSuggestions": true
+    }
+  },
+  {
+    "id": "2026-05-21-22ae7e92-writing-y6-first-week-july",
+    "label": "Audit May 21: Writing Y6 first week of July broad summary",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "หาครูสอนวิชา writing y6 ช่วง Week แรกของ July"
+      }
+    ],
+    "expect": {
+      "parentReady": true,
+      "requiresAvailabilitySummary": true,
+      "dateRange": {
+        "startDate": "2026-07-01",
+        "endDate": "2026-07-07"
+      },
+      "subjects": [
+        "EFL",
+        "ESL",
+        "Literature"
+      ],
+      "level": "Y2-8"
+    }
+  },
+  {
+    "id": "2026-05-21-1d7e8733-writing-y6-july-weekdays",
+    "label": "Audit May 21: Writing Y6 July Mon-Sun 10:00-18:00",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "หาครูสอนวิชา writing y6 ช่วง Mon- Sun 10.00 AM- 6.00 PM July"
+      }
+    ],
+    "expect": {
+      "parentReady": true,
+      "requiresAvailabilitySummary": true,
+      "subjects": [
+        "EFL",
+        "ESL",
+        "Literature"
+      ],
+      "level": "Y2-8",
+      "slots": [
+        {
+          "searchMode": "one_time",
+          "start": "10:00",
+          "end": "18:00"
+        }
+      ],
+      "mustNotAsk": [
+        "Which day/time"
+      ]
+    }
+  },
+  {
+    "id": "2026-05-21-64b87983-writing-y6-july-90",
+    "label": "Audit May 21: Writing Y6 July Mon-Sun 10:00-18:00 90 minutes",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "หาครูสอนวิชา writing y6 ช่วง Mon- Sun 10.00 AM- 6.00 PM July จะเรียนประมาณ 1.5"
+      }
+    ],
+    "expect": {
+      "parentReady": true,
+      "requiresAvailabilitySummary": true,
+      "subjects": [
+        "EFL",
+        "ESL",
+        "Literature"
+      ],
+      "level": "Y2-8",
+      "mustNotAsk": [
+        "Which day/time"
+      ]
+    }
+  },
+  {
+    "id": "2026-05-21-07f84f99-students-iota-kappa-range-multi-subject",
+    "label": "Audit May 21: Students Iota and Kappa onsite Math English Science date range",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "Students Iota and Kappa จะมา Onsite วันที่ 30 May - 3 Teacher One อยากได้ตารางครูสอนวิชา Math English Science เวลา 9:00 - 12:00 น."
+      }
+    ],
+    "expect": {
+      "parentReady": true,
+      "mode": "onsite",
+      "subjects": [
+        "Math",
+        "English",
+        "Science"
+      ],
+      "dateRange": {
+        "startDate": "2026-05-30",
+        "endDate": "2026-06-03"
+      },
+      "slots": [
+        {
+          "searchMode": "one_time",
+          "date": "2026-05-30",
+          "start": "09:00",
+          "end": "12:00"
+        }
+      ],
+      "requiresEvidence": true
+    }
+  },
+  {
+    "id": "2026-05-21-e760661c-students-iota-kappa-explicit-dates",
+    "label": "Audit May 21: Students Iota and Kappa explicit date list Math English Science",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "Students Iota and Kappa จะมา Onsite วันที่ 30 May, 31 May, 1 Teacher One, 2 Teacher One, 3 Teacher One อยากได้ตารางครูสอนวิชา Math English Science เวลา 9:00 - 12:00 น."
+      }
+    ],
+    "expect": {
+      "mode": "onsite",
+      "subjects": [
+        "Math",
+        "English",
+        "Science"
+      ],
+      "dateRange": {
+        "startDate": "2026-05-30",
+        "endDate": "2026-06-03"
+      },
+      "requiresEvidence": true
+    }
+  },
+  {
+    "id": "2026-05-21-def92a2f-student-delta-english-missing-day",
+    "label": "Audit May 21: Student Delta 11+/13+ English no day",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "student-delta 11+ english ว่าง 13.00-14.00 มีครูไรบ้าง"
+      }
+    ],
+    "expect": {
+      "parentReady": false,
+      "requiresClarification": true,
+      "noSuggestions": true,
+      "subjects": [
+        "EnglishVR"
+      ],
+      "level": "11+/13+"
+    }
+  },
+  {
+    "id": "2026-05-21-12bfcf0e-student-delta-saturday-followup",
+    "label": "Audit May 21: Student Delta Saturday follow-up clears stale question",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "student-delta 11+ english ว่าง 13.00-14.00 มีครูไรบ้าง"
+      },
+      {
+        "role": "admin",
+        "content": "Saturday"
+      }
+    ],
+    "expect": {
+      "parentReady": true,
+      "subjects": [
+        "EnglishVR"
+      ],
+      "level": "11+/13+",
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 6,
+          "start": "13:00",
+          "end": "14:00"
+        }
+      ],
+      "mustNotAsk": [
+        "Which weekday or exact date"
+      ]
+    }
+  },
+  {
+    "id": "new-year5-english-writing-profile-fit",
+    "label": "New failure target: Year 5 English writing uses academic mapping and tutor evidence",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "Need a patient tutor for Year 5 English writing, online, Tuesday 16:00-17:30"
+      }
+    ],
+    "expect": {
+      "mode": "online",
+      "subjects": [
+        "EFL",
+        "ESL",
+        "Literature"
+      ],
+      "level": "Y2-8",
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 2,
+          "start": "16:00",
+          "end": "17:30"
+        }
+      ],
+      "requiresEvidence": true
+    }
+  },
+  {
+    "id": "new-igcse-econ-profile-fit",
+    "label": "New failure target: IGCSE Econ profile-fit ranking evidence",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "หา IGCSE Econ tutor with exam prep experience for Y10, online Thursday 18:00-19:30"
+      }
+    ],
+    "expect": {
+      "mode": "online",
+      "subjects": [
+        "Econ"
+      ],
+      "level": "Y9-11",
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 4,
+          "start": "18:00",
+          "end": "19:30"
+        }
+      ],
+      "requiresEvidence": true
+    }
+  },
+  {
+    "id": "new-thai-grade-science-multi-subject",
+    "label": "New failure target: Thai grade Science and Math multi-subject",
+    "messages": [
+      {
+        "role": "admin",
+        "content": "ม.4 Science and Math onsite Sunday 10:00-12:00"
+      }
+    ],
+    "expect": {
+      "mode": "onsite",
+      "subjects": [
+        "Science",
+        "Math"
+      ],
+      "level": "G10-12",
+      "slots": [
+        {
+          "searchMode": "recurring",
+          "dayOfWeek": 0,
+          "start": "10:00",
+          "end": "12:00"
+        }
+      ],
+      "requiresEvidence": true
     }
   }
 ]

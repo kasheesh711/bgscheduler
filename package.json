@@ -19,7 +19,8 @@
     "tutor-profiles:seed": "tsx scripts/seed-tutor-business-profiles.ts",
     "room-capacity:import-model": "tsx scripts/import-room-capacity-model.ts",
     "room-utilization:sync": "tsx scripts/sync-room-utilization.ts",
-    "ai-scheduler:evaluate": "tsx scripts/evaluate-ai-scheduler.ts"
+    "ai-scheduler:evaluate": "tsx scripts/evaluate-ai-scheduler.ts",
+    "ai-scheduler:compare-models": "tsx scripts/compare-ai-scheduler-models.ts"
   },
   "dependencies": {
     "@base-ui/react": "1.3.0",

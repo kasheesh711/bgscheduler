@@ -216,6 +216,14 @@ export function AiSchedulerPanel({ enabled, onAddToCompare, disableAdd }: AiSche
                     <div className="truncate text-[11px] text-muted-foreground">
                       {option.tutors.map((tutor) => tutor.displayName).join(" or ")}
                     </div>
+                    {option.tutors.some((tutor) => (tutor.profileEvidence ?? []).length > 0) && (
+                      <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                        {option.tutors
+                          .flatMap((tutor) => (tutor.profileEvidence ?? []).map((item) => `${tutor.displayName}: ${item}`))
+                          .slice(0, 2)
+                          .join(" · ")}
+                      </div>
+                    )}
                     <div className="mt-0.5 flex flex-wrap gap-1">
                       {option.reasons.slice(0, 2).map((reason) => (
                         <span key={reason} className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground">

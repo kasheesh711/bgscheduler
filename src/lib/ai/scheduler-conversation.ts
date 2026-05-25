@@ -7,6 +7,7 @@ import type { IndexedTutorGroup, SearchIndex } from "@/lib/search/index";
 import type { FilterOptions } from "@/lib/data/filters";
 import type { TutorListItem } from "@/lib/data/tutors";
 import {
+  aiSchedulerReasoningEffort,
   aiSchedulerModel,
   extractOutputText,
   isAiSchedulerConfigured,
@@ -16,6 +17,7 @@ import {
   resolveAcademicFilters,
   type AcademicLevelResolution,
 } from "@/lib/ai/academic-levels";
+import { scoreTutorProfileSignals } from "@/lib/ai/tutor-profile-signals";
 import { TEACHING_STYLE_VOCABULARY } from "@/lib/tutor-profile-vocabulary";
 import type { SearchFilters, SnapshotMeta, TutorResult } from "@/lib/search/types";
 
@@ -119,6 +121,7 @@ export interface SchedulerSuggestionTutor {
   tutorGroupId: string;
   displayName: string;
   supportedModes: string[];
+  profileEvidence?: string[];
 }
 
 export interface SchedulerSuggestion {
@@ -154,6 +157,7 @@ export interface SchedulerAvailabilityTutorSummary {
   supportedModes: string[];
   matchedSubjects: string[];
   windows: SchedulerAvailabilityWindowSummary[];
+  profileEvidence?: string[];
 }
 
 export interface SchedulerAvailabilityReviewSummary {
@@ -607,6 +611,56 @@ function mentionsExamEnglish(text: string, level: string | undefined): boolean {
     normalized.includes("exam prep");
 }
 
+function mergeInferredBusinessRequirements(
+  existing: SchedulerBusinessRequirements | undefined,
+  text: string,
+): SchedulerBusinessRequirements {
+  const normalized = normalizeLookup(text);
+  const inferred: SchedulerBusinessRequirements = {};
+
+  const strengthTags: string[] = [];
+  if (normalized.includes("writing") || normalized.includes("essay")) strengthTags.push("writing");
+  if (
+    normalized.includes("exam") ||
+    normalized.includes("11+") ||
+    normalized.includes("13+") ||
+    normalized.includes("16+") ||
+    normalized.includes("igcse") ||
+    normalized.includes("a-level") ||
+    normalized.includes("a level") ||
+    normalized.includes("sat") ||
+    normalized.includes("ielts")
+  ) {
+    strengthTags.push("exam prep");
+  }
+  if (normalized.includes("young learner") || normalized.includes("เด็กเล็ก")) strengthTags.push("young learners");
+  if (normalized.includes("foundation")) strengthTags.push("foundation building");
+  if (normalized.includes("problem solving")) strengthTags.push("math problem solving");
+  if (normalized.includes("science")) strengthTags.push("science concepts");
+  if (strengthTags.length > 0) inferred.strengthTags = strengthTags;
+
+  const curriculumExperience: string[] = [];
+  if (normalized.includes("igcse")) curriculumExperience.push("IGCSE");
+  if (normalized.includes("a-level") || normalized.includes("a level") || normalized.includes("ial")) curriculumExperience.push("A-Level");
+  if (normalized.includes("ib")) curriculumExperience.push("IB");
+  if (normalized.includes("myp")) curriculumExperience.push("MYP");
+  if (normalized.includes("sat")) curriculumExperience.push("SAT");
+  if (normalized.includes("ielts")) curriculumExperience.push("IELTS");
+  if (normalized.includes("ged")) curriculumExperience.push("GED");
+  if (normalized.includes("ap ")) curriculumExperience.push("AP");
+  if (curriculumExperience.length > 0) inferred.curriculumExperience = curriculumExperience;
+
+  const teachingStyleTags: string[] = [];
+  for (const entry of TEACHING_STYLE_VOCABULARY) {
+    if (entry.synonyms.some((synonym) => normalized.includes(normalizeLookup(synonym)))) {
+      teachingStyleTags.push(entry.tag);
+    }
+  }
+  if (teachingStyleTags.length > 0) inferred.teachingStyleTags = teachingStyleTags;
+
+  return mergeBusinessRequirements(existing, inferred);
+}
+
 function activeSubjectsForLevel(input: {
   index: SearchIndex;
   subjects: string[];
@@ -690,6 +744,7 @@ function applyDeterministicSchedulerIntent(input: {
   options: FilterOptions;
 }): SchedulerResolvedState {
   const text = schedulerIntentText(input.state);
+  const businessRequirements = mergeInferredBusinessRequirements(input.state.businessRequirements, text);
   const inferredLevel = input.state.filters.level ?? inferRawLevelFromText(text);
   const provisionalFilters = {
     ...input.state.filters,
@@ -709,6 +764,7 @@ function applyDeterministicSchedulerIntent(input: {
   if (!subjectIntent || subjectIntent.canonicalSubjects.length === 0) {
     return {
       ...input.state,
+      businessRequirements,
       filters: provisionalFilters,
     };
   }
@@ -723,6 +779,7 @@ function applyDeterministicSchedulerIntent(input: {
 
   return {
     ...input.state,
+    businessRequirements,
     subjectIntent,
     filters: {
       ...input.state.filters,
@@ -1506,9 +1563,12 @@ function hasBusinessRequirements(requirements: SchedulerBusinessRequirements): b
   );
 }
 
-function includesAll(profileValues: string[] | undefined, requiredValues: string[] | undefined): boolean {
-  const profileSet = new Set((profileValues ?? []).map(normalizeRequirement));
-  return (requiredValues ?? []).every((value) => profileSet.has(normalizeRequirement(value)));
+function hasHardBusinessRequirements(requirements: SchedulerBusinessRequirements): boolean {
+  return Boolean(
+    requirements.englishProficiency && requirements.englishProficiency !== "unknown" ||
+    requirements.youngLearnerAge ||
+    requirements.schoolKeywords?.length
+  );
 }
 
 function educationMatchesKeywords(group: IndexedTutorGroup, keywords: string[] | undefined): boolean {
@@ -1531,7 +1591,7 @@ function matchesBusinessRequirements(
   group: IndexedTutorGroup,
   requirements: SchedulerBusinessRequirements,
 ): boolean {
-  if (!hasBusinessRequirements(requirements)) return true;
+  if (!hasHardBusinessRequirements(requirements)) return true;
   const profile = group.businessProfile;
   if (!profile) return false;
 
@@ -1547,8 +1607,6 @@ function matchesBusinessRequirements(
     if (profile.youngestComfortableAge > requirements.youngLearnerAge) return false;
   }
 
-  if (!includesAll(profile.strengthTags, requirements.strengthTags)) return false;
-  if (!includesAll(profile.curriculumExperience, requirements.curriculumExperience)) return false;
   if (!educationMatchesKeywords(group, requirements.schoolKeywords)) return false;
   return true;
 }
@@ -1580,6 +1638,12 @@ function buildReasons(
   if (modes.has("online") && modes.has("onsite")) reasons.push("Online and onsite choices");
   else if (modes.has("online")) reasons.push("Online options");
   else if (modes.has("onsite")) reasons.push("Onsite options");
+  if (tutors.some((tutor) => (tutor.profileEvidence ?? []).some((item) => item.startsWith("profile:")))) {
+    reasons.push("Verified tutor profile fit");
+  }
+  if (tutors.some((tutor) => (tutor.profileEvidence ?? []).some((item) => item.startsWith("notes:")))) {
+    reasons.push("Website notes considered");
+  }
   if (teachingStyleTags?.length) reasons.push("Teaching style preference considered");
   if (!parentReady) reasons.push("Needs clarification before sending to parent");
   return reasons;
@@ -1635,28 +1699,42 @@ export function runSchedulerSearch(input: {
     .map(({ slot, response }) => {
       const result = response.perSlotResults[0];
       const tutors = result.available
-        .filter((tutor) => {
+        .map((tutor) => {
           if (input.matchedTutorIds && input.matchedTutorIds.size > 0 && !input.matchedTutorIds.has(tutor.tutorGroupId)) {
-            return false;
+            return null;
           }
           if (input.excludedTutorIds?.has(tutor.tutorGroupId)) {
-            return false;
+            return null;
           }
           const group = groupById.get(tutor.tutorGroupId);
-          if (!group || groupHasDataIssue(group, tutor.tutorGroupId)) return false;
+          if (!group || groupHasDataIssue(group, tutor.tutorGroupId)) return null;
           if (!matchesBusinessRequirements(group, input.state.businessRequirements)) {
             businessFilteredCount += 1;
-            return false;
+            return null;
           }
-          return !input.activeProposalHolds.some((hold) => slotBlockedByProposalHold(hold, tutor, slot, slot.searchMode));
+          if (input.activeProposalHolds.some((hold) => slotBlockedByProposalHold(hold, tutor, slot, slot.searchMode))) {
+            return null;
+          }
+          const profileSignals = scoreTutorProfileSignals({
+            group,
+            filters: input.state.filters,
+            subjectIntent: input.state.subjectIntent,
+            businessRequirements: input.state.businessRequirements,
+          });
+          if (profileSignals.reviewReasons.length > 0) return null;
+          return { tutor, group, profileSignals };
         })
+        .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
         .map((tutor) => ({
-          tutorGroupId: tutor.tutorGroupId,
-          displayName: tutor.displayName,
-          supportedModes: tutor.supportedModes,
-          styleScore: teachingStyleScore(groupById.get(tutor.tutorGroupId)!, input.state.businessRequirements),
+          tutorGroupId: tutor.tutor.tutorGroupId,
+          displayName: tutor.tutor.displayName,
+          supportedModes: tutor.tutor.supportedModes,
+          profileEvidence: tutor.profileSignals.evidence.slice(0, 5),
+          profileSignalScore: tutor.profileSignals.score,
+          styleScore: teachingStyleScore(tutor.group, input.state.businessRequirements),
         }))
         .sort((a, b) => (
+          b.profileSignalScore - a.profileSignalScore ||
           b.styleScore - a.styleScore ||
           a.displayName.localeCompare(b.displayName)
         ))
@@ -1664,6 +1742,7 @@ export function runSchedulerSearch(input: {
           tutorGroupId: tutor.tutorGroupId,
           displayName: tutor.displayName,
           supportedModes: tutor.supportedModes,
+          profileEvidence: tutor.profileEvidence,
         }));
 
       return {
@@ -1672,6 +1751,14 @@ export function runSchedulerSearch(input: {
         styleScore: tutors.reduce((score, tutor) => (
           score + teachingStyleScore(groupById.get(tutor.tutorGroupId)!, input.state.businessRequirements)
         ), 0),
+        profileSignalScore: tutors.reduce((score, tutor) => (
+          score + (scoreTutorProfileSignals({
+            group: groupById.get(tutor.tutorGroupId)!,
+            filters: input.state.filters,
+            subjectIntent: input.state.subjectIntent,
+            businessRequirements: input.state.businessRequirements,
+          }).score)
+        ), 0),
       };
     })
     .filter((entry) => entry.tutors.length > 0);
@@ -1679,6 +1766,7 @@ export function runSchedulerSearch(input: {
   const sortedEntries = input.state.requestedSlots.length > 0
     ? entries
     : entries.sort((a, b) => (
+      b.profileSignalScore - a.profileSignalScore ||
       b.styleScore - a.styleScore ||
       b.tutors.length - a.tutors.length ||
       suggestionDayScore(a.slot) - suggestionDayScore(b.slot) ||
@@ -1810,7 +1898,11 @@ function buildDateRangeAvailabilitySummary(input: {
   const searchedFilters = searchFiltersForState(input.state);
   const warnings: string[] = [];
   const groupById = new Map(input.index.tutorGroups.map((group) => [group.id, group]));
-  const tutorWindows = new Map<string, SchedulerAvailabilityTutorSummary & { windowKeys: Set<string>; matchedSubjectKeys: Set<string> }>();
+  const tutorWindows = new Map<string, SchedulerAvailabilityTutorSummary & {
+    windowKeys: Set<string>;
+    matchedSubjectKeys: Set<string>;
+    profileSignalScore: number;
+  }>();
   const reviewMap = new Map<string, SchedulerAvailabilityReviewSummary>();
   let businessFilteredCount = 0;
 
@@ -1835,6 +1927,13 @@ function buildDateRangeAvailabilitySummary(input: {
           businessFilteredCount += 1;
           continue;
         }
+        const profileSignals = scoreTutorProfileSignals({
+          group,
+          filters,
+          subjectIntent: input.state.subjectIntent,
+          businessRequirements: input.state.businessRequirements,
+        });
+        if (profileSignals.reviewReasons.length > 0) continue;
         if (input.activeProposalHolds.some((hold) => slotBlockedByProposalHold(hold, tutor, slot, "one_time"))) {
           continue;
         }
@@ -1845,9 +1944,13 @@ function buildDateRangeAvailabilitySummary(input: {
           supportedModes: tutor.supportedModes,
           matchedSubjects: [],
           windows: [],
+          profileEvidence: [],
+          profileSignalScore: 0,
           windowKeys: new Set<string>(),
           matchedSubjectKeys: new Set<string>(),
         };
+        entry.profileSignalScore = Math.max(entry.profileSignalScore, profileSignals.score);
+        entry.profileEvidence = uniqueStrings([...(entry.profileEvidence ?? []), ...profileSignals.evidence]).slice(0, 5);
         const subject = filters.subject ?? "Any subject";
         const subjectKey = normalizeLookup(subject);
         if (!entry.matchedSubjectKeys.has(subjectKey)) {
@@ -1892,8 +1995,18 @@ function buildDateRangeAvailabilitySummary(input: {
       supportedModes: entry.supportedModes,
       matchedSubjects: entry.matchedSubjects.sort(),
       windows: entry.windows.sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start)),
+      profileEvidence: entry.profileEvidence,
+      profileSignalScore: entry.profileSignalScore,
     }))
-    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+    .sort((a, b) => b.profileSignalScore - a.profileSignalScore || a.displayName.localeCompare(b.displayName))
+    .map((entry) => ({
+      tutorGroupId: entry.tutorGroupId,
+      displayName: entry.displayName,
+      supportedModes: entry.supportedModes,
+      matchedSubjects: entry.matchedSubjects,
+      windows: entry.windows,
+      profileEvidence: entry.profileEvidence,
+    }));
 
   if (slots.length === 0) {
     warnings.push("No candidate availability windows could be generated for the requested date range.");
@@ -2028,7 +2141,8 @@ function formatTutorAvailabilityLine(
   index: number,
 ): string {
   const subjects = tutor.matchedSubjects.length > 0 ? ` (${tutor.matchedSubjects.join("/")})` : "";
-  return `${index + 1}. ${tutor.displayName}${subjects} - ${formatAvailabilityWindows(tutor.windows)}`;
+  const evidence = tutor.profileEvidence?.find((item) => item.startsWith("profile:") || item.startsWith("notes:"));
+  return `${index + 1}. ${tutor.displayName}${subjects} - ${formatAvailabilityWindows(tutor.windows)}${evidence ? `; ${evidence}` : ""}`;
 }
 
 function subjectLabelForSuggestion(state: SchedulerResolvedState, suggestion: SchedulerSuggestion): string {
@@ -2080,7 +2194,10 @@ export function buildSchedulerParentDraft(input: {
   const lines = input.suggestions.slice(0, 4).map((suggestion) => {
     const tutors = suggestion.tutors.slice(0, 3).map((tutor) => tutor.displayName).join(" or ");
     const suggestionSubject = suggestion.subject ? `${subjectLabelForSuggestion(input.state, suggestion)}: ` : "";
-    return `- ${suggestionSubject}${formatSuggestionDay(suggestion)}, ${formatSlotTime(suggestion.start, suggestion.end)}${tutors ? ` with ${tutors}` : ""}`;
+    const evidence = suggestion.tutors
+      .flatMap((tutor) => tutor.profileEvidence ?? [])
+      .find((item) => item.startsWith("profile:") || item.startsWith("notes:"));
+    return `- ${suggestionSubject}${formatSuggestionDay(suggestion)}, ${formatSlotTime(suggestion.start, suggestion.end)}${tutors ? ` with ${tutors}` : ""}${evidence ? ` (${evidence})` : ""}`;
   });
 
   if (!input.parentReady) {
@@ -2235,6 +2352,9 @@ export async function extractSchedulerStateWithOpenAi(input: {
     body: JSON.stringify({
       model: aiSchedulerModel(),
       store: false,
+      reasoning: {
+        effort: aiSchedulerReasoningEffort(),
+      },
       input: [
         {
           role: "system",

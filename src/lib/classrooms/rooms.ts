@@ -118,6 +118,8 @@ export const PREFERRED_BY_TUTOR = new Map<string, string>(
     ["Smit (Tito) Kanjanapas", ROOM_THINK_OUTSIDE_THE_BOX],
     ["Kevin (Kev) Y. Hsieh", ROOM_THINK_OUTSIDE_THE_BOX],
     ["Kevin (Kev) Y. Hsieh Online", ROOM_THINK_OUTSIDE_THE_BOX],
+    ["Rachata (Mek) Sakpuaram", "Iconic (TV)"],
+    ["Rachata (Mek) Sakpuaram Online", "Iconic (TV)"],
     ["Menika (Menika) Ratnakovit", "Iconic (TV)"],
     ["Menika (Menika) Ratnakovit Online", "Iconic (TV)"],
     ["Kasidej (Peat) Jungrakangthong", "Hakuna Matata"],
@@ -147,11 +149,13 @@ export const PREFERRED_BY_TUTOR = new Map<string, string>(
 
 export const PREFERRED_ROOMS = new Set(PREFERRED_BY_TUTOR.values());
 
-const KEVIN_PRIORITY_TUTORS = new Set(
+const PRIORITY_PREFERRED_ROOM_BY_TUTOR = new Map<string, string>(
   [
-    "Kevin (Kev) Y. Hsieh",
-    "Kevin (Kev) Y. Hsieh Online",
-  ].flatMap(tutorRuleAliases).map(normalizeTutorName),
+    ["Kevin (Kev) Y. Hsieh", ROOM_THINK_OUTSIDE_THE_BOX],
+    ["Kevin (Kev) Y. Hsieh Online", ROOM_THINK_OUTSIDE_THE_BOX],
+    ["Rachata (Mek) Sakpuaram", "Iconic (TV)"],
+    ["Rachata (Mek) Sakpuaram Online", "Iconic (TV)"],
+  ].flatMap(([name, room]) => tutorRuleAliases(name).map((alias) => [normalizeTutorName(alias), room])),
 );
 
 export function isGiftTutor(tutorName: string): boolean {
@@ -164,9 +168,13 @@ export function isGiftTutor(tutorName: string): boolean {
 }
 
 export function isKevinPriorityTutor(tutorName: string): boolean {
-  return KEVIN_PRIORITY_TUTORS.has(normalizeTutorName(tutorName));
+  return getPriorityPreferredRoom(tutorName) === ROOM_THINK_OUTSIDE_THE_BOX;
 }
 
 export function getPreferredRoom(tutorName: string): string | undefined {
   return PREFERRED_BY_TUTOR.get(normalizeTutorName(tutorName));
+}
+
+export function getPriorityPreferredRoom(tutorName: string): string | undefined {
+  return PRIORITY_PREFERRED_ROOM_BY_TUTOR.get(normalizeTutorName(tutorName));
 }

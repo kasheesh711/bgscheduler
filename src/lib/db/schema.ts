@@ -949,6 +949,27 @@ export const aiSchedulerRuns = pgTable("ai_scheduler_runs", {
   index("ai_scheduler_runs_status_idx").on(table.status),
 ]);
 
+export const aiSchedulerFeedback = pgTable("ai_scheduler_feedback", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  conversationId: uuid("conversation_id").references(() => aiSchedulerConversations.id, { onDelete: "set null" }),
+  messageId: uuid("message_id").references(() => aiSchedulerMessages.id, { onDelete: "set null" }),
+  schedulerRunId: uuid("scheduler_run_id").references(() => aiSchedulerRuns.id, { onDelete: "set null" }),
+  action: text("action").notNull(),
+  selectedTutorIds: jsonb("selected_tutor_ids").$type<string[]>().notNull().default([]),
+  rejectedTutorIds: jsonb("rejected_tutor_ids").$type<string[]>().notNull().default([]),
+  editedParentDraft: text("edited_parent_draft"),
+  rejectionReason: text("rejection_reason"),
+  staffCorrection: text("staff_correction"),
+  createdByEmail: text("created_by_email"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("ai_scheduler_feedback_message_idx").on(table.messageId),
+  index("ai_scheduler_feedback_run_idx").on(table.schedulerRunId),
+  index("ai_scheduler_feedback_created_at_idx").on(table.createdAt),
+  index("ai_scheduler_feedback_action_idx").on(table.action),
+]);
+
 // ── LINE Scheduler Review ───────────────────────────────────────────────
 
 export const lineContacts = pgTable("line_contacts", {

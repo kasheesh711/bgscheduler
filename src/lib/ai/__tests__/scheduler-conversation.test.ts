@@ -9,6 +9,7 @@ import {
 } from "@/lib/ai/scheduler-conversation";
 import type { SearchIndex, IndexedTutorGroup } from "@/lib/search/index";
 import type { ProposalHoldSummary } from "@/lib/proposals/types";
+import type { TutorBusinessProfile } from "@/lib/tutor-business-profiles";
 
 function group(overrides: Partial<IndexedTutorGroup> = {}): IndexedTutorGroup {
   return {
@@ -79,6 +80,31 @@ function hold(overrides: Partial<ProposalHoldSummary> = {}): ProposalHoldSummary
     createdAt: overrides.createdAt ?? "2026-05-18T00:00:00.000Z",
     expiresAt: overrides.expiresAt ?? "2026-05-20T00:00:00.000Z",
     confirmedAt: overrides.confirmedAt,
+  };
+}
+
+function businessProfile(overrides: Partial<TutorBusinessProfile> = {}): TutorBusinessProfile {
+  return {
+    canonicalKey: overrides.canonicalKey ?? "profile",
+    displayName: overrides.displayName ?? "Profile Tutor",
+    parentSafeSummary: overrides.parentSafeSummary ?? "",
+    internalNotes: overrides.internalNotes ?? "",
+    education: overrides.education ?? [],
+    languages: overrides.languages ?? [],
+    englishProficiency: overrides.englishProficiency ?? "unknown",
+    youngLearnerFit: overrides.youngLearnerFit ?? "unknown",
+    youngestComfortableAge: overrides.youngestComfortableAge ?? null,
+    youngLearnerNotes: overrides.youngLearnerNotes ?? "",
+    teachingStyleTags: overrides.teachingStyleTags ?? [],
+    teachingStyleNotes: overrides.teachingStyleNotes ?? "",
+    strengthTags: overrides.strengthTags ?? [],
+    curriculumExperience: overrides.curriculumExperience ?? [],
+    studentFitNotes: overrides.studentFitNotes ?? "",
+    doNotUseForNotes: overrides.doNotUseForNotes ?? "",
+    verifiedBy: overrides.verifiedBy ?? "Kevin",
+    lastReviewedAt: overrides.lastReviewedAt ?? "2026-05-20T00:00:00.000Z",
+    active: overrides.active ?? true,
+    updatedAt: overrides.updatedAt ?? "2026-05-20T00:00:00.000Z",
   };
 }
 
@@ -555,6 +581,108 @@ describe("conversational scheduler helpers", () => {
       "Generic Tutor",
     ]);
     expect(result.suggestions[0].reasons.join(" ")).toMatch(/Teaching style/);
+  });
+
+  it("ranks structured profile signals ahead of note-derived and generic tutor evidence", () => {
+    const qualification = [{ subject: "English", curriculum: "International", level: "Y2-8" }];
+    const structuredTutor = group({
+      id: "structured-profile",
+      canonicalKey: "structured-profile",
+      displayName: "Structured Profile",
+      qualifications: qualification,
+      businessProfile: businessProfile({
+        canonicalKey: "structured-profile",
+        displayName: "Structured Profile",
+        englishProficiency: "fluent",
+        strengthTags: ["writing"],
+        curriculumExperience: ["International"],
+        teachingStyleTags: ["patient"],
+      }),
+    });
+    const notesTutor = group({
+      id: "notes-profile",
+      canonicalKey: "notes-profile",
+      displayName: "Notes Profile",
+      qualifications: qualification,
+      businessProfile: businessProfile({
+        canonicalKey: "notes-profile",
+        displayName: "Notes Profile",
+        internalNotes: "Good for writing support and patient lesson pacing.",
+      }),
+    });
+    const genericTutor = group({
+      id: "generic-profile",
+      canonicalKey: "generic-profile",
+      displayName: "Generic Profile",
+      qualifications: qualification,
+    });
+
+    const result = solveSchedulerTurn({
+      index: index([genericTutor, notesTutor, structuredTutor]),
+      extractedState: {
+        searchMode: "recurring",
+        dayOfWeek: 1,
+        startTime: "15:00",
+        endTime: "16:00",
+        filters: { subject: "English", curriculum: "International", level: "Y2-8" },
+        businessRequirements: { strengthTags: ["writing"], teachingStyleTags: ["patient"] },
+      },
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.suggestions[0].tutors.map((tutor) => tutor.displayName)).toEqual([
+      "Structured Profile",
+      "Notes Profile",
+      "Generic Profile",
+    ]);
+    expect(result.suggestions[0].tutors[0].profileEvidence?.join(" ")).toMatch(/profile: Profile strength: writing/);
+    expect(result.suggestions[0].tutors[1].profileEvidence?.join(" ")).toMatch(/notes: Profile notes mention strength: writing/);
+  });
+
+  it("keeps profile caution matches out of available suggestions without treating unrelated caution notes as availability proof", () => {
+    const qualification = [{ subject: "English", curriculum: "International", level: "Y2-8" }];
+    const writingCautionTutor = group({
+      id: "writing-caution",
+      canonicalKey: "writing-caution",
+      displayName: "Writing Caution",
+      qualifications: qualification,
+      businessProfile: businessProfile({
+        canonicalKey: "writing-caution",
+        displayName: "Writing Caution",
+        doNotUseForNotes: "Do not use for writing requests.",
+      }),
+    });
+    const unrelatedCautionTutor = group({
+      id: "unrelated-caution",
+      canonicalKey: "unrelated-caution",
+      displayName: "Unrelated Caution",
+      qualifications: qualification,
+      businessProfile: businessProfile({
+        canonicalKey: "unrelated-caution",
+        displayName: "Unrelated Caution",
+        doNotUseForNotes: "Avoid for IELTS test prep.",
+      }),
+    });
+
+    const result = solveSchedulerTurn({
+      index: index([writingCautionTutor, unrelatedCautionTutor]),
+      extractedState: {
+        searchMode: "recurring",
+        dayOfWeek: 1,
+        startTime: "15:00",
+        endTime: "16:00",
+        filters: { subject: "English", curriculum: "International", level: "Y2-8" },
+        businessRequirements: { strengthTags: ["writing"] },
+      },
+      filterOptions: filters,
+      tutorList: tutors,
+      activeProposalHolds: [],
+    });
+
+    expect(result.suggestions[0].tutors.map((tutor) => tutor.displayName)).toEqual(["Unrelated Caution"]);
+    expect(result.suggestions[0].tutors[0].profileEvidence?.join(" ")).toMatch(/notes: Profile caution note present/);
   });
 
   it("splits a requested time window into bounded sub-slots only inside that window", () => {

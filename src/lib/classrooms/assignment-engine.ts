@@ -2,8 +2,8 @@ import {
   CORE_TEACHING_ROOM_RANK,
   type ClassroomRoomDefinition,
   getPreferredRoom,
+  getPriorityPreferredRoom,
   isGiftTutor,
-  isKevinPriorityTutor,
   NO_ROOM_AVAILABLE,
   ROOM_JOY,
   ROOM_THINK_OUTSIDE_THE_BOX,
@@ -90,7 +90,7 @@ interface AssignmentSessionFacts {
   needsTv: boolean;
   preferredRoom: string | null;
   isGift: boolean;
-  isKevinPriority: boolean;
+  priorityPreferredRoom: string | null;
   overrideRoom: string | null;
   requiresCenterRoom: boolean;
 }
@@ -284,7 +284,7 @@ function buildSessionFacts(
     needsTv: TV_REQUIRED_TUTORS.has(tutorNorm),
     preferredRoom: getPreferredRoom(session.tutorDisplayName) ?? null,
     isGift: isGiftTutor(session.tutorDisplayName),
-    isKevinPriority: isKevinPriorityTutor(session.tutorDisplayName),
+    priorityPreferredRoom: getPriorityPreferredRoom(session.tutorDisplayName) ?? null,
     overrideRoom,
     requiresCenterRoom: Boolean(overrideRoom) || centerRoomRequiredBySessionId.get(session.wiseSessionId) !== false,
   };
@@ -341,15 +341,16 @@ export function assignClassrooms(
     validOverrideBySessionId.add(session.wiseSessionId);
   }
 
-  const kevinPriorityClaimBySessionId = new Set<string>();
+  const priorityPreferredRoomClaimBySessionId = new Set<string>();
   for (const session of sortedSessions) {
     const facts = factsBySessionId.get(session.wiseSessionId);
-    if (!facts?.isKevinPriority) continue;
+    const priorityPreferredRoom = facts?.priorityPreferredRoom;
+    if (!priorityPreferredRoom) continue;
     if (validOverrideBySessionId.has(session.wiseSessionId)) continue;
     if (!facts.requiresCenterRoom) continue;
     if (
       !roomPassesConstraints(
-        roomByName.get(ROOM_THINK_OUTSIDE_THE_BOX),
+        roomByName.get(priorityPreferredRoom),
         session,
         facts.minCapacity,
         facts.needsTv,
@@ -357,17 +358,17 @@ export function assignClassrooms(
     ) {
       continue;
     }
-    if (!isAvailable(protectedClaims, ROOM_THINK_OUTSIDE_THE_BOX, session, session.wiseSessionId)) continue;
+    if (!isAvailable(protectedClaims, priorityPreferredRoom, session, session.wiseSessionId)) continue;
 
-    addRoomInterval(protectedClaims, ROOM_THINK_OUTSIDE_THE_BOX, session);
-    kevinPriorityClaimBySessionId.add(session.wiseSessionId);
+    addRoomInterval(protectedClaims, priorityPreferredRoom, session);
+    priorityPreferredRoomClaimBySessionId.add(session.wiseSessionId);
   }
 
   const preferredRoomClaimBySessionId = new Set<string>();
   for (const session of sortedSessions) {
     const facts = factsBySessionId.get(session.wiseSessionId);
     if (!facts?.preferredRoom) continue;
-    if (facts.isKevinPriority) continue;
+    if (facts.priorityPreferredRoom) continue;
     if (validOverrideBySessionId.has(session.wiseSessionId)) continue;
     if (!facts.requiresCenterRoom) continue;
     if (!roomPassesConstraints(roomByName.get(facts.preferredRoom), session, facts.minCapacity, facts.needsTv)) continue;
@@ -387,6 +388,7 @@ export function assignClassrooms(
     const needsTv = facts.needsTv;
     const preferredRoom = facts.preferredRoom;
     const isGift = facts.isGift;
+    const priorityPreferredRoom = facts.priorityPreferredRoom;
     const overrideRoom = facts.overrideRoom;
     const ruleTrace: string[] = [];
     const requiresCenterRoom = facts.requiresCenterRoom;
@@ -437,12 +439,17 @@ export function assignClassrooms(
 
     if (
       !assignedRoom &&
-      kevinPriorityClaimBySessionId.has(session.wiseSessionId) &&
-      roomOk(ROOM_THINK_OUTSIDE_THE_BOX) &&
-      roomAvailable(ROOM_THINK_OUTSIDE_THE_BOX)
+      priorityPreferredRoom &&
+      priorityPreferredRoomClaimBySessionId.has(session.wiseSessionId) &&
+      roomOk(priorityPreferredRoom) &&
+      roomAvailable(priorityPreferredRoom)
     ) {
-      assignedRoom = ROOM_THINK_OUTSIDE_THE_BOX;
-      ruleTrace.push(`assigned Kevin priority room: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
+      assignedRoom = priorityPreferredRoom;
+      if (priorityPreferredRoom === ROOM_THINK_OUTSIDE_THE_BOX) {
+        ruleTrace.push(`assigned Kevin priority room: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
+      } else {
+        ruleTrace.push(`assigned priority preferred room: ${priorityPreferredRoom}`);
+      }
     }
 
     if (!assignedRoom && isOnlineSession(session.sessionType)) {

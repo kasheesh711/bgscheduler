@@ -25,6 +25,7 @@ const originalEnv = {
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
   ENABLE_AI_SCHEDULER: process.env.ENABLE_AI_SCHEDULER,
   OPENAI_SCHEDULER_MODEL: process.env.OPENAI_SCHEDULER_MODEL,
+  OPENAI_SCHEDULER_REASONING_EFFORT: process.env.OPENAI_SCHEDULER_REASONING_EFFORT,
 };
 
 function modelParsed(overrides: Record<string, unknown> = {}) {
@@ -133,6 +134,7 @@ describe("AI scheduler helpers", () => {
     process.env.OPENAI_API_KEY = "test-key";
     process.env.ENABLE_AI_SCHEDULER = "true";
     process.env.OPENAI_SCHEDULER_MODEL = "gpt-5.4-mini";
+    process.env.OPENAI_SCHEDULER_REASONING_EFFORT = "medium";
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ output_text: JSON.stringify(modelParsed()) }),
@@ -150,6 +152,7 @@ describe("AI scheduler helpers", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("https://api.openai.com/v1/responses");
     expect(body.model).toBe("gpt-5.4-mini");
     expect(body.store).toBe(false);
+    expect(body.reasoning).toEqual({ effort: "medium" });
     expect(body.text.format.type).toBe("json_schema");
   });
 });

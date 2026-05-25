@@ -288,6 +288,42 @@ describe("assignClassrooms", () => {
     expect(result.rows[0].assignedRoom).toBe("OMG");
   });
 
+  it("assigns Mek to Iconic (TV) when available", () => {
+    const result = assignClassrooms([
+      session({ tutorDisplayName: "Rachata (Mek) Sakpuaram" }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    expect(result.rows[0].preferredRoom).toBe("Iconic (TV)");
+    expect(result.rows[0].assignedRoom).toBe("Iconic (TV)");
+    expect(result.rows[0].ruleTrace).toContain("assigned priority preferred room: Iconic (TV)");
+  });
+
+  it("gives Mek Iconic (TV) over overlapping Menika sessions", () => {
+    const result = assignClassrooms([
+      session({
+        groupId: "menika",
+        wiseSessionId: "menika",
+        tutorDisplayName: "Menika (Menika) Ratnakovit",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        groupId: "mek",
+        wiseSessionId: "mek",
+        tutorDisplayName: "Rachata (Mek) Sakpuaram",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    const mek = result.rows.find((row) => row.wiseSessionId === "mek")!;
+    const menika = result.rows.find((row) => row.wiseSessionId === "menika")!;
+    expect(mek.preferredRoom).toBe("Iconic (TV)");
+    expect(mek.assignedRoom).toBe("Iconic (TV)");
+    expect(menika.preferredRoom).toBe("Iconic (TV)");
+    expect(menika.assignedRoom).not.toBe("Iconic (TV)");
+  });
+
   it("matches preferred room rules against Wise nickname display names", () => {
     const result = assignClassrooms([
       session({ tutorDisplayName: "Da" }),
@@ -341,6 +377,59 @@ describe("assignClassrooms", () => {
     expect(generic.assignedRoom).not.toBe(preferredRoom);
     expect(preferred.preferredRoom).toBe(preferredRoom);
     expect(preferred.assignedRoom).toBe(preferredRoom);
+  });
+
+  it("protects Mek's Iconic (TV) priority from an earlier overlapping generic session", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          wiseSessionId: "generic",
+          tutorDisplayName: "Generic Tutor",
+          startMinute: 9 * 60,
+          endMinute: 11 * 60,
+        }),
+        session({
+          wiseSessionId: "mek",
+          tutorDisplayName: "Mek",
+          startMinute: 10 * 60,
+          endMinute: 11 * 60,
+        }),
+      ],
+      roomsFor("Iconic (TV)", "Remember (TV)"),
+    );
+
+    const generic = result.rows.find((row) => row.wiseSessionId === "generic")!;
+    const mek = result.rows.find((row) => row.wiseSessionId === "mek")!;
+    expect(generic.assignedRoom).not.toBe("Iconic (TV)");
+    expect(mek.preferredRoom).toBe("Iconic (TV)");
+    expect(mek.assignedRoom).toBe("Iconic (TV)");
+  });
+
+  it("still assigns Menika to Iconic (TV) when Mek is not competing", () => {
+    const result = assignClassrooms([
+      session({ tutorDisplayName: "Menika (Menika) Ratnakovit" }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    expect(result.rows[0].preferredRoom).toBe("Iconic (TV)");
+    expect(result.rows[0].assignedRoom).toBe("Iconic (TV)");
+  });
+
+  it("honors Mek's own valid room override instead of automatic Iconic (TV) priority", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          groupId: "mek",
+          wiseSessionId: "mek",
+          tutorDisplayName: "Rachata (Mek) Sakpuaram",
+        }),
+      ],
+      DEFAULT_CLASSROOM_ROOMS,
+      new Map([["mek", "Turn The Page (TV)"]]),
+    );
+
+    expect(result.rows[0].preferredRoom).toBe("Iconic (TV)");
+    expect(result.rows[0].assignedRoom).toBe("Turn The Page (TV)");
+    expect(result.rows[0].ruleTrace).toContain("assigned by override: Turn The Page (TV)");
   });
 
   it("requires a TV-capable room for Rasna without pinning her to one exact room", () => {

@@ -6,9 +6,9 @@ import {
 } from "@/lib/ai/academic-levels";
 
 const options = {
-  subjects: ["English", "Math", "Econ"],
+  subjects: ["English", "EnglishVR", "Math", "Econ", "Science"],
   curriculums: ["International", "Thai"],
-  levels: ["11+/13+", "16+", "AP", "G1-9", "G10-12", "GED", "IELTS", "SAT", "Uni", "Y12-13", "Y2-8", "Y9-11"],
+  levels: ["11+/13+", "16+", "A-Level", "AP", "G1-9", "G10-12", "GED", "IB", "IELTS", "IGCSE", "MYP", "SAT", "Uni", "Y12-13", "Y2-8", "Y9-11"],
 };
 
 describe("academic level resolver", () => {
@@ -46,6 +46,28 @@ describe("academic level resolver", () => {
     });
   });
 
+  it("maps exam and programme aliases when active", () => {
+    expect(resolveAcademicLevel({
+      rawLevel: "IGCSE",
+      activeLevels: options.levels,
+    })).toMatchObject({ wiseLevel: "IGCSE", status: "mapped" });
+
+    expect(resolveAcademicLevel({
+      rawLevel: "A level",
+      activeLevels: options.levels,
+    })).toMatchObject({ wiseLevel: "A-Level", status: "mapped" });
+
+    expect(resolveAcademicLevel({
+      rawLevel: "IB",
+      activeLevels: options.levels,
+    })).toMatchObject({ wiseLevel: "IB", status: "mapped" });
+
+    expect(resolveAcademicLevel({
+      rawLevel: "IB MYP",
+      activeLevels: options.levels,
+    })).toMatchObject({ wiseLevel: "MYP", status: "mapped" });
+  });
+
   it("treats Grade 10 as ambiguous without curriculum context", () => {
     expect(resolveAcademicLevel({
       rawLevel: "Grade 10",
@@ -77,6 +99,45 @@ describe("academic level resolver", () => {
 
     expect(result.filters.subject).toBe("English");
     expect(result.remainingUnknowns).toEqual([]);
+  });
+
+  it("recovers raw course and subject aliases before warning", () => {
+    const result = recoverFiltersFromUnknowns({
+      filters: {},
+      explicitUnknownFilters: ["economics", "Thai curriculum", "Grade 10"],
+      options,
+    });
+
+    expect(result.filters).toEqual({
+      subject: "Econ",
+      curriculum: "Thai",
+      level: "G10-12",
+    });
+    expect(result.remainingUnknowns).toEqual([]);
+  });
+
+  it("resolves raw subject aliases passed directly in filters", () => {
+    expect(resolveAcademicFilters({
+      subject: "English writing",
+      level: "Y6",
+    }, options)).toMatchObject({
+      filters: {
+        subject: "English",
+        level: "Y2-8",
+      },
+      issues: [],
+    });
+
+    expect(resolveAcademicFilters({
+      subject: "economics",
+      level: "Y10",
+    }, options)).toMatchObject({
+      filters: {
+        subject: "Econ",
+        level: "Y9-11",
+      },
+      issues: [],
+    });
   });
 
   it("resolves filters with raw requested level preserved in resolution metadata", () => {

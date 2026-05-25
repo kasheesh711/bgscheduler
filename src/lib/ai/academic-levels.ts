@@ -39,6 +39,39 @@ function findCaseInsensitiveOption(value: string | undefined, options: string[])
   return options.find((option) => normalizeLookup(option) === normalized);
 }
 
+function findAliasOption(value: string | undefined, aliases: Record<string, string[]>, options: string[]): string | undefined {
+  if (!value) return undefined;
+  const normalized = normalizeLookup(value).replace(/[._]/g, "").replace(/\s*-\s*/g, "-");
+  for (const [canonical, patterns] of Object.entries(aliases)) {
+    if (!options.some((option) => normalizeLookup(option) === normalizeLookup(canonical))) continue;
+    if (patterns.some((pattern) => normalized === normalizeLookup(pattern).replace(/[._]/g, "").replace(/\s*-\s*/g, "-"))) {
+      return options.find((option) => normalizeLookup(option) === normalizeLookup(canonical));
+    }
+  }
+  return undefined;
+}
+
+function findSubjectOption(value: string | undefined, options: string[]): string | undefined {
+  return findCaseInsensitiveOption(value, options) ??
+    findAliasOption(value, {
+      Econ: ["economics", "economic"],
+      English: ["eng", "english writing", "writing english", "writing"],
+      EnglishVR: ["english vr", "vr english", "11+ english", "13+ english", "entrance english"],
+      NonVR: ["non vr", "non-vr", "nonverbal", "non verbal"],
+      Math: ["maths", "mathematics"],
+      Science: ["sci"],
+    }, options) ??
+    options.find((option) => normalizeLookup(value ?? "").startsWith(`${normalizeLookup(option)} `));
+}
+
+function findCurriculumOption(value: string | undefined, options: string[]): string | undefined {
+  return findCaseInsensitiveOption(value, options) ??
+    findAliasOption(value, {
+      International: ["int", "int.", "international", "inter", "ib", "myp", "igcse", "a-level", "a level"],
+      Thai: ["thai", "thai curriculum", "thai school"],
+    }, options);
+}
+
 function available(candidates: string[], activeLevels: string[]): string[] {
   return candidates.filter((candidate) => activeLevels.some((level) => normalizeLookup(level) === normalizeLookup(candidate)));
 }
@@ -116,8 +149,20 @@ function parseRawLevel(raw: string): {
   const thaiPrimary = normalized.match(/^ป\.?\s*(\d)$/);
   if (thaiPrimary) return { kind: "thai_primary", number: Number(thaiPrimary[1]) };
 
-  const exam = ["ap", "ged", "ielts", "sat", "uni", "16+"].find((label) => normalized === label);
-  if (exam) return { kind: "exam", label: exam };
+  const examAliases: Record<string, string[]> = {
+    "AP": ["ap", "advanced placement"],
+    "GED": ["ged"],
+    "IELTS": ["ielts"],
+    "SAT": ["sat"],
+    "Uni": ["uni", "university", "undergraduate"],
+    "IGCSE": ["igcse", "gcse"],
+    "A-Level": ["a-level", "a level", "alevel", "ial"],
+    "IB": ["ib", "international baccalaureate"],
+    "MYP": ["myp", "ib myp"],
+    "16+": ["16+"],
+  };
+  const exam = Object.entries(examAliases).find(([, aliases]) => aliases.some((label) => normalized === label));
+  if (exam) return { kind: "exam", label: exam[0] };
 
   return { kind: "unknown" };
 }
@@ -162,7 +207,8 @@ export function resolveAcademicLevel(input: ResolveAcademicLevelInput): Academic
   }
 
   if (parsed.kind === "exam" && parsed.label) {
-    const [candidate] = available([parsed.label.toUpperCase()], input.activeLevels);
+    const candidates = [parsed.label, parsed.label.toUpperCase()];
+    const [candidate] = available(candidates, input.activeLevels);
     return candidate ? mapped(rawLevelLabel, candidate) : unknown(rawLevelLabel);
   }
 
@@ -205,14 +251,13 @@ export function recoverFiltersFromUnknowns(input: {
     const trimmed = compact(unknownFilter);
     if (!trimmed) continue;
 
-    const subject = findCaseInsensitiveOption(trimmed, input.options.subjects) ??
-      input.options.subjects.find((option) => normalizeLookup(trimmed).startsWith(`${normalizeLookup(option)} `));
+    const subject = findSubjectOption(trimmed, input.options.subjects);
     if (subject) {
       if (!filters.subject) filters.subject = subject;
       continue;
     }
 
-    const curriculum = findCaseInsensitiveOption(trimmed, input.options.curriculums);
+    const curriculum = findCurriculumOption(trimmed, input.options.curriculums);
     if (curriculum) {
       if (!filters.curriculum) filters.curriculum = curriculum;
       continue;
@@ -243,11 +288,11 @@ export function resolveAcademicFilters(
   const resolved: SearchFilters = {};
   const issues: string[] = [];
 
-  const subject = findCaseInsensitiveOption(filters.subject, options.subjects);
+  const subject = findSubjectOption(filters.subject, options.subjects);
   if (filters.subject && !subject) issues.push(`Subject "${filters.subject}" is not an active Wise qualification.`);
   if (subject) resolved.subject = subject;
 
-  const curriculum = findCaseInsensitiveOption(filters.curriculum, options.curriculums);
+  const curriculum = findCurriculumOption(filters.curriculum, options.curriculums);
   if (filters.curriculum && !curriculum) issues.push(`Curriculum "${filters.curriculum}" is not an active Wise qualification.`);
   if (curriculum) resolved.curriculum = curriculum;
 

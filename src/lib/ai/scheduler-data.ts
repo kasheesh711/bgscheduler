@@ -48,8 +48,27 @@ export interface SchedulerLatencyBreakdown {
   searchMs: number;
 }
 
+export type SchedulerFeedbackAction = "accept" | "edit" | "reject";
+
+export interface SchedulerFeedbackDto {
+  id: string;
+  conversationId: string | null;
+  messageId: string | null;
+  schedulerRunId: string | null;
+  action: SchedulerFeedbackAction;
+  selectedTutorIds: string[];
+  rejectedTutorIds: string[];
+  editedParentDraft: string | null;
+  rejectionReason: string | null;
+  staffCorrection: string | null;
+  createdByEmail: string | null;
+  createdByName: string | null;
+  createdAt: string;
+}
+
 type ConversationRow = typeof schema.aiSchedulerConversations.$inferSelect;
 type MessageRow = typeof schema.aiSchedulerMessages.$inferSelect;
+type FeedbackRow = typeof schema.aiSchedulerFeedback.$inferSelect;
 
 function iso(value: Date | string | null): string | null {
   if (value === null) return null;
@@ -84,6 +103,24 @@ function messageToDto(row: MessageRow): SchedulerMessageDto {
     structuredPayload: row.structuredPayload ?? null,
     model: row.model,
     latencyMs: row.latencyMs,
+    createdByEmail: row.createdByEmail,
+    createdByName: row.createdByName,
+    createdAt: iso(row.createdAt)!,
+  };
+}
+
+function feedbackToDto(row: FeedbackRow): SchedulerFeedbackDto {
+  return {
+    id: row.id,
+    conversationId: row.conversationId,
+    messageId: row.messageId,
+    schedulerRunId: row.schedulerRunId,
+    action: row.action as SchedulerFeedbackAction,
+    selectedTutorIds: row.selectedTutorIds,
+    rejectedTutorIds: row.rejectedTutorIds,
+    editedParentDraft: row.editedParentDraft,
+    rejectionReason: row.rejectionReason,
+    staffCorrection: row.staffCorrection,
     createdByEmail: row.createdByEmail,
     createdByName: row.createdByName,
     createdAt: iso(row.createdAt)!,
@@ -335,4 +372,39 @@ export async function logSchedulerRun(
     console.error("Failed to write AI scheduler run", error);
     return "unlogged";
   }
+}
+
+export async function createSchedulerFeedback(
+  db: Database,
+  input: {
+    conversationId?: string | null;
+    messageId?: string | null;
+    schedulerRunId?: string | null;
+    action: SchedulerFeedbackAction;
+    selectedTutorIds?: string[];
+    rejectedTutorIds?: string[];
+    editedParentDraft?: string | null;
+    rejectionReason?: string | null;
+    staffCorrection?: string | null;
+    actor?: SchedulerActor;
+  },
+): Promise<SchedulerFeedbackDto> {
+  const actor = normalizeActor(input.actor ?? {});
+  const [row] = await db
+    .insert(schema.aiSchedulerFeedback)
+    .values({
+      conversationId: input.conversationId ?? null,
+      messageId: input.messageId ?? null,
+      schedulerRunId: input.schedulerRunId ?? null,
+      action: input.action,
+      selectedTutorIds: input.selectedTutorIds ?? [],
+      rejectedTutorIds: input.rejectedTutorIds ?? [],
+      editedParentDraft: input.editedParentDraft?.trim() || null,
+      rejectionReason: input.rejectionReason?.trim() || null,
+      staffCorrection: input.staffCorrection?.trim() || null,
+      createdByEmail: actor.email,
+      createdByName: actor.name,
+    })
+    .returning();
+  return feedbackToDto(row);
 }

@@ -57,6 +57,7 @@ function optionFromSuggestion(suggestion: SchedulerSuggestion): AiSchedulerOptio
       tutorGroupId: tutor.tutorGroupId,
       displayName: tutor.displayName,
       supportedModes: tutor.supportedModes,
+      profileEvidence: tutor.profileEvidence,
     })),
   };
 }

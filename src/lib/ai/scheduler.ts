@@ -6,6 +6,9 @@ import type { SchedulerAvailabilitySummary, SchedulerResolvedState } from "@/lib
 import { resolveAcademicFilters } from "@/lib/ai/academic-levels";
 
 export const DEFAULT_AI_SCHEDULER_MODEL = "gpt-5.4-mini";
+export const DEFAULT_AI_SCHEDULER_REASONING_EFFORT = "low";
+
+export type AiSchedulerReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
 
 export type AiSchedulerSearchMode = "recurring" | "one_time";
 export type AiSchedulerDeliveryMode = "online" | "onsite" | "either";
@@ -62,6 +65,7 @@ export interface AiSchedulerOption {
     tutorGroupId: string;
     displayName: string;
     supportedModes: string[];
+    profileEvidence?: string[];
   }[];
 }
 
@@ -458,6 +462,18 @@ export function aiSchedulerModel(): string {
   return process.env.OPENAI_SCHEDULER_MODEL?.trim() || DEFAULT_AI_SCHEDULER_MODEL;
 }
 
+export function aiSchedulerShadowModel(): string | undefined {
+  return process.env.OPENAI_SCHEDULER_SHADOW_MODEL?.trim() || undefined;
+}
+
+export function aiSchedulerReasoningEffort(): AiSchedulerReasoningEffort {
+  const value = process.env.OPENAI_SCHEDULER_REASONING_EFFORT?.trim();
+  if (value === "none" || value === "low" || value === "medium" || value === "high" || value === "xhigh") {
+    return value;
+  }
+  return DEFAULT_AI_SCHEDULER_REASONING_EFFORT;
+}
+
 export function isAiSchedulerConfigured(): boolean {
   return process.env.ENABLE_AI_SCHEDULER !== "false" &&
     Boolean(process.env.OPENAI_API_KEY?.trim());
@@ -534,6 +550,9 @@ export async function parseSchedulingRequestWithOpenAi(input: {
     body: JSON.stringify({
       model: aiSchedulerModel(),
       store: false,
+      reasoning: {
+        effort: aiSchedulerReasoningEffort(),
+      },
       input: [
         {
           role: "system",

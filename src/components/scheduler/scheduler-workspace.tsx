@@ -117,7 +117,7 @@ interface SchedulerSuggestion {
   durationMinutes: 60 | 90 | 120;
   mode: "online" | "onsite" | "either";
   confidence: "Best fit" | "Strong fit" | "Good fit";
-  tutors: { tutorGroupId: string; displayName: string; supportedModes: string[] }[];
+  tutors: { tutorGroupId: string; displayName: string; supportedModes: string[]; profileEvidence?: string[] }[];
   availableTutorCount: number;
   reasons: string[];
   parentReady: boolean;
@@ -138,6 +138,7 @@ interface SchedulerAvailabilityTutorSummary {
   supportedModes: string[];
   matchedSubjects: string[];
   windows: SchedulerAvailabilityWindowSummary[];
+  profileEvidence?: string[];
 }
 
 interface SchedulerAvailabilitySummary {
@@ -387,6 +388,19 @@ function SuggestionCard({
       <div className="mt-2 text-[11px] text-muted-foreground">
         {suggestion.tutors.map((tutor) => tutor.displayName).join(" or ")}
       </div>
+      {suggestion.tutors.some((tutor) => (tutor.profileEvidence ?? []).length > 0) && (
+        <div className="mt-1 space-y-0.5 text-[10.5px] text-muted-foreground">
+          {suggestion.tutors.slice(0, 2).map((tutor) => {
+            const evidence = (tutor.profileEvidence ?? []).slice(0, 2);
+            if (evidence.length === 0) return null;
+            return (
+              <div key={`${tutor.tutorGroupId}-evidence`} className="truncate">
+                {tutor.displayName}: {evidence.join(" · ")}
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="mt-1.5 flex flex-wrap gap-1">
         {suggestion.reasons.slice(0, 3).map((reason) => (
           <span key={reason} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
@@ -400,17 +414,68 @@ function SuggestionCard({
 
 function ParentDraft({
   messageId,
+  conversationId,
   initialDraft,
+  suggestions,
 }: {
   messageId: string;
+  conversationId: string;
   initialDraft: string;
+  suggestions: SchedulerSuggestion[];
 }) {
   const [draft, setDraft] = useState(initialDraft);
   const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState<"accept" | "reject" | null>(null);
+  const [feedbackStatus, setFeedbackStatus] = useState<string | null>(null);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [showReject, setShowReject] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [staffCorrection, setStaffCorrection] = useState("");
 
   useEffect(() => {
     setDraft(initialDraft);
   }, [initialDraft]);
+
+  const selectedTutorIds = Array.from(new Set(
+    suggestions.flatMap((suggestion) => suggestion.tutors.map((tutor) => tutor.tutorGroupId)),
+  ));
+
+  const submitFeedback = async (action: "accept" | "edit" | "reject") => {
+    setBusy(action === "reject" ? "reject" : "accept");
+    setFeedbackError(null);
+    setFeedbackStatus(null);
+    try {
+      const body = action === "reject"
+        ? {
+            action,
+            conversationId,
+            rejectedTutorIds: selectedTutorIds,
+            rejectionReason,
+            staffCorrection,
+          }
+        : {
+            action,
+            conversationId,
+            selectedTutorIds,
+            editedParentDraft: draft.trim() !== initialDraft.trim() ? draft : undefined,
+          };
+      await jsonOrThrow<{ feedback: unknown }>(
+        await fetch(`/api/ai-scheduler/messages/${messageId}/feedback`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      setFeedbackStatus(action === "reject" ? "Rejection saved" : action === "edit" ? "Edit saved" : "Accepted");
+      if (action === "reject") {
+        setShowReject(false);
+      }
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : "Failed to save feedback");
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const copy = async () => {
     await navigator.clipboard.writeText(draft);
@@ -434,6 +499,61 @@ function ParentDraft({
         rows={6}
         className="min-h-[124px] max-h-[260px] resize-y overflow-y-auto bg-muted/30 text-xs leading-relaxed [field-sizing:fixed]"
       />
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <Button
+          type="button"
+          size="xs"
+          onClick={() => submitFeedback(draft.trim() === initialDraft.trim() ? "accept" : "edit")}
+          disabled={busy !== null || !draft.trim()}
+          className="gap-1"
+        >
+          <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+          {busy === "accept" ? "Saving" : draft.trim() === initialDraft.trim() ? "Accept" : "Save edit"}
+        </Button>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          onClick={() => setShowReject((value) => !value)}
+          disabled={busy !== null}
+          className="gap-1"
+        >
+          <XCircle className="h-3.5 w-3.5" aria-hidden />
+          Reject
+        </Button>
+        {feedbackStatus && <span className="text-[11px] text-available">{feedbackStatus}</span>}
+      </div>
+      {showReject && (
+        <div className="mt-2 grid gap-1.5 rounded-md border border-border bg-muted/20 p-2">
+          <Input
+            value={rejectionReason}
+            onChange={(event) => setRejectionReason(event.target.value)}
+            placeholder="Why is this wrong?"
+            className="h-8 text-xs"
+          />
+          <Textarea
+            value={staffCorrection}
+            onChange={(event) => setStaffCorrection(event.target.value)}
+            placeholder="What should the scheduler have done?"
+            rows={3}
+            className="text-xs"
+          />
+          <div className="flex items-center justify-end">
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={() => submitFeedback("reject")}
+              disabled={busy !== null || !rejectionReason.trim() || !staffCorrection.trim()}
+            >
+              {busy === "reject" ? "Saving" : "Save rejection"}
+            </Button>
+          </div>
+        </div>
+      )}
+      {feedbackError && (
+        <div className="mt-2 rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive">{feedbackError}</div>
+      )}
     </div>
   );
 }
@@ -473,6 +593,11 @@ function AvailabilitySummaryPanel({ summary }: { summary: SchedulerAvailabilityS
             <div className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
               {compactAvailabilityWindows(tutor.windows)}
             </div>
+            {tutor.profileEvidence && tutor.profileEvidence.length > 0 && (
+              <div className="mt-1 truncate text-[10.5px] text-muted-foreground">
+                {tutor.profileEvidence.slice(0, 2).join(" · ")}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -1219,7 +1344,12 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
                       <ConstraintLedgerPanel ledger={constraintLedger} />
                     )}
                     {parentDraft && (
-                      <ParentDraft messageId={message.id} initialDraft={parentDraft} />
+                      <ParentDraft
+                        messageId={message.id}
+                        conversationId={message.conversationId}
+                        initialDraft={parentDraft}
+                        suggestions={suggestions}
+                      />
                     )}
                   </div>
                 );
