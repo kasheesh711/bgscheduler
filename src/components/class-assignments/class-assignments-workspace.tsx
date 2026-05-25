@@ -118,8 +118,19 @@ interface ScheduleEmailSendResult {
     sendStatus: "sent" | "failed" | "blocked";
     resendEmailId: string | null;
     error: string | null;
+    senderKey: "primary" | "backup";
+    emailRunId: string;
   }>;
   preview: ScheduleEmailPreview;
+  failover?: {
+    triggered: boolean;
+    fromEmailRunId: string;
+    toEmailRunId?: string;
+    reason: string;
+    attempted: number;
+    sent: number;
+    failed: number;
+  };
 }
 
 interface PublishStartResult {
@@ -531,8 +542,11 @@ export function ClassAssignmentsWorkspace() {
         setScheduleEmailPreview(body.preview);
         setSelectedScheduleEmailGroupIds(new Set(recipientGroupIds));
         if (response.ok) {
+          const failoverMessage = body.failover?.triggered
+            ? ` Backup failover sent ${body.failover.sent} more via the backup sender.`
+            : "";
           setMessage(
-            `Schedule emails sent: ${body.summary.success} succeeded, ${body.summary.failed} failed, ${body.summary.blocked} skipped.`,
+            `Schedule emails sent: ${body.summary.success} succeeded, ${body.summary.failed} failed, ${body.summary.blocked} skipped.${failoverMessage}`,
           );
         }
       }
@@ -1175,6 +1189,7 @@ export function ClassAssignmentsWorkspace() {
                           <span>{recipient.tutorDisplayName}</span>
                           <span className={recipient.sendStatus === "failed" ? "text-destructive" : "text-muted-foreground"}>
                             {recipient.sendStatus}
+                            {recipient.senderKey === "backup" ? " via backup" : ""}
                             {recipient.error ? ` - ${recipient.error}` : ""}
                           </span>
                         </div>
