@@ -225,6 +225,9 @@ export const salesDashboardImportRuns = pgTable("sales_dashboard_import_runs", {
 }, (table) => [
   index("sdir_source_started_idx").on(table.sourceId, table.startedAt),
   index("sdir_status_started_idx").on(table.status, table.startedAt),
+  uniqueIndex("sdir_source_single_running_idx")
+    .on(table.sourceId)
+    .where(sql`${table.status} = 'running' AND ${table.sourceId} IS NOT NULL`),
 ]);
 
 export const salesDashboardNormalRows = pgTable("sales_dashboard_normal_rows", {
@@ -303,6 +306,9 @@ export const creditControlSyncRuns = pgTable("credit_control_sync_runs", {
 }, (table) => [
   index("ccsr_status_idx").on(table.status),
   index("ccsr_started_at_idx").on(table.startedAt),
+  uniqueIndex("ccsr_single_running_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'running'`),
 ]);
 
 export const creditControlStudents = pgTable("credit_control_students", {

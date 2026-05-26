@@ -155,6 +155,13 @@
       "when": 1779770404000,
       "tag": "0023_classroom_automation",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1779774000000,
+      "tag": "0024_dashboard_sync_single_flight",
+      "breakpoints": true
     }
   ]
 }

@@ -76,9 +76,10 @@ From an authenticated session:
 
 ## 6. Check cron continuity
 
-Current production cron runs every 30 minutes on Vercel Pro:
+Current production cron runs these data refreshes every 30 minutes on Vercel Pro:
 
-- `/api/internal/sync-wise`
-- `*/30 * * * *`
+- `/api/internal/sync-wise` at `*/30 * * * *`
+- `/api/internal/sync-sales-dashboard` at `10,40 * * * *`
+- `/api/internal/sync-credit-control` at `20,50 * * * *`
 
-Confirm recent `sync_runs` rows complete successfully and that no fresh overlapping `running` rows remain. Old abandoned `running` rows should be marked failed by the single-flight guard after 20 minutes.
+Confirm recent `sync_runs`, `sales_dashboard_import_runs`, and `credit_control_sync_runs` rows complete successfully and that no fresh overlapping `running` rows remain. Old abandoned `running` rows should be marked failed by the single-flight guards after 20 minutes.

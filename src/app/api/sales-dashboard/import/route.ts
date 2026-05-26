@@ -17,6 +17,10 @@ const ImportSchema = z.object({
   allowFinalized: z.boolean().optional(),
 });
 
+function importedSourceCount(results: Array<{ skipped?: boolean }>): number {
+  return results.filter((result) => !result.skipped).length;
+}
+
 function errorResponse(error: unknown) {
   const message = error instanceof Error ? error.message : "Sales dashboard import failed";
   const status = error instanceof MissingGoogleSheetsTokenError ? 409 : 500;
@@ -35,15 +39,16 @@ export async function POST(request: NextRequest) {
       const results = await importAllSalesSources(session.user.email);
       const normalRows = results.reduce((sum, result) => sum + result.normalRows, 0);
       const additionalRows = results.reduce((sum, result) => sum + result.additionalRows, 0);
+      const importedCount = importedSourceCount(results);
       return NextResponse.json({
         ok: true,
         results,
         sourceCount: results.length,
-        importedSourceCount: results.length,
+        importedSourceCount: importedCount,
         normalRows,
         additionalRows,
-        message: results.length
-          ? `Backfilled ${results.length} sources: ${normalRows} normal rows and ${additionalRows} additional rows.`
+        message: importedCount
+          ? `Backfilled ${importedCount} sources: ${normalRows} normal rows and ${additionalRows} additional rows.`
           : "No sources configured. Seed historical sources first.",
       });
     }
@@ -73,15 +78,16 @@ export async function POST(request: NextRequest) {
     });
     const normalRows = results.reduce((sum, result) => sum + result.normalRows, 0);
     const additionalRows = results.reduce((sum, result) => sum + result.additionalRows, 0);
+    const importedCount = importedSourceCount(results);
     return NextResponse.json({
       ok: true,
       results,
       sourceCount: sources.length,
-      importedSourceCount: results.length,
+      importedSourceCount: importedCount,
       normalRows,
       additionalRows,
-      message: results.length
-        ? `Refreshed ${results.length} live-month sources: ${normalRows} normal rows and ${additionalRows} additional rows.`
+      message: importedCount
+        ? `Refreshed ${importedCount} live-month sources: ${normalRows} normal rows and ${additionalRows} additional rows.`
         : "No current or previous-month sources needed refresh.",
     });
   } catch (error) {

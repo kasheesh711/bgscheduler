@@ -325,11 +325,14 @@ export async function runCreditControlSync(
   client: WiseClient,
   instituteId: string,
   now = new Date(),
+  options: { syncRunId?: string } = {},
 ): Promise<CreditControlSyncResult> {
-  const [run] = await db
-    .insert(schema.creditControlSyncRuns)
-    .values({ status: "running", startedAt: now })
-    .returning({ id: schema.creditControlSyncRuns.id });
+  const run = options.syncRunId
+    ? { id: options.syncRunId }
+    : (await db
+      .insert(schema.creditControlSyncRuns)
+      .values({ status: "running", startedAt: now })
+      .returning({ id: schema.creditControlSyncRuns.id }))[0];
 
   try {
     const pastStart = addDays(now, -PAST_WINDOW_DAYS);

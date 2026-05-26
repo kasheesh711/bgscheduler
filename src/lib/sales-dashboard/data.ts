@@ -24,6 +24,11 @@ import {
   sourceShouldRefresh,
   statusAfterSuccessfulImport,
 } from "./lifecycle";
+import {
+  acquireSalesImportRun,
+  failStaleSalesDashboardImports,
+  type SalesDashboardImportOutcome,
+} from "./import-guard";
 import type {
   ParsedAdditionalSaleRow,
   ParsedNormalSaleRow,
@@ -208,24 +213,46 @@ export async function importSalesDashboardSource(
   sourceId: string,
   options: ImportOptions,
   db: Database = getDb(),
-) {
-  const source = await getSourceOrThrow(sourceId, db);
+): Promise<SalesDashboardImportOutcome> {
+  let source = await getSourceOrThrow(sourceId, db);
+  const now = options.now ?? new Date();
+  const staleRunningImportsFailed = await failStaleSalesDashboardImports(db, source.id, now);
+  if (staleRunningImportsFailed > 0) {
+    source = await getSourceOrThrow(sourceId, db);
+  }
+
   if (source.status === "finalized" && !options.allowFinalized) {
     throw new Error("Source is finalized. Reopen or confirm manual refresh first.");
   }
+  const previousStatus = source.status === "refreshing" ? "active" : source.status;
 
-  const now = options.now ?? new Date();
-  const previousStatus = source.status;
-  const [run] = await db
-    .insert(schema.salesDashboardImportRuns)
-    .values({
-      sourceId: source.id,
-      triggerType: options.triggerType,
-      actorEmail: options.actorEmail,
-      sourceCount: 1,
-      startedAt: now,
-    })
-    .returning({ id: schema.salesDashboardImportRuns.id });
+  const guard = await acquireSalesImportRun(db, {
+    sourceId: source.id,
+    sourceLabel: source.label,
+    previousStatus,
+    triggerType: options.triggerType,
+    actorEmail: options.actorEmail,
+    now,
+    staleRunningImportsFailed,
+  });
+
+  if (guard.skipped) {
+    return guard;
+  }
+
+  if (source.status === "finalized" && !options.allowFinalized) {
+    await db
+      .update(schema.salesDashboardImportRuns)
+      .set({
+        status: "failed",
+        finishedAt: new Date(),
+        errorSummary: "Source is finalized. Reopen or confirm manual refresh first.",
+      })
+      .where(eq(schema.salesDashboardImportRuns.id, guard.runId));
+    throw new Error("Source is finalized. Reopen or confirm manual refresh first.");
+  }
+
+  const run = { id: guard.runId };
 
   await db
     .update(schema.salesDashboardSources)
@@ -314,7 +341,13 @@ export async function importSalesDashboardSource(
       })
       .where(eq(schema.salesDashboardSources.id, source.id));
     revalidateSalesDashboardCache();
-    return { sourceId: source.id, runId: run.id, normalRows: normalRows.length, additionalRows: additionalRows.length };
+    return {
+      sourceId: source.id,
+      runId: run.id,
+      normalRows: normalRows.length,
+      additionalRows: additionalRows.length,
+      staleRunningImportsFailed: guard.staleRunningImportsFailed,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sales dashboard import failed";
     await db

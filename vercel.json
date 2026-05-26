@@ -6,7 +6,11 @@
     },
     {
       "path": "/api/internal/sync-sales-dashboard",
-      "schedule": "15 18 * * *"
+      "schedule": "10,40 * * * *"
+    },
+    {
+      "path": "/api/internal/sync-credit-control",
+      "schedule": "20,50 * * * *"
     },
     {
       "path": "/api/internal/class-assignments/morning",
