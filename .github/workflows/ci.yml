@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  DATABASE_URL: postgresql://user:password@localhost:5432/test
+  AUTH_GOOGLE_ID: test-google-client-id
+  AUTH_GOOGLE_SECRET: test-google-client-secret
+  AUTH_SECRET: test-auth-secret-for-ci-only
+  WISE_USER_ID: test-wise-user
+  WISE_API_KEY: test-wise-api-key
+  WISE_NAMESPACE: begifted-education
+  WISE_INSTITUTE_ID: 696e1f4d90102225641cc413
+  CRON_SECRET: test-cron-secret
+  ENABLE_AI_SCHEDULER: "false"
+  ENABLE_LINE_SCHEDULER: "false"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+  unit-tests:
+    name: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build

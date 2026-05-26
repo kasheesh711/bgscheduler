@@ -1,0 +1,23 @@
+name: Sales Dashboard Scope
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  sales-dashboard-scope:
+    name: sales-dashboard-scope
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check changed file scope
+        run: |
+          git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            | node scripts/check-sales-dashboard-scope.mjs --actor "${{ github.event.pull_request.user.login }}"

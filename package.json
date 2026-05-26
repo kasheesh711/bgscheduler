@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run --project unit",
     "test:watch": "vitest --project unit",
     "test:integration": "vitest run --project integration",
@@ -20,7 +21,8 @@
     "room-capacity:import-model": "tsx scripts/import-room-capacity-model.ts",
     "room-utilization:sync": "tsx scripts/sync-room-utilization.ts",
     "ai-scheduler:evaluate": "tsx scripts/evaluate-ai-scheduler.ts",
-    "ai-scheduler:compare-models": "tsx scripts/compare-ai-scheduler-models.ts"
+    "ai-scheduler:compare-models": "tsx scripts/compare-ai-scheduler-models.ts",
+    "guard:sales-dashboard-scope": "node scripts/check-sales-dashboard-scope.mjs"
   },
   "dependencies": {
     "@base-ui/react": "1.3.0",

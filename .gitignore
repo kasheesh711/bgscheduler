@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# Claude Code local project settings
+.claude/settings.local.json
+
 # superpowers brainstorm artifacts
 .superpowers/
 
