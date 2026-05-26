@@ -96,6 +96,7 @@ describe("publish job progress", () => {
       id: "job-1",
       runId: "run-1",
       status: "partial",
+      targetRowIds: null,
       totalCount: 5,
       eligibleCount: 3,
       completedCount: 5,

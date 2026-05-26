@@ -7,6 +7,14 @@
     {
       "path": "/api/internal/sync-sales-dashboard",
       "schedule": "15 18 * * *"
+    },
+    {
+      "path": "/api/internal/class-assignments/morning",
+      "schedule": "45 23 * * *"
+    },
+    {
+      "path": "/api/internal/class-assignments/admin-email",
+      "schedule": "0,10,20,30 0 * * *"
     }
   ]
 }

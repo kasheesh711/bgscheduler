@@ -148,6 +148,13 @@
       "when": 1779468000000,
       "tag": "0022_ai_scheduler_feedback",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1779770404000,
+      "tag": "0023_classroom_automation",
+      "breakpoints": true
     }
   ]
 }

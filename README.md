@@ -53,6 +53,8 @@ Important live payload details:
 - Assignment runs preserve admin override rooms unless the admin chooses force reassign.
 - Local rooms are stored in `classroom_rooms` and seeded from the 24-room BeGifted catalog.
 - Wise writeback is deliberately conservative: `Publish to Wise` updates only eligible `OFFLINE` session locations with reliable capacity and Wise class/session IDs. Online booth assignments stay local.
+- Automated classroom flow runs daily at 6:45 Bangkok for today plus six days, reusing a fresh Wise sync when available, reconciling incrementally, and publishing changed eligible rows.
+- Admin-only current-day schedule email retries at 7:00, 7:10, 7:20, and 7:30 Bangkok and sends to all `admin_users`.
 - Run `npm run db:migrate` before using this feature in production so the classroom tables and new Wise session columns exist.
 
 ## Local Development

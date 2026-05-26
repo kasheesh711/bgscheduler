@@ -588,6 +588,10 @@ export const classroomAssignmentRuns = pgTable("classroom_assignment_runs", {
   snapshotId: uuid("snapshot_id").notNull().references(() => snapshots.id),
   status: classroomAssignmentRunStatusEnum("status").notNull().default("completed"),
   forceReassign: boolean("force_reassign").notNull().default(false),
+  sourceRunId: uuid("source_run_id"),
+  automationBatchId: uuid("automation_batch_id"),
+  reconciliationMode: text("reconciliation_mode"),
+  changeSummary: jsonb("change_summary").$type<Record<string, unknown>>().notNull().default({}),
   totalSessions: integer("total_sessions").notNull().default(0),
   assignedCount: integer("assigned_count").notNull().default(0),
   needsReviewCount: integer("needs_review_count").notNull().default(0),
@@ -601,6 +605,7 @@ export const classroomAssignmentRuns = pgTable("classroom_assignment_runs", {
 }, (table) => [
   index("car_date_idx").on(table.assignmentDate),
   index("car_snapshot_idx").on(table.snapshotId),
+  index("car_automation_batch_idx").on(table.automationBatchId),
 ]);
 
 export const classroomAssignmentRows = pgTable("classroom_assignment_rows", {
@@ -632,6 +637,9 @@ export const classroomAssignmentRows = pgTable("classroom_assignment_rows", {
   overrideRoom: text("override_room"),
   assignedRoom: text("assigned_room").notNull(),
   status: classroomAssignmentRowStatusEnum("status").notNull().default("assigned"),
+  sourceRowId: uuid("source_row_id"),
+  changeType: text("change_type").notNull().default("manual"),
+  assignmentFingerprint: text("assignment_fingerprint"),
   warnings: jsonb("warnings").$type<string[]>().notNull().default([]),
   ruleTrace: jsonb("rule_trace").$type<string[]>().notNull().default([]),
   publishStatus: classroomPublishStatusEnum("publish_status").notNull().default("not_published"),
@@ -642,6 +650,8 @@ export const classroomAssignmentRows = pgTable("classroom_assignment_rows", {
 }, (table) => [
   index("car_rows_run_idx").on(table.runId),
   index("car_rows_snapshot_idx").on(table.snapshotId),
+  index("car_rows_source_row_idx").on(table.sourceRowId),
+  index("car_rows_change_type_idx").on(table.changeType),
   uniqueIndex("car_rows_run_session_idx").on(table.runId, table.wiseSessionId),
 ]);
 
@@ -673,6 +683,7 @@ export const classroomPublishJobs = pgTable("classroom_publish_jobs", {
   id: uuid("id").primaryKey().defaultRandom(),
   runId: uuid("run_id").notNull().references(() => classroomAssignmentRuns.id),
   status: classroomPublishJobStatusEnum("status").notNull().default("pending"),
+  targetRowIds: jsonb("target_row_ids").$type<string[] | null>(),
   totalCount: integer("total_count").notNull().default(0),
   eligibleCount: integer("eligible_count").notNull().default(0),
   completedCount: integer("completed_count").notNull().default(0),
@@ -688,6 +699,25 @@ export const classroomPublishJobs = pgTable("classroom_publish_jobs", {
 }, (table) => [
   index("classroom_publish_jobs_run_idx").on(table.runId),
   index("classroom_publish_jobs_status_idx").on(table.status),
+]);
+
+export const classroomAutomationEvents = pgTable("classroom_automation_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  automationBatchId: uuid("automation_batch_id").notNull(),
+  assignmentRunId: uuid("assignment_run_id").references(() => classroomAssignmentRuns.id),
+  assignmentDate: date("assignment_date", { mode: "string" }).notNull(),
+  eventType: text("event_type").notNull(),
+  wiseSessionId: text("wise_session_id"),
+  sourceRowId: uuid("source_row_id"),
+  targetRowId: uuid("target_row_id"),
+  message: text("message").notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("cae_batch_idx").on(table.automationBatchId),
+  index("cae_run_idx").on(table.assignmentRunId),
+  index("cae_date_idx").on(table.assignmentDate),
+  index("cae_type_idx").on(table.eventType),
 ]);
 
 export const tutorContacts = pgTable("tutor_contacts", {
@@ -776,6 +806,44 @@ export const classroomScheduleEmailRecipients = pgTable("classroom_schedule_emai
   index("cser_recipients_email_run_idx").on(table.emailRunId),
   index("cser_recipients_assignment_run_idx").on(table.assignmentRunId),
   index("cser_recipients_group_idx").on(table.groupId),
+]);
+
+export const classroomAdminEmailRuns = pgTable("classroom_admin_email_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  assignmentDate: date("assignment_date", { mode: "string" }).notNull(),
+  assignmentRunId: uuid("assignment_run_id").references(() => classroomAssignmentRuns.id),
+  status: text("status").notNull().default("pending"),
+  subject: text("subject").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  triggerKind: text("trigger_kind").notNull().default("ready"),
+  createdBy: text("created_by"),
+  attemptedCount: integer("attempted_count").notNull().default(0),
+  successCount: integer("success_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("caer_idempotency_idx").on(table.idempotencyKey),
+  index("caer_date_idx").on(table.assignmentDate),
+  index("caer_assignment_run_idx").on(table.assignmentRunId),
+]);
+
+export const classroomAdminEmailRecipients = pgTable("classroom_admin_email_recipients", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  emailRunId: uuid("email_run_id").notNull().references(() => classroomAdminEmailRuns.id),
+  assignmentDate: date("assignment_date", { mode: "string" }).notNull(),
+  recipientEmail: text("recipient_email").notNull(),
+  status: text("status").notNull().default("pending"),
+  providerMessageId: text("provider_message_id"),
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("caer_recipients_email_run_idx").on(table.emailRunId),
+  index("caer_recipients_date_idx").on(table.assignmentDate),
+  index("caer_recipients_email_idx").on(table.recipientEmail),
 ]);
 
 // ── Past Sessions (cross-snapshot capture) ──────────────────────────────

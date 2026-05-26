@@ -29,6 +29,13 @@ import {
   TV_ROOM_NAME_BY_PHYSICAL_NAME,
   type ClassroomRoomDefinition,
 } from "./rooms";
+import {
+  assignmentFingerprint,
+  reconcileClassroomAssignments,
+  type ClassroomAutomationEvent,
+  type PreviousAssignmentRow,
+  type ReconciledAssignmentRow,
+} from "./reconciliation";
 
 export type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
 export type ClassroomRow = typeof schema.classroomAssignmentRows.$inferSelect;
@@ -765,8 +772,9 @@ async function loadAssignmentSessions(
 function toInsertRow(
   runId: string,
   snapshotId: string,
-  row: AssignmentResultRow,
+  row: AssignmentResultRow | ReconciledAssignmentRow,
 ): typeof schema.classroomAssignmentRows.$inferInsert {
+  const reconciled = row as Partial<ReconciledAssignmentRow>;
   return {
     runId,
     snapshotId,
@@ -795,11 +803,14 @@ function toInsertRow(
     overrideRoom: row.overrideRoom,
     assignedRoom: row.assignedRoom,
     status: row.status,
+    sourceRowId: reconciled.sourceRowId ?? null,
+    changeType: reconciled.changeType ?? "manual",
+    assignmentFingerprint: reconciled.assignmentFingerprint ?? assignmentFingerprint(row),
     warnings: row.warnings,
     ruleTrace: row.ruleTrace,
-    publishStatus: "not_published",
-    publishError: null,
-    publishedAt: null,
+    publishStatus: reconciled.publishStatus ?? "not_published",
+    publishError: reconciled.publishError ?? null,
+    publishedAt: reconciled.publishedAt ?? null,
   };
 }
 
@@ -809,7 +820,13 @@ async function persistAssignmentRun(
   snapshotId: string,
   forceReassign: boolean,
   createdBy: string | null,
-  assignmentRows: AssignmentResultRow[],
+  assignmentRows: Array<AssignmentResultRow | ReconciledAssignmentRow>,
+  metadata: {
+    sourceRunId?: string | null;
+    automationBatchId?: string | null;
+    reconciliationMode?: string | null;
+    changeSummary?: Record<string, unknown>;
+  } = {},
 ) {
   const counts = {
     totalSessions: assignmentRows.length,
@@ -826,6 +843,10 @@ async function persistAssignmentRun(
       snapshotId,
       status: "completed",
       forceReassign,
+      sourceRunId: metadata.sourceRunId ?? null,
+      automationBatchId: metadata.automationBatchId ?? null,
+      reconciliationMode: metadata.reconciliationMode ?? null,
+      changeSummary: metadata.changeSummary ?? {},
       ...counts,
       createdBy,
     })
@@ -881,6 +902,119 @@ export async function runClassroomAssignment(
     snapshotMeta,
     liveRoomBlocks: externalBlocks,
     roomConflictWarnings: buildRoomConflictWarnings(rows, externalBlocks, (assignedRoom) => assignedRoom),
+  };
+}
+
+function classroomRowToPrevious(row: ClassroomRow): PreviousAssignmentRow {
+  return {
+    ...rowToSession(row),
+    id: row.id,
+    minCapacity: row.minCapacity,
+    needsTv: row.needsTv,
+    preferredRoom: row.preferredRoom,
+    overrideRoom: row.overrideRoom,
+    assignedRoom: row.assignedRoom,
+    status: row.status,
+    warnings: row.warnings,
+    ruleTrace: row.ruleTrace,
+    publishStatus: row.publishStatus,
+    publishError: row.publishError,
+    publishedAt: row.publishedAt,
+    assignmentFingerprint: row.assignmentFingerprint,
+    sourceRowId: row.sourceRowId,
+    changeType: row.changeType,
+  };
+}
+
+async function persistAutomationEvents(
+  db: Database,
+  input: {
+    automationBatchId: string;
+    assignmentRunId: string;
+    assignmentDate: string;
+    events: ClassroomAutomationEvent[];
+    targetRows: Array<{ id: string; wiseSessionId: string }>;
+  },
+): Promise<void> {
+  if (input.events.length === 0) return;
+  const targetBySessionId = new Map(input.targetRows.map((row) => [row.wiseSessionId, row]));
+  await db.insert(schema.classroomAutomationEvents).values(input.events.map((event) => ({
+    automationBatchId: input.automationBatchId,
+    assignmentRunId: input.assignmentRunId,
+    assignmentDate: input.assignmentDate,
+    eventType: event.type,
+    wiseSessionId: event.wiseSessionId,
+    sourceRowId: event.sourceRowId,
+    targetRowId: targetBySessionId.get(event.wiseSessionId)?.id ?? null,
+    message: event.message,
+    metadata: event.metadata,
+  })));
+}
+
+export async function runIncrementalClassroomAssignment(
+  db: Database,
+  input: {
+    date: string;
+    automationBatchId: string;
+    createdBy?: string | null;
+    liveSessions?: WiseSession[];
+  },
+): Promise<ClassroomAssignmentDetail & {
+  events: ClassroomAutomationEvent[];
+  changeSummary: Record<string, number>;
+}> {
+  const date = assertIsoDate(input.date);
+  const activeSnapshot = await getActiveSnapshot(db);
+  const snapshotMeta = await assertFreshClassroomSnapshot(db, activeSnapshot.id);
+  const rooms = await listClassroomRooms(db);
+  const previousRun = await loadLatestRunForDate(db, date);
+  const previousRows = previousRun ? await loadRowsForRun(db, previousRun.id) : [];
+  const sessions = await loadAssignmentSessions(db, activeSnapshot.id, date);
+  const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
+  const liveSessions = input.liveSessions ?? await fetchAllFutureSessions(createWiseClientFromEnv(), instituteId);
+  const liveBlocks = liveRoomBlocksForDate(liveSessions, date);
+  const localWiseSessionIds = new Set(sessions.map((session) => session.wiseSessionId));
+  const externalBlocks = externalLiveRoomBlocks(liveBlocks, localWiseSessionIds);
+  const reconciliation = reconcileClassroomAssignments({
+    sessions,
+    previousRows: previousRows.map(classroomRowToPrevious),
+    rooms: rooms.map(toEngineRoom),
+    externalRoomBlocks: externalBlocks,
+  });
+
+  const run = await persistAssignmentRun(
+    db,
+    date,
+    activeSnapshot.id,
+    false,
+    input.createdBy ?? null,
+    reconciliation.rows,
+    {
+      sourceRunId: previousRun?.id ?? null,
+      automationBatchId: input.automationBatchId,
+      reconciliationMode: "minimal_moves",
+      changeSummary: reconciliation.summary,
+    },
+  );
+
+  const rows = await loadRowsForRun(db, run.id);
+  await persistAutomationEvents(db, {
+    automationBatchId: input.automationBatchId,
+    assignmentRunId: run.id,
+    assignmentDate: date,
+    events: reconciliation.events,
+    targetRows: rows,
+  });
+
+  return {
+    run,
+    rows,
+    rooms,
+    snapshotMeta,
+    liveRoomBlocks: externalBlocks,
+    roomConflictWarnings: buildRoomConflictWarnings(rows, externalBlocks, (assignedRoom) => assignedRoom),
+    events: reconciliation.events,
+    changeSummary: reconciliation.summary,
   };
 }
 
@@ -1082,7 +1216,7 @@ export function isClassroomPublishEligible(
 
 export async function createClassroomPublishJob(
   db: Database,
-  input: { runId: string; createdBy?: string | null },
+  input: { runId: string; createdBy?: string | null; targetRowIds?: string[] | null },
 ): Promise<PublishJobProgress> {
   const [run] = await db
     .select()
@@ -1092,12 +1226,15 @@ export async function createClassroomPublishJob(
   if (!run) throw new Error("Assignment run not found");
 
   const rows = await loadRowsForRun(db, input.runId);
-  const eligibleCount = rows.filter((row) => isClassroomPublishEligible(row).eligible).length;
+  const targetRowIdSet = input.targetRowIds ? new Set(input.targetRowIds) : null;
+  const targetRows = targetRowIdSet ? rows.filter((row) => targetRowIdSet.has(row.id)) : rows;
+  const eligibleCount = targetRows.filter((row) => isClassroomPublishEligible(row).eligible).length;
   const [job] = await db
     .insert(schema.classroomPublishJobs)
     .values({
       runId: input.runId,
-      totalCount: rows.length,
+      targetRowIds: input.targetRowIds ?? null,
+      totalCount: targetRows.length,
       eligibleCount,
       createdBy: input.createdBy ?? null,
     })
@@ -1308,6 +1445,7 @@ export async function runClassroomPublishJob(
   db: Database,
   jobId: string,
   client = createWiseClientFromEnv(),
+  options: { liveSessions?: WiseSession[] } = {},
 ): Promise<PublishJobStatusResponse> {
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const existingJob = await loadPublishJob(db, jobId);
@@ -1333,12 +1471,14 @@ export async function runClassroomPublishJob(
       .limit(1);
     if (!run) throw new Error("Assignment run not found");
 
-    const rows = await loadRowsForRun(db, existingJob.runId);
-    const liveSessions = await fetchAllFutureSessions(client, instituteId);
+    const allRows = await loadRowsForRun(db, existingJob.runId);
+    const targetRowIds = Array.isArray(existingJob.targetRowIds) ? new Set(existingJob.targetRowIds) : null;
+    const rows = targetRowIds ? allRows.filter((row) => targetRowIds.has(row.id)) : allRows;
+    const liveSessions = options.liveSessions ?? await fetchAllFutureSessions(client, instituteId);
     const liveBySessionId = new Map(liveSessions.map((session) => [session._id, session]));
-    await refreshRowsCurrentWiseLocations(db, rows, liveBySessionId);
+    await refreshRowsCurrentWiseLocations(db, allRows, liveBySessionId);
 
-    const localWiseSessionIds = new Set(rows.map((row) => row.wiseSessionId));
+    const localWiseSessionIds = new Set(allRows.map((row) => row.wiseSessionId));
     const externalBlocks = externalLiveRoomBlocks(
       liveRoomBlocksForDate(liveSessions, run.assignmentDate),
       localWiseSessionIds,
@@ -1434,6 +1574,21 @@ export async function runClassroomPublishJob(
         continue;
       }
 
+      const fixedLocalBlockers = targetRowIds
+        ? findPublishRoomBlockers(row, allRows).filter((blocker) => !targetRowIds.has(blocker.id))
+        : [];
+      if (fixedLocalBlockers.length > 0) {
+        const blockerNames = fixedLocalBlockers.map((blocker) => blocker.tutorDisplayName).join(", ");
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: `Wise room still occupied by unchanged local assignment: ${blockerNames}`,
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        failedRows.set(row.id, row);
+        continue;
+      }
+
       if (isCurrentWisePublishLocation(row.currentWiseLocation, resolvedLocation.location)) {
         const result = await publishRowResult(db, jobId, row, {
           status: "success",
@@ -1472,7 +1627,7 @@ export async function runClassroomPublishJob(
           db,
           client,
           stillPending,
-          rows,
+          allRows,
           temporaryLocations,
           temporaryMovedRowIds,
         );
@@ -1584,9 +1739,15 @@ export async function publishClassroomAssignmentRun(
   db: Database,
   runId: string,
   client = createWiseClientFromEnv(),
+  options: { targetRowIds?: string[] | null; liveSessions?: WiseSession[] } = {},
 ): Promise<{ detail: ClassroomAssignmentDetail; summary: PublishSummary }> {
-  const progress = await createClassroomPublishJob(db, { runId });
-  const result = await runClassroomPublishJob(db, progress.jobId, client);
+  const progress = await createClassroomPublishJob(db, {
+    runId,
+    targetRowIds: options.targetRowIds,
+  });
+  const result = await runClassroomPublishJob(db, progress.jobId, client, {
+    liveSessions: options.liveSessions,
+  });
   const finalProgress = result.progress;
   const detail = result.detail ?? await getClassroomAssignmentByRunId(db, runId);
   return {
@@ -1598,6 +1759,42 @@ export async function publishClassroomAssignmentRun(
       failed: finalProgress.failedCount,
     },
   };
+}
+
+export async function selectAutomationPublishTargetRowIds(
+  db: Database,
+  rows: ClassroomRow[],
+  liveSessions: WiseSession[],
+  client = createWiseClientFromEnv(),
+): Promise<string[]> {
+  const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
+  const liveBySessionId = new Map(liveSessions.map((session) => [session._id, session]));
+  let publishCatalog: WisePublishLocationCatalog | null = null;
+
+  try {
+    publishCatalog = await loadWisePublishLocationCatalog(db, client, instituteId);
+  } catch {
+    publishCatalog = null;
+  }
+
+  const targets: string[] = [];
+  for (const row of rows) {
+    if (!isClassroomPublishEligible(row).eligible) continue;
+    if (row.changeType !== "carried" || row.publishStatus !== "success") {
+      targets.push(row.id);
+      continue;
+    }
+
+    if (!publishCatalog) continue;
+    const resolved = resolveWisePublishLocation(publishCatalog, row.assignedRoom);
+    if (!resolved.ok) continue;
+    const liveLocation = liveBySessionId.get(row.wiseSessionId)?.location ?? row.currentWiseLocation;
+    if (!isCurrentWisePublishLocation(liveLocation, resolved.location)) {
+      targets.push(row.id);
+    }
+  }
+
+  return targets;
 }
 
 export async function getClassroomAssignmentByRunId(
