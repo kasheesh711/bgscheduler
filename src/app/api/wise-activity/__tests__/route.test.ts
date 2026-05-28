@@ -59,6 +59,27 @@ describe("Wise activity API routes", () => {
       dateRange: { startDate: "2026-05-01", endDate: "2026-05-28" },
       coverage: { status: "empty" },
       summary: { saleRows: 0 },
+      revenueVariance: {
+        startDate: "2026-05-01",
+        endDate: "2026-05-28",
+        periodLabel: "May 1-28, 2026",
+        sheetPackageSalesTotal: 0,
+        wiseRevenueTotal: 0,
+        difference: 0,
+        differencePct: null,
+        currency: "THB",
+        wiseRevenueTransactionCount: 0,
+        wiseRevenueEventCount: 0,
+        skippedEventCount: 0,
+        skippedEventBreakdown: {
+          payoutOrRefund: 0,
+          failedStatus: 0,
+          nonPositiveAmount: 0,
+          unsupportedCurrency: 0,
+          duplicate: 0,
+        },
+        source: "persisted_wise_activity_events",
+      },
       students: [],
     } as never);
     vi.mocked(wiseReconciliationBackfillLookbackDays).mockReturnValue(28);
@@ -149,6 +170,12 @@ describe("Wise activity API routes", () => {
       month: undefined,
       startDate: "2026-05-01",
       endDate: "2026-05-28",
+    });
+    await expect(res.json()).resolves.toMatchObject({
+      revenueVariance: {
+        periodLabel: "May 1-28, 2026",
+        source: "persisted_wise_activity_events",
+      },
     });
   });
 
