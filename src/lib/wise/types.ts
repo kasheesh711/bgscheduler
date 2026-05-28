@@ -173,6 +173,31 @@ export interface WiseClassroomTrendsResponse {
   [key: string]: unknown;
 }
 
+export interface WiseMoneyAmount {
+  value?: number;
+  currency?: string;
+  [key: string]: unknown;
+}
+
+export interface WiseFeesPaidTrendPoint {
+  timestamp?: string;
+  count?: number;
+  amount?: WiseMoneyAmount;
+  [key: string]: unknown;
+}
+
+export interface WiseInstituteTrendsResponse {
+  data?: {
+    trends?: {
+      feesPaid?: {
+        trends?: WiseFeesPaidTrendPoint[];
+      };
+      [key: string]: unknown;
+    };
+  };
+  [key: string]: unknown;
+}
+
 export function getWiseUserId(
   userRef: string | WiseUserReference | undefined
 ): string | undefined {

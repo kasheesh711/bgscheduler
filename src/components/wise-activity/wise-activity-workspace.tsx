@@ -218,7 +218,8 @@ function formatPercent(value: number | null | undefined): string {
   return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
 }
 
-function differenceClass(value: number): string {
+function differenceClass(value: number | null): string {
+  if (typeof value !== "number") return "text-muted-foreground";
   if (Math.abs(value) < 0.01) return "text-emerald-700";
   return value > 0 ? "text-amber-700" : "text-sky-700";
 }
@@ -251,7 +252,7 @@ function RevenueVarianceTable({ data }: { data: WisePackageSalesReconciliation }
     <section className="rounded-lg border bg-card">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <div className="text-sm font-semibold">Revenue Variance</div>
-        <div className="text-xs text-muted-foreground">Sheet - Wise from persisted Wise Activity events</div>
+        <div className="text-xs text-muted-foreground">Sheet - Wise from Wise fees paid trend</div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[860px] text-left text-sm">
@@ -278,7 +279,7 @@ function RevenueVarianceTable({ data }: { data: WisePackageSalesReconciliation }
               <td className="px-3 py-3 font-medium">
                 <div>{formatWiseAmount(variance.wiseRevenueTotal, variance.currency)}</div>
                 <div className="text-xs font-normal text-muted-foreground">
-                  {data.coverage.status === "complete" ? "Persisted total" : "Partial persisted total"}
+                  {variance.wiseRevenueAvailable ? "Wise fees paid trend" : variance.wiseRevenueUnavailableReason}
                 </div>
               </td>
               <td className={cn("px-3 py-3 font-semibold", differenceClass(variance.difference))}>
@@ -289,19 +290,18 @@ function RevenueVarianceTable({ data }: { data: WisePackageSalesReconciliation }
               </td>
               <td className="px-3 py-3">
                 <div className="font-medium">
-                  {variance.wiseRevenueTransactionCount} transaction{variance.wiseRevenueTransactionCount === 1 ? "" : "s"}
+                  {typeof variance.wiseRevenueTransactionCount === "number"
+                    ? `${variance.wiseRevenueTransactionCount} transaction${variance.wiseRevenueTransactionCount === 1 ? "" : "s"}`
+                    : "-"}
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {variance.wiseRevenueEventCount} revenue event{variance.wiseRevenueEventCount === 1 ? "" : "s"}
-                  {variance.skippedEventCount > 0 ? ` | ${variance.skippedEventCount} skipped` : ""}
-                </div>
+                <div className="text-xs text-muted-foreground">{variance.wiseRevenueTrendTimestamp ?? "No trend row"}</div>
               </td>
               <td className="px-3 py-3">
                 <Badge variant="outline" className={cn("rounded-md capitalize", coverageTone)}>
                   {data.coverage.status}
                 </Badge>
                 {data.coverage.status !== "complete" ? (
-                  <div className="mt-1 text-xs text-muted-foreground">Backfill before trusting variance.</div>
+                  <div className="mt-1 text-xs text-muted-foreground">Backfill before trusting row candidates.</div>
                 ) : null}
               </td>
             </tr>

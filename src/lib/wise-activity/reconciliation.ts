@@ -3,10 +3,13 @@ import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { addBangkokDays, bangkokDateKey, bangkokDateStartUtc, endOfBangkokMonth, todayBangkok } from "@/lib/room-capacity/dates";
 import type { SalesDashboardSourceRecord, SalesSourceStatus } from "@/lib/sales-dashboard/types";
+import { createWiseClient } from "@/lib/wise/client";
+import { fetchWiseFeesPaidTrends, type WiseFeesPaidTrend } from "@/lib/wise/fetchers";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
 const MAX_CANDIDATES_PER_ROW = 5;
+const DEFAULT_INSTITUTE_ID = "696e1f4d90102225641cc413";
 
 export interface ReconciliationSourceSummary {
   id: string;
@@ -126,21 +129,15 @@ export interface ReconciliationRevenueVariance {
   endDate: string;
   periodLabel: string;
   sheetPackageSalesTotal: number;
-  wiseRevenueTotal: number;
-  difference: number;
+  wiseRevenueTotal: number | null;
+  difference: number | null;
   differencePct: number | null;
   currency: "THB";
-  wiseRevenueTransactionCount: number;
-  wiseRevenueEventCount: number;
-  skippedEventCount: number;
-  skippedEventBreakdown: {
-    payoutOrRefund: number;
-    failedStatus: number;
-    nonPositiveAmount: number;
-    unsupportedCurrency: number;
-    duplicate: number;
-  };
-  source: "persisted_wise_activity_events";
+  wiseRevenueAvailable: boolean;
+  wiseRevenueUnavailableReason: string | null;
+  wiseRevenueTrendTimestamp: string | null;
+  wiseRevenueTransactionCount: number | null;
+  source: "wise_fees_paid_trend";
 }
 
 export interface WisePackageSalesReconciliation {
@@ -172,6 +169,8 @@ export interface ReconciliationBuildInput {
   creditPackages: CreditPackageInput[];
   startDate: string;
   endDate: string;
+  wiseFeesPaidTrends?: WiseFeesPaidTrend[];
+  wiseFeesPaidTrendsError?: string | null;
 }
 
 interface SaleEvidence {
@@ -466,20 +465,6 @@ function buildCoverage(events: WiseInvoiceEventInput[], startDate: string, endDa
   };
 }
 
-function isRefundOrPayoutEvent(event: WiseInvoiceEventInput): boolean {
-  const transactionType = nestedString(event.payload, ["transaction", "type"]);
-  const text = `${event.eventName} ${event.transactionStatus ?? ""} ${transactionType}`;
-  return /payout|refund|reversal|chargeback/i.test(text);
-}
-
-function isFailedRevenueStatus(status: string | null): boolean {
-  return Boolean(status && /fail|cancel|void|declin|refund|revers|chargeback|delete/i.test(status));
-}
-
-function isDeletedRevenueEvent(event: WiseInvoiceEventInput): boolean {
-  return /delete|void/i.test(`${event.eventName} ${event.transactionStatus ?? ""}`);
-}
-
 function normalizeWiseAmountValue(value: number | null, currency: string): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return currency === "THB" ? value / 100 : value;
@@ -496,30 +481,11 @@ function eventTransactionAmount(event: WiseInvoiceEventInput): number | null {
   return normalizeWiseAmountValue(Number.isFinite(parsed) ? parsed : null, currency);
 }
 
-function revenueAmount(event: WiseInvoiceEventInput): number | null {
-  return eventTransactionAmount(event);
-}
-
 function revenueCurrency(event: WiseInvoiceEventInput): string {
   return firstString([
     event.transactionCurrency,
     nestedString(event.payload, ["transaction", "amount", "currency"]),
   ]).toUpperCase();
-}
-
-function revenueTransactionKey(event: WiseInvoiceEventInput): string {
-  const payload = event.payload;
-  const metadata = nestedRecord(nestedRecord(payload, "transaction"), "metadata");
-  const rawKey = firstString([
-    event.transactionId,
-    nestedString(payload, ["transaction", "id"]),
-    metadata.invoiceNumber,
-    metadata.transactionId,
-    metadata.paymentOptionId,
-    event.eventId,
-    event.id,
-  ]);
-  return compactKey(rawKey) || compactKey(event.id);
 }
 
 function periodLabel(startDate: string, endDate: string): string {
@@ -535,70 +501,33 @@ function periodLabel(startDate: string, endDate: string): string {
   return `${startDate} to ${endDate}`;
 }
 
+function sourceMonthForVariance(input: ReconciliationBuildInput): string {
+  return input.selectedSource?.sourceMonth.slice(0, 7) ?? input.startDate.slice(0, 7);
+}
+
+function trendMonth(trend: WiseFeesPaidTrend): string {
+  const timestamp = new Date(trend.timestamp);
+  if (Number.isNaN(timestamp.getTime())) return "";
+  return bangkokDateKey(timestamp).slice(0, 7);
+}
+
 function buildRevenueVariance(
   rows: ReconciliationSaleRow[],
-  events: WiseInvoiceEventInput[],
   startDate: string,
   endDate: string,
+  sourceMonth: string,
+  trends: WiseFeesPaidTrend[] | undefined,
+  trendsError: string | null | undefined,
 ): ReconciliationRevenueVariance {
   const sheetPackageSalesTotal = rows.reduce((sum, row) => sum + row.paymentAmount, 0);
-  const deletedTransactionKeys = new Set(events
-    .filter((event) => isInboundWiseInvoiceEvent(event) && isDeletedRevenueEvent(event))
-    .map(revenueTransactionKey));
-  const transactions = new Map<string, { amount: number; timestamp: number }>();
-  const skippedEventBreakdown = {
-    payoutOrRefund: 0,
-    failedStatus: 0,
-    nonPositiveAmount: 0,
-    unsupportedCurrency: 0,
-    duplicate: 0,
-  };
-  let wiseRevenueEventCount = 0;
-
-  for (const event of events) {
-    if (isRefundOrPayoutEvent(event)) {
-      skippedEventBreakdown.payoutOrRefund += 1;
-      continue;
-    }
-    if (!isInboundWiseInvoiceEvent(event)) continue;
-    const key = revenueTransactionKey(event);
-    if (deletedTransactionKeys.has(key)) {
-      skippedEventBreakdown.failedStatus += 1;
-      continue;
-    }
-    if (isFailedRevenueStatus(event.transactionStatus)) {
-      skippedEventBreakdown.failedStatus += 1;
-      continue;
-    }
-
-    const amount = revenueAmount(event);
-    if (typeof amount !== "number" || amount <= 0) {
-      skippedEventBreakdown.nonPositiveAmount += 1;
-      continue;
-    }
-
-    const currency = revenueCurrency(event);
-    if (currency && currency !== "THB") {
-      skippedEventBreakdown.unsupportedCurrency += 1;
-      continue;
-    }
-
-    wiseRevenueEventCount += 1;
-    const timestamp = event.eventTimestamp.getTime();
-    const existing = transactions.get(key);
-    if (existing) {
-      skippedEventBreakdown.duplicate += 1;
-      if (timestamp >= existing.timestamp) {
-        transactions.set(key, { amount, timestamp });
-      }
-      continue;
-    }
-    transactions.set(key, { amount, timestamp });
-  }
-
-  const wiseRevenueTotal = [...transactions.values()].reduce((sum, item) => sum + item.amount, 0);
-  const difference = sheetPackageSalesTotal - wiseRevenueTotal;
-  const skippedEventCount = Object.values(skippedEventBreakdown).reduce((sum, count) => sum + count, 0);
+  const trend = trends?.find((candidate) => trendMonth(candidate) === sourceMonth) ?? null;
+  const wiseRevenueTotal = trend?.amount ?? null;
+  const difference = typeof wiseRevenueTotal === "number" ? sheetPackageSalesTotal - wiseRevenueTotal : null;
+  const unavailableReason = trendsError
+    ? `Wise fees paid trend unavailable: ${trendsError}`
+    : trend
+      ? null
+      : `Wise fees paid trend has no row for ${sourceMonth}.`;
 
   return {
     startDate,
@@ -607,13 +536,13 @@ function buildRevenueVariance(
     sheetPackageSalesTotal,
     wiseRevenueTotal,
     difference,
-    differencePct: wiseRevenueTotal === 0 ? null : (difference / wiseRevenueTotal) * 100,
+    differencePct: typeof difference === "number" && wiseRevenueTotal ? (difference / wiseRevenueTotal) * 100 : null,
     currency: "THB",
-    wiseRevenueTransactionCount: transactions.size,
-    wiseRevenueEventCount,
-    skippedEventCount,
-    skippedEventBreakdown,
-    source: "persisted_wise_activity_events",
+    wiseRevenueAvailable: Boolean(trend),
+    wiseRevenueUnavailableReason: unavailableReason,
+    wiseRevenueTrendTimestamp: trend?.timestamp ?? null,
+    wiseRevenueTransactionCount: trend?.count ?? null,
+    source: "wise_fees_paid_trend",
   };
 }
 
@@ -701,7 +630,14 @@ export function buildPackageSalesReconciliation(input: ReconciliationBuildInput)
       candidateCount: rows.reduce((sum, row) => sum + row.candidates.length, 0),
       wiseInboundEvents: wiseEvents.length,
     },
-    revenueVariance: buildRevenueVariance(rows, input.wiseEvents, input.startDate, input.endDate),
+    revenueVariance: buildRevenueVariance(
+      rows,
+      input.startDate,
+      input.endDate,
+      sourceMonthForVariance(input),
+      input.wiseFeesPaidTrends,
+      input.wiseFeesPaidTrendsError,
+    ),
     students,
   };
 }
@@ -781,6 +717,33 @@ function selectSource(
   return sources.find((source) => source.lastSuccessfulImportRunId) ?? sources[0] ?? null;
 }
 
+async function loadWiseFeesPaidTrends(): Promise<{
+  trends: WiseFeesPaidTrend[] | undefined;
+  error: string | null;
+}> {
+  if (!process.env.WISE_USER_ID || !process.env.WISE_API_KEY) {
+    return {
+      trends: undefined,
+      error: "WISE_USER_ID and WISE_API_KEY are required to fetch Wise fees paid trends.",
+    };
+  }
+
+  try {
+    return {
+      trends: await fetchWiseFeesPaidTrends(
+        createWiseClient(),
+        process.env.WISE_INSTITUTE_ID ?? DEFAULT_INSTITUTE_ID,
+      ),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      trends: undefined,
+      error: error instanceof Error ? error.message : "Wise fees paid trend fetch failed.",
+    };
+  }
+}
+
 export async function getWisePackageSalesReconciliation(
   db: Database = getDb(),
   input: {
@@ -847,6 +810,7 @@ export async function getWisePackageSalesReconciliation(
       .orderBy(desc(schema.creditControlSnapshots.generatedAt))
       .limit(1),
   ]);
+  const wiseFeesPaidTrends = await loadWiseFeesPaidTrends();
 
   const activeSnapshotId = snapshotRows[0]?.id;
   const creditPackages = activeSnapshotId
@@ -872,6 +836,8 @@ export async function getWisePackageSalesReconciliation(
     creditPackages,
     startDate,
     endDate,
+    wiseFeesPaidTrends: wiseFeesPaidTrends.trends,
+    wiseFeesPaidTrendsError: wiseFeesPaidTrends.error,
   });
 }
 

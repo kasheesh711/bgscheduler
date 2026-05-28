@@ -13,6 +13,7 @@ import {
   WiseSessionStatsResponse,
   WiseClassroomStatsResponse,
   WiseClassroomTrendsResponse,
+  WiseInstituteTrendsResponse,
 } from "./types";
 import { addDays } from "date-fns";
 
@@ -278,4 +279,52 @@ export async function fetchWiseClassroomTrends(
     `/institutes/${instituteId}/analytics/classroomTrends`,
   );
   return res.data ?? {};
+}
+
+export interface WiseFeesPaidTrend {
+  timestamp: string;
+  count: number;
+  amountMinor: number;
+  amount: number;
+  currency: string;
+}
+
+function amountMinorToMajor(value: number, currency: string): number {
+  return currency.toUpperCase() === "THB" ? value / 100 : value;
+}
+
+export async function fetchWiseFeesPaidTrends(
+  client: WiseClient,
+  instituteId: string,
+): Promise<WiseFeesPaidTrend[]> {
+  const res = await client.get<WiseInstituteTrendsResponse>(
+    `/institutes/${instituteId}/trends`,
+    {
+      showFeeCollectionTrends: "true",
+      showPayoutTrends: "true",
+    },
+    {
+      headers: {
+        "x-wise-timezone": "Asia/Bangkok",
+        "x-wise-platform": "web",
+      },
+    },
+  );
+
+  return (res.data?.trends?.feesPaid?.trends ?? [])
+    .map((trend) => {
+      const timestamp = typeof trend.timestamp === "string" ? trend.timestamp : "";
+      const currency = typeof trend.amount?.currency === "string" ? trend.amount.currency : "THB";
+      const amountMinor = typeof trend.amount?.value === "number" && Number.isFinite(trend.amount.value)
+        ? trend.amount.value
+        : 0;
+      return {
+        timestamp,
+        count: typeof trend.count === "number" && Number.isFinite(trend.count) ? trend.count : 0,
+        amountMinor,
+        amount: amountMinorToMajor(amountMinor, currency),
+        currency,
+      };
+    })
+    .filter((trend) => trend.timestamp);
 }

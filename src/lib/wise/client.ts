@@ -60,14 +60,14 @@ export class WiseClient {
     };
   }
 
-  async get<T>(path: string, params?: Record<string, string>): Promise<T> {
+  async get<T>(path: string, params?: Record<string, string>, init?: RequestInit): Promise<T> {
     const url = new URL(`${this.baseUrl}${path}`);
     if (params) {
       for (const [k, v] of Object.entries(params)) {
         url.searchParams.set(k, v);
       }
     }
-    return this.withConcurrency(() => this.fetchWithRetry<T>(url.toString(), { method: "GET" }));
+    return this.withConcurrency(() => this.fetchWithRetry<T>(url.toString(), { ...init, method: "GET" }));
   }
 
   async post<T>(path: string, body: unknown): Promise<T> {

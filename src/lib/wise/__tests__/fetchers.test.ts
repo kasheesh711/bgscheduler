@@ -5,6 +5,7 @@ import {
   fetchWiseActivityEvents,
   fetchWiseClassroomStats,
   fetchWiseClassroomTrends,
+  fetchWiseFeesPaidTrends,
   fetchWiseSessionStats,
   fetchAllFutureSessions,
   fetchAllInstituteSessions,
@@ -344,5 +345,48 @@ describe("Wise fetchers", () => {
     const sessionStatsUrl = new URL(fetchMock.mock.calls[0][0] as string);
     expect(sessionStatsUrl.searchParams.get("from")).toBe("2026-05-01T00:00:00.000Z");
     expect(sessionStatsUrl.searchParams.get("to")).toBe("2026-05-28T00:00:00.000Z");
+  });
+
+  it("fetches Wise fees-paid trends with Bangkok web headers and normalizes THB minor units", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        status: 200,
+        data: {
+          trends: {
+            feesPaid: {
+              trends: [{
+                timestamp: "2026-04-30T17:00:00.000Z",
+                count: 148,
+                amount: { value: 344046000, currency: "THB" },
+              }],
+            },
+          },
+        },
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    global.fetch = fetchMock as typeof fetch;
+
+    const trends = await fetchWiseFeesPaidTrends(makeClient(), "center-1");
+
+    const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(calledUrl.pathname).toBe("/institutes/center-1/trends");
+    expect(calledUrl.searchParams.get("showFeeCollectionTrends")).toBe("true");
+    expect(calledUrl.searchParams.get("showPayoutTrends")).toBe("true");
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({
+      headers: expect.objectContaining({
+        "x-wise-timezone": "Asia/Bangkok",
+        "x-wise-platform": "web",
+      }),
+    }));
+    expect(trends).toEqual([{
+      timestamp: "2026-04-30T17:00:00.000Z",
+      count: 148,
+      amountMinor: 344046000,
+      amount: 3440460,
+      currency: "THB",
+    }]);
   });
 });
