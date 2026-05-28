@@ -42,13 +42,13 @@ function event(overrides: Partial<WiseInvoiceEventInput> = {}): WiseInvoiceEvent
     classroomSubject: "Math",
     transactionId: "tx-1",
     transactionStatus: "paid",
-    transactionAmount: 12000,
+    transactionAmount: 1_200_000,
     transactionCurrency: "THB",
     payload: {
       transaction: {
         id: "tx-1",
         senderId: "student-1",
-        amount: { value: 12000, currency: "THB" },
+        amount: { value: 1_200_000, currency: "THB" },
         metadata: {
           invoiceNumber: "INV-100",
           classId: "class-1",
@@ -121,6 +121,27 @@ describe("Wise package-sales reconciliation", () => {
     });
   });
 
+  it("normalizes Wise THB minor-unit invoice amounts before computing variance", () => {
+    const result = buildPackageSalesReconciliation({
+      sources: [],
+      selectedSource: null,
+      saleRows: [sale({ paymentAmount: 24000 })],
+      wiseEvents: [event({
+        transactionId: "tx-24000",
+        transactionAmount: 2_400_000,
+        payload: { transaction: { id: "tx-24000", amount: { value: 2_400_000, currency: "THB" } } },
+      })],
+      creditPackages: [],
+      startDate: "2026-05-10",
+      endDate: "2026-05-10",
+    });
+
+    expect(result.revenueVariance.wiseRevenueTotal).toBe(24000);
+    expect(result.revenueVariance.difference).toBe(0);
+    expect(result.students[0].rows[0].candidates[0].transactionAmount).toBe(24000);
+    expect(result.students[0].rows[0].candidates[0].reasons).toContain("Payment amount matches the package-sale row.");
+  });
+
   it("deduplicates Wise revenue events by transaction identity", () => {
     const result = buildPackageSalesReconciliation({
       sources: [],
@@ -144,6 +165,45 @@ describe("Wise package-sales reconciliation", () => {
     expect(result.revenueVariance.wiseRevenueEventCount).toBe(2);
     expect(result.revenueVariance.wiseRevenueTransactionCount).toBe(1);
     expect(result.revenueVariance.skippedEventBreakdown.duplicate).toBe(1);
+  });
+
+  it("excludes charged Wise invoices when the same transaction is later deleted", () => {
+    const result = buildPackageSalesReconciliation({
+      sources: [],
+      selectedSource: null,
+      saleRows: [sale()],
+      wiseEvents: [
+        event({
+          id: "event-deleted-charge",
+          eventId: "wise-event-deleted-charge",
+          transactionId: "tx-deleted",
+          transactionAmount: 4_000_000,
+          payload: { transaction: { id: "tx-deleted", amount: { value: 4_000_000, currency: "THB" } } },
+        }),
+        event({
+          id: "event-deleted",
+          eventId: "wise-event-deleted",
+          eventName: "InvoiceDeletedEvent",
+          eventTimestamp: new Date("2026-05-10T08:00:00.000Z"),
+          transactionId: "tx-deleted",
+          transactionAmount: 4_000_000,
+          payload: { transaction: { id: "tx-deleted", amount: { value: 4_000_000, currency: "THB" } } },
+        }),
+        event({
+          id: "event-good",
+          eventId: "wise-event-good",
+          transactionId: "tx-good",
+          transactionAmount: 500_000,
+          payload: { transaction: { id: "tx-good", amount: { value: 500_000, currency: "THB" } } },
+        }),
+      ],
+      creditPackages: [],
+      startDate: "2026-05-10",
+      endDate: "2026-05-10",
+    });
+
+    expect(result.revenueVariance.wiseRevenueTotal).toBe(5000);
+    expect(result.revenueVariance.wiseRevenueTransactionCount).toBe(1);
   });
 
   it("excludes payout, refund, failed, non-positive, and non-THB Wise revenue events", () => {
@@ -176,12 +236,40 @@ describe("Wise package-sales reconciliation", () => {
     });
   });
 
+  it("does not classify session feedback as inbound finance because it contains the substring fee", () => {
+    const result = buildPackageSalesReconciliation({
+      sources: [],
+      selectedSource: null,
+      saleRows: [sale()],
+      wiseEvents: [
+        event(),
+        event({
+          id: "event-feedback",
+          eventId: "wise-event-feedback",
+          eventType: "SESSION",
+          eventName: "SessionFeedbackSubmittedEvent",
+          transactionId: null,
+          transactionAmount: null,
+          transactionCurrency: null,
+          payload: {},
+        }),
+      ],
+      creditPackages: [],
+      startDate: "2026-05-10",
+      endDate: "2026-05-10",
+    });
+
+    expect(result.summary.wiseInboundEvents).toBe(1);
+    expect(result.coverage.inboundEventCount).toBe(1);
+    expect(result.revenueVariance.skippedEventCount).toBe(0);
+  });
+
   it("reports Sheet minus Wise difference and percentage against Wise revenue", () => {
     const result = buildPackageSalesReconciliation({
       sources: [],
       selectedSource: null,
       saleRows: [sale({ paymentAmount: 15000 })],
-      wiseEvents: [event({ transactionAmount: 10000, payload: { transaction: { id: "tx-1", amount: { value: 10000, currency: "THB" } } } })],
+      wiseEvents: [event({ transactionAmount: 1_000_000, payload: { transaction: { id: "tx-1", amount: { value: 1_000_000, currency: "THB" } } } })],
       creditPackages: [],
       startDate: "2026-05-10",
       endDate: "2026-05-10",

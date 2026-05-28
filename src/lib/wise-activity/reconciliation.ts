@@ -307,7 +307,7 @@ export function isInboundWiseInvoiceEvent(event: {
   if (/payout/i.test(eventName)) return false;
   return event.eventType === "BILLING" ||
     Boolean(event.transactionId) ||
-    /invoice|payment|transaction|fee/i.test(eventName);
+    /invoice|payment|transaction/i.test(eventName);
 }
 
 function packageMatchesSale(row: PackageSaleInput, creditPackage: CreditPackageInput): boolean {
@@ -373,6 +373,7 @@ function buildSaleEvidence(row: PackageSaleInput, creditPackages: CreditPackageI
 function scoreCandidate(row: PackageSaleInput, evidence: SaleEvidence, event: WiseInvoiceEventInput): ReconciliationCandidate | null {
   const reasons: string[] = [];
   let score = 0;
+  const transactionAmount = eventTransactionAmount(event);
 
   const normalizedTransactionNo = compactKey(evidence.transactionNo);
   if (normalizedTransactionNo && eventIdentifiers(event).has(normalizedTransactionNo)) {
@@ -392,7 +393,7 @@ function scoreCandidate(row: PackageSaleInput, evidence: SaleEvidence, event: Wi
     reasons.push("Wise student ID matches the student's active Credit Control package.");
   }
 
-  if (moneyEqual(row.paymentAmount, event.transactionAmount)) {
+  if (moneyEqual(row.paymentAmount, transactionAmount)) {
     score += 30;
     reasons.push("Payment amount matches the package-sale row.");
   }
@@ -428,7 +429,7 @@ function scoreCandidate(row: PackageSaleInput, evidence: SaleEvidence, event: Wi
     classroomSubject: event.classroomSubject,
     transactionId: event.transactionId,
     transactionStatus: event.transactionStatus,
-    transactionAmount: event.transactionAmount,
+    transactionAmount,
     transactionCurrency: event.transactionCurrency,
     score,
     confidence: score >= 80 ? "high" : score >= 45 ? "medium" : "low",
@@ -475,14 +476,28 @@ function isFailedRevenueStatus(status: string | null): boolean {
   return Boolean(status && /fail|cancel|void|declin|refund|revers|chargeback|delete/i.test(status));
 }
 
-function revenueAmount(event: WiseInvoiceEventInput): number | null {
+function isDeletedRevenueEvent(event: WiseInvoiceEventInput): boolean {
+  return /delete|void/i.test(`${event.eventName} ${event.transactionStatus ?? ""}`);
+}
+
+function normalizeWiseAmountValue(value: number | null, currency: string): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return currency === "THB" ? value / 100 : value;
+}
+
+function eventTransactionAmount(event: WiseInvoiceEventInput): number | null {
+  const currency = revenueCurrency(event);
   if (typeof event.transactionAmount === "number" && Number.isFinite(event.transactionAmount)) {
-    return event.transactionAmount;
+    return normalizeWiseAmountValue(event.transactionAmount, currency);
   }
   const nestedAmount = nestedString(event.payload, ["transaction", "amount", "value"]);
   if (!nestedAmount) return null;
   const parsed = Number(nestedAmount.replace(/,/g, ""));
-  return Number.isFinite(parsed) ? parsed : null;
+  return normalizeWiseAmountValue(Number.isFinite(parsed) ? parsed : null, currency);
+}
+
+function revenueAmount(event: WiseInvoiceEventInput): number | null {
+  return eventTransactionAmount(event);
 }
 
 function revenueCurrency(event: WiseInvoiceEventInput): string {
@@ -527,6 +542,9 @@ function buildRevenueVariance(
   endDate: string,
 ): ReconciliationRevenueVariance {
   const sheetPackageSalesTotal = rows.reduce((sum, row) => sum + row.paymentAmount, 0);
+  const deletedTransactionKeys = new Set(events
+    .filter((event) => isInboundWiseInvoiceEvent(event) && isDeletedRevenueEvent(event))
+    .map(revenueTransactionKey));
   const transactions = new Map<string, { amount: number; timestamp: number }>();
   const skippedEventBreakdown = {
     payoutOrRefund: 0,
@@ -543,6 +561,11 @@ function buildRevenueVariance(
       continue;
     }
     if (!isInboundWiseInvoiceEvent(event)) continue;
+    const key = revenueTransactionKey(event);
+    if (deletedTransactionKeys.has(key)) {
+      skippedEventBreakdown.failedStatus += 1;
+      continue;
+    }
     if (isFailedRevenueStatus(event.transactionStatus)) {
       skippedEventBreakdown.failedStatus += 1;
       continue;
@@ -561,7 +584,6 @@ function buildRevenueVariance(
     }
 
     wiseRevenueEventCount += 1;
-    const key = revenueTransactionKey(event);
     const timestamp = event.eventTimestamp.getTime();
     const existing = transactions.get(key);
     if (existing) {
@@ -814,7 +836,6 @@ export async function getWisePackageSalesReconciliation(
           OR ${schema.wiseActivityEvents.eventName} ILIKE '%invoice%'
           OR ${schema.wiseActivityEvents.eventName} ILIKE '%payment%'
           OR ${schema.wiseActivityEvents.eventName} ILIKE '%transaction%'
-          OR ${schema.wiseActivityEvents.eventName} ILIKE '%fee%'
         )`,
         sql`${schema.wiseActivityEvents.eventName} NOT ILIKE '%payout%'`,
       ))

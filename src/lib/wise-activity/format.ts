@@ -61,7 +61,7 @@ export function isWiseFinanceEvent(input: {
   const eventName = input.eventName ?? "";
   return input.eventType === "BILLING" ||
     Boolean(input.transactionId) ||
-    /invoice|payment|payout|transaction|fee/i.test(eventName);
+    /invoice|payment|payout|transaction/i.test(eventName);
 }
 
 export function isWiseSessionMutation(eventName: string): boolean {

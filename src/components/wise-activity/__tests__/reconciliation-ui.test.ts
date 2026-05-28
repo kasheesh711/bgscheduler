@@ -20,6 +20,7 @@ describe("Wise Audit reconciliation UI", () => {
     expect(source).toContain("Revenue Variance");
     expect(source).toContain("Wise Revenue");
     expect(source).toContain("Sheet - Wise");
+    expect(source).toContain("Partial persisted total");
     expect(source).toContain("Rows With Candidates");
     expect(source).toContain("Student Package Sales");
   });
