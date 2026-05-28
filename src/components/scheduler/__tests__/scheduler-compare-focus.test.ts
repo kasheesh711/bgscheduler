@@ -98,22 +98,37 @@ describe("scheduler workspace LINE triage guardrails", () => {
 
     expect(source.indexOf("<LineQueueBand")).toBeLessThan(source.indexOf("Search conversations"));
     expect(source).toContain("LINE Review Queue");
-    expect(source).toContain("oldestPendingReview(pendingLineReviews)");
+    expect(source).toContain("lineQueueExpanded");
+    expect(source).toContain("Line queue compact");
   });
 
-  it("keeps active LINE reviews above chat history and collapses reviewed audits", () => {
+  it("keeps active LINE reviews outside the message scroller and collapses reviewed audits", () => {
     const source = read("src/components/scheduler/scheduler-workspace.tsx");
 
     expect(source.indexOf("Active LINE review")).toBeLessThan(source.indexOf("messages.map"));
+    expect(source.indexOf("Active LINE review")).toBeLessThan(source.indexOf("min-h-0 flex-1 overflow-y-auto rounded-md"));
+    expect(source).not.toContain("sticky top-0 z-20");
+    expect(source).not.toContain("sticky bottom-0");
     expect(source).toContain('setExpanded(review.status === "pending_review")');
     expect(source).toContain("Audit");
   });
 
-  it("surfaces admin owner filters and deterministic admin accents", () => {
+  it("surfaces compact admin owner filters and deterministic admin accents", () => {
     const source = read("src/components/scheduler/scheduler-workspace.tsx");
 
     expect(source).toContain("adminFacets.map");
     expect(source).toContain("adminAccentFor");
     expect(source).toContain("Needs review first");
+    expect(source).toContain('aria-label="Admin filter"');
+    expect(source).not.toContain("Admin chats");
+    expect(source).not.toContain("max-h-24 flex-wrap");
+  });
+
+  it("does not render a redundant sidebar LINE reviews card", () => {
+    const source = read("src/components/scheduler/scheduler-workspace.tsx");
+
+    expect(source).not.toContain("Avg model");
+    expect(source).not.toContain("Classified</div>");
+    expect(source).toContain("LINE Review Queue");
   });
 });

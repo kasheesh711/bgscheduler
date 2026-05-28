@@ -22,6 +22,7 @@
     "room-utilization:sync": "tsx scripts/sync-room-utilization.ts",
     "ai-scheduler:evaluate": "tsx scripts/evaluate-ai-scheduler.ts",
     "ai-scheduler:compare-models": "tsx scripts/compare-ai-scheduler-models.ts",
+    "line:test-data:cleanup": "tsx scripts/delete-line-test-data.ts",
     "guard:sales-dashboard-scope": "node scripts/check-sales-dashboard-scope.mjs"
   },
   "dependencies": {

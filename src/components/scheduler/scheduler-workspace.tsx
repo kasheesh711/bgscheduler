@@ -5,7 +5,6 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import {
   AlertTriangle,
   Archive,
-  BarChart3,
   Calendar,
   Check,
   CheckCircle2,
@@ -13,7 +12,6 @@ import {
   ChevronUp,
   Clipboard,
   ExternalLink,
-  Filter,
   Inbox,
   MessageSquarePlus,
   RefreshCw,
@@ -292,6 +290,7 @@ const SCHEDULER_SORT_OPTIONS: Array<{ value: SchedulerConversationSort; label: s
   { value: "latest", label: "Latest activity" },
   { value: "admin", label: "Admin" },
 ];
+const LINE_QUEUE_EXPANDED_STORAGE_KEY = "scheduler-line-queue-expanded";
 const UNTITLED = "Untitled scheduler chat";
 
 function emptyDetails(): DetailsState {
@@ -452,17 +451,46 @@ function LineQueueBand({
   reviews,
   analytics,
   selectedReviewId,
+  expanded,
+  canToggle,
+  onToggleExpanded,
   onSelectReview,
 }: {
   reviews: LineSchedulerReview[];
   analytics: LineSchedulerAnalytics | null;
   selectedReviewId: string | null;
+  expanded: boolean;
+  canToggle: boolean;
+  onToggleExpanded: () => void;
   onSelectReview: (review: LineSchedulerReview) => void;
 }) {
   const oldest = oldestPendingReview(reviews);
   const editedCount = analytics?.feedbackLabels.find((item) => item.label === "edited")?.count ?? 0;
   const completed = (analytics?.approvedSent ?? 0) + (analytics?.acceptedNoSend ?? 0) + (analytics?.rejected ?? 0) + (analytics?.dismissed ?? 0);
   const editRate = completed > 0 ? Math.round((editedCount / completed) * 100) : 0;
+  const classificationCoverage = Math.round((analytics?.classificationReviewCoverage ?? 0) * 100);
+  const rejectionRate = Math.round((analytics?.rejectionRate ?? 0) * 100);
+
+  if (!expanded) {
+    return (
+      <section className="shrink-0 rounded-lg border border-border bg-card/80 px-3 py-2 shadow-sm" aria-label="Line queue compact">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-foreground">
+            <Inbox className="h-4 w-4 text-primary" aria-hidden />
+            <span>LINE Review Queue</span>
+            <Badge variant="outline" className="h-5">0 pending</Badge>
+            <span className="truncate text-[11px] font-normal text-muted-foreground">
+              {classificationCoverage}% classification coverage · {rejectionRate}% reject · {editRate}% edit
+            </span>
+          </div>
+          <Button type="button" size="xs" variant="outline" onClick={onToggleExpanded}>
+            <ChevronDown className="h-3 w-3" aria-hidden />
+            Expand
+          </Button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="shrink-0 rounded-lg border border-primary/20 bg-gradient-to-r from-primary/10 via-background to-background p-3 shadow-sm">
@@ -475,19 +503,25 @@ function LineQueueBand({
               {reviews.length} pending
             </Badge>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            First-pass morning triage: verify student links, correct classifications, then approve or reject drafts.
-          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{reviews.length > 0 ? "Morning triage is open until all pending reviews are handled." : "No pending LINE reviews."}</span>
+            {canToggle && (
+              <Button type="button" size="xs" variant="ghost" onClick={onToggleExpanded} className="h-6 px-1.5">
+                <ChevronUp className="h-3 w-3" aria-hidden />
+                Collapse
+              </Button>
+            )}
+          </div>
         </div>
         <div className="grid min-w-[420px] flex-1 grid-cols-2 gap-2 md:grid-cols-5">
           <QueueMetric label="Pending" value={reviews.length} detail={oldest ? `Oldest ${formatAge(oldest.createdAt)}` : "Clear"} />
           <QueueMetric label="Needs Links" value={analytics?.unverifiedLinkBacklog ?? 0} detail="Suggested links" />
           <QueueMetric
             label="Cls Coverage"
-            value={`${Math.round((analytics?.classificationReviewCoverage ?? 0) * 100)}%`}
+            value={`${classificationCoverage}%`}
             detail={`${analytics?.classificationReviewedMessages ?? 0} reviewed`}
           />
-          <QueueMetric label="Reject Rate" value={`${Math.round((analytics?.rejectionRate ?? 0) * 100)}%`} detail="Reviewed outputs" />
+          <QueueMetric label="Reject Rate" value={`${rejectionRate}%`} detail="Reviewed outputs" />
           <QueueMetric label="Edit Rate" value={`${editRate}%`} detail="Draft changed" />
         </div>
       </div>
@@ -1231,7 +1265,7 @@ function LineReviewPanel({
       )}
 
       {!locked ? (
-        <div className="sticky bottom-0 z-10 -mx-3 mt-3 flex flex-wrap items-center gap-1.5 border-t border-primary/15 bg-primary/5 px-3 py-2 backdrop-blur">
+        <div className="-mx-3 mt-3 flex flex-wrap items-center gap-1.5 border-t border-primary/15 bg-primary/5 px-3 py-2">
           <Button
             type="button"
             size="sm"
@@ -1306,6 +1340,10 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
   const [pendingLineReviews, setPendingLineReviews] = useState<LineSchedulerReview[]>([]);
   const [selectedLineReviews, setSelectedLineReviews] = useState<LineSchedulerReview[]>([]);
   const [lineAnalytics, setLineAnalytics] = useState<LineSchedulerAnalytics | null>(null);
+  const [lineQueueManuallyExpanded, setLineQueueManuallyExpanded] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(LINE_QUEUE_EXPANDED_STORAGE_KEY) === "true";
+  });
   const [ownerFilter, setOwnerFilter] = useState<"all" | "mine" | string>("all");
   const [sortMode, setSortMode] = useState<SchedulerConversationSort>("review_priority");
   const [includeArchived, setIncludeArchived] = useState(false);
@@ -1607,6 +1645,21 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
     [selectedLineReviews],
   );
   const selectedReviewId = activeLineReview?.id ?? null;
+  const lineQueueExpanded = pendingLineReviews.length > 0 || lineQueueManuallyExpanded;
+  const toggleLineQueueExpanded = useCallback(() => {
+    if (pendingLineReviews.length > 0) return;
+    setLineQueueManuallyExpanded((current) => {
+      const next = !current;
+      window.localStorage.setItem(LINE_QUEUE_EXPANDED_STORAGE_KEY, String(next));
+      return next;
+    });
+  }, [pendingLineReviews.length]);
+
+  useEffect(() => {
+    if (pendingLineReviews.length === 0 || !lineQueueManuallyExpanded) return;
+    setLineQueueManuallyExpanded(false);
+    window.localStorage.setItem(LINE_QUEUE_EXPANDED_STORAGE_KEY, "false");
+  }, [lineQueueManuallyExpanded, pendingLineReviews.length]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
@@ -1614,6 +1667,9 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
         reviews={pendingLineReviews}
         analytics={lineAnalytics}
         selectedReviewId={selectedReviewId}
+        expanded={lineQueueExpanded}
+        canToggle={pendingLineReviews.length === 0}
+        onToggleExpanded={toggleLineQueueExpanded}
         onSelectReview={selectLineReview}
       />
       <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
@@ -1678,107 +1734,24 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
           </select>
         </label>
         {adminFacets.length > 0 && (
-          <div className="mb-2 rounded-md border border-border bg-card/70 p-2">
-            <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              <Filter className="h-3 w-3" aria-hidden />
-              Admin chats
-            </div>
-            <div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto pr-1">
-              {adminFacets.map((facet) => {
-                const accent = adminAccentFor(facet.email, facet.name);
-                const active = ownerFilter === facet.email;
-                return (
-                  <button
-                    key={facet.email ?? "unknown-admin"}
-                    type="button"
-                    onClick={() => facet.email && setOwnerFilter(facet.email)}
-                    disabled={!facet.email}
-                    className={cn(
-                      "inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-medium disabled:cursor-not-allowed disabled:opacity-60",
-                      active ? cn(accent.borderClassName, accent.bgClassName, accent.textClassName) : "border-border bg-background text-muted-foreground hover:bg-muted",
-                    )}
-                  >
-                    <span className={cn("h-2 w-2 shrink-0 rounded-full", accent.dotClassName)} />
-                    <span className="truncate">{facet.name || facet.email || "Unknown"}</span>
-                    <span className="text-[9px] opacity-80">{facet.count}</span>
-                    {facet.pendingLineCount > 0 && (
-                      <Badge variant="outline" className="h-4 px-1 text-[9px]">{facet.pendingLineCount}</Badge>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-        <div className="mb-2 rounded-md border border-border bg-card/70 p-2">
-          <div className="mb-1.5 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              <Inbox className="h-3.5 w-3.5" aria-hidden />
-              LINE reviews
-            </div>
-            <Badge variant={pendingLineReviews.length > 0 ? "default" : "outline"} className="h-5 px-1.5 text-[10px]">
-              {pendingLineReviews.length}
-            </Badge>
-          </div>
-          {lineAnalytics && (
-            <div className="mb-2 grid grid-cols-3 gap-1 text-center">
-              <div className="rounded bg-background px-1 py-1">
-                <div className="text-xs font-semibold">{lineAnalytics.classifiedMessages}</div>
-                <div className="text-[9px] text-muted-foreground">Classified</div>
-              </div>
-              <div className="rounded bg-background px-1 py-1">
-                <div className="text-xs font-semibold">{lineAnalytics.approvedSent + lineAnalytics.acceptedNoSend}</div>
-                <div className="text-[9px] text-muted-foreground">Good</div>
-              </div>
-              <div className="rounded bg-background px-1 py-1">
-                <div className="text-xs font-semibold">{Math.round(lineAnalytics.rejectionRate * 100)}%</div>
-                <div className="text-[9px] text-muted-foreground">Reject</div>
-              </div>
-              <div className="rounded bg-background px-1 py-1">
-                <div className="text-xs font-semibold">
-                  {lineAnalytics.classificationAccuracy === null ? "-" : `${Math.round(lineAnalytics.classificationAccuracy * 100)}%`}
-                </div>
-                <div className="text-[9px] text-muted-foreground">Cls acc</div>
-              </div>
-              <div className="rounded bg-background px-1 py-1">
-                <div className="text-xs font-semibold">{lineAnalytics.classificationFalsePositives}/{lineAnalytics.classificationFalseNegatives}</div>
-                <div className="text-[9px] text-muted-foreground">FP/FN</div>
-              </div>
-              <div className="rounded bg-background px-1 py-1">
-                <div className="text-xs font-semibold">{lineAnalytics.unverifiedLinkBacklog}</div>
-                <div className="text-[9px] text-muted-foreground">Links</div>
-              </div>
-            </div>
-          )}
-          {pendingLineReviews.length === 0 ? (
-            <div className="text-[11px] text-muted-foreground">No pending LINE scheduling reviews.</div>
-          ) : (
-            <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
-              {pendingLineReviews.map((review) => (
-                <button
-                  key={review.id}
-                  type="button"
-                  onClick={() => selectLineReview(review)}
-                  disabled={!review.conversationId}
-                  className="w-full rounded border border-border bg-background px-2 py-1.5 text-left hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <div className="truncate text-[11px] font-semibold text-foreground">
-                    {review.contactDisplayName || review.lineUserId}
-                  </div>
-                  <div className="truncate text-[10px] text-muted-foreground">
-                    {review.classifierSummary || review.classifierCategory.replace(/_/g, " ")}
-                  </div>
-                </button>
+          <label className="mb-2 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Admin
+            <select
+              value={ownerFilter}
+              onChange={(event) => setOwnerFilter(event.target.value)}
+              className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs normal-case tracking-normal text-foreground outline-none focus:ring-2 focus:ring-ring/50"
+              aria-label="Admin filter"
+            >
+              <option value="all">All admins</option>
+              <option value="mine">Mine</option>
+              {adminFacets.map((facet) => (
+                <option key={facet.email ?? "unknown-admin"} value={facet.email ?? ""} disabled={!facet.email}>
+                  {(facet.name || facet.email || "Unknown admin")} · {facet.count}{facet.pendingLineCount > 0 ? ` · ${facet.pendingLineCount} LINE` : ""}
+                </option>
               ))}
-            </div>
-          )}
-          {lineAnalytics?.averageModelLatencyMs !== null && lineAnalytics?.averageModelLatencyMs !== undefined && (
-            <div className="mt-1.5 flex items-center gap-1 text-[10px] text-muted-foreground">
-              <BarChart3 className="h-3 w-3" aria-hidden />
-              Avg model {Math.round(lineAnalytics.averageModelLatencyMs)}ms
-            </div>
-          )}
-        </div>
+            </select>
+          </label>
+        )}
         <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-1">
           {loadingList && conversations.length === 0 ? (
             <div className="rounded-md border border-border p-3 text-xs text-muted-foreground">Loading conversations...</div>
@@ -1787,6 +1760,13 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
           ) : conversations.map((conversation) => {
             const active = conversation.id === selectedId;
             const accent = adminAccentFor(conversation.createdByEmail, conversation.createdByName);
+            const sourceLabel = conversation.source === "line" ? "LINE" : "Manual";
+            const reviewLabel = conversation.pendingLineReviewCount > 0
+              ? `${conversation.pendingLineReviewCount} pending`
+              : conversation.latestLineReviewStatus
+                ? conversation.latestLineReviewStatus === "rejected" ? "rejected" : "handled"
+                : null;
+            const detailParts = [reviewLabel, conversation.needsStudentLink ? "needs link" : null].filter(Boolean);
             return (
               <button
                 key={conversation.id}
@@ -1806,23 +1786,15 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
                     <Badge variant="outline" className="h-4 px-1 text-[9px]">Archived</Badge>
                   )}
                 </div>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  <Badge variant={conversation.source === "line" ? "secondary" : "outline"} className="h-4 px-1 text-[9px]">
-                    {conversation.source === "line" ? "LINE" : "Manual"}
+                <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <Badge
+                    variant={conversation.source === "line" ? "secondary" : "outline"}
+                    className={cn("h-4 shrink-0 px-1 text-[9px]", conversation.pendingLineReviewCount > 0 ? reviewStatusClass("pending_review") : undefined)}
+                  >
+                    {sourceLabel}
                   </Badge>
-                  {conversation.pendingLineReviewCount > 0 ? (
-                    <Badge variant="outline" className={cn("h-4 px-1 text-[9px]", reviewStatusClass("pending_review"))}>
-                      {conversation.pendingLineReviewCount} pending
-                    </Badge>
-                  ) : conversation.latestLineReviewStatus ? (
-                    <Badge variant="outline" className={cn("h-4 px-1 text-[9px] capitalize", reviewStatusClass(conversation.latestLineReviewStatus))}>
-                      {conversation.latestLineReviewStatus === "rejected" ? "Rejected" : "Handled"}
-                    </Badge>
-                  ) : null}
-                  {conversation.needsStudentLink && (
-                    <Badge variant="outline" className="h-4 border-amber-300 bg-amber-50 px-1 text-[9px] text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-                      Needs link
-                    </Badge>
+                  {detailParts.length > 0 && (
+                    <span className="min-w-0 truncate">{detailParts.join(" · ")}</span>
                   )}
                 </div>
                 <div className="mt-1 truncate text-[11px] text-muted-foreground">
@@ -1882,26 +1854,27 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
           </div>
         )}
 
+        {selectedLineReviews.length > 0 && (
+          <div className="mb-2 shrink-0 space-y-2 rounded-md border border-primary/20 bg-card/95 p-2 shadow-sm">
+            <div className="flex items-center justify-between gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <span className="flex items-center gap-1.5"><Inbox className="h-3.5 w-3.5" aria-hidden /> Active LINE review</span>
+              <span>{selectedLineReviews.length} review{selectedLineReviews.length === 1 ? "" : "s"}</span>
+            </div>
+            {selectedLineReviews.map((review) => (
+              <LineReviewPanel
+                key={review.id}
+                review={review}
+                onUpdated={replaceLineReview}
+              />
+            ))}
+          </div>
+        )}
+
         <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border bg-card/60 p-3">
           {loadingConversation ? (
             <div className="text-xs text-muted-foreground">Loading chat...</div>
           ) : (
             <div className="space-y-3">
-              {selectedLineReviews.length > 0 && (
-                <div className="sticky top-0 z-20 space-y-2 rounded-md border border-primary/20 bg-card/95 p-2 shadow-sm backdrop-blur">
-                  <div className="flex items-center justify-between gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    <span className="flex items-center gap-1.5"><Inbox className="h-3.5 w-3.5" aria-hidden /> Active LINE review</span>
-                    <span>{selectedLineReviews.length} review{selectedLineReviews.length === 1 ? "" : "s"}</span>
-                  </div>
-                  {selectedLineReviews.map((review) => (
-                    <LineReviewPanel
-                      key={review.id}
-                      review={review}
-                      onUpdated={replaceLineReview}
-                    />
-                  ))}
-                </div>
-              )}
               {messages.length === 0 && (
                 <div className="flex min-h-[240px] items-center justify-center">
                   <div className="max-w-md text-center">
