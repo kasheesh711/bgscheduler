@@ -14,10 +14,14 @@ import {
   WiseClassroomStatsResponse,
   WiseClassroomTrendsResponse,
   WiseInstituteTrendsResponse,
+  WiseFeeTransaction,
+  WiseFeeTransactionsResponse,
 } from "./types";
 import { addDays } from "date-fns";
 
 const PAGE_LIMIT = 1000;
+const RECEIPT_PAGE_SIZE = 50;
+const RECEIPT_MAX_PAGES = 200;
 
 /**
  * Fetch all teachers from a Wise institute.
@@ -327,4 +331,162 @@ export async function fetchWiseFeesPaidTrends(
       };
     })
     .filter((trend) => trend.timestamp);
+}
+
+export interface WiseReceiptTransaction {
+  id: string;
+  type: string;
+  status: string;
+  chargedAt: string;
+  createdAt: string | null;
+  amountMinor: number | null;
+  amount: number | null;
+  currency: string;
+  note: string;
+  classId: string | null;
+  classroomName: string | null;
+  classroomSubject: string | null;
+  studentId: string | null;
+  studentName: string | null;
+  parentIds: string[];
+  parentNames: string[];
+  identifiers: string[];
+  raw: Record<string, unknown>;
+}
+
+export interface WiseReceiptTransactionFetchOptions {
+  startDate: string;
+  endDate: string;
+  pageSize?: number;
+  maxPages?: number;
+}
+
+function bangkokDateStartIso(date: string): string {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day, -7, 0, 0, 0)).toISOString();
+}
+
+function bangkokDateEndIso(date: string): string {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + 1, -7, 0, 0, -1)).toISOString();
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function nestedString(value: unknown, path: string[]): string {
+  let cursor: unknown = value;
+  for (const key of path) {
+    if (!cursor || typeof cursor !== "object" || Array.isArray(cursor)) return "";
+    cursor = (cursor as Record<string, unknown>)[key];
+  }
+  return stringValue(cursor);
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  return [...new Set(values.map(stringValue).filter(Boolean))];
+}
+
+function normalizeWiseReceipt(raw: WiseFeeTransaction): WiseReceiptTransaction | null {
+  const id = stringValue(raw._id) || stringValue(raw.id);
+  const type = stringValue(raw.type);
+  const status = stringValue(raw.status);
+  const chargedAt = stringValue(raw.chargedAt) || stringValue(raw.createdAt);
+  if (!id || !chargedAt) return null;
+
+  const metadata = recordValue(raw.metadata);
+  const invoice = recordValue(raw.invoice);
+  const paymentOption = recordValue(raw.paymentOption);
+  const amountMinor = numberValue(raw.amount?.value);
+  const currency = stringValue(raw.amount?.currency) || "THB";
+
+  return {
+    id,
+    type,
+    status,
+    chargedAt,
+    createdAt: stringValue(raw.createdAt) || null,
+    amountMinor,
+    amount: amountMinor === null ? null : amountMinorToMajor(amountMinor, currency),
+    currency,
+    note: stringValue(raw.note),
+    classId: stringValue(raw.classId) || stringValue(metadata.classId) || stringValue(raw.classroom?._id) || null,
+    classroomName: stringValue(raw.classroom?.name) || null,
+    classroomSubject: stringValue(raw.classroom?.subject) || null,
+    studentId: stringValue(raw.studentId) || stringValue(raw.student?._id) || stringValue(raw.participant?._id) || null,
+    studentName: stringValue(raw.student?.name) || stringValue(raw.participant?.name) || null,
+    parentIds: uniqueStrings((raw.parents ?? []).map((parent) => parent._id)),
+    parentNames: uniqueStrings((raw.parents ?? []).map((parent) => parent.name)),
+    identifiers: uniqueStrings([
+      id,
+      raw.transactionId,
+      raw.invoiceId,
+      raw.invoiceNumber,
+      metadata.transactionId,
+      metadata.invoiceId,
+      metadata.invoiceNumber,
+      metadata.paymentOptionId,
+      invoice._id,
+      invoice.id,
+      invoice.invoiceNumber,
+      paymentOption._id,
+      paymentOption.id,
+      nestedString(raw, ["payment", "id"]),
+      nestedString(raw, ["transaction", "id"]),
+    ]),
+    raw: raw as Record<string, unknown>,
+  };
+}
+
+export async function fetchWiseReceiptTransactions(
+  client: WiseClient,
+  instituteId: string,
+  options: WiseReceiptTransactionFetchOptions,
+): Promise<WiseReceiptTransaction[]> {
+  const pageSize = options.pageSize ?? RECEIPT_PAGE_SIZE;
+  const maxPages = options.maxPages ?? RECEIPT_MAX_PAGES;
+  const receipts: WiseReceiptTransaction[] = [];
+
+  for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
+    const res = await client.get<WiseFeeTransactionsResponse>(
+      `/institutes/${instituteId}/fees/transactions`,
+      {
+        type: "PAYMENT,OFFLINE_PAYMENT,DISBURSAL",
+        status: "CHARGED,PENDING_CONFIRMATION",
+        populateParticipant: "true",
+        populateClassroom: "true",
+        page_size: String(pageSize),
+        page_number: String(pageNumber),
+        startDate: bangkokDateStartIso(options.startDate),
+        endDate: bangkokDateEndIso(options.endDate),
+      },
+      {
+        headers: {
+          "x-wise-timezone": "Asia/Bangkok",
+          "x-wise-platform": "web",
+        },
+      },
+    );
+
+    const pageReceipts = (res.data?.transactions ?? [])
+      .map(normalizeWiseReceipt)
+      .filter((receipt): receipt is WiseReceiptTransaction => Boolean(receipt));
+    receipts.push(...pageReceipts);
+
+    const pageCount = res.data?.page_count ?? 1;
+    if (pageNumber >= pageCount || (!res.data?.page_count && pageReceipts.length < pageSize)) break;
+  }
+
+  return receipts;
 }

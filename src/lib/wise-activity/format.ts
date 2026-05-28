@@ -28,6 +28,7 @@ const EVENT_LABELS: Record<string, string> = {
   TutorPayoutInvoiceCreatedEvent: "Tutor payout invoice created",
   UserAddedToInstituteEvent: "User added to institute",
   UserRemovedFromInstituteEvent: "User removed from institute",
+  WiseReceiptTransaction: "Wise receipt transaction",
 };
 
 const TYPE_LABELS: Record<string, string> = {
