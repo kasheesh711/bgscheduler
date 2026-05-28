@@ -183,6 +183,7 @@ interface SchedulerWorkspaceProps {
 
 interface LineSchedulerReview {
   id: string;
+  contactId: string;
   lineUserId: string;
   contactDisplayName: string | null;
   inboundMessageId: string;
@@ -194,7 +195,11 @@ interface LineSchedulerReview {
   proposedDraft: string;
   finalText: string | null;
   rejectionReason: string | null;
+  reasonCategory: string | null;
   staffCorrection: string | null;
+  selectedTutorIds: string[];
+  studentLinkOverride: boolean;
+  verifiedStudentKeys: string[];
   sendLineMessageId: string | null;
   reviewedByName: string | null;
   reviewedAt: string | null;
@@ -214,9 +219,28 @@ interface LineSchedulerAnalytics {
   rejectionRate: number;
   averageEditDistance: number | null;
   averageModelLatencyMs: number | null;
+  classificationReviewedMessages: number;
+  classificationAccuracy: number | null;
+  classificationFalsePositives: number;
+  classificationFalseNegatives: number;
+  classificationReviewCoverage: number;
+  unverifiedLinkBacklog: number;
   commonRejectionReasons: Array<{ reason: string; count: number }>;
   commonRejectionCategories: Array<{ category: string; count: number }>;
   feedbackLabels: Array<{ label: "accepted" | "edited" | "rejected" | "dismissed"; count: number }>;
+}
+
+interface LineContactStudentLink {
+  id: string;
+  contactId: string;
+  wiseStudentId: string;
+  studentKey: string;
+  studentName: string;
+  parentName: string;
+  status: "suggested" | "verified" | "rejected";
+  confidence: number | null;
+  reviewedByName: string | null;
+  reviewedAt: string | null;
 }
 
 interface DetailsState {
@@ -228,6 +252,21 @@ interface DetailsState {
 }
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const LINE_CLASSIFICATION_CATEGORIES = [
+  "scheduling_request",
+  "scheduling_change",
+  "non_scheduling",
+  "unclear",
+] as const;
+const LINE_REJECTION_REASON_OPTIONS = [
+  { value: "wrong_student_link", label: "Wrong student" },
+  { value: "wrong_extracted_request", label: "Wrong request" },
+  { value: "wrong_tutor_fit", label: "Wrong tutor" },
+  { value: "wrong_availability", label: "Wrong availability" },
+  { value: "unsafe_draft", label: "Unsafe draft" },
+  { value: "unclear", label: "Unclear" },
+  { value: "other", label: "Other" },
+] as const;
 const UNTITLED = "Untitled scheduler chat";
 
 function emptyDetails(): DetailsState {
@@ -659,16 +698,40 @@ function LineReviewPanel({
 }) {
   const [draft, setDraft] = useState(review.finalText ?? review.proposedDraft);
   const [reason, setReason] = useState(review.rejectionReason ?? "");
+  const [reasonCategory, setReasonCategory] = useState(review.reasonCategory ?? "wrong_availability");
   const [correction, setCorrection] = useState(review.staffCorrection ?? "");
+  const [studentLinkOverride, setStudentLinkOverride] = useState(review.studentLinkOverride);
+  const [studentLinks, setStudentLinks] = useState<LineContactStudentLink[]>([]);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [classificationStatus, setClassificationStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setDraft(review.finalText ?? review.proposedDraft);
     setReason(review.rejectionReason ?? "");
+    setReasonCategory(review.reasonCategory ?? "wrong_availability");
     setCorrection(review.staffCorrection ?? "");
+    setStudentLinkOverride(review.studentLinkOverride);
     setError(null);
+    setClassificationStatus(null);
   }, [review]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLinkError(null);
+    fetch(`/api/line/contacts/${review.contactId}/student-links`)
+      .then((response) => jsonOrThrow<{ links: LineContactStudentLink[] }>(response))
+      .then((data) => {
+        if (!cancelled) setStudentLinks(data.links);
+      })
+      .catch((err) => {
+        if (!cancelled) setLinkError(err instanceof Error ? err.message : "Failed to load student links");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [review.contactId]);
 
   const patchReview = async (body: Record<string, unknown>, busyKey: string) => {
     setBusy(busyKey);
@@ -689,8 +752,50 @@ function LineReviewPanel({
     }
   };
 
+  const patchStudentLink = async (linkId: string, action: "verify" | "reject") => {
+    setBusy(`link-${linkId}`);
+    setLinkError(null);
+    try {
+      const data = await jsonOrThrow<{ links: LineContactStudentLink[] }>(
+        await fetch(`/api/line/contacts/${review.contactId}/student-links`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, linkId }),
+        }),
+      );
+      setStudentLinks(data.links);
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : "Failed to update student link");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const patchClassification = async (reviewedCategory: string) => {
+    setBusy("classification");
+    setClassificationStatus(null);
+    try {
+      const data = await jsonOrThrow<{
+        feedback: { classificationReviewedCorrect: boolean };
+      }>(
+        await fetch(`/api/line/messages/${review.inboundMessageId}/classification-feedback`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reviewedCategory }),
+        }),
+      );
+      setClassificationStatus(data.feedback.classificationReviewedCorrect ? "Marked correct" : "Correction logged");
+    } catch (err) {
+      setClassificationStatus(err instanceof Error ? err.message : "Failed to log classification feedback");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const locked = review.status !== "pending_review";
   const statusLabel = review.status.replace(/_/g, " ");
+  const verifiedCount = studentLinks.filter((link) => link.status === "verified").length;
+  const sendBlocked = !locked && verifiedCount === 0 && !studentLinkOverride;
 
   return (
     <div className="rounded-md border border-primary/20 bg-primary/5 p-3">
@@ -718,6 +823,104 @@ function LineReviewPanel({
         )}
       </div>
 
+      <div className="mb-2 rounded-md border border-border bg-background/80 p-2">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Student link
+          </div>
+          <Badge variant={verifiedCount > 0 ? "secondary" : "outline"} className="h-5 px-1.5 text-[9px]">
+            {verifiedCount > 0 ? `${verifiedCount} verified` : "Needs check"}
+          </Badge>
+        </div>
+        {studentLinks.length === 0 ? (
+          <div className="text-[11px] text-muted-foreground">No Wise student candidate found from this LINE label.</div>
+        ) : (
+          <div className="space-y-1">
+            {studentLinks.map((link) => (
+              <div key={link.id} className="flex items-center justify-between gap-2 rounded border border-border/70 px-2 py-1">
+                <div className="min-w-0">
+                  <div className="truncate text-[11px] font-medium text-foreground">
+                    {link.studentName}
+                  </div>
+                  <div className="truncate text-[10px] text-muted-foreground">
+                    {link.parentName || "Missing parent"} · {link.status}
+                    {typeof link.confidence === "number" ? ` · ${Math.round(link.confidence * 100)}%` : ""}
+                  </div>
+                </div>
+                {!locked && (
+                  <div className="flex shrink-0 gap-1">
+                    <Button
+                      type="button"
+                      size="icon-xs"
+                      variant={link.status === "verified" ? "secondary" : "outline"}
+                      onClick={() => patchStudentLink(link.id, "verify")}
+                      disabled={busy !== null}
+                      title="Verify student link"
+                    >
+                      <Check className="h-3 w-3" aria-hidden />
+                    </Button>
+                    <Button
+                      type="button"
+                      size="icon-xs"
+                      variant={link.status === "rejected" ? "secondary" : "outline"}
+                      onClick={() => patchStudentLink(link.id, "reject")}
+                      disabled={busy !== null}
+                      title="Reject student link"
+                    >
+                      <XCircle className="h-3 w-3" aria-hidden />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {!locked && (
+          <label className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={studentLinkOverride}
+              onChange={(event) => setStudentLinkOverride(event.target.checked)}
+              disabled={busy !== null}
+              className="h-3.5 w-3.5"
+            />
+            New/unmatched student for this review
+          </label>
+        )}
+        {linkError && <div className="mt-1 text-[11px] text-destructive">{linkError}</div>}
+        {sendBlocked && (
+          <div className="mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+            Verify a student link or mark unmatched before sending to parent.
+          </div>
+        )}
+      </div>
+
+      {!locked && (
+        <div className="mb-2 rounded-md border border-border bg-background/80 p-2">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Classification feedback
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {LINE_CLASSIFICATION_CATEGORIES.map((category) => (
+              <Button
+                key={category}
+                type="button"
+                size="sm"
+                variant={category === review.classifierCategory ? "secondary" : "outline"}
+                onClick={() => patchClassification(category)}
+                disabled={busy !== null}
+                className="h-7 px-2 text-[10px]"
+              >
+                {category.replace(/_/g, " ")}
+              </Button>
+            ))}
+          </div>
+          {classificationStatus && (
+            <div className="mt-1 text-[11px] text-muted-foreground">{classificationStatus}</div>
+          )}
+        </div>
+      )}
+
       <label className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         Reply draft
         <Textarea
@@ -732,6 +935,18 @@ function LineReviewPanel({
       {!locked && (
         <div className="mt-2 grid gap-2 md:grid-cols-2">
           <label className="block text-[11px] font-medium text-muted-foreground">
+            Reject category
+            <select
+              value={reasonCategory}
+              onChange={(event) => setReasonCategory(event.target.value)}
+              className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring/50"
+            >
+              {LINE_REJECTION_REASON_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-[11px] font-medium text-muted-foreground">
             Reject reason
             <Input
               value={reason}
@@ -740,7 +955,7 @@ function LineReviewPanel({
               className="mt-1 text-xs"
             />
           </label>
-          <label className="block text-[11px] font-medium text-muted-foreground">
+          <label className="block text-[11px] font-medium text-muted-foreground md:col-span-2">
             Staff correction
             <Input
               value={correction}
@@ -761,8 +976,13 @@ function LineReviewPanel({
           <Button
             type="button"
             size="sm"
-            onClick={() => patchReview({ action: "approve_send", finalText: draft }, "approve")}
-            disabled={busy !== null || !draft.trim()}
+            onClick={() => patchReview({
+              action: "approve_send",
+              finalText: draft,
+              selectedTutorIds: review.selectedTutorIds,
+              studentLinkOverride,
+            }, "approve")}
+            disabled={busy !== null || !draft.trim() || sendBlocked}
           >
             <SendHorizontal className="h-3.5 w-3.5" aria-hidden />
             {busy === "approve" ? "Sending" : "Approve & send"}
@@ -771,7 +991,12 @@ function LineReviewPanel({
             type="button"
             size="sm"
             variant="outline"
-            onClick={() => patchReview({ action: "accept_no_send", finalText: draft }, "accept")}
+            onClick={() => patchReview({
+              action: "accept_no_send",
+              finalText: draft,
+              selectedTutorIds: review.selectedTutorIds,
+              studentLinkOverride,
+            }, "accept")}
             disabled={busy !== null}
           >
             <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
@@ -781,8 +1006,14 @@ function LineReviewPanel({
             type="button"
             size="sm"
             variant="outline"
-            onClick={() => patchReview({ action: "reject", rejectionReason: reason, staffCorrection: correction }, "reject")}
-            disabled={busy !== null || !reason.trim() || !correction.trim()}
+            onClick={() => patchReview({
+              action: "reject",
+              reasonCategory,
+              rejectionReason: reason,
+              staffCorrection: correction,
+              rejectedTutorIds: review.selectedTutorIds,
+            }, "reject")}
+            disabled={busy !== null || !reasonCategory.trim() || !reason.trim() || !correction.trim()}
           >
             <XCircle className="h-3.5 w-3.5" aria-hidden />
             {busy === "reject" ? "Saving" : "Reject"}
@@ -1163,6 +1394,20 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
               <div className="rounded bg-background px-1 py-1">
                 <div className="text-xs font-semibold">{Math.round(lineAnalytics.rejectionRate * 100)}%</div>
                 <div className="text-[9px] text-muted-foreground">Reject</div>
+              </div>
+              <div className="rounded bg-background px-1 py-1">
+                <div className="text-xs font-semibold">
+                  {lineAnalytics.classificationAccuracy === null ? "-" : `${Math.round(lineAnalytics.classificationAccuracy * 100)}%`}
+                </div>
+                <div className="text-[9px] text-muted-foreground">Cls acc</div>
+              </div>
+              <div className="rounded bg-background px-1 py-1">
+                <div className="text-xs font-semibold">{lineAnalytics.classificationFalsePositives}/{lineAnalytics.classificationFalseNegatives}</div>
+                <div className="text-[9px] text-muted-foreground">FP/FN</div>
+              </div>
+              <div className="rounded bg-background px-1 py-1">
+                <div className="text-xs font-semibold">{lineAnalytics.unverifiedLinkBacklog}</div>
+                <div className="text-[9px] text-muted-foreground">Links</div>
               </div>
             </div>
           )}

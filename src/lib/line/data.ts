@@ -52,7 +52,11 @@ export interface LineSchedulerReviewDto {
   selectedSuggestion: Record<string, unknown> | null;
   finalText: string | null;
   rejectionReason: string | null;
+  reasonCategory: string | null;
   staffCorrection: string | null;
+  selectedTutorIds: string[];
+  studentLinkOverride: boolean;
+  verifiedStudentKeys: string[];
   sendLineMessageId: string | null;
   sendResponse: Record<string, unknown> | null;
   sendError: string | null;
@@ -76,6 +80,12 @@ export interface LineSchedulerAnalytics {
   rejectionRate: number;
   averageEditDistance: number | null;
   averageModelLatencyMs: number | null;
+  classificationReviewedMessages: number;
+  classificationAccuracy: number | null;
+  classificationFalsePositives: number;
+  classificationFalseNegatives: number;
+  classificationReviewCoverage: number;
+  unverifiedLinkBacklog: number;
   commonRejectionReasons: Array<{ reason: string; count: number }>;
   commonRejectionCategories: Array<{ category: string; count: number }>;
   feedbackLabels: Array<{ label: "accepted" | "edited" | "rejected" | "dismissed"; count: number }>;
@@ -138,7 +148,11 @@ function reviewToDto(row: ReviewRow & {
     selectedSuggestion: row.selectedSuggestion ?? null,
     finalText: row.finalText,
     rejectionReason: row.rejectionReason,
+    reasonCategory: row.reasonCategory,
     staffCorrection: row.staffCorrection,
+    selectedTutorIds: row.selectedTutorIds ?? [],
+    studentLinkOverride: row.studentLinkOverride,
+    verifiedStudentKeys: row.verifiedStudentKeys ?? [],
     sendLineMessageId: row.sendLineMessageId,
     sendResponse: row.sendResponse ?? null,
     sendError: row.sendError,
@@ -400,6 +414,55 @@ export async function updateLineMessageClassification(
     .where(eq(schema.lineMessages.id, messageId));
 }
 
+export async function updateLineMessageClassificationFeedback(
+  db: Database,
+  input: {
+    messageId: string;
+    reviewedCategory: LineSchedulerClassification["category"];
+    actor: LineReviewActor;
+  },
+): Promise<{
+  id: string;
+  classifierCategory: LineSchedulerClassification["category"] | null;
+  classificationReviewedCategory: LineSchedulerClassification["category"];
+  classificationReviewedCorrect: boolean;
+} | null> {
+  const actor = normalizeActor(input.actor);
+  const [existing] = await db
+    .select({ classifierCategory: schema.lineMessages.classifierCategory })
+    .from(schema.lineMessages)
+    .where(eq(schema.lineMessages.id, input.messageId))
+    .limit(1);
+  if (!existing) return null;
+
+  const reviewedCorrect = existing.classifierCategory === input.reviewedCategory;
+  const [row] = await db
+    .update(schema.lineMessages)
+    .set({
+      classificationReviewedCategory: input.reviewedCategory,
+      classificationReviewedCorrect: reviewedCorrect,
+      classificationReviewedByEmail: actor.email,
+      classificationReviewedByName: actor.name,
+      classificationReviewedAt: now(),
+    })
+    .where(eq(schema.lineMessages.id, input.messageId))
+    .returning({
+      id: schema.lineMessages.id,
+      classifierCategory: schema.lineMessages.classifierCategory,
+      classificationReviewedCategory: schema.lineMessages.classificationReviewedCategory,
+      classificationReviewedCorrect: schema.lineMessages.classificationReviewedCorrect,
+    });
+
+  return row && row.classificationReviewedCategory
+    ? {
+      id: row.id,
+      classifierCategory: row.classifierCategory,
+      classificationReviewedCategory: row.classificationReviewedCategory,
+      classificationReviewedCorrect: Boolean(row.classificationReviewedCorrect),
+    }
+    : null;
+}
+
 export async function createLineSchedulerReview(
   db: Database,
   input: {
@@ -412,6 +475,7 @@ export async function createLineSchedulerReview(
     classification: LineSchedulerClassification;
     proposedDraft: string;
     selectedSuggestion?: Record<string, unknown> | null;
+    selectedTutorIds?: string[];
   },
 ): Promise<LineSchedulerReviewDto | null> {
   await db
@@ -429,6 +493,7 @@ export async function createLineSchedulerReview(
       classifierPayload: { ...input.classification },
       proposedDraft: input.proposedDraft,
       selectedSuggestion: input.selectedSuggestion ?? null,
+      selectedTutorIds: input.selectedTutorIds ?? [],
     })
     .onConflictDoNothing({ target: schema.lineSchedulerReviews.inboundMessageId });
 
@@ -485,7 +550,11 @@ export async function listLineSchedulerReviews(
       selectedSuggestion: schema.lineSchedulerReviews.selectedSuggestion,
       finalText: schema.lineSchedulerReviews.finalText,
       rejectionReason: schema.lineSchedulerReviews.rejectionReason,
+      reasonCategory: schema.lineSchedulerReviews.reasonCategory,
       staffCorrection: schema.lineSchedulerReviews.staffCorrection,
+      selectedTutorIds: schema.lineSchedulerReviews.selectedTutorIds,
+      studentLinkOverride: schema.lineSchedulerReviews.studentLinkOverride,
+      verifiedStudentKeys: schema.lineSchedulerReviews.verifiedStudentKeys,
       sendLineMessageId: schema.lineSchedulerReviews.sendLineMessageId,
       sendResponse: schema.lineSchedulerReviews.sendResponse,
       sendError: schema.lineSchedulerReviews.sendError,
@@ -513,7 +582,11 @@ export async function patchLineSchedulerReview(
     status: LineSchedulerReviewStatus;
     finalText?: string | null;
     rejectionReason?: string | null;
+    reasonCategory?: string | null;
     staffCorrection?: string | null;
+    selectedTutorIds?: string[];
+    studentLinkOverride?: boolean;
+    verifiedStudentKeys?: string[];
     sendLineMessageId?: string | null;
     sendResponse?: Record<string, unknown> | null;
     sendError?: string | null;
@@ -527,7 +600,11 @@ export async function patchLineSchedulerReview(
       status: input.status,
       finalText: input.finalText ?? null,
       rejectionReason: input.rejectionReason ?? null,
+      reasonCategory: input.reasonCategory ?? null,
       staffCorrection: input.staffCorrection ?? null,
+      selectedTutorIds: input.selectedTutorIds ?? [],
+      studentLinkOverride: input.studentLinkOverride ?? false,
+      verifiedStudentKeys: input.verifiedStudentKeys ?? [],
       sendLineMessageId: input.sendLineMessageId ?? null,
       sendResponse: input.sendResponse ?? null,
       sendError: input.sendError ?? null,
@@ -606,14 +683,19 @@ function feedbackLabelForReview(review: LineSchedulerReviewDto): "accepted" | "e
 }
 
 export async function getLineSchedulerAnalytics(db: Database): Promise<LineSchedulerAnalytics> {
-  const [messages, reviews] = await Promise.all([
+  const [messages, reviews, links] = await Promise.all([
     db
       .select({
         classifierCategory: schema.lineMessages.classifierCategory,
+        classificationReviewedCategory: schema.lineMessages.classificationReviewedCategory,
+        classificationReviewedCorrect: schema.lineMessages.classificationReviewedCorrect,
       })
       .from(schema.lineMessages)
       .where(eq(schema.lineMessages.direction, "inbound")),
     listLineSchedulerReviews(db),
+    db
+      .select({ status: schema.lineContactStudentLinks.status })
+      .from(schema.lineContactStudentLinks),
   ]);
 
   const runIds = reviews
@@ -638,6 +720,17 @@ export async function getLineSchedulerAnalytics(db: Database): Promise<LineSched
   const rejected = reviews.filter((review) => review.status === "rejected").length;
   const dismissed = reviews.filter((review) => review.status === "dismissed").length;
   const completed = approvedSent + acceptedNoSend + rejected + dismissed;
+  const reviewedClassifications = messages.filter((message) => Boolean(message.classificationReviewedCategory));
+  const reviewedCorrect = reviewedClassifications.filter((message) => message.classificationReviewedCorrect).length;
+  const isScheduling = (category: string | null) =>
+    category === "scheduling_request" || category === "scheduling_change";
+  const classificationFalsePositives = reviewedClassifications.filter((message) =>
+    isScheduling(message.classifierCategory) && !isScheduling(message.classificationReviewedCategory),
+  ).length;
+  const classificationFalseNegatives = reviewedClassifications.filter((message) =>
+    !isScheduling(message.classifierCategory) && isScheduling(message.classificationReviewedCategory),
+  ).length;
+  const unverifiedLinkBacklog = links.filter((link) => link.status === "suggested").length;
 
   const distances = reviews
     .map((review) => {
@@ -660,7 +753,7 @@ export async function getLineSchedulerAnalytics(db: Database): Promise<LineSched
     const reason = review.rejectionReason.trim();
     if (!reason) continue;
     rejectionCounts.set(reason, (rejectionCounts.get(reason) ?? 0) + 1);
-    const category = categorizeRejectionReason(reason);
+    const category = review.reasonCategory?.trim() || categorizeRejectionReason(reason);
     rejectionCategoryCounts.set(category, (rejectionCategoryCounts.get(category) ?? 0) + 1);
   }
 
@@ -681,6 +774,12 @@ export async function getLineSchedulerAnalytics(db: Database): Promise<LineSched
     averageModelLatencyMs: latencies.length > 0
       ? latencies.reduce((sum, value) => sum + value, 0) / latencies.length
       : null,
+    classificationReviewedMessages: reviewedClassifications.length,
+    classificationAccuracy: reviewedClassifications.length > 0 ? reviewedCorrect / reviewedClassifications.length : null,
+    classificationFalsePositives,
+    classificationFalseNegatives,
+    classificationReviewCoverage: classifiedMessages > 0 ? reviewedClassifications.length / classifiedMessages : 0,
+    unverifiedLinkBacklog,
     commonRejectionReasons: [...rejectionCounts.entries()]
       .map(([reason, count]) => ({ reason, count }))
       .sort((a, b) => b.count - a.count)

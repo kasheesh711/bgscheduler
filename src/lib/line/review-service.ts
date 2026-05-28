@@ -6,6 +6,7 @@ import {
 } from "@/lib/ai/scheduler";
 import { buildConversationTitle, type SchedulerConversationMessageForPrompt } from "@/lib/ai/scheduler-conversation";
 import {
+  createSchedulerFeedback,
   createSchedulerConversation,
   createSchedulerMessage,
   getSchedulerConversationWithMessages,
@@ -28,11 +29,17 @@ import {
   type LineReviewActor,
   type LineSchedulerReviewDto,
 } from "@/lib/line/data";
+import {
+  ensureLineContactStudentLinkSuggestions,
+  listVerifiedLineStudentKeys,
+} from "@/lib/line/student-links";
+import { v5 as uuidv5 } from "uuid";
 
 const LINE_ACTOR = {
   email: "line-webhook@begifted.local",
   name: "LINE Webhook",
 };
+const LINE_SCHEDULER_REVIEW_RETRY_NAMESPACE = "5c7e94bf-f5e3-4864-bc8f-f3865c2f4c05";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
@@ -54,6 +61,28 @@ function selectedSuggestionPayload(suggestions: unknown[]): Record<string, unkno
     : null;
 }
 
+function selectedTutorIdsFromSuggestion(suggestion: Record<string, unknown> | null): string[] {
+  const tutors = Array.isArray(suggestion?.tutors) ? suggestion.tutors : [];
+  return tutors
+    .map((tutor) => tutor && typeof tutor === "object" && !Array.isArray(tutor)
+      ? (tutor as Record<string, unknown>).tutorGroupId
+      : null)
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .slice(0, 12);
+}
+
+function schedulerReviewRetryKey(reviewId: string): string {
+  return uuidv5(`line-scheduler-review:${reviewId}`, LINE_SCHEDULER_REVIEW_RETRY_NAMESPACE);
+}
+
+async function recordPostSendAudit(label: string, task: () => Promise<unknown>): Promise<void> {
+  try {
+    await task();
+  } catch (error) {
+    console.error(`Failed to record LINE scheduler ${label}`, error);
+  }
+}
+
 export async function processLineMessageForScheduler(
   db: Database,
   lineMessageId: string,
@@ -61,9 +90,13 @@ export async function processLineMessageForScheduler(
   const lineMessage = await getLineMessageForProcessing(db, lineMessageId);
   if (!lineMessage || !lineMessage.text.trim()) return { review: null };
 
-  void fetchLineProfile(lineMessage.lineUserId)
-    .then((profile) => updateLineContactProfile(db, lineMessage.lineUserId, profile))
-    .catch(() => undefined);
+  const profile = await fetchLineProfile(lineMessage.lineUserId).catch(() => null);
+  await updateLineContactProfile(db, lineMessage.lineUserId, profile).catch(() => undefined);
+  await ensureLineContactStudentLinkSuggestions(
+    db,
+    lineMessage.contactId,
+    profile?.displayName ?? lineMessage.contactDisplayName,
+  ).catch(() => undefined);
 
   const recentMessages = await loadRecentLineMessages(db, lineMessage.threadId);
   const classification = await classifyLineSchedulerMessage({
@@ -85,6 +118,7 @@ export async function processLineMessageForScheduler(
       classification,
       proposedDraft: "",
       selectedSuggestion: null,
+      selectedTutorIds: [],
     });
     return { review, category: classification.category };
   }
@@ -168,6 +202,7 @@ export async function processLineMessageForScheduler(
       solverPayload: assistantPayload,
       warnings: assistantResult.warnings,
     });
+    const selectedSuggestion = selectedSuggestionPayload(assistantResult.suggestions);
     const review = await createLineSchedulerReview(db, {
       threadId: lineMessage.threadId,
       contactId: lineMessage.contactId,
@@ -177,7 +212,8 @@ export async function processLineMessageForScheduler(
       schedulerRunId: logId === "unlogged" ? null : logId,
       classification,
       proposedDraft: assistantResult.parentMessageDraft,
-      selectedSuggestion: selectedSuggestionPayload(assistantResult.suggestions),
+      selectedSuggestion,
+      selectedTutorIds: selectedTutorIdsFromSuggestion(selectedSuggestion),
     });
 
     return { review, category: classification.category };
@@ -219,6 +255,7 @@ export async function processLineMessageForScheduler(
       classification,
       proposedDraft: "",
       selectedSuggestion: null,
+      selectedTutorIds: [],
     });
     return { review, category: classification.category };
   }
@@ -228,20 +265,45 @@ export async function approveLineSchedulerReview(input: {
   db: Database;
   reviewId: string;
   finalText: string;
+  selectedTutorIds?: string[];
+  studentLinkOverride?: boolean;
   actor: LineReviewActor;
 }): Promise<LineSchedulerReviewDto | null> {
   const review = await getLineSchedulerReview(input.db, input.reviewId);
   if (!review) return null;
   if (review.status !== "pending_review") return review;
 
+  const verifiedStudentKeys = await listVerifiedLineStudentKeys(input.db, review.contactId);
+  if (verifiedStudentKeys.length === 0 && !input.studentLinkOverride) {
+    throw new Error("Verify a LINE student link or mark this contact as unmatched before sending");
+  }
+
   const finalText = input.finalText.trim() || review.proposedDraft.trim();
   if (!finalText) throw new Error("Final LINE message cannot be empty");
+  const selectedTutorIds = input.selectedTutorIds ?? review.selectedTutorIds;
+  const retryKey = schedulerReviewRetryKey(review.id);
 
   const pushResult = await pushLineTextMessage({
     to: review.lineUserId,
     text: finalText,
+    retryKey,
   });
-  await insertOutboundLineMessage(input.db, {
+
+  const sentReview = await patchLineSchedulerReview(input.db, input.reviewId, {
+    status: "approved_sent",
+    finalText,
+    selectedTutorIds,
+    studentLinkOverride: Boolean(input.studentLinkOverride),
+    verifiedStudentKeys,
+    sendLineMessageId: pushResult.sentMessageId,
+    sendResponse: {
+      ...pushResult.response,
+      retryKey: pushResult.retryKey,
+    },
+    actor: input.actor,
+  });
+
+  await recordPostSendAudit("outbound message", () => insertOutboundLineMessage(input.db, {
     threadId: review.threadId,
     contactId: review.contactId,
     lineMessageId: pushResult.sentMessageId,
@@ -250,33 +312,51 @@ export async function approveLineSchedulerReview(input: {
       ...pushResult.response,
       retryKey: pushResult.retryKey,
     },
-  });
-
-  return patchLineSchedulerReview(input.db, input.reviewId, {
-    status: "approved_sent",
-    finalText,
-    sendLineMessageId: pushResult.sentMessageId,
-    sendResponse: {
-      ...pushResult.response,
-      retryKey: pushResult.retryKey,
-    },
+  }));
+  await recordPostSendAudit("scheduler feedback", () => createSchedulerFeedback(input.db, {
+    conversationId: review.conversationId,
+    messageId: review.schedulerMessageId,
+    schedulerRunId: review.schedulerRunId,
+    action: finalText === review.proposedDraft.trim() ? "accept" : "edit",
+    selectedTutorIds,
+    editedParentDraft: finalText === review.proposedDraft.trim() ? null : finalText,
     actor: input.actor,
-  });
+  }));
+
+  return sentReview;
 }
 
 export async function acceptLineSchedulerReviewNoSend(input: {
   db: Database;
   reviewId: string;
   finalText?: string;
+  selectedTutorIds?: string[];
+  studentLinkOverride?: boolean;
   actor: LineReviewActor;
 }): Promise<LineSchedulerReviewDto | null> {
   const review = await getLineSchedulerReview(input.db, input.reviewId);
   if (!review) return null;
   if (review.status !== "pending_review") return review;
 
+  const finalText = input.finalText?.trim() || review.proposedDraft;
+  const selectedTutorIds = input.selectedTutorIds ?? review.selectedTutorIds;
+  const verifiedStudentKeys = await listVerifiedLineStudentKeys(input.db, review.contactId);
+  await createSchedulerFeedback(input.db, {
+    conversationId: review.conversationId,
+    messageId: review.schedulerMessageId,
+    schedulerRunId: review.schedulerRunId,
+    action: finalText.trim() === review.proposedDraft.trim() ? "accept" : "edit",
+    selectedTutorIds,
+    editedParentDraft: finalText.trim() === review.proposedDraft.trim() ? null : finalText,
+    actor: input.actor,
+  });
+
   return patchLineSchedulerReview(input.db, input.reviewId, {
     status: "accepted_no_send",
-    finalText: input.finalText?.trim() || review.proposedDraft,
+    finalText,
+    selectedTutorIds,
+    studentLinkOverride: Boolean(input.studentLinkOverride),
+    verifiedStudentKeys,
     actor: input.actor,
   });
 }
@@ -285,7 +365,9 @@ export async function rejectLineSchedulerReview(input: {
   db: Database;
   reviewId: string;
   rejectionReason: string;
+  reasonCategory: string;
   staffCorrection: string;
+  rejectedTutorIds?: string[];
   actor: LineReviewActor;
 }): Promise<LineSchedulerReviewDto | null> {
   const review = await getLineSchedulerReview(input.db, input.reviewId);
@@ -293,15 +375,31 @@ export async function rejectLineSchedulerReview(input: {
   if (review.status !== "pending_review") return review;
 
   const rejectionReason = input.rejectionReason.trim();
+  const reasonCategory = input.reasonCategory.trim();
   const staffCorrection = input.staffCorrection.trim();
-  if (!rejectionReason || !staffCorrection) {
-    throw new Error("Rejected recommendations require a reason and staff correction");
+  if (!rejectionReason || !reasonCategory || !staffCorrection) {
+    throw new Error("Rejected recommendations require a category, reason, and staff correction");
   }
+  const verifiedStudentKeys = await listVerifiedLineStudentKeys(input.db, review.contactId);
+  const rejectedTutorIds = input.rejectedTutorIds ?? review.selectedTutorIds;
+  await createSchedulerFeedback(input.db, {
+    conversationId: review.conversationId,
+    messageId: review.schedulerMessageId,
+    schedulerRunId: review.schedulerRunId,
+    action: "reject",
+    rejectedTutorIds,
+    rejectionReason,
+    staffCorrection,
+    actor: input.actor,
+  });
 
   return patchLineSchedulerReview(input.db, input.reviewId, {
     status: "rejected",
     rejectionReason,
+    reasonCategory,
     staffCorrection,
+    selectedTutorIds: rejectedTutorIds,
+    verifiedStudentKeys,
     actor: input.actor,
   });
 }

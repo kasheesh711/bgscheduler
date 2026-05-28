@@ -80,15 +80,21 @@ export async function pushLineTextMessage(input: {
   });
 
   const payload = asRecord(await response.json().catch(() => ({})));
-  if (!response.ok) {
+  if (!response.ok && response.status !== 409) {
     throw new Error(typeof payload.message === "string" ? payload.message : `LINE push returned HTTP ${response.status}`);
   }
 
+  const responsePayload: Record<string, unknown> = { ...payload };
+  if (response.status === 409) {
+    responsePayload.retryAccepted = true;
+    const acceptedRequestId = response.headers.get("x-line-accepted-request-id");
+    if (acceptedRequestId) responsePayload.acceptedRequestId = acceptedRequestId;
+  }
   const sentMessages = Array.isArray(payload.sentMessages) ? payload.sentMessages : [];
   const first = asRecord(sentMessages[0]);
   return {
     retryKey,
     sentMessageId: typeof first.id === "string" ? first.id : null,
-    response: payload,
+    response: responsePayload,
   };
 }

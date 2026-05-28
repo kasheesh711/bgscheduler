@@ -15,7 +15,19 @@ vi.mock("@/lib/line/data", () => ({
   updateLineContactProfile: vi.fn(),
   updateLineMessageClassification: vi.fn(),
 }));
+vi.mock("@/lib/line/student-links", () => ({
+  ensureLineContactStudentLinkSuggestions: vi.fn(),
+  listVerifiedLineStudentKeys: vi.fn(),
+}));
+vi.mock("@/lib/ai/scheduler-data", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/ai/scheduler-data")>();
+  return {
+    ...actual,
+    createSchedulerFeedback: vi.fn(),
+  };
+});
 
+import { createSchedulerFeedback } from "@/lib/ai/scheduler-data";
 import { pushLineTextMessage } from "@/lib/line/client";
 import {
   getLineSchedulerReview,
@@ -27,6 +39,7 @@ import {
   approveLineSchedulerReview,
   rejectLineSchedulerReview,
 } from "@/lib/line/review-service";
+import { listVerifiedLineStudentKeys } from "@/lib/line/student-links";
 
 const pendingReview = {
   id: "review-1",
@@ -46,7 +59,11 @@ const pendingReview = {
   selectedSuggestion: null,
   finalText: null,
   rejectionReason: null,
+  reasonCategory: null,
   staffCorrection: null,
+  selectedTutorIds: ["tutor-1"],
+  studentLinkOverride: false,
+  verifiedStudentKeys: [],
   sendLineMessageId: null,
   sendResponse: null,
   sendError: null,
@@ -61,17 +78,23 @@ describe("LINE scheduler review actions", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(getLineSchedulerReview).mockResolvedValue(pendingReview);
-    vi.mocked(pushLineTextMessage).mockResolvedValue({
-      retryKey: "retry-1",
+    vi.mocked(listVerifiedLineStudentKeys).mockResolvedValue(["student::parent"]);
+    vi.mocked(createSchedulerFeedback).mockResolvedValue({} as never);
+    vi.mocked(pushLineTextMessage).mockImplementation(async (input) => ({
+      retryKey: input.retryKey ?? "generated-retry",
       sentMessageId: "line-out-1",
       response: { sentMessages: [{ id: "line-out-1" }] },
-    });
+    }));
     vi.mocked(patchLineSchedulerReview).mockImplementation(async (_db, _reviewId, input) => ({
       ...pendingReview,
       status: input.status,
       finalText: input.finalText ?? null,
       rejectionReason: input.rejectionReason ?? null,
+      reasonCategory: input.reasonCategory ?? null,
       staffCorrection: input.staffCorrection ?? null,
+      selectedTutorIds: input.selectedTutorIds ?? [],
+      studentLinkOverride: input.studentLinkOverride ?? false,
+      verifiedStudentKeys: input.verifiedStudentKeys ?? [],
       sendLineMessageId: input.sendLineMessageId ?? null,
       sendResponse: input.sendResponse ?? null,
       reviewedByEmail: "admin@example.com",
@@ -92,6 +115,7 @@ describe("LINE scheduler review actions", () => {
     expect(pushLineTextMessage).toHaveBeenCalledWith({
       to: "line-user-1",
       text: "Approved text",
+      retryKey: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
     });
     expect(insertOutboundLineMessage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       threadId: "thread-1",
@@ -102,9 +126,84 @@ describe("LINE scheduler review actions", () => {
     expect(patchLineSchedulerReview).toHaveBeenCalledWith(expect.anything(), "review-1", expect.objectContaining({
       status: "approved_sent",
       finalText: "Approved text",
+      verifiedStudentKeys: ["student::parent"],
       sendLineMessageId: "line-out-1",
     }));
+    expect(createSchedulerFeedback).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: "edit",
+      selectedTutorIds: ["tutor-1"],
+      editedParentDraft: "Approved text",
+    }));
     expect(review?.status).toBe("approved_sent");
+  });
+
+  it("keeps the review approved when post-send audit logging fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.mocked(insertOutboundLineMessage).mockRejectedValueOnce(new Error("outbound audit failed") as never);
+    vi.mocked(createSchedulerFeedback).mockRejectedValueOnce(new Error("feedback failed") as never);
+
+    try {
+      const review = await approveLineSchedulerReview({
+        db: {} as never,
+        reviewId: "review-1",
+        finalText: "Approved text",
+        actor: { email: "admin@example.com", name: "Admin" },
+      });
+
+      expect(pushLineTextMessage).toHaveBeenCalledTimes(1);
+      expect(patchLineSchedulerReview).toHaveBeenCalledWith(expect.anything(), "review-1", expect.objectContaining({
+        status: "approved_sent",
+        finalText: "Approved text",
+        sendLineMessageId: "line-out-1",
+      }));
+      expect(review?.status).toBe("approved_sent");
+      expect(consoleError).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(patchLineSchedulerReview).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(insertOutboundLineMessage).mock.invocationCallOrder[0],
+      );
+      expect(vi.mocked(patchLineSchedulerReview).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(createSchedulerFeedback).mock.invocationCallOrder[0],
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("reuses the same retry key if a sent review has to be retried after a DB failure", async () => {
+    vi.mocked(patchLineSchedulerReview).mockRejectedValueOnce(new Error("temporary DB failure"));
+
+    await expect(approveLineSchedulerReview({
+      db: {} as never,
+      reviewId: "review-1",
+      finalText: "Approved text",
+      actor: { email: "admin@example.com", name: "Admin" },
+    })).rejects.toThrow(/temporary DB failure/);
+    await approveLineSchedulerReview({
+      db: {} as never,
+      reviewId: "review-1",
+      finalText: "Approved text",
+      actor: { email: "admin@example.com", name: "Admin" },
+    });
+
+    expect(pushLineTextMessage).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(pushLineTextMessage).mock.calls[0][0].retryKey).toBe(
+      vi.mocked(pushLineTextMessage).mock.calls[1][0].retryKey,
+    );
+  });
+
+  it("does not push-send before a student link is verified or overridden", async () => {
+    vi.mocked(listVerifiedLineStudentKeys).mockResolvedValue([]);
+
+    await expect(approveLineSchedulerReview({
+      db: {} as never,
+      reviewId: "review-1",
+      finalText: "Approved text",
+      actor: { email: "admin@example.com", name: "Admin" },
+    })).rejects.toThrow(/Verify a LINE student link/);
+
+    expect(pushLineTextMessage).not.toHaveBeenCalled();
+    expect(insertOutboundLineMessage).not.toHaveBeenCalled();
+    expect(patchLineSchedulerReview).not.toHaveBeenCalled();
   });
 
   it("does not push-send when an approval request is repeated after completion", async () => {
@@ -145,14 +244,16 @@ describe("LINE scheduler review actions", () => {
     await expect(rejectLineSchedulerReview({
       db: {} as never,
       reviewId: "review-1",
+      reasonCategory: "wrong_availability",
       rejectionReason: "",
       staffCorrection: "Use Saturday instead",
       actor: { email: "admin@example.com", name: "Admin" },
-    })).rejects.toThrow(/reason and staff correction/);
+    })).rejects.toThrow(/category, reason, and staff correction/);
 
     await rejectLineSchedulerReview({
       db: {} as never,
       reviewId: "review-1",
+      reasonCategory: "wrong_availability",
       rejectionReason: "Wrong day",
       staffCorrection: "Use Saturday instead",
       actor: { email: "admin@example.com", name: "Admin" },
@@ -161,6 +262,12 @@ describe("LINE scheduler review actions", () => {
     expect(pushLineTextMessage).not.toHaveBeenCalled();
     expect(patchLineSchedulerReview).toHaveBeenCalledWith(expect.anything(), "review-1", expect.objectContaining({
       status: "rejected",
+      reasonCategory: "wrong_availability",
+      rejectionReason: "Wrong day",
+      staffCorrection: "Use Saturday instead",
+    }));
+    expect(createSchedulerFeedback).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: "reject",
       rejectionReason: "Wrong day",
       staffCorrection: "Use Saturday instead",
     }));

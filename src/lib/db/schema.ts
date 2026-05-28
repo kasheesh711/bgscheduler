@@ -125,6 +125,12 @@ export const lineSchedulerReviewStatusEnum = pgEnum("line_scheduler_review_statu
   "dismissed",
 ]);
 
+export const lineContactStudentLinkStatusEnum = pgEnum("line_contact_student_link_status", [
+  "suggested",
+  "verified",
+  "rejected",
+]);
+
 export const salesDashboardSourceStatusEnum = pgEnum("sales_dashboard_source_status", [
   "active",
   "refreshing",
@@ -1163,6 +1169,11 @@ export const lineMessages = pgTable("line_messages", {
   classifierSummary: text("classifier_summary"),
   classifierPayload: jsonb("classifier_payload").$type<Record<string, unknown> | null>(),
   classifiedAt: timestamp("classified_at", { withTimezone: true }),
+  classificationReviewedCategory: lineSchedulerClassifierCategoryEnum("classification_reviewed_category"),
+  classificationReviewedCorrect: boolean("classification_reviewed_correct"),
+  classificationReviewedByEmail: text("classification_reviewed_by_email"),
+  classificationReviewedByName: text("classification_reviewed_by_name"),
+  classificationReviewedAt: timestamp("classification_reviewed_at", { withTimezone: true }),
   raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -1170,6 +1181,28 @@ export const lineMessages = pgTable("line_messages", {
   uniqueIndex("line_messages_line_message_idx").on(table.lineMessageId),
   index("line_messages_thread_created_idx").on(table.threadId, table.createdAt),
   index("line_messages_classifier_idx").on(table.classifierCategory, table.classifiedAt),
+  index("line_messages_classification_review_idx").on(table.classificationReviewedCategory, table.classificationReviewedAt),
+]);
+
+export const lineContactStudentLinks = pgTable("line_contact_student_links", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  contactId: uuid("contact_id").notNull().references(() => lineContacts.id, { onDelete: "cascade" }),
+  wiseStudentId: text("wise_student_id").notNull(),
+  studentKey: text("student_key").notNull(),
+  studentName: text("student_name").notNull(),
+  parentName: text("parent_name").notNull().default(""),
+  status: lineContactStudentLinkStatusEnum("status").notNull().default("suggested"),
+  confidence: doublePrecision("confidence"),
+  evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull().default({}),
+  reviewedByEmail: text("reviewed_by_email"),
+  reviewedByName: text("reviewed_by_name"),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("line_contact_student_links_contact_student_idx").on(table.contactId, table.studentKey),
+  index("line_contact_student_links_contact_status_idx").on(table.contactId, table.status),
+  index("line_contact_student_links_student_key_idx").on(table.studentKey),
 ]);
 
 export const lineSchedulerReviews = pgTable("line_scheduler_reviews", {
@@ -1194,7 +1227,11 @@ export const lineSchedulerReviews = pgTable("line_scheduler_reviews", {
   selectedSuggestion: jsonb("selected_suggestion").$type<Record<string, unknown> | null>(),
   finalText: text("final_text"),
   rejectionReason: text("rejection_reason"),
+  reasonCategory: text("reason_category"),
   staffCorrection: text("staff_correction"),
+  selectedTutorIds: jsonb("selected_tutor_ids").$type<string[]>().notNull().default([]),
+  studentLinkOverride: boolean("student_link_override").notNull().default(false),
+  verifiedStudentKeys: jsonb("verified_student_keys").$type<string[]>().notNull().default([]),
   sendLineMessageId: text("send_line_message_id"),
   sendResponse: jsonb("send_response").$type<Record<string, unknown> | null>(),
   sendError: text("send_error"),

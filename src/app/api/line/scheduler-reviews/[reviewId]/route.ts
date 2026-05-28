@@ -13,15 +13,29 @@ const patchReviewSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("approve_send"),
     finalText: z.string().trim().min(1).max(5000),
+    selectedTutorIds: z.array(z.string().min(1)).max(12).optional(),
+    studentLinkOverride: z.boolean().optional(),
   }).strict(),
   z.object({
     action: z.literal("accept_no_send"),
     finalText: z.string().trim().max(5000).optional(),
+    selectedTutorIds: z.array(z.string().min(1)).max(12).optional(),
+    studentLinkOverride: z.boolean().optional(),
   }).strict(),
   z.object({
     action: z.literal("reject"),
+    reasonCategory: z.enum([
+      "wrong_student_link",
+      "wrong_extracted_request",
+      "wrong_tutor_fit",
+      "wrong_availability",
+      "unsafe_draft",
+      "unclear",
+      "other",
+    ]),
     rejectionReason: z.string().trim().min(1).max(500),
     staffCorrection: z.string().trim().min(1).max(5000),
+    rejectedTutorIds: z.array(z.string().min(1)).max(12).optional(),
   }).strict(),
   z.object({
     action: z.literal("dismiss"),
@@ -77,6 +91,8 @@ export async function PATCH(
         db,
         reviewId,
         finalText: parsed.data.finalText,
+        selectedTutorIds: parsed.data.selectedTutorIds,
+        studentLinkOverride: parsed.data.studentLinkOverride,
         actor,
       })
       : parsed.data.action === "accept_no_send"
@@ -84,6 +100,8 @@ export async function PATCH(
           db,
           reviewId,
           finalText: parsed.data.finalText,
+          selectedTutorIds: parsed.data.selectedTutorIds,
+          studentLinkOverride: parsed.data.studentLinkOverride,
           actor,
         })
         : parsed.data.action === "reject"
@@ -91,7 +109,9 @@ export async function PATCH(
             db,
             reviewId,
             rejectionReason: parsed.data.rejectionReason,
+            reasonCategory: parsed.data.reasonCategory,
             staffCorrection: parsed.data.staffCorrection,
+            rejectedTutorIds: parsed.data.rejectedTutorIds,
             actor,
           })
           : await dismissLineSchedulerReview({
