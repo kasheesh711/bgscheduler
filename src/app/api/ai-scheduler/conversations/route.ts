@@ -7,6 +7,8 @@ import {
   listSchedulerConversations,
 } from "@/lib/ai/scheduler-data";
 
+const sortSchema = z.enum(["review_priority", "latest", "admin", "oldest_pending_line"]);
+
 const createConversationSchema = z.object({
   title: z.string().trim().min(1).max(120).optional(),
   customerParentName: z.string().trim().max(120).optional(),
@@ -30,15 +32,23 @@ export async function GET(request: NextRequest) {
 
   const includeArchived = request.nextUrl.searchParams.get("includeArchived") === "true";
   const mineOnly = request.nextUrl.searchParams.get("scope") === "mine";
+  const ownerEmail = request.nextUrl.searchParams.get("ownerEmail");
+  const rawSort = request.nextUrl.searchParams.get("sort") ?? "review_priority";
+  const parsedSort = sortSchema.safeParse(rawSort);
+  if (!parsedSort.success) {
+    return NextResponse.json({ error: "Invalid sort" }, { status: 400 });
+  }
   const query = request.nextUrl.searchParams.get("q") ?? undefined;
-  const conversations = await listSchedulerConversations(getDb(), {
+  const result = await listSchedulerConversations(getDb(), {
     includeArchived,
     mineOnly,
+    ownerEmail,
+    sort: parsedSort.data,
     query,
     actor: actorFromSession(session),
   });
 
-  return NextResponse.json({ conversations });
+  return NextResponse.json(result);
 }
 
 export async function POST(request: NextRequest) {

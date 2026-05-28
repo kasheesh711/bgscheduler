@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { SchedulerExtractedState } from "@/lib/ai/scheduler-conversation";
@@ -10,11 +10,19 @@ export interface SchedulerActor {
 
 export type SchedulerConversationStatus = "active" | "archived";
 export type SchedulerMessageRole = "admin" | "parent" | "assistant" | "system";
+export type SchedulerConversationSource = "line" | "manual";
+export type SchedulerConversationSort = "review_priority" | "latest" | "admin" | "oldest_pending_line";
 
 export interface SchedulerConversationDto {
   id: string;
   title: string;
   status: SchedulerConversationStatus;
+  source: SchedulerConversationSource;
+  pendingLineReviewCount: number;
+  latestLineReviewStatus: string | null;
+  needsStudentLink: boolean;
+  oldestPendingLineReviewAt: string | null;
+  latestLineReviewAt: string | null;
   customerParentName: string | null;
   customerStudentName: string | null;
   customerContact: string | null;
@@ -26,6 +34,18 @@ export interface SchedulerConversationDto {
   lastMessageAt: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface SchedulerConversationAdminFacet {
+  email: string | null;
+  name: string | null;
+  count: number;
+  pendingLineCount: number;
+}
+
+export interface ListSchedulerConversationsResult {
+  conversations: SchedulerConversationDto[];
+  adminFacets: SchedulerConversationAdminFacet[];
 }
 
 export interface SchedulerMessageDto {
@@ -70,16 +90,42 @@ type ConversationRow = typeof schema.aiSchedulerConversations.$inferSelect;
 type MessageRow = typeof schema.aiSchedulerMessages.$inferSelect;
 type FeedbackRow = typeof schema.aiSchedulerFeedback.$inferSelect;
 
+interface ConversationLineStats {
+  source: SchedulerConversationSource;
+  pendingLineReviewCount: number;
+  latestLineReviewStatus: string | null;
+  needsStudentLink: boolean;
+  oldestPendingLineReviewAt: string | null;
+  latestLineReviewAt: string | null;
+}
+
 function iso(value: Date | string | null): string | null {
   if (value === null) return null;
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
-function conversationToDto(row: ConversationRow): SchedulerConversationDto {
+function emptyLineStats(): ConversationLineStats {
+  return {
+    source: "manual",
+    pendingLineReviewCount: 0,
+    latestLineReviewStatus: null,
+    needsStudentLink: false,
+    oldestPendingLineReviewAt: null,
+    latestLineReviewAt: null,
+  };
+}
+
+function conversationToDto(row: ConversationRow, lineStats: ConversationLineStats = emptyLineStats()): SchedulerConversationDto {
   return {
     id: row.id,
     title: row.title,
     status: row.status,
+    source: lineStats.source,
+    pendingLineReviewCount: lineStats.pendingLineReviewCount,
+    latestLineReviewStatus: lineStats.latestLineReviewStatus,
+    needsStudentLink: lineStats.needsStudentLink,
+    oldestPendingLineReviewAt: lineStats.oldestPendingLineReviewAt,
+    latestLineReviewAt: lineStats.latestLineReviewAt,
     customerParentName: row.customerParentName,
     customerStudentName: row.customerStudentName,
     customerContact: row.customerContact,
@@ -143,10 +189,12 @@ export async function listSchedulerConversations(
   input: {
     includeArchived?: boolean;
     mineOnly?: boolean;
+    ownerEmail?: string | null;
+    sort?: SchedulerConversationSort;
     query?: string;
     actor?: SchedulerActor;
   } = {},
-): Promise<SchedulerConversationDto[]> {
+): Promise<ListSchedulerConversationsResult> {
   const rows = input.includeArchived
     ? await db
       .select()
@@ -160,11 +208,67 @@ export async function listSchedulerConversations(
       .orderBy(desc(schema.aiSchedulerConversations.lastMessageAt))
       .limit(200);
 
-  const actorEmail = normalizeActor(input.actor ?? {}).email;
-  const query = input.query?.trim().toLowerCase();
+  const conversationIds = rows.map((row) => row.id);
+  const reviewRows = conversationIds.length > 0
+    ? await db
+      .select({
+        conversationId: schema.lineSchedulerReviews.conversationId,
+        contactId: schema.lineSchedulerReviews.contactId,
+        status: schema.lineSchedulerReviews.status,
+        studentLinkOverride: schema.lineSchedulerReviews.studentLinkOverride,
+        verifiedStudentKeys: schema.lineSchedulerReviews.verifiedStudentKeys,
+        createdAt: schema.lineSchedulerReviews.createdAt,
+        updatedAt: schema.lineSchedulerReviews.updatedAt,
+      })
+      .from(schema.lineSchedulerReviews)
+      .where(inArray(schema.lineSchedulerReviews.conversationId, conversationIds))
+    : [];
+  const pendingContactIds = Array.from(new Set(
+    reviewRows
+      .filter((review) => review.status === "pending_review")
+      .map((review) => review.contactId),
+  ));
+  const verifiedLinkRows = pendingContactIds.length > 0
+    ? await db
+      .select({ contactId: schema.lineContactStudentLinks.contactId })
+      .from(schema.lineContactStudentLinks)
+      .where(and(
+        inArray(schema.lineContactStudentLinks.contactId, pendingContactIds),
+        eq(schema.lineContactStudentLinks.status, "verified"),
+      ))
+    : [];
+  const verifiedContactIds = new Set(verifiedLinkRows.map((link) => link.contactId));
+  const lineStats = new Map<string, ConversationLineStats>();
+  for (const review of reviewRows) {
+    if (!review.conversationId) continue;
+    const current = lineStats.get(review.conversationId) ?? {
+      ...emptyLineStats(),
+      source: "line" as const,
+    };
+    const createdAt = iso(review.createdAt)!;
+    const updatedAt = iso(review.updatedAt)!;
+    if (!current.latestLineReviewAt || updatedAt > current.latestLineReviewAt) {
+      current.latestLineReviewAt = updatedAt;
+      current.latestLineReviewStatus = review.status;
+    }
+    if (review.status === "pending_review") {
+      current.pendingLineReviewCount += 1;
+      if (!current.oldestPendingLineReviewAt || createdAt < current.oldestPendingLineReviewAt) {
+        current.oldestPendingLineReviewAt = createdAt;
+      }
+      const hasVerifiedStudent = review.verifiedStudentKeys.length > 0 || verifiedContactIds.has(review.contactId);
+      if (!hasVerifiedStudent && !review.studentLinkOverride) {
+        current.needsStudentLink = true;
+      }
+    }
+    lineStats.set(review.conversationId, current);
+  }
 
-  return rows
-    .filter((row) => !input.mineOnly || !actorEmail || row.createdByEmail === actorEmail)
+  const actorEmail = normalizeActor(input.actor ?? {}).email;
+  const ownerEmail = input.ownerEmail?.trim().toLowerCase() || null;
+  const query = input.query?.trim().toLowerCase();
+  const queryFiltered = rows
+    .map((row) => conversationToDto(row, lineStats.get(row.id)))
     .filter((row) => {
       if (!query) return true;
       return [
@@ -174,8 +278,56 @@ export async function listSchedulerConversations(
         row.customerContact,
         row.notes,
       ].some((value) => value?.toLowerCase().includes(query));
-    })
-    .map(conversationToDto);
+    });
+  const adminFacetMap = new Map<string, SchedulerConversationAdminFacet>();
+  for (const row of queryFiltered) {
+    const key = row.createdByEmail ?? "__unassigned__";
+    const facet = adminFacetMap.get(key) ?? {
+      email: row.createdByEmail,
+      name: row.createdByName,
+      count: 0,
+      pendingLineCount: 0,
+    };
+    facet.count += 1;
+    facet.pendingLineCount += row.pendingLineReviewCount;
+    if (!facet.name && row.createdByName) facet.name = row.createdByName;
+    adminFacetMap.set(key, facet);
+  }
+  const adminFacets = [...adminFacetMap.values()]
+    .sort((a, b) => (a.name ?? a.email ?? "Unknown admin").localeCompare(b.name ?? b.email ?? "Unknown admin"));
+
+  const activeOwnerEmail = ownerEmail ?? (input.mineOnly ? actorEmail : null);
+  const conversations = queryFiltered
+    .filter((row) => !activeOwnerEmail || row.createdByEmail === activeOwnerEmail)
+    .sort((a, b) => {
+      const sort = input.sort ?? "review_priority";
+      if (sort === "admin") {
+        const adminCompare = (a.createdByName ?? a.createdByEmail ?? "").localeCompare(b.createdByName ?? b.createdByEmail ?? "");
+        if (adminCompare !== 0) return adminCompare;
+        return b.lastMessageAt.localeCompare(a.lastMessageAt);
+      }
+      if (sort === "oldest_pending_line") {
+        const aPending = a.oldestPendingLineReviewAt;
+        const bPending = b.oldestPendingLineReviewAt;
+        if (aPending && bPending) return aPending.localeCompare(bPending);
+        if (aPending) return -1;
+        if (bPending) return 1;
+        return b.lastMessageAt.localeCompare(a.lastMessageAt);
+      }
+      if (sort === "latest") {
+        return b.lastMessageAt.localeCompare(a.lastMessageAt);
+      }
+      const pendingCompare = b.pendingLineReviewCount - a.pendingLineReviewCount;
+      if (pendingCompare !== 0) return pendingCompare;
+      if (a.needsStudentLink !== b.needsStudentLink) return a.needsStudentLink ? -1 : 1;
+      if (a.oldestPendingLineReviewAt && b.oldestPendingLineReviewAt) {
+        return a.oldestPendingLineReviewAt.localeCompare(b.oldestPendingLineReviewAt);
+      }
+      if (a.source !== b.source) return a.source === "line" ? -1 : 1;
+      return b.lastMessageAt.localeCompare(a.lastMessageAt);
+    });
+
+  return { conversations, adminFacets };
 }
 
 export async function createSchedulerConversation(

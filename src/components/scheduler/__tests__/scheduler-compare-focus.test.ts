@@ -91,3 +91,29 @@ describe("scheduler workspace compare integration source guardrails", () => {
     expect(source).not.toContain('href={compareHref(suggestion)}');
   });
 });
+
+describe("scheduler workspace LINE triage guardrails", () => {
+  it("renders the dominant LINE review queue before the generic chat list", () => {
+    const source = read("src/components/scheduler/scheduler-workspace.tsx");
+
+    expect(source.indexOf("<LineQueueBand")).toBeLessThan(source.indexOf("Search conversations"));
+    expect(source).toContain("LINE Review Queue");
+    expect(source).toContain("oldestPendingReview(pendingLineReviews)");
+  });
+
+  it("keeps active LINE reviews above chat history and collapses reviewed audits", () => {
+    const source = read("src/components/scheduler/scheduler-workspace.tsx");
+
+    expect(source.indexOf("Active LINE review")).toBeLessThan(source.indexOf("messages.map"));
+    expect(source).toContain('setExpanded(review.status === "pending_review")');
+    expect(source).toContain("Audit");
+  });
+
+  it("surfaces admin owner filters and deterministic admin accents", () => {
+    const source = read("src/components/scheduler/scheduler-workspace.tsx");
+
+    expect(source).toContain("adminFacets.map");
+    expect(source).toContain("adminAccentFor");
+    expect(source).toContain("Needs review first");
+  });
+});

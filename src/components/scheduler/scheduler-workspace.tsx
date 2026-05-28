@@ -1,15 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Archive,
   BarChart3,
   Calendar,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Clipboard,
   ExternalLink,
+  Filter,
   Inbox,
   MessageSquarePlus,
   RefreshCw,
@@ -26,11 +30,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { ComparePanel } from "@/components/compare/compare-panel";
 import { useCompare } from "@/hooks/use-compare";
 import type { TutorListItem } from "@/lib/data/tutors";
+import { adminAccentFor } from "@/lib/scheduler/admin-colors";
 import { cn } from "@/lib/utils";
 import { buildSchedulerCompareFocusTarget } from "./scheduler-compare-focus";
 
 type SchedulerConversationStatus = "active" | "archived";
 type SchedulerMessageRole = "admin" | "parent" | "assistant" | "system";
+type SchedulerConversationSort = "review_priority" | "latest" | "admin" | "oldest_pending_line";
 
 interface SchedulerExtractedState {
   searchMode?: "recurring" | "one_time";
@@ -80,6 +86,12 @@ interface SchedulerConversation {
   id: string;
   title: string;
   status: SchedulerConversationStatus;
+  source: "line" | "manual";
+  pendingLineReviewCount: number;
+  latestLineReviewStatus: string | null;
+  needsStudentLink: boolean;
+  oldestPendingLineReviewAt: string | null;
+  latestLineReviewAt: string | null;
   customerParentName: string | null;
   customerStudentName: string | null;
   customerContact: string | null;
@@ -91,6 +103,13 @@ interface SchedulerConversation {
   lastMessageAt: string;
   createdAt: string;
   updatedAt: string;
+}
+
+interface SchedulerAdminFacet {
+  email: string | null;
+  name: string | null;
+  count: number;
+  pendingLineCount: number;
 }
 
 interface SchedulerMessage {
@@ -267,6 +286,12 @@ const LINE_REJECTION_REASON_OPTIONS = [
   { value: "unclear", label: "Unclear" },
   { value: "other", label: "Other" },
 ] as const;
+const SCHEDULER_SORT_OPTIONS: Array<{ value: SchedulerConversationSort; label: string }> = [
+  { value: "review_priority", label: "Needs review first" },
+  { value: "oldest_pending_line", label: "Oldest pending LINE" },
+  { value: "latest", label: "Latest activity" },
+  { value: "admin", label: "Admin" },
+];
 const UNTITLED = "Untitled scheduler chat";
 
 function emptyDetails(): DetailsState {
@@ -311,6 +336,31 @@ function formatShortDate(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function formatAge(value: string | null): string {
+  if (!value) return "-";
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+function oldestPendingReview(reviews: LineSchedulerReview[]): LineSchedulerReview | null {
+  return [...reviews].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0] ?? null;
+}
+
+function statusLabel(status: string | null): string {
+  if (!status) return "No review";
+  return status.replace(/_/g, " ");
+}
+
+function reviewStatusClass(status: string | null): string {
+  if (status === "pending_review") return "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200";
+  if (status === "rejected") return "border-destructive/30 bg-destructive/10 text-destructive";
+  if (status === "approved_sent" || status === "accepted_no_send") return "border-available/30 bg-available/10 text-available";
+  return "border-border bg-background text-muted-foreground";
 }
 
 function formatSuggestionDay(suggestion: SchedulerSuggestion): string {
@@ -385,6 +435,87 @@ function RequirementPill({ label, value }: { label: string; value?: string | num
       <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="truncate text-xs text-foreground">{value || "Not set"}</div>
     </div>
+  );
+}
+
+function QueueMetric({ label, value, detail }: { label: string; value: string | number; detail?: string }) {
+  return (
+    <div className="min-w-0 rounded-md border border-border/70 bg-background/80 px-3 py-2">
+      <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-0.5 text-lg font-semibold leading-none text-foreground">{value}</div>
+      {detail && <div className="mt-1 truncate text-[10px] text-muted-foreground">{detail}</div>}
+    </div>
+  );
+}
+
+function LineQueueBand({
+  reviews,
+  analytics,
+  selectedReviewId,
+  onSelectReview,
+}: {
+  reviews: LineSchedulerReview[];
+  analytics: LineSchedulerAnalytics | null;
+  selectedReviewId: string | null;
+  onSelectReview: (review: LineSchedulerReview) => void;
+}) {
+  const oldest = oldestPendingReview(reviews);
+  const editedCount = analytics?.feedbackLabels.find((item) => item.label === "edited")?.count ?? 0;
+  const completed = (analytics?.approvedSent ?? 0) + (analytics?.acceptedNoSend ?? 0) + (analytics?.rejected ?? 0) + (analytics?.dismissed ?? 0);
+  const editRate = completed > 0 ? Math.round((editedCount / completed) * 100) : 0;
+
+  return (
+    <section className="shrink-0 rounded-lg border border-primary/20 bg-gradient-to-r from-primary/10 via-background to-background p-3 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-[220px]">
+          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Inbox className="h-4 w-4 text-primary" aria-hidden />
+            LINE Review Queue
+            <Badge variant={reviews.length > 0 ? "default" : "outline"} className="h-5">
+              {reviews.length} pending
+            </Badge>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            First-pass morning triage: verify student links, correct classifications, then approve or reject drafts.
+          </p>
+        </div>
+        <div className="grid min-w-[420px] flex-1 grid-cols-2 gap-2 md:grid-cols-5">
+          <QueueMetric label="Pending" value={reviews.length} detail={oldest ? `Oldest ${formatAge(oldest.createdAt)}` : "Clear"} />
+          <QueueMetric label="Needs Links" value={analytics?.unverifiedLinkBacklog ?? 0} detail="Suggested links" />
+          <QueueMetric
+            label="Cls Coverage"
+            value={`${Math.round((analytics?.classificationReviewCoverage ?? 0) * 100)}%`}
+            detail={`${analytics?.classificationReviewedMessages ?? 0} reviewed`}
+          />
+          <QueueMetric label="Reject Rate" value={`${Math.round((analytics?.rejectionRate ?? 0) * 100)}%`} detail="Reviewed outputs" />
+          <QueueMetric label="Edit Rate" value={`${editRate}%`} detail="Draft changed" />
+        </div>
+      </div>
+      {reviews.length > 0 && (
+        <div className="mt-3 flex gap-2 overflow-x-auto pb-0.5">
+          {[...reviews].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(0, 8).map((review) => (
+            <button
+              key={review.id}
+              type="button"
+              onClick={() => onSelectReview(review)}
+              disabled={!review.conversationId}
+              className={cn(
+                "min-w-[240px] rounded-md border bg-background px-3 py-2 text-left shadow-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60",
+                selectedReviewId === review.id ? "border-primary/60 ring-2 ring-primary/20" : "border-border",
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-xs font-semibold text-foreground">{review.contactDisplayName || review.lineUserId}</span>
+                <span className="shrink-0 text-[10px] text-muted-foreground">{formatAge(review.createdAt)}</span>
+              </div>
+              <div className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
+                {review.classifierSummary || statusLabel(review.classifierCategory)}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -654,36 +785,133 @@ function AvailabilitySummaryPanel({ summary }: { summary: SchedulerAvailabilityS
   );
 }
 
-function ConstraintLedgerPanel({ ledger }: { ledger: SchedulerConstraintLedgerItem[] }) {
-  const visible = ledger.filter((item) => item.status !== "not_applicable");
-  if (visible.length === 0) return null;
+function AiDecisionChecklist({
+  state,
+  payload,
+}: {
+  state: SchedulerExtractedState;
+  payload: SchedulerPayload;
+}) {
+  const filters = state.filters ?? {};
+  const suggestions = payload.suggestions ?? [];
+  const availableTutorCount = payload.availabilitySummary?.tutors.length ?? 0;
+  const hasTime = Boolean((state.startTime && state.endTime) && (state.date || typeof state.dayOfWeek === "number"));
+  const subjectLevel = [filters.subject, filters.level].filter(Boolean).join(" / ");
+  const academicStatus = state.academicLevelResolution?.status;
+  const checklist = [
+    {
+      label: "Student",
+      value: state.studentName || state.parentName || "Missing",
+      ok: Boolean(state.studentName || state.parentName),
+    },
+    {
+      label: "Request",
+      value: state.searchMode === "one_time" ? "One-time" : state.searchMode === "recurring" ? "Recurring" : "Unknown",
+      ok: Boolean(state.searchMode),
+    },
+    {
+      label: "Time",
+      value: hasTime
+        ? `${state.date || (typeof state.dayOfWeek === "number" ? DAY_NAMES[state.dayOfWeek] : "Day")} ${state.startTime}-${state.endTime}`
+        : "Needs date/time",
+      ok: hasTime,
+    },
+    {
+      label: "Subject / level",
+      value: subjectLevel || state.academicLevelResolution?.message || "Needs subject/level",
+      ok: Boolean(filters.subject && filters.level && academicStatus !== "unknown"),
+    },
+    {
+      label: "Tutor fit",
+      value: suggestions.length > 0 ? `${suggestions.length} ranked option${suggestions.length === 1 ? "" : "s"}` : "No ranked option",
+      ok: suggestions.length > 0,
+    },
+    {
+      label: "Availability",
+      value: availableTutorCount > 0 ? `${availableTutorCount} available tutor${availableTutorCount === 1 ? "" : "s"}` : "No availability proof",
+      ok: availableTutorCount > 0,
+    },
+    {
+      label: "Draft safety",
+      value: payload.parentReady ? "Parent-ready" : payload.parentMessageDraft ? "Needs admin review" : "No draft",
+      ok: Boolean(payload.parentReady && payload.parentMessageDraft),
+    },
+  ];
 
   return (
-    <div className="mt-3 rounded-md border border-border bg-muted/25 p-2.5">
+    <div className="mt-3 rounded-md border border-border bg-muted/20 p-2.5">
       <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <CheckCircle2 className="h-3.5 w-3.5 text-available" aria-hidden />
-        Safety proof
+        <CheckCircle2 className="h-3.5 w-3.5 text-primary" aria-hidden />
+        AI Decision Checklist
       </div>
-      <div className="grid gap-1.5 md:grid-cols-2">
-        {visible.slice(0, 8).map((item) => (
-          <div key={`${item.key}-${item.label}`} className="rounded-md border border-border bg-background/80 px-2 py-1.5">
+      <div className="grid gap-1.5 md:grid-cols-2 xl:grid-cols-3">
+        {checklist.map((item) => (
+          <div
+            key={item.label}
+            className={cn(
+              "rounded-md border bg-background px-2 py-1.5",
+              item.ok ? "border-available/25" : "border-amber-300 bg-amber-50/70 dark:bg-amber-950/20",
+            )}
+          >
             <div className="flex items-center justify-between gap-2">
-              <span className="min-w-0 truncate text-[11px] font-medium text-foreground">{item.label}</span>
-              <Badge
-                variant={item.status === "proven" ? "secondary" : "outline"}
-                className={cn(
-                  "h-5 shrink-0 px-1.5 text-[9px]",
-                  item.status === "needs_clarification" && "border-amber-400 text-amber-700 dark:text-amber-300",
-                )}
-              >
-                {item.status === "proven" ? "Proven" : "Check"}
-              </Badge>
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{item.label}</span>
+              {item.ok ? (
+                <Check className="h-3.5 w-3.5 text-available" aria-hidden />
+              ) : (
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-600" aria-hidden />
+              )}
             </div>
-            <div className="mt-0.5 truncate text-[10.5px] text-muted-foreground">
-              {item.normalized ?? item.message}
-            </div>
+            <div className="mt-0.5 truncate text-[11px] font-medium text-foreground">{item.value}</div>
           </div>
         ))}
+      </div>
+      {payload.questions && payload.questions.length > 0 && (
+        <div className="mt-2 rounded-md border border-amber-300/40 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:bg-amber-950/20 dark:text-amber-200">
+          {payload.questions[0]}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WhyTheseTutorsPanel({
+  suggestions,
+  availabilitySummary,
+}: {
+  suggestions: SchedulerSuggestion[];
+  availabilitySummary?: SchedulerAvailabilitySummary;
+}) {
+  if (suggestions.length === 0) return null;
+  const availabilityByTutor = new Map(
+    (availabilitySummary?.tutors ?? []).map((tutor) => [tutor.tutorGroupId, tutor]),
+  );
+  const tutors = suggestions
+    .flatMap((suggestion) => suggestion.tutors.map((tutor) => ({
+      ...tutor,
+      reasons: suggestion.reasons,
+      rank: suggestion.rank,
+    })))
+    .filter((tutor, index, list) => list.findIndex((item) => item.tutorGroupId === tutor.tutorGroupId) === index)
+    .slice(0, 4);
+
+  return (
+    <div className="mt-3 rounded-md border border-primary/15 bg-primary/5 p-2.5">
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        Why these tutors
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        {tutors.map((tutor) => {
+          const availability = availabilityByTutor.get(tutor.tutorGroupId);
+          return (
+            <div key={tutor.tutorGroupId} className="rounded-md border border-border bg-background/80 p-2">
+              <div className="text-xs font-semibold text-foreground">{tutor.displayName}</div>
+              <div className="mt-1 grid gap-1 text-[11px] text-muted-foreground">
+                <div><span className="font-medium text-foreground">Fit:</span> {(tutor.profileEvidence ?? tutor.reasons).slice(0, 2).join(" · ") || "Matched request"}</div>
+                <div><span className="font-medium text-foreground">Availability:</span> {availability ? compactAvailabilityWindows(availability.windows, 1) : "See option card"}</div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -706,6 +934,7 @@ function LineReviewPanel({
   const [classificationStatus, setClassificationStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(review.status === "pending_review");
 
   useEffect(() => {
     setDraft(review.finalText ?? review.proposedDraft);
@@ -715,6 +944,7 @@ function LineReviewPanel({
     setStudentLinkOverride(review.studentLinkOverride);
     setError(null);
     setClassificationStatus(null);
+    setExpanded(review.status === "pending_review");
   }, [review]);
 
   useEffect(() => {
@@ -797,6 +1027,32 @@ function LineReviewPanel({
   const verifiedCount = studentLinks.filter((link) => link.status === "verified").length;
   const sendBlocked = !locked && verifiedCount === 0 && !studentLinkOverride;
 
+  if (locked && !expanded) {
+    return (
+      <div className="rounded-md border border-primary/15 bg-primary/5 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <Inbox className="h-3.5 w-3.5 text-primary" aria-hidden />
+              LINE review
+              <Badge className={cn("h-5 capitalize", reviewStatusClass(review.status))} variant="outline">
+                {statusLabel}
+              </Badge>
+            </div>
+            <div className="mt-1 truncate text-[11px] text-muted-foreground">
+              {review.contactDisplayName || review.lineUserId} · Reviewed by {review.reviewedByName || "admin"}
+              {review.reviewedAt ? ` · ${formatShortDate(review.reviewedAt)}` : ""}
+            </div>
+          </div>
+          <Button type="button" size="xs" variant="outline" onClick={() => setExpanded(true)} className="shrink-0">
+            <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+            Audit
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-md border border-primary/20 bg-primary/5 p-3">
       <div className="mb-2 flex items-start justify-between gap-2">
@@ -804,7 +1060,7 @@ function LineReviewPanel({
           <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
             <Inbox className="h-3.5 w-3.5 text-primary" aria-hidden />
             LINE review
-            <Badge variant={locked ? "secondary" : "outline"} className="h-5 capitalize">
+            <Badge variant={locked ? "secondary" : "outline"} className={cn("h-5 capitalize", reviewStatusClass(review.status))}>
               {statusLabel}
             </Badge>
           </div>
@@ -816,10 +1072,13 @@ function LineReviewPanel({
             <div className="mt-1 text-xs text-muted-foreground">{review.classifierSummary}</div>
           )}
         </div>
-        {review.sendLineMessageId && (
-          <Badge variant="secondary" className="h-5 text-[10px]">
-            Sent
-          </Badge>
+        {locked && (
+          <Button type="button" size="icon-xs" variant="ghost" onClick={() => setExpanded(false)} title="Collapse review audit">
+            <ChevronUp className="h-3.5 w-3.5" aria-hidden />
+          </Button>
+        )}
+        {!locked && review.sendLineMessageId && (
+          <Badge variant="secondary" className="h-5 text-[10px]">Sent</Badge>
         )}
       </div>
 
@@ -972,7 +1231,7 @@ function LineReviewPanel({
       )}
 
       {!locked ? (
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <div className="sticky bottom-0 z-10 -mx-3 mt-3 flex flex-wrap items-center gap-1.5 border-t border-primary/15 bg-primary/5 px-3 py-2 backdrop-blur">
           <Button
             type="button"
             size="sm"
@@ -1040,13 +1299,15 @@ function LineReviewPanel({
 export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList }: SchedulerWorkspaceProps) {
   const compare = useCompare();
   const [conversations, setConversations] = useState<SchedulerConversation[]>([]);
+  const [adminFacets, setAdminFacets] = useState<SchedulerAdminFacet[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<SchedulerConversation | null>(null);
   const [messages, setMessages] = useState<SchedulerMessage[]>([]);
   const [pendingLineReviews, setPendingLineReviews] = useState<LineSchedulerReview[]>([]);
   const [selectedLineReviews, setSelectedLineReviews] = useState<LineSchedulerReview[]>([]);
   const [lineAnalytics, setLineAnalytics] = useState<LineSchedulerAnalytics | null>(null);
-  const [scope, setScope] = useState<"all" | "mine">("all");
+  const [ownerFilter, setOwnerFilter] = useState<"all" | "mine" | string>("all");
+  const [sortMode, setSortMode] = useState<SchedulerConversationSort>("review_priority");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
@@ -1060,6 +1321,7 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
   const [rightWorkspace, setRightWorkspace] = useState<"compare" | "notes">("notes");
   const [compareFullscreen, setCompareFullscreen] = useState(false);
   const detailsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSelectedLineReviewRef = useRef(false);
 
   const refreshLineReviews = async (conversationId = selectedId) => {
     const pendingParams = new URLSearchParams({ status: "pending_review", analytics: "true" });
@@ -1087,18 +1349,30 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
     void refreshLineReviews(selectedId);
   };
 
+  const selectLineReview = useCallback((review: LineSchedulerReview) => {
+    if (review.conversationId) {
+      setSelectedId(review.conversationId);
+    }
+  }, []);
+
   const loadConversations = async (nextSelectedId?: string | null) => {
     setLoadingList(true);
     setError(null);
     try {
       const params = new URLSearchParams();
-      params.set("scope", scope);
+      params.set("sort", sortMode);
+      if (ownerFilter === "mine") {
+        params.set("scope", "mine");
+      } else if (ownerFilter !== "all") {
+        params.set("ownerEmail", ownerFilter);
+      }
       if (includeArchived) params.set("includeArchived", "true");
       if (deferredQuery.trim()) params.set("q", deferredQuery.trim());
-      const data = await jsonOrThrow<{ conversations: SchedulerConversation[] }>(
+      const data = await jsonOrThrow<{ conversations: SchedulerConversation[]; adminFacets: SchedulerAdminFacet[] }>(
         await fetch(`/api/ai-scheduler/conversations?${params.toString()}`),
       );
       setConversations(data.conversations);
+      setAdminFacets(data.adminFacets);
       const desiredId = nextSelectedId ?? selectedId;
       if (desiredId && data.conversations.some((conversation) => conversation.id === desiredId)) {
         setSelectedId(desiredId);
@@ -1115,7 +1389,7 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
   useEffect(() => {
     void loadConversations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope, includeArchived, deferredQuery]);
+  }, [ownerFilter, sortMode, includeArchived, deferredQuery]);
 
   useEffect(() => {
     void refreshLineReviews();
@@ -1125,6 +1399,14 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (autoSelectedLineReviewRef.current || pendingLineReviews.length === 0) return;
+    const oldest = oldestPendingReview(pendingLineReviews);
+    if (!oldest?.conversationId) return;
+    autoSelectedLineReviewRef.current = true;
+    setSelectedId(oldest.conversationId);
+  }, [pendingLineReviews]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -1320,9 +1602,21 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
   ].filter(Boolean).join(", ");
   const questions = state.unresolvedQuestions ?? [];
   const assumptions = state.assumptions ?? [];
+  const activeLineReview = useMemo(
+    () => selectedLineReviews.find((review) => review.status === "pending_review") ?? selectedLineReviews[0] ?? null,
+    [selectedLineReviews],
+  );
+  const selectedReviewId = activeLineReview?.id ?? null;
 
   return (
-    <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+      <LineQueueBand
+        reviews={pendingLineReviews}
+        analytics={lineAnalytics}
+        selectedReviewId={selectedReviewId}
+        onSelectReview={selectLineReview}
+      />
+      <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
       <aside className="flex w-[280px] shrink-0 flex-col overflow-hidden border-r border-border/60 pr-3">
         <div className="mb-2 flex items-center justify-between gap-2">
           <div>
@@ -1346,8 +1640,8 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
           <Button
             type="button"
             size="xs"
-            variant={scope === "all" ? "default" : "outline"}
-            onClick={() => setScope("all")}
+            variant={ownerFilter === "all" ? "default" : "outline"}
+            onClick={() => setOwnerFilter("all")}
             className="flex-1"
           >
             All
@@ -1355,8 +1649,8 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
           <Button
             type="button"
             size="xs"
-            variant={scope === "mine" ? "default" : "outline"}
-            onClick={() => setScope("mine")}
+            variant={ownerFilter === "mine" ? "default" : "outline"}
+            onClick={() => setOwnerFilter("mine")}
             className="flex-1"
           >
             Mine
@@ -1371,6 +1665,51 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
             <Archive className="h-3 w-3" aria-hidden />
           </Button>
         </div>
+        <label className="mb-2 block text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Sort
+          <select
+            value={sortMode}
+            onChange={(event) => setSortMode(event.target.value as SchedulerConversationSort)}
+            className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs normal-case tracking-normal text-foreground outline-none focus:ring-2 focus:ring-ring/50"
+          >
+            {SCHEDULER_SORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        {adminFacets.length > 0 && (
+          <div className="mb-2 rounded-md border border-border bg-card/70 p-2">
+            <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <Filter className="h-3 w-3" aria-hidden />
+              Admin chats
+            </div>
+            <div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto pr-1">
+              {adminFacets.map((facet) => {
+                const accent = adminAccentFor(facet.email, facet.name);
+                const active = ownerFilter === facet.email;
+                return (
+                  <button
+                    key={facet.email ?? "unknown-admin"}
+                    type="button"
+                    onClick={() => facet.email && setOwnerFilter(facet.email)}
+                    disabled={!facet.email}
+                    className={cn(
+                      "inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] font-medium disabled:cursor-not-allowed disabled:opacity-60",
+                      active ? cn(accent.borderClassName, accent.bgClassName, accent.textClassName) : "border-border bg-background text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    <span className={cn("h-2 w-2 shrink-0 rounded-full", accent.dotClassName)} />
+                    <span className="truncate">{facet.name || facet.email || "Unknown"}</span>
+                    <span className="text-[9px] opacity-80">{facet.count}</span>
+                    {facet.pendingLineCount > 0 && (
+                      <Badge variant="outline" className="h-4 px-1 text-[9px]">{facet.pendingLineCount}</Badge>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
         <div className="mb-2 rounded-md border border-border bg-card/70 p-2">
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -1419,9 +1758,7 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
                 <button
                   key={review.id}
                   type="button"
-                  onClick={() => {
-                    if (review.conversationId) setSelectedId(review.conversationId);
-                  }}
+                  onClick={() => selectLineReview(review)}
                   disabled={!review.conversationId}
                   className="w-full rounded border border-border bg-background px-2 py-1.5 text-left hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
                 >
@@ -1449,6 +1786,7 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
             <div className="rounded-md border border-border p-3 text-xs text-muted-foreground">No conversations yet.</div>
           ) : conversations.map((conversation) => {
             const active = conversation.id === selectedId;
+            const accent = adminAccentFor(conversation.createdByEmail, conversation.createdByName);
             return (
               <button
                 key={conversation.id}
@@ -1460,6 +1798,7 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
                 )}
               >
                 <div className="flex items-center gap-1">
+                  <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", accent.dotClassName)} />
                   <div className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
                     {conversation.title}
                   </div>
@@ -1467,11 +1806,30 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
                     <Badge variant="outline" className="h-4 px-1 text-[9px]">Archived</Badge>
                   )}
                 </div>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  <Badge variant={conversation.source === "line" ? "secondary" : "outline"} className="h-4 px-1 text-[9px]">
+                    {conversation.source === "line" ? "LINE" : "Manual"}
+                  </Badge>
+                  {conversation.pendingLineReviewCount > 0 ? (
+                    <Badge variant="outline" className={cn("h-4 px-1 text-[9px]", reviewStatusClass("pending_review"))}>
+                      {conversation.pendingLineReviewCount} pending
+                    </Badge>
+                  ) : conversation.latestLineReviewStatus ? (
+                    <Badge variant="outline" className={cn("h-4 px-1 text-[9px] capitalize", reviewStatusClass(conversation.latestLineReviewStatus))}>
+                      {conversation.latestLineReviewStatus === "rejected" ? "Rejected" : "Handled"}
+                    </Badge>
+                  ) : null}
+                  {conversation.needsStudentLink && (
+                    <Badge variant="outline" className="h-4 border-amber-300 bg-amber-50 px-1 text-[9px] text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                      Needs link
+                    </Badge>
+                  )}
+                </div>
                 <div className="mt-1 truncate text-[11px] text-muted-foreground">
                   {conversation.customerStudentName || conversation.customerParentName || "No customer label"}
                 </div>
                 <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-                  <span className="truncate">{conversation.createdByName || conversation.createdByEmail || "Unknown admin"}</span>
+                  <span className={cn("truncate", accent.textClassName)}>{conversation.createdByName || conversation.createdByEmail || "Unknown admin"}</span>
                   <span>{formatShortDate(conversation.lastMessageAt)}</span>
                 </div>
               </button>
@@ -1527,44 +1885,66 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
         <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-border bg-card/60 p-3">
           {loadingConversation ? (
             <div className="text-xs text-muted-foreground">Loading chat...</div>
-          ) : messages.length === 0 ? (
-            <div className="flex h-full items-center justify-center">
-              <div className="max-w-md text-center">
-                <div className="text-sm font-semibold text-foreground">Start with the parent’s message</div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  The assistant will extract requirements, search broad partials when needed, and keep the notes saved here.
-                </p>
-              </div>
-            </div>
           ) : (
             <div className="space-y-3">
+              {selectedLineReviews.length > 0 && (
+                <div className="sticky top-0 z-20 space-y-2 rounded-md border border-primary/20 bg-card/95 p-2 shadow-sm backdrop-blur">
+                  <div className="flex items-center justify-between gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <span className="flex items-center gap-1.5"><Inbox className="h-3.5 w-3.5" aria-hidden /> Active LINE review</span>
+                    <span>{selectedLineReviews.length} review{selectedLineReviews.length === 1 ? "" : "s"}</span>
+                  </div>
+                  {selectedLineReviews.map((review) => (
+                    <LineReviewPanel
+                      key={review.id}
+                      review={review}
+                      onUpdated={replaceLineReview}
+                    />
+                  ))}
+                </div>
+              )}
+              {messages.length === 0 && (
+                <div className="flex min-h-[240px] items-center justify-center">
+                  <div className="max-w-md text-center">
+                    <div className="text-sm font-semibold text-foreground">Start with the parent’s message</div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      The assistant will extract requirements, search broad partials when needed, and keep the notes saved here.
+                    </p>
+                  </div>
+                </div>
+              )}
               {messages.map((message) => {
                 const payload = payloadFromMessage(message);
                 const suggestions = payload?.suggestions ?? [];
                 const availabilitySummary = payload?.availabilitySummary;
-                const constraintLedger = payload?.constraintLedger ?? [];
                 const parentDraft = payload?.parentMessageDraft;
                 const isAdmin = message.role === "admin";
                 const isParent = message.role === "parent";
+                const accent = adminAccentFor(message.createdByEmail, message.createdByName);
                 return (
                   <div
                     key={message.id}
                     className={cn(
                       "rounded-md border p-3",
                       isAdmin
-                        ? "ml-auto max-w-[78%] border-primary/20 bg-primary/5"
+                        ? cn("ml-auto max-w-[78%] border-primary/20 bg-primary/5", accent.bubbleClassName)
                         : isParent
                           ? "mr-auto max-w-[84%] border-available/30 bg-available/8"
                           : "mr-auto max-w-[88%] border-border bg-background",
                     )}
                   >
                     <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-muted-foreground">
-                      <span>{isAdmin ? message.createdByName || "Admin" : isParent ? message.createdByName || "Parent via LINE" : "AI Scheduler"}</span>
+                      <span className="inline-flex items-center gap-1">
+                        {isAdmin && <span className={cn("h-2 w-2 rounded-full", accent.dotClassName)} />}
+                        {isAdmin ? message.createdByName || "Admin" : isParent ? message.createdByName || "Parent via LINE" : "AI Scheduler"}
+                      </span>
                       <span>{formatShortDate(message.createdAt)}</span>
                     </div>
                     <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{message.content}</div>
                     {payload?.error && (
                       <div className="mt-2 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">{payload.error}</div>
+                    )}
+                    {payload && (
+                      <AiDecisionChecklist state={payload.state ?? state} payload={payload} />
                     )}
                     {suggestions.length > 0 && (
                       <div className="mt-3 grid gap-2 lg:grid-cols-2">
@@ -1577,16 +1957,9 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
                         ))}
                       </div>
                     )}
-                    {payload?.questions && payload.questions.length > 0 && (
-                      <div className="mt-2 rounded-md border border-amber-300/40 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:bg-amber-950/20 dark:text-amber-200">
-                        {payload.questions[0]}
-                      </div>
-                    )}
+                    <WhyTheseTutorsPanel suggestions={suggestions} availabilitySummary={availabilitySummary} />
                     {availabilitySummary && (
                       <AvailabilitySummaryPanel summary={availabilitySummary} />
-                    )}
-                    {constraintLedger.length > 0 && (
-                      <ConstraintLedgerPanel ledger={constraintLedger} />
                     )}
                     {parentDraft && (
                       <ParentDraft
@@ -1599,17 +1972,6 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
                   </div>
                 );
               })}
-              {selectedLineReviews.length > 0 && (
-                <div className="space-y-2">
-                  {selectedLineReviews.map((review) => (
-                    <LineReviewPanel
-                      key={review.id}
-                      review={review}
-                      onUpdated={replaceLineReview}
-                    />
-                  ))}
-                </div>
-              )}
               {sending && (
                 <div className="rounded-md border border-border bg-background p-3 text-xs text-muted-foreground">
                   Searching Wise-backed availability...
@@ -1654,7 +2016,11 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
       <aside
         className={cn(
           "flex min-w-0 flex-col overflow-hidden border-l border-border/60",
-          compareFullscreen ? "flex-1 border-l-0 pl-0" : "min-w-[520px] basis-[48%] pl-3",
+          compareFullscreen
+            ? "flex-1 border-l-0 pl-0"
+            : pendingLineReviews.length > 0
+              ? "min-w-[420px] basis-[38%] pl-3"
+              : "min-w-[520px] basis-[48%] pl-3",
         )}
       >
         <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
@@ -1811,6 +2177,7 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
           </div>
         )}
       </aside>
+      </div>
     </div>
   );
 }
