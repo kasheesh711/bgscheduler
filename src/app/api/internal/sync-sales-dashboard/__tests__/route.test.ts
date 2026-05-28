@@ -2,10 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { NextRequest } from "next/server";
 
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
-vi.mock("@/lib/sales-dashboard/data", () => ({ importRefreshableSalesSources: vi.fn() }));
+vi.mock("@/lib/sales-dashboard/data", () => ({
+  importActiveSalesDashboardProjectionSource: vi.fn(),
+  importRefreshableSalesSources: vi.fn(),
+}));
 
 import { auth } from "@/lib/auth";
-import { importRefreshableSalesSources } from "@/lib/sales-dashboard/data";
+import {
+  importActiveSalesDashboardProjectionSource,
+  importRefreshableSalesSources,
+} from "@/lib/sales-dashboard/data";
 import { MissingGoogleSheetsTokenError } from "@/lib/sales-dashboard/google-oauth";
 import { GET, POST } from "../route";
 
@@ -24,6 +30,7 @@ describe("GET/POST /api/internal/sync-sales-dashboard", () => {
     process.env.CRON_SECRET = "test-secret";
     authMock.mockResolvedValue(null);
     vi.mocked(importRefreshableSalesSources).mockResolvedValue([{ sourceId: "source-1" }] as never);
+    vi.mocked(importActiveSalesDashboardProjectionSource).mockResolvedValue({ sourceId: "projection-1" } as never);
   });
 
   afterEach(() => {
@@ -47,7 +54,15 @@ describe("GET/POST /api/internal/sync-sales-dashboard", () => {
       triggerType: "cron",
       actorEmail: "cron@begifted.local",
     });
-    await expect(res.json()).resolves.toMatchObject({ ok: true, results: [{ sourceId: "source-1" }] });
+    expect(importActiveSalesDashboardProjectionSource).toHaveBeenCalledWith({
+      triggerType: "cron",
+      actorEmail: "cron@begifted.local",
+    });
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      results: [{ sourceId: "source-1" }],
+      projectionResult: { sourceId: "projection-1" },
+    });
   });
 
   it("allows a signed-in admin to trigger POST manually without the cron secret", async () => {
@@ -57,6 +72,10 @@ describe("GET/POST /api/internal/sync-sales-dashboard", () => {
 
     expect(res.status).toBe(200);
     expect(importRefreshableSalesSources).toHaveBeenCalledWith({
+      triggerType: "cron",
+      actorEmail: "admin@example.com",
+    });
+    expect(importActiveSalesDashboardProjectionSource).toHaveBeenCalledWith({
       triggerType: "cron",
       actorEmail: "admin@example.com",
     });

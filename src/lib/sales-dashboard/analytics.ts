@@ -202,6 +202,7 @@ export function buildSalesDashboardPayload(input: {
   normalRows: ParsedNormalSaleRow[];
   additionalRows: ParsedAdditionalSaleRow[];
   sources: SalesDashboardSourceSummary[];
+  projection?: SalesDashboardPayload["projection"];
   token: SalesDashboardPayload["token"];
   now?: Date;
 }): SalesDashboardPayload {
@@ -328,6 +329,15 @@ export function buildSalesDashboardPayload(input: {
     retentionCohort,
     lastUpdated: lastImportedAt,
     sources: input.sources,
+    projection: input.projection ?? {
+      source: null,
+      targetMonthlyRevenue: null,
+      targetSource: "fallback",
+      scenarioSummaries: [],
+      months: [],
+      lastImportedAt: null,
+      lastImportError: null,
+    },
     token: input.token,
   };
 }

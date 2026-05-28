@@ -1,8 +1,11 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { LineProfile } from "@/lib/line/client";
-import type { LineSchedulerClassification } from "@/lib/line/classifier";
+import {
+  LINE_FALSE_NEGATIVE_CONFIDENCE_THRESHOLD,
+  type LineSchedulerClassification,
+} from "@/lib/line/classifier";
 
 export type LineSchedulerReviewStatus =
   | "pending_review"
@@ -32,6 +35,25 @@ export interface LineMessageForProcessing {
   text: string;
   createdAt: string;
   aiSchedulerConversationId: string | null;
+  classifierCategory: string | null;
+  classifierConfidence: number | null;
+  classifierSummary: string | null;
+  classifierRationale: string | null;
+}
+
+export interface LineFalseNegativeCandidateDto {
+  id: string;
+  threadId: string;
+  contactId: string;
+  lineUserId: string;
+  contactDisplayName: string | null;
+  text: string;
+  classifierCategory: string | null;
+  classifierConfidence: number | null;
+  classifierSummary: string | null;
+  classifierRationale: string | null;
+  classifiedAt: string | null;
+  conversationId: string | null;
 }
 
 export interface LineSchedulerReviewDto {
@@ -47,6 +69,7 @@ export interface LineSchedulerReviewDto {
   classifierCategory: string;
   classifierConfidence: number | null;
   classifierSummary: string | null;
+  classifierRationale: string | null;
   status: LineSchedulerReviewStatus;
   proposedDraft: string;
   selectedSuggestion: Record<string, unknown> | null;
@@ -126,6 +149,12 @@ function normalizeActor(actor: LineReviewActor): { email: string | null; name: s
   };
 }
 
+function extractRationale(payload: Record<string, unknown> | null | undefined): string | null {
+  if (!payload) return null;
+  const rationale = (payload as { rationale?: unknown }).rationale;
+  return typeof rationale === "string" && rationale.trim() ? rationale : null;
+}
+
 function reviewToDto(row: ReviewRow & {
   lineUserId: string;
   contactDisplayName: string | null;
@@ -143,6 +172,7 @@ function reviewToDto(row: ReviewRow & {
     classifierCategory: row.classifierCategory,
     classifierConfidence: row.classifierConfidence,
     classifierSummary: row.classifierSummary,
+    classifierRationale: extractRationale(row.classifierPayload),
     status: row.status,
     proposedDraft: row.proposedDraft,
     selectedSuggestion: row.selectedSuggestion ?? null,
@@ -346,6 +376,10 @@ export async function getLineMessageForProcessing(
       contactId: schema.lineMessages.contactId,
       text: schema.lineMessages.text,
       createdAt: schema.lineMessages.createdAt,
+      classifierCategory: schema.lineMessages.classifierCategory,
+      classifierConfidence: schema.lineMessages.classifierConfidence,
+      classifierSummary: schema.lineMessages.classifierSummary,
+      classifierPayload: schema.lineMessages.classifierPayload,
       lineUserId: schema.lineContacts.lineUserId,
       contactDisplayName: schema.lineContacts.displayName,
       aiSchedulerConversationId: schema.lineThreads.aiSchedulerConversationId,
@@ -366,7 +400,80 @@ export async function getLineMessageForProcessing(
     lineUserId: row.lineUserId,
     contactDisplayName: row.contactDisplayName,
     aiSchedulerConversationId: row.aiSchedulerConversationId,
+    classifierCategory: row.classifierCategory,
+    classifierConfidence: row.classifierConfidence,
+    classifierSummary: row.classifierSummary,
+    classifierRationale: extractRationale(row.classifierPayload),
   };
+}
+
+export async function listLineFalseNegativeCandidates(
+  db: Database,
+  options: { threshold?: number; limit?: number } = {},
+): Promise<LineFalseNegativeCandidateDto[]> {
+  const threshold = options.threshold ?? LINE_FALSE_NEGATIVE_CONFIDENCE_THRESHOLD;
+  const limit = options.limit ?? 100;
+
+  const rows = await db
+    .select({
+      id: schema.lineMessages.id,
+      threadId: schema.lineMessages.threadId,
+      contactId: schema.lineMessages.contactId,
+      text: schema.lineMessages.text,
+      classifierCategory: schema.lineMessages.classifierCategory,
+      classifierConfidence: schema.lineMessages.classifierConfidence,
+      classifierSummary: schema.lineMessages.classifierSummary,
+      classifierPayload: schema.lineMessages.classifierPayload,
+      classifiedAt: schema.lineMessages.classifiedAt,
+      lineUserId: schema.lineContacts.lineUserId,
+      contactDisplayName: schema.lineContacts.displayName,
+      conversationId: schema.lineThreads.aiSchedulerConversationId,
+    })
+    .from(schema.lineMessages)
+    .innerJoin(schema.lineContacts, eq(schema.lineMessages.contactId, schema.lineContacts.id))
+    .innerJoin(schema.lineThreads, eq(schema.lineMessages.threadId, schema.lineThreads.id))
+    .leftJoin(
+      schema.lineSchedulerReviews,
+      eq(schema.lineSchedulerReviews.inboundMessageId, schema.lineMessages.id),
+    )
+    .where(and(
+      eq(schema.lineMessages.direction, "inbound"),
+      // Drop out of the queue once an admin has triaged the classification
+      // (both "Not scheduling" and "Promote" record classification feedback).
+      isNull(schema.lineMessages.classificationReviewedAt),
+      // Exclude anything already promoted into a review.
+      isNull(schema.lineSchedulerReviews.id),
+      or(
+        eq(schema.lineMessages.classifierCategory, "unclear"),
+        and(
+          eq(schema.lineMessages.classifierCategory, "non_scheduling"),
+          // Fail-open: NULL confidence counts as "show".
+          or(
+            lt(schema.lineMessages.classifierConfidence, threshold),
+            isNull(schema.lineMessages.classifierConfidence),
+          ),
+        ),
+      ),
+    ))
+    .orderBy(desc(schema.lineMessages.classifiedAt))
+    .limit(limit);
+
+  return rows
+    .filter((row): row is typeof row & { text: string } => Boolean(row.text))
+    .map((row) => ({
+      id: row.id,
+      threadId: row.threadId,
+      contactId: row.contactId,
+      lineUserId: row.lineUserId,
+      contactDisplayName: row.contactDisplayName,
+      text: row.text,
+      classifierCategory: row.classifierCategory,
+      classifierConfidence: row.classifierConfidence,
+      classifierSummary: row.classifierSummary,
+      classifierRationale: extractRationale(row.classifierPayload),
+      classifiedAt: iso(row.classifiedAt),
+      conversationId: row.conversationId,
+    }));
 }
 
 export async function loadRecentLineMessages(

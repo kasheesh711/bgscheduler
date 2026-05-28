@@ -29,6 +29,7 @@ import { ComparePanel } from "@/components/compare/compare-panel";
 import { useCompare } from "@/hooks/use-compare";
 import type { TutorListItem } from "@/lib/data/tutors";
 import { adminAccentFor } from "@/lib/scheduler/admin-colors";
+import { confidenceBand } from "@/lib/line/confidence";
 import { cn } from "@/lib/utils";
 import { buildSchedulerCompareFocusTarget } from "./scheduler-compare-focus";
 
@@ -208,6 +209,7 @@ interface LineSchedulerReview {
   classifierCategory: string;
   classifierConfidence: number | null;
   classifierSummary: string | null;
+  classifierRationale: string | null;
   status: "pending_review" | "approved_sent" | "accepted_no_send" | "rejected" | "dismissed";
   proposedDraft: string;
   finalText: string | null;
@@ -221,6 +223,21 @@ interface LineSchedulerReview {
   reviewedByName: string | null;
   reviewedAt: string | null;
   createdAt: string;
+}
+
+interface LineFalseNegativeCandidate {
+  id: string;
+  threadId: string;
+  contactId: string;
+  lineUserId: string;
+  contactDisplayName: string | null;
+  text: string;
+  classifierCategory: string | null;
+  classifierConfidence: number | null;
+  classifierSummary: string | null;
+  classifierRationale: string | null;
+  classifiedAt: string | null;
+  conversationId: string | null;
 }
 
 interface LineSchedulerAnalytics {
@@ -447,6 +464,21 @@ function QueueMetric({ label, value, detail }: { label: string; value: string | 
   );
 }
 
+function ConfidenceBadge({ value, className }: { value: number | null; className?: string }) {
+  const band = confidenceBand(value);
+  if (!band || value == null) return null;
+  const bandClass = {
+    high: "border-available/40 bg-available/10 text-available",
+    medium: "border-blocked/40 bg-blocked/10 text-blocked",
+    low: "border-conflict/40 bg-conflict/10 text-conflict",
+  }[band];
+  return (
+    <Badge variant="outline" className={cn("h-5 shrink-0 text-[10px]", bandClass, className)} title={`AI confidence: ${band}`}>
+      {Math.round(value * 100)}%{band === "low" ? " · low" : ""}
+    </Badge>
+  );
+}
+
 function LineQueueBand({
   reviews,
   analytics,
@@ -464,6 +496,7 @@ function LineQueueBand({
   onToggleExpanded: () => void;
   onSelectReview: (review: LineSchedulerReview) => void;
 }) {
+  const [queueSort, setQueueSort] = useState<"oldest" | "confidence">("oldest");
   const oldest = oldestPendingReview(reviews);
   const editedCount = analytics?.feedbackLabels.find((item) => item.label === "edited")?.count ?? 0;
   const completed = (analytics?.approvedSent ?? 0) + (analytics?.acceptedNoSend ?? 0) + (analytics?.rejected ?? 0) + (analytics?.dismissed ?? 0);
@@ -505,6 +538,18 @@ function LineQueueBand({
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span>{reviews.length > 0 ? "Morning triage is open until all pending reviews are handled." : "No pending LINE reviews."}</span>
+            {reviews.length > 0 && (
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                onClick={() => setQueueSort((value) => (value === "oldest" ? "confidence" : "oldest"))}
+                className="h-6 px-1.5"
+                title="Toggle queue sort order"
+              >
+                Sort: {queueSort === "oldest" ? "Oldest" : "Lowest confidence"}
+              </Button>
+            )}
             {canToggle && (
               <Button type="button" size="xs" variant="ghost" onClick={onToggleExpanded} className="h-6 px-1.5">
                 <ChevronUp className="h-3 w-3" aria-hidden />
@@ -527,7 +572,14 @@ function LineQueueBand({
       </div>
       {reviews.length > 0 && (
         <div className="mt-3 flex gap-2 overflow-x-auto pb-0.5">
-          {[...reviews].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(0, 8).map((review) => (
+          {[...reviews]
+            .sort((a, b) =>
+              queueSort === "confidence"
+                ? (a.classifierConfidence ?? 1) - (b.classifierConfidence ?? 1)
+                : a.createdAt.localeCompare(b.createdAt),
+            )
+            .slice(0, 8)
+            .map((review) => (
             <button
               key={review.id}
               type="button"
@@ -540,12 +592,130 @@ function LineQueueBand({
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate text-xs font-semibold text-foreground">{review.contactDisplayName || review.lineUserId}</span>
-                <span className="shrink-0 text-[10px] text-muted-foreground">{formatAge(review.createdAt)}</span>
+                <span className="flex shrink-0 items-center gap-1">
+                  <ConfidenceBadge value={review.classifierConfidence} />
+                  <span className="text-[10px] text-muted-foreground">{formatAge(review.createdAt)}</span>
+                </span>
               </div>
               <div className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
                 {review.classifierSummary || statusLabel(review.classifierCategory)}
               </div>
             </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function MissedMessagesBand({
+  candidates,
+  onChanged,
+  onJumpToConversation,
+}: {
+  candidates: LineFalseNegativeCandidate[];
+  onChanged: () => void;
+  onJumpToConversation: (conversationId: string) => void;
+}) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  if (candidates.length === 0) return null;
+
+  const markNotScheduling = async (candidate: LineFalseNegativeCandidate) => {
+    setBusyId(candidate.id);
+    setError(null);
+    try {
+      await jsonOrThrow(
+        await fetch(`/api/line/messages/${candidate.id}/classification-feedback`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reviewedCategory: "non_scheduling" }),
+        }),
+      );
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update message");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const promote = async (candidate: LineFalseNegativeCandidate) => {
+    setBusyId(candidate.id);
+    setError(null);
+    try {
+      await jsonOrThrow(await fetch(`/api/line/messages/${candidate.id}/promote`, { method: "POST" }));
+      onChanged();
+      if (candidate.conversationId) onJumpToConversation(candidate.conversationId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to promote message");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <section className="shrink-0 rounded-lg border border-blocked/30 bg-blocked/5 p-3 shadow-sm" aria-label="Possibly missed messages">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-foreground">
+          <AlertTriangle className="h-4 w-4 text-blocked" aria-hidden />
+          <span>Possibly missed messages</span>
+          <Badge variant="outline" className="h-5">{candidates.length}</Badge>
+          <span className="hidden truncate text-[11px] font-normal text-muted-foreground sm:inline">
+            AI marked these unclear or low-confidence non-scheduling.
+          </span>
+        </div>
+        <Button type="button" size="xs" variant="outline" onClick={() => setExpanded((value) => !value)}>
+          {expanded ? <ChevronUp className="h-3 w-3" aria-hidden /> : <ChevronDown className="h-3 w-3" aria-hidden />}
+          {expanded ? "Hide" : "Review"}
+        </Button>
+      </div>
+      {error && <div className="mt-2 text-[11px] text-conflict">{error}</div>}
+      {expanded && (
+        <div className="mt-2 max-h-64 space-y-1.5 overflow-y-auto pr-1">
+          {candidates.map((candidate) => (
+            <div key={candidate.id} className="rounded-md border border-border bg-background px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-xs font-semibold text-foreground">
+                  {candidate.contactDisplayName || candidate.lineUserId}
+                </span>
+                <span className="flex shrink-0 items-center gap-1">
+                  <ConfidenceBadge value={candidate.classifierConfidence} />
+                  <Badge variant="outline" className="h-5 text-[10px] capitalize">
+                    {(candidate.classifierCategory ?? "unclear").replace(/_/g, " ")}
+                  </Badge>
+                </span>
+              </div>
+              <div className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{candidate.text}</div>
+              {candidate.classifierRationale && (
+                <details className="mt-1 text-[11px] text-muted-foreground">
+                  <summary className="cursor-pointer select-none text-primary/80 hover:text-primary">Why the AI skipped it</summary>
+                  <p className="mt-1 whitespace-pre-wrap">{candidate.classifierRationale}</p>
+                </details>
+              )}
+              <div className="mt-2 flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="default"
+                  disabled={busyId === candidate.id}
+                  onClick={() => promote(candidate)}
+                >
+                  Promote to review
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={busyId === candidate.id}
+                  onClick={() => markNotScheduling(candidate)}
+                >
+                  Not scheduling
+                </Button>
+              </div>
+            </div>
           ))}
         </div>
       )}
@@ -1098,12 +1268,24 @@ function LineReviewPanel({
               {statusLabel}
             </Badge>
           </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">
-            {review.contactDisplayName || review.lineUserId} · {review.classifierCategory.replace(/_/g, " ")}
-            {typeof review.classifierConfidence === "number" ? ` · ${Math.round(review.classifierConfidence * 100)}%` : ""}
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span>{review.contactDisplayName || review.lineUserId} · {review.classifierCategory.replace(/_/g, " ")}</span>
+            <ConfidenceBadge value={review.classifierConfidence} />
           </div>
+          {confidenceBand(review.classifierConfidence) === "low" && (
+            <div className="mt-1 flex items-start gap-1.5 rounded-md border border-conflict/30 bg-conflict/10 px-2 py-1 text-[11px] text-conflict">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span>Low AI confidence — double-check the extraction before sending.</span>
+            </div>
+          )}
           {review.classifierSummary && (
             <div className="mt-1 text-xs text-muted-foreground">{review.classifierSummary}</div>
+          )}
+          {review.classifierRationale && (
+            <details className="mt-1 text-[11px] text-muted-foreground">
+              <summary className="cursor-pointer select-none text-primary/80 hover:text-primary">Why the AI thinks so</summary>
+              <p className="mt-1 whitespace-pre-wrap">{review.classifierRationale}</p>
+            </details>
           )}
         </div>
         {locked && (
@@ -1340,11 +1522,12 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
   const [pendingLineReviews, setPendingLineReviews] = useState<LineSchedulerReview[]>([]);
   const [selectedLineReviews, setSelectedLineReviews] = useState<LineSchedulerReview[]>([]);
   const [lineAnalytics, setLineAnalytics] = useState<LineSchedulerAnalytics | null>(null);
+  const [falseNegatives, setFalseNegatives] = useState<LineFalseNegativeCandidate[]>([]);
   const [lineQueueManuallyExpanded, setLineQueueManuallyExpanded] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem(LINE_QUEUE_EXPANDED_STORAGE_KEY) === "true";
   });
-  const [ownerFilter, setOwnerFilter] = useState<"all" | "mine" | string>("all");
+  const [ownerFilter, setOwnerFilter] = useState<"all" | "mine" | string>("mine");
   const [sortMode, setSortMode] = useState<SchedulerConversationSort>("review_priority");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [query, setQuery] = useState("");
@@ -1360,6 +1543,7 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
   const [compareFullscreen, setCompareFullscreen] = useState(false);
   const detailsSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSelectedLineReviewRef = useRef(false);
+  const ownerFallbackTriedRef = useRef(false);
 
   const refreshLineReviews = async (conversationId = selectedId) => {
     const pendingParams = new URLSearchParams({ status: "pending_review", analytics: "true" });
@@ -1378,6 +1562,17 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
       setSelectedLineReviews(selectedData.reviews);
     } else {
       setSelectedLineReviews([]);
+    }
+  };
+
+  const refreshFalseNegatives = async () => {
+    try {
+      const data = await jsonOrThrow<{ candidates: LineFalseNegativeCandidate[] }>(
+        await fetch("/api/line/scheduler-reviews/false-negatives"),
+      );
+      setFalseNegatives(data.candidates);
+    } catch {
+      // Non-fatal: leave the existing missed-message list in place.
     }
   };
 
@@ -1411,6 +1606,11 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
       );
       setConversations(data.conversations);
       setAdminFacets(data.adminFacets);
+      if (ownerFilter === "mine" && data.conversations.length === 0 && !ownerFallbackTriedRef.current) {
+        ownerFallbackTriedRef.current = true;
+        setOwnerFilter("all");
+        return;
+      }
       const desiredId = nextSelectedId ?? selectedId;
       if (desiredId && data.conversations.some((conversation) => conversation.id === desiredId)) {
         setSelectedId(desiredId);
@@ -1431,8 +1631,10 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
 
   useEffect(() => {
     void refreshLineReviews();
+    void refreshFalseNegatives();
     const interval = window.setInterval(() => {
       void refreshLineReviews();
+      void refreshFalseNegatives();
     }, 60_000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1671,6 +1873,14 @@ export function SchedulerWorkspace({ sessionUser, aiSchedulerEnabled, tutorList 
         canToggle={pendingLineReviews.length === 0}
         onToggleExpanded={toggleLineQueueExpanded}
         onSelectReview={selectLineReview}
+      />
+      <MissedMessagesBand
+        candidates={falseNegatives}
+        onChanged={() => {
+          void refreshFalseNegatives();
+          void refreshLineReviews(selectedId);
+        }}
+        onJumpToConversation={(conversationId) => setSelectedId(conversationId)}
       />
       <div className="flex min-h-0 flex-1 gap-3 overflow-hidden">
       <aside className="flex w-[280px] shrink-0 flex-col overflow-hidden border-r border-border/60 pr-3">

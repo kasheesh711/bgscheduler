@@ -68,7 +68,7 @@ export interface SchedulerLatencyBreakdown {
   searchMs: number;
 }
 
-export type SchedulerFeedbackAction = "accept" | "edit" | "reject";
+export type SchedulerFeedbackAction = "accept" | "edit" | "reject" | "dismiss";
 
 export interface SchedulerFeedbackDto {
   id: string;
@@ -81,6 +81,9 @@ export interface SchedulerFeedbackDto {
   editedParentDraft: string | null;
   rejectionReason: string | null;
   staffCorrection: string | null;
+  lineReviewId: string | null;
+  classifierConfidence: number | null;
+  timeToReviewMs: number | null;
   createdByEmail: string | null;
   createdByName: string | null;
   createdAt: string;
@@ -167,6 +170,9 @@ function feedbackToDto(row: FeedbackRow): SchedulerFeedbackDto {
     editedParentDraft: row.editedParentDraft,
     rejectionReason: row.rejectionReason,
     staffCorrection: row.staffCorrection,
+    lineReviewId: row.lineReviewId,
+    classifierConfidence: row.classifierConfidence,
+    timeToReviewMs: row.timeToReviewMs,
     createdByEmail: row.createdByEmail,
     createdByName: row.createdByName,
     createdAt: iso(row.createdAt)!,
@@ -538,6 +544,9 @@ export async function createSchedulerFeedback(
     editedParentDraft?: string | null;
     rejectionReason?: string | null;
     staffCorrection?: string | null;
+    lineReviewId?: string | null;
+    classifierConfidence?: number | null;
+    timeToReviewMs?: number | null;
     actor?: SchedulerActor;
   },
 ): Promise<SchedulerFeedbackDto> {
@@ -554,6 +563,9 @@ export async function createSchedulerFeedback(
       editedParentDraft: input.editedParentDraft?.trim() || null,
       rejectionReason: input.rejectionReason?.trim() || null,
       staffCorrection: input.staffCorrection?.trim() || null,
+      lineReviewId: input.lineReviewId ?? null,
+      classifierConfidence: input.classifierConfidence ?? null,
+      timeToReviewMs: input.timeToReviewMs ?? null,
       createdByEmail: actor.email,
       createdByName: actor.name,
     })

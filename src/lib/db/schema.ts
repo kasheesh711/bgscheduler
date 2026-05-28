@@ -346,6 +346,81 @@ export const salesDashboardAdditionalRows = pgTable("sales_dashboard_additional_
   index("sdar_source_month_idx").on(table.sourceMonth),
 ]);
 
+export const salesDashboardProjectionSources = pgTable("sales_dashboard_projection_sources", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  spreadsheetId: text("spreadsheet_id").notNull(),
+  spreadsheetUrl: text("spreadsheet_url").notNull(),
+  summarySheetName: text("summary_sheet_name").notNull().default("Summary"),
+  whatIfSheetName: text("what_if_sheet_name").notNull().default("What_If"),
+  calcMultiSheetName: text("calc_multi_sheet_name").notNull().default("Calc_Multi"),
+  status: text("status").notNull().default("active"),
+  lastSuccessfulImportRunId: uuid("last_successful_import_run_id"),
+  lastImportedAt: timestamp("last_imported_at", { withTimezone: true }),
+  lastImportError: text("last_import_error"),
+  lastProjectionMonthCount: integer("last_projection_month_count").notNull().default(0),
+  lastTargetMonthlyRevenue: doublePrecision("last_target_monthly_revenue"),
+  connectedEmail: text("connected_email").notNull(),
+  createdByEmail: text("created_by_email").notNull(),
+  updatedByEmail: text("updated_by_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("sdps_single_active_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'active'`),
+  index("sdps_connected_email_idx").on(table.connectedEmail),
+]);
+
+export const salesDashboardProjectionImportRuns = pgTable("sales_dashboard_projection_import_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sourceId: uuid("source_id").references(() => salesDashboardProjectionSources.id),
+  status: syncStatusEnum("status").notNull().default("running"),
+  triggerType: text("trigger_type").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  monthRowCount: integer("month_row_count").notNull().default(0),
+  targetMonthlyRevenue: doublePrecision("target_monthly_revenue"),
+  errorSummary: text("error_summary"),
+  actorEmail: text("actor_email"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+}, (table) => [
+  index("sdpir_source_started_idx").on(table.sourceId, table.startedAt),
+  index("sdpir_status_started_idx").on(table.status, table.startedAt),
+  uniqueIndex("sdpir_source_single_running_idx")
+    .on(table.sourceId)
+    .where(sql`${table.status} = 'running' AND ${table.sourceId} IS NOT NULL`),
+]);
+
+export const salesDashboardProjectionMonths = pgTable("sales_dashboard_projection_months", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sourceId: uuid("source_id").notNull().references(() => salesDashboardProjectionSources.id),
+  importRunId: uuid("import_run_id").notNull().references(() => salesDashboardProjectionImportRuns.id),
+  scenario: text("scenario").notNull(),
+  projectionMonth: date("projection_month", { mode: "string" }).notNull(),
+  monthLabel: text("month_label").notNull(),
+  monthKind: text("month_kind").notNull().default("forecast"),
+  totalNetRevenue: doublePrecision("total_net_revenue").notNull().default(0),
+  renewalRevenue: doublePrecision("renewal_revenue").notNull().default(0),
+  newStudentRevenue: doublePrecision("new_student_revenue").notNull().default(0),
+  trialRevenue: doublePrecision("trial_revenue").notNull().default(0),
+  activeStudents: doublePrecision("active_students").notNull().default(0),
+  trialBookings: doublePrecision("trial_bookings").notNull().default(0),
+  newStudents: doublePrecision("new_students").notNull().default(0),
+  packRenewals: doublePrecision("pack_renewals").notNull().default(0),
+  renewalHours: doublePrecision("renewal_hours").notNull().default(0),
+  newStudentHours: doublePrecision("new_student_hours").notNull().default(0),
+  trialHours: doublePrecision("trial_hours").notNull().default(0),
+  totalHours: doublePrecision("total_hours").notNull().default(0),
+  roomCapacity: doublePrecision("room_capacity").notNull().default(0),
+  roomUtilization: doublePrecision("room_utilization").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("sdpm_run_scenario_month_idx").on(table.importRunId, table.scenario, table.projectionMonth),
+  index("sdpm_source_run_idx").on(table.sourceId, table.importRunId),
+  index("sdpm_month_idx").on(table.projectionMonth),
+  index("sdpm_scenario_month_idx").on(table.scenario, table.projectionMonth),
+]);
+
 // ── Credit Control ──────────────────────────────────────────────────────
 
 export const creditControlSnapshots = pgTable("credit_control_snapshots", {
@@ -1103,6 +1178,9 @@ export const aiSchedulerFeedback = pgTable("ai_scheduler_feedback", {
   editedParentDraft: text("edited_parent_draft"),
   rejectionReason: text("rejection_reason"),
   staffCorrection: text("staff_correction"),
+  lineReviewId: uuid("line_review_id").references(() => lineSchedulerReviews.id, { onDelete: "set null" }),
+  classifierConfidence: doublePrecision("classifier_confidence"),
+  timeToReviewMs: integer("time_to_review_ms"),
   createdByEmail: text("created_by_email"),
   createdByName: text("created_by_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1111,6 +1189,7 @@ export const aiSchedulerFeedback = pgTable("ai_scheduler_feedback", {
   index("ai_scheduler_feedback_run_idx").on(table.schedulerRunId),
   index("ai_scheduler_feedback_created_at_idx").on(table.createdAt),
   index("ai_scheduler_feedback_action_idx").on(table.action),
+  index("ai_scheduler_feedback_line_review_idx").on(table.lineReviewId),
 ]);
 
 // ── LINE Scheduler Review ───────────────────────────────────────────────

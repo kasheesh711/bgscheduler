@@ -51,4 +51,17 @@ describe("sales dashboard empty setup UI", () => {
     expect(sourceManager).toContain("Archived sources");
     expect(sourceManager).not.toContain("title=\"Delete\"");
   });
+
+  it("includes projection workbook controls in the data sources dialog", () => {
+    const shell = readSalesDashboardShell();
+    const sourceManager = readSourceManager();
+
+    expect(shell).toContain("projectionForm");
+    expect(shell).toContain("/api/sales-dashboard/projection-source");
+    expect(shell).toContain("/api/sales-dashboard/projection-import");
+    expect(sourceManager).toContain("Projection Workbook");
+    expect(sourceManager).toContain("Actual-vs-projection uses normal sales only");
+    expect(sourceManager).toContain("Save projection");
+    expect(sourceManager).toContain("Import projection");
+  });
 });

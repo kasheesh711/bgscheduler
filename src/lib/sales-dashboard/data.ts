@@ -11,6 +11,13 @@ import {
 } from "./dates";
 import { getGoogleTokenStatus } from "./google-oauth";
 import {
+  DEFAULT_PROJECTION_CALC_MULTI_SHEET,
+  DEFAULT_PROJECTION_SPREADSHEET_URL,
+  DEFAULT_PROJECTION_SUMMARY_SHEET,
+  DEFAULT_PROJECTION_WHAT_IF_SHEET,
+  parseSalesProjectionWorkbook,
+} from "./projection";
+import {
   DEFAULT_ADDITIONAL_SHEET,
   DEFAULT_NORMAL_SHEET,
   LEGACY_NORMAL_SHEET,
@@ -32,9 +39,15 @@ import {
 import type {
   ParsedAdditionalSaleRow,
   ParsedNormalSaleRow,
+  ParsedSalesProjectionWorkbook,
   SalesDashboardSourceRecord,
   SalesDashboardSourceSummary,
+  SalesDashboardProjectionPayload,
+  SalesDashboardProjectionSourceRecord,
+  SalesDashboardProjectionSourceSummary,
   SalesImportTrigger,
+  SalesProjectionMonthRecord,
+  SalesProjectionScenarioSummary,
 } from "./types";
 
 export const SALES_DASHBOARD_CACHE_TAG = "sales-dashboard";
@@ -45,6 +58,15 @@ interface SourceInput {
   label?: string | null;
   normalSheetName?: string | null;
   additionalSheetName?: string | null;
+  connectedEmail: string;
+  actorEmail: string;
+}
+
+interface ProjectionSourceInput {
+  spreadsheetUrl: string;
+  summarySheetName?: string | null;
+  whatIfSheetName?: string | null;
+  calcMultiSheetName?: string | null;
   connectedEmail: string;
   actorEmail: string;
 }
@@ -60,6 +82,10 @@ function asSourceRecord(row: typeof schema.salesDashboardSources.$inferSelect): 
   return row as SalesDashboardSourceRecord;
 }
 
+function asProjectionSourceRecord(row: typeof schema.salesDashboardProjectionSources.$inferSelect): SalesDashboardProjectionSourceRecord {
+  return row as SalesDashboardProjectionSourceRecord;
+}
+
 function revalidateSalesDashboardCache() {
   try {
     revalidateTag(SALES_DASHBOARD_CACHE_TAG, "max");
@@ -67,6 +93,23 @@ function revalidateSalesDashboardCache() {
     const message = error instanceof Error ? error.message : "";
     if (!message.includes("static generation store missing")) throw error;
   }
+}
+
+function toProjectionSummary(source: SalesDashboardProjectionSourceRecord): SalesDashboardProjectionSourceSummary {
+  return {
+    id: source.id,
+    spreadsheetId: source.spreadsheetId,
+    spreadsheetUrl: source.spreadsheetUrl,
+    summarySheetName: source.summarySheetName,
+    whatIfSheetName: source.whatIfSheetName,
+    calcMultiSheetName: source.calcMultiSheetName,
+    status: source.status,
+    lastImportedAt: source.lastImportedAt?.toISOString() ?? null,
+    lastImportError: source.lastImportError,
+    lastProjectionMonthCount: source.lastProjectionMonthCount,
+    lastTargetMonthlyRevenue: source.lastTargetMonthlyRevenue,
+    connectedEmail: source.connectedEmail,
+  };
 }
 
 function toSummary(source: SalesDashboardSourceRecord): SalesDashboardSourceSummary {
@@ -180,6 +223,63 @@ export async function seedDefaultSalesSources(actorEmail: string, connectedEmail
     }, db));
   }
   return seeded;
+}
+
+export async function getActiveSalesDashboardProjectionSource(db: Database = getDb()): Promise<SalesDashboardProjectionSourceRecord | null> {
+  const [row] = await db
+    .select()
+    .from(schema.salesDashboardProjectionSources)
+    .where(eq(schema.salesDashboardProjectionSources.status, "active"))
+    .limit(1);
+  return row ? asProjectionSourceRecord(row) : null;
+}
+
+export async function upsertSalesDashboardProjectionSource(input: ProjectionSourceInput, db: Database = getDb()) {
+  const spreadsheetId = extractSpreadsheetId(input.spreadsheetUrl);
+  const now = new Date();
+  const existing = await getActiveSalesDashboardProjectionSource(db);
+  const values = {
+    spreadsheetId,
+    spreadsheetUrl: input.spreadsheetUrl.trim() || sourceUrl(spreadsheetId),
+    summarySheetName: input.summarySheetName?.trim() || DEFAULT_PROJECTION_SUMMARY_SHEET,
+    whatIfSheetName: input.whatIfSheetName?.trim() || DEFAULT_PROJECTION_WHAT_IF_SHEET,
+    calcMultiSheetName: input.calcMultiSheetName?.trim() || DEFAULT_PROJECTION_CALC_MULTI_SHEET,
+    connectedEmail: input.connectedEmail.trim().toLowerCase(),
+    updatedByEmail: input.actorEmail.trim().toLowerCase(),
+    updatedAt: now,
+  };
+
+  const [row] = existing
+    ? await db
+      .update(schema.salesDashboardProjectionSources)
+      .set({
+        ...values,
+        lastImportError: null,
+      })
+      .where(eq(schema.salesDashboardProjectionSources.id, existing.id))
+      .returning()
+    : await db
+      .insert(schema.salesDashboardProjectionSources)
+      .values({
+        ...values,
+        status: "active",
+        createdByEmail: input.actorEmail.trim().toLowerCase(),
+      })
+      .returning();
+
+  revalidateSalesDashboardCache();
+  return asProjectionSourceRecord(row);
+}
+
+export async function seedDefaultSalesDashboardProjectionSource(actorEmail: string, connectedEmail = actorEmail, db: Database = getDb()) {
+  return upsertSalesDashboardProjectionSource({
+    spreadsheetUrl: DEFAULT_PROJECTION_SPREADSHEET_URL,
+    summarySheetName: DEFAULT_PROJECTION_SUMMARY_SHEET,
+    whatIfSheetName: DEFAULT_PROJECTION_WHAT_IF_SHEET,
+    calcMultiSheetName: DEFAULT_PROJECTION_CALC_MULTI_SHEET,
+    connectedEmail,
+    actorEmail,
+  }, db);
 }
 
 export async function updateSalesDashboardSourceStatus(
@@ -492,6 +592,140 @@ export async function importAllSalesSources(
   return results;
 }
 
+function requireProjectionSheet(titles: string[], sheetName: string, purpose: string): string {
+  if (titles.includes(sheetName)) return sheetName;
+  throw new Error(`Projection workbook is missing ${purpose} sheet "${sheetName}"`);
+}
+
+async function fetchProjectionWorkbook(source: SalesDashboardProjectionSourceRecord): Promise<ParsedSalesProjectionWorkbook> {
+  const titles = await listGoogleSheetTitles(source.connectedEmail, source.spreadsheetId);
+  const summarySheetName = requireProjectionSheet(titles, source.summarySheetName, "Summary");
+  const whatIfSheetName = requireProjectionSheet(titles, source.whatIfSheetName, "What_If");
+  const calcMultiSheetName = requireProjectionSheet(titles, source.calcMultiSheetName, "Calc_Multi");
+
+  const [summaryRows, whatIfRows, calcMultiRows] = await Promise.all([
+    fetchGoogleSheetRows(source.connectedEmail, source.spreadsheetId, summarySheetName),
+    fetchGoogleSheetRows(source.connectedEmail, source.spreadsheetId, whatIfSheetName),
+    fetchGoogleSheetRows(source.connectedEmail, source.spreadsheetId, calcMultiSheetName),
+  ]);
+
+  const parsed = parseSalesProjectionWorkbook({ summaryRows, whatIfRows, calcMultiRows });
+  return {
+    ...parsed,
+    metadata: {
+      ...parsed.metadata,
+      summarySheetName,
+      whatIfSheetName,
+      calcMultiSheetName,
+      availableSheetNames: titles,
+    },
+  };
+}
+
+export async function importSalesDashboardProjectionSource(
+  sourceId: string,
+  options: ImportOptions,
+  db: Database = getDb(),
+) {
+  const source = await getActiveSalesDashboardProjectionSource(db);
+  if (!source || source.id !== sourceId) throw new Error("Sales dashboard projection source not found");
+  const now = options.now ?? new Date();
+  const [run] = await db
+    .insert(schema.salesDashboardProjectionImportRuns)
+    .values({
+      sourceId: source.id,
+      status: "running",
+      triggerType: options.triggerType,
+      actorEmail: options.actorEmail,
+      startedAt: now,
+    })
+    .returning();
+
+  await db
+    .update(schema.salesDashboardProjectionSources)
+    .set({ lastImportError: null, updatedAt: now, updatedByEmail: options.actorEmail })
+    .where(eq(schema.salesDashboardProjectionSources.id, source.id));
+
+  try {
+    const parsed = await fetchProjectionWorkbook(source);
+    await insertChunks(db, schema.salesDashboardProjectionMonths, parsed.months.map((row) => ({
+      sourceId: source.id,
+      importRunId: run.id,
+      scenario: row.scenario,
+      projectionMonth: row.projectionMonth,
+      monthLabel: row.monthLabel,
+      monthKind: row.monthKind,
+      totalNetRevenue: row.totalNetRevenue,
+      renewalRevenue: row.renewalRevenue,
+      newStudentRevenue: row.newStudentRevenue,
+      trialRevenue: row.trialRevenue,
+      activeStudents: row.activeStudents,
+      trialBookings: row.trialBookings,
+      newStudents: row.newStudents,
+      packRenewals: row.packRenewals,
+      renewalHours: row.renewalHours,
+      newStudentHours: row.newStudentHours,
+      trialHours: row.trialHours,
+      totalHours: row.totalHours,
+      roomCapacity: row.roomCapacity,
+      roomUtilization: row.roomUtilization,
+    })));
+
+    const finishedAt = new Date();
+    await db
+      .update(schema.salesDashboardProjectionImportRuns)
+      .set({
+        status: "success",
+        finishedAt,
+        monthRowCount: parsed.months.length,
+        targetMonthlyRevenue: parsed.targetMonthlyRevenue,
+        metadata: parsed.metadata,
+      })
+      .where(eq(schema.salesDashboardProjectionImportRuns.id, run.id));
+    await db
+      .update(schema.salesDashboardProjectionSources)
+      .set({
+        lastSuccessfulImportRunId: run.id,
+        lastImportedAt: finishedAt,
+        lastImportError: null,
+        lastProjectionMonthCount: parsed.months.length,
+        lastTargetMonthlyRevenue: parsed.targetMonthlyRevenue,
+        updatedAt: finishedAt,
+        updatedByEmail: options.actorEmail,
+      })
+      .where(eq(schema.salesDashboardProjectionSources.id, source.id));
+
+    revalidateSalesDashboardCache();
+    return {
+      sourceId: source.id,
+      runId: run.id,
+      projectionMonths: parsed.months.length,
+      targetMonthlyRevenue: parsed.targetMonthlyRevenue,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Sales dashboard projection import failed";
+    await db
+      .update(schema.salesDashboardProjectionImportRuns)
+      .set({ status: "failed", finishedAt: new Date(), errorSummary: message })
+      .where(eq(schema.salesDashboardProjectionImportRuns.id, run.id));
+    await db
+      .update(schema.salesDashboardProjectionSources)
+      .set({ lastImportError: message, updatedAt: new Date(), updatedByEmail: options.actorEmail })
+      .where(eq(schema.salesDashboardProjectionSources.id, source.id));
+    revalidateSalesDashboardCache();
+    throw error;
+  }
+}
+
+export async function importActiveSalesDashboardProjectionSource(
+  options: ImportOptions,
+  db: Database = getDb(),
+) {
+  const source = await getActiveSalesDashboardProjectionSource(db);
+  if (!source) return null;
+  return importSalesDashboardProjectionSource(source.id, options, db);
+}
+
 function normalRowFromDb(
   row: typeof schema.salesDashboardNormalRows.$inferSelect,
   source: SalesDashboardSourceRecord,
@@ -533,6 +767,83 @@ function additionalRowFromDb(
   };
 }
 
+function projectionMonthFromDb(row: typeof schema.salesDashboardProjectionMonths.$inferSelect): SalesProjectionMonthRecord {
+  return {
+    scenario: row.scenario as SalesProjectionMonthRecord["scenario"],
+    projectionMonth: row.projectionMonth,
+    monthLabel: row.monthLabel,
+    monthKind: row.monthKind === "actual" ? "actual" : "forecast",
+    totalNetRevenue: row.totalNetRevenue,
+    renewalRevenue: row.renewalRevenue,
+    newStudentRevenue: row.newStudentRevenue,
+    trialRevenue: row.trialRevenue,
+    activeStudents: row.activeStudents,
+    trialBookings: row.trialBookings,
+    newStudents: row.newStudents,
+    packRenewals: row.packRenewals,
+    renewalHours: row.renewalHours,
+    newStudentHours: row.newStudentHours,
+    trialHours: row.trialHours,
+    totalHours: row.totalHours,
+    roomCapacity: row.roomCapacity,
+    roomUtilization: row.roomUtilization,
+  };
+}
+
+function scenarioSummariesFromMetadata(metadata: Record<string, unknown>): SalesProjectionScenarioSummary[] {
+  const value = metadata.scenarioSummaries;
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is SalesProjectionScenarioSummary => {
+    if (!item || typeof item !== "object") return false;
+    const scenario = (item as { scenario?: unknown }).scenario;
+    return scenario === "Bear" || scenario === "Base" || scenario === "Bull";
+  });
+}
+
+async function getSalesDashboardProjectionPayload(db: Database): Promise<SalesDashboardProjectionPayload> {
+  const source = await getActiveSalesDashboardProjectionSource(db);
+  if (!source) {
+    return {
+      source: null,
+      targetMonthlyRevenue: null,
+      targetSource: "fallback",
+      scenarioSummaries: [],
+      months: [],
+      lastImportedAt: null,
+      lastImportError: null,
+    };
+  }
+
+  const runId = source.lastSuccessfulImportRunId;
+  const [latestRun, monthRows] = await Promise.all([
+    runId
+      ? db
+        .select()
+        .from(schema.salesDashboardProjectionImportRuns)
+        .where(eq(schema.salesDashboardProjectionImportRuns.id, runId))
+        .limit(1)
+      : Promise.resolve([]),
+    runId
+      ? db
+        .select()
+        .from(schema.salesDashboardProjectionMonths)
+        .where(eq(schema.salesDashboardProjectionMonths.importRunId, runId))
+        .orderBy(schema.salesDashboardProjectionMonths.projectionMonth, schema.salesDashboardProjectionMonths.scenario)
+      : Promise.resolve([]),
+  ]);
+  const run = latestRun[0];
+
+  return {
+    source: toProjectionSummary(source),
+    targetMonthlyRevenue: run?.targetMonthlyRevenue ?? source.lastTargetMonthlyRevenue,
+    targetSource: run?.targetMonthlyRevenue || source.lastTargetMonthlyRevenue ? "projection" : "fallback",
+    scenarioSummaries: scenarioSummariesFromMetadata(run?.metadata ?? {}),
+    months: monthRows.map(projectionMonthFromDb),
+    lastImportedAt: source.lastImportedAt?.toISOString() ?? null,
+    lastImportError: source.lastImportError,
+  };
+}
+
 async function getSalesDashboardPayloadUncached(email: string | null | undefined, db: Database = getDb()) {
   const sources = await listSalesDashboardSources(db, { includeArchived: true });
   const activeSources = sources.filter((source) => source.status !== "archived");
@@ -541,7 +852,7 @@ async function getSalesDashboardPayloadUncached(email: string | null | undefined
     .filter((id): id is string => Boolean(id));
   const sourceByRun = new Map(activeSources.map((source) => [source.lastSuccessfulImportRunId, source]));
 
-  const [normalRows, additionalRows, token] = await Promise.all([
+  const [normalRows, additionalRows, token, projection] = await Promise.all([
     activeRunIds.length > 0
       ? db.select().from(schema.salesDashboardNormalRows).where(inArray(schema.salesDashboardNormalRows.importRunId, activeRunIds))
       : Promise.resolve([]),
@@ -549,6 +860,7 @@ async function getSalesDashboardPayloadUncached(email: string | null | undefined
       ? db.select().from(schema.salesDashboardAdditionalRows).where(inArray(schema.salesDashboardAdditionalRows.importRunId, activeRunIds))
       : Promise.resolve([]),
     getGoogleTokenStatus(email, db),
+    getSalesDashboardProjectionPayload(db),
   ]);
 
   return buildSalesDashboardPayload({
@@ -565,6 +877,7 @@ async function getSalesDashboardPayloadUncached(email: string | null | undefined
       })
       .filter((row): row is ParsedAdditionalSaleRow => Boolean(row)),
     sources: sources.map(toSummary),
+    projection,
     token,
   });
 }

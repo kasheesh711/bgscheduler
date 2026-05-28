@@ -20,12 +20,18 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { SalesDashboardCommandCenter } from "@/components/sales-dashboard/gm-command-center";
-import { SourceManager, type SourceForm } from "@/components/sales-dashboard/source-manager";
+import { SourceManager, type ProjectionSourceForm, type SourceForm } from "@/components/sales-dashboard/source-manager";
 import {
   currentBangkokDate,
   currentBangkokMonthEnd,
   currentBangkokMonthStart,
 } from "@/lib/sales-dashboard/dates";
+import {
+  DEFAULT_PROJECTION_CALC_MULTI_SHEET,
+  DEFAULT_PROJECTION_SPREADSHEET_URL,
+  DEFAULT_PROJECTION_SUMMARY_SHEET,
+  DEFAULT_PROJECTION_WHAT_IF_SHEET,
+} from "@/lib/sales-dashboard/projection";
 import type { SalesDashboardPayload } from "@/lib/sales-dashboard/types";
 
 type ImportSummary = {
@@ -59,6 +65,15 @@ function newSourceForm(): SourceForm {
   };
 }
 
+function newProjectionSourceForm(): ProjectionSourceForm {
+  return {
+    spreadsheetUrl: DEFAULT_PROJECTION_SPREADSHEET_URL,
+    summarySheetName: DEFAULT_PROJECTION_SUMMARY_SHEET,
+    whatIfSheetName: DEFAULT_PROJECTION_WHAT_IF_SHEET,
+    calcMultiSheetName: DEFAULT_PROJECTION_CALC_MULTI_SHEET,
+  };
+}
+
 function formatDateTime(value: string | null): string {
   if (!value) return "Never imported";
   return new Intl.DateTimeFormat("en-GB", {
@@ -79,6 +94,7 @@ export function SalesDashboardShell() {
   const [from, setFrom] = useState(currentBangkokMonthStart());
   const [to, setTo] = useState(currentBangkokMonthEnd());
   const [sourceForm, setSourceForm] = useState<SourceForm>(newSourceForm);
+  const [projectionForm, setProjectionForm] = useState<ProjectionSourceForm>(newProjectionSourceForm);
   const [busyAction, setBusyAction] = useState("");
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
 
@@ -89,6 +105,14 @@ export function SalesDashboardShell() {
       if (!response.ok) throw new Error(`Dashboard request failed (${response.status})`);
       const payload = (await response.json()) as SalesDashboardPayload;
       setData(payload);
+      if (payload.projection.source) {
+        setProjectionForm({
+          spreadsheetUrl: payload.projection.source.spreadsheetUrl,
+          summarySheetName: payload.projection.source.summarySheetName,
+          whatIfSheetName: payload.projection.source.whatIfSheetName,
+          calcMultiSheetName: payload.projection.source.calcMultiSheetName,
+        });
+      }
       const allDates = [...payload.normalDays, ...payload.addDays].map((row) => row.d).sort();
       if (allDates.length > 0 && period === "all") {
         setFrom(allDates[0]);
@@ -213,6 +237,25 @@ export function SalesDashboardShell() {
     });
   }
 
+  async function saveProjectionSource() {
+    await runAction("projection-source", async () => {
+      await postJson("/api/sales-dashboard/projection-source", {
+        ...projectionForm,
+        summarySheetName: projectionForm.summarySheetName || undefined,
+        whatIfSheetName: projectionForm.whatIfSheetName || undefined,
+        calcMultiSheetName: projectionForm.calcMultiSheetName || undefined,
+      });
+      setMessage("Projection source saved.");
+    });
+  }
+
+  async function importProjectionSource() {
+    await runAction("projection-import", async () => {
+      const payload = await postJson("/api/sales-dashboard/projection-import") as { result?: { projectionMonths?: number; targetMonthlyRevenue?: number } };
+      setMessage(`Projection refreshed: ${payload.result?.projectionMonths ?? 0} monthly scenario rows imported.`);
+    });
+  }
+
   if (loading) {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading sales dashboard...</div>;
   }
@@ -327,12 +370,17 @@ export function SalesDashboardShell() {
             sources={data?.sources ?? []}
             form={sourceForm}
             setForm={setSourceForm}
+            projection={data?.projection ?? null}
+            projectionForm={projectionForm}
+            setProjectionForm={setProjectionForm}
             busyAction={busyAction}
             runAction={runAction}
             postJson={postJson}
             patchJson={patchJson}
             deleteJson={deleteJson}
             addSource={addSource}
+            saveProjectionSource={saveProjectionSource}
+            importProjectionSource={importProjectionSource}
             seedHistoricalSources={seedHistoricalSources}
             backfillAllSources={backfillAllSources}
           />

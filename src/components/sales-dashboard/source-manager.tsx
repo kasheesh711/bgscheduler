@@ -13,7 +13,10 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { SalesDashboardSourceSummary } from "@/lib/sales-dashboard/types";
+import type {
+  SalesDashboardProjectionPayload,
+  SalesDashboardSourceSummary,
+} from "@/lib/sales-dashboard/types";
 
 export type SourceForm = {
   spreadsheetUrl: string;
@@ -23,16 +26,28 @@ export type SourceForm = {
   additionalSheetName: string;
 };
 
+export type ProjectionSourceForm = {
+  spreadsheetUrl: string;
+  summarySheetName: string;
+  whatIfSheetName: string;
+  calcMultiSheetName: string;
+};
+
 interface SourceManagerProps {
   sources: SalesDashboardSourceSummary[];
   form: SourceForm;
   setForm: Dispatch<SetStateAction<SourceForm>>;
+  projection: SalesDashboardProjectionPayload | null;
+  projectionForm: ProjectionSourceForm;
+  setProjectionForm: Dispatch<SetStateAction<ProjectionSourceForm>>;
   busyAction: string;
   runAction: (actionName: string, action: () => Promise<void>) => Promise<void>;
   postJson: (url: string, body?: unknown) => Promise<unknown>;
   patchJson: (url: string, body?: unknown) => Promise<unknown>;
   deleteJson: (url: string) => Promise<unknown>;
   addSource: () => Promise<void>;
+  saveProjectionSource: () => Promise<void>;
+  importProjectionSource: () => Promise<void>;
   seedHistoricalSources: () => Promise<void>;
   backfillAllSources: () => Promise<void>;
 }
@@ -41,12 +56,17 @@ export function SourceManager({
   sources,
   form,
   setForm,
+  projection,
+  projectionForm,
+  setProjectionForm,
   busyAction,
   runAction,
   postJson,
   patchJson,
   deleteJson,
   addSource,
+  saveProjectionSource,
+  importProjectionSource,
   seedHistoricalSources,
   backfillAllSources,
 }: SourceManagerProps) {
@@ -69,6 +89,65 @@ export function SourceManager({
             {busyAction === "backfill" ? <Loader2 className="size-4 animate-spin" /> : <CalendarClock className="size-4" />}
             Backfill all
           </Button>
+        </div>
+      </div>
+
+      <div className="rounded-lg border bg-muted/15 p-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold">Projection Workbook</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Actual-vs-projection uses normal sales only. The imported What_If target replaces the operational dashboard target.
+            </p>
+            {projection?.source ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <Badge variant={projection.lastImportError ? "destructive" : "secondary"}>
+                  {projection.lastImportError ? "Import failed" : projection.lastImportedAt ? "Imported" : "Configured"}
+                </Badge>
+                <span>{projection.source.lastProjectionMonthCount} scenario-month rows</span>
+                <span>Target {projection.targetMonthlyRevenue ? formatMoney(projection.targetMonthlyRevenue) : "fallback"}</span>
+                <span>{formatDateTime(projection.lastImportedAt)}</span>
+              </div>
+            ) : (
+              <div className="mt-2 text-xs text-muted-foreground">Default projection workbook is ready to save and import.</div>
+            )}
+            {projection?.lastImportError ? (
+              <div className="mt-2 text-xs text-destructive">Last import failed: {projection.lastImportError}</div>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => void saveProjectionSource()} disabled={!projectionForm.spreadsheetUrl || busyAction === "projection-source"}>
+              {busyAction === "projection-source" ? <Loader2 className="size-4 animate-spin" /> : <LinkIcon className="size-4" />}
+              Save projection
+            </Button>
+            <Button variant="outline" onClick={() => void importProjectionSource()} disabled={!projection?.source || busyAction === "projection-import"}>
+              {busyAction === "projection-import" ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              Import projection
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-3 grid min-w-0 gap-2 lg:grid-cols-[1.8fr_0.7fr_0.7fr_0.7fr]">
+          <Input
+            placeholder="Projection Google Sheet URL"
+            value={projectionForm.spreadsheetUrl}
+            onChange={(event) => setProjectionForm((current) => ({ ...current, spreadsheetUrl: event.target.value }))}
+          />
+          <Input
+            placeholder="Summary tab"
+            value={projectionForm.summarySheetName}
+            onChange={(event) => setProjectionForm((current) => ({ ...current, summarySheetName: event.target.value }))}
+          />
+          <Input
+            placeholder="What_If tab"
+            value={projectionForm.whatIfSheetName}
+            onChange={(event) => setProjectionForm((current) => ({ ...current, whatIfSheetName: event.target.value }))}
+          />
+          <Input
+            placeholder="Calc_Multi tab"
+            value={projectionForm.calcMultiSheetName}
+            onChange={(event) => setProjectionForm((current) => ({ ...current, calcMultiSheetName: event.target.value }))}
+          />
         </div>
       </div>
 
@@ -195,4 +274,8 @@ function formatDateTime(value: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function formatMoney(value: number): string {
+  return `฿${Math.round(value).toLocaleString("en-US")}`;
 }

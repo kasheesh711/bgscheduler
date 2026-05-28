@@ -1,7 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { importRefreshableSalesSources } from "@/lib/sales-dashboard/data";
+import {
+  importActiveSalesDashboardProjectionSource,
+  importRefreshableSalesSources,
+} from "@/lib/sales-dashboard/data";
 import { MissingGoogleSheetsTokenError } from "@/lib/sales-dashboard/google-oauth";
 
 export const maxDuration = 800;
@@ -42,7 +45,11 @@ async function handleSync(request: NextRequest, options: { allowSessionAuth: boo
       triggerType: "cron",
       actorEmail,
     });
-    return NextResponse.json({ ok: true, results });
+    const projectionResult = await importActiveSalesDashboardProjectionSource({
+      triggerType: "cron",
+      actorEmail,
+    });
+    return NextResponse.json({ ok: true, results, projectionResult });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sales dashboard sync failed";
     const status = error instanceof MissingGoogleSheetsTokenError ? 409 : 500;

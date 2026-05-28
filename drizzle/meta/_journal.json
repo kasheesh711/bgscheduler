@@ -183,6 +183,20 @@
       "when": 1780000000000,
       "tag": "0028_line_scheduler_human_review",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1780005000000,
+      "tag": "0029_sales_dashboard_projection",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1780010000000,
+      "tag": "0030_scheduler_feedback_telemetry",
+      "breakpoints": true
     }
   ]
 }

@@ -5,10 +5,13 @@ vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/sales-dashboard/data", () => ({
   archiveSalesDashboardSource: vi.fn(),
   getSalesDashboardPayload: vi.fn(),
+  importActiveSalesDashboardProjectionSource: vi.fn(),
   importAllSalesSources: vi.fn(),
   importRefreshableSalesSources: vi.fn(),
   importSalesDashboardSource: vi.fn(),
   listSalesDashboardSources: vi.fn(),
+  seedDefaultSalesDashboardProjectionSource: vi.fn(),
+  upsertSalesDashboardProjectionSource: vi.fn(),
   updateSalesDashboardSourceStatus: vi.fn(),
 }));
 
@@ -16,15 +19,19 @@ import { auth } from "@/lib/auth";
 import {
   archiveSalesDashboardSource,
   getSalesDashboardPayload,
+  importActiveSalesDashboardProjectionSource,
   importAllSalesSources,
   importRefreshableSalesSources,
   importSalesDashboardSource,
   listSalesDashboardSources,
+  upsertSalesDashboardProjectionSource,
   updateSalesDashboardSourceStatus,
 } from "@/lib/sales-dashboard/data";
 import { MissingGoogleSheetsTokenError } from "@/lib/sales-dashboard/google-oauth";
 import { GET as getDashboard } from "../route";
 import { POST as importDashboard } from "../import/route";
+import { POST as importProjection } from "../projection-import/route";
+import { POST as saveProjectionSource } from "../projection-source/route";
 import { DELETE as archiveSource, PATCH as patchSource } from "../sources/[sourceId]/route";
 
 const authMock = auth as unknown as Mock;
@@ -57,9 +64,45 @@ describe("sales dashboard API routes", () => {
     vi.mocked(importAllSalesSources).mockResolvedValue([{ sourceId: "source-1", normalRows: 10, additionalRows: 2 }] as never);
     vi.mocked(importRefreshableSalesSources).mockResolvedValue([{ sourceId: "source-2", normalRows: 3, additionalRows: 1 }] as never);
     vi.mocked(importSalesDashboardSource).mockResolvedValue({ sourceId: "source-3" } as never);
+    vi.mocked(importActiveSalesDashboardProjectionSource).mockResolvedValue({ sourceId: "projection-1", projectionMonths: 63, targetMonthlyRevenue: 3_500_000 } as never);
     vi.mocked(listSalesDashboardSources).mockResolvedValue([{ id: "source-2" }] as never);
+    vi.mocked(upsertSalesDashboardProjectionSource).mockResolvedValue({ id: "projection-1" } as never);
     vi.mocked(archiveSalesDashboardSource).mockResolvedValue({ id: "source-archived", status: "archived" } as never);
     vi.mocked(updateSalesDashboardSourceStatus).mockResolvedValue({ id: "source-restored", status: "active" } as never);
+  });
+
+  it("saves the projection source with the signed-in admin account", async () => {
+    const res = await saveProjectionSource(request({
+      spreadsheetUrl: "https://docs.google.com/spreadsheets/d/projection/edit",
+      summarySheetName: "Summary",
+      whatIfSheetName: "What_If",
+      calcMultiSheetName: "Calc_Multi",
+    }));
+
+    expect(res.status).toBe(200);
+    expect(upsertSalesDashboardProjectionSource).toHaveBeenCalledWith({
+      spreadsheetUrl: "https://docs.google.com/spreadsheets/d/projection/edit",
+      summarySheetName: "Summary",
+      whatIfSheetName: "What_If",
+      calcMultiSheetName: "Calc_Multi",
+      connectedEmail: "admin@example.com",
+      actorEmail: "admin@example.com",
+    });
+    await expect(res.json()).resolves.toEqual({ source: { id: "projection-1" } });
+  });
+
+  it("imports the configured projection workbook", async () => {
+    const res = await importProjection();
+
+    expect(res.status).toBe(200);
+    expect(importActiveSalesDashboardProjectionSource).toHaveBeenCalledWith({
+      triggerType: "manual",
+      actorEmail: "admin@example.com",
+    });
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      result: { projectionMonths: 63, targetMonthlyRevenue: 3_500_000 },
+    });
   });
 
   it("requires auth before returning the dashboard payload", async () => {

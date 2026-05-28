@@ -9,6 +9,7 @@ import type {
   SalesDashboardPayload,
   SalesDayAggregate,
   SalesDayRepAggregate,
+  SalesProjectionMonthRecord,
 } from "./types";
 
 export const MONTHLY_NORMAL_SALES_TARGET = 4_000_000;
@@ -28,6 +29,7 @@ export interface GmException {
 
 export interface RevenuePaceInsight {
   target: number;
+  targetSource: "projection" | "fallback";
   normalRevenue: number;
   additionalRevenue: number;
   totalRevenue: number;
@@ -90,6 +92,18 @@ export interface MonthlyRevenueInsight {
   additionalRevenue: number;
 }
 
+export interface ActualVsProjectionInsight {
+  month: string;
+  label: string;
+  actualNormalRevenue: number | null;
+  baseProjectedRevenue: number;
+  bearProjectedRevenue: number;
+  bullProjectedRevenue: number;
+  varianceToBase: number | null;
+  variancePctToBase: number | null;
+  roomUtilization: number | null;
+}
+
 export interface GmDashboardInsights {
   filteredNormalDays: SalesDayAggregate[];
   filteredAdditionalDays: SalesAdditionalDayAggregate[];
@@ -98,6 +112,7 @@ export interface GmDashboardInsights {
   exceptions: GmException[];
   salesTeam: SalesTeamInsightRow[];
   monthlyRevenue: MonthlyRevenueInsight[];
+  actualVsProjection: ActualVsProjectionInsight[];
   programMix: MixInsightRow[];
   packageMix: MixInsightRow[];
   paymentConcentration: MixInsightRow[];
@@ -128,6 +143,7 @@ export function buildGmDashboardInsights(
     exceptions,
     salesTeam,
     monthlyRevenue: buildMonthlyRevenue(filteredNormalDays, filteredAdditionalDays),
+    actualVsProjection: buildActualVsProjection(data, now),
     programMix: buildCountMix(filteredNormalDays, "program"),
     packageMix: buildCountMix(filteredNormalDays, "package"),
     paymentConcentration: buildPaymentConcentration(filteredNormalDays),
@@ -147,6 +163,7 @@ function buildRevenuePace(
   effectiveTo: string,
   now: Date,
 ): RevenuePaceInsight {
+  const target = data.projection.targetMonthlyRevenue ?? MONTHLY_NORMAL_SALES_TARGET;
   const normalRevenue = sum(normalDays, (row) => row.rev);
   const additionalRevenue = sum(additionalDays, (row) => row.rev);
   const normalTransactions = sum(normalDays, (row) => row.count);
@@ -156,15 +173,16 @@ function buildRevenuePace(
   const sampledCompletion = data.completionMonths > 0 ? data.completionRate[String(referenceDay)] : undefined;
   const completionRatio = clamp(sampledCompletion && sampledCompletion > 0 ? sampledCompletion : fallbackCompletion, 0.01, 1);
   const projectedNormalRevenue = normalRevenue > 0 ? normalRevenue / completionRatio : 0;
-  const currentGap = Math.max(0, MONTHLY_NORMAL_SALES_TARGET - normalRevenue);
-  const projectedGap = Math.max(0, MONTHLY_NORMAL_SALES_TARGET - projectedNormalRevenue);
+  const currentGap = Math.max(0, target - normalRevenue);
+  const projectedGap = Math.max(0, target - projectedNormalRevenue);
   const isCurrentMonthRange = range.from.slice(0, 7) === currentBangkokDate(now).slice(0, 7);
   const paceEnd = isCurrentMonthRange ? currentBangkokMonthEnd(now) : range.to;
   const daysRemaining = Math.max(0, daysBetween(effectiveTo, paceEnd));
   const dailyPaceNeeded = currentGap > 0 ? currentGap / Math.max(1, daysRemaining) : 0;
 
   return {
-    target: MONTHLY_NORMAL_SALES_TARGET,
+    target,
+    targetSource: data.projection.targetSource,
     normalRevenue,
     additionalRevenue,
     totalRevenue: normalRevenue + additionalRevenue,
@@ -177,11 +195,48 @@ function buildRevenuePace(
     projectedGap,
     dailyPaceNeeded,
     daysRemaining,
-    goalProgressPct: Math.min(100, Math.round((normalRevenue / MONTHLY_NORMAL_SALES_TARGET) * 100)),
-    projectedProgressPct: Math.min(140, Math.round((projectedNormalRevenue / MONTHLY_NORMAL_SALES_TARGET) * 100)),
+    goalProgressPct: Math.min(100, Math.round((normalRevenue / target) * 100)),
+    projectedProgressPct: Math.min(140, Math.round((projectedNormalRevenue / target) * 100)),
     referenceDate: effectiveTo,
     isCurrentMonthRange,
   };
+}
+
+function buildActualVsProjection(data: SalesDashboardPayload, now: Date): ActualVsProjectionInsight[] {
+  if (data.projection.months.length === 0) return [];
+
+  const actualByMonth = new Map<string, number>();
+  for (const day of data.normalDays) {
+    const month = `${day.d.slice(0, 7)}-01`;
+    actualByMonth.set(month, (actualByMonth.get(month) ?? 0) + day.rev);
+  }
+
+  const byMonth = new Map<string, Partial<Record<SalesProjectionMonthRecord["scenario"], SalesProjectionMonthRecord>>>();
+  for (const row of data.projection.months) {
+    const existing = byMonth.get(row.projectionMonth) ?? {};
+    existing[row.scenario] = row;
+    byMonth.set(row.projectionMonth, existing);
+  }
+
+  const currentMonth = `${currentBangkokDate(now).slice(0, 7)}-01`;
+  return [...byMonth.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([month, scenarios]) => {
+      const actual = month <= currentMonth ? (actualByMonth.get(month) ?? 0) : null;
+      const baseProjectedRevenue = scenarios.Base?.totalNetRevenue ?? 0;
+      const varianceToBase = actual === null ? null : actual - baseProjectedRevenue;
+      return {
+        month,
+        label: shortMonthForDate(month),
+        actualNormalRevenue: actual,
+        baseProjectedRevenue,
+        bearProjectedRevenue: scenarios.Bear?.totalNetRevenue ?? 0,
+        bullProjectedRevenue: scenarios.Bull?.totalNetRevenue ?? 0,
+        varianceToBase,
+        variancePctToBase: actual === null || baseProjectedRevenue <= 0 ? null : (actual - baseProjectedRevenue) / baseProjectedRevenue,
+        roomUtilization: scenarios.Base?.roomUtilization ?? null,
+      };
+    });
 }
 
 function buildPipeline(data: SalesDashboardPayload, from: string, to: string): PipelineInsight {
@@ -439,6 +494,12 @@ function shortMonth(monthLabel: string): string {
   const [ym, monthName] = monthLabel.split(" ");
   const year = ym?.slice(2, 4) ?? "";
   return `${monthName ?? ym} '${year}`;
+}
+
+function shortMonthForDate(monthStart: string): string {
+  const date = new Date(`${monthStart}T00:00:00.000Z`);
+  const month = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" }).format(date);
+  return `${month} '${monthStart.slice(2, 4)}`;
 }
 
 function formatCompactMoney(value: number): string {

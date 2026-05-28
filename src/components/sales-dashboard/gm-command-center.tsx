@@ -19,6 +19,7 @@ import {
   buildGmDashboardInsights,
   type GmDashboardInsights,
   type GmException,
+  type ActualVsProjectionInsight,
   type MixInsightRow,
   type MonthlyRevenueInsight,
   type SalesTeamInsightRow,
@@ -41,6 +42,8 @@ export function SalesDashboardCommandCenter({ data, from, to }: SalesDashboardCo
         <RevenuePaceSurface insights={insights} />
         <ExceptionsRail exceptions={insights.exceptions} />
       </div>
+
+      <ActualVsProjectionPanel rows={insights.actualVsProjection} targetSource={insights.revenuePace.targetSource} />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(520px,0.95fr)]">
         <RevenueTrendPanel rows={insights.monthlyRevenue} />
@@ -73,7 +76,7 @@ function RevenuePaceSurface({ insights }: { insights: GmDashboardInsights }) {
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2 text-right sm:grid-cols-3 lg:min-w-[430px]">
-            <MetricInline label="Target" value={formatCurrency(pace.target)} />
+            <MetricInline label="Target" value={formatCurrency(pace.target)} detail={pace.targetSource === "projection" ? "Sheet target" : "Fallback"} />
             <MetricInline label="Projected" value={formatCurrency(pace.projectedNormalRevenue)} tone={projectedGood ? "good" : "risk"} />
             <MetricInline label="Needed/day" value={formatCurrency(pace.dailyPaceNeeded)} />
           </div>
@@ -261,6 +264,121 @@ function RevenueTrendPanel({ rows }: { rows: MonthlyRevenueInsight[] }) {
         </div>
       </div>
       <ChartCanvas config={config} className="mt-4" />
+    </section>
+  );
+}
+
+function ActualVsProjectionPanel({
+  rows,
+  targetSource,
+}: {
+  rows: ActualVsProjectionInsight[];
+  targetSource: "projection" | "fallback";
+}) {
+  const config = useMemo<ChartConfiguration>(() => ({
+    type: "bar",
+    data: {
+      labels: rows.map((row) => row.label),
+      datasets: [
+        {
+          type: "line",
+          label: "Bull",
+          data: rows.map((row) => row.bullProjectedRevenue),
+          borderColor: "rgba(14, 165, 233, 0.25)",
+          backgroundColor: "rgba(14, 165, 233, 0.10)",
+          borderWidth: 1,
+          pointRadius: 0,
+          tension: 0.25,
+        },
+        {
+          type: "line",
+          label: "Bear/Bull range",
+          data: rows.map((row) => row.bearProjectedRevenue),
+          borderColor: "rgba(14, 165, 233, 0.25)",
+          backgroundColor: "rgba(14, 165, 233, 0.10)",
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: "-1",
+          tension: 0.25,
+        },
+        {
+          type: "line",
+          label: "Base projection",
+          data: rows.map((row) => row.baseProjectedRevenue),
+          borderColor: "#0EA5E9",
+          backgroundColor: "#0EA5E9",
+          borderWidth: 2,
+          pointRadius: 2,
+          tension: 0.25,
+        },
+        {
+          type: "bar",
+          label: "Actual normal sales",
+          data: rows.map((row) => row.actualNormalRevenue),
+          backgroundColor: "#F59E0B",
+          borderRadius: 3,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { grid: { display: false } },
+        y: {
+          grid: { color: "rgba(0,0,0,0.05)" },
+          ticks: { callback: (value) => formatCurrency(Number(value), true) },
+        },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const value = typeof ctx.raw === "number" ? ctx.raw : null;
+              return ` ${ctx.dataset.label}: ${value === null ? "-" : formatCurrency(value)}`;
+            },
+          },
+        },
+      },
+    },
+  }), [rows]);
+
+  const latestActual = [...rows].reverse().find((row) => row.actualNormalRevenue !== null);
+  const varianceTone = latestActual?.varianceToBase === undefined || latestActual.varianceToBase === null
+    ? "neutral"
+    : latestActual.varianceToBase >= 0 ? "good" : "risk";
+
+  return (
+    <section className="flex min-h-[360px] flex-col rounded-lg border bg-card p-4 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">Actual vs Projection</h2>
+          <p className="text-xs text-muted-foreground">
+            Normal sales compared with Base projection from April 2026 onward; Bear/Bull show scenario range.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-3 text-right sm:grid-cols-3">
+          <MetricInline label="Target source" value={targetSource === "projection" ? "Sheet" : "Fallback"} />
+          <MetricInline label="Latest variance" value={latestActual?.varianceToBase == null ? "-" : formatCurrency(latestActual.varianceToBase)} tone={varianceTone} />
+          <MetricInline label="Latest month" value={latestActual?.label ?? "-"} />
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="mt-4 flex min-h-[220px] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">
+          Save and import the projection workbook to compare actuals against Bear/Base/Bull scenarios.
+        </div>
+      ) : (
+        <>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+            <LegendDot color="#F59E0B" label="Actual normal sales" />
+            <LegendDot color="#0EA5E9" label="Base projection" />
+            <LegendDot color="rgba(14, 165, 233, 0.25)" label="Bear/Bull range" />
+          </div>
+          <ChartCanvas config={config} className="mt-4" />
+        </>
+      )}
     </section>
   );
 }

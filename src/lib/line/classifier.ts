@@ -18,6 +18,11 @@ export interface LineSchedulerClassification {
   rationale: string;
 }
 
+// Below this confidence, a "non_scheduling" classification is surfaced in the
+// false-negative queue for a human to re-check. "unclear" is always surfaced.
+// Fail-open: the queue only surfaces messages for review, it never auto-acts.
+export const LINE_FALSE_NEGATIVE_CONFIDENCE_THRESHOLD = 0.75;
+
 const lineClassificationSchema = z.object({
   category: z.enum(["scheduling_request", "scheduling_change", "non_scheduling", "unclear"]),
   confidence: z.number().min(0).max(1),

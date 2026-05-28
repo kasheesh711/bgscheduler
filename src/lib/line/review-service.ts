@@ -15,17 +15,19 @@ import {
 } from "@/lib/ai/scheduler-data";
 import { executeSchedulerTurn, schedulerRunMetadata } from "@/lib/ai/scheduler-service";
 import { fetchLineProfile, pushLineTextMessage } from "@/lib/line/client";
-import { classifyLineSchedulerMessage } from "@/lib/line/classifier";
+import { classifyLineSchedulerMessage, type LineSchedulerClassification } from "@/lib/line/classifier";
 import {
   createLineSchedulerReview,
   getLineMessageForProcessing,
   getLineSchedulerReview,
+  getLineSchedulerReviewByInboundMessage,
   insertOutboundLineMessage,
   linkLineThreadConversation,
   loadRecentLineMessages,
   patchLineSchedulerReview,
   updateLineContactProfile,
   updateLineMessageClassification,
+  updateLineMessageClassificationFeedback,
   type LineReviewActor,
   type LineSchedulerReviewDto,
 } from "@/lib/line/data";
@@ -81,6 +83,10 @@ async function recordPostSendAudit(label: string, task: () => Promise<unknown>):
   } catch (error) {
     console.error(`Failed to record LINE scheduler ${label}`, error);
   }
+}
+
+function reviewAgeMs(review: LineSchedulerReviewDto): number {
+  return Date.now() - new Date(review.createdAt).getTime();
 }
 
 export async function processLineMessageForScheduler(
@@ -261,6 +267,51 @@ export async function processLineMessageForScheduler(
   }
 }
 
+// Promote a message the AI did NOT escalate (false negative) into a pending
+// review. Records the classification correction, then creates a pending_review
+// row with an empty draft — identical to the no-AI webhook path. Never sends.
+export async function promoteLineMessageToReview(input: {
+  db: Database;
+  lineMessageId: string;
+  actor: LineReviewActor;
+}): Promise<{ review: LineSchedulerReviewDto | null; alreadyExisted: boolean }> {
+  const lineMessage = await getLineMessageForProcessing(input.db, input.lineMessageId);
+  if (!lineMessage || !lineMessage.text.trim()) {
+    return { review: null, alreadyExisted: false };
+  }
+
+  const existing = await getLineSchedulerReviewByInboundMessage(input.db, lineMessage.id);
+  if (existing) {
+    return { review: existing, alreadyExisted: true };
+  }
+
+  await recordPostSendAudit("classification feedback", () => updateLineMessageClassificationFeedback(input.db, {
+    messageId: lineMessage.id,
+    reviewedCategory: "scheduling_request",
+    actor: input.actor,
+  }));
+
+  const classification: LineSchedulerClassification = {
+    category: "scheduling_request",
+    confidence: lineMessage.classifierConfidence ?? 0,
+    summary: lineMessage.classifierSummary?.trim() || "Promoted from the missed-message queue",
+    rationale: lineMessage.classifierRationale?.trim() || "Manually promoted by an admin from the missed-message queue.",
+  };
+
+  const review = await createLineSchedulerReview(input.db, {
+    threadId: lineMessage.threadId,
+    contactId: lineMessage.contactId,
+    inboundMessageId: lineMessage.id,
+    conversationId: lineMessage.aiSchedulerConversationId,
+    classification,
+    proposedDraft: "",
+    selectedSuggestion: null,
+    selectedTutorIds: [],
+  });
+
+  return { review, alreadyExisted: false };
+}
+
 export async function approveLineSchedulerReview(input: {
   db: Database;
   reviewId: string;
@@ -320,6 +371,9 @@ export async function approveLineSchedulerReview(input: {
     action: finalText === review.proposedDraft.trim() ? "accept" : "edit",
     selectedTutorIds,
     editedParentDraft: finalText === review.proposedDraft.trim() ? null : finalText,
+    lineReviewId: review.id,
+    classifierConfidence: review.classifierConfidence,
+    timeToReviewMs: reviewAgeMs(review),
     actor: input.actor,
   }));
 
@@ -348,6 +402,9 @@ export async function acceptLineSchedulerReviewNoSend(input: {
     action: finalText.trim() === review.proposedDraft.trim() ? "accept" : "edit",
     selectedTutorIds,
     editedParentDraft: finalText.trim() === review.proposedDraft.trim() ? null : finalText,
+    lineReviewId: review.id,
+    classifierConfidence: review.classifierConfidence,
+    timeToReviewMs: reviewAgeMs(review),
     actor: input.actor,
   });
 
@@ -390,6 +447,9 @@ export async function rejectLineSchedulerReview(input: {
     rejectedTutorIds,
     rejectionReason,
     staffCorrection,
+    lineReviewId: review.id,
+    classifierConfidence: review.classifierConfidence,
+    timeToReviewMs: reviewAgeMs(review),
     actor: input.actor,
   });
 
@@ -413,6 +473,18 @@ export async function dismissLineSchedulerReview(input: {
   const review = await getLineSchedulerReview(input.db, input.reviewId);
   if (!review) return null;
   if (review.status !== "pending_review") return review;
+
+  await recordPostSendAudit("scheduler feedback", () => createSchedulerFeedback(input.db, {
+    conversationId: review.conversationId,
+    messageId: review.schedulerMessageId,
+    schedulerRunId: review.schedulerRunId,
+    action: "dismiss",
+    rejectionReason: input.rejectionReason?.trim() || null,
+    lineReviewId: review.id,
+    classifierConfidence: review.classifierConfidence,
+    timeToReviewMs: reviewAgeMs(review),
+    actor: input.actor,
+  }));
 
   return patchLineSchedulerReview(input.db, input.reviewId, {
     status: "dismissed",

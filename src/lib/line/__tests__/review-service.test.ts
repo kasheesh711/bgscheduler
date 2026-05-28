@@ -8,12 +8,14 @@ vi.mock("@/lib/line/data", () => ({
   createLineSchedulerReview: vi.fn(),
   getLineMessageForProcessing: vi.fn(),
   getLineSchedulerReview: vi.fn(),
+  getLineSchedulerReviewByInboundMessage: vi.fn(),
   insertOutboundLineMessage: vi.fn(),
   linkLineThreadConversation: vi.fn(),
   loadRecentLineMessages: vi.fn(),
   patchLineSchedulerReview: vi.fn(),
   updateLineContactProfile: vi.fn(),
   updateLineMessageClassification: vi.fn(),
+  updateLineMessageClassificationFeedback: vi.fn(),
 }));
 vi.mock("@/lib/line/student-links", () => ({
   ensureLineContactStudentLinkSuggestions: vi.fn(),
@@ -30,13 +32,19 @@ vi.mock("@/lib/ai/scheduler-data", async (importOriginal) => {
 import { createSchedulerFeedback } from "@/lib/ai/scheduler-data";
 import { pushLineTextMessage } from "@/lib/line/client";
 import {
+  createLineSchedulerReview,
+  getLineMessageForProcessing,
   getLineSchedulerReview,
+  getLineSchedulerReviewByInboundMessage,
   insertOutboundLineMessage,
   patchLineSchedulerReview,
+  updateLineMessageClassificationFeedback,
 } from "@/lib/line/data";
 import {
   acceptLineSchedulerReviewNoSend,
   approveLineSchedulerReview,
+  dismissLineSchedulerReview,
+  promoteLineMessageToReview,
   rejectLineSchedulerReview,
 } from "@/lib/line/review-service";
 import { listVerifiedLineStudentKeys } from "@/lib/line/student-links";
@@ -54,6 +62,7 @@ const pendingReview = {
   classifierCategory: "scheduling_request",
   classifierConfidence: 0.92,
   classifierSummary: "Needs a Sunday Math class",
+  classifierRationale: null,
   status: "pending_review" as const,
   proposedDraft: "Draft message",
   selectedSuggestion: null,
@@ -133,6 +142,9 @@ describe("LINE scheduler review actions", () => {
       action: "edit",
       selectedTutorIds: ["tutor-1"],
       editedParentDraft: "Approved text",
+      lineReviewId: "review-1",
+      classifierConfidence: 0.92,
+      timeToReviewMs: expect.any(Number),
     }));
     expect(review?.status).toBe("approved_sent");
   });
@@ -270,6 +282,105 @@ describe("LINE scheduler review actions", () => {
       action: "reject",
       rejectionReason: "Wrong day",
       staffCorrection: "Use Saturday instead",
+      lineReviewId: "review-1",
+      classifierConfidence: 0.92,
+      timeToReviewMs: expect.any(Number),
     }));
+  });
+
+  it("records a dismiss feedback row when a review is dismissed", async () => {
+    await dismissLineSchedulerReview({
+      db: {} as never,
+      reviewId: "review-1",
+      rejectionReason: "Duplicate",
+      actor: { email: "admin@example.com", name: "Admin" },
+    });
+
+    expect(createSchedulerFeedback).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: "dismiss",
+      lineReviewId: "review-1",
+      classifierConfidence: 0.92,
+      timeToReviewMs: expect.any(Number),
+    }));
+    expect(patchLineSchedulerReview).toHaveBeenCalledWith(expect.anything(), "review-1", expect.objectContaining({
+      status: "dismissed",
+    }));
+  });
+});
+
+describe("promoteLineMessageToReview", () => {
+  const lineMessage = {
+    id: "line-msg-9",
+    threadId: "thread-9",
+    contactId: "contact-9",
+    lineUserId: "line-user-9",
+    contactDisplayName: "Missed Parent",
+    text: "Can we move Sunday math?",
+    createdAt: "2026-05-20T00:00:00.000Z",
+    aiSchedulerConversationId: "conv-9",
+    classifierCategory: "unclear",
+    classifierConfidence: 0.4,
+    classifierSummary: "Possibly a reschedule",
+    classifierRationale: "Mentions a day but no clear intent",
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(getLineMessageForProcessing).mockResolvedValue(lineMessage);
+    vi.mocked(getLineSchedulerReviewByInboundMessage).mockResolvedValue(null);
+    vi.mocked(updateLineMessageClassificationFeedback).mockResolvedValue({
+      id: lineMessage.id,
+      classifierCategory: "unclear",
+      classificationReviewedCategory: "scheduling_request",
+      classificationReviewedCorrect: false,
+    });
+    vi.mocked(createLineSchedulerReview).mockResolvedValue({ id: "review-9" } as never);
+  });
+
+  it("records the classification correction and creates a review", async () => {
+    const result = await promoteLineMessageToReview({
+      db: {} as never,
+      lineMessageId: "line-msg-9",
+      actor: { email: "admin@example.com", name: "Admin" },
+    });
+
+    expect(updateLineMessageClassificationFeedback).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      messageId: "line-msg-9",
+      reviewedCategory: "scheduling_request",
+    }));
+    expect(createLineSchedulerReview).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      inboundMessageId: "line-msg-9",
+      conversationId: "conv-9",
+      proposedDraft: "",
+    }));
+    expect(result.alreadyExisted).toBe(false);
+    expect(result.review).toEqual({ id: "review-9" });
+  });
+
+  it("is idempotent when a review already exists", async () => {
+    vi.mocked(getLineSchedulerReviewByInboundMessage).mockResolvedValue({ id: "review-existing" } as never);
+
+    const result = await promoteLineMessageToReview({
+      db: {} as never,
+      lineMessageId: "line-msg-9",
+      actor: { email: "admin@example.com", name: "Admin" },
+    });
+
+    expect(result.alreadyExisted).toBe(true);
+    expect(createLineSchedulerReview).not.toHaveBeenCalled();
+    expect(updateLineMessageClassificationFeedback).not.toHaveBeenCalled();
+  });
+
+  it("returns null when the message is missing", async () => {
+    vi.mocked(getLineMessageForProcessing).mockResolvedValue(null);
+
+    const result = await promoteLineMessageToReview({
+      db: {} as never,
+      lineMessageId: "missing",
+      actor: { email: "admin@example.com", name: "Admin" },
+    });
+
+    expect(result.review).toBeNull();
+    expect(createLineSchedulerReview).not.toHaveBeenCalled();
   });
 });

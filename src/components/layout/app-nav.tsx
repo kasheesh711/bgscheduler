@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 
 const SCHEDULING_ITEMS = [
   { href: "/scheduler", label: "Scheduler" },
+  { href: "/scheduler/metrics", label: "Scheduler Metrics" },
   { href: "/search", label: "Search" },
   { href: "/tutor-profiles", label: "Tutor Profiles" },
   { href: "/class-assignments", label: "Class Assignments" },

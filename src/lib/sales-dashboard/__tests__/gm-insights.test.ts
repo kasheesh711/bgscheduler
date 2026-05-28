@@ -90,6 +90,15 @@ function payload(overrides: Partial<SalesDashboardPayload> = {}): SalesDashboard
     retentionCohort: [],
     lastUpdated: "2026-05-15T10:00:00.000Z",
     sources: [source()],
+    projection: {
+      source: null,
+      targetMonthlyRevenue: null,
+      targetSource: "fallback",
+      scenarioSummaries: [],
+      months: [],
+      lastImportedAt: null,
+      lastImportError: null,
+    },
     token: { connected: true, email: "admin@example.com", expiresAt: null, lastError: null },
     ...overrides,
   };
@@ -190,5 +199,103 @@ describe("GM sales dashboard insights", () => {
       deltaPct: 1,
       averageOrderValue: 25_000,
     });
+  });
+
+  it("uses imported projection target and builds normal-sales actual-vs-projection rows", () => {
+    const insights = buildGmDashboardInsights(
+      payload({
+        normalDays: [
+          normalDay({ d: "2026-04-05", m: "2026-04 Apr", rev: 2_000_000, count: 10 }),
+          normalDay({ d: "2026-04-20", m: "2026-04 Apr", rev: 500_000, count: 2 }),
+        ],
+        addDays: [{ d: "2026-04-05", m: "2026-04 Apr", rev: 999_999, count: 1 }],
+        projection: {
+          source: null,
+          targetMonthlyRevenue: 3_500_000,
+          targetSource: "projection",
+          scenarioSummaries: [],
+          months: [
+            {
+              scenario: "Bear",
+              projectionMonth: "2026-04-01",
+              monthLabel: "Apr '26",
+              monthKind: "actual",
+              totalNetRevenue: 2_000_000,
+              renewalRevenue: 0,
+              newStudentRevenue: 0,
+              trialRevenue: 0,
+              activeStudents: 0,
+              trialBookings: 0,
+              newStudents: 0,
+              packRenewals: 0,
+              renewalHours: 0,
+              newStudentHours: 0,
+              trialHours: 0,
+              totalHours: 0,
+              roomCapacity: 2_633,
+              roomUtilization: 0.7,
+            },
+            {
+              scenario: "Base",
+              projectionMonth: "2026-04-01",
+              monthLabel: "Apr '26",
+              monthKind: "actual",
+              totalNetRevenue: 3_000_000,
+              renewalRevenue: 0,
+              newStudentRevenue: 0,
+              trialRevenue: 0,
+              activeStudents: 0,
+              trialBookings: 0,
+              newStudents: 0,
+              packRenewals: 0,
+              renewalHours: 0,
+              newStudentHours: 0,
+              trialHours: 0,
+              totalHours: 0,
+              roomCapacity: 2_633,
+              roomUtilization: 0.8,
+            },
+            {
+              scenario: "Bull",
+              projectionMonth: "2026-04-01",
+              monthLabel: "Apr '26",
+              monthKind: "actual",
+              totalNetRevenue: 4_000_000,
+              renewalRevenue: 0,
+              newStudentRevenue: 0,
+              trialRevenue: 0,
+              activeStudents: 0,
+              trialBookings: 0,
+              newStudents: 0,
+              packRenewals: 0,
+              renewalHours: 0,
+              newStudentHours: 0,
+              trialHours: 0,
+              totalHours: 0,
+              roomCapacity: 2_633,
+              roomUtilization: 0.9,
+            },
+          ],
+          lastImportedAt: "2026-05-15T10:00:00.000Z",
+          lastImportError: null,
+        },
+      }),
+      { from: "2026-04-01", to: "2026-04-30" },
+      new Date("2026-05-15T12:00:00.000Z"),
+    );
+
+    expect(insights.revenuePace.target).toBe(3_500_000);
+    expect(insights.revenuePace.targetSource).toBe("projection");
+    expect(insights.actualVsProjection).toEqual([
+      expect.objectContaining({
+        month: "2026-04-01",
+        actualNormalRevenue: 2_500_000,
+        baseProjectedRevenue: 3_000_000,
+        bearProjectedRevenue: 2_000_000,
+        bullProjectedRevenue: 4_000_000,
+        varianceToBase: -500_000,
+        roomUtilization: 0.8,
+      }),
+    ]);
   });
 });
