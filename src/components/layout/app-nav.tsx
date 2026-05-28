@@ -46,8 +46,8 @@ export function AppNav() {
   const schedulingActive = SCHEDULING_ITEMS.some((item) => isActivePath(pathname, item.href));
 
   return (
-    <nav className="flex items-center justify-between border-b border-border bg-card px-4 lg:px-6 h-11 flex-shrink-0">
-      <div className="flex items-center gap-6">
+    <nav className="flex h-11 flex-shrink-0 items-center overflow-x-auto border-b border-border bg-card px-4 [scrollbar-width:none] lg:px-6 [&::-webkit-scrollbar]:hidden">
+      <div className="flex min-w-max items-center gap-6">
         <Link href="/search" className="text-sm font-semibold text-primary tracking-tight">
           BeGifted Ops
         </Link>

@@ -9,19 +9,26 @@ function readSalesDashboardShell() {
   );
 }
 
+function readSourceManager() {
+  return fs.readFileSync(
+    path.join(process.cwd(), "src/components/sales-dashboard/source-manager.tsx"),
+    "utf8",
+  );
+}
+
 describe("sales dashboard empty setup UI", () => {
-  it("surfaces zero-source setup guidance above the chart grid", () => {
+  it("surfaces zero-source setup guidance above the command center", () => {
     const source = readSalesDashboardShell();
     const setupIndex = source.indexOf("<SalesDashboardSetupState");
-    const chartsIndex = source.indexOf("<ChartCard");
+    const commandCenterIndex = source.indexOf("<SalesDashboardCommandCenter");
 
     expect(source).toContain("No monthly sources configured");
     expect(source).toContain("Google Sheets is connected, but the dashboard has no monthly sheet sources yet.");
     expect(source).toContain("Seed historical sources");
     expect(source).toContain("Backfill all");
     expect(setupIndex).toBeGreaterThan(-1);
-    expect(chartsIndex).toBeGreaterThan(-1);
-    expect(setupIndex).toBeLessThan(chartsIndex);
+    expect(commandCenterIndex).toBeGreaterThan(-1);
+    expect(setupIndex).toBeLessThan(commandCenterIndex);
   });
 
   it("does not let the live-month refresh claim success before sources exist", () => {
@@ -32,14 +39,16 @@ describe("sales dashboard empty setup UI", () => {
     expect(source).not.toContain("setMessage(\"Refresh completed.\");");
   });
 
-  it("uses cohort KPI copy and source archival/error wording", () => {
-    const source = readSalesDashboardShell();
+  it("tucks source management behind the data sources dialog", () => {
+    const shell = readSalesDashboardShell();
+    const sourceManager = readSourceManager();
 
-    expect(source).toContain("Trial Cohort Conversion");
-    expect(source).toContain("Retention Rate");
-    expect(source).toContain("Last import failed");
-    expect(source).toContain("Archive source");
-    expect(source).toContain("Archived sources");
-    expect(source).not.toContain("title=\"Delete\"");
+    expect(shell).toContain("Data Sources & Imports");
+    expect(shell).toContain("<Dialog");
+    expect(shell).toContain("<SourceManager");
+    expect(sourceManager).toContain("Last import failed");
+    expect(sourceManager).toContain("Archive source");
+    expect(sourceManager).toContain("Archived sources");
+    expect(sourceManager).not.toContain("title=\"Delete\"");
   });
 });
