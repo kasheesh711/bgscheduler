@@ -68,17 +68,11 @@ describe("Wise activity API routes", () => {
         difference: 0,
         differencePct: null,
         currency: "THB",
+        wiseRevenueAvailable: true,
+        wiseRevenueUnavailableReason: null,
+        wiseRevenueTrendTimestamp: "2026-04-30T17:00:00.000Z",
         wiseRevenueTransactionCount: 0,
-        wiseRevenueEventCount: 0,
-        skippedEventCount: 0,
-        skippedEventBreakdown: {
-          payoutOrRefund: 0,
-          failedStatus: 0,
-          nonPositiveAmount: 0,
-          unsupportedCurrency: 0,
-          duplicate: 0,
-        },
-        source: "persisted_wise_activity_events",
+        source: "wise_fees_paid_trend",
       },
       students: [],
     } as never);
@@ -174,7 +168,7 @@ describe("Wise activity API routes", () => {
     await expect(res.json()).resolves.toMatchObject({
       revenueVariance: {
         periodLabel: "May 1-28, 2026",
-        source: "persisted_wise_activity_events",
+        source: "wise_fees_paid_trend",
       },
     });
   });

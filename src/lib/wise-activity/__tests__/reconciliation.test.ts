@@ -6,6 +6,7 @@ import {
   type PackageSaleInput,
   type WiseInvoiceEventInput,
 } from "../reconciliation";
+import type { WiseFeesPaidTrend } from "@/lib/wise/fetchers";
 
 function sale(overrides: Partial<PackageSaleInput> = {}): PackageSaleInput {
   return {
@@ -73,6 +74,17 @@ function creditPackage(overrides: Partial<CreditPackageInput> = {}): CreditPacka
   };
 }
 
+function feesPaidTrend(overrides: Partial<WiseFeesPaidTrend> = {}): WiseFeesPaidTrend {
+  return {
+    timestamp: "2026-04-30T17:00:00.000Z",
+    count: 148,
+    amountMinor: 344_046_000,
+    amount: 3_440_460,
+    currency: "THB",
+    ...overrides,
+  };
+}
+
 describe("Wise package-sales reconciliation", () => {
   it("returns review candidates from exact transaction and invoice metadata without auto-matching", () => {
     const result = buildPackageSalesReconciliation({
@@ -94,7 +106,7 @@ describe("Wise package-sales reconciliation", () => {
     expect(row).not.toHaveProperty("matchStatus");
   });
 
-  it("computes revenue variance from positive inbound Wise revenue events", () => {
+  it("computes revenue variance from Wise fees paid monthly trends", () => {
     const result = buildPackageSalesReconciliation({
       sources: [],
       selectedSource: null,
@@ -103,6 +115,7 @@ describe("Wise package-sales reconciliation", () => {
       creditPackages: [],
       startDate: "2026-05-10",
       endDate: "2026-05-10",
+      wiseFeesPaidTrends: [feesPaidTrend({ timestamp: "2026-05-09T17:00:00.000Z", count: 1, amountMinor: 1_200_000, amount: 12_000 })],
     });
 
     expect(result.revenueVariance).toMatchObject({
@@ -114,14 +127,74 @@ describe("Wise package-sales reconciliation", () => {
       difference: 0,
       differencePct: 0,
       currency: "THB",
+      wiseRevenueAvailable: true,
+      wiseRevenueTrendTimestamp: "2026-05-09T17:00:00.000Z",
       wiseRevenueTransactionCount: 1,
-      wiseRevenueEventCount: 1,
-      skippedEventCount: 0,
-      source: "persisted_wise_activity_events",
+      source: "wise_fees_paid_trend",
     });
   });
 
-  it("normalizes Wise THB minor-unit invoice amounts before computing variance", () => {
+  it("maps the May source month to the Wise Bangkok fees-paid trend row", () => {
+    const result = buildPackageSalesReconciliation({
+      sources: [],
+      selectedSource: {
+        id: "source-may",
+        sourceMonth: "2026-05-01",
+        label: "2026-05 May",
+        status: "active",
+        lastImportedAt: "2026-05-28T09:40:12.398Z",
+        lastNormalRowCount: 157,
+      },
+      saleRows: [sale({ paymentAmount: 3_499_610, paymentDate: "2026-05-28" })],
+      wiseEvents: [],
+      creditPackages: [],
+      startDate: "2026-05-01",
+      endDate: "2026-05-28",
+      wiseFeesPaidTrends: [feesPaidTrend()],
+    });
+
+    expect(result.revenueVariance.wiseRevenueTotal).toBe(3_440_460);
+    expect(result.revenueVariance.difference).toBe(59_150);
+    expect(result.revenueVariance.differencePct).toBeCloseTo(1.71924556);
+    expect(result.revenueVariance.wiseRevenueTrendTimestamp).toBe("2026-04-30T17:00:00.000Z");
+  });
+
+  it("returns official Wise revenue as unavailable when the fees-paid trend row is missing", () => {
+    const result = buildPackageSalesReconciliation({
+      sources: [],
+      selectedSource: null,
+      saleRows: [sale()],
+      wiseEvents: [event()],
+      creditPackages: [],
+      startDate: "2026-05-10",
+      endDate: "2026-05-10",
+      wiseFeesPaidTrends: [feesPaidTrend({ timestamp: "2026-03-31T17:00:00.000Z" })],
+    });
+
+    expect(result.revenueVariance.wiseRevenueAvailable).toBe(false);
+    expect(result.revenueVariance.wiseRevenueTotal).toBeNull();
+    expect(result.revenueVariance.difference).toBeNull();
+    expect(result.revenueVariance.wiseRevenueUnavailableReason).toContain("no row for 2026-05");
+  });
+
+  it("does not fall back to persisted activity events when the Wise fees-paid endpoint fails", () => {
+    const result = buildPackageSalesReconciliation({
+      sources: [],
+      selectedSource: null,
+      saleRows: [sale()],
+      wiseEvents: [event()],
+      creditPackages: [],
+      startDate: "2026-05-10",
+      endDate: "2026-05-10",
+      wiseFeesPaidTrendsError: "Wise API 500",
+    });
+
+    expect(result.revenueVariance.wiseRevenueAvailable).toBe(false);
+    expect(result.revenueVariance.wiseRevenueTotal).toBeNull();
+    expect(result.revenueVariance.wiseRevenueUnavailableReason).toContain("Wise API 500");
+  });
+
+  it("normalizes Wise THB minor-unit invoice amounts for row-level candidates", () => {
     const result = buildPackageSalesReconciliation({
       sources: [],
       selectedSource: null,
@@ -134,106 +207,13 @@ describe("Wise package-sales reconciliation", () => {
       creditPackages: [],
       startDate: "2026-05-10",
       endDate: "2026-05-10",
+      wiseFeesPaidTrends: [feesPaidTrend({ timestamp: "2026-05-09T17:00:00.000Z", amountMinor: 2_400_000, amount: 24_000 })],
     });
 
     expect(result.revenueVariance.wiseRevenueTotal).toBe(24000);
     expect(result.revenueVariance.difference).toBe(0);
     expect(result.students[0].rows[0].candidates[0].transactionAmount).toBe(24000);
     expect(result.students[0].rows[0].candidates[0].reasons).toContain("Payment amount matches the package-sale row.");
-  });
-
-  it("deduplicates Wise revenue events by transaction identity", () => {
-    const result = buildPackageSalesReconciliation({
-      sources: [],
-      selectedSource: null,
-      saleRows: [sale()],
-      wiseEvents: [
-        event({ id: "event-charge", eventId: "wise-event-charge" }),
-        event({
-          id: "event-update",
-          eventId: "wise-event-update",
-          eventName: "InvoiceUpdatedEvent",
-          eventTimestamp: new Date("2026-05-10T07:00:00.000Z"),
-        }),
-      ],
-      creditPackages: [],
-      startDate: "2026-05-10",
-      endDate: "2026-05-10",
-    });
-
-    expect(result.revenueVariance.wiseRevenueTotal).toBe(12000);
-    expect(result.revenueVariance.wiseRevenueEventCount).toBe(2);
-    expect(result.revenueVariance.wiseRevenueTransactionCount).toBe(1);
-    expect(result.revenueVariance.skippedEventBreakdown.duplicate).toBe(1);
-  });
-
-  it("excludes charged Wise invoices when the same transaction is later deleted", () => {
-    const result = buildPackageSalesReconciliation({
-      sources: [],
-      selectedSource: null,
-      saleRows: [sale()],
-      wiseEvents: [
-        event({
-          id: "event-deleted-charge",
-          eventId: "wise-event-deleted-charge",
-          transactionId: "tx-deleted",
-          transactionAmount: 4_000_000,
-          payload: { transaction: { id: "tx-deleted", amount: { value: 4_000_000, currency: "THB" } } },
-        }),
-        event({
-          id: "event-deleted",
-          eventId: "wise-event-deleted",
-          eventName: "InvoiceDeletedEvent",
-          eventTimestamp: new Date("2026-05-10T08:00:00.000Z"),
-          transactionId: "tx-deleted",
-          transactionAmount: 4_000_000,
-          payload: { transaction: { id: "tx-deleted", amount: { value: 4_000_000, currency: "THB" } } },
-        }),
-        event({
-          id: "event-good",
-          eventId: "wise-event-good",
-          transactionId: "tx-good",
-          transactionAmount: 500_000,
-          payload: { transaction: { id: "tx-good", amount: { value: 500_000, currency: "THB" } } },
-        }),
-      ],
-      creditPackages: [],
-      startDate: "2026-05-10",
-      endDate: "2026-05-10",
-    });
-
-    expect(result.revenueVariance.wiseRevenueTotal).toBe(5000);
-    expect(result.revenueVariance.wiseRevenueTransactionCount).toBe(1);
-  });
-
-  it("excludes payout, refund, failed, non-positive, and non-THB Wise revenue events", () => {
-    const result = buildPackageSalesReconciliation({
-      sources: [],
-      selectedSource: null,
-      saleRows: [sale()],
-      wiseEvents: [
-        event({ id: "event-good", eventId: "wise-event-good", transactionId: "tx-good" }),
-        event({ id: "event-payout", eventId: "wise-event-payout", eventName: "TutorPayoutInvoiceCreatedEvent", transactionId: "tx-payout", transactionAmount: 5000 }),
-        event({ id: "event-refund", eventId: "wise-event-refund", eventName: "RefundIssuedEvent", transactionId: "tx-refund", transactionAmount: 1000 }),
-        event({ id: "event-failed", eventId: "wise-event-failed", transactionId: "tx-failed", transactionStatus: "failed", transactionAmount: 2000 }),
-        event({ id: "event-zero", eventId: "wise-event-zero", transactionId: "tx-zero", transactionAmount: 0 }),
-        event({ id: "event-usd", eventId: "wise-event-usd", transactionId: "tx-usd", transactionAmount: 100, transactionCurrency: "USD" }),
-      ],
-      creditPackages: [],
-      startDate: "2026-05-10",
-      endDate: "2026-05-10",
-    });
-
-    expect(result.revenueVariance.wiseRevenueTotal).toBe(12000);
-    expect(result.revenueVariance.wiseRevenueTransactionCount).toBe(1);
-    expect(result.revenueVariance.skippedEventCount).toBe(5);
-    expect(result.revenueVariance.skippedEventBreakdown).toEqual({
-      payoutOrRefund: 2,
-      failedStatus: 1,
-      nonPositiveAmount: 1,
-      unsupportedCurrency: 1,
-      duplicate: 0,
-    });
   });
 
   it("does not classify session feedback as inbound finance because it contains the substring fee", () => {
@@ -261,7 +241,6 @@ describe("Wise package-sales reconciliation", () => {
 
     expect(result.summary.wiseInboundEvents).toBe(1);
     expect(result.coverage.inboundEventCount).toBe(1);
-    expect(result.revenueVariance.skippedEventCount).toBe(0);
   });
 
   it("reports Sheet minus Wise difference and percentage against Wise revenue", () => {
@@ -273,6 +252,7 @@ describe("Wise package-sales reconciliation", () => {
       creditPackages: [],
       startDate: "2026-05-10",
       endDate: "2026-05-10",
+      wiseFeesPaidTrends: [feesPaidTrend({ timestamp: "2026-05-09T17:00:00.000Z", amountMinor: 1_000_000, amount: 10_000 })],
     });
 
     expect(result.revenueVariance.sheetPackageSalesTotal).toBe(15000);
@@ -341,7 +321,6 @@ describe("Wise package-sales reconciliation", () => {
     expect(result.coverage.status).toBe("partial");
     expect(result.coverage.firstInboundEventDate).toBe("2026-05-27");
     expect(result.coverage.message).toContain("backfill before trusting missing-candidate rows");
-    expect(result.revenueVariance.wiseRevenueTotal).toBe(12000);
   });
 
   it("marks coverage complete when inbound Wise events span the selected range", () => {
