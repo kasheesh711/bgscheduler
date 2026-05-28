@@ -5,10 +5,15 @@ import type { ChartConfiguration, ChartDataset } from "chart.js";
 import {
   AlertCircle,
   CalendarDays,
+  CheckCircle2,
+  ChevronDown,
+  Coins,
   Eye,
   Filter,
+  ListChecks,
   RefreshCw,
   Search,
+  ShieldAlert,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -24,6 +29,12 @@ import {
   wiseActivityEventLabel,
   wiseActivityTypeLabel,
 } from "@/lib/wise-activity/format";
+import type {
+  ReconciliationCandidate,
+  ReconciliationSaleRow,
+  ReconciliationStudentGroup,
+  WisePackageSalesReconciliation,
+} from "@/lib/wise-activity/reconciliation";
 
 interface WiseActivityEventDto {
   id: string;
@@ -134,6 +145,36 @@ function queryString(filters: {
   return params.toString();
 }
 
+function reconciliationQueryString(filters: { sourceId: string }) {
+  const params = new URLSearchParams();
+  if (filters.sourceId) params.set("sourceId", filters.sourceId);
+  return params.toString();
+}
+
+async function checkedJson<T>(response: Response, fallback: string): Promise<T> {
+  const payload = await response.json().catch(() => null) as { error?: string } | T | null;
+  if (!response.ok) {
+    throw new Error(payload && typeof payload === "object" && "error" in payload && payload.error ? payload.error : fallback);
+  }
+  return payload as T;
+}
+
+function sourceMonthLabel(value: string): string {
+  return value.slice(0, 7);
+}
+
+function confidenceBadgeClass(confidence: ReconciliationCandidate["confidence"]) {
+  if (confidence === "high") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (confidence === "medium") return "border-sky-200 bg-sky-50 text-sky-800";
+  return "border-amber-200 bg-amber-50 text-amber-800";
+}
+
+function coverageClass(status: WisePackageSalesReconciliation["coverage"]["status"]) {
+  if (status === "complete") return "border-emerald-200 bg-emerald-50 text-emerald-900";
+  if (status === "empty") return "border-red-200 bg-red-50 text-red-900";
+  return "border-amber-200 bg-amber-50 text-amber-900";
+}
+
 function ChartCanvas({ config }: { config: ChartConfiguration }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -188,9 +229,204 @@ function typeBadgeClass(type: string) {
   return "border-slate-200 bg-slate-50 text-slate-700";
 }
 
+function CandidateList({ candidates }: { candidates: ReconciliationCandidate[] }) {
+  if (candidates.length === 0) {
+    return <div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">No Wise invoice/payment candidates.</div>;
+  }
+
+  return (
+    <div className="space-y-2">
+      {candidates.map((candidate) => (
+        <details key={`${candidate.id}-${candidate.score}`} className="rounded-md border bg-background p-3">
+          <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline" className={cn("rounded-md", confidenceBadgeClass(candidate.confidence))}>
+                  {candidate.confidence} confidence
+                </Badge>
+                <span className="text-sm font-medium">{wiseActivityEventLabel(candidate.eventName)}</span>
+                <span className="text-xs text-muted-foreground">{formatBangkokDateTime(candidate.eventTimestamp)}</span>
+              </div>
+              <div className="mt-1 truncate text-xs text-muted-foreground">
+                {[candidate.classroomName, candidate.transactionId].filter(Boolean).join(" | ") || candidate.eventId}
+              </div>
+            </div>
+            <div className="shrink-0 text-right">
+              <div className="text-sm font-semibold">{formatWiseAmount(candidate.transactionAmount, candidate.transactionCurrency)}</div>
+              <div className="text-xs text-muted-foreground">score {candidate.score}</div>
+            </div>
+          </summary>
+          <div className="mt-3 space-y-3 border-t pt-3">
+            <ul className="space-y-1 text-xs text-muted-foreground">
+              {candidate.reasons.map((reason) => <li key={reason}>- {reason}</li>)}
+            </ul>
+            <details className="rounded-md bg-muted/60 p-2">
+              <summary className="cursor-pointer text-xs font-medium">Wise raw details</summary>
+              <JsonBlock value={{ payload: candidate.payload, raw: candidate.raw }} />
+            </details>
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function SaleRowReview({ row }: { row: ReconciliationSaleRow }) {
+  return (
+    <div className="space-y-3 border-t px-3 py-3 first:border-t-0">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[120px_1fr_130px_160px]">
+        <div>
+          <div className="text-[10px] font-semibold uppercase text-muted-foreground">Row</div>
+          <div className="font-medium">#{row.rowNumber}</div>
+          <div className="text-xs text-muted-foreground">{row.paymentDate}</div>
+        </div>
+        <div className="min-w-0">
+          <div className="truncate font-medium">{row.packageName || row.program || row.packageHours || "Package sale"}</div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <span>Parent: {row.parentAccount || "-"}</span>
+            <span>Transaction: {row.transactionNo || "-"}</span>
+            <span>WISE: {row.recordedInWise || "-"}</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase text-muted-foreground">Sheet Amount</div>
+          <div className="font-medium">{formatWiseAmount(row.paymentAmount, "THB")}</div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase text-muted-foreground">Review</div>
+          <div className={cn("font-medium", row.reviewFlags.length > 0 ? "text-amber-700" : "text-emerald-700")}>
+            {row.reviewFlags.length > 0 ? `${row.reviewFlags.length} flag${row.reviewFlags.length === 1 ? "" : "s"}` : "Candidates available"}
+          </div>
+        </div>
+      </div>
+      {row.reviewFlags.length > 0 ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {row.reviewFlags.join(" ")}
+        </div>
+      ) : null}
+      <CandidateList candidates={row.candidates} />
+    </div>
+  );
+}
+
+function StudentReconciliationGroup({ group }: { group: ReconciliationStudentGroup }) {
+  return (
+    <details className="rounded-lg border bg-card" open={group.rowsNeedingReview > 0}>
+      <summary className="grid cursor-pointer list-none grid-cols-1 gap-3 px-4 py-3 md:grid-cols-[1fr_120px_150px_150px_auto]">
+        <div className="min-w-0">
+          <div className="truncate font-semibold">{group.studentNickname}</div>
+          <div className="text-xs text-muted-foreground">{group.rowCount} sale row{group.rowCount === 1 ? "" : "s"}</div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase text-muted-foreground">Sheet Total</div>
+          <div className="font-medium">{formatWiseAmount(group.totalAmount, "THB")}</div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase text-muted-foreground">Candidate Rows</div>
+          <div className="font-medium">{group.rowsWithCandidates} / {group.rowCount}</div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase text-muted-foreground">Needs Review</div>
+          <div className={cn("font-medium", group.rowsNeedingReview > 0 ? "text-amber-700" : "text-emerald-700")}>{group.rowsNeedingReview}</div>
+        </div>
+        <ChevronDown className="size-4 self-center justify-self-end text-muted-foreground" />
+      </summary>
+      <div className="border-t">
+        {group.rows.map((row) => <SaleRowReview key={row.id} row={row} />)}
+      </div>
+    </details>
+  );
+}
+
+function ReconciliationPanel({
+  data,
+  selectedSourceId,
+  loading,
+  backfilling,
+  onSourceChange,
+  onReload,
+  onBackfill,
+}: {
+  data: WisePackageSalesReconciliation | null;
+  selectedSourceId: string;
+  loading: boolean;
+  backfilling: boolean;
+  onSourceChange: (sourceId: string) => void;
+  onReload: () => void;
+  onBackfill: () => void;
+}) {
+  const summary = data?.summary;
+  return (
+    <div className="space-y-3">
+      <section className="rounded-lg border bg-card p-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <label className="w-full text-xs font-medium text-muted-foreground lg:max-w-md">
+            <span className="mb-1 block">Sales Dashboard source</span>
+            <select
+              className="h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground"
+              value={selectedSourceId}
+              onChange={(event) => onSourceChange(event.target.value)}
+            >
+              {(data?.sources ?? []).map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.label} ({sourceMonthLabel(source.sourceMonth)})
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={onReload} disabled={loading}>
+              <RefreshCw className={cn("mr-2 size-4", loading && "animate-spin")} />
+              Reload
+            </Button>
+            <Button size="sm" onClick={onBackfill} disabled={!data || backfilling}>
+              <RefreshCw className={cn("mr-2 size-4", backfilling && "animate-spin")} />
+              Backfill selected range
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      {data ? (
+        <section className={cn("flex items-start gap-2 rounded-lg border px-3 py-2 text-sm", coverageClass(data.coverage.status))}>
+          {data.coverage.status === "complete" ? <CheckCircle2 className="mt-0.5 size-4" /> : <ShieldAlert className="mt-0.5 size-4" />}
+          <div>
+            <div className="font-medium">
+              Coverage: {data.coverage.status} for {data.dateRange.startDate} to {data.dateRange.endDate}
+            </div>
+            <div className="text-xs">{data.coverage.message}</div>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <KpiCard label="Package Sale Rows" value={String(summary?.saleRows ?? 0)} detail="Sales Dashboard normal rows" tone="sky" />
+        <KpiCard label="Sheet Total" value={formatWiseAmount(summary?.sheetTotal ?? 0, "THB")} detail={`${summary?.students ?? 0} students`} tone="green" />
+        <KpiCard label="Rows With Candidates" value={String(summary?.rowsWithCandidates ?? 0)} detail={`${summary?.candidateCount ?? 0} Wise candidates`} tone="amber" />
+        <KpiCard label="Needs Review" value={String(summary?.rowsNeedingReview ?? 0)} detail={`${summary?.wiseInboundEvents ?? 0} inbound Wise events`} tone="red" />
+      </section>
+
+      <section className="space-y-2">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <ListChecks className="size-4" />
+          Student Package Sales
+        </div>
+        {loading ? (
+          <div className="rounded-lg border bg-card px-4 py-8 text-center text-sm text-muted-foreground">Loading reconciliation...</div>
+        ) : data && data.students.length > 0 ? (
+          data.students.map((group) => <StudentReconciliationGroup key={group.studentKey} group={group} />)
+        ) : (
+          <div className="rounded-lg border bg-card px-4 py-8 text-center text-sm text-muted-foreground">No package sales found for this source.</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 export function WiseActivityWorkspace() {
   const defaultEnd = useMemo(() => bangkokToday(), []);
   const defaultStart = useMemo(() => addDays(defaultEnd, -6), [defaultEnd]);
+  const [view, setView] = useState<"activity" | "reconciliation">("activity");
   const [startDate, setStartDate] = useState(defaultStart);
   const [endDate, setEndDate] = useState(defaultEnd);
   const [eventType, setEventType] = useState("");
@@ -204,6 +440,10 @@ export function WiseActivityWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [reconciliation, setReconciliation] = useState<WisePackageSalesReconciliation | null>(null);
+  const [selectedSourceId, setSelectedSourceId] = useState("");
+  const [reconciliationLoading, setReconciliationLoading] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
 
   const loadData = useCallback((targetPage: number) => {
     const controller = new AbortController();
@@ -236,6 +476,33 @@ export function WiseActivityWorkspace() {
   }, [endDate, eventName, eventType, financeOnly, query, startDate]);
 
   useEffect(() => loadData(1), [loadData]);
+
+  const loadReconciliation = useCallback((sourceId = selectedSourceId) => {
+    const controller = new AbortController();
+    setReconciliationLoading(true);
+    setError(null);
+    fetch(`/api/wise-activity/reconciliation?${reconciliationQueryString({ sourceId })}`, { signal: controller.signal })
+      .then((response) => checkedJson<WisePackageSalesReconciliation>(response, "Wise reconciliation load failed"))
+      .then((json) => {
+        setReconciliation(json);
+        if (json.selectedSource?.id && json.selectedSource.id !== selectedSourceId) {
+          setSelectedSourceId(json.selectedSource.id);
+        }
+      })
+      .catch((loadError) => {
+        if (loadError instanceof DOMException && loadError.name === "AbortError") return;
+        setError(loadError instanceof Error ? loadError.message : "Wise reconciliation load failed");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setReconciliationLoading(false);
+      });
+    return () => controller.abort();
+  }, [selectedSourceId]);
+
+  useEffect(() => {
+    if (view !== "reconciliation") return;
+    return loadReconciliation();
+  }, [loadReconciliation, view]);
 
   const eventTypes = useMemo(
     () => Object.keys(summary?.eventTypeCounts ?? {}).sort(),
@@ -343,22 +610,79 @@ export function WiseActivityWorkspace() {
     }
   }
 
+  async function runReconciliationBackfill() {
+    if (!reconciliation) return;
+    setBackfilling(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/wise-activity/reconciliation/backfill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          startDate: reconciliation.dateRange.startDate,
+          endDate: reconciliation.dateRange.endDate,
+          maxPages: 1_000,
+        }),
+      });
+      await checkedJson<{ ok: true }>(response, "Wise reconciliation backfill failed");
+      loadReconciliation(selectedSourceId);
+    } catch (backfillError) {
+      setError(backfillError instanceof Error ? backfillError.message : "Wise reconciliation backfill failed");
+    } finally {
+      setBackfilling(false);
+    }
+  }
+
   const rows = list?.events ?? [];
   const cards = summary?.cards;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto pb-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Wise Audit</h1>
           <p className="text-xs text-muted-foreground">Ops and finance activity from persisted Wise logs.</p>
         </div>
-        <Button size="sm" onClick={runManualSync} disabled={syncing}>
-          <RefreshCw className={cn("mr-2 size-4", syncing && "animate-spin")} />
-          Sync
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-md border bg-muted p-1">
+            <Button size="sm" variant={view === "activity" ? "default" : "ghost"} onClick={() => setView("activity")}>
+              <Eye className="mr-2 size-4" />
+              Activity
+            </Button>
+            <Button size="sm" variant={view === "reconciliation" ? "default" : "ghost"} onClick={() => setView("reconciliation")}>
+              <Coins className="mr-2 size-4" />
+              Reconciliation
+            </Button>
+          </div>
+          <Button size="sm" onClick={runManualSync} disabled={syncing}>
+            <RefreshCw className={cn("mr-2 size-4", syncing && "animate-spin")} />
+            Sync
+          </Button>
+        </div>
       </header>
 
+      {error ? (
+        <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          <AlertCircle className="size-4" />
+          {error}
+        </div>
+      ) : null}
+
+      {view === "reconciliation" ? (
+        <ReconciliationPanel
+          data={reconciliation}
+          selectedSourceId={selectedSourceId}
+          loading={reconciliationLoading}
+          backfilling={backfilling}
+          onSourceChange={(sourceId) => {
+            setSelectedSourceId(sourceId);
+            loadReconciliation(sourceId);
+          }}
+          onReload={() => loadReconciliation(selectedSourceId)}
+          onBackfill={runReconciliationBackfill}
+        />
+      ) : (
+        <>
       <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Total Events" value={String(cards?.totalEvents ?? 0)} detail={`${startDate} to ${endDate} BKK`} tone="sky" />
         <KpiCard label="Session Mutations" value={String(cards?.sessionMutationEvents ?? 0)} detail="Created, updated, cancelled, deleted" tone="green" />
@@ -430,13 +754,6 @@ export function WiseActivityWorkspace() {
           </div>
         </div>
       </section>
-
-      {error ? (
-        <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-          <AlertCircle className="size-4" />
-          {error}
-        </div>
-      ) : null}
 
       <section className="grid min-h-[260px] grid-cols-1 gap-3 xl:grid-cols-3">
         <Card className="flex min-h-[260px] flex-col p-4 xl:col-span-2">
@@ -537,6 +854,8 @@ export function WiseActivityWorkspace() {
           </Button>
         </div>
       </section>
+        </>
+      )}
 
       {selected ? (
         <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-xl flex-col border-l bg-background shadow-xl">

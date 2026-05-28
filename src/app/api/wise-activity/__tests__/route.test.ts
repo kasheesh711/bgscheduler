@@ -13,18 +13,29 @@ vi.mock("@/lib/wise-activity/data", () => ({
   })),
 }));
 vi.mock("@/lib/wise-activity/sync", () => ({
-  WiseActivitySyncAlreadyRunningError: class WiseActivitySyncAlreadyRunningError extends Error {},
+  WiseActivitySyncAlreadyRunningError: class WiseActivitySyncAlreadyRunningError extends Error {
+    constructor() {
+      super("Wise activity sync is already running");
+    }
+  },
   syncWiseActivityEvents: vi.fn(),
+}));
+vi.mock("@/lib/wise-activity/reconciliation", () => ({
+  getWisePackageSalesReconciliation: vi.fn(),
+  wiseReconciliationBackfillLookbackDays: vi.fn(() => 28),
 }));
 
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { createWiseClient } from "@/lib/wise/client";
 import { getWiseActivitySummary, listWiseActivityEvents } from "@/lib/wise-activity/data";
-import { syncWiseActivityEvents } from "@/lib/wise-activity/sync";
+import { syncWiseActivityEvents, WiseActivitySyncAlreadyRunningError } from "@/lib/wise-activity/sync";
+import { getWisePackageSalesReconciliation, wiseReconciliationBackfillLookbackDays } from "@/lib/wise-activity/reconciliation";
 import { GET as getEvents } from "../route";
 import { GET as getSummary } from "../summary/route";
 import { POST as postSync } from "../sync/route";
+import { GET as getReconciliation } from "../reconciliation/route";
+import { POST as postReconciliationBackfill } from "../reconciliation/backfill/route";
 
 const authMock = auth as unknown as Mock;
 
@@ -42,6 +53,15 @@ describe("Wise activity API routes", () => {
     vi.mocked(listWiseActivityEvents).mockResolvedValue({ events: [], pagination: { total: 0 } } as never);
     vi.mocked(getWiseActivitySummary).mockResolvedValue({ cards: { totalEvents: 0 } } as never);
     vi.mocked(syncWiseActivityEvents).mockResolvedValue({ syncRunId: "run-1", status: "success" } as never);
+    vi.mocked(getWisePackageSalesReconciliation).mockResolvedValue({
+      sources: [],
+      selectedSource: null,
+      dateRange: { startDate: "2026-05-01", endDate: "2026-05-28" },
+      coverage: { status: "empty" },
+      summary: { saleRows: 0 },
+      students: [],
+    } as never);
+    vi.mocked(wiseReconciliationBackfillLookbackDays).mockReturnValue(28);
   });
 
   it("requires auth before returning persisted events", async () => {
@@ -116,5 +136,63 @@ describe("Wise activity API routes", () => {
         maxPages: 700,
       },
     );
+  });
+
+  it("returns package-sales reconciliation for signed-in admins", async () => {
+    const res = await getReconciliation(request(
+      "http://test.local/api/wise-activity/reconciliation?sourceId=source-1&startDate=2026-05-01&endDate=2026-05-28",
+    ));
+
+    expect(res.status).toBe(200);
+    expect(getWisePackageSalesReconciliation).toHaveBeenCalledWith({ db: true }, {
+      sourceId: "source-1",
+      month: undefined,
+      startDate: "2026-05-01",
+      endDate: "2026-05-28",
+    });
+  });
+
+  it("validates reconciliation date ranges", async () => {
+    const res = await getReconciliation(request(
+      "http://test.local/api/wise-activity/reconciliation?startDate=2026-05-29&endDate=2026-05-28",
+    ));
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "Invalid date range" });
+    expect(getWisePackageSalesReconciliation).not.toHaveBeenCalled();
+  });
+
+  it("backfills Wise activity for the reconciliation range", async () => {
+    const res = await postReconciliationBackfill(request("http://test.local/api/wise-activity/reconciliation/backfill", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ startDate: "2026-05-01", endDate: "2026-05-28", maxPages: 900 }),
+    }));
+
+    expect(res.status).toBe(200);
+    expect(wiseReconciliationBackfillLookbackDays).toHaveBeenCalledWith("2026-05-01");
+    expect(syncWiseActivityEvents).toHaveBeenCalledWith(
+      { db: true },
+      { client: true },
+      "institute-1",
+      {
+        triggerType: "manual",
+        lookbackDays: 28,
+        maxPages: 900,
+      },
+    );
+  });
+
+  it("surfaces reconciliation backfill already-running conflicts", async () => {
+    vi.mocked(syncWiseActivityEvents).mockRejectedValue(new WiseActivitySyncAlreadyRunningError());
+
+    const res = await postReconciliationBackfill(request("http://test.local/api/wise-activity/reconciliation/backfill", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ startDate: "2026-05-01", endDate: "2026-05-28" }),
+    }));
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({ error: "Wise activity sync is already running" });
   });
 });
