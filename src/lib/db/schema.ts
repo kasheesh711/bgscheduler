@@ -158,6 +158,63 @@ export const syncRuns = pgTable("sync_runs", {
   index("sync_runs_status_started_idx").on(table.status, table.startedAt),
 ]);
 
+// ── Wise Activity Audit ────────────────────────────────────────────────
+
+export const wiseActivityEvents = pgTable("wise_activity_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  eventId: text("event_id").notNull(),
+  eventType: text("event_type").notNull().default("unknown"),
+  eventName: text("event_name").notNull(),
+  eventTimestamp: timestamp("event_timestamp", { withTimezone: true }).notNull(),
+  actorWiseUserId: text("actor_wise_user_id"),
+  actorName: text("actor_name"),
+  actorRole: text("actor_role"),
+  classroomId: text("classroom_id"),
+  classroomName: text("classroom_name"),
+  classroomSubject: text("classroom_subject"),
+  sessionId: text("session_id"),
+  sessionStartTime: timestamp("session_start_time", { withTimezone: true }),
+  sessionEndTime: timestamp("session_end_time", { withTimezone: true }),
+  transactionId: text("transaction_id"),
+  transactionType: text("transaction_type"),
+  transactionStatus: text("transaction_status"),
+  transactionAmount: doublePrecision("transaction_amount"),
+  transactionCurrency: text("transaction_currency"),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("wise_activity_events_event_id_idx").on(table.eventId),
+  index("wise_activity_events_timestamp_idx").on(table.eventTimestamp),
+  index("wise_activity_events_type_timestamp_idx").on(table.eventType, table.eventTimestamp),
+  index("wise_activity_events_name_timestamp_idx").on(table.eventName, table.eventTimestamp),
+  index("wise_activity_events_actor_idx").on(table.actorWiseUserId, table.eventTimestamp),
+  index("wise_activity_events_classroom_idx").on(table.classroomId, table.eventTimestamp),
+  index("wise_activity_events_session_idx").on(table.sessionId),
+  index("wise_activity_events_transaction_idx").on(table.transactionId),
+]);
+
+export const wiseActivitySyncRuns = pgTable("wise_activity_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  triggerType: text("trigger_type").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  pagesFetched: integer("pages_fetched").notNull().default(0),
+  eventsFetched: integer("events_fetched").notNull().default(0),
+  insertedCount: integer("inserted_count").notNull().default(0),
+  oldestEventTimestamp: timestamp("oldest_event_timestamp", { withTimezone: true }),
+  newestEventTimestamp: timestamp("newest_event_timestamp", { withTimezone: true }),
+  errorSummary: text("error_summary"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+}, (table) => [
+  uniqueIndex("wise_activity_sync_runs_single_running_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'running'`),
+  index("wise_activity_sync_runs_status_started_idx").on(table.status, table.startedAt),
+]);
+
 // ── Auth ────────────────────────────────────────────────────────────────
 
 export const adminUsers = pgTable("admin_users", {
@@ -210,7 +267,7 @@ export const salesDashboardSources = pgTable("sales_dashboard_sources", {
 }, (table) => [
   uniqueIndex("sds_source_month_active_idx")
     .on(table.sourceMonth)
-    .where(sql`${table.status}::text <> 'archived'`),
+    .where(sql`${table.archivedAt} IS NULL`),
   index("sds_status_month_idx").on(table.status, table.sourceMonth),
   index("sds_connected_email_idx").on(table.connectedEmail),
 ]);

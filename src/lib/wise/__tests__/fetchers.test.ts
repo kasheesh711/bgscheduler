@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WiseClient } from "../client";
 import {
   checkTeacherAvailabilityForSessions,
+  fetchWiseActivityEvents,
+  fetchWiseClassroomStats,
+  fetchWiseClassroomTrends,
+  fetchWiseSessionStats,
   fetchAllFutureSessions,
   fetchAllInstituteSessions,
   fetchAllTeachers,
@@ -270,5 +274,75 @@ describe("Wise fetchers", () => {
         body: JSON.stringify({ location: "Joy" }),
       }),
     );
+  });
+
+  it("fetches Wise activity events with supported filters and caps page size at 50", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: 200,
+          data: {
+            events: [
+              {
+                event: {
+                  eventId: "event-1",
+                  eventName: "SessionUpdatedEvent",
+                  eventTimestamp: "2026-05-28T05:00:00.000Z",
+                  type: "SESSION",
+                },
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    global.fetch = fetchMock as typeof fetch;
+
+    const events = await fetchWiseActivityEvents(makeClient(), "center-1", {
+      pageNumber: 2,
+      pageSize: 100,
+      type: "SESSION",
+      eventName: "SessionUpdatedEvent",
+      userId: "user-1",
+      classIds: ["class-1", "class-2"],
+    });
+
+    expect(events).toHaveLength(1);
+    const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(calledUrl.pathname).toBe("/institutes/center-1/events");
+    expect(calledUrl.searchParams.get("page_number")).toBe("2");
+    expect(calledUrl.searchParams.get("page_size")).toBe("50");
+    expect(calledUrl.searchParams.get("type")).toBe("SESSION");
+    expect(calledUrl.searchParams.get("eventName")).toBe("SessionUpdatedEvent");
+    expect(calledUrl.searchParams.get("userId")).toBe("user-1");
+    expect(calledUrl.searchParams.get("classIds")).toBe("class-1,class-2");
+  });
+
+  it("fetches Wise analytics summary endpoints", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ status: 200, data: { ok: true } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ));
+    global.fetch = fetchMock as typeof fetch;
+
+    await fetchWiseSessionStats(makeClient(), "center-1", {
+      from: new Date("2026-05-01T00:00:00.000Z"),
+      to: new Date("2026-05-28T00:00:00.000Z"),
+    });
+    await fetchWiseClassroomStats(makeClient(), "center-1");
+    await fetchWiseClassroomTrends(makeClient(), "center-1");
+
+    const paths = fetchMock.mock.calls.map((call) => new URL(call[0] as string).pathname);
+    expect(paths).toEqual([
+      "/institutes/center-1/analytics/sessionStats",
+      "/institutes/center-1/analytics/classroomStats",
+      "/institutes/center-1/analytics/classroomTrends",
+    ]);
+    const sessionStatsUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(sessionStatsUrl.searchParams.get("from")).toBe("2026-05-01T00:00:00.000Z");
+    expect(sessionStatsUrl.searchParams.get("to")).toBe("2026-05-28T00:00:00.000Z");
   });
 });

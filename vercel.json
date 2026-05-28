@@ -13,6 +13,10 @@
       "schedule": "20,50 * * * *"
     },
     {
+      "path": "/api/internal/sync-wise-activity",
+      "schedule": "5,35 * * * *"
+    },
+    {
       "path": "/api/internal/class-assignments/morning",
       "schedule": "45 23 * * *"
     },

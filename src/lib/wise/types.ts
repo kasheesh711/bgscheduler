@@ -105,6 +105,74 @@ export interface WiseSessionUpdateResponse {
   [key: string]: unknown;
 }
 
+export interface WiseActivityUser {
+  _id?: string;
+  name?: string;
+  profilePicture?: string;
+  role?: string;
+  [key: string]: unknown;
+}
+
+export interface WiseActivityClassroom {
+  _id?: string;
+  name?: string;
+  subject?: string;
+  [key: string]: unknown;
+}
+
+export interface WiseActivityEventDetail {
+  eventId?: string;
+  eventName?: string;
+  eventTimestamp?: string;
+  payload?: Record<string, unknown>;
+  type?: string;
+  [key: string]: unknown;
+}
+
+export interface WiseActivityEvent {
+  user?: WiseActivityUser;
+  event?: WiseActivityEventDetail;
+  classroom?: WiseActivityClassroom;
+  participant?: WiseActivityUser;
+  [key: string]: unknown;
+}
+
+export interface WiseActivityEventsResponse {
+  data?: {
+    events?: WiseActivityEvent[];
+  };
+  [key: string]: unknown;
+}
+
+export interface WiseSessionStatsResponse {
+  data?: {
+    sessionStats?: {
+      totalScheduled?: number;
+      totalLive?: number;
+      totalLate?: number;
+      totalCompleted?: number;
+      [key: string]: unknown;
+    };
+  };
+  [key: string]: unknown;
+}
+
+export interface WiseClassroomStatsResponse {
+  data?: {
+    courseStats?: Record<string, unknown>;
+    classroomStats?: Record<string, unknown>;
+  };
+  [key: string]: unknown;
+}
+
+export interface WiseClassroomTrendsResponse {
+  data?: {
+    courseTrends?: Record<string, unknown>;
+    classroomTrends?: Record<string, unknown>;
+  };
+  [key: string]: unknown;
+}
+
 export function getWiseUserId(
   userRef: string | WiseUserReference | undefined
 ): string | undefined {

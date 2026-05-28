@@ -149,7 +149,7 @@ export async function upsertSalesDashboardSource(input: SourceInput, db: Databas
     })
     .onConflictDoUpdate({
       target: schema.salesDashboardSources.sourceMonth,
-      targetWhere: sql`${schema.salesDashboardSources.status}::text <> 'archived'`,
+      targetWhere: sql`${schema.salesDashboardSources.archivedAt} IS NULL`,
       set: {
         label,
         spreadsheetId,
@@ -260,7 +260,7 @@ export async function restoreSalesDashboardSource(
     .where(and(
       eq(schema.salesDashboardSources.sourceMonth, source.sourceMonth),
       ne(schema.salesDashboardSources.id, source.id),
-      sql`${schema.salesDashboardSources.status}::text <> 'archived'`,
+      sql`${schema.salesDashboardSources.archivedAt} IS NULL`,
     ))
     .limit(1);
   if (existingMonthSource) {

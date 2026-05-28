@@ -23,6 +23,7 @@ const SCHEDULING_ITEMS = [
 const NAV_ITEMS = [
   { href: "/sales-dashboard", label: "Sales Dashboard" },
   { href: "/credit-control", label: "Credit Control" },
+  { href: "/wise-activity", label: "Wise Audit" },
   { href: "/data-health", label: "Data Health" },
 ];
 

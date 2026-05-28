@@ -1,0 +1,576 @@
+"use client";
+
+import Chart from "chart.js/auto";
+import type { ChartConfiguration, ChartDataset } from "chart.js";
+import {
+  AlertCircle,
+  CalendarDays,
+  Eye,
+  Filter,
+  RefreshCw,
+  Search,
+  X,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
+import {
+  formatBangkokDateTime,
+  formatWiseAmount,
+  isWiseFinanceEvent,
+  wiseActivityEventLabel,
+  wiseActivityTypeLabel,
+} from "@/lib/wise-activity/format";
+
+interface WiseActivityEventDto {
+  id: string;
+  eventId: string;
+  eventType: string;
+  eventName: string;
+  eventTimestamp: string;
+  actorWiseUserId: string | null;
+  actorName: string | null;
+  actorRole: string | null;
+  classroomId: string | null;
+  classroomName: string | null;
+  classroomSubject: string | null;
+  sessionId: string | null;
+  sessionStartTime: string | null;
+  sessionEndTime: string | null;
+  transactionId: string | null;
+  transactionType: string | null;
+  transactionStatus: string | null;
+  transactionAmount: number | null;
+  transactionCurrency: string | null;
+  payload: Record<string, unknown>;
+  raw: Record<string, unknown>;
+}
+
+interface WiseActivityListResponse {
+  events: WiseActivityEventDto[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    total: number;
+    pageCount: number;
+  };
+}
+
+interface WiseActivitySummaryResponse {
+  cards: {
+    totalEvents: number;
+    sessionMutationEvents: number;
+    financeEvents: number;
+    lastSyncAt: string | null;
+    lastSyncStatus: string | null;
+    lastSyncInsertedCount: number | null;
+  };
+  activityByDate: Array<Record<string, string | number>>;
+  financeTrend: Array<{ date: string; count: number; amount: number }>;
+  eventTypeCounts: Record<string, number>;
+  eventNameCounts: Record<string, number>;
+  sessionMutationCounts: Record<string, number>;
+  topActors: Array<[string, number]>;
+  topClassrooms: Array<[string, number]>;
+}
+
+const EVENT_TYPE_COLORS: Record<string, string> = {
+  BILLING: "#e67e22",
+  CLASSROOM: "#7c3aed",
+  CONTENT: "#14b8a6",
+  CREDIT: "#0ea5e9",
+  SESSION: "#2563eb",
+  SETTING: "#dc2626",
+  USER: "#16a34a",
+  unknown: "#64748b",
+};
+
+const MUTATION_COLORS: Record<string, string> = {
+  SessionCreatedEvent: "#16a34a",
+  SessionUpdatedEvent: "#2563eb",
+  SessionCancelledEvent: "#e67e22",
+  SessionDeletedEvent: "#dc2626",
+};
+
+function bangkokToday(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
+}
+
+function addDays(date: string, days: number): string {
+  const [year, month, day] = date.split("-").map(Number);
+  const value = new Date(Date.UTC(year, month - 1, day + days, 12, 0, 0, 0));
+  return value.toISOString().slice(0, 10);
+}
+
+function queryString(filters: {
+  startDate: string;
+  endDate: string;
+  eventType: string;
+  eventName: string;
+  query: string;
+  financeOnly: boolean;
+  page?: number;
+}) {
+  const params = new URLSearchParams({
+    startDate: filters.startDate,
+    endDate: filters.endDate,
+  });
+  if (filters.page) params.set("page", String(filters.page));
+  params.set("pageSize", "50");
+  if (filters.eventType) params.set("type", filters.eventType);
+  if (filters.eventName) params.set("eventName", filters.eventName);
+  if (filters.query.trim()) params.set("q", filters.query.trim());
+  if (filters.financeOnly) params.set("financeOnly", "true");
+  return params.toString();
+}
+
+function ChartCanvas({ config }: { config: ChartConfiguration }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    const chart = new Chart(canvasRef.current, config);
+    return () => chart.destroy();
+  }, [config]);
+
+  return (
+    <div className="relative min-h-0 flex-1">
+      <canvas ref={canvasRef} />
+    </div>
+  );
+}
+
+function KpiCard({ label, value, detail, tone }: {
+  label: string;
+  value: string;
+  detail: string;
+  tone: "sky" | "amber" | "green" | "red";
+}) {
+  const toneClass = {
+    sky: "bg-sky-500",
+    amber: "bg-amber-500",
+    green: "bg-emerald-500",
+    red: "bg-red-500",
+  }[tone];
+  return (
+    <Card className="relative overflow-hidden rounded-lg px-4 py-3">
+      <div className={cn("absolute inset-x-0 top-0 h-1", toneClass)} />
+      <div className="text-[10px] font-semibold uppercase text-muted-foreground">{label}</div>
+      <div className="mt-2 text-2xl font-semibold tracking-tight">{value}</div>
+      <div className="mt-1 truncate text-xs text-muted-foreground">{detail}</div>
+    </Card>
+  );
+}
+
+function JsonBlock({ value }: { value: unknown }) {
+  return (
+    <pre className="max-h-72 overflow-auto rounded-md bg-muted p-3 text-[11px] leading-relaxed text-muted-foreground">
+      {JSON.stringify(value, null, 2)}
+    </pre>
+  );
+}
+
+function typeBadgeClass(type: string) {
+  if (type === "BILLING") return "border-amber-200 bg-amber-50 text-amber-800";
+  if (type === "SESSION") return "border-sky-200 bg-sky-50 text-sky-800";
+  if (type === "CLASSROOM") return "border-purple-200 bg-purple-50 text-purple-800";
+  if (type === "USER") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
+export function WiseActivityWorkspace() {
+  const defaultEnd = useMemo(() => bangkokToday(), []);
+  const defaultStart = useMemo(() => addDays(defaultEnd, -6), [defaultEnd]);
+  const [startDate, setStartDate] = useState(defaultStart);
+  const [endDate, setEndDate] = useState(defaultEnd);
+  const [eventType, setEventType] = useState("");
+  const [eventName, setEventName] = useState("");
+  const [query, setQuery] = useState("");
+  const [financeOnly, setFinanceOnly] = useState(false);
+  const [page, setPage] = useState(1);
+  const [summary, setSummary] = useState<WiseActivitySummaryResponse | null>(null);
+  const [list, setList] = useState<WiseActivityListResponse | null>(null);
+  const [selected, setSelected] = useState<WiseActivityEventDto | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  const loadData = useCallback((targetPage: number) => {
+    const controller = new AbortController();
+    const filters = { startDate, endDate, eventType, eventName, query, financeOnly, page: targetPage };
+    setLoading(true);
+    setError(null);
+    Promise.all([
+      fetch(`/api/wise-activity/summary?${queryString(filters)}`, { signal: controller.signal }),
+      fetch(`/api/wise-activity?${queryString(filters)}`, { signal: controller.signal }),
+    ])
+      .then(async ([summaryResponse, listResponse]) => {
+        if (!summaryResponse.ok) throw new Error((await summaryResponse.json()).error ?? "Summary failed");
+        if (!listResponse.ok) throw new Error((await listResponse.json()).error ?? "Activity query failed");
+        const [summaryJson, listJson] = await Promise.all([
+          summaryResponse.json() as Promise<WiseActivitySummaryResponse>,
+          listResponse.json() as Promise<WiseActivityListResponse>,
+        ]);
+        setSummary(summaryJson);
+        setList(listJson);
+        setPage(targetPage);
+      })
+      .catch((loadError) => {
+        if (loadError instanceof DOMException && loadError.name === "AbortError") return;
+        setError(loadError instanceof Error ? loadError.message : "Wise activity load failed");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [endDate, eventName, eventType, financeOnly, query, startDate]);
+
+  useEffect(() => loadData(1), [loadData]);
+
+  const eventTypes = useMemo(
+    () => Object.keys(summary?.eventTypeCounts ?? {}).sort(),
+    [summary],
+  );
+  const eventNames = useMemo(
+    () => Object.keys(summary?.eventNameCounts ?? {}).sort((left, right) => wiseActivityEventLabel(left).localeCompare(wiseActivityEventLabel(right))),
+    [summary],
+  );
+
+  const activityConfig = useMemo<ChartConfiguration>(() => {
+    const rows = summary?.activityByDate ?? [];
+    const labels = rows.map((row) => String(row.date).slice(5));
+    const types = Object.keys(summary?.eventTypeCounts ?? {}).sort();
+    const datasets: ChartDataset<"bar">[] = types.map((type) => ({
+      label: wiseActivityTypeLabel(type),
+      data: rows.map((row) => Number(row[type] ?? 0)),
+      backgroundColor: EVENT_TYPE_COLORS[type] ?? "#64748b",
+      borderRadius: 3,
+    }));
+    return {
+      type: "bar",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { stacked: true, grid: { display: false } },
+          y: { stacked: true, beginAtZero: true, grid: { color: "rgba(15, 23, 42, 0.06)" } },
+        },
+        plugins: { legend: { position: "bottom" } },
+      },
+    };
+  }, [summary]);
+
+  const mutationConfig = useMemo<ChartConfiguration>(() => {
+    const entries = Object.entries(summary?.sessionMutationCounts ?? {});
+    return {
+      type: "bar",
+      data: {
+        labels: entries.map(([name]) => wiseActivityEventLabel(name)),
+        datasets: [{
+          label: "Events",
+          data: entries.map(([, count]) => count),
+          backgroundColor: entries.map(([name]) => MUTATION_COLORS[name] ?? "#64748b"),
+          borderRadius: 4,
+        }],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { beginAtZero: true, grid: { color: "rgba(15, 23, 42, 0.06)" } },
+          y: { grid: { display: false } },
+        },
+        plugins: { legend: { display: false } },
+      },
+    };
+  }, [summary]);
+
+  const financeConfig = useMemo<ChartConfiguration>(() => {
+    const rows = summary?.financeTrend ?? [];
+    return {
+      type: "line",
+      data: {
+        labels: rows.map((row) => row.date.slice(5)),
+        datasets: [{
+          label: "Finance events",
+          data: rows.map((row) => row.count),
+          borderColor: "#e67e22",
+          backgroundColor: "rgba(230, 126, 34, 0.18)",
+          fill: true,
+          tension: 0.35,
+          pointRadius: 3,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { grid: { display: false } },
+          y: { beginAtZero: true, grid: { color: "rgba(15, 23, 42, 0.06)" } },
+        },
+        plugins: { legend: { display: false } },
+      },
+    };
+  }, [summary]);
+
+  async function runManualSync() {
+    setSyncing(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/wise-activity/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lookbackDays: 30, maxPages: 500 }),
+      });
+      if (!response.ok) throw new Error((await response.json()).error ?? "Wise activity sync failed");
+      loadData(1);
+    } catch (syncError) {
+      setError(syncError instanceof Error ? syncError.message : "Wise activity sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  const rows = list?.events ?? [];
+  const cards = summary?.cards;
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Wise Audit</h1>
+          <p className="text-xs text-muted-foreground">Ops and finance activity from persisted Wise logs.</p>
+        </div>
+        <Button size="sm" onClick={runManualSync} disabled={syncing}>
+          <RefreshCw className={cn("mr-2 size-4", syncing && "animate-spin")} />
+          Sync
+        </Button>
+      </header>
+
+      <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <KpiCard label="Total Events" value={String(cards?.totalEvents ?? 0)} detail={`${startDate} to ${endDate} BKK`} tone="sky" />
+        <KpiCard label="Session Mutations" value={String(cards?.sessionMutationEvents ?? 0)} detail="Created, updated, cancelled, deleted" tone="green" />
+        <KpiCard label="Finance Events" value={String(cards?.financeEvents ?? 0)} detail="Billing, payments, invoices, payouts" tone="amber" />
+        <KpiCard
+          label="Last Activity Sync"
+          value={cards?.lastSyncStatus ?? "-"}
+          detail={cards?.lastSyncAt ? `${formatBangkokDateTime(cards.lastSyncAt)} | +${cards.lastSyncInsertedCount ?? 0}` : "No sync run recorded"}
+          tone={cards?.lastSyncStatus === "failed" ? "red" : "sky"}
+        />
+      </section>
+
+      <section className="rounded-lg border bg-card p-3">
+        <div className="grid grid-cols-1 gap-2 lg:grid-cols-[repeat(6,minmax(0,1fr))_auto]">
+          <label className="text-xs font-medium text-muted-foreground">
+            <span className="mb-1 flex items-center gap-1"><CalendarDays className="size-3" /> Start</span>
+            <Input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+          </label>
+          <label className="text-xs font-medium text-muted-foreground">
+            <span className="mb-1 block">End</span>
+            <Input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+          </label>
+          <label className="text-xs font-medium text-muted-foreground">
+            <span className="mb-1 block">Type</span>
+            <select className="h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground" value={eventType} onChange={(event) => setEventType(event.target.value)}>
+              <option value="">All types</option>
+              {eventTypes.map((type) => <option key={type} value={type}>{wiseActivityTypeLabel(type)}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-medium text-muted-foreground">
+            <span className="mb-1 block">Action</span>
+            <select className="h-9 w-full rounded-md border bg-background px-2 text-sm text-foreground" value={eventName} onChange={(event) => setEventName(event.target.value)}>
+              <option value="">All actions</option>
+              {eventNames.map((name) => <option key={name} value={name}>{wiseActivityEventLabel(name)}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-medium text-muted-foreground lg:col-span-2">
+            <span className="mb-1 flex items-center gap-1"><Search className="size-3" /> Search</span>
+            <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Actor, class, session, transaction" />
+          </label>
+          <div className="flex items-end gap-2">
+            <Button size="sm" onClick={() => loadData(1)} disabled={loading}>
+              <Filter className="mr-2 size-4" />
+              Apply
+            </Button>
+            <Button
+              size="sm"
+              variant={financeOnly ? "default" : "outline"}
+              aria-pressed={financeOnly}
+              onClick={() => setFinanceOnly((value) => !value)}
+            >
+              Finance
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Clear filters"
+              onClick={() => {
+                setEventType("");
+                setEventName("");
+                setQuery("");
+                setFinanceOnly(false);
+                setStartDate(defaultStart);
+                setEndDate(defaultEnd);
+              }}
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      {error ? (
+        <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          <AlertCircle className="size-4" />
+          {error}
+        </div>
+      ) : null}
+
+      <section className="grid min-h-[260px] grid-cols-1 gap-3 xl:grid-cols-3">
+        <Card className="flex min-h-[260px] flex-col p-4 xl:col-span-2">
+          <div className="mb-3">
+            <h2 className="text-sm font-semibold">Activity by Day</h2>
+            <p className="text-xs text-muted-foreground">Stacked by Wise event type.</p>
+          </div>
+          <ChartCanvas config={activityConfig} />
+        </Card>
+        <div className="grid grid-cols-1 gap-3">
+          <Card className="flex min-h-[180px] flex-col p-4">
+            <h2 className="mb-3 text-sm font-semibold">Session Mutations</h2>
+            <ChartCanvas config={mutationConfig} />
+          </Card>
+          <Card className="flex min-h-[180px] flex-col p-4">
+            <h2 className="mb-3 text-sm font-semibold">Finance Trend</h2>
+            <ChartCanvas config={financeConfig} />
+          </Card>
+        </div>
+      </section>
+
+      <section className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card">
+        <div className="flex items-center justify-between border-b px-3 py-2">
+          <div className="text-sm font-semibold">Activity Log</div>
+          <div className="text-xs text-muted-foreground">
+            {loading ? "Loading" : list ? `${list.pagination.total} events | page ${list.pagination.page} of ${Math.max(1, list.pagination.pageCount)}` : "No data"}
+          </div>
+        </div>
+        <div className="max-h-[42vh] overflow-auto">
+          <table className="w-full table-fixed text-left text-sm">
+            <thead className="sticky top-0 z-10 bg-muted text-[11px] uppercase text-muted-foreground">
+              <tr>
+                <th className="w-28 px-3 py-2">Time</th>
+                <th className="w-48 px-3 py-2">Actor</th>
+                <th className="w-28 px-3 py-2">Type</th>
+                <th className="w-56 px-3 py-2">Action</th>
+                <th className="px-3 py-2">Class / Session</th>
+                <th className="w-40 px-3 py-2">Finance</th>
+                <th className="w-16 px-3 py-2 text-right">Open</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id} className="border-t align-top hover:bg-muted/40">
+                  <td className="px-3 py-2 text-xs font-medium">{formatBangkokDateTime(row.eventTimestamp)}</td>
+                  <td className="px-3 py-2">
+                    <div className="truncate font-medium">{row.actorName ?? "-"}</div>
+                    <div className="truncate text-xs text-muted-foreground">{row.actorRole ?? row.actorWiseUserId ?? ""}</div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <Badge variant="outline" className={cn("rounded-md", typeBadgeClass(row.eventType))}>
+                      {wiseActivityTypeLabel(row.eventType)}
+                    </Badge>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="truncate font-medium">{wiseActivityEventLabel(row.eventName)}</div>
+                    <div className="truncate text-xs text-muted-foreground">{row.eventName}</div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="truncate font-medium">{row.classroomName ?? "-"}</div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {[row.classroomSubject, row.sessionId].filter(Boolean).join(" | ")}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    {isWiseFinanceEvent(row) ? (
+                      <>
+                        <div className="font-medium">{formatWiseAmount(row.transactionAmount, row.transactionCurrency)}</div>
+                        <div className="truncate text-xs text-muted-foreground">{row.transactionStatus ?? row.transactionType ?? row.transactionId}</div>
+                      </>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">-</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <Button size="icon" variant="ghost" aria-label="Open event details" onClick={() => setSelected(row)}>
+                      <Eye className="size-4" />
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+              {rows.length === 0 ? (
+                <tr>
+                  <td className="px-3 py-10 text-center text-sm text-muted-foreground" colSpan={7}>
+                    No Wise activity found for the selected filters.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t px-3 py-2">
+          <Button size="sm" variant="outline" disabled={!list || list.pagination.page <= 1} onClick={() => loadData(Math.max(1, page - 1))}>
+            Previous
+          </Button>
+          <Button size="sm" variant="outline" disabled={!list || list.pagination.page >= list.pagination.pageCount} onClick={() => loadData(page + 1)}>
+            Next
+          </Button>
+        </div>
+      </section>
+
+      {selected ? (
+        <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-xl flex-col border-l bg-background shadow-xl">
+          <div className="flex items-start justify-between border-b px-4 py-3">
+            <div>
+              <h2 className="text-base font-semibold">{wiseActivityEventLabel(selected.eventName)}</h2>
+              <p className="text-xs text-muted-foreground">{selected.eventId}</p>
+            </div>
+            <Button size="icon" variant="ghost" aria-label="Close details" onClick={() => setSelected(null)}>
+              <X className="size-4" />
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div><div className="text-xs text-muted-foreground">Time</div><div className="font-medium">{formatBangkokDateTime(selected.eventTimestamp)}</div></div>
+              <div><div className="text-xs text-muted-foreground">Type</div><div className="font-medium">{wiseActivityTypeLabel(selected.eventType)}</div></div>
+              <div><div className="text-xs text-muted-foreground">Actor</div><div className="font-medium">{selected.actorName ?? "-"}</div></div>
+              <div><div className="text-xs text-muted-foreground">Role</div><div className="font-medium">{selected.actorRole ?? "-"}</div></div>
+              <div><div className="text-xs text-muted-foreground">Class</div><div className="font-medium">{selected.classroomName ?? "-"}</div></div>
+              <div><div className="text-xs text-muted-foreground">Session</div><div className="font-medium">{selected.sessionId ?? "-"}</div></div>
+              <div><div className="text-xs text-muted-foreground">Transaction</div><div className="font-medium">{selected.transactionId ?? "-"}</div></div>
+              <div><div className="text-xs text-muted-foreground">Amount</div><div className="font-medium">{formatWiseAmount(selected.transactionAmount, selected.transactionCurrency)}</div></div>
+            </div>
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Payload</h3>
+              <JsonBlock value={selected.payload} />
+            </div>
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Raw Event</h3>
+              <JsonBlock value={selected.raw} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}

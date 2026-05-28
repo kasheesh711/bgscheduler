@@ -7,12 +7,13 @@ Internal admin app for searching tutor availability from normalized Wise snapsho
 - Production app: [https://bgscheduler.vercel.app](https://bgscheduler.vercel.app)
 - Repo: [https://github.com/kasheesh711/bgscheduler](https://github.com/kasheesh711/bgscheduler)
 - Stack: Next.js 16 App Router, TypeScript, Tailwind, shadcn/ui, Auth.js, Drizzle, Neon Postgres, Vercel
-- Test status: 589 passing Vitest unit tests
-- Data sync status: Wise, Sales Dashboard, and Credit Control refresh on staggered 30-minute Vercel Pro crons
+- Test status: Vitest unit suite covers Wise contracts, sync logic, search, compare, classroom assignment, sales, credit control, and audit views
+- Data sync status: Wise, Wise Activity, Sales Dashboard, and Credit Control refresh on staggered 30-minute Vercel Pro crons
 - Compare UI: side-by-side search and compare workspace with weekly/day schedule views, tutor combobox, discovery modal, and student-level conflict detection
 - Class assignments: native `/class-assignments` workspace for local room assignment, admin overrides, teacher schedules, and explicit Wise OFFLINE location publishing
 - Latest compare fixes: week view uses per-tutor lanes for 2-3 tutors, session cards use normalized RGBA fills, and online/onsite styling now prefers Wise identity/session evidence over raw location strings
-- Sync reliability: single-flight guards prevent overlapping Wise, Sales Dashboard, and Credit Control syncs and mark abandoned runs failed after 20 minutes
+- Wise audit: admin-only `/wise-activity` view persists Wise activity events for operational and finance review
+- Sync reliability: single-flight guards prevent overlapping Wise, Wise Activity, Sales Dashboard, and Credit Control syncs and mark abandoned runs failed after 20 minutes
 
 ## Product Rules
 
@@ -46,6 +47,19 @@ Important live payload details:
 - sessions are returned under `data.sessions`
 - `GET /institutes/{centerId}/locations` returns Wise location strings under `data.locations`
 - `PUT /teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` updates one session; the app only uses it to publish `location` for eligible `OFFLINE` rows after admin confirmation
+- `GET /institutes/{centerId}/events` returns activity events under `data.events`
+- activity events support `page_number`, `page_size`, `type`, `eventName`, `userId`, and `classIds`; the live endpoint rejects `page_size=100`, so the app caps requests at 50
+- activity date params appear ignored by Wise, so `/wise-activity` reads from local `wise_activity_events` persistence for date range search and charts
+- activity analytics helpers are available for `GET /institutes/{centerId}/analytics/sessionStats?from&to`, `/analytics/classroomStats`, and `/analytics/classroomTrends`
+
+## Wise Audit
+
+- `/wise-activity` is an admin-only operational and finance activity view.
+- Events are persisted in `wise_activity_events` with extracted actor, class, session, and transaction fields plus raw JSON for debugging.
+- Sync runs are tracked in `wise_activity_sync_runs`.
+- Vercel calls `/api/internal/sync-wise-activity` at `5,35 * * * *`, protected by `CRON_SECRET`.
+- Admins can trigger a capped backfill through `POST /api/wise-activity/sync`.
+- Read APIs: `GET /api/wise-activity` for paginated filters and `GET /api/wise-activity/summary` for KPI/chart aggregates.
 
 ## Classroom Assignments
 

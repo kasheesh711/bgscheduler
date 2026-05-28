@@ -8,6 +8,11 @@ import {
   WiseSessionsResponse,
   WiseLocationsResponse,
   WiseSessionUpdateResponse,
+  WiseActivityEvent,
+  WiseActivityEventsResponse,
+  WiseSessionStatsResponse,
+  WiseClassroomStatsResponse,
+  WiseClassroomTrendsResponse,
 } from "./types";
 import { addDays } from "date-fns";
 
@@ -207,4 +212,70 @@ export async function updateSessionLocation(
     `/teacher/classes/${classId}/sessions/${sessionId}?updateType=SINGLE`,
     { location }
   );
+}
+
+export interface WiseActivityEventsParams {
+  pageNumber?: number;
+  pageSize?: number;
+  type?: string;
+  eventName?: string;
+  userId?: string;
+  classIds?: string[];
+}
+
+export async function fetchWiseActivityEvents(
+  client: WiseClient,
+  instituteId: string,
+  params: WiseActivityEventsParams = {},
+): Promise<WiseActivityEvent[]> {
+  const requestParams: Record<string, string> = {
+    page_number: String(params.pageNumber ?? 1),
+    page_size: String(Math.max(1, Math.min(params.pageSize ?? 50, 50))),
+  };
+  if (params.type) requestParams.type = params.type;
+  if (params.eventName) requestParams.eventName = params.eventName;
+  if (params.userId) requestParams.userId = params.userId;
+  if (params.classIds?.length) requestParams.classIds = params.classIds.join(",");
+
+  const res = await client.get<WiseActivityEventsResponse>(
+    `/institutes/${instituteId}/events`,
+    requestParams,
+  );
+  return res.data?.events ?? [];
+}
+
+export async function fetchWiseSessionStats(
+  client: WiseClient,
+  instituteId: string,
+  params: { from?: Date; to?: Date } = {},
+): Promise<WiseSessionStatsResponse["data"]> {
+  const requestParams: Record<string, string> = {};
+  if (params.from) requestParams.from = params.from.toISOString();
+  if (params.to) requestParams.to = params.to.toISOString();
+
+  const res = await client.get<WiseSessionStatsResponse>(
+    `/institutes/${instituteId}/analytics/sessionStats`,
+    requestParams,
+  );
+  return res.data ?? {};
+}
+
+export async function fetchWiseClassroomStats(
+  client: WiseClient,
+  instituteId: string,
+): Promise<WiseClassroomStatsResponse["data"]> {
+  const res = await client.get<WiseClassroomStatsResponse>(
+    `/institutes/${instituteId}/analytics/classroomStats`,
+  );
+  return res.data ?? {};
+}
+
+export async function fetchWiseClassroomTrends(
+  client: WiseClient,
+  instituteId: string,
+): Promise<WiseClassroomTrendsResponse["data"]> {
+  const res = await client.get<WiseClassroomTrendsResponse>(
+    `/institutes/${instituteId}/analytics/classroomTrends`,
+  );
+  return res.data ?? {};
 }

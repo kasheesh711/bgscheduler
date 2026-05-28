@@ -11,10 +11,11 @@ function loadVercelConfig(): VercelConfig {
 }
 
 describe("vercel cron configuration", () => {
-  it("runs Wise, Sales Dashboard, and Credit Control on staggered 30-minute schedules", () => {
+  it("runs Wise, Wise Activity, Sales Dashboard, and Credit Control on staggered 30-minute schedules", () => {
     const crons = new Map(loadVercelConfig().crons.map((cron) => [cron.path, cron.schedule]));
 
     expect(crons.get("/api/internal/sync-wise")).toBe("*/30 * * * *");
+    expect(crons.get("/api/internal/sync-wise-activity")).toBe("5,35 * * * *");
     expect(crons.get("/api/internal/sync-sales-dashboard")).toBe("10,40 * * * *");
     expect(crons.get("/api/internal/sync-credit-control")).toBe("20,50 * * * *");
   });

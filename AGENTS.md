@@ -6,18 +6,18 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 # AGENTS.md — Tutor Availability Search Tool
 
-## Status: Live — production sync active, 30-minute cron running
+## Status: Live — production sync active, staggered 30-minute crons running
 
-The application is fully built, tested, deployed, and live at https://bgscheduler.vercel.app. Google OAuth login works. Production Wise sync is active with 30-minute cron on Vercel Pro.
+The application is fully built, tested, deployed, and live at https://bgscheduler.vercel.app. Google OAuth login works. Production Wise sync is active with 30-minute cron on Vercel Pro, with separate staggered crons for Wise Activity, Sales Dashboard, and Credit Control.
 
 ## What Is Built
 
 ### Infrastructure (complete)
 - Next.js 16 App Router + TypeScript + Tailwind + shadcn/ui
 - Auth.js with Google provider + `admin_users` table for explicit email allowlisting
-- Drizzle ORM + Neon Postgres (ap-southeast-1) with 18 tables
-- Vercel hosting with 30-minute cron on Pro and a single-flight sync guard
-- Vitest with 281 passing unit tests
+- Drizzle ORM + Neon Postgres (ap-southeast-1)
+- Vercel hosting with staggered 30-minute crons on Pro and single-flight sync guards
+- Vitest unit suite covers Wise contracts, sync logic, search, compare, classroom assignment, sales, credit control, and audit flows
 
 ### Database schema (complete, migrated, seeded)
 - `snapshots` — versioned snapshot records with atomic `active` flag promotion
@@ -36,6 +36,8 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - `classroom_assignment_runs` — per-date local assignment runs with publish counts and override policy
 - `classroom_assignment_rows` — denormalized session assignment rows, overrides, warnings, publish audit status
 - `past_session_blocks` — cross-snapshot capture for historical compare fallback
+- `wise_activity_events` — persisted Wise activity audit events with extracted actor/class/session/transaction fields plus raw payloads
+- `wise_activity_sync_runs` — Wise activity sync metadata, counts, stop reasons, and error summaries
 - `data_issues` — all unresolved normalization issues by type and severity
 - `snapshot_stats` — counts for data-health dashboard
 
@@ -45,6 +47,8 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - Auth: Basic Auth (base64 of userId:apiKey) + `x-api-key` + `x-wise-namespace` + `user-agent: VendorIntegrations/{namespace}`
 - Fetchers aligned to the live Wise request/response contracts for teachers, availability, and future sessions
 - Location helpers: `GET /institutes/{instituteId}/locations`, `POST /institutes/{instituteId}/checkSessionsAvailability`, and `PUT /teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE`
+- Activity helpers: `GET /institutes/{instituteId}/events` with `page_number`, `page_size<=50`, `type`, `eventName`, `userId`, and `classIds`; date params are not trusted because the live endpoint appears to ignore them
+- Analytics helpers: `GET /institutes/{instituteId}/analytics/sessionStats?from&to`, `/analytics/classroomStats`, and `/analytics/classroomTrends`
 - Wise writeback policy: class assignment publishing updates only `location` for eligible `OFFLINE` sessions after explicit admin confirmation; online room/booth assignments remain local in v1
 - 180-day leave stitching across 26 seven-day windows
 
@@ -63,6 +67,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - Failed syncs preserve previous active snapshot
 - Completeness threshold: >50% unresolved identity groups prevents promotion
 - Exposed at `POST /api/internal/sync-wise` (CRON_SECRET protected)
+- Wise Activity audit sync is read-only and separate from snapshot sync: `/api/internal/sync-wise-activity` runs at `5,35 * * * *`, fetches newest events first with a 3-day/20-page cron cap, and persists manual backfills from `POST /api/wise-activity/sync` with a default 30-day/500-page cap
 
 ### Search engine (complete)
 - In-memory index singleton loaded from active Postgres snapshot
@@ -90,6 +95,10 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - `GET /api/filters` — distinct subjects, curriculums, levels from active snapshot for dropdown population
 - `GET /api/data-health` — sync status, issue counts by type, unresolved aliases/modality/tags, recent sync history
 - `POST /api/internal/sync-wise` — cron-triggered sync, CRON_SECRET auth
+- `GET /api/internal/sync-wise-activity` — cron-triggered Wise activity event sync, CRON_SECRET auth
+- `POST /api/wise-activity/sync` — manual admin Wise activity backfill
+- `GET /api/wise-activity` — paginated persisted activity events with date, type, event, actor/class search, session, transaction, and finance-only filters
+- `GET /api/wise-activity/summary` — activity KPI cards and chart aggregates
 - `POST /api/compare` — compare 1-3 tutors: accepts optional `weekStart` (ISO date, defaults to current week) and optional `fetchOnly` (array of tutor IDs to include in response — omit for all). Returns week-scoped schedules, student-level conflicts, shared free slots, and `weekStart`/`weekEnd` in response. Conflicts and free slots always computed on full tutor set regardless of `fetchOnly`
 - `POST /api/compare/discover` — find candidate tutors with subject/level/mode/time filters and pre-computed conflict status against existing selected tutors
 - `GET /api/tutors` — all tutor names/IDs/modes/subjects from active snapshot (used by tutor combobox)
@@ -121,6 +130,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
   - **Right panel (Compare)**: tutor selector chips (max 3, color-coded, removable) + searchable tutor combobox dropdown (shadcn Command+Popover, fetches from `GET /api/tutors`), "Advanced search" link opens discovery modal (shadcn Dialog), **week picker** (prev/next arrows, clickable week label "6 Apr – 12 Apr, 2026" opens month-grid calendar popup for direct date jumping, Today button to reset to current week), week/day sub-tabs with D/M dates (e.g. "Mon 6/4"), GCal-style weekly time grid (7AM–9PM vertical axis, Mon–Sun sticky headers, full-width cards for single-tutor view and per-tutor lanes for 2-3 tutor view, sub-column cap at 3 single-tutor / 2 multi-tutor with "+N more" overflow badges, free-gap green indicators for available-but-unbooked time, vertical scrolling), day drill-down (side-by-side tutor columns with positioned session blocks), conflict bands + summary, shared free slot indicators, tutor profile popover, URL param support (`?tutors=id1,id2`), **client-side tutor cache** (`Map<tutorGroupId:weekStart, CompareTutor>`) with incremental fetch (add → `fetchOnly: [newId]`, remove → `fetchOnly: []` reuses cache, week change → cache clear + full fetch), AbortController for race-condition safety, automatic cache invalidation on snapshot change
 - `/compare` — redirects to `/search` (backward compatibility for bookmarked URLs, preserves `?tutors=` param)
 - `/class-assignments` — full-width operational room assignment workspace with date picker, keep/force override control, assignment table, per-row override dropdowns, publish confirmation, and teacher schedule blocks
+- `/wise-activity` — admin-only Wise Audit workspace with last-7-Bangkok-days default, KPI cards, activity/session/finance charts, dense filterable event table, manual sync action, and raw payload drawer
 - `/data-health` — full-width sync status cards, snapshot stats, issues by type, unresolved aliases/modality/unmapped tags tables, recent sync history
 
 #### Known UX Issues
@@ -137,6 +147,7 @@ The application is fully built, tested, deployed, and live at https://bgschedule
 - Search engine: recurring blocking, one-time blocking, cancelled non-blocking, mode filtering, qualification filtering, multi-slot intersection, Needs Review routing
 - Compare engine: buildCompareTutor (date range + weekday filtering, weekday fallback for missing data, weekly hours, student count), detectConflicts (same student overlap, different students, non-overlapping times), findSharedFreeSlots (date-range-scoped interval intersection across tutors)
 - Wise contract: auth headers, teacher list parsing, availability envelope parsing, sessions pagination parsing
+- Wise activity audit: event fetcher params and page-size cap, event normalization, dedupe/stop conditions, API auth/filter plumbing, cron registration, formatter helpers
 - Classroom assignment: capacity, TV, online-only rooms, Gift/Joy, preferred rooms, continuity, overflow, invalid overrides, no-room cases, publish eligibility
 - Wise class assignment helpers: location fetch, availability check payload, session-location PUT body, permanent 4xx no-retry behavior
 - Parser: single/multi slot parsing, abbreviated days, ambiguous input warnings
@@ -147,7 +158,8 @@ First successful production sync completed 2026-04-07 on commit `c673999`:
 - Snapshot `d70608b0-0f2d-4738-b9b4-1f3fd5210fea` promoted successfully
 - 131 teachers fetched, 72 identity groups resolved, 251 data issues logged
 - Sync duration: ~4m26s (Vercel function ceiling is 5m)
-- 30-minute cron active (`*/30 * * * *`)
+- 30-minute Wise snapshot cron active (`*/30 * * * *`)
+- 30-minute Wise Activity audit cron active (`5,35 * * * *`)
 
 ### Optional improvements
 - Monitor sync duration headroom against the 800s sync function timeout
