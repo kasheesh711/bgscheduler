@@ -9,6 +9,7 @@ export function sourceShouldRefresh(
   source: Pick<SalesDashboardSourceRecord, "sourceMonth" | "status">,
   now = new Date(),
 ): boolean {
+  if (source.status === "archived") return false;
   if (source.status === "finalized") return false;
   const current = currentBangkokMonthStart(now);
   const previous = previousBangkokMonthStart(now);
@@ -22,6 +23,7 @@ export function statusAfterSuccessfulImport(
   currentStatus: SalesSourceStatus,
   now = new Date(),
 ): SalesSourceStatus {
+  if (currentStatus === "archived") return "archived";
   if (currentStatus === "reopened") return "reopened";
   const current = currentBangkokMonthStart(now);
   const previous = previousBangkokMonthStart(now);
@@ -34,6 +36,7 @@ export function shouldAutoFinalizePreviousMonth(
   source: Pick<SalesDashboardSourceRecord, "sourceMonth" | "status">,
   now = new Date(),
 ): boolean {
+  if (source.status === "archived") return false;
   if (source.status === "finalized" || source.status === "reopened") return false;
   return source.sourceMonth === previousBangkokMonthStart(now) && bangkokDayOfMonth(now) >= 8;
 }

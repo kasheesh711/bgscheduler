@@ -31,4 +31,15 @@ describe("sales dashboard empty setup UI", () => {
     expect(source).toContain("disabled={!hasSources || busyAction === \"refresh\"}");
     expect(source).not.toContain("setMessage(\"Refresh completed.\");");
   });
+
+  it("uses cohort KPI copy and source archival/error wording", () => {
+    const source = readSalesDashboardShell();
+
+    expect(source).toContain("Trial Cohort Conversion");
+    expect(source).toContain("Retention Rate");
+    expect(source).toContain("Last import failed");
+    expect(source).toContain("Archive source");
+    expect(source).toContain("Archived sources");
+    expect(source).not.toContain("title=\"Delete\"");
+  });
 });

@@ -3,24 +3,29 @@ import { NextRequest } from "next/server";
 
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/sales-dashboard/data", () => ({
+  archiveSalesDashboardSource: vi.fn(),
   getSalesDashboardPayload: vi.fn(),
   importAllSalesSources: vi.fn(),
   importRefreshableSalesSources: vi.fn(),
   importSalesDashboardSource: vi.fn(),
   listSalesDashboardSources: vi.fn(),
+  updateSalesDashboardSourceStatus: vi.fn(),
 }));
 
 import { auth } from "@/lib/auth";
 import {
+  archiveSalesDashboardSource,
   getSalesDashboardPayload,
   importAllSalesSources,
   importRefreshableSalesSources,
   importSalesDashboardSource,
   listSalesDashboardSources,
+  updateSalesDashboardSourceStatus,
 } from "@/lib/sales-dashboard/data";
 import { MissingGoogleSheetsTokenError } from "@/lib/sales-dashboard/google-oauth";
 import { GET as getDashboard } from "../route";
 import { POST as importDashboard } from "../import/route";
+import { DELETE as archiveSource, PATCH as patchSource } from "../sources/[sourceId]/route";
 
 const authMock = auth as unknown as Mock;
 
@@ -32,6 +37,18 @@ function request(body: unknown): NextRequest {
   });
 }
 
+function sourceRequest(body: unknown): NextRequest {
+  return new NextRequest("http://test.local/api/sales-dashboard/sources/11111111-1111-4111-8111-111111111111", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+function sourceCtx(sourceId = "11111111-1111-4111-8111-111111111111") {
+  return { params: Promise.resolve({ sourceId }) };
+}
+
 describe("sales dashboard API routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -41,6 +58,8 @@ describe("sales dashboard API routes", () => {
     vi.mocked(importRefreshableSalesSources).mockResolvedValue([{ sourceId: "source-2", normalRows: 3, additionalRows: 1 }] as never);
     vi.mocked(importSalesDashboardSource).mockResolvedValue({ sourceId: "source-3" } as never);
     vi.mocked(listSalesDashboardSources).mockResolvedValue([{ id: "source-2" }] as never);
+    vi.mocked(archiveSalesDashboardSource).mockResolvedValue({ id: "source-archived", status: "archived" } as never);
+    vi.mocked(updateSalesDashboardSourceStatus).mockResolvedValue({ id: "source-restored", status: "active" } as never);
   });
 
   it("requires auth before returning the dashboard payload", async () => {
@@ -128,5 +147,39 @@ describe("sales dashboard API routes", () => {
       additionalRows: 1,
       message: "Refreshed 1 live-month sources: 3 normal rows and 1 additional rows.",
     });
+  });
+
+  it("archives source records instead of hard-deleting them", async () => {
+    const res = await archiveSource(new NextRequest("http://test.local/api/sales-dashboard/sources/11111111-1111-4111-8111-111111111111", { method: "DELETE" }), sourceCtx());
+
+    expect(res.status).toBe(200);
+    expect(archiveSalesDashboardSource).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", "admin@example.com");
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      source: { id: "source-archived", status: "archived" },
+    });
+  });
+
+  it("restores archived sources through the checked PATCH route", async () => {
+    const res = await patchSource(sourceRequest({ status: "active" }), sourceCtx());
+
+    expect(res.status).toBe(200);
+    expect(updateSalesDashboardSourceStatus).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      "active",
+      "admin@example.com",
+    );
+    await expect(res.json()).resolves.toMatchObject({
+      source: { id: "source-restored", status: "active" },
+    });
+  });
+
+  it("returns visible source action errors", async () => {
+    vi.mocked(updateSalesDashboardSourceStatus).mockRejectedValue(new Error("Another active source already exists for this month.") as never);
+
+    const res = await patchSource(sourceRequest({ status: "active" }), sourceCtx());
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "Another active source already exists for this month." });
   });
 });

@@ -18,6 +18,7 @@ describe("sales dashboard month lifecycle", () => {
     expect(sourceShouldRefresh(source("2026-04-01"), day7Bangkok)).toBe(true);
     expect(sourceShouldRefresh(source("2026-03-01"), day7Bangkok)).toBe(false);
     expect(sourceShouldRefresh(source("2026-04-01", "finalized"), day7Bangkok)).toBe(false);
+    expect(sourceShouldRefresh(source("2026-05-01", "archived"), day7Bangkok)).toBe(false);
   });
 
   it("stops refreshing previous month and auto-finalizes on Bangkok day 8", () => {
@@ -26,6 +27,7 @@ describe("sales dashboard month lifecycle", () => {
     expect(sourceShouldRefresh(source("2026-04-01"), day8Bangkok)).toBe(false);
     expect(shouldAutoFinalizePreviousMonth(source("2026-04-01"), day8Bangkok)).toBe(true);
     expect(shouldAutoFinalizePreviousMonth(source("2026-04-01", "reopened"), day8Bangkok)).toBe(false);
+    expect(shouldAutoFinalizePreviousMonth(source("2026-04-01", "archived"), day8Bangkok)).toBe(false);
   });
 
   it("finalizes historical months after successful import while keeping reopened sources reopened", () => {
@@ -35,5 +37,6 @@ describe("sales dashboard month lifecycle", () => {
     expect(statusAfterSuccessfulImport("2026-04-01", "active", day8Bangkok)).toBe("finalized");
     expect(statusAfterSuccessfulImport("2026-05-01", "active", day8Bangkok)).toBe("active");
     expect(statusAfterSuccessfulImport("2026-03-01", "reopened", day8Bangkok)).toBe("reopened");
+    expect(statusAfterSuccessfulImport("2026-03-01", "archived", day8Bangkok)).toBe("archived");
   });
 });

@@ -130,6 +130,7 @@ export const salesDashboardSourceStatusEnum = pgEnum("sales_dashboard_source_sta
   "refreshing",
   "finalized",
   "reopened",
+  "archived",
 ]);
 
 // ── Snapshots & Sync ───────────────────────────────────────────────────
@@ -198,13 +199,18 @@ export const salesDashboardSources = pgTable("sales_dashboard_sources", {
   lastAdditionalRowCount: integer("last_additional_row_count").notNull().default(0),
   finalizedAt: timestamp("finalized_at", { withTimezone: true }),
   reopenedAt: timestamp("reopened_at", { withTimezone: true }),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  archivedByEmail: text("archived_by_email"),
+  statusBeforeArchive: salesDashboardSourceStatusEnum("status_before_archive"),
   connectedEmail: text("connected_email").notNull(),
   createdByEmail: text("created_by_email").notNull(),
   updatedByEmail: text("updated_by_email").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  uniqueIndex("sds_source_month_idx").on(table.sourceMonth),
+  uniqueIndex("sds_source_month_active_idx")
+    .on(table.sourceMonth)
+    .where(sql`${table.status}::text <> 'archived'`),
   index("sds_status_month_idx").on(table.status, table.sourceMonth),
   index("sds_connected_email_idx").on(table.connectedEmail),
 ]);

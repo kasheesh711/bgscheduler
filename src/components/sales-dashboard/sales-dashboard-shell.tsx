@@ -6,6 +6,7 @@ import { signIn } from "next-auth/react";
 import Chart from "chart.js/auto";
 import type { ChartConfiguration, ChartDataset } from "chart.js";
 import {
+  Archive,
   CalendarClock,
   Database,
   LinkIcon,
@@ -13,12 +14,16 @@ import {
   RefreshCw,
   RotateCcw,
   ShieldCheck,
-  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import {
+  currentBangkokDate,
+  currentBangkokMonthEnd,
+  currentBangkokMonthStart,
+} from "@/lib/sales-dashboard/dates";
 import type {
   SalesAdditionalDayAggregate,
   SalesDashboardPayload,
@@ -73,20 +78,7 @@ function formatDateTime(value: string | null): string {
 }
 
 function todayIso(): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Bangkok",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
-
-function monthStart(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-01`;
-}
-
-function monthEnd(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()).padStart(2, "0")}`;
+  return currentBangkokDate();
 }
 
 function shortMonth(monthLabel: string): string {
@@ -271,7 +263,6 @@ export function SalesDashboardShell() {
 
   function applyPeriod(next: typeof period) {
     setPeriod(next);
-    const now = new Date();
     if (next === "all" && data) {
       const allDates = [...data.normalDays, ...data.addDays].map((row) => row.d).sort();
       setFrom(allDates[0] ?? "2025-04-01");
@@ -290,8 +281,8 @@ export function SalesDashboardShell() {
       setTo("2026-03-31");
     }
     if (next === "thismonth") {
-      setFrom(monthStart(now));
-      setTo(monthEnd(now));
+      setFrom(currentBangkokMonthStart());
+      setTo(currentBangkokMonthEnd());
     }
   }
 
@@ -309,15 +300,34 @@ export function SalesDashboardShell() {
     }
   }
 
-  async function postJson(url: string, body: unknown = {}) {
+  async function requestJson(url: string, init: RequestInit = {}) {
+    const headers = new Headers(init.headers);
+    if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
     const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      ...init,
+      headers,
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
     return payload;
+  }
+
+  async function postJson(url: string, body: unknown = {}) {
+    return requestJson(url, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function patchJson(url: string, body: unknown = {}) {
+    return requestJson(url, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function deleteJson(url: string) {
+    return requestJson(url, { method: "DELETE" });
   }
 
   async function seedHistoricalSources() {
@@ -403,8 +413,11 @@ export function SalesDashboardShell() {
       additionalTxn += row.count;
     }
 
-    const churnList = data?.churnList ?? [];
-    const churned = churnList.filter((row) => row.validUntil >= from && row.validUntil <= to && row.status === "Churned").length;
+    const trialCohort = (data?.trialCohort ?? []).filter((row) => row.trialDate >= from && row.trialDate <= to);
+    const trialConverted = trialCohort.filter((row) => row.convertedDate !== null && row.convertedDate <= to).length;
+    const retentionCohort = (data?.retentionCohort ?? []).filter((row) => row.decisionDate >= from && row.decisionDate <= to);
+    const retained = retentionCohort.filter((row) => row.renewedDate !== null).length;
+    const churned = retentionCohort.filter((row) => row.status === "Churned").length;
     const repRows = Object.keys(repRev)
       .map((name) => ({ name, revenue: repRev[name], count: repCount[name] ?? 0 }))
       .sort((a, b) => b.revenue - a.revenue);
@@ -421,10 +434,14 @@ export function SalesDashboardShell() {
       trials,
       newStudents,
       renewals,
+      trialCohortSize: trialCohort.length,
+      trialConverted,
+      retentionCohortSize: retentionCohort.length,
+      retained,
       churned,
       repRows,
     };
-  }, [data?.churnList, filtered, from, to]);
+  }, [data?.retentionCohort, data?.trialCohort, filtered, from, to]);
 
   const monthlyNormal = useMemo(() => groupNormalByMonth(filtered.normalDays), [filtered.normalDays]);
   const monthlyAdditional = useMemo(() => groupAdditionalByMonth(filtered.addDays), [filtered.addDays]);
@@ -506,13 +523,13 @@ export function SalesDashboardShell() {
     return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading sales dashboard...</div>;
   }
 
-  const conversion = aggregates.trials > 0 ? Math.round((aggregates.newStudents / aggregates.trials) * 100) : 0;
-  const paid = aggregates.newStudents + aggregates.renewals;
-  const renewalRate = paid > 0 ? Math.round((aggregates.renewals / paid) * 100) : 0;
-  const replacement = aggregates.churned > 0 ? (aggregates.newStudents / aggregates.churned).toFixed(2) : "—";
-  const sourceCount = data?.sources.length ?? 0;
+  const conversion = aggregates.trialCohortSize > 0 ? Math.round((aggregates.trialConverted / aggregates.trialCohortSize) * 100) : 0;
+  const retentionRate = aggregates.retentionCohortSize > 0 ? Math.round((aggregates.retained / aggregates.retentionCohortSize) * 100) : 0;
+  const replacement = aggregates.churned > 0 ? (aggregates.trialConverted / aggregates.churned).toFixed(2) : "—";
+  const sourceCount = (data?.sources ?? []).filter((source) => source.status !== "archived").length;
   const hasSources = sourceCount > 0;
   const hasImportedRows = (data?.totalTxn ?? 0) + (data?.totalAddTxn ?? 0) > 0;
+  const failedSources = (data?.sources ?? []).filter((source) => source.status !== "archived" && source.lastImportError);
 
   return (
     <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
@@ -572,6 +589,15 @@ export function SalesDashboardShell() {
       <div className="min-h-0 flex-1 overflow-auto px-4 py-4 lg:px-6">
         {error ? <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div> : null}
         {message ? <div className="mb-3 rounded-md border border-available/30 bg-available/10 px-3 py-2 text-sm text-available">{message}</div> : null}
+        {failedSources.length > 0 ? (
+          <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <div className="font-medium">{failedSources.length} source{failedSources.length === 1 ? "" : "s"} failed the last import</div>
+            <div className="mt-1 text-xs">
+              {failedSources.slice(0, 3).map((source) => `${source.label}: ${source.lastImportError}`).join(" · ")}
+              {failedSources.length > 3 ? ` · +${failedSources.length - 3} more` : ""}
+            </div>
+          </div>
+        ) : null}
 
         {!hasSources || !hasImportedRows ? (
           <SalesDashboardSetupState
@@ -593,9 +619,9 @@ export function SalesDashboardShell() {
           <KpiCard label="Normal Sales" value={formatCurrency(aggregates.normalRevenue)} detail={`${aggregates.normalTxn.toLocaleString("en-US")} transactions`} tone="sky" />
           <KpiCard label="Additional Sales" value={formatCurrency(aggregates.additionalRevenue)} detail={`${aggregates.additionalTxn.toLocaleString("en-US")} transactions`} tone="amber" />
           <KpiCard label="Total Revenue" value={formatCurrency(aggregates.totalRevenue)} detail={`${(aggregates.normalTxn + aggregates.additionalTxn).toLocaleString("en-US")} transactions total`} tone="navy" />
-          <KpiCard label="Trial to Paid" value={`${conversion}%`} detail={`${aggregates.newStudents} converted / ${aggregates.trials} trialed`} tone="green" />
-          <KpiCard label="Renewal Rate" value={`${renewalRate}%`} detail={`${aggregates.renewals} renewed / ${paid} paid`} tone="amber" />
-          <KpiCard label="Churned · Replacement" value={`${aggregates.churned} churned`} detail={`Replacement ${replacement}x · ${aggregates.newStudents} new`} tone="red" />
+          <KpiCard label="Trial Cohort Conversion" value={`${conversion}%`} detail={`${aggregates.trialConverted} converted / ${aggregates.trialCohortSize} first trials`} tone="green" />
+          <KpiCard label="Retention Rate" value={`${retentionRate}%`} detail={`${aggregates.retained} retained / ${aggregates.retentionCohortSize} decisions`} tone="amber" />
+          <KpiCard label="Churned · Replacement" value={`${aggregates.churned} churned`} detail={`Replacement ${replacement}x · ${aggregates.trialConverted} trial conversions`} tone="red" />
         </div>
 
         <GoalTracker normalRevenue={aggregates.normalRevenue} monthlyNormal={monthlyNormal} />
@@ -638,6 +664,8 @@ export function SalesDashboardShell() {
           busyAction={busyAction}
           runAction={runAction}
           postJson={postJson}
+          patchJson={patchJson}
+          deleteJson={deleteJson}
           addSource={addSource}
           seedHistoricalSources={seedHistoricalSources}
           backfillAllSources={backfillAllSources}
@@ -702,10 +730,9 @@ function SalesDashboardSetupState({
 
 function GoalTracker({ normalRevenue, monthlyNormal }: { normalRevenue: number; monthlyNormal: SalesDayAggregate[] }) {
   const goal = 4_000_000;
+  const currentMonth = currentBangkokDate().slice(0, 7);
   const completed = monthlyNormal.filter((row) => {
-    const [year, month] = row.m.slice(0, 7).split("-").map(Number);
-    const now = new Date();
-    return year < now.getFullYear() || (year === now.getFullYear() && month < now.getMonth() + 1);
+    return row.m.slice(0, 7) < currentMonth;
   });
   const fy26 = completed.filter((row) => row.m.startsWith("2026-"));
   const average = fy26.length ? fy26.reduce((sum, row) => sum + row.rev, 0) / fy26.length : normalRevenue;
@@ -769,6 +796,8 @@ function SourceManager({
   busyAction,
   runAction,
   postJson,
+  patchJson,
+  deleteJson,
   addSource,
   seedHistoricalSources,
   backfillAllSources,
@@ -779,16 +808,21 @@ function SourceManager({
   busyAction: string;
   runAction: (actionName: string, action: () => Promise<void>) => Promise<void>;
   postJson: (url: string, body?: unknown) => Promise<unknown>;
+  patchJson: (url: string, body?: unknown) => Promise<unknown>;
+  deleteJson: (url: string) => Promise<unknown>;
   addSource: () => Promise<void>;
   seedHistoricalSources: () => Promise<void>;
   backfillAllSources: () => Promise<void>;
 }) {
+  const activeSources = sources.filter((source) => source.status !== "archived");
+  const archivedSources = sources.filter((source) => source.status === "archived");
+
   return (
     <section className="mt-4 rounded-lg border bg-card p-4 shadow-sm">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold">Monthly Sources</h2>
-          <p className="text-xs text-muted-foreground">{sources.length} configured Google Sheet sources</p>
+          <p className="text-xs text-muted-foreground">{activeSources.length} active Google Sheet sources · {archivedSources.length} archived</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => void seedHistoricalSources()}>
@@ -827,13 +861,18 @@ function SourceManager({
             </tr>
           </thead>
           <tbody>
-            {sources.map((source) => (
+            {activeSources.map((source) => (
               <tr key={source.id} className="border-b last:border-0">
                 <td className="py-2">
                   <div className="font-medium">{source.label}</div>
                   <div className="text-xs text-muted-foreground">{source.sourceMonth.slice(0, 7)}</div>
                 </td>
-                <td className="py-2"><Badge variant={source.status === "finalized" ? "secondary" : "outline"}>{source.status}</Badge></td>
+                <td className="py-2">
+                  <Badge variant={source.status === "finalized" ? "secondary" : "outline"}>{source.status}</Badge>
+                  {source.lastImportError ? (
+                    <div className="mt-1 max-w-[260px] text-xs text-destructive">Last import failed: {source.lastImportError}</div>
+                  ) : null}
+                </td>
                 <td className="py-2 text-xs text-muted-foreground">{source.lastNormalRowCount} normal · {source.lastAdditionalRowCount} additional</td>
                 <td className="py-2 text-xs text-muted-foreground">{formatDateTime(source.lastImportedAt)}</td>
                 <td className="py-2 text-xs text-muted-foreground">{source.connectedEmail}</td>
@@ -846,20 +885,16 @@ function SourceManager({
                     </Button>
                     {source.status === "finalized" ? (
                       <Button size="icon-sm" variant="outline" title="Reopen" onClick={() => void runAction(`reopen-${source.id}`, async () => {
-                        await fetch(`/api/sales-dashboard/sources/${source.id}`, {
-                          method: "PATCH",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ status: "reopened" }),
-                        });
+                        await patchJson(`/api/sales-dashboard/sources/${source.id}`, { status: "reopened" });
                       })}>
                         <RotateCcw className="size-3.5" />
                       </Button>
                     ) : null}
-                    <Button size="icon-sm" variant="destructive" title="Delete" onClick={() => void runAction(`delete-${source.id}`, async () => {
-                      if (!window.confirm(`Delete ${source.label}?`)) return;
-                      await fetch(`/api/sales-dashboard/sources/${source.id}`, { method: "DELETE" });
+                    <Button size="icon-sm" variant="outline" title="Archive source" disabled={source.status === "refreshing"} onClick={() => void runAction(`archive-${source.id}`, async () => {
+                      if (!window.confirm(`Archive ${source.label}? Imported rows and import history will be kept and can be restored later.`)) return;
+                      await deleteJson(`/api/sales-dashboard/sources/${source.id}`);
                     })}>
-                      <Trash2 className="size-3.5" />
+                      {busyAction === `archive-${source.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <Archive className="size-3.5" />}
                     </Button>
                   </div>
                 </td>
@@ -868,6 +903,49 @@ function SourceManager({
           </tbody>
         </table>
       </div>
+
+      {archivedSources.length > 0 ? (
+        <details className="mt-4 rounded-md border bg-muted/20 px-3 py-2">
+          <summary className="cursor-pointer text-sm font-medium">Archived sources ({archivedSources.length})</summary>
+          <div className="mt-3 overflow-auto">
+            <table className="w-full text-sm">
+              <thead className="text-xs uppercase tracking-wide text-muted-foreground">
+                <tr className="border-b">
+                  <th className="py-2 text-left">Month</th>
+                  <th className="py-2 text-left">Archived</th>
+                  <th className="py-2 text-left">Rows kept</th>
+                  <th className="py-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {archivedSources.map((source) => (
+                  <tr key={source.id} className="border-b last:border-0">
+                    <td className="py-2">
+                      <div className="font-medium">{source.label}</div>
+                      <div className="text-xs text-muted-foreground">{source.sourceMonth.slice(0, 7)}</div>
+                    </td>
+                    <td className="py-2 text-xs text-muted-foreground">
+                      {formatDateTime(source.archivedAt)}
+                      {source.archivedByEmail ? <div>{source.archivedByEmail}</div> : null}
+                    </td>
+                    <td className="py-2 text-xs text-muted-foreground">{source.lastNormalRowCount} normal · {source.lastAdditionalRowCount} additional</td>
+                    <td className="py-2">
+                      <div className="flex justify-end">
+                        <Button size="sm" variant="outline" onClick={() => void runAction(`restore-${source.id}`, async () => {
+                          await patchJson(`/api/sales-dashboard/sources/${source.id}`, { status: "active" });
+                        })}>
+                          {busyAction === `restore-${source.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
+                          Restore
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      ) : null}
     </section>
   );
 }

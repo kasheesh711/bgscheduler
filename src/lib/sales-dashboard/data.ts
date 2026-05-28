@@ -1,5 +1,5 @@
 import { cacheLife, cacheTag, revalidateTag } from "next/cache";
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { DEFAULT_SALES_SOURCES } from "./default-sources";
@@ -84,6 +84,9 @@ function toSummary(source: SalesDashboardSourceRecord): SalesDashboardSourceSumm
     lastNormalRowCount: source.lastNormalRowCount,
     lastAdditionalRowCount: source.lastAdditionalRowCount,
     connectedEmail: source.connectedEmail,
+    archivedAt: source.archivedAt?.toISOString() ?? null,
+    archivedByEmail: source.archivedByEmail,
+    statusBeforeArchive: source.statusBeforeArchive,
   };
 }
 
@@ -107,11 +110,20 @@ async function insertChunks<T extends Record<string, unknown>>(
   }
 }
 
-export async function listSalesDashboardSources(db: Database = getDb()): Promise<SalesDashboardSourceRecord[]> {
-  const rows = await db
-    .select()
-    .from(schema.salesDashboardSources)
-    .orderBy(schema.salesDashboardSources.sourceMonth);
+export async function listSalesDashboardSources(
+  db: Database = getDb(),
+  options: { includeArchived?: boolean } = {},
+): Promise<SalesDashboardSourceRecord[]> {
+  const rows = options.includeArchived
+    ? await db
+      .select()
+      .from(schema.salesDashboardSources)
+      .orderBy(schema.salesDashboardSources.sourceMonth)
+    : await db
+      .select()
+      .from(schema.salesDashboardSources)
+      .where(sql`${schema.salesDashboardSources.status}::text <> 'archived'`)
+      .orderBy(schema.salesDashboardSources.sourceMonth);
   return rows.map(asSourceRecord);
 }
 
@@ -137,6 +149,7 @@ export async function upsertSalesDashboardSource(input: SourceInput, db: Databas
     })
     .onConflictDoUpdate({
       target: schema.salesDashboardSources.sourceMonth,
+      targetWhere: sql`${schema.salesDashboardSources.status}::text <> 'archived'`,
       set: {
         label,
         spreadsheetId,
@@ -176,12 +189,24 @@ export async function updateSalesDashboardSourceStatus(
   db: Database = getDb(),
 ) {
   const now = new Date();
+  const source = await getSource(id, db);
+  if (!source) return null;
+  if (source.status === "archived") {
+    if (status !== "active") {
+      throw new Error("Restore archived source before changing its status.");
+    }
+    return restoreSalesDashboardSource(id, actorEmail, db);
+  }
+
   const [row] = await db
     .update(schema.salesDashboardSources)
     .set({
       status,
       finalizedAt: status === "finalized" ? now : null,
       reopenedAt: status === "reopened" ? now : null,
+      archivedAt: null,
+      archivedByEmail: null,
+      statusBeforeArchive: null,
       updatedAt: now,
       updatedByEmail: actorEmail,
     })
@@ -191,22 +216,91 @@ export async function updateSalesDashboardSourceStatus(
   return row ? asSourceRecord(row) : null;
 }
 
-export async function deleteSalesDashboardSource(id: string, db: Database = getDb()): Promise<void> {
-  await db.delete(schema.salesDashboardNormalRows).where(eq(schema.salesDashboardNormalRows.sourceId, id));
-  await db.delete(schema.salesDashboardAdditionalRows).where(eq(schema.salesDashboardAdditionalRows.sourceId, id));
-  await db.delete(schema.salesDashboardImportRuns).where(eq(schema.salesDashboardImportRuns.sourceId, id));
-  await db.delete(schema.salesDashboardSources).where(eq(schema.salesDashboardSources.id, id));
+export async function archiveSalesDashboardSource(
+  id: string,
+  actorEmail: string,
+  db: Database = getDb(),
+): Promise<SalesDashboardSourceRecord | null> {
+  const source = await getSource(id, db);
+  if (!source) return null;
+  if (source.status === "archived") return source;
+  if (source.status === "refreshing") {
+    throw new Error("Source is refreshing. Wait for the import to finish before archiving it.");
+  }
+
+  const now = new Date();
+  const [row] = await db
+    .update(schema.salesDashboardSources)
+    .set({
+      status: "archived",
+      archivedAt: now,
+      archivedByEmail: actorEmail,
+      statusBeforeArchive: source.status,
+      updatedAt: now,
+      updatedByEmail: actorEmail,
+    })
+    .where(eq(schema.salesDashboardSources.id, id))
+    .returning();
   revalidateSalesDashboardCache();
+  return row ? asSourceRecord(row) : null;
 }
 
-async function getSourceOrThrow(sourceId: string, db: Database): Promise<SalesDashboardSourceRecord> {
+export async function restoreSalesDashboardSource(
+  id: string,
+  actorEmail: string,
+  db: Database = getDb(),
+): Promise<SalesDashboardSourceRecord | null> {
+  const source = await getSource(id, db);
+  if (!source) return null;
+  if (source.status !== "archived") return source;
+
+  const [existingMonthSource] = await db
+    .select({ id: schema.salesDashboardSources.id })
+    .from(schema.salesDashboardSources)
+    .where(and(
+      eq(schema.salesDashboardSources.sourceMonth, source.sourceMonth),
+      ne(schema.salesDashboardSources.id, source.id),
+      sql`${schema.salesDashboardSources.status}::text <> 'archived'`,
+    ))
+    .limit(1);
+  if (existingMonthSource) {
+    throw new Error("Another active source already exists for this month. Archive it before restoring this source.");
+  }
+
+  const now = new Date();
+  const restoredStatus = source.statusBeforeArchive && !["archived", "refreshing"].includes(source.statusBeforeArchive)
+    ? source.statusBeforeArchive
+    : "active";
+  const [row] = await db
+    .update(schema.salesDashboardSources)
+    .set({
+      status: restoredStatus,
+      archivedAt: null,
+      archivedByEmail: null,
+      statusBeforeArchive: null,
+      updatedAt: now,
+      updatedByEmail: actorEmail,
+    })
+    .where(eq(schema.salesDashboardSources.id, id))
+    .returning();
+  revalidateSalesDashboardCache();
+  return row ? asSourceRecord(row) : null;
+}
+
+async function getSource(id: string, db: Database): Promise<SalesDashboardSourceRecord | null> {
   const [source] = await db
     .select()
     .from(schema.salesDashboardSources)
-    .where(eq(schema.salesDashboardSources.id, sourceId))
+    .where(eq(schema.salesDashboardSources.id, id))
     .limit(1);
+  return source ? asSourceRecord(source) : null;
+}
+
+async function getSourceOrThrow(sourceId: string, db: Database): Promise<SalesDashboardSourceRecord> {
+  const source = await getSource(sourceId, db);
   if (!source) throw new Error("Sales dashboard source not found");
-  return asSourceRecord(source);
+  if (source.status === "archived") throw new Error("Sales dashboard source is archived. Restore it before importing.");
+  return source;
 }
 
 export async function importSalesDashboardSource(
@@ -440,11 +534,12 @@ function additionalRowFromDb(
 }
 
 async function getSalesDashboardPayloadUncached(email: string | null | undefined, db: Database = getDb()) {
-  const sources = await listSalesDashboardSources(db);
-  const activeRunIds = sources
+  const sources = await listSalesDashboardSources(db, { includeArchived: true });
+  const activeSources = sources.filter((source) => source.status !== "archived");
+  const activeRunIds = activeSources
     .map((source) => source.lastSuccessfulImportRunId)
     .filter((id): id is string => Boolean(id));
-  const sourceByRun = new Map(sources.map((source) => [source.lastSuccessfulImportRunId, source]));
+  const sourceByRun = new Map(activeSources.map((source) => [source.lastSuccessfulImportRunId, source]));
 
   const [normalRows, additionalRows, token] = await Promise.all([
     activeRunIds.length > 0

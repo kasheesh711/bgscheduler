@@ -1,4 +1,4 @@
-import { dayOfWeekShort } from "./dates";
+import { addDaysIso, currentBangkokDate, dayOfWeekShort } from "./dates";
 import type {
   ParsedAdditionalSaleRow,
   ParsedNormalSaleRow,
@@ -9,6 +9,8 @@ import type {
   SalesDayAggregate,
   SalesDayRepAggregate,
   SalesRepAggregate,
+  SalesRetentionCohortEntry,
+  SalesTrialCohortEntry,
 } from "./types";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -80,8 +82,7 @@ function daysInMonth(month: string): number {
 }
 
 function buildCompletionStats(normalDays: SalesDayAggregate[], now = new Date()) {
-  const todayYear = now.getFullYear();
-  const todayMonth = now.getMonth() + 1;
+  const [todayYear, todayMonth] = currentBangkokDate(now).split("-").map(Number);
   const monthGroups = new Map<string, Array<{ dom: number; rev: number }>>();
 
   for (const day of normalDays) {
@@ -135,6 +136,66 @@ function buildCompletionStats(normalDays: SalesDayAggregate[], now = new Date())
   });
 
   return { completionRate, completionMonths: completionSamples.length, weekBandPct };
+}
+
+function normalizedNick(row: Pick<ParsedNormalSaleRow, "studentNickname">): string {
+  return row.studentNickname.toLowerCase().trim();
+}
+
+function isPaidEnrollment(row: ParsedNormalSaleRow): boolean {
+  return row.enrollmentType === "New Student" || row.enrollmentType === "Renewal";
+}
+
+function buildTrialCohort(rows: ParsedNormalSaleRow[]): SalesTrialCohortEntry[] {
+  const byNick = new Map<string, ParsedNormalSaleRow[]>();
+  for (const row of rows) {
+    const nick = normalizedNick(row);
+    if (!nick) continue;
+    byNick.set(nick, [...(byNick.get(nick) ?? []), row]);
+  }
+
+  const cohort: SalesTrialCohortEntry[] = [];
+  for (const [nick, items] of byNick.entries()) {
+    const sorted = [...items].sort((left, right) => left.paymentDate.localeCompare(right.paymentDate) || left.rowNumber - right.rowNumber);
+    const firstTrial = sorted.find((row) => row.enrollmentType === "Trial");
+    if (!firstTrial) continue;
+    const converted = sorted.find((row) => row.enrollmentType === "New Student" && row.paymentDate > firstTrial.paymentDate);
+    cohort.push({
+      nick,
+      trialDate: firstTrial.paymentDate,
+      convertedDate: converted?.paymentDate ?? null,
+    });
+  }
+  return cohort.sort((left, right) => left.trialDate.localeCompare(right.trialDate) || left.nick.localeCompare(right.nick));
+}
+
+function buildRetentionCohort(rows: ParsedNormalSaleRow[]): SalesRetentionCohortEntry[] {
+  const paidRowsByNick = new Map<string, ParsedNormalSaleRow[]>();
+  for (const row of rows) {
+    const nick = normalizedNick(row);
+    if (!nick || !isPaidEnrollment(row)) continue;
+    paidRowsByNick.set(nick, [...(paidRowsByNick.get(nick) ?? []), row]);
+  }
+
+  const cohort: SalesRetentionCohortEntry[] = [];
+  for (const [nick, items] of paidRowsByNick.entries()) {
+    const sorted = [...items].sort((left, right) => left.paymentDate.localeCompare(right.paymentDate) || left.rowNumber - right.rowNumber);
+    for (const row of sorted) {
+      if (!row.validUntil) continue;
+      const decisionDate = addDaysIso(row.validUntil, 14);
+      const renewed = sorted.find((candidate) => candidate.paymentDate > decisionDate);
+      cohort.push({
+        nick,
+        saleDate: row.paymentDate,
+        validUntil: row.validUntil,
+        decisionDate,
+        renewedDate: renewed?.paymentDate ?? null,
+        status: renewed ? "Retained" : "Churned",
+      });
+    }
+  }
+
+  return cohort.sort((left, right) => left.decisionDate.localeCompare(right.decisionDate) || left.nick.localeCompare(right.nick));
 }
 
 export function buildSalesDashboardPayload(input: {
@@ -224,6 +285,8 @@ export function buildSalesDashboardPayload(input: {
 
   const normalDays = [...byDay.values()].sort((left, right) => left.d.localeCompare(right.d));
   const addDays = [...addByDay.values()].sort((left, right) => left.d.localeCompare(right.d));
+  const trialCohort = buildTrialCohort(input.normalRows);
+  const retentionCohort = buildRetentionCohort(input.normalRows);
   const repArr: SalesRepAggregate[] = Object.keys(repRevenue)
     .map((name) => ({ name, revenue: Math.round(repRevenue[name]), count: repCount[name] ?? 0 }))
     .sort((left, right) => right.revenue - left.revenue);
@@ -261,6 +324,8 @@ export function buildSalesDashboardPayload(input: {
     completionMonths,
     weekBandPct,
     churnList,
+    trialCohort,
+    retentionCohort,
     lastUpdated: lastImportedAt,
     sources: input.sources,
     token: input.token,

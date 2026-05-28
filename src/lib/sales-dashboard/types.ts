@@ -1,4 +1,4 @@
-export type SalesSourceStatus = "active" | "refreshing" | "finalized" | "reopened";
+export type SalesSourceStatus = "active" | "refreshing" | "finalized" | "reopened" | "archived";
 export type SalesImportTrigger = "manual" | "backfill" | "cron";
 
 export interface SalesDashboardSourceRecord {
@@ -17,6 +17,9 @@ export interface SalesDashboardSourceRecord {
   lastAdditionalRowCount: number;
   finalizedAt: Date | null;
   reopenedAt: Date | null;
+  archivedAt: Date | null;
+  archivedByEmail: string | null;
+  statusBeforeArchive: SalesSourceStatus | null;
   connectedEmail: string;
   createdByEmail: string;
   updatedByEmail: string;
@@ -74,6 +77,8 @@ export interface SalesDashboardPayload {
   completionMonths: number;
   weekBandPct: number[];
   churnList: SalesChurnListEntry[];
+  trialCohort: SalesTrialCohortEntry[];
+  retentionCohort: SalesRetentionCohortEntry[];
   lastUpdated: string | null;
   sources: SalesDashboardSourceSummary[];
   token: {
@@ -98,6 +103,9 @@ export interface SalesDashboardSourceSummary {
   lastNormalRowCount: number;
   lastAdditionalRowCount: number;
   connectedEmail: string;
+  archivedAt: string | null;
+  archivedByEmail: string | null;
+  statusBeforeArchive: SalesSourceStatus | null;
 }
 
 export interface SalesDayAggregate {
@@ -145,4 +153,19 @@ export interface SalesChurnListEntry {
   nick: string;
   validUntil: string;
   status: "Churned" | "Retained" | "Active";
+}
+
+export interface SalesTrialCohortEntry {
+  nick: string;
+  trialDate: string;
+  convertedDate: string | null;
+}
+
+export interface SalesRetentionCohortEntry {
+  nick: string;
+  saleDate: string;
+  validUntil: string;
+  decisionDate: string;
+  renewedDate: string | null;
+  status: "Retained" | "Churned";
 }

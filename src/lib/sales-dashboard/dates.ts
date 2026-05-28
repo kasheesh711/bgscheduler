@@ -1,4 +1,4 @@
-import { bangkokDateKey, bangkokDateStartUtc } from "@/lib/room-capacity/dates";
+import { bangkokDateKey, bangkokDateStartUtc, endOfBangkokMonth } from "@/lib/room-capacity/dates";
 
 const DAY_MS = 86_400_000;
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -21,6 +21,14 @@ export function labelForMonth(monthStart: string): string {
 
 export function currentBangkokMonthStart(now = new Date()): string {
   return monthStartFromMonthKey(monthKeyFromDate(bangkokDateKey(now)));
+}
+
+export function currentBangkokDate(now = new Date()): string {
+  return bangkokDateKey(now);
+}
+
+export function currentBangkokMonthEnd(now = new Date()): string {
+  return endOfBangkokMonth(bangkokDateKey(now));
 }
 
 export function previousBangkokMonthStart(now = new Date()): string {

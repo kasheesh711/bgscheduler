@@ -162,6 +162,13 @@
       "when": 1779774000000,
       "tag": "0024_dashboard_sync_single_flight",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1779952800000,
+      "tag": "0026_sales_dashboard_archival",
+      "breakpoints": true
     }
   ]
 }

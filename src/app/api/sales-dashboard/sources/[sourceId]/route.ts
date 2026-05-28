@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import {
-  deleteSalesDashboardSource,
+  archiveSalesDashboardSource,
   updateSalesDashboardSourceStatus,
 } from "@/lib/sales-dashboard/data";
 
@@ -38,10 +38,11 @@ export async function DELETE(_request: NextRequest, ctx: SourceRouteContext) {
 
   try {
     const { sourceId } = await ctx.params;
-    await deleteSalesDashboardSource(sourceId);
-    return NextResponse.json({ ok: true });
+    const source = await archiveSalesDashboardSource(sourceId, session.user.email);
+    if (!source) return NextResponse.json({ error: "Source not found" }, { status: 404 });
+    return NextResponse.json({ ok: true, source });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to delete source";
+    const message = error instanceof Error ? error.message : "Failed to archive source";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
