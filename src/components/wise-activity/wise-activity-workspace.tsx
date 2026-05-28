@@ -276,7 +276,10 @@ function RevenueVarianceTable({ data }: { data: WisePackageSalesReconciliation }
                 {formatWiseAmount(variance.sheetPackageSalesTotal, variance.currency)}
               </td>
               <td className="px-3 py-3 font-medium">
-                {formatWiseAmount(variance.wiseRevenueTotal, variance.currency)}
+                <div>{formatWiseAmount(variance.wiseRevenueTotal, variance.currency)}</div>
+                <div className="text-xs font-normal text-muted-foreground">
+                  {data.coverage.status === "complete" ? "Persisted total" : "Partial persisted total"}
+                </div>
               </td>
               <td className={cn("px-3 py-3 font-semibold", differenceClass(variance.difference))}>
                 {formatWiseAmount(variance.difference, variance.currency)}

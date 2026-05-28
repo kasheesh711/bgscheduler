@@ -20,6 +20,7 @@ describe("Wise activity format helpers", () => {
     expect(isWiseFinanceEvent({ eventName: "TutorPayoutInvoiceCreatedEvent" })).toBe(true);
     expect(isWiseFinanceEvent({ transactionId: "transaction-1" })).toBe(true);
     expect(isWiseFinanceEvent({ eventType: "SESSION", eventName: "SessionUpdatedEvent" })).toBe(false);
+    expect(isWiseFinanceEvent({ eventType: "SESSION", eventName: "SessionFeedbackSubmittedEvent" })).toBe(false);
 
     expect(isWiseSessionMutation("SessionCreatedEvent")).toBe(true);
     expect(isWiseSessionMutation("SessionFeedbackSubmittedEvent")).toBe(false);
