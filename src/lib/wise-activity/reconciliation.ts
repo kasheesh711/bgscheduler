@@ -121,6 +121,28 @@ export interface ReconciliationCoverage {
   message: string;
 }
 
+export interface ReconciliationRevenueVariance {
+  startDate: string;
+  endDate: string;
+  periodLabel: string;
+  sheetPackageSalesTotal: number;
+  wiseRevenueTotal: number;
+  difference: number;
+  differencePct: number | null;
+  currency: "THB";
+  wiseRevenueTransactionCount: number;
+  wiseRevenueEventCount: number;
+  skippedEventCount: number;
+  skippedEventBreakdown: {
+    payoutOrRefund: number;
+    failedStatus: number;
+    nonPositiveAmount: number;
+    unsupportedCurrency: number;
+    duplicate: number;
+  };
+  source: "persisted_wise_activity_events";
+}
+
 export interface WisePackageSalesReconciliation {
   sources: ReconciliationSourceSummary[];
   selectedSource: ReconciliationSourceSummary | null;
@@ -138,6 +160,7 @@ export interface WisePackageSalesReconciliation {
     candidateCount: number;
     wiseInboundEvents: number;
   };
+  revenueVariance: ReconciliationRevenueVariance;
   students: ReconciliationStudentGroup[];
 }
 
@@ -235,6 +258,14 @@ function eventIdentifiers(event: WiseInvoiceEventInput): Set<string> {
     metadata.paymentOptionId,
   ];
   return new Set(values.map(compactKey).filter(Boolean));
+}
+
+function firstString(values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
 }
 
 function eventClassIds(event: WiseInvoiceEventInput): Set<string> {
@@ -434,6 +465,136 @@ function buildCoverage(events: WiseInvoiceEventInput[], startDate: string, endDa
   };
 }
 
+function isRefundOrPayoutEvent(event: WiseInvoiceEventInput): boolean {
+  const transactionType = nestedString(event.payload, ["transaction", "type"]);
+  const text = `${event.eventName} ${event.transactionStatus ?? ""} ${transactionType}`;
+  return /payout|refund|reversal|chargeback/i.test(text);
+}
+
+function isFailedRevenueStatus(status: string | null): boolean {
+  return Boolean(status && /fail|cancel|void|declin|refund|revers|chargeback|delete/i.test(status));
+}
+
+function revenueAmount(event: WiseInvoiceEventInput): number | null {
+  if (typeof event.transactionAmount === "number" && Number.isFinite(event.transactionAmount)) {
+    return event.transactionAmount;
+  }
+  const nestedAmount = nestedString(event.payload, ["transaction", "amount", "value"]);
+  if (!nestedAmount) return null;
+  const parsed = Number(nestedAmount.replace(/,/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function revenueCurrency(event: WiseInvoiceEventInput): string {
+  return firstString([
+    event.transactionCurrency,
+    nestedString(event.payload, ["transaction", "amount", "currency"]),
+  ]).toUpperCase();
+}
+
+function revenueTransactionKey(event: WiseInvoiceEventInput): string {
+  const payload = event.payload;
+  const metadata = nestedRecord(nestedRecord(payload, "transaction"), "metadata");
+  const rawKey = firstString([
+    event.transactionId,
+    nestedString(payload, ["transaction", "id"]),
+    metadata.invoiceNumber,
+    metadata.transactionId,
+    metadata.paymentOptionId,
+    event.eventId,
+    event.id,
+  ]);
+  return compactKey(rawKey) || compactKey(event.id);
+}
+
+function periodLabel(startDate: string, endDate: string): string {
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const [startYear, startMonth, startDay] = startDate.split("-").map(Number);
+  const [endYear, endMonth, endDay] = endDate.split("-").map(Number);
+  if (startYear === endYear && startMonth === endMonth && startDay === endDay) {
+    return `${months[startMonth - 1]} ${startDay}, ${startYear}`;
+  }
+  if (startYear === endYear && startMonth === endMonth) {
+    return `${months[startMonth - 1]} ${startDay}-${endDay}, ${startYear}`;
+  }
+  return `${startDate} to ${endDate}`;
+}
+
+function buildRevenueVariance(
+  rows: ReconciliationSaleRow[],
+  events: WiseInvoiceEventInput[],
+  startDate: string,
+  endDate: string,
+): ReconciliationRevenueVariance {
+  const sheetPackageSalesTotal = rows.reduce((sum, row) => sum + row.paymentAmount, 0);
+  const transactions = new Map<string, { amount: number; timestamp: number }>();
+  const skippedEventBreakdown = {
+    payoutOrRefund: 0,
+    failedStatus: 0,
+    nonPositiveAmount: 0,
+    unsupportedCurrency: 0,
+    duplicate: 0,
+  };
+  let wiseRevenueEventCount = 0;
+
+  for (const event of events) {
+    if (isRefundOrPayoutEvent(event)) {
+      skippedEventBreakdown.payoutOrRefund += 1;
+      continue;
+    }
+    if (!isInboundWiseInvoiceEvent(event)) continue;
+    if (isFailedRevenueStatus(event.transactionStatus)) {
+      skippedEventBreakdown.failedStatus += 1;
+      continue;
+    }
+
+    const amount = revenueAmount(event);
+    if (typeof amount !== "number" || amount <= 0) {
+      skippedEventBreakdown.nonPositiveAmount += 1;
+      continue;
+    }
+
+    const currency = revenueCurrency(event);
+    if (currency && currency !== "THB") {
+      skippedEventBreakdown.unsupportedCurrency += 1;
+      continue;
+    }
+
+    wiseRevenueEventCount += 1;
+    const key = revenueTransactionKey(event);
+    const timestamp = event.eventTimestamp.getTime();
+    const existing = transactions.get(key);
+    if (existing) {
+      skippedEventBreakdown.duplicate += 1;
+      if (timestamp >= existing.timestamp) {
+        transactions.set(key, { amount, timestamp });
+      }
+      continue;
+    }
+    transactions.set(key, { amount, timestamp });
+  }
+
+  const wiseRevenueTotal = [...transactions.values()].reduce((sum, item) => sum + item.amount, 0);
+  const difference = sheetPackageSalesTotal - wiseRevenueTotal;
+  const skippedEventCount = Object.values(skippedEventBreakdown).reduce((sum, count) => sum + count, 0);
+
+  return {
+    startDate,
+    endDate,
+    periodLabel: periodLabel(startDate, endDate),
+    sheetPackageSalesTotal,
+    wiseRevenueTotal,
+    difference,
+    differencePct: wiseRevenueTotal === 0 ? null : (difference / wiseRevenueTotal) * 100,
+    currency: "THB",
+    wiseRevenueTransactionCount: transactions.size,
+    wiseRevenueEventCount,
+    skippedEventCount,
+    skippedEventBreakdown,
+    source: "persisted_wise_activity_events",
+  };
+}
+
 function makeSaleRow(row: PackageSaleInput, candidates: ReconciliationCandidate[], evidence: SaleEvidence): ReconciliationSaleRow {
   const reviewFlags: string[] = [];
   if (candidates.length === 0) reviewFlags.push("No Wise invoice/payment candidates found.");
@@ -499,6 +660,7 @@ export function buildPackageSalesReconciliation(input: ReconciliationBuildInput)
   );
   const rowsWithCandidates = rows.filter((row) => row.candidates.length > 0).length;
   const rowsNeedingReview = rows.filter((row) => row.reviewFlags.length > 0).length;
+  const coverage = buildCoverage(wiseEvents, input.startDate, input.endDate);
 
   return {
     sources: input.sources,
@@ -507,7 +669,7 @@ export function buildPackageSalesReconciliation(input: ReconciliationBuildInput)
       startDate: input.startDate,
       endDate: input.endDate,
     },
-    coverage: buildCoverage(wiseEvents, input.startDate, input.endDate),
+    coverage,
     summary: {
       saleRows: rows.length,
       students: students.length,
@@ -517,6 +679,7 @@ export function buildPackageSalesReconciliation(input: ReconciliationBuildInput)
       candidateCount: rows.reduce((sum, row) => sum + row.candidates.length, 0),
       wiseInboundEvents: wiseEvents.length,
     },
+    revenueVariance: buildRevenueVariance(rows, input.wiseEvents, input.startDate, input.endDate),
     students,
   };
 }

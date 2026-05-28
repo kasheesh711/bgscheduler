@@ -213,6 +213,16 @@ function KpiCard({ label, value, detail, tone }: {
   );
 }
 
+function formatPercent(value: number | null | undefined): string {
+  if (typeof value !== "number" || Number.isNaN(value)) return "-";
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
+function differenceClass(value: number): string {
+  if (Math.abs(value) < 0.01) return "text-emerald-700";
+  return value > 0 ? "text-amber-700" : "text-sky-700";
+}
+
 function JsonBlock({ value }: { value: unknown }) {
   return (
     <pre className="max-h-72 overflow-auto rounded-md bg-muted p-3 text-[11px] leading-relaxed text-muted-foreground">
@@ -227,6 +237,76 @@ function typeBadgeClass(type: string) {
   if (type === "CLASSROOM") return "border-purple-200 bg-purple-50 text-purple-800";
   if (type === "USER") return "border-emerald-200 bg-emerald-50 text-emerald-800";
   return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
+function RevenueVarianceTable({ data }: { data: WisePackageSalesReconciliation }) {
+  const variance = data.revenueVariance;
+  const coverageTone = data.coverage.status === "complete"
+    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+    : data.coverage.status === "empty"
+      ? "border-red-200 bg-red-50 text-red-800"
+      : "border-amber-200 bg-amber-50 text-amber-800";
+
+  return (
+    <section className="rounded-lg border bg-card">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+        <div className="text-sm font-semibold">Revenue Variance</div>
+        <div className="text-xs text-muted-foreground">Sheet - Wise from persisted Wise Activity events</div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[860px] text-left text-sm">
+          <thead className="bg-muted/50 text-[10px] uppercase text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2 font-semibold">Period</th>
+              <th className="px-3 py-2 font-semibold">Sheet Package Sales</th>
+              <th className="px-3 py-2 font-semibold">Wise Revenue</th>
+              <th className="px-3 py-2 font-semibold">Sheet - Wise</th>
+              <th className="px-3 py-2 font-semibold">Difference %</th>
+              <th className="px-3 py-2 font-semibold">Wise Transactions</th>
+              <th className="px-3 py-2 font-semibold">Coverage</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="border-t">
+              <td className="px-3 py-3">
+                <div className="font-medium">{variance.periodLabel}</div>
+                <div className="text-xs text-muted-foreground">{variance.startDate} to {variance.endDate}</div>
+              </td>
+              <td className="px-3 py-3 font-medium">
+                {formatWiseAmount(variance.sheetPackageSalesTotal, variance.currency)}
+              </td>
+              <td className="px-3 py-3 font-medium">
+                {formatWiseAmount(variance.wiseRevenueTotal, variance.currency)}
+              </td>
+              <td className={cn("px-3 py-3 font-semibold", differenceClass(variance.difference))}>
+                {formatWiseAmount(variance.difference, variance.currency)}
+              </td>
+              <td className={cn("px-3 py-3 font-medium", differenceClass(variance.difference))}>
+                {formatPercent(variance.differencePct)}
+              </td>
+              <td className="px-3 py-3">
+                <div className="font-medium">
+                  {variance.wiseRevenueTransactionCount} transaction{variance.wiseRevenueTransactionCount === 1 ? "" : "s"}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {variance.wiseRevenueEventCount} revenue event{variance.wiseRevenueEventCount === 1 ? "" : "s"}
+                  {variance.skippedEventCount > 0 ? ` | ${variance.skippedEventCount} skipped` : ""}
+                </div>
+              </td>
+              <td className="px-3 py-3">
+                <Badge variant="outline" className={cn("rounded-md capitalize", coverageTone)}>
+                  {data.coverage.status}
+                </Badge>
+                {data.coverage.status !== "complete" ? (
+                  <div className="mt-1 text-xs text-muted-foreground">Backfill before trusting variance.</div>
+                ) : null}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
 }
 
 function CandidateList({ candidates }: { candidates: ReconciliationCandidate[] }) {
@@ -405,6 +485,8 @@ function ReconciliationPanel({
         <KpiCard label="Rows With Candidates" value={String(summary?.rowsWithCandidates ?? 0)} detail={`${summary?.candidateCount ?? 0} Wise candidates`} tone="amber" />
         <KpiCard label="Needs Review" value={String(summary?.rowsNeedingReview ?? 0)} detail={`${summary?.wiseInboundEvents ?? 0} inbound Wise events`} tone="red" />
       </section>
+
+      {data ? <RevenueVarianceTable data={data} /> : null}
 
       <section className="space-y-2">
         <div className="flex items-center gap-2 text-sm font-semibold">
