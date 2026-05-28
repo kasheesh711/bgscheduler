@@ -6,6 +6,7 @@ import {
   fetchWiseClassroomStats,
   fetchWiseClassroomTrends,
   fetchWiseFeesPaidTrends,
+  fetchWiseReceiptTransactions,
   fetchWiseSessionStats,
   fetchAllFutureSessions,
   fetchAllInstituteSessions,
@@ -387,6 +388,108 @@ describe("Wise fetchers", () => {
       amountMinor: 344046000,
       amount: 3440460,
       currency: "THB",
+    }]);
+  });
+
+  it("fetches Wise receipt transactions with web filters, Bangkok dates, pagination, and normalized THB amounts", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({
+          status: 200,
+          data: {
+            transactions: [{
+              _id: "receipt-1",
+              type: "OFFLINE_PAYMENT",
+              status: "CHARGED",
+              amount: { value: 3_569_360_00, currency: "THB" },
+              note: "Paid Offline",
+              chargedAt: "2026-05-28T10:49:03.973Z",
+              createdAt: "2026-05-28T10:49:03.975Z",
+              classId: "class-1",
+              studentId: "student-1",
+              metadata: {
+                classId: "class-1",
+                invoiceNumber: "INV-100",
+                paymentOptionId: "payment-option-1",
+              },
+              classroom: { _id: "class-1", name: "Minnie Math", subject: "Math" },
+              student: { _id: "student-1", name: "Minnie Smith" },
+              parents: [{ _id: "parent-1", name: "Parent Minnie" }],
+            }],
+            page_count: 2,
+            page_number: 1,
+            page_size: 50,
+            totalRecords: 2,
+          },
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({
+          status: 200,
+          data: {
+            transactions: [{
+              _id: "receipt-2",
+              type: "PAYMENT",
+              status: "CHARGED",
+              amount: { value: 10_000, currency: "THB" },
+              chargedAt: "2026-05-28T11:00:00.000Z",
+            }],
+            page_count: 2,
+            page_number: 2,
+            page_size: 50,
+            totalRecords: 2,
+          },
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    global.fetch = fetchMock as typeof fetch;
+
+    const receipts = await fetchWiseReceiptTransactions(makeClient(), "center-1", {
+      startDate: "2026-05-01",
+      endDate: "2026-05-28",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(firstUrl.pathname).toBe("/institutes/center-1/fees/transactions");
+    expect(firstUrl.searchParams.get("type")).toBe("PAYMENT,OFFLINE_PAYMENT,DISBURSAL");
+    expect(firstUrl.searchParams.get("status")).toBe("CHARGED,PENDING_CONFIRMATION");
+    expect(firstUrl.searchParams.get("populateParticipant")).toBe("true");
+    expect(firstUrl.searchParams.get("populateClassroom")).toBe("true");
+    expect(firstUrl.searchParams.get("page_size")).toBe("50");
+    expect(firstUrl.searchParams.get("page_number")).toBe("1");
+    expect(firstUrl.searchParams.get("startDate")).toBe("2026-04-30T17:00:00.000Z");
+    expect(firstUrl.searchParams.get("endDate")).toBe("2026-05-28T16:59:59.999Z");
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({
+      headers: expect.objectContaining({
+        "x-wise-timezone": "Asia/Bangkok",
+        "x-wise-platform": "web",
+      }),
+    }));
+    const secondUrl = new URL(fetchMock.mock.calls[1][0] as string);
+    expect(secondUrl.searchParams.get("page_number")).toBe("2");
+    expect(receipts).toMatchObject([{
+      id: "receipt-1",
+      type: "OFFLINE_PAYMENT",
+      status: "CHARGED",
+      amountMinor: 356_936_000,
+      amount: 3_569_360,
+      currency: "THB",
+      chargedAt: "2026-05-28T10:49:03.973Z",
+      classId: "class-1",
+      studentId: "student-1",
+      studentName: "Minnie Smith",
+      parentNames: ["Parent Minnie"],
+      identifiers: expect.arrayContaining(["receipt-1", "INV-100", "payment-option-1"]),
+    }, {
+      id: "receipt-2",
+      amountMinor: 10_000,
+      amount: 100,
     }]);
   });
 });

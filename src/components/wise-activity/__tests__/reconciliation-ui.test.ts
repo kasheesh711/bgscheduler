@@ -18,19 +18,22 @@ describe("Wise Audit reconciliation UI", () => {
     expect(source).toContain("Backfill selected range");
     expect(source).toContain("Coverage:");
     expect(source).toContain("Revenue Variance");
-    expect(source).toContain("Wise Revenue");
-    expect(source).toContain("Sheet - Wise");
+    expect(source).toContain("Wise Fees Paid Trend");
+    expect(source).toContain("Wise Receipt Total");
+    expect(source).toContain("Sheet - Receipts");
+    expect(source).toContain("Receipts - Trend");
     expect(source).toContain("Wise fees paid trend");
+    expect(source).toContain("Wise receipt transactions");
     expect(source).not.toContain("Partial persisted total");
-    expect(source).toContain("Rows With Candidates");
+    expect(source).toContain("Rows With Receipt Candidates");
     expect(source).toContain("Student Package Sales");
   });
 
   it("keeps reconciliation candidate review read-only", () => {
     const source = readWiseActivityWorkspace();
 
-    expect(source).toContain("No Wise invoice/payment candidates.");
-    expect(source).toContain("Wise raw details");
+    expect(source).toContain("No Wise receipt candidates.");
+    expect(source).toContain("Wise receipt raw details");
     expect(source).not.toContain("Mark as matched");
     expect(source).not.toContain("Save match");
   });

@@ -4,7 +4,12 @@ import * as schema from "@/lib/db/schema";
 import { addBangkokDays, bangkokDateKey, bangkokDateStartUtc, endOfBangkokMonth, todayBangkok } from "@/lib/room-capacity/dates";
 import type { SalesDashboardSourceRecord, SalesSourceStatus } from "@/lib/sales-dashboard/types";
 import { createWiseClient } from "@/lib/wise/client";
-import { fetchWiseFeesPaidTrends, type WiseFeesPaidTrend } from "@/lib/wise/fetchers";
+import {
+  fetchWiseFeesPaidTrends,
+  fetchWiseReceiptTransactions,
+  type WiseFeesPaidTrend,
+  type WiseReceiptTransaction,
+} from "@/lib/wise/fetchers";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
@@ -64,11 +69,14 @@ export interface CreditPackageInput {
 }
 
 export interface ReconciliationCandidate {
+  source: "wise_receipt";
   id: string;
   eventId: string;
   eventName: string;
   eventTimestamp: string;
   eventDate: string;
+  receiptType: string | null;
+  receiptStatus: string | null;
   actorName: string | null;
   classroomId: string | null;
   classroomName: string | null;
@@ -137,6 +145,13 @@ export interface ReconciliationRevenueVariance {
   wiseRevenueUnavailableReason: string | null;
   wiseRevenueTrendTimestamp: string | null;
   wiseRevenueTransactionCount: number | null;
+  wiseReceiptsAvailable: boolean;
+  wiseReceiptsUnavailableReason: string | null;
+  wiseReceiptTotal: number | null;
+  wiseReceiptCount: number | null;
+  wiseReceiptSkippedCount: number | null;
+  sheetMinusReceipts: number | null;
+  receiptsMinusTrend: number | null;
   source: "wise_fees_paid_trend";
 }
 
@@ -156,6 +171,7 @@ export interface WisePackageSalesReconciliation {
     rowsNeedingReview: number;
     candidateCount: number;
     wiseInboundEvents: number;
+    wiseReceipts: number;
   };
   revenueVariance: ReconciliationRevenueVariance;
   students: ReconciliationStudentGroup[];
@@ -166,6 +182,8 @@ export interface ReconciliationBuildInput {
   selectedSource: ReconciliationSourceSummary | null;
   saleRows: PackageSaleInput[];
   wiseEvents: WiseInvoiceEventInput[];
+  wiseReceipts?: WiseReceiptTransaction[];
+  wiseReceiptsError?: string | null;
   creditPackages: CreditPackageInput[];
   startDate: string;
   endDate: string;
@@ -221,15 +239,6 @@ function dayDistance(left: string, right: string): number {
   return Math.abs((bangkokDateStartUtc(left).getTime() - bangkokDateStartUtc(right).getTime()) / DAY_MS);
 }
 
-function nestedRecord(value: unknown, key: string): Record<string, unknown> {
-  const candidate = value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)[key]
-    : null;
-  return candidate && typeof candidate === "object" && !Array.isArray(candidate)
-    ? candidate as Record<string, unknown>
-    : {};
-}
-
 function nestedString(value: unknown, path: string[]): string {
   let cursor: unknown = value;
   for (const key of path) {
@@ -246,54 +255,36 @@ function allNestedStrings(value: unknown): string[] {
   return Object.values(value).flatMap(allNestedStrings);
 }
 
-function eventIdentifiers(event: WiseInvoiceEventInput): Set<string> {
-  const payload = event.payload;
-  const metadata = nestedRecord(nestedRecord(payload, "transaction"), "metadata");
-  const values = [
-    event.transactionId,
-    nestedString(payload, ["transaction", "id"]),
-    metadata.invoiceNumber,
-    metadata.transactionId,
-    metadata.paymentOptionId,
-  ];
-  return new Set(values.map(compactKey).filter(Boolean));
+function receiptIdentifiers(receipt: WiseReceiptTransaction): Set<string> {
+  return new Set(receipt.identifiers.map(compactKey).filter(Boolean));
 }
 
-function firstString(values: unknown[]): string {
-  for (const value of values) {
-    const text = String(value ?? "").trim();
-    if (text) return text;
-  }
-  return "";
-}
-
-function eventClassIds(event: WiseInvoiceEventInput): Set<string> {
+function receiptClassIds(receipt: WiseReceiptTransaction): Set<string> {
   return new Set([
-    event.classroomId,
-    nestedString(event.payload, ["transaction", "metadata", "classId"]),
-    nestedString(event.payload, ["class", "id"]),
-    nestedString(event.raw, ["classroom", "_id"]),
+    receipt.classId,
+    nestedString(receipt.raw, ["metadata", "classId"]),
+    nestedString(receipt.raw, ["classroom", "_id"]),
   ].map((value) => String(value ?? "").trim()).filter(Boolean));
 }
 
-function eventStudentIds(event: WiseInvoiceEventInput): Set<string> {
+function receiptStudentIds(receipt: WiseReceiptTransaction): Set<string> {
   return new Set([
-    nestedString(event.payload, ["transaction", "senderId"]),
-    nestedString(event.payload, ["transaction", "receiverId"]),
-    nestedString(event.payload, ["transaction", "metadata", "senderId"]),
-    nestedString(event.payload, ["transaction", "metadata", "receiverId"]),
-    nestedString(event.payload, ["user", "id"]),
-    nestedString(event.raw, ["participant", "_id"]),
+    receipt.studentId,
+    nestedString(receipt.raw, ["student", "_id"]),
+    nestedString(receipt.raw, ["participant", "_id"]),
+    nestedString(receipt.raw, ["metadata", "studentId"]),
   ].map((value) => String(value ?? "").trim()).filter(Boolean));
 }
 
-function eventSearchText(event: WiseInvoiceEventInput): string {
+function receiptSearchText(receipt: WiseReceiptTransaction): string {
   return normalizeText([
-    event.actorName,
-    event.classroomName,
-    event.classroomSubject,
-    event.transactionId,
-    ...allNestedStrings(event.payload),
+    receipt.studentName,
+    ...receipt.parentNames,
+    receipt.classroomName,
+    receipt.classroomSubject,
+    receipt.note,
+    ...receipt.identifiers,
+    ...allNestedStrings(receipt.raw),
   ].join(" "));
 }
 
@@ -369,24 +360,24 @@ function buildSaleEvidence(row: PackageSaleInput, creditPackages: CreditPackageI
   };
 }
 
-function scoreCandidate(row: PackageSaleInput, evidence: SaleEvidence, event: WiseInvoiceEventInput): ReconciliationCandidate | null {
+function scoreReceiptCandidate(row: PackageSaleInput, evidence: SaleEvidence, receipt: WiseReceiptTransaction): ReconciliationCandidate | null {
   const reasons: string[] = [];
   let score = 0;
-  const transactionAmount = eventTransactionAmount(event);
+  const transactionAmount = receipt.amount;
 
   const normalizedTransactionNo = compactKey(evidence.transactionNo);
-  if (normalizedTransactionNo && eventIdentifiers(event).has(normalizedTransactionNo)) {
+  if (normalizedTransactionNo && receiptIdentifiers(receipt).has(normalizedTransactionNo)) {
     score += 100;
-    reasons.push("Sheet transaction number appears on the Wise event.");
+    reasons.push("Sheet transaction number appears on the Wise receipt.");
   }
 
-  const classIds = eventClassIds(event);
+  const classIds = receiptClassIds(receipt);
   if ([...classIds].some((id) => evidence.mappedClassIds.has(id))) {
     score += 50;
     reasons.push("Wise class ID matches the student's active Credit Control package.");
   }
 
-  const studentIds = eventStudentIds(event);
+  const studentIds = receiptStudentIds(receipt);
   if ([...studentIds].some((id) => evidence.mappedStudentIds.has(id))) {
     score += 50;
     reasons.push("Wise student ID matches the student's active Credit Control package.");
@@ -397,44 +388,49 @@ function scoreCandidate(row: PackageSaleInput, evidence: SaleEvidence, event: Wi
     reasons.push("Payment amount matches the package-sale row.");
   }
 
-  const eventDate = bangkokDateKey(event.eventTimestamp);
+  const receiptTimestamp = new Date(receipt.chargedAt);
+  if (Number.isNaN(receiptTimestamp.getTime())) return null;
+  const eventDate = bangkokDateKey(receiptTimestamp);
   const distance = dayDistance(row.paymentDate, eventDate);
   if (distance === 0) {
     score += 20;
-    reasons.push("Wise event date matches the sheet payment date.");
+    reasons.push("Wise receipt date matches the sheet payment date.");
   } else if (distance <= 3) {
     score += 10;
-    reasons.push(`Wise event date is within ${distance} day${distance === 1 ? "" : "s"} of the sheet payment date.`);
+    reasons.push(`Wise receipt date is within ${distance} day${distance === 1 ? "" : "s"} of the sheet payment date.`);
   }
 
-  const searchText = eventSearchText(event);
+  const searchText = receiptSearchText(receipt);
   const packageTextHit = evidence.packageHints.some((hint) => hint.length >= 3 && searchText.includes(hint));
   if (packageTextHit) {
     score += 15;
-    reasons.push("Wise event text overlaps with the sheet student, parent, program, or package text.");
+    reasons.push("Wise receipt text overlaps with the sheet student, parent, program, or package text.");
   }
 
   if (score < 20) return null;
 
   return {
-    id: event.id,
-    eventId: event.eventId,
-    eventName: event.eventName,
-    eventTimestamp: event.eventTimestamp.toISOString(),
+    source: "wise_receipt",
+    id: receipt.id,
+    eventId: receipt.id,
+    eventName: "WiseReceiptTransaction",
+    eventTimestamp: receiptTimestamp.toISOString(),
     eventDate,
-    actorName: event.actorName,
-    classroomId: event.classroomId,
-    classroomName: event.classroomName,
-    classroomSubject: event.classroomSubject,
-    transactionId: event.transactionId,
-    transactionStatus: event.transactionStatus,
+    receiptType: receipt.type || null,
+    receiptStatus: receipt.status || null,
+    actorName: receipt.studentName,
+    classroomId: receipt.classId,
+    classroomName: receipt.classroomName,
+    classroomSubject: receipt.classroomSubject,
+    transactionId: receipt.id,
+    transactionStatus: receipt.status,
     transactionAmount,
-    transactionCurrency: event.transactionCurrency,
+    transactionCurrency: receipt.currency,
     score,
     confidence: score >= 80 ? "high" : score >= 45 ? "medium" : "low",
     reasons,
-    payload: event.payload,
-    raw: event.raw,
+    payload: receipt.raw,
+    raw: receipt.raw,
   };
 }
 
@@ -465,29 +461,6 @@ function buildCoverage(events: WiseInvoiceEventInput[], startDate: string, endDa
   };
 }
 
-function normalizeWiseAmountValue(value: number | null, currency: string): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return currency === "THB" ? value / 100 : value;
-}
-
-function eventTransactionAmount(event: WiseInvoiceEventInput): number | null {
-  const currency = revenueCurrency(event);
-  if (typeof event.transactionAmount === "number" && Number.isFinite(event.transactionAmount)) {
-    return normalizeWiseAmountValue(event.transactionAmount, currency);
-  }
-  const nestedAmount = nestedString(event.payload, ["transaction", "amount", "value"]);
-  if (!nestedAmount) return null;
-  const parsed = Number(nestedAmount.replace(/,/g, ""));
-  return normalizeWiseAmountValue(Number.isFinite(parsed) ? parsed : null, currency);
-}
-
-function revenueCurrency(event: WiseInvoiceEventInput): string {
-  return firstString([
-    event.transactionCurrency,
-    nestedString(event.payload, ["transaction", "amount", "currency"]),
-  ]).toUpperCase();
-}
-
 function periodLabel(startDate: string, endDate: string): string {
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const [startYear, startMonth, startDay] = startDate.split("-").map(Number);
@@ -511,6 +484,15 @@ function trendMonth(trend: WiseFeesPaidTrend): string {
   return bangkokDateKey(timestamp).slice(0, 7);
 }
 
+function isReceiptRevenue(receipt: WiseReceiptTransaction): boolean {
+  const type = receipt.type.toUpperCase();
+  const status = receipt.status.toUpperCase();
+  return (type === "PAYMENT" || type === "OFFLINE_PAYMENT") &&
+    status === "CHARGED" &&
+    typeof receipt.amount === "number" &&
+    receipt.amount > 0;
+}
+
 function buildRevenueVariance(
   rows: ReconciliationSaleRow[],
   startDate: string,
@@ -518,6 +500,8 @@ function buildRevenueVariance(
   sourceMonth: string,
   trends: WiseFeesPaidTrend[] | undefined,
   trendsError: string | null | undefined,
+  receipts: WiseReceiptTransaction[] | undefined,
+  receiptsError: string | null | undefined,
 ): ReconciliationRevenueVariance {
   const sheetPackageSalesTotal = rows.reduce((sum, row) => sum + row.paymentAmount, 0);
   const trend = trends?.find((candidate) => trendMonth(candidate) === sourceMonth) ?? null;
@@ -528,6 +512,16 @@ function buildRevenueVariance(
     : trend
       ? null
       : `Wise fees paid trend has no row for ${sourceMonth}.`;
+  const revenueReceipts = (receipts ?? []).filter(isReceiptRevenue);
+  const wiseReceiptTotal = receiptsError
+    ? null
+    : revenueReceipts.reduce((sum, receipt) => sum + (receipt.amount ?? 0), 0);
+  const wiseReceiptCount = receiptsError ? null : revenueReceipts.length;
+  const wiseReceiptSkippedCount = receiptsError ? null : (receipts ?? []).length - revenueReceipts.length;
+  const sheetMinusReceipts = typeof wiseReceiptTotal === "number" ? sheetPackageSalesTotal - wiseReceiptTotal : null;
+  const receiptsMinusTrend = typeof wiseReceiptTotal === "number" && typeof wiseRevenueTotal === "number"
+    ? wiseReceiptTotal - wiseRevenueTotal
+    : null;
 
   return {
     startDate,
@@ -542,13 +536,20 @@ function buildRevenueVariance(
     wiseRevenueUnavailableReason: unavailableReason,
     wiseRevenueTrendTimestamp: trend?.timestamp ?? null,
     wiseRevenueTransactionCount: trend?.count ?? null,
+    wiseReceiptsAvailable: !receiptsError,
+    wiseReceiptsUnavailableReason: receiptsError ? `Wise receipts unavailable: ${receiptsError}` : null,
+    wiseReceiptTotal,
+    wiseReceiptCount,
+    wiseReceiptSkippedCount,
+    sheetMinusReceipts,
+    receiptsMinusTrend,
     source: "wise_fees_paid_trend",
   };
 }
 
 function makeSaleRow(row: PackageSaleInput, candidates: ReconciliationCandidate[], evidence: SaleEvidence): ReconciliationSaleRow {
   const reviewFlags: string[] = [];
-  if (candidates.length === 0) reviewFlags.push("No Wise invoice/payment candidates found.");
+  if (candidates.length === 0) reviewFlags.push("No Wise receipt candidates found.");
   if (!evidence.transactionNo) reviewFlags.push("Sheet row has no transaction number.");
   if (evidence.recordedInWise && !/yes|y|true|recorded/i.test(evidence.recordedInWise)) {
     reviewFlags.push(`Sheet WISE status is "${evidence.recordedInWise}".`);
@@ -575,10 +576,11 @@ function makeSaleRow(row: PackageSaleInput, candidates: ReconciliationCandidate[
 
 export function buildPackageSalesReconciliation(input: ReconciliationBuildInput): WisePackageSalesReconciliation {
   const wiseEvents = input.wiseEvents.filter(isInboundWiseInvoiceEvent);
+  const wiseReceipts = input.wiseReceipts ?? [];
   const rows = input.saleRows.map((row) => {
     const evidence = buildSaleEvidence(row, input.creditPackages);
-    const candidates = wiseEvents
-      .map((event) => scoreCandidate(row, evidence, event))
+    const candidates = wiseReceipts
+      .map((receipt) => scoreReceiptCandidate(row, evidence, receipt))
       .filter((candidate): candidate is ReconciliationCandidate => Boolean(candidate))
       .sort((left, right) => right.score - left.score || left.eventTimestamp.localeCompare(right.eventTimestamp))
       .slice(0, MAX_CANDIDATES_PER_ROW);
@@ -629,6 +631,7 @@ export function buildPackageSalesReconciliation(input: ReconciliationBuildInput)
       rowsNeedingReview,
       candidateCount: rows.reduce((sum, row) => sum + row.candidates.length, 0),
       wiseInboundEvents: wiseEvents.length,
+      wiseReceipts: wiseReceipts.length,
     },
     revenueVariance: buildRevenueVariance(
       rows,
@@ -637,6 +640,8 @@ export function buildPackageSalesReconciliation(input: ReconciliationBuildInput)
       sourceMonthForVariance(input),
       input.wiseFeesPaidTrends,
       input.wiseFeesPaidTrendsError,
+      input.wiseReceipts,
+      input.wiseReceiptsError,
     ),
     students,
   };
@@ -744,6 +749,34 @@ async function loadWiseFeesPaidTrends(): Promise<{
   }
 }
 
+async function loadWiseReceipts(startDate: string, endDate: string): Promise<{
+  receipts: WiseReceiptTransaction[] | undefined;
+  error: string | null;
+}> {
+  if (!process.env.WISE_USER_ID || !process.env.WISE_API_KEY) {
+    return {
+      receipts: undefined,
+      error: "WISE_USER_ID and WISE_API_KEY are required to fetch Wise receipts.",
+    };
+  }
+
+  try {
+    return {
+      receipts: await fetchWiseReceiptTransactions(
+        createWiseClient(),
+        process.env.WISE_INSTITUTE_ID ?? DEFAULT_INSTITUTE_ID,
+        { startDate, endDate },
+      ),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      receipts: undefined,
+      error: error instanceof Error ? error.message : "Wise receipt fetch failed.",
+    };
+  }
+}
+
 export async function getWisePackageSalesReconciliation(
   db: Database = getDb(),
   input: {
@@ -810,7 +843,10 @@ export async function getWisePackageSalesReconciliation(
       .orderBy(desc(schema.creditControlSnapshots.generatedAt))
       .limit(1),
   ]);
-  const wiseFeesPaidTrends = await loadWiseFeesPaidTrends();
+  const [wiseFeesPaidTrends, wiseReceipts] = await Promise.all([
+    loadWiseFeesPaidTrends(),
+    loadWiseReceipts(startDate, endDate),
+  ]);
 
   const activeSnapshotId = snapshotRows[0]?.id;
   const creditPackages = activeSnapshotId
@@ -833,6 +869,8 @@ export async function getWisePackageSalesReconciliation(
     selectedSource: sourceSummary(selectedSource),
     saleRows,
     wiseEvents: eventRows.map(toWiseInvoiceInput),
+    wiseReceipts: wiseReceipts.receipts,
+    wiseReceiptsError: wiseReceipts.error,
     creditPackages,
     startDate,
     endDate,

@@ -198,6 +198,55 @@ export interface WiseInstituteTrendsResponse {
   [key: string]: unknown;
 }
 
+export interface WiseFeeTransactionUser {
+  _id?: string;
+  name?: string;
+  profilePicture?: string;
+  [key: string]: unknown;
+}
+
+export interface WiseFeeTransactionClassroom {
+  _id?: string;
+  name?: string;
+  subject?: string;
+  classType?: string;
+  [key: string]: unknown;
+}
+
+export interface WiseFeeTransaction {
+  _id?: string;
+  id?: string;
+  type?: string;
+  status?: string;
+  amount?: WiseMoneyAmount;
+  note?: string;
+  chargedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  classId?: string;
+  studentId?: string;
+  transactionId?: string;
+  invoiceId?: string;
+  invoiceNumber?: string;
+  metadata?: Record<string, unknown>;
+  classroom?: WiseFeeTransactionClassroom;
+  student?: WiseFeeTransactionUser;
+  participant?: WiseFeeTransactionUser;
+  parents?: WiseFeeTransactionUser[];
+  [key: string]: unknown;
+}
+
+export interface WiseFeeTransactionsResponse {
+  data?: {
+    transactions?: WiseFeeTransaction[];
+    totalRecords?: number;
+    page_count?: number;
+    page_number?: number;
+    page_size?: number;
+  };
+  [key: string]: unknown;
+}
+
 export function getWiseUserId(
   userRef: string | WiseUserReference | undefined
 ): string | undefined {

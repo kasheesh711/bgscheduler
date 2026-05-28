@@ -213,11 +213,6 @@ function KpiCard({ label, value, detail, tone }: {
   );
 }
 
-function formatPercent(value: number | null | undefined): string {
-  if (typeof value !== "number" || Number.isNaN(value)) return "-";
-  return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
-}
-
 function differenceClass(value: number | null): string {
   if (typeof value !== "number") return "text-muted-foreground";
   if (Math.abs(value) < 0.01) return "text-emerald-700";
@@ -252,18 +247,19 @@ function RevenueVarianceTable({ data }: { data: WisePackageSalesReconciliation }
     <section className="rounded-lg border bg-card">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <div className="text-sm font-semibold">Revenue Variance</div>
-        <div className="text-xs text-muted-foreground">Sheet - Wise from Wise fees paid trend</div>
+        <div className="text-xs text-muted-foreground">Sheet, Wise fees paid trend, and Wise receipt totals</div>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[860px] text-left text-sm">
+        <table className="w-full min-w-[1100px] text-left text-sm">
           <thead className="bg-muted/50 text-[10px] uppercase text-muted-foreground">
             <tr>
               <th className="px-3 py-2 font-semibold">Period</th>
               <th className="px-3 py-2 font-semibold">Sheet Package Sales</th>
-              <th className="px-3 py-2 font-semibold">Wise Revenue</th>
-              <th className="px-3 py-2 font-semibold">Sheet - Wise</th>
-              <th className="px-3 py-2 font-semibold">Difference %</th>
-              <th className="px-3 py-2 font-semibold">Wise Transactions</th>
+              <th className="px-3 py-2 font-semibold">Wise Fees Paid Trend</th>
+              <th className="px-3 py-2 font-semibold">Wise Receipt Total</th>
+              <th className="px-3 py-2 font-semibold">Sheet - Receipts</th>
+              <th className="px-3 py-2 font-semibold">Receipts - Trend</th>
+              <th className="px-3 py-2 font-semibold">Receipt Count</th>
               <th className="px-3 py-2 font-semibold">Coverage</th>
             </tr>
           </thead>
@@ -282,19 +278,29 @@ function RevenueVarianceTable({ data }: { data: WisePackageSalesReconciliation }
                   {variance.wiseRevenueAvailable ? "Wise fees paid trend" : variance.wiseRevenueUnavailableReason}
                 </div>
               </td>
-              <td className={cn("px-3 py-3 font-semibold", differenceClass(variance.difference))}>
-                {formatWiseAmount(variance.difference, variance.currency)}
+              <td className="px-3 py-3 font-medium">
+                <div>{formatWiseAmount(variance.wiseReceiptTotal, variance.currency)}</div>
+                <div className="text-xs font-normal text-muted-foreground">
+                  {variance.wiseReceiptsAvailable ? "Wise receipt transactions" : variance.wiseReceiptsUnavailableReason}
+                </div>
               </td>
-              <td className={cn("px-3 py-3 font-medium", differenceClass(variance.difference))}>
-                {formatPercent(variance.differencePct)}
+              <td className={cn("px-3 py-3 font-semibold", differenceClass(variance.sheetMinusReceipts))}>
+                {formatWiseAmount(variance.sheetMinusReceipts, variance.currency)}
+              </td>
+              <td className={cn("px-3 py-3 font-semibold", differenceClass(variance.receiptsMinusTrend))}>
+                {formatWiseAmount(variance.receiptsMinusTrend, variance.currency)}
               </td>
               <td className="px-3 py-3">
                 <div className="font-medium">
-                  {typeof variance.wiseRevenueTransactionCount === "number"
-                    ? `${variance.wiseRevenueTransactionCount} transaction${variance.wiseRevenueTransactionCount === 1 ? "" : "s"}`
+                  {typeof variance.wiseReceiptCount === "number"
+                    ? `${variance.wiseReceiptCount} receipt${variance.wiseReceiptCount === 1 ? "" : "s"}`
                     : "-"}
                 </div>
-                <div className="text-xs text-muted-foreground">{variance.wiseRevenueTrendTimestamp ?? "No trend row"}</div>
+                <div className="text-xs text-muted-foreground">
+                  {typeof variance.wiseReceiptSkippedCount === "number"
+                    ? `${variance.wiseReceiptSkippedCount} skipped`
+                    : "Receipt data unavailable"}
+                </div>
               </td>
               <td className="px-3 py-3">
                 <Badge variant="outline" className={cn("rounded-md capitalize", coverageTone)}>
@@ -314,7 +320,7 @@ function RevenueVarianceTable({ data }: { data: WisePackageSalesReconciliation }
 
 function CandidateList({ candidates }: { candidates: ReconciliationCandidate[] }) {
   if (candidates.length === 0) {
-    return <div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">No Wise invoice/payment candidates.</div>;
+    return <div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">No Wise receipt candidates.</div>;
   }
 
   return (
@@ -328,6 +334,11 @@ function CandidateList({ candidates }: { candidates: ReconciliationCandidate[] }
                   {candidate.confidence} confidence
                 </Badge>
                 <span className="text-sm font-medium">{wiseActivityEventLabel(candidate.eventName)}</span>
+                {[candidate.receiptType, candidate.receiptStatus].filter(Boolean).length ? (
+                  <span className="text-xs text-muted-foreground">
+                    {[candidate.receiptType, candidate.receiptStatus].filter(Boolean).join(" / ")}
+                  </span>
+                ) : null}
                 <span className="text-xs text-muted-foreground">{formatBangkokDateTime(candidate.eventTimestamp)}</span>
               </div>
               <div className="mt-1 truncate text-xs text-muted-foreground">
@@ -344,7 +355,7 @@ function CandidateList({ candidates }: { candidates: ReconciliationCandidate[] }
               {candidate.reasons.map((reason) => <li key={reason}>- {reason}</li>)}
             </ul>
             <details className="rounded-md bg-muted/60 p-2">
-              <summary className="cursor-pointer text-xs font-medium">Wise raw details</summary>
+              <summary className="cursor-pointer text-xs font-medium">Wise receipt raw details</summary>
               <JsonBlock value={{ payload: candidate.payload, raw: candidate.raw }} />
             </details>
           </div>
@@ -378,7 +389,7 @@ function SaleRowReview({ row }: { row: ReconciliationSaleRow }) {
         <div>
           <div className="text-[10px] font-semibold uppercase text-muted-foreground">Review</div>
           <div className={cn("font-medium", row.reviewFlags.length > 0 ? "text-amber-700" : "text-emerald-700")}>
-            {row.reviewFlags.length > 0 ? `${row.reviewFlags.length} flag${row.reviewFlags.length === 1 ? "" : "s"}` : "Candidates available"}
+            {row.reviewFlags.length > 0 ? `${row.reviewFlags.length} flag${row.reviewFlags.length === 1 ? "" : "s"}` : "Receipt candidates available"}
           </div>
         </div>
       </div>
@@ -485,7 +496,7 @@ function ReconciliationPanel({
       <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
         <KpiCard label="Package Sale Rows" value={String(summary?.saleRows ?? 0)} detail="Sales Dashboard normal rows" tone="sky" />
         <KpiCard label="Sheet Total" value={formatWiseAmount(summary?.sheetTotal ?? 0, "THB")} detail={`${summary?.students ?? 0} students`} tone="green" />
-        <KpiCard label="Rows With Candidates" value={String(summary?.rowsWithCandidates ?? 0)} detail={`${summary?.candidateCount ?? 0} Wise candidates`} tone="amber" />
+        <KpiCard label="Rows With Receipt Candidates" value={String(summary?.rowsWithCandidates ?? 0)} detail={`${summary?.candidateCount ?? 0} Wise receipt candidates`} tone="amber" />
         <KpiCard label="Needs Review" value={String(summary?.rowsNeedingReview ?? 0)} detail={`${summary?.wiseInboundEvents ?? 0} inbound Wise events`} tone="red" />
       </section>
 

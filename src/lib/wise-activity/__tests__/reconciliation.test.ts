@@ -6,7 +6,7 @@ import {
   type PackageSaleInput,
   type WiseInvoiceEventInput,
 } from "../reconciliation";
-import type { WiseFeesPaidTrend } from "@/lib/wise/fetchers";
+import type { WiseFeesPaidTrend, WiseReceiptTransaction } from "@/lib/wise/fetchers";
 
 function sale(overrides: Partial<PackageSaleInput> = {}): PackageSaleInput {
   return {
@@ -74,6 +74,36 @@ function creditPackage(overrides: Partial<CreditPackageInput> = {}): CreditPacka
   };
 }
 
+function receipt(overrides: Partial<WiseReceiptTransaction> = {}): WiseReceiptTransaction {
+  return {
+    id: "receipt-1",
+    type: "OFFLINE_PAYMENT",
+    status: "CHARGED",
+    chargedAt: "2026-05-10T05:00:00.000Z",
+    createdAt: "2026-05-10T05:00:00.000Z",
+    amountMinor: 1_200_000,
+    amount: 12_000,
+    currency: "THB",
+    note: "Paid Offline",
+    classId: "class-1",
+    classroomName: "Math Y5 Minnie",
+    classroomSubject: "Math",
+    studentId: "student-1",
+    studentName: "Minnie Smith",
+    parentIds: ["parent-1"],
+    parentNames: ["Parent Minnie"],
+    identifiers: ["receipt-1", "INV-100", "payment-option-1"],
+    raw: {
+      _id: "receipt-1",
+      metadata: {
+        invoiceNumber: "INV-100",
+        classId: "class-1",
+      },
+    },
+    ...overrides,
+  };
+}
+
 function feesPaidTrend(overrides: Partial<WiseFeesPaidTrend> = {}): WiseFeesPaidTrend {
   return {
     timestamp: "2026-04-30T17:00:00.000Z",
@@ -86,12 +116,13 @@ function feesPaidTrend(overrides: Partial<WiseFeesPaidTrend> = {}): WiseFeesPaid
 }
 
 describe("Wise package-sales reconciliation", () => {
-  it("returns review candidates from exact transaction and invoice metadata without auto-matching", () => {
+  it("returns review candidates from exact receipt metadata without auto-matching", () => {
     const result = buildPackageSalesReconciliation({
       sources: [],
       selectedSource: null,
       saleRows: [sale()],
-      wiseEvents: [event()],
+      wiseEvents: [],
+      wiseReceipts: [receipt()],
       creditPackages: [creditPackage()],
       startDate: "2026-05-10",
       endDate: "2026-05-10",
@@ -100,7 +131,9 @@ describe("Wise package-sales reconciliation", () => {
     const row = result.students[0].rows[0];
     expect(row.candidates).toHaveLength(1);
     expect(row.candidates[0].confidence).toBe("high");
-    expect(row.candidates[0].reasons).toContain("Sheet transaction number appears on the Wise event.");
+    expect(row.candidates[0].source).toBe("wise_receipt");
+    expect(row.candidates[0].receiptType).toBe("OFFLINE_PAYMENT");
+    expect(row.candidates[0].reasons).toContain("Sheet transaction number appears on the Wise receipt.");
     expect(row.candidates[0].reasons).toContain("Wise class ID matches the student's active Credit Control package.");
     expect(row).not.toHaveProperty("matched");
     expect(row).not.toHaveProperty("matchStatus");
@@ -111,7 +144,8 @@ describe("Wise package-sales reconciliation", () => {
       sources: [],
       selectedSource: null,
       saleRows: [sale()],
-      wiseEvents: [event()],
+      wiseEvents: [],
+      wiseReceipts: [receipt()],
       creditPackages: [],
       startDate: "2026-05-10",
       endDate: "2026-05-10",
@@ -130,6 +164,11 @@ describe("Wise package-sales reconciliation", () => {
       wiseRevenueAvailable: true,
       wiseRevenueTrendTimestamp: "2026-05-09T17:00:00.000Z",
       wiseRevenueTransactionCount: 1,
+      wiseReceiptTotal: 12000,
+      wiseReceiptCount: 1,
+      wiseReceiptSkippedCount: 0,
+      sheetMinusReceipts: 0,
+      receiptsMinusTrend: 0,
       source: "wise_fees_paid_trend",
     });
   });
@@ -147,15 +186,18 @@ describe("Wise package-sales reconciliation", () => {
       },
       saleRows: [sale({ paymentAmount: 3_499_610, paymentDate: "2026-05-28" })],
       wiseEvents: [],
+      wiseReceipts: [receipt({ amount: 3_569_360, amountMinor: 356_936_000 })],
       creditPackages: [],
       startDate: "2026-05-01",
       endDate: "2026-05-28",
-      wiseFeesPaidTrends: [feesPaidTrend()],
+      wiseFeesPaidTrends: [feesPaidTrend({ amount: 3_569_360, amountMinor: 356_936_000 })],
     });
 
-    expect(result.revenueVariance.wiseRevenueTotal).toBe(3_440_460);
-    expect(result.revenueVariance.difference).toBe(59_150);
-    expect(result.revenueVariance.differencePct).toBeCloseTo(1.71924556);
+    expect(result.revenueVariance.wiseRevenueTotal).toBe(3_569_360);
+    expect(result.revenueVariance.wiseReceiptTotal).toBe(3_569_360);
+    expect(result.revenueVariance.sheetMinusReceipts).toBe(-69_750);
+    expect(result.revenueVariance.receiptsMinusTrend).toBe(0);
+    expect(result.revenueVariance.difference).toBe(-69_750);
     expect(result.revenueVariance.wiseRevenueTrendTimestamp).toBe("2026-04-30T17:00:00.000Z");
   });
 
@@ -165,6 +207,7 @@ describe("Wise package-sales reconciliation", () => {
       selectedSource: null,
       saleRows: [sale()],
       wiseEvents: [event()],
+      wiseReceipts: [receipt()],
       creditPackages: [],
       startDate: "2026-05-10",
       endDate: "2026-05-10",
@@ -183,6 +226,7 @@ describe("Wise package-sales reconciliation", () => {
       selectedSource: null,
       saleRows: [sale()],
       wiseEvents: [event()],
+      wiseReceipts: [receipt()],
       creditPackages: [],
       startDate: "2026-05-10",
       endDate: "2026-05-10",
@@ -194,15 +238,17 @@ describe("Wise package-sales reconciliation", () => {
     expect(result.revenueVariance.wiseRevenueUnavailableReason).toContain("Wise API 500");
   });
 
-  it("normalizes Wise THB minor-unit invoice amounts for row-level candidates", () => {
+  it("uses normalized Wise THB receipt amounts for row-level candidates", () => {
     const result = buildPackageSalesReconciliation({
       sources: [],
       selectedSource: null,
       saleRows: [sale({ paymentAmount: 24000 })],
-      wiseEvents: [event({
-        transactionId: "tx-24000",
-        transactionAmount: 2_400_000,
-        payload: { transaction: { id: "tx-24000", amount: { value: 2_400_000, currency: "THB" } } },
+      wiseEvents: [],
+      wiseReceipts: [receipt({
+        id: "receipt-24000",
+        amount: 24_000,
+        amountMinor: 2_400_000,
+        identifiers: ["receipt-24000"],
       })],
       creditPackages: [],
       startDate: "2026-05-10",
@@ -249,6 +295,7 @@ describe("Wise package-sales reconciliation", () => {
       selectedSource: null,
       saleRows: [sale({ paymentAmount: 15000 })],
       wiseEvents: [event({ transactionAmount: 1_000_000, payload: { transaction: { id: "tx-1", amount: { value: 1_000_000, currency: "THB" } } } })],
+      wiseReceipts: [receipt({ amount: 10_000, amountMinor: 1_000_000 })],
       creditPackages: [],
       startDate: "2026-05-10",
       endDate: "2026-05-10",
@@ -259,6 +306,53 @@ describe("Wise package-sales reconciliation", () => {
     expect(result.revenueVariance.wiseRevenueTotal).toBe(10000);
     expect(result.revenueVariance.difference).toBe(5000);
     expect(result.revenueVariance.differencePct).toBe(50);
+    expect(result.revenueVariance.sheetMinusReceipts).toBe(5000);
+    expect(result.revenueVariance.receiptsMinusTrend).toBe(0);
+  });
+
+  it("returns receipt totals unavailable when the Wise receipt endpoint fails", () => {
+    const result = buildPackageSalesReconciliation({
+      sources: [],
+      selectedSource: null,
+      saleRows: [sale()],
+      wiseEvents: [event()],
+      wiseReceiptsError: "Wise API 500",
+      creditPackages: [],
+      startDate: "2026-05-10",
+      endDate: "2026-05-10",
+      wiseFeesPaidTrends: [feesPaidTrend({ timestamp: "2026-05-09T17:00:00.000Z", amountMinor: 1_200_000, amount: 12_000 })],
+    });
+
+    expect(result.revenueVariance.wiseReceiptsAvailable).toBe(false);
+    expect(result.revenueVariance.wiseReceiptTotal).toBeNull();
+    expect(result.revenueVariance.sheetMinusReceipts).toBeNull();
+    expect(result.revenueVariance.wiseReceiptsUnavailableReason).toContain("Wise API 500");
+    expect(result.students[0].rows[0].candidates).toHaveLength(0);
+  });
+
+  it("skips non-revenue receipt rows from receipt totals", () => {
+    const result = buildPackageSalesReconciliation({
+      sources: [],
+      selectedSource: null,
+      saleRows: [sale({ paymentAmount: 3569360 })],
+      wiseEvents: [],
+      wiseReceipts: [
+        receipt({ id: "charged", amount: 3_569_360, amountMinor: 356_936_000 }),
+        receipt({ id: "disbursal", type: "DISBURSAL", amount: 50_000, amountMinor: 5_000_000 }),
+        receipt({ id: "pending", status: "PENDING_CONFIRMATION", amount: 10_000, amountMinor: 1_000_000 }),
+        receipt({ id: "rejected", status: "REJECTED", amount: 10_000, amountMinor: 1_000_000 }),
+        receipt({ id: "refund", type: "REFUND", amount: 1_000, amountMinor: 100_000 }),
+        receipt({ id: "zero", amount: 0, amountMinor: 0 }),
+      ],
+      creditPackages: [],
+      startDate: "2026-05-01",
+      endDate: "2026-05-28",
+      wiseFeesPaidTrends: [feesPaidTrend({ amount: 3_569_360, amountMinor: 356_936_000 })],
+    });
+
+    expect(result.revenueVariance.wiseReceiptTotal).toBe(3_569_360);
+    expect(result.revenueVariance.wiseReceiptCount).toBe(1);
+    expect(result.revenueVariance.wiseReceiptSkippedCount).toBe(5);
   });
 
   it("uses amount and date proximity as supporting candidate evidence", () => {
@@ -266,10 +360,11 @@ describe("Wise package-sales reconciliation", () => {
       sources: [],
       selectedSource: null,
       saleRows: [sale({ raw: { "Transaction No.": "sheet-only" } })],
-      wiseEvents: [event({
-        transactionId: "different",
-        eventTimestamp: new Date("2026-05-12T05:00:00.000Z"),
-        payload: { transaction: { id: "different", amount: { value: 12000, currency: "THB" } } },
+      wiseEvents: [],
+      wiseReceipts: [receipt({
+        id: "different",
+        chargedAt: "2026-05-12T05:00:00.000Z",
+        identifiers: ["different"],
       })],
       creditPackages: [],
       startDate: "2026-05-10",
@@ -279,7 +374,7 @@ describe("Wise package-sales reconciliation", () => {
     const candidate = result.students[0].rows[0].candidates[0];
     expect(candidate.confidence).toBe("medium");
     expect(candidate.reasons).toContain("Payment amount matches the package-sale row.");
-    expect(candidate.reasons).toContain("Wise event date is within 2 days of the sheet payment date.");
+    expect(candidate.reasons).toContain("Wise receipt date is within 2 days of the sheet payment date.");
   });
 
   it("leaves rows candidate-only when no Wise evidence reaches the threshold", () => {
@@ -287,11 +382,15 @@ describe("Wise package-sales reconciliation", () => {
       sources: [],
       selectedSource: null,
       saleRows: [sale({ paymentAmount: 9999, raw: {} })],
-      wiseEvents: [event({
-        eventTimestamp: new Date("2026-05-20T05:00:00.000Z"),
+      wiseEvents: [],
+      wiseReceipts: [receipt({
+        id: "other",
+        chargedAt: "2026-05-20T05:00:00.000Z",
         classroomName: "Unrelated class",
-        transactionAmount: 100,
-        payload: { transaction: { id: "other" } },
+        amount: 100,
+        identifiers: ["other"],
+        parentNames: [],
+        studentName: "Other Student",
       })],
       creditPackages: [],
       startDate: "2026-05-10",
@@ -300,7 +399,7 @@ describe("Wise package-sales reconciliation", () => {
 
     const row = result.students[0].rows[0];
     expect(row.candidates).toHaveLength(0);
-    expect(row.reviewFlags).toContain("No Wise invoice/payment candidates found.");
+    expect(row.reviewFlags).toContain("No Wise receipt candidates found.");
     expect(row.reviewFlags).toContain("Sheet row has no transaction number.");
   });
 
