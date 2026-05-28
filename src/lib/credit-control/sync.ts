@@ -416,12 +416,16 @@ async function buildSessionRows(
   const feedbackBySessionId = new Map(feedbackEntries);
 
   const rows: Array<typeof schema.creditControlSessions.$inferInsert> = [];
+  const seenSessionRows = new Set<string>();
   function addSessions(sessions: WiseCreditSession[], kind: "past" | "future") {
     for (const session of sessions) {
       const durationMinutes = durationMsToMinutes(session.duration);
       for (const studentId of session.students) {
         const pair = pairsByKey.get(`${session.classId._id}|${studentId}`);
         if (!pair) continue;
+        const rowKey = `${session._id}|${pair.wiseStudentId}`;
+        if (seenSessionRows.has(rowKey)) continue;
+        seenSessionRows.add(rowKey);
         const packageKey = buildStudentPackageKey(pair.studentName, pair.packageName);
         rows.push({
           snapshotId,

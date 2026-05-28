@@ -209,6 +209,33 @@ describe("runCreditControlSync", () => {
     expect(snapshotLinkIndex).toBeLessThan(events.indexOf(sessionInsertEvents[0]));
   });
 
+  it("dedupes duplicate Wise session/student rows before inserting sessions", async () => {
+    const duplicateSession = makeFutureSessions(1)[0];
+    vi.mocked(fetchCreditSessions).mockImplementation(async (_client, _instituteId, status) => (
+      status === "PAST" ? [] : [duplicateSession, { ...duplicateSession, students: ["student-1", "student-1"] }]
+    ));
+    const { db, events } = makeDbMock();
+
+    const result = await runCreditControlSync(
+      db,
+      fakeClient(),
+      "institute-1",
+      new Date("2026-05-26T08:00:00.000Z"),
+      { syncRunId: "run-1" },
+    );
+
+    const sessionInsertEvents = events.filter((event): event is InsertEvent => (
+      event.type === "insert" &&
+      event.table === schema.creditControlSessions
+    ));
+
+    expect(result).toMatchObject({
+      success: true,
+      sessionCount: 1,
+    });
+    expect(sessionInsertEvents.map((event) => event.rows.length)).toEqual([1]);
+  });
+
   it("keeps failed sync runs traceable to the candidate snapshot", async () => {
     const dbCause = Object.assign(new Error("duplicate key value violates unique constraint"), {
       name: "NeonDbError",
