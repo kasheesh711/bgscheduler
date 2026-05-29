@@ -14,6 +14,22 @@ export type LineSchedulerReviewStatus =
   | "rejected"
   | "dismissed";
 
+export type LineOperationalIntentType =
+  | "new_request"
+  | "cancel_one_off"
+  | "pause_until"
+  | "resume"
+  | "reschedule"
+  | "unclear_change";
+
+export type LineWritebackStatus =
+  | "not_applicable"
+  | "dry_run"
+  | "manual_required"
+  | "ready"
+  | "confirmed"
+  | "failed";
+
 export interface LineReviewActor {
   email?: string | null;
   name?: string | null;
@@ -71,6 +87,8 @@ export interface LineSchedulerReviewDto {
   classifierSummary: string | null;
   classifierRationale: string | null;
   status: LineSchedulerReviewStatus;
+  intentType: LineOperationalIntentType;
+  intentPayload: Record<string, unknown>;
   proposedDraft: string;
   selectedSuggestion: Record<string, unknown> | null;
   finalText: string | null;
@@ -80,6 +98,11 @@ export interface LineSchedulerReviewDto {
   selectedTutorIds: string[];
   studentLinkOverride: boolean;
   verifiedStudentKeys: string[];
+  matchedStudentKeys: string[];
+  candidateSessions: Record<string, unknown>[];
+  proposedWiseActions: Record<string, unknown>[];
+  adminSelectedSessionIds: string[];
+  writebackStatus: LineWritebackStatus;
   sendLineMessageId: string | null;
   sendResponse: Record<string, unknown> | null;
   sendError: string | null;
@@ -88,6 +111,44 @@ export interface LineSchedulerReviewDto {
   reviewedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface LineWiseActionLogDto {
+  id: string;
+  lineReviewId: string | null;
+  actionType: string;
+  status: string;
+  dryRun: boolean;
+  wiseSessionIds: string[];
+  requestPayload: Record<string, unknown>;
+  responsePayload: Record<string, unknown> | null;
+  errorMessage: string | null;
+  createdByEmail: string | null;
+  createdByName: string | null;
+  createdAt: string;
+}
+
+export interface LineReviewContextMessageDto {
+  id: string;
+  source: "line" | "website";
+  roleLabel: string;
+  text: string;
+  timestamp: string;
+  direction: "inbound" | "outbound" | null;
+  role: "admin" | "parent" | "assistant" | "system" | null;
+  messageType: string | null;
+  isRetracted: boolean;
+  createdByEmail: string | null;
+  createdByName: string | null;
+}
+
+export interface LineReviewChatContextDto {
+  reviewId: string;
+  threadId: string;
+  conversationId: string | null;
+  lineMessages: LineReviewContextMessageDto[];
+  websiteMessages: LineReviewContextMessageDto[];
+  combinedTimeline: LineReviewContextMessageDto[];
 }
 
 export interface LineSchedulerAnalytics {
@@ -118,6 +179,7 @@ type ContactRow = typeof schema.lineContacts.$inferSelect;
 type ThreadRow = typeof schema.lineThreads.$inferSelect;
 type MessageRow = typeof schema.lineMessages.$inferSelect;
 type ReviewRow = typeof schema.lineSchedulerReviews.$inferSelect;
+type WiseActionLogRow = typeof schema.lineWiseActionLogs.$inferSelect;
 
 function now(): Date {
   return new Date();
@@ -174,6 +236,8 @@ function reviewToDto(row: ReviewRow & {
     classifierSummary: row.classifierSummary,
     classifierRationale: extractRationale(row.classifierPayload),
     status: row.status,
+    intentType: (row.intentType || "new_request") as LineOperationalIntentType,
+    intentPayload: row.intentPayload ?? {},
     proposedDraft: row.proposedDraft,
     selectedSuggestion: row.selectedSuggestion ?? null,
     finalText: row.finalText,
@@ -183,6 +247,11 @@ function reviewToDto(row: ReviewRow & {
     selectedTutorIds: row.selectedTutorIds ?? [],
     studentLinkOverride: row.studentLinkOverride,
     verifiedStudentKeys: row.verifiedStudentKeys ?? [],
+    matchedStudentKeys: row.matchedStudentKeys ?? [],
+    candidateSessions: row.candidateSessions ?? [],
+    proposedWiseActions: row.proposedWiseActions ?? [],
+    adminSelectedSessionIds: row.adminSelectedSessionIds ?? [],
+    writebackStatus: (row.writebackStatus || "not_applicable") as LineWritebackStatus,
     sendLineMessageId: row.sendLineMessageId,
     sendResponse: row.sendResponse ?? null,
     sendError: row.sendError,
@@ -192,6 +261,34 @@ function reviewToDto(row: ReviewRow & {
     createdAt: iso(row.createdAt)!,
     updatedAt: iso(row.updatedAt)!,
   };
+}
+
+function wiseActionLogToDto(row: WiseActionLogRow): LineWiseActionLogDto {
+  return {
+    id: row.id,
+    lineReviewId: row.lineReviewId,
+    actionType: row.actionType,
+    status: row.status,
+    dryRun: row.dryRun,
+    wiseSessionIds: row.wiseSessionIds ?? [],
+    requestPayload: row.requestPayload ?? {},
+    responsePayload: row.responsePayload ?? null,
+    errorMessage: row.errorMessage,
+    createdByEmail: row.createdByEmail,
+    createdByName: row.createdByName,
+    createdAt: iso(row.createdAt)!,
+  };
+}
+
+function lineMessageRoleLabel(direction: "inbound" | "outbound"): string {
+  return direction === "inbound" ? "LINE parent" : "LINE staff";
+}
+
+function schedulerMessageRoleLabel(role: "admin" | "parent" | "assistant" | "system"): string {
+  if (role === "admin") return "Website admin";
+  if (role === "assistant") return "Website AI";
+  if (role === "parent") return "Website parent";
+  return "Website system";
 }
 
 export async function upsertLineContact(
@@ -245,6 +342,24 @@ export async function updateLineContactProfile(
       updatedAt: now(),
     })
     .where(eq(schema.lineContacts.lineUserId, lineUserId));
+}
+
+export async function updateLineContactLabels(
+  db: Database,
+  contactId: string,
+  input: {
+    linkedParentLabel?: string | null;
+    linkedStudentLabel?: string | null;
+  },
+): Promise<void> {
+  await db
+    .update(schema.lineContacts)
+    .set({
+      linkedParentLabel: input.linkedParentLabel ?? null,
+      linkedStudentLabel: input.linkedStudentLabel ?? null,
+      updatedAt: now(),
+    })
+    .where(eq(schema.lineContacts.id, contactId));
 }
 
 export async function getOrCreateLineThread(
@@ -583,6 +698,13 @@ export async function createLineSchedulerReview(
     proposedDraft: string;
     selectedSuggestion?: Record<string, unknown> | null;
     selectedTutorIds?: string[];
+    intentType?: LineOperationalIntentType;
+    intentPayload?: Record<string, unknown>;
+    matchedStudentKeys?: string[];
+    candidateSessions?: Record<string, unknown>[];
+    proposedWiseActions?: Record<string, unknown>[];
+    adminSelectedSessionIds?: string[];
+    writebackStatus?: LineWritebackStatus;
   },
 ): Promise<LineSchedulerReviewDto | null> {
   await db
@@ -598,9 +720,16 @@ export async function createLineSchedulerReview(
       classifierConfidence: input.classification.confidence,
       classifierSummary: input.classification.summary,
       classifierPayload: { ...input.classification },
+      intentType: input.intentType ?? "new_request",
+      intentPayload: input.intentPayload ?? {},
       proposedDraft: input.proposedDraft,
       selectedSuggestion: input.selectedSuggestion ?? null,
       selectedTutorIds: input.selectedTutorIds ?? [],
+      matchedStudentKeys: input.matchedStudentKeys,
+      candidateSessions: input.candidateSessions,
+      proposedWiseActions: input.proposedWiseActions,
+      adminSelectedSessionIds: input.adminSelectedSessionIds,
+      writebackStatus: input.writebackStatus,
     })
     .onConflictDoNothing({ target: schema.lineSchedulerReviews.inboundMessageId });
 
@@ -627,6 +756,7 @@ export async function listLineSchedulerReviews(
   db: Database,
   filters: {
     status?: LineSchedulerReviewStatus;
+    intentType?: LineOperationalIntentType;
     conversationId?: string;
     inboundMessageId?: string;
     reviewId?: string;
@@ -634,6 +764,7 @@ export async function listLineSchedulerReviews(
 ): Promise<LineSchedulerReviewDto[]> {
   const conditions = [
     filters.status ? eq(schema.lineSchedulerReviews.status, filters.status) : undefined,
+    filters.intentType ? eq(schema.lineSchedulerReviews.intentType, filters.intentType) : undefined,
     filters.conversationId ? eq(schema.lineSchedulerReviews.conversationId, filters.conversationId) : undefined,
     filters.inboundMessageId ? eq(schema.lineSchedulerReviews.inboundMessageId, filters.inboundMessageId) : undefined,
     filters.reviewId ? eq(schema.lineSchedulerReviews.id, filters.reviewId) : undefined,
@@ -653,6 +784,8 @@ export async function listLineSchedulerReviews(
       classifierSummary: schema.lineSchedulerReviews.classifierSummary,
       classifierPayload: schema.lineSchedulerReviews.classifierPayload,
       status: schema.lineSchedulerReviews.status,
+      intentType: schema.lineSchedulerReviews.intentType,
+      intentPayload: schema.lineSchedulerReviews.intentPayload,
       proposedDraft: schema.lineSchedulerReviews.proposedDraft,
       selectedSuggestion: schema.lineSchedulerReviews.selectedSuggestion,
       finalText: schema.lineSchedulerReviews.finalText,
@@ -662,6 +795,11 @@ export async function listLineSchedulerReviews(
       selectedTutorIds: schema.lineSchedulerReviews.selectedTutorIds,
       studentLinkOverride: schema.lineSchedulerReviews.studentLinkOverride,
       verifiedStudentKeys: schema.lineSchedulerReviews.verifiedStudentKeys,
+      matchedStudentKeys: schema.lineSchedulerReviews.matchedStudentKeys,
+      candidateSessions: schema.lineSchedulerReviews.candidateSessions,
+      proposedWiseActions: schema.lineSchedulerReviews.proposedWiseActions,
+      adminSelectedSessionIds: schema.lineSchedulerReviews.adminSelectedSessionIds,
+      writebackStatus: schema.lineSchedulerReviews.writebackStatus,
       sendLineMessageId: schema.lineSchedulerReviews.sendLineMessageId,
       sendResponse: schema.lineSchedulerReviews.sendResponse,
       sendError: schema.lineSchedulerReviews.sendError,
@@ -694,6 +832,11 @@ export async function patchLineSchedulerReview(
     selectedTutorIds?: string[];
     studentLinkOverride?: boolean;
     verifiedStudentKeys?: string[];
+    matchedStudentKeys?: string[];
+    candidateSessions?: Record<string, unknown>[];
+    proposedWiseActions?: Record<string, unknown>[];
+    adminSelectedSessionIds?: string[];
+    writebackStatus?: LineWritebackStatus;
     sendLineMessageId?: string | null;
     sendResponse?: Record<string, unknown> | null;
     sendError?: string | null;
@@ -712,6 +855,11 @@ export async function patchLineSchedulerReview(
       selectedTutorIds: input.selectedTutorIds ?? [],
       studentLinkOverride: input.studentLinkOverride ?? false,
       verifiedStudentKeys: input.verifiedStudentKeys ?? [],
+      matchedStudentKeys: input.matchedStudentKeys,
+      candidateSessions: input.candidateSessions,
+      proposedWiseActions: input.proposedWiseActions,
+      adminSelectedSessionIds: input.adminSelectedSessionIds,
+      writebackStatus: input.writebackStatus,
       sendLineMessageId: input.sendLineMessageId ?? null,
       sendResponse: input.sendResponse ?? null,
       sendError: input.sendError ?? null,
@@ -722,6 +870,56 @@ export async function patchLineSchedulerReview(
     })
     .where(eq(schema.lineSchedulerReviews.id, reviewId));
 
+  return getLineSchedulerReview(db, reviewId);
+}
+
+export async function patchLineSchedulerOperationalState(
+  db: Database,
+  reviewId: string,
+  input: {
+    adminSelectedSessionIds?: string[];
+    writebackStatus?: LineWritebackStatus;
+  },
+): Promise<LineSchedulerReviewDto | null> {
+  await db
+    .update(schema.lineSchedulerReviews)
+    .set({
+      adminSelectedSessionIds: input.adminSelectedSessionIds,
+      writebackStatus: input.writebackStatus,
+      updatedAt: now(),
+    })
+    .where(eq(schema.lineSchedulerReviews.id, reviewId));
+  return getLineSchedulerReview(db, reviewId);
+}
+
+export async function patchLineSchedulerOperationalPlan(
+  db: Database,
+  reviewId: string,
+  input: {
+    intentType: LineOperationalIntentType;
+    intentPayload: Record<string, unknown>;
+    proposedDraft: string;
+    matchedStudentKeys: string[];
+    candidateSessions: Record<string, unknown>[];
+    proposedWiseActions: Record<string, unknown>[];
+    adminSelectedSessionIds: string[];
+    writebackStatus: LineWritebackStatus;
+  },
+): Promise<LineSchedulerReviewDto | null> {
+  await db
+    .update(schema.lineSchedulerReviews)
+    .set({
+      intentType: input.intentType,
+      intentPayload: input.intentPayload,
+      proposedDraft: input.proposedDraft,
+      matchedStudentKeys: input.matchedStudentKeys,
+      candidateSessions: input.candidateSessions,
+      proposedWiseActions: input.proposedWiseActions,
+      adminSelectedSessionIds: input.adminSelectedSessionIds,
+      writebackStatus: input.writebackStatus,
+      updatedAt: now(),
+    })
+    .where(eq(schema.lineSchedulerReviews.id, reviewId));
   return getLineSchedulerReview(db, reviewId);
 }
 
@@ -749,6 +947,144 @@ export async function insertOutboundLineMessage(
     })
     .returning();
   return row;
+}
+
+export async function createLineWiseActionLog(
+  db: Database,
+  input: {
+    lineReviewId?: string | null;
+    actionType: string;
+    status?: string;
+    dryRun?: boolean;
+    wiseSessionIds?: string[];
+    requestPayload?: Record<string, unknown>;
+    responsePayload?: Record<string, unknown> | null;
+    errorMessage?: string | null;
+    actor?: LineReviewActor;
+  },
+): Promise<LineWiseActionLogDto> {
+  const actor = normalizeActor(input.actor ?? {});
+  const [row] = await db
+    .insert(schema.lineWiseActionLogs)
+    .values({
+      lineReviewId: input.lineReviewId ?? null,
+      actionType: input.actionType,
+      status: input.status ?? "dry_run",
+      dryRun: input.dryRun ?? true,
+      wiseSessionIds: input.wiseSessionIds ?? [],
+      requestPayload: input.requestPayload ?? {},
+      responsePayload: input.responsePayload ?? null,
+      errorMessage: input.errorMessage ?? null,
+      createdByEmail: actor.email,
+      createdByName: actor.name,
+    })
+    .returning();
+  return wiseActionLogToDto(row);
+}
+
+export async function listLineWiseActionLogs(
+  db: Database,
+  lineReviewId: string,
+): Promise<LineWiseActionLogDto[]> {
+  const rows = await db
+    .select()
+    .from(schema.lineWiseActionLogs)
+    .where(eq(schema.lineWiseActionLogs.lineReviewId, lineReviewId))
+    .orderBy(desc(schema.lineWiseActionLogs.createdAt));
+  return rows.map(wiseActionLogToDto);
+}
+
+export async function getLineReviewChatContext(
+  db: Database,
+  reviewId: string,
+  options: { lineLimit?: number } = {},
+): Promise<LineReviewChatContextDto | null> {
+  const lineLimit = options.lineLimit ?? 30;
+  const [review] = await db
+    .select({
+      id: schema.lineSchedulerReviews.id,
+      threadId: schema.lineSchedulerReviews.threadId,
+      conversationId: schema.lineSchedulerReviews.conversationId,
+    })
+    .from(schema.lineSchedulerReviews)
+    .where(eq(schema.lineSchedulerReviews.id, reviewId))
+    .limit(1);
+  if (!review) return null;
+
+  const recentLineRows = await db
+    .select({
+      id: schema.lineMessages.id,
+      direction: schema.lineMessages.direction,
+      messageType: schema.lineMessages.messageType,
+      text: schema.lineMessages.text,
+      isRetracted: schema.lineMessages.isRetracted,
+      eventTimestamp: schema.lineMessages.eventTimestamp,
+      createdAt: schema.lineMessages.createdAt,
+    })
+    .from(schema.lineMessages)
+    .where(eq(schema.lineMessages.threadId, review.threadId))
+    .orderBy(desc(schema.lineMessages.createdAt))
+    .limit(lineLimit);
+
+  const lineMessages: LineReviewContextMessageDto[] = recentLineRows
+    .reverse()
+    .map((row) => {
+      const timestamp = iso(row.eventTimestamp) ?? iso(row.createdAt)!;
+      return {
+        id: row.id,
+        source: "line" as const,
+        roleLabel: lineMessageRoleLabel(row.direction),
+        text: row.text ?? "",
+        timestamp,
+        direction: row.direction,
+        role: null,
+        messageType: row.messageType,
+        isRetracted: row.isRetracted,
+        createdByEmail: null,
+        createdByName: null,
+      };
+    });
+
+  const websiteRows = review.conversationId
+    ? await db
+      .select({
+        id: schema.aiSchedulerMessages.id,
+        role: schema.aiSchedulerMessages.role,
+        content: schema.aiSchedulerMessages.content,
+        createdByEmail: schema.aiSchedulerMessages.createdByEmail,
+        createdByName: schema.aiSchedulerMessages.createdByName,
+        createdAt: schema.aiSchedulerMessages.createdAt,
+      })
+      .from(schema.aiSchedulerMessages)
+      .where(eq(schema.aiSchedulerMessages.conversationId, review.conversationId))
+      .orderBy(schema.aiSchedulerMessages.createdAt)
+    : [];
+
+  const websiteMessages: LineReviewContextMessageDto[] = websiteRows.map((row) => ({
+    id: row.id,
+    source: "website" as const,
+    roleLabel: schedulerMessageRoleLabel(row.role),
+    text: row.content,
+    timestamp: iso(row.createdAt)!,
+    direction: null,
+    role: row.role,
+    messageType: null,
+    isRetracted: false,
+    createdByEmail: row.createdByEmail,
+    createdByName: row.createdByName,
+  }));
+
+  const combinedTimeline = [...lineMessages, ...websiteMessages]
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.id.localeCompare(b.id));
+
+  return {
+    reviewId: review.id,
+    threadId: review.threadId,
+    conversationId: review.conversationId,
+    lineMessages,
+    websiteMessages,
+    combinedTimeline,
+  };
 }
 
 function levenshtein(a: string, b: string): number {

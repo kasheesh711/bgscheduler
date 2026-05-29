@@ -35,6 +35,10 @@ import {
   ensureLineContactStudentLinkSuggestions,
   listVerifiedLineStudentKeys,
 } from "@/lib/line/student-links";
+import {
+  buildLineOperationalReviewPlan,
+  type LineOperationalReviewPlan,
+} from "@/lib/line/operational";
 import { v5 as uuidv5 } from "uuid";
 
 const LINE_ACTOR = {
@@ -89,6 +93,36 @@ function reviewAgeMs(review: LineSchedulerReviewDto): number {
   return Date.now() - new Date(review.createdAt).getTime();
 }
 
+async function ensureLineSchedulerConversation(input: {
+  db: Database;
+  lineMessage: {
+    threadId: string;
+    lineUserId: string;
+    contactDisplayName: string | null;
+    aiSchedulerConversationId: string | null;
+  };
+}): Promise<string> {
+  if (input.lineMessage.aiSchedulerConversationId) return input.lineMessage.aiSchedulerConversationId;
+  const label = input.lineMessage.contactDisplayName || "LINE parent";
+  const conversation = await createSchedulerConversation(input.db, LINE_ACTOR, {
+    title: `LINE: ${label}`,
+    customerParentName: input.lineMessage.contactDisplayName ?? undefined,
+    customerContact: input.lineMessage.lineUserId,
+    notes: `Imported from LINE user ${input.lineMessage.lineUserId}`,
+  });
+  await linkLineThreadConversation(input.db, input.lineMessage.threadId, conversation.id);
+  return conversation.id;
+}
+
+function operationalAssistantMessage(plan: LineOperationalReviewPlan): string {
+  const issues = plan.intentPayload.issues ?? [];
+  const issueText = issues.length > 0 ? ` Needs admin clarification: ${issues[0]}` : "";
+  const actionText = plan.proposedWiseActions.length > 0
+    ? ` Proposed ${plan.proposedWiseActions.length} Wise action dry run${plan.proposedWiseActions.length === 1 ? "" : "s"}.`
+    : " No actionable Wise operation yet.";
+  return `I classified this LINE message as ${plan.intentType.replace(/_/g, " ")}.${actionText}${issueText}`;
+}
+
 export async function processLineMessageForScheduler(
   db: Database,
   lineMessageId: string,
@@ -113,6 +147,83 @@ export async function processLineMessageForScheduler(
 
   if (classification.category !== "scheduling_request" && classification.category !== "scheduling_change") {
     return { review: null, category: classification.category };
+  }
+
+  const operationalPlan = await buildLineOperationalReviewPlan({
+    db,
+    contactId: lineMessage.contactId,
+    messageText: lineMessage.text,
+    classifierCategory: classification.category,
+  });
+  if (operationalPlan.intentType !== "new_request") {
+    const startedAt = Date.now();
+    const conversationId = await ensureLineSchedulerConversation({ db, lineMessage });
+    await createSchedulerMessage(db, {
+      conversationId,
+      role: "parent",
+      content: lineMessage.text,
+      actor: { email: null, name: lineMessage.contactDisplayName || "LINE parent" },
+    });
+    const assistantPayload = asRecord({
+      line: {
+        sourceMessageId: lineMessage.id,
+        classifierCategory: classification.category,
+      },
+      operational: operationalPlan,
+    });
+    const assistantMessage = await createSchedulerMessage(db, {
+      conversationId,
+      role: "assistant",
+      content: operationalAssistantMessage(operationalPlan),
+      structuredPayload: assistantPayload,
+      model: "deterministic-line-ops",
+      latencyMs: Date.now() - startedAt,
+      actor: { email: null, name: "AI Scheduler" },
+    });
+    await touchSchedulerConversationAfterMessage(db, conversationId, {
+      title: `LINE: ${lineMessage.contactDisplayName || operationalPlan.intentType.replace(/_/g, " ")}`,
+      customerParentName: lineMessage.contactDisplayName ?? undefined,
+      customerContact: lineMessage.lineUserId,
+    });
+    const hasIssues = operationalPlan.intentPayload.issues.length > 0 || operationalPlan.proposedWiseActions.length === 0;
+    const logId = await logSchedulerRun(db, {
+      conversationId,
+      messageId: assistantMessage.id,
+      createdByEmail: LINE_ACTOR.email,
+      status: hasIssues ? "needs_clarification" : "solved",
+      inputPreviewRedacted: redactAiSchedulerInput(lineMessage.text),
+      model: "deterministic-line-ops",
+      latencyMs: Date.now() - startedAt,
+      ...schedulerRunMetadata({
+        totalMs: Date.now() - startedAt,
+        dbMs: Date.now() - startedAt,
+        modelMs: 0,
+        searchMs: 0,
+      }),
+      parsedPayload: assistantPayload,
+      solverPayload: assistantPayload,
+      warnings: operationalPlan.intentPayload.issues,
+    });
+    const review = await createLineSchedulerReview(db, {
+      threadId: lineMessage.threadId,
+      contactId: lineMessage.contactId,
+      inboundMessageId: lineMessage.id,
+      conversationId,
+      schedulerMessageId: assistantMessage.id,
+      schedulerRunId: logId === "unlogged" ? null : logId,
+      classification,
+      proposedDraft: operationalPlan.proposedDraft,
+      selectedSuggestion: null,
+      selectedTutorIds: [],
+      intentType: operationalPlan.intentType,
+      intentPayload: operationalPlan.intentPayload as unknown as Record<string, unknown>,
+      matchedStudentKeys: operationalPlan.matchedStudentKeys,
+      candidateSessions: operationalPlan.candidateSessions as unknown as Record<string, unknown>[],
+      proposedWiseActions: operationalPlan.proposedWiseActions as unknown as Record<string, unknown>[],
+      adminSelectedSessionIds: operationalPlan.adminSelectedSessionIds,
+      writebackStatus: operationalPlan.writebackStatus,
+    });
+    return { review, category: classification.category };
   }
 
   if (!isAiSchedulerConfigured()) {

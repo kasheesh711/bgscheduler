@@ -1,0 +1,346 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import {
+  CheckCircle2,
+  Clipboard,
+  ExternalLink,
+  Loader2,
+  Play,
+  RefreshCw,
+  Search,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import type { LineOaResolverRun, LineOaResolverRow, LineOaResolverRowStatus } from "./types";
+import { formatDateTime, jsonFetch } from "./utils";
+
+const STORAGE_KEY = "line-oa-resolver-run-id";
+
+function statusLabel(status: LineOaResolverRowStatus): string {
+  if (status === "no_match") return "No match";
+  if (status === "needs_manual_code") return "Needs code";
+  return status[0].toUpperCase() + status.slice(1);
+}
+
+function statusVariant(status: LineOaResolverRowStatus): "default" | "outline" | "destructive" | "secondary" {
+  if (status === "matched" || status === "committed") return "default";
+  if (status === "error" || status === "needs_manual_code") return "destructive";
+  if (status === "ambiguous" || status === "no_match") return "secondary";
+  return "outline";
+}
+
+function CountChip({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border border-border bg-background px-2.5 py-1.5">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div className="text-sm font-semibold leading-none text-foreground">{value}</div>
+    </div>
+  );
+}
+
+function rowGroupKey(row: LineOaResolverRow): string {
+  return row.lineUserId ?? `unresolved:${row.status}`;
+}
+
+export function OaResolverDialog({
+  open,
+  onOpenChange,
+  onCommitted,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCommitted: () => void;
+}) {
+  const [run, setRun] = useState<LineOaResolverRun | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"create" | "refresh" | "commit" | null>(null);
+
+  const matchedRows = useMemo(() => run?.rows.filter((row) => row.status === "matched") ?? [], [run]);
+  const groupedRows = useMemo(() => {
+    const groups = new Map<string, LineOaResolverRow[]>();
+    for (const row of run?.rows ?? []) {
+      const key = rowGroupKey(row);
+      groups.set(key, [...(groups.get(key) ?? []), row]);
+    }
+    return [...groups.entries()];
+  }, [run]);
+
+  async function loadRun(runId: string, mode: "refresh" | "silent" = "refresh") {
+    if (mode === "refresh") setBusy("refresh");
+    setMessage(null);
+    try {
+      const payload = await jsonFetch<{ run: LineOaResolverRun }>(
+        `/api/line/contacts/oa-resolver/runs/${runId}`,
+      );
+      setRun(payload.run);
+      window.localStorage.setItem(STORAGE_KEY, payload.run.id);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to load resolver run");
+    } finally {
+      if (mode === "refresh") setBusy(null);
+    }
+  }
+
+  async function loadLatestRun() {
+    setBusy("refresh");
+    setMessage(null);
+    try {
+      const payload = await jsonFetch<{ run: LineOaResolverRun | null }>(
+        "/api/line/contacts/oa-resolver/runs?latest=true",
+      );
+      setRun(payload.run);
+      if (payload.run) window.localStorage.setItem(STORAGE_KEY, payload.run.id);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to load resolver run");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function createRun() {
+    setBusy("create");
+    setMessage(null);
+    try {
+      const payload = await jsonFetch<{ run: LineOaResolverRun; token: string }>(
+        "/api/line/contacts/oa-resolver/runs",
+        { method: "POST" },
+      );
+      setRun(payload.run);
+      setToken(payload.token);
+      window.localStorage.setItem(STORAGE_KEY, payload.run.id);
+      setMessage("Resolver run created. Paste the token into the LINE OA Chrome extension.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to create resolver run");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function copyToken() {
+    if (!token) return;
+    await navigator.clipboard.writeText(token);
+    setMessage("Extension token copied.");
+  }
+
+  async function commitRun() {
+    if (!run) return;
+    setBusy("commit");
+    setMessage(null);
+    try {
+      const payload = await jsonFetch<{
+        result: { committed: number; skipped: number; run: LineOaResolverRun };
+      }>(`/api/line/contacts/oa-resolver/runs/${run.id}/commit`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      setRun(payload.result.run);
+      setMessage(`Committed ${payload.result.committed} suggested link(s); skipped ${payload.result.skipped}.`);
+      onCommitted();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Commit failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    const storedRunId = window.localStorage.getItem(STORAGE_KEY);
+    if (storedRunId && !run) {
+      void loadRun(storedRunId, "silent");
+    } else if (!run) {
+      void loadLatestRun();
+    }
+  }, [open, run]);
+
+  useEffect(() => {
+    if (!open || !run || run.status !== "active") return;
+    const interval = window.setInterval(() => {
+      void loadRun(run.id, "silent");
+    }, 4000);
+    return () => window.clearInterval(interval);
+  }, [open, run]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[88vh] max-w-6xl overflow-hidden p-0">
+        <DialogHeader className="border-b border-border p-4">
+          <DialogTitle className="flex items-center gap-2">
+            <Search className="size-5 text-primary" />
+            Bulk LINE OA resolver
+          </DialogTitle>
+          <DialogDescription>
+            Generate a Wise student-code worklist, let the Chrome extension search LINE OA, then commit suggested links.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid min-h-0 grid-cols-1 gap-0 overflow-hidden lg:grid-cols-[360px_minmax(0,1fr)]">
+          <aside className="space-y-3 border-b border-border p-4 lg:border-b-0 lg:border-r">
+            <div className="rounded-lg border border-border bg-card p-3">
+              <div className="text-sm font-semibold text-foreground">1. Start or resume a run</div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                New runs use the current Wise credit-control snapshot and include inactive current-snapshot students.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button type="button" size="sm" onClick={createRun} disabled={Boolean(busy)}>
+                  {busy === "create" ? <Loader2 className="animate-spin" /> : <Play />}
+                  New run
+                </Button>
+                <Button type="button" size="sm" variant="outline" onClick={loadLatestRun} disabled={Boolean(busy)}>
+                  {busy === "refresh" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                  Latest
+                </Button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-border bg-card p-3">
+              <div className="text-sm font-semibold text-foreground">2. Run the Chrome extension</div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Load the unpacked extension from <span className="font-mono">extensions/line-oa-resolver</span>, open LINE OA Manager, then paste this token.
+              </p>
+              <div className="mt-3 rounded-md border border-dashed border-border bg-background p-2 font-mono text-xs">
+                {token ?? "Create a new run to reveal a token. Existing tokens are not shown again."}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={copyToken} disabled={!token}>
+                  <Clipboard />
+                  Copy token
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => window.open("https://chat.line.biz/", "_blank", "noopener,noreferrer")}
+                >
+                  <ExternalLink />
+                  Open LINE OA
+                </Button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-border bg-card p-3">
+              <div className="text-sm font-semibold text-foreground">3. Commit suggested links</div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Commit only writes suggested links. Admin verification still happens inside Scheduler.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                className="mt-3"
+                onClick={commitRun}
+                disabled={!run || matchedRows.length === 0 || Boolean(busy)}
+              >
+                {busy === "commit" ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
+                Commit {matchedRows.length} matched row(s)
+              </Button>
+            </div>
+
+            {message ? (
+              <div className="rounded-lg border border-border bg-background p-3 text-sm text-muted-foreground">
+                {message}
+              </div>
+            ) : null}
+          </aside>
+
+          <section className="min-h-0 overflow-hidden p-4">
+            {!run ? (
+              <div className="flex h-[520px] items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
+                Create or load a resolver run to see the preview table.
+              </div>
+            ) : (
+              <div className="flex h-[520px] min-h-0 flex-col">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={run.status === "active" ? "default" : "outline"}>
+                        {run.status}
+                      </Badge>
+                      <span className="text-sm font-medium text-foreground">
+                        Run {run.id.slice(0, 8)}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Expires {formatDateTime(run.expiresAt)} / created {formatDateTime(run.createdAt)}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => loadRun(run.id)}
+                    disabled={Boolean(busy)}
+                  >
+                    <RefreshCw />
+                    Refresh preview
+                  </Button>
+                </div>
+
+                <div className="mb-3 grid grid-cols-3 gap-2 md:grid-cols-7">
+                  <CountChip label="Total" value={run.totalRows} />
+                  <CountChip label="Pending" value={run.pendingRows} />
+                  <CountChip label="Matched" value={run.matchedRows} />
+                  <CountChip label="Ambig." value={run.ambiguousRows} />
+                  <CountChip label="No match" value={run.noMatchRows} />
+                  <CountChip label="Needs code" value={run.needsManualCodeRows} />
+                  <CountChip label="Committed" value={run.committedRows} />
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border">
+                  {groupedRows.map(([groupKey, rows]) => (
+                    <div key={groupKey} className="border-b border-border last:border-b-0">
+                      <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-muted/80 px-3 py-2 backdrop-blur">
+                        <div className="min-w-0">
+                          <div className="truncate text-xs font-semibold text-foreground">
+                            {groupKey.startsWith("unresolved:") ? "Unresolved" : groupKey}
+                          </div>
+                          <div className="truncate text-[11px] text-muted-foreground">
+                            {rows[0]?.chatTitle || rows[0]?.lineChatUrl || `${rows.length} row(s)`}
+                          </div>
+                        </div>
+                        <Badge variant="outline">{rows.length}</Badge>
+                      </div>
+                      {rows.map((row) => (
+                        <div key={row.id} className="grid gap-2 border-b border-border px-3 py-2 last:border-b-0 md:grid-cols-[minmax(0,1fr)_120px_170px]">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-foreground">
+                              {row.studentName}
+                            </div>
+                            <div className="truncate text-xs text-muted-foreground">
+                              {row.searchCode || "No dotted code"} / {row.parentName || "No parent"}
+                            </div>
+                            {row.errorMessage ? (
+                              <div className="mt-1 text-xs text-destructive">{row.errorMessage}</div>
+                            ) : null}
+                          </div>
+                          <div>
+                            <Badge variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
+                          </div>
+                          <div className="min-w-0 text-xs text-muted-foreground">
+                            <div className="truncate">{row.captureMode || row.matchMode || "n/a"}</div>
+                            <div className="truncate">{row.lineOaAccountId || ""}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

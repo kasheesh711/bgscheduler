@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, gte, isNull } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
@@ -30,6 +30,9 @@ export interface LineContactStudentLinkDto {
   reviewedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  currentStudentActivated: boolean | null;
+  currentStudentHasFutureSessions: boolean | null;
+  currentStudentHasLivePackage: boolean | null;
 }
 
 export interface LineStudentDirectoryRow {
@@ -37,6 +40,21 @@ export interface LineStudentDirectoryRow {
   studentKey: string;
   studentName: string;
   parentName: string;
+  activated: boolean;
+  hasFutureSessions: boolean;
+  hasLivePackage: boolean;
+}
+
+export type LineStudentMatchType = "student_name" | "student_key" | "nickname_code";
+export type LineStudentSearchMatchType =
+  | "exact_code"
+  | "nickname_code"
+  | "student_key"
+  | "student_name"
+  | "parent_name";
+
+export interface LineStudentSearchRow extends LineStudentDirectoryRow {
+  matchType: LineStudentSearchMatchType;
 }
 
 type LinkRow = typeof schema.lineContactStudentLinks.$inferSelect;
@@ -66,8 +84,10 @@ export function normalizeLineStudentCode(value: string): string {
 }
 
 function cleanLineLabel(value: string): string {
-  return value
+  const labelOnly = value.split(/\s*=\s*/u)[0] ?? value;
+  return labelOnly
     .normalize("NFKC")
+    .replace(/[\uFE0E\uFE0F]/g, "")
     .replace(/[✅☑✔✓]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -98,7 +118,7 @@ export function parseLineStudentCodes(label: string | null | undefined): ParsedL
   if (!cleaned) return [];
 
   const parts = cleaned
-    .split(/\s*\/\s*|\s*,\s*|\s*&\s*|\s+\+\s+/)
+    .split(/\s*\/\s*|\s*,\s*|\s*&\s*|\s+\+\s+|\s+and\s+/i)
     .map((part) => part.trim())
     .filter(Boolean);
   const suffix = parts
@@ -118,7 +138,7 @@ export function parseLineStudentCodes(label: string | null | undefined): ParsedL
   return result;
 }
 
-function linkToDto(row: LinkRow): LineContactStudentLinkDto {
+function linkToDto(row: LinkRow, currentStudent?: LineStudentDirectoryRow | null): LineContactStudentLinkDto {
   return {
     id: row.id,
     contactId: row.contactId,
@@ -134,41 +154,245 @@ function linkToDto(row: LinkRow): LineContactStudentLinkDto {
     reviewedAt: iso(row.reviewedAt),
     createdAt: iso(row.createdAt)!,
     updatedAt: iso(row.updatedAt)!,
+    currentStudentActivated: currentStudent?.activated ?? null,
+    currentStudentHasFutureSessions: currentStudent?.hasFutureSessions ?? null,
+    currentStudentHasLivePackage: currentStudent?.hasLivePackage ?? null,
   };
 }
 
-async function activeStudentRows(db: Database): Promise<LineStudentDirectoryRow[]> {
-  const rows = await db
+async function activeCreditControlSnapshotId(db: Database): Promise<string | null> {
+  const [snapshot] = await db
+    .select({ id: schema.creditControlSnapshots.id })
+    .from(schema.creditControlSnapshots)
+    .where(eq(schema.creditControlSnapshots.active, true))
+    .limit(1);
+  return snapshot?.id ?? null;
+}
+
+export async function listCurrentLineStudents(db: Database): Promise<LineStudentDirectoryRow[]> {
+  const snapshotId = await activeCreditControlSnapshotId(db);
+  if (!snapshotId) return [];
+
+  const [studentRows, livePackageRows, futureSessionRows] = await Promise.all([
+    db
+      .select({
+        wiseStudentId: schema.creditControlStudents.wiseStudentId,
+        studentKey: schema.creditControlStudents.studentKey,
+        studentName: schema.creditControlStudents.studentName,
+        parentName: schema.creditControlStudents.parentName,
+        activated: schema.creditControlStudents.activated,
+      })
+      .from(schema.creditControlStudents)
+      .where(eq(schema.creditControlStudents.snapshotId, snapshotId)),
+    db
+      .select({ studentKey: schema.creditControlPackages.studentKey })
+      .from(schema.creditControlPackages)
+      .where(and(
+        eq(schema.creditControlPackages.snapshotId, snapshotId),
+        isNull(schema.creditControlPackages.excludedReason),
+      )),
+    db
+      .select({ studentKey: schema.creditControlSessions.studentKey })
+      .from(schema.creditControlSessions)
+      .where(and(
+        eq(schema.creditControlSessions.snapshotId, snapshotId),
+        eq(schema.creditControlSessions.sessionKind, "future"),
+        gte(schema.creditControlSessions.scheduledStartTime, now()),
+      )),
+  ]);
+
+  const livePackageKeys = new Set(livePackageRows.map((row) => row.studentKey));
+  const futureSessionKeys = new Set(futureSessionRows.map((row) => row.studentKey));
+
+  return studentRows.map((student) => ({
+    ...student,
+    hasFutureSessions: futureSessionKeys.has(student.studentKey),
+    hasLivePackage: livePackageKeys.has(student.studentKey),
+  }));
+}
+
+async function currentStudentMap(db: Database): Promise<Map<string, LineStudentDirectoryRow>> {
+  return new Map((await listCurrentLineStudents(db)).map((student) => [student.studentKey, student]));
+}
+
+async function findCurrentStudentByKey(
+  db: Database,
+  studentKey: string,
+): Promise<LineStudentDirectoryRow | null> {
+  const snapshotId = await activeCreditControlSnapshotId(db);
+  if (!snapshotId) return null;
+
+  const [student] = await db
     .select({
       wiseStudentId: schema.creditControlStudents.wiseStudentId,
       studentKey: schema.creditControlStudents.studentKey,
       studentName: schema.creditControlStudents.studentName,
       parentName: schema.creditControlStudents.parentName,
+      activated: schema.creditControlStudents.activated,
     })
     .from(schema.creditControlStudents)
-    .innerJoin(
-      schema.creditControlSnapshots,
-      eq(schema.creditControlStudents.snapshotId, schema.creditControlSnapshots.id),
-    )
     .where(and(
-      eq(schema.creditControlSnapshots.active, true),
-      eq(schema.creditControlStudents.activated, true),
-    ));
+      eq(schema.creditControlStudents.snapshotId, snapshotId),
+      eq(schema.creditControlStudents.studentKey, studentKey),
+    ))
+    .limit(1);
+  if (!student) return null;
 
-  return rows;
+  const [livePackage] = await db
+    .select({ studentKey: schema.creditControlPackages.studentKey })
+    .from(schema.creditControlPackages)
+    .where(and(
+      eq(schema.creditControlPackages.snapshotId, snapshotId),
+      eq(schema.creditControlPackages.studentKey, student.studentKey),
+      isNull(schema.creditControlPackages.excludedReason),
+    ))
+    .limit(1);
+  const [futureSession] = await db
+    .select({ studentKey: schema.creditControlSessions.studentKey })
+    .from(schema.creditControlSessions)
+    .where(and(
+      eq(schema.creditControlSessions.snapshotId, snapshotId),
+      eq(schema.creditControlSessions.studentKey, student.studentKey),
+      eq(schema.creditControlSessions.sessionKind, "future"),
+      gte(schema.creditControlSessions.scheduledStartTime, now()),
+    ))
+    .limit(1);
+
+  return {
+    ...student,
+    hasFutureSessions: Boolean(futureSession),
+    hasLivePackage: Boolean(livePackage),
+  };
+}
+
+function nicknameCodes(value: string): string[] {
+  const matches = [...value.matchAll(/\(([^)]+)\)/g)];
+  return matches
+    .map((match) => normalizeLineStudentCode(match[1] ?? ""))
+    .filter(Boolean);
+}
+
+function matchParsedCodeForStudent(
+  student: LineStudentDirectoryRow,
+  parsedCodes: ParsedLineStudentCode[],
+  parsedByNormalized: Map<string, ParsedLineStudentCode>,
+): { parsed: ParsedLineStudentCode; matchType: LineStudentMatchType } | null {
+  for (const nickname of nicknameCodes(student.studentName)) {
+    const parsed = parsedByNormalized.get(nickname);
+    if (parsed) return { parsed, matchType: "nickname_code" };
+  }
+
+  for (const nickname of nicknameCodes(student.studentKey)) {
+    const parsed = parsedByNormalized.get(nickname);
+    if (parsed) return { parsed, matchType: "student_key" };
+  }
+
+  const nameMatch = parsedByNormalized.get(normalizeLineStudentCode(student.studentName));
+  if (nameMatch) return { parsed: nameMatch, matchType: "student_name" };
+
+  const keyMatch = parsedByNormalized.get(normalizeLineStudentCode(student.studentKey));
+  if (keyMatch) return { parsed: keyMatch, matchType: "student_key" };
+
+  const normalizedName = normalizeLineStudentCode(student.studentName);
+  const normalizedKey = normalizeLineStudentCode(student.studentKey);
+  for (const parsed of parsedCodes) {
+    if (!parsed.normalized.includes(".")) continue;
+    if (normalizedKey.includes(parsed.normalized)) {
+      return { parsed, matchType: "student_key" };
+    }
+    if (normalizedName.includes(parsed.normalized)) {
+      return { parsed, matchType: "nickname_code" };
+    }
+  }
+
+  return null;
 }
 
 export function matchLineStudentCodesToStudents(
   parsedCodes: ParsedLineStudentCode[],
   students: LineStudentDirectoryRow[],
-): Array<{ student: LineStudentDirectoryRow; parsed: ParsedLineStudentCode }> {
+): Array<{ student: LineStudentDirectoryRow; parsed: ParsedLineStudentCode; matchType: LineStudentMatchType }> {
   const parsedByNormalized = new Map(parsedCodes.map((code) => [code.normalized, code]));
   return students
     .map((student) => ({
       student,
-      parsed: parsedByNormalized.get(normalizeLineStudentCode(student.studentName)),
+      match: matchParsedCodeForStudent(student, parsedCodes, parsedByNormalized),
     }))
-    .filter((match): match is { student: LineStudentDirectoryRow; parsed: ParsedLineStudentCode } => Boolean(match.parsed));
+    .filter((match): match is {
+      student: LineStudentDirectoryRow;
+      match: { parsed: ParsedLineStudentCode; matchType: LineStudentMatchType };
+    } => Boolean(match.match))
+    .map((match) => ({
+      student: match.student,
+      parsed: match.match.parsed,
+      matchType: match.match.matchType,
+    }));
+}
+
+function helperTextParsedCodes(label: string | null): ParsedLineStudentCode[] {
+  const helperText = label?.split(/\s*=\s*/u).slice(1).join(" ") ?? "";
+  if (!helperText.trim()) return [];
+  return parseLineStudentCodes(helperText)
+    .filter((code) => code.normalized.includes("."));
+}
+
+async function linkDtosForRows(db: Database, rows: LinkRow[]): Promise<LineContactStudentLinkDto[]> {
+  if (rows.length === 0) return [];
+  const studentsByKey = await currentStudentMap(db);
+  return rows.map((row) => linkToDto(row, studentsByKey.get(row.studentKey) ?? null));
+}
+
+export function resolveLineStudentCodeMatches(
+  label: string | null,
+  students: LineStudentDirectoryRow[],
+): {
+  matches: Array<{ student: LineStudentDirectoryRow; parsed: ParsedLineStudentCode; matchType: LineStudentMatchType }>;
+  evidenceSource: "line_display_name" | "admin_helper_text";
+  parsedCodes: ParsedLineStudentCode[];
+} {
+  const parsedCodes = parseLineStudentCodes(label);
+  const matches = parsedCodes.length > 0
+    ? matchLineStudentCodesToStudents(parsedCodes, students)
+    : [];
+  if (matches.length > 0) {
+    return { matches, evidenceSource: "line_display_name", parsedCodes };
+  }
+
+  const helperCodes = helperTextParsedCodes(label);
+  if (helperCodes.length === 0) {
+    return { matches: [], evidenceSource: "line_display_name", parsedCodes };
+  }
+
+  const helperMatches = matchLineStudentCodesToStudents(helperCodes, students);
+  if (helperMatches.length === 0) {
+    return { matches: [], evidenceSource: "line_display_name", parsedCodes };
+  }
+
+  return {
+    matches: helperMatches,
+    evidenceSource: "admin_helper_text",
+    parsedCodes: helperCodes,
+  };
+}
+
+function studentLinkEvidence(input: {
+  source: "line_display_name" | "admin_helper_text" | "admin_search";
+  parsedCodes?: ParsedLineStudentCode[];
+  matchedCode?: string;
+  matchedField?: LineStudentMatchType;
+  label?: string | null;
+  student: LineStudentDirectoryRow;
+}): Record<string, unknown> {
+  return {
+    source: input.source,
+    ...(input.parsedCodes ? { parsedCodes: input.parsedCodes } : {}),
+    ...(input.matchedCode ? { matchedCode: input.matchedCode } : {}),
+    ...(input.matchedField ? { matchedField: input.matchedField } : {}),
+    ...(input.label ? { label: input.label } : {}),
+    activated: input.student.activated,
+    hasFutureSessions: input.student.hasFutureSessions,
+    hasLivePackage: input.student.hasLivePackage,
+  };
 }
 
 async function contactLabel(db: Database, contactId: string): Promise<string | null> {
@@ -189,13 +413,10 @@ export async function ensureLineContactStudentLinkSuggestions(
   labelOverride?: string | null,
 ): Promise<LineContactStudentLinkDto[]> {
   const label = labelOverride ?? await contactLabel(db, contactId);
-  const parsedCodes = parseLineStudentCodes(label);
-  if (parsedCodes.length === 0) {
-    return listLineContactStudentLinks(db, contactId);
-  }
+  const students = await listCurrentLineStudents(db);
+  const { matches, evidenceSource, parsedCodes } = resolveLineStudentCodeMatches(label, students);
 
-  const students = await activeStudentRows(db);
-  const matches = matchLineStudentCodesToStudents(parsedCodes, students);
+  if (matches.length === 0) return listLineContactStudentLinks(db, contactId);
 
   for (const match of matches) {
     await db
@@ -208,12 +429,14 @@ export async function ensureLineContactStudentLinkSuggestions(
         parentName: match.student.parentName,
         status: "suggested",
         confidence: 0.95,
-        evidence: {
-          source: "line_display_name",
+        evidence: studentLinkEvidence({
+          source: evidenceSource,
           parsedCodes,
           matchedCode: match.parsed.code,
+          matchedField: match.matchType,
           label,
-        },
+          student: match.student,
+        }),
       })
       .onConflictDoNothing({
         target: [
@@ -235,7 +458,149 @@ export async function listLineContactStudentLinks(
     .from(schema.lineContactStudentLinks)
     .where(eq(schema.lineContactStudentLinks.contactId, contactId))
     .orderBy(schema.lineContactStudentLinks.status, schema.lineContactStudentLinks.studentName);
-  return rows.map(linkToDto);
+  return linkDtosForRows(db, rows);
+}
+
+export async function listVerifiedLineContactStudentLinks(
+  db: Database,
+  contactId: string,
+): Promise<LineContactStudentLinkDto[]> {
+  const rows = await db
+    .select()
+    .from(schema.lineContactStudentLinks)
+    .where(and(
+      eq(schema.lineContactStudentLinks.contactId, contactId),
+      eq(schema.lineContactStudentLinks.status, "verified"),
+    ))
+    .orderBy(schema.lineContactStudentLinks.studentName);
+  return linkDtosForRows(db, rows);
+}
+
+function bestSearchMatch(
+  student: LineStudentDirectoryRow,
+  query: string,
+): { matchType: LineStudentSearchMatchType; rank: number } | null {
+  const normalizedQuery = normalizeLineStudentCode(query);
+  if (!normalizedQuery) return null;
+  const parsedCodes = parseLineStudentCodes(query);
+  const exactCodes = new Set([normalizedQuery, ...parsedCodes.map((code) => code.normalized)]);
+  const normalizedName = normalizeLineStudentCode(student.studentName);
+  const normalizedKey = normalizeLineStudentCode(student.studentKey);
+  const normalizedParent = normalizeLineStudentCode(student.parentName);
+  const nicknames = new Set([
+    ...nicknameCodes(student.studentName),
+    ...nicknameCodes(student.studentKey),
+  ]);
+
+  for (const code of exactCodes) {
+    if (nicknames.has(code)) return { matchType: "exact_code", rank: 50 };
+  }
+  for (const code of exactCodes) {
+    if (normalizedKey === code) return { matchType: "student_key", rank: 45 };
+    if (normalizedName === code) return { matchType: "student_name", rank: 44 };
+  }
+  for (const code of exactCodes) {
+    if (code.includes(".") && normalizedKey.includes(code)) {
+      return { matchType: "nickname_code", rank: 42 };
+    }
+    if (code.includes(".") && normalizedName.includes(code)) {
+      return { matchType: "nickname_code", rank: 41 };
+    }
+  }
+  if (normalizedKey.includes(normalizedQuery)) return { matchType: "student_key", rank: 35 };
+  if (normalizedName.includes(normalizedQuery)) return { matchType: "student_name", rank: 34 };
+  if (normalizedParent.includes(normalizedQuery)) return { matchType: "parent_name", rank: 25 };
+  return null;
+}
+
+export function searchLineStudentRows(
+  students: LineStudentDirectoryRow[],
+  query: string,
+  limit = 20,
+): LineStudentSearchRow[] {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+  return students
+    .map((student) => ({
+      student,
+      match: bestSearchMatch(student, trimmed),
+    }))
+    .filter((row): row is {
+      student: LineStudentDirectoryRow;
+      match: { matchType: LineStudentSearchMatchType; rank: number };
+    } => Boolean(row.match))
+    .sort((a, b) => (
+      b.match.rank - a.match.rank
+      || Number(b.student.activated) - Number(a.student.activated)
+      || Number(b.student.hasFutureSessions) - Number(a.student.hasFutureSessions)
+      || Number(b.student.hasLivePackage) - Number(a.student.hasLivePackage)
+      || a.student.studentName.localeCompare(b.student.studentName)
+    ))
+    .slice(0, limit)
+    .map(({ student, match }) => ({
+      ...student,
+      matchType: match.matchType,
+    }));
+}
+
+export async function searchCurrentLineStudents(
+  db: Database,
+  query: string,
+  limit = 20,
+): Promise<LineStudentSearchRow[]> {
+  return searchLineStudentRows(await listCurrentLineStudents(db), query, limit);
+}
+
+export const searchActiveLineStudents = searchCurrentLineStudents;
+
+export async function createVerifiedLineContactStudentLink(
+  db: Database,
+  input: {
+    contactId: string;
+    studentKey: string;
+    actor: LineStudentLinkActor;
+  },
+): Promise<LineContactStudentLinkDto | null> {
+  const actor = normalizeActor(input.actor);
+  const student = await findCurrentStudentByKey(db, input.studentKey);
+  if (!student) return null;
+  const evidence = studentLinkEvidence({ source: "admin_search", student });
+
+  const [row] = await db
+    .insert(schema.lineContactStudentLinks)
+    .values({
+      contactId: input.contactId,
+      wiseStudentId: student.wiseStudentId,
+      studentKey: student.studentKey,
+      studentName: student.studentName,
+      parentName: student.parentName,
+      status: "verified",
+      confidence: 1,
+      evidence,
+      reviewedByEmail: actor.email,
+      reviewedByName: actor.name,
+      reviewedAt: now(),
+    })
+    .onConflictDoUpdate({
+      target: [
+        schema.lineContactStudentLinks.contactId,
+        schema.lineContactStudentLinks.studentKey,
+      ],
+      set: {
+        wiseStudentId: student.wiseStudentId,
+        studentName: student.studentName,
+        parentName: student.parentName,
+        status: "verified",
+        confidence: 1,
+        evidence,
+        reviewedByEmail: actor.email,
+        reviewedByName: actor.name,
+        reviewedAt: now(),
+        updatedAt: now(),
+      },
+    })
+    .returning();
+  return row ? linkToDto(row, student) : null;
 }
 
 export async function patchLineContactStudentLinkStatus(
@@ -262,7 +627,9 @@ export async function patchLineContactStudentLinkStatus(
       eq(schema.lineContactStudentLinks.contactId, input.contactId),
     ))
     .returning();
-  return row ? linkToDto(row) : null;
+  if (!row) return null;
+  const studentsByKey = await currentStudentMap(db);
+  return linkToDto(row, studentsByKey.get(row.studentKey) ?? null);
 }
 
 export async function listVerifiedLineStudentKeys(

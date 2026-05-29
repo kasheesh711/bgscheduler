@@ -12,6 +12,15 @@ const statusSchema = z.enum([
   "dismissed",
 ]);
 
+const intentSchema = z.enum([
+  "new_request",
+  "cancel_one_off",
+  "pause_until",
+  "resume",
+  "reschedule",
+  "unclear_change",
+]);
+
 export async function GET(request: NextRequest) {
   const session = await auth();
   if (!session) {
@@ -23,6 +32,11 @@ export async function GET(request: NextRequest) {
   if (parsedStatus && !parsedStatus.success) {
     return NextResponse.json({ error: "Invalid status" }, { status: 400 });
   }
+  const rawIntent = request.nextUrl.searchParams.get("intentType");
+  const parsedIntent = rawIntent ? intentSchema.safeParse(rawIntent) : null;
+  if (parsedIntent && !parsedIntent.success) {
+    return NextResponse.json({ error: "Invalid intentType" }, { status: 400 });
+  }
 
   const conversationId = request.nextUrl.searchParams.get("conversationId") ?? undefined;
   const includeAnalytics = request.nextUrl.searchParams.get("analytics") === "true";
@@ -30,6 +44,7 @@ export async function GET(request: NextRequest) {
   const [reviews, analytics] = await Promise.all([
     listLineSchedulerReviews(db, {
       status: parsedStatus?.success ? parsedStatus.data : undefined,
+      intentType: parsedIntent?.success ? parsedIntent.data : undefined,
       conversationId,
     }),
     includeAnalytics ? getLineSchedulerAnalytics(db) : Promise.resolve(null),
