@@ -1,18 +1,23 @@
 import { edgeAuth } from "@/lib/auth-edge";
 import { NextResponse } from "next/server";
 
-export default edgeAuth((req) => {
-  const { pathname, search } = req.nextUrl;
-
-  // Allow public routes
-  if (
+function isPublicRoute(pathname: string) {
+  return (
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth") ||
     pathname === "/api/search/assistant" ||
     pathname === "/api/classrooms/floor-plan-map" ||
     pathname === "/api/line/webhook" ||
+    pathname === "/api/line/contacts/oa-resolver/worklist" ||
+    /^\/api\/line\/contacts\/oa-resolver\/runs\/[^/]+\/rows$/.test(pathname) ||
     pathname.startsWith("/api/internal/")
-  ) {
+  );
+}
+
+export default edgeAuth((req) => {
+  const { pathname, search } = req.nextUrl;
+
+  if (isPublicRoute(pathname)) {
     return NextResponse.next();
   }
 
