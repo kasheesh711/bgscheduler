@@ -226,6 +226,7 @@ export interface LineOaResolverRow {
   matchMode: string | null;
   captureMode: string | null;
   errorMessage: string | null;
+  evidence: Record<string, unknown>;
   committedContactId: string | null;
   committedLinkId: string | null;
   createdAt: string;

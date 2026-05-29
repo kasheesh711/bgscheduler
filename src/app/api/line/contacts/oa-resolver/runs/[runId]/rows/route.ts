@@ -9,11 +9,24 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, content-type",
 };
 
+const candidateSchema = z.object({
+  lineChatUrl: z.string().trim().max(500),
+  chatTitle: z.string().trim().max(500).nullable().optional(),
+  adminNoteRaw: z.string().trim().max(1000).nullable().optional(),
+  relationshipRole: z.enum(["mom", "dad", "secretary", "other", "unknown"]).nullable().optional(),
+  candidateRank: z.number().int().min(1).max(100).nullable().optional(),
+  captureMode: z.string().trim().max(80).nullable().optional(),
+  matchMode: z.string().trim().max(80).nullable().optional(),
+  searchCode: z.string().trim().max(120).nullable().optional(),
+  siblingFanout: z.boolean().nullable().optional(),
+}).strict();
+
 const rowSchema = z.object({
   rowId: z.string().uuid(),
   status: z.enum(["matched", "ambiguous", "no_match", "error"]),
   lineChatUrl: z.string().trim().max(500).nullable().optional(),
   chatTitle: z.string().trim().max(500).nullable().optional(),
+  candidates: z.array(candidateSchema).max(25).optional(),
   matchMode: z.string().trim().max(80).nullable().optional(),
   captureMode: z.string().trim().max(80).nullable().optional(),
   errorMessage: z.string().trim().max(1000).nullable().optional(),

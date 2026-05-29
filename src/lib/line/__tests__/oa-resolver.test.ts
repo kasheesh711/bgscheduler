@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildLineOaResolverSearchCodes,
   buildLineOaResolverWorklist,
+  buildSharedLineOaSearchCodes,
+  normalizeLineOaResolverCandidateContacts,
   parseLineOaChatUrl,
   preferredLineOaSearchCode,
+  relationshipRoleFromText,
 } from "@/lib/line/oa-resolver";
 import type { LineStudentDirectoryRow } from "@/lib/line/student-links";
 
@@ -91,5 +95,58 @@ describe("LINE OA resolver", () => {
         activated: true,
       },
     ]);
+  });
+
+  it("builds sibling-aware search codes for shared LINE labels", () => {
+    expect(buildSharedLineOaSearchCodes(["Jasmine.Th", "Copter.Th"])).toEqual([
+      "Jasmine/Copter.Th",
+    ]);
+
+    const rows = buildLineOaResolverWorklist([
+      student({
+        wiseStudentId: "wise-jasmine",
+        studentName: "Jidapa (Jasmine.Th) Thamprida",
+        studentKey: "jidapa (jasmine.th) thamprida::kanokwan",
+        parentName: "Kanokwan Thamprida",
+      }),
+      student({
+        wiseStudentId: "wise-copter",
+        studentName: "Teethad (Copter.Th) Thamprida",
+        studentKey: "teethad (copter.th) thamprida::kanokwan",
+        parentName: "Kanokwan Thamprida",
+      }),
+    ]);
+
+    expect(rows[0].searchCodes).toEqual(["Jasmine.Th", "Copter.Th", "Jasmine/Copter.Th"]);
+    expect(buildLineOaResolverSearchCodes(rows[1], rows)).toEqual(["Copter.Th", "Jasmine.Th", "Copter/Jasmine.Th"]);
+  });
+
+  it("normalizes multi-account candidates and relationship role notes", () => {
+    expect(relationshipRoleFromText("เลขา")).toBe("secretary");
+    expect(relationshipRoleFromText("Dad account")).toBe("dad");
+
+    const candidates = normalizeLineOaResolverCandidateContacts([
+      {
+        lineChatUrl: "https://chat.line.biz/Ueebc1942ed1ed3bd52bb0c6e8d122565/chat/U9fdc5658d0c2cbfc02d0a2acc89fdb6d",
+        chatTitle: "Copter mom",
+        adminNoteRaw: "mom",
+        searchCode: "Copter.Th",
+      },
+      {
+        lineChatUrl: "https://chat.line.biz/Ueebc1942ed1ed3bd52bb0c6e8d122565/chat/U9fdc5658d0c2cbfc02d0a2acc89fdb6d",
+        chatTitle: "Duplicate",
+      },
+      {
+        lineChatUrl: "https://example.com/not-line",
+        chatTitle: "Invalid",
+      },
+    ]);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      lineUserId: "U9fdc5658d0c2cbfc02d0a2acc89fdb6d",
+      relationshipRole: "mom",
+      searchCode: "Copter.Th",
+    });
   });
 });

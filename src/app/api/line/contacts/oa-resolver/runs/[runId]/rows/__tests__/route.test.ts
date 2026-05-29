@@ -66,4 +66,43 @@ describe("LINE OA resolver row update route", () => {
       }],
     });
   });
+
+  it("accepts multi-candidate resolver updates", async () => {
+    const response = await POST(request({
+      rows: [{
+        rowId: "00000000-0000-4000-8000-000000000002",
+        status: "ambiguous",
+        candidates: [{
+          lineChatUrl: "https://chat.line.biz/Ueebc1942ed1ed3bd52bb0c6e8d122565/chat/U9fdc5658d0c2cbfc02d0a2acc89fdb6d",
+          chatTitle: "Copter mom",
+          adminNoteRaw: "mom",
+          relationshipRole: "mom",
+          candidateRank: 1,
+          captureMode: "extension",
+          matchMode: "multi_candidate",
+          searchCode: "Copter.Th",
+        }],
+      }],
+    }, "token-1"), ctx);
+
+    expect(response.status).toBe(200);
+    expect(updateLineOaResolverRowsFromExtension).toHaveBeenLastCalledWith({ db: true }, {
+      token: "token-1",
+      runId: "00000000-0000-4000-8000-000000000001",
+      rows: [{
+        rowId: "00000000-0000-4000-8000-000000000002",
+        status: "ambiguous",
+        candidates: [{
+          lineChatUrl: "https://chat.line.biz/Ueebc1942ed1ed3bd52bb0c6e8d122565/chat/U9fdc5658d0c2cbfc02d0a2acc89fdb6d",
+          chatTitle: "Copter mom",
+          adminNoteRaw: "mom",
+          relationshipRole: "mom",
+          candidateRank: 1,
+          captureMode: "extension",
+          matchMode: "multi_candidate",
+          searchCode: "Copter.Th",
+        }],
+      }],
+    });
+  });
 });

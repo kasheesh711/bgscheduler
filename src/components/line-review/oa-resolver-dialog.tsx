@@ -27,6 +27,7 @@ const STORAGE_KEY = "line-oa-resolver-run-id";
 function statusLabel(status: LineOaResolverRowStatus): string {
   if (status === "no_match") return "No match";
   if (status === "needs_manual_code") return "Needs code";
+  if (status === "ambiguous") return "Multi-candidate";
   return status[0].toUpperCase() + status.slice(1);
 }
 
@@ -48,8 +49,63 @@ function CountChip({ label, value }: { label: string; value: number }) {
   );
 }
 
+interface ResolverCandidateContact {
+  lineChatUrl: string;
+  lineUserId: string;
+  lineOaAccountId: string;
+  chatTitle: string | null;
+  adminNoteRaw: string | null;
+  relationshipRole: string | null;
+  candidateRank: number | null;
+  siblingFanout?: boolean;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function candidateContacts(row: LineOaResolverRow): ResolverCandidateContact[] {
+  const rawCandidates = Array.isArray(row.evidence?.candidateContacts)
+    ? row.evidence.candidateContacts
+    : [];
+  const candidates = rawCandidates
+    .map(asRecord)
+    .filter((candidate): candidate is Record<string, unknown> => Boolean(candidate))
+    .map((candidate, index) => ({
+      lineChatUrl: asString(candidate.lineChatUrl) ?? "",
+      lineUserId: asString(candidate.lineUserId) ?? "",
+      lineOaAccountId: asString(candidate.lineOaAccountId) ?? "",
+      chatTitle: asString(candidate.chatTitle),
+      adminNoteRaw: asString(candidate.adminNoteRaw),
+      relationshipRole: asString(candidate.relationshipRole),
+      candidateRank: typeof candidate.candidateRank === "number" ? candidate.candidateRank : index + 1,
+      siblingFanout: candidate.siblingFanout === true,
+    }))
+    .filter((candidate) => candidate.lineChatUrl && candidate.lineUserId);
+
+  if (candidates.length > 0) return candidates;
+  if (!row.lineChatUrl || !row.lineUserId) return [];
+  return [{
+    lineChatUrl: row.lineChatUrl,
+    lineUserId: row.lineUserId,
+    lineOaAccountId: row.lineOaAccountId ?? "",
+    chatTitle: row.chatTitle,
+    adminNoteRaw: null,
+    relationshipRole: null,
+    candidateRank: 1,
+  }];
+}
+
+function candidateKey(rowId: string, lineUserId: string): string {
+  return `${rowId}:${lineUserId}`;
+}
+
 function rowGroupKey(row: LineOaResolverRow): string {
-  return row.lineUserId ?? `unresolved:${row.status}`;
+  return row.studentKey;
 }
 
 export function OaResolverDialog({
@@ -65,8 +121,24 @@ export function OaResolverDialog({
   const [token, setToken] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState<"create" | "refresh" | "commit" | null>(null);
+  const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
+  const [knownCandidateKeys, setKnownCandidateKeys] = useState<Set<string>>(new Set());
 
-  const matchedRows = useMemo(() => run?.rows.filter((row) => row.status === "matched") ?? [], [run]);
+  const committableRows = useMemo(
+    () => run?.rows.filter((row) => row.status === "matched" || row.status === "ambiguous") ?? [],
+    [run],
+  );
+  const selectedCandidatePayload = useMemo(() => {
+    const selected: Array<{ rowId: string; lineUserId: string }> = [];
+    for (const row of committableRows) {
+      for (const candidate of candidateContacts(row)) {
+        if (selectedCandidates.has(candidateKey(row.id, candidate.lineUserId))) {
+          selected.push({ rowId: row.id, lineUserId: candidate.lineUserId });
+        }
+      }
+    }
+    return selected;
+  }, [committableRows, selectedCandidates]);
   const groupedRows = useMemo(() => {
     const groups = new Map<string, LineOaResolverRow[]>();
     for (const row of run?.rows ?? []) {
@@ -75,6 +147,16 @@ export function OaResolverDialog({
     }
     return [...groups.entries()];
   }, [run]);
+
+  function toggleCandidate(rowId: string, lineUserId: string) {
+    setSelectedCandidates((current) => {
+      const next = new Set(current);
+      const key = candidateKey(rowId, lineUserId);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   async function loadRun(runId: string, mode: "refresh" | "silent" = "refresh") {
     if (mode === "refresh") setBusy("refresh");
@@ -143,7 +225,7 @@ export function OaResolverDialog({
       }>(`/api/line/contacts/oa-resolver/runs/${run.id}/commit`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ selectedCandidates: selectedCandidatePayload }),
       });
       setRun(payload.result.run);
       setMessage(`Committed ${payload.result.committed} suggested link(s); skipped ${payload.result.skipped}.`);
@@ -172,6 +254,29 @@ export function OaResolverDialog({
     }, 4000);
     return () => window.clearInterval(interval);
   }, [open, run]);
+
+  useEffect(() => {
+    if (!run) {
+      setSelectedCandidates(new Set());
+      setKnownCandidateKeys(new Set());
+      return;
+    }
+    const candidateKeys = new Set<string>();
+    for (const row of run.rows) {
+      if (row.status !== "matched" && row.status !== "ambiguous") continue;
+      for (const candidate of candidateContacts(row)) {
+        candidateKeys.add(candidateKey(row.id, candidate.lineUserId));
+      }
+    }
+    setSelectedCandidates((current) => {
+      const next = new Set(current);
+      for (const key of candidateKeys) {
+        if (!knownCandidateKeys.has(key)) next.add(key);
+      }
+      return next;
+    });
+    setKnownCandidateKeys(candidateKeys);
+  }, [run]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -240,10 +345,10 @@ export function OaResolverDialog({
                 size="sm"
                 className="mt-3"
                 onClick={commitRun}
-                disabled={!run || matchedRows.length === 0 || Boolean(busy)}
+                disabled={!run || selectedCandidatePayload.length === 0 || Boolean(busy)}
               >
                 {busy === "commit" ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
-                Commit {matchedRows.length} matched row(s)
+                Commit {selectedCandidatePayload.length} selected candidate(s)
               </Button>
             </div>
 
@@ -303,29 +408,57 @@ export function OaResolverDialog({
                       <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-muted/80 px-3 py-2 backdrop-blur">
                         <div className="min-w-0">
                           <div className="truncate text-xs font-semibold text-foreground">
-                            {groupKey.startsWith("unresolved:") ? "Unresolved" : groupKey}
+                            {rows[0]?.studentName ?? groupKey}
                           </div>
                           <div className="truncate text-[11px] text-muted-foreground">
-                            {rows[0]?.chatTitle || rows[0]?.lineChatUrl || `${rows.length} row(s)`}
+                            {rows[0]?.searchCode || "No dotted code"} / {rows[0]?.parentName || "No parent"}
                           </div>
                         </div>
                         <Badge variant="outline">{rows.length}</Badge>
                       </div>
                       {rows.map((row) => (
-                        <div key={row.id} className="grid gap-2 border-b border-border px-3 py-2 last:border-b-0 md:grid-cols-[minmax(0,1fr)_120px_170px]">
+                        <div key={row.id} className="grid gap-2 border-b border-border px-3 py-2 last:border-b-0 md:grid-cols-[minmax(0,1fr)_120px_220px]">
                           <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-foreground">
-                              {row.studentName}
-                            </div>
-                            <div className="truncate text-xs text-muted-foreground">
-                              {row.searchCode || "No dotted code"} / {row.parentName || "No parent"}
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="truncate text-sm font-medium text-foreground">
+                                {row.searchCode || "No dotted code"}
+                              </div>
+                              <Badge variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
                             </div>
                             {row.errorMessage ? (
                               <div className="mt-1 text-xs text-destructive">{row.errorMessage}</div>
                             ) : null}
-                          </div>
-                          <div>
-                            <Badge variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
+                            {candidateContacts(row).length > 0 ? (
+                              <div className="mt-2 space-y-1.5">
+                                {candidateContacts(row).map((candidate) => {
+                                  const key = candidateKey(row.id, candidate.lineUserId);
+                                  const checked = selectedCandidates.has(key);
+                                  return (
+                                    <label
+                                      key={key}
+                                      className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        className="mt-0.5"
+                                        checked={checked}
+                                        onChange={() => toggleCandidate(row.id, candidate.lineUserId)}
+                                      />
+                                      <span className="min-w-0 flex-1">
+                                        <span className="block truncate font-medium text-foreground">
+                                          {candidate.chatTitle || candidate.lineUserId}
+                                        </span>
+                                        <span className="block truncate text-muted-foreground">
+                                          {candidate.relationshipRole || "unknown"}
+                                          {candidate.adminNoteRaw ? ` / ${candidate.adminNoteRaw}` : ""}
+                                          {candidate.siblingFanout ? " / sibling fanout" : ""}
+                                        </span>
+                                      </span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            ) : null}
                           </div>
                           <div className="min-w-0 text-xs text-muted-foreground">
                             <div className="truncate">{row.captureMode || row.matchMode || "n/a"}</div>

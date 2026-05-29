@@ -55,6 +55,26 @@ describe("LINE OA resolver commit route", () => {
     expect(commitLineOaResolverRun).toHaveBeenCalledWith({ db: true }, {
       runId: "00000000-0000-4000-8000-000000000001",
       rowIds: ["00000000-0000-4000-8000-000000000002"],
+      selectedCandidates: undefined,
+    });
+  });
+
+  it("passes selected multi-account candidates to the resolver service", async () => {
+    const response = await POST(request({
+      selectedCandidates: [{
+        rowId: "00000000-0000-4000-8000-000000000002",
+        lineUserId: "U9fdc5658d0c2cbfc02d0a2acc89fdb6d",
+      }],
+    }), ctx);
+
+    expect(response.status).toBe(200);
+    expect(commitLineOaResolverRun).toHaveBeenCalledWith({ db: true }, {
+      runId: "00000000-0000-4000-8000-000000000001",
+      rowIds: undefined,
+      selectedCandidates: [{
+        rowId: "00000000-0000-4000-8000-000000000002",
+        lineUserId: "U9fdc5658d0c2cbfc02d0a2acc89fdb6d",
+      }],
     });
   });
 });

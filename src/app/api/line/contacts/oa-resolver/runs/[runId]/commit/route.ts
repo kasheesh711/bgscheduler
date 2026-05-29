@@ -6,6 +6,10 @@ import { commitLineOaResolverRun } from "@/lib/line/oa-resolver";
 
 const commitSchema = z.object({
   rowIds: z.array(z.string().uuid()).min(1).max(1000).optional(),
+  selectedCandidates: z.array(z.object({
+    rowId: z.string().uuid(),
+    lineUserId: z.string().regex(/^U[a-fA-F0-9]{32}$/u),
+  }).strict()).max(5000).optional(),
 }).strict();
 
 type RouteContext = { params: Promise<{ runId: string }> };
@@ -35,6 +39,7 @@ export async function POST(request: NextRequest, ctx: RouteContext) {
   const result = await commitLineOaResolverRun(getDb(), {
     runId,
     rowIds: parsed.data.rowIds,
+    selectedCandidates: parsed.data.selectedCandidates,
   });
   if (!result) {
     return NextResponse.json({ error: "Resolver run not found" }, { status: 404 });

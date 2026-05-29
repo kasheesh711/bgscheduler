@@ -5,6 +5,8 @@ let resolverState = {
   runId: "",
   rows: [],
   index: 0,
+  processedRows: 0,
+  capturedRows: 0,
 };
 
 function normalize(value) {
@@ -16,6 +18,15 @@ function normalize(value) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function relationshipRoleFromText(value) {
+  const normalized = String(value || "").normalize("NFKC").toLowerCase();
+  if (!normalized.trim()) return "unknown";
+  if (/\b(mom|mum|mother|mama|mami)\b/u.test(normalized) || /แม่|คุณแม่/u.test(normalized)) return "mom";
+  if (/\b(dad|father|papa|daddy)\b/u.test(normalized) || /พ่อ|คุณพ่อ/u.test(normalized)) return "dad";
+  if (/\b(secretary|assistant|admin|pa)\b/u.test(normalized) || /เลขา|ผู้ช่วย/u.test(normalized)) return "secretary";
+  return "other";
 }
 
 function visibleText(element) {
@@ -96,6 +107,34 @@ function currentChatTitle() {
   return title || null;
 }
 
+function currentAdminNoteText() {
+  const candidates = [
+    ...document.querySelectorAll("[data-testid], [aria-label], [title], div, span"),
+  ]
+    .filter((element) => isVisible(element))
+    .map((element) => visibleText(element) || element.getAttribute("aria-label") || element.getAttribute("title") || "")
+    .map((text) => text.trim())
+    .filter((text) => text && text.length <= 240)
+    .filter((text) => relationshipRoleFromText(text) !== "unknown");
+  return candidates[0] || null;
+}
+
+function candidateFromCurrentChat(input) {
+  const lineChatUrl = waitForCurrentUrl();
+  if (!lineChatUrl) return null;
+  const adminNoteRaw = input.adminNoteRaw || currentAdminNoteText();
+  return {
+    lineChatUrl,
+    chatTitle: currentChatTitle() || input.chatTitle || null,
+    adminNoteRaw,
+    relationshipRole: relationshipRoleFromText([adminNoteRaw, input.chatTitle].filter(Boolean).join(" ")),
+    candidateRank: input.candidateRank,
+    captureMode: input.captureMode,
+    matchMode: input.matchMode,
+    searchCode: input.searchCode,
+  };
+}
+
 function ensureOverlay() {
   let overlay = document.getElementById("line-oa-resolver-overlay");
   if (overlay) return overlay;
@@ -138,10 +177,15 @@ function manualCapture(row, reason) {
   `;
   return new Promise((resolve) => {
     overlay.querySelector("#line-oa-capture-current").addEventListener("click", () => {
-      const url = waitForCurrentUrl();
+      const candidate = candidateFromCurrentChat({
+        candidateRank: 1,
+        captureMode: "manual",
+        matchMode: "admin_selected",
+        searchCode: row.searchCode,
+      });
       hideOverlay();
-      resolve(url
-        ? { status: "matched", lineChatUrl: url, chatTitle: currentChatTitle(), captureMode: "manual", matchMode: "admin_selected" }
+      resolve(candidate
+        ? { status: "matched", lineChatUrl: candidate.lineChatUrl, chatTitle: candidate.chatTitle, candidates: [candidate], captureMode: "manual", matchMode: "admin_selected" }
         : { status: "error", errorMessage: "Current page is not a LINE OA chat URL.", captureMode: "manual" });
     });
     overlay.querySelector("#line-oa-mark-no-match").addEventListener("click", () => {
@@ -178,6 +222,7 @@ async function postRow(row, result) {
         status: result.status,
         lineChatUrl: result.lineChatUrl ?? null,
         chatTitle: result.chatTitle ?? null,
+        candidates: result.candidates ?? undefined,
         matchMode: result.matchMode ?? null,
         captureMode: result.captureMode ?? null,
         errorMessage: result.errorMessage ?? null,
@@ -195,28 +240,95 @@ async function postRow(row, result) {
   }
 }
 
-async function processRow(row) {
-  const search = await searchLineOa(row.searchCode);
+async function captureCandidateForSearch(row, searchCode, candidateIndex) {
+  const search = await searchLineOa(searchCode);
+  const candidate = search.candidates[candidateIndex];
+  if (!candidate) {
+    return { error: `Candidate ${candidateIndex + 1} disappeared before capture.` };
+  }
+
+  candidate.element.click();
+  const url = await waitForChatUrl();
+  if (!url) {
+    return { error: "Candidate did not open a LINE OA chat URL." };
+  }
+
+  return {
+    candidate: candidateFromCurrentChat({
+      chatTitle: currentChatTitle() || candidate.text,
+      adminNoteRaw: candidate.text,
+      candidateRank: candidateIndex + 1,
+      captureMode: "extension",
+      matchMode: "dom_search",
+      searchCode,
+    }),
+  };
+}
+
+function dedupeCandidates(candidates) {
+  const seen = new Set();
+  const result = [];
+  for (const candidate of candidates) {
+    if (!candidate?.lineChatUrl) continue;
+    const key = candidate.lineChatUrl;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(candidate);
+  }
+  return result;
+}
+
+async function captureSearchCodeCandidates(row, searchCode) {
+  const search = await searchLineOa(searchCode);
   if (search.mode === "selector_missing") {
     return manualCapture(row, "Could not find the LINE OA search input. Search manually, open the correct chat, then capture.");
   }
   if (search.candidates.length === 0) {
-    return { status: "no_match", matchMode: search.mode, captureMode: "extension", errorMessage: "No visible chat matched the student code." };
-  }
-  if (search.candidates.length > 1) {
-    return manualCapture(row, `Found ${search.candidates.length} possible chats. Open the correct one, then capture.`);
+    return { candidates: [], mode: search.mode };
   }
 
-  search.candidates[0].element.click();
-  const url = await waitForChatUrl();
-  if (!url) {
-    return manualCapture(row, "The single visible match did not open a chat URL. Open the correct chat, then capture.");
+  const captured = [];
+  for (let index = 0; index < search.candidates.length; index += 1) {
+    const result = await captureCandidateForSearch(row, searchCode, index);
+    if (result.error) {
+      return manualCapture(row, `${result.error} Search manually, open the correct chat, then capture.`);
+    }
+    if (result.candidate) captured.push(result.candidate);
   }
+
+  return { candidates: dedupeCandidates(captured), mode: search.mode };
+}
+
+async function processRow(row) {
+  const searchCodes = (row.searchCodes && row.searchCodes.length > 0 ? row.searchCodes : [row.searchCode]).filter(Boolean);
+  const allCandidates = [];
+  const attemptedCodes = [];
+
+  for (const searchCode of searchCodes) {
+    attemptedCodes.push(searchCode);
+    const result = await captureSearchCodeCandidates(row, searchCode);
+    if (result.status) return result;
+    allCandidates.push(...(result.candidates ?? []));
+    if (allCandidates.length > 0) break;
+  }
+
+  const candidates = dedupeCandidates(allCandidates);
+  if (candidates.length === 0) {
+    return {
+      status: "no_match",
+      matchMode: "dom_search",
+      captureMode: "extension",
+      errorMessage: `No visible chat matched any student code: ${attemptedCodes.join(", ")}.`,
+    };
+  }
+
+  const [first] = candidates;
   return {
-    status: "matched",
-    lineChatUrl: url,
-    chatTitle: currentChatTitle() || search.candidates[0].text,
-    matchMode: search.mode,
+    status: candidates.length > 1 ? "ambiguous" : "matched",
+    lineChatUrl: first.lineChatUrl,
+    chatTitle: first.chatTitle,
+    candidates,
+    matchMode: candidates.length > 1 ? "multi_candidate" : "dom_search",
     captureMode: "extension",
   };
 }
@@ -228,6 +340,7 @@ async function runResolver() {
     const row = resolverState.rows[resolverState.index];
     try {
       const result = await processRow(row);
+      resolverState.lastResultHadCapture = Boolean(result.lineChatUrl || result.candidates?.length);
       await postRow(row, result);
     } catch (error) {
       await postRow(row, {
@@ -236,6 +349,18 @@ async function runResolver() {
         matchMode: "extension_error",
         captureMode: "extension",
       });
+    }
+    resolverState.processedRows += 1;
+    if (resolverState.lastResultHadCapture) resolverState.capturedRows += 1;
+    resolverState.lastResultHadCapture = false;
+    if (resolverState.processedRows >= 10 && resolverState.capturedRows === 0) {
+      resolverState.running = false;
+      const overlay = ensureOverlay();
+      overlay.innerHTML = `
+        <div style="font-weight:700;margin-bottom:4px;">LINE OA Resolver paused</div>
+        <div style="color:#636973;margin-bottom:8px;">Processed 10 rows without capturing any valid chat URL. Stop and check that LINE OA search is opening chat pages.</div>
+      `;
+      break;
     }
     await sleep(500);
   }
@@ -264,6 +389,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     runId: message.runId,
     rows: message.rows || [],
     index: 0,
+    processedRows: 0,
+    capturedRows: 0,
+    lastResultHadCapture: false,
   };
   void runResolver();
   sendResponse({ ok: true });
