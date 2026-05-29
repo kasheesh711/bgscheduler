@@ -13,12 +13,11 @@ let resolverState = {
 const RESUME_STATE_KEY = "begifted-line-oa-resolver-state";
 const LINE_OA_CHAT_URL_RE = /^https:\/\/chat\.line\.biz\/(U[a-fA-F0-9]{32})\/chat\/(U[a-fA-F0-9]{32})/u;
 const LINE_OA_ACCOUNT_RE = /^https:\/\/chat\.line\.biz\/(U[a-fA-F0-9]{32})(?:\/|$)/u;
+const candidateUtils = globalThis.LineOaResolverCandidateUtils || {};
 
 function normalize(value) {
-  return (value || "")
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}.]+/gu, "");
+  if (typeof candidateUtils.normalize === "function") return candidateUtils.normalize(value);
+  return (value || "").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}.]+/gu, "");
 }
 
 function sleep(ms) {
@@ -120,40 +119,66 @@ function setInputValue(input, value) {
 
 async function searchLineOa(code) {
   const input = findSearchInput();
-  if (!input) return { mode: "selector_missing", candidates: [] };
+  if (!input) return { mode: "selector_missing", candidates: [], rawDomHitCount: 0, visualRowCount: 0 };
   input.focus();
   setInputValue(input, code);
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
   await sleep(1400);
+  const result = findChatCandidates(code);
   return {
     mode: "dom_search",
-    candidates: findChatCandidates(code),
+    ...result,
   };
 }
 
 function findChatCandidates(code) {
   const normalizedCode = normalize(code);
-  const clickable = [
-    ...document.querySelectorAll("a[href*='/chat/'], [role='link'], [role='button'], button, li, [data-testid], div"),
+  const inputRect = rectObject(findSearchInput());
+  const rawElements = [
+    ...document.querySelectorAll("a[href*='/chat/'], [role='link'], [role='button'], button, li, [data-testid], div, span"),
   ].filter((element) => isVisible(element));
-  const seen = new Set();
-  const candidates = [];
-  for (const element of clickable) {
+  const rawHits = [];
+  let rawDomHitCount = 0;
+
+  for (const element of rawElements) {
     const text = visibleText(element);
     if (!text || !normalize(text).includes(normalizedCode)) continue;
-    const actionElement = actionableChatElement(element);
-    if (!actionElement) continue;
-    const rect = actionElement.getBoundingClientRect();
-    const href = chatUrlFromElement(actionElement);
-    const key = href || `${Math.round(rect.top)}:${Math.round(rect.left)}:${text.slice(0, 80)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    candidates.push({ element: actionElement, text, top: rect.top, lineChatUrl: href });
+    const elementRect = rectObject(element);
+    if (!elementRect || !rectIsInSearchColumn(elementRect, inputRect)) continue;
+    rawDomHitCount += 1;
+
+    const rowElement = closestVisualChatRow(element, normalizedCode, inputRect);
+    if (!rowElement) continue;
+    const rowRect = rectObject(rowElement);
+    if (!rowRect || !rectIsInSearchColumn(rowRect, inputRect)) continue;
+    rawHits.push({
+      element: rowElement,
+      text: visibleText(rowElement) || text,
+      rect: rowRect,
+      lineChatUrl: chatUrlFromElement(rowElement) || chatUrlFromElement(element),
+    });
   }
-  return candidates
-    .sort((a, b) => a.top - b.top)
-    .slice(0, 5);
+
+  const collapsed = typeof candidateUtils.collapseVisualRows === "function"
+    ? candidateUtils.collapseVisualRows(rawHits, { limit: 5 })
+    : rawHits.slice(0, 5);
+
+  return {
+    rawDomHitCount,
+    visualRowCount: collapsed.length,
+    candidates: collapsed.map((candidate, index) => {
+      const rect = candidate.rect || rectObject(candidate.element);
+      return {
+        ...candidate,
+        index,
+        top: rect?.top ?? 0,
+        clickX: rect ? rect.left + Math.min(Math.max(rect.width * 0.42, 48), rect.width - 24) : null,
+        clickY: rect ? rect.top + rect.height / 2 : null,
+        fingerprint: candidate.fingerprint || candidateUtils.candidateFingerprint?.(candidate) || `${index}:${candidate.text}`,
+      };
+    }),
+  };
 }
 
 function chatUrlFromElement(element) {
@@ -164,12 +189,72 @@ function chatUrlFromElement(element) {
   return isLineOaChatUrl(url) ? url : null;
 }
 
-function actionableChatElement(element) {
-  const anchor = element.closest?.("a[href*='/chat/']") || element.querySelector?.("a[href*='/chat/']");
-  if (anchor && isVisible(anchor)) return anchor;
-  const actionable = element.closest?.("a, button, [role='button'], [role='link'], li");
-  if (actionable && isVisible(actionable) && actionable !== document.body) return actionable;
-  return element.matches?.("a, button, [role='button'], [role='link'], li") ? element : null;
+function rectObject(elementOrRect) {
+  if (!elementOrRect) return null;
+  const rect = typeof elementOrRect.getBoundingClientRect === "function"
+    ? elementOrRect.getBoundingClientRect()
+    : elementOrRect;
+  const top = Number(rect.top);
+  const left = Number(rect.left);
+  const width = Number(rect.width);
+  const height = Number(rect.height);
+  if (![top, left, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  return {
+    top,
+    left,
+    width,
+    height,
+    right: Number.isFinite(Number(rect.right)) ? Number(rect.right) : left + width,
+    bottom: Number.isFinite(Number(rect.bottom)) ? Number(rect.bottom) : top + height,
+  };
+}
+
+function rectIsInSearchColumn(rect, inputRect) {
+  if (typeof candidateUtils.rectIsInSearchColumn === "function") {
+    return candidateUtils.rectIsInSearchColumn(rect, inputRect);
+  }
+  if (!inputRect) return true;
+  const paddedLeft = inputRect.left - 32;
+  const paddedRight = inputRect.right + Math.max(96, inputRect.width * 0.8);
+  return rect.right >= paddedLeft
+    && rect.left <= paddedRight
+    && rect.bottom >= inputRect.bottom - 24;
+}
+
+function closestVisualChatRow(element, normalizedCode, inputRect) {
+  const candidates = [];
+  let current = element;
+  while (current && current !== document.body && current !== document.documentElement) {
+    if (isVisible(current)) {
+      const rect = rectObject(current);
+      const text = visibleText(current);
+      if (
+        rect
+        && text
+        && normalize(text).includes(normalizedCode)
+        && rectIsInSearchColumn(rect, inputRect)
+        && rect.width >= 180
+        && rect.height >= 34
+        && rect.height <= 190
+      ) {
+        candidates.push({ element: current, rect, text });
+      }
+    }
+    current = current.parentElement;
+  }
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => rowCandidateScore(b) - rowCandidateScore(a));
+  return candidates[0].element;
+}
+
+function rowCandidateScore(candidate) {
+  const hasChatHref = chatUrlFromElement(candidate.element) ? 1 : 0;
+  const clickableRole = candidate.element.matches?.("a, button, [role='button'], [role='link'], li") ? 1 : 0;
+  return hasChatHref * 10_000
+    + clickableRole * 2_500
+    + Math.min(candidate.rect.width, 800) * 8
+    + Math.min(candidate.rect.height, 160) * 16
+    + Math.min(candidate.text.length, 260);
 }
 
 async function waitForChatUrl(timeoutMs = 5000, previousUrl = null) {
@@ -246,7 +331,7 @@ function hideOverlay() {
   document.getElementById("line-oa-resolver-overlay")?.remove();
 }
 
-function manualCapture(row, reason) {
+function manualCapture(row, reason, evidence = {}) {
   const overlay = ensureOverlay();
   overlay.innerHTML = `
     <div style="font-weight:700;margin-bottom:4px;">LINE OA Resolver paused</div>
@@ -269,12 +354,12 @@ function manualCapture(row, reason) {
       });
       hideOverlay();
       resolve(candidate
-        ? { status: "matched", lineChatUrl: candidate.lineChatUrl, chatTitle: candidate.chatTitle, candidates: [candidate], captureMode: "manual", matchMode: "admin_selected" }
-        : { status: "error", errorMessage: "Current page is not a LINE OA chat URL.", captureMode: "manual" });
+        ? { status: "matched", lineChatUrl: candidate.lineChatUrl, chatTitle: candidate.chatTitle, candidates: [candidate], captureMode: "manual", matchMode: "admin_selected", evidence }
+        : { status: "error", errorMessage: "Current page is not a LINE OA chat URL.", captureMode: "manual", evidence });
     });
     overlay.querySelector("#line-oa-mark-no-match").addEventListener("click", () => {
       hideOverlay();
-      resolve({ status: "no_match", errorMessage: reason, captureMode: "manual", matchMode: "admin_no_match" });
+      resolve({ status: "no_match", errorMessage: reason, captureMode: "manual", matchMode: "admin_no_match", evidence });
     });
   });
 }
@@ -325,20 +410,100 @@ async function postRow(row, result) {
   }
 }
 
-async function captureCandidateForSearch(row, searchCode, candidateIndex) {
+function debuggerMouseClick(candidate) {
+  const x = Number(candidate.clickX);
+  const y = Number(candidate.clickY);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return Promise.resolve({ ok: false, error: "Candidate row has no valid click coordinates." });
+  }
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({
+      type: "line-oa-resolver:debugger-click",
+      x,
+      y,
+    }, (response) => {
+      const lastError = chrome.runtime.lastError;
+      if (lastError) {
+        resolve({ ok: false, error: lastError.message });
+        return;
+      }
+      resolve(response || { ok: false, error: "No debugger click response." });
+    });
+  });
+}
+
+async function clickCandidate(candidate) {
+  const debuggerResult = await debuggerMouseClick(candidate);
+  if (debuggerResult?.ok) {
+    return { clickMethod: "debugger_mouse", debuggerResult };
+  }
+
+  candidate.element?.click?.();
+  return {
+    clickMethod: "dom_fallback",
+    debuggerError: debuggerResult?.error || "Debugger click failed.",
+  };
+}
+
+function selectCandidate(candidates, candidateIndex, expectedFingerprint) {
+  if (expectedFingerprint) {
+    const byFingerprint = candidates.find((candidate) => candidate.fingerprint === expectedFingerprint);
+    if (byFingerprint) return byFingerprint;
+  }
+  return candidates[candidateIndex] || null;
+}
+
+async function waitForSearchResults(searchCode, timeoutMs = 5000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!isLineOaChatUrl(location.href) && findSearchInput()) {
+      const search = await searchLineOa(searchCode);
+      if (search.mode !== "selector_missing") return { ok: true, search };
+    }
+    await sleep(250);
+  }
+  return { ok: false };
+}
+
+async function returnToSearchResults(searchCode) {
+  const beforeBackUrl = location.href;
+  window.history.back();
+  const result = await waitForSearchResults(searchCode);
+  return {
+    ...result,
+    beforeBackUrl,
+    afterBackUrl: location.href,
+  };
+}
+
+async function captureCandidateForSearch(row, searchCode, candidateIndex, options = {}) {
   if (!ensureSearchContext()) return { deferred: true };
   const search = await searchLineOa(searchCode);
-  const candidate = search.candidates[candidateIndex];
+  const candidate = selectCandidate(search.candidates, candidateIndex, options.expectedFingerprint);
   if (!candidate) {
     return { error: `Candidate ${candidateIndex + 1} disappeared before capture.` };
   }
 
   const beforeClickUrl = location.href;
-  candidate.element.click();
+  const clickResult = await clickCandidate(candidate);
   const afterClickUrl = await waitForChatUrl(5000, beforeClickUrl);
   const clickChangedUrl = Boolean(afterClickUrl && afterClickUrl !== beforeClickUrl);
   if (!afterClickUrl || !clickChangedUrl) {
-    return { error: "Candidate did not open a LINE OA chat URL." };
+    return {
+      error: "Candidate did not open a LINE OA chat URL.",
+      evidence: {
+        rawDomHitCount: search.rawDomHitCount,
+        visualRowCount: search.visualRowCount,
+        candidateRowFingerprint: candidate.fingerprint,
+        beforeClickUrl,
+        afterClickUrl: afterClickUrl || location.href,
+        clickedCandidateText: candidate.text,
+        clickedCandidateHref: candidate.lineChatUrl,
+        clickChangedUrl,
+        clickMethod: clickResult.clickMethod,
+        debuggerError: clickResult.debuggerError,
+      },
+    };
   }
 
   return {
@@ -352,11 +517,16 @@ async function captureCandidateForSearch(row, searchCode, candidateIndex) {
       afterClickUrl,
     }),
     evidence: {
+      rawDomHitCount: search.rawDomHitCount,
+      visualRowCount: search.visualRowCount,
+      candidateRowFingerprint: candidate.fingerprint,
       beforeClickUrl,
       afterClickUrl,
       clickedCandidateText: candidate.text,
       clickedCandidateHref: candidate.lineChatUrl,
       clickChangedUrl,
+      clickMethod: clickResult.clickMethod,
+      debuggerError: clickResult.debuggerError,
     },
   };
 }
@@ -381,51 +551,66 @@ async function captureSearchCodeCandidates(row, searchCode) {
     return manualCapture(row, "Could not find the LINE OA search input. Search manually, open the correct chat, then capture.");
   }
   if (search.candidates.length === 0) {
-    return { candidates: [], mode: search.mode };
-  }
-
-  if (search.candidates.length > 1 && search.candidates.every((candidate) => candidate.lineChatUrl)) {
-    const evidence = search.candidates.map((candidate) => ({
-      beforeClickUrl: location.href,
-      afterClickUrl: candidate.lineChatUrl,
-      clickedCandidateText: candidate.text,
-      clickedCandidateHref: candidate.lineChatUrl,
-      clickChangedUrl: false,
-      capturedFromHref: true,
-    }));
     return {
-      candidates: dedupeCandidates(search.candidates.map((candidate, index) => ({
-        lineChatUrl: candidate.lineChatUrl,
-        chatTitle: candidate.text,
-        adminNoteRaw: candidate.text,
-        relationshipRole: relationshipRoleFromText(candidate.text),
-        candidateRank: index + 1,
-        captureMode: "extension",
-        matchMode: "dom_href",
-        searchCode,
-      }))),
-      mode: "dom_href",
-      evidence,
+      candidates: [],
+      mode: search.mode,
+      evidence: [{
+        rawDomHitCount: search.rawDomHitCount,
+        visualRowCount: search.visualRowCount,
+        clickMethod: null,
+      }],
     };
-  }
-
-  if (search.candidates.length > 1) {
-    return manualCapture(row, `Found ${search.candidates.length} possible chats, but LINE did not expose safe chat links for all of them. Open the correct chat, then capture.`);
   }
 
   const captured = [];
   const evidence = [];
+  const initialCandidates = search.candidates.map((candidate) => ({
+    fingerprint: candidate.fingerprint,
+    text: candidate.text,
+  }));
   for (let index = 0; index < search.candidates.length; index += 1) {
-    const result = await captureCandidateForSearch(row, searchCode, index);
+    const result = await captureCandidateForSearch(row, searchCode, index, {
+      expectedFingerprint: initialCandidates[index]?.fingerprint,
+    });
     if (result.deferred) return result;
     if (result.error) {
-      return manualCapture(row, `${result.error} Search manually, open the correct chat, then capture.`);
+      return manualCapture(row, `${result.error} Search manually, open the correct chat, then capture.`, {
+        searchMode: search.mode,
+        rawDomHitCount: search.rawDomHitCount,
+        visualRowCount: search.visualRowCount,
+        candidateRowFingerprint: initialCandidates[index]?.fingerprint,
+        clickedCandidateText: initialCandidates[index]?.text,
+        attemptEvidence: [
+          ...evidence,
+          ...(result.evidence ? [result.evidence] : []),
+        ],
+      });
     }
     if (result.candidate) captured.push(result.candidate);
     if (result.evidence) evidence.push(result.evidence);
+    if (index < search.candidates.length - 1) {
+      const returned = await returnToSearchResults(searchCode);
+      evidence.push({
+        beforeBackUrl: returned.beforeBackUrl,
+        afterBackUrl: returned.afterBackUrl,
+        returnedToSearchResults: returned.ok,
+      });
+      if (!returned.ok) {
+        return manualCapture(row, "Captured one chat but could not return to LINE OA search results for the remaining candidates. Open the correct chat manually, then capture.", {
+          searchMode: search.mode,
+          rawDomHitCount: search.rawDomHitCount,
+          visualRowCount: search.visualRowCount,
+          attemptEvidence: evidence,
+        });
+      }
+    }
   }
 
-  return { candidates: dedupeCandidates(captured), mode: search.mode, evidence };
+  return {
+    candidates: dedupeCandidates(captured),
+    mode: search.candidates.length > 1 ? "multi_visual_row" : search.mode,
+    evidence,
+  };
 }
 
 async function processRow(row) {

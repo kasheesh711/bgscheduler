@@ -20,6 +20,8 @@ Internal unpacked Chrome extension for bulk LINE parent linking.
 7. Resolve pauses manually when the extension cannot pick one chat safely.
 8. Return to Scheduler, review matched rows, and commit suggested links.
 
+Chrome may show a debugger-permission warning while the resolver is running. The extension uses that permission only to send a real mouse click to the visible LINE OA chat row, then immediately detaches.
+
 The extension stores no screenshots. It sends only student-code search results, captured LINE OA chat URLs, and visible account-note text such as mom/dad/secretary labels back to Scheduler.
 
 If one student code returns multiple LINE OA chats, the extension captures each candidate account and Scheduler keeps them as suggested links for admin verification. If siblings share a Wise parent, Scheduler can fan out the same captured candidate accounts to the sibling rows.
