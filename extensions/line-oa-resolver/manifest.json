@@ -3,7 +3,7 @@
   "name": "BeGifted LINE OA Resolver",
   "description": "Search LINE OA Manager by Wise student code and capture parent chat URLs for Scheduler.",
   "version": "0.1.0",
-  "permissions": ["storage", "activeTab"],
+  "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": [
     "https://chat.line.biz/*",
     "https://bgscheduler.vercel.app/*",

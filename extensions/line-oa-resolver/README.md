@@ -21,3 +21,5 @@ Internal unpacked Chrome extension for bulk LINE parent linking.
 8. Return to Scheduler, review matched rows, and commit suggested links.
 
 The extension stores no screenshots. It sends only student-code search results and captured LINE OA chat URLs back to Scheduler.
+
+If Chrome says the receiving end does not exist, refresh the LINE OA tab and reload the extension from `chrome://extensions`. Existing LINE OA tabs opened before extension install/reload may not have the content script attached yet.

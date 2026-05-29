@@ -246,6 +246,10 @@ async function runResolver() {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "line-oa-resolver:ping") {
+    sendResponse({ ok: true });
+    return false;
+  }
   if (message.type === "line-oa-resolver:stop") {
     resolverState.running = false;
     hideOverlay();
