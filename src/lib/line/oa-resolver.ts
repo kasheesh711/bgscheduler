@@ -762,6 +762,32 @@ export async function updateLineOaResolverRowsFromExtension(
       continue;
     }
 
+    if (row.status === "no_match" && parseLineOaChatUrl(stringOrNull(row.evidence?.extensionUrl))) {
+      await db
+        .update(schema.lineOaResolverRows)
+        .set({
+          status: "error",
+          lineOaAccountId: null,
+          lineUserId: null,
+          lineChatUrl: null,
+          chatTitle: row.chatTitle?.trim() || null,
+          matchMode: "extension_context_guard",
+          captureMode: row.captureMode?.trim() || null,
+          errorMessage: "Extension was still on a LINE OA chat URL without capturing a candidate. Reset to the chat list and retry.",
+          evidence: {
+            source: "line_oa_resolver",
+            ...(existingRow.evidence ?? {}),
+            ...(row.evidence ?? {}),
+          },
+          updatedAt: now(),
+        })
+        .where(and(
+          eq(schema.lineOaResolverRows.id, row.rowId),
+          eq(schema.lineOaResolverRows.runId, input.runId),
+        ));
+      continue;
+    }
+
     if ((row.status === "matched" || row.status === "ambiguous") && candidates.length > 0) {
       const [first] = candidates;
       const status = candidates.length > 1 || row.status === "ambiguous" ? "ambiguous" : "matched";
