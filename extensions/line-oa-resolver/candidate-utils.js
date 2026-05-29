@@ -87,6 +87,64 @@
       && candidateRect.bottom >= searchRect.bottom - 24;
   }
 
+  function uniqueValues(values) {
+    const seen = new Set();
+    const result = [];
+    for (const value of values) {
+      const normalizedValue = normalize(value);
+      if (!normalizedValue || seen.has(normalizedValue)) continue;
+      seen.add(normalizedValue);
+      result.push(normalizedValue);
+    }
+    return result;
+  }
+
+  function rowSearchCodeSet(row) {
+    return new Set(uniqueValues([
+      row?.searchCode,
+      ...(Array.isArray(row?.searchCodes) ? row.searchCodes : []),
+    ]));
+  }
+
+  function normalizedParentGroup(row) {
+    const parent = normalize(row?.parentName || "");
+    return parent === "missingparent" ? "" : parent;
+  }
+
+  function rowsAreRelated(a, b) {
+    const parentA = normalizedParentGroup(a);
+    const parentB = normalizedParentGroup(b);
+    if (parentA && parentA === parentB) return true;
+
+    const codesA = rowSearchCodeSet(a);
+    const codesB = rowSearchCodeSet(b);
+    for (const code of codesA) {
+      if (codesB.has(code)) return true;
+    }
+    return false;
+  }
+
+  function classifyRepeatedSameChat(recentCaptures, nextCapture, options) {
+    const windowSize = Number(options?.windowSize || 3);
+    const recent = [
+      ...(Array.isArray(recentCaptures) ? recentCaptures : []),
+      nextCapture,
+    ].slice(-windowSize);
+    const lineUserId = nextCapture?.lineUserId || null;
+    if (!lineUserId || recent.length < windowSize) {
+      return { suspect: false, recent, lineUserId };
+    }
+
+    const allSameLineUser = recent.every((capture) => capture?.lineUserId === lineUserId);
+    const distinctStudents = new Set(recent.map((capture) => capture?.studentKey).filter(Boolean));
+    const allRelated = recent.every((capture) => rowsAreRelated(nextCapture, capture));
+    return {
+      suspect: allSameLineUser && distinctStudents.size >= windowSize && !allRelated,
+      recent,
+      lineUserId,
+    };
+  }
+
   function collapseVisualRows(rawHits, options) {
     const limit = Number(options?.limit || 5);
     const hits = (Array.isArray(rawHits) ? rawHits : [])
@@ -128,6 +186,9 @@
     candidateFingerprint,
     rectIsInSearchColumn,
     isSameVisualRow,
+    classifyRepeatedSameChat,
+    rowsAreRelated,
+    rowSearchCodeSet,
   };
 
   root.LineOaResolverCandidateUtils = api;

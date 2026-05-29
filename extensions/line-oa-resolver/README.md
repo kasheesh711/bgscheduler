@@ -16,6 +16,7 @@ Internal unpacked Chrome extension for bulk LINE parent linking.
 3. Copy the token.
 4. Open `https://chat.line.biz/` while signed in.
 5. Open the extension, paste the Scheduler URL and token, then click **Start / resume**.
+   - Enable **Overnight unattended** when you want it to log uncertain/no-match rows and keep going without manual pauses.
 6. Leave the LINE OA tab open while it searches each student code.
 7. Resolve pauses manually when the extension cannot pick one chat safely.
 8. Return to Scheduler, review matched rows, and commit suggested links.

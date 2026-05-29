@@ -7,6 +7,15 @@ let resolverState = {
   index: 0,
   processedRows: 0,
   capturedRows: 0,
+  multiCandidateRows: 0,
+  noMatchRows: 0,
+  errorRows: 0,
+  noCaptureZeroHitStreak: 0,
+  lastStatus: "Idle",
+  lastReason: "",
+  warningMessage: "",
+  overnightUnattended: false,
+  selectorRetryRowId: null,
   recentCaptures: [],
 };
 
@@ -82,6 +91,15 @@ function ensureSearchContext() {
   resolverState.running = false;
   location.assign(rootUrl);
   return false;
+}
+
+function resetToSearchRoot(row) {
+  const rootUrl = currentAccountRootUrl() || "https://chat.line.biz/";
+  resolverState.selectorRetryRowId = row?.rowId || null;
+  persistResolverState();
+  resolverState.running = false;
+  location.assign(rootUrl);
+  return { deferred: true };
 }
 
 function relationshipRoleFromText(value) {
@@ -331,7 +349,62 @@ function hideOverlay() {
   document.getElementById("line-oa-resolver-overlay")?.remove();
 }
 
-function manualCapture(row, reason, evidence = {}) {
+function renderProgressOverlay(extra = {}) {
+  const overlay = ensureOverlay();
+  const pending = Math.max(0, resolverState.rows.length - resolverState.processedRows);
+  const modeLabel = resolverState.overnightUnattended ? "Overnight unattended" : "Manual QA";
+  const warning = resolverState.warningMessage
+    ? `<div style="margin-top:8px;border:1px solid #f0c36a;background:#fff8e6;border-radius:8px;padding:8px;color:#6b4b00;">${escapeHtml(resolverState.warningMessage)}</div>`
+    : "";
+  overlay.innerHTML = `
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px;">
+      <div style="font-weight:700;">LINE OA Resolver running</div>
+      <div style="font-size:11px;color:#636973;">${escapeHtml(modeLabel)}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px;">
+      ${progressChip("Processed", resolverState.processedRows)}
+      ${progressChip("Pending", pending)}
+      ${progressChip("Captured", resolverState.capturedRows)}
+      ${progressChip("Multi", resolverState.multiCandidateRows)}
+      ${progressChip("No match", resolverState.noMatchRows)}
+      ${progressChip("Errors", resolverState.errorRows)}
+    </div>
+    <div style="border-top:1px solid #ece7df;padding-top:8px;color:#636973;">
+      <div><strong style="color:#15171a;">Last:</strong> ${escapeHtml(extra.lastStatus || resolverState.lastStatus || "Idle")}</div>
+      ${extra.lastReason || resolverState.lastReason ? `<div style="margin-top:3px;">${escapeHtml(extra.lastReason || resolverState.lastReason)}</div>` : ""}
+    </div>
+    ${warning}
+  `;
+}
+
+function progressChip(label, value) {
+  return `
+    <div style="border:1px solid #ece7df;border-radius:8px;padding:6px;background:#fbfaf7;">
+      <div style="font-size:10px;text-transform:uppercase;color:#636973;font-weight:700;">${escapeHtml(label)}</div>
+      <div style="font-size:16px;font-weight:750;">${escapeHtml(value)}</div>
+    </div>
+  `;
+}
+
+function overnightLoggedResult(row, reason, evidence = {}, fallback = {}) {
+  return {
+    status: fallback.status || "error",
+    errorMessage: reason,
+    captureMode: fallback.captureMode || "extension",
+    matchMode: fallback.matchMode || "overnight_logged",
+    evidence: {
+      overnightUnattended: true,
+      searchCode: row.searchCode,
+      studentKey: row.studentKey,
+      ...(evidence ?? {}),
+    },
+  };
+}
+
+function manualCapture(row, reason, evidence = {}, fallback = {}) {
+  if (resolverState.overnightUnattended) {
+    return Promise.resolve(overnightLoggedResult(row, reason, evidence, fallback));
+  }
   const overlay = ensureOverlay();
   overlay.innerHTML = `
     <div style="font-weight:700;margin-bottom:4px;">LINE OA Resolver paused</div>
@@ -378,7 +451,33 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
+function truncateString(value, maxLength) {
+  if (value == null) return value;
+  const stringValue = String(value);
+  return stringValue.length > maxLength ? stringValue.slice(0, maxLength) : stringValue;
+}
+
+function sanitizeCandidate(candidate) {
+  if (!candidate || typeof candidate !== "object") return candidate;
+  return {
+    ...candidate,
+    lineChatUrl: truncateString(candidate.lineChatUrl, 500),
+    chatTitle: truncateString(candidate.chatTitle, 500),
+    adminNoteRaw: truncateString(candidate.adminNoteRaw, 1000),
+    captureMode: truncateString(candidate.captureMode, 80),
+    matchMode: truncateString(candidate.matchMode, 80),
+    searchCode: truncateString(candidate.searchCode, 120),
+  };
+}
+
+function sanitizeErrorMessage(value) {
+  return truncateString(value, 1000);
+}
+
 async function postRow(row, result) {
+  const candidates = Array.isArray(result.candidates)
+    ? result.candidates.map(sanitizeCandidate).slice(0, 25)
+    : undefined;
   const response = await fetch(`${resolverState.baseUrl}/api/line/contacts/oa-resolver/runs/${resolverState.runId}/rows`, {
     method: "POST",
     headers: {
@@ -389,12 +488,12 @@ async function postRow(row, result) {
       rows: [{
         rowId: row.rowId,
         status: result.status,
-        lineChatUrl: result.lineChatUrl ?? null,
-        chatTitle: result.chatTitle ?? null,
-        candidates: result.candidates ?? undefined,
-        matchMode: result.matchMode ?? null,
-        captureMode: result.captureMode ?? null,
-        errorMessage: result.errorMessage ?? null,
+        lineChatUrl: truncateString(result.lineChatUrl, 500) ?? null,
+        chatTitle: truncateString(result.chatTitle, 500) ?? null,
+        candidates,
+        matchMode: truncateString(result.matchMode, 80) ?? null,
+        captureMode: truncateString(result.captureMode, 80) ?? null,
+        errorMessage: sanitizeErrorMessage(result.errorMessage) ?? null,
         evidence: {
           searchCode: row.searchCode,
           studentKey: row.studentKey,
@@ -548,8 +647,17 @@ async function captureSearchCodeCandidates(row, searchCode) {
   if (!ensureSearchContext()) return { deferred: true };
   const search = await searchLineOa(searchCode);
   if (search.mode === "selector_missing") {
-    return manualCapture(row, "Could not find the LINE OA search input. Search manually, open the correct chat, then capture.");
+    if (resolverState.selectorRetryRowId !== row.rowId) {
+      return resetToSearchRoot(row);
+    }
+    return manualCapture(
+      row,
+      "Could not find the LINE OA search input after retrying the LINE OA root.",
+      { attemptedSearchCode: searchCode, selectorRetryRowId: resolverState.selectorRetryRowId },
+      { matchMode: "selector_missing" },
+    );
   }
+  if (resolverState.selectorRetryRowId === row.rowId) resolverState.selectorRetryRowId = null;
   if (search.candidates.length === 0) {
     return {
       candidates: [],
@@ -584,6 +692,8 @@ async function captureSearchCodeCandidates(row, searchCode) {
           ...evidence,
           ...(result.evidence ? [result.evidence] : []),
         ],
+      }, {
+        matchMode: "click_failed",
       });
     }
     if (result.candidate) captured.push(result.candidate);
@@ -601,15 +711,29 @@ async function captureSearchCodeCandidates(row, searchCode) {
           rawDomHitCount: search.rawDomHitCount,
           visualRowCount: search.visualRowCount,
           attemptEvidence: evidence,
+        }, {
+          matchMode: "search_context_lost",
         });
       }
     }
+  }
+
+  let contextReturn = null;
+  if (captured.length > 0 && isLineOaChatUrl(location.href)) {
+    contextReturn = await returnToSearchResults(searchCode);
+    evidence.push({
+      beforeBackUrl: contextReturn.beforeBackUrl,
+      afterBackUrl: contextReturn.afterBackUrl,
+      returnedToSearchResults: contextReturn.ok,
+      finalReturnToSearchResults: true,
+    });
   }
 
   return {
     candidates: dedupeCandidates(captured),
     mode: search.candidates.length > 1 ? "multi_visual_row" : search.mode,
     evidence,
+    contextLost: contextReturn ? !contextReturn.ok : false,
   };
 }
 
@@ -626,7 +750,7 @@ async function processRow(row) {
     if (result.status) return result;
     allCandidates.push(...(result.candidates ?? []));
     attemptEvidence.push(...(result.evidence ?? []));
-    if (allCandidates.length > 0) break;
+    if (result.contextLost) break;
   }
 
   const candidates = dedupeCandidates(allCandidates);
@@ -664,20 +788,60 @@ async function processRow(row) {
 
 function repeatedSameChatCapture(row, result) {
   const lineUserId = lineUserIdFromUrl(result.lineChatUrl || result.candidates?.[0]?.lineChatUrl);
-  if (!lineUserId) return false;
-  const recent = [
-    ...resolverState.recentCaptures,
-    { lineUserId, studentKey: row.studentKey, searchCode: row.searchCode },
-  ].slice(-3);
-  resolverState.recentCaptures = recent;
-  const distinctStudents = new Set(recent.map((capture) => capture.studentKey));
-  return recent.length >= 3
-    && distinctStudents.size >= 3
-    && recent.every((capture) => capture.lineUserId === lineUserId);
+  if (!lineUserId) return { suspect: false, lineUserId: null, recent: resolverState.recentCaptures };
+  const nextCapture = {
+    lineUserId,
+    studentKey: row.studentKey,
+    searchCode: row.searchCode,
+    searchCodes: row.searchCodes || [],
+    parentName: row.parentName,
+  };
+  const classified = typeof candidateUtils.classifyRepeatedSameChat === "function"
+    ? candidateUtils.classifyRepeatedSameChat(resolverState.recentCaptures, nextCapture, { windowSize: 3 })
+    : { suspect: false, recent: [...resolverState.recentCaptures, nextCapture].slice(-3), lineUserId };
+  resolverState.recentCaptures = classified.recent;
+  return classified;
+}
+
+function maxRawDomHitCount(result) {
+  const values = [];
+  if (Array.isArray(result.evidence?.attemptEvidence)) {
+    for (const evidence of result.evidence.attemptEvidence) {
+      const value = Number(evidence?.rawDomHitCount);
+      if (Number.isFinite(value)) values.push(value);
+    }
+  }
+  const topLevel = Number(result.evidence?.rawDomHitCount);
+  if (Number.isFinite(topLevel)) values.push(topLevel);
+  return values.length > 0 ? Math.max(...values) : null;
+}
+
+function updateSessionCounters(result) {
+  resolverState.processedRows += 1;
+  const capturedCount = Array.isArray(result.candidates) ? dedupeCandidates(result.candidates).length : result.lineChatUrl ? 1 : 0;
+  if (capturedCount > 0) resolverState.capturedRows += capturedCount;
+  if (capturedCount > 1 || result.status === "ambiguous") resolverState.multiCandidateRows += 1;
+  if (result.status === "no_match") resolverState.noMatchRows += 1;
+  if (result.status === "error") resolverState.errorRows += 1;
+
+  const rawHitCount = maxRawDomHitCount(result);
+  if (capturedCount === 0 && rawHitCount === 0) {
+    resolverState.noCaptureZeroHitStreak += 1;
+  } else {
+    resolverState.noCaptureZeroHitStreak = 0;
+  }
+
+  if (resolverState.overnightUnattended && resolverState.noCaptureZeroHitStreak >= 25) {
+    resolverState.warningMessage = `${resolverState.noCaptureZeroHitStreak} rows in a row had no visible LINE search hits. Continuing overnight, but LINE search may be stale.`;
+  }
+
+  resolverState.lastStatus = `${result.status}${result.matchMode ? ` / ${result.matchMode}` : ""}`;
+  resolverState.lastReason = result.errorMessage || "";
 }
 
 async function runResolver() {
   resolverState.running = true;
+  renderProgressOverlay();
   for (; resolverState.index < resolverState.rows.length; resolverState.index += 1) {
     if (!resolverState.running) break;
     const row = resolverState.rows[resolverState.index];
@@ -685,37 +849,46 @@ async function runResolver() {
       persistResolverState();
       const result = await processRow(row);
       if (result.deferred) return;
+      let rowPosted = false;
       resolverState.lastResultHadCapture = Boolean(result.lineChatUrl || result.candidates?.length);
-      if (resolverState.lastResultHadCapture && repeatedSameChatCapture(row, result)) {
-        const lineUserId = lineUserIdFromUrl(result.lineChatUrl || result.candidates?.[0]?.lineChatUrl);
-        resolverState.running = false;
-        const overlay = ensureOverlay();
-        overlay.innerHTML = `
-          <div style="font-weight:700;margin-bottom:4px;">LINE OA Resolver paused</div>
-          <div style="color:#636973;margin-bottom:8px;">The same LINE chat (${escapeHtml(lineUserId)}) was captured for several unrelated student codes. Search appears stuck in one chat.</div>
-        `;
-        await postRow(row, {
-          status: "error",
-          errorMessage: "Same LINE chat captured across unrelated student codes; resolver paused.",
-          matchMode: "stuck_same_chat_guard",
-          captureMode: "extension",
-          evidence: result.evidence,
-        });
-        break;
+      if (resolverState.lastResultHadCapture) {
+        const repeated = repeatedSameChatCapture(row, result);
+        if (repeated.suspect) {
+          const suspectResult = {
+            status: "error",
+            errorMessage: "Same LINE chat captured across unrelated student codes; resolver logged and continued.",
+            matchMode: "suspect_same_chat_guard",
+            captureMode: "extension",
+            evidence: {
+              ...(result.evidence ?? {}),
+              candidateContacts: result.candidates ?? [],
+              suspectLineUserId: repeated.lineUserId,
+              recentCaptures: repeated.recent,
+              overnightUnattended: resolverState.overnightUnattended,
+            },
+          };
+          await postRow(row, suspectResult);
+          updateSessionCounters(suspectResult);
+          rowPosted = true;
+        }
       }
-      await postRow(row, result);
+      if (!rowPosted) {
+        await postRow(row, result);
+        updateSessionCounters(result);
+      }
     } catch (error) {
-      await postRow(row, {
+      const errorResult = {
         status: "error",
         errorMessage: error instanceof Error ? error.message : String(error),
         matchMode: "extension_error",
         captureMode: "extension",
-      });
+      };
+      await postRow(row, errorResult);
+      updateSessionCounters(errorResult);
     }
-    resolverState.processedRows += 1;
-    if (resolverState.lastResultHadCapture) resolverState.capturedRows += 1;
     resolverState.lastResultHadCapture = false;
-    if (resolverState.processedRows >= 10 && resolverState.capturedRows === 0) {
+    renderProgressOverlay();
+    if (!resolverState.overnightUnattended && resolverState.processedRows >= 10 && resolverState.capturedRows === 0) {
       resolverState.running = false;
       const overlay = ensureOverlay();
       overlay.innerHTML = `
@@ -757,6 +930,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     index: 0,
     processedRows: 0,
     capturedRows: 0,
+    multiCandidateRows: 0,
+    noMatchRows: 0,
+    errorRows: 0,
+    noCaptureZeroHitStreak: 0,
+    lastStatus: "Starting",
+    lastReason: "",
+    warningMessage: "",
+    overnightUnattended: Boolean(message.overnightUnattended),
+    selectorRetryRowId: null,
     lastResultHadCapture: false,
     recentCaptures: [],
   };
@@ -772,6 +954,7 @@ if (restoredResolverState) {
     ...resolverState,
     ...restoredResolverState,
     running: true,
+    overnightUnattended: Boolean(restoredResolverState.overnightUnattended),
     recentCaptures: Array.isArray(restoredResolverState.recentCaptures) ? restoredResolverState.recentCaptures : [],
   };
   window.setTimeout(() => {

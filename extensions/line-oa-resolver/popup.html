@@ -41,6 +41,36 @@
         background: #fff;
         font: inherit;
       }
+      .check {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        margin-top: 12px;
+        padding: 8px;
+        border: 1px solid #e6e0d6;
+        border-radius: 8px;
+        background: #fff;
+      }
+      .check input {
+        width: 16px;
+        height: 16px;
+        margin-top: 2px;
+        flex: 0 0 auto;
+      }
+      .check label {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0;
+        text-transform: none;
+        color: #15171a;
+      }
+      .check span {
+        display: block;
+        margin-top: 2px;
+        color: #636973;
+        font-weight: 400;
+      }
       button {
         height: 32px;
         border: 1px solid #0b83b8;
@@ -86,6 +116,14 @@
 
       <label for="token">Resolver token</label>
       <input id="token" placeholder="Paste token from /line-review">
+
+      <div class="check">
+        <input id="overnight" type="checkbox">
+        <div>
+          <label for="overnight">Overnight unattended</label>
+          <span>Log uncertain rows and keep going instead of pausing for manual capture.</span>
+        </div>
+      </div>
 
       <div class="actions">
         <button id="start">Start / resume</button>

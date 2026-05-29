@@ -1,5 +1,6 @@
 const baseUrlInput = document.getElementById("baseUrl");
 const tokenInput = document.getElementById("token");
+const overnightInput = document.getElementById("overnight");
 const startButton = document.getElementById("start");
 const stopButton = document.getElementById("stop");
 const statusEl = document.getElementById("status");
@@ -44,7 +45,7 @@ async function ensureContentScript(tab) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      files: ["content.js"],
+      files: ["candidate-utils.js", "content.js"],
     });
     await sendTabMessage(tab.id, { type: "line-oa-resolver:ping" });
   } catch (error) {
@@ -71,6 +72,7 @@ async function saveSettings() {
   await chrome.storage.local.set({
     schedulerBaseUrl: schedulerBaseUrl(),
     resolverToken: tokenInput.value.trim(),
+    resolverOvernightUnattended: overnightInput.checked,
   });
 }
 
@@ -93,8 +95,9 @@ async function start() {
       token,
       runId: worklist.runId,
       rows: worklist.rows,
+      overnightUnattended: overnightInput.checked,
     });
-    setStatus(`Running ${worklist.rows.length} row(s). Keep this LINE OA tab open.`);
+    setStatus(`Running ${worklist.rows.length} row(s). Keep this LINE OA tab open.${overnightInput.checked ? "\nOvernight unattended is ON." : ""}`);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error));
   } finally {
@@ -113,9 +116,10 @@ async function stop() {
   }
 }
 
-chrome.storage.local.get(["schedulerBaseUrl", "resolverToken"], (values) => {
+chrome.storage.local.get(["schedulerBaseUrl", "resolverToken", "resolverOvernightUnattended"], (values) => {
   baseUrlInput.value = values.schedulerBaseUrl || "https://bgscheduler.vercel.app";
   tokenInput.value = values.resolverToken || "";
+  overnightInput.checked = Boolean(values.resolverOvernightUnattended);
 });
 
 startButton.addEventListener("click", start);
