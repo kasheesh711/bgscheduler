@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  ChevronUp,
   ExternalLink,
   Loader2,
   RefreshCw,
@@ -53,13 +54,20 @@ export function LinkValidationPanel({
   className,
   onChanged,
   refreshKey = 0,
+  defaultScope = "my",
+  assignmentOpen = false,
+  onAssignmentOpenChange,
 }: {
   runId: string | null;
   className?: string;
   onChanged?: () => void;
   refreshKey?: number;
+  defaultScope?: LineLinkValidationScope;
+  assignmentOpen?: boolean;
+  onAssignmentOpenChange?: (open: boolean) => void;
 }) {
-  const [scope, setScope] = useState<LineLinkValidationScope>("my");
+  const [scope, setScope] = useState<LineLinkValidationScope>(defaultScope);
+  const [scopeTouched, setScopeTouched] = useState(false);
   const [tasks, setTasks] = useState<LineLinkValidationTask[]>([]);
   const [reviewers, setReviewers] = useState<LineLinkValidationReviewer[]>([]);
   const [selectedReviewers, setSelectedReviewers] = useState<Set<string>>(new Set());
@@ -96,6 +104,11 @@ export function LinkValidationPanel({
       else next.add(email);
       return next;
     });
+  }
+
+  function updateScope(nextScope: LineLinkValidationScope) {
+    setScopeTouched(true);
+    setScope(nextScope);
   }
 
   async function assignValidation() {
@@ -176,61 +189,82 @@ export function LinkValidationPanel({
     void loadValidation(scope);
   }, [runId, scope, refreshKey]);
 
+  useEffect(() => {
+    if (scopeTouched) return;
+    setScope(defaultScope);
+  }, [defaultScope, scopeTouched]);
+
   return (
     <div className={cn("flex min-h-0 flex-col rounded-lg border border-border bg-card", className)}>
-      <div className="border-b border-border p-3">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-              <UserCheck className="size-4 text-primary" />
-              Mapping validation
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Assign suggested resolver links, then verify each LINE account to student-code mapping.
-            </p>
-          </div>
-          <Button type="button" size="sm" variant="outline" onClick={() => loadValidation(scope)} disabled={Boolean(busy)}>
-            {busy === "load" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-            Refresh
-          </Button>
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-1">
+      <div className="shrink-0 border-b border-border bg-card px-3 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-1">
           {SCOPES.map((item) => (
             <button
               key={item.value}
               type="button"
               className={cn(
-                "rounded-md border px-2 py-1 text-xs font-medium",
+                "rounded-md border px-2.5 py-1 text-xs font-medium",
                 scope === item.value
                   ? "border-primary bg-primary/10 text-primary"
                   : "border-border bg-background text-muted-foreground hover:text-foreground",
               )}
-              onClick={() => setScope(item.value)}
+              onClick={() => updateScope(item.value)}
             >
               {item.label}
             </button>
           ))}
-        </div>
+          </div>
 
-        <div className="mt-3 rounded-md border border-border bg-background p-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs font-medium text-foreground">Assign open tasks evenly</div>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>{tasks.length} shown</span>
+            {busy === "load" ? <Loader2 className="size-3.5 animate-spin" /> : null}
             <Button
               type="button"
               size="sm"
-              onClick={assignValidation}
-              disabled={!runId || selectedReviewerPayload.length === 0 || busy === "assign"}
+              variant="ghost"
+              onClick={() => loadValidation(scope)}
+              disabled={Boolean(busy)}
             >
-              {busy === "assign" ? <Loader2 className="animate-spin" /> : <UserCheck />}
-              Assign validation
+              <RefreshCw />
+              Refresh rows
             </Button>
           </div>
-          <div className="mt-2 grid gap-1 sm:grid-cols-2">
+        </div>
+
+        {assignmentOpen ? (
+          <div className="mt-2 rounded-lg border border-border bg-background p-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
+                <UserCheck className="size-3.5 text-primary" />
+                Assign open tasks evenly
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={assignValidation}
+                  disabled={!runId || selectedReviewerPayload.length === 0 || busy === "assign"}
+                >
+                  {busy === "assign" ? <Loader2 className="animate-spin" /> : <UserCheck />}
+                  Assign validation
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onAssignmentOpenChange?.(false)}
+                >
+                  <ChevronUp />
+                  Hide
+                </Button>
+              </div>
+            </div>
+            <div className="mt-2 grid gap-1 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
             {reviewers.map((reviewer) => (
               <label
                 key={reviewer.email}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-xs hover:bg-muted"
+                className="flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-1.5 py-1 text-xs hover:border-border hover:bg-muted"
               >
                 <input
                   type="checkbox"
@@ -243,8 +277,9 @@ export function LinkValidationPanel({
                 <Badge variant="outline">{reviewer.openAssignments}</Badge>
               </label>
             ))}
+            </div>
           </div>
-        </div>
+        ) : null}
 
         {message ? (
           <div className="mt-2 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground">
@@ -253,7 +288,7 @@ export function LinkValidationPanel({
         ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-auto">
         {openTasks.length === 0 && scope !== "verified" && scope !== "rejected" ? (
           <div className="p-4 text-sm text-muted-foreground">
             No open validation tasks for this filter. Commit resolver candidates first, then assign validation.
@@ -261,93 +296,118 @@ export function LinkValidationPanel({
         ) : tasks.length === 0 ? (
           <div className="p-4 text-sm text-muted-foreground">No validation rows for this filter.</div>
         ) : (
-          <div className="divide-y divide-border">
-            {tasks.map((task) => (
-              <div key={task.id} className="space-y-2 p-3">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-foreground">
-                      {task.studentName}
-                    </div>
+          <table className="w-full min-w-[1180px] table-fixed text-left text-sm">
+            <thead className="sticky top-0 z-10 border-b border-border bg-muted/90 text-xs font-medium uppercase tracking-wide text-muted-foreground backdrop-blur">
+              <tr>
+                <th className="w-[28%] px-3 py-2">Student</th>
+                <th className="w-[31%] px-3 py-2">LINE account</th>
+                <th className="w-[18%] px-3 py-2">Assigned</th>
+                <th className="w-[9%] px-3 py-2">Status</th>
+                <th className="w-[14%] px-3 py-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {tasks.map((task) => (
+                <tr key={task.id} className="align-top hover:bg-muted/35">
+                  <td className="px-3 py-2">
+                    <div className="truncate font-semibold text-foreground">{task.studentName}</div>
                     <div className="truncate text-xs text-muted-foreground">
                       {task.studentKey} / Parent: {task.parentName || "n/a"}
                     </div>
-                  </div>
-                  <Badge variant={statusVariant(task.status)}>{task.status}</Badge>
-                </div>
-
-                <div className="rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground">
-                  <div className="truncate text-foreground">
-                    {task.chatTitle || task.contactDisplayName || task.lineUserId}
-                  </div>
-                  <div className="truncate">{evidenceLabel(task) || "No LINE role evidence"}</div>
-                  <div className="truncate">Assigned: {assignmentLabel(task)}</div>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => task.lineChatUrl && window.open(task.lineChatUrl, "_blank", "noopener,noreferrer")}
-                    disabled={!task.lineChatUrl}
-                  >
-                    <ExternalLink />
-                    Open LINE
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => patchTask(task.id, "verified")}
-                    disabled={task.status !== "suggested" || busy === `verified:${task.id}`}
-                  >
-                    {busy === `verified:${task.id}` ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
-                    Verify
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => patchTask(task.id, "rejected")}
-                    disabled={task.status !== "suggested" || busy === `rejected:${task.id}`}
-                  >
-                    {busy === `rejected:${task.id}` ? <Loader2 className="animate-spin" /> : <XCircle />}
-                    Reject
-                  </Button>
-                </div>
-
-                {task.status === "suggested" ? (
-                  <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                    <select
-                      className="h-8 rounded-lg border border-input bg-background px-2 text-xs"
-                      value={rowAssignees[task.id] ?? ""}
-                      onChange={(event) => setRowAssignees((current) => ({
-                        ...current,
-                        [task.id]: event.target.value,
-                      }))}
-                    >
-                      <option value="">Reassign to...</option>
-                      {reviewers.map((reviewer) => (
-                        <option key={reviewer.email} value={reviewer.email}>
-                          {reviewer.name || reviewer.email}
-                        </option>
-                      ))}
-                    </select>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => reassignTask(task.id)}
-                      disabled={!rowAssignees[task.id] || busy === `reassign:${task.id}`}
-                    >
-                      {busy === `reassign:${task.id}` ? <Loader2 className="animate-spin" /> : <UserCheck />}
-                      Reassign
-                    </Button>
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {task.currentStudentActivated === false ? (
+                        <Badge variant="outline" className="text-[10px]">Inactive in Wise</Badge>
+                      ) : null}
+                      {task.currentStudentHasFutureSessions ? (
+                        <Badge variant="outline" className="text-[10px]">Future sessions</Badge>
+                      ) : null}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="truncate font-medium text-foreground">
+                      {task.chatTitle || task.contactDisplayName || task.lineUserId}
+                    </div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {evidenceLabel(task) || "No LINE role evidence"}
+                    </div>
+                    <div className="truncate text-[11px] text-muted-foreground">{task.lineUserId}</div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="truncate text-xs text-muted-foreground">{assignmentLabel(task)}</div>
+                    {task.status === "suggested" ? (
+                      <div className="mt-1 flex gap-1">
+                        <select
+                          className="h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs"
+                          value={rowAssignees[task.id] ?? ""}
+                          onChange={(event) => setRowAssignees((current) => ({
+                            ...current,
+                            [task.id]: event.target.value,
+                          }))}
+                        >
+                          <option value="">Reassign...</option>
+                          {reviewers.map((reviewer) => (
+                            <option key={reviewer.email} value={reviewer.email}>
+                              {reviewer.name || reviewer.email}
+                            </option>
+                          ))}
+                        </select>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2"
+                          onClick={() => reassignTask(task.id)}
+                          disabled={!rowAssignees[task.id] || busy === `reassign:${task.id}`}
+                        >
+                          {busy === `reassign:${task.id}` ? <Loader2 className="animate-spin" /> : <UserCheck />}
+                          <span className="sr-only">Reassign</span>
+                        </Button>
+                      </div>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2">
+                    <Badge variant={statusVariant(task.status)}>{task.status}</Badge>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2"
+                        onClick={() => task.lineChatUrl && window.open(task.lineChatUrl, "_blank", "noopener,noreferrer")}
+                        disabled={!task.lineChatUrl}
+                      >
+                        <ExternalLink />
+                        LINE
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-7 px-2"
+                        onClick={() => patchTask(task.id, "verified")}
+                        disabled={task.status !== "suggested" || busy === `verified:${task.id}`}
+                      >
+                        {busy === `verified:${task.id}` ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
+                        Verify
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2"
+                        onClick={() => patchTask(task.id, "rejected")}
+                        disabled={task.status !== "suggested" || busy === `rejected:${task.id}`}
+                      >
+                        {busy === `rejected:${task.id}` ? <Loader2 className="animate-spin" /> : <XCircle />}
+                        Reject
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
     </div>

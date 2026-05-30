@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   LINE_REVIEW_WORKSPACE_TABS,
+  MAPPING_VALIDATION_HEADER_MODE,
   studentLinkVisibilityForReview,
 } from "@/components/line-review/line-review-workspace";
+import {
+  MAPPING_VALIDATION_ADMIN_DEFAULT_SCOPE,
+  MAPPING_VALIDATION_LEAD_DEFAULT_SCOPE,
+} from "@/components/line-review/mapping-validation-workspace";
 import { getResolutionStepStates } from "@/components/line-review/resolution-board";
 
 const baseReview = {
@@ -89,6 +94,15 @@ describe("LINE review workspace navigation", () => {
       "AI Review Queue",
       "Mapping Validation",
     ]);
+  });
+
+  it("uses a standalone header for mapping validation", () => {
+    expect(MAPPING_VALIDATION_HEADER_MODE).toBe("standalone");
+  });
+
+  it("defaults lead and admin validation queues to the intended scopes", () => {
+    expect(MAPPING_VALIDATION_LEAD_DEFAULT_SCOPE).toBe("all");
+    expect(MAPPING_VALIDATION_ADMIN_DEFAULT_SCOPE).toBe("my");
   });
 });
 

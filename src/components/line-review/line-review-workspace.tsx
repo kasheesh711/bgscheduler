@@ -40,6 +40,8 @@ export const LINE_REVIEW_WORKSPACE_TABS = [
   { value: "validation", label: "Mapping Validation" },
 ] as const;
 
+export const MAPPING_VALIDATION_HEADER_MODE = "standalone";
+
 export function LineReviewWorkspace() {
   const [workspaceTab, setWorkspaceTab] = useState<(typeof LINE_REVIEW_WORKSPACE_TABS)[number]["value"]>("reviews");
   const [intentFilter, setIntentFilter] = useState<IntentType>("all");
@@ -362,159 +364,170 @@ export function LineReviewWorkspace() {
     />
   );
 
+  const workspaceTabs = (
+    <div className="inline-flex rounded-lg border border-border bg-background p-1">
+      {LINE_REVIEW_WORKSPACE_TABS.map((item) => (
+        <button
+          key={item.value}
+          type="button"
+          className={cn(
+            "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+            workspaceTab === item.value
+              ? "bg-primary text-primary-foreground shadow-sm"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          )}
+          onClick={() => setWorkspaceTab(item.value)}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <main className="flex h-[calc(100vh-2.75rem)] flex-col overflow-hidden bg-background">
-      <CaseHeader
-        selected={selected}
-        links={links}
-        analytics={analytics}
-        falseNegativeCount={falseNegatives.length}
-        logCount={logs.length}
-        busy={busy}
-        loading={loading}
-        onRefresh={refreshAll}
-        onRebuild={() => rebuildOperationalPlan(selected?.id)}
-        onOpenSignals={() => setSignalsOpen(true)}
-        aliasImportCommand={(
-          <>
-            <Button
-              type="button"
-              size="sm"
-              variant="default"
-              onClick={() => setOaResolverOpen(true)}
-            >
-              <ScanSearch />
-              Bulk OA resolver
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setAliasImportOpen(true)}
-            >
-              <Upload />
-              Screenshot aliases
-            </Button>
-          </>
-        )}
-        studentLinkCommand={studentLinkCommand}
-      />
+      {workspaceTab === "reviews" ? (
+        <>
+          <CaseHeader
+            selected={selected}
+            links={links}
+            analytics={analytics}
+            falseNegativeCount={falseNegatives.length}
+            logCount={logs.length}
+            busy={busy}
+            loading={loading}
+            onRefresh={refreshAll}
+            onRebuild={() => rebuildOperationalPlan(selected?.id)}
+            onOpenSignals={() => setSignalsOpen(true)}
+            aliasImportCommand={(
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="default"
+                  onClick={() => setOaResolverOpen(true)}
+                >
+                  <ScanSearch />
+                  Bulk OA resolver
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setAliasImportOpen(true)}
+                >
+                  <Upload />
+                  Screenshot aliases
+                </Button>
+              </>
+            )}
+            studentLinkCommand={studentLinkCommand}
+          />
 
-      <div className="shrink-0 border-b border-border bg-card/55 px-4 py-2 lg:px-5">
-        <div className="inline-flex rounded-lg border border-border bg-background p-1">
-          {LINE_REVIEW_WORKSPACE_TABS.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              className={cn(
-                "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                workspaceTab === item.value
-                  ? "bg-primary text-primary-foreground shadow-sm"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
-              )}
-              onClick={() => setWorkspaceTab(item.value)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {error ? (
-        <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive lg:px-5">
-          {error}
-        </div>
+          <div className="shrink-0 border-b border-border bg-card/55 px-4 py-2 lg:px-5">
+            {workspaceTabs}
+          </div>
+        </>
       ) : null}
 
       {workspaceTab === "validation" ? (
         <MappingValidationWorkspace
           onOpenResolver={() => setOaResolverOpen(true)}
           refreshKey={validationRefreshKey}
+          workspaceTabs={workspaceTabs}
         />
       ) : (
-      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[310px_minmax(0,1fr)]">
-        <ReviewQueue
-          reviews={reviews}
-          selected={selected}
-          links={links}
-          loading={loading}
-          intentFilter={intentFilter}
-          onIntentFilterChange={setIntentFilter}
-          onSelect={setSelectedId}
-          className="hidden lg:flex"
-        />
+        <>
+          {error ? (
+            <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive lg:px-5">
+              {error}
+            </div>
+          ) : null}
 
-        <section className="flex min-h-0 flex-col overflow-hidden bg-background">
-          {!selected ? (
-            <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-              {loading ? (
-                <div className="flex items-center text-sm text-muted-foreground">
-                  <Loader2 className="mr-2 size-4 animate-spin" />
-                  Loading reviews
+          <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[310px_minmax(0,1fr)]">
+            <ReviewQueue
+              reviews={reviews}
+              selected={selected}
+              links={links}
+              loading={loading}
+              intentFilter={intentFilter}
+              onIntentFilterChange={setIntentFilter}
+              onSelect={setSelectedId}
+              className="hidden lg:flex"
+            />
+
+            <section className="flex min-h-0 flex-col overflow-hidden bg-background">
+              {!selected ? (
+                <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+                  {loading ? (
+                    <div className="flex items-center text-sm text-muted-foreground">
+                      <Loader2 className="mr-2 size-4 animate-spin" />
+                      Loading reviews
+                    </div>
+                  ) : (
+                    <EmptyState
+                      title="No review selected"
+                      detail="Select a pending LINE review to validate the AI response and operational suggestion."
+                    />
+                  )}
                 </div>
               ) : (
-                <EmptyState
-                  title="No review selected"
-                  detail="Select a pending LINE review to validate the AI response and operational suggestion."
-                />
-              )}
-            </div>
-          ) : (
-            <>
-              <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden 2xl:grid-cols-[minmax(0,1fr)_410px]">
-                <div className="min-h-0 overflow-y-auto p-3">
-                  <ChatEvidencePanel context={chatContext} selected={selected} />
-                  <div className="mt-3 2xl:hidden">
-                    <ResolutionBoard
-                      selected={selected}
-                      links={links}
-                      candidates={candidates}
-                      actions={actions}
-                      selectedSessionIds={selectedSessionIds}
-                      busy={busy}
-                      onToggleSession={toggleSession}
-                      onConfirmWiseAction={confirmWiseAction}
-                      onOpenStudentLink={() => setStudentLinkOpen(true)}
-                    />
+                <>
+                  <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden 2xl:grid-cols-[minmax(0,1fr)_410px]">
+                    <div className="min-h-0 overflow-y-auto p-3">
+                      <ChatEvidencePanel context={chatContext} selected={selected} />
+                      <div className="mt-3 2xl:hidden">
+                        <ResolutionBoard
+                          selected={selected}
+                          links={links}
+                          candidates={candidates}
+                          actions={actions}
+                          selectedSessionIds={selectedSessionIds}
+                          busy={busy}
+                          onToggleSession={toggleSession}
+                          onConfirmWiseAction={confirmWiseAction}
+                          onOpenStudentLink={() => setStudentLinkOpen(true)}
+                        />
+                      </div>
+                    </div>
+
+                    <aside className="hidden min-h-0 overflow-y-auto border-l border-border bg-card/35 p-3 2xl:block">
+                      <ResolutionBoard
+                        selected={selected}
+                        links={links}
+                        candidates={candidates}
+                        actions={actions}
+                        selectedSessionIds={selectedSessionIds}
+                        busy={busy}
+                        onToggleSession={toggleSession}
+                        onConfirmWiseAction={confirmWiseAction}
+                        onOpenStudentLink={() => setStudentLinkOpen(true)}
+                      />
+                    </aside>
                   </div>
-                </div>
 
-                <aside className="hidden min-h-0 overflow-y-auto border-l border-border bg-card/35 p-3 2xl:block">
-                  <ResolutionBoard
-                    selected={selected}
-                    links={links}
-                    candidates={candidates}
-                    actions={actions}
-                    selectedSessionIds={selectedSessionIds}
+                  <ReplyDock
+                    draft={draft}
+                    onDraftChange={setDraft}
+                    rejectCorrection={rejectCorrection}
+                    onRejectCorrectionChange={setRejectCorrection}
+                    rejectReason={rejectReason}
+                    onRejectReasonChange={setRejectReason}
                     busy={busy}
-                    onToggleSession={toggleSession}
-                    onConfirmWiseAction={confirmWiseAction}
-                    onOpenStudentLink={() => setStudentLinkOpen(true)}
+                    onReject={() => updateReview({
+                      action: "reject",
+                      reasonCategory: "other",
+                      rejectionReason: rejectReason.trim() || "Operational review rejected",
+                      staffCorrection: rejectCorrection.trim() || draft.trim() || "Needs manual handling",
+                    })}
+                    onAcceptHandled={() => updateReview({ action: "accept_no_send", finalText: draft })}
+                    onApproveSend={() => updateReview({ action: "approve_send", finalText: draft })}
                   />
-                </aside>
-              </div>
-
-              <ReplyDock
-                draft={draft}
-                onDraftChange={setDraft}
-                rejectCorrection={rejectCorrection}
-                onRejectCorrectionChange={setRejectCorrection}
-                rejectReason={rejectReason}
-                onRejectReasonChange={setRejectReason}
-                busy={busy}
-                onReject={() => updateReview({
-                  action: "reject",
-                  reasonCategory: "other",
-                  rejectionReason: rejectReason.trim() || "Operational review rejected",
-                  staffCorrection: rejectCorrection.trim() || draft.trim() || "Needs manual handling",
-                })}
-                onAcceptHandled={() => updateReview({ action: "accept_no_send", finalText: draft })}
-                onApproveSend={() => updateReview({ action: "approve_send", finalText: draft })}
-              />
-            </>
-          )}
-        </section>
-      </div>
+                </>
+              )}
+            </section>
+          </div>
+        </>
       )}
 
       <SignalsDialog

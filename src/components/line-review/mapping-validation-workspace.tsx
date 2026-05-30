@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
@@ -10,6 +11,8 @@ import {
   ScanSearch,
   ShieldCheck,
   UserCheck,
+  Users,
+  X,
   XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -18,22 +21,14 @@ import { cn } from "@/lib/utils";
 import { LinkValidationPanel } from "./link-validation-panel";
 import type {
   LineLinkValidationReviewerSummary,
+  LineLinkValidationScope,
   LineLinkValidationSummary,
   LineOaResolverRun,
 } from "./types";
 import { formatDateTime, jsonFetch } from "./utils";
 
-function StatCard({ label, value, detail }: { label: string; value: string | number; detail?: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-card px-3 py-2">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      <div className="mt-1 text-xl font-semibold leading-none text-foreground">{value}</div>
-      {detail ? <div className="mt-1 text-xs text-muted-foreground">{detail}</div> : null}
-    </div>
-  );
-}
+export const MAPPING_VALIDATION_LEAD_DEFAULT_SCOPE = "all";
+export const MAPPING_VALIDATION_ADMIN_DEFAULT_SCOPE = "my";
 
 function reviewerName(reviewer: LineLinkValidationReviewerSummary): string {
   return reviewer.name || reviewer.email;
@@ -46,20 +41,29 @@ function runLabel(run: LineOaResolverRun): string {
 export function MappingValidationWorkspace({
   onOpenResolver,
   refreshKey,
+  workspaceTabs,
 }: {
   onOpenResolver: () => void;
   refreshKey: number;
+  workspaceTabs: ReactNode;
 }) {
   const [runs, setRuns] = useState<LineOaResolverRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [runSelectionTouched, setRunSelectionTouched] = useState(false);
   const [summary, setSummary] = useState<LineLinkValidationSummary | null>(null);
+  const [assignmentOpen, setAssignmentOpen] = useState(false);
+  const [progressOpen, setProgressOpen] = useState(false);
   const [busy, setBusy] = useState<"runs" | "summary" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const selectedRun = useMemo(
     () => runs.find((run) => run.id === selectedRunId) ?? null,
     [runs, selectedRunId],
+  );
+  const canViewTracker = summary?.canViewTracker === true;
+  const defaultValidationScope = useMemo<LineLinkValidationScope>(
+    () => (canViewTracker ? MAPPING_VALIDATION_LEAD_DEFAULT_SCOPE : MAPPING_VALIDATION_ADMIN_DEFAULT_SCOPE),
+    [canViewTracker],
   );
 
   const loadRuns = useCallback(async () => {
@@ -113,35 +117,23 @@ export function MappingValidationWorkspace({
   }, [loadSummary, refreshKey]);
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
-      <div className="shrink-0 border-b border-border bg-card/45 px-4 py-3 lg:px-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 text-base font-semibold text-foreground">
+    <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
+      <div className="shrink-0 border-b border-border bg-card px-4 py-2 lg:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            {workspaceTabs}
+            <div className="hidden h-7 border-l border-border lg:block" />
+            <div className="flex min-w-0 items-center gap-2 text-base font-semibold text-foreground">
               <UserCheck className="size-4 text-primary" />
-              Mapping Validation
+              <span className="truncate">Mapping Validation</span>
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Assign suggested LINE account mappings, open LINE OA to check them, then verify or reject.
-            </p>
+            <CompactSummary summary={summary} />
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={refreshAll} disabled={Boolean(busy)}>
-              {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-              Refresh
-            </Button>
-            <Button type="button" size="sm" onClick={onOpenResolver}>
-              <ScanSearch />
-              Run Bulk OA Resolver
-            </Button>
-          </div>
-        </div>
 
-        <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
-          <label className="grid gap-1 text-xs font-medium text-muted-foreground">
-            Resolver run
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
             <select
-              className="h-9 rounded-lg border border-input bg-background px-2 text-sm text-foreground"
+              aria-label="Resolver run"
+              className="h-8 max-w-[310px] rounded-lg border border-input bg-background px-2 text-sm text-foreground"
               value={selectedRunId ?? ""}
               onChange={(event) => {
                 setRunSelectionTouched(true);
@@ -155,18 +147,25 @@ export function MappingValidationWorkspace({
                 </option>
               ))}
             </select>
-          </label>
-          <div className="flex flex-wrap items-end gap-2 text-xs text-muted-foreground">
-            {selectedRun ? (
-              <>
-                <Badge variant={selectedRun.status === "active" ? "default" : "outline"}>{selectedRun.status}</Badge>
-                <span>{selectedRun.totalRows} worklist rows</span>
-                <span>{selectedRun.matchedRows + selectedRun.ambiguousRows} captured</span>
-                <span>{selectedRun.committedRows} committed</span>
-              </>
-            ) : (
-              <span>Showing validation links across every committed resolver run.</span>
-            )}
+            <RunMeta run={selectedRun} />
+            <Button type="button" size="sm" variant="outline" onClick={() => setAssignmentOpen((open) => !open)}>
+              <Users />
+              Assign work
+            </Button>
+            {canViewTracker ? (
+              <Button type="button" size="sm" variant="outline" onClick={() => setProgressOpen(true)}>
+                <BarChart3 />
+                Progress
+              </Button>
+            ) : null}
+            <Button type="button" variant="outline" size="sm" onClick={refreshAll} disabled={Boolean(busy)}>
+              {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              Refresh
+            </Button>
+            <Button type="button" size="sm" onClick={onOpenResolver}>
+              <ScanSearch />
+              Run Bulk OA Resolver
+            </Button>
           </div>
         </div>
 
@@ -177,58 +176,97 @@ export function MappingValidationWorkspace({
         ) : null}
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 xl:grid-cols-[minmax(0,1fr)_420px] xl:overflow-hidden">
-        <div className="flex min-h-0 flex-col gap-3">
-          {summary?.canViewTracker ? (
-            <LeadTracker summary={summary} />
-          ) : (
-            <div className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
-              Your queue opens on <span className="font-medium text-foreground">My assignments</span>. Leads can see the cross-admin tracker here.
-            </div>
-          )}
+      <LinkValidationPanel
+        runId={selectedRunId}
+        className="min-h-0 flex-1 rounded-none border-0"
+        onChanged={loadSummary}
+        refreshKey={refreshKey}
+        defaultScope={defaultValidationScope}
+        assignmentOpen={assignmentOpen}
+        onAssignmentOpenChange={setAssignmentOpen}
+      />
 
-          <LinkValidationPanel
-            runId={selectedRunId}
-            className="min-h-[480px] flex-1"
-            onChanged={loadSummary}
-            refreshKey={refreshKey}
-          />
+      {canViewTracker && progressOpen ? (
+        <div className="absolute inset-y-0 right-0 z-30 flex w-full justify-end bg-background/25 backdrop-blur-[1px]">
+          <aside className="h-full w-[min(460px,calc(100vw-1rem))] border-l border-border bg-card shadow-xl">
+            <div className="flex items-center justify-between border-b border-border px-3 py-2">
+              <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <BarChart3 className="size-4 text-primary" />
+                Validation Progress
+              </div>
+              <Button type="button" size="icon" variant="ghost" onClick={() => setProgressOpen(false)}>
+                <X />
+                <span className="sr-only">Close progress</span>
+              </Button>
+            </div>
+            <div className="h-[calc(100%-45px)] overflow-y-auto p-3">
+              <ProgressSidebar summary={summary} />
+            </div>
+          </aside>
         </div>
-
-        <aside className="min-h-0 overflow-y-auto rounded-lg border border-border bg-card p-3">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <BarChart3 className="size-4 text-primary" />
-            Validation Progress
-          </div>
-          {summary?.canViewTracker ? (
-            <ProgressSidebar summary={summary} />
-          ) : (
-            <div className="mt-3 rounded-md border border-dashed border-border bg-background p-3 text-sm text-muted-foreground">
-              Tracker access is limited to LINE validation leads.
-            </div>
-          )}
-        </aside>
-      </div>
+      ) : null}
     </section>
   );
 }
 
-function LeadTracker({ summary }: { summary: LineLinkValidationSummary }) {
+function CompactSummary({ summary }: { summary: LineLinkValidationSummary | null }) {
+  if (!summary?.canViewTracker) {
+    return (
+      <span className="text-xs text-muted-foreground">
+        Verify LINE account to student-code mappings.
+      </span>
+    );
+  }
+
+  const items = [
+    ["Total", summary.totals.total],
+    ["Remaining", summary.totals.remaining],
+    ["Assigned", summary.totals.assigned],
+    ["Verified", summary.totals.verified],
+    ["Rejected", summary.totals.rejected],
+    ["Complete", `${summary.totals.completionRate}%`],
+  ];
+
   return (
-    <div className="grid gap-2 md:grid-cols-3 2xl:grid-cols-6">
-      <StatCard label="Total links" value={summary.totals.total} />
-      <StatCard label="Remaining" value={summary.totals.remaining} detail={`${summary.totals.unassigned} unassigned`} />
-      <StatCard label="Assigned" value={summary.totals.assigned} />
-      <StatCard label="Verified" value={summary.totals.verified} />
-      <StatCard label="Rejected" value={summary.totals.rejected} />
-      <StatCard label="Complete" value={`${summary.totals.completionRate}%`} />
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+      {items.map(([label, value]) => (
+        <span key={label} className="rounded-md border border-border bg-background px-2 py-1">
+          <span className="text-foreground">{value}</span> {label}
+        </span>
+      ))}
+      {summary.totals.unassigned > 0 ? (
+        <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-700 dark:text-amber-300">
+          {summary.totals.unassigned} unassigned
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function RunMeta({ run }: { run: LineOaResolverRun | null }) {
+  if (!run) {
+    return <span className="hidden text-xs text-muted-foreground xl:inline">All runs</span>;
+  }
+
+  return (
+    <div className="hidden items-center gap-1.5 text-xs text-muted-foreground 2xl:flex">
+      <Badge variant={run.status === "active" ? "default" : "outline"}>{run.status}</Badge>
+      <span>{run.totalRows} rows</span>
+      <span>{run.matchedRows + run.ambiguousRows} captured</span>
+      <span>{run.committedRows} committed</span>
     </div>
   );
 }
 
 function ProgressSidebar({ summary }: { summary: LineLinkValidationSummary }) {
   return (
-    <div className="mt-3 space-y-3">
+    <div className="space-y-3">
+      <div className="grid grid-cols-3 gap-2">
+        <ProgressTotal label="Remaining" value={summary.totals.remaining} />
+        <ProgressTotal label="Verified" value={summary.totals.verified} />
+        <ProgressTotal label="Complete" value={`${summary.totals.completionRate}%`} />
+      </div>
+
       <div className="space-y-2">
         {summary.reviewers.map((reviewer) => {
           const active = reviewer.remaining + reviewer.verified + reviewer.rejected > 0;
@@ -307,6 +345,15 @@ function ProgressSidebar({ summary }: { summary: LineLinkValidationSummary }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ProgressTotal({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-md border border-border bg-background px-2 py-1.5">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-sm font-semibold text-foreground">{value}</div>
     </div>
   );
 }
