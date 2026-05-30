@@ -33,8 +33,19 @@ interface AdminEmailContext {
   assignmentDate: string;
   detail: ClassroomAssignmentDetail;
   publishJobs: ClassroomPublishJob[];
+  teacherScheduleEmailSummary: TeacherScheduleEmailSummary | null;
   blockers: string[];
   triggerKind: "ready" | "failure";
+}
+
+interface TeacherScheduleEmailSummary {
+  runCount: number;
+  attempted: number;
+  success: number;
+  failed: number;
+  blocked: number;
+  latestStatus: string;
+  latestUpdatedAt: Date;
 }
 
 function bangkokMinuteOfDay(now: Date): number {
@@ -90,6 +101,18 @@ function statusLine(row: ClassroomRow): string {
   return `${row.status}; ${publish}; ${row.changeType}`;
 }
 
+function teacherEmailSummaryLine(summary: TeacherScheduleEmailSummary | null): string {
+  if (!summary) return "Tutor schedule emails: not sent yet.";
+  return [
+    `Tutor schedule emails: ${summary.success} sent`,
+    `${summary.failed} failed`,
+    `${summary.blocked} blocked`,
+    `${summary.attempted} attempted`,
+    `${summary.runCount} run(s)`,
+    `latest status ${summary.latestStatus}`,
+  ].join("; ");
+}
+
 function renderText(context: AdminEmailContext): string {
   const rows = context.detail.rows;
   const lines = [
@@ -97,6 +120,7 @@ function renderText(context: AdminEmailContext): string {
     "",
     `Run: ${context.detail.run?.id ?? "not available"}`,
     `Status: ${context.triggerKind === "ready" ? "ready" : "blocked/failure summary"}`,
+    teacherEmailSummaryLine(context.teacherScheduleEmailSummary),
     "",
   ];
 
@@ -131,6 +155,10 @@ function renderHtml(context: AdminEmailContext): string {
   const blockerHtml = context.blockers.length > 0
     ? `<h2>Blockers</h2><ul>${context.blockers.map((blocker) => `<li>${escapeHtml(blocker)}</li>`).join("")}</ul>`
     : "";
+  const teacherEmailSummary = context.teacherScheduleEmailSummary;
+  const teacherEmailHtml = teacherEmailSummary
+    ? `<p style="margin:0 0 18px;color:#475569;">Tutor schedule emails: <strong>${teacherEmailSummary.success}</strong> sent; <strong>${teacherEmailSummary.failed}</strong> failed; <strong>${teacherEmailSummary.blocked}</strong> blocked; ${teacherEmailSummary.attempted} attempted across ${teacherEmailSummary.runCount} run(s). Latest status: ${escapeHtml(teacherEmailSummary.latestStatus)}.</p>`
+    : `<p style="margin:0 0 18px;color:#475569;">Tutor schedule emails: not sent yet.</p>`;
   const rowHtml = rows.length > 0
     ? rows.map((row) => `
       <tr>
@@ -150,6 +178,7 @@ function renderHtml(context: AdminEmailContext): string {
     <div style="max-width:960px;margin:0 auto;padding:24px;">
       <h1 style="margin:0 0 4px;font-size:24px;">BeGifted classroom assignments</h1>
       <p style="margin:0 0 18px;color:#475569;">${escapeHtml(context.assignmentDate)} - ${escapeHtml(context.triggerKind === "ready" ? "ready" : "blocked/failure summary")}</p>
+      ${teacherEmailHtml}
       ${blockerHtml}
       <table style="width:100%;border-collapse:collapse;background:#ffffff;border:1px solid #cbd5e1;">
         <thead>
@@ -182,6 +211,43 @@ async function loadPublishJobs(db: Database, runId: string): Promise<ClassroomPu
     .from(schema.classroomPublishJobs)
     .where(eq(schema.classroomPublishJobs.runId, runId))
     .orderBy(desc(schema.classroomPublishJobs.createdAt));
+}
+
+async function loadTeacherScheduleEmailSummary(
+  db: Database,
+  runId: string,
+): Promise<TeacherScheduleEmailSummary | null> {
+  const rows = await db
+    .select({
+      status: schema.classroomScheduleEmailRuns.status,
+      attemptedCount: schema.classroomScheduleEmailRuns.attemptedCount,
+      successCount: schema.classroomScheduleEmailRuns.successCount,
+      failedCount: schema.classroomScheduleEmailRuns.failedCount,
+      blockedCount: schema.classroomScheduleEmailRuns.blockedCount,
+      updatedAt: schema.classroomScheduleEmailRuns.updatedAt,
+    })
+    .from(schema.classroomScheduleEmailRuns)
+    .where(eq(schema.classroomScheduleEmailRuns.assignmentRunId, runId))
+    .orderBy(desc(schema.classroomScheduleEmailRuns.updatedAt));
+
+  if (rows.length === 0) return null;
+  return rows.reduce<TeacherScheduleEmailSummary>((summary, row, index) => ({
+    runCount: summary.runCount + 1,
+    attempted: summary.attempted + row.attemptedCount,
+    success: summary.success + row.successCount,
+    failed: summary.failed + row.failedCount,
+    blocked: summary.blocked + row.blockedCount,
+    latestStatus: index === 0 ? row.status : summary.latestStatus,
+    latestUpdatedAt: index === 0 ? row.updatedAt : summary.latestUpdatedAt,
+  }), {
+    runCount: 0,
+    attempted: 0,
+    success: 0,
+    failed: 0,
+    blocked: 0,
+    latestStatus: rows[0].status,
+    latestUpdatedAt: rows[0].updatedAt,
+  });
 }
 
 async function hasTerminalAdminEmailForDate(db: Database, assignmentDate: string): Promise<boolean> {
@@ -296,6 +362,9 @@ export async function sendAdminClassroomScheduleEmail(
 
   const detail = await getClassroomAssignmentForDate(db, assignmentDate);
   const publishJobs = detail.run ? await loadPublishJobs(db, detail.run.id) : [];
+  const teacherScheduleEmailSummary = detail.run
+    ? await loadTeacherScheduleEmailSummary(db, detail.run.id)
+    : null;
   const blockers = buildBlockers(detail, publishJobs);
   const finalRetry = bangkokMinuteOfDay(now) >= FINAL_RETRY_MINUTE;
   const stillPreparing = !detail.run || publishPending(publishJobs);
@@ -340,6 +409,7 @@ export async function sendAdminClassroomScheduleEmail(
     assignmentDate,
     detail,
     publishJobs,
+    teacherScheduleEmailSummary,
     blockers,
     triggerKind,
   };

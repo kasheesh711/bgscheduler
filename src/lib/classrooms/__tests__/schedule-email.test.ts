@@ -505,7 +505,7 @@ describe("schedule email preview", () => {
     expect(result.summary).toEqual({ attempted: 2, success: 0, failed: 2, blocked: 0 });
   });
 
-  it("does not fail over failed-only retries", async () => {
+  it("fails over failed-only retries when primary quota is exhausted", async () => {
     vi.stubEnv("SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_URL", "https://script.google.com/macros/s/backup/exec");
     vi.stubEnv("SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET", "backup-secret");
     const db = makePreviewDb({
@@ -529,13 +529,31 @@ describe("schedule email preview", () => {
     });
 
     expect(primarySender.sendEmail).toHaveBeenCalledTimes(1);
-    expect(backupSender.sendEmail).not.toHaveBeenCalled();
-    expect(result.failover).toBeUndefined();
-    expect(result.summary).toEqual({ attempted: 2, success: 0, failed: 2, blocked: 0 });
-    expect(db.updatedEmailRuns.at(-1)).toEqual(expect.objectContaining({
+    expect(backupSender.sendEmail).toHaveBeenCalledTimes(2);
+    expect(backupSender.sendEmail.mock.calls.map(([input]) => input.to)).toEqual([
+      "kevhsh7@gmail.com",
+      "nsinghsachthep@gmail.com",
+    ]);
+    expect(result.failover).toEqual(expect.objectContaining({
+      triggered: true,
+      fromEmailRunId: "email-run-1",
+      toEmailRunId: "email-run-2",
+      reason: "MailApp daily recipient quota is exhausted",
+      attempted: 2,
+      sent: 2,
+      failed: 0,
+    }));
+    expect(result.summary).toEqual({ attempted: 2, success: 2, failed: 0, blocked: 0 });
+    expect(db.updatedEmailRuns[0]).toEqual(expect.objectContaining({
       status: "failed",
+      attemptedCount: 1,
+      failedCount: 1,
+    }));
+    expect(db.updatedEmailRuns[1]).toEqual(expect.objectContaining({
+      status: "sent",
       attemptedCount: 2,
-      failedCount: 2,
+      successCount: 2,
+      failedCount: 0,
     }));
   });
 
