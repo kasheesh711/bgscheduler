@@ -97,6 +97,11 @@ export interface StudentLink {
   parentName: string;
   status: "suggested" | "verified" | "rejected";
   confidence: number | null;
+  validationAssignedToEmail?: string | null;
+  validationAssignedToName?: string | null;
+  validationAssignedRunId?: string | null;
+  validationAssignedAt?: string | null;
+  validationNote?: string | null;
   currentStudentActivated: boolean | null;
   currentStudentHasFutureSessions: boolean | null;
   currentStudentHasLivePackage: boolean | null;
@@ -253,4 +258,48 @@ export interface LineOaResolverRun {
   createdAt: string;
   updatedAt: string;
   rows: LineOaResolverRow[];
+}
+
+export type LineLinkValidationScope = "my" | "all" | "unassigned" | "verified" | "rejected";
+
+export interface LineLinkValidationReviewer {
+  email: string;
+  name: string | null;
+  openAssignments: number;
+}
+
+export interface LineLinkValidationTask {
+  id: string;
+  contactId: string;
+  lineUserId: string;
+  contactDisplayName: string | null;
+  linkedStudentLabel: string | null;
+  wiseStudentId: string;
+  studentKey: string;
+  studentName: string;
+  parentName: string;
+  status: "suggested" | "verified" | "rejected";
+  confidence: number | null;
+  lineChatUrl: string | null;
+  lineOaAccountId: string | null;
+  chatTitle: string | null;
+  adminNoteRaw: string | null;
+  relationshipRole: string | null;
+  sourceRunId: string | null;
+  sourceRowId: string | null;
+  matchedCode: string | null;
+  matchedField: string | null;
+  validationAssignedToEmail: string | null;
+  validationAssignedToName: string | null;
+  validationAssignedRunId: string | null;
+  validationAssignedAt: string | null;
+  validationNote: string | null;
+  reviewedByEmail: string | null;
+  reviewedByName: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  currentStudentActivated: boolean | null;
+  currentStudentHasFutureSessions: boolean | null;
+  currentStudentHasLivePackage: boolean | null;
 }

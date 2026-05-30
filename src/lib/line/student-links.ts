@@ -28,6 +28,11 @@ export interface LineContactStudentLinkDto {
   reviewedByEmail: string | null;
   reviewedByName: string | null;
   reviewedAt: string | null;
+  validationAssignedToEmail: string | null;
+  validationAssignedToName: string | null;
+  validationAssignedRunId: string | null;
+  validationAssignedAt: string | null;
+  validationNote: string | null;
   createdAt: string;
   updatedAt: string;
   currentStudentActivated: boolean | null;
@@ -152,6 +157,11 @@ function linkToDto(row: LinkRow, currentStudent?: LineStudentDirectoryRow | null
     reviewedByEmail: row.reviewedByEmail,
     reviewedByName: row.reviewedByName,
     reviewedAt: iso(row.reviewedAt),
+    validationAssignedToEmail: row.validationAssignedToEmail,
+    validationAssignedToName: row.validationAssignedToName,
+    validationAssignedRunId: row.validationAssignedRunId,
+    validationAssignedAt: iso(row.validationAssignedAt),
+    validationNote: row.validationNote,
     createdAt: iso(row.createdAt)!,
     updatedAt: iso(row.updatedAt)!,
     currentStudentActivated: currentStudent?.activated ?? null,
@@ -610,6 +620,7 @@ export async function patchLineContactStudentLinkStatus(
     linkId: string;
     status: Extract<LineContactStudentLinkStatus, "verified" | "rejected">;
     actor: LineStudentLinkActor;
+    note?: string | null;
   },
 ): Promise<LineContactStudentLinkDto | null> {
   const actor = normalizeActor(input.actor);
@@ -620,6 +631,7 @@ export async function patchLineContactStudentLinkStatus(
       reviewedByEmail: actor.email,
       reviewedByName: actor.name,
       reviewedAt: now(),
+      validationNote: input.note?.trim() || null,
       updatedAt: now(),
     })
     .where(and(

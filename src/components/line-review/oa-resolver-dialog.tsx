@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { LineOaResolverRun, LineOaResolverRow, LineOaResolverRowStatus } from "./types";
+import { LinkValidationPanel } from "./link-validation-panel";
 import { formatDateTime, jsonFetch } from "./utils";
 
 const STORAGE_KEY = "line-oa-resolver-run-id";
@@ -280,7 +281,7 @@ export function OaResolverDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88vh] max-w-6xl overflow-hidden p-0">
+      <DialogContent className="max-h-[88vh] max-w-7xl overflow-hidden p-0">
         <DialogHeader className="border-b border-border p-4">
           <DialogTitle className="flex items-center gap-2">
             <Search className="size-5 text-primary" />
@@ -365,7 +366,7 @@ export function OaResolverDialog({
                 Create or load a resolver run to see the preview table.
               </div>
             ) : (
-              <div className="flex h-[520px] min-h-0 flex-col">
+              <div className="flex h-[640px] min-h-0 flex-col">
                 <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -402,72 +403,75 @@ export function OaResolverDialog({
                   <CountChip label="Committed" value={run.committedRows} />
                 </div>
 
-                <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border">
-                  {groupedRows.map(([groupKey, rows]) => (
-                    <div key={groupKey} className="border-b border-border last:border-b-0">
-                      <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-muted/80 px-3 py-2 backdrop-blur">
-                        <div className="min-w-0">
-                          <div className="truncate text-xs font-semibold text-foreground">
-                            {rows[0]?.studentName ?? groupKey}
-                          </div>
-                          <div className="truncate text-[11px] text-muted-foreground">
-                            {rows[0]?.searchCode || "No dotted code"} / {rows[0]?.parentName || "No parent"}
-                          </div>
-                        </div>
-                        <Badge variant="outline">{rows.length}</Badge>
-                      </div>
-                      {rows.map((row) => (
-                        <div key={row.id} className="grid gap-2 border-b border-border px-3 py-2 last:border-b-0 md:grid-cols-[minmax(0,1fr)_120px_220px]">
+                <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,1fr)_430px]">
+                  <div className="min-h-0 overflow-y-auto rounded-lg border border-border">
+                    {groupedRows.map(([groupKey, rows]) => (
+                      <div key={groupKey} className="border-b border-border last:border-b-0">
+                        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-muted/80 px-3 py-2 backdrop-blur">
                           <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <div className="truncate text-sm font-medium text-foreground">
-                                {row.searchCode || "No dotted code"}
-                              </div>
-                              <Badge variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
+                            <div className="truncate text-xs font-semibold text-foreground">
+                              {rows[0]?.studentName ?? groupKey}
                             </div>
-                            {row.errorMessage ? (
-                              <div className="mt-1 text-xs text-destructive">{row.errorMessage}</div>
-                            ) : null}
-                            {candidateContacts(row).length > 0 ? (
-                              <div className="mt-2 space-y-1.5">
-                                {candidateContacts(row).map((candidate) => {
-                                  const key = candidateKey(row.id, candidate.lineUserId);
-                                  const checked = selectedCandidates.has(key);
-                                  return (
-                                    <label
-                                      key={key}
-                                      className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        className="mt-0.5"
-                                        checked={checked}
-                                        onChange={() => toggleCandidate(row.id, candidate.lineUserId)}
-                                      />
-                                      <span className="min-w-0 flex-1">
-                                        <span className="block truncate font-medium text-foreground">
-                                          {candidate.chatTitle || candidate.lineUserId}
-                                        </span>
-                                        <span className="block truncate text-muted-foreground">
-                                          {candidate.relationshipRole || "unknown"}
-                                          {candidate.adminNoteRaw ? ` / ${candidate.adminNoteRaw}` : ""}
-                                          {candidate.siblingFanout ? " / sibling fanout" : ""}
-                                        </span>
-                                      </span>
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                            ) : null}
+                            <div className="truncate text-[11px] text-muted-foreground">
+                              {rows[0]?.searchCode || "No dotted code"} / {rows[0]?.parentName || "No parent"}
+                            </div>
                           </div>
-                          <div className="min-w-0 text-xs text-muted-foreground">
-                            <div className="truncate">{row.captureMode || row.matchMode || "n/a"}</div>
-                            <div className="truncate">{row.lineOaAccountId || ""}</div>
-                          </div>
+                          <Badge variant="outline">{rows.length}</Badge>
                         </div>
-                      ))}
-                    </div>
-                  ))}
+                        {rows.map((row) => (
+                          <div key={row.id} className="grid gap-2 border-b border-border px-3 py-2 last:border-b-0 md:grid-cols-[minmax(0,1fr)_120px]">
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <div className="truncate text-sm font-medium text-foreground">
+                                  {row.searchCode || "No dotted code"}
+                                </div>
+                                <Badge variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
+                              </div>
+                              {row.errorMessage ? (
+                                <div className="mt-1 text-xs text-destructive">{row.errorMessage}</div>
+                              ) : null}
+                              {candidateContacts(row).length > 0 ? (
+                                <div className="mt-2 space-y-1.5">
+                                  {candidateContacts(row).map((candidate) => {
+                                    const key = candidateKey(row.id, candidate.lineUserId);
+                                    const checked = selectedCandidates.has(key);
+                                    return (
+                                      <label
+                                        key={key}
+                                        className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-background px-2 py-1.5 text-xs"
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          className="mt-0.5"
+                                          checked={checked}
+                                          onChange={() => toggleCandidate(row.id, candidate.lineUserId)}
+                                        />
+                                        <span className="min-w-0 flex-1">
+                                          <span className="block truncate font-medium text-foreground">
+                                            {candidate.chatTitle || candidate.lineUserId}
+                                          </span>
+                                          <span className="block truncate text-muted-foreground">
+                                            {candidate.relationshipRole || "unknown"}
+                                            {candidate.adminNoteRaw ? ` / ${candidate.adminNoteRaw}` : ""}
+                                            {candidate.siblingFanout ? " / sibling fanout" : ""}
+                                          </span>
+                                        </span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              ) : null}
+                            </div>
+                            <div className="min-w-0 text-xs text-muted-foreground">
+                              <div className="truncate">{row.captureMode || row.matchMode || "n/a"}</div>
+                              <div className="truncate">{row.lineOaAccountId || ""}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                  <LinkValidationPanel runId={run.id} />
                 </div>
               </div>
             )}

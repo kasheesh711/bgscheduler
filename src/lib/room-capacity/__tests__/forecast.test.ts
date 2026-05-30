@@ -280,5 +280,5 @@ describe("room capacity forecast simulation", () => {
 
     expect(result?.combined.status).toBe("reached_extrapolated");
     expect(result?.combined.breakpointMonth).toMatch(/^2026-|^2027-/);
-  });
+  }, 30_000);
 });

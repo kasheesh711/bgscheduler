@@ -1276,12 +1276,19 @@ export const lineContactStudentLinks = pgTable("line_contact_student_links", {
   reviewedByEmail: text("reviewed_by_email"),
   reviewedByName: text("reviewed_by_name"),
   reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  validationAssignedToEmail: text("validation_assigned_to_email"),
+  validationAssignedToName: text("validation_assigned_to_name"),
+  validationAssignedRunId: uuid("validation_assigned_run_id"),
+  validationAssignedAt: timestamp("validation_assigned_at", { withTimezone: true }),
+  validationNote: text("validation_note"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("line_contact_student_links_contact_student_idx").on(table.contactId, table.studentKey),
   index("line_contact_student_links_contact_status_idx").on(table.contactId, table.status),
   index("line_contact_student_links_student_key_idx").on(table.studentKey),
+  index("line_contact_student_links_validation_assignee_idx").on(table.validationAssignedToEmail, table.status),
+  index("line_contact_student_links_validation_run_idx").on(table.validationAssignedRunId, table.status),
 ]);
 
 export const lineSchedulerReviews = pgTable("line_scheduler_reviews", {
