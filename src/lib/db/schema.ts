@@ -910,7 +910,7 @@ export const payrollPayoutInvoices = pgTable("payroll_payout_invoices", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("payroll_payout_invoices_event_idx").on(table.eventId),
-  uniqueIndex("payroll_payout_invoices_transaction_idx").on(table.transactionId),
+  index("payroll_payout_invoices_transaction_idx").on(table.transactionId),
   index("payroll_payout_invoices_month_idx").on(table.payrollMonth),
   index("payroll_payout_invoices_month_teacher_idx").on(table.payrollMonth, table.wiseTeacherUserId),
   index("payroll_payout_invoices_session_idx").on(table.wiseSessionId),

@@ -21,6 +21,7 @@ const SESSION_PAGE_SIZE = 1000;
 const DEFAULT_MAX_EVENT_PAGES = 1000;
 const STALE_RUNNING_MS = 20 * 60 * 1000;
 const INSERT_CHUNK_SIZE = 500;
+const ERROR_SUMMARY_MAX_LENGTH = 2_000;
 
 export interface PayrollSyncResult {
   syncRunId: string;
@@ -62,8 +63,10 @@ function chunk<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+type PayrollWriteDb = Pick<Database, "insert" | "delete" | "update">;
+
 async function insertChunks<T extends Record<string, unknown>>(
-  db: Database,
+  db: PayrollWriteDb,
   table: Parameters<Database["insert"]>[0],
   rows: T[],
 ): Promise<void> {
@@ -72,6 +75,12 @@ async function insertChunks<T extends Record<string, unknown>>(
       await db.insert(table).values(part as never);
     }
   }
+}
+
+function shortErrorSummary(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Payroll sync failed";
+  if (message.length <= ERROR_SUMMARY_MAX_LENGTH) return message;
+  return `${message.slice(0, ERROR_SUMMARY_MAX_LENGTH)}... [truncated ${message.length - ERROR_SUMMARY_MAX_LENGTH} chars]`;
 }
 
 async function markAbandonedRuns(db: Database, now: Date): Promise<void> {
@@ -315,53 +324,66 @@ export async function runPayrollSync(
         raw: event.raw,
       }));
 
-    await db.delete(schema.payrollTeacherTiers).where(eq(schema.payrollTeacherTiers.payrollMonth, range.payrollMonth));
-    await db.delete(schema.payrollPayoutInvoices).where(eq(schema.payrollPayoutInvoices.payrollMonth, range.payrollMonth));
-    await db.delete(schema.payrollSessionObservations).where(eq(schema.payrollSessionObservations.payrollMonth, range.payrollMonth));
-
-    await insertChunks(db, schema.payrollTeacherTiers, teacherRows);
-    await insertChunks(db, schema.payrollSessionObservations, sessionRows);
-    await insertChunks(db, schema.payrollPayoutInvoices, invoiceRows);
-
-    await db
-      .insert(schema.payrollReviews)
-      .values({
-        payrollMonth: range.payrollMonth,
-        status: "draft",
-        lastSyncRunId: syncRunId,
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: schema.payrollReviews.payrollMonth,
-        set: {
-          status: "draft",
-          approvedByEmail: null,
-          approvedByName: null,
-          approvedAt: null,
-          lastSyncRunId: syncRunId,
-          updatedAt: new Date(),
-        },
-      });
+    const metadata = {
+      maxEventPages,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      queryStartDate: range.queryStartDate,
+      queryEndDate: range.queryEndDate,
+      eventPagesFetched: eventFetch.pagesFetched,
+      sessionPagesFetched: sessionFetch.pagesFetched,
+      rawPayoutEventsMatched: eventFetch.events.length,
+      teacherRowsPrepared: teacherRows.length,
+      sessionRowsPrepared: sessionRows.length,
+      invoiceRowsNormalized: invoiceRows.length,
+    };
 
     await db
       .update(schema.payrollSyncRuns)
-      .set({
-        status: "success",
-        finishedAt: new Date(),
-        teacherCount: teacherRows.length,
-        sessionCount: sessionRows.length,
-        invoiceCount: invoiceRows.length,
-        metadata: {
-          maxEventPages,
-          startDate: range.startDate,
-          endDate: range.endDate,
-          queryStartDate: range.queryStartDate,
-          queryEndDate: range.queryEndDate,
-          eventPagesFetched: eventFetch.pagesFetched,
-          sessionPagesFetched: sessionFetch.pagesFetched,
-        },
-      })
+      .set({ metadata })
       .where(eq(schema.payrollSyncRuns.id, syncRunId));
+
+    await db.transaction(async (tx) => {
+      await tx.delete(schema.payrollTeacherTiers).where(eq(schema.payrollTeacherTiers.payrollMonth, range.payrollMonth));
+      await tx.delete(schema.payrollPayoutInvoices).where(eq(schema.payrollPayoutInvoices.payrollMonth, range.payrollMonth));
+      await tx.delete(schema.payrollSessionObservations).where(eq(schema.payrollSessionObservations.payrollMonth, range.payrollMonth));
+
+      await insertChunks(tx, schema.payrollTeacherTiers, teacherRows);
+      await insertChunks(tx, schema.payrollSessionObservations, sessionRows);
+      await insertChunks(tx, schema.payrollPayoutInvoices, invoiceRows);
+
+      await tx
+        .insert(schema.payrollReviews)
+        .values({
+          payrollMonth: range.payrollMonth,
+          status: "draft",
+          lastSyncRunId: syncRunId,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: schema.payrollReviews.payrollMonth,
+          set: {
+            status: "draft",
+            approvedByEmail: null,
+            approvedByName: null,
+            approvedAt: null,
+            lastSyncRunId: syncRunId,
+            updatedAt: new Date(),
+          },
+        });
+
+      await tx
+        .update(schema.payrollSyncRuns)
+        .set({
+          status: "success",
+          finishedAt: new Date(),
+          teacherCount: teacherRows.length,
+          sessionCount: sessionRows.length,
+          invoiceCount: invoiceRows.length,
+          metadata,
+        })
+        .where(eq(schema.payrollSyncRuns.id, syncRunId));
+    });
 
     return {
       syncRunId,
@@ -374,13 +396,12 @@ export async function runPayrollSync(
       sessionPagesFetched: sessionFetch.pagesFetched,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Payroll sync failed";
     await db
       .update(schema.payrollSyncRuns)
       .set({
         status: "failed",
         finishedAt: new Date(),
-        errorSummary: message,
+        errorSummary: shortErrorSummary(error),
       })
       .where(eq(schema.payrollSyncRuns.id, syncRunId));
     throw error;

@@ -225,6 +225,13 @@
       "when": 1780214400000,
       "tag": "0034_wise_payroll_tracker",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1780218000000,
+      "tag": "0035_payroll_invoice_transaction_index",
+      "breakpoints": true
     }
   ]
 }
