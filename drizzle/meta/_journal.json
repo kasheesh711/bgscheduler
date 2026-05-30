@@ -218,6 +218,13 @@
       "when": 1780128000000,
       "tag": "0033_line_link_validation",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1780214400000,
+      "tag": "0034_wise_payroll_tracker",
+      "breakpoints": true
     }
   ]
 }

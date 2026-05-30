@@ -139,6 +139,11 @@ export const salesDashboardSourceStatusEnum = pgEnum("sales_dashboard_source_sta
   "archived",
 ]);
 
+export const payrollReviewStatusEnum = pgEnum("payroll_review_status", [
+  "draft",
+  "approved",
+]);
+
 // ── Snapshots & Sync ───────────────────────────────────────────────────
 
 export const snapshots = pgTable("snapshots", {
@@ -827,6 +832,133 @@ export const roomUtilizationSessions = pgTable("room_utilization_sessions", {
   uniqueIndex("rus_wise_session_id_idx").on(table.wiseSessionId),
   index("rus_date_idx").on(table.utilizationDate),
   index("rus_room_date_idx").on(table.normalizedRoomLabel, table.utilizationDate),
+]);
+
+// ── Wise Payroll Review ────────────────────────────────────────────────
+
+export const payrollSyncRuns = pgTable("payroll_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  payrollMonth: date("payroll_month", { mode: "string" }).notNull(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  triggerType: text("trigger_type").notNull().default("manual"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  teacherCount: integer("teacher_count").notNull().default(0),
+  sessionCount: integer("session_count").notNull().default(0),
+  invoiceCount: integer("invoice_count").notNull().default(0),
+  errorSummary: text("error_summary"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+}, (table) => [
+  uniqueIndex("payroll_sync_runs_single_running_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'running'`),
+  index("payroll_sync_runs_month_idx").on(table.payrollMonth, table.startedAt),
+  index("payroll_sync_runs_status_idx").on(table.status, table.startedAt),
+]);
+
+export const payrollReviews = pgTable("payroll_reviews", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  payrollMonth: date("payroll_month", { mode: "string" }).notNull(),
+  status: payrollReviewStatusEnum("status").notNull().default("draft"),
+  notes: text("notes").notNull().default(""),
+  approvedByEmail: text("approved_by_email"),
+  approvedByName: text("approved_by_name"),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  lastSyncRunId: uuid("last_sync_run_id").references(() => payrollSyncRuns.id),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("payroll_reviews_month_idx").on(table.payrollMonth),
+]);
+
+export const payrollTeacherTiers = pgTable("payroll_teacher_tiers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  payrollMonth: date("payroll_month", { mode: "string" }).notNull(),
+  syncRunId: uuid("sync_run_id").notNull().references(() => payrollSyncRuns.id),
+  wiseTeacherId: text("wise_teacher_id").notNull(),
+  wiseUserId: text("wise_user_id"),
+  wiseDisplayName: text("wise_display_name").notNull(),
+  rawTier: text("raw_tier"),
+  normalizedTier: text("normalized_tier").notNull().default("Unassigned"),
+  tags: jsonb("tags").$type<string[]>().notNull().default([]),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("payroll_teacher_tiers_month_teacher_idx").on(table.payrollMonth, table.wiseTeacherId),
+  index("payroll_teacher_tiers_month_user_idx").on(table.payrollMonth, table.wiseUserId),
+]);
+
+export const payrollPayoutInvoices = pgTable("payroll_payout_invoices", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  payrollMonth: date("payroll_month", { mode: "string" }).notNull(),
+  syncRunId: uuid("sync_run_id").notNull().references(() => payrollSyncRuns.id),
+  eventId: text("event_id").notNull(),
+  transactionId: text("transaction_id").notNull(),
+  eventTimestamp: timestamp("event_timestamp", { withTimezone: true }).notNull(),
+  wiseTeacherUserId: text("wise_teacher_user_id"),
+  actorWiseUserId: text("actor_wise_user_id"),
+  wiseClassId: text("wise_class_id"),
+  wiseSessionId: text("wise_session_id"),
+  sessionStartTime: timestamp("session_start_time", { withTimezone: true }),
+  sessionCredits: doublePrecision("session_credits").notNull().default(0),
+  amountMinor: integer("amount_minor"),
+  amount: doublePrecision("amount").notNull().default(0),
+  currency: text("currency").notNull().default("THB"),
+  transactionStatus: text("transaction_status"),
+  note: text("note"),
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("payroll_payout_invoices_event_idx").on(table.eventId),
+  uniqueIndex("payroll_payout_invoices_transaction_idx").on(table.transactionId),
+  index("payroll_payout_invoices_month_idx").on(table.payrollMonth),
+  index("payroll_payout_invoices_month_teacher_idx").on(table.payrollMonth, table.wiseTeacherUserId),
+  index("payroll_payout_invoices_session_idx").on(table.wiseSessionId),
+]);
+
+export const payrollSessionObservations = pgTable("payroll_session_observations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  payrollMonth: date("payroll_month", { mode: "string" }).notNull(),
+  syncRunId: uuid("sync_run_id").notNull().references(() => payrollSyncRuns.id),
+  wiseSessionId: text("wise_session_id").notNull(),
+  wiseTeacherUserId: text("wise_teacher_user_id"),
+  wiseTeacherId: text("wise_teacher_id"),
+  tutorGroupCanonicalKey: text("tutor_group_canonical_key"),
+  tutorDisplayName: text("tutor_display_name"),
+  wiseClassId: text("wise_class_id"),
+  className: text("class_name"),
+  subject: text("subject"),
+  classType: text("class_type"),
+  startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+  endTime: timestamp("end_time", { withTimezone: true }),
+  durationMinutes: integer("duration_minutes").notNull().default(0),
+  meetingStatus: text("meeting_status").notNull(),
+  sessionType: text("session_type"),
+  studentCount: integer("student_count"),
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("payroll_session_observations_month_session_idx").on(table.payrollMonth, table.wiseSessionId),
+  index("payroll_session_observations_month_teacher_idx").on(table.payrollMonth, table.wiseTeacherUserId),
+  index("payroll_session_observations_month_group_idx").on(table.payrollMonth, table.tutorGroupCanonicalKey),
+]);
+
+export const payrollAdjustments = pgTable("payroll_adjustments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  payrollMonth: date("payroll_month", { mode: "string" }).notNull(),
+  adjustmentType: text("adjustment_type").notNull().default("manual"),
+  tutorCanonicalKey: text("tutor_canonical_key"),
+  tutorDisplayName: text("tutor_display_name"),
+  hours: doublePrecision("hours").notNull().default(0),
+  amount: doublePrecision("amount").notNull().default(0),
+  description: text("description").notNull().default(""),
+  source: text("source").notNull().default("manual"),
+  createdByEmail: text("created_by_email"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("payroll_adjustments_month_idx").on(table.payrollMonth, table.createdAt),
 ]);
 
 export const classroomPublishJobs = pgTable("classroom_publish_jobs", {
