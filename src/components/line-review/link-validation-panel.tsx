@@ -48,7 +48,17 @@ function evidenceLabel(task: LineLinkValidationTask): string {
   ].filter(Boolean).join(" / ");
 }
 
-export function LinkValidationPanel({ runId }: { runId: string | null }) {
+export function LinkValidationPanel({
+  runId,
+  className,
+  onChanged,
+  refreshKey = 0,
+}: {
+  runId: string | null;
+  className?: string;
+  onChanged?: () => void;
+  refreshKey?: number;
+}) {
   const [scope, setScope] = useState<LineLinkValidationScope>("my");
   const [tasks, setTasks] = useState<LineLinkValidationTask[]>([]);
   const [reviewers, setReviewers] = useState<LineLinkValidationReviewer[]>([]);
@@ -61,11 +71,11 @@ export function LinkValidationPanel({ runId }: { runId: string | null }) {
   const selectedReviewerPayload = useMemo(() => [...selectedReviewers], [selectedReviewers]);
 
   async function loadValidation(nextScope = scope) {
-    if (!runId) return;
     setBusy("load");
     setMessage(null);
     try {
-      const params = new URLSearchParams({ scope: nextScope, runId });
+      const params = new URLSearchParams({ scope: nextScope });
+      if (runId) params.set("runId", runId);
       const payload = await jsonFetch<{
         tasks: LineLinkValidationTask[];
         reviewers: LineLinkValidationReviewer[];
@@ -103,6 +113,7 @@ export function LinkValidationPanel({ runId }: { runId: string | null }) {
       );
       setMessage(`Assigned ${payload.assigned} open validation task(s).`);
       await loadValidation(scope);
+      onChanged?.();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Assignment failed");
     } finally {
@@ -127,6 +138,7 @@ export function LinkValidationPanel({ runId }: { runId: string | null }) {
       );
       setMessage("Task reassigned.");
       await loadValidation(scope);
+      onChanged?.();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Reassignment failed");
     } finally {
@@ -152,6 +164,7 @@ export function LinkValidationPanel({ runId }: { runId: string | null }) {
       );
       setMessage(status === "verified" ? "Mapping verified." : "Mapping rejected.");
       await loadValidation(scope);
+      onChanged?.();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Validation update failed");
     } finally {
@@ -161,10 +174,10 @@ export function LinkValidationPanel({ runId }: { runId: string | null }) {
 
   useEffect(() => {
     void loadValidation(scope);
-  }, [runId, scope]);
+  }, [runId, scope, refreshKey]);
 
   return (
-    <div className="flex min-h-0 flex-col rounded-lg border border-border bg-card">
+    <div className={cn("flex min-h-0 flex-col rounded-lg border border-border bg-card", className)}>
       <div className="border-b border-border p-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
@@ -176,7 +189,7 @@ export function LinkValidationPanel({ runId }: { runId: string | null }) {
               Assign suggested resolver links, then verify each LINE account to student-code mapping.
             </p>
           </div>
-          <Button type="button" size="sm" variant="outline" onClick={() => loadValidation(scope)} disabled={!runId || Boolean(busy)}>
+          <Button type="button" size="sm" variant="outline" onClick={() => loadValidation(scope)} disabled={Boolean(busy)}>
             {busy === "load" ? <Loader2 className="animate-spin" /> : <RefreshCw />}
             Refresh
           </Button>
@@ -241,9 +254,7 @@ export function LinkValidationPanel({ runId }: { runId: string | null }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {!runId ? (
-          <div className="p-4 text-sm text-muted-foreground">Load a resolver run first.</div>
-        ) : openTasks.length === 0 && scope !== "verified" && scope !== "rejected" ? (
+        {openTasks.length === 0 && scope !== "verified" && scope !== "rejected" ? (
           <div className="p-4 text-sm text-muted-foreground">
             No open validation tasks for this filter. Commit resolver candidates first, then assign validation.
           </div>

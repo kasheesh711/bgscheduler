@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { studentLinkVisibilityForReview } from "@/components/line-review/line-review-workspace";
+import {
+  LINE_REVIEW_WORKSPACE_TABS,
+  studentLinkVisibilityForReview,
+} from "@/components/line-review/line-review-workspace";
 import { getResolutionStepStates } from "@/components/line-review/resolution-board";
 
 const baseReview = {
@@ -77,6 +80,15 @@ describe("LINE review student link visibility", () => {
     });
 
     expect(visibility.label).toBe("Multi-child verified");
+  });
+});
+
+describe("LINE review workspace navigation", () => {
+  it("exposes AI review and mapping validation as top-level tabs", () => {
+    expect(LINE_REVIEW_WORKSPACE_TABS.map((tab) => tab.label)).toEqual([
+      "AI Review Queue",
+      "Mapping Validation",
+    ]);
   });
 });
 

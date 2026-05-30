@@ -303,3 +303,29 @@ export interface LineLinkValidationTask {
   currentStudentHasFutureSessions: boolean | null;
   currentStudentHasLivePackage: boolean | null;
 }
+
+export interface LineLinkValidationReviewerSummary {
+  email: string;
+  name: string | null;
+  assigned: number;
+  verified: number;
+  rejected: number;
+  remaining: number;
+  completionRate: number;
+}
+
+export interface LineLinkValidationSummary {
+  canViewTracker: boolean;
+  runId: string | null;
+  totals: {
+    assigned: number;
+    unassigned: number;
+    verified: number;
+    rejected: number;
+    remaining: number;
+    total: number;
+    completionRate: number;
+  };
+  reviewers: LineLinkValidationReviewerSummary[];
+  recentActivity: LineLinkValidationTask[];
+}

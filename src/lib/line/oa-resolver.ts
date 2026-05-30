@@ -523,6 +523,20 @@ export async function getLatestLineOaResolverRun(
   return runToDto(run, await getRunRows(db, run.id));
 }
 
+export async function listLineOaResolverRuns(
+  db: Database,
+  limit = 20,
+): Promise<LineOaResolverRunDto[]> {
+  const safeLimit = Math.min(Math.max(Math.floor(limit), 1), 50);
+  const runs = await db
+    .select()
+    .from(schema.lineOaResolverRuns)
+    .orderBy(desc(schema.lineOaResolverRuns.createdAt))
+    .limit(safeLimit);
+  const rowSets = await Promise.all(runs.map((run) => getRunRows(db, run.id)));
+  return runs.map((run, index) => runToDto(run, rowSets[index] ?? []));
+}
+
 export async function createLineOaResolverRun(
   db: Database,
   actor: LineStudentLinkActor,

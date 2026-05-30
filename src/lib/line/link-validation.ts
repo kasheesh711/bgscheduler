@@ -56,6 +56,32 @@ export interface LineLinkValidationReviewerDto {
   openAssignments: number;
 }
 
+export interface LineLinkValidationReviewerSummaryDto {
+  email: string;
+  name: string | null;
+  assigned: number;
+  verified: number;
+  rejected: number;
+  remaining: number;
+  completionRate: number;
+}
+
+export interface LineLinkValidationSummaryDto {
+  canViewTracker: boolean;
+  runId: string | null;
+  totals: {
+    assigned: number;
+    unassigned: number;
+    verified: number;
+    rejected: number;
+    remaining: number;
+    total: number;
+    completionRate: number;
+  };
+  reviewers: LineLinkValidationReviewerSummaryDto[];
+  recentActivity: LineLinkValidationTaskDto[];
+}
+
 export class LineLinkValidationError extends Error {
   constructor(
     message: string,
@@ -83,6 +109,11 @@ export interface PlannedValidationAssignment {
   reviewerName: string | null;
 }
 
+const DEFAULT_LINE_VALIDATION_LEAD_EMAILS = [
+  "kevhsh7@gmail.com",
+  "kevinhsieh711@gmail.com",
+];
+
 function now(): Date {
   return new Date();
 }
@@ -97,6 +128,45 @@ function actorFromInput(actor: LineLinkValidationActor): { email: string | null;
     email: actor.email?.trim().toLowerCase() || null,
     name: actor.name?.trim() || null,
   };
+}
+
+function emptySummary(runId?: string | null, canViewTracker = false): LineLinkValidationSummaryDto {
+  return {
+    canViewTracker,
+    runId: runId ?? null,
+    totals: {
+      assigned: 0,
+      unassigned: 0,
+      verified: 0,
+      rejected: 0,
+      remaining: 0,
+      total: 0,
+      completionRate: 0,
+    },
+    reviewers: [],
+    recentActivity: [],
+  };
+}
+
+function percent(completed: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.round((completed / total) * 100);
+}
+
+export function lineValidationLeadEmails(): string[] {
+  const configured = process.env.LINE_VALIDATION_LEAD_EMAILS
+    ?.split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+  const source = configured && configured.length > 0
+    ? configured
+    : DEFAULT_LINE_VALIDATION_LEAD_EMAILS;
+  return [...new Set(source)];
+}
+
+export function isLineValidationLeadEmail(email?: string | null): boolean {
+  const normalized = email?.trim().toLowerCase();
+  return Boolean(normalized && lineValidationLeadEmails().includes(normalized));
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -301,6 +371,141 @@ export async function listLineLinkValidationTasks(
       studentsByKey.get(row.link.studentKey) ?? null,
     )),
     reviewers,
+  };
+}
+
+export async function getLineLinkValidationSummary(
+  db: Database,
+  input: {
+    runId?: string | null;
+    actor: LineLinkValidationActor;
+  },
+): Promise<LineLinkValidationSummaryDto> {
+  const actor = actorFromInput(input.actor);
+  if (!isLineValidationLeadEmail(actor.email)) {
+    return emptySummary(input.runId, false);
+  }
+
+  const conditions = [lineOaResolverSourceCondition()];
+  if (input.runId) conditions.push(lineOaResolverRunCondition(input.runId));
+
+  const [rows, adminRows, currentStudents] = await Promise.all([
+    db
+      .select({
+        link: schema.lineContactStudentLinks,
+        contact: schema.lineContacts,
+      })
+      .from(schema.lineContactStudentLinks)
+      .innerJoin(schema.lineContacts, eq(schema.lineContactStudentLinks.contactId, schema.lineContacts.id))
+      .where(and(...conditions)),
+    db
+      .select()
+      .from(schema.adminUsers)
+      .orderBy(asc(schema.adminUsers.email)),
+    listCurrentLineStudents(db),
+  ]);
+
+  const studentsByKey = new Map(currentStudents.map((student) => [student.studentKey, student]));
+  const tasks = rows.map((row) => linkTaskToDto(
+    row.link,
+    row.contact,
+    studentsByKey.get(row.link.studentKey) ?? null,
+  ));
+
+  const totals = {
+    assigned: 0,
+    unassigned: 0,
+    verified: 0,
+    rejected: 0,
+    remaining: 0,
+    total: 0,
+    completionRate: 0,
+  };
+
+  const reviewerMap = new Map<string, LineLinkValidationReviewerSummaryDto>();
+  function ensureReviewer(email: string, name?: string | null): LineLinkValidationReviewerSummaryDto {
+    const normalized = email.trim().toLowerCase();
+    const existing = reviewerMap.get(normalized);
+    if (existing) {
+      if (!existing.name && name) existing.name = name;
+      return existing;
+    }
+    const reviewer = {
+      email: normalized,
+      name: name ?? null,
+      assigned: 0,
+      verified: 0,
+      rejected: 0,
+      remaining: 0,
+      completionRate: 0,
+    };
+    reviewerMap.set(normalized, reviewer);
+    return reviewer;
+  }
+
+  for (const admin of adminRows) {
+    ensureReviewer(admin.email, admin.name);
+  }
+
+  for (const task of tasks) {
+    if (task.status === "suggested") {
+      if (task.validationAssignedToEmail) {
+        totals.assigned += 1;
+        const reviewer = ensureReviewer(task.validationAssignedToEmail, task.validationAssignedToName);
+        reviewer.assigned += 1;
+        reviewer.remaining += 1;
+      } else {
+        totals.unassigned += 1;
+      }
+      continue;
+    }
+
+    if (task.status === "verified") {
+      totals.verified += 1;
+      const email = task.reviewedByEmail || task.validationAssignedToEmail;
+      if (email) {
+        ensureReviewer(email, task.reviewedByName || task.validationAssignedToName).verified += 1;
+      }
+    } else if (task.status === "rejected") {
+      totals.rejected += 1;
+      const email = task.reviewedByEmail || task.validationAssignedToEmail;
+      if (email) {
+        ensureReviewer(email, task.reviewedByName || task.validationAssignedToName).rejected += 1;
+      }
+    }
+  }
+
+  totals.remaining = totals.assigned + totals.unassigned;
+  totals.total = totals.remaining + totals.verified + totals.rejected;
+  totals.completionRate = percent(totals.verified + totals.rejected, totals.total);
+
+  const reviewers = [...reviewerMap.values()]
+    .map((reviewer) => {
+      const completed = reviewer.verified + reviewer.rejected;
+      return {
+        ...reviewer,
+        completionRate: percent(completed, completed + reviewer.remaining),
+      };
+    })
+    .sort((a, b) => (
+      (b.remaining + b.verified + b.rejected) - (a.remaining + a.verified + a.rejected)
+      || a.email.localeCompare(b.email)
+    ));
+
+  const recentActivity = tasks
+    .filter((task) => task.status === "verified" || task.status === "rejected")
+    .sort((a, b) => (
+      new Date(b.reviewedAt ?? b.updatedAt).getTime()
+      - new Date(a.reviewedAt ?? a.updatedAt).getTime()
+    ))
+    .slice(0, 10);
+
+  return {
+    canViewTracker: true,
+    runId: input.runId ?? null,
+    totals,
+    reviewers,
+    recentActivity,
   };
 }
 

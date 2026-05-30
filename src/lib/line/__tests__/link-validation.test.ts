@@ -1,5 +1,19 @@
-import { describe, expect, it } from "vitest";
-import { planRoundRobinValidationAssignments } from "@/lib/line/link-validation";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  isLineValidationLeadEmail,
+  lineValidationLeadEmails,
+  planRoundRobinValidationAssignments,
+} from "@/lib/line/link-validation";
+
+const originalLeadEmails = process.env.LINE_VALIDATION_LEAD_EMAILS;
+
+afterEach(() => {
+  if (originalLeadEmails === undefined) {
+    delete process.env.LINE_VALIDATION_LEAD_EMAILS;
+  } else {
+    process.env.LINE_VALIDATION_LEAD_EMAILS = originalLeadEmails;
+  }
+});
 
 describe("LINE link validation assignment planning", () => {
   it("evenly distributes unassigned candidate links across reviewers", () => {
@@ -38,5 +52,23 @@ describe("LINE link validation assignment planning", () => {
       "free@example.com",
       "free@example.com",
     ]);
+  });
+
+  it("uses Kevin's admin emails as default validation leads", () => {
+    delete process.env.LINE_VALIDATION_LEAD_EMAILS;
+
+    expect(lineValidationLeadEmails()).toEqual([
+      "kevhsh7@gmail.com",
+      "kevinhsieh711@gmail.com",
+    ]);
+    expect(isLineValidationLeadEmail("KEVHSH7@gmail.com")).toBe(true);
+  });
+
+  it("allows validation leads to be configured by environment", () => {
+    process.env.LINE_VALIDATION_LEAD_EMAILS = "lead@example.com, other@example.com ";
+
+    expect(lineValidationLeadEmails()).toEqual(["lead@example.com", "other@example.com"]);
+    expect(isLineValidationLeadEmail("lead@example.com")).toBe(true);
+    expect(isLineValidationLeadEmail("kevhsh7@gmail.com")).toBe(false);
   });
 });

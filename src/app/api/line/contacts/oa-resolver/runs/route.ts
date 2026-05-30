@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import {
   createLineOaResolverRun,
   getLatestLineOaResolverRun,
+  listLineOaResolverRuns,
 } from "@/lib/line/oa-resolver";
 
 function actorFromSession(session: { user?: { email?: string | null; name?: string | null } } | null) {
@@ -21,7 +22,10 @@ export async function GET(request: NextRequest) {
 
   const latest = request.nextUrl.searchParams.get("latest") === "true";
   if (!latest) {
-    return NextResponse.json({ error: "Only latest=true is supported" }, { status: 400 });
+    const limitParam = Number(request.nextUrl.searchParams.get("limit") ?? "20");
+    const limit = Number.isFinite(limitParam) ? limitParam : 20;
+    const runs = await listLineOaResolverRuns(getDb(), limit);
+    return NextResponse.json({ runs });
   }
 
   const run = await getLatestLineOaResolverRun(getDb(), actorFromSession(session));

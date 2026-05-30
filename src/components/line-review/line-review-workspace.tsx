@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, ScanSearch, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { AliasImportDialog } from "./alias-import-dialog";
 import { EmptyState } from "./status-badges";
 import { CaseHeader } from "./case-header";
 import { ChatEvidencePanel } from "./chat-evidence-panel";
+import { MappingValidationWorkspace } from "./mapping-validation-workspace";
 import { OaResolverDialog } from "./oa-resolver-dialog";
 import { ReplyDock } from "./reply-dock";
 import { ResolutionBoard } from "./resolution-board";
@@ -33,7 +35,13 @@ import {
 
 export { studentLinkVisibilityForReview } from "./utils";
 
+export const LINE_REVIEW_WORKSPACE_TABS = [
+  { value: "reviews", label: "AI Review Queue" },
+  { value: "validation", label: "Mapping Validation" },
+] as const;
+
 export function LineReviewWorkspace() {
+  const [workspaceTab, setWorkspaceTab] = useState<(typeof LINE_REVIEW_WORKSPACE_TABS)[number]["value"]>("reviews");
   const [intentFilter, setIntentFilter] = useState<IntentType>("all");
   const [reviews, setReviews] = useState<Review[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -52,6 +60,7 @@ export function LineReviewWorkspace() {
   const [studentLinkOpen, setStudentLinkOpen] = useState(false);
   const [aliasImportOpen, setAliasImportOpen] = useState(false);
   const [oaResolverOpen, setOaResolverOpen] = useState(false);
+  const [validationRefreshKey, setValidationRefreshKey] = useState(0);
   const [signalsOpen, setSignalsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -331,6 +340,11 @@ export function LineReviewWorkspace() {
     });
   }
 
+  function handleResolverCommitted() {
+    setValidationRefreshKey((current) => current + 1);
+    void refreshAll();
+  }
+
   const studentLinkCommand = (
     <StudentLinkCommand
       open={studentLinkOpen}
@@ -386,12 +400,38 @@ export function LineReviewWorkspace() {
         studentLinkCommand={studentLinkCommand}
       />
 
+      <div className="shrink-0 border-b border-border bg-card/55 px-4 py-2 lg:px-5">
+        <div className="inline-flex rounded-lg border border-border bg-background p-1">
+          {LINE_REVIEW_WORKSPACE_TABS.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              className={cn(
+                "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                workspaceTab === item.value
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+              onClick={() => setWorkspaceTab(item.value)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {error ? (
         <div className="shrink-0 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive lg:px-5">
           {error}
         </div>
       ) : null}
 
+      {workspaceTab === "validation" ? (
+        <MappingValidationWorkspace
+          onOpenResolver={() => setOaResolverOpen(true)}
+          refreshKey={validationRefreshKey}
+        />
+      ) : (
       <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[310px_minmax(0,1fr)]">
         <ReviewQueue
           reviews={reviews}
@@ -475,6 +515,7 @@ export function LineReviewWorkspace() {
           )}
         </section>
       </div>
+      )}
 
       <SignalsDialog
         open={signalsOpen}
@@ -496,9 +537,7 @@ export function LineReviewWorkspace() {
       <OaResolverDialog
         open={oaResolverOpen}
         onOpenChange={setOaResolverOpen}
-        onCommitted={() => {
-          void refreshAll();
-        }}
+        onCommitted={handleResolverCommitted}
       />
     </main>
   );
