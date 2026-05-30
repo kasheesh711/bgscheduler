@@ -1,4 +1,6 @@
 import { and, eq, lte } from "drizzle-orm";
+import { drizzle as drizzleNodePostgres } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { WiseClient } from "@/lib/wise/client";
@@ -22,6 +24,7 @@ const DEFAULT_MAX_EVENT_PAGES = 1000;
 const STALE_RUNNING_MS = 20 * 60 * 1000;
 const INSERT_CHUNK_SIZE = 500;
 const ERROR_SUMMARY_MAX_LENGTH = 2_000;
+let payrollWritePool: Pool | null = null;
 
 export interface PayrollSyncResult {
   syncRunId: string;
@@ -81,6 +84,42 @@ function shortErrorSummary(error: unknown): string {
   const message = error instanceof Error ? error.message : "Payroll sync failed";
   if (message.length <= ERROR_SUMMARY_MAX_LENGTH) return message;
   return `${message.slice(0, ERROR_SUMMARY_MAX_LENGTH)}... [truncated ${message.length - ERROR_SUMMARY_MAX_LENGTH} chars]`;
+}
+
+function isNeonHttpTransactionUnsupported(error: unknown): boolean {
+  return error instanceof Error && /No transactions support in neon-http driver/i.test(error.message);
+}
+
+function getPayrollWritePool(): Pool {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) throw new Error("DATABASE_URL is not set");
+  payrollWritePool ??= new Pool({ connectionString: databaseUrl, max: 1 });
+  return payrollWritePool;
+}
+
+async function runPayrollWriteTransaction<T>(
+  db: Database,
+  callback: (tx: PayrollWriteDb) => Promise<T>,
+): Promise<T> {
+  try {
+    return await db.transaction((tx) => callback(tx as PayrollWriteDb));
+  } catch (error) {
+    if (!isNeonHttpTransactionUnsupported(error)) throw error;
+  }
+
+  const client = await getPayrollWritePool().connect();
+  try {
+    await client.query("BEGIN");
+    const txDb = drizzleNodePostgres(client, { schema }) as unknown as PayrollWriteDb;
+    const result = await callback(txDb);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function markAbandonedRuns(db: Database, now: Date): Promise<void> {
@@ -343,7 +382,7 @@ export async function runPayrollSync(
       .set({ metadata })
       .where(eq(schema.payrollSyncRuns.id, syncRunId));
 
-    await db.transaction(async (tx) => {
+    await runPayrollWriteTransaction(db, async (tx) => {
       await tx.delete(schema.payrollTeacherTiers).where(eq(schema.payrollTeacherTiers.payrollMonth, range.payrollMonth));
       await tx.delete(schema.payrollPayoutInvoices).where(eq(schema.payrollPayoutInvoices.payrollMonth, range.payrollMonth));
       await tx.delete(schema.payrollSessionObservations).where(eq(schema.payrollSessionObservations.payrollMonth, range.payrollMonth));
