@@ -281,7 +281,7 @@ export function OaResolverDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88vh] max-w-7xl overflow-hidden p-0">
+      <DialogContent className="h-[min(88vh,900px)] max-h-[88vh] w-[calc(100vw-2rem)] max-w-none overflow-hidden p-0 sm:max-w-[min(1500px,calc(100vw-2rem))]">
         <DialogHeader className="border-b border-border p-4">
           <DialogTitle className="flex items-center gap-2">
             <Search className="size-5 text-primary" />
@@ -292,8 +292,8 @@ export function OaResolverDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid min-h-0 grid-cols-1 gap-0 overflow-hidden lg:grid-cols-[360px_minmax(0,1fr)]">
-          <aside className="space-y-3 border-b border-border p-4 lg:border-b-0 lg:border-r">
+        <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-0 overflow-y-auto xl:grid-cols-[360px_minmax(0,1fr)] xl:overflow-hidden">
+          <aside className="space-y-3 border-b border-border p-4 xl:border-b-0 xl:border-r">
             <div className="rounded-lg border border-border bg-card p-3">
               <div className="text-sm font-semibold text-foreground">1. Start or resume a run</div>
               <p className="mt-1 text-xs text-muted-foreground">
@@ -360,13 +360,13 @@ export function OaResolverDialog({
             ) : null}
           </aside>
 
-          <section className="min-h-0 overflow-hidden p-4">
+          <section className="min-h-0 min-w-0 overflow-hidden p-4">
             {!run ? (
               <div className="flex h-[520px] items-center justify-center rounded-lg border border-dashed border-border text-sm text-muted-foreground">
                 Create or load a resolver run to see the preview table.
               </div>
             ) : (
-              <div className="flex h-[640px] min-h-0 flex-col">
+              <div className="flex h-full min-h-0 flex-col">
                 <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -403,7 +403,7 @@ export function OaResolverDialog({
                   <CountChip label="Committed" value={run.committedRows} />
                 </div>
 
-                <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,1fr)_430px]">
+                <div className="grid min-h-0 min-w-0 flex-1 gap-3 2xl:grid-cols-[minmax(0,1fr)_430px]">
                   <div className="min-h-0 overflow-y-auto rounded-lg border border-border">
                     {groupedRows.map(([groupKey, rows]) => (
                       <div key={groupKey} className="border-b border-border last:border-b-0">
