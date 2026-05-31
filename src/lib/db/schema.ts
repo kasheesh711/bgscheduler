@@ -144,6 +144,22 @@ export const payrollReviewStatusEnum = pgEnum("payroll_review_status", [
   "approved",
 ]);
 
+export const leaveRequestWorkflowStatusEnum = pgEnum("leave_request_workflow_status", [
+  "new",
+  "needs_review",
+  "in_progress",
+  "done",
+  "ignored",
+  "canceled_by_tutor",
+]);
+
+export const leaveRequestSheetWriteStatusEnum = pgEnum("leave_request_sheet_write_status", [
+  "not_required",
+  "pending",
+  "success",
+  "failed",
+]);
+
 // ── Snapshots & Sync ───────────────────────────────────────────────────
 
 export const snapshots = pgTable("snapshots", {
@@ -961,6 +977,42 @@ export const payrollAdjustments = pgTable("payroll_adjustments", {
   index("payroll_adjustments_month_idx").on(table.payrollMonth, table.createdAt),
 ]);
 
+export const payrollRateCardVersions = pgTable("payroll_rate_card_versions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  versionName: text("version_name").notNull(),
+  effectiveMonth: date("effective_month", { mode: "string" }).notNull(),
+  sourceLabel: text("source_label").notNull(),
+  active: boolean("active").notNull().default(false),
+  createdByEmail: text("created_by_email"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+}, (table) => [
+  uniqueIndex("payroll_rate_card_versions_active_idx")
+    .on(table.active)
+    .where(sql`${table.active} = true`),
+  index("payroll_rate_card_versions_effective_idx").on(table.effectiveMonth),
+]);
+
+export const payrollRateRules = pgTable("payroll_rate_rules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  versionId: uuid("version_id").notNull().references(() => payrollRateCardVersions.id),
+  studentBand: text("student_band").notNull(),
+  curriculum: text("curriculum").notNull(),
+  course: text("course").notNull(),
+  normalizedCourseKey: text("normalized_course_key").notNull(),
+  tierKey: text("tier_key").notNull(),
+  sourceTierKey: text("source_tier_key").notNull(),
+  pricePerHour: doublePrecision("price_per_hour"),
+  expectedRevenuePerHour: doublePrecision("expected_revenue_per_hour").notNull(),
+  revenueShare: doublePrecision("revenue_share"),
+  rawSourceRow: jsonb("raw_source_row").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("payroll_rate_rules_unique_idx").on(table.versionId, table.studentBand, table.normalizedCourseKey, table.tierKey),
+  index("payroll_rate_rules_lookup_idx").on(table.versionId, table.studentBand, table.normalizedCourseKey),
+]);
+
 export const classroomPublishJobs = pgTable("classroom_publish_jobs", {
   id: uuid("id").primaryKey().defaultRandom(),
   runId: uuid("run_id").notNull().references(() => classroomAssignmentRuns.id),
@@ -1126,6 +1178,151 @@ export const classroomAdminEmailRecipients = pgTable("classroom_admin_email_reci
   index("caer_recipients_email_run_idx").on(table.emailRunId),
   index("caer_recipients_date_idx").on(table.assignmentDate),
   index("caer_recipients_email_idx").on(table.recipientEmail),
+]);
+
+// ── Tutor Leave Requests ───────────────────────────────────────────────
+
+export const leaveRequestSyncRuns = pgTable("leave_request_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  triggerType: text("trigger_type").notNull(),
+  actorEmail: text("actor_email"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  scannedRowCount: integer("scanned_row_count").notNull().default(0),
+  insertedCount: integer("inserted_count").notNull().default(0),
+  updatedCount: integer("updated_count").notNull().default(0),
+  notificationCount: integer("notification_count").notNull().default(0),
+  errorSummary: text("error_summary"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+}, (table) => [
+  uniqueIndex("leave_request_sync_runs_single_running_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'running'`),
+  index("leave_request_sync_runs_started_idx").on(table.status, table.startedAt),
+]);
+
+export const leaveRequests = pgTable("leave_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  spreadsheetId: text("spreadsheet_id").notNull(),
+  sheetName: text("sheet_name").notNull(),
+  sourceRowNumber: integer("source_row_number").notNull(),
+  sourceFingerprint: text("source_fingerprint").notNull(),
+  sourceSubmittedAt: timestamp("source_submitted_at", { withTimezone: true }),
+  tutorName: text("tutor_name").notNull(),
+  tutorEmail: text("tutor_email"),
+  startDate: date("start_date", { mode: "string" }),
+  endDate: date("end_date", { mode: "string" }),
+  timePeriod: text("time_period"),
+  specificTimeText: text("specific_time_text"),
+  leaveStartTime: timestamp("leave_start_time", { withTimezone: true }),
+  leaveEndTime: timestamp("leave_end_time", { withTimezone: true }),
+  startMinute: integer("start_minute"),
+  endMinute: integer("end_minute"),
+  normalizationStatus: text("normalization_status").notNull().default("ok"),
+  normalizationError: text("normalization_error"),
+  reportedHasClasses: text("reported_has_classes"),
+  reportedAffectedClasses: text("reported_affected_classes"),
+  makeupOptions: text("makeup_options"),
+  reason: text("reason"),
+  certificateUrl: text("certificate_url"),
+  situationText: text("situation_text"),
+  policyAgreement: text("policy_agreement"),
+  daysNotice: integer("days_notice"),
+  lateNotice: text("late_notice"),
+  adminFee: integer("admin_fee"),
+  emergencyUsed: integer("emergency_used"),
+  sourceSheetStatus: text("source_sheet_status"),
+  workflowStatus: leaveRequestWorkflowStatusEnum("workflow_status").notNull().default("new"),
+  staffNote: text("staff_note"),
+  unread: boolean("unread").notNull().default(true),
+  sheetWriteStatus: leaveRequestSheetWriteStatusEnum("sheet_write_status").notNull().default("not_required"),
+  sheetWriteError: text("sheet_write_error"),
+  sheetWrittenAt: timestamp("sheet_written_at", { withTimezone: true }),
+  tutorGroupId: uuid("tutor_group_id").references(() => tutorIdentityGroups.id),
+  tutorCanonicalKey: text("tutor_canonical_key"),
+  tutorDisplayName: text("tutor_display_name"),
+  matchConfidence: text("match_confidence").notNull().default("unmatched"),
+  matchReason: text("match_reason"),
+  affectedClassCount: integer("affected_class_count").notNull().default(0),
+  cancellationPreviewCount: integer("cancellation_preview_count").notNull().default(0),
+  rawValues: jsonb("raw_values").$type<Record<string, unknown>>().notNull().default({}),
+  lastSyncRunId: uuid("last_sync_run_id").references(() => leaveRequestSyncRuns.id),
+  firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  statusUpdatedAt: timestamp("status_updated_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("leave_requests_source_row_idx").on(table.spreadsheetId, table.sheetName, table.sourceRowNumber),
+  index("leave_requests_workflow_idx").on(table.workflowStatus, table.leaveStartTime),
+  index("leave_requests_unread_idx").on(table.unread, table.createdAt),
+  index("leave_requests_tutor_idx").on(table.tutorCanonicalKey, table.leaveStartTime),
+]);
+
+export const leaveRequestAffectedSessions = pgTable("leave_request_affected_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  leaveRequestId: uuid("leave_request_id").notNull().references(() => leaveRequests.id, { onDelete: "cascade" }),
+  snapshotId: uuid("snapshot_id").references(() => snapshots.id),
+  groupId: uuid("group_id").references(() => tutorIdentityGroups.id),
+  wiseTeacherId: text("wise_teacher_id").notNull(),
+  wiseTeacherUserId: text("wise_teacher_user_id"),
+  wiseClassId: text("wise_class_id"),
+  wiseSessionId: text("wise_session_id").notNull(),
+  startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+  endTime: timestamp("end_time", { withTimezone: true }).notNull(),
+  weekday: integer("weekday").notNull(),
+  startMinute: integer("start_minute").notNull(),
+  endMinute: integer("end_minute").notNull(),
+  wiseStatus: text("wise_status").notNull(),
+  sessionType: text("session_type"),
+  location: text("location"),
+  studentName: text("student_name"),
+  studentCount: integer("student_count"),
+  subject: text("subject"),
+  classType: text("class_type"),
+  title: text("title"),
+  overlapMinutes: integer("overlap_minutes").notNull().default(0),
+  cancelPreviewSelected: boolean("cancel_preview_selected").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("leave_request_affected_session_unique_idx").on(table.leaveRequestId, table.wiseSessionId),
+  index("leave_request_affected_sessions_request_idx").on(table.leaveRequestId, table.startTime),
+  index("leave_request_affected_sessions_wise_idx").on(table.wiseSessionId),
+]);
+
+export const leaveRequestActivityLogs = pgTable("leave_request_activity_logs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  leaveRequestId: uuid("leave_request_id").references(() => leaveRequests.id, { onDelete: "cascade" }),
+  actionType: text("action_type").notNull(),
+  status: text("status").notNull().default("success"),
+  message: text("message"),
+  requestPayload: jsonb("request_payload").$type<Record<string, unknown>>().notNull().default({}),
+  responsePayload: jsonb("response_payload").$type<Record<string, unknown> | null>(),
+  errorMessage: text("error_message"),
+  createdByEmail: text("created_by_email"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("leave_request_activity_logs_request_idx").on(table.leaveRequestId, table.createdAt),
+]);
+
+export const leaveRequestNotifications = pgTable("leave_request_notifications", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  syncRunId: uuid("sync_run_id").references(() => leaveRequestSyncRuns.id, { onDelete: "set null" }),
+  leaveRequestId: uuid("leave_request_id").references(() => leaveRequests.id, { onDelete: "cascade" }),
+  notificationType: text("notification_type").notNull().default("new_submission_email"),
+  recipientEmail: text("recipient_email").notNull(),
+  status: text("status").notNull().default("pending"),
+  providerMessageId: text("provider_message_id"),
+  error: text("error"),
+  idempotencyKey: text("idempotency_key").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("leave_request_notifications_idempotency_idx").on(table.idempotencyKey),
+  index("leave_request_notifications_request_idx").on(table.leaveRequestId),
+  index("leave_request_notifications_sync_idx").on(table.syncRunId),
 ]);
 
 // ── Past Sessions (cross-snapshot capture) ──────────────────────────────

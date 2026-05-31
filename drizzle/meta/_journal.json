@@ -232,6 +232,20 @@
       "when": 1780218000000,
       "tag": "0035_payroll_invoice_transaction_index",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1780304400000,
+      "tag": "0036_tutor_leave_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1780311600000,
+      "tag": "0037_payroll_rate_cards",
+      "breakpoints": true
     }
   ]
 }

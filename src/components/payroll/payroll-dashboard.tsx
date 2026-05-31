@@ -22,7 +22,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import type { PayrollPayload, PayrollTutorRow } from "@/lib/payroll/types";
 
-type FilterMode = "all" | "issues" | "kevin" | "free-pay";
+type FilterMode = "all" | "issues" | "rate" | "kevin" | "free-pay";
+
+const RATE_ISSUE_TYPES = new Set(["expected_rate_mismatch", "missing_expected_rate_rule", "unmapped_rate_course"]);
 
 function currentBangkokMonth(): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -103,6 +105,19 @@ function rateSummary(row: PayrollTutorRow): string {
     .join(", ");
 }
 
+function rateCheckSummary(row: PayrollTutorRow): string {
+  if (row.expectedRateIssueCount > 0) {
+    return `${row.expectedRateIssueCount} issue${row.expectedRateIssueCount === 1 ? "" : "s"}`;
+  }
+  if (row.expectedRateCheckedCount > 0) return `${row.expectedRateCheckedCount} checked`;
+  return "No coverage";
+}
+
+function formatStudentBand(value: string | null | undefined): string {
+  if (value === "3_plus") return "3+";
+  return value ?? "-";
+}
+
 export function PayrollDashboard() {
   const [month, setMonth] = useState(currentBangkokMonth);
   const [data, setData] = useState<PayrollPayload | null>(null);
@@ -144,6 +159,7 @@ export function PayrollDashboard() {
   const filteredTutors = useMemo(() => {
     const rows = data?.tutors ?? [];
     if (filter === "issues") return rows.filter((row) => row.flags.length > 0);
+    if (filter === "rate") return rows.filter((row) => row.flags.some((flag) => RATE_ISSUE_TYPES.has(flag)) || row.expectedRateIssueCount > 0);
     if (filter === "kevin") return rows.filter((row) => row.isKevin);
     if (filter === "free-pay") return rows.filter((row) => row.freePayHours > 0 || row.flags.includes("zero_credit_or_zero_amount"));
     return rows;
@@ -266,10 +282,11 @@ export function PayrollDashboard() {
           <div className="rounded-lg border bg-card p-6 text-sm text-muted-foreground">Loading payroll data...</div>
         ) : data ? (
           <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
               <StatCard icon={Banknote} label="Total payout" value={formatMoney(data.summary.totalPayoutAmount)} detail={`${formatHours(data.summary.paidHours)} paid hours`} />
               <StatCard icon={Clock3} label="Utilization" value={formatHours(data.summary.utilizationHours)} detail={`${formatHours(data.summary.varianceHours)} variance`} tone={Math.abs(data.summary.varianceHours) > 1 ? "warn" : "default"} />
               <StatCard icon={UserMinus} label="Kevin hours" value={formatHours(data.summary.kevinHours)} detail={`${formatMoney(data.summary.kevinPayoutAmount)} payout`} />
+              <StatCard icon={BadgeCheck} label="Rate checks" value={String(data.summary.expectedRateCheckedCount)} detail={`${data.summary.expectedRateMismatchCount} mismatches · ${data.summary.missingRateRuleCount + data.summary.unmappedRateCourseCount} missing`} tone={data.summary.expectedRateMismatchCount + data.summary.missingRateRuleCount + data.summary.unmappedRateCourseCount > 0 ? "danger" : "default"} />
               <StatCard icon={AlertTriangle} label="Issues" value={String(data.summary.issueCount)} detail={`${data.summary.unresolvedTutorCount} unresolved tutors`} tone={data.summary.issueCount > 0 ? "danger" : "default"} />
             </div>
 
@@ -280,6 +297,7 @@ export function PayrollDashboard() {
                     <CardTitle>Monthly reconciliation</CardTitle>
                     <div className="mt-1 text-xs text-muted-foreground">
                       Last sync: {formatDateTime(data.lastSync?.finishedAt ?? data.lastSync?.startedAt)} · {data.lastSync?.invoiceCount ?? 0} invoices · {data.lastSync?.sessionCount ?? 0} sessions
+                      {data.rateCard ? ` · Rate card: ${data.rateCard.versionName}` : " · No active rate card"}
                     </div>
                   </div>
                   <Badge variant={data.review.status === "approved" ? "default" : "outline"}>
@@ -288,14 +306,14 @@ export function PayrollDashboard() {
                 </CardHeader>
                 <CardContent>
                   <div className="mb-3 flex flex-wrap items-center gap-2">
-                    {(["all", "issues", "kevin", "free-pay"] as const).map((value) => (
+                    {(["all", "issues", "rate", "kevin", "free-pay"] as const).map((value) => (
                       <Button
                         key={value}
                         variant={filter === value ? "default" : "outline"}
                         size="sm"
                         onClick={() => setFilter(value)}
                       >
-                        {value === "free-pay" ? "Free-pay" : value[0].toUpperCase() + value.slice(1)}
+                        {value === "free-pay" ? "Free-pay" : value === "rate" ? "Rate issues" : value[0].toUpperCase() + value.slice(1)}
                       </Button>
                     ))}
                   </div>
@@ -310,6 +328,7 @@ export function PayrollDashboard() {
                           <TableHead className="text-right">Variance</TableHead>
                           <TableHead className="text-right">Payout</TableHead>
                           <TableHead>Rates</TableHead>
+                          <TableHead>Rate check</TableHead>
                           <TableHead>Flags</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -328,6 +347,11 @@ export function PayrollDashboard() {
                             </TableCell>
                             <TableCell className="text-right font-mono text-xs">{formatMoney(row.payoutAmount)}</TableCell>
                             <TableCell className="max-w-64 text-xs text-muted-foreground">{rateSummary(row)}</TableCell>
+                            <TableCell>
+                              <Badge variant={row.expectedRateIssueCount > 0 ? "destructive" : row.expectedRateCheckedCount > 0 ? "secondary" : "outline"}>
+                                {rateCheckSummary(row)}
+                              </Badge>
+                            </TableCell>
                             <TableCell>
                               <div className="flex max-w-72 flex-wrap gap-1">
                                 {row.isKevin ? <Badge variant="outline">Kevin</Badge> : null}
@@ -360,7 +384,12 @@ export function PayrollDashboard() {
                           Unapprove
                         </Button>
                       ) : (
-                        <Button size="sm" onClick={() => void updateReview("approved")} disabled={saving || data.summary.issueCount > 0}>
+                        <Button
+                          size="sm"
+                          onClick={() => void updateReview("approved")}
+                          disabled={saving || data.summary.issueCount > 0}
+                          title={data.summary.expectedRateMismatchCount + data.summary.missingRateRuleCount + data.summary.unmappedRateCourseCount > 0 ? "Resolve expected-rate issues before approval" : undefined}
+                        >
                           <BadgeCheck className="size-4" />
                           Approve
                         </Button>
@@ -462,6 +491,7 @@ export function PayrollDashboard() {
                       <TableHead>Severity</TableHead>
                       <TableHead>Type</TableHead>
                       <TableHead>Tutor</TableHead>
+                      <TableHead>Rate detail</TableHead>
                       <TableHead>Message</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -471,6 +501,14 @@ export function PayrollDashboard() {
                         <TableCell><Badge variant={issue.severity === "high" ? "destructive" : "secondary"}>{issue.severity}</Badge></TableCell>
                         <TableCell>{flagLabel(issue.type)}</TableCell>
                         <TableCell>{issue.tutorName}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {RATE_ISSUE_TYPES.has(issue.type) ? (
+                            <div>
+                              <div>{issue.course ?? "-"} · {formatStudentBand(issue.studentBand)} stu · {issue.tier ?? "-"}</div>
+                              <div>Expected {issue.expectedRate ? formatMoney(issue.expectedRate) : "-"} · Actual {issue.actualRate ? formatMoney(issue.actualRate) : "-"}</div>
+                            </div>
+                          ) : "-"}
+                        </TableCell>
                         <TableCell>{issue.message}</TableCell>
                       </TableRow>
                     ))}

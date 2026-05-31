@@ -9,6 +9,8 @@ type TierRow = typeof schema.payrollTeacherTiers.$inferSelect;
 type SessionRow = typeof schema.payrollSessionObservations.$inferSelect;
 type InvoiceRow = typeof schema.payrollPayoutInvoices.$inferSelect;
 type AdjustmentRow = typeof schema.payrollAdjustments.$inferSelect;
+type RateCardVersionRow = typeof schema.payrollRateCardVersions.$inferSelect;
+type RateRuleRow = typeof schema.payrollRateRules.$inferSelect;
 
 function sync(overrides: Partial<SyncRow> = {}): SyncRow {
   const base: SyncRow = {
@@ -94,11 +96,47 @@ function invoice(overrides: Partial<InvoiceRow> = {}): InvoiceRow {
   return { ...base, ...overrides };
 }
 
+function rateCardVersion(overrides: Partial<RateCardVersionRow> = {}): RateCardVersionRow {
+  const base: RateCardVersionRow = {
+    id: "rate-card-1",
+    versionName: "PayRate May 2026",
+    effectiveMonth: "2026-05-01",
+    sourceLabel: "PayRate",
+    active: true,
+    createdByEmail: "admin@example.com",
+    createdAt: now,
+    updatedAt: now,
+    metadata: {},
+  };
+  return { ...base, ...overrides };
+}
+
+function rateRule(overrides: Partial<RateRuleRow> = {}): RateRuleRow {
+  const base: RateRuleRow = {
+    id: "rate-rule-1",
+    versionId: "rate-card-1",
+    studentBand: "1",
+    curriculum: "UK/US/IB",
+    course: "Year 9-11 or Grade 8-10",
+    normalizedCourseKey: "year_9_11_grade_8_10",
+    tierKey: "BG1",
+    sourceTierKey: "Tier 1",
+    pricePerHour: 1400,
+    expectedRevenuePerHour: 700,
+    revenueShare: 0.5,
+    rawSourceRow: {},
+    createdAt: now,
+  };
+  return { ...base, ...overrides };
+}
+
 function payload(overrides: {
   tiers?: TierRow[];
   invoices?: InvoiceRow[];
   sessions?: SessionRow[];
   adjustments?: AdjustmentRow[];
+  rateCardVersion?: RateCardVersionRow | null;
+  rateRules?: RateRuleRow[];
 } = {}) {
   return buildPayrollPayload({
     month: "2026-05",
@@ -108,6 +146,8 @@ function payload(overrides: {
     invoices: overrides.invoices ?? [invoice()],
     sessions: overrides.sessions ?? [session()],
     adjustments: overrides.adjustments ?? [],
+    rateCardVersion: overrides.rateCardVersion,
+    rateRules: overrides.rateRules,
   });
 }
 
@@ -177,5 +217,79 @@ describe("payroll aggregation", () => {
 
     expect(result.tutors[0].rateBuckets.map((bucket) => bucket.rate)).toEqual([600, 700]);
     expect(result.tutors[0].effectiveRate).toBe(650);
+  });
+
+  it("checks invoice rates against the active PayRate card", () => {
+    const result = payload({
+      rateCardVersion: rateCardVersion(),
+      rateRules: [rateRule()],
+      sessions: [session({ subject: "Y9-11 / G8-10 (Int.)", studentCount: 1 })],
+    });
+
+    expect(result.rateCard).toMatchObject({ versionName: "PayRate May 2026" });
+    expect(result.summary.expectedRateCheckedCount).toBe(1);
+    expect(result.summary.expectedRateMismatchCount).toBe(0);
+    expect(result.tutors[0]).toMatchObject({ expectedRateCheckedCount: 1, expectedRateIssueCount: 0 });
+  });
+
+  it("allows one baht per hour tolerance for expected rate checks", () => {
+    const result = payload({
+      rateCardVersion: rateCardVersion(),
+      rateRules: [rateRule({ expectedRevenuePerHour: 701 })],
+      sessions: [session({ subject: "Y9-11 / G8-10 (Int.)", studentCount: 1 })],
+    });
+
+    expect(result.summary.expectedRateMismatchCount).toBe(0);
+    expect(result.summary.issueCount).toBe(0);
+  });
+
+  it("flags expected-rate mismatches", () => {
+    const result = payload({
+      rateCardVersion: rateCardVersion(),
+      rateRules: [rateRule({ expectedRevenuePerHour: 600 })],
+      sessions: [session({ subject: "Y9-11 / G8-10 (Int.)", studentCount: 1 })],
+    });
+
+    expect(result.summary.expectedRateMismatchCount).toBe(1);
+    expect(result.issues[0]).toMatchObject({
+      type: "expected_rate_mismatch",
+      expectedRate: 600,
+      actualRate: 700,
+      rateDifference: 100,
+      studentBand: "1",
+      tier: "BG1",
+    });
+    expect(result.tutors[0].flags).toContain("expected_rate_mismatch");
+  });
+
+  it("flags missing and unmapped expected rate rules", () => {
+    const missing = payload({
+      rateCardVersion: rateCardVersion(),
+      rateRules: [],
+      sessions: [session({ subject: "Y9-11 / G8-10 (Int.)", studentCount: 1 })],
+    });
+    expect(missing.summary.missingRateRuleCount).toBe(1);
+    expect(missing.issues[0]).toMatchObject({ type: "missing_expected_rate_rule" });
+
+    const unmapped = payload({
+      rateCardVersion: rateCardVersion(),
+      rateRules: [rateRule()],
+      sessions: [session({ subject: "Unmapped Custom Course", studentCount: 1 })],
+    });
+    expect(unmapped.summary.unmappedRateCourseCount).toBe(1);
+    expect(unmapped.issues[0]).toMatchObject({ type: "unmapped_rate_course" });
+  });
+
+  it("does not rate-check zero-credit or zero-amount invoices", () => {
+    const result = payload({
+      rateCardVersion: rateCardVersion(),
+      rateRules: [rateRule({ expectedRevenuePerHour: 600 })],
+      invoices: [invoice({ sessionCredits: 0, amount: 0, amountMinor: 0 })],
+      sessions: [session({ subject: "Y9-11 / G8-10 (Int.)", studentCount: 1 })],
+    });
+
+    expect(result.summary.expectedRateCheckedCount).toBe(0);
+    expect(result.summary.expectedRateMismatchCount).toBe(0);
+    expect(result.tutors[0].flags).toContain("zero_credit_or_zero_amount");
   });
 });

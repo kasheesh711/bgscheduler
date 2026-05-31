@@ -17,6 +17,10 @@
       "schedule": "5,35 * * * *"
     },
     {
+      "path": "/api/internal/sync-leave-requests",
+      "schedule": "15,45 * * * *"
+    },
+    {
       "path": "/api/internal/class-assignments/morning",
       "schedule": "45 23 * * *"
     },

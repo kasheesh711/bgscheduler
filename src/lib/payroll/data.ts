@@ -9,6 +9,13 @@ import {
   payrollMonthRange,
   roundPayrollNumber,
 } from "./domain";
+import {
+  actualInvoiceRate,
+  buildRateRuleLookup,
+  normalizePayrollRateCourse,
+  payrollStudentBand,
+  rateRuleKey,
+} from "./rate-card";
 import type {
   PayrollAdjustmentDto,
   PayrollIssue,
@@ -27,6 +34,8 @@ type TierRow = typeof schema.payrollTeacherTiers.$inferSelect;
 type InvoiceRow = typeof schema.payrollPayoutInvoices.$inferSelect;
 type SessionRow = typeof schema.payrollSessionObservations.$inferSelect;
 type AdjustmentRow = typeof schema.payrollAdjustments.$inferSelect;
+type RateCardVersionRow = typeof schema.payrollRateCardVersions.$inferSelect;
+type RateRuleRow = typeof schema.payrollRateRules.$inferSelect;
 
 interface AggregateTutor {
   tutorKey: string;
@@ -43,6 +52,10 @@ interface AggregateTutor {
   flags: Set<PayrollIssueType>;
   isKevin: boolean;
   freePayHours: number;
+  expectedRateCheckedCount: number;
+  expectedRateIssueCount: number;
+  expectedRateMismatchCount: number;
+  expectedRateMissingCount: number;
 }
 
 function iso(value: Date | null): string | null {
@@ -83,6 +96,17 @@ function syncDto(row: SyncRunRow | null): PayrollPayload["lastSync"] {
     sessionCount: row.sessionCount,
     invoiceCount: row.invoiceCount,
     errorSummary: row.errorSummary,
+  };
+}
+
+function rateCardDto(row: RateCardVersionRow | null): PayrollPayload["rateCard"] {
+  if (!row) return null;
+  return {
+    id: row.id,
+    versionName: row.versionName,
+    effectiveMonth: row.effectiveMonth,
+    sourceLabel: row.sourceLabel,
+    active: row.active,
   };
 }
 
@@ -169,6 +193,10 @@ function getTutor(
     flags: new Set(),
     isKevin: isKevinCanonicalKey(canonicalKey),
     freePayHours: 0,
+    expectedRateCheckedCount: 0,
+    expectedRateIssueCount: 0,
+    expectedRateMismatchCount: 0,
+    expectedRateMissingCount: 0,
   };
   tutors.set(input.tutorKey, row);
   return row;
@@ -220,6 +248,10 @@ function toTutorRow(tutor: AggregateTutor): PayrollTutorRow {
     flags: [...tutor.flags].sort(),
     isKevin: tutor.isKevin,
     freePayHours: roundPayrollNumber(tutor.freePayHours, 2),
+    expectedRateCheckedCount: tutor.expectedRateCheckedCount,
+    expectedRateIssueCount: tutor.expectedRateIssueCount,
+    expectedRateMismatchCount: tutor.expectedRateMismatchCount,
+    expectedRateMissingCount: tutor.expectedRateMissingCount,
   };
 }
 
@@ -231,9 +263,12 @@ export function buildPayrollPayload(input: {
   invoices: InvoiceRow[];
   sessions: SessionRow[];
   adjustments: AdjustmentRow[];
+  rateCardVersion?: RateCardVersionRow | null;
+  rateRules?: RateRuleRow[];
 }): PayrollPayload {
   const range = payrollMonthRange(input.month);
   const tiersByUser = tierByUser(input.tiers);
+  const rateRuleLookup = input.rateCardVersion ? buildRateRuleLookup(input.rateRules ?? []) : null;
   const sessionsById = new Map(input.sessions.map((session) => [session.wiseSessionId, session]));
   const invoicesBySession = new Map<string, InvoiceRow[]>();
   for (const invoice of input.invoices) {
@@ -371,6 +406,69 @@ export function buildPayrollPayload(input: {
         transactionId: invoice.transactionId,
         message: "Payout invoice has zero session credits or zero payout amount.",
       });
+    } else if (matchedSession && tier && tier.normalizedTier !== "Unassigned" && rateRuleLookup) {
+      const tierKey = tier.normalizedTier as PayrollTier;
+      const studentBand = payrollStudentBand(matchedSession.studentCount);
+      const normalizedCourseKey = normalizePayrollRateCourse(matchedSession.subject ?? matchedSession.className);
+      const actualRate = actualInvoiceRate(invoice);
+      if (!normalizedCourseKey) {
+        tutor.expectedRateIssueCount += 1;
+        tutor.expectedRateMissingCount += 1;
+        addIssue(issues, tutor, {
+          type: "unmapped_rate_course",
+          severity: "high",
+          wiseSessionId: invoice.wiseSessionId,
+          transactionId: invoice.transactionId,
+          sessionDate: iso(matchedSession.startTime),
+          course: matchedSession.subject ?? matchedSession.className,
+          studentBand,
+          tier: tierKey,
+          actualRate,
+          message: "Wise session subject could not be mapped to the active payroll rate card.",
+        });
+      } else {
+        const rule = rateRuleLookup.get(rateRuleKey({ studentBand, normalizedCourseKey, tierKey }));
+        if (!rule) {
+          tutor.expectedRateIssueCount += 1;
+          tutor.expectedRateMissingCount += 1;
+          addIssue(issues, tutor, {
+            type: "missing_expected_rate_rule",
+            severity: "high",
+            wiseSessionId: invoice.wiseSessionId,
+            transactionId: invoice.transactionId,
+            sessionDate: iso(matchedSession.startTime),
+            course: matchedSession.subject ?? matchedSession.className,
+            normalizedCourseKey,
+            studentBand,
+            tier: tierKey,
+            actualRate,
+            message: `No expected payroll rate for ${matchedSession.subject ?? "session"} (${studentBand} student band, ${tierKey}).`,
+          });
+        } else if (actualRate !== null) {
+          tutor.expectedRateCheckedCount += 1;
+          const expectedRate = roundPayrollNumber(rule.expectedRevenuePerHour, 2);
+          const rateDifference = roundPayrollNumber(actualRate - expectedRate, 2);
+          if (Math.abs(rateDifference) > 1) {
+            tutor.expectedRateIssueCount += 1;
+            tutor.expectedRateMismatchCount += 1;
+            addIssue(issues, tutor, {
+              type: "expected_rate_mismatch",
+              severity: "high",
+              wiseSessionId: invoice.wiseSessionId,
+              transactionId: invoice.transactionId,
+              sessionDate: iso(matchedSession.startTime),
+              course: matchedSession.subject ?? matchedSession.className,
+              normalizedCourseKey,
+              studentBand,
+              tier: tierKey,
+              expectedRate,
+              actualRate,
+              rateDifference,
+              message: `Actual payout rate ฿${actualRate.toLocaleString("en-US")}/h differs from expected ฿${expectedRate.toLocaleString("en-US")}/h.`,
+            });
+          }
+        }
+      }
     }
   }
 
@@ -392,10 +490,15 @@ export function buildPayrollPayload(input: {
   const kevinHours = kevinRows.reduce((sum, row) => sum + row.utilizationHours, 0);
   const kevinPaidHours = kevinRows.reduce((sum, row) => sum + row.paidHours, 0);
   const kevinPayoutAmount = kevinRows.reduce((sum, row) => sum + row.payoutAmount, 0);
+  const expectedRateCheckedCount = tutorRows.reduce((sum, row) => sum + row.expectedRateCheckedCount, 0);
+  const expectedRateMismatchCount = issues.filter((issue) => issue.type === "expected_rate_mismatch").length;
+  const missingRateRuleCount = issues.filter((issue) => issue.type === "missing_expected_rate_rule").length;
+  const unmappedRateCourseCount = issues.filter((issue) => issue.type === "unmapped_rate_course").length;
 
   return {
     month: range.month,
     payrollMonth: range.payrollMonth,
+    rateCard: rateCardDto(input.rateCardVersion ?? null),
     review: reviewDto(input.review),
     lastSync: syncDto(input.lastSync),
     summary: {
@@ -411,6 +514,10 @@ export function buildPayrollPayload(input: {
       manualAdjustmentAmount: roundPayrollNumber(manualAdjustmentAmount, 2),
       unresolvedTutorCount: tutorRows.filter((row) => row.flags.includes("unresolved_tutor_identity")).length,
       issueCount: issues.length,
+      expectedRateCheckedCount,
+      expectedRateMismatchCount,
+      missingRateRuleCount,
+      unmappedRateCourseCount,
       tutorCount: tutorRows.length,
     },
     tutors: tutorRows,
@@ -422,7 +529,7 @@ export function buildPayrollPayload(input: {
 export async function getPayrollPayload(db: Database, monthInput: string): Promise<PayrollPayload> {
   const month = assertPayrollMonth(monthInput);
   const range = payrollMonthRange(month);
-  const [reviewRows, syncRows, tiers, invoices, sessions, adjustments] = await Promise.all([
+  const [reviewRows, syncRows, tiers, invoices, sessions, adjustments, rateCardRows] = await Promise.all([
     db
       .select()
       .from(schema.payrollReviews)
@@ -442,7 +549,17 @@ export async function getPayrollPayload(db: Database, monthInput: string): Promi
       .from(schema.payrollAdjustments)
       .where(eq(schema.payrollAdjustments.payrollMonth, range.payrollMonth))
       .orderBy(desc(schema.payrollAdjustments.createdAt)),
+    db
+      .select()
+      .from(schema.payrollRateCardVersions)
+      .where(eq(schema.payrollRateCardVersions.active, true))
+      .orderBy(desc(schema.payrollRateCardVersions.createdAt))
+      .limit(1),
   ]);
+  const rateCardVersion = rateCardRows[0] ?? null;
+  const rateRules = rateCardVersion
+    ? await db.select().from(schema.payrollRateRules).where(eq(schema.payrollRateRules.versionId, rateCardVersion.id))
+    : [];
 
   return buildPayrollPayload({
     month,
@@ -452,6 +569,8 @@ export async function getPayrollPayload(db: Database, monthInput: string): Promi
     invoices,
     sessions,
     adjustments,
+    rateCardVersion,
+    rateRules,
   });
 }
 

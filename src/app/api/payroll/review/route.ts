@@ -23,14 +23,30 @@ export async function PATCH(request: NextRequest) {
   }
 
   try {
-    await updatePayrollReview(getDb(), {
+    const db = getDb();
+    if (body.status === "approved") {
+      const payload = await getPayrollPayload(db, body.month);
+      const blockingRateIssues = payload.issues.filter((issue) => (
+        issue.type === "expected_rate_mismatch"
+        || issue.type === "missing_expected_rate_rule"
+        || issue.type === "unmapped_rate_course"
+      ));
+      if (blockingRateIssues.length > 0) {
+        return NextResponse.json(
+          { error: `Cannot approve payroll with ${blockingRateIssues.length} unresolved expected-rate issue(s).` },
+          { status: 409 },
+        );
+      }
+    }
+
+    await updatePayrollReview(db, {
       month: body.month,
       status: body.status,
       notes: typeof body.notes === "string" ? body.notes : undefined,
       actorEmail: session.user.email,
       actorName: session.user.name,
     });
-    return NextResponse.json({ ok: true, payload: await getPayrollPayload(getDb(), body.month) });
+    return NextResponse.json({ ok: true, payload: await getPayrollPayload(db, body.month) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Payroll review update failed";
     return NextResponse.json(
