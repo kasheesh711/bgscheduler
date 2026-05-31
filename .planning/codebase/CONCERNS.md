@@ -1,309 +1,290 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-04-29
+**Analysis Date:** 2026-05-31
+
+> Scope note: this audit covers HEAD plus the substantial uncommitted WIP on
+> branch `codex/SalesDashboard_refactor` (two in-flight features — `leave-requests`
+> and payroll `rate-card`/`may-reconciliation` — plus a Google OAuth scope
+> escalation). Counts reflect the working tree: **78 tables**, **96 route files
+> (~110 HTTP method handlers)**, **7 Vercel crons**, **16 pages**, **132 test
+> files** (129 unit `.test.ts(x)` + 3 `.integration.test.ts`). Many concerns from
+> the prior (2026-04-29) audit are now FIXED in code and are listed under
+> "Resolved Since Last Audit" rather than silently dropped.
 
 ## Tech Debt
 
-**Non-atomic snapshot promotion (HIGH):**
-- Issue: `runFullSync` performs the snapshot promotion as TWO separate UPDATE statements (`src/lib/sync/orchestrator.ts:471-481`). Step 1 deactivates the previously active snapshot, step 2 activates the new one. Neon's HTTP driver does not support transactions (acknowledged at `src/lib/sync/past-sessions-diff-hook.ts:60-62`).
-- Files: `src/lib/sync/orchestrator.ts:469-484`
-- Impact: A network failure or process termination between the two updates leaves the system with ZERO active snapshots. Every subsequent call to `ensureIndex` (`src/lib/search/index.ts:281-305`) and `buildIndex` (`src/lib/search/index.ts:115-125`) throws `"No active snapshot found"` with HTTP 500. Application is unavailable until manual recovery or next successful sync.
-- Fix approach: Either (a) switch the sync entry point to the WebSocket-based Neon driver for transactional support, or (b) update both rows in a single SQL statement: `UPDATE snapshots SET active = (id = $newId)` so the atomicity is provided by the row-level lock on a single statement.
+**`env.ts` no longer validates most integration secrets (HIGH):**
+- Issue: `src/lib/env.ts:3-16` validates only 12 vars (the original 9 + 3 optional LINE vars). But the codebase now reads ~34 distinct env vars directly via `process.env.*`, bypassing the Zod gate. Unvalidated criticals include `OPENAI_API_KEY`, `OPENAI_SCHEDULER_MODEL`/`OPENAI_SCHEDULER_SHADOW_MODEL`/`OPENAI_SCHEDULER_REASONING_EFFORT` (AI scheduler), the entire `SCHEDULE_EMAIL_*` family (Apps Script email sender, 8 vars), `LEAVE_REQUESTS_*` (Google Sheets ingestion), `SALES_DASHBOARD_CONNECTED_EMAIL`, `WISE_SESSION_OPERATIONS_VERIFIED` (writeback safety gate), and the feature flags `ENABLE_AI_SCHEDULER`/`ENABLE_LINE_SCHEDULER`.
+- Files: `src/lib/env.ts:3-16`; direct readers in `src/lib/ai/scheduler.ts:478-540`, `src/lib/ai/scheduler-conversation.ts:2341`, `src/lib/classrooms/schedule-email.ts`, `src/lib/leave-requests/config.ts`, `src/lib/sales-dashboard/*`.
+- Impact: `env.ts` claims to be the startup source-of-truth but a missing OpenAI key, email Apps Script secret, or sheets config now fails lazily at first request (often a 502/503 deep in a feature), not at boot. Config drift between `.env.example` and what the code actually needs is unbounded.
+- Fix approach: Extend the Zod schema with the new vars (mark genuinely-optional ones `.optional()`, feature-flag-gated ones conditionally required). Route all `process.env.*` reads through `env`.
 
-**Brittle data_issue → group join (MEDIUM):**
-- Issue: `buildIndex` joins `data_issues` to `tutor_identity_groups` with O(issues × groups) nested loop, matching by `entityId === canonicalKey OR entityId === group.id OR entityName === displayName`. This triple-condition fallback exists because issue rows are written with inconsistent entity identifiers depending on the source (identity vs. modality vs. tag normalization).
-- Files: `src/lib/search/index.ts:170-186`
-- Impact: With current production volumes (251 issues × 72 groups = ~18k comparisons) this is fine, but it grows quadratically. More importantly, `entityName === displayName` fuzzy matching will silently misattribute issues if two groups ever share a display name.
-- Fix approach: Normalize issue rows to ALWAYS write `entityId = group.id` (or `canonicalKey`) at the point of insertion in `src/lib/sync/orchestrator.ts`. Drop the `entityName` fallback. Build a single `Map<string, IndexedDataIssue[]>` keyed by canonical id.
+**`createWiseClient` still uses non-null assertions instead of validated `env` (LOW):**
+- Issue: `createWiseClient()` reads `process.env.WISE_USER_ID!` and `process.env.WISE_API_KEY!` (`src/lib/wise/client.ts:161-162`) rather than the validated `env` object. If those are unset the `Buffer.from(undefined:undefined)` runs and credentials are silently wrong at request time.
+- Files: `src/lib/wise/client.ts:159-166`
+- Impact: A misconfigured deploy surfaces as a Wise 401 mid-sync rather than a boot failure. `env.ts` does validate these two, but `client.ts` does not import it.
+- Fix approach: Import `env` from `src/lib/env.ts` and use `env.WISE_USER_ID` / `env.WISE_API_KEY`.
 
-**Modality location-pattern matching defeated by venue names (MEDIUM, known issue):**
-- Issue: `deriveModality` checks `location` field against literal lowercased strings `"online"`, `"virtual"`, `"onsite"` (`src/lib/normalization/modality.ts:46-52`). Production venue names like "Think Outside the Box", "Tesla", "Nerd" do not match — all default to onsite. CLAUDE.md notes the visual distinction (dashed border) was removed pending reliable detection.
-- Files: `src/lib/normalization/modality.ts:42-63`
-- Impact: All single-record onsite groups have unverifiable modality. Search results may show a tutor as "onsite available" when the underlying session is actually online. Compare view shows `HelpCircle` (unknown) icons more often than expected.
-- Fix approach: Stop relying on `location` substring matching. Instead use `sessionType` field from Wise API as primary signal. If `sessionType` is unreliable too, escalate to Wise team (per `.planning/phases/07-WISE-SPIKE.md`) for an `isOnline` boolean on session records.
+**Brittle `data_issues` → group join in `buildIndex` (MEDIUM):**
+- Issue: `buildIndex` joins `data_issues` to tutor groups with an O(issues × groups) nested loop, matching on `entityId === canonicalKey OR entityId === group.id OR entityName === displayName` (`src/lib/search/index.ts:233-247`). The triple fallback exists because issue rows carry inconsistent entity identifiers depending on which normalizer emitted them (identity uses `canonicalKey`, modality/conflict_model uses `wiseSessionId`, completeness uses `teacher._id`).
+- Files: `src/lib/search/index.ts:231-247`
+- Impact: The `entityName === displayName` arm will misattribute issues if two groups ever share a display name. With ~70+ groups and a few hundred issues the quadratic cost is negligible today but grows with both axes.
+- Fix approach: Normalize all issue rows to write `entityId = group.canonicalKey` at insertion in `orchestrator.ts`, then build one `Map<canonicalKey, IndexedDataIssue[]>` and drop the `entityName`/`group.id` arms. Note many issues are deliberately keyed by `wiseSessionId` (conflict_model) and intentionally never match a group — those are silently dropped from the per-group view today.
 
-**Past-day session fallback heuristic (MEDIUM, known issue):**
-- Issue: Wise's `status: "FUTURE"` API does not return past sessions. `buildCompareTutor` falls back to "nearest future occurrence of the same recurring session" for past weekdays in the requested week (`src/lib/search/compare.ts:262-291`). One-time past sessions cannot be recovered.
-- Files: `src/lib/search/compare.ts:225-291`, `src/lib/data/past-sessions.ts`
-- Impact: Compare view for a past week shows representative future occurrences instead of actual historical sessions. Conflict detection on past weeks is unreliable. Phase 7 PAST-01 mitigates by capturing dropped sessions into `past_session_blocks` table going forward, but no backfill exists for sessions that dropped before deployment.
-- Fix approach: Phase 7 diff-hook already in place (`src/lib/sync/past-sessions-diff-hook.ts`). Sessions captured from this point forward will be available via `fetchPastSessionBlocks`. No retroactive fix possible.
+**Payroll transaction fallback relies on driver error-string matching (MEDIUM):**
+- Issue: The default DB singleton uses the `neon-http` driver, which has no transaction support. `payroll/sync.ts` wants real transactions for invoice writes, so it tries `db.transaction(...)` and, on failure, detects the unsupported case by regex-matching the thrown message `/No transactions support in neon-http driver/i` (`src/lib/payroll/sync.ts:90`), then falls back to a dedicated `pg.Pool` (node-postgres, `max: 1`) at `src/lib/payroll/sync.ts:93-110`.
+- Files: `src/lib/payroll/sync.ts:88-110`
+- Impact: If Neon/Drizzle ever change that error string, the fallback stops triggering and payroll sync either throws or silently loses transactional guarantees. Also opens a second connection pool to the same DB on a serverless function.
+- Fix approach: Detect driver capability explicitly (feature flag or driver-type check) rather than parsing an error message; or standardize on the WebSocket `neon-serverless` driver for write-heavy paths.
 
-**Stale-data threshold mismatched to sync cadence (LOW):**
-- Issue: `staleThresholdMs` defaults to 35 minutes (`src/lib/search/engine.ts:24`, `src/app/api/compare/route.ts:85`, `src/app/api/compare/discover/route.ts:60`). But the daily cron runs every 24 hours (`vercel.json:5`). The "stale" warning is permanently true 23+ hours per day.
-- Files: `src/lib/search/engine.ts:24`, `src/app/api/compare/route.ts:85`, `src/app/api/compare/discover/route.ts:60`
-- Impact: Stale warning is meaningless noise. Either every UI shows a stale warning all day, or admins ignore it.
-- Fix approach: Either (a) raise threshold to 26 hours to match Hobby cron cadence, or (b) upgrade Vercel to Pro for 30-min sync (which would make the existing 35-min threshold meaningful).
+**Modality location/type matching is still substring-based (MEDIUM, known issue):**
+- Issue: Modality derivation no longer pattern-matches venue names (the old `http`/`zoom`/`meet.google` heuristic is gone), but it still leans on literal lowercased `sessionType`/`location` strings: `ONLINE_SESSION_TYPES = {online, virtual, scheduled}`, `ONSITE_SESSION_TYPES = {onsite, in-person, offline}` (`src/lib/search/compare.ts:6-7`), and `deriveModality` checks `location` for literal `"online"/"virtual"/"onsite"` (`src/lib/normalization/modality.ts:42-63`). Single offline records with no session evidence now fail-closed to `unresolved` (`modality.ts:65-79`) rather than defaulting onsite.
+- Files: `src/lib/normalization/modality.ts:42-92`, `src/lib/search/compare.ts:6-7,97-172`
+- Impact: Tenant venue names ("Tesla", "Nerd", "Think Outside the Box") still don't match, so onsite-vs-online for single-record groups is frequently `unknown`/`low` confidence. This is now correct (fail-closed) but produces many "Needs Review" / unknown-modality cards. The `"scheduled"` synonym was bolted on per MOD-UAT-01 (2026-04-21) to absorb tenant vocabulary — a sign the type vocabulary is unstable.
+- Fix approach: Source a reliable `isOnline` boolean from Wise rather than inferring from free-text `sessionType`/`location`.
 
-**Empty catch swallows cleanup errors (LOW):**
-- Issue: Sync orchestrator's outer error handler tries to write the failure to `sync_runs` and silently ignores any failure of that write itself: `.catch(() => {})` at `src/lib/sync/orchestrator.ts:524`.
-- Files: `src/lib/sync/orchestrator.ts:512-525`
-- Impact: If the DB is fully unreachable, the sync run never gets marked as `failed`. The `data-health` page will show the stuck row in `running` state. Operators have no visibility into the actual error.
-- Fix approach: At minimum, `console.error` the cleanup failure. Consider returning a separate result code to the route handler so it can return a more accurate HTTP response.
+**Orphan handler: `sync-room-utilization` has no cron and no UI trigger (MEDIUM):**
+- Issue: `POST /api/internal/sync-room-utilization` (`src/app/api/internal/sync-room-utilization/route.ts`) is fully implemented with `maxDuration = 800`, constant-time CRON_SECRET auth, and session fallback — but it is NOT registered in `vercel.json` crons, and nothing in `src/` calls `syncRoomUtilizationSessions`. The only invoker is the manual npm script `room-utilization:sync` → `scripts/sync-room-utilization.ts`.
+- Files: `src/app/api/internal/sync-room-utilization/route.ts`, `vercel.json` (absent), `scripts/sync-room-utilization.ts`
+- Impact: Room-utilization data only refreshes when an operator runs the script by hand. The HTTP endpoint exists but is dead weight unless someone curls it. Room-capacity dashboards silently drift between manual syncs.
+- Fix approach: Either add a cron entry, or delete the route and document the script as the sole entry point.
 
-**TODO marker for unimplemented modality tier (LOW):**
-- Issue: Single TODO in source flags missing `medium` confidence tier in modality display. CLAUDE.md notes 06-CONTEXT.md D-03 anticipates this, but no follow-up phase exists.
-- Files: `src/components/compare/modality-display.ts:9-11`
-- Impact: When a future sync ever emits `confidence: "medium"`, the helper falls through to `unknown` styling, masking the medium-confidence intent in the UI.
-- Fix approach: Either (a) extend `modalityDisplay` to handle `"medium"` now with a third icon/label, or (b) remove the TODO and document that medium tier is intentionally not implemented.
+**Uncommitted feature WIP not yet under version control (MEDIUM):**
+- Issue: Two features live entirely in the working tree, untracked: (a) `leave-requests` — `src/lib/leave-requests/**`, `src/app/api/leave-requests/**`, `src/app/api/internal/sync-leave-requests/`, `src/app/(app)/leave-requests/`, `src/components/leave-requests/`, migration `drizzle/0036_tutor_leave_requests.sql`; and (b) payroll rate-cards — `src/lib/payroll/rate-card.ts`, `src/lib/payroll/may-reconciliation.ts`, migration `drizzle/0037_payroll_rate_cards.sql`. Both depend on uncommitted edits to `src/lib/db/schema.ts` (+197 lines) and `drizzle/meta/_journal.json` (idx 33, 34), plus modified-but-tracked payroll files (`data.ts`, `types.ts`, `review/route.ts`, `payroll-dashboard.tsx`, `app-nav.tsx`).
+- Files: see above; `vercel.json` already references the leave-requests cron (`/api/internal/sync-leave-requests` at `15,45`).
+- Impact: The branch is in a half-shipped state — `vercel.json` and the schema reference tables/routes that exist only locally. A clean checkout would not build. The "78 tables" count includes WIP tables defined only in the uncommitted `schema.ts`. Risk of losing work or a partial commit that wires the cron without the handler (or vice versa).
+- Fix approach: Land each feature as a coherent commit (migration + schema + lib + route + cron + tests together), or stash. Do not commit `vercel.json`'s leave-requests cron without the handler.
+
+**TODO marker for unimplemented `medium` modality confidence tier (LOW):**
+- Issue: The confidence rubric reserves a `"medium"` tier that is never emitted (`src/lib/search/compare.ts:69-72` docstring; `src/components/compare/modality-display.ts` handles only high/low/unknown).
+- Files: `src/lib/search/compare.ts:64-95`, `src/components/compare/modality-display.ts`
+- Impact: If a future change ever returns `confidence: "medium"`, the UI falls through to `unknown` styling, masking intent. Harmless today (no emitter).
+- Fix approach: Implement the tier or delete the reservation and note it is intentionally absent.
 
 ## Known Bugs
 
-**`detectConflicts` `indexedGroups` parameter is unused (LOW):**
-- Symptoms: Function signature accepts `indexedGroups` but never reads it.
-- Files: `src/lib/search/compare.ts:321` — parameter declared, body uses only `compareTutors`.
-- Trigger: Always — dead parameter.
-- Workaround: None needed; harmless. Indicates incomplete refactor or cargo-culted signature.
+**Mixed `toLocaleString` + `new Date` timezone derivation persists in client code (MEDIUM):**
+- Symptoms: Several client components compute "now in Bangkok" by round-tripping through `Date.toLocaleString("en-US", { timeZone: "Asia/Bangkok" })` and re-parsing with `new Date(...)`, instead of the canonical `toZonedTime` helper. The server-side compare path was migrated to `getStartOfTodayBkk()` (which uses `toZonedTime`, `src/lib/search/compare.ts:36-39`), but the client week-math was not fully converged.
+- Files: client components under `src/components/compare/*` and `src/hooks/use-compare.ts` still use the `toLocaleString` idiom for week boundaries (grep `toLocaleString` in `src/components`/`src/hooks`).
+- Trigger: The pattern yields a `Date` whose UTC fields look like BKK local time but is not a valid instant; subsequent `.getDay()/.getHours()` math works only because the internal fields happen to match. Off-by-one weekday is possible near the UTC/BKK date boundary.
+- Workaround: `src/lib/normalization/timezone.ts` and `src/lib/search/compare.ts:getStartOfTodayBkk` are correct; the gap is purely client-side week-start computation.
+- Fix approach: Replace remaining `new Date(new Date().toLocaleString(...))` sites with a single shared `toZonedTime`-based "now in BKK" helper.
 
-**Asia/Bangkok timezone derivation via `toLocaleString("en-US", ...)` (MEDIUM):**
-- Symptoms: Several modules compute "now in Bangkok" by round-tripping through `Date.toLocaleString` and parsing the result back with `new Date(...)`: `src/app/api/compare/route.ts:28-30`, `src/hooks/use-compare.ts:22-26`, `src/components/compare/week-overview.tsx:235`, `src/components/compare/calendar-grid.tsx:67`.
-- Files: As above (5+ call sites).
-- Trigger: This pattern produces a Date whose UTC fields appear to be Bangkok local time but is interpreted by all other Date code as UTC. Subsequent arithmetic with `.getDay()`, `.getHours()`, etc. accidentally works because the internal fields match — but the resulting Date is NOT a valid instant.
-- Workaround: `src/lib/normalization/timezone.ts` correctly uses `toZonedTime` from `date-fns-tz`. The mixed-style calls bypass the canonical helper.
-- Fix approach: Replace all `new Date(new Date().toLocaleString(...))` patterns with `toZonedTime(new Date(), TIMEZONE)` from `src/lib/normalization/timezone.ts`. Centralize the "current time in BKK" helper.
-
-**Multi-day leave overlap check uses local-time minutes incorrectly (MEDIUM):**
-- Symptoms: `hasRecurringLeaveConflict` walks each day of a leave range and tests `leaveStart.getHours() * 60 + leaveStart.getMinutes()` against the slot's start/end minutes (`src/lib/search/engine.ts:240-269`). For multi-day leaves, the entire day is blocked (line 262), but the start-minute calculation only uses `leaveStart` regardless of which day the loop is on.
-- Files: `src/lib/search/engine.ts:240-269`
-- Trigger: A multi-day leave that happens to cover the requested weekday but where the leave's first calendar day is NOT the same weekday will use the wrong start/end minutes.
-- Workaround: The `isMultiDay` branch (line 259-262) catches this with the > 24h short-circuit. Single-day leaves work correctly.
-- Fix approach: Compute leave-start/end minutes from the `current` cursor's date, not from `leaveStart`. Or just always treat multi-day leaves as full-day blocks (current behavior) and document the assumption.
+**`recurrenceId`-only dedup in past-day fallback can drop a co-located recurring series (LOW):**
+- Symptoms: When `buildCompareTutor` fills a missing today/future weekday with the nearest-future occurrence, it dedups candidates by `recurrenceId` only (`src/lib/search/compare.ts:274-289`). Two distinct recurring series at the same weekday+time (different students) collapse to whichever sorts first by start time.
+- Files: `src/lib/search/compare.ts:262-291`
+- Trigger: A tutor with two same-slot recurring series; only one shows in the fallback render.
+- Workaround: The blast radius is now much smaller than before — the fallback runs ONLY for weekdays whose calendar date is today-or-future (past weekdays render honest-empty per D-05, `compare.ts:255-268`). Real (non-fallback) date-range rendering is unaffected.
+- Fix approach: Dedup by `(recurrenceId, studentName)`.
 
 ## Security Considerations
 
-**Cron secret authorization compares string equality (MEDIUM):**
-- Risk: `authHeader !== `Bearer ${cronSecret}`` (`src/app/api/internal/sync-wise/route.ts:15`) uses non-constant-time comparison. Theoretical timing attack if an attacker can repeatedly probe.
-- Files: `src/app/api/internal/sync-wise/route.ts:11-17`
-- Current mitigation: CRON_SECRET is environment-only; Vercel cron sends it correctly.
-- Recommendations: Use `crypto.timingSafeEqual` over equal-length buffers. Low priority since admin-only single-tenant tool, but worth fixing.
+**Middleware public-route allowlist has grown well beyond `/api/internal/*` (MEDIUM):**
+- Risk: `isPublicRoute` (`src/middleware.ts:4-15`) now lets SIX path families through `edgeAuth` without a session: `/login`, `/api/auth/*`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/api/line/contacts/oa-resolver/worklist`, the regex `^/api/line/contacts/oa-resolver/runs/[^/]+/rows$`, and all `/api/internal/*`. Each must self-authenticate; the contract is implicit and easy to violate.
+- Files: `src/middleware.ts:4-15`; self-auth verified in `src/app/api/line/webhook/route.ts` (HMAC `x-line-signature`, fail-closed 401 at `src/lib/line/webhook.ts:24-33`), `src/app/api/line/contacts/oa-resolver/worklist/route.ts` (bearer resolver token, 401 if invalid), `src/app/api/search/assistant/route.ts:136-139` (calls `auth()`, 401 if no session — so it is whitelisted yet still session-gated, an inconsistency).
+- Current mitigation: The three data-bearing public routes do self-protect (LINE HMAC, resolver token, or a redundant `auth()`).
+- Recommendations: `/api/classrooms/floor-plan-map` has NO auth (it renders an SVG from a `rooms` query param, no DB/secret — low risk but genuinely open, and sets long `Cache-Control: public`). Document, per route, the self-auth mechanism. A future engineer adding a public route under any of these prefixes inherits zero gate by default.
 
-**Middleware bypass: `/api/internal/*` is unauthenticated at the middleware layer (LOW):**
-- Risk: `src/middleware.ts:11` allows `/api/internal/*` through without checking auth. Each internal route must self-protect.
-- Files: `src/middleware.ts:7-14`, `src/app/api/internal/sync-wise/route.ts:11-17`
-- Current mitigation: `sync-wise` route checks `CRON_SECRET` itself.
-- Recommendations: Document the contract that internal routes MUST self-authenticate. Add a comment to `middleware.ts` listing every internal route's auth mechanism. Risk: a future engineer adds `/api/internal/foo/route.ts` and forgets to gate it.
+**In-flight Google OAuth scope escalation to read-write Sheets (MEDIUM, uncommitted WIP):**
+- Risk: Uncommitted changes widen the requested Google scope from `spreadsheets.readonly` to full read-write `spreadsheets` (`src/lib/auth.ts` diff) and add write-token plumbing (`getGoogleSheetsWriteAccessToken`, `hasSheetsWriteScope` in `src/lib/sales-dashboard/google-oauth.ts`).
+- Files: `src/lib/auth.ts` (scope param), `src/lib/sales-dashboard/google-oauth.ts:1-260` (read/write scope split, write token path)
+- Current mitigation: Not yet deployed. Read-only tokens fail closed (`getGoogleSheetsWriteAccessToken` throws `MissingGoogleSheetsTokenError` for tokens lacking the write scope).
+- Recommendations: This escalates every admin's Google grant from read-only to write-capable on their Sheets. Confirm the write capability is actually needed before merge, scope it to the narrowest spreadsheet set possible, and plan the forced re-consent (existing read-only tokens stop working for write paths).
 
-**Admin allowlist queried per signin via uncached DB read (LOW):**
-- Risk: `auth.signIn` callback hits Postgres on every login attempt to check the allowlist (`src/lib/auth.ts:22-29`). Vulnerable to slow login if DB is degraded.
-- Files: `src/lib/auth.ts:18-30`
-- Current mitigation: Login traffic is low (admin-only tool, ~10 users).
-- Recommendations: At admin scale this is fine. If user count grows, cache the allowlist in module memory with `cacheTag("admin-users")` invalidated on seed.
+**LINE OA-resolver `worklist` allows wildcard CORS (LOW):**
+- Risk: `worklist/route.ts` sets `Access-Control-Allow-Origin: *` (`src/app/api/line/contacts/oa-resolver/worklist/route.ts:5-9`) so a browser extension on any origin can call it.
+- Files: `src/app/api/line/contacts/oa-resolver/worklist/route.ts`
+- Current mitigation: Access is gated by an opaque per-run bearer resolver token (401 without it); the wildcard only governs which page can present the token.
+- Recommendations: Acceptable for an extension integration. If feasible, restrict the origin to the extension's ID.
 
-**Wise API credentials passed via Basic Auth + duplicated headers (LOW):**
-- Risk: WiseClient sends the API key in both `Authorization: Basic` AND `x-api-key` headers (`src/lib/wise/client.ts:37-46`). Slightly increases blast radius if a request log leaks.
-- Files: `src/lib/wise/client.ts:37-46`
-- Current mitigation: HTTPS-only target (`https://api.wiseapp.live`).
-- Recommendations: This is a Wise tenant requirement (per AGENTS.md), not optional. No action needed unless Wise documents a single-header alternative.
+**Wise API key duplicated across `Authorization: Basic` and `x-api-key` headers (LOW):**
+- Risk: `WiseClient.headers` sends the key in both the Basic auth blob and `x-api-key` (`src/lib/wise/client.ts:52-61`). Slightly larger leak surface in any request log.
+- Files: `src/lib/wise/client.ts:52-61`
+- Current mitigation: HTTPS-only (`https://api.wiseapp.live`); this header shape is a Wise tenant requirement per AGENTS.md.
+- Recommendations: No action unless Wise documents a single-header alternative.
 
-**`process.env.WISE_USER_ID!` and `process.env.WISE_API_KEY!` non-null assertions (LOW):**
-- Risk: If env vars are missing, `createWiseClient` returns a client with `undefined` credentials and the `Buffer.from` call throws at request time, not at startup.
-- Files: `src/lib/wise/client.ts:117-122`
-- Current mitigation: `src/lib/env.ts` validates env vars at module load with Zod. But `client.ts` does not import or use `env.ts`.
-- Recommendations: Replace `process.env.WISE_USER_ID!` with `env.WISE_USER_ID` (validated at startup).
+**Admin allowlist queried per sign-in via uncached DB read (LOW):**
+- Risk: The Auth.js `signIn` callback hits Postgres on every login attempt to check `admin_users`. (Note: `src/lib/auth.ts` is read-only for this audit; the callback is exercised by `src/lib/auth/__tests__/signin-callback.test.ts`.)
+- Files: `src/lib/auth.ts` (signIn callback), `src/lib/auth/signin-callback.ts`
+- Current mitigation: ~9 admins, low login volume.
+- Recommendations: Fine at this scale; cache with a revalidation tag if user count grows.
 
 ## Performance Bottlenecks
 
-**Sync timing close to Vercel function ceiling (HIGH):**
-- Problem: First production sync took 4m26s on a 5m (300s) ceiling. ~34s of headroom. As teacher count grows, this ceiling will be hit.
-- Files: `src/app/api/internal/sync-wise/route.ts:7` (`maxDuration = 300`), `src/lib/sync/orchestrator.ts`, `src/lib/wise/fetchers.ts:49-91` (per-teacher 26-window leave stitching)
-- Cause: Per-teacher availability fetch issues 1 working-hours request + 25 leave-window requests, each batched but bottle-necked by `maxConcurrency: 15`. With 131 teachers × 26 windows = 3,406 Wise API calls per sync. At 15 concurrent ≈ 227 batches × ~1s/batch = ~3.8 minutes just for leaves.
-- Improvement path:
-  1. Reduce horizon from 180 days to 90 days (cuts windows from 26 to 13).
-  2. Ask Wise team for a multi-window `availability` endpoint (eliminates the stitching loop entirely).
-  3. Upgrade Vercel to Pro for higher function ceilings AND 30-minute cron.
-  4. Split sync into "teachers + working hours" (fast) and "leaves" (deferred, paginated background job).
+**Per-teacher leave stitching dominates Wise sync wall time (HIGH):**
+- Problem: `runFullSync` fetches working hours + leaves per teacher across a 180-day horizon stitched into 26 seven-day windows. With ~130 teachers that is thousands of Wise calls per sync, throttled by the client's `maxConcurrency: 15`.
+- Files: `src/lib/sync/orchestrator.ts:155-260`, `src/lib/wise/fetchers.ts` (window stitching), `src/lib/wise/client.ts:136-156` (concurrency limiter)
+- Cause: No batch availability endpoint on Wise; the per-window fan-out is irreducible client-side.
+- Mitigation in place: `maxDuration = 800` (Vercel Pro) now gives ample headroom vs the prior 300s ceiling, and the single-flight guard (`run-wise-sync.ts`) prevents overlapping syncs from compounding load.
+- Improvement path: Reduce horizon (180→90 days halves windows), negotiate a multi-window endpoint with Wise, or split working-hours (fast) from leaves (deferred).
 
-**`buildIndex` loads entire snapshot every cold-start (MEDIUM):**
-- Problem: Every API route calls `ensureIndex` which fetches all 6 snapshot tables in parallel (`src/lib/search/index.ts:135-161`). On a cold serverless instance, first request pays full DB latency.
-- Files: `src/lib/search/index.ts:115-276`
-- Cause: Index lives in `globalThis` (line 81-86) — survives HMR but NOT cold starts. Each new Vercel invocation rebuilds.
-- Improvement path: With current 72 groups × ~200 sessions × ~30 windows, the index is small enough that rebuild is sub-second. Concern grows if scale ever reaches 1000+ tutors. Long-term: snapshot the index to JSONB column, deserialize on cold start.
+**`buildIndex` reloads the whole snapshot on every cold start (MEDIUM):**
+- Problem: The in-memory index lives on `globalThis` (`src/lib/search/index.ts:94-113`) — it survives HMR and warm invocations but not cold serverless starts. Each cold instance re-runs ~8 parallel snapshot-wide `SELECT`s plus the tutor business-profile map (`src/lib/search/index.ts:142-222`).
+- Files: `src/lib/search/index.ts:142-344`
+- Cause: Singleton scope is per-instance.
+- Mitigation in place: Build is coalesced (see Fragile Areas) and the dataset is small (tens of groups), so a cold build is sub-second.
+- Improvement path: Persist a serialized index to a JSONB column and deserialize on cold start if scale ever reaches thousands of tutors.
 
-**Compare API rebuilds entire CompareTutor for unchanged tutors (LOW):**
-- Problem: When client adds a new tutor, server rebuilds CompareTutor for ALL selected tutors (`src/app/api/compare/route.ts:135-142`) just to compute conflicts/free-slots. Only the new tutor's serialized data is sent back via `fetchOnly` (line 167-169), but the server still does the work.
-- Files: `src/app/api/compare/route.ts:135-169`, `src/lib/search/compare.ts:225-319`
-- Cause: Conflict and free-slot detection require all selected tutors. Cannot be incrementalized without server-side cache.
-- Improvement path: Acceptable for ≤3 tutors. If max selection ever grows, cache CompareTutor by `(tutorGroupId, weekStart, snapshotId)` in module memory.
+**Second connection pool opened for payroll writes (LOW):**
+- Problem: `getPayrollWritePool()` lazily opens a `pg.Pool` (`max: 1`) in addition to the shared `neon-http` client, to obtain transactions (`src/lib/payroll/sync.ts:93-110`).
+- Files: `src/lib/payroll/sync.ts:93-110`
+- Cause: `neon-http` lacks transactions; payroll needs them.
+- Improvement path: Acceptable at `max: 1`; monitor for connection exhaustion if payroll sync ever runs concurrently with other pooled writers.
 
-**O(n²) overlap detection in `WeekOverview.computeOverlapColumns` (LOW):**
-- Problem: Nested loop on indices to compute union-find groups (`src/components/compare/week-overview.tsx:134-142`). For typical N≤20 sessions per day, fine. Worst case: N=80 sessions, 6,400 comparisons.
-- Files: `src/components/compare/week-overview.tsx:84-155`
-- Cause: Algorithm is correct but not optimal.
-- Improvement path: Sweepline-based interval graph would be O(n log n). Defer until N exceeds ~100/day.
-
-**`detectConflicts` is O(students × overlaps²) (LOW):**
-- Problem: Nested for-loop over student-session pairs (`src/lib/search/compare.ts:336-355`). For each student appearing in multiple tutors, all pairs are compared.
-- Files: `src/lib/search/compare.ts:321-358`
-- Cause: Acceptable at admin-scale (3 tutors × ~30 sessions ≤ 90 entries per student).
-- Improvement path: None needed at current scale.
+**O(n²) overlap/conflict detection in compare rendering (LOW):**
+- Problem: Same-student conflict detection is O(students × overlaps²) (`src/lib/search/compare.ts:322-359`); calendar overlap-column packing in the week overview is similarly nested. Fine for ≤3 tutors and tens of sessions/day.
+- Files: `src/lib/search/compare.ts:322-359`, `src/components/compare/week-overview.tsx`
+- Improvement path: Sweepline interval graph if per-day session counts ever exceed ~100. Not needed now.
 
 ## Fragile Areas
 
-**Snapshot index race on simultaneous rebuild + active-flag flip (HIGH):**
-- Files: `src/lib/search/index.ts:281-305`, `src/lib/sync/orchestrator.ts:469-484`
-- Why fragile: `ensureIndex` reads `snapshots WHERE active = true` (line 285-289), then if stale rebuilds. But snapshot promotion is two non-atomic UPDATEs (see "Tech Debt"). Window between deactivate-old and activate-new returns ZERO rows from `WHERE active = true` — `ensureIndex` will throw `"No active snapshot found"` from `buildIndex` (line 124).
-- Safe modification: Always check `if (!activeSnapshot)` before failing; fall back to the previously cached index with a stale warning. Or fix the underlying non-atomic promotion.
-- Test coverage: No integration test for "promotion happening during read" race. `src/lib/search/index.ts` has zero unit tests.
+**Snapshot promotion is now atomic, but the read path still tolerates zero active rows by design (MEDIUM):**
+- Files: `src/lib/sync/orchestrator.ts:480-501`, `src/lib/search/index.ts:354-401`
+- Why fragile: Promotion is a SINGLE `UPDATE snapshots SET active = (id = $new) WHERE active = true OR id = $new` (`orchestrator.ts:488-498`) — MVCC guarantees readers never see zero active rows mid-promote (REL-01, replacing the old two-UPDATE sequence). Separately, `ensureIndex` now returns the cached index when `!activeSnapshot` (`index.ts:384-386`) so a transient empty result no longer 500s. The fragility is that two independent mechanisms must both hold: if a future refactor splits the promotion back into two statements OR removes the cached-fallback, the "No active snapshot found" outage (`buildIndex` `index.ts:150-152`) returns.
+- Safe modification: Keep promotion a single statement; keep the cached fallback. Add an integration test asserting `ensureIndex` survives a promotion in flight.
+- Test coverage: `src/lib/sync/__tests__/orchestrator.integration.test.ts` exercises promotion against testcontainers Postgres; `src/lib/search/__tests__/index.test.ts` now exists (the prior "zero tests" gap is closed) but does not cover the concurrent-promotion race specifically.
 
-**Concurrent index rebuild promise leak (MEDIUM):**
-- Files: `src/lib/search/index.ts:296-305`
-- Why fragile: `ensureIndex` checks `getBuildingPromise()` to coalesce concurrent rebuilds. But this is non-atomic in JavaScript: two simultaneous calls that both find `null` will both start a rebuild (the first sets, the second overwrites). The second rebuild's promise wins; the first rebuild still runs but its result is discarded.
-- Safe modification: Wrap the check-and-set in a single synchronous block before any await. Currently the await happens between `getCurrentIndex()` (line 282) and `setBuildingPromise(p)` (line 301), so a second caller can interleave.
-- Test coverage: None. `__tests__` directory has no `index.test.ts`.
+**Build-promise coalescing depends on a synchronous assign-before-await (MEDIUM):**
+- Files: `src/lib/search/index.ts:354-401`
+- Why fragile: `ensureIndex` (REL-02) assigns the in-flight build promise to the `globalThis` singleton synchronously, before any `await`, so concurrent first-time callers reuse it (`index.ts:391-400`). Correct as written, but it relies on the precise ordering — moving the `setBuildingPromise(p)` after any `await` reintroduces the double-rebuild leak the comment warns about.
+- Safe modification: Preserve the "kick off work and assign promise in the same tick" structure. Do not insert awaits between `buildAndCheck()` and `setBuildingPromise(p)`.
+- Test coverage: `src/lib/search/__tests__/index.test.ts`; verify it includes a concurrent-call coalescing assertion.
 
-**`globalThis.__bgscheduler_*` survives across HMR but not invocations (MEDIUM):**
-- Files: `src/lib/search/index.ts:81-86`, `src/lib/db/index.ts:16-19`
-- Why fragile: Pattern works for dev (HMR) and within a warm Vercel function instance, but each cold-start rebuilds. There's also no protection against module re-imports creating multiple `__bgscheduler_searchIndex` namespaces if the bundler splits the module.
-- Safe modification: Document the contract. Add a unit test that asserts `getCurrentIndex()` returns the same reference across multiple `import` statements.
-- Test coverage: None.
+**`globalThis`-anchored singletons survive HMR but not cold starts (MEDIUM):**
+- Files: `src/lib/search/index.ts:94-113`, `src/lib/db/index.ts:16-27`
+- Why fragile: The search index and DB client both hang off `globalThis.__bgscheduler_*`. Works per-instance; each cold start rebuilds. No guard against a bundler splitting the module and creating two namespaces.
+- Safe modification: Document the per-instance contract.
+- Test coverage: None for the singleton identity property.
 
-**Identity resolution silently merges teachers with the same nickname (HIGH):**
-- Files: `src/lib/normalization/identity.ts:111-150`
-- Why fragile: If two teachers happen to have the same nickname (e.g. "Kev"), they're merged into one canonical group with no warning. A real-world false-positive would silently combine two unrelated tutors' availability into one phantom tutor.
-- Safe modification: Detect collisions: `if (entries.length > 2 && !allOnlineOffsetPair(entries)) issues.push(...)`. Currently a 3-member group is treated identically to a 2-member online/offline pair.
-- Test coverage: `src/lib/normalization/__tests__/identity.test.ts` covers happy paths; no test for "three teachers with the same nickname".
+**Multi-day leave coverage is a documented full-day assumption, not minute-accurate (LOW):**
+- Files: `src/lib/search/engine.ts:240-289`
+- Why fragile: `hasRecurringLeaveConflict` blocks EVERY weekday a >24h leave touches, in full-day form, deliberately ignoring the leave's HH:MM bounds for middle days (REL-04, documented at `engine.ts:240-250`). Single-day leaves use minute-of-day math against `leaveStart`. This is now intentional (the prior "wrong start minutes on multi-day" bug is fixed by short-circuiting multi-day to full-day), but it means a partial-day leave on the first/last day of a multi-day span over-blocks.
+- Safe modification: If minute-accuracy on span edges is ever needed, compute bounds from the per-day cursor; otherwise keep and document.
+- Test coverage: `src/lib/normalization/__tests__/leaves.test.ts` and `src/lib/search/__tests__/engine.test.ts` cover normalization and single-day blocking.
 
-**`recurrenceId` dedup in fallback can mask genuine conflicts (MEDIUM):**
-- Files: `src/lib/search/compare.ts:274-289`
-- Why fragile: When pulling nearest-future-occurrence for missing weekdays, the dedup is by `recurrenceId`. If a tutor has TWO different recurring series at the same weekday/time (one for student A, one for student B), only the first sorted by start-time wins. The second is silently dropped from the compare view.
-- Safe modification: Dedup by `(recurrenceId, studentName)` instead.
-- Test coverage: `src/lib/search/__tests__/compare.test.ts` tests the fallback path but does not cover multi-recurrence-per-weekday.
-
-**Wise client retry doesn't distinguish 4xx from 5xx (MEDIUM):**
-- Files: `src/lib/wise/client.ts:67-91`
-- Why fragile: The retry loop catches ALL fetch errors and ALL non-OK responses indiscriminately. A 401 (bad creds), 404 (bad URL), or 422 (bad request body) gets retried 3 times with backoff before failing — wastes ~7 seconds and ~12 API calls per request on a permanent error.
-- Safe modification: Don't retry on 4xx (client errors are not transient). Only retry on 5xx, network errors, or 429.
-- Test coverage: `src/lib/wise/__tests__/client.test.ts` exists but doesn't enumerate status codes for retry policy.
+**Wise-activity / leave-requests / sales sync single-flight via unique-index race (LOW):**
+- Files: `src/lib/wise-activity/sync.ts:46-53`, `src/lib/leave-requests/sync.ts:44-47`, `src/lib/sync/run-wise-sync.ts:42-118`
+- Why fragile: Several sync paths enforce "only one running" by inserting a `running` row and catching the Postgres `23505` unique violation (or matching a named partial index like `wise_activity_sync_runs_single_running_idx` / `leave_request_sync_runs_single_running_idx`). The Wise snapshot sync additionally fails abandoned `running` rows older than 20 min (`run-wise-sync.ts:STALE_RUNNING_SYNC_MS`). Correct, but each feature reimplements the pattern slightly differently (error-code check vs. index-name string match), so a renamed index silently disables a guard.
+- Safe modification: Centralize the single-flight helper; assert on the SQLSTATE `23505` rather than the index name.
+- Test coverage: per-feature sync tests exist (`src/lib/wise-activity/__tests__/sync.test.ts`, `src/lib/leave-requests/__tests__/*`, `src/app/api/internal/sync-wise/__tests__/route.test.ts`).
 
 ## Scaling Limits
 
-**Sync function timeout (CRITICAL — already at threshold):**
-- Current capacity: 4m26s for 131 teachers, 26 leave windows each
-- Limit: Vercel Hobby 300s function timeout
-- Scaling path: Either (a) Pro plan for higher ceiling, (b) reduce horizon days, (c) split sync into multiple functions, (d) negotiate with Wise for batch endpoints.
+**Snapshot storage now bounded by 30-snapshot retention (RESOLVED → LOW):**
+- Current capacity: Every promoted sync appends a full snapshot across all snapshot-scoped tables. `pruneOldSnapshots` (`src/lib/sync/snapshot-pruning.ts`) runs after each successful promote and keeps the most recent `SNAPSHOT_RETENTION_COUNT = 30` (`snapshot-pruning.ts:5,51,65`), cascade-deleting older snapshots. `past_session_blocks` is intentionally cross-snapshot and exempt.
+- Limit: At 30 snapshots × per-snapshot row volume, storage is now flat rather than monotonically growing — the prior "unbounded growth vs Neon free tier" concern is mitigated. Pruning failures are caught, logged, and recorded in `sync_runs.metadata` without failing the sync (`orchestrator.ts:520-548`).
+- Scaling path: Tune the retention count if 30 snapshots exceed the storage budget; pruning is idempotent.
+
+**Wise sync wall time vs the 800s function ceiling (MEDIUM):**
+- Current capacity: ~130 teachers × 26 leave windows under `maxDuration = 800` on Vercel Pro.
+- Limit: The 800s ceiling; the prior 300s Hobby ceiling (with ~34s headroom) is gone.
+- Scaling path: Horizon reduction or a Wise batch endpoint as teacher count grows (see Performance Bottlenecks).
 
 **In-memory index size (LOW):**
-- Current capacity: 72 groups × ~30 windows × ~200 sessions = ~3-5 MB serialized
-- Limit: Vercel function memory budget (1024 MB on Hobby)
-- Scaling path: Plenty of headroom. Concern only at 10,000+ tutors.
+- Current capacity: Tens of groups × windows × sessions — single-digit MB serialized.
+- Limit: Function memory budget. Ample headroom.
+- Scaling path: Concern only at 10,000+ tutors.
 
-**Vercel cron cadence (HIGH — known issue):**
-- Current capacity: Daily on Hobby plan
-- Limit: Hobby plan does not support sub-daily crons
-- Scaling path: Upgrade to Pro for 30-minute cadence.
-
-**Compare cache key collisions (LOW):**
-- Current capacity: Cache keyed on `${tutorGroupId}:${weekStart}:${CACHE_VERSION}` (`src/hooks/use-compare.ts:140`).
-- Limit: Map grows unbounded as user navigates weeks. ~50KB per (tutor, week) entry × hundreds of weeks = potential ~50MB browser memory.
-- Scaling path: Add LRU eviction at ~50 entries. Currently no eviction.
+**Client-side compare cache grows unbounded across week navigation (LOW):**
+- Current capacity: `useCompare` caches `CompareTutor` keyed by `tutorGroupId:weekStart:CACHE_VERSION` (`src/hooks/use-compare.ts`). Entries accumulate as the user pages weeks; cache invalidates on snapshot change but has no size cap.
+- Limit: Browser memory after hundreds of week navigations.
+- Scaling path: Add LRU eviction (~50 entries).
 
 ## Dependencies at Risk
 
-**`next-auth: ^5.0.0-beta.30` (HIGH):**
-- Risk: Beta release of Auth.js v5. Breaking changes between betas; no LTS guarantee. Beta 30 is from a moving train.
-- Impact: Major upgrades may require migration work for `auth()` callback, JWT handling, session shape.
-- Migration plan: Pin to exact version (no caret) until v5 stable releases. Monitor https://github.com/nextauthjs/next-auth/releases. When v5 GA lands, upgrade in a dedicated phase.
+**`next-auth: 5.0.0-beta.30` (HIGH):**
+- Risk: Pinned to an exact Auth.js v5 beta (`package.json` — note it is now exact, no caret). Betas carry breaking changes between releases; no LTS.
+- Impact: Auth split into `src/lib/auth.ts` (node) + `src/lib/auth-edge.ts` (edge middleware) plus the custom `admin_users` callback and Google Sheets OAuth — a beta bump could touch any of these.
+- Migration plan: Stay pinned; upgrade to v5 GA in a dedicated phase, re-testing the edge/node split and the sheets scope.
 
-**`@auth/drizzle-adapter: ^1.11.1` (MEDIUM):**
-- Risk: Imported (`package.json:14`) but not actually used — auth uses a custom callback against `admin_users` (`src/lib/auth.ts:22-29`), not the Drizzle adapter.
-- Impact: Dead dependency increasing bundle size.
-- Migration plan: Remove from `package.json`.
+**No `openai` SDK despite heavy OpenAI usage — raw `fetch` to `/v1/responses` (MEDIUM):**
+- Risk: The AI scheduler calls `https://api.openai.com/v1/responses` directly via `fetch` (`src/lib/ai/scheduler.ts:544`, `src/lib/ai/scheduler-conversation.ts:2346`); there is no `openai` package in `package.json`. The request/response shape of the Responses API is hand-rolled.
+- Impact: API contract drift (model names, response envelope, reasoning-effort params) is caught only at runtime as a 4xx/5xx. `OPENAI_SCHEDULER_MODEL`/`OPENAI_SCHEDULER_REASONING_EFFORT` are free-text env with no validation.
+- Migration plan: Either adopt the official SDK (typed, versioned) or add a Zod contract test against a recorded fixture. Gate on `isAiSchedulerConfigured()` (already present).
 
-**`shadcn: ^4.1.2` as a runtime dependency (LOW):**
-- Risk: `shadcn` package in `dependencies` (`package.json:30`) — but shadcn/ui is a copy-paste component library. The CLI is normally a dev-only tool.
-- Impact: Increases bundle size if the package is actually shipped.
-- Migration plan: Move to `devDependencies` if only used at build time. Verify nothing in `src/` imports from `shadcn` directly.
+**`@base-ui/react: 1.3.0` (MEDIUM):**
+- Risk: Exact-pinned 1.x of a young primitives library underpinning `src/components/ui/*`.
+- Impact: Major bumps may require prop migrations.
+- Migration plan: Stay pinned; monitor changelog.
 
-**`@base-ui/react: ^1.3.0` (MEDIUM):**
-- Risk: 1.x release of a relatively new library (formerly Radix internals, recently rebranded). Public API stability unclear.
-- Impact: Major version bumps may require component prop updates. Used heavily in `src/components/ui/*`.
-- Migration plan: Pin to exact version. Monitor changelog at https://base-ui.com.
+**`shadcn: ^4.1.2` correctly in devDependencies (RESOLVED → LOW):**
+- Risk: Previously flagged as a runtime dependency. It is now under `devDependencies` (`package.json`) — the copy-paste component CLI is dev-only as intended.
+- Migration plan: No action; verify nothing in `src/` imports the `shadcn` package at runtime.
 
-**`drizzle-orm: ^0.45.2` (LOW):**
-- Risk: Pre-1.0 — semver caret allows MINOR bumps which can include breaking changes.
-- Impact: Schema or query API changes.
-- Migration plan: Pin to exact version. Test migrations in staging before each upgrade.
+**`drizzle-orm: 0.45.2` / `zod: ^4.3.6` (LOW):**
+- Risk: `drizzle-orm` is exact-pinned pre-1.0; `zod` is v4 (caret). Ecosystem peer support for zod v4 is still maturing.
+- Impact: Query/schema API or type-inference changes on bump.
+- Migration plan: Test migrations on the testcontainers integration suite before upgrading.
 
-**`zod: ^4.3.6` (LOW):**
-- Risk: Major version 4 (released late 2025). Not all ecosystem libraries support v4 yet.
-- Impact: Type inference changes between v3 → v4. Already migrated but watch for ecosystem libraries that pin to v3.
-- Migration plan: Acceptable. Watch transient peer-dep warnings.
+**`@auth/drizzle-adapter` no longer present (RESOLVED):**
+- The prior "dead dependency" concern is gone — there is no `@auth/drizzle-adapter` in `package.json`. Auth uses the custom `admin_users` callback. No action.
 
 ## Missing Critical Features
 
-**Snapshot pruning / retention policy:**
-- Problem: `snapshots`, `tutor_identity_groups`, `tutor_identity_group_members`, `recurring_availability_windows`, `dated_leaves`, `future_session_blocks`, `subject_level_qualifications`, `raw_teacher_tags`, `data_issues`, `snapshot_stats` are all snapshot-scoped and append-only. Daily sync creates a new full copy.
-- Files: `src/lib/db/schema.ts`, `src/lib/sync/orchestrator.ts`
-- Blocks: Long-running operation — every day adds ~131 teachers × all related rows. 1 year = ~365 snapshots × ~2-5MB = ~1-2 GB. Neon free tier is 0.5GB.
-- Approach: Add a snapshot-pruning step at end of sync: keep last N=30 snapshots, delete older. Cascade deletes all snapshot-scoped tables. `past_session_blocks` is intentionally cross-snapshot (per `src/lib/db/schema.ts:213-214`) and unaffected.
+**Sync failure / staleness self-recovery is implemented but uneven across features (MEDIUM):**
+- Problem: The Wise snapshot path surfaces staleness well — `src/lib/ops/stale.ts` defines an API warning at 90 min (`API_STALE_THRESHOLD_MS`) and an app-wide banner at 2h (`APP_STALE_BANNER_THRESHOLD_MS`), rendered by `src/components/layout/stale-snapshot-banner.tsx`. But the newer sync surfaces (sales-dashboard, credit-control, wise-activity, leave-requests, room-utilization) each have their own `*_sync_runs` tables and failure reporting; there is no unified "any sync is failing" health signal.
+- Files: `src/lib/ops/stale.ts`, `src/app/api/data-health/route.ts`, the per-feature `*-sync-runs` schemas.
+- Approach: A consolidated health endpoint/banner spanning all seven crons would catch a silently-failing sales or credit-control sync the way the snapshot banner catches stale tutor data.
 
-**Sync failure visibility:**
-- Problem: Cron failures land in Vercel logs and are visible on `/data-health`, but admins do not get a proactive in-app signal on the main scheduling surface.
-- Files: `src/app/api/internal/sync-wise/route.ts`
-- Blocks: Silent stale data — admins only notice when Compare results look wrong.
-- Approach: Surface failed/stale sync state in the app itself via `/search`, `/compare`, `/data-health`, and manual sync feedback. External notification integrations are out of scope for Phase 8.7.
+**No automated trigger for room-utilization sync (MEDIUM):**
+- Problem: As noted under Tech Debt, room-utilization only refreshes via the manual `room-utilization:sync` script — there is no cron and the HTTP handler is unreferenced.
+- Files: `src/app/api/internal/sync-room-utilization/route.ts`, `scripts/sync-room-utilization.ts`.
+- Approach: Add a staggered cron or remove the orphan route.
 
-**Tutor add/remove without full sync:**
-- Problem: Wise API changes (new tutor, removed tutor, changed availability) only propagate after the next daily sync.
-- Files: `src/lib/sync/orchestrator.ts`
-- Blocks: Up to 24h staleness; admins cannot react to urgent updates.
-- Approach: Manual admin "sync now" button. Already supported via `POST /api/internal/sync-wise` with CRON_SECRET, but no UI button.
-
-**Stale snapshot self-recovery:**
-- Problem: If sync fails repeatedly, the system silently keeps serving stale data. The `data-health` page surfaces it but admins have to actively check.
-- Files: `src/app/(app)/data-health/page.tsx`, `src/app/api/data-health/route.ts`
-- Blocks: Silent decay of accuracy.
-- Approach: When `staleAgeMs` exceeds threshold (e.g. 48h), display a banner on `/search` and `/compare` pages, not just `/data-health`.
+**Manual "sync now" remains curl/CRON_SECRET only for some pipelines (LOW):**
+- Problem: The Wise snapshot sync has an admin UI trigger path (`POST /api/internal/sync-wise` also accepts a session via `handleSync({allowSessionAuth:true})`, and `/api/admin/sync-wise` exists). Other pipelines expose manual sync routes (`/api/*/sync`) but UI affordance coverage is inconsistent.
+- Files: `src/app/api/internal/sync-wise/route.ts:41-47`, `src/app/api/admin/sync-wise/route.ts`, `src/app/api/{credit-control,sales-dashboard,wise-activity,leave-requests,payroll}/sync/route.ts`.
+- Approach: Audit that every operationally-important sync has a button, not just an endpoint.
 
 ## Test Coverage Gaps
 
-**Sync orchestrator integration (HIGH):**
-- What's not tested: `runFullSync` end-to-end. The critical path (fetch → normalize → persist → promote) has no integration test that exercises the actual DB.
-- Files: `src/lib/sync/orchestrator.ts:45-539`
-- Risk: Schema migration or query change could break sync silently. Only the daily cron would catch it — at 24h delay.
-- Priority: HIGH
-
-**Search index build/ensure (HIGH):**
-- What's not tested: `buildIndex`, `ensureIndex`, the `globalThis` singleton, the building-promise coalescing.
-- Files: `src/lib/search/index.ts` — no `__tests__/index.test.ts` exists.
-- Risk: Every API route depends on this. Race conditions and stale-detection bugs would surface only under production load.
-- Priority: HIGH
-
-**API route handlers (HIGH):**
-- What's not tested: All 7 API routes (`src/app/api/{compare,compare/discover,filters,tutors,search,search/range,data-health}/route.ts`, `src/app/api/internal/sync-wise/route.ts`). Auth, validation, and error paths uncovered.
-- Files: All route.ts files.
-- Risk: A schema validation regression silently breaks a route in production.
-- Priority: HIGH
+> Counts: 132 test files total (129 `.test.ts(x)` + 3 `.integration.test.ts`).
+> `npm test` runs the `unit` project (excludes the 3 integration files);
+> `npm run test:integration` runs the testcontainers Postgres suite. The prior
+> audit's blanket "search index / route handlers / sync orchestrator untested"
+> gaps are now substantially covered — what remains is listed below.
 
 **Client UI components and hooks (MEDIUM):**
-- What's not tested: `useCompare` hook (`src/hooks/use-compare.ts`), `WeekOverview` (`src/components/compare/week-overview.tsx`), `CalendarGrid` (`src/components/compare/calendar-grid.tsx`), `SearchForm` (`src/components/search/search-form.tsx`), `DiscoveryPanel` (`src/components/compare/discovery-panel.tsx`), `RecommendedSlots` (`src/components/search/recommended-slots.tsx`).
-- Files: All `src/components/**/*.tsx` and `src/hooks/*.ts`.
-- Risk: AbortController logic, cache invalidation on snapshot change, recursive retry guard (`use-compare.ts:127-134`), overflow detection — all are implemented but unverified by tests.
-- Priority: MEDIUM (requires React Testing Library + jsdom setup)
+- What's not tested: The `useCompare` hook (`src/hooks/use-compare.ts`) — AbortController cancellation, incremental `fetchOnly` cache merge, snapshot-change invalidation, retry guard. Most `src/components/**/*.tsx` are excluded from coverage entirely (`vitest.config.ts` excludes `src/app/**/*.tsx` from coverage; only a handful of component `.test.tsx` files exist: density-overview, visualization-components, room-capacity-dashboard).
+- Files: `src/hooks/use-compare.ts`, `src/components/compare/*`, `src/components/search/*`.
+- Risk: Race-condition and cache-invalidation logic is unverified.
+- Priority: MEDIUM (needs jsdom/RTL setup).
 
-**Auth flows (MEDIUM):**
-- What's not tested: `signIn` callback's allowlist check (`src/lib/auth.ts:18-30`), middleware bypass logic for `/api/internal/*`.
-- Files: `src/lib/auth.ts`, `src/middleware.ts`
-- Risk: A future change might accidentally allow non-admin users in.
-- Priority: MEDIUM
+**Uncommitted WIP features are partially tested but not in the gating suite (MEDIUM):**
+- What's not tested end-to-end: `leave-requests` has unit tests (`src/lib/leave-requests/__tests__/parser.test.ts`, `matching.test.ts`) and one route test (`wise-cancel-preview`), but the sync→match→recompute→email flow (`src/lib/leave-requests/sync.ts`) has no integration coverage. Payroll `rate-card`/`may-reconciliation` have new unit tests (`src/lib/payroll/__tests__/rate-card.test.ts`, `may-reconciliation.test.ts`) but, like the source, are uncommitted.
+- Files: `src/lib/leave-requests/sync.ts`, `src/lib/payroll/{rate-card,may-reconciliation}.ts`.
+- Risk: WIP could be committed without the full-flow test, and the migrations (`0036`, `0037`) are unproven against the integration DB.
+- Priority: MEDIUM.
 
-**Past sessions diff-hook integration (MEDIUM):**
-- What's not tested: End-to-end "prior snapshot has session X, new sync drops X, X is past → captured into past_session_blocks". Existing `src/lib/sync/__tests__/past-sessions-diff-hook.test.ts` is unit-level with mock DB.
-- Files: `src/lib/sync/past-sessions-diff-hook.ts`
-- Risk: Captured as `partial` with `verification_status: needs_human` in v1.1 milestone audit.
-- Priority: MEDIUM
+**Modality contradiction emission during sync (LOW):**
+- What's not tested directly: The orchestrator's per-session `detectSessionModalityConflict` → `conflict_model` persistence loop (`src/lib/sync/orchestrator.ts:364-398`). `src/lib/sync/__tests__/orchestrator-modality-conflict.test.ts` covers the conflict detection; verify it asserts the rows actually land in `data_issues`.
+- Files: `src/lib/sync/orchestrator.ts:364-398`.
+- Priority: LOW.
 
-**Timezone correctness (MEDIUM):**
-- What's not tested: The mixed `toLocaleString` + `new Date` pattern in `src/app/api/compare/route.ts:28-30`, `src/hooks/use-compare.ts:22-26`, `src/components/compare/week-overview.tsx:235`. No DST tests (Bangkok has no DST, but Vercel server might).
-- Files: As above.
-- Risk: Subtle weekday off-by-one when sync runs at a UTC hour where Bangkok is the next/previous day.
-- Priority: MEDIUM
+**Cross-feature env/config wiring (LOW):**
+- What's not tested: That a missing `OPENAI_API_KEY`, `SCHEDULE_EMAIL_*`, or `LEAVE_REQUESTS_*` var degrades gracefully (503/disabled) rather than 500-ing deep in a handler.
+- Files: `src/lib/env.ts`, feature config modules.
+- Priority: LOW.
 
-**Modality contradiction emission (LOW):**
-- What's not tested: The MOD-01 per-session contradiction loop in `src/lib/sync/orchestrator.ts:356-387`. `compare.test.ts` tests `detectSessionModalityConflict` in isolation, but the orchestrator-side persistence is uncovered.
-- Files: `src/lib/sync/orchestrator.ts:356-387`
-- Risk: A regression could stop emitting `conflict_model` issues to `data_issues` table.
-- Priority: LOW
+## Resolved Since Last Audit (2026-04-29)
+
+The following prior concerns are FIXED in current code and retained here so the
+delta is auditable:
+
+- **Non-atomic snapshot promotion (was HIGH)** — now a single atomic `UPDATE ... SET active = (id = $new)` (REL-01, `src/lib/sync/orchestrator.ts:488-498`).
+- **Concurrent index-rebuild promise leak (was MEDIUM)** — coalesced via synchronous promise assignment (REL-02, `src/lib/search/index.ts:354-401`).
+- **Zero-active-snapshot read race throwing 500 (was HIGH)** — `ensureIndex` falls back to the cached index when no active snapshot is found (`src/lib/search/index.ts:384-386`).
+- **CRON_SECRET non-constant-time compare (was MEDIUM)** — now `crypto.timingSafeEqual` with length pre-check (REL-07, `src/app/api/internal/sync-wise/route.ts:10-28`; same pattern in `sync-room-utilization`).
+- **Wise client retried 4xx (was MEDIUM)** — retries restricted to a transient-status allowlist {408,429,5xx}; permanent 4xx fail fast (REL-05, `src/lib/wise/client.ts:23-30,121-134`).
+- **Identity silently merges same-nickname teachers (was HIGH)** — emits `identity_collision` high-severity issue for 3+ member or non-clean-pair groupings; group still routed to Needs Review (REL-03, `src/lib/normalization/identity.ts:148-170`).
+- **Empty catch swallowed sync-cleanup errors (was LOW)** — cleanup failures are now `console.error`-logged (REL-06, `src/lib/sync/orchestrator.ts:573-585`).
+- **`detectConflicts` unused `indexedGroups` param (was LOW)** — parameter removed; signature is `detectConflicts(compareTutors)` (`src/lib/search/compare.ts:322`).
+- **Multi-day leave wrong start-minute math (was MEDIUM)** — multi-day leaves now short-circuit to full-day blocking (REL-04, `src/lib/search/engine.ts:260-275`).
+- **Stale threshold mismatched to cron cadence (was LOW)** — centralized to 90 min / 2h matching the 30-min Pro cron (`src/lib/ops/stale.ts:1-9`).
+- **Past-day fallback showed misleading future occurrences (was MEDIUM)** — past weekdays now render honest-empty; fallback runs only for today/future weekdays (D-05, `src/lib/search/compare.ts:255-268`); real dropped past sessions captured into `past_session_blocks` via the committed diff-hook (`src/lib/sync/past-sessions-diff-hook.ts`).
+- **No snapshot retention policy (was missing feature)** — `pruneOldSnapshots` keeps 30 snapshots after each promote (`src/lib/sync/snapshot-pruning.ts`).
+- **`shadcn` as a runtime dep / `@auth/drizzle-adapter` dead dep (was LOW/MEDIUM)** — `shadcn` moved to devDependencies; `@auth/drizzle-adapter` removed.
 
 ---
 
-*Concerns audit: 2026-04-29*
+_Verified against HEAD + uncommitted WIP on 2026-05-31._

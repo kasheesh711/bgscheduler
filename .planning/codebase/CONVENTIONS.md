@@ -1,62 +1,127 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-04-29
+**Analysis Date:** 2026-05-31
+
+These conventions are verified against current code (HEAD + uncommitted WIP). The
+codebase has grown well beyond the original tutor-search tool into a multi-domain
+admin platform — search/compare, classroom assignment, sales dashboard, credit
+control, payroll review, LINE scheduler review, AI scheduler, leave requests, room
+capacity, and Wise activity audit. The conventions below hold across **all** of
+those domains; where a newer module refines an older pattern (e.g. `z.coerce`,
+constant-time cron auth, graceful table-missing fallbacks) it is called out.
 
 ## Naming Patterns
 
 ### Files
 
-- **kebab-case** for all source files: `session-colors.ts`, `week-overview.tsx`, `app-nav.tsx`, `tutor-combobox.tsx`, `past-sessions-diff-hook.ts`
-- React components use `.tsx` extension (e.g., `src/components/compare/week-overview.tsx`)
-- Pure logic / type-only modules use `.ts` (e.g., `src/lib/normalization/timezone.ts`)
+- **kebab-case** for every source file: `session-colors.ts`, `week-overview.tsx`,
+  `app-nav.tsx`, `cron-auth.ts`, `review-service.ts`, `may-reconciliation.ts`,
+  `sales-dashboard-shell.tsx`, `scheduler-conversation.ts`
+- React components use `.tsx`; pure logic / type-only modules use `.ts`
+  (e.g. `src/lib/normalization/timezone.ts`, `src/lib/sales-dashboard/types.ts`)
 - Singular `schema.ts` for the Drizzle schema (`src/lib/db/schema.ts`)
-- Per-domain `types.ts` files (`src/lib/search/types.ts`, `src/lib/wise/types.ts`)
-- Test files: `{module}.test.ts` inside a sibling `__tests__/` directory (e.g., `src/lib/normalization/__tests__/identity.test.ts`)
-- Page components live at `src/app/.../page.tsx`; route handlers at `src/app/api/.../route.ts`
-- Layouts at `src/app/.../layout.tsx`; redirects at `src/app/page.tsx`
+- Per-domain `types.ts` files (`src/lib/search/types.ts`, `src/lib/wise/types.ts`,
+  `src/lib/sales-dashboard/types.ts`, `src/lib/payroll/types.ts`)
+- Test files: `{module}.test.ts` (or `.test.tsx`) inside a sibling `__tests__/`
+  directory — **never** colocated. Every one of the 130 test files lives under a
+  `__tests__/` dir (`src/lib/normalization/__tests__/identity.test.ts`,
+  `src/lib/auth/__tests__/signin-callback.test.ts`)
+- Integration tests use the `.integration.test.ts` suffix and live under
+  `__tests__/` too; shared integration helpers sit in `src/tests/integration/`
+- Page components at `src/app/.../page.tsx`; route handlers at
+  `src/app/api/.../route.ts`; dynamic segments use bracket dirs
+  (`src/app/api/class-assignments/runs/[runId]/rows/[rowId]/route.ts`)
+- Layouts at `src/app/.../layout.tsx`; the root redirect at `src/app/page.tsx`
 
 ### Functions
 
-- **camelCase** for all functions
-- Verb-prefixed by intent:
-  - `get*` for retrieval / accessors: `getDb()`, `getEnv()`, `getBaseName()`, `getCurrentMonday()`, `getStartOfTodayBkk()`, `getCurrentIndex()`, `getRecommendedSlots()`, `getWiseTeacherDisplayName()`
-  - `is*` / `has*` for booleans: `isBlockingStatus()`, `isOnlineVariant()`, `hasWindow` (local boolean)
-  - `make*` / `create*` for factories: `createWiseClient()`, `createDb()`, `makeTutor()` (test fixtures), `makeIndex()`, `makeRow()`
-  - `parse*` / `normalize*` for transformation: `parseTimeToMinutes()`, `parseSlotInput()`, `normalizeWorkingHours()`, `normalizeLeaves()`, `normalizeSessions()`, `normalizeTeacherTags()`, `normalizeWeekday()`
-  - `fetch*` for I/O: `fetchAllTeachers()`, `fetchAllFutureSessions()`, `fetchTeacherAvailability()`, `fetchPastSessionBlocks()`
-  - `derive*` / `resolve*` / `extract*` for inference: `deriveModality()`, `resolveIdentities()`, `resolveSessionModality()`, `extractNickname()`
-  - `build*` / `compute*` for derived structures: `buildIndex()`, `buildCompareTutor()`, `computeFreeGaps()`, `computeIntersection()`, `computeDateForWeekdayInRange()`
-  - `detect*` / `find*` for analysis: `detectConflicts()`, `detectSessionModalityConflict()`, `findSharedFreeSlots()`
-- Internal/private helpers prefixed with no special marker but lowercased (e.g., `searchSlot`, `intersectIntervals`, `formatMinute`)
+- **camelCase** for all functions, verb-prefixed by intent:
+  - `get*` for retrieval / accessors: `getDb()`, `getEnv()`, `getCurrentMonday()`,
+    `getStartOfTodayBkk()`, `getSearchIndex()`, `getActiveSnapshotId()`,
+    `getCronSecretStatus()`, `getRoomCapacityForecast()`
+  - `is*` / `has*` / `should*` for booleans: `isBlockingStatus()`,
+    `isOnlineVariant()`, `isMissingForecastTableError()`,
+    `shouldReturnAvailabilitySummary()`, `hasValidCronSecret()`
+  - `make*` / `create*` for factories: `createWiseClient()`, `createDb()`
+  - `parse*` / `normalize*` for transformation: `parseTimeToMinutes()`,
+    `parseSlotInput()`, `normalizeWorkingHours()`, `normalizeLeaves()`,
+    `normalizeSessions()`, `normalizeWeekday()`
+  - `fetch*` for I/O: `fetchAllTeachers()`, `fetchAllFutureSessions()`,
+    `fetchTeacherAvailability()`, `fetchPastSessionBlocks()`
+  - `derive*` / `resolve*` / `extract*` for inference: `deriveModality()`,
+    `resolveIdentities()`, `resolveSessionModality()`, `extractNickname()`
+  - `build*` / `compute*` for derived structures: `buildIndex()`,
+    `buildCompareTutor()`, `computeFreeGaps()`
+  - `detect*` / `find*` for analysis: `detectConflicts()`, `findSharedFreeSlots()`
+  - `reject*` for guard helpers that return an error response or null:
+    `rejectInvalidCronSecret()` (`src/lib/internal/cron-auth.ts:20`)
+- Internal/private helpers are lowercased with no special marker
+  (`searchSlot`, `formatIsoDate`, `parseMondayDate`, `addDays`)
 
 ### Variables
 
-- **camelCase** for locals and properties: `snapshotMeta`, `tutorGroupIds`, `sessionBlocks`, `dateRange`, `mondayDate`, `pastBlocksByCanonicalKey`
-- Module-level mutable singletons prefixed with `_`: not used directly here; instead, this codebase uses a `globalThis` namespace (`globalThis.__bgscheduler_db`, `globalThis.__bgscheduler_searchIndex`) to survive Next.js HMR (`src/lib/db/index.ts:16-19`, `src/lib/search/index.ts:81-86`)
+- **camelCase** for locals and properties: `snapshotMeta`, `tutorGroupIds`,
+  `sessionBlocks`, `dateRange`, `mondayDate`, `pastBlocksByCanonicalKey`,
+  `resolvedIdByRequestedId`, `usedStaleIds`
+- Module-level mutable singletons are **not** `_`-prefixed. The codebase uses a
+  `globalThis` namespace (`globalThis.__bgscheduler_db`,
+  `globalThis.__bgscheduler_searchIndex`,
+  `globalThis.__bgscheduler_searchIndexBuildPromise`) to survive Next.js HMR
+  (`src/lib/db/index.ts:16-19`, `src/lib/search/index.ts:94-97`). This is the
+  **only** module-singleton mechanism — no `let _db` / `let _cachedIndex` style
+  exists anywhere.
 
 ### Constants
 
-- **UPPER_SNAKE_CASE** for module-level constants: `TUTOR_COLORS`, `HOUR_HEIGHT`, `START_HOUR`, `END_HOUR`, `TOTAL_HOURS`, `DAY_NAMES`, `DISPLAY_DAYS`, `TIMEZONE`, `WEEKDAY_MAP`, `NON_BLOCKING_STATUSES`, `ONLINE_SESSION_TYPES`, `DAY_OPTIONS`, `DURATION_OPTIONS`, `TIME_OPTIONS`
-- Examples: `src/components/compare/week-overview.tsx:23-28`, `src/lib/normalization/timezone.ts:3`, `src/lib/normalization/availability.ts:10-18`
+- **UPPER_SNAKE_CASE** for module-level constants: `TUTOR_COLORS`, `HOUR_HEIGHT`,
+  `START_HOUR`, `END_HOUR`, `TOTAL_HOURS`, `DAY_NAMES`, `DISPLAY_DAYS`,
+  `TIMEZONE`, `WEEKDAY_MAP`, `UUID_RE`, `API_STALE_THRESHOLD_MS`,
+  `STALE_SEARCH_WARNING`
+- Examples: `src/components/compare/week-overview.tsx`,
+  `src/lib/normalization/timezone.ts`, `src/lib/ops/stale.ts`,
+  `src/app/api/compare/route.ts:59` (`UUID_RE`)
 
 ### Types
 
 - **PascalCase** for interfaces and type aliases
-- `interface` for object shapes; `type` for unions, primitives, or aliases
-  - Examples: `interface SearchRequest`, `interface CompareTutor`, `interface IndexedTutorGroup`, `type SearchMode = "recurring" | "one_time"`, `type WiseTag = string | WiseTagObject`
+- `interface` for object shapes; `type` for unions, primitives, or aliases:
+  - `interface SearchRequest`, `interface IndexedTutorGroup`,
+    `interface SalesDashboardSourceRecord`
+  - `type SearchMode = "recurring" | "one_time"`,
+    `type CronSecretStatus = "valid" | "invalid" | "missing-secret"`
+    (`src/lib/internal/cron-auth.ts:5`),
+    `type SalesSourceStatus = "active" | "refreshing" | ...`
+    (`src/lib/sales-dashboard/types.ts:1`)
 - Domain-prefixed names:
-  - `Wise*` for external Wise API shapes: `WiseTeacher`, `WiseSession`, `WiseTag`, `WiseLeave`, `WiseWorkingHourSlot`, `WiseClientConfig`
-  - `Indexed*` for in-memory index types: `IndexedTutorGroup`, `IndexedSessionBlock`, `IndexedAvailabilityWindow`, `IndexedQualification`, `IndexedLeave`, `IndexedDataIssue`, `IndexedWiseRecord`
-  - `Normalized*` for normalization-pipeline outputs: `NormalizedSessionBlock`
-  - `Compare*` for compare-engine outputs: `CompareTutor`, `CompareSessionBlock`, `CompareResponse`, `CompareRequest`
-- TypeScript `enum` is **not** used; database enums use Drizzle's `pgEnum` (`src/lib/db/schema.ts:16-43`)
+  - `Wise*` for external Wise API shapes: `WiseTeacher`, `WiseSession`, `WiseTag`,
+    `WiseLeave`, `WiseClientConfig`
+  - `Indexed*` for in-memory index types: `IndexedTutorGroup`,
+    `IndexedSessionBlock`, `IndexedAvailabilityWindow`, `IndexedQualification`,
+    `IndexedLeave`, `IndexedDataIssue`, `IndexedWiseRecord`,
+    `IndexedTutorBusinessProfile`
+  - `Normalized*` for normalization-pipeline outputs (e.g. `NormalizedSessionBlock`)
+  - `Compare*` for compare-engine outputs: `CompareTutor`, `CompareSessionBlock`,
+    `CompareResponse`, `CompareRequest`
+  - `Parsed*` for parser outputs in the sales pipeline: `ParsedNormalSaleRow`,
+    `ParsedAdditionalSaleRow` (`src/lib/sales-dashboard/types.ts`)
+- TypeScript `enum` is **never** used. Database enums use Drizzle's `pgEnum`
+  (21 declarations in `src/lib/db/schema.ts`, e.g. `syncStatusEnum`,
+  `modalityEnum`, `payrollReviewStatusEnum`, `lineSchedulerReviewStatusEnum`)
 
 ### Database (Drizzle / Postgres)
 
-- **snake_case** for table and column SQL names: `tutor_identity_groups`, `snapshot_id`, `created_at`, `wise_teacher_id`, `is_online_variant`
-- **camelCase** for the Drizzle schema object names: `tutorIdentityGroups`, `snapshotId`, `wiseTeacherId`, `isOnlineVariant`
-- Index names: short prefix + `_idx` suffix: `tig_snapshot_idx`, `tigm_group_idx`, `admin_users_email_idx` (`src/lib/db/schema.ts:73, 86, 98-99`)
-- Postgres enums declared with `pgEnum`: `syncStatusEnum`, `dataIssueTypeEnum`, `dataIssueSeverityEnum`, `modalityEnum` (`src/lib/db/schema.ts:16-43`)
+- **snake_case** for table and column SQL names: `tutor_identity_groups`,
+  `snapshot_id`, `created_at`, `wise_teacher_id`, `is_online_variant`,
+  `group_canonical_key`, `payroll_review_status`
+- **camelCase** for the Drizzle schema object names: `tutorIdentityGroups`,
+  `snapshotId`, `wiseTeacherId`, `isOnlineVariant`
+- 78 tables defined with `pgTable(...)`, all snapshot-scoped except the single
+  documented cross-snapshot table `past_session_blocks` (its deviation is
+  explained inline at `src/lib/db/schema.ts:1328-1346`)
+- Index names: short table-prefix + `_idx` suffix (e.g. `tig_snapshot_idx`,
+  `tigm_group_idx`, `admin_users_email_idx`)
+- Postgres enums declared with `pgEnum` and exported by name (used both for the
+  column type and as the TS union source)
 
 ## Code Style
 
@@ -64,57 +129,90 @@
 
 - **No formatter config** is checked in (no `.prettierrc`, no `.editorconfig`)
 - **2-space indentation** throughout
-- **Double quotes** for strings everywhere (TS imports, string literals, JSX attributes)
+- **Double quotes** for strings everywhere (TS imports, string literals, JSX
+  attributes) — single-quote imports do not appear in `src/lib` or `src/app`
 - **Semicolons required** in `src/lib/**` and `src/app/**`
-- **Semicolons omitted** in shadcn/ui primitives (`src/components/ui/*.tsx`) — these are regenerated by the shadcn CLI and follow upstream style
+- **Semicolons omitted** in shadcn/ui primitives (`src/components/ui/*.tsx`,
+  13 files) — these are regenerated by the shadcn CLI and follow upstream style
+  (`src/components/ui/button.tsx` import lines carry no semicolons)
 - Trailing commas on multi-line object/array literals
-- Template literals for interpolation (e.g., `` `Wise API ${response.status}: ${text} (${url})` `` in `src/lib/wise/client.ts:79`)
-- Section header comment patterns:
-  - `// ── Section Name ─────────` (em-dash bars) — used in `src/lib/db/schema.ts:14`, `src/lib/search/index.ts:5`, `src/lib/search/types.ts:1`
-  - `// -- Section Name --` (double-hyphen) — used in `src/lib/sync/__tests__/past-sessions-diff-hook.test.ts:7`
-  - `// --------------------` (long underscores) — used in components like `src/components/compare/week-overview.tsx:48-50`, `src/components/search/search-form.tsx:17-19`
+- Template literals for interpolation
+  (e.g. `` `Wise API ${response.status}: ${text} (${url})` `` in
+  `src/lib/wise/client.ts`)
+- Section-header comment patterns (two coexist — match whichever the file already
+  uses):
+  - `// ── Section Name ─────────` (em-dash bars) — preferred in `src/lib/**`
+    (`src/lib/db/schema.ts:17`, `src/lib/search/index.ts:9,92`)
+  - `// -------------------------` (long-hyphen blocks above/below a label) —
+    used pervasively in `src/components/**` and across newer lib modules
+    (e.g. `src/lib/sales-dashboard/*.ts`, `src/lib/line/*.ts`)
 
 ### Linting
 
 - **ESLint 9** with flat config at `eslint.config.mjs`
-- Extends `eslint-config-next/core-web-vitals` and `eslint-config-next/typescript` only
-- **No custom rules** added beyond Next.js defaults
-- Default ignores overridden to keep `.next/`, `out/`, `build/`, `next-env.d.ts` ignored (`eslint.config.mjs:8-13`)
-- Runs via `npm run lint` (resolves to `eslint`)
-- Inline `eslint-disable-next-line` only used to relax `no-var` for `globalThis` augmentations (`src/lib/db/index.ts:17`, `src/lib/search/index.ts:82, 84`)
+- Extends `eslint-config-next/core-web-vitals` and `eslint-config-next/typescript`
+  only — **no custom rules** added beyond Next.js defaults
+- Default ignores re-declared to keep `.next/`, `out/`, `build/`, `next-env.d.ts`
+  ignored (`eslint.config.mjs:9-15`)
+- Runs via `npm run lint` (resolves to bare `eslint`); type-checking is a separate
+  `npm run typecheck` (`tsc --noEmit`)
+- Inline `eslint-disable` is used sparingly and only for two narrow purposes:
+  - `// eslint-disable-next-line no-var` for the `globalThis` `var` augmentations
+    (`src/lib/db/index.ts:17`, `src/lib/search/index.ts`)
+  - `react-hooks/exhaustive-deps` and `react-hooks/set-state-in-effect`
+    suppressions inside interactive client components (≈12 sites across
+    `src/components/search/*`, `src/components/scheduler/*`,
+    `src/components/compare/week-calendar.tsx`, etc.) where the effect is
+    intentionally not reactive to a dependency or sets state on mount
 
 ### TypeScript
 
 - **strict: true** in `tsconfig.json`
-- `target: "ES2017"`, `module: "esnext"`, `moduleResolution: "bundler"` (`tsconfig.json:3-13`)
-- `lib: ["dom", "dom.iterable", "esnext"]`
-- `jsx: "react-jsx"` (no need to import React for JSX)
-- `isolatedModules: true`, `esModuleInterop: true`
-- `allowJs: true`, `noEmit: true` (Next.js handles emission)
-- Path alias `"@/*": ["./src/*"]` (`tsconfig.json:24-26`)
-- Non-null assertions used sparingly and only after defensive checks (e.g., `this.queue.shift()!` in `src/lib/wise/client.ts:102`, `byWeekday.get(w.weekday)!` after a `has` check)
-- Type predicates used at filter boundaries: `.filter((g): g is NonNullable<typeof g> => g !== undefined)` (`src/app/api/compare/route.ts:94`)
+- `target: "ES2017"`, `module: "esnext"`, `moduleResolution: "bundler"`
+- `lib: ["dom", "dom.iterable", "esnext"]`, `jsx: "react-jsx"` (no React import
+  needed for JSX)
+- `isolatedModules: true`, `esModuleInterop: true`, `allowJs: true`,
+  `noEmit: true`, `resolveJsonModule: true`, `incremental: true`,
+  `skipLibCheck: true`, `plugins: [{ "name": "next" }]`
+- Path alias `"@/*": ["./src/*"]` (`tsconfig.json:21-23`)
+- Non-null assertions used sparingly and only after defensive checks
+  (e.g. `this.queue.shift()!` in `src/lib/wise/client.ts`)
+- Type predicates at filter boundaries are a recurring pattern:
+  `.filter((g): g is IndexedTutorGroup => g !== undefined)`
+  (`src/app/api/compare/route.ts:75`),
+  `.filter((g): g is NonNullable<typeof g> => g !== undefined)`
+  (`src/app/api/compare/discover/route.ts:68`),
+  `.filter((item): item is string => typeof item === "string")`
+  (`src/app/api/leave-requests/[requestId]/wise-cancel-preview/route.ts:22`),
+  and a custom user-defined type guard `shouldReturnAvailabilitySummary(...): result is ...`
+  (`src/app/api/search/assistant/route.ts:91`)
 
 ## Import Organization
 
 ### Order (observed pattern)
 
-1. External packages (`next`, `zod`, `react`, `drizzle-orm`, `@base-ui/react`, `lucide-react`, etc.)
-2. Internal `@/` aliases grouped by depth:
+1. External packages (`next/server`, `zod`, `react`, `drizzle-orm`,
+   `date-fns-tz`, `@base-ui/react`, `lucide-react`, `node:crypto`, etc.)
+2. Internal `@/` aliases, grouped roughly by depth:
    - `@/lib/auth`, `@/lib/db`, `@/lib/env`
-   - `@/lib/wise/*`, `@/lib/normalization/*`, `@/lib/search/*`
+   - domain libs: `@/lib/wise/*`, `@/lib/normalization/*`, `@/lib/search/*`,
+     `@/lib/ops/*`, `@/lib/data/*`, `@/lib/sales-dashboard/*`, etc.
    - `@/components/ui/*`
    - `@/components/{feature}/*`
-3. Relative imports (`./types`, `./modality-display`, `../identity`)
-4. Type-only imports separated where appropriate using `import type {...}`
+3. Relative imports (`./types`, `../identity`)
+4. Type-only imports use `import type {...}`, often grouped at the end of the
+   import block
 
-Example (`src/app/api/compare/route.ts:1-15`):
+Example (`src/app/api/compare/route.ts:1-22`):
 
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
+import { toZonedTime } from "date-fns-tz";
 import { z } from "zod";
+import { inArray } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
+import * as schema from "@/lib/db/schema";
 import { ensureIndex } from "@/lib/search/index";
 import {
   buildCompareTutor,
@@ -125,20 +223,30 @@ import {
 import type { DateRange } from "@/lib/search/compare";
 import { fetchPastSessionBlocks } from "@/lib/data/past-sessions";
 import type { IndexedSessionBlock } from "@/lib/search/index";
+import { TIMEZONE } from "@/lib/normalization/timezone";
+import { API_STALE_THRESHOLD_MS, STALE_SEARCH_WARNING } from "@/lib/ops/stale";
 import type { CompareResponse, SnapshotMeta } from "@/lib/search/types";
 ```
 
 ### Path Aliases
 
 - Single alias: `@/*` → `./src/*`
-- Configured in **both** `tsconfig.json` (`paths`) and `vitest.config.ts` (`resolve.alias`) so tests resolve identically
-- No barrel files — modules import directly from specific files (`from "@/lib/wise/client"`, not `from "@/lib/wise"`)
+- Configured in **both** `tsconfig.json` (`paths`) and `vitest.config.ts`
+  (`resolve.alias`) so tests resolve identically
+- **No barrel files** — modules import directly from specific files
+  (`from "@/lib/wise/client"`, not `from "@/lib/wise"`). The Drizzle schema is
+  the one exception, imported namespace-style as `import * as schema from "@/lib/db/schema"`
+- The shadcn `components.json` registers additional aliases for the CLI
+  (`@/components`, `@/lib/utils`, `@/components/ui`, `@/lib`, `@/hooks`) but
+  application code only ever uses the single `@/*` mapping
 
 ## Error Handling
 
 ### API Route Pattern
 
-Every API route follows the same structure (see `src/app/api/compare/route.ts`, `src/app/api/search/route.ts`, `src/app/api/filters/route.ts`):
+Every mutating API route follows the same four-step structure (see
+`src/app/api/compare/route.ts:112-`, and mirrored across search, filters,
+class-assignments, credit-control, etc.):
 
 ```typescript
 export async function POST(request: NextRequest) {
@@ -176,47 +284,88 @@ export async function POST(request: NextRequest) {
 }
 ```
 
+Read-only `GET` routes that take a single trivial query param skip Zod and read
+`request.nextUrl.searchParams.get(...)` with an inline default, then wrap the
+data load in the same try/catch (`src/app/api/room-capacity/forecast/route.ts:43-61`).
+
 ### HTTP Status Conventions
 
 - `200` — success
 - `400` — invalid JSON body, Zod validation failure
-- `401` — `auth()` returned null (not signed in)
-- `404` — resource not found in active snapshot (e.g., `src/app/api/compare/route.ts:96-101` when no matching tutor groups exist)
-- `500` — caught business-logic exception
-- Cron-protected routes (`src/app/api/internal/sync-wise/route.ts:15-17`) check `Authorization: Bearer ${CRON_SECRET}` header before any other work
+- `401` — `auth()` returned null (not signed in), or an invalid cron secret
+- `404` — resource not found in active snapshot (e.g.
+  `src/app/api/compare/route.ts:161-166` when no matching tutor groups exist)
+- `500` — caught business-logic exception, or `missing-secret` server
+  misconfiguration on a cron route (`src/lib/internal/cron-auth.ts:24`)
 
 ### Error Message Extraction
 
-Universal pattern: `const message = err instanceof Error ? err.message : "<Default message>"` — used in every API route's catch block (e.g., `src/app/api/compare/route.ts:184`, `src/app/api/search/route.ts:58`, `src/app/api/filters/route.ts:35`).
+Universal pattern in every catch block:
+`const message = err instanceof Error ? err.message : "<Default message>"`
+(`src/app/api/compare/route.ts`, `src/app/api/room-capacity/forecast/route.ts:58`,
+and throughout). The default string is route-specific.
+
+### Cron-Protected Routes (constant-time auth)
+
+Internal cron routes no longer compare the bearer token with `===`. They use a
+**constant-time** comparison via `node:crypto`'s `timingSafeEqual`, with an
+O(1) length pre-check to avoid the `RangeError` that `timingSafeEqual` throws on
+length-mismatched buffers (this is the REL-07 hardening):
+
+- Shared helper `src/lib/internal/cron-auth.ts` exports `getCronSecretStatus()`
+  (returns `"valid" | "invalid" | "missing-secret"`) and `rejectInvalidCronSecret()`
+  (returns a `NextResponse` 401/500 or `null` to continue). Used by
+  `sync-wise-activity`, `sync-leave-requests`,
+  `class-assignments/morning`, and `class-assignments/admin-email`.
+- `src/app/api/internal/sync-wise/route.ts` carries an equivalent **inline**
+  `hasValidCronSecret()` implementation (same REL-07 logic) because it also
+  supports session-auth fallback for manual admin triggers.
+
+When refactoring, prefer the shared `cron-auth.ts` helper over inlining.
+
+### Graceful Degradation for Optional Tables
+
+Newer feature routes that depend on optionally-migrated tables detect the
+"relation does not exist" error by message substring and return a typed
+"missing" payload (HTTP 200) instead of a 500, so the UI can render an empty
+state (`isMissingForecastTableError()` →
+`missingForecastBody()` in `src/app/api/room-capacity/forecast/route.ts:6-41`).
 
 ### Fail-Closed Defaults
 
-Non-negotiable safety rule (per AGENTS.md): unresolved data routes the user away from "Available", never silently omits records:
+Non-negotiable safety rule (per AGENTS.md): unresolved data routes the user away
+from "Available", never silently omits records:
 
-- Unknown session status → blocking (`src/lib/normalization/sessions.ts`, `isBlockingStatus()` returns `true` for unknown / undefined)
-- Unresolved identity / modality / qualification → "Needs Review", never "Available" (`src/lib/search/engine.ts:83-93`)
+- Unknown session status → blocking (`src/lib/normalization/sessions.ts`,
+  `isBlockingStatus()`)
+- Unresolved identity / modality / qualification → "Needs Review", never
+  "Available" (`src/lib/search/engine.ts`)
 - Cancelled sessions: explicitly non-blocking
-- Modality contradictions: emit `unknown` modality + `low` confidence, never guess (`src/lib/search/compare.ts` — `resolveSessionModality`, `detectSessionModalityConflict`)
+- Modality contradictions: emit `unknown` modality + low confidence, never guess
+  (`src/lib/search/compare.ts` — `resolveSessionModality`)
 
 ### Wise Client Errors
 
-`src/lib/wise/client.ts:67-91` wraps `fetch` with:
-- Non-OK response → throws `Error` with status, response text, and URL: `Wise API ${response.status}: ${text} (${url})`
+`src/lib/wise/client.ts` wraps `fetch` with:
+- Non-OK response → throws `Error` with status, response text, and URL
 - Exponential backoff retry: `Math.pow(2, attempt) * 1000` → 1 s, 2 s, 4 s
+  (`src/lib/wise/client.ts:108,129`)
 - Configurable `maxRetries` (default 3); errors re-thrown after retries exhausted
-- Concurrency limiter (default 5; production sync uses 15 — `src/lib/wise/client.ts:121`)
+- Queue-based concurrency limiter, `maxConcurrency` default 5
+  (`src/lib/wise/client.ts:48`), raised to 15 for the production sync via config
 
 ### Sync Orchestrator Errors
 
 - Per-teacher errors caught, logged as `data_issues` rows; sync continues
-- Top-level failures mark `sync_runs.status = 'failed'` and preserve previous active snapshot (no promotion)
+- Top-level failures mark `sync_runs.status = 'failed'` and preserve the previous
+  active snapshot (no promotion)
 - Completeness gate: > 50 % unresolved identity groups blocks promotion
 
 ## Validation
 
 ### Zod Pattern
 
-Schemas declared as `const` at module scope, above the handler:
+Schemas are declared as `const` at module scope, above the handler:
 
 ```typescript
 const compareRequestSchema = z.object({
@@ -229,26 +378,28 @@ const compareRequestSchema = z.object({
 });
 ```
 
-(`src/app/api/compare/route.ts:17-24`)
+(`src/app/api/compare/route.ts:24-31`)
 
-### Search Schema
+### Coercion at the Boundary
 
-Uses regex constraints for time format:
+Newer code prefers Zod's `z.coerce.*` helpers over the older `.transform(Number)`
+idiom for parsing strings (query params, sheet/Wise payloads) into typed values:
 
-```typescript
-start: z.string().regex(/^\d{2}:\d{2}$/),
-end: z.string().regex(/^\d{2}:\d{2}$/),
-mode: z.enum(["online", "onsite", "either"]),
-```
-
-(`src/app/api/search/route.ts:15-17`)
+- `z.coerce.number().min(0).max(1)`
+  (`src/app/api/line/scheduler-reviews/false-negatives/route.ts:7`)
+- `z.coerce.boolean()`, `z.coerce.number()`, `z.coerce.date()` for parsing the
+  raw Wise credit-control envelope (`src/lib/credit-control/wise.ts:11,32-46`)
 
 ### Rules
 
-- **Always `.safeParse()`**, never `.parse()` (`.parse()` throws; `.safeParse()` returns a discriminated `success` boolean)
-- On failure return Zod's `.error.flatten()` in the JSON `details` field for client-side highlighting
-- Use `.transform(Number)` for string-to-number coercion at the boundary
-- Prefer narrowing helpers (`.min()`, `.max()`, `.regex()`, `.url()`) over manual checks
+- **Always `.safeParse()`**, never `.parse()` (`.parse()` throws; `.safeParse()`
+  returns a discriminated `success` boolean)
+- On failure return Zod's `.error.flatten()` in the JSON `details` field
+- Prefer narrowing helpers (`.min()`, `.max()`, `.regex()`, `.url()`,
+  `z.coerce.*`) over manual checks
+- Zod also validates **external** data crossing into the system, not just request
+  bodies — the credit-control Wise client parses Wise API responses through Zod
+  schemas before use (`src/lib/credit-control/wise.ts`)
 
 ### Environment Variable Validation
 
@@ -265,44 +416,68 @@ const envSchema = z.object({
   WISE_NAMESPACE: z.string().default("begifted-education"),
   WISE_INSTITUTE_ID: z.string().default("696e1f4d90102225641cc413"),
   CRON_SECRET: z.string().min(1),
+  LINE_CHANNEL_SECRET: z.string().min(1).optional(),
+  LINE_CHANNEL_ACCESS_TOKEN: z.string().min(1).optional(),
+  ENABLE_LINE_SCHEDULER: z.string().optional(),
 });
 
 export const env = getEnv();
 ```
 
-- Validates all 9 vars at module load (`src/lib/env.ts:26`)
-- Defaults provided for `WISE_NAMESPACE` and `WISE_INSTITUTE_ID`
-- On invalid env: `console.error(...)` then `throw new Error("Invalid environment variables")` (`src/lib/env.ts:19-22`)
+- Validates all required vars at module load (`src/lib/env.ts:29`)
+- The 9 original vars are required; defaults are provided for `WISE_NAMESPACE` and
+  `WISE_INSTITUTE_ID`; the three `LINE_*` / `ENABLE_LINE_SCHEDULER` vars are
+  `.optional()` so the app boots without LINE configured
+- On invalid env: `console.error(...)` with `fieldErrors`, then
+  `throw new Error("Invalid environment variables")` (`src/lib/env.ts:22-25`)
 
 ## Logging
 
 ### Approach
 
-- **No structured logger** — bare `console.error` / `console.log`
-- Used in roughly 10 places total across the codebase
+- **No structured logger** — bare `console.error` / `console.log` only
+- Used in ≈10 non-test files: 12 `console.error` calls and 6 `console.log` calls
+  total
 
 ### Patterns
 
-- `console.error` for errors that bubble up to the user or that must surface in Vercel logs:
-  - Env validation failure (`src/lib/env.ts:20`)
-  - Async `.catch(console.error)` for fire-and-forget client fetches (`src/app/(app)/data-health/page.tsx:95`)
-  - Caught errors in components (`src/components/compare/discovery-panel.tsx:59`: `console.error("Failed to load filter options:", err)`)
-  - Seed script failures (`src/lib/db/seed.ts:49`)
-- `console.log` is reserved for the seed script for human-readable progress (`src/lib/db/seed.ts:14, 28, 33, 40, 42, 45`)
-- API route handlers do **not** call `console.*` — they return JSON errors instead
+- `console.error` for errors that must surface in Vercel logs or that are caught
+  at a fire-and-forget boundary:
+  - Env validation failure (`src/lib/env.ts:23`)
+  - Sync orchestrator failures (`src/lib/sync/orchestrator.ts`)
+  - Long-running pipeline steps in `src/lib/credit-control/api.ts`,
+    `src/lib/line/review-service.ts`, `src/lib/ai/scheduler-data.ts`
+  - LINE webhook handler and the class-assignment publish route
+    (`src/app/api/line/webhook/route.ts`,
+    `src/app/api/class-assignments/runs/[runId]/publish/route.ts`)
+  - Async `.catch(console.error)` for client fetches and caught component errors
+    (`src/app/(app)/data-health/page.tsx`,
+    `src/components/compare/discovery-panel.tsx`)
+- `console.log` is reserved for the seed script's human-readable progress
+  (`src/lib/db/seed.ts:14,28,33,40,42,45`)
+- Standard request/response API handlers do **not** `console.*` — they return JSON
+  errors instead
 
 ### What to Avoid
 
-- Do not introduce a logging dependency without explicit approval (Vercel + console.log is sufficient for current scale)
-- Do not log request bodies or env values
+- Do not introduce a logging dependency without explicit approval (Vercel +
+  `console.*` is sufficient at current scale)
+- Do not log request bodies, secrets, or env values (the env error logs only
+  Zod `fieldErrors`, never the values)
 
 ## Comments
 
 ### When to Comment
 
-- **Public exported functions** get JSDoc with a short purpose statement (sometimes including pre-/post-conditions)
-- **Non-obvious arithmetic / business logic** gets inline `//` notes (e.g., `// shift to Monday`, `// 1s, 2s, 4s`, `// fail-closed`)
-- **References to design decisions** are linked by ID: `D-04`, `D-07`, `MOD-01`, `Pitfall 16`, `AGENTS.md:146-149`. The codebase treats these IDs as load-bearing — they tie code to plan documents under `.planning/`
+- **Public exported functions** get JSDoc with a short purpose statement, and for
+  multi-step algorithms an explicit numbered list of steps
+- **Non-obvious arithmetic / business logic** gets inline `//` notes
+  (e.g. `// shift to Monday`, `// 1s, 2s, 4s`, `// 0=Sun`)
+- **Design decisions are referenced by ID inline** — `D-04`, `D-07`, `D-08`,
+  `MOD-01`, `REL-07`, `REL-08`, `PAST-01`, `PAST-05`, `Pitfall 16`,
+  plus `AGENTS.md:line` anchors. These IDs are **load-bearing**: they tie code to
+  the plan/research documents under `.planning/` and appear in dozens of files
+  (most-cited: `MOD-01`, `D-08`, `D-04`). Preserve them when editing nearby code.
 
 ### JSDoc Pattern
 
@@ -315,7 +490,7 @@ export const env = getEnv();
 export function extractNickname(displayName: string): string | null { ... }
 ```
 
-(`src/lib/normalization/identity.ts:38-46`)
+(`src/lib/normalization/identity.ts`)
 
 Multi-step algorithms list the steps explicitly:
 
@@ -331,19 +506,20 @@ Multi-step algorithms list the steps explicitly:
  */
 ```
 
-(`src/lib/normalization/identity.ts:64-71`)
+(`src/lib/normalization/identity.ts`)
 
 ### Section Headers
 
-Two patterns coexist (use the one that already appears in the file):
+Two patterns coexist (use whichever already appears in the file):
 
-- **Em-dash bars** — preferred for `src/lib/**`:
+- **Em-dash bars** — preferred in `src/lib/**`:
   ```
   // ── Section Name ──────────────────────────────────────────────────
   ```
-  Examples: `src/lib/db/schema.ts:14`, `src/lib/search/index.ts:5,79`, `src/lib/search/types.ts:1`
+  (`src/lib/db/schema.ts`, `src/lib/search/index.ts`, `src/lib/search/types.ts`)
 
-- **Long-hyphen blocks** — used in `src/components/**` and `src/components/compare/week-overview.tsx`:
+- **Long-hyphen blocks** — used in `src/components/**` and across the newer lib
+  modules (`src/lib/sales-dashboard/*`, `src/lib/line/*`):
   ```
   // ---------------------------------------------------------------------------
   // Section Name
@@ -352,49 +528,68 @@ Two patterns coexist (use the one that already appears in the file):
 
 ### Inline Comment Style
 
-- Reference plan/research IDs in line: `// D-07 / PAST-01: historical-range trigger.` (`src/app/api/compare/route.ts:115`)
+- Reference plan/research IDs in line: `// D-07 / PAST-01: historical-range trigger.`
+  (`src/app/api/compare/route.ts:180`)
 - Use `→` to note transformations: `// "Chinnakrit (Celeste) Channiti" → "Celeste"`
-- Type-field documentation: `dayOfWeek?: number; // 0=Sunday..6=Saturday` (`src/lib/search/types.ts:7`)
-- Magic numbers explained: `// 1s, 2s, 4s` (`src/lib/wise/client.ts:85`)
+- Type-field documentation: `dayOfWeek?: number; // 0=Sunday..6=Saturday`
+- Magic numbers explained: `// 1s, 2s, 4s` (`src/lib/wise/client.ts`)
+- Long-form deviation rationales live as multi-line `//` blocks directly above the
+  code they justify (the `past_session_blocks` cross-snapshot deviation,
+  `src/lib/db/schema.ts:1328-1346`)
 
 ### TODO Discipline
 
-- Only one `TODO` exists in the codebase (`src/components/compare/modality-display.ts:9`) — and it specifically annotates a future-phase D-03 follow-up
-- Treat `TODO`, `FIXME`, `HACK` as code smells; resolve before merging when possible
+- **Zero** `TODO` / `FIXME` / `HACK` markers exist in non-test source. Treat them
+  as code smells and resolve before merging.
 
 ## Function Design
 
 ### Signature Style
 
-- Destructured object parameters when 3+ args: `executeSearch(index, request, staleThresholdMs?)`
+- Destructured object parameters when 3+ args, or a single config object
+  (`new WiseClient({ userId, apiKey, namespace, maxConcurrency, maxRetries })`)
+- Helper functions that need both a DB handle and options take the handle
+  positionally and options as a trailing object:
+  `getRoomCapacityForecast(getDb(), { scenario })`
 - Optional params expressed with `?` property or default values:
-  - `staleThresholdMs: number = 35 * 60 * 1000` (`src/lib/search/engine.ts:24`)
-  - `attempt = 0` (`src/lib/wise/client.ts:67`)
-- Factory functions take a single config object: `new WiseClient({ userId, apiKey, namespace, maxRetries })`
+  - `staleThresholdMs: number = ...` (search engine)
+  - `attempt = 0` (`src/lib/wise/client.ts:94`)
+  - `options: { allowSessionAuth: boolean }` (sync route `handleSync`)
 
 ### Return Values
 
 - Return typed objects, not raw primitives, for any non-trivial operation
-- Pipeline / normalization functions return `{ result, issues }` tuples to surface problems without exceptions:
-  - `deriveModality(group, sessions) → { modality, issue }` (`src/lib/normalization/modality.ts`)
-  - `normalizeTeacherTags(...)` → `{ qualifications, issues }` (`src/lib/normalization/qualifications.ts`)
-  - `resolveIdentities(...)` → `{ groups, issues }` (`src/lib/normalization/identity.ts`)
-  - `resolveSessionModality(...)` → `{ modality, confidence }` (`src/lib/search/compare.ts:97`)
-- Nullable returns use `| null` (e.g., `extractNickname() → string | null`); avoid `undefined` in domain return types
+- Pipeline / normalization functions return `{ result, issues }`-shaped objects to
+  surface problems without throwing:
+  - `deriveModality(...) → { modality, issue }`
+  - `normalizeTeacherTags(...) → { qualifications, issues }`
+  - `resolveIdentities(...) → { groups, issues }`
+  - `resolveSessionModality(...) → { modality, confidence }`
+  - `resolveTutorGroupsForActiveSnapshot(...) → { groups, resolvedIdByRequestedId, usedStaleIds }`
+    (`src/app/api/compare/route.ts:61-65`)
+- Guard helpers return `T | null` to signal "continue" vs "stop"
+  (`rejectInvalidCronSecret(): NextResponse | null`)
+- Nullable returns use `| null` (e.g. `extractNickname(): string | null`); avoid
+  `undefined` in domain return types
 - Async functions return `Promise<T>` directly; no callback style
 
 ### Function Length
 
 - Most domain functions ≤ 40 lines
-- Larger orchestrators (`buildCompareTutor`, `runFullSync`) factor sub-steps into named helpers in the same file
+- Larger orchestrators (`buildCompareTutor`, `runFullSync`, the compare `POST`
+  handler) factor sub-steps into named helpers in the same file
 
 ## Module Design
 
 ### Exports
 
-- **Named exports** everywhere except page components and route handlers
-- Page components: `export default function SearchPage()` (`src/app/(app)/search/page.tsx:7`)
-- Route handlers use named `GET`/`POST` exports per Next.js App Router contract (`src/app/api/compare/route.ts:53`)
+- **Named exports** everywhere except page components and route handlers — there
+  are **zero** default exports in `src/lib` or `src/components`
+- Page components: `export default async function SearchPage()`
+  (`src/app/(app)/search/page.tsx:7`)
+- Route handlers use named `GET`/`POST`/`PATCH`/`PUT`/`DELETE` exports per the
+  Next.js App Router contract (110 endpoints across 96 `route.ts` files:
+  48 POST, 46 GET, 12 PATCH, 4 DELETE)
 - Types co-exported with implementations or re-exported from a sibling `types.ts`
 - No barrel files — `from "@/lib/wise/client"`, never `from "@/lib/wise"`
 
@@ -402,7 +597,8 @@ Two patterns coexist (use the one that already appears in the file):
 
 Two patterns:
 
-1. **`globalThis`-anchored** — survives Next.js HMR in dev:
+1. **`globalThis`-anchored** — survives Next.js HMR in dev. This is the only
+   place `declare global` appears (`src/lib/db/index.ts`, `src/lib/search/index.ts`):
    ```typescript
    declare global {
      // eslint-disable-next-line no-var
@@ -416,40 +612,56 @@ Two patterns:
      return globalThis.__bgscheduler_db;
    }
    ```
-   (`src/lib/db/index.ts:14-27`, `src/lib/search/index.ts:81-102`)
 
-2. **Lazy ensure-pattern with staleness check** — `ensureIndex(db)` rebuilds when the active snapshot's id changes (`src/lib/search/index.ts`, `ensureIndex`)
+2. **Lazy ensure-pattern with staleness check + in-flight dedupe** — the search
+   index adds a build-promise singleton
+   (`globalThis.__bgscheduler_searchIndexBuildPromise`) so concurrent requests
+   share a single rebuild; `ensureIndex(db)` rebuilds when the active snapshot's
+   id changes (`src/lib/search/index.ts`)
 
-### Type Re-Exports
+### Server-only Helpers Behind Routes
 
-`src/app/api/data-health/route.ts:25-31` re-exports a helper from a sibling module just so Vitest can import without pulling in the full Next.js / next-auth route graph:
-
-```typescript
-export function selectModalityIssues<T extends ...>(issues: T[]) {
-  return _selectModalityIssues(issues);
-}
-```
-
-Use this pattern when a route's helper needs unit testing.
+Logic invoked by route handlers lives in plain `src/lib/{domain}/*.ts` modules
+(`@/lib/data/filters`, `@/lib/room-capacity/data`, `@/lib/sync/run-wise-sync`,
+`@/lib/credit-control/service`) so it is unit-testable in the Vitest `node`
+environment without pulling in the Next.js / next-auth route graph. Server
+component pages call these helpers directly (see Component Patterns).
 
 ## Component Patterns
 
 ### Where Components Live
 
-- shadcn/ui primitives: `src/components/ui/` — wrap `@base-ui/react` with `cva()` variants (`src/components/ui/button.tsx`)
-- Feature components: `src/components/{feature}/` — `compare/`, `search/`, `data-health/`, `layout/`, `skeletons/`
+- shadcn/ui primitives: `src/components/ui/` (13 files) — wrap `@base-ui/react`
+  with `cva()` variants
+- Feature components: `src/components/{feature}/` — `compare/`, `search/`,
+  `class-assignments/`, `credit-control/`, `sales-dashboard/`, `payroll/`,
+  `line-review/`, `leave-requests/`, `room-capacity/`, `scheduler/`,
+  `tutor-profiles/`, `wise-activity/`, `layout/`, `skeletons/`
 
 ### "use client" Directive
 
 - Required on every interactive component or component using browser APIs / hooks
-- Top of file, before imports: `"use client";` (`src/components/compare/week-overview.tsx:1`, `src/components/search/search-form.tsx:1`)
-- Server components have **no** directive — Next.js App Router defaults to server (`src/app/(app)/search/page.tsx`, which is `async` and awaits server-only `getFilterOptions()`)
-- Pages using `useSearchParams` wrap an inner client component in `<Suspense>`:
+  (62 client components under `src/components/`)
+- Top of file, before imports: `"use client";`
+- **Pages are async server components by default.** The dominant page pattern is:
+  the `page.tsx` is an `async` server component that fetches data via server-only
+  lib helpers and passes it as props into a client "shell"/"workspace" wrapped in
+  `<Suspense>` with a skeleton fallback:
   ```typescript
-  <Suspense fallback={<SearchSkeleton />}>
-    <SearchWorkspace ... />
-  </Suspense>
+  export default async function SearchPage() {
+    const filterOptions = await getFilterOptions();
+    const tutorList = await getTutorList();
+    return (
+      <Suspense fallback={<SearchSkeleton />}>
+        <SearchWorkspace filterOptions={filterOptions} tutorList={tutorList} />
+      </Suspense>
+    );
+  }
   ```
+  (`src/app/(app)/search/page.tsx`). Most `(app)` pages — sales-dashboard,
+  credit-control, scheduler, payroll, leave-requests, wise-activity,
+  tutor-profiles, compare — follow this server-fetch → `<Suspense>` → client-shell
+  shape.
 
 ### Variant Components (shadcn / CVA)
 
@@ -457,21 +669,28 @@ Use this pattern when a route's helper needs unit testing.
 - `cn()` utility from `src/lib/utils.ts` merges variants with caller `className`:
   ```typescript
   export function cn(...inputs: ClassValue[]) {
-    return twMerge(clsx(inputs));
+    return twMerge(clsx(inputs))
   }
   ```
-- Both component and variants exported: `export { Button, buttonVariants }` (`src/components/ui/button.tsx:58`)
+- Both component and variants exported: `export { Button, buttonVariants }`
 - shadcn/ui files **omit semicolons** — leave them as is
 
 ### Hooks & State
 
-- React `useState` / `useCallback` / `useRef` only; no Redux, Zustand, Jotai, etc.
-- Recent searches persisted via `localStorage` (`src/components/search/recent-searches.tsx`, capped at 10)
-- Tutor cache lives client-side as `Map<tutorGroupId:weekStart, CompareTutor>` with incremental fetch + `AbortController` for race-condition safety
+- React `useState` / `useCallback` / `useRef` / `useEffect` only; no Redux,
+  Zustand, Jotai, etc.
+- Recent searches persisted via `localStorage` (capped at 10)
+- The compare tutor cache lives client-side as
+  `Map<tutorGroupId:weekStart, CompareTutor>` with incremental fetch +
+  `AbortController` for race-condition safety
+- Intentional non-reactive effects or mount-time `setState` are documented with a
+  targeted `// eslint-disable-next-line react-hooks/exhaustive-deps`
+  (or `set-state-in-effect`) comment rather than silenced project-wide
 
 ### Constants in Components
 
-Defined at module scope above the component (`src/components/compare/week-overview.tsx:23-28`):
+Defined at module scope above the component
+(`src/components/compare/week-overview.tsx`):
 
 ```typescript
 const HOUR_HEIGHT = 48;
@@ -484,27 +703,28 @@ const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 ### Helpers
 
-Pure helpers (no hooks, no JSX) defined in the same file above the component:
-
-```typescript
-function minuteToY(minute: number): number { ... }
-function minuteToLabel(minute: number): string { ... }
-function formatClassType(ct?: string): string { ... }
-```
-
-Visual helpers shared across components live in dedicated modules: `src/components/compare/session-colors.ts` exports `rgba()`, `sessionBgColor()`, `sessionFrameColor()`, `sessionTextColor()`, `sessionBorderStyle()`, `TUTOR_COLORS`.
+Pure helpers (no hooks, no JSX) are defined in the same file above the component
+(`minuteToY`, `minuteToLabel`, `formatClassType`). Visual helpers shared across
+components live in dedicated modules — e.g. `src/components/compare/session-colors.ts`
+exports `rgba()`, `sessionBgColor()`, `sessionFrameColor()`, `sessionTextColor()`,
+`sessionBorderStyle()`, and `TUTOR_COLORS`. Per-feature color/z-index tokens are
+centralized in `src/lib/ui/` (`z-index.ts`, `view-transitions.ts`) and
+`src/lib/scheduler/admin-colors.ts`.
 
 ### Styling
 
-- Tailwind CSS 4 utility classes inline on JSX
-- Semantic color tokens via CSS custom properties: `--available`, `--blocked`, `--conflict`, `--free-slot`
+- Tailwind CSS 4 utility classes inline on JSX (shadcn style `base-nova`,
+  base color `neutral`, CSS variables enabled — `components.json`)
+- Semantic color tokens via CSS custom properties: `--available`, `--blocked`,
+  `--conflict`, `--free-slot`
 - OKLCH color space for the palette
-- Tutor lane colors centralized: `TUTOR_COLORS = ["#3b82f6", "#e67e22", "#7c3aed"]` (sky blue, amber, purple)
-- Conditional classes via template literals + `cn()`:
+- Tutor lane colors centralized: `TUTOR_COLORS = ["#3b82f6", "#e67e22", "#7c3aed"]`
+  (sky blue, amber, purple)
+- Conditional classes via `cn()` + template literals:
   ```typescript
   className={cn("base-class", isActive && "text-primary", className)}
   ```
 
 ---
 
-*Convention analysis: 2026-04-29*
+_Verified against HEAD + uncommitted WIP on 2026-05-31._
