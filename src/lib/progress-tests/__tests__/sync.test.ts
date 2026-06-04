@@ -345,6 +345,12 @@ describe("runProgressTestSync", () => {
       ["class-1|student-due", dueLedger],
       ["class-2|student-appr", approachingLedger],
     ]));
+    // Tracked cycles (not first observation) so the count-based state machine
+    // reaches "due" at position 8 and "approaching" at position 6.
+    loadCycleStatesMock.mockResolvedValue(new Map([
+      ["class-1|student-due", makeCycleStateRecord({ enrollmentKey: "class-1|student-due", wiseStudentId: "student-due", cycleIndex: 0 })],
+      ["class-2|student-appr", makeCycleStateRecord({ enrollmentKey: "class-2|student-appr", wiseClassId: "class-2", wiseStudentId: "student-appr", cycleIndex: 0 })],
+    ]));
 
     const result = await runProgressTestSync({
       db: finalizingDb(),
@@ -370,6 +376,10 @@ describe("runProgressTestSync", () => {
       }),
     );
     loadLedgerMock.mockResolvedValue(new Map([["class-1|student-1", approachingLedger]]));
+    // Tracked cycle (not first observation) so reaching position 6 fires the heads-up.
+    loadCycleStatesMock.mockResolvedValue(new Map([
+      ["class-1|student-1", makeCycleStateRecord({ cycleIndex: 0, teacherNotifiedForCycle: null })],
+    ]));
     generateSummaryMock.mockResolvedValue({
       status: "ok",
       summary: { headline: "h", strengths: [], focusAreas: [], recommendation: "r" },
