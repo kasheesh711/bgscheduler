@@ -71,14 +71,15 @@ export interface ProgressTestAiSummary {
 
 /**
  * Result of generating an AI summary. Fail-closed on content: sparse/empty
- * feedback returns `sparse` (no fabrication); disabled/no-key returns `skipped`;
- * any error returns `failed`. Only `ok` carries a usable summary.
+ * feedback returns `sparse` (no fabrication, no API call); disabled/no-key
+ * returns `skipped`; any error returns `failed`. Only `ok` carries a usable
+ * summary, the model that produced it, and how many notes were fed in.
  */
 export type ProgressTestAiSummaryResult =
-  | { kind: "ok"; summary: ProgressTestAiSummary }
-  | { kind: "sparse" }
-  | { kind: "skipped" }
-  | { kind: "failed"; message: string };
+  | { status: "ok"; summary: ProgressTestAiSummary; model: string; sessionsUsed: number }
+  | { status: "sparse"; reason: string; sessionsUsed: number }
+  | { status: "skipped"; reason: string }
+  | { status: "failed"; error: string };
 
 /** Minimal authenticated user shape used by the page guard and actions. */
 export interface AppSessionUser {
