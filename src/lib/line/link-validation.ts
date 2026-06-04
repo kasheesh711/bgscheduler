@@ -1,7 +1,7 @@
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { listCurrentLineStudents, type LineContactStudentLinkStatus } from "./student-links";
+import { listCurrentLineStudentsByKeys, type LineContactStudentLinkStatus } from "./student-links";
 
 type LinkRow = typeof schema.lineContactStudentLinks.$inferSelect;
 type ContactRow = typeof schema.lineContacts.$inferSelect;
@@ -64,6 +64,13 @@ export interface LineLinkValidationReviewerSummaryDto {
   rejected: number;
   remaining: number;
   completionRate: number;
+}
+
+export interface LineLinkValidationPaginationDto {
+  page: number;
+  pageSize: number;
+  total: number;
+  pageCount: number;
 }
 
 export interface LineLinkValidationSummaryDto {
@@ -153,6 +160,60 @@ function percent(completed: number, total: number): number {
   return Math.round((completed / total) * 100);
 }
 
+export function normalizeLineLinkValidationPagination(input: {
+  page?: number;
+  pageSize?: number;
+}): { page: number; pageSize: number; offset: number } {
+  const page = Number.isInteger(input.page) ? Math.max(1, input.page as number) : 1;
+  const pageSize = Number.isInteger(input.pageSize)
+    ? Math.min(100, Math.max(1, input.pageSize as number))
+    : 100;
+  return {
+    page,
+    pageSize,
+    offset: (page - 1) * pageSize,
+  };
+}
+
+export function buildLineLinkValidationPagination(
+  total: number,
+  paging: { page: number; pageSize: number },
+): LineLinkValidationPaginationDto {
+  return {
+    page: paging.page,
+    pageSize: paging.pageSize,
+    total,
+    pageCount: Math.ceil(total / paging.pageSize),
+  };
+}
+
+export function lineLinkValidationTotalsFromCounts(row: {
+  assigned?: string | number | null;
+  unassigned?: string | number | null;
+  verified?: string | number | null;
+  rejected?: string | number | null;
+}): LineLinkValidationSummaryDto["totals"] {
+  const assigned = Number(row.assigned ?? 0);
+  const unassigned = Number(row.unassigned ?? 0);
+  const verified = Number(row.verified ?? 0);
+  const rejected = Number(row.rejected ?? 0);
+  const remaining = assigned + unassigned;
+  const total = remaining + verified + rejected;
+  return {
+    assigned,
+    unassigned,
+    verified,
+    rejected,
+    remaining,
+    total,
+    completionRate: percent(verified + rejected, total),
+  };
+}
+
+export function uniqueLineLinkValidationStudentKeys(rows: Array<{ link: { studentKey: string } }>): string[] {
+  return [...new Set(rows.map((row) => row.link.studentKey).filter(Boolean))];
+}
+
 export function lineValidationLeadEmails(): string[] {
   const configured = process.env.LINE_VALIDATION_LEAD_EMAILS
     ?.split(",")
@@ -180,11 +241,11 @@ function asString(value: unknown): string | null {
 }
 
 function lineOaResolverSourceCondition() {
-  return sql`${schema.lineContactStudentLinks.evidence}->>'source' = 'line_oa_resolver'`;
+  return eq(schema.lineContactStudentLinks.sourceKind, "line_oa_resolver");
 }
 
 function lineOaResolverRunCondition(runId: string) {
-  return sql`${schema.lineContactStudentLinks.evidence}->>'runId' = ${runId}`;
+  return eq(schema.lineContactStudentLinks.sourceRunId, runId);
 }
 
 function normalizeReviewerEmails(emails: string[]): string[] {
@@ -237,7 +298,7 @@ function linkTaskToDto(
     chatTitle: asString(evidence.chatTitle),
     adminNoteRaw: asString(evidence.adminNoteRaw),
     relationshipRole: asString(evidence.relationshipRole),
-    sourceRunId: asString(evidence.runId),
+    sourceRunId: row.sourceRunId ?? asString(evidence.runId),
     sourceRowId: asString(evidence.rowId),
     matchedCode: asString(evidence.matchedCode),
     matchedField: asString(evidence.matchedField),
@@ -255,6 +316,21 @@ function linkTaskToDto(
     currentStudentHasFutureSessions: currentStudent?.hasFutureSessions ?? null,
     currentStudentHasLivePackage: currentStudent?.hasLivePackage ?? null,
   };
+}
+
+async function linkRowsToDtos(
+  db: Database,
+  rows: Array<{ link: LinkRow; contact: ContactRow }>,
+): Promise<LineLinkValidationTaskDto[]> {
+  const studentsByKey = new Map(
+    (await listCurrentLineStudentsByKeys(db, uniqueLineLinkValidationStudentKeys(rows)))
+      .map((student) => [student.studentKey, student]),
+  );
+  return rows.map((row) => linkTaskToDto(
+    row.link,
+    row.contact,
+    studentsByKey.get(row.link.studentKey) ?? null,
+  ));
 }
 
 export function planRoundRobinValidationAssignments(
@@ -294,20 +370,23 @@ export async function listLineLinkValidationReviewers(
     db
       .select({
         email: schema.lineContactStudentLinks.validationAssignedToEmail,
+        count: sql<string>`count(*)::text`,
       })
       .from(schema.lineContactStudentLinks)
       .where(and(
         lineOaResolverSourceCondition(),
         eq(schema.lineContactStudentLinks.status, "suggested"),
+        sql`${schema.lineContactStudentLinks.validationAssignedToEmail} IS NOT NULL`,
         ...(runId ? [lineOaResolverRunCondition(runId)] : []),
-      )),
+      ))
+      .groupBy(schema.lineContactStudentLinks.validationAssignedToEmail),
   ]);
 
   const counts = new Map<string, number>();
   for (const row of assignmentRows) {
     const email = row.email?.trim().toLowerCase();
     if (!email) continue;
-    counts.set(email, (counts.get(email) ?? 0) + 1);
+    counts.set(email, Number(row.count));
   }
 
   return adminRows.map((row) => ({
@@ -323,17 +402,27 @@ export async function listLineLinkValidationTasks(
     scope: LineLinkValidationScope;
     runId?: string | null;
     actor: LineLinkValidationActor;
+    page?: number;
+    pageSize?: number;
   },
 ): Promise<{
   tasks: LineLinkValidationTaskDto[];
   reviewers: LineLinkValidationReviewerDto[];
+  pagination: LineLinkValidationPaginationDto;
 }> {
   const actor = actorFromInput(input.actor);
-  const conditions = [lineOaResolverSourceCondition()];
+  const paging = normalizeLineLinkValidationPagination(input);
+  const conditions: SQL[] = [lineOaResolverSourceCondition()];
   if (input.runId) conditions.push(lineOaResolverRunCondition(input.runId));
 
   if (input.scope === "my") {
-    if (!actor.email) return { tasks: [], reviewers: await listLineLinkValidationReviewers(db, input.runId) };
+    if (!actor.email) {
+      return {
+        tasks: [],
+        reviewers: await listLineLinkValidationReviewers(db, input.runId),
+        pagination: buildLineLinkValidationPagination(0, paging),
+      };
+    }
     conditions.push(eq(schema.lineContactStudentLinks.status, "suggested"));
     conditions.push(eq(schema.lineContactStudentLinks.validationAssignedToEmail, actor.email));
   } else if (input.scope === "unassigned") {
@@ -347,30 +436,36 @@ export async function listLineLinkValidationTasks(
     conditions.push(eq(schema.lineContactStudentLinks.status, "suggested"));
   }
 
-  const rows = await db
-    .select({
-      link: schema.lineContactStudentLinks,
-      contact: schema.lineContacts,
-    })
-    .from(schema.lineContactStudentLinks)
-    .innerJoin(schema.lineContacts, eq(schema.lineContactStudentLinks.contactId, schema.lineContacts.id))
-    .where(and(...conditions))
-    .orderBy(
-      asc(schema.lineContactStudentLinks.parentName),
-      asc(schema.lineContactStudentLinks.studentName),
-      asc(schema.lineContactStudentLinks.studentKey),
-      asc(schema.lineContacts.displayName),
-    );
+  const where = and(...conditions);
+  const [countRows, rows, reviewers] = await Promise.all([
+    db
+      .select({ count: sql<string>`count(*)::text` })
+      .from(schema.lineContactStudentLinks)
+      .where(where),
+    db
+      .select({
+        link: schema.lineContactStudentLinks,
+        contact: schema.lineContacts,
+      })
+      .from(schema.lineContactStudentLinks)
+      .innerJoin(schema.lineContacts, eq(schema.lineContactStudentLinks.contactId, schema.lineContacts.id))
+      .where(where)
+      .orderBy(
+        asc(schema.lineContactStudentLinks.parentName),
+        asc(schema.lineContactStudentLinks.studentName),
+        asc(schema.lineContactStudentLinks.studentKey),
+        asc(schema.lineContacts.displayName),
+      )
+      .limit(paging.pageSize)
+      .offset(paging.offset),
+    listLineLinkValidationReviewers(db, input.runId),
+  ]);
+  const total = Number(countRows[0]?.count ?? "0");
 
-  const studentsByKey = new Map((await listCurrentLineStudents(db)).map((student) => [student.studentKey, student]));
-  const reviewers = await listLineLinkValidationReviewers(db, input.runId);
   return {
-    tasks: rows.map((row) => linkTaskToDto(
-      row.link,
-      row.contact,
-      studentsByKey.get(row.link.studentKey) ?? null,
-    )),
+    tasks: await linkRowsToDtos(db, rows),
     reviewers,
+    pagination: buildLineLinkValidationPagination(total, paging),
   };
 }
 
@@ -386,10 +481,57 @@ export async function getLineLinkValidationSummary(
     return emptySummary(input.runId, false);
   }
 
-  const conditions = [lineOaResolverSourceCondition()];
+  const conditions: SQL[] = [lineOaResolverSourceCondition()];
   if (input.runId) conditions.push(lineOaResolverRunCondition(input.runId));
+  const where = and(...conditions);
+  const reviewerEmail = sql<string>`coalesce(${schema.lineContactStudentLinks.reviewedByEmail}, ${schema.lineContactStudentLinks.validationAssignedToEmail})`;
+  const reviewerName = sql<string>`coalesce(${schema.lineContactStudentLinks.reviewedByName}, ${schema.lineContactStudentLinks.validationAssignedToName})`;
 
-  const [rows, adminRows, currentStudents] = await Promise.all([
+  const [totalRows, reviewerRows, adminRows, recentRows] = await Promise.all([
+    db
+      .select({
+        assigned: sql<string>`count(*) filter (
+          where ${schema.lineContactStudentLinks.status} = 'suggested'
+            and ${schema.lineContactStudentLinks.validationAssignedToEmail} is not null
+        )::text`,
+        unassigned: sql<string>`count(*) filter (
+          where ${schema.lineContactStudentLinks.status} = 'suggested'
+            and ${schema.lineContactStudentLinks.validationAssignedToEmail} is null
+        )::text`,
+        verified: sql<string>`count(*) filter (
+          where ${schema.lineContactStudentLinks.status} = 'verified'
+        )::text`,
+        rejected: sql<string>`count(*) filter (
+          where ${schema.lineContactStudentLinks.status} = 'rejected'
+        )::text`,
+      })
+      .from(schema.lineContactStudentLinks)
+      .where(where),
+    db
+      .select({
+        email: reviewerEmail,
+        name: reviewerName,
+        assigned: sql<string>`count(*) filter (
+          where ${schema.lineContactStudentLinks.status} = 'suggested'
+            and ${schema.lineContactStudentLinks.validationAssignedToEmail} is not null
+        )::text`,
+        verified: sql<string>`count(*) filter (
+          where ${schema.lineContactStudentLinks.status} = 'verified'
+        )::text`,
+        rejected: sql<string>`count(*) filter (
+          where ${schema.lineContactStudentLinks.status} = 'rejected'
+        )::text`,
+      })
+      .from(schema.lineContactStudentLinks)
+      .where(and(
+        ...conditions,
+        sql`${reviewerEmail} IS NOT NULL`,
+      ))
+      .groupBy(reviewerEmail, reviewerName),
+    db
+      .select()
+      .from(schema.adminUsers)
+      .orderBy(asc(schema.adminUsers.email)),
     db
       .select({
         link: schema.lineContactStudentLinks,
@@ -397,30 +539,17 @@ export async function getLineLinkValidationSummary(
       })
       .from(schema.lineContactStudentLinks)
       .innerJoin(schema.lineContacts, eq(schema.lineContactStudentLinks.contactId, schema.lineContacts.id))
-      .where(and(...conditions)),
-    db
-      .select()
-      .from(schema.adminUsers)
-      .orderBy(asc(schema.adminUsers.email)),
-    listCurrentLineStudents(db),
+      .where(and(
+        ...conditions,
+        inArray(schema.lineContactStudentLinks.status, ["verified", "rejected"]),
+      ))
+      .orderBy(
+        desc(sql`coalesce(${schema.lineContactStudentLinks.reviewedAt}, ${schema.lineContactStudentLinks.updatedAt})`),
+      )
+      .limit(10),
   ]);
 
-  const studentsByKey = new Map(currentStudents.map((student) => [student.studentKey, student]));
-  const tasks = rows.map((row) => linkTaskToDto(
-    row.link,
-    row.contact,
-    studentsByKey.get(row.link.studentKey) ?? null,
-  ));
-
-  const totals = {
-    assigned: 0,
-    unassigned: 0,
-    verified: 0,
-    rejected: 0,
-    remaining: 0,
-    total: 0,
-    completionRate: 0,
-  };
+  const totals = lineLinkValidationTotalsFromCounts(totalRows[0] ?? {});
 
   const reviewerMap = new Map<string, LineLinkValidationReviewerSummaryDto>();
   function ensureReviewer(email: string, name?: string | null): LineLinkValidationReviewerSummaryDto {
@@ -447,37 +576,14 @@ export async function getLineLinkValidationSummary(
     ensureReviewer(admin.email, admin.name);
   }
 
-  for (const task of tasks) {
-    if (task.status === "suggested") {
-      if (task.validationAssignedToEmail) {
-        totals.assigned += 1;
-        const reviewer = ensureReviewer(task.validationAssignedToEmail, task.validationAssignedToName);
-        reviewer.assigned += 1;
-        reviewer.remaining += 1;
-      } else {
-        totals.unassigned += 1;
-      }
-      continue;
-    }
-
-    if (task.status === "verified") {
-      totals.verified += 1;
-      const email = task.reviewedByEmail || task.validationAssignedToEmail;
-      if (email) {
-        ensureReviewer(email, task.reviewedByName || task.validationAssignedToName).verified += 1;
-      }
-    } else if (task.status === "rejected") {
-      totals.rejected += 1;
-      const email = task.reviewedByEmail || task.validationAssignedToEmail;
-      if (email) {
-        ensureReviewer(email, task.reviewedByName || task.validationAssignedToName).rejected += 1;
-      }
-    }
+  for (const row of reviewerRows) {
+    if (!row.email) continue;
+    const reviewer = ensureReviewer(row.email, row.name);
+    reviewer.assigned += Number(row.assigned);
+    reviewer.remaining += Number(row.assigned);
+    reviewer.verified += Number(row.verified);
+    reviewer.rejected += Number(row.rejected);
   }
-
-  totals.remaining = totals.assigned + totals.unassigned;
-  totals.total = totals.remaining + totals.verified + totals.rejected;
-  totals.completionRate = percent(totals.verified + totals.rejected, totals.total);
 
   const reviewers = [...reviewerMap.values()]
     .map((reviewer) => {
@@ -492,20 +598,12 @@ export async function getLineLinkValidationSummary(
       || a.email.localeCompare(b.email)
     ));
 
-  const recentActivity = tasks
-    .filter((task) => task.status === "verified" || task.status === "rejected")
-    .sort((a, b) => (
-      new Date(b.reviewedAt ?? b.updatedAt).getTime()
-      - new Date(a.reviewedAt ?? a.updatedAt).getTime()
-    ))
-    .slice(0, 10);
-
   return {
     canViewTracker: true,
     runId: input.runId ?? null,
     totals,
     reviewers,
-    recentActivity,
+    recentActivity: await linkRowsToDtos(db, recentRows),
   };
 }
 
@@ -520,6 +618,7 @@ export async function assignLineLinkValidationTasks(
   assigned: number;
   reviewers: LineLinkValidationReviewerDto[];
   tasks: LineLinkValidationTaskDto[];
+  pagination: LineLinkValidationPaginationDto;
 }> {
   const reviewerEmails = normalizeReviewerEmails(input.reviewerEmails);
   if (reviewerEmails.length === 0) {
@@ -632,6 +731,8 @@ export async function patchLineLinkValidationTaskStatus(
     .limit(1);
   if (!contact) return null;
 
-  const studentsByKey = new Map((await listCurrentLineStudents(db)).map((student) => [student.studentKey, student]));
+  const studentsByKey = new Map(
+    (await listCurrentLineStudentsByKeys(db, [row.studentKey])).map((student) => [student.studentKey, student]),
+  );
   return linkTaskToDto(row, contact, studentsByKey.get(row.studentKey) ?? null);
 }

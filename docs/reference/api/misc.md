@@ -163,38 +163,42 @@ Distinct subjects/curriculums/levels from the active snapshot, for populating th
 
 ### `GET /api/data-health`
 
-Sync status, active-snapshot stats, and normalization issue counts for the data-health dashboard. Source: `src/app/api/data-health/route.ts`.
+Operations command payload for the data-health dashboard. Source: `src/app/api/data-health/route.ts`.
 
-- **Auth:** `auth()` → `401` (`route.ts:34-37`).
+- **Auth:** `auth()` → `401`.
 - **Request:** no parameters.
-- **Behavior:** reads the latest successful and failed `syncRuns`, the active `snapshot` and its `snapshotStats`, and the active snapshot's `dataIssues`; bucketizes issues into alias / modality / tag lists. Modality issues are counted via `selectModalityIssues`, which spans BOTH legacy group-level `"modality"` issues and session-level `"conflict_model"` issues (`route.ts:25-31, 91-97`, helper in `./modality-counter.ts`).
-- **Response** (`200`) — `route.ts:116-144`:
+- **Behavior:** delegates to `getDataHealthDashboardPayload`, which aggregates `cron_invocations`, the feature run ledgers, the active Wise snapshot, snapshot stats, and unresolved data issues. It preserves stale-banner fields (`staleAgeMs`, `lastSuccessfulSync`, etc.) at the top level.
+- **Response** (`200`):
   ```json
   {
-    "lastSuccessfulSync": "<ISO|null>",
-    "lastFailedSync": "<ISO|null>",
-    "lastFailureError": "<string|null>",
-    "staleAgeMs": 0,
-    "staleMinutes": 0,
-    "activeSnapshotId": "<uuid|null>",
-    "stats": {
-      "totalWiseTeachers": 0,
-      "totalIdentityGroups": 0,
-      "resolvedGroups": 0,
-      "unresolvedGroups": 0,
-      "totalDataIssues": 0
+    "overall": { "status": "healthy", "headline": "", "detail": "" },
+    "cronJobs": [],
+    "dataDomains": [],
+    "wiseSnapshot": {},
+    "issueSummary": {},
+    "issueDetails": {
+      "unresolvedAliases": [],
+      "unresolvedModality": [],
+      "unmappedTags": []
     },
-    "issuesByType": {},
-    "unresolvedAliases": [{ "entityName": "", "message": "" }],
-    "unresolvedModality": [{ "entityName": "", "message": "", "issueType": "" }],
-    "unmappedTags": [{ "entityName": "", "message": "" }],
-    "recentSyncs": [
-      { "id": "", "status": "", "startedAt": "", "finishedAt": "", "teacherCount": 0, "errorSummary": "" }
-    ]
+    "recentRuns": [],
+    "lastSuccessfulSync": "<ISO|null>",
+    "staleAgeMs": 0
   }
   ```
-  `stats` is `null` when there is no active snapshot; `staleAgeMs`/`staleMinutes` are `null` when there has been no successful sync.
-- **Errors:** `500 { "error": <message | "Data health failed"> }` (`route.ts:145-148`).
+- **Errors:** `500 { "error": <message | "Data health failed"> }`.
+
+### `POST /api/data-health/jobs/[jobKey]/run`
+
+Session-gated manual trigger for registered data-health jobs. Source: `src/app/api/data-health/jobs/[jobKey]/run/route.ts`.
+
+- **Auth:** `auth()` with an email → `401`.
+- **Request body:** `{ "confirmed": true }` is required for dangerous jobs (`classroom_morning`, `classroom_admin_email`).
+- **Behavior:** validates `jobKey` against the typed cron registry, then calls `runDataHealthJob`. The job runner records a `cron_invocations` row with `triggerSource = "admin"` and calls the same underlying sync/automation helpers as the cron routes.
+- **Responses:**
+  - `200`/`202`/`500` — forwarded from the underlying job runner.
+  - `404 { "error": "Unknown job" }`
+  - `409 { "error": "Confirmation required" }` for dangerous jobs without confirmation.
 
 ---
 

@@ -29,7 +29,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       clientSecret: process.env.AUTH_GOOGLE_SECRET,
       authorization: {
         params: {
-          scope: "openid email profile https://www.googleapis.com/auth/spreadsheets.readonly",
+          scope: "openid email profile https://www.googleapis.com/auth/spreadsheets",
           access_type: "offline",
         },
       },

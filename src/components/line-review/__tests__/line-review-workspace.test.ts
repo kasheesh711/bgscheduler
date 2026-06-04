@@ -8,6 +8,11 @@ import {
   MAPPING_VALIDATION_ADMIN_DEFAULT_SCOPE,
   MAPPING_VALIDATION_LEAD_DEFAULT_SCOPE,
 } from "@/components/line-review/mapping-validation-workspace";
+import {
+  optimisticValidationPageState,
+  validationPageCacheKey,
+  validationRangeLabel,
+} from "@/components/line-review/link-validation-panel";
 import { getResolutionStepStates } from "@/components/line-review/resolution-board";
 
 const baseReview = {
@@ -103,6 +108,51 @@ describe("LINE review workspace navigation", () => {
   it("defaults lead and admin validation queues to the intended scopes", () => {
     expect(MAPPING_VALIDATION_LEAD_DEFAULT_SCOPE).toBe("all");
     expect(MAPPING_VALIDATION_ADMIN_DEFAULT_SCOPE).toBe("my");
+  });
+});
+
+describe("Mapping validation pagination helpers", () => {
+  const task = {
+    id: "link-1",
+    status: "suggested",
+    validationAssignedToEmail: "admin@example.com",
+  } as never;
+
+  it("keys cached pages by run, scope, page, and page size", () => {
+    expect(validationPageCacheKey("run-1", "all", 2, 100)).toBe("run-1:all:2:100");
+    expect(validationPageCacheKey(null, "my", 1, 100)).toBe("all-runs:my:1:100");
+  });
+
+  it("formats paged row ranges", () => {
+    expect(validationRangeLabel({ page: 1, pageSize: 100, total: 678, pageCount: 7 })).toBe("1-100 of 678");
+    expect(validationRangeLabel({ page: 7, pageSize: 100, total: 678, pageCount: 7 })).toBe("601-678 of 678");
+    expect(validationRangeLabel({ page: 1, pageSize: 100, total: 0, pageCount: 0 })).toBe("0 shown");
+  });
+
+  it("optimistically removes suggested rows from open scopes", () => {
+    const next = optimisticValidationPageState({
+      tasks: [task],
+      pagination: { page: 1, pageSize: 100, total: 678, pageCount: 7 },
+      taskId: "link-1",
+      scope: "all",
+    });
+
+    expect(next.task).toBe(task);
+    expect(next.tasks).toEqual([]);
+    expect(next.pagination.total).toBe(677);
+    expect(next.pagination.pageCount).toBe(7);
+  });
+
+  it("leaves reviewed scopes unchanged for rollback-safe behavior", () => {
+    const next = optimisticValidationPageState({
+      tasks: [task],
+      pagination: { page: 1, pageSize: 100, total: 17, pageCount: 1 },
+      taskId: "link-1",
+      scope: "verified",
+    });
+
+    expect(next.tasks).toEqual([task]);
+    expect(next.pagination.total).toBe(17);
   });
 });
 

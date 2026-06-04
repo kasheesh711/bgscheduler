@@ -9,7 +9,12 @@ vi.mock("@/lib/line/link-validation", () => ({
       super(message);
     }
   },
-  assignLineLinkValidationTasks: vi.fn(async () => ({ assigned: 2, tasks: [], reviewers: [] })),
+  assignLineLinkValidationTasks: vi.fn(async () => ({
+    assigned: 2,
+    tasks: [],
+    reviewers: [],
+    pagination: { page: 1, pageSize: 100, total: 0, pageCount: 0 },
+  })),
 }));
 
 import { auth } from "@/lib/auth";
@@ -30,7 +35,12 @@ describe("LINE link validation assignment route", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     authMock.mockResolvedValue({ user: { email: "owner@example.com", name: "Owner" } });
-    vi.mocked(assignLineLinkValidationTasks).mockResolvedValue({ assigned: 2, tasks: [], reviewers: [] });
+    vi.mocked(assignLineLinkValidationTasks).mockResolvedValue({
+      assigned: 2,
+      tasks: [],
+      reviewers: [],
+      pagination: { page: 1, pageSize: 100, total: 0, pageCount: 0 },
+    });
   });
 
   it("requires auth", async () => {

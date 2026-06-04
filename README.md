@@ -4,7 +4,7 @@ Internal admin platform for BeGifted Education. It runs against the Wise schedul
 platform as the only production source of truth: a background sync pipeline pulls
 everything out of Wise on staggered crons, normalizes it into versioned Postgres
 snapshots, and serves all reads from a process-global in-memory index. On top of that
-core sit fourteen operational features — tutor search/compare, an AI scheduling
+core sit fifteen operational features — tutor search/compare, an AI scheduling
 assistant, a LINE inbox, payroll, sales, credit control, room planning, and more.
 
 ## 📚 Documentation
@@ -18,8 +18,8 @@ layer; the handbook owns the depth.
 |---|---|
 | [`docs/handbook/`](docs/handbook/architecture.md) | System architecture, data flow, conventions, glossary, and the Next.js-16 gotchas |
 | [`docs/features/`](docs/features/) | One doc per feature — purpose, rules, and flows (the *why* and *what*) |
-| [`docs/reference/api/`](docs/reference/api/index.md) | Every HTTP endpoint: method, path, auth, purpose (110 handlers) |
-| [`docs/reference/database/`](docs/reference/database/index.md) | Every table and ER diagrams (78 tables) |
+| [`docs/reference/api/`](docs/reference/api/index.md) | Every HTTP endpoint: method, path, auth, purpose (117 handlers) |
+| [`docs/reference/database/`](docs/reference/database/index.md) | Every table and ER diagrams (82 tables) |
 | [`docs/reference/crons.md`](docs/reference/crons.md) · [`docs/reference/env.md`](docs/reference/env.md) | Cron registry and environment-variable reference |
 | [`docs/operations/`](docs/operations/runbook.md) | Runbook, auth/access model, observability |
 
@@ -30,7 +30,7 @@ layer; the handbook owns the depth.
 
 - **Production**: [bgscheduler.vercel.app](https://bgscheduler.vercel.app) · **Repo**: [kasheesh711/bgscheduler](https://github.com/kasheesh711/bgscheduler)
 - **Stack**: Next.js 16 (App Router) · TypeScript · Tailwind v4 · shadcn/ui · Auth.js (Google) · Drizzle ORM · Neon Postgres (ap-southeast-1) · Vercel Pro
-- **Surface**: 14 admin features across 14 routed pages, 110 API handlers, 78 Postgres tables, 7 Vercel crons
+- **Surface**: 15 admin features across 15 routed pages, 117 API handlers, 82 Postgres tables, 8 Vercel crons
 - **Tests**: Vitest unit suite (`npm test`) plus a Testcontainers-backed integration suite (`npm run test:integration`)
 
 ## Features
@@ -53,11 +53,12 @@ maturity recorded in the corresponding feature doc.
 | **Credit Control** — project prepaid-credit run-out, prioritized follow-up queue, outreach log | `/credit-control` | stable | [credit-control](docs/features/credit-control.md) |
 | **Payroll** — reconcile tutor pay vs. Wise sessions + invoices, integrity issues, adjustments | `/payroll` | stable | [payroll](docs/features/payroll.md) |
 | **Wise Activity Audit** — read-only Wise event log + package-sales reconciliation workbench | `/wise-activity` | stable | [wise-activity-audit](docs/features/wise-activity-audit.md) |
+| **Student Promotions** — audited July 1, 2026 Wise grade/course promotion workflow | `/student-promotions` | stable, pending first production run | [student-promotions](docs/features/student-promotions.md) |
 | **Data Health** — sync status, snapshot stats, unresolved normalization issues | `/data-health` | stable | [data-health](docs/features/data-health.md) |
 
 ### Pages
 
-Fourteen routed feature pages live under the `(app)` route group (auth-gated). `/`
+Fifteen routed feature pages live under the `(app)` route group (auth-gated). `/`
 redirects to `/search`, and `/login` is the only unauthenticated page.
 
 | Route | Feature |
@@ -75,6 +76,7 @@ redirects to `/search`, and `/login` is the only unauthenticated page.
 | `/credit-control` | Credit Control |
 | `/payroll` | Payroll |
 | `/wise-activity` | Wise Audit |
+| `/student-promotions` | Student Promotions |
 | `/data-health` | Data Health |
 
 Navigation is grouped in [`src/components/layout/app-nav.tsx`](src/components/layout/app-nav.tsx):

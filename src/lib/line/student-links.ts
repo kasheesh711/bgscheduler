@@ -1,4 +1,4 @@
-import { and, eq, gte, isNull } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
@@ -183,6 +183,43 @@ export async function listCurrentLineStudents(db: Database): Promise<LineStudent
   const snapshotId = await activeCreditControlSnapshotId(db);
   if (!snapshotId) return [];
 
+  return listCurrentLineStudentsForSnapshot(db, snapshotId);
+}
+
+export async function listCurrentLineStudentsByKeys(
+  db: Database,
+  studentKeys: string[],
+): Promise<LineStudentDirectoryRow[]> {
+  const keys = [...new Set(studentKeys.filter(Boolean))];
+  if (keys.length === 0) return [];
+
+  const snapshotId = await activeCreditControlSnapshotId(db);
+  if (!snapshotId) return [];
+
+  return listCurrentLineStudentsForSnapshot(db, snapshotId, keys);
+}
+
+async function listCurrentLineStudentsForSnapshot(
+  db: Database,
+  snapshotId: string,
+  studentKeys?: string[],
+): Promise<LineStudentDirectoryRow[]> {
+  const studentConditions = [eq(schema.creditControlStudents.snapshotId, snapshotId)];
+  const packageConditions = [
+    eq(schema.creditControlPackages.snapshotId, snapshotId),
+    isNull(schema.creditControlPackages.excludedReason),
+  ];
+  const sessionConditions = [
+    eq(schema.creditControlSessions.snapshotId, snapshotId),
+    eq(schema.creditControlSessions.sessionKind, "future"),
+    gte(schema.creditControlSessions.scheduledStartTime, now()),
+  ];
+  if (studentKeys && studentKeys.length > 0) {
+    studentConditions.push(inArray(schema.creditControlStudents.studentKey, studentKeys));
+    packageConditions.push(inArray(schema.creditControlPackages.studentKey, studentKeys));
+    sessionConditions.push(inArray(schema.creditControlSessions.studentKey, studentKeys));
+  }
+
   const [studentRows, livePackageRows, futureSessionRows] = await Promise.all([
     db
       .select({
@@ -193,22 +230,15 @@ export async function listCurrentLineStudents(db: Database): Promise<LineStudent
         activated: schema.creditControlStudents.activated,
       })
       .from(schema.creditControlStudents)
-      .where(eq(schema.creditControlStudents.snapshotId, snapshotId)),
+      .where(and(...studentConditions)),
     db
       .select({ studentKey: schema.creditControlPackages.studentKey })
       .from(schema.creditControlPackages)
-      .where(and(
-        eq(schema.creditControlPackages.snapshotId, snapshotId),
-        isNull(schema.creditControlPackages.excludedReason),
-      )),
+      .where(and(...packageConditions)),
     db
       .select({ studentKey: schema.creditControlSessions.studentKey })
       .from(schema.creditControlSessions)
-      .where(and(
-        eq(schema.creditControlSessions.snapshotId, snapshotId),
-        eq(schema.creditControlSessions.sessionKind, "future"),
-        gte(schema.creditControlSessions.scheduledStartTime, now()),
-      )),
+      .where(and(...sessionConditions)),
   ]);
 
   const livePackageKeys = new Set(livePackageRows.map((row) => row.studentKey));

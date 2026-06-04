@@ -180,10 +180,12 @@ List validation tasks for a scope ([`link-validation/route.ts:20-44`](../../../s
 **Query params:**
 - `scope` (default `"my"`) — enum `my | all | unassigned | verified | rejected` ([:10](../../../src/app/api/line/contacts/link-validation/route.ts)); invalid → **400 `{ "error": "Invalid scope" }`**.
 - `runId` (optional) — must be a UUID ([:11](../../../src/app/api/line/contacts/link-validation/route.ts)); invalid → **400 `{ "error": "Invalid runId" }`**.
+- `page` (default `1`) — positive integer; invalid → **400 `{ "error": "Invalid page" }`**.
+- `pageSize` (default `100`, max `100`) — positive integer; invalid → **400 `{ "error": "Invalid pageSize" }`**.
 
 Scope semantics are applied in `listLineLinkValidationTasks` ([`link-validation.ts:320-345`](../../../src/lib/line/link-validation.ts)): `my` filters to suggested links assigned to the caller's email; `unassigned` to suggested+unassigned; `verified`/`rejected` by status.
 
-**Response:** **200** `{ tasks, reviewers }` ([`link-validation.ts:327-330`](../../../src/lib/line/link-validation.ts)).
+**Response:** **200** `{ tasks, reviewers, pagination }`, where `pagination` includes `page`, `pageSize`, `total`, and `pageCount`.
 
 ### `GET /api/line/contacts/link-validation/summary`
 

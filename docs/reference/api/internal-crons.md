@@ -7,7 +7,7 @@ For the **meaning** of each pipeline (what a snapshot is, why syncs fail-closed,
 ## Conventions shared by these endpoints
 
 - **`CRON_SECRET` bearer auth.** The caller must send `Authorization: Bearer $CRON_SECRET`. Comparison is constant-time via `node:crypto.timingSafeEqual`, guarded by a length pre-check to avoid the `RangeError` that `timingSafeEqual` throws on length-mismatched buffers (`src/app/api/internal/sync-wise/route.ts:10`-`28`; shared helper at `src/lib/internal/cron-auth.ts:6`-`17`).
-- **No request body or query params.** None of these six routes read the request body or query string, and none define a Zod schema at the route boundary. The trigger type (`cron` vs manual) is inferred from the HTTP method / auth path, not from input.
+- **No query params.** The cron `GET` routes do not read query params. Most routes read no body; manual/replay `POST` variants either read no body or use a route-specific confirmation body documented below.
 - **Single-flight guard.** Each pipeline prevents overlapping runs. The mechanism differs per family (DB row-state check + 20-minute stale recovery for Wise/credit-control; a partial unique index for leave-requests) — see each section.
 - **Missing secret is a server error.** If `process.env.CRON_SECRET` is unset, the route returns `500 {"error":"Server misconfigured"}` rather than `401`, so a misconfiguration is not silently treated as an auth failure (`src/lib/internal/cron-auth.ts:22`-`24`; `src/app/api/internal/sync-wise/route.ts:49`-`50`).
 
@@ -18,6 +18,7 @@ The Vercel cron schedules for these paths (from `vercel.json`):
 | `/api/internal/sync-wise` | `*/30 * * * *` (`vercel.json:4`-`5`) |
 | `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:12`-`13`) |
 | `/api/internal/sync-leave-requests` | `15,45 * * * *` (`vercel.json:20`-`21`) |
+| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` |
 
 ---
 
@@ -227,5 +228,50 @@ Response wiring: success at `src/app/api/internal/sync-leave-requests/route.ts:1
   "notificationCount": 0
 }
 ```
+
+---
+
+## Student promotions July 1 apply
+
+Applies the newest verified Student Promotions run for target date `2026-07-01`.
+Unlike the recurring sync jobs, this cron is a one-shot business event: the
+Vercel schedule is annual syntax, but the route hard-blocks itself unless the
+Bangkok date is exactly `2026-07-01`.
+
+### `GET /api/internal/student-promotions/july-1`
+
+Vercel cron entry point.
+
+- **Auth:** `CRON_SECRET` bearer only.
+- **Request:** none.
+- **Function config:** `maxDuration = 800`.
+- **One-shot guard:** returns `409` unless `todayBangkok() === "2026-07-01"`.
+
+### `POST /api/internal/student-promotions/july-1`
+
+Cron-secret replay alias. It delegates to the same handler as `GET`, including
+the same bearer-secret and one-shot date checks.
+
+### Behavior
+
+Both methods call `applyVerifiedStudentPromotionRun({ trigger: "cron" })`. The
+service refuses to apply before `2026-07-01 00:05 Asia/Bangkok`, loads the newest
+verified run, and returns immediately if the run is already `applied` or
+`applied_with_errors`.
+
+For each pending grade action it re-reads the student's Wise registration field
+before writing. For each pending course action it re-reads the Wise class subject
+and roster before writing. Per-action Wise drift or write errors are persisted on
+the action row; they do not abort the whole run.
+
+### Responses
+
+| Status | When | Body |
+|--------|------|------|
+| `200` | Apply completed or run was already terminal | `{"detail": StudentPromotionRunDetail}` |
+| `401` | Secret present but invalid | `{"error":"Unauthorized"}` |
+| `409` | Called outside July 1, 2026 Bangkok time | `{"error":"Student promotion cron is only allowed on July 1, 2026 Bangkok time"}` |
+| `500` | `CRON_SECRET` env var not set | `{"error":"Server misconfigured"}` |
+| `400`/`500` | Apply service rejected or failed | `{"error":"<message>"}` |
 
 _Verified against HEAD + uncommitted WIP on 2026-05-31._

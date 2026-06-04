@@ -4,105 +4,63 @@
 
 ## Purpose
 
-Data Health is the admin-facing observability dashboard for the Wise snapshot sync pipeline. It answers one question for non-technical admin staff: **is the tutor data the rest of the app is searching against fresh and trustworthy right now?**
+Data Health is now the admin-facing operations command center for the site. It answers two questions:
 
-It surfaces, in one screen:
+- Are the scheduled production jobs actually firing?
+- Is the data used by search, scheduling, sales, credit control, leave requests, classrooms, and room capacity fresh enough to trust?
 
-- When the last sync succeeded, when one last failed (and why), and whether the active snapshot is stale.
-- Which snapshot is currently active and its headline counts (Wise teachers, identity groups, resolved vs. unresolved, total issues).
-- A breakdown of unresolved normalization problems by category, with drill-down tables for the three that need a human to fix the source data in Wise: unresolved tutor aliases, unresolved/contradictory modality, and unmapped qualification tags.
-- A rolling history of the last 10 sync runs.
+The page still owns the Wise snapshot health view used by the stale-data banner, but it no longer stops there. It now combines cron invocation audit rows, existing feature run ledgers, active snapshot stats, normalization issue drill-downs, and manual run controls.
 
-It also provides a single operational lever — a **Sync now** button — that lets an admin trigger an on-demand sync without shell access or the `CRON_SECRET`.
+## Data Model
 
-The feature is almost entirely a **read layer**: the `/api/data-health` endpoint performs only `SELECT`s and never writes. The only mutation reachable from the page is the manual sync trigger, which is delegated to a separate endpoint.
+Data Health reads the existing feature run ledgers and adds one generic audit table:
 
-The primary user is an admin who sees the "tutor data may be outdated" banner elsewhere in the app and clicks through here to investigate (`src/components/layout/stale-snapshot-banner.tsx:101-107`).
+| Table | Role |
+|---|---|
+| `cron_invocations` | One valid cron/admin invocation of a registered operational job. Written by the route wrapper after auth succeeds; stores job key, path, schedule, trigger source, actor, response status, outcome, duration, error summary, and linked run metadata. |
+| `sync_runs` | Wise snapshot sync ledger and stale-snapshot source of truth. |
+| `wise_activity_sync_runs` | Wise Activity cron/manual sync evidence. |
+| `sales_dashboard_import_runs`, `sales_dashboard_projection_import_runs` | Sales source and projection refresh evidence. |
+| `credit_control_sync_runs` | Credit-control snapshot evidence. |
+| `leave_request_sync_runs` | Leave-request sheet sync evidence. |
+| `classroom_assignment_runs`, `classroom_admin_email_runs` | Morning automation and admin email evidence. |
+| `room_utilization_sessions` | Manual-only room-utilization sync evidence. |
+| `snapshots`, `snapshot_stats`, `data_issues` | Active Wise snapshot, roll-up stats, and unresolved normalization issues. |
 
-## Conceptual data model
+`cron_invocations` is best-effort: audit write failures are logged but do not block production cron execution.
 
-Data Health reads four tables, all part of the snapshot/sync subsystem. It writes none of them.
-
-| Table | Role in this feature |
-|-------|----------------------|
-| `snapshots` | Identifies the single `active` snapshot. Only its `id` is read; the first 8 chars are shown as the "Active Snapshot" card. |
-| `sync_runs` | The audit log of every sync attempt. Read three ways: last `success`, last `failed`, and the 10 most recent runs by start time. |
-| `snapshot_stats` | The pre-aggregated counts (teacher totals, identity-group resolution, total issues, and a JSON `issuesByType` map) for the active snapshot. |
-| `data_issues` | All unresolved normalization issues for the active snapshot. Filtered by `type` into the alias / modality / tag drill-down tables. |
-
-These tables are produced and promoted by the sync orchestrator (the writer side); Data Health is strictly a consumer. For exact columns, types, indexes, and constraints, see the snapshot/scheduler ERD reference: [docs/reference/database/erd-core.md](../reference/database/erd-core.md).
-
-## API surface
+## API Surface
 
 | Endpoint | Purpose |
-|----------|---------|
-| `GET /api/data-health` | Returns the full health payload — sync timestamps, stale age, active snapshot id, headline stats, `issuesByType`, the three filtered issue lists, and recent sync history. Auth-gated (401 if no session). |
-| `POST /api/admin/sync-wise` | Not part of this feature's own code, but is the target of the page's "Sync now" button. Triggers an on-demand Wise sync via the shared `runWiseSyncRequest` runner. |
-
-Full request/response contracts belong in the API reference: [docs/reference/api/misc.md](../reference/api/misc.md). The manual sync endpoint (`POST /api/admin/sync-wise`) is documented there alongside the sync pipeline.
+|---|---|
+| `GET /api/data-health` | Returns the v2 dashboard payload: `overall`, `cronJobs`, `dataDomains`, `wiseSnapshot`, `issueSummary`, `issueDetails`, `recentRuns`, and compatibility fields (`staleAgeMs`, `lastSuccessfulSync`, etc.) consumed by the stale banner. |
+| `POST /api/data-health/jobs/[jobKey]/run` | Session-gated manual trigger for registered jobs. Dangerous jobs require `{ "confirmed": true }`. |
+| `POST /api/admin/sync-wise` | Legacy/admin Wise sync trigger; now also records a `cron_invocations` audit row. |
 
 ## UI
 
-- **Page**: `src/app/(app)/data-health/page.tsx` — a single `"use client"` component (`DataHealthPage`) rendered at `/data-health`. Reachable from the persistent top nav (`src/components/layout/app-nav.tsx:32`) and from the stale-data banner link.
-- **Layout** (top to bottom):
-  - **Sync status row** (3 cards): Last Successful Sync (with a destructive "Stale (Nm ago)" badge and the **Sync now** button), Active Snapshot (8-char id), Last Failed Sync (with truncated error).
-  - **Stats row** (5 cards): Wise Teachers, Identity Groups, Resolved, Unresolved, Total Issues — rendered only when `stats` is present.
-  - **Issues by Type**: outline badges, one per `issuesByType` key.
-  - **Drill-down tables**, each rendered only when non-empty: Unresolved Aliases, Modality issues (with per-row `group`/`session` tags), Unmapped Tags (capped at 50 rows).
-  - **Recent Sync History**: 10-row table with a status badge (success/failed/other), Bangkok-formatted timestamps, teacher count, and error.
-- **Components**: shadcn/ui `Card`, `Badge`, `Button`, `Table`. A bespoke `DataHealthSkeleton` shimmer matches the card layout during initial load. Timestamps are formatted with `formatBangkokDateTime` (`src/lib/bangkok-time.ts`); staleness is decided by `isApiSnapshotStale` (`src/lib/ops/stale.ts`).
+- **Page:** `src/app/(app)/data-health/page.tsx` is a Server Component that auth-checks and loads the initial dashboard payload.
+- **Interactive dashboard:** `src/components/data-health/data-health-dashboard.tsx` handles refresh, manual run buttons, confirmations, and UI state.
+- **Primary sections:** overall health strip, next expected cron timeline, manual controls, cron control plane, data freshness, Wise snapshot fidelity, normalization issue tables, and unified run history.
+- **Status values:** `healthy`, `late`, `failing`, `running`, `manual-only`, `unknown`.
 
-## Data flow
+## Cron Health Rules
 
-On mount the page fetches `/api/data-health`; the route reads the four tables and returns a denormalized payload. The "Sync now" button takes a different path — it POSTs to the separate admin sync endpoint and then re-polls `/api/data-health` to refresh the view.
-
-```mermaid
-flowchart TD
-  A[DataHealthPage mount] -->|GET /api/data-health| B[route.ts GET]
-  B --> C{auth session?}
-  C -->|no| C401[401 Unauthorized]
-  C -->|yes| D[getDb]
-  D --> E[sync_runs: last success / last failure]
-  D --> F[snapshots: active]
-  F --> G[snapshot_stats for active snapshot]
-  F --> H[data_issues for active snapshot]
-  D --> I[sync_runs: 10 most recent]
-  E & G & H & I --> J[JSON payload]
-  J --> K[Render cards + tables]
-
-  K -.Sync now button.-> L[POST /api/admin/sync-wise]
-  L --> M[runWiseSyncRequest]
-  M -.on settle.-> A2[re-poll GET /api/data-health]
-```
-
-Notable flow details:
-
-- The active-snapshot lookup gates the stats and issue queries. If no snapshot is `active`, the route skips those queries entirely and returns `stats: null` with empty issue lists (`src/app/api/data-health/route.ts:71-102`).
-- `staleAgeMs` is computed in the route as `Date.now() - lastSuccess.finishedAt`, and `staleMinutes` is derived from it (`src/app/api/data-health/route.ts:105-121`). The page independently re-derives staleness for the badge using the same threshold helper.
-- The same `GET /api/data-health` endpoint is also consumed headlessly by the global stale banner to decide whether to show itself (`src/components/layout/stale-snapshot-banner.tsx:58-66`).
-
-## Business rules & edge cases
-
-- **Auth-first, fail-closed.** The route returns 401 before touching the DB if there is no session (`src/app/api/data-health/route.ts:34-37`). All errors are caught and returned as `{ error }` with status 500 (`src/app/api/data-health/route.ts:145-148`).
-- **Stale threshold is 90 minutes for this dashboard.** `isApiSnapshotStale` returns true when `staleAgeMs > 90 * 60 * 1000` (`src/lib/ops/stale.ts:2,11-13`). This is deliberately wider than the 30-minute cron cadence to tolerate cron jitter and sync-recovery headroom. Note the **separate, larger 2-hour threshold** (`shouldShowStaleBanner`, `src/lib/ops/stale.ts:3,15-17`) governs the app-wide warning banner — so the page can show "Stale" while the global banner stays hidden.
-- **Modality issues merge two issue types into one number.** `selectModalityIssues` filters `data_issues` to BOTH `type === "modality"` (legacy group-level, from `deriveModality`) AND `type === "conflict_model"` (session-level signal contradictions, from `detectSessionModalityConflict`), projecting each row with an `issueType` field so the UI can tag it `group` vs `session` (`src/app/api/data-health/modality-counter.ts:19-31`; rendered at `src/app/(app)/data-health/page.tsx:361-375`). The page carries an explicit note that this counter is **expected to rise** post-deploy and that the rise is "surface-of-reality, not a regression" (`src/app/(app)/data-health/page.tsx:348-350`).
-- **Two homes for the same helper, on purpose.** The canonical `selectModalityIssues` lives in `modality-counter.ts`; `route.ts` re-exports a thin wrapper. The split exists so Vitest can import the helper without pulling the Next.js route module graph (which transitively imports `next-auth`, whose `next/server` subpath the bare Node resolver can't resolve) (`src/app/api/data-health/route.ts:8-31`, `src/app/api/data-health/modality-counter.ts:1-18`).
-- **`issuesByType` comes straight from the snapshot, not recomputed.** The breakdown badges read the pre-aggregated `snapshotStat.issuesByType` JSON; the per-row tables are computed live from `data_issues`. The two can therefore differ in framing (the aggregate may carry types the page has no dedicated table for, e.g. `completeness`), which is by design.
-- **Aliases/modality/tags are the only categories given drill-down tables.** Other `data_issues` types appear only in the `issuesByType` badge row. Unmapped tags are capped at 50 rows in the table (`src/app/(app)/data-health/page.tsx:400`); aliases and modality are uncapped.
-- **`entityName` is coerced to `""`.** Null entity names from `data_issues` become empty strings in all three lists (`src/app/api/data-health/route.ts:89,101`, `src/app/api/data-health/modality-counter.ts:27`).
-- **"Sync now" is resilient to early-terminated requests.** A full Wise sync can outlast the browser's HTTP request. The handler treats a non-OK/thrown response as possibly-still-succeeded: it re-polls health and, if `lastSuccessfulSync` advanced to within 30s of when the click started, reports success anyway (`src/app/(app)/data-health/page.tsx:129-133,158-176`). It also distinguishes the single-flight "already running" skip response (`src/app/(app)/data-health/page.tsx:152-157`).
-- **Sync trigger is a different endpoint.** The button POSTs `/api/admin/sync-wise` — a route module that exports `maxDuration = 800` (`src/app/api/admin/sync-wise/route.ts:5`) and delegates the work to `runWiseSyncRequest` (`src/lib/sync/run-wise-sync.ts:142`, which itself sets no `maxDuration`) — not `/api/data-health` (`src/app/(app)/data-health/page.tsx:136`, `src/app/api/admin/sync-wise/route.ts:7-15`). Data Health itself never writes.
+- 30-minute sync jobs are late when the latest observed evidence is older than cadence + 15 minutes.
+- Daily classroom jobs are evaluated against Bangkok business windows:
+  - morning automation: 06:45 Bangkok
+  - admin email retry ladder: 07:00-07:30 Bangkok
+- Running jobs are marked failing after configured `maxDuration` plus a one-minute buffer.
+- Until new `cron_invocations` rows exist for a job, health can be inferred from durable run tables; the UI labels this as inferred proof.
+- Room utilization remains `manual-only` because it is not listed in `vercel.json`.
 
 ## Tests
 
-- `src/app/api/data-health/__tests__/route.test.ts` — exercises the `GET` handler against a mocked Drizzle chain. Covers: 401 when unauthenticated; the full 200 response shape (sync timestamps, stats, `issuesByType`, all three filtered issue lists, recent syncs) including that a `modality` issue and a `conflict_model` issue both land in `unresolvedModality` with the right `issueType`; and a 500 JSON error when the DB throws.
-- `src/app/api/data-health/__tests__/modality-counter.test.ts` — unit tests for `selectModalityIssues`: includes both `modality` and `conflict_model` types under one counter, excludes unrelated types, handles a session-only scenario (zero `modality` rows), preserves `entityName`/`message`/`issueType`, and coerces null `entityName` to `""`.
+- `src/lib/data-health/__tests__/cron-registry.test.ts` checks registry parity with `vercel.json`.
+- `src/lib/data-health/__tests__/status.test.ts` covers interval lateness, Bangkok daily windows, stuck runs, and recovery after later success.
+- `src/lib/data-health/__tests__/migration.test.ts` checks the cron audit migration shape.
+- `src/app/api/data-health/__tests__/route.test.ts` covers the v2 payload route and legacy stale-banner fields.
+- `src/app/api/data-health/jobs/[jobKey]/run/__tests__/route.test.ts` covers auth, unknown jobs, and dangerous-job confirmation.
+- `src/components/data-health/__tests__/data-health-dashboard.test.tsx` smoke-tests the rendered command-center sections.
 
-No automated test covers the page component itself (skeleton, stale badge rendering, or the "Sync now" early-termination logic).
-
-## Open questions
-
-- **`issuesByType` vs. drill-down divergence.** The badge row is sourced from the snapshot's pre-aggregated `issuesByType`, while the tables are filtered live from `data_issues`. Is it intended that a category counted in the badges (e.g. `completeness`) has no corresponding detail table, and could the aggregate and live counts ever disagree if a snapshot's stats were computed at a different moment than its issues were written?
-- **No page-level tests for the resilient "Sync now" path.** The early-termination success heuristic (30s window around click start) is non-obvious and untested. Is leaving it uncovered acceptable, or should it have a component/integration test?
-
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Updated for the Ops Command dashboard refactor on 2026-06-01._

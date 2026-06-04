@@ -918,6 +918,8 @@ async function upsertResolverSuggestedLink(
         status: nextStatus,
         confidence: nextStatus === "verified" ? existing.confidence : 0.95,
         evidence: input.evidence,
+        sourceKind: "line_oa_resolver",
+        sourceRunId: input.row.runId,
         updatedAt: now(),
       })
       .where(eq(schema.lineContactStudentLinks.id, existing.id))
@@ -936,6 +938,8 @@ async function upsertResolverSuggestedLink(
       status: "suggested",
       confidence: 0.95,
       evidence: input.evidence,
+      sourceKind: "line_oa_resolver",
+      sourceRunId: input.row.runId,
     })
     .returning();
   return created;

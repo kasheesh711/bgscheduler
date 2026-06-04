@@ -1,6 +1,6 @@
 # Database Reference — Master Table Index
 
-Canonical lookup of **every table** in the BGScheduler Postgres database. All 78 tables
+Canonical lookup of **every table** in the BGScheduler Postgres database. All 82 tables
 are defined in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) via Drizzle ORM.
 This page is the index: it lists each table's SQL name, its Drizzle export name, the
 domain it belongs to, its **grain** (what one row represents), the feature that owns it,
@@ -23,8 +23,9 @@ which the ETL pipeline rewrites wholesale and then atomically promotes via
 `snapshots.active`, `schema.ts:167`).
 
 A few tables are deliberately **snapshot-independent** (they survive snapshot rotation):
-`admin_users`, `google_oauth_tokens`, `tutor_aliases`, `wise_activity_events`,
-`wise_activity_sync_runs`, `room_utilization_sessions`, and `past_session_blocks`
+`admin_users`, `google_oauth_tokens`, `tutor_aliases`, `cron_invocations`, `wise_activity_events`,
+`wise_activity_sync_runs`, `student_promotion_runs`, `student_promotion_grade_actions`,
+`student_promotion_course_actions`, `room_utilization_sessions`, and `past_session_blocks`
 (`schema.ts:1347-1386`, the only cross-snapshot data table — see its note in
 [erd-core.md](./erd-core.md)).
 
@@ -32,17 +33,18 @@ A few tables are deliberately **snapshot-independent** (they survive snapshot ro
 
 | Domain | Tables | ER diagram |
 |---|---|---|
-| Core (snapshots, sync, audit, auth, tutors, normalization) | 19 | [erd-core.md](./erd-core.md) |
+| Core (snapshots, sync, audit, auth, tutors, normalization) | 20 | [erd-core.md](./erd-core.md) |
 | Sales Dashboard | 7 | [erd-sales-dashboard.md](./erd-sales-dashboard.md) |
 | Credit Control | 10 | [erd-credit-control.md](./erd-credit-control.md) |
 | Classrooms (assignment + email) | 9 | [erd-classrooms.md](./erd-classrooms.md) |
 | Payroll | 8 | [erd-payroll.md](./erd-payroll.md) |
 | Tutor Profiles | 2 | [erd-tutor-profiles.md](./erd-tutor-profiles.md) |
 | Leave Requests | 5 | [erd-leave-requests.md](./erd-leave-requests.md) |
+| Student Promotions | 3 | [erd-student-promotions.md](./erd-student-promotions.md) |
 | AI & Proposals | 6 | [erd-ai-and-proposals.md](./erd-ai-and-proposals.md) |
 | LINE | 8 | [erd-line.md](./erd-line.md) |
 | Room Capacity | 4 | [erd-room-capacity.md](./erd-room-capacity.md) |
-| **Total** | **78** | |
+| **Total** | **82** | |
 
 ## Master table list
 
@@ -57,6 +59,7 @@ Line ranges: `schema.ts:165-269`, `611-740`, `831-854`, `1347-1386`, `1744-1784`
 |---|---|---|---|---|---|
 | `snapshots` | `snapshots` | core | versioned ETL snapshot; at most one `active=true` (`schema.ts:165-169`) | [Tutor search](../../features/tutor-search.md) (ETL) | [core](./erd-core.md) |
 | `sync_runs` | `syncRuns` | core | one Wise snapshot-sync run; partial-unique guard allows a single `running` row (`schema.ts:171-186`) | [Data health](../../features/data-health.md) | [core](./erd-core.md) |
+| `cron_invocations` | `cronInvocations` | core | one valid cron/admin invocation of a registered operational job (`schema.ts`) | [Data health](../../features/data-health.md) | [core](./erd-core.md) |
 | `wise_activity_events` | `wiseActivityEvents` | core | one Wise audit event, deduped on `event_id` (`schema.ts:190-223`) | [Wise activity audit](../../features/wise-activity-audit.md) | [core](./erd-core.md) |
 | `wise_activity_sync_runs` | `wiseActivitySyncRuns` | core | one Wise-activity audit sync run; single `running` guard (`schema.ts:225-243`) | [Wise activity audit](../../features/wise-activity-audit.md) | [core](./erd-core.md) |
 | `admin_users` | `adminUsers` | core | one allowlisted admin email (unique on `email`) (`schema.ts:247-254`) | Auth ([middleware](../../../src/middleware.ts)) | [core](./erd-core.md) |
@@ -105,6 +108,16 @@ Line ranges: `schema.ts:447-610`.
 | `credit_control_follow_up_log` | `creditControlFollowUpLog` | credit-control | one follow-up action event (PK = `event_id`) (`schema.ts:576-589`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
 | `credit_control_inactive_students` | `creditControlInactiveStudents` | credit-control | one student manually marked inactive (PK = `student_key`) (`schema.ts:591-597`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
 | `credit_control_admin_ownership` | `creditControlAdminOwnership` | credit-control | one admin-owner assignment per student (PK = `student_key`) (`schema.ts:599-607`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
+
+### Student Promotions
+
+Line ranges: `schema.ts:649-733`.
+
+| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
+|---|---|---|---|---|---|
+| `student_promotion_runs` | `studentPromotionRuns` | student-promotions | one audited dry-run/apply ledger for a target date (`schema.ts:649-679`) | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
+| `student_promotion_grade_actions` | `studentPromotionGradeActions` | student-promotions | one potential Wise registration grade update per accepted student within a run (`schema.ts:682-704`) | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
+| `student_promotion_course_actions` | `studentPromotionCourseActions` | student-promotions | one potential Wise class-subject update per class within a run (`schema.ts:706-733`) | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
 
 ### Classrooms — assignment + email
 

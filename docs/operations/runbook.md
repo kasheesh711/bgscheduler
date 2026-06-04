@@ -313,7 +313,7 @@ users on the next query, without a redeploy.
 
 ## 7. The crons and how to trigger each manually
 
-`vercel.json:2` registers seven crons. All are `GET /api/internal/*` and all
+`vercel.json:2` registers eight crons. All scheduled entries are `GET /api/internal/*` and all
 require `Authorization: Bearer $CRON_SECRET`. The schedules are staggered so the
 30-minute-ish jobs do not all fire on the same minute.
 
@@ -326,6 +326,7 @@ require `Authorization: Bearer $CRON_SECRET`. The schedules are staggered so the
 | `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:13`) | GET + POST(session) | 300s (`…/sync-credit-control/route.ts:6`) | — |
 | `/api/internal/class-assignments/morning` | `45 23 * * *` (`vercel.json:25`) | GET only | 800s (`…/morning/route.ts:5`) | daily room-assignment automation |
 | `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` (`vercel.json:29`) | GET only | 300s (`…/admin-email/route.ts:5`) | retried 4x; 500 if email send failed |
+| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` | GET + POST | 800s (`…/student-promotions/july-1/route.ts:6`) | one-shot July 1, 2026 Bangkok guard; applies newest verified run |
 
 > The morning/admin-email schedules (`23:45 UTC` and the four `00:xx UTC` slots)
 > correspond to the README's "6:45 Bangkok" automation and "7:00–7:30 Bangkok"

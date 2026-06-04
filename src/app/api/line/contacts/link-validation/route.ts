@@ -9,6 +9,8 @@ import {
 
 const scopeSchema = z.enum(["my", "all", "unassigned", "verified", "rejected"]);
 const runIdSchema = z.string().uuid().optional();
+const pageSchema = z.coerce.number().int().min(1).default(1);
+const pageSizeSchema = z.coerce.number().int().min(1).max(100).default(100);
 
 function actorFromSession(session: { user?: { email?: string | null; name?: string | null } } | null) {
   return {
@@ -35,10 +37,22 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid runId" }, { status: 400 });
   }
 
+  const page = pageSchema.safeParse(request.nextUrl.searchParams.get("page") ?? undefined);
+  if (!page.success) {
+    return NextResponse.json({ error: "Invalid page" }, { status: 400 });
+  }
+
+  const pageSize = pageSizeSchema.safeParse(request.nextUrl.searchParams.get("pageSize") ?? undefined);
+  if (!pageSize.success) {
+    return NextResponse.json({ error: "Invalid pageSize" }, { status: 400 });
+  }
+
   const result = await listLineLinkValidationTasks(getDb(), {
     scope: scope.data as LineLinkValidationScope,
     runId: runId.data,
     actor: actorFromSession(session),
+    page: page.data,
+    pageSize: pageSize.data,
   });
   return NextResponse.json(result);
 }

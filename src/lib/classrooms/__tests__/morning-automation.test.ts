@@ -14,6 +14,7 @@ vi.mock("@/lib/wise/fetchers", () => ({
 
 vi.mock("../data", () => ({
   CLASSROOM_ASSIGNMENT_FRESHNESS_MS: 15 * 60 * 1000,
+  getFreshClassroomSnapshotForAssignment: vi.fn(),
   publishClassroomAssignmentRun: vi.fn(),
   runIncrementalClassroomAssignment: vi.fn(),
   selectAutomationPublishTargetRowIds: vi.fn(),
@@ -27,6 +28,7 @@ import { runWiseSyncRequest } from "@/lib/sync/run-wise-sync";
 import { createWiseClient } from "@/lib/wise/client";
 import { fetchAllFutureSessions } from "@/lib/wise/fetchers";
 import {
+  getFreshClassroomSnapshotForAssignment,
   publishClassroomAssignmentRun,
   runIncrementalClassroomAssignment,
   selectAutomationPublishTargetRowIds,
@@ -125,6 +127,15 @@ function assignmentDetail(date: string) {
 function mockMorningDependencies() {
   vi.mocked(createWiseClient).mockReturnValue({ wise: true } as never);
   vi.mocked(fetchAllFutureSessions).mockResolvedValue([] as never);
+  vi.mocked(getFreshClassroomSnapshotForAssignment).mockResolvedValue({
+    snapshotId: "snapshot-1",
+    snapshotMeta: {
+      snapshotId: "snapshot-1",
+      latestSyncFinishedAt: "2026-05-25T23:43:00.000Z",
+      staleAgeMs: 0,
+      fresh: true,
+    },
+  } as never);
   vi.mocked(runIncrementalClassroomAssignment).mockImplementation(async (_db, input) =>
     assignmentDetail(input.date) as never
   );
@@ -172,6 +183,30 @@ describe("runClassroomMorningAutomation", () => {
       summary: { attempted: 2, success: 2, failed: 0, blocked: 0 },
     });
     expect(result.dates.slice(1).every((dateResult) => dateResult.scheduleEmail === undefined)).toBe(true);
+  });
+
+  it("uses the same captured fresh snapshot for the whole automation batch", async () => {
+    const db = makeDbSelect([
+      [syncRow({ id: "fresh-sync", finishedAt: new Date() })],
+    ]);
+
+    const result = await runClassroomMorningAutomation(db as never, {
+      startDate: "2026-05-26",
+      automationBatchId: "batch-1",
+      liveSessions: [],
+    });
+
+    expect(result.sync.snapshotId).toBe("snapshot-1");
+    expect(runIncrementalClassroomAssignment).toHaveBeenCalledTimes(7);
+    for (const call of vi.mocked(runIncrementalClassroomAssignment).mock.calls) {
+      expect(call[1]).toMatchObject({
+        snapshotId: "snapshot-1",
+        trustedSnapshotMeta: {
+          snapshotId: "snapshot-1",
+          fresh: true,
+        },
+      });
+    }
   });
 
   it("captures tutor schedule email errors without failing assignment automation", async () => {

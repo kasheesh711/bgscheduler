@@ -2,7 +2,7 @@
 
 The canonical lookup of every HTTP endpoint in BGScheduler. This page lists **method + path + group + auth + one-line purpose** only. For full request/response schemas, query parameters, and error shapes, follow the link on each group heading to the per-group detail page.
 
-All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **110**.
+All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **117**.
 
 ## How to read this index
 
@@ -91,11 +91,12 @@ Student credit/payment tracking: payload load, per-student and bulk actions, act
 
 ## [Data Health](./misc.md) — `/api/data-health`
 
-Sync status and normalization-issue dashboard.
+Operations health, cron-firing, data freshness, and normalization-issue dashboard.
 
 | Method | Path | Group | Auth | Brief purpose |
 |---|---|---|---|---|
-| GET | `/api/data-health` | data-health | admin | Sync status, snapshot stats, and issue counts by type |
+| GET | `/api/data-health` | data-health | admin | Ops command payload: cron health, data freshness, snapshot stats, and issue drill-downs |
+| POST | `/api/data-health/jobs/[jobKey]/run` | data-health | admin | Manually trigger a registered data-health job; dangerous jobs require confirmation |
 
 ## [Filters](./misc.md) — `/api/filters`
 
@@ -123,6 +124,8 @@ Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/inter
 | POST | `/api/internal/sync-room-utilization` | internal | cron (or admin) | Sync room-utilization sessions (session or `curl`) |
 | GET | `/api/internal/class-assignments/admin-email` | internal | cron | Send the daily admin classroom-schedule email |
 | GET | `/api/internal/class-assignments/morning` | internal | cron | Run the morning classroom-assignment automation |
+| GET | `/api/internal/student-promotions/july-1` | internal | cron | Apply the verified July 1, 2026 student-promotion run |
+| POST | `/api/internal/student-promotions/july-1` | internal | cron | Cron-secret replay alias for the July 1 student-promotion apply |
 
 > **Admin-only sync (not cron):** `POST /api/admin/sync-wise` triggers the same Wise sync but is gated by an admin session via `auth()` (no `CRON_SECRET`) — see the [Admin](./misc.md) group.
 
@@ -239,6 +242,18 @@ Tutor availability search: range search, legacy slot search, and the public natu
 | POST | `/api/search/range` | search | admin | Range search: time window + duration → availability grid |
 | POST | `/api/search` | search | admin | Legacy slot-based availability search |
 | POST | `/api/search/assistant` | search | public | Natural-language search assistant (public per middleware) |
+
+## [Student Promotions](./student-promotions.md) — `/api/student-promotions`
+
+Audited July 1, 2026 Wise student grade/course promotion workflow.
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/student-promotions/runs` | student-promotions | admin | Load the latest promotion run detail |
+| POST | `/api/student-promotions/runs` | student-promotions | admin | Run a fresh live-Wise dry-run audit |
+| GET | `/api/student-promotions/runs/[runId]` | student-promotions | admin | Load one promotion run detail |
+| POST | `/api/student-promotions/runs/[runId]/verify` | student-promotions | admin | Verify a reviewed dry run for July 1 apply |
+| POST | `/api/student-promotions/runs/[runId]/apply` | student-promotions | admin | Manual fallback apply for a verified run |
 
 ## [Tutor Profiles](./misc.md) — `/api/tutor-profiles`
 

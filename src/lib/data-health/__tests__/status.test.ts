@@ -1,0 +1,123 @@
+import { describe, expect, it } from "vitest";
+import { getCronJobDefinition } from "../cron-registry";
+import { evaluateCronJobStatus, type RunEvidence } from "../status";
+
+function job(key: string) {
+  const value = getCronJobDefinition(key);
+  if (!value) throw new Error(`Missing job ${key}`);
+  return value;
+}
+
+function run(overrides: Partial<RunEvidence> = {}): RunEvidence {
+  return {
+    status: overrides.status ?? "success",
+    startedAt: overrides.startedAt ?? new Date("2026-06-01T01:00:00.000Z"),
+    finishedAt: overrides.finishedAt ?? new Date("2026-06-01T01:04:00.000Z"),
+    errorSummary: overrides.errorSummary ?? null,
+  };
+}
+
+describe("cron status evaluation", () => {
+  it("uses inferred run evidence before audit rows accumulate", () => {
+    const latest = run();
+    const result = evaluateCronJobStatus({
+      job: job("wise_snapshot"),
+      now: new Date("2026-06-01T01:20:00.000Z"),
+      latestInvocation: null,
+      latestCronInvocation: null,
+      latestRun: latest,
+      latestSuccessfulRun: latest,
+      latestFailedRun: null,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("healthy");
+    expect(result.proof).toBe("inferred");
+    expect(result.healthDetail).toContain("run-table");
+  });
+
+  it("marks interval crons late after the expected window is missed", () => {
+    const latest = run({
+      startedAt: new Date("2026-06-01T00:00:00.000Z"),
+      finishedAt: new Date("2026-06-01T00:04:00.000Z"),
+    });
+    const result = evaluateCronJobStatus({
+      job: job("wise_snapshot"),
+      now: new Date("2026-06-01T02:50:00.000Z"),
+      latestInvocation: null,
+      latestCronInvocation: null,
+      latestRun: latest,
+      latestSuccessfulRun: latest,
+      latestFailedRun: null,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("late");
+  });
+
+  it("evaluates daily Bangkok windows without rolling 24-hour shortcuts", () => {
+    const latest = run({
+      startedAt: new Date("2026-05-31T23:45:00.000Z"),
+      finishedAt: new Date("2026-05-31T23:55:00.000Z"),
+    });
+    const result = evaluateCronJobStatus({
+      job: job("classroom_morning"),
+      now: new Date("2026-06-01T00:20:00.000Z"),
+      latestInvocation: null,
+      latestCronInvocation: null,
+      latestRun: latest,
+      latestSuccessfulRun: latest,
+      latestFailedRun: null,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("healthy");
+    expect(result.lastExpectedAt?.toISOString()).toBe("2026-05-31T23:45:00.000Z");
+  });
+
+  it("marks long-running jobs as failing after maxDuration plus buffer", () => {
+    const running = run({
+      status: "running",
+      startedAt: new Date("2026-06-01T01:00:00.000Z"),
+      finishedAt: null,
+    });
+    const result = evaluateCronJobStatus({
+      job: job("credit_control"),
+      now: new Date("2026-06-01T01:07:00.000Z"),
+      latestInvocation: null,
+      latestCronInvocation: null,
+      latestRun: running,
+      latestSuccessfulRun: null,
+      latestFailedRun: null,
+      runningRun: running,
+    });
+
+    expect(result.status).toBe("failing");
+    expect(result.healthDetail).toContain("maxDuration");
+  });
+
+  it("recovers from an older failure after a later success", () => {
+    const success = run({
+      startedAt: new Date("2026-06-01T01:00:00.000Z"),
+      finishedAt: new Date("2026-06-01T01:03:00.000Z"),
+    });
+    const failure = run({
+      status: "failed",
+      startedAt: new Date("2026-06-01T00:30:00.000Z"),
+      finishedAt: new Date("2026-06-01T00:31:00.000Z"),
+      errorSummary: "Earlier failure",
+    });
+    const result = evaluateCronJobStatus({
+      job: job("wise_snapshot"),
+      now: new Date("2026-06-01T01:20:00.000Z"),
+      latestInvocation: null,
+      latestCronInvocation: null,
+      latestRun: success,
+      latestSuccessfulRun: success,
+      latestFailedRun: failure,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("healthy");
+  });
+});

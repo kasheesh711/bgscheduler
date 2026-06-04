@@ -4,11 +4,13 @@
 
 Every scheduled job in BGScheduler is a Vercel Cron entry. Vercel reads `vercel.json` at deploy time, and on each tick it issues an **HTTP `GET`** to the configured `path` with an `Authorization: Bearer $CRON_SECRET` header. There is no in-process scheduler — if a handler is not listed in `vercel.json`, nothing fires it automatically.
 
+After cron auth succeeds, each registered handler records a best-effort `cron_invocations` row. Data Health uses those rows as direct proof that Vercel reached the route; before rows exist for a job, it falls back to the job's durable run table and labels the proof as inferred.
+
 This page is the mechanical reference: schedule, endpoint, auth, timeout, and what each handler does. Feature meaning and data flows live in the corresponding `features/*` docs (linked per cron).
 
 ## Cron registry (authoritative)
 
-The seven entries below are the complete contents of `vercel.json` ([`vercel.json:2-31`](../../vercel.json)). Schedules are UTC (Vercel Cron runs in UTC); the app's business timezone is `Asia/Bangkok` (UTC+7), which matters for the two time-of-day jobs.
+The eight entries below are the complete contents of `vercel.json`. Schedules are UTC (Vercel Cron runs in UTC); the app's business timezone is `Asia/Bangkok` (UTC+7), which matters for the time-of-day jobs.
 
 | # | Schedule (UTC) | Cadence | Endpoint (`GET`) | Handler file | `maxDuration` |
 |---|----------------|---------|------------------|--------------|---------------|
@@ -19,6 +21,7 @@ The seven entries below are the complete contents of `vercel.json` ([`vercel.jso
 | 5 | `15,45 * * * *` | every 30 min, on :15/:45 | `/api/internal/sync-leave-requests` | [`route.ts:24`](../../src/app/api/internal/sync-leave-requests/route.ts) | 800s ([:6](../../src/app/api/internal/sync-leave-requests/route.ts)) |
 | 6 | `45 23 * * *` | once daily, 23:45 UTC (06:45 Bangkok) | `/api/internal/class-assignments/morning` | [`route.ts:7`](../../src/app/api/internal/class-assignments/morning/route.ts) | 800s ([:5](../../src/app/api/internal/class-assignments/morning/route.ts)) |
 | 7 | `0,10,20,30 0 * * *` | 4×/day, 00:00–00:30 UTC at :00/:10/:20/:30 (07:00–07:30 Bangkok) | `/api/internal/class-assignments/admin-email` | [`route.ts:7`](../../src/app/api/internal/class-assignments/admin-email/route.ts) | 300s ([:5](../../src/app/api/internal/class-assignments/admin-email/route.ts)) |
+| 8 | `5 17 30 6 *` | one-shot business event: 2026-06-30 17:05 UTC (2026-07-01 00:05 Bangkok); route hard-blocks all other Bangkok dates | `/api/internal/student-promotions/july-1` | [`route.ts`](../../src/app/api/internal/student-promotions/july-1/route.ts) | 800s |
 
 The five `sync-*` jobs are **staggered at 5-minute offsets** across the half-hour so they never all hit the Wise API or the database in the same minute: Wise snapshot on :00/:30, activity audit on :05/:35, sales on :10/:40, leave requests on :15/:45, credit control on :20/:50.
 
@@ -40,7 +43,7 @@ gantt
 Every cron handler authenticates the inbound request by constant-time comparison of the `Authorization` header against `Bearer ${CRON_SECRET}`. The comparison length-pre-checks before `crypto.timingSafeEqual` to avoid the `RangeError` that function throws on length-mismatched buffers ([`sync-wise/route.ts:10-28`](../../src/app/api/internal/sync-wise/route.ts)). Two implementations of identical logic exist:
 
 - **Shared helper** `rejectInvalidCronSecret(request)` — returns a `NextResponse` (401 invalid / 500 missing-secret) or `null` when valid ([`cron-auth.ts:19-26`](../../src/lib/internal/cron-auth.ts)). Used by `sync-wise-activity`, `sync-leave-requests`, `class-assignments/morning`, and `class-assignments/admin-email`.
-- **Inline copies** — `sync-wise`, `sync-sales-dashboard`, `sync-credit-control`, and `sync-room-utilization` each define their own `hasValidCronSecret` with the same constant-time check rather than importing the helper.
+- **Inline copies** — `sync-wise`, `sync-sales-dashboard`, `sync-credit-control`, `sync-room-utilization`, and `student-promotions/july-1` each define their own `hasValidCronSecret` with the same constant-time check rather than importing the helper.
 
 `CRON_SECRET` is a required environment variable; when unset, handlers return **HTTP 500 `{ "error": "Server misconfigured" }`** rather than running unauthenticated ([`cron-auth.ts:22-24`](../../src/lib/internal/cron-auth.ts)).
 
@@ -48,7 +51,7 @@ The auth gate in [`middleware.ts:13`](../../src/middleware.ts) treats the entire
 
 #### `GET` vs `POST` per handler
 
-Vercel Cron always calls **`GET`**. Three of the sync handlers additionally export `POST` for manual/admin triggers, and the two that wrap the snapshot/credit pipelines allow an authenticated Auth.js **session** as an alternative to `CRON_SECRET` on the `POST` path only:
+Vercel Cron always calls **`GET`**. Some handlers additionally export `POST` for manual/admin triggers or cron-secret replay; the two that wrap the snapshot/credit pipelines allow an authenticated Auth.js **session** as an alternative to `CRON_SECRET` on the `POST` path only:
 
 | Handler | `GET` | `POST` | `POST` accepts session auth? |
 |---------|-------|--------|------------------------------|
@@ -59,6 +62,7 @@ Vercel Cron always calls **`GET`**. Three of the sync handlers additionally expo
 | `sync-leave-requests` | yes | yes (bearer only) | no ([`route.ts:24-30`](../../src/app/api/internal/sync-leave-requests/route.ts)) |
 | `class-assignments/morning` | yes | no | n/a |
 | `class-assignments/admin-email` | yes | no | n/a |
+| `student-promotions/july-1` | yes | yes (bearer only, replay alias) | no |
 
 ---
 
@@ -142,11 +146,19 @@ Calls `sendAdminClassroomScheduleEmail()` ([`route.ts:12`](../../src/app/api/int
 
 The handler maps a `failed` result status to HTTP 500, otherwise HTTP 200 ([`route.ts:13-14`](../../src/app/api/internal/class-assignments/admin-email/route.ts)). See the classroom-assignments feature doc.
 
+## 8. Student promotions July 1 apply — `/api/internal/student-promotions/july-1`
+
+**Schedule:** `5 17 30 6 *` — 17:05 UTC on June 30, which is **00:05 Asia/Bangkok on July 1**. **Does:** applies the newest verified Student Promotions run for target date `2026-07-01`.
+
+This cron is a one-shot business event, not a recurring data sync. The Vercel expression is annual syntax, so the route adds a hard guard: it returns HTTP 409 unless the current Bangkok date is exactly `2026-07-01`. The apply service also refuses to run before `2026-07-01 00:05 Asia/Bangkok`.
+
+The handler authenticates with `CRON_SECRET`, then calls `applyVerifiedStudentPromotionRun({ trigger: "cron" })`. Each grade and course action revalidates current Wise state before writing, and per-action drift/errors are persisted without aborting the run. See the Student Promotions feature doc and API reference for the full review/apply flow.
+
 ---
 
 ## Internal handlers without a cron schedule
 
-These `/api/internal/*` route handlers exist on disk but are **not** listed in `vercel.json`, so Vercel Cron never invokes them. Verified by comparing the seven cron `path`s in `vercel.json` against the eight `route.ts` files under `src/app/api/internal/`.
+These `/api/internal/*` route handlers exist on disk but are **not** listed in `vercel.json`, so Vercel Cron never invokes them. Verified by comparing the eight cron `path`s in `vercel.json` against the internal `route.ts` files under `src/app/api/internal/`.
 
 ### `/api/internal/sync-room-utilization` — manual only (no GET handler)
 
@@ -158,7 +170,7 @@ These `/api/internal/*` route handlers exist on disk but are **not** listed in `
 
 **Flag:** this job is **manual / not scheduled**. If it is meant to keep room-utilization data current on a cadence (like the other syncs), it is currently effectively disabled from the automation standpoint — see open questions.
 
-> No other `/api/internal/*` handler is missing from `vercel.json`: the remaining seven route directories map 1:1 to the seven cron entries.
+> No other `/api/internal/*` handler is missing from `vercel.json`: the remaining route directories map 1:1 to the registered cron entries.
 
 ---
 

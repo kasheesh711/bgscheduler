@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { runCreditControlSyncRequest } from "@/lib/credit-control/run-sync-request";
 
 export const maxDuration = 300;
@@ -26,13 +27,24 @@ async function handleSync(request: NextRequest, options: { allowSessionAuth: boo
   const cronSecretStatus = hasValidCronSecret(request);
 
   if (cronSecretStatus === "valid") {
-    return runCreditControlSyncRequest();
+    return withCronInvocationAudit(
+      { jobKey: "credit_control", triggerSource: "cron", requestMethod: request.method },
+      () => runCreditControlSyncRequest(),
+    );
   }
 
   if (options.allowSessionAuth) {
     const session = await auth();
     if (session) {
-      return runCreditControlSyncRequest();
+      return withCronInvocationAudit(
+        {
+          jobKey: "credit_control",
+          triggerSource: "admin",
+          actorEmail: session.user?.email ?? null,
+          requestMethod: request.method,
+        },
+        () => runCreditControlSyncRequest(),
+      );
     }
   }
 

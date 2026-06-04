@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import {
   importActiveSalesDashboardProjectionSource,
   importRefreshableSalesSources,
@@ -40,21 +41,31 @@ async function handleSync(request: NextRequest, options: { allowSessionAuth: boo
     }
   }
 
-  try {
-    const results = await importRefreshableSalesSources({
-      triggerType: "cron",
+  return withCronInvocationAudit(
+    {
+      jobKey: "sales_dashboard",
+      triggerSource: cronSecretStatus === "valid" ? "cron" : "admin",
       actorEmail,
-    });
-    const projectionResult = await importActiveSalesDashboardProjectionSource({
-      triggerType: "cron",
-      actorEmail,
-    });
-    return NextResponse.json({ ok: true, results, projectionResult });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Sales dashboard sync failed";
-    const status = error instanceof MissingGoogleSheetsTokenError ? 409 : 500;
-    return NextResponse.json({ error: message }, { status });
-  }
+      requestMethod: request.method,
+    },
+    async () => {
+      try {
+        const results = await importRefreshableSalesSources({
+          triggerType: "cron",
+          actorEmail,
+        });
+        const projectionResult = await importActiveSalesDashboardProjectionSource({
+          triggerType: "cron",
+          actorEmail,
+        });
+        return NextResponse.json({ ok: true, results, projectionResult });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Sales dashboard sync failed";
+        const status = error instanceof MissingGoogleSheetsTokenError ? 409 : 500;
+        return NextResponse.json({ error: message }, { status });
+      }
+    },
+  );
 }
 
 export async function GET(request: NextRequest) {

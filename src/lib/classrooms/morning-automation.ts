@@ -10,6 +10,7 @@ import { fetchAllFutureSessions } from "@/lib/wise/fetchers";
 import type { WiseSession } from "@/lib/wise/types";
 import {
   CLASSROOM_ASSIGNMENT_FRESHNESS_MS,
+  getFreshClassroomSnapshotForAssignment,
   publishClassroomAssignmentRun,
   runIncrementalClassroomAssignment,
   selectAutomationPublishTargetRowIds,
@@ -57,6 +58,7 @@ export interface MorningAutomationResult {
     mode: "reused" | "waited" | "triggered";
     syncRunId: string | null;
     finishedAt: string | null;
+    snapshotId?: string | null;
   };
   dates: MorningAutomationDateResult[];
 }
@@ -184,6 +186,7 @@ export async function runClassroomMorningAutomation(
   const sync = await ensureFreshWiseSyncForClassroomAutomation(db, {
     maxWaitMs: options.maxSyncWaitMs,
   });
+  const classroomSnapshot = await getFreshClassroomSnapshotForAssignment(db);
   const client = createWiseClient();
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const liveSessions = options.liveSessions ?? await fetchAllFutureSessions(client, instituteId);
@@ -195,6 +198,8 @@ export async function runClassroomMorningAutomation(
       automationBatchId,
       createdBy: AUTOMATION_ACTOR,
       liveSessions,
+      snapshotId: classroomSnapshot.snapshotId,
+      trustedSnapshotMeta: classroomSnapshot.snapshotMeta,
     });
     if (!detail.run) throw new Error(`Classroom assignment run was not created for ${date}`);
     const targetRowIds = await selectAutomationPublishTargetRowIds(db, detail.rows, liveSessions, client);
@@ -245,7 +250,10 @@ export async function runClassroomMorningAutomation(
     automationBatchId,
     startDate,
     endDate: dates[dates.length - 1],
-    sync,
+    sync: {
+      ...sync,
+      snapshotId: classroomSnapshot.snapshotId,
+    },
     dates: results,
   };
 }

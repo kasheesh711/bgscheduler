@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  buildLineLinkValidationPagination,
   isLineValidationLeadEmail,
+  lineLinkValidationTotalsFromCounts,
   lineValidationLeadEmails,
+  normalizeLineLinkValidationPagination,
   planRoundRobinValidationAssignments,
+  uniqueLineLinkValidationStudentKeys,
 } from "@/lib/line/link-validation";
 
 const originalLeadEmails = process.env.LINE_VALIDATION_LEAD_EMAILS;
@@ -16,6 +20,53 @@ afterEach(() => {
 });
 
 describe("LINE link validation assignment planning", () => {
+  it("normalizes paged list params with a 100-row cap", () => {
+    expect(normalizeLineLinkValidationPagination({ page: 3, pageSize: 500 })).toEqual({
+      page: 3,
+      pageSize: 100,
+      offset: 200,
+    });
+    expect(normalizeLineLinkValidationPagination({ page: 0, pageSize: -1 })).toEqual({
+      page: 1,
+      pageSize: 1,
+      offset: 0,
+    });
+  });
+
+  it("builds pagination metadata from SQL count results", () => {
+    expect(buildLineLinkValidationPagination(678, { page: 2, pageSize: 100 })).toEqual({
+      page: 2,
+      pageSize: 100,
+      total: 678,
+      pageCount: 7,
+    });
+  });
+
+  it("converts aggregate summary counts into tracker totals", () => {
+    expect(lineLinkValidationTotalsFromCounts({
+      assigned: "678",
+      unassigned: "0",
+      verified: "17",
+      rejected: "1",
+    })).toEqual({
+      assigned: 678,
+      unassigned: 0,
+      verified: 17,
+      rejected: 1,
+      remaining: 678,
+      total: 696,
+      completionRate: 3,
+    });
+  });
+
+  it("dedupes student keys before current-student enrichment", () => {
+    expect(uniqueLineLinkValidationStudentKeys([
+      { link: { studentKey: "ada::li" } },
+      { link: { studentKey: "ada::li" } },
+      { link: { studentKey: "ben::ng" } },
+    ])).toEqual(["ada::li", "ben::ng"]);
+  });
+
   it("evenly distributes unassigned candidate links across reviewers", () => {
     const assignments = planRoundRobinValidationAssignments(
       [

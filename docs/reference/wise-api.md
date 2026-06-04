@@ -4,7 +4,7 @@ How BGScheduler talks to the external **Wise** scheduling platform — the singl
 production source of truth (tenant `begifted-education`, institute
 `696e1f4d90102225641cc413`). This page is the canonical contract for the transport
 client, every domain fetcher, the read-only helpers (locations / availability
-check / activity events / analytics / fees), the one writeback operation, and the
+check / activity events / analytics / fees), the writeback operations, and the
 `WISE_*` environment variables.
 
 The **source of truth** is the code under `src/lib/wise/`:
@@ -12,13 +12,13 @@ The **source of truth** is the code under `src/lib/wise/`:
 | File | Role |
 |---|---|
 | `src/lib/wise/client.ts` | `WiseClient` transport — auth headers, retry/backoff, concurrency limiter |
-| `src/lib/wise/fetchers.ts` | Domain fetchers + read helpers + the `updateSessionLocation` writeback |
+| `src/lib/wise/fetchers.ts` | Domain fetchers + read helpers + verified Wise writeback helpers |
 | `src/lib/wise/types.ts` | Wise request/response shapes and field accessors |
 | `src/lib/wise/operations.ts` | LINE-scheduler Wise *cancel/reschedule* actions (currently dry-run only) |
 | `src/lib/env.ts` | Zod declarations for `WISE_USER_ID` / `WISE_API_KEY` / `WISE_NAMESPACE` / `WISE_INSTITUTE_ID` |
 
-> **Maturity:** The transport client, the read fetchers, and the
-> `updateSessionLocation` writeback are live in production. The LINE
+> **Maturity:** The transport client, the read fetchers, the
+> `updateSessionLocation` writeback, and the Student Promotions write helpers are live production code. The LINE
 > cancel/reschedule path in `operations.ts` is **not** a verified Wise mutation —
 > it records dry-run logs and never sends a request (see
 > [Writeback operations](#writeback-operations)).
@@ -46,9 +46,9 @@ The **source of truth** is the code under `src/lib/wise/`:
 - **Institute scoping:** nearly every endpoint is nested under
   `/institutes/{instituteId}`; callers pass `WISE_INSTITUTE_ID`
   (default `696e1f4d90102225641cc413`).
-- **Writeback:** exactly one mutating endpoint is used in production —
-  `PUT /teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` with body
-  `{ location }`, gated to eligible **OFFLINE** sessions only.
+- **Writeback:** production mutations are narrowly scoped: classroom assignments write
+  only OFFLINE session `location`; Student Promotions writes only registration field
+  `if89sblj` and verified class `subject` transitions.
 
 ---
 
@@ -282,6 +282,38 @@ rather than reading the polymorphic fields directly.
 > future occurrence (deduped by `recurrenceId`). See `handbook/data-flow.md` and the
 > "Known Issues" notes in the root docs.
 
+### Accepted students — `fetchWiseAcceptedStudents`
+
+Returns accepted Wise students for Student Promotions audit generation.
+
+- **Endpoint:** `GET /institutes/v3/{instituteId}/students`
+- **Params:** `status=ACCEPTED`, `page_number`, `page_size=100`, plus Wise UI flags
+  `showParents=true`, `showFeedbackData=true`, `showContractStatus=true`.
+- **Pagination:** loops until the returned `page_count` is reached, or until a page
+  returns no students.
+- **Returns:** flattened student rows from `res.data.students`.
+
+### Student registration — `fetchWiseStudentRegistrationData`
+
+Reads a single student's Wise registration answers, including the Student
+Promotions grade source field.
+
+- **Endpoint:** `GET /institutes/{instituteId}/participants/{studentId}`
+- **Params:** `showRegistrationData=true`
+- **Returns:** participant payload with `registrationData.fields[]`.
+
+Student Promotions reads field id `if89sblj`, label `Current Year/Grade level`.
+
+### Course detail and participants
+
+These helpers support Student Promotions course-action planning and apply-time
+roster revalidation.
+
+| Fetcher | Endpoint | Purpose |
+|---|---|---|
+| `fetchWiseCourse` | `GET /user/v2/classes/{classId}?full=true` | Reads current class/course subject before planning and before apply. |
+| `fetchWiseCourseParticipants` | `GET /user/classes/{classId}/participants?showCoTeachers=true` | Reads the current class roster before applying a class-level subject update. |
+
 ---
 
 ## Read-only helpers
@@ -410,8 +442,8 @@ value.
 
 ## Writeback operations
 
-BGScheduler is **read-mostly**. Exactly one mutating Wise endpoint is exercised in
-production, and it is opt-in per classroom-assignment run.
+BGScheduler is **read-mostly**. Wise mutations are limited to verified workflows
+with narrow field scopes.
 
 ### Session location update — `updateSessionLocation`
 
@@ -425,8 +457,7 @@ production, and it is opt-in per classroom-assignment run.
 - **Returns:** `WiseSessionUpdateResponse` = `{ status?, message?, data? }`
   (`types.ts:101`–`106`).
 
-This is the **only** field BGScheduler writes back to Wise. Online room/booth
-assignments stay local in v1.
+Online room/booth assignments stay local in v1.
 
 #### Eligibility policy
 
@@ -449,6 +480,31 @@ So the writeback fires only for an **assigned, OFFLINE** session that has both a
 Wise class id and session id and a clean capacity signal. Publishing is also an
 explicit admin action (`POST /api/class-assignments/runs/{runId}/publish`) — local
 run generation never writes to Wise.
+
+### Student registration update — `updateWiseStudentRegistrationAnswers`
+
+Used only by Student Promotions after a dry-run plan has been verified and the
+apply window has opened.
+
+- **Endpoint:** `PUT /institutes/{instituteId}/students/{studentId}/registration`
+- **Body:** `{ answers }`, where Student Promotions sends only the verified target
+  for field `if89sblj`.
+- **Returns:** loose Wise response payload retained on the action row.
+
+Before writing, the service re-fetches the participant registration data and skips
+the action if the current grade no longer matches the verified plan.
+
+### Course subject update — `updateWiseCourseSubject`
+
+Used only by Student Promotions for verified class-level course transitions.
+
+- **Endpoint:** `PUT /teacher/editClass`
+- **Body:** `{ classId, subject }`
+- **Returns:** loose Wise response payload retained on the action row.
+
+Before writing, the service re-fetches the class detail and class roster. It skips
+the action if the current subject drifted or if the live roster no longer matches
+the verified all-students-qualify guard.
 
 ### LINE cancel / reschedule — dry-run only (`operations.ts`)
 
@@ -501,6 +557,10 @@ above.
 | GET | `/institutes/{id}/teachers` | `fetchAllTeachers` | read |
 | GET | `/institutes/{id}/teachers/{userId}/availability` | `fetchTeacherAvailability` / `fetchTeacherFullAvailability` | read |
 | GET | `/institutes/{id}/sessions` | `fetchAllFutureSessions` / `fetchAllInstituteSessions` | read (paginated) |
+| GET | `/institutes/v3/{id}/students` | `fetchWiseAcceptedStudents` | read (paginated) |
+| GET | `/institutes/{id}/participants/{studentId}?showRegistrationData=true` | `fetchWiseStudentRegistrationData` | read |
+| GET | `/user/v2/classes/{classId}?full=true` | `fetchWiseCourse` | read |
+| GET | `/user/classes/{classId}/participants?showCoTeachers=true` | `fetchWiseCourseParticipants` | read |
 | GET | `/institutes/{id}/locations` | `fetchInstituteLocations` | read |
 | POST | `/institutes/{id}/checkSessionsAvailability` | `checkTeacherAvailabilityForSessions` | read (validation) |
 | GET | `/institutes/{id}/events` | `fetchWiseActivityEvents` | read (paginated) |
@@ -510,6 +570,8 @@ above.
 | GET | `/institutes/{id}/trends` | `fetchWiseFeesPaidTrends` | read |
 | GET | `/institutes/{id}/fees/transactions` | `fetchWiseReceiptTransactions` | read (paginated) |
 | PUT | `/teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` | `updateSessionLocation` | **write** (OFFLINE only) |
+| PUT | `/institutes/{id}/students/{studentId}/registration` | `updateWiseStudentRegistrationAnswers` | **write** (Student Promotions only) |
+| PUT | `/teacher/editClass` | `updateWiseCourseSubject` | **write** (Student Promotions only) |
 
 ## See also
 

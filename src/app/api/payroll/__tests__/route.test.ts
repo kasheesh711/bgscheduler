@@ -35,9 +35,28 @@ const authMock = auth as unknown as Mock;
 const payrollPayload = {
   month: "2026-05",
   payrollMonth: "2026-05-01",
+  rateCard: null,
   review: { status: "draft", notes: "", approvedByEmail: null, approvedByName: null, approvedAt: null, updatedAt: null },
   lastSync: null,
-  summary: { issueCount: 0 },
+  summary: {
+    totalPayoutAmount: 0,
+    paidHours: 0,
+    utilizationHours: 0,
+    varianceHours: 0,
+    detectedFreePayHours: 0,
+    kevinHours: 0,
+    kevinPaidHours: 0,
+    kevinPayoutAmount: 0,
+    manualAdjustmentHours: 0,
+    manualAdjustmentAmount: 0,
+    unresolvedTutorCount: 0,
+    issueCount: 0,
+    expectedRateCheckedCount: 0,
+    expectedRateMismatchCount: 0,
+    missingRateRuleCount: 0,
+    unmappedRateCourseCount: 0,
+    tutorCount: 0,
+  },
   tutors: [],
   issues: [],
   adjustments: [],
@@ -126,6 +145,28 @@ describe("payroll API routes", () => {
       actorEmail: "admin@example.com",
       actorName: "Admin",
     });
+  });
+
+  it("blocks approval when expected-rate issues remain", async () => {
+    vi.mocked(getPayrollPayload).mockResolvedValue({
+      ...payrollPayload,
+      issues: [{
+        type: "expected_rate_mismatch",
+        severity: "high",
+        tutorKey: "tutor-1",
+        tutorName: "Tutor One",
+        message: "Rate mismatch",
+      }],
+    } as never);
+
+    const res = await patchReview(new NextRequest("http://test.local/api/payroll/review", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ month: "2026-05", status: "approved" }),
+    }));
+
+    expect(res.status).toBe(409);
+    expect(updatePayrollReview).not.toHaveBeenCalled();
   });
 
   it("adds manual adjustment rows", async () => {

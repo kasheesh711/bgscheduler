@@ -201,6 +201,31 @@ The model-assigned category for an inbound LINE message; the reviewed variant on
 
 ---
 
+## `student_promotion_run_status`
+
+- **Variable**: `studentPromotionRunStatusEnum`
+- **Definition**: `src/lib/db/schema.ts:134`
+- **Values**: `draft`, `verified`, `applying`, `applied`, `applied_with_errors`, `failed`
+- **Used by**:
+  - `student_promotion_runs.status` — default `draft` (`schema.ts:652`)
+
+Tracks the dry-run verification and apply lifecycle for the July 1 student-promotion workflow.
+
+---
+
+## `student_promotion_action_status`
+
+- **Variable**: `studentPromotionActionStatusEnum`
+- **Definition**: `src/lib/db/schema.ts:143`
+- **Values**: `pending`, `skipped`, `applied`, `failed`
+- **Used by**:
+  - `student_promotion_grade_actions.status` — default `pending` (`schema.ts:692`)
+  - `student_promotion_course_actions.status` — default `pending` (`schema.ts:715`)
+
+Per-action status for grade registration writes and class-subject writes. `skipped` covers dry-run exclusions and apply-time drift.
+
+---
+
 ## `sales_dashboard_source_status`
 
 - **Variable**: `salesDashboardSourceStatusEnum`

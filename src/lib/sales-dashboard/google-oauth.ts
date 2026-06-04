@@ -4,7 +4,8 @@ import { eq } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
-const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
+export const SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
+export const SHEETS_WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
 const SALES_DASHBOARD_CACHE_TAG = "sales-dashboard";
 const REFRESH_SKEW_MS = 2 * 60 * 1000;
 
@@ -70,8 +71,17 @@ function expiresAtFromAccount(account: GoogleAccountLike): Date | null {
   return account.expires_at ? new Date(account.expires_at * 1000) : null;
 }
 
-function hasSheetsScope(scope: string | null | undefined): boolean {
-  return String(scope ?? "").split(/\s+/).includes(SHEETS_SCOPE);
+function scopeSet(scope: string | null | undefined): Set<string> {
+  return new Set(String(scope ?? "").split(/\s+/).filter(Boolean));
+}
+
+export function hasSheetsReadScope(scope: string | null | undefined): boolean {
+  const scopes = scopeSet(scope);
+  return scopes.has(SHEETS_READONLY_SCOPE) || scopes.has(SHEETS_WRITE_SCOPE);
+}
+
+export function hasSheetsWriteScope(scope: string | null | undefined): boolean {
+  return scopeSet(scope).has(SHEETS_WRITE_SCOPE);
 }
 
 export async function storeGoogleOAuthTokenForUser(
@@ -171,8 +181,35 @@ export async function getGoogleSheetsAccessToken(
     .where(eq(schema.googleOAuthTokens.email, normalizedEmail))
     .limit(1);
   if (!row?.accessTokenCiphertext) throw new MissingGoogleSheetsTokenError();
-  if (!hasSheetsScope(row.scope)) {
-    throw new MissingGoogleSheetsTokenError("Google Sheets readonly scope is missing. Reconnect Google Sheets.");
+  if (!hasSheetsReadScope(row.scope)) {
+    throw new MissingGoogleSheetsTokenError("Google Sheets read scope is missing. Reconnect Google Sheets.");
+  }
+
+  const accessToken = decryptToken(row.accessTokenCiphertext);
+  if (!accessToken) throw new MissingGoogleSheetsTokenError();
+  const expiresAt = row.expiresAt?.getTime() ?? 0;
+  if (!expiresAt || expiresAt > Date.now() + REFRESH_SKEW_MS) return accessToken;
+
+  const refreshToken = decryptToken(row.refreshTokenCiphertext);
+  if (!refreshToken) {
+    throw new MissingGoogleSheetsTokenError("Google refresh token is missing. Reconnect Google Sheets.");
+  }
+  return refreshAccessToken(normalizedEmail, refreshToken, db);
+}
+
+export async function getGoogleSheetsWriteAccessToken(
+  email: string,
+  db: Database = getDb(),
+): Promise<string> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const [row] = await db
+    .select()
+    .from(schema.googleOAuthTokens)
+    .where(eq(schema.googleOAuthTokens.email, normalizedEmail))
+    .limit(1);
+  if (!row?.accessTokenCiphertext) throw new MissingGoogleSheetsTokenError();
+  if (!hasSheetsWriteScope(row.scope)) {
+    throw new MissingGoogleSheetsTokenError("Google Sheets write scope is missing. Reconnect Google Sheets.");
   }
 
   const accessToken = decryptToken(row.accessTokenCiphertext);
@@ -198,7 +235,8 @@ export async function getGoogleTokenStatus(email: string | null | undefined, db:
     .where(eq(schema.googleOAuthTokens.email, normalizedEmail))
     .limit(1);
   return {
-    connected: Boolean(row?.accessTokenCiphertext && hasSheetsScope(row.scope)),
+    connected: Boolean(row?.accessTokenCiphertext && hasSheetsReadScope(row.scope)),
+    writeConnected: Boolean(row?.accessTokenCiphertext && hasSheetsWriteScope(row.scope)),
     email: normalizedEmail,
     expiresAt: row?.expiresAt?.toISOString() ?? null,
     lastError: row?.lastError ?? null,

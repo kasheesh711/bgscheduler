@@ -1,4 +1,4 @@
-import { getGoogleSheetsAccessToken } from "./google-oauth";
+import { getGoogleSheetsAccessToken, getGoogleSheetsWriteAccessToken } from "./google-oauth";
 
 interface GoogleSheetsValuesResponse {
   values?: unknown[][];
@@ -7,6 +7,14 @@ interface GoogleSheetsValuesResponse {
 
 interface GoogleSheetsMetadataResponse {
   sheets?: Array<{ properties?: { title?: string } }>;
+  error?: { message?: string };
+}
+
+interface GoogleSheetsUpdateResponse {
+  updatedRange?: string;
+  updatedRows?: number;
+  updatedColumns?: number;
+  updatedCells?: number;
   error?: { message?: string };
 }
 
@@ -23,6 +31,29 @@ async function googleSheetsGet<T>(path: string, accessToken: string, params: Rec
   const body = (await response.json()) as T & { error?: { message?: string } };
   if (!response.ok) {
     throw new Error(body.error?.message || `Google Sheets request failed (${response.status})`);
+  }
+  return body;
+}
+
+async function googleSheetsPut<T>(
+  path: string,
+  accessToken: string,
+  params: Record<string, string>,
+  payload: Record<string, unknown>,
+): Promise<T> {
+  const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${path}`);
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  const body = (await response.json()) as T & { error?: { message?: string } };
+  if (!response.ok) {
+    throw new Error(body.error?.message || `Google Sheets update failed (${response.status})`);
   }
   return body;
 }
@@ -56,4 +87,25 @@ export async function fetchGoogleSheetRows(
     },
   );
   return body.values ?? [];
+}
+
+export async function updateGoogleSheetCell(
+  email: string,
+  spreadsheetId: string,
+  sheetName: string,
+  cellA1: string,
+  value: string,
+): Promise<GoogleSheetsUpdateResponse> {
+  const accessToken = await getGoogleSheetsWriteAccessToken(email);
+  const range = `${quoteSheetName(sheetName)}!${cellA1}`;
+  return googleSheetsPut<GoogleSheetsUpdateResponse>(
+    `${spreadsheetId}/values/${encodeURIComponent(range)}`,
+    accessToken,
+    { valueInputOption: "USER_ENTERED" },
+    {
+      range,
+      majorDimension: "ROWS",
+      values: [[value]],
+    },
+  );
 }

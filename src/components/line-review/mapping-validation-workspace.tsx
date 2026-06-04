@@ -23,6 +23,7 @@ import type {
   LineLinkValidationReviewerSummary,
   LineLinkValidationScope,
   LineLinkValidationSummary,
+  LineLinkValidationTask,
   LineOaResolverRun,
 } from "./types";
 import { formatDateTime, jsonFetch } from "./utils";
@@ -36,6 +37,11 @@ function reviewerName(reviewer: LineLinkValidationReviewerSummary): string {
 
 function runLabel(run: LineOaResolverRun): string {
   return `${run.id.slice(0, 8)} / ${run.status} / ${formatDateTime(run.createdAt)}`;
+}
+
+function completionRate(verified: number, rejected: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.round(((verified + rejected) / total) * 100);
 }
 
 export function MappingValidationWorkspace({
@@ -107,6 +113,44 @@ export function MappingValidationWorkspace({
   function refreshAll() {
     void Promise.all([loadRuns(), loadSummary()]);
   }
+
+  const applyOptimisticStatusChange = useCallback((
+    task: LineLinkValidationTask,
+    status: "verified" | "rejected",
+    phase: "apply" | "rollback",
+  ) => {
+    if (task.status !== "suggested") return;
+    const direction = phase === "apply" ? 1 : -1;
+    setSummary((current) => {
+      if (!current?.canViewTracker) return current;
+      const assignedDelta = task.validationAssignedToEmail ? direction : 0;
+      const unassignedDelta = task.validationAssignedToEmail ? 0 : direction;
+      const totals = {
+        ...current.totals,
+        assigned: Math.max(0, current.totals.assigned - assignedDelta),
+        unassigned: Math.max(0, current.totals.unassigned - unassignedDelta),
+        remaining: Math.max(0, current.totals.remaining - direction),
+        verified: status === "verified"
+          ? Math.max(0, current.totals.verified + direction)
+          : current.totals.verified,
+        rejected: status === "rejected"
+          ? Math.max(0, current.totals.rejected + direction)
+          : current.totals.rejected,
+      };
+      return {
+        ...current,
+        totals: {
+          ...totals,
+          total: totals.remaining + totals.verified + totals.rejected,
+          completionRate: completionRate(
+            totals.verified,
+            totals.rejected,
+            totals.remaining + totals.verified + totals.rejected,
+          ),
+        },
+      };
+    });
+  }, []);
 
   useEffect(() => {
     void loadRuns();
@@ -180,6 +224,7 @@ export function MappingValidationWorkspace({
         runId={selectedRunId}
         className="min-h-0 flex-1 rounded-none border-0"
         onChanged={loadSummary}
+        onOptimisticStatusChange={applyOptimisticStatusChange}
         refreshKey={refreshKey}
         defaultScope={defaultValidationScope}
         assignmentOpen={assignmentOpen}

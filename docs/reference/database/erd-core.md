@@ -17,7 +17,7 @@ writes a complete set of these rows under a fresh snapshot, then atomically flip
 `snapshots.active` (`schema.ts:167`). Reads target the single active snapshot; failed
 syncs leave the previous active snapshot untouched. A handful of tables are
 deliberately **snapshot-independent** (`admin_users`, `google_oauth_tokens`,
-`tutor_aliases`, `wise_activity_events`, `wise_activity_sync_runs`,
+`tutor_aliases`, `cron_invocations`, `wise_activity_events`, `wise_activity_sync_runs`,
 `room_utilization_sessions`, `past_session_blocks`) — see each table's note for why.
 
 ## ER diagram
@@ -153,7 +153,7 @@ erDiagram
 > The diagram represents `snapshots` and `tutor_identity_groups` as full nodes because
 > they are the two hubs every other core table fans out from. `tutor_aliases`,
 > `admin_users`, `google_oauth_tokens`, `wise_activity_events`,
-> `wise_activity_sync_runs`, `room_utilization_sessions`, and `past_session_blocks`
+> `wise_activity_sync_runs`, `cron_invocations`, `room_utilization_sessions`, and `past_session_blocks`
 > have **no database foreign keys** and therefore appear unconnected — their logical
 > links are described per table below.
 

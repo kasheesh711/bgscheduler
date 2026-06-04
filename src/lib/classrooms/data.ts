@@ -58,6 +58,11 @@ export interface ClassroomSnapshotMeta {
   fresh: boolean;
 }
 
+export interface FreshClassroomSnapshot {
+  snapshotId: string;
+  snapshotMeta: ClassroomSnapshotMeta;
+}
+
 export interface LiveRoomBlock extends ExternalRoomBlock {
   wiseClassId: string | null;
   sessionType: string | null;
@@ -572,6 +577,14 @@ async function assertFreshClassroomSnapshot(db: Database, snapshotId: string): P
   return meta;
 }
 
+export async function getFreshClassroomSnapshotForAssignment(db: Database): Promise<FreshClassroomSnapshot> {
+  const activeSnapshot = await getActiveSnapshot(db);
+  return {
+    snapshotId: activeSnapshot.id,
+    snapshotMeta: await assertFreshClassroomSnapshot(db, activeSnapshot.id),
+  };
+}
+
 async function loadLatestRunForDate(db: Database, date: string): Promise<ClassroomRun | null> {
   const [run] = await db
     .select()
@@ -958,18 +971,24 @@ export async function runIncrementalClassroomAssignment(
     automationBatchId: string;
     createdBy?: string | null;
     liveSessions?: WiseSession[];
+    snapshotId?: string;
+    trustedSnapshotMeta?: ClassroomSnapshotMeta;
   },
 ): Promise<ClassroomAssignmentDetail & {
   events: ClassroomAutomationEvent[];
   changeSummary: Record<string, number>;
 }> {
   const date = assertIsoDate(input.date);
-  const activeSnapshot = await getActiveSnapshot(db);
-  const snapshotMeta = await assertFreshClassroomSnapshot(db, activeSnapshot.id);
+  const snapshot = input.snapshotId ? await loadSnapshotById(db, input.snapshotId) : await getActiveSnapshot(db);
+  if (!snapshot) throw new Error("Wise snapshot not found for classroom assignment");
+  const snapshotMeta =
+    input.trustedSnapshotMeta?.snapshotId === snapshot.id
+      ? input.trustedSnapshotMeta
+      : await assertFreshClassroomSnapshot(db, snapshot.id);
   const rooms = await listClassroomRooms(db);
   const previousRun = await loadLatestRunForDate(db, date);
   const previousRows = previousRun ? await loadRowsForRun(db, previousRun.id) : [];
-  const sessions = await loadAssignmentSessions(db, activeSnapshot.id, date);
+  const sessions = await loadAssignmentSessions(db, snapshot.id, date);
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const liveSessions = input.liveSessions ?? await fetchAllFutureSessions(createWiseClientFromEnv(), instituteId);
   const liveBlocks = liveRoomBlocksForDate(liveSessions, date);
@@ -985,7 +1004,7 @@ export async function runIncrementalClassroomAssignment(
   const run = await persistAssignmentRun(
     db,
     date,
-    activeSnapshot.id,
+    snapshot.id,
     false,
     input.createdBy ?? null,
     reconciliation.rows,
@@ -1761,6 +1780,51 @@ export async function publishClassroomAssignmentRun(
   };
 }
 
+type AutomationPublishTargetRow = Pick<
+  ClassroomRow,
+  | "id"
+  | "tutorDisplayName"
+  | "currentWiseLocation"
+  | "assignedRoom"
+  | "startMinute"
+  | "endMinute"
+  | "status"
+  | "sessionType"
+  | "wiseClassId"
+  | "wiseSessionId"
+  | "warnings"
+>;
+
+export function expandAutomationPublishTargetRowIds(
+  rows: AutomationPublishTargetRow[],
+  initialTargetRowIds: string[],
+): string[] {
+  const rowById = new Map(rows.map((row) => [row.id, row]));
+  const targetRowIds = new Set<string>();
+  const queue: AutomationPublishTargetRow[] = [];
+
+  for (const rowId of initialTargetRowIds) {
+    const row = rowById.get(rowId);
+    if (!row || targetRowIds.has(row.id)) continue;
+    targetRowIds.add(row.id);
+    queue.push(row);
+  }
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const row = queue[index];
+    const blockers = findPublishRoomBlockers(row, rows);
+    for (const blocker of blockers) {
+      const blockerRow = rowById.get(blocker.id);
+      if (!blockerRow || targetRowIds.has(blockerRow.id)) continue;
+      if (!isClassroomPublishEligible(blockerRow).eligible) continue;
+      targetRowIds.add(blockerRow.id);
+      queue.push(blockerRow);
+    }
+  }
+
+  return [...targetRowIds];
+}
+
 export async function selectAutomationPublishTargetRowIds(
   db: Database,
   rows: ClassroomRow[],
@@ -1794,7 +1858,7 @@ export async function selectAutomationPublishTargetRowIds(
     }
   }
 
-  return targets;
+  return expandAutomationPublishTargetRowIds(rows, targets);
 }
 
 export async function getClassroomAssignmentByRunId(

@@ -268,6 +268,13 @@ export interface LineLinkValidationReviewer {
   openAssignments: number;
 }
 
+export interface LineLinkValidationPagination {
+  page: number;
+  pageSize: number;
+  total: number;
+  pageCount: number;
+}
+
 export interface LineLinkValidationTask {
   id: string;
   contactId: string;
