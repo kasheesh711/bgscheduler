@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { getDb } from "@/lib/db";
 import { syncRoomUtilizationSessions } from "@/lib/room-capacity/utilization";
 
@@ -24,6 +25,8 @@ function hasValidCronSecret(request: NextRequest): CronSecretStatus {
 
 export async function POST(request: NextRequest) {
   const cronSecretStatus = hasValidCronSecret(request);
+  let triggerSource: "cron" | "admin" = cronSecretStatus === "valid" ? "cron" : "admin";
+  let actorEmail: string | null = null;
   if (cronSecretStatus !== "valid") {
     const session = await auth();
     if (!session) {
@@ -32,13 +35,20 @@ export async function POST(request: NextRequest) {
       }
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    actorEmail = session.user?.email ?? null;
+    triggerSource = "admin";
   }
 
-  try {
-    const result = await syncRoomUtilizationSessions(getDb());
-    return NextResponse.json({ ok: true, ...result });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to sync room utilization";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+  return withCronInvocationAudit(
+    { jobKey: "room_utilization", triggerSource, actorEmail, requestMethod: request.method },
+    async () => {
+      try {
+        const result = await syncRoomUtilizationSessions(getDb());
+        return NextResponse.json({ ok: true, ...result });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to sync room utilization";
+        return NextResponse.json({ error: message }, { status: 500 });
+      }
+    },
+  );
 }

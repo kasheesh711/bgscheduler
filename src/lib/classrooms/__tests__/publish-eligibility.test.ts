@@ -5,6 +5,7 @@ import {
   buildRoomConflictWarnings,
   classroomTimestampToWiseIso,
   estimatePublishRemainingMs,
+  expandAutomationPublishTargetRowIds,
   findExternalRoomBlocker,
   findPublishRoomBlockers,
   findTemporaryPublishLocation,
@@ -345,6 +346,65 @@ describe("findPublishRoomBlockers", () => {
     };
 
     expect(findPublishRoomBlockers(row, [later])).toEqual([]);
+  });
+});
+
+describe("expandAutomationPublishTargetRowIds", () => {
+  function publishRow(overrides: Record<string, unknown>) {
+    return {
+      id: "row",
+      tutorDisplayName: "Tutor",
+      currentWiseLocation: "Focus",
+      assignedRoom: "Remember (TV)",
+      startMinute: 600,
+      endMinute: 660,
+      status: "assigned" as const,
+      sessionType: "OFFLINE",
+      wiseClassId: "class-1",
+      wiseSessionId: "session-1",
+      warnings: [] as string[],
+      ...overrides,
+    };
+  }
+
+  it("recursively includes eligible rows blocking target rooms", () => {
+    const target = publishRow({
+      id: "target",
+      currentWiseLocation: "Focus",
+      assignedRoom: "Remember (TV)",
+    });
+    const blocker = publishRow({
+      id: "blocker",
+      currentWiseLocation: "Remember (TV)",
+      assignedRoom: "Doubt (TV)",
+    });
+    const downstream = publishRow({
+      id: "downstream",
+      currentWiseLocation: "Doubt",
+      assignedRoom: "Joy (TV)",
+    });
+
+    expect(expandAutomationPublishTargetRowIds([target, blocker, downstream], ["target"])).toEqual([
+      "target",
+      "blocker",
+      "downstream",
+    ]);
+  });
+
+  it("does not include ineligible blockers", () => {
+    const target = publishRow({
+      id: "target",
+      currentWiseLocation: "Focus",
+      assignedRoom: "Remember (TV)",
+    });
+    const blocker = publishRow({
+      id: "blocker",
+      currentWiseLocation: "Remember (TV)",
+      assignedRoom: "Doubt (TV)",
+      wiseClassId: null,
+    });
+
+    expect(expandAutomationPublishTargetRowIds([target, blocker], ["target"])).toEqual(["target"]);
   });
 });
 

@@ -48,6 +48,44 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     expect(res.headers.get("location")).toBeNull();
   });
 
+  it("/api/line/contacts/oa-resolver/worklist bypasses middleware so extension token auth can run", async () => {
+    const res = await middleware(
+      makeReq("/api/line/contacts/oa-resolver/worklist") as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("/api/line/contacts/oa-resolver/runs/:runId/rows bypasses middleware so extension token auth can run", async () => {
+    const res = await middleware(
+      makeReq("/api/line/contacts/oa-resolver/runs/11111111-1111-1111-1111-111111111111/rows") as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("/api/line/contacts/oa-resolver/runs still requires app auth", async () => {
+    const res = await middleware(
+      makeReq("/api/line/contacts/oa-resolver/runs", false) as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/login");
+  });
+
+  it("/api/line/contacts/oa-resolver/runs/:runId/commit still requires app auth", async () => {
+    const res = await middleware(
+      makeReq("/api/line/contacts/oa-resolver/runs/11111111-1111-1111-1111-111111111111/commit", false) as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/login");
+  });
+
   it("non-public route /search redirects to /login when unauthenticated, with callbackUrl preserved", async () => {
     const res = await middleware(makeReq("/search", false) as never, {} as never) as Response;
 

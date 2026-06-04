@@ -43,6 +43,14 @@ function detail(overrides: Record<string, unknown> = {}) {
 function makeDb(input: {
   existingEmailRuns?: Array<{ id: string }>;
   publishJobs?: unknown[] | null;
+  teacherEmailRuns?: Array<{
+    status: string;
+    attemptedCount: number;
+    successCount: number;
+    failedCount: number;
+    blockedCount: number;
+    updatedAt: Date;
+  }>;
   adminEmails?: string[];
 }) {
   let selectCall = 0;
@@ -70,6 +78,15 @@ function makeDb(input: {
           from: vi.fn(() => ({
             where: vi.fn(() => ({
               orderBy: vi.fn().mockResolvedValue(input.publishJobs ?? []),
+            })),
+          })),
+        };
+      }
+      if (call === 2 && input.publishJobs !== null) {
+        return {
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              orderBy: vi.fn().mockResolvedValue(input.teacherEmailRuns ?? []),
             })),
           })),
         };
@@ -117,7 +134,46 @@ describe("sendAdminClassroomScheduleEmail", () => {
     expect(getClassroomAssignmentForDate).toHaveBeenCalledWith(db, "2026-05-26");
     expect(sender.sendEmail).toHaveBeenCalledTimes(2);
     expect(sender.sendEmail.mock.calls[0][0].text).toContain("BeGifted classroom assignments - 2026-05-26");
+    expect(sender.sendEmail.mock.calls[0][0].text).toContain("Tutor schedule emails: not sent yet.");
     expect(sender.sendEmail.mock.calls[0][0].text).toContain("Kevin");
+  });
+
+  it("includes teacher schedule email counts in the admin summary", async () => {
+    const db = makeDb({
+      publishJobs: [],
+      teacherEmailRuns: [
+        {
+          status: "sent",
+          attemptedCount: 2,
+          successCount: 2,
+          failedCount: 0,
+          blockedCount: 1,
+          updatedAt: new Date("2026-05-26T00:05:00.000Z"),
+        },
+        {
+          status: "partial",
+          attemptedCount: 1,
+          successCount: 0,
+          failedCount: 1,
+          blockedCount: 0,
+          updatedAt: new Date("2026-05-26T00:01:00.000Z"),
+        },
+      ],
+      adminEmails: ["admin@example.com"],
+    });
+    const sender = { sendEmail: vi.fn().mockResolvedValue({ id: "msg-1" }) };
+
+    const result = await sendAdminClassroomScheduleEmail(db as never, {
+      assignmentDate: "2026-05-26",
+      now: new Date("2026-05-26T00:00:00.000Z"),
+      sender,
+    });
+
+    expect(result.status).toBe("sent");
+    expect(sender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining("Tutor schedule emails: 2 sent; 1 failed; 1 blocked; 3 attempted; 2 run(s); latest status sent"),
+      html: expect.stringContaining("Tutor schedule emails: <strong>2</strong> sent; <strong>1</strong> failed; <strong>1</strong> blocked; 3 attempted across 2 run(s). Latest status: sent."),
+    }));
   });
 
   it("waits during the retry window when no current-day run exists", async () => {

@@ -17,12 +17,20 @@
       "schedule": "5,35 * * * *"
     },
     {
+      "path": "/api/internal/sync-leave-requests",
+      "schedule": "15,45 * * * *"
+    },
+    {
       "path": "/api/internal/class-assignments/morning",
       "schedule": "45 23 * * *"
     },
     {
       "path": "/api/internal/class-assignments/admin-email",
       "schedule": "0,10,20,30 0 * * *"
+    },
+    {
+      "path": "/api/internal/student-promotions/july-1",
+      "schedule": "5 17 30 6 *"
     }
   ]
 }

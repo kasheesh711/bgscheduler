@@ -1033,7 +1033,7 @@ export async function sendScheduleEmailsForRun(
   const senderKey = options.senderKey ?? "primary";
   const mode = options.mode ?? "selected";
   const resolvedSender = sender ?? createAppsScriptScheduleEmailSender(senderKey);
-  const autoFailoverEnabled = senderKey === "primary" && mode === "selected";
+  const autoFailoverEnabled = senderKey === "primary" && (mode === "selected" || mode === "failed_only");
   const preview = await getScheduleEmailPreview(db, runId, { senderKey });
   const selectedGroupIds = options.recipientGroupIds === undefined
     ? null

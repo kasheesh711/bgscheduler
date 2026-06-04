@@ -1,0 +1,137 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>LINE OA Resolver</title>
+    <style>
+      body {
+        width: 360px;
+        margin: 0;
+        font: 13px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #15171a;
+        background: #fbfaf7;
+      }
+      main {
+        padding: 14px;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 16px;
+      }
+      p {
+        margin: 0 0 12px;
+        color: #636973;
+      }
+      label {
+        display: block;
+        margin: 10px 0 4px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #636973;
+      }
+      input {
+        box-sizing: border-box;
+        width: 100%;
+        height: 32px;
+        border: 1px solid #d8d4cb;
+        border-radius: 8px;
+        padding: 0 9px;
+        background: #fff;
+        font: inherit;
+      }
+      .check {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        margin-top: 12px;
+        padding: 8px;
+        border: 1px solid #e6e0d6;
+        border-radius: 8px;
+        background: #fff;
+      }
+      .check input {
+        width: 16px;
+        height: 16px;
+        margin-top: 2px;
+        flex: 0 0 auto;
+      }
+      .check label {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0;
+        text-transform: none;
+        color: #15171a;
+      }
+      .check span {
+        display: block;
+        margin-top: 2px;
+        color: #636973;
+        font-weight: 400;
+      }
+      button {
+        height: 32px;
+        border: 1px solid #0b83b8;
+        border-radius: 8px;
+        padding: 0 10px;
+        background: #0b83b8;
+        color: #fff;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button.secondary {
+        border-color: #d8d4cb;
+        background: #fff;
+        color: #15171a;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .status {
+        margin-top: 12px;
+        border: 1px solid #e6e0d6;
+        border-radius: 8px;
+        padding: 8px;
+        color: #636973;
+        background: #fff;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>LINE OA Resolver</h1>
+      <p>Paste the Scheduler token, open LINE OA Manager, then start the resolver.</p>
+
+      <label for="baseUrl">Scheduler URL</label>
+      <input id="baseUrl" placeholder="https://bgscheduler.vercel.app">
+
+      <label for="token">Resolver token</label>
+      <input id="token" placeholder="Paste token from /line-review">
+
+      <div class="check">
+        <input id="overnight" type="checkbox">
+        <div>
+          <label for="overnight">Overnight unattended</label>
+          <span>Log uncertain rows and keep going instead of pausing for manual capture.</span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="start">Start / resume</button>
+        <button id="stop" class="secondary">Stop</button>
+      </div>
+
+      <div id="status" class="status">Idle</div>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -10,16 +10,22 @@ import { fetchAllFutureSessions } from "@/lib/wise/fetchers";
 import type { WiseSession } from "@/lib/wise/types";
 import {
   CLASSROOM_ASSIGNMENT_FRESHNESS_MS,
+  getFreshClassroomSnapshotForAssignment,
   publishClassroomAssignmentRun,
   runIncrementalClassroomAssignment,
   selectAutomationPublishTargetRowIds,
   type ClassroomAssignmentDetail,
   type PublishSummary,
 } from "./data";
+import {
+  sendScheduleEmailsForRun,
+  type ScheduleEmailSendResult,
+} from "./schedule-email";
 
 const DEFAULT_SYNC_WAIT_MS = 90_000;
 const SYNC_POLL_MS = 5_000;
 const AUTOMATION_ACTOR = "cron@classroom-assignments";
+const SCHEDULE_EMAIL_ACTOR = "cron@classroom-schedule-email";
 
 interface LatestSync {
   id: string;
@@ -34,6 +40,11 @@ export interface MorningAutomationDateResult {
   changedRows: number;
   targetPublishRows: number;
   publishSummary: PublishSummary;
+  scheduleEmail?: {
+    summary: ScheduleEmailSendResult["summary"];
+    failover?: NonNullable<ScheduleEmailSendResult["failover"]>;
+  };
+  scheduleEmailError?: string;
   events: number;
   detail: ClassroomAssignmentDetail;
 }
@@ -47,6 +58,7 @@ export interface MorningAutomationResult {
     mode: "reused" | "waited" | "triggered";
     syncRunId: string | null;
     finishedAt: string | null;
+    snapshotId?: string | null;
   };
   dates: MorningAutomationDateResult[];
 }
@@ -174,6 +186,7 @@ export async function runClassroomMorningAutomation(
   const sync = await ensureFreshWiseSyncForClassroomAutomation(db, {
     maxWaitMs: options.maxSyncWaitMs,
   });
+  const classroomSnapshot = await getFreshClassroomSnapshotForAssignment(db);
   const client = createWiseClient();
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const liveSessions = options.liveSessions ?? await fetchAllFutureSessions(client, instituteId);
@@ -185,6 +198,8 @@ export async function runClassroomMorningAutomation(
       automationBatchId,
       createdBy: AUTOMATION_ACTOR,
       liveSessions,
+      snapshotId: classroomSnapshot.snapshotId,
+      trustedSnapshotMeta: classroomSnapshot.snapshotMeta,
     });
     if (!detail.run) throw new Error(`Classroom assignment run was not created for ${date}`);
     const targetRowIds = await selectAutomationPublishTargetRowIds(db, detail.rows, liveSessions, client);
@@ -197,12 +212,34 @@ export async function runClassroomMorningAutomation(
       publishSummary = published.summary;
     }
 
+    let scheduleEmail: MorningAutomationDateResult["scheduleEmail"];
+    let scheduleEmailError: string | undefined;
+    if (date === startDate) {
+      try {
+        const sent = await sendScheduleEmailsForRun(
+          db,
+          detail.run.id,
+          SCHEDULE_EMAIL_ACTOR,
+          undefined,
+          { mode: "failed_only" },
+        );
+        scheduleEmail = {
+          summary: sent.summary,
+          ...(sent.failover ? { failover: sent.failover } : {}),
+        };
+      } catch (error) {
+        scheduleEmailError = error instanceof Error ? error.message : "Schedule email send failed";
+      }
+    }
+
     results.push({
       date,
       runId: detail.run.id,
       changedRows: detail.rows.filter((row) => row.changeType !== "carried").length,
       targetPublishRows: targetRowIds.length,
       publishSummary,
+      ...(scheduleEmail ? { scheduleEmail } : {}),
+      ...(scheduleEmailError ? { scheduleEmailError } : {}),
       events: detail.events.length,
       detail,
     });
@@ -213,7 +250,10 @@ export async function runClassroomMorningAutomation(
     automationBatchId,
     startDate,
     endDate: dates[dates.length - 1],
-    sync,
+    sync: {
+      ...sync,
+      snapshotId: classroomSnapshot.snapshotId,
+    },
     dates: results,
   };
 }

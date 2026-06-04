@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Popover,
   PopoverContent,
@@ -14,16 +15,20 @@ import { cn } from "@/lib/utils";
 
 const SCHEDULING_ITEMS = [
   { href: "/scheduler", label: "Scheduler" },
+  { href: "/line-review", label: "LINE AI Review" },
   { href: "/scheduler/metrics", label: "Scheduler Metrics" },
   { href: "/search", label: "Search" },
+  { href: "/leave-requests", label: "Leave Requests", badgeKey: "leaveRequests" },
   { href: "/tutor-profiles", label: "Tutor Profiles" },
   { href: "/class-assignments", label: "Class Assignments" },
   { href: "/room-capacity", label: "Room Capacity" },
 ];
 
 const NAV_ITEMS = [
+  { href: "/student-promotions", label: "Student Promotions" },
   { href: "/sales-dashboard", label: "Sales Dashboard" },
   { href: "/credit-control", label: "Credit Control" },
+  { href: "/payroll", label: "Payroll" },
   { href: "/wise-activity", label: "Wise Audit" },
   { href: "/data-health", label: "Data Health" },
 ];
@@ -44,7 +49,19 @@ function navLinkClass(isActive: boolean) {
 export function AppNav() {
   const pathname = usePathname();
   const [schedulingOpen, setSchedulingOpen] = useState(false);
+  const [leaveRequestCount, setLeaveRequestCount] = useState(0);
   const schedulingActive = SCHEDULING_ITEMS.some((item) => isActivePath(pathname, item.href));
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/leave-requests?summaryOnly=true", { signal: controller.signal })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload: { unreadActionCount?: number } | null) => {
+        setLeaveRequestCount(Number(payload?.unreadActionCount ?? 0));
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [pathname]);
 
   return (
     <nav className="flex h-11 flex-shrink-0 items-center overflow-x-auto border-b border-border bg-card px-4 [scrollbar-width:none] lg:px-6 [&::-webkit-scrollbar]:hidden">
@@ -83,9 +100,14 @@ export function AppNav() {
                     key={item.href}
                     href={item.href}
                     onClick={() => setSchedulingOpen(false)}
-                    className={navLinkClass(isActive)}
+                    className={cn(navLinkClass(isActive), "flex items-center justify-between gap-2")}
                   >
-                    {item.label}
+                    <span>{item.label}</span>
+                    {item.badgeKey === "leaveRequests" && leaveRequestCount > 0 && (
+                      <Badge variant="outline" className="border-amber-200 bg-amber-50 px-1.5 text-amber-900">
+                        {leaveRequestCount}
+                      </Badge>
+                    )}
                   </Link>
                 );
               })}

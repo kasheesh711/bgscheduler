@@ -197,6 +197,76 @@
       "when": 1780010000000,
       "tag": "0030_scheduler_feedback_telemetry",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1780030000000,
+      "tag": "0031_line_operational_reviews",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1780035000000,
+      "tag": "0032_line_oa_resolver",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1780128000000,
+      "tag": "0033_line_link_validation",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1780214400000,
+      "tag": "0034_wise_payroll_tracker",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1780218000000,
+      "tag": "0035_payroll_invoice_transaction_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1780304400000,
+      "tag": "0036_tutor_leave_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1780311600000,
+      "tag": "0037_payroll_rate_cards",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1780315200000,
+      "tag": "0038_data_health_cron_invocations",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1780358400000,
+      "tag": "0039_line_link_validation_source_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1780362000000,
+      "tag": "0040_student_promotions",
+      "breakpoints": true
     }
   ]
 }

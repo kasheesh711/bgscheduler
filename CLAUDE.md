@@ -8,6 +8,7 @@
 - **Wise API**: https://api.wiseapp.live
 - **Wise namespace**: `begifted-education`
 - **Wise institute**: `696e1f4d90102225641cc413`
+- **Docs**: comprehensive handbook at [docs/README.md](docs/README.md); open questions in [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md)
 
 ## Current Status
 
@@ -73,262 +74,62 @@ A performance and UX overhaul of the existing BGScheduler tutor scheduling tool 
 <!-- GSD:stack-start source:codebase/STACK.md -->
 ## Technology Stack
 
-## Languages
-- TypeScript ^5.9.3 - All application code (`src/**/*.ts`, `src/**/*.tsx`)
-- SQL (PostgreSQL) - Database schema via Drizzle ORM migrations (`drizzle/`)
-## Runtime
-- Node.js (no `.nvmrc` detected; target ES2017 in `tsconfig.json`)
-- Vercel Serverless Functions (max 800s duration configured in `src/app/api/internal/sync-wise/route.ts`)
-- npm
-- Lockfile: `package-lock.json` present
-## Frameworks
-- Next.js 16.2.2 - App Router, full-stack framework
-- React 19.2.4 - UI rendering
-- React DOM 19.2.4 - Browser rendering
-- Vitest ^4.1.2 - Unit test runner, node environment, globals enabled
-- Config: `vitest.config.ts`
-- Tailwind CSS ^4 - Utility-first CSS (via `@tailwindcss/postcss` plugin)
-- PostCSS - CSS processing (`postcss.config.mjs`)
-- ESLint ^9 - Linting with `eslint-config-next` 16.2.2 (core-web-vitals + typescript presets)
-- TypeScript ^5.9.3 - Type checking (`tsconfig.json`, strict mode, bundler module resolution)
-## Key Dependencies
-- `next-auth` ^5.0.0-beta.30 - Authentication (Auth.js v5 beta with Google provider)
-- `drizzle-orm` ^0.45.2 - Type-safe ORM for PostgreSQL
-- `@neondatabase/serverless` ^1.0.2 - Neon serverless Postgres driver (HTTP mode)
-- `zod` ^4.3.6 - Runtime schema validation
-- `drizzle-kit` ^0.31.10 - Schema migrations and generation
-- `tsx` (implicit via `db:seed` script) - TypeScript execution for seed scripts
-- `shadcn` ^4.1.2 - Component library (uses Radix primitives under the hood)
-- `@base-ui/react` ^1.3.0 - Base UI primitives
-- `cmdk` ^1.1.1 - Command palette / searchable combobox
-- `lucide-react` ^1.7.0 - Icon library
-- `class-variance-authority` ^0.7.1 - Variant-based component styling
-- `clsx` ^2.1.1 - Conditional className utility
-- `tailwind-merge` ^3.5.0 - Tailwind class deduplication
-- `tw-animate-css` ^1.4.0 - Tailwind animation utilities
-- `date-fns` ^4.1.0 - Date manipulation
-- `date-fns-tz` ^3.2.0 - Timezone-aware date operations (Asia/Bangkok)
-- `uuid` ^13.0.0 - UUID generation
-## Configuration
-- `tsconfig.json`: strict mode, ES2017 target, bundler moduleResolution
-- Path alias: `@/*` maps to `./src/*`
-- `.env.example` documents 9 required variables (see INTEGRATIONS.md)
-- `.env.local` present (gitignored, contains local secrets)
-- Variables loaded via `process.env.*` at runtime
-- `next.config.ts`: Default configuration (no custom settings)
-- `postcss.config.mjs`: `@tailwindcss/postcss` plugin only
-- `eslint.config.mjs`: Flat config with core-web-vitals + typescript presets
-- `drizzle.config.ts`: PostgreSQL dialect, schema at `./src/lib/db/schema.ts`, migrations output to `./drizzle/`
-## NPM Scripts
-## Platform Requirements
-- Node.js (ES2017+ compatible)
-- npm
-- PostgreSQL connection (Neon or local)
-- Google OAuth credentials for auth testing
-- Vercel Pro (30-minute cron)
-- Neon Postgres (ap-southeast-1 region)
-- Vercel Cron for scheduled sync
-- Vercel Serverless Functions (800s max duration for sync endpoint)
+No stack changes from the locked baseline — all versions current as of 2026-05-31.
+
+- **Languages**: TypeScript ^5.9.3 (all of `src/`); SQL (PostgreSQL) via Drizzle migrations in `drizzle/` (35 files). Config tooling in `.mjs`.
+- **Runtime**: Node.js (no version pinned), Vercel Serverless Functions. TS target ES2017, module `esnext`, `moduleResolution: bundler`. Package manager npm (`package-lock.json`).
+- **Framework**: Next.js 16.2.2 (App Router, `cacheComponents: true` — the only custom `next.config.ts` setting; uses `"use cache"` + `cacheTag`/`cacheLife`). React / React DOM 19.2.4. UI under `src/app/`, authed routes in the `(app)` group.
+- **Testing**: Vitest ^4.1.2 with two projects — `unit` (node env, `src/**/*.test.ts(x)`) and `integration` (`*.integration.test.ts`, serial forks). `testcontainers` spins up ephemeral Postgres for the 3 integration suites. `@vitest/coverage-v8` for coverage.
+- **DB / ORM**: `drizzle-orm` 0.45.2 (schema with ~78 tables at `src/lib/db/schema.ts`). `@neondatabase/serverless` is the primary driver (neon-http, singleton on `globalThis.__bgscheduler_db`). `pg` ^8.21.0 is used ONLY where transactions are required (payroll sync via `node-postgres`), since neon-http has no transaction support. `drizzle-kit` ^0.31.10 for migrations.
+- **Auth / validation**: `next-auth` 5.0.0-beta.30 (Auth.js v5, Google provider + `admin_users` allowlist; edge variant `src/lib/auth-edge.ts` backs middleware). `zod` ^4.3.6 (centralized env schema + per-route body schemas).
+- **AI scheduler**: no vendor SDK — calls OpenAI's Responses API directly over `fetch`; reads `OPENAI_*` from `process.env`, gated by `ENABLE_AI_SCHEDULER`.
+- **Sheets ingest**: no Google client lib — leave-request import hits OAuth + Sheets over `fetch`. `xlsx` ^0.18.5 parses sales-dashboard/projection imports.
+- **UI / styling**: Tailwind CSS ^4 (theme in `src/app/globals.css`, OKLCH tokens; no `tailwind.config`), `shadcn` ^4.1.2 over `@base-ui/react` 1.3.0, `cmdk`, `lucide-react`, `class-variance-authority` + `clsx` + `tailwind-merge` (`cn()`), `chart.js`. Fonts: Inter + JetBrains Mono via `next/font/google`.
+- **Dates**: `date-fns` + `date-fns-tz` (Asia/Bangkok), `uuid`.
+- **Config**: strict TS, path alias `@/*` → `./src/*`. ESLint 9 flat config (`next/core-web-vitals` + `next/typescript`, no custom rules). `src/lib/env.ts` validates 9 required env vars at startup (+ 3 optional LINE vars); function `maxDuration` is set per-route (most sync/import routes 800s on Vercel Pro), NOT in `vercel.json`.
+- **Platform**: Vercel Pro with 7 staggered crons (Wise snapshot `*/30`, plus sales/credit-control/wise-activity/leave-requests/class-assignment crons); Neon Postgres (ap-southeast-1); Docker for integration tests. External: Wise API, OpenAI (when enabled), Google Sheets, LINE Messaging API.
+
+_Full detail: [.planning/codebase/STACK.md](.planning/codebase/STACK.md) and the [docs/ handbook](docs/README.md)._
 <!-- GSD:stack-end -->
 
 <!-- GSD:conventions-start source:CONVENTIONS.md -->
 ## Conventions
 
-## Naming Patterns
-- kebab-case for all files: `session-colors.ts`, `week-overview.tsx`, `app-nav.tsx`, `copy-button.tsx`
-- React components use `.tsx`, logic/types use `.ts`
-- Test files: `{module}.test.ts` inside `__tests__/` directories
-- Schema file: `schema.ts` (singular)
-- Type definition files: `types.ts` (per module)
-- camelCase for all functions: `executeSearch`, `buildCompareTutor`, `detectConflicts`, `normalizeWorkingHours`
-- Prefix `get` for getters: `getDb()`, `getEnv()`, `getBaseName()`, `getWiseTeacherDisplayName()`
-- Prefix `is`/`has` for boolean returns: `isBlockingStatus()`, `isOnlineVariant()`
-- Prefix `make`/`create` for factory functions: `createWiseClient()`, `createDb()`
-- Prefix `parse`/`normalize` for data transformation: `parseTimeToMinutes()`, `normalizeLeaves()`, `normalizeTag()`
-- Prefix `fetch` for API calls: `fetchAllTeachers()`, `fetchAllFutureSessions()`
-- camelCase: `snapshotMeta`, `tutorGroupIds`, `sessionBlocks`
-- UPPER_SNAKE_CASE for constants: `TUTOR_COLORS`, `HOUR_HEIGHT`, `DAY_NAMES`, `DISPLAY_DAYS`, `ONLINE_SESSION_TYPES`
-- Prefix `_` for module-level singletons: `let _db`, `let _cachedIndex`
-- PascalCase: `SearchRequest`, `CompareTutor`, `IndexedTutorGroup`
-- Prefix `Wise` for external API types: `WiseTeacher`, `WiseSession`, `WiseAvailabilityResponse`
-- Prefix `Indexed` for in-memory index types: `IndexedTutorGroup`, `IndexedSessionBlock`
-- Prefix `Normalized` for pipeline output types: `NormalizedSessionBlock`
-- Use `interface` for object shapes, `type` for unions/aliases: `type SearchMode = "recurring" | "one_time"`, `type WiseTag = string | WiseTagObject`
-- Enums defined via Drizzle `pgEnum`, not TypeScript `enum`
-- snake_case for table/column names: `tutor_identity_groups`, `snapshot_id`, `created_at`
-- camelCase for Drizzle schema object names: `tutorIdentityGroups`, `snapshotId`
-## Code Style
-- No dedicated formatter config (no `.prettierrc`). Relies on editor defaults.
-- 2-space indentation
-- Double quotes for strings in most files; some shadcn/ui components omit semicolons
-- Trailing commas in multi-line structures
-- Template literals for string interpolation
-- ESLint 9 with flat config at `eslint.config.mjs`
-- Extends `eslint-config-next/core-web-vitals` and `eslint-config-next/typescript`
-- No custom rules added beyond Next.js defaults
-- `strict: true` in `tsconfig.json`
-- Target ES2017, module esnext, bundler resolution
-- Non-null assertions used sparingly (e.g., `this.queue.shift()!`)
-- Path alias: `@/*` maps to `./src/*`
-## Import Organization
-- `@/*` -> `./src/*` (configured in both `tsconfig.json` and `vitest.config.ts`)
-## Error Handling
-- Auth check first, return 401 if unauthorized
-- Parse JSON body in try/catch, return 400 for invalid JSON
-- Validate with Zod `.safeParse()`, return 400 with flattened errors on failure
-- Wrap business logic in try/catch, return 500 with error message
-- Pattern: `const message = err instanceof Error ? err.message : "Compare failed"`
-- Unknown session status -> blocking (safe default)
-- Unresolved identity/modality/qualification -> route to "Needs Review", never "Available"
-- Missing env vars -> throw at startup via Zod validation in `src/lib/env.ts`
-- Retry with exponential backoff: 1s, 2s, 4s (configurable `maxRetries`)
-- Concurrency limiter (max 5 default, 15 for production sync)
-- Errors re-thrown after max retries exhausted
-## Validation
-- Use Zod schemas at API route boundaries
-- Schema defined as `const` at module scope, above the handler
-- Transform strings to numbers where needed: `.transform(Number)`
-- `.safeParse()` pattern (never `.parse()` which throws)
-- Centralized in `src/lib/env.ts` using Zod schema
-- Validates all 9 required env vars at startup
-- Defaults provided for `WISE_NAMESPACE` and `WISE_INSTITUTE_ID`
-## Logging
-- `console.error()` for validation failures and caught errors
-- No request logging middleware
-- Sync orchestrator likely logs progress (not examined in detail)
-## Comments
-- JSDoc `/** */` for exported public functions with brief description
-- Section headers using `// -- Section Name --` pattern with em-dash decorations
-- Inline comments for non-obvious logic (e.g., `// shift to Monday`, `// fail-closed`)
-- Type comments on interface fields: `dayOfWeek?: number; // 0=Sunday..6=Saturday`
-## Function Design
-- Use destructured objects for 3+ params
-- Optional params via `?` property or default values: `staleThresholdMs: number = 35 * 60 * 1000`
-- Factory functions accept config objects: `WiseClientConfig`
-- Return typed objects, never raw primitives for complex operations
-- Tuples of `{ result, issues }` for normalization functions: `{ modality, issue }`, `{ qualifications, issues }`
-- Nullable returns use `| null` (not undefined): `extractNickname() -> string | null`
-## Module Design
-- Named exports only (no default exports except page components)
-- Page components: `export default function SearchPage()`
-- Re-export types from central `types.ts` files
-- Helper functions exported individually, not via barrel
-- Not used. Each module imports directly from the specific file.
-- Lazy initialization pattern for DB and search index
-- Module-level `let _db` with `getDb()` accessor
-- `ensureIndex(db)` checks staleness and rebuilds if needed
-## Component Patterns
-- Located in `src/components/ui/`
-- Use `class-variance-authority` (CVA) for variant styling
-- Use `cn()` utility from `src/lib/utils.ts` for class merging
-- Wrap `@base-ui/react` primitives with project styling
-- Export both component and variants: `export { Button, buttonVariants }`
-- Located in `src/components/{feature}/` (e.g., `compare/`, `search/`, `layout/`)
-- `"use client"` directive at top of interactive components
-- Props typed inline or via imported interfaces
-- Constants defined above component (e.g., `HOUR_HEIGHT`, `START_HOUR`)
-- Helper functions defined in same file above component
-- `"use client"` with Suspense wrapper for pages using `useSearchParams`
-- Inner component pattern: `SearchPage` wraps `SearchPageInner` in Suspense
-- State management via `useState`/`useCallback`/`useRef` hooks
-- No external state management library
-- Tailwind CSS 4 utility classes inline
-- Semantic color tokens via CSS custom properties: `--available`, `--blocked`, `--conflict`
-- OKLCH color space for palette definition
-- Template literal for conditional classes: `` `${isActive ? "text-primary" : "text-muted-foreground"}` ``
-- Shared color logic in dedicated modules: `src/components/compare/session-colors.ts`
+These hold across all subsystems (search/compare, classroom assignment, sales, credit control, payroll, LINE/AI review, leave requests, room capacity, Wise activity).
+
+- **Naming**: kebab-case files (`.tsx` for components, `.ts` for logic/types); singular `schema.ts`; per-domain `types.ts`. Tests are `{module}.test.ts(x)` inside a sibling `__tests__/` dir (never colocated); integration tests use `.integration.test.ts`. camelCase functions, verb-prefixed: `get*`/`is*`/`has*`/`should*`/`make*`/`create*`/`parse*`/`normalize*`/`fetch*`/`derive*`/`resolve*`/`build*`/`compute*`/`detect*`/`find*`. UPPER_SNAKE_CASE constants. PascalCase types — domain-prefixed `Wise*` / `Indexed*` / `Normalized*` / `Compare*` / `Parsed*`. `interface` for shapes, `type` for unions. No TS `enum` — DB uses Drizzle `pgEnum` (snake_case SQL names, camelCase Drizzle objects).
+- **Code style**: no formatter config; 2-space indent; double quotes; semicolons in `src/lib/**` and `src/app/**` but OMITTED in shadcn/ui primitives (`src/components/ui/*` — leave as-is). Trailing commas, template literals. Two section-header comment styles coexist (em-dash bars in `src/lib`, long-hyphen blocks in `src/components`/newer libs) — match the file. Strict TS; non-null assertions only after defensive checks; type-predicate filters at boundaries.
+- **Imports**: external → `@/` aliases → relative → `import type`. Single alias `@/*` → `./src/*` (in both `tsconfig.json` and `vitest.config.ts`). No barrel files — import from specific files (exception: `import * as schema from "@/lib/db/schema"`).
+- **Error handling**: every mutating route follows 4 steps — `auth()` → 401; `request.json()` in try/catch → 400; `schema.safeParse()` → 400 with `.error.flatten()`; business logic in try/catch → 500 with `err instanceof Error ? err.message : "…"`. Statuses 200/400/401/404/500. Internal cron routes use **constant-time** `CRON_SECRET` comparison (`timingSafeEqual` + length pre-check, REL-07) via shared `src/lib/internal/cron-auth.ts`. Optional-table routes detect "relation does not exist" and return a typed missing payload (HTTP 200), not 500.
+- **Fail-closed (non-negotiable)**: unknown session status → blocking; unresolved identity/modality/qualification → "Needs Review", never "Available"; cancelled sessions non-blocking; modality contradictions emit `unknown` + low confidence, never guess.
+- **Validation**: Zod schemas as module-scope `const`; always `.safeParse()` (never `.parse()`). Prefer `z.coerce.*` for boundary parsing; Zod also validates external Wise payloads. Env centralized in `src/lib/env.ts` (9 required + 3 optional LINE vars; throws on invalid, logs only `fieldErrors`).
+- **Logging**: bare `console.error`/`console.log` only (no logger). Errors that must surface in Vercel logs or fire-and-forget boundaries use `console.error`; `console.log` reserved for the seed script. Never log bodies/secrets/env values.
+- **Comments**: JSDoc on exported functions (numbered steps for multi-step algorithms). Design-decision IDs (`D-04`, `MOD-01`, `REL-07`, `PAST-01`, etc.) are **load-bearing** — preserve them when editing nearby code. Zero `TODO`/`FIXME`/`HACK` in non-test source.
+- **Function design**: destructured object params for 3+ args / config objects; pipeline fns return `{ result, issues }`; guards return `T | null`; nullable returns use `| null`, not `undefined`.
+- **Modules**: named exports only (zero default exports in `src/lib`/`src/components`); page components and route handlers are the exceptions. Singletons are `globalThis`-anchored (`__bgscheduler_db`, `__bgscheduler_searchIndex`, `__bgscheduler_searchIndexBuildPromise`) to survive HMR — NOT `let _db`. Route logic lives in plain `src/lib/{domain}/*.ts` so it's unit-testable without the Next/auth route graph.
+- **Components**: shadcn/ui primitives in `src/components/ui/` (CVA `cva()` + `cn()`); feature dirs under `src/components/{feature}/`. Pages are async Server Components that fetch via server-only lib helpers and pass props to a client shell wrapped in `<Suspense>` with a skeleton. `"use client"` on interactive components; `useState`/`useCallback`/`useRef`/`useEffect` only (no Redux/Zustand). Tailwind 4 inline classes; OKLCH semantic tokens (`--available`/`--blocked`/`--conflict`/`--free-slot`); `TUTOR_COLORS = ["#3b82f6","#e67e22","#7c3aed"]`. Intentional non-reactive effects carry a targeted `eslint-disable` comment.
+
+_Full detail: [.planning/codebase/CONVENTIONS.md](.planning/codebase/CONVENTIONS.md) and the [docs/ handbook](docs/README.md)._
 <!-- GSD:conventions-end -->
 
 <!-- GSD:architecture-start source:ARCHITECTURE.md -->
 ## Architecture
 
-## Pattern Overview
-- **Snapshot-based data model** -- all tutor data is versioned under a `snapshot_id`. The active snapshot is atomically promoted after a successful sync. Failed syncs preserve the previous active snapshot.
-- **In-memory search index singleton** -- the entire active snapshot is loaded into a `SearchIndex` object in server memory. All search and compare queries run against this index with no additional DB queries. Stale detection triggers a rebuild when the active snapshot changes.
-- **ETL pipeline** -- a sync orchestrator fetches from the Wise API, normalizes data through six domain-specific modules, writes to Postgres, and promotes a new snapshot.
-- **Fail-closed safety** -- unresolved identity, modality, or qualification data routes tutors to "Needs Review", never "Available".
-## Layers
-- Purpose: HTTP communication with the Wise scheduling platform
-- Location: `src/lib/wise/`
-- Contains: `client.ts` (HTTP client with retry/backoff/concurrency), `fetchers.ts` (domain fetchers for teachers, availability, sessions), `types.ts` (Wise API response shapes)
-- Depends on: Nothing internal (pure HTTP + env vars)
-- Used by: Sync orchestrator
-- Purpose: Transform raw Wise API data into canonical internal representations
-- Location: `src/lib/normalization/`
-- Contains: `identity.ts` (tutor identity resolution with 5-step cascade), `availability.ts` (working hours normalization), `leaves.ts` (leave normalization with UTC-to-Bangkok conversion), `sessions.ts` (session blocking classification), `qualifications.ts` (tag parsing into subject/curriculum/level), `modality.ts` (online/onsite derivation), `timezone.ts` (Asia/Bangkok timezone utilities)
-- Depends on: Wise types
-- Used by: Sync orchestrator
-- Purpose: Full ETL pipeline -- fetch, normalize, persist, validate, promote
-- Location: `src/lib/sync/orchestrator.ts`
-- Contains: `runFullSync()` function (single entry point for the entire pipeline)
-- Depends on: Wise client, all normalization modules, DB layer
-- Used by: `POST /api/internal/sync-wise` route handler
-- Purpose: Postgres connection and schema definition
-- Location: `src/lib/db/`
-- Contains: `index.ts` (Neon serverless client singleton via `getDb()`), `schema.ts` (14 Drizzle ORM table definitions), `seed.ts` (admin user and alias seeding)
-- Depends on: `@neondatabase/serverless`, `drizzle-orm`
-- Used by: All server-side code (sync, search index, API routes, auth)
-- Purpose: In-memory data structure for fast query execution
-- Location: `src/lib/search/index.ts`
-- Contains: Module-level singleton (`currentIndex`), `buildIndex()` (loads entire snapshot into memory with parallel DB queries), `ensureIndex()` (lazy init with stale detection), indexed data structures (`IndexedTutorGroup`, `SearchIndex`)
-- Depends on: DB layer, schema
-- Used by: Search engine, compare engine, API routes (filters, tutors)
-- Purpose: Execute availability searches against the in-memory index
-- Location: `src/lib/search/engine.ts`
-- Contains: `executeSearch()` (slot-based search with recurring/one-time modes), blocking checks (sessions, leaves), qualification/modality filtering, multi-slot intersection
-- Depends on: Search index, normalization/timezone
-- Used by: `POST /api/search`, `POST /api/search/range`
-- Purpose: Build side-by-side tutor schedules, detect conflicts, find shared free slots
-- Location: `src/lib/search/compare.ts`
-- Contains: `buildCompareTutor()` (date-range filtered schedule assembly with weekday fallback), `detectConflicts()` (same-student overlap detection), `findSharedFreeSlots()` (interval intersection across tutors)
-- Depends on: Search index types
-- Used by: `POST /api/compare`, `POST /api/compare/discover`
-- Purpose: HTTP endpoints consumed by the frontend
-- Location: `src/app/api/`
-- Contains: Route handlers using Next.js App Router conventions
-- Depends on: Auth, DB, search index, search engine, compare engine
-- Used by: Frontend client components
-- Purpose: Admin UI for searching and comparing tutor availability
-- Location: `src/app/(app)/` (pages), `src/components/` (reusable components)
-- Contains: Client components with `"use client"` directive, shadcn/ui primitives
-- Depends on: API routes (via `fetch`), search types (shared type imports)
-- Used by: End users (admin staff)
-## Data Flow
-- **Server state**: Module-level singleton `currentIndex` in `src/lib/search/index.ts`. Rebuilt lazily when active snapshot changes.
-- **Client state**: React `useState` in `src/app/(app)/search/page.tsx`. Client-side tutor cache (`Map<string, CompareTutor>`) keyed by `tutorGroupId:weekStart` with incremental fetch. AbortController for request cancellation.
-- **Persistent client state**: Recent searches in `localStorage` (last 10).
-## Key Abstractions
-- Purpose: Versioned point-in-time capture of all tutor data
-- Examples: `src/lib/db/schema.ts` (table definition), `src/lib/sync/orchestrator.ts` (creation/promotion)
-- Pattern: Only one snapshot is `active = true` at a time. All data tables reference a `snapshotId`.
-- Purpose: In-memory representation of a tutor with all associated data (qualifications, availability, sessions, leaves, issues)
-- Examples: `src/lib/search/index.ts` (interface + build logic)
-- Pattern: Denormalized aggregate loaded once, queried many times. The `byWeekday` map provides O(1) weekday lookup.
-- Purpose: Logical grouping of multiple Wise teacher records that represent the same real person (e.g. online + onsite variants)
-- Examples: `src/lib/normalization/identity.ts` (`IdentityGroup` interface), `src/lib/db/schema.ts` (`tutorIdentityGroups` + `tutorIdentityGroupMembers` tables)
-- Pattern: 5-step cascade resolution: nickname extraction -> alias table lookup -> online/offline pair detection -> unresolved -> data_issue
-- Purpose: Rate-limited, retry-capable HTTP client for the Wise API
-- Examples: `src/lib/wise/client.ts`
-- Pattern: Queue-based concurrency limiter (max 5 or 15 concurrent), exponential backoff (1s/2s/4s), Basic Auth + API key headers
-## Entry Points
-- Location: `src/app/page.tsx`
-- Triggers: User navigates to `/`
-- Responsibilities: Redirects to `/search`
-- Location: `src/app/(app)/search/page.tsx`
-- Triggers: User navigates to `/search`
-- Responsibilities: Renders the side-by-side search + compare workspace. Client component with `"use client"` directive. All data fetching via `fetch()` to API routes.
-- Location: `src/app/api/internal/sync-wise/route.ts`
-- Triggers: Vercel cron every 30 minutes or manual `curl` with CRON_SECRET
-- Responsibilities: Runs the full sync pipeline. `maxDuration = 800`; shared runner skips overlap and fails abandoned `running` rows after 20 minutes.
-- Location: `src/middleware.ts`
-- Triggers: Every request (except static assets)
-- Responsibilities: Auth gate. Allows `/login`, `/api/auth/*`, `/api/internal/*` without auth. Redirects unauthenticated users to `/login`.
-## Error Handling
-- **Sync errors**: Per-teacher errors are caught and logged as `data_issues` without aborting the entire sync. Top-level sync errors mark the sync run as `failed` and preserve the previous active snapshot. (`src/lib/sync/orchestrator.ts` lines 239-249, 443-468)
-- **API route errors**: All route handlers wrap logic in try-catch, return `{ error: string }` with appropriate HTTP status codes (400, 401, 404, 500). Zod schema validation with `.safeParse()` returns 400 with flattened error details. (`src/app/api/compare/route.ts` lines 53-65)
-- **Search index staleness**: `ensureIndex()` checks active snapshot on every call. Stale data is flagged in response `warnings` array and `snapshotMeta.stale` boolean. (`src/lib/search/index.ts` lines 252-274)
-- **Data integrity**: Unresolved identity/modality/qualification routes tutors to "Needs Review" rather than silently omitting them. Cancelled sessions are explicitly non-blocking. Unknown session statuses are blocking (fail-closed). (`src/lib/search/engine.ts` lines 83-93)
-## Cross-Cutting Concerns
+**Pattern**: snapshot-versioned ETL + in-memory query index, extended into a multi-domain admin platform. Wise (the source of truth) is slow and rate-limited, so it is never queried on the request path — a background sync pulls all tutor data, normalizes it through six domain modules, persists it to Postgres tables keyed by an immutable `snapshot_id`, and serves search/compare reads from a process-global in-memory index. The same spine now hosts ~15 feature subsystems (search/compare, sales dashboard, credit control, payroll, leave requests, LINE/AI review, classroom assignment, room capacity, AI scheduler), each with its own sync/import pipeline and tables. Scale: **~78 tables, ~110 HTTP route handlers, 7 crons, 14 in-app pages, ~130 test files**.
+
+- **Core invariants**:
+  - **Snapshot persistence** — tutor writes scoped to `snapshot_id`; one atomic `UPDATE` flips a candidate to `active = true` after a successful sync; failed syncs preserve the prior snapshot. `past_session_blocks` is the sole cross-snapshot table (keyed by `group_canonical_key`).
+  - **Single in-memory index** — the active snapshot is loaded once into a `globalThis`-anchored singleton (`__bgscheduler_searchIndex`) and queried in-process; `ensureIndex()` rebuilds on snapshot-id or profile-version change, with build-promise coalescing against thundering herds.
+  - **ETL orchestrator** — one `runFullSync()` (`src/lib/sync/orchestrator.ts`) does fetch → normalize → persist → validate → promote in a single try/catch; `run-wise-sync.ts` wraps it with a single-flight guard and `revalidateTag("snapshot")` on success.
+  - **Fail-closed safety** — unresolved identity/modality/qualification → "Needs Review", never "Available" (`src/lib/search/engine.ts`).
+  - **Server-first reads** — Server Components fetch via cached `src/lib/data/*` helpers (`"use cache"` + `cacheTag`/`cacheLife`); clients hydrate from props and call API routes.
+- **Layers** (lower layers know nothing of upper): Wise client `src/lib/wise/` (retry/backoff, concurrency limiter 5→15 for sync, `RETRYABLE_STATUS_CODES` so 4xx fail fast; no internal imports) → normalization `src/lib/normalization/` (identity 5-step cascade, availability, leaves, sessions, qualifications, modality, timezone; depends only on Wise types) → orchestrator `src/lib/sync/` → DB `src/lib/db/` (`getDb()` Neon-http singleton, `schema.ts`) → in-memory index `src/lib/search/index.ts` → search engine `engine.ts` (recurring/one-time, multi-slot intersection) + compare engine `compare.ts` (`buildCompareTutor`/`detectConflicts`/`findSharedFreeSlots`) → API routes `src/app/api/` → server data layer `src/lib/data/` → frontend `src/app/(app)/` + `src/components/`.
+- **Key abstractions**: Snapshot (immutable point-in-time data); IndexedTutorGroup (denormalized read aggregate with O(1) `byWeekday`, `canonicalKey` denormalized for cross-snapshot past-session fetch); IdentityGroup (5-step cascade merging Wise teacher records); WiseClient (rate-limited HTTP); SearchIndex singleton (lazy, stale-detected); client-side `CompareTutor` cache (`Map<"tutorGroupId:weekStart:CACHE_VERSION", CompareTutor>` in `src/hooks/use-compare.ts`, version `v3`).
+- **Entry points**: `/` redirects to `/search`; `src/app/(app)/search/page.tsx` (async Server Component → `<SearchWorkspace>`); `src/app/api/internal/sync-wise/route.ts` (`maxDuration=800`, cron `*/30`, constant-time `CRON_SECRET`) + 6 other internal crons; `src/middleware.ts` (auth gate via edge Auth.js, public-route allowlist, else redirect to `/login`).
+- **Error handling**: fail-closed at the data boundary, fail-loud at the API boundary (uniform auth→JSON→Zod→try/catch), fail-isolated inside sync (per-teacher errors → `data_issues`, no abort; top-level throw → `sync_runs.status="failed"`, no promotion; promotion gate blocks at ≥50% unresolved identity). Staleness is a warning (90-min threshold), never withheld data.
+- **Cross-cutting**: Auth.js v5 (edge + Node split, `admin_users` allowlist, `spreadsheets.readonly` scope); Zod everywhere; `console.error` only; all times `Asia/Bangkok`; Next `"use cache"` tags (`snapshot` swept on sync, `past-sessions` deliberately not); non-Wise subsystems replicate the single-flight + `*_sync_runs` discipline rather than the snapshot/index machinery.
+
+_Full detail: [.planning/codebase/ARCHITECTURE.md](.planning/codebase/ARCHITECTURE.md), the [docs/ handbook](docs/README.md), and [docs/handbook/architecture.md](docs/handbook/architecture.md)._
 <!-- GSD:architecture-end -->
 
 <!-- GSD:skills-start source:skills/ -->

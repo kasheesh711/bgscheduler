@@ -13,7 +13,13 @@ import {
   fetchAllTeachers,
   fetchInstituteLocations,
   fetchTeacherAvailability,
+  fetchWiseAcceptedStudents,
+  fetchWiseCourse,
+  fetchWiseCourseParticipants,
+  fetchWiseStudentRegistrationData,
   updateSessionLocation,
+  updateWiseCourseSubject,
+  updateWiseStudentRegistrationAnswers,
 } from "../fetchers";
 
 describe("Wise fetchers", () => {
@@ -221,6 +227,116 @@ describe("Wise fetchers", () => {
 
     expect(locations).toEqual(["Joy", "Relax"]);
     expect(new URL(fetchMock.mock.calls[0][0] as string).pathname).toBe("/institutes/center-1/locations");
+  });
+
+  it("fetches accepted students with registration-related query flags", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ data: { students: Array.from({ length: 100 }, (_, index) => ({ _id: `student-${index}` })) } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ data: { students: [{ _id: "last-student" }] } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    global.fetch = fetchMock as typeof fetch;
+
+    const students = await fetchWiseAcceptedStudents(makeClient(), "center-1");
+
+    expect(students).toHaveLength(101);
+    const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(calledUrl.pathname).toBe("/institutes/v3/center-1/students");
+    expect(calledUrl.searchParams.get("status")).toBe("ACCEPTED");
+    expect(calledUrl.searchParams.get("showParents")).toBe("true");
+    expect(calledUrl.searchParams.get("showFeedbackData")).toBe("true");
+    expect(calledUrl.searchParams.get("showContractStatus")).toBe("true");
+  });
+
+  it("fetches and updates student registration fields", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: {
+              registrationData: {
+                fields: [{ questionId: "if89sblj", answer: "Year 8" }],
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: 200, data: { ok: true } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    global.fetch = fetchMock as typeof fetch;
+
+    const registration = await fetchWiseStudentRegistrationData(makeClient(), "center-1", "student-1");
+    await updateWiseStudentRegistrationAnswers(makeClient(), "center-1", "student-1", [
+      { questionId: "if89sblj", answer: "Year 9 / Grade 8" },
+    ]);
+
+    expect(registration.registrationData?.fields?.[0].answer).toBe("Year 8");
+    expect(new URL(fetchMock.mock.calls[0][0] as string).pathname).toBe(
+      "/institutes/center-1/participants/student-1",
+    );
+    expect(new URL(fetchMock.mock.calls[0][0] as string).searchParams.get("showRegistrationData")).toBe("true");
+    expect(new URL(fetchMock.mock.calls[1][0] as string).pathname).toBe(
+      "/institutes/center-1/students/student-1/registration",
+    );
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ answers: [{ questionId: "if89sblj", answer: "Year 9 / Grade 8" }] }),
+    }));
+  });
+
+  it("fetches courses, course participants, and updates course subject", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { _id: "class-1", subject: "Y2-8 / G1-7 (Int.)" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { students: [{ _id: "student-1", profile: "student" }] } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: 200, data: { ok: true } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    global.fetch = fetchMock as typeof fetch;
+
+    const course = await fetchWiseCourse(makeClient(), "class-1");
+    const participants = await fetchWiseCourseParticipants(makeClient(), "class-1");
+    await updateWiseCourseSubject(makeClient(), "class-1", "Y9-11 / G8-10 (Int.)");
+
+    expect(course?.subject).toBe("Y2-8 / G1-7 (Int.)");
+    expect(participants).toEqual([{ _id: "student-1", profile: "student" }]);
+    expect(new URL(fetchMock.mock.calls[0][0] as string).pathname).toBe("/user/v2/classes/class-1");
+    expect(new URL(fetchMock.mock.calls[0][0] as string).searchParams.get("full")).toBe("true");
+    expect(new URL(fetchMock.mock.calls[1][0] as string).pathname).toBe("/user/classes/class-1/participants");
+    expect(new URL(fetchMock.mock.calls[1][0] as string).searchParams.get("showCoTeachers")).toBe("true");
+    expect(new URL(fetchMock.mock.calls[2][0] as string).pathname).toBe("/teacher/editClass");
+    expect(fetchMock.mock.calls[2][1]).toEqual(expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ classId: "class-1", subject: "Y9-11 / G8-10 (Int.)" }),
+    }));
   });
 
   it("checks teacher availability for sessions with the Wise webapp endpoint", async () => {
