@@ -218,14 +218,22 @@ export async function loadActiveIdentityEntries(
     .where(eq(schema.snapshots.active, true));
 }
 
+// Each ledger row binds 16 parameters; chunking at 500 rows keeps every insert
+// statement at 8,000 params, well under Postgres's 65,535 bound-parameter limit.
+// (A single un-chunked insert of a full snapshot — thousands of rows — exceeds
+// that limit and fails at runtime, which unit tests with a handful of rows miss.)
+const LEDGER_INSERT_CHUNK_SIZE = 500;
+
 /**
- * Upserts attendance ledger rows idempotently.
+ * Upserts attendance ledger rows idempotently, in parameter-safe chunks.
  *
  * Conflicts on the (wiseSessionId, wiseStudentId) unique index refresh the
  * mutable attendance fields (meetingStatus/creditApplied/isProgressTest/
  * countsTowardCycle) and updatedAt, while preserving first-observation
  * provenance (firstObservedSnapshotId/capturedAt) so the ledger remains a
- * durable record of when each class was first seen.
+ * durable record of when each class was first seen. Rows are inserted in chunks
+ * of LEDGER_INSERT_CHUNK_SIZE so a full-snapshot append never exceeds Postgres's
+ * 65,535 bound-parameter limit.
  *
  * @returns nothing; no-ops on an empty input.
  */
@@ -234,22 +242,25 @@ export async function appendLedgerRows(
   db: Database = getDb(),
 ): Promise<void> {
   if (rows.length === 0) return;
-  await db
-    .insert(schema.progressTestAttendanceLedger)
-    .values(rows)
-    .onConflictDoUpdate({
-      target: [
-        schema.progressTestAttendanceLedger.wiseSessionId,
-        schema.progressTestAttendanceLedger.wiseStudentId,
-      ],
-      set: {
-        meetingStatus: sql`excluded.meeting_status`,
-        creditApplied: sql`excluded.credit_applied`,
-        isProgressTest: sql`excluded.is_progress_test`,
-        countsTowardCycle: sql`excluded.counts_toward_cycle`,
-        updatedAt: new Date(),
-      },
-    });
+  for (let i = 0; i < rows.length; i += LEDGER_INSERT_CHUNK_SIZE) {
+    const chunk = rows.slice(i, i + LEDGER_INSERT_CHUNK_SIZE);
+    await db
+      .insert(schema.progressTestAttendanceLedger)
+      .values(chunk)
+      .onConflictDoUpdate({
+        target: [
+          schema.progressTestAttendanceLedger.wiseSessionId,
+          schema.progressTestAttendanceLedger.wiseStudentId,
+        ],
+        set: {
+          meetingStatus: sql`excluded.meeting_status`,
+          creditApplied: sql`excluded.credit_applied`,
+          isProgressTest: sql`excluded.is_progress_test`,
+          countsTowardCycle: sql`excluded.counts_toward_cycle`,
+          updatedAt: new Date(),
+        },
+      });
+  }
 }
 
 /**
