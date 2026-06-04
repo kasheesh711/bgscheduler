@@ -134,11 +134,9 @@ Indexes:
 - `applied`
 - `applied_with_errors`
 - `failed`
-
 `student_promotion_action_status`:
 
 - `pending`
 - `skipped`
 - `applied`
 - `failed`
-

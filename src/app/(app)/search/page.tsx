@@ -1,10 +1,13 @@
 import { Suspense } from "react";
+import { connection } from "next/server";
 import { getFilterOptions } from "@/lib/data/filters";
 import { getTutorList } from "@/lib/data/tutors";
 import { SearchWorkspace } from "@/components/search/search-workspace";
 import { SearchSkeleton } from "@/components/skeletons/search-skeleton";
 
 export default async function SearchPage() {
+  await connection();
+
   const filterOptions = await getFilterOptions();
   const tutorList = await getTutorList();
 

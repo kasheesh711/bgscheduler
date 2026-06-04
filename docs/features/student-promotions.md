@@ -123,4 +123,3 @@ On July 1, 2026 Bangkok time:
 1. Confirm the cron ran or use the manual fallback after 00:05.
 2. Review `applied`, `skipped`, and `failed` action counts.
 3. Spot-check Wise readback for selected grade and course updates.
-

@@ -23,6 +23,7 @@ env:
   CRON_SECRET: test-cron-secret
   ENABLE_AI_SCHEDULER: "false"
   ENABLE_LINE_SCHEDULER: "false"
+  TZ: Asia/Bangkok
 
 jobs:
   lint:

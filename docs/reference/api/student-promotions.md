@@ -124,4 +124,3 @@ Alias of the cron `GET` handler for operator replay with the cron secret. It has
 ```
 
 Each action row includes its Wise identifiers, current/target values, status, skip/error details, raw Wise response payloads where available, and timestamps. Exact persisted columns are in [erd-student-promotions.md](../database/erd-student-promotions.md).
-
