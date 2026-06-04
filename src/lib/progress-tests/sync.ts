@@ -29,7 +29,12 @@ import {
   getWiseTeacherUserId,
 } from "@/lib/wise/types";
 import type { ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
-import { PROGRESS_TESTS_CACHE_TAG, PROGRESS_TEST_COUNTING_START, buildEnrollmentKey } from "./config";
+import {
+  PROGRESS_TESTS_CACHE_TAG,
+  PROGRESS_TEST_APPROACHING_AT,
+  PROGRESS_TEST_COUNTING_START,
+  buildEnrollmentKey,
+} from "./config";
 import {
   appendLedgerRows,
   loadActiveCreditControlSnapshotSessions,
@@ -333,6 +338,12 @@ function buildCycleStateRow(
   prior: ProgressTestCycleStateRecord | null,
 ): typeof schema.progressTestCycleState.$inferInsert {
   const reset = outcome.cycleResetTriggered;
+  // First observation = the enrollment had no prior cycle state (true for every
+  // row on the one-time re-baseline). Suppress the heads-up for students already
+  // at/after the approaching mark so re-baselining never re-blasts teachers.
+  const isFirstObservation = prior === null;
+  const suppressHeadsUp =
+    isFirstObservation && outcome.currentCount >= PROGRESS_TEST_APPROACHING_AT;
   const sample = records[0];
   const [wiseClassId, wiseStudentId] = outcome.enrollmentKey.split("|");
   const tutor = computeMostFrequentTutor(records, outcome.currentCycleStart);
@@ -352,7 +363,11 @@ function buildCycleStateRow(
     bookedTestDate: reset ? null : prior?.bookedTestDate ?? null,
     bookedTestBookingMode: reset ? null : prior?.bookedTestBookingMode ?? null,
     teacherNotifiedAt: reset ? null : prior?.teacherNotifiedAt ?? null,
-    teacherNotifiedForCycle: reset ? null : prior?.teacherNotifiedForCycle ?? null,
+    teacherNotifiedForCycle: reset
+      ? null
+      : suppressHeadsUp
+        ? outcome.cycleIndex
+        : prior?.teacherNotifiedForCycle ?? null,
     mostFrequentTutorCanonicalKey: tutor.canonicalKey,
     mostFrequentTutorDisplayName: tutor.displayName,
     lastAiSummary: prior?.lastAiSummary ?? null,
