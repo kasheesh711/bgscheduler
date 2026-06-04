@@ -22,6 +22,7 @@ const SCHEDULING_ITEMS = [
 ];
 
 const NAV_ITEMS = [
+  { href: "/student-promotions", label: "Student Promotions" },
   { href: "/sales-dashboard", label: "Sales Dashboard" },
   { href: "/credit-control", label: "Credit Control" },
   { href: "/wise-activity", label: "Wise Audit" },

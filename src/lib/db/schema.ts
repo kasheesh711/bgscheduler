@@ -131,6 +131,22 @@ export const lineContactStudentLinkStatusEnum = pgEnum("line_contact_student_lin
   "rejected",
 ]);
 
+export const studentPromotionRunStatusEnum = pgEnum("student_promotion_run_status", [
+  "draft",
+  "verified",
+  "applying",
+  "applied",
+  "applied_with_errors",
+  "failed",
+]);
+
+export const studentPromotionActionStatusEnum = pgEnum("student_promotion_action_status", [
+  "pending",
+  "skipped",
+  "applied",
+  "failed",
+]);
+
 export const salesDashboardSourceStatusEnum = pgEnum("sales_dashboard_source_status", [
   "active",
   "refreshing",
@@ -583,6 +599,88 @@ export const creditControlAdminOwnership = pgTable("credit_control_admin_ownersh
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("cc_admin_ownership_admin_idx").on(table.adminKey),
+]);
+
+// ── Student Promotions ─────────────────────────────────────────────────
+
+export const studentPromotionRuns = pgTable("student_promotion_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  targetDate: date("target_date", { mode: "string" }).notNull(),
+  status: studentPromotionRunStatusEnum("status").notNull().default("draft"),
+  sourceSnapshotId: uuid("source_snapshot_id").references(() => creditControlSnapshots.id),
+  wiseAcceptedStudentCount: integer("wise_accepted_student_count").notNull().default(0),
+  websiteSnapshotStudentCount: integer("website_snapshot_student_count").notNull().default(0),
+  gradeOnlyCount: integer("grade_only_count").notNull().default(0),
+  year8CourseMoveCount: integer("year8_course_move_count").notNull().default(0),
+  year11CourseMoveCount: integer("year11_course_move_count").notNull().default(0),
+  skippedGradeCount: integer("skipped_grade_count").notNull().default(0),
+  pendingCourseActionCount: integer("pending_course_action_count").notNull().default(0),
+  skippedCourseActionCount: integer("skipped_course_action_count").notNull().default(0),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  verifiedByEmail: text("verified_by_email"),
+  verifiedByName: text("verified_by_name"),
+  endpointVerificationNote: text("endpoint_verification_note"),
+  applyStartedAt: timestamp("apply_started_at", { withTimezone: true }),
+  applyFinishedAt: timestamp("apply_finished_at", { withTimezone: true }),
+  appliedByEmail: text("applied_by_email"),
+  appliedByName: text("applied_by_name"),
+  errorSummary: text("error_summary"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdByEmail: text("created_by_email"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("student_promotion_runs_target_status_idx").on(table.targetDate, table.status),
+  index("student_promotion_runs_created_at_idx").on(table.createdAt),
+  index("student_promotion_runs_verified_idx").on(table.verifiedAt),
+]);
+
+export const studentPromotionGradeActions = pgTable("student_promotion_grade_actions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => studentPromotionRuns.id),
+  wiseStudentId: text("wise_student_id").notNull(),
+  studentName: text("student_name").notNull().default(""),
+  studentKey: text("student_key").notNull().default(""),
+  currentGradeRaw: text("current_grade_raw").notNull().default(""),
+  parsedCurrentYear: integer("parsed_current_year"),
+  targetGrade: text("target_grade"),
+  actionType: text("action_type").notNull(),
+  status: studentPromotionActionStatusEnum("status").notNull().default("pending"),
+  skipReason: text("skip_reason"),
+  requestPayload: jsonb("request_payload").$type<Record<string, unknown>>(),
+  responsePayload: jsonb("response_payload").$type<Record<string, unknown>>(),
+  errorMessage: text("error_message"),
+  appliedAt: timestamp("applied_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("sp_grade_actions_run_student_idx").on(table.runId, table.wiseStudentId),
+  index("sp_grade_actions_run_status_idx").on(table.runId, table.status),
+  index("sp_grade_actions_student_idx").on(table.wiseStudentId),
+]);
+
+export const studentPromotionCourseActions = pgTable("student_promotion_course_actions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => studentPromotionRuns.id),
+  wiseClassId: text("wise_class_id").notNull(),
+  currentSubject: text("current_subject").notNull(),
+  targetSubject: text("target_subject"),
+  transitionType: text("transition_type").notNull(),
+  studentIds: jsonb("student_ids").$type<string[]>().notNull().default([]),
+  qualifyingStudentIds: jsonb("qualifying_student_ids").$type<string[]>().notNull().default([]),
+  status: studentPromotionActionStatusEnum("status").notNull().default("pending"),
+  skipReason: text("skip_reason"),
+  requestPayload: jsonb("request_payload").$type<Record<string, unknown>>(),
+  responsePayload: jsonb("response_payload").$type<Record<string, unknown>>(),
+  errorMessage: text("error_message"),
+  appliedAt: timestamp("applied_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("sp_course_actions_run_class_idx").on(table.runId, table.wiseClassId),
+  index("sp_course_actions_run_status_idx").on(table.runId, table.status),
+  index("sp_course_actions_class_idx").on(table.wiseClassId),
 ]);
 
 // ── Tutor Identity ──────────────────────────────────────────────────────

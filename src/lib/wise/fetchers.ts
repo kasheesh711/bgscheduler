@@ -155,6 +155,147 @@ export async function fetchInstituteLocations(
   return res.data?.locations ?? [];
 }
 
+export interface WisePromotionStudent {
+  _id: string;
+  name?: string;
+  email?: string;
+  activated?: boolean;
+  parents?: Array<{ _id?: string; name?: string; [key: string]: unknown }>;
+  classrooms?: Array<{ _id?: string; name?: string; subject?: string; classType?: string; [key: string]: unknown }>;
+  [key: string]: unknown;
+}
+
+export interface WiseRegistrationField {
+  questionId?: string;
+  questionText?: string;
+  type?: string;
+  answer?: string;
+  [key: string]: unknown;
+}
+
+export interface WiseParticipantRegistrationData {
+  _id?: string;
+  name?: string;
+  email?: string;
+  status?: string;
+  tags?: unknown[];
+  registrationData?: {
+    fields?: WiseRegistrationField[];
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+export interface WiseCourseDetail {
+  _id: string;
+  name?: string;
+  subject?: string;
+  classType?: string;
+  settings?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface WiseCourseParticipant {
+  _id?: string;
+  userId?: string | { _id?: string; name?: string; [key: string]: unknown };
+  name?: string;
+  profile?: string;
+  [key: string]: unknown;
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+export async function fetchWiseAcceptedStudents(
+  client: WiseClient,
+  instituteId: string,
+): Promise<WisePromotionStudent[]> {
+  const students: WisePromotionStudent[] = [];
+  const pageSize = 100;
+
+  for (let page = 1; ; page += 1) {
+    const res = await client.get<{ data?: { students?: WisePromotionStudent[] } }>(
+      `/institutes/v3/${instituteId}/students`,
+      {
+        status: "ACCEPTED",
+        page_number: String(page),
+        page_size: String(pageSize),
+        showParents: "true",
+        showFeedbackData: "true",
+        showContractStatus: "true",
+      },
+    );
+    const batch = res.data?.students ?? [];
+    students.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+
+  return students;
+}
+
+export async function fetchWiseStudentRegistrationData(
+  client: WiseClient,
+  instituteId: string,
+  studentId: string,
+): Promise<WiseParticipantRegistrationData> {
+  const res = await client.get<{ data?: WiseParticipantRegistrationData }>(
+    `/institutes/${instituteId}/participants/${studentId}`,
+    { showRegistrationData: "true" },
+  );
+  return res.data ?? {};
+}
+
+export async function updateWiseStudentRegistrationAnswers(
+  client: WiseClient,
+  instituteId: string,
+  studentId: string,
+  answers: Array<{ questionId: string; answer: string }>,
+): Promise<unknown> {
+  return client.put<unknown>(
+    `/institutes/${instituteId}/students/${studentId}/registration`,
+    { answers },
+  );
+}
+
+export async function fetchWiseCourse(
+  client: WiseClient,
+  classId: string,
+): Promise<WiseCourseDetail | null> {
+  const res = await client.get<{ data?: WiseCourseDetail }>(
+    `/user/v2/classes/${classId}`,
+    { full: "true" },
+  );
+  return res.data ?? null;
+}
+
+export async function updateWiseCourseSubject(
+  client: WiseClient,
+  classId: string,
+  subject: string,
+): Promise<unknown> {
+  return client.put<unknown>("/teacher/editClass", { classId, subject });
+}
+
+export async function fetchWiseCourseParticipants(
+  client: WiseClient,
+  classId: string,
+): Promise<WiseCourseParticipant[]> {
+  const res = await client.get<{ data?: Record<string, unknown> }>(
+    `/user/classes/${classId}/participants`,
+    { showCoTeachers: "true" },
+  );
+  const data = res.data ?? {};
+  const candidates = [
+    data.students,
+    data.participants,
+    data.users,
+    data.learners,
+  ];
+
+  return candidates.flatMap((candidate) => asArray(candidate) as WiseCourseParticipant[]);
+}
+
 export interface WiseSessionAvailabilityInput {
   teacherId?: string;
   sessions: {

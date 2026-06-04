@@ -197,6 +197,13 @@
       "when": 1780010000000,
       "tag": "0030_scheduler_feedback_telemetry",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1780362000000,
+      "tag": "0031_student_promotions",
+      "breakpoints": true
     }
   ]
 }
