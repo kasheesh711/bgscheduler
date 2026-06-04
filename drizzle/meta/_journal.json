@@ -267,6 +267,13 @@
       "when": 1780362000000,
       "tag": "0040_student_promotions",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1780580854081,
+      "tag": "0038_cynical_karma",
+      "breakpoints": true
     }
   ]
 }

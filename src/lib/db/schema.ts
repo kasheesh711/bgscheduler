@@ -176,6 +176,23 @@ export const leaveRequestSheetWriteStatusEnum = pgEnum("leave_request_sheet_writ
   "failed",
 ]);
 
+export const progressTestStatusEnum = pgEnum("progress_test_status", [
+  "accumulating",
+  "approaching",
+  "due",
+  "scheduled",
+  "completed",
+]);
+
+export const progressTestBookingStatusEnum = pgEnum("progress_test_booking_status", [
+  "recorded",
+  "dry_run",
+  "wise_created",
+  "manual_required",
+  "manual_confirmed",
+  "failed",
+]);
+
 // ── Snapshots & Sync ───────────────────────────────────────────────────
 
 export const snapshots = pgTable("snapshots", {
@@ -286,6 +303,9 @@ export const adminUsers = pgTable("admin_users", {
   id: uuid("id").primaryKey().defaultRandom(),
   email: text("email").notNull(),
   name: text("name"),
+  // null = full access (all existing admins unchanged); non-null = restricted
+  // to those route prefixes (page-level access control for restricted users).
+  allowedPages: jsonb("allowed_pages").$type<string[] | null>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("admin_users_email_idx").on(table.email),
@@ -1982,4 +2002,197 @@ export const roomCapacityPackageMix = pgTable("room_capacity_package_mix", {
 }, (table) => [
   index("rcpm_model_run_idx").on(table.modelRunId),
   index("rcpm_bucket_idx").on(table.modelRunId, table.packageHourBucket),
+]);
+
+// ── Progress Tests ──────────────────────────────────────────────────────
+//
+// Per-student-per-subject progress-test tracking. A student is "due" for a
+// progress test after 8 attended-with-credit classes since 2026-03-01 (the
+// post-migration counting start); their most-frequent teacher is notified at 6.
+//
+// DEVIATION from project convention: the attendance ledger and cycle-state
+// tables are CROSS-SNAPSHOT (no `snapshot_id` FK) — they must accumulate counts
+// durably across credit-control snapshot rotations. Precedent:
+// `room_utilization_sessions` (same 2026-03-01 history start) and
+// `past_session_blocks` (survives snapshot rotation). `first_observed_snapshot_id`
+// denormalizes the source credit-control snapshot for provenance and, like
+// `past_session_blocks.captured_in_snapshot_id`, is a nullable non-FK uuid so
+// snapshots may be pruned without cascading.
+
+export const progressTestAttendanceLedger = pgTable("progress_test_attendance_ledger", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  enrollmentKey: text("enrollment_key").notNull(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  wiseClassId: text("wise_class_id").notNull(),
+  wiseStudentId: text("wise_student_id").notNull(),
+  studentKey: text("student_key").notNull(),
+  studentName: text("student_name").notNull(),
+  subject: text("subject").notNull().default(""),
+  scheduledStartTime: timestamp("scheduled_start_time", { withTimezone: true }).notNull(),
+  creditApplied: doublePrecision("credit_applied").notNull().default(0),
+  meetingStatus: text("meeting_status").notNull(),
+  wiseTeacherUserId: text("wise_teacher_user_id"),
+  wiseTeacherId: text("wise_teacher_id"),
+  tutorCanonicalKey: text("tutor_canonical_key"),
+  tutorDisplayName: text("tutor_display_name"),
+  isProgressTest: boolean("is_progress_test").notNull().default(false),
+  countsTowardCycle: boolean("counts_toward_cycle").notNull().default(true),
+  firstObservedSnapshotId: uuid("first_observed_snapshot_id"),
+  capturedAt: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("ptal_session_student_idx").on(table.wiseSessionId, table.wiseStudentId),
+  index("ptal_enrollment_start_idx").on(table.enrollmentKey, table.scheduledStartTime),
+]);
+
+export const progressTestCycleState = pgTable("progress_test_cycle_state", {
+  enrollmentKey: text("enrollment_key").primaryKey(),
+  wiseStudentId: text("wise_student_id").notNull(),
+  wiseClassId: text("wise_class_id").notNull(),
+  studentKey: text("student_key").notNull(),
+  studentName: text("student_name").notNull(),
+  subject: text("subject").notNull().default(""),
+  currentCount: integer("current_count").notNull().default(0),
+  currentCycleStart: timestamp("current_cycle_start", { withTimezone: true }),
+  cycleIndex: integer("cycle_index").notNull().default(0),
+  status: progressTestStatusEnum("status").notNull().default("accumulating"),
+  bookedTestWiseSessionId: text("booked_test_wise_session_id"),
+  bookedTestDate: timestamp("booked_test_date", { withTimezone: true }),
+  bookedTestBookingMode: text("booked_test_booking_mode"),
+  teacherNotifiedAt: timestamp("teacher_notified_at", { withTimezone: true }),
+  teacherNotifiedForCycle: integer("teacher_notified_for_cycle"),
+  mostFrequentTutorCanonicalKey: text("most_frequent_tutor_canonical_key"),
+  mostFrequentTutorDisplayName: text("most_frequent_tutor_display_name"),
+  lastAiSummary: jsonb("last_ai_summary").$type<Record<string, unknown> | null>(),
+  lastAiSummaryAt: timestamp("last_ai_summary_at", { withTimezone: true }),
+  lastClassDate: timestamp("last_class_date", { withTimezone: true }),
+  updatedByEmail: text("updated_by_email"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("ptcs_status_idx").on(table.status),
+  index("ptcs_student_key_idx").on(table.studentKey),
+  index("ptcs_updated_at_idx").on(table.updatedAt),
+]);
+
+export const progressTestBookings = pgTable("progress_test_bookings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  enrollmentKey: text("enrollment_key").notNull(),
+  cycleIndex: integer("cycle_index").notNull().default(0),
+  status: progressTestBookingStatusEnum("status").notNull().default("recorded"),
+  dryRun: boolean("dry_run").notNull().default(true),
+  scheduledTestDate: timestamp("scheduled_test_date", { withTimezone: true }),
+  wiseClassId: text("wise_class_id"),
+  wiseStudentId: text("wise_student_id"),
+  wiseSessionId: text("wise_session_id"),
+  wiseTeacherUserId: text("wise_teacher_user_id"),
+  location: text("location"),
+  requestPayload: jsonb("request_payload").$type<Record<string, unknown>>().notNull().default({}),
+  responsePayload: jsonb("response_payload").$type<Record<string, unknown> | null>(),
+  errorMessage: text("error_message"),
+  createdByEmail: text("created_by_email"),
+  createdByName: text("created_by_name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("pt_bookings_enrollment_idx").on(table.enrollmentKey, table.createdAt),
+  index("pt_bookings_status_idx").on(table.status),
+]);
+
+export const progressTestEmailRuns = pgTable("progress_test_email_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  enrollmentKey: text("enrollment_key").notNull(),
+  cycleIndex: integer("cycle_index").notNull().default(0),
+  status: text("status").notNull().default("pending"),
+  subject: text("subject").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  triggerKind: text("trigger_kind").notNull().default("approaching"),
+  createdBy: text("created_by"),
+  attemptedCount: integer("attempted_count").notNull().default(0),
+  successCount: integer("success_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pt_email_runs_idempotency_idx").on(table.idempotencyKey),
+  index("pt_email_runs_enrollment_idx").on(table.enrollmentKey),
+]);
+
+export const progressTestNotifications = pgTable("progress_test_notifications", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  emailRunId: uuid("email_run_id").references(() => progressTestEmailRuns.id, { onDelete: "set null" }),
+  enrollmentKey: text("enrollment_key").notNull(),
+  cycleIndex: integer("cycle_index").notNull().default(0),
+  notificationType: text("notification_type").notNull().default("teacher_heads_up_email"),
+  recipientEmail: text("recipient_email").notNull(),
+  status: text("status").notNull().default("pending"),
+  providerMessageId: text("provider_message_id"),
+  error: text("error"),
+  idempotencyKey: text("idempotency_key").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("pt_notifications_idempotency_idx").on(table.idempotencyKey),
+  index("pt_notifications_enrollment_idx").on(table.enrollmentKey),
+  index("pt_notifications_email_run_idx").on(table.emailRunId),
+]);
+
+export const progressTestAdminDigestRuns = pgTable("progress_test_admin_digest_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  digestDate: date("digest_date", { mode: "string" }).notNull(),
+  status: text("status").notNull().default("pending"),
+  subject: text("subject").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  triggerKind: text("trigger_kind").notNull().default("daily"),
+  createdBy: text("created_by"),
+  approachingCount: integer("approaching_count").notNull().default(0),
+  dueCount: integer("due_count").notNull().default(0),
+  attemptedCount: integer("attempted_count").notNull().default(0),
+  successCount: integer("success_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pt_admin_digest_runs_idempotency_idx").on(table.idempotencyKey),
+  uniqueIndex("pt_admin_digest_runs_date_idx").on(table.digestDate),
+]);
+
+export const progressTestAdminDigestRecipients = pgTable("progress_test_admin_digest_recipients", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  digestRunId: uuid("digest_run_id").notNull().references(() => progressTestAdminDigestRuns.id),
+  digestDate: date("digest_date", { mode: "string" }).notNull(),
+  recipientEmail: text("recipient_email").notNull(),
+  status: text("status").notNull().default("pending"),
+  providerMessageId: text("provider_message_id"),
+  error: text("error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("pt_admin_digest_recipients_run_idx").on(table.digestRunId),
+  index("pt_admin_digest_recipients_date_idx").on(table.digestDate),
+  index("pt_admin_digest_recipients_email_idx").on(table.recipientEmail),
+]);
+
+export const progressTestSyncRuns = pgTable("progress_test_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  triggerType: text("trigger_type").notNull().default("manual"),
+  actorEmail: text("actor_email"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  ledgerRowCount: integer("ledger_row_count").notNull().default(0),
+  enrollmentCount: integer("enrollment_count").notNull().default(0),
+  approachingCount: integer("approaching_count").notNull().default(0),
+  dueCount: integer("due_count").notNull().default(0),
+  notificationCount: integer("notification_count").notNull().default(0),
+  errorSummary: text("error_summary"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+}, (table) => [
+  index("pt_sync_runs_status_idx").on(table.status),
+  index("pt_sync_runs_started_at_idx").on(table.startedAt),
+  uniqueIndex("pt_sync_runs_single_running_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'running'`),
 ]);
