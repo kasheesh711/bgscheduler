@@ -26,6 +26,7 @@ const SCHEDULING_ITEMS = [
 
 const NAV_ITEMS = [
   { href: "/student-promotions", label: "Student Promotions" },
+  { href: "/progress-tests", label: "Progress Tests" },
   { href: "/sales-dashboard", label: "Sales Dashboard" },
   { href: "/credit-control", label: "Credit Control" },
   { href: "/payroll", label: "Payroll" },
@@ -37,6 +38,11 @@ function isActivePath(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+function canAccess(href: string, allowedPages: string[] | null) {
+  if (!allowedPages) return true;
+  return allowedPages.some((page) => href === page || href.startsWith(`${page}/`));
+}
+
 function navLinkClass(isActive: boolean) {
   return cn(
     "px-3 py-1.5 text-sm rounded-md transition-colors",
@@ -46,13 +52,17 @@ function navLinkClass(isActive: boolean) {
   );
 }
 
-export function AppNav() {
+export function AppNav({ allowedPages }: { allowedPages: string[] | null }) {
   const pathname = usePathname();
   const [schedulingOpen, setSchedulingOpen] = useState(false);
   const [leaveRequestCount, setLeaveRequestCount] = useState(0);
-  const schedulingActive = SCHEDULING_ITEMS.some((item) => isActivePath(pathname, item.href));
+  const schedulingItems = SCHEDULING_ITEMS.filter((item) => canAccess(item.href, allowedPages));
+  const navItems = NAV_ITEMS.filter((item) => canAccess(item.href, allowedPages));
+  const schedulingActive = schedulingItems.some((item) => isActivePath(pathname, item.href));
+  const canAccessLeaveRequests = canAccess("/leave-requests", allowedPages);
 
   useEffect(() => {
+    if (!canAccessLeaveRequests) return;
     const controller = new AbortController();
     fetch("/api/leave-requests?summaryOnly=true", { signal: controller.signal })
       .then((response) => response.ok ? response.json() : null)
@@ -61,7 +71,7 @@ export function AppNav() {
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [pathname]);
+  }, [pathname, canAccessLeaveRequests]);
 
   return (
     <nav className="flex h-11 flex-shrink-0 items-center overflow-x-auto border-b border-border bg-card px-4 [scrollbar-width:none] lg:px-6 [&::-webkit-scrollbar]:hidden">
@@ -70,50 +80,52 @@ export function AppNav() {
           BeGifted Ops
         </Link>
         <div className="flex items-center gap-1">
-          <Popover open={schedulingOpen} onOpenChange={setSchedulingOpen}>
-            <PopoverTrigger
-              render={(props) => (
-                <Button
-                  {...props}
-                  variant="ghost"
-                  size="sm"
-                  className={cn(
-                    "h-auto gap-1.5 px-3 py-1.5 rounded-md",
-                    schedulingActive
-                      ? "text-primary font-medium bg-primary/10 hover:bg-primary/10"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted",
-                  )}
-                >
-                  Scheduling Tools
-                  <ChevronDown
-                    aria-hidden="true"
-                    className={cn("size-3.5 transition-transform", schedulingOpen && "rotate-180")}
-                  />
-                </Button>
-              )}
-            />
-            <PopoverContent className="w-56 gap-1 p-1.5" align="start">
-              {SCHEDULING_ITEMS.map((item) => {
-                const isActive = isActivePath(pathname, item.href);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => setSchedulingOpen(false)}
-                    className={cn(navLinkClass(isActive), "flex items-center justify-between gap-2")}
-                  >
-                    <span>{item.label}</span>
-                    {item.badgeKey === "leaveRequests" && leaveRequestCount > 0 && (
-                      <Badge variant="outline" className="border-amber-200 bg-amber-50 px-1.5 text-amber-900">
-                        {leaveRequestCount}
-                      </Badge>
+          {schedulingItems.length > 0 && (
+            <Popover open={schedulingOpen} onOpenChange={setSchedulingOpen}>
+              <PopoverTrigger
+                render={(props) => (
+                  <Button
+                    {...props}
+                    variant="ghost"
+                    size="sm"
+                    className={cn(
+                      "h-auto gap-1.5 px-3 py-1.5 rounded-md",
+                      schedulingActive
+                        ? "text-primary font-medium bg-primary/10 hover:bg-primary/10"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted",
                     )}
-                  </Link>
-                );
-              })}
-            </PopoverContent>
-          </Popover>
-          {NAV_ITEMS.map((item) => {
+                  >
+                    Scheduling Tools
+                    <ChevronDown
+                      aria-hidden="true"
+                      className={cn("size-3.5 transition-transform", schedulingOpen && "rotate-180")}
+                    />
+                  </Button>
+                )}
+              />
+              <PopoverContent className="w-56 gap-1 p-1.5" align="start">
+                {schedulingItems.map((item) => {
+                  const isActive = isActivePath(pathname, item.href);
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      onClick={() => setSchedulingOpen(false)}
+                      className={cn(navLinkClass(isActive), "flex items-center justify-between gap-2")}
+                    >
+                      <span>{item.label}</span>
+                      {item.badgeKey === "leaveRequests" && leaveRequestCount > 0 && (
+                        <Badge variant="outline" className="border-amber-200 bg-amber-50 px-1.5 text-amber-900">
+                          {leaveRequestCount}
+                        </Badge>
+                      )}
+                    </Link>
+                  );
+                })}
+              </PopoverContent>
+            </Popover>
+          )}
+          {navItems.map((item) => {
             const isActive = isActivePath(pathname, item.href);
             return (
               <Link

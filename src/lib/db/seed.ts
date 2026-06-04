@@ -42,6 +42,23 @@ async function seed() {
     console.log("No SEED_ADMIN_EMAILS set, skipping admin user seed");
   }
 
+  // Seed restricted users - access scoped to specific page prefixes only.
+  // These are intentionally NOT in SEED_ADMIN_EMAILS (which grants full access).
+  const restrictedUsers = [
+    { email: "m.giftwan@gmail.com", allowedPages: ["/progress-tests"] },
+  ];
+  console.log("Seeding restricted users...");
+  for (const restrictedUser of restrictedUsers) {
+    await db
+      .insert(adminUsers)
+      .values({ email: restrictedUser.email, allowedPages: restrictedUser.allowedPages })
+      .onConflictDoUpdate({
+        target: adminUsers.email,
+        set: { allowedPages: restrictedUser.allowedPages },
+      });
+  }
+  console.log(`Seeded ${restrictedUsers.length} restricted users`);
+
   console.log("Seed complete");
 }
 
