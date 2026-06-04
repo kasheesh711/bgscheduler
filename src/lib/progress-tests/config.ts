@@ -13,6 +13,13 @@ export const PROGRESS_TEST_THRESHOLD = 8;
 /** The most-frequent teacher is notified once the count reaches this value (before the 7th class). */
 export const PROGRESS_TEST_APPROACHING_AT = 6;
 
+/**
+ * Default length (minutes) of a booked progress-test session. The dashboard
+ * collects a single start time; the service derives the end time by adding this
+ * default so callers don't have to supply both ends.
+ */
+export const PROGRESS_TEST_DEFAULT_DURATION_MINUTES = 60;
+
 /** Next.js cache tag swept after a progress-test sync. */
 export const PROGRESS_TESTS_CACHE_TAG = "progress-tests";
 
