@@ -28,3 +28,17 @@ export const STALE_RUNNING_PROGRESS_TEST_SYNC_MS = 20 * 60 * 1000;
 export function buildEnrollmentKey(wiseClassId: string, wiseStudentId: string): string {
   return `${wiseClassId}|${wiseStudentId}`;
 }
+
+/**
+ * Whether the real Wise session-create write is verified for this environment.
+ *
+ * Mirrors wiseSessionOperationsVerified() (src/lib/wise/operations.ts): off by
+ * default, so progress-test bookings record locally and require a manual Wise
+ * booking until the create-session contract has been validated against the
+ * begifted-education tenant.
+ *
+ * @returns true only when WISE_SESSION_CREATE_VERIFIED === "true".
+ */
+export function wiseSessionCreateVerified(): boolean {
+  return process.env.WISE_SESSION_CREATE_VERIFIED === "true";
+}

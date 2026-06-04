@@ -10,6 +10,12 @@ import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { PROGRESS_TEST_COUNTING_START } from "./config";
 
+/** Insert shape for a progress-test booking audit row. */
+export type ProgressTestBookingInsert = typeof schema.progressTestBookings.$inferInsert;
+
+/** A persisted booking audit row. */
+export type ProgressTestBookingRecord = typeof schema.progressTestBookings.$inferSelect;
+
 /** Active Wise snapshot identity entry (the payroll teacher-resolution recipe shape). */
 export interface ProgressTestIdentityEntry {
   wiseTeacherId: string;
@@ -236,4 +242,91 @@ export async function upsertCycleState(
         updatedAt: new Date(),
       },
     });
+}
+
+/**
+ * Loads a single enrollment's cycle state by key.
+ *
+ * @returns the cycle-state row, or null when the enrollment has none yet.
+ */
+export async function loadCycleState(
+  enrollmentKey: string,
+  db: Database = getDb(),
+): Promise<ProgressTestCycleStateRecord | null> {
+  const [row] = await db
+    .select()
+    .from(schema.progressTestCycleState)
+    .where(eq(schema.progressTestCycleState.enrollmentKey, enrollmentKey))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Inserts a progress-test booking audit row and returns it.
+ *
+ * Every booking attempt — dry-run, manual, or a real Wise create — is recorded
+ * here for an immutable audit trail (requestPayload carries the intended body +
+ * endpoint string). Never store secrets/PII in the payload.
+ *
+ * @returns the persisted booking row (with its generated id).
+ */
+export async function insertBooking(
+  input: ProgressTestBookingInsert,
+  db: Database = getDb(),
+): Promise<ProgressTestBookingRecord> {
+  const [row] = await db
+    .insert(schema.progressTestBookings)
+    .values(input)
+    .returning();
+  return row;
+}
+
+/**
+ * Resolves a Wise teacher userId for a tutor canonical key from the ledger.
+ *
+ * The cycle-state row stores only the most-frequent tutor's canonicalKey; the
+ * Wise create-session call needs a teacher userId. Each ledger row carries both,
+ * so we pick the most recent ledger row for that canonical key that has a
+ * non-null wiseTeacherUserId.
+ *
+ * @returns the resolved teacher userId, or null when none can be found.
+ */
+export async function resolveTeacherUserIdForCanonicalKey(
+  canonicalKey: string,
+  db: Database = getDb(),
+): Promise<string | null> {
+  const [row] = await db
+    .select({ wiseTeacherUserId: schema.progressTestAttendanceLedger.wiseTeacherUserId })
+    .from(schema.progressTestAttendanceLedger)
+    .where(and(
+      eq(schema.progressTestAttendanceLedger.tutorCanonicalKey, canonicalKey),
+      sql`${schema.progressTestAttendanceLedger.wiseTeacherUserId} IS NOT NULL`,
+    ))
+    .orderBy(desc(schema.progressTestAttendanceLedger.scheduledStartTime))
+    .limit(1);
+  return row?.wiseTeacherUserId ?? null;
+}
+
+/**
+ * Marks the ledger row for a booked test session as a progress test.
+ *
+ * Sets isProgressTest=true and countsTowardCycle=false on the matching
+ * (wiseSessionId, wiseStudentId) ledger row so the booked test is excluded from
+ * the cycle count. No-ops when the row does not exist yet (the nightly sync will
+ * fold it in once Wise reports it as attended).
+ *
+ * @returns nothing.
+ */
+export async function markLedgerRowAsProgressTest(
+  wiseSessionId: string,
+  wiseStudentId: string,
+  db: Database = getDb(),
+): Promise<void> {
+  await db
+    .update(schema.progressTestAttendanceLedger)
+    .set({ isProgressTest: true, countsTowardCycle: false, updatedAt: new Date() })
+    .where(and(
+      eq(schema.progressTestAttendanceLedger.wiseSessionId, wiseSessionId),
+      eq(schema.progressTestAttendanceLedger.wiseStudentId, wiseStudentId),
+    ));
 }

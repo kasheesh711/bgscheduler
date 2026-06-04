@@ -360,6 +360,57 @@ export async function updateSessionLocation(
   );
 }
 
+export interface WiseScheduleSessionInput {
+  classId: string;
+  userId: string;
+  title: string;
+  scheduledStartTime: string;
+  scheduledEndTime: string;
+  location?: string;
+}
+
+/**
+ * Schedule a single new session into an existing Wise class.
+ *
+ * 1. POST `/teacher/classes/${classId}/sessions` with one SINGLE session
+ *    (location is included only when provided — OFFLINE bookings need it).
+ * 2. Parse the response as WiseSessionUpdateResponse and pull the created
+ *    session id from `data.sessionId` (tolerant of the field being absent).
+ *
+ * Callers gate this behind WISE_SESSION_CREATE_VERIFIED and run an availability
+ * pre-check first; this fetcher itself performs no verification.
+ *
+ * @returns the created `sessionId` (null when the response omits it) and the raw response.
+ */
+export async function scheduleWiseSession(
+  client: WiseClient,
+  input: WiseScheduleSessionInput
+): Promise<{ sessionId: string | null; raw: WiseSessionUpdateResponse }> {
+  const raw = await client.post<WiseSessionUpdateResponse>(
+    `/teacher/classes/${input.classId}/sessions`,
+    {
+      userId: input.userId,
+      title: input.title,
+      sessions: [
+        {
+          type: "SINGLE",
+          scheduledStartTime: input.scheduledStartTime,
+          scheduledEndTime: input.scheduledEndTime,
+          ...(input.location ? { location: input.location } : {}),
+        },
+      ],
+    }
+  );
+
+  const data = raw.data;
+  const sessionId =
+    data && typeof data === "object" && "sessionId" in data
+      ? String((data as { sessionId?: unknown }).sessionId ?? "") || null
+      : null;
+
+  return { sessionId, raw };
+}
+
 export interface WiseActivityEventsParams {
   pageNumber?: number;
   pageSize?: number;
