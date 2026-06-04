@@ -5,6 +5,7 @@ export type CronJobKey =
   | "wise_activity"
   | "sales_dashboard"
   | "credit_control"
+  | "progress_tests"
   | "leave_requests"
   | "classroom_morning"
   | "classroom_admin_email"
@@ -82,6 +83,21 @@ export const CRON_JOBS = [
     feature: "Credit Control",
     path: "/api/internal/sync-credit-control",
     schedule: "20,50 * * * *",
+    cadenceLabel: "Every 30 min",
+    cadenceMinutes: 30,
+    lateAfterMinutes: 45,
+    maxDurationSeconds: 300,
+    manualOnly: false,
+    dangerous: false,
+    confirmationLabel: null,
+    routeMethod: "GET",
+  },
+  {
+    key: "progress_tests",
+    label: "Progress Tests",
+    feature: "Progress Tests",
+    path: "/api/internal/sync-progress-tests",
+    schedule: "25,55 * * * *",
     cadenceLabel: "Every 30 min",
     cadenceMinutes: 30,
     lateAfterMinutes: 45,

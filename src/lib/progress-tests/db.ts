@@ -10,6 +10,14 @@ import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { PROGRESS_TEST_COUNTING_START } from "./config";
 
+/** Active Wise snapshot identity entry (the payroll teacher-resolution recipe shape). */
+export interface ProgressTestIdentityEntry {
+  wiseTeacherId: string;
+  wiseUserId: string | null;
+  canonicalKey: string;
+  displayName: string;
+}
+
 /** One attended-with-credit session sourced from the active credit-control snapshot. */
 export interface CreditControlAttendedSession {
   wiseSessionId: string;
@@ -79,6 +87,37 @@ export async function loadActiveCreditControlSnapshotSessions(
     ));
 
   return rows;
+}
+
+/**
+ * Loads the ACTIVE Wise snapshot's identity-group members joined to their groups.
+ *
+ * Mirrors the payroll recipe (src/lib/payroll/sync.ts): one row per identity
+ * member on the active Wise snapshot, carrying the group's canonicalKey and
+ * displayName, used to resolve a session teacher to a stable canonical key.
+ *
+ * @returns the identity entries for teacher resolution (empty when no active snapshot).
+ */
+export async function loadActiveIdentityEntries(
+  db: Database = getDb(),
+): Promise<ProgressTestIdentityEntry[]> {
+  return db
+    .select({
+      wiseTeacherId: schema.tutorIdentityGroupMembers.wiseTeacherId,
+      wiseUserId: schema.tutorIdentityGroupMembers.wiseUserId,
+      canonicalKey: schema.tutorIdentityGroups.canonicalKey,
+      displayName: schema.tutorIdentityGroups.displayName,
+    })
+    .from(schema.tutorIdentityGroupMembers)
+    .innerJoin(
+      schema.tutorIdentityGroups,
+      eq(schema.tutorIdentityGroupMembers.groupId, schema.tutorIdentityGroups.id),
+    )
+    .innerJoin(
+      schema.snapshots,
+      eq(schema.snapshots.id, schema.tutorIdentityGroups.snapshotId),
+    )
+    .where(eq(schema.snapshots.active, true));
 }
 
 /**
