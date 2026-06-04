@@ -5,6 +5,8 @@ export type CronJobKey =
   | "wise_activity"
   | "sales_dashboard"
   | "credit_control"
+  | "progress_tests"
+  | "progress_tests_digest"
   | "leave_requests"
   | "classroom_morning"
   | "classroom_admin_email"
@@ -89,6 +91,37 @@ export const CRON_JOBS = [
     manualOnly: false,
     dangerous: false,
     confirmationLabel: null,
+    routeMethod: "GET",
+  },
+  {
+    key: "progress_tests",
+    label: "Progress Tests",
+    feature: "Progress Tests",
+    path: "/api/internal/sync-progress-tests",
+    schedule: "25,55 * * * *",
+    cadenceLabel: "Every 30 min",
+    cadenceMinutes: 30,
+    lateAfterMinutes: 45,
+    maxDurationSeconds: 300,
+    manualOnly: false,
+    dangerous: false,
+    confirmationLabel: null,
+    routeMethod: "GET",
+  },
+  {
+    key: "progress_tests_digest",
+    label: "Progress Tests Digest",
+    feature: "Progress Tests",
+    path: "/api/internal/progress-tests/admin-digest",
+    schedule: "35 0 * * *",
+    cadenceLabel: "Daily 07:35 Bangkok",
+    cadenceMinutes: 24 * 60,
+    lateAfterMinutes: 60,
+    maxDurationSeconds: 300,
+    manualOnly: false,
+    dangerous: false,
+    confirmationLabel: null,
+    expectedBangkokMinute: 7 * 60 + 35,
     routeMethod: "GET",
   },
   {

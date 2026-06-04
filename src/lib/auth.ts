@@ -48,7 +48,25 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       }
       return allowed;
     },
-    async session({ session }) {
+    async jwt({ token, user }) {
+      // `user` is only present at sign-in; resolve allowedPages once and persist
+      // it on the token so subsequent requests need no DB call.
+      if (user) {
+        const email = user.email?.trim().toLowerCase();
+        if (email) {
+          const db = getDb();
+          const rows = await db
+            .select({ allowedPages: adminUsers.allowedPages })
+            .from(adminUsers)
+            .where(eq(adminUsers.email, email))
+            .limit(1);
+          token.allowedPages = rows[0]?.allowedPages ?? null;
+        }
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      session.user.allowedPages = token.allowedPages ?? null;
       return session;
     },
   },

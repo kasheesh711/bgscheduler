@@ -19,7 +19,13 @@ export const { auth: edgeAuth } = NextAuth({
     error: "/login",
   },
   callbacks: {
-    async session({ session }) {
+    async jwt({ token }) {
+      // Edge runtime: no DB access. The Node `jwt` callback (src/lib/auth.ts)
+      // sets `allowedPages` at sign-in; here we only pass the token through.
+      return token;
+    },
+    async session({ session, token }) {
+      session.user.allowedPages = token.allowedPages ?? null;
       return session;
     },
   },

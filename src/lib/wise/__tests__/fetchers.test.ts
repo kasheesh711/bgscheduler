@@ -17,6 +17,7 @@ import {
   fetchWiseCourse,
   fetchWiseCourseParticipants,
   fetchWiseStudentRegistrationData,
+  scheduleWiseSession,
   updateSessionLocation,
   updateWiseCourseSubject,
   updateWiseStudentRegistrationAnswers,
@@ -392,6 +393,77 @@ describe("Wise fetchers", () => {
         body: JSON.stringify({ location: "Joy" }),
       }),
     );
+  });
+
+  it("schedules a new session with a SINGLE body and pulls data.sessionId", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: 200, data: { sessionId: "new-session-1" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    global.fetch = fetchMock as typeof fetch;
+
+    const result = await scheduleWiseSession(makeClient(), {
+      classId: "class-1",
+      userId: "teacher-user-1",
+      title: "Progress Test",
+      scheduledStartTime: "2026-06-10T09:00:00.000Z",
+      scheduledEndTime: "2026-06-10T10:00:00.000Z",
+      location: "Joy",
+    });
+
+    expect(result.sessionId).toBe("new-session-1");
+    const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(calledUrl.pathname).toBe("/teacher/classes/class-1/sessions");
+    expect(fetchMock.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          userId: "teacher-user-1",
+          title: "Progress Test",
+          sessions: [
+            {
+              type: "SINGLE",
+              scheduledStartTime: "2026-06-10T09:00:00.000Z",
+              scheduledEndTime: "2026-06-10T10:00:00.000Z",
+              location: "Joy",
+            },
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("omits location from the schedule body when not provided and tolerates a missing sessionId", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: 200, data: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    global.fetch = fetchMock as typeof fetch;
+
+    const result = await scheduleWiseSession(makeClient(), {
+      classId: "class-1",
+      userId: "teacher-user-1",
+      title: "Progress Test",
+      scheduledStartTime: "2026-06-10T09:00:00.000Z",
+      scheduledEndTime: "2026-06-10T10:00:00.000Z",
+    });
+
+    expect(result.sessionId).toBeNull();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+      userId: "teacher-user-1",
+      title: "Progress Test",
+      sessions: [
+        {
+          type: "SINGLE",
+          scheduledStartTime: "2026-06-10T09:00:00.000Z",
+          scheduledEndTime: "2026-06-10T10:00:00.000Z",
+        },
+      ],
+    });
   });
 
   it("fetches Wise activity events with supported filters and caps page size at 50", async () => {
