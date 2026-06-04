@@ -8,7 +8,7 @@
 import { and, desc, eq, gt, gte, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { PROGRESS_TEST_COUNTING_START } from "./config";
+import { PROGRESS_TEST_COUNTING_START, buildEnrollmentKey } from "./config";
 
 /** Insert shape for a progress-test booking audit row. */
 export type ProgressTestBookingInsert = typeof schema.progressTestBookings.$inferInsert;
@@ -93,6 +93,98 @@ export async function loadActiveCreditControlSnapshotSessions(
     ));
 
   return rows;
+}
+
+/** One per-class teacher feedback note for the AI summary. */
+export interface ProgressTestFeedbackNoteRecord {
+  scheduledStartTime: Date;
+  teacherFeedback: string;
+}
+
+/**
+ * Loads attended-with-credit teacher feedback notes for the given enrollments.
+ *
+ * Reads the ACTIVE credit-control snapshot's `creditControlSessions` (the same
+ * attended-with-credit filter as the ledger source), selecting only sessions for
+ * the requested enrollment keys and keeping rows with non-empty teacherFeedback.
+ * Used by the nightly sync to feed the AI summary when an enrollment first
+ * reaches the approaching threshold. Never logs the feedback text.
+ *
+ * @returns a Map from enrollmentKey to its feedback notes (ascending start time),
+ *   or an empty Map when no active snapshot or no enrollment keys are given.
+ */
+export async function loadFeedbackNotesByEnrollment(
+  enrollmentKeys: string[],
+  db: Database = getDb(),
+): Promise<Map<string, ProgressTestFeedbackNoteRecord[]>> {
+  if (enrollmentKeys.length === 0) return new Map();
+
+  const [snapshot] = await db
+    .select({ id: schema.creditControlSnapshots.id })
+    .from(schema.creditControlSnapshots)
+    .where(eq(schema.creditControlSnapshots.active, true))
+    .orderBy(desc(schema.creditControlSnapshots.generatedAt))
+    .limit(1);
+
+  if (!snapshot) return new Map();
+
+  const wantedKeys = new Set(enrollmentKeys);
+  const rows = await db
+    .select({
+      wiseClassId: schema.creditControlSessions.wiseClassId,
+      wiseStudentId: schema.creditControlSessions.wiseStudentId,
+      scheduledStartTime: schema.creditControlSessions.scheduledStartTime,
+      teacherFeedback: schema.creditControlSessions.teacherFeedback,
+    })
+    .from(schema.creditControlSessions)
+    .where(and(
+      eq(schema.creditControlSessions.snapshotId, snapshot.id),
+      eq(schema.creditControlSessions.sessionKind, "past"),
+      eq(schema.creditControlSessions.meetingStatus, "ENDED"),
+      gt(schema.creditControlSessions.creditApplied, 0),
+      gte(schema.creditControlSessions.scheduledStartTime, PROGRESS_TEST_COUNTING_START),
+    ))
+    .orderBy(schema.creditControlSessions.scheduledStartTime);
+
+  const byEnrollment = new Map<string, ProgressTestFeedbackNoteRecord[]>();
+  for (const row of rows) {
+    const enrollmentKey = buildEnrollmentKey(row.wiseClassId, row.wiseStudentId);
+    if (!wantedKeys.has(enrollmentKey)) continue;
+    const feedback = row.teacherFeedback?.trim();
+    if (!feedback) continue;
+    const existing = byEnrollment.get(enrollmentKey);
+    const note: ProgressTestFeedbackNoteRecord = {
+      scheduledStartTime: row.scheduledStartTime,
+      teacherFeedback: feedback,
+    };
+    if (existing) {
+      existing.push(note);
+    } else {
+      byEnrollment.set(enrollmentKey, [note]);
+    }
+  }
+  return byEnrollment;
+}
+
+/**
+ * Stores the generated AI summary on an enrollment's cycle-state row.
+ *
+ * Sets lastAiSummary (as plain JSON) + lastAiSummaryAt without touching the cycle
+ * counters. No-ops are impossible — the row exists because the recompute upserted
+ * it earlier in the same sync pass.
+ *
+ * @returns nothing.
+ */
+export async function storeCycleAiSummary(
+  enrollmentKey: string,
+  summary: Record<string, unknown>,
+  now: Date,
+  db: Database = getDb(),
+): Promise<void> {
+  await db
+    .update(schema.progressTestCycleState)
+    .set({ lastAiSummary: summary, lastAiSummaryAt: now, updatedAt: now })
+    .where(eq(schema.progressTestCycleState.enrollmentKey, enrollmentKey));
 }
 
 /**

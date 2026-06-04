@@ -10,9 +10,11 @@
 // "Needs Review" downstream via the engine's issues), and idempotent upserts
 // keyed by stable identifiers let a failed run self-heal on the next pass.
 //
-// IMPORTANT: this phase does NOT send teacher emails or generate AI summaries —
-// the Notifications phase wires step 6 in. The engine still computes which
-// enrollments *should* notify; we only count them here.
+// Step 5 wires notifications: enrollments newly transitioning to approaching get
+// an AI summary of the teacher's recent feedback and a teacher heads-up email.
+// That step is fail-isolated in its own try/catch — a notification/AI error is
+// logged and never fails the sync run (the engine recomputes which enrollments
+// *should* notify, and idempotency keys keep re-runs from re-sending).
 
 import { revalidateTag } from "next/cache";
 import { eq, sql } from "drizzle-orm";
@@ -26,13 +28,16 @@ import {
   getWiseTeacherDisplayName,
   getWiseTeacherUserId,
 } from "@/lib/wise/types";
+import type { ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
 import { PROGRESS_TESTS_CACHE_TAG, PROGRESS_TEST_COUNTING_START, buildEnrollmentKey } from "./config";
 import {
   appendLedgerRows,
   loadActiveCreditControlSnapshotSessions,
   loadActiveIdentityEntries,
   loadCycleStates,
+  loadFeedbackNotesByEnrollment,
   loadLedgerByEnrollment,
+  storeCycleAiSummary,
   upsertCycleState,
   type CreditControlAttendedSession,
   type ProgressTestCycleStateRecord,
@@ -46,6 +51,12 @@ import {
   type ProgressTestEnrollmentResult,
   type ProgressTestLedgerRow,
 } from "./engine";
+import { generateProgressTestSummary } from "./ai-summary";
+import {
+  runTeacherHeadsUpNotifications,
+  type TeacherHeadsUpEnrollment,
+} from "./teacher-heads-up";
+import type { ProgressTestAiSummary } from "./types";
 
 const SESSION_PAGE_SIZE = 1000;
 const ERROR_SUMMARY_MAX_LENGTH = 2_000;
@@ -58,6 +69,7 @@ export interface ProgressTestSyncResult {
   approachingCount: number;
   dueCount: number;
   unresolvedTeacherCount: number;
+  notificationCount: number;
   errorSummary?: string;
 }
 
@@ -76,6 +88,8 @@ export interface ProgressTestSyncDeps {
   instituteId: string;
   now?: Date;
   syncRunId: string;
+  /** Overridable email sender for the teacher heads-up step (defaults to Apps Script). */
+  sender?: ScheduleEmailSender;
 }
 
 function shortErrorSummary(error: unknown): string {
@@ -348,6 +362,78 @@ function buildCycleStateRow(
   };
 }
 
+/** A newly-approaching enrollment captured during recompute for step 6. */
+interface NotifyingEnrollment {
+  enrollmentKey: string;
+  cycleIndex: number;
+  studentName: string;
+  subject: string;
+  currentCount: number;
+  mostFrequentTutorCanonicalKey: string | null;
+  mostFrequentTutorDisplayName: string | null;
+}
+
+/**
+ * Generates AI summaries for newly-approaching enrollments and sends the teacher
+ * heads-up emails (step 6).
+ *
+ * 1. Load the last-8 attended-with-credit feedback notes per notifying enrollment
+ *    from the active credit-control snapshot.
+ * 2. For each enrollment, generate the AI summary (fail-closed: sparse/skipped/
+ *    failed yields no summary, and the heads-up email falls back gracefully); a
+ *    usable summary is stored on the cycle-state row for reuse in the email + UI.
+ * 3. Send the heads-up emails via runTeacherHeadsUpNotifications, which stamps
+ *    teacherNotifiedAt/teacherNotifiedForCycle on each successful send.
+ *
+ * Never logs the feedback text or the summary. Returns 0 when there is nothing to
+ * notify; the caller wraps this in its own try/catch so any failure is isolated.
+ *
+ * @returns the number of heads-up emails successfully sent.
+ */
+async function runTeacherHeadsUpStep(
+  db: Database,
+  syncRunId: string,
+  notifying: NotifyingEnrollment[],
+  now: Date,
+  sender: ScheduleEmailSender | undefined,
+): Promise<number> {
+  if (notifying.length === 0) return 0;
+
+  const feedbackByEnrollment = await loadFeedbackNotesByEnrollment(
+    notifying.map((enrollment) => enrollment.enrollmentKey),
+    db,
+  );
+
+  const enrollments: TeacherHeadsUpEnrollment[] = [];
+  for (const enrollment of notifying) {
+    let aiSummary: ProgressTestAiSummary | null = null;
+    const notes = feedbackByEnrollment.get(enrollment.enrollmentKey) ?? [];
+    const summaryResult = await generateProgressTestSummary(notes);
+    if (summaryResult.status === "ok") {
+      aiSummary = summaryResult.summary;
+      await storeCycleAiSummary(
+        enrollment.enrollmentKey,
+        summaryResult.summary as unknown as Record<string, unknown>,
+        now,
+        db,
+      );
+    }
+    enrollments.push({
+      enrollmentKey: enrollment.enrollmentKey,
+      cycleIndex: enrollment.cycleIndex,
+      studentName: enrollment.studentName,
+      subject: enrollment.subject,
+      currentCount: enrollment.currentCount,
+      mostFrequentTutorCanonicalKey: enrollment.mostFrequentTutorCanonicalKey,
+      mostFrequentTutorDisplayName: enrollment.mostFrequentTutorDisplayName,
+      aiSummary,
+    });
+  }
+
+  const result = await runTeacherHeadsUpNotifications(db, { syncRunId, enrollments, sender });
+  return result.sent;
+}
+
 /**
  * Runs one progress-test sync pass against a pre-acquired run row.
  *
@@ -358,10 +444,15 @@ function buildCycleStateRow(
  *    marking a row isProgressTest only when it is the enrollment's booked test.
  * 4. Recompute per-enrollment cycle state through the pure engine, computing the
  *    most-frequent tutor, and upsert progress_test_cycle_state (handling resets).
- * 5. Record due/approaching counts and finalize the run row, then revalidate the
- *    progress-tests cache tag. Fail-isolated: any throw fails only this run row.
+ * 5. For enrollments newly transitioning to approaching (shouldNotifyTeacher),
+ *    generate the AI summary from the last-8 attended feedback notes, store it on
+ *    cycle state, and send the teacher heads-up email. Fail-isolated: a
+ *    notification/AI error is caught + logged and never fails the sync run.
+ * 6. Record due/approaching/notification counts and finalize the run row, then
+ *    revalidate the progress-tests cache tag. Any earlier throw fails only this
+ *    run row (the per-row upserts self-heal on the next pass).
  *
- * @returns a summary of ledger/enrollment/due/approaching counts (success flag).
+ * @returns a summary of ledger/enrollment/due/approaching/notification counts.
  */
 export async function runProgressTestSync(deps: ProgressTestSyncDeps): Promise<ProgressTestSyncResult> {
   const { db, client, instituteId, syncRunId } = deps;
@@ -410,17 +501,43 @@ export async function runProgressTestSync(deps: ProgressTestSyncDeps): Promise<P
 
     let approachingCount = 0;
     let dueCount = 0;
+    const notifying: NotifyingEnrollment[] = [];
     for (const outcome of result) {
       if (outcome.status === "approaching") approachingCount += 1;
       if (outcome.status === "due") dueCount += 1;
       const records = ledgerByEnrollment.get(outcome.enrollmentKey) ?? [];
       const prior = priorCycleStates.get(outcome.enrollmentKey) ?? null;
       await upsertCycleState(buildCycleStateRow(outcome, records, prior), db);
+
+      // Capture enrollments newly transitioning to approaching for step 5.
+      if (outcome.shouldNotifyTeacher) {
+        const tutor = computeMostFrequentTutor(records, outcome.currentCycleStart);
+        const sample = records.find((record) => record.countsTowardCycle && !record.isProgressTest) ?? records[0];
+        notifying.push({
+          enrollmentKey: outcome.enrollmentKey,
+          cycleIndex: outcome.cycleIndex,
+          studentName: sample?.studentName ?? prior?.studentName ?? "the student",
+          subject: sample?.subject ?? prior?.subject ?? "",
+          currentCount: outcome.currentCount,
+          mostFrequentTutorCanonicalKey: tutor.canonicalKey,
+          mostFrequentTutorDisplayName: tutor.displayName,
+        });
+      }
     }
 
     const unresolvedTeacherCount = issues.length;
 
-    // Step 5: finalize the run row + sweep the cache.
+    // Step 5: generate AI summaries + send teacher heads-up emails. Fail-isolated
+    // — a notification/AI error must never fail the sync run.
+    let notificationCount = 0;
+    try {
+      notificationCount = await runTeacherHeadsUpStep(db, syncRunId, notifying, now, deps.sender);
+    } catch (notifyError) {
+      const message = notifyError instanceof Error ? notifyError.message : "Teacher heads-up step failed";
+      console.error(`progress-test sync teacher heads-up step failed: ${message}`);
+    }
+
+    // Step 6: finalize the run row + sweep the cache.
     await db
       .update(schema.progressTestSyncRuns)
       .set({
@@ -430,10 +547,12 @@ export async function runProgressTestSync(deps: ProgressTestSyncDeps): Promise<P
         enrollmentCount: result.length,
         approachingCount,
         dueCount,
+        notificationCount,
         metadata: {
           attendedSessions: attendedSessions.length,
           wiseSessionsFetched: wiseSessions.length,
           unresolvedTeacherCount,
+          notificationCount,
         },
       })
       .where(eq(schema.progressTestSyncRuns.id, syncRunId));
@@ -447,6 +566,7 @@ export async function runProgressTestSync(deps: ProgressTestSyncDeps): Promise<P
       approachingCount,
       dueCount,
       unresolvedTeacherCount,
+      notificationCount,
     };
   } catch (error) {
     const errorSummary = shortErrorSummary(error);
@@ -467,6 +587,7 @@ export async function runProgressTestSync(deps: ProgressTestSyncDeps): Promise<P
       approachingCount: 0,
       dueCount: 0,
       unresolvedTeacherCount: 0,
+      notificationCount: 0,
       errorSummary,
     };
   }

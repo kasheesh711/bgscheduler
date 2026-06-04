@@ -15,10 +15,14 @@ import {
   loadActiveCreditControlSnapshotSessions,
   loadActiveIdentityEntries,
   loadCycleStates,
+  loadFeedbackNotesByEnrollment,
   loadLedgerByEnrollment,
+  storeCycleAiSummary,
   upsertCycleState,
 } from "@/lib/progress-tests/db";
 import { fetchAllTeachers } from "@/lib/wise/fetchers";
+import { generateProgressTestSummary } from "@/lib/progress-tests/ai-summary";
+import { runTeacherHeadsUpNotifications } from "@/lib/progress-tests/teacher-heads-up";
 import {
   buildSessionTeacherMap,
   computeMostFrequentTutor,
@@ -33,8 +37,12 @@ vi.mock("@/lib/progress-tests/db", () => ({
   appendLedgerRows: vi.fn(),
   loadLedgerByEnrollment: vi.fn(),
   loadCycleStates: vi.fn(),
+  loadFeedbackNotesByEnrollment: vi.fn(),
+  storeCycleAiSummary: vi.fn(),
   upsertCycleState: vi.fn(),
 }));
+vi.mock("@/lib/progress-tests/ai-summary", () => ({ generateProgressTestSummary: vi.fn() }));
+vi.mock("@/lib/progress-tests/teacher-heads-up", () => ({ runTeacherHeadsUpNotifications: vi.fn() }));
 
 // ── Builders ────────────────────────────────────────────────────────────
 
@@ -136,8 +144,12 @@ const loadIdentitiesMock = loadActiveIdentityEntries as unknown as Mock;
 const appendLedgerMock = appendLedgerRows as unknown as Mock;
 const loadLedgerMock = loadLedgerByEnrollment as unknown as Mock;
 const loadCycleStatesMock = loadCycleStates as unknown as Mock;
+const loadFeedbackNotesMock = loadFeedbackNotesByEnrollment as unknown as Mock;
+const storeCycleAiSummaryMock = storeCycleAiSummary as unknown as Mock;
 const upsertCycleStateMock = upsertCycleState as unknown as Mock;
 const fetchTeachersMock = fetchAllTeachers as unknown as Mock;
+const generateSummaryMock = generateProgressTestSummary as unknown as Mock;
+const runHeadsUpMock = runTeacherHeadsUpNotifications as unknown as Mock;
 
 describe("runProgressTestSync", () => {
   beforeEach(() => {
@@ -149,6 +161,10 @@ describe("runProgressTestSync", () => {
     loadLedgerMock.mockResolvedValue(new Map());
     appendLedgerMock.mockResolvedValue(undefined);
     upsertCycleStateMock.mockResolvedValue(undefined);
+    loadFeedbackNotesMock.mockResolvedValue(new Map());
+    storeCycleAiSummaryMock.mockResolvedValue(undefined);
+    generateSummaryMock.mockResolvedValue({ status: "skipped", reason: "not configured" });
+    runHeadsUpMock.mockResolvedValue({ attempted: 0, sent: 0, failed: 0, unresolved: 0, outcomes: [] });
   });
 
   afterEach(() => {
@@ -341,6 +357,106 @@ describe("runProgressTestSync", () => {
     expect(result.dueCount).toBe(1);
     expect(result.approachingCount).toBe(1);
     expect(result.enrollmentCount).toBe(2);
+  });
+
+  it("fires the teacher heads-up step for a newly-approaching enrollment with its AI summary", async () => {
+    const approachingLedger = Array.from({ length: 6 }, (_, index) =>
+      makeLedgerRecord({
+        wiseSessionId: `appr-${index}`,
+        enrollmentKey: "class-1|student-1",
+        scheduledStartTime: dayAfterStart(index + 1),
+        tutorCanonicalKey: "alice",
+        tutorDisplayName: "Alice",
+      }),
+    );
+    loadLedgerMock.mockResolvedValue(new Map([["class-1|student-1", approachingLedger]]));
+    generateSummaryMock.mockResolvedValue({
+      status: "ok",
+      summary: { headline: "h", strengths: [], focusAreas: [], recommendation: "r" },
+      model: "gpt-5.4-mini",
+      sessionsUsed: 6,
+    });
+
+    const result = await runProgressTestSync({
+      db: finalizingDb(),
+      client: fakeClient(),
+      instituteId: "institute-1",
+      now: dayAfterStart(20),
+      syncRunId: "run-1",
+    });
+
+    expect(result.success).toBe(true);
+    // The AI summary is generated for the approaching enrollment and stored on cycle state.
+    expect(generateSummaryMock).toHaveBeenCalledTimes(1);
+    expect(storeCycleAiSummaryMock).toHaveBeenCalledWith(
+      "class-1|student-1",
+      { headline: "h", strengths: [], focusAreas: [], recommendation: "r" },
+      expect.any(Date),
+      expect.anything(),
+    );
+    // The heads-up sender is invoked with the resolved tutor + summary.
+    expect(runHeadsUpMock).toHaveBeenCalledTimes(1);
+    const headsUpArgs = runHeadsUpMock.mock.calls[0][1];
+    expect(headsUpArgs.syncRunId).toBe("run-1");
+    expect(headsUpArgs.enrollments).toHaveLength(1);
+    expect(headsUpArgs.enrollments[0]).toMatchObject({
+      enrollmentKey: "class-1|student-1",
+      cycleIndex: 0,
+      currentCount: 6,
+      mostFrequentTutorCanonicalKey: "alice",
+      mostFrequentTutorDisplayName: "Alice",
+    });
+    expect(headsUpArgs.enrollments[0].aiSummary).toEqual({
+      headline: "h",
+      strengths: [],
+      focusAreas: [],
+      recommendation: "r",
+    });
+  });
+
+  it("does NOT re-notify an enrollment already notified for the current cycle", async () => {
+    const approachingLedger = Array.from({ length: 6 }, (_, index) =>
+      makeLedgerRecord({ wiseSessionId: `appr-${index}`, scheduledStartTime: dayAfterStart(index + 1) }),
+    );
+    loadLedgerMock.mockResolvedValue(new Map([["class-1|student-1", approachingLedger]]));
+    // Prior state already records a heads-up sent for cycle 0 → engine clears shouldNotifyTeacher.
+    loadCycleStatesMock.mockResolvedValue(
+      new Map([["class-1|student-1", makeCycleStateRecord({ cycleIndex: 0, teacherNotifiedForCycle: 0 })]]),
+    );
+
+    await runProgressTestSync({
+      db: finalizingDb(),
+      client: fakeClient(),
+      instituteId: "institute-1",
+      now: dayAfterStart(20),
+      syncRunId: "run-1",
+    });
+
+    // No second heads-up: re-running the sync sends nothing new for this cycle.
+    expect(runHeadsUpMock).not.toHaveBeenCalled();
+    expect(generateSummaryMock).not.toHaveBeenCalled();
+  });
+
+  it("is fail-isolated: a throwing heads-up step does not fail the sync run", async () => {
+    const approachingLedger = Array.from({ length: 6 }, (_, index) =>
+      makeLedgerRecord({ wiseSessionId: `appr-${index}`, scheduledStartTime: dayAfterStart(index + 1) }),
+    );
+    loadLedgerMock.mockResolvedValue(new Map([["class-1|student-1", approachingLedger]]));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    runHeadsUpMock.mockRejectedValue(new Error("email provider down"));
+
+    const result = await runProgressTestSync({
+      db: finalizingDb(),
+      client: fakeClient(),
+      instituteId: "institute-1",
+      now: dayAfterStart(20),
+      syncRunId: "run-1",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.notificationCount).toBe(0);
+    expect(result.approachingCount).toBe(1);
+    errorSpy.mockRestore();
   });
 
   it("fails the run row (not the process) when a step throws", async () => {

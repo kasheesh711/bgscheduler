@@ -17,6 +17,10 @@
       "schedule": "25,55 * * * *"
     },
     {
+      "path": "/api/internal/progress-tests/admin-digest",
+      "schedule": "35 0 * * *"
+    },
+    {
       "path": "/api/internal/sync-wise-activity",
       "schedule": "5,35 * * * *"
     },
