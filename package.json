@@ -23,7 +23,10 @@
     "ai-scheduler:evaluate": "tsx scripts/evaluate-ai-scheduler.ts",
     "ai-scheduler:compare-models": "tsx scripts/compare-ai-scheduler-models.ts",
     "line:test-data:cleanup": "tsx scripts/delete-line-test-data.ts",
-    "guard:sales-dashboard-scope": "node scripts/check-sales-dashboard-scope.mjs"
+    "guard:sales-dashboard-scope": "node scripts/check-sales-dashboard-scope.mjs",
+    "guard:production-route-surface": "node scripts/check-production-route-surface.mjs",
+    "verify:release": "npm run typecheck && npm test && npm run build && npm run typecheck && git diff --check && npm run guard:production-route-surface",
+    "deploy:prod": "npm run verify:release && node scripts/assert-production-deploy-ready.mjs && npx vercel --prod"
   },
   "dependencies": {
     "@base-ui/react": "1.3.0",

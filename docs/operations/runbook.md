@@ -17,7 +17,7 @@ cron, or when you need to run a one-off command against production.
 | What | Command / value |
 | --- | --- |
 | Production URL | `https://bgscheduler.vercel.app` |
-| Deploy to production | `npx vercel --prod` |
+| Deploy to production | `npm run deploy:prod` |
 | Run unit tests | `npm test` |
 | Generate a migration | `npm run db:generate` |
 | Apply migrations | `DATABASE_URL=... npm run db:migrate` |
@@ -40,12 +40,14 @@ is default and `vercel.json` only declares crons (`vercel.json:1`).
 ### Deploy to production
 
 ```bash
-npx vercel --prod
+npm run deploy:prod
 ```
 
-`npm run build` (`package.json:7`) runs `next build`. Before deploying anything
-that touches the database schema, apply migrations first (see [§4](#4-database-scripts)) —
-a deploy does **not** run migrations.
+`npm run deploy:prod` runs the release verification chain, refuses dirty
+worktrees, refuses non-`main` branches, refuses commits that do not match
+`origin/main`, and then calls `npx vercel --prod`. Before deploying anything
+that touches the database schema, apply migrations first (see
+[§4](#4-database-scripts)) — a deploy does **not** run migrations.
 
 ### Pre-deploy checklist
 
@@ -53,6 +55,7 @@ a deploy does **not** run migrations.
 npm run typecheck   # tsc --noEmit            (package.json:10)
 npm run lint        # eslint                  (package.json:9)
 npm test            # vitest run --project unit (package.json:11)
+npm run guard:production-route-surface
 ```
 
 > Schema-affecting features must migrate before they deploy. The README is
