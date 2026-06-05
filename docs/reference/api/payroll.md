@@ -1,207 +1,197 @@
-# Payroll API
+# Payroll API — `/api/payroll`
 
-**Status: stable.** **Authoritative source:** the five route handlers under [`src/app/api/payroll/`](../../../src/app/api/payroll/).
+Monthly tutor-pay reconciliation endpoints. The payroll feature pulls a Bangkok calendar month of Wise past sessions + tutor-payout invoice events, normalizes them against a rate card, and serves a single read payload plus review/adjustment mutations. For purpose, business rules, tier/rate-card semantics, and the reconciliation flow, see [docs/features/payroll.md](../../features/payroll.md). This page owns only the mechanical endpoint inventory (method + path + auth + request/response shapes + side effects + status codes).
 
-This page is the mechanical reference for the Payroll HTTP endpoints: method, path, auth, request shape, response shape, side effects, and status codes. Feature meaning, the reconciliation flow, and the issue taxonomy live in [docs/features/payroll.md](../../features/payroll.md). Table columns are defined in [`schema.ts`](../../../src/lib/db/schema.ts) — the eight `payroll_*` tables start at [`schema.ts:855`](../../../src/lib/db/schema.ts).
+All five route handlers live under `src/app/api/payroll/**/route.ts`.
 
-A **payroll month** is addressed in every request as `YYYY-MM` (Asia/Bangkok). Each handler that takes a month resolves it through `assertPayrollMonth`, which throws `Invalid month. Expected YYYY-MM.` on a malformed value ([`domain.ts:79-89`](../../../src/lib/payroll/domain.ts)); every handler maps that specific message to **400** and any other thrown error to **500**.
+## Conventions for this group
 
-## Conventions shared across the endpoints
-
-- **No Zod.** Unlike most BGScheduler routes, none of the payroll handlers use a Zod schema. Bodies are parsed with `request.json()` inside a `.catch()` that falls back to `{}`, then read through inline TypeScript casts. Field validation is hand-written `if` checks. There is no rejection of unknown fields and no type coercion guard beyond what each handler does explicitly.
-- **Authentication.** Every handler calls `auth()` from [`@/lib/auth`](../../../src/lib/auth.ts) and returns `401 {"error":"Unauthorized"}` when the session check fails. Two of the five (`PATCH /api/payroll/review`, `POST /api/payroll/adjustments`) require not just a session but `session.user.email`, because they stamp the actor's email/name onto the row. The middleware also gates the whole `/api/payroll/**` subtree: it is **not** in the public-route allowlist ([`middleware.ts:4-15`](../../../src/middleware.ts)), so an unauthenticated browser request is redirected to `/login` before the handler runs. The in-handler `auth()` check is the API-level backstop.
-- **Payload echo.** `POST /api/payroll/sync`, `PATCH /api/payroll/review`, and `POST /api/payroll/adjustments` all re-read and return the full month payload (`getPayrollPayload`) in their success response, so the client never needs a follow-up `GET`. The shape of that payload object is documented once under [`GET /api/payroll`](#get-apipayroll) and referenced elsewhere as the **payroll payload**.
-
----
-
-## Sync
-
-### `POST /api/payroll/sync`
-
-Runs a manual Wise payroll sync for a month, then returns the sync result and the freshly-rebuilt payload. Handler: [`sync/route.ts:18-53`](../../../src/app/api/payroll/sync/route.ts). `maxDuration = 800` ([`sync/route.ts:9`](../../../src/app/api/payroll/sync/route.ts)).
-
-**Auth:** session required (`if (!session)`, [`sync/route.ts:19-22`](../../../src/app/api/payroll/sync/route.ts)).
-
-**Request body** (JSON; all fields optional, no schema):
-
-| Field | Type | Default | Notes |
-|-------|------|---------|-------|
-| `month` | string | current Bangkok month (`todayBangkok().slice(0,7)`) | Read only if a string; any other type silently falls back to the default ([`sync/route.ts:31`](../../../src/app/api/payroll/sync/route.ts)). |
-| `maxEventPages` | number | `1000` | Clamped to the integer range `[1, 2000]` by `numberOption`; non-integers fall back to `1000` ([`sync/route.ts:13-16,39`](../../../src/app/api/payroll/sync/route.ts)). Caps how many pages of Wise payout events are pulled. |
-
-A missing or non-JSON body is treated as `{}` ([`sync/route.ts:24-30`](../../../src/app/api/payroll/sync/route.ts)), so both `month` and `maxEventPages` fall to their defaults.
-
-The Wise institute is taken from `process.env.WISE_INSTITUTE_ID`, falling back to the hard-coded `696e1f4d90102225641cc413` ([`sync/route.ts:11,37`](../../../src/app/api/payroll/sync/route.ts)).
-
-**Side effects** (in `runPayrollSync`, [`sync.ts:243-448`](../../../src/lib/payroll/sync.ts)):
-
-- Marks any `payroll_sync_runs` row still `running` after 20 minutes as `failed` ([`sync.ts:125-137,255`](../../../src/lib/payroll/sync.ts)).
-- Inserts a new `payroll_sync_runs` row with `status: "running"`, `triggerType: "manual"`. A partial unique index allowing only one `running` row at a time means a concurrent sync raises a `23505` violation, surfaced as `PayrollSyncAlreadyRunningError` ([`sync.ts:258-273`](../../../src/lib/payroll/sync.ts)).
-- Fetches teachers, the active tutor-identity snapshot, past sessions, and payout events from Wise in parallel ([`sync.ts:276-281`](../../../src/lib/payroll/sync.ts)).
-- In a single write transaction: **deletes and replaces** all `payroll_teacher_tiers`, `payroll_payout_invoices`, and `payroll_session_observations` rows for the month; upserts the month's `payroll_reviews` row back to `status: "draft"` (clearing any prior approval); and marks the run `status: "success"` with teacher/session/invoice counts ([`sync.ts:385-425`](../../../src/lib/payroll/sync.ts)). The transaction runs over a dedicated `pg` Pool when the Neon HTTP driver rejects transactions ([`sync.ts:100-123`](../../../src/lib/payroll/sync.ts)).
-- On any failure inside the run, the sync row is set to `status: "failed"` with a truncated `errorSummary` and the error is re-thrown ([`sync.ts:437-447`](../../../src/lib/payroll/sync.ts)).
-
-**Response 200** — `{ ok: true, result, payload }`:
-
-- `result` is a `PayrollSyncResult` ([`sync.ts:29-38`](../../../src/lib/payroll/sync.ts)): `{ syncRunId, status: "success", payrollMonth, teacherCount, sessionCount, invoiceCount, eventPagesFetched, sessionPagesFetched }`.
-- `payload` is the full payroll payload re-read after the sync ([`sync/route.ts:41-42`](../../../src/app/api/payroll/sync/route.ts)). See [`GET /api/payroll`](#get-apipayroll).
-
-**Status codes:**
-
-| Status | When |
-|--------|------|
-| 200 | Sync completed; `result` + `payload` returned. |
-| 401 | No session. |
-| 409 | A sync is already running (`PayrollSyncAlreadyRunningError`); body `{"error":"Payroll sync is already running"}` ([`sync/route.ts:44-46`](../../../src/app/api/payroll/sync/route.ts)). |
-| 400 | Error message starts with `Invalid month` ([`sync/route.ts:50`](../../../src/app/api/payroll/sync/route.ts)). |
-| 500 | Any other thrown error; body carries the error message ([`sync/route.ts:47-51`](../../../src/app/api/payroll/sync/route.ts)). |
+- **Auth — all `admin`.** None of these paths are in the `src/middleware.ts` public allowlist, so the middleware redirects unauthenticated browser requests to `/login` and every handler additionally calls `auth()` (`src/lib/auth.ts`). A missing session returns `401 {"error":"Unauthorized"}`. Two handlers (`PATCH /api/payroll/review`, `POST /api/payroll/adjustments`) require not just a session but `session.user.email` (used as the audit actor), still returning the same `401` when it is absent (`review/route.ts:8`, `adjustments/route.ts:8`).
+- **No Zod.** Unlike most mutating routes in the codebase, the payroll handlers do **not** use a Zod schema. Request bodies are read with `request.json().catch(() => ({}))` and treated as inline-cast TypeScript shapes with hand-rolled field checks. There is no `safeParse`; malformed JSON degrades to an empty object rather than `400`.
+- **`month` parameter.** Format is `YYYY-MM` (Bangkok calendar month). It is validated lazily inside the data/sync layer by `assertPayrollMonth`, which throws `"Invalid month. Expected YYYY-MM."` for anything not matching `/^\d{4}-\d{2}$/` or that fails a Bangkok round-trip check (`src/lib/payroll/domain.ts:79-89`). Every handler maps a thrown message that `startsWith("Invalid month")` to HTTP `400`, and any other thrown error to `500`. On `POST /api/payroll/sync` and `GET /api/payroll`, `month` defaults to the current Bangkok month (`todayBangkok().slice(0, 7)`); on `review` and `adjustments` it is required (`400` if missing).
+- **Payload echo.** Four of the five handlers return the full `PayrollPayload` (see [Shared response: `PayrollPayload`](#shared-response-payrollpayload)) so the client can refresh its view from a single round-trip. `DELETE` is the exception — it returns only `{ ok: true }`.
 
 ---
 
-## Reading the month
+## Sync — `POST /api/payroll/sync`
 
-### `GET /api/payroll`
+File: `src/app/api/payroll/sync/route.ts`. Carries `export const maxDuration = 800` (`sync/route.ts:9`) for the long Wise pull.
 
-Returns the full reconciled payroll payload for a month. Read-only — no writes. Handler: [`route.ts:7-23`](../../../src/app/api/payroll/route.ts).
+Triggers a full payroll resync for a month: fetches Wise teachers, past sessions, and `TutorPayoutInvoiceCreatedEvent` activity events, normalizes them, and rewrites the month's snapshot tables transactionally.
 
-**Auth:** session required (`if (!session)`, [`route.ts:8-11`](../../../src/app/api/payroll/route.ts)).
+- **Auth**: `admin` — `auth()`; `401` if no session (`sync/route.ts:19-22`).
+- **Request body** (JSON, all optional; malformed JSON → `{}`):
 
-**Query parameters:**
+  | Field | Type | Default | Notes |
+  |---|---|---|---|
+  | `month` | string `YYYY-MM` | current Bangkok month | `sync/route.ts:31` |
+  | `maxEventPages` | integer | `1000` | Clamped to `[1, 2000]` via `numberOption`; non-integer/non-number falls back to `1000` (`sync/route.ts:13-16,39`). Caps how many 50-event activity pages are walked. |
 
-| Param | Type | Default | Notes |
-|-------|------|---------|-------|
-| `month` | string (`YYYY-MM`) | current Bangkok month | From `searchParams.get("month")`, falling back to `todayBangkok().slice(0,7)` ([`route.ts:13`](../../../src/app/api/payroll/route.ts)). |
+- **Side effects** (in `runPayrollSync`, `src/lib/payroll/sync.ts:243-448`):
+  1. Marks any `running` `payroll_sync_runs` row older than 20 minutes as `failed` (`sync.ts:125-137`).
+  2. Inserts a new `payroll_sync_runs` row with `status: "running"`, `triggerType: "manual"`. **Single-flight guard**: a unique partial index `payroll_sync_runs_single_running_idx` makes a concurrent second `running` insert raise Postgres `23505`, which is caught and rethrown as `PayrollSyncAlreadyRunningError` (`sync.ts:54-59,259-273`).
+  3. Fetches Wise teachers, active identity groups (from the active snapshot), past sessions (`status=PAST`, paginated by date over a ±1-day padded window), and payout events — concurrently.
+  4. In a transaction, **deletes and replaces** `payroll_teacher_tiers`, `payroll_payout_invoices`, and `payroll_session_observations` for the month, then upserts `payroll_reviews` back to `status: "draft"` (clearing any prior approval) and marks the sync run `success` with counts (`sync.ts:385-425`). The transaction runs via `node-postgres` `Pool` when the Neon-HTTP driver rejects transactions (`sync.ts:100-123`).
+  5. On any error after the run row exists, the run is set to `status: "failed"` with a truncated `errorSummary` and the error is rethrown (`sync.ts:437-447`).
+- **Response** `200`:
+  ```jsonc
+  {
+    "ok": true,
+    "result": {            // PayrollSyncResult (sync.ts:29-38)
+      "syncRunId": "…",
+      "status": "success",
+      "payrollMonth": "2026-05-01",   // first-of-month form
+      "teacherCount": 0,
+      "sessionCount": 0,
+      "invoiceCount": 0,
+      "eventPagesFetched": 0,
+      "sessionPagesFetched": 0
+    },
+    "payload": { /* PayrollPayload, freshly re-read */ }
+  }
+  ```
+  The payload is re-fetched after the sync via `getPayrollPayload` (`sync/route.ts:41`).
+- **Status codes**:
 
-**Response 200** — the **payroll payload** object, the return value of `getPayrollPayload` / `buildPayrollPayload` ([`data.ts:258-575`](../../../src/lib/payroll/data.ts)), typed as `PayrollPayload` ([`types.ts:77-127`](../../../src/lib/payroll/types.ts)). The handler returns it directly (no `ok`/`result` envelope). Top-level keys:
-
-| Key | Type | Meaning |
-|-----|------|---------|
-| `month` | string | The requested month, `YYYY-MM`. |
-| `payrollMonth` | string | First-of-month date, e.g. `2026-05-01`. |
-| `rateCard` | object \| null | Active rate-card version `{ id, versionName, effectiveMonth, sourceLabel, active }`, or null if none active ([`data.ts:102-111`](../../../src/lib/payroll/data.ts)). |
-| `review` | object | `{ status: "draft" \| "approved", notes, approvedByEmail, approvedByName, approvedAt, updatedAt }` ([`data.ts:76-86`](../../../src/lib/payroll/data.ts)). |
-| `lastSync` | object \| null | Most recent sync run `{ id, status, startedAt, finishedAt, teacherCount, sessionCount, invoiceCount, errorSummary }`, or null ([`data.ts:88-100`](../../../src/lib/payroll/data.ts)). |
-| `summary` | object | Month-level aggregates (totals, paid vs utilization hours, variance, free-pay hours, Kevin-specific totals, manual-adjustment totals, and issue/expected-rate counts). See `PayrollPayload["summary"]` ([`types.ts:105-123`](../../../src/lib/payroll/types.ts)) and the assembly at [`data.ts:504-522`](../../../src/lib/payroll/data.ts). |
-| `tutors` | `PayrollTutorRow[]` | Per-tutor aggregate rows, sorted by tier then name ([`types.ts:39-60`](../../../src/lib/payroll/types.ts), [`data.ts:224-256`](../../../src/lib/payroll/data.ts)). |
-| `issues` | `PayrollIssue[]` | Data-integrity issues; nine `type` values incl. `missing_payout_invoice`, `orphan_payout_invoice`, `unresolved_tutor_identity`, `missing_tier`, `duration_mismatch`, `expected_rate_mismatch`, `missing_expected_rate_rule`, `unmapped_rate_course`, `zero_credit_or_zero_amount` ([`types.ts:3-30`](../../../src/lib/payroll/types.ts)). |
-| `adjustments` | `PayrollAdjustmentDto[]` | Manual adjustment rows for the month, newest first ([`types.ts:62-75`](../../../src/lib/payroll/types.ts), [`data.ts:113-128`](../../../src/lib/payroll/data.ts)). |
-
-(The issue taxonomy and what each field means are documented in [docs/features/payroll.md](../../features/payroll.md); this page does not restate them.)
-
-**Status codes:**
-
-| Status | When |
-|--------|------|
-| 200 | Payload returned. |
-| 401 | No session. |
-| 400 | Error message starts with `Invalid month` ([`route.ts:20`](../../../src/app/api/payroll/route.ts)). |
-| 500 | Any other thrown error ([`route.ts:16-21`](../../../src/app/api/payroll/route.ts)). |
+  | Code | When |
+  |---|---|
+  | `200` | Sync completed; `result` + `payload` returned. |
+  | `401` | No session. |
+  | `409` | `PayrollSyncAlreadyRunningError` — another sync holds the single-flight slot (`sync/route.ts:44-46`). |
+  | `400` | Thrown message starts with `"Invalid month"` (`sync/route.ts:50`). |
+  | `500` | Any other failure; body `{"error": <message>}`. |
 
 ---
 
-## Review (approval workflow)
+## Read payload — `GET /api/payroll`
 
-### `PATCH /api/payroll/review`
+File: `src/app/api/payroll/route.ts`. Read-only; computes the reconciliation payload from the month's persisted snapshot tables (no Wise call).
 
-Sets a month's review `status` and/or `notes`, stamping the actor on approval. Handler: [`review/route.ts:6-57`](../../../src/app/api/payroll/review/route.ts).
+- **Auth**: `admin` — `auth()`; `401` if no session (`route.ts:9-11`).
+- **Query parameters**:
 
-**Auth:** session **with email** required (`if (!session?.user?.email)`, [`review/route.ts:7-10`](../../../src/app/api/payroll/review/route.ts)). The email/name become `actorEmail`/`actorName` on the review row.
+  | Param | Type | Default | Notes |
+  |---|---|---|---|
+  | `month` | string `YYYY-MM` | current Bangkok month | `request.nextUrl.searchParams.get("month")` (`route.ts:13`) |
 
-**Request body** (JSON; no schema):
+- **Side effects**: none (pure read; `getPayrollPayload` issues parallel `SELECT`s, `src/lib/payroll/data.ts:529-575`).
+- **Response** `200`: the bare [`PayrollPayload`](#shared-response-payrollpayload) object (not wrapped in `{ ok, payload }`).
+- **Status codes**: `200` success · `401` no session · `400` `"Invalid month…"` · `500` other (`route.ts:16-22`).
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `month` | string (`YYYY-MM`) | yes | Missing → 400 `{"error":"month is required"}` ([`review/route.ts:18-20`](../../../src/app/api/payroll/review/route.ts)). |
-| `status` | `"draft"` \| `"approved"` | no | If present and not one of those two literals → 400 `{"error":"Invalid review status"}` ([`review/route.ts:21-23`](../../../src/app/api/payroll/review/route.ts)). When omitted, `updatePayrollReview` defaults the row to `"draft"` ([`data.ts:589-593`](../../../src/lib/payroll/data.ts)). |
-| `notes` | string | no | Persisted only when a string; otherwise left unchanged ([`review/route.ts:45`](../../../src/app/api/payroll/review/route.ts), [`data.ts:615`](../../../src/lib/payroll/data.ts)). |
+---
 
-**Approval gate (fail-closed):** when `status === "approved"`, the handler first loads the payload and counts blocking expected-rate issues — `expected_rate_mismatch`, `missing_expected_rate_rule`, `unmapped_rate_course`. If any exist it returns **409** without writing ([`review/route.ts:27-40`](../../../src/app/api/payroll/review/route.ts)).
+## Review status — `PATCH /api/payroll/review`
 
-**Side effects:** `updatePayrollReview` upserts the month's `payroll_reviews` row ([`data.ts:577-619`](../../../src/lib/payroll/data.ts)). On `approved` it sets `approvedByEmail`/`approvedByName`/`approvedAt`; otherwise those columns are cleared.
+File: `src/app/api/payroll/review/route.ts`. Sets a month's review state to `draft` or `approved` and/or updates its notes.
 
-**Response 200** — `{ ok: true, payload }`, where `payload` is the payload re-read after the update ([`review/route.ts:49`](../../../src/app/api/payroll/review/route.ts)). See [`GET /api/payroll`](#get-apipayroll).
+- **Auth**: `admin` — requires `session.user.email`; `401` otherwise (`review/route.ts:8`). The signed-in email/name is recorded as the approver when approving.
+- **Request body** (JSON):
 
-**Status codes:**
+  | Field | Type | Required | Notes |
+  |---|---|---|---|
+  | `month` | string `YYYY-MM` | yes | `400 {"error":"month is required"}` if missing (`review/route.ts:18`). |
+  | `status` | `"draft"` \| `"approved"` | no | If present and not one of those two values → `400 {"error":"Invalid review status"}` (`review/route.ts:21-23`). If omitted, `updatePayrollReview` defaults the inserted row to `"draft"` but only changes status fields when `status` is provided (`data.ts:589,606-614`). |
+  | `notes` | string | no | Persisted only when a string is supplied; non-strings are ignored (`review/route.ts:45`). |
 
-| Status | When |
-|--------|------|
-| 200 | Review updated. |
-| 400 | Missing `month`; invalid `status`; or error message starts with `Invalid month` ([`review/route.ts:18-23,54`](../../../src/app/api/payroll/review/route.ts)). |
-| 401 | No session, or session without email. |
-| 409 | Approval attempted while unresolved expected-rate issues remain ([`review/route.ts:34-39`](../../../src/app/api/payroll/review/route.ts)). |
-| 500 | Any other thrown error ([`review/route.ts:50-55`](../../../src/app/api/payroll/review/route.ts)). |
+- **Approval gate**: when `status === "approved"`, the handler first loads the payload and counts blocking expected-rate issues (types `expected_rate_mismatch`, `missing_expected_rate_rule`, `unmapped_rate_course`). If any exist, it refuses with `409` and does **not** write (`review/route.ts:27-39`).
+- **Side effects**: upserts the `payroll_reviews` row for the month (`updatePayrollReview`, `data.ts:577-619`). On approval, sets `approvedByEmail`/`approvedByName` (name falls back to email) and `approvedAt = now`; reverting to `draft` clears those approval columns. `updatedAt` is always bumped.
+- **Response** `200`: `{ "ok": true, "payload": { /* PayrollPayload, re-read */ } }` (`review/route.ts:49`).
+- **Status codes**:
+
+  | Code | When |
+  |---|---|
+  | `200` | Review updated. |
+  | `400` | Missing `month`, invalid `status`, or thrown `"Invalid month…"`. |
+  | `401` | No session / no `session.user.email`. |
+  | `409` | Approval blocked by unresolved expected-rate issues (`review/route.ts:34-39`). |
+  | `500` | Other failure. |
 
 ---
 
 ## Manual adjustments
 
-### `POST /api/payroll/adjustments`
+Two routes manage manual line-item adjustments (e.g. one-off bonuses/deductions) stored in `payroll_adjustments`. Adjustment hours/amounts roll into `summary.manualAdjustmentHours` / `manualAdjustmentAmount` in the payload (`data.ts:483-484,513-514`).
 
-Adds one manual adjustment row (extra hours/amount) to a month. Handler: [`adjustments/route.ts:6-45`](../../../src/app/api/payroll/adjustments/route.ts).
+### Create — `POST /api/payroll/adjustments`
 
-**Auth:** session **with email** required (`if (!session?.user?.email)`, [`adjustments/route.ts:7-10`](../../../src/app/api/payroll/adjustments/route.ts)). The email/name become the row's `createdByEmail`/`createdByName`.
+File: `src/app/api/payroll/adjustments/route.ts`.
 
-**Request body** (JSON; no schema):
+- **Auth**: `admin` — requires `session.user.email`; `401` otherwise (`adjustments/route.ts:8`). Email/name recorded as `createdByEmail`/`createdByName`.
+- **Request body** (JSON):
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `month` | string (`YYYY-MM`) | yes | Missing → 400 `{"error":"month is required"}` ([`adjustments/route.ts:22`](../../../src/app/api/payroll/adjustments/route.ts)). |
-| `description` | string | yes | Empty/whitespace → 400 `{"error":"description is required"}` (checked via `.trim()`) ([`adjustments/route.ts:23`](../../../src/app/api/payroll/adjustments/route.ts)). Trimmed before insert. |
-| `adjustmentType` | string | no | Defaults to `"manual"` at the route ([`adjustments/route.ts:29`](../../../src/app/api/payroll/adjustments/route.ts)); `addPayrollAdjustment` re-trims and re-defaults to `"manual"` if blank ([`data.ts:640`](../../../src/lib/payroll/data.ts)). |
-| `tutorCanonicalKey` | string \| null | no | Trimmed; blank → null ([`data.ts:641`](../../../src/lib/payroll/data.ts)). |
-| `tutorDisplayName` | string \| null | no | Trimmed; blank → null ([`data.ts:641`](../../../src/lib/payroll/data.ts)). |
-| `hours` | number | no | Coerced with `Number(body.hours ?? 0)`; non-finite stored as `0` ([`adjustments/route.ts:31`](../../../src/app/api/payroll/adjustments/route.ts), [`data.ts:643`](../../../src/lib/payroll/data.ts)). |
-| `amount` | number | no | Coerced with `Number(body.amount ?? 0)`; non-finite stored as `0` ([`adjustments/route.ts:32`](../../../src/app/api/payroll/adjustments/route.ts), [`data.ts:644`](../../../src/lib/payroll/data.ts)). |
+  | Field | Type | Required | Notes |
+  |---|---|---|---|
+  | `month` | string `YYYY-MM` | yes | `400 {"error":"month is required"}` if missing (`adjustments/route.ts:22`). |
+  | `description` | string | yes | Must be non-empty after `.trim()`; else `400 {"error":"description is required"}` (`adjustments/route.ts:23`). Stored trimmed. |
+  | `adjustmentType` | string | no | Defaults to `"manual"` in the handler; `addPayrollAdjustment` also falls back to `"manual"` if the trimmed value is empty (`adjustments/route.ts:29`, `data.ts:640`). |
+  | `tutorCanonicalKey` | string \| null | no | Trimmed; empty → `null` (`data.ts:641`). |
+  | `tutorDisplayName` | string \| null | no | Trimmed; empty → `null` (`data.ts:642`). |
+  | `hours` | number | no | Coerced via `Number(body.hours ?? 0)`; non-finite stored as `0` (`adjustments/route.ts:31`, `data.ts:643`). |
+  | `amount` | number | no | Coerced via `Number(body.amount ?? 0)`; non-finite stored as `0` (`adjustments/route.ts:32`, `data.ts:644`). |
 
-**Side effects:** inserts one row into `payroll_adjustments` with `source: "manual"` and returns it ([`data.ts:621-652`](../../../src/lib/payroll/data.ts)). The month's `summary.manualAdjustmentHours` / `manualAdjustmentAmount` reflect the new row on the next payload build ([`data.ts:483-484`](../../../src/lib/payroll/data.ts)).
+- **Side effects**: inserts one `payroll_adjustments` row with `source: "manual"` and returns it (`addPayrollAdjustment`, `data.ts:621-652`).
+- **Response** `200`:
+  ```jsonc
+  {
+    "ok": true,
+    "adjustment": {        // PayrollAdjustmentDto (types.ts:62-75)
+      "id": "…",
+      "payrollMonth": "2026-05-01",
+      "adjustmentType": "manual",
+      "tutorCanonicalKey": null,
+      "tutorDisplayName": null,
+      "hours": 0,
+      "amount": 0,
+      "description": "…",
+      "source": "manual",
+      "createdByEmail": "…",
+      "createdByName": "…",
+      "createdAt": "2026-05-31T…Z"
+    },
+    "payload": { /* PayrollPayload, re-read */ }
+  }
+  ```
+- **Status codes**: `200` created · `400` missing `month`/`description` or `"Invalid month…"` · `401` no session/email · `500` other (`adjustments/route.ts:38-43`).
 
-**Response 200** — `{ ok: true, adjustment, payload }`:
+### Delete — `DELETE /api/payroll/adjustments/[adjustmentId]`
 
-- `adjustment` is the inserted row as a `PayrollAdjustmentDto`: `{ id, payrollMonth, adjustmentType, tutorCanonicalKey, tutorDisplayName, hours, amount, description, source, createdByEmail, createdByName, createdAt }` ([`types.ts:62-75`](../../../src/lib/payroll/types.ts), [`data.ts:113-128`](../../../src/lib/payroll/data.ts)).
-- `payload` is the payload re-read after the insert ([`adjustments/route.ts:37`](../../../src/app/api/payroll/adjustments/route.ts)). See [`GET /api/payroll`](#get-apipayroll).
+File: `src/app/api/payroll/adjustments/[adjustmentId]/route.ts`.
 
-**Status codes:**
+- **Auth**: `admin` — `auth()`; `401` if no session (`[adjustmentId]/route.ts:11-13`). (Does **not** require `session.user.email`.)
+- **Path parameter**: `adjustmentId` — the `payroll_adjustments.id` to delete (awaited from `context.params`, `[adjustmentId]/route.ts:15`).
+- **Request body**: none.
+- **Side effects**: deletes the matching `payroll_adjustments` row (`deletePayrollAdjustment`, `data.ts:654-660`). Returns whether a row was deleted.
+- **Response** `200`: `{ "ok": true }`. Unlike the other mutations, this route does **not** echo a refreshed payload.
+- **Status codes**:
 
-| Status | When |
-|--------|------|
-| 200 | Adjustment added. |
-| 400 | Missing `month`; missing/blank `description`; or error message starts with `Invalid month` ([`adjustments/route.ts:22-23,42`](../../../src/app/api/payroll/adjustments/route.ts)). |
-| 401 | No session, or session without email. |
-| 500 | Any other thrown error ([`adjustments/route.ts:38-43`](../../../src/app/api/payroll/adjustments/route.ts)). |
+  | Code | When |
+  |---|---|
+  | `200` | Row deleted. |
+  | `401` | No session. |
+  | `404` | No adjustment matched `adjustmentId` (`[adjustmentId]/route.ts:17-19`). |
 
----
-
-### `DELETE /api/payroll/adjustments/[adjustmentId]`
-
-Deletes a single manual adjustment by id. Handler: [`adjustments/[adjustmentId]/route.ts:6-21`](../../../src/app/api/payroll/adjustments/[adjustmentId]/route.ts).
-
-**Auth:** session required (`if (!session)`, [`adjustments/[adjustmentId]/route.ts:11-13`](../../../src/app/api/payroll/adjustments/[adjustmentId]/route.ts)).
-
-**Path parameter:**
-
-| Param | Type | Notes |
-|-------|------|-------|
-| `adjustmentId` | string | The `payroll_adjustments.id` (UUID). Awaited from `context.params` ([`adjustments/[adjustmentId]/route.ts:15`](../../../src/app/api/payroll/adjustments/[adjustmentId]/route.ts)). |
-
-No request body is read. There is no `month`-based validation, so this endpoint never returns the `Invalid month` 400.
-
-**Side effects:** `deletePayrollAdjustment` issues a `DELETE ... RETURNING id` against `payroll_adjustments` and reports whether a row matched ([`data.ts:654-660`](../../../src/lib/payroll/data.ts)).
-
-**Response:**
-
-- **200** — `{ ok: true }` when a row was deleted ([`adjustments/[adjustmentId]/route.ts:20`](../../../src/app/api/payroll/adjustments/[adjustmentId]/route.ts)). Unlike the other write endpoints, this one does **not** echo the payload.
-- **404** — `{"error":"Adjustment not found"}` when no row matched the id ([`adjustments/[adjustmentId]/route.ts:17-19`](../../../src/app/api/payroll/adjustments/[adjustmentId]/route.ts)).
-
-**Status codes:**
-
-| Status | When |
-|--------|------|
-| 200 | Row deleted. |
-| 401 | No session. |
-| 404 | No adjustment with that id. |
-
-(No `try/catch` wraps the delete, so an unexpected DB error surfaces as a framework-level 500 rather than a handler-shaped `{ error }` body.)
+  > This handler has no surrounding try/catch, so an unexpected DB error surfaces as Next's default `500` rather than the uniform `{"error": …}` envelope used by the other four routes.
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+## Shared response: `PayrollPayload`
+
+Returned (bare, or under `payload`) by `GET /api/payroll`, `POST /api/payroll/sync`, `PATCH /api/payroll/review`, and `POST /api/payroll/adjustments`. Defined in `src/lib/payroll/types.ts:77-127`; assembled by `buildPayrollPayload` (`src/lib/payroll/data.ts:258-527`). Top-level shape:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `month` | string `YYYY-MM` | Requested month. |
+| `payrollMonth` | string `YYYY-MM-01` | First-of-month key used in storage. |
+| `rateCard` | object \| null | Active rate-card version (`id`, `versionName`, `effectiveMonth`, `sourceLabel`, `active`), or `null` if none active. |
+| `review` | object | `{ status: "draft"\|"approved", notes, approvedByEmail, approvedByName, approvedAt, updatedAt }`; defaults to an empty draft when no row exists (`data.ts:65-86`). |
+| `lastSync` | object \| null | Most recent `payroll_sync_runs` row: `{ id, status: "running"\|"success"\|"failed", startedAt, finishedAt, teacherCount, sessionCount, invoiceCount, errorSummary }`. |
+| `summary` | object | Aggregates: `totalPayoutAmount`, `paidHours`, `utilizationHours`, `varianceHours`, `detectedFreePayHours`, `kevinHours`, `kevinPaidHours`, `kevinPayoutAmount`, `manualAdjustmentHours`, `manualAdjustmentAmount`, `unresolvedTutorCount`, `issueCount`, `expectedRateCheckedCount`, `expectedRateMismatchCount`, `missingRateRuleCount`, `unmappedRateCourseCount`, `tutorCount` (`types.ts:105-123`). |
+| `tutors` | `PayrollTutorRow[]` | Per-tutor reconciliation rows (tier, paid vs utilization hours, payout, rate buckets, variance, per-row `flags`, expected-rate counters); sorted by tier then name (`types.ts:39-60`, `data.ts:475-481`). |
+| `issues` | `PayrollIssue[]` | Flat list of detected problems; `type` is one of `missing_payout_invoice`, `orphan_payout_invoice`, `zero_credit_or_zero_amount`, `missing_tier`, `unresolved_tutor_identity`, `duration_mismatch`, `expected_rate_mismatch`, `missing_expected_rate_rule`, `unmapped_rate_course` (`types.ts:3-30`). The last three are the **blocking** set for approval. |
+| `adjustments` | `PayrollAdjustmentDto[]` | Manual adjustments for the month, newest first (`data.ts:550-551`). |
+
+> See [docs/reference/database/index.md](../database/index.md) for the underlying `payroll_*` table columns and [docs/features/payroll.md](../../features/payroll.md) for what each issue type / summary metric means.
+
+---
+
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

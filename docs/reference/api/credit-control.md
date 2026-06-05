@@ -1,264 +1,237 @@
 # Credit Control API
 
-HTTP reference for the eight Credit Control endpoints under `/api/credit-control`. These power the admin credit-control dashboard: refreshing the Wise-derived snapshot, reading the dashboard payload, recording per-student follow-up actions, assigning admin ownership, and marking students inactive.
+**Status: stable.** **Authoritative source:** the seven route handlers under [`src/app/api/credit-control/`](../../../src/app/api/credit-control/).
 
-For *what* credit control means (purpose, package risk rules, admin ownership semantics), see the feature documentation. This page documents mechanical request/response detail only.
+This page is the mechanical reference for the Credit Control HTTP endpoints: method, path, auth, request shape, response shape, side effects, and status codes. Feature meaning — the prepaid-credit depletion projection, the at-risk follow-up queue, and the ownership/inactive model — lives in [docs/features/credit-control.md](../../features/credit-control.md). Table columns are defined in [`schema.ts`](../../../src/lib/db/schema.ts).
 
-## Conventions shared by all eight endpoints
+This group exposes **8 endpoints** across 7 files (`/api/credit-control/inactive` serves both `POST` and `DELETE`).
 
-**Authentication.** Every handler calls `requireCreditControlSession()` before doing any work (`src/lib/credit-control/api.ts:5`). That helper reads the Auth.js session via `auth()`, lowercases/trims the email, and throws `Error("Unauthorized")` when either the email or display name is missing (`src/lib/credit-control/api.ts:10-12`). There is no role/allowlist check inside the helper beyond requiring a logged-in user with an email and name. On top of that, none of these eight paths appear in the middleware public-route allowlist (`src/middleware.ts:4-15`), so the global auth middleware also redirects unauthenticated browser requests to `/login` before the handler runs. The returned `AppSessionUser` (`{ email, name }`) is used as the actor for writes (`src/types/credit-control.ts:247-250`).
+## Conventions shared across the endpoints
 
-**Error handling.** Every handler wraps its body in `try/catch` and funnels failures through `creditControlErrorResponse(route, error, fallbackMessage)` (`src/lib/credit-control/api.ts:17-36`):
-
-- If the error is a Next.js `HANGING_PROMISE_REJECTION` digest, it is re-thrown (not converted to a response) — `src/lib/credit-control/api.ts:18-25`.
-- If `error.message === "Unauthorized"`, returns `401` with `{ "error": "Unauthorized" }` — `src/lib/credit-control/api.ts:27-29`.
-- Otherwise logs to `console.error` and returns `500` with `{ "error": <error.message or fallbackMessage> }` — `src/lib/credit-control/api.ts:31-35`.
-
-This means **`401` is signalled by the in-handler session check, not by the HTTP framework**, and any thrown DB/Wise error surfaces as `500` with the underlying message.
-
-**Validation.** None of these handlers use Zod. Inputs are validated inline (`String(...).trim()` + presence checks). Where a field must be one of an enum, that check is done against a hardcoded list (see per-endpoint notes).
-
-**Cache invalidation.** Mutating endpoints call `revalidateTag(CREDIT_CONTROL_CACHE_TAG, { expire: 0 })`. `CREDIT_CONTROL_CACHE_TAG` is `"credit-control"` (`src/lib/credit-control/config.ts:11`), the same tag the cached dashboard payload registers under (`src/lib/credit-control/service.ts:28`), so a successful write forces the next `GET /api/credit-control` to recompute.
-
-> **Not in this reference:** the Vercel cron at `20,50 * * * *` targets `/api/internal/sync-credit-control` (`vercel.json:11-14`), **not** `POST /api/credit-control/sync`. The cron-driven internal route is a separate, CRON_SECRET-protected endpoint and is documented elsewhere. The `/api/credit-control/sync` route documented below is the admin-session-gated trigger.
+- **Authentication.** Every handler calls `requireCreditControlSession()` ([`api.ts:5-15`](../../../src/lib/credit-control/api.ts)), which reads the Auth.js session and requires both a non-empty `email` and `name`; otherwise it throws `Error("Unauthorized")`. The middleware also gates the whole `/api/credit-control/**` subtree — it is **not** in any public-route allowlist and the matcher covers all paths except Next static assets ([`middleware.ts:68`](../../../src/middleware.ts)) — so an unauthenticated browser request is redirected to `/login` before the handler runs. The in-handler session check is the API-level backstop. There is **no** cron/`CRON_SECRET` tier in this group; the manual sync is admin-session only (the scheduled sync lives in the internal-cron group, not here).
+- **Returned session user.** `requireCreditControlSession()` returns `{ email, name }` where `email` is lower-cased/trimmed and `name` falls back to `email` when the session name is blank ([`api.ts:7-14`](../../../src/lib/credit-control/api.ts)). The `email` is stamped as the actor on every mutation; the `name` is echoed back in the optimistic `actionState`.
+- **No Zod.** None of the credit-control handlers use a Zod schema. Bodies are read with `await request.json()` and cast inline to a TypeScript shape, then each field is coerced with `String(value ?? "").trim()` and validated with hand-written `if` checks. There is no rejection of unknown fields.
+- **Uniform error mapping.** Every handler wraps its body in `try/catch` and routes failures through `creditControlErrorResponse(route, error, fallbackMessage)` ([`api.ts:17-36`](../../../src/lib/credit-control/api.ts)):
+  - An error whose `digest === "HANGING_PROMISE_REJECTION"` is **re-thrown** (it is a Next.js cache-component control signal, not a real failure).
+  - `Error("Unauthorized")` → **401** `{"error":"Unauthorized"}`.
+  - Anything else → **500** `{"error": <error.message or fallbackMessage>}` (and `console.error(route, error)`).
+- **Validation 400s short-circuit the handler** before the catch (e.g. missing `studentKey`) and return their own message; they do **not** pass through `creditControlErrorResponse`.
+- **Cache invalidation.** Mutations call `revalidateTag(CREDIT_CONTROL_CACHE_TAG, { expire: 0 })` (tag value `"credit-control"`, [`config.ts:11`](../../../src/lib/credit-control/config.ts)) so the next read of the cached dashboard payload rebuilds. The follow-up-action mutations do this inside the service layer ([`actions.ts:75,89,112,128,133,138`](../../../src/lib/credit-control/actions.ts)); `admin-ownership` does it inline in the route ([`admin-ownership/route.ts:27`](../../../src/app/api/credit-control/admin-ownership/route.ts)).
+- **The dashboard payload** returned by `GET /api/credit-control` is the `DashboardPayload` shape ([`types/credit-control.ts:215-223`](../../../src/types/credit-control.ts)); it is documented once under [`GET /api/credit-control`](#get-apicredit-control) and referenced elsewhere as the **credit-control payload**. Several mutation handlers re-read it via `getCreditControlPayload()` to resolve a `studentKey` to its display names, but they do **not** return it.
 
 ---
 
-## Snapshot
-
-### `POST /api/credit-control/sync`
-
-Triggers a full credit-control snapshot rebuild from the Wise API (fetch students/packages/sessions, compute credits, write a new snapshot row). Source: `src/app/api/credit-control/sync/route.ts`.
-
-- **Auth:** `requireCreditControlSession()` (`route.ts:8`). No CRON_SECRET — this is the session-gated trigger.
-- **Function config:** `export const maxDuration = 300` (`route.ts:4`).
-- **Request body:** none. The handler is `POST()` with no parameters and does not read the request (`route.ts:6`).
-- **Behavior:** delegates to `runCreditControlSyncRequest()` (`route.ts:9`, `src/lib/credit-control/run-sync-request.ts:138`), which:
-  1. Builds a Wise client and resolves `instituteId` from `WISE_INSTITUTE_ID` (default `696e1f4d90102225641cc413`) — `run-sync-request.ts:140-141`.
-  2. **Single-flight guard** (`acquireSyncRun`, `run-sync-request.ts:106-136`): first fails any `creditControlSyncRuns` row stuck in `running` for more than 20 minutes (`STALE_RUNNING_CREDIT_CONTROL_SYNC_MS = 20 * 60 * 1000`, `run-sync-request.ts:9`, `failStaleRunningSyncs` `run-sync-request.ts:50-68`), counting them as `staleRunningSyncsFailed`. Then, if another run is still `running`, it skips. Otherwise it inserts a new `running` row; a unique-violation (`23505`) on insert is treated as a concurrent run and also skips (`run-sync-request.ts:124-135`).
-  3. If skipped, returns the run synchronously without touching Wise.
-  4. Otherwise runs `runCreditControlSync(db, client, instituteId, now, { syncRunId })` (`run-sync-request.ts:149`, `src/lib/credit-control/sync.ts:483`).
-
-- **Side effects:** inserts/updates rows in `creditControlSyncRuns`; on success writes a new snapshot and its derived student/package/session rows and promotes it (`sync.ts:527-578`); on failure marks the sync run `failed` with an `errorSummary` (`sync.ts:580-599`). Does **not** call `revalidateTag` itself.
-
-- **Responses:**
-
-  - **`202 Accepted`** — a sync is already running (or was just claimed concurrently). Body (`run-sync-request.ts:84-104, 145-147`):
-    ```json
-    {
-      "success": true,
-      "skipped": true,
-      "alreadyRunning": true,
-      "syncRunId": "<uuid of the in-flight run>",
-      "snapshotId": null,
-      "promotedSnapshotId": null,
-      "studentCount": 0,
-      "packageCount": 0,
-      "sessionCount": 0,
-      "failedCreditPairs": 0,
-      "errorSummary": null,
-      "message": "Credit control sync is already running. Data will refresh when that run finishes.",
-      "runningStartedAt": "<ISO timestamp>",
-      "staleRunningSyncsFailed": 0
-    }
-    ```
-
-  - **`200 OK`** — sync ran and succeeded (`result.success === true`, `run-sync-request.ts:158`). Body is the sync result (`sync.ts:571-578`) merged with `syncRunId` and `staleRunningSyncsFailed` (`run-sync-request.ts:153-157`):
-    ```json
-    {
-      "success": true,
-      "snapshotId": "<uuid>",
-      "promotedSnapshotId": "<uuid>",
-      "studentCount": 0,
-      "packageCount": 0,
-      "sessionCount": 0,
-      "failedCreditPairs": 0,
-      "syncRunId": "<uuid>",
-      "staleRunningSyncsFailed": 0
-    }
-    ```
-
-  - **`500 Internal Server Error`** — sync ran but failed (`result.success === false`, `run-sync-request.ts:158`). Same envelope, with `success: false`, `snapshotId` possibly set, zeroed counts, and an `errorSummary` string (`sync.ts:591-599`). A thrown error before/within the runner is instead caught by the route's `creditControlErrorResponse` and returns `{ "error": ... }` (`route.ts:11`).
-
-> Note the two distinct `500` shapes: a *handled* sync failure returns the rich result object `{ success: false, ..., errorSummary }`; an *unhandled* exception returns `{ "error": "Credit control sync failed" }` (or the thrown message).
-
----
-
-## Dashboard payload
+## Read
 
 ### `GET /api/credit-control`
 
-Returns the full credit-control dashboard payload computed from the active snapshot plus Postgres sidecar state (action states, inactive set, admin ownership). Source: `src/app/api/credit-control/route.ts`.
+Returns the full credit-control dashboard payload for the current Bangkok day. Handler: [`route.ts:5-13`](../../../src/app/api/credit-control/route.ts).
 
-- **Auth:** `requireCreditControlSession()` (`route.ts:7`).
-- **Request:** no query params, no body (`route.ts:5`).
-- **Behavior:** returns `getCreditControlPayload()` verbatim (`route.ts:8-9`). That service is wrapped in `"use cache"` tagged `credit-control` with `cacheLife({ stale: 60, revalidate: 60, expire: 300 })` (`src/lib/credit-control/service.ts:27-30`), so responses are served from cache until a mutating endpoint invalidates the tag or the TTL elapses.
-- **Response — `200 OK`:** a `DashboardPayload` (`src/types/credit-control.ts:215-223`):
-  ```jsonc
-  {
-    "adminViews":        [ { "key": "all", "label": "All" }, ... ],   // AdminViewOption[]
-    "lastUpdatedAt":     "<ISO timestamp>",
-    "previousUpdatedAt": "<ISO timestamp | null>",
-    "summary":           { /* SummaryPayload: students, packages, portfolio, queue, deltas */ },
-    "studentQueue":      [ /* StudentQueueRow[] */ ],
-    "calendar":          { /* CalendarPayload: availableStart, availableEnd, days[] */ },
-    "students":          [ /* StudentRecord[] */ ]
-  }
-  ```
-  See `src/types/credit-control.ts` for the nested shapes: `SummaryPayload` (lines 194-213), `StudentQueueRow` (112-143), `CalendarPayload` (177-181), `StudentRecord` (93-103, includes per-student `actionState`, `adminOwnerKey`, `adminOwnerName`). Inactive students are filtered out of the payload (`service.ts:79-81`).
-- **Errors:** `401` if unauthenticated; `500` (`{ "error": "Credit control load failed" }` or thrown message) on failure (`route.ts:11`).
+**Auth:** session required (`requireCreditControlSession()`).
+
+**Request:** none (no query, no body).
+
+**Response (200):** `getCreditControlPayload()` ([`service.ts:27`](../../../src/lib/credit-control/service.ts)), serialized as `DashboardPayload` ([`types/credit-control.ts:215-223`](../../../src/types/credit-control.ts)):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `adminViews` | `AdminViewOption[]` | View filter tabs: `All`, the six named admins, `Unassigned` ([`config.ts:105-111`](../../../src/lib/credit-control/config.ts)). |
+| `lastUpdatedAt` | string | Generation timestamp of the active snapshot. |
+| `previousUpdatedAt` | string \| null | Prior snapshot timestamp, for delta computation. |
+| `summary` | `SummaryPayload` | Status/portfolio/queue counts + `deltas` vs. the previous snapshot ([`types/credit-control.ts:194-213`](../../../src/types/credit-control.ts)). |
+| `studentQueue` | `StudentQueueRow[]` | Ranked at-risk follow-up queue ([`types/credit-control.ts:112-143`](../../../src/types/credit-control.ts)). |
+| `calendar` | `CalendarPayload` | Per-day upcoming-session view ([`types/credit-control.ts:177-181`](../../../src/types/credit-control.ts)). |
+| `students` | `StudentRecord[]` | Per-student records with packages, projections, `adminOwnerKey`, and `actionState` ([`types/credit-control.ts:93-103`](../../../src/types/credit-control.ts)). |
+
+**Side effects:** none (read-only; served from the `credit-control`-tagged cache).
+
+**Status codes:** `200` success · `401` unauthorized · `500` load failure (`"Credit control load failed"`).
+
+---
+
+## Sync
+
+### `POST /api/credit-control/sync`
+
+Triggers a manual Wise credit-control sync with a single-flight guard, then returns the sync result. Handler: [`sync/route.ts:6-13`](../../../src/app/api/credit-control/sync/route.ts). `maxDuration = 300` ([`sync/route.ts:4`](../../../src/app/api/credit-control/sync/route.ts)).
+
+**Auth:** session required (`requireCreditControlSession()`).
+
+**Request:** none (no body is read). The Wise institute is taken from `process.env.WISE_INSTITUTE_ID`, falling back to the hard-coded `696e1f4d90102225641cc413` ([`run-sync-request.ts:141`](../../../src/lib/credit-control/run-sync-request.ts)).
+
+**Side effects** (in `runCreditControlSyncRequest` → `acquireSyncRun`, [`run-sync-request.ts:106-160`](../../../src/lib/credit-control/run-sync-request.ts)):
+
+1. Marks any `credit_control_sync_runs` row still `running` after **20 minutes** as `failed` with a timeout `errorSummary`, and counts how many were failed (`staleRunningSyncsFailed`) ([`run-sync-request.ts:9,50-68`](../../../src/lib/credit-control/run-sync-request.ts)).
+2. If another run is currently `running`, **skips** without starting work (see 202 below).
+3. Otherwise inserts a new `credit_control_sync_runs` row with `status: "running"`; a concurrent insert that hits a `23505` unique violation is re-resolved to the running run and also skipped ([`run-sync-request.ts:117-135`](../../../src/lib/credit-control/run-sync-request.ts)).
+4. Runs `runCreditControlSync(...)` ([`run-sync-request.ts:149`](../../../src/lib/credit-control/run-sync-request.ts)), which fetches Wise data, writes a new credit-control snapshot, and atomically promotes it on success.
+
+**Response — skipped (202):** when a sync is already running, the guard object is returned with HTTP **202** ([`run-sync-request.ts:145-147`](../../../src/lib/credit-control/run-sync-request.ts)). Shape (`SkippedCreditControlSyncResult`, [`run-sync-request.ts:24-39`](../../../src/lib/credit-control/run-sync-request.ts)): `success: true`, `skipped: true`, `alreadyRunning: true`, `syncRunId`, `snapshotId: null`, `promotedSnapshotId: null`, zeroed counts, `errorSummary: null`, a human `message`, `runningStartedAt`, `staleRunningSyncsFailed`.
+
+**Response — ran (200 or 500):** the `runCreditControlSync` result spread with `syncRunId` and `staleRunningSyncsFailed` added; HTTP **200** when `result.success`, else **500** ([`run-sync-request.ts:153-159`](../../../src/lib/credit-control/run-sync-request.ts)). The result shape is `CreditControlSyncResult` ([`sync.ts:41-49`](../../../src/lib/credit-control/sync.ts)):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `success` | boolean | Drives the 200 vs. 500 status. |
+| `snapshotId` | string \| undefined | New snapshot id (present on success). |
+| `promotedSnapshotId` | string \| undefined | Promoted snapshot id. |
+| `studentCount` | number | Students written. |
+| `packageCount` | number | Packages written. |
+| `sessionCount` | number | Sessions written. |
+| `failedCreditPairs` | number | Student/package pairs whose Wise credit fetch failed. |
+| `errorSummary` | string \| undefined | Set on failure. |
+
+**Status codes:** `200` sync ran and succeeded · `202` skipped (already running) · `401` unauthorized · `500` sync ran and failed, or the request threw (`"Credit control sync failed"`).
 
 ---
 
 ## Follow-up actions
 
-These endpoints record per-student follow-up status. Valid statuses are exactly `contacted`, `pending-callback`, `resolved` (`normalizeStudentActionStatus`, `src/lib/credit-control/action-helpers.ts:17-24`); anything else normalizes to `null` (treated as "clear"). All three mutate the `creditControlFollowUpState` / `creditControlFollowUpLog` tables and call `revalidateTag("credit-control")` (`src/lib/credit-control/actions.ts`).
+These endpoints record an admin's follow-up state on a student (`contacted`, `pending-callback`, `resolved`) and append to an audit log. The two write endpoints resolve the `studentKey` against the live payload first, returning **404** if the student is not present.
+
+The valid status set is normalized by `normalizeStudentActionStatus()` — `String(status).trim().toLowerCase()` must be one of `contacted`, `pending-callback`, `resolved`, else it yields `null` ([`action-helpers.ts:17-24`](../../../src/lib/credit-control/action-helpers.ts)).
 
 ### `POST /api/credit-control/actions`
 
-Set or clear the follow-up action for a single student. Source: `src/app/api/credit-control/actions/route.ts`.
+Sets or clears the follow-up status for a single student. Handler: [`actions/route.ts:7-56`](../../../src/app/api/credit-control/actions/route.ts).
 
-- **Auth:** `requireCreditControlSession()` → `sessionUser` used as actor (`route.ts:9`).
-- **Request body** (JSON, parsed as `{ studentKey?: string; status?: string | null }`, `route.ts:10`):
+**Auth:** session required.
 
-  | Field | Type | Required | Notes |
-  |-------|------|----------|-------|
-  | `studentKey` | string | yes | Trimmed; `400` if empty (`route.ts:11-15`). Must match a student in the current payload, else `404` (`route.ts:18-21`). |
-  | `status` | string \| null | no | Normalized via `normalizeStudentActionStatus` (`route.ts:23`). A valid status → **set**; null/empty/invalid → **clear**. |
+**Request body** (JSON, no schema — cast inline at [`actions/route.ts:10`](../../../src/app/api/credit-control/actions/route.ts)):
 
-- **Behavior:** loads `getCreditControlPayload()` and looks up the student (`route.ts:17-21`). If `status` normalizes to a valid value, calls `setStudentAction(...)` (upsert state + append a `"set"` log row, `src/lib/credit-control/actions.ts:57-76`); otherwise `clearStudentAction(...)` (delete state + append a `"clear"` log row, `actions.ts:78-90`). Both paths revalidate the cache tag.
-- **Response — `200 OK`** (`route.ts:52`):
-  ```jsonc
-  {
-    "ok": true,
-    "studentKey": "<studentKey>",
-    "actionState": {            // null when the action was cleared
-      "status": "contacted",   // the normalized status
-      "updatedAt": "<ISO>",
-      "updatedByName": "<session user name>",
-      "isToday": true
-    }
-  }
-  ```
-- **Errors:** `400` `{ "error": "studentKey is required" }`; `404` `{ "error": "Student not found" }`; `401`; `500` (`{ "error": "Action request failed" }` or thrown message, `route.ts:54`).
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `studentKey` | string | yes | Trimmed; `400 "studentKey is required"` if blank. |
+| `status` | string \| null | no | Normalized; a recognized value **sets** the action, anything else (incl. `null`/empty/unknown) **clears** it. |
+
+The student must exist in the live payload (used to resolve `studentName`/`parentName`), else `404 "Student not found"` ([`actions/route.ts:17-21`](../../../src/app/api/credit-control/actions/route.ts)).
+
+**Side effects:**
+- A valid `status` → `setStudentAction(...)`: upserts `credit_control_follow_up_state` and appends a `set` row to `credit_control_follow_up_log`, stamping `updatedByEmail`/`updatedByName` ([`actions.ts:57-76`](../../../src/lib/credit-control/actions.ts)).
+- Otherwise → `clearStudentAction(...)`: deletes the follow-up-state row and appends a `clear` log row ([`actions.ts:78-90`](../../../src/lib/credit-control/actions.ts)).
+- Both revalidate the `credit-control` cache tag.
+
+**Response (200):** `{ ok: true, studentKey, actionState }` where `actionState` is the optimistic state `{ status, updatedAt, updatedByName, isToday: true }` when a status was set, or `null` when cleared ([`actions/route.ts:24-31,52`](../../../src/app/api/credit-control/actions/route.ts)).
+
+**Status codes:** `200` · `400` missing `studentKey` · `401` · `404` `"Student not found"` · `500` (`"Action request failed"`).
 
 ### `POST /api/credit-control/actions/bulk`
 
-Set or clear the follow-up action for many students at once. Source: `src/app/api/credit-control/actions/bulk/route.ts`.
+Sets or clears the follow-up status for many students at once. Handler: [`actions/bulk/route.ts:7-70`](../../../src/app/api/credit-control/actions/bulk/route.ts).
 
-- **Auth:** `requireCreditControlSession()` → actor (`route.ts:9`).
-- **Request body** (JSON, `{ studentKeys?: string[]; status?: string | null }`, `route.ts:10`):
+**Auth:** session required.
 
-  | Field | Type | Required | Notes |
-  |-------|------|----------|-------|
-  | `studentKeys` | string[] | yes | Trimmed, empty-filtered, **de-duplicated** via `Set` (`route.ts:11-13`). `400` if the resulting list is empty (`route.ts:15-17`). |
-  | `status` | string \| null | conditional | `null` or `""` means **clear** (`wantsClear`, `route.ts:19`). Otherwise must normalize to a valid status, else `400` (`route.ts:20-23`). |
+**Request body** (JSON, no schema):
 
-- **Behavior:** loads the payload, keeps only `studentKeys` that resolve to a known student (`route.ts:25-33`). If none resolve, short-circuits to `200 { "updated": [] }` (`route.ts:35-37`). Then either `bulkSetAction(...)` (per-student upsert + `"bulk-set"` log, `src/lib/credit-control/actions.ts:92-113`) or `bulkClearAction(...)` (per-student delete + `"bulk-clear"` log, `actions.ts:115-129`). Each helper revalidates the cache tag once.
-- **Response — `200 OK`** (`route.ts:54-66`): one entry per *resolved* student. Unknown keys are silently dropped (not reported).
-  ```jsonc
-  {
-    "updated": [
-      {
-        "studentKey": "<key>",
-        "actionState": {          // null when cleared
-          "status": "resolved",
-          "updatedAt": "<ISO, shared across the batch>",
-          "updatedByName": "<session user name>",
-          "isToday": true
-        }
-      }
-    ]
-  }
-  ```
-- **Errors:** `400` `{ "error": "studentKeys is required" }` or `{ "error": "valid status is required" }`; `401`; `500` (`{ "error": "Bulk action request failed" }`, `route.ts:68`).
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `studentKeys` | string[] | yes | De-duplicated, trimmed, empties dropped; `400 "studentKeys is required"` if the resulting set is empty ([`actions/bulk/route.ts:11-17`](../../../src/app/api/credit-control/actions/bulk/route.ts)). |
+| `status` | string \| null | yes-ish | `null` or `""` means **clear**; otherwise must normalize to a valid status, else `400 "valid status is required"` ([`actions/bulk/route.ts:19-23`](../../../src/app/api/credit-control/actions/bulk/route.ts)). |
+
+`studentKeys` are intersected with the live payload's students; unknown keys are silently dropped. If none match, the handler returns `200 { "updated": [] }` without touching the DB ([`actions/bulk/route.ts:25-37`](../../../src/app/api/credit-control/actions/bulk/route.ts)).
+
+**Side effects:** `bulkSetAction(...)` (per-student upsert + `bulk-set` log row) or `bulkClearAction(...)` (per-student delete + `bulk-clear` log row); single cache revalidation at the end ([`actions.ts:92-129`](../../../src/lib/credit-control/actions.ts)).
+
+**Response (200):** `{ updated: [{ studentKey, actionState }, ...] }`, one entry per matched student. `actionState` is `{ status, updatedAt, updatedByName, isToday: true }` for a set, or `null` for a clear ([`actions/bulk/route.ts:54-66`](../../../src/app/api/credit-control/actions/bulk/route.ts)).
+
+**Status codes:** `200` (including the empty-match case) · `400` missing `studentKeys` or invalid `status` · `401` · `500` (`"Bulk action request failed"`).
 
 ### `GET /api/credit-control/actions/history`
 
-Returns the recent follow-up action log for one student. Source: `src/app/api/credit-control/actions/history/route.ts`.
+Returns the recent follow-up audit log for one student. Handler: [`actions/history/route.ts:5-27`](../../../src/app/api/credit-control/actions/history/route.ts).
 
-- **Auth:** `requireCreditControlSession()` (`route.ts:7`).
-- **Request — query params** (`route.ts:8-9`):
+**Auth:** session required.
 
-  | Param | Type | Required | Notes |
-  |-------|------|----------|-------|
-  | `studentKey` | string | yes | Trimmed from the URL; `400` if empty (`route.ts:11-13`). |
+**Query parameters:**
 
-- **Behavior:** calls `readCreditActionHistory(studentKey, 7)` — the window is hardcoded to the **last 7 days** at the call site (`route.ts:15`; helper default also 7, `src/lib/credit-control/db.ts:233-249`), ordered newest-first by `createdAt`. Maps each log row to a compact shape (`route.ts:16-21`). Read-only — no cache invalidation.
-- **Response — `200 OK`** (`route.ts:23`):
-  ```jsonc
-  {
-    "history": [
-      {
-        "status": "contacted",            // log row status (may be null for clears)
-        "updatedAt": "<ISO timestamp>",   // from createdAt
-        "updatedByName": "<actor name>",
-        "actionType": "set"               // "set" | "clear" | "bulk-set" | "bulk-clear"
-      }
-    ]
-  }
-  ```
-- **Errors:** `400` `{ "error": "studentKey is required" }`; `401`; `500` (`{ "error": "Failed to load history" }`, `route.ts:25`).
+| Param | Type | Required | Notes |
+|-------|------|----------|-------|
+| `studentKey` | string | yes | Trimmed; `400 "studentKey is required"` if blank. |
+
+**Response (200):** `{ history: [...] }`, mapped from `readCreditActionHistory(studentKey, 7)` — `credit_control_follow_up_log` rows from the **last 7 days**, newest first ([`db.ts:233-248`](../../../src/lib/credit-control/db.ts)). Each item ([`actions/history/route.ts:16-21`](../../../src/app/api/credit-control/actions/history/route.ts)):
+
+| Field | Type | Source column |
+|-------|------|---------------|
+| `status` | string \| null | `status` |
+| `updatedAt` | string (ISO) | `createdAt` |
+| `updatedByName` | string | `actorName` |
+| `actionType` | string | `actionType` (`set`/`clear`/`bulk-set`/`bulk-clear`) |
+
+**Side effects:** none.
+
+**Status codes:** `200` · `400` missing `studentKey` · `401` · `500` (`"Failed to load history"`).
 
 ---
 
-## Admin ownership
+## Ownership
 
 ### `POST /api/credit-control/admin-ownership`
 
-Assigns (or reassigns) which admin owns a student. Source: `src/app/api/credit-control/admin-ownership/route.ts`.
+Assigns a student to a named admin owner (sidecar table, survives snapshot rotation). Handler: [`admin-ownership/route.ts:7-37`](../../../src/app/api/credit-control/admin-ownership/route.ts).
 
-- **Auth:** `requireCreditControlSession()` → `sessionUser.email` recorded as `assignedByEmail` (`route.ts:9`, `22-26`).
-- **Request body** (JSON, `{ studentKey?: string; adminKey?: string }`, `route.ts:10`):
+**Auth:** session required.
 
-  | Field | Type | Required | Notes |
-  |-------|------|----------|-------|
-  | `studentKey` | string | yes | Trimmed; `400` if empty (`route.ts:11-16`). |
-  | `adminKey` | string | yes | Trimmed; `400` if empty. Must be one of the keys returned by `getAdminViewOptions()`, else `400` `{ "error": "Unknown adminKey" }` (`route.ts:18-20`). Valid keys: `all`, `palm`, `kem`, `care`, `aya`, `petchy`, `muk`, `unassigned` (`src/lib/credit-control/config.ts:23-31, 105-112`). |
+**Request body** (JSON, no schema):
 
-- **Behavior:** upserts the ownership row via `upsertCreditAdminOwnership({ studentKey, adminKey, assignedByEmail })` (`route.ts:22-26`, `src/lib/credit-control/db.ts:297-310` — insert with `onConflictDoUpdate` on `studentKey`). Then `revalidateTag("credit-control", { expire: 0 })` (`route.ts:27`). Unlike the action endpoints, this route does **not** verify the `studentKey` exists in the payload — only that `adminKey` is a known key.
-- **Response — `200 OK`** (`route.ts:29`):
-  ```json
-  { "ok": true, "studentKey": "<studentKey>", "adminKey": "<adminKey>" }
-  ```
-- **Errors:** `400` `{ "error": "studentKey and adminKey are required" }` or `{ "error": "Unknown adminKey" }`; `401`; `500` (`{ "error": "Admin ownership update failed" }`, `route.ts:31-35`).
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `studentKey` | string | yes | Trimmed. |
+| `adminKey` | string | yes | Trimmed; must be one of the keys from `getAdminViewOptions()` (`all`, the six named admins, `unassigned`), else `400 "Unknown adminKey"` ([`admin-ownership/route.ts:18-20`](../../../src/app/api/credit-control/admin-ownership/route.ts), [`config.ts:105-111`](../../../src/lib/credit-control/config.ts)). |
+
+Both fields blank/missing → `400 "studentKey and adminKey are required"`.
+
+**Side effects:** `upsertCreditAdminOwnership({ studentKey, adminKey, assignedByEmail })` into `credit_control_admin_ownership` ([`db.ts:297`](../../../src/lib/credit-control/db.ts)), then `revalidateTag("credit-control", { expire: 0 })` inline ([`admin-ownership/route.ts:22-27`](../../../src/app/api/credit-control/admin-ownership/route.ts)). Unlike the follow-up routes, this handler does **not** look the student up in the payload, so it never returns 404.
+
+**Response (200):** `{ ok: true, studentKey, adminKey }`.
+
+**Status codes:** `200` · `400` missing fields or unknown `adminKey` · `401` · `500` (`"Admin ownership update failed"`).
 
 ---
 
-## Inactive students
+## Inactive flag
 
-`POST` marks a student inactive (excluding them from the dashboard payload); `DELETE` un-marks. Both live in `src/app/api/credit-control/inactive/route.ts` and both call `revalidateTag("credit-control")` via their action helpers.
+The same file serves both verbs. Both resolve `studentKey` from the request body; both revalidate the `credit-control` cache via the service layer ([`actions.ts:131-139`](../../../src/lib/credit-control/actions.ts)).
 
 ### `POST /api/credit-control/inactive`
 
-Mark a student inactive. Source: `src/app/api/credit-control/inactive/route.ts:6-33`.
+Marks a student inactive (excludes them from the at-risk queue). Handler: [`inactive/route.ts:6-33`](../../../src/app/api/credit-control/inactive/route.ts).
 
-- **Auth:** `requireCreditControlSession()` → `sessionUser.email` recorded as `markedByEmail` (`route.ts:8`, `22-27`).
-- **Request body** (JSON, `{ studentKey?: string }`, `route.ts:9`):
+**Auth:** session required.
 
-  | Field | Type | Required | Notes |
-  |-------|------|----------|-------|
-  | `studentKey` | string | yes | Trimmed; `400` if empty (`route.ts:10-14`). Must exist in the current payload, else `404` (`route.ts:16-20`). |
+**Request body** (JSON, no schema):
 
-- **Behavior:** loads `getCreditControlPayload()`, looks up the student (to capture `student`/`parent` names), then `markInactiveStudent({ studentKey, studentName, parentName, markedByEmail })` — upsert into `creditControlInactiveStudents` keyed on `studentKey` (`src/lib/credit-control/actions.ts:131-134`, `src/lib/credit-control/db.ts:254-267`) followed by cache revalidation. Subsequent `GET /api/credit-control` responses omit this student (`src/lib/credit-control/service.ts:79-81`).
-- **Response — `200 OK`:** `{ "ok": true }` (`route.ts:29`).
-- **Errors:** `400` `{ "error": "studentKey is required" }`; `404` `{ "error": "Student not found" }`; `401`; `500` (`{ "error": "Inactive request failed" }`, `route.ts:31`).
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `studentKey` | string | yes | Trimmed; `400 "studentKey is required"` if blank. |
+
+The student must exist in the live payload (used to resolve `studentName`/`parentName`), else `404 "Student not found"` ([`inactive/route.ts:16-21`](../../../src/app/api/credit-control/inactive/route.ts)).
+
+**Side effects:** `markInactiveStudent(...)` → `markCreditInactive(...)` upserts `credit_control_inactive_students` (conflict on `studentKey` updates names/`markedAt`/`markedByEmail`) ([`db.ts:254-267`](../../../src/lib/credit-control/db.ts)); then cache revalidation.
+
+**Response (200):** `{ ok: true }`.
+
+**Status codes:** `200` · `400` missing `studentKey` · `401` · `404` `"Student not found"` · `500` (`"Inactive request failed"`).
 
 ### `DELETE /api/credit-control/inactive`
 
-Clear a student's inactive flag. Source: `src/app/api/credit-control/inactive/route.ts:35-50`.
+Clears the inactive flag for a student. Handler: [`inactive/route.ts:35-50`](../../../src/app/api/credit-control/inactive/route.ts).
 
-- **Auth:** `requireCreditControlSession()` (`route.ts:37`). Note: unlike the `POST`, this handler does **not** read the session user beyond the auth check, and does **not** verify the student exists in the payload.
-- **Request body** (JSON, `{ studentKey?: string }`, `route.ts:38`):
+**Auth:** session required.
 
-  | Field | Type | Required | Notes |
-  |-------|------|----------|-------|
-  | `studentKey` | string | yes | Trimmed; `400` if empty (`route.ts:39-43`). |
+**Request body** (JSON, no schema):
 
-- **Behavior:** `clearInactiveStudent(studentKey)` — deletes the matching `creditControlInactiveStudents` row (`src/lib/credit-control/actions.ts:136-139`, `src/lib/credit-control/db.ts:269-273`) and revalidates the cache tag. Deleting a non-existent row is a no-op (still `200`).
-- **Response — `200 OK`:** `{ "ok": true }` (`route.ts:46`).
-- **Errors:** `400` `{ "error": "studentKey is required" }`; `401`; `500` (`{ "error": "Inactive request failed" }`, `route.ts:48`).
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `studentKey` | string | yes | Trimmed; `400 "studentKey is required"` if blank. |
+
+Unlike the `POST`, this verb does **not** consult the payload, so it never returns 404 — deleting a non-existent row is a no-op.
+
+**Side effects:** `clearInactiveStudent(studentKey)` → `clearCreditInactive(...)` deletes the `credit_control_inactive_students` row ([`db.ts:269-273`](../../../src/lib/credit-control/db.ts)); then cache revalidation.
+
+**Response (200):** `{ ok: true }`.
+
+**Status codes:** `200` · `400` missing `studentKey` · `401` · `500` (`"Inactive request failed"`).
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

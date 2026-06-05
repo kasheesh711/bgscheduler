@@ -1,155 +1,219 @@
 # LINE Integration
 
-**Status: stable** — read paths and review tooling are live; the Wise scheduler write-path is flag-gated and still dry-run only.
+**Status: stable (scheduler write-path flag-gated; Wise writeback dry-run only).**
+
+The read/triage path — webhook ingest, classification, the human review queue, contact↔student linking, and the OA resolver — is production-grade. The two mutating edges are deliberately fenced: outbound LINE replies require `ENABLE_LINE_SCHEDULER`, and every Wise session change is recorded as a dry run and never sent (see [Business rules](#business-rules--edge-cases)).
+
+> Mechanical detail lives in the reference pages and this doc links to them. Endpoint signatures: [`reference/api/line.md`](../reference/api/line.md). Table columns/indexes: [`reference/database/erd-line.md`](../reference/database/erd-line.md) and the [database index](../reference/database/index.md).
+
+---
 
 ## Purpose
 
-The LINE Integration turns BeGifted's LINE Official Account into a managed inbox for scheduling operations. Parents message the OA in Thai or English; the system ingests every message, classifies whether it is a scheduling request, drafts a proposed reply, and surfaces the whole thing to admin staff in a review workspace. Nothing is ever sent back to a parent — and no Wise session is ever mutated — without an explicit human click.
+BeGifted runs a LINE Official Account (OA) that parents message — often in Thai, sometimes English — to ask for new classes or to move, pause, resume, or cancel existing ones. This subsystem turns that inbound stream into a **safe, auditable admin worklist**:
 
-It exists because LINE is where most parent scheduling conversations actually happen, and because the people triaging those conversations are non-technical admin staff. The integration gives them one queue to work, with the AI doing the reading-and-drafting and the human keeping veto power on every outbound action.
+1. **Ingest** every inbound LINE message via the platform webhook, deduped and idempotent.
+2. **Classify** each message (scheduling request / scheduling change / non-scheduling / unclear) with an LLM, and surface likely misses in a false-negative queue.
+3. **Draft** a parent-facing reply — either a full AI-scheduler turn (for new-class requests) or a deterministic operational plan with candidate Wise sessions (for change requests).
+4. **Review**: an admin approves-and-sends, accepts-without-sending, rejects (with a correction that feeds telemetry), or dismisses each draft. Sending is the only path that pushes a LINE reply.
+5. **Link** each LINE contact to a real Wise/credit-control student, so the system can prove which child a request is about before proposing any operational action. Linking is supported three ways: per-contact in the review screen, bulk **alias import** (paste or screenshot), and the browser-extension-driven **OA resolver**.
 
-Four concerns live under this umbrella:
+The primary users are the same non-technical admin staff who run the rest of BGScheduler. They work the queue from two surfaces: the dedicated `/line-review` page and an embedded LINE queue inside the AI Scheduler page (`/scheduler`).
 
-1. **Webhook ingest + contacts** — receive LINE events, persist messages, build a per-user contact/thread record, and pull LINE profiles.
-2. **Classifier + scheduler reviews** — classify each inbound message, run the AI scheduler (or a deterministic operational planner for change requests), and create a reviewable draft. The reply/write side is gated by `ENABLE_LINE_SCHEDULER`.
-3. **Link validation + OA resolver** — connect a LINE contact to a real Wise student. Includes a browser-extension-driven bulk resolver and a human round-robin validation tracker.
-4. **Wise-action logs** — an append-only audit of every proposed/confirmed operational action against Wise sessions (currently always dry-run).
+This is one of the largest subsystems in the app: ~13 library modules under `src/lib/line/`, 28 HTTP handlers under `src/app/api/line/`, eight Postgres tables, and a multi-panel review workspace.
 
-The primary users are the nine allowlisted admin staff. The OA-resolver also has a second, machine "user": a browser extension that authenticates with a per-run token (no Google session).
+---
 
 ## Conceptual data model
 
-All LINE tables are defined in `src/lib/db/schema.ts` (lines 1526–1740) — that file is the source of truth for exact columns, indexes, and enums (there is no separate database reference doc for LINE yet).
+LINE owns **eight tables** (all defined in `src/lib/db/schema.ts`). Conceptually they fall into four clusters — see [`reference/database/erd-line.md`](../reference/database/erd-line.md) for the ER diagram, keys, and cascade rules, and the [database index](../reference/database/index.md) for column-level detail.
 
-Conceptually:
+- **Inbox** — `lineContacts` (one row per LINE user; the hub of the domain, keyed by a unique `line_user_id`), `lineThreads` (one conversation per contact, optionally linked to an AI-scheduler conversation), and `lineMessages` (one row per inbound/outbound event, carrying the inline classifier verdict and a separate human review-of-classification block). Idempotency is enforced by unique indexes on `webhook_event_id` and `line_message_id`.
+- **Linking** — `lineContactStudentLinks` (one row per contact↔student association, `suggested | verified | rejected`), which doubles as the validation-workbench worklist via its `validation_assigned_*` columns and `source_kind`/`source_run_id` provenance.
+- **Review** — `lineSchedulerReviews` (the central human-in-the-loop record: one review per inbound message, holding the intent, draft, candidate sessions, proposed Wise actions, decision, and LINE send outcome) and `lineWiseActionLogs` (append-only audit of each Wise writeback attempt; `dry_run` defaults to `true`).
+- **OA resolver** — `lineOaResolverRuns` (a token-scoped batch job, addressed by a hashed token with an expiry) and `lineOaResolverRows` (one student worklist entry per run, which on commit points back into `lineContacts` / `lineContactStudentLinks`).
 
-- **Contacts** (`line_contacts`) — one row per LINE user, with the cached LINE profile (display name, picture, status) plus staff-applied labels. Uniquely keyed by LINE user id.
-- **Threads** (`line_threads`) — one conversation per contact, optionally bridged to an AI-scheduler conversation so LINE and website chat share one timeline. Also uniquely keyed by LINE user id.
-- **Messages** (`line_messages`) — every inbound and outbound message, including LINE webhook dedupe keys, retraction state, and the classifier verdict (category, confidence, summary, payload) plus a separate human "classification reviewed" verdict used for accuracy metrics.
-- **Contact↔student links** (`line_contact_student_links`) — the mapping from a LINE contact to a Wise student, with a `suggested → verified | rejected` lifecycle, a confidence score, free-form evidence, and validation-assignment fields. Uniquely keyed per (contact, student).
-- **Scheduler reviews** (`line_scheduler_reviews`) — the unit of human review for a scheduling message: the classifier verdict, the inferred operational intent, the proposed parent draft, candidate Wise sessions, proposed Wise actions, the send result, and the reviewer's decision. One review per inbound message.
-- **Wise-action logs** (`line_wise_action_logs`) — append-only audit rows for each proposed/confirmed Wise session action, carrying a `dryRun` flag and request/response payloads.
-- **OA-resolver runs + rows** (`line_oa_resolver_runs`, `line_oa_resolver_rows`) — a token-scoped bulk job (8-hour TTL) that hands a browser extension a worklist of students-needing-a-LINE-contact and collects back chat-URL candidates per row.
+**Reads from other domains (never written here):**
 
-The integration **reads** but does not own several neighbouring tables: the credit-control snapshot (`credit_control_students`, `credit_control_packages`, `credit_control_sessions`) supplies the current student directory and future sessions; the in-memory search index supplies tutor candidates; and the AI-scheduler tables (`ai_scheduler_conversations`, `ai_scheduler_messages`, `ai_scheduler_runs`, `ai_scheduler_feedback`) store the conversation/run/feedback that a LINE scheduling message generates.
+- **AI Scheduler** tables (`aiSchedulerConversations` / `aiSchedulerMessages` / `aiSchedulerRuns`) — the LINE review reuses the AI scheduler's conversation/turn/feedback machinery; a thread links to a conversation and a review references the run/message it came from (all `set null`). See [`ai-scheduler.md`](ai-scheduler.md).
+- **Credit Control** snapshot tables (`creditControlStudents` / `creditControlPackages` / `creditControlSessions`) — the *current* student directory, "live package / future session" flags, and the candidate future-session list all come from the active credit-control snapshot. See [`credit-control.md`](credit-control.md).
+- **Tutor snapshot** tables (`futureSessionBlocks`, `tutorIdentityGroups`) and the in-memory search index — used to attach teacher identity to a candidate session and to score reschedule-replacement tutors.
+
+Snapshot-independent note: the LINE tables survive Wise snapshot rotation (they are not snapshot-scoped), but the student data they join against *is* snapshot-scoped, so a contact's "current student" facts are recomputed against whatever credit-control snapshot is active at read time.
+
+---
 
 ## API surface
 
-All LINE endpoints live under `src/app/api/line/` — the route handlers there are the source of truth for exact request/response contracts (there is no separate API reference doc for LINE yet). Narrative summary:
+28 handlers under `src/app/api/line/`. Full method/path/auth/request/response contracts are in [`reference/api/line.md`](../reference/api/line.md) — this is a narrative index only; it does not restate schemas.
 
-**Ingest (public)**
-- `POST /api/line/webhook` — LINE event receiver; signature-verified, schedules background processing.
+**Three auth tiers** guard the group ([`reference/api/line.md` § Authentication model](../reference/api/line.md#authentication-model)): admin Auth.js **session** (the default for everything an admin touches), the LINE **HMAC signature** (webhook only), and a per-run **bearer token** (the two OA-resolver extension endpoints). `src/middleware.ts:10-12` exempts exactly those three machine-facing paths from the login redirect; every other LINE route is session-gated.
 
-**Reviews & messages (session-auth)**
-- `GET /api/line/scheduler-reviews` — list reviews (filterable by status/intent) plus optional analytics.
-- `GET /api/line/scheduler-reviews/false-negatives` — the "missed message" queue: inbound messages the AI did not escalate.
-- `PATCH /api/line/scheduler-reviews/{reviewId}` — approve-and-send, accept-no-send, reject, or dismiss a review.
-- `GET /api/line/scheduler-reviews/{reviewId}/context` — merged LINE + website chat timeline for the review.
-- `POST /api/line/scheduler-reviews/{reviewId}/operational-plan` — recompute the deterministic operational plan for a change request.
-- `GET|POST /api/line/scheduler-reviews/{reviewId}/wise-actions` — list / confirm proposed Wise session actions (the gated write-path).
-- `POST /api/line/messages/{messageId}/promote` — promote a missed message into a pending review.
-- `PATCH /api/line/messages/{messageId}/classification-feedback` — record the human-corrected classification.
+- **Webhook** (`POST /api/line/webhook`) — inbound event ingestion; signature-verified, gated by `lineSchedulerEnabled()`, schedules classification off the request path.
+- **Scheduler reviews** (`/api/line/scheduler-reviews…`) — list reviews + analytics; the false-negative queue; per-review chat context; the primary `PATCH` decision endpoint (approve-send / accept-no-send / reject / dismiss); and a `POST …/operational-plan` to rebuild a pending review's deterministic plan.
+- **Wise actions** (`/api/line/scheduler-reviews/[reviewId]/wise-actions`) — list and *confirm* proposed Wise session changes; confirmation is **dry-run only** in this build.
+- **Messages** (`/api/line/messages/[messageId]…`) — promote a missed message into a review; record a human classification correction.
+- **Students** (`GET /api/line/students`) — typeahead over current credit-control students for linking.
+- **Contacts — link validation** (`/api/line/contacts/link-validation…`) — the round-robin validation worklist, lead-only summary, reviewer assignment, and per-link verify/reject.
+- **Contacts — contact + student links** (`/api/line/contacts/[contactId]…`, `…/refresh-profiles`) — edit contact labels, list/create/verify student links, refresh cached LINE profiles.
+- **Contacts — alias import** (`/api/line/contacts/alias-import/preview|commit`) — parse pasted chat-list text or a screenshot into proposed aliases, then persist them.
+- **Contacts — OA resolver** (`/api/line/contacts/oa-resolver…`) — create/list/get resolver runs, the extension's token-authed worklist + row write-back, and commit resolved rows into links.
 
-**Contacts, links & directory (session-auth)**
-- `PATCH /api/line/contacts/{contactId}` — update a contact's parent/student labels; re-derives link suggestions and returns the contact's student links. (No GET on this route.)
-- `GET|POST|PATCH /api/line/contacts/{contactId}/student-links` — read a contact's student links (GET, with suggestion backfill), create a verified link (POST), or verify/reject a link (PATCH).
-- `GET /api/line/students` — search the current Wise student directory.
-- `POST /api/line/contacts/refresh-profiles` — re-pull LINE profiles for all contacts.
-- `POST /api/line/contacts/alias-import/preview`, `.../alias-import/commit` — parse a LINE-desktop chat-list paste/screenshot into contact↔student suggestions and apply them.
-- `GET /api/line/contacts/link-validation`, `.../summary`, `POST .../assign`, `PATCH .../{linkId}` — the human validation tracker (list, lead-only summary, round-robin assignment, verify/reject).
+There is **no cron** for LINE — ingestion is webhook-driven and the heavy work runs in a Next.js `after()` callback. (LINE does not appear in `vercel.json`.)
 
-**OA resolver**
-- `GET|POST /api/line/contacts/oa-resolver/runs`, `GET .../runs/{runId}`, `POST .../runs/{runId}/commit` — create/list/read a resolver run and commit matched rows into links (session-auth).
-- `GET /api/line/contacts/oa-resolver/worklist`, `POST .../runs/{runId}/rows` — **token-auth, public, CORS-enabled** endpoints the browser extension calls to pull its worklist and post back chat-URL candidates.
-
-> The token-auth resolver routes and the webhook are the only LINE endpoints exempted from Google session auth in `src/middleware.ts:10-13`. Everything else is gated by the middleware and re-checks `auth()` in-handler.
+---
 
 ## UI
 
-- **Page**: `src/app/(app)/line-review/page.tsx` (route `/line-review`, nav label "LINE AI Review" — `src/components/layout/app-nav.tsx:18`). It is a thin server shell that redirects unauthenticated users to `/login` and renders the client workspace inside a Suspense boundary.
-- **Workspace**: `src/components/line-review/line-review-workspace.tsx` is the orchestrator. It owns all state and fetches, and exposes two top-level tabs (`line-review-workspace.tsx:38-41`): **AI Review Queue** and **Mapping Validation**.
+Two surfaces consume the same `/api/line/*` endpoints.
 
-Key components in `src/components/line-review/`:
-- `review-queue.tsx` — the pending-review list with intent filter.
-- `case-header.tsx`, `chat-evidence-panel.tsx` — the selected review's header and the merged LINE/website chat timeline.
-- `resolution-board.tsx`, `reply-dock.tsx` — candidate-session / Wise-action board and the parent-reply editor. The dock surfaces exactly three buttons: Reject, "Accept handled" (the `accept_no_send` action), and "Approve & send" (`reply-dock.tsx:59-89`). The `dismiss` review action exists only at the API/service layer (`PATCH /api/line/scheduler-reviews/{reviewId}` → `dismissLineSchedulerReview`, `src/lib/line/review-service.ts:578`); it is not a reply-dock control.
-- `student-link-command.tsx` — searchable student picker for verifying a contact↔student link.
-- `alias-import-dialog.tsx` (+ `alias-import-batch.ts`) — the paste/screenshot alias-import flow.
-- `oa-resolver-dialog.tsx` — create/monitor an OA-resolver run and surface the extension token.
-- `mapping-validation-workspace.tsx`, `link-validation-panel.tsx` — the validation tracker tab.
-- `signals-dialog.tsx`, `status-badges.tsx`, `types.ts`, `utils.ts` — analytics drawer, badges, shared DTO types, and fetch/serialization helpers.
+### `/line-review` — dedicated triage workspace
+
+`src/app/(app)/line-review/page.tsx` is an async Server Component that gates on an Auth.js session and renders the client shell `LineReviewWorkspace` (`src/components/line-review/line-review-workspace.tsx`) inside `<Suspense>`. The workspace has two tabs (`src/components/line-review/line-review-workspace.tsx:38-41`):
+
+- **AI Review Queue** — the main triage view. Left: `ReviewQueue` (pending reviews, intent filter). Center: `ChatEvidencePanel` (merged LINE + website timeline). Right: `ResolutionBoard` (verified-student status, candidate sessions, proposed Wise actions) and the `ReplyDock` (the approve-send / accept-handled / reject controls). Supporting components: `CaseHeader`, `StudentLinkCommand`, `SignalsDialog` (analytics), `AliasImportDialog`, `OaResolverDialog`, `status-badges`.
+- **Mapping Validation** — `MappingValidationWorkspace` + `link-validation-panel` + `resolution-board`, the round-robin link-validation tracker driven by the OA-resolver worklist.
+
+`alias-import-batch.ts` holds the client-side batching logic for the screenshot/paste importer; `utils.ts` holds shared helpers including `studentLinkVisibilityForReview` (the verified/suggested/none badge logic, `src/components/line-review/utils.ts:115-135`).
+
+### `/scheduler` — embedded LINE queue
+
+The AI Scheduler workspace (`src/components/scheduler/scheduler-workspace.tsx`) embeds a compact **LINE Review Queue** panel and a "morning triage" flow. It calls the same endpoints — `/api/line/scheduler-reviews`, `…/false-negatives`, the `PATCH` decision route, `/api/line/messages/[id]/promote`, `/api/line/messages/[id]/classification-feedback`, and `/api/line/contacts/[id]/student-links` — and reuses `confidenceBand` from `src/lib/line/confidence.ts`. So a review created from a LINE message is workable from either page.
+
+---
 
 ## Data flow
 
-A parent message travels from LINE to a human-reviewed draft like this:
+### Inbound → review (the hot path)
 
-1. **Webhook** (`src/app/api/line/webhook/route.ts`) — verifies the `x-line-signature` HMAC, then hands the raw body to `handleLineWebhookPost` (`src/lib/line/webhook.ts`). On success it schedules per-message processing via Next's `after()` so the HTTP response returns immediately.
-2. **Ingest** (`recordLineWebhookPayload`, `src/lib/line/data.ts:403`) — walks the event array, upserts the contact + thread, and inserts text messages (deduped on `webhookEventId`). `unsend` events flip `isRetracted` instead of inserting; non-user / non-text events are ignored and counted.
-3. **Processing** (`processLineMessageForScheduler`, `src/lib/line/review-service.ts:126`) — pulls the LINE profile, ensures student-link suggestions, classifies the message, and persists the verdict. Non-scheduling / unclear messages stop here (no review).
-4. **Classify** (`classifyLineSchedulerMessage`, `src/lib/line/classifier.ts:89`) — calls OpenAI with a strict JSON schema and recent thread context, returning `scheduling_request | scheduling_change | non_scheduling | unclear`.
-5. **Plan & draft** — change requests run the deterministic operational planner (`buildLineOperationalReviewPlan`, `src/lib/line/operational.ts:584`) to infer intent and candidate sessions; new requests run the AI scheduler turn. Either way a `line_scheduler_reviews` row is created in `pending_review`.
-6. **Human review** (`/line-review`) — staff approve/send, accept-no-send, reject, or dismiss. `approveLineSchedulerReview` (`review-service.ts:426`) is the only path that calls the LINE push API.
-7. **Wise actions** — confirming an operational action calls `confirmLineWiseAction` (`src/lib/wise/operations.ts:26`), which records a dry-run audit log; no Wise mutation is sent.
+A parent message becomes a review without ever blocking the webhook response. `processLineMessageForScheduler` runs inside `after()`, so the platform gets its 200 immediately and classification/drafting happen afterward (`src/app/api/line/webhook/route.ts:21-29`).
 
 ```mermaid
 flowchart TD
-    P[Parent on LINE OA] -->|event| WH["POST /api/line/webhook<br/>(signature verified)"]
-    WH -->|recordLineWebhookPayload| MSG[(line_messages<br/>+ contacts + threads)]
-    WH -.->|after(): background| PROC[processLineMessageForScheduler]
-    PROC --> CLS{classifyLineSchedulerMessage}
-    CLS -->|non_scheduling / unclear| STOP[no review · maybe false-negative queue]
-    CLS -->|scheduling_request| AISCHED[AI scheduler turn]
-    CLS -->|scheduling_change| OPS[buildLineOperationalReviewPlan<br/>deterministic intent + candidates]
-    AISCHED --> REV[(line_scheduler_reviews<br/>pending_review)]
-    OPS --> REV
-    REV --> UI[/line-review workspace/]
-    UI -->|approve_send| PUSH["pushLineTextMessage → LINE<br/>(gated by ENABLE_LINE_SCHEDULER)"]
-    UI -->|confirm wise action| WACT["confirmLineWiseAction<br/>(dry-run only)"]
-    WACT --> LOG[(line_wise_action_logs)]
-    PUSH --> OUT[(outbound line_messages)]
+  LINE[LINE platform webhook] -->|POST raw body + x-line-signature| WH[POST /api/line/webhook]
+  WH -->|verify HMAC, gate on ENABLE_LINE_SCHEDULER| ING[recordLineWebhookPayload]
+  ING -->|upsert contact + thread, insert inbound message idempotently| MSG[(lineMessages)]
+  WH -.->|after: per new message| PROC[processLineMessageForScheduler]
+  PROC -->|fetch LINE profile, ensure link suggestions| LINK[(lineContactStudentLinks)]
+  PROC -->|classifyLineSchedulerMessage OpenAI| CLS{category}
+  CLS -->|non_scheduling / unclear| STOP[stop; may surface in false-negative queue]
+  CLS -->|scheduling_request -> new_request| AIS[executeSchedulerTurn AI draft]
+  CLS -->|scheduling_change -> change intent| OPS[buildLineOperationalReviewPlan deterministic]
+  AIS --> REV[(lineSchedulerReviews: pending_review)]
+  OPS --> REV
+  REV --> QUEUE[/line-review and /scheduler queues/]
 ```
 
-A separate, parallel flow links contacts to students: the **OA resolver** (`src/lib/line/oa-resolver.ts`) builds a worklist from the credit-control student directory, a browser extension fetches it by token and posts back LINE chat-URL candidates, an admin commits matches into `suggested` links, and the **validation tracker** (`src/lib/line/link-validation.ts`) round-robins those suggestions to reviewers who verify or reject them.
+Key branch points inside `processLineMessageForScheduler` (`src/lib/line/review-service.ts:126-379`):
+
+- Only `scheduling_request` and `scheduling_change` proceed to a review; everything else stops after recording the classification (`review-service.ts:148-150`).
+- For a **change** request (`intentType !== "new_request"`), it builds a deterministic operational plan and stores a `deterministic-line-ops` assistant turn (`review-service.ts:152-227`).
+- For a **new** request, if the AI scheduler is configured it runs a real `executeSchedulerTurn` and stores the AI draft + suggestions (`review-service.ts:243-336`); if not configured, it still creates a `pending_review` with an empty draft so the message is not lost (`review-service.ts:229-241`). On AI failure it records a failed run and a fallback "please review manually" review (`review-service.ts:337-378`).
+
+### Review decision → outbound
+
+The admin's decision flows through one `PATCH` route to `review-service.ts`:
+
+- **approve_send** (`approveLineSchedulerReview`, `review-service.ts:426-492`) — the *only* path that calls `pushLineTextMessage`. It first requires a verified student link (or an explicit override), pushes the reply with a deterministic idempotency `X-Line-Retry-Key`, records an outbound `lineMessages` row, and writes scheduler feedback (`accept` vs `edit` by comparing final text to the draft).
+- **accept_no_send** / **reject** / **dismiss** — update review state and write feedback, but never send. Reject requires a category + reason + staff correction and records a `reject` feedback signal that drives the rejection-reason analytics.
+
+### Operational change → Wise (dry run)
+
+`buildLineOperationalReviewPlan` (`src/lib/line/operational.ts:584-689`) parses an intent (cancel / pause-until / resume / reschedule), picks the verified student, loads that student's future sessions from the credit-control snapshot, scores them by date/time proximity, and proposes a Wise action only when exactly one session clears the bar. `confirmLineWiseAction` (`src/lib/wise/operations.ts:26-95`) then **logs the intent without mutating Wise** — see below.
+
+### Contact → student linking (three entry points)
+
+- **Per-contact** — `ensureLineContactStudentLinkSuggestions` parses dotted nickname codes from the contact's display name / staff label and matches them against current students (`src/lib/line/student-links.ts:450-490`); admins verify/reject in the review screen.
+- **Alias import** — `previewLineAliasImport` extracts chat-list rows from pasted text or an OpenAI vision pass over a screenshot, ranks contact candidates, and suggests students; `commitLineAliasImport` writes the labels and regenerates suggestions (`src/lib/line/contact-aliases.ts:465-507`).
+- **OA resolver** — a token-scoped run materializes a worklist of current students with computed search codes; a browser extension posts back discovered LINE chat URLs (matched/ambiguous), with **sibling fan-out** to same-parent rows; commit creates stub contacts + suggested links (`src/lib/line/oa-resolver.ts`). Resolver-sourced links then feed the **Mapping Validation** round-robin tracker (`src/lib/line/link-validation.ts`).
+
+---
 
 ## Business rules & edge cases
 
-**Fail-closed on sending and writing.**
-- The webhook returns `503` unless `ENABLE_LINE_SCHEDULER` is satisfied (`src/app/api/line/webhook/route.ts:10`). `lineSchedulerEnabled()` is true only when the flag is not the string `"false"` **and** both `LINE_CHANNEL_SECRET` and `LINE_CHANNEL_ACCESS_TOKEN` are set (`src/lib/line/client.ts:19-23`). This is the master gate on the entire write-path: with it off, nothing ingests and nothing sends.
-- A reply can only be sent from a `pending_review` row, and only after a verified student link exists or the admin explicitly checks "unmatched" — `approveLineSchedulerReview` throws otherwise (`src/lib/line/review-service.ts:436-441`). Empty final text is rejected (`review-service.ts:444`).
-- The Wise session write-path is **doubly gated and still inert**: even when `WISE_SESSION_OPERATIONS_VERIFIED === "true"`, `confirmLineWiseAction` only writes a `dry_run` audit row and sends no Wise mutation (`src/lib/wise/operations.ts:71-89`). With the flag off it writes a `manual_required` log instead (`operations.ts:49-69`). The proposed actions themselves carry `dryRun: true` and an `endpointVerified` flag mirroring the env var (`src/lib/line/operational.ts:481-485`).
+The non-obvious, load-bearing logic — most of it fail-closed or flag-gated.
 
-**Signature verification is constant-time and fail-closed.** `verifyLineSignature` returns false when the secret or signature is missing, compares lengths first, then uses `timingSafeEqual` (`src/lib/line/signature.ts:10-19`).
+### Feature gate: `lineSchedulerEnabled()`
 
-**Webhook idempotency.** Messages dedupe on `webhookEventId` via `onConflictDoNothing`; a conflict increments `duplicateEvents` rather than creating a duplicate (`src/lib/line/data.ts:473-477`). Reviews dedupe on `inboundMessageId` (`data.ts:734`), so re-processing a message never creates a second review.
+The webhook returns **503** and processes nothing unless the flag is on (`src/app/api/line/webhook/route.ts:10-12`). The flag is true only when `ENABLE_LINE_SCHEDULER !== "false"` **and both** `LINE_CHANNEL_SECRET` and `LINE_CHANNEL_ACCESS_TOKEN` are set (`src/lib/line/client.ts:19-23`). All three are *optional* env vars (`src/lib/env.ts:13-15`), so the subsystem is dark by default and the rest of the app runs without it.
 
-**Classifier fail-open into the missed-message queue.** The false-negative queue surfaces every `unclear` message, plus `non_scheduling` messages whose confidence is below `LINE_FALSE_NEGATIVE_CONFIDENCE_THRESHOLD = 0.75` — and a NULL confidence counts as "show" (`src/lib/line/data.ts:561-571`, threshold at `src/lib/line/classifier.ts:24`). Messages drop out of the queue once an admin records classification feedback or promotes them. "Fail-open" here means the queue only ever *surfaces* messages for a human glance; it never auto-acts.
+### Signature verification is mandatory and constant-time
 
-**Operational intent is deterministic, not AI.** For change requests, intent (`cancel_one_off`, `pause_until`, `resume`, `reschedule`, `unclear_change`) is inferred by Thai/English regex over the message text, and dates/times are parsed with a Thai-month table and Buddhist-era year normalization (`src/lib/line/operational.ts:106-307`). When a required field is missing (e.g. a pause with no resume date, or a cancel with no target date) the planner records an `issues` entry and refuses to mark the action ready (`operational.ts:286-291`, `674`).
+The webhook reads the raw body via `request.text()` so the exact bytes can be signed, then verifies `HMAC-SHA256(channelSecret, rawBody)` base64 against `x-line-signature` with a length pre-check + `timingSafeEqual` (`src/lib/line/signature.ts:10-19`). Missing secret or signature → reject. An invalid signature returns 401 *before* any DB write (`src/lib/line/webhook.ts:24-33`).
 
-**Student-link selection is conservative.** With multiple verified children on one contact and no clear mention in the message, the planner selects none and raises an issue rather than guessing (`src/lib/line/operational.ts:319-334`). An operational action is only "ready" when exactly one candidate session scores ≥ 60 with no outstanding issues (`operational.ts:649`).
+### Webhook ingestion is idempotent and selective
 
-**Resolver tokens.** Runs are authenticated by a hashed bearer token with an 8-hour TTL (`TOKEN_TTL_MS`, `src/lib/line/oa-resolver.ts:111`); only a SHA-256 hash and a short prefix are stored (`oa-resolver.ts:560-571`). Chat URLs are accepted only from `https://chat.line.biz/...` with both ids matching the `U[hex]{32}` LINE-user pattern (`oa-resolver.ts:112,344-360`). Matches found for one student fan out to siblings sharing a normalized parent group (`oa-resolver.ts:670-720`). A matched/ambiguous row with no valid candidate URL is downgraded to `error` (`oa-resolver.ts:762-776`), and committed links default to `suggested` (never auto-verified) unless already verified (`oa-resolver.ts:909`).
+`recordLineWebhookPayload` (`src/lib/line/data.ts:403-481`) only ingests `source.type === "user"` text messages; non-user sources, non-message events, and non-text messages are counted as `ignoredEvents`. `unsend` events flip `is_retracted` on the matching message rather than deleting it. New rows use `onConflictDoNothing` on `webhook_event_id`, so a redelivered webhook increments `duplicateEvents` instead of creating a duplicate (`data.ts:457-477`).
 
-**Validation tracker is lead-gated and round-robin.** The cross-reviewer summary is only returned to lead emails — `LINE_VALIDATION_LEAD_EMAILS` or the two hard-coded defaults (`src/lib/line/link-validation.ts:112-170`, `getLineLinkValidationSummary` at `385`). Assignment balances open workload across reviewers (`planRoundRobinValidationAssignments`, `link-validation.ts:260-283`). The tracker only ever touches links whose evidence `source = 'line_oa_resolver'` (`link-validation.ts:182-188`).
+### Off-request processing never fails the webhook
 
-**Identity/role parsing is best-effort but typed.** Relationship role (mom/dad/secretary/other/unknown) is derived from explicit field → admin note → chat title, in that order, via bilingual regex (`src/lib/line/oa-resolver.ts:370-397`).
+Classification + drafting run in `after()`; any thrown error is logged with `console.error` and swallowed (`src/app/api/line/webhook/route.ts:22-28`). The webhook's own response only reflects ingestion counts.
 
-**Destructive cleanup is double-guarded.** `deleteLineTestData` refuses to run unless `confirm === "delete-line-test-data"` and supports a `dryRun` plan (`src/lib/line/test-data-cleanup.ts:211-227`).
+### Fail-open classification, fail-closed review
+
+The classifier is fail-**open** for *surfacing*: a `non_scheduling` verdict below the 0.75 confidence threshold, and *all* `unclear` verdicts, are surfaced in the false-negative queue for a human re-check — the queue only shows messages, it never auto-acts (`src/lib/line/classifier.ts:21-24`). `NULL` confidence counts as "show" (`src/lib/line/data.ts:561-571`). The review path is fail-**closed**: messages drop out of the queue only once an admin records classification feedback (both "Not scheduling" and "Promote" do so) or once a review already exists (`data.ts:556-571`).
+
+### Sending requires a proven student link
+
+`approveLineSchedulerReview` throws "Verify a LINE student link or mark this contact as unmatched before sending" when there are no verified student keys and no `studentLinkOverride` (`src/lib/line/review-service.ts:438-441`). This is the human-in-the-loop guarantee that a reply only goes out once staff have confirmed which child the conversation is about (or explicitly overridden). Empty final text is also rejected (`review-service.ts:443-444`).
+
+### Outbound idempotency
+
+Each review has a deterministic retry key derived via UUIDv5 from its id (`review-service.ts:80-82, 446`), passed as `X-Line-Retry-Key`. The LINE client treats HTTP 409 as an accepted retry rather than an error (`src/lib/line/client.ts:83-92`), so a re-approve cannot double-send.
+
+### Wise writeback is dry-run only (the second fence)
+
+This is the most important safety property of the change path. `confirmLineWiseAction` **never mutates Wise**. When `WISE_SESSION_OPERATIONS_VERIFIED !== "true"` it records a log with `status: "manual_required", dryRun: true` and sets the review's `writebackStatus` to `manual_required` (`src/lib/wise/operations.ts:49-68`). Even when that flag *is* set, it still only records a `status: "dry_run"` log ("Dry run recorded; no Wise mutation was sent.") and `writebackStatus: "dry_run"` — the cancel/reschedule request shape is intentionally not wired until verified against production-safe Wise docs (`operations.ts:71-94`). Confirmation also requires a `pending_review` status and at least one selected session (`operations.ts:34-47`). The same `WISE_SESSION_OPERATIONS_VERIFIED` flag drives the disabled-reason and `endpointVerified` fields when proposing actions (`src/lib/line/operational.ts:21,464-491`).
+
+### Deterministic intent parsing is conservative (bilingual)
+
+`inferLineOperationalIntent` (`operational.ts:262-307`) classifies change intent via Thai+English regexes and parses Thai/English/Buddhist-era dates and times (`parseDateFromText`/`parseTimeFromText`, `operational.ts:190-250`; Buddhist→Gregorian year normalization at `:175-181`). It refuses to guess: a pause with no exact resume date, or a cancel/reschedule with no exact target date, records an `issue` that blocks any proposed action (`operational.ts:286-291`). An action is proposed only when exactly one candidate session scores ≥ 60 and there are no issues; if multiple sessions match, it adds an issue forcing the admin to pick (`operational.ts:643-671`). Multiple verified children with no in-message mention also block (`operational.ts:319-334`).
+
+### Student matching keys off dotted nickname codes
+
+BeGifted student identity in LINE labels uses dotted codes like `nick.suffix`. `parseLineStudentCodes` (`student-links.ts:121-144`) cleans labels (stripping checkmarks, "sent a photo" previews, leading single-letter prefixes), splits on separators, and infers a shared suffix across siblings. Matching cascades nickname-in-parentheses → student key → student name → substring (`student-links.ts:315-349`). Suggestions are written at confidence 0.95; an admin "add" is written `verified` at confidence 1 (`student-links.ts:471, 617-619`).
+
+### Link-validation lead gate returns empty, not 403
+
+The validation **summary** is lead-only, but for a non-lead admin it returns an *empty* summary (`canViewTracker: false`) rather than erroring (`link-validation.ts:480-482`). The lead list comes from `LINE_VALIDATION_LEAD_EMAILS` or a built-in default (`link-validation.ts:119-122, 217-231`). Assignment is round-robin by current open-assignment count, deterministic by a stable sort key (`planRoundRobinValidationAssignments`, `link-validation.ts:336-359`).
+
+### OA resolver: hashed tokens, TTL, parsed chat URLs, sibling fan-out
+
+Run tokens are `runId.secret`; only the SHA-256 hash is stored, with an 8-hour TTL and a display-only prefix (`oa-resolver.ts:111, 540-590`). Token auth requires a non-expired matching hash (`authenticateLineOaResolverToken`, `:592-606`). Chat URLs are strictly validated: HTTPS, host `chat.line.biz`, path `…/chat/…`, and both ids matching `^U[a-fA-F0-9]{32}$` (`parseLineOaChatUrl`, `:344-360`). A discovered match fans out to same-parent sibling rows with `matchMode: "sibling_fanout"` (`:670-720`). Guard rails: matched/ambiguous rows with no valid candidate URL are downgraded to `error`; a `no_match` reported while the extension is still on a chat URL is flagged as an error to retry from the chat list (`:762-803`). Commit creates stub contacts (`profileRaw.source = "line_oa_resolver_stub"`) and `suggested` links tagged `source_kind: "line_oa_resolver"`, never auto-verifying (`:867-946`); a run auto-closes to `committed` only once no matched/ambiguous rows remain (`:1086-1093`).
+
+### Analytics derive everything at read time
+
+`getLineSchedulerAnalytics` (`data.ts:1128-1237`) computes classifier mix, review outcomes, rejection rate, **Levenshtein** edit distance between draft and final/correction, average model latency (joined from `aiSchedulerRuns`), classification accuracy / false-positive / false-negative counts from human feedback, and the unverified-link backlog — all from live queries, no materialized counters.
+
+---
 
 ## Tests
 
-Library unit tests live in `src/lib/line/__tests__/` and cover: webhook ingest/dedupe/retraction (`webhook.test.ts`), signature verification (`signature.test.ts`), the LINE HTTP client incl. push retry-key 409 handling (`client.test.ts`), classifier confidence banding (`confidence.test.ts`), the review service end-to-end incl. promote/approve/reject paths (`review-service.test.ts`), deterministic operational planning (`operational.test.ts`), student-code parsing and matching (`student-links.test.ts`, `contact-aliases.test.ts`), link validation incl. round-robin and lead gating (`link-validation.test.ts`), the OA resolver and its extension-candidate normalization (`oa-resolver.test.ts`, `oa-resolver-extension-candidates.test.ts`), and the test-data cleanup planner (`test-data-cleanup.test.ts`).
+LINE has heavy unit coverage. Library suites live in `src/lib/line/__tests__/`:
 
-Route-handler tests sit beside their routes under `src/app/api/line/**/__tests__/` (14 files), covering alias-import commit, link-validation list/summary/assign/`[linkId]`, OA-resolver runs/rows/worklist/commit, refresh-profiles, message promote and classification-feedback, the false-negatives queue, and the review context endpoint.
+- `signature.test.ts` — HMAC verify (valid/invalid/length-mismatch).
+- `webhook.test.ts` — ingest result shape, dedup, retraction, signature rejection.
+- `client.test.ts` — LINE push/profile client behavior (incl. 409 retry handling).
+- `confidence.test.ts` — band thresholds around the 0.75 false-negative cutoff.
+- `review-service.test.ts` — the largest suite: classification branching, new-request vs change-request review creation, approve/accept/reject/dismiss, the send guard, and promote.
+- `operational.test.ts` — bilingual intent + date/time parsing, candidate scoring, pause/resume session selection, issue gating.
+- `student-links.test.ts` — code parsing and the matching cascade.
+- `link-validation.test.ts` — round-robin assignment planning, totals, lead gate.
+- `oa-resolver.test.ts` and `oa-resolver-extension-candidates.test.ts` — search-code building, chat-URL parsing, candidate normalization, sibling fan-out.
+- `contact-aliases.test.ts` — chat-list row extraction, contact-candidate ranking, suggested-student derivation.
+- `test-data-cleanup.test.ts` — the cleanup-targets resolver in `test-data-cleanup.ts`.
 
-Component logic is tested in `src/components/line-review/__tests__/` (`line-review-workspace.test.ts`, `alias-import-batch.test.ts`).
+Route-handler tests sit beside the handlers under `src/app/api/line/**/__tests__/route.test.ts` (classification-feedback, promote, false-negatives, context, link-validation + assign + summary + `[linkId]`, refresh-profiles, alias-import commit, and all four OA-resolver route groups).
+
+UI tests are in `src/components/line-review/__tests__/` (`line-review-workspace.test.ts`, `alias-import-batch.test.ts`).
+
+---
 
 ## Open questions
 
-- **The Wise session write-path is intentionally inert even when "verified."** `confirmLineWiseAction` records only a dry-run and never mutates Wise, with a code comment that the endpoint contract is unverified (`src/lib/wise/operations.ts:71-72`). Is this the intended permanent v1 behavior, or a placeholder awaiting the verified Wise cancel/reschedule request shape? It also has **no dedicated unit test** (the only references are the function itself and its route), unlike the rest of the subsystem.
-- **`test-data-cleanup.ts` is script-only, with no API route.** It is wired to the one-off script `scripts/delete-line-test-data.ts` (`scripts/delete-line-test-data.ts:3-6,40`), which gates the destructive run behind a `CONFIRM_DELETE_LINE_TEST_DATA` env var and supports `--dry-run`. It is intentionally *not* reachable from any API route under `src/app`. Confirm this manual-script-only exposure is the intended access model (i.e. it should never gain an HTTP entry point).
-- **Two LINE write-path flags with overlapping intent.** `ENABLE_LINE_SCHEDULER` gates ingest+send while `WISE_SESSION_OPERATIONS_VERIFIED` gates the (still dry-run) Wise action path. Confirm the intended operational matrix — e.g. is it ever expected to run with the scheduler enabled but Wise operations "verified," and what real effect that combination should have.
-- **Hard-coded validation leads.** `DEFAULT_LINE_VALIDATION_LEAD_EMAILS` embeds two personal Gmail addresses as the fallback when `LINE_VALIDATION_LEAD_EMAILS` is unset (`src/lib/line/link-validation.ts:112-115`). Is relying on that fallback in production intended, or should the env var always be set?
-- **"stable" maturity vs. dry-run reality.** The badge was supplied as authoritative. Worth a human confirming that "stable" is the right label given the Wise write-path never actually writes — the read/classify/review/send-reply loop is the part that is production-stable.
+- **`test-data-cleanup.ts` has no production caller.** It exposes `LINE_TEST_DATA_DELETE_CONFIRMATION` and a cleanup-targets/counts API and is exercised only by its own test (`test-data-cleanup.test.ts`); no route, page, or script imports it. Is this dead code, a fixture utility for integration tests, or a planned admin/ops endpoint that was never wired? A human should confirm intent before it is removed or surfaced.
+- **`WISE_SESSION_OPERATIONS_VERIFIED` is intentionally never honored as a real writeback.** Even when set to `"true"`, `confirmLineWiseAction` still records a dry run only (`src/lib/wise/operations.ts:71-94`). Is the real Wise cancel/reschedule call a committed near-term roadmap item, or is dry-run the permanent design until Wise publishes a verified contract? The code comments say "until verified" but give no owner/date.
+- **Some `writebackStatus` enum values look unreachable in this build.** The dry-run path sets `writebackStatus` to `"dry_run"` / `"manual_required"`, while `confirmed` and `failed` exist in the `LineWritebackStatus` type (`src/lib/line/data.ts:25-31`) but are not written anywhere in the current code. Confirm whether `confirmed`/`failed` are reserved for the future live path or are vestigial.
+- **Hardcoded validation-lead default list.** `DEFAULT_LINE_VALIDATION_LEAD_EMAILS` (`src/lib/line/link-validation.ts:119-122`) bakes in two specific Gmail addresses as the fallback when `LINE_VALIDATION_LEAD_EMAILS` is unset. Intended as a permanent default, or should it fall back to "all admins" / empty in production?
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

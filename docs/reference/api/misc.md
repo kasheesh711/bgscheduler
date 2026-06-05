@@ -1,133 +1,144 @@
 # Search, Tutors, Filters, Compare, Data Health, Auth & Admin API
 
-HTTP reference for the search/compare workspace, tutor metadata, filter dropdowns, data-health dashboard, leave-request review, tutor business profiles, and the admin Wise-sync trigger. Eighteen endpoints across eight path families:
+HTTP reference for the search/compare workspace, tutor metadata, filter dropdowns, the data-health dashboard + job runner, the progress-tests tracker, the student-promotions audit/apply pipeline, leave-request review, tutor business profiles, and the admin Wise-sync trigger. Thirty endpoints across these path families:
 
-- **Search** — `/api/search`, `/api/search/range`, `/api/search/assistant`
-- **Compare** — `/api/compare`, `/api/compare/discover`
-- **Tutors** — `/api/tutors`
-- **Filters** — `/api/filters`
-- **Data Health** — `/api/data-health`
-- **Admin** — `/api/admin/sync-wise`
-- **Tutor Profiles** — `/api/tutor-profiles`, `/api/tutor-profiles/[canonicalKey]`, `/api/tutor-profiles/import-preview`, `/api/tutor-profiles/import-commit`
-- **Leave Requests** — `/api/leave-requests`, `/api/leave-requests/sync`, `/api/leave-requests/[requestId]`, `/api/leave-requests/[requestId]/wise-cancel-preview`
+- **Search** — `POST /api/search`, `POST /api/search/range`, `POST /api/search/assistant`
+- **Compare** — `POST /api/compare`, `POST /api/compare/discover`
+- **Tutors** — `GET /api/tutors`
+- **Filters** — `GET /api/filters`
+- **Tutor Profiles** — `GET /api/tutor-profiles`, `PATCH /api/tutor-profiles/[canonicalKey]`, `POST /api/tutor-profiles/import-preview`, `POST /api/tutor-profiles/import-commit`
+- **Progress Tests** — `GET /api/progress-tests`, `POST /api/progress-tests/book`, `POST /api/progress-tests/mark-complete`, `POST /api/progress-tests/select-at-home`, `POST /api/progress-tests/mark-at-home-submitted`, `POST /api/progress-tests/resend-email`
+- **Student Promotions** — `GET /api/student-promotions/runs`, `POST /api/student-promotions/runs`, `GET /api/student-promotions/runs/[runId]`, `POST /api/student-promotions/runs/[runId]/verify`, `POST /api/student-promotions/runs/[runId]/apply`
+- **Leave Requests** — `GET /api/leave-requests`, `POST /api/leave-requests/sync`, `GET /api/leave-requests/[requestId]`, `PATCH /api/leave-requests/[requestId]`, `POST /api/leave-requests/[requestId]/wise-cancel-preview`
+- **Data Health** — `GET /api/data-health`, `POST /api/data-health/jobs/[jobKey]/run`
+- **Admin** — `POST /api/admin/sync-wise`
 
-For *what* these features mean (search/compare workflow, fail-closed availability rules, leave-request lifecycle, profile-import matching), see the relevant `docs/features/*` pages. This page documents mechanical request/response detail only.
+For *what* these features mean (search/compare workflow, fail-closed availability rules, the every-8-classes progress-test cycle, the student-promotion July-1 gate, leave-request lifecycle, profile-import matching), see the relevant `docs/features/*` pages. This page documents mechanical request/response detail only.
 
 ## Conventions shared across these endpoints
 
-**Authentication.** Every handler in this group calls `auth()` from `@/lib/auth` as its first step and returns `401 { "error": "Unauthorized" }` when no session is present. The leave-request handlers additionally require an email — they check `!session?.user?.email` rather than just `!session` (`src/app/api/leave-requests/route.ts:9`, `[requestId]/route.ts:16`, `[requestId]/route.ts:28`, `[requestId]/wise-cancel-preview/route.ts:10`, `sync/route.ts:10`). All other handlers check `!session` (e.g. `src/app/api/compare/route.ts:114`, `src/app/api/search/route.ts:31`).
+**Authentication.** Every handler in this group resolves the Auth.js session before doing any work. Three patterns appear:
 
-These paths are **admin** tier: none are in the middleware public-route allowlist except `/api/search/assistant`, so the global auth middleware also redirects unauthenticated browser requests to `/login` before the handler runs (`src/middleware.ts:4-15, 25-29`). `/api/search/assistant` is allowlisted as public in the middleware (`src/middleware.ts:8`) yet still enforces a session in-handler (`src/app/api/search/assistant/route.ts:136-139`) — see its section below.
+- **Session-only** (most routes): call `auth()` from `@/lib/auth`; return `401 { "error": "Unauthorized" }` when `!session` (e.g. `src/app/api/search/route.ts:31-34`, `src/app/api/compare/route.ts:113-116`).
+- **Session + email** (leave-requests, data-health job runner): check `!session?.user?.email` instead of just `!session` (`src/app/api/leave-requests/route.ts:9`, `src/app/api/data-health/jobs/[jobKey]/run/route.ts:12`).
+- **Domain guard with role split** (progress-tests, student-promotions): a shared helper resolves the session and throws a sentinel `Error` that a shared error-mapper turns into `401`/`403`. Progress-tests reads use `requireProgressTestsSession`; every progress-tests mutation uses `requireProgressTestsAdminSession`, which throws `"Forbidden"` → `403` for teacher sessions (`src/lib/progress-tests/api.ts:32-63`). Student-promotions uses `requireStudentPromotionSession` (`src/lib/student-promotions/api.ts:9-15`).
 
-**Validation.** Most write/query bodies are validated with a Zod `.safeParse()`; on failure the handler returns `400 { "error": "Invalid request", "details": <flattened zod error> }`. Routes that parse a JSON body first wrap `request.json()` in `try/catch` and return `400 { "error": "Invalid JSON" }` on a parse failure. The leave-request `POST`/`PATCH` handlers are the exception: a JSON parse failure is swallowed and treated as an empty body (`{}`), not a 400 (`src/app/api/leave-requests/sync/route.ts:14-19`, `[requestId]/route.ts:33-38`, `[requestId]/wise-cancel-preview/route.ts:14-19`).
+All of these paths are **admin/authenticated** tier (no `CRON_SECRET` bearer); none are in the middleware public-route allowlist except `/api/search/assistant`, so the global Auth.js edge middleware also redirects unauthenticated browser navigations and applies page-level `allowedPages` access control before the handler runs (`src/middleware.ts:25-29, 52-58`). `/api/search/assistant` is allowlisted as public in the middleware yet still enforces a session in-handler (`src/app/api/search/assistant/route.ts:136-139`). The admin allowlist itself is enforced at sign-in (the `signIn` callback rejects non-admin/non-teacher Google accounts); these handlers therefore trust any present session as an allowed user. There is no separate "is this user an admin" check inside the search/compare/tutor/filter/leave/profile handlers beyond the presence of a session — the role distinction only exists in the progress-tests and student-promotions domains.
 
-**Error handling.** Business logic runs in a `try/catch`; uncaught errors generally return `500 { "error": <err.message or a fallback> }`, via the pattern `const message = err instanceof Error ? err.message : "<fallback>"`. Exceptions: `wise-cancel-preview` returns `400` on any thrown error (`[requestId]/wise-cancel-preview/route.ts:35`); `search/assistant` returns `502`/`503` (see below); `leave-requests/sync` returns `409` on a concurrent-run error.
+**Validation.** Most write/query bodies are validated with a module-scope Zod `const` + `.safeParse()`; on failure the handler returns `400` with the flattened error. Two shapes of failure body coexist:
+- `{ "error": "Invalid request", "details": <flattened zod error> }` (search, compare, tutor-profiles import-commit).
+- `{ "error": <flattened zod error> }` (progress-tests routes — they put the flattened error directly under `error`, `src/app/api/progress-tests/book/route.ts:28`).
 
-**Snapshot metadata.** Search/compare responses embed `snapshotMeta: { snapshotId, syncedAt, stale }` (`src/lib/search/types.ts:30-34`). `stale` is `true` when `Date.now() - syncedAt > API_STALE_THRESHOLD_MS`; when stale, a `STALE_SEARCH_WARNING` string is pushed into the response `warnings[]` (`src/app/api/compare/route.ts:144-149`).
+Routes that parse a JSON body first wrap `request.json()` in `try/catch` and return `400 { "error": "Invalid JSON" }` (search/compare) or `400 { "error": "Invalid JSON body" }` (progress-tests) on a parse failure. The leave-request and student-promotions write handlers are the exception: a JSON parse failure is swallowed and treated as an empty body (`{}`), not a `400` (`src/app/api/leave-requests/sync/route.ts:14-19`, `src/app/api/student-promotions/runs/[runId]/verify/route.ts:17`).
+
+**Error handling.** Business logic runs in a `try/catch`; uncaught errors generally return `500 { "error": <err.message or a fallback> }` via the pattern `err instanceof Error ? err.message : "<fallback>"`. Exceptions, documented per-route below: `wise-cancel-preview` returns `400` on any thrown error; `search/assistant` returns `502`/`503`; `leave-requests/sync` returns `409` on a concurrent-run error; the data-health job runner returns `409` for an unconfirmed dangerous job; the progress-tests and student-promotions error-mappers translate sentinel messages into `401`/`403`/`404`/`400` before the `500` fallback.
+
+**Snapshot metadata.** Search/compare responses embed `snapshotMeta: { snapshotId, syncedAt, stale }` (`src/lib/search/types.ts`). `stale` is `true` when `Date.now() - syncedAt > API_STALE_THRESHOLD_MS`; when stale, a `STALE_SEARCH_WARNING` string is pushed into the response `warnings[]` (`src/app/api/compare/route.ts:144-149`).
 
 ---
 
 ## Search
 
-Tutor-availability search against the warm in-memory index. The recommended endpoint is `POST /api/search/range`; `POST /api/search` is the legacy slot-based form; `POST /api/search/assistant` is the natural-language assistant.
+Tutor-availability search against the warm in-memory index (`ensureIndex(db)`). The recommended endpoint is `POST /api/search/range`; `POST /api/search` is the legacy slot-based form; `POST /api/search/assistant` is the natural-language AI assistant.
 
 ### `POST /api/search/range`
 
 Range search: an admin enters a time window + class duration, the backend slices it into fixed sub-slots and returns an availability grid. Source: `src/app/api/search/range/route.ts`.
 
-- **Auth:** `auth()` → `401` when no session (`route.ts:7-10`).
+- **Auth:** `auth()` → `401 { "error": "Unauthorized" }` when no session (`route.ts:7-10`).
 - **Request body** — Zod `rangeRequestSchema` (`src/lib/search/range-search.ts:16-37`):
   | Field | Type | Notes |
   |---|---|---|
   | `searchMode` | `"recurring" \| "one_time"` | required |
-  | `startTime` | `string` | required, `HH:MM` (regex `^\d{2}:\d{2}$`) |
-  | `endTime` | `string` | required, `HH:MM` |
-  | `durationMinutes` | `60 \| 90 \| 120` | required; accepts the strings `"60"/"90"/"120"` (transformed to number) or the numeric literals |
+  | `dayOfWeek` | number 0–6 | optional (used for `recurring`) |
+  | `date` | string | optional (used for `one_time`) |
+  | `startTime` | `"HH:MM"` (regex `^\d{2}:\d{2}$`) | required |
+  | `endTime` | `"HH:MM"` | required |
+  | `durationMinutes` | `60 \| 90 \| 120` (string `"60"/"90"/"120"` coerced, or numeric literal) | required |
   | `mode` | `"online" \| "onsite" \| "either"` | required |
-  | `dayOfWeek` | `number` (0–6) | optional (recurring) |
-  | `date` | `string` | optional (one-time) |
   | `filters` | `{ subject?, curriculum?, level? }` | optional |
-  | `tutorGroupIds` | `string[]` | optional — restrict the grid to specific tutor groups |
-- **Behavior:** generates sub-slots via `generateSubSlots(startTime, endTime, durationMinutes)` (`range-search.ts:41-71`); if zero sub-slots fit, returns `400 { "error": "Time range is too short for the selected class duration" }` (`route.ts:31-36`). Otherwise delegates to `executeRangeSearch(db, …)` (`route.ts:41`, `range-search.ts:103`).
-- **Response** — `RangeSearchResponse` (`src/lib/search/types.ts:102-109`): `{ snapshotMeta, subSlots: {start,end}[], grid: RangeGridRow[], needsReview: TutorReviewResult[], latencyMs, warnings }`. Each `RangeGridRow` has `availability: (true | BlockingSessionInfo[])[]` aligned to `subSlots` — `true` means free, an array lists the blocking sessions/holds (`types.ts:93-100`). `needsReview` carries fail-closed tutors with `reasons[]` (`types.ts:46-48`).
-- **Errors:** `500 { "error": <message | "Search failed"> }` on a thrown error (`route.ts:52-55`).
+  | `tutorGroupIds` | `string[]` | optional — scope to specific tutors |
+- **Behavior:** after parsing, the handler calls `generateSubSlots(startTime, endTime, durationMinutes)`; if zero sub-slots fit the window it returns `400 { "error": "Time range is too short for the selected class duration" }` (`route.ts:30-36`). Otherwise it delegates to `executeRangeSearch(db, …)`.
+- **Response:** the `RangeSearchResponse` from `executeRangeSearch` (`src/lib/search/range-search.ts`) — an availability grid of per-sub-slot rows with `Available` / blocked / `Needs review` results plus `snapshotMeta`. Fail-closed: unresolved identity/modality/qualification routes to "Needs review", never "Available".
+- **Errors:** `400` (bad JSON / Zod / empty sub-slot set), `401`, `500` (`route.ts:52-55`).
 
 ### `POST /api/search`
 
-Legacy slot-based search kept for backward compatibility. Source: `src/app/api/search/route.ts`.
+Legacy slot-based search (multi-slot intersection). Source: `src/app/api/search/route.ts`.
 
-- **Auth:** `auth()` → `401` (`route.ts:30-34`).
-- **Request body** — inline Zod `searchRequestSchema` (`route.ts:8-28`):
-  - `searchMode`: `"recurring" | "one_time"` (required).
-  - `slots`: non-empty array of `{ id: string, dayOfWeek?: 0–6, date?: string, start: HH:MM, end: HH:MM, mode: "online"|"onsite"|"either" }`.
-  - `filters`: `{ subject?, curriculum?, level? }` (optional).
-  - `rawInput`: `string` (optional — the original natural-language text).
-- **Behavior:** `ensureIndex(db)` then `executeSearch(index, parsed.data)` (`route.ts:54-55`).
-- **Response** — `SearchResponse` (`src/lib/search/types.ts:56-63`): `{ snapshotMeta, normalizedSlots, perSlotResults: SlotResult[], intersection: TutorResult[], latencyMs, warnings }`. `perSlotResults` splits tutors into `available`/`needsReview` per slot; `intersection` is the set available across all slots.
-- **Errors:** `400 Invalid JSON` / `400 Invalid request` / `500 { "error": <message | "Search failed"> }` (`route.ts:38-59`).
+- **Auth:** `auth()` → `401` (`route.ts:31-34`).
+- **Request body** — Zod `searchRequestSchema` (`route.ts:8-28`):
+  | Field | Type | Notes |
+  |---|---|---|
+  | `searchMode` | `"recurring" \| "one_time"` | required |
+  | `slots` | array (min 1) of `{ id, dayOfWeek?, date?, start, end, mode }` | `start`/`end` are `"HH:MM"`; `mode` ∈ `online/onsite/either` |
+  | `filters` | `{ subject?, curriculum?, level? }` | optional |
+  | `rawInput` | string | optional (echo of the source text) |
+- **Behavior:** `ensureIndex(db)` then `executeSearch(index, parsed.data)` (`route.ts:53-56`).
+- **Response:** the `executeSearch` result object (matched tutors + per-slot availability, `snapshotMeta`).
+- **Errors:** `400` (`{ "error": "Invalid JSON" }` or `{ "error": "Invalid request", "details": … }`), `401`, `500 { "error": "Search failed" }`.
 
 ### `POST /api/search/assistant`
 
-Natural-language scheduling assistant (single-turn). Public in the middleware allowlist but session-gated in-handler. Source: `src/app/api/search/assistant/route.ts`.
+Natural-language AI scheduler turn: the admin pastes a parent message, the LLM extracts a structured request, the app decides availability via the search engine, and a parent-reply draft is returned. Source: `src/app/api/search/assistant/route.ts`. This is the **only** route in this group on the middleware public allowlist, but it still enforces a session in-handler.
 
-- **Auth:** allowlisted public at the edge (`src/middleware.ts:8`), but the handler still calls `auth()` and returns `401` with no session (`route.ts:136-139`). Effectively admin-gated.
-- **Request body** — Zod `aiSchedulerRequestSchema` (`src/lib/ai/scheduler.ts:141-143`): `{ input: string }`, trimmed, length 1–6000, `.strict()` (no extra keys).
-- **Preconditions:** if the AI scheduler is not configured (`isAiSchedulerConfigured()`), returns `503 { "error": "AI scheduler is not configured" }` (`route.ts:156-161`).
-- **Behavior:** runs one assistant turn via `executeSchedulerTurn(...)` over the single admin message (`route.ts:169-174`), shapes the result, and persists a usage row with `logSchedulerRun(...)` (`route.ts:176-186`) tagged with the signed-in admin's email.
-- **Response** (`200`) — discriminated by `status`, all carrying a `logId` (`src/lib/ai/scheduler.ts:72-98`):
-  - `status: "needs_clarification"` → `{ partial, clarifyingQuestions: string[], warnings, logId }`.
-  - `status: "solved"` → `{ parsedRequest, options: AiSchedulerOption[], parentMessageDraft, snapshotMeta, warnings, logId }`.
-  - `status: "availability_summary"` → `{ state, availabilitySummary, assistantMessage, parentMessageDraft, snapshotMeta, warnings, logId }`.
-- **Side effects:** always inserts a scheduler-run log row (on success and on failure) — `route.ts:176, 191`.
-- **Errors:** `400 Invalid JSON` / `400 Invalid request` / `503` (not configured). On a model/runtime failure it still logs a `failed` run and returns `502 { "error": "AI scheduling failed", "detail": <message>, "logId": <uuid> }` (`route.ts:189-210`).
+- **Auth:** `auth()` → `401` (`route.ts:136-139`).
+- **Gate:** if `!isAiSchedulerConfigured()`, returns `503 { "error": "AI scheduler is not configured" }` (`route.ts:156-161`). The feature is gated by the `OPENAI_*` env vars / `ENABLE_AI_SCHEDULER`.
+- **Request body** — Zod `aiSchedulerRequestSchema` (`src/lib/ai/scheduler.ts:141-143`): `{ input: string }` — trimmed, min 1, max 6000 chars, `.strict()`.
+- **Behavior:** runs one scheduler turn via `executeSchedulerTurn(...)` with the pasted text as a single `admin` message, maps the result into a response, and persists a row via `logSchedulerRun(...)` (redacted input preview, model, latency breakdown, parsed/solver payloads) — both on success and on failure (`route.ts:168-205`).
+- **Response (200):** one of three discriminated shapes, all carrying a `logId`:
+  - `{ status: "needs_clarification", partial, clarifyingQuestions[], warnings[], logId }`
+  - `{ status: "solved", parsedRequest, options[], parentMessageDraft, snapshotMeta, warnings[], logId }`
+  - `{ status: "availability_summary", state, availabilitySummary, assistantMessage, parentMessageDraft, snapshotMeta, warnings[], logId }`
+
+  (shape assembly: `responseFromSchedulerResult`, `route.ts:101-133`).
+- **Side effects:** writes an AI-scheduler run-log row (always — success or failure path).
+- **Errors:** `400` (`{ "error": "Invalid JSON" }` / `{ "error": "Invalid request", "details": … }`), `401`, `503` (not configured), and on a thrown turn error `502 { "error": "AI scheduling failed", "detail": <message>, "logId": <id> }` — note a failure-path log row is still written (`route.ts:189-210`).
 
 ---
 
 ## Compare
 
-Side-by-side tutor comparison and candidate discovery, both reading from the same in-memory `SearchIndex` (no extra DB queries beyond stale-ID resolution).
+Side-by-side week-scoped comparison of 1–3 tutors (conflicts + shared free slots), and candidate discovery to suggest a tutor to add. Both run against the in-memory index.
 
 ### `POST /api/compare`
 
-Compare 1–3 tutors for one week: per-tutor schedules, same-student conflicts, and shared free slots. Source: `src/app/api/compare/route.ts`.
+Assemble week schedules for 1–3 tutors, detect same-student conflicts, and compute shared free slots. Source: `src/app/api/compare/route.ts`.
 
-- **Auth:** `auth()` → `401` (`route.ts:113-116`).
+- **Auth:** `auth()` → `401` when no session (`route.ts:113-116`).
 - **Request body** — Zod `compareRequestSchema` (`route.ts:24-31`):
   | Field | Type | Notes |
   |---|---|---|
-  | `tutorGroupIds` | `string[]` | required, length **1–3** |
+  | `tutorGroupIds` | `string[]`, **1–3 items** | required |
   | `mode` | `"recurring" \| "one_time"` | required |
-  | `dayOfWeek` | `number` (0–6) | optional — restrict to one weekday |
-  | `date` | `string` | optional — restrict to the weekday of this date |
-  | `weekStart` | `string` (ISO Monday) | optional — defaults to the current Monday in Asia/Bangkok (`getCurrentMonday`, `route.ts:34-41`) |
-  | `fetchOnly` | `string[]` | optional — serialize only this subset of tutors in the response (conflicts/free-slots still computed on the full set) |
-- **Behavior:**
-  1. `ensureIndex(db)`; builds `snapshotMeta` and pushes `STALE_SEARCH_WARNING` if stale (`route.ts:138-149`).
-  2. Resolves the requested IDs against the active snapshot. IDs missing from the active index but matching a UUID are looked up in `tutorIdentityGroups` and remapped to the active group by `canonicalKey`; when that happens it pushes the warning `"Tutor selection was refreshed after the latest Wise sync"` (`route.ts:61-110, 157-159`). If nothing resolves, returns `404 { "error": "No matching tutor groups found in active snapshot" }` (`route.ts:161-166`).
-  3. Computes the Monday→Sunday week range. **Historical fallback:** if the range starts before start-of-today (Bangkok), it fetches captured `past_session_blocks` via `fetchPastSessionBlocks(canonicalKeys, …)` and merges them into both `buildCompareTutor` and the free-slot computation (`route.ts:185-227`).
-  4. `buildCompareTutor` per group → `detectConflicts(allCompareTutors)` → `findSharedFreeSlots(...)` (`route.ts:200-227`).
-  5. Applies `fetchOnly` to the serialized tutor list only (`route.ts:231-236`).
-- **Response** — `CompareResponse` (`src/lib/search/types.ts:169-178`): `{ snapshotMeta, tutors: CompareTutor[], conflicts: Conflict[], sharedFreeSlots: SharedFreeSlot[], weekStart, weekEnd, latencyMs, warnings }`.
-- **Errors:** `400 Invalid JSON` / `400 Invalid request` / `404` (no match) / `500 { "error": <message | "Compare failed"> }` (`route.ts:250-253`).
+  | `dayOfWeek` | number 0–6 | optional |
+  | `date` | string | optional |
+  | `weekStart` | string `YYYY-MM-DD` | optional — defaults to the current Bangkok Monday (`getCurrentMonday`, `route.ts:34-41`) |
+  | `fetchOnly` | `string[]` | optional — incremental fetch: serialize only this subset, but still use the full set for conflict/free-slot detection (`route.ts:229-236`) |
+- **Behavior / side effects (read-only):**
+  - Resolves requested ids against the active snapshot; ids that are stale (point at a prior snapshot's identity-group id) are remapped via `tutorIdentityGroups.canonicalKey`, pushing the warning `"Tutor selection was refreshed after the latest Wise sync"` (`resolveTutorGroupsForActiveSnapshot`, `route.ts:61-110, 157-159`).
+  - **Historical-range merge (D-07 / PAST-01):** if any day in the requested week is before start-of-today Bangkok, fetches `past_session_blocks` for the tutors' canonical keys and merges them into both `buildCompareTutor` and `findSharedFreeSlots` (`route.ts:185-227`).
+- **Response (200)** — `CompareResponse` (`src/lib/search/types.ts`): `{ snapshotMeta, tutors[], conflicts[], sharedFreeSlots[], weekStart, weekEnd, latencyMs, warnings[] }` (`route.ts:238-247`).
+- **Errors:** `400` (`{ "error": "Invalid JSON" }` / `{ "error": "Invalid request", "details": … }`), `401`, `404 { "error": "No matching tutor groups found in active snapshot" }` when none of the ids resolve (`route.ts:161-166`), `500 { "error": "Compare failed" }`.
 
 ### `POST /api/compare/discover`
 
-Find candidate tutors to add to a comparison, with per-candidate conflict status pre-computed against the already-selected tutors. Source: `src/app/api/compare/discover/route.ts`.
+Rank candidate tutors to add to an existing comparison (0–2 already chosen), scored by conflict count and free-slot fit. Source: `src/app/api/compare/discover/route.ts`.
 
 - **Auth:** `auth()` → `401` (`route.ts:30-33`).
 - **Request body** — Zod `discoverRequestSchema` (`route.ts:12-27`):
   | Field | Type | Notes |
   |---|---|---|
-  | `existingTutorGroupIds` | `string[]` | required, **max 2** (the already-selected tutors) |
+  | `existingTutorGroupIds` | `string[]`, **max 2** | required |
   | `mode` | `"recurring" \| "one_time"` | required |
-  | `dayOfWeek` | `number` (0–6) | optional |
-  | `date` | `string` | optional |
-  | `startTime` / `endTime` | `string` | optional, `HH:MM` |
+  | `dayOfWeek` | number 0–6 | optional |
+  | `date` | string | optional |
+  | `startTime` / `endTime` | `"HH:MM"` (regex) | optional |
   | `modeFilter` | `"online" \| "onsite" \| "either"` | optional |
   | `filters` | `{ subject?, curriculum?, level? }` | optional |
-- **Behavior:** iterates every tutor group not already selected, filters by `modeFilter` (against `supportedModes`) and `filters` (subject/curriculum/level, case-insensitive), and — when a weekday + time window are given — flags a candidate `freeSlot` only if it has a matching availability window AND no blocking session AND no leave (`route.ts:78-125`). For each candidate it computes conflicts against the existing selection (`detectConflicts`) and flags data issues / unresolved modality. Candidates are sorted: clean before issues, then by conflict count ascending, then by free-slot count descending (`route.ts:153-157`).
-- **Response** — `DiscoverResponse` (`src/lib/search/types.ts:203-207`): `{ snapshotMeta, candidates: DiscoverCandidate[], latencyMs }`. Each `DiscoverCandidate` (`types.ts:191-201`): `{ tutorGroupId, displayName, supportedModes, qualifications, conflictCount, conflicts, freeSlots, hasDataIssues, dataIssueReasons }`.
-- **Errors:** `400 Invalid JSON` / `400 Invalid request` / `500 { "error": <message | "Discover failed"> }` (`route.ts:166-169`).
+- **Behavior (read-only):** iterates the active index's tutor groups (excluding the already-chosen ones), filters by `supportedModes`/qualifications, computes per-candidate `freeSlots`, conflicts vs the existing set, and a `hasDataIssues` flag; sorts data-clean → fewest conflicts → most free slots (`route.ts:78-157`).
+- **Response (200)** — `DiscoverResponse`: `{ snapshotMeta, candidates[], latencyMs }`, each candidate `{ tutorGroupId, displayName, supportedModes, qualifications, conflictCount, conflicts[], freeSlots[], hasDataIssues, dataIssueReasons[] }` (`route.ts:140-165`).
+- **Errors:** `400`, `401`, `500 { "error": "Discover failed" }`.
 
 ---
 
@@ -135,13 +146,12 @@ Find candidate tutors to add to a comparison, with per-candidate conflict status
 
 ### `GET /api/tutors`
 
-All tutor names/IDs/modes/subjects from the active snapshot — the data source for the searchable tutor combobox. Source: `src/app/api/tutors/route.ts`.
+Combobox source: the active snapshot's tutors. Source: `src/app/api/tutors/route.ts`.
 
 - **Auth:** `auth()` → `401` (`route.ts:6-9`).
-- **Request:** no parameters.
-- **Behavior:** `getTutorList()` (`src/lib/data/tutors.ts`, `route.ts:12`).
-- **Response** (`200`): `{ tutors: [...] }` (`route.ts:13`).
-- **Errors:** `500 { "error": <message | "Failed to load tutors"> }` (`route.ts:14-17`).
+- **Request:** none (no query params, no body).
+- **Response (200):** `{ tutors: TutorListItem[] }`, where `TutorListItem = { tutorGroupId, displayName, supportedModes: string[], subjects: string[] }` (`src/lib/data/tutors.ts:7-12`; `getTutorList()`).
+- **Errors:** `401`, `500 { "error": "Failed to load tutors" }`.
 
 ---
 
@@ -149,56 +159,320 @@ All tutor names/IDs/modes/subjects from the active snapshot — the data source 
 
 ### `GET /api/filters`
 
-Distinct subjects/curriculums/levels from the active snapshot, for populating the search-form dropdowns. Source: `src/app/api/filters/route.ts`.
+Dropdown facets (subjects / curriculums / levels) derived from the active snapshot's qualifications. Source: `src/app/api/filters/route.ts`.
 
 - **Auth:** `auth()` → `401` (`route.ts:6-9`).
-- **Request:** no parameters.
-- **Behavior:** returns `getFilterOptions()` directly (`src/lib/data/filters.ts`, `route.ts:12`).
-- **Response** (`200`): the filter-options object from `getFilterOptions()`.
-- **Errors:** `500 { "error": <message | "Failed to load filters"> }` (`route.ts:13-16`).
+- **Request:** none.
+- **Response (200):** `FilterOptions = { subjects: string[], curriculums: string[], levels: string[] }`, each sorted (`src/lib/data/filters.ts:7-11, 30-34`). Cached server function (`"use cache"`, tagged `snapshot`).
+- **Errors:** `401`, `500 { "error": "Failed to load filters" }`.
+
+---
+
+## Tutor Profiles
+
+Editorial business context Wise does not store (parent-safe summary, fit, tags), keyed by stable `canonicalKey` and read by the AI scheduler. Mutating a profile clears the in-memory search index so the next search rebuilds with the new profile data.
+
+### `GET /api/tutor-profiles`
+
+List all tutor business profiles. Source: `src/app/api/tutor-profiles/route.ts`.
+
+- **Auth:** `auth()` → `401` (`route.ts:7-10`).
+- **Request:** none.
+- **Response (200):** `{ profiles: TutorBusinessProfile[] }` (`listTutorBusinessProfiles(getDb())`, `route.ts:13-14`).
+- **Errors:** `401`, `500 { "error": "Failed to load tutor profiles" }`.
+
+### `PATCH /api/tutor-profiles/[canonicalKey]`
+
+Upsert a single tutor's editorial profile. Source: `src/app/api/tutor-profiles/[canonicalKey]/route.ts`. The `canonicalKey` path segment is URL-decoded (`route.ts:13-16`).
+
+- **Auth:** `auth()` → `401` (`route.ts:22-25`).
+- **Request body** — Zod `tutorBusinessProfilePatchSchema` (`src/lib/tutor-business-profiles.ts:36-55`, `.strict()`). All fields optional; key fields: `displayName` (1–160), `parentSafeSummary` (≤1200), `internalNotes` (≤3000), `education[]` (≤12), `languages[]` (≤12), `englishProficiency`, `youngLearnerFit`, `youngestComfortableAge` (int 3–20, nullable), `teachingStyleTags[]`/`strengthTags[]`/`curriculumExperience[]` (≤30 each), various `*Notes` (≤2000), `verifiedBy` (≤160, nullable), `lastReviewedAt` (ISO datetime, nullable), `active` (boolean).
+- **Behavior:** resolves the active-snapshot display name for `canonicalKey`; if the tutor is not in the active snapshot → `404 { "error": "Tutor not found in active snapshot" }` (`route.ts:43-47`). On success, `upsertTutorBusinessProfile(...)` then `clearSearchIndex()` (`route.ts:50-52`).
+- **Response (200):** `{ profile }`.
+- **Side effects:** upserts the `tutor_business_profiles` row; **clears the in-memory search index**.
+- **Errors:** `400` (`{ "error": "Invalid JSON" }` / `{ "error": "Invalid request", "details": … }`), `401`, `404`, `500 { "error": "Failed to save tutor profile" }`.
+
+### `POST /api/tutor-profiles/import-preview`
+
+Parse uploaded education/availability workbooks and return a dry-run import preview (matched to active identities + aliases). Source: `src/app/api/tutor-profiles/import-preview/route.ts`. **Multipart form-data**, not JSON.
+
+- **Auth:** `auth()` → `401` (`route.ts:26-29`).
+- **Request (multipart):** `await request.formData()`; on failure → `400 { "error": "Expected multipart form data" }` (`route.ts:31-36`). Fields:
+  - `educationFile` and/or `availabilityFile` — file parts (zero-size treated as absent). At least one is required, else `400 { "error": "Upload at least one tutor profile workbook" }` (`route.ts:48-50`).
+  - `verifiedBy`, `lastReviewedAt` — optional string fields, trimmed-or-null (`route.ts:20-23, 62-63`).
+- **Behavior (read-only):** parses workbooks via `parseTutorProfileImportWorkbooks`, then `buildTutorProfileImportPreview(...)` against active profiles, identities, and aliases.
+- **Response (200):** the preview object (per-row proposed `canonicalKey` + patch + match status).
+- **Errors:** `400`, `401`, `500 { "error": "Failed to preview tutor profile import" }`.
+
+### `POST /api/tutor-profiles/import-commit`
+
+Commit a reviewed batch of profile patches. Source: `src/app/api/tutor-profiles/import-commit/route.ts`. JSON body.
+
+- **Auth:** `auth()` → `401` (`route.ts:20-23`).
+- **Request body** — Zod `importCommitSchema` (`route.ts:12-17`, `.strict()`): `{ rows: Array<{ canonicalKey: string (min 1), patch: tutorBusinessProfilePatchSchema }> }` — `rows` **min 1, max 200**.
+- **Behavior:** for each row, if the `canonicalKey` is not in the active snapshot it is skipped (recorded with reason `"Tutor not found in active snapshot"`); otherwise `upsertTutorBusinessProfile(...)`. If any row saved, `clearSearchIndex()` (`route.ts:47-61`).
+- **Response (200):** `{ savedCount, skipped: Array<{ canonicalKey, reason }>, profiles: <saved profiles> }`.
+- **Side effects:** upserts 0–200 `tutor_business_profiles` rows; **clears the search index** when ≥1 saved.
+- **Errors:** `400` (`{ "error": "Invalid JSON" }` / `{ "error": "Invalid request", "details": … }`), `401`, `500 { "error": "Failed to commit tutor profile import" }`.
+
+---
+
+## Progress Tests
+
+The every-8-classes progress-test tracker. **Reads** are role-scoped: a `teacher` session sees only its own students (the GET resolves the teacher's canonical-key set), an `admin` session sees every enrollment. **All mutations are admin-only** — `requireProgressTestsAdminSession` throws `"Forbidden"` (→ `403`) for a teacher session before any write. The shared error-mapper `progressTestsErrorResponse` maps `"Unauthorized"`→`401`, `"Forbidden"`→`403`, and everything else →`500` (re-throwing Next's hanging-promise rejection) (`src/lib/progress-tests/api.ts:65-88`).
+
+All five mutation routes share the same skeleton: `requireProgressTestsAdminSession()` → `request.json()` (in try/catch → `400 { "error": "Invalid JSON body" }`) → `safeParse()` (→ `400 { "error": <flattened> }`) → service call → `404 { "error": "Enrollment not found" }` when the enrollment is unknown.
+
+### `GET /api/progress-tests`
+
+Dashboard payload. Source: `src/app/api/progress-tests/route.ts`.
+
+- **Auth:** `requireProgressTestsSession()` — `401`/`403` via mapper. Teacher vs admin scoping resolved in-handler (`route.ts:11-13`).
+- **Request:** none.
+- **Response (200):** `ProgressTestsPayload = { rows: ProgressTestRow[], summary: ProgressTestsSummary, subjects: string[], lastSyncedAt: string | null, generatedAt: string }` (`src/lib/progress-tests/types.ts:80-96`). Each `ProgressTestRow` carries cycle counts/threshold/status, the most-frequent tutor, booking state, optional parent LINE contact + recommended slots + prebuilt parent message.
+- **Errors:** `401`, `403`, `500 { "error": "Progress tests load failed" }`.
+
+### `POST /api/progress-tests/book`
+
+Book a progress test for an enrollment (admin-confirmed). Source: `src/app/api/progress-tests/book/route.ts`.
+
+- **Auth:** `requireProgressTestsAdminSession()` — admin-only (`route.ts:17`).
+- **Request body** — Zod `BookProgressTestSchema` (`route.ts:6-13`):
+  | Field | Type | Notes |
+  |---|---|---|
+  | `enrollmentKey` | string (min 1) | required |
+  | `testDate` | ISO datetime (`z.string().datetime()`) | required; parsed to `Date` |
+  | `location` | string | optional → `null` |
+  | `modality` | `"online" \| "offline"` | optional (parsed but not forwarded to the service in this handler) |
+  | `scheduleMethod` | `"after_class" \| "parent_pick"` | defaults to `"parent_pick"` |
+- **Behavior:** `bookTest(...)` derives the session end from `testDate` + default duration and delegates the audited, flag-gated Wise write; then reloads the dashboard row (`route.ts:31-43`). Unknown enrollment → `404 { "error": "Enrollment not found" }`.
+- **Response (200):** `BookProgressTestServiceResult = { status, wiseSessionId: string | null, bookingMode: "wise" | "manual" | null, message, row: ProgressTestRow | null }` (`src/lib/progress-tests/service.ts:313-319`).
+- **Side effects:** writes progress-test cycle/booking state; may perform a flag-gated Wise session write.
+- **Errors:** `400`, `401`, `403`, `404`, `500 { "error": "Progress test booking failed" }`.
+
+### `POST /api/progress-tests/mark-complete`
+
+Manually roll an enrollment's current cycle to complete. Source: `src/app/api/progress-tests/mark-complete/route.ts`.
+
+- **Auth:** admin-only (`route.ts:12`).
+- **Request body** — Zod `MarkCompleteSchema` (`route.ts:6-8`): `{ enrollmentKey: string (min 1) }`.
+- **Behavior:** `markComplete(...)`; unknown enrollment → `404` (`route.ts:26-29`).
+- **Response (200):** `{ row: ProgressTestRow }`.
+- **Errors:** `400`, `401`, `403`, `404`, `500 { "error": "Mark complete failed" }`.
+
+### `POST /api/progress-tests/select-at-home`
+
+Mark the enrollment's progress test as an at-home test (selected). Source: `src/app/api/progress-tests/select-at-home/route.ts`.
+
+- **Auth:** admin-only (`route.ts:12`).
+- **Request body** — Zod `SelectAtHomeSchema` (`route.ts:6-8`): `{ enrollmentKey: string (min 1) }`.
+- **Behavior:** `selectAtHome(...)`; unknown enrollment → `404`.
+- **Response (200):** `{ row: ProgressTestRow }`.
+- **Errors:** `400`, `401`, `403`, `404`, `500 { "error": "Select at-home failed" }`.
+
+### `POST /api/progress-tests/mark-at-home-submitted`
+
+Mark a previously-selected at-home test as submitted. Source: `src/app/api/progress-tests/mark-at-home-submitted/route.ts`.
+
+- **Auth:** admin-only (`route.ts:12`).
+- **Request body** — Zod `MarkAtHomeSubmittedSchema` (`route.ts:6-8`): `{ enrollmentKey: string (min 1) }`.
+- **Behavior:** `submitAtHome(...)`; unknown enrollment → `404`.
+- **Response (200):** `{ row: ProgressTestRow }`.
+- **Errors:** `400`, `401`, `403`, `404`, `500 { "error": "Mark at-home submitted failed" }`.
+
+### `POST /api/progress-tests/resend-email`
+
+Resend the teacher heads-up email for an enrollment (one-off, idempotent per cycle). Source: `src/app/api/progress-tests/resend-email/route.ts`.
+
+- **Auth:** admin-only (`route.ts:12`).
+- **Request body** — Zod `ResendEmailSchema` (`route.ts:6-8`): `{ enrollmentKey: string (min 1) }`.
+- **Behavior:** `resendTeacherEmail(...)` rebuilds a single heads-up from stored cycle fields (reusing the persisted AI summary) and sends it via `runTeacherHeadsUpNotifications` (idempotent per cycle; stamps `teacherNotifiedAt` on success); unknown enrollment → `404` (`src/lib/progress-tests/service.ts:422-449`).
+- **Response (200):** `ResendTeacherEmailServiceResult = { outcome: <per-enrollment send outcome> | null, row: ProgressTestRow | null }` (`service.ts:405-408`).
+- **Side effects:** may send a teacher heads-up email; may stamp `teacherNotifiedAt`.
+- **Errors:** `400`, `401`, `403`, `404`, `500 { "error": "Resend teacher email failed" }`.
+
+---
+
+## Student Promotions
+
+The student grade/course promotion audit + apply pipeline. A **dry-run** builds a proposed set of grade/course writes from the active snapshot; an admin then **verifies** the run (confirming they checked the endpoint), and finally **applies** it (executes the Wise writes). Applies are gated to on/after **July 1, 2026 Bangkok time** for the `admin` trigger. The shared error-mapper `studentPromotionErrorResponse` maps `"Unauthorized"`→`401`, any `/not found/i` message →`404`, any message matching `/(required|cannot|only|no verified|no pending|before July 1)/i` →`400`, else →`500` (`src/lib/student-promotions/api.ts:29-56`).
+
+Auth for all five routes: `requireStudentPromotionSession()` (`src/lib/student-promotions/api.ts:9-15`) — requires a session with email+name, else throws `"Unauthorized"` → `401`. The `[runId]` routes additionally resolve the path param via `requireStudentPromotionRunId(context)`, which throws `"Student promotion run id is required"` (→ `400` by the mapper) when absent/blank (`api.ts:17-27`).
+
+### `GET /api/student-promotions/runs`
+
+Load the latest run's detail. Source: `src/app/api/student-promotions/runs/route.ts`. `maxDuration = 800`.
+
+- **Auth:** session-required (`route.ts:9`).
+- **Request:** none.
+- **Response (200):** `{ detail: StudentPromotionRunDetail | null }` — `null` when no run has ever been created (`getLatestStudentPromotionRunDetail`, `src/lib/student-promotions/data.ts:519`). `StudentPromotionRunDetail = { run, gradeActions[], courseActions[], summary: { pending/skipped/applied/failed × grade/course actions } }` (`data.ts:38-52`).
+- **Errors:** `401`, `500 { "error": "Failed to load student promotion run" }`.
+
+### `POST /api/student-promotions/runs`
+
+Create a new dry-run audit. Source: `src/app/api/student-promotions/runs/route.ts`. `maxDuration = 800`.
+
+- **Auth:** session-required; the resolved `{ email, name }` becomes the run actor (`route.ts:18`).
+- **Request:** none (no body).
+- **Behavior:** `createStudentPromotionDryRun({ actor })` — fetches the active snapshot's students/packages + Wise registration state and computes proposed grade/course actions (no Wise writes).
+- **Response (201):** `{ detail: StudentPromotionRunDetail }` (`route.ts:19`).
+- **Side effects:** inserts a `student_promotion_runs` row + grade/course action rows (all `pending`/`skipped`, none applied).
+- **Errors:** `401`, `500 { "error": "Student promotion audit failed" }`.
+
+### `GET /api/student-promotions/runs/[runId]`
+
+Load a specific run's detail. Source: `src/app/api/student-promotions/runs/[runId]/route.ts`.
+
+- **Auth:** session-required; resolves `runId` from the path (`route.ts:15-16`).
+- **Request:** none.
+- **Response (200):** `{ detail: StudentPromotionRunDetail }`. An unknown `runId` throws `"Student promotion run not found"` → mapped to `404` (`data.ts:489`).
+- **Errors:** `400` (missing run id), `401`, `404` (unknown run), `500 { "error": "Failed to load student promotion run" }`.
+
+### `POST /api/student-promotions/runs/[runId]/verify`
+
+Mark a dry-run as verified (records the admin's endpoint-verification confirmation + optional note). Source: `src/app/api/student-promotions/runs/[runId]/verify/route.ts`.
+
+- **Auth:** session-required; resolves `runId` (`route.ts:15-16`).
+- **Request body** (hand-parsed, not Zod; a JSON parse failure is swallowed to `{}`, `route.ts:17`):
+  | Field | Type | Notes |
+  |---|---|---|
+  | `endpointVerificationConfirmed` | boolean | **must be `true`**, else `400 { "error": "Endpoint verification confirmation is required" }` (`route.ts:23-25`) |
+  | `endpointVerificationNote` | string | optional; non-strings coerced to `""` |
+- **Behavior:** `verifyStudentPromotionRun({ runId, actor, endpointVerificationNote })` — flips the run to a verified state.
+- **Response (200):** `{ detail: StudentPromotionRunDetail }`.
+- **Side effects:** updates the run row's verification fields.
+- **Errors:** `400` (missing run id / unconfirmed / guard messages), `401`, `404` (unknown run), `500 { "error": "Student promotion verification failed" }`.
+
+### `POST /api/student-promotions/runs/[runId]/apply`
+
+Apply a verified run — execute the Wise grade/course promotion writes. Source: `src/app/api/student-promotions/runs/[runId]/apply/route.ts`. `maxDuration = 800`.
+
+- **Auth:** session-required; resolves `runId`; actor recorded (`route.ts:17-18`).
+- **Request body** (hand-parsed; parse failure swallowed to `{}`, `route.ts:19`): `{ confirm: "apply-student-promotions" }` — the literal string is required, else `400 { "error": "Apply confirmation is required" }` (`route.ts:20-22`).
+- **Behavior:** `applyVerifiedStudentPromotionRun({ runId, actor, trigger: "admin" })`. **Date gate:** throws `"Student promotions cannot be applied before July 1, 2026 Bangkok time"` (→ `400`) for an admin trigger before the target date (`data.ts:734`). Requires a verified run, else `"No verified student promotion run found"` → `404`-ish (mapped to `404` by `/not found/i`, `data.ts:803`).
+- **Response (200):** `{ detail: StudentPromotionRunDetail }` with applied/failed action counts in `summary`.
+- **Side effects:** **executes Wise writes** (grade + course promotions, rate-limited at concurrency 3); updates action rows to `applied`/`failed`.
+- **Errors:** `400` (missing run id / missing confirm / before-July-1 / other guard messages), `401`, `404` (no verified run), `500 { "error": "Student promotion apply failed" }`.
+
+---
+
+## Leave Requests
+
+> **Status:** the entire Leave Requests feature is present in the working tree but **uncommitted** at this revision (per the feature docs). The route handlers under `src/app/api/leave-requests/` are documented here; the underlying `src/lib/leave-requests/**` is the in-flight source.
+
+Tutor leave-request triage: pull leave-form rows from a Google Sheet, match to a Wise identity, compute affected sessions, give admins a worklist + sheet-status writeback + dry-run Wise-cancel preview. These handlers check `!session?.user?.email` (not just `!session`). JSON `POST`/`PATCH` bodies are parsed leniently — a parse failure becomes `{}`, never a `400`.
+
+### `GET /api/leave-requests`
+
+List/filter leave requests (+ Google Sheets connection status). Source: `src/app/api/leave-requests/route.ts`.
+
+- **Auth:** `!session?.user?.email` → `401` (`route.ts:8-11`).
+- **Query params** (all optional, read from `request.nextUrl.searchParams`, `route.ts:13-21`): `status`, `q` (free-text search), `startDate`, `endDate`, `summaryOnly` (`"true"` → boolean).
+- **Behavior:** `listLeaveRequests(getDb(), …)` plus `getGoogleTokenStatus(session.user.email)`.
+- **Response (200):** the list payload spread with `{ ...data, googleSheets }` (rows/summary + the connected-token status).
+- **Errors:** `401`, `500 { "error": "Leave request query failed" }`.
+
+### `POST /api/leave-requests/sync`
+
+Manually trigger a leave-request sync from the Google Sheet. Source: `src/app/api/leave-requests/sync/route.ts`. `maxDuration = 800`.
+
+- **Auth:** `!session?.user?.email` → `401` (`route.ts:9-12`).
+- **Request body** (lenient JSON → `{}` on failure): optional `{ connectedEmail?: string }` — the Google account whose token to use (`route.ts:14-27`).
+- **Behavior:** `syncLeaveRequests(getDb(), { triggerType: "manual", actorEmail, actorName, connectedEmail })`. Single-flight: a concurrent run throws `LeaveRequestSyncAlreadyRunningError`.
+- **Response (200):** `{ ok: true, result }`.
+- **Side effects:** runs the leave-request ingest/match pipeline; writes sync-run + request rows; may write sheet status back.
+- **Errors:** `401`, `409 { "error": <already-running message> }` on a concurrent run (`route.ts:31-33`), `500 { "error": "Leave request sync failed" }`.
+
+### `GET /api/leave-requests/[requestId]`
+
+Fetch one leave-request's detail (request + affected sessions + activity). Source: `src/app/api/leave-requests/[requestId]/route.ts`.
+
+- **Auth:** `!session?.user?.email` → `401` (`route.ts:15-18`).
+- **Request:** `requestId` from the path; no body.
+- **Behavior:** `getLeaveRequestDetail(getDb(), requestId)`; `null` → `404 { "error": "Not found" }` (`route.ts:20-23`).
+- **Response (200):** the detail object.
+- **Errors:** `401`, `404`. (No explicit `try/catch` around the lookup — an unexpected throw surfaces as the framework's default.)
+
+### `PATCH /api/leave-requests/[requestId]`
+
+Update a leave-request's workflow status / staff note / sheet-status text, with optional sheet-write retry. Source: `src/app/api/leave-requests/[requestId]/route.ts`.
+
+- **Auth:** `!session?.user?.email` → `401` (`route.ts:27-30`).
+- **Request body** (lenient JSON → `{}`; hand-validated, not Zod), fields read at `route.ts:39-43, 54-63`:
+  | Field | Type | Notes |
+  |---|---|---|
+  | `workflowStatus` | string | if present, must be in `LEAVE_WORKFLOW_STATUSES`, else `400 { "error": "Invalid workflow status" }` |
+  | `staffNote` | string \| `null` | tri-state: string sets, `null` clears, absent leaves unchanged |
+  | `sheetStatusText` | string \| `null` | applied only when the key is present (own-property check) |
+  | `retrySheetWrite` | boolean | `true` retries the Sheets writeback |
+- **Behavior:** resolves a `connectedEmail` (best-effort; failure → `null`), then `updateLeaveRequestWorkflow(...)`; an unknown request → `404 { "error": "Not found" }` (`route.ts:45-66`).
+- **Response (200):** `{ ok: true, ...result }`.
+- **Side effects:** updates the request row; may write status back to the Google Sheet.
+- **Errors:** `400` (invalid workflow status), `401`, `404`, `500 { "error": "Leave request update failed" }`.
+
+### `POST /api/leave-requests/[requestId]/wise-cancel-preview`
+
+Build a **dry-run** preview of the Wise session cancellations a leave would imply (no Wise writes). Source: `src/app/api/leave-requests/[requestId]/wise-cancel-preview/route.ts`.
+
+- **Auth:** `!session?.user?.email` → `401` (`route.ts:9-12`).
+- **Request body** (lenient JSON → `{}`): `{ affectedSessionIds?: string[] }` — non-string entries filtered out; defaults to `[]` (`route.ts:20-23`).
+- **Behavior:** `createWiseCancelPreview(getDb(), requestId, { affectedSessionIds, actorEmail, actorName })`.
+- **Response (200):** `{ ok: true, detail }`.
+- **Side effects:** records the preview attempt (audit); **does not** cancel anything in Wise.
+- **Errors:** `401`; **any** thrown error → `400 { "error": <message or "Wise cancel preview failed"> }` (this route uses `400`, not `500`, as its catch-all, `route.ts:33-36`).
+
+---
+
+## Home / Ops Hub
+
+The landing-page summary that powers the Ops Hub at `/` and the top-nav badge counts. Read-only; access-filtered to the viewer's `allowedPages`. For *what* the hub is, see [docs/features/ops-hub.md](../../features/ops-hub.md).
+
+### `GET /api/home/summary`
+
+Aggregate operational signals for the home page: per-queue action counts + a data-freshness strip. Source: `src/app/api/home/summary/route.ts`.
+
+- **Auth:** `auth()` → `401 { "error": "Unauthorized" }` when `!session?.user?.email` (`route.ts:7-10`). This path is explicitly allowlisted in the middleware (`src/middleware.ts:27`) so it bypasses page-level `allowedPages` redirects for restricted users, but the handler still enforces a session and the payload is itself access-filtered.
+- **Request:** none (no query params, no body).
+- **Behavior:** delegates to `getHomeSummaryPayload({ allowedPages, email }, getDb())` (`src/lib/home/summary.ts`). Each of the seven action queues is loaded only when the viewer can access its page (`canAccessHref`); each source is wrapped fail-soft so one failure marks only that queue's card `status: "error"` (value `null`) without failing the request.
+- **Response (200):** `HomeSummaryPayload` (`src/lib/home/summary.ts:53-57`):
+  - `generatedAt` — ISO timestamp.
+  - `actions[]` — accessible queues only, each `{ id: NavBadgeKey, toolId, label, href, value: number | null, detail, status: "ok" | "error", error: string | null }`. Possible `id`s: `leaveRequests`, `lineReviews`, `progressTests`, `creditControl`, `payroll`, `wiseReconciliation`, `dataHealth`.
+  - `freshness` — `{ status: "ok" | "error", checkedAt, overallStatus, overallHeadline, staleAgeMs, staleMinutes, wiseSnapshotLastSuccess, cronCounts: { healthy, late, failing, running, manualOnly, unknown }, googleSheets: { connected, writeConnected, email, lastError }, error }` (sourced from the Data Health payload + the viewer's Google OAuth token status; degrades to a zeroed error shape when Data Health is unavailable).
+- **Errors:** `401`, `500 { "error": <err.message or "Home summary failed"> }` (`route.ts:17-20`).
 
 ---
 
 ## Data Health
 
+Sync status, snapshot stats, and the cron/job runner that lets an admin trigger background jobs from the dashboard.
+
 ### `GET /api/data-health`
 
-Operations command payload for the data-health dashboard. Source: `src/app/api/data-health/route.ts`.
+Dashboard payload (sync status, snapshot stats, normalization-issue counts). Source: `src/app/api/data-health/route.ts`.
 
-- **Auth:** `auth()` → `401`.
-- **Request:** no parameters.
-- **Behavior:** delegates to `getDataHealthDashboardPayload`, which aggregates `cron_invocations`, the feature run ledgers, the active Wise snapshot, snapshot stats, and unresolved data issues. It preserves stale-banner fields (`staleAgeMs`, `lastSuccessfulSync`, etc.) at the top level.
-- **Response** (`200`):
-  ```json
-  {
-    "overall": { "status": "healthy", "headline": "", "detail": "" },
-    "cronJobs": [],
-    "dataDomains": [],
-    "wiseSnapshot": {},
-    "issueSummary": {},
-    "issueDetails": {
-      "unresolvedAliases": [],
-      "unresolvedModality": [],
-      "unmappedTags": []
-    },
-    "recentRuns": [],
-    "lastSuccessfulSync": "<ISO|null>",
-    "staleAgeMs": 0
-  }
-  ```
-- **Errors:** `500 { "error": <message | "Data health failed"> }`.
+- **Auth:** `auth()` → `401` (`route.ts:15-18`).
+- **Request:** none.
+- **Response (200):** `getDataHealthDashboardPayload()` — sync-run summary + snapshot metrics + normalization issues. (This module also re-exports a `selectModalityIssues` helper for tests; it is not part of the HTTP surface.)
+- **Errors:** `401`, `500 { "error": "Data health failed" }`.
 
 ### `POST /api/data-health/jobs/[jobKey]/run`
 
-Session-gated manual trigger for registered data-health jobs. Source: `src/app/api/data-health/jobs/[jobKey]/run/route.ts`.
+Manually run a registered background job from the data-health dashboard. Source: `src/app/api/data-health/jobs/[jobKey]/run/route.ts`.
 
-- **Auth:** `auth()` with an email → `401`.
-- **Request body:** `{ "confirmed": true }` is required for dangerous jobs (`classroom_morning`, `classroom_admin_email`).
-- **Behavior:** validates `jobKey` against the typed cron registry, then calls `runDataHealthJob`. The job runner records a `cron_invocations` row with `triggerSource = "admin"` and calls the same underlying sync/automation helpers as the cron routes.
-- **Responses:**
-  - `200`/`202`/`500` — forwarded from the underlying job runner.
-  - `404 { "error": "Unknown job" }`
-  - `409 { "error": "Confirmation required" }` for dangerous jobs without confirmation.
+- **Auth:** `!session?.user?.email` → `401` (`route.ts:11-14`).
+- **Path param:** `jobKey` — must resolve via `getCronJobDefinition(jobKey)`; an unknown key → `404 { "error": "Unknown job" }` (`route.ts:16-20`). Valid `CronJobKey` values: `wise_snapshot`, `wise_activity`, `sales_dashboard`, `credit_control`, `progress_tests`, `progress_tests_digest`, `leave_requests`, `classroom_morning`, `classroom_admin_email`, `student_promotions_july_1`, `room_utilization` (`src/lib/data-health/cron-registry.ts:3-14`).
+- **Request body** (lenient JSON → `{}`): `{ confirmed?: boolean }`. For a job flagged `dangerous: true` (`classroom_morning`, `classroom_admin_email`, `student_promotions_july_1`), `confirmed !== true` → `409 { "error": "Confirmation required", "confirmationLabel": <job.confirmationLabel> }` (`route.ts:22-31`).
+- **Behavior:** dispatches to `runDataHealthJob(jobKey, actorEmail)`, wrapped in a cron-invocation audit (`triggerSource: "admin"`). Each branch returns its own status:
+  - `wise_snapshot` → delegates to `runWiseSyncRequest()`.
+  - `wise_activity`, `leave_requests` → `200 { ok: true, result }`; a single-flight collision → `409`.
+  - `sales_dashboard` → `200 { ok: true, results, projectionResult }`.
+  - `credit_control` → delegates to `runCreditControlSyncRequest()`.
+  - `classroom_morning` → returns the automation result (`500 { ok: false, error }` on throw).
+  - `classroom_admin_email` → returns the email result (`500` when `status === "failed"`).
+  - `room_utilization` → `200 { ok: true, ...result }`.
+  - **`progress_tests`, `progress_tests_digest`, `student_promotions_july_1`** have **no executor branch** in `runDataHealthJob` and fall through to `404 { "error": "Unknown job" }` (`src/lib/data-health/run-job.ts:121`) — even though `getCronJobDefinition` recognizes them (so the route-level 404 and dangerous-confirmation checks still apply first). See [open questions](#open-questions-recorded-during-documentation).
+- **Side effects:** whatever the dispatched job does (Wise snapshot sync, sales/credit/leave/room imports, classroom automation + email). Always writes a cron-invocation audit row.
+- **Errors:** `401`, `404` (unknown key, or an unimplemented executor branch), `409` (unconfirmed dangerous job, or a single-flight collision inside a job), `500` (per-branch failures).
 
 ---
 
@@ -206,134 +480,21 @@ Session-gated manual trigger for registered data-health jobs. Source: `src/app/a
 
 ### `POST /api/admin/sync-wise`
 
-Manually trigger a full Wise snapshot sync from an **admin session** (distinct from the `CRON_SECRET`-protected `/api/internal/sync-wise`). Source: `src/app/api/admin/sync-wise/route.ts`.
+Admin-session trigger for a full Wise snapshot sync (the same pipeline the cron runs, but session-gated rather than `CRON_SECRET`-gated). Source: `src/app/api/admin/sync-wise/route.ts`. `maxDuration = 800`.
 
-- **Auth:** `auth()` → `401`. **No** `CRON_SECRET` check — this is the session-gated trigger (`route.ts:8-12`).
-- **Function config:** `export const maxDuration = 800` (`route.ts:5`).
-- **Request body:** none — `POST()` takes no parameters and does not read the request.
-- **Behavior:** delegates to `runWiseSyncRequest()` (`route.ts:14`, `src/lib/sync/run-wise-sync.ts:142`), which acquires a single-flight sync run (failing any `running` row stuck > 20 min) and either skips or runs `runFullSync(...)`. On success it calls `revalidateTag("snapshot", { expire: 0 })` (`run-wise-sync.ts:160-162`).
-- **Responses** (returned by `runWiseSyncRequest`, `run-wise-sync.ts:148-166`):
-  - **`202 Accepted`** — a sync is already running; body is the skip-guard object (includes `skipped: true` and the in-flight `syncRunId`).
-  - **`200 OK`** — sync ran and `result.success === true`; body is the `runFullSync` result merged with `staleRunningSyncsFailed`.
-  - **`500`** — sync ran but `result.success === false`; same merged body shape with `success: false`.
-  - **`401`** — no admin session.
-
-> The Vercel cron drives `/api/internal/sync-wise`, not this route. See the Internal/Cron group for the cron-secret endpoint.
+- **Auth:** `auth()` → `401` when no session (`route.ts:9-12`). Any allowed session may trigger it (no extra role check beyond session presence).
+- **Request:** none (no body).
+- **Behavior:** `runWiseSyncRequest()` wrapped in `withCronInvocationAudit({ jobKey: "wise_snapshot", triggerSource: "admin", actorEmail, requestMethod: "POST" }, …)` (`route.ts:15-23`). The single-flight guard lives inside `runWiseSyncRequest`; on success it revalidates the `snapshot` cache tag.
+- **Response:** the `runWiseSyncRequest()` result (sync-run outcome) — status/body determined by that function.
+- **Side effects:** runs the full fetch → normalize → persist → validate → atomic-promote pipeline; writes a `sync_runs` row + a cron-invocation audit row; on success promotes a new active snapshot and sweeps the `snapshot` cache tag.
+- **Errors:** `401`; otherwise whatever `runWiseSyncRequest()` returns.
 
 ---
 
-## Tutor Profiles
+## Open questions (recorded during documentation)
 
-Tutor business-profile records (parent-safe summary, education, languages, teaching-style/strength tags, young-learner fit, etc.) with single-record edit and a two-step bulk import. Profiles are keyed by `canonicalKey`. Saving a profile clears the in-memory search index so the next search picks up the change.
+- **`progress_tests`, `progress_tests_digest`, and `student_promotions_july_1` are registry keys with no executor.** `getCronJobDefinition` recognizes all three (so `POST /api/data-health/jobs/[jobKey]/run` passes its route-level 404 check, and the two `dangerous` ones still demand `confirmed: true`), but `runDataHealthJob` has no branch for them and falls through to `404 { "error": "Unknown job" }` (`src/lib/data-health/run-job.ts`; keys at `cron-registry.ts:97-191`). So a confirmed run of `student_promotions_july_1` from the dashboard returns a confusing 404 rather than applying promotions (the real apply path is `POST /api/student-promotions/runs/[runId]/apply`). Intentional (these jobs are cron-only / triggered elsewhere) or a gap? The same three keys do appear in the dashboard's status registry.
+- **`GET /api/leave-requests/[requestId]` has no `try/catch`.** Unlike its sibling `PATCH`, the GET handler calls `getLeaveRequestDetail` without a guard, so an unexpected DB error surfaces as the framework default rather than a `500 { "error": … }`. Minor inconsistency; likely fine since the read is simple.
+- **`POST /api/progress-tests/book` accepts `modality` but drops it.** The Zod schema parses `modality: "online" | "offline"` (`book/route.ts:10`), but the handler never forwards it to `bookTest(...)` (`route.ts:31-37`). Either dead input or a missed wiring — worth confirming whether modality should influence the booked Wise session.
 
-### `GET /api/tutor-profiles`
-
-List all tutor business profiles. Source: `src/app/api/tutor-profiles/route.ts`.
-
-- **Auth:** `auth()` → `401` (`route.ts:7-10`).
-- **Request:** no parameters.
-- **Behavior:** `listTutorBusinessProfiles(getDb())` (`route.ts:13`).
-- **Response** (`200`): `{ profiles: TutorBusinessProfileListItem[] }` (`route.ts:14`, item shape at `src/lib/tutor-business-profiles.ts:93`).
-- **Errors:** `500 { "error": <message | "Failed to load tutor profiles"> }` (`route.ts:15-18`).
-
-### `PATCH /api/tutor-profiles/[canonicalKey]`
-
-Update (upsert) one tutor's business profile, addressed by canonical key. Source: `src/app/api/tutor-profiles/[canonicalKey]/route.ts`.
-
-- **Auth:** `auth()` → `401` (`route.ts:22-25`).
-- **Path param:** `canonicalKey` — URL-decoded from `ctx.params` (`route.ts:13-16, 43`).
-- **Request body** — Zod `tutorBusinessProfilePatchSchema` (`src/lib/tutor-business-profiles.ts:36-56`), `.strict()`. All fields optional; notable ones: `displayName` (1–160), `parentSafeSummary` (≤1200), `internalNotes` (≤3000), `education[]`/`languages[]` (≤12 each), `englishProficiency`, `youngLearnerFit`, `youngestComfortableAge` (int 3–20, nullable), `teachingStyleTags[]`/`strengthTags[]`/`curriculumExperience[]` (≤30, each tag 1–80), free-text note fields, `verifiedBy` (nullable), `lastReviewedAt` (ISO datetime, nullable), `active` (boolean).
-- **Behavior:** resolves the active display name for the key; if the tutor is not in the active snapshot returns `404 { "error": "Tutor not found in active snapshot" }` (`route.ts:44-47`). Otherwise upserts via `upsertTutorBusinessProfile(...)` and calls `clearSearchIndex()` (`route.ts:50-51`).
-- **Response** (`200`): `{ profile }` (`route.ts:52`).
-- **Errors:** `400 Invalid JSON` / `400 Invalid request` / `404` (not in snapshot) / `500 { "error": <message | "Failed to save tutor profile"> }` (`route.ts:53-56`).
-
-### `POST /api/tutor-profiles/import-preview`
-
-Dry-run a bulk profile import from uploaded workbooks; returns the match analysis without writing anything. Source: `src/app/api/tutor-profiles/import-preview/route.ts`.
-
-- **Auth:** `auth()` → `401` (`route.ts:26-29`).
-- **Request body** — **multipart form data** (not JSON). A non-form body returns `400 { "error": "Expected multipart form data" }` (`route.ts:31-36`). Fields read (`route.ts:40-64`):
-  - `educationFile` and/or `availabilityFile` — `.xlsx`-style workbooks (read as `File`). At least one is required, else `400 { "error": "Upload at least one tutor profile workbook" }` (`route.ts:48-50`).
-  - `verifiedBy`, `lastReviewedAt` — optional string metadata.
-- **Behavior:** parses the workbooks (`parseTutorProfileImportWorkbooks`) and builds a preview against active profiles, identities, and aliases (`buildTutorProfileImportPreview`) — `route.ts:52-64`. No DB writes.
-- **Response** (`200`) — `TutorProfileImportPreview` (`src/lib/tutor-profile-import.ts:102-117`): `{ summary: { educationRows, availabilityRows, matchedRows, unmatchedRows, duplicateSourceRows, availabilityOnlyRows, invalidRows, ambiguousRows }, rows: matched[], unmatchedRows[], ambiguousRows[], duplicateSourceRows: string[], availabilityOnlyRows: string[] }`.
-- **Errors:** `400` (bad form / no workbook) / `500 { "error": <message | "Failed to preview tutor profile import"> }` (`route.ts:67-70`).
-
-### `POST /api/tutor-profiles/import-commit`
-
-Commit a previewed bulk import — upserts the supplied per-tutor patches. Source: `src/app/api/tutor-profiles/import-commit/route.ts`.
-
-- **Auth:** `auth()` → `401` (`route.ts:20-23`).
-- **Request body** — Zod `importCommitSchema` (`route.ts:12-17`), `.strict()`: `{ rows: [{ canonicalKey: string(≥1), patch: tutorBusinessProfilePatchSchema }] }`, `rows` length **1–200**.
-- **Behavior:** loads active profiles into a `canonicalKey → profile` map; for each row, if the key is not in the active snapshot it is recorded in `skipped` (`reason: "Tutor not found in active snapshot"`), otherwise `upsertTutorBusinessProfile(...)` runs (`route.ts:42-59`). If anything was saved, `clearSearchIndex()` is called (`route.ts:61`).
-- **Response** (`200`): `{ savedCount: number, skipped: [{ canonicalKey, reason }], profiles: <saved profiles> }` (`route.ts:62`).
-- **Errors:** `400 Invalid JSON` / `400 Invalid request` / `500 { "error": <message | "Failed to commit tutor profile import"> }` (`route.ts:63-66`).
-
----
-
-## Leave Requests
-
-Teacher leave-request review: list with KPI cards, single-request detail, workflow status/note updates (with optional Google-Sheets writeback), a manual sync trigger, and a **preview-only** Wise session-cancellation helper. All four handlers require a session *with an email*.
-
-> The business logic lives in `src/lib/leave-requests/**` (data + sync). This page documents the route surface; see the feature docs for lifecycle and matching rules.
-
-### `GET /api/leave-requests`
-
-List leave requests with summary cards and the connected-Google-Sheets status. Source: `src/app/api/leave-requests/route.ts`.
-
-- **Auth:** `auth()` requiring `session.user.email` → `401` (`route.ts:8-11`).
-- **Query params** (all optional; read off `request.nextUrl.searchParams`, `route.ts:13-21`) → `LeaveRequestListFilters` (`src/lib/leave-requests/data.ts:20-26`): `status`, `q` (free-text search), `startDate`, `endDate`, and `summaryOnly` (the literal string `"true"`).
-- **Behavior:** `listLeaveRequests(db, filters)` (`route.ts:15`, `data.ts:112`) then `getGoogleTokenStatus(session.user.email)` (`route.ts:22`). When `summaryOnly` is true the `requests` array is empty (cards/timeline only); the row limit is 200 vs 500 (`data.ts:119, 139`).
-- **Response** (`200`): `{ cards: { total, new, needsReview, sheetWriteFailed, affectedClasses }, unreadActionCount, timeline, requests: [...], googleSheets: <token status> }` (`data.ts:121-168`, merged at `route.ts:23`). Each request row carries normalized leave fields, `workflowStatus`, `staffNote`, `sheetWriteStatus`, `affectedClassCount`, `cancellationPreviewCount`, `unread`, etc.
-- **Errors:** `500 { "error": <message | "Leave request query failed"> }` (`route.ts:24-27`).
-
-### `POST /api/leave-requests/sync`
-
-Manually trigger a leave-requests sync (read from the source sheet + normalize). Source: `src/app/api/leave-requests/sync/route.ts`.
-
-- **Auth:** `auth()` requiring `session.user.email` → `401` (`route.ts:9-12`).
-- **Function config:** `export const maxDuration = 800` (`route.ts:6`).
-- **Request body:** optional JSON; a parse failure is treated as `{}` (no 400). Reads `connectedEmail` (string) when present (`route.ts:14-27`).
-- **Behavior:** `syncLeaveRequests(db, { triggerType: "manual", actorEmail, actorName, connectedEmail })` (`route.ts:23-28`).
-- **Response** (`200`): `{ ok: true, result: <sync result> }` (`route.ts:29`).
-- **Errors:** **`409`** `{ "error": <message> }` when a sync is already running (`LeaveRequestSyncAlreadyRunningError`, `route.ts:31-33`); otherwise `500 { "error": <message | "Leave request sync failed"> }` (`route.ts:34-35`).
-
-### `GET /api/leave-requests/[requestId]`
-
-Fetch one leave request with its affected sessions and activity log. Source: `src/app/api/leave-requests/[requestId]/route.ts`.
-
-- **Auth:** `auth()` requiring `session.user.email` → `401` (`route.ts:15-18`).
-- **Path param:** `requestId` (from `context.params`, `route.ts:20`).
-- **Behavior:** `getLeaveRequestDetail(db, requestId)` (`route.ts:21`, `data.ts:171`).
-- **Response** (`200`): the detail object. **`404 { "error": "Not found" }`** when the request does not exist (`route.ts:22`).
-- **Errors:** the GET handler has no `try/catch`; a thrown DB error propagates to the framework (no explicit 500 envelope).
-
-### `PATCH /api/leave-requests/[requestId]`
-
-Update a leave request's workflow status / staff note, with optional Google-Sheets writeback. Source: `src/app/api/leave-requests/[requestId]/route.ts`.
-
-- **Auth:** `auth()` requiring `session.user.email` → `401` (`route.ts:27-30`).
-- **Path param:** `requestId` (`route.ts:32`).
-- **Request body:** JSON; a parse failure is treated as `{}` (no 400). Validated inline (no Zod), reading (`route.ts:39-62`):
-  - `workflowStatus` — must be one of `LEAVE_WORKFLOW_STATUSES` (`new`, `needs_review`, `in_progress`, `done`, `ignored`, `canceled_by_tutor` — `data.ts:9-16`); an invalid value returns `400 { "error": "Invalid workflow status" }` (`route.ts:41-43`).
-  - `staffNote` — string, or `null` to clear, or omitted to leave unchanged.
-  - `sheetStatusText` — present (string or `null`) toggles a sheet write.
-  - `retrySheetWrite` — `true` to retry a failed sheet write.
-- **Behavior:** resolves the connected Google email (best-effort), then `updateLeaveRequestWorkflow(db, requestId, {...})` (`route.ts:46-64`, `data.ts:332`). The helper marks the row read, sets `sheetWriteStatus: "pending"` when a write is implied, and appends a `status_update` activity-log entry.
-- **Response** (`200`): `{ ok: true, ...result }`. **`404 { "error": "Not found" }`** when the request does not exist (`route.ts:65-66`).
-- **Errors:** `500 { "error": <message | "Leave request update failed"> }` (`route.ts:67-70`).
-
-### `POST /api/leave-requests/[requestId]/wise-cancel-preview`
-
-Preview the Wise session-cancellation actions for a leave request. **Preview only — no Wise mutation is sent.** Source: `src/app/api/leave-requests/[requestId]/wise-cancel-preview/route.ts`.
-
-- **Auth:** `auth()` requiring `session.user.email` → `401` (`route.ts:9-12`).
-- **Path param:** `requestId` (`route.ts:26`).
-- **Request body:** JSON (parse failure → `{}`). Reads `affectedSessionIds` — only string entries are kept (`route.ts:14-23`).
-- **Behavior:** `createWiseCancelPreview(db, requestId, { affectedSessionIds, actorEmail, actorName })` (`route.ts:27-31`, `data.ts:443`). The helper requires at least one valid session id (throws otherwise), sets `cancelPreviewSelected` on the chosen `leaveRequestAffectedSessions` rows, builds dry-run `DELETE` endpoint descriptors (each tagged `manualRequired: true`), updates `cancellationPreviewCount`, and writes a `wise_cancel_preview` activity-log entry with `status: "manual_required"` and `policy: "preview_only_manual_required"`. It then returns the refreshed detail via `getLeaveRequestDetail` (`data.ts:448-502`).
-- **Response** (`200`): `{ ok: true, detail: <refreshed leave-request detail> }` (`route.ts:32`).
-- **Errors:** this handler returns **`400`** on *any* thrown error (e.g. "Select at least one affected session." or "Selected affected sessions were not found.") — `route.ts:33-36` — not 500.
-
----
-
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

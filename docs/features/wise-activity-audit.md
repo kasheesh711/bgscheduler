@@ -4,127 +4,120 @@
 
 ## Purpose
 
-The Wise Activity Audit is a read-only audit log of operational and financial events that occurred inside the Wise platform (`begifted-education` tenant), plus a package-sales reconciliation workbench that cross-checks the Sales Dashboard sheet against Wise's own money records.
+Wise Activity Audit is a **read-only audit log** of operational and financial events emitted by the Wise platform, plus a **package-sales reconciliation** workbench that cross-checks the Sales Dashboard's recorded sales against money Wise actually saw. Admin/finance staff use the `/wise-activity` page (nav label "Wise Audit") to answer questions Wise's own UI makes tedious: who changed/created/cancelled a session and when, what billing/payment/payout events landed in a window, and — in reconciliation mode — which monthly package-sale rows have a matching Wise receipt versus which need a human to look.
 
-It answers two distinct questions for admin/finance staff:
-
-1. **"What happened in Wise, and who did it?"** — a filterable timeline of session mutations (created/updated/cancelled/deleted), billing/invoice/payout events, user and classroom changes, etc., with full raw payloads for forensic inspection.
-2. **"Does our Sales Dashboard match what Wise actually charged?"** — a reconciliation view that scores Wise receipt transactions as candidate evidence for each package-sale row and surfaces a sheet-vs-Wise revenue variance.
-
-Crucially, this feature is **separate from and independent of the snapshot sync** that powers tutor search. It never writes back to Wise and never participates in snapshot promotion. It maintains its own append-only event store (`wise_activity_events`) and its own sync-run ledger (`wise_activity_sync_runs`). The reconciliation surface is explicitly review-only: it produces ranked candidates and variance figures but never auto-marks a sale as "matched" (verified by `src/components/wise-activity/__tests__/reconciliation-ui.test.ts:37`–`:38`, which assert the workspace source contains no "Mark as matched"/"Save match" controls).
-
-Users: the allowlisted admin staff. The page is reached through the "Wise Audit" nav link (`src/components/layout/app-nav.tsx:31`) and requires a signed-in session (`src/app/(app)/wise-activity/page.tsx:8`); the whole app sits behind the admin allowlist enforced in middleware/auth.
+The feature is deliberately **independent of the tutor snapshot sync**. It maintains its own append-only event store and its own sync-run ledger, it never participates in snapshot promotion or the in-memory search index, and it never writes back to Wise. Both backing tables survive snapshot rotation (they are snapshot-independent), so the audit history is continuous across tutor-data refreshes. The page header reads "Wise Audit" with the subtitle "Ops and finance activity from persisted Wise logs" ([`wise-activity-workspace.tsx:739-740`](../../src/components/wise-activity/wise-activity-workspace.tsx)).
 
 ## Conceptual data model
 
-This feature owns two tables and **reads** from several others belonging to neighbouring features.
+Two tables are **owned** by this feature, both snapshot-independent (they are not keyed by `snapshot_id` and persist across tutor-snapshot rotation):
 
-Owned (read + write):
+- **`wise_activity_events`** — the append-only audit store. One row per Wise event, keyed by Wise's `eventId` (a unique index makes ingestion idempotent). Each row denormalizes the fields the UI filters and displays — event type/name, timestamp, actor, classroom, session, and transaction columns — and keeps the full `payload` and `raw` JSON for the detail drawer. Written only by the sync pipeline; read by the list/summary endpoints and by reconciliation.
+- **`wise_activity_sync_runs`** — the sync-run ledger. One row per ingest attempt with `status` (`running`/`success`/`failed`), trigger type, page/event/insert counts, the oldest/newest event timestamps seen, and a JSON `metadata` blob (lookback, page cap, stop reason). A **partial unique index** over the single `running` row enforces single-flight (a second concurrent insert raises a unique violation).
 
-- **`wise_activity_events`** — the append-only audit store. Each row is one normalized Wise event keyed by Wise's `eventId` (unique), with extracted actor, classroom, session, and transaction fields hoisted out of the raw payload for fast filtering, plus the original `payload` and `raw` JSON retained verbatim for the detail drawer. Written by the sync (`src/lib/wise-activity/sync.ts:209`), read by the list/summary queries and the reconciliation builder.
-- **`wise_activity_sync_runs`** — the sync ledger: one row per sync attempt (cron or manual) with status, trigger type, page/event/insert counts, oldest/newest event timestamps, a `stoppedReason` in `metadata`, and an error summary. A partial unique index guarantees at most one `running` row at a time (the single-flight guard).
+Reconciliation additionally **reads** (never writes) four tables owned by other features: the Sales Dashboard's `sales_dashboard_sources` and `sales_dashboard_normal_rows` (the recorded package sales), and Credit Control's `credit_control_snapshots` + `credit_control_packages` (the active student↔Wise-ID mapping used as matching evidence). It also pulls live data directly from the Wise API (fees-paid trends and receipt transactions) that is not persisted anywhere.
 
-Read-only (owned by other features, consulted only during reconciliation in `src/lib/wise-activity/reconciliation.ts`):
-
-- **`sales_dashboard_sources`** and **`sales_dashboard_normal_rows`** — the package-sale rows to reconcile, selected by source/month.
-- **`credit_control_snapshots`** and **`credit_control_packages`** — the active Credit Control snapshot's packages, used to map a sale to its Wise student/class IDs for candidate scoring.
-
-The canonical home for exact columns, types, indexes, and constraints of the two owned tables is the Drizzle schema itself — `wise_activity_events` at `src/lib/db/schema.ts:190`–`223` and `wise_activity_sync_runs` at `:225`–`243`. Both tables are also documented in the ERD reference at [docs/reference/database/erd-core.md](../reference/database/erd-core.md).
-
-Note: Wise receipt transactions and Wise "fees paid" monthly trends are **not** persisted by this feature — they are fetched live from the Wise API on each reconciliation request (`src/lib/wise-activity/reconciliation.ts:736`, `:763`) and never stored.
+Column-level detail (types, indexes, exact line numbers) lives in the canonical ER reference — see **[`reference/database/erd-core.md`](../reference/database/erd-core.md)** for `wiseActivityEvents` and `wiseActivitySyncRuns`. The Sales Dashboard and Credit Control tables read during reconciliation are documented in [`reference/database/erd-sales-dashboard.md`](../reference/database/erd-sales-dashboard.md) and [`reference/database/erd-credit-control.md`](../reference/database/erd-credit-control.md).
 
 ## API surface
 
-The five user-facing endpoints live under `src/app/api/wise-activity/` (`route.ts`, `summary/route.ts`, `sync/route.ts`, `reconciliation/route.ts`, `reconciliation/backfill/route.ts`) and require an authenticated session; the sixth, the cron ingest endpoint, lives separately under `src/app/api/internal/` (`sync-wise-activity/route.ts`) and is protected by `CRON_SECRET` instead. Full request/response contracts are documented in the API reference at [docs/reference/api/wise-activity.md](../reference/api/wise-activity.md).
+Six endpoints. Five are admin-session (Auth.js); one is the cron-secret ingest route. Full request/response contracts live in the canonical reference — see **[`reference/api/wise-activity.md`](../reference/api/wise-activity.md)** (and **[`reference/crons.md` §4](../reference/crons.md)** for the cron's scheduling mechanics).
 
-- `GET /api/wise-activity` — paginated, filterable list of persisted events (date range, type, action, free-text, session/transaction ID, finance-only).
-- `GET /api/wise-activity/summary` — KPI cards and chart aggregates (activity-by-day, session-mutation breakdown, finance trend, top actors/classrooms) over the same filter set.
-- `POST /api/wise-activity/sync` — manual admin backfill of the event store (default 30-day / 500-page cap).
-- `GET /api/wise-activity/reconciliation` — package-sales reconciliation for a chosen Sales Dashboard source: scored Wise-receipt candidates per sale row, coverage status, and revenue variance.
-- `POST /api/wise-activity/reconciliation/backfill` — backfills the event store for exactly the reconciliation date range before trusting its results.
-- `GET /api/internal/sync-wise-activity` — the cron ingest entry point (3-day / 20-page cap), registered at `5,35 * * * *` in `vercel.json`.
+| Method + path | One-line purpose |
+|---|---|
+| `GET /api/wise-activity/summary` | KPI cards, per-day activity, finance trend, and top-actor/classroom aggregates over a Bangkok date window. |
+| `GET /api/wise-activity` | Paginated event list for the activity-log table, same filter set as summary. |
+| `GET /api/wise-activity/reconciliation` | Package-sale rows for a Sales Dashboard source with ranked Wise-receipt candidates, coverage status, and revenue variance. |
+| `POST /api/wise-activity/sync` | Admin-triggered manual ingest (30-day / 500-page bounds). |
+| `POST /api/wise-activity/reconciliation/backfill` | Manual ingest sized to cover a specific reconciliation date range. |
+| `GET /api/internal/sync-wise-activity` | Cron ingest (`CRON_SECRET`), 30-min cadence, 3-day / 20-page bounds. |
 
 ## UI
 
-Single page, single workspace component:
+Single page: **`src/app/(app)/wise-activity/page.tsx`** — an async Server Component that gates on `auth()` (redirect to `/login` if no session email) and renders the client workspace inside `<Suspense>` ([`page.tsx:6-21`](../../src/app/(app)/wise-activity/page.tsx)).
 
-- **Page**: `src/app/(app)/wise-activity/page.tsx` — server component that gates on session email (redirects to `/login` if absent) and renders the client workspace inside a `Suspense` boundary.
-- **Workspace**: `src/components/wise-activity/wise-activity-workspace.tsx` — a `"use client"` component holding all state and data fetching. It has two views, held in a `view` state (`src/components/wise-activity/wise-activity-workspace.tsx:525`) and toggled by an Activity/Reconciliation button pair in the header (`:743`–`:752`):
-  - **Activity** view — four KPI cards (total events, session mutations, finance events, last-sync status); a filter bar (start/end date, type select, action select, free-text search, Finance toggle, clear button); three Chart.js charts (stacked activity-by-day, horizontal session-mutation bars, finance-trend line); and a paginated, sticky-header activity log table. Each row opens a right-side drawer showing structured fields plus the raw `payload` and `raw` JSON (`:956`).
-  - **Reconciliation** view (`ReconciliationPanel`, `:435`) — a Sales Dashboard source selector, a coverage banner, KPI cards, a `RevenueVarianceTable` (sheet vs Wise fees-paid trend vs Wise receipts), and per-student expandable groups of sale rows. Each sale row lists scored receipt candidates with confidence badges and expandable raw receipt details. A "Backfill selected range" button triggers the reconciliation backfill endpoint.
-  - **Sync** button — runs the manual `POST /api/wise-activity/sync` (`:691`).
+All interactivity lives in **`src/components/wise-activity/wise-activity-workspace.tsx`** (`"use client"`), a single large component with two modes toggled by a header segmented control:
 
-Display helpers (labels, Bangkok timestamp/amount formatting, finance/session-mutation classification) live in `src/lib/wise-activity/format.ts` and are shared between the workspace and the data layer.
+- **Activity mode** — four KPI cards (total events, session mutations, finance events, last sync status); a filter bar (date range, type, action, free-text search, Finance-only toggle, clear); three Chart.js charts (`ChartCanvas`) for activity-by-day (stacked bars by event type), session mutations (horizontal bar), and finance trend (line); and a paginated **Activity Log** table sorted newest-first. Clicking the eye icon opens a right-side detail drawer with a field grid plus pretty-printed `payload` and `raw` JSON (`JsonBlock`).
+- **Reconciliation mode** (`ReconciliationPanel`) — a Sales Dashboard source picker, Reload + "Backfill selected range" buttons, a coverage banner, four KPI cards, a `RevenueVarianceTable` (sheet vs Wise fees-paid trend vs receipts), and collapsible per-student groups (`StudentReconciliationGroup` → `SaleRowReview` → `CandidateList`) where each `<details>` defaults open only when the row/group has review flags.
+
+Data fetching is plain `fetch` with `AbortController` cancellation; charts and label formatting come from `src/lib/wise-activity/format.ts` (`wiseActivityEventLabel`, `wiseActivityTypeLabel`, `formatBangkokDateTime`, `formatWiseAmount`, `isWiseFinanceEvent`).
 
 ## Data flow
 
-There are three independent flows: cron ingest, manual ingest, and read/reconcile.
-
-**Ingest (cron or manual)** — page-ordered pagination into the append-only store (the stop conditions assume Wise returns events newest-first; see Business rules):
+**Ingest (write path):** the Vercel cron (or a manual admin POST) calls `syncWiseActivityEvents`, which pages newest-first through `fetchWiseActivityEvents`, normalizes each Wise event to an audit row, and bulk-inserts with `onConflictDoNothing` on `eventId`.
 
 ```mermaid
 flowchart TD
-  Cron["Vercel cron 5,35 * * * *"] --> CronRoute["GET /api/internal/sync-wise-activity\n(CRON_SECRET, triggerType: cron)"]
-  Admin["Admin clicks Sync / Backfill"] --> ManualRoute["POST /api/wise-activity/sync\nor .../reconciliation/backfill\n(session auth, triggerType: manual)"]
-  CronRoute --> Sync["syncWiseActivityEvents()"]
-  ManualRoute --> Sync
-  Sync --> Guard["markAbandonedRuns + insert 'running' row\n(unique partial index = single-flight)"]
-  Guard --> Loop["page loop: fetchWiseActivityEvents\n(page_size 50, page_number 1,2,3…)"]
-  Loop --> Norm["normalizeWiseActivityEvent\n(hoist actor/class/session/txn, keep raw)"]
-  Norm --> Upsert["insert ... onConflictDoNothing(eventId)"]
-  Upsert --> Stop{"stop?\nempty / short page /\nlookback reached / all known"}
-  Stop -->|no| Loop
-  Stop -->|yes| Finish["update run: success + counts + stoppedReason"]
+  cron["Cron /api/internal/sync-wise-activity (5,35 * * * *)"] -->|CRON_SECRET| audit["withCronInvocationAudit(jobKey wise_activity)"]
+  manual["Admin POST /api/wise-activity/sync\nor .../reconciliation/backfill"] -->|auth session| sync
+  audit --> sync["syncWiseActivityEvents()"]
+  sync -->|insert running row| runs[("wise_activity_sync_runs")]
+  sync -->|page newest-first| wise["Wise API fetchWiseActivityEvents"]
+  wise --> norm["normalizeWiseActivityEvent()"]
+  norm -->|onConflictDoNothing eventId| events[("wise_activity_events")]
+  sync -->|update success/failed + counts| runs
+
+  subgraph Read path
+    page["/wise-activity page (Server Component, auth gate)"] --> ws["WiseActivityWorkspace (client)"]
+    ws -->|GET| listapi["/api/wise-activity + /summary"]
+    listapi --> data["listWiseActivityEvents / getWiseActivitySummary"]
+    data --> events
+    ws -->|GET| recapi["/api/wise-activity/reconciliation"]
+    recapi --> recon["getWisePackageSalesReconciliation"]
+    recon --> events
+    recon --> sales[("sales_dashboard_* (read)")]
+    recon --> credit[("credit_control_* (read)")]
+    recon --> wiserec["Wise API fees-paid trends + receipts (live)"]
+  end
 ```
 
-**Read / reconcile** — UI fetches against the persisted store and (for reconciliation) live Wise money endpoints:
-
-```mermaid
-flowchart LR
-  WS["WiseActivityWorkspace"] -->|activity view| List["GET /api/wise-activity\n+ /summary"]
-  WS -->|reconciliation view| Recon["GET /api/wise-activity/reconciliation"]
-  List --> Data["listWiseActivityEvents / getWiseActivitySummary\n(query wise_activity_events)"]
-  Recon --> Build["getWisePackageSalesReconciliation"]
-  Build --> Sheet["sales_dashboard_normal_rows"]
-  Build --> Credit["credit_control_packages (active snapshot)"]
-  Build --> Events["wise_activity_events (inbound finance only)"]
-  Build --> Live["live Wise API:\nreceipt transactions + fees-paid trends"]
-  Build --> Score["scoreReceiptCandidate per row → ranked candidates + variance"]
-```
-
-The Activity view fires the summary and list requests in parallel with an `AbortController` to cancel superseded loads (`src/components/wise-activity/wise-activity-workspace.tsx:544`).
+**Read path:** the page authenticates, mounts the client workspace, and the workspace issues parallel `GET`s. List/summary go through `src/lib/wise-activity/data.ts`, which builds a shared `WHERE` clause (`buildConditions`) over `wise_activity_events.eventTimestamp` and the filters, then either paginates (`listWiseActivityEvents`) or loads all matching rows and aggregates them in memory (`getWiseActivitySummary`). Reconciliation goes through `src/lib/wise-activity/reconciliation.ts`, which assembles persisted sale rows + persisted inbound Wise events + live Wise receipts/trends + the active Credit Control packages, then scores receipt candidates per row.
 
 ## Business rules & edge cases
 
-- **Single-flight ingest.** A partial unique index on `status = 'running'` (`src/lib/db/schema.ts:239`) means a second concurrent sync's insert fails with Postgres `23505`; `syncWiseActivityEvents` catches that and throws `WiseActivitySyncAlreadyRunningError` (`src/lib/wise-activity/sync.ts:45`, `:166`), which routes return as HTTP 409.
-- **Abandoned-run recovery.** Before starting, any `running` row older than 20 minutes is force-failed (`src/lib/wise-activity/sync.ts:117`, `STALE_RUNNING_MS` `:13`) so a crashed sync cannot wedge the guard forever.
-- **Page-ordered ingest with four stop conditions.** The page loop fetches `page_number` 1, 2, 3, … with no sort parameter (`src/lib/wise-activity/sync.ts:178`–`:182`; `fetchWiseActivityEvents` sends no `sort`, `src/lib/wise/fetchers.ts:236`–`:243`) and stops on: an empty page, a short (<50) page, the lookback cutoff reached (`oldestEventTimestamp <= cutoff`, `:222`), or a full page where every `eventId` is already persisted (`hitKnownPage`, `:207`, `:218`–`:229`). The lookback and known-events stop conditions are only correct if the Wise `/institutes/{id}/events` endpoint returns events **newest-first** — an assumption about the external API that cannot be proven from this repo's code (it is consistent with AGENTS.md's note that the endpoint's date params are ignored, but the ordering itself is unverified here). Cron uses a 3-day / 20-page cap; manual uses 30-day / 500-page (`:9`–`:12`, `:147`–`:148`). Each stop reason is recorded in run metadata.
-- **Idempotent dedupe.** Inserts use `onConflictDoNothing` on the unique `eventId` (`src/lib/wise-activity/sync.ts:213`), so re-fetching overlapping pages never duplicates rows; `insertedCount` reflects only genuinely new rows.
-- **Wise `eventTimestamp` date params are not trusted.** The fetcher (`fetchWiseActivityEvents`, `src/lib/wise/fetchers.ts:231`) accepts optional `type`/`eventName`/`userId`/`classIds` filters (`WiseActivityEventsParams`, `:222`–`:229`) but **never** a date filter; the sync's call site (`src/lib/wise-activity/sync.ts:179`–`:182`) passes only `pageNumber`/`pageSize`. The live endpoint appears to ignore date params, so the sync enforces the lookback window client-side via the `oldestEventTimestamp <= cutoff` check instead.
-- **Fail-soft normalization.** `normalizeWiseActivityEvent` returns `null` when an event lacks an `eventId` or a parseable `eventTimestamp` (`src/lib/wise-activity/sync.ts:90`); such rows are filtered out rather than aborting the page. Missing `eventType`/`eventName` default to `"unknown"`/`"UnknownEvent"` (`:94`–`:95`). Actor/class IDs fall back from the top-level `user`/`classroom` objects to nested `payload.user`/`payload.class` (`:97`–`:100`).
-- **Finance classification is substring-aware but payout-excluding.** `isWiseFinanceEvent` treats an event as finance if it is `BILLING`, has any `transactionId`, or its name matches `/invoice|payment|payout|transaction/i` (`src/lib/wise-activity/format.ts:57`). Reconciliation uses a stricter **inbound** variant, `isInboundWiseInvoiceEvent`, that additionally **excludes** anything matching `/payout/i` (`src/lib/wise-activity/reconciliation.ts:291`) so tutor payouts never count as sales revenue. A regression test guards that "SessionFeedbackSubmittedEvent" is not misclassified as finance just because it contains the substring "fee" (`src/lib/wise-activity/__tests__/reconciliation.test.ts:265`).
-- **Reconciliation is review-only and never auto-matches.** `scoreReceiptCandidate` produces an additive score (exact transaction-number-on-receipt +100; mapped class ID +50; mapped student ID +50; amount match +30; same-day +20 / within-3-days +10; text overlap +15) and drops anything under 20 (`src/lib/wise-activity/reconciliation.ts:363`, threshold `:410`). Candidates are bucketed `high` (≥80) / `medium` (≥45) / `low` and capped at 5 per row (`:430`, `MAX_CANDIDATES_PER_ROW` `:16`). Rows are never stamped "matched" — the UI test asserts the absence of "Mark as matched" (`src/components/wise-activity/__tests__/reconciliation-ui.test.ts:37`) and "Save match" (`:38`).
-- **Coverage gate before trusting "no candidate" rows.** `buildCoverage` reports `complete`/`partial`/`empty` based on whether persisted **inbound** events span the requested date range (`src/lib/wise-activity/reconciliation.ts:437`). When not complete, the message and UI banner warn the user to backfill before trusting missing-candidate rows — i.e. an absent candidate may just mean the event store hasn't been backfilled yet, not that the sale is unrecorded.
-- **Live Wise money sources degrade gracefully.** Both the fees-paid trend and receipt fetches are wrapped so that missing `WISE_USER_ID`/`WISE_API_KEY` or an API error yields an `unavailable` reason rather than throwing (`src/lib/wise-activity/reconciliation.ts:725`, `:752`). Revenue variance then reports `wiseRevenueAvailable: false` / `wiseReceiptsAvailable: false` with the reason, and the system explicitly does **not** fall back to summing persisted activity events for revenue (test: `reconciliation.test.ts:223`).
-- **Revenue figures are derived, not stored.** Sheet total comes from the sale rows; "Wise revenue" comes from the fees-paid **monthly** trend row matched by Bangkok month (`src/lib/wise-activity/reconciliation.ts:507`); receipt total sums only revenue receipts — `PAYMENT`/`OFFLINE_PAYMENT` + `CHARGED` + positive amount (`isReceiptRevenue`, `:487`) — with all other receipt rows counted as "skipped".
-- **Backfill window is computed from the start date.** `wiseReconciliationBackfillLookbackDays` converts the reconciliation start date into a Bangkok-day lookback, clamped to 1–365 days (`src/lib/wise-activity/reconciliation.ts:882`), so the backfill ingests exactly enough history to cover the range.
-- **All dates are Asia/Bangkok.** Date keys, range boundaries, and display formatting go through the shared Bangkok helpers (`src/lib/room-capacity/dates.ts`, `src/lib/wise-activity/format.ts:1`); list/summary queries convert a `YYYY-MM-DD` range into a UTC instant window via `wiseActivityBangkokRange` (`src/lib/wise-activity/data.ts:240`).
+- **Read-only, no Wise writeback.** Nothing in this feature mutates Wise. The reconciliation UI is explicitly review-only — there is no "mark as matched" / "save match" affordance, and a test asserts those strings are absent ([`reconciliation-ui.test.ts:32-39`](../../src/components/wise-activity/__tests__/reconciliation-ui.test.ts)). Candidates are surfaced for a human to judge; the system never auto-records a match.
+
+- **Idempotent ingest; malformed rows are dropped, not rejected.** Events with no `eventId` or no parseable `eventTimestamp` normalize to `null` and are skipped ([`sync.ts:90`](../../src/lib/wise-activity/sync.ts)); everything else gets `eventType`/`eventName` defaults of `"unknown"`/`"UnknownEvent"` rather than being lost ([`sync.ts:94-95`](../../src/lib/wise-activity/sync.ts)). Inserts use `onConflictDoNothing` on `eventId`, so re-fetching overlapping pages is safe ([`sync.ts:209-216`](../../src/lib/wise-activity/sync.ts)).
+
+- **Newest-first paging with five stop conditions.** The sync loop stops on the first of: an empty page (`empty_page`), a short final page (`short_page`, `events.length < PAGE_SIZE`), reaching the lookback cutoff via `oldestEventTimestamp <= cutoff` (`lookback_reached`), a full page where every `eventId` already exists in the DB (`known_events`), or hitting `maxPages` (`max_pages`) ([`sync.ts:178-230`](../../src/lib/wise-activity/sync.ts)). The `known_events` short-circuit (`hitKnownPage`) is what keeps the routine cheap on the 30-minute cadence ([`sync.ts:201-207`](../../src/lib/wise-activity/sync.ts)).
+
+- **Cron vs manual bounds diverge.** Cron runs default to 3-day lookback / 20 pages; manual runs default to 30-day / 500 pages ([`sync.ts:9-12`](../../src/lib/wise-activity/sync.ts), [`sync.ts:147-148`](../../src/lib/wise-activity/sync.ts)). `PAGE_SIZE` is fixed at 50 ([`sync.ts:8`](../../src/lib/wise-activity/sync.ts)). The manual API route clamps `lookbackDays` to `[1,365]` and `maxPages` to `[1,1000]` ([`sync/route.ts:37-39`](../../src/app/api/wise-activity/sync/route.ts)).
+
+- **Single-flight + stale-run reaping.** A partial unique index over the `running` sync-run row means a concurrent insert raises Postgres `23505`, detected by `isUniqueViolation` and surfaced as `WiseActivitySyncAlreadyRunningError` → HTTP 409 ([`sync.ts:45-54`](../../src/lib/wise-activity/sync.ts), [`sync.ts:165-167`](../../src/lib/wise-activity/sync.ts); route at [`sync/route.ts:43-45`](../../src/app/api/wise-activity/sync/route.ts)). Before each run, `markAbandonedRuns` flips any `running` row older than `STALE_RUNNING_MS` (20 min) to `failed` so a crashed run cannot wedge the guard forever ([`sync.ts:13`](../../src/lib/wise-activity/sync.ts), [`sync.ts:117-129`](../../src/lib/wise-activity/sync.ts), [`sync.ts:151`](../../src/lib/wise-activity/sync.ts)).
+
+- **Cron route is audited; manual routes are not.** Only the cron entry wraps the sync in `withCronInvocationAudit({ jobKey: "wise_activity", ... })` ([`sync-wise-activity/route.ts:16-17`](../../src/app/api/internal/sync-wise-activity/route.ts)); the admin manual routes do not. Cron auth is the shared constant-time `rejectInvalidCronSecret` ([`sync-wise-activity/route.ts:13`](../../src/app/api/internal/sync-wise-activity/route.ts)).
+
+- **Bangkok date semantics.** Read endpoints default to the last 7 Bangkok days and validate `^\d{4}-\d{2}-\d{2}$` with `startDate <= endDate` ([`route.ts:28-34`](../../src/app/api/wise-activity/route.ts)). `wiseActivityBangkokRange` converts the inclusive date pair to a UTC instant window `[bangkokDateStartUtc(start), bangkokDateStartUtc(end+1day) − 1ms]` ([`data.ts:240-245`](../../src/lib/wise-activity/data.ts)). All display formatting is `Asia/Bangkok` ([`format.ts:1`](../../src/lib/wise-activity/format.ts)).
+
+- **Finance/mutation classification is name-pattern based.** `isWiseFinanceEvent` treats a row as finance if `eventType === "BILLING"`, a `transactionId` is present, or the name matches `/invoice|payment|payout|transaction/i` ([`format.ts:57-66`](../../src/lib/wise-activity/format.ts)). Session mutations are an explicit 4-name set (`SessionCreated/Updated/Cancelled/Deleted`) — `SessionFeedbackSubmittedEvent` is deliberately excluded ([`format.ts:3-8`](../../src/lib/wise-activity/format.ts), [`format.ts:68-70`](../../src/lib/wise-activity/format.ts)). Note the summary's `financeOnly` SQL filter includes `%payout%` while reconciliation's inbound filter excludes it — see below.
+
+- **Reconciliation: "inbound" excludes payouts.** Revenue/coverage logic only counts money *coming in*. `isInboundWiseInvoiceEvent` returns false for any `/payout/i` name and otherwise matches BILLING / transactionId / `/invoice|payment|transaction/i` ([`reconciliation.ts:291-301`](../../src/lib/wise-activity/reconciliation.ts)); the DB query mirrors this with an explicit `NOT ILIKE '%payout%'` ([`reconciliation.ts:836`](../../src/lib/wise-activity/reconciliation.ts)). A regression test guards that `SessionFeedbackSubmittedEvent` is not miscounted as finance despite containing "fee" ([`reconciliation.test.ts:265-290`](../../src/lib/wise-activity/__tests__/reconciliation.test.ts)).
+
+- **Reconciliation: additive candidate scoring, never auto-match.** `scoreReceiptCandidate` adds points for the exact transaction number appearing on a receipt (+100), Wise class-ID match to the Credit Control package (+50), Wise student-ID match (+50), exact amount (+30), same/near payment date (+20 / +10), and overlapping text (+15); candidates below score 20 are dropped, and confidence is `high ≥80 / medium ≥45 / low` otherwise ([`reconciliation.ts:363-435`](../../src/lib/wise-activity/reconciliation.ts)). Up to `MAX_CANDIDATES_PER_ROW = 5` are kept per row ([`reconciliation.ts:16`](../../src/lib/wise-activity/reconciliation.ts), [`reconciliation.ts:586`](../../src/lib/wise-activity/reconciliation.ts)).
+
+- **Reconciliation: coverage warning gates trust.** `buildCoverage` reports `complete`/`partial`/`empty` based on whether *persisted inbound* events span the requested range; when not complete it returns a "backfill before trusting missing-candidate rows" message and the UI shows a `ShieldAlert` banner ([`reconciliation.ts:437-462`](../../src/lib/wise-activity/reconciliation.ts); UI at [`wise-activity-workspace.tsx:485-493`](../../src/components/wise-activity/wise-activity-workspace.tsx)). This is the explicit fail-honest stance: a row with no candidate is *not* asserted as "missing from Wise" unless coverage proves the data was there to match against. The backfill button sizes the manual sync via `wiseReconciliationBackfillLookbackDays` (days from `startDate` to today, clamped `[1,365]`) ([`reconciliation.ts:882-888`](../../src/lib/wise-activity/reconciliation.ts)).
+
+- **Reconciliation: live-Wise degrades, never fails the request.** Revenue variance pulls `fetchWiseFeesPaidTrends` and `fetchWiseReceiptTransactions` live. If `WISE_USER_ID`/`WISE_API_KEY` are unset or a Wise call throws, the corresponding block returns an `error` string and `*Available: false` flags rather than 500-ing ([`reconciliation.ts:725-778`](../../src/lib/wise-activity/reconciliation.ts)). Crucially, when the official fees-paid trend is unavailable the code does **not** fall back to summing persisted activity events — `wiseRevenueTotal` stays `null` ([`reconciliation.test.ts:223-239`](../../src/lib/wise-activity/__tests__/reconciliation.test.ts)). Only `PAYMENT`/`OFFLINE_PAYMENT` receipts with status `CHARGED` and positive amount count as revenue; everything else (disbursal, refund, pending, rejected, zero) is skipped and reported as `wiseReceiptSkippedCount` ([`reconciliation.ts:487-494`](../../src/lib/wise-activity/reconciliation.ts), [`reconciliation.test.ts:333-356`](../../src/lib/wise-activity/__tests__/reconciliation.test.ts)).
+
+- **Reconciliation source selection.** Sources resolve by `sourceId` → `month` → "most recent with a successful import" fallback ([`reconciliation.ts:716-723`](../../src/lib/wise-activity/reconciliation.ts)). A selected source with no successful package-sales import throws "Selected Sales Dashboard source has no successful package-sales import" (→ 500) ([`reconciliation.ts:802-804`](../../src/lib/wise-activity/reconciliation.ts)); no sources at all returns an empty reconciliation rather than erroring ([`reconciliation.ts:791-801`](../../src/lib/wise-activity/reconciliation.ts)). The reconciliation date-range rule differs from the read endpoints: **both or neither** of `startDate`/`endDate` must be supplied ([`reconciliation/route.ts:14-18`](../../src/app/api/wise-activity/reconciliation/route.ts)).
+
+- **`DEFAULT_INSTITUTE_ID` hard-coded fallback.** Every route falls back to `"696e1f4d90102225641cc413"` when `WISE_INSTITUTE_ID` is unset ([`sync/route.ts:9`](../../src/app/api/wise-activity/sync/route.ts), [`reconciliation.ts:17`](../../src/lib/wise-activity/reconciliation.ts), [`sync-wise-activity/route.ts:10`](../../src/app/api/internal/sync-wise-activity/route.ts)).
 
 ## Tests
 
-- `src/lib/wise-activity/__tests__/sync.test.ts` — payload normalization into persisted fields (`:104`); dedupe of known event IDs while persisting a successful run (`:129`); the `known_events` full-page stop condition (`:168`). Note this file mocks `@/lib/wise/fetchers` wholesale (`:5`–`:7`) and only asserts the sync *invokes* the fetcher with `{ pageNumber: 1, pageSize: 50 }` (`:148`–`:151`); it does not exercise the fetcher's actual page-size clamp.
-- `src/lib/wise/__tests__/fetchers.test.ts` — the Wise-contract test that exercises the fetcher's page-size cap: calling `fetchWiseActivityEvents` with `pageSize: 100` and asserting the outgoing `page_size` is clamped to `'50'` (`:304`–`:317`), matching the `Math.max(1, Math.min(pageSize ?? 50, 50))` clamp at `src/lib/wise/fetchers.ts:238`.
-- `src/lib/wise-activity/__tests__/reconciliation.test.ts` — read-only candidate scoring from exact receipt metadata; revenue variance from monthly fees-paid trend; Bangkok month → trend-row mapping; revenue/receipts unavailable paths (no fallback to events); THB minor→major amount handling; the "fee" substring guard; amount/date-proximity supporting evidence; sub-threshold rows left candidate-only; coverage complete vs partial; backfill lookback-day computation.
-- `src/lib/wise-activity/__tests__/format.test.ts` — event/type label generation, finance and session-mutation classification, Bangkok timestamp and currency formatting.
-- `src/app/api/wise-activity/__tests__/route.test.ts` — auth gating, filter/pagination plumbing, date-range validation (400), manual-sync option pass-through wiring (`:143`–`:161` passes in-range `{ lookbackDays: 45, maxPages: 700 }` and asserts the sync is called with exactly those values — it verifies the options reach the sync, not that out-of-range values are clamped; the clamp itself, `numberOption` at `src/app/api/wise-activity/sync/route.ts:11`–`:14`/`:37`–`:38`, is not exercised with an out-of-range input), reconciliation query plumbing, backfill lookback wiring, and the 409 already-running conflict for backfill.
-- `src/components/wise-activity/__tests__/reconciliation-ui.test.ts` — asserts the reconciliation surface renders (coverage, revenue variance, receipt columns) and stays read-only (no match-saving controls). This is a source-text assertion against the workspace file rather than a rendered-DOM test.
+- **`src/lib/wise-activity/__tests__/sync.test.ts`** — `normalizeWiseActivityEvent` field mapping, dedup against known event IDs while persisting a success run, and the `known_events` full-page stop condition.
+- **`src/lib/wise-activity/__tests__/reconciliation.test.ts`** — the densest suite: high-confidence receipt candidates without auto-match, revenue variance from monthly fees-paid trends, source-month → trend-row mapping, unavailable-trend and Wise-error degradation (no event fallback), THB amount handling, the "fee" substring false-positive guard, receipt-revenue filtering/skip counts, amount+date proximity scoring, candidate-only rows under threshold, coverage partial/complete, and `wiseReconciliationBackfillLookbackDays`.
+- **`src/lib/wise-activity/__tests__/format.test.ts`** — event/type labels, finance + session-mutation classification, Bangkok time and money formatting.
+- **`src/app/api/wise-activity/__tests__/route.test.ts`** — auth 401s, filter/pagination forwarding, date-range 400s, manual sync wiring, reconciliation success + 400, backfill wiring, and the 409 already-running path (covers all five non-cron routes).
+- **`src/app/api/internal/sync-wise-activity/__tests__/route.test.ts`** — cron-secret accept/reject and the `triggerType: "cron"` call shape.
+- **`src/components/wise-activity/__tests__/reconciliation-ui.test.ts`** — source-reads the workspace file to assert the reconciliation surface (coverage warning, revenue-variance columns) is present and that candidate review stays read-only (no "Mark as matched" / "Save match").
 
 ## Open questions
 
-- The list/summary endpoints accept `sessionId` and `transactionId` filters server-side (`src/lib/wise-activity/data.ts:106`–`:107`) and the route forwards them, but the Activity-view UI exposes no input for them — they are reachable only by hand-editing the URL. Intentional power-user affordance, or unfinished UI?
-- The page itself only checks for a session email; AGENTS.md calls this page "admin-only". Confirm whether admin-vs-any-signed-in-user distinction is meant to be enforced here beyond the app-wide allowlist, or whether the allowlist is the sole gate by design.
-- The `getWiseActivitySummary` aggregate loads all matching rows into memory to compute counts (`src/lib/wise-activity/data.ts:169`) with no row cap. Fine for the default 7-day window, but is there a guardrail intended for very wide date ranges on a large event store?
-- The `participant` field exists on the `WiseActivityEvent` type (`src/lib/wise/types.ts:136`) but normalization never reads it. Is participant/student attribution a planned extraction, or dead surface area in the type?
-- **Newest-first event ordering is assumed, not proven.** The ingest's `lookback_reached` and `known_events` stop conditions depend on Wise's `/institutes/{id}/events` endpoint returning events newest-first, but the sync sends no sort parameter and the ordering is a property of the external Wise API that cannot be verified from this repo. Confirm against live Wise behavior (and/or document it in the API reference) that the endpoint is reliably newest-first; if it is not, the lookback/known-events early-exits could terminate ingest prematurely.
+- **Two divergent payout treatments by design or drift?** The activity-log `financeOnly` filter includes `%payout%` ([`data.ts:108-116`](../../src/lib/wise-activity/data.ts)) while reconciliation's inbound filter excludes it ([`reconciliation.ts:836`](../../src/lib/wise-activity/reconciliation.ts)). This is internally consistent (audit wants all money movement; reconciliation wants inbound only), but worth confirming with the feature owner that the split is intentional rather than accidental.
+- **No automatic cron backfill for reconciliation gaps.** The cron only ingests a rolling 3-day window; closing a historical coverage gap requires a human to click "Backfill selected range". Is periodic deeper backfill desired, or is manual-on-demand the intended workflow?
+- **`raw` JSON retention cost.** Every event persists both `payload` and full `raw` blobs with no truncation or TTL, and the table is cross-snapshot and never pruned, so it grows unbounded. Confirm whether a retention policy is wanted.
+- **Passthrough actor/role fields.** Actor role and other denormalized columns are taken verbatim from Wise with no normalization or fail-closed handling (unlike the tutor pipeline). Acceptable for a read-only audit view, but flagged in case any downstream consumer ever treats these as authoritative.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

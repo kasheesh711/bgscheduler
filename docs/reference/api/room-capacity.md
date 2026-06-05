@@ -1,265 +1,222 @@
 # Room Capacity API
 
-**Status:** Stable. This page is the mechanical reference for the four Room Capacity HTTP endpoints: method, path, auth, request shape, response shape, side effects, and status codes. Feature meaning — what the room-capacity workspace is for, the forecast model, and the data-quality rules — lives in [`docs/features/room-capacity.md`](../../features/room-capacity.md). Cron context for the internal sync lives in [`docs/reference/crons.md`](../crons.md).
+Mechanical reference for the **Room Capacity** endpoint group. Three read endpoints serve the utilization dashboard, the month heatmap, and the saturation forecast; one internal endpoint refreshes the room-utilization session store from Wise. For the feature's purpose, rules, and flows (including the note that the month/forecast engines have no frontend consumer yet), see [`docs/features/room-capacity.md`](../../features/room-capacity.md).
 
-All four endpoints are App Router route handlers under `src/app/api/`. None of them use Zod — the three read endpoints parse query parameters by hand and delegate validation to the service layer; the write endpoint takes no request body.
+> **Canonical-home rule:** this page owns the endpoint mechanics (method, path, auth, request/response shape, side effects, status codes). Meaning and rationale live in the feature doc.
 
-## Endpoint summary
+**Routes covered (4):**
 
-| Method + path | Handler | Auth | Side effects |
-|---------------|---------|------|--------------|
-| `GET /api/room-capacity/utilization` | [`utilization/route.ts:6`](../../../src/app/api/room-capacity/utilization/route.ts) | Auth.js session | none (read-only) |
-| `GET /api/room-capacity/month` | [`month/route.ts:6`](../../../src/app/api/room-capacity/month/route.ts) | Auth.js session | none (read-only) |
-| `GET /api/room-capacity/forecast` | [`forecast/route.ts:43`](../../../src/app/api/room-capacity/forecast/route.ts) | Auth.js session | none (read-only) |
-| `POST /api/internal/sync-room-utilization` | [`sync-room-utilization/route.ts:25`](../../../src/app/api/internal/sync-room-utilization/route.ts) | `CRON_SECRET` bearer **or** Auth.js session | writes `room_utilization_sessions` (upsert) |
+| Method | Path | Auth | Source |
+|---|---|---|---|
+| GET | `/api/room-capacity/utilization` | admin | `src/app/api/room-capacity/utilization/route.ts` |
+| GET | `/api/room-capacity/month` | admin | `src/app/api/room-capacity/month/route.ts` |
+| GET | `/api/room-capacity/forecast` | admin | `src/app/api/room-capacity/forecast/route.ts` |
+| POST | `/api/internal/sync-room-utilization` | cron (or admin) | `src/app/api/internal/sync-room-utilization/route.ts` |
 
-> **Auth boundary note.** The three `GET /api/room-capacity/*` routes sit behind the session gate enforced two ways: the route handler's own `auth()` check returns 401 when there is no session, and [`middleware.ts`](../../../src/middleware.ts) redirects unauthenticated browser requests to `/login` for any non-public path. The internal `POST` route lives under `/api/internal/`, which `middleware.ts` treats as a **public route** ([`middleware.ts:13`](../../../src/middleware.ts)) — so it relies entirely on its own in-handler `CRON_SECRET`/session check for protection.
+**Validation note:** none of these routes use Zod. The three GET routes read raw query-string params via `request.nextUrl.searchParams.get(...)` and delegate validation to the room-capacity lib helpers (which throw plain `Error`s on bad input). The POST route takes no body.
 
 ---
 
-## Read endpoints (`/api/room-capacity/*`)
+## Read endpoints
 
-These three share an identical auth preamble: call `auth()`, and if there is no session return **HTTP 401** `{ "error": "Unauthorized" }` ([`utilization/route.ts:7-10`](../../../src/app/api/room-capacity/utilization/route.ts), [`month/route.ts:7-10`](../../../src/app/api/room-capacity/month/route.ts), [`forecast/route.ts:44-47`](../../../src/app/api/room-capacity/forecast/route.ts)). They take no request body; all inputs are URL query parameters.
+All three GET routes follow the same auth shape: `auth()` → `401 {"error":"Unauthorized"}` when there is no session (`utilization/route.ts:7-10`, `month/route.ts:7-10`, `forecast/route.ts:44-47`). They are admin-gated by `src/middleware.ts` plus the in-handler `auth()` call.
 
-### `GET /api/room-capacity/utilization`
+### GET `/api/room-capacity/utilization`
 
-Historical room-occupancy report computed from persisted Wise sessions (the `room_utilization_sessions` table) against the active classroom-room catalog.
+Returns historical room-utilization metrics (occupied vs. available minutes, per-day / per-month / per-room breakdowns, and a data-quality block) aggregated from the persisted `room_utilization_sessions` store. Backed by `getRoomUtilization()` (`src/lib/room-capacity/utilization.ts:474-507`).
 
-**Auth:** authenticated Auth.js session required (401 otherwise).
+**Auth:** admin (`utilization/route.ts:7-10`).
 
-**Query parameters** (parsed in [`utilization/route.ts:12-17`](../../../src/app/api/room-capacity/utilization/route.ts); no Zod):
+**Query parameters** (all optional; `utilization/route.ts:12-16`):
 
 | Param | Type | Default | Notes |
-|-------|------|---------|-------|
-| `startDate` | `YYYY-MM-DD` | `2026-03-01` | When absent, falls back to `ROOM_UTILIZATION_HISTORY_START` ([`utilization.ts:20`, `:101-103`, `:478-479`](../../../src/lib/room-capacity/utilization.ts)). |
-| `endDate` | `YYYY-MM-DD` | today in `Asia/Bangkok` | Default is `todayBangkok()` ([`utilization.ts:101-103`](../../../src/lib/room-capacity/utilization.ts); [`dates.ts:27-29`](../../../src/lib/room-capacity/dates.ts)). |
-| `weekdays` | comma-separated list | all 7 days | Tokens may be numbers `0`–`6` (0 = Sunday) **or** names/abbreviations (`sun`, `mon`, `tue`/`tues`, `wed`, `thu`/`thur`/`thurs`, `fri`, `sat`, and full names), case-insensitive. Parsed and de-duplicated by `parseUtilizationWeekdays` ([`utilization.ts:28-53`, `:112-129`](../../../src/lib/room-capacity/utilization.ts)). |
+|---|---|---|---|
+| `startDate` | `YYYY-MM-DD` | `ROOM_UTILIZATION_HISTORY_START` = `2026-03-01` | Validated by `assertUtilizationDate` (`utilization.ts:90-99`); default applied at `utilization.ts:478-479`. |
+| `endDate` | `YYYY-MM-DD` | today in `Asia/Bangkok` (`todayBangkok`) | Default range from `defaultRoomUtilizationRange` (`utilization.ts:101-103`). |
+| `weekdays` | comma-separated list | all 7 weekdays | Parsed by `parseUtilizationWeekdays` (`utilization.ts:112-129`). Accepts numbers `0`–`6` (0 = Sunday) **and** names/abbreviations (`sun`/`sunday`, `mon`, `tue`/`tues`, `thu`/`thur`/`thurs`, etc.). De-duplicated and sorted ascending. Empty/whitespace value → treated as "all weekdays". |
 
-The handler calls `parseUtilizationWeekdays(...)` then `getRoomUtilization(getDb(), { startDate, endDate, weekdays })` ([`utilization/route.ts:16-17`](../../../src/app/api/room-capacity/utilization/route.ts)). Note `startDate`/`endDate` are passed through as raw strings (or `null` when the param is absent); the defaulting happens inside the service ([`utilization.ts:474-483`](../../../src/lib/room-capacity/utilization.ts)).
+**Behavior / side effects:** read-only. Issues three parallel queries (`utilization.ts:485-497`) — the in-range `room_utilization_sessions` rows, the classroom room catalog (`listClassroomRooms`), and `max(synced_at)` for `lastSyncedAt` — then aggregates via `aggregateRoomUtilization`. Open-hours window is fixed at minutes 420–1260 (07:00–21:00 Bangkok; `utilization.ts:21-22`); session minutes are clipped to that window. Sessions are bucketed by Wise status: `ENDED`/`IN_PROGRESS`/`UPCOMING` count toward occupancy; `CANCELLED`/`CANCELED`/`MISSED`/`NO_SHOW` (and any unrecognized status) are excluded and tallied under data quality; rows missing a location or an unmatched normalized room label are likewise tallied separately (`utilization.ts:55-56`, `131-138`, `311-331`).
 
-**What it computes.** `getRoomUtilization` reads `room_utilization_sessions` rows whose `utilizationDate` is within `[startDate, endDate]`, the active classroom rooms, and the max `syncedAt` timestamp, then calls `aggregateRoomUtilization` ([`utilization.ts:485-507`](../../../src/lib/room-capacity/utilization.ts)). The open-hours window is fixed at minute `420`–`1260` (07:00–21:00 Bangkok) ([`utilization.ts:21-24`](../../../src/lib/room-capacity/utilization.ts)). Sessions in counted statuses (`ENDED`, `IN_PROGRESS`, `UPCOMING`) contribute occupancy; `CANCELLED`/`CANCELED`/`MISSED`/`NO_SHOW` and any unknown status are excluded and tallied as data-quality issues ([`utilization.ts:55-56`, `:131-138`, `:311-331`](../../../src/lib/room-capacity/utilization.ts)).
-
-**Response shape** — JSON `RoomUtilizationResponse` ([type: `types.ts:264-281`](../../../src/lib/room-capacity/types.ts); assembled at [`utilization.ts:380-397`](../../../src/lib/room-capacity/utilization.ts)):
+**Response 200** — `RoomUtilizationResponse` (`src/lib/room-capacity/types.ts:264-281`), assembled at `utilization.ts:380-397`:
 
 ```jsonc
 {
   "range": {
     "startDate": "2026-03-01",
-    "endDate": "2026-05-18",
-    "generatedAt": "2026-05-18T00:00:00.000Z",
+    "endDate": "2026-05-31",
+    "generatedAt": "2026-05-31T...Z",
     "openStartMinute": 420,
     "openEndMinute": 1260,
     "weekdays": [0, 1, 2, 3, 4, 5, 6]
   },
-  "lastSyncedAt": "2026-05-18T00:00:00.000Z",   // max synced_at, or null if no rows
-  "summary": {                                    // RoomUtilizationMetric + activeRoomCount
-    "occupiedMinutes": 12000,
-    "availableMinutes": 48000,
-    "utilizationPct": 25,                         // occupied/available, rounded to 0.1%
-    "sessionCount": 200,
-    "activeRoomCount": 24
+  "lastSyncedAt": "2026-05-31T...Z",   // or null if the table is empty
+  "summary": {                          // RoomUtilizationMetric + activeRoomCount
+    "occupiedMinutes": 0,
+    "availableMinutes": 0,
+    "utilizationPct": 0,                // occupied/available × 100, 1-decimal rounding
+    "sessionCount": 0,
+    "activeRoomCount": 0
   },
-  "daily": [/* RoomUtilizationDailyRow[] */],     // per-date metrics + quality counts
-  "monthly": [/* RoomUtilizationMonthlyRow[] */], // per-month rollups
-  "rooms": [/* RoomUtilizationRoomRow[] */],      // per-room, sorted by utilizationPct desc
-  "dataQuality": {                                // RoomUtilizationDataQuality
-    "missingLocationCount": 1, "missingLocationMinutes": 60,
-    "unknownRoomCount": 1,     "unknownRoomMinutes": 60,
-    "excludedStatusCount": 2,  "excludedStatusMinutes": 120,
-    "overlapMinutes": 30
+  "daily":   [ /* RoomUtilizationDailyRow[]  — per date: metric + weekday + missing/unknown/excluded counts + overlapMinutes */ ],
+  "monthly": [ /* RoomUtilizationMonthlyRow[] — per YYYY-MM: metric + startDate/endDate + same quality counts */ ],
+  "rooms":   [ /* RoomUtilizationRoomRow[]   — per active room: metric + capacity + category, sorted by utilizationPct desc */ ],
+  "dataQuality": {
+    "missingLocationCount": 0, "missingLocationMinutes": 0,
+    "unknownRoomCount": 0,     "unknownRoomMinutes": 0,
+    "excludedStatusCount": 0,  "excludedStatusMinutes": 0,
+    "overlapMinutes": 0
   }
 }
 ```
 
-Field-level definitions for `RoomUtilizationDailyRow`, `RoomUtilizationMonthlyRow`, and `RoomUtilizationRoomRow` are in [`types.ts:221-262`](../../../src/lib/room-capacity/types.ts).
+Field-level types: `RoomUtilizationDailyRow` (`types.ts:228-235`), `RoomUtilizationMonthlyRow` (`types.ts:237-245`), `RoomUtilizationRoomRow` (`types.ts:247-252`), `RoomUtilizationDataQuality` (`types.ts:254-262`).
 
-**Side effects:** none. Read-only Postgres `SELECT`s only ([`utilization.ts:485-497`](../../../src/lib/room-capacity/utilization.ts)).
+**Error / status codes** (`utilization/route.ts:19-27`):
 
-**Status codes:**
+| Status | Condition |
+|---|---|
+| `401` | No session. |
+| `400` | Lib error whose message starts with `Invalid date range`, `Invalid startDate`, `Invalid endDate`, or `Invalid weekdays`. These cover a malformed date (not `YYYY-MM-DD`), `startDate > endDate` (`utilization.ts:481-483`), or an unrecognized weekday token (`utilization.ts:120-127`). Body `{"error": <message>}`. |
+| `500` | Any other thrown error; body `{"error": <message>}` (falls back to `"Failed to load room utilization"`). |
 
-| Status | When | Body |
-|--------|------|------|
-| 200 | success | `RoomUtilizationResponse` |
-| 401 | no session | `{ "error": "Unauthorized" }` |
-| 400 | thrown message starts with `Invalid date range` / `Invalid startDate` / `Invalid endDate` / `Invalid weekdays` | `{ "error": <message> }` |
-| 500 | any other thrown error | `{ "error": <message \| "Failed to load room utilization"> }` |
+---
 
-The 400-vs-500 split is decided in the handler's `catch` by prefix-matching the error message ([`utilization/route.ts:19-28`](../../../src/app/api/room-capacity/utilization/route.ts)). Those messages originate from `assertUtilizationDate` ("Invalid startDate/endDate. Expected YYYY-MM-DD."), the `startDate > endDate` guard ("Invalid date range. startDate must be before or equal to endDate."), and `parseUtilizationWeekdays` ("Invalid weekdays. Expected comma-separated weekday numbers 0-6 or names." / "Invalid weekdays. Expected at least one weekday.") ([`utilization.ts:90-99`, `:120-127`, `:481-483`](../../../src/lib/room-capacity/utilization.ts)). Both 400 paths are covered by tests ([`route.test.ts:236-258`](../../../src/app/api/room-capacity/__tests__/route.test.ts)).
+### GET `/api/room-capacity/month`
 
-### `GET /api/room-capacity/month`
+Returns the month-view payload for the live snapshot: current room load vs. a re-projected ideal assignment, including overcapacity intervals, heatmap cells, per-day summaries, and KPIs. Backed by `getRoomCapacityMonth()` (`src/lib/room-capacity/data.ts:229-291`).
 
-Operational room-load view for a date range: current Wise locations vs. the engine's *projected* room assignment, with overcapacity intervals, unmatched allocations, heatmap cells, and per-day summaries. Scoped to the active Wise snapshot.
+**Auth:** admin (`month/route.ts:7-10`).
 
-**Auth:** authenticated Auth.js session required (401 otherwise — [`month/route.ts:7-10`](../../../src/app/api/room-capacity/month/route.ts)).
-
-**Query parameters** (parsed in [`month/route.ts:12-16`](../../../src/app/api/room-capacity/month/route.ts); no Zod):
+**Query parameters** (both optional; `month/route.ts:12-13`):
 
 | Param | Type | Default | Notes |
-|-------|------|---------|-------|
-| `startDate` | `YYYY-MM-DD` | today in `Asia/Bangkok` | Default from `defaultRoomCapacityRange()` ([`dates.ts:69-75`](../../../src/lib/room-capacity/dates.ts)). |
-| `endDate` | `YYYY-MM-DD` | end of the current Bangkok month | Same default helper ([`dates.ts:63-75`](../../../src/lib/room-capacity/dates.ts)). |
+|---|---|---|---|
+| `startDate` | `YYYY-MM-DD` | `defaultRoomCapacityRange().startDate` | Passed straight through; **not** range-validated on this path (`data.ts:233-235`). |
+| `endDate` | `YYYY-MM-DD` | `defaultRoomCapacityRange().endDate` | Same — no `assertUtilizationDate`/ordering check here. |
 
-The handler passes the raw params (or `null`) straight into `getRoomCapacityMonth(getDb(), { startDate, endDate })`; the defaulting happens in the service ([`data.ts:229-235`](../../../src/lib/room-capacity/data.ts)). Tests confirm both the `{ startDate: null, endDate: null }` default pass-through and explicit-range pass-through ([`route.test.ts:142-160`](../../../src/app/api/room-capacity/__tests__/route.test.ts)).
+**Behavior / side effects:** read-only against Postgres; no Wise call. Resolves the active snapshot (`data.ts:37-45`), loads the room catalog, loads **blocking** `future_session_blocks` in range for that snapshot (`data.ts:70-125`), pulls the latest classroom-assignment override per date (`data.ts:127-167`), then computes an "ideal" assignment via `assignClassrooms` to derive the `projected.*` view (`data.ts:193-227`). Current vs. projected overcaps, heatmap cells, unmatched allocations, no-room rows, and day summaries are computed from the analysis helpers.
 
-**What it computes.** `getRoomCapacityMonth` loads the active snapshot (`snapshots.active = true`), the classroom-room catalog, blocking `future_session_blocks` in range, and the latest classroom-assignment overrides per date; it then runs the assignment engine to produce projected rows and derives KPIs, overcap intervals, unmatched allocations, heatmap cells, and day summaries for both the `current` and `projected` views ([`data.ts:229-291`](../../../src/lib/room-capacity/data.ts)). If there is no active snapshot it throws `"No active Wise snapshot found"` ([`data.ts:37-44`](../../../src/lib/room-capacity/data.ts)).
-
-**Response shape** — JSON `RoomCapacityMonthResponse` ([type: `types.ts:109-139`](../../../src/lib/room-capacity/types.ts); assembled at [`data.ts:267-290`](../../../src/lib/room-capacity/data.ts)):
+**Response 200** — `RoomCapacityMonthResponse` (`types.ts:109-139`), assembled at `data.ts:267-290`:
 
 ```jsonc
 {
-  "range": { "startDate": "2026-05-15", "endDate": "2026-05-31", "generatedAt": "2026-05-15T00:00:00.000Z" },
-  "snapshotMeta": { "snapshotId": "snapshot-1", "syncedAt": "2026-05-15T00:00:00.000Z" },
-  "rooms": [/* RoomCapacityRoom[] */],
+  "range": { "startDate": "...", "endDate": "...", "generatedAt": "...Z" },
+  "snapshotMeta": { "snapshotId": "...", "syncedAt": "...Z" },   // from the active snapshot
+  "rooms": [ /* RoomCapacityRoom[] (types.ts:3-11) */ ],
   "kpis": {
     "currentOvercapIntervals": 0,
-    "impactedRooms": 0,
+    "impactedRooms": 0,                 // distinct room names in current overcaps
     "projectedNoRoomSessions": 0,
     "unmatchedCurrentAllocations": 0,
-    "peakLoadRatio": 0
+    "peakLoadRatio": 0                  // max heatmap loadRatio
   },
-  "current":   { "overcaps": [], "unmatchedAllocations": [], "heatmapCells": [], "daySummaries": [] },
-  "projected": { "overcaps": [], "noRoomRows": [],            "heatmapCells": [], "daySummaries": [] }
+  "current":   { "overcaps": [...], "unmatchedAllocations": [...], "heatmapCells": [...], "daySummaries": [...] },
+  "projected": { "overcaps": [...], "noRoomRows": [...],          "heatmapCells": [...], "daySummaries": [...] }
 }
 ```
 
-Element types (`RoomCapacityRoom`, `RoomCapacityOvercapInterval`, `RoomCapacityUnmatchedAllocation`, `RoomCapacityHeatmapCell`, `RoomCapacityNoRoomRow`, `RoomCapacityDaySummary`) are defined in [`types.ts:3-107`](../../../src/lib/room-capacity/types.ts).
+Field-level types: `RoomCapacityRoom` (`types.ts:3-11`), `RoomCapacityOvercapInterval` (`types.ts:54-67`), `RoomCapacityUnmatchedAllocation` (`types.ts:69-79`), `RoomCapacityNoRoomRow` (`types.ts:81-93`), `RoomCapacityHeatmapCell` (`types.ts:39-52`), `RoomCapacityDaySummary` (`types.ts:95-107`).
 
-**Side effects:** none. The override lookup and assignment run are computed in memory; this endpoint does **not** persist an assignment run (the test names this explicitly: "uses service defaults … without persisting runs", [`route.test.ts:142-148`](../../../src/app/api/room-capacity/__tests__/route.test.ts)).
+**Error / status codes** (`month/route.ts:18-21`):
 
-**Status codes:**
+| Status | Condition |
+|---|---|
+| `401` | No session. |
+| `500` | Any thrown error; body `{"error": <message>}` (fallback `"Failed to load room capacity"`). Notably, `getActiveSnapshot` throws `No active Wise snapshot found` (`data.ts:43`) when no snapshot is active — surfaced here as a 500, not a typed missing payload. There is no `400` branch on this route. |
 
-| Status | When | Body |
-|--------|------|------|
-| 200 | success | `RoomCapacityMonthResponse` |
-| 401 | no session | `{ "error": "Unauthorized" }` |
-| 500 | any thrown error (e.g. no active snapshot) | `{ "error": <message \| "Failed to load room capacity"> }` |
+---
 
-This handler has no 400 branch — every caught error maps to 500 ([`month/route.ts:18-21`](../../../src/app/api/room-capacity/month/route.ts)).
+### GET `/api/room-capacity/forecast`
 
-### `GET /api/room-capacity/forecast`
+Returns the saturation/weekend-demand forecast for a scenario: when each weekday's room-slot and room+tutor capacity saturates, the weekend-demand breakpoint, capture-readiness diagnostics, and monthly driver rows. Backed by `getRoomCapacityForecast()` (`src/lib/room-capacity/data.ts:385-444`).
 
-Capacity-saturation and weekend-demand forecast for a named scenario, derived from an imported model run plus the active snapshot's schedule. Degrades gracefully to a "missing" payload when the forecast tables/model run do not yet exist.
+**Auth:** admin (`forecast/route.ts:44-47`).
 
-**Auth:** authenticated Auth.js session required (401 otherwise — [`forecast/route.ts:44-47`](../../../src/app/api/room-capacity/forecast/route.ts)).
-
-**Query parameters** (parsed in [`forecast/route.ts:49`](../../../src/app/api/room-capacity/forecast/route.ts); no Zod):
+**Query parameters** (optional; `forecast/route.ts:49`):
 
 | Param | Type | Default | Notes |
-|-------|------|---------|-------|
-| `scenario` | string | `"Base"` | `request.nextUrl.searchParams.get("scenario") \|\| "Base"`. If the requested scenario has no drivers, the service falls back to the first available scenario and echoes it back in the response's `scenario` field ([`data.ts:389-396`, `:436`](../../../src/lib/room-capacity/data.ts)). Test: defaults to `Base` ([`route.test.ts:162-173`](../../../src/app/api/room-capacity/__tests__/route.test.ts)). |
+|---|---|---|---|
+| `scenario` | string | `"Base"` | Selects forecast drivers. If the requested scenario has no drivers, the lib falls back to the first available scenario and echoes the effective scenario back in the response's `scenario` field (`data.ts:389-397`, `436`). Conventionally `Bear` / `Base` / `Bull`. |
 
-The handler calls `getRoomCapacityForecast(getDb(), { scenario })` ([`forecast/route.ts:52`](../../../src/app/api/room-capacity/forecast/route.ts)).
+**Behavior / side effects:** read-only. Loads the latest `room_capacity_model_runs` row (`data.ts:293-300`). If **no model run exists**, returns a fully-formed `status:"missing"` response with empty arrays and 7 null-filled `weekdayResults` (`data.ts:358-383`, `391`) — HTTP 200, not an error. When a run exists, it loads forecast drivers / demand mix / package mix for that run, loads the active snapshot + room catalog, loads in-range blocking `future_session_blocks` as seed sessions, builds an `ensureIndex(db)` search index, and runs the saturation + weekend-demand simulations (`data.ts:393-426`). `ensureIndex` may lazily (re)build the in-memory search index as a side effect.
 
-**What it computes.** `getRoomCapacityForecast` loads the latest `room_capacity_model_runs` row; if none exists it returns a `status: "missing"` response immediately ([`data.ts:385-391`](../../../src/lib/room-capacity/data.ts)). Otherwise it loads scenario drivers, demand mix, and package mix for that model run, loads the active snapshot's seed sessions, runs `simulateSaturation`, `buildWeekendDemandCaptureReadiness`, and `simulateWeekendDemandBreakpoint`, and returns a `status: "ready"` response ([`data.ts:385-444`](../../../src/lib/room-capacity/data.ts)).
-
-**Response shape** — JSON `RoomCapacityForecastResponse` ([type: `types.ts:304-320`](../../../src/lib/room-capacity/types.ts)):
+**Response 200** — `RoomCapacityForecastResponse` (`types.ts:304-320`), assembled at `data.ts:427-443`:
 
 ```jsonc
 {
   "model": {
     "status": "ready",                 // or "missing"
-    "modelRunId": "model-1",           // null when missing
-    "sourceLabel": "Projection",       // null when missing
-    "forecastStart": "2026-06-01",     // null when missing
-    "forecastEnd": "2027-05-01",       // null when missing
-    "importedAt": "2026-05-15T00:00:00.000Z"  // null when missing
+    "modelRunId": "...",               // null when missing
+    "sourceLabel": "...",
+    "forecastStart": "YYYY-MM-DD",
+    "forecastEnd": "YYYY-MM-DD",
+    "importedAt": "...Z"
   },
-  "scenario": "Base",                  // the effective scenario (may differ from the request)
-  "scenarios": ["Base"],               // all scenarios present in the model run
-  "generatedAt": "2026-05-15T00:00:00.000Z",
-  "weekdayResults": [/* WeekdaySaturationResult[] */],
-  "weekendDemandBreakpoint": { /* WeekendDemandBreakpoint */ } ,   // or null
-  "weekendDemandCaptureReadiness": { /* WeekendDemandCaptureReadiness */ },  // or null
-  "monthlyDrivers": [/* RoomCapacityForecastDriver[] */]
+  "scenario": "Base",                   // effective scenario (may differ from request after fallback)
+  "scenarios": ["Base", "Bull", ...],   // distinct scenarios present in drivers
+  "generatedAt": "...Z",
+  "weekdayResults": [ /* WeekdaySaturationResult[] (types.ts:174-181), one per weekday 0–6 */ ],
+  "weekendDemandBreakpoint": { /* WeekendDemandBreakpoint (types.ts:212-219) */ } /* or null */,
+  "weekendDemandCaptureReadiness": { /* WeekendDemandCaptureReadiness (types.ts:291-302) */ } /* or null */,
+  "monthlyDrivers": [ /* RoomCapacityForecastDriver[] (types.ts:141-150) */ ]
 }
 ```
 
-Element types (`WeekdaySaturationResult`, `WeekendDemandBreakpoint`, `WeekendDemandCaptureReadiness`, `RoomCapacityForecastDriver`) are in [`types.ts:141-219`, `:283-302`](../../../src/lib/room-capacity/types.ts). The `ready` response sets `weekendDemandBreakpoint` only when the readiness gate passes — `simulateWeekendDemandBreakpoint` returns `null` otherwise (see the feature doc for the readiness rules).
+**Error / status codes** (`forecast/route.ts:54-60`):
 
-**The "missing" fallback (two paths, same shape).** A `status: "missing"` body is returned in two situations, and both produce the identical shape — `model.status: "missing"`, all `model.*` ids/labels `null`, `scenarios: []`, `weekendDemandBreakpoint: null`, `weekendDemandCaptureReadiness: null`, `monthlyDrivers: []`, and a `weekdayResults` array of exactly 7 entries (Sunday→Saturday, all dates/reasons `null`):
-
-1. **No model run yet** — handled inside the service via `missingForecastResponse(scenario)` ([`data.ts:358-383`, `:391`](../../../src/lib/room-capacity/data.ts)).
-2. **Forecast tables don't exist yet** — if the service throws an error whose message references any of `room_capacity_model_runs`, `room_capacity_forecast_drivers`, `room_capacity_demand_mix`, or `room_capacity_package_mix`, the route's `catch` recognizes it via `isMissingForecastTableError` and returns `missingForecastBody(scenario)` with **HTTP 200** instead of 500 ([`forecast/route.ts:6-14`, `:16-41`, `:55-57`](../../../src/app/api/room-capacity/forecast/route.ts)). Both `scenario` and the 7-element `weekdayResults` are echoed/preserved — covered by [`route.test.ts:175-190`](../../../src/app/api/room-capacity/__tests__/route.test.ts).
-
-> The route-level `missingForecastBody` ([`forecast/route.ts:16-41`](../../../src/app/api/room-capacity/forecast/route.ts)) and the service-level `missingForecastResponse` ([`data.ts:358-383`](../../../src/lib/room-capacity/data.ts)) are two copies of the same payload, kept in sync by shape.
-
-**Side effects:** none. Read-only.
-
-**Status codes:**
-
-| Status | When | Body |
-|--------|------|------|
-| 200 | success (`ready`) | `RoomCapacityForecastResponse` with `model.status: "ready"` |
-| 200 | no model run, or a missing-forecast-table error | `RoomCapacityForecastResponse` with `model.status: "missing"` |
-| 401 | no session | `{ "error": "Unauthorized" }` |
-| 500 | any other thrown error | `{ "error": <message \| "Failed to load room capacity forecast"> }` |
-
-This is the only one of the four endpoints that turns a thrown error into a 200 (the missing-table case); all non-recognized errors still return 500 ([`forecast/route.ts:54-60`](../../../src/app/api/room-capacity/forecast/route.ts)).
+| Status | Condition |
+|---|---|
+| `401` | No session. |
+| `200` (missing payload) | The caught error message mentions any of `room_capacity_model_runs`, `room_capacity_forecast_drivers`, `room_capacity_demand_mix`, or `room_capacity_package_mix` — i.e. a missing forecast table. The route returns `missingForecastBody(scenario)` (`forecast/route.ts:6-41`, `55-57`), a `status:"missing"` body that mirrors the lib's missing-run shape. This is the route's "optional-table → HTTP 200, not 500" guard. |
+| `500` | Any other thrown error; body `{"error": <message>}` (fallback `"Failed to load room capacity forecast"`). `getActiveSnapshot` raising `No active Wise snapshot found` (only reached when a model run exists) would surface here. |
 
 ---
 
 ## Internal sync endpoint
 
-### `POST /api/internal/sync-room-utilization`
+### POST `/api/internal/sync-room-utilization`
 
-Refreshes the room-utilization history that backs `GET /api/room-capacity/utilization`: fetches every institute session from Wise and upserts the relevant rows into `room_utilization_sessions`.
+Refreshes the `room_utilization_sessions` store by pulling all institute sessions from Wise and upserting them. Backed by `syncRoomUtilizationSessions()` (`src/lib/room-capacity/utilization.ts:427-472`).
 
-**HTTP method + path:** `POST /api/internal/sync-room-utilization`. The handler exports **only `POST`** — there is no `GET` ([`sync-room-utilization/route.ts:25`](../../../src/app/api/internal/sync-room-utilization/route.ts)).
+**Auth:** cron (or admin) — dual-path (`sync-room-utilization/route.ts:26-40`):
 
-**Auth:** dual-mode — a valid `CRON_SECRET` bearer token, **or** an authenticated Auth.js session as a fallback ([`sync-room-utilization/route.ts:25-35`](../../../src/app/api/internal/sync-room-utilization/route.ts)):
+1. Constant-time `Bearer ${CRON_SECRET}` check via `timingSafeEqual` with a length pre-check (`route.ts:12-24`). A valid secret marks `triggerSource = "cron"`.
+2. If `CRON_SECRET` is **unset**, the route returns `500 {"error":"Server misconfigured"}` — but only when there is also no session.
+3. If the secret is present-but-invalid, the route falls back to an admin `auth()` session; no session → `401 {"error":"Unauthorized"}`. A valid session marks `triggerSource = "admin"` and records the actor email.
 
-1. `hasValidCronSecret(request)` compares the `Authorization` header against `Bearer ${CRON_SECRET}` using a length pre-check plus `crypto.timingSafeEqual` (constant-time), returning `"valid"`, `"invalid"`, or `"missing-secret"` ([`sync-room-utilization/route.ts:1`, `:9-23`](../../../src/app/api/internal/sync-room-utilization/route.ts)).
-2. If the secret is **not** `"valid"`, the handler calls `auth()`. With no session: a `"missing-secret"` status returns **HTTP 500 `{ "error": "Server misconfigured" }`** (refusing to run unauthenticated), otherwise **HTTP 401 `{ "error": "Unauthorized" }`** ([`sync-room-utilization/route.ts:27-35`](../../../src/app/api/internal/sync-room-utilization/route.ts)). A present session lets the request through even without a valid bearer token.
+**Not a Vercel cron.** In the cron registry this job is `manualOnly: true` with `schedule: null` / `cadenceLabel: "Manual only"` (`src/lib/data-health/cron-registry.ts:191-204`), and it is **not** listed under `crons` in `vercel.json`. It runs only when triggered manually (admin UI or an explicit bearer call). `maxDuration = 800` (`route.ts:8`).
 
-This is a local copy of the same constant-time pattern used by the other internal sync routes (it does not import the shared `cron-auth` helper) — see [`docs/reference/crons.md`](../crons.md).
+**Request body:** none. The HTTP route calls `syncRoomUtilizationSessions(getDb())` with no input, so it uses the defaults (`startDate` = `ROOM_UTILIZATION_HISTORY_START` = `2026-03-01`, `syncedAt` = now; `utilization.ts:429-432`).
 
-**Request body:** none. The handler reads no body and no query params; it always calls `syncRoomUtilizationSessions(getDb())` with default arguments ([`sync-room-utilization/route.ts:38`](../../../src/app/api/internal/sync-room-utilization/route.ts)). (The underlying `syncRoomUtilizationSessions` accepts an optional `{ startDate?, syncedAt? }`, but the route passes neither, so the sync uses `ROOM_UTILIZATION_HISTORY_START = "2026-03-01"` as the floor — [`utilization.ts:427-431`](../../../src/lib/room-capacity/utilization.ts).)
+**Behavior / side effects:**
 
-**`maxDuration = 800`** — the route exports an 800-second function ceiling to cover the full institute-session fetch ([`sync-room-utilization/route.ts:7`](../../../src/app/api/internal/sync-room-utilization/route.ts)).
+- Requires `WISE_INSTITUTE_ID` (throws `WISE_INSTITUTE_ID is required to sync room utilization` if unset; `utilization.ts:433-434`).
+- Fetches **all** institute sessions via `fetchAllInstituteSessions(createWiseClient(), instituteId)` — a live Wise API call (`utilization.ts:436`).
+- Maps each Wise session to a row (`wiseSessionToUtilizationRow`, `utilization.ts:400-425`), dropping rows without an id/start/end or with a `utilizationDate` earlier than `startDate`.
+- **Upserts** rows into `room_utilization_sessions` in chunks of 500, on conflict by `wiseSessionId` updating all derived columns (`utilization.ts:441-464`). This is the only write to domain data.
+- The whole handler is wrapped in `withCronInvocationAudit({ jobKey: "room_utilization", ... })`, which writes a start/finish row to `cron_invocations` (status, duration, response status, error summary; `src/lib/data-health/cron-audit.ts:144-159`, `84-142`).
 
-**Side effects (writes).** `syncRoomUtilizationSessions(db)` ([`utilization.ts:427-472`](../../../src/lib/room-capacity/utilization.ts)):
-
-1. Requires `WISE_INSTITUTE_ID`; throws `"WISE_INSTITUTE_ID is required to sync room utilization"` if unset ([`utilization.ts:433-434`](../../../src/lib/room-capacity/utilization.ts)).
-2. Fetches **all** institute sessions via `fetchAllInstituteSessions(createWiseClient(), instituteId)` (no status filter — past, present, and future) ([`utilization.ts:436`](../../../src/lib/room-capacity/utilization.ts)).
-3. Maps each session to a row (`wiseSessionToUtilizationRow`), dropping rows that fail to parse and any whose `utilizationDate` is before `2026-03-01` ([`utilization.ts:437-439`](../../../src/lib/room-capacity/utilization.ts)).
-4. Upserts in chunks of 500 into `room_utilization_sessions`, conflict target `wiseSessionId`, updating all mutable columns from the new values (`onConflictDoUpdate`) ([`utilization.ts:54`, `:441-464`](../../../src/lib/room-capacity/utilization.ts)). This is the **only** write among the four endpoints.
-
-**Response shape** — on success, **HTTP 200** with `{ ok: true, ...result }`, where `result` is the return of `syncRoomUtilizationSessions` ([`sync-room-utilization/route.ts:38-39`](../../../src/app/api/internal/sync-room-utilization/route.ts); [`utilization.ts:466-471`](../../../src/lib/room-capacity/utilization.ts)):
+**Response 200** (`route.ts:46-47`) — `{ ok: true, ...result }` where `result` is the `syncRoomUtilizationSessions` return (`utilization.ts:466-471`):
 
 ```jsonc
 {
   "ok": true,
-  "fetchedCount": 0,            // sessions returned by Wise
-  "storedCount": 0,            // rows kept (on/after 2026-03-01) and upserted
+  "fetchedCount": 0,    // total sessions returned by Wise
+  "storedCount": 0,     // rows upserted (after date/validity filtering)
   "startDate": "2026-03-01",
-  "syncedAt": "2026-05-31T00:00:00.000Z"
+  "syncedAt": "...Z"
 }
 ```
 
-**Status codes:**
+**Error / status codes:**
 
-| Status | When | Body |
-|--------|------|------|
-| 200 | success | `{ "ok": true, "fetchedCount", "storedCount", "startDate", "syncedAt" }` |
-| 401 | invalid/absent bearer **and** no session (with `CRON_SECRET` set) | `{ "error": "Unauthorized" }` |
-| 500 | `CRON_SECRET` unset **and** no session | `{ "error": "Server misconfigured" }` |
-| 500 | any thrown error during sync (e.g. missing `WISE_INSTITUTE_ID`, Wise fetch failure) | `{ "error": <message \| "Failed to sync room utilization"> }` |
-
-(Both 500 cases share the same status; the bodies differ — `"Server misconfigured"` for the auth-misconfig path vs. the sync error message — [`sync-room-utilization/route.ts:30-33`, `:40-43`](../../../src/app/api/internal/sync-room-utilization/route.ts).)
-
-**Scheduling — manual only.** This endpoint is **not** registered in [`vercel.json`](../../../vercel.json) (its cron list contains seven other paths, none of which is `sync-room-utilization`). Vercel Cron invokes endpoints via `GET`, and this handler exports only `POST`, so it is not auto-scheduled. It is triggered by:
-
-- the room-capacity dashboard's refresh action, which `fetch`es `POST /api/internal/sync-room-utilization` ([`room-capacity-dashboard.tsx:375`](../../../src/components/room-capacity/room-capacity-dashboard.tsx));
-- an external `POST` with the `CRON_SECRET` bearer; or
-- the CLI script `scripts/sync-room-utilization.ts` (npm `room-utilization:sync`, [`package.json:22`](../../../package.json)), which calls `syncRoomUtilizationSessions` directly.
-
-See [`docs/reference/crons.md`](../crons.md) ("Internal handlers without a cron schedule") and the [room-capacity feature doc](../../features/room-capacity.md) for the open question on whether an automated cron was intended.
+| Status | Condition |
+|---|---|
+| `500` `{"error":"Server misconfigured"}` | `CRON_SECRET` is unset **and** no admin session (`route.ts:33-35`). |
+| `401` `{"error":"Unauthorized"}` | Invalid/absent bearer and no admin session (`route.ts:36`). |
+| `500` `{"error": <message>}` | Sync threw (e.g. missing `WISE_INSTITUTE_ID`, a Wise fetch failure, or a DB error); fallback `"Failed to sync room utilization"` (`route.ts:48-51`). The audit wrapper also coerces any uncaught throw into a `500 {"error": <message>}` (`cron-audit.ts:152-157`). |
+| `200` | Successful upsert. |
 
 ---
 
-## Notes & open questions
-
-- **No Zod at these route boundaries.** Unlike the project convention of validating with Zod `.safeParse()` at API boundaries, all three read routes parse query params manually and rely on service-layer string checks (`assertUtilizationDate`, `parseUtilizationWeekdays`) for validation; the write route takes no input. Verified by absence — `grep -r "zod" src/app/api/room-capacity src/app/api/internal/sync-room-utilization` returns nothing.
-- **`sync-room-utilization` is unscheduled.** It exists with `maxDuration = 800` but has no `vercel.json` cron entry and is `POST`-only (cron calls `GET`), so it never fires automatically. Open question: was an automated cron (and stagger) intended, or is manual/CLI refresh the deliberate design? (Mirrors the open question already recorded in [`docs/reference/crons.md`](../crons.md) and [`docs/features/room-capacity.md`](../../features/room-capacity.md).)
-
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

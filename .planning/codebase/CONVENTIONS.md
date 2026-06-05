@@ -2,59 +2,73 @@
 
 **Analysis Date:** 2026-05-31
 
-These conventions are verified against current code (HEAD + uncommitted WIP). The
+These conventions are verified against current code (HEAD `d4fe6d3`). The
 codebase has grown well beyond the original tutor-search tool into a multi-domain
 admin platform — search/compare, classroom assignment, sales dashboard, credit
 control, payroll review, LINE scheduler review, AI scheduler, leave requests, room
-capacity, and Wise activity audit. The conventions below hold across **all** of
-those domains; where a newer module refines an older pattern (e.g. `z.coerce`,
-constant-time cron auth, graceful table-missing fallbacks) it is called out.
+capacity, Wise activity audit, **progress tests** (every-8-classes tracker with a
+teacher-scoped read-only view), and **student promotions** (annual grade roll-up).
+The conventions below hold across **all** of those domains; where a newer module
+refines an older pattern (e.g. `z.coerce`, constant-time cron auth, graceful
+table-missing fallbacks, the domain-scoped `require*Session` / `*ErrorResponse`
+auth helpers) it is called out.
 
 ## Naming Patterns
 
 ### Files
 
 - **kebab-case** for every source file: `session-colors.ts`, `week-overview.tsx`,
-  `app-nav.tsx`, `cron-auth.ts`, `review-service.ts`, `may-reconciliation.ts`,
+  `app-nav.tsx`, `cron-auth.ts`, `review-service.ts`, `teacher-access.ts`,
+  `teacher-heads-up.ts`, `parent-message.ts`, `admin-digest.ts`,
   `sales-dashboard-shell.tsx`, `scheduler-conversation.ts`
 - React components use `.tsx`; pure logic / type-only modules use `.ts`
-  (e.g. `src/lib/normalization/timezone.ts`, `src/lib/sales-dashboard/types.ts`)
+  (e.g. `src/lib/normalization/timezone.ts`, `src/lib/progress-tests/types.ts`)
 - Singular `schema.ts` for the Drizzle schema (`src/lib/db/schema.ts`)
 - Per-domain `types.ts` files (`src/lib/search/types.ts`, `src/lib/wise/types.ts`,
-  `src/lib/sales-dashboard/types.ts`, `src/lib/payroll/types.ts`)
+  `src/lib/progress-tests/types.ts`, `src/lib/payroll/types.ts`)
 - Test files: `{module}.test.ts` (or `.test.tsx`) inside a sibling `__tests__/`
-  directory — **never** colocated. Every one of the 130 test files lives under a
-  `__tests__/` dir (`src/lib/normalization/__tests__/identity.test.ts`,
+  directory — **never** colocated. All 162 test files live under a `__tests__/`
+  dir (`src/lib/normalization/__tests__/identity.test.ts`,
+  `src/lib/progress-tests/__tests__/engine.test.ts`,
   `src/lib/auth/__tests__/signin-callback.test.ts`)
 - Integration tests use the `.integration.test.ts` suffix and live under
-  `__tests__/` too; shared integration helpers sit in `src/tests/integration/`
+  `__tests__/` too (3 suites); the shared integration helper sits in
+  `src/tests/integration/db-helper.ts`
 - Page components at `src/app/.../page.tsx`; route handlers at
   `src/app/api/.../route.ts`; dynamic segments use bracket dirs
-  (`src/app/api/class-assignments/runs/[runId]/rows/[rowId]/route.ts`)
-- Layouts at `src/app/.../layout.tsx`; the root redirect at `src/app/page.tsx`
+  (`src/app/api/student-promotions/runs/[runId]/apply/route.ts`,
+  `src/app/api/class-assignments/runs/[runId]/rows/[rowId]/route.ts`)
+- Layouts at `src/app/.../layout.tsx`; the root redirect at
+  `src/app/(app)/page.tsx`
 
 ### Functions
 
 - **camelCase** for all functions, verb-prefixed by intent:
   - `get*` for retrieval / accessors: `getDb()`, `getEnv()`, `getCurrentMonday()`,
     `getStartOfTodayBkk()`, `getSearchIndex()`, `getActiveSnapshotId()`,
-    `getCronSecretStatus()`, `getRoomCapacityForecast()`
+    `getCronSecretStatus()`, `getRoomCapacityForecast()`,
+    `getProgressTestsPayload()`
   - `is*` / `has*` / `should*` for booleans: `isBlockingStatus()`,
     `isOnlineVariant()`, `isMissingForecastTableError()`,
-    `shouldReturnAvailabilitySummary()`, `hasValidCronSecret()`
+    `shouldReturnAvailabilitySummary()`, `hasValidCronSecret()`, `hasPageAccess()`
   - `make*` / `create*` for factories: `createWiseClient()`, `createDb()`
   - `parse*` / `normalize*` for transformation: `parseTimeToMinutes()`,
     `parseSlotInput()`, `normalizeWorkingHours()`, `normalizeLeaves()`,
-    `normalizeSessions()`, `normalizeWeekday()`
+    `normalizeSessions()`, `normalizeWeekday()`, `normalizeEmail()`,
+    `normalizeTutorLookupKey()`
   - `fetch*` for I/O: `fetchAllTeachers()`, `fetchAllFutureSessions()`,
     `fetchTeacherAvailability()`, `fetchPastSessionBlocks()`
   - `derive*` / `resolve*` / `extract*` for inference: `deriveModality()`,
-    `resolveIdentities()`, `resolveSessionModality()`, `extractNickname()`
+    `resolveIdentities()`, `resolveSessionModality()`, `extractNickname()`,
+    `resolveUserAccess()`, `resolveTeacherCanonicalKeys()`
   - `build*` / `compute*` for derived structures: `buildIndex()`,
     `buildCompareTutor()`, `computeFreeGaps()`
   - `detect*` / `find*` for analysis: `detectConflicts()`, `findSharedFreeSlots()`
+  - `require*` for auth/precondition guards that throw on failure:
+    `requireProgressTestsSession()`, `requireProgressTestsAdminSession()`
+    (`src/lib/progress-tests/api.ts:32,57`)
   - `reject*` for guard helpers that return an error response or null:
-    `rejectInvalidCronSecret()` (`src/lib/internal/cron-auth.ts:20`)
+    `rejectInvalidCronSecret()` (`src/lib/internal/cron-auth.ts:19`)
 - Internal/private helpers are lowercased with no special marker
   (`searchSlot`, `formatIsoDate`, `parseMondayDate`, `addDays`)
 
@@ -62,12 +76,13 @@ constant-time cron auth, graceful table-missing fallbacks) it is called out.
 
 - **camelCase** for locals and properties: `snapshotMeta`, `tutorGroupIds`,
   `sessionBlocks`, `dateRange`, `mondayDate`, `pastBlocksByCanonicalKey`,
-  `resolvedIdByRequestedId`, `usedStaleIds`
+  `resolvedIdByRequestedId`, `usedStaleIds`, `teacherCanonicalKeys`,
+  `enrollmentKey`
 - Module-level mutable singletons are **not** `_`-prefixed. The codebase uses a
   `globalThis` namespace (`globalThis.__bgscheduler_db`,
   `globalThis.__bgscheduler_searchIndex`,
   `globalThis.__bgscheduler_searchIndexBuildPromise`) to survive Next.js HMR
-  (`src/lib/db/index.ts:16-19`, `src/lib/search/index.ts:94-97`). This is the
+  (`src/lib/db/index.ts:16-19`, `src/lib/search/index.ts:94-96`). This is the
   **only** module-singleton mechanism — no `let _db` / `let _cachedIndex` style
   exists anywhere.
 
@@ -77,21 +92,24 @@ constant-time cron auth, graceful table-missing fallbacks) it is called out.
   `START_HOUR`, `END_HOUR`, `TOTAL_HOURS`, `DAY_NAMES`, `DISPLAY_DAYS`,
   `TIMEZONE`, `WEEKDAY_MAP`, `UUID_RE`, `API_STALE_THRESHOLD_MS`,
   `STALE_SEARCH_WARNING`
+- Single-route literals that read more naturally lower-cased stay `const` but
+  carry a descriptive name and a JSDoc line — e.g.
+  `const PROGRESS_TESTS_ROUTE = "/progress-tests"` (`src/lib/auth-access.ts:18`,
+  `src/lib/progress-tests/api.ts:6`)
 - Examples: `src/components/compare/week-overview.tsx`,
   `src/lib/normalization/timezone.ts`, `src/lib/ops/stale.ts`,
-  `src/app/api/compare/route.ts:59` (`UUID_RE`)
+  `src/app/api/compare/route.ts` (`UUID_RE`)
 
 ### Types
 
 - **PascalCase** for interfaces and type aliases
 - `interface` for object shapes; `type` for unions, primitives, or aliases:
   - `interface SearchRequest`, `interface IndexedTutorGroup`,
-    `interface SalesDashboardSourceRecord`
+    `interface UserAccess` (`src/lib/auth-access.ts:23`)
   - `type SearchMode = "recurring" | "one_time"`,
     `type CronSecretStatus = "valid" | "invalid" | "missing-secret"`
-    (`src/lib/internal/cron-auth.ts:5`),
-    `type SalesSourceStatus = "active" | "refreshing" | ...`
-    (`src/lib/sales-dashboard/types.ts:1`)
+    (`src/lib/internal/cron-auth.ts:4`),
+    `type UserRole = "admin" | "teacher"` (`src/lib/auth-access.ts:21`)
 - Domain-prefixed names:
   - `Wise*` for external Wise API shapes: `WiseTeacher`, `WiseSession`, `WiseTag`,
     `WiseLeave`, `WiseClientConfig`
@@ -103,25 +121,37 @@ constant-time cron auth, graceful table-missing fallbacks) it is called out.
   - `Compare*` for compare-engine outputs: `CompareTutor`, `CompareSessionBlock`,
     `CompareResponse`, `CompareRequest`
   - `Parsed*` for parser outputs in the sales pipeline: `ParsedNormalSaleRow`,
-    `ParsedAdditionalSaleRow` (`src/lib/sales-dashboard/types.ts`)
+    `ParsedAdditionalSaleRow`
+  - `App*` for shared session/app shapes: `AppSessionUser`
+    (`src/lib/progress-tests/types.ts`, used by the auth helpers)
 - TypeScript `enum` is **never** used. Database enums use Drizzle's `pgEnum`
-  (21 declarations in `src/lib/db/schema.ts`, e.g. `syncStatusEnum`,
-  `modalityEnum`, `payrollReviewStatusEnum`, `lineSchedulerReviewStatusEnum`)
+  (**25 declarations** in `src/lib/db/schema.ts`, e.g. `syncStatusEnum`,
+  `modalityEnum`, `payrollReviewStatusEnum`, `lineSchedulerReviewStatusEnum`,
+  and the progress-tests / student-promotions status enums)
 
 ### Database (Drizzle / Postgres)
 
 - **snake_case** for table and column SQL names: `tutor_identity_groups`,
   `snapshot_id`, `created_at`, `wise_teacher_id`, `is_online_variant`,
-  `group_canonical_key`, `payroll_review_status`
+  `group_canonical_key`, `payroll_review_status`, `most_frequent_tutor_canonical_key`
 - **camelCase** for the Drizzle schema object names: `tutorIdentityGroups`,
-  `snapshotId`, `wiseTeacherId`, `isOnlineVariant`
-- 78 tables defined with `pgTable(...)`, all snapshot-scoped except the single
-  documented cross-snapshot table `past_session_blocks` (its deviation is
-  explained inline at `src/lib/db/schema.ts:1328-1346`)
+  `snapshotId`, `wiseTeacherId`, `isOnlineVariant`, `tutorContacts`
+- **90 tables** defined with `pgTable(...)`; nearly all are snapshot-scoped or
+  keyed by a domain partition key (`payrollMonth`, `studentKey`, `canonicalKey`).
+  Snapshot-independent tables that survive snapshot rotation include `admin_users`
+  (now carrying an `allowed_pages` column for page-scoped access),
+  `tutor_aliases`, `tutor_contacts`, `wise_activity_events`,
+  `room_utilization_sessions`, and the single documented cross-snapshot data
+  table `past_session_blocks` (its deviation is explained inline near its
+  definition in `src/lib/db/schema.ts`)
 - Index names: short table-prefix + `_idx` suffix (e.g. `tig_snapshot_idx`,
   `tigm_group_idx`, `admin_users_email_idx`)
 - Postgres enums declared with `pgEnum` and exported by name (used both for the
   column type and as the TS union source)
+
+> `src/lib/db/schema.ts` is excluded from edits in this map's scope; counts here
+> are read-only observations. Column-level detail is owned by
+> `docs/reference/database/index.md`.
 
 ## Code Style
 
@@ -138,11 +168,12 @@ constant-time cron auth, graceful table-missing fallbacks) it is called out.
 - Trailing commas on multi-line object/array literals
 - Template literals for interpolation
   (e.g. `` `Wise API ${response.status}: ${text} (${url})` `` in
-  `src/lib/wise/client.ts`)
+  `src/lib/wise/client.ts`; `` `Bearer ${cronSecret}` `` in
+  `src/lib/internal/cron-auth.ts:13`)
 - Section-header comment patterns (two coexist — match whichever the file already
   uses):
   - `// ── Section Name ─────────` (em-dash bars) — preferred in `src/lib/**`
-    (`src/lib/db/schema.ts:17`, `src/lib/search/index.ts:9,92`)
+    (`src/lib/db/schema.ts`, `src/lib/search/index.ts`)
   - `// -------------------------` (long-hyphen blocks above/below a label) —
     used pervasively in `src/components/**` and across newer lib modules
     (e.g. `src/lib/sales-dashboard/*.ts`, `src/lib/line/*.ts`)
@@ -152,18 +183,21 @@ constant-time cron auth, graceful table-missing fallbacks) it is called out.
 - **ESLint 9** with flat config at `eslint.config.mjs`
 - Extends `eslint-config-next/core-web-vitals` and `eslint-config-next/typescript`
   only — **no custom rules** added beyond Next.js defaults
-- Default ignores re-declared to keep `.next/`, `out/`, `build/`, `next-env.d.ts`
-  ignored (`eslint.config.mjs:9-15`)
+  (`eslint.config.mjs:5-16`)
+- Default ignores re-declared via `globalIgnores([...])` to keep `.next/`, `out/`,
+  `build/`, and `next-env.d.ts` ignored (`eslint.config.mjs:9-15`)
 - Runs via `npm run lint` (resolves to bare `eslint`); type-checking is a separate
-  `npm run typecheck` (`tsc --noEmit`)
+  `npm run typecheck` (`tsc --noEmit`). The release gate
+  (`npm run verify:release`) chains `typecheck` → `test` → `build` → `typecheck`
+  again → `git diff --check` → a production-route-surface guard.
 - Inline `eslint-disable` is used sparingly and only for two narrow purposes:
   - `// eslint-disable-next-line no-var` for the `globalThis` `var` augmentations
     (`src/lib/db/index.ts:17`, `src/lib/search/index.ts`)
   - `react-hooks/exhaustive-deps` and `react-hooks/set-state-in-effect`
-    suppressions inside interactive client components (≈12 sites across
-    `src/components/search/*`, `src/components/scheduler/*`,
-    `src/components/compare/week-calendar.tsx`, etc.) where the effect is
+    suppressions inside interactive client components where the effect is
     intentionally not reactive to a dependency or sets state on mount
+    (`src/components/search/*`, `src/components/scheduler/*`,
+    `src/components/compare/week-calendar.tsx`, etc.)
 
 ### TypeScript
 
@@ -174,18 +208,18 @@ constant-time cron auth, graceful table-missing fallbacks) it is called out.
 - `isolatedModules: true`, `esModuleInterop: true`, `allowJs: true`,
   `noEmit: true`, `resolveJsonModule: true`, `incremental: true`,
   `skipLibCheck: true`, `plugins: [{ "name": "next" }]`
-- Path alias `"@/*": ["./src/*"]` (`tsconfig.json:21-23`)
+- Path alias `"@/*": ["./src/*"]`
 - Non-null assertions used sparingly and only after defensive checks
   (e.g. `this.queue.shift()!` in `src/lib/wise/client.ts`)
 - Type predicates at filter boundaries are a recurring pattern:
   `.filter((g): g is IndexedTutorGroup => g !== undefined)`
-  (`src/app/api/compare/route.ts:75`),
+  (`src/app/api/compare/route.ts`),
   `.filter((g): g is NonNullable<typeof g> => g !== undefined)`
-  (`src/app/api/compare/discover/route.ts:68`),
+  (`src/app/api/compare/discover/route.ts`),
   `.filter((item): item is string => typeof item === "string")`
-  (`src/app/api/leave-requests/[requestId]/wise-cancel-preview/route.ts:22`),
+  (`src/app/api/leave-requests/[requestId]/wise-cancel-preview/route.ts`),
   and a custom user-defined type guard `shouldReturnAvailabilitySummary(...): result is ...`
-  (`src/app/api/search/assistant/route.ts:91`)
+  (`src/app/api/search/assistant/route.ts`)
 
 ## Import Organization
 
@@ -196,14 +230,15 @@ constant-time cron auth, graceful table-missing fallbacks) it is called out.
 2. Internal `@/` aliases, grouped roughly by depth:
    - `@/lib/auth`, `@/lib/db`, `@/lib/env`
    - domain libs: `@/lib/wise/*`, `@/lib/normalization/*`, `@/lib/search/*`,
-     `@/lib/ops/*`, `@/lib/data/*`, `@/lib/sales-dashboard/*`, etc.
+     `@/lib/ops/*`, `@/lib/data/*`, `@/lib/progress-tests/*`,
+     `@/lib/student-promotions/*`, etc.
    - `@/components/ui/*`
    - `@/components/{feature}/*`
 3. Relative imports (`./types`, `../identity`)
 4. Type-only imports use `import type {...}`, often grouped at the end of the
    import block
 
-Example (`src/app/api/compare/route.ts:1-22`):
+Example (`src/app/api/compare/route.ts`):
 
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
@@ -235,7 +270,9 @@ import type { CompareResponse, SnapshotMeta } from "@/lib/search/types";
   (`resolve.alias`) so tests resolve identically
 - **No barrel files** — modules import directly from specific files
   (`from "@/lib/wise/client"`, not `from "@/lib/wise"`). The Drizzle schema is
-  the one exception, imported namespace-style as `import * as schema from "@/lib/db/schema"`
+  the one exception, imported namespace-style as
+  `import * as schema from "@/lib/db/schema"` (e.g.
+  `src/lib/progress-tests/teacher-access.ts:18`)
 - The shadcn `components.json` registers additional aliases for the CLI
   (`@/components`, `@/lib/utils`, `@/components/ui`, `@/lib`, `@/hooks`) but
   application code only ever uses the single `@/*` mapping
@@ -244,9 +281,9 @@ import type { CompareResponse, SnapshotMeta } from "@/lib/search/types";
 
 ### API Route Pattern
 
-Every mutating API route follows the same four-step structure (see
-`src/app/api/compare/route.ts:112-`, and mirrored across search, filters,
-class-assignments, credit-control, etc.):
+Two compatible shapes coexist. **Older / classic routes** follow the four-step
+structure (auth-first), seen across search, compare, filters, class-assignments,
+and credit-control:
 
 ```typescript
 export async function POST(request: NextRequest) {
@@ -284,42 +321,100 @@ export async function POST(request: NextRequest) {
 }
 ```
 
+**Newer domain routes (progress-tests)** wrap the *whole* handler in a single
+try/catch and delegate auth + error mapping to shared per-domain helpers. Auth is
+performed inside the `try` (so an auth failure flows through the same error mapper
+that distinguishes 401 vs 403), and a domain-scoped `*ErrorResponse` translates
+thrown sentinels into status codes:
+
+```typescript
+export async function POST(request: NextRequest) {
+  try {
+    const user = await requireProgressTestsAdminSession();   // throws "Unauthorized"/"Forbidden"
+
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    const parsed = MarkCompleteSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    }
+
+    const row = await markComplete({ enrollmentKey: parsed.data.enrollmentKey, actor: user });
+    if (!row) return NextResponse.json({ error: "Enrollment not found" }, { status: 404 });
+    return NextResponse.json({ row });
+  } catch (error) {
+    return progressTestsErrorResponse("/api/progress-tests/mark-complete", error, "Mark complete failed");
+  }
+}
+```
+
+(`src/app/api/progress-tests/mark-complete/route.ts`,
+`src/lib/progress-tests/api.ts:32,57,65`)
+
 Read-only `GET` routes that take a single trivial query param skip Zod and read
 `request.nextUrl.searchParams.get(...)` with an inline default, then wrap the
-data load in the same try/catch (`src/app/api/room-capacity/forecast/route.ts:43-61`).
+data load in the same try/catch (`src/app/api/room-capacity/forecast/route.ts`).
 
 ### HTTP Status Conventions
 
 - `200` — success
 - `400` — invalid JSON body, Zod validation failure
-- `401` — `auth()` returned null (not signed in), or an invalid cron secret
-- `404` — resource not found in active snapshot (e.g.
-  `src/app/api/compare/route.ts:161-166` when no matching tutor groups exist)
+- `401` — `auth()` returned null (not signed in), thrown `"Unauthorized"`, or an
+  invalid cron secret
+- `403` — authenticated but not permitted (a teacher hitting a mutating
+  progress-tests route, or any page the session's `allowedPages` excludes;
+  thrown `"Forbidden"` → `src/lib/progress-tests/api.ts:79-81`)
+- `404` — resource not found in active snapshot / domain (e.g. "Enrollment not
+  found", or no matching tutor groups in `src/app/api/compare/route.ts`)
 - `500` — caught business-logic exception, or `missing-secret` server
-  misconfiguration on a cron route (`src/lib/internal/cron-auth.ts:24`)
+  misconfiguration on a cron route (`src/lib/internal/cron-auth.ts:23`)
 
 ### Error Message Extraction
 
 Universal pattern in every catch block:
 `const message = err instanceof Error ? err.message : "<Default message>"`
-(`src/app/api/compare/route.ts`, `src/app/api/room-capacity/forecast/route.ts:58`,
-and throughout). The default string is route-specific.
+(`src/app/api/compare/route.ts`, `src/lib/progress-tests/api.ts:84-85`, and
+throughout). The default string is route-specific.
+
+### Role + Page-Level Access (defense in depth)
+
+Sign-in eligibility and per-page authorization are resolved server-side:
+
+- `resolveUserAccess(email)` (`src/lib/auth-access.ts:39`) is the Node-only
+  sign-in gate. Admins (rows in `admin_users`) take precedence; their
+  `allowed_pages` column is `null` for full access or a list of route prefixes
+  for restricted admins. A non-admin whose email matches an active
+  `tutor_contacts` row becomes a page-restricted **teacher** scoped to
+  `/progress-tests`. Anyone else → `null` → sign-in denied (fail-closed, the same
+  posture as the original admin-only allowlist). The edge auth config never
+  imports this module — it only reads the resulting token claims.
+- `hasPageAccess(allowedPages, route)` (`src/lib/progress-tests/api.ts:15`) is the
+  in-handler / in-page check: `null` allowedPages ⇒ full access; otherwise the
+  route must equal or be a child prefix of an allowed page.
 
 ### Cron-Protected Routes (constant-time auth)
 
-Internal cron routes no longer compare the bearer token with `===`. They use a
+Internal cron routes do not compare the bearer token with `===`. They use a
 **constant-time** comparison via `node:crypto`'s `timingSafeEqual`, with an
 O(1) length pre-check to avoid the `RangeError` that `timingSafeEqual` throws on
-length-mismatched buffers (this is the REL-07 hardening):
+length-mismatched buffers (the REL-07 hardening):
 
 - Shared helper `src/lib/internal/cron-auth.ts` exports `getCronSecretStatus()`
-  (returns `"valid" | "invalid" | "missing-secret"`) and `rejectInvalidCronSecret()`
-  (returns a `NextResponse` 401/500 or `null` to continue). Used by
-  `sync-wise-activity`, `sync-leave-requests`,
-  `class-assignments/morning`, and `class-assignments/admin-email`.
+  (returns `"valid" | "invalid" | "missing-secret"`, line 6) and
+  `rejectInvalidCronSecret()` (returns a `NextResponse` 401/500 or `null` to
+  continue, line 19). It is used by **six** internal cron routes:
+  `sync-wise-activity`, `sync-leave-requests`, `sync-progress-tests`,
+  `progress-tests/admin-digest`, `class-assignments/morning`, and
+  `class-assignments/admin-email`.
 - `src/app/api/internal/sync-wise/route.ts` carries an equivalent **inline**
-  `hasValidCronSecret()` implementation (same REL-07 logic) because it also
-  supports session-auth fallback for manual admin triggers.
+  `hasValidCronSecret()` implementation (same REL-07 logic, `route.ts:11-27`)
+  because it also supports a session-auth fallback for manual admin triggers
+  (`handleSync(request, { allowSessionAuth })`).
 
 When refactoring, prefer the shared `cron-auth.ts` helper over inlining.
 
@@ -328,13 +423,22 @@ When refactoring, prefer the shared `cron-auth.ts` helper over inlining.
 Newer feature routes that depend on optionally-migrated tables detect the
 "relation does not exist" error by message substring and return a typed
 "missing" payload (HTTP 200) instead of a 500, so the UI can render an empty
-state (`isMissingForecastTableError()` →
-`missingForecastBody()` in `src/app/api/room-capacity/forecast/route.ts:6-41`).
+state (`isMissingForecastTableError()` → `missingForecastBody()` in
+`src/app/api/room-capacity/forecast/route.ts`).
+
+### Next.js cacheComponents Re-throw
+
+Handlers that call cached data helpers must not swallow Next's hanging-promise
+sentinel. The progress-tests error mapper explicitly re-throws any error whose
+`digest === "HANGING_PROMISE_REJECTION"` before its own status mapping, so
+`cacheComponents` streaming semantics are preserved
+(`src/lib/progress-tests/api.ts:66-73`). Replicate this in any new domain-scoped
+error mapper.
 
 ### Fail-Closed Defaults
 
 Non-negotiable safety rule (per AGENTS.md): unresolved data routes the user away
-from "Available", never silently omits records:
+from "Available" / from access, never silently omits or guesses:
 
 - Unknown session status → blocking (`src/lib/normalization/sessions.ts`,
   `isBlockingStatus()`)
@@ -343,16 +447,19 @@ from "Available", never silently omits records:
 - Cancelled sessions: explicitly non-blocking
 - Modality contradictions: emit `unknown` modality + low confidence, never guess
   (`src/lib/search/compare.ts` — `resolveSessionModality`)
+- Unknown sign-in email or unresolvable teacher → no access, no rows
+  (`resolveUserAccess` → `null`; `resolveTeacherCanonicalKeys` → empty set)
 
 ### Wise Client Errors
 
 `src/lib/wise/client.ts` wraps `fetch` with:
 - Non-OK response → throws `Error` with status, response text, and URL
 - Exponential backoff retry: `Math.pow(2, attempt) * 1000` → 1 s, 2 s, 4 s
-  (`src/lib/wise/client.ts:108,129`)
 - Configurable `maxRetries` (default 3); errors re-thrown after retries exhausted
-- Queue-based concurrency limiter, `maxConcurrency` default 5
-  (`src/lib/wise/client.ts:48`), raised to 15 for the production sync via config
+- A `RETRYABLE_STATUS_CODES` set so 4xx (except the retryable ones) fail fast
+  rather than burning all retries
+- Queue-based concurrency limiter, `maxConcurrency` default 5, raised (to ~15)
+  for the production sync via config
 
 ### Sync Orchestrator Errors
 
@@ -360,6 +467,9 @@ from "Available", never silently omits records:
 - Top-level failures mark `sync_runs.status = 'failed'` and preserve the previous
   active snapshot (no promotion)
 - Completeness gate: > 50 % unresolved identity groups blocks promotion
+- Non-Wise sync lineages (sales, credit-control, wise-activity, leave-requests,
+  progress-tests, room utilization) replicate the single-flight `running`-row
+  guard and `*_sync_runs` discipline rather than the snapshot/index machinery
 
 ## Validation
 
@@ -378,7 +488,11 @@ const compareRequestSchema = z.object({
 });
 ```
 
-(`src/app/api/compare/route.ts:24-31`)
+(`src/app/api/compare/route.ts`)
+
+Small single-field bodies follow the same module-scope `const` convention, e.g.
+`const MarkCompleteSchema = z.object({ enrollmentKey: z.string().min(1) })`
+(`src/app/api/progress-tests/mark-complete/route.ts`).
 
 ### Coercion at the Boundary
 
@@ -386,15 +500,16 @@ Newer code prefers Zod's `z.coerce.*` helpers over the older `.transform(Number)
 idiom for parsing strings (query params, sheet/Wise payloads) into typed values:
 
 - `z.coerce.number().min(0).max(1)`
-  (`src/app/api/line/scheduler-reviews/false-negatives/route.ts:7`)
+  (`src/app/api/line/scheduler-reviews/false-negatives/route.ts`)
 - `z.coerce.boolean()`, `z.coerce.number()`, `z.coerce.date()` for parsing the
-  raw Wise credit-control envelope (`src/lib/credit-control/wise.ts:11,32-46`)
+  raw Wise credit-control envelope (`src/lib/credit-control/wise.ts`)
 
 ### Rules
 
 - **Always `.safeParse()`**, never `.parse()` (`.parse()` throws; `.safeParse()`
   returns a discriminated `success` boolean)
-- On failure return Zod's `.error.flatten()` in the JSON `details` field
+- On failure return Zod's `.error.flatten()` in the JSON body (as `details` in
+  classic routes, or directly as `error` in newer ones)
 - Prefer narrowing helpers (`.min()`, `.max()`, `.regex()`, `.url()`,
   `z.coerce.*`) over manual checks
 - Zod also validates **external** data crossing into the system, not just request
@@ -428,16 +543,21 @@ export const env = getEnv();
 - The 9 original vars are required; defaults are provided for `WISE_NAMESPACE` and
   `WISE_INSTITUTE_ID`; the three `LINE_*` / `ENABLE_LINE_SCHEDULER` vars are
   `.optional()` so the app boots without LINE configured
-- On invalid env: `console.error(...)` with `fieldErrors`, then
-  `throw new Error("Invalid environment variables")` (`src/lib/env.ts:22-25`)
+- On invalid env: `console.error(...)` with `.fieldErrors` only (never the
+  values), then `throw new Error("Invalid environment variables")`
+  (`src/lib/env.ts:22-25`)
+- Other env vars consumed directly off `process.env` (not in this schema) include
+  `CRON_SECRET` re-reads in cron-auth, `OPENAI_*` (gated by `ENABLE_AI_SCHEDULER`),
+  and the `LEAVE_REQUESTS_*` Sheets settings — read at the point of use with
+  inline defaults
 
 ## Logging
 
 ### Approach
 
 - **No structured logger** — bare `console.error` / `console.log` only
-- Used in ≈10 non-test files: 12 `console.error` calls and 6 `console.log` calls
-  total
+- Currently **14 `console.error`** and **8 `console.log`** calls across non-test
+  source
 
 ### Patterns
 
@@ -445,39 +565,43 @@ export const env = getEnv();
   at a fire-and-forget boundary:
   - Env validation failure (`src/lib/env.ts:23`)
   - Sync orchestrator failures (`src/lib/sync/orchestrator.ts`)
-  - Long-running pipeline steps in `src/lib/credit-control/api.ts`,
-    `src/lib/line/review-service.ts`, `src/lib/ai/scheduler-data.ts`
+  - The domain `*ErrorResponse` 500 branch logs `(route, error)` before
+    returning JSON (`src/lib/progress-tests/api.ts:83`)
+  - Long-running pipeline steps (credit-control, LINE review-service, AI
+    scheduler-data, progress-tests sync)
   - LINE webhook handler and the class-assignment publish route
-    (`src/app/api/line/webhook/route.ts`,
-    `src/app/api/class-assignments/runs/[runId]/publish/route.ts`)
   - Async `.catch(console.error)` for client fetches and caught component errors
-    (`src/app/(app)/data-health/page.tsx`,
-    `src/components/compare/discovery-panel.tsx`)
-- `console.log` is reserved for the seed script's human-readable progress
-  (`src/lib/db/seed.ts:14,28,33,40,42,45`)
-- Standard request/response API handlers do **not** `console.*` — they return JSON
-  errors instead
+- `console.log` is reserved for human-readable script progress (the seed script
+  `src/lib/db/seed.ts` and the `tsx scripts/*` maintenance scripts)
+- Standard request/response API handlers do **not** `console.*` on the happy path
+  — they return JSON errors instead
 
 ### What to Avoid
 
 - Do not introduce a logging dependency without explicit approval (Vercel +
   `console.*` is sufficient at current scale)
 - Do not log request bodies, secrets, or env values (the env error logs only
-  Zod `fieldErrors`, never the values)
+  Zod `fieldErrors`, never the values; cron-auth never logs the token)
 
 ## Comments
 
 ### When to Comment
 
 - **Public exported functions** get JSDoc with a short purpose statement, and for
-  multi-step algorithms an explicit numbered list of steps
+  multi-step algorithms an explicit numbered list of steps (e.g.
+  `resolveTeacherCanonicalKeys` documents its 3-step online/onsite bridging,
+  `src/lib/progress-tests/teacher-access.ts:23-48`)
 - **Non-obvious arithmetic / business logic** gets inline `//` notes
   (e.g. `// shift to Monday`, `// 1s, 2s, 4s`, `// 0=Sun`)
+- **File-top design notes** explain a module's posture before the imports — the
+  teacher-role rationale at the head of `src/lib/auth-access.ts:1-13`, and the
+  online/onsite identity-bridging note at
+  `src/lib/progress-tests/teacher-access.ts:1-13`, are good examples
 - **Design decisions are referenced by ID inline** — `D-04`, `D-07`, `D-08`,
-  `MOD-01`, `REL-07`, `REL-08`, `PAST-01`, `PAST-05`, `Pitfall 16`,
-  plus `AGENTS.md:line` anchors. These IDs are **load-bearing**: they tie code to
-  the plan/research documents under `.planning/` and appear in dozens of files
-  (most-cited: `MOD-01`, `D-08`, `D-04`). Preserve them when editing nearby code.
+  `MOD-01`, `REL-07`, `REL-08`, `PAST-01`, `PAST-05`, plus `AGENTS.md:line`
+  anchors. These IDs are **load-bearing**: they tie code to the plan/research
+  documents under `.planning/` and appear across dozens of files. Preserve them
+  when editing nearby code.
 
 ### JSDoc Pattern
 
@@ -492,21 +616,23 @@ export function extractNickname(displayName: string): string | null { ... }
 
 (`src/lib/normalization/identity.ts`)
 
-Multi-step algorithms list the steps explicitly:
+Multi-step algorithms list the steps explicitly, and often note where the
+function is called from and what an empty/null return means for the caller:
 
 ```typescript
 /**
- * Resolve tutor identities from Wise teacher records.
+ * Resolves a login email to every tutor canonicalKey the teacher owns.
  *
- * Resolution order:
- * 1. Extract nickname from parenthetical
- * 2. Apply alias overrides
- * 3. Detect online/offline pairs and merge them
- * 4. Any teacher that doesn't resolve → data_issue
+ * 1. Match active `tutor_contacts` rows by normalized onsite OR online email.
+ * 2. Seed the result with those rows' canonicalKeys (nickname-merged identities).
+ * 3. Bridge any split online/onsite identities via displayName / sourceNames.
+ *
+ * @returns the unique set of canonicalKeys; empty when the email is unknown
+ *   (→ fail-closed: the caller shows no rows / denies access).
  */
 ```
 
-(`src/lib/normalization/identity.ts`)
+(`src/lib/progress-tests/teacher-access.ts:23-48`)
 
 ### Section Headers
 
@@ -529,13 +655,15 @@ Two patterns coexist (use whichever already appears in the file):
 ### Inline Comment Style
 
 - Reference plan/research IDs in line: `// D-07 / PAST-01: historical-range trigger.`
-  (`src/app/api/compare/route.ts:180`)
+  (`src/app/api/compare/route.ts`)
 - Use `→` to note transformations: `// "Chinnakrit (Celeste) Channiti" → "Celeste"`
 - Type-field documentation: `dayOfWeek?: number; // 0=Sunday..6=Saturday`
-- Magic numbers explained: `// 1s, 2s, 4s` (`src/lib/wise/client.ts`)
+- Magic numbers explained: `// 1s, 2s, 4s` (`src/lib/wise/client.ts`); the
+  length pre-check rationale on `timingSafeEqual`
+  (`src/lib/internal/cron-auth.ts` / sync-wise inline copy)
 - Long-form deviation rationales live as multi-line `//` blocks directly above the
-  code they justify (the `past_session_blocks` cross-snapshot deviation,
-  `src/lib/db/schema.ts:1328-1346`)
+  code they justify (the `past_session_blocks` cross-snapshot deviation in
+  `src/lib/db/schema.ts`)
 
 ### TODO Discipline
 
@@ -547,13 +675,19 @@ Two patterns coexist (use whichever already appears in the file):
 ### Signature Style
 
 - Destructured object parameters when 3+ args, or a single config object
-  (`new WiseClient({ userId, apiKey, namespace, maxConcurrency, maxRetries })`)
-- Helper functions that need both a DB handle and options take the handle
-  positionally and options as a trailing object:
-  `getRoomCapacityForecast(getDb(), { scenario })`
+  (`new WiseClient({ userId, apiKey, namespace, maxConcurrency, maxRetries })`;
+  `markComplete({ enrollmentKey, actor })`)
+- Helper functions that need a DB handle take it as a trailing parameter that
+  **defaults to `getDb()`**, so production callers omit it and tests inject a
+  handle: `resolveUserAccess(email, db: Database = getDb())`
+  (`src/lib/auth-access.ts:46`),
+  `resolveTeacherCanonicalKeys(email, db: Database = getDb())`
+  (`src/lib/progress-tests/teacher-access.ts`). Where a handle and options are
+  both needed, the handle is positional and options trail as an object
+  (`getRoomCapacityForecast(getDb(), { scenario })`).
 - Optional params expressed with `?` property or default values:
   - `staleThresholdMs: number = ...` (search engine)
-  - `attempt = 0` (`src/lib/wise/client.ts:94`)
+  - `attempt = 0` (`src/lib/wise/client.ts`)
   - `options: { allowSessionAuth: boolean }` (sync route `handleSync`)
 
 ### Return Values
@@ -566,18 +700,25 @@ Two patterns coexist (use whichever already appears in the file):
   - `resolveIdentities(...) → { groups, issues }`
   - `resolveSessionModality(...) → { modality, confidence }`
   - `resolveTutorGroupsForActiveSnapshot(...) → { groups, resolvedIdByRequestedId, usedStaleIds }`
-    (`src/app/api/compare/route.ts:61-65`)
-- Guard helpers return `T | null` to signal "continue" vs "stop"
-  (`rejectInvalidCronSecret(): NextResponse | null`)
-- Nullable returns use `| null` (e.g. `extractNickname(): string | null`); avoid
-  `undefined` in domain return types
+- Auth/precondition guards split by failure mode:
+  - **Throwing guards** raise a sentinel `Error` mapped to a status by a shared
+    `*ErrorResponse` (`requireProgressTestsSession` throws `"Unauthorized"` /
+    `"Forbidden"`)
+  - **Response-or-null guards** return `NextResponse | null`
+    (`rejectInvalidCronSecret(): NextResponse | null` — `null` means "continue")
+- Resolver functions that may find nothing return a concrete empty value
+  (`resolveTeacherCanonicalKeys → string[]`, empty on miss) or `| null`
+  (`resolveUserAccess → UserAccess | null`); avoid `undefined` in domain return
+  types
+- Nullable returns use `| null` (e.g. `extractNickname(): string | null`)
 - Async functions return `Promise<T>` directly; no callback style
 
 ### Function Length
 
 - Most domain functions ≤ 40 lines
-- Larger orchestrators (`buildCompareTutor`, `runFullSync`, the compare `POST`
-  handler) factor sub-steps into named helpers in the same file
+- Larger orchestrators (`buildCompareTutor`, `runFullSync`, the progress-tests
+  sync/booking engines, the compare `POST` handler) factor sub-steps into named
+  helpers in the same file
 
 ## Module Design
 
@@ -586,10 +727,10 @@ Two patterns coexist (use whichever already appears in the file):
 - **Named exports** everywhere except page components and route handlers — there
   are **zero** default exports in `src/lib` or `src/components`
 - Page components: `export default async function SearchPage()`
-  (`src/app/(app)/search/page.tsx:7`)
-- Route handlers use named `GET`/`POST`/`PATCH`/`PUT`/`DELETE` exports per the
-  Next.js App Router contract (110 endpoints across 96 `route.ts` files:
-  48 POST, 46 GET, 12 PATCH, 4 DELETE)
+  (`src/app/(app)/search/page.tsx`)
+- Route handlers use named `GET`/`POST`/`PATCH`/`DELETE` exports per the Next.js
+  App Router contract (**130 endpoints** across 111 `route.ts` files; method
+  exports skew POST/GET with a handful of `PATCH` and `DELETE`, no `PUT`)
 - Types co-exported with implementations or re-exported from a sibling `types.ts`
 - No barrel files — `from "@/lib/wise/client"`, never `from "@/lib/wise"`
 
@@ -600,6 +741,8 @@ Two patterns:
 1. **`globalThis`-anchored** — survives Next.js HMR in dev. This is the only
    place `declare global` appears (`src/lib/db/index.ts`, `src/lib/search/index.ts`):
    ```typescript
+   type DbInstance = ReturnType<typeof createDb>;
+
    declare global {
      // eslint-disable-next-line no-var
      var __bgscheduler_db: DbInstance | undefined;
@@ -611,21 +754,28 @@ Two patterns:
      }
      return globalThis.__bgscheduler_db;
    }
+
+   export type Database = ReturnType<typeof getDb>;
    ```
+   The public handle type is **`Database`** (`src/lib/db/index.ts:29`), which
+   newer modules accept as a defaulted parameter (see Function Design).
 
 2. **Lazy ensure-pattern with staleness check + in-flight dedupe** — the search
    index adds a build-promise singleton
    (`globalThis.__bgscheduler_searchIndexBuildPromise`) so concurrent requests
-   share a single rebuild; `ensureIndex(db)` rebuilds when the active snapshot's
-   id changes (`src/lib/search/index.ts`)
+   share a single rebuild; `ensureIndex(db: Database)` rebuilds when the active
+   snapshot's id changes (`src/lib/search/index.ts:94-96,354`)
 
 ### Server-only Helpers Behind Routes
 
 Logic invoked by route handlers lives in plain `src/lib/{domain}/*.ts` modules
 (`@/lib/data/filters`, `@/lib/room-capacity/data`, `@/lib/sync/run-wise-sync`,
-`@/lib/credit-control/service`) so it is unit-testable in the Vitest `node`
-environment without pulling in the Next.js / next-auth route graph. Server
-component pages call these helpers directly (see Component Patterns).
+`@/lib/credit-control/service`, `@/lib/progress-tests/service`,
+`@/lib/student-promotions/data`) so it is unit-testable in the Vitest `node`
+environment without pulling in the Next.js / next-auth route graph. Auth +
+error-mapping helpers for a domain are co-located in that domain's `api.ts`
+(`src/lib/progress-tests/api.ts`). Server-component pages call these helpers
+directly (see Component Patterns).
 
 ## Component Patterns
 
@@ -633,15 +783,16 @@ component pages call these helpers directly (see Component Patterns).
 
 - shadcn/ui primitives: `src/components/ui/` (13 files) — wrap `@base-ui/react`
   with `cva()` variants
-- Feature components: `src/components/{feature}/` — `compare/`, `search/`,
-  `class-assignments/`, `credit-control/`, `sales-dashboard/`, `payroll/`,
-  `line-review/`, `leave-requests/`, `room-capacity/`, `scheduler/`,
-  `tutor-profiles/`, `wise-activity/`, `layout/`, `skeletons/`
+- Feature components: `src/components/{feature}/` —
+  `compare/`, `search/`, `class-assignments/`, `credit-control/`,
+  `sales-dashboard/`, `payroll/`, `line-review/`, `leave-requests/`,
+  `room-capacity/`, `scheduler/`, `tutor-profiles/`, `wise-activity/`,
+  `progress-tests/`, `student-promotions/`, `home/`, `layout/`, `skeletons/`
 
 ### "use client" Directive
 
 - Required on every interactive component or component using browser APIs / hooks
-  (62 client components under `src/components/`)
+  (**65 client components** under `src/components/`)
 - Top of file, before imports: `"use client";`
 - **Pages are async server components by default.** The dominant page pattern is:
   the `page.tsx` is an `async` server component that fetches data via server-only
@@ -660,8 +811,10 @@ component pages call these helpers directly (see Component Patterns).
   ```
   (`src/app/(app)/search/page.tsx`). Most `(app)` pages — sales-dashboard,
   credit-control, scheduler, payroll, leave-requests, wise-activity,
-  tutor-profiles, compare — follow this server-fetch → `<Suspense>` → client-shell
-  shape.
+  tutor-profiles, progress-tests, student-promotions, compare — follow this
+  server-fetch → `<Suspense>` → client-shell shape. Pages that gate on role
+  resolve access in the server component (or rely on middleware + the in-handler
+  `hasPageAccess` check) before rendering the shell.
 
 ### Variant Components (shadcn / CVA)
 
@@ -673,7 +826,9 @@ component pages call these helpers directly (see Component Patterns).
   }
   ```
 - Both component and variants exported: `export { Button, buttonVariants }`
-- shadcn/ui files **omit semicolons** — leave them as is
+- shadcn/ui files **omit semicolons** — leave them as is. The CLI config
+  (`components.json`) records `style: "base-nova"`, `baseColor: "neutral"`, CSS
+  variables enabled
 
 ### Hooks & State
 
@@ -681,8 +836,8 @@ component pages call these helpers directly (see Component Patterns).
   Zustand, Jotai, etc.
 - Recent searches persisted via `localStorage` (capped at 10)
 - The compare tutor cache lives client-side as
-  `Map<tutorGroupId:weekStart, CompareTutor>` with incremental fetch +
-  `AbortController` for race-condition safety
+  `Map<"tutorGroupId:weekStart:CACHE_VERSION", CompareTutor>` with incremental
+  fetch + `AbortController` for race-condition safety
 - Intentional non-reactive effects or mount-time `setState` are documented with a
   targeted `// eslint-disable-next-line react-hooks/exhaustive-deps`
   (or `set-state-in-effect`) comment rather than silenced project-wide
@@ -713,11 +868,12 @@ centralized in `src/lib/ui/` (`z-index.ts`, `view-transitions.ts`) and
 
 ### Styling
 
-- Tailwind CSS 4 utility classes inline on JSX (shadcn style `base-nova`,
-  base color `neutral`, CSS variables enabled — `components.json`)
+- Tailwind CSS 4 utility classes inline on JSX; theme in `src/app/globals.css`
+  (OKLCH tokens, no `tailwind.config`)
 - Semantic color tokens via CSS custom properties: `--available`, `--blocked`,
   `--conflict`, `--free-slot`
-- OKLCH color space for the palette
+- OKLCH color space for the palette (sky-blue primary, amber accent, cream
+  backgrounds)
 - Tutor lane colors centralized: `TUTOR_COLORS = ["#3b82f6", "#e67e22", "#7c3aed"]`
   (sky blue, amber, purple)
 - Conditional classes via `cn()` + template literals:
@@ -727,4 +883,4 @@ centralized in `src/lib/ui/` (`z-index.ts`, `view-transitions.ts`) and
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

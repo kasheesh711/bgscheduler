@@ -4,43 +4,69 @@
 
 ## Purpose
 
-This document traces the **Wise snapshot sync** — the single ETL pipeline that turns the live Wise scheduling platform into the normalized, versioned, in-memory data that every search and compare query reads. It is the backbone of the application's "source of truth" rule: production truth comes from the Wise API only, is fetched on a schedule, normalized through six domain modules, written into a fresh immutable snapshot, validated, and atomically promoted. Search and compare never call Wise directly — they read a process-global index built from the active snapshot.
+This document traces the **Wise snapshot sync** — the single ETL pipeline that turns the live Wise scheduling platform into the normalized, versioned, in-memory data that every tutor search and compare query reads. It is the spine of the application's source-of-truth rule: production truth comes from the Wise API only, is fetched on a schedule, normalized through seven domain modules, written into a fresh immutable snapshot, validated, and atomically promoted. Search and compare never call Wise on the request path — they read a process-global index built from whichever snapshot is currently `active`.
 
-The pipeline's single entry point is `runFullSync()` in `src/lib/sync/orchestrator.ts:50`. It is triggered by a Vercel cron every 30 minutes (`vercel.json`, path `/api/internal/sync-wise`, schedule `*/30 * * * *`) and can also be triggered manually. A single-flight guard ensures only one sync runs at a time.
+The pipeline has one entry point, `runFullSync()` in `src/lib/sync/orchestrator.ts:50`. It is triggered by a Vercel cron every 30 minutes (`vercel.json:4-5`: path `/api/internal/sync-wise`, schedule `*/30 * * * *`) and can also be triggered manually (admin session or `curl` with the cron secret). A single-flight guard ensures only one sync runs at a time.
 
-> **Scope note.** This is the *tutor-availability* snapshot sync. Other staggered crons (Wise Activity audit, Sales Dashboard, Credit Control, Leave Requests, class-assignment emails — all listed in `vercel.json`) are separate pipelines documented with their own features. They share the `WiseClient` but not the snapshot/promotion machinery described here.
+> **Scope note.** This is the *tutor-availability* snapshot sync only. The other staggered crons in `vercel.json` (Wise Activity audit, Sales Dashboard, Credit Control, Leave Requests, class-assignment automation, student promotions) are separate pipelines with their own sync lineages and tables — see [`docs/reference/crons.md`](../reference/crons.md). They share the `WiseClient` transport but not the snapshot / promotion / in-memory-index machinery described here.
+
+For the meaning of individual snapshot tables (purpose, business rules), see the feature docs ([tutor-search](../features/tutor-search.md), [tutor-compare](../features/tutor-compare.md), [data-health](../features/data-health.md)). For column-level detail (types, defaults, indexes, FK targets) see the [database reference](../reference/database/index.md) and its [core ERD](../reference/database/erd-core.md). For the Wise endpoints and transport contract see the [Wise API reference](../reference/wise-api.md). This document owns the *flow* — the ordered choreography across those layers and the invariants that hold each stage together.
+
+## The layered model
+
+The architecture rule is that lower layers know nothing of upper layers. The sync is the one place that touches every layer top to bottom in a single function:
+
+```
+Wise client        src/lib/wise/        retry/backoff + concurrency limiter; no internal imports
+  ↓
+Normalization      src/lib/normalization/   identity, availability, leaves, sessions,
+                                            qualifications, modality, timezone — depend only on Wise types
+  ↓
+Orchestrator       src/lib/sync/        runFullSync() + diff-hook + pruning
+  ↓
+Database           src/lib/db/          Neon-http singleton, snapshot-scoped writes, atomic promote
+  ↓
+In-memory index    src/lib/search/index.ts   SearchIndex singleton, lazily (re)built from the active snapshot
+```
+
+The orchestrator never imports a route, auth, or React. The route handler (`src/app/api/internal/sync-wise/route.ts`) is a thin auth gate; the runnable logic lives in `src/lib/sync/run-wise-sync.ts` and `orchestrator.ts` so it is unit-testable without the Next/auth graph.
 
 ## The stage map
 
-The full pipeline, end to end:
+End to end, with the orchestrator's own source-comment numbering (`// 1.` … `// 12.`) preserved so the prose lines up with the code:
 
 ```
-Trigger (cron GET / manual POST)
-  └─ run-wise-sync.ts: single-flight guard → acquire syncRunId
+Trigger (cron GET / manual POST) → /api/internal/sync-wise
+  └─ run-wise-sync.ts: failStaleRunningSyncs → single-flight guard → acquire syncRunId
        └─ orchestrator.ts: runFullSync()
-            1.  Create / adopt sync_run row (status=running)
-            2.  Create candidate snapshot (active=false)
+            1.  Create sync_run row (status=running) — unless caller supplied syncRunId
+            2.  Create candidate snapshot (active=false), link it onto the sync_run
             3.  Fetch all teachers ........................... Wise GET /teachers
-            4.  Load tutor_aliases (DB)
+            4.  Load tutor_aliases (DB read)
             5.  Resolve identities .......................... normalization/identity
             6.  Persist identity groups + members (DB write)
-            7.  Per teacher: fetch availability + leaves .... Wise GET /availability ×26
-                  → normalize working hours, leaves, tags, qualifications
+            7.  Per teacher: fetch availability + leaves .... Wise GET /availability ×26 windows
+                  → normalize workingHours, leaves, raw tags, qualifications
             8.  Fetch all FUTURE sessions ................... Wise GET /sessions (paged)
-                  → normalize session blocks
+                  → normalize into session blocks
             9.  Derive modality per group ................... normalization/modality
-                  → MOD-01 per-session contradiction pass
-            9.5 PAST-01 diff-hook: capture dropped past sessions (DB write)
-            10. Batch-insert windows/leaves/tags/quals/sessions/tutors (DB write)
-            11. Insert data_issues + snapshot_stats (DB write)
-            12. Validate (unresolved ratio) → atomic promote (single UPDATE)
-                  → on success: prune old snapshots, mark sync_run success
+                  → build tutor rows; MOD-01 per-session contradiction pass
+            9.5 PAST-01 diff-hook: capture dropped past sessions (DB write) — BEFORE promote
+            10. Stamp window modality, then batch-insert
+                  windows / leaves / tags / quals / sessions / tutors (DB write, parallel)
+                  → insert data_issues
+            11. Compute + insert snapshot_stats (DB write)
+            12. Validate (unresolved ratio < 0.5) → atomic promote (single UPDATE)
+                  → mark sync_run success; prune old snapshots
        └─ run-wise-sync.ts: revalidateTag("snapshot") on success
-  ... later, on first read ...
-  └─ ensureIndex(): staleness check → buildIndex() rebuilds the in-memory SearchIndex
+  ... later, on the first read after promotion ...
+  └─ ensureIndex(): staleness check (snapshotId / profileVersion) → buildIndex() rebuilds SearchIndex
 ```
 
-A note on numbering: the comment numbers in the orchestrator source (`// 1.` … `// 12.`) are followed throughout this document so the prose and the code line up. Step 9.5 (the diff-hook) is interleaved between the modality work and the bulk insert; the section below explains why.
+Two ordering subtleties worth flagging up front, both explained in their sections below:
+
+- **Step 9.5 runs before step 12.** The past-session diff-hook reads the *prior* active snapshot, so it must run while that snapshot is still `active=true` — i.e. before the promote in step 12 flips the flag (`past-sessions-diff-hook.ts:11-13`, `orchestrator.ts:400-407`).
+- **The index rebuild is not part of the sync.** `runFullSync()` writes the snapshot and returns; it never builds the index. The successful HTTP wrapper only calls `revalidateTag("snapshot")` (`run-wise-sync.ts:160-162`). The in-memory `SearchIndex` is rebuilt lazily by the *next read-path caller* via `ensureIndex()`, which detects the snapshot change and rebuilds (`src/lib/search/index.ts:354-401`).
 
 ## Sequence diagram
 
@@ -56,256 +82,296 @@ sequenceDiagram
     participant Idx as SearchIndex (globalThis)
 
     Cron->>Route: GET (cron) / POST (manual)
-    Route->>Route: hasValidCronSecret (constant-time)
-    Route->>Runner: runWiseSyncRequest()
-    Runner->>DB: failStaleRunningSyncs (>20min → failed)
-    Runner->>DB: find running sync_run
-    alt a sync is already running
-        Runner-->>Route: 202 skipped (single-flight)
-    else acquire guard
-        Runner->>DB: INSERT sync_run (status=running) → syncRunId
-        Runner->>Orch: runFullSync(db, client, instituteId, {syncRunId})
+    Route->>Route: hasValidCronSecret() — constant-time, REL-07
+    alt secret valid OR (POST and Auth.js session)
+        Route->>Runner: runWiseSyncRequest()
+    else neither
+        Route-->>Cron: 401 Unauthorized
+    end
 
-        Orch->>DB: INSERT snapshot (active=false) → snapshotId
+    Runner->>DB: failStaleRunningSyncs() (>20min running → failed)
+    Runner->>DB: findRunningSyncRun()
+    alt a sync is already running
+        Runner-->>Cron: 202 { skipped, alreadyRunning }
+    else acquire guard
+        Runner->>DB: INSERT sync_runs(status=running) → syncRunId
+        Runner->>Orch: runFullSync(db, client, instituteId, { syncRunId })
+
+        Orch->>DB: INSERT snapshots(active=false) → snapshotId
+        Orch->>DB: UPDATE sync_runs SET snapshotId
         Orch->>Wise: GET /institutes/{id}/teachers
         Wise-->>Orch: WiseTeacher[]
         Orch->>DB: SELECT tutor_aliases
-        Orch->>Orch: resolveIdentities(teachers, aliases)
-        Orch->>DB: INSERT identity groups + members
+        Orch->>Orch: resolveIdentities(teachers, aliases) → groups + identityIssues
+        Orch->>DB: INSERT tutor_identity_groups (per group) + members (chunked)
 
-        loop per teacher (concurrency ≤15)
-            Orch->>Wise: GET /availability ×26 (180-day horizon)
-            Wise-->>Orch: workingHours + leaves
+        loop per teacher
+            Orch->>Wise: GET /availability ×26 windows (workingHours + 180d leaves)
+            Wise-->>Orch: { workingHours, leaves }
             Orch->>Orch: normalizeWorkingHours / normalizeLeaves / normalizeTeacherTags
         end
 
-        Orch->>Wise: GET /sessions?status=FUTURE (paged)
+        Orch->>Wise: GET /sessions?status=FUTURE (paged, page_size 1000)
         Wise-->>Orch: WiseSession[]
-        Orch->>Orch: normalizeSessions (resolve teacher, classify blocking)
+        Orch->>Orch: normalizeSessions(...) → session blocks
+        Orch->>DB: UPDATE tutor_identity_groups SET supportedModality (per group)
+        Orch->>Orch: deriveModality + MOD-01 contradiction pass → data_issues
 
-        loop per group
-            Orch->>Orch: deriveModality(group, sessions)
-            Orch->>DB: UPDATE group.supportedModality
-        end
-        Orch->>Orch: MOD-01 per-session contradiction pass
-
-        Orch->>DB: PAST-01 diff-hook (reads prior active snapshot, inserts past_session_blocks)
-        Orch->>DB: batch INSERT windows / leaves / tags / quals / sessions / tutors
+        Orch->>DB: PAST-01 diff-hook: read prior active snapshot,<br/>INSERT past_session_blocks ON CONFLICT DO NOTHING
+        Orch->>DB: batch INSERT windows/leaves/tags/quals/sessions/tutors (parallel)
         Orch->>DB: INSERT data_issues + snapshot_stats
 
-        alt unresolved ratio < 0.5
-            Orch->>DB: single UPDATE → atomic promote (active flips to new snapshot)
-            Orch->>DB: pruneOldSnapshots (retain 30 + active)
+        alt unresolvedRatio < 0.5
+            Orch->>DB: UPDATE snapshots SET active = (id = snapshotId) — single atomic UPDATE
+            Orch->>DB: UPDATE sync_runs SET status=success, promotedSnapshotId
+            Orch->>DB: pruneOldSnapshots() — keep newest 30 + active
+        else ≥50% unresolved
+            Note over Orch,DB: no promote; prior snapshot stays active
+            Orch->>DB: UPDATE sync_runs SET status=success (promotedSnapshotId=null)
         end
-        Orch->>DB: UPDATE sync_run (success/failed, counts, metadata)
+
         Orch-->>Runner: SyncResult
-        Runner->>Runner: revalidateTag("snapshot") on success
-        Runner-->>Route: 200 / 500 JSON
+        alt result.success
+            Runner->>Idx: revalidateTag("snapshot")
+        end
+        Runner-->>Cron: 200 (success) / 500 (failed)
     end
 
-    Note over Idx: Index is NOT pushed by sync.
-    Route-->>Idx: (next API read) ensureIndex() detects snapshot change → buildIndex()
+    Note over Idx: index NOT rebuilt here
+    rect rgb(245,245,245)
+        participant Reader as next read (search/compare/…)
+        Reader->>Idx: ensureIndex(db)
+        Idx->>DB: SELECT active snapshot id + profile version
+        alt snapshotId or profileVersion changed
+            Idx->>DB: buildIndex() — load all snapshot tables
+            Idx->>Idx: rebuild SearchIndex singleton
+        else unchanged
+            Idx-->>Reader: cached index
+        end
+    end
 ```
 
-## Trigger and entry (steps before runFullSync)
+## Stage-by-stage
 
-### Authentication and dispatch
+### Trigger and authentication
 
-The HTTP entry point is `src/app/api/internal/sync-wise/route.ts`. Both verbs route through one `handleSync` helper:
+`/api/internal/sync-wise/route.ts` exposes both `GET` (Vercel cron) and `POST` (manual admin or `curl`). The handler:
 
-- **`GET`** is what Vercel cron invokes; it accepts only the `CRON_SECRET` bearer token (`allowSessionAuth: false`, `route.ts:57`–`59`).
-- **`POST`** additionally accepts an authenticated Auth.js admin session, so a logged-in admin can trigger a manual sync from the browser, and `curl -X POST` with the secret still works (`route.ts:62`–`64`).
+1. Checks `CRON_SECRET` with `hasValidCronSecret()` — a **constant-time** comparison using `timingSafeEqual` after a length pre-check (`route.ts:11-29`, design ID REL-07). The length pre-check both avoids the `RangeError` that `timingSafeEqual` throws on length-mismatched buffers and is itself O(1), so the secret length does not leak through timing.
+2. If the secret is valid → run, tagged `triggerSource: "cron"`.
+3. Else, for `POST` only (`allowSessionAuth: true`), it falls back to an Auth.js session (`route.ts:45-59`); a valid session runs tagged `triggerSource: "admin"`. `GET` does not allow session auth (`route.ts:69-71`).
+4. A missing `CRON_SECRET` env returns `500 Server misconfigured`; otherwise `401 Unauthorized` (`route.ts:61-65`).
 
-The secret check is constant-time. It length-pre-checks before calling `crypto.timingSafeEqual` to avoid the `RangeError` that function throws on length-mismatched buffers (REL-07, `route.ts:10`–`28`). A missing `CRON_SECRET` env var returns `500 Server misconfigured` rather than silently allowing the call (`route.ts:49`–`51`).
-
-`maxDuration = 800` (`route.ts:6`) gives the function up to ~13 minutes on the Vercel Pro plan — headroom over the ~4.5-minute production sync time.
+Either authenticated path wraps the run in `withCronInvocationAudit(...)` (recording the invocation) and delegates to `runWiseSyncRequest()`. The route carries `export const maxDuration = 800` (`route.ts:7`) — Vercel Pro headroom for a full sync.
 
 ### Single-flight guard
 
-`runWiseSyncRequest()` in `src/lib/sync/run-wise-sync.ts:142` constructs the `WiseClient` and resolves the institute id (defaulting to `696e1f4d90102225641cc413`, `run-wise-sync.ts:145`), then acquires a guard before doing any work. `acquireSyncRun` (`run-wise-sync.ts:88`) does three things in order:
+`runWiseSyncRequest()` (`run-wise-sync.ts:142-167`) is the concurrency gate. Before doing any work it:
 
-1. **Fail abandoned runs.** Any `sync_run` still in `running` state older than 20 minutes (`STALE_RUNNING_SYNC_MS`, `run-wise-sync.ts:10`) is forced to `failed` with an explanatory `errorSummary` (`failStaleRunningSyncs`, `run-wise-sync.ts:51`). This recovers from a function that timed out or was aborted mid-sync without leaving the guard permanently stuck.
-2. **Check for a live run.** If a `running` row still exists, the request short-circuits with a `202` and a `SkippedSyncResult` (`run-wise-sync.ts:95`–`97`, `120`–`140`). No second sync starts.
-3. **Insert the guard row.** Otherwise it inserts a fresh `sync_run` (`status=running`) and passes its id into `runFullSync` as `options.syncRunId` (`run-wise-sync.ts:100`–`105`, `152`). A unique-violation (`23505`) on insert is treated as a lost race and also resolves to the skipped result (`run-wise-sync.ts:106`–`117`).
+1. **Fails stale `running` rows.** `failStaleRunningSyncs()` flips any `sync_runs` row that has been `running` longer than `STALE_RUNNING_SYNC_MS` (20 minutes, `run-wise-sync.ts:10`) to `failed` with an explanatory `errorSummary` (`run-wise-sync.ts:51-72`). This self-heals after a crashed or aborted sync left a guard row behind.
+2. **Checks for a live run.** `findRunningSyncRun()` returns the newest `running` row, if any (`run-wise-sync.ts:74-86`). If one exists, the request short-circuits and returns **HTTP 202** with `{ skipped: true, alreadyRunning: true }` (`run-wise-sync.ts:120-140`, `148-150`) — "data will refresh when that run finishes."
+3. **Acquires the guard.** Otherwise it inserts a fresh `sync_runs` row with `status: "running"` and passes its id into `runFullSync({ syncRunId })` (`run-wise-sync.ts:99-105`, `152-154`). A concurrent insert that loses the race (unique-violation, Postgres `23505`) is caught and downgraded to the same skipped result (`run-wise-sync.ts:42-49`, `106-117`) — the partial-unique index on `sync_runs` permits at most one `running` row.
 
-Because `runFullSync` accepts a pre-acquired `syncRunId`, the orchestrator skips its own `sync_run` creation when the guard already made one (`orchestrator.ts:62`–`68`).
+Because the guard row is created here, `runFullSync()` is told to *adopt* it rather than create its own (step 1 below).
 
-## The Wise client (transport layer)
+The instituteId comes from `process.env.WISE_INSTITUTE_ID` and defaults to `696e1f4d90102225641cc413` (`run-wise-sync.ts:145`). The client is built by `createWiseClient()`.
 
-Every Wise call goes through `WiseClient` (`src/lib/wise/client.ts`). Two cross-cutting behaviors matter for the ETL:
+### The Wise client (transport)
 
-- **Auth headers** are computed per request: HTTP Basic (`base64(userId:apiKey)`), plus `x-api-key`, `x-wise-namespace`, and a `user-agent: VendorIntegrations/{namespace}` (`client.ts:52`–`61`).
-- **Concurrency limiter.** A queue caps in-flight requests at `maxConcurrency` (`client.ts:136`–`156`). The production factory `createWiseClient()` sets this to **15** (`client.ts:159`–`166`), versus the class default of 5 — this is what lets the per-teacher availability fan-out (one teacher = 26 windowed calls) complete inside the function timeout.
-- **Retry/backoff.** `fetchWithRetry` retries up to `maxRetries` (default 3) with exponential backoff of 1s/2s/4s, but **only** for transient failures: network errors and the status set `{408, 429, 500, 502, 503, 504}` (`RETRYABLE_STATUS_CODES`, `client.ts:23`–`30`, `91`–`134`). Permanent 4xx (401/403/404/422) fail fast with a thrown `Wise API {status}` error — no retry budget wasted (REL-05, `client.ts:121`–`124`).
+`createWiseClient()` (`client.ts:159-166`) constructs a `WiseClient` with `maxConcurrency: 15` — deliberately higher than the constructor default of `5` (`client.ts:48`) because a full sync issues hundreds of availability requests and benefits from more in-flight parallelism. Auth headers are Basic Auth (base64 `userId:apiKey`) plus `x-api-key`, `x-wise-namespace`, and a `user-agent` of `VendorIntegrations/{namespace}` (`client.ts:52-61`).
 
-A thrown client error propagates differently depending on where it occurs: a failure inside the per-teacher loop is caught and downgraded to a data issue (see step 7); a failure in the teacher list (step 3) or session fetch (step 8) is uncaught and aborts the whole sync into the `catch` block (step 12, failure path).
+Two transport invariants matter to the sync:
 
-For the exact endpoint signatures and fetcher contracts, see [docs/reference/wise-api.md](../reference/wise-api.md).
+- **Concurrency limiter.** A simple in-process queue caps concurrent fetches at `maxConcurrency`; each completion drains the next queued request (`client.ts:136-156`). This is what keeps the sync from stampeding the Wise API even when `fetchTeacherFullAvailability` fans out 26 requests per teacher.
+- **Retry / backoff with fail-fast on permanent errors.** `fetchWithRetry` retries network-level failures and only the status codes in `RETRYABLE_STATUS_CODES` — `408, 429, 500, 502, 503, 504` (`client.ts:23-30`, REL-05). Backoff is `2^attempt × 1000ms` (1s / 2s / 4s) up to `maxRetries` (default 3) (`client.ts:107-111`, `128-133`). Permanent 4xx (401/403/404/422 and any other non-retryable status) throw immediately with the body and URL (`client.ts:121-124`) so no retry budget is wasted on errors that will not fix themselves.
 
-## Step 1–2: Sync run + candidate snapshot
+A thrown Wise error propagates up to `runFullSync`'s top-level try/catch and fails the whole sync (see [Error handling](#error-handling-three-layers)). Per-teacher availability errors are the exception — they are isolated (step 7).
 
-`runFullSync` opens by ensuring a `sync_run` row exists (created here only if the caller did not pass one, `orchestrator.ts:62`–`68`), then **always** inserts a fresh `snapshot` with `active = false` (`orchestrator.ts:71`–`75`) and links it onto the `sync_run` via `snapshotId` (`orchestrator.ts:78`–`81`). The candidate snapshot is the write target for every subsequent insert; nothing it contains is visible to readers until promotion (step 12). The prior active snapshot stays active and serves all reads throughout the sync.
+### 1–2. Create / adopt the sync run, create the candidate snapshot
 
-## Step 3–6: Identity resolution
+`runFullSync` (`orchestrator.ts:50-60`) records `startTime` and:
 
-### Fetch and inputs
+1. If no `syncRunId` was supplied, it inserts one with `status: "running"` (`orchestrator.ts:61-68`). In production the runner already supplied one, so this branch is the manual/test path.
+2. Inserts a new `snapshots` row with `active: false` — the **candidate** (`orchestrator.ts:70-75`) — and back-links it onto the sync run via `UPDATE sync_runs SET snapshotId` (`orchestrator.ts:77-81`).
 
-`fetchAllTeachers` (`src/lib/wise/fetchers.ts:29`) pulls the full teacher roster in one call (`GET /institutes/{id}/teachers`). The alias overrides are loaded from the `tutor_aliases` table (`orchestrator.ts:87`–`91`) and passed alongside.
+Every subsequent write is scoped to this `snapshotId`. The candidate stays invisible to readers (which only read `active = true`) until the atomic promote in step 12. A sync that fails anywhere before promotion simply leaves an orphan inactive snapshot; the previously-active one is untouched.
 
-### The 5-step cascade
+### 3–4. Fetch teachers, load aliases
 
-`resolveIdentities` (`src/lib/normalization/identity.ts:72`) collapses the raw Wise teacher records — which split each real person into separate online and onsite teacher rows — into logical **identity groups**. The resolution order:
+`fetchAllTeachers(client, instituteId)` issues a single `GET /institutes/{id}/teachers` and returns `data.teachers ?? []` (`fetchers.ts:29-35`). Then `tutor_aliases` is read in full and mapped to `{ fromKey, toKey }` pairs (`orchestrator.ts:86-91`). `tutor_aliases` is one of the snapshot-independent tables — it survives snapshot rotation and feeds identity resolution.
 
-1. **Nickname extraction.** Pull the parenthetical from the display name: `"Chinnakrit (Celeste) Channiti" → "Celeste"` (`extractNickname`, `identity.ts:43`–`46`).
-2. **Alias override.** Lower-case the nickname and look it up in the alias map; the alias's `toKey` becomes the canonical key, else the nickname itself is used (`identity.ts:96`–`100`).
-3. **Online/offline pair merge.** Teachers are grouped by lower-cased canonical key. The `Online` suffix is detected (`isOnlineVariant`, `identity.ts:52`–`54`) and the display name is taken from the non-online member when available (`identity.ts:127`–`133`). A clean group is exactly one solo entry, or exactly one online + one offline pair.
-4. **Collision detection.** A canonical key matching more than two teachers — or two that are *not* a clean online+offline pair — is flagged as an `identity_collision` alias issue, but the group is **still kept** so its members appear in Needs Review for manual disambiguation (REL-03, `identity.ts:153`–`170`).
-5. **Unresolved fallback.** A teacher with no extractable nickname and no alias match gets an `alias` data issue *and* is still wrapped in a solo group so it surfaces in Needs Review rather than vanishing (`identity.ts:177`–`204`).
+### 5–6. Identity resolution
 
-This is the first expression of the **fail-closed** rule: unresolved identity never drops a teacher silently; it routes them to review.
+`resolveIdentities(wiseTeachers, aliases)` (`identity.ts:72-207`) merges Wise's per-teacher records into logical tutors. The cascade:
 
-### Persistence
+1. **Nickname extraction.** The parenthetical in a display name is the nickname — `"Chinnakrit (Celeste) Channiti"` → `"Celeste"` (`extractNickname`, `identity.ts:43-46`).
+2. **Alias override.** If the nickname matches an entry in `tutor_aliases` (case-insensitive), the canonical key becomes the alias target; otherwise it is the nickname itself (`identity.ts:96-100`).
+3. **Online/offline pairing.** Records are grouped by lower-cased canonical key (`identity.ts:110-121`). `isOnlineVariant()` flags names ending in "Online" (`identity.ts:52-54`); the non-online entry supplies the group display name (`identity.ts:127-133`).
+4. **Collision detection (REL-03).** A key that matches more than two records, or two that are not a clean 1-online + 1-offline pair, emits a high-severity `alias`-type issue but is **still kept** so admins can disambiguate it in Needs Review (`identity.ts:148-170`).
+5. **Unresolved fallback.** A teacher with no nickname and no alias match gets its own `alias` issue *and* a solo group, again so it surfaces in Needs Review rather than vanishing (`identity.ts:177-204`).
 
-The orchestrator inserts one `tutor_identity_groups` row per group (with `supportedModality` provisionally set to `"unresolved"` — corrected in step 9) and accumulates member rows for a chunked batch insert into `tutor_identity_group_members` (`orchestrator.ts:111`–`139`). A `groupIdMap` (canonical key → DB id) and a `teacherToGroupId` map are built so later stages can attach availability, sessions, and qualifications to the right group without re-querying (`orchestrator.ts:108`, `142`–`148`). Identity issues are collected into the shared `allIssues` array, classified `critical` (`orchestrator.ts:97`–`105`).
+The result is `{ groups, issues }`. Identity issues are mapped into the running `allIssues` array as `type: "alias", severity: "critical"` (`orchestrator.ts:97-105`). Critically, the **unresolved ratio computed from these issues is the promotion gate** (step 12) — identity is the one failure that can block a snapshot from going live.
 
-For the column definitions of the identity tables, see [docs/reference/database.md](../reference/database/index.md). The *why* of identity grouping lives in [docs/features/tutor-search.md](../features/tutor-search.md).
+Persistence (step 6): each group is inserted into `tutor_identity_groups` with `supportedModality: "unresolved"` (set properly later in step 9), and its db id is recorded in `groupIdMap` keyed by canonical key (`orchestrator.ts:108-122`). Members are queued and inserted into `tutor_identity_group_members` in chunks of 250 via `insertInChunks` (`orchestrator.ts:38-48`, `124-139`). A `teacherToGroupId` map is then built so per-teacher rows in later stages can resolve their group id from memory without a SELECT (`orchestrator.ts:141-148`).
 
-## Step 7: Availability, leaves, and qualifications (per teacher)
+### 7. Per-teacher availability, leaves, tags, qualifications
 
-This is the fan-out stage. The orchestrator loops over every teacher (`orchestrator.ts:156`–`260`). For each:
+For each teacher with a resolvable group and a Wise user id, the orchestrator fetches and normalizes that teacher's schedule data (`orchestrator.ts:156-260`). A teacher missing a Wise user id is skipped with a `completeness` / `high` issue (`orchestrator.ts:162-173`).
 
-### Guard: missing Wise user id
+**Fetch.** `fetchTeacherFullAvailability(client, instituteId, teacherUserId)` (`fetchers.ts:61-103`) stitches a 180-day horizon:
 
-A teacher whose Wise `userId` cannot be resolved cannot have availability fetched. That emits a `completeness` data issue (severity `high`) and the teacher is skipped for this stage (`orchestrator.ts:162`–`173`).
+- The **first** 7-day window (now → now+7) returns both `workingHours` (the recurring pattern) and the first batch of leaves (`fetchers.ts:74-83`).
+- The remaining 25 windows (`ceil(180/7) = 26` total) are fetched **in parallel** for leaves only and concatenated (`fetchers.ts:85-100`). The concurrency limiter throttles the actual network parallelism.
 
-### Fetch (180-day horizon, 26 windows)
+Each window is a `GET /institutes/{id}/teachers/{userId}/availability?startTime=…&endTime=…` (`fetchers.ts:40-55`).
 
-`fetchTeacherFullAvailability` (`src/lib/wise/fetchers.ts:61`) is the heaviest external call pattern in the pipeline. The Wise availability endpoint is windowed, so to cover a 180-day horizon it issues `ceil(180/7) = 26` seven-day requests per teacher:
+**Normalize.**
 
-- The **first window** returns both `workingHours` (the recurring weekly schedule) and the first batch of `leaves` (`fetchers.ts:74`–`83`).
-- The **remaining 25 windows** are fired in parallel (`Promise.all`) and contribute leaves only; `workingHours` is assumed stable and taken from the first window (`fetchers.ts:86`–`102`).
+- `normalizeWorkingHours(workingHours?.slots)` (`availability.ts:33-57`): maps each slot's day (name or `0–6`) to a weekday and parses `HH:mm` start/end to minutes-since-midnight. Working hours are already Asia/Bangkok local time, so **no UTC conversion is applied** (`availability.ts:28-32`). Zero-length or inverted windows are dropped (`availability.ts:47`), and windows are then de-duplicated and overlap-merged per weekday (`deduplicateWindows`, `availability.ts:62-92`). Rows are queued with `modality: "unresolved"` — a placeholder stamped with the real value just before insert (`orchestrator.ts:182-194`, `420-422`).
+- `normalizeLeaves(leaves)` (`leaves.ts:14-24`): converts each leave's UTC start/end to Asia/Bangkok via `toLocalTime` and overlap-merges adjacent intervals (`deduplicateLeaves`, `leaves.ts:29-54`). Queued into `dated_leaves` (`orchestrator.ts:197-206`).
+- Raw tags are recorded verbatim into `raw_teacher_tags` (`orchestrator.ts:209-218`), and `normalizeTeacherTags(tags, …)` (`qualifications.ts:71-98`) parses each tag of the form `Subject (Curriculum) Level` via a single regex (`qualifications.ts:31`), mapping curriculum aliases (`int.`→International, `th`→Thai, `examprep`→ExamPrep, etc., `qualifications.ts:33-41`). Parsed rows queue into `subject_level_qualifications`; unmapped tags emit `tag` / `high` issues (`qualifications.ts:86-94`, `orchestrator.ts:226-248`).
 
-With ~130 teachers this is on the order of 3,000+ availability calls, which is exactly why the client concurrency is raised to 15.
+**Error isolation.** The entire per-teacher body is wrapped in try/catch; any failure (a Wise error on that teacher's availability, a parse error) records a `completeness` / `high` issue and **continues to the next teacher** (`orchestrator.ts:249-259`). One teacher's bad data never aborts the sync. This is the "fail-isolated inside sync" rule.
 
-### Normalize
+Timezone note: every Wise→local conversion in the pipeline goes through `src/lib/normalization/timezone.ts`, which is hard-wired to `Asia/Bangkok` (`timezone.ts:3`) using `date-fns-tz`'s `toZonedTime` (`timezone.ts:8-11`). `getLocalWeekday` and `getLocalMinuteOfDay` derive the indexed weekday and minute-of-day used by the search grid (`timezone.ts:16-26`).
 
-Three normalizers run on the fetched data:
+### 8. Future sessions
 
-- **Working hours → recurring windows** (`normalizeWorkingHours`, `src/lib/normalization/availability.ts:33`). Wise slots carry a weekday (numeric `0=Sun..6=Sat` or a weekday name, mapped at `availability.ts:10`–`26`) and `HH:mm` times. Times are parsed to minutes-since-midnight; zero-length or inverted windows (`start >= end`) are dropped (`availability.ts:44`–`54`). Working hours are **already in Asia/Bangkok**, so no timezone conversion is applied (`availability.ts:30`–`31`). Overlapping windows on the same weekday are sorted and merged (`deduplicateWindows`, `availability.ts:62`–`92`). The rows are queued with `modality = "unresolved"` — a placeholder resolved in step 9 (`orchestrator.ts:184`–`194`).
-- **Leaves** (`normalizeLeaves`, `src/lib/normalization/leaves.ts:14`). Each leave's `startTime`/`endTime` is **converted UTC → Asia/Bangkok** via `toLocalTime` (`leaves.ts:17`–`21`), then overlapping/adjacent leaves are merged (`deduplicateLeaves`, `leaves.ts:29`–`54`).
-- **Tags → qualifications** (`normalizeTeacherTags`, `src/lib/normalization/qualifications.ts:71`). Every raw tag is stored verbatim into `raw_teacher_tags` (`orchestrator.ts:209`–`218`). In parallel, each tag is matched against the pattern `Subject (Curriculum) Level` (`TAG_PATTERN`, `qualifications.ts:31`); the curriculum token is canonicalized via `CURRICULUM_MAP` (`int.`/`int`/`international → International`, `th`/`thai → Thai`, `examprep`/`exam prep → ExamPrep`, `qualifications.ts:33`–`41`). An `ExamPrep` curriculum copies the level into a dedicated `examPrep` field (`qualifications.ts:61`–`63`). A tag that does not match the pattern produces a `tag` data issue (`Unmapped Wise tag`, `qualifications.ts:87`–`93`) — again, fail-closed: an unmapped tag never silently becomes a fabricated qualification.
+`fetchAllFutureSessions(client, instituteId)` delegates to `fetchAllInstituteSessions` with `status: "FUTURE"` (`fetchers.ts:108-113`), paging `GET /institutes/{id}/sessions` at `page_size = 1000` until `page_count` is reached or an empty page is returned (`fetchers.ts:115-145`). Because Wise's FUTURE API does not return past sessions, this fetch is also the input to the PAST-01 diff-hook (step 9.5).
 
-### Error isolation
+`normalizeSessions(wiseSessions, resolver)` (`sessions.ts:57-94`) converts each session to a block. The `resolver` callback maps a session's Wise user id back to a teacher id via the `wiseUserIdToTeacherId` map built in the orchestrator from `getWiseSessionTeacherUserId` ↔ `getWiseTeacherUserId` (`orchestrator.ts:263-275`; accessors at `wise/types.ts:264-276`); sessions whose teacher cannot be resolved are dropped (`sessions.ts:64-65`). Each block carries Asia/Bangkok start/end plus the derived `weekday` / `startMinute` / `endMinute` (`sessions.ts:67-79`), denormalized class metadata (title, type, location, student name/count, subject, classType, `recurrenceId`), and a **blocking** flag.
 
-The fetch + normalize for each teacher is wrapped in a `try/catch`. A thrown error (e.g. a Wise 5xx that exhausted retries for that teacher) becomes a `completeness` data issue and the loop continues to the next teacher (`orchestrator.ts:249`–`259`). One teacher's failure never aborts the sync. (Contrast: the teacher-list fetch and the session fetch are *not* individually wrapped, so their failure does abort.)
+**Blocking classification is fail-closed.** `isBlockingStatus(status)` (`sessions.ts:46-51`) returns `false` only for the explicit non-blocking set `CANCELLED, CANCELED, COMPLETED, MISSED, NO_SHOW` (`sessions.ts:33-40`). A missing status, or any status not in that set, is treated as **blocking** (`sessions.ts:47`, `50`). This realizes the non-negotiable rule "unknown session status → blocking; cancelled sessions must not block."
 
-Timezone conversion throughout the pipeline uses `Asia/Bangkok` via `date-fns-tz`, on the documented assumption that Thailand has had no DST since 1941 (`src/lib/normalization/timezone.ts:1`–`11`).
+Resolved blocks queue into `future_session_blocks`, again resolving the group id from `teacherToGroupId` in memory (`orchestrator.ts:277-305`).
 
-## Step 8: Future sessions
+### 9. Modality derivation, tutor rows, and the MOD-01 contradiction pass
 
-`fetchAllFutureSessions` (`src/lib/wise/fetchers.ts:108`) calls the generic `fetchAllInstituteSessions` with `status: "FUTURE"`, paginating `GET /institutes/{id}/sessions` at `page_size = 1000` until a short or empty page is returned (`fetchers.ts:115`–`145`). Wise's `FUTURE` filter is the reason past sessions are not returned by this endpoint — a constraint that motivates the diff-hook in step 9.5 and the compare feature's weekday fallback.
+For each group, `deriveModality(group, groupSessions)` (`modality.ts:23-92`) decides the supported modality with strict precedence, **never guessing**:
 
-`normalizeSessions` (`src/lib/normalization/sessions.ts:57`) transforms each Wise session into a `NormalizedSessionBlock`. The orchestrator supplies a teacher resolver closure that maps a session's Wise user id back to a teacher `_id` via a pre-built `wiseUserIdToTeacherId` map (`orchestrator.ts:264`–`275`); a session whose teacher cannot be resolved is dropped. For each retained session:
+1. **Structural.** Online + offline members → `both`; online-only → `online` (`modality.ts:27-36`).
+2. **Session-type / location evidence.** Online vs onsite signals from session `type`/`location`; both present → `both`, otherwise the single signal (`modality.ts:38-63`).
+3. **Single offline record, no evidence → `unresolved`** with a modality issue — explicitly fail-closed rather than assuming onsite (`modality.ts:65-79`).
+4. **Otherwise `unresolved`** with an issue (`modality.ts:81-91`).
 
-- `startTime`/`endTime` are converted UTC → Asia/Bangkok, and `weekday`/`startMinute`/`endMinute` are derived in that timezone (`sessions.ts:67`–`79`).
-- **Blocking classification** is fail-closed. `isBlockingStatus` (`sessions.ts:46`–`51`) treats a defined `NON_BLOCKING_STATUSES` set (`CANCELLED`, `CANCELED`, `COMPLETED`, `MISSED`, `NO_SHOW`, `sessions.ts:34`–`40`) as non-blocking; a missing status or any unknown status is **blocking** by default. This is the rule that guarantees a cancelled session never makes a tutor appear busy, while an unrecognized status never makes a busy tutor appear free.
-- Session metadata (`title`, `type`, `location`, `studentCount`, class name/subject/type via the `classId` helpers, and `metadata.recurrenceId`) is carried onto the block (`sessions.ts:80`–`90`).
+The result drives three writes per group (`orchestrator.ts:315-362`):
 
-Session blocks are then attached to their group (skipping any block whose teacher is not in a group) and queued into `future_session_blocks` rows (`orchestrator.ts:277`–`305`).
+- `UPDATE tutor_identity_groups SET supportedModality` (`orchestrator.ts:326-329`).
+- A per-teacher entry in `teacherModalities` so each availability window is stamped with the correct value before insert — online-variant members get `online`; for a `both` group the offline member is stamped `onsite` (`orchestrator.ts:331-337`, applied at `420-422`).
+- A `tutors` display row whose `supportedModes` is `["online","onsite"]` for `both`, the single mode otherwise, and `[]` for `unresolved` (`orchestrator.ts:351-361`).
 
-## Step 9: Modality derivation + per-session contradiction pass
+Any modality issue is appended to `allIssues` as `modality` / `high` (`orchestrator.ts:339-349`).
 
-`deriveModality` (`src/lib/normalization/modality.ts:23`) assigns each group a modality with a strict precedence — structure first, never a guess:
+The derived modality per group is also cached in `groupSupportedModality` (`orchestrator.ts:308-324`) so the **MOD-01 contradiction pass** that follows (`orchestrator.ts:364-398`, design IDs D-07/D-08) needs no per-session SELECT. For every session in a group it calls `detectSessionModalityConflict(...)` (`compare.ts:185-223`), which flags cases where the teacher record's `isOnlineVariant` disagrees with the session's `sessionType` (e.g. a `both` group's online record carrying an onsite session). Each contradiction emits a `conflict_model` / `high` issue with `metadata` (`orchestrator.ts:381-397`). Like the availability loop, this pass is read-only over in-memory data and emits issues without aborting.
 
-1. **Structural evidence.** Online + offline members → `both`; online only → `online` (`modality.ts:27`–`36`).
-2. **Session-type / location evidence.** For groups without a clear pair, the group's sessions are scanned for online vs onsite signals in `sessionType`/`location` (`modality.ts:38`–`63`).
-3. **Single offline record, no evidence → `unresolved`** with a modality issue (fail-closed; the code comments note onsite would be the naive default but is deliberately *not* assumed, `modality.ts:65`–`79`).
-4. **Otherwise `unresolved`** with an issue (`modality.ts:81`–`91`).
+> **Known limitation (carried, not solved here).** Online/onsite detection from `location` strings is unreliable — most venues are named (`"Tesla"`, `"Nerd"`) and match no online pattern, so many sessions read as onsite. The visual modality distinction on compare cards was removed pending a more reliable signal. The fail-closed `unresolved` routing above is what keeps this from ever producing a false "Available."
 
-For each group the orchestrator writes the resolved modality back onto the `tutor_identity_groups` row (`UPDATE supportedModality`, `orchestrator.ts:326`–`329`), records a per-teacher modality so the placeholder availability windows can be finalized (`orchestrator.ts:331`–`337`, applied at `orchestrator.ts:420`–`422`), and builds a `tutors` display row whose `supportedModes` array reflects the modality (`orchestrator.ts:351`–`362`). The resolved modality is cached in an in-memory `groupSupportedModality` map (`orchestrator.ts:312`, `324`) specifically so the next pass needs no per-session DB read.
+### 9.5. PAST-01 diff-hook (runs before promotion)
 
-**MOD-01 contradiction pass** (`orchestrator.ts:367`–`398`). A second loop checks every session against its group's resolved modality using `detectSessionModalityConflict` (`src/lib/search/compare.ts:185`). That helper flags cases where a teacher record's `isOnlineVariant` disagrees with the session's `sessionType` (e.g. an online-variant record teaching an `offline` session). The online/onsite vocabulary is defined by `ONLINE_SESSION_TYPES = {online, virtual, scheduled}` and `ONSITE_SESSION_TYPES = {onsite, in-person, offline}` (`compare.ts:6`–`7`). A contradiction emits a `conflict_model` data issue carrying structured metadata (`orchestrator.ts:381`–`396`). Like the availability loop, this pass isolates errors per session and never aborts the sync.
+`runPastSessionsDiffHook(db, sessionBlocks, snapshotId)` (`past-sessions-diff-hook.ts:66-172`) captures sessions that have **dropped out of Wise's FUTURE response and already started**, persisting them to the cross-snapshot `past_session_blocks` table so the compare view can still show recent history Wise no longer returns.
 
-The meaning of modality and how it gates search results is covered in [docs/features/tutor-search.md](../features/tutor-search.md) and [docs/features/tutor-compare.md](../features/tutor-compare.md).
+It must run **before** the step-12 promote, because it reads the *prior* active snapshot — which is only still `active=true` until the promote flips it (`past-sessions-diff-hook.ts:11-13`, `orchestrator.ts:400-407`). Mechanics:
 
-## Step 9.5: PAST-01 diff-hook
+1. Find the prior active snapshot (active and `id != newSnapshotId`); if none (first-ever sync), return empty (`past-sessions-diff-hook.ts:74-89`).
+2. Read the prior snapshot's `future_session_blocks` and its group→canonicalKey map in batch queries (`past-sessions-diff-hook.ts:91-107`).
+3. A prior block is "dropped" iff its `wiseSessionId` is absent from the newly-fetched set **and** its `startTime < now` (`past-sessions-diff-hook.ts:109-132`). A block whose group canonical key can't be resolved is skipped with a `completeness` / `medium` issue (`past-sessions-diff-hook.ts:121-132`).
+4. Insert in chunks of 250 with `onConflictDoNothing({ target: wiseSessionId })` (`past-sessions-diff-hook.ts:155-165`, design IDs D-03 / PAST-05).
 
-`runPastSessionsDiffHook` (`src/lib/sync/past-sessions-diff-hook.ts:66`) captures sessions that have aged out of Wise's `FUTURE` response into the cross-snapshot `past_session_blocks` table, so the compare view can still show a representative of a recurring session on a past day.
+Idempotency is structural: the Neon HTTP driver has **no transaction support**, so a crashed sync that partially inserted these rows can safely re-run on the next cron tick — the `UNIQUE(wise_session_id)` + `ON CONFLICT DO NOTHING` guarantees exactly one row per session (`past-sessions-diff-hook.ts:55-61`). Per-group errors emit issues; the hook never throws (`orchestrator.ts:400-418`). Its `{ capturedCount, durationMs }` is later stamped into the sync run's `metadata` (`orchestrator.ts:503-506`).
 
-The ordering constraint is the reason this runs *before* promotion (step 12): the hook reads the **prior active snapshot** (`active = true AND id != newSnapshotId`, `past-sessions-diff-hook.ts:75`–`84`), which is only still active because promotion hasn't happened yet. On the first-ever sync there is no prior snapshot, so the hook is a no-op (`past-sessions-diff-hook.ts:86`–`89`).
+### 10–11. Bulk insert and stats
 
-The "dropped" set is computed as: a prior `future_session_blocks` row whose `wiseSessionId` is **not** in the newly fetched FUTURE list **and** whose `startTime` is already in the past (`past-sessions-diff-hook.ts:115`–`131`). Those rows are inserted with `onConflictDoNothing` on the unique `wiseSessionId` (`past-sessions-diff-hook.ts:155`–`165`). Idempotency here is critical because the **Neon HTTP driver has no transaction support** — a sync that crashes mid-insert can safely re-run on the next cron tick, and a session observed as "dropped" across two snapshots produces exactly one row (D-03, `past-sessions-diff-hook.ts:15`–`16`, `57`–`61`). A group whose canonical key can't be resolved produces a `completeness` issue and is skipped, never throwing (`past-sessions-diff-hook.ts:120`–`132`). The hook returns its captured count and duration, which are folded into the `sync_run` metadata (`orchestrator.ts:503`–`506`).
+With window modality now finalized (`orchestrator.ts:420-422`), the six bulk tables are inserted **in parallel** via `Promise.all`, each chunked at 250 rows: `recurring_availability_windows`, `dated_leaves`, `raw_teacher_tags`, `subject_level_qualifications`, `future_session_blocks`, `tutors` (`orchestrator.ts:424-443`). Then all accumulated `data_issues` are inserted (chunked) if any exist (`orchestrator.ts:445-450`).
 
-The lack of DB transactions is a defining property of this pipeline: there is no rollback. Every stage either writes idempotently or writes into the *not-yet-active* candidate snapshot, and atomicity is achieved only at the promotion step.
+Chunking at 250 is deliberate. The Neon-http driver has no transaction support and Postgres caps bound parameters per statement; 250-row chunks keep each insert under that limit (`orchestrator.ts:38`). These writes are not transactional — but they all target the **inactive candidate** snapshot, so a partial write is never visible to readers and is cleaned up by pruning on a later successful run.
 
-## Step 10–11: Bulk persistence and stats
+`snapshot_stats` is then computed and written once (`orchestrator.ts:452-470`): totals for Wise teachers, identity groups, resolved vs unresolved groups, qualifications, availability windows, leaves, future sessions, and total data issues, plus an `issuesByType` histogram. This single roll-up row is what the Data Health page reads to summarize a snapshot.
 
-After modality finalization, six row sets are inserted in parallel, each chunked at 250 rows (`INSERT_CHUNK_SIZE`, `orchestrator.ts:38`; `insertInChunks`, `orchestrator.ts:40`–`48`): recurring availability windows, dated leaves, raw tags, qualifications, future session blocks, and tutor display rows (`orchestrator.ts:424`–`443`). All `allIssues` accumulated across every stage are then inserted into `data_issues` (`orchestrator.ts:446`–`450`).
+### 12. Validate and atomic promote
 
-A `snapshot_stats` row is computed in the same pass for the data-health dashboard: total teachers, total/resolved/unresolved groups, qualification/window/leave/session counts, total issues, and an `issuesByType` histogram (`orchestrator.ts:452`–`470`). Note `resolvedGroups` is derived by excluding groups that appear in `identityIssues` (`orchestrator.ts:462`), and `unresolvedGroups` is simply the identity-issue count (`orchestrator.ts:463`).
+The promotion gate is a single ratio (`orchestrator.ts:472-476`):
 
-Column-level detail for all snapshot tables lives in [docs/reference/database.md](../reference/database/index.md). The dashboard that surfaces `snapshot_stats` and `data_issues` is [docs/features/data-health.md](../features/data-health.md).
+```
+unresolvedRatio = identityIssues.length / max(groups.length, 1)
+shouldPromote   = unresolvedRatio < 0.5
+```
 
-## Step 12: Validate and atomic promote
+If **≥50% of identity groups are unresolved**, the candidate is **not** promoted and the prior active snapshot keeps serving traffic. Note the gate keys on *identity* issues specifically — modality/qualification/completeness issues do not block a promote (they surface as Needs Review instead).
 
-### The validation gate
-
-The only promotion gate is the **unresolved-identity ratio**: `identityIssues.length / max(groups.length, 1)`. Promotion proceeds only if this is `< 0.5` (`shouldPromote`, `orchestrator.ts:473`–`476`). In other words, a snapshot is promoted unless more than half of all identity groups failed to resolve — a catastrophic-data guard, not a per-record one. Individual unresolved tutors are tolerated (they show up in Needs Review); a wholesale identity-resolution failure is not.
-
-### Atomic promotion
-
-Promotion is a **single `UPDATE`** that sets `active = (id == snapshotId)` over a bounded `WHERE` matching either the currently-active row(s) or the new candidate (`orchestrator.ts:488`–`498`):
+When `shouldPromote`, promotion is a **single atomic `UPDATE`** (`orchestrator.ts:480-501`, design ID REL-01):
 
 ```sql
 UPDATE snapshots
-SET active = (snapshots.id = $newSnapshotId)
-WHERE active = true OR snapshots.id = $newSnapshotId
+SET active = (snapshots.id = :snapshotId)
+WHERE active = true OR snapshots.id = :snapshotId;
 ```
 
-This is the linchpin of the whole no-transaction design. Because PostgreSQL evaluates one statement under MVCC with a row-level lock, a concurrent reader sees either the old active row or the new one — there is never an instant where zero rows satisfy `active = true` (REL-01, `orchestrator.ts:480`–`487`). The bounded `WHERE` also avoids rewriting every snapshot row on each promote. If `shouldPromote` is false, no UPDATE runs, the candidate snapshot stays `active = false`, and the **previous active snapshot continues to serve reads** — failed/rejected syncs are non-destructive.
+One statement sets the candidate's `active` to `true` and every previously-active row's `active` to `false`. Postgres MVCC plus the row-level lock held for the statement's duration guarantee that a concurrent reader sees either the old active row or the new one — **never a window with zero active snapshots**. The bounded `WHERE` touches only the prior-active row(s) and the candidate, avoiding a full-table rewrite. This replaced an earlier two-UPDATE sequence that briefly had no active snapshot.
 
-### Finalize the sync run
+The sync run is then marked `status: "success"` with `finishedAt`, `promotedSnapshotId` (null if not promoted), `teacherCount`, and the diff-hook metadata (`orchestrator.ts:508-518`).
 
-`promotedSnapshotId` is set to the candidate id on a successful promote, else `null`. The `sync_run` is updated to `success` with `finishedAt`, `promotedSnapshotId`, `teacherCount`, and metadata (`orchestrator.ts:508`–`518`). The function returns a `SyncResult` (`orchestrator.ts:550`–`560`).
+Finally, **only if a snapshot was promoted**, `pruneOldSnapshots(db)` runs (`orchestrator.ts:520-548`). It keeps the newest `SNAPSHOT_RETENTION_COUNT = 30` snapshots plus whatever is currently active, and deletes everything older — fanning out cascading `DELETE`/`UPDATE` across every snapshot-scoped table and nullifying `sync_runs` references (`snapshot-pruning.ts:49-190`). Pruning is best-effort: a failure is caught, logged, and recorded in the sync run's `metadata.pruning` rather than failing the (already successful) sync (`orchestrator.ts:525-547`). `past_session_blocks` is deliberately **not** pruned here — it is cross-snapshot by design.
 
-### Post-promotion pruning
+`runFullSync` returns a `SyncResult` (`orchestrator.ts:22-32`, `550-560`): `success`, `syncRunId`, `snapshotId`, `promotedSnapshotId`, counts, `errorSummary`, `durationMs`.
 
-Only when a promotion happened does `pruneOldSnapshots` run (`orchestrator.ts:520`–`548`; `src/lib/sync/snapshot-pruning.ts:49`). It retains the most recent `SNAPSHOT_RETENTION_COUNT = 30` snapshots by `createdAt`, plus the active one unconditionally (`snapshot-pruning.ts:5`, `64`–`70`), and hard-deletes everything older across all snapshot-scoped tables (and nullifies `sync_runs.snapshotId` / `promotedSnapshotId` references first, `snapshot-pruning.ts:88`–`179`). Pruning is best-effort: a failure is caught, logged, and recorded into `sync_run.metadata` but does **not** fail the sync (`orchestrator.ts:525`–`547`).
+### Back in the runner: cache invalidation
 
-### Failure path
+If `result.success`, `runWiseSyncRequest()` calls `revalidateTag("snapshot", { expire: 0 })` (`run-wise-sync.ts:160-162`) and returns the `SyncResult` as JSON with status **200** (success) or **500** (failed) (`run-wise-sync.ts:164-166`). The `"snapshot"` cache tag is what the Server Components' cached `src/lib/data/*` helpers register under (`"use cache"` + `cacheTag`), so revalidation sweeps stale cached reads. Note this revalidates the *Next data cache*; it does **not** rebuild the in-memory `SearchIndex`.
 
-If anything throws outside the per-stage `try/catch` islands (e.g. the teacher-list fetch in step 3, the session fetch in step 8, or any DB write before promotion), control falls to the outer `catch` (`orchestrator.ts:561`–`599`). The `sync_run` is marked `failed` with the error message; if even that cleanup write fails it is logged but swallowed so the original error is not masked (REL-06, `orchestrator.ts:564`–`586`). The candidate snapshot is left orphaned and inactive — it will be cleaned up by a future prune — and the prior active snapshot is untouched. A failure returns a `SyncResult` with `success: false`.
+## Index rebuild — lazy, on the read path
 
-## After the sync: cache invalidation and index rebuild
+The in-memory `SearchIndex` is a `globalThis`-anchored singleton (`__bgscheduler_searchIndex`) that survives HMR (`src/lib/search/index.ts:92-126`). It is **never** built by the sync. Instead, the next read-path caller triggers it:
 
-A subtlety worth stating plainly: **the in-memory `SearchIndex` is not pushed by the sync.** The orchestrator never calls `buildIndex` or touches the index singleton. Instead:
+- `ensureIndex(db)` (`index.ts:354-401`) is called by every read that needs tutor data — search (`api/search/route.ts:54`, `range-search.ts:115`), compare (`api/compare/route.ts:138`, `api/compare/discover/route.ts:57`), proposals (`api/proposals/route.ts:64`), room capacity (`room-capacity/data.ts:409`), the AI scheduler (`ai/scheduler-service.ts:60`), and LINE operational planning (`line/operational.ts:527`).
+- It **stale-detects** by comparing the cached index's `snapshotId` and `profileVersion` against the current active snapshot and the tutor-profile version string (`index.ts:365-387`). If either changed — which is exactly what a promote does to `snapshotId` — it calls `buildIndex(db)` (`index.ts:142-344`) to reload every snapshot table for the active snapshot into a fresh `IndexedTutorGroup[]` plus an O(1) `byWeekday` map.
+- **Build-promise coalescing (REL-02).** The in-flight build promise is assigned to the singleton **synchronously**, before any `await`, so concurrent first-time callers reuse the same promise instead of each kicking off a duplicate rebuild — guarding against a thundering herd right after promotion (`index.ts:346-401`).
 
-1. On a successful sync, `runWiseSyncRequest` calls `revalidateTag("snapshot", { expire: 0 })` (`run-wise-sync.ts:160`–`162`). This invalidates the Next.js `"use cache"`-tagged read functions — the filters and tutors endpoints that read snapshot tables directly — so they re-read on next request.
-2. The **search index itself rebuilds lazily** on the next API read. `ensureIndex` (`src/lib/search/index.ts:354`) is called by every search/compare/range route (`src/app/api/search/route.ts:54`, `src/app/api/compare/route.ts:138`, `src/app/api/compare/discover/route.ts:57`, `src/lib/search/range-search.ts:115`). On each call it compares the cached index's `snapshotId` (and a `profileVersion` token) against the DB's current `active` snapshot; if they differ, it calls `buildIndex` (`index.ts:365`–`389`). `buildIndex` loads the entire active snapshot — groups, members, qualifications, windows, leaves, sessions, issues, business profiles — in parallel and assembles one denormalized `IndexedTutorGroup` per tutor plus a `byWeekday` lookup (`index.ts:142`–`344`).
+A second, independent invalidation path exists: editing tutor business profiles calls `clearSearchIndex()` directly (`api/tutor-profiles/import-commit/route.ts:61`, `api/tutor-profiles/[canonicalKey]/route.ts:51`), which nulls the singleton so the next `ensureIndex` rebuilds. This is why the index keys on *both* `snapshotId` and `profileVersion`.
 
-This means a freshly promoted snapshot becomes visible to search the first time any user hits a search/compare endpoint after promotion — there is no warm-up call in the sync itself. Concurrent first-time rebuilds are coalesced onto a single in-flight promise anchored on `globalThis` (REL-02, `index.ts:354`–`401`), and the index survives HMR in development because it is stored on `globalThis` rather than a module-level `let` (`index.ts:92`–`126`).
+`buildIndex` also stamps `syncedAt` from the last successful promoted sync's `finishedAt` (`index.ts:155-166`) — this is the value the staleness banner uses (sync data older than ~90 minutes is shown as a warning, never withheld).
 
-How the index is consumed lives in [docs/features/tutor-search.md](../features/tutor-search.md); the staleness model is also surfaced to users via warnings on the search response.
+## Error handling (three layers)
 
-## Defining properties (summary)
+The pipeline applies a different failure posture at each layer — the architecture's "fail-closed at the data boundary, fail-loud at the API boundary, fail-isolated inside sync":
 
-- **One pipeline, one entry point.** `runFullSync` is the only writer of snapshot data; everything else reads.
-- **Snapshot immutability + atomic promote.** Writes land in an inactive candidate; a single `UPDATE` flips `active`. No transaction is needed and none is available (Neon HTTP).
-- **Fail-closed at every normalizer.** Unknown session status → blocking; unresolved identity/modality/tag → data issue + Needs Review, never silent omission and never fabricated availability.
-- **Error isolation vs. abort.** Per-teacher, per-session-contradiction, and diff-hook errors degrade to data issues. Whole-roster fetches (teachers, sessions) and pre-promotion DB writes abort the sync and preserve the prior snapshot.
-- **Lazy, pull-based index.** Sync invalidates a cache tag and updates the DB; the in-memory index self-heals on the next read via `ensureIndex` staleness detection.
+| Layer | Posture | Mechanism |
+|---|---|---|
+| Normalization / data boundary | **Fail-closed** | Unknown session status → blocking (`sessions.ts:46-51`); unresolved identity/modality → issue + Needs Review, never "Available" (`identity.ts`, `modality.ts`); modality contradictions → `conflict_model` issue, never a guess (`compare.ts:185-223`). |
+| Inside the sync | **Fail-isolated** | Per-teacher availability errors → `completeness` issue, continue (`orchestrator.ts:249-259`); diff-hook per-group errors → `completeness` issue, never throw (`past-sessions-diff-hook.ts:121-132`); pruning failure → logged into metadata, sync still succeeds (`orchestrator.ts:525-547`). |
+| Top of `runFullSync` | **Fail-loud, preserve prior** | Any uncaught throw is caught at `orchestrator.ts:561`; the sync run is marked `failed` with the error message, **no promotion happens**, and the prior active snapshot is untouched. The cleanup `UPDATE` failure is itself logged (REL-06) but swallowed so the primary error surfaces (`orchestrator.ts:564-586`). Returns `success: false`. |
+| API boundary | **Fail-loud** | The runner returns HTTP 500 on `result.success === false` (`run-wise-sync.ts:164-166`); the route returns 401/500 on auth failures. |
 
-## Related references
+The net guarantee: a failed sync is a **no-op on served data**. Readers keep seeing the last good snapshot, and the next cron tick (or manual trigger) retries from scratch with a brand-new candidate.
 
-- [docs/reference/wise-api.md](../reference/wise-api.md) — Wise client and fetcher endpoint contracts.
-- [docs/reference/database.md](../reference/database/index.md) — column-level schema for snapshot, sync, identity, qualification, availability, leave, session, issue, and stats tables.
-- [docs/features/tutor-search.md](../features/tutor-search.md) — how the index is built and queried; modality and Needs Review semantics.
-- [docs/features/tutor-compare.md](../features/tutor-compare.md) — weekday fallback and past-session usage that the diff-hook feeds.
-- [docs/features/data-health.md](../features/data-health.md) — surfacing of `data_issues`, `snapshot_stats`, and sync history.
+## Tables written, at a glance
 
-## Open questions
+All writes are scoped to the candidate `snapshotId` except `past_session_blocks` (cross-snapshot). Grain and columns live in the [database reference](../reference/database/index.md) / [core ERD](../reference/database/erd-core.md); the table below maps each to its producing stage.
 
-- `fetchTeacherFullAvailability` assumes `workingHours` is identical across all 26 windows and only reads it from the first window (`fetchers.ts:82`). A teacher whose recurring schedule legitimately differs in a later week would not have that captured — confirm with the Wise contract whether `workingHours` can vary by window.
-- `snapshot_stats.resolvedGroups` counts groups whose `canonicalKey` is absent from `identityIssues.entityId` (`orchestrator.ts:462`), but unresolved-fallback groups are created with `canonicalKey = displayName` while their issue uses `entityType: "teacher"` / `entityId: teacher._id` (`identity.ts:182`–`189`). Verify the resolved/unresolved counts line up as intended for the solo-fallback case.
+| Table (`const`) | Written in | Notes |
+|---|---|---|
+| `snapshots` (`snapshots`) | 2, 12 | Candidate created inactive; promoted by the single atomic `UPDATE`. |
+| `sync_runs` (`syncRuns`) | 1, 2, 12 | Lifecycle: running → success/failed; carries diff-hook + pruning metadata. |
+| `tutor_identity_groups` (`tutorIdentityGroups`) | 6, 9 | Inserted unresolved; `supportedModality` updated in step 9. |
+| `tutor_identity_group_members` (`tutorIdentityGroupMembers`) | 6 | Chunked. |
+| `recurring_availability_windows` (`recurringAvailabilityWindows`) | 10 | Modality stamped just before insert. |
+| `dated_leaves` (`datedLeaves`) | 10 | UTC→Bangkok, overlap-merged. |
+| `raw_teacher_tags` (`rawTeacherTags`) | 10 | Verbatim Wise tag values. |
+| `subject_level_qualifications` (`subjectLevelQualifications`) | 10 | Parsed from tags. |
+| `future_session_blocks` (`futureSessionBlocks`) | 10 | Blocking flag fail-closed. |
+| `tutors` (`tutors`) | 10 | Display record + `supportedModes`. |
+| `past_session_blocks` (`pastSessionBlocks`) | 9.5 | **Cross-snapshot**, `ON CONFLICT DO NOTHING`. |
+| `data_issues` (`dataIssues`) | 10 | All accumulated issues (alias/tag/modality/conflict_model/completeness). |
+| `snapshot_stats` (`snapshotStats`) | 11 | One roll-up row per snapshot. |
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+Reads during the sync: `tutor_aliases` (step 4), and inside the diff-hook the prior snapshot's `snapshots` / `tutor_identity_groups` / `future_session_blocks` (step 9.5).
+
+## Cross-references
+
+- **Architecture** — the snapshot/index spine in context: [architecture.md](architecture.md).
+- **Tutor search / compare** — how the promoted snapshot is *queried* (range search, conflict detection, free-slot intersection): [tutor-search](../features/tutor-search.md), [tutor-compare](../features/tutor-compare.md).
+- **Data health** — how `sync_runs`, `snapshot_stats`, and `data_issues` surface to admins: [data-health](../features/data-health.md).
+- **Crons** — the full cron roster and how this sync is staggered against the others: [crons.md](../reference/crons.md).
+- **Wise API** — endpoint contracts, pagination, and the client's auth/retry behavior: [wise-api.md](../reference/wise-api.md).
+- **Database** — table grains, columns, indexes: [database/index.md](../reference/database/index.md), [erd-core.md](../reference/database/erd-core.md).
+
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

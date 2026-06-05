@@ -4,139 +4,129 @@
 
 ## Purpose
 
-The Sales Dashboard imports monthly sales records from Google Sheets, normalizes them into Postgres, and renders a GM-facing "command center" that tracks revenue pace against a monthly target, scores the trial→new→renewal pipeline, and compares actual revenue against an imported scenario projection (Bear/Base/Bull).
+The Sales Dashboard is the GM command center for BeGifted's tutoring sales. It imports the team's monthly Google Sheets sales records — one spreadsheet per month, with a normal-package sheet and an additional-sales sheet — plus a single multi-scenario revenue-projection workbook, and persists the parsed rows to Postgres. The dashboard then renders revenue pace, pipeline (trial conversion / retention), sales-rep performance, program/package mix, and actual-vs-projection charts on top of that snapshot, refreshed automatically by cron.
 
-It serves BeGifted general-management and sales-ops staff who maintain the per-month sales spreadsheets and want a single read-only readout of where the month stands — without the dashboard ever mutating the source sheets. The page lives behind the standard admin auth gate (`src/app/(app)/sales-dashboard/page.tsx:7-12`) and is reachable from the top nav (`src/components/layout/app-nav.tsx:28`).
+The audience is non-technical admin/GM staff. They connect their own Google account (OAuth, Sheets read scope), seed the historical source list, run a backfill, and from then on the cron keeps the live months fresh. All money is THB; all dates are normalized to `Asia/Bangkok`.
 
-This feature owns the repo's Google-Sheets access layer (`src/lib/sales-dashboard/sheets.ts` + `google-oauth.ts`), and the leave-requests feature reuses it: `src/lib/leave-requests/sync.ts:4` imports `fetchGoogleSheetRows` from `@/lib/sales-dashboard/sheets` (called at `sync.ts:310`) and `src/lib/leave-requests/data.ts:5` imports `updateGoogleSheetCell` from the same module (called at `data.ts:386`). So the Sheets read/write primitives are shared, even though the Sales-Dashboard page itself only ever reads. The feature carries a dedicated scope guard (see [Business rules & edge cases](#business-rules--edge-cases)) restricting one collaborator to Sales-Dashboard paths.
+This feature is also notable operationally: it is the one area scoped to a guest collaborator. A Claude hook (`.claude/hooks/sales-dashboard-guard.mjs`) and a CI workflow (`.github/workflows/sales-dashboard-scope.yml`) together fence edits, sensitive-file reads, and risky shell/git commands to the Sales Dashboard paths only. See [Business rules & edge cases](#business-rules--edge-cases).
 
 ## Conceptual data model
 
-The feature owns seven tables plus a shared OAuth-token table. Conceptually they fall into four groups:
+The domain is self-contained — none of its tables reference the core scheduling tables (`snapshots`, `tutors`, identity groups). It splits into two parallel sub-graphs that never join, plus one shared auth-token table.
 
-- **Monthly sources & their imports** — one row per calendar month (`salesDashboardSources`) pointing at a Google Sheet, with an append-only import-run log (`salesDashboardImportRuns`) and two row tables holding the parsed sheet contents: package/"normal" sales (`salesDashboardNormalRows`) and ad-hoc "additional" sales (`salesDashboardAdditionalRows`). Each row table references the import run that produced it, so the dashboard reads only rows belonging to each source's *last successful* run.
-- **Projection workbook & its imports** — a single active projection source (`salesDashboardProjectionSources`), an import-run log (`salesDashboardProjectionImportRuns`), and the parsed per-scenario, per-month projection rows (`salesDashboardProjectionMonths`).
-- **OAuth credentials** — `googleOAuthTokens` stores per-admin encrypted Google access/refresh tokens and granted scopes; it is shared infrastructure, not Sales-Dashboard-exclusive (defined outside the feature's schema section, `src/lib/db/schema.ts:256-266`).
-- **Source-status enum** — `sales_dashboard_source_status` (`active | refreshing | finalized | reopened | archived`), `src/lib/db/schema.ts:134-140`.
+**Monthly sales lineage**
+- **Sources** (`sales_dashboard_sources`) — one row per calendar month, keyed by `sourceMonth` (a `YYYY-MM-01` date). Holds the spreadsheet id/URL, the resolved/overridden sheet names, the connected Google email, a lifecycle `status` (`active` / `refreshing` / `finalized` / `reopened` / `archived`), and a soft pointer to the last successful import run. A partial-unique constraint allows at most one non-archived source per month.
+- **Import runs** (`sales_dashboard_import_runs`) — one row per import attempt against a source, with `status`, `triggerType` (`manual` / `backfill` / `cron`), timing, row counts, and a metadata blob recording which sheet names were resolved. A partial unique index on `(source_id) WHERE status = 'running'` is the single-flight lock.
+- **Parsed rows** (`sales_dashboard_normal_rows`, `sales_dashboard_additional_rows`) — the per-transaction rows from each sheet, tagged with both `source_id` and `import_run_id` so the dashboard reads only rows from each source's *last successful* run.
 
-Full column definitions, indexes, and the partial unique indexes that enforce "one active source per month" and "single running import per source" live in the database reference. See **[docs/reference/database/erd-sales-dashboard.md](../reference/database/erd-sales-dashboard.md)** for the entity-relationship detail.
+**Projection lineage** (a separate triple, mirroring the above)
+- **Projection source** (`sales_dashboard_projection_sources`) — the single active projection workbook (Summary / What_If / Calc_Multi sheet names), with its own last-success pointer and target-monthly-revenue cache.
+- **Projection import runs** (`sales_dashboard_projection_import_runs`) — one per projection import, with its own `(source_id) WHERE status = 'running'` partial-unique single-flight lock.
+- **Projection months** (`sales_dashboard_projection_months`) — one row per `(scenario, projectionMonth)` across Bear/Base/Bull, holding revenue / student / hours / room-capacity projections.
 
-> Note: at the time of writing, the `docs/reference/database/` and `docs/reference/api/` subdirectories do not yet exist in the repo, so the `erd-*.md` and `api/*.md` targets are not yet present (see [Open questions](#open-questions)). `docs/reference/` itself does exist (it holds `crons.md` and `env.md`). The links above and below use the canonical reference home where that mechanical detail belongs.
+**Shared auth token** — `google_oauth_tokens` (a snapshot-independent core table) stores the AES-256-GCM-encrypted Google access/refresh tokens, scope, and expiry, keyed by lowercased email. The Sales Dashboard owns the read/write/refresh logic for it (`google-oauth.ts`) and is the primary consumer of the `spreadsheets.readonly` scope.
+
+For column-level detail (types, defaults, nullability, indexes) and the ER diagram, see **[docs/reference/database/erd-sales-dashboard.md](../reference/database/erd-sales-dashboard.md)** (the seven domain tables) and [docs/reference/database/erd-core.md](../reference/database/erd-core.md) for `google_oauth_tokens`.
 
 ## API surface
 
-All HTTP routes require an authenticated admin session (`auth()` returning a `user.email`), except the cron endpoint which additionally accepts a `CRON_SECRET` bearer token. One-line purposes follow; for full request/response contracts see **[docs/reference/api/sales-dashboard.md](../reference/api/sales-dashboard.md)**.
+All routes are admin-session-gated (`auth()` → 401 when no `session.user.email`) except the cron route, which is `CRON_SECRET`-gated in-handler. A `MissingGoogleSheetsTokenError` maps to HTTP **409** on the import paths. For full request/response contracts and per-route line citations, see **[docs/reference/api/sales-dashboard.md](../reference/api/sales-dashboard.md)**.
 
-- `GET /api/sales-dashboard` — return the fully-aggregated dashboard payload for the signed-in admin (`src/app/api/sales-dashboard/route.ts`).
-- `POST /api/sales-dashboard/import` — run an import: a single source by `sourceId`, all sources (`mode: "backfill"`), or just the live months (`mode: "refreshable"`) (`src/app/api/sales-dashboard/import/route.ts`).
-- `GET /api/sales-dashboard/import-runs` — list the 20 most recent import runs (`src/app/api/sales-dashboard/import-runs/route.ts`).
-- `GET /api/sales-dashboard/sources` — list non-archived monthly sources; `POST` upserts a source by month (`src/app/api/sales-dashboard/sources/route.ts`).
-- `PATCH /api/sales-dashboard/sources/[sourceId]` — change a source's status (active/finalized/reopened, with archive-restore semantics); `DELETE` archives it (soft-delete) (`src/app/api/sales-dashboard/sources/[sourceId]/route.ts`).
-- `POST /api/sales-dashboard/sources/seed` — seed the 14 hard-coded historical month sources (`src/app/api/sales-dashboard/sources/seed/route.ts`).
-- `POST /api/sales-dashboard/projection-source` — upsert (or seed default) the active projection workbook source (`src/app/api/sales-dashboard/projection-source/route.ts`).
-- `POST /api/sales-dashboard/projection-import` — import the active projection workbook (`src/app/api/sales-dashboard/projection-import/route.ts`).
-- `GET|POST /api/internal/sync-sales-dashboard` — cron-triggered (or session-triggered POST) refresh of live-month sources plus the projection workbook (`src/app/api/internal/sync-sales-dashboard/route.ts`). Registered as a Vercel cron at `10,40 * * * *` in `vercel.json`.
+| Method · Path | Purpose |
+|---|---|
+| `GET /api/sales-dashboard` | Return the cached, fully-aggregated dashboard payload for the signed-in admin. |
+| `GET /api/sales-dashboard/sources` | List configured monthly sources (non-archived). |
+| `POST /api/sales-dashboard/sources` | Create or update a monthly source (upsert keyed by month). |
+| `PATCH /api/sales-dashboard/sources/[sourceId]` | Change a source's lifecycle status (active / finalized / reopened; restores if archived). |
+| `DELETE /api/sales-dashboard/sources/[sourceId]` | Archive a source (soft delete; preserves prior status). |
+| `POST /api/sales-dashboard/sources/seed` | Seed the built-in historical source list (`DEFAULT_SALES_SOURCES`). |
+| `POST /api/sales-dashboard/import` | Run an import — one source, all-sources backfill, or refreshable-months-only. `maxDuration = 800`. |
+| `GET /api/sales-dashboard/import-runs` | List the 20 most recent monthly-sales import runs. |
+| `POST /api/sales-dashboard/projection-source` | Save the active projection workbook config, or seed the default. |
+| `POST /api/sales-dashboard/projection-import` | Re-import the active projection workbook. `maxDuration = 800`. |
+| `GET · POST /api/internal/sync-sales-dashboard` | Cron entry: refresh live months + re-import projection. `CRON_SECRET`; POST also accepts admin session. `maxDuration = 800`. |
 
 ## UI
 
-- **Page**: `src/app/(app)/sales-dashboard/page.tsx` — a thin server component that gates on auth and renders the client shell inside a `Suspense` boundary.
-- **`SalesDashboardShell`** (`src/components/sales-dashboard/sales-dashboard-shell.tsx`) — the top-level client component. Owns all data fetching (`GET /api/sales-dashboard` with `cache: "no-store"`), the period/date-range filter state, the Google-Sheets connect button (triggers `signIn("google", …)` with the readonly Sheets scope), the import action buttons, the failed-source banner, an empty/setup state, and a "Data Sources & Imports" dialog. Period presets are `All / 2025 / 2026 / Q1 2026 / This Month`, defaulting to **This Month** (`sales-dashboard-shell.tsx:46-93`).
-- **`SalesDashboardCommandCenter`** (`src/components/sales-dashboard/gm-command-center.tsx`) — the analytics surface, rendered only when sources exist and rows have been imported. It calls `buildGmDashboardInsights(data, {from, to})` in a `useMemo` and lays out: a Revenue-Pace surface with pipeline stats, an Exceptions rail, an Actual-vs-Projection panel, a monthly revenue-trend chart (Chart.js), a sales-team table with previous-period deltas, and program/package/payment-day mix panels.
-- **`SourceManager`** (`src/components/sales-dashboard/source-manager.tsx`) — the contents of the dialog: monthly-source table (status badges, row counts, per-source import/reopen/archive actions), an archived-sources expander with restore, the add-source form, and the projection-workbook configure/import controls.
+One page: **`/sales-dashboard`** (`src/app/(app)/sales-dashboard/page.tsx`). It is an async Server Component that only checks auth (redirects to `/login`) and renders the client shell inside `<Suspense>`; all data is fetched client-side.
+
+Key components (`src/components/sales-dashboard/`):
+- **`sales-dashboard-shell.tsx`** — the client orchestrator. Owns the period filter (`All` / `2025` / `2026` / `Q1 2026` / `This Month` presets plus a free date range), fetches `/api/sales-dashboard` (`cache: "no-store"`), drives the Connect-Google-Sheets `signIn` flow (requesting the `spreadsheets.readonly` scope with `prompt: "consent"`, `access_type: "offline"`), and renders one of two states: a **setup card** (`SalesDashboardSetupState`) when there are no sources or no imported rows, or the command center otherwise. A "Data Sources & Imports" dialog hosts the `SourceManager`.
+- **`gm-command-center.tsx`** — the analytics surface (`SalesDashboardCommandCenter`). Builds insights via `buildGmDashboardInsights` and renders a revenue-pace hero, a GM-exceptions rail, a Chart.js revenue-trend **stacked bar** chart (`RevenueTrendPanel`, four `stack: "sales"` datasets — new/renewal/trial/additional — `gm-command-center.tsx:218-227`), an actual-vs-projection chart (where the Chart.js *line* datasets actually live — `gm-command-center.tsx:284`, `:294`, `:305`), the sales-team table with previous-period deltas, and a tabbed program-mix / package-mix / payment-concentration panel.
+- **`source-manager.tsx`** — the source/projection admin UI inside the dialog: add monthly source, seed historical, backfill all, per-source status / archive / restore controls, and the projection-workbook config + import.
 
 ## Data flow
 
-A refresh (manual or cron) moves through the layers like this:
+A read (`GET /api/sales-dashboard`) is served entirely from Postgres + the Next `"use cache"` layer — Google Sheets is never touched on the request path. A write (import) is the only thing that calls Google.
 
 ```mermaid
 flowchart TD
-    Cron["Vercel cron 10,40 * * * *<br/>/api/internal/sync-sales-dashboard"] --> Refreshable
-    Manual["Admin clicks Refresh / Backfill<br/>POST /api/sales-dashboard/import"] --> Refreshable["importRefreshableSalesSources()<br/>(lib/sales-dashboard/data.ts)"]
-    Refreshable --> Lifecycle{"per source:<br/>auto-finalize?<br/>shouldRefresh?"}
-    Lifecycle -->|skip| Done
-    Lifecycle -->|import| Guard["acquireSalesImportRun()<br/>single-flight guard"]
-    Guard -->|already running| Skipped["return skipped result"]
-    Guard -->|acquired| Fetch["listGoogleSheetTitles +<br/>fetchGoogleSheetRows<br/>(lib/sales-dashboard/sheets.ts)"]
-    Fetch --> OAuth["getGoogleSheetsAccessToken<br/>decrypt + refresh<br/>(google-oauth.ts)"]
-    Fetch --> Parse["parseNormalSalesRows /<br/>parseAdditionalSalesRows<br/>(parser.ts)"]
-    Parse --> Persist["insertChunks into<br/>normal/additional row tables"]
-    Persist --> Promote["mark run success,<br/>set lastSuccessfulImportRunId,<br/>status via statusAfterSuccessfulImport"]
-    Promote --> Revalidate["revalidateTag('sales-dashboard')"]
-    Revalidate --> Done["done"]
+    Cron["Vercel cron 10,40 * * * *"] -->|CRON_SECRET| SyncRoute["/api/internal/sync-sales-dashboard"]
+    Admin["Admin (shell UI)"] -->|POST mode=refreshable/backfill| ImportRoute["/api/sales-dashboard/import"]
 
-    Read["GET /api/sales-dashboard"] --> Payload["getSalesDashboardPayload (cached)"]
-    Payload --> ReadRows["read rows for each source's<br/>lastSuccessfulImportRunId only"]
-    ReadRows --> Build["buildSalesDashboardPayload<br/>(analytics.ts)"]
-    Build --> Client["SalesDashboardShell → CommandCenter<br/>buildGmDashboardInsights (gm-insights.ts)"]
+    SyncRoute --> Refreshable["importRefreshableSalesSources()"]
+    ImportRoute --> Refreshable
+    Refreshable --> ImportOne["importSalesDashboardSource()"]
+
+    ImportOne --> Guard["acquireSalesImportRun()<br/>single-flight + stale-fail"]
+    Guard -->|skipped| Skip["return alreadyRunning"]
+    Guard -->|acquired| Fetch["listGoogleSheetTitles + fetchGoogleSheetRows"]
+    Fetch -->|token via google_oauth_tokens| Sheets[(Google Sheets API)]
+    Fetch --> Parse["parseNormalSalesRows / parseAdditionalSalesRows<br/>(+ analyzeNormalSalesRows: enrollment + churn)"]
+    Parse --> Persist["insert normal_rows + additional_rows<br/>(500-row chunks)"]
+    Persist --> Promote["update source: status, lastSuccessfulImportRunId<br/>revalidateTag('sales-dashboard')"]
+
+    Admin -->|GET| ReadRoute["/api/sales-dashboard"]
+    ReadRoute --> Cached["getSalesDashboardPayload (use cache)"]
+    Cached --> Build["read last-success rows + projection + token<br/>buildSalesDashboardPayload()"]
+    Build --> Payload["SalesDashboardPayload"]
+    Payload --> CC["GM command center<br/>buildGmDashboardInsights()"]
 ```
 
-Key points:
-
-- **Import path** (`importSalesDashboardSource`, `src/lib/sales-dashboard/data.ts:406-557`): resolves the sheet tab name from a preference + fallback list, fetches normal and additional tabs in parallel, parses, and bulk-inserts in 500-row chunks (`insertChunks`, `data.ts:145-154`). On success it stamps `lastSuccessfulImportRunId` and recomputes the source status; on error it rolls the source status back to its previous value and records `lastImportError`.
-- **Read path** (`getSalesDashboardPayloadUncached`, `data.ts:847-883`): loads only the rows whose `importRunId` equals each non-archived source's `lastSuccessfulImportRunId`, so superseded import runs are silently ignored without deletion. Aggregation happens in `buildSalesDashboardPayload`; the result is wrapped in a Next.js `"use cache"` function tagged `sales-dashboard` with a 60s stale / 60s revalidate / 300s expire profile (`data.ts:885-890`).
-- **Insight layer** is computed **client-side** from the payload (`buildGmDashboardInsights`, `src/lib/sales-dashboard/gm-insights.ts:122-152`), so changing the date-range filter does not re-hit the server.
+The read path (`getSalesDashboardPayloadUncached`, `data.ts:847`) gathers each non-archived source's `lastSuccessfulImportRunId`, fetches only rows belonging to those run ids (`inArray`), re-hydrates them into the parser's row shape, and hands everything to `buildSalesDashboardPayload` (`analytics.ts:201`), which produces per-day aggregates, cohorts, completion curves, and rep totals. The client then layers range filtering and GM insights on top via `buildGmDashboardInsights` (`gm-insights.ts:122`).
 
 ## Business rules & edge cases
 
-**Month lifecycle (auto-refresh windows).** `src/lib/sales-dashboard/lifecycle.ts` governs which sources refresh and when they freeze:
-- A source refreshes only if it is the current Bangkok month, or the previous month through Bangkok day 7 (`sourceShouldRefresh`, `lifecycle.ts:8-19`).
-- After a successful import, status becomes `active` for the current month (or previous month ≤ day 7) and `finalized` otherwise; `reopened`/`archived` are preserved (`statusAfterSuccessfulImport`, `lifecycle.ts:21-33`).
-- On Bangkok day 8+, the previous month auto-finalizes during a refreshable run and is then skipped (`shouldAutoFinalizePreviousMonth`, `lifecycle.ts:35-42`; consumed at `data.ts:567-572`).
-- Finalized sources are protected: importing one throws unless `allowFinalized` is passed (`data.ts:418-420, 437-447`). The UI confirms via `window.confirm` before sending `allowFinalized` (`source-manager.tsx:196-198`).
+**Collaborator scope guard (the notable non-obvious bit).** A guest collaborator (`aoengnatchasmith-spec`) is fenced to this feature by two enforcement points:
+- **Local Claude hook** `.claude/hooks/sales-dashboard-guard.mjs` — on `PreToolUse`, `Edit`/`Write`/`MultiEdit` are denied unless the target path starts with one of the allowed prefixes (`src/app/(app)/sales-dashboard/`, `src/app/api/sales-dashboard/`, `src/app/api/internal/sync-sales-dashboard/`, `src/components/sales-dashboard/`, `src/lib/sales-dashboard/`) (`sales-dashboard-guard.mjs:9-15`, `:126-138`). `Read` is denied for sensitive files (`.env*`, `.vercel`, `*.pem/.key/.p12`, `*.xlsx/.xls`) (`:17-27`, `:140-146`). Risky `Bash` is denied: prod `vercel --prod`, force-push, push to main/master, `git reset --hard`, broad `rm -rf`, hitting prod `/api/internal/sync-*`, and commands reading `.env`/`.vercel` (`:29-66`, `:148-160`).
+- **CI gate** `.github/workflows/sales-dashboard-scope.yml` runs `scripts/check-sales-dashboard-scope.mjs` against the PR diff, passing the PR author login, so out-of-scope file changes by the scoped collaborator fail the `sales-dashboard-scope` check on PRs into `main`.
 
-**Single-flight import guard (fail-safe concurrency).** `src/lib/sales-dashboard/import-guard.ts`:
-- Before starting, any `running` import older than 20 minutes is force-failed and the source status restored from the run's stored `previousStatus` metadata (`STALE_RUNNING_SALES_IMPORT_MS = 20*60*1000`, `import-guard.ts:6`, `failStaleSalesDashboardImports` `:97-125`).
-- A fresh concurrent run is detected and skipped rather than duplicated; the database partial unique index (`sdir_source_single_running_idx`) is the backstop — a `23505` unique violation is caught and converted to a "skipped/already running" result (`import-guard.ts:185-215`).
+**Single-flight imports, fail-isolated.** Each source import acquires a run via `acquireSalesImportRun` (`import-guard.ts:168`), which (1) fails any run still `running` past 20 minutes and restores the source's prior status (`STALE_RUNNING_SALES_IMPORT_MS`, `import-guard.ts:6`, `:97-125`), then (2) refuses to start if a fresh `running` run exists, returning a skipped result. The DB partial-unique index on `(source_id) WHERE status = 'running'` is the backstop: a unique-violation (`23505`) is caught and converted to the same skipped result (`import-guard.ts:199-215`). The projection lineage has the identical lock (`drizzle/0029_sales_dashboard_projection.sql:74`). On any import failure the run is marked `failed` and the source's status is rolled back to `previousStatus` with `lastImportError` set, never throwing away the prior successful snapshot (`data.ts:545-556`).
 
-**Google token handling (fail-closed on scope).** `src/lib/sales-dashboard/google-oauth.ts`:
-- Access/refresh tokens are AES-256-GCM encrypted with a key derived from `AUTH_SECRET` (`encryptToken`/`decryptToken`, `google-oauth.ts:37-68`); a missing `AUTH_SECRET` throws.
-- Reads require the readonly *or* write scope; writes require the write scope. Missing scope throws `MissingGoogleSheetsTokenError` (`google-oauth.ts:184-186, 211-213`), which routes map to HTTP **409** rather than 500 (`import/route.ts:24-28`, `sync-sales-dashboard/route.ts:53-56`). Tokens are refreshed when within a 2-minute skew of expiry (`REFRESH_SKEW_MS`, `google-oauth.ts:10`).
-- Note: the sheet *read* path only ever calls `getGoogleSheetsAccessToken` (readonly), consistent with the source-of-truth rule that the dashboard never mutates the sheets. The write functions `updateGoogleSheetCell` (`sheets.ts:92-111`, which internally calls `getGoogleSheetsWriteAccessToken` at `sheets.ts:99`) and `getGoogleSheetsWriteAccessToken` (`google-oauth.ts:200-225`) have no caller *within* the Sales-Dashboard feature, but they are not dead code: the leave-requests feature calls `updateGoogleSheetCell` at `src/lib/leave-requests/data.ts:386` (imported at `data.ts:5`) to write status back to its own sheet.
+**Month lifecycle (auto-finalize).** `sourceShouldRefresh` only refreshes the current month, and the previous month through Bangkok day 7 (`lifecycle.ts:8-19`). On Bangkok day ≥ 8, the previous month auto-finalizes (`shouldAutoFinalizePreviousMonth`, `lifecycle.ts:35-42`) and is skipped by the refreshable run (`data.ts:567-571`). `finalized` sources are not refreshed unless `allowFinalized` (backfill sets it) or a manual confirm reopens them; importing a finalized source without that flag throws and marks the run failed (`data.ts:418-447`). `reopened` sources stay `reopened` after a successful import (`statusAfterSuccessfulImport`, `lifecycle.ts:21-33`).
 
-**Cron auth.** The cron endpoint compares the bearer token with `timingSafeEqual` and distinguishes `valid | invalid | missing-secret`; a missing server secret returns 500, an invalid one 401. `GET` requires the secret; `POST` additionally allows a signed-in admin to trigger manually (`sync-sales-dashboard/route.ts:14-66`).
+**Sheet-format tolerance.** The normal-sales parser auto-detects new English vs. legacy Thai headers off `HEADER_ROW = 3` (`parser.ts:6`, `:83`): the new format keys off `Payment Date` and filters out rows that are not `Already Paid?` (`parser.ts:97-102`), while the legacy format reads Thai column names (`วันที่ชำระเงิน`, `ผู้ขาย`, `ยอดชำระสุทธิ`) (`parser.ts:103-108`). Sheet-name resolution falls back across `(1)PackageSales` → `SalesRecord` for normal and `(2)AdditionalSales` for additional (`data.ts:457-464`); a missing normal sheet throws "No normal sales sheet found". Money parsing strips `฿`, commas, and parentheses (`parser.ts:25-33`); Google serial-date cells are converted via the 1899-12-30 epoch (`dates.ts:46-50`).
 
-**Sheet parsing heuristics.** `src/lib/sales-dashboard/parser.ts`:
-- Header row is fixed at row 3 (`HEADER_ROW = 3`, `parser.ts:6`); data starts at row 4.
-- Two formats are auto-detected by column presence: the new English layout (keyed off a `Payment Date` column, requires `Already Paid?` truthy) vs. the legacy Thai layout (`วันที่ชำระเงิน`, `ผู้ขาย`, `ยอดชำระสุทธิ`) (`parser.ts:83-108`). `paidValue` treats `true/1/yes/paid/ชำระ` as paid (`parser.ts:35-39`).
-- Rows without a student nickname or without a parseable payment date are dropped (`parser.ts:88-110, 146-149`).
-- **Enrollment classification** when not pre-filled: per student (case-insensitive nickname), trial rows are `Trial`; the first paid row preceded by a trial is `New Student`, all later paid rows are `Renewal` (`analyzeNormalSalesRows`, `parser.ts:165-192`).
-- **Churn status**: computed from the latest paid row's `validUntil` plus a **14-day grace** (`addDaysIso(validUntil, 14)`). Within grace → `Active`; past grace with a later payment → `Retained`; otherwise → `Churned`. All-trial students → `N/A` (`parser.ts:200-224`). The same 14-day grace drives the retention cohort in `analytics.ts:172-199`.
-- `programWiseName` is mapped through `PROGRAM_MAP` (`program-map.ts`), falling back to the raw program name when unmapped (`parser.ts:195`).
+**Derived enrollment + churn.** When a row lacks an explicit `Enrollment Type`, `analyzeNormalSalesRows` (`parser.ts:165`) groups by lowercased nickname, sorted by payment date, and labels each: a `trial`-package row → `Trial`; the first paid row immediately after a trial → `New Student`; all other paid rows → `Renewal` (`parser.ts:178-192`). Churn status is computed off the latest paid row's `Valid Until` plus a **14-day grace** window: within grace → `Active`; a later payment after the deadline → `Retained`; otherwise → `Churned`. Two cases short-circuit to `N/A`: an all-trial student (`parser.ts:204-208`) and a student whose latest paid row has no `Valid Until` (`parser.ts:210-214`); the grace logic then runs for everyone else (`parser.ts:216-223`). The retention cohort uses the same 14-day decision-date logic (`analytics.ts:185`).
 
-**Date handling.** Google serial date numbers are converted via the 1899-12-30 epoch (`isoDateFromGoogleSerial`, `dates.ts:46-50`); string dates accept ISO and D/M/Y forms; all month/day boundary math is anchored to Asia/Bangkok (`dates.ts`).
+**Revenue target precedence & projection fallback.** The GM pace target prefers the imported projection's `targetMonthlyRevenue`, falling back to the hardcoded `MONTHLY_NORMAL_SALES_TARGET = 4,000,000` THB when no projection is loaded (`gm-insights.ts:15`, `:166`); `targetSource` reports which was used. Month-end revenue is projected from historical completion curves (cumulative-revenue-by-day-of-month, averaged over prior complete months), clamped to `[0.01, 1]`, with a day-fraction fallback when there are no samples (`gm-insights.ts:172-175`, `analytics.ts:84-139`).
 
-**Projection parsing (fail-loud).** `src/lib/sales-dashboard/projection.ts` requires the Summary sheet to carry Bear/Base/Bull headers and named rows, the What_If sheet to carry an "effective monthly revenue target" (or fallback label), and the Calc_Multi sheet to contain `--- Bear ---`/`--- Base ---`/`--- Bull ---` scenario blocks with all required metric rows; a non-numeric value or any missing label **throws** with a specific message (`projection.ts:57-63, 91-100, 116-123, 138-156, 168-183`). The active projection source is enforced unique by a partial index (`sdps_single_active_idx`).
+**Deterministic GM exceptions.** `buildExceptions` (`gm-insights.ts:322`) emits a fixed set keyed by thresholds: any failed active source → critical; no import timestamp → warning; stale > 90 min → warning (`STALE_SOURCE_MINUTES`, `gm-insights.ts:16`); behind pace (critical if projected gap > 15% of target); trial conversion < 35%; retention < 50%; churn-replacement ratio < 1×.
 
-**Target source.** Revenue pace uses the imported What_If target when present, otherwise the hard-coded fallback `MONTHLY_NORMAL_SALES_TARGET = 4_000_000` (`gm-insights.ts:15, 166`); the payload reports `targetSource: "projection" | "fallback"` (`data.ts:838-839`).
+**Token handling.** Google tokens are AES-256-GCM encrypted with a key derived from `AUTH_SECRET` (`google-oauth.ts:37-54`); a `v1:`-prefixed format is required on decrypt. Access tokens auto-refresh within a 2-minute skew (`REFRESH_SKEW_MS`, `google-oauth.ts:10`, `:191`); a refresh failure persists `lastError` and throws `MissingGoogleSheetsTokenError`. Read imports require the readonly *or* write scope; the cell-writeback helper (`updateGoogleSheetCell`, `sheets.ts:92`) requires the full write scope — note that scope is not requested by this feature's UI sign-in flow (the shell requests only `spreadsheets.readonly`).
 
-**GM exceptions (deterministic thresholds).** `buildExceptions` (`gm-insights.ts:322-400`) emits a fixed set: any failed active source (`critical`), no import timestamp or staleness > 90 min (`STALE_SOURCE_MINUTES`, `gm-insights.ts:16`), behind monthly pace (critical when the projected gap exceeds 15% of target), trial conversion < 35%, retention < 50%, and churn-replacement ratio < 1.0.
-
-**Soft-delete / restore.** Archiving sets `status = archived` and stashes `statusBeforeArchive`, keeping all rows and history (`archiveSalesDashboardSource`, `data.ts:319-346`). Restore is blocked if another active source already occupies that month (`data.ts:357-368`). A refreshing source cannot be archived (`data.ts:327-329`).
-
-**Repository scope guard (operational, not runtime).** Because a non-owner collaborator (`aoengnatchasmith-spec`) contributes only to this feature, two guards enforce the boundary:
-- A **CI check** — `.github/workflows/sales-dashboard-scope.yml` pipes the PR's changed files into `scripts/check-sales-dashboard-scope.mjs`, which fails the build if that specific actor touches anything outside five allowed prefixes (`src/app/(app)/sales-dashboard/`, `src/app/api/sales-dashboard/`, `src/app/api/internal/sync-sales-dashboard/`, `src/components/sales-dashboard/`, `src/lib/sales-dashboard/`). For any other actor the check is skipped.
-- A **local Claude hook** — `.claude/hooks/sales-dashboard-guard.mjs` enforces the same allow-list on `Edit`/`Write` at `PreToolUse`, blocks `Read` of secret/`.xlsx`/`.vercel` paths, and blocks destructive or production commands (force-push, push to main, `vercel --prod`, hitting prod `sync-*` endpoints, reading `.env`).
+**Caching.** The payload is wrapped in `"use cache"` with `cacheTag("sales-dashboard")` and `cacheLife({ stale: 60, revalidate: 60, expire: 300 })` (`data.ts:885-889`). Every mutating helper calls `revalidateSalesDashboardCache()`, which swallows the "static generation store missing" error so the functions remain callable outside a request context (`data.ts:89-96`).
 
 ## Tests
 
-Tests use Vitest and live in `__tests__` directories beside the code:
+Unit tests in `src/lib/sales-dashboard/__tests__/`:
+- **`parser.test.ts`** — spreadsheet-id extraction; legacy-Thai and new-English parsing; unpaid-row filtering; derived enrollment/churn analytics; additional-row parsing.
+- **`analytics.test.ts`** — first-trial cohort conversion dates; retention cohorts off 14-day grace deadlines.
+- **`gm-insights.test.ts`** — completion-curve month-end projection; the deterministic exception set; previous-equivalent-period sales-team deltas; imported-target actual-vs-projection rows.
+- **`projection.test.ts`** — target / scenario-summary / monthly-scenario parsing by label; clear failure on missing labels.
+- **`import-guard.test.ts`** — acquire when idle; skip when running; unique-index race loser; stale-running fail + status restore.
+- **`lifecycle.test.ts`** — refresh current + previous-through-day-7; stop + auto-finalize on day 8; finalize historical while keeping reopened.
+- **`dates.test.ts`** — Bangkok month boundaries.
 
-- **`src/lib/sales-dashboard/__tests__/parser.test.ts`** — spreadsheet-ID extraction; old Thai vs. new English format parsing; unpaid-row filtering; preservation of pre-filled enrollment type; additional-row parsing and skipping rows without payment dates.
-- **`src/lib/sales-dashboard/__tests__/analytics.test.ts`** — first-trial cohort conversion-date logic; retention cohort built off the valid-until **grace deadline** rather than valid-until itself.
-- **`src/lib/sales-dashboard/__tests__/gm-insights.test.ts`** — month-end revenue projection from historical completion curves; deterministic exception generation (stale/failed/pace/conversion/retention/replacement); previous-equivalent-period sales-team deltas; imported-projection target and actual-vs-projection rows.
-- **`src/lib/sales-dashboard/__tests__/lifecycle.test.ts`** — current + previous-month refresh through day 7; stop + auto-finalize on day 8; finalize historical months while preserving `reopened`.
-- **`src/lib/sales-dashboard/__tests__/import-guard.test.ts`** — acquires a run when idle; skips a fresh in-flight run; resolves the unique-index race; marks stale runs failed and restores prior source status.
-- **`src/lib/sales-dashboard/__tests__/projection.test.ts`** — parses target, scenario summaries, and monthly scenario rows; fails clearly on missing labels.
-- **`src/lib/sales-dashboard/__tests__/dates.test.ts`** — Bangkok-anchored current-month helpers; no premature month rollover before Bangkok midnight.
-- **`src/app/api/sales-dashboard/__tests__/route.test.ts`** — auth gating; Postgres-backed payload; backfill / selected-source / finalized-protection imports; 409 when Sheets unconnected; explicit no-op when no sources; row-count summaries; archive (soft-delete) and restore; surfaced action errors; projection save + import.
-- **`src/app/api/internal/sync-sales-dashboard/__tests__/route.test.ts`** — cron-secret requirement for GET; cron-actor refreshable import; manual admin POST without secret; 409 when cron lacks Sheets access.
-- **`src/components/sales-dashboard/__tests__/empty-state-source.test.ts`** — zero-source setup guidance renders above the command center; live-month refresh cannot claim success before sources exist; source management is tucked behind the dialog; projection controls live in the dialog.
+Route/UI tests:
+- **`src/app/api/sales-dashboard/__tests__/route.test.ts`** — auth gating, Postgres-backed payload, projection save/import, backfill/refresh, the 409 missing-token case, and the no-sources no-op.
+- **`src/components/sales-dashboard/__tests__/empty-state-source.test.ts`** — zero-source setup guidance, refresh not claiming false success, and source/projection controls living behind the dialog.
+- **`src/app/api/internal/sync-sales-dashboard/__tests__/route.test.ts`** — the cron entry point: the `CRON_SECRET` gate (401 on a wrong secret, GET — `route.test.ts:41`), a valid-secret cron run dispatching both refreshable + projection imports with the `cron@begifted.local` actor (`:49`), the admin-session POST fallback running without the cron secret and tagging the admin's email as actor (`:68`), and the 409 `MissingGoogleSheetsTokenError` path (`:84`).
 
 ## Open questions
 
-- **Reference docs are missing.** The section contract asks feature docs to link to `docs/reference/database/erd-*.md` and `docs/reference/api/*.md`, but neither subdirectory exists yet in the repo. (`docs/reference/` itself exists and holds `crons.md` and `env.md`; `docs/` also contains `features/`, `handbook/`, and `operations/`.) The links here point at the canonical reference home (`erd-sales-dashboard.md`, `api/sales-dashboard.md`); a human should confirm those reference files will be generated under those exact names.
-- **No-op month status branch.** In `upsertSalesDashboardSource`, the status is set via `sourceMonth === currentBangkokMonthStart(now) ? "active" : "active"` (`data.ts:190`) — both branches yield `"active"`. This looks like a leftover from an intended current-vs-historical distinction; intent unclear.
-- **`isHistoricalMonth` appears unused.** Exported from `lifecycle.ts:44-48` but not referenced by the import/read paths reviewed; possibly intended for a UI affordance that was not wired up.
-- **Backfill ignores the auto-finalize/refresh windows.** `importAllSalesSources` (`data.ts:579-593`) imports every source with `allowFinalized: true`, bypassing lifecycle gating. This is presumably intentional for one-shot historical loads, but the contrast with the cron path is worth a human confirming as designed.
+- **Write scope is unused *within* this feature, but consumed by Leave Requests.** `updateGoogleSheetCell` / `getGoogleSheetsWriteAccessToken` (`sheets.ts:92`, `google-oauth.ts:200`) require the full `spreadsheets` write scope, and no Sales Dashboard code calls them — the shell's Connect flow requests only `spreadsheets.readonly`. The write helper is not dead code, though: Leave Requests imports `updateGoogleSheetCell` from `@/lib/sales-dashboard/sheets` (`src/lib/leave-requests/data.ts:5`) and calls it for sheet-status writeback (`src/lib/leave-requests/data.ts:551`). Sales Dashboard owns the shared Google-Sheets access layer; Leave Requests is the writeback consumer. The only open part is whether the Sales Dashboard UI should ever request the write scope itself, or remain read-only and let Leave Requests carry the write OAuth.
+- **`upsertSalesDashboardSource` status ternary is a no-op.** `data.ts:190` reads `sourceMonth === currentBangkokMonthStart(now) ? "active" : "active"` — both branches yield `"active"`. Intentional placeholder, or a leftover from a removed "finalized-on-create" branch?
+- **Default source ids are environment-specific.** `DEFAULT_SALES_SOURCES` (`default-sources.ts`) hardcodes 14 production spreadsheet ids (2025-04 … 2026-05). Confirm these are the canonical production sheets and whether the list is meant to be extended monthly by hand or superseded by manual source entry.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._
