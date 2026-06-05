@@ -24,21 +24,28 @@ import {
 import {
   loadCycleState,
   loadCycleStates,
+  loadRecommendationData,
   type ProgressTestCycleStateRecord,
 } from "./db";
 import {
   confirmProgressTestBooking,
+  markAtHomeSubmitted,
   markProgressTestComplete,
+  selectAtHomeOption,
   type ProgressTestActor,
 } from "./booking";
 import {
   runTeacherHeadsUpNotifications,
   type TeacherHeadsUpResult,
 } from "./teacher-heads-up";
+import { getVerifiedLineContactsByStudentKey } from "./line";
+import { RECOMMEND_WINDOW_DAYS, buildRecommendedSlots } from "./recommend";
+import { buildParentMessage } from "./parent-message";
 import type {
   ProgressTestAiSummary,
   ProgressTestBookingMode,
   ProgressTestRow,
+  ProgressTestScheduleMethod,
   ProgressTestsPayload,
   ProgressTestStatus,
   ProgressTestsSummary,
@@ -49,6 +56,8 @@ export interface BookProgressTestInput {
   enrollmentKey: string;
   testDate: Date;
   location?: string | null;
+  /** "after_class" (clicked a recommended slot) or "parent_pick" (custom time). */
+  scheduleMethod: ProgressTestScheduleMethod;
   actor?: ProgressTestActor;
 }
 
@@ -124,11 +133,19 @@ function toProgressTestRow(record: ProgressTestCycleStateRecord): ProgressTestRo
     bookedTestWiseSessionId: record.bookedTestWiseSessionId,
     bookedTestDate: record.bookedTestDate?.toISOString() ?? null,
     bookedTestBookingMode: (record.bookedTestBookingMode as ProgressTestBookingMode | null) ?? null,
+    scheduleMethod: (record.scheduleMethod as ProgressTestScheduleMethod | null) ?? null,
+    bookedTestLocation: record.bookedTestLocation,
+    atHomeSelectedAt: record.atHomeSelectedAt?.toISOString() ?? null,
+    atHomeSubmittedAt: record.atHomeSubmittedAt?.toISOString() ?? null,
     lastClassDate: record.lastClassDate?.toISOString() ?? null,
     lastAiSummary: toAiSummary(record.lastAiSummary),
     lastAiSummaryAt: record.lastAiSummaryAt?.toISOString() ?? null,
     updatedByEmail: record.updatedByEmail,
     updatedAt: record.updatedAt?.toISOString() ?? null,
+    // Parent-outreach fields: defaults; getProgressTestsPayload fills them for eligible rows.
+    parentLineContact: null,
+    recommendedSlots: [],
+    parentMessage: null,
   };
 }
 
@@ -168,6 +185,53 @@ async function loadLastSyncedAt(db: Database): Promise<string | null> {
 }
 
 /**
+ * Enriches dashboard rows with parent outreach data (mutates rows in place).
+ *
+ * 1. Batch-resolve the verified parent LINE contact for every row's studentKey
+ *    (one query) so admins can open any linked parent's chat.
+ * 2. For approaching/due rows that have a verified link, build schedule-aware
+ *    recommended slots (room-verified) from a single shared recommendation-data
+ *    load, and a prebuilt bilingual message for one-click outreach.
+ *
+ * Bounded cost: one LINE query + (when any eligible row) ~2-3 batched queries
+ * shared across all eligible students — not per-row.
+ */
+async function enrichRowsWithParentOutreach(rows: ProgressTestRow[], db: Database): Promise<void> {
+  if (rows.length === 0) return;
+  const now = new Date();
+
+  const lineByKey = await getVerifiedLineContactsByStudentKey(
+    rows.map((row) => row.studentKey),
+    db,
+  );
+
+  const eligible = rows.filter(
+    (row) => lineByKey.has(row.studentKey) && (row.status === "approaching" || row.status === "due"),
+  );
+  const recData = eligible.length > 0
+    ? await loadRecommendationData(eligible.map((row) => row.wiseStudentId), now, RECOMMEND_WINDOW_DAYS, db)
+    : null;
+
+  for (const row of rows) {
+    row.parentLineContact = lineByKey.get(row.studentKey) ?? null;
+    if (recData && row.parentLineContact && (row.status === "approaching" || row.status === "due")) {
+      const slots = buildRecommendedSlots({
+        classes: recData.studentClasses.get(row.wiseStudentId) ?? [],
+        roomBlocks: recData.roomBlocks,
+        rooms: recData.rooms,
+        now,
+      });
+      row.recommendedSlots = slots;
+      row.parentMessage = buildParentMessage({
+        studentName: row.studentName,
+        count: row.currentCount,
+        slots,
+      });
+    }
+  }
+}
+
+/**
  * Builds the progress-tests dashboard payload from durable cycle-state rows.
  *
  * 1. Load every persisted cycle-state row (cross-snapshot, keyed by enrollment).
@@ -193,6 +257,8 @@ export async function getProgressTestsPayload(db: Database = getDb()): Promise<P
       if (b.currentCount !== a.currentCount) return b.currentCount - a.currentCount;
       return a.studentName.localeCompare(b.studentName);
     });
+
+  await enrichRowsWithParentOutreach(rows, db);
 
   const subjects = [...new Set(rows.map((row) => row.subject).filter((subject) => subject.length > 0))].sort(
     (a, b) => a.localeCompare(b),
@@ -245,6 +311,7 @@ export async function bookTest(
     scheduledTestStart: input.testDate,
     scheduledTestEnd,
     location: input.location ?? null,
+    scheduleMethod: input.scheduleMethod,
     actor: input.actor,
     db,
   });
@@ -277,6 +344,34 @@ export async function markComplete(
     db,
   });
   if (!rolled) return null;
+  return reloadRow(input.enrollmentKey, db);
+}
+
+/**
+ * Logs that an enrollment's test will be taken at home (no Wise booking).
+ *
+ * @returns the refreshed dashboard row, or null when the enrollment was unknown.
+ */
+export async function selectAtHome(
+  input: ProgressTestActionInput,
+  db: Database = getDb(),
+): Promise<ProgressTestRow | null> {
+  const ok = await selectAtHomeOption({ enrollmentKey: input.enrollmentKey, actor: input.actor, db });
+  if (!ok) return null;
+  return reloadRow(input.enrollmentKey, db);
+}
+
+/**
+ * Logs that an at-home test was submitted and rolls the cycle.
+ *
+ * @returns the refreshed dashboard row, or null when the enrollment was unknown.
+ */
+export async function submitAtHome(
+  input: ProgressTestActionInput,
+  db: Database = getDb(),
+): Promise<ProgressTestRow | null> {
+  const ok = await markAtHomeSubmitted({ enrollmentKey: input.enrollmentKey, actor: input.actor, db });
+  if (!ok) return null;
   return reloadRow(input.enrollmentKey, db);
 }
 

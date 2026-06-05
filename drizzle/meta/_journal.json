@@ -274,6 +274,13 @@
       "when": 1780580854081,
       "tag": "0038_cynical_karma",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1780622893951,
+      "tag": "0039_overrated_krista_starr",
+      "breakpoints": true
     }
   ]
 }

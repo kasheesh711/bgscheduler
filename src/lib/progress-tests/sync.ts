@@ -362,6 +362,10 @@ function buildCycleStateRow(
     bookedTestWiseSessionId: reset ? null : prior?.bookedTestWiseSessionId ?? null,
     bookedTestDate: reset ? null : prior?.bookedTestDate ?? null,
     bookedTestBookingMode: reset ? null : prior?.bookedTestBookingMode ?? null,
+    scheduleMethod: reset ? null : prior?.scheduleMethod ?? null,
+    bookedTestLocation: reset ? null : prior?.bookedTestLocation ?? null,
+    atHomeSelectedAt: reset ? null : prior?.atHomeSelectedAt ?? null,
+    atHomeSubmittedAt: reset ? null : prior?.atHomeSubmittedAt ?? null,
     teacherNotifiedAt: reset ? null : prior?.teacherNotifiedAt ?? null,
     teacherNotifiedForCycle: reset
       ? null
@@ -506,6 +510,8 @@ export async function runProgressTestSync(deps: ProgressTestSyncDeps): Promise<P
               bookedTestWiseSessionId: cycleState.bookedTestWiseSessionId,
               bookedTestDate: cycleState.bookedTestDate,
               teacherNotifiedForCycle: cycleState.teacherNotifiedForCycle,
+              atHomeSelectedAt: cycleState.atHomeSelectedAt,
+              atHomeSubmittedAt: cycleState.atHomeSubmittedAt,
             }
             : null,
         };

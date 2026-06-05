@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarPlus, CheckCircle2, ChevronDown, ChevronRight, LogOut, Mail, RefreshCw, Search } from "lucide-react";
+import { CalendarPlus, CheckCircle2, ChevronDown, ChevronRight, FileCheck2, House, LogOut, Mail, MessageCircle, RefreshCw, Search } from "lucide-react";
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -116,6 +116,25 @@ export function shortTime(value: string | null): string {
   return value ? formatBangkokShortDateTime(value) : "-";
 }
 
+/** A short sub-label describing how a scheduled test is being run, or null. */
+export function methodLabel(row: ProgressTestRow): string | null {
+  if (row.scheduleMethod === "at_home") {
+    return row.atHomeSelectedAt ? `At home · selected ${shortTime(row.atHomeSelectedAt)}` : "At home";
+  }
+  if (row.scheduleMethod === "after_class") {
+    return row.bookedTestLocation ? `After class · ${row.bookedTestLocation}` : "After class";
+  }
+  if (row.scheduleMethod === "parent_pick") {
+    return row.bookedTestLocation ? `Parent's time · ${row.bookedTestLocation}` : "Parent's time";
+  }
+  return null;
+}
+
+/** True when this row is an at-home test that's been selected but not yet submitted. */
+export function isAtHomeAwaitingSubmission(row: ProgressTestRow): boolean {
+  return row.scheduleMethod === "at_home" && row.atHomeSelectedAt !== null && row.atHomeSubmittedAt === null;
+}
+
 /** Builds a one-line plain-text preview of a structured AI summary, or null when absent. */
 export function aiSummaryPreview(row: ProgressTestRow): string | null {
   const summary = row.lastAiSummary;
@@ -195,12 +214,14 @@ function BookTestDialog({
   busy,
   onOpenChange,
   onConfirm,
+  onSelectAtHome,
 }: {
   row: ProgressTestRow | null;
   open: boolean;
   busy: boolean;
   onOpenChange: (next: boolean) => void;
-  onConfirm: (input: { testDate: string; modality: BookingModality; location: string | null }) => void;
+  onConfirm: (input: { testDate: string; modality: BookingModality; location: string | null; scheduleMethod: "after_class" | "parent_pick" }) => void;
+  onSelectAtHome: () => void;
 }) {
   const [localDateTime, setLocalDateTime] = useState("");
   const [modality, setModality] = useState<BookingModality>("offline");
@@ -208,8 +229,9 @@ function BookTestDialog({
 
   const offlineMissingLocation = modality === "offline" && location.trim().length === 0;
   const canConfirm = !busy && localDateTime.length > 0 && !offlineMissingLocation;
+  const slots = row?.recommendedSlots ?? [];
 
-  function handleConfirm() {
+  function handleCustomConfirm() {
     if (!canConfirm) return;
     // datetime-local has no zone; treat the entered wall-clock as Bangkok time.
     const testDate = new Date(`${localDateTime}:00+07:00`).toISOString();
@@ -217,6 +239,7 @@ function BookTestDialog({
       testDate,
       modality,
       location: modality === "offline" ? location.trim() : null,
+      scheduleMethod: "parent_pick",
     });
   }
 
@@ -235,7 +258,47 @@ function BookTestDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-4">
+          {slots.length ? (
+            <div className="flex flex-col gap-1.5">
+              <div className="text-xs font-medium text-muted-foreground">Recommended times (room-checked)</div>
+              {slots.map((slot) => (
+                <button
+                  key={`${slot.start}-${slot.room}`}
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    onConfirm({ testDate: slot.start, modality: "offline", location: slot.room, scheduleMethod: "after_class" })
+                  }
+                  className="flex items-center justify-between gap-2 rounded-lg border border-input px-3 py-2 text-left text-sm hover:border-ring hover:bg-muted disabled:opacity-50"
+                >
+                  <span>{slot.label}</span>
+                  <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {slot.kind === "after_class" ? "after class" : "gap"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              No room-verified after-class slots in the next few class days — use at-home or a custom time.
+            </p>
+          )}
+
+          <Button
+            variant="outline"
+            size="sm"
+            className="justify-center gap-1.5"
+            disabled={busy}
+            onClick={onSelectAtHome}
+          >
+            <House className="size-3.5" /> Take the test at home (no booking)
+          </Button>
+
+          <div className="border-t border-border pt-3 text-xs font-medium text-muted-foreground">
+            Or pick a custom time (parent&apos;s choice)
+          </div>
+
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground" htmlFor="progress-test-date">
               Date &amp; time (Bangkok)
@@ -279,11 +342,11 @@ function BookTestDialog({
 
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
-            Cancel
+            Close
           </Button>
-          <Button size="sm" onClick={handleConfirm} disabled={!canConfirm}>
+          <Button size="sm" onClick={handleCustomConfirm} disabled={!canConfirm}>
             {busy ? <RefreshCw className="size-3.5 animate-spin" /> : <CalendarPlus className="size-3.5" />}
-            Book test
+            Book custom time
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -458,7 +521,12 @@ export function ProgressTestsDashboard({ sessionUser }: { sessionUser: AppSessio
     }
   }
 
-  function handleBookConfirm(input: { testDate: string; modality: BookingModality; location: string | null }) {
+  function handleBookConfirm(input: {
+    testDate: string;
+    modality: BookingModality;
+    location: string | null;
+    scheduleMethod: "after_class" | "parent_pick";
+  }) {
     if (!bookingRow) return;
     const enrollmentKey = bookingRow.enrollmentKey;
     void runAction(
@@ -471,11 +539,58 @@ export function ProgressTestsDashboard({ sessionUser }: { sessionUser: AppSessio
             enrollmentKey,
             testDate: input.testDate,
             modality: input.modality,
+            scheduleMethod: input.scheduleMethod,
             ...(input.location ? { location: input.location } : {}),
           }),
         }),
       "Progress test booked.",
     ).then(() => setBookingRow(null));
+  }
+
+  function handleSelectAtHome(row: ProgressTestRow) {
+    void runAction(
+      row.enrollmentKey,
+      () =>
+        fetch("/api/progress-tests/select-at-home", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enrollmentKey: row.enrollmentKey }),
+        }),
+      "Logged: test will be taken at home.",
+    ).then(() => setBookingRow(null));
+  }
+
+  function handleMarkSubmitted(row: ProgressTestRow) {
+    void runAction(
+      row.enrollmentKey,
+      () =>
+        fetch("/api/progress-tests/mark-at-home-submitted", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enrollmentKey: row.enrollmentKey }),
+        }),
+      "At-home test marked submitted; cycle reset.",
+    );
+  }
+
+  /**
+   * One-click parent outreach: copy the prebuilt bilingual message to the clipboard
+   * AND open the parent's LINE chat. Both run synchronously in the click handler so
+   * the clipboard write keeps its user-gesture (no async before writeText).
+   */
+  function copyAndOpenLine(row: ProgressTestRow) {
+    const contact = row.parentLineContact;
+    if (!contact?.chatUrl) return;
+    if (row.parentMessage) {
+      void navigator.clipboard.writeText(row.parentMessage).catch(() => {});
+    }
+    window.open(contact.chatUrl, "_blank", "noopener,noreferrer");
+    setMessage({
+      text: row.parentMessage
+        ? `Message copied — paste into ${contact.displayName ?? "the parent"}'s LINE chat and send.`
+        : `Opened ${contact.displayName ?? "the parent"}'s LINE chat.`,
+      tone: "success",
+    });
   }
 
   function handleMarkComplete(row: ProgressTestRow) {
@@ -619,6 +734,7 @@ export function ProgressTestsDashboard({ sessionUser }: { sessionUser: AppSessio
                     <TableHead>Subject</TableHead>
                     <TableHead>Progress</TableHead>
                     <TableHead>Teacher</TableHead>
+                    <TableHead>Parent (LINE)</TableHead>
                     <TableHead>Notified</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Last class</TableHead>
@@ -646,6 +762,29 @@ export function ProgressTestsDashboard({ sessionUser }: { sessionUser: AppSessio
                           </TableCell>
                           <TableCell className="text-sm">{row.mostFrequentTutorDisplayName ?? "-"}</TableCell>
                           <TableCell>
+                            {row.parentLineContact ? (
+                              row.parentLineContact.chatUrl ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="gap-1.5"
+                                  disabled={rowBusy}
+                                  onClick={() => copyAndOpenLine(row)}
+                                  title={row.parentMessage ? "Copy message + open LINE chat" : "Open LINE chat"}
+                                >
+                                  <MessageCircle className="size-3.5" />
+                                  <span className="max-w-28 truncate">{row.parentLineContact.displayName ?? "LINE"}</span>
+                                </Button>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">
+                                  {row.parentLineContact.displayName ?? "Linked"} (no chat)
+                                </span>
+                              )
+                            ) : (
+                              <span className="text-xs text-muted-foreground">No LINE link</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
                             {row.teacherNotifiedAt ? (
                               <Badge variant="outline" className="border-available/30 bg-available/10 text-available">
                                 {shortTime(row.teacherNotifiedAt)}
@@ -658,6 +797,9 @@ export function ProgressTestsDashboard({ sessionUser }: { sessionUser: AppSessio
                           </TableCell>
                           <TableCell>
                             <StatusBadge status={row.status} />
+                            {methodLabel(row) ? (
+                              <div className="mt-0.5 text-[10px] text-muted-foreground">{methodLabel(row)}</div>
+                            ) : null}
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">{shortTime(row.lastClassDate)}</TableCell>
                           <TableCell className="max-w-72">
@@ -689,18 +831,31 @@ export function ProgressTestsDashboard({ sessionUser }: { sessionUser: AppSessio
                                 onClick={() => setBookingRow(row)}
                               >
                                 <CalendarPlus className="size-3.5" />
-                                Book test
+                                Schedule
                               </Button>
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                className="gap-1.5"
-                                disabled={rowBusy || row.status !== "scheduled"}
-                                onClick={() => handleMarkComplete(row)}
-                              >
-                                {rowBusy ? <RefreshCw className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
-                                Mark complete
-                              </Button>
+                              {isAtHomeAwaitingSubmission(row) ? (
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  className="gap-1.5"
+                                  disabled={rowBusy}
+                                  onClick={() => handleMarkSubmitted(row)}
+                                >
+                                  {rowBusy ? <RefreshCw className="size-3.5 animate-spin" /> : <FileCheck2 className="size-3.5" />}
+                                  Mark submitted
+                                </Button>
+                              ) : (
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  className="gap-1.5"
+                                  disabled={rowBusy || row.status !== "scheduled"}
+                                  onClick={() => handleMarkComplete(row)}
+                                >
+                                  {rowBusy ? <RefreshCw className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                                  Mark complete
+                                </Button>
+                              )}
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -718,7 +873,7 @@ export function ProgressTestsDashboard({ sessionUser }: { sessionUser: AppSessio
                     })
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={9} className="h-24 text-center text-sm text-muted-foreground">
+                      <TableCell colSpan={10} className="h-24 text-center text-sm text-muted-foreground">
                         No students match the current filters.
                       </TableCell>
                     </TableRow>
@@ -739,6 +894,9 @@ export function ProgressTestsDashboard({ sessionUser }: { sessionUser: AppSessio
           if (!next && !bookingBusy) setBookingRow(null);
         }}
         onConfirm={handleBookConfirm}
+        onSelectAtHome={() => {
+          if (bookingRow) handleSelectAtHome(bookingRow);
+        }}
       />
     </div>
   );

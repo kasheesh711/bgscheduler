@@ -39,6 +39,10 @@ export interface ProgressTestCycleStateInput {
   bookedTestWiseSessionId: string | null;
   bookedTestDate: Date | null;
   teacherNotifiedForCycle: number | null;
+  /** Set when the admin logged an at-home test (in progress until submitted). */
+  atHomeSelectedAt: Date | null;
+  /** Set when the at-home test was submitted (the booking action then rolls the cycle). */
+  atHomeSubmittedAt: Date | null;
 }
 
 /** Per-enrollment input bundle: ledger rows + (optional) prior cycle state. */
@@ -186,9 +190,15 @@ export function computeEnrollmentCycle(
   // Step 4: position within the current block + state machine.
   const rawPosition = count - cycleIndex * PROGRESS_TEST_THRESHOLD;
 
+  const atHomeSelectedAt = cycleState?.atHomeSelectedAt ?? null;
+  const atHomeSubmittedAt = cycleState?.atHomeSubmittedAt ?? null;
+
   let status: ProgressTestStatus;
   let shouldNotifyTeacher = false;
-  if (bookedTestDate && now.getTime() <= bookedTestDate.getTime()) {
+  if (atHomeSelectedAt && !atHomeSubmittedAt) {
+    // An at-home test is being handled; it isn't due and shouldn't re-notify.
+    status = "scheduled";
+  } else if (bookedTestDate && now.getTime() <= bookedTestDate.getTime()) {
     status = "scheduled";
   } else if (rawPosition >= PROGRESS_TEST_THRESHOLD) {
     status = "due";
