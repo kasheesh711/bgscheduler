@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireProgressTestsSession, progressTestsErrorResponse } from "@/lib/progress-tests/api";
+import { requireProgressTestsAdminSession, progressTestsErrorResponse } from "@/lib/progress-tests/api";
 import { selectAtHome } from "@/lib/progress-tests/service";
 
 const SelectAtHomeSchema = z.object({
@@ -9,7 +9,7 @@ const SelectAtHomeSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    const user = await requireProgressTestsSession();
+    const user = await requireProgressTestsAdminSession();
 
     let body: unknown;
     try {

@@ -119,4 +119,6 @@ export type ProgressTestAiSummaryResult =
 export interface AppSessionUser {
   email: string;
   name: string;
+  /** "admin" = full view + all actions; "teacher" = read-only, scoped to own students. */
+  role: "admin" | "teacher";
 }

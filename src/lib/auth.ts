@@ -1,25 +1,16 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
-import { getDb } from "@/lib/db";
-import { adminUsers } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { resolveUserAccess } from "@/lib/auth-access";
 
 export async function signInCallback({
   user,
 }: {
   user: { email?: string | null };
 }): Promise<boolean> {
-  const email = user.email?.trim().toLowerCase();
-  if (!email) return false;
-
-  const db = getDb();
-  const allowed = await db
-    .select()
-    .from(adminUsers)
-    .where(eq(adminUsers.email, email))
-    .limit(1);
-
-  return allowed.length > 0;
+  // Admins (admin_users) and teachers (matched to an active tutor contact) may
+  // sign in; everyone else is denied. See resolveUserAccess.
+  const access = await resolveUserAccess(user.email);
+  return access !== null;
 }
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
@@ -49,24 +40,18 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       return allowed;
     },
     async jwt({ token, user }) {
-      // `user` is only present at sign-in; resolve allowedPages once and persist
-      // it on the token so subsequent requests need no DB call.
+      // `user` is only present at sign-in; resolve role + allowedPages once and
+      // persist them on the token so subsequent requests need no DB call.
       if (user) {
-        const email = user.email?.trim().toLowerCase();
-        if (email) {
-          const db = getDb();
-          const rows = await db
-            .select({ allowedPages: adminUsers.allowedPages })
-            .from(adminUsers)
-            .where(eq(adminUsers.email, email))
-            .limit(1);
-          token.allowedPages = rows[0]?.allowedPages ?? null;
-        }
+        const access = await resolveUserAccess(user.email);
+        token.allowedPages = access?.allowedPages ?? null;
+        token.role = access?.role ?? null;
       }
       return token;
     },
     async session({ session, token }) {
       session.user.allowedPages = token.allowedPages ?? null;
+      session.user.role = token.role ?? null;
       return session;
     },
   },

@@ -1,9 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
-vi.mock("@/lib/sales-dashboard/google-oauth", () => ({
-  storeGoogleOAuthTokenForUser: vi.fn(),
-}));
+// signInCallback now delegates the admin/teacher decision to resolveUserAccess;
+// stub it (and NextAuth's instantiation) so we test the delegation contract.
+vi.mock("@/lib/auth-access", () => ({ resolveUserAccess: vi.fn() }));
 vi.mock("next-auth", () => ({
   default: () => ({
     handlers: {},
@@ -13,77 +12,47 @@ vi.mock("next-auth", () => ({
   }),
 }));
 vi.mock("next-auth/providers/google", () => ({
-  default: () => ({
-    id: "google",
-    name: "Google",
-    type: "oauth",
-  }),
+  default: () => ({ id: "google", name: "Google", type: "oauth" }),
 }));
-vi.mock("drizzle-orm", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("drizzle-orm")>();
-
-  return {
-    ...actual,
-    eq: vi.fn((column: unknown, value: unknown) => ({ column, value })),
-  };
-});
 
 import { signInCallback } from "@/lib/auth";
-import { getDb } from "@/lib/db";
-import { eq } from "drizzle-orm";
+import { resolveUserAccess } from "@/lib/auth-access";
 
-describe("signInCallback — TCOV-06 part 1 (allowlist)", () => {
+describe("signInCallback — TCOV-06 (admin allowlist + teacher access)", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(getDb).mockReturnValue({
-      select: () => ({
-        from: () => ({
-          where: () => ({
-            limit: vi.fn().mockResolvedValue([{ email: "kevhsh7@gmail.com" }]),
-          }),
-        }),
-      }),
-    } as never);
   });
 
-  it("admits an allowlisted user", async () => {
+  it("admits a recognized admin", async () => {
+    vi.mocked(resolveUserAccess).mockResolvedValue({ role: "admin", allowedPages: null });
+
     const ok = await signInCallback({ user: { email: "kevhsh7@gmail.com" } });
 
     expect(ok).toBe(true);
+    expect(resolveUserAccess).toHaveBeenCalledWith("kevhsh7@gmail.com");
   });
 
-  it("normalizes email casing and surrounding whitespace before allowlist lookup", async () => {
-    const ok = await signInCallback({ user: { email: "  KevHSH7@Gmail.Com  " } });
+  it("admits a recognized teacher", async () => {
+    vi.mocked(resolveUserAccess).mockResolvedValue({ role: "teacher", allowedPages: ["/progress-tests"] });
+
+    const ok = await signInCallback({ user: { email: "aey@example.com" } });
 
     expect(ok).toBe(true);
-    expect(eq).toHaveBeenCalledWith(expect.anything(), "kevhsh7@gmail.com");
   });
 
-  it("rejects a non-allowlisted user", async () => {
-    vi.mocked(getDb).mockReturnValue({
-      select: () => ({
-        from: () => ({
-          where: () => ({
-            limit: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      }),
-    } as never);
+  it("rejects a user resolveUserAccess denies", async () => {
+    vi.mocked(resolveUserAccess).mockResolvedValue(null);
 
     const ok = await signInCallback({ user: { email: "evil@example.com" } });
 
     expect(ok).toBe(false);
   });
 
-  it("rejects when email is missing without calling DB", async () => {
-    const dbSpy = vi.fn(() => {
-      throw new Error("getDb should not be called");
-    });
-    vi.mocked(getDb).mockImplementation(dbSpy);
+  it("rejects when the email is missing", async () => {
+    vi.mocked(resolveUserAccess).mockResolvedValue(null);
 
     const ok = await signInCallback({ user: { email: null } });
 
     expect(ok).toBe(false);
-    expect(dbSpy).not.toHaveBeenCalled();
   });
 });

@@ -42,7 +42,24 @@ export async function requireProgressTestsSession(): Promise<AppSessionUser> {
     throw new Error("Forbidden");
   }
 
-  return { email, name };
+  const role = session?.user?.role === "teacher" ? "teacher" : "admin";
+  return { email, name, role };
+}
+
+/**
+ * Like requireProgressTestsSession but additionally requires an admin role.
+ *
+ * Teachers get a read-only, student-scoped view, so every mutating route uses
+ * this guard — a teacher session throws "Forbidden" (403) before any write.
+ *
+ * @returns the authenticated admin user on success.
+ */
+export async function requireProgressTestsAdminSession(): Promise<AppSessionUser> {
+  const user = await requireProgressTestsSession();
+  if (user.role !== "admin") {
+    throw new Error("Forbidden");
+  }
+  return user;
 }
 
 export function progressTestsErrorResponse(route: string, error: unknown, fallbackMessage: string) {

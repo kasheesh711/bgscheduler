@@ -8,6 +8,9 @@ vi.mock("@/lib/progress-tests/service", () => ({
   markComplete: vi.fn(),
   resendTeacherEmail: vi.fn(),
 }));
+vi.mock("@/lib/progress-tests/teacher-access", () => ({
+  resolveTeacherCanonicalKeys: vi.fn(),
+}));
 
 import { auth } from "@/lib/auth";
 import {
@@ -16,6 +19,7 @@ import {
   markComplete,
   resendTeacherEmail,
 } from "@/lib/progress-tests/service";
+import { resolveTeacherCanonicalKeys } from "@/lib/progress-tests/teacher-access";
 import { GET } from "@/app/api/progress-tests/route";
 import { POST as bookRoute } from "@/app/api/progress-tests/book/route";
 import { POST as markCompleteRoute } from "@/app/api/progress-tests/mark-complete/route";
@@ -96,6 +100,27 @@ describe("progress-tests API routes", () => {
       });
     });
 
+    it("scopes the payload to a teacher's canonicalKeys", async () => {
+      authMock.mockResolvedValue({
+        user: { email: "aey@example.com", name: "Aey", allowedPages: ["/progress-tests"], role: "teacher" },
+      });
+      vi.mocked(resolveTeacherCanonicalKeys).mockResolvedValue(["Aey"]);
+
+      const res = await GET();
+
+      expect(res.status).toBe(200);
+      expect(resolveTeacherCanonicalKeys).toHaveBeenCalledWith("aey@example.com");
+      expect(getProgressTestsPayload).toHaveBeenCalledWith({ teacherCanonicalKeys: ["Aey"] });
+    });
+
+    it("passes no teacher filter for an admin session", async () => {
+      const res = await GET();
+
+      expect(res.status).toBe(200);
+      expect(getProgressTestsPayload).toHaveBeenCalledWith({ teacherCanonicalKeys: null });
+      expect(resolveTeacherCanonicalKeys).not.toHaveBeenCalled();
+    });
+
     it("returns 401 when unauthenticated", async () => {
       authMock.mockResolvedValue(null);
 
@@ -127,6 +152,20 @@ describe("progress-tests API routes", () => {
   });
 
   describe("POST /api/progress-tests/book", () => {
+    it("returns 403 for a teacher session (read-only)", async () => {
+      authMock.mockResolvedValue({
+        user: { email: "aey@example.com", name: "Aey", allowedPages: ["/progress-tests"], role: "teacher" },
+      });
+
+      const res = await bookRoute(postRequest("http://test.local/api/progress-tests/book", {
+        enrollmentKey: "class-1|student-1",
+        testDate: "2026-06-20T02:00:00.000Z",
+      }));
+
+      expect(res.status).toBe(403);
+      expect(bookTest).not.toHaveBeenCalled();
+    });
+
     it("books a test and returns the refreshed row", async () => {
       const res = await bookRoute(postRequest("http://test.local/api/progress-tests/book", {
         enrollmentKey: "class-1|student-1",
@@ -140,7 +179,7 @@ describe("progress-tests API routes", () => {
         testDate: new Date("2026-06-20T02:00:00.000Z"),
         location: "Tesla",
         scheduleMethod: "parent_pick",
-        actor: { email: "admin@example.com", name: "Admin" },
+        actor: { email: "admin@example.com", name: "Admin", role: "admin" },
       });
       await expect(res.json()).resolves.toMatchObject({ status: "manual_required", row: { enrollmentKey: "class-1|student-1" } });
     });
@@ -194,7 +233,7 @@ describe("progress-tests API routes", () => {
       expect(res.status).toBe(200);
       expect(markComplete).toHaveBeenCalledWith({
         enrollmentKey: "class-1|student-1",
-        actor: { email: "admin@example.com", name: "Admin" },
+        actor: { email: "admin@example.com", name: "Admin", role: "admin" },
       });
       await expect(res.json()).resolves.toEqual({ row: sampleRow });
     });
@@ -226,7 +265,7 @@ describe("progress-tests API routes", () => {
       expect(res.status).toBe(200);
       expect(resendTeacherEmail).toHaveBeenCalledWith({
         enrollmentKey: "class-1|student-1",
-        actor: { email: "admin@example.com", name: "Admin" },
+        actor: { email: "admin@example.com", name: "Admin", role: "admin" },
       });
       await expect(res.json()).resolves.toMatchObject({ outcome: { status: "sent" }, row: { enrollmentKey: "class-1|student-1" } });
     });
