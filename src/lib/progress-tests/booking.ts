@@ -36,7 +36,7 @@ import {
   type ProgressTestCycleStateInsert,
   type ProgressTestCycleStateRecord,
 } from "./db";
-import type { ProgressTestBookingMode } from "./types";
+import type { ProgressTestBookingMode, ProgressTestScheduleMethod } from "./types";
 
 const PROGRESS_TEST_SESSION_TITLE = "Progress Test";
 
@@ -56,6 +56,8 @@ export interface ConfirmProgressTestBookingInput {
   scheduledTestStart: Date;
   scheduledTestEnd: Date;
   location?: string | null;
+  /** How this test is being scheduled ("after_class" | "parent_pick"). */
+  scheduleMethod: ProgressTestScheduleMethod;
   actor?: ProgressTestActor;
   db?: Database;
   client?: WiseClient;
@@ -76,6 +78,8 @@ export interface MarkProgressTestBookedManuallyInput {
   enrollmentKey: string;
   wiseSessionId: string;
   scheduledTestStart?: Date | null;
+  scheduleMethod?: ProgressTestScheduleMethod;
+  location?: string | null;
   actor?: ProgressTestActor;
   db?: Database;
 }
@@ -137,6 +141,10 @@ function cycleStateToInsert(record: ProgressTestCycleStateRecord): ProgressTestC
     bookedTestWiseSessionId: record.bookedTestWiseSessionId,
     bookedTestDate: record.bookedTestDate,
     bookedTestBookingMode: record.bookedTestBookingMode,
+    scheduleMethod: record.scheduleMethod,
+    bookedTestLocation: record.bookedTestLocation,
+    atHomeSelectedAt: record.atHomeSelectedAt,
+    atHomeSubmittedAt: record.atHomeSubmittedAt,
     teacherNotifiedAt: record.teacherNotifiedAt,
     teacherNotifiedForCycle: record.teacherNotifiedForCycle,
     mostFrequentTutorCanonicalKey: record.mostFrequentTutorCanonicalKey,
@@ -237,6 +245,8 @@ export async function confirmProgressTestBooking(
       bookedTestDate: input.scheduledTestStart,
       bookedTestWiseSessionId: null,
       bookingMode: "manual",
+      scheduleMethod: input.scheduleMethod,
+      location,
       actorEmail: actor.email,
     });
     revalidateTag(PROGRESS_TESTS_CACHE_TAG, { expire: 0 });
@@ -288,6 +298,8 @@ export async function confirmProgressTestBooking(
       bookedTestDate: input.scheduledTestStart,
       bookedTestWiseSessionId: null,
       bookingMode: "manual",
+      scheduleMethod: input.scheduleMethod,
+      location,
       actorEmail: actor.email,
     });
     revalidateTag(PROGRESS_TESTS_CACHE_TAG, { expire: 0 });
@@ -321,6 +333,8 @@ export async function confirmProgressTestBooking(
     bookedTestDate: input.scheduledTestStart,
     bookedTestWiseSessionId: created.sessionId,
     bookingMode: "wise",
+    scheduleMethod: input.scheduleMethod,
+    location,
     actorEmail: actor.email,
   });
   if (created.sessionId) {
@@ -380,6 +394,8 @@ export async function markProgressTestBookedManually(
     bookedTestDate,
     bookedTestWiseSessionId: input.wiseSessionId,
     bookingMode: "manual",
+    scheduleMethod: input.scheduleMethod ?? "parent_pick",
+    location: input.location?.trim() || null,
     actorEmail: actor.email,
   });
   await markLedgerRowAsProgressTest(input.wiseSessionId, wiseStudentId, db);
@@ -417,6 +433,116 @@ export async function markProgressTestComplete(
     bookedTestWiseSessionId: null,
     bookedTestDate: null,
     bookedTestBookingMode: null,
+    scheduleMethod: null,
+    bookedTestLocation: null,
+    atHomeSelectedAt: null,
+    atHomeSubmittedAt: null,
+    teacherNotifiedAt: null,
+    teacherNotifiedForCycle: null,
+    updatedByEmail: actor.email,
+  }, db);
+  revalidateTag(PROGRESS_TESTS_CACHE_TAG, { expire: 0 });
+
+  return true;
+}
+
+/** Input for the at-home option actions. */
+export interface AtHomeOptionInput {
+  enrollmentKey: string;
+  actor?: ProgressTestActor;
+  db?: Database;
+}
+
+/**
+ * Logs that an enrollment's progress test will be taken AT HOME (no Wise booking).
+ *
+ * Records an audit row and sets the cycle state to "scheduled" with
+ * scheduleMethod="at_home" + atHomeSelectedAt=now (clearing any prior booked/at-home
+ * fields). The student is no longer "due" while the at-home test is outstanding;
+ * markAtHomeSubmitted later rolls the cycle. No-ops when no cycle state exists.
+ *
+ * @returns true when the at-home option was recorded; false when the enrollment was unknown.
+ */
+export async function selectAtHomeOption(input: AtHomeOptionInput): Promise<boolean> {
+  const db = input.db ?? getDb();
+  const actor = normalizeActor(input.actor);
+  const cycleState = await loadCycleState(input.enrollmentKey, db);
+  if (!cycleState) return false;
+
+  const now = new Date();
+  await insertBooking({
+    enrollmentKey: input.enrollmentKey,
+    cycleIndex: cycleState.cycleIndex,
+    status: "recorded",
+    dryRun: true,
+    scheduledTestDate: null,
+    wiseClassId: cycleState.wiseClassId,
+    wiseStudentId: cycleState.wiseStudentId,
+    requestPayload: { mode: "at_home_selected" },
+    createdByEmail: actor.email,
+    createdByName: actor.name,
+  }, db);
+
+  await upsertCycleState({
+    ...cycleStateToInsert(cycleState),
+    status: "scheduled",
+    scheduleMethod: "at_home",
+    bookedTestWiseSessionId: null,
+    bookedTestDate: null,
+    bookedTestBookingMode: null,
+    bookedTestLocation: null,
+    atHomeSelectedAt: now,
+    atHomeSubmittedAt: null,
+    updatedByEmail: actor.email,
+  }, db);
+  revalidateTag(PROGRESS_TESTS_CACHE_TAG, { expire: 0 });
+
+  return true;
+}
+
+/**
+ * Logs that an at-home progress test has been submitted, then rolls the cycle.
+ *
+ * Records an audit row (its createdAt is the submission time) and immediately
+ * rolls the cycle (cycleIndex+1, currentCount=0, status accumulating, clearing the
+ * booked + at-home + notify fields) — i.e. the at-home submission counts as the
+ * test done, exactly like markProgressTestComplete. No-ops when no cycle state exists.
+ *
+ * @returns true when the submission rolled the cycle; false when the enrollment was unknown.
+ */
+export async function markAtHomeSubmitted(input: AtHomeOptionInput): Promise<boolean> {
+  const db = input.db ?? getDb();
+  const actor = normalizeActor(input.actor);
+  const cycleState = await loadCycleState(input.enrollmentKey, db);
+  if (!cycleState) return false;
+
+  const now = new Date();
+  await insertBooking({
+    enrollmentKey: input.enrollmentKey,
+    cycleIndex: cycleState.cycleIndex,
+    status: "manual_confirmed",
+    dryRun: true,
+    scheduledTestDate: cycleState.atHomeSelectedAt,
+    wiseClassId: cycleState.wiseClassId,
+    wiseStudentId: cycleState.wiseStudentId,
+    requestPayload: { mode: "at_home_submitted" },
+    createdByEmail: actor.email,
+    createdByName: actor.name,
+  }, db);
+
+  await upsertCycleState({
+    ...cycleStateToInsert(cycleState),
+    currentCount: 0,
+    currentCycleStart: now,
+    cycleIndex: cycleState.cycleIndex + 1,
+    status: "accumulating",
+    bookedTestWiseSessionId: null,
+    bookedTestDate: null,
+    bookedTestBookingMode: null,
+    scheduleMethod: null,
+    bookedTestLocation: null,
+    atHomeSelectedAt: null,
+    atHomeSubmittedAt: null,
     teacherNotifiedAt: null,
     teacherNotifiedForCycle: null,
     updatedByEmail: actor.email,
@@ -470,6 +596,8 @@ async function applyScheduledCycleState(
     bookedTestDate: Date | null;
     bookedTestWiseSessionId: string | null;
     bookingMode: ProgressTestBookingMode;
+    scheduleMethod: ProgressTestScheduleMethod;
+    location: string | null;
     actorEmail: string | null;
   },
 ): Promise<void> {
@@ -489,6 +617,10 @@ async function applyScheduledCycleState(
       bookedTestWiseSessionId: null,
       bookedTestDate: null,
       bookedTestBookingMode: null,
+      scheduleMethod: null,
+      bookedTestLocation: null,
+      atHomeSelectedAt: null,
+      atHomeSubmittedAt: null,
       teacherNotifiedAt: null,
       teacherNotifiedForCycle: null,
       mostFrequentTutorCanonicalKey: null,
@@ -505,6 +637,11 @@ async function applyScheduledCycleState(
     bookedTestDate: params.bookedTestDate,
     bookedTestWiseSessionId: params.bookedTestWiseSessionId,
     bookedTestBookingMode: params.bookingMode,
+    scheduleMethod: params.scheduleMethod,
+    bookedTestLocation: params.location,
+    // A Wise/parent-pick booking is not at-home; clear any prior at-home state.
+    atHomeSelectedAt: null,
+    atHomeSubmittedAt: null,
     updatedByEmail: params.actorEmail,
   }, db);
 }

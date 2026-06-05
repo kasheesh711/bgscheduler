@@ -139,6 +139,7 @@ describe("progress-tests API routes", () => {
         enrollmentKey: "class-1|student-1",
         testDate: new Date("2026-06-20T02:00:00.000Z"),
         location: "Tesla",
+        scheduleMethod: "parent_pick",
         actor: { email: "admin@example.com", name: "Admin" },
       });
       await expect(res.json()).resolves.toMatchObject({ status: "manual_required", row: { enrollmentKey: "class-1|student-1" } });

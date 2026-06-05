@@ -49,6 +49,8 @@ function cycleState(overrides: Partial<ProgressTestCycleStateInput> = {}): Progr
     bookedTestWiseSessionId: null,
     bookedTestDate: null,
     teacherNotifiedForCycle: null,
+    atHomeSelectedAt: null,
+    atHomeSubmittedAt: null,
     ...overrides,
   };
 }
@@ -197,6 +199,18 @@ describe("computeEnrollmentCycle — due + scheduled + reset (going forward)", (
     const outcome = computeEnrollmentCycle(enrollment(attendedRows(8), state), now);
     expect(outcome.status).toBe("scheduled");
     expect(outcome.cycleResetTriggered).toBe(false);
+  });
+
+  it("treats an at-home-selected enrollment as scheduled even when it would otherwise be due", () => {
+    const outcome = computeEnrollmentCycle(
+      enrollment(
+        attendedRows(8),
+        cycleState({ cycleIndex: 0, atHomeSelectedAt: new Date("2026-06-01T03:00:00+07:00") }),
+      ),
+      now,
+    );
+    expect(outcome.status).toBe("scheduled");
+    expect(outcome.shouldNotifyTeacher).toBe(false);
   });
 
   it("accounts a block when the booked test date passes (cycleIndex + 1) and recomputes position", () => {

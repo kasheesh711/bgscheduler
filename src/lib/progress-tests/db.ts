@@ -5,10 +5,12 @@
 // identifiers (wiseSessionId/wiseStudentId, enrollmentKey) rather than a
 // snapshot id. Source attendance comes from the ACTIVE credit-control snapshot.
 
-import { and, desc, eq, gt, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, lt, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { listClassroomRooms } from "@/lib/classrooms/data";
 import { PROGRESS_TEST_COUNTING_START, buildEnrollmentKey } from "./config";
+import type { FutureClassInterval, FutureRoomBlock } from "./recommend";
 
 /** Insert shape for a progress-test booking audit row. */
 export type ProgressTestBookingInsert = typeof schema.progressTestBookings.$inferInsert;
@@ -334,6 +336,10 @@ export async function upsertCycleState(
         bookedTestWiseSessionId: input.bookedTestWiseSessionId,
         bookedTestDate: input.bookedTestDate,
         bookedTestBookingMode: input.bookedTestBookingMode,
+        scheduleMethod: input.scheduleMethod ?? null,
+        bookedTestLocation: input.bookedTestLocation ?? null,
+        atHomeSelectedAt: input.atHomeSelectedAt ?? null,
+        atHomeSubmittedAt: input.atHomeSubmittedAt ?? null,
         teacherNotifiedAt: input.teacherNotifiedAt,
         teacherNotifiedForCycle: input.teacherNotifiedForCycle,
         mostFrequentTutorCanonicalKey: input.mostFrequentTutorCanonicalKey,
@@ -432,4 +438,101 @@ export async function markLedgerRowAsProgressTest(
       eq(schema.progressTestAttendanceLedger.wiseSessionId, wiseSessionId),
       eq(schema.progressTestAttendanceLedger.wiseStudentId, wiseStudentId),
     ));
+}
+
+/** Pre-fetched inputs for the recommendation engine (batched, shared across rows). */
+export interface RecommendationData {
+  /** wiseStudentId -> their upcoming class intervals. */
+  studentClasses: Map<string, FutureClassInterval[]>;
+  /** Future onsite room occupancy across the window. */
+  roomBlocks: FutureRoomBlock[];
+  /** Usable physical room names (active, excluding online-only). */
+  rooms: string[];
+}
+
+/**
+ * Loads everything the recommendation engine needs, batched and shared across rows.
+ *
+ * 1. The active credit-control snapshot's FUTURE sessions for the given students
+ *    (their upcoming class schedule), within [now, now+windowDays], keyed by wiseStudentId.
+ * 2. The active Wise snapshot's blocking FUTURE room occupancy across the same window.
+ * 3. The usable physical room catalog (active, excluding online-only rooms).
+ *
+ * @returns the pre-fetched RecommendationData (empty pieces when no snapshot/keys).
+ */
+export async function loadRecommendationData(
+  wiseStudentIds: string[],
+  now: Date,
+  windowDays: number,
+  db: Database = getDb(),
+): Promise<RecommendationData> {
+  const ids = [...new Set(wiseStudentIds.filter(Boolean))];
+  const windowEnd = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
+
+  const studentClasses = new Map<string, FutureClassInterval[]>();
+  if (ids.length > 0) {
+    const [ccSnapshot] = await db
+      .select({ id: schema.creditControlSnapshots.id })
+      .from(schema.creditControlSnapshots)
+      .where(eq(schema.creditControlSnapshots.active, true))
+      .orderBy(desc(schema.creditControlSnapshots.generatedAt))
+      .limit(1);
+    if (ccSnapshot) {
+      const rows = await db
+        .select({
+          wiseStudentId: schema.creditControlSessions.wiseStudentId,
+          start: schema.creditControlSessions.scheduledStartTime,
+          end: schema.creditControlSessions.scheduledEndTime,
+        })
+        .from(schema.creditControlSessions)
+        .where(and(
+          eq(schema.creditControlSessions.snapshotId, ccSnapshot.id),
+          eq(schema.creditControlSessions.sessionKind, "future"),
+          inArray(schema.creditControlSessions.wiseStudentId, ids),
+          gte(schema.creditControlSessions.scheduledStartTime, now),
+          lt(schema.creditControlSessions.scheduledStartTime, windowEnd),
+        ));
+      for (const row of rows) {
+        if (!row.end) continue;
+        const interval: FutureClassInterval = { start: row.start, end: row.end };
+        const list = studentClasses.get(row.wiseStudentId);
+        if (list) list.push(interval);
+        else studentClasses.set(row.wiseStudentId, [interval]);
+      }
+    }
+  }
+
+  const roomBlocks: FutureRoomBlock[] = [];
+  const [wiseSnapshot] = await db
+    .select({ id: schema.snapshots.id })
+    .from(schema.snapshots)
+    .where(eq(schema.snapshots.active, true))
+    .limit(1);
+  if (wiseSnapshot) {
+    const blocks = await db
+      .select({
+        room: schema.futureSessionBlocks.location,
+        start: schema.futureSessionBlocks.startTime,
+        end: schema.futureSessionBlocks.endTime,
+      })
+      .from(schema.futureSessionBlocks)
+      .where(and(
+        eq(schema.futureSessionBlocks.snapshotId, wiseSnapshot.id),
+        eq(schema.futureSessionBlocks.isBlocking, true),
+        isNotNull(schema.futureSessionBlocks.location),
+        gte(schema.futureSessionBlocks.startTime, now),
+        lt(schema.futureSessionBlocks.startTime, windowEnd),
+      ));
+    for (const block of blocks) {
+      if (!block.room) continue;
+      roomBlocks.push({ room: block.room, start: block.start, end: block.end });
+    }
+  }
+
+  const roomRows = await listClassroomRooms(db);
+  const rooms = roomRows
+    .filter((room) => room.active && room.category !== "online_only")
+    .map((room) => room.name);
+
+  return { studentClasses, roomBlocks, rooms };
 }

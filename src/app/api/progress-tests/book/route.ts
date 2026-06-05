@@ -8,6 +8,8 @@ const BookProgressTestSchema = z.object({
   testDate: z.string().datetime(),
   location: z.string().optional(),
   modality: z.enum(["online", "offline"]).optional(),
+  // "after_class" = admin clicked a recommended slot; "parent_pick" = custom time.
+  scheduleMethod: z.enum(["after_class", "parent_pick"]).default("parent_pick"),
 });
 
 export async function POST(request: NextRequest) {
@@ -30,6 +32,7 @@ export async function POST(request: NextRequest) {
       enrollmentKey: parsed.data.enrollmentKey,
       testDate: new Date(parsed.data.testDate),
       location: parsed.data.location ?? null,
+      scheduleMethod: parsed.data.scheduleMethod,
       actor: user,
     });
 

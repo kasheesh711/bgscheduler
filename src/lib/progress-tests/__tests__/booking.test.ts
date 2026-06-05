@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import type { Database } from "@/lib/db";
 import type { WiseClient } from "@/lib/wise/client";
 import { PROGRESS_TEST_COUNTING_START } from "@/lib/progress-tests/config";
-import type { ProgressTestCycleStateRecord } from "@/lib/progress-tests/db";
+import type { ProgressTestCycleStateInsert, ProgressTestCycleStateRecord } from "@/lib/progress-tests/db";
 import {
   insertBooking,
   loadCycleState,
@@ -11,7 +11,7 @@ import {
   upsertCycleState,
 } from "@/lib/progress-tests/db";
 import { checkTeacherAvailabilityForSessions, scheduleWiseSession } from "@/lib/wise/fetchers";
-import { confirmProgressTestBooking } from "@/lib/progress-tests/booking";
+import { confirmProgressTestBooking, markAtHomeSubmitted, selectAtHomeOption } from "@/lib/progress-tests/booking";
 
 vi.mock("next/cache", () => ({ revalidateTag: vi.fn() }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
@@ -56,6 +56,10 @@ function makeCycleStateRecord(
     bookedTestWiseSessionId: null,
     bookedTestDate: null,
     bookedTestBookingMode: null,
+    scheduleMethod: null,
+    bookedTestLocation: null,
+    atHomeSelectedAt: null,
+    atHomeSubmittedAt: null,
     teacherNotifiedAt: null,
     teacherNotifiedForCycle: null,
     mostFrequentTutorCanonicalKey: "alice",
@@ -104,6 +108,7 @@ describe("confirmProgressTestBooking", () => {
       enrollmentKey: "class-1|student-1",
       scheduledTestStart: START,
       scheduledTestEnd: END,
+      scheduleMethod: "parent_pick",
       actor: { email: "Admin@Example.com", name: "Admin" },
       db: bookingDb(),
     });
@@ -138,6 +143,7 @@ describe("confirmProgressTestBooking", () => {
       enrollmentKey: "class-1|student-1",
       scheduledTestStart: START,
       scheduledTestEnd: END,
+      scheduleMethod: "parent_pick",
       db: bookingDb(),
     });
 
@@ -155,6 +161,7 @@ describe("confirmProgressTestBooking", () => {
       enrollmentKey: "class-1|student-1",
       scheduledTestStart: START,
       scheduledTestEnd: END,
+      scheduleMethod: "parent_pick",
       location: "Joy",
       db: bookingDb(),
     });
@@ -185,6 +192,7 @@ describe("confirmProgressTestBooking", () => {
       enrollmentKey: "class-1|student-1",
       scheduledTestStart: START,
       scheduledTestEnd: END,
+      scheduleMethod: "parent_pick",
       db: bookingDb(),
     });
 
@@ -199,11 +207,77 @@ describe("confirmProgressTestBooking", () => {
       enrollmentKey: "class-1|student-1",
       scheduledTestStart: START,
       scheduledTestEnd: END,
+      scheduleMethod: "parent_pick",
       db: bookingDb(),
     });
 
     expect(result.status).toBe("manual_required");
     expect(checkAvailabilityMock).not.toHaveBeenCalled();
     expect(scheduleWiseSessionMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("selectAtHomeOption", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    loadCycleStateMock.mockResolvedValue(makeCycleStateRecord());
+    insertBookingMock.mockImplementation(async (input) => ({ id: "booking-1", ...input }));
+    upsertCycleStateMock.mockResolvedValue(undefined);
+  });
+
+  it("logs at-home selection and sets the cycle state scheduled with atHomeSelectedAt (no Wise booking)", async () => {
+    const ok = await selectAtHomeOption({
+      enrollmentKey: "class-1|student-1",
+      actor: { email: "Admin@Example.com", name: "Admin" },
+      db: bookingDb(),
+    });
+
+    expect(ok).toBe(true);
+    expect(insertBookingMock).toHaveBeenCalledTimes(1);
+    expect(insertBookingMock.mock.calls[0][0].requestPayload).toEqual({ mode: "at_home_selected" });
+    const upserted = upsertCycleStateMock.mock.calls[0][0] as ProgressTestCycleStateInsert;
+    expect(upserted.status).toBe("scheduled");
+    expect(upserted.scheduleMethod).toBe("at_home");
+    expect(upserted.atHomeSelectedAt).toBeInstanceOf(Date);
+    expect(upserted.atHomeSubmittedAt).toBeNull();
+    expect(upserted.bookedTestDate).toBeNull();
+    expect(upserted.bookedTestWiseSessionId).toBeNull();
+  });
+
+  it("returns false when the enrollment has no cycle state", async () => {
+    loadCycleStateMock.mockResolvedValue(null);
+    const ok = await selectAtHomeOption({ enrollmentKey: "x|y", db: bookingDb() });
+    expect(ok).toBe(false);
+    expect(upsertCycleStateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("markAtHomeSubmitted", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    loadCycleStateMock.mockResolvedValue(
+      makeCycleStateRecord({
+        cycleIndex: 2,
+        status: "scheduled",
+        scheduleMethod: "at_home",
+        atHomeSelectedAt: PROGRESS_TEST_COUNTING_START,
+      }),
+    );
+    insertBookingMock.mockImplementation(async (input) => ({ id: "booking-1", ...input }));
+    upsertCycleStateMock.mockResolvedValue(undefined);
+  });
+
+  it("records the submission and rolls the cycle (counts as the test done)", async () => {
+    const ok = await markAtHomeSubmitted({ enrollmentKey: "class-1|student-1", db: bookingDb() });
+
+    expect(ok).toBe(true);
+    expect(insertBookingMock.mock.calls[0][0].requestPayload).toEqual({ mode: "at_home_submitted" });
+    const upserted = upsertCycleStateMock.mock.calls[0][0] as ProgressTestCycleStateInsert;
+    expect(upserted.cycleIndex).toBe(3);
+    expect(upserted.currentCount).toBe(0);
+    expect(upserted.status).toBe("accumulating");
+    expect(upserted.scheduleMethod).toBeNull();
+    expect(upserted.atHomeSelectedAt).toBeNull();
+    expect(upserted.atHomeSubmittedAt).toBeNull();
   });
 });

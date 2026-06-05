@@ -30,11 +30,18 @@ function row(overrides: Partial<ProgressTestRow> = {}): ProgressTestRow {
     bookedTestWiseSessionId: overrides.bookedTestWiseSessionId ?? null,
     bookedTestDate: overrides.bookedTestDate ?? null,
     bookedTestBookingMode: overrides.bookedTestBookingMode ?? null,
+    scheduleMethod: overrides.scheduleMethod ?? null,
+    bookedTestLocation: overrides.bookedTestLocation ?? null,
+    atHomeSelectedAt: overrides.atHomeSelectedAt ?? null,
+    atHomeSubmittedAt: overrides.atHomeSubmittedAt ?? null,
     lastClassDate: overrides.lastClassDate ?? null,
     lastAiSummary: overrides.lastAiSummary ?? null,
     lastAiSummaryAt: overrides.lastAiSummaryAt ?? null,
     updatedByEmail: overrides.updatedByEmail ?? null,
     updatedAt: overrides.updatedAt ?? null,
+    parentLineContact: overrides.parentLineContact ?? null,
+    recommendedSlots: overrides.recommendedSlots ?? [],
+    parentMessage: overrides.parentMessage ?? null,
   };
 }
 

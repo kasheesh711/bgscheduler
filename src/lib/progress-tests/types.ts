@@ -15,6 +15,30 @@ export type ProgressTestStatus =
 /** Mode used to book the progress test into Wise. */
 export type ProgressTestBookingMode = "wise" | "manual";
 
+/** How a scheduled test is being run. */
+export type ProgressTestScheduleMethod = "after_class" | "parent_pick" | "at_home";
+
+/** The student's verified parent LINE contact (for one-click parent outreach). */
+export interface ParentLineContact {
+  displayName: string | null;
+  lineUserId: string;
+  /** Validated https://chat.line.biz/... staff chat URL, or null if not derivable. */
+  chatUrl: string | null;
+}
+
+/** A recommended, room-verified test slot derived from the student's class schedule. */
+export interface RecommendedTestSlot {
+  /** ISO start/end (Asia/Bangkok wall-clock encoded with +07:00). */
+  start: string;
+  end: string;
+  /** A free physical room for this slot. */
+  room: string;
+  /** "after_class" = right after the day's last class; "gap" = a >=1h break between classes. */
+  kind: "after_class" | "gap";
+  /** Human label, e.g. "Sat 14 Jun, 16:00–17:00 · Tesla". */
+  label: string;
+}
+
 /** One dashboard row: a student's progress within their current cycle for a subject. */
 export interface ProgressTestRow {
   enrollmentKey: string;
@@ -35,11 +59,21 @@ export interface ProgressTestRow {
   bookedTestWiseSessionId: string | null;
   bookedTestDate: string | null;
   bookedTestBookingMode: ProgressTestBookingMode | null;
+  scheduleMethod: ProgressTestScheduleMethod | null;
+  bookedTestLocation: string | null;
+  atHomeSelectedAt: string | null;
+  atHomeSubmittedAt: string | null;
   lastClassDate: string | null;
   lastAiSummary: ProgressTestAiSummary | null;
   lastAiSummaryAt: string | null;
   updatedByEmail: string | null;
   updatedAt: string | null;
+  // Parent outreach (populated only for eligible rows: verified LINE link present).
+  parentLineContact: ParentLineContact | null;
+  // Schedule-aware recommended slots (populated for approaching/due rows with a verified link).
+  recommendedSlots: RecommendedTestSlot[];
+  // Prebuilt bilingual message for one-click copy + open-chat (null when no outreach is prepared).
+  parentMessage: string | null;
 }
 
 /** Counts by lifecycle state for the dashboard summary cards. */

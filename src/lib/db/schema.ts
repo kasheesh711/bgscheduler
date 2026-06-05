@@ -2059,6 +2059,13 @@ export const progressTestCycleState = pgTable("progress_test_cycle_state", {
   bookedTestWiseSessionId: text("booked_test_wise_session_id"),
   bookedTestDate: timestamp("booked_test_date", { withTimezone: true }),
   bookedTestBookingMode: text("booked_test_booking_mode"),
+  // How the test was scheduled: 'after_class' | 'parent_pick' | 'at_home' (null = not yet scheduled).
+  scheduleMethod: text("schedule_method"),
+  // The room the booked test is in (display only; the booking audit holds full detail).
+  bookedTestLocation: text("booked_test_location"),
+  // At-home option lifecycle: selected (admin logged the choice) -> submitted (student returned it; rolls the cycle).
+  atHomeSelectedAt: timestamp("at_home_selected_at", { withTimezone: true }),
+  atHomeSubmittedAt: timestamp("at_home_submitted_at", { withTimezone: true }),
   teacherNotifiedAt: timestamp("teacher_notified_at", { withTimezone: true }),
   teacherNotifiedForCycle: integer("teacher_notified_for_cycle"),
   mostFrequentTutorCanonicalKey: text("most_frequent_tutor_canonical_key"),
