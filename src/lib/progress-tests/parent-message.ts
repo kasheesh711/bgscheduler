@@ -1,9 +1,9 @@
-// Progress Tests — bilingual (English + Thai) parent outreach message.
+// Progress Tests — bilingual (Thai + English) parent outreach message.
 //
-// DRAFT WORDING — the EN/TH lines below are placeholders to be replaced with the
-// team's final copy before going live (see the plan's "Open input"). The builder
-// fills per-row values and concatenates EN then TH for one-click copy into the
-// parent's LINE chat.
+// Thai is placed first because the recipients are Thai-speaking parents. The
+// builder fills per-row values (student, cycle position, subject, recommended
+// slots) and concatenates TH then EN for one-click copy into the parent's LINE
+// chat. Slot labels (date/time/room) are language-neutral and shared by both.
 
 import { PROGRESS_TEST_THRESHOLD } from "./config";
 import type { RecommendedTestSlot } from "./types";
@@ -17,41 +17,63 @@ export interface ParentMessageInput {
   slots: RecommendedTestSlot[];
 }
 
-/** Renders the recommended after-class slots as a shared bullet block (or a dash). */
-function slotsBlock(slots: RecommendedTestSlot[]): string {
-  if (slots.length === 0) return "—";
-  return slots.map((slot) => `• ${slot.label}`).join("\n");
+/** Renders the recommended slots as an indented bullet list. */
+function bullets(slots: RecommendedTestSlot[]): string {
+  return slots.map((slot) => `   • ${slot.label}`).join("\n");
 }
 
 /**
- * Builds the bilingual parent outreach message (English, then Thai) for one-click
- * copy. Embeds the student name, cycle position, subject, and the recommended
- * after-class slots, then lists the three options (after class / at home / parent
- * picks a time). DRAFT copy — replace EN/TH templates with the team's wording.
+ * Builds the bilingual parent outreach message (Thai, then English) for one-click
+ * copy. Embeds the student, cycle position, subject, and the room-verified
+ * after-class slots, then the three options (after class / at home / a time that
+ * suits the parent). Falls back gracefully when no after-class slot is free.
  *
- * @returns the combined "EN\n\nTH" message string.
+ * @returns the combined "TH\n\nEN" message string.
  */
 export function buildParentMessage(input: ParentMessageInput): string {
-  const subject = input.subject || "their class";
-  const slots = slotsBlock(input.slots);
+  const { studentName, count, slots } = input;
+  const subject = input.subject.trim();
+  const hasSlots = slots.length > 0;
 
-  const en = [
-    `Hello — ${input.studentName} has completed ${input.count} of ${PROGRESS_TEST_THRESHOLD} classes in ${subject} and is due for a progress test. Here are some options:`,
-    `1) Right after class:`,
-    slots,
-    `2) At home — we'll send the test, no booking needed.`,
-    `3) A time that suits you — just reply with a preferred time and we'll arrange it.`,
-    `Please let us know which option you'd prefer. Thank you!`,
-  ].join("\n");
-
+  // --- Thai (primary) ---
+  const thSubject = subject ? `วิชา ${subject} ` : "";
+  const thOption1 = hasSlots
+    ? `1) สอบต่อหลังเลิกเรียน (มีห้องว่างรองรับแล้ว):\n${bullets(slots)}`
+    : `1) สอบต่อหลังเลิกเรียน — ทางเราจะจัดหาห้องว่างและยืนยันเวลาให้ค่ะ`;
   const th = [
-    `สวัสดีค่ะ น้อง ${input.studentName} เรียนครบ ${input.count} จาก ${PROGRESS_TEST_THRESHOLD} คาบในวิชา ${subject} แล้ว และถึงกำหนดสอบวัดผล (progress test) ค่ะ มีตัวเลือกดังนี้ค่ะ`,
-    `1) สอบต่อหลังเลิกเรียน:`,
-    slots,
-    `2) สอบที่บ้าน — ทางเราจะส่งข้อสอบให้ ไม่ต้องจองเวลาค่ะ`,
-    `3) เลือกเวลาที่สะดวก — แจ้งเวลาที่สะดวกได้เลยค่ะ เดี๋ยวทางเราจัดให้`,
-    `รบกวนแจ้งตัวเลือกที่สะดวกด้วยนะคะ ขอบคุณค่ะ`,
+    `สวัสดีค่ะ คุณผู้ปกครองน้อง ${studentName}`,
+    ``,
+    `น้อง ${studentName} เรียน${thSubject}ครบ ${count} จาก ${PROGRESS_TEST_THRESHOLD} คาบแล้ว ทางเราขอนัดทำ Progress Test (แบบทดสอบวัดผลความก้าวหน้า) เพื่อติดตามพัฒนาการของน้องค่ะ มีตัวเลือกให้คุณผู้ปกครองดังนี้ค่ะ`,
+    ``,
+    thOption1,
+    ``,
+    `2) ทำที่บ้าน — ทางเราจัดส่งข้อสอบให้ ไม่ต้องนัดเวลาค่ะ`,
+    ``,
+    `3) เลือกเวลาที่สะดวก — แจ้งวันและเวลาที่สะดวกกลับมาได้เลย เดี๋ยวทางเราจัดให้ค่ะ`,
+    ``,
+    `รบกวนคุณผู้ปกครองแจ้งตัวเลือกที่สะดวกกลับมาด้วยนะคะ ขอบคุณค่ะ`,
+    `— ทีม BeGifted`,
   ].join("\n");
 
-  return `${en}\n\n${th}`;
+  // --- English ---
+  const enSubject = subject ? ` in ${subject}` : "";
+  const enOption1 = hasSlots
+    ? `1) Right after a class (a room is already free):\n${bullets(slots)}`
+    : `1) Right after one of their classes — we'll find a free room and confirm a time.`;
+  const en = [
+    `Hello! This is BeGifted, regarding ${studentName}.`,
+    ``,
+    `${studentName} has now completed ${count} of ${PROGRESS_TEST_THRESHOLD} classes${enSubject}, so it's time to schedule a Progress Test to check in on their progress. Here are a few options:`,
+    ``,
+    enOption1,
+    ``,
+    `2) At home — we'll send the test over, no booking needed.`,
+    ``,
+    `3) A time that suits you — just reply with a preferred day and time and we'll arrange it.`,
+    ``,
+    `Please let us know which option works best. Thank you!`,
+    `— The BeGifted Team`,
+  ].join("\n");
+
+  return `${th}\n\n${en}`;
 }
