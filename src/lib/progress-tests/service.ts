@@ -225,7 +225,6 @@ async function enrichRowsWithParentOutreach(rows: ProgressTestRow[], db: Databas
       row.parentMessage = buildParentMessage({
         studentName: row.studentName,
         count: row.currentCount,
-        subject: row.subject,
         slots,
       });
     }
