@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { requireProgressTestsSession, progressTestsErrorResponse } from "@/lib/progress-tests/api";
+import { requireProgressTestsAdminSession, progressTestsErrorResponse } from "@/lib/progress-tests/api";
 import { bookTest } from "@/lib/progress-tests/service";
 
 const BookProgressTestSchema = z.object({
@@ -14,7 +14,7 @@ const BookProgressTestSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    const user = await requireProgressTestsSession();
+    const user = await requireProgressTestsAdminSession();
 
     let body: unknown;
     try {

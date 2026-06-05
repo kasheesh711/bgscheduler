@@ -2,7 +2,9 @@
 //
 // Adds the page-level access-control claim used by middleware and server
 // guards. `allowedPages` is null for full-access admins (all existing admins
-// unchanged) and a list of allowed route prefixes for restricted users.
+// unchanged) and a list of allowed route prefixes for restricted users. `role`
+// distinguishes full "admin" users from page-restricted "teacher" logins (the
+// teacher view of /progress-tests is read-only and scoped to their students).
 //
 // NOTE: the `JWT` import + re-export below is load-bearing. `next-auth/jwt`
 // re-exports its `JWT` interface from a nested `@auth/core/jwt`; without forcing
@@ -19,6 +21,7 @@ declare module "next-auth" {
   interface Session {
     user: {
       allowedPages?: string[] | null;
+      role?: "admin" | "teacher" | null;
     } & DefaultSession["user"];
   }
 }
@@ -26,5 +29,6 @@ declare module "next-auth" {
 declare module "next-auth/jwt" {
   interface JWT {
     allowedPages?: string[] | null;
+    role?: "admin" | "teacher" | null;
   }
 }

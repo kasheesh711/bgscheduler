@@ -26,6 +26,7 @@ export const { auth: edgeAuth } = NextAuth({
     },
     async session({ session, token }) {
       session.user.allowedPages = token.allowedPages ?? null;
+      session.user.role = token.role ?? null;
       return session;
     },
   },

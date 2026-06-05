@@ -27,6 +27,16 @@ import {
   loadRecommendationData,
   type ProgressTestCycleStateRecord,
 } from "./db";
+
+/** Options for getProgressTestsPayload. */
+export interface GetProgressTestsPayloadOptions {
+  /**
+   * When set, restrict rows to enrollments whose most-frequent tutor canonicalKey
+   * is in this set (teacher-scoped view). An empty array yields zero rows. When
+   * null/omitted, all rows are returned with admin parent-outreach enrichment.
+   */
+  teacherCanonicalKeys?: string[] | null;
+}
 import {
   confirmProgressTestBooking,
   markAtHomeSubmitted,
@@ -243,22 +253,38 @@ async function enrichRowsWithParentOutreach(rows: ProgressTestRow[], db: Databas
  * Reads fresh on every call (no "use cache") so the table reflects book/
  * mark-complete/resend actions immediately.
  *
+ * When `teacherCanonicalKeys` is provided (teacher-scoped view), rows are
+ * filtered to those tutors and the admin-only parent-outreach enrichment is
+ * skipped; an empty set yields zero rows (fail-closed).
+ *
  * @returns the full dashboard payload (rows + summary + subjects + timestamps).
  */
-export async function getProgressTestsPayload(db: Database = getDb()): Promise<ProgressTestsPayload> {
+export async function getProgressTestsPayload(
+  options: GetProgressTestsPayloadOptions = {},
+  db: Database = getDb(),
+): Promise<ProgressTestsPayload> {
+  const { teacherCanonicalKeys = null } = options;
   const [cycleStates, lastSyncedAt] = await Promise.all([
     loadCycleStates(db),
     loadLastSyncedAt(db),
   ]);
 
-  const rows = [...cycleStates.values()]
+  let rows = [...cycleStates.values()]
     .map(toProgressTestRow)
     .sort((a, b) => {
       if (b.currentCount !== a.currentCount) return b.currentCount - a.currentCount;
       return a.studentName.localeCompare(b.studentName);
     });
 
-  await enrichRowsWithParentOutreach(rows, db);
+  if (teacherCanonicalKeys !== null) {
+    // Teacher-scoped: only this tutor's enrollments; no parent-outreach tooling.
+    const allowed = new Set(teacherCanonicalKeys);
+    rows = rows.filter(
+      (row) => row.mostFrequentTutorCanonicalKey !== null && allowed.has(row.mostFrequentTutorCanonicalKey),
+    );
+  } else {
+    await enrichRowsWithParentOutreach(rows, db);
+  }
 
   const subjects = [...new Set(rows.map((row) => row.subject).filter((subject) => subject.length > 0))].sort(
     (a, b) => a.localeCompare(b),

@@ -373,6 +373,9 @@ function isProgressTestsPayload(value: unknown): value is ProgressTestsPayload {
 // ---------------------------------------------------------------------------
 
 export function ProgressTestsDashboard({ sessionUser }: { sessionUser: AppSessionUser }) {
+  // Teachers get a read-only view scoped to their own students: the parent-LINE
+  // outreach column and all admin action buttons are hidden (and blocked server-side).
+  const isTeacher = sessionUser.role === "teacher";
   const [data, setData] = useState<ProgressTestsPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -734,12 +737,12 @@ export function ProgressTestsDashboard({ sessionUser }: { sessionUser: AppSessio
                     <TableHead>Subject</TableHead>
                     <TableHead>Progress</TableHead>
                     <TableHead>Teacher</TableHead>
-                    <TableHead>Parent (LINE)</TableHead>
+                    {!isTeacher && <TableHead>Parent (LINE)</TableHead>}
                     <TableHead>Notified</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Last class</TableHead>
                     <TableHead>AI summary</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+                    {!isTeacher && <TableHead className="text-right">Actions</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -761,29 +764,31 @@ export function ProgressTestsDashboard({ sessionUser }: { sessionUser: AppSessio
                             <ProgressBar count={row.currentCount} threshold={row.threshold} />
                           </TableCell>
                           <TableCell className="text-sm">{row.mostFrequentTutorDisplayName ?? "-"}</TableCell>
-                          <TableCell>
-                            {row.parentLineContact ? (
-                              row.parentLineContact.chatUrl ? (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="gap-1.5"
-                                  disabled={rowBusy}
-                                  onClick={() => copyAndOpenLine(row)}
-                                  title={row.parentMessage ? "Copy message + open LINE chat" : "Open LINE chat"}
-                                >
-                                  <MessageCircle className="size-3.5" />
-                                  <span className="max-w-28 truncate">{row.parentLineContact.displayName ?? "LINE"}</span>
-                                </Button>
+                          {!isTeacher && (
+                            <TableCell>
+                              {row.parentLineContact ? (
+                                row.parentLineContact.chatUrl ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="gap-1.5"
+                                    disabled={rowBusy}
+                                    onClick={() => copyAndOpenLine(row)}
+                                    title={row.parentMessage ? "Copy message + open LINE chat" : "Open LINE chat"}
+                                  >
+                                    <MessageCircle className="size-3.5" />
+                                    <span className="max-w-28 truncate">{row.parentLineContact.displayName ?? "LINE"}</span>
+                                  </Button>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">
+                                    {row.parentLineContact.displayName ?? "Linked"} (no chat)
+                                  </span>
+                                )
                               ) : (
-                                <span className="text-xs text-muted-foreground">
-                                  {row.parentLineContact.displayName ?? "Linked"} (no chat)
-                                </span>
-                              )
-                            ) : (
-                              <span className="text-xs text-muted-foreground">No LINE link</span>
-                            )}
-                          </TableCell>
+                                <span className="text-xs text-muted-foreground">No LINE link</span>
+                              )}
+                            </TableCell>
+                          )}
                           <TableCell>
                             {row.teacherNotifiedAt ? (
                               <Badge variant="outline" className="border-available/30 bg-available/10 text-available">
@@ -821,59 +826,61 @@ export function ProgressTestsDashboard({ sessionUser }: { sessionUser: AppSessio
                               <span className="text-xs text-muted-foreground">-</span>
                             )}
                           </TableCell>
-                          <TableCell>
-                            <div className="flex items-center justify-end gap-1.5">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                className="gap-1.5"
-                                disabled={rowBusy}
-                                onClick={() => setBookingRow(row)}
-                              >
-                                <CalendarPlus className="size-3.5" />
-                                Schedule
-                              </Button>
-                              {isAtHomeAwaitingSubmission(row) ? (
+                          {!isTeacher && (
+                            <TableCell>
+                              <div className="flex items-center justify-end gap-1.5">
                                 <Button
-                                  variant="secondary"
+                                  variant="outline"
                                   size="sm"
                                   className="gap-1.5"
                                   disabled={rowBusy}
-                                  onClick={() => handleMarkSubmitted(row)}
+                                  onClick={() => setBookingRow(row)}
                                 >
-                                  {rowBusy ? <RefreshCw className="size-3.5 animate-spin" /> : <FileCheck2 className="size-3.5" />}
-                                  Mark submitted
+                                  <CalendarPlus className="size-3.5" />
+                                  Schedule
                                 </Button>
-                              ) : (
+                                {isAtHomeAwaitingSubmission(row) ? (
+                                  <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    className="gap-1.5"
+                                    disabled={rowBusy}
+                                    onClick={() => handleMarkSubmitted(row)}
+                                  >
+                                    {rowBusy ? <RefreshCw className="size-3.5 animate-spin" /> : <FileCheck2 className="size-3.5" />}
+                                    Mark submitted
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    className="gap-1.5"
+                                    disabled={rowBusy || row.status !== "scheduled"}
+                                    onClick={() => handleMarkComplete(row)}
+                                  >
+                                    {rowBusy ? <RefreshCw className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                                    Mark complete
+                                  </Button>
+                                )}
                                 <Button
-                                  variant="secondary"
+                                  variant="ghost"
                                   size="sm"
                                   className="gap-1.5"
-                                  disabled={rowBusy || row.status !== "scheduled"}
-                                  onClick={() => handleMarkComplete(row)}
+                                  disabled={rowBusy}
+                                  onClick={() => handleResendEmail(row)}
                                 >
-                                  {rowBusy ? <RefreshCw className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
-                                  Mark complete
+                                  {rowBusy ? <RefreshCw className="size-3.5 animate-spin" /> : <Mail className="size-3.5" />}
+                                  Resend email
                                 </Button>
-                              )}
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="gap-1.5"
-                                disabled={rowBusy}
-                                onClick={() => handleResendEmail(row)}
-                              >
-                                {rowBusy ? <RefreshCw className="size-3.5 animate-spin" /> : <Mail className="size-3.5" />}
-                                Resend email
-                              </Button>
-                            </div>
-                          </TableCell>
+                              </div>
+                            </TableCell>
+                          )}
                         </TableRow>
                       );
                     })
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={10} className="h-24 text-center text-sm text-muted-foreground">
+                      <TableCell colSpan={isTeacher ? 8 : 10} className="h-24 text-center text-sm text-muted-foreground">
                         No students match the current filters.
                       </TableCell>
                     </TableRow>
