@@ -24,7 +24,10 @@ import type { DashboardPayload, AdminViewKey } from "@/types/credit-control";
 const SYSTEM_ACTOR_EMAIL = "system@begifted.local";
 const SYSTEM_ACTOR_NAME = "System";
 
-export async function getCreditControlPayload(todayKey = formatDate(getTodayDate())!): Promise<DashboardPayload> {
+export async function getCreditControlPayload(
+  todayKey = formatDate(getTodayDate())!,
+  options: { clearRecoveredActionStates?: boolean } = {},
+): Promise<DashboardPayload> {
   "use cache";
   cacheTag(CREDIT_CONTROL_CACHE_TAG);
   cacheLife({ stale: 60, revalidate: 60, expire: 300 });
@@ -73,7 +76,9 @@ export async function getCreditControlPayload(todayKey = formatDate(getTodayDate
   }
 
   attachActionStatesToStudents(students, today, actionStateMap);
-  await clearRecoveredActionStates(students);
+  if (options.clearRecoveredActionStates !== false) {
+    await clearRecoveredActionStates(students);
+  }
 
   const inactiveSet = new Set(inactiveRows.map((row) => row.studentKey));
   const filteredStudents = inactiveSet.size > 0

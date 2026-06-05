@@ -177,6 +177,15 @@ export interface WisePackageSalesReconciliation {
   students: ReconciliationStudentGroup[];
 }
 
+export interface WiseReconciliationActionSummary {
+  selectedSourceLabel: string | null;
+  selectedSourceMonth: string | null;
+  saleRows: number;
+  rowsWithPersistedCandidates: number;
+  rowsNeedingReview: number;
+  coverageStatus: ReconciliationCoverage["status"];
+}
+
 export interface ReconciliationBuildInput {
   sources: ReconciliationSourceSummary[];
   selectedSource: ReconciliationSourceSummary | null;
@@ -574,6 +583,38 @@ function makeSaleRow(row: PackageSaleInput, candidates: ReconciliationCandidate[
   };
 }
 
+function persistedEventMatchesSale(
+  row: PackageSaleInput,
+  evidence: SaleEvidence,
+  event: WiseInvoiceEventInput,
+): boolean {
+  const transactionNo = compactKey(evidence.transactionNo);
+  if (transactionNo) {
+    const identifiers = [
+      event.transactionId,
+      event.eventId,
+      nestedString(event.payload, ["transactionId"]),
+      nestedString(event.payload, ["transaction", "_id"]),
+      nestedString(event.raw, ["transactionId"]),
+      nestedString(event.raw, ["transaction", "_id"]),
+    ].map(compactKey).filter(Boolean);
+    if (identifiers.includes(transactionNo)) return true;
+  }
+
+  if (!moneyEqual(row.paymentAmount, event.transactionAmount)) return false;
+  const eventDate = bangkokDateKey(event.eventTimestamp);
+  if (dayDistance(row.paymentDate, eventDate) > 3) return false;
+  const eventText = normalizeText([
+    event.actorName,
+    event.classroomName,
+    event.classroomSubject,
+    event.transactionId,
+    ...allNestedStrings(event.payload),
+    ...allNestedStrings(event.raw),
+  ].join(" "));
+  return evidence.packageHints.some((hint) => hint.length >= 3 && eventText.includes(hint));
+}
+
 export function buildPackageSalesReconciliation(input: ReconciliationBuildInput): WisePackageSalesReconciliation {
   const wiseEvents = input.wiseEvents.filter(isInboundWiseInvoiceEvent);
   const wiseReceipts = input.wiseReceipts ?? [];
@@ -877,6 +918,96 @@ export async function getWisePackageSalesReconciliation(
     wiseFeesPaidTrends: wiseFeesPaidTrends.trends,
     wiseFeesPaidTrendsError: wiseFeesPaidTrends.error,
   });
+}
+
+export async function getWiseReconciliationActionSummary(
+  db: Database = getDb(),
+): Promise<WiseReconciliationActionSummary> {
+  const sources = await listReconciliationSources(db);
+  const selectedSource = selectSource(sources, {});
+  if (!selectedSource || !selectedSource.lastSuccessfulImportRunId) {
+    return {
+      selectedSourceLabel: selectedSource?.label ?? null,
+      selectedSourceMonth: selectedSource?.sourceMonth ?? null,
+      saleRows: 0,
+      rowsWithPersistedCandidates: 0,
+      rowsNeedingReview: 0,
+      coverageStatus: "empty",
+    };
+  }
+
+  const allSaleRows = (await db
+    .select()
+    .from(schema.salesDashboardNormalRows)
+    .where(eq(schema.salesDashboardNormalRows.importRunId, selectedSource.lastSuccessfulImportRunId))
+    .orderBy(schema.salesDashboardNormalRows.rowNumber))
+    .map(toSaleInput);
+
+  const fallbackRange = defaultDateRange(allSaleRows, selectedSource);
+  const start = bangkokDateStartUtc(fallbackRange.startDate);
+  const end = new Date(bangkokDateStartUtc(addBangkokDays(fallbackRange.endDate, 1)).getTime() - 1);
+
+  const [eventRows, snapshotRows] = await Promise.all([
+    db
+      .select()
+      .from(schema.wiseActivityEvents)
+      .where(and(
+        gte(schema.wiseActivityEvents.eventTimestamp, start),
+        lte(schema.wiseActivityEvents.eventTimestamp, end),
+        sql`(
+          ${schema.wiseActivityEvents.eventType} = 'BILLING'
+          OR ${schema.wiseActivityEvents.transactionId} IS NOT NULL
+          OR ${schema.wiseActivityEvents.eventName} ILIKE '%invoice%'
+          OR ${schema.wiseActivityEvents.eventName} ILIKE '%payment%'
+          OR ${schema.wiseActivityEvents.eventName} ILIKE '%transaction%'
+        )`,
+        sql`${schema.wiseActivityEvents.eventName} NOT ILIKE '%payout%'`,
+      ))
+      .orderBy(schema.wiseActivityEvents.eventTimestamp),
+    db
+      .select({ id: schema.creditControlSnapshots.id })
+      .from(schema.creditControlSnapshots)
+      .where(eq(schema.creditControlSnapshots.active, true))
+      .orderBy(desc(schema.creditControlSnapshots.generatedAt))
+      .limit(1),
+  ]);
+
+  const activeSnapshotId = snapshotRows[0]?.id;
+  const creditPackages = activeSnapshotId
+    ? await db
+      .select({
+        wiseStudentId: schema.creditControlPackages.wiseStudentId,
+        wiseClassId: schema.creditControlPackages.wiseClassId,
+        studentKey: schema.creditControlPackages.studentKey,
+        studentName: schema.creditControlPackages.studentName,
+        parentName: schema.creditControlPackages.parentName,
+        packageName: schema.creditControlPackages.packageName,
+        subject: schema.creditControlPackages.subject,
+      })
+      .from(schema.creditControlPackages)
+      .where(eq(schema.creditControlPackages.snapshotId, activeSnapshotId))
+    : [];
+
+  const wiseEvents = eventRows.map(toWiseInvoiceInput);
+  let rowsWithPersistedCandidates = 0;
+  let rowsNeedingReview = 0;
+
+  for (const row of allSaleRows) {
+    const evidence = buildSaleEvidence(row, creditPackages);
+    const hasPersistedCandidate = wiseEvents.some((event) => persistedEventMatchesSale(row, evidence, event));
+    if (hasPersistedCandidate) rowsWithPersistedCandidates += 1;
+    const recordedOutsideWise = evidence.recordedInWise && !/yes|y|true|recorded/i.test(evidence.recordedInWise);
+    if (!hasPersistedCandidate || !evidence.transactionNo || recordedOutsideWise) rowsNeedingReview += 1;
+  }
+
+  return {
+    selectedSourceLabel: selectedSource.label,
+    selectedSourceMonth: selectedSource.sourceMonth,
+    saleRows: allSaleRows.length,
+    rowsWithPersistedCandidates,
+    rowsNeedingReview,
+    coverageStatus: buildCoverage(wiseEvents, fallbackRange.startDate, fallbackRange.endDate).status,
+  };
 }
 
 export function wiseReconciliationBackfillLookbackDays(startDate: string, now = new Date()): number {

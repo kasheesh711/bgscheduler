@@ -24,6 +24,8 @@ function isPublicRoute(pathname: string) {
  */
 function isPathAllowed(pathname: string, allowedPages: string[] | null): boolean {
   if (!allowedPages) return true;
+  if (pathname === "/api/home/summary") return true;
+  if (pathname === "/" && allowedPages.length > 1) return true;
   return allowedPages.some((page) => {
     return (
       pathname === page ||
