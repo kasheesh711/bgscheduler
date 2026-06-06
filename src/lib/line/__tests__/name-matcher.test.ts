@@ -264,15 +264,29 @@ describe("matchNamesToDirectory — Tier 3 fuzzy match", () => {
     expect(results[0].score).toBe(50);
   });
 
-  it("levenshtein distance 1 on parentName token returns score 35 with matchBasis parent_name_fuzzy", () => {
+  it("parentName fuzzy score (35) is below SUGGEST_SHORTLIST_MIN_SCORE — returns [] alone", () => {
     const dir = [
       student({ studentKey: "nicha.sw::parent", studentName: "Nicha Suwanprasert", parentName: "Mom Smith" }),
     ];
-    // "Smyth" has edit distance 1 from "smith"
+    // "Smyth" has edit distance 1 from "smith" → parentName fuzzy score would be 35,
+    // but 35 < SUGGEST_SHORTLIST_MIN_SCORE (50), so the candidate is filtered out.
+    // parentName fuzzy only surfaces when a higher-tier match also contributes.
     const results = matchNamesToDirectory({ parentName: "Smyth" }, dir);
+    expect(results).toHaveLength(0);
+  });
+
+  it("parentName fuzzy match (score 35) can still surface via dedup — kept if another path scores higher", () => {
+    // If studentName also matches at a higher tier, the max score for that student wins.
+    // This test confirms parentName fuzzy score (35) is overridden by a token match (70).
+    const dir = [
+      student({ studentKey: "nicha.sw::parent", studentName: "Nicha Suwanprasert", parentName: "Mom Smith" }),
+    ];
+    // studentName "Nicha" → token match on "nicha" → score 70
+    // parentName "Smyth" → fuzzy "smith" → score 35 (would be filtered, but studentName wins at 70)
+    const results = matchNamesToDirectory({ studentName: "Nicha", parentName: "Smyth" }, dir);
     expect(results).toHaveLength(1);
-    expect(results[0].score).toBe(35);
-    expect(results[0].matchBasis).toBe("parent_name_fuzzy");
+    expect(results[0].score).toBe(70);
+    expect(results[0].matchBasis).toBe("student_name_token");
   });
 
   it("levenshtein distance > 2 returns no match", () => {
