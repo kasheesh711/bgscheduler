@@ -863,17 +863,21 @@ The `db:push` command is intentionally NOT present in this codebase. Do not add 
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Where exactly do AI-extracted names flow per message?**
+> Both questions were resolved during Phase 11 planning (2026-06-06). The decisions below are implemented in plans 11-02/11-03 (name source) and 11-05 (assignment).
+
+1. **Where exactly do AI-extracted names flow per message?** — **RESOLVED**
    - What we know: `aiSchedulerConversations.extractedState` accumulates them; `review_service.ts:305` shows `assistantResult.state.studentName` saved to the conversation.
    - What's unclear: For a contact with no prior AI scheduler turn (first message), `extractedState` is empty. The matcher can still use the display name (existing path) but has no name signal from the message text itself.
    - Recommendation: The name-matcher should also accept the current message's `classifierPayload` (which has `summary` text but not extracted names) as a fallback signal. Alternatively, run a lightweight extraction step in `processLineMessageForScheduler` before the matcher. This decision can be deferred to Wave 1 planning — the eval set will reveal how many contacts have no `extractedState` at message time.
+   - **RESOLVED (planning):** Plan 11-03 reads `studentName`/`parentName` from the thread's `aiSchedulerConversations.extractedState` (via the `db` already in scope in `processLineMessageForScheduler`). Contacts with no prior AI turn fall back to the **existing display-name code matcher** (no regression — the name matcher simply yields no candidates when no names are present). Plan 11-02's eval set quantifies the no-name coverage gap so it is measured, not assumed. No new extraction step is added this phase (classifier change is out of scope per SPEC).
 
-2. **Round-robin assignment for widened worklist**
+2. **Round-robin assignment for widened worklist** — **RESOLVED**
    - What we know: `assignLineLinkValidationTasks` assigns within a `runId` scope and uses `lineOaResolverSourceCondition()`.
    - What's unclear: Should message-content-sourced suggestions also be assignable for validation, or is the current ad-hoc "assigned to whoever opens it" workflow sufficient given small volume?
    - Recommendation: Leave assignment optional for Phase 11; the worklist without assignment is sufficient for the ≥80% coverage target. Remove the assignment requirement from D-04's acceptance scope.
+   - **RESOLVED (planning):** Plan 11-05 leaves validation assignment **optional** — message-content/follower links are surfaced in the worklist without `runId`-scoped round-robin assignment; the unassigned worklist meets the ≥80% coverage goal. Assignment for the widened scope is deferred (revisit only if volume warrants, per D-04).
 
 ---
 
