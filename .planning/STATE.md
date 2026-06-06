@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: Data Fidelity & Depth
-status: complete
-stopped_at: Completed Phase 10 VPOL-01 View Transitions
-last_updated: "2026-05-09T10:08:38.556Z"
-last_activity: 2026-05-09
+milestone: v1.2
+milestone_name: Autonomous LINE Scheduling
+status: in_progress
+stopped_at: Phase 11 IDENT-01 SPEC written (webhook-side identity resolution)
+last_updated: "2026-06-06"
+last_activity: 2026-06-06
 progress:
-  total_phases: 9
-  completed_phases: 9
-  total_plans: 53
-  completed_plans: 53
-  percent: 100
+  total_phases: 1
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -21,18 +21,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-20 — milestone v1.1 Data Fidelity & Depth scoped)
 
 **Core value:** Admin staff can find, compare, and schedule tutors instantly and independently
-**Current focus:** v1.1 complete — Phase 10 VPOL-01 View Transitions verified
+**Current focus:** v1.2 Autonomous LINE Scheduling — Phase 11 IDENT-01 (webhook-side identity resolution) spec'd; next is discuss → plan
 
 ## Current Position
 
-Milestone: v1.1 Data Fidelity & Depth
-Phase: Complete
-Plan: 53 of 53 complete
-Next: `/gsd-progress` — review updated roadmap
-Status: Phase 10 verified; v1.1 roadmap complete
-Last activity: 2026-05-09
+Milestone: v1.2 Autonomous LINE Scheduling (started 2026-06-06; v1.1 complete)
+Phase: 11 — IDENT-01 Webhook-Side LINE Identity Resolution
+Plan: not yet planned (SPEC written, 6 requirements locked)
+Next: `/gsd-discuss-phase 11` — implementation decisions
+Status: Phase 11 SPEC committed; discuss-phase pending
+Last activity: 2026-06-06
 
-Progress: [██████████] 9/9 phases complete; 53/53 plans complete (100%)
+Progress: v1.2 just started — Phase 11 spec'd (0 plans)
 
 ## Last Completed Milestone
 

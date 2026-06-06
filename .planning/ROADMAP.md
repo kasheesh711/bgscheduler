@@ -3,7 +3,8 @@
 ## Milestones
 
 - ✅ **v1.0 Performance & UX Improvement** — Phases 1–4 (shipped 2026-04-17) — see [MILESTONES.md](MILESTONES.md)
-- 🚧 **v1.1 Data Fidelity & Depth** — Phases 5–10 + reliability remediation 8.5–8.7 (planning 2026-04-20; remediation phases inserted 2026-04-29 from codebase audit)
+- ✅ **v1.1 Data Fidelity & Depth** — Phases 5–10 + reliability remediation 8.5–8.7 (completed 2026-05-09)
+- 🚧 **v1.2 Autonomous LINE Scheduling** — Phase 11+ (started 2026-06-06) — foundation: webhook-side LINE identity resolution; long-term goal: AI resolves LINE scheduling requests (reschedule/cancel/book) autonomously
 
 ## Phases
 
@@ -30,6 +31,10 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 - [x] **Phase 8.7: Operational Maturity** — Snapshot pruning (retention), sync failure visibility, stale-snapshot banner, threshold raise to 26h, manual sync UI, dependency cleanup, version pinning (completed 2026-05-05)
 - [x] **Phase 9: VPOL-03 Density Overview** — Client-side density aggregation via `useMemo` over existing `CompareResponse.tutors[].sessions[]`; shape (A aggregate / B per-tutor / C heatmap) chosen via phase-local design review; `prefers-reduced-motion` + a11y text equivalents
 - [x] **Phase 10: VPOL-01 View Transitions** — Native `document.startViewTransition()` helper in `src/lib/ui/view-transitions.ts` wired into week prev/next/today + day-tab switches with manual scroll capture/restore and `prefers-reduced-motion` CSS skip (completed 2026-05-09)
+
+### v1.2 Autonomous LINE Scheduling (in progress)
+
+- [ ] **Phase 11: IDENT-01 Webhook-Side LINE Identity Resolution** — Link the parents who actually message the LINE OA (Messaging-API webhook `source.userId`) to Wise students via content-based suggestions + `followers/ids` re-anchor + re-pointed Mapping Validation; quarantine the ~520 wrong-namespace OA-resolver phantoms. Foundation for autonomous LINE scheduling. (spec'd 2026-06-06 — see `phases/11-*/11-SPEC.md`)
 
 ## Phase Details
 
@@ -211,9 +216,22 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   - [x] 10-04-PLAN.md - Automated evidence plus browser QA checkpoint
 **UI hint**: yes
 
+### Phase 11: IDENT-01 Webhook-Side LINE Identity Resolution
+**Goal**: ≥80% of active messaging contacts (those who sent a scheduling message) have a verified/parent-confirmed Wise student link, and every new scheduling message yields a student-link suggestion or routes to human verification — so downstream scheduling automation has trustworthy identity.
+**Depends on**: v1.1 complete; LINE integration feature (live, write-path dry-run)
+**Requirements**: IDENT-01..06 (locked in 11-SPEC.md)
+**Success Criteria** (what must be TRUE):
+  1. A name-based matcher creates `suggested` links from AI-extracted studentName/parentName on real messaging contacts (not just dotted display-name codes)
+  2. No code path creates a `verified` link from content matching alone — only admin verify (parent self-confirm deferred); unresolved/ambiguous identity → Needs Review, never auto-proceed
+  3. A one-time `GET /v2/bot/followers/ids` re-anchor job seeds correct-namespace contacts and is idempotent
+  4. The Mapping Validation UI surfaces + verifies suggestions on real contacts; the ~520 wrong-namespace OA-resolver phantom contacts/links are quarantined (flagged + excluded from counts/queues, not deleted)
+  5. Verifying a link refreshes the contact's pending review badge + plan without a manual recompute; all existing tests continue to pass
+**Plans**: TBD (run `/gsd-plan-phase 11` after discuss-phase)
+**UI hint**: yes
+
 ## Next Milestone
 
-v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a candidate v1.2 Advanced Workflow milestone (AWRK-01..03 + carried-forward differentiators from MOD/PAST/VPOL backlogs).
+v1.2 Autonomous LINE Scheduling is the active milestone (started 2026-06-06). Phase 11 (identity) is its foundation; subsequent phases follow the autonomy ladder (human-confirmed Wise cancel → shadow → supervised auto-execute → conversational self-identify + full autonomy). Full ladder detail in `~/.claude/plans/start-a-workflow-to-misty-valiant.md` pending formal roadmap expansion.
 
 ## Progress
 
@@ -232,3 +250,4 @@ v1.1 Data Fidelity & Depth is the current active milestone. Next after v1.1 is a
 | 8.7. Operational Maturity | v1.1 | 5/5 | Complete | 2026-05-05 |
 | 9. VPOL-03 Density Overview | v1.1 | 3/3 | Complete | 2026-05-08 |
 | 10. VPOL-01 View Transitions | v1.1 | 4/4 | Complete    | 2026-05-09 |
+| 11. IDENT-01 Webhook-Side LINE Identity Resolution | v1.2 | 0/? | Spec'd | - |
