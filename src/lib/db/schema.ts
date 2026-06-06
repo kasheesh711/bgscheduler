@@ -1744,6 +1744,7 @@ export const lineContactStudentLinks = pgTable("line_contact_student_links", {
   evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull().default({}),
   sourceKind: text("source_kind"),
   sourceRunId: uuid("source_run_id"),
+  isPhantom: boolean("is_phantom").notNull().default(false),
   reviewedByEmail: text("reviewed_by_email"),
   reviewedByName: text("reviewed_by_name"),
   reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
@@ -1756,6 +1757,7 @@ export const lineContactStudentLinks = pgTable("line_contact_student_links", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("line_contact_student_links_contact_student_idx").on(table.contactId, table.studentKey),
+  index("line_contact_student_links_phantom_idx").on(table.isPhantom, table.status),
   index("line_contact_student_links_contact_status_idx").on(table.contactId, table.status),
   index("line_contact_student_links_student_key_idx").on(table.studentKey),
   index("line_contact_student_links_validation_assignee_idx").on(table.validationAssignedToEmail, table.status),
