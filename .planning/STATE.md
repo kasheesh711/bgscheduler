@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Autonomous LINE Scheduling
 status: in_progress
-stopped_at: Phase 11 IDENT-01 SPEC written (webhook-side identity resolution)
+stopped_at: Phase 11 IDENT-01 context gathered (discuss complete)
 last_updated: "2026-06-06"
 last_activity: 2026-06-06
 progress:
@@ -27,12 +27,12 @@ See: .planning/PROJECT.md (updated 2026-04-20 — milestone v1.1 Data Fidelity &
 
 Milestone: v1.2 Autonomous LINE Scheduling (started 2026-06-06; v1.1 complete)
 Phase: 11 — IDENT-01 Webhook-Side LINE Identity Resolution
-Plan: not yet planned (SPEC written, 6 requirements locked)
-Next: `/gsd-discuss-phase 11` — implementation decisions
-Status: Phase 11 SPEC committed; discuss-phase pending
+Plan: not yet planned (SPEC + CONTEXT done; 6 requirements locked, 4 implementation decisions captured)
+Next: `/gsd-plan-phase 11` — create executable plans
+Status: Phase 11 discuss complete (CONTEXT committed); planning pending
 Last activity: 2026-06-06
 
-Progress: v1.2 just started — Phase 11 spec'd (0 plans)
+Progress: v1.2 — Phase 11 spec'd + discussed (0 plans)
 
 ## Last Completed Milestone
 
