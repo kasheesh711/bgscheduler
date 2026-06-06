@@ -1,0 +1,2 @@
+ALTER TABLE "line_contact_student_links" ADD COLUMN "is_phantom" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+CREATE INDEX "line_contact_student_links_phantom_idx" ON "line_contact_student_links" USING btree ("is_phantom","status");
