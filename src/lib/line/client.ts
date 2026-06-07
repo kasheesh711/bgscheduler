@@ -87,6 +87,28 @@ export async function fetchLineFollowerIds(startCursor?: string): Promise<LineFo
   return { userIds, next };
 }
 
+/**
+ * Fetch LINE profiles for a list of userIds with bounded concurrency.
+ * Skips 404s (follower has no profile or blocked the OA).
+ * Returns a Map keyed by userId for O(1) lookup.
+ */
+export async function fetchLineProfilesBatched(
+  userIds: string[],
+  concurrencyLimit = 5,
+): Promise<Map<string, LineProfile>> {
+  const result = new Map<string, LineProfile>();
+  for (let i = 0; i < userIds.length; i += concurrencyLimit) {
+    const chunk = userIds.slice(i, i + concurrencyLimit);
+    const profiles = await Promise.all(chunk.map((id) => fetchLineProfile(id)));
+    for (let j = 0; j < chunk.length; j += 1) {
+      const profile = profiles[j];
+      if (profile !== null) result.set(chunk[j]!, profile);
+      // null → fetchLineProfile returned 404 → skip entry in result Map
+    }
+  }
+  return result;
+}
+
 export async function pushLineTextMessage(input: {
   to: string;
   text: string;
