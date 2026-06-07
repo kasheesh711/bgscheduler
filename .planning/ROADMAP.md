@@ -264,7 +264,11 @@ v1.2 Autonomous LINE Scheduling is the active milestone (started 2026-06-06). Ph
 **Goal:** Map existing LINE contacts/followers to Wise students with high precision — distinctive-token matching (≥4-char lastnames/parent-names/nickname-codes) against the 662 human-verified resolver mappings, dropping the noisy fuzzy tier; write `suggested` links carrying the verified chat URL to light up the worklist's one-click confirm; fail-closed (admin verifies). UAT-validated ~229 high-confidence auto-maps. Gate: read-only prod dry-run before any write. (Forward deterministic capture via app-sent confirmations = separate later phase.) Plan: `~/.claude/plans/can-t-we-look-for-sunny-lampson.md`; evidence: `phases/11-*/11-IDENTITY-FINDINGS.md`.
 **Requirements**: IDENT-07
 **Depends on:** Phase 11
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 12 to break down)
+- [ ] 12-01-PLAN.md — backlog-matcher.ts (pure distinctive-token matching) + unit tests
+- [ ] 12-02-PLAN.md — fetchLineProfilesBatched in client.ts + drop fuzzy tier from name-matcher.ts + update tests
+- [ ] 12-03-PLAN.md — student-links.ts: export nicknameCodes, add "follower_profile" source, listVerifiedResolverTargets, runLineBacklogRecovery; C1 route wiring with ?dryRun
+- [ ] 12-04-PLAN.md — PROD DRY-RUN GATE (human checkpoint): verify ~229 suggestions with real chat.line.biz URLs before any write
+- [ ] 12-05-PLAN.md — C2 hardening: lineBacklogRecoverySyncRuns schema + migration 0041 [BLOCKING] + cron-registry entry + internal cron route
