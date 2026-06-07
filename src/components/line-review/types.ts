@@ -260,7 +260,7 @@ export interface LineOaResolverRun {
   rows: LineOaResolverRow[];
 }
 
-export type LineLinkValidationScope = "my" | "all" | "unassigned" | "verified" | "rejected";
+export type LineLinkValidationScope = "my" | "all" | "unassigned" | "verified" | "rejected" | "phantom";
 
 export interface LineLinkValidationReviewer {
   email: string;

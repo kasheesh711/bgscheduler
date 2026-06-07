@@ -33,6 +33,7 @@ const SCOPES: Array<{ value: LineLinkValidationScope; label: string }> = [
   { value: "unassigned", label: "Unassigned" },
   { value: "verified", label: "Verified" },
   { value: "rejected", label: "Rejected" },
+  { value: "phantom", label: "Legacy / needs re-match" },
 ];
 
 function statusVariant(status: LineLinkValidationTask["status"]): "default" | "outline" | "destructive" | "secondary" {
