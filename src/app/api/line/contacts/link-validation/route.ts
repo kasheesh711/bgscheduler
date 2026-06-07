@@ -4,10 +4,11 @@ import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import {
   listLineLinkValidationTasks,
+  LINE_LINK_VALIDATION_SCOPES,
   type LineLinkValidationScope,
 } from "@/lib/line/link-validation";
 
-const scopeSchema = z.enum(["my", "all", "unassigned", "verified", "rejected"]);
+const scopeSchema = z.enum(LINE_LINK_VALIDATION_SCOPES);
 const runIdSchema = z.string().uuid().optional();
 const pageSchema = z.coerce.number().int().min(1).default(1);
 const pageSizeSchema = z.coerce.number().int().min(1).max(100).default(100);

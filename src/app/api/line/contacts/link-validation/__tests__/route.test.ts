@@ -9,6 +9,7 @@ vi.mock("@/lib/line/link-validation", () => ({
     reviewers: [],
     pagination: { page: 1, pageSize: 100, total: 0, pageCount: 0 },
   })),
+  LINE_LINK_VALIDATION_SCOPES: ["my", "all", "unassigned", "verified", "rejected", "phantom"],
 }));
 
 import { auth } from "@/lib/auth";
@@ -68,6 +69,21 @@ describe("LINE link validation list route", () => {
       actor: { email: "admin@example.com", name: "Admin" },
       page: 3,
       pageSize: 50,
+    });
+  });
+
+  it("accepts the phantom (legacy archive) scope", async () => {
+    const response = await GET(request(
+      "http://test.local/api/line/contacts/link-validation?scope=phantom",
+    ));
+
+    expect(response.status).toBe(200);
+    expect(listLineLinkValidationTasks).toHaveBeenCalledWith({ db: true }, {
+      scope: "phantom",
+      runId: undefined,
+      actor: { email: "admin@example.com", name: "Admin" },
+      page: 1,
+      pageSize: 100,
     });
   });
 

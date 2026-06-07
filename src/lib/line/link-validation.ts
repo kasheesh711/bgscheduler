@@ -9,7 +9,8 @@ type LinkRow = typeof schema.lineContactStudentLinks.$inferSelect;
 type ContactRow = typeof schema.lineContacts.$inferSelect;
 type AdminUserRow = typeof schema.adminUsers.$inferSelect;
 
-export type LineLinkValidationScope = "my" | "all" | "unassigned" | "verified" | "rejected" | "phantom";
+export const LINE_LINK_VALIDATION_SCOPES = ["my", "all", "unassigned", "verified", "rejected", "phantom"] as const;
+export type LineLinkValidationScope = (typeof LINE_LINK_VALIDATION_SCOPES)[number];
 
 export interface LineLinkValidationActor {
   email?: string | null;
