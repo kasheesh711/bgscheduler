@@ -78,7 +78,20 @@ followers-reanchor/route.ts (C1 route)
 
 ## Deviations from Plan
 
-### Auto-fixed Issues
+### Post-plan Corrective Fix (2026-06-08 — commit f4d2c77)
+
+**[Corrective — Phase 12 deviation] Rewired runLineBacklogRecovery to fetch the full LINE roster**
+
+- **Found during:** Phase 12 Plan 04 production dry-run gate — the stored-lineContacts path yielded only 41 high-confidence matches; UAT-validated expectation was 229.
+- **Root cause:** `lineContacts` table has 788 rows with displayNames, but only those already upserted by the re-anchor. The full OA follower roster has 1,962 followers; 788 stored records is a subset.
+- **Fix:** Replaced the `db.select().from(schema.lineContacts)` scan with `fetchLineFollowerIds` (paginated) + `fetchLineProfilesBatched(allUserIds, 10)` to cover all 1,962 followers fresh from the LINE API. `upsertLineContactFromFollower` exported from `student-links.ts` so the live path can also write the contact row before inserting the suggestion link.
+- **Route change:** `dryRun ? null` gates `runLineFollowersReanchor` — a `?dryRun=true` call is now fully read-only (`reanchor: null` in the response). Previously, reanchor always ran regardless of `dryRun`.
+- **Known follow-up (do NOT fix in this plan):** On the LIVE combined C1 route (`!dryRun`), the follower roster is double-fetched: `runLineFollowersReanchor` does ~1,962 sequential `getProfile` calls then `runLineBacklogRecovery` batches another ~1,962 fetches. This risks the 300s `maxDuration`. The dedicated C2 cron (Plan 05) calls `runLineBacklogRecovery` directly (single fetch) and is the clean production vehicle. The double-fetch is intentionally deferred.
+- **Files modified:** `src/lib/line/backlog-recovery.ts`, `src/lib/line/student-links.ts`, `src/app/api/line/contacts/followers-reanchor/route.ts`, `src/app/api/line/contacts/followers-reanchor/__tests__/route.test.ts`
+- **New file:** `src/lib/line/__tests__/backlog-recovery.test.ts` (15 unit tests — mocked client + DB)
+- **Commit:** f4d2c77
+
+### Auto-fixed Issues (original plan execution)
 
 **1. [Rule 1 - Bug] Route test broke when POST signature changed to require NextRequest**
 - **Found during:** Task 3 TypeScript check (`npx tsc --noEmit` returned exit 2)
