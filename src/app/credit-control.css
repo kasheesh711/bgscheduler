@@ -296,6 +296,9 @@ html[data-theme="dark"] .dashboard-page .skeleton-panel::after {
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 10px;
   min-height: 0;
+  /* Safari won't shrink this 1fr grid item below its content's intrinsic width
+     without an explicit min-width:0, pushing the inspector column off-screen. */
+  min-width: 0;
   overflow: hidden;
   padding: 0;
 }
@@ -482,6 +485,7 @@ html[data-theme="dark"] .dashboard-page .skeleton-panel::after {
   display: flex;
   gap: 10px;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -549,6 +553,7 @@ html[data-theme="dark"] .dashboard-page .skeleton-panel::after {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 .queue-table-wrap {
