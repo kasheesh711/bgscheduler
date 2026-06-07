@@ -212,6 +212,15 @@ export interface SummaryPayload {
   deltas: SummaryDeltas;
 }
 
+export interface InactiveStudentSummary {
+  studentKey: string;
+  student: string;
+  parent: string;
+  source: string;
+  markedAt: string;
+  removedAtRemaining: number | null;
+}
+
 export interface DashboardPayload {
   adminViews: AdminViewOption[];
   lastUpdatedAt: string;
@@ -226,6 +235,8 @@ export interface DashboardPayload {
   studentQueueAll: StudentQueueRow[];
   calendar: CalendarPayload;
   students: StudentRecord[];
+  /** Students hidden from the worklist (manual "No Longer Active" or auto-churn) — powers the restore view. */
+  inactiveStudents?: InactiveStudentSummary[];
 }
 
 export interface SnapshotState {

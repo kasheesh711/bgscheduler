@@ -85,12 +85,25 @@ export async function getCreditControlPayload(
     ? students.filter((student) => !inactiveSet.has(student.studentKey))
     : students;
 
-  return buildDashboardModel(
+  const payload = buildDashboardModel(
     filteredStudents,
     { lastSnapshot: null, history: [] },
     today,
     snapshot.generatedAt,
   ).payload as DashboardPayload;
+
+  // Surface the hidden students so the UI can list + restore them (the worklist itself
+  // still excludes them via filteredStudents above).
+  payload.inactiveStudents = inactiveRows.map((row) => ({
+    studentKey: row.studentKey,
+    student: row.studentName,
+    parent: row.parentName,
+    source: row.source ?? "manual",
+    markedAt: row.markedAt instanceof Date ? row.markedAt.toISOString() : String(row.markedAt),
+    removedAtRemaining: row.removedAtRemaining ?? null,
+  }));
+
+  return payload;
 }
 
 export async function clearRecoveredActionStates(students: Array<{
