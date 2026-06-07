@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleHelp, LogOut, Search, X } from "lucide-react";
+import { CircleHelp, LogOut, RefreshCw, Search, X } from "lucide-react";
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import { formatShortTimestamp } from "@/lib/credit-control/helpers";
@@ -822,6 +822,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
             type="button"
             style={{ padding: "4px 10px", fontSize: "0.78rem", cursor: "pointer" }}
           >
+            <RefreshCw aria-hidden="true" size={12} />
             {refreshing
               ? "Refreshing\u2026"
               : data
@@ -1059,7 +1060,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
                     <div className="table-primary" style={{ fontSize: "0.85rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {removed.student}
                     </div>
-                    <div className="table-subtle" style={{ fontSize: "0.75rem" }}>
+                    <div className="table-subtle" style={{ fontSize: "0.72rem" }}>
                       {removed.parent || "No parent"} · {removed.source === "auto-churn" ? "Auto-removed" : "Manual"} · {formatShortTimestamp(removed.markedAt)}
                     </div>
                   </div>

@@ -94,7 +94,7 @@ export const StudentDetail = React.memo(function StudentDetail({
             </div>
           </div>
           <div className="mini-pills" style={{ gap: 4, flexShrink: 0 }}>
-            <span className={`status-pill tone-${worstStatus(student.packages)}`} style={{ padding: "2px 8px", fontSize: "0.75rem" }}>
+            <span className={`status-pill tone-${worstStatus(student.packages)}`} style={{ padding: "2px 8px", fontSize: "0.72rem" }}>
               {statusLabel(worstStatus(student.packages))}
             </span>
           </div>
@@ -104,7 +104,7 @@ export const StudentDetail = React.memo(function StudentDetail({
         <div style={{ marginTop: 6, fontSize: "0.78rem" }}>
           {student.actionState ? (
             <span>
-              <span className={`status-pill tone-action-${student.actionState.status}`} style={{ padding: "2px 6px", fontSize: "0.75rem" }}>
+              <span className={`status-pill tone-action-${student.actionState.status}`} style={{ padding: "2px 6px", fontSize: "0.72rem" }}>
                 {actionStatusLabel(student.actionState.status)}
               </span>
               {" "}<span className="muted">{formatActionStateSummary(student.actionState)}</span>
@@ -131,15 +131,15 @@ export const StudentDetail = React.memo(function StudentDetail({
           )}
           <button className="ghost-button" disabled={submitting} onClick={() => onSubmitAction(student, "contacted")} type="button" style={{ padding: "4px 8px", fontSize: "0.75rem" }}>
             <Phone aria-hidden="true" />
-            Contacted <kbd style={{ fontSize: "0.75rem", opacity: 0.6 }}>c</kbd>
+            Contacted <kbd style={{ fontSize: "0.72rem", opacity: 0.6 }}>c</kbd>
           </button>
           <button className="ghost-button" disabled={submitting} onClick={() => onSubmitAction(student, "pending-callback")} type="button" style={{ padding: "4px 8px", fontSize: "0.75rem" }}>
             <Clock3 aria-hidden="true" />
-            Pending <kbd style={{ fontSize: "0.75rem", opacity: 0.6 }}>p</kbd>
+            Pending <kbd style={{ fontSize: "0.72rem", opacity: 0.6 }}>p</kbd>
           </button>
           <button className="ghost-button" disabled={submitting} onClick={() => onSubmitAction(student, "resolved")} type="button" style={{ padding: "4px 8px", fontSize: "0.75rem" }}>
             <Check aria-hidden="true" />
-            Resolved <kbd style={{ fontSize: "0.75rem", opacity: 0.6 }}>r</kbd>
+            Resolved <kbd style={{ fontSize: "0.72rem", opacity: 0.6 }}>r</kbd>
           </button>
           <button
             className="ghost-button"
@@ -181,13 +181,13 @@ export const StudentDetail = React.memo(function StudentDetail({
 
       {/* ---- Compact snapshot metrics ---- */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "0 2px" }}>
-        <div className="mini-pill" style={{ padding: "3px 8px", fontSize: "0.75rem" }}>
+        <div className="mini-pill" style={{ padding: "3px 8px", fontSize: "0.72rem" }}>
           {student.packages.filter((p) => p.status === "notify" || p.status === "watch").length} risky
         </div>
-        <div className="mini-pill" style={{ padding: "3px 8px", fontSize: "0.75rem" }}>
+        <div className="mini-pill" style={{ padding: "3px 8px", fontSize: "0.72rem" }}>
           {formatNumber(student.packages.reduce((s, p) => s + p.pendingDeduction, 0))} pending
         </div>
-        <div className="mini-pill" style={{ padding: "3px 8px", fontSize: "0.75rem" }}>
+        <div className="mini-pill" style={{ padding: "3px 8px", fontSize: "0.72rem" }}>
           {student.packages.length} pkgs
         </div>
       </div>
@@ -201,11 +201,11 @@ export const StudentDetail = React.memo(function StudentDetail({
               className={pkg.key === effectiveKey ? "chip is-active" : "chip"}
               onClick={() => setActivePkgKey(pkg.key)}
               type="button"
-              style={{ padding: "3px 8px", fontSize: "0.75rem", borderRadius: 999 }}
+              style={{ padding: "3px 8px", fontSize: "0.72rem", borderRadius: 999 }}
             >
               {pkg.name.length > 18 ? pkg.name.slice(0, 16) + "\u2026" : pkg.name}
               {" "}
-              <span className={`status-pill tone-${pkg.status}`} style={{ padding: "1px 5px", fontSize: "0.75rem", marginLeft: 2 }}>
+              <span className={`status-pill tone-${pkg.status}`} style={{ padding: "1px 5px", fontSize: "0.72rem", marginLeft: 2 }}>
                 {formatNumber(pkg.adjustedRemaining)} cr
               </span>
             </button>
@@ -218,7 +218,7 @@ export const StudentDetail = React.memo(function StudentDetail({
         <section className="panel" style={{ padding: 10 }}>
           {/* "What to do now" block */}
           <div style={{ marginBottom: 8, padding: "8px 10px", borderRadius: 8, background: "var(--blue-50)", border: "1px solid var(--panel-border)" }}>
-            <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "var(--accent)", marginBottom: 2 }}>What to do now</div>
+            <div style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--accent)", marginBottom: 2 }}>What to do now</div>
             <div className="table-primary" style={{ fontSize: "0.85rem" }}>{activePkg.recommendedAction}</div>
             <div className="table-subtle" style={{ fontSize: "0.75rem" }}>{activePkg.whyNow}</div>
             <div style={{ marginTop: 4 }}>
@@ -232,7 +232,7 @@ export const StudentDetail = React.memo(function StudentDetail({
                   })
                 }
                 type="button"
-                style={{ padding: "3px 8px", fontSize: "0.75rem" }}
+                style={{ padding: "3px 8px", fontSize: "0.72rem" }}
               >
                 <MessageCircle aria-hidden="true" />
                 Preview LINE message
@@ -244,7 +244,7 @@ export const StudentDetail = React.memo(function StudentDetail({
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 6 }}>
             <h3 style={{ fontSize: "0.88rem" }}>{activePkg.name}</h3>
             <div className="mini-pills" style={{ gap: 4 }}>
-              <span className={`status-pill tone-${activePkg.status}`} style={{ padding: "2px 6px", fontSize: "0.75rem" }}>{statusLabel(activePkg.status)}</span>
+              <span className={`status-pill tone-${activePkg.status}`} style={{ padding: "2px 6px", fontSize: "0.72rem" }}>{statusLabel(activePkg.status)}</span>
             </div>
           </div>
 
@@ -294,7 +294,7 @@ export const StudentDetail = React.memo(function StudentDetail({
           {activePkg.dataQualityFlags.length > 0 && (
             <div className="mini-pills wrap-pills" style={{ gap: 4, marginBottom: 4 }}>
               {activePkg.dataQualityFlags.map((flag) => (
-                <span className="flag-pill" key={`${activePkg.key}-${flag}`} style={{ padding: "2px 6px", fontSize: "0.75rem" }}>
+                <span className="flag-pill" key={`${activePkg.key}-${flag}`} style={{ padding: "2px 6px", fontSize: "0.72rem" }}>
                   {flagLabel(flag)}
                 </span>
               ))}
@@ -311,14 +311,14 @@ export const StudentDetail = React.memo(function StudentDetail({
           style={{ background: "none", border: "none", padding: 0, width: "100%", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
         >
           <span className="panel-title" style={{ fontSize: "0.78rem" }}>Recent Activity ({actionHistory.length})</span>
-          <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>{showActivity ? "−" : "+"}</span>
+          <span style={{ fontSize: "0.72rem", color: "var(--muted)" }}>{showActivity ? "−" : "+"}</span>
         </button>
         {showActivity && (
           <div className="history-timeline" style={{ marginTop: 4 }}>
             {actionHistory.length ? (
               actionHistory.map((entry, idx) => (
                 <div className="history-entry" key={`${entry.updatedAt}-${idx}`} style={{ padding: "3px 0" }}>
-                  <div className="history-date" style={{ fontSize: "0.75rem" }}>{formatShortDate(entry.updatedAt.slice(0, 10))}</div>
+                  <div className="history-date" style={{ fontSize: "0.72rem" }}>{formatShortDate(entry.updatedAt.slice(0, 10))}</div>
                   <div className="history-detail" style={{ fontSize: "0.78rem" }}>
                     {entry.actionType === "clear" || entry.actionType === "bulk-clear"
                       ? `Cleared by ${entry.updatedByName}`
@@ -341,7 +341,7 @@ export const StudentDetail = React.memo(function StudentDetail({
           style={{ background: "none", border: "none", padding: 0, width: "100%", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
         >
           <span className="panel-title" style={{ fontSize: "0.78rem" }}>Upcoming Sessions</span>
-          <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>{showUpcoming ? "−" : "+"}</span>
+          <span style={{ fontSize: "0.72rem", color: "var(--muted)" }}>{showUpcoming ? "−" : "+"}</span>
         </button>
         {showUpcoming && (
           <div className="upcoming-list" style={{ marginTop: 4 }}>
@@ -408,7 +408,7 @@ export const StudentDetail = React.memo(function StudentDetail({
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ padding: "4px 6px", borderRadius: 6, background: "var(--panel-strong)", border: "1px solid var(--panel-border)" }}>
-      <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>{label}</div>
+      <div style={{ fontSize: "0.72rem", color: "var(--muted)" }}>{label}</div>
       <div style={{ fontSize: "0.82rem", fontWeight: 700 }}>{value}</div>
     </div>
   );
