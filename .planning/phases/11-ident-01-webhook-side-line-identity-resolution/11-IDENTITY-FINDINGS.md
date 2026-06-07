@@ -51,3 +51,16 @@ Tested against the REAL production OA (`@begifted` "BeGifted Education", premium
 
 ---
 *Captured during /gsd-verify-work 11. Feeds the matching-redesign follow-up phase.*
+
+## 7. Coverage measurement — follower-profile extraction (run 2026-06-07)
+
+Extracted all **1,962 followers** (followers/ids) + `getProfile` (100% fetched) on production `@begifted`. Matched display names against the verified mappings by DISTINCTIVE tokens (>=4 chars: lastnames, parent names, kid nickname-codes — NOT short-nickname fuzz):
+
+| Target | >=1 distinctive match | Unambiguous (single student) |
+|--------|----------------------|------------------------------|
+| 662 human-verified mappings | 323 | **229** |
+| All resolver-known students (upper bound) | 396 | **251** |
+
+**~229 high-confidence auto-map candidates** from the full roster (vs ~23 from the 258 messagers alone — ~10x). Signal is real: handles often carry the parent lastname (`OIL PinyavorakuL`→Pinyavorakul), parent name (`Pavan`→Pavan Kaur), or the kid's nickname-code (`Jern`→jern.si, `tractor`→tractor.jo, `Kaew`→kaew.vi). These are CANDIDATES (admin one-click confirm via chat URL), not certainties. The ~70% remainder are emoji/number/generic handles or inactive followers → need phone (Profile+) or a parent-confirmation flow.
+
+**Validated redesign spine:** extract roster → distinctive-token match vs verified ground truth (drop fuzzy) → admin one-click confirm (chat URL) → per-contact content aggregation for messagers → phone/ask for the nameless remainder.
