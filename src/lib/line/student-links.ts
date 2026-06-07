@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNull } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { matchNamesToDirectory, SUGGEST_SHORTLIST_MIN_SCORE } from "@/lib/line/name-matcher";
@@ -307,7 +307,7 @@ async function findCurrentStudentByKey(
   };
 }
 
-function nicknameCodes(value: string): string[] {
+export function nicknameCodes(value: string): string[] {
   const matches = [...value.matchAll(/\(([^)]+)\)/g)];
   return matches
     .map((match) => normalizeLineStudentCode(match[1] ?? ""))
@@ -417,18 +417,23 @@ export function resolveLineStudentCodeMatches(
   };
 }
 
-function studentLinkEvidence(input: {
+export function studentLinkEvidence(input: {
   source:
     | "line_display_name"
     | "admin_helper_text"
     | "admin_search"
     | "message_content"
-    | "line_followers";
+    | "line_followers"
+    | "follower_profile";   // Phase 12: distinctive-token backlog recovery
   parsedCodes?: ParsedLineStudentCode[];
   matchedCode?: string;
   matchedField?: LineStudentMatchType;
   label?: string | null;
-  student: LineStudentDirectoryRow;
+  student?: LineStudentDirectoryRow;
+  originalUrl?: string | null;   // Phase 12: chat.line.biz URL from resolver target
+  ambiguous?: boolean;           // Phase 12: true when multiple students matched
+  tokens?: string[];             // Phase 12: distinctive tokens that fired the match
+  displayName?: string;          // Phase 12: follower's LINE display name
 }): Record<string, unknown> {
   return {
     source: input.source,
@@ -436,9 +441,15 @@ function studentLinkEvidence(input: {
     ...(input.matchedCode ? { matchedCode: input.matchedCode } : {}),
     ...(input.matchedField ? { matchedField: input.matchedField } : {}),
     ...(input.label ? { label: input.label } : {}),
-    activated: input.student.activated,
-    hasFutureSessions: input.student.hasFutureSessions,
-    hasLivePackage: input.student.hasLivePackage,
+    ...(input.student ? {
+      activated: input.student.activated,
+      hasFutureSessions: input.student.hasFutureSessions,
+      hasLivePackage: input.student.hasLivePackage,
+    } : {}),
+    ...(input.originalUrl !== undefined ? { originalUrl: input.originalUrl } : {}),
+    ...(input.ambiguous !== undefined ? { ambiguous: input.ambiguous } : {}),
+    ...(input.tokens ? { tokens: input.tokens } : {}),
+    ...(input.displayName ? { displayName: input.displayName } : {}),
   };
 }
 
@@ -798,6 +809,30 @@ export async function runLineFollowersReanchor({ db }: { db: Database }): Promis
   }
 
   return result;
+}
+
+/**
+ * Returns human-verified OA-resolver rows (those with committedLinkId IS NOT NULL).
+ * These are the ground-truth targets for the Phase 12 backlog identity recovery (IDENT-07).
+ * VerifiedResolverTarget is defined in backlog-matcher.ts (canonical home).
+ *
+ * Step 1: Query lineOaResolverRows WHERE committedLinkId IS NOT NULL.
+ * Step 2: Return rows shaped as VerifiedResolverTarget[].
+ */
+export async function listVerifiedResolverTargets(
+  db: Database,
+): Promise<import("@/lib/line/backlog-matcher").VerifiedResolverTarget[]> {
+  return db
+    .select({
+      studentName: schema.lineOaResolverRows.studentName,
+      parentName: schema.lineOaResolverRows.parentName,
+      searchCode: schema.lineOaResolverRows.searchCode,
+      lineChatUrl: schema.lineOaResolverRows.lineChatUrl,
+      wiseStudentId: schema.lineOaResolverRows.wiseStudentId,
+      studentKey: schema.lineOaResolverRows.studentKey,
+    })
+    .from(schema.lineOaResolverRows)
+    .where(isNotNull(schema.lineOaResolverRows.committedLinkId));
 }
 
 /**
