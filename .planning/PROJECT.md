@@ -14,6 +14,8 @@ Admin staff can find, compare, and schedule tutors instantly and independently �
 **Production URL:** https://bgscheduler.vercel.app
 **Status:** Live, daily Wise sync active, Phase 10 verification passing with 256 unit tests and lint exit 0
 
+**v1.2 Autonomous LINE Scheduling (in progress):** Phase 11 — IDENT-01 Webhook-Side LINE Identity Resolution — complete 2026-06-07. Delivered the identity-resolution foundation: a deterministic name-based content matcher (precision 0.905 / recall 1.0 on a distractor-rich eval), an `is_phantom` quarantine column (696 wrong-namespace OA-resolver rows quarantined in production), a `followers/ids` re-anchor job + admin route, a re-pointed Mapping Validation worklist (real messaging contacts by default) with a phantom/legacy archive scope, and inline re-link recompute on verify. Fail-closed preserved (content matching only ever writes `suggested`). 1119 unit tests green, `tsc --noEmit` clean. The ≥80% verified-link coverage target is an operational metric (1.6% post-quarantine baseline) reached as admins work the newly-populated worklist — 3 live-UI walkthroughs tracked in `11-HUMAN-UAT.md`.
+
 ### What's live after v1.0.1 (2026-04-20)
 - **Recommended slots hero** — top of search results shows up to 3 auto-ranked time slots (sub-slot with most qualified tutors free), each with avatar stack, checkmark reasons, "Copy for parent" action, and a "Show in calendar" quick-add; select multiple slots to bundle into one message
 - **Copy-for-parent drawer** — slide-in right drawer with Friendly/Terse tone toggle, tutor-name inclusion toggle, editable message preview, and clipboard copy
@@ -201,4 +203,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Context update
 
 ---
-*Last updated: 2026-05-09 — Phase 10 VPOL-01 View Transitions complete (4/4 plans, TRANS-01..05 verified PASS, clean code review after post-review fix, 32 unit test files / 256 tests passing, lint exits 0 with warnings); v1.1 roadmap scope complete.*
+*Last updated: 2026-06-07 — Phase 11 IDENT-01 Webhook-Side LINE Identity Resolution complete (7/7 plans, IDENT-01..06 verified 6/6 must-haves, code review WR-01 found+fixed, 1119 unit tests passing / tsc clean, production migration applied + 696 phantom rows quarantined; 3 live-UI items tracked in 11-HUMAN-UAT.md). First phase of v1.2 Autonomous LINE Scheduling.*
