@@ -83,7 +83,11 @@ export function MappingValidationWorkspace({
       setSelectedRunId((current) => {
         if (current === null && runSelectionTouched) return null;
         if (current && payload.runs.some((run) => run.id === current)) return current;
-        return payload.runs[0]?.id ?? null;
+        // Default to "All resolver runs" (null). The worklist is now widened to real
+        // messaging/follower contacts whose suggestions have NO resolver run; defaulting
+        // to a specific run's sourceRunId filter would hide every real-contact suggestion
+        // (IDENT-04). The run dropdown remains available to narrow to a legacy resolver run.
+        return null;
       });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Failed to load resolver runs");
