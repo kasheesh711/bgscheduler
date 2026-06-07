@@ -1063,7 +1063,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
                     <div className="table-primary" style={{ fontSize: "0.85rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {removed.student}
                     </div>
-                    <div className="table-subtle" style={{ fontSize: "0.72rem" }}>
+                    <div className="table-subtle" style={{ fontSize: "0.75rem" }}>
                       {removed.parent || "No parent"} · {removed.source === "auto-churn" ? "Auto-removed" : "Manual"} · {formatShortTimestamp(removed.markedAt)}
                     </div>
                   </div>

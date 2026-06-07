@@ -98,9 +98,9 @@ export const QueuePanel = React.memo(
         <div className="panel-header" style={{ padding: "4px 0", gap: 6 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <h2 style={{ fontSize: "0.9rem" }}>{displayQueue.length} students</h2>
-            <span className="mini-pill" style={{ padding: "2px 6px", fontSize: "0.7rem" }}>{adminScopedSummary.queue.pinnedStudents} pinned</span>
+            <span className="mini-pill" style={{ padding: "2px 6px", fontSize: "0.75rem" }}>{adminScopedSummary.queue.pinnedStudents} pinned</span>
           </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "0.72rem", color: "var(--muted)", cursor: "pointer" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "0.75rem", color: "var(--muted)", cursor: "pointer" }}>
             <input type="checkbox" checked={hideWorked} onChange={toggleHideWorked} />
             Hide worked
           </label>
@@ -159,7 +159,7 @@ export const QueuePanel = React.memo(
                       <span
                         className={`status-pill tone-action-${row.actionState.status}`}
                         title={formatActionStateSummary(row.actionState)}
-                        style={{ padding: "2px 6px", fontSize: "0.7rem" }}
+                        style={{ padding: "2px 6px", fontSize: "0.75rem" }}
                       >
                         {actionStatusLabel(row.actionState.status)} {formatShortTimestamp(row.actionState.updatedAt)}
                       </span>
@@ -274,7 +274,7 @@ export const QueuePanel = React.memo(
                         <div className={`table-primary ${balanceTone(row.totalAdjustedRemaining)}`} style={{ fontSize: "1.1rem", fontWeight: 800 }}>
                           {formatNumber(row.totalAdjustedRemaining)} cr
                         </div>
-                        <div className="table-subtle" style={{ fontSize: "0.72rem" }}>
+                        <div className="table-subtle" style={{ fontSize: "0.75rem" }}>
                           {formatNumber(row.totalPendingDeduction)} pending
                         </div>
                       </td>
@@ -286,10 +286,10 @@ export const QueuePanel = React.memo(
                       <td>
                         {row.actionState ? (
                           <div>
-                            <span className={`status-pill tone-action-${row.actionState.status}`} style={{ padding: "2px 6px", fontSize: "0.7rem" }}>
+                            <span className={`status-pill tone-action-${row.actionState.status}`} style={{ padding: "2px 6px", fontSize: "0.75rem" }}>
                               {actionStatusLabel(row.actionState.status)}
                             </span>
-                            <div className="table-subtle" style={{ fontSize: "0.68rem", marginTop: 2 }}>
+                            <div className="table-subtle" style={{ fontSize: "0.75rem", marginTop: 2 }}>
                               {formatShortTimestamp(row.actionState.updatedAt)}
                             </div>
                           </div>
