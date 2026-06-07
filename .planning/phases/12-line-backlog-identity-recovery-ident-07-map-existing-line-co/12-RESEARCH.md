@@ -624,22 +624,25 @@ The Phase 12 LINE API calls are identical to Phase 11 calls — no new external 
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Display name vs fresh profile fetch for backlog recovery:**
    - What we know: `lineContacts.displayName` was populated by `runLineFollowersReanchor` (Phase 11 re-anchor job). If the re-anchor was run recently, these names are current.
    - What's unclear: if a follower changed their display name since the re-anchor, the stored name is stale.
    - Recommendation: For the dry-run and initial landing, use stored `displayName` from `lineContacts` (no extra API calls needed). For the production run, optionally re-fetch with `fetchLineProfilesBatched`. Let the planner decide at build time.
+   - **RESOLVED:** Use stored `displayName` from `lineContacts` (no fresh API fetch). The Phase 11 re-anchor populated these; the backlog recovery reads them in-memory. This keeps `runLineBacklogRecovery` fast and keeps C1 within `maxDuration=300`.
 
 2. **Ambiguous match handling policy:**
    - What we know: UAT showed 323 followers have ≥1 distinctive match; 229 are unambiguous (single student); 94 are ambiguous.
    - What's unclear: design doc says "many → ambiguous shortlist" but doesn't specify whether to insert or omit them.
    - Recommendation: Insert ambiguous matches with `confidence: 0.60` and `evidence.matchBasis: "ambiguous"` so admins can review, but do not surface them in the primary worklist by default (or mark them in the UI with a badge). This is a planner decision — document it in the plan.
+   - **RESOLVED:** Insert ambiguous matches with `confidence: 0.60` and `evidence.ambiguous: true`. They are inserted as `status:"suggested"` and appear in the review worklist (distinguishable from high-confidence 0.95 entries). Never auto-collapsed to one student pick.
 
 3. **maxDuration for C1 route:**
    - What we know: `runLineFollowersReanchor` currently has `maxDuration = 60` on the route. The backlog recovery must fetch 1,962 profiles (if fresh) + match all against the target index.
    - What's unclear: actual latency of 1,962 sequential `getProfile` calls in production.
    - Recommendation: If using stored `displayName` (not fresh fetch), the backlog recovery is fast (in-memory match only). If fetching fresh, increase `maxDuration` to 300. The planner must pick one approach and set `maxDuration` accordingly.
+   - **RESOLVED:** `maxDuration` raised to 300 on C1 route (`followers-reanchor`). The backlog recovery itself is in-memory (fast); the 300s budget covers `runLineFollowersReanchor`'s ~1,962 sequential LINE API calls.
 
 ---
 
