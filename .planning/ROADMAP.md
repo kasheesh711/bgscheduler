@@ -258,3 +258,13 @@ v1.2 Autonomous LINE Scheduling is the active milestone (started 2026-06-06). Ph
 | 9. VPOL-03 Density Overview | v1.1 | 3/3 | Complete | 2026-05-08 |
 | 10. VPOL-01 View Transitions | v1.1 | 4/4 | Complete    | 2026-05-09 |
 | 11. IDENT-01 Webhook-Side LINE Identity Resolution | v1.2 | 7/7 | Complete    | 2026-06-07 |
+
+### Phase 12: LINE Backlog Identity Recovery (IDENT-07)
+
+**Goal:** Map existing LINE contacts/followers to Wise students with high precision — distinctive-token matching (≥4-char lastnames/parent-names/nickname-codes) against the 662 human-verified resolver mappings, dropping the noisy fuzzy tier; write `suggested` links carrying the verified chat URL to light up the worklist's one-click confirm; fail-closed (admin verifies). UAT-validated ~229 high-confidence auto-maps. Gate: read-only prod dry-run before any write. (Forward deterministic capture via app-sent confirmations = separate later phase.) Plan: `~/.claude/plans/can-t-we-look-for-sunny-lampson.md`; evidence: `phases/11-*/11-IDENTITY-FINDINGS.md`.
+**Requirements**: IDENT-07
+**Depends on:** Phase 11
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 12 to break down)

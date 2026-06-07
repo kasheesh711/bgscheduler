@@ -87,6 +87,10 @@ Progress: [██████████] 98%
 
 ## Accumulated Context
 
+### Roadmap Evolution
+
+- **Phase 12 added (2026-06-07):** LINE Backlog Identity Recovery (IDENT-07) — name-matching redesign anchored on the 662 human-verified resolver mappings, after Phase 11 UAT found the original matcher unreliable and proved the verified data can't be reused by ID (namespace wall). Approved plan: `~/.claude/plans/can-t-we-look-for-sunny-lampson.md`; evidence: `phases/11-*/11-IDENTITY-FINDINGS.md`.
+
 ### Decisions (recent)
 
 Full log in PROJECT.md Key Decisions table. Roadmap-scoping decisions from v1.1:
