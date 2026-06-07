@@ -59,7 +59,7 @@ export function MappingValidationWorkspace({
   const [summary, setSummary] = useState<LineLinkValidationSummary | null>(null);
   const [assignmentOpen, setAssignmentOpen] = useState(false);
   const [progressOpen, setProgressOpen] = useState(false);
-  const [busy, setBusy] = useState<"runs" | "summary" | null>(null);
+  const [busy, setBusy] = useState<"runs" | "summary" | "reanchor" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const selectedRun = useMemo(
@@ -109,6 +109,26 @@ export function MappingValidationWorkspace({
       setBusy(null);
     }
   }, [selectedRunId]);
+
+  const runReanchor = useCallback(async () => {
+    setBusy("reanchor");
+    setMessage(null);
+    try {
+      const payload = await jsonFetch<{
+        result: { followerCount: number; upsertedContacts: number; suggestionsCreated: number };
+      }>("/api/line/contacts/followers-reanchor", { method: "POST" });
+      setMessage(
+        `Re-anchor complete: ${payload.result.upsertedContacts} contacts upserted, ` +
+        `${payload.result.suggestionsCreated} suggestions created.`,
+      );
+      // Reload the worklist + summary to reflect new contacts/suggestions
+      void Promise.all([loadRuns(), loadSummary()]);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Re-anchor failed");
+    } finally {
+      setBusy(null);
+    }
+  }, [loadRuns, loadSummary]);
 
   function refreshAll() {
     void Promise.all([loadRuns(), loadSummary()]);
@@ -202,6 +222,17 @@ export function MappingValidationWorkspace({
                 Progress
               </Button>
             ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={runReanchor}
+              disabled={Boolean(busy)}
+              title="Seed correct-namespace contacts from LINE OA followers list"
+            >
+              {busy === "reanchor" ? <Loader2 className="animate-spin" /> : <Users className="h-4 w-4" />}
+              Re-anchor followers
+            </Button>
             <Button type="button" variant="outline" size="sm" onClick={refreshAll} disabled={Boolean(busy)}>
               {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
               Refresh
