@@ -72,6 +72,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   const [toast, setToast] = useState<Toast>(null);
   const [submitting, setSubmitting] = useState(false);
   const [linePreview, setLinePreview] = useState<LinePreview>(null);
+  const [showRemoved, setShowRemoved] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [optimisticKeys, setOptimisticKeys] = useState<Set<string>>(new Set());
   const [actionHistory, setActionHistory] = useState<ActionHistoryEntry[]>([]);
@@ -400,20 +401,44 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
       if (!response.ok) {
         throw new Error(`Failed to mark inactive (${response.status})`);
       }
-      setToast({ message: `${student.student} marked as no longer active.`, tone: "success" });
+      setToast({
+        message: `${student.student} marked as no longer active.`,
+        tone: "success",
+        undo: {
+          studentKey: student.studentKey,
+          previousStatus: null,
+          previousActionState: null,
+          kind: "inactive",
+        },
+      });
       setSelectedStudentKey("");
-      // Refetch dashboard so the student is removed from the list
-      setRefreshing(true);
-      const refreshRes = await fetch("/api/credit-control", { cache: "no-store" });
-      if (refreshRes.ok) {
-        const payload = (await refreshRes.json()) as DashboardPayload;
-        startTransition(() => setData(payload));
-      }
-      setRefreshing(false);
+      await loadDashboard("refresh");
     } catch (err) {
-      setRefreshing(false);
       setToast({
         message: err instanceof Error ? err.message : "Failed to mark inactive.",
+        tone: "error",
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function restoreInactive(studentKey: string) {
+    setSubmitting(true);
+    try {
+      const response = await fetch("/api/credit-control/inactive", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentKey }),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to restore (${response.status})`);
+      }
+      setToast({ message: "Student restored to the worklist.", tone: "success" });
+      await loadDashboard("refresh");
+    } catch (err) {
+      setToast({
+        message: err instanceof Error ? err.message : "Failed to restore.",
         tone: "error",
       });
     } finally {
@@ -782,6 +807,17 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
           >
             <CircleHelp aria-hidden="true" size={14} />
           </button>
+          {data?.inactiveStudents?.length ? (
+            <button
+              className="meta-chip"
+              onClick={() => setShowRemoved(true)}
+              title="Removed students"
+              type="button"
+              style={{ padding: "4px 10px", fontSize: "0.78rem", cursor: "pointer" }}
+            >
+              Removed {data.inactiveStudents.length}
+            </button>
+          ) : null}
           <button
             className="meta-chip"
             onClick={() => loadDashboard("refresh")}
@@ -965,8 +1001,12 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
         onDismiss={() => setToast(null)}
         onUndo={() => {
           if (!toast?.undo) return;
-          const { studentKey, previousStatus } = toast.undo;
+          const { studentKey, previousStatus, kind } = toast.undo;
           setToast(null);
+          if (kind === "inactive") {
+            restoreInactive(studentKey);
+            return;
+          }
           const student = data?.students.find((s) => s.studentKey === studentKey);
           if (student) {
             submitSingleAction(student, previousStatus);
@@ -990,6 +1030,57 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
                   <span>{item.description}</span>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showRemoved ? (
+        <div className="shortcut-overlay" onClick={() => setShowRemoved(false)} role="presentation">
+          <div
+            className="shortcut-card"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            style={{ width: "min(460px, 92vw)" }}
+          >
+            <div className="panel-header">
+              <h3>Removed students ({data?.inactiveStudents?.length ?? 0})</h3>
+              <button className="icon-button" onClick={() => setShowRemoved(false)} type="button">
+                <X aria-hidden="true" size={14} />
+              </button>
+            </div>
+            <p className="muted" style={{ fontSize: "0.78rem", marginTop: 6 }}>
+              Hidden from the worklist. They rejoin automatically on a credit top-up, or restore one now.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10, maxHeight: "58vh", overflowY: "auto" }}>
+              {(data?.inactiveStudents ?? []).map((removed) => (
+                <div
+                  key={removed.studentKey}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", borderRadius: 8, border: "1px solid var(--panel-border)" }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div className="table-primary" style={{ fontSize: "0.85rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {removed.student}
+                    </div>
+                    <div className="table-subtle" style={{ fontSize: "0.72rem" }}>
+                      {removed.parent || "No parent"} · {removed.source === "auto-churn" ? "Auto-removed" : "Manual"} · {formatShortTimestamp(removed.markedAt)}
+                    </div>
+                  </div>
+                  <button
+                    className="ghost-button"
+                    disabled={submitting}
+                    onClick={() => restoreInactive(removed.studentKey)}
+                    type="button"
+                    style={{ padding: "4px 8px", fontSize: "0.75rem", flexShrink: 0 }}
+                  >
+                    Restore
+                  </button>
+                </div>
+              ))}
+              {!data?.inactiveStudents?.length ? (
+                <div className="empty-inline" style={{ fontSize: "0.8rem" }}>No removed students.</div>
+              ) : null}
             </div>
           </div>
         </div>

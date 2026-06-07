@@ -31,6 +31,8 @@ export type Toast = {
     studentKey: string;
     previousStatus: StudentActionStatus | null;
     previousActionState: StudentRecord["actionState"];
+    /** "action" (default) restores a follow-up status; "inactive" un-hides a removed student. */
+    kind?: "action" | "inactive";
   };
 } | null;
 export type LinePreview = { student: StudentRecord; pkg: PackageRecord; message: string } | null;

@@ -1,4 +1,4 @@
-import { Check, Clock3, MessageCircle, Phone, UserX } from "lucide-react";
+import { Check, Clock3, MessageCircle, Phone, UserX, X } from "lucide-react";
 import React, { useMemo, useState } from "react";
 
 import type { PackageRecord, StudentActionStatus, StudentRecord } from "@/types/credit-control";
@@ -58,6 +58,13 @@ export const StudentDetail = React.memo(function StudentDetail({
   // Collapsible sections
   const [showActivity, setShowActivity] = useState(false);
   const [showUpcoming, setShowUpcoming] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string;
+    body: string;
+    confirmLabel: string;
+    danger?: boolean;
+    onConfirm: () => void;
+  } | null>(null);
 
   if (!student) {
     return (
@@ -137,11 +144,14 @@ export const StudentDetail = React.memo(function StudentDetail({
           <button
             className="ghost-button"
             disabled={submitting}
-            onClick={() => {
-              if (window.confirm(`Clear action state for ${student.student}?`)) {
-                onSubmitAction(student, null);
-              }
-            }}
+            onClick={() =>
+              setConfirmAction({
+                title: "Clear follow-up status",
+                body: `Clear the follow-up status for ${student.student}?`,
+                confirmLabel: "Clear",
+                onConfirm: () => onSubmitAction(student, null),
+              })
+            }
             type="button"
             style={{ padding: "4px 8px", fontSize: "0.75rem" }}
           >
@@ -151,11 +161,15 @@ export const StudentDetail = React.memo(function StudentDetail({
           <button
             className="ghost-button"
             disabled={submitting}
-            onClick={() => {
-              if (window.confirm(`Mark ${student.student} as no longer taking classes?\nThey will be hidden from the dashboard.`)) {
-                onMarkInactive(student);
-              }
-            }}
+            onClick={() =>
+              setConfirmAction({
+                title: "Mark no longer active",
+                body: `Mark ${student.student} as no longer taking classes? They'll be hidden from the worklist, and will rejoin automatically if they top up their credits.`,
+                confirmLabel: "No Longer Active",
+                danger: true,
+                onConfirm: () => onMarkInactive(student),
+              })
+            }
             type="button"
             style={{ padding: "4px 8px", fontSize: "0.75rem", color: "var(--notify)" }}
           >
@@ -335,6 +349,54 @@ export const StudentDetail = React.memo(function StudentDetail({
           </div>
         )}
       </section>
+
+      {confirmAction ? (
+        <div className="shortcut-overlay" onClick={() => setConfirmAction(null)} role="presentation">
+          <div
+            className="shortcut-card"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            style={{ width: "min(380px, 92vw)" }}
+          >
+            <div className="panel-header">
+              <h3 style={{ fontSize: "0.95rem" }}>{confirmAction.title}</h3>
+              <button className="icon-button" onClick={() => setConfirmAction(null)} type="button">
+                <X aria-hidden="true" size={14} />
+              </button>
+            </div>
+            <p className="muted" style={{ fontSize: "0.82rem", marginTop: 8, lineHeight: 1.45 }}>
+              {confirmAction.body}
+            </p>
+            <div className="action-row" style={{ marginTop: 14, justifyContent: "flex-end", gap: 8 }}>
+              <button
+                className="ghost-button"
+                onClick={() => setConfirmAction(null)}
+                type="button"
+                style={{ padding: "5px 12px", fontSize: "0.8rem" }}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                onClick={() => {
+                  const run = confirmAction.onConfirm;
+                  setConfirmAction(null);
+                  run();
+                }}
+                type="button"
+                style={{
+                  padding: "5px 12px",
+                  fontSize: "0.8rem",
+                  ...(confirmAction.danger ? { background: "var(--notify)", borderColor: "var(--notify)" } : {}),
+                }}
+              >
+                {confirmAction.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 });
