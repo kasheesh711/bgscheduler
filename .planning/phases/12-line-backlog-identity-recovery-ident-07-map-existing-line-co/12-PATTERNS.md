@@ -326,7 +326,7 @@ export async function GET(request: NextRequest) {
 - `jobKey: "line_backlog_recovery"` (must match the `CronJobKey` added to `cron-registry.ts`)
 - Replace `syncWiseActivityEvents` with `runLineBacklogRecovery({ db: getDb(), dryRun: false })`
 - Replace `WiseActivitySyncAlreadyRunningError` with a `LineBacklogRecoveryAlreadyRunningError` (or check `error.message.includes("already running")` if no typed error class is created)
-- Import `runLineBacklogRecovery` from `@/lib/line/student-links`
+- Import `runLineBacklogRecovery` from `@/lib/line/backlog-recovery`  <!-- was student-links; Plan 03 moved runLineBacklogRecovery to backlog-recovery.ts -->
 
 **`rejectInvalidCronSecret` signature** (cron-auth.ts:19):
 ```typescript
