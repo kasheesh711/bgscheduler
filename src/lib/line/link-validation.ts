@@ -240,10 +240,6 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function lineOaResolverSourceCondition() {
-  return eq(schema.lineContactStudentLinks.sourceKind, "line_oa_resolver");
-}
-
 // D-04/IDENT-05: real contact condition — excludes phantom OA-resolver rows from active scopes
 function realContactCondition() {
   return eq(schema.lineContactStudentLinks.isPhantom, false);
