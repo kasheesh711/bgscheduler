@@ -541,12 +541,6 @@ async function applyChurnMaintenance(
     thresholdDays: CHURN_INACTIVITY_DAYS,
   });
 
-  if (transitions.zeroClears.length > 0) {
-    await db
-      .delete(schema.creditControlZeroBalanceTracking)
-      .where(inArray(schema.creditControlZeroBalanceTracking.studentKey, transitions.zeroClears));
-  }
-
   for (const upsert of transitions.zeroUpserts) {
     await db
       .insert(schema.creditControlZeroBalanceTracking)
@@ -619,6 +613,16 @@ async function applyChurnMaintenance(
         actorName: CREDIT_SYSTEM_ACTOR_NAME,
       });
     }
+  }
+
+  // Clear tracking rows LAST — both recovered students and just-inactivated ones.
+  // Running this after the inactive-table writes means a partial failure earlier
+  // leaves tracking rows intact, so a still-qualifying student is re-processed on the
+  // next sync without resetting their zero-credit streak (Neon HTTP has no transactions).
+  if (transitions.zeroClears.length > 0) {
+    await db
+      .delete(schema.creditControlZeroBalanceTracking)
+      .where(inArray(schema.creditControlZeroBalanceTracking.studentKey, transitions.zeroClears));
   }
 }
 
