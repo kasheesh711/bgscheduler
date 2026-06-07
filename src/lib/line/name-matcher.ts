@@ -2,10 +2,9 @@
  * Pure-TypeScript deterministic name matcher for LINE student identity resolution.
  *
  * Converts AI-extracted `studentName`/`parentName` strings into scored
- * `NameMatchCandidate[]` against a student directory using a three-tier pipeline:
+ * `NameMatchCandidate[]` against a student directory using a two-tier pipeline:
  *   1. Exact NFKC match (highest confidence)
  *   2. Token subset match (medium confidence)
- *   3. Levenshtein ≤ 2 fuzzy match (low confidence)
  *
  * Fail-closed invariant: this module performs NO DB writes and never auto-confirms a link.
  * It returns scored suggestions only; callers must route them through admin review.
@@ -24,9 +23,7 @@ export interface NameMatchCandidate {
     | "student_name_exact"
     | "parent_name_exact"
     | "student_name_token"
-    | "parent_name_token"
-    | "student_name_fuzzy"
-    | "parent_name_fuzzy";
+    | "parent_name_token";
 }
 
 // ─── Threshold constants ──────────────────────────────────────────────────────
@@ -100,13 +97,11 @@ export function levenshtein(a: string, b: string): number {
 // | Exact NFKC match on parentName only               |    75 |
 // | Token subset match on studentName (≥1 token)      |    70 |
 // | Token subset match on parentName                  |    55 |
-// | Levenshtein ≤ 2 on any studentName token          |    50 |
-// | Levenshtein ≤ 2 on any parentName token           |    35 |
 
 // ─── Core matcher ─────────────────────────────────────────────────────────────
 
 /**
- * Matches AI-extracted names against a student directory using a three-tier pipeline.
+ * Matches AI-extracted names against a student directory using a two-tier pipeline.
  *
  * Step 1 — Exact NFKC match: normalizeForNameMatch(input) === normalizeForNameMatch(student field).
  *   Scores: studentName → 90, parentName → 75.
@@ -117,11 +112,7 @@ export function levenshtein(a: string, b: string): number {
  *   space splitting.
  *   Scores: studentName → 70, parentName → 55.
  *
- * Step 3 — Levenshtein fuzzy match: at least one token from the normalized input is within
- *   edit distance ≤ 2 of any token in the normalized student field.
- *   Scores: studentName → 50, parentName → 35.
- *
- * Step 4 — sibling dominance: a candidate that matched ONLY on parentName is dropped when it
+ * Step 3 — sibling dominance: a candidate that matched ONLY on parentName is dropped when it
  *   shares the parent name of a student that matched confidently on studentName (score
  *   >= SUGGEST_SINGLE_MIN_SCORE) — that candidate is the named student's sibling, not the named
  *   student. A parent-only match on a student with a DIFFERENT parent (a conflicting signal,
@@ -163,7 +154,7 @@ export function matchNamesToDirectory(
 
   // Track which students matched via a studentName signal (not parentName-only), plus the
   // parent names of the students that *confidently* matched on studentName. Together these
-  // let the sibling-dominance rule (step 4) drop a parent-only candidate that is merely a
+  // let the sibling-dominance rule (step 3) drop a parent-only candidate that is merely a
   // sibling of the named student (shares that student's parent name).
   const studentNameMatchedKeys = new Set<string>();
   const confidentStudentNameParents = new Set<string>();
@@ -224,33 +215,9 @@ export function matchNamesToDirectory(
       }
     }
 
-    // ── Step 3: Levenshtein fuzzy match ───────────────────────────────────────
-    // ALL input tokens must have a fuzzy match (edit distance ≤ 2) to some student
-    // field token. This mirrors the intersection requirement from Tier 2 — it prevents
-    // a partial-overlap input (e.g. "Nicha Suwanprasert") from fuzzy-matching a student
-    // that only shares the first-name token ("Nicha Kamolrat"), because "Suwanprasert"
-    // has no fuzzy match in "Kamolrat".
-
-    if (inputStudentTokens.length > 0 && studentNameTokens.length > 0) {
-      const hasFuzzy = inputStudentTokens.every((it) =>
-        studentNameTokens.some((st) => levenshtein(it, st) <= 2),
-      );
-      if (hasFuzzy) {
-        consider(student, 50, "student_name_fuzzy", true);
-      }
-    }
-
-    if (inputParentTokens.length > 0 && parentNameTokens.length > 0) {
-      const hasFuzzy = inputParentTokens.every((it) =>
-        parentNameTokens.some((st) => levenshtein(it, st) <= 2),
-      );
-      if (hasFuzzy) {
-        consider(student, 35, "parent_name_fuzzy", false);
-      }
-    }
   }
 
-  // ── Step 4: sibling dominance ───────────────────────────────────────────────
+  // ── Step 3: sibling dominance ───────────────────────────────────────────────
   // Drop a candidate that matched ONLY on parentName when it is a sibling of a student
   // the input already named confidently — i.e. it shares the parent name of a student
   // that matched via studentName at score >= SUGGEST_SINGLE_MIN_SCORE. Such a candidate

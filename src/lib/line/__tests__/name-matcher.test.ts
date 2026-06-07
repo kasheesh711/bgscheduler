@@ -241,48 +241,42 @@ describe("matchNamesToDirectory — Tier 2 token subset match", () => {
   });
 });
 
-// ─── matchNamesToDirectory — Tier 3: Levenshtein fuzzy match ───────────────────
+// ─── matchNamesToDirectory — no fuzzy tier (fuzzy removed) ────────────────────
 
-describe("matchNamesToDirectory — Tier 3 fuzzy match", () => {
-  it("levenshtein distance 1 on studentName token returns score 50 with matchBasis student_name_fuzzy", () => {
+describe("matchNamesToDirectory — no fuzzy tier", () => {
+  it("near-miss studentName token (edit dist 1) returns [] — fuzzy tier removed", () => {
     const dir = [
       student({ studentKey: "nicha.sw::parent", studentName: "Nicha Suwanprasert", parentName: "Parent" }),
     ];
-    // "Ncha" has edit distance 1 from "nicha"
+    // "Ncha" has edit distance 1 from "nicha" but is not an exact token — no match without fuzzy
     const results = matchNamesToDirectory({ studentName: "Ncha" }, dir);
-    expect(results).toHaveLength(1);
-    expect(results[0].score).toBe(50);
-    expect(results[0].matchBasis).toBe("student_name_fuzzy");
+    expect(results).toHaveLength(0);
   });
 
-  it("levenshtein distance 2 on studentName token still returns score 50", () => {
+  it("near-miss studentName (edit dist 2) also returns [] — fuzzy tier removed", () => {
     const dir = [
       student({ studentKey: "nicha.sw::parent", studentName: "Nicha Suwanprasert", parentName: "Parent" }),
     ];
-    // "Nicha" → "Ncha" = edit distance 1; "cha" → edit distance 2 from "nicha"
+    // "Ncha" (edit dist 1 from "nicha") still returns [] without fuzzy tier
     const results = matchNamesToDirectory({ studentName: "Ncha" }, dir);
-    expect(results[0].score).toBe(50);
+    expect(results).toHaveLength(0);
   });
 
-  it("parentName fuzzy score (35) is below SUGGEST_SHORTLIST_MIN_SCORE — returns [] alone", () => {
+  it("parentName near-miss returns [] — no fuzzy tier", () => {
     const dir = [
       student({ studentKey: "nicha.sw::parent", studentName: "Nicha Suwanprasert", parentName: "Mom Smith" }),
     ];
-    // "Smyth" has edit distance 1 from "smith" → parentName fuzzy score would be 35,
-    // but 35 < SUGGEST_SHORTLIST_MIN_SCORE (50), so the candidate is filtered out.
-    // parentName fuzzy only surfaces when a higher-tier match also contributes.
+    // "Smyth" is edit distance 1 from "smith" but without fuzzy no match fires
     const results = matchNamesToDirectory({ parentName: "Smyth" }, dir);
     expect(results).toHaveLength(0);
   });
 
-  it("parentName fuzzy match (score 35) can still surface via dedup — kept if another path scores higher", () => {
-    // If studentName also matches at a higher tier, the max score for that student wins.
-    // This test confirms parentName fuzzy score (35) is overridden by a token match (70).
+  it("studentName token match (score 70) wins when parentName near-miss contributes nothing", () => {
+    // studentName "Nicha" → token match on "nicha" → score 70.
+    // parentName "Smyth" near-miss "smith" → no match (fuzzy tier removed).
     const dir = [
       student({ studentKey: "nicha.sw::parent", studentName: "Nicha Suwanprasert", parentName: "Mom Smith" }),
     ];
-    // studentName "Nicha" → token match on "nicha" → score 70
-    // parentName "Smyth" → fuzzy "smith" → score 35 (would be filtered, but studentName wins at 70)
     const results = matchNamesToDirectory({ studentName: "Nicha", parentName: "Smyth" }, dir);
     expect(results).toHaveLength(1);
     expect(results[0].score).toBe(70);
@@ -319,7 +313,8 @@ describe("matchNamesToDirectory — deduplication and sort", () => {
     const s1 = student({ studentKey: "nicha.sw::parent", studentName: "Nicha Suwanprasert", parentName: "Parent A" });
     const s2 = student({ studentKey: "nisha.th::parent", studentName: "Nisha Thailand", parentName: "Parent B" });
     // s1: exact match on "Nicha Suwanprasert" → 90
-    // s2: fuzzy "nicha" → "nisha" edit dist 1 → 50
+    // s2: token "nicha" only → 70 on "nicha" alone (token subset); "nisha" is different
+    // Actually "nicha" is NOT in "Nisha Thailand" → s2 gets no match. s1 only.
     const results = matchNamesToDirectory({ studentName: "Nicha Suwanprasert" }, [s1, s2]);
     expect(results.length).toBeGreaterThanOrEqual(1);
     // Sorted descending
