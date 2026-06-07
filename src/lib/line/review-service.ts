@@ -1,4 +1,6 @@
+import { eq } from "drizzle-orm";
 import type { Database } from "@/lib/db";
+import * as schema from "@/lib/db/schema";
 import {
   aiSchedulerModel,
   isAiSchedulerConfigured,
@@ -132,10 +134,32 @@ export async function processLineMessageForScheduler(
 
   const profile = await fetchLineProfile(lineMessage.lineUserId).catch(() => null);
   await updateLineContactProfile(db, lineMessage.lineUserId, profile).catch(() => undefined);
+
+  // Read extractedState using the db parameter already in scope (per IDENT-01 RESOLVED).
+  // Never call getDb() inside a lib function — use the db param passed by the caller.
+  let extractedNames: { studentName?: string | null; parentName?: string | null } | undefined;
+  if (lineMessage.aiSchedulerConversationId) {
+    const conversationRow = await db
+      .select({ extractedState: schema.aiSchedulerConversations.extractedState })
+      .from(schema.aiSchedulerConversations)
+      .where(eq(schema.aiSchedulerConversations.id, lineMessage.aiSchedulerConversationId))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+    if (conversationRow?.extractedState) {
+      const state = conversationRow.extractedState as Record<string, unknown>;
+      const studentName = typeof state.studentName === "string" ? state.studentName : null;
+      const parentName = typeof state.parentName === "string" ? state.parentName : null;
+      if (studentName || parentName) {
+        extractedNames = { studentName, parentName };
+      }
+    }
+  }
+
   await ensureLineContactStudentLinkSuggestions(
     db,
     lineMessage.contactId,
     profile?.displayName ?? lineMessage.contactDisplayName,
+    extractedNames,    // NEW — undefined if no conversation or no names extracted (IDENT-01)
   ).catch(() => undefined);
 
   const recentMessages = await loadRecentLineMessages(db, lineMessage.threadId);
