@@ -48,9 +48,14 @@ export function buildExcludedPackageReasons(studentsCoursesSnapshot: SheetSnapsh
 
   studentsCoursesSnapshot.rows.forEach((row) => {
     const studentName = readTrimmedCell(row, studentsCoursesSnapshot.cols, "Student Name");
-    const className = readTrimmedCell(row, studentsCoursesSnapshot.cols, "Student Full Name");
-    const packageName = readTrimmedCell(row, studentsCoursesSnapshot.cols, "Class Subject");
-    const exclusionReason = getPackageExclusionReason(className, packageName);
+    // loadCreditControlSources (db.ts) stores the package NAME in "Student Full Name"
+    // and the SUBJECT in "Class Subject" for this snapshot. Detect a keyword in either,
+    // but key the map by the package NAME so it matches isExcludedPackage() lookups —
+    // those read the package name carried by the aggregations/upcoming/creditControl
+    // snapshots. Keying by subject here was the cause of Pretest packages leaking through.
+    const packageName = readTrimmedCell(row, studentsCoursesSnapshot.cols, "Student Full Name");
+    const subject = readTrimmedCell(row, studentsCoursesSnapshot.cols, "Class Subject");
+    const exclusionReason = getPackageExclusionReason(packageName, subject);
 
     if (!studentName || !packageName || !exclusionReason) return;
     excludedPackageReasons[buildStudentPackageKey(studentName, packageName)] = exclusionReason;

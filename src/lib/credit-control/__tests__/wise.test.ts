@@ -12,10 +12,12 @@ import {
 } from "@/lib/credit-control/helpers";
 import {
   buildActiveStudentSet,
+  buildExcludedPackageReasons,
   buildPendingDeductionContext,
   buildStudentAdminOwnershipMap,
   buildUpcomingSessionMap,
   getPackageExclusionReason,
+  isExcludedPackage,
 } from "@/lib/credit-control/packages";
 import type { SheetSnapshot } from "@/lib/credit-control/domain";
 
@@ -193,6 +195,21 @@ describe("credit-control business rules", () => {
     expect(getPackageExclusionReason("SAT Pretest", "SAT")).toBe("pretest");
     expect(getPackageExclusionReason("Math", "Trial Lesson")).toBe("trial");
     expect(getPackageExclusionReason("Math", "Regular Package")).toBeNull();
+  });
+
+  it("excludes a package whose name contains Pretest even when its subject differs", () => {
+    // Mirrors db.ts loadCreditControlSources: the studentsCourses snapshot carries
+    // the package NAME in "Student Full Name" and the SUBJECT in "Class Subject".
+    const studentsCourses = snapshot(
+      ["Student Name", "Student Full Name", "Class Subject"],
+      [["Ada", "SAT Pretest", "SAT"]],
+    );
+
+    const excluded = buildExcludedPackageReasons(studentsCourses);
+
+    // The dashboard looks packages up by their package NAME ("SAT Pretest") — the
+    // value carried by the aggregations/upcoming/creditControl snapshots.
+    expect(isExcludedPackage("Ada", "SAT Pretest", excluded)).toBe(true);
   });
 
   it("uses duration fallback for ended sessions without a positive credit-history match", () => {
