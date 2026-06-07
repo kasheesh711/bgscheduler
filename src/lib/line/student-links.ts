@@ -2,6 +2,7 @@ import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { matchNamesToDirectory, SUGGEST_SHORTLIST_MIN_SCORE } from "@/lib/line/name-matcher";
+import { fetchLineFollowerIds, fetchLineProfile, type LineProfile } from "@/lib/line/client";
 
 export type LineContactStudentLinkStatus = "suggested" | "verified" | "rejected";
 
@@ -727,4 +728,104 @@ export async function listVerifiedLineStudentKeys(
 export async function hasVerifiedLineStudentLink(db: Database, contactId: string): Promise<boolean> {
   const keys = await listVerifiedLineStudentKeys(db, contactId);
   return keys.length > 0;
+}
+
+// ── LINE Followers Re-anchor Job ────────────────────────────────────────────
+
+export interface LineFollowersReanchorResult {
+  followerCount: number;
+  upsertedContacts: number;
+  suggestionsCreated: number;
+  errors: string[];
+}
+
+/**
+ * Re-anchor job for IDENT-03: seeds correct-namespace contacts from the OA's
+ * real followers list. Idempotent — re-running creates no duplicate contacts.
+ *
+ * Step 1: Paginate fetchLineFollowerIds to collect all follower userIds.
+ * Step 2: For each follower, fetch LINE profile + upsert contact (onConflictDoNothing).
+ * Step 3: Run ensureLineContactStudentLinkSuggestions with names=undefined per follower.
+ *         Followers have no AI-extracted state at re-anchor time, so only the
+ *         display-name/dotted-code suggestion path runs. Name-based matching fires
+ *         per-message in Plan 11-03 for real messaging contacts.
+ */
+export async function runLineFollowersReanchor({ db }: { db: Database }): Promise<LineFollowersReanchorResult> {
+  // Step 1: Paginate fetchLineFollowerIds to collect all userIds
+  const allUserIds: string[] = [];
+  let cursor: string | undefined = undefined;
+  do {
+    const page = await fetchLineFollowerIds(cursor);
+    allUserIds.push(...page.userIds);
+    cursor = page.next;
+  } while (cursor);
+
+  const result: LineFollowersReanchorResult = {
+    followerCount: allUserIds.length,
+    upsertedContacts: 0,
+    suggestionsCreated: 0,
+    errors: [],
+  };
+
+  // Step 2: For each follower, fetchProfile + upsert contact + run matcher
+  for (const userId of allUserIds) {
+    try {
+      const profile = await fetchLineProfile(userId).catch(() => null);
+      const contactId = await upsertLineContactFromFollower(db, userId, profile);
+      if (contactId) {
+        result.upsertedContacts += 1;
+        // Step 3: Run the existing suggestion pipeline (display-name/dotted-code path only).
+        // No AI-extracted names for followers re-anchor — pass names=undefined.
+        const before = await db
+          .select({ id: schema.lineContactStudentLinks.id })
+          .from(schema.lineContactStudentLinks)
+          .where(eq(schema.lineContactStudentLinks.contactId, contactId));
+        await ensureLineContactStudentLinkSuggestions(
+          db,
+          contactId,
+          profile?.displayName ?? null,
+          undefined, // No AI-extracted names for followers re-anchor (display-name path only)
+        ).catch(() => undefined);
+        const after = await db
+          .select({ id: schema.lineContactStudentLinks.id })
+          .from(schema.lineContactStudentLinks)
+          .where(eq(schema.lineContactStudentLinks.contactId, contactId));
+        result.suggestionsCreated += after.length - before.length;
+      }
+    } catch (err) {
+      result.errors.push(`${userId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Upsert a line_contact from the followers list — idempotent on lineUserId unique index.
+ * Returns the contact id, or null if the contact could not be found after insert.
+ */
+async function upsertLineContactFromFollower(
+  db: Database,
+  lineUserId: string,
+  profile: LineProfile | null,
+): Promise<string | null> {
+  const values = {
+    lineUserId,
+    displayName: profile?.displayName ?? null,
+    pictureUrl: profile?.pictureUrl ?? null,
+    statusMessage: profile?.statusMessage ?? null,
+  };
+  const inserted = await db
+    .insert(schema.lineContacts)
+    .values(values)
+    .onConflictDoNothing({ target: schema.lineContacts.lineUserId })
+    .returning({ id: schema.lineContacts.id });
+  if (inserted.length > 0) return inserted[0].id;
+  // Contact already exists — fetch its id
+  const existing = await db
+    .select({ id: schema.lineContacts.id })
+    .from(schema.lineContacts)
+    .where(eq(schema.lineContacts.lineUserId, lineUserId))
+    .limit(1);
+  return existing[0]?.id ?? null;
 }
