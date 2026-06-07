@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildLineLinkValidationPagination,
   isLineValidationLeadEmail,
@@ -12,10 +12,20 @@ import {
   patchLineLinkValidationTaskStatus,
   type LineLinkValidationScope,
 } from "@/lib/line/link-validation";
+import { buildLineOperationalReviewPlan } from "@/lib/line/operational";
+import { patchLineSchedulerOperationalPlan } from "@/lib/line/data";
 
 // Top-level module mock — hoisted before all tests
 vi.mock("@/lib/line/student-links", () => ({
   listCurrentLineStudentsByKeys: vi.fn(async () => []),
+}));
+
+// IDENT-06: mocks for inline recompute dependencies
+vi.mock("@/lib/line/operational", () => ({
+  buildLineOperationalReviewPlan: vi.fn(),
+}));
+vi.mock("@/lib/line/data", () => ({
+  patchLineSchedulerOperationalPlan: vi.fn(),
 }));
 
 // ── DB mock helpers ────────────────────────────────────────────────────────────
@@ -354,5 +364,210 @@ describe("getLineLinkValidationSummary — phantom exclusion in count aggregates
     // remaining = assigned + unassigned = 5, total = 6
     expect(result.totals.remaining).toBe(5);
     expect(result.totals.total).toBe(6);
+  });
+});
+
+// ── New tests: patchLineLinkValidationTaskStatus re-link recompute (IDENT-06) ──
+
+/**
+ * Helper: builds a DB mock specifically for patchLineLinkValidationTaskStatus
+ * recompute tests. The function makes these DB calls in order:
+ *   1. update().set().where().returning() → [updatedLink]
+ *   2. select().from().where().limit(1) → [contact]   (contact fetch)
+ *   3. select().from().where() → [pendingReview(s)]   (pending reviews query, only if verified)
+ *   4. For each pending review:
+ *      a. select().from().where().limit(1).then() → [messageRow]
+ */
+function makeRecomputeDb(options: {
+  updatedLink?: Record<string, unknown>;
+  contact?: Record<string, unknown>;
+  pendingReviews?: Record<string, unknown>[];
+  messageRows?: Array<Record<string, unknown> | null>;
+}) {
+  const {
+    updatedLink = makeLink({ status: "verified", contactId: "contact-1" }),
+    contact = makeContact({ id: "contact-1" }),
+    pendingReviews = [],
+    messageRows = [],
+  } = options;
+
+  // Track select call count separately from update
+  let selectCallIndex = 0;
+  const selectSequence: unknown[] = [
+    [contact],        // select #1: contact fetch
+    pendingReviews,   // select #2: pending reviews query
+    ...messageRows.map((row) => (row ? [row] : [])), // select #3+: one per review (message fetch)
+    [],               // student enrichment (listCurrentLineStudentsByKeys via linkTaskToDto path)
+  ];
+
+  const updateChain = makeChain([updatedLink]);
+
+  return {
+    update: vi.fn(() => updateChain),
+    select: vi.fn(() => makeChain(selectSequence[selectCallIndex++] ?? [])),
+  } as unknown as Parameters<typeof patchLineLinkValidationTaskStatus>[0];
+}
+
+describe("patchLineLinkValidationTaskStatus — re-link recompute (IDENT-06)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("calls buildLineOperationalReviewPlan for pending reviews when status=verified", async () => {
+    const mockPlan = {
+      intentType: "cancel_one_off" as const,
+      intentPayload: { issues: [] },
+      matchedStudentKeys: ["nicha::somboon"],
+      candidateSessions: [],
+      proposedWiseActions: [],
+      adminSelectedSessionIds: [],
+      writebackStatus: "not_applicable" as const,
+      proposedDraft: "Dear parent...",
+    };
+
+    vi.mocked(buildLineOperationalReviewPlan).mockResolvedValue(mockPlan);
+    vi.mocked(patchLineSchedulerOperationalPlan).mockResolvedValue(null);
+
+    const db = makeRecomputeDb({
+      pendingReviews: [
+        {
+          id: "review-1",
+          inboundMessageId: "msg-1",
+          classifierCategory: "scheduling_change",
+        },
+      ],
+      messageRows: [{ text: "My child Nicha needs to cancel next class" }],
+    });
+
+    await patchLineLinkValidationTaskStatus(db, {
+      linkId: "link-1",
+      status: "verified",
+      actor: { email: "admin@example.com" },
+    });
+
+    expect(buildLineOperationalReviewPlan).toHaveBeenCalledOnce();
+    expect(buildLineOperationalReviewPlan).toHaveBeenCalledWith({
+      db,
+      contactId: "contact-1",
+      messageText: "My child Nicha needs to cancel next class",
+      classifierCategory: "scheduling_change",
+    });
+
+    expect(patchLineSchedulerOperationalPlan).toHaveBeenCalledOnce();
+    expect(patchLineSchedulerOperationalPlan).toHaveBeenCalledWith(
+      db,
+      "review-1",
+      expect.objectContaining({
+        matchedStudentKeys: ["nicha::somboon"],
+        intentType: "cancel_one_off",
+        writebackStatus: "not_applicable",
+        adminSelectedSessionIds: [],
+      }),
+    );
+  });
+
+  it("does NOT call buildLineOperationalReviewPlan when status=rejected", async () => {
+    vi.mocked(buildLineOperationalReviewPlan).mockResolvedValue({
+      intentType: "new_request",
+      intentPayload: { issues: [] },
+      matchedStudentKeys: [],
+      candidateSessions: [],
+      proposedWiseActions: [],
+      adminSelectedSessionIds: [],
+      writebackStatus: "not_applicable",
+      proposedDraft: "",
+    });
+
+    const db = makeRecomputeDb({});
+
+    await patchLineLinkValidationTaskStatus(db, {
+      linkId: "link-1",
+      status: "rejected",
+      actor: { email: "admin@example.com" },
+    });
+
+    expect(buildLineOperationalReviewPlan).not.toHaveBeenCalled();
+    expect(patchLineSchedulerOperationalPlan).not.toHaveBeenCalled();
+  });
+
+  it("continues loop for remaining reviews if one buildLineOperationalReviewPlan throws", async () => {
+    const mockPlan = {
+      intentType: "cancel_one_off" as const,
+      intentPayload: { issues: [] },
+      matchedStudentKeys: ["second::student"],
+      candidateSessions: [],
+      proposedWiseActions: [],
+      adminSelectedSessionIds: [],
+      writebackStatus: "not_applicable" as const,
+      proposedDraft: "",
+    };
+
+    vi.mocked(buildLineOperationalReviewPlan)
+      .mockRejectedValueOnce(new Error("Operational plan failed for first review"))
+      .mockResolvedValueOnce(mockPlan);
+    vi.mocked(patchLineSchedulerOperationalPlan).mockResolvedValue(null);
+
+    // Two pending reviews; first message missing (forces skip), second succeeds
+    const db = makeRecomputeDb({
+      pendingReviews: [
+        { id: "review-1", inboundMessageId: "msg-1", classifierCategory: "scheduling_change" },
+        { id: "review-2", inboundMessageId: "msg-2", classifierCategory: "scheduling_change" },
+      ],
+      messageRows: [
+        { text: "First message" },
+        { text: "Second message" },
+      ],
+    });
+
+    // Should not throw
+    await expect(
+      patchLineLinkValidationTaskStatus(db, {
+        linkId: "link-1",
+        status: "verified",
+        actor: { email: "admin@example.com" },
+      }),
+    ).resolves.not.toBeNull();
+
+    // buildLineOperationalReviewPlan called twice (once per review)
+    expect(buildLineOperationalReviewPlan).toHaveBeenCalledTimes(2);
+    // patchLineSchedulerOperationalPlan called only for the second review (first threw)
+    expect(patchLineSchedulerOperationalPlan).toHaveBeenCalledOnce();
+    expect(patchLineSchedulerOperationalPlan).toHaveBeenCalledWith(
+      db,
+      "review-2",
+      expect.objectContaining({ matchedStudentKeys: ["second::student"] }),
+    );
+  });
+
+  it("skips a review when its inbound message text is missing", async () => {
+    vi.mocked(buildLineOperationalReviewPlan).mockResolvedValue({
+      intentType: "new_request",
+      intentPayload: { issues: [] },
+      matchedStudentKeys: [],
+      candidateSessions: [],
+      proposedWiseActions: [],
+      adminSelectedSessionIds: [],
+      writebackStatus: "not_applicable",
+      proposedDraft: "",
+    });
+    vi.mocked(patchLineSchedulerOperationalPlan).mockResolvedValue(null);
+
+    const db = makeRecomputeDb({
+      pendingReviews: [
+        { id: "review-1", inboundMessageId: "msg-missing", classifierCategory: "scheduling_change" },
+      ],
+      // messageRows returns null — simulates message row not found
+      messageRows: [null],
+    });
+
+    await patchLineLinkValidationTaskStatus(db, {
+      linkId: "link-1",
+      status: "verified",
+      actor: { email: "admin@example.com" },
+    });
+
+    // buildLineOperationalReviewPlan must NOT be called when message text is absent
+    expect(buildLineOperationalReviewPlan).not.toHaveBeenCalled();
+    expect(patchLineSchedulerOperationalPlan).not.toHaveBeenCalled();
   });
 });
