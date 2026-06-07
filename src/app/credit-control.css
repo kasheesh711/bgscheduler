@@ -515,9 +515,19 @@ html[data-theme="dark"] .dashboard-page {
   transition: background-color 160ms ease;
 }
 
-.queue-table tbody tr:hover,
-.queue-table tbody tr.is-active {
+.queue-table tbody tr:hover {
   background: var(--blue-50);
+}
+
+/* Selected row: persistent, distinct from a transient hover (accent rail + stronger fill). */
+.queue-table tbody tr.is-active {
+  background: var(--blue-100);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.queue-card.is-active {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .sortable {
