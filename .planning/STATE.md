@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Autonomous LINE Scheduling
 status: executing
-stopped_at: "Completed 11-06: inline recompute of pending reviews on link verify (IDENT-06)"
+stopped_at: "Completed 11-07 Tasks 1-2: re-anchor button + phantom scope filter (awaiting human-verify checkpoint Task 3)"
 last_updated: "2026-06-07T08:22:15.429Z"
 last_activity: 2026-06-07
 progress:
