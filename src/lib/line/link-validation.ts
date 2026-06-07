@@ -783,11 +783,11 @@ export async function patchLineLinkValidationTaskStatus(
 
       await patchLineSchedulerOperationalPlan(db, review.id, {
         intentType: plan.intentType,
-        intentPayload: plan.intentPayload,
+        intentPayload: plan.intentPayload as unknown as Record<string, unknown>,
         proposedDraft: plan.proposedDraft,
         matchedStudentKeys: plan.matchedStudentKeys,
-        candidateSessions: plan.candidateSessions,
-        proposedWiseActions: plan.proposedWiseActions,
+        candidateSessions: plan.candidateSessions as unknown as Record<string, unknown>[],
+        proposedWiseActions: plan.proposedWiseActions as unknown as Record<string, unknown>[],
         adminSelectedSessionIds: [],
         writebackStatus: plan.writebackStatus,
       }).catch(() => undefined);

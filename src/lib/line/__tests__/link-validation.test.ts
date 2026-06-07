@@ -416,7 +416,7 @@ describe("patchLineLinkValidationTaskStatus — re-link recompute (IDENT-06)", (
   it("calls buildLineOperationalReviewPlan for pending reviews when status=verified", async () => {
     const mockPlan = {
       intentType: "cancel_one_off" as const,
-      intentPayload: { issues: [] },
+      intentPayload: { summary: "", confidence: 0, issues: [], source: "deterministic" as const },
       matchedStudentKeys: ["nicha::somboon"],
       candidateSessions: [],
       proposedWiseActions: [],
@@ -469,7 +469,7 @@ describe("patchLineLinkValidationTaskStatus — re-link recompute (IDENT-06)", (
   it("does NOT call buildLineOperationalReviewPlan when status=rejected", async () => {
     vi.mocked(buildLineOperationalReviewPlan).mockResolvedValue({
       intentType: "new_request",
-      intentPayload: { issues: [] },
+      intentPayload: { summary: "", confidence: 0, issues: [], source: "deterministic" as const },
       matchedStudentKeys: [],
       candidateSessions: [],
       proposedWiseActions: [],
@@ -493,7 +493,7 @@ describe("patchLineLinkValidationTaskStatus — re-link recompute (IDENT-06)", (
   it("continues loop for remaining reviews if one buildLineOperationalReviewPlan throws", async () => {
     const mockPlan = {
       intentType: "cancel_one_off" as const,
-      intentPayload: { issues: [] },
+      intentPayload: { summary: "", confidence: 0, issues: [], source: "deterministic" as const },
       matchedStudentKeys: ["second::student"],
       candidateSessions: [],
       proposedWiseActions: [],
@@ -542,7 +542,7 @@ describe("patchLineLinkValidationTaskStatus — re-link recompute (IDENT-06)", (
   it("skips a review when its inbound message text is missing", async () => {
     vi.mocked(buildLineOperationalReviewPlan).mockResolvedValue({
       intentType: "new_request",
-      intentPayload: { issues: [] },
+      intentPayload: { summary: "", confidence: 0, issues: [], source: "deterministic" as const },
       matchedStudentKeys: [],
       candidateSessions: [],
       proposedWiseActions: [],
