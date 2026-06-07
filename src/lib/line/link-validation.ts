@@ -7,7 +7,7 @@ type LinkRow = typeof schema.lineContactStudentLinks.$inferSelect;
 type ContactRow = typeof schema.lineContacts.$inferSelect;
 type AdminUserRow = typeof schema.adminUsers.$inferSelect;
 
-export type LineLinkValidationScope = "my" | "all" | "unassigned" | "verified" | "rejected";
+export type LineLinkValidationScope = "my" | "all" | "unassigned" | "verified" | "rejected" | "phantom";
 
 export interface LineLinkValidationActor {
   email?: string | null;
@@ -244,6 +244,11 @@ function lineOaResolverSourceCondition() {
   return eq(schema.lineContactStudentLinks.sourceKind, "line_oa_resolver");
 }
 
+// D-04/IDENT-05: real contact condition — excludes phantom OA-resolver rows from active scopes
+function realContactCondition() {
+  return eq(schema.lineContactStudentLinks.isPhantom, false);
+}
+
 function lineOaResolverRunCondition(runId: string) {
   return eq(schema.lineContactStudentLinks.sourceRunId, runId);
 }
@@ -374,7 +379,7 @@ export async function listLineLinkValidationReviewers(
       })
       .from(schema.lineContactStudentLinks)
       .where(and(
-        lineOaResolverSourceCondition(),
+        realContactCondition(),
         eq(schema.lineContactStudentLinks.status, "suggested"),
         sql`${schema.lineContactStudentLinks.validationAssignedToEmail} IS NOT NULL`,
         ...(runId ? [lineOaResolverRunCondition(runId)] : []),
@@ -412,10 +417,20 @@ export async function listLineLinkValidationTasks(
 }> {
   const actor = actorFromInput(input.actor);
   const paging = normalizeLineLinkValidationPagination(input);
-  const conditions: SQL[] = [lineOaResolverSourceCondition()];
+
+  // D-03: "phantom" scope is the archive filter — shows only quarantined rows.
+  // All other (active) scopes use realContactCondition() to exclude phantoms.
+  const isPhantomScope = input.scope === "phantom";
+  const conditions: SQL[] = [
+    isPhantomScope
+      ? eq(schema.lineContactStudentLinks.isPhantom, true)
+      : realContactCondition(),
+  ];
   if (input.runId) conditions.push(lineOaResolverRunCondition(input.runId));
 
-  if (input.scope === "my") {
+  if (isPhantomScope) {
+    // D-03 archive filter: no additional status constraints — return all phantom rows regardless of status
+  } else if (input.scope === "my") {
     if (!actor.email) {
       return {
         tasks: [],
@@ -481,7 +496,8 @@ export async function getLineLinkValidationSummary(
     return emptySummary(input.runId, false);
   }
 
-  const conditions: SQL[] = [lineOaResolverSourceCondition()];
+  // IDENT-05: all count aggregates exclude phantom rows via realContactCondition()
+  const conditions: SQL[] = [realContactCondition()];
   if (input.runId) conditions.push(lineOaResolverRunCondition(input.runId));
   const where = and(...conditions);
   const reviewerEmail = sql<string>`coalesce(${schema.lineContactStudentLinks.reviewedByEmail}, ${schema.lineContactStudentLinks.validationAssignedToEmail})`;
@@ -650,7 +666,7 @@ export async function assignLineLinkValidationTasks(
   });
 
   const conditions = [
-    lineOaResolverSourceCondition(),
+    realContactCondition(),
     lineOaResolverRunCondition(input.runId),
     eq(schema.lineContactStudentLinks.status, "suggested"),
   ];
@@ -719,7 +735,7 @@ export async function patchLineLinkValidationTaskStatus(
     })
     .where(and(
       eq(schema.lineContactStudentLinks.id, input.linkId),
-      lineOaResolverSourceCondition(),
+      eq(schema.lineContactStudentLinks.isPhantom, false),
     ))
     .returning();
   if (!row) return null;
