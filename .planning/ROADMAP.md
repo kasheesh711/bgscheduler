@@ -34,7 +34,7 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 
 ### v1.2 Autonomous LINE Scheduling (in progress)
 
-- [ ] **Phase 11: IDENT-01 Webhook-Side LINE Identity Resolution** — Link the parents who actually message the LINE OA (Messaging-API webhook `source.userId`) to Wise students via content-based suggestions + `followers/ids` re-anchor + re-pointed Mapping Validation; quarantine the ~520 wrong-namespace OA-resolver phantoms. Foundation for autonomous LINE scheduling. (spec'd 2026-06-06 — see `phases/11-*/11-SPEC.md`)
+- [x] **Phase 11: IDENT-01 Webhook-Side LINE Identity Resolution** — Link the parents who actually message the LINE OA (Messaging-API webhook `source.userId`) to Wise students via content-based suggestions + `followers/ids` re-anchor + re-pointed Mapping Validation; quarantine the ~520 wrong-namespace OA-resolver phantoms. Foundation for autonomous LINE scheduling. (spec'd 2026-06-06 — see `phases/11-*/11-SPEC.md`) (completed 2026-06-07)
 
 ## Phase Details
 
@@ -227,13 +227,13 @@ Archive: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   4. The Mapping Validation UI surfaces + verifies suggestions on real contacts; the ~520 wrong-namespace OA-resolver phantom contacts/links are quarantined (flagged + excluded from counts/queues, not deleted)
   5. Verifying a link refreshes the contact's pending review badge + plan without a manual recompute; all existing tests continue to pass
 **Plans**: 7 plans
-  - [ ] 11-01-PLAN.md — isPhantom schema column + Drizzle migration + data quarantine of ~520 phantom rows (IDENT-05 foundation)
-  - [ ] 11-02-PLAN.md — name-matcher.ts (3-tier deterministic: exact NFKC → token overlap → Levenshtein ≤ 2) + unit tests + precision/recall eval set (IDENT-01)
-  - [ ] 11-03-PLAN.md — Wire name matcher into ensureLineContactStudentLinkSuggestions + processLineMessageForScheduler + isPhantom filter on listVerifiedLineStudentKeys (IDENT-01/02)
-  - [ ] 11-04-PLAN.md — fetchLineFollowerIds in client.ts + runLineFollowersReanchor + POST /api/line/contacts/followers-reanchor (IDENT-03)
-  - [ ] 11-05-PLAN.md — Widen worklist scope (drop OA-resolver-only filter), phantom exclusion on all counts, verify guard fix, phantom archive scope (IDENT-04/05)
-  - [ ] 11-06-PLAN.md — Inline re-link recompute on verify (buildLineOperationalReviewPlan + patchLineSchedulerOperationalPlan) (IDENT-06)
-  - [ ] 11-07-PLAN.md — Re-anchor button + archive filter in mapping-validation-workspace.tsx + human verify checkpoint (IDENT-03/04/05/06)
+  - [x] 11-01-PLAN.md — isPhantom schema column + Drizzle migration + data quarantine of ~520 phantom rows (IDENT-05 foundation)
+  - [x] 11-02-PLAN.md — name-matcher.ts (3-tier deterministic: exact NFKC → token overlap → Levenshtein ≤ 2) + unit tests + precision/recall eval set (IDENT-01)
+  - [x] 11-03-PLAN.md — Wire name matcher into ensureLineContactStudentLinkSuggestions + processLineMessageForScheduler + isPhantom filter on listVerifiedLineStudentKeys (IDENT-01/02)
+  - [x] 11-04-PLAN.md — fetchLineFollowerIds in client.ts + runLineFollowersReanchor + POST /api/line/contacts/followers-reanchor (IDENT-03)
+  - [x] 11-05-PLAN.md — Widen worklist scope (drop OA-resolver-only filter), phantom exclusion on all counts, verify guard fix, phantom archive scope (IDENT-04/05)
+  - [x] 11-06-PLAN.md — Inline re-link recompute on verify (buildLineOperationalReviewPlan + patchLineSchedulerOperationalPlan) (IDENT-06)
+  - [x] 11-07-PLAN.md — Re-anchor button + archive filter in mapping-validation-workspace.tsx + human verify checkpoint (IDENT-03/04/05/06)
 **UI hint**: yes
 
 ## Next Milestone
@@ -257,4 +257,4 @@ v1.2 Autonomous LINE Scheduling is the active milestone (started 2026-06-06). Ph
 | 8.7. Operational Maturity | v1.1 | 5/5 | Complete | 2026-05-05 |
 | 9. VPOL-03 Density Overview | v1.1 | 3/3 | Complete | 2026-05-08 |
 | 10. VPOL-01 View Transitions | v1.1 | 4/4 | Complete    | 2026-05-09 |
-| 11. IDENT-01 Webhook-Side LINE Identity Resolution | v1.2 | 0/7 | Planned | - |
+| 11. IDENT-01 Webhook-Side LINE Identity Resolution | v1.2 | 7/7 | Complete    | 2026-06-07 |
