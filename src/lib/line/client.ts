@@ -60,6 +60,33 @@ export async function fetchLineProfile(userId: string): Promise<LineProfile | nu
   };
 }
 
+export interface LineFollowersPage {
+  userIds: string[];
+  next: string | undefined;
+}
+
+export async function fetchLineFollowerIds(startCursor?: string): Promise<LineFollowersPage> {
+  const url = new URL(`${LINE_API_BASE}/v2/bot/followers/ids`);
+  url.searchParams.set("limit", "300");
+  if (startCursor) url.searchParams.set("start", startCursor);
+
+  const response = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${lineAccessToken()}` },
+  });
+
+  // Note: no 404 case for followers/ids (unlike fetchLineProfile)
+  const payload = asRecord(await response.json().catch(() => ({})));
+  if (!response.ok) {
+    throw new Error(typeof payload.message === "string" ? payload.message : `LINE followers/ids returned HTTP ${response.status}`);
+  }
+
+  const userIds = Array.isArray(payload.userIds)
+    ? payload.userIds.filter((id): id is string => typeof id === "string")
+    : [];
+  const next = typeof payload.next === "string" ? payload.next : undefined;
+  return { userIds, next };
+}
+
 export async function pushLineTextMessage(input: {
   to: string;
   text: string;
