@@ -102,6 +102,7 @@ export interface DashboardModelResult {
     previousUpdatedAt: string | null;
     summary: SummaryPayload;
     studentQueue: StudentQueueRow[];
+    studentQueueAll: StudentQueueRow[];
     calendar: CalendarPayload;
     students: StudentRecord[];
   };

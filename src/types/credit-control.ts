@@ -218,6 +218,12 @@ export interface DashboardPayload {
   previousUpdatedAt: string | null;
   summary: SummaryPayload;
   studentQueue: StudentQueueRow[];
+  /**
+   * All active students as queue rows (no `includeInQueue` filter). The default
+   * worklist uses `studentQueue` (at-risk only); the client switches to this list
+   * when a search term is active so any active student is reachable by search.
+   */
+  studentQueueAll: StudentQueueRow[];
   calendar: CalendarPayload;
   students: StudentRecord[];
 }

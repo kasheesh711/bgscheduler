@@ -170,13 +170,25 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
     return data.studentQueue.filter((row) => isQueueRowVisibleForCurrentAdmin(row, adminView));
   }, [adminView, data]);
 
+  // All active students (admin-scoped). Used as the worklist source only while a
+  // search is active, so any active student is reachable by search — not just the
+  // at-risk queue. The summary/calendar keep using the at-risk `adminScopedQueue`.
+  const adminScopedQueueAll = useMemo(() => {
+    if (!data) return [];
+    const source = data.studentQueueAll ?? data.studentQueue;
+    return source.filter((row) => isQueueRowVisibleForCurrentAdmin(row, adminView));
+  }, [adminView, data]);
+
   const adminScopedSummary = useMemo(
     () => buildAdminScopedSummary(adminScopedStudents, adminScopedQueue),
     [adminScopedQueue, adminScopedStudents],
   );
 
   const filteredQueue = useMemo(() => {
-    return adminScopedQueue.filter((row) => {
+    // While searching, widen the worklist to all active students so a searched
+    // student appears even if they are not in the at-risk queue.
+    const base = deferredSearch ? adminScopedQueueAll : adminScopedQueue;
+    return base.filter((row) => {
       const matchesRisk =
         riskFilter === "all"
           ? true
@@ -186,7 +198,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
       const matchesSearch = !deferredSearch || row.searchText.includes(deferredSearch);
       return matchesRisk && matchesSearch;
     });
-  }, [adminScopedQueue, deferredSearch, riskFilter]);
+  }, [adminScopedQueue, adminScopedQueueAll, deferredSearch, riskFilter]);
 
   const sortedQueue = useMemo(() => {
     const direction = currentSort.dir === "asc" ? 1 : -1;

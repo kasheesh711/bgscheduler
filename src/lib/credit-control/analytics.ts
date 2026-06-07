@@ -45,7 +45,8 @@ export function buildDashboardModel(
     }
   });
 
-  const studentQueue = buildStudentQueue(students);
+  const studentQueueAll = buildAllStudentQueueRows(students);
+  const studentQueue = studentQueueAll.filter((row) => row.includeInQueue);
   const summary = buildSummary(students, packageRows, previousSnapshot, studentQueue);
   const calendar = buildCalendarData(students, studentQueue, today);
   const snapshotForPersistence = buildSnapshotForPersistence(summary, packageRows, now);
@@ -58,6 +59,7 @@ export function buildDashboardModel(
       previousUpdatedAt: previousSnapshot ? previousSnapshot.generatedAt : null,
       summary,
       studentQueue,
+      studentQueueAll,
       calendar,
       students,
     },
@@ -203,11 +205,14 @@ function compareQueueRows(a: PackageRow, b: PackageRow) {
   return a.student.localeCompare(b.student);
 }
 
-export function buildStudentQueue(students: StudentRecord[]): StudentQueueRow[] {
+export function buildAllStudentQueueRows(students: StudentRecord[]): StudentQueueRow[] {
   return students
     .map((student, studentIndex) => buildStudentQueueRow(student, studentIndex))
-    .filter((row) => row.includeInQueue)
     .sort(compareStudentQueueRows);
+}
+
+export function buildStudentQueue(students: StudentRecord[]): StudentQueueRow[] {
+  return buildAllStudentQueueRows(students).filter((row) => row.includeInQueue);
 }
 
 export function buildStudentQueueRow(student: StudentRecord, studentIndex: number): StudentQueueRow {
