@@ -31,10 +31,10 @@ describe("POST /api/line/contacts/followers-reanchor", () => {
       errors: [],
     });
     vi.mocked(runLineBacklogRecovery).mockResolvedValue({
-      contactsScanned: 10,
+      contactsScanned: 1962,
       targetsCount: 662,
-      matchedCount: 5,
-      insertedCount: 5,
+      matchedCount: 229,
+      insertedCount: 229,
       dryRun: false,
     });
   });
@@ -47,14 +47,34 @@ describe("POST /api/line/contacts/followers-reanchor", () => {
     expect(runLineBacklogRecovery).not.toHaveBeenCalled();
   });
 
-  it("calls runLineFollowersReanchor + runLineBacklogRecovery and returns combined result", async () => {
+  it("calls runLineFollowersReanchor + runLineBacklogRecovery on non-dryRun and returns combined result", async () => {
     const res = await POST(makeRequest());
     expect(res.status).toBe(200);
     expect(runLineFollowersReanchor).toHaveBeenCalledWith({ db: { db: true } });
     expect(runLineBacklogRecovery).toHaveBeenCalledWith({ db: { db: true }, dryRun: false });
     const body = await res.json();
     expect(body.reanchor.followerCount).toBe(5);
-    expect(body.backlog.matchedCount).toBe(5);
+    expect(body.backlog.matchedCount).toBe(229);
+  });
+
+  it("skips runLineFollowersReanchor on dryRun=true — reanchor is null", async () => {
+    vi.mocked(runLineBacklogRecovery).mockResolvedValue({
+      contactsScanned: 1962,
+      targetsCount: 662,
+      matchedCount: 229,
+      insertedCount: 0,
+      dryRun: true,
+      dryRunMatches: [],
+    });
+    const res = await POST(makeRequest("http://localhost/api/line/contacts/followers-reanchor?dryRun=true"));
+    expect(res.status).toBe(200);
+    // reanchor MUST NOT be called when dryRun=true
+    expect(runLineFollowersReanchor).not.toHaveBeenCalled();
+    expect(runLineBacklogRecovery).toHaveBeenCalledWith({ db: { db: true }, dryRun: true });
+    const body = await res.json();
+    expect(body.reanchor).toBeNull();
+    expect(body.backlog.dryRun).toBe(true);
+    expect(body.backlog.insertedCount).toBe(0);
   });
 
   it("passes dryRun=true to runLineBacklogRecovery when ?dryRun=true", async () => {

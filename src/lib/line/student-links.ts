@@ -839,7 +839,7 @@ export async function listVerifiedResolverTargets(
  * Upsert a line_contact from the followers list — idempotent on lineUserId unique index.
  * Returns the contact id, or null if the contact could not be found after insert.
  */
-async function upsertLineContactFromFollower(
+export async function upsertLineContactFromFollower(
   db: Database,
   lineUserId: string,
   profile: LineProfile | null,
