@@ -29,8 +29,75 @@
   color: var(--text);
 }
 
+/* Dark theme — the page now respects the app theme instead of forcing light.
+   First-draft OKLCH palette; tune lightness/chroma during visual review. */
 html[data-theme="dark"] .dashboard-page {
-  color-scheme: light;
+  color-scheme: dark;
+  --bg: oklch(0.21 0.02 255);
+  --blue-25: oklch(0.25 0.025 245);
+  --blue-50: oklch(0.29 0.04 245);
+  --blue-100: oklch(0.35 0.06 245);
+  --panel: oklch(0.24 0.02 255);
+  --panel-strong: oklch(0.28 0.025 255);
+  --panel-border: oklch(0.39 0.03 255);
+  --text: oklch(0.95 0.01 255);
+  --muted: oklch(0.73 0.025 255);
+  --accent: oklch(0.62 0.17 245);
+  --accent-strong: oklch(0.72 0.17 245);
+  --success: oklch(0.72 0.14 155);
+  --error: oklch(0.72 0.19 25);
+  --notify: oklch(0.72 0.19 25);
+  --watch: oklch(0.79 0.15 70);
+  --ok: oklch(0.72 0.14 155);
+  --nodata: oklch(0.68 0.02 255);
+  --surface: oklch(0.24 0.02 255);
+  --shadow: 0 14px 36px oklch(0 0 0 / 45%);
+}
+
+/* Dark equivalents for the status/calendar backgrounds that are hardcoded light. */
+html[data-theme="dark"] .dashboard-page .calendar-severity-pill.urgent,
+html[data-theme="dark"] .dashboard-page .calendar-action-pill.urgent,
+html[data-theme="dark"] .dashboard-page .tone-notify,
+html[data-theme="dark"] .dashboard-page .tone-error {
+  background: oklch(0.33 0.08 25);
+}
+
+html[data-theme="dark"] .dashboard-page .calendar-severity-pill.watch,
+html[data-theme="dark"] .dashboard-page .calendar-action-pill.watch,
+html[data-theme="dark"] .dashboard-page .tone-watch,
+html[data-theme="dark"] .dashboard-page .tone-action-pending-callback {
+  background: oklch(0.34 0.07 70);
+}
+
+html[data-theme="dark"] .dashboard-page .calendar-severity-pill.scheduled,
+html[data-theme="dark"] .dashboard-page .calendar-action-pill.scheduled,
+html[data-theme="dark"] .dashboard-page .tone-ok,
+html[data-theme="dark"] .dashboard-page .tone-action-resolved,
+html[data-theme="dark"] .dashboard-page .tone-success,
+html[data-theme="dark"] .dashboard-page .tone-action-contacted {
+  background: oklch(0.33 0.07 155);
+}
+
+html[data-theme="dark"] .dashboard-page .calendar-cell.has-urgent {
+  background: oklch(0.3 0.06 25);
+}
+
+html[data-theme="dark"] .dashboard-page .calendar-cell.has-watch {
+  background: oklch(0.31 0.05 70);
+}
+
+html[data-theme="dark"] .dashboard-page .calendar-cell.has-scheduled {
+  background: oklch(0.3 0.05 155);
+}
+
+html[data-theme="dark"] .dashboard-page .search-highlight {
+  background: oklch(0.52 0.12 80);
+  color: oklch(0.98 0 0);
+}
+
+html[data-theme="dark"] .dashboard-page .skeleton::after,
+html[data-theme="dark"] .dashboard-page .skeleton-panel::after {
+  background: linear-gradient(90deg, transparent, oklch(0.42 0.03 245 / 55%), transparent);
 }
 
 .dashboard-page *,

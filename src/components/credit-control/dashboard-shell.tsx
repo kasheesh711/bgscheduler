@@ -79,10 +79,6 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   const actionHistoryCache = useRef<Record<string, ActionHistoryEntry[]>>({});
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
 
-  useEffect(() => {
-    document.documentElement.removeAttribute("data-theme");
-  }, []);
-
   const queuePanelRef = useRef<QueuePanelHandle>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
