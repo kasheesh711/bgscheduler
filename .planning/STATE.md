@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Autonomous LINE Scheduling
-status: milestone_complete
-stopped_at: "Completed 11-07 Tasks 1-2: re-anchor button + phantom scope filter (awaiting human-verify checkpoint Task 3)"
-last_updated: "2026-06-07T08:22:15.429Z"
+status: completed
+stopped_at: "Completed 11-06: inline recompute of pending reviews on link verify (IDENT-06)"
+last_updated: "2026-06-07T16:54:33.201Z"
 last_activity: 2026-06-07
 progress:
-  total_phases: 10
+  total_phases: 11
   completed_phases: 10
-  total_plans: 60
-  completed_plans: 59
-  percent: 100
+  total_plans: 65
+  completed_plans: 60
+  percent: 92
 ---
 
 # Project State
@@ -151,4 +151,4 @@ Resume: run `/gsd-progress` to review v1.1 completion status.
 
 **Completed Phase:** 08.7 (Operational Maturity) — 5 plans — 2026-05-05T04:20:52Z
 
-**Planned Phase:** 11 (IDENT-01 Webhook-Side LINE Identity Resolution) — 7 plans — 2026-06-06T16:09:50.564Z
+**Planned Phase:** 12 (LINE Backlog Identity Recovery (IDENT-07)) — 5 plans — 2026-06-07T16:54:33.190Z
