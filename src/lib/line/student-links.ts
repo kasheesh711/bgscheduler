@@ -1,6 +1,7 @@
 import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { matchNamesToDirectory, SUGGEST_SHORTLIST_MIN_SCORE } from "@/lib/line/name-matcher";
 
 export type LineContactStudentLinkStatus = "suggested" | "verified" | "rejected";
 
@@ -416,7 +417,12 @@ export function resolveLineStudentCodeMatches(
 }
 
 function studentLinkEvidence(input: {
-  source: "line_display_name" | "admin_helper_text" | "admin_search";
+  source:
+    | "line_display_name"
+    | "admin_helper_text"
+    | "admin_search"
+    | "message_content"
+    | "line_followers";
   parsedCodes?: ParsedLineStudentCode[];
   matchedCode?: string;
   matchedField?: LineStudentMatchType;
@@ -451,12 +457,11 @@ export async function ensureLineContactStudentLinkSuggestions(
   db: Database,
   contactId: string,
   labelOverride?: string | null,
+  names?: { studentName?: string | null; parentName?: string | null },
 ): Promise<LineContactStudentLinkDto[]> {
   const label = labelOverride ?? await contactLabel(db, contactId);
   const students = await listCurrentLineStudents(db);
   const { matches, evidenceSource, parsedCodes } = resolveLineStudentCodeMatches(label, students);
-
-  if (matches.length === 0) return listLineContactStudentLinks(db, contactId);
 
   for (const match of matches) {
     await db
@@ -484,6 +489,36 @@ export async function ensureLineContactStudentLinkSuggestions(
           schema.lineContactStudentLinks.studentKey,
         ],
       });
+  }
+
+  // Name-based matching — per IDENT-01 (source: "message_content")
+  if (names) {
+    const nameCandidates = matchNamesToDirectory(names, students);
+    for (const candidate of nameCandidates) {
+      if (candidate.score < SUGGEST_SHORTLIST_MIN_SCORE) continue;
+      await db
+        .insert(schema.lineContactStudentLinks)
+        .values({
+          contactId,
+          wiseStudentId: candidate.student.wiseStudentId,
+          studentKey: candidate.student.studentKey,
+          studentName: candidate.student.studentName,
+          parentName: candidate.student.parentName,
+          status: "suggested",          // ALWAYS suggested — NEVER verified from content (IDENT-02)
+          confidence: candidate.score / 100,
+          evidence: studentLinkEvidence({
+            source: "message_content",
+            student: candidate.student,
+          }),
+          sourceKind: "message_content",
+        })
+        .onConflictDoNothing({
+          target: [
+            schema.lineContactStudentLinks.contactId,
+            schema.lineContactStudentLinks.studentKey,
+          ],
+        });
+    }
   }
 
   return listLineContactStudentLinks(db, contactId);
@@ -684,6 +719,7 @@ export async function listVerifiedLineStudentKeys(
     .where(and(
       eq(schema.lineContactStudentLinks.contactId, contactId),
       eq(schema.lineContactStudentLinks.status, "verified"),
+      eq(schema.lineContactStudentLinks.isPhantom, false),   // NEW per IDENT-05: excludes quarantined phantom rows
     ));
   return rows.map((row) => row.studentKey);
 }
