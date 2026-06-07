@@ -19,11 +19,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Student not found" }, { status: 404 });
     }
 
+    // Record the balance at removal so reactivation requires a genuine top-up
+    // above this level (matches the auto-churn reactivation rule).
+    const removedAtRemaining = student.packages.reduce((sum, pkg) => sum + pkg.currentRemaining, 0);
     await markInactiveStudent({
       studentKey,
       studentName: student.student,
       parentName: student.parent,
       markedByEmail: sessionUser.email,
+      source: "manual",
+      removedAtRemaining,
     });
 
     return NextResponse.json({ ok: true });

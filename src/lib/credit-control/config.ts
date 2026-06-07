@@ -12,6 +12,11 @@ export const CREDIT_CONTROL_CACHE_TAG = "credit-control";
 export const DASHBOARD_CACHE_REVALIDATE_SECONDS = 60;
 export const SHEETS_IN_MEMORY_TTL_MS = 15_000;
 export const HISTORY_LIMIT = 12;
+/** Consecutive days at <= 0 remaining credits before a student is auto-removed from the worklist. */
+export const CHURN_INACTIVITY_DAYS = 45;
+/** Synthetic actor for system-driven follow-up log / inactive writes (auto churn). */
+export const CREDIT_SYSTEM_ACTOR_EMAIL = "system@begifted.local";
+export const CREDIT_SYSTEM_ACTOR_NAME = "System";
 
 export const SHEET_AGGREGATIONS = "Aggregations";
 export const SHEET_CREDIT_CONTROL = "Credit_Control";

@@ -49,6 +49,10 @@ export interface InactiveInput {
   studentName: string;
   parentName: string;
   markedByEmail: string;
+  /** "manual" (default) or "auto-churn". */
+  source?: string;
+  /** Total remaining credits at removal; used for genuine-top-up reactivation. */
+  removedAtRemaining?: number | null;
 }
 
 export interface AdminOwnershipInput {
@@ -252,9 +256,18 @@ export async function listCreditInactive(db: Database = getDb()) {
 }
 
 export async function markCreditInactive(input: InactiveInput, db: Database = getDb()): Promise<void> {
+  const source = input.source ?? "manual";
+  const removedAtRemaining = input.removedAtRemaining ?? null;
   await db
     .insert(schema.creditControlInactiveStudents)
-    .values(input)
+    .values({
+      studentKey: input.studentKey,
+      studentName: input.studentName,
+      parentName: input.parentName,
+      markedByEmail: input.markedByEmail,
+      source,
+      removedAtRemaining,
+    })
     .onConflictDoUpdate({
       target: schema.creditControlInactiveStudents.studentKey,
       set: {
@@ -262,6 +275,8 @@ export async function markCreditInactive(input: InactiveInput, db: Database = ge
         parentName: input.parentName,
         markedAt: new Date(),
         markedByEmail: input.markedByEmail,
+        source,
+        removedAtRemaining,
       },
     });
 }

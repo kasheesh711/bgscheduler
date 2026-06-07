@@ -652,6 +652,22 @@ export const creditControlInactiveStudents = pgTable("credit_control_inactive_st
   parentName: text("parent_name").notNull(),
   markedAt: timestamp("marked_at", { withTimezone: true }).notNull().defaultNow(),
   markedByEmail: text("marked_by_email").notNull(),
+  // "manual" (admin clicked No Longer Active) or "auto-churn" (45-day zero-credit rule).
+  source: text("source").notNull().default("manual"),
+  // Total remaining credits when removed; reactivation requires a genuine top-up above max(this, 0).
+  removedAtRemaining: doublePrecision("removed_at_remaining"),
+});
+
+// Tracks how long each student has continuously held <= 0 remaining credits, so the
+// sync can auto-remove them after CHURN_INACTIVITY_DAYS. Keyed by studentKey (survives
+// snapshot rotation); the row is cleared the moment a student recovers above zero.
+export const creditControlZeroBalanceTracking = pgTable("credit_control_zero_balance_tracking", {
+  studentKey: text("student_key").primaryKey(),
+  studentName: text("student_name").notNull(),
+  parentName: text("parent_name").notNull(),
+  zeroSince: timestamp("zero_since", { withTimezone: true }).notNull().defaultNow(),
+  lastRemaining: doublePrecision("last_remaining").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const creditControlAdminOwnership = pgTable("credit_control_admin_ownership", {

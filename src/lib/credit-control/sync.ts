@@ -1,9 +1,16 @@
 import { revalidateTag } from "next/cache";
-import { sql } from "drizzle-orm";
+import { inArray, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { WiseClient } from "@/lib/wise/client";
-import { CREDIT_CONTROL_CACHE_TAG, EXCLUDED_PACKAGE_KEYWORDS } from "@/lib/credit-control/config";
+import {
+  CHURN_INACTIVITY_DAYS,
+  CREDIT_CONTROL_CACHE_TAG,
+  CREDIT_SYSTEM_ACTOR_EMAIL,
+  CREDIT_SYSTEM_ACTOR_NAME,
+  EXCLUDED_PACKAGE_KEYWORDS,
+} from "@/lib/credit-control/config";
+import { aggregateStudentRemaining, computeChurnTransitions } from "@/lib/credit-control/churn";
 import { buildDashboardStudentKey, buildStudentPackageKey, normalizeText } from "@/lib/credit-control/helpers";
 import {
   durationMsToMinutes,
@@ -480,6 +487,141 @@ async function insertChunks<T extends Record<string, unknown>>(
   }
 }
 
+/**
+ * Maintain the churn lifecycle from the freshly-promoted snapshot's package rows.
+ * Runs at sync time (the only point balances change): advances each student's
+ * zero-credit streak, auto-removes students past CHURN_INACTIVITY_DAYS at <= 0
+ * remaining credits, and reactivates removed students on a genuine top-up. Uses
+ * raw Drizzle ops (consistent with this module) so the pure churn logic in
+ * churn.ts stays free of DB/env imports. Best-effort: the caller swallows errors
+ * so churn never rolls back the promoted snapshot.
+ */
+async function applyChurnMaintenance(
+  db: Database,
+  packageRows: Array<typeof schema.creditControlPackages.$inferInsert>,
+  now: Date,
+): Promise<void> {
+  const students = aggregateStudentRemaining(
+    packageRows.map((row) => ({
+      studentKey: row.studentKey,
+      studentName: row.studentName,
+      parentName: row.parentName ?? "",
+      remainingCredits: row.remainingCredits ?? 0,
+      excludedReason: row.excludedReason ?? null,
+    })),
+  );
+
+  const [tracking, inactive] = await Promise.all([
+    db
+      .select({
+        studentKey: schema.creditControlZeroBalanceTracking.studentKey,
+        zeroSince: schema.creditControlZeroBalanceTracking.zeroSince,
+      })
+      .from(schema.creditControlZeroBalanceTracking),
+    db
+      .select({
+        studentKey: schema.creditControlInactiveStudents.studentKey,
+        studentName: schema.creditControlInactiveStudents.studentName,
+        parentName: schema.creditControlInactiveStudents.parentName,
+        source: schema.creditControlInactiveStudents.source,
+        removedAtRemaining: schema.creditControlInactiveStudents.removedAtRemaining,
+      })
+      .from(schema.creditControlInactiveStudents),
+  ]);
+
+  const transitions = computeChurnTransitions({
+    students,
+    tracking,
+    inactive: inactive.map((row) => ({
+      studentKey: row.studentKey,
+      source: row.source,
+      removedAtRemaining: row.removedAtRemaining,
+    })),
+    now,
+    thresholdDays: CHURN_INACTIVITY_DAYS,
+  });
+
+  if (transitions.zeroClears.length > 0) {
+    await db
+      .delete(schema.creditControlZeroBalanceTracking)
+      .where(inArray(schema.creditControlZeroBalanceTracking.studentKey, transitions.zeroClears));
+  }
+
+  for (const upsert of transitions.zeroUpserts) {
+    await db
+      .insert(schema.creditControlZeroBalanceTracking)
+      .values({
+        studentKey: upsert.studentKey,
+        studentName: upsert.studentName,
+        parentName: upsert.parentName,
+        zeroSince: upsert.zeroSince,
+        lastRemaining: upsert.lastRemaining,
+      })
+      .onConflictDoUpdate({
+        target: schema.creditControlZeroBalanceTracking.studentKey,
+        set: {
+          studentName: upsert.studentName,
+          parentName: upsert.parentName,
+          zeroSince: upsert.zeroSince,
+          lastRemaining: upsert.lastRemaining,
+          updatedAt: now,
+        },
+      });
+  }
+
+  for (const row of transitions.toInactivate) {
+    await db
+      .insert(schema.creditControlInactiveStudents)
+      .values({
+        studentKey: row.studentKey,
+        studentName: row.studentName,
+        parentName: row.parentName,
+        markedByEmail: CREDIT_SYSTEM_ACTOR_EMAIL,
+        source: "auto-churn",
+        removedAtRemaining: row.removedAtRemaining,
+      })
+      .onConflictDoUpdate({
+        target: schema.creditControlInactiveStudents.studentKey,
+        set: {
+          studentName: row.studentName,
+          parentName: row.parentName,
+          markedAt: now,
+          markedByEmail: CREDIT_SYSTEM_ACTOR_EMAIL,
+          source: "auto-churn",
+          removedAtRemaining: row.removedAtRemaining,
+        },
+      });
+    await db.insert(schema.creditControlFollowUpLog).values({
+      studentKey: row.studentKey,
+      studentName: row.studentName,
+      parentName: row.parentName,
+      actionType: "auto-remove",
+      status: null,
+      actorEmail: CREDIT_SYSTEM_ACTOR_EMAIL,
+      actorName: CREDIT_SYSTEM_ACTOR_NAME,
+    });
+  }
+
+  if (transitions.toReactivate.length > 0) {
+    const inactiveByKey = new Map(inactive.map((row) => [row.studentKey, row]));
+    await db
+      .delete(schema.creditControlInactiveStudents)
+      .where(inArray(schema.creditControlInactiveStudents.studentKey, transitions.toReactivate));
+    for (const studentKey of transitions.toReactivate) {
+      const row = inactiveByKey.get(studentKey);
+      await db.insert(schema.creditControlFollowUpLog).values({
+        studentKey,
+        studentName: row?.studentName ?? studentKey,
+        parentName: row?.parentName ?? "",
+        actionType: "auto-reactivate",
+        status: null,
+        actorEmail: CREDIT_SYSTEM_ACTOR_EMAIL,
+        actorName: CREDIT_SYSTEM_ACTOR_NAME,
+      });
+    }
+  }
+}
+
 export async function runCreditControlSync(
   db: Database,
   client: WiseClient,
@@ -549,6 +691,13 @@ export async function runCreditControlSync(
     await db
       .update(schema.creditControlSnapshots)
       .set({ active: sql`(${schema.creditControlSnapshots.id} = ${snapshot.id})` });
+
+    // Churn lifecycle (best-effort; never roll back the promoted snapshot).
+    try {
+      await applyChurnMaintenance(db, packageRows, now);
+    } catch (churnError) {
+      console.error("[credit-control] churn maintenance failed", churnError);
+    }
 
     await db
       .update(schema.creditControlSyncRuns)

@@ -288,6 +288,13 @@
       "when": 1780769330280,
       "tag": "0040_nifty_mercury",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1780823078043,
+      "tag": "0041_simple_lila_cheney",
+      "breakpoints": true
     }
   ]
 }

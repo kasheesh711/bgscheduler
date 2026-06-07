@@ -52,6 +52,10 @@ export interface MarkInactiveStudentInput {
   studentName: string;
   parentName: string;
   markedByEmail: string;
+  /** "manual" (default) or "auto-churn". */
+  source?: string;
+  /** Total remaining credits at removal; used for genuine-top-up reactivation. */
+  removedAtRemaining?: number | null;
 }
 
 export async function setStudentAction(input: SetStudentActionInput): Promise<void> {
