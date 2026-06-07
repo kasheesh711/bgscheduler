@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Autonomous LINE Scheduling
 status: executing
-stopped_at: "Completed 11-04: followers re-anchor job, fetchLineFollowerIds, runLineFollowersReanchor"
-last_updated: "2026-06-07T08:04:50.138Z"
+stopped_at: "Completed 11-05: widened worklist scope (isPhantom=false), phantom archive filter, verify guard fix"
+last_updated: "2026-06-07T08:15:31.882Z"
 last_activity: 2026-06-07
 progress:
   total_phases: 10
   completed_phases: 9
   total_plans: 60
-  completed_plans: 57
-  percent: 95
+  completed_plans: 58
+  percent: 97
 ---
 
 # Project State
@@ -27,12 +27,12 @@ See: .planning/PROJECT.md (updated 2026-04-20 — milestone v1.1 Data Fidelity &
 
 Milestone: v1.2 Autonomous LINE Scheduling (started 2026-06-06; v1.1 complete)
 Phase: 11 (ident-01-webhook-side-line-identity-resolution) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 Next: `/gsd-plan-phase 11` — create executable plans
 Status: Ready to execute
 Last activity: 2026-06-07
 
-Progress: [██████████] 95%
+Progress: [██████████] 97%
 
 ## Last Completed Milestone
 
@@ -135,11 +135,12 @@ None blocking roadmap execution.
 | Phase 10-vpol-01-view-transitions P02 | 4min | 2 tasks | 2 files |
 | Phase 11 P03 | 31515093 | 2 tasks | 3 files |
 | Phase 11 P04 | 185 | 2 tasks | 5 files |
+| Phase 11 P05 | 7min | 1 tasks | 2 files |
 
 ## Session Continuity
 
-Last session: 2026-06-07T08:04:50.129Z
-Stopped at: Completed 11-04: followers re-anchor job, fetchLineFollowerIds, runLineFollowersReanchor
+Last session: 2026-06-07T08:15:31.876Z
+Stopped at: Completed 11-05: widened worklist scope (isPhantom=false), phantom archive filter, verify guard fix
 Resume file: None
 Resume: run `/gsd-progress` to review v1.1 completion status.
 
