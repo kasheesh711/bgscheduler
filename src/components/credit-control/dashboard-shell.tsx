@@ -88,61 +88,49 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   // ---------------------------------------------------------------------------
   // Data loading
   // ---------------------------------------------------------------------------
-  useEffect(() => {
-    let cancelled = false;
-    let isInitialLoad = true;
-
-    async function load() {
-      if (isInitialLoad) {
-        setLoading(true);
-        setError("");
-      } else {
-        if (!document.hasFocus()) return;
-        setRefreshing(true);
-      }
-
-      try {
-        const response = await fetch("/api/credit-control", { cache: "no-store" });
-        if (!response.ok) {
-          throw new Error(`Dashboard request failed (${response.status})`);
-        }
-
-        const payload = (await response.json()) as DashboardPayload;
-        if (cancelled) return;
-
-        startTransition(() => {
-          setData(payload);
-          if (isInitialLoad) {
-            setSelectedStudentKey(payload.studentQueue[0]?.studentKey ?? payload.students[0]?.studentKey ?? "");
-            const defaultDate = getDefaultCalendarDate(payload.calendar);
-            setSelectedCalendarDate(defaultDate);
-            setCalendarCursor(getCalendarCursorForView("month", parseDateKey(defaultDate)));
-          }
-        });
-      } catch (loadError) {
-        if (!cancelled && isInitialLoad) {
-          setError(loadError instanceof Error ? loadError.message : "Failed to load dashboard.");
-        }
-      } finally {
-        if (!cancelled) {
-          if (isInitialLoad) setLoading(false);
-          setRefreshing(false);
-        }
-      }
+  const loadDashboard = useCallback(async (mode: "initial" | "refresh") => {
+    if (mode === "initial") {
+      setLoading(true);
+      setError("");
+    } else {
+      if (!document.hasFocus()) return;
+      setRefreshing(true);
     }
 
-    void load();
+    try {
+      const response = await fetch("/api/credit-control", { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`Dashboard request failed (${response.status})`);
+      }
 
-    const interval = window.setInterval(() => {
-      isInitialLoad = false;
-      void load();
-    }, 60_000);
+      const payload = (await response.json()) as DashboardPayload;
 
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
+      startTransition(() => {
+        setData(payload);
+        if (mode === "initial") {
+          setSelectedStudentKey(payload.studentQueue[0]?.studentKey ?? payload.students[0]?.studentKey ?? "");
+          const defaultDate = getDefaultCalendarDate(payload.calendar);
+          setSelectedCalendarDate(defaultDate);
+          setCalendarCursor(getCalendarCursorForView("month", parseDateKey(defaultDate)));
+        }
+      });
+    } catch (loadError) {
+      if (mode === "initial") {
+        setError(loadError instanceof Error ? loadError.message : "Failed to load dashboard.");
+      }
+    } finally {
+      if (mode === "initial") setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadDashboard("initial");
+    const interval = window.setInterval(() => {
+      void loadDashboard("refresh");
+    }, 60_000);
+    return () => window.clearInterval(interval);
+  }, [loadDashboard]);
 
   useEffect(() => {
     if (!toast) return;
@@ -794,13 +782,20 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
           >
             <CircleHelp aria-hidden="true" size={14} />
           </button>
-          <span className="meta-chip" style={{ padding: "4px 10px", fontSize: "0.78rem" }}>
+          <button
+            className="meta-chip"
+            onClick={() => loadDashboard("refresh")}
+            disabled={refreshing}
+            title="Refresh now"
+            type="button"
+            style={{ padding: "4px 10px", fontSize: "0.78rem", cursor: "pointer" }}
+          >
             {refreshing
               ? "Refreshing\u2026"
               : data
                 ? `Updated ${formatShortTimestamp(data.lastUpdatedAt)}`
                 : "Loading"}
-          </span>
+          </button>
           <span className="meta-chip" style={{ padding: "4px 10px", fontSize: "0.78rem" }}>
             {sessionUser.name}
           </span>
@@ -819,7 +814,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
       </header>
 
       {loading ? <DashboardSkeleton /> : null}
-      {!loading && error ? <ErrorState message={error} /> : null}
+      {!loading && error ? <ErrorState message={error} onRetry={() => loadDashboard("initial")} /> : null}
 
       {!loading && !error && data ? (
         <div className="workspace">
@@ -1019,11 +1014,14 @@ function DashboardSkeleton() {
   );
 }
 
-function ErrorState({ message }: { message: string }) {
+function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <section className="panel">
       <h2>Dashboard unavailable</h2>
       <p className="muted">{message}</p>
+      <button className="primary-button" onClick={onRetry} type="button" style={{ marginTop: 10 }}>
+        Retry
+      </button>
     </section>
   );
 }
