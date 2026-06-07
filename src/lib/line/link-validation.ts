@@ -2,6 +2,8 @@ import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm"
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { listCurrentLineStudentsByKeys, type LineContactStudentLinkStatus } from "./student-links";
+import { buildLineOperationalReviewPlan } from "@/lib/line/operational";
+import { patchLineSchedulerOperationalPlan } from "@/lib/line/data";
 
 type LinkRow = typeof schema.lineContactStudentLinks.$inferSelect;
 type ContactRow = typeof schema.lineContacts.$inferSelect;
@@ -742,6 +744,55 @@ export async function patchLineLinkValidationTaskStatus(
     .where(eq(schema.lineContacts.id, row.contactId))
     .limit(1);
   if (!contact) return null;
+
+  // IDENT-06: inline re-link recompute — when a link is verified, immediately
+  // recompute pending_review scheduler rows for this contact so matchedStudentKeys
+  // and writebackStatus reflect the newly-verified identity without a manual recompute.
+  // Per-row errors are caught and do not abort the status patch (fail-isolated).
+  if (input.status === "verified") {
+    const pendingReviews = await db
+      .select({
+        id: schema.lineSchedulerReviews.id,
+        inboundMessageId: schema.lineSchedulerReviews.inboundMessageId,
+        classifierCategory: schema.lineSchedulerReviews.classifierCategory,
+      })
+      .from(schema.lineSchedulerReviews)
+      .where(and(
+        eq(schema.lineSchedulerReviews.contactId, row.contactId),
+        eq(schema.lineSchedulerReviews.status, "pending_review"),
+      ));
+
+    for (const review of pendingReviews) {
+      const messageRow = await db
+        .select({ text: schema.lineMessages.text })
+        .from(schema.lineMessages)
+        .where(eq(schema.lineMessages.id, review.inboundMessageId))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+
+      if (!messageRow?.text) continue;
+
+      const plan = await buildLineOperationalReviewPlan({
+        db,
+        contactId: row.contactId,
+        messageText: messageRow.text,
+        classifierCategory: review.classifierCategory ?? "scheduling_change",
+      }).catch(() => null);
+
+      if (!plan) continue;
+
+      await patchLineSchedulerOperationalPlan(db, review.id, {
+        intentType: plan.intentType,
+        intentPayload: plan.intentPayload,
+        proposedDraft: plan.proposedDraft,
+        matchedStudentKeys: plan.matchedStudentKeys,
+        candidateSessions: plan.candidateSessions,
+        proposedWiseActions: plan.proposedWiseActions,
+        adminSelectedSessionIds: [],
+        writebackStatus: plan.writebackStatus,
+      }).catch(() => undefined);
+    }
+  }
 
   const studentsByKey = new Map(
     (await listCurrentLineStudentsByKeys(db, [row.studentKey])).map((student) => [student.studentKey, student]),
