@@ -1,291 +1,261 @@
-# API Reference — Master Index
+# API Reference — Master Endpoint Index
 
-The canonical lookup of every HTTP endpoint in BGScheduler. This page lists **method + path + group + auth + one-line purpose** only. For full request/response schemas, query parameters, and error shapes, follow the link on each group heading to the per-group detail page.
+The canonical lookup of **every** HTTP endpoint in BGScheduler. All routes are Next.js App Router handlers under `src/app/api/**/route.ts`; one file can export several methods, so the 111 route files below resolve to **130 endpoints** (each method+path row below is one endpoint — 54 GET + 60 POST + 12 PATCH + 4 DELETE; the Auth.js `[...nextauth]` catch-all counts as its GET + POST, and CORS `OPTIONS` preflight handlers are not listed).
 
-All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **117**.
+This page is the index only — method, path, group, auth tier, and a one-line purpose. Full request/response shapes, body schemas, and status codes live on the per-group detail pages linked in each section heading. Feature-level meaning (why an endpoint exists, the rules it enforces) lives under [`docs/features/`](../../features/); those docs link here rather than restating signatures.
 
-## How to read this index
+## Auth tiers
 
-**Auth column** — three tiers, all verified against `src/middleware.ts` plus each route handler:
+Auth is enforced first by `src/middleware.ts` (edge Auth.js), then re-checked inside each handler.
 
-- **public** — reachable without an authenticated session. `src/middleware.ts:4-15` allowlists `/api/auth/*`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/api/line/contacts/oa-resolver/worklist`, and `/api/line/contacts/oa-resolver/runs/{runId}/rows`. The non-`/api/auth` public routes enforce their own checks in-handler (LINE signature header or a bearer token), not an admin session.
-- **admin** — requires an authenticated Auth.js session. The middleware redirects unauthenticated requests to `/login` (`src/middleware.ts:25-29`); handlers additionally call `auth()` (or `requireCreditControlSession()` for credit-control) and return `401` when no session is present.
-- **cron** — `CRON_SECRET`-protected. `src/middleware.ts:13` lets `/api/internal/*` bypass the session gate; each handler then enforces a constant-time `Bearer ${CRON_SECRET}` check (`src/lib/internal/cron-auth.ts:6-26`, or an inline copy). Four internal routes additionally accept an admin session as a fallback when the cron secret is absent — see the **cron (or admin)** notes below.
-
-> **Canonical-home rule:** this page owns only the mechanical endpoint inventory. Meaning, business rules, and flows live in the relevant `docs/features/*` pages; full per-endpoint signatures live in the linked per-group detail pages.
+- **public** — reachable without a session. The middleware allowlist (`isPublicRoute`, `src/middleware.ts:4`) is: anything under `/api/auth/*`, anything under `/api/internal/*` (those self-check `CRON_SECRET`), plus the explicit handler-protected routes `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/api/line/contacts/oa-resolver/worklist`, and `POST /api/line/contacts/oa-resolver/runs/{runId}/rows` (matched by the regex at `src/middleware.ts:12`).
+- **cron** — `CRON_SECRET` bearer token, constant-time compared. Every `/api/internal/*` route gates on it, via the shared helper `src/lib/internal/cron-auth.ts` (`getCronSecretStatus` / `rejectInvalidCronSecret`, `timingSafeEqual` with a length pre-check) or an inline equivalent in `internal/sync-wise` and `internal/student-promotions/july-1`. The middleware lets these through unauthenticated so cron can reach them; the handler is the real gate.
+- **admin** — an authenticated Auth.js session on the `admin_users` allowlist. The middleware redirects sessionless requests to `/login` (or returns `403` for restricted users hitting a page outside their `allowedPages`, `src/middleware.ts:53`); each handler then calls `auth()` and returns `401` if absent. This is the default for everything not listed above. (Progress-Tests read routes additionally admit `teacher`-role sessions with a scoped view, but remain session-gated, not public.)
 
 ---
 
-## [AI Scheduler](./ai-scheduler.md) — `/api/ai-scheduler`
+## Home / Ops Hub — [`misc.md`](./misc.md#home--ops-hub)
 
-Conversational scheduling assistant: conversation CRUD, message turns, feedback, and usage metrics.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/ai-scheduler/conversations` | ai-scheduler | admin | List the signed-in admin's AI-scheduler conversations |
-| POST | `/api/ai-scheduler/conversations` | ai-scheduler | admin | Create a new AI-scheduler conversation |
-| GET | `/api/ai-scheduler/conversations/[conversationId]` | ai-scheduler | admin | Fetch a single conversation with its messages |
-| PATCH | `/api/ai-scheduler/conversations/[conversationId]` | ai-scheduler | admin | Update a conversation (e.g. rename/title) |
-| DELETE | `/api/ai-scheduler/conversations/[conversationId]` | ai-scheduler | admin | Delete a conversation |
-| POST | `/api/ai-scheduler/conversations/[conversationId]/messages` | ai-scheduler | admin | Post a user message and get the assistant's reply |
-| POST | `/api/ai-scheduler/messages/[messageId]/feedback` | ai-scheduler | admin | Record thumbs-up/down feedback on an assistant message |
-| GET | `/api/ai-scheduler/metrics` | ai-scheduler | admin | AI-scheduler usage / quality metrics |
+| GET | `/api/home/summary` | Home / Ops Hub | admin | Access-filtered ops-hub landing summary — per-queue action counts + a data-freshness strip (middleware-allowlisted so the nav can always fetch badges, but the handler requires a session and filters per the viewer's `allowedPages`). |
 
-## [Auth](./misc.md) — `/api/auth`
+## Search — [`misc.md`](./misc.md#search)
 
-Auth.js (NextAuth v5) Google OAuth handler.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET, POST | `/api/auth/[...nextauth]` | auth | public | Auth.js catch-all: sign-in, callback, session, sign-out |
+| POST | `/api/search/range` | Search | admin | Range availability search (time window + class duration → sub-slots → availability grid) via `executeRangeSearch`. |
+| POST | `/api/search` | Search | admin | Legacy multi-slot availability search via `executeSearch` (explicit slot list). |
+| POST | `/api/search/assistant` | Search | public | Natural-language search assistant (public NL entry point). |
 
-> Implemented by the Auth.js handler in `src/app/api/auth/[...nextauth]/route.ts`; it exports the framework's `GET`/`POST` handlers rather than hand-written ones. Public per `src/middleware.ts:7`.
+## Compare — [`misc.md`](./misc.md#compare)
 
-## [Class Assignments](./classrooms-and-assignments.md) — `/api/class-assignments`
-
-Daily classroom room-assignment workspace: generate runs, override rows, publish eligible OFFLINE locations to Wise, and the teacher-schedule / schedule-email views.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/class-assignments` | class-assignments | admin | Latest assignment run for a Bangkok date (`?date=`) |
-| POST | `/api/class-assignments/run` | class-assignments | admin | Generate a new local assignment run for a date |
-| PATCH | `/api/class-assignments/runs/[runId]/rows/[rowId]` | class-assignments | admin | Override a row's room and recalculate the run |
-| POST | `/api/class-assignments/runs/[runId]/publish` | class-assignments | admin | Publish eligible OFFLINE room locations to Wise |
-| GET | `/api/class-assignments/runs/[runId]/publish/[jobId]` | class-assignments | admin | Poll status of a publish job |
-| GET | `/api/class-assignments/runs/[runId]/teacher-schedule` | class-assignments | admin | Grouped teacher schedule for a run |
-| GET | `/api/class-assignments/runs/[runId]/schedule-email/preview` | class-assignments | admin | Preview the schedule email for a run |
-| POST | `/api/class-assignments/runs/[runId]/schedule-email/send` | class-assignments | admin | Send the schedule email for a run |
+| POST | `/api/compare` | Compare | admin | Build week-scoped comparison for 1–3 tutors (schedules, conflicts, shared free slots); supports incremental `fetchOnly`. |
+| POST | `/api/compare/discover` | Compare | admin | Discover candidate tutors for the compare workspace. |
 
-## [Classrooms](./classrooms-and-assignments.md) — `/api/classrooms`
+## Tutors & Filters — [`misc.md`](./misc.md#tutors)
 
-Classroom room catalog and floor-plan map asset.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/classrooms/rooms` | classrooms | admin | Classroom room catalog (24-room BeGifted list) |
-| GET | `/api/classrooms/floor-plan-map` | classrooms | public | Serve the classroom floor-plan map (public per middleware) |
+| GET | `/api/tutors` | Tutors | admin | Tutor list for the searchable combobox (`getTutorList`). |
+| GET | `/api/filters` | Filters | admin | Dropdown facet options (subjects/curricula/levels/modality) via `getFilterOptions`. |
 
-## [Compare](./misc.md) — `/api/compare`
+## AI Scheduler — [`ai-scheduler.md`](./ai-scheduler.md)
 
-Side-by-side tutor comparison and candidate discovery.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| POST | `/api/compare` | compare | admin | Compare 1-3 tutors for a week: schedules, conflicts, shared free slots |
-| POST | `/api/compare/discover` | compare | admin | Find candidate tutors with pre-computed conflict status |
+| GET | `/api/ai-scheduler/conversations` | AI Scheduler | admin | List AI-scheduler conversations. |
+| POST | `/api/ai-scheduler/conversations` | AI Scheduler | admin | Create a new AI-scheduler conversation. |
+| GET | `/api/ai-scheduler/conversations/[conversationId]` | AI Scheduler | admin | Fetch a single conversation with its messages. |
+| PATCH | `/api/ai-scheduler/conversations/[conversationId]` | AI Scheduler | admin | Update conversation metadata (e.g. title/state). |
+| DELETE | `/api/ai-scheduler/conversations/[conversationId]` | AI Scheduler | admin | Delete a conversation. |
+| POST | `/api/ai-scheduler/conversations/[conversationId]/messages` | AI Scheduler | admin | Post a message turn (parse chat → availability → draft reply). |
+| POST | `/api/ai-scheduler/messages/[messageId]/feedback` | AI Scheduler | admin | Record accept/edit/reject feedback on a scheduler message. |
+| GET | `/api/ai-scheduler/metrics` | AI Scheduler | admin | Read-only accept/edit/reject metrics (`getAiSchedulerMetrics`). |
 
-## [Credit Control](./credit-control.md) — `/api/credit-control`
+## LINE — [`line.md`](./line.md)
 
-Student credit/payment tracking: payload load, per-student and bulk actions, action history, admin ownership, inactive flagging, and a manual sync trigger. All routes gate on `requireCreditControlSession()`.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/credit-control` | credit-control | admin | Load the credit-control payload (students + balances) |
-| POST | `/api/credit-control/sync` | credit-control | admin | Manually trigger a credit-control data sync |
-| POST | `/api/credit-control/actions` | credit-control | admin | Set or clear a single student's follow-up action status |
-| POST | `/api/credit-control/actions/bulk` | credit-control | admin | Set or clear action status for many students at once |
-| GET | `/api/credit-control/actions/history` | credit-control | admin | Recent action history for a student (`?studentKey=`) |
-| POST | `/api/credit-control/admin-ownership` | credit-control | admin | Assign an admin owner to a student |
-| POST | `/api/credit-control/inactive` | credit-control | admin | Mark a student inactive |
-| DELETE | `/api/credit-control/inactive` | credit-control | admin | Clear a student's inactive flag |
+| POST | `/api/line/webhook` | LINE | public | LINE Messaging API webhook ingest (signature-verified in handler). |
+| GET | `/api/line/students` | LINE | admin | Search current LINE-linkable students by query (`searchCurrentLineStudents`). |
+| GET | `/api/line/scheduler-reviews` | LINE | admin | List LINE scheduler reviews. |
+| GET | `/api/line/scheduler-reviews/false-negatives` | LINE | admin | List candidate false-negative (missed) scheduler-review messages. |
+| PATCH | `/api/line/scheduler-reviews/[reviewId]` | LINE | admin | Update a scheduler review (triage decision/status). |
+| GET | `/api/line/scheduler-reviews/[reviewId]/context` | LINE | admin | Fetch surrounding thread/context for a review. |
+| POST | `/api/line/scheduler-reviews/[reviewId]/operational-plan` | LINE | admin | Generate an operational plan for a reviewed request. |
+| GET | `/api/line/scheduler-reviews/[reviewId]/wise-actions` | LINE | admin | List Wise-action audit entries for a review. |
+| POST | `/api/line/scheduler-reviews/[reviewId]/wise-actions` | LINE | admin | Record/execute a Wise action for a review (dry-run / flag-gated). |
+| POST | `/api/line/messages/[messageId]/promote` | LINE | admin | Promote a LINE message into a scheduler review. |
+| PATCH | `/api/line/messages/[messageId]/classification-feedback` | LINE | admin | Submit classifier-correction feedback on a message. |
+| PATCH | `/api/line/contacts/[contactId]` | LINE | admin | Update a LINE contact record. |
+| GET | `/api/line/contacts/[contactId]/student-links` | LINE | admin | List student links for a contact. |
+| POST | `/api/line/contacts/[contactId]/student-links` | LINE | admin | Create a student link for a contact. |
+| PATCH | `/api/line/contacts/[contactId]/student-links` | LINE | admin | Update a contact's student links. |
+| POST | `/api/line/contacts/refresh-profiles` | LINE | admin | Refresh LINE contact display profiles from the OA. |
+| POST | `/api/line/contacts/alias-import/preview` | LINE | admin | Preview a contact alias-import (no writes). |
+| POST | `/api/line/contacts/alias-import/commit` | LINE | admin | Commit a contact alias-import. |
+| GET | `/api/line/contacts/link-validation` | LINE | admin | List contact link-validation worklist items. |
+| GET | `/api/line/contacts/link-validation/summary` | LINE | admin | Link-validation summary counts. |
+| POST | `/api/line/contacts/link-validation/assign` | LINE | admin | Assign a link-validation item. |
+| PATCH | `/api/line/contacts/link-validation/[linkId]` | LINE | admin | Update a single link-validation item. |
+| GET | `/api/line/contacts/oa-resolver/worklist` | LINE | public | OA-resolver worklist (public read for the resolver tool). |
+| GET | `/api/line/contacts/oa-resolver/runs` | LINE | admin | List OA-resolver runs. |
+| POST | `/api/line/contacts/oa-resolver/runs` | LINE | admin | Start a new OA-resolver run. |
+| GET | `/api/line/contacts/oa-resolver/runs/[runId]` | LINE | admin | Fetch a single OA-resolver run. |
+| POST | `/api/line/contacts/oa-resolver/runs/[runId]/rows` | LINE | public | Append resolved rows to an OA-resolver run (regex-allowlisted public). |
+| POST | `/api/line/contacts/oa-resolver/runs/[runId]/commit` | LINE | admin | Commit an OA-resolver run's resolutions. |
 
-## [Data Health](./misc.md) — `/api/data-health`
+## Class Assignments — [`classrooms-and-assignments.md`](./classrooms-and-assignments.md)
 
-Operations health, cron-firing, data freshness, and normalization-issue dashboard.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/data-health` | data-health | admin | Ops command payload: cron health, data freshness, snapshot stats, and issue drill-downs |
-| POST | `/api/data-health/jobs/[jobKey]/run` | data-health | admin | Manually trigger a registered data-health job; dangerous jobs require confirmation |
+| GET | `/api/class-assignments` | Class Assignments | admin | Load class-assignment runs/payload. |
+| POST | `/api/class-assignments/run` | Class Assignments | admin | Trigger a new daily room-assignment run. |
+| PATCH | `/api/class-assignments/runs/[runId]/rows/[rowId]` | Class Assignments | admin | Override a single assignment row. |
+| POST | `/api/class-assignments/runs/[runId]/publish` | Class Assignments | admin | Publish eligible OFFLINE `location` values to Wise. |
+| GET | `/api/class-assignments/runs/[runId]/publish/[jobId]` | Class Assignments | admin | Poll a publish job's status. |
+| GET | `/api/class-assignments/runs/[runId]/teacher-schedule` | Class Assignments | admin | Teacher schedule view for a run. |
+| GET | `/api/class-assignments/runs/[runId]/schedule-email/preview` | Class Assignments | admin | Preview the per-teacher schedule email. |
+| POST | `/api/class-assignments/runs/[runId]/schedule-email/send` | Class Assignments | admin | Send the per-teacher schedule emails. |
 
-## [Filters](./misc.md) — `/api/filters`
+## Classrooms — [`classrooms-and-assignments.md`](./classrooms-and-assignments.md)
 
-Dropdown population for the search form.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/filters` | filters | admin | Distinct subjects/curriculums/levels from the active snapshot |
+| GET | `/api/classrooms/rooms` | Classrooms | admin | Room catalog. |
+| GET | `/api/classrooms/floor-plan-map` | Classrooms | public | Public floor-plan map data. |
 
-## [Internal / Cron](./internal-crons.md) — `/api/internal`
+## Progress Tests — [`progress-tests.md`](./progress-tests.md)
 
-Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/internal/cron-auth.ts`); bypass the session gate via `src/middleware.ts:13`. Routes tagged **cron (or admin)** also run if an authenticated admin session is present and the cron secret check did not pass.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/internal/sync-wise` | internal | cron (or admin on POST) | Run the full Wise snapshot sync (Vercel cron via GET) |
-| POST | `/api/internal/sync-wise` | internal | cron (or admin) | Manual full Wise snapshot sync (session or `curl`) |
-| GET | `/api/internal/sync-wise-activity` | internal | cron | Sync newest Wise activity audit events |
-| GET | `/api/internal/sync-credit-control` | internal | cron (or admin on POST) | Cron-trigger a credit-control sync |
-| POST | `/api/internal/sync-credit-control` | internal | cron (or admin) | Manual credit-control sync (session or `curl`) |
-| GET | `/api/internal/sync-sales-dashboard` | internal | cron (or admin on POST) | Cron-trigger a sales-dashboard import |
-| POST | `/api/internal/sync-sales-dashboard` | internal | cron (or admin) | Manual sales-dashboard import (session or `curl`) |
-| GET | `/api/internal/sync-leave-requests` | internal | cron | Cron-trigger a leave-requests sync |
-| POST | `/api/internal/sync-leave-requests` | internal | cron | Trigger a leave-requests sync (same cron-secret check) |
-| POST | `/api/internal/sync-room-utilization` | internal | cron (or admin) | Sync room-utilization sessions (session or `curl`) |
-| GET | `/api/internal/class-assignments/admin-email` | internal | cron | Send the daily admin classroom-schedule email |
-| GET | `/api/internal/class-assignments/morning` | internal | cron | Run the morning classroom-assignment automation |
-| GET | `/api/internal/student-promotions/july-1` | internal | cron | Apply the verified July 1, 2026 student-promotion run |
-| POST | `/api/internal/student-promotions/july-1` | internal | cron | Cron-secret replay alias for the July 1 student-promotion apply |
+| GET | `/api/progress-tests` | Progress Tests | admin | Progress-tests payload; teacher sessions get a scoped read-only view, admins see all. |
+| POST | `/api/progress-tests/book` | Progress Tests | admin | Book a progress test for an enrollment. |
+| POST | `/api/progress-tests/mark-complete` | Progress Tests | admin | Mark a progress test complete. |
+| POST | `/api/progress-tests/resend-email` | Progress Tests | admin | Resend the progress-test notification email. |
+| POST | `/api/progress-tests/select-at-home` | Progress Tests | admin | Select the at-home progress-test option for an enrollment. |
+| POST | `/api/progress-tests/mark-at-home-submitted` | Progress Tests | admin | Mark an at-home progress test as submitted. |
 
-> **Admin-only sync (not cron):** `POST /api/admin/sync-wise` triggers the same Wise sync but is gated by an admin session via `auth()` (no `CRON_SECRET`) — see the [Admin](./misc.md) group.
+## Student Promotions — [`student-promotions.md`](./student-promotions.md)
 
-## [Admin](./misc.md) — `/api/admin`
-
-Admin-session-gated operational triggers (distinct from the `CRON_SECRET` internal routes).
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| POST | `/api/admin/sync-wise` | admin | admin | Manually trigger a Wise sync from an admin session |
+| GET | `/api/student-promotions/runs` | Student Promotions | admin | List student-promotion runs. |
+| POST | `/api/student-promotions/runs` | Student Promotions | admin | Create a new student-promotion run. |
+| GET | `/api/student-promotions/runs/[runId]` | Student Promotions | admin | Fetch a single promotion run. |
+| POST | `/api/student-promotions/runs/[runId]/verify` | Student Promotions | admin | Verify a promotion run before applying. |
+| POST | `/api/student-promotions/runs/[runId]/apply` | Student Promotions | admin | Apply a verified promotion run (requires confirm token; `maxDuration=800`). |
 
-## [Leave Requests](./misc.md) — `/api/leave-requests`
+## Sales Dashboard — [`sales-dashboard.md`](./sales-dashboard.md)
 
-Teacher leave-request review: list, detail, update, manual sync, and Wise session-cancellation preview.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/leave-requests` | leave-requests | admin | List leave requests |
-| POST | `/api/leave-requests/sync` | leave-requests | admin | Manually trigger a leave-requests sync |
-| GET | `/api/leave-requests/[requestId]` | leave-requests | admin | Fetch a single leave request |
-| PATCH | `/api/leave-requests/[requestId]` | leave-requests | admin | Update a leave request (status/decision) |
-| POST | `/api/leave-requests/[requestId]/wise-cancel-preview` | leave-requests | admin | Preview Wise sessions that would be cancelled |
+| GET | `/api/sales-dashboard` | Sales Dashboard | admin | GM command-center payload. |
+| POST | `/api/sales-dashboard/import` | Sales Dashboard | admin | Import a monthly sales sheet. |
+| GET | `/api/sales-dashboard/import-runs` | Sales Dashboard | admin | List sales import runs. |
+| GET | `/api/sales-dashboard/sources` | Sales Dashboard | admin | List sales sheet sources. |
+| POST | `/api/sales-dashboard/sources` | Sales Dashboard | admin | Create a sales sheet source. |
+| POST | `/api/sales-dashboard/sources/seed` | Sales Dashboard | admin | Seed default sales sources. |
+| PATCH | `/api/sales-dashboard/sources/[sourceId]` | Sales Dashboard | admin | Update a sales source. |
+| DELETE | `/api/sales-dashboard/sources/[sourceId]` | Sales Dashboard | admin | Delete a sales source. |
+| POST | `/api/sales-dashboard/projection-source` | Sales Dashboard | admin | Configure the scenario-projection source. |
+| POST | `/api/sales-dashboard/projection-import` | Sales Dashboard | admin | Import the active scenario-projection source (Bear/Base/Bull). |
 
-## [LINE](./line.md) — `/api/line`
+## Credit Control — [`credit-control.md`](./credit-control.md)
 
-LINE OA integration: inbound webhook, contact resolution & alias import, student linking, link validation, scheduler-review workflow, and the OA-resolver run pipeline.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| POST | `/api/line/webhook` | line | public | Inbound LINE webhook (verifies `x-line-signature`) |
-| GET | `/api/line/students` | line | admin | List students known to the LINE integration |
-| GET | `/api/line/scheduler-reviews` | line | admin | List scheduler-review items |
-| PATCH | `/api/line/scheduler-reviews/[reviewId]` | line | admin | Update a scheduler-review item |
-| GET | `/api/line/scheduler-reviews/[reviewId]/context` | line | admin | Fetch context for a scheduler review |
-| GET | `/api/line/scheduler-reviews/[reviewId]/wise-actions` | line | admin | List Wise action logs for a review |
-| POST | `/api/line/scheduler-reviews/[reviewId]/wise-actions` | line | admin | Confirm/execute a Wise action for a review |
-| POST | `/api/line/scheduler-reviews/[reviewId]/operational-plan` | line | admin | Generate an operational plan for a review |
-| GET | `/api/line/scheduler-reviews/false-negatives` | line | admin | List false-negative classification candidates |
-| POST | `/api/line/messages/[messageId]/promote` | line | admin | Promote a LINE message into a scheduler review |
-| PATCH | `/api/line/messages/[messageId]/classification-feedback` | line | admin | Record corrected classification for a message |
-| PATCH | `/api/line/contacts/[contactId]` | line | admin | Update a LINE contact |
-| GET | `/api/line/contacts/[contactId]/student-links` | line | admin | List a contact's student links |
-| POST | `/api/line/contacts/[contactId]/student-links` | line | admin | Add a student link to a contact |
-| PATCH | `/api/line/contacts/[contactId]/student-links` | line | admin | Update a contact's student links |
-| GET | `/api/line/contacts/link-validation` | line | admin | List contact-link validation tasks |
-| GET | `/api/line/contacts/link-validation/summary` | line | admin | Link-validation summary counts |
-| POST | `/api/line/contacts/link-validation/assign` | line | admin | Assign link-validation tasks to reviewers |
-| PATCH | `/api/line/contacts/link-validation/[linkId]` | line | admin | Resolve/update a single link-validation task |
-| POST | `/api/line/contacts/alias-import/preview` | line | admin | Preview a contact alias import |
-| POST | `/api/line/contacts/alias-import/commit` | line | admin | Commit a contact alias import |
-| POST | `/api/line/contacts/refresh-profiles` | line | admin | Refresh all LINE contact profiles from LINE |
-| GET | `/api/line/contacts/oa-resolver/worklist` | line | public | OA-resolver worklist (bearer-token gated in-handler) |
-| GET | `/api/line/contacts/oa-resolver/runs` | line | admin | List OA-resolver runs |
-| POST | `/api/line/contacts/oa-resolver/runs` | line | admin | Start a new OA-resolver run |
-| GET | `/api/line/contacts/oa-resolver/runs/[runId]` | line | admin | Fetch a single OA-resolver run |
-| POST | `/api/line/contacts/oa-resolver/runs/[runId]/rows` | line | public | Submit resolver rows (bearer-token gated in-handler) |
-| POST | `/api/line/contacts/oa-resolver/runs/[runId]/commit` | line | admin | Commit an OA-resolver run's results |
+| GET | `/api/credit-control` | Credit Control | admin | At-risk follow-up queue payload. |
+| POST | `/api/credit-control/sync` | Credit Control | admin | Trigger credit-control sync (recompute depletion). |
+| POST | `/api/credit-control/actions` | Credit Control | admin | Record a single follow-up action. |
+| POST | `/api/credit-control/actions/bulk` | Credit Control | admin | Record follow-up actions in bulk. |
+| GET | `/api/credit-control/actions/history` | Credit Control | admin | Follow-up action history. |
+| POST | `/api/credit-control/admin-ownership` | Credit Control | admin | Set/clear admin ownership of a student. |
+| POST | `/api/credit-control/inactive` | Credit Control | admin | Flag a student inactive. |
+| DELETE | `/api/credit-control/inactive` | Credit Control | admin | Clear a student's inactive flag. |
 
-## [Payroll](./payroll.md) — `/api/payroll`
+## Payroll — [`payroll.md`](./payroll.md)
 
-Tutor payroll: payload load, Wise-driven sync, review edits, and manual adjustments.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/payroll` | payroll | admin | Load the payroll payload |
-| POST | `/api/payroll/sync` | payroll | admin | Run the payroll sync (Wise sessions → payroll) |
-| PATCH | `/api/payroll/review` | payroll | admin | Update a payroll review entry |
-| POST | `/api/payroll/adjustments` | payroll | admin | Add a manual payroll adjustment |
-| DELETE | `/api/payroll/adjustments/[adjustmentId]` | payroll | admin | Delete a manual payroll adjustment |
+| GET | `/api/payroll` | Payroll | admin | Monthly payroll reconciliation payload. |
+| POST | `/api/payroll/sync` | Payroll | admin | Trigger payroll sync for a Bangkok month. |
+| PATCH | `/api/payroll/review` | Payroll | admin | Update payroll review state. |
+| POST | `/api/payroll/adjustments` | Payroll | admin | Add a manual payroll adjustment. |
+| DELETE | `/api/payroll/adjustments/[adjustmentId]` | Payroll | admin | Remove a manual payroll adjustment. |
 
-## [Proposals](./proposals.md) — `/api/proposals`
+## Room Capacity — [`room-capacity.md`](./room-capacity.md)
 
-Tentative scheduling "holds" (proposal bundles) with confirm/release/extend lifecycle.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| POST | `/api/proposals` | proposals | admin | Create a proposal bundle (tentative holds) |
-| GET | `/api/proposals/active` | proposals | admin | List active proposal holds |
-| PATCH | `/api/proposals/items/[itemId]` | proposals | admin | Confirm, release, or extend a proposal item |
+| GET | `/api/room-capacity/utilization` | Room Capacity | admin | Live room-utilization dashboard data. |
+| GET | `/api/room-capacity/month` | Room Capacity | admin | Month-pressure view. |
+| GET | `/api/room-capacity/forecast` | Room Capacity | admin | Saturation-forecast data (typed missing-table payload when drivers absent). |
 
-## [Room Capacity](./room-capacity.md) — `/api/room-capacity`
+## Tutor Profiles — [`misc.md`](./misc.md#tutor-profiles)
 
-Room-utilization analytics and capacity forecasting.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/room-capacity/utilization` | room-capacity | admin | Room utilization over a date/weekday range |
-| GET | `/api/room-capacity/month` | room-capacity | admin | Monthly room-capacity view (`?startDate=`) |
-| GET | `/api/room-capacity/forecast` | room-capacity | admin | Room-capacity forecast (model runs / drivers) |
+| GET | `/api/tutor-profiles` | Tutor Profiles | admin | List editorial tutor business profiles. |
+| PATCH | `/api/tutor-profiles/[canonicalKey]` | Tutor Profiles | admin | Edit a tutor profile (keyed by stable `canonicalKey`). |
+| POST | `/api/tutor-profiles/import-preview` | Tutor Profiles | admin | Preview a bulk profile import (no writes). |
+| POST | `/api/tutor-profiles/import-commit` | Tutor Profiles | admin | Commit a bulk profile import. |
 
-## [Sales Dashboard](./sales-dashboard.md) — `/api/sales-dashboard`
+## Proposals — [`proposals.md`](./proposals.md)
 
-Sales reporting: payload load, source CRUD & seeding, Google-Sheets imports, import-run history, and projection source/import.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/sales-dashboard` | sales-dashboard | admin | Load the sales-dashboard payload |
-| POST | `/api/sales-dashboard/import` | sales-dashboard | admin | Import sales data (single source / backfill / refreshable) |
-| GET | `/api/sales-dashboard/import-runs` | sales-dashboard | admin | List sales-dashboard import runs |
-| GET | `/api/sales-dashboard/sources` | sales-dashboard | admin | List configured sales sources |
-| POST | `/api/sales-dashboard/sources` | sales-dashboard | admin | Create a sales source |
-| PATCH | `/api/sales-dashboard/sources/[sourceId]` | sales-dashboard | admin | Update a sales source |
-| DELETE | `/api/sales-dashboard/sources/[sourceId]` | sales-dashboard | admin | Delete a sales source |
-| POST | `/api/sales-dashboard/sources/seed` | sales-dashboard | admin | Seed the default set of sales sources |
-| POST | `/api/sales-dashboard/projection-source` | sales-dashboard | admin | Configure / seed the projection source |
-| POST | `/api/sales-dashboard/projection-import` | sales-dashboard | admin | Import the active projection source |
+| POST | `/api/proposals` | Proposals | admin | Create a proposal bundle (local tentative holds). |
+| GET | `/api/proposals/active` | Proposals | admin | List active proposal holds. |
+| PATCH | `/api/proposals/items/[itemId]` | Proposals | admin | Update a proposal item's lifecycle state. |
 
-## [Search](./misc.md) — `/api/search`
+## Wise Activity — [`wise-activity.md`](./wise-activity.md)
 
-Tutor availability search: range search, legacy slot search, and the public natural-language assistant.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| POST | `/api/search/range` | search | admin | Range search: time window + duration → availability grid |
-| POST | `/api/search` | search | admin | Legacy slot-based availability search |
-| POST | `/api/search/assistant` | search | public | Natural-language search assistant (public per middleware) |
+| GET | `/api/wise-activity` | Wise Activity | admin | List persisted Wise activity events (filters). |
+| GET | `/api/wise-activity/summary` | Wise Activity | admin | Activity KPI summary. |
+| POST | `/api/wise-activity/sync` | Wise Activity | admin | Manual Wise-activity event sync (`maxDuration=800`). |
+| GET | `/api/wise-activity/reconciliation` | Wise Activity | admin | Package-sales reconciliation readout. |
+| POST | `/api/wise-activity/reconciliation/backfill` | Wise Activity | admin | Backfill Wise-activity events for reconciliation (`maxDuration=800`). |
 
-## [Student Promotions](./student-promotions.md) — `/api/student-promotions`
+## Leave Requests — [`misc.md`](./misc.md#leave-requests)
 
-Audited July 1, 2026 Wise student grade/course promotion workflow.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/student-promotions/runs` | student-promotions | admin | Load the latest promotion run detail |
-| POST | `/api/student-promotions/runs` | student-promotions | admin | Run a fresh live-Wise dry-run audit |
-| GET | `/api/student-promotions/runs/[runId]` | student-promotions | admin | Load one promotion run detail |
-| POST | `/api/student-promotions/runs/[runId]/verify` | student-promotions | admin | Verify a reviewed dry run for July 1 apply |
-| POST | `/api/student-promotions/runs/[runId]/apply` | student-promotions | admin | Manual fallback apply for a verified run |
+| GET | `/api/leave-requests` | Leave Requests | admin | List tutor leave-request worklist. |
+| POST | `/api/leave-requests/sync` | Leave Requests | admin | Manual sync of leave-form rows from the Google Sheet. |
+| GET | `/api/leave-requests/[requestId]` | Leave Requests | admin | Fetch a single leave request with affected sessions. |
+| PATCH | `/api/leave-requests/[requestId]` | Leave Requests | admin | Update a leave request (triage + sheet-status writeback). |
+| POST | `/api/leave-requests/[requestId]/wise-cancel-preview` | Leave Requests | admin | Dry-run preview of Wise session cancellations for a leave. |
 
-## [Tutor Profiles](./misc.md) — `/api/tutor-profiles`
+## Data Health — [`misc.md`](./misc.md#data-health)
 
-Tutor business-profile records with edit and bulk import.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/tutor-profiles` | tutor-profiles | admin | List tutor business profiles |
-| PATCH | `/api/tutor-profiles/[canonicalKey]` | tutor-profiles | admin | Update a tutor business profile (by canonical key) |
-| POST | `/api/tutor-profiles/import-preview` | tutor-profiles | admin | Preview a tutor-profile bulk import |
-| POST | `/api/tutor-profiles/import-commit` | tutor-profiles | admin | Commit a tutor-profile bulk import |
+| GET | `/api/data-health` | Data Health | admin | Sync status + normalization-issue counts. |
+| POST | `/api/data-health/jobs/[jobKey]/run` | Data Health | admin | Manually trigger a registered cron job (dangerous jobs require `confirmed:true`). |
 
-## [Tutors](./misc.md) — `/api/tutors`
+## Auth
 
-Tutor combobox data source.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/tutors` | tutors | admin | All tutor names/IDs/modes/subjects from the active snapshot |
+| GET | `/api/auth/[...nextauth]` | Auth | public | Auth.js catch-all (sign-in/out, callbacks, session). |
+| POST | `/api/auth/[...nextauth]` | Auth | public | Auth.js catch-all (sign-in/out, callbacks, session). |
 
-## [Wise Activity](./wise-activity.md) — `/api/wise-activity`
+## Admin — [`misc.md`](./misc.md#admin)
 
-Wise audit-event workspace: paginated events, summary KPIs, manual backfill sync, and package-sales reconciliation.
-
-| Method | Path | Group | Auth | Brief purpose |
+| Method | Path | Group | Auth | Purpose |
 |---|---|---|---|---|
-| GET | `/api/wise-activity` | wise-activity | admin | Paginated persisted Wise activity events |
-| GET | `/api/wise-activity/summary` | wise-activity | admin | Activity KPI cards and chart aggregates |
-| POST | `/api/wise-activity/sync` | wise-activity | admin | Manual admin Wise activity backfill |
-| GET | `/api/wise-activity/reconciliation` | wise-activity | admin | Wise package-sales reconciliation report |
-| POST | `/api/wise-activity/reconciliation/backfill` | wise-activity | admin | Backfill events for reconciliation lookback window |
+| POST | `/api/admin/sync-wise` | Admin | admin | Admin-session trigger for a Wise snapshot sync. |
+
+## Internal / Cron — [`internal-crons.md`](./internal-crons.md)
+
+All routes self-check `CRON_SECRET`; the middleware lets them through unauthenticated so cron can reach the handler. Sync routes typically expose both `GET` (Vercel cron) and `POST` (manual curl) with identical behavior.
+
+| Method | Path | Group | Auth | Purpose |
+|---|---|---|---|---|
+| GET | `/api/internal/sync-wise` | Internal | cron | Wise snapshot sync (cron trigger; `maxDuration=800`). |
+| POST | `/api/internal/sync-wise` | Internal | cron | Wise snapshot sync (manual trigger). |
+| GET | `/api/internal/sync-wise-activity` | Internal | cron | Wise-activity audit event sync. |
+| GET | `/api/internal/sync-sales-dashboard` | Internal | cron | Sales-dashboard sync (cron). |
+| POST | `/api/internal/sync-sales-dashboard` | Internal | cron | Sales-dashboard sync (manual). |
+| GET | `/api/internal/sync-credit-control` | Internal | cron | Credit-control sync (cron). |
+| POST | `/api/internal/sync-credit-control` | Internal | cron | Credit-control sync (manual). |
+| GET | `/api/internal/sync-leave-requests` | Internal | cron | Leave-requests sync (cron). |
+| POST | `/api/internal/sync-leave-requests` | Internal | cron | Leave-requests sync (manual). |
+| GET | `/api/internal/sync-progress-tests` | Internal | cron | Progress-tests sync (cron; `maxDuration=300`). |
+| POST | `/api/internal/sync-progress-tests` | Internal | cron | Progress-tests sync (manual). |
+| POST | `/api/internal/sync-room-utilization` | Internal | cron | Room-utilization sync. |
+| GET | `/api/internal/progress-tests/admin-digest` | Internal | cron | Send the progress-tests admin digest email (`maxDuration=300`). |
+| GET | `/api/internal/class-assignments/morning` | Internal | cron | Morning class-assignment automation run (`maxDuration=800`). |
+| GET | `/api/internal/class-assignments/admin-email` | Internal | cron | Send the daily class-assignment admin email (`maxDuration=300`). |
+| GET | `/api/internal/student-promotions/july-1` | Internal | cron | July-1 student-promotion automation (cron; `maxDuration=800`). |
+| POST | `/api/internal/student-promotions/july-1` | Internal | cron | July-1 student-promotion automation (manual). |
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

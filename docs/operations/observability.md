@@ -2,246 +2,317 @@
 
 **Status: stable**
 
-> Note: the `docs/reference/database/*` and `docs/reference/api/*` targets referenced below are the canonical home for column-level and endpoint-signature detail. At the time of writing those targets are not all present in the repo (see [Open questions](#open-questions)); the links point at where that mechanical detail belongs.
+> The `docs/reference/database/*` and `docs/reference/api/*` targets are the canonical home for column-level table definitions and endpoint signatures. This runbook explains how to *read* the health signals and what they mean; it links to reference for the mechanical detail rather than restating column lists.
 
 ## What this document covers
 
-BGScheduler runs several independent ingestion pipelines, each backed by its own `*_sync_runs` ledger table. This runbook explains **how to tell whether the system is healthy** without shell access to the database:
+BGScheduler ingests data through several independent pipelines, each backed by its own `*_sync_runs` ledger table. This runbook explains **how to tell whether the system is healthy** — what the ledger tables record, how the `/data-health` surface assembles them into a single readout, what failure modes each pipeline can land in, and how a stale snapshot gets flagged.
 
-- The four sync-run ledgers — `sync_runs`, `wise_activity_sync_runs`, `credit_control_sync_runs`, `payroll_sync_runs` — and what each row means.
-- `snapshot_stats` and `data_issues`: the per-snapshot health counters and the categorised list of unresolved normalization problems.
-- The `/data-health` surface, which is the one admin-facing screen for the Wise snapshot pipeline.
-- The failure modes each ledger can land in, and how a wedged or abandoned run is automatically cleaned up.
-- How a **stale snapshot** is detected and flagged — both in API responses and as a cross-app banner.
+Specifically:
 
-This is an operations runbook. The *meaning* of the Data Health screen (what each card is for, who reads it) lives in the feature doc, [`docs/features/data-health.md`](../features/data-health.md); the per-domain pipelines have their own feature docs ([credit-control](../features/credit-control.md), [payroll](../features/payroll.md), [wise-activity-audit](../features/wise-activity-audit.md)). Column-by-column table definitions belong in `docs/reference/database/*`. This document links to those rather than restating them.
+- The sync-run ledgers — `sync_runs`, `wise_activity_sync_runs`, `credit_control_sync_runs`, `payroll_sync_runs` (and the sibling `leave_request_sync_runs` / `progress_test_sync_runs`) — and what a row in each means.
+- `snapshot_stats` and `data_issues`: the per-snapshot health counters and the categorised list of unresolved normalization problems, broken down by **type** and **severity**.
+- The `/data-health` API surface (`GET /api/data-health`), which is the one admin-facing screen that fuses every ledger plus a cron-invocation audit into an overall status.
+- The failure modes each ledger can land in, and how a wedged or abandoned run is detected.
+- How a **stale snapshot** is detected and flagged — in search API responses, in the dashboard payload, and as a cross-app banner.
 
-## The mental model: snapshots vs. ledgers
+This is an operations document. The *meaning* of the Data Health screen (what each card is for, who reads it) lives in the feature doc [`docs/features/data-health.md`](../features/data-health.md); the per-domain pipelines have their own feature docs ([credit-control](../features/credit-control.md), [payroll](../features/payroll.md), [wise-activity-audit](../features/wise-activity-audit.md)). Column-by-column table definitions belong in [`docs/reference/database/index.md`](../reference/database/index.md).
+
+## Mental model: snapshots vs. ledgers
 
 Two different things are versioned, and conflating them is the most common source of confusion:
 
-1. **Snapshots** (`snapshots`, `credit_control_snapshots`) are versioned *data*. Exactly one row has `active = true` at a time; the rest of the app reads only the active one. Promotion of a new snapshot is atomic.
-2. **Sync runs** (`*_sync_runs`) are an *audit ledger* of ingestion attempts. A run row records when an attempt started, whether it finished, what it produced, and — on failure — why. A run may or may not promote a snapshot; a failed run leaves the previously-active snapshot in place.
+1. **Snapshots** (`snapshots` at `src/lib/db/schema.ts:198`, `credit_control_snapshots`) are versioned *data*. Exactly one snapshot row carries `active = true` at a time, and the rest of the app reads only that one. Promotion of a new snapshot is a single atomic `UPDATE` (`src/lib/sync/orchestrator.ts:488`).
+2. **Sync runs** (`*_sync_runs`) are an *audit ledger* of ingestion attempts. A run row records when an attempt started, whether it finished, what it produced, and — on failure — why (`errorSummary`). A run may or may not promote a snapshot; a failed run leaves the previously-active snapshot in place.
 
-A healthy system is one where the **most recent** run in each ledger is `success` and the active snapshot it promoted is recent enough that the staleness thresholds (below) have not tripped.
+A healthy system is one where the **most recent** run in each ledger is `success`, and the active snapshot it promoted is recent enough that the staleness thresholds (below) have not tripped.
 
 ```mermaid
 flowchart LR
   cron[Vercel Cron] --> route["/api/internal/sync-* route<br/>(CRON_SECRET gated)"]
-  route --> guard{Single-flight<br/>guard}
-  guard -- "another run already 'running'" --> skip[Return 202 skipped]
-  guard -- "lock acquired" --> run[Insert run row: status=running]
+  route --> guard{Single-flight<br/>running guard}
+  guard -- "another run already 'running'" --> skip[Return skipped / 409]
+  guard -- "lock acquired" --> run["Insert run row<br/>status = running"]
   run --> work[Fetch Wise → normalize → write candidate]
-  work -- ok --> promote[Atomic promote snapshot<br/>run row: status=success]
-  work -- throws --> fail[run row: status=failed<br/>errorSummary set<br/>prior snapshot preserved]
-  promote --> stats[snapshot_stats + data_issues written]
+  work -- ok --> promote["Atomic promote snapshot<br/>run row: status = success"]
+  work -- throws --> fail["run row: status = failed<br/>errorSummary set<br/>prior snapshot preserved"]
+  promote --> stats["snapshot_stats + data_issues<br/>written for the new snapshot"]
 ```
 
-## The four sync-run ledgers
+## The sync-status enum
 
-All four ledgers share the same `sync_status` enum — `running`, `success`, `failed` (`src/lib/db/schema.ts:19-23`) — and the same lifecycle skeleton: a row is inserted `running`, then transitioned to `success` or `failed` with `finishedAt` stamped. They differ in what they count and how they are triggered.
+Every `*_sync_runs.status` column is the same Postgres enum, `sync_status`, with exactly three values (`src/lib/db/schema.ts:19`):
 
-| Ledger table | Pipeline | Triggered by | Cron schedule | Single-flight guard |
-|---|---|---|---|---|
-| `sync_runs` | Wise tutor snapshot (the data Search/Compare run against) | Vercel cron + manual "Sync now" | `*/30 * * * *` | `sync_runs_single_running_idx` |
-| `wise_activity_sync_runs` | Wise activity audit events | Vercel cron + manual backfill | `5,35 * * * *` | `wise_activity_sync_runs_single_running_idx` |
-| `credit_control_sync_runs` | Credit-control snapshot | Vercel cron + manual | `20,50 * * * *` | `ccsr_single_running_idx` |
-| `payroll_sync_runs` | Payroll month computation | **Manual only** (no cron) | — | `payroll_sync_runs_single_running_idx` |
+| Value | Meaning |
+|---|---|
+| `running` | A run is in progress, or was left wedged (never reached a terminal state). |
+| `success` | The run completed. For `sync_runs` this does **not** guarantee promotion — see the promotion gate below. |
+| `failed` | The run threw; `errorSummary` carries the message. |
 
-Cron schedules are registered in `vercel.json:2-31`. Note that **payroll has no cron entry** — it is invoked on demand via `POST /api/payroll/sync` and every run row is stamped `triggerType: "manual"` (`src/lib/payroll/sync.ts:264`). The Wise snapshot sync runs on the Pro plan with a generous function ceiling: `export const maxDuration = 800` (`src/app/api/internal/sync-wise/route.ts:6`).
+Every ledger defaults `status` to `running` on insert (e.g. `src/lib/db/schema.ts:206`), so the row exists *before* the work starts and is updated to a terminal state when it ends. A row stuck in `running` therefore means the process died mid-flight.
 
-### `sync_runs` — Wise tutor snapshot
+## The sync-run ledgers
 
-Defined at `src/lib/db/schema.ts:171-186`. Key columns for observability:
+All ledgers share the same backbone columns: `id`, `status` (the `sync_status` enum), `startedAt`, `finishedAt`, `errorSummary`, and a `metadata` JSONB. Each adds domain-specific counters and a partial unique index that enforces single-flight. The four tables named in this runbook's scope:
 
-- `status`, `startedAt`, `finishedAt` — lifecycle.
-- `snapshotId` — the *candidate* snapshot created for this run, set immediately after the run row (`src/lib/sync/orchestrator.ts:78-81`).
-- `promotedSnapshotId` — set **only** if the candidate passed validation and was promoted to active (`orchestrator.ts:500`, `514`). A non-null `promotedSnapshotId` is the signal that this run actually changed what the app serves.
-- `teacherCount` — how many Wise teachers were fetched.
-- `errorSummary` — populated on the failure path only.
-- `metadata` (jsonb) — carries the past-sessions diff-hook timings and snapshot-pruning result (`orchestrator.ts:503-506`, `539`).
+### `sync_runs` — Wise tutor snapshot (`src/lib/db/schema.ts:204`)
 
-The full lifecycle: insert `running` (`orchestrator.ts:62-68`), attach the candidate `snapshotId` (`78-81`), do all the work, then on the happy path update to `success` with `promotedSnapshotId`/`teacherCount`/`metadata` (`509-518`). On any thrown error the `catch` sets `status: "failed"`, `finishedAt`, and `errorSummary` (`561-586`). The cleanup `UPDATE` itself is wrapped in `.catch()` so that if the database is unreachable, the original error still surfaces and a log line explains why the row is stuck `running` (`orchestrator.ts:573-585`).
+The primary pipeline, feeding tutor search and compare. Distinctive columns:
 
-### `wise_activity_sync_runs` — activity audit
+- `snapshotId` — the candidate snapshot this run wrote into.
+- `promotedSnapshotId` — set **only if** the run actually promoted (passed the promotion gate). A `success` row with a null `promotedSnapshotId` means the run completed but was blocked from promotion.
+- `teacherCount` — teachers fetched from Wise.
+- `metadata` — on a promoting run, carries `diffHookDurationMs`, `pastSessionsCapturedCount`, and a `pruning` summary (`src/lib/sync/orchestrator.ts:503`, `:539`).
 
-Defined at `src/lib/db/schema.ts:225-243`. This is a **read-only audit** pipeline (it never promotes a snapshot), so it has no `promotedSnapshotId`. Instead it records ingestion volume: `pagesFetched`, `eventsFetched`, `insertedCount`, and the `oldestEventTimestamp`/`newestEventTimestamp` window covered. `triggerType` distinguishes `cron` from `manual` backfills, which use different lookback/page caps (`src/lib/wise-activity/sync.ts:146-148`).
+Single-flight is enforced by `sync_runs_single_running_idx`, a unique index on `status` filtered to `WHERE status = 'running'` (`src/lib/db/schema.ts:215`) — at most one `running` row can exist, so a concurrent cron tick cannot start a second sync.
 
-### `credit_control_sync_runs` — credit-control snapshot
+### `wise_activity_sync_runs` — Wise Activity audit ingest (`src/lib/db/schema.ts:280`)
 
-Defined at `src/lib/db/schema.ts:459-477`. Mirrors `sync_runs`: it has both `snapshotId` and `promotedSnapshotId` (referencing `credit_control_snapshots`), plus domain counters `studentCount`, `packageCount`, `sessionCount`.
+Read-only ingestion of Wise audit events. Distinctive columns: `triggerType`, `pagesFetched`, `eventsFetched`, `insertedCount`, `oldestEventTimestamp`, `newestEventTimestamp`. Single-flight via `wise_activity_sync_runs_single_running_idx` (`:294`). When a second run is attempted while one is `running`, the sync throws `WiseActivitySyncAlreadyRunningError`, which the manual path maps to HTTP 409 (`src/lib/data-health/run-job.ts:48`).
 
-### `payroll_sync_runs` — payroll month
+### `credit_control_sync_runs` — Credit Control snapshot (`src/lib/db/schema.ts:517`)
 
-Defined at `src/lib/db/schema.ts:855-873`. Scoped by `payrollMonth` (a `date`), so several runs accumulate per month. Counters are `teacherCount`, `sessionCount`, `invoiceCount`. There is no snapshot concept here; the latest run for a month is the source of truth for that month's review.
+A second snapshot lineage (it references `creditControlSnapshots` via `snapshotId` / `promotedSnapshotId`). Distinctive counters: `studentCount`, `packageCount`, `sessionCount`. Single-flight via `ccsr_single_running_idx` (`:532`).
+
+### `payroll_sync_runs` — Monthly payroll reconciliation (`src/lib/db/schema.ts:995`)
+
+Keyed by `payrollMonth` (a `date`), so multiple months coexist. Distinctive columns: `triggerType` (defaults to `"manual"`), `teacherCount`, `sessionCount`, `invoiceCount`. Single-flight via `payroll_sync_runs_single_running_idx` on `status` (`:1008`) — note this is **global**, not per-month, so two different months cannot be syncing simultaneously. Downstream tables (`payrollReviews`, etc.) carry a `lastSyncRunId` / `syncRunId` FK back to this ledger (`:1023`, `:1034`).
+
+> Two further ledgers follow the identical shape but fall outside the four-table scope of this runbook: `leave_request_sync_runs` (`src/lib/db/schema.ts:1325`; adds `scannedRowCount` / `insertedCount` / `updatedCount` / `notificationCount`) and `progress_test_sync_runs` (`:2185`; adds `ledgerRowCount` / `enrollmentCount` / `approachingCount` / `dueCount` / `notificationCount`). Both are surfaced on `/data-health` the same way.
+
+### Reading a ledger
+
+To answer "is pipeline X healthy?" without DB shell access, the rule the dashboard itself uses (`src/lib/data-health/dashboard.ts`):
+
+- **Latest run** — the row with the greatest `startedAt`. If its `status` is `failed`, the pipeline is failing.
+- **Latest success** — the most recent `status = success` row with a `finishedAt`. This is the freshness anchor (`latestSuccessful`, `src/lib/data-health/dashboard.ts:107`).
+- **Latest failure after latest success** — if a failure is newer than the newest success, the domain is failing even if older successes exist (`hasRecentFailure`, `src/lib/data-health/status.ts:200`).
+- **Running too long** — a `running` row older than the job's `maxDurationSeconds` (+60s buffer) is treated as wedged/failing (`src/lib/data-health/status.ts:203`).
 
 ## `snapshot_stats` — per-snapshot health counters
 
-Defined at `src/lib/db/schema.ts:1762-1778`, one row per snapshot (unique on `snapshotId`). Written once, at the end of a successful Wise sync, just before promotion (`src/lib/sync/orchestrator.ts:458-470`). It is a denormalized rollup so the Data Health screen can render headline numbers without scanning the snapshot's data tables.
+`snapshot_stats` (`src/lib/db/schema.ts:1913`) holds exactly one row per snapshot (`ss_snapshot_idx` is unique on `snapshotId`, `:1928`). It is written once at the end of a successful sync, before promotion (`src/lib/sync/orchestrator.ts:458`). Columns and how each is derived:
 
-Fields:
+| Column | Source at write time (`orchestrator.ts:458`) |
+|---|---|
+| `totalWiseTeachers` | `wiseTeachers.length` — raw teacher records from Wise. |
+| `totalIdentityGroups` | `groups.length` — identity groups after the 5-step cascade. |
+| `resolvedGroups` | groups with no unresolved-identity issue (`:462`). |
+| `unresolvedGroups` | `identityIssues.length` — groups that failed identity resolution. |
+| `totalQualifications` | `qualificationRows.length`. |
+| `totalAvailabilityWindows` | `recurringAvailabilityRows.length`. |
+| `totalLeaves` | `datedLeaveRows.length`. |
+| `totalFutureSessions` | `sessionBlocks.length`. |
+| `totalDataIssues` | `allIssues.length` — every `data_issues` row for this snapshot. |
+| `issuesByType` | JSONB map of `data_issue_type → count`, accumulated from `allIssues` (`:453`). |
 
-- `totalWiseTeachers`, `totalIdentityGroups`, `resolvedGroups`, `unresolvedGroups` — identity-resolution health. `resolvedGroups` is computed as the groups *not* implicated in an identity issue (`orchestrator.ts:462`); `unresolvedGroups` equals the identity-issue count (`463`).
-- `totalQualifications`, `totalAvailabilityWindows`, `totalLeaves`, `totalFutureSessions` — volume counters for the normalized tables.
-- `totalDataIssues` — total issue count for the snapshot.
-- `issuesByType` (jsonb) — a `Record<type, count>` map, built by tallying every issue's `type` (`orchestrator.ts:453-456`). This is what powers the "Issues by Type" badges on the dashboard.
+`resolvedGroups + unresolvedGroups` and `unresolvedGroups / totalIdentityGroups` are the inputs to the **promotion gate** (below): the same `unresolvedRatio` that decides promotion is what these counters expose after the fact.
 
-Because `snapshot_stats` is written *only* on the success path, a snapshot that was never promoted has no stats row, and the Data Health screen falls back to `null` stats (`src/app/api/data-health/route.ts:65`, `122-131`).
+The dashboard reads this row only for the **active** snapshot (`src/lib/data-health/dashboard.ts:660`). If the active snapshot has no `snapshot_stats` row, the payload's `stats` is `null` and the Tutor Snapshot domain reads "No active snapshot" (`:345`).
 
-## `data_issues` — categorised unresolved problems
+## `data_issues` — categorised normalization problems
 
-Defined at `src/lib/db/schema.ts:1744-1758`. Every normalization problem the sync cannot resolve cleanly is recorded here, scoped to the snapshot that produced it (`snapshotId`, indexed at `1756-1757`). This is the fail-closed audit trail: rather than silently dropping a tutor, the pipeline writes an issue and routes the tutor to "Needs Review".
+`data_issues` (`src/lib/db/schema.ts:1895`) is the itemised list behind the `totalDataIssues` counter. Each row is scoped to a snapshot (`snapshotId` FK, `:1897`) and classified along two axes.
 
-Each row carries a `type`, a `severity`, optional entity pointers (`entityType`/`entityId`/`entityName`), a human-readable `message`, and optional `metadata`.
+### By type — `data_issue_type` enum (`src/lib/db/schema.ts:25`)
 
-### Issue types
+| Type | Emitted when |
+|---|---|
+| `alias` | Identity resolution could not match a teacher record (unresolved alias). Issues are seeded from `identityIssues` at `src/lib/sync/orchestrator.ts:97`. |
+| `modality` | A tutor's online/onsite modality could not be resolved. |
+| `tag` | A Wise qualification tag did not map to subject/curriculum/level/examPrep. |
+| `completeness` | A per-group data-fetch failure during the past-sessions diff hook — emitted but never aborts the sync (`src/lib/sync/past-sessions-diff-hook.ts:19`). |
+| `conflict_model` | A modality contradiction (fail-closed: emits `unknown` + low confidence rather than guessing; `orchestrator.ts:365`). |
+| `sync` | A sync-level issue. |
 
-The `data_issue_type` enum (`src/lib/db/schema.ts:25-32`) has six values. Where each originates during the Wise sync:
+### By severity — `data_issue_severity` enum (`src/lib/db/schema.ts:34`)
 
-| `type` | Meaning | Emitted at |
-|---|---|---|
-| `alias` | A tutor identity could not be resolved (nickname/alias cascade failed). | `src/lib/sync/orchestrator.ts:97-100` (mapped from identity issues, severity `critical`) |
-| `completeness` | Missing required field on a Wise record (e.g. teacher with no user ID), or a per-group fetch error that did not abort the sync. | `orchestrator.ts:165`, `252-253`, `343`; diff-hook issues `408-417` |
-| `modality` | A tutor group's online/onsite modality could not be derived. | `orchestrator.ts` (group-level, via `deriveModality`) |
-| `conflict_model` | A *session-level* contradiction between modality signals (a stronger, per-session check than the group-level `modality` issue). | `orchestrator.ts:384-385` (from `detectSessionModalityConflict`) |
-| `tag` | A raw Wise tag could not be mapped to a subject/curriculum/level qualification. | qualification normalization |
-| `sync` | Reserved sync-level issue category (enum member). | — |
+`critical`, `high`, `medium`, `low`. The column defaults to `high` (`:1899`).
 
-### Severities
+### How the dashboard groups them
 
-The `data_issue_severity` enum is `critical | high | medium | low` (`src/lib/db/schema.ts:34-39`), defaulting to `high`. In practice identity (`alias`) issues are written `critical` (`orchestrator.ts:100`) and completeness/modality/conflict issues `high` (`166`, `253`, `343`, `385`). Severity is stored but the current `/data-health` surface groups and counts by **type**, not severity (see below).
+`/data-health` surfaces `data_issues` two ways:
 
-### How issues surface on `/data-health`
+1. **`issueSummary` / `issuesByType`** — the pre-aggregated `snapshot_stats.issuesByType` map (type → count). Cheap; no per-row scan.
+2. **`issueDetails`** — a live `SELECT type, entityName, message` over `data_issues` for the active snapshot (`src/lib/data-health/dashboard.ts:681`), then bucketed by `issueDetailsFromIssues` (`:258`) into three reviewer-facing lists:
+   - `unresolvedAliases` ← `type = 'alias'`
+   - `unresolvedModality` ← `type IN ('modality', 'conflict_model')`
+   - `unmappedTags` ← `type = 'tag'`
 
-The route does not return raw issues wholesale. It filters the snapshot's issues into three drill-down lists plus a by-type histogram (`src/app/api/data-health/route.ts:82-101`):
-
-- **Unresolved aliases** — `type === "alias"` (`route.ts:87-89`).
-- **Modality issues** — a *combined* counter covering both group-level `modality` issues **and** session-level `conflict_model` issues, merged by the `selectModalityIssues` helper (`route.ts:97`, implemented in `src/app/api/data-health/modality-counter.ts`). The route's own JSDoc warns this number is expected to rise after the session-level check shipped — that is surface-of-reality, not a regression (`route.ts:8-23`).
-- **Unmapped tags** — `type === "tag"` (`route.ts:99-101`).
-
-The `issuesByType` map comes straight from `snapshot_stats.issuesByType` (`route.ts:79`), not recomputed from rows.
+   Note that `completeness` and `sync` issues count toward `totalDataIssues` and `issuesByType` but are **not** broken out into a detail list. The `severity` column is stored but is **not** part of the dashboard payload — there is no severity filter on the screen today (see [Open questions](#open-questions)).
 
 ```mermaid
 flowchart TD
-  sync[Wise sync orchestrator] --> di[(data_issues<br/>per snapshot)]
-  sync --> ss[(snapshot_stats<br/>issuesByType rollup)]
-  di --> dh["/api/data-health"]
-  ss --> dh
-  dh --> alias[Unresolved aliases table]
-  dh --> mod[Modality issues table<br/>group + session]
-  dh --> tag[Unmapped tags table]
-  ss --> hist[Issues-by-type badges]
+  subgraph write["Sync write path (orchestrator.ts)"]
+    issues["allIssues[] (alias / modality / tag /<br/>completeness / conflict_model / sync)"]
+    issues --> di["INSERT data_issues (chunked)"]
+    issues --> byType["issuesByType map"]
+    byType --> ss["INSERT snapshot_stats<br/>(totalDataIssues, issuesByType)"]
+  end
+  subgraph read["/data-health read path (dashboard.ts)"]
+    ss --> summary["issueSummary = issuesByType"]
+    di --> details["SELECT type,entityName,message<br/>→ aliases / modality / tags buckets"]
+  end
 ```
 
 ## The `/data-health` surface
 
-`GET /api/data-health` (`src/app/api/data-health/route.ts`) is auth-gated (401 if no session, `route.ts:34-37`) and is **read-only** — it issues only `SELECT`s. It is scoped to the **Wise snapshot pipeline only** (`sync_runs` + `snapshots` + `snapshot_stats` + `data_issues`); it does **not** report on credit-control, payroll, or wise-activity runs.
+`GET /api/data-health` (`src/app/api/data-health/route.ts`) is the single admin-facing observability endpoint. It requires an authenticated session — `auth()` → 401 if absent (`route.ts:15`) — and otherwise returns the output of `getDataHealthDashboardPayload()` (`route.ts:21`), or 500 on error. There is no `CRON_SECRET` tier here; this is an admin screen, not a cron route.
 
-What it returns (`route.ts:116-144`):
+### What the payload contains
 
-- `lastSuccessfulSync` / `lastFailedSync` — newest `finishedAt` for `status = success` / `failed` (`route.ts:43-56`).
-- `lastFailureError` — `errorSummary` of the newest failed run (`route.ts:119`).
-- `staleAgeMs` / `staleMinutes` — wall-clock age of the last successful sync (`route.ts:105-107`, `120-121`).
-- `activeSnapshotId` — id of the `active = true` snapshot (`route.ts:59-63`).
-- `stats` — the five headline counts from `snapshot_stats` (`route.ts:123-131`), or `null` if no stats row exists.
-- `issuesByType`, `unresolvedAliases`, `unresolvedModality`, `unmappedTags` — as described above.
-- `recentSyncs` — the last 10 runs by `startedAt` (`route.ts:110-114`, `136-143`), the rolling history table on the page.
+The shape is `DataHealthDashboardPayload` (`src/lib/data-health/types.ts:107`). Key sections:
 
-The page (`src/app/(app)/data-health/page.tsx`) renders three status cards (last success, active snapshot, last failure), five stat cards, the by-type badges, the three drill-down tables, and the recent-history table. It also exposes the one operational lever — **Sync now** — and shows a red "Stale (Nm ago)" badge when `isApiSnapshotStale(staleAgeMs)` is true (`page.tsx:191`, `211-215`).
+- **`overall`** — a single fused status (`healthy` / `late` / `failing` / `running` / `unknown` / `manual-only`) plus per-status counts. Computed as the **worst** status across all non-manual cron jobs (`overallFromJobs`, `dashboard.ts:596`), using a severity ranking where `failing(5) > late(4) > running(3) > unknown(2) > manual-only(1) > healthy(0)` (`statusRank`, `src/lib/data-health/cron-registry.ts:214`).
+- **`cronJobs[]`** — one `CronJobHealth` per registered job (next section).
+- **`dataDomains[]`** — seven per-domain cards (Tutor Snapshot, Wise Activity Audit, Sales Dashboard, Credit Control, Leave Requests, Class Assignments, Room Utilization) with a freshness label, last-success time, record-count label, and issue count (`buildDomains`, `dashboard.ts:328`).
+- **`wiseSnapshot`** — the Wise pipeline's `activeSnapshotId`, `lastSuccessfulSync`, `lastFailedSync` + `lastFailureError`, `staleAgeMs` / `staleMinutes`, and the `snapshot_stats` row (`dashboard.ts:699`).
+- **`issueSummary`** + **`issueDetails`** — the `data_issues` rollups described above.
+- **`recentRuns[]`** — the 30 most recent runs across all ledgers, interleaved and sorted by `startedAt` (`buildRecentRuns`, `dashboard.ts:443`, `:533`).
+- **`recentSyncs[]`** — the last 8 Wise `sync_runs` specifically (`dashboard.ts:735`).
+- **Top-level compatibility mirrors** — `lastSuccessfulSync`, `staleAgeMs`, `staleMinutes`, `stats`, `issuesByType`, `unresolvedAliases`, etc. are duplicated at the payload root for the stale-banner client and older tests (`types.ts:132`).
 
-The other three pipelines surface their latest-run state inside their **own** feature screens rather than on `/data-health`:
+### How freshness is computed
 
-- **Wise activity** exposes `lastSyncAt` / `lastSyncStatus` / `lastSyncInsertedCount` from the newest `wise_activity_sync_runs` row (`src/lib/wise-activity/data.ts:174-175`, `220-228`).
-- **Payroll** exposes the newest run for the selected month as `lastSync` with `status`/`finishedAt`/`errorSummary` (`src/lib/payroll/data.ts:540-542`, `88-98`).
-- **Credit control** reads its active snapshot and follow-up state for its own dashboard (`src/lib/credit-control/db.ts`).
+The Wise freshness clock is driven by the **last successful `sync_runs` row**, not by the snapshot's own `createdAt`:
 
-## Failure modes
+```text
+staleAgeMs = now - lastSuccess.finishedAt     (dashboard.ts:695)
+staleMinutes = round(staleAgeMs / 60000)
+```
 
-### 1. A run throws → `failed` with `errorSummary`
+`lastSuccess` is the newest `sync_runs` row with `status = 'success'` ordered by `finishedAt` (`dashboard.ts:631`). If there has never been a successful sync, `staleAgeMs` is `null`.
 
-The universal failure path: the run row is updated to `status: "failed"`, `finishedAt` is stamped, and a short `errorSummary` is recorded. This is identical in shape across all four pipelines:
+### Data-fetch budget
 
-- Wise snapshot: `src/lib/sync/orchestrator.ts:561-586`.
-- Wise activity: `src/lib/wise-activity/sync.ts:262-269`.
-- Credit control: `src/lib/credit-control/sync.ts:585-587`.
-- Payroll: `src/lib/payroll/sync.ts:441-443`.
+`getDataHealthDashboardPayload` issues the ledger reads with `Promise.all` and a `RECENT_LIMIT` of 8 rows per ledger (`dashboard.ts:17`, `:538`). Cron-invocation rows are capped at 80 (`dashboard.ts:585`). The `cron_invocations` read is wrapped in a try/catch that downgrades a missing-table error to an empty list (`dashboard.ts:586`) so the dashboard still renders from run-table inference if that table has not been migrated yet.
 
-Crucially, a failed Wise or credit-control sync **does not** promote its candidate snapshot, so the previously-active snapshot keeps serving. The app degrades to *stale-but-correct*, never *empty or wrong*.
+## Cron health: proof sources, late detection, and stuck runs
 
-### 2. Validation gate blocks promotion (Wise only)
+`/data-health` does not just read run tables — it also reconciles them against a **cron-invocation audit** (`cron_invocations`, `src/lib/db/schema.ts:221`). Every internal/admin job is wrapped in `withCronInvocationAudit` (`src/lib/data-health/cron-audit.ts:144`), which inserts a `cron_invocations` row with `outcome = 'running'` before the work (`cron-audit.ts:91`) and updates it to a terminal outcome afterward. Outcomes are derived from the response (`determineOutcome`, `cron-audit.ts:61`): a body with `skipped === true` or an `"already running"` message → `skipped`; `ok === false` / `success === false` or HTTP ≥ 400 → `failed`; HTTP 202 → `skipped`; otherwise `success`.
 
-Even without an exception, the Wise sync refuses to promote a catastrophically broken snapshot. If more than 50% of identity groups are unresolved, `shouldPromote` is false and the run finishes `success` with `promotedSnapshotId = null` (`src/lib/sync/orchestrator.ts:473-476`, `480`). The run "succeeded" in the sense that it completed cleanly, but it deliberately left the old snapshot active. Watch for a `success` run whose `promotedSnapshotId` is null — that is the validation gate firing.
-
-### 3. Single-flight guard skips an overlapping run
-
-Each ledger has a partial unique index that permits at most one `running` row (e.g. `sync_runs_single_running_idx`, `src/lib/db/schema.ts:182-184`). Before inserting a new `running` row, the guard checks for an existing one and, if found, returns a `202`-style skipped result instead of starting a second sync (`src/lib/sync/run-wise-sync.ts:93-97`, `120-140`). If two requests race past the check, the second `INSERT` hits the unique constraint (`23505`) and is converted into the same skipped result (`run-wise-sync.ts:106-117`). This prevents two crons (or a cron + a manual click) from clobbering each other.
-
-### 4. Abandoned `running` row → force-failed after 20 minutes
-
-If a function is killed mid-run (timeout, deploy, abort), its row is left dangling in `running` and would otherwise block all future syncs forever via the single-flight guard. Every pipeline guards against this by force-failing any `running` row older than **20 minutes** before acquiring a new one:
-
-- Wise snapshot: `STALE_RUNNING_SYNC_MS = 20 * 60 * 1000` (`src/lib/sync/run-wise-sync.ts:10`); `failStaleRunningSyncs` flips stale rows to `failed` with an explanatory `errorSummary` (`run-wise-sync.ts:39-72`).
-- Credit control: identical, `STALE_RUNNING_CREDIT_CONTROL_SYNC_MS` (`src/lib/credit-control/run-sync-request.ts:9`, `50-68`).
-- Wise activity: `markAbandonedRuns` (`src/lib/wise-activity/sync.ts:117-129`).
-- Payroll: `markAbandonedRuns` (`src/lib/payroll/sync.ts:117-137`).
-
-A force-failed row's `errorSummary` reads, e.g., *"Sync marked failed because it was still running after 20 minutes; likely timed out or the request was aborted."* (`run-wise-sync.ts:39-40`). The count of rows reaped this way is returned as `staleRunningSyncsFailed` on the next run's response, so an operator triggering "Sync now" can see if a wedge was just cleared.
-
-**Worth knowing:** the 20-minute cutoff is wider than the Wise sync's 800s (~13.3 min) function ceiling, so a legitimately-running sync can never be force-failed; the cutoff is purely a safety net for abandoned rows. The trade-off is that a genuinely wedged row blocks roughly 1.5 cron cycles (the 30-min Wise cadence) before the next invocation reaps it.
-
-### 5. Route-level error
-
-`/api/data-health` itself wraps its body in try/catch and returns `{ error }` with `500` on any failure (`src/app/api/data-health/route.ts:145-148`); a `401` is returned when unauthenticated (`34-37`). A failed Data Health *fetch* is a problem with the observability surface, not necessarily with the underlying syncs.
-
-## How stale snapshots are flagged
-
-Staleness is computed from the **age of the last successful sync**, not from any flag stored on the snapshot. There are two distinct thresholds, both centralized in `src/lib/ops/stale.ts`:
-
-| Constant | Value | Effect |
-|---|---|---|
-| `API_STALE_THRESHOLD_MS` | 90 minutes (`stale.ts:2`) | API responses set `snapshotMeta.stale = true` and push a warning string. |
-| `APP_STALE_BANNER_THRESHOLD_MS` | 2 hours (`stale.ts:3`) | The cross-app banner appears. |
-
-The 90-minute API threshold is deliberately wider than the 30-minute Pro cron cadence to tolerate a couple of missed/recovering cycles before crying wolf (`stale.ts:1`).
-
-### Where the flag is set
-
-**Search/Compare API responses.** When the search engine builds a response it computes `stale: Date.now() - index.syncedAt.getTime() > staleThresholdMs` (default `API_STALE_THRESHOLD_MS`) and, if stale, appends `STALE_SEARCH_WARNING` to the `warnings` array (`src/lib/search/engine.ts:25`, `30-37`). The `SnapshotMeta` shape (`{ snapshotId, syncedAt, stale }`) is defined at `src/lib/search/types.ts:30-34`.
-
-The `syncedAt` anchor is the `finishedAt` of the **successful sync that promoted the active snapshot** — found by matching `status = success AND promotedSnapshotId = <active>` (`src/lib/search/index.ts:155-165`) — falling back to the snapshot's `createdAt` if no such run is found (`index.ts:166`).
-
-**The `/data-health` page.** It calls `isApiSnapshotStale(staleAgeMs)` (90-min threshold) to decide whether to show the red "Stale (Nm ago)" badge (`src/app/(app)/data-health/page.tsx:191`, `211-215`).
-
-**The cross-app banner.** `StaleSnapshotBanner` fetches `/api/data-health`, reads `staleAgeMs`, and shows the banner when `shouldShowStaleBanner(staleAgeMs)` is true (2-hour threshold) (`src/components/layout/stale-snapshot-banner.tsx:58-66`). Dismissal is remembered per session (`stale-snapshot-banner.tsx:44`, `84`). The banner text and "View data health" deep link are also centralized in `stale.ts:6-9`.
+Each cron job's status is then computed by `evaluateCronJobStatus` (`src/lib/data-health/status.ts:160`) from the **registry definition** (`CRON_JOBS`, `src/lib/data-health/cron-registry.ts:35`) plus the latest invocation and the latest run. The registry is the source of truth for each job's schedule, `lateAfterMinutes`, and `maxDurationSeconds`. The status precedence:
 
 ```mermaid
 flowchart TD
-  ok[Last SUCCESS sync<br/>that promoted active] --> age["syncedAt = finishedAt<br/>(fallback: snapshot.createdAt)"]
-  age --> t90{age > 90 min?}
-  age --> t120{age > 2 hr?}
-  t90 -- yes --> apiwarn["API: snapshotMeta.stale=true<br/>+ warning string"]
-  t90 -- yes --> badge["/data-health: red Stale badge"]
-  t120 -- yes --> banner[App-wide stale banner]
+  start[evaluateCronJobStatus] --> manual{manualOnly?}
+  manual -- yes --> mo["manual-only<br/>(room_utilization)"]
+  manual -- no --> stuck{"running past<br/>maxDurationSeconds + 60s?"}
+  stuck -- yes --> failing1["failing<br/>'Running longer than maxDuration'"]
+  stuck -- no --> running{currently running?}
+  running -- yes --> run[running]
+  running -- no --> proof{any run/invocation<br/>evidence?}
+  proof -- none --> unknown[unknown]
+  proof -- yes --> recentfail{failure newer<br/>than success?}
+  recentfail -- yes --> failing2[failing]
+  recentfail -- no --> latecheck{missed expected<br/>window by lateAfter?}
+  latecheck -- yes --> late[late]
+  latecheck -- no --> healthy[healthy]
 ```
 
-### Index freshness vs. data staleness — not the same thing
+Two distinct "proof" sources feed this (`proof: "direct" | "inferred" | "none"`, `status.ts:185`): **direct** when a `cron_invocations` row confirms the route fired; **inferred** when only the run-table cadence is available (e.g. before the audit table accumulates rows). This is why a brand-new deployment can show `healthy` via "Run-table inference" before any cron-audit rows exist (`status.ts:313`).
 
-Independent of the staleness *threshold*, the in-memory search index keeps itself pointed at the current active snapshot. `ensureIndex` compares the cached index's `snapshotId` (and tutor-profile version) against the live `active = true` snapshot on each call and rebuilds when they diverge (`src/lib/search/index.ts:354-401`, comparison at `377-383`). So a freshly-promoted snapshot is picked up automatically; the 90-minute/2-hour thresholds are about whether the *data itself* has gone unrefreshed for too long, not about index cache coherence.
+### Registry cadence reference (for late detection)
 
-## Quick operator checklist
+`lateAfterMinutes` is how long past the expected window a scheduled job may go silent before it flips to `late` (`status.ts:282`). From `CRON_JOBS` (`cron-registry.ts:35`):
 
-- **Is tutor search fresh?** Open `/data-health`. Green if "Last Successful Sync" is recent and no Stale badge. The "Active Snapshot" short id should match the snapshot most recently promoted.
-- **A sync failed — why?** Read `lastFailureError` (the failed run's `errorSummary`) on `/data-health`, or the newest `failed` row's `errorSummary` in the relevant `*_sync_runs` table.
-- **A `success` run but data didn't change?** Check `promotedSnapshotId`; if null, the >50% unresolved-identity validation gate blocked promotion (Wise only).
-- **Syncs seem stuck / "already running"?** A dangling `running` row is blocking the single-flight guard. It self-heals after 20 minutes; the next run's `staleRunningSyncsFailed` count confirms the reap. Manual "Sync now" triggers the reap immediately.
-- **Too many issues?** The `issuesByType` badges and the alias/modality/tag drill-down tables on `/data-health` point at exactly which Wise source records need a human fix. Modality counts intentionally include both group- and session-level contradictions.
+| Job key | Schedule (UTC cron) | Cadence | `lateAfterMinutes` | `maxDurationSeconds` |
+|---|---|---|---|---|
+| `wise_snapshot` | `*/30 * * * *` | Every 30 min | 45 | 800 |
+| `wise_activity` | `5,35 * * * *` | Every 30 min | 45 | 800 |
+| `sales_dashboard` | `10,40 * * * *` | Every 30 min | 45 | 800 |
+| `credit_control` | `20,50 * * * *` | Every 30 min | 45 | 300 |
+| `progress_tests` | `25,55 * * * *` | Every 30 min | 45 | 300 |
+| `progress_tests_digest` | `35 0 * * *` | Daily 07:35 BKK | 60 | 300 |
+| `leave_requests` | `15,45 * * * *` | Every 30 min | 45 | 800 |
+| `classroom_morning` | `45 23 * * *` | Daily 06:45 BKK | 75 | 800 |
+| `classroom_admin_email` | `0,10,20,30 0 * * *` | Daily 07:00–07:30 BKK | 30 | 300 |
+| `student_promotions_july_1` | `5 17 30 6 *` | One-shot Jul 1 2026 | 1440 | 800 |
+| `room_utilization` | — | Manual only | 0 | 800 |
+
+> This table mirrors the registry; the cron *deployment* (entries in `vercel.json`) is documented in [`docs/reference/crons.md`](../reference/crons.md). `room_utilization` is `manualOnly` (no `schedule`) and is always reported as `manual-only`, never `late` (`status.ts:164`).
+
+## Failure modes
+
+### 1. A run fails (most common)
+
+The orchestrator wraps fetch → normalize → persist → promote in one try/catch (`src/lib/sync/orchestrator.ts`). On any throw, the `sync_runs` row is updated to `status = 'failed'`, `finishedAt = now`, `errorSummary = <message>` (`orchestrator.ts:564`), and **no promotion happens** — the previously-active snapshot remains the one every reader sees. On `/data-health` this surfaces as `wiseSnapshot.lastFailedSync` + `lastFailureError`, and the cron job flips to `failing` because the failure is newer than the last success (`status.ts:200`).
+
+The same pattern holds for the other ledgers: a thrown error lands the latest row in `failed`, and the domain card's `issueCount` ticks to 1 when its latest run is `failed` (e.g. `dashboard.ts:357` for Wise Activity, `:379` for Credit Control).
+
+### 2. Promotion gate blocks an otherwise-successful run
+
+A Wise sync can complete (`status = 'success'`) yet refuse to promote. The gate is identity-resolution quality: `unresolvedRatio = identityIssues.length / max(groups.length, 1)`, and promotion only happens when `unresolvedRatio < 0.5` (`orchestrator.ts:473`). If **≥ 50%** of identity groups are unresolved, `promotedSnapshotId` stays `null`, the candidate snapshot is written but never activated, and the old snapshot keeps serving. This is the fail-closed safety rule in action: a catastrophically-degraded fetch never replaces good data. Detect it by a `success` row whose `promotedSnapshotId` is null while `snapshot_stats.unresolvedGroups` is high.
+
+### 3. A run is left wedged in `running`
+
+If the serverless function is killed (timeout, OOM, deploy) after the run row is inserted but before it reaches a terminal state, the row stays `running`. Because the single-flight unique index only permits one `running` row, this can **block all future runs** of that pipeline until the stale row is cleared.
+
+There is no scheduled sweeper inside this codebase that auto-fails abandoned rows; the cleanup paths are:
+
+- **Detection on the dashboard** — `evaluateCronJobStatus` treats a `running` invocation/run older than `maxDurationSeconds + 60s` as `failing` with "Run appears stuck past maxDuration" (`status.ts:203`, `:207`). So a wedged Wise sync shows as `failing` once ~801s+ have elapsed, even though its row literally still says `running`.
+- **Cleanup-failure visibility** — if the orchestrator's own `failed`-state write fails during error handling, it logs (but does not re-throw) so an operator can see why a row is stuck (`orchestrator.ts:573`, REL-06).
+
+> The production claim that "abandoned `running` rows are failed after a timeout" (AGENTS.md) refers to behaviour in the single-flight wrappers (`run-wise-sync.ts` and the per-domain `run-sync-request` modules), not to the dashboard — the dashboard only *flags* stuck runs, it does not mutate them. See [Open questions](#open-questions).
+
+### 4. `cron_invocations` table missing
+
+If the audit table has not been migrated, the dashboard catches the "relation does not exist" error and proceeds with an empty invocation list (`dashboard.ts:586`). Cron statuses then fall back to run-table inference (`proof: "inferred"`). This is graceful degradation, not a failure — but it means cron `late`/`stuck` detection that depends on invocation timing is weaker until the table exists.
+
+### 5. No active snapshot at all
+
+If no snapshot has `active = true`, the search index throws "No active snapshot found" on build (`src/lib/search/index.ts:150`), and the dashboard's `stats` is `null` with the Tutor Snapshot card reading "No active snapshot" (`dashboard.ts:345`). This is the cold-start / total-failure state.
+
+## Stale-snapshot detection and flagging
+
+Staleness is treated as a **warning, never withheld data** — a stale snapshot still serves results, it just annotates them. There are two thresholds and they fire in three places, all anchored in `src/lib/ops/stale.ts`:
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `API_STALE_THRESHOLD_MS` | 90 min (`90 * 60 * 1000`) | Search results and the dashboard mark the snapshot "stale". |
+| `APP_STALE_BANNER_THRESHOLD_MS` | 2 h (`2 * 60 * 60 * 1000`) | The cross-app warning banner appears. |
+
+The 90-minute API threshold deliberately tolerates a missed 30-minute cron tick plus recovery headroom (comment, `src/lib/ops/stale.ts:1`).
+
+### Where each fires
+
+1. **Search API responses.** `executeSearch` computes `snapshotMeta.stale = (now - index.syncedAt) > API_STALE_THRESHOLD_MS` (`src/lib/search/engine.ts:33`). When stale, it pushes `STALE_SEARCH_WARNING` ("Search data may be stale — last sync was more than 90 minutes ago") into the response `warnings[]` (`engine.ts:37`). Here the clock is `index.syncedAt`, which is the **promoting** sync run's `finishedAt`, falling back to the snapshot's `createdAt` (`src/lib/search/index.ts:166`).
+2. **`/data-health` payload.** `dataHealthSummaryIsStale(payload)` runs `isApiSnapshotStale(payload.staleAgeMs)` against the same 90-minute threshold (`dashboard.ts:746`). Here the clock is the last successful `sync_runs.finishedAt` (`dashboard.ts:695`).
+3. **Cross-app banner.** `StaleSnapshotBanner` fetches `/api/data-health` and shows an amber "Tutor data may be outdated. Last successful sync was over 2 hours ago." bar when `shouldShowStaleBanner(staleAgeMs)` is true — i.e. `staleAgeMs > 2h` (`src/lib/ops/stale.ts`, `src/components/layout/stale-snapshot-banner.tsx:66`). The banner only renders on the search/scheduler/compare workspaces (`stale-snapshot-banner.tsx:18`) and is dismissable for the session via `sessionStorage` (`:84`).
+
+```mermaid
+flowchart LR
+  subgraph clocks["Two freshness clocks"]
+    idx["index.syncedAt<br/>= promoting run finishedAt<br/>(search/index.ts:166)"]
+    led["last success sync_runs.finishedAt<br/>(dashboard.ts:695)"]
+  end
+  idx -->|"> 90 min"| sw["search warnings[]<br/>STALE_SEARCH_WARNING"]
+  led -->|"> 90 min"| dh["/data-health<br/>dataHealthSummaryIsStale"]
+  led -->|"> 2 h"| banner["StaleSnapshotBanner<br/>(workspace pages only)"]
+```
+
+> Subtlety: search staleness reads `index.syncedAt` (the in-memory index's anchor), while the dashboard and banner read the latest `sync_runs.finishedAt`. These can briefly diverge — e.g. immediately after a successful sync, the dashboard's clock resets but the in-memory index only resyncs its `syncedAt` once `ensureIndex` rebuilds (next section). In steady state they agree.
+
+## How the in-memory index detects a changed snapshot
+
+The search index is a `globalThis`-anchored singleton, not re-read per request. `ensureIndex` (`src/lib/search/index.ts:354`) decides whether to rebuild by comparing the cached snapshot id **and** the tutor-profile version against the current active snapshot (`index.ts:377`). If the active snapshot id changed (a new sync promoted) or the profile version changed, it rebuilds via `buildIndex`; otherwise it returns the cached index. Concurrent callers coalesce onto a single in-flight build promise to avoid a thundering herd (`index.ts:358`, `:396`). Notably, if there is suddenly **no** active snapshot, `ensureIndex` keeps serving the last cached index rather than erroring (`index.ts:384`) — a deliberate fail-soft.
+
+This is why a freshly-promoted snapshot becomes visible to search on the next request that triggers a rebuild, and why the search-side staleness clock (`index.syncedAt`) updates only at that point.
+
+## Operator quick-reference
+
+- **"Is search data current?"** → `GET /api/data-health`, read `staleMinutes`. ≤ 90 → fine; > 90 → API marks stale; > 120 → banner shows.
+- **"Did the last sync work?"** → `wiseSnapshot.lastSuccessfulSync` vs `lastFailedSync` + `lastFailureError`.
+- **"Did it actually promote?"** → check the latest `sync_runs` row's `promotedSnapshotId`. Null on a `success` row ⇒ promotion gate blocked it (identity ≥ 50% unresolved).
+- **"What's broken in normalization?"** → `issueSummary` (counts by type) and `issueDetails` (aliases / modality / tags).
+- **"Is a pipeline wedged?"** → `cronJobs[]` entry shows `failing` with "Running longer than maxDuration" once a `running` row exceeds `maxDurationSeconds + 60s`.
+- **"Which pipelines are late/failing overall?"** → `overall.status` and the per-status counts in `overall.detail`.
 
 ## Open questions
 
-- **Reference targets not yet present.** This doc links column-level detail to `docs/reference/database/*` and endpoint signatures to `docs/reference/api/*`, but those files do not all exist yet. Should they be authored, or should the canonical home be reconsidered?
-- **No unified observability surface for the non-Wise pipelines.** `/data-health` covers only `sync_runs`. Credit-control, payroll, and wise-activity each expose their latest-run state only inside their own feature screens. Is a single cross-pipeline health view desirable, or is per-feature surfacing intentional?
-- **Severity is recorded but unused in the surface.** `data_issues.severity` (`critical`/`high`/`medium`/`low`) is stored but `/data-health` groups only by `type`. Should severity drive sorting or alerting?
-- **`sync` issue type appears unused.** The `data_issue_type` enum includes `sync`, but no emission site for it was found during this pass. Is it reserved for future use or dead?
-- **Stale-running cutoff vs. cron cadence.** The 20-minute abandoned-run cutoff is wider than the 800s function ceiling (safe) but also wider than the 30-minute Wise cron interval is short, so a wedged row can block up to ~1.5 cycles before cleanup. Acceptable today; flagged in case cron cadence tightens.
+- **Where stale `running` rows are actually failed.** AGENTS.md states abandoned `running` rows "are failed after a timeout," but the auto-fail logic lives in the single-flight wrappers (`run-wise-sync.ts`, per-domain `run-sync-request.ts`), which were not read for this runbook. The dashboard only *detects and flags* stuck runs (`status.ts:203`); it does not clear them. The exact timeout and the table-clearing mechanism should be verified against those wrappers.
+- **`severity` is stored but unused on the surface.** `data_issues.severity` (`schema.ts:1899`) is a 4-level enum, but no part of the `/data-health` payload reads or groups by it — issues are only bucketed by `type`. Is severity consumed anywhere (alerts, sorting), or is it dead metadata?
+- **`completeness` / `sync` issues have no detail bucket.** They count toward `totalDataIssues` and `issuesByType` but are excluded from `issueDetails` (`dashboard.ts:258`), so a reviewer cannot see them on the surface. Intentional, or a gap?
+- **Severity assignment at write time.** The orchestrator seeds `data_issues` from `identityIssues`/normalization output (`orchestrator.ts:97`); whether any path sets `severity` below the `high` default was not traced here.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

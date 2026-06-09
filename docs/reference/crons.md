@@ -1,177 +1,175 @@
 # Cron Schedule
 
-**Status:** Stable. **Authoritative source:** [`vercel.json`](../../vercel.json).
+> **Reference doc.** This is the canonical, code-grounded inventory of every scheduled job in BGScheduler: when it fires, which endpoint Vercel calls, what the handler does, and how it authenticates. Feature meaning (why a job exists, its product rules) lives in the per-feature docs under [`../features/`](../features/); this page owns the mechanics.
 
-Every scheduled job in BGScheduler is a Vercel Cron entry. Vercel reads `vercel.json` at deploy time, and on each tick it issues an **HTTP `GET`** to the configured `path` with an `Authorization: Bearer $CRON_SECRET` header. There is no in-process scheduler — if a handler is not listed in `vercel.json`, nothing fires it automatically.
+All cron schedules are declared in one place — [`vercel.json`](../../vercel.json) — and Vercel triggers each `path` with an HTTP **GET** carrying `Authorization: Bearer $CRON_SECRET`. There is no in-process scheduler: if a handler is not listed in `vercel.json`, nothing fires it automatically. Every handler verifies that secret in **constant time** before doing any work (REL-07).
 
-After cron auth succeeds, each registered handler records a best-effort `cron_invocations` row. Data Health uses those rows as direct proof that Vercel reached the route; before rows exist for a job, it falls back to the job's durable run table and labels the proof as inferred.
+## The two-source contract (and why they can't drift)
 
-This page is the mechanical reference: schedule, endpoint, auth, timeout, and what each handler does. Feature meaning and data flows live in the corresponding `features/*` docs (linked per cron).
+There are two representations of the cron set, and a test pins them together:
 
-## Cron registry (authoritative)
+1. **`vercel.json`** (`crons: [...]`) — the *deployment* source. This is what Vercel actually schedules. **Authoritative.**
+2. **`src/lib/data-health/cron-registry.ts`** (`CRON_JOBS`) — the *in-app* registry used by the Data Health page and the cron-invocation audit (labels, owning feature, expected cadence, late-after thresholds, `maxDuration`, manual-only flag). It carries one extra entry that `vercel.json` does not (`room_utilization`, marked `manualOnly: true`).
 
-The eight entries below are the complete contents of `vercel.json`. Schedules are UTC (Vercel Cron runs in UTC); the app's business timezone is `Asia/Bangkok` (UTC+7), which matters for the time-of-day jobs.
+`SCHEDULED_CRON_JOBS` is the registry filtered to non-manual jobs (`cron-registry.ts:208`). Two test files enforce equality:
 
-| # | Schedule (UTC) | Cadence | Endpoint (`GET`) | Handler file | `maxDuration` |
-|---|----------------|---------|------------------|--------------|---------------|
-| 1 | `*/30 * * * *` | every 30 min, on :00/:30 | `/api/internal/sync-wise` | [`route.ts:57`](../../src/app/api/internal/sync-wise/route.ts) | 800s ([:6](../../src/app/api/internal/sync-wise/route.ts)) |
-| 2 | `10,40 * * * *` | every 30 min, on :10/:40 | `/api/internal/sync-sales-dashboard` | [`route.ts:60`](../../src/app/api/internal/sync-sales-dashboard/route.ts) | 800s ([:10](../../src/app/api/internal/sync-sales-dashboard/route.ts)) |
-| 3 | `20,50 * * * *` | every 30 min, on :20/:50 | `/api/internal/sync-credit-control` | [`route.ts:46`](../../src/app/api/internal/sync-credit-control/route.ts) | 300s ([:6](../../src/app/api/internal/sync-credit-control/route.ts)) |
-| 4 | `5,35 * * * *` | every 30 min, on :05/:35 | `/api/internal/sync-wise-activity` | [`route.ts:11`](../../src/app/api/internal/sync-wise-activity/route.ts) | 800s ([:7](../../src/app/api/internal/sync-wise-activity/route.ts)) |
-| 5 | `15,45 * * * *` | every 30 min, on :15/:45 | `/api/internal/sync-leave-requests` | [`route.ts:24`](../../src/app/api/internal/sync-leave-requests/route.ts) | 800s ([:6](../../src/app/api/internal/sync-leave-requests/route.ts)) |
-| 6 | `45 23 * * *` | once daily, 23:45 UTC (06:45 Bangkok) | `/api/internal/class-assignments/morning` | [`route.ts:7`](../../src/app/api/internal/class-assignments/morning/route.ts) | 800s ([:5](../../src/app/api/internal/class-assignments/morning/route.ts)) |
-| 7 | `0,10,20,30 0 * * *` | 4×/day, 00:00–00:30 UTC at :00/:10/:20/:30 (07:00–07:30 Bangkok) | `/api/internal/class-assignments/admin-email` | [`route.ts:7`](../../src/app/api/internal/class-assignments/admin-email/route.ts) | 300s ([:5](../../src/app/api/internal/class-assignments/admin-email/route.ts)) |
-| 8 | `5 17 30 6 *` | one-shot business event: 2026-06-30 17:05 UTC (2026-07-01 00:05 Bangkok); route hard-blocks all other Bangkok dates | `/api/internal/student-promotions/july-1` | [`route.ts`](../../src/app/api/internal/student-promotions/july-1/route.ts) | 800s |
+- `src/lib/data-health/__tests__/cron-registry.test.ts:7-20` — asserts the sorted `{path, schedule}` list of `SCHEDULED_CRON_JOBS` **deep-equals** `vercel.json.crons`. Add, remove, or re-time a cron in only one place and this test fails.
+- `src/lib/data-health/__tests__/cron-registry.test.ts:22-25` — asserts `/api/internal/sync-room-utilization` is **not** in the scheduled set (it must stay manual-only).
+- `src/__tests__/vercel-crons.test.ts:14-21` — independently re-checks the four staggered 30-minute schedules straight out of `vercel.json`.
 
-The five `sync-*` jobs are **staggered at 5-minute offsets** across the half-hour so they never all hit the Wise API or the database in the same minute: Wise snapshot on :00/:30, activity audit on :05/:35, sales on :10/:40, leave requests on :15/:45, credit control on :20/:50.
+Because of these tests, the table below (derived from `vercel.json`) and the registry are guaranteed identical at HEAD. Where this doc cites a field the registry adds (owning feature, Bangkok-local time, `maxDuration`), the citation points at `cron-registry.ts` or the handler file.
+
+## All times are UTC in cron; Asia/Bangkok in product
+
+Cron expressions in `vercel.json` are **UTC** (Vercel's scheduler timezone). The app operates in `Asia/Bangkok` (UTC+7, no DST). The daily/one-off jobs are timed so they land at a sensible Bangkok local hour — e.g. `45 23 * * *` (23:45 UTC) fires at **06:45 Bangkok**. The registry records the intended Bangkok-local time in `cadenceLabel` / `expectedBangkokMinute` for each daily job.
+
+## Schedule overview
+
+The five `sync-*` 30-minute jobs are deliberately **staggered at 5-minute offsets** so they never hit the Wise API or the database in the same minute. The minute-of-hour layout:
 
 ```mermaid
 gantt
-    title One 30-minute window of staggered sync crons (minutes past the hour, UTC)
-    dateFormat m
-    axisFormat %M
-    section Syncs
-    sync-wise (:00)            :a1, 0, 1m
-    sync-wise-activity (:05)   :a2, 5, 1m
-    sync-sales-dashboard (:10) :a3, 10, 1m
-    sync-leave-requests (:15)  :a4, 15, 1m
-    sync-credit-control (:20)  :a5, 20, 1m
+    title 30-minute sync jobs — minute-of-hour offsets (repeats every half hour, UTC)
+    dateFormat  m
+    axisFormat  :%M
+    section :00 / :30
+    Wise snapshot        (*/30)   :w1, 0, 1m
+    section :05 / :35
+    Wise Activity        (5,35)   :a1, 5, 1m
+    section :10 / :40
+    Sales Dashboard      (10,40)  :s1, 10, 1m
+    section :15 / :45
+    Leave Requests       (15,45)  :l1, 15, 1m
+    section :20 / :50
+    Credit Control       (20,50)  :c1, 20, 1m
+    section :25 / :55
+    Progress Tests       (25,55)  :p1, 25, 1m
 ```
 
-### Authentication (shared across all crons)
+> `sync-wise` runs at `*/30` (minutes :00 and :30) and shares its slot with nothing else; the other four `sync-*` jobs each occupy a distinct 5-minute offset. The daily/annual jobs (digest, classroom, promotions) run in the early-Bangkok-morning window and are described below.
 
-Every cron handler authenticates the inbound request by constant-time comparison of the `Authorization` header against `Bearer ${CRON_SECRET}`. The comparison length-pre-checks before `crypto.timingSafeEqual` to avoid the `RangeError` that function throws on length-mismatched buffers ([`sync-wise/route.ts:10-28`](../../src/app/api/internal/sync-wise/route.ts)). Two implementations of identical logic exist:
+## Cron inventory (10 scheduled jobs)
 
-- **Shared helper** `rejectInvalidCronSecret(request)` — returns a `NextResponse` (401 invalid / 500 missing-secret) or `null` when valid ([`cron-auth.ts:19-26`](../../src/lib/internal/cron-auth.ts)). Used by `sync-wise-activity`, `sync-leave-requests`, `class-assignments/morning`, and `class-assignments/admin-email`.
-- **Inline copies** — `sync-wise`, `sync-sales-dashboard`, `sync-credit-control`, `sync-room-utilization`, and `student-promotions/july-1` each define their own `hasValidCronSecret` with the same constant-time check rather than importing the helper.
+Source of truth: [`vercel.json`](../../vercel.json) lines 3-42. Owning feature, Bangkok-local time, audit `jobKey`, and `maxDuration` come from each handler + `cron-registry.ts`.
 
-`CRON_SECRET` is a required environment variable; when unset, handlers return **HTTP 500 `{ "error": "Server misconfigured" }`** rather than running unauthenticated ([`cron-auth.ts:22-24`](../../src/lib/internal/cron-auth.ts)).
+| Schedule (UTC) | Bangkok-local | Endpoint (GET) | `maxDuration` | Audit `jobKey` | Feature | What it does |
+|---|---|---|---|---|---|---|
+| `*/30 * * * *` | every :00/:30 | `/api/internal/sync-wise` | 800s | `wise_snapshot` | Tutor Search | Full Wise ETL → new snapshot → atomic promote |
+| `5,35 * * * *` | every :05/:35 | `/api/internal/sync-wise-activity` | 800s | `wise_activity` | Wise Audit | Pull + persist Wise activity events |
+| `10,40 * * * *` | every :10/:40 | `/api/internal/sync-sales-dashboard` | 800s | `sales_dashboard` | Sales Dashboard | Re-import refreshable sales sheets + active projection |
+| `15,45 * * * *` | every :15/:45 | `/api/internal/sync-leave-requests` | 800s | `leave_requests` | Leave Requests | Import leave-form rows, match identities, compute affected sessions |
+| `20,50 * * * *` | every :20/:50 | `/api/internal/sync-credit-control` | 300s | `credit_control` | Credit Control | Recompute prepaid-credit depletion + at-risk queue |
+| `25,55 * * * *` | every :25/:55 | `/api/internal/sync-progress-tests` | 300s | `progress_tests` | Progress Tests | Recompute every-8-classes progress-test tracker |
+| `35 0 * * *` | daily 07:35 | `/api/internal/progress-tests/admin-digest` | 300s | `progress_tests_digest` | Progress Tests | Send once-daily progress-test digest to admins |
+| `45 23 * * *` | daily 06:45 | `/api/internal/class-assignments/morning` | 800s | `classroom_morning` | Class Assignments | Fresh-sync → assign rooms (7-day horizon) → publish eligible OFFLINE → tutor emails |
+| `0,10,20,30 0 * * *` | daily 07:00–07:30 | `/api/internal/class-assignments/admin-email` | 300s | `classroom_admin_email` | Class Assignments | Send (or retry) the daily admin classroom summary email |
+| `5 17 30 6 *` | **Jul 1 2026 00:05** | `/api/internal/student-promotions/july-1` | 800s | `student_promotions_july_1` | Student Promotions | One-time: apply verified Wise grade/course promotions |
 
-The auth gate in [`middleware.ts:13`](../../src/middleware.ts) treats the entire `/api/internal/` prefix as a public route (no session redirect), so these endpoints rely solely on the `CRON_SECRET` bearer check for protection — there is no second session layer in front of them.
+> The last job's cron expression `5 17 30 6 *` means **17:05 UTC on June 30** — which is **00:05 on July 1 in Bangkok** (`cron-registry.ts:180-189`, `expectedBangkokMinute: 5`). It is effectively a one-time job, and the handler refuses to run on any other date (see below).
 
-#### `GET` vs `POST` per handler
+## Auth: how each handler checks `CRON_SECRET`
 
-Vercel Cron always calls **`GET`**. Some handlers additionally export `POST` for manual/admin triggers or cron-secret replay; the two that wrap the snapshot/credit pipelines allow an authenticated Auth.js **session** as an alternative to `CRON_SECRET` on the `POST` path only:
+Every handler compares the `Authorization` header to `Bearer ${CRON_SECRET}` using `node:crypto`'s `timingSafeEqual`, guarded by a length pre-check that avoids the `RangeError` `timingSafeEqual` throws on length-mismatched buffers (and is itself O(1), so it does not leak the secret length). This is design decision **REL-07**, documented inline at `sync-wise/route.ts:11-29`.
 
-| Handler | `GET` | `POST` | `POST` accepts session auth? |
-|---------|-------|--------|------------------------------|
-| `sync-wise` | yes | yes | yes ([`route.ts:62-63`](../../src/app/api/internal/sync-wise/route.ts)) |
-| `sync-sales-dashboard` | yes | yes | yes ([`route.ts:64-65`](../../src/app/api/internal/sync-sales-dashboard/route.ts)) |
-| `sync-credit-control` | yes | yes | yes ([`route.ts:50-51`](../../src/app/api/internal/sync-credit-control/route.ts)) |
-| `sync-wise-activity` | yes | no (manual backfill lives at a separate route) | n/a |
-| `sync-leave-requests` | yes | yes (bearer only) | no ([`route.ts:24-30`](../../src/app/api/internal/sync-leave-requests/route.ts)) |
-| `class-assignments/morning` | yes | no | n/a |
-| `class-assignments/admin-email` | yes | no | n/a |
-| `student-promotions/july-1` | yes | yes (bearer only, replay alias) | no |
+Two shapes of this logic coexist:
 
----
+- **Shared helper** — newer handlers import `getCronSecretStatus` / `rejectInvalidCronSecret` from `src/lib/internal/cron-auth.ts`. `rejectInvalidCronSecret` returns `401 Unauthorized` on a bad/absent header, `500 Server misconfigured` when `CRON_SECRET` is unset, or `null` (proceed) when valid (`cron-auth.ts:19-26`). Used by: `sync-progress-tests`, `progress-tests/admin-digest`, `sync-wise-activity`, `sync-leave-requests`, `class-assignments/morning`, `class-assignments/admin-email`.
+- **Inlined copy** — older/independent handlers re-implement the identical check locally: `sync-wise` (`route.ts:11-29`), `sync-sales-dashboard` (`route.ts:15-22`), `sync-credit-control` (`route.ts:11-24`), `student-promotions/july-1` (`route.ts:10-17`), and the unwired `sync-room-utilization` (`route.ts:12-24`).
 
-## 1. Wise snapshot sync — `/api/internal/sync-wise`
+### Cron vs. admin (session) trigger
 
-**Schedule:** `*/30 * * * *` (every 30 min). **Does:** runs the full Wise ETL pipeline and atomically promotes a new tutor-availability snapshot.
+A cron `path` is also reachable from inside the app. Handlers fall into two auth shapes:
 
-The handler delegates to `runWiseSyncRequest()` ([`run-wise-sync.ts:142`](../../src/lib/sync/run-wise-sync.ts)), which:
+| Handler | Cron (`GET` + bearer) | Admin session | Notes |
+|---|---|---|---|
+| `sync-wise` | GET | POST (Auth.js) | `GET` is cron-only; `POST` also accepts an admin session or `curl` with the bearer (`route.ts:69-76`) |
+| `sync-sales-dashboard` | GET | POST | same dual shape (`route.ts:71-77`) |
+| `sync-credit-control` | GET | POST | same dual shape (`route.ts:58-64`) |
+| `sync-progress-tests` | GET | POST | same dual shape (`route.ts:41-47`) |
+| `student-promotions/july-1` | GET | POST (bearer only) | `POST` delegates to `GET`; **no** session path — bearer is mandatory (`route.ts:46-48`) |
+| `sync-wise-activity` | GET | — | bearer-only (`rejectInvalidCronSecret`) |
+| `sync-leave-requests` | GET / POST | — | both verbs require the bearer (`route.ts:30-36`) |
+| `progress-tests/admin-digest` | GET | — | bearer-only |
+| `class-assignments/morning` | GET | — | bearer-only |
+| `class-assignments/admin-email` | GET | — | bearer-only |
 
-1. **Single-flight guard.** Before starting, it fails any `sync_runs` row stuck in `running` for more than **20 minutes** (`STALE_RUNNING_SYNC_MS`, [`run-wise-sync.ts:10`](../../src/lib/sync/run-wise-sync.ts)) with the message "still running after 20 minutes; likely timed out or the request was aborted" ([:39-40](../../src/lib/sync/run-wise-sync.ts)). It then checks for any live `running` row; if one exists it returns **HTTP 202** with `skipped: true, alreadyRunning: true` and does not start a second sync ([:120-140, :148-150](../../src/lib/sync/run-wise-sync.ts)). Insert races are caught via the unique-violation path ([:106-117](../../src/lib/sync/run-wise-sync.ts)).
-2. **Runs the pipeline** via `runFullSync(db, client, instituteId, { syncRunId })` ([:152](../../src/lib/sync/run-wise-sync.ts)). The institute defaults to `696e1f4d90102225641cc413` when `WISE_INSTITUTE_ID` is unset ([:145](../../src/lib/sync/run-wise-sync.ts)).
-3. **On success**, invalidates the cached snapshot via `revalidateTag("snapshot", { expire: 0 })` so the in-memory search index reloads ([:160-162](../../src/lib/sync/run-wise-sync.ts)), and returns HTTP 200; on failure returns HTTP 500 ([:164-166](../../src/lib/sync/run-wise-sync.ts)).
+Admin-session manual triggers for these jobs are also routed through the **Data Health** page via `runDataHealthJob()` (`src/lib/data-health/run-job.ts:20-124`), which dispatches by `jobKey` to the same business functions — including `room_utilization` (`run-job.ts:111-119`).
 
-**`maxDuration = 800`** gives Pro-plan headroom for the full fetch→normalize→persist→promote pipeline ([`route.ts:6`](../../src/app/api/internal/sync-wise/route.ts)). See the sync-pipeline feature doc for the ETL stages, fail-closed rules, and promotion semantics.
+## Every invocation is audited
 
-## 2. Sales dashboard sync — `/api/internal/sync-sales-dashboard`
+Nine of the ten handlers wrap their work in `withCronInvocationAudit({ jobKey, triggerSource, requestMethod }, handler)` (`src/lib/data-health/cron-audit.ts:144-159`). This inserts a `cron_invocations` row (`outcome: "running"`) before the handler runs and updates it afterward with `responseStatus`, `durationMs`, a derived `outcome` (`success` / `skipped` / `failed`), an `errorSummary`, and any linked run IDs parsed out of the response body (`cron-audit.ts:114-142`). `triggerSource` is `"cron"` for the bearer path and `"admin"` for session/Data-Health triggers. Outcome derivation treats HTTP 202 or an `already running` message as `"skipped"` and HTTP ≥400 (or `ok:false`/`success:false`) as `"failed"` (`cron-audit.ts:61-70`).
 
-**Schedule:** `10,40 * * * *`. **Does:** refreshes Google-Sheets-backed sales dashboard sources and re-imports the active projection workbook.
+> `student-promotions/july-1` is the one scheduled handler that does **not** call `withCronInvocationAudit` — it responds directly (`route.ts:33-43`). Its `jobKey` (`student_promotions_july_1`) still exists in the registry for Data-Health display, but a cron run leaves no `cron_invocations` row.
 
-The handler resolves an actor email (defaults to `cron@begifted.local` for cron-triggered runs; uses the session email on a manual `POST`) and then calls two imports in sequence ([`route.ts:25, 44-51`](../../src/app/api/internal/sync-sales-dashboard/route.ts)):
+## Per-job detail
 
-- `importRefreshableSalesSources({ triggerType: "cron", actorEmail })` — iterates every configured sales source, auto-finalizes the previous month where due, skips sources that are not yet due to refresh (`sourceShouldRefresh`), and imports the rest ([`data.ts:559-577`](../../src/lib/sales-dashboard/data.ts)).
-- `importActiveSalesDashboardProjectionSource({ triggerType: "cron", actorEmail })` — re-imports the active projection workbook ([`data.ts:720`](../../src/lib/sales-dashboard/data.ts)).
+### `sync-wise` — Wise snapshot ETL (`*/30 * * * *`, `wise_snapshot`)
 
-**Failure mode:** a `MissingGoogleSheetsTokenError` returns **HTTP 409** (the connected Google account needs re-auth); any other error returns HTTP 500 ([`route.ts:53-56`](../../src/app/api/internal/sync-sales-dashboard/route.ts)). See the sales-dashboard feature doc for source modeling and projection logic.
+The core data refresh. The handler delegates to `runWiseSyncRequest()` (`src/lib/sync/run-wise-sync.ts:142`), which:
 
-## 3. Credit control sync — `/api/internal/sync-credit-control`
+1. **Single-flight guard** — `acquireSyncRun()` first fails any `sync_runs` row stuck in `running` for >20 min (`STALE_RUNNING_SYNC_MS`, `run-wise-sync.ts:10,51-72`), then refuses to start if another run is `running`, returning **HTTP 202** with `skipped: true` (`run-wise-sync.ts:120-150`). A unique-violation (`23505`) on insert is also treated as "already running" (`run-wise-sync.ts:106-117`).
+2. **Full sync** — `runFullSync(db, client, instituteId, { syncRunId })` does fetch → normalize → persist → validate → atomic promote (see [`../features/tutor-search.md`](../features/tutor-search.md)).
+3. **Cache bust** — on success, `revalidateTag("snapshot", { expire: 0 })` invalidates the cached server reads (`run-wise-sync.ts:160-162`). Returns 200 on success, 500 on failure, 202 when skipped.
 
-**Schedule:** `20,50 * * * *`. **Does:** pulls student credit/package/session data from Wise and recomputes credit-control state under its own snapshot.
+`maxDuration = 800` (`sync-wise/route.ts:7`) — the Pro-plan ceiling, since a full sync is the longest-running job.
 
-Delegates to `runCreditControlSyncRequest()` ([`run-sync-request.ts:138`](../../src/lib/credit-control/run-sync-request.ts)), which mirrors the Wise-snapshot guard against the **`credit_control_sync_runs`** table: stale `running` rows older than **20 minutes** are failed (`STALE_RUNNING_CREDIT_CONTROL_SYNC_MS`, [:9](../../src/lib/credit-control/run-sync-request.ts)), a live `running` row yields **HTTP 202** `skipped` ([:145-147](../../src/lib/credit-control/run-sync-request.ts)), and unique-violation races are handled ([:124-135](../../src/lib/credit-control/run-sync-request.ts)). On a clean acquire it runs `runCreditControlSync(...)` and returns HTTP 200/500 by `result.success` ([:149-159](../../src/lib/credit-control/run-sync-request.ts)).
+### `sync-wise-activity` — Wise activity audit (`5,35 * * * *`, `wise_activity`)
 
-**`maxDuration = 300`** — shorter ceiling than the Wise snapshot sync ([`route.ts:6`](../../src/app/api/internal/sync-credit-control/route.ts)). See the credit-control feature doc.
+Calls `syncWiseActivityEvents(getDb(), createWiseClient(), instituteId, { triggerType: "cron" })` (`sync-wise-activity/route.ts:20-25`). Has its own single-flight guard: a concurrent run throws `WiseActivitySyncAlreadyRunningError`, mapped to **HTTP 409** (`route.ts:28-30`). Institute ID falls back to the hard-coded `696e1f4d90102225641cc413` if `WISE_INSTITUTE_ID` is unset (`route.ts:10,23`).
 
-## 4. Wise activity audit sync — `/api/internal/sync-wise-activity`
+### `sync-sales-dashboard` — sales sheet re-import (`10,40 * * * *`, `sales_dashboard`)
 
-**Schedule:** `5,35 * * * *`. **Does:** read-only ingestion of newest-first Wise activity/audit events into `wise_activity_events`. This is **separate from the snapshot sync** and never writes snapshot data.
+Runs two imports in sequence: `importRefreshableSalesSources(...)` then `importActiveSalesDashboardProjectionSource(...)`, both tagged `triggerType: "cron"` (`sync-sales-dashboard/route.ts:53-60`). If the Google-Sheets OAuth token is missing it throws `MissingGoogleSheetsTokenError`, mapped to **HTTP 409**; other errors return 500 (`route.ts:62-66`). This is the only scheduled job that depends on the shared Google-Sheets access layer.
 
-Calls `syncWiseActivityEvents(db, client, instituteId, { triggerType: "cron" })` ([`route.ts:16-21`](../../src/app/api/internal/sync-wise-activity/route.ts)). Cron-mode bounds ([`sync.ts:9-12, 147-148`](../../src/lib/wise-activity/sync.ts)):
+### `sync-leave-requests` — leave-form import (`15,45 * * * *`, `leave_requests`)
 
-- **lookback** `CRON_LOOKBACK_DAYS = 3` days
-- **page cap** `CRON_MAX_PAGES = 20` pages of `PAGE_SIZE = 50` events
-- (manual backfill, via a different route, uses 30 days / 500 pages — `MANUAL_LOOKBACK_DAYS` / `MANUAL_MAX_PAGES`, [:11-12](../../src/lib/wise-activity/sync.ts))
+Calls `syncLeaveRequests(getDb(), { triggerType: "cron" })` (`sync-leave-requests/route.ts:17`). Single-flight via `LeaveRequestSyncAlreadyRunningError` → **HTTP 409** (`route.ts:20-22`). Accepts both GET and POST, both bearer-gated. (Leave Requests is the in-flight/uncommitted subsystem; the cron wiring for it is nonetheless present in `vercel.json` at HEAD.)
 
-It pages newest-first and stops on the first of: empty page (`empty_page`), a short final page (`short_page`), reaching the lookback cutoff (`lookback_reached`), a full page of already-known event IDs (`known_events`), or the page cap (`max_pages`) ([`sync.ts:178-230`](../../src/lib/wise-activity/sync.ts)). Inserts use `onConflictDoNothing` on `eventId` for idempotency ([:209-216](../../src/lib/wise-activity/sync.ts)).
+### `sync-credit-control` — at-risk recompute (`20,50 * * * *`, `credit_control`)
 
-**Single-flight guard:** a partial unique index on the sync-runs table makes a concurrent `running` insert raise a unique violation, which is surfaced as `WiseActivitySyncAlreadyRunningError` → **HTTP 409** ([`route.ts:24-26`](../../src/app/api/internal/sync-wise-activity/route.ts); [`sync.ts:165-167`](../../src/lib/wise-activity/sync.ts)). Abandoned runs are reaped via `markAbandonedRuns` using a 20-minute `STALE_RUNNING_MS` ([`sync.ts:13, 151`](../../src/lib/wise-activity/sync.ts)). See the wise-activity feature doc.
+Delegates to `runCreditControlSyncRequest()` (`sync-credit-control/route.ts:5,33`), which carries the same stale-run / single-flight pattern as the Wise sync but over `credit_control_sync_runs` (`src/lib/credit-control/run-sync-request.ts:61,100,138`). `maxDuration = 300` (`route.ts:7`).
 
-## 5. Leave requests sync — `/api/internal/sync-leave-requests`
+### `sync-progress-tests` — every-8-classes tracker (`25,55 * * * *`, `progress_tests`)
 
-**Schedule:** `15,45 * * * *`. **Does:** ingests tutor leave requests from a Google Sheet and matches them to tutors.
+Delegates to `runProgressTestSyncRequest({ triggerType: "cron" })` (`sync-progress-tests/route.ts:15`), again the same single-flight discipline over `progress_test_sync_runs` (`src/lib/progress-tests/run-sync-request.ts:59,97,137`). This handler uses the shared `getCronSecretStatus` helper (`route.ts:3,10`). `maxDuration = 300`.
 
-Calls `syncLeaveRequests(db, { triggerType: "cron" })` ([`route.ts:13`](../../src/app/api/internal/sync-leave-requests/route.ts)). The run reads from the configured leave-requests spreadsheet/sheet, parses rows, builds a tutor matcher, and records new requests ([`sync.ts:290-313`](../../src/lib/leave-requests/sync.ts)).
+### `progress-tests/admin-digest` — daily admin digest (`35 0 * * *` = 07:35 Bangkok, `progress_tests_digest`)
 
-**Single-flight guard:** a partial unique index `leave_request_sync_runs_single_running_idx` blocks a second concurrent run; the conflict is surfaced as `LeaveRequestSyncAlreadyRunningError` → **HTTP 409** ([`route.ts:16-18`](../../src/app/api/internal/sync-leave-requests/route.ts); [`sync.ts:46, 303`](../../src/lib/leave-requests/sync.ts)).
+GET-only, bearer-only. Calls `sendProgressTestAdminDigest()` (`progress-tests/admin-digest/route.ts:16`). Per its JSDoc (`admin-digest.ts:295-308`): short-circuits if a terminal digest run already exists for today (Bangkok); if there is nothing to report it records a `skipped` run and returns; otherwise it inserts the per-date run row (a **unique index serves as the single-flight guard**, `admin-digest.ts:242,301`) and sends to every `admin_users` recipient with a per-recipient idempotency key. A `failed` result status maps to HTTP 500 (`route.ts:17`).
 
-> Note: the `src/lib/leave-requests/**` module is documented here but is treated as in-flight source — see open questions. The route handler and schedule are stable in `vercel.json`.
+### `class-assignments/morning` — daily room automation (`45 23 * * *` = 06:45 Bangkok, `classroom_morning`)
 
-## 6. Classroom morning automation — `/api/internal/class-assignments/morning`
+GET-only, bearer-only. Calls `runClassroomMorningAutomation()` (`class-assignments/morning/route.ts:16`). This is a **`dangerous: true`** job in the registry (`cron-registry.ts:153`) because it writes back to Wise. Per `morning-automation.ts:174-220`, for a 7-day horizon starting today (Bangkok), it:
 
-**Schedule:** `45 23 * * *` — once daily at **23:45 UTC = 06:45 Asia/Bangkok**, just before the school day. **Does:** ensures a fresh Wise snapshot, then generates and (where eligible) publishes classroom room assignments for the next 7 Bangkok days, and emails the current day's tutor schedules.
+1. **Ensures a fresh Wise snapshot first** — `ensureFreshWiseSyncForClassroomAutomation()` waits for / triggers a sync and throws if one is still running past the wait window (`morning-automation.ts:105-160`).
+2. Runs incremental classroom assignment per date (`morning-automation.ts:195-204`).
+3. **Publishes eligible OFFLINE rooms back to Wise** — `selectAutomationPublishTargetRowIds()` + `publishClassroomAssignmentRun()` (`morning-automation.ts:205-212`). This is the opt-in `location` writeback; see [`../features/classroom-assignments.md`](../features/classroom-assignments.md).
+4. Sends tutor schedule emails for the start date (`morning-automation.ts:217-219`).
 
-Calls `runClassroomMorningAutomation()` ([`route.ts:12`](../../src/app/api/internal/class-assignments/morning/route.ts) → [`morning-automation.ts:172`](../../src/lib/classrooms/morning-automation.ts)). Sequence:
+### `class-assignments/admin-email` — admin summary email (`0,10,20,30 0 * * *` = 07:00–07:30 Bangkok, `classroom_admin_email`)
 
-1. **Freshness gate.** `ensureFreshWiseSyncForClassroomAutomation` reuses the latest successful `sync_runs` row if it finished within `CLASSROOM_ASSIGNMENT_FRESHNESS_MS = 15 min` ([`data.ts:129`](../../src/lib/classrooms/data.ts); [`morning-automation.ts:94-115`](../../src/lib/classrooms/morning-automation.ts)). Otherwise it waits on an in-progress sync (polling every 5s up to `DEFAULT_SYNC_WAIT_MS = 90s`), or triggers one via `runWiseSyncRequest()` and waits for the promoted snapshot ([:24-25, :117-166](../../src/lib/classrooms/morning-automation.ts)). It throws if no fresh snapshot can be produced ([:153, :157-159](../../src/lib/classrooms/morning-automation.ts)).
-2. **7-day horizon.** Iterates today + 6 following Bangkok dates ([:168-170, :192](../../src/lib/classrooms/morning-automation.ts)), running an incremental assignment per date as actor `cron@classroom-assignments` ([:26, :193-198](../../src/lib/classrooms/morning-automation.ts)).
-3. **Selective publish.** Picks eligible OFFLINE rows (`selectAutomationPublishTargetRowIds`) and publishes their `location` to Wise; rows with nothing to publish record an empty summary ([:200-208](../../src/lib/classrooms/morning-automation.ts)).
-4. **Tutor schedule email for the start day only**, in `failed_only` mode, as actor `cron@classroom-schedule-email` ([:27, :212-228](../../src/lib/classrooms/morning-automation.ts)).
+GET-only, bearer-only. Calls `sendAdminClassroomScheduleEmail()` (`class-assignments/admin-email/route.ts:16`). It runs at **four offsets** across a half-hour window (`cron-registry.ts:171-172`, Bangkok 07:00–07:30) so a transient failure or a still-pending publish job gets retried; the function blocks/no-ops while a classroom publish job is still pending or running (`admin-schedule-email.ts:266,275`), and a `failed` status maps to HTTP 500 (`route.ts:17`). Marked `dangerous: true` because it may send mail (`cron-registry.ts:169`).
 
-Errors return HTTP 500 with `{ ok: false, error }` ([`route.ts:14-17`](../../src/app/api/internal/class-assignments/morning/route.ts)). See the classroom-assignments feature doc for the assignment engine and Wise writeback policy.
+### `student-promotions/july-1` — one-time grade promotion (`5 17 30 6 *` = Jul 1 2026 00:05 Bangkok, `student_promotions_july_1`)
 
-## 7. Classroom admin email — `/api/internal/class-assignments/admin-email`
-
-**Schedule:** `0,10,20,30 0 * * *` — four runs at **00:00, 00:10, 00:20, 00:30 UTC = 07:00–07:30 Asia/Bangkok**, i.e. a retry ladder in the ~15–45 minutes after the morning automation. **Does:** emails the day's classroom assignment summary to all admin users, retrying until ready or the final window.
-
-Calls `sendAdminClassroomScheduleEmail()` ([`route.ts:12`](../../src/app/api/internal/class-assignments/admin-email/route.ts) → [`admin-schedule-email.ts:340`](../../src/lib/classrooms/admin-schedule-email.ts)). Behavior:
-
-- **Idempotency / skip.** If a terminal (`sent`/`partial`/`failed`) admin-email run already exists for the Bangkok date, it returns `status: "skipped"` and sends nothing ([:253-263, :350-361](../../src/lib/classrooms/admin-schedule-email.ts)). The DB-level idempotency key is `classroom-admin:{date}` ([:295](../../src/lib/classrooms/admin-schedule-email.ts)).
-- **Retry window.** While the assignment run is missing or publish jobs are still pending/running, it returns `status: "pending"` and waits for the next cron tick — **unless** the Bangkok clock has passed `FINAL_RETRY_MINUTE = 07:30` (`7*60+30`), at which point it sends a "blocked/failure summary" email instead ([:19, :369-387](../../src/lib/classrooms/admin-schedule-email.ts)).
-- **Recipients.** All `admin_users` emails ([:201-206, :407](../../src/lib/classrooms/admin-schedule-email.ts)); zero recipients is recorded as a failed run ([:421-442](../../src/lib/classrooms/admin-schedule-email.ts)). Final status is `sent` / `partial` / `failed` by per-recipient outcome ([:476](../../src/lib/classrooms/admin-schedule-email.ts)).
-
-The handler maps a `failed` result status to HTTP 500, otherwise HTTP 200 ([`route.ts:13-14`](../../src/app/api/internal/class-assignments/admin-email/route.ts)). See the classroom-assignments feature doc.
-
-## 8. Student promotions July 1 apply — `/api/internal/student-promotions/july-1`
-
-**Schedule:** `5 17 30 6 *` — 17:05 UTC on June 30, which is **00:05 Asia/Bangkok on July 1**. **Does:** applies the newest verified Student Promotions run for target date `2026-07-01`.
-
-This cron is a one-shot business event, not a recurring data sync. The Vercel expression is annual syntax, so the route adds a hard guard: it returns HTTP 409 unless the current Bangkok date is exactly `2026-07-01`. The apply service also refuses to run before `2026-07-01 00:05 Asia/Bangkok`.
-
-The handler authenticates with `CRON_SECRET`, then calls `applyVerifiedStudentPromotionRun({ trigger: "cron" })`. Each grade and course action revalidates current Wise state before writing, and per-action drift/errors are persisted without aborting the run. See the Student Promotions feature doc and API reference for the full review/apply flow.
-
----
+GET-only by cron (POST delegates to GET); **bearer is mandatory — there is no session fallback** (`student-promotions/july-1/route.ts:46-48`). Hard date guard: the handler returns **HTTP 409** unless `todayBangkok()` equals `STUDENT_PROMOTION_TARGET_DATE` (`"2026-07-01"`, `src/lib/student-promotions/rules.ts:1`; check at `route.ts:27-31`). On the target date it calls `applyVerifiedStudentPromotionRun({ trigger: "cron" })`, applying verified Wise grade/course promotion writes (`route.ts:35`). `dangerous: true` (`cron-registry.ts:186`). Unlike the other handlers it does **not** wrap in `withCronInvocationAudit`, so cron runs are not recorded in `cron_invocations`.
 
 ## Internal handlers without a cron schedule
 
-These `/api/internal/*` route handlers exist on disk but are **not** listed in `vercel.json`, so Vercel Cron never invokes them. Verified by comparing the eight cron `path`s in `vercel.json` against the internal `route.ts` files under `src/app/api/internal/`.
+`src/app/api/internal/` contains exactly one route handler that is **not** wired into `vercel.json` and therefore **never fires on a schedule**:
 
-### `/api/internal/sync-room-utilization` — manual only (no GET handler)
+### `sync-room-utilization` — manual only
 
-- **Not in `vercel.json`** → no automatic schedule.
-- **Exports only `POST`** ([`route.ts:25`](../../src/app/api/internal/sync-room-utilization/route.ts)); there is no `GET`. Vercel Cron invokes endpoints via `GET` (every wired cron above exports `GET`), so even if this path were added to `vercel.json` as-is, a cron `GET` would not match the handler.
-- **How it actually runs:** triggered manually from the room-capacity dashboard UI, which `fetch`es `POST /api/internal/sync-room-utilization` ([`room-capacity-dashboard.tsx:375`](../../src/components/room-capacity/room-capacity-dashboard.tsx)).
-- **Auth:** accepts a valid `CRON_SECRET` bearer **or** an authenticated Auth.js session ([`route.ts:26-35`](../../src/app/api/internal/sync-room-utilization/route.ts)).
-- **Does:** `syncRoomUtilizationSessions(getDb())` and returns `{ ok: true, ...result }` ([`route.ts:38-39`](../../src/app/api/internal/sync-room-utilization/route.ts)).
+- **Path**: `/api/internal/sync-room-utilization`
+- **Verb**: **POST only** — the handler exports `POST` and **no `GET`** (`sync-room-utilization/route.ts:26`). Since Vercel cron triggers via GET, this handler could not be cron-driven as written even if it were listed.
+- **Registry status**: present in `CRON_JOBS` as `room_utilization` with `schedule: null`, `cadenceLabel: "Manual only"`, `manualOnly: true`, `routeMethod: "POST"` (`cron-registry.ts:191-205`). Being `manualOnly`, it is excluded from `SCHEDULED_CRON_JOBS`, and the registry test explicitly asserts it stays out of `vercel.json` (`cron-registry.test.ts:22-25`).
+- **How it is actually triggered**: by an admin, two ways —
+  1. The Room Capacity dashboard "sync" button POSTs to it directly (`src/components/room-capacity/room-capacity-dashboard.tsx:375`).
+  2. Data Health's `runDataHealthJob("room_utilization", …)` calls the same underlying `syncRoomUtilizationSessions(getDb())` (`src/lib/data-health/run-job.ts:111-119`).
+- **Auth**: accepts either a valid `CRON_SECRET` bearer **or** an Auth.js admin session (`route.ts:26-40`). It calls `syncRoomUtilizationSessions(getDb())` and returns `{ ok: true, ... }` or 500 (`route.ts:45-51`).
 
-**Flag:** this job is **manual / not scheduled**. If it is meant to keep room-utilization data current on a cadence (like the other syncs), it is currently effectively disabled from the automation standpoint — see open questions.
+**Characterization: manual, not disabled.** It is fully functional and intentionally operator-triggered (the Room Capacity feature is `partial` — utilization sync feeds a live dashboard, but the month-pressure/forecast engines have no scheduled refresh). It is modeled as a "cron job" in the registry only so the Data Health page can show its last-run status and offer a manual trigger; it has no automated cadence. → see openQuestions.
 
-> No other `/api/internal/*` handler is missing from `vercel.json`: the remaining route directories map 1:1 to the registered cron entries.
+> The remaining files under `src/app/api/internal/` that are not in `vercel.json` are `__tests__/*.ts` test files, not route handlers. Every non-test `route.ts` under `src/app/api/internal/` except `sync-room-utilization` is scheduled in `vercel.json`.
 
----
-
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

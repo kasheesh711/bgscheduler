@@ -1,77 +1,73 @@
-# Database Reference — Payroll Domain (ER Diagram)
+# Database Reference — Payroll Domain
 
-The payroll domain captures the monthly teacher payout pipeline: a per-month sync run pulls Wise payout-invoice events and session observations, snapshots each teacher's tier, layers on manual adjustments, and prices everything against a versioned rate card. All 8 tables below are defined in `src/lib/db/schema.ts`.
+The Payroll domain reconciles tutor pay for a Bangkok calendar month. A monthly
+sync pulls Wise teaching sessions and payout-invoice events into month-scoped
+observation tables, joins them against a versioned rate card, and surfaces a
+review worklist with manual adjustments. Unlike the tutor-scheduling and
+Credit Control domains, **Payroll has no snapshot lineage** — every ingest table
+is keyed by `payrollMonth` (a `date` stored as `"YYYY-MM-DD"` string, conventionally
+the first of the month) and the most-recent `payrollSyncRuns` row for that month,
+not by an immutable promoted snapshot. The rate card is the one piece of long-lived
+state: rate-card versions and their rules are independent of any month and are
+selected by effective month at compute time.
 
-Full per-column type and constraint detail lives in [`./index.md`](./index.md) — this page covers grain, keys, and relationships only.
+All 8 tables documented here are defined in `src/lib/db/schema.ts` lines 995–1155.
+For the complete column-by-column listing (types, defaults, indexes) see
+[index.md](./index.md).
 
-## Scope
+## Entity Relationship Diagram
 
-Exactly 8 tables (varName — `schema.ts` line range):
-
-| Table (var) | Postgres table | Lines |
-|---|---|---|
-| `payrollSyncRuns` | `payroll_sync_runs` | 855–874 |
-| `payrollReviews` | `payroll_reviews` | 875–890 |
-| `payrollTeacherTiers` | `payroll_teacher_tiers` | 891–906 |
-| `payrollPayoutInvoices` | `payroll_payout_invoices` | 907–934 |
-| `payrollSessionObservations` | `payroll_session_observations` | 935–961 |
-| `payrollAdjustments` | `payroll_adjustments` | 962–979 |
-| `payrollRateCardVersions` | `payroll_rate_card_versions` | 980–996 |
-| `payrollRateRules` | `payroll_rate_rules` | 997–1015 |
-
-## Relationship model
-
-Only **two** foreign keys are enforced via Drizzle `.references()` inside this domain:
-
-- `payrollSyncRuns.id` is referenced by `payrollReviews.lastSyncRunId` (schema.ts:883), `payrollTeacherTiers.syncRunId` (schema.ts:894), `payrollPayoutInvoices.syncRunId` (schema.ts:910), and `payrollSessionObservations.syncRunId` (schema.ts:938).
-- `payrollRateCardVersions.id` is referenced by `payrollRateRules.versionId` (schema.ts:999).
-
-There are **no** Drizzle FKs from this domain to the core scheduling tables (`snapshots`, `tutors`, `tutorIdentityGroups`). Links to Wise entities and tutors are carried as loose string identifiers — e.g. `wiseTeacherId` / `wiseUserId` (schema.ts:895–896), `wiseTeacherUserId` / `wiseClassId` / `wiseSessionId` (schema.ts:914–917, 939–944), `tutorGroupCanonicalKey` (schema.ts:942), and `tutorCanonicalKey` (schema.ts:966) — not enforced relationships. They appear in the diagram below only as a single `CORE_AND_WISE` stub node with dashed soft-link edges.
-
-Most cross-table cohesion is instead implicit via the shared `payrollMonth` `date` column (present on all tables except the two rate-card tables, which use `effectiveMonth`).
-
-## ER diagram
+Each entity shows only its primary key, foreign keys, and 1–2 identifying columns
+for legibility. `payrollMonth` (a `date` string) is the **logical partition key**
+that threads through the ingest tables — it is not a database foreign key, so the
+dashed relationships mark those month-scoped logical groupings. The
+`tutorGroupCanonicalKey` / `tutorCanonicalKey` columns are plain text that join
+logically to the core tutor identity (shown as a single stub node, not expanded
+here — see [erd-core.md](./erd-core.md)).
 
 ```mermaid
 erDiagram
     payrollSyncRuns {
         uuid id PK
         date payrollMonth
-        sync_status status
+        enum status
     }
     payrollReviews {
         uuid id PK
         date payrollMonth
-        payroll_review_status status
         uuid lastSyncRunId FK
+        enum status
     }
     payrollTeacherTiers {
         uuid id PK
         uuid syncRunId FK
-        text wiseTeacherId "soft link"
+        date payrollMonth
+        text wiseTeacherId
         text normalizedTier
     }
     payrollPayoutInvoices {
         uuid id PK
         uuid syncRunId FK
-        text eventId "unique"
-        text transactionId
+        date payrollMonth
+        text eventId
+        text wiseSessionId
     }
     payrollSessionObservations {
         uuid id PK
         uuid syncRunId FK
+        date payrollMonth
         text wiseSessionId
-        text tutorGroupCanonicalKey "soft link"
+        text tutorGroupCanonicalKey
     }
     payrollAdjustments {
         uuid id PK
         date payrollMonth
-        text tutorCanonicalKey "soft link"
-        text adjustmentType
+        text tutorCanonicalKey
     }
     payrollRateCardVersions {
         uuid id PK
         text versionName
+        date effectiveMonth
         boolean active
     }
     payrollRateRules {
@@ -80,9 +76,8 @@ erDiagram
         text normalizedCourseKey
         text tierKey
     }
-
-    CORE_AND_WISE {
-        stub note "snapshots / tutors / identity groups + Wise IDs"
+    CORE_TUTOR_IDENTITY {
+        text canonicalKey
     }
 
     payrollSyncRuns ||--o| payrollReviews : "lastSyncRunId"
@@ -91,54 +86,131 @@ erDiagram
     payrollSyncRuns ||--o{ payrollSessionObservations : "syncRunId"
     payrollRateCardVersions ||--o{ payrollRateRules : "versionId"
 
-    payrollTeacherTiers }o..o| CORE_AND_WISE : "wiseTeacherId / wiseUserId (no FK)"
-    payrollPayoutInvoices }o..o| CORE_AND_WISE : "wiseTeacherUserId / wiseClassId / wiseSessionId (no FK)"
-    payrollSessionObservations }o..o| CORE_AND_WISE : "tutorGroupCanonicalKey / wiseSessionId (no FK)"
-    payrollAdjustments }o..o| CORE_AND_WISE : "tutorCanonicalKey (no FK)"
+    payrollSyncRuns ||..o| payrollReviews : "payrollMonth (logical)"
+    payrollSyncRuns ||..o{ payrollTeacherTiers : "payrollMonth (logical)"
+    payrollSyncRuns ||..o{ payrollPayoutInvoices : "payrollMonth (logical)"
+    payrollSyncRuns ||..o{ payrollSessionObservations : "payrollMonth (logical)"
+    payrollSyncRuns ||..o{ payrollAdjustments : "payrollMonth (logical)"
+
+    payrollSessionObservations }o..|| CORE_TUTOR_IDENTITY : "tutorGroupCanonicalKey (logical)"
+    payrollAdjustments }o..|| CORE_TUTOR_IDENTITY : "tutorCanonicalKey (logical)"
 ```
 
-> Dashed edges (`..`) are soft links by string identifier, not enforced foreign keys. The `CORE_AND_WISE` node is a stub standing in for the core scheduling tables and external Wise entities; it is not expanded here.
+## Key model
 
-## Per-table description
+Two identity dimensions thread through this domain and explain why most joins are
+logical rather than enforced by SQL foreign keys:
 
-### `payrollSyncRuns` (schema.ts:855–874)
-**Grain:** one row per payroll-month sync attempt. Tracks the ETL run that ingests a month's payout and session data from Wise.
-**Key columns:** `id` (PK); `payrollMonth` (`date`, string mode); `status` (`syncStatusEnum` — `running` / `success` / `failed`, default `running`, schema.ts:19–23); `triggerType` (default `manual`); `startedAt` / `finishedAt`; count rollups `teacherCount`, `sessionCount`, `invoiceCount`; `errorSummary`; `metadata` jsonb.
-**Constraints / relationships:** a partial unique index `payroll_sync_runs_single_running_idx` enforces a single-flight guard — at most one row with `status = 'running'` (schema.ts:868–870). This row is the parent for tier/invoice/observation children and is referenced by `payrollReviews.lastSyncRunId`.
+- **`payrollMonth`** — a `date` (mode `"string"`, so `"YYYY-MM-DD"`) carried by every
+  ingest table (`payrollSyncRuns`, `payrollReviews`, `payrollTeacherTiers`,
+  `payrollPayoutInvoices`, `payrollSessionObservations`, `payrollAdjustments`). It
+  partitions all of a month's pay data; the active dataset for a month is the rows
+  written by that month's latest `payrollSyncRuns`.
+- **`canonicalKey` family** — `tutorGroupCanonicalKey` (`payrollSessionObservations`,
+  schema.ts:1082) and `tutorCanonicalKey` (`payrollAdjustments`, schema.ts:1106) are
+  plain `text` that correspond to the stable `tutor_identity_groups.canonical_key`
+  used across snapshots (the same key denormalized onto `past_session_blocks`). There
+  is **no SQL FK** into the core tutor tables, so payroll rows survive independently
+  of snapshot rotation; the link is resolved in application code.
 
-### `payrollReviews` (schema.ts:875–890)
-**Grain:** one row per payroll month (enforced by the unique index `payroll_reviews_month_idx` on `payrollMonth`, schema.ts:888) — the human review/approval record for that month.
-**Key columns:** `id` (PK); `payrollMonth`; `status` (`payrollReviewStatusEnum` — `draft` / `approved`, default `draft`, schema.ts:142–145); `notes`; approval audit fields `approvedByEmail` / `approvedByName` / `approvedAt`; `lastSyncRunId`; `metadata`; `createdAt` / `updatedAt`.
-**Relationships:** `lastSyncRunId` → `payrollSyncRuns.id` (nullable, schema.ts:883), pinning the review to the sync run whose numbers were last reviewed.
+Only two FK relationships are enforced in SQL: the four month-scoped ingest tables
+back-reference the run that wrote them via `syncRunId -> payrollSyncRuns.id`
+(`payrollReviews` uses the nullable `lastSyncRunId`), and every rate rule references
+its version via `versionId -> payrollRateCardVersions.id`. `payrollAdjustments` has
+no FK at all — it is keyed only by `payrollMonth`.
 
-### `payrollTeacherTiers` (schema.ts:891–906)
-**Grain:** one row per (`payrollMonth`, `wiseTeacherId`) — the resolved compensation tier for each teacher within a month (unique index `payroll_teacher_tiers_month_teacher_idx`, schema.ts:903).
-**Key columns:** `id` (PK); `payrollMonth`; `syncRunId` (FK, not null); Wise identity `wiseTeacherId` / `wiseUserId` / `wiseDisplayName`; `rawTier` (as seen in Wise) vs `normalizedTier` (default `Unassigned`); `tags` (jsonb string array); `createdAt`.
-**Relationships:** `syncRunId` → `payrollSyncRuns.id` (schema.ts:894). Soft-links to tutors via the `wiseTeacherId` / `wiseUserId` strings (no FK). A secondary index supports lookups by month + user (schema.ts:904).
+## Tables
 
-### `payrollPayoutInvoices` (schema.ts:907–934)
-**Grain:** one row per Wise payout event (unique on `eventId` via `payroll_payout_invoices_event_idx`, schema.ts:928) — the per-session payout/invoice line ingested from Wise activity.
-**Key columns:** `id` (PK); `payrollMonth`; `syncRunId` (FK, not null); `eventId` (unique) and `transactionId`; `eventTimestamp`; Wise references `wiseTeacherUserId` / `actorWiseUserId` / `wiseClassId` / `wiseSessionId`; `sessionStartTime`; `sessionCredits`; monetary fields `amountMinor` (integer) and `amount` (double, default 0) with `currency` (default `THB`); `transactionStatus`; `note`; `raw` jsonb payload; `createdAt`.
-**Relationships:** `syncRunId` → `payrollSyncRuns.id` (schema.ts:910). Soft-links to the teacher/class/session by Wise ID strings. Secondary indexes cover `transactionId`, `payrollMonth`, month + teacher, and `wiseSessionId` (schema.ts:929–932).
+### `payrollSyncRuns` (schema.ts 995–1014)
 
-### `payrollSessionObservations` (schema.ts:935–961)
-**Grain:** one row per (`payrollMonth`, `wiseSessionId`) — a denormalized snapshot of each taught session that month, used to attribute hours and pricing (unique index `payroll_session_observations_month_session_idx`, schema.ts:957).
-**Key columns:** `id` (PK); `payrollMonth`; `syncRunId` (FK, not null); `wiseSessionId`; teacher refs `wiseTeacherUserId` / `wiseTeacherId`; tutor refs `tutorGroupCanonicalKey` / `tutorDisplayName`; class context `wiseClassId` / `className` / `subject` / `classType`; `startTime` / `endTime` / `durationMinutes`; `meetingStatus` (not null) and `sessionType`; `studentCount`; `raw` jsonb; `createdAt`.
-**Relationships:** `syncRunId` → `payrollSyncRuns.id` (schema.ts:938). Soft-links to tutors/sessions by Wise IDs and `tutorGroupCanonicalKey` (no FK). Secondary indexes cover month + teacher and month + tutor group (schema.ts:958–959).
+Grain: one row per payroll sync attempt for a month. PK `id` (uuid). `payrollMonth`
+(date string) names the month being reconciled. Status uses the shared `syncStatusEnum`
+(`running` / `success` / `failed`, schema.ts:19-23, default `running`); `triggerType`
+defaults to `"manual"`. Carries roll-up counts (`teacherCount`, `sessionCount`,
+`invoiceCount`), an `errorSummary`, and a `metadata` JSON bag. A partial unique index
+`payroll_sync_runs_single_running_idx` enforces single-flight by allowing only one row
+WHERE `status = 'running'` (schema.ts:1008-1010); also indexed by `(payrollMonth, startedAt)`
+and `(status, startedAt)`. This run is the parent that the four month-scoped ingest tables
+reference via `syncRunId`.
 
-### `payrollAdjustments` (schema.ts:962–979)
-**Grain:** one row per manual (or sourced) adjustment line applied to a payroll month for a given tutor — extra hours or amounts layered onto the computed totals.
-**Key columns:** `id` (PK); `payrollMonth`; `adjustmentType` (default `manual`); `tutorCanonicalKey` / `tutorDisplayName`; `hours` and `amount` (both double, default 0); `description`; `source` (default `manual`); audit fields `createdByEmail` / `createdByName`; `createdAt` / `updatedAt`.
-**Relationships:** no enforced FKs. Associated to a month by `payrollMonth` and to a tutor by the `tutorCanonicalKey` string (soft link). One index on month + `createdAt` (schema.ts:977).
+### `payrollReviews` (schema.ts 1015–1030)
 
-### `payrollRateCardVersions` (schema.ts:980–996)
-**Grain:** one row per rate-card version — a named, dated revision of the pricing table.
-**Key columns:** `id` (PK); `versionName`; `effectiveMonth` (`date`, string mode); `sourceLabel`; `active` (boolean, default false); `createdByEmail`; `createdAt` / `updatedAt`; `metadata` jsonb.
-**Constraints / relationships:** a partial unique index `payroll_rate_card_versions_active_idx` enforces at most one row with `active = true` (schema.ts:991–993) — a single active rate card at a time. Parent of `payrollRateRules`; a secondary index sorts by `effectiveMonth` (schema.ts:994).
+Grain: one row per month-level payroll review (the approval record for a month). PK `id`
+(uuid); unique on `payrollMonth` (`payroll_reviews_month_idx`, schema.ts:1028), so a month
+has at most one review. Status uses `payrollReviewStatusEnum` (`draft` / `approved`,
+schema.ts:158-161, default `draft`). Holds free-text `notes`, approval audit fields
+(`approvedByEmail`, `approvedByName`, `approvedAt`), and a `metadata` JSON bag. FK
+`lastSyncRunId -> payrollSyncRuns.id` (nullable, schema.ts:1023) pins the review to the
+sync run whose data was approved.
 
-### `payrollRateRules` (schema.ts:997–1015)
-**Grain:** one row per priced cell within a rate-card version — keyed by (`versionId`, `studentBand`, `normalizedCourseKey`, `tierKey`) per the unique index `payroll_rate_rules_unique_idx` (schema.ts:1012).
-**Key columns:** `id` (PK); `versionId` (FK, not null); `studentBand`; `curriculum` / `course` / `normalizedCourseKey`; `tierKey` and `sourceTierKey`; `pricePerHour` (nullable); `expectedRevenuePerHour` (not null); `revenueShare` (nullable); `rawSourceRow` jsonb; `createdAt`.
-**Relationships:** `versionId` → `payrollRateCardVersions.id` (schema.ts:999). A lookup index on (`versionId`, `studentBand`, `normalizedCourseKey`) speeds rate resolution (schema.ts:1013).
+### `payrollTeacherTiers` (schema.ts 1031–1046)
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+Grain: one row per teacher per month, recording the pay tier resolved for that teacher.
+PK `id` (uuid); FK `syncRunId -> payrollSyncRuns.id` (not null, schema.ts:1034). Identified
+by Wise `wiseTeacherId` (+ optional `wiseUserId`) and a denormalized `wiseDisplayName`.
+Captures the `rawTier` as seen in Wise and the `normalizedTier` used for rate lookup
+(default `"Unassigned"`), plus a `tags` string array. Unique per `(payrollMonth, wiseTeacherId)`
+(`payroll_teacher_tiers_month_teacher_idx`, schema.ts:1043); also indexed by
+`(payrollMonth, wiseUserId)`.
+
+### `payrollPayoutInvoices` (schema.ts 1047–1074)
+
+Grain: one row per Wise payout-invoice event for a month (a teacher-payment transaction
+line). PK `id` (uuid); FK `syncRunId -> payrollSyncRuns.id` (not null, schema.ts:1050).
+Keyed by `eventId` (unique) and `transactionId`, with `eventTimestamp`. Links to the
+paid party (`wiseTeacherUserId`, `actorWiseUserId`) and the work (`wiseClassId`,
+`wiseSessionId`, `sessionStartTime`, `sessionCredits`). Money is stored both as
+`amountMinor` (integer minor units) and `amount` (doublePrecision), with `currency`
+(default `"THB"`), `transactionStatus`, a `note`, and the full `raw` Wise payload. Unique
+on `eventId` (`payroll_payout_invoices_event_idx`, schema.ts:1068); additionally indexed by
+`transactionId`, `payrollMonth`, `(payrollMonth, wiseTeacherUserId)`, and `wiseSessionId`
+(the last enabling reconciliation against session observations).
+
+### `payrollSessionObservations` (schema.ts 1075–1101)
+
+Grain: one row per observed teaching session for a month (the work side of the
+reconciliation, sourced from Wise sessions). PK `id` (uuid); FK `syncRunId ->
+payrollSyncRuns.id` (not null, schema.ts:1078). Identified by `wiseSessionId`, attributed to
+a teacher via `wiseTeacherUserId` / `wiseTeacherId` and to a tutor identity via the
+denormalized `tutorGroupCanonicalKey` (+ `tutorDisplayName`). Describes the class
+(`wiseClassId`, `className`, `subject`, `classType`), timing (`startTime`, `endTime`,
+`durationMinutes`), `meetingStatus`, `sessionType`, `studentCount`, and the `raw` payload.
+Unique per `(payrollMonth, wiseSessionId)` (`payroll_session_observations_month_session_idx`,
+schema.ts:1097); also indexed by `(payrollMonth, wiseTeacherUserId)` and
+`(payrollMonth, tutorGroupCanonicalKey)`. The `tutorGroupCanonicalKey` joins logically to
+the core tutor identity (no SQL FK).
+
+### `payrollAdjustments` (schema.ts 1102–1119)
+
+Grain: one row per manual payroll adjustment for a month (an admin-entered correction to
+hours/amount). PK `id` (uuid). **No FK to a sync run** — adjustments are keyed only by
+`payrollMonth` and persist across re-syncs. `adjustmentType` and `source` both default to
+`"manual"`. Attributed to a tutor by the denormalized `tutorCanonicalKey` (+ `tutorDisplayName`),
+with `hours` and `amount` (doublePrecision), a `description`, and actor audit fields
+(`createdByEmail`, `createdByName`, `createdAt` / `updatedAt`). Indexed by
+`(payrollMonth, createdAt)` (`payroll_adjustments_month_idx`, schema.ts:1117). The
+`tutorCanonicalKey` joins logically to the core tutor identity (no SQL FK).
+
+### `payrollRateCardVersions` (schema.ts 1120–1136)
+
+Grain: one row per rate-card version — a named, dated revision of the pay rate card.
+PK `id` (uuid). **Snapshot- and month-independent**: a version is identified by `versionName`,
+takes effect from `effectiveMonth` (date string), and records a `sourceLabel` plus a `metadata`
+JSON bag and audit fields (`createdByEmail`, `createdAt` / `updatedAt`). An `active` boolean marks
+the single live card; a partial unique index `payroll_rate_card_versions_active_idx` allows only
+one row WHERE `active = true` (schema.ts:1131-1133), and `effectiveMonth` is indexed for
+effective-dated selection. Parent of `payrollRateRules`.
+
+### `payrollRateRules` (schema.ts 1137–1155)
+
+Grain: one row per rate rule within a rate-card version (the price for a specific
+band/curriculum/course/tier combination). PK `id` (uuid); FK `versionId ->
+payrollRateCardVersions.id` (not null, schema.ts:1139). Lookup dimensions are `studentBand`,
+`curriculum`, `course` (with its `normalizedCourseKey`), and `tierKey` (with the original
+`sourceTierKey`). Pricing fields: `pricePerHour` (nullable), `expectedRevenuePerHour` (not null),
+and `revenueShare` (nullable), alongside the `rawSourceRow` JSON. Unique per
+`(versionId, studentBand, normalizedCourseKey, tierKey)` (`payroll_rate_rules_unique_idx`,
+schema.ts:1152); also indexed by `(versionId, studentBand, normalizedCourseKey)` for the
+rate-lookup path.
+
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

@@ -2,13 +2,22 @@
 
 **Status: stable.** **Authoritative source:** the three route handlers under [`src/app/api/proposals/`](../../../src/app/api/proposals/), backed by the data layer at [`src/lib/proposals/data.ts`](../../../src/lib/proposals/data.ts) and the overlap helpers at [`src/lib/proposals/overlap.ts`](../../../src/lib/proposals/overlap.ts).
 
-This page is the mechanical reference for the Proposals HTTP endpoints: method, path, auth, request shape, response shape, side effects, and status codes. Feature meaning — what a proposal hold *is*, the soft-hold lifecycle, and why conflicts are fail-closed — lives in [docs/features/proposals.md](../../features/proposals.md). The two backing tables (`proposal_bundles`, `proposal_items`) are defined in [`schema.ts:1392`](../../../src/lib/db/schema.ts) and [`schema.ts:1404`](../../../src/lib/db/schema.ts); the two GIST exclusion constraints that enforce overlap-free holds at the DB level live in migration [`0006_admin_proposal_holds.sql:48-57`](../../../drizzle/0006_admin_proposal_holds.sql).
+This page is the mechanical reference for the Proposals HTTP endpoints: method, path, auth, request shape, response shape, side effects, and status codes. Feature meaning — what a proposal hold *is*, the soft-hold lifecycle, and why conflicts are fail-closed — lives in [docs/features/proposals.md](../../features/proposals.md). The two backing tables (`proposal_bundles`, `proposal_items`) are defined in [`schema.ts:1532`](../../../src/lib/db/schema.ts) and [`schema.ts:1544`](../../../src/lib/db/schema.ts); the two GIST exclusion constraints that enforce overlap-free holds at the DB level live in migration [`0006_admin_proposal_holds.sql:48-57`](../../../drizzle/0006_admin_proposal_holds.sql).
 
 A **proposal** is a soft hold on a tutor's time slot. Holds are grouped into a **bundle** (one student request, 1+ items). A `proposal_items` row carries its own `status` (`pending` | `confirmed` | `released` | `expired` | `auto_resolved`, [`types.ts:3-8`](../../../src/lib/proposals/types.ts)); only `pending` and `confirmed` are **active** ([`overlap.ts:9`](../../../src/lib/proposals/overlap.ts)). All times are minute-of-day integers in Asia/Bangkok.
 
+This API surface is exactly three endpoints:
+
+| Method + path | Purpose |
+|---|---|
+| `GET /api/proposals/active` | List all currently active holds (pending + confirmed). |
+| `POST /api/proposals` | Create a bundle of 1+ holds after resolving tutors and rejecting conflicts. |
+| `PATCH /api/proposals/items/[itemId]` | Apply `confirm` / `release` / `extend` to one hold. |
+
 ## Conventions shared across the endpoints
 
-- **Authentication.** All three handlers call `auth()` from [`@/lib/auth`](../../../src/lib/auth.ts) and return `401 {"error":"Unauthorized"}` when there is no session. None of them require an email — but the actor's `session.user.email` / `name` are stamped onto the rows when present (`createdByEmail`/`createdByName` on bundles, `lastActionByEmail`/`lastActionByName` on items). The middleware also gates the whole `/api/proposals/**` subtree: it is **not** in the public-route allowlist ([`middleware.ts:4-15`](../../../src/middleware.ts)), so an unauthenticated browser request is redirected to `/login` before the handler runs. The in-handler `auth()` check is the API-level backstop.
+- **Authentication.** All three handlers call `auth()` from [`@/lib/auth`](../../../src/lib/auth.ts) and return `401 {"error":"Unauthorized"}` when there is no session. None of them require an email — but the actor's `session.user.email` / `name` are stamped onto the rows when present (`createdByEmail`/`createdByName` on bundles, `lastActionByEmail`/`lastActionByName` on items).
+- **Middleware gating.** The middleware also gates the whole `/api/proposals/**` subtree: it is **not** in the public-route allowlist (`isPublicRoute`, [`middleware.ts:4-15`](../../../src/middleware.ts)), so an unauthenticated browser request is redirected to `/login` before the handler runs. The in-handler `auth()` check is the API-level backstop. A second middleware layer applies to *restricted* admins whose `allowedPages` is non-null: if `/api/proposals/**` is not within their allowed prefixes, the middleware returns `403 {"error":"Forbidden"}` for the `/api/*` path before the handler runs ([`middleware.ts:25-62`](../../../src/middleware.ts)). The handlers themselves emit only `401`, never `403`.
 - **Reconcile-on-read.** Every data-layer entry point first runs `reconcileProposalState` ([`data.ts:253-256`](../../../src/lib/proposals/data.ts)), which (a) flips `pending` items whose `expiresAt` has passed to `expired`, and (b) flips `confirmed` items to `auto_resolved` once a matching blocking Wise session exists in the active snapshot. So a `GET`, `POST`, or `PATCH` can change item statuses as a side effect even when that was not the caller's intent.
 - **The `holds` array.** `GET /api/proposals/active` and `PATCH /api/proposals/items/[itemId]` both return `{ holds: ProposalHoldSummary[] }` — the current set of **active** holds (statuses `pending` + `confirmed`), newest first. `POST /api/proposals` instead returns the created bundle. The `ProposalHoldSummary` shape is documented once under [`GET /api/proposals/active`](#get-apiproposalsactive) and referenced elsewhere as the **hold summary**.
 - **48-hour hold window.** A new `pending` item expires 48 hours after creation (`PENDING_HOLD_MS = 48 * 60 * 60 * 1000`, [`data.ts:21`](../../../src/lib/proposals/data.ts)); `confirm` clears the expiry and `extend` pushes it out another 48 hours from now.
@@ -129,7 +138,7 @@ Applies one lifecycle action — `confirm`, `release`, or `extend` — to a sing
 
 | Param | Type | Notes |
 |-------|------|-------|
-| `itemId` | string | The `proposal_items.id`. Awaited from `ctx.params` ([`items/[itemId]/route.ts:39`](../../../src/app/api/proposals/items/[itemId]/route.ts)). |
+| `itemId` | string | The `proposal_items.id`. Awaited from `ctx.params` (the param is a `Promise`, [`items/[itemId]/route.ts:17,39`](../../../src/app/api/proposals/items/[itemId]/route.ts)). |
 
 **Request body** (JSON) is validated by Zod `patchSchema` ([`items/[itemId]/route.ts:11-13`](../../../src/app/api/proposals/items/[itemId]/route.ts)). A non-JSON body returns `400 {"error":"Invalid JSON"}`; a schema failure returns `400 {"error":"Invalid request","details": <flattened>}` ([`items/[itemId]/route.ts:24-37`](../../../src/app/api/proposals/items/[itemId]/route.ts)).
 
@@ -161,4 +170,4 @@ Applies one lifecycle action — `confirm`, `release`, or `extend` — to a sing
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

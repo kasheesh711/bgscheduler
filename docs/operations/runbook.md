@@ -34,8 +34,9 @@ variables are validated at startup in `src/lib/env.ts:3` (see
 
 ## 2. Deploy
 
-The app deploys to Vercel. There is no custom build configuration — `next.config.ts`
-is default and `vercel.json` only declares crons (`vercel.json:1`).
+The app deploys to Vercel. `next.config.ts` sets exactly one option,
+`cacheComponents: true` (`next.config.ts:4`), and `vercel.json` only declares crons
+(`vercel.json:1`) — there is no custom build/output config beyond those.
 
 ### Deploy to production
 
@@ -58,10 +59,10 @@ npm test            # vitest run --project unit (package.json:11)
 npm run guard:production-route-surface
 ```
 
-> Schema-affecting features must migrate before they deploy. The README is
-> explicit that classroom tables and the new Wise session columns require
-> `npm run db:migrate` to exist in production before the feature is used
-> (`README.md:74`).
+> A Vercel deploy does **not** run migrations. Any schema-affecting feature must
+> have its migration applied to the production database (§4) before the code that
+> reads the new schema goes live, or the running app will error against the old
+> schema. See §4.1 for additive-vs-destructive ordering.
 
 ---
 
@@ -69,8 +70,9 @@ npm run guard:production-route-surface
 
 `src/lib/env.ts:20` validates `process.env` with a Zod schema **at module load**.
 If any required variable is missing or malformed, `getEnv()` logs the flattened
-field errors and throws `Invalid environment variables` (`src/lib/env.ts:22`),
-which crashes the importing process/function. Required and optional variables:
+field errors (`src/lib/env.ts:23`) and throws `Invalid environment variables`
+(`src/lib/env.ts:24`), which crashes the importing process/function. Required and
+optional variables:
 
 | Variable | Required? | Notes |
 | --- | --- | --- |
@@ -87,10 +89,12 @@ which crashes the importing process/function. Required and optional variables:
 | `LINE_CHANNEL_ACCESS_TOKEN` | optional | LINE integration |
 | `ENABLE_LINE_SCHEDULER` | optional | feature flag |
 
-The README documents additional runtime variables consumed by leave-requests and
-the schedule-email Apps Script (`README.md:110`–`README.md:118`) that are **not**
-part of the `src/lib/env.ts` schema — those modules read `process.env` directly,
-so a missing value degrades that feature rather than crashing startup.
+Feature-specific variables consumed by leave-requests, the AI scheduler, LINE
+writeback, and the schedule emails are **not** in the `src/lib/env.ts` schema (the
+schema is the twelve entries above, `src/lib/env.ts:3`–`:16`). Those modules read
+`process.env` directly, so a missing value degrades that one feature rather than
+crashing startup. The full list with sources is in
+[`docs/reference/env.md`](../reference/env.md).
 
 `CRON_SECRET` is the single most operationally important secret: rotating or
 clearing it changes how every internal sync responds (see
@@ -124,12 +128,13 @@ DATABASE_URL='postgres://...' npm run db:migrate    # drizzle-kit migrate (packa
 Applies any unapplied `drizzle/*.sql` files to the target database. Run this
 against production **before** deploying code that depends on the new schema.
 
-> Migration files are sequentially numbered but the directory has gaps (e.g.
-> `0009`, `0010`, `0025` are absent from the committed set, and the highest at
-> HEAD is `0037_payroll_rate_cards.sql`). drizzle-kit tracks applied migrations
-> in its `meta` journal, not by filename arithmetic, so apply with
-> `db:migrate` rather than hand-running individual files. There is **no**
-> `db:push` script — never push schema directly to production.
+> The directory holds **40** `.sql` files; the highest at HEAD is
+> `0040_student_promotions.sql`. Numbering is **not** contiguous — `0009`, `0010`,
+> and `0025` are absent, and there are **two** files each at `0038` and `0039`
+> (numbers collided when branches merged). drizzle-kit tracks applied migrations in
+> its `meta` journal, not by filename arithmetic, so always apply with
+> `db:migrate` rather than hand-running individual files in numeric order. There is
+> **no** `db:push` script — never push schema directly to production.
 
 ### `npm run db:seed` — seed aliases and admins
 
@@ -137,17 +142,27 @@ against production **before** deploying code that depends on the new schema.
 DATABASE_URL='postgres://...' SEED_ADMIN_EMAILS='a@x.com,b@y.com' npm run db:seed
 ```
 
-`src/lib/db/seed.ts:5` runs `tsx src/lib/db/seed.ts`. It is idempotent:
+`src/lib/db/seed.ts:5` is the seed entrypoint (`db:seed` runs `tsx src/lib/db/seed.ts`).
+It is idempotent and does **three** things:
 
 - Inserts four tutor aliases (`Kev→Kevin`, `Paoju→Paojuu`, `Poi→Nacha (Poi)`,
-  `Sam→Samantha`) with `onConflictDoNothing` on `fromKey` (`src/lib/db/seed.ts:15`).
-- Splits `SEED_ADMIN_EMAILS` on commas and inserts each into `admin_users` with
-  `onConflictDoNothing` on `email` (`src/lib/db/seed.ts:31`). If the variable is
-  unset it logs `No SEED_ADMIN_EMAILS set, skipping admin user seed` and seeds
-  only aliases (`src/lib/db/seed.ts:41`).
-- On any error it logs `Seed failed:` and exits non-zero (`src/lib/db/seed.ts:48`).
+  `Sam→Samantha`, `src/lib/db/seed.ts:15`–`:20`) with `onConflictDoNothing` on
+  `fromKey` (`:26`).
+- **Admin users** — only if `SEED_ADMIN_EMAILS` is set; it is comma-split and empties
+  filtered out, then each email is inserted into `admin_users` with
+  `onConflictDoNothing` on `email` (`src/lib/db/seed.ts:31`–`:38`). If unset it logs
+  `No SEED_ADMIN_EMAILS set, skipping admin user seed` and skips this step
+  (`:42`). These are **full-access** admins.
+- **Restricted users** — always seeded, regardless of `SEED_ADMIN_EMAILS`. The
+  array at `src/lib/db/seed.ts:47`–`:49` scopes specific emails to a page-prefix
+  allowlist (`allowedPages`) via `onConflictDoUpdate` (`:55`). At HEAD this grants
+  `m.giftwan@gmail.com` access to `/progress-tests` only. The inline comment notes
+  these are intentionally **not** in `SEED_ADMIN_EMAILS` (`:45`–`:46`).
 
-Note this seed driver uses the Neon **HTTP** client (`src/lib/db/seed.ts:1`).
+`DATABASE_URL` is mandatory — the script throws `DATABASE_URL is not set` if missing
+(`src/lib/db/seed.ts:7`–`:9`). On any error it logs `Seed failed:` and exits non-zero
+(`src/lib/db/seed.ts:65`–`:67`). The driver is the Neon **HTTP** client
+(`src/lib/db/seed.ts:1`).
 
 ### Other one-off scripts
 
@@ -170,17 +185,19 @@ running them.
 | `npm run test:all` | `vitest run` (`package.json:14`) | both projects |
 | `npm run test:coverage` | `vitest run --project unit --coverage` (`package.json:15`) | v8 coverage of the unit project |
 
-Two Vitest projects are configured in `vitest.config.ts:23`:
+Two Vitest projects are configured in `vitest.config.ts:25`:
 
 - **`unit`** — `node` environment, matches `src/**/*.test.ts(x)`, **excludes**
-  `*.integration.test.ts` (`vitest.config.ts:30`). This is what `npm test` runs.
+  `*.integration.test.ts` (`vitest.config.ts:32`–`:33`). This is what `npm test`
+  runs. The suite forces `TZ = "Asia/Bangkok"` (`vitest.config.ts:4`).
 - **`integration`** — matches `src/**/*.integration.test.ts`, runs in a single
-  forked worker (`fileParallelism: false`, `maxWorkers: 1`) with 60s test/hook
-  timeouts (`vitest.config.ts:43`). Integration specs use
-  `@testcontainers/postgresql` (a `devDependency`, `package.json:52`), so the
-  integration project needs Docker available locally. The orchestrator,
-  past-sessions diff hook, and snapshot-pruning all ship `*.integration.test.ts`
-  suites under `src/lib/sync/__tests__/`.
+  forked worker (`pool: "forks"`, `fileParallelism: false`, `maxWorkers: 1`) with
+  60s test/hook timeouts (`vitest.config.ts:43`–`:48`). Integration specs use
+  `@testcontainers/postgresql` (a `devDependency`, `package.json:55`), so the
+  integration project needs Docker available locally. The three integration suites
+  are `orchestrator.integration.test.ts`,
+  `past-sessions-diff-hook.integration.test.ts`, and
+  `snapshot-pruning.integration.test.ts`, all under `src/lib/sync/__tests__/`.
 
 ---
 
@@ -192,14 +209,17 @@ Every scheduled sync lives under `/api/internal/*` and is gated by a constant-ti
 
 ### 6.1 Cron authentication
 
-Two equivalent constant-time check implementations exist:
+Two equivalent constant-time check implementations exist (same algorithm):
 
-- The shared helper `getCronSecretStatus` / `rejectInvalidCronSecret` in
-  `src/lib/internal/cron-auth.ts:6`, used by the activity, leave-requests, and
-  classroom crons.
-- An inline copy `hasValidCronSecret` in
-  `src/app/api/internal/sync-wise/route.ts:10`, the sales-dashboard route, the
-  credit-control route, and the room-utilization route.
+- The **shared helper** `getCronSecretStatus` / `rejectInvalidCronSecret` in
+  `src/lib/internal/cron-auth.ts:6`, `:19`. Used by `sync-wise-activity`,
+  `progress-tests/admin-digest`, `sync-leave-requests`, `class-assignments/morning`,
+  and `class-assignments/admin-email` (via `rejectInvalidCronSecret`), and by
+  `sync-progress-tests` (via `getCronSecretStatus`,
+  `src/app/api/internal/sync-progress-tests/route.ts:3`).
+- An **inline copy** `hasValidCronSecret` in `src/app/api/internal/sync-wise/route.ts:11`,
+  the sales-dashboard route, the credit-control route, the room-utilization route,
+  and `student-promotions/july-1` (`src/app/api/internal/student-promotions/july-1/route.ts:10`).
 
 Both return one of three states and map them to HTTP responses:
 
@@ -220,7 +240,10 @@ environment — fix the env var, do not touch the route code.
 
 ### 6.2 GET vs POST and session fallback
 
-The Wise sync, sales-dashboard, and credit-control routes accept **both** verbs:
+The Wise sync, sales-dashboard, credit-control, and progress-tests routes accept
+**both** verbs and add a session fallback on `POST` (`allowSessionAuth: true`). The
+room-utilization route is POST-only but likewise falls back to a session
+(`src/app/api/internal/sync-room-utilization/route.ts:30`):
 
 ```mermaid
 flowchart TD
@@ -232,17 +255,19 @@ flowchart TD
   C -- "POST, no session" --> X
 ```
 
-- `GET` is what Vercel cron calls; it does **not** allow session auth
-  (`allowSessionAuth: false`, `src/app/api/internal/sync-wise/route.ts:57`).
+- `GET` is what Vercel cron calls; on the Wise route it does **not** allow session
+  auth (`allowSessionAuth: false`, `src/app/api/internal/sync-wise/route.ts:70`). The
+  session fallback is gated on this flag (`src/app/api/internal/sync-wise/route.ts:45`).
 - `POST` allows an authenticated Auth.js admin session as an alternative to the
-  secret (`allowSessionAuth: true`, `src/app/api/internal/sync-wise/route.ts:62`).
+  secret (`allowSessionAuth: true`, `src/app/api/internal/sync-wise/route.ts:75`).
   This is what lets a logged-in admin trigger a sync from the browser/UI without
   knowing `CRON_SECRET`.
 
 The activity, leave-requests, classroom-morning, and classroom-admin-email routes
 use `rejectInvalidCronSecret` directly and therefore require the secret on **all**
-verbs (no session fallback) — e.g. `src/app/api/internal/sync-wise-activity/route.ts:12`,
-`src/app/api/internal/sync-leave-requests/route.ts:9`.
+verbs (no session fallback) — e.g. `src/app/api/internal/sync-wise-activity/route.ts:13`,
+`src/app/api/internal/sync-leave-requests/route.ts:10` (leave-requests exposes both
+GET and POST, but both go through the same secret check).
 
 There is also a dedicated admin-only trigger at `POST /api/admin/sync-wise`
 (`src/app/api/admin/sync-wise/route.ts`) that requires an Auth.js session (`401`
@@ -295,19 +320,30 @@ On success the route calls `revalidateTag("snapshot", { expire: 0 })`
 (`src/lib/sync/run-wise-sync.ts:161`) and returns 200; on failure it returns
 500 with the orchestrator's `errorSummary` (`src/lib/sync/run-wise-sync.ts:164`).
 
-> Other syncs have their own guards. Wise-activity and leave-requests throw a
-> typed `…AlreadyRunningError` that their routes translate to **HTTP 409**
-> (`src/app/api/internal/sync-wise-activity/route.ts:24`,
-> `src/app/api/internal/sync-leave-requests/route.ts:16`). These are independent
-> mechanisms from the Wise-snapshot 20-minute guard above.
+> Other syncs have their own guards, in two flavors:
+> - **Same DB single-flight + 20-minute sweep as Wise.** Credit-control mirrors
+>   this pattern exactly — its own `acquireSyncRun` fails `running` rows older than
+>   20 minutes, returns **202 skipped** when one is live, and is backstopped by the
+>   `ccsr_single_running_idx` partial unique index
+>   (`src/lib/credit-control/run-sync-request.ts:12`, `:100`, `:120`;
+>   `drizzle/0024_dashboard_sync_single_flight.sql:33`–`:34`). Sales-dashboard guards its
+>   *projection import* with a per-source partial unique index
+>   (`sdpir_source_single_running_idx`, `drizzle/0029_sales_dashboard_projection.sql:74`).
+> - **In-process `…AlreadyRunningError` → HTTP 409.** Wise-activity and
+>   leave-requests throw a typed error their routes translate to **409**
+>   (`src/app/api/internal/sync-wise-activity/route.ts:29`,
+>   `src/app/api/internal/sync-leave-requests/route.ts:21`).
+>
+> All of these are independent of the Wise-snapshot guard above.
 
 ### 6.4 How a fresh snapshot reaches live queries
 
 A successful Wise sync promotes a new snapshot (see [§8](#8-snapshot-promotion-and-rollback)),
 but search/compare read from an **in-memory index singleton**, not Postgres
-directly. `ensureIndex` re-checks the active snapshot id on each call and rebuilds
-the index when the cached `snapshotId` no longer matches the DB's `active=true`
-row (`src/lib/search/index.ts:366`–`:380`). The `revalidateTag("snapshot")` call
+directly. `ensureIndex` (`src/lib/search/index.ts:354`) re-checks the active
+snapshot on each call and rebuilds the index when the cached `snapshotId` (or
+`profileVersion`) no longer matches the DB's `active=true` row
+(`src/lib/search/index.ts:367`–`:380`). The `revalidateTag("snapshot")` call
 after a successful sync invalidates the Next.js data cache so the next request
 observes the new snapshot. Net effect: a promoted snapshot becomes visible to
 users on the next query, without a redeploy.
@@ -316,29 +352,39 @@ users on the next query, without a redeploy.
 
 ## 7. The crons and how to trigger each manually
 
-`vercel.json:2` registers eight crons. All scheduled entries are `GET /api/internal/*` and all
-require `Authorization: Bearer $CRON_SECRET`. The schedules are staggered so the
-30-minute-ish jobs do not all fire on the same minute.
+`vercel.json` registers **ten** crons (`vercel.json:2`–`:43`). All scheduled
+entries are `GET /api/internal/*` and all require
+`Authorization: Bearer $CRON_SECRET`. The interval jobs are staggered onto
+different minutes so the ~30-minute jobs never all fire in the same minute.
 
-| Path | Schedule (UTC) | Verb(s) accepted | maxDuration | Manual-trigger notes |
-| --- | --- | --- | --- | --- |
-| `/api/internal/sync-wise` | `*/30 * * * *` (`vercel.json:6`) | GET + POST(session) | 800s (`…/sync-wise/route.ts:6`) | single-flight; 202 if already running |
-| `/api/internal/sync-wise-activity` | `5,35 * * * *` (`vercel.json:17`) | GET only | 800s (`…/sync-wise-activity/route.ts:7`) | 409 if already running |
-| `/api/internal/sync-sales-dashboard` | `10,40 * * * *` (`vercel.json:9`) | GET + POST(session) | 800s (`…/sync-sales-dashboard/route.ts:10`) | 409 on missing Google token |
-| `/api/internal/sync-leave-requests` | `15,45 * * * *` (`vercel.json:21`) | GET + POST | 800s (`…/sync-leave-requests/route.ts:6`) | 409 if already running |
-| `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:13`) | GET + POST(session) | 300s (`…/sync-credit-control/route.ts:6`) | — |
-| `/api/internal/class-assignments/morning` | `45 23 * * *` (`vercel.json:25`) | GET only | 800s (`…/morning/route.ts:5`) | daily room-assignment automation |
-| `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` (`vercel.json:29`) | GET only | 300s (`…/admin-email/route.ts:5`) | retried 4x; 500 if email send failed |
-| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` | GET + POST | 800s (`…/student-promotions/july-1/route.ts:6`) | one-shot July 1, 2026 Bangkok guard; applies newest verified run |
+| Path | Schedule (UTC) | Bangkok | Verb(s) accepted | maxDuration | Manual-trigger notes |
+| --- | --- | --- | --- | --- | --- |
+| `/api/internal/sync-wise` | `*/30 * * * *` (`vercel.json:5`) | every 30 min | GET + POST(session) | 800s (`…/sync-wise/route.ts:7`) | single-flight; 202 if already running |
+| `/api/internal/sync-wise-activity` | `5,35 * * * *` (`vercel.json:23`) | every 30 min | GET only | 800s (`…/sync-wise-activity/route.ts:8`) | 409 if already running |
+| `/api/internal/sync-sales-dashboard` | `10,40 * * * *` (`vercel.json:8`) | every 30 min | GET + POST(session) | 800s (`…/sync-sales-dashboard/route.ts:8`) | projection-import single-flight |
+| `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:11`) | every 30 min | GET + POST(session) | 300s (`…/sync-credit-control/route.ts:7`) | single-flight; 202 if already running |
+| `/api/internal/sync-progress-tests` | `25,55 * * * *` (`vercel.json:14`) | every 30 min | GET + POST(session) | 300s (`…/sync-progress-tests/route.ts:7`) | — |
+| `/api/internal/progress-tests/admin-digest` | `35 0 * * *` (`vercel.json:18`) | 07:35 daily | GET only | 300s (`…/admin-digest/route.ts:6`) | daily progress-tests digest email |
+| `/api/internal/sync-leave-requests` | `15,45 * * * *` (`vercel.json:26`) | every 30 min | GET + POST (secret only) | 800s (`…/sync-leave-requests/route.ts:7`) | 409 if already running |
+| `/api/internal/class-assignments/morning` | `45 23 * * *` (`vercel.json:31`) | 06:45 daily | GET only | 800s (`…/morning/route.ts`) | **dangerous**: assigns + publishes rooms + emails tutors |
+| `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` (`vercel.json:34`) | 07:00–07:30 | GET only | 300s (`…/admin-email/route.ts`) | **dangerous**: sends/retries admin digest email |
+| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` (`vercel.json:38`) | 00:05 Jul 1 2026 | GET + POST | 800s (`…/july-1/route.ts:8`) | **dangerous**, one-shot; 409 outside July 1 2026 Bangkok |
 
+> `dangerous: true` is set per-job in
+> `src/lib/data-health/cron-registry.ts:153`, `:169`, `:186` — those jobs have
+> real-world side effects (write `location` to Wise, send emails, write student
+> grade/course promotions). Prefer the
+> [Data Health manual-run endpoint](#data-health-manual-run-recommended-for-operators)
+> over a bare curl for these.
+>
 > The morning/admin-email schedules (`23:45 UTC` and the four `00:xx UTC` slots)
-> correspond to the README's "6:45 Bangkok" automation and "7:00–7:30 Bangkok"
-> email retries (`README.md:72`–`README.md:73`); Bangkok is UTC+7.
+> are 06:45 and 07:00–07:30 Bangkok (UTC+7); the digest at `35 0 * * *` is 07:35
+> Bangkok (`cron-registry.ts:117`–`:124`).
 
 ### Manual triggers (copy/paste)
 
 The canonical manual trigger documented in the README is the Wise sync
-(`README.md:134`):
+(`README.md:167`–`:169`):
 
 ```bash
 # Wise snapshot sync (POST works for both admin session and CRON_SECRET)
@@ -361,35 +407,75 @@ curl -X POST https://bgscheduler.vercel.app/api/internal/sync-sales-dashboard \
 curl -X POST https://bgscheduler.vercel.app/api/internal/sync-credit-control \
   -H "Authorization: Bearer $CRON_SECRET"
 
-# Leave requests
-curl -X POST https://bgscheduler.vercel.app/api/internal/sync-leave-requests \
+# Progress tests
+curl -X POST https://bgscheduler.vercel.app/api/internal/sync-progress-tests \
   -H "Authorization: Bearer $CRON_SECRET"
 
-# Classroom morning automation (GET only)
+# Progress-tests admin digest (GET only)
+curl https://bgscheduler.vercel.app/api/internal/progress-tests/admin-digest \
+  -H "Authorization: Bearer $CRON_SECRET"
+
+# Leave requests (GET or POST; both require the secret — no session fallback)
+curl https://bgscheduler.vercel.app/api/internal/sync-leave-requests \
+  -H "Authorization: Bearer $CRON_SECRET"
+
+# Room utilization (POST only; secret OR admin session; not on any cron)
+curl -X POST https://bgscheduler.vercel.app/api/internal/sync-room-utilization \
+  -H "Authorization: Bearer $CRON_SECRET"
+
+# DANGEROUS — classroom morning automation: assigns rooms, publishes OFFLINE
+# location to Wise, emails tutors. Prefer the Data Health manual-run endpoint.
 curl https://bgscheduler.vercel.app/api/internal/class-assignments/morning \
   -H "Authorization: Bearer $CRON_SECRET"
 
-# Admin classroom schedule email (GET only)
+# DANGEROUS — admin classroom schedule email: sends/retries the daily digest.
 curl https://bgscheduler.vercel.app/api/internal/class-assignments/admin-email \
+  -H "Authorization: Bearer $CRON_SECRET"
+
+# Student promotions (one-shot; 409 on any day other than 1 Jul 2026 Bangkok)
+curl -X POST https://bgscheduler.vercel.app/api/internal/student-promotions/july-1 \
   -H "Authorization: Bearer $CRON_SECRET"
 ```
 
 ### Manual Wise-activity backfill (admin session, not CRON_SECRET)
 
-`POST /api/wise-activity/sync` (`src/app/api/wise-activity/sync/route.ts`) is the
-operator backfill path. It requires an **Auth.js session** (returns 401
-otherwise), not the cron secret, and accepts an optional JSON body with
-`lookbackDays` (clamped 1–365, default 30) and `maxPages` (clamped 1–1000,
-default 500). It returns 409 if an activity sync is already running. Use this when
-the audit log needs more history than the cron's smaller default window provides.
+`POST /api/wise-activity/sync` (`src/app/api/wise-activity/sync/route.ts:16`) is the
+operator backfill path. It requires an **Auth.js session** (401 otherwise,
+`route.ts:17`–`:19`), not the cron secret, and accepts an optional JSON body with
+`lookbackDays` (clamped 1–365, default 30) and `maxPages` (clamped 1–1000, default
+500) (`route.ts:37`–`:38`). It returns **409** if an activity sync is already running
+(`route.ts:43`–`:44`). Use this when the audit log needs more history than the cron's
+default window provides.
 
 ### Room-utilization sync (no cron)
 
 `POST /api/internal/sync-room-utilization` exists
-(`src/app/api/internal/sync-room-utilization/route.ts:25`) and accepts either the
-cron secret or an Auth.js session, **but it is not registered in `vercel.json`**.
-It runs only when triggered manually (or via the `room-utilization:sync` npm
-script, `package.json:22`). See [Open questions](#open-questions).
+(`src/app/api/internal/sync-room-utilization/route.ts:26`) and accepts either the
+cron secret **or** an Auth.js session fallback
+(`route.ts:30`–`:40`), **but it is not registered in `vercel.json`** and is marked
+`manualOnly: true` in the registry (`cron-registry.ts:191`–`:205`). It runs only when
+triggered manually — by curl with the secret, by the Data Health manual control
+(below), or via the `room-utilization:sync` npm script (`package.json:22`).
+
+### Data Health manual-run (recommended for operators)
+
+The Data Health page exposes a manual-run endpoint that needs **no `CRON_SECRET`** —
+just an admin session — and records who ran it:
+
+```
+POST /api/data-health/jobs/{jobKey}/run
+```
+
+`src/app/api/data-health/jobs/[jobKey]/run/route.ts:11` checks the session, then
+`runDataHealthJob(jobKey, actorEmail)` dispatches on `jobKey` to the same underlying
+sync function as the cron and wraps it in the audit with `triggerSource: "admin"`
+(`src/lib/data-health/run-job.ts:20`–`:124`). Valid `jobKey` values are the eleven in
+`src/lib/data-health/cron-registry.ts:3`–`:14`. This is the preferred way to retrigger
+a job — especially a `dangerous` one — because the secret never leaves Vercel, the run
+is attributed to the operator, and the UI surfaces the confirmation label. (Note: a few
+jobs map to slightly different entrypoints than their cron route — e.g. `sales_dashboard`
+runs both the refreshable-source import and the projection import,
+`run-job.ts:56`–`:71`.)
 
 ---
 
@@ -485,16 +571,20 @@ Work from the in-app surface outward to the platform logs.
 
 ### 9.1 `/data-health` (start here for the Wise snapshot sync)
 
-`GET /api/data-health` (`src/app/api/data-health/route.ts`) requires an admin
-session and returns the operational summary used by the `/data-health` page:
+`GET /api/data-health` (`src/app/api/data-health/route.ts:14`) requires an admin
+session and returns the payload built in `src/lib/data-health/dashboard.ts:723`–`:740`:
 
 - `lastSuccessfulSync`, `lastFailedSync`, and **`lastFailureError`** — the
-  `errorSummary` of the most recent failed run (the first thing to read).
-- `staleAgeMs` / `staleMinutes` — time since the last successful finish.
-- `activeSnapshotId` and `stats` (teacher / identity-group counts, total issues).
-- `issuesByType`, `unresolvedAliases`, `unresolvedModality`, `unmappedTags`.
-- `recentSyncs` — the last 10 `sync_runs` with `status`, timestamps,
-  `teacherCount`, and `errorSummary`.
+  `errorSummary` of the most recent failed run, the first thing to read
+  (`dashboard.ts:703`).
+- `staleAgeMs` / `staleMinutes` — time since the last successful finish
+  (`dashboard.ts:704`–`:705`).
+- `activeSnapshotId` and `stats` (teacher / identity-group counts, total issues)
+  (`dashboard.ts:700`, `:706`).
+- `issuesByType`, `unresolvedAliases`, `unresolvedModality`, `unmappedTags`
+  (`dashboard.ts:731`–`:734`).
+- `recentSyncs` — the last `sync_runs` with `status`, timestamps, and
+  `errorSummary` (`dashboard.ts:735`).
 
 Interpretation cheat-sheet:
 
@@ -515,12 +605,12 @@ Triggering the sync by `curl` tells you a lot immediately:
 
 | Response | Meaning | Source |
 | --- | --- | --- |
-| `200` + `success:true` | sync ran; check `promotedSnapshotId` | `src/lib/sync/run-wise-sync.ts:160` |
-| `202` + `skipped:true` | already running — not an error | `src/lib/sync/run-wise-sync.ts:148` |
-| `500` + `error:"Server misconfigured"` | `CRON_SECRET` unset in env | `src/app/api/internal/sync-wise/route.ts:49` |
-| `401` + `error:"Unauthorized"` | wrong/absent secret (GET) or no session (POST) | `src/app/api/internal/sync-wise/route.ts:53` |
-| `500` + `errorSummary` | `runFullSync` threw; the string is the cause | `src/lib/sync/run-wise-sync.ts:164` |
-| `409` (activity / leave-requests) | that sync's own already-running guard | `…/sync-wise-activity/route.ts:24` |
+| `200` + `success:true` | sync ran; check `promotedSnapshotId` | `src/lib/sync/run-wise-sync.ts:160`–`:166` |
+| `202` + `skipped:true` | already running — not an error | `src/lib/sync/run-wise-sync.ts:148`–`:150` |
+| `500` + `error:"Server misconfigured"` | `CRON_SECRET` unset in env | `src/app/api/internal/sync-wise/route.ts:61`–`:63` |
+| `401` + `error:"Unauthorized"` | wrong/absent secret (GET) or no session (POST) | `src/app/api/internal/sync-wise/route.ts:65` |
+| `500` + `errorSummary` | `runFullSync` threw; the string is the cause | `src/lib/sync/run-wise-sync.ts:164`–`:166` |
+| `409` (activity / leave-requests) | that sync's own already-running guard | `…/sync-wise-activity/route.ts:29`, `…/sync-leave-requests/route.ts:21` |
 
 ### 9.3 Vercel platform logs
 
@@ -555,24 +645,30 @@ manual insert of a second `running` row will be rejected by the unique index.
 
 ## Open questions
 
-- **`/api/internal/sync-room-utilization` has no cron.** It lives under the
-  `internal` namespace and accepts the cron secret
-  (`src/app/api/internal/sync-room-utilization/route.ts:25`) but is absent from
-  `vercel.json`. Is it intended to be cron-driven (a missing entry) or strictly a
-  manual/admin operation invoked via the `room-utilization:sync` script?
-- **Migration numbering gaps.** `drizzle/` skips `0009`, `0010`, and `0025`
-  (highest at HEAD is `0037`). Were these intentionally squashed/removed, and is
-  the `meta` journal authoritative for what production has applied? Confirm before
-  relying on filename order during a manual recovery.
-- **Per-sync guard semantics differ.** The Wise snapshot sync uses a DB
-  single-flight row + 20-minute sweep, while activity/leave-requests use an
-  in-process `AlreadyRunningError` → 409. Sales-dashboard and credit-control
-  routes show no overlap guard in their route handlers — is overlap protection
-  handled inside `importRefreshableSalesSources` /
-  `runCreditControlSyncRequest`, or can those two genuinely run concurrently?
-- **Emergency manual rollback is undocumented as a supported procedure.** The
-  fail-closed design means re-running the sync is the intended recovery, but there
-  is no first-class endpoint to re-promote a specific older snapshot. Should one
-  exist, given pruning physically deletes snapshots beyond the most recent 30?
+- **`/api/internal/sync-room-utilization` is intentionally cron-less.** It accepts
+  the cron secret *or* an Auth.js session
+  (`src/app/api/internal/sync-room-utilization/route.ts:26`–`:40`) but is absent
+  from `vercel.json` and is marked `manualOnly: true` in the registry
+  (`src/lib/data-health/cron-registry.ts:191`–`:205`). It runs only from the Data
+  Health manual control or the `room-utilization:sync` script. Confirm with the
+  team whether it *should* eventually be scheduled, or whether on-demand is the
+  permanent intent.
+- **Migration numbering has gaps and duplicates.** `drizzle/` skips `0009`,
+  `0010`, `0025`, and has **two** files each at `0038` and `0039` (a merge-time
+  collision); highest is `0040_student_promotions.sql`. drizzle-kit's `meta`
+  journal — not filename order — is authoritative for what production has applied.
+  Worth confirming the duplicate-numbered files were both intended (and apply
+  cleanly in journal order) before relying on this during a manual recovery.
+- **Whether `student-promotions/july-1` should be auditable.** Unlike every other
+  cron, its route does not wrap `withCronInvocationAudit`
+  (`src/app/api/internal/student-promotions/july-1/route.ts:19`–`:48`), so its runs
+  leave no `cron_invocations` row and the Data Health page cannot prove it fired.
+  Is this deliberate (it has its own domain run table) or an oversight?
+- **Emergency manual rollback is not a first-class procedure.** The fail-closed
+  design means re-running the sync is the intended recovery, and §8 documents a
+  manual `UPDATE snapshots SET active = …` flip, but there is no app endpoint to
+  re-promote a specific older snapshot — and pruning physically deletes snapshots
+  beyond the most recent 30 (`src/lib/sync/snapshot-pruning.ts:5`). Should a
+  guarded "re-promote snapshot N" admin action exist?
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._

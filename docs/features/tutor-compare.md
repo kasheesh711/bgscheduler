@@ -1,123 +1,117 @@
 # Tutor Compare
 
-**Status: legacy-redirect** — the standalone `/compare` route is a thin client-side redirect to `/search`; the live compare experience runs inside the search workspace. The compare *engine* and its API endpoints are fully active.
+**Status: legacy-redirect** — the standalone `/compare` page now redirects into `/search`, but the comparison engine, API, and UI are fully active and embedded in the search workspace.
 
 ## Purpose
 
-Tutor Compare lets admin staff place 1–3 tutors side by side for a chosen week and answer three operational questions at a glance:
+Tutor Compare lets admin staff put **1–3 tutors side by side for a single week** and answer three questions at a glance:
 
-1. **What is each tutor already teaching this week?** (a GCal-style weekly grid of their booked sessions)
-2. **Do any two selected tutors have a booking conflict for the same student?** (the same student double-booked across two tutors at overlapping times)
-3. **When are all selected tutors simultaneously free?** (shared free slots, for scheduling a new class)
+1. **What is each tutor's week already booked with?** A GCal-style calendar renders every blocking session per tutor.
+2. **Do any of these tutors clash for the same student?** Same-student, same-weekday, overlapping sessions are surfaced as explicit conflicts.
+3. **When are all selected tutors simultaneously free?** Shared free-slot intervals are intersected across the group so staff can find a common opening.
 
-It also offers a **discovery** flow ("Advanced search") that surfaces candidate tutors filtered by subject/level/mode/time and pre-ranks them by conflict count and availability against the tutors already selected.
-
-The users are non-technical BeGifted admin staff scheduling classes; comparison is meant to be self-serve without engineering help.
-
-The historical standalone `/compare` page now simply forwards to `/search` (preserving any `?tutors=` query), so old bookmarks keep working. See [Business rules & edge cases](#business-rules--edge-cases).
+The audience is the same non-technical admin staff who drive Tutor Search. Compare is reached by selecting tutors from search results (or via a deep link), not as a separate destination — the dedicated `/compare` route exists only to bounce old bookmarks back to `/search` (verified: `src/app/(app)/compare/page.tsx:10-18` `router.replace("/search")`, preserving `?tutors=`).
 
 ## Conceptual data model
 
-Compare performs **no writes**. It reads entirely from the warm in-memory `SearchIndex` singleton (built from the active snapshot), with one direct DB read for historical weeks.
+Compare is **read-only** — it never writes. All reads are served from the warm in-memory `SearchIndex` singleton (the active Wise snapshot), not from Postgres on the request path. The only direct DB touches are a fallback resolution query and a historical-range fetch.
 
-Conceptually it reads:
+Tables/aggregates it reads, conceptually:
 
-- **Tutor identity groups + their members** — the logical "one real person" grouping, including each underlying Wise teacher record (online vs onsite variant). Drives display name, supported modes, and per-session modality resolution.
-- **Subject/level qualifications** — surfaced on each tutor and used by discovery's subject/curriculum/level filters.
-- **Recurring availability windows** — the weekday + time + modality windows from which shared free slots are computed.
-- **Dated leaves** — block availability in the discovery flow.
-- **Future session blocks** — the booked sessions rendered in the grid and matched for conflicts; the bulk of compare's data.
-- **Past session blocks** — read directly from the database (bypassing the index) only when the requested week is entirely in the past, to fill in history the Wise FUTURE API no longer returns. Fetched by `fetchPastSessionBlocksUncached` in `src/lib/data/past-sessions.ts:35`, which is wrapped by a cached `fetchPastSessionBlocks` used by the route.
+- **Active-snapshot tutor data** (identity groups, qualifications, availability windows, leaves, future session blocks) — loaded once into the index and read in-process as `IndexedTutorGroup` aggregates.
+- **`tutor_identity_groups`** — queried directly only to resolve *stale* tutor-group UUIDs (from old links/caches) to their `canonicalKey`, so they can be re-mapped onto the current snapshot (`src/app/api/compare/route.ts:82-91`).
+- **`past_session_blocks`** — the sole cross-snapshot table, keyed by `group_canonical_key`. Read only when the requested week is historical, to recover real past sessions instead of guessing (`src/app/api/compare/route.ts:189-198`, via `fetchPastSessionBlocks`).
+- **`tutor_business_profiles`** — editorial profile data carried on the index and passed through onto each `CompareTutor` for the profile popover (`businessProfile`, `src/lib/search/compare.ts:316`).
 
-For the full table/column definitions and relationships, see the database ERD reference: [`docs/reference/database/erd-core.md`](../reference/database/erd-core.md). The index build that loads these tables lives in `src/lib/search/index.ts` (DB queries at `src/lib/search/index.ts:170-206`).
+For column-level detail and ER diagrams of these tables, see the canonical reference: [docs/reference/database/erd-core.md](../reference/database/erd-core.md) (snapshot, identity-group, session-block, and `past_session_blocks` tables) and [docs/reference/database/erd-tutor-profiles.md](../reference/database/erd-tutor-profiles.md) (business profiles).
 
 ## API surface
 
-All endpoints require an authenticated session (return `401` otherwise) and validate the request body with Zod (`400` on failure). For full request/response contracts see [`docs/reference/api/misc.md`](../reference/api/misc.md).
+Two POST endpoints, both **admin-authed** (`auth()` → 401). Full request/response contracts live in the canonical API reference — do not rely on the summaries below for shapes.
 
-- **`POST /api/compare`** — compare 1–3 tutors for a week: returns each tutor's week-scoped sessions, cross-tutor same-student conflicts, shared free slots, and the resolved `weekStart`/`weekEnd`. (`src/app/api/compare/route.ts:112`)
-- **`POST /api/compare/discover`** — find candidate tutors (subject/level/mode/time filters) with conflict status pre-computed against the already-selected tutors, sorted by data-health → conflicts → availability. (`src/app/api/compare/discover/route.ts:29`)
+| Method + path | Purpose | Reference |
+|---|---|---|
+| `POST /api/compare` | Build week-scoped schedules for 1–3 tutors, detect same-student conflicts, and compute shared free slots. Supports `fetchOnly` (incremental serialization) and `weekStart` (week selection). | [docs/reference/api/misc.md](../reference/api/misc.md) |
+| `POST /api/compare/discover` | Given up to 2 already-selected tutors, rank candidate tutors to add — each annotated with conflict count, free-slot match, and data-issue flags. | [docs/reference/api/misc.md](../reference/api/misc.md) |
 
-Two adjacent endpoints feed the surrounding workspace but are owned by other features: `GET /api/tutors` (combobox list) and `GET /api/search/range` (the left-hand search panel). They are documented under their own features.
+The client never calls these from a `/compare` page; the `useCompare` hook (`src/hooks/use-compare.ts`) owns all `fetch("/api/compare")` calls (`src/hooks/use-compare.ts:135`), and the discovery panel drives `/api/compare/discover`.
 
 ## UI
 
-There is no dedicated compare page in the app shell. Two routes are relevant:
+There is **no rendered compare page**. The user-facing surface is the compare half of the search workspace.
 
-- **`src/app/(app)/compare/page.tsx`** — a client component (`CompareRedirect`) whose only job is to `router.replace()` to `/search`, carrying the `?tutors=` param through. It renders `null`. (`src/app/(app)/compare/page.tsx:6-28`)
-- **`src/app/(app)/search/page.tsx`** — the real home of compare. It server-loads filter options and the tutor list, then renders `SearchWorkspace`, which mounts the compare UI as the right-hand panel (`src/components/search/search-workspace.tsx:18`, `src/components/search/search-workspace.tsx:347`).
+- **Page**: `src/app/(app)/compare/page.tsx` — a client redirect shell only (`Suspense` → `router.replace`). No compare UI renders here.
+- **Host page**: `src/app/(app)/search/page.tsx` → `<SearchWorkspace>` (`src/components/search/search-workspace.tsx`), which mounts `<ComparePanel>` (imported at `search-workspace.tsx:18`) on the right half of the side-by-side layout — a `w-1/2 pl-1` container at `search-workspace.tsx:341-354`.
 
 Key components under `src/components/compare/`:
 
-- **`compare-panel.tsx`** — the orchestrating panel: tutor-selector chips (max 3, color-coded, removable), the searchable `TutorCombobox`, the "Advanced search" trigger, the week picker (prev/next, clickable label → `WeekCalendar` popup, Today button), Week/day tabs, the calendar surface, and the conflict summary. It is driven entirely by the `useCompare` hook passed in as `compare`.
-- **`week-overview.tsx`** / **`calendar-grid.tsx`** — the GCal-style weekly grid and single-day drill-down (lazy-loaded via `next/dynamic`).
-- **`tutor-combobox.tsx`**, **`tutor-selector.tsx`** — tutor selection UI and the `TutorChip` shape.
-- **`discovery-panel.tsx`** — the "Advanced search" modal that calls `/api/compare/discover`.
-- **`density-overview.tsx`** — per-day booking density / conflict badges row.
-- **`week-calendar.tsx`** — the month-grid date-jump popup.
-- **`session-colors.ts`** (`TUTOR_COLORS`), **`modality-display.ts`**, **`tutor-profile-popover.tsx`** — presentation helpers.
+- **`compare-panel.tsx`** — the container. Owns the `useCompare` hook wiring, week navigation, fullscreen toggle, tutor chips, and lazy-loads the calendar/discovery children via `next/dynamic` (`compare-panel.tsx:29-42`).
+- **`week-overview.tsx`** — GCal-style 7-day week grid with overlap sub-columns (lazy).
+- **`calendar-grid.tsx`** — single-day calendar grid (lazy).
+- **`density-overview.tsx`** — compact booked-hours / session-count summary per tutor/day (`sessionCount: daySessions.length`, `density-overview.tsx:70`; rendered in the cell aria-label `${day.sessionCount} session(s)`, `density-overview.tsx:125`).
+- **`discovery-panel.tsx`** — the "add a tutor" modal, backed by `/api/compare/discover` (lazy).
+- **`week-calendar.tsx`** — month-grid date-picker popup for jumping to any week.
+- **`tutor-combobox.tsx`** / **`tutor-selector.tsx`** — searchable tutor add control + chip type.
+- **`tutor-profile-popover.tsx`**, **`session-colors.ts`**, **`modality-display.ts`** — per-session rendering helpers (colors, modality labels, profile hovercard).
 
-Client state and the network lifecycle live in the **`useCompare` hook** (`src/hooks/use-compare.ts`): selected tutors, the displayed `weekStart`, the response, and the incremental-fetch tutor cache (see data flow below).
+Client state (selected tutors, week, per-tutor cache) lives in `useCompare` (`src/hooks/use-compare.ts`), which keeps a `Map<"tutorGroupId:week:CACHE_VERSION", CompareTutor>` cache (version `v3`, `src/lib/search/cache-version.ts:24`) so adding/removing a tutor or changing weeks only refetches what changed.
 
 ## Data flow
 
-A compare interaction (add/remove a tutor, or change the week) flows from the hook through the API into the in-memory index and back:
+A typical "compare these tutors for this week" request:
 
-1. The user adds a tutor in `ComparePanel`. `useCompare.addTutor` appends the chip and calls `fetchCompare` with `fetchOnly: [newId]` — only the new tutor is requested over the wire (`src/hooks/use-compare.ts:281-298`).
-2. `fetchCompareData` aborts any in-flight request, POSTs to `/api/compare`, and on success merges returned tutors into a `Map` cache keyed by `tutorGroupId:week:CACHE_VERSION`, then rebuilds the full visible list from cache (`src/hooks/use-compare.ts:116-206`).
-3. The route authenticates, ensures the index is warm, resolves the requested IDs against the active snapshot, builds **all** `CompareTutor`s, runs `detectConflicts` + `findSharedFreeSlots` over the full set, then serializes only the `fetchOnly` subset (`src/app/api/compare/route.ts:200-236`).
-4. The engine (`src/lib/search/compare.ts`) filters each group's blocking sessions to the week, applies per-weekday fallback/modality resolution, and computes booked hours, student count, conflicts, and shared free slots — all from in-memory data.
+1. The client (`useCompare.fetchCompare`) POSTs `tutorGroupIds`, `mode: "recurring"`, `weekStart`, and optional `fetchOnly` to `/api/compare`.
+2. The route authenticates, validates with Zod (`compareRequestSchema`, `route.ts:24-31`), and calls `ensureIndex(db)` to get the warm snapshot.
+3. Requested IDs are resolved against the active snapshot; any that miss are re-mapped via `tutor_identity_groups.canonicalKey` (stale-link recovery).
+4. If the week starts before today (BKK), captured `past_session_blocks` are fetched and merged in.
+5. `buildCompareTutor` assembles each tutor's sessions; `detectConflicts` and `findSharedFreeSlots` run across the **full** set; `fetchOnly` then trims which tutors are serialized back.
+6. The client merges returned tutors into its cache and renders the calendar, conflicts, and shared free slots.
 
 ```mermaid
 flowchart TD
-  U[Admin: add/remove tutor or change week] --> H[useCompare hook]
-  H -->|fetchOnly subset + weekStart| API["POST /api/compare"]
-  API --> AUTH[auth + Zod validate]
-  AUTH --> IDX[ensureIndex: warm SearchIndex]
-  IDX --> RES[resolveTutorGroupsForActiveSnapshot]
-  RES --> HIST{week entirely\nin the past?}
-  HIST -->|yes| PAST[fetchPastSessionBlocks from DB]
-  HIST -->|no| ENG
-  PAST --> ENG[buildCompareTutor x N]
-  ENG --> CF[detectConflicts + findSharedFreeSlots\nover ALL tutors]
-  CF --> SER[serialize only fetchOnly subset]
-  SER -->|CompareResponse| H
-  H --> CACHE["merge into Map cache\n(tutorGroupId:week:CACHE_VERSION)"]
-  CACHE --> UI[ComparePanel renders grid + conflicts + free slots]
+  U[Admin in /search compare panel] -->|fetchCompare| H[useCompare hook<br/>client cache Map v3]
+  H -->|POST /api/compare| R[compare route.ts<br/>auth + Zod]
+  R --> EI[ensureIndex into SearchIndex<br/>active snapshot, in-memory]
+  R -->|stale id?| TIG[(tutor_identity_groups<br/>canonicalKey remap)]
+  R -->|historical week?| PSB[(past_session_blocks<br/>fetchPastSessionBlocks)]
+  EI --> BCT[buildCompareTutor per group]
+  PSB --> BCT
+  BCT --> DC[detectConflicts]
+  BCT --> FFS[findSharedFreeSlots]
+  DC --> RESP[CompareResponse:<br/>tutors + conflicts + sharedFreeSlots]
+  FFS --> RESP
+  RESP --> H
+  H --> UI[WeekOverview / CalendarGrid / DensityOverview]
 ```
-
-Removing a tutor reuses the cache and sends `fetchOnly: []` so the server only recomputes conflicts/free slots (`src/hooks/use-compare.ts:267-279`). Changing the week clears stale entries via `pruneCacheToWeek` (`src/hooks/use-compare.ts:229-236`).
 
 ## Business rules & edge cases
 
-- **`/compare` redirects to `/search`.** Verified in current code: the page is a `Suspense`-wrapped client component that `router.replace`s to `/search?tutors=…` (or `/search` if no tutors), and renders `null` (`src/app/(app)/compare/page.tsx:10-19`). There is no compare page UI anymore.
-- **Fail-closed modality, no silent fallback.** `resolveSessionModality` returns `"unknown"` (confidence `"low"`) for any unresolved group, and for any *contradiction* between a paired/single group's known modality and the session's `sessionType` (`src/lib/search/compare.ts:124-171`). The pre-MOD-01 single-element `supportedModes` fallback was intentionally deleted. `detectSessionModalityConflict` mirrors this at sync time so contradictions land in `data_issues` as `conflict_model` rows (`src/lib/search/compare.ts:185-223`).
-- **Tenant modality vocabulary.** `ONLINE_SESSION_TYPES` includes `"scheduled"` and `ONSITE_SESSION_TYPES` includes `"offline"`; `sessionType` is trimmed + lowercased before matching, so the tenant's uppercase `"SCHEDULED"`/`"OFFLINE"` resolve correctly (`src/lib/search/compare.ts:6-7`, `src/lib/search/compare.ts:104`).
-- **Per-weekday historical fallback (the past-day problem).** Wise's FUTURE API omits past sessions. In `buildCompareTutor`, for weekdays with no session in the requested range, a nearest-future-occurrence fallback (deduped by `recurrenceId`) fills the day — **but only for weekdays whose calendar date is today or later** in Asia/Bangkok. Past weekdays render an honest empty unless real captured `pastBlocks` are supplied (`src/lib/search/compare.ts:255-291`). `getStartOfTodayBkk` is extracted so tests can freeze "now" (`src/lib/search/compare.ts:36-39`).
-- **Historical weeks read captured past data.** When `dateRange.start` is before start-of-today BKK, the route fetches `past_session_blocks` for the selected canonical keys and merges them both into `buildCompareTutor` (via `pastBlocks`) and into `findSharedFreeSlots` (by cloning groups with extended `sessionBlocks`) — otherwise a tutor could be shown "free" during a past captured session (`src/app/api/compare/route.ts:180-227`).
-- **Only blocking sessions count.** Both the grid and free-slot math filter on `isBlocking` (`src/lib/search/compare.ts:243`, `src/lib/search/compare.ts:375`); cancelled sessions are non-blocking upstream and never appear or block.
-- **Conflicts are same-student, cross-tutor, time-overlapping, on the same weekday.** Matching is case-insensitive on student name, skips same-tutor pairs, and dedupes by `student|weekday|tutorPair` (`src/lib/search/compare.ts:322-358`).
-- **Shared free slots require a ≥30-minute window.** Free intervals are availability windows minus blocking sessions, intersected across all tutors; intervals shorter than 30 minutes are dropped (`src/lib/search/compare.ts:401`). If any tutor has no availability on a weekday, that weekday yields no shared slot (`src/lib/search/compare.ts:397`).
-- **Stale-snapshot warning.** If the index's `syncedAt` is older than the API threshold, `snapshotMeta.stale` is set and a warning is pushed (`src/app/api/compare/route.ts:144-149`).
-- **Stale tutor-ID recovery across snapshots.** Tutor group UUIDs are snapshot-scoped. If a requested ID isn't in the active snapshot, the route looks it up by `canonicalKey` in the DB and resolves to the active group, adding a "selection was refreshed" warning (`src/app/api/compare/route.ts:61-110`, `src/app/api/compare/route.ts:157-159`). The client mirrors this by treating server-returned IDs as authoritative when the cache can't satisfy the full set (`src/hooks/use-compare.ts:180-184`).
-- **Snapshot change mid-session invalidates the client cache.** If the server returns a different `snapshotId` than the last seen one, the cache is cleared and the request retried once as a full (no-`fetchOnly`) fetch; a second mismatch surfaces an error rather than recursing (`src/hooks/use-compare.ts:153-165`).
-- **Discovery is read-only ranking.** `/api/compare/discover` never blocks for a same-weekday session on a *different* date in one-time mode, requires the availability window's modality to match the requested mode, excludes leave-overlapping slots, and sorts candidates by `hasDataIssues` → `conflictCount` → free-slot count (`src/app/api/compare/discover/route.ts:153-157`, `src/app/api/compare/discover/route.ts:172-242`).
-- **Selection cap.** The request schema caps `tutorGroupIds` at 3 and discovery's `existingTutorGroupIds` at 2; the UI enforces the same max-3 chip limit (`src/app/api/compare/route.ts:25`, `src/app/api/compare/discover/route.ts:13`, `src/components/compare/compare-panel.tsx:277`).
+- **Fail-closed modality (MOD-01 / MOD-02).** `resolveSessionModality` never guesses a session's online/onsite. An unresolved group (`supportedModes` empty) returns `unknown`/`low` even when a `sessionType` hint exists (`src/lib/search/compare.ts:170-171`); the pre-MOD-01 silent single-mode fallback was deliberately deleted. Paired-group signal disagreements (teacher `isOnline` vs `sessionType`) emit a contradiction and resolve to `unknown` (D-07, `compare.ts:124-133`); single-record disagreements do the same (D-08, `compare.ts:142-151` and `compare.ts:156-165`). Tenant vocabulary `"scheduled"` is treated as online (MOD-UAT-01, `compare.ts:6`).
+- **Sync-time modality contradictions.** `detectSessionModalityConflict` (`compare.ts:185-223`) mirrors the same logic without an index, so the orchestrator can record `conflict_model` rows in `data_issues` during sync — same module, different entry point.
+- **Blocking-only schedule.** `buildCompareTutor` filters to `s.isBlocking` sessions before anything else (`compare.ts:243`); cancelled / non-blocking sessions never appear and never block a free slot.
+- **Per-weekday historical handling (D-05 / PAST-01 / PAST-04).** For weekdays whose calendar date is **before today (BKK)**, the nearest-future-occurrence fallback is disabled — those days render an honest empty unless real `past_session_blocks` were captured (`compare.ts:262-291`). Today/future empty weekdays still fall back to the nearest future occurrence of a recurring session, de-duped by `recurrenceId` (`compare.ts:279-284`) and then narrowed to only the sessions sharing that nearest occurrence's calendar date (`s.startTime.toDateString() === firstDate`, `compare.ts:287-288`). `getStartOfTodayBkk` is extracted so tests can mock `Date.now()` (`compare.ts:36-39`).
+- **Historical free-slots must not "free" a past session (Pitfall 16).** When the range is historical, the route clones each group with `past_session_blocks` merged into `sessionBlocks` *before* calling `findSharedFreeSlots`, so a captured past session correctly blocks (`route.ts:215-227`). Non-historical ranges skip the extra allocation.
+- **Conflict definition.** A conflict requires the **same student** (case-insensitive), **different tutors**, **same weekday**, and **minute overlap** (`compare.ts:340-342`); pairs are de-duped per student / weekday / tutor-pair (`compare.ts:343-345`). Conflicts are detected across the full selection regardless of `fetchOnly`.
+- **Shared free-slot threshold.** Intersected free intervals shorter than **30 minutes** are dropped (`compare.ts:401`); a tutor with no availability window on a weekday makes that weekday yield no shared slot (`compare.ts:397`).
+- **Stale tutor-id recovery.** Tutor-group UUIDs are snapshot-scoped. After a sync, old `/search?tutors=…` links may carry dead IDs; the route resolves them via `canonicalKey` and adds the warning `"Tutor selection was refreshed after the latest Wise sync"` (`route.ts:157-159`). Only well-formed UUIDs are looked up (`UUID_RE`, `route.ts:59` and `route.ts:82`).
+- **Staleness is a warning, never withheld data.** If the snapshot is older than the 90-minute API threshold, `snapshotMeta.stale = true` and `STALE_SEARCH_WARNING` is pushed, but the comparison still returns (`route.ts:144-149`).
+- **Incremental fetch (`fetchOnly`).** The full tutor set is always used for conflict / free-slot computation, but only the `fetchOnly` subset is serialized back (`route.ts:229-236`). Client-side, this means adding a tutor fetches only the new one and removing a tutor sends `fetchOnly: []` to recompute conflicts without re-downloading schedules (`use-compare.ts:278` and `use-compare.ts:295`).
+- **Client cache invalidation.** `useCompare` clears its cache when the server snapshot id changes mid-session and retries once before surfacing an error (`use-compare.ts:153-165`); `CACHE_VERSION` (`v3`) namespaces every cache key so a shape change invalidates long-lived tabs (`cache-version.ts`).
+- **Discovery ranking & fail-closed flags.** `/api/compare/discover` ranks candidates by: data-issues last, fewest conflicts, then most free-slot matches (`discover/route.ts:153-157`). A candidate with empty `supportedModes` is flagged `hasDataIssues` with reason `"Unresolved modality"` (`discover/route.ts:134-138`), keeping unresolved tutors out of the clean top of the list.
 
 ## Tests
 
-- **Engine** — `src/lib/search/__tests__/compare.test.ts`: `buildCompareTutor` (weekday filtering, full-week, weekly hours, distinct student count, online-variant modality), the full 19-case `resolveSessionModality` matrix including every contradiction and the tenant `SCHEDULED`/`OFFLINE` vocabulary anchors, `detectConflicts` (same-student overlap, different students, non-overlapping times, one-arg public API), `findSharedFreeSlots`, and a Phase-7 block covering past+future merge with the per-weekday historical flag (historical week returns captured data with no fallback, honest-empty when no past data, future-week fallback preserved, current-week per-weekday behavior, backward-compat with the 3-arg signature, and merged-data conflict detection).
-- **`POST /api/compare` route** — `src/app/api/compare/__tests__/route.test.ts`: 401/400/500 paths, success response shape, stale-ID resolution via canonical key after promotion, and the 90-minute stale-snapshot threshold/warning.
-- **`POST /api/compare/discover` route** — `src/app/api/compare/discover/__tests__/route.test.ts`: 401/400/500 paths, response shape, stale threshold, one-time same-weekday-different-date non-blocking, Bangkok-calendar-date matching, modality-must-match-mode, and leave-overlap exclusion.
-- **Sync-time contradiction** — `src/lib/sync/__tests__/orchestrator-modality-conflict.test.ts` exercises `detectSessionModalityConflict` in the orchestrator path.
-- **Components** — `src/components/compare/__tests__/` holds `density-overview.test.tsx`, `modality-display.test.ts`, and `view-transitions-source.test.ts`.
+- **Engine** — `src/lib/search/__tests__/compare.test.ts` (37 `it` cases): `buildCompareTutor` weekday / full-week selection, `weeklyHoursBooked` / `studentCount` math; the full 19-case modality-resolution matrix incl. contradictions and the no-`medium`-tier invariant (MOD-05 / D-21); `detectConflicts` (overlap, different students, non-overlap); `findSharedFreeSlots`; and the Phase-7 past+future merge with per-weekday historical flag (honest-empty, future fallback, backward-compat without `pastBlocks`, and merged-session conflict detection — Pitfalls 13/16).
+- **Compare API route** — `src/app/api/compare/__tests__/route.test.ts`: 401 unauth, 400 Zod failure, 200 happy-path shape, stale-id resolution via canonical key + warning, 90-minute staleness flag/warning, and 500 on `ensureIndex` throw.
+- **Discover API route** — `src/app/api/compare/discover/__tests__/route.test.ts`.
+- **Components** — `src/components/compare/__tests__/`: `density-overview.test.tsx`, `modality-display.test.ts`, `view-transitions-source.test.ts`.
 
-The `useCompare` hook (cache keying, abort, incremental merge, snapshot-change retry) has no dedicated unit test in the locations read.
+The `/compare` redirect page itself has no dedicated test in this tree.
 
 ## Open questions
 
-- **Is the standalone `/compare` route still worth keeping?** It is purely a redirect for old bookmarks. No code links to it internally (the live entry point is `/search`). A human should confirm whether external bookmarks/links to `/compare` still warrant the route or whether it can be dropped.
-- **`useCompare` is untested.** The client cache invalidation, AbortController race handling, and snapshot-change single-retry logic (`src/hooks/use-compare.ts:116-206`) carry real correctness weight but have no unit coverage in the files read — intentional, or a gap?
-- **`mode` is accepted but unused by `/api/compare`.** The request schema requires `mode: "recurring" | "one_time"` (`src/app/api/compare/route.ts:26`) and the client always sends `"recurring"` (`src/hooks/use-compare.ts:141`), but the handler never reads it (week-range filtering supersedes mode). Is `mode` vestigial here, or reserved for a planned one-time compare view?
+- **Is the `mode` request field still meaningful for compare?** Both the client and `compareRequestSchema` require `mode`, but the client always sends `mode: "recurring"` (`use-compare.ts:141`) and `buildCompareTutor` keys entirely off `weekStart` / `dateRange`, never `mode`. The schema also accepts `dayOfWeek` / `date`, which the client never sets — these look vestigial from a pre-week-view design. A human should confirm before removing.
+- **`CompareRequest` type vs the live request schema.** The exported `CompareRequest` interface (`types.ts:113-119`) omits `fetchOnly`, which the route's Zod schema accepts and the client sends; the interface appears unused by the route (which defines its own `compareRequestSchema`). Confirm whether `CompareRequest` is dead or meant to be kept in sync.
+- **Should the legacy `/compare` route be retired entirely?** It exists solely to redirect old bookmarks. Whether to keep it indefinitely or drop it is a product call.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD `d4fe6d3` on 2026-06-05._
