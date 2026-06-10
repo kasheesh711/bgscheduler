@@ -57,6 +57,8 @@ interface TransactionsTableProps {
 
 const LOAD_ALL_PAGE_SIZE = 1000;
 const SKELETON_ROWS = 6;
+/** Bounded restarts when the server list shifts mid load-all (see loadAll). */
+const MAX_LOAD_ALL_RESTARTS = 3;
 
 function buildQuery(filter: TransactionsFilter, from: string | undefined, to: string | undefined, limit: number, offset: number): string {
   const params = new URLSearchParams();
@@ -164,13 +166,25 @@ export function TransactionsTable({ filter, from, to, pageSize = 200, className,
     setLoadingAll(true);
     setError("");
     try {
+      // The list is newest-first behind a short-lived server cache, and rows
+      // carry no stable id to dedup on. If an import lands mid-loop the
+      // offsets shift, so when `total` moves between pages we restart the
+      // accumulation from offset 0 (bounded) instead of stitching pages from
+      // two different snapshots.
       let rows = page.rows;
       let total = page.total;
+      let restarts = 0;
       while (rows.length < total) {
         const next = await fetchTransactionsPage(
           buildQuery(filter, from, to, LOAD_ALL_PAGE_SIZE, rows.length),
           controller.signal,
         );
+        if (next.total !== total && restarts < MAX_LOAD_ALL_RESTARTS) {
+          restarts += 1;
+          rows = [];
+          total = next.total;
+          continue;
+        }
         total = next.total;
         if (next.rows.length === 0) break;
         rows = [...rows, ...next.rows];
