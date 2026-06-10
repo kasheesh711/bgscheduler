@@ -270,5 +270,5 @@ Plans:
 - [ ] 12-01-PLAN.md — backlog-matcher.ts (pure distinctive-token matching) + unit tests
 - [ ] 12-02-PLAN.md — fetchLineProfilesBatched in client.ts + drop fuzzy tier from name-matcher.ts + update tests
 - [ ] 12-03-PLAN.md — student-links.ts: export nicknameCodes, add "follower_profile" source, listVerifiedResolverTargets, runLineBacklogRecovery; C1 route wiring with ?dryRun
-- [ ] 12-04-PLAN.md — PROD DRY-RUN GATE (human checkpoint): verify ~229 suggestions with real chat.line.biz URLs before any write
+- [x] 12-04-PLAN.md — PROD DRY-RUN GATE (human checkpoint): verify ~229 suggestions with real chat.line.biz URLs before any write — APPROVED + live write 2026-06-10 (446 rows)
 - [ ] 12-05-PLAN.md — C2 hardening: lineBacklogRecoverySyncRuns schema + migration 0041 [BLOCKING] + cron-registry entry + internal cron route
