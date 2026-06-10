@@ -257,3 +257,141 @@ export interface SalesRetentionCohortEntry {
   renewedDate: string | null;
   status: "Retained" | "Churned";
 }
+
+// ————————————————————————————————————————————————————————————————————————————
+// Sales Dashboard v2 — tabbed workspace dimensions + transactions (additive)
+// ————————————————————————————————————————————————————————————————————————————
+
+/** Grain: (normalized rep, month "YYYY-MM-01"). */
+export interface RepMonthAgg {
+  rep: string;
+  month: string;
+  rev: number;
+  count: number;
+  revT: number;
+  revN: number;
+  revR: number;
+  cntT: number;
+  cntN: number;
+  cntR: number;
+}
+
+/** Grain: rep, whole-history. Trial conversion is credited to the rep on the student's first Trial row. */
+export interface RepFunnel {
+  rep: string;
+  trialsHandled: number;
+  trialsConverted: number;
+  medianDaysToConvert: number | null;
+  topPrograms: { name: string; rev: number }[];
+  topPackages: { band: string; rev: number }[];
+}
+
+/** Grain: (programWiseName||program, month). */
+export interface ProgramMonthAgg {
+  program: string;
+  month: string;
+  rev: number;
+  count: number;
+  students: number;
+  revT: number;
+  revN: number;
+  revR: number;
+}
+
+/** Grain: (packageBand, month). */
+export interface PackageMonthAgg {
+  packageBand: string;
+  packageLabel: string;
+  hours: number | null;
+  month: string;
+  rev: number;
+  count: number;
+  totalHoursSold: number | null;
+}
+
+/** Live-recomputed student status (validUntil+14d rule) — never the stored churn_status. */
+export type StudentLiveStatus = "Active" | "Retained" | "Churned" | "Pending" | "Trial-only";
+
+/** Grain: distinct normalized student nickname. */
+export interface StudentDirectoryEntry {
+  key: string;
+  displayName: string;
+  displayNameVariants: string[];
+  firstSeen: string;
+  lastPaymentDate: string;
+  totalRevenue: number;
+  txnCount: number;
+  addTxnCount: number;
+  programs: string[];
+  reps: string[];
+  latestValidUntil: string | null;
+  status: StudentLiveStatus;
+  decisionDate: string | null;
+}
+
+export interface AdditionalMixMonthAgg {
+  month: string;
+  salesType: string;
+  rev: number;
+  count: number;
+}
+
+export interface SalesDimensionsPayload {
+  months: string[];
+  reps: RepMonthAgg[];
+  repFunnels: RepFunnel[];
+  programs: ProgramMonthAgg[];
+  packages: PackageMonthAgg[];
+  additionalMix: AdditionalMixMonthAgg[];
+  students: StudentDirectoryEntry[];
+  targetMonthlyRevenue: number | null;
+  unparsedPackageCount: number;
+  generatedAt: string;
+}
+
+/** Slim row for the transactions endpoint. The `raw` jsonb column is NEVER serialized here. */
+export interface SlimTransaction {
+  date: string;
+  student: string;
+  studentKey: string;
+  rep: string;
+  program: string;
+  packageLabel: string;
+  band: string;
+  hours: number | null;
+  amount: number;
+  enrollmentType: string;
+  validUntil: string | null;
+  sourceMonth: string;
+  numberOfStudents: number | null;
+  kind: "normal" | "additional";
+  salesType?: string;
+}
+
+/** Student-journey renewal timeline segment, chained on validUntil. */
+export interface CoverageWindow {
+  from: string;
+  until: string;
+  status: "covered" | "gap" | "open";
+}
+
+export type SalesWorkspaceTab = "overview" | "reps" | "programs" | "packages" | "students";
+
+/** GM command-center cross-link seed: shell switches tab + seeds the panel filter. */
+export interface ExploreSeed {
+  tab: SalesWorkspaceTab;
+  rep?: string;
+  program?: string;
+  band?: string;
+  studentKey?: string;
+  filter?: string;
+}
+
+/** Locked prop contract for the four workspace tab panels (Wave-2 agents). */
+export interface SalesTabProps {
+  dimensions: SalesDimensionsPayload | null;
+  loading: boolean;
+  from: string;
+  to: string;
+  seed?: ExploreSeed;
+}
