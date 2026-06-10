@@ -379,7 +379,7 @@ export function ProgramsTab({ dimensions, loading, from, to, seed, active = true
 
         {segments.length > 0 ? (
           <div className="mt-4">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Share of revenue</div>
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Share of revenue</div>
             <div className="mt-1.5 flex h-3 overflow-hidden rounded-full bg-muted">
               {segments.map((segment, index) => (
                 <div
@@ -524,7 +524,7 @@ export function ProgramsTab({ dimensions, loading, from, to, seed, active = true
                 <Metric label="Share" value={formatPercent(selectedRow.share)} />
                 <Metric label="Avg ticket" value={formatCurrency(selectedRow.avgTicket)} />
                 <div>
-                  <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">MoM</div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">MoM</div>
                   <div className="mt-0.5 text-sm font-semibold">
                     <MovementDelta delta={selectedRow.momDelta} pct={selectedRow.momPct} />
                   </div>
@@ -536,7 +536,7 @@ export function ProgramsTab({ dimensions, loading, from, to, seed, active = true
 
             {detail.rev > 0 ? (
               <div>
-                <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Revenue split</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Revenue split</div>
                 <div className="mt-1.5 flex h-3 overflow-hidden rounded-full bg-muted">
                   {splitSegments(detail).map((segment) => (
                     <div
@@ -593,7 +593,7 @@ function seriesColor(colors: { chart: string[]; border: string; mutedForeground:
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-0.5 text-sm font-semibold">{value}</div>
     </div>
   );

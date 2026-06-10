@@ -598,8 +598,8 @@ export function PackagesTab({ dimensions, loading, from, to, seed, active = true
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border bg-card p-3 shadow-sm">
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 text-lg font-semibold tracking-tight tabular-nums">{value}</div>
     </div>
   );
 }
