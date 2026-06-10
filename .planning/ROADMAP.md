@@ -272,3 +272,33 @@ Plans:
 - [ ] 12-03-PLAN.md — student-links.ts: export nicknameCodes, add "follower_profile" source, listVerifiedResolverTargets, runLineBacklogRecovery; C1 route wiring with ?dryRun
 - [x] 12-04-PLAN.md — PROD DRY-RUN GATE (human checkpoint): verify ~229 suggestions with real chat.line.biz URLs before any write — APPROVED + live write 2026-06-10 (446 rows)
 - [x] 12-05-PLAN.md — C2 hardening: lineBacklogRecoverySyncRuns schema + migration 0042 (renumbered; 0041 taken by credit-control) + cron-registry entry + internal cron route — DONE 2026-06-10
+
+### Phase 13: IDENT-08 label bridge
+
+**Goal:** Transfer the ~662 admin chat-queue labels (student codes admins typed in LINE OA Manager) onto REAL webhook contacts, reaching ≥95% of active messaging contacts verified. Spike + prod diagnostic complete (13-SPIKE-FINDINGS.md, commit `7e75725`): scraped chat.line.biz surface and the webhook channel are the SAME BeGifted OA under two ID namespaces (chat-surface botId `Ueebc1942…` vs Messaging-API bot `U3c0bf81c…`); `line_oa_resolver_rows.lineUserId` actually stores chat-surface chatIds (naming trap). Build: authenticated chat.line.biz internal API sweep (`GET /api/v2/bots/{botId}/chats` → admin nickname + tags + iconHash per chat, replacing DOM scraping) → join chatId→webhook userId via (a) message-ID equality (verify the assumption first — webhook `line_messages.lineMessageId` vs chat-API message ids) with (b) name+iconHash fallback. Fail-closed: links land as `suggested` (verified-grade evidence) with a batch-confirm screen; non-unique correlation → suggested only. Owner-approved 2026-06-10 (gate #2: full bridge build). NEEDS owner's authenticated OA Manager session (extension capture or cookie) at run time.
+**Requirements**: IDENT-08
+**Depends on:** Phase 12 (complete)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 13 to break down)
+
+### Phase 14: Rich taxonomy and shadow replies
+
+**Goal:** Every parent message gets a useful category and a logged-but-unsent AI reply. Expand `LineSchedulerClassifierCategory` from 4 to ~8-10 categories (reschedule, cancel, pause/resume, new-booking, absence-notice, payment/credit, progress/homework, complaint, general-question, spam) with per-category routing rules; introduce `LINE_AUTO_REPLY_MODE=shadow` — for every review the exact reply that WOULD have been sent is logged (zero actual `pushLineTextMessage` calls from shadow paths, asserted in tests); accuracy/coverage view for admins. DB enum migration (next free number 0044 — coordinate with program migration allocation). Owner-locked 2026-06-10: shadow mode only this push, rich taxonomy chosen over 4-category tuning.
+**Requirements**: TAXON-01, SHADOW-01
+**Depends on:** Phase 12 (complete); independent of Phase 13
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 14 to break down)
+
+### Phase 15: Wise live-cancel harness and in-app cancel
+
+**Goal:** Admins can execute a real Wise session cancel from the LINE review UI with one confirmed click — the first live Wise mutation beyond `updateSessionLocation`. Build `src/lib/wise/scheduling-actions.ts` on the proven safe-write template `confirmProgressTestBooking` (`src/lib/progress-tests/booking.ts:180`): audit-before-call → resolve identity → fail-closed pre-check → flag gate (`WISE_SESSION_OPERATIONS_VERIFIED`) → `DELETE /teacher/classes/{classId}/sessions/{sessionId}?cancelSession=true` → log → revalidate. LINE review UI gets admin-confirmed "Execute cancel" on proposed actions; `line_wise_action_logs` transitions dry_run→ready→confirmed/failed. NOT autonomous (owner-locked); OWNER GATE before the prod flag flip (staged dry-run report first). This harness is shared infrastructure — WS2 leave-request automation consumes it; reschedule/booking stay shadow.
+**Requirements**: WISE-CANCEL-01
+**Depends on:** Phase 12 (complete); independent of Phases 13/14 — can plan immediately
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 15 to break down)

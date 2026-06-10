@@ -90,6 +90,9 @@ Progress: [██████████] 97%
 ### Roadmap Evolution
 
 - **Phase 12 added (2026-06-07):** LINE Backlog Identity Recovery (IDENT-07) — name-matching redesign anchored on the 662 human-verified resolver mappings, after Phase 11 UAT found the original matcher unreliable and proved the verified data can't be reused by ID (namespace wall). Approved plan: `~/.claude/plans/can-t-we-look-for-sunny-lampson.md`; evidence: `phases/11-*/11-IDENTITY-FINDINGS.md`.
+- **Phase 13 added (2026-06-10):** IDENT-08 Label Bridge — transfer ~662 admin chat-queue labels to real webhook contacts via authenticated chat.line.biz internal API + message-ID/iconHash join. Spike + same-OA diagnostic complete (`phases/13-*/13-SPIKE-FINDINGS.md`). Owner gate #2 approved full bridge build. Program plan: `~/.claude/plans/start-a-workflow-to-squishy-volcano.md`.
+- **Phase 14 added (2026-06-10):** Rich taxonomy (~8-10 categories) + shadow-mode replies (`LINE_AUTO_REPLY_MODE=shadow`, zero sends). Owner-locked: shadow only this push.
+- **Phase 15 added (2026-06-10):** Wise live-cancel harness (`src/lib/wise/scheduling-actions.ts` per confirmProgressTestBooking template) + admin-confirmed in-app cancel. NOT autonomous; owner gate before prod flag flip. Shared with leave-request automation (WS2).
 
 ### Decisions (recent)
 
