@@ -7,8 +7,16 @@
 // (lastAlertOutcome = "recovered"), which re-arms the next alert. Alert state
 // is only written after at least one recipient accepted the email, so a
 // failed delivery is retried on the next sweep instead of silently dropped.
+//
+// Partial-delivery tradeoff (deliberate): if some but not all recipients
+// accept the email, the episode is still marked alerted and the failed
+// recipients are only logged via console.error — they will not be retried
+// for this episode. The alternative (persist only when every send succeeds)
+// would re-email all successful recipients every 30-minute sweep for as long
+// as a single address keeps bouncing, which is worse than one admin missing
+// one digest that their colleagues received.
 
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import {
@@ -171,10 +179,16 @@ export function buildWatchdogEmail({
   return { subject, text, html };
 }
 
+/**
+ * Full-access admins only: `allowedPages` non-null marks page-restricted
+ * users (src/middleware.ts) who cannot open the /data-health link these
+ * alerts point at, so emailing them would be noise they cannot act on.
+ */
 async function loadAdminEmails(db: Database): Promise<string[]> {
   const rows = await db
     .select({ email: schema.adminUsers.email })
     .from(schema.adminUsers)
+    .where(isNull(schema.adminUsers.allowedPages))
     .orderBy(asc(schema.adminUsers.email));
   return [...new Set(rows.map((row) => row.email.trim().toLowerCase()).filter(Boolean))];
 }
@@ -369,6 +383,13 @@ async function runLockedSweep(
   if (sentCount === 0) {
     console.error("Cron watchdog could not deliver to any recipient; episode state left unmarked for retry.");
     return { ...base, alertsSent: 0, recoveries: 0, emailRecipients: 0, skippedReason: "email delivery failed" };
+  }
+  if (sentCount < recipients.length) {
+    // Partial delivery still closes out the episode below — see the
+    // partial-delivery tradeoff note in the module header.
+    console.error(
+      `Cron watchdog delivered to ${sentCount}/${recipients.length} recipients; failed recipients will not be retried for this episode.`,
+    );
   }
 
   for (const job of sweep.newAlerts) {
