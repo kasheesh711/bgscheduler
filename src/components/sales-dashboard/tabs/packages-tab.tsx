@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import type { ChartConfiguration } from "chart.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -246,10 +245,7 @@ function bandChartColor(band: string, colors: ChartThemeColors): string {
 
 type HistogramMode = "count" | "revenue";
 
-export function PackagesTab({ dimensions, loading, from, to, seed }: SalesTabProps) {
-  const searchParams = useSearchParams();
-  const active = searchParams.get("tab") === "packages";
-
+export function PackagesTab({ dimensions, loading, from, to, seed, active = true }: SalesTabProps) {
   const [histogramMode, setHistogramMode] = useState<HistogramMode>("count");
 
   // Consume GM cross-link seeds during render (sanctioned derived-state

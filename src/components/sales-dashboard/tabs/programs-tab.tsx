@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ChartConfiguration } from "chart.js";
 import { ArrowDownRight, ArrowUpRight, ChevronDown, ChevronUp, ChevronsUpDown, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -216,14 +216,12 @@ export function compareProgramRows(
   return factor * (left[key] - right[key]) || left.program.localeCompare(right.program);
 }
 
-export function ProgramsTab({ dimensions, loading, from, to, seed }: SalesTabProps) {
+export function ProgramsTab({ dimensions, loading, from, to, seed, active = true }: SalesTabProps) {
   const [includeTrials, setIncludeTrials] = useState(true);
   const [sortKey, setSortKey] = useState<ProgramSortKey>("rev");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [selectedProgram, setSelectedProgram] = useState<string | null>(null);
   const [consumedSeed, setConsumedSeed] = useState<ExploreSeed | null>(null);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const [panelVisible, setPanelVisible] = useState(true);
 
   // One-shot GM cross-link seed consumption (render-time derived state, same
   // sanctioned pattern as workspace-tabs URL adoption).
@@ -231,19 +229,6 @@ export function ProgramsTab({ dimensions, loading, from, to, seed }: SalesTabPro
     setConsumedSeed(seed);
     if (seed.program) setSelectedProgram(seed.program);
   }
-
-  // Track panel visibility so ChartCanvas can resize on tab re-activation —
-  // the panel stays mounted (keepMounted) but hidden while another tab is up.
-  useEffect(() => {
-    const element = rootRef.current;
-    if (!element || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver((entries) => {
-      const entry = entries[entries.length - 1];
-      if (entry) setPanelVisible(entry.isIntersecting);
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
 
   const rows = useMemo(
     () => (dimensions
@@ -366,7 +351,7 @@ export function ProgramsTab({ dimensions, loading, from, to, seed }: SalesTabPro
   };
 
   return (
-    <div ref={rootRef} className="space-y-4">
+    <div className="space-y-4">
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -451,7 +436,7 @@ export function ProgramsTab({ dimensions, loading, from, to, seed }: SalesTabPro
                 </span>
               ))}
             </div>
-            <ChartCanvas config={chartConfig} className="mt-3" active={panelVisible} />
+            <ChartCanvas config={chartConfig} className="mt-3" active={active} />
           </section>
 
           <section className="rounded-lg border bg-card shadow-sm">

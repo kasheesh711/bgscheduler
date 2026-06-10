@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useSalesDimensions } from "@/hooks/use-sales-dimensions";
 import type { ExploreSeed, SalesTabProps, SalesWorkspaceTab } from "@/lib/sales-dashboard/types";
@@ -72,7 +73,7 @@ export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed }: Work
   }
 
   const panelsTouched = activeTab !== "overview" || [...activated].some((tab) => tab !== "overview");
-  const { dimensions, loading } = useSalesDimensions({ enabled: panelsTouched });
+  const { dimensions, loading, error, invalidate } = useSalesDimensions({ enabled: panelsTouched });
 
   const selectTab = useCallback((tab: SalesWorkspaceTab) => {
     setActiveTab(tab);
@@ -113,6 +114,15 @@ export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed }: Work
         ))}
       </TabsList>
 
+      {activeTab !== "overview" && error && !dimensions && !loading ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <span>Failed to load sales dimensions: {error}</span>
+          <Button size="sm" variant="outline" onClick={invalidate}>
+            Retry
+          </Button>
+        </div>
+      ) : null}
+
       <TabsContent value="overview" keepMounted>
         {overview}
       </TabsContent>
@@ -128,6 +138,7 @@ export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed }: Work
                 from={from}
                 to={to}
                 seed={panelSeed?.tab === tab ? panelSeed : undefined}
+                active={activeTab === tab}
               />
             ) : null}
           </TabsContent>

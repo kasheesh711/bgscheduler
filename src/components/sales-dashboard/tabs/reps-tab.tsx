@@ -221,11 +221,10 @@ const MIX_SEGMENTS = [
   { label: "Renewal", colorVar: "var(--chart-2)", rev: (stats: RepRangeStats) => stats.revR, count: (stats: RepRangeStats) => stats.cntR },
 ] as const;
 
-export function RepsTab({ dimensions, loading, from, to, seed }: SalesTabProps) {
+export function RepsTab({ dimensions, loading, from, to, seed, active = true }: SalesTabProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const isActiveTab = (searchParams.get("tab") ?? "overview") === "reps";
   const urlRep = searchParams.get("rep");
 
   const [selectedKey, setSelectedKey] = useState<string | null>(() => {
@@ -509,7 +508,7 @@ export function RepsTab({ dimensions, loading, from, to, seed }: SalesTabProps) 
                     <LegendDot colorVar="var(--chart-2)" label="Renewal" />
                   </div>
                 </div>
-                <ChartCanvas config={trendConfig} active={isActiveTab} className="mt-3" />
+                <ChartCanvas config={trendConfig} active={active} className="mt-3" />
               </div>
             ) : null}
 

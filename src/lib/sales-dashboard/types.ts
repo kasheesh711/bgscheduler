@@ -394,4 +394,10 @@ export interface SalesTabProps {
   from: string;
   to: string;
   seed?: ExploreSeed;
+  /**
+   * Whether this panel is the currently visible tab. Drives ChartCanvas
+   * resize-on-reactivation for keepMounted (hidden) panels. Defaults to
+   * visible so standalone renders/tests need not pass it.
+   */
+  active?: boolean;
 }
