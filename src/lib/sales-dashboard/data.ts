@@ -5,6 +5,12 @@ import * as schema from "@/lib/db/schema";
 import { DEFAULT_SALES_SOURCES } from "./default-sources";
 import { buildSalesDashboardPayload } from "./analytics";
 import {
+  buildSalesDimensions,
+  sortSlimTransactions,
+  toSlimAdditionalTransaction,
+  toSlimTransaction,
+} from "./dimensions";
+import {
   currentBangkokMonthStart,
   labelForMonth,
   monthStartFromMonthKey,
@@ -45,9 +51,11 @@ import type {
   SalesDashboardProjectionPayload,
   SalesDashboardProjectionSourceRecord,
   SalesDashboardProjectionSourceSummary,
+  SalesDimensionsPayload,
   SalesImportTrigger,
   SalesProjectionMonthRecord,
   SalesProjectionScenarioSummary,
+  SlimTransaction,
 } from "./types";
 
 export const SALES_DASHBOARD_CACHE_TAG = "sales-dashboard";
@@ -844,7 +852,21 @@ async function getSalesDashboardProjectionPayload(db: Database): Promise<SalesDa
   };
 }
 
-async function getSalesDashboardPayloadUncached(email: string | null | undefined, db: Database = getDb()) {
+export interface LiveRowData {
+  /** All sources, including archived (the landing payload lists them). */
+  sources: SalesDashboardSourceRecord[];
+  /** Run-id-scoped rows from the active sources' last successful imports. */
+  normalRows: ParsedNormalSaleRow[];
+  additionalRows: ParsedAdditionalSaleRow[];
+}
+
+/**
+ * One DB pass loading the live (run-id-scoped) row materialization shared by
+ * the landing payload, the dimensions payload, and the slim-transactions
+ * endpoint. Rows are scoped to each active source's lastSuccessfulImportRunId
+ * so partially imported runs never leak.
+ */
+export async function loadLiveRowData(db: Database = getDb()): Promise<LiveRowData> {
   const sources = await listSalesDashboardSources(db, { includeArchived: true });
   const activeSources = sources.filter((source) => source.status !== "archived");
   const activeRunIds = activeSources
@@ -852,18 +874,17 @@ async function getSalesDashboardPayloadUncached(email: string | null | undefined
     .filter((id): id is string => Boolean(id));
   const sourceByRun = new Map(activeSources.map((source) => [source.lastSuccessfulImportRunId, source]));
 
-  const [normalRows, additionalRows, token, projection] = await Promise.all([
+  const [normalRows, additionalRows] = await Promise.all([
     activeRunIds.length > 0
       ? db.select().from(schema.salesDashboardNormalRows).where(inArray(schema.salesDashboardNormalRows.importRunId, activeRunIds))
       : Promise.resolve([]),
     activeRunIds.length > 0
       ? db.select().from(schema.salesDashboardAdditionalRows).where(inArray(schema.salesDashboardAdditionalRows.importRunId, activeRunIds))
       : Promise.resolve([]),
-    getGoogleTokenStatus(email, db),
-    getSalesDashboardProjectionPayload(db),
   ]);
 
-  return buildSalesDashboardPayload({
+  return {
+    sources,
     normalRows: normalRows
       .map((row) => {
         const source = sourceByRun.get(row.importRunId);
@@ -876,6 +897,19 @@ async function getSalesDashboardPayloadUncached(email: string | null | undefined
         return source ? additionalRowFromDb(row, source) : null;
       })
       .filter((row): row is ParsedAdditionalSaleRow => Boolean(row)),
+  };
+}
+
+async function getSalesDashboardPayloadUncached(email: string | null | undefined, db: Database = getDb()) {
+  const [{ sources, normalRows, additionalRows }, token, projection] = await Promise.all([
+    loadLiveRowData(db),
+    getGoogleTokenStatus(email, db),
+    getSalesDashboardProjectionPayload(db),
+  ]);
+
+  return buildSalesDashboardPayload({
+    normalRows,
+    additionalRows,
     sources: sources.map(toSummary),
     projection,
     token,
@@ -887,6 +921,47 @@ export async function getSalesDashboardPayload(email: string | null | undefined)
   cacheTag(SALES_DASHBOARD_CACHE_TAG);
   cacheLife({ stale: 60, revalidate: 60, expire: 300 });
   return getSalesDashboardPayloadUncached(email);
+}
+
+/**
+ * Cached slim-transaction materialization for /api/sales-dashboard/transactions.
+ * Serialized exclusively through toSlimTransaction — the raw jsonb column is
+ * never exposed. Invalidated by the existing revalidateTag calls on
+ * import/source mutations.
+ */
+export async function getLiveSlimRows(): Promise<SlimTransaction[]> {
+  "use cache";
+  cacheTag(SALES_DASHBOARD_CACHE_TAG);
+  cacheLife({ stale: 60, revalidate: 60, expire: 300 });
+  const { normalRows, additionalRows } = await loadLiveRowData();
+  return sortSlimTransactions([
+    ...normalRows.map(toSlimTransaction),
+    ...additionalRows.map(toSlimAdditionalTransaction),
+  ]);
+}
+
+/**
+ * Cached month-grain dimensions payload for /api/sales-dashboard/dimensions.
+ * The landing payload (getSalesDashboardPayload) stays byte-identical; the
+ * tabbed workspace fetches this lazily on first non-Overview activation.
+ */
+export async function getSalesDimensionsPayload(): Promise<SalesDimensionsPayload> {
+  "use cache";
+  cacheTag(SALES_DASHBOARD_CACHE_TAG);
+  cacheLife({ stale: 60, revalidate: 60, expire: 300 });
+  const db = getDb();
+  const [{ normalRows, additionalRows }, projection] = await Promise.all([
+    loadLiveRowData(db),
+    getSalesDashboardProjectionPayload(db),
+  ]);
+  return buildSalesDimensions({
+    normalRows,
+    additionalRows,
+    projection: {
+      targetMonthlyRevenue: projection.targetMonthlyRevenue,
+      targetSource: projection.targetSource,
+    },
+  });
 }
 
 export async function listRecentSalesDashboardImportRuns(db: Database = getDb()) {
