@@ -1,4 +1,3 @@
--- renumber at merge (expected 0043)
 CREATE TABLE "cron_alert_state" (
 	"job_key" text PRIMARY KEY NOT NULL,
 	"episode_key" text NOT NULL,
