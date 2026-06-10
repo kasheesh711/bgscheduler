@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,6 +11,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  getSalesDimensionsVersion,
+  subscribeSalesDimensionsVersion,
+} from "@/hooks/use-sales-dimensions";
 import { formatCurrency } from "@/lib/sales-dashboard/format";
 import type { SlimTransaction } from "@/lib/sales-dashboard/types";
 import { cn } from "@/lib/utils";
@@ -103,7 +107,21 @@ export function TransactionsTable({ filter, from, to, pageSize = 200, className,
 
   const key = cacheKey(filter, from, to);
 
+  // Imports/source edits bump the shared sales-data version; drop the
+  // per-mount page cache so this table can't disagree with the refreshed
+  // aggregates (the current key would otherwise keep serving pre-import rows).
+  const dataVersion = useSyncExternalStore(
+    subscribeSalesDimensionsVersion,
+    getSalesDimensionsVersion,
+    getSalesDimensionsVersion,
+  );
+  const dataVersionRef = useRef(dataVersion);
+
   useEffect(() => {
+    if (dataVersionRef.current !== dataVersion) {
+      dataVersionRef.current = dataVersion;
+      cacheRef.current.clear();
+    }
     const cached = cacheRef.current.get(key);
     if (cached) {
       setPage(cached);
@@ -136,7 +154,7 @@ export function TransactionsTable({ filter, from, to, pageSize = 200, className,
 
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- key encodes filter/from/to; pageSize is fixed per mount
-  }, [key]);
+  }, [key, dataVersion]);
 
   const loadAll = useCallback(async () => {
     if (!page || loadingAll) return;

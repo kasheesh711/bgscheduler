@@ -30,6 +30,23 @@ export function invalidateSalesDimensions(): void {
   for (const listener of listeners) listener();
 }
 
+/**
+ * Subscribe to sales-data invalidations (useSyncExternalStore contract).
+ * Components that keep their own per-mount caches over the same sales rows
+ * (e.g. TransactionsTable) use this to drop them when an import lands.
+ */
+export function subscribeSalesDimensionsVersion(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+/** Current invalidation counter — bumps on every invalidateSalesDimensions(). */
+export function getSalesDimensionsVersion(): number {
+  return cacheVersion;
+}
+
 export function useSalesDimensions({ enabled }: { enabled: boolean }) {
   const [state, setState] = useState<SalesDimensionsState>({
     dimensions: cachedPayload,
