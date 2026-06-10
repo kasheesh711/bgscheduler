@@ -41,6 +41,14 @@ interface TransactionsTableProps {
   /** First-page size; defaults to the endpoint default of 200. */
   pageSize?: number;
   className?: string;
+  /**
+   * Notified whenever rows settle (cache hit, fetch success, or load-all), so
+   * embedding panels can derive views from the same fetch instead of issuing
+   * a duplicate request.
+   */
+  onLoaded?: (rows: SlimTransaction[], total: number) => void;
+  /** Notified when the fetch fails (the table also renders the error inline). */
+  onError?: (message: string) => void;
 }
 
 const LOAD_ALL_PAGE_SIZE = 1000;
@@ -77,13 +85,21 @@ function kindLabel(row: SlimTransaction): string {
   return row.enrollmentType || "—";
 }
 
-export function TransactionsTable({ filter, from, to, pageSize = 200, className }: TransactionsTableProps) {
+export function TransactionsTable({ filter, from, to, pageSize = 200, className, onLoaded, onError }: TransactionsTableProps) {
   const [page, setPage] = useState<TransactionsPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingAll, setLoadingAll] = useState(false);
   const [error, setError] = useState("");
   const cacheRef = useRef(new Map<string, TransactionsPage>());
   const abortRef = useRef<AbortController | null>(null);
+
+  // Latest-callback refs so changing parent closures never re-trigger fetches.
+  const onLoadedRef = useRef(onLoaded);
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onLoadedRef.current = onLoaded;
+    onErrorRef.current = onError;
+  });
 
   const key = cacheKey(filter, from, to);
 
@@ -93,6 +109,7 @@ export function TransactionsTable({ filter, from, to, pageSize = 200, className 
       setPage(cached);
       setLoading(false);
       setError("");
+      onLoadedRef.current?.(cached.rows, cached.total);
       return;
     }
 
@@ -107,11 +124,14 @@ export function TransactionsTable({ filter, from, to, pageSize = 200, className 
         cacheRef.current.set(key, result);
         setPage(result);
         setLoading(false);
+        onLoadedRef.current?.(result.rows, result.total);
       })
       .catch((fetchError: unknown) => {
         if (controller.signal.aborted) return;
-        setError(fetchError instanceof Error ? fetchError.message : "Failed to load transactions");
+        const message = fetchError instanceof Error ? fetchError.message : "Failed to load transactions";
+        setError(message);
         setLoading(false);
+        onErrorRef.current?.(message);
       });
 
     return () => controller.abort();
@@ -140,9 +160,12 @@ export function TransactionsTable({ filter, from, to, pageSize = 200, className 
       const result = { rows, total };
       cacheRef.current.set(key, result);
       setPage(result);
+      onLoadedRef.current?.(result.rows, result.total);
     } catch (fetchError) {
       if (!controller.signal.aborted) {
-        setError(fetchError instanceof Error ? fetchError.message : "Failed to load transactions");
+        const message = fetchError instanceof Error ? fetchError.message : "Failed to load transactions";
+        setError(message);
+        onErrorRef.current?.(message);
       }
     } finally {
       setLoadingAll(false);

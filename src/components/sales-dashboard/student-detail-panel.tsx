@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -23,9 +23,10 @@ import { cn } from "@/lib/utils";
 // ----------------------------------------------------------------------------
 // Student detail panel — centered dialog below xl, right-hand side panel at
 // xl+. Shows the purchase history (via the shared <TransactionsTable>), the
-// coverage-window renewal timeline (buildCoverageWindows over the student's
-// fetched slim transactions), the trial-conversion marker, and the live churn
-// rule spelled out. Nickname-identity caveat is surfaced, never hidden.
+// coverage-window renewal timeline (buildCoverageWindows over the rows the
+// table reports through onLoaded — one fetch serves both views), the
+// trial-conversion marker, and the live churn rule spelled out. The
+// nickname-identity caveat is surfaced, never hidden.
 // ----------------------------------------------------------------------------
 
 /** Badge variant per live status — shared with the Students directory rows. */
@@ -127,6 +128,9 @@ export interface StudentDetailBodyProps {
   journeyTotal: number;
   journeyLoading: boolean;
   journeyError: string;
+  /** Bubbled from the purchase-history table so the panel reuses its fetch. */
+  onJourneyLoaded?: (rows: SlimTransaction[], total: number) => void;
+  onJourneyError?: (message: string) => void;
 }
 
 /**
@@ -140,6 +144,8 @@ export function StudentDetailBody({
   journeyTotal,
   journeyLoading,
   journeyError,
+  onJourneyLoaded,
+  onJourneyError,
 }: StudentDetailBodyProps) {
   const windows = journeyRows ? buildCoverageWindows(journeyRows, today) : [];
   const segments = computeTimelineSegments(windows);
@@ -302,7 +308,13 @@ export function StudentDetailBody({
         <p className="mt-1 text-[11px] text-muted-foreground">
           All recorded transactions for this student, whole history (package + additional).
         </p>
-        <TransactionsTable filter={{ student: student.key }} className="mt-2" />
+        <TransactionsTable
+          filter={{ student: student.key }}
+          pageSize={JOURNEY_PAGE_SIZE}
+          onLoaded={onJourneyLoaded}
+          onError={onJourneyError}
+          className="mt-2"
+        />
       </section>
     </div>
   );
@@ -324,59 +336,35 @@ export interface StudentDetailPanelProps {
 }
 
 /**
- * Per-student journey panel. Owns its own whole-history transactions fetch
- * (AbortController + per-key cache) for the coverage timeline; the purchase
- * list itself renders through the shared <TransactionsTable>.
+ * Per-student journey panel. The whole-history rows arrive once through the
+ * purchase-history <TransactionsTable> fetch (pageSize = 1000) and are bubbled
+ * up via onLoaded — the coverage timeline is derived from that same response,
+ * so opening a student issues a single request.
  */
 export function StudentDetailPanel({ student, today, onClose }: StudentDetailPanelProps) {
-  const [journey, setJourney] = useState<JourneyState>({ rows: null, total: 0, loading: false, error: "" });
-  const cacheRef = useRef(new Map<string, { rows: SlimTransaction[]; total: number }>());
-  const abortRef = useRef<AbortController | null>(null);
   const studentKey = student?.key ?? null;
+  const [journey, setJourney] = useState<JourneyState>(() => ({
+    rows: null,
+    total: 0,
+    loading: studentKey !== null,
+    error: "",
+  }));
+  const [trackedKey, setTrackedKey] = useState(studentKey);
 
-  useEffect(() => {
-    if (!studentKey) return;
-    const cached = cacheRef.current.get(studentKey);
-    if (cached) {
-      setJourney({ rows: cached.rows, total: cached.total, loading: false, error: "" });
-      return;
-    }
+  // Reset the journey when the selected student changes (render-time derived
+  // state, same sanctioned pattern as workspace-tabs' URL adoption).
+  if (studentKey !== trackedKey) {
+    setTrackedKey(studentKey);
+    setJourney({ rows: null, total: 0, loading: studentKey !== null, error: "" });
+  }
 
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setJourney({ rows: null, total: 0, loading: true, error: "" });
+  const handleJourneyLoaded = useCallback((rows: SlimTransaction[], total: number) => {
+    setJourney({ rows, total, loading: false, error: "" });
+  }, []);
 
-    fetch(
-      `/api/sales-dashboard/transactions?student=${encodeURIComponent(studentKey)}&limit=${JOURNEY_PAGE_SIZE}`,
-      { signal: controller.signal, cache: "no-store" },
-    )
-      .then(async (response) => {
-        const body = (await response.json().catch(() => ({}))) as {
-          rows?: SlimTransaction[];
-          total?: number;
-          error?: string;
-        };
-        if (!response.ok) {
-          throw new Error(body.error || `Student journey request failed (${response.status})`);
-        }
-        const rows = body.rows ?? [];
-        const total = body.total ?? rows.length;
-        cacheRef.current.set(studentKey, { rows, total });
-        setJourney({ rows, total, loading: false, error: "" });
-      })
-      .catch((fetchError: unknown) => {
-        if (controller.signal.aborted) return;
-        setJourney({
-          rows: null,
-          total: 0,
-          loading: false,
-          error: fetchError instanceof Error ? fetchError.message : "Failed to load student journey",
-        });
-      });
-
-    return () => controller.abort();
-  }, [studentKey]);
+  const handleJourneyError = useCallback((message: string) => {
+    setJourney({ rows: null, total: 0, loading: false, error: message });
+  }, []);
 
   return (
     <Dialog
@@ -404,6 +392,8 @@ export function StudentDetailPanel({ student, today, onClose }: StudentDetailPan
                 journeyTotal={journey.total}
                 journeyLoading={journey.loading}
                 journeyError={journey.error}
+                onJourneyLoaded={handleJourneyLoaded}
+                onJourneyError={handleJourneyError}
               />
             </div>
           </>
