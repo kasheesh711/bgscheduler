@@ -37,6 +37,7 @@ export function PeriodToolbar({ period, from, to, onSelectPreset, onFromChange, 
             key={item.key}
             size="sm"
             variant={period === item.key ? "default" : "outline"}
+            aria-pressed={period === item.key}
             onClick={() => onSelectPreset(item.key)}
           >
             {item.label}
@@ -44,9 +45,21 @@ export function PeriodToolbar({ period, from, to, onSelectPreset, onFromChange, 
         ))}
       </div>
       <div className="flex items-center gap-2">
-        <Input type="date" value={from} onChange={(event) => onFromChange(event.target.value)} className="w-36" />
+        <Input
+          type="date"
+          value={from}
+          onChange={(event) => onFromChange(event.target.value)}
+          className="w-36"
+          aria-label="From date"
+        />
         <span className="text-xs text-muted-foreground">to</span>
-        <Input type="date" value={to} onChange={(event) => onToChange(event.target.value)} className="w-36" />
+        <Input
+          type="date"
+          value={to}
+          onChange={(event) => onToChange(event.target.value)}
+          className="w-36"
+          aria-label="To date"
+        />
       </div>
     </div>
   );

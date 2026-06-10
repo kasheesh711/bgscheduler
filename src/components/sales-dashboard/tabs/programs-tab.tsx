@@ -659,7 +659,10 @@ function SortableHead({
 }) {
   const isActive = column === activeKey;
   return (
-    <TableHead className={cn(align === "right" && "text-right", className)}>
+    <TableHead
+      className={cn(align === "right" && "text-right", className)}
+      aria-sort={isActive ? (direction === "asc" ? "ascending" : "descending") : "none"}
+    >
       <button
         type="button"
         onClick={() => onSort(column)}

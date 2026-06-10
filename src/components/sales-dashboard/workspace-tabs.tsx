@@ -133,7 +133,10 @@ export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed }: Work
       </TabsList>
 
       {activeTab !== "overview" && error && !dimensions && !loading ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        >
           <span>Failed to load sales dimensions: {error}</span>
           <Button size="sm" variant="outline" onClick={invalidate}>
             Retry

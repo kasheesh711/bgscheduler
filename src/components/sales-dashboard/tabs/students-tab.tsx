@@ -174,6 +174,7 @@ function FilterChip({
       size="sm"
       variant={active ? "default" : "outline"}
       className="h-7 rounded-full px-2.5 text-xs"
+      aria-pressed={active}
       onClick={onClick}
     >
       {label}
@@ -315,6 +316,7 @@ export function StudentsTab({ dimensions, loading, seed }: SalesTabProps) {
               size="sm"
               variant={sortKey === option.key ? "secondary" : "ghost"}
               className="h-7 px-2.5 text-xs"
+              aria-pressed={sortKey === option.key}
               onClick={() => setSortKey(option.key)}
             >
               {option.label}
@@ -372,10 +374,13 @@ export function StudentsTab({ dimensions, loading, seed }: SalesTabProps) {
               <span className="flex items-center gap-1.5 text-xs whitespace-nowrap text-muted-foreground">
                 {entry.latestValidUntil ?? "—"}
                 {isExpiringSoon(entry, today) ? (
-                  <span
-                    className="size-1.5 shrink-0 rounded-full bg-blocked"
-                    title={`Renewal decision window closes by ${entry.decisionDate}`}
-                  />
+                  <>
+                    <span
+                      className="size-1.5 shrink-0 rounded-full bg-blocked"
+                      title={`Renewal decision window closes by ${entry.decisionDate}`}
+                    />
+                    <span className="sr-only">expiring soon</span>
+                  </>
                 ) : null}
               </span>
               <span className="text-right font-medium whitespace-nowrap">

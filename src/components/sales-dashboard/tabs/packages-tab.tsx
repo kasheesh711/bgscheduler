@@ -432,6 +432,7 @@ export function PackagesTab({ dimensions, loading, from, to, seed, active = true
                     size="sm"
                     variant={histogramMode === "count" ? "secondary" : "ghost"}
                     className="h-6 px-2 text-xs"
+                    aria-pressed={histogramMode === "count"}
                     onClick={() => setHistogramMode("count")}
                   >
                     Count
@@ -440,6 +441,7 @@ export function PackagesTab({ dimensions, loading, from, to, seed, active = true
                     size="sm"
                     variant={histogramMode === "revenue" ? "secondary" : "ghost"}
                     className="h-6 px-2 text-xs"
+                    aria-pressed={histogramMode === "revenue"}
                     onClick={() => setHistogramMode("revenue")}
                   >
                     Revenue
