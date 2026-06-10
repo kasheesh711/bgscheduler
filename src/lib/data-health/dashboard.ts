@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq, getTableColumns, lte, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { isApiSnapshotStale } from "@/lib/ops/stale";
@@ -25,6 +25,8 @@ type CreditRun = typeof schema.creditControlSyncRuns.$inferSelect;
 type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
 type ClassroomAdminEmailRun = typeof schema.classroomAdminEmailRuns.$inferSelect;
 type LeaveRun = typeof schema.leaveRequestSyncRuns.$inferSelect;
+type ProgressTestRun = typeof schema.progressTestSyncRuns.$inferSelect;
+type ProgressTestDigestRun = typeof schema.progressTestAdminDigestRuns.$inferSelect;
 type RoomUtilizationSession = typeof schema.roomUtilizationSessions.$inferSelect;
 
 function iso(value: Date | string | null | undefined): string | null {
@@ -143,6 +145,8 @@ function pickJobRuns(
     salesProjection: SalesProjectionRun[];
     credit: CreditRun[];
     leave: LeaveRun[];
+    progressTests: ProgressTestRun[];
+    progressTestDigest: ProgressTestDigestRun[];
     classroom: ClassroomRun[];
     adminEmail: ClassroomAdminEmailRun[];
     roomUtilization: RoomUtilizationSession[];
@@ -194,6 +198,39 @@ function pickJobRuns(
     };
   }
 
+  if (job.key === "progress_tests") {
+    return {
+      latestRun: runEvidence(allRuns.progressTests[0] ?? null),
+      latestSuccessfulRun: runEvidence(latestSuccessful(allRuns.progressTests, (run) => run.finishedAt)),
+      latestFailedRun: runEvidence(latestFailed(allRuns.progressTests, (run) => run.finishedAt)),
+      runningRun: runEvidence(latestRunning(allRuns.progressTests, (run) => run.startedAt)),
+    };
+  }
+
+  if (job.key === "progress_tests_digest") {
+    // Daily job: a "skipped" run (nothing to report) is still proof it fired.
+    return {
+      latestRun: runEvidence(digestRunEvidence(allRuns.progressTestDigest[0] ?? null)),
+      latestSuccessfulRun: runEvidence(digestRunEvidence(latestSuccessful(allRuns.progressTestDigest, (run) => run.sentAt ?? run.updatedAt, new Set(["sent", "skipped"])))),
+      latestFailedRun: runEvidence(digestRunEvidence(latestFailed(allRuns.progressTestDigest, (run) => run.updatedAt))),
+      runningRun: runEvidence(digestRunEvidence(latestRunning(allRuns.progressTestDigest, (run) => run.createdAt))),
+    };
+  }
+
+  if (job.key === "student_promotions_july_1") {
+    // The july-1 route is not audit-wrapped and its run table mixes admin
+    // drafts with the cron apply, so there is no trustworthy run evidence.
+    // Fail closed: no evidence -> "unknown" (alertable) instead of borrowing
+    // the room-utilization fallback, which would report this dangerous
+    // write-path cron as healthy without it ever firing.
+    return {
+      latestRun: null,
+      latestSuccessfulRun: null,
+      latestFailedRun: null,
+      runningRun: null,
+    };
+  }
+
   if (job.key === "classroom_morning") {
     return {
       latestRun: runEvidence(classroomRunEvidence(allRuns.classroom[0] ?? null)),
@@ -223,6 +260,9 @@ function pickJobRuns(
     };
   }
 
+  // Only room_utilization reaches this fallback; every scheduled job above
+  // maps to its own run table (or deliberately to no evidence) so stale
+  // utilization rows can never stand in as another job's health proof.
   const latestUtilization = allRuns.roomUtilization[0] ?? null;
   return {
     latestRun: latestUtilization
@@ -257,6 +297,16 @@ function classroomRunEvidence(run: ClassroomRun | null): { status: string; start
 }
 
 function adminEmailRunEvidence(run: ClassroomAdminEmailRun | null): { status: string; startedAt: Date; finishedAt: Date | null; errorSummary: string | null } | null {
+  if (!run) return null;
+  return {
+    status: run.status,
+    startedAt: run.createdAt,
+    finishedAt: run.sentAt ?? run.updatedAt,
+    errorSummary: run.lastError,
+  };
+}
+
+function digestRunEvidence(run: ProgressTestDigestRun | null): { status: string; startedAt: Date; finishedAt: Date | null; errorSummary: string | null } | null {
   if (!run) return null;
   return {
     status: run.status,
@@ -554,6 +604,8 @@ async function fetchAllRuns(db: Database) {
     salesProjection,
     credit,
     leave,
+    progressTests,
+    progressTestDigest,
     classroom,
     adminEmail,
     roomUtilization,
@@ -564,6 +616,8 @@ async function fetchAllRuns(db: Database) {
     db.select().from(schema.salesDashboardProjectionImportRuns).orderBy(desc(schema.salesDashboardProjectionImportRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.creditControlSyncRuns).orderBy(desc(schema.creditControlSyncRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.leaveRequestSyncRuns).orderBy(desc(schema.leaveRequestSyncRuns.startedAt)).limit(RECENT_LIMIT),
+    db.select().from(schema.progressTestSyncRuns).orderBy(desc(schema.progressTestSyncRuns.startedAt)).limit(RECENT_LIMIT),
+    db.select().from(schema.progressTestAdminDigestRuns).orderBy(desc(schema.progressTestAdminDigestRuns.createdAt)).limit(RECENT_LIMIT),
     db
       .select()
       .from(schema.classroomAssignmentRuns)
@@ -581,19 +635,38 @@ async function fetchAllRuns(db: Database) {
     salesProjection,
     credit,
     leave,
+    progressTests,
+    progressTestDigest,
     classroom,
     adminEmail,
     roomUtilization,
   };
 }
 
+const INVOCATIONS_PER_JOB = 8;
+
+/**
+ * Latest invocations per jobKey (not a global recency window). A global
+ * LIMIT used to let chatty 30-minute jobs push a daily job's only invocation
+ * out of the window within hours, flipping its health evidence to stale
+ * fallbacks; ranking per jobKey keeps every job's own proof visible.
+ */
 async function fetchCronInvocations(db: Database): Promise<CronInvocation[]> {
   try {
-    return await db
-      .select()
+    const ranked = db
+      .select({
+        ...getTableColumns(schema.cronInvocations),
+        rowNumber: sql<number>`row_number() over (partition by ${schema.cronInvocations.jobKey} order by ${schema.cronInvocations.receivedAt} desc)`.as("row_number"),
+      })
       .from(schema.cronInvocations)
-      .orderBy(desc(schema.cronInvocations.receivedAt))
-      .limit(80);
+      .as("ranked");
+    const rows = await db
+      .select()
+      .from(ranked)
+      .where(lte(ranked.rowNumber, INVOCATIONS_PER_JOB))
+      .orderBy(desc(ranked.receivedAt));
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- strips the window-rank helper column
+    return rows.map(({ rowNumber: _rowNumber, ...invocation }) => invocation as CronInvocation);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (message.includes("cron_invocations") || message.includes("relation") || message.includes("does not exist")) {
