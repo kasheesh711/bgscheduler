@@ -8,7 +8,8 @@ import { cn } from "@/lib/utils";
 // ----------------------------------------------------------------------------
 // Shared Chart.js canvas, extracted from gm-command-center.tsx so every
 // workspace panel renders charts the same way. New charts must use
-// chartColors() tokens (no hardcoded hexes).
+// chartColors() tokens — the only hardcoded hexes here are the SSR-safe
+// FALLBACK_COLORS approximations below.
 // ----------------------------------------------------------------------------
 
 export interface ChartThemeColors {
@@ -18,6 +19,11 @@ export interface ChartThemeColors {
   mutedForeground: string;
 }
 
+/**
+ * Static approximations of the OKLCH theme tokens (--chart-1…5, --border,
+ * --muted-foreground), used only when CSS variables are unreadable (SSR).
+ * Charts mount client-side, so these never reach a painted chart.
+ */
 const FALLBACK_COLORS: ChartThemeColors = {
   chart: ["#3b82f6", "#e67e22", "#7c3aed", "#10b981", "#64748b"],
   border: "#e2e8f0",

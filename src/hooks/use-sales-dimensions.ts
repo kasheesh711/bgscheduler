@@ -15,6 +15,9 @@ interface SalesDimensionsState {
   error: string;
 }
 
+// Deliberately module-scope rather than globalThis-anchored (the repo's
+// server-singleton convention): this is client-only state, and losing it on
+// an HMR module swap merely costs one extra fetch on the next tab activation.
 let cachedPayload: SalesDimensionsPayload | null = null;
 let cacheVersion = 0;
 const listeners = new Set<() => void>();
