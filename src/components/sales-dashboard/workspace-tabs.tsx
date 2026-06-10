@@ -92,13 +92,27 @@ export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed }: Work
 
   // Consume GM cross-link seeds: switch tab, hand the seed to the panel, then
   // notify the shell. Must run as an effect (it updates the parent's state).
+  // The ?tab= and ?rep= params are composed into a single router.replace —
+  // panels must not write the URL in the same tick or they race this one.
   useEffect(() => {
     if (!seed) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot seed handoff from the shell, consumed immediately
     setPanelSeed(seed);
-    selectTab(seed.tab);
+    setActiveTab(seed.tab);
+    setActivated((previous) => {
+      if (previous.has(seed.tab)) return previous;
+      const next = new Set(previous);
+      next.add(seed.tab);
+      return next;
+    });
+    const params = new URLSearchParams(searchParams.toString());
+    if (seed.tab === "overview") params.delete("tab");
+    else params.set("tab", seed.tab);
+    if (seed.tab === "reps" && seed.rep) params.set("rep", seed.rep);
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
     onSeedConsumed();
-  }, [seed, selectTab, onSeedConsumed]);
+  }, [seed, pathname, router, searchParams, onSeedConsumed]);
 
   return (
     <Tabs
