@@ -7,6 +7,7 @@ import { ArrowDownRight, ArrowUpRight, Target } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ChartCanvas, chartColors } from "@/components/sales-dashboard/chart-canvas";
 import { TransactionsTable } from "@/components/sales-dashboard/transactions-table";
+import { normalizeRepKey } from "@/lib/sales-dashboard/cohorts";
 import { formatCurrency, formatPercent } from "@/lib/sales-dashboard/format";
 import type { RepFunnel, RepMonthAgg, SalesTabProps } from "@/lib/sales-dashboard/types";
 import { cn } from "@/lib/utils";
@@ -24,9 +25,9 @@ import { cn } from "@/lib/utils";
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const MAX_RANGE_MONTHS = 240;
 
-/** Same trim/lowercase/collapse rule the dimensions builder and /transactions route apply. */
+/** Canonical rep grouping key — delegates to the shared normalizeRepKey rule. */
 export function repKeyOf(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
+  return normalizeRepKey(value);
 }
 
 /** "YYYY-MM-DD" → "YYYY-MM-01". */

@@ -8,6 +8,7 @@ import {
   STATUS_BADGE_VARIANTS,
   StudentDetailPanel,
 } from "@/components/sales-dashboard/student-detail-panel";
+import { addDaysIso, currentBangkokDate } from "@/lib/sales-dashboard/dates";
 import { formatCurrency } from "@/lib/sales-dashboard/format";
 import type {
   ExploreSeed,
@@ -54,20 +55,14 @@ const QUICK_FILTERS: { id: StudentFilterId; label: string }[] = [
   { id: "status:Trial-only", label: "Trials not converted" },
 ];
 
-/** Bangkok-local ISO date (YYYY-MM-DD) — the panel's "today" for live flags. */
+/** Bangkok-local ISO date (YYYY-MM-DD) — delegates to the shared dates helper. */
 export function bangkokTodayIso(now = new Date()): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Bangkok",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(now);
+  return currentBangkokDate(now);
 }
 
-/** Add whole days to an ISO date (UTC math; date-only strings). */
+/** Add whole days to an ISO date — delegates to the shared dates helper. */
 export function addDaysToIso(date: string, days: number): string {
-  const [year, month, day] = date.split("-").map(Number);
-  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+  return addDaysIso(date, days);
 }
 
 /**
