@@ -64,6 +64,11 @@ import {
 import type { ProgressTestAiSummary } from "./types";
 
 const SESSION_PAGE_SIZE = 1000;
+// Wise rejects PAST-session date ranges of roughly 100+ days with
+// "Invalid start or end date!" — observed in production when the counting
+// window (2026-03-01 → now) crossed 100 days on 2026-06-10. Fetch in
+// bounded windows and stitch, like the 7-day leave-window stitching.
+const SESSION_FETCH_WINDOW_DAYS = 85;
 const ERROR_SUMMARY_MAX_LENGTH = 2_000;
 
 /** Outcome summary returned to callers and surfaced in the run row + cron audit. */
@@ -110,30 +115,43 @@ function shortErrorSummary(error: unknown): string {
  * pull the raw Wise sessions (which carry teacherId/userId) and key them by
  * wiseSessionId. Paginated by date like the payroll past-session fetch.
  *
+ * Fetches in windows of at most SESSION_FETCH_WINDOW_DAYS because Wise rejects
+ * long date ranges; downstream consumers key sessions by wiseSessionId, so a
+ * session duplicated on a window boundary is harmless.
+ *
  * @returns the raw Wise sessions covering [startDate, endDate] (Bangkok-aware ISO bounds).
  */
-async function fetchWisePastSessions(
+export async function fetchWisePastSessions(
   client: WiseClient,
   instituteId: string,
   startDate: Date,
   endDate: Date,
 ): Promise<WiseSession[]> {
   const sessions: WiseSession[] = [];
-  for (let pageNumber = 1; ; pageNumber += 1) {
-    const response = await client.get<{
-      data?: { sessions?: WiseSession[]; page_count?: number };
-    }>(`/institutes/${instituteId}/sessions`, {
-      status: "PAST",
-      paginateBy: "DATE",
-      startDate: startDate.toISOString(),
-      endDate: endDate.toISOString(),
-      page_number: String(pageNumber),
-      page_size: String(SESSION_PAGE_SIZE),
-    });
-    const pageSessions = response.data?.sessions ?? [];
-    sessions.push(...pageSessions);
-    const pageCount = response.data?.page_count ?? pageNumber;
-    if (pageNumber >= pageCount || pageSessions.length === 0) break;
+  const windowMs = SESSION_FETCH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  for (
+    let windowStartMs = startDate.getTime();
+    windowStartMs < endDate.getTime();
+    windowStartMs += windowMs
+  ) {
+    const windowStart = new Date(windowStartMs);
+    const windowEnd = new Date(Math.min(windowStartMs + windowMs, endDate.getTime()));
+    for (let pageNumber = 1; ; pageNumber += 1) {
+      const response = await client.get<{
+        data?: { sessions?: WiseSession[]; page_count?: number };
+      }>(`/institutes/${instituteId}/sessions`, {
+        status: "PAST",
+        paginateBy: "DATE",
+        startDate: windowStart.toISOString(),
+        endDate: windowEnd.toISOString(),
+        page_number: String(pageNumber),
+        page_size: String(SESSION_PAGE_SIZE),
+      });
+      const pageSessions = response.data?.sessions ?? [];
+      sessions.push(...pageSessions);
+      const pageCount = response.data?.page_count ?? pageNumber;
+      if (pageNumber >= pageCount || pageSessions.length === 0) break;
+    }
   }
   return sessions;
 }

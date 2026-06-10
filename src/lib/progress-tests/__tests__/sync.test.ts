@@ -26,6 +26,7 @@ import { runTeacherHeadsUpNotifications } from "@/lib/progress-tests/teacher-hea
 import {
   buildSessionTeacherMap,
   computeMostFrequentTutor,
+  fetchWisePastSessions,
   runProgressTestSync,
 } from "@/lib/progress-tests/sync";
 
@@ -487,6 +488,65 @@ describe("runProgressTestSync", () => {
     expect(result.success).toBe(false);
     expect(result.errorSummary).toContain("credit snapshot read failed");
     expect(upsertCycleStateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchWisePastSessions", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  it("splits long ranges into windows of at most 85 days (Wise rejects ~100+ day ranges)", async () => {
+    const get = vi.fn().mockResolvedValue({ data: { sessions: [], page_count: 1 } });
+    const client = { get } as unknown as WiseClient;
+    const start = new Date("2026-03-01T00:00:00+07:00");
+    const end = new Date("2026-06-10T01:00:00+07:00"); // 101 days — the production failure shape
+
+    await fetchWisePastSessions(client, "inst-1", start, end);
+
+    expect(get.mock.calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of get.mock.calls) {
+      const params = call[1] as { startDate: string; endDate: string };
+      const spanMs =
+        new Date(params.endDate).getTime() - new Date(params.startDate).getTime();
+      expect(spanMs).toBeLessThanOrEqual(85 * DAY_MS);
+      expect(spanMs).toBeGreaterThan(0);
+    }
+    // Windows are contiguous: first starts at start, last ends at end.
+    const firstParams = get.mock.calls[0][1] as { startDate: string };
+    const lastParams = get.mock.calls.at(-1)![1] as { endDate: string };
+    expect(new Date(firstParams.startDate).getTime()).toBe(start.getTime());
+    expect(new Date(lastParams.endDate).getTime()).toBe(end.getTime());
+  });
+
+  it("concatenates sessions across windows and pages", async () => {
+    const sessionFor = (id: string) => ({ _id: id }) as unknown as WiseSession;
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { sessions: [sessionFor("a")], page_count: 2 } })
+      .mockResolvedValueOnce({ data: { sessions: [sessionFor("b")], page_count: 2 } })
+      .mockResolvedValueOnce({ data: { sessions: [sessionFor("c")], page_count: 1 } });
+    const client = { get } as unknown as WiseClient;
+    const start = new Date("2026-03-01T00:00:00+07:00");
+    const end = new Date(start.getTime() + 100 * DAY_MS);
+
+    const sessions = await fetchWisePastSessions(client, "inst-1", start, end);
+
+    expect(get).toHaveBeenCalledTimes(3); // window 1: pages 1-2; window 2: page 1
+    expect(sessions.map((s) => (s as unknown as { _id: string })._id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("uses a single request for ranges within one window", async () => {
+    const get = vi.fn().mockResolvedValue({ data: { sessions: [], page_count: 1 } });
+    const client = { get } as unknown as WiseClient;
+    const start = new Date("2026-03-01T00:00:00+07:00");
+    const end = new Date(start.getTime() + 30 * DAY_MS);
+
+    await fetchWisePastSessions(client, "inst-1", start, end);
+
+    expect(get).toHaveBeenCalledTimes(1);
   });
 });
 
