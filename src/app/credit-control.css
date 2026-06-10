@@ -602,6 +602,23 @@ html[data-theme="dark"] .dashboard-page .skeleton-panel::after {
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
+/* PERF: skip layout/paint work for offscreen cards. Progressive enhancement —
+   safe containment root on the card div only (table rows are not reliable
+   containment roots cross-browser). */
+.queue-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+
+/* PERF: "load more" sentinel for the windowed worklist; grows the row window
+   when scrolled into view. */
+.queue-sentinel {
+  padding: 12px 10px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
 .sortable {
   cursor: pointer;
   user-select: none;

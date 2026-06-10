@@ -82,6 +82,13 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   const queuePanelRef = useRef<QueuePanelHandle>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // Mirror of `data` for stable callbacks that only need a point-in-time read
+  // (keeps memoized children from re-rendering when handlers are recreated).
+  const dataRef = useRef<DashboardPayload | null>(null);
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
+
   // ---------------------------------------------------------------------------
   // Data loading
   // ---------------------------------------------------------------------------
@@ -253,6 +260,9 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
     return selectedKeys.filter((key) => visibleSet.has(key));
   }, [selectedKeys, sortedQueue]);
 
+  // Set-backed view of the selection for O(1) per-row membership checks.
+  const selectedKeySet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
+
   const selectedDayStudentKeys = useMemo(() => {
     if (!selectedDay) return new Set<string>();
     return new Set(selectedDay.students.map((s) => s.key));
@@ -321,70 +331,94 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   // ---------------------------------------------------------------------------
   // Action handlers
   // ---------------------------------------------------------------------------
-  async function submitSingleAction(student: StudentRecord, status: StudentActionStatus | null) {
-    const previousActionState = student.actionState;
-    const previousStatus = previousActionState?.status ?? null;
-    const optimisticActionState: StudentRecord["actionState"] = status
-      ? { status, updatedAt: new Date().toISOString(), updatedByName: sessionUser.name, isToday: true }
-      : null;
-
-    // Optimistic update
-    patchActionState(student.studentKey, optimisticActionState);
-    setOptimisticKeys((prev) => new Set(prev).add(student.studentKey));
-    setSubmitting(true);
-
-    try {
-      const response = await fetch("/api/credit-control/actions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ studentKey: student.studentKey, status }),
+  const patchActionState = useCallback(
+    (studentKey: string, actionState: StudentRecord["actionState"]) => {
+      setData((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          students: current.students.map((student) =>
+            student.studentKey === studentKey ? { ...student, actionState } : student,
+          ),
+          studentQueue: current.studentQueue.map((row) =>
+            row.studentKey === studentKey ? { ...row, actionState } : row,
+          ),
+        };
       });
-      if (!response.ok) {
-        throw new Error(`Action request failed (${response.status})`);
-      }
+    },
+    [],
+  );
 
-      const update = (await response.json()) as {
-        studentKey: string;
-        actionState: StudentRecord["actionState"];
-      };
-      patchActionState(update.studentKey, update.actionState);
-      delete actionHistoryCache.current[student.studentKey];
+  const submitSingleAction = useCallback(
+    async (student: StudentRecord, status: StudentActionStatus | null) => {
+      const previousActionState = student.actionState;
+      const previousStatus = previousActionState?.status ?? null;
+      const optimisticActionState: StudentRecord["actionState"] = status
+        ? { status, updatedAt: new Date().toISOString(), updatedByName: sessionUser.name, isToday: true }
+        : null;
 
-      if (status) {
-        setToast({
-          message: `Marked ${student.student} as ${actionStatusLabel(status).toLowerCase()}.`,
-          tone: "success",
-          undo: { studentKey: student.studentKey, previousStatus, previousActionState },
+      // Optimistic update
+      patchActionState(student.studentKey, optimisticActionState);
+      setOptimisticKeys((prev) => new Set(prev).add(student.studentKey));
+      setSubmitting(true);
+
+      try {
+        const response = await fetch("/api/credit-control/actions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ studentKey: student.studentKey, status }),
         });
-      } else {
-        setToast({
-          message: buildActionToastMessage(null, 1),
-          tone: "success",
-        });
-      }
-    } catch (submitError) {
-      // Revert optimistic update
-      patchActionState(student.studentKey, previousActionState);
-      setToast({
-        message: submitError instanceof Error ? submitError.message : "Failed to save action.",
-        tone: "error",
-      });
-    } finally {
-      setOptimisticKeys((prev) => {
-        const next = new Set(prev);
-        next.delete(student.studentKey);
-        return next;
-      });
-      setSubmitting(false);
-    }
-  }
+        if (!response.ok) {
+          throw new Error(`Action request failed (${response.status})`);
+        }
 
-  async function submitSingleActionByKey(studentKey: string, status: StudentActionStatus) {
-    const student = data?.students.find((s) => s.studentKey === studentKey);
-    if (student) {
-      await submitSingleAction(student, status);
-    }
-  }
+        const update = (await response.json()) as {
+          studentKey: string;
+          actionState: StudentRecord["actionState"];
+        };
+        patchActionState(update.studentKey, update.actionState);
+        delete actionHistoryCache.current[student.studentKey];
+
+        if (status) {
+          setToast({
+            message: `Marked ${student.student} as ${actionStatusLabel(status).toLowerCase()}.`,
+            tone: "success",
+            undo: { studentKey: student.studentKey, previousStatus, previousActionState },
+          });
+        } else {
+          setToast({
+            message: buildActionToastMessage(null, 1),
+            tone: "success",
+          });
+        }
+      } catch (submitError) {
+        // Revert optimistic update
+        patchActionState(student.studentKey, previousActionState);
+        setToast({
+          message: submitError instanceof Error ? submitError.message : "Failed to save action.",
+          tone: "error",
+        });
+      } finally {
+        setOptimisticKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(student.studentKey);
+          return next;
+        });
+        setSubmitting(false);
+      }
+    },
+    [patchActionState, sessionUser.name],
+  );
+
+  const submitSingleActionByKey = useCallback(
+    async (studentKey: string, status: StudentActionStatus) => {
+      const student = dataRef.current?.students.find((s) => s.studentKey === studentKey);
+      if (student) {
+        await submitSingleAction(student, status);
+      }
+    },
+    [submitSingleAction],
+  );
 
   async function handleMarkInactive(student: StudentRecord) {
     setSubmitting(true);
@@ -511,50 +545,35 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
     }
   }
 
-  function patchActionState(studentKey: string, actionState: StudentRecord["actionState"]) {
-    setData((current) => {
-      if (!current) return current;
-      return {
-        ...current,
-        students: current.students.map((student) =>
-          student.studentKey === studentKey ? { ...student, actionState } : student,
-        ),
-        studentQueue: current.studentQueue.map((row) =>
-          row.studentKey === studentKey ? { ...row, actionState } : row,
-        ),
-      };
-    });
-  }
-
-  function toggleSort(field: SortField) {
+  const toggleSort = useCallback((field: SortField) => {
     setCurrentSort((current) => {
       if (current.field === field) {
         return { field, dir: current.dir === "asc" ? "desc" : "asc" };
       }
       return { field, dir: field === "student" || field === "nextSessionDate" ? "asc" : "desc" };
     });
-  }
+  }, []);
 
-  function toggleStudentSelection(studentKey: string) {
+  const toggleStudentSelection = useCallback((studentKey: string) => {
     setSelectedKeys((current) =>
       current.includes(studentKey)
         ? current.filter((item) => item !== studentKey)
         : [...current, studentKey],
     );
-  }
+  }, []);
 
-  function toggleAllVisible() {
+  const toggleAllVisible = useCallback(() => {
     setSelectedKeys((current) =>
       visibleSelectedRows.length === sortedQueue.length
         ? current.filter((key) => !sortedQueue.some((row) => row.studentKey === key))
         : Array.from(new Set([...current, ...sortedQueue.map((row) => row.studentKey)])),
     );
-  }
+  }, [sortedQueue, visibleSelectedRows]);
 
-  function openStudent(studentKey: string) {
+  const openStudent = useCallback((studentKey: string) => {
     setSelectedStudentKey(studentKey);
     queuePanelRef.current?.scrollToStudent(studentKey);
-  }
+  }, []);
 
   function openStudentByIndex(studentIndex: number) {
     const student = data?.students[studentIndex];
@@ -928,7 +947,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
                   selectedStudentKey={selectedStudent?.studentKey ?? ""}
                   onSelectStudent={openStudent}
                   onToggleSelection={toggleStudentSelection}
-                  selectedKeys={selectedKeys}
+                  selectedKeySet={selectedKeySet}
                   currentSort={currentSort}
                   onToggleSort={toggleSort}
                   submitting={submitting}
