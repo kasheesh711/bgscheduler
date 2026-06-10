@@ -422,7 +422,10 @@ export function PackagesTab({ dimensions, loading, from, to, seed, active = true
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-semibold">Hours distribution</h2>
-                  <p className="text-xs text-muted-foreground">Package sales by hours band in the selected period</p>
+                  <p className="text-xs text-muted-foreground">
+                    Package sales by hours band in the selected period (month grain — boundary months
+                    count whole; the transactions drill filters by exact dates)
+                  </p>
                 </div>
                 <div className="flex items-center gap-0.5 rounded-md border p-0.5">
                   <Button

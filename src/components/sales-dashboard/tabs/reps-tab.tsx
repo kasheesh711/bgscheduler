@@ -372,7 +372,8 @@ export function RepsTab({ dimensions, loading, from, to, seed, active = true }: 
         <div>
           <h2 className="text-sm font-semibold">Sales Reps</h2>
           <p className="text-xs text-muted-foreground">
-            Range-scoped per-rep breakdown. Additional-revenue rows are excluded from rep groupings.
+            Range-scoped per-rep breakdown (month grain — boundary months count whole; the transactions
+            drill filters by exact dates). Additional-revenue rows are excluded from rep groupings.
           </p>
         </div>
         {rangeMonthCount > 0 ? (
