@@ -1908,6 +1908,26 @@ export const lineOaResolverRows = pgTable("line_oa_resolver_rows", {
   index("line_oa_resolver_rows_line_user_idx").on(table.lineUserId),
 ]);
 
+export const lineBacklogRecoverySyncRuns = pgTable("line_backlog_recovery_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  triggerType: text("trigger_type").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  followerCount: integer("follower_count").notNull().default(0),
+  targetsCount: integer("targets_count").notNull().default(0),
+  matchedCount: integer("matched_count").notNull().default(0),
+  insertedCount: integer("inserted_count").notNull().default(0),
+  dryRun: boolean("dry_run").notNull().default(false),
+  errorSummary: text("error_summary"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+}, (table) => [
+  uniqueIndex("line_backlog_recovery_sync_runs_single_running_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'running'`),
+  index("line_backlog_recovery_sync_runs_status_started_idx").on(table.status, table.startedAt),
+]);
+
 // ── Data Issues ─────────────────────────────────────────────────────────
 
 export const dataIssues = pgTable("data_issues", {

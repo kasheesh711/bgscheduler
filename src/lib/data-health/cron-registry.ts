@@ -11,7 +11,8 @@ export type CronJobKey =
   | "classroom_morning"
   | "classroom_admin_email"
   | "student_promotions_july_1"
-  | "room_utilization";
+  | "room_utilization"
+  | "line_backlog_recovery";
 
 export interface CronJobDefinition {
   key: CronJobKey;
@@ -202,6 +203,21 @@ export const CRON_JOBS = [
     dangerous: false,
     confirmationLabel: null,
     routeMethod: "POST",
+  },
+  {
+    key: "line_backlog_recovery",
+    label: "LINE Backlog Recovery",
+    feature: "LINE Integration",
+    path: "/api/internal/line-backlog-recovery",
+    schedule: null,
+    cadenceLabel: "Manual only",
+    cadenceMinutes: null,
+    lateAfterMinutes: 0,
+    maxDurationSeconds: 300,
+    manualOnly: true,
+    dangerous: false,
+    confirmationLabel: null,
+    routeMethod: "GET",
   },
 ] as const satisfies readonly CronJobDefinition[];
 
