@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
-import Chart from "chart.js/auto";
+import { useMemo } from "react";
 import type { ChartConfiguration } from "chart.js";
 import {
   AlertTriangle,
@@ -15,6 +14,8 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ChartCanvas } from "@/components/sales-dashboard/chart-canvas";
+import { formatCurrency, formatPercent } from "@/lib/sales-dashboard/format";
 import {
   buildGmDashboardInsights,
   type GmDashboardInsights,
@@ -602,36 +603,3 @@ function InsightRows({
   );
 }
 
-function ChartCanvas({ config, className }: { config: ChartConfiguration; className?: string }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  useEffect(() => {
-    if (!canvasRef.current) return;
-    const chart = new Chart(canvasRef.current, config);
-    return () => chart.destroy();
-  }, [config]);
-
-  return (
-    <div className={cn("relative min-h-0 flex-1", className)}>
-      <canvas ref={canvasRef} />
-    </div>
-  );
-}
-
-function formatCurrency(value: number, compact = false): string {
-  const rounded = Math.round(value);
-  if (compact && Math.abs(rounded) >= 1_000_000) {
-    return `฿${(rounded / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 2 })}M`;
-  }
-  if (compact && Math.abs(rounded) >= 1_000) {
-    return `฿${Math.round(rounded / 1_000).toLocaleString("en-US")}k`;
-  }
-  if (Math.abs(rounded) >= 1_000_000) {
-    return `฿${(rounded / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 2 })}M`;
-  }
-  return `฿${rounded.toLocaleString("en-US")}`;
-}
-
-function formatPercent(value: number): string {
-  return `${Math.round(value * 100)}%`;
-}
