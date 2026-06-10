@@ -465,12 +465,30 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   async function handleMarkInactive(student: StudentRecord) {
     if (!data) return;
 
+    // Re-entry guard: until the reconcile lands, the student stays reachable
+    // through the calendar/detail pane (`students` and `calendar` are left
+    // untouched by the optimistic removal). A second mark would capture empty
+    // worklist rows and the server would 404 on the already-removed student —
+    // whose error revert would then drop them from both lists.
+    if (data.inactiveStudents?.some((item) => item.studentKey === student.studentKey)) {
+      setToast({
+        message: `${student.student} is already marked as no longer active.`,
+        tone: "success",
+      });
+      return;
+    }
+
     // Optimistic removal: drop the student from the worklist immediately and
     // list them as removed; the background refresh reconciles calendar/detail
     // data with the server (see removeStudentFromWorklist for why `students`
     // and `calendar` stay untouched until then).
     const entry = buildOptimisticInactiveEntry(student, new Date().toISOString());
-    removedRowsRef.current.set(student.studentKey, captureWorklistRows(data, student.studentKey));
+    const captured = captureWorklistRows(data, student.studentKey);
+    // Defensive: never clobber a previous capture with empty rows — the rows
+    // only exist in the payload before the first optimistic removal.
+    if (captured.queueRow || captured.queueAllRow || !removedRowsRef.current.has(student.studentKey)) {
+      removedRowsRef.current.set(student.studentKey, captured);
+    }
     setData((current) =>
       current ? removeStudentFromWorklist(current, student.studentKey, entry) : current,
     );
@@ -498,17 +516,20 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
       });
       void loadDashboard("refresh", { force: true });
     } catch (err) {
-      // Revert the optimistic removal and re-select the student.
+      // Revert the optimistic removal; only re-select the student when the
+      // user has not moved their selection on in the meantime.
       const removed = removedRowsRef.current.get(student.studentKey) ?? null;
       removedRowsRef.current.delete(student.studentKey);
       setData((current) =>
         current ? restoreStudentToWorklist(current, student.studentKey, removed) : current,
       );
-      setSelectedStudentKey(student.studentKey);
+      setSelectedStudentKey((current) => (current === "" ? student.studentKey : current));
       setToast({
         message: err instanceof Error ? err.message : "Failed to mark inactive.",
         tone: "error",
       });
+      // Reconcile with server truth (e.g. another admin removed them first).
+      void loadDashboard("refresh", { force: true });
     } finally {
       setSubmitting(false);
     }
