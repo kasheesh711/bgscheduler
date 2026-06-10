@@ -1,4 +1,5 @@
-import { addDaysIso, currentBangkokDate, dayOfWeekShort } from "./dates";
+import { currentBangkokDate, dayOfWeekShort } from "./dates";
+import { decisionDateFor, findConversion } from "./cohorts";
 import type {
   ParsedAdditionalSaleRow,
   ParsedNormalSaleRow,
@@ -159,7 +160,7 @@ function buildTrialCohort(rows: ParsedNormalSaleRow[]): SalesTrialCohortEntry[] 
     const sorted = [...items].sort((left, right) => left.paymentDate.localeCompare(right.paymentDate) || left.rowNumber - right.rowNumber);
     const firstTrial = sorted.find((row) => row.enrollmentType === "Trial");
     if (!firstTrial) continue;
-    const converted = sorted.find((row) => row.enrollmentType === "New Student" && row.paymentDate > firstTrial.paymentDate);
+    const converted = findConversion(sorted, firstTrial.paymentDate);
     cohort.push({
       nick,
       trialDate: firstTrial.paymentDate,
@@ -182,7 +183,7 @@ function buildRetentionCohort(rows: ParsedNormalSaleRow[]): SalesRetentionCohort
     const sorted = [...items].sort((left, right) => left.paymentDate.localeCompare(right.paymentDate) || left.rowNumber - right.rowNumber);
     for (const row of sorted) {
       if (!row.validUntil) continue;
-      const decisionDate = addDaysIso(row.validUntil, 14);
+      const decisionDate = decisionDateFor(row.validUntil);
       const renewed = sorted.find((candidate) => candidate.paymentDate > decisionDate);
       cohort.push({
         nick,
