@@ -235,10 +235,12 @@ export function RepsTab({ dimensions, loading, from, to, seed, active = true }: 
   const [trackedUrlRep, setTrackedUrlRep] = useState(urlRep);
 
   // Follow back/forward navigation: adopt ?rep= when it changes underneath us
-  // (sanctioned derived-state adjustment, mirrors workspace-tabs).
+  // (sanctioned derived-state adjustment, mirrors workspace-tabs). An absent
+  // param restores the default selection (top of the rail) so the URL and the
+  // view never desync.
   if (urlRep !== trackedUrlRep) {
     setTrackedUrlRep(urlRep);
-    if (urlRep) setSelectedKey(repKeyOf(urlRep));
+    setSelectedKey(urlRep ? repKeyOf(urlRep) : null);
   }
 
   // Consume GM cross-link seeds: any display variant resolves via repKeyOf.
