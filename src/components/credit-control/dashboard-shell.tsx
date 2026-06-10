@@ -4,6 +4,14 @@ import { CircleHelp, LogOut, RefreshCw, Search, X } from "lucide-react";
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import { formatShortTimestamp } from "@/lib/credit-control/helpers";
+import {
+  buildOptimisticInactiveEntry,
+  captureWorklistRows,
+  patchActionStateInPayload,
+  removeStudentFromWorklist,
+  restoreStudentToWorklist,
+} from "@/lib/credit-control/payload-patch";
+import type { RemovedQueueRows } from "@/lib/credit-control/payload-patch";
 import type {
   AppSessionUser,
   DashboardPayload,
@@ -88,6 +96,10 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   useEffect(() => {
     dataRef.current = data;
   }, [data]);
+
+  // Worklist rows captured at optimistic removal so undo/restore can re-insert
+  // them instantly (keyed by studentKey; cleared on successful restore).
+  const removedRowsRef = useRef<Map<string, RemovedQueueRows>>(new Map());
 
   // ---------------------------------------------------------------------------
   // Data loading
@@ -333,18 +345,9 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   // ---------------------------------------------------------------------------
   const patchActionState = useCallback(
     (studentKey: string, actionState: StudentRecord["actionState"]) => {
-      setData((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          students: current.students.map((student) =>
-            student.studentKey === studentKey ? { ...student, actionState } : student,
-          ),
-          studentQueue: current.studentQueue.map((row) =>
-            row.studentKey === studentKey ? { ...row, actionState } : row,
-          ),
-        };
-      });
+      setData((current) =>
+        current ? patchActionStateInPayload(current, studentKey, actionState) : current,
+      );
     },
     [],
   );
@@ -421,7 +424,20 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   );
 
   async function handleMarkInactive(student: StudentRecord) {
+    if (!data) return;
+
+    // Optimistic removal: drop the student from the worklist immediately and
+    // list them as removed; the background refresh reconciles calendar/detail
+    // data with the server (see removeStudentFromWorklist for why `students`
+    // and `calendar` stay untouched until then).
+    const entry = buildOptimisticInactiveEntry(student, new Date().toISOString());
+    removedRowsRef.current.set(student.studentKey, captureWorklistRows(data, student.studentKey));
+    setData((current) =>
+      current ? removeStudentFromWorklist(current, student.studentKey, entry) : current,
+    );
+    setSelectedStudentKey("");
     setSubmitting(true);
+
     try {
       const response = await fetch("/api/credit-control/inactive", {
         method: "POST",
@@ -441,9 +457,15 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
           kind: "inactive",
         },
       });
-      setSelectedStudentKey("");
-      await loadDashboard("refresh");
+      void loadDashboard("refresh");
     } catch (err) {
+      // Revert the optimistic removal and re-select the student.
+      const removed = removedRowsRef.current.get(student.studentKey) ?? null;
+      removedRowsRef.current.delete(student.studentKey);
+      setData((current) =>
+        current ? restoreStudentToWorklist(current, student.studentKey, removed) : current,
+      );
+      setSelectedStudentKey(student.studentKey);
       setToast({
         message: err instanceof Error ? err.message : "Failed to mark inactive.",
         tone: "error",
@@ -454,7 +476,15 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   }
 
   async function restoreInactive(studentKey: string) {
+    const entry = data?.inactiveStudents?.find((item) => item.studentKey === studentKey) ?? null;
+    const removed = removedRowsRef.current.get(studentKey) ?? null;
+
+    // Optimistic restore: drop the removed-list entry now and re-insert the
+    // worklist rows when this session still holds them (undo path); otherwise
+    // the background refresh re-adds the rows.
+    setData((current) => (current ? restoreStudentToWorklist(current, studentKey, removed) : current));
     setSubmitting(true);
+
     try {
       const response = await fetch("/api/credit-control/inactive", {
         method: "DELETE",
@@ -464,9 +494,16 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
       if (!response.ok) {
         throw new Error(`Failed to restore (${response.status})`);
       }
+      removedRowsRef.current.delete(studentKey);
       setToast({ message: "Student restored to the worklist.", tone: "success" });
-      await loadDashboard("refresh");
+      void loadDashboard("refresh");
     } catch (err) {
+      // Revert: hide the student again and re-list them as removed.
+      if (entry) {
+        setData((current) =>
+          current ? removeStudentFromWorklist(current, studentKey, entry) : current,
+        );
+      }
       setToast({
         message: err instanceof Error ? err.message : "Failed to restore.",
         tone: "error",
