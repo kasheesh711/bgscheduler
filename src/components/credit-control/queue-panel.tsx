@@ -177,6 +177,13 @@ export const QueuePanel = React.memo(
       flashRow(pendingKey);
     });
 
+    // Grows the window by one step. Shared by the IntersectionObserver
+    // sentinel (scroll-driven) and the manual load-more button (keyboard and
+    // screen-reader users, who cannot rely on scroll-into-view growth).
+    const loadMoreRows = useCallback(() => {
+      setVisibleCount((current) => getNextWindowSize(current, displayQueueRef.current.length));
+    }, []);
+
     // "Load more" sentinel — grows the window when it becomes visible inside
     // the scroll container. Callback ref so layout swaps re-observe cleanly.
     const observerRef = useRef<IntersectionObserver | null>(null);
@@ -191,12 +198,12 @@ export const QueuePanel = React.memo(
       }
       const observer = new IntersectionObserver((entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
-          setVisibleCount((current) => getNextWindowSize(current, displayQueueRef.current.length));
+          loadMoreRows();
         }
       });
       observer.observe(node);
       observerRef.current = observer;
-    }, []);
+    }, [loadMoreRows]);
 
     const emptyState = (
       <div className="empty-state empty-state-styled">
@@ -241,7 +248,9 @@ export const QueuePanel = React.memo(
                 ))}
                 {hasMoreRows ? (
                   <div className="queue-sentinel" ref={sentinelRef}>
-                    Loading more…
+                    <button className="ghost-button" onClick={loadMoreRows} type="button">
+                      Show more ({windowedQueue.length} of {displayQueue.length})
+                    </button>
                   </div>
                 ) : null}
               </>
@@ -291,7 +300,9 @@ export const QueuePanel = React.memo(
                   {hasMoreRows ? (
                     <tr className="queue-sentinel-row">
                       <td className="queue-sentinel" colSpan={6} ref={sentinelRef}>
-                        Loading more…
+                        <button className="ghost-button" onClick={loadMoreRows} type="button">
+                          Show more ({windowedQueue.length} of {displayQueue.length})
+                        </button>
                       </td>
                     </tr>
                   ) : null}
@@ -542,10 +553,15 @@ function SortableHeader({
   const arrow = !isActive ? "↕" : currentSort.dir === "asc" ? "↑" : "↓";
 
   return (
-    <th className="sortable" onClick={() => onSort(field)}>
-      <span className="sort-label">
-        {label} <span>{arrow}</span>
-      </span>
+    <th
+      aria-sort={isActive ? (currentSort.dir === "asc" ? "ascending" : "descending") : "none"}
+      className="sortable"
+    >
+      <button className="sort-button" onClick={() => onSort(field)} type="button">
+        <span className="sort-label">
+          {label} <span aria-hidden="true">{arrow}</span>
+        </span>
+      </button>
     </th>
   );
 }

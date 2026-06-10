@@ -122,6 +122,16 @@ describe("QueuePanel windowing", () => {
     expect(markup).toContain("queue-sentinel");
   });
 
+  it("renders the sentinel as a manual load-more button with progress counts", () => {
+    const markup = renderPanel(makeRows(QUEUE_WINDOW_INITIAL + 40));
+
+    // Keyboard and screen-reader users get a real button — scroll-driven
+    // IntersectionObserver growth is not their only path to the hidden rows.
+    expect(markup).toContain(
+      `Show more (${QUEUE_WINDOW_INITIAL} of ${QUEUE_WINDOW_INITIAL + 40})`,
+    );
+  });
+
   it("still reports the full filtered count in the header while windowed", () => {
     const markup = renderPanel(makeRows(QUEUE_WINDOW_INITIAL + 40));
     expect(markup).toContain(`${QUEUE_WINDOW_INITIAL + 40} students`);
@@ -183,5 +193,26 @@ describe("QueuePanel selection and row state", () => {
 
     expect(markup).toContain("is-active");
     expect(markup).toContain("row-optimistic");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sortable headers
+// ---------------------------------------------------------------------------
+
+describe("QueuePanel sortable headers", () => {
+  it("announces the active sort via aria-sort and renders inactive headers as none", () => {
+    const markup = renderPanel(makeRows(3), {
+      currentSort: { field: "student", dir: "asc" },
+    });
+
+    expect(markup).toContain('aria-sort="ascending"');
+    // The two other sortable columns (Actual, Next) are not sorted.
+    expect((markup.match(/aria-sort="none"/g) ?? []).length).toBe(2);
+  });
+
+  it("exposes each sortable header as a real button", () => {
+    const markup = renderPanel(makeRows(3));
+    expect((markup.match(/class="sort-button"/g) ?? []).length).toBe(3);
   });
 });

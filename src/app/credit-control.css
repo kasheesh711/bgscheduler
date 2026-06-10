@@ -624,6 +624,19 @@ html[data-theme="dark"] .dashboard-page .skeleton-panel::after {
   user-select: none;
 }
 
+/* A11Y: sortable headers are real buttons (keyboard + SR operable, aria-sort
+   on the th). The button inherits the header cell's typography. */
+.sort-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
 .sort-label {
   display: inline-flex;
   align-items: center;
