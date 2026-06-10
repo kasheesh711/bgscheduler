@@ -7,6 +7,7 @@ import {
   buildWatchdogEmail,
   runCronWatchdog,
   sweepCronJobs,
+  SWEEP_LOCK_KEY,
   type CronAlertStateRow,
 } from "@/lib/internal/cron-watchdog";
 
@@ -67,6 +68,9 @@ interface FakeDbState {
   adminEmails: string[];
   alertStates: CronAlertStateRow[];
   alertStateTableError: Error | null;
+  lockAvailable: boolean;
+  lockClaims: Array<Record<string, unknown>>;
+  lockReleases: Array<Record<string, unknown>>;
   upserts: Array<{ values: Record<string, unknown>; set: Record<string, unknown> }>;
   updates: Array<Record<string, unknown>>;
 }
@@ -76,6 +80,9 @@ function freshState(overrides: Partial<FakeDbState> = {}): FakeDbState {
     adminEmails: ["a@x.com", "b@x.com"],
     alertStates: [],
     alertStateTableError: null,
+    lockAvailable: true,
+    lockClaims: [],
+    lockReleases: [],
     upserts: [],
     updates: [],
     ...overrides,
@@ -133,10 +140,24 @@ function makeFakeDb(state: FakeDbState): Database {
         values(values: Record<string, unknown>) {
           return {
             onConflictDoUpdate(config: { set: Record<string, unknown> }) {
-              if (table === schema.cronAlertState) {
+              const isLockClaim = values.jobKey === SWEEP_LOCK_KEY;
+              if (table === schema.cronAlertState && !isLockClaim) {
                 state.upserts.push({ values, set: config.set });
               }
-              return Promise.resolve([]);
+              return {
+                // Lock claims call .returning(); a row back means we won it.
+                returning() {
+                  if (state.alertStateTableError) {
+                    return Promise.reject(state.alertStateTableError);
+                  }
+                  if (isLockClaim) state.lockClaims.push(values);
+                  return Promise.resolve(state.lockAvailable ? [{ jobKey: values.jobKey }] : []);
+                },
+                // Episode upserts await the builder directly.
+                then(resolve: (value: unknown[]) => unknown, reject: (reason: unknown) => unknown) {
+                  return Promise.resolve([]).then(resolve, reject);
+                },
+              };
             },
           };
         },
@@ -148,7 +169,11 @@ function makeFakeDb(state: FakeDbState): Database {
           return {
             where() {
               if (table === schema.cronAlertState) {
-                state.updates.push(values);
+                if (values.lastStatus === "released") {
+                  state.lockReleases.push(values);
+                } else {
+                  state.updates.push(values);
+                }
               }
               return Promise.resolve([]);
             },
@@ -468,6 +493,43 @@ describe("runCronWatchdog", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it("claims the sweep lock before alerting and releases it afterwards", async () => {
+    const state = freshState();
+    const sender = makeSender();
+    await runCronWatchdog(makeFakeDb(state), {
+      now: NOW,
+      sender,
+      loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "failing" })]),
+    });
+
+    expect(state.lockClaims).toHaveLength(1);
+    expect(state.lockClaims[0]).toMatchObject({
+      jobKey: SWEEP_LOCK_KEY,
+      lastStatus: "running",
+      lastAlertOutcome: "sweep_lock",
+    });
+    expect(state.lockReleases).toHaveLength(1);
+    expect(state.lockReleases[0]).toMatchObject({ lastStatus: "released" });
+    // The sentinel never leaks into episode bookkeeping.
+    expect(state.upserts.map((upsert) => upsert.values.jobKey)).toEqual(["wise_snapshot"]);
+  });
+
+  it("skips the sweep without emailing when another sweep holds the lock", async () => {
+    const state = freshState({ lockAvailable: false });
+    const sender = makeSender();
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: NOW,
+      sender,
+      loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "failing" })]),
+    });
+
+    expect(result).toMatchObject({ checked: 1, unhealthy: 1, alertsSent: 0, recoveries: 0 });
+    expect(result.skippedReason).toBe("another sweep is in flight");
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+    expect(state.upserts).toEqual([]);
+    expect(state.lockReleases).toEqual([]);
   });
 
   it("fails safe without alert spam when cron_alert_state does not exist yet (drizzle-wrapped error)", async () => {

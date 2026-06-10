@@ -8,7 +8,7 @@
 // is only written after at least one recipient accepted the email, so a
 // failed delivery is retried on the next sweep instead of silently dropped.
 
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import {
@@ -23,6 +23,17 @@ export type CronAlertStateRow = typeof schema.cronAlertState.$inferSelect;
 
 /** The watchdog's own registry key; it never alerts about itself flapping. */
 export const WATCHDOG_JOB_KEY = "cron_watchdog";
+
+/**
+ * Sentinel cron_alert_state row used as a single-flight sweep lock (the
+ * watchdog has no *_sync_runs table to carry a `running`-row guard, and
+ * neon-http supports neither transactions nor session advisory locks).
+ * Never matches a registry job key, so it is invisible to classification.
+ */
+export const SWEEP_LOCK_KEY = "__watchdog_sweep_lock";
+
+/** A crashed sweep's lock is reclaimable after route maxDuration (300s) + buffer. */
+const SWEEP_LOCK_STALE_MS = 6 * 60 * 1000;
 
 const ALERTABLE_STATUSES: ReadonlySet<CronJobStatus> = new Set(["failing", "late", "unknown"]);
 
@@ -196,15 +207,73 @@ function isMissingAlertStateTable(error: unknown): boolean {
 }
 
 /**
+ * Atomically claim the single-flight sweep lock in one conditional upsert:
+ * the INSERT takes the lock when no sentinel row exists, the DO UPDATE only
+ * fires when the previous holder released it or went stale, and RETURNING
+ * reports whether either path won. Concurrent sweeps therefore cannot both
+ * read alert state before one of them writes it (duplicate alert emails).
+ */
+async function claimSweepLock(db: Database, now: Date): Promise<boolean> {
+  const staleBefore = new Date(now.getTime() - SWEEP_LOCK_STALE_MS);
+  const token = `sweep:${now.toISOString()}`;
+  const claimed = await db
+    .insert(schema.cronAlertState)
+    .values({
+      jobKey: SWEEP_LOCK_KEY,
+      episodeKey: token,
+      lastStatus: "running",
+      lastAlertOutcome: "sweep_lock",
+      lastAlertedAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: schema.cronAlertState.jobKey,
+      set: {
+        episodeKey: token,
+        lastStatus: "running",
+        lastAlertedAt: now,
+        updatedAt: now,
+      },
+      setWhere: sql`${schema.cronAlertState.lastStatus} <> 'running' OR ${schema.cronAlertState.updatedAt} < ${staleBefore}`,
+    })
+    .returning({ jobKey: schema.cronAlertState.jobKey });
+  return claimed.length > 0;
+}
+
+/** Release only our own claim (episodeKey match guards stale-reclaim races). */
+async function releaseSweepLock(db: Database, now: Date): Promise<void> {
+  const token = `sweep:${now.toISOString()}`;
+  try {
+    await db
+      .update(schema.cronAlertState)
+      .set({ lastStatus: "released", updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.cronAlertState.jobKey, SWEEP_LOCK_KEY),
+          eq(schema.cronAlertState.episodeKey, token),
+        ),
+      );
+  } catch (error) {
+    // Never mask the sweep's own outcome; a stuck lock self-heals via the
+    // stale window on the next claim.
+    console.error("Cron watchdog failed to release the sweep lock", error);
+  }
+}
+
+/**
  * Run one watchdog sweep.
  *
  * 1. Load every job's health via the shared /data-health derivation.
- * 2. Load persisted alert state; if the table is missing, fail safe with no
- *    alerting (un-deduped alerts every sweep would be spam).
- * 3. Classify new alert episodes and recoveries against that state.
- * 4. If anything changed, email the digest to all admin_users recipients.
+ * 2. Claim the single-flight sweep lock; if the cron_alert_state table is
+ *    missing, fail safe with no alerting (un-deduped alerts every sweep
+ *    would be spam); if another sweep holds the lock, skip this one.
+ * 3. Load persisted alert state and classify new alert episodes and
+ *    recoveries against it.
+ * 4. If anything changed, email the digest to all full-access admin_users
+ *    recipients.
  * 5. Persist episode state only after at least one delivery succeeded, so a
  *    total delivery failure is retried on the next sweep.
+ * 6. Release the lock.
  *
  * @returns counts for the route's JSON summary.
  */
@@ -215,9 +284,9 @@ export async function runCronWatchdog(
   const now = options.now ?? new Date();
   const jobs = await (options.loadJobs ?? getCronJobsHealth)(now);
 
-  let states: CronAlertStateRow[];
+  let lockClaimed: boolean;
   try {
-    states = await db.select().from(schema.cronAlertState);
+    lockClaimed = await claimSweepLock(db, now);
   } catch (error) {
     if (!isMissingAlertStateTable(error)) throw error;
     console.error(
@@ -233,6 +302,34 @@ export async function runCronWatchdog(
       skippedReason: "cron_alert_state table unavailable",
     };
   }
+
+  if (!lockClaimed) {
+    const sweep = sweepCronJobs({ jobs, states: [] });
+    return {
+      checked: sweep.checked.length,
+      unhealthy: sweep.unhealthy.length,
+      alertsSent: 0,
+      recoveries: 0,
+      emailRecipients: 0,
+      skippedReason: "another sweep is in flight",
+    };
+  }
+
+  try {
+    return await runLockedSweep(db, now, jobs, options);
+  } finally {
+    await releaseSweepLock(db, now);
+  }
+}
+
+async function runLockedSweep(
+  db: Database,
+  now: Date,
+  jobs: CronJobHealth[],
+  options: RunCronWatchdogOptions,
+): Promise<CronWatchdogSummary> {
+  const allStates = await db.select().from(schema.cronAlertState);
+  const states = allStates.filter((state) => state.jobKey !== SWEEP_LOCK_KEY);
 
   const sweep = sweepCronJobs({ jobs, states });
   const base = { checked: sweep.checked.length, unhealthy: sweep.unhealthy.length };
