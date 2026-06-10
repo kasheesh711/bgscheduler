@@ -446,7 +446,14 @@ export function PackagesTab({ dimensions, loading, from, to, seed, active = true
                   </Button>
                 </div>
               </div>
-              {histogramConfig ? <ChartCanvas config={histogramConfig} className="mt-4" active={active} /> : null}
+              {histogramConfig ? (
+                <ChartCanvas
+                  config={histogramConfig}
+                  className="mt-4"
+                  active={active}
+                  ariaLabel={histogramMode === "count" ? "Packages sold by hours band" : "Package revenue by hours band"}
+                />
+              ) : null}
             </section>
 
             {/* 100%-stacked monthly mix shift */}
@@ -462,7 +469,14 @@ export function PackagesTab({ dimensions, loading, from, to, seed, active = true
                   ))}
                 </div>
               </div>
-              {mixShiftConfig ? <ChartCanvas config={mixShiftConfig} className="mt-4" active={active} /> : null}
+              {mixShiftConfig ? (
+                <ChartCanvas
+                  config={mixShiftConfig}
+                  className="mt-4"
+                  active={active}
+                  ariaLabel="Each band's share of monthly package revenue"
+                />
+              ) : null}
             </section>
           </div>
 

@@ -45,6 +45,11 @@ interface ChartCanvasProps {
   config: ChartConfiguration;
   className?: string;
   /**
+   * Accessible name for the chart — Chart.js canvases are opaque to screen
+   * readers, so the wrapper is exposed as role="img" when a label is given.
+   */
+  ariaLabel?: string;
+  /**
    * Whether the surrounding tab panel is currently visible. Chart.js cannot
    * size itself inside a hidden panel, so the chart is resized whenever the
    * panel is re-activated.
@@ -52,7 +57,7 @@ interface ChartCanvasProps {
   active?: boolean;
 }
 
-export function ChartCanvas({ config, className, active = true }: ChartCanvasProps) {
+export function ChartCanvas({ config, className, ariaLabel, active = true }: ChartCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartRef = useRef<Chart | null>(null);
 
@@ -71,7 +76,11 @@ export function ChartCanvas({ config, className, active = true }: ChartCanvasPro
   }, [active]);
 
   return (
-    <div className={cn("relative min-h-0 flex-1", className)}>
+    <div
+      className={cn("relative min-h-0 flex-1", className)}
+      role={ariaLabel ? "img" : undefined}
+      aria-label={ariaLabel}
+    >
       <canvas ref={canvasRef} />
     </div>
   );

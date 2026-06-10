@@ -273,7 +273,12 @@ function RevenueTrendPanel({ rows, active }: { rows: MonthlyRevenueInsight[]; ac
           <LegendDot color="#E8712B" label="Additional" />
         </div>
       </div>
-      <ChartCanvas config={config} className="mt-4" active={active} />
+      <ChartCanvas
+        config={config}
+        className="mt-4"
+        active={active}
+        ariaLabel="Monthly revenue trend by new, renewal, trial, and additional sales"
+      />
     </section>
   );
 }
@@ -388,7 +393,12 @@ function ActualVsProjectionPanel({
             <LegendDot color="#0EA5E9" label="Base projection" />
             <LegendDot color="rgba(14, 165, 233, 0.25)" label="Bear/Bull range" />
           </div>
-          <ChartCanvas config={config} className="mt-4" active={active} />
+          <ChartCanvas
+            config={config}
+            className="mt-4"
+            active={active}
+            ariaLabel="Actual normal sales vs Bear, Base, and Bull projections by month"
+          />
         </>
       )}
     </section>

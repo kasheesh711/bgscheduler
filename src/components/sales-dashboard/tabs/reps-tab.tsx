@@ -512,7 +512,12 @@ export function RepsTab({ dimensions, loading, from, to, seed, active = true }: 
                     <LegendDot colorVar="var(--chart-2)" label="Renewal" />
                   </div>
                 </div>
-                <ChartCanvas config={trendConfig} active={active} className="mt-3" />
+                <ChartCanvas
+                  config={trendConfig}
+                  active={active}
+                  className="mt-3"
+                  ariaLabel={`Monthly trial, new-student, and renewal revenue for ${selectedDisplayName}`}
+                />
               </div>
             ) : null}
 

@@ -448,7 +448,12 @@ export function ProgramsTab({ dimensions, loading, from, to, seed, active = true
                 </span>
               ))}
             </div>
-            <ChartCanvas config={chartConfig} className="mt-3" active={active} />
+            <ChartCanvas
+              config={chartConfig}
+              className="mt-3"
+              active={active}
+              ariaLabel="Monthly revenue stacked by program"
+            />
           </section>
 
           <section className="rounded-lg border bg-card shadow-sm">
