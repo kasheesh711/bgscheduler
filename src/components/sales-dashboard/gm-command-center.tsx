@@ -24,16 +24,19 @@ import {
   type MonthlyRevenueInsight,
   type SalesTeamInsightRow,
 } from "@/lib/sales-dashboard/gm-insights";
-import type { SalesDashboardPayload } from "@/lib/sales-dashboard/types";
+import { parsePackageHours } from "@/lib/sales-dashboard/package-hours";
+import type { ExploreSeed, SalesDashboardPayload } from "@/lib/sales-dashboard/types";
 import { cn } from "@/lib/utils";
 
 interface SalesDashboardCommandCenterProps {
   data: SalesDashboardPayload;
   from: string;
   to: string;
+  /** Cross-link hook: clicking a rep / program / package row seeds the matching workspace tab. */
+  onExplore?: (seed: ExploreSeed) => void;
 }
 
-export function SalesDashboardCommandCenter({ data, from, to }: SalesDashboardCommandCenterProps) {
+export function SalesDashboardCommandCenter({ data, from, to, onExplore }: SalesDashboardCommandCenterProps) {
   const insights = useMemo(() => buildGmDashboardInsights(data, { from, to }), [data, from, to]);
 
   return (
@@ -47,10 +50,10 @@ export function SalesDashboardCommandCenter({ data, from, to }: SalesDashboardCo
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(520px,0.95fr)]">
         <RevenueTrendPanel rows={insights.monthlyRevenue} />
-        <SalesTeamTable rows={insights.salesTeam} />
+        <SalesTeamTable rows={insights.salesTeam} onExplore={onExplore} />
       </div>
 
-      <InsightsPanel insights={insights} />
+      <InsightsPanel insights={insights} onExplore={onExplore} />
     </div>
   );
 }
@@ -392,7 +395,13 @@ function LegendDot({ color, label }: { color: string; label: string }) {
   );
 }
 
-function SalesTeamTable({ rows }: { rows: SalesTeamInsightRow[] }) {
+function SalesTeamTable({
+  rows,
+  onExplore,
+}: {
+  rows: SalesTeamInsightRow[];
+  onExplore?: (seed: ExploreSeed) => void;
+}) {
   const maxRevenue = rows[0]?.revenue || 1;
 
   return (
@@ -400,7 +409,10 @@ function SalesTeamTable({ rows }: { rows: SalesTeamInsightRow[] }) {
       <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold">Sales Team</h2>
-          <p className="text-xs text-muted-foreground">Revenue quality, mix, and movement vs previous equivalent period</p>
+          <p className="text-xs text-muted-foreground">
+            Revenue quality, mix, and movement vs previous equivalent period
+            {onExplore ? " · click a rep to open the Reps tab" : ""}
+          </p>
         </div>
         <Users className="size-4 text-muted-foreground" />
       </div>
@@ -422,8 +434,15 @@ function SalesTeamTable({ rows }: { rows: SalesTeamInsightRow[] }) {
                 <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">No sales rep rows in this period.</td>
               </tr>
             ) : (
-              rows.slice(0, 10).map((row) => (
-                <tr key={row.name} className="border-b last:border-0">
+              rows.slice(0, 10).map((row) => {
+                const explorable = Boolean(onExplore && row.name);
+                return (
+                <tr
+                  key={row.name}
+                  className={cn("border-b last:border-0", explorable && "cursor-pointer transition-colors hover:bg-muted/50")}
+                  onClick={explorable ? () => onExplore!({ tab: "reps", rep: row.name }) : undefined}
+                  title={explorable ? `Explore ${row.name} in the Reps tab` : undefined}
+                >
                   <td className="px-4 py-3">
                     <div className="font-medium">{row.name || "Unassigned"}</div>
                     <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
@@ -441,7 +460,8 @@ function SalesTeamTable({ rows }: { rows: SalesTeamInsightRow[] }) {
                     <Delta value={row.deltaRevenue} pct={row.deltaPct} />
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>
@@ -477,13 +497,22 @@ function Delta({ value, pct }: { value: number; pct: number | null }) {
   );
 }
 
-function InsightsPanel({ insights }: { insights: GmDashboardInsights }) {
+function InsightsPanel({
+  insights,
+  onExplore,
+}: {
+  insights: GmDashboardInsights;
+  onExplore?: (seed: ExploreSeed) => void;
+}) {
   return (
     <section className="rounded-lg border bg-card p-4 shadow-sm">
       <div className="flex flex-col gap-3 border-b pb-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-sm font-semibold">Insights</h2>
-          <p className="text-xs text-muted-foreground">Compact drill-downs without adding more dashboard cards</p>
+          <p className="text-xs text-muted-foreground">
+            Compact drill-downs without adding more dashboard cards
+            {onExplore ? " · click a row to explore its tab" : ""}
+          </p>
         </div>
         <TrendingUp className="hidden size-4 text-muted-foreground sm:block" />
       </div>
@@ -494,10 +523,18 @@ function InsightsPanel({ insights }: { insights: GmDashboardInsights }) {
           <TabsTrigger value="payment">Payment concentration</TabsTrigger>
         </TabsList>
         <TabsContent value="program" className="pt-3">
-          <InsightRows rows={insights.programMix} empty="No program rows in this period." />
+          <InsightRows
+            rows={insights.programMix}
+            empty="No program rows in this period."
+            onSelect={onExplore ? (label) => onExplore({ tab: "programs", program: label }) : undefined}
+          />
         </TabsContent>
         <TabsContent value="package" className="pt-3">
-          <InsightRows rows={insights.packageMix} empty="No package rows in this period." />
+          <InsightRows
+            rows={insights.packageMix}
+            empty="No package rows in this period."
+            onSelect={onExplore ? (label) => onExplore({ tab: "packages", band: parsePackageHours(label).band }) : undefined}
+          />
         </TabsContent>
         <TabsContent value="payment" className="pt-3">
           <InsightRows rows={insights.paymentConcentration} empty="No payment rows in this period." showRevenue />
@@ -507,30 +544,60 @@ function InsightsPanel({ insights }: { insights: GmDashboardInsights }) {
   );
 }
 
-function InsightRows({ rows, empty, showRevenue = false }: { rows: MixInsightRow[]; empty: string; showRevenue?: boolean }) {
+function InsightRows({
+  rows,
+  empty,
+  showRevenue = false,
+  onSelect,
+}: {
+  rows: MixInsightRow[];
+  empty: string;
+  showRevenue?: boolean;
+  onSelect?: (label: string) => void;
+}) {
   const max = rows[0]?.count || 1;
   if (rows.length === 0) {
     return <div className="rounded-md border border-dashed px-3 py-8 text-center text-sm text-muted-foreground">{empty}</div>;
   }
   return (
     <div className="grid gap-x-6 gap-y-2 lg:grid-cols-2">
-      {rows.map((row) => (
-        <div key={row.label} className="grid grid-cols-[minmax(0,1fr)_76px] items-center gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center justify-between gap-3">
-              <span className="truncate text-sm font-medium">{row.label || "Unspecified"}</span>
-              <span className="text-xs text-muted-foreground">{formatPercent(row.share)}</span>
+      {rows.map((row) => {
+        const content = (
+          <>
+            <div className="min-w-0">
+              <div className="flex items-center justify-between gap-3">
+                <span className="truncate text-sm font-medium">{row.label || "Unspecified"}</span>
+                <span className="text-xs text-muted-foreground">{formatPercent(row.share)}</span>
+              </div>
+              <div className="mt-1 h-2 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-primary" style={{ width: `${Math.round((row.count / max) * 100)}%` }} />
+              </div>
             </div>
-            <div className="mt-1 h-2 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-primary" style={{ width: `${Math.round((row.count / max) * 100)}%` }} />
+            <div className="text-right text-xs text-muted-foreground">
+              <div className="font-medium text-foreground">{row.count} txn</div>
+              {showRevenue ? <div>{formatCurrency(row.revenue, true)}</div> : null}
             </div>
-          </div>
-          <div className="text-right text-xs text-muted-foreground">
-            <div className="font-medium text-foreground">{row.count} txn</div>
-            {showRevenue ? <div>{formatCurrency(row.revenue, true)}</div> : null}
-          </div>
-        </div>
-      ))}
+          </>
+        );
+        const rowClass = "grid grid-cols-[minmax(0,1fr)_76px] items-center gap-3";
+        if (!onSelect) {
+          return (
+            <div key={row.label} className={rowClass}>
+              {content}
+            </div>
+          );
+        }
+        return (
+          <button
+            key={row.label}
+            type="button"
+            onClick={() => onSelect(row.label)}
+            className={cn(rowClass, "-mx-1.5 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-muted/50")}
+          >
+            {content}
+          </button>
+        );
+      })}
     </div>
   );
 }

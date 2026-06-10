@@ -337,7 +337,7 @@ export function SalesDashboardShell() {
               ) : null}
 
               {data && hasSources && hasImportedRows ? (
-                <SalesDashboardCommandCenter data={data} from={from} to={to} />
+                <SalesDashboardCommandCenter data={data} from={from} to={to} onExplore={setExploreSeed} />
               ) : null}
             </>
           )}
