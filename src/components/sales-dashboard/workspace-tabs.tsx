@@ -40,8 +40,12 @@ function asWorkspaceTab(value: string | null): SalesWorkspaceTab {
 }
 
 interface WorkspaceTabsProps {
-  /** The existing Overview content (setup state + GM command center). */
-  overview: ReactNode;
+  /**
+   * The existing Overview content (setup state + GM command center). Render
+   * prop receiving whether the Overview tab is currently visible, so its
+   * keepMounted ChartCanvas instances can resize on re-activation.
+   */
+  overview: (active: boolean) => ReactNode;
   from: string;
   to: string;
   /** GM cross-link seed from the shell; consumed once on arrival. */
@@ -138,7 +142,7 @@ export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed }: Work
       ) : null}
 
       <TabsContent value="overview" keepMounted>
-        {overview}
+        {overview(activeTab === "overview")}
       </TabsContent>
 
       {(Object.keys(PANELS) as Array<keyof typeof PANELS>).map((tab) => {

@@ -318,7 +318,7 @@ export function SalesDashboardShell() {
           to={to}
           seed={exploreSeed}
           onSeedConsumed={() => setExploreSeed(null)}
-          overview={(
+          overview={(overviewActive) => (
             <>
               {!hasSources || !hasImportedRows ? (
                 <SalesDashboardSetupState
@@ -337,7 +337,13 @@ export function SalesDashboardShell() {
               ) : null}
 
               {data && hasSources && hasImportedRows ? (
-                <SalesDashboardCommandCenter data={data} from={from} to={to} onExplore={setExploreSeed} />
+                <SalesDashboardCommandCenter
+                  data={data}
+                  from={from}
+                  to={to}
+                  onExplore={setExploreSeed}
+                  active={overviewActive}
+                />
               ) : null}
             </>
           )}

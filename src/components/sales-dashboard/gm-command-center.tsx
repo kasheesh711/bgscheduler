@@ -35,9 +35,15 @@ interface SalesDashboardCommandCenterProps {
   to: string;
   /** Cross-link hook: clicking a rep / program / package row seeds the matching workspace tab. */
   onExplore?: (seed: ExploreSeed) => void;
+  /**
+   * Whether the Overview tab is currently visible — drives ChartCanvas
+   * resize-on-reactivation for the keepMounted (hidden) panel. Defaults to
+   * visible so standalone renders/tests need not pass it.
+   */
+  active?: boolean;
 }
 
-export function SalesDashboardCommandCenter({ data, from, to, onExplore }: SalesDashboardCommandCenterProps) {
+export function SalesDashboardCommandCenter({ data, from, to, onExplore, active = true }: SalesDashboardCommandCenterProps) {
   const insights = useMemo(() => buildGmDashboardInsights(data, { from, to }), [data, from, to]);
 
   return (
@@ -47,10 +53,10 @@ export function SalesDashboardCommandCenter({ data, from, to, onExplore }: Sales
         <ExceptionsRail exceptions={insights.exceptions} />
       </div>
 
-      <ActualVsProjectionPanel rows={insights.actualVsProjection} targetSource={insights.revenuePace.targetSource} />
+      <ActualVsProjectionPanel rows={insights.actualVsProjection} targetSource={insights.revenuePace.targetSource} active={active} />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(520px,0.95fr)]">
-        <RevenueTrendPanel rows={insights.monthlyRevenue} />
+        <RevenueTrendPanel rows={insights.monthlyRevenue} active={active} />
         <SalesTeamTable rows={insights.salesTeam} onExplore={onExplore} />
       </div>
 
@@ -219,7 +225,7 @@ function ExceptionRow({ item }: { item: GmException }) {
   );
 }
 
-function RevenueTrendPanel({ rows }: { rows: MonthlyRevenueInsight[] }) {
+function RevenueTrendPanel({ rows, active }: { rows: MonthlyRevenueInsight[]; active: boolean }) {
   const config = useMemo<ChartConfiguration>(() => ({
     type: "bar",
     data: {
@@ -267,7 +273,7 @@ function RevenueTrendPanel({ rows }: { rows: MonthlyRevenueInsight[] }) {
           <LegendDot color="#E8712B" label="Additional" />
         </div>
       </div>
-      <ChartCanvas config={config} className="mt-4" />
+      <ChartCanvas config={config} className="mt-4" active={active} />
     </section>
   );
 }
@@ -275,9 +281,11 @@ function RevenueTrendPanel({ rows }: { rows: MonthlyRevenueInsight[] }) {
 function ActualVsProjectionPanel({
   rows,
   targetSource,
+  active,
 }: {
   rows: ActualVsProjectionInsight[];
   targetSource: "projection" | "fallback";
+  active: boolean;
 }) {
   const config = useMemo<ChartConfiguration>(() => ({
     type: "bar",
@@ -380,7 +388,7 @@ function ActualVsProjectionPanel({
             <LegendDot color="#0EA5E9" label="Base projection" />
             <LegendDot color="rgba(14, 165, 233, 0.25)" label="Bear/Bull range" />
           </div>
-          <ChartCanvas config={config} className="mt-4" />
+          <ChartCanvas config={config} className="mt-4" active={active} />
         </>
       )}
     </section>
