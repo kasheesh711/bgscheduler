@@ -248,6 +248,26 @@ describe("ProgramsTab rendering", () => {
     expect(html).toContain("No program revenue in the selected period.");
   });
 
+  it("does not unlock MoM movement off an additional-only previous month", () => {
+    // dimensions.months says January exists (additional revenue only), but no
+    // program row carries that month — MoM must stay gated off.
+    const html = renderToStaticMarkup(
+      <ProgramsTab
+        dimensions={makeDimensions({
+          months: ["2026-01-01", "2026-02-01"],
+          programs: [
+            makeAgg({ program: "Math", month: "2026-02-01", rev: 50000, revN: 50000, count: 4, students: 4 }),
+          ],
+        })}
+        loading={false}
+        from="2026-02-01"
+        to="2026-02-28"
+      />,
+    );
+    expect(html).toContain("No previous month in the data for MoM movement");
+    expect(html).not.toContain("MoM compares");
+  });
+
   it("consumes an explore seed by opening the program detail with its transactions drill", () => {
     const html = renderToStaticMarkup(
       <ProgramsTab

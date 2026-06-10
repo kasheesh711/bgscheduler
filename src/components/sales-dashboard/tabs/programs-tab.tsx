@@ -47,7 +47,12 @@ export interface ProgramRangeOptions {
   from: string;
   to: string;
   includeTrials: boolean;
-  /** All months ("YYYY-MM-01") present in the live data — gates MoM comparability. */
+  /**
+   * Months ("YYYY-MM-01") with normal-row (program) data — gates MoM
+   * comparability. Must NOT include additional-only months (dimensions.months
+   * does), or a prior month with no program revenue would unlock fabricated
+   * deltas against a zero baseline.
+   */
   allMonths: string[];
 }
 
@@ -230,11 +235,18 @@ export function ProgramsTab({ dimensions, loading, from, to, seed, active = true
     if (seed.program) setSelectedProgram(seed.program);
   }
 
+  // Months with program (normal-row) data only — dimensions.months also
+  // contains additional-only months, which must not unlock MoM movement.
+  const programMonths = useMemo(
+    () => (dimensions ? [...new Set(dimensions.programs.map((agg) => agg.month))] : []),
+    [dimensions],
+  );
+
   const rows = useMemo(
     () => (dimensions
-      ? buildProgramTableRows(dimensions.programs, { from, to, includeTrials, allMonths: dimensions.months })
+      ? buildProgramTableRows(dimensions.programs, { from, to, includeTrials, allMonths: programMonths })
       : []),
-    [dimensions, from, to, includeTrials],
+    [dimensions, from, to, includeTrials, programMonths],
   );
   const sortedRows = useMemo(
     () => [...rows].sort((left, right) => compareProgramRows(left, right, sortKey, sortDirection)),
@@ -337,7 +349,7 @@ export function ProgramsTab({ dimensions, loading, from, to, seed, active = true
   const totalTxn = rows.reduce((sum, row) => sum + row.txn, 0);
   const latestMonth = monthly.months.at(-1) ?? null;
   const prevMonth = latestMonth ? previousMonthOf(latestMonth) : null;
-  const momComparable = prevMonth !== null && dimensions.months.includes(prevMonth);
+  const momComparable = prevMonth !== null && programMonths.includes(prevMonth);
   const colors = chartColors();
   const selectedRow = selectedProgram ? rows.find((row) => row.program === selectedProgram) ?? null : null;
 
