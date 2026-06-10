@@ -480,14 +480,26 @@ export function ProgramsTab({ dimensions, loading, from, to, seed, active = true
                     <TableRow
                       key={row.program}
                       onClick={() => setSelectedProgram((current) => (current === row.program ? null : row.program))}
-                      aria-selected={row.program === selectedProgram}
                       className={cn(
                         "cursor-pointer hover:bg-muted/50",
                         row.program === selectedProgram && "bg-primary/5",
                       )}
                     >
                       <TableCell className="pl-4">
-                        <div className="max-w-[220px] truncate font-medium">{row.program || "Unspecified"}</div>
+                        {/* Keyboard path for the row's select action — the row
+                            onClick is a pointer-only convenience target
+                            (aria-selected is invalid on plain-table rows). */}
+                        <button
+                          type="button"
+                          aria-pressed={row.program === selectedProgram}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedProgram((current) => (current === row.program ? null : row.program));
+                          }}
+                          className="block max-w-[220px] truncate text-left font-medium underline-offset-2 hover:underline focus-visible:underline"
+                        >
+                          {row.program || "Unspecified"}
+                        </button>
                         <div className="mt-1 h-1.5 max-w-[160px] overflow-hidden rounded-full bg-muted">
                           <div
                             className="h-full rounded-full bg-primary"

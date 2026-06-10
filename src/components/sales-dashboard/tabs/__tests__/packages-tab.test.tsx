@@ -280,7 +280,7 @@ describe("PackagesTab", () => {
       />,
     );
     expect(html).toContain("Clear filter");
-    expect(html).toContain("aria-selected=\"true\"");
+    expect(html).toContain("aria-pressed=\"true\"");
     expect(html).toContain("additional-revenue rows are excluded");
   });
 

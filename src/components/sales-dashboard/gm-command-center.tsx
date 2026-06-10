@@ -453,7 +453,22 @@ function SalesTeamTable({
                   title={explorable ? `Explore ${row.name} in the Reps tab` : undefined}
                 >
                   <td className="px-4 py-3">
-                    <div className="font-medium">{row.name || "Unassigned"}</div>
+                    {explorable ? (
+                      // Keyboard path for the row's explore action — the row
+                      // onClick is a pointer-only convenience target.
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onExplore!({ tab: "reps", rep: row.name });
+                        }}
+                        className="font-medium underline-offset-2 hover:underline focus-visible:underline"
+                      >
+                        {row.name}
+                      </button>
+                    ) : (
+                      <div className="font-medium">{row.name || "Unassigned"}</div>
+                    )}
                     <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
                       <div className="h-full rounded-full bg-primary" style={{ width: `${Math.round((row.revenue / maxRevenue) * 100)}%` }} />
                     </div>

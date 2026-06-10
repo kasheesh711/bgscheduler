@@ -497,17 +497,27 @@ export function PackagesTab({ dimensions, loading, from, to, seed, active = true
                     <TableRow
                       key={band.band}
                       className={cn("cursor-pointer hover:bg-muted/50", selected && "bg-muted/60 hover:bg-muted/60")}
-                      aria-selected={selected}
                       onClick={() => setSelectedBand(selected ? null : band.band)}
                     >
                       <TableCell className="pl-4 font-medium whitespace-nowrap">
-                        <span className="inline-flex items-center gap-2">
+                        {/* Keyboard path for the row's filter action — the row
+                            onClick is a pointer-only convenience target
+                            (aria-selected is invalid on plain-table rows). */}
+                        <button
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSelectedBand(selected ? null : band.band);
+                          }}
+                          className="inline-flex items-center gap-2 underline-offset-2 hover:underline focus-visible:underline"
+                        >
                           <span
                             className="size-2.5 shrink-0 rounded-full"
                             style={{ backgroundColor: BAND_CSS_COLOR[band.band] ?? "var(--muted-foreground)" }}
                           />
                           {band.band}
-                        </span>
+                        </button>
                       </TableCell>
                       <TableCell className="max-w-[200px] truncate text-muted-foreground">{band.packageLabel || "—"}</TableCell>
                       <TableCell className="text-right">{band.txnCount.toLocaleString("en-US")}</TableCell>
