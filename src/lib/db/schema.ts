@@ -240,6 +240,21 @@ export const cronInvocations = pgTable("cron_invocations", {
   index("cron_invocations_trigger_received_idx").on(table.triggerSource, table.receivedAt),
 ]);
 
+// Cron watchdog alert dedup — one row per cron job the watchdog has alerted
+// on. `episodeKey` identifies the failure episode that was alerted;
+// `lastAlertOutcome` flips to "recovered" when the recovery notice goes out,
+// which re-arms the next alert for that job.
+export const cronAlertState = pgTable("cron_alert_state", {
+  jobKey: text("job_key").primaryKey(),
+  episodeKey: text("episode_key").notNull(),
+  lastStatus: text("last_status").notNull(),
+  lastAlertOutcome: text("last_alert_outcome").notNull().default("alerted"),
+  lastAlertedAt: timestamp("last_alerted_at", { withTimezone: true }).notNull(),
+  lastRecoveredAt: timestamp("last_recovered_at", { withTimezone: true }),
+  errorSummary: text("error_summary"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // ── Wise Activity Audit ────────────────────────────────────────────────
 
 export const wiseActivityEvents = pgTable("wise_activity_events", {
