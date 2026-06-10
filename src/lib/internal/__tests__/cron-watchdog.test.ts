@@ -66,7 +66,7 @@ function alertState(overrides: Partial<CronAlertStateRow> & { jobKey: string }):
 interface FakeDbState {
   adminEmails: string[];
   alertStates: CronAlertStateRow[];
-  alertStateTableMissing: boolean;
+  alertStateTableError: Error | null;
   upserts: Array<{ values: Record<string, unknown>; set: Record<string, unknown> }>;
   updates: Array<Record<string, unknown>>;
 }
@@ -75,11 +75,27 @@ function freshState(overrides: Partial<FakeDbState> = {}): FakeDbState {
   return {
     adminEmails: ["a@x.com", "b@x.com"],
     alertStates: [],
-    alertStateTableMissing: false,
+    alertStateTableError: null,
     upserts: [],
     updates: [],
     ...overrides,
   };
+}
+
+/**
+ * What drizzle-orm 0.45 + neon-http actually throws for a missing table: a
+ * DrizzleQueryError-shaped wrapper whose message is `Failed query: <sql>`
+ * (no "does not exist") with the Postgres relation error on `cause`.
+ */
+function drizzleMissingTableError(): Error {
+  const cause = Object.assign(
+    new Error('relation "cron_alert_state" does not exist'),
+    { code: "42P01" },
+  );
+  return new Error(
+    'Failed query: select "job_key", "episode_key" from "cron_alert_state"\nparams: ',
+    { cause },
+  );
 }
 
 function makeFakeDb(state: FakeDbState): Database {
@@ -88,8 +104,8 @@ function makeFakeDb(state: FakeDbState): Database {
       return Promise.resolve(state.adminEmails.map((email) => ({ email })));
     }
     if (table === schema.cronAlertState) {
-      if (state.alertStateTableMissing) {
-        return Promise.reject(new Error('relation "cron_alert_state" does not exist'));
+      if (state.alertStateTableError) {
+        return Promise.reject(state.alertStateTableError);
       }
       return Promise.resolve(state.alertStates);
     }
@@ -454,8 +470,8 @@ describe("runCronWatchdog", () => {
     }
   });
 
-  it("fails safe without alert spam when cron_alert_state does not exist yet", async () => {
-    const state = freshState({ alertStateTableMissing: true });
+  it("fails safe without alert spam when cron_alert_state does not exist yet (drizzle-wrapped error)", async () => {
+    const state = freshState({ alertStateTableError: drizzleMissingTableError() });
     const sender = makeSender();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -471,5 +487,42 @@ describe("runCronWatchdog", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it("fails safe on a bare relation-does-not-exist error too", async () => {
+    const state = freshState({
+      alertStateTableError: new Error('relation "cron_alert_state" does not exist'),
+    });
+    const sender = makeSender();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await runCronWatchdog(makeFakeDb(state), {
+        now: NOW,
+        sender,
+        loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "failing" })]),
+      });
+
+      expect(result.skippedReason).toBe("cron_alert_state table unavailable");
+      expect(sender.sendEmail).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("rethrows unrelated query errors instead of swallowing them", async () => {
+    const state = freshState({
+      alertStateTableError: new Error("Failed query: select 1\nparams: ", {
+        cause: Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" }),
+      }),
+    });
+    const sender = makeSender();
+    await expect(
+      runCronWatchdog(makeFakeDb(state), {
+        now: NOW,
+        sender,
+        loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "failing" })]),
+      }),
+    ).rejects.toThrow("Failed query");
+    expect(sender.sendEmail).not.toHaveBeenCalled();
   });
 });

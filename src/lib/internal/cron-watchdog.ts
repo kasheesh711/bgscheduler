@@ -168,9 +168,31 @@ async function loadAdminEmails(db: Database): Promise<string[]> {
   return [...new Set(rows.map((row) => row.email.trim().toLowerCase()).filter(Boolean))];
 }
 
+/**
+ * drizzle-orm wraps every neon-http query error in a DrizzleQueryError whose
+ * message is `Failed query: <sql>`; the Postgres "relation does not exist"
+ * detail lives on `error.cause`. Mirror isMissingTutorProfileTable
+ * (src/lib/tutor-business-profiles.ts) and check both layers plus pg code
+ * 42P01 so the fail-safe actually fires before the migration is applied.
+ */
 function isMissingAlertStateTable(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return message.includes("cron_alert_state") && message.includes("does not exist");
+  const cause = typeof error === "object" && error && "cause" in error
+    ? (error as { cause?: unknown }).cause
+    : undefined;
+  const causeMessage = cause instanceof Error ? cause.message : String(cause ?? "");
+  const causeCode = typeof cause === "object" && cause && "code" in cause
+    ? String((cause as { code?: unknown }).code)
+    : "";
+  return (
+    message.includes("cron_alert_state") ||
+    causeMessage.includes("cron_alert_state")
+  ) && (
+    message.includes("does not exist") ||
+    causeMessage.includes("does not exist") ||
+    message.includes("42P01") ||
+    causeCode === "42P01"
+  );
 }
 
 /**
