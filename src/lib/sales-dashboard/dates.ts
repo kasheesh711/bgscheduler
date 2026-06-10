@@ -1,7 +1,41 @@
 import { bangkokDateKey, bangkokDateStartUtc, endOfBangkokMonth } from "@/lib/room-capacity/dates";
 
 const DAY_MS = 86_400_000;
-const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+export const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Defensive cap for monthsInRange so a corrupt range cannot loop forever. */
+const MAX_RANGE_MONTHS = 240;
+
+/** "YYYY-MM-DD" → "YYYY-MM-01". */
+export function monthStartOf(date: string): string {
+  return `${date.slice(0, 7)}-01`;
+}
+
+/** Pure month arithmetic on "YYYY-MM-01" keys (no Date construction). */
+export function addMonths(month: string, delta: number): string {
+  const zeroBased = Number(month.slice(0, 4)) * 12 + (Number(month.slice(5, 7)) - 1) + delta;
+  const year = Math.floor(zeroBased / 12);
+  const monthIndex = ((zeroBased % 12) + 12) % 12;
+  return `${String(year).padStart(4, "0")}-${String(monthIndex + 1).padStart(2, "0")}-01`;
+}
+
+/** Inclusive calendar month starts covering [from, to]; empty when from > to. */
+export function monthsInRange(from: string, to: string): string[] {
+  const start = monthStartOf(from);
+  const end = monthStartOf(to);
+  if (!from || !to || start > end) return [];
+  const months: string[] = [];
+  for (let month = start; month <= end && months.length < MAX_RANGE_MONTHS; month = addMonths(month, 1)) {
+    months.push(month);
+  }
+  return months;
+}
+
+/** "2026-04-01" → "Apr 26"; unparseable inputs are returned unchanged. */
+export function monthShortLabel(month: string): string {
+  const name = MONTH_NAMES[Number(month.slice(5, 7)) - 1];
+  return name ? `${name} ${month.slice(2, 4)}` : month;
+}
 
 export function monthStartFromMonthKey(monthKey: string): string {
   if (!/^\d{4}-\d{2}$/.test(monthKey)) {

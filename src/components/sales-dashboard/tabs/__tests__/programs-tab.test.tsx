@@ -27,9 +27,6 @@ import {
   buildProgramTableRows,
   buildShareSegments,
   compareProgramRows,
-  formatMonthLabel,
-  previousMonthOf,
-  toMonthStart,
 } from "../programs-tab";
 
 function makeAgg(overrides: Partial<ProgramMonthAgg> = {}): ProgramMonthAgg {
@@ -75,19 +72,8 @@ function makeDimensions(overrides: Partial<SalesDimensionsPayload> = {}): SalesD
 
 const RANGE = { from: "2026-01-01", to: "2026-03-31", includeTrials: true, allMonths: ALL_MONTHS };
 
-describe("month helpers", () => {
-  it("derives month starts and previous calendar months (incl. year boundary)", () => {
-    expect(toMonthStart("2026-03-15")).toBe("2026-03-01");
-    expect(previousMonthOf("2026-03-01")).toBe("2026-02-01");
-    expect(previousMonthOf("2026-01-01")).toBe("2025-12-01");
-  });
-
-  it("formats month labels", () => {
-    expect(formatMonthLabel("2026-04-01")).toBe("Apr 26");
-    expect(formatMonthLabel("garbage")).toBe("garbage");
-  });
-});
-
+// Month-key helpers (monthStartOf/addMonths/monthShortLabel) moved to
+// @/lib/sales-dashboard/dates — covered by dates.test.ts.
 describe("buildProgramTableRows", () => {
   it("aggregates only months inside the range and computes share + avg ticket", () => {
     const rows = buildProgramTableRows(FIXTURE_PROGRAMS, RANGE);

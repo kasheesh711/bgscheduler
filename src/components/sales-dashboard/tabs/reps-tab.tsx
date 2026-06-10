@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { ChartCanvas, chartColors } from "@/components/sales-dashboard/chart-canvas";
 import { TransactionsTable } from "@/components/sales-dashboard/transactions-table";
 import { normalizeRepKey } from "@/lib/sales-dashboard/cohorts";
+import { addMonths, monthShortLabel, monthsInRange } from "@/lib/sales-dashboard/dates";
 import { formatCurrency, formatPercent } from "@/lib/sales-dashboard/format";
 import type { RepFunnel, RepMonthAgg, SalesTabProps } from "@/lib/sales-dashboard/types";
 import { cn } from "@/lib/utils";
@@ -22,42 +23,9 @@ import { cn } from "@/lib/utils";
 // payload is never touched. Deep link: ?rep= (any display variant).
 // ----------------------------------------------------------------------------
 
-const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const MAX_RANGE_MONTHS = 240;
-
 /** Canonical rep grouping key — delegates to the shared normalizeRepKey rule. */
 export function repKeyOf(value: string): string {
   return normalizeRepKey(value);
-}
-
-/** "YYYY-MM-DD" → "YYYY-MM-01". */
-export function monthStartOf(date: string): string {
-  return `${date.slice(0, 7)}-01`;
-}
-
-/** Pure month arithmetic on "YYYY-MM-01" keys (no Date construction). */
-export function addMonths(month: string, delta: number): string {
-  const zeroBased = Number(month.slice(0, 4)) * 12 + (Number(month.slice(5, 7)) - 1) + delta;
-  const year = Math.floor(zeroBased / 12);
-  const monthIndex = ((zeroBased % 12) + 12) % 12;
-  return `${String(year).padStart(4, "0")}-${String(monthIndex + 1).padStart(2, "0")}-01`;
-}
-
-/** Inclusive calendar month starts covering [from, to]; empty when from > to. */
-export function monthsInRange(from: string, to: string): string[] {
-  const start = monthStartOf(from);
-  const end = monthStartOf(to);
-  if (!from || !to || start > end) return [];
-  const months: string[] = [];
-  for (let month = start; month <= end && months.length < MAX_RANGE_MONTHS; month = addMonths(month, 1)) {
-    months.push(month);
-  }
-  return months;
-}
-
-/** "2026-04-01" → "Apr 26". */
-export function monthShortLabel(month: string): string {
-  return `${MONTH_SHORT[Number(month.slice(5, 7)) - 1] ?? month.slice(5, 7)} ${month.slice(2, 4)}`;
 }
 
 export interface RepRailEntry {

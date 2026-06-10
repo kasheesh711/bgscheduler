@@ -27,13 +27,10 @@ vi.mock("@/components/sales-dashboard/transactions-table", () => ({
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  addMonths,
   buildRepMonthlySeries,
   buildRepRail,
   buildRepRangeStats,
   computePaceVsTarget,
-  monthShortLabel,
-  monthsInRange,
   repKeyOf,
   RepsTab,
 } from "../reps-tab";
@@ -83,26 +80,9 @@ function mockNavigation(query: string) {
   );
 }
 
-describe("month helpers", () => {
-  it("adds months across year boundaries in both directions", () => {
-    expect(addMonths("2026-01-01", -1)).toBe("2025-12-01");
-    expect(addMonths("2025-11-01", 3)).toBe("2026-02-01");
-  });
-
-  it("builds inclusive month ranges and returns empty for reversed ranges", () => {
-    expect(monthsInRange("2025-11-15", "2026-02-03")).toEqual([
-      "2025-11-01",
-      "2025-12-01",
-      "2026-01-01",
-      "2026-02-01",
-    ]);
-    expect(monthsInRange("2026-05-01", "2026-04-30")).toEqual([]);
-  });
-
-  it("formats short month labels", () => {
-    expect(monthShortLabel("2026-04-01")).toBe("Apr 26");
-  });
-
+// Month-key helpers (addMonths/monthsInRange/monthShortLabel) moved to
+// @/lib/sales-dashboard/dates — covered by dates.test.ts.
+describe("repKeyOf", () => {
   it("normalizes rep keys with trim, lowercase, and whitespace collapse", () => {
     expect(repKeyOf("  AOM   Smith ")).toBe("aom smith");
   });

@@ -18,6 +18,7 @@ import {
   type ChartThemeColors,
 } from "@/components/sales-dashboard/chart-canvas";
 import { TransactionsTable } from "@/components/sales-dashboard/transactions-table";
+import { MONTH_NAMES } from "@/lib/sales-dashboard/dates";
 import { formatCurrency, formatPercent } from "@/lib/sales-dashboard/format";
 import { PACKAGE_BANDS } from "@/lib/sales-dashboard/package-hours";
 import type {
@@ -49,8 +50,6 @@ const BAND_CSS_COLOR: Record<string, string> = {
   "40h+": "var(--chart-5)",
   Other: "var(--muted-foreground)",
 };
-
-const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export interface PackageBandSummary {
   band: string;

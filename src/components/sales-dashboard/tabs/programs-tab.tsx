@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/table";
 import { ChartCanvas, chartColors } from "@/components/sales-dashboard/chart-canvas";
 import { TransactionsTable } from "@/components/sales-dashboard/transactions-table";
+import { addMonths, monthShortLabel, monthStartOf } from "@/lib/sales-dashboard/dates";
 import { formatCurrency, formatPercent } from "@/lib/sales-dashboard/format";
 import type { ExploreSeed, ProgramMonthAgg, SalesTabProps } from "@/lib/sales-dashboard/types";
 import { cn } from "@/lib/utils";
@@ -28,7 +29,6 @@ import { cn } from "@/lib/utils";
 // ----------------------------------------------------------------------------
 
 const TOP_SERIES_LIMIT = 6;
-const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export interface ProgramRangeRow {
   program: string;
@@ -69,26 +69,6 @@ export interface ProgramShareSegment {
 
 export type ProgramSortKey = "program" | "rev" | "txn" | "studentMonths" | "avgTicket" | "share" | "mom";
 
-/** First day of the month containing an ISO date ("YYYY-MM-DD" → "YYYY-MM-01"). */
-export function toMonthStart(date: string): string {
-  return `${date.slice(0, 7)}-01`;
-}
-
-/** Previous calendar month of a "YYYY-MM-01" month key. */
-export function previousMonthOf(month: string): string {
-  const [year, monthNumber] = month.split("-").map(Number);
-  const previousYear = monthNumber === 1 ? year - 1 : year;
-  const previousNumber = monthNumber === 1 ? 12 : monthNumber - 1;
-  return `${previousYear}-${String(previousNumber).padStart(2, "0")}-01`;
-}
-
-/** Short axis label for a "YYYY-MM-01" month key, e.g. "Apr 26". */
-export function formatMonthLabel(month: string): string {
-  const [year, monthNumber] = month.split("-").map(Number);
-  const name = MONTH_NAMES[monthNumber - 1];
-  return name ? `${name} ${String(year).slice(2)}` : month;
-}
-
 function rowRevenue(agg: ProgramMonthAgg, includeTrials: boolean): number {
   return includeTrials ? agg.rev : agg.rev - agg.revT;
 }
@@ -105,8 +85,8 @@ function rowRevenue(agg: ProgramMonthAgg, includeTrials: boolean): number {
  *    avg ticket, and movement; txn and student counts keep all rows.
  */
 export function buildProgramTableRows(programs: ProgramMonthAgg[], options: ProgramRangeOptions): ProgramRangeRow[] {
-  const fromMonth = toMonthStart(options.from);
-  const toMonth = toMonthStart(options.to);
+  const fromMonth = monthStartOf(options.from);
+  const toMonth = monthStartOf(options.to);
   const inRange = programs.filter((agg) => agg.month >= fromMonth && agg.month <= toMonth);
   if (inRange.length === 0) return [];
 
@@ -121,7 +101,7 @@ export function buildProgramTableRows(programs: ProgramMonthAgg[], options: Prog
     grouped.set(agg.program, entry);
   }
 
-  const prevMonth = previousMonthOf(latestMonth);
+  const prevMonth = addMonths(latestMonth, -1);
   const prevMonthHasData = options.allMonths.includes(prevMonth);
   const totalRev = [...grouped.values()].reduce((sum, entry) => sum + entry.rev, 0);
 
@@ -164,8 +144,8 @@ export function buildProgramMonthlySeries(
   options: { from: string; to: string; includeTrials: boolean; topLimit?: number },
 ): ProgramMonthlySeries {
   const topLimit = options.topLimit ?? TOP_SERIES_LIMIT;
-  const fromMonth = toMonthStart(options.from);
-  const toMonth = toMonthStart(options.to);
+  const fromMonth = monthStartOf(options.from);
+  const toMonth = monthStartOf(options.to);
   const inRange = programs.filter((agg) => agg.month >= fromMonth && agg.month <= toMonth);
   const months = [...new Set(inRange.map((agg) => agg.month))].sort((left, right) => left.localeCompare(right));
   if (months.length === 0) return { months: [], series: [] };
@@ -265,7 +245,7 @@ export function ProgramsTab({ dimensions, loading, from, to, seed, active = true
     return {
       type: "bar",
       data: {
-        labels: monthly.months.map(formatMonthLabel),
+        labels: monthly.months.map(monthShortLabel),
         datasets: monthly.series.map((entry, index) => ({
           label: entry.program,
           data: entry.values,
@@ -301,8 +281,8 @@ export function ProgramsTab({ dimensions, loading, from, to, seed, active = true
   // (trials included) so the toggle never hides what the mix actually is.
   const detail = useMemo(() => {
     if (!selectedProgram || !dimensions) return null;
-    const fromMonth = toMonthStart(from);
-    const toMonth = toMonthStart(to);
+    const fromMonth = monthStartOf(from);
+    const toMonth = monthStartOf(to);
     let rev = 0;
     let revT = 0;
     let revN = 0;
@@ -348,7 +328,7 @@ export function ProgramsTab({ dimensions, loading, from, to, seed, active = true
   const totalRev = rows.reduce((sum, row) => sum + row.rev, 0);
   const totalTxn = rows.reduce((sum, row) => sum + row.txn, 0);
   const latestMonth = monthly.months.at(-1) ?? null;
-  const prevMonth = latestMonth ? previousMonthOf(latestMonth) : null;
+  const prevMonth = latestMonth ? addMonths(latestMonth, -1) : null;
   const momComparable = prevMonth !== null && programMonths.includes(prevMonth);
   const colors = chartColors();
   const selectedRow = selectedProgram ? rows.find((row) => row.program === selectedProgram) ?? null : null;
@@ -462,7 +442,7 @@ export function ProgramsTab({ dimensions, loading, from, to, seed, active = true
                 <h3 className="text-sm font-semibold">Program breakdown</h3>
                 <p className="text-xs text-muted-foreground">
                   {momComparable && latestMonth && prevMonth
-                    ? `MoM compares ${formatMonthLabel(latestMonth)} vs ${formatMonthLabel(prevMonth)}`
+                    ? `MoM compares ${monthShortLabel(latestMonth)} vs ${monthShortLabel(prevMonth)}`
                     : "No previous month in the data for MoM movement"}
                 </p>
               </div>
