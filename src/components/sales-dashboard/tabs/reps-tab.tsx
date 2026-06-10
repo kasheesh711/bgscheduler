@@ -328,7 +328,7 @@ export function RepsTab({ dimensions, loading, from, to, seed, active = true }: 
     };
   }, [monthlySeries]);
 
-  if (loading) {
+  if (loading && !dimensions) {
     return (
       <section className="rounded-lg border bg-card p-4 shadow-sm">
         <h2 className="text-sm font-semibold">Reps</h2>
