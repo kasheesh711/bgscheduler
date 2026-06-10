@@ -18,21 +18,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { SalesDashboardCommandCenter } from "@/components/sales-dashboard/gm-command-center";
+import { PeriodToolbar, type SalesPeriodKey } from "@/components/sales-dashboard/period-toolbar";
 import { SourceManager, type ProjectionSourceForm, type SourceForm } from "@/components/sales-dashboard/source-manager";
+import { WorkspaceTabs } from "@/components/sales-dashboard/workspace-tabs";
+import { invalidateSalesDimensions } from "@/hooks/use-sales-dimensions";
 import {
   currentBangkokDate,
   currentBangkokMonthEnd,
   currentBangkokMonthStart,
 } from "@/lib/sales-dashboard/dates";
+import { formatDateTime } from "@/lib/sales-dashboard/format";
 import {
   DEFAULT_PROJECTION_CALC_MULTI_SHEET,
   DEFAULT_PROJECTION_SPREADSHEET_URL,
   DEFAULT_PROJECTION_SUMMARY_SHEET,
   DEFAULT_PROJECTION_WHAT_IF_SHEET,
 } from "@/lib/sales-dashboard/projection";
-import type { SalesDashboardPayload } from "@/lib/sales-dashboard/types";
+import type { ExploreSeed, SalesDashboardPayload } from "@/lib/sales-dashboard/types";
 
 type ImportSummary = {
   message?: string;
@@ -43,13 +46,6 @@ type ImportSummary = {
 };
 
 const SHEETS_SCOPE = "openid email profile https://www.googleapis.com/auth/spreadsheets.readonly";
-const PERIODS = [
-  { key: "all", label: "All" },
-  { key: "y2025", label: "2025" },
-  { key: "y2026", label: "2026" },
-  { key: "q1", label: "Q1 2026" },
-  { key: "thismonth", label: "This Month" },
-] as const;
 
 function todayIso(): string {
   return currentBangkokDate();
@@ -74,29 +70,19 @@ function newProjectionSourceForm(): ProjectionSourceForm {
   };
 }
 
-function formatDateTime(value: string | null): string {
-  if (!value) return "Never imported";
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Bangkok",
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
-
 export function SalesDashboardShell() {
   const [data, setData] = useState<SalesDashboardPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [period, setPeriod] = useState<(typeof PERIODS)[number]["key"]>("thismonth");
+  const [period, setPeriod] = useState<SalesPeriodKey>("thismonth");
   const [from, setFrom] = useState(currentBangkokMonthStart());
   const [to, setTo] = useState(currentBangkokMonthEnd());
   const [sourceForm, setSourceForm] = useState<SourceForm>(newSourceForm);
   const [projectionForm, setProjectionForm] = useState<ProjectionSourceForm>(newProjectionSourceForm);
   const [busyAction, setBusyAction] = useState("");
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
+  const [exploreSeed, setExploreSeed] = useState<ExploreSeed | null>(null);
 
   async function load() {
     setError("");
@@ -129,7 +115,7 @@ export function SalesDashboardShell() {
     void load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function applyPeriod(next: typeof period) {
+  function applyPeriod(next: SalesPeriodKey) {
     setPeriod(next);
     if (next === "all" && data) {
       const allDates = [...data.normalDays, ...data.addDays].map((row) => row.d).sort();
@@ -161,6 +147,7 @@ export function SalesDashboardShell() {
     try {
       await action();
       await load();
+      invalidateSalesDimensions();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "Request failed");
     } finally {
@@ -304,25 +291,14 @@ export function SalesDashboardShell() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-3 border-b bg-card px-4 py-2 lg:flex-row lg:items-center lg:justify-between lg:px-6">
-        <div className="flex flex-wrap items-center gap-2">
-          {PERIODS.map((item) => (
-            <Button
-              key={item.key}
-              size="sm"
-              variant={period === item.key ? "default" : "outline"}
-              onClick={() => applyPeriod(item.key)}
-            >
-              {item.label}
-            </Button>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <Input type="date" value={from} onChange={(event) => { setPeriod("all"); setFrom(event.target.value); }} className="w-36" />
-          <span className="text-xs text-muted-foreground">to</span>
-          <Input type="date" value={to} onChange={(event) => { setPeriod("all"); setTo(event.target.value); }} className="w-36" />
-        </div>
-      </div>
+      <PeriodToolbar
+        period={period}
+        from={from}
+        to={to}
+        onSelectPreset={applyPeriod}
+        onFromChange={(value) => { setPeriod("all"); setFrom(value); }}
+        onToChange={(value) => { setPeriod("all"); setTo(value); }}
+      />
 
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4 lg:px-6">
         {error ? <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div> : null}
@@ -337,25 +313,35 @@ export function SalesDashboardShell() {
           </div>
         ) : null}
 
-        {!hasSources || !hasImportedRows ? (
-          <SalesDashboardSetupState
-            connected={Boolean(data?.token.connected)}
-            hasSources={hasSources}
-            sourceCount={sourceCount}
-            busyAction={busyAction}
-            onConnect={() => signIn("google", { callbackUrl: "/sales-dashboard" }, {
-              prompt: "consent",
-              access_type: "offline",
-              scope: SHEETS_SCOPE,
-            })}
-            onSeed={seedHistoricalSources}
-            onBackfill={backfillAllSources}
-          />
-        ) : null}
+        <WorkspaceTabs
+          from={from}
+          to={to}
+          seed={exploreSeed}
+          onSeedConsumed={() => setExploreSeed(null)}
+          overview={(
+            <>
+              {!hasSources || !hasImportedRows ? (
+                <SalesDashboardSetupState
+                  connected={Boolean(data?.token.connected)}
+                  hasSources={hasSources}
+                  sourceCount={sourceCount}
+                  busyAction={busyAction}
+                  onConnect={() => signIn("google", { callbackUrl: "/sales-dashboard" }, {
+                    prompt: "consent",
+                    access_type: "offline",
+                    scope: SHEETS_SCOPE,
+                  })}
+                  onSeed={seedHistoricalSources}
+                  onBackfill={backfillAllSources}
+                />
+              ) : null}
 
-        {data && hasSources && hasImportedRows ? (
-          <SalesDashboardCommandCenter data={data} from={from} to={to} />
-        ) : null}
+              {data && hasSources && hasImportedRows ? (
+                <SalesDashboardCommandCenter data={data} from={from} to={to} />
+              ) : null}
+            </>
+          )}
+        />
       </div>
 
       <Dialog open={sourceDialogOpen} onOpenChange={setSourceDialogOpen}>
