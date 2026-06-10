@@ -625,6 +625,17 @@ function overallFromJobs(jobs: CronJobHealth[]): DataHealthDashboardPayload["ove
   };
 }
 
+/**
+ * Cron-job health only — the same status derivation `/data-health` renders,
+ * without the snapshot/issue queries. Used by the cron watchdog sweep.
+ */
+export async function getCronJobsHealth(now = new Date()): Promise<CronJobHealth[]> {
+  const db = getDb();
+  const invocations = await fetchCronInvocations(db);
+  const allRuns = await fetchAllRuns(db);
+  return buildCronJobs(invocations, allRuns, now);
+}
+
 export async function getDataHealthDashboardPayload(now = new Date()): Promise<DataHealthDashboardPayload> {
   const db = getDb();
 
