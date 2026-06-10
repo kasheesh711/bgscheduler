@@ -39,6 +39,10 @@
     {
       "path": "/api/internal/student-promotions/july-1",
       "schedule": "5 17 30 6 *"
+    },
+    {
+      "path": "/api/internal/cron-watchdog",
+      "schedule": "7,37 * * * *"
     }
   ]
 }

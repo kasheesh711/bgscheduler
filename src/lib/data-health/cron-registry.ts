@@ -11,6 +11,7 @@ export type CronJobKey =
   | "classroom_morning"
   | "classroom_admin_email"
   | "student_promotions_july_1"
+  | "cron_watchdog"
   | "room_utilization"
   | "line_backlog_recovery";
 
@@ -187,6 +188,21 @@ export const CRON_JOBS = [
     dangerous: true,
     confirmationLabel: "Applies verified Wise student grade and course promotion writes.",
     expectedBangkokMinute: 5,
+    routeMethod: "GET",
+  },
+  {
+    key: "cron_watchdog",
+    label: "Cron Watchdog",
+    feature: "Data Health",
+    path: "/api/internal/cron-watchdog",
+    schedule: "7,37 * * * *",
+    cadenceLabel: "Every 30 min",
+    cadenceMinutes: 30,
+    lateAfterMinutes: 45,
+    maxDurationSeconds: 300,
+    manualOnly: false,
+    dangerous: false,
+    confirmationLabel: null,
     routeMethod: "GET",
   },
   {

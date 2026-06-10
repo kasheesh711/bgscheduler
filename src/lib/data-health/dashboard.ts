@@ -212,6 +212,17 @@ function pickJobRuns(
     };
   }
 
+  if (job.key === "cron_watchdog") {
+    // The watchdog has no domain run table; its health comes solely from
+    // direct cron_invocations proof (the route is audit-wrapped).
+    return {
+      latestRun: null,
+      latestSuccessfulRun: null,
+      latestFailedRun: null,
+      runningRun: null,
+    };
+  }
+
   const latestUtilization = allRuns.roomUtilization[0] ?? null;
   return {
     latestRun: latestUtilization

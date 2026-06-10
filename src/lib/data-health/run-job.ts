@@ -9,6 +9,7 @@ import {
   importActiveSalesDashboardProjectionSource,
   importRefreshableSalesSources,
 } from "@/lib/sales-dashboard/data";
+import { runCronWatchdog } from "@/lib/internal/cron-watchdog";
 import { runWiseSyncRequest } from "@/lib/sync/run-wise-sync";
 import { createWiseClient } from "@/lib/wise/client";
 import { syncWiseActivityEvents, WiseActivitySyncAlreadyRunningError } from "@/lib/wise-activity/sync";
@@ -104,6 +105,17 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
           return NextResponse.json(result, { status });
         } catch (error) {
           const message = error instanceof Error ? error.message : "Admin classroom schedule email failed";
+          return NextResponse.json({ error: message }, { status: 500 });
+        }
+      }
+
+      if (jobKey === "cron_watchdog") {
+        try {
+          const result = await runCronWatchdog(getDb());
+          return NextResponse.json({ ok: true, ...result });
+        } catch (error) {
+          console.error("Cron watchdog sweep failed", error);
+          const message = error instanceof Error ? error.message : "Cron watchdog sweep failed";
           return NextResponse.json({ error: message }, { status: 500 });
         }
       }
