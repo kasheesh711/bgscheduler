@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildOptimisticInactiveEntry,
   captureWorklistRows,
+  mergeLocalActionPatches,
   patchActionStateInPayload,
   removeStudentFromWorklist,
   restoreStudentToWorklist,
 } from "@/lib/credit-control/payload-patch";
+import type { LocalActionPatch } from "@/lib/credit-control/payload-patch";
 import type {
   ActionState,
   DashboardPayload,
@@ -356,5 +358,65 @@ describe("restoreStudentToWorklist", () => {
     expect(restored.studentQueue.map((row) => row.studentKey).sort()).toEqual(["a", "b"]);
     expect(restored.studentQueueAll.map((row) => row.studentKey).sort()).toEqual(["a", "b"]);
     expect(restored.inactiveStudents).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mergeLocalActionPatches
+// ---------------------------------------------------------------------------
+
+describe("mergeLocalActionPatches", () => {
+  it("re-applies patches made after the request was dispatched and keeps them pending", () => {
+    const payload = makePayload({
+      students: [makeStudent()],
+      studentQueue: [makeQueueRow()],
+      studentQueueAll: [makeQueueRow()],
+    });
+    const patches = new Map<string, LocalActionPatch>([["a", { actionState: ACTION, at: 1_000 }]]);
+
+    const merged = mergeLocalActionPatches(payload, patches, 500);
+
+    expect(merged.students[0].actionState).toEqual(ACTION);
+    expect(merged.studentQueue[0].actionState).toEqual(ACTION);
+    expect(merged.studentQueueAll?.[0].actionState).toEqual(ACTION);
+    // Still pending — only a fetch dispatched after the patch may prune it.
+    expect(patches.has("a")).toBe(true);
+  });
+
+  it("prunes server-reflected patches and returns the payload untouched", () => {
+    const payload = makePayload({ students: [makeStudent()], studentQueue: [makeQueueRow()] });
+    const patches = new Map<string, LocalActionPatch>([["a", { actionState: ACTION, at: 400 }]]);
+
+    const merged = mergeLocalActionPatches(payload, patches, 500);
+
+    expect(merged).toBe(payload); // referential identity — nothing re-applied
+    expect(patches.size).toBe(0);
+  });
+
+  it("applies newer patches while pruning older ones in a single pass", () => {
+    const payload = makePayload({
+      students: [
+        makeStudent(),
+        makeStudent({ studentKey: "b", student: "Student B", actionState: ACTION }),
+      ],
+      studentQueue: [
+        makeQueueRow(),
+        makeQueueRow({ key: "row-b", studentKey: "b", student: "Student B", actionState: ACTION }),
+      ],
+    });
+    const patches = new Map<string, LocalActionPatch>([
+      ["a", { actionState: ACTION, at: 400 }],
+      ["b", { actionState: null, at: 600 }],
+    ]);
+
+    const merged = mergeLocalActionPatches(payload, patches, 500);
+
+    // "a" pruned (server payload wins): stays as the fetched value.
+    expect(merged.students[0].actionState).toBeNull();
+    expect(patches.has("a")).toBe(false);
+    // "b" re-applied on top of the fetched value (clear-action after dispatch).
+    expect(merged.students[1].actionState).toBeNull();
+    expect(merged.studentQueue[1].actionState).toBeNull();
+    expect(patches.has("b")).toBe(true);
   });
 });

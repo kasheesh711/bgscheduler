@@ -7,11 +7,12 @@ import { formatShortTimestamp } from "@/lib/credit-control/helpers";
 import {
   buildOptimisticInactiveEntry,
   captureWorklistRows,
+  mergeLocalActionPatches,
   patchActionStateInPayload,
   removeStudentFromWorklist,
   restoreStudentToWorklist,
 } from "@/lib/credit-control/payload-patch";
-import type { RemovedQueueRows } from "@/lib/credit-control/payload-patch";
+import type { LocalActionPatch, RemovedQueueRows } from "@/lib/credit-control/payload-patch";
 import type {
   AppSessionUser,
   DashboardPayload,
@@ -101,44 +102,81 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   // them instantly (keyed by studentKey; cleared on successful restore).
   const removedRowsRef = useRef<Map<string, RemovedQueueRows>>(new Map());
 
+  // Refresh sequencing: each load aborts the superseded in-flight request and
+  // any response that is no longer the latest is dropped, so an older payload
+  // can never overwrite a newer one (e.g. the mark-inactive reconcile racing
+  // the undo reconcile).
+  const loadSeqRef = useRef(0);
+  const loadAbortRef = useRef<AbortController | null>(null);
+
+  // Action patches applied locally (optimistic + server-confirmed), recorded
+  // so a refresh payload whose GET was dispatched before a patch landed can
+  // re-apply it instead of silently reverting a confirmed pill until the next
+  // poll. Entries the server already reflects are pruned on each merge.
+  const localActionPatchesRef = useRef<Map<string, LocalActionPatch>>(new Map());
+
   // ---------------------------------------------------------------------------
   // Data loading
   // ---------------------------------------------------------------------------
-  const loadDashboard = useCallback(async (mode: "initial" | "refresh") => {
-    if (mode === "initial") {
-      setLoading(true);
-      setError("");
-    } else {
-      if (!document.hasFocus()) return;
-      setRefreshing(true);
-    }
-
-    try {
-      const response = await fetch("/api/credit-control", { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error(`Dashboard request failed (${response.status})`);
-      }
-
-      const payload = (await response.json()) as DashboardPayload;
-
-      startTransition(() => {
-        setData(payload);
-        if (mode === "initial") {
-          setSelectedStudentKey(payload.studentQueue[0]?.studentKey ?? payload.students[0]?.studentKey ?? "");
-          const defaultDate = getDefaultCalendarDate(payload.calendar);
-          setSelectedCalendarDate(defaultDate);
-          setCalendarCursor(getCalendarCursorForView("month", parseDateKey(defaultDate)));
-        }
-      });
-    } catch (loadError) {
+  const loadDashboard = useCallback(
+    async (mode: "initial" | "refresh", options?: { force?: boolean }) => {
       if (mode === "initial") {
-        setError(loadError instanceof Error ? loadError.message : "Failed to load dashboard.");
+        setLoading(true);
+        setError("");
+      } else {
+        // Skip background polls in unfocused tabs, but never skip a forced
+        // post-mutation reconcile — the optimistic worklist depends on it.
+        if (!options?.force && !document.hasFocus()) return;
+        setRefreshing(true);
       }
-    } finally {
-      if (mode === "initial") setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+
+      loadAbortRef.current?.abort();
+      const controller = new AbortController();
+      loadAbortRef.current = controller;
+      const seq = ++loadSeqRef.current;
+      const dispatchedAt = Date.now();
+
+      try {
+        const response = await fetch("/api/credit-control", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Dashboard request failed (${response.status})`);
+        }
+
+        const fetched = (await response.json()) as DashboardPayload;
+        if (seq !== loadSeqRef.current) return; // superseded by a newer request
+
+        // Re-apply action patches made after this request was dispatched — the
+        // server cannot have seen them — and prune ones it already reflects.
+        const payload = mergeLocalActionPatches(fetched, localActionPatchesRef.current, dispatchedAt);
+
+        startTransition(() => {
+          setData(payload);
+          if (mode === "initial") {
+            setSelectedStudentKey(payload.studentQueue[0]?.studentKey ?? payload.students[0]?.studentKey ?? "");
+            const defaultDate = getDefaultCalendarDate(payload.calendar);
+            setSelectedCalendarDate(defaultDate);
+            setCalendarCursor(getCalendarCursorForView("month", parseDateKey(defaultDate)));
+          }
+        });
+      } catch (loadError) {
+        if (controller.signal.aborted) return; // superseded — the newer request owns the UI
+        if (mode === "initial") {
+          setError(loadError instanceof Error ? loadError.message : "Failed to load dashboard.");
+        } else {
+          console.error("Credit-control dashboard refresh failed", loadError);
+        }
+      } finally {
+        if (seq === loadSeqRef.current) {
+          if (mode === "initial") setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     void loadDashboard("initial");
@@ -345,6 +383,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
   // ---------------------------------------------------------------------------
   const patchActionState = useCallback(
     (studentKey: string, actionState: StudentRecord["actionState"]) => {
+      localActionPatchesRef.current.set(studentKey, { actionState, at: Date.now() });
       setData((current) =>
         current ? patchActionStateInPayload(current, studentKey, actionState) : current,
       );
@@ -457,7 +496,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
           kind: "inactive",
         },
       });
-      void loadDashboard("refresh");
+      void loadDashboard("refresh", { force: true });
     } catch (err) {
       // Revert the optimistic removal and re-select the student.
       const removed = removedRowsRef.current.get(student.studentKey) ?? null;
@@ -496,7 +535,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
       }
       removedRowsRef.current.delete(studentKey);
       setToast({ message: "Student restored to the worklist.", tone: "success" });
-      void loadDashboard("refresh");
+      void loadDashboard("refresh", { force: true });
     } catch (err) {
       // Revert: hide the student again and re-list them as removed.
       if (entry) {

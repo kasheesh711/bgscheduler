@@ -20,6 +20,12 @@ export interface RemovedQueueRows {
   queueAllRow: StudentQueueRow | null;
 }
 
+/** A locally applied action patch (optimistic or server-confirmed) plus when it was applied. */
+export interface LocalActionPatch {
+  actionState: ActionState | null;
+  at: number;
+}
+
 /** Minimal student shape needed to build an optimistic inactive entry. */
 export interface InactiveEntrySource {
   studentKey: string;
@@ -53,6 +59,31 @@ export function patchActionStateInPayload(
       ? patchRows(payload.studentQueueAll)
       : payload.studentQueueAll,
   };
+}
+
+/**
+ * Reconcile a freshly fetched payload with action patches applied locally
+ * while (or after) the request was in flight. A patch applied after
+ * `dispatchedAt` cannot be reflected in the response yet, so it is re-applied
+ * on top of the payload; older patches were committed before the request was
+ * dispatched (the server already reflects them) and are pruned from `patches`
+ * — the only mutation this helper performs. Returns the input payload
+ * unchanged (same reference) when no patch needs re-applying.
+ */
+export function mergeLocalActionPatches(
+  payload: DashboardPayload,
+  patches: Map<string, LocalActionPatch>,
+  dispatchedAt: number,
+): DashboardPayload {
+  let merged = payload;
+  for (const [studentKey, patch] of patches) {
+    if (patch.at > dispatchedAt) {
+      merged = patchActionStateInPayload(merged, studentKey, patch.actionState);
+    } else {
+      patches.delete(studentKey);
+    }
+  }
+  return merged;
 }
 
 /**
