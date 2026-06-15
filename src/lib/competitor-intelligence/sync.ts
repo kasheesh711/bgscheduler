@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import {
@@ -37,6 +37,10 @@ type SourceRow = typeof schema.competitorSources.$inferSelect;
 type EntityRow = typeof schema.competitorEntities.$inferSelect;
 type KeywordRow = typeof schema.competitorSerpKeywords.$inferSelect;
 
+export const STALE_RUNNING_COMPETITOR_SYNC_MS = 20 * 60 * 1000;
+const STALE_RUNNING_COMPETITOR_SYNC_ERROR =
+  "Competitor intelligence sync marked failed because it was still running after 20 minutes; likely timed out or the request was aborted.";
+
 interface RunCounts {
   sourceCount: number;
   sourceSuccessCount: number;
@@ -73,6 +77,50 @@ function bangkokDateIso(now = new Date()): string {
 function compactError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.length > 500 ? `${message.slice(0, 500)}...` : message;
+}
+
+export async function failStaleRunningCompetitorSyncs(db: Database, now: Date): Promise<number> {
+  const cutoff = new Date(now.getTime() - STALE_RUNNING_COMPETITOR_SYNC_MS);
+  const staleRuns = await db
+    .update(schema.competitorSyncRuns)
+    .set({
+      status: "failed",
+      finishedAt: now,
+      errorSummary: STALE_RUNNING_COMPETITOR_SYNC_ERROR,
+    })
+    .where(and(
+      eq(schema.competitorSyncRuns.status, "running"),
+      lt(schema.competitorSyncRuns.startedAt, cutoff),
+    ))
+    .returning({ id: schema.competitorSyncRuns.id });
+
+  const staleRunIds = staleRuns.map((row) => row.id);
+  if (!staleRunIds.length) return 0;
+
+  await Promise.all([
+    db.update(schema.competitorSourceRuns)
+      .set({
+        status: "failed",
+        finishedAt: now,
+        errorSummary: STALE_RUNNING_COMPETITOR_SYNC_ERROR,
+      })
+      .where(and(
+        eq(schema.competitorSourceRuns.status, "running"),
+        inArray(schema.competitorSourceRuns.syncRunId, staleRunIds),
+      )),
+    db.update(schema.competitorAiRuns)
+      .set({
+        status: "failed",
+        finishedAt: now,
+        errorSummary: STALE_RUNNING_COMPETITOR_SYNC_ERROR,
+      })
+      .where(and(
+        eq(schema.competitorAiRuns.status, "running"),
+        inArray(schema.competitorAiRuns.syncRunId, staleRunIds),
+      )),
+  ]);
+
+  return staleRunIds.length;
 }
 
 function sourceEstimateUsd(source: SourceRow): number {
@@ -450,6 +498,7 @@ export async function runCompetitorIntelligenceSync(input: {
 }): Promise<CompetitorSyncResult> {
   const db = input.db ?? getDb();
   const actorEmail = input.actorEmail ?? (input.triggerType === "cron" ? "cron@begifted.local" : null);
+  await failStaleRunningCompetitorSyncs(db, new Date());
   const [running] = await db
     .select()
     .from(schema.competitorSyncRuns)
