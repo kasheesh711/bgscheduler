@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deterministicBrief } from "@/lib/competitor-intelligence/ai";
+import { deterministicBrief, parseWarRoomAiInsights } from "@/lib/competitor-intelligence/ai";
 import type { NormalizedCompetitorItem } from "@/lib/competitor-intelligence/types";
 
 function item(overrides: Partial<NormalizedCompetitorItem> = {}): NormalizedCompetitorItem {
@@ -35,5 +35,38 @@ describe("competitor intelligence AI fallback", () => {
     });
     expect(brief.keywordSuggestions).toEqual([]);
     expect(brief.competitorSuggestions).toEqual([]);
+  });
+
+  it("validates weekly War Room content-angle JSON", () => {
+    expect(parseWarRoomAiInsights({
+      executiveSummary: "Ignite is increasing SAT cadence.",
+      confidence: 0.8,
+      contentAngles: [{
+        entityId: "ignite",
+        title: "Create outcome-led SAT proof content",
+        rationale: "Competitor evidence shows repeated SAT score claims.",
+        suggestedChannel: "instagram",
+        cta: "Message BeGifted for a consultation.",
+        confidence: 0.77,
+        evidenceItemKeys: ["ci:test"],
+      }],
+    }).contentAngles[0]).toMatchObject({
+      suggestedChannel: "instagram",
+      evidenceItemKeys: ["ci:test"],
+    });
+
+    expect(() => parseWarRoomAiInsights({
+      executiveSummary: "Bad channel",
+      confidence: 0.8,
+      contentAngles: [{
+        entityId: null,
+        title: "Post everywhere",
+        rationale: "Unsupported channel should fail",
+        suggestedChannel: "tiktok",
+        cta: "Message us",
+        confidence: 0.7,
+        evidenceItemKeys: [],
+      }],
+    })).toThrow();
   });
 });

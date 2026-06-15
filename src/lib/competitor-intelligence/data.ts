@@ -3,6 +3,11 @@ import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { DATAFORSEO_BANGKOK_LOCATION, DEFAULT_COMPETITOR_ENTITIES, DEFAULT_SERP_KEYWORDS } from "./default-sources";
 import { buildEvidenceItemKey, classifyMarketCategory, scoreImpact } from "./normalization";
+import {
+  latestWarRoomSnapshot,
+  refreshContentAngleStatuses,
+  warRoomSnapshotDto,
+} from "./war-room";
 import type {
   CompetitorDashboardPayload,
   CompetitorSourceStatus,
@@ -14,6 +19,9 @@ type EntityRow = typeof schema.competitorEntities.$inferSelect;
 type SourceRow = typeof schema.competitorSources.$inferSelect;
 type EvidenceRow = typeof schema.competitorEvidenceItems.$inferSelect;
 type BriefRow = typeof schema.competitorBriefs.$inferSelect;
+
+const OWN_BRAND_SOURCE_TYPES = ["website", "instagram", "facebook"] as const;
+type OwnBrandSourceType = typeof OWN_BRAND_SOURCE_TYPES[number];
 
 function iso(value: Date | string | null | undefined): string | null {
   if (!value) return null;
@@ -40,6 +48,14 @@ function slugify(value: string): string {
 function sourceReliability(type: CompetitorSourceType, bestEffort?: boolean) {
   if (bestEffort || type === "instagram" || type === "facebook") return "best_effort";
   return "reliable";
+}
+
+function isOwnBrandSourceType(value: string): value is OwnBrandSourceType {
+  return OWN_BRAND_SOURCE_TYPES.includes(value as OwnBrandSourceType);
+}
+
+function providerForOwnBrandSource(type: OwnBrandSourceType) {
+  return type === "website" ? "internal" : "apify";
 }
 
 export async function seedDefaultCompetitorSources(actorEmail: string | null, db: Database = getDb()) {
@@ -218,6 +234,7 @@ export async function getCompetitorIntelligencePayload(db: Database = getDb()): 
     runRows,
     usageRows,
     assetCounts,
+    latestWarRoom,
   ] = await Promise.all([
     db.select().from(schema.competitorEntities).orderBy(schema.competitorEntities.displayName),
     db.select({
@@ -261,6 +278,7 @@ export async function getCompetitorIntelligencePayload(db: Database = getDb()): 
       itemId: schema.competitorAssets.itemId,
       count: sql<number>`count(*)::int`,
     }).from(schema.competitorAssets).groupBy(schema.competitorAssets.itemId),
+    latestWarRoomSnapshot(db),
   ]);
 
   const sourceCountByEntity = new Map<string, number>();
@@ -286,9 +304,27 @@ export async function getCompetitorIntelligencePayload(db: Database = getDb()): 
   const healthySourceCount = sourceRows.filter((row) => row.source.status === "active" && !row.source.lastError).length;
   const estimatedCost = usageRows.reduce((sum, row) => sum + row.estimatedCostUsd, 0);
   const hardCap = usageRows.reduce((sum, row) => sum + row.hardCapUsd, 0);
+  const warRoom = warRoomSnapshotDto(latestWarRoom);
+  const ownBrandSources = sourceRows
+    .filter(({ source, entity }) => entity.kind === "own_brand" && isOwnBrandSourceType(source.sourceType))
+    .map(({ source, entity }) => ({
+      id: source.id,
+      entityId: entity.id,
+      sourceType: source.sourceType as OwnBrandSourceType,
+      label: source.label,
+      url: source.url,
+      handle: source.handle,
+      provider: source.provider,
+      priority: source.priority,
+      status: source.status,
+      lastSuccessAt: iso(source.lastSuccessAt),
+      lastError: compact(source.lastError),
+    }));
 
   return {
     checkedAt: new Date().toISOString(),
+    ...warRoom,
+    contentAngles: await refreshContentAngleStatuses(db, warRoom.contentAngles),
     brief: briefDto(latestBrief),
     kpis: {
       coveragePercent: activeSourceCount ? Math.round((healthySourceCount / activeSourceCount) * 100) : 0,
@@ -406,7 +442,139 @@ export async function getCompetitorIntelligencePayload(db: Database = getDb()): 
       hardCapUsd: row.hardCapUsd,
       capped: row.capped,
     })),
+    ownBrandSources,
   };
+}
+
+async function ensureOwnBrandEntity(actorEmail: string, db: Database) {
+  const now = new Date();
+  const [entity] = await db.insert(schema.competitorEntities)
+    .values({
+      slug: "begifted",
+      displayName: "BeGifted",
+      kind: "own_brand",
+      categoryTags: ["baseline", "academic tutoring", "test prep"],
+      marketPosition: "Own-brand baseline",
+      discoveryMetadata: { sourceSetupAt: now.toISOString() },
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: schema.competitorEntities.slug,
+      set: {
+        displayName: "BeGifted",
+        kind: "own_brand",
+        marketPosition: "Own-brand baseline",
+        updatedAt: now,
+      },
+    })
+    .returning();
+  await db.update(schema.competitorEntities)
+    .set({ updatedAt: now })
+    .where(eq(schema.competitorEntities.id, entity.id));
+  void actorEmail;
+  return entity;
+}
+
+export async function listOwnBrandSources(db: Database = getDb()) {
+  const rows = await db.select({
+    source: schema.competitorSources,
+    entity: schema.competitorEntities,
+  })
+    .from(schema.competitorSources)
+    .innerJoin(schema.competitorEntities, eq(schema.competitorSources.entityId, schema.competitorEntities.id))
+    .where(eq(schema.competitorEntities.kind, "own_brand"))
+    .orderBy(schema.competitorSources.sourceType, schema.competitorSources.label);
+  return rows
+    .filter(({ source }) => isOwnBrandSourceType(source.sourceType))
+    .map(({ source, entity }) => ({
+      id: source.id,
+      entityId: entity.id,
+      sourceType: source.sourceType as OwnBrandSourceType,
+      label: source.label,
+      url: source.url,
+      handle: source.handle,
+      provider: source.provider,
+      priority: source.priority,
+      status: source.status,
+      lastSuccessAt: iso(source.lastSuccessAt),
+      lastError: compact(source.lastError),
+    }));
+}
+
+export async function upsertOwnBrandSource(
+  input: {
+    id?: string;
+    sourceType: OwnBrandSourceType;
+    label: string;
+    url: string;
+    handle?: string | null;
+    status?: CompetitorSourceStatus;
+  },
+  actorEmail: string,
+  db: Database = getDb(),
+) {
+  const entity = await ensureOwnBrandEntity(actorEmail, db);
+  const now = new Date();
+  const values = {
+    entityId: entity.id,
+    sourceType: input.sourceType,
+    label: input.label,
+    url: input.url,
+    handle: input.handle ?? null,
+    provider: providerForOwnBrandSource(input.sourceType),
+    priority: 100,
+    status: input.status ?? "active",
+    reliability: sourceReliability(input.sourceType, input.sourceType !== "website"),
+    bestEffort: input.sourceType !== "website",
+    updatedByEmail: actorEmail,
+    updatedAt: now,
+  };
+  if (input.id) {
+    const [row] = await db.update(schema.competitorSources)
+      .set(values)
+      .where(and(
+        eq(schema.competitorSources.id, input.id),
+        eq(schema.competitorSources.entityId, entity.id),
+      ))
+      .returning();
+    if (!row) throw new Error("Own-brand source not found");
+    return row;
+  }
+  const [row] = await db.insert(schema.competitorSources)
+    .values({
+      ...values,
+      createdByEmail: actorEmail,
+    })
+    .onConflictDoUpdate({
+      target: [
+        schema.competitorSources.entityId,
+        schema.competitorSources.sourceType,
+        schema.competitorSources.url,
+      ],
+      set: values,
+    })
+    .returning();
+  return row;
+}
+
+export async function disableOwnBrandSource(
+  sourceId: string,
+  actorEmail: string,
+  db: Database = getDb(),
+) {
+  const [row] = await db.select({
+    source: schema.competitorSources,
+    entity: schema.competitorEntities,
+  })
+    .from(schema.competitorSources)
+    .innerJoin(schema.competitorEntities, eq(schema.competitorSources.entityId, schema.competitorEntities.id))
+    .where(and(
+      eq(schema.competitorSources.id, sourceId),
+      eq(schema.competitorEntities.kind, "own_brand"),
+    ))
+    .limit(1);
+  if (!row) throw new Error("Own-brand source not found");
+  return updateCompetitorSourceStatus(sourceId, "disabled", actorEmail, db);
 }
 
 export async function updateCompetitorSourceStatus(

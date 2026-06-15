@@ -795,6 +795,31 @@ export const competitorBriefs = pgTable("competitor_briefs", {
   index("competitor_briefs_created_idx").on(table.createdAt),
 ]);
 
+export const competitorWarRoomSnapshots = pgTable("competitor_war_room_snapshots", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  weekStart: date("week_start", { mode: "string" }).notNull(),
+  weekEnd: date("week_end", { mode: "string" }).notNull(),
+  lookbackStart: date("lookback_start", { mode: "string" }).notNull(),
+  lookbackEnd: date("lookback_end", { mode: "string" }).notNull(),
+  syncRunId: uuid("sync_run_id").references(() => competitorSyncRuns.id),
+  aiRunId: uuid("ai_run_id").references(() => competitorAiRuns.id),
+  status: text("status").notNull().default("ready"),
+  confidence: doublePrecision("confidence").notNull().default(0.5),
+  executiveSummary: text("executive_summary").notNull().default(""),
+  matrix: jsonb("matrix").$type<Array<Record<string, unknown>>>().notNull().default([]),
+  contentAngles: jsonb("content_angles").$type<Array<Record<string, unknown>>>().notNull().default([]),
+  scoreDrilldowns: jsonb("score_drilldowns").$type<Record<string, unknown>>().notNull().default({}),
+  sourceHealth: jsonb("source_health").$type<Record<string, unknown>>().notNull().default({}),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("competitor_war_room_snapshots_week_idx").on(table.weekStart),
+  index("competitor_war_room_snapshots_generated_idx").on(table.generatedAt),
+  index("competitor_war_room_snapshots_sync_idx").on(table.syncRunId),
+]);
+
 export const competitorTaskSuggestions = pgTable("competitor_task_suggestions", {
   id: uuid("id").primaryKey().defaultRandom(),
   briefId: uuid("brief_id").references(() => competitorBriefs.id),

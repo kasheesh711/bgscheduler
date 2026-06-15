@@ -49,8 +49,95 @@ export interface ProviderFetchResult {
   metadata?: Record<string, unknown>;
 }
 
+export interface CompetitorScoreComponents {
+  activity: number;
+  burst: number;
+  engagement: number;
+  seo: number;
+  offer: number;
+  coverage: number;
+}
+
+export interface CompetitorMatrixRow {
+  entityId: string;
+  slug: string;
+  displayName: string;
+  kind: CompetitorEntityKind;
+  categoryTags: string[];
+  attentionScore: number;
+  scoreComponents: CompetitorScoreComponents;
+  cadencePerWeek: number;
+  cadenceTrend: "up" | "down" | "flat";
+  activeChannels: string[];
+  channelCounts: Record<string, number>;
+  burstLabel: string;
+  topTheme: string;
+  topThemeCount: number;
+  seoVisibility: number | null;
+  offerSignalCount: number;
+  beGiftedGap: string;
+  recommendedAngle: string;
+  latestEvidenceAt: string | null;
+  coverageWarnings: string[];
+}
+
+export interface CompetitorContentAngle {
+  id: string;
+  suggestionId: string | null;
+  entityId: string | null;
+  competitorName: string | null;
+  title: string;
+  rationale: string;
+  suggestedChannel: string;
+  cta: string;
+  confidence: number;
+  status: string;
+  evidence: Array<{
+    itemId: string;
+    title: string;
+    channel: string;
+    canonicalUrl: string | null;
+    observedAt: string;
+  }>;
+}
+
+export interface CompetitorScoreDrilldown {
+  entityId: string;
+  generatedAt: string;
+  formula: string;
+  components: CompetitorScoreComponents;
+  weeklyTimeline: Array<{
+    weekStart: string;
+    activityCount: number;
+    channels: Record<string, number>;
+    topEvidence: Array<{
+      itemId: string;
+      title: string;
+      channel: string;
+      canonicalUrl: string | null;
+      observedAt: string;
+      impactScore: number;
+    }>;
+  }>;
+}
+
 export interface CompetitorDashboardPayload {
   checkedAt: string;
+  weeklyWarRoom: {
+    id: string | null;
+    weekStart: string;
+    weekEnd: string;
+    lookbackStart: string;
+    lookbackEnd: string;
+    generatedAt: string | null;
+    confidence: number;
+    executiveSummary: string;
+    status: string;
+    sourceHealth: Record<string, unknown>;
+  };
+  competitorMatrix: CompetitorMatrixRow[];
+  contentAngles: CompetitorContentAngle[];
+  scoreDrilldowns: Record<string, CompetitorScoreDrilldown>;
   brief: {
     id: string | null;
     briefDate: string;
@@ -176,5 +263,18 @@ export interface CompetitorDashboardPayload {
     estimatedCostUsd: number;
     hardCapUsd: number;
     capped: boolean;
+  }>;
+  ownBrandSources: Array<{
+    id: string;
+    entityId: string;
+    sourceType: Exclude<CompetitorSourceType, "serp" | "manual" | "sitemap">;
+    label: string;
+    url: string;
+    handle: string | null;
+    provider: string;
+    priority: number;
+    status: CompetitorSourceStatus;
+    lastSuccessAt: string | null;
+    lastError: string | null;
   }>;
 }

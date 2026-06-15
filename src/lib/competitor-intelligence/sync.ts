@@ -24,6 +24,7 @@ import {
   fetchWebsiteSource,
   getSeededSerpSource,
 } from "./providers";
+import { regenerateWarRoomSnapshot } from "./war-room";
 import type {
   CompetitorSourceType,
   CompetitorSyncTrigger,
@@ -479,6 +480,7 @@ export async function runCompetitorIntelligenceSync(input: {
   const errors: string[] = [];
   const capturedItems: NormalizedCompetitorItem[] = [];
   let aiFailed = false;
+  let warRoomFailed = false;
   let seeded = { entities: 0, sources: 0, keywords: 0 };
 
   try {
@@ -734,7 +736,21 @@ export async function runCompetitorIntelligenceSync(input: {
         .where(eq(schema.competitorAiRuns.id, aiRun.id));
     }
 
-    const status = aiFailed ? "failed" : "success";
+    try {
+      const warRoom = await regenerateWarRoomSnapshot({
+        db,
+        syncRunId: run.id,
+        actorEmail,
+      });
+      counts.aiRunCount += warRoom.aiRunCount;
+      counts.taskSuggestionCount += warRoom.contentAngleCount;
+    } catch (error) {
+      warRoomFailed = true;
+      const message = compactError(error);
+      errors.push(`War Room snapshot: ${message}`);
+    }
+
+    const status = aiFailed || warRoomFailed ? "failed" : "success";
     const errorSummary = errors.length ? errors.slice(0, 6).join("; ") : null;
     await db.update(schema.competitorSyncRuns)
       .set({
