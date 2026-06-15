@@ -2,6 +2,7 @@ export type NavSectionId =
   | "scheduling-tutors"
   | "student-lifecycle"
   | "finance-revenue"
+  | "market-intelligence"
   | "data-audit";
 
 export type NavToolId =
@@ -18,6 +19,7 @@ export type NavToolId =
   | "sales-dashboard"
   | "credit-control"
   | "payroll"
+  | "competitor-intelligence"
   | "wise-activity"
   | "data-health";
 
@@ -63,6 +65,11 @@ export const NAV_SECTIONS: NavSection[] = [
     id: "finance-revenue",
     label: "Finance & Revenue",
     description: "Sales, prepaid credit follow-up, and payroll reconciliation.",
+  },
+  {
+    id: "market-intelligence",
+    label: "Market Intelligence",
+    description: "Competitor activity, SEO visibility, offers, and response workflow.",
   },
   {
     id: "data-audit",
@@ -170,6 +177,13 @@ export const NAV_TOOLS: NavTool[] = [
     description: "Reconcile tutor payouts, rates, and monthly review issues.",
     section: "finance-revenue",
     badgeKey: "payroll",
+  },
+  {
+    id: "competitor-intelligence",
+    href: "/competitor-intelligence",
+    label: "Competitor BI",
+    description: "Track competitor activity, search visibility, offers, and response tasks.",
+    section: "market-intelligence",
   },
   {
     id: "wise-activity",

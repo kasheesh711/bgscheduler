@@ -16,10 +16,12 @@ describe("navigation tool registry", () => {
       "Scheduling & Tutors",
       "Student Lifecycle",
       "Finance & Revenue",
+      "Market Intelligence",
       "Data & Audit",
     ]);
     expect(sections[0].tools.map((tool) => tool.href)).toContain("/leave-requests");
     expect(sections[1].tools.map((tool) => tool.href)).toEqual(["/progress-tests", "/student-promotions"]);
+    expect(sections[3].tools.map((tool) => tool.href)).toEqual(["/competitor-intelligence"]);
   });
 
   it("filters tools by restricted allowedPages", () => {
@@ -39,6 +41,7 @@ describe("navigation tool registry", () => {
 
   it("detects active sections and curated shortcuts", () => {
     expect(activeSection("/credit-control", null)).toBe("finance-revenue");
+    expect(activeSection("/competitor-intelligence", null)).toBe("market-intelligence");
     expect(shortcutTools(null).map((tool) => tool.href)).toEqual([
       "/scheduler",
       "/search",

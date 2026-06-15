@@ -13,7 +13,8 @@ export type CronJobKey =
   | "student_promotions_july_1"
   | "cron_watchdog"
   | "room_utilization"
-  | "line_backlog_recovery";
+  | "line_backlog_recovery"
+  | "competitor_intelligence";
 
 export interface CronJobDefinition {
   key: CronJobKey;
@@ -78,6 +79,22 @@ export const CRON_JOBS = [
     manualOnly: false,
     dangerous: false,
     confirmationLabel: null,
+    routeMethod: "GET",
+  },
+  {
+    key: "competitor_intelligence",
+    label: "Competitor Intelligence",
+    feature: "Market Intelligence",
+    path: "/api/internal/sync-competitor-intelligence",
+    schedule: "25 18 * * *",
+    cadenceLabel: "Daily 01:25 Bangkok",
+    cadenceMinutes: 24 * 60,
+    lateAfterMinutes: 120,
+    maxDurationSeconds: 800,
+    manualOnly: false,
+    dangerous: false,
+    confirmationLabel: null,
+    expectedBangkokMinute: 1 * 60 + 25,
     routeMethod: "GET",
   },
   {
