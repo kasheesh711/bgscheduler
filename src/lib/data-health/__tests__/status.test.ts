@@ -75,6 +75,48 @@ describe("cron status evaluation", () => {
     expect(result.lastExpectedAt?.toISOString()).toBe("2026-05-31T23:45:00.000Z");
   });
 
+  it("evaluates the weekly competitor intelligence Monday Bangkok window", () => {
+    const latest = run({
+      startedAt: new Date("2026-06-14T18:25:00.000Z"),
+      finishedAt: new Date("2026-06-14T18:33:00.000Z"),
+    });
+    const result = evaluateCronJobStatus({
+      job: job("competitor_intelligence"),
+      now: new Date("2026-06-14T19:00:00.000Z"),
+      latestInvocation: null,
+      latestCronInvocation: null,
+      latestRun: latest,
+      latestSuccessfulRun: latest,
+      latestFailedRun: null,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("healthy");
+    expect(result.lastExpectedAt?.toISOString()).toBe("2026-06-14T18:25:00.000Z");
+    expect(result.nextExpectedAt?.toISOString()).toBe("2026-06-21T18:25:00.000Z");
+  });
+
+  it("marks the weekly competitor intelligence cron late after the Monday window is missed", () => {
+    const latest = run({
+      startedAt: new Date("2026-06-07T18:25:00.000Z"),
+      finishedAt: new Date("2026-06-07T18:33:00.000Z"),
+    });
+    const result = evaluateCronJobStatus({
+      job: job("competitor_intelligence"),
+      now: new Date("2026-06-14T21:00:00.000Z"),
+      latestInvocation: null,
+      latestCronInvocation: null,
+      latestRun: latest,
+      latestSuccessfulRun: latest,
+      latestFailedRun: null,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("late");
+    expect(result.lastExpectedAt?.toISOString()).toBe("2026-06-14T18:25:00.000Z");
+    expect(result.lateAfterAt?.toISOString()).toBe("2026-06-14T20:25:00.000Z");
+  });
+
   it("marks long-running jobs as failing after maxDuration plus buffer", () => {
     const running = run({
       status: "running",

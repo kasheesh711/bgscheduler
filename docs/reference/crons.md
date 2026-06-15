@@ -10,20 +10,24 @@ This page is the mechanical reference: schedule, endpoint, auth, timeout, and wh
 
 ## Cron registry (authoritative)
 
-The eight entries below are the complete contents of `vercel.json`. Schedules are UTC (Vercel Cron runs in UTC); the app's business timezone is `Asia/Bangkok` (UTC+7), which matters for the time-of-day jobs.
+The entries below are the complete contents of `vercel.json`. Schedules are UTC (Vercel Cron runs in UTC); the app's business timezone is `Asia/Bangkok` (UTC+7), which matters for the time-of-day jobs.
 
 | # | Schedule (UTC) | Cadence | Endpoint (`GET`) | Handler file | `maxDuration` |
 |---|----------------|---------|------------------|--------------|---------------|
 | 1 | `*/30 * * * *` | every 30 min, on :00/:30 | `/api/internal/sync-wise` | [`route.ts:57`](../../src/app/api/internal/sync-wise/route.ts) | 800s ([:6](../../src/app/api/internal/sync-wise/route.ts)) |
 | 2 | `10,40 * * * *` | every 30 min, on :10/:40 | `/api/internal/sync-sales-dashboard` | [`route.ts:60`](../../src/app/api/internal/sync-sales-dashboard/route.ts) | 800s ([:10](../../src/app/api/internal/sync-sales-dashboard/route.ts)) |
-| 3 | `20,50 * * * *` | every 30 min, on :20/:50 | `/api/internal/sync-credit-control` | [`route.ts:46`](../../src/app/api/internal/sync-credit-control/route.ts) | 300s ([:6](../../src/app/api/internal/sync-credit-control/route.ts)) |
-| 4 | `5,35 * * * *` | every 30 min, on :05/:35 | `/api/internal/sync-wise-activity` | [`route.ts:11`](../../src/app/api/internal/sync-wise-activity/route.ts) | 800s ([:7](../../src/app/api/internal/sync-wise-activity/route.ts)) |
-| 5 | `15,45 * * * *` | every 30 min, on :15/:45 | `/api/internal/sync-leave-requests` | [`route.ts:24`](../../src/app/api/internal/sync-leave-requests/route.ts) | 800s ([:6](../../src/app/api/internal/sync-leave-requests/route.ts)) |
-| 6 | `45 23 * * *` | once daily, 23:45 UTC (06:45 Bangkok) | `/api/internal/class-assignments/morning` | [`route.ts:7`](../../src/app/api/internal/class-assignments/morning/route.ts) | 800s ([:5](../../src/app/api/internal/class-assignments/morning/route.ts)) |
-| 7 | `0,10,20,30 0 * * *` | 4×/day, 00:00–00:30 UTC at :00/:10/:20/:30 (07:00–07:30 Bangkok) | `/api/internal/class-assignments/admin-email` | [`route.ts:7`](../../src/app/api/internal/class-assignments/admin-email/route.ts) | 300s ([:5](../../src/app/api/internal/class-assignments/admin-email/route.ts)) |
-| 8 | `5 17 30 6 *` | one-shot business event: 2026-06-30 17:05 UTC (2026-07-01 00:05 Bangkok); route hard-blocks all other Bangkok dates | `/api/internal/student-promotions/july-1` | [`route.ts`](../../src/app/api/internal/student-promotions/july-1/route.ts) | 800s |
+| 3 | `25 18 * * 0` | weekly, Sunday 18:25 UTC (Monday 01:25 Bangkok) | `/api/internal/sync-competitor-intelligence` | [`route.ts:66`](../../src/app/api/internal/sync-competitor-intelligence/route.ts) | 800s ([:7](../../src/app/api/internal/sync-competitor-intelligence/route.ts)) |
+| 4 | `20,50 * * * *` | every 30 min, on :20/:50 | `/api/internal/sync-credit-control` | [`route.ts:46`](../../src/app/api/internal/sync-credit-control/route.ts) | 300s ([:6](../../src/app/api/internal/sync-credit-control/route.ts)) |
+| 5 | `25,55 * * * *` | every 30 min, on :25/:55 | `/api/internal/sync-progress-tests` | [`route.ts:41`](../../src/app/api/internal/sync-progress-tests/route.ts) | 300s ([:7](../../src/app/api/internal/sync-progress-tests/route.ts)) |
+| 6 | `35 0 * * *` | once daily, 00:35 UTC (07:35 Bangkok) | `/api/internal/progress-tests/admin-digest` | [`route.ts:8`](../../src/app/api/internal/progress-tests/admin-digest/route.ts) | 300s ([:6](../../src/app/api/internal/progress-tests/admin-digest/route.ts)) |
+| 7 | `5,35 * * * *` | every 30 min, on :05/:35 | `/api/internal/sync-wise-activity` | [`route.ts:11`](../../src/app/api/internal/sync-wise-activity/route.ts) | 800s ([:7](../../src/app/api/internal/sync-wise-activity/route.ts)) |
+| 8 | `15,45 * * * *` | every 30 min, on :15/:45 | `/api/internal/sync-leave-requests` | [`route.ts:24`](../../src/app/api/internal/sync-leave-requests/route.ts) | 800s ([:6](../../src/app/api/internal/sync-leave-requests/route.ts)) |
+| 9 | `45 23 * * *` | once daily, 23:45 UTC (06:45 Bangkok) | `/api/internal/class-assignments/morning` | [`route.ts:7`](../../src/app/api/internal/class-assignments/morning/route.ts) | 800s ([:5](../../src/app/api/internal/class-assignments/morning/route.ts)) |
+| 10 | `0,10,20,30 0 * * *` | 4×/day, 00:00–00:30 UTC at :00/:10/:20/:30 (07:00–07:30 Bangkok) | `/api/internal/class-assignments/admin-email` | [`route.ts:7`](../../src/app/api/internal/class-assignments/admin-email/route.ts) | 300s ([:5](../../src/app/api/internal/class-assignments/admin-email/route.ts)) |
+| 11 | `5 17 30 6 *` | one-shot business event: 2026-06-30 17:05 UTC (2026-07-01 00:05 Bangkok); route hard-blocks all other Bangkok dates | `/api/internal/student-promotions/july-1` | [`route.ts`](../../src/app/api/internal/student-promotions/july-1/route.ts) | 800s |
+| 12 | `7,37 * * * *` | every 30 min, on :07/:37 | `/api/internal/cron-watchdog` | [`route.ts:28`](../../src/app/api/internal/cron-watchdog/route.ts) | 300s ([:7](../../src/app/api/internal/cron-watchdog/route.ts)) |
 
-The five `sync-*` jobs are **staggered at 5-minute offsets** across the half-hour so they never all hit the Wise API or the database in the same minute: Wise snapshot on :00/:30, activity audit on :05/:35, sales on :10/:40, leave requests on :15/:45, credit control on :20/:50.
+The high-frequency sync jobs are **staggered at 5-minute offsets** across the half-hour so they do not all hit upstream APIs or the database in the same minute: Wise snapshot on :00/:30, activity audit on :05/:35, sales on :10/:40, leave requests on :15/:45, credit control on :20/:50, and progress tests on :25/:55. Competitor intelligence runs weekly at Monday 01:25 Bangkok to limit vendor spend.
 
 ```mermaid
 gantt
@@ -36,6 +40,7 @@ gantt
     sync-sales-dashboard (:10) :a3, 10, 1m
     sync-leave-requests (:15)  :a4, 15, 1m
     sync-credit-control (:20)  :a5, 20, 1m
+    sync-progress-tests (:25)  :a6, 25, 1m
 ```
 
 ### Authentication (shared across all crons)

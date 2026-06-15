@@ -10,7 +10,7 @@
     },
     {
       "path": "/api/internal/sync-competitor-intelligence",
-      "schedule": "25 18 * * *"
+      "schedule": "25 18 * * 0"
     },
     {
       "path": "/api/internal/sync-credit-control",

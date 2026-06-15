@@ -16,9 +16,17 @@ The Vercel cron schedules for these paths (from `vercel.json`):
 | Path | Schedule (cron) |
 |------|-----------------|
 | `/api/internal/sync-wise` | `*/30 * * * *` (`vercel.json:4`-`5`) |
-| `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:12`-`13`) |
-| `/api/internal/sync-leave-requests` | `15,45 * * * *` (`vercel.json:20`-`21`) |
-| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` |
+| `/api/internal/sync-sales-dashboard` | `10,40 * * * *` (`vercel.json:8`-`9`) |
+| `/api/internal/sync-competitor-intelligence` | `25 18 * * 0` (`vercel.json:12`-`13`) |
+| `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:16`-`17`) |
+| `/api/internal/sync-progress-tests` | `25,55 * * * *` (`vercel.json:20`-`21`) |
+| `/api/internal/progress-tests/admin-digest` | `35 0 * * *` (`vercel.json:24`-`25`) |
+| `/api/internal/sync-wise-activity` | `5,35 * * * *` (`vercel.json:28`-`29`) |
+| `/api/internal/sync-leave-requests` | `15,45 * * * *` (`vercel.json:32`-`33`) |
+| `/api/internal/class-assignments/morning` | `45 23 * * *` (`vercel.json:36`-`37`) |
+| `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` (`vercel.json:40`-`41`) |
+| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` (`vercel.json:44`-`45`) |
+| `/api/internal/cron-watchdog` | `7,37 * * * *` (`vercel.json:48`-`49`) |
 
 ---
 

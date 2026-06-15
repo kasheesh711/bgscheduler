@@ -30,6 +30,7 @@ export interface CronJobDefinition {
   dangerous: boolean;
   confirmationLabel: string | null;
   expectedBangkokMinute?: number;
+  expectedBangkokWeekday?: number;
   expectedBangkokWindowStartMinute?: number;
   expectedBangkokWindowEndMinute?: number;
   routeMethod: "GET" | "POST";
@@ -86,14 +87,15 @@ export const CRON_JOBS = [
     label: "Competitor Intelligence",
     feature: "Market Intelligence",
     path: "/api/internal/sync-competitor-intelligence",
-    schedule: "25 18 * * *",
-    cadenceLabel: "Daily 01:25 Bangkok",
-    cadenceMinutes: 24 * 60,
+    schedule: "25 18 * * 0",
+    cadenceLabel: "Weekly Monday 01:25 Bangkok",
+    cadenceMinutes: 7 * 24 * 60,
     lateAfterMinutes: 120,
     maxDurationSeconds: 800,
     manualOnly: false,
     dangerous: false,
     confirmationLabel: null,
+    expectedBangkokWeekday: 1,
     expectedBangkokMinute: 1 * 60 + 25,
     routeMethod: "GET",
   },

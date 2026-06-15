@@ -2,6 +2,7 @@ import type { CronJobDefinition } from "./cron-registry";
 import type { CronInvocationOutcome, CronJobStatus, CronProofSource } from "./types";
 
 const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const STUCK_BUFFER_MS = 60 * 1000;
 
 export interface RunEvidence {
@@ -96,6 +97,7 @@ function bangkokParts(now: Date) {
     year: shifted.getUTCFullYear(),
     month: shifted.getUTCMonth(),
     day: shifted.getUTCDate(),
+    weekday: shifted.getUTCDay(),
     minuteOfDay: shifted.getUTCHours() * 60 + shifted.getUTCMinutes(),
   };
 }
@@ -132,8 +134,41 @@ function dailyExpectation(job: CronJobDefinition, now: Date) {
   return { lastExpectedAt, nextExpectedAt, lateAfterAt };
 }
 
+function weeklyExpectation(job: CronJobDefinition, now: Date) {
+  const targetWeekday = job.expectedBangkokWeekday;
+  const parts = bangkokParts(now);
+  const startMinute = job.expectedBangkokWindowStartMinute ?? job.expectedBangkokMinute;
+  const endMinute = job.expectedBangkokWindowEndMinute ?? job.expectedBangkokMinute;
+  if (targetWeekday === undefined || startMinute === undefined || endMinute === undefined) {
+    return { lastExpectedAt: null, nextExpectedAt: null, lateAfterAt: null };
+  }
+
+  const todayStart = bangkokLocalInstant(parts.year, parts.month, parts.day, startMinute);
+  const todayEnd = bangkokLocalInstant(parts.year, parts.month, parts.day, endMinute);
+  const daysSinceTarget = (parts.weekday - targetWeekday + 7) % 7;
+  const currentWeekStart = new Date(todayStart.getTime() - daysSinceTarget * DAY_MS);
+  const currentWeekEnd = new Date(todayEnd.getTime() - daysSinceTarget * DAY_MS);
+  const hasCurrentWeekWindowStarted = now.getTime() >= currentWeekStart.getTime();
+
+  const lastExpectedAt = hasCurrentWeekWindowStarted
+    ? currentWeekStart
+    : new Date(currentWeekStart.getTime() - 7 * DAY_MS);
+  const windowEnd = hasCurrentWeekWindowStarted
+    ? currentWeekEnd
+    : new Date(currentWeekEnd.getTime() - 7 * DAY_MS);
+  const nextExpectedAt = hasCurrentWeekWindowStarted
+    ? new Date(currentWeekStart.getTime() + 7 * DAY_MS)
+    : currentWeekStart;
+  const lateAfterAt = new Date(windowEnd.getTime() + job.lateAfterMinutes * 60 * 1000);
+
+  return { lastExpectedAt, nextExpectedAt, lateAfterAt };
+}
+
 export function expectedWindowForJob(job: CronJobDefinition, now: Date) {
   if (job.manualOnly) return { lastExpectedAt: null, nextExpectedAt: null, lateAfterAt: null };
+  if (job.expectedBangkokWeekday !== undefined) {
+    return weeklyExpectation(job, now);
+  }
   if (job.expectedBangkokMinute !== undefined || job.expectedBangkokWindowStartMinute !== undefined) {
     return dailyExpectation(job, now);
   }
@@ -279,8 +314,9 @@ export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult 
   const isDailyWindow =
     job.expectedBangkokMinute !== undefined ||
     job.expectedBangkokWindowStartMinute !== undefined;
+  const usesCalendarWindow = isDailyWindow || job.expectedBangkokWeekday !== undefined;
   const intervalEvidenceTooOld =
-    !isDailyWindow &&
+    !usesCalendarWindow &&
     lastSeenAt !== null &&
     now.getTime() - lastSeenAt.getTime() > job.lateAfterMinutes * 60 * 1000;
   const missedExpectedWindow =

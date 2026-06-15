@@ -316,20 +316,24 @@ users on the next query, without a redeploy.
 
 ## 7. The crons and how to trigger each manually
 
-`vercel.json:2` registers eight crons. All scheduled entries are `GET /api/internal/*` and all
+`vercel.json:2` registers twelve crons. All scheduled entries are `GET /api/internal/*` and all
 require `Authorization: Bearer $CRON_SECRET`. The schedules are staggered so the
 30-minute-ish jobs do not all fire on the same minute.
 
 | Path | Schedule (UTC) | Verb(s) accepted | maxDuration | Manual-trigger notes |
 | --- | --- | --- | --- | --- |
-| `/api/internal/sync-wise` | `*/30 * * * *` (`vercel.json:6`) | GET + POST(session) | 800s (`…/sync-wise/route.ts:6`) | single-flight; 202 if already running |
-| `/api/internal/sync-wise-activity` | `5,35 * * * *` (`vercel.json:17`) | GET only | 800s (`…/sync-wise-activity/route.ts:7`) | 409 if already running |
+| `/api/internal/sync-wise` | `*/30 * * * *` (`vercel.json:5`) | GET + POST(session) | 800s (`…/sync-wise/route.ts:6`) | single-flight; 202 if already running |
+| `/api/internal/sync-wise-activity` | `5,35 * * * *` (`vercel.json:29`) | GET only | 800s (`…/sync-wise-activity/route.ts:7`) | 409 if already running |
 | `/api/internal/sync-sales-dashboard` | `10,40 * * * *` (`vercel.json:9`) | GET + POST(session) | 800s (`…/sync-sales-dashboard/route.ts:10`) | 409 on missing Google token |
-| `/api/internal/sync-leave-requests` | `15,45 * * * *` (`vercel.json:21`) | GET + POST | 800s (`…/sync-leave-requests/route.ts:6`) | 409 if already running |
-| `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:13`) | GET + POST(session) | 300s (`…/sync-credit-control/route.ts:6`) | — |
-| `/api/internal/class-assignments/morning` | `45 23 * * *` (`vercel.json:25`) | GET only | 800s (`…/morning/route.ts:5`) | daily room-assignment automation |
-| `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` (`vercel.json:29`) | GET only | 300s (`…/admin-email/route.ts:5`) | retried 4x; 500 if email send failed |
-| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` | GET + POST | 800s (`…/student-promotions/july-1/route.ts:6`) | one-shot July 1, 2026 Bangkok guard; applies newest verified run |
+| `/api/internal/sync-competitor-intelligence` | `25 18 * * 0` (`vercel.json:13`) | GET + POST(session) | 800s (`…/sync-competitor-intelligence/route.ts:7`) | weekly Monday 01:25 Bangkok; manual admin refresh remains available |
+| `/api/internal/sync-leave-requests` | `15,45 * * * *` (`vercel.json:33`) | GET + POST | 800s (`…/sync-leave-requests/route.ts:6`) | 409 if already running |
+| `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:17`) | GET + POST(session) | 300s (`…/sync-credit-control/route.ts:6`) | — |
+| `/api/internal/sync-progress-tests` | `25,55 * * * *` (`vercel.json:21`) | GET + POST(session) | 300s (`…/sync-progress-tests/route.ts:7`) | progress-test data sync |
+| `/api/internal/progress-tests/admin-digest` | `35 0 * * *` (`vercel.json:25`) | GET only | 300s (`…/progress-tests/admin-digest/route.ts:6`) | daily admin digest at 07:35 Bangkok |
+| `/api/internal/class-assignments/morning` | `45 23 * * *` (`vercel.json:37`) | GET only | 800s (`…/morning/route.ts:5`) | daily room-assignment automation |
+| `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` (`vercel.json:41`) | GET only | 300s (`…/admin-email/route.ts:5`) | retried 4x; 500 if email send failed |
+| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` (`vercel.json:45`) | GET + POST | 800s (`…/student-promotions/july-1/route.ts:6`) | one-shot July 1, 2026 Bangkok guard; applies newest verified run |
+| `/api/internal/cron-watchdog` | `7,37 * * * *` (`vercel.json:49`) | GET + POST | 300s (`…/cron-watchdog/route.ts:7`) | cron audit watchdog sweep |
 
 > The morning/admin-email schedules (`23:45 UTC` and the four `00:xx UTC` slots)
 > correspond to the README's "6:45 Bangkok" automation and "7:00–7:30 Bangkok"
@@ -355,6 +359,10 @@ curl https://bgscheduler.vercel.app/api/internal/sync-wise-activity \
 
 # Sales dashboard
 curl -X POST https://bgscheduler.vercel.app/api/internal/sync-sales-dashboard \
+  -H "Authorization: Bearer $CRON_SECRET"
+
+# Competitor intelligence
+curl -X POST https://bgscheduler.vercel.app/api/internal/sync-competitor-intelligence \
   -H "Authorization: Bearer $CRON_SECRET"
 
 # Credit control
