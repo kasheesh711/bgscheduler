@@ -1,5 +1,7 @@
 import type { CompetitorSourceType } from "./types";
 
+export const DATAFORSEO_BANGKOK_LOCATION = "Bangkok,Bangkok,Thailand";
+
 export interface DefaultCompetitorSource {
   type: CompetitorSourceType;
   label: string;
@@ -182,6 +184,6 @@ const KEYWORD_BASE = [
 ] as const;
 
 export const DEFAULT_SERP_KEYWORDS = KEYWORD_BASE.flatMap((entry) => [
-  { ...entry, location: "Bangkok, Thailand", device: "mobile" },
-  { ...entry, location: "Bangkok, Thailand", device: "desktop" },
+  { ...entry, location: DATAFORSEO_BANGKOK_LOCATION, device: "mobile" },
+  { ...entry, location: DATAFORSEO_BANGKOK_LOCATION, device: "desktop" },
 ]);

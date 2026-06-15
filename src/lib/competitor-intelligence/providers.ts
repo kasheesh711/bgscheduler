@@ -16,6 +16,7 @@ type KeywordRow = typeof schema.competitorSerpKeywords.$inferSelect;
 const WEBSITE_TIMEOUT_MS = 10_000;
 const APIFY_INSTAGRAM_ACTOR = process.env.APIFY_INSTAGRAM_ACTOR || "apify/instagram-scraper";
 const APIFY_FACEBOOK_ACTOR = process.env.APIFY_FACEBOOK_ACTOR || "apify/facebook-posts-scraper";
+const DATAFORSEO_BANGKOK_CITY_LOCATION = "Bangkok,Bangkok,Thailand";
 
 function envNumber(name: string, fallback: number): number {
   const parsed = Number(process.env[name]);
@@ -24,6 +25,12 @@ function envNumber(name: string, fallback: number): number {
 
 function basicAuth(login: string, password: string): string {
   return Buffer.from(`${login}:${password}`).toString("base64");
+}
+
+function dataForSeoLocationName(location: string): string {
+  return location.trim().toLowerCase() === "bangkok, thailand"
+    ? DATAFORSEO_BANGKOK_CITY_LOCATION
+    : location;
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = WEBSITE_TIMEOUT_MS): Promise<Response> {
@@ -144,7 +151,7 @@ export async function fetchDataForSeoKeyword(keyword: KeywordRow): Promise<Provi
       body: JSON.stringify([{
         keyword: keyword.keyword,
         language_code: keyword.language,
-        location_name: keyword.location,
+        location_name: dataForSeoLocationName(keyword.location),
         device: keyword.device,
       }]),
     },

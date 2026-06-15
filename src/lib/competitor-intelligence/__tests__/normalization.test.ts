@@ -73,7 +73,7 @@ describe("competitor intelligence normalization", () => {
     const first = normalizeDataForSeoItems({
       keyword: "sat prep bangkok",
       language: "en",
-      location: "Bangkok, Thailand",
+      location: "Bangkok,Bangkok,Thailand",
       device: "mobile",
       items: [
         {
@@ -92,7 +92,7 @@ describe("competitor intelligence normalization", () => {
     const second = normalizeDataForSeoItems({
       keyword: "sat prep bangkok",
       language: "en",
-      location: "Bangkok, Thailand",
+      location: "Bangkok,Bangkok,Thailand",
       device: "mobile",
       items: [
         {

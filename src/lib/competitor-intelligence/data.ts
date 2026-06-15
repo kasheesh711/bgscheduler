@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { DEFAULT_COMPETITOR_ENTITIES, DEFAULT_SERP_KEYWORDS } from "./default-sources";
+import { DATAFORSEO_BANGKOK_LOCATION, DEFAULT_COMPETITOR_ENTITIES, DEFAULT_SERP_KEYWORDS } from "./default-sources";
 import { buildEvidenceItemKey, classifyMarketCategory, scoreImpact } from "./normalization";
 import type {
   CompetitorDashboardPayload,
@@ -586,7 +586,7 @@ export async function upsertDiscoveredKeyword(
       .values({
         keyword: input.keyword,
         language: input.language,
-        location: "Bangkok, Thailand",
+        location: DATAFORSEO_BANGKOK_LOCATION,
         device,
         discoveredBy: "ai",
         confidence: input.confidence,
