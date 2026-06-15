@@ -146,7 +146,7 @@ function EmptyState({ title }: { title: string }) {
 
 export function CompetitorIntelligenceSkeleton() {
   return (
-    <main className="space-y-4 p-4 md:p-6">
+    <main className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 md:p-6">
       <div className="h-10 w-72 animate-pulse rounded-lg bg-muted" />
       <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
         {Array.from({ length: 6 }).map((_, index) => (
@@ -282,14 +282,14 @@ export function CompetitorIntelligenceDashboard() {
   if (busy === "load" && !data) return <CompetitorIntelligenceSkeleton />;
   if (!data) {
     return (
-      <main className="p-6">
+      <main className="min-h-0 flex-1 overflow-y-auto p-6">
         <EmptyState title={error || "Competitor intelligence is unavailable."} />
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-background p-4 text-foreground md:p-6">
+    <main className="min-h-0 flex-1 overflow-y-auto bg-background p-4 text-foreground md:p-6">
       <div className="mx-auto flex max-w-[1600px] flex-col gap-4">
         <header className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="space-y-1">
