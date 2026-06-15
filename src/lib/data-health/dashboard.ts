@@ -21,6 +21,7 @@ type CronInvocation = typeof schema.cronInvocations.$inferSelect;
 type WiseActivityRun = typeof schema.wiseActivitySyncRuns.$inferSelect;
 type SalesImportRun = typeof schema.salesDashboardImportRuns.$inferSelect;
 type SalesProjectionRun = typeof schema.salesDashboardProjectionImportRuns.$inferSelect;
+type CompetitorRun = typeof schema.competitorSyncRuns.$inferSelect;
 type CreditRun = typeof schema.creditControlSyncRuns.$inferSelect;
 type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
 type ClassroomAdminEmailRun = typeof schema.classroomAdminEmailRuns.$inferSelect;
@@ -143,6 +144,7 @@ function pickJobRuns(
     activity: WiseActivityRun[];
     salesImports: SalesImportRun[];
     salesProjection: SalesProjectionRun[];
+    competitor: CompetitorRun[];
     credit: CreditRun[];
     leave: LeaveRun[];
     progressTests: ProgressTestRun[];
@@ -177,6 +179,15 @@ function pickJobRuns(
       latestSuccessfulRun: runEvidence(latestSuccessful(rows, (run) => run.finishedAt)),
       latestFailedRun: runEvidence(latestFailed(rows, (run) => run.finishedAt)),
       runningRun: runEvidence(latestRunning(rows, (run) => run.startedAt)),
+    };
+  }
+
+  if (job.key === "competitor_intelligence") {
+    return {
+      latestRun: runEvidence(allRuns.competitor[0] ?? null),
+      latestSuccessfulRun: runEvidence(latestSuccessful(allRuns.competitor, (run) => run.finishedAt)),
+      latestFailedRun: runEvidence(latestFailed(allRuns.competitor, (run) => run.finishedAt)),
+      runningRun: runEvidence(latestRunning(allRuns.competitor, (run) => run.startedAt)),
     };
   }
 
@@ -430,6 +441,17 @@ function buildDomains(
       detail: "Google Sheets imports and projection workbook refresh.",
     },
     {
+      key: "competitor_intelligence",
+      label: "Competitor Intelligence",
+      status: domainStatusFor(jobByKey.get("competitor_intelligence")),
+      freshnessLabel: freshnessLabel(iso(allRuns.competitor.find((run) => run.status === "success")?.finishedAt), now),
+      lastSuccessAt: iso(allRuns.competitor.find((run) => run.status === "success")?.finishedAt),
+      lastRunAt: iso(allRuns.competitor[0]?.startedAt),
+      recordCountLabel: `${allRuns.competitor[0]?.newItemCount ?? 0} new signals`,
+      issueCount: (allRuns.competitor[0]?.sourceFailedCount ?? 0) + (allRuns.competitor[0]?.status === "failed" ? 1 : 0),
+      detail: "Market source ingestion, SERP checks, AI brief, and task suggestions.",
+    },
+    {
       key: "credit_control",
       label: "Credit Control",
       status: domainStatusFor(jobByKey.get("credit_control")),
@@ -546,6 +568,17 @@ function buildRecentRuns(allRuns: Parameters<typeof pickJobRuns>[1]): RunHistory
       countLabel: `${run.monthRowCount} months`,
       errorSummary: run.errorSummary,
     })),
+    ...allRuns.competitor.map((run) => runHistoryItem({
+      id: run.id,
+      jobKey: "competitor_intelligence",
+      label: "Competitor Intelligence",
+      status: run.status,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      triggerType: run.triggerType,
+      countLabel: `${run.newItemCount} new / ${run.sourceFailedCount} failed`,
+      errorSummary: run.errorSummary,
+    })),
     ...allRuns.credit.map((run) => runHistoryItem({
       id: run.id,
       jobKey: "credit_control",
@@ -602,6 +635,7 @@ async function fetchAllRuns(db: Database) {
     activity,
     salesImports,
     salesProjection,
+    competitor,
     credit,
     leave,
     progressTests,
@@ -614,6 +648,7 @@ async function fetchAllRuns(db: Database) {
     db.select().from(schema.wiseActivitySyncRuns).orderBy(desc(schema.wiseActivitySyncRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.salesDashboardImportRuns).orderBy(desc(schema.salesDashboardImportRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.salesDashboardProjectionImportRuns).orderBy(desc(schema.salesDashboardProjectionImportRuns.startedAt)).limit(RECENT_LIMIT),
+    db.select().from(schema.competitorSyncRuns).orderBy(desc(schema.competitorSyncRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.creditControlSyncRuns).orderBy(desc(schema.creditControlSyncRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.leaveRequestSyncRuns).orderBy(desc(schema.leaveRequestSyncRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.progressTestSyncRuns).orderBy(desc(schema.progressTestSyncRuns.startedAt)).limit(RECENT_LIMIT),
@@ -633,6 +668,7 @@ async function fetchAllRuns(db: Database) {
     activity,
     salesImports,
     salesProjection,
+    competitor,
     credit,
     leave,
     progressTests,

@@ -309,6 +309,13 @@
       "when": 1781078373017,
       "tag": "0043_abandoned_jetstream",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1781494704196,
+      "tag": "0044_competitor_intelligence",
+      "breakpoints": true
     }
   ]
 }

@@ -193,6 +193,41 @@ export const progressTestBookingStatusEnum = pgEnum("progress_test_booking_statu
   "failed",
 ]);
 
+export const competitorSyncTriggerEnum = pgEnum("competitor_sync_trigger", [
+  "cron",
+  "manual",
+  "backfill",
+]);
+
+export const competitorEntityKindEnum = pgEnum("competitor_entity_kind", [
+  "competitor",
+  "own_brand",
+]);
+
+export const competitorSourceTypeEnum = pgEnum("competitor_source_type", [
+  "website",
+  "sitemap",
+  "instagram",
+  "facebook",
+  "serp",
+  "manual",
+]);
+
+export const competitorSourceStatusEnum = pgEnum("competitor_source_status", [
+  "active",
+  "disabled",
+  "needs_review",
+  "archived",
+]);
+
+export const competitorTaskStatusEnum = pgEnum("competitor_task_status", [
+  "todo",
+  "in_progress",
+  "blocked",
+  "done",
+  "ignored",
+]);
+
 // ── Snapshots & Sync ───────────────────────────────────────────────────
 
 export const snapshots = pgTable("snapshots", {
@@ -513,6 +548,336 @@ export const salesDashboardProjectionMonths = pgTable("sales_dashboard_projectio
   index("sdpm_source_run_idx").on(table.sourceId, table.importRunId),
   index("sdpm_month_idx").on(table.projectionMonth),
   index("sdpm_scenario_month_idx").on(table.scenario, table.projectionMonth),
+]);
+
+// ── Competitor Intelligence ────────────────────────────────────────────
+
+export const competitorEntities = pgTable("competitor_entities", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  slug: text("slug").notNull(),
+  displayName: text("display_name").notNull(),
+  kind: competitorEntityKindEnum("kind").notNull().default("competitor"),
+  categoryTags: jsonb("category_tags").$type<string[]>().notNull().default([]),
+  marketPosition: text("market_position"),
+  websiteUrl: text("website_url"),
+  confidence: doublePrecision("confidence").notNull().default(1),
+  discoveredBy: text("discovered_by").notNull().default("seed"),
+  discoveryMetadata: jsonb("discovery_metadata").$type<Record<string, unknown>>().notNull().default({}),
+  active: boolean("active").notNull().default(true),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("competitor_entities_slug_idx").on(table.slug),
+  index("competitor_entities_kind_active_idx").on(table.kind, table.active),
+  index("competitor_entities_name_idx").on(table.displayName),
+]);
+
+export const competitorSources = pgTable("competitor_sources", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  entityId: uuid("entity_id").notNull().references(() => competitorEntities.id),
+  sourceType: competitorSourceTypeEnum("source_type").notNull(),
+  label: text("label").notNull(),
+  url: text("url").notNull(),
+  handle: text("handle"),
+  provider: text("provider").notNull().default("internal"),
+  priority: integer("priority").notNull().default(50),
+  status: competitorSourceStatusEnum("status").notNull().default("active"),
+  reliability: text("reliability").notNull().default("reliable"),
+  captureMedia: boolean("capture_media").notNull().default(true),
+  bestEffort: boolean("best_effort").notNull().default(false),
+  config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+  lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  createdByEmail: text("created_by_email"),
+  updatedByEmail: text("updated_by_email"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("competitor_sources_entity_type_url_idx").on(table.entityId, table.sourceType, table.url),
+  index("competitor_sources_entity_idx").on(table.entityId),
+  index("competitor_sources_status_type_idx").on(table.status, table.sourceType),
+  index("competitor_sources_provider_idx").on(table.provider),
+]);
+
+export const competitorSyncRuns = pgTable("competitor_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  triggerType: competitorSyncTriggerEnum("trigger_type").notNull().default("manual"),
+  actorEmail: text("actor_email"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  sourceCount: integer("source_count").notNull().default(0),
+  sourceSuccessCount: integer("source_success_count").notNull().default(0),
+  sourceFailedCount: integer("source_failed_count").notNull().default(0),
+  sourceSkippedCount: integer("source_skipped_count").notNull().default(0),
+  itemCount: integer("item_count").notNull().default(0),
+  newItemCount: integer("new_item_count").notNull().default(0),
+  assetCount: integer("asset_count").notNull().default(0),
+  aiRunCount: integer("ai_run_count").notNull().default(0),
+  taskSuggestionCount: integer("task_suggestion_count").notNull().default(0),
+  budgetSkippedCount: integer("budget_skipped_count").notNull().default(0),
+  errorSummary: text("error_summary"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+}, (table) => [
+  uniqueIndex("competitor_sync_runs_single_running_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'running'`),
+  index("competitor_sync_runs_status_started_idx").on(table.status, table.startedAt),
+  index("competitor_sync_runs_trigger_started_idx").on(table.triggerType, table.startedAt),
+]);
+
+export const competitorSourceRuns = pgTable("competitor_source_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  syncRunId: uuid("sync_run_id").notNull().references(() => competitorSyncRuns.id),
+  sourceId: uuid("source_id").notNull().references(() => competitorSources.id),
+  entityId: uuid("entity_id").notNull().references(() => competitorEntities.id),
+  provider: text("provider").notNull(),
+  sourceType: competitorSourceTypeEnum("source_type").notNull(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  fetchedCount: integer("fetched_count").notNull().default(0),
+  itemCount: integer("item_count").notNull().default(0),
+  newItemCount: integer("new_item_count").notNull().default(0),
+  assetCount: integer("asset_count").notNull().default(0),
+  skippedReason: text("skipped_reason"),
+  errorSummary: text("error_summary"),
+  usageUnits: doublePrecision("usage_units").notNull().default(0),
+  estimatedCostUsd: doublePrecision("estimated_cost_usd").notNull().default(0),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+}, (table) => [
+  index("competitor_source_runs_sync_idx").on(table.syncRunId),
+  index("competitor_source_runs_source_started_idx").on(table.sourceId, table.startedAt),
+  index("competitor_source_runs_status_started_idx").on(table.status, table.startedAt),
+]);
+
+export const competitorEvidenceItems = pgTable("competitor_evidence_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  itemKey: text("item_key").notNull(),
+  entityId: uuid("entity_id").notNull().references(() => competitorEntities.id),
+  sourceId: uuid("source_id").references(() => competitorSources.id),
+  sourceRunId: uuid("source_run_id").references(() => competitorSourceRuns.id),
+  channel: text("channel").notNull(),
+  category: text("category").notNull().default("uncategorized"),
+  title: text("title").notNull(),
+  summary: text("summary"),
+  contentText: text("content_text"),
+  canonicalUrl: text("canonical_url"),
+  language: text("language"),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+  impactScore: doublePrecision("impact_score").notNull().default(0),
+  confidence: doublePrecision("confidence").notNull().default(0.5),
+  evidenceStatus: text("evidence_status").notNull().default("captured"),
+  reviewStatus: text("review_status").notNull().default("new"),
+  pricingSignal: boolean("pricing_signal").notNull().default(false),
+  taskSuggestionStatus: text("task_suggestion_status").notNull().default("none"),
+  metrics: jsonb("metrics").$type<Record<string, unknown>>().notNull().default({}),
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("competitor_evidence_items_key_idx").on(table.itemKey),
+  index("competitor_evidence_items_entity_observed_idx").on(table.entityId, table.observedAt),
+  index("competitor_evidence_items_channel_observed_idx").on(table.channel, table.observedAt),
+  index("competitor_evidence_items_category_idx").on(table.category, table.observedAt),
+  index("competitor_evidence_items_review_idx").on(table.reviewStatus, table.observedAt),
+]);
+
+export const competitorAssets = pgTable("competitor_assets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  itemId: uuid("item_id").notNull().references(() => competitorEvidenceItems.id),
+  assetType: text("asset_type").notNull(),
+  storageProvider: text("storage_provider").notNull().default("vercel_blob"),
+  storageKey: text("storage_key").notNull(),
+  sourceUrl: text("source_url"),
+  mimeType: text("mime_type"),
+  sizeBytes: integer("size_bytes"),
+  checksum: text("checksum"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("competitor_assets_storage_key_idx").on(table.storageKey),
+  index("competitor_assets_item_idx").on(table.itemId),
+  index("competitor_assets_type_idx").on(table.assetType),
+]);
+
+export const competitorSerpKeywords = pgTable("competitor_serp_keywords", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  keyword: text("keyword").notNull(),
+  language: text("language").notNull().default("en"),
+  location: text("location").notNull().default("Bangkok, Thailand"),
+  device: text("device").notNull().default("mobile"),
+  status: competitorSourceStatusEnum("status").notNull().default("active"),
+  discoveredBy: text("discovered_by").notNull().default("seed"),
+  confidence: doublePrecision("confidence").notNull().default(1),
+  autoTracked: boolean("auto_tracked").notNull().default(false),
+  approvedByEmail: text("approved_by_email"),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("competitor_serp_keywords_unique_idx").on(table.keyword, table.language, table.location, table.device),
+  index("competitor_serp_keywords_status_idx").on(table.status),
+  index("competitor_serp_keywords_discovered_idx").on(table.discoveredBy, table.confidence),
+]);
+
+export const competitorSerpObservations = pgTable("competitor_serp_observations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  observationKey: text("observation_key").notNull(),
+  keywordId: uuid("keyword_id").notNull().references(() => competitorSerpKeywords.id),
+  entityId: uuid("entity_id").references(() => competitorEntities.id),
+  sourceRunId: uuid("source_run_id").references(() => competitorSourceRuns.id),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
+  keyword: text("keyword").notNull(),
+  language: text("language").notNull(),
+  location: text("location").notNull(),
+  device: text("device").notNull(),
+  resultType: text("result_type").notNull().default("organic"),
+  rankAbsolute: integer("rank_absolute"),
+  rankGroup: integer("rank_group"),
+  title: text("title"),
+  url: text("url"),
+  displayUrl: text("display_url"),
+  snippet: text("snippet"),
+  isBeGifted: boolean("is_begifted").notNull().default(false),
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("competitor_serp_observations_key_idx").on(table.observationKey),
+  index("competitor_serp_observations_keyword_observed_idx").on(table.keywordId, table.observedAt),
+  index("competitor_serp_observations_entity_observed_idx").on(table.entityId, table.observedAt),
+  index("competitor_serp_observations_rank_idx").on(table.rankAbsolute),
+]);
+
+export const competitorAiRuns = pgTable("competitor_ai_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  syncRunId: uuid("sync_run_id").references(() => competitorSyncRuns.id),
+  runType: text("run_type").notNull(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  model: text("model"),
+  promptVersion: text("prompt_version").notNull(),
+  inputItemCount: integer("input_item_count").notNull().default(0),
+  output: jsonb("output").$type<Record<string, unknown>>().notNull().default({}),
+  errorSummary: text("error_summary"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  latencyMs: integer("latency_ms"),
+}, (table) => [
+  index("competitor_ai_runs_sync_idx").on(table.syncRunId),
+  index("competitor_ai_runs_type_started_idx").on(table.runType, table.startedAt),
+  index("competitor_ai_runs_status_idx").on(table.status, table.startedAt),
+]);
+
+export const competitorBriefs = pgTable("competitor_briefs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  briefDate: date("brief_date", { mode: "string" }).notNull(),
+  syncRunId: uuid("sync_run_id").references(() => competitorSyncRuns.id),
+  aiRunId: uuid("ai_run_id").references(() => competitorAiRuns.id),
+  title: text("title").notNull(),
+  executiveSummary: text("executive_summary").notNull(),
+  whatChanged: jsonb("what_changed").$type<string[]>().notNull().default([]),
+  whyItMatters: jsonb("why_it_matters").$type<string[]>().notNull().default([]),
+  recommendedResponses: jsonb("recommended_responses").$type<string[]>().notNull().default([]),
+  confidence: doublePrecision("confidence").notNull().default(0.5),
+  coverageScore: doublePrecision("coverage_score").notNull().default(0),
+  seoVisibilityScore: doublePrecision("seo_visibility_score").notNull().default(0),
+  openTaskCount: integer("open_task_count").notNull().default(0),
+  budgetUsageRatio: doublePrecision("budget_usage_ratio").notNull().default(0),
+  sourceHealth: jsonb("source_health").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("competitor_briefs_date_idx").on(table.briefDate),
+  index("competitor_briefs_created_idx").on(table.createdAt),
+]);
+
+export const competitorTaskSuggestions = pgTable("competitor_task_suggestions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  briefId: uuid("brief_id").references(() => competitorBriefs.id),
+  itemId: uuid("item_id").references(() => competitorEvidenceItems.id),
+  aiRunId: uuid("ai_run_id").references(() => competitorAiRuns.id),
+  title: text("title").notNull(),
+  description: text("description").notNull().default(""),
+  priority: text("priority").notNull().default("medium"),
+  dueDate: date("due_date", { mode: "string" }),
+  labels: jsonb("labels").$type<string[]>().notNull().default([]),
+  suggestedOwnerEmail: text("suggested_owner_email"),
+  status: text("status").notNull().default("suggested"),
+  confidence: doublePrecision("confidence").notNull().default(0.5),
+  acceptedTaskId: uuid("accepted_task_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  acceptedByEmail: text("accepted_by_email"),
+}, (table) => [
+  index("competitor_task_suggestions_status_idx").on(table.status, table.createdAt),
+  index("competitor_task_suggestions_item_idx").on(table.itemId),
+  index("competitor_task_suggestions_brief_idx").on(table.briefId),
+]);
+
+export const competitorTasks = pgTable("competitor_tasks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  itemId: uuid("item_id").references(() => competitorEvidenceItems.id),
+  briefId: uuid("brief_id").references(() => competitorBriefs.id),
+  suggestionId: uuid("suggestion_id").references(() => competitorTaskSuggestions.id),
+  title: text("title").notNull(),
+  description: text("description").notNull().default(""),
+  status: competitorTaskStatusEnum("status").notNull().default("todo"),
+  priority: text("priority").notNull().default("medium"),
+  ownerEmail: text("owner_email"),
+  dueDate: date("due_date", { mode: "string" }),
+  labels: jsonb("labels").$type<string[]>().notNull().default([]),
+  createdByEmail: text("created_by_email").notNull(),
+  updatedByEmail: text("updated_by_email"),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("competitor_tasks_status_due_idx").on(table.status, table.dueDate),
+  index("competitor_tasks_owner_idx").on(table.ownerEmail, table.status),
+  index("competitor_tasks_item_idx").on(table.itemId),
+  index("competitor_tasks_brief_idx").on(table.briefId),
+]);
+
+export const competitorTaskComments = pgTable("competitor_task_comments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  taskId: uuid("task_id").notNull().references(() => competitorTasks.id),
+  body: text("body").notNull(),
+  attachmentAssetId: uuid("attachment_asset_id").references(() => competitorAssets.id),
+  createdByEmail: text("created_by_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("competitor_task_comments_task_idx").on(table.taskId, table.createdAt),
+]);
+
+export const competitorTaskEvents = pgTable("competitor_task_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  taskId: uuid("task_id").notNull().references(() => competitorTasks.id),
+  eventType: text("event_type").notNull(),
+  actorEmail: text("actor_email").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("competitor_task_events_task_idx").on(table.taskId, table.createdAt),
+]);
+
+export const competitorVendorUsage = pgTable("competitor_vendor_usage", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  usageMonth: date("usage_month", { mode: "string" }).notNull(),
+  provider: text("provider").notNull(),
+  sourceType: competitorSourceTypeEnum("source_type").notNull(),
+  usageUnits: doublePrecision("usage_units").notNull().default(0),
+  estimatedCostUsd: doublePrecision("estimated_cost_usd").notNull().default(0),
+  hardCapUsd: doublePrecision("hard_cap_usd").notNull().default(0),
+  capped: boolean("capped").notNull().default(false),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("competitor_vendor_usage_month_provider_idx").on(table.usageMonth, table.provider, table.sourceType),
+  index("competitor_vendor_usage_capped_idx").on(table.capped, table.usageMonth),
 ]);
 
 // ── Credit Control ──────────────────────────────────────────────────────
