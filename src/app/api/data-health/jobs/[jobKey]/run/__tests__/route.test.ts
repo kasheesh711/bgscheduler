@@ -59,6 +59,16 @@ describe("POST /api/data-health/jobs/[jobKey]/run", () => {
     expect(runDataHealthJob).toHaveBeenCalledWith("classroom_morning", "admin@example.com");
   });
 
+  it("rejects jobs that are not wired for Data Health manual runs", async () => {
+    const res = await POST(request(), context("progress_tests"));
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({
+      error: "Manual run is not available for this job",
+    });
+    expect(runDataHealthJob).not.toHaveBeenCalled();
+  });
+
   it("rejects unknown jobs", async () => {
     const res = await POST(request(), context("missing"));
 

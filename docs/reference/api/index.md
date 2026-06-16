@@ -119,13 +119,21 @@ Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/inter
 | POST | `/api/internal/sync-credit-control` | internal | cron (or admin) | Manual credit-control sync (session or `curl`) |
 | GET | `/api/internal/sync-sales-dashboard` | internal | cron (or admin on POST) | Cron-trigger a sales-dashboard import |
 | POST | `/api/internal/sync-sales-dashboard` | internal | cron (or admin) | Manual sales-dashboard import (session or `curl`) |
+| GET | `/api/internal/sync-competitor-intelligence` | internal | cron (or admin on POST) | Cron-trigger weekly competitor intelligence ingestion |
+| POST | `/api/internal/sync-competitor-intelligence` | internal | cron (or admin) | Manual competitor intelligence ingestion |
+| GET | `/api/internal/sync-progress-tests` | internal | cron (or admin on POST) | Cron-trigger progress-test sync |
+| POST | `/api/internal/sync-progress-tests` | internal | cron (or admin) | Manual progress-test sync |
+| GET | `/api/internal/progress-tests/admin-digest` | internal | cron | Send the daily progress-test admin digest |
 | GET | `/api/internal/sync-leave-requests` | internal | cron | Cron-trigger a leave-requests sync |
 | POST | `/api/internal/sync-leave-requests` | internal | cron | Trigger a leave-requests sync (same cron-secret check) |
 | POST | `/api/internal/sync-room-utilization` | internal | cron (or admin) | Sync room-utilization sessions (session or `curl`) |
+| GET | `/api/internal/line-backlog-recovery` | internal | cron | Run LINE backlog recovery manually with `CRON_SECRET` |
 | GET | `/api/internal/class-assignments/admin-email` | internal | cron | Send the daily admin classroom-schedule email |
 | GET | `/api/internal/class-assignments/morning` | internal | cron | Run the morning classroom-assignment automation |
 | GET | `/api/internal/student-promotions/july-1` | internal | cron | Apply the verified July 1, 2026 student-promotion run |
 | POST | `/api/internal/student-promotions/july-1` | internal | cron | Cron-secret replay alias for the July 1 student-promotion apply |
+| GET | `/api/internal/cron-watchdog` | internal | cron | Run the cron invocation watchdog sweep |
+| POST | `/api/internal/cron-watchdog` | internal | cron | Cron-secret replay alias for the watchdog sweep |
 
 > **Admin-only sync (not cron):** `POST /api/admin/sync-wise` triggers the same Wise sync but is gated by an admin session via `auth()` (no `CRON_SECRET`) — see the [Admin](./misc.md) group.
 

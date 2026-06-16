@@ -1,6 +1,6 @@
 # Internal / Cron API
 
-Machine-to-machine endpoints that drive the scheduled ETL pipelines. They are invoked by Vercel Cron (HTTP `GET`) on a staggered schedule and by operators for manual reruns (HTTP `POST`). All endpoints live under `/api/internal/*`, which `src/middleware.ts` exempts from the session auth gate — each route enforces its own `CRON_SECRET` check instead.
+Machine-to-machine endpoints that drive scheduled ETL pipelines, scheduled automations, and manual recovery jobs. Vercel Cron invokes the paths listed in `vercel.json` with HTTP `GET`; some routes also export `POST` for operator reruns. All endpoints live under `/api/internal/*`, which `src/middleware.ts` exempts from the session auth gate — each route enforces its own `CRON_SECRET` check instead.
 
 For the **meaning** of each pipeline (what a snapshot is, why syncs fail-closed, the data-integrity rules), see the corresponding feature docs. This page documents only the mechanical HTTP contract.
 
@@ -11,22 +11,29 @@ For the **meaning** of each pipeline (what a snapshot is, why syncs fail-closed,
 - **Single-flight guard.** Each pipeline prevents overlapping runs. The mechanism differs per family (DB row-state check + 20-minute stale recovery for Wise/credit-control; a partial unique index for leave-requests) — see each section.
 - **Missing secret is a server error.** If `process.env.CRON_SECRET` is unset, the route returns `500 {"error":"Server misconfigured"}` rather than `401`, so a misconfiguration is not silently treated as an auth failure (`src/lib/internal/cron-auth.ts:22`-`24`; `src/app/api/internal/sync-wise/route.ts:49`-`50`).
 
-The Vercel cron schedules for these paths (from `vercel.json`):
+The Vercel cron schedules for these paths (from `vercel.json`). The method column is from the corresponding `src/app/api/internal/**/route.ts` file:
 
-| Path | Schedule (cron) |
-|------|-----------------|
-| `/api/internal/sync-wise` | `*/30 * * * *` (`vercel.json:4`-`5`) |
-| `/api/internal/sync-sales-dashboard` | `10,40 * * * *` (`vercel.json:8`-`9`) |
-| `/api/internal/sync-competitor-intelligence` | `25 18 * * 0` (`vercel.json:12`-`13`) |
-| `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:16`-`17`) |
-| `/api/internal/sync-progress-tests` | `25,55 * * * *` (`vercel.json:20`-`21`) |
-| `/api/internal/progress-tests/admin-digest` | `35 0 * * *` (`vercel.json:24`-`25`) |
-| `/api/internal/sync-wise-activity` | `5,35 * * * *` (`vercel.json:28`-`29`) |
-| `/api/internal/sync-leave-requests` | `15,45 * * * *` (`vercel.json:32`-`33`) |
-| `/api/internal/class-assignments/morning` | `45 23 * * *` (`vercel.json:36`-`37`) |
-| `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` (`vercel.json:40`-`41`) |
-| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` (`vercel.json:44`-`45`) |
-| `/api/internal/cron-watchdog` | `7,37 * * * *` (`vercel.json:48`-`49`) |
+| Path | Schedule (cron) | Route methods |
+|------|-----------------|---------------|
+| `/api/internal/sync-wise` | `*/30 * * * *` (`vercel.json:4`-`5`) | `GET`, `POST` |
+| `/api/internal/sync-sales-dashboard` | `10,40 * * * *` (`vercel.json:8`-`9`) | `GET`, `POST` |
+| `/api/internal/sync-competitor-intelligence` | `25 18 * * 0` (`vercel.json:12`-`13`) | `GET`, `POST` |
+| `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:16`-`17`) | `GET`, `POST` |
+| `/api/internal/sync-progress-tests` | `25,55 * * * *` (`vercel.json:20`-`21`) | `GET`, `POST` |
+| `/api/internal/progress-tests/admin-digest` | `35 0 * * *` (`vercel.json:24`-`25`) | `GET` |
+| `/api/internal/sync-wise-activity` | `5,35 * * * *` (`vercel.json:28`-`29`) | `GET` |
+| `/api/internal/sync-leave-requests` | `15,45 * * * *` (`vercel.json:32`-`33`) | `GET`, `POST` |
+| `/api/internal/class-assignments/morning` | `45 23 * * *` (`vercel.json:36`-`37`) | `GET` |
+| `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` (`vercel.json:40`-`41`) | `GET` |
+| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` (`vercel.json:44`-`45`) | `GET`, `POST` |
+| `/api/internal/cron-watchdog` | `7,37 * * * *` (`vercel.json:48`-`49`) | `GET`, `POST` |
+
+The internal route handlers below are **not** Vercel Cron entries:
+
+| Path | Route methods | Scheduling note |
+|------|---------------|-----------------|
+| `/api/internal/sync-room-utilization` | `POST` | Manual/session or bearer-triggered utilization refresh; `POST`-only, so it is not cron-callable as written. |
+| `/api/internal/line-backlog-recovery` | `GET` | Manual LINE recovery endpoint protected by `CRON_SECRET`; no deployed cadence in `vercel.json`. |
 
 ---
 
