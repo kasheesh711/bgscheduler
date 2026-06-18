@@ -25,6 +25,7 @@
     "line:test-data:cleanup": "tsx scripts/delete-line-test-data.ts",
     "guard:sales-dashboard-scope": "node scripts/check-sales-dashboard-scope.mjs",
     "guard:production-route-surface": "node scripts/check-production-route-surface.mjs",
+    "docs:audit": "node scripts/docs-audit.mjs",
     "verify:release": "npm run typecheck && npm test && npm run build && npm run typecheck && git diff --check && npm run guard:production-route-surface",
     "deploy:prod": "npm run verify:release && node scripts/assert-production-deploy-ready.mjs && npx vercel --prod"
   },

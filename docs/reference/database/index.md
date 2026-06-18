@@ -1,6 +1,6 @@
 # Database Reference — Master Table Index
 
-Canonical lookup of **every table** in the BGScheduler Postgres database. All 82 tables
+Canonical lookup of **every table** in the BGScheduler Postgres database. All 109 tables
 are defined in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) via Drizzle ORM.
 This page is the index: it lists each table's SQL name, its Drizzle export name, the
 domain it belongs to, its **grain** (what one row represents), the feature that owns it,
@@ -22,29 +22,33 @@ snapshot* (almost all tutor/normalization rows carry a `snapshotId` FK to `snaps
 which the ETL pipeline rewrites wholesale and then atomically promotes via
 `snapshots.active`, `schema.ts:167`).
 
-A few tables are deliberately **snapshot-independent** (they survive snapshot rotation):
-`admin_users`, `google_oauth_tokens`, `tutor_aliases`, `cron_invocations`, `wise_activity_events`,
-`wise_activity_sync_runs`, `student_promotion_runs`, `student_promotion_grade_actions`,
-`student_promotion_course_actions`, `room_utilization_sessions`, and `past_session_blocks`
-(`schema.ts:1347-1386`, the only cross-snapshot data table — see its note in
-[erd-core.md](./erd-core.md)).
+A few **Core** tables are deliberately snapshot-independent (they survive Wise
+snapshot rotation): `admin_users`, `google_oauth_tokens`, `tutor_aliases`,
+`cron_invocations`, `cron_alert_state`, `wise_activity_events`,
+`wise_activity_sync_runs`, `room_utilization_sessions`, and
+`past_session_blocks` (the only cross-snapshot tutor/session data table — see
+its note in [erd-core.md](./erd-core.md)). Other feature domains outside the
+Wise snapshot lineage are also snapshot-independent unless their grain names a
+feature-specific snapshot/run.
 
 ## Domain map
 
 | Domain | Tables | ER diagram |
 |---|---|---|
-| Core (snapshots, sync, audit, auth, tutors, normalization) | 20 | [erd-core.md](./erd-core.md) |
+| Core (snapshots, sync, audit, auth, tutors, normalization) | 21 | [erd-core.md](./erd-core.md) |
 | Sales Dashboard | 7 | [erd-sales-dashboard.md](./erd-sales-dashboard.md) |
-| Credit Control | 10 | [erd-credit-control.md](./erd-credit-control.md) |
+| Competitor Intelligence | 16 | ERD pending |
+| Credit Control | 11 | [erd-credit-control.md](./erd-credit-control.md) |
 | Classrooms (assignment + email) | 9 | [erd-classrooms.md](./erd-classrooms.md) |
 | Payroll | 8 | [erd-payroll.md](./erd-payroll.md) |
 | Tutor Profiles | 2 | [erd-tutor-profiles.md](./erd-tutor-profiles.md) |
 | Leave Requests | 5 | [erd-leave-requests.md](./erd-leave-requests.md) |
 | Student Promotions | 3 | [erd-student-promotions.md](./erd-student-promotions.md) |
 | AI & Proposals | 6 | [erd-ai-and-proposals.md](./erd-ai-and-proposals.md) |
-| LINE | 8 | [erd-line.md](./erd-line.md) |
+| LINE | 9 | [erd-line.md](./erd-line.md) |
 | Room Capacity | 4 | [erd-room-capacity.md](./erd-room-capacity.md) |
-| **Total** | **82** | |
+| Progress Tests | 8 | ERD pending |
+| **Total** | **109** | |
 
 ## Master table list
 
@@ -53,13 +57,14 @@ Columns: **Table** (SQL name) · **Const** (Drizzle export in `schema.ts`) · **
 
 ### Core — snapshots, sync, audit, auth, tutors, normalization
 
-Line ranges: `schema.ts:165-269`, `611-740`, `831-854`, `1347-1386`, `1744-1784`.
+Line ranges: `schema.ts:233-376`, `1172-1301`, `1392-1415`, `1908-1952`, `2338-2378`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
 | `snapshots` | `snapshots` | core | versioned ETL snapshot; at most one `active=true` (`schema.ts:165-169`) | [Tutor search](../../features/tutor-search.md) (ETL) | [core](./erd-core.md) |
 | `sync_runs` | `syncRuns` | core | one Wise snapshot-sync run; partial-unique guard allows a single `running` row (`schema.ts:171-186`) | [Data health](../../features/data-health.md) | [core](./erd-core.md) |
 | `cron_invocations` | `cronInvocations` | core | one valid cron/admin invocation of a registered operational job (`schema.ts`) | [Data health](../../features/data-health.md) | [core](./erd-core.md) |
+| `cron_alert_state` | `cronAlertState` | core | one watchdog alert episode state per cron job (`schema.ts:282-293`) | [Data health](../../features/data-health.md) | [core](./erd-core.md) |
 | `wise_activity_events` | `wiseActivityEvents` | core | one Wise audit event, deduped on `event_id` (`schema.ts:190-223`) | [Wise activity audit](../../features/wise-activity-audit.md) | [core](./erd-core.md) |
 | `wise_activity_sync_runs` | `wiseActivitySyncRuns` | core | one Wise-activity audit sync run; single `running` guard (`schema.ts:225-243`) | [Wise activity audit](../../features/wise-activity-audit.md) | [core](./erd-core.md) |
 | `admin_users` | `adminUsers` | core | one allowlisted admin email (unique on `email`) (`schema.ts:247-254`) | Auth ([middleware](../../../src/middleware.ts)) | [core](./erd-core.md) |
@@ -80,7 +85,7 @@ Line ranges: `schema.ts:165-269`, `611-740`, `831-854`, `1347-1386`, `1744-1784`
 
 ### Sales Dashboard
 
-Line ranges: `schema.ts:270-446`.
+Line ranges: `schema.ts:378-553`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
@@ -92,9 +97,36 @@ Line ranges: `schema.ts:270-446`.
 | `sales_dashboard_projection_import_runs` | `salesDashboardProjectionImportRuns` | sales-dashboard | one projection import run; single `running` per source (`schema.ts:395-413`) | [Sales dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) |
 | `sales_dashboard_projection_months` | `salesDashboardProjectionMonths` | sales-dashboard | one projected month per scenario (unique on `import_run_id`+`scenario`+`projection_month`) (`schema.ts:415-443`) | [Sales dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) |
 
+### Competitor Intelligence
+
+Line ranges: `schema.ts:555-909`.
+
+> ERD page pending. These rows were added after the last full database-reference
+> pass; this index is kept current so table-count and migration audits do not
+> silently drift while the per-domain ERD is written.
+
+| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
+|---|---|---|---|---|---|
+| `competitor_entities` | `competitorEntities` | competitor-intelligence | one tracked competitor or own-brand entity (unique on `slug`) (`schema.ts:555-574`) | Competitor intelligence | pending |
+| `competitor_sources` | `competitorSources` | competitor-intelligence | one source URL/handle for a competitor entity (unique on entity+type+URL) (`schema.ts:576-602`) | Competitor intelligence | pending |
+| `competitor_sync_runs` | `competitorSyncRuns` | competitor-intelligence | one competitor-intelligence sync run; single `running` guard (`schema.ts:604-629`) | Competitor intelligence | pending |
+| `competitor_source_runs` | `competitorSourceRuns` | competitor-intelligence | one provider fetch attempt for a source within a sync run (`schema.ts:631-654`) | Competitor intelligence | pending |
+| `competitor_evidence_items` | `competitorEvidenceItems` | competitor-intelligence | one normalized competitor signal, deduped on `item_key` (`schema.ts:656-687`) | Competitor intelligence | pending |
+| `competitor_assets` | `competitorAssets` | competitor-intelligence | one captured media/asset blob for an evidence item (unique on `storage_key`) (`schema.ts:689-705`) | Competitor intelligence | pending |
+| `competitor_serp_keywords` | `competitorSerpKeywords` | competitor-intelligence | one tracked SERP keyword/device/location tuple (`schema.ts:707-726`) | Competitor intelligence | pending |
+| `competitor_serp_observations` | `competitorSerpObservations` | competitor-intelligence | one SERP result observation for a keyword run, deduped on `observation_key` (`schema.ts:728-754`) | Competitor intelligence | pending |
+| `competitor_ai_runs` | `competitorAiRuns` | competitor-intelligence | one AI summarization/analysis run for competitor evidence (`schema.ts:756-773`) | Competitor intelligence | pending |
+| `competitor_briefs` | `competitorBriefs` | competitor-intelligence | one daily competitor brief (unique on `brief_date`) (`schema.ts:775-796`) | Competitor intelligence | pending |
+| `competitor_war_room_snapshots` | `competitorWarRoomSnapshots` | competitor-intelligence | one weekly War Room matrix snapshot (unique on `week_start`) (`schema.ts:798-821`) | Competitor intelligence | pending |
+| `competitor_task_suggestions` | `competitorTaskSuggestions` | competitor-intelligence | one AI-generated follow-up task suggestion (`schema.ts:823-844`) | Competitor intelligence | pending |
+| `competitor_tasks` | `competitorTasks` | competitor-intelligence | one accepted/manual competitor-response task (`schema.ts:846-868`) | Competitor intelligence | pending |
+| `competitor_task_comments` | `competitorTaskComments` | competitor-intelligence | one comment on a competitor task (`schema.ts:870-879`) | Competitor intelligence | pending |
+| `competitor_task_events` | `competitorTaskEvents` | competitor-intelligence | one audit event for a competitor task (`schema.ts:881-890`) | Competitor intelligence | pending |
+| `competitor_vendor_usage` | `competitorVendorUsage` | competitor-intelligence | one monthly provider/source-type spend bucket (`schema.ts:892-909`) | Competitor intelligence | pending |
+
 ### Credit Control
 
-Line ranges: `schema.ts:447-610`.
+Line ranges: `schema.ts:910-1089`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
@@ -107,11 +139,12 @@ Line ranges: `schema.ts:447-610`.
 | `credit_control_follow_up_state` | `creditControlFollowUpState` | credit-control | current follow-up status per student (PK = `student_key`); snapshot-independent (`schema.ts:564-574`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
 | `credit_control_follow_up_log` | `creditControlFollowUpLog` | credit-control | one follow-up action event (PK = `event_id`) (`schema.ts:576-589`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
 | `credit_control_inactive_students` | `creditControlInactiveStudents` | credit-control | one student manually marked inactive (PK = `student_key`) (`schema.ts:591-597`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
+| `credit_control_zero_balance_tracking` | `creditControlZeroBalanceTracking` | credit-control | one continuous <=0-credit streak tracker per student (PK = `student_key`) (`schema.ts:1069-1076`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
 | `credit_control_admin_ownership` | `creditControlAdminOwnership` | credit-control | one admin-owner assignment per student (PK = `student_key`) (`schema.ts:599-607`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
 
 ### Student Promotions
 
-Line ranges: `schema.ts:649-733`.
+Line ranges: `schema.ts:1090-1171`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
@@ -121,7 +154,7 @@ Line ranges: `schema.ts:649-733`.
 
 ### Classrooms — assignment + email
 
-Line ranges: `schema.ts:741-830`, `1016-1056`, `1110-1184`.
+Line ranges: `schema.ts:1302-1391`, `1577-1617`, `1671-1745`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
@@ -137,7 +170,7 @@ Line ranges: `schema.ts:741-830`, `1016-1056`, `1110-1184`.
 
 ### Payroll
 
-Line ranges: `schema.ts:855-1015`.
+Line ranges: `schema.ts:1416-1576`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
@@ -152,7 +185,7 @@ Line ranges: `schema.ts:855-1015`.
 
 ### Tutor Profiles
 
-Line ranges: `schema.ts:1057-1109`.
+Line ranges: `schema.ts:1618-1670`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
@@ -161,7 +194,7 @@ Line ranges: `schema.ts:1057-1109`.
 
 ### Leave Requests
 
-Line ranges: `schema.ts:1185-1326`.
+Line ranges: `schema.ts:1746-1907`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
@@ -173,7 +206,7 @@ Line ranges: `schema.ts:1185-1326`.
 
 ### AI & Proposals
 
-Line ranges: `schema.ts:1392-1522`.
+Line ranges: `schema.ts:1953-2086`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
@@ -186,7 +219,7 @@ Line ranges: `schema.ts:1392-1522`.
 
 ### LINE
 
-Line ranges: `schema.ts:1526-1740`.
+Line ranges: `schema.ts:2087-2337`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
@@ -198,10 +231,11 @@ Line ranges: `schema.ts:1526-1740`.
 | `line_wise_action_logs` | `lineWiseActionLogs` | line | one Wise writeback action attempted from a LINE review (`schema.ts:1672-1687`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
 | `line_oa_resolver_runs` | `lineOaResolverRuns` | line | one OA-resolver run (unique on `token_hash`) (`schema.ts:1689-1713`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
 | `line_oa_resolver_rows` | `lineOaResolverRows` | line | one student worklist row in a resolver run (unique on run+student+code) (`schema.ts:1715-1740`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
+| `line_backlog_recovery_sync_runs` | `lineBacklogRecoverySyncRuns` | line | one LINE backlog-recovery import run; single `running` guard (`schema.ts:2316-2336`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
 
 ### Room Capacity
 
-Line ranges: `schema.ts:1785-1858`.
+Line ranges: `schema.ts:2379-2464`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
@@ -209,6 +243,24 @@ Line ranges: `schema.ts:1785-1858`.
 | `room_capacity_forecast_drivers` | `roomCapacityForecastDrivers` | room-capacity | one scenario+month forecast driver row within a model run (`schema.ts:1799-1820`) | [Room capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) |
 | `room_capacity_demand_mix` | `roomCapacityDemandMix` | room-capacity | one weekday/time demand-mix bucket within a model run (`schema.ts:1822-1838`) | [Room capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) |
 | `room_capacity_package_mix` | `roomCapacityPackageMix` | room-capacity | one package-hour bucket within a model run (`schema.ts:1840-1858`) | [Room capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) |
+
+### Progress Tests
+
+Line ranges: `schema.ts:2465-2648`.
+
+> ERD page pending. These tables are cross-snapshot by design so progress-test
+> cycles survive credit-control snapshot rotation.
+
+| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
+|---|---|---|---|---|---|
+| `progress_test_attendance_ledger` | `progressTestAttendanceLedger` | progress-tests | one attended/class-credit ledger row per Wise session+student (`schema.ts:2465-2489`) | Progress tests | pending |
+| `progress_test_cycle_state` | `progressTestCycleState` | progress-tests | one current progress-test cycle per enrollment key (`schema.ts:2491-2525`) | Progress tests | pending |
+| `progress_test_bookings` | `progressTestBookings` | progress-tests | one recorded/dry-run/Wise-created progress-test booking (`schema.ts:2527-2548`) | Progress tests | pending |
+| `progress_test_email_runs` | `progressTestEmailRuns` | progress-tests | one teacher heads-up email run for an enrollment cycle (`schema.ts:2550-2569`) | Progress tests | pending |
+| `progress_test_notifications` | `progressTestNotifications` | progress-tests | one progress-test notification recipient send attempt (`schema.ts:2571-2588`) | Progress tests | pending |
+| `progress_test_admin_digest_runs` | `progressTestAdminDigestRuns` | progress-tests | one daily admin digest email run (unique on `digest_date`) (`schema.ts:2590-2610`) | Progress tests | pending |
+| `progress_test_admin_digest_recipients` | `progressTestAdminDigestRecipients` | progress-tests | one recipient of a progress-test admin digest (`schema.ts:2612-2626`) | Progress tests | pending |
+| `progress_test_sync_runs` | `progressTestSyncRuns` | progress-tests | one progress-test ledger/cycle sync run; single `running` guard (`schema.ts:2628-2648`) | Progress tests | pending |
 
 ## Notes & caveats
 
@@ -218,6 +270,9 @@ Line ranges: `schema.ts:1785-1858`.
   [`src/lib/room-capacity/utilization.ts`](../../../src/lib/room-capacity/utilization.ts),
   so its owning feature is Room capacity. Similarly `google_oauth_tokens` is a core/auth
   table but is exercised by the Sales Dashboard and Leave Requests Google integrations.
+- **ERD backlog for newer domains.** Competitor Intelligence and Progress Tests are
+  represented in this master index because their tables are in `schema.ts` and migrated,
+  but they do not yet have per-domain `erd-*.md` pages with column-level diagrams.
 - **Snapshot scoping.** Tables in the Core (tutor/normalization) and Credit Control
   sections carry a `snapshotId`/`snapshot_id` FK; their grain is *within a snapshot*. The
   exceptions are flagged inline above and in [erd-core.md](./erd-core.md).
