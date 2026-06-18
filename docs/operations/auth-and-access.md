@@ -1,9 +1,10 @@
 # Auth & Access
 
-How BGScheduler decides who may use the app. There are exactly two gates, and a request must clear both to reach protected data:
+How BGScheduler decides who may use the app. There are three gates, depending on the route:
 
 1. **The middleware gate** (`src/middleware.ts`) — runs on the **Edge runtime** for every request, decides _is there a valid session?_ and redirects to `/login` if not.
-2. **The allowlist check** (`signIn` callback in `src/lib/auth.ts`) — runs once **at login time** on the **Node.js runtime**, decides _is this Google identity permitted?_ by looking the email up in the `admin_users` table.
+2. **The sign-in access resolver** (`resolveUserAccess` via the `signIn` callback in `src/lib/auth.ts`) — runs once **at login time** on the **Node.js runtime**, decides _is this Google identity permitted?_ by checking `admin_users` first, then active tutor contacts for teacher access.
+3. **Page/feature authorization** (`allowedPages` + domain helpers) — persists `role` and `allowedPages` onto the JWT at sign-in. Middleware and route helpers use those claims to keep restricted users on their allowed route prefixes.
 
 Identity comes from **Auth.js v5 (NextAuth)** with a single **Google** OAuth provider. The package is `next-auth@5.0.0-beta.30` (`package.json:40`).
 
@@ -27,16 +28,20 @@ flowchart TD
     H --> I[signIn google]
     I --> J[Google OAuth consent]
     J --> K[signIn callback in src/lib/auth.ts]
-    K --> L{email in admin_users?}
-    L -- no --> M[return false<br/>error=AccessDenied -> back to /login]
-    L -- yes --> N[store Google OAuth tokens<br/>then session issued JWT cookie]
-    N --> E
+    K --> L{resolveUserAccess}
+    L -- no match --> M[return false<br/>error=AccessDenied -> back to /login]
+    L -- admin_users row --> N[JWT role admin<br/>allowedPages from row]
+    L -- active tutor contact --> O[JWT role teacher<br/>allowedPages progress-tests]
+    N --> P[store Google OAuth tokens<br/>then session issued JWT cookie]
+    O --> P
+    P --> E
 ```
 
 Two distinct decisions, made in two different places:
 
-- **"Are you logged in?"** is answered by the **session cookie**, checked at the edge on every request (`src/middleware.ts:25`) and re-checked inside each route/page.
-- **"Are you allowed?"** is answered **only once, at sign-in**, by the `signIn` callback's `admin_users` lookup (`src/lib/auth.ts:43-50`). After that, the session cookie is the proof of allowed-ness — there is no per-request DB allowlist check.
+- **"Are you logged in?"** is answered by the **session cookie**, checked at the edge on every request (`src/middleware.ts:47`) and re-checked inside each route/page.
+- **"May this identity sign in?"** is answered **only once, at sign-in**, by `resolveUserAccess` (`src/lib/auth-access.ts`) through the `signIn` callback (`src/lib/auth.ts:34-40`). After that, the JWT cookie carries `role` and `allowedPages`; there is no per-request DB allowlist lookup.
+- **"May this signed-in user reach this page/API?"** is answered from the JWT's `allowedPages` claim in middleware (`src/middleware.ts:17-64`) and, for sensitive feature routes, by domain helpers such as `requireProgressTestsSession()` and `requireCompetitorIntelligenceSession()`.
 
 ---
 
@@ -46,28 +51,30 @@ Two NextAuth instances are configured. They are **deliberately split** by runtim
 
 ### The Node-runtime instance — `src/lib/auth.ts`
 
-`NextAuth({...})` here exports `handlers`, `signIn`, `signOut`, and `auth` (`src/lib/auth.ts:25`). This is the full configuration:
+`NextAuth({...})` here exports `handlers`, `signIn`, `signOut`, and `auth` (`src/lib/auth.ts:16`). This is the full configuration:
 
-- **Provider**: Google, configured with `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` (`src/lib/auth.ts:27-36`).
-- **OAuth scope**: `openid email profile https://www.googleapis.com/auth/spreadsheets` with `access_type: "offline"` (`src/lib/auth.ts:32-33`). The Sheets **write** scope and offline access are requested because the same Google grant is reused to drive Google Sheets integrations (sales dashboard, leave-requests), not just to identify the user.
-- **Custom pages**: both `signIn` and `error` point at `/login` (`src/lib/auth.ts:38-41`), so OAuth errors land back on the login screen rather than a NextAuth default page.
-- **`signIn` callback** (`src/lib/auth.ts:43-50`): this is the access-control gate. It calls `signInCallback({ user })`; if the user is allowed **and** has an email, it stores the Google OAuth token for that user (`storeGoogleOAuthTokenForUser`, imported lazily from `@/lib/sales-dashboard/google-oauth`) and then returns the allow/deny boolean. **Returning `false` aborts sign-in** — NextAuth redirects back to `/login?error=AccessDenied`.
-- **`session` callback** (`src/lib/auth.ts:51-53`): pass-through; it returns the session unchanged.
+- **Provider**: Google, configured with `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` (`src/lib/auth.ts:17-27`).
+- **OAuth scope**: `openid email profile https://www.googleapis.com/auth/spreadsheets` with `access_type: "offline"` (`src/lib/auth.ts:23-24`). The Sheets **write** scope and offline access are requested because the same Google grant is reused to drive Google Sheets integrations (sales dashboard, leave-requests), not just to identify the user.
+- **Custom pages**: both `signIn` and `error` point at `/login` (`src/lib/auth.ts:29-32`), so OAuth errors land back on the login screen rather than a NextAuth default page.
+- **`signIn` callback** (`src/lib/auth.ts:34-40`): this is the access-control gate. It calls `signInCallback({ user })`; if the user is allowed **and** has an email, it stores the Google OAuth token for that user (`storeGoogleOAuthTokenForUser`, imported lazily from `@/lib/sales-dashboard/google-oauth`) and then returns the allow/deny boolean. **Returning `false` aborts sign-in** — NextAuth redirects back to `/login?error=AccessDenied`.
+- **`jwt` callback** (`src/lib/auth.ts:42-50`): when `user` is present at sign-in, resolves `role` and `allowedPages` and stores them on the JWT.
+- **`session` callback** (`src/lib/auth.ts:52-56`): copies `token.allowedPages` and `token.role` onto `session.user` for server routes, pages, and client code.
 
-> Note the side effect: a successful sign-in also **persists encrypted Google OAuth tokens** (`storeGoogleOAuthTokenForUser`, `src/lib/auth.ts:46-47`). Token encryption is keyed off `AUTH_SECRET` (`src/lib/sales-dashboard/google-oauth.ts:37-41`). So `AUTH_SECRET` protects both session cookies and stored OAuth refresh tokens.
+> Note the side effect: a successful sign-in also **persists encrypted Google OAuth tokens** (`storeGoogleOAuthTokenForUser`, `src/lib/auth.ts:37-38`). Token encryption is keyed off `AUTH_SECRET` (`src/lib/sales-dashboard/google-oauth.ts:37-41`). So `AUTH_SECRET` protects both session cookies and stored OAuth refresh tokens.
 
-### The allowlist callback — `signInCallback`
+### The sign-in resolver — `signInCallback` and `resolveUserAccess`
 
-`signInCallback({ user })` (`src/lib/auth.ts:7-23`) is the single source of truth for "may this person in":
+`signInCallback({ user })` delegates to `resolveUserAccess(user.email)` and returns true when the resolver finds any allowed access shape. `resolveUserAccess` is the source of truth for "may this person sign in, and with what scope?":
 
-1. Normalize the email: `user.email?.trim().toLowerCase()` (`src/lib/auth.ts:12`). Casing and surrounding whitespace are stripped before lookup.
-2. If there is no email, return `false` **without touching the database** (`src/lib/auth.ts:13`).
-3. Otherwise query `admin_users` for an exact email match, `limit(1)` (`src/lib/auth.ts:15-20`).
-4. Return `true` iff a row exists (`src/lib/auth.ts:22`).
+1. Normalize the email: trim and lowercase (`src/lib/auth-access.ts:43-44`).
+2. If there is no email, return `null` fail-closed.
+3. Query `admin_users` for an exact email match. Admins take precedence and receive `role: "admin"` plus the row's `allowedPages` (`null` means full access).
+4. If no admin row exists, call `resolveTeacherCanonicalKeys`. A matching active tutor contact receives `role: "teacher"` and `allowedPages: ["/progress-tests"]`.
+5. If neither path matches, return `null`; `signInCallback` returns false and Auth.js denies login.
 
-This behavior is locked by `src/lib/auth/__tests__/signin-callback.test.ts`: it asserts an allowlisted email is admitted, casing/whitespace is normalized before the lookup (`eq` called with the normalized string, test line 59), a non-allowlisted email is rejected, and a missing email returns `false` without calling `getDb()` (test lines 78-88).
+This behavior is locked by `src/lib/auth/__tests__/signin-callback.test.ts` and `src/lib/__tests__/auth-access.test.ts`: they assert admin admission, teacher-scoped admission, admin precedence over teacher matching, non-allowlisted rejection, and missing-email fail-closed behavior.
 
-This is a **fail-closed allowlist**: unknown or empty identities are denied, never admitted.
+This is a **fail-closed access resolver**: unknown or empty identities are denied, never admitted.
 
 ### NextAuth route handler — `src/app/api/auth/[...nextauth]`
 
@@ -83,7 +90,7 @@ That is the entire file (`src/app/api/auth/[...nextauth]/route.ts:1-3`). All of 
 
 ### Session strategy
 
-Neither NextAuth config sets a `session.strategy` and **no database adapter is configured** (no `adapter:` key in either file; `@auth/drizzle-adapter` is not a dependency in `package.json`). With no adapter, Auth.js v5 defaults to a **JWT session** stored in an encrypted cookie. This is what makes the edge gate possible: the middleware can validate the session cookie at the edge without a database round-trip (see below). The `admin_users` table is consulted only at the moment of sign-in, never on subsequent requests.
+Neither NextAuth config sets a `session.strategy` and **no database adapter is configured** (no `adapter:` key in either file; `@auth/drizzle-adapter` is not a dependency in `package.json`). With no adapter, Auth.js v5 defaults to a **JWT session** stored in an encrypted cookie. This is what makes the edge gate possible: the middleware can validate the session cookie at the edge without a database round-trip (see below). The `admin_users` table and tutor-contact lookup are consulted only at the moment of sign-in, never on subsequent requests.
 
 ---
 
@@ -106,23 +113,23 @@ Neither NextAuth config sets a `session.strategy` and **no database adapter is c
 | `/api/line/contacts/oa-resolver/worklist` (exact) | Driven by extension token auth, not a browser session. |
 | `/api/line/contacts/oa-resolver/runs/{id}/rows` (regex `^/api/line/contacts/oa-resolver/runs/[^/]+/rows$`) | Same extension-token path; only the `…/rows` sub-route is public. |
 
-> **Documentation correction (for the parent task):** the task brief states the bypass list as exactly `/login`, `/api/auth/*`, `/api/internal/*`. The code (`src/middleware.ts:4-15`) bypasses **eight** path patterns, not three — the five additional entries above (`/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, the LINE OA-resolver worklist, and the regex-matched `…/runs/{id}/rows`) are public too. The three named in the brief are a subset. See Open Questions.
+The five non-auth/non-cron bypasses are intentional: `/api/search/assistant` still calls `auth()` in-handler and returns JSON `401`, `/api/classrooms/floor-plan-map` serves a static SVG map, `/api/line/webhook` verifies the LINE HMAC signature, and the two OA-resolver routes require per-run bearer tokens.
 
 A subtlety worth calling out: most of the LINE OA-resolver namespace is **not** public. Only `…/worklist` and the exact `…/runs/{id}/rows` shape bypass auth; `…/runs` and `…/runs/{id}/commit` still require a session (`src/__tests__/middleware.test.ts:69-87`). The regex is anchored (`^…$`) precisely so it cannot match those sibling routes.
 
 ### What happens on a non-public route
 
-For everything else (`src/middleware.ts:17-32`):
+For everything else (`src/middleware.ts:39-67`):
 
-- If `req.auth` is falsy (no valid session), build a redirect to `/login` and **preserve the original destination** as `callbackUrl=${pathname}${search}` (`src/middleware.ts:25-28`). The query string is preserved too, so e.g. `/search?tutors=g1,g2` round-trips through login (`src/__tests__/middleware.test.ts:97-104`).
-- Otherwise call `NextResponse.next()` and let the request proceed (`src/middleware.ts:31`).
+- If `req.auth` is falsy (no valid session), build a redirect to `/login` and **preserve the original destination** as `callbackUrl=${pathname}${search}` (`src/middleware.ts:47-50`). The query string is preserved too, so e.g. `/search?tutors=g1,g2` round-trips through login (`src/__tests__/middleware.test.ts:103-109`).
+- Otherwise call `NextResponse.next()` and let the request proceed (`src/middleware.ts:66`).
 
-`req.auth` is populated by wrapping the handler in `edgeAuth(...)` (`src/middleware.ts:17`) — the edge instance reads and validates the JWT session cookie.
+`req.auth` is populated by wrapping the handler in `edgeAuth(...)` (`src/middleware.ts:39`) — the edge instance reads and validates the JWT session cookie.
 
 ### The matcher
 
 ```ts
-// src/middleware.ts:34-36
+// src/middleware.ts:69-71
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
@@ -136,7 +143,7 @@ The bypass behavior is regression-tested in `src/__tests__/middleware.test.ts` (
 
 ## The auth vs auth-edge split
 
-Two NextAuth configs exist because **Vercel runs middleware on the Edge runtime**, which cannot open a Postgres connection, but the allowlist check and token storage **need** the database.
+Two NextAuth configs exist because **Vercel runs middleware on the Edge runtime**, which cannot open a Postgres connection, but the sign-in resolver and token storage **need** the database.
 
 ```mermaid
 flowchart LR
@@ -144,7 +151,7 @@ flowchart LR
       MW[middleware.ts] --> EA["auth-edge.ts<br/>edgeAuth<br/>NO db callbacks"]
     end
     subgraph Node["Node.js runtime"]
-      API["~130 route handlers<br/>+ server pages"] --> NA["auth.ts<br/>auth / handlers / signIn<br/>signIn callback hits admin_users"]
+      API["125 API route files<br/>+ server pages"] --> NA["auth.ts<br/>auth / handlers / signIn<br/>resolveUserAccess"]
       NEXTAUTH["api/auth/[...nextauth]"] --> NA
     end
     EA -. "validates same JWT cookie" .-> NA
@@ -153,11 +160,12 @@ flowchart LR
 | | `src/lib/auth-edge.ts` (`edgeAuth`) | `src/lib/auth.ts` (`auth`, `handlers`, `signIn`, `signOut`) |
 | --- | --- | --- |
 | Runtime | Edge | Node.js |
-| Exports | only `auth` (aliased `edgeAuth`) (`src/lib/auth-edge.ts:4`) | `handlers`, `signIn`, `signOut`, `auth` (`src/lib/auth.ts:25`) |
-| `signIn` callback | **none** — no `admin_users` lookup, no DB access | present — runs the allowlist + token storage (`src/lib/auth.ts:43-50`) |
-| `session` callback | pass-through (`src/lib/auth-edge.ts:21-25`) | pass-through (`src/lib/auth.ts:51-53`) |
-| Google scope | `…/spreadsheets.readonly` (`src/lib/auth-edge.ts:11`) | `…/spreadsheets` (write) (`src/lib/auth.ts:32`) |
-| Imported by | `src/middleware.ts` **only** | ~130 route handlers + server pages (e.g. `src/app/api/filters/route.ts:2`, `src/app/(app)/scheduler/page.tsx:3`) |
+| Exports | only `auth` (aliased `edgeAuth`) (`src/lib/auth-edge.ts:4`) | `handlers`, `signIn`, `signOut`, `auth` (`src/lib/auth.ts:16`) |
+| `signIn` callback | **none** — no DB access | present — runs the access resolver + token storage (`src/lib/auth.ts:34-40`) |
+| `jwt` callback | pass-through token validation (`src/lib/auth-edge.ts:22-25`) | resolves and stores `allowedPages` + `role` at sign-in (`src/lib/auth.ts:42-50`) |
+| `session` callback | copies token `allowedPages` + `role` onto `session.user` (`src/lib/auth-edge.ts:27-31`) | copies token `allowedPages` + `role` onto `session.user` (`src/lib/auth.ts:52-56`) |
+| Google scope | `…/spreadsheets.readonly` (`src/lib/auth-edge.ts:11`) | `…/spreadsheets` (write) (`src/lib/auth.ts:23`) |
+| Imported by | `src/middleware.ts` **only** | API route handlers + server pages (e.g. `src/app/api/filters/route.ts:2`, `src/app/(app)/scheduler/page.tsx:3`) |
 
 The key idea: the edge instance is a **stripped-down validator**. It has no callbacks that touch the database, so it can run in the constrained edge environment and still verify the JWT session cookie that the Node instance issued. Both configs use the same Google provider and the same `AUTH_SECRET` (implicitly, via NextAuth), so the cookie minted on the Node side is readable on the edge side.
 
@@ -177,6 +185,8 @@ This is **defence in depth**: the middleware already blocks unauthenticated traf
 ---
 
 ## The admin allowlist (`admin_users`)
+
+`admin_users` is the full-access / restricted-admin allowlist. It is no longer the only way a user can sign in: non-admin tutor contacts may receive the teacher role, restricted to `/progress-tests`, through `resolveTeacherCanonicalKeys`.
 
 ### Where the table lives
 
@@ -199,7 +209,7 @@ The allowlist table doubles as the **notification recipient list** for several f
 - Admin daily-schedule emails (`src/lib/classrooms/admin-schedule-email.ts:203-204`; logs "No admin_users email recipients are configured." when empty, lines 428/440).
 - LINE link-validation reviewer resolution (`src/lib/line/link-validation.ts:292-293, 403-404, 531-532`).
 
-So adding/removing an `admin_users` row affects both **who can log in** and **who receives operational email**.
+So adding/removing an `admin_users` row affects both **who has admin access** and **who receives operational email**. Teacher sign-in is resolved from active tutor contacts, not this table.
 
 ---
 
@@ -215,8 +225,8 @@ Validated at startup by `src/lib/env.ts` (Zod `safeParse`; throws "Invalid envir
 
 | Variable | Role in auth | Required? |
 | --- | --- | --- |
-| `AUTH_GOOGLE_ID` | Google OAuth client ID (`src/lib/auth.ts:28`, `auth-edge.ts:7`) | yes (`env.ts:5`) |
-| `AUTH_GOOGLE_SECRET` | Google OAuth client secret (`src/lib/auth.ts:29`, `auth-edge.ts:8`) | yes (`env.ts:6`) |
+| `AUTH_GOOGLE_ID` | Google OAuth client ID (`src/lib/auth.ts:19`, `auth-edge.ts:7`) | yes (`env.ts:5`) |
+| `AUTH_GOOGLE_SECRET` | Google OAuth client secret (`src/lib/auth.ts:20`, `auth-edge.ts:8`) | yes (`env.ts:6`) |
 | `AUTH_SECRET` | Signs/encrypts the JWT session cookie; also the key for encrypting stored Google OAuth tokens (`google-oauth.ts:37-41`) | yes (`env.ts:7`) |
 | `CRON_SECRET` | Gates `/api/internal/*` (which the middleware lets through) | yes (`env.ts:12`) |
 | `SEED_ADMIN_EMAILS` | Comma-separated allowlist, consumed **only** by `src/lib/db/seed.ts:31` | not in `env.ts` schema; **not** in `.env.example` |
@@ -227,10 +237,9 @@ Validated at startup by `src/lib/env.ts` (Zod `safeParse`; throws "Invalid envir
 
 ## Open Questions
 
-- The task brief lists the middleware bypass set as `/login`, `/api/auth/*`, `/api/internal/*`. The code bypasses five additional paths (`/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/api/line/contacts/oa-resolver/worklist`, and the regex `…/runs/{id}/rows`) per `src/middleware.ts:4-15`. Should the brief's list be treated as illustrative, or is one of those extra bypasses unintended and worth security review?
 - **Allowlist count is unverifiable from the repo.** AGENTS.md says both "8" and "9"; CLAUDE.md says "9". The real value is whatever `SEED_ADMIN_EMAILS` held at seed time / whatever rows now exist in `admin_users`. To get the authoritative count, query the production DB: `SELECT count(*) FROM admin_users;`. Which number (if any) should the docs cite?
-- The Node and edge configs request **different Google scopes** (`spreadsheets` write vs `spreadsheets.readonly`; `src/lib/auth.ts:32` vs `src/lib/auth-edge.ts:11`). Since only the Node instance ever runs the OAuth grant, the edge scope appears inert — is the divergence intentional, or should both be `spreadsheets`?
-- `SEED_ADMIN_EMAILS` is undocumented in `.env.example` despite being the only way to populate the allowlist. Worth adding so a fresh deployment doesn't ship with an empty (lock-everyone-out) allowlist.
-- The `session` callback is a pass-through in both configs (`src/lib/auth.ts:51-53`, `src/lib/auth-edge.ts:21-25`), so the session object carries only NextAuth defaults (no DB-derived role/name enrichment). Pages read `session.user.email`/`name` directly. Confirm no downstream code expects custom session fields.
+- The Node and edge configs request **different Google scopes** (`spreadsheets` write vs `spreadsheets.readonly`; `src/lib/auth.ts:23` vs `src/lib/auth-edge.ts:11`). Since only the Node instance ever runs the OAuth grant, the edge scope appears inert — is the divergence intentional, or should both be `spreadsheets`?
+- `SEED_ADMIN_EMAILS` is undocumented in `.env.example` despite being the only way to populate the admin allowlist. Worth adding so a fresh deployment doesn't ship without any full-access admin users.
+- Access claims are resolved into the JWT only at sign-in. Should revoking an admin row, changing `allowedPages`, or removing a tutor contact invalidate existing sessions immediately, or is "takes effect on next sign-in/session refresh" acceptable?
 
 _Verified against HEAD + uncommitted WIP on 2026-05-31._
