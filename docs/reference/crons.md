@@ -163,7 +163,7 @@ The handler authenticates with `CRON_SECRET`, then calls `applyVerifiedStudentPr
 
 ## Internal handlers without a cron schedule
 
-These `/api/internal/*` route handlers exist on disk but are **not** listed in `vercel.json`, so Vercel Cron never invokes them. Verified by comparing the eight cron `path`s in `vercel.json` against the internal `route.ts` files under `src/app/api/internal/`.
+These `/api/internal/*` route handlers exist on disk but are **not** listed in `vercel.json`, so Vercel Cron never invokes them. Verified by comparing the 12 cron `path`s in `vercel.json` against the internal `route.ts` files under `src/app/api/internal/`.
 
 ### `/api/internal/sync-room-utilization` — manual only (no GET handler)
 
@@ -175,7 +175,16 @@ These `/api/internal/*` route handlers exist on disk but are **not** listed in `
 
 **Flag:** this job is **manual / not scheduled**. If it is meant to keep room-utilization data current on a cadence (like the other syncs), it is currently effectively disabled from the automation standpoint — see open questions.
 
-> No other `/api/internal/*` handler is missing from `vercel.json`: the remaining route directories map 1:1 to the registered cron entries.
+### `/api/internal/line-backlog-recovery` — manual recovery only (no Vercel schedule)
+
+- **Not in `vercel.json`** → no automatic schedule.
+- **Exports `GET`** ([`route.ts:11`](../../src/app/api/internal/line-backlog-recovery/route.ts)) and authenticates with `CRON_SECRET` via `rejectInvalidCronSecret(request)` ([`route.ts:12`](../../src/app/api/internal/line-backlog-recovery/route.ts)).
+- **How it actually runs:** direct operator/recovery invocation with the cron bearer token; it is also listed as unscheduled in the Data Health `CRON_JOBS` registry ([`cron-registry.ts:257`](../../src/lib/data-health/cron-registry.ts)).
+- **Does:** `runLineBacklogRecovery({ db: getDb(), dryRun: false })` and returns `{ ok: true, result }` on success ([`route.ts:17`](../../src/app/api/internal/line-backlog-recovery/route.ts)).
+
+**Flag:** this job is **manual / not scheduled**. Adding it to `vercel.json` would be a production scheduling change and needs explicit review.
+
+> Every other `/api/internal/*/route.ts` handler is registered in `vercel.json`.
 
 ---
 

@@ -388,7 +388,7 @@ function buildCronJobs(
       healthDetail: status.healthDetail,
       latestInvocation: latestInvocation ? invocationSummary(latestInvocation) : null,
       recentInvocations: jobInvocations.slice(0, 4).map(invocationSummary),
-      canRunManually: true,
+      canRunManually: job.manualRunSupported,
     };
   });
 }
@@ -846,12 +846,14 @@ export async function getDataHealthDashboardPayload(now = new Date()): Promise<D
     issueSummary: issuesByType,
     issueDetails,
     recentRuns: buildRecentRuns(allRuns),
-    manualActions: CRON_JOBS.map((job) => ({
-      key: job.key,
-      label: job.label,
-      dangerous: job.dangerous,
-      confirmationLabel: job.confirmationLabel,
-    })),
+    manualActions: CRON_JOBS
+      .filter((job) => job.manualRunSupported)
+      .map((job) => ({
+        key: job.key,
+        label: job.label,
+        dangerous: job.dangerous,
+        confirmationLabel: job.confirmationLabel,
+      })),
     lastSuccessfulSync: wiseSnapshot.lastSuccessfulSync,
     lastFailedSync: wiseSnapshot.lastFailedSync,
     lastFailureError: wiseSnapshot.lastFailureError,

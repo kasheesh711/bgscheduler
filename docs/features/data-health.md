@@ -34,13 +34,13 @@ Data Health reads the existing feature run ledgers and adds one generic audit ta
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/data-health` | Returns the v2 dashboard payload: `overall`, `cronJobs`, `dataDomains`, `wiseSnapshot`, `issueSummary`, `issueDetails`, `recentRuns`, and compatibility fields (`staleAgeMs`, `lastSuccessfulSync`, etc.) consumed by the stale banner. |
-| `POST /api/data-health/jobs/[jobKey]/run` | Session-gated manual trigger for registered jobs. Dangerous jobs require `{ "confirmed": true }`. |
+| `POST /api/data-health/jobs/[jobKey]/run` | Session-gated manual trigger for registered jobs that set `manualRunSupported: true`. Dangerous jobs require `{ "confirmed": true }`. |
 | `POST /api/admin/sync-wise` | Legacy/admin Wise sync trigger; now also records a `cron_invocations` audit row. |
 
 ## UI
 
 - **Page:** `src/app/(app)/data-health/page.tsx` is a Server Component that auth-checks and loads the initial dashboard payload.
-- **Interactive dashboard:** `src/components/data-health/data-health-dashboard.tsx` handles refresh, manual run buttons, confirmations, and UI state.
+- **Interactive dashboard:** `src/components/data-health/data-health-dashboard.tsx` handles refresh, supported manual run buttons, confirmations, and UI state.
 - **Primary sections:** overall health strip, next expected cron timeline, manual controls, cron control plane, data freshness, Wise snapshot fidelity, normalization issue tables, and unified run history.
 - **Status values:** `healthy`, `late`, `failing`, `running`, `manual-only`, `unknown`.
 
@@ -56,11 +56,11 @@ Data Health reads the existing feature run ledgers and adds one generic audit ta
 
 ## Tests
 
-- `src/lib/data-health/__tests__/cron-registry.test.ts` checks registry parity with `vercel.json`.
+- `src/lib/data-health/__tests__/cron-registry.test.ts` checks registry parity with `vercel.json` and supported Data Health manual-run metadata.
 - `src/lib/data-health/__tests__/status.test.ts` covers interval lateness, Bangkok daily windows, stuck runs, and recovery after later success.
 - `src/lib/data-health/__tests__/migration.test.ts` checks the cron audit migration shape.
 - `src/app/api/data-health/__tests__/route.test.ts` covers the v2 payload route and legacy stale-banner fields.
-- `src/app/api/data-health/jobs/[jobKey]/run/__tests__/route.test.ts` covers auth, unknown jobs, and dangerous-job confirmation.
+- `src/app/api/data-health/jobs/[jobKey]/run/__tests__/route.test.ts` covers auth, unknown/unsupported jobs, and dangerous-job confirmation.
 - `src/components/data-health/__tests__/data-health-dashboard.test.tsx` smoke-tests the rendered command-center sections.
 
 _Updated for the Ops Command dashboard refactor on 2026-06-01._

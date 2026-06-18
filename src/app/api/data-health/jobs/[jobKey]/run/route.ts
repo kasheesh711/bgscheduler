@@ -18,6 +18,12 @@ export async function POST(request: NextRequest, context: RunRouteContext) {
   if (!job) {
     return NextResponse.json({ error: "Unknown job" }, { status: 404 });
   }
+  if (!job.manualRunSupported) {
+    return NextResponse.json(
+      { error: "Manual run is not available for this job" },
+      { status: 409 },
+    );
+  }
 
   const body = await request.json().catch(() => ({})) as { confirmed?: boolean };
   if (job.dangerous && body.confirmed !== true) {
