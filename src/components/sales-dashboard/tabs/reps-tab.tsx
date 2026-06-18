@@ -6,9 +6,11 @@ import type { ChartConfiguration } from "chart.js";
 import { ArrowDownRight, ArrowUpRight, Target } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ChartCanvas, chartColors } from "@/components/sales-dashboard/chart-canvas";
+import { CsvExportButton } from "@/components/sales-dashboard/csv-export-button";
 import { TransactionsTable } from "@/components/sales-dashboard/transactions-table";
 import { normalizeRepKey } from "@/lib/sales-dashboard/cohorts";
 import { addMonths, monthShortLabel, monthsInRange } from "@/lib/sales-dashboard/dates";
+import type { CsvColumn } from "@/lib/sales-dashboard/csv";
 import { formatCurrency, formatPercent } from "@/lib/sales-dashboard/format";
 import type { RepFunnel, RepMonthAgg, SalesTabProps } from "@/lib/sales-dashboard/types";
 import { cn } from "@/lib/utils";
@@ -38,6 +40,15 @@ export interface RepRailEntry {
   /** Revenue delta vs the previous equal-length month window; null when that window had none. */
   deltaPct: number | null;
 }
+
+export const REP_EXPORT_COLUMNS: CsvColumn<RepRailEntry>[] = [
+  { key: "rep", header: "Rep", value: (row) => row.rep },
+  { key: "rev", header: "Revenue", value: (row) => row.rev },
+  { key: "count", header: "Transactions", value: (row) => row.count },
+  { key: "share", header: "Revenue Share", value: (row) => row.share },
+  { key: "deltaPct", header: "Previous Period Delta Percent", value: (row) => row.deltaPct },
+  { key: "key", header: "Rep Key", value: (row) => row.key },
+];
 
 /**
  * Build the left-rail entries from the month-grain rep aggregates.
@@ -344,11 +355,20 @@ export function RepsTab({ dimensions, loading, from, to, seed, active = true }: 
             drill filters by exact dates). Additional-revenue rows are excluded from rep groupings.
           </p>
         </div>
-        {rangeMonthCount > 0 ? (
-          <span className="text-xs text-muted-foreground">
-            Deltas vs previous {rangeMonthCount} month{rangeMonthCount === 1 ? "" : "s"}
-          </span>
-        ) : null}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {rangeMonthCount > 0 ? (
+            <span className="text-xs text-muted-foreground">
+              Deltas vs previous {rangeMonthCount} month{rangeMonthCount === 1 ? "" : "s"}
+            </span>
+          ) : null}
+          <CsvExportButton
+            filename={`sales-dashboard-reps-${from}-to-${to}.csv`}
+            rows={rail}
+            columns={REP_EXPORT_COLUMNS}
+          >
+            Reps CSV
+          </CsvExportButton>
+        </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">

@@ -32,6 +32,7 @@ import {
   buildRepRangeStats,
   computePaceVsTarget,
   repKeyOf,
+  REP_EXPORT_COLUMNS,
   RepsTab,
 } from "../reps-tab";
 
@@ -126,6 +127,29 @@ describe("buildRepRail", () => {
       makeRepMonth({ rep: `Rep ${String(index).padStart(2, "0")}`, month: "2026-05-01", rev: 1_000 + index, count: 1 }),
     );
     expect(buildRepRail(reps, "2026-05-01", "2026-05-31")).toHaveLength(14);
+  });
+});
+
+describe("REP_EXPORT_COLUMNS", () => {
+  it("keeps the export column order stable over the full rep rail row", () => {
+    const row = buildRepRail(makeDimensions().reps, "2026-05-01", "2026-05-31")[0];
+
+    expect(REP_EXPORT_COLUMNS.map((column) => column.header)).toEqual([
+      "Rep",
+      "Revenue",
+      "Transactions",
+      "Revenue Share",
+      "Previous Period Delta Percent",
+      "Rep Key",
+    ]);
+    expect(REP_EXPORT_COLUMNS.map((column) => column.value(row))).toEqual([
+      "Aom",
+      60_000,
+      5,
+      0.75,
+      0.5,
+      "aom",
+    ]);
   });
 });
 

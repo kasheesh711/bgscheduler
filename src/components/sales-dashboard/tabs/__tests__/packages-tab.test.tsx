@@ -6,6 +6,7 @@ import type {
   SalesDimensionsPayload,
 } from "@/lib/sales-dashboard/types";
 import {
+  buildPackageExportRows,
   buildPackageMixShift,
   filterToMonthRange,
   formatMonthShort,
@@ -185,6 +186,26 @@ describe("summarizeAdditionalMix", () => {
 
   it("handles empty input without dividing by zero", () => {
     expect(summarizeAdditionalMix([])).toEqual({ entries: [], totalRevenue: 0, totalCount: 0 });
+  });
+});
+
+describe("buildPackageExportRows", () => {
+  it("sections package-band rows and additional-revenue mix rows in one export", () => {
+    const bands = summarizePackageBands([
+      makePackageAgg({ packageBand: "Trial", packageLabel: "Trial", hours: null, totalHoursSold: null, rev: 2_000, count: 4 }),
+      makePackageAgg({ rev: 40_000, count: 2, totalHoursSold: 40 }),
+    ]);
+    const additional = summarizeAdditionalMix([
+      makeAdditionalAgg({ salesType: "Books", rev: 1_500, count: 3 }),
+    ]);
+
+    const rows = buildPackageExportRows(bands, additional.entries);
+
+    expect(rows).toEqual([
+      expect.objectContaining({ section: "Package bands", label: "Trial", revenue: 2_000 }),
+      expect.objectContaining({ section: "Package bands", label: "20h", revenue: 40_000 }),
+      expect.objectContaining({ section: "Additional revenue", label: "Books", revenue: 1_500 }),
+    ]);
   });
 });
 

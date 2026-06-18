@@ -17,8 +17,10 @@ import {
   chartColors,
   type ChartThemeColors,
 } from "@/components/sales-dashboard/chart-canvas";
+import { CsvExportButton } from "@/components/sales-dashboard/csv-export-button";
 import { TransactionsTable } from "@/components/sales-dashboard/transactions-table";
 import { MONTH_NAMES } from "@/lib/sales-dashboard/dates";
+import type { CsvColumn } from "@/lib/sales-dashboard/csv";
 import { formatCurrency, formatPercent } from "@/lib/sales-dashboard/format";
 import { PACKAGE_BANDS } from "@/lib/sales-dashboard/package-hours";
 import type {
@@ -80,6 +82,30 @@ export interface AdditionalMixSummary {
   /** Share of total additional revenue in the selected range (0..1). */
   share: number;
 }
+
+export interface PackageExportRow {
+  section: "Package bands" | "Additional revenue";
+  label: string;
+  packageLabel: string;
+  txnCount: number;
+  revenue: number;
+  share: number;
+  avgPackageValue: number | null;
+  avgPricePerHour: number | null;
+  hoursSold: number | null;
+}
+
+export const PACKAGE_EXPORT_COLUMNS: CsvColumn<PackageExportRow>[] = [
+  { key: "section", header: "Section", value: (row) => row.section },
+  { key: "label", header: "Label", value: (row) => row.label },
+  { key: "packageLabel", header: "Package", value: (row) => row.packageLabel },
+  { key: "txnCount", header: "Transactions", value: (row) => row.txnCount },
+  { key: "revenue", header: "Revenue", value: (row) => row.revenue },
+  { key: "share", header: "Share", value: (row) => row.share },
+  { key: "avgPackageValue", header: "Average Package Value", value: (row) => row.avgPackageValue },
+  { key: "avgPricePerHour", header: "Average Price Per Hour", value: (row) => row.avgPricePerHour },
+  { key: "hoursSold", header: "Hours Sold", value: (row) => row.hoursSold },
+];
 
 function bandRank(band: string): number {
   return BAND_RANK.get(band) ?? PACKAGE_BANDS.length;
@@ -216,6 +242,36 @@ export function summarizeAdditionalMix(rows: AdditionalMixMonthAgg[]): {
     }))
     .sort((left, right) => right.revenue - left.revenue || left.salesType.localeCompare(right.salesType));
   return { entries, totalRevenue, totalCount };
+}
+
+export function buildPackageExportRows(
+  bands: PackageBandSummary[],
+  additionalEntries: AdditionalMixSummary[],
+): PackageExportRow[] {
+  return [
+    ...bands.map((band) => ({
+      section: "Package bands" as const,
+      label: band.band,
+      packageLabel: band.packageLabel,
+      txnCount: band.txnCount,
+      revenue: band.revenue,
+      share: band.revenueShare,
+      avgPackageValue: band.avgPackageValue,
+      avgPricePerHour: band.avgPricePerHour,
+      hoursSold: band.hoursSold,
+    })),
+    ...additionalEntries.map((entry) => ({
+      section: "Additional revenue" as const,
+      label: entry.salesType,
+      packageLabel: "",
+      txnCount: entry.count,
+      revenue: entry.revenue,
+      share: entry.share,
+      avgPackageValue: null,
+      avgPricePerHour: null,
+      hoursSold: null,
+    })),
+  ];
 }
 
 /** Resolve a GM cross-link seed to a known package band (else null). */
@@ -392,9 +448,20 @@ export function PackagesTab({ dimensions, loading, from, to, seed, active = true
 
   const { bands, totals, additional } = view;
   const hasPackages = bands.length > 0;
+  const exportRows = buildPackageExportRows(bands, additional.entries);
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <CsvExportButton
+          filename={`sales-dashboard-packages-${from}-to-${to}.csv`}
+          rows={exportRows}
+          columns={PACKAGE_EXPORT_COLUMNS}
+        >
+          Packages CSV
+        </CsvExportButton>
+      </div>
+
       {/* KPI strip */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Package revenue" value={formatCurrency(totals.revenue)} />

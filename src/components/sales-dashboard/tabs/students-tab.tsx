@@ -4,11 +4,13 @@ import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CsvExportButton } from "@/components/sales-dashboard/csv-export-button";
 import {
   STATUS_BADGE_VARIANTS,
   StudentDetailPanel,
 } from "@/components/sales-dashboard/student-detail-panel";
 import { addDaysIso, currentBangkokDate } from "@/lib/sales-dashboard/dates";
+import type { CsvColumn } from "@/lib/sales-dashboard/csv";
 import { formatCurrency } from "@/lib/sales-dashboard/format";
 import type {
   ExploreSeed,
@@ -53,6 +55,22 @@ const QUICK_FILTERS: { id: StudentFilterId; label: string }[] = [
   { id: "quick:expiring", label: `Expiring soon (≤${EXPIRING_HORIZON_DAYS}d)` },
   { id: "status:Churned", label: "Churned" },
   { id: "status:Trial-only", label: "Trials not converted" },
+];
+
+export const STUDENT_EXPORT_COLUMNS: CsvColumn<StudentDirectoryEntry>[] = [
+  { key: "displayName", header: "Student", value: (entry) => entry.displayName },
+  { key: "status", header: "Status", value: (entry) => entry.status },
+  { key: "displayNameVariants", header: "Name Variants", value: (entry) => entry.displayNameVariants },
+  { key: "programs", header: "Programs", value: (entry) => entry.programs },
+  { key: "reps", header: "Reps", value: (entry) => entry.reps },
+  { key: "firstSeen", header: "First Seen", value: (entry) => entry.firstSeen },
+  { key: "lastPaymentDate", header: "Last Paid", value: (entry) => entry.lastPaymentDate },
+  { key: "latestValidUntil", header: "Valid Until", value: (entry) => entry.latestValidUntil },
+  { key: "decisionDate", header: "Renewal Decision By", value: (entry) => entry.decisionDate },
+  { key: "totalRevenue", header: "Revenue", value: (entry) => entry.totalRevenue },
+  { key: "txnCount", header: "Package Txn", value: (entry) => entry.txnCount },
+  { key: "addTxnCount", header: "Additional Txn", value: (entry) => entry.addTxnCount },
+  { key: "key", header: "Student Key", value: (entry) => entry.key },
 ];
 
 /** Bangkok-local ISO date (YYYY-MM-DD) — delegates to the shared dates helper. */
@@ -146,6 +164,16 @@ export function sortStudentDirectory(
   return rows;
 }
 
+export function buildStudentExportRows(
+  students: StudentDirectoryEntry[],
+  query: string,
+  filterId: StudentFilterId | null,
+  sortKey: StudentSortKey,
+  today: string,
+): StudentDirectoryEntry[] {
+  return sortStudentDirectory(filterStudentDirectory(students, query, filterId, today), sortKey);
+}
+
 export interface StudentsSeedState {
   query: string;
   selectedKey: string | null;
@@ -227,7 +255,7 @@ export function StudentsTab({ dimensions, loading, seed }: SalesTabProps) {
   }, [students, today]);
 
   const visibleStudents = useMemo(
-    () => sortStudentDirectory(filterStudentDirectory(students, query, filterId, today), sortKey),
+    () => buildStudentExportRows(students, query, filterId, sortKey, today),
     [students, query, filterId, today, sortKey],
   );
 
@@ -264,11 +292,20 @@ export function StudentsTab({ dimensions, loading, seed }: SalesTabProps) {
   return (
     <div className="space-y-3">
       <section className="rounded-lg border bg-card p-4 shadow-sm">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold">Students</h2>
-          <span className="text-[11px] text-muted-foreground">
-            {students.length.toLocaleString("en-US")} students · whole history · status recomputed (live)
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-muted-foreground">
+              {students.length.toLocaleString("en-US")} students · whole history · status recomputed (live)
+            </span>
+            <CsvExportButton
+              filename={`sales-dashboard-students-${today}.csv`}
+              rows={visibleStudents}
+              columns={STUDENT_EXPORT_COLUMNS}
+            >
+              Students CSV
+            </CsvExportButton>
+          </div>
         </div>
 
         <Input
