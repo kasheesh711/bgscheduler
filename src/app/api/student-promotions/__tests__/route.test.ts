@@ -148,6 +148,19 @@ describe("student promotion routes", () => {
     expect(res.status).toBe(401);
   });
 
+  it("fails closed when the cron secret is not configured", async () => {
+    delete process.env.CRON_SECRET;
+
+    const res = await cronApply(request(
+      "http://test.local/api/internal/student-promotions/july-1",
+      undefined,
+      { authorization: "Bearer secret" },
+    ));
+
+    expect(res.status).toBe(500);
+    expect(applyVerifiedStudentPromotionRun).not.toHaveBeenCalled();
+  });
+
   it("runs cron apply with a valid bearer secret", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-30T17:05:00.000Z"));
@@ -160,6 +173,20 @@ describe("student promotion routes", () => {
 
     expect(res.status).toBe(200);
     expect(applyVerifiedStudentPromotionRun).toHaveBeenCalledWith({ trigger: "cron" });
+  });
+
+  it("blocks the cron before July 1 starts in Bangkok", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-30T16:59:00.000Z"));
+
+    const res = await cronApply(request(
+      "http://test.local/api/internal/student-promotions/july-1",
+      undefined,
+      { authorization: "Bearer secret" },
+    ));
+
+    expect(res.status).toBe(409);
+    expect(applyVerifiedStudentPromotionRun).not.toHaveBeenCalled();
   });
 
   it("blocks the cron outside the July 1, 2026 Bangkok target date", async () => {
