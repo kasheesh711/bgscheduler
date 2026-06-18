@@ -5,12 +5,13 @@ import { signIn } from "next-auth/react";
 import {
   CalendarClock,
   Database,
+  Download,
   Loader2,
   RefreshCw,
   ShieldCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -28,6 +29,7 @@ import {
   currentBangkokMonthEnd,
   currentBangkokMonthStart,
 } from "@/lib/sales-dashboard/dates";
+import { buildTransactionsExportHref } from "@/lib/sales-dashboard/export-links";
 import { formatDateTime } from "@/lib/sales-dashboard/format";
 import {
   DEFAULT_PROJECTION_CALC_MULTI_SHEET,
@@ -279,6 +281,14 @@ export function SalesDashboardShell() {
             <Database className="size-4" />
             Data Sources & Imports
           </Button>
+          <a
+            href={buildTransactionsExportHref({ from, to })}
+            className={buttonVariants({ variant: "outline" })}
+            aria-label="Export all transactions in the selected date range"
+          >
+            <Download className="size-4" />
+            Transactions CSV
+          </a>
           <Button
             variant="outline"
             disabled={!hasSources || busyAction === "refresh"}

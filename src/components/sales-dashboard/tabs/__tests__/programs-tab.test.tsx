@@ -27,6 +27,7 @@ import {
   buildProgramTableRows,
   buildShareSegments,
   compareProgramRows,
+  PROGRAM_EXPORT_COLUMNS,
 } from "../programs-tab";
 
 function makeAgg(overrides: Partial<ProgramMonthAgg> = {}): ProgramMonthAgg {
@@ -190,6 +191,33 @@ describe("compareProgramRows", () => {
     const withNull = [...rows, { ...rows[0], program: "Zero", momDelta: null, momPct: null }];
     const sorted = withNull.sort((left, right) => compareProgramRows(left, right, "mom", "desc"));
     expect(sorted.at(-1)!.program).toBe("Zero");
+  });
+});
+
+describe("PROGRAM_EXPORT_COLUMNS", () => {
+  it("keeps the export column order stable over range-scoped program rows", () => {
+    const row = buildProgramTableRows(FIXTURE_PROGRAMS, RANGE)[0];
+
+    expect(PROGRAM_EXPORT_COLUMNS.map((column) => column.header)).toEqual([
+      "Program",
+      "Revenue",
+      "Transactions",
+      "Student Months",
+      "Average Ticket",
+      "Revenue Share",
+      "MoM Delta",
+      "MoM Percent",
+    ]);
+    expect(PROGRAM_EXPORT_COLUMNS.map((column) => column.value(row))).toEqual([
+      "Math",
+      80_000,
+      7,
+      7,
+      80_000 / 7,
+      0.8,
+      20_000,
+      20_000 / 30_000,
+    ]);
   });
 });
 

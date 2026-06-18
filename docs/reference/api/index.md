@@ -2,7 +2,7 @@
 
 The canonical lookup of every HTTP endpoint in BGScheduler. This page lists **method + path + group + auth + one-line purpose** only. For full request/response schemas, query parameters, and error shapes, follow the link on each group heading to the per-group detail page.
 
-All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **117**.
+All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **118**.
 
 ## How to read this index
 
@@ -218,11 +218,14 @@ Room-utilization analytics and capacity forecasting.
 
 ## [Sales Dashboard](./sales-dashboard.md) — `/api/sales-dashboard`
 
-Sales reporting: payload load, source CRUD & seeding, Google-Sheets imports, import-run history, and projection source/import.
+Sales reporting: payload load, tab dimensions, transaction drills/CSV export, source CRUD & seeding, Google-Sheets imports, import-run history, and projection source/import.
 
 | Method | Path | Group | Auth | Brief purpose |
 |---|---|---|---|---|
 | GET | `/api/sales-dashboard` | sales-dashboard | admin | Load the sales-dashboard payload |
+| GET | `/api/sales-dashboard/dimensions` | sales-dashboard | admin | Load tab dimensions and filter facets |
+| GET | `/api/sales-dashboard/transactions` | sales-dashboard | admin | Load filtered, paginated transaction drill rows |
+| GET | `/api/sales-dashboard/transactions/export` | sales-dashboard | admin | Export all filtered transaction drill rows as CSV |
 | POST | `/api/sales-dashboard/import` | sales-dashboard | admin | Import sales data (single source / backfill / refreshable) |
 | GET | `/api/sales-dashboard/import-runs` | sales-dashboard | admin | List sales-dashboard import runs |
 | GET | `/api/sales-dashboard/sources` | sales-dashboard | admin | List configured sales sources |

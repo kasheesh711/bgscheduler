@@ -29,6 +29,43 @@ File: `src/app/api/sales-dashboard/route.ts:5-18`
 
 ---
 
+## Dimensions and transaction drills
+
+These read from the same live Sales Dashboard materialization as the workspace tabs. They expose normalized dashboard fields only; raw sheet JSON, OAuth token state, and source internals are not serialized.
+
+### `GET /api/sales-dashboard/dimensions`
+
+File: `src/app/api/sales-dashboard/dimensions/route.ts:1-17`
+
+- **Auth:** admin session (`:5-8`).
+- **Request:** none.
+- **Response 200:** `SalesDimensionsPayload` from `getSalesDimensionsPayload()` (`:11`). Top-level keys include `months`, `reps`, `repFunnels`, `programs`, `packages`, `additionalMix`, `students`, `targetMonthlyRevenue`, `unparsedPackageCount`, and `generatedAt`.
+- **Side effects:** none; read-only aggregation.
+- **Errors:** `401`; `500 {"error": message}` on any thrown error, default message `"Failed to load sales dimensions"` (`:13-16`).
+
+### `GET /api/sales-dashboard/transactions`
+
+File: `src/app/api/sales-dashboard/transactions/route.ts:1-36`
+
+- **Auth:** admin session (`:10-13`).
+- **Query params:** optional `rep`, `program`, `band`, `student`, `from`, `to`, `limit`, and `offset`. `from`/`to` must be `YYYY-MM-DD`. `limit` defaults to `200` and clamps at `1000`; `offset` defaults to `0` (`src/lib/sales-dashboard/transaction-query.ts:5-27`).
+- **Response 200:** `{ "rows": SlimTransaction[], "total": number }`. Filtering is applied before pagination, and `total` is the filtered row count (`:25-31`).
+- **Side effects:** none; reads `getLiveSlimRows()` and filters via `filterSlimTransactions()`.
+- **Errors:** `401`; `400 {"error":"Invalid query","details":...}` on malformed query params; `500 {"error": message}` on any thrown error, default message `"Failed to load sales transactions"` (`:15-35`).
+
+### `GET /api/sales-dashboard/transactions/export`
+
+File: `src/app/api/sales-dashboard/transactions/export/route.ts:1-70`
+
+- **Auth:** admin session (`:41-44`).
+- **Query params:** optional `rep`, `program`, `band`, `student`, `from`, and `to`. These are the same filters as the JSON transaction route, without `limit` or `offset`; all matching rows are exported (`src/lib/sales-dashboard/transaction-query.ts:8-20`).
+- **Response 200:** CSV text with a UTF-8 BOM and CRLF row endings. Headers are `Date`, `Kind`, `Student`, `Student Key`, `Rep`, `Program`, `Package`, `Band`, `Hours`, `Amount`, `Enrollment Type`, `Sales Type`, `Valid Until`, `Source Month`, and `Number Of Students` (`:10-26`).
+- **Response headers:** `Content-Type: text/csv; charset=utf-8`; `Content-Disposition: attachment; filename="sales-dashboard-transactions-<from>-to-<to>.csv"`; `Cache-Control: no-store` (`:60-64`).
+- **Side effects:** none; reads `getLiveSlimRows()`, filters via `filterSlimTransactions()`, and serializes the normalized slim transaction rows only.
+- **Errors:** `401`; `400 {"error":"Invalid query","details":...}` on malformed query params; `500 {"error": message}` on any thrown error, default message `"Failed to export sales transactions"` (`:46-68`).
+
+---
+
 ## Source management
 
 These manage the per-month Google Sheet "sources" that feed the dashboard.

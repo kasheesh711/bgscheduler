@@ -10,6 +10,7 @@ import { auth } from "@/lib/auth";
 import { getLiveSlimRows } from "@/lib/sales-dashboard/data";
 import { toSlimAdditionalTransaction, toSlimTransaction } from "@/lib/sales-dashboard/dimensions";
 import type { ParsedAdditionalSaleRow, ParsedNormalSaleRow, SlimTransaction } from "@/lib/sales-dashboard/types";
+import { GET as getTransactionsExport } from "../transactions/export/route";
 import { GET as getTransactions } from "../transactions/route";
 
 const authMock = auth as unknown as Mock;
@@ -63,6 +64,10 @@ const fixtureRows: SlimTransaction[] = [
 
 function request(query: string): NextRequest {
   return new NextRequest(`http://test.local/api/sales-dashboard/transactions${query}`);
+}
+
+function exportRequest(query: string): NextRequest {
+  return new NextRequest(`http://test.local/api/sales-dashboard/transactions/export${query}`);
 }
 
 describe("GET /api/sales-dashboard/transactions", () => {
@@ -136,5 +141,62 @@ describe("GET /api/sales-dashboard/transactions", () => {
     expect(text).not.toContain('"raw"');
     expect(text).not.toContain("sensitive-raw-cell");
     expect(text).not.toContain("081-000-0000");
+  });
+});
+
+describe("GET /api/sales-dashboard/transactions/export", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    authMock.mockResolvedValue({ user: { email: "admin@example.com" }, expires: "2026-06-21T00:00:00.000Z" });
+    vi.mocked(getLiveSlimRows).mockResolvedValue(fixtureRows);
+  });
+
+  it("requires auth", async () => {
+    authMock.mockResolvedValue(null);
+
+    const res = await getTransactionsExport(exportRequest(""));
+
+    expect(res.status).toBe(401);
+    expect(getLiveSlimRows).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed dates with 400 and flattened details", async () => {
+    const res = await getTransactionsExport(exportRequest("?from=10-01-2026"));
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe("Invalid query");
+    expect(body.details.fieldErrors.from).toBeTruthy();
+    expect(getLiveSlimRows).not.toHaveBeenCalled();
+  });
+
+  it("exports all matching rows without pagination and sets CSV download headers", async () => {
+    const res = await getTransactionsExport(exportRequest("?rep=alice%20wong&from=2026-01-01&to=2026-02-28"));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("text/csv; charset=utf-8");
+    expect(res.headers.get("Content-Disposition")).toBe(
+      'attachment; filename="sales-dashboard-transactions-2026-01-01-to-2026-02-28.csv"',
+    );
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(Array.from(bytes.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf]);
+    const csv = Buffer.from(bytes).toString("utf8");
+    const lines = csv.split("\r\n");
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain('"Date","Kind","Student","Student Key","Rep"');
+    expect(csv).toContain('"Alice Wong"');
+  });
+
+  it("filters by student across normal and additional rows and excludes raw source cells", async () => {
+    const res = await getTransactionsExport(exportRequest("?student=mint&from=2026-01-01&to=2026-01-31"));
+
+    expect(res.status).toBe(200);
+    const csv = await res.text();
+    expect(csv).toContain('"normal"');
+    expect(csv).toContain('"additional"');
+    expect(csv.split("\r\n")).toHaveLength(3);
+    expect(csv).not.toContain('"raw"');
+    expect(csv).not.toContain("sensitive-raw-cell");
+    expect(csv).not.toContain("081-000-0000");
   });
 });

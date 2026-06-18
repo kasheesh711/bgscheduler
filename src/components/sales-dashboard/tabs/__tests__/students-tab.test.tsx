@@ -4,6 +4,7 @@ import {
   EXPIRING_HORIZON_DAYS,
   StudentsTab,
   addDaysToIso,
+  buildStudentExportRows,
   filterStudentDirectory,
   isExpiringSoon,
   matchesStudentFilter,
@@ -141,6 +142,24 @@ describe("sortStudentDirectory", () => {
     const before = directory.map((entry) => entry.key);
     sortStudentDirectory(directory, "ltv");
     expect(directory.map((entry) => entry.key)).toEqual(before);
+  });
+});
+
+describe("buildStudentExportRows", () => {
+  it("exports every filtered and sorted row, independent of the 50-row UI cap", () => {
+    const many = Array.from({ length: 60 }, (_, index) =>
+      student({
+        key: `student-${String(index).padStart(2, "0")}`,
+        displayName: `Student ${String(index).padStart(2, "0")}`,
+        totalRevenue: index,
+      }),
+    );
+
+    const rows = buildStudentExportRows(many, "student", null, "ltv", TODAY);
+
+    expect(rows).toHaveLength(60);
+    expect(rows[0].key).toBe("student-59");
+    expect(rows.at(-1)?.key).toBe("student-00");
   });
 });
 

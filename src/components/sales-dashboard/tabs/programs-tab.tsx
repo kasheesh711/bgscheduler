@@ -13,8 +13,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ChartCanvas, chartColors } from "@/components/sales-dashboard/chart-canvas";
+import { CsvExportButton } from "@/components/sales-dashboard/csv-export-button";
 import { TransactionsTable } from "@/components/sales-dashboard/transactions-table";
 import { addMonths, monthShortLabel, monthStartOf } from "@/lib/sales-dashboard/dates";
+import type { CsvColumn } from "@/lib/sales-dashboard/csv";
 import { formatCurrency, formatPercent } from "@/lib/sales-dashboard/format";
 import type { ExploreSeed, ProgramMonthAgg, SalesTabProps } from "@/lib/sales-dashboard/types";
 import { cn } from "@/lib/utils";
@@ -68,6 +70,17 @@ export interface ProgramShareSegment {
 }
 
 export type ProgramSortKey = "program" | "rev" | "txn" | "studentMonths" | "avgTicket" | "share" | "mom";
+
+export const PROGRAM_EXPORT_COLUMNS: CsvColumn<ProgramRangeRow>[] = [
+  { key: "program", header: "Program", value: (row) => row.program },
+  { key: "rev", header: "Revenue", value: (row) => row.rev },
+  { key: "txn", header: "Transactions", value: (row) => row.txn },
+  { key: "studentMonths", header: "Student Months", value: (row) => row.studentMonths },
+  { key: "avgTicket", header: "Average Ticket", value: (row) => row.avgTicket },
+  { key: "share", header: "Revenue Share", value: (row) => row.share },
+  { key: "momDelta", header: "MoM Delta", value: (row) => row.momDelta },
+  { key: "momPct", header: "MoM Percent", value: (row) => row.momPct },
+];
 
 function rowRevenue(agg: ProgramMonthAgg, includeTrials: boolean): number {
   return includeTrials ? agg.rev : agg.rev - agg.revT;
@@ -353,6 +366,13 @@ export function ProgramsTab({ dimensions, loading, from, to, seed, active = true
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <CsvExportButton
+              filename={`sales-dashboard-programs-${from}-to-${to}.csv`}
+              rows={sortedRows}
+              columns={PROGRAM_EXPORT_COLUMNS}
+            >
+              Programs CSV
+            </CsvExportButton>
             <Button
               size="sm"
               variant={includeTrials ? "default" : "outline"}
