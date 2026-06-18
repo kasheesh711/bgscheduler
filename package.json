@@ -23,6 +23,7 @@
     "ai-scheduler:evaluate": "tsx scripts/evaluate-ai-scheduler.ts",
     "ai-scheduler:compare-models": "tsx scripts/compare-ai-scheduler-models.ts",
     "line:test-data:cleanup": "tsx scripts/delete-line-test-data.ts",
+    "docs:audit": "vitest run --project unit src/__tests__/api-reference-index.test.ts",
     "guard:sales-dashboard-scope": "node scripts/check-sales-dashboard-scope.mjs",
     "guard:production-route-surface": "node scripts/check-production-route-surface.mjs",
     "verify:release": "npm run typecheck && npm test && npm run build && npm run typecheck && git diff --check && npm run guard:production-route-surface",
