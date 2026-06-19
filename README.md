@@ -18,7 +18,7 @@ layer; the handbook owns the depth.
 |---|---|
 | [`docs/handbook/`](docs/handbook/architecture.md) | System architecture, data flow, conventions, glossary, and the Next.js-16 gotchas |
 | [`docs/features/`](docs/features/) | One doc per feature — purpose, rules, and flows (the *why* and *what*) |
-| [`docs/reference/api/`](docs/reference/api/index.md) | Every HTTP endpoint: method, path, auth, purpose (117 handlers) |
+| [`docs/reference/api/`](docs/reference/api/index.md) | Every HTTP endpoint: method, path, auth, purpose (118 handlers) |
 | [`docs/reference/database/`](docs/reference/database/index.md) | Every table and ER diagrams (82 tables) |
 | [`docs/reference/crons.md`](docs/reference/crons.md) · [`docs/reference/env.md`](docs/reference/env.md) | Cron registry and environment-variable reference |
 | [`docs/operations/`](docs/operations/runbook.md) | Runbook, auth/access model, observability |
@@ -30,7 +30,7 @@ layer; the handbook owns the depth.
 
 - **Production**: [bgscheduler.vercel.app](https://bgscheduler.vercel.app) · **Repo**: [kasheesh711/bgscheduler](https://github.com/kasheesh711/bgscheduler)
 - **Stack**: Next.js 16 (App Router) · TypeScript · Tailwind v4 · shadcn/ui · Auth.js (Google) · Drizzle ORM · Neon Postgres (ap-southeast-1) · Vercel Pro
-- **Surface**: 15 admin features across 15 routed pages, 117 API handlers, 82 Postgres tables, 8 Vercel crons
+- **Surface**: 15 admin features across 15 routed pages, 118 API handlers, 82 Postgres tables, 12 Vercel crons
 - **Tests**: Vitest unit suite (`npm test`) plus a Testcontainers-backed integration suite (`npm run test:integration`)
 
 ## Features
@@ -98,7 +98,7 @@ These are enforced in code and must not be weakened without explicit approval (s
 
 ## Scheduled syncs
 
-Seven Vercel crons are declared in [`vercel.json`](vercel.json); all fire an
+Twelve Vercel crons are declared in [`vercel.json`](vercel.json); all fire an
 HTTP `GET` with `Authorization: Bearer $CRON_SECRET`. The five `sync-*` jobs are
 staggered at 5-minute offsets and guarded against overlap. Full registry (schedules,
 timeouts, handlers) in [`docs/reference/crons.md`](docs/reference/crons.md).
@@ -110,8 +110,13 @@ timeouts, handlers) in [`docs/reference/crons.md`](docs/reference/crons.md).
 | `sync-sales-dashboard` | `10,40 * * * *` |
 | `sync-leave-requests` | `15,45 * * * *` |
 | `sync-credit-control` | `20,50 * * * *` |
+| `sync-progress-tests` | `25,55 * * * *` |
+| `sync-competitor-intelligence` | `25 18 * * 0` (01:25 Bangkok Monday) |
+| `progress-tests/admin-digest` | `35 0 * * *` (07:35 Bangkok) |
 | `class-assignments/morning` (assign + publish + tutor emails) | `45 23 * * *` (06:45 Bangkok) |
 | `class-assignments/admin-email` (daily readiness digest) | `0,10,20,30 0 * * *` (07:00–07:30 Bangkok) |
+| `student-promotions/july-1` | `5 17 30 6 *` (2026-07-01 00:05 Bangkok) |
+| `cron-watchdog` | `7,37 * * * *` |
 
 ## Local development
 
