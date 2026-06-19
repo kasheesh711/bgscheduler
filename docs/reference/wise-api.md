@@ -12,15 +12,17 @@ The **source of truth** is the code under `src/lib/wise/`:
 | File | Role |
 |---|---|
 | `src/lib/wise/client.ts` | `WiseClient` transport — auth headers, retry/backoff, concurrency limiter |
-| `src/lib/wise/fetchers.ts` | Domain fetchers + read helpers + verified Wise writeback helpers |
+| `src/lib/wise/fetchers.ts` | Domain fetchers + read helpers + verified / flag-gated Wise writeback helpers |
 | `src/lib/wise/types.ts` | Wise request/response shapes and field accessors |
 | `src/lib/wise/operations.ts` | LINE-scheduler Wise *cancel/reschedule* actions (currently dry-run only) |
 | `src/lib/env.ts` | Zod declarations for `WISE_USER_ID` / `WISE_API_KEY` / `WISE_NAMESPACE` / `WISE_INSTITUTE_ID` |
 
 > **Maturity:** The transport client, the read fetchers, the
-> `updateSessionLocation` writeback, and the Student Promotions write helpers are live production code. The LINE
-> cancel/reschedule path in `operations.ts` is **not** a verified Wise mutation —
-> it records dry-run logs and never sends a request (see
+> `updateSessionLocation` writeback, and the Student Promotions write helpers are
+> live production code. Progress-test session creation is a flag-gated live code
+> path (`WISE_SESSION_CREATE_VERIFIED`) that records `manual_required` with no
+> Wise call by default. The LINE cancel/reschedule path in `operations.ts` is
+> **not** a verified Wise mutation — it records dry-run logs and never sends a request (see
 > [Writeback operations](#writeback-operations)).
 
 > **Naming caution.** "Wise" here is the *scheduling platform* `api.wiseapp.live`.
@@ -48,7 +50,9 @@ The **source of truth** is the code under `src/lib/wise/`:
   (default `696e1f4d90102225641cc413`).
 - **Writeback:** production mutations are narrowly scoped: classroom assignments write
   only OFFLINE session `location`; Student Promotions writes only registration field
-  `if89sblj` and verified class `subject` transitions.
+  `if89sblj` and verified class `subject` transitions; Progress Tests can create
+  a single progress-test session only after an availability pre-check and only
+  when `WISE_SESSION_CREATE_VERIFIED === "true"`.
 
 ---
 
@@ -506,6 +510,24 @@ Before writing, the service re-fetches the class detail and class roster. It ski
 the action if the current subject drifted or if the live roster no longer matches
 the verified all-students-qualify guard.
 
+### Progress-test session create — `scheduleWiseSession`
+
+Used only by Progress Tests after an admin confirms a booking. The low-level
+fetcher has no built-in safety checks; the caller owns the guardrails.
+
+- **Endpoint:** `POST /teacher/classes/{classId}/sessions`
+- **Body:** `{ userId, title: "Progress Test", sessions: [{ type: "SINGLE", scheduledStartTime, scheduledEndTime, location? }] }`
+- **Returns:** `{ sessionId, raw }`, where `sessionId` is parsed from Wise's
+  response when present.
+
+`confirmProgressTestBooking` records the intended booking audit row before any
+network call, resolves the Wise class and teacher user id, runs the read-only
+`checkTeacherAvailabilityForSessions` pre-check, and aborts on any reported
+conflict. If `WISE_SESSION_CREATE_VERIFIED !== "true"`, it records
+`manual_required`, updates local cycle state for manual booking, and sends **no**
+Wise create request. Only when the flag is exactly `"true"` does it call
+`scheduleWiseSession`; the route entry point is admin-only.
+
 ### LINE cancel / reschedule — dry-run only (`operations.ts`)
 
 `src/lib/wise/operations.ts` handles the LINE-scheduler's *proposed* Wise actions
@@ -544,9 +566,10 @@ The four `WISE_*` variables are declared in the Zod schema at `src/lib/env.ts:8`
 > `WISE_NAMESPACE` fall back to the documented literals at their call sites even
 > though the schema also defaults them.
 
-`WISE_SESSION_OPERATIONS_VERIFIED` (read at `operations.ts:11`) is **not** in the
-env schema; it is an undeclared feature flag gating the LINE dry-run path described
-above.
+`WISE_SESSION_OPERATIONS_VERIFIED` (read at `operations.ts:11`) and
+`WISE_SESSION_CREATE_VERIFIED` (read at `progress-tests/config.ts:50`) are **not**
+in the env schema; they are undeclared feature flags gating the LINE dry-run path
+and Progress Tests session-create path described above.
 
 ---
 
@@ -572,6 +595,7 @@ above.
 | PUT | `/teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` | `updateSessionLocation` | **write** (OFFLINE only) |
 | PUT | `/institutes/{id}/students/{studentId}/registration` | `updateWiseStudentRegistrationAnswers` | **write** (Student Promotions only) |
 | PUT | `/teacher/editClass` | `updateWiseCourseSubject` | **write** (Student Promotions only) |
+| POST | `/teacher/classes/{classId}/sessions` | `scheduleWiseSession` | **write** (Progress Tests only, flag-gated) |
 
 ## See also
 
