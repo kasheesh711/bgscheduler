@@ -146,8 +146,9 @@ flowchart LR
 
 These variables are consumed by `process.env.*` reads in shipping code but are
 **absent from `src/lib/env.ts`**, so they receive **no validation** and no
-schema default. Several appear in `.env.example`; a few do not. They are
-grouped by feature.
+schema default. The project-level `.env.example` now lists every non-injected
+variable in this section; Vercel, GitHub, and local-shell variables are called
+out separately.
 
 ### AI scheduler (OpenAI)
 
@@ -155,15 +156,22 @@ grouped by feature.
 |---|---|---|---|---|
 | `OPENAI_API_KEY` | Yes (line 19) | OpenAI API key for the AI scheduler + LINE classifier. Also doubles as a feature gate. | `src/lib/ai/scheduler.ts:479,539`; `scheduler-conversation.ts:2341`; `src/lib/line/classifier.ts:93`; `src/lib/line/contact-aliases.ts:363` | `isAiSchedulerConfigured()` requires a non-empty trimmed value (`scheduler.ts:477-480`); `runAiScheduler` no-ops if missing (`scheduler.ts:539-540`) |
 | `OPENAI_SCHEDULER_MODEL` | Yes (line 20) | Model name for the AI scheduler. | `src/lib/ai/scheduler.ts:462` | Falls back to `DEFAULT_AI_SCHEDULER_MODEL = "gpt-5.4-mini"` (`scheduler.ts:8,462`) |
-| `OPENAI_SCHEDULER_SHADOW_MODEL` | No | Optional secondary "shadow" model run alongside the primary. | `src/lib/ai/scheduler.ts:466` | `undefined` when unset (no shadow run) |
-| `OPENAI_SCHEDULER_REASONING_EFFORT` | No | Reasoning-effort tier (`none`/`low`/`medium`/`high`/`xhigh`). | `src/lib/ai/scheduler.ts:470` | Invalid/unset → `DEFAULT_AI_SCHEDULER_REASONING_EFFORT` (`scheduler.ts:474`) |
+| `OPENAI_SCHEDULER_SHADOW_MODEL` | Yes | Optional secondary "shadow" model run alongside the primary. | `src/lib/ai/scheduler.ts:466` | `undefined` when unset (no shadow run) |
+| `OPENAI_SCHEDULER_REASONING_EFFORT` | Yes | Reasoning-effort tier (`none`/`low`/`medium`/`high`/`xhigh`). | `src/lib/ai/scheduler.ts:470` | Invalid/unset → `DEFAULT_AI_SCHEDULER_REASONING_EFFORT` (`scheduler.ts:474`) |
 | `ENABLE_AI_SCHEDULER` | Yes (line 21) | Opt-out feature flag for the AI scheduler. | `src/lib/ai/scheduler.ts:478,540` | Disabled only when exactly `"false"`; otherwise enabled if `OPENAI_API_KEY` present (`scheduler.ts:477-480`) |
+
+### Progress tests
+
+| Variable | In `.env.example`? | Purpose | Consumed at | Default / guard |
+|---|---|---|---|---|
+| `OPENAI_PROGRESS_TEST_MODEL` | Yes | Optional model override for progress-test teacher-summary generation. | `src/lib/progress-tests/ai-summary.ts:88` | Falls back to the AI-scheduler default model. |
+| `WISE_SESSION_CREATE_VERIFIED` | Yes | Hard kill-switch for creating Wise progress-test sessions. | `src/lib/progress-tests/config.ts:50` | Enabled only when exactly `"true"`; otherwise bookings stay local/manual-required. |
 
 ### LINE auxiliary
 
 | Variable | In `.env.example`? | Purpose | Consumed at | Default / guard |
 |---|---|---|---|---|
-| `LINE_VALIDATION_LEAD_EMAILS` | No | Comma-separated allowlist of lead reviewer emails for LINE link-validation. | `src/lib/line/link-validation.ts:157` | Falls back to `DEFAULT_LINE_VALIDATION_LEAD_EMAILS` (`link-validation.ts:112,163`) |
+| `LINE_VALIDATION_LEAD_EMAILS` | Yes | Comma-separated allowlist of lead reviewer emails for LINE link-validation. | `src/lib/line/link-validation.ts:221` | Falls back to `DEFAULT_LINE_VALIDATION_LEAD_EMAILS` (`link-validation.ts:112-115`) |
 
 > Note: `WISE_SESSION_OPERATIONS_VERIFIED` (below) also gates LINE-driven Wise
 > writeback via `src/lib/line/operational.ts:21`.
@@ -181,7 +189,7 @@ All read with `?.trim()` and no schema entry; consumed in
 | `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET` | Yes (line 32) | Shared secret for the backup Apps Script. | `schedule-email.ts:292` | Optional |
 | `SCHEDULE_EMAIL_SENDER_NAME` | Yes (line 33) | Display name for the sender. | `schedule-email.ts:606` | Defaults to `"BeGifted"` |
 | `SCHEDULE_EMAIL_REPLY_TO` | Yes (line 34) | Reply-to address. | `schedule-email.ts:607` | Defaults to hard-coded `"kevhsh7@gmail.com"` |
-| `SCHEDULE_EMAIL_PUBLIC_BASE_URL` | No | Override for the public base URL used in email links. | `schedule-email.ts:266`; also `src/lib/leave-requests/config.ts:19` | First in a cascade (see below) |
+| `SCHEDULE_EMAIL_PUBLIC_BASE_URL` | Yes | Override for the public base URL used in email links. | `schedule-email.ts:266`; also `src/lib/leave-requests/config.ts:19` | First in a cascade (see below) |
 
 ### Tutor leave requests (Google Sheets bridge)
 
@@ -192,17 +200,47 @@ Consumed in `src/lib/leave-requests/config.ts`.
 | `LEAVE_REQUESTS_SPREADSHEET_ID` | Yes (line 37) | Google Sheet ID holding form responses. | `config.ts:2` | Defaults to a hard-coded sheet ID literal |
 | `LEAVE_REQUESTS_SHEET_NAME` | Yes (line 38) | Worksheet/tab name. | `config.ts:5` | Defaults to `"Form Responses 1"` |
 | `LEAVE_REQUESTS_CONNECTED_EMAIL` | Yes (line 39) | Google account with Sheets write scope. | `config.ts:13` | Falls back to `SALES_DASHBOARD_CONNECTED_EMAIL`, then `""` |
+| `SALES_DASHBOARD_CONNECTED_EMAIL` | Yes | Google account for the Sales Dashboard sync; also the fallback for the leave-requests connected email. | `src/lib/leave-requests/config.ts:13` | Falls back to `""` |
 | `NEXT_PUBLIC_APP_URL` | Yes (line 40) | Public app base URL (client-exposed `NEXT_PUBLIC_*`). | `config.ts:18` | First in the leave-requests base-URL cascade |
 
-### Wise writeback safety + seed + Vercel-injected
+### Competitor intelligence
+
+These variables control the competitor-intelligence sync and its optional paid
+providers. Missing provider credentials do not fail the whole app: the provider
+path skips with a `skippedReason`, and website/manual sources can still run.
 
 | Variable | In `.env.example`? | Purpose | Consumed at | Default / guard |
 |---|---|---|---|---|
-| `WISE_SESSION_OPERATIONS_VERIFIED` | No | Hard kill-switch for **writing back to Wise** (session location updates). Writeback is enabled **only** when this equals the string `"true"`. | `src/lib/wise/operations.ts:11`; `src/lib/line/operational.ts:21` | Defaults to *disabled* (anything but `"true"`) — fail-closed |
-| `SALES_DASHBOARD_CONNECTED_EMAIL` | No | Google account for the Sales Dashboard sync; also the fallback for the leave-requests connected email. | `src/lib/leave-requests/config.ts:13` | Falls back to `""` |
-| `SEED_ADMIN_EMAILS` | No (documented in run scripts) | Comma-separated admin emails for the one-off DB seed script. | `src/lib/db/seed.ts:31` | Empty → seed logs "No SEED_ADMIN_EMAILS set, skipping admin user seed" (`seed.ts:42`) |
+| `ENABLE_COMPETITOR_AI` | Yes | Opt-out flag for AI-generated competitor briefs and War Room insights. | `src/lib/competitor-intelligence/ai.ts:71` | Disabled only when exactly `"false"`; also requires `OPENAI_API_KEY`. |
+| `OPENAI_COMPETITOR_INTEL_MODEL` | Yes | Optional model override for competitor-intelligence AI. | `src/lib/competitor-intelligence/ai.ts:65` | Falls back to `OPENAI_SCHEDULER_MODEL`, then `"gpt-5.4-mini"`. |
+| `APIFY_API_TOKEN` | Yes | Apify API token for Instagram/Facebook source captures. | `src/lib/competitor-intelligence/providers.ts:70,93` | Missing token skips Apify social sources. |
+| `APIFY_INSTAGRAM_ACTOR` | Yes | Apify actor id for Instagram scraping. | `src/lib/competitor-intelligence/providers.ts:17` | Defaults to `"apify/instagram-scraper"`. |
+| `APIFY_FACEBOOK_ACTOR` | Yes | Apify actor id for Facebook scraping. | `src/lib/competitor-intelligence/providers.ts:18` | Defaults to `"apify/facebook-posts-scraper"`. |
+| `DATAFORSEO_LOGIN` | Yes | DataForSEO login for SERP captures. | `src/lib/competitor-intelligence/providers.ts:130` | Missing login/password skips SERP sources. |
+| `DATAFORSEO_PASSWORD` | Yes | DataForSEO password for SERP captures. | `src/lib/competitor-intelligence/providers.ts:131` | Missing login/password skips SERP sources. |
+| `COMPETITOR_APIFY_COST_PER_ITEM_USD` | Yes | Estimated Apify cost per returned social item for budget tracking. | `src/lib/competitor-intelligence/providers.ts:119` | Invalid/unset → `0.01`. |
+| `COMPETITOR_DATAFORSEO_COST_PER_QUERY_USD` | Yes | Estimated DataForSEO cost per SERP query for budget tracking. | `src/lib/competitor-intelligence/providers.ts:164` | Invalid/unset → `0.002`. |
+| `COMPETITOR_INTEL_MONTHLY_CAP_USD` | Yes | Global monthly hard cap for paid competitor-intelligence providers. | `src/lib/competitor-intelligence/budget.ts:20` | Invalid/unset paid providers default to `250`; website/manual sources are uncapped. |
+| `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` | Pattern | Provider-specific monthly hard cap; for example `COMPETITOR_DATAFORSEO_MONTHLY_CAP_USD`. | `src/lib/competitor-intelligence/budget.ts:19` | Overrides `COMPETITOR_INTEL_MONTHLY_CAP_USD` for that normalized provider key. |
+| `COMPETITOR_DATAFORSEO_MONTHLY_CAP_USD` | Yes | Concrete provider-specific cap for DataForSEO. | `src/lib/competitor-intelligence/budget.ts:19` | Optional; falls back to the global cap. |
+
+### Wise writeback safety + seed + platform-injected
+
+| Variable | In `.env.example`? | Purpose | Consumed at | Default / guard |
+|---|---|---|---|---|
+| `WISE_SESSION_OPERATIONS_VERIFIED` | Yes | Hard kill-switch for **writing back to Wise** (session location updates). Writeback is enabled **only** when this equals the string `"true"`. | `src/lib/wise/operations.ts:11`; `src/lib/line/operational.ts:21` | Defaults to *disabled* (anything but `"true"`) — fail-closed |
+| `SEED_ADMIN_EMAILS` | Yes | Comma-separated admin emails for the one-off DB seed script. | `src/lib/db/seed.ts:31` | Empty → seed logs "No SEED_ADMIN_EMAILS set, skipping admin user seed" (`seed.ts:42`) |
 | `VERCEL_PROJECT_PRODUCTION_URL` | No (injected by Vercel) | Production hostname, used to derive the email public base URL on Vercel. | `src/lib/classrooms/schedule-email.ts:269` | Vercel-provided; part of cascade |
 | `VERCEL_URL` | No (injected by Vercel) | Per-deployment hostname fallback for base-URL derivation. | `src/lib/classrooms/schedule-email.ts:272`; `src/lib/leave-requests/config.ts:15` | Vercel-provided; last-resort in cascade |
+| `GITHUB_ACTOR` | No (injected by GitHub Actions) | Used by the Sales Dashboard scope guard to bypass local-only behavior for Dependabot. | `scripts/check-sales-dashboard-scope.mjs:14` | Empty outside GitHub Actions. |
+| `USER` | No (local shell) | Records the local user as `createdBy` when importing the room-capacity model. | `scripts/import-room-capacity-model.ts:303` | Falls back to `null`. |
+
+### Local scripts / release guard
+
+| Variable | In `.env.example`? | Purpose | Consumed at | Default / guard |
+|---|---|---|---|---|
+| `PRODUCTION_BRANCH` | Yes | Overrides the branch expected by the production-deploy guard. | `scripts/assert-production-deploy-ready.mjs:5` | Defaults to `"main"`. |
+| `CONFIRM_DELETE_LINE_TEST_DATA` | Yes | Confirmation guard for the destructive LINE test-data cleanup script. | `scripts/delete-line-test-data.ts:34` | Cleanup refuses to run unless the script-specific confirmation is set as required by that script. |
 
 > **Base-URL cascades.** Two independent fallback chains derive a public URL:
 > - schedule-email (`schedule-email.ts:266-272`): `SCHEDULE_EMAIL_PUBLIC_BASE_URL`
@@ -251,17 +289,19 @@ sequenceDiagram
 - **Prose says "9 required"; Zod says 7.** The discrepancy is explained above
   (the 2 `.default()` `WISE_*` vars are counted as required in prose). Worth
   aligning the prose to say "7 hard-required + 2 defaulted".
-- **Schema is missing ~15 live variables.** `OPENAI_*`, `ENABLE_AI_SCHEDULER`,
-  all `SCHEDULE_EMAIL_*`, all `LEAVE_REQUESTS_*`, `WISE_SESSION_OPERATIONS_VERIFIED`,
-  `LINE_VALIDATION_LEAD_EMAILS`, `SALES_DASHBOARD_CONNECTED_EMAIL`,
-  `NEXT_PUBLIC_APP_URL`, and `SEED_ADMIN_EMAILS` are all read from `process.env`
-  but absent from `src/lib/env.ts`. The schema is no longer a complete inventory.
-- **`.env.example` lists vars not in the schema and omits the optional LINE
-  vars' siblings.** `.env.example` documents `OPENAI_*`, `SCHEDULE_EMAIL_*`,
-  `LEAVE_REQUESTS_*`, and `NEXT_PUBLIC_APP_URL` (none in schema), while several
-  live vars (`OPENAI_SCHEDULER_SHADOW_MODEL`, `OPENAI_SCHEDULER_REASONING_EFFORT`,
+- **Schema is missing many live optional variables.** `OPENAI_*`,
+  `ENABLE_AI_SCHEDULER`, `ENABLE_COMPETITOR_AI`, provider credentials/caps,
+  `SCHEDULE_EMAIL_*`, `LEAVE_REQUESTS_*`, progress-test switches,
   `WISE_SESSION_OPERATIONS_VERIFIED`, `LINE_VALIDATION_LEAD_EMAILS`,
-  `SALES_DASHBOARD_CONNECTED_EMAIL`) appear in neither schema nor example.
+  `SALES_DASHBOARD_CONNECTED_EMAIL`, `NEXT_PUBLIC_APP_URL`, and
+  `SEED_ADMIN_EMAILS` are all read from `process.env` but absent from
+  `src/lib/env.ts`. The schema is no longer a complete inventory.
+- **`.env.example` is now a broader inventory than the schema.** It includes the
+  optional AI, LINE, schedule-email, leave-request, progress-test, competitor,
+  and local-script variables tracked by `npm run docs:audit`, while the Zod
+  schema still covers only the original core Auth/Wise/Cron/LINE set. Decide
+  whether that split is intentional or whether the schema should grow a
+  non-fail-fast optional inventory.
 - **Redundant inline defaults.** `WISE_INSTITUTE_ID` / `WISE_NAMESPACE` literals
   are duplicated across ~12 call sites instead of being centralized — and
   `room-capacity/utilization.ts:433` reads `WISE_INSTITUTE_ID` with no fallback,
