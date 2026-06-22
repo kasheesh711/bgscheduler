@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Separator } from "@/components/ui/separator";
 import { DEFAULT_PAGE_SIZE, MAX_COMPARE } from "@/lib/us-universities/constants";
 import type {
   FilterParams,
@@ -19,17 +19,12 @@ import {
   isSortableKey,
   toggleSort,
 } from "./institution-table";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { ComparePanel } from "./compare-panel";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { InstitutionProfileDialog } from "./institution-profile";
 import { InstitutionSearchCombobox } from "./institution-search-combobox";
-
-type TabKey = "overview" | "browse" | "compare";
-const TABS: readonly string[] = ["overview", "browse", "compare"];
-
-function asTab(value: string | null): TabKey {
-  return value && TABS.includes(value) ? (value as TabKey) : "overview";
-}
+import { KpiHero } from "./kpi-hero";
 
 function parseIds(value: string | null): number[] {
   return (value ?? "")
@@ -73,7 +68,6 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
     [searchParams],
   );
 
-  const [tab, setTab] = useState<TabKey>(asTab(getParam("tab")));
   const [compareIds, setCompareIds] = useState<number[]>(() => parseIds(getParam("compare")));
 
   // Lifted browse-search state (was inside InstitutionTable).
@@ -161,14 +155,14 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
 
   const syncUrl = useCallback(
     (next: {
-      tab?: TabKey;
       compare?: number[];
       filters?: FilterParams;
     }) => {
       const params = new URLSearchParams(searchParams?.toString() ?? "");
-      params.set("tab", next.tab ?? tab);
       // unitId belongs on the dossier route; never carry it in the Console URL.
       params.delete("unitId");
+      // Drop the legacy ?tab= param — the Console has no tabs.
+      params.delete("tab");
       const compare = next.compare ?? compareIds;
       if (compare.length) params.set("compare", compare.join(","));
       else params.delete("compare");
@@ -179,23 +173,26 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
       for (const [k, v] of fq.entries()) params.set(k, v);
       router.replace(`${pathname}?${params.toString()}`, { scroll: false });
     },
-    [searchParams, tab, compareIds, filters, pathname, router],
+    [searchParams, compareIds, filters, pathname, router],
   );
 
-  const changeTab = useCallback(
-    (value: string) => {
-      const next = asTab(value);
-      setTab(next);
-      syncUrl({ tab: next });
-    },
-    [syncUrl],
-  );
-
-  const openProfile = useCallback(
+  const openDossier = useCallback(
     (unitId: number) => {
       router.push(dossierHref(unitId, filters, compareIds));
     },
     [router, filters, compareIds],
+  );
+
+  const resultsRef = useRef<HTMLDivElement | null>(null);
+
+  const handleChartFilter = useCallback(
+    (patch: Partial<FilterParams>) => {
+      const next = applyChartFilter(filters, patch);
+      setFilters(next);
+      syncUrl({ filters: next });
+      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    },
+    [filters, syncUrl],
   );
 
   // Redirect legacy ?unitId= deep links to the dossier route on first render.
@@ -263,10 +260,6 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
     [syncUrl],
   );
 
-  // applyChartFilter is wired by Phase 2 (chart onFilter); kept imported for the
-  // cross-filter path. Reference here to document intent without dead-code lint.
-  void applyChartFilter;
-
   return (
     // Research page: opt out of the app's viewport-locked single-screen layout —
     // the whole page scrolls so all overview charts + the compare SAT chart are
@@ -282,51 +275,39 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
         <div className="w-full md:w-80">
           <InstitutionSearchCombobox
             placeholder="Search universities…"
-            onSelect={(unitId) => openProfile(unitId)}
+            onSelect={(unitId) => openDossier(unitId)}
           />
         </div>
       </header>
 
-      <Tabs value={tab} onValueChange={changeTab} className="flex flex-col gap-3">
-        <TabsList>
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="browse">Browse</TabsTrigger>
-          <TabsTrigger value="compare">
-            Compare{compareIds.length ? ` (${compareIds.length})` : ""}
-          </TabsTrigger>
-        </TabsList>
+      <KpiHero overview={overview} />
 
-        {/* keepMounted so browse filters/sort/page (and chart instances) survive
-            tab switches — base-ui Tabs.Panel unmounts inactive panels by default. */}
-        <TabsContent value="overview" keepMounted>
-          <OverviewCharts overview={overview} active={tab === "overview"} onSelect={openProfile} />
-        </TabsContent>
-        <TabsContent value="browse" keepMounted>
-          <InstitutionTable
-            rows={rows}
-            total={total}
-            loading={loading}
-            error={error}
-            filters={filters}
-            states={overview.states}
-            cip2Options={overview.cip2Options}
-            onSort={onSort}
-            onSelect={openProfile}
-            onAddCompare={addCompare}
-            onFilterChange={onFilterChange}
-            onPage={onPage}
-            compareIds={compareIds}
-          />
-        </TabsContent>
-        <TabsContent value="compare" keepMounted>
-          <ComparePanel
-            unitIds={compareIds}
-            onRemove={removeCompare}
-            onAdd={addCompare}
-            onClear={clearCompare}
-          />
-        </TabsContent>
-      </Tabs>
+      <OverviewCharts
+        overview={overview}
+        active
+        onSelect={openDossier}
+        onFilter={handleChartFilter}
+      />
+
+      <Separator />
+
+      <div id="us-universities-results" ref={resultsRef} className="min-h-0 flex-1 scroll-mt-4">
+        <InstitutionTable
+          rows={rows}
+          total={total}
+          loading={loading}
+          error={error}
+          filters={filters}
+          states={overview.states}
+          cip2Options={overview.cip2Options}
+          onSort={onSort}
+          onSelect={openDossier}
+          onAddCompare={addCompare}
+          onFilterChange={onFilterChange}
+          onPage={onPage}
+          compareIds={compareIds}
+        />
+      </div>
     </div>
   );
 }
