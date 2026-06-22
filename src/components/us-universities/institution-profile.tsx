@@ -8,7 +8,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ExternalLinkIcon, PlusIcon } from "lucide-react";
 import type { ChartConfiguration } from "chart.js";
-
 import { cn } from "@/lib/utils";
 import { ChartCanvas, chartColors } from "@/components/sales-dashboard/chart-canvas";
 import { Button } from "@/components/ui/button";
@@ -25,10 +24,7 @@ import {
   CONTROL_LABELS,
   INST_SIZE_LABELS,
 } from "@/lib/us-universities/constants";
-import type {
-  AdmissionsTrendPoint,
-  InstitutionProfile,
-} from "@/lib/us-universities/types";
+import type { InstitutionProfile } from "@/lib/us-universities/types";
 import type { InstitutionProfileDialogProps } from "./view-types";
 import {
   EM_DASH,
@@ -39,9 +35,11 @@ import {
   formatUsd,
   rangeText,
 } from "@/lib/us-universities/format";
+import { buildAdmissionsTrendChartData } from "@/lib/us-universities/trend-charts";
 
 export type { AdmissionRequirement } from "@/lib/us-universities/format";
 export { admissionRequirements, formatPct, formatRatio, formatUsd } from "@/lib/us-universities/format";
+export { buildAdmissionsTrendChartData } from "@/lib/us-universities/trend-charts";
 
 const MAX_COMPLETION_ROWS = 25;
 
@@ -77,36 +75,6 @@ function Metric({ label, value }: { label: string; value: string }) {
       </dd>
     </div>
   );
-}
-
-// ── Admissions-trend chart (pure, exported for tests) ──────────────────
-
-/**
- * Build the Chart.js `data` object for the multi-year admissions line chart:
- * acceptance rate % and yield rate % by `dataYear`. Labels come from the years
- * (ascending). Null metric points are dropped (not plotted as 0) — fail-closed
- * — so each dataset only carries the years it actually has data for.
- */
-export function buildAdmissionsTrendChartData(
-  trend: AdmissionsTrendPoint[],
-): ChartConfiguration<"line">["data"] {
-  const labels = trend.map((point) => point.dataYear);
-  const acceptance = trend.map((point) =>
-    point.acceptanceRate == null || !Number.isFinite(point.acceptanceRate)
-      ? null
-      : point.acceptanceRate,
-  );
-  const yieldRate = trend.map((point) =>
-    point.yieldRate == null || !Number.isFinite(point.yieldRate) ? null : point.yieldRate,
-  );
-
-  return {
-    labels,
-    datasets: [
-      { label: "Acceptance rate %", data: acceptance, spanGaps: true },
-      { label: "Yield rate %", data: yieldRate, spanGaps: true },
-    ],
-  };
 }
 
 // ── Component ──────────────────────────────────────────────────────────
