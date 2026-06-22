@@ -2646,3 +2646,136 @@ export const progressTestSyncRuns = pgTable("progress_test_sync_runs", {
     .on(table.status)
     .where(sql`${table.status} = 'running'`),
 ]);
+
+// ── US Universities (IPEDS) ────────────────────────────────────────────
+// Curated slice of the IPEDS 2024-25 Provisional release for the admin
+// "US Universities" college-counseling tab. All rows are keyed by
+// (dataYear, unitId) so a future IPEDS year drops in without a migration.
+// Populated by the local one-time import (scripts/ipeds-import.ts); the
+// runtime only ever reads these tables, never the source .accdb/CSV.
+
+export const ipedsImportRuns = pgTable("ipeds_import_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  dataYear: text("data_year").notNull(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  institutionCount: integer("institution_count").notNull().default(0),
+  completionCount: integer("completion_count").notNull().default(0),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  errorSummary: text("error_summary"),
+  triggeredByEmail: text("triggered_by_email"),
+}, (table) => [
+  index("ipeds_runs_year_started_idx").on(table.dataYear, table.startedAt),
+  uniqueIndex("ipeds_runs_single_running_idx")
+    .on(table.dataYear)
+    .where(sql`${table.status} = 'running'`),
+]);
+
+export const ipedsInstitutions = pgTable("ipeds_institutions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  dataYear: text("data_year").notNull(),
+  unitId: integer("unit_id").notNull(),
+  importRunId: uuid("import_run_id").references(() => ipedsImportRuns.id),
+  // Directory (HD2024)
+  instName: text("inst_name").notNull(),
+  alias: text("alias"),
+  city: text("city"),
+  stateAbbr: text("state_abbr"),
+  zip: text("zip"),
+  region: integer("region"),
+  website: text("website"),
+  admissionsUrl: text("admissions_url"),
+  netPriceCalcUrl: text("net_price_calc_url"),
+  control: integer("control"),
+  sector: integer("sector"),
+  iclevel: integer("iclevel"),
+  locale: integer("locale"),
+  instSize: integer("inst_size"),
+  hbcu: boolean("hbcu"),
+  landGrant: boolean("land_grant"),
+  carnegieBasic: integer("carnegie_basic"),
+  latitude: doublePrecision("latitude"),
+  longitude: doublePrecision("longitude"),
+  countyName: text("county_name"),
+  // Admissions + test scores (ADM2024 + DRVADM2024)
+  applicantsTotal: integer("applicants_total"),
+  admitsTotal: integer("admits_total"),
+  enrolledTotal: integer("enrolled_total"),
+  acceptanceRate: doublePrecision("acceptance_rate"),
+  yieldRate: doublePrecision("yield_rate"),
+  admConsiderations: jsonb("adm_considerations").$type<Record<string, number | null>>(),
+  satSubmitPct: doublePrecision("sat_submit_pct"),
+  actSubmitPct: doublePrecision("act_submit_pct"),
+  satReadingP25: integer("sat_reading_p25"),
+  satReadingP75: integer("sat_reading_p75"),
+  satMathP25: integer("sat_math_p25"),
+  satMathP75: integer("sat_math_p75"),
+  actCompositeP25: integer("act_composite_p25"),
+  actCompositeP75: integer("act_composite_p75"),
+  // Enrollment + demographics (DRVEF2024)
+  enrollmentTotal: integer("enrollment_total"),
+  enrollmentUg: integer("enrollment_ug"),
+  enrollmentGrad: integer("enrollment_grad"),
+  fte: doublePrecision("fte"),
+  pctWomen: doublePrecision("pct_women"),
+  pctFullTimeFirstTime: doublePrecision("pct_full_time_first_time"),
+  pctWhite: doublePrecision("pct_white"),
+  pctBlack: doublePrecision("pct_black"),
+  pctHispanic: doublePrecision("pct_hispanic"),
+  pctAsianPacIsl: doublePrecision("pct_asian_pac_isl"),
+  pctAmInd: doublePrecision("pct_am_ind"),
+  pctTwoOrMore: doublePrecision("pct_two_or_more"),
+  pctUnknown: doublePrecision("pct_unknown"),
+  pctNonresident: doublePrecision("pct_nonresident"),
+  pctInState: doublePrecision("pct_in_state"),
+  pctOutOfState: doublePrecision("pct_out_of_state"),
+  // Retention + outcomes (EF2024D + DRVGR2024 + DRVOM2024)
+  retentionFt: doublePrecision("retention_ft"),
+  retentionPt: doublePrecision("retention_pt"),
+  studentFacultyRatio: doublePrecision("student_faculty_ratio"),
+  gradRateTotal: doublePrecision("grad_rate_total"),
+  gradRateBach6yr: doublePrecision("grad_rate_bach_6yr"),
+  transferOutRate: doublePrecision("transfer_out_rate"),
+  omAward8yr: doublePrecision("om_award_8yr"),
+  omStillEnrolled8yr: doublePrecision("om_still_enrolled_8yr"),
+  // Cost (DRVCOST2024 + Cost1_2024 + COST2_2024_NetPrice + Cost2_2024_FinancialAid)
+  appFeeUg: integer("app_fee_ug"),
+  tuitionInState: integer("tuition_in_state"),
+  tuitionOutState: integer("tuition_out_state"),
+  totalPriceInState: integer("total_price_in_state"),
+  totalPriceOutState: integer("total_price_out_state"),
+  roomBoardAmt: integer("room_board_amt"),
+  avgNetPrice: integer("avg_net_price"),
+  pctAwardedAid: doublePrecision("pct_awarded_aid"),
+  avgGrantAid: integer("avg_grant_aid"),
+  // Degree mix (DRVC2024)
+  degBachelors: integer("deg_bachelors"),
+  degMasters: integer("deg_masters"),
+  degDoctoral: integer("deg_doctoral"),
+  degAssociate: integer("deg_associate"),
+  // Meta
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("ipeds_inst_year_unit_idx").on(table.dataYear, table.unitId),
+  index("ipeds_inst_year_state_idx").on(table.dataYear, table.stateAbbr),
+  index("ipeds_inst_year_control_idx").on(table.dataYear, table.control),
+  index("ipeds_inst_year_acceptance_idx").on(table.dataYear, table.acceptanceRate),
+]);
+
+export const ipedsCompletions = pgTable("ipeds_completions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  dataYear: text("data_year").notNull(),
+  unitId: integer("unit_id").notNull(),
+  importRunId: uuid("import_run_id").references(() => ipedsImportRuns.id),
+  cipCode: text("cip_code").notNull(),
+  cipTitle: text("cip_title"),
+  cip2: text("cip2").notNull(),
+  awardLevel: integer("award_level"),
+  awardLevelLabel: text("award_level_label"),
+  count: integer("count").notNull().default(0),
+}, (table) => [
+  index("ipeds_compl_year_unit_idx").on(table.dataYear, table.unitId),
+  index("ipeds_compl_year_cip2_idx").on(table.dataYear, table.cip2),
+  index("ipeds_compl_year_unit_count_idx").on(table.dataYear, table.unitId, table.count),
+]);
