@@ -122,9 +122,11 @@ Mechanical lookup. Owns exact signatures, columns, schedules, and variables.
 | [index.md](./reference/api/index.md) | Master index of every HTTP endpoint (method + path + group + auth + one-line purpose). |
 | [ai-scheduler.md](./reference/api/ai-scheduler.md) | `/api/ai-scheduler/*` — conversations, messages, feedback, metrics. |
 | [classrooms-and-assignments.md](./reference/api/classrooms-and-assignments.md) | `/api/class-assignments/*` and `/api/classrooms/*`. |
+| [competitor-intelligence.md](./reference/api/competitor-intelligence.md) | `/api/competitor-intelligence/*`. |
 | [credit-control.md](./reference/api/credit-control.md) | `/api/credit-control/*`. |
 | [line.md](./reference/api/line.md) | `/api/line/*` — webhook, contacts, review tooling. |
 | [payroll.md](./reference/api/payroll.md) | `/api/payroll/*`. |
+| [progress-tests.md](./reference/api/progress-tests.md) | `/api/progress-tests/*`. |
 | [proposals.md](./reference/api/proposals.md) | `/api/proposals/*`. |
 | [room-capacity.md](./reference/api/room-capacity.md) | `/api/room-capacity/*`. |
 | [sales-dashboard.md](./reference/api/sales-dashboard.md) | `/api/sales-dashboard/*`. |

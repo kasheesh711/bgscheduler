@@ -1,11 +1,12 @@
-# Search, Tutors, Filters, Compare, Data Health, Auth & Admin API
+# Search, Tutors, Filters, Compare, Home, Data Health, Auth & Admin API
 
-HTTP reference for the search/compare workspace, tutor metadata, filter dropdowns, data-health dashboard, leave-request review, tutor business profiles, and the admin Wise-sync trigger. Eighteen endpoints across eight path families:
+HTTP reference for the search/compare workspace, tutor metadata, filter dropdowns, home summary, data-health dashboard, leave-request review, tutor business profiles, and the admin Wise-sync trigger.
 
 - **Search** — `/api/search`, `/api/search/range`, `/api/search/assistant`
 - **Compare** — `/api/compare`, `/api/compare/discover`
 - **Tutors** — `/api/tutors`
 - **Filters** — `/api/filters`
+- **Home** — `/api/home/summary`
 - **Data Health** — `/api/data-health`
 - **Admin** — `/api/admin/sync-wise`
 - **Tutor Profiles** — `/api/tutor-profiles`, `/api/tutor-profiles/[canonicalKey]`, `/api/tutor-profiles/import-preview`, `/api/tutor-profiles/import-commit`
@@ -156,6 +157,20 @@ Distinct subjects/curriculums/levels from the active snapshot, for populating th
 - **Behavior:** returns `getFilterOptions()` directly (`src/lib/data/filters.ts`, `route.ts:12`).
 - **Response** (`200`): the filter-options object from `getFilterOptions()`.
 - **Errors:** `500 { "error": <message | "Failed to load filters"> }` (`route.ts:13-16`).
+
+---
+
+## Home
+
+### `GET /api/home/summary`
+
+Authenticated app-shell summary payload for the signed-in user's landing view. Source: `src/app/api/home/summary/route.ts`.
+
+- **Auth:** `auth()` with a session email → `401` when absent (`route.ts:7-10`).
+- **Request:** no query params or body.
+- **Behavior:** calls `getHomeSummaryPayload({ allowedPages, email }, getDb())`, passing through the session's page-access scope (`route.ts:13-16`).
+- **Response** (`200`): the home-summary payload returned by `getHomeSummaryPayload`.
+- **Errors:** `500 { "error": <message | "Home summary failed"> }` (`route.ts:17-20`).
 
 ---
 

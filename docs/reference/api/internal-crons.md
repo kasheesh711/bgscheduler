@@ -8,7 +8,7 @@ For the **meaning** of each pipeline (what a snapshot is, why syncs fail-closed,
 
 - **`CRON_SECRET` bearer auth.** The caller must send `Authorization: Bearer $CRON_SECRET`. Comparison is constant-time via `node:crypto.timingSafeEqual`, guarded by a length pre-check to avoid the `RangeError` that `timingSafeEqual` throws on length-mismatched buffers (`src/app/api/internal/sync-wise/route.ts:10`-`28`; shared helper at `src/lib/internal/cron-auth.ts:6`-`17`).
 - **No query params.** The cron `GET` routes do not read query params. Most routes read no body; manual/replay `POST` variants either read no body or use a route-specific confirmation body documented below.
-- **Single-flight guard.** Each pipeline prevents overlapping runs. The mechanism differs per family (DB row-state check + 20-minute stale recovery for Wise/credit-control; a partial unique index for leave-requests) — see each section.
+- **Single-flight guard.** Sync pipelines prevent overlapping runs where the underlying service defines a guard. The mechanism differs per family (DB row-state check + stale recovery for Wise/credit-control; partial unique indexes or in-service already-running errors for other syncs) — see each section.
 - **Missing secret is a server error.** If `process.env.CRON_SECRET` is unset, the route returns `500 {"error":"Server misconfigured"}` rather than `401`, so a misconfiguration is not silently treated as an auth failure (`src/lib/internal/cron-auth.ts:22`-`24`; `src/app/api/internal/sync-wise/route.ts:49`-`50`).
 
 The Vercel cron schedules for these paths (from `vercel.json`):
@@ -111,6 +111,31 @@ Status selection: `result.success ? 200 : 500` (`src/lib/sync/run-wise-sync.ts:1
 
 ---
 
+## Competitor-intelligence sync
+
+Runs the weekly market-intelligence sync (`runCompetitorIntelligenceSync`) and records a cron-invocation row with job key `competitor_intelligence`.
+
+### `GET /api/internal/sync-competitor-intelligence`
+
+- **Auth:** `CRON_SECRET` bearer only. No session fallback (`allowSessionAuth: false`, `src/app/api/internal/sync-competitor-intelligence/route.ts:66`-`68`).
+- **Request:** none.
+
+### `POST /api/internal/sync-competitor-intelligence`
+
+- **Auth:** `CRON_SECRET` bearer **or**, if the secret check is not `valid`, a competitor-intelligence admin session (`allowSessionAuth: true`; `src/app/api/internal/sync-competitor-intelligence/route.ts:70`-`72`).
+- **Request:** none.
+
+### Behavior and responses
+
+`maxDuration = 800` seconds (`src/app/api/internal/sync-competitor-intelligence/route.ts:7`). Cron-secret calls use actor `cron@begifted.local` and `triggerType: "cron"`; session fallback uses the admin email and `triggerType: "manual"`.
+
+| Status | When | Body |
+|--------|------|------|
+| `200` | Sync returned `status: "success"` | `{ "ok": true, "result": ... }` |
+| `401` | Secret present but invalid, and (for POST) no session | `{ "error": "Unauthorized" }` |
+| `409` | Sync threw an already-running error | `{ "error": <message> }` |
+| `500` | Missing `CRON_SECRET`, non-success result, or other thrown error | `{ "error": <message> }` or `{ "ok": false, "result": ... }` |
+
 ## Credit-control sync
 
 Runs the credit-control ETL pipeline (`runCreditControlSync`): fetch student packages / sessions / per-pair credit records from Wise, write a snapshot, and promote it. Structurally mirrors the Wise sync's single-flight guard but against the `credit_control_sync_runs` table.
@@ -189,6 +214,49 @@ Status selection: `result.success ? 200 : 500` (`src/lib/credit-control/run-sync
 
 ---
 
+## Progress-tests sync
+
+Runs the progress-test cycle sync via `runProgressTestSyncRequest` and records cron invocations with job key `progress_tests`.
+
+### `GET /api/internal/sync-progress-tests`
+
+- **Auth:** `CRON_SECRET` bearer only. No session fallback (`allowSessionAuth: false`, `src/app/api/internal/sync-progress-tests/route.ts:41`-`43`).
+- **Request:** none.
+
+### `POST /api/internal/sync-progress-tests`
+
+- **Auth:** `CRON_SECRET` bearer **or**, if the secret check is not `valid`, any logged-in Auth.js session (`allowSessionAuth: true`; `src/app/api/internal/sync-progress-tests/route.ts:45`-`47`).
+- **Request:** none.
+
+### Behavior and responses
+
+`maxDuration = 300` seconds (`src/app/api/internal/sync-progress-tests/route.ts:7`). Cron-secret calls delegate to `runProgressTestSyncRequest({ triggerType: "cron" })`; session fallback delegates with `triggerType: "admin"` and the session email. The route returns the sync helper response directly when authorized.
+
+| Status | When | Body |
+|--------|------|------|
+| route-specific | Auth succeeded | Whatever `runProgressTestSyncRequest()` returns |
+| `401` | Secret present but invalid, and (for POST) no session | `{ "error": "Unauthorized" }` |
+| `500` | `CRON_SECRET` env var not set and no session fallback was accepted | `{ "error": "Server misconfigured" }` |
+
+## Progress-tests admin digest
+
+Sends the daily progress-test admin digest and records cron invocations with job key `progress_tests_digest`.
+
+### `GET /api/internal/progress-tests/admin-digest`
+
+- **Auth:** `CRON_SECRET` bearer only via `rejectInvalidCronSecret(request)` (`src/app/api/internal/progress-tests/admin-digest/route.ts:9`-`10`).
+- **Function config:** `maxDuration = 300`.
+- **Request:** none.
+- **Behavior:** calls `sendProgressTestAdminDigest()`.
+
+### Responses
+
+| Status | When | Body |
+|--------|------|------|
+| `200` | Digest result status is not `failed` | digest result |
+| `401` | Secret present but invalid | `{ "error": "Unauthorized" }` |
+| `500` | Digest result status is `failed`, `CRON_SECRET` is missing, or handler throws | digest result or `{ "error": <message> }` |
+
 ## Leave-requests sync
 
 Reads the leave-requests Google Sheet, parses and matches rows to tutors, upserts `leave_requests` rows (recomputing affected sessions per request), and emails notifications for newly inserted requests. Implementation lives in `src/lib/leave-requests/sync.ts` (in-flight source; treat as authoritative for the result shape). Both HTTP methods behave identically — there is no session fallback and no manual-specific branch in the route.
@@ -239,6 +307,31 @@ Response wiring: success at `src/app/api/internal/sync-leave-requests/route.ts:1
 
 ---
 
+## Cron watchdog
+
+Sweeps cron-health state and abandoned run state via `runCronWatchdog(getDb())`. This is a scheduled internal maintenance job, not a feature-facing API.
+
+### `GET /api/internal/cron-watchdog`
+
+- **Auth:** `CRON_SECRET` bearer only.
+- **Function config:** `maxDuration = 300`.
+- **Request:** none.
+
+### `POST /api/internal/cron-watchdog`
+
+- **Auth:** same `CRON_SECRET` bearer check as `GET`; no session fallback.
+- **Request:** none.
+
+### Behavior and responses
+
+Both methods call the same handler (`src/app/api/internal/cron-watchdog/route.ts:10`-`36`) and record job key `cron_watchdog`.
+
+| Status | When | Body |
+|--------|------|------|
+| `200` | Sweep completed | `{ "ok": true, ...result }` |
+| `401` | Secret present but invalid | `{ "error": "Unauthorized" }` |
+| `500` | `CRON_SECRET` missing or sweep throws | `{ "error": "Server misconfigured" }` or `{ "error": <message> }` |
+
 ## Student promotions July 1 apply
 
 Applies the newest verified Student Promotions run for target date `2026-07-01`.
@@ -281,5 +374,29 @@ the action row; they do not abort the whole run.
 | `409` | Called outside July 1, 2026 Bangkok time | `{"error":"Student promotion cron is only allowed on July 1, 2026 Bangkok time"}` |
 | `500` | `CRON_SECRET` env var not set | `{"error":"Server misconfigured"}` |
 | `400`/`500` | Apply service rejected or failed | `{"error":"<message>"}` |
+
+## Internal handlers without a Vercel Cron schedule
+
+These `/api/internal/*` handlers exist on disk but are not listed in `vercel.json`, so Vercel Cron does not invoke them automatically.
+
+### `POST /api/internal/sync-room-utilization`
+
+- **Auth:** valid `CRON_SECRET` bearer, or an authenticated Auth.js session when the bearer check is not valid (`src/app/api/internal/sync-room-utilization/route.ts:26`-`35`).
+- **Function config:** `maxDuration = 800`.
+- **Request:** no body or query params are read.
+- **Behavior:** calls `syncRoomUtilizationSessions(getDb())`.
+- **Response 200:** `{ "ok": true, ...result }`.
+- **Response 401:** invalid bearer and no session.
+- **Response 500:** missing `CRON_SECRET` with no session fallback, or a thrown sync error.
+
+### `GET /api/internal/line-backlog-recovery`
+
+- **Auth:** `CRON_SECRET` bearer only via `rejectInvalidCronSecret(request)` (`src/app/api/internal/line-backlog-recovery/route.ts:11`-`12`).
+- **Function config:** `maxDuration = 300`.
+- **Request:** none.
+- **Behavior:** records job key `line_backlog_recovery` and calls `runLineBacklogRecovery({ db: getDb(), dryRun: false })`. It intentionally does **not** call the follower re-anchor path (`src/app/api/internal/line-backlog-recovery/route.ts:6`-`8`).
+- **Response 200:** `{ "ok": true, "result": ... }`.
+- **Response 401:** invalid bearer.
+- **Response 500:** missing `CRON_SECRET` or a thrown backlog-recovery error.
 
 _Verified against HEAD + uncommitted WIP on 2026-05-31._
