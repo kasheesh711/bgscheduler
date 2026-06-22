@@ -25,6 +25,7 @@ import {
   INST_SIZE_LABELS,
 } from "@/lib/us-universities/constants";
 import type { InstitutionProfile } from "@/lib/us-universities/types";
+import { resolveSinglePlacement } from "@/lib/us-universities/dot-map";
 import type { InstitutionProfileDialogProps } from "./view-types";
 import {
   EM_DASH,
@@ -36,10 +37,21 @@ import {
   rangeText,
 } from "@/lib/us-universities/format";
 import { buildAdmissionsTrendChartData } from "@/lib/us-universities/trend-charts";
+import { UsDotMap } from "./us-dot-map";
 
 export type { AdmissionRequirement } from "@/lib/us-universities/format";
 export { admissionRequirements, formatPct, formatRatio, formatUsd } from "@/lib/us-universities/format";
 export { buildAdmissionsTrendChartData } from "@/lib/us-universities/trend-charts";
+
+/** Accessible label for the dossier locator map; omits missing place parts. */
+export function dossierLocationAriaLabel(
+  instName: string,
+  city: string | null,
+  stateAbbr: string | null,
+): string {
+  const place = [city, stateAbbr].filter((part): part is string => !!part).join(", ");
+  return place ? `Location of ${instName}: ${place}` : `Location of ${instName}`;
+}
 
 const MAX_COMPLETION_ROWS = 25;
 
@@ -355,6 +367,30 @@ export function InstitutionProfileDialog({
                 <p className="text-sm text-muted-foreground">No multi-year admissions data.</p>
               )}
             </Section>
+
+            <Separator />
+
+            {/* Location */}
+            {(() => {
+              const placement = resolveSinglePlacement(profile);
+              if (placement.kind === "none") return null;
+              const ariaLabel = dossierLocationAriaLabel(
+                profile.instName,
+                profile.city,
+                profile.stateAbbr,
+              );
+              return (
+                <Section title="Location">
+                  <UsDotMap
+                    points={placement.kind === "pin" ? [placement.point] : []}
+                    chipLabel={placement.kind === "chip" ? placement.label : null}
+                    activeUnitId={profile.unitId}
+                    ariaLabel={ariaLabel}
+                    className="max-w-md"
+                  />
+                </Section>
+              );
+            })()}
 
             <Separator />
 
