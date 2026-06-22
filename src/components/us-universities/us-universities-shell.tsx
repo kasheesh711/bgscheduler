@@ -10,6 +10,7 @@ import type {
   IpedsInstitutionListItem,
   UsUniversitiesOverview,
 } from "@/lib/us-universities/types";
+import { dossierHref } from "@/lib/us-universities/nav";
 import { OverviewCharts } from "./overview-charts";
 import {
   InstitutionTable,
@@ -19,6 +20,7 @@ import {
   toggleSort,
 } from "./institution-table";
 import { ComparePanel } from "./compare-panel";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { InstitutionProfileDialog } from "./institution-profile";
 import { InstitutionSearchCombobox } from "./institution-search-combobox";
 
@@ -44,6 +46,22 @@ const INITIAL_FILTERS: FilterParams = {
   pageSize: DEFAULT_PAGE_SIZE,
 };
 
+/**
+ * Legacy deep-link bridge: a stale `?unitId=N` Console URL (from the old modal
+ * era) is rewritten to the dossier route, carrying any `?compare=` shortlist
+ * and dropping the obsolete tab/unitId params. Returns null when there is no
+ * valid legacy unitId. Pure + exported for tests.
+ */
+export function legacyUnitIdRedirect(searchParams: URLSearchParams): string | null {
+  const raw = searchParams.get("unitId");
+  if (!raw) return null;
+  const unitId = Number.parseInt(raw, 10);
+  if (!Number.isFinite(unitId) || unitId <= 0) return null;
+  const compareIds = parseIds(searchParams.get("compare"));
+  // Filters are not modelled in the legacy URL beyond compare; pass empty.
+  return dossierHref(unitId, {} as FilterParams, compareIds);
+}
+
 export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOverview }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -56,14 +74,42 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
   );
 
   const [tab, setTab] = useState<TabKey>(asTab(getParam("tab")));
-  const [profileUnitId, setProfileUnitId] = useState<number | null>(() => {
-    const u = Number.parseInt(getParam("unitId") ?? "", 10);
-    return Number.isFinite(u) && u > 0 ? u : null;
-  });
   const [compareIds, setCompareIds] = useState<number[]>(() => parseIds(getParam("compare")));
 
   // Lifted browse-search state (was inside InstitutionTable).
-  const [filters, setFilters] = useState<FilterParams>(INITIAL_FILTERS);
+  // Initialize from URL params so a hard refresh or consoleHref round-trip
+  // restores the active sort/filter/page state (D-04: URL is the source of truth).
+  const [filters, setFilters] = useState<FilterParams>(() => {
+    const sp = searchParams;
+    if (!sp) return INITIAL_FILTERS;
+    const p = (k: string) => sp.get(k);
+    const coerceInt = (v: string | null) => {
+      const n = Number.parseInt(v ?? "", 10);
+      return Number.isFinite(n) && n > 0 ? n : undefined;
+    };
+    const coerceFloat = (v: string | null) => {
+      const n = Number.parseFloat(v ?? "");
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const states = p("states") ? p("states")!.split(",").filter(Boolean) : undefined;
+    const control = p("control")
+      ? p("control")!.split(",").map(Number).filter((n) => Number.isFinite(n) && n > 0)
+      : undefined;
+    return {
+      search: p("search") ?? undefined,
+      states: states && states.length > 0 ? states : undefined,
+      control: control && control.length > 0 ? control : undefined,
+      minAcceptance: coerceFloat(p("minAcceptance")),
+      maxAcceptance: coerceFloat(p("maxAcceptance")),
+      maxNetPrice: coerceFloat(p("maxNetPrice")),
+      minGradRate: coerceFloat(p("minGradRate")),
+      cip2: p("cip2") ?? undefined,
+      sort: p("sort") ?? INITIAL_FILTERS.sort,
+      dir: (p("dir") === "desc" ? "desc" : "asc") as "asc" | "desc",
+      page: coerceInt(p("page")) ?? 1,
+      pageSize: coerceInt(p("pageSize")) ?? DEFAULT_PAGE_SIZE,
+    };
+  });
   const [rows, setRows] = useState<IpedsInstitutionListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -116,15 +162,13 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
   const syncUrl = useCallback(
     (next: {
       tab?: TabKey;
-      unitId?: number | null;
       compare?: number[];
       filters?: FilterParams;
     }) => {
       const params = new URLSearchParams(searchParams?.toString() ?? "");
       params.set("tab", next.tab ?? tab);
-      const unit = next.unitId !== undefined ? next.unitId : profileUnitId;
-      if (unit) params.set("unitId", String(unit));
-      else params.delete("unitId");
+      // unitId belongs on the dossier route; never carry it in the Console URL.
+      params.delete("unitId");
       const compare = next.compare ?? compareIds;
       if (compare.length) params.set("compare", compare.join(","));
       else params.delete("compare");
@@ -135,7 +179,7 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
       for (const [k, v] of fq.entries()) params.set(k, v);
       router.replace(`${pathname}?${params.toString()}`, { scroll: false });
     },
-    [searchParams, tab, profileUnitId, compareIds, filters, pathname, router],
+    [searchParams, tab, compareIds, filters, pathname, router],
   );
 
   const changeTab = useCallback(
@@ -149,16 +193,17 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
 
   const openProfile = useCallback(
     (unitId: number) => {
-      setProfileUnitId(unitId);
-      syncUrl({ unitId });
+      router.push(dossierHref(unitId, filters, compareIds));
     },
-    [syncUrl],
+    [router, filters, compareIds],
   );
 
-  const closeProfile = useCallback(() => {
-    setProfileUnitId(null);
-    syncUrl({ unitId: null });
-  }, [syncUrl]);
+  // Redirect legacy ?unitId= deep links to the dossier route on first render.
+  useEffect(() => {
+    const href = legacyUnitIdRedirect(new URLSearchParams(searchParams?.toString() ?? ""));
+    if (href) router.replace(href, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const addCompare = useCallback(
     (unitId: number) => {
@@ -282,12 +327,6 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
           />
         </TabsContent>
       </Tabs>
-
-      <InstitutionProfileDialog
-        unitId={profileUnitId}
-        onClose={closeProfile}
-        onAddCompare={addCompare}
-      />
     </div>
   );
 }
