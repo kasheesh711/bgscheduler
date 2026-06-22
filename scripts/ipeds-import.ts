@@ -129,46 +129,61 @@ function arg(name: string, fallback: string): string {
 
 async function main(): Promise<void> {
   const dataYear = arg("year", CURRENT_DATA_YEAR);
+  // 4-digit data-year suffix used in the per-year Access table names
+  // (HD2024, ADM2021, …). Defaults to the current 2024-25 release.
+  const suffix = arg("suffix", "2024");
   const csvDir = arg("csv", "IPEDS_2024-25_Provisional/csv");
   const triggeredByEmail = arg("email", "");
+  // Historical years align to the live 2024-25 institution set (trend rows only).
+  const restrictToCurrentSet = process.argv.includes("--current-set");
+  // The COST survey component + completions detail exist only in 2024-25.
+  const isCurrentRelease = suffix === "2024";
   const p = (name: string) => path.join(csvDir, `${name}.csv`);
+  const emptyMap = () => new Map<number, Record<string, string>>();
 
-  if (!fs.existsSync(p("HD2024"))) {
-    throw new Error(`CSV not found: ${p("HD2024")}. Run scripts/ipeds-convert.sh first.`);
+  const hdFile = p(`HD${suffix}`);
+  if (!fs.existsSync(hdFile)) {
+    throw new Error(`CSV not found: ${hdFile}. Run the convert script first.`);
   }
 
   const db = getDb();
-  console.log(`IPEDS import — year=${dataYear} csv=${csvDir}`);
+  console.log(
+    `IPEDS import — year=${dataYear} suffix=${suffix} csv=${csvDir} currentSet=${restrictToCurrentSet}`,
+  );
 
-  // Load the small "frequently used" tables.
-  const hdRows = readCsvObjects(p("HD2024"));
-  const adm = indexByUnit(readCsvObjects(p("ADM2024")));
-  const drvadm = indexByUnit(readCsvObjects(p("DRVADM2024")));
-  const drvef = indexByUnit(readCsvObjects(p("DRVEF2024")));
-  const ef2024d = indexByUnit(readCsvObjects(p("EF2024D")));
-  const drvgr = indexByUnit(readCsvObjects(p("DRVGR2024")));
-  const drvom = indexByUnit(readCsvObjects(p("DRVOM2024")));
-  const drvcost = indexByUnit(readCsvObjects(p("DRVCOST2024")));
-  const cost1 = indexByUnit(readCsvObjects(p("Cost1_2024")));
-  const netprice = indexByUnit(readCsvObjects(p("COST2_2024_NetPrice")));
-  const drvc = indexByUnit(readCsvObjects(p("DRVC2024")));
+  // Load the small "frequently used" tables (suffix-resolved per year).
+  const hdRows = readCsvObjects(hdFile);
+  const adm = indexByUnit(readCsvObjects(p(`ADM${suffix}`)));
+  const drvadm = indexByUnit(readCsvObjects(p(`DRVADM${suffix}`)));
+  const drvef = indexByUnit(readCsvObjects(p(`DRVEF${suffix}`)));
+  const ef2024d = indexByUnit(readCsvObjects(p(`EF${suffix}D`)));
+  const drvgr = indexByUnit(readCsvObjects(p(`DRVGR${suffix}`)));
+  const drvom = indexByUnit(readCsvObjects(p(`DRVOM${suffix}`)));
+  const drvc = indexByUnit(readCsvObjects(p(`DRVC${suffix}`)));
+  // Cost tables only exist in the 2024-25 release; historical cost stays null.
+  const drvcost = isCurrentRelease ? indexByUnit(readCsvObjects(p("DRVCOST2024"))) : emptyMap();
+  const cost1 = isCurrentRelease ? indexByUnit(readCsvObjects(p("Cost1_2024"))) : emptyMap();
+  const netprice = isCurrentRelease ? indexByUnit(readCsvObjects(p("COST2_2024_NetPrice"))) : emptyMap();
 
-  // CIP title map from valueSets24 (VarName = CIPCODE).
-  const cipTitleMap = new Map<string, string>();
-  for (const r of readCsvObjects(p("valueSets24"))) {
-    if (r.VARNAME === "CIPCODE" && r.CODEVALUE) {
-      cipTitleMap.set(r.CODEVALUE.trim(), (r.VALUELABEL ?? "").trim());
-    }
+  // 4-year degree-granting active Title IV institutions for this year.
+  let fourYear = hdRows.filter(isFourYearDegreeGranting);
+  if (restrictToCurrentSet) {
+    const currentRows = await db
+      .select({ unitId: ipedsInstitutions.unitId })
+      .from(ipedsInstitutions)
+      .where(eq(ipedsInstitutions.dataYear, CURRENT_DATA_YEAR));
+    const currentSet = new Set(currentRows.map((r) => r.unitId));
+    fourYear = fourYear.filter((r) => {
+      const id = coerceIpedsInt(r.UNITID);
+      return id != null && currentSet.has(id);
+    });
   }
-
-  // 4-year degree-granting active Title IV institutions.
-  const fourYear = hdRows.filter(isFourYearDegreeGranting);
   const ids = new Set<number>();
   for (const r of fourYear) {
     const id = coerceIpedsInt(r.UNITID);
     if (id != null) ids.add(id);
   }
-  console.log(`  HD2024 total=${hdRows.length}  4-year set=${ids.size}`);
+  console.log(`  HD${suffix} total=${hdRows.length}  import set=${ids.size}`);
 
   // Build institution records.
   const institutions: IpedsInstitutionInsert[] = [];
@@ -191,42 +206,52 @@ async function main(): Promise<void> {
     institutions.push(buildInstitution(src, unitId, dataYear));
   }
 
-  // Stream completions (C2024_A is ~1.7M rows); keep bachelor's-level conferrals.
-  const completionRaw: Array<Record<string, string>> = [];
-  await new Promise<void>((resolve, reject) => {
-    const stream = fs.createReadStream(p("C2024_A"), "utf8");
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-    let header: string[] | null = null;
-    let idx: Record<string, number> = {};
-    rl.on("line", (line) => {
-      if (line === "") return;
-      const fields = parseCsvLine(line);
-      if (!header) {
-        header = fields.map((h) => h.trim().toUpperCase());
-        idx = Object.fromEntries(header.map((h, i) => [h, i]));
-        return;
+  // Completions: current release only (no historical majors-trend requested).
+  let completions: IpedsCompletionInsert[] = [];
+  if (isCurrentRelease && fs.existsSync(p("C2024_A"))) {
+    const cipTitleMap = new Map<string, string>();
+    for (const r of readCsvObjects(p("valueSets24"))) {
+      if (r.VARNAME === "CIPCODE" && r.CODEVALUE) {
+        cipTitleMap.set(r.CODEVALUE.trim(), (r.VALUELABEL ?? "").trim());
       }
-      const unitId = coerceIpedsInt(fields[idx.UNITID]);
-      if (unitId == null || !ids.has(unitId)) return;
-      if (fields[idx.MAJORNUM] !== "1") return;
-      const cip = (fields[idx.CIPCODE] ?? "").trim();
-      // C2024_A nests 2-/4-/6-digit CIP rollups of the same degrees; keep only
-      // 6-digit detail rows to avoid triple-counting. Exclude the 99 grand total.
-      if (!isSixDigitCip(cip) || cip.startsWith("99")) return;
-      if (coerceIpedsInt(fields[idx.AWLEVEL]) !== COMPLETIONS_AWARD_LEVEL) return;
-      const total = coerceIpedsInt(fields[idx.CTOTALT]) ?? 0;
-      if (total <= 0) return;
-      completionRaw.push({
-        UNITID: String(unitId),
-        CIPCODE: cip,
-        AWLEVEL: fields[idx.AWLEVEL],
-        CTOTALT: fields[idx.CTOTALT],
+    }
+    // Stream completions (C2024_A is ~1.7M rows); keep bachelor's-level conferrals.
+    const completionRaw: Array<Record<string, string>> = [];
+    await new Promise<void>((resolve, reject) => {
+      const stream = fs.createReadStream(p("C2024_A"), "utf8");
+      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+      let header: string[] | null = null;
+      let idx: Record<string, number> = {};
+      rl.on("line", (line) => {
+        if (line === "") return;
+        const fields = parseCsvLine(line);
+        if (!header) {
+          header = fields.map((h) => h.trim().toUpperCase());
+          idx = Object.fromEntries(header.map((h, i) => [h, i]));
+          return;
+        }
+        const unitId = coerceIpedsInt(fields[idx.UNITID]);
+        if (unitId == null || !ids.has(unitId)) return;
+        if (fields[idx.MAJORNUM] !== "1") return;
+        const cip = (fields[idx.CIPCODE] ?? "").trim();
+        // C2024_A nests 2-/4-/6-digit CIP rollups of the same degrees; keep only
+        // 6-digit detail rows to avoid triple-counting. Exclude the 99 grand total.
+        if (!isSixDigitCip(cip) || cip.startsWith("99")) return;
+        if (coerceIpedsInt(fields[idx.AWLEVEL]) !== COMPLETIONS_AWARD_LEVEL) return;
+        const total = coerceIpedsInt(fields[idx.CTOTALT]) ?? 0;
+        if (total <= 0) return;
+        completionRaw.push({
+          UNITID: String(unitId),
+          CIPCODE: cip,
+          AWLEVEL: fields[idx.AWLEVEL],
+          CTOTALT: fields[idx.CTOTALT],
+        });
       });
+      rl.on("close", resolve);
+      rl.on("error", reject);
     });
-    rl.on("close", resolve);
-    rl.on("error", reject);
-  });
-  const completions: IpedsCompletionInsert[] = buildCompletions(completionRaw, cipTitleMap, dataYear);
+    completions = buildCompletions(completionRaw, cipTitleMap, dataYear);
+  }
   console.log(`  institutions=${institutions.length}  completions=${completions.length}`);
 
   // Clear any stale running run for this year, then open a fresh run.
