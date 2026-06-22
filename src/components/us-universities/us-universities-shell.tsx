@@ -260,25 +260,21 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
 
   const addCompare = useCallback(
     (unitId: number) => {
-      setCompareIds((prev) => {
-        if (prev.includes(unitId) || prev.length >= MAX_COMPARE) return prev;
-        const next = [...prev, unitId];
-        syncUrl({ compare: next });
-        return next;
-      });
+      if (compareIds.includes(unitId) || compareIds.length >= MAX_COMPARE) return;
+      const next = [...compareIds, unitId];
+      setCompareIds(next);
+      syncUrl({ compare: next });
     },
-    [syncUrl],
+    [compareIds, syncUrl],
   );
 
   const removeCompare = useCallback(
     (unitId: number) => {
-      setCompareIds((prev) => {
-        const next = prev.filter((id) => id !== unitId);
-        syncUrl({ compare: next });
-        return next;
-      });
+      const next = compareIds.filter((id) => id !== unitId);
+      setCompareIds(next);
+      syncUrl({ compare: next });
     },
-    [syncUrl],
+    [compareIds, syncUrl],
   );
 
   const clearCompare = useCallback(() => {
@@ -296,24 +292,20 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
 
   const onSort = useCallback(
     (key: string) => {
-      setFilters((current) => {
-        const next = isSortableKey(key) ? toggleSort(current, key) : current;
-        syncUrl({ filters: next });
-        return next;
-      });
+      const next = isSortableKey(key) ? toggleSort(filters, key) : filters;
+      setFilters(next);
+      syncUrl({ filters: next });
     },
-    [syncUrl],
+    [filters, syncUrl],
   );
 
   const onPage = useCallback(
     (nextPage: number) => {
-      setFilters((current) => {
-        const next = { ...current, page: nextPage };
-        syncUrl({ filters: next });
-        return next;
-      });
+      const next = { ...filters, page: nextPage };
+      setFilters(next);
+      syncUrl({ filters: next });
     },
-    [syncUrl],
+    [filters, syncUrl],
   );
 
   return (
