@@ -16,6 +16,8 @@ export interface OverviewChartsProps {
   active: boolean;
   /** Open an institution profile (e.g. clicking a scatter point). */
   onSelect: (unitId: number) => void;
+  /** Patch the live browse filters from a bar/slice click (optional — Console only). */
+  onFilter?: (patch: Partial<FilterParams>) => void;
 }
 
 export interface InstitutionFiltersProps {

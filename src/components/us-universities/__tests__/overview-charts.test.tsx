@@ -112,6 +112,36 @@ describe("buildAcceptanceTrendData", () => {
   });
 });
 
+describe("OverviewCharts onFilter affordance", () => {
+  const overview: UsUniversitiesOverview = {
+    dataYear: "2024-25",
+    totalInstitutions: 140,
+    withAcceptanceRate: 130,
+    avgAcceptanceRate: 55,
+    states: STATES,
+    controls: CONTROLS,
+    acceptanceBuckets: BUCKETS,
+    scatter: SCATTER,
+    cip2Options: [],
+    acceptanceTrend: ACCEPTANCE_TREND,
+    lastImportedAt: null,
+  };
+
+  it("renders a click-to-filter hint when onFilter is provided", () => {
+    const html = renderToStaticMarkup(
+      <OverviewCharts overview={overview} active onSelect={() => {}} onFilter={() => {}} />,
+    );
+    expect(html).toContain("Click to filter");
+  });
+
+  it("omits the click-to-filter hint when onFilter is absent (back-compat)", () => {
+    const html = renderToStaticMarkup(
+      <OverviewCharts overview={overview} active onSelect={() => {}} />,
+    );
+    expect(html).not.toContain("Click to filter");
+  });
+});
+
 describe("OverviewCharts rendering", () => {
   const overview: UsUniversitiesOverview = {
     dataYear: "2024-25",
