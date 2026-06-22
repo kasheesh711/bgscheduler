@@ -1,5 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("next/navigation", () => ({
+  useRouter: vi.fn(() => ({ replace: vi.fn(), push: vi.fn() })),
+  useSearchParams: vi.fn(() => null),
+}));
+
 import type { InstitutionProfile } from "@/lib/us-universities/types";
 import {
   InstitutionDossier,
@@ -197,5 +203,57 @@ describe("InstitutionDossier", () => {
       />,
     );
     expect(html).not.toContain("Admissions over time");
+  });
+
+  // ── Shortlist dock + Add-to-shortlist SSR assertions ───────────────────
+
+  it("shows 'Add to shortlist' when the profile is not in compareIds", () => {
+    const html = renderToStaticMarkup(
+      <InstitutionDossier
+        profile={makeProfile()}
+        backHref="/us-universities"
+        compareIds={[999]}
+      />,
+    );
+    expect(html).toContain("Add to shortlist");
+    expect(html).not.toContain("In shortlist");
+  });
+
+  it("shows 'In shortlist' and disables the button when profile.unitId is in compareIds", () => {
+    const profile = makeProfile({ unitId: 166027 });
+    const html = renderToStaticMarkup(
+      <InstitutionDossier
+        profile={profile}
+        backHref="/us-universities"
+        compareIds={[166027]}
+      />,
+    );
+    expect(html).toContain("In shortlist");
+    // button carries disabled attribute when the id is already in the set
+    expect(html).toContain("disabled");
+  });
+
+  it("renders the ShortlistBar dock when compareIds is non-empty", () => {
+    const html = renderToStaticMarkup(
+      <InstitutionDossier
+        profile={makeProfile({ unitId: 166027, instName: "Test University" })}
+        backHref="/us-universities"
+        compareIds={[166027]}
+      />,
+    );
+    expect(html).toContain("Shortlist");
+    expect(html).toContain("Test University");
+    expect(html).toContain("Compare");
+  });
+
+  it("does not render the ShortlistBar dock when compareIds is empty", () => {
+    const html = renderToStaticMarkup(
+      <InstitutionDossier
+        profile={makeProfile()}
+        backHref="/us-universities"
+        compareIds={[]}
+      />,
+    );
+    expect(html).not.toContain("Shortlist");
   });
 });
