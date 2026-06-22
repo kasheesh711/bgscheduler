@@ -3,6 +3,7 @@ export type NavSectionId =
   | "student-lifecycle"
   | "finance-revenue"
   | "market-intelligence"
+  | "research-reference"
   | "data-audit";
 
 export type NavToolId =
@@ -20,6 +21,7 @@ export type NavToolId =
   | "credit-control"
   | "payroll"
   | "competitor-intelligence"
+  | "us-universities"
   | "wise-activity"
   | "data-health";
 
@@ -70,6 +72,11 @@ export const NAV_SECTIONS: NavSection[] = [
     id: "market-intelligence",
     label: "Market Intelligence",
     description: "Competitor activity, SEO visibility, offers, and response workflow.",
+  },
+  {
+    id: "research-reference",
+    label: "Research & Reference",
+    description: "External datasets for advising — US university research and statistics.",
   },
   {
     id: "data-audit",
@@ -184,6 +191,13 @@ export const NAV_TOOLS: NavTool[] = [
     label: "Competitor BI",
     description: "Track competitor activity, search visibility, offers, and response tasks.",
     section: "market-intelligence",
+  },
+  {
+    id: "us-universities",
+    href: "/us-universities",
+    label: "US Universities",
+    description: "Research & compare US 4-year universities (IPEDS): admissions, cost, outcomes.",
+    section: "research-reference",
   },
   {
     id: "wise-activity",
