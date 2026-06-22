@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   CONTINENTAL_BOUNDS,
@@ -150,9 +152,6 @@ describe("resolveSinglePlacement", () => {
 
 describe("dot-map isolation", () => {
   it("imports nothing beyond the us-universities domain types", () => {
-    const { readFileSync } = require("node:fs");
-    const { fileURLToPath } = require("node:url");
-
     const src = readFileSync(
       fileURLToPath(new URL("../dot-map.ts", import.meta.url)),
       "utf8",
