@@ -4,6 +4,8 @@ import {
   DOT_MAP_VIEWBOX,
   outOfBoundsLabel,
   projectLatLng,
+  buildDotMapPoints,
+  resolveSinglePlacement,
 } from "../dot-map";
 
 describe("projectLatLng", () => {
@@ -65,5 +67,83 @@ describe("outOfBoundsLabel", () => {
     expect(outOfBoundsLabel(undefined)).toBeNull();
     expect(outOfBoundsLabel("")).toBeNull();
     expect(outOfBoundsLabel("   ")).toBeNull();
+  });
+});
+
+describe("buildDotMapPoints", () => {
+  const rows = [
+    { unitId: 1, instName: "Mid U", latitude: 37, longitude: -95.5 },
+    { unitId: 2, instName: "Alaska U", latitude: 64.2, longitude: -149.5 }, // out of bounds
+    { unitId: 3, instName: "No coords U", latitude: null, longitude: null },
+    { unitId: 4, instName: "NE corner U", latitude: 50, longitude: -66 },
+  ];
+
+  it("keeps only rows that project inside the continental frame", () => {
+    const points = buildDotMapPoints(rows);
+    expect(points.map((p) => p.unitId)).toEqual([1, 4]);
+  });
+
+  it("carries unitId, name, and projected coordinates onto each point", () => {
+    const [first] = buildDotMapPoints(rows);
+    expect(first.unitId).toBe(1);
+    expect(first.name).toBe("Mid U");
+    expect(first.x).toBeGreaterThan(0);
+    expect(first.y).toBeGreaterThan(0);
+  });
+
+  it("returns an empty array when nothing is plottable", () => {
+    expect(
+      buildDotMapPoints([{ unitId: 9, instName: "AK", latitude: 64, longitude: -150 }]),
+    ).toEqual([]);
+  });
+});
+
+describe("resolveSinglePlacement", () => {
+  it("returns a pin for an in-bounds institution", () => {
+    const placement = resolveSinglePlacement({
+      unitId: 1,
+      instName: "Mid U",
+      stateAbbr: "KS",
+      latitude: 37,
+      longitude: -95.5,
+    });
+    expect(placement.kind).toBe("pin");
+    if (placement.kind === "pin") {
+      expect(placement.point.unitId).toBe(1);
+      expect(placement.point.x).toBeGreaterThan(0);
+    }
+  });
+
+  it("returns a chip for an out-of-bounds but located institution (AK/HI)", () => {
+    const placement = resolveSinglePlacement({
+      unitId: 2,
+      instName: "Alaska U",
+      stateAbbr: "AK",
+      latitude: 64.2,
+      longitude: -149.5,
+    });
+    expect(placement).toEqual({ kind: "chip", label: "AK" });
+  });
+
+  it("returns none when the institution has no coordinates", () => {
+    const placement = resolveSinglePlacement({
+      unitId: 3,
+      instName: "No coords U",
+      stateAbbr: "TX",
+      latitude: null,
+      longitude: null,
+    });
+    expect(placement).toEqual({ kind: "none" });
+  });
+
+  it("returns none for out-of-bounds coords when no state abbr is available", () => {
+    const placement = resolveSinglePlacement({
+      unitId: 4,
+      instName: "Mystery U",
+      stateAbbr: null,
+      latitude: 64.2,
+      longitude: -149.5,
+    });
+    expect(placement).toEqual({ kind: "none" });
   });
 });
