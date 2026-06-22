@@ -131,6 +131,19 @@ export function toggleSort(filters: FilterParams, key: TableSortKey): FilterPara
   return { ...filters, sort: key, dir: "asc", page: 1 };
 }
 
+/**
+ * Merge a chart-cross-filter patch onto the current filters, always resetting
+ * to page 1. Pure + testable: a chart click maps a clicked element to a
+ * Partial<FilterParams> patch (see chart-filters.ts) which this applies. The
+ * patch's `page`, if any, is overridden — a new filter always starts at page 1.
+ */
+export function applyChartFilter(
+  filters: FilterParams,
+  patch: Partial<FilterParams>,
+): FilterParams {
+  return { ...filters, ...patch, page: 1 };
+}
+
 const INITIAL_FILTERS: FilterParams = {
   sort: "instName",
   dir: "asc",
