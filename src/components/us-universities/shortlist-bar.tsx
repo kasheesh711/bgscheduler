@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { chartColors } from "@/components/sales-dashboard/chart-canvas";
 import { cn } from "@/lib/utils";
 import { MAX_COMPARE } from "@/lib/us-universities/constants";
+import type { IpedsInstitutionSummary } from "@/lib/us-universities/types";
 import { compareColorIndex } from "./compare-colors";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,6 +32,24 @@ export interface ShortlistBarProps {
 export function shortlistColor(unitId: number, orderedIds: number[]): string {
   const palette = chartColors().chart;
   return palette[compareColorIndex(unitId, orderedIds) % palette.length];
+}
+
+/**
+ * Resolve shortlist ids into displayable entries, preserving compare order.
+ * Names come from a matching loaded row; an id with no row (not yet fetched,
+ * or a phantom deep-link id) falls back to `Institution #<id>` so it always
+ * gets a chip + remove control (mirrors ComparePanel's chip fallback).
+ */
+export function resolveShortlistEntries(
+  compareIds: number[],
+  rows: IpedsInstitutionSummary[],
+): ShortlistEntry[] {
+  const nameById = new Map<number, string>();
+  for (const r of rows) nameById.set(r.unitId, r.instName);
+  return compareIds.map((unitId) => ({
+    unitId,
+    name: nameById.get(unitId) ?? `Institution #${unitId}`,
+  }));
 }
 
 export function ShortlistBar({

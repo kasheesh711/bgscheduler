@@ -59,3 +59,30 @@ describe("ShortlistBar", () => {
     expect(html).toContain("Max 4 reached");
   });
 });
+
+import type { IpedsInstitutionSummary } from "@/lib/us-universities/types";
+import { resolveShortlistEntries } from "../shortlist-bar";
+
+function row(unitId: number, instName: string): IpedsInstitutionSummary {
+  return { unitId, instName } as IpedsInstitutionSummary;
+}
+
+describe("resolveShortlistEntries", () => {
+  it("maps ids to names from rows, preserving compare order", () => {
+    const rows = [row(220, "Beta College"), row(110, "Alpha University")];
+    expect(resolveShortlistEntries([110, 220], rows)).toEqual([
+      { unitId: 110, name: "Alpha University" },
+      { unitId: 220, name: "Beta College" },
+    ]);
+  });
+
+  it("falls back to a placeholder name for ids missing from rows (never drops)", () => {
+    expect(resolveShortlistEntries([999], [])).toEqual([
+      { unitId: 999, name: "Institution #999" },
+    ]);
+  });
+
+  it("returns an empty array for an empty shortlist", () => {
+    expect(resolveShortlistEntries([], [row(1, "A")])).toEqual([]);
+  });
+});
