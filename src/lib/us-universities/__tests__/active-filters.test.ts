@@ -10,6 +10,7 @@ const OVERVIEW: UsUniversitiesOverview = {
   states: [],
   controls: [],
   acceptanceBuckets: [],
+  acceptanceTrend: [],
   scatter: [],
   cip2Options: [],
   lastImportedAt: null,

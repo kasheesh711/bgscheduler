@@ -220,7 +220,7 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
 
   const handleClearChip = useCallback(
     (patch: Partial<FilterParams>) => {
-      const next = applyChartFilter(filters, patch);
+      const next = { ...applyChartFilter(filters, patch), page: 1 };
       setFilters(next);
       syncUrl({ filters: next });
     },
@@ -241,13 +241,11 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
   const handleSortChange = useCallback(
     (next: string | null) => {
       if (!next) return;
-      setFilters((current) => {
-        const updated = { ...current, sort: next, page: 1 };
-        syncUrl({ filters: updated });
-        return updated;
-      });
+      const updated = { ...filters, sort: next, page: 1 };
+      setFilters(updated);
+      syncUrl({ filters: updated });
     },
-    [syncUrl],
+    [filters, syncUrl],
   );
 
   // Redirect legacy ?unitId= deep links to the dossier route on first render.
