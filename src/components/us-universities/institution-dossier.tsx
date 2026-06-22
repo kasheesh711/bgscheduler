@@ -45,8 +45,11 @@ import {
 import { hasAnyValue } from "@/lib/us-universities/dossier-sections";
 import { buildAdmissionsTrendChartData } from "@/lib/us-universities/trend-charts";
 import { addCompareId, removeCompareId } from "@/lib/us-universities/compare-set";
+import { resolveSinglePlacement } from "@/lib/us-universities/dot-map";
 import type { InstitutionProfile, IpedsInstitutionSummary } from "@/lib/us-universities/types";
 import { PriceLadder } from "./price-ladder";
+import { UsDotMap } from "./us-dot-map";
+import { dossierLocationAriaLabel } from "./institution-profile";
 import { DemographicsStackedBar } from "./demographics-stacked-bar";
 import {
   DossierSectionNav,
@@ -622,6 +625,24 @@ export function InstitutionDossier({
                   }
                 />
               </MetricGrid>
+              {(() => {
+                const placement = resolveSinglePlacement(profile);
+                if (placement.kind === "none") return null;
+                const ariaLabel = dossierLocationAriaLabel(
+                  profile.instName,
+                  profile.city,
+                  profile.stateAbbr,
+                );
+                return (
+                  <UsDotMap
+                    points={placement.kind === "pin" ? [placement.point] : []}
+                    chipLabel={placement.kind === "chip" ? placement.label : null}
+                    activeUnitId={profile.unitId}
+                    ariaLabel={ariaLabel}
+                    className="mt-4 max-w-md"
+                  />
+                );
+              })()}
             </DossierSectionBlock>
           ) : null}
         </div>

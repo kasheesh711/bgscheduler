@@ -256,4 +256,57 @@ describe("InstitutionDossier", () => {
     );
     expect(html).not.toContain("Shortlist");
   });
+
+  // ── Location section — locator map (pin / chip / omit) ─────────────────
+
+  it("renders a map pin (svg) for an in-bounds continental US institution", () => {
+    // Cambridge MA: lat ~42.3, lng ~-71.1 — well inside continental bounds
+    const html = renderToStaticMarkup(
+      <InstitutionDossier
+        profile={makeProfile({ latitude: 42.3, longitude: -71.1 })}
+        backHref="/us-universities"
+        compareIds={[]}
+      />,
+    );
+    // UsDotMap renders an <svg> with role="img" for pin placements
+    expect(html).toContain("role=\"img\"");
+    // The aria-label includes the institution name
+    expect(html).toContain("Location of Test University");
+    // A <circle> pin is rendered inside the SVG
+    expect(html).toContain("<circle");
+  });
+
+  it("renders an out-of-bounds chip for a Hawaii institution", () => {
+    // Honolulu HI: lat ~21.3, lng ~-157.8 — outside continental bounds
+    const html = renderToStaticMarkup(
+      <InstitutionDossier
+        profile={makeProfile({ latitude: 21.3, longitude: -157.8, stateAbbr: "HI" })}
+        backHref="/us-universities"
+        compareIds={[]}
+      />,
+    );
+    // UsDotMap renders a chip with role="img" (a div, not svg) for out-of-bounds
+    expect(html).toContain("role=\"img\"");
+    // The state abbreviation appears as the chip label
+    expect(html).toContain(">HI<");
+    // No pin circle — chip path has no <circle
+    expect(html).not.toContain("<circle");
+  });
+
+  it("renders the Location section without a map when lat/lng are null", () => {
+    const html = renderToStaticMarkup(
+      <InstitutionDossier
+        profile={makeProfile({ latitude: null, longitude: null })}
+        backHref="/us-universities"
+        compareIds={[]}
+      />,
+    );
+    // Location section still shows city/state metrics
+    expect(html).toContain("Cambridge");
+    expect(html).toContain("MA");
+    // No locator map rendered — UsDotMap returns null for kind="none"
+    // (the dossier location aria-label always contains "Location of")
+    expect(html).not.toContain("Location of Test University");
+    expect(html).not.toContain("<circle");
+  });
 });
