@@ -175,3 +175,31 @@ export const DEFAULT_SORT: SortableColumnKey = "instName";
 export const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 100;
 export const MAX_COMPARE = 4;
+
+/** HD2024 C21BASIC: 2021 Carnegie Classification — Basic codes → labels. */
+export const CARNEGIE_BASIC_LABELS: Record<number, string> = {
+  15: "R1: Doctoral – Very high research",
+  16: "R2: Doctoral – High research",
+  17: "D/PU: Doctoral/Professional",
+  18: "Master's: Larger programs",
+  19: "Master's: Medium programs",
+  20: "Master's: Smaller programs",
+  21: "Baccalaureate: Arts & Sciences",
+  22: "Baccalaureate: Diverse fields",
+  23: "Baccalaureate/Associate's",
+  24: "Associate's: High transfer",
+  25: "Associate's: Mixed transfer/career",
+  26: "Associate's: High career & technical",
+  27: "Special focus: Two-year",
+  28: "Special focus: Four-year",
+  29: "Tribal Colleges",
+};
+
+/**
+ * Human label for a Carnegie Basic (C21BASIC) code. Returns NULL when the code
+ * is unmapped or missing (fail-closed: the caller omits the badge on null).
+ */
+export function carnegieLabel(code: number | null | undefined): string | null {
+  if (code == null || !Number.isFinite(code)) return null;
+  return CARNEGIE_BASIC_LABELS[code] ?? null;
+}
