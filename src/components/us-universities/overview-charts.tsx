@@ -24,6 +24,13 @@ import type {
   ScatterPoint,
   StateFacet,
 } from "@/lib/us-universities/types";
+import { cn } from "@/lib/utils";
+import {
+  acceptanceBucketToFilter,
+  controlToFilter,
+  stateToFilter,
+  topStates,
+} from "@/lib/us-universities/chart-filters";
 import type { OverviewChartsProps } from "./view-types";
 
 // ── Pure data builders (exported for unit tests) ───────────────────────
@@ -141,7 +148,7 @@ export function buildControlDoughnutData(controls: ControlFacet[], palette: stri
 
 // ── Component ──────────────────────────────────────────────────────────
 
-export function OverviewCharts({ overview, active, onSelect }: OverviewChartsProps) {
+export function OverviewCharts({ overview, active, onSelect, onFilter }: OverviewChartsProps) {
   const acceptanceConfig = useMemo<ChartConfiguration>(() => {
     const colors = chartColors();
     return {
@@ -150,6 +157,13 @@ export function OverviewCharts({ overview, active, onSelect }: OverviewChartsPro
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        onClick: (_event, elements) => {
+          if (!onFilter) return;
+          const hit = elements[0];
+          if (!hit) return;
+          const bucket = overview.acceptanceBuckets[hit.index];
+          if (bucket) onFilter(acceptanceBucketToFilter(bucket));
+        },
         scales: {
           x: { grid: { display: false } },
           y: {
@@ -168,7 +182,7 @@ export function OverviewCharts({ overview, active, onSelect }: OverviewChartsPro
         },
       },
     };
-  }, [overview.acceptanceBuckets]);
+  }, [overview.acceptanceBuckets, onFilter]);
 
   const scatterConfig = useMemo<ChartConfiguration>(() => {
     const colors = chartColors();
@@ -223,6 +237,13 @@ export function OverviewCharts({ overview, active, onSelect }: OverviewChartsPro
         indexAxis: "y",
         responsive: true,
         maintainAspectRatio: false,
+        onClick: (_event, elements) => {
+          if (!onFilter) return;
+          const hit = elements[0];
+          if (!hit) return;
+          const facet = topStates(overview.states)[hit.index];
+          if (facet) onFilter(stateToFilter(facet.state));
+        },
         scales: {
           x: {
             beginAtZero: true,
@@ -241,7 +262,7 @@ export function OverviewCharts({ overview, active, onSelect }: OverviewChartsPro
         },
       },
     };
-  }, [overview.states]);
+  }, [overview.states, onFilter]);
 
   const acceptanceTrendConfig = useMemo<ChartConfiguration>(() => {
     const colors = chartColors();
@@ -279,6 +300,13 @@ export function OverviewCharts({ overview, active, onSelect }: OverviewChartsPro
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        onClick: (_event, elements) => {
+          if (!onFilter) return;
+          const hit = elements[0];
+          if (!hit) return;
+          const facet = overview.controls[hit.index];
+          if (facet) onFilter(controlToFilter(facet.control));
+        },
         plugins: {
           legend: { display: true, position: "bottom" },
           tooltip: {
@@ -289,7 +317,7 @@ export function OverviewCharts({ overview, active, onSelect }: OverviewChartsPro
         },
       },
     };
-  }, [overview.controls]);
+  }, [overview.controls, onFilter]);
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -298,9 +326,10 @@ export function OverviewCharts({ overview, active, onSelect }: OverviewChartsPro
           <CardTitle>Admissions selectivity</CardTitle>
           <CardDescription>
             Institutions grouped by acceptance-rate band.
+            {onFilter ? " Click to filter." : ""}
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex min-h-[240px] flex-col">
+        <CardContent className={cn("flex min-h-[240px] flex-col", onFilter && "cursor-pointer")}>
           <ChartCanvas
             config={acceptanceConfig}
             active={active}
@@ -329,9 +358,11 @@ export function OverviewCharts({ overview, active, onSelect }: OverviewChartsPro
       <Card className="min-h-[340px]">
         <CardHeader>
           <CardTitle>Universities by state</CardTitle>
-          <CardDescription>Top 15 states by institution count.</CardDescription>
+          <CardDescription>
+            Top 15 states by institution count.{onFilter ? " Click to filter." : ""}
+          </CardDescription>
         </CardHeader>
-        <CardContent className="flex min-h-[240px] flex-col">
+        <CardContent className={cn("flex min-h-[240px] flex-col", onFilter && "cursor-pointer")}>
           <ChartCanvas
             config={stateConfig}
             active={active}
@@ -344,10 +375,10 @@ export function OverviewCharts({ overview, active, onSelect }: OverviewChartsPro
         <CardHeader>
           <CardTitle>Public vs. private mix</CardTitle>
           <CardDescription>
-            Share of institutions by control type.
+            Share of institutions by control type.{onFilter ? " Click to filter." : ""}
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex min-h-[240px] flex-col">
+        <CardContent className={cn("flex min-h-[240px] flex-col", onFilter && "cursor-pointer")}>
           <ChartCanvas
             config={controlConfig}
             active={active}

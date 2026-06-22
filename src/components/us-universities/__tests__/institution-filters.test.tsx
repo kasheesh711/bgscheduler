@@ -83,3 +83,15 @@ describe("InstitutionFilters rendering", () => {
     expect(html).toContain('value="20"');
   });
 });
+
+describe("InstitutionFilters min-accept input + placeholder", () => {
+  it("renders a Min accept % input and the name-only search placeholder", () => {
+    const html = renderToStaticMarkup(
+      <InstitutionFilters states={STATES} cip2Options={CIP2} value={{}} onChange={() => {}} />,
+    );
+    expect(html).toContain("Minimum acceptance rate");
+    expect(html).toContain("Min accept %");
+    expect(html).toContain('placeholder="Search by name…"');
+    expect(html).not.toContain("Search by name or city…");
+  });
+});

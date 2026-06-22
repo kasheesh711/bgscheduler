@@ -1,6 +1,5 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Download } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -17,44 +16,18 @@ import {
   DEFAULT_PAGE_SIZE,
   MAX_COMPARE,
 } from "@/lib/us-universities/constants";
-import type {
-  FilterParams,
-  InstitutionListResult,
-  IpedsInstitutionListItem,
-} from "@/lib/us-universities/types";
+import type { FilterParams } from "@/lib/us-universities/types";
 import type { InstitutionTableProps } from "@/components/us-universities/view-types";
 import { cn } from "@/lib/utils";
+import { formatInt, formatPct, formatSatRange } from "@/lib/us-universities/format";
 
 // ----------------------------------------------------------------------------
-// Institution browse table — stateful filter bar + server-paginated results.
-// Filters drive a debounced /api/us-universities/search fetch (AbortController-
-// cancelled on overlap). Sortable headers toggle sort/dir on the whitelisted
-// keys, server pagination via Prev/Next, and a CSV export anchor that mirrors
-// the current query. Numeric IPEDS metrics are fail-closed: null renders "—".
+// Institution browse table — pure presenter. All filter/fetch state is owned
+// by UsUniversitiesShell and passed down as props. The table renders whatever
+// it receives, calls back onSort/onFilterChange/onPage/onSelect/onAddCompare,
+// and contains no fetch logic of its own. Numeric IPEDS metrics are fail-closed:
+// null renders "—".
 // ----------------------------------------------------------------------------
-
-/** Numeric metrics are `number | null` — never render null as 0/"null". */
-function fmt(value: number | null | undefined, suffix = ""): string {
-  return value == null ? "—" : `${value}${suffix}`;
-}
-
-/** Whole-number locale formatting for enrollment / dollar amounts. */
-function fmtInt(value: number | null | undefined, prefix = ""): string {
-  return value == null ? "—" : `${prefix}${Math.round(value).toLocaleString("en-US")}`;
-}
-
-/** One-decimal percentage with a trailing %; "—" when missing. */
-function fmtPct(value: number | null | undefined): string {
-  if (value == null) return "—";
-  const rounded = Math.round(value * 10) / 10;
-  return `${rounded}%`;
-}
-
-/** SAT reading range "p25–p75"; "—" when either bound is missing. */
-function fmtSatRange(p25: number | null | undefined, p75: number | null | undefined): string {
-  if (p25 == null || p75 == null) return "—";
-  return `${p25}–${p75}`;
-}
 
 /**
  * Year-over-year acceptance change in percentage points. `null` when either
@@ -88,7 +61,7 @@ const SORTABLE_KEYS = [
 
 type TableSortKey = (typeof SORTABLE_KEYS)[number];
 
-function isSortableKey(key: string): key is TableSortKey {
+export function isSortableKey(key: string): key is TableSortKey {
   return (SORTABLE_KEYS as readonly string[]).includes(key);
 }
 
@@ -153,74 +126,35 @@ export function toggleSort(filters: FilterParams, key: TableSortKey): FilterPara
   return { ...filters, sort: key, dir: "asc", page: 1 };
 }
 
-const INITIAL_FILTERS: FilterParams = {
-  sort: "instName",
-  dir: "asc",
-  page: 1,
-  pageSize: DEFAULT_PAGE_SIZE,
-};
+/**
+ * Merge a chart-cross-filter patch onto the current filters, always resetting
+ * to page 1. Pure + testable: a chart click maps a clicked element to a
+ * Partial<FilterParams> patch (see chart-filters.ts) which this applies. The
+ * patch's `page`, if any, is overridden — a new filter always starts at page 1.
+ */
+export function applyChartFilter(
+  filters: FilterParams,
+  patch: Partial<FilterParams>,
+): FilterParams {
+  return { ...filters, ...patch, page: 1 };
+}
 
 export function InstitutionTable({
-  overview,
+  rows,
+  total,
+  loading,
+  error,
+  filters,
+  states,
+  cip2Options,
+  onSort,
   onSelect,
   onAddCompare,
+  onFilterChange,
+  onPage,
   compareIds,
 }: InstitutionTableProps) {
-  const [filters, setFilters] = useState<FilterParams>(INITIAL_FILTERS);
-  const [rows, setRows] = useState<IpedsInstitutionListItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const abortRef = useRef<AbortController | null>(null);
   const query = buildSearchQuery(filters);
-
-  useEffect(() => {
-    // Cancel any in-flight request before issuing a new one.
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    // Defer state updates into the timer callback so no setState runs
-    // synchronously in the effect body (react-hooks/set-state-in-effect).
-    const handle = window.setTimeout(() => {
-      setLoading(true);
-      setError(null);
-
-      fetch(`/api/us-universities/search?${query}`, { signal: controller.signal })
-        .then(async (response) => {
-          if (!response.ok) {
-            throw new Error(`Search failed (${response.status})`);
-          }
-          return (await response.json()) as InstitutionListResult;
-        })
-        .then((result) => {
-          if (controller.signal.aborted) return;
-          setRows(result.rows ?? []);
-          setTotal(result.total ?? 0);
-          setLoading(false);
-        })
-        .catch((err: unknown) => {
-          if (controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
-            return;
-          }
-          setRows([]);
-          setTotal(0);
-          setError(err instanceof Error ? err.message : "Failed to load institutions");
-          setLoading(false);
-        });
-    }, 0);
-
-    return () => {
-      window.clearTimeout(handle);
-      controller.abort();
-    };
-  }, [query]);
-
-  const onSort = useCallback((key: TableSortKey) => {
-    setFilters((current) => toggleSort(current, key));
-  }, []);
-
   const page = filters.page ?? 1;
   const pageSize = filters.pageSize ?? DEFAULT_PAGE_SIZE;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -229,17 +163,13 @@ export function InstitutionTable({
   const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const rangeEnd = Math.min(page * pageSize, total);
 
-  const goToPage = useCallback((next: number) => {
-    setFilters((current) => ({ ...current, page: next }));
-  }, []);
-
   return (
     <div className="flex flex-col gap-3">
       <InstitutionFilters
-        states={overview.states}
-        cip2Options={overview.cip2Options}
+        states={states}
+        cip2Options={cip2Options}
         value={filters}
-        onChange={setFilters}
+        onChange={onFilterChange}
       />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -354,7 +284,7 @@ export function InstitutionTable({
                     <TableCell>
                       {row.control != null ? (CONTROL_LABELS[row.control] ?? "—") : "—"}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtPct(row.acceptanceRate)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatPct(row.acceptanceRate)}</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {(() => {
                         const delta = acceptanceDelta(row);
@@ -377,11 +307,11 @@ export function InstitutionTable({
                       })()}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {fmtSatRange(row.satReadingP25, row.satReadingP75)}
+                      {formatSatRange(row.satReadingP25, row.satReadingP75)}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtInt(row.enrollmentTotal)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtPct(row.gradRateBach6yr)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtInt(row.avgNetPrice, "$")}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatInt(row.enrollmentTotal)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatPct(row.gradRateBach6yr)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatInt(row.avgNetPrice, "$")}</TableCell>
                     <TableCell className="text-right">
                       <Button
                         variant={inCompare ? "secondary" : "outline"}
@@ -414,7 +344,7 @@ export function InstitutionTable({
             variant="outline"
             size="sm"
             disabled={!hasPrev || loading}
-            onClick={() => goToPage(page - 1)}
+            onClick={() => onPage(page - 1)}
           >
             Prev
           </Button>
@@ -422,7 +352,7 @@ export function InstitutionTable({
             variant="outline"
             size="sm"
             disabled={!hasNext || loading}
-            onClick={() => goToPage(page + 1)}
+            onClick={() => onPage(page + 1)}
           >
             Next
           </Button>

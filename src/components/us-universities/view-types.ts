@@ -7,6 +7,7 @@ import type {
   FilterParams,
   StateFacet,
   Cip2Option,
+  IpedsInstitutionListItem,
 } from "@/lib/us-universities/types";
 
 export interface OverviewChartsProps {
@@ -15,6 +16,8 @@ export interface OverviewChartsProps {
   active: boolean;
   /** Open an institution profile (e.g. clicking a scatter point). */
   onSelect: (unitId: number) => void;
+  /** Patch the live browse filters from a bar/slice click (optional — Console only). */
+  onFilter?: (patch: Partial<FilterParams>) => void;
 }
 
 export interface InstitutionFiltersProps {
@@ -25,19 +28,26 @@ export interface InstitutionFiltersProps {
 }
 
 export interface InstitutionTableProps {
-  overview: UsUniversitiesOverview;
+  /** Current page of results from the shell's fetch. */
+  rows: IpedsInstitutionListItem[];
+  total: number;
+  loading: boolean;
+  error: string | null;
+  filters: FilterParams;
+  states: StateFacet[];
+  cip2Options: Cip2Option[];
+  /** Toggle sort on a column key (shell applies toggleSort). */
+  onSort: (key: string) => void;
   /** Open the profile dialog for a row. */
   onSelect: (unitId: number) => void;
   /** Add a row to the compare set. */
   onAddCompare: (unitId: number) => void;
+  /** Replace the filter set (filter bar edits). */
+  onFilterChange: (next: FilterParams) => void;
+  /** Change page (Prev/Next). */
+  onPage: (page: number) => void;
   /** Unit ids already in the compare set (to disable/mark rows). */
   compareIds: number[];
-}
-
-export interface InstitutionProfileDialogProps {
-  unitId: number | null;
-  onClose: () => void;
-  onAddCompare: (unitId: number) => void;
 }
 
 export interface InstitutionSearchComboboxProps {

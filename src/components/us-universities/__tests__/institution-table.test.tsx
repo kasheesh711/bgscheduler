@@ -1,24 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { InstitutionTable, acceptanceDelta, buildSearchQuery, toggleSort } from "../institution-table";
-import type { FilterParams, UsUniversitiesOverview } from "@/lib/us-universities/types";
+import type { FilterParams, StateFacet, Cip2Option } from "@/lib/us-universities/types";
 
-const OVERVIEW: UsUniversitiesOverview = {
-  dataYear: "2024-25",
-  totalInstitutions: 200,
-  withAcceptanceRate: 180,
-  avgAcceptanceRate: 62.5,
-  states: [
-    { state: "CA", count: 50 },
-    { state: "TX", count: 40 },
-  ],
-  controls: [],
-  acceptanceBuckets: [],
-  scatter: [],
-  cip2Options: [{ cip2: "11", label: "Computer & Information Sciences" }],
-  acceptanceTrend: [],
-  lastImportedAt: "2026-06-01T00:00:00.000Z",
-};
+const STATES: StateFacet[] = [
+  { state: "CA", count: 50 },
+  { state: "TX", count: 40 },
+];
+
+const CIP2_OPTIONS: Cip2Option[] = [{ cip2: "11", label: "Computer & Information Sciences" }];
 
 describe("buildSearchQuery", () => {
   it("csv-joins states and control, omits undefined values, and always sets page/sort/dir/pageSize", () => {
@@ -116,23 +106,29 @@ describe("acceptanceDelta", () => {
 });
 
 describe("InstitutionTable rendering", () => {
-  it("renders the filter bar and sortable headers in the loading state (no fetch under SSR)", () => {
+  it("renders the filter bar, headers, and loading state from props (fetch-free presenter)", () => {
     const html = renderToStaticMarkup(
       <InstitutionTable
-        overview={OVERVIEW}
+        rows={[]}
+        total={0}
+        loading
+        error={null}
+        filters={{ sort: "instName", dir: "asc", page: 1, pageSize: 50 }}
+        states={STATES}
+        cip2Options={CIP2_OPTIONS}
+        onSort={() => {}}
         onSelect={() => {}}
         onAddCompare={() => {}}
+        onFilterChange={() => {}}
+        onPage={() => {}}
         compareIds={[]}
       />,
     );
-    // Filter bar is present (the search input's aria-label always renders).
     expect(html).toContain("Search institutions");
-    // Table headers render.
     expect(html).toContain("Institution");
     expect(html).toContain("Acceptance %");
     expect(html).toContain("Acceptance trend");
     expect(html).toContain("Net price");
-    // Loading state (effects don't run in SSR) + CSV export anchor mirrors query.
     expect(html).toContain("Loading institutions…");
     expect(html).toContain("/api/us-universities/export?");
     expect(html).toContain("sort=instName");
