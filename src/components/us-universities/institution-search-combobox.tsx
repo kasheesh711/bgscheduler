@@ -49,32 +49,35 @@ export function InstitutionSearchCombobox({
 
   useEffect(() => {
     const term = query.trim();
-    if (term.length === 0) {
-      abortRef.current?.abort();
-      setRows([]);
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    const handle = window.setTimeout(() => {
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-
-      fetch(buildSuggestQuery(term), { signal: controller.signal })
-        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
-        .then((data: { rows?: IpedsInstitutionSummary[] }) => {
-          setRows(Array.isArray(data.rows) ? data.rows : []);
-          setLoading(false);
-        })
-        .catch((err: unknown) => {
-          if (err instanceof DOMException && err.name === "AbortError") return;
-          console.error("Institution suggest failed", err);
+    abortRef.current?.abort();
+    // All state updates happen inside the timer callback (not synchronously in
+    // the effect body) so the fetch effect stays a clean external subscription.
+    const handle = window.setTimeout(
+      () => {
+        if (term.length === 0) {
           setRows([]);
           setLoading(false);
-        });
-    }, DEBOUNCE_MS);
+          return;
+        }
+        setLoading(true);
+        const controller = new AbortController();
+        abortRef.current = controller;
+
+        fetch(buildSuggestQuery(term), { signal: controller.signal })
+          .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+          .then((data: { rows?: IpedsInstitutionSummary[] }) => {
+            setRows(Array.isArray(data.rows) ? data.rows : []);
+            setLoading(false);
+          })
+          .catch((err: unknown) => {
+            if (err instanceof DOMException && err.name === "AbortError") return;
+            console.error("Institution suggest failed", err);
+            setRows([]);
+            setLoading(false);
+          });
+      },
+      term.length === 0 ? 0 : DEBOUNCE_MS,
+    );
 
     return () => window.clearTimeout(handle);
   }, [query]);

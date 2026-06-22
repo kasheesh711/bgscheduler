@@ -148,40 +148,47 @@ export function InstitutionProfileDialog({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (unitId == null) {
-      setProfile(null);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-
     const controller = new AbortController();
-    setLoading(true);
-    setError(null);
-    setProfile(null);
-
-    fetch(`/api/us-universities/institutions/${unitId}`, { signal: controller.signal })
-      .then(async (res) => {
-        if (!res.ok) {
-          throw new Error(
-            res.status === 404
-              ? "Institution not found."
-              : `Failed to load institution (${res.status}).`,
-          );
-        }
-        return (await res.json()) as InstitutionProfile;
-      })
-      .then((data) => {
-        setProfile(data);
+    // Defer state updates into the timer callback so no setState runs
+    // synchronously in the effect body (react-hooks/set-state-in-effect).
+    const handle = window.setTimeout(() => {
+      if (unitId == null) {
+        setProfile(null);
+        setError(null);
         setLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setError(err instanceof Error ? err.message : "Failed to load institution.");
-        setLoading(false);
-      });
+        return;
+      }
 
-    return () => controller.abort();
+      setLoading(true);
+      setError(null);
+      setProfile(null);
+
+      fetch(`/api/us-universities/institutions/${unitId}`, { signal: controller.signal })
+        .then(async (res) => {
+          if (!res.ok) {
+            throw new Error(
+              res.status === 404
+                ? "Institution not found."
+                : `Failed to load institution (${res.status}).`,
+            );
+          }
+          return (await res.json()) as InstitutionProfile;
+        })
+        .then((data) => {
+          setProfile(data);
+          setLoading(false);
+        })
+        .catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          setError(err instanceof Error ? err.message : "Failed to load institution.");
+          setLoading(false);
+        });
+    }, 0);
+
+    return () => {
+      window.clearTimeout(handle);
+      controller.abort();
+    };
   }, [unitId]);
 
   const open = unitId != null;

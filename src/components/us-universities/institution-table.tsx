@@ -162,33 +162,40 @@ export function InstitutionTable({
     const controller = new AbortController();
     abortRef.current = controller;
 
-    setLoading(true);
-    setError(null);
+    // Defer state updates into the timer callback so no setState runs
+    // synchronously in the effect body (react-hooks/set-state-in-effect).
+    const handle = window.setTimeout(() => {
+      setLoading(true);
+      setError(null);
 
-    fetch(`/api/us-universities/search?${query}`, { signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`Search failed (${response.status})`);
-        }
-        return (await response.json()) as InstitutionListResult;
-      })
-      .then((result) => {
-        if (controller.signal.aborted) return;
-        setRows(result.rows ?? []);
-        setTotal(result.total ?? 0);
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
-          return;
-        }
-        setRows([]);
-        setTotal(0);
-        setError(err instanceof Error ? err.message : "Failed to load institutions");
-        setLoading(false);
-      });
+      fetch(`/api/us-universities/search?${query}`, { signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) {
+            throw new Error(`Search failed (${response.status})`);
+          }
+          return (await response.json()) as InstitutionListResult;
+        })
+        .then((result) => {
+          if (controller.signal.aborted) return;
+          setRows(result.rows ?? []);
+          setTotal(result.total ?? 0);
+          setLoading(false);
+        })
+        .catch((err: unknown) => {
+          if (controller.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
+            return;
+          }
+          setRows([]);
+          setTotal(0);
+          setError(err instanceof Error ? err.message : "Failed to load institutions");
+          setLoading(false);
+        });
+    }, 0);
 
-    return () => controller.abort();
+    return () => {
+      window.clearTimeout(handle);
+      controller.abort();
+    };
   }, [query]);
 
   const onSort = useCallback((key: TableSortKey) => {
