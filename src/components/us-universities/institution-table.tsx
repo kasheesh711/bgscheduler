@@ -24,6 +24,7 @@ import type {
 } from "@/lib/us-universities/types";
 import type { InstitutionTableProps } from "@/components/us-universities/view-types";
 import { cn } from "@/lib/utils";
+import { formatInt, formatPct, formatSatRange } from "@/lib/us-universities/format";
 
 // ----------------------------------------------------------------------------
 // Institution browse table — stateful filter bar + server-paginated results.
@@ -32,29 +33,6 @@ import { cn } from "@/lib/utils";
 // keys, server pagination via Prev/Next, and a CSV export anchor that mirrors
 // the current query. Numeric IPEDS metrics are fail-closed: null renders "—".
 // ----------------------------------------------------------------------------
-
-/** Numeric metrics are `number | null` — never render null as 0/"null". */
-function fmt(value: number | null | undefined, suffix = ""): string {
-  return value == null ? "—" : `${value}${suffix}`;
-}
-
-/** Whole-number locale formatting for enrollment / dollar amounts. */
-function fmtInt(value: number | null | undefined, prefix = ""): string {
-  return value == null ? "—" : `${prefix}${Math.round(value).toLocaleString("en-US")}`;
-}
-
-/** One-decimal percentage with a trailing %; "—" when missing. */
-function fmtPct(value: number | null | undefined): string {
-  if (value == null) return "—";
-  const rounded = Math.round(value * 10) / 10;
-  return `${rounded}%`;
-}
-
-/** SAT reading range "p25–p75"; "—" when either bound is missing. */
-function fmtSatRange(p25: number | null | undefined, p75: number | null | undefined): string {
-  if (p25 == null || p75 == null) return "—";
-  return `${p25}–${p75}`;
-}
 
 /**
  * Year-over-year acceptance change in percentage points. `null` when either
@@ -354,7 +332,7 @@ export function InstitutionTable({
                     <TableCell>
                       {row.control != null ? (CONTROL_LABELS[row.control] ?? "—") : "—"}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtPct(row.acceptanceRate)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatPct(row.acceptanceRate)}</TableCell>
                     <TableCell className="text-right tabular-nums">
                       {(() => {
                         const delta = acceptanceDelta(row);
@@ -377,11 +355,11 @@ export function InstitutionTable({
                       })()}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {fmtSatRange(row.satReadingP25, row.satReadingP75)}
+                      {formatSatRange(row.satReadingP25, row.satReadingP75)}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtInt(row.enrollmentTotal)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtPct(row.gradRateBach6yr)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtInt(row.avgNetPrice, "$")}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatInt(row.enrollmentTotal)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatPct(row.gradRateBach6yr)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatInt(row.avgNetPrice, "$")}</TableCell>
                     <TableCell className="text-right">
                       <Button
                         variant={inCompare ? "secondary" : "outline"}

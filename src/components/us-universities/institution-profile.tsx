@@ -22,9 +22,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  ADM_CONSIDERATION_LABELS,
-  ADM_CONSIDERATION_VALUE_LABELS,
-  AWARD_LEVEL_LABELS,
   CONTROL_LABELS,
   INST_SIZE_LABELS,
 } from "@/lib/us-universities/constants";
@@ -33,69 +30,18 @@ import type {
   InstitutionProfile,
 } from "@/lib/us-universities/types";
 import type { InstitutionProfileDialogProps } from "./view-types";
+import {
+  EM_DASH,
+  admissionRequirements,
+  awardLevelText,
+  formatPct,
+  formatRatio,
+  formatUsd,
+  rangeText,
+} from "@/lib/us-universities/format";
 
-// ── Formatting helpers (pure, exported for tests) ──────────────────────
-
-const EM_DASH = "—";
-
-/** USD with thousands separators; null/undefined → em dash. */
-export function formatUsd(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return EM_DASH;
-  return `$${Math.round(v).toLocaleString("en-US")}`;
-}
-
-/** Percentage value (already 0–100); null/undefined → em dash. */
-export function formatPct(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return EM_DASH;
-  // Keep up to one decimal place but drop a trailing ".0".
-  const rounded = Math.round(v * 10) / 10;
-  return `${rounded}%`;
-}
-
-/** Student-faculty ratio as "N:1"; null/undefined → em dash. */
-export function formatRatio(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return EM_DASH;
-  const rounded = Math.round(v * 10) / 10;
-  return `${rounded}:1`;
-}
-
-export interface AdmissionRequirement {
-  key: string;
-  label: string;
-  level: string;
-}
-
-/**
- * Build the admission-requirements list from the ADMCON1..12 map.
- * Skips null codes and "Not considered" (code 3), preserving the canonical
- * ADMCON1→ADMCON12 ordering.
- */
-export function admissionRequirements(
-  admConsiderations: Record<string, number | null> | null | undefined,
-): AdmissionRequirement[] {
-  if (!admConsiderations) return [];
-  const out: AdmissionRequirement[] = [];
-  for (let n = 1; n <= 12; n += 1) {
-    const key = `ADMCON${n}`;
-    const code = admConsiderations[key];
-    if (code == null) continue;
-    // 3 = "Not considered" — omit it from the surfaced requirements.
-    if (code === 3) continue;
-    const level = ADM_CONSIDERATION_VALUE_LABELS[code];
-    if (!level) continue;
-    out.push({ key, label: ADM_CONSIDERATION_LABELS[key] ?? key, level });
-  }
-  return out;
-}
-
-/** Completion row label, preferring the precomputed award-level label. */
-function awardLevelText(awardLevel: number | null, fallbackLabel: string | null): string {
-  if (fallbackLabel) return fallbackLabel;
-  if (awardLevel != null && AWARD_LEVEL_LABELS[awardLevel]) {
-    return AWARD_LEVEL_LABELS[awardLevel];
-  }
-  return EM_DASH;
-}
+export type { AdmissionRequirement } from "@/lib/us-universities/format";
+export { admissionRequirements, formatPct, formatRatio, formatUsd } from "@/lib/us-universities/format";
 
 const MAX_COMPLETION_ROWS = 25;
 
@@ -131,14 +77,6 @@ function Metric({ label, value }: { label: string; value: string }) {
       </dd>
     </div>
   );
-}
-
-/** Render a p25–p75 range, or em dash if neither bound is present. */
-function rangeText(p25: number | null, p75: number | null): string {
-  if (p25 == null && p75 == null) return EM_DASH;
-  const lo = p25 == null ? EM_DASH : p25.toLocaleString("en-US");
-  const hi = p75 == null ? EM_DASH : p75.toLocaleString("en-US");
-  return `${lo}–${hi}`;
 }
 
 // ── Admissions-trend chart (pure, exported for tests) ──────────────────

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { buildAdmissionsTrendChartData } from "../institution-profile";
 import {
   admissionRequirements,
-  buildAdmissionsTrendChartData,
   formatPct,
   formatRatio,
   formatUsd,
-} from "../institution-profile";
+} from "@/lib/us-universities/format";
 import type { AdmissionsTrendPoint } from "@/lib/us-universities/types";
 
 const EM_DASH = "—";
