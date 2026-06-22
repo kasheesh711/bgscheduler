@@ -251,7 +251,14 @@ async function getUsUniversitiesOverviewUncached(dataYear: string): Promise<UsUn
     .map((r) => ({ cip2: r.cip2, label: cip2Label(r.cip2) }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
-  // Aggregate acceptance rate across ALL loaded years (admissions trend chart).
+  // Aggregate acceptance rate by year for the admissions-trend chart. Restrict
+  // to the canonical-year institution cohort so each year averages the SAME set
+  // of schools (cross-year comparability; independent of how historical rows
+  // were imported). Self-scoped via a subquery rather than the optional import flag.
+  const cohortSub = db
+    .select({ unitId: ipedsInstitutions.unitId })
+    .from(ipedsInstitutions)
+    .where(eq(ipedsInstitutions.dataYear, dataYear));
   const trendRows = await db
     .select({
       dataYear: ipedsInstitutions.dataYear,
@@ -259,6 +266,7 @@ async function getUsUniversitiesOverviewUncached(dataYear: string): Promise<UsUn
       n: sql<number>`count(${ipedsInstitutions.acceptanceRate})::int`,
     })
     .from(ipedsInstitutions)
+    .where(inArray(ipedsInstitutions.unitId, cohortSub))
     .groupBy(ipedsInstitutions.dataYear)
     .orderBy(asc(ipedsInstitutions.dataYear));
   const acceptanceTrend: AcceptanceTrendPoint[] = trendRows.map((r) => ({

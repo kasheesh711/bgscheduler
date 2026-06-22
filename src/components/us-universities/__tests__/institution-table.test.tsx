@@ -105,6 +105,14 @@ describe("acceptanceDelta", () => {
     expect(acceptanceDelta({ acceptanceRate: 40, acceptancePrevYear: null })).toBeNull();
     expect(acceptanceDelta({ acceptanceRate: null, acceptancePrevYear: null })).toBeNull();
   });
+
+  it("returns 'flat' for an unchanged (or sub-0.1pp) year-over-year delta", () => {
+    expect(acceptanceDelta({ acceptanceRate: 50, acceptancePrevYear: 50 })).toEqual({
+      points: 0,
+      direction: "flat",
+    });
+    expect(acceptanceDelta({ acceptanceRate: 50.03, acceptancePrevYear: 50 })?.direction).toBe("flat");
+  });
 });
 
 describe("InstitutionTable rendering", () => {

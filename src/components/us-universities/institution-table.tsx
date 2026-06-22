@@ -64,10 +64,14 @@ function fmtSatRange(p25: number | null | undefined, p75: number | null | undefi
 export function acceptanceDelta(row: {
   acceptanceRate: number | null;
   acceptancePrevYear: number | null;
-}): { points: number; direction: "down" | "up" } | null {
+}): { points: number; direction: "down" | "up" | "flat" } | null {
   if (row.acceptanceRate == null || row.acceptancePrevYear == null) return null;
   const points = row.acceptanceRate - row.acceptancePrevYear;
-  return { points, direction: points < 0 ? "down" : "up" };
+  // Derive direction from the displayed (1-dp) value so a ±0.0x change reads as
+  // flat rather than a mis-coloured "0pp" up/down arrow.
+  const rounded = Math.round(points * 10) / 10;
+  if (rounded === 0) return { points: 0, direction: "flat" };
+  return { points, direction: rounded < 0 ? "down" : "up" };
 }
 
 /** Sort keys the search endpoint accepts (whitelist; others are ignored). */
@@ -355,6 +359,9 @@ export function InstitutionTable({
                       {(() => {
                         const delta = acceptanceDelta(row);
                         if (delta == null) return "—";
+                        if (delta.direction === "flat") {
+                          return <span className="text-xs text-muted-foreground">0pp</span>;
+                        }
                         const DeltaIcon = delta.direction === "down" ? ArrowDown : ArrowUp;
                         return (
                           <span
