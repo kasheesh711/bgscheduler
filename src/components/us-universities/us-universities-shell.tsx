@@ -37,6 +37,8 @@ import { ComparePanel } from "./compare-panel";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { InstitutionProfileDialog } from "./institution-profile";
 import { InstitutionSearchCombobox } from "./institution-search-combobox";
+import { ShortlistBar, resolveShortlistEntries } from "./shortlist-bar";
+import { CompareSheet } from "./compare-sheet";
 import { KpiHero } from "./kpi-hero";
 
 const SORT_OPTIONS: { value: string; label: string }[] = [
@@ -91,6 +93,7 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
   );
 
   const [compareIds, setCompareIds] = useState<number[]>(() => parseIds(getParam("compare")));
+  const [compareOpen, setCompareOpen] = useState(false);
 
   // Lifted browse-search state (was inside InstitutionTable).
   // Initialize from URL params so a hard refresh or consoleHref round-trip
@@ -428,6 +431,21 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
           )}
         </div>
       </div>
+
+      <ShortlistBar
+        entries={resolveShortlistEntries(compareIds, rows)}
+        onRemove={removeCompare}
+        onClear={clearCompare}
+        onOpenCompare={() => setCompareOpen(true)}
+      />
+      <CompareSheet
+        open={compareOpen}
+        onOpenChange={setCompareOpen}
+        unitIds={compareIds}
+        onRemove={removeCompare}
+        onAdd={addCompare}
+        onClear={clearCompare}
+      />
     </div>
   );
 }
