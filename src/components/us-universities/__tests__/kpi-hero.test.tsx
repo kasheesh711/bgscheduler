@@ -35,6 +35,7 @@ describe("KpiHero rendering", () => {
     acceptanceBuckets: [],
     scatter: [],
     cip2Options: [],
+    acceptanceTrend: [],
     lastImportedAt: null,
   };
 
