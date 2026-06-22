@@ -81,6 +81,23 @@ function ToolLink({
   );
 }
 
+/**
+ * Static skeleton used as the Suspense fallback for AppNav in the shared
+ * (app) layout. Renders the nav chrome without calling usePathname(), which
+ * is required by Next 16 cacheComponents when the route has a dynamic param
+ * — usePathname() inside a Suspense fallback triggers a prerender error on
+ * dynamic segments unless the fallback itself is Suspense-safe.
+ */
+export function AppNavSkeleton() {
+  return (
+    <nav className="flex h-11 flex-shrink-0 items-center overflow-x-auto border-b border-border bg-card px-4 [scrollbar-width:none] lg:px-6 [&::-webkit-scrollbar]:hidden">
+      <div className="flex min-w-max flex-1 items-center gap-4">
+        <span className="text-sm font-semibold tracking-tight text-primary">BeGifted Ops</span>
+      </div>
+    </nav>
+  );
+}
+
 export function AppNav({ allowedPages }: { allowedPages: string[] | null }) {
   const pathname = usePathname();
   const [openSection, setOpenSection] = useState<NavSectionId | null>(null);
