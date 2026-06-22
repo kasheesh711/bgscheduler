@@ -19,6 +19,7 @@ import { ChartCanvas, chartColors } from "@/components/sales-dashboard/chart-can
 import { CONTROL_LABELS } from "@/lib/us-universities/constants";
 import type {
   AcceptanceBucket,
+  AcceptanceTrendPoint,
   ControlFacet,
   ScatterPoint,
   StateFacet,
@@ -96,6 +97,28 @@ export function buildStateBarData(states: StateFacet[], color: string, topN = 15
         data: top.map((facet) => facet.count),
         backgroundColor: color,
         borderRadius: 4,
+      },
+    ],
+  };
+}
+
+/**
+ * Line-chart data for average acceptance rate over time. Drops years whose
+ * avgAcceptance is null so missing data is never plotted as 0 (fail-closed).
+ */
+export function buildAcceptanceTrendData(trend: AcceptanceTrendPoint[], color: string) {
+  const points = trend.filter((point) => point.avgAcceptance != null);
+  return {
+    labels: points.map((point) => point.dataYear),
+    datasets: [
+      {
+        label: "Avg. acceptance rate",
+        data: points.map((point) => point.avgAcceptance as number),
+        borderColor: color,
+        backgroundColor: color,
+        tension: 0.3,
+        pointRadius: 4,
+        pointHoverRadius: 6,
       },
     ],
   };
@@ -220,6 +243,34 @@ export function OverviewCharts({ overview, active, onSelect }: OverviewChartsPro
     };
   }, [overview.states]);
 
+  const acceptanceTrendConfig = useMemo<ChartConfiguration>(() => {
+    const colors = chartColors();
+    return {
+      type: "line",
+      data: buildAcceptanceTrendData(overview.acceptanceTrend, colors.chart[2]),
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { grid: { display: false } },
+          y: {
+            beginAtZero: true,
+            max: 100,
+            title: { display: true, text: "Avg. acceptance rate (%)" },
+          },
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => ` ${Number(ctx.raw)}% acceptance`,
+            },
+          },
+        },
+      },
+    };
+  }, [overview.acceptanceTrend]);
+
   const controlConfig = useMemo<ChartConfiguration>(() => {
     const colors = chartColors();
     return {
@@ -301,6 +352,22 @@ export function OverviewCharts({ overview, active, onSelect }: OverviewChartsPro
             config={controlConfig}
             active={active}
             ariaLabel="Doughnut chart of institutions by control type"
+          />
+        </CardContent>
+      </Card>
+
+      <Card className="min-h-[340px]">
+        <CardHeader>
+          <CardTitle>Acceptance rate over time</CardTitle>
+          <CardDescription>
+            Average acceptance rate across four-year universities, by year.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex min-h-[240px] flex-col">
+          <ChartCanvas
+            config={acceptanceTrendConfig}
+            active={active}
+            ariaLabel="Line chart of average acceptance rate across four-year universities by year"
           />
         </CardContent>
       </Card>

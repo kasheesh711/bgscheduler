@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   OverviewCharts,
   buildAcceptanceBarData,
+  buildAcceptanceTrendData,
   buildControlDoughnutData,
   buildScatterData,
   buildStateBarData,
 } from "../overview-charts";
 import type {
   AcceptanceBucket,
+  AcceptanceTrendPoint,
   ControlFacet,
   ScatterPoint,
   StateFacet,
@@ -40,6 +42,14 @@ const CONTROLS: ControlFacet[] = [
   { control: 1, label: "Public", count: 50 },
   { control: 2, label: "Private nonprofit", count: 30 },
   { control: 3, label: "Private for-profit", count: 5 },
+];
+
+const ACCEPTANCE_TREND: AcceptanceTrendPoint[] = [
+  { dataYear: "2020-21", avgAcceptance: 60, n: 120 },
+  { dataYear: "2021-22", avgAcceptance: null, n: 0 },
+  { dataYear: "2022-23", avgAcceptance: 56, n: 125 },
+  { dataYear: "2023-24", avgAcceptance: 54, n: 130 },
+  { dataYear: "2024-25", avgAcceptance: 53, n: 135 },
 ];
 
 describe("buildAcceptanceBarData", () => {
@@ -90,6 +100,18 @@ describe("buildControlDoughnutData", () => {
   });
 });
 
+describe("buildAcceptanceTrendData", () => {
+  it("uses years as labels and avgAcceptance as values, dropping null years", () => {
+    const data = buildAcceptanceTrendData(ACCEPTANCE_TREND, "#000");
+    expect(data.labels).toEqual(["2020-21", "2022-23", "2023-24", "2024-25"]);
+    expect(data.datasets[0].data).toEqual([60, 56, 54, 53]);
+    // The 2021-22 point with a null avgAcceptance is excluded (never plotted as 0).
+    expect(data.labels).not.toContain("2021-22");
+    expect(data.datasets[0].data).not.toContain(0);
+    expect(data.datasets[0].borderColor).toBe("#000");
+  });
+});
+
 describe("OverviewCharts rendering", () => {
   const overview: UsUniversitiesOverview = {
     dataYear: "2024-25",
@@ -101,11 +123,11 @@ describe("OverviewCharts rendering", () => {
     acceptanceBuckets: BUCKETS,
     scatter: SCATTER,
     cip2Options: [],
-    acceptanceTrend: [],
+    acceptanceTrend: ACCEPTANCE_TREND,
     lastImportedAt: null,
   };
 
-  it("renders all four chart card titles", () => {
+  it("renders all five chart card titles", () => {
     const html = renderToStaticMarkup(
       <OverviewCharts overview={overview} active onSelect={() => {}} />,
     );
@@ -113,5 +135,6 @@ describe("OverviewCharts rendering", () => {
     expect(html).toContain("Cost vs. 6-year graduation rate");
     expect(html).toContain("Universities by state");
     expect(html).toContain("Public vs. private mix");
+    expect(html).toContain("Acceptance rate over time");
   });
 });
