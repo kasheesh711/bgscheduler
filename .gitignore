@@ -50,3 +50,6 @@ seed-reports/
 *.tsbuildinfo
 next-env.d.ts
 .env*.local
+
+# IPEDS raw source data + generated CSV (591MB Access DB; never committed — runtime reads Postgres only)
+IPEDS_2024-25_Provisional/
