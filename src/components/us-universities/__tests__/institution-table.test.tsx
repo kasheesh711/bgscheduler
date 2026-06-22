@@ -16,6 +16,7 @@ const OVERVIEW: UsUniversitiesOverview = {
   acceptanceBuckets: [],
   scatter: [],
   cip2Options: [{ cip2: "11", label: "Computer & Information Sciences" }],
+  acceptanceTrend: [],
   lastImportedAt: "2026-06-01T00:00:00.000Z",
 };
 

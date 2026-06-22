@@ -101,6 +101,7 @@ describe("OverviewCharts rendering", () => {
     acceptanceBuckets: BUCKETS,
     scatter: SCATTER,
     cip2Options: [],
+    acceptanceTrend: [],
     lastImportedAt: null,
   };
 
