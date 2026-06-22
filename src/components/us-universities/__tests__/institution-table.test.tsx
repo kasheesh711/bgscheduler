@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { InstitutionTable, buildSearchQuery, toggleSort } from "../institution-table";
+import { InstitutionTable, acceptanceDelta, buildSearchQuery, toggleSort } from "../institution-table";
 import type { FilterParams, UsUniversitiesOverview } from "@/lib/us-universities/types";
 
 const OVERVIEW: UsUniversitiesOverview = {
@@ -16,6 +16,7 @@ const OVERVIEW: UsUniversitiesOverview = {
   acceptanceBuckets: [],
   scatter: [],
   cip2Options: [{ cip2: "11", label: "Computer & Information Sciences" }],
+  acceptanceTrend: [],
   lastImportedAt: "2026-06-01T00:00:00.000Z",
 };
 
@@ -84,6 +85,36 @@ describe("toggleSort", () => {
   });
 });
 
+describe("acceptanceDelta", () => {
+  it("returns 'down' (more selective) when current acceptance is below prior year", () => {
+    expect(acceptanceDelta({ acceptanceRate: 40, acceptancePrevYear: 50 })).toEqual({
+      points: -10,
+      direction: "down",
+    });
+  });
+
+  it("returns 'up' when current acceptance is above prior year", () => {
+    expect(acceptanceDelta({ acceptanceRate: 55, acceptancePrevYear: 50 })).toEqual({
+      points: 5,
+      direction: "up",
+    });
+  });
+
+  it("returns null when either value is missing (fail-closed)", () => {
+    expect(acceptanceDelta({ acceptanceRate: null, acceptancePrevYear: 50 })).toBeNull();
+    expect(acceptanceDelta({ acceptanceRate: 40, acceptancePrevYear: null })).toBeNull();
+    expect(acceptanceDelta({ acceptanceRate: null, acceptancePrevYear: null })).toBeNull();
+  });
+
+  it("returns 'flat' for an unchanged (or sub-0.1pp) year-over-year delta", () => {
+    expect(acceptanceDelta({ acceptanceRate: 50, acceptancePrevYear: 50 })).toEqual({
+      points: 0,
+      direction: "flat",
+    });
+    expect(acceptanceDelta({ acceptanceRate: 50.03, acceptancePrevYear: 50 })?.direction).toBe("flat");
+  });
+});
+
 describe("InstitutionTable rendering", () => {
   it("renders the filter bar and sortable headers in the loading state (no fetch under SSR)", () => {
     const html = renderToStaticMarkup(
@@ -99,6 +130,7 @@ describe("InstitutionTable rendering", () => {
     // Table headers render.
     expect(html).toContain("Institution");
     expect(html).toContain("Acceptance %");
+    expect(html).toContain("Acceptance trend");
     expect(html).toContain("Net price");
     // Loading state (effects don't run in SSR) + CSV export anchor mirrors query.
     expect(html).toContain("Loading institutions…");

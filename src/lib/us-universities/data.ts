@@ -14,8 +14,11 @@ import {
   clampPagination,
   combineConditions,
 } from "./query";
+import { shapeAdmissionsTrend, priorDataYearOf } from "./trend";
 import type {
   AcceptanceBucket,
+  AcceptanceTrendPoint,
+  AdmissionsTrendPoint,
   CompareInstitution,
   ControlFacet,
   FilterParams,
@@ -65,6 +68,35 @@ function topMajorByUnit(
   return out;
 }
 
+// ── Admissions trends (multi-year) ─────────────────────────────────────
+
+const TREND_COLUMNS = {
+  unitId: ipedsInstitutions.unitId,
+  dataYear: ipedsInstitutions.dataYear,
+  acceptanceRate: ipedsInstitutions.acceptanceRate,
+  yieldRate: ipedsInstitutions.yieldRate,
+  applicantsTotal: ipedsInstitutions.applicantsTotal,
+  admitsTotal: ipedsInstitutions.admitsTotal,
+  enrolledTotal: ipedsInstitutions.enrolledTotal,
+  satReadingP25: ipedsInstitutions.satReadingP25,
+  satReadingP75: ipedsInstitutions.satReadingP75,
+  satMathP25: ipedsInstitutions.satMathP25,
+  satMathP75: ipedsInstitutions.satMathP75,
+  actCompositeP25: ipedsInstitutions.actCompositeP25,
+  actCompositeP75: ipedsInstitutions.actCompositeP75,
+};
+
+async function fetchAdmissionsTrend(unitIds: number[]): Promise<Map<number, AdmissionsTrendPoint[]>> {
+  if (unitIds.length === 0) return new Map();
+  const db = getDb();
+  const rows = await db
+    .select(TREND_COLUMNS)
+    .from(ipedsInstitutions)
+    .where(inArray(ipedsInstitutions.unitId, unitIds))
+    .orderBy(asc(ipedsInstitutions.unitId), asc(ipedsInstitutions.dataYear));
+  return shapeAdmissionsTrend(rows);
+}
+
 // ── Uncached implementations ───────────────────────────────────────────
 
 async function searchInstitutionsUncached(
@@ -96,7 +128,28 @@ async function searchInstitutionsUncached(
     .limit(limit)
     .offset(offset);
 
-  return { rows: rows.map(stripRaw), total, page, pageSize };
+  // Prior-year acceptance for the page's institutions → browse "trend" delta.
+  const prior = priorDataYearOf(dataYear);
+  const prevById = new Map<number, number | null>();
+  if (prior && rows.length > 0) {
+    const prevRows = await db
+      .select({ unitId: ipedsInstitutions.unitId, acc: ipedsInstitutions.acceptanceRate })
+      .from(ipedsInstitutions)
+      .where(
+        and(
+          eq(ipedsInstitutions.dataYear, prior),
+          inArray(ipedsInstitutions.unitId, rows.map((r) => r.unitId)),
+        ),
+      );
+    for (const r of prevRows) prevById.set(r.unitId, r.acc);
+  }
+
+  return {
+    rows: rows.map((r) => ({ ...stripRaw(r), acceptancePrevYear: prevById.get(r.unitId) ?? null })),
+    total,
+    page,
+    pageSize,
+  };
 }
 
 const EXPORT_ROW_CAP = 5000;
@@ -198,6 +251,30 @@ async function getUsUniversitiesOverviewUncached(dataYear: string): Promise<UsUn
     .map((r) => ({ cip2: r.cip2, label: cip2Label(r.cip2) }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
+  // Aggregate acceptance rate by year for the admissions-trend chart. Restrict
+  // to the canonical-year institution cohort so each year averages the SAME set
+  // of schools (cross-year comparability; independent of how historical rows
+  // were imported). Self-scoped via a subquery rather than the optional import flag.
+  const cohortSub = db
+    .select({ unitId: ipedsInstitutions.unitId })
+    .from(ipedsInstitutions)
+    .where(eq(ipedsInstitutions.dataYear, dataYear));
+  const trendRows = await db
+    .select({
+      dataYear: ipedsInstitutions.dataYear,
+      avg: sql<number | null>`avg(${ipedsInstitutions.acceptanceRate})`,
+      n: sql<number>`count(${ipedsInstitutions.acceptanceRate})::int`,
+    })
+    .from(ipedsInstitutions)
+    .where(inArray(ipedsInstitutions.unitId, cohortSub))
+    .groupBy(ipedsInstitutions.dataYear)
+    .orderBy(asc(ipedsInstitutions.dataYear));
+  const acceptanceTrend: AcceptanceTrendPoint[] = trendRows.map((r) => ({
+    dataYear: r.dataYear,
+    avgAcceptance: r.avg != null ? Math.round(Number(r.avg) * 10) / 10 : null,
+    n: r.n,
+  }));
+
   const [lastRun] = await db
     .select({ finishedAt: ipedsImportRuns.finishedAt })
     .from(ipedsImportRuns)
@@ -215,6 +292,7 @@ async function getUsUniversitiesOverviewUncached(dataYear: string): Promise<UsUn
     acceptanceBuckets,
     scatter,
     cip2Options,
+    acceptanceTrend,
     lastImportedAt: lastRun?.finishedAt ? lastRun.finishedAt.toISOString() : null,
   };
 }
@@ -244,7 +322,9 @@ async function getInstitutionProfileUncached(
     .sort((a, b) => b.count - a.count)
     .slice(0, 8);
 
-  return { ...institution, completions, topMajors };
+  const admissionsTrend = (await fetchAdmissionsTrend([unitId])).get(unitId) ?? [];
+
+  return { ...institution, completions, topMajors, admissionsTrend };
 }
 
 async function getCompareInstitutionsUncached(
@@ -267,13 +347,18 @@ async function getCompareInstitutionsUncached(
     .from(ipedsCompletions)
     .where(and(eq(ipedsCompletions.dataYear, dataYear), inArray(ipedsCompletions.unitId, unitIds)));
   const topMajor = topMajorByUnit(completions);
+  const trendByUnit = await fetchAdmissionsTrend(unitIds);
 
   // Preserve caller order.
   const byId = new Map(rows.map((r) => [r.unitId, r]));
   return unitIds
     .map((id) => byId.get(id))
     .filter((r): r is IpedsInstitution => Boolean(r))
-    .map((r) => ({ ...stripRaw(r), topMajor: topMajor.get(r.unitId) ?? null }));
+    .map((r) => ({
+      ...stripRaw(r),
+      topMajor: topMajor.get(r.unitId) ?? null,
+      admissionsTrend: trendByUnit.get(r.unitId) ?? [],
+    }));
 }
 
 // ── Cached public API ──────────────────────────────────────────────────

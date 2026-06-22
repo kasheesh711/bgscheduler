@@ -5,10 +5,12 @@
 // sectioned read-only profile. Fail-closed UI rule: a missing numeric metric
 // (number | null) is rendered as an em dash "—", never coerced to 0.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ExternalLinkIcon, PlusIcon } from "lucide-react";
+import type { ChartConfiguration } from "chart.js";
 
 import { cn } from "@/lib/utils";
+import { ChartCanvas, chartColors } from "@/components/sales-dashboard/chart-canvas";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -26,7 +28,10 @@ import {
   CONTROL_LABELS,
   INST_SIZE_LABELS,
 } from "@/lib/us-universities/constants";
-import type { InstitutionProfile } from "@/lib/us-universities/types";
+import type {
+  AdmissionsTrendPoint,
+  InstitutionProfile,
+} from "@/lib/us-universities/types";
 import type { InstitutionProfileDialogProps } from "./view-types";
 
 // ── Formatting helpers (pure, exported for tests) ──────────────────────
@@ -136,6 +141,36 @@ function rangeText(p25: number | null, p75: number | null): string {
   return `${lo}–${hi}`;
 }
 
+// ── Admissions-trend chart (pure, exported for tests) ──────────────────
+
+/**
+ * Build the Chart.js `data` object for the multi-year admissions line chart:
+ * acceptance rate % and yield rate % by `dataYear`. Labels come from the years
+ * (ascending). Null metric points are dropped (not plotted as 0) — fail-closed
+ * — so each dataset only carries the years it actually has data for.
+ */
+export function buildAdmissionsTrendChartData(
+  trend: AdmissionsTrendPoint[],
+): ChartConfiguration<"line">["data"] {
+  const labels = trend.map((point) => point.dataYear);
+  const acceptance = trend.map((point) =>
+    point.acceptanceRate == null || !Number.isFinite(point.acceptanceRate)
+      ? null
+      : point.acceptanceRate,
+  );
+  const yieldRate = trend.map((point) =>
+    point.yieldRate == null || !Number.isFinite(point.yieldRate) ? null : point.yieldRate,
+  );
+
+  return {
+    labels,
+    datasets: [
+      { label: "Acceptance rate %", data: acceptance, spanGaps: true },
+      { label: "Yield rate %", data: yieldRate, spanGaps: true },
+    ],
+  };
+}
+
 // ── Component ──────────────────────────────────────────────────────────
 
 export function InstitutionProfileDialog({
@@ -197,6 +232,39 @@ export function InstitutionProfileDialog({
   const completions = profile
     ? [...profile.completions].sort((a, b) => (b.count ?? 0) - (a.count ?? 0)).slice(0, MAX_COMPLETION_ROWS)
     : [];
+
+  const admissionsTrend = profile?.admissionsTrend ?? [];
+  const trendChartConfig = useMemo<ChartConfiguration<"line">>(() => {
+    const colors = chartColors();
+    const data = buildAdmissionsTrendChartData(admissionsTrend);
+    data.datasets.forEach((dataset, index) => {
+      const color = colors.chart[index % colors.chart.length];
+      dataset.borderColor = color;
+      dataset.backgroundColor = color;
+      dataset.pointBackgroundColor = color;
+      dataset.tension = 0.3;
+    });
+    return {
+      type: "line",
+      data,
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: colors.mutedForeground } } },
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: { color: colors.mutedForeground },
+            grid: { color: colors.border },
+          },
+          x: {
+            ticks: { color: colors.mutedForeground },
+            grid: { display: false },
+          },
+        },
+      },
+    };
+  }, [admissionsTrend]);
 
   return (
     <Dialog
@@ -311,6 +379,75 @@ export function InstitutionProfileDialog({
                   <p className="text-sm text-muted-foreground">{EM_DASH}</p>
                 )}
               </div>
+            </Section>
+
+            <Separator />
+
+            {/* Admissions over time */}
+            <Section title="Admissions over time">
+              {admissionsTrend.length > 0 ? (
+                <>
+                  <div className="h-56">
+                    <ChartCanvas
+                      config={trendChartConfig}
+                      ariaLabel="Acceptance and yield rate by year"
+                      active
+                    />
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                          <th className="py-1.5 pr-3 font-medium">Year</th>
+                          <th className="py-1.5 pr-3 font-medium">Acceptance %</th>
+                          <th className="py-1.5 pr-3 font-medium">SAT reading (p25–p75)</th>
+                          <th className="py-1.5 pr-3 font-medium">SAT math (p25–p75)</th>
+                          <th className="py-1.5 pr-3 font-medium">ACT (p25–p75)</th>
+                          <th className="py-1.5 pr-3 font-medium">Applicants</th>
+                          <th className="py-1.5 pr-3 font-medium">Admits</th>
+                          <th className="py-1.5 font-medium">Enrolled</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border tabular-nums">
+                        {admissionsTrend.map((point) => (
+                          <tr key={point.dataYear}>
+                            <td className="py-1.5 pr-3 text-foreground">{point.dataYear}</td>
+                            <td className="py-1.5 pr-3 text-foreground">
+                              {formatPct(point.acceptanceRate)}
+                            </td>
+                            <td className="py-1.5 pr-3 text-foreground">
+                              {rangeText(point.satReadingP25, point.satReadingP75)}
+                            </td>
+                            <td className="py-1.5 pr-3 text-foreground">
+                              {rangeText(point.satMathP25, point.satMathP75)}
+                            </td>
+                            <td className="py-1.5 pr-3 text-foreground">
+                              {rangeText(point.actCompositeP25, point.actCompositeP75)}
+                            </td>
+                            <td className="py-1.5 pr-3 text-foreground">
+                              {point.applicantsTotal == null
+                                ? EM_DASH
+                                : point.applicantsTotal.toLocaleString("en-US")}
+                            </td>
+                            <td className="py-1.5 pr-3 text-foreground">
+                              {point.admitsTotal == null
+                                ? EM_DASH
+                                : point.admitsTotal.toLocaleString("en-US")}
+                            </td>
+                            <td className="py-1.5 text-foreground">
+                              {point.enrolledTotal == null
+                                ? EM_DASH
+                                : point.enrolledTotal.toLocaleString("en-US")}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">No multi-year admissions data.</p>
+              )}
             </Section>
 
             <Separator />

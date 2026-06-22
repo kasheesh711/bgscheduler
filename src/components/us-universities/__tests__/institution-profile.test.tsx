@@ -1,12 +1,32 @@
 import { describe, expect, it } from "vitest";
 import {
   admissionRequirements,
+  buildAdmissionsTrendChartData,
   formatPct,
   formatRatio,
   formatUsd,
 } from "../institution-profile";
+import type { AdmissionsTrendPoint } from "@/lib/us-universities/types";
 
 const EM_DASH = "—";
+
+function trendPoint(overrides: Partial<AdmissionsTrendPoint>): AdmissionsTrendPoint {
+  return {
+    dataYear: "2020-21",
+    acceptanceRate: null,
+    yieldRate: null,
+    applicantsTotal: null,
+    admitsTotal: null,
+    enrolledTotal: null,
+    satReadingP25: null,
+    satReadingP75: null,
+    satMathP25: null,
+    satMathP75: null,
+    actCompositeP25: null,
+    actCompositeP75: null,
+    ...overrides,
+  };
+}
 
 describe("formatUsd", () => {
   it("formats with a dollar sign and thousands separators", () => {
@@ -86,5 +106,58 @@ describe("admissionRequirements", () => {
 
   it("drops unknown value codes defensively", () => {
     expect(admissionRequirements({ ADMCON1: 99 })).toEqual([]);
+  });
+});
+
+describe("buildAdmissionsTrendChartData", () => {
+  it("derives labels from the years and maps acceptance + yield datasets", () => {
+    const trend: AdmissionsTrendPoint[] = [
+      trendPoint({ dataYear: "2020-21", acceptanceRate: 30, yieldRate: 12 }),
+      trendPoint({ dataYear: "2021-22", acceptanceRate: 28, yieldRate: 14 }),
+      trendPoint({ dataYear: "2022-23", acceptanceRate: 25, yieldRate: 15 }),
+    ];
+
+    const data = buildAdmissionsTrendChartData(trend);
+
+    expect(data.labels).toEqual(["2020-21", "2021-22", "2022-23"]);
+    expect(data.datasets).toHaveLength(2);
+    expect(data.datasets[0].label).toBe("Acceptance rate %");
+    expect(data.datasets[0].data).toEqual([30, 28, 25]);
+    expect(data.datasets[1].label).toBe("Yield rate %");
+    expect(data.datasets[1].data).toEqual([12, 14, 15]);
+  });
+
+  it("drops null/NaN points (never plots 0) while keeping the year labels", () => {
+    const trend: AdmissionsTrendPoint[] = [
+      trendPoint({ dataYear: "2020-21", acceptanceRate: 30 }),
+      trendPoint({ dataYear: "2021-22", acceptanceRate: null }),
+      trendPoint({ dataYear: "2022-23", acceptanceRate: Number.NaN }),
+    ];
+
+    const data = buildAdmissionsTrendChartData(trend);
+
+    expect(data.labels).toEqual(["2020-21", "2021-22", "2022-23"]);
+    // null/NaN become null (gap), never 0.
+    expect(data.datasets[0].data).toEqual([30, null, null]);
+  });
+
+  it("yields an all-null dataset when a metric is missing every year", () => {
+    const trend: AdmissionsTrendPoint[] = [
+      trendPoint({ dataYear: "2020-21", acceptanceRate: 30 }),
+      trendPoint({ dataYear: "2021-22", acceptanceRate: 28 }),
+    ];
+
+    const data = buildAdmissionsTrendChartData(trend);
+
+    // Yield rate is null for every year → the plotted series carries no real points.
+    expect(data.datasets[1].data).toEqual([null, null]);
+    expect((data.datasets[1].data as (number | null)[]).filter((v) => v != null)).toHaveLength(0);
+  });
+
+  it("returns empty labels and datasets for an empty trend", () => {
+    const data = buildAdmissionsTrendChartData([]);
+    expect(data.labels).toEqual([]);
+    expect(data.datasets[0].data).toEqual([]);
+    expect(data.datasets[1].data).toEqual([]);
   });
 });

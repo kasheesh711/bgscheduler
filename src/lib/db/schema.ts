@@ -2761,6 +2761,8 @@ export const ipedsInstitutions = pgTable("ipeds_institutions", {
   index("ipeds_inst_year_state_idx").on(table.dataYear, table.stateAbbr),
   index("ipeds_inst_year_control_idx").on(table.dataYear, table.control),
   index("ipeds_inst_year_acceptance_idx").on(table.dataYear, table.acceptanceRate),
+  // Per-institution cross-year fetch for admissions trends (Milestone 2).
+  index("ipeds_inst_unit_year_idx").on(table.unitId, table.dataYear),
 ]);
 
 export const ipedsCompletions = pgTable("ipeds_completions", {

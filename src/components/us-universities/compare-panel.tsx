@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 import { ChartCanvas, chartColors } from "@/components/sales-dashboard/chart-canvas";
 import { cn } from "@/lib/utils";
 import { CONTROL_LABELS, MAX_COMPARE } from "@/lib/us-universities/constants";
-import type { CompareInstitution } from "@/lib/us-universities/types";
+import type { AdmissionsTrendPoint, CompareInstitution } from "@/lib/us-universities/types";
 import type { ComparePanelProps } from "./view-types";
 import { InstitutionSearchCombobox } from "./institution-search-combobox";
 
@@ -222,6 +222,94 @@ export function buildSatChartConfig(
   };
 }
 
+interface CompareTrendData {
+  labels: string[];
+  datasets: { instName: string; data: (number | null)[] }[];
+}
+
+/**
+ * Align each school's acceptance-rate trend onto a shared, sorted union of
+ * dataYears. The label axis is the ascending union of every year present in any
+ * selected school; each dataset maps that school's acceptanceRate onto the axis,
+ * with null where the school lacks a point for that year (fail-closed: never 0).
+ */
+export function buildCompareTrendData(
+  institutions: Array<{ instName: string; admissionsTrend: AdmissionsTrendPoint[] }>,
+): CompareTrendData {
+  const yearSet = new Set<string>();
+  for (const inst of institutions) {
+    for (const point of inst.admissionsTrend) {
+      yearSet.add(point.dataYear);
+    }
+  }
+  const labels = Array.from(yearSet).sort();
+
+  const datasets = institutions.map((inst) => {
+    const byYear = new Map<string, number | null>();
+    for (const point of inst.admissionsTrend) {
+      byYear.set(point.dataYear, point.acceptanceRate);
+    }
+    return {
+      instName: inst.instName,
+      data: labels.map((year) => byYear.get(year) ?? null),
+    };
+  });
+
+  return { labels, datasets };
+}
+
+/**
+ * Multi-line acceptance-rate-over-time config: one line per school across the
+ * shared year axis, null points dropped (spanGaps). Returns null when no school
+ * has any acceptance-rate point to plot.
+ */
+export function buildAcceptanceTrendConfig(
+  institutions: CompareInstitution[],
+  colors: ReturnType<typeof chartColors>,
+): ChartConfiguration | null {
+  const { labels, datasets } = buildCompareTrendData(institutions);
+  const hasAnyPoint = datasets.some((d) => d.data.some((v) => v != null));
+  if (labels.length === 0 || !hasAnyPoint) return null;
+
+  return {
+    type: "line",
+    data: {
+      labels,
+      datasets: datasets.map((d, index) => {
+        const color = colors.chart[index % colors.chart.length];
+        return {
+          label: d.instName,
+          data: d.data,
+          borderColor: color,
+          backgroundColor: color,
+          spanGaps: true,
+          tension: 0.2,
+        };
+      }),
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: colors.mutedForeground } },
+      },
+      scales: {
+        x: {
+          ticks: { color: colors.mutedForeground },
+          grid: { color: colors.border },
+        },
+        y: {
+          ticks: {
+            color: colors.mutedForeground,
+            callback: (value) => `${value}%`,
+          },
+          grid: { color: colors.border },
+        },
+      },
+    },
+  };
+}
+
 export function ComparePanel({ unitIds, onRemove, onAdd, onClear }: ComparePanelProps) {
   const [institutions, setInstitutions] = useState<CompareInstitution[]>([]);
   const [loading, setLoading] = useState(false);
@@ -267,6 +355,10 @@ export function ComparePanel({ unitIds, onRemove, onAdd, onClear }: ComparePanel
   const metricRows = useMemo(() => buildMetricRows(institutions), [institutions]);
   const chartConfig = useMemo(
     () => buildSatChartConfig(institutions, chartColors()),
+    [institutions],
+  );
+  const trendConfig = useMemo(
+    () => buildAcceptanceTrendConfig(institutions, chartColors()),
     [institutions],
   );
 
@@ -409,6 +501,28 @@ export function ComparePanel({ unitIds, onRemove, onAdd, onClear }: ComparePanel
           ) : (
             <p className="mt-2 text-xs text-muted-foreground">
               SAT score ranges unavailable for the selected institutions.
+            </p>
+          )}
+
+          {trendConfig ? (
+            <div className="mt-2">
+              <p className="mb-1 text-xs font-medium text-muted-foreground">
+                Acceptance rate over time
+              </p>
+              <div className="h-64">
+                <ChartCanvas
+                  config={trendConfig}
+                  ariaLabel="Acceptance rate over time across selected institutions"
+                  active
+                />
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                One line per school across shared years; gaps where a year is unavailable.
+              </p>
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Acceptance rate trend unavailable for the selected institutions.
             </p>
           )}
         </>

@@ -1,0 +1,1 @@
+CREATE INDEX "ipeds_inst_unit_year_idx" ON "ipeds_institutions" USING btree ("unit_id","data_year");

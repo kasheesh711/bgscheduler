@@ -21,13 +21,45 @@ export interface TopMajor {
   count: number;
 }
 
+// ── Admissions trends (Milestone 2 — multi-year series) ────────────────
+
+/** One year of an institution's admissions metrics (all nullable, fail-closed). */
+export interface AdmissionsTrendPoint {
+  dataYear: string;
+  acceptanceRate: number | null;
+  yieldRate: number | null;
+  applicantsTotal: number | null;
+  admitsTotal: number | null;
+  enrolledTotal: number | null;
+  satReadingP25: number | null;
+  satReadingP75: number | null;
+  satMathP25: number | null;
+  satMathP75: number | null;
+  actCompositeP25: number | null;
+  actCompositeP75: number | null;
+}
+
+/** Aggregate acceptance rate across the 4-year set, by year (overview chart). */
+export interface AcceptanceTrendPoint {
+  dataYear: string;
+  avgAcceptance: number | null;
+  n: number;
+}
+
 export interface InstitutionProfile extends IpedsInstitution {
   completions: IpedsCompletion[];
   topMajors: TopMajor[];
+  admissionsTrend: AdmissionsTrendPoint[];
 }
 
 export interface CompareInstitution extends IpedsInstitutionSummary {
   topMajor: TopMajor | null;
+  admissionsTrend: AdmissionsTrendPoint[];
+}
+
+/** Browse-row item: current-year summary + prior-year acceptance for a delta. */
+export interface IpedsInstitutionListItem extends IpedsInstitutionSummary {
+  acceptancePrevYear: number | null;
 }
 
 // ── Filter / list ──────────────────────────────────────────────────────
@@ -48,7 +80,7 @@ export interface FilterParams {
 }
 
 export interface InstitutionListResult {
-  rows: IpedsInstitutionSummary[];
+  rows: IpedsInstitutionListItem[];
   total: number;
   page: number;
   pageSize: number;
@@ -98,5 +130,6 @@ export interface UsUniversitiesOverview {
   acceptanceBuckets: AcceptanceBucket[];
   scatter: ScatterPoint[];
   cip2Options: Cip2Option[];
+  acceptanceTrend: AcceptanceTrendPoint[];
   lastImportedAt: string | null;
 }

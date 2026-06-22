@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   bestIndexForMetric,
+  buildCompareTrendData,
   buildSatChartConfig,
   formatRange,
 } from "../compare-panel";
-import type { CompareInstitution } from "@/lib/us-universities/types";
+import type { AdmissionsTrendPoint, CompareInstitution } from "@/lib/us-universities/types";
 
 function institution(overrides: Partial<CompareInstitution> = {}): CompareInstitution {
   return {
@@ -20,6 +21,7 @@ function institution(overrides: Partial<CompareInstitution> = {}): CompareInstit
     actCompositeP25: null,
     actCompositeP75: null,
     topMajor: null,
+    admissionsTrend: [],
     // The remaining IpedsInstitutionSummary columns are not exercised by the
     // pure helpers under test; cast through unknown to keep the fixture small.
     ...overrides,
@@ -103,5 +105,75 @@ describe("buildSatChartConfig", () => {
       colors,
     );
     expect(config).toBeNull();
+  });
+});
+
+describe("buildCompareTrendData", () => {
+  const trendPoint = (
+    dataYear: string,
+    acceptanceRate: number | null,
+  ): AdmissionsTrendPoint => ({
+    dataYear,
+    acceptanceRate,
+    yieldRate: null,
+    applicantsTotal: null,
+    admitsTotal: null,
+    enrolledTotal: null,
+    satReadingP25: null,
+    satReadingP75: null,
+    satMathP25: null,
+    satMathP75: null,
+    actCompositeP25: null,
+    actCompositeP75: null,
+  });
+
+  it("aligns differing year coverage onto a sorted union axis with nulls where missing", () => {
+    const { labels, datasets } = buildCompareTrendData([
+      {
+        instName: "Alpha",
+        admissionsTrend: [
+          trendPoint("2020-21", 40),
+          trendPoint("2021-22", 38),
+          trendPoint("2022-23", 35),
+        ],
+      },
+      {
+        instName: "Beta",
+        admissionsTrend: [
+          trendPoint("2021-22", 22),
+          trendPoint("2023-24", 18),
+        ],
+      },
+    ]);
+
+    expect(labels).toEqual(["2020-21", "2021-22", "2022-23", "2023-24"]);
+    expect(datasets[0]).toEqual({
+      instName: "Alpha",
+      data: [40, 38, 35, null],
+    });
+    expect(datasets[1]).toEqual({
+      instName: "Beta",
+      data: [null, 22, null, 18],
+    });
+  });
+
+  it("preserves null acceptance points rather than coercing to 0", () => {
+    const { labels, datasets } = buildCompareTrendData([
+      {
+        instName: "Gamma",
+        admissionsTrend: [trendPoint("2020-21", null), trendPoint("2021-22", 50)],
+      },
+    ]);
+
+    expect(labels).toEqual(["2020-21", "2021-22"]);
+    expect(datasets[0].data).toEqual([null, 50]);
+  });
+
+  it("returns an empty axis when no school has any trend points", () => {
+    const { labels, datasets } = buildCompareTrendData([
+      { instName: "Delta", admissionsTrend: [] },
+    ]);
+    expect(labels).toEqual([]);
+    expect(datasets[0].data).toEqual([]);
   });
 });

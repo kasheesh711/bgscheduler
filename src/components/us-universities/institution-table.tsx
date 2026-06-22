@@ -20,7 +20,7 @@ import {
 import type {
   FilterParams,
   InstitutionListResult,
-  IpedsInstitutionSummary,
+  IpedsInstitutionListItem,
 } from "@/lib/us-universities/types";
 import type { InstitutionTableProps } from "@/components/us-universities/view-types";
 import { cn } from "@/lib/utils";
@@ -56,6 +56,24 @@ function fmtSatRange(p25: number | null | undefined, p75: number | null | undefi
   return `${p25}–${p75}`;
 }
 
+/**
+ * Year-over-year acceptance change in percentage points. `null` when either
+ * bound is missing (fail-closed; never imply a 0 delta). A "down" direction
+ * means the institution got MORE selective (lower acceptance %).
+ */
+export function acceptanceDelta(row: {
+  acceptanceRate: number | null;
+  acceptancePrevYear: number | null;
+}): { points: number; direction: "down" | "up" | "flat" } | null {
+  if (row.acceptanceRate == null || row.acceptancePrevYear == null) return null;
+  const points = row.acceptanceRate - row.acceptancePrevYear;
+  // Derive direction from the displayed (1-dp) value so a ±0.0x change reads as
+  // flat rather than a mis-coloured "0pp" up/down arrow.
+  const rounded = Math.round(points * 10) / 10;
+  if (rounded === 0) return { points: 0, direction: "flat" };
+  return { points, direction: rounded < 0 ? "down" : "up" };
+}
+
 /** Sort keys the search endpoint accepts (whitelist; others are ignored). */
 const SORTABLE_KEYS = [
   "instName",
@@ -86,6 +104,7 @@ const COLUMNS: ColumnDef[] = [
   { key: "stateAbbr", label: "State", sortKey: "stateAbbr" },
   { key: "control", label: "Control" },
   { key: "acceptanceRate", label: "Acceptance %", sortKey: "acceptanceRate", numeric: true },
+  { key: "acceptanceTrend", label: "Acceptance trend", numeric: true },
   { key: "sat", label: "SAT (read)", sortKey: "satReadingP75", numeric: true },
   { key: "enrollmentTotal", label: "Enrollment", sortKey: "enrollmentTotal", numeric: true },
   { key: "gradRateBach6yr", label: "Grad 6yr %", sortKey: "gradRateBach6yr", numeric: true },
@@ -148,7 +167,7 @@ export function InstitutionTable({
   compareIds,
 }: InstitutionTableProps) {
   const [filters, setFilters] = useState<FilterParams>(INITIAL_FILTERS);
-  const [rows, setRows] = useState<IpedsInstitutionSummary[]>([]);
+  const [rows, setRows] = useState<IpedsInstitutionListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -336,6 +355,27 @@ export function InstitutionTable({
                       {row.control != null ? (CONTROL_LABELS[row.control] ?? "—") : "—"}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{fmtPct(row.acceptanceRate)}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {(() => {
+                        const delta = acceptanceDelta(row);
+                        if (delta == null) return "—";
+                        if (delta.direction === "flat") {
+                          return <span className="text-xs text-muted-foreground">0pp</span>;
+                        }
+                        const DeltaIcon = delta.direction === "down" ? ArrowDown : ArrowUp;
+                        return (
+                          <span
+                            className={cn(
+                              "inline-flex items-center justify-end gap-0.5 text-xs font-medium",
+                              delta.direction === "down" ? "text-available" : "text-destructive",
+                            )}
+                          >
+                            <DeltaIcon aria-hidden className="size-3" />
+                            {Math.abs(Math.round(delta.points * 10) / 10)}pp
+                          </span>
+                        );
+                      })()}
+                    </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {fmtSatRange(row.satReadingP25, row.satReadingP75)}
                     </TableCell>
