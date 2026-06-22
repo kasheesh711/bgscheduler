@@ -44,4 +44,9 @@ describe("UsUniversitiesShell Console layout", () => {
     // results scroll target
     expect(html).toContain('id="us-universities-results"');
   });
+
+  it("renders the supply map toggle button inside the results region", () => {
+    const html = renderToStaticMarkup(<UsUniversitiesShell overview={overview} />);
+    expect(html).toContain("Show supply map");
+  });
 });

@@ -40,6 +40,7 @@ import { InstitutionSearchCombobox } from "./institution-search-combobox";
 import { ShortlistBar, resolveShortlistEntries } from "./shortlist-bar";
 import { CompareSheet } from "./compare-sheet";
 import { KpiHero } from "./kpi-hero";
+import { ConsoleSupplyMap } from "./console-supply-map";
 
 const SORT_OPTIONS: { value: string; label: string }[] = [
   { value: "instName", label: "Name (A–Z)" },
@@ -134,6 +135,7 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resultsView, setResultsView] = useState<ResultsView>("cards");
+  const [supplyMapOpen, setSupplyMapOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const query = buildSearchQuery(filters);
@@ -382,6 +384,12 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
             overview={overview}
             onClear={handleClearChip}
             onClearAll={handleClearAll}
+          />
+
+          <ConsoleSupplyMap
+            rows={rows}
+            open={supplyMapOpen}
+            onToggle={setSupplyMapOpen}
           />
 
           {error ? (
