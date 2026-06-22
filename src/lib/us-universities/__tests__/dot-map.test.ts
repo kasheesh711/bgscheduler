@@ -147,3 +147,20 @@ describe("resolveSinglePlacement", () => {
     expect(placement).toEqual({ kind: "none" });
   });
 });
+
+describe("dot-map isolation", () => {
+  it("imports nothing beyond the us-universities domain types", () => {
+    const { readFileSync } = require("node:fs");
+    const { fileURLToPath } = require("node:url");
+
+    const src = readFileSync(
+      fileURLToPath(new URL("../dot-map.ts", import.meta.url)),
+      "utf8",
+    );
+    const importLines = src.split("\n").filter((l: string) => l.trimStart().startsWith("import"));
+    // Only allowed import is the type-only pull from "./types".
+    for (const line of importLines) {
+      expect(line).toContain('from "./types"');
+    }
+  });
+});
