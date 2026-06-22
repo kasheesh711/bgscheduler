@@ -104,7 +104,10 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
   }, [syncUrl]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 md:p-6">
+    // Research page: opt out of the app's viewport-locked single-screen layout —
+    // the whole page scrolls so all overview charts + the compare SAT chart are
+    // reachable (the (app) <main> is overflow-hidden).
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 md:p-6">
       <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">US Universities</h1>
@@ -120,7 +123,7 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
         </div>
       </header>
 
-      <Tabs value={tab} onValueChange={changeTab} className="flex min-h-0 flex-1 flex-col">
+      <Tabs value={tab} onValueChange={changeTab} className="flex flex-col gap-3">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="browse">Browse</TabsTrigger>
@@ -131,10 +134,10 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
 
         {/* keepMounted so browse filters/sort/page (and chart instances) survive
             tab switches — base-ui Tabs.Panel unmounts inactive panels by default. */}
-        <TabsContent value="overview" keepMounted className="min-h-0 flex-1">
+        <TabsContent value="overview" keepMounted>
           <OverviewCharts overview={overview} active={tab === "overview"} onSelect={openProfile} />
         </TabsContent>
-        <TabsContent value="browse" keepMounted className="min-h-0 flex-1">
+        <TabsContent value="browse" keepMounted>
           <InstitutionTable
             overview={overview}
             onSelect={openProfile}
@@ -142,7 +145,7 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
             compareIds={compareIds}
           />
         </TabsContent>
-        <TabsContent value="compare" keepMounted className="min-h-0 flex-1">
+        <TabsContent value="compare" keepMounted>
           <ComparePanel
             unitIds={compareIds}
             onRemove={removeCompare}
