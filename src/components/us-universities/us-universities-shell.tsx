@@ -34,8 +34,6 @@ import {
 } from "@/components/ui/select";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { ComparePanel } from "./compare-panel";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { InstitutionProfileDialog } from "./institution-profile";
 import { InstitutionSearchCombobox } from "./institution-search-combobox";
 import { ShortlistBar, resolveShortlistEntries } from "./shortlist-bar";
 import { CompareSheet } from "./compare-sheet";

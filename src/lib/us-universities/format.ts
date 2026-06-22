@@ -89,6 +89,16 @@ export function admissionRequirements(
   return out;
 }
 
+/** Accessible label for the dossier locator map; omits missing place parts. */
+export function dossierLocationAriaLabel(
+  instName: string,
+  city: string | null,
+  stateAbbr: string | null,
+): string {
+  const place = [city, stateAbbr].filter((part): part is string => !!part).join(", ");
+  return place ? `Location of ${instName}: ${place}` : `Location of ${instName}`;
+}
+
 /** Completion row label, preferring the precomputed award-level label. */
 export function awardLevelText(
   awardLevel: number | null,

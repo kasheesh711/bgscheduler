@@ -37,6 +37,7 @@ import {
   EM_DASH,
   admissionRequirements,
   awardLevelText,
+  dossierLocationAriaLabel,
   formatPct,
   formatRatio,
   formatUsd,
@@ -49,7 +50,6 @@ import { resolveSinglePlacement } from "@/lib/us-universities/dot-map";
 import type { InstitutionProfile, IpedsInstitutionSummary } from "@/lib/us-universities/types";
 import { PriceLadder } from "./price-ladder";
 import { UsDotMap } from "./us-dot-map";
-import { dossierLocationAriaLabel } from "./institution-profile";
 import { DemographicsStackedBar } from "./demographics-stacked-bar";
 import {
   DossierSectionNav,

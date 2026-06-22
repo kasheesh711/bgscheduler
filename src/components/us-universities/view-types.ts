@@ -50,12 +50,6 @@ export interface InstitutionTableProps {
   compareIds: number[];
 }
 
-export interface InstitutionProfileDialogProps {
-  unitId: number | null;
-  onClose: () => void;
-  onAddCompare: (unitId: number) => void;
-}
-
 export interface InstitutionSearchComboboxProps {
   placeholder?: string;
   onSelect: (unitId: number, name: string) => void;
