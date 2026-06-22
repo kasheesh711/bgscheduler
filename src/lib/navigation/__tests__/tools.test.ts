@@ -17,6 +17,7 @@ describe("navigation tool registry", () => {
       "Student Lifecycle",
       "Finance & Revenue",
       "Market Intelligence",
+      "Research & Reference",
       "Data & Audit",
     ]);
     expect(sections[0].tools.map((tool) => tool.href)).toContain("/leave-requests");
