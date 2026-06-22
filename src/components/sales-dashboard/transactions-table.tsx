@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Download, Loader2 } from "lucide-react";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -15,6 +15,7 @@ import {
   getSalesDimensionsVersion,
   subscribeSalesDimensionsVersion,
 } from "@/hooks/use-sales-dimensions";
+import { buildTransactionsExportHref } from "@/lib/sales-dashboard/export-links";
 import { formatCurrency } from "@/lib/sales-dashboard/format";
 import type { SlimTransaction } from "@/lib/sales-dashboard/types";
 import { cn } from "@/lib/utils";
@@ -108,6 +109,11 @@ export function TransactionsTable({ filter, from, to, pageSize = 200, className,
   });
 
   const key = cacheKey(filter, from, to);
+  const exportHref = buildTransactionsExportHref({
+    ...filter,
+    from,
+    to,
+  });
 
   // Imports/source edits bump the shared sales-data version; drop the
   // per-mount page cache so this table can't disagree with the refreshed
@@ -209,6 +215,16 @@ export function TransactionsTable({ filter, from, to, pageSize = 200, className,
 
   return (
     <div className={cn("rounded-lg border bg-card", className)}>
+      <div className="flex items-center justify-end border-b px-3 py-2">
+        <a
+          href={exportHref}
+          className={buttonVariants({ variant: "outline", size: "sm" })}
+          aria-label="Export transactions CSV"
+        >
+          <Download className="size-3.5" />
+          Transactions CSV
+        </a>
+      </div>
       <Table className="text-sm">
         <TableHeader>
           <TableRow className="text-[11px] uppercase tracking-wide text-muted-foreground">

@@ -3,9 +3,9 @@
 ## 1. Document Purpose
 This document defines the product requirements for an internal admin tool that searches tutor availability against parent-requested timeslots using Wise API data as the sole production source of truth.
 
-This repo remains documentation-first. No implementation should begin until this document, [AGENTS.md](/Users/kevinhsieh/Desktop/Scheduling/AGENTS.md), and [DATA_AUDIT.md](/Users/kevinhsieh/Desktop/Scheduling/DATA_AUDIT.md) are reviewed and accepted.
+This repo remains documentation-first. No implementation should begin until this document, [AGENTS.md](AGENTS.md), and [DATA_AUDIT.md](DATA_AUDIT.md) are reviewed and accepted.
 
-[WISE_COMPARISON.md](/Users/kevinhsieh/Desktop/Scheduling/WISE_COMPARISON.md) is the migration decision record that justifies the move from sheet-based exports to Wise-only production truth.
+[WISE_COMPARISON.md](WISE_COMPARISON.md) is the migration decision record that justifies the move from sheet-based exports to Wise-only production truth.
 
 ## 2. Product Goal
 Admins need a near-instant way to answer: "Which tutors can actually take this requested slot?" The tool must:
@@ -214,7 +214,7 @@ That means:
 - if the system cannot prove a tutor is available, it must not show that tutor in `Available`
 - ambiguous or unresolved tutors may appear in `Needs review`
 - normalization defects and sync issues must be surfaced explicitly
-- launch quality depends on resolving or formally accepting blockers listed in [DATA_AUDIT.md](/Users/kevinhsieh/Desktop/Scheduling/DATA_AUDIT.md)
+- launch quality depends on resolving or formally accepting blockers listed in [DATA_AUDIT.md](DATA_AUDIT.md)
 
 The product must prefer false negatives over false positives.
 
@@ -287,6 +287,6 @@ Implementation status as of 2026-04-07:
 - Vercel Pro upgrade for 30-minute sync cadence (currently daily on Hobby)
 
 ## 14. Implementation Gate
-This PRD, [AGENTS.md](/Users/kevinhsieh/Desktop/Scheduling/AGENTS.md), and [DATA_AUDIT.md](/Users/kevinhsieh/Desktop/Scheduling/DATA_AUDIT.md) together formed the approval gate for the project.
+This PRD, [AGENTS.md](AGENTS.md), and [DATA_AUDIT.md](DATA_AUDIT.md) together formed the approval gate for the project.
 
 Implementation is complete and live. The app is deployed at https://bgscheduler.vercel.app with an active production snapshot promoted on 2026-04-07. Daily Wise sync cron is running. Range search with availability grid, copy-for-parents, and recent searches shipped 2026-04-07.

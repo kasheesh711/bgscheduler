@@ -15,6 +15,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChartCanvas } from "@/components/sales-dashboard/chart-canvas";
+import { CsvExportButton } from "@/components/sales-dashboard/csv-export-button";
+import type { CsvColumn } from "@/lib/sales-dashboard/csv";
 import { formatCurrency, formatPercent } from "@/lib/sales-dashboard/format";
 import {
   buildGmDashboardInsights,
@@ -43,11 +45,126 @@ interface SalesDashboardCommandCenterProps {
   active?: boolean;
 }
 
+export interface OverviewExportRow {
+  section: string;
+  label: string;
+  metric: string;
+  value: string | number | null;
+  detail: string;
+}
+
+export const OVERVIEW_EXPORT_COLUMNS: CsvColumn<OverviewExportRow>[] = [
+  { key: "section", header: "Section", value: (row) => row.section },
+  { key: "label", header: "Label", value: (row) => row.label },
+  { key: "metric", header: "Metric", value: (row) => row.metric },
+  { key: "value", header: "Value", value: (row) => row.value },
+  { key: "detail", header: "Detail", value: (row) => row.detail },
+];
+
+function metricRow(
+  section: string,
+  label: string,
+  metric: string,
+  value: string | number | null,
+  detail = "",
+): OverviewExportRow {
+  return { section, label, metric, value, detail };
+}
+
+export function buildOverviewExportRows(insights: GmDashboardInsights): OverviewExportRow[] {
+  const rows: OverviewExportRow[] = [];
+  const { revenuePace: pace, pipeline } = insights;
+
+  rows.push(
+    metricRow("Revenue Pace", "Normal sales", "normalRevenue", pace.normalRevenue),
+    metricRow("Revenue Pace", "Additional sales", "additionalRevenue", pace.additionalRevenue),
+    metricRow("Revenue Pace", "Total revenue", "totalRevenue", pace.totalRevenue),
+    metricRow("Revenue Pace", "Target", "target", pace.target, pace.targetSource),
+    metricRow("Revenue Pace", "Projected normal revenue", "projectedNormalRevenue", pace.projectedNormalRevenue),
+    metricRow("Revenue Pace", "Current gap", "currentGap", pace.currentGap),
+    metricRow("Revenue Pace", "Projected gap", "projectedGap", pace.projectedGap),
+    metricRow("Revenue Pace", "Daily pace needed", "dailyPaceNeeded", pace.dailyPaceNeeded),
+    metricRow("Pipeline", "Trial conversion", "conversionRate", pipeline.conversionRate, `${pipeline.trialConverted}/${pipeline.trialCohortSize}`),
+    metricRow("Pipeline", "Retention", "retentionRate", pipeline.retentionRate, `${pipeline.retained}/${pipeline.retentionCohortSize}`),
+    metricRow("Pipeline", "Replacement", "replacementRatio", pipeline.replacementRatio, `${pipeline.churned} churned`),
+    metricRow("Pipeline", "New students", "newStudents", pipeline.newStudents),
+    metricRow("Pipeline", "Trials", "trials", pipeline.trials),
+    metricRow("Pipeline", "Renewals", "renewals", pipeline.renewals),
+  );
+
+  for (const exception of insights.exceptions) {
+    rows.push(metricRow("GM Exceptions", exception.title, exception.severity, exception.value ?? "", exception.detail));
+  }
+
+  for (const rep of insights.salesTeam) {
+    rows.push(
+      metricRow("Sales Team", rep.name, "revenue", rep.revenue),
+      metricRow("Sales Team", rep.name, "transactions", rep.count),
+      metricRow("Sales Team", rep.name, "trialCount", rep.trialCount),
+      metricRow("Sales Team", rep.name, "newCount", rep.newCount),
+      metricRow("Sales Team", rep.name, "renewalCount", rep.renewalCount),
+      metricRow("Sales Team", rep.name, "averageOrderValue", rep.averageOrderValue),
+      metricRow("Sales Team", rep.name, "revenueShare", rep.revenueShare),
+      metricRow("Sales Team", rep.name, "previousRevenue", rep.previousRevenue),
+      metricRow("Sales Team", rep.name, "deltaRevenue", rep.deltaRevenue),
+      metricRow("Sales Team", rep.name, "deltaPct", rep.deltaPct),
+    );
+  }
+
+  for (const month of insights.monthlyRevenue) {
+    rows.push(
+      metricRow("Monthly Revenue", month.label, "newRevenue", month.newRevenue),
+      metricRow("Monthly Revenue", month.label, "renewalRevenue", month.renewalRevenue),
+      metricRow("Monthly Revenue", month.label, "trialRevenue", month.trialRevenue),
+      metricRow("Monthly Revenue", month.label, "additionalRevenue", month.additionalRevenue),
+    );
+  }
+
+  for (const projection of insights.actualVsProjection) {
+    rows.push(
+      metricRow("Actual vs Projection", projection.label, "actualNormalRevenue", projection.actualNormalRevenue),
+      metricRow("Actual vs Projection", projection.label, "baseProjectedRevenue", projection.baseProjectedRevenue),
+      metricRow("Actual vs Projection", projection.label, "bearProjectedRevenue", projection.bearProjectedRevenue),
+      metricRow("Actual vs Projection", projection.label, "bullProjectedRevenue", projection.bullProjectedRevenue),
+      metricRow("Actual vs Projection", projection.label, "varianceToBase", projection.varianceToBase),
+      metricRow("Actual vs Projection", projection.label, "variancePctToBase", projection.variancePctToBase),
+      metricRow("Actual vs Projection", projection.label, "roomUtilization", projection.roomUtilization),
+    );
+  }
+
+  for (const [section, entries] of [
+    ["Program Mix", insights.programMix],
+    ["Package Mix", insights.packageMix],
+    ["Payment Concentration", insights.paymentConcentration],
+  ] as const) {
+    for (const entry of entries) {
+      rows.push(
+        metricRow(section, entry.label, "count", entry.count),
+        metricRow(section, entry.label, "revenue", entry.revenue),
+        metricRow(section, entry.label, "share", entry.share),
+      );
+    }
+  }
+
+  return rows;
+}
+
 export function SalesDashboardCommandCenter({ data, from, to, onExplore, active = true }: SalesDashboardCommandCenterProps) {
   const insights = useMemo(() => buildGmDashboardInsights(data, { from, to }), [data, from, to]);
+  const exportRows = useMemo(() => buildOverviewExportRows(insights), [insights]);
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <CsvExportButton
+          filename={`sales-dashboard-overview-${from}-to-${to}.csv`}
+          rows={exportRows}
+          columns={OVERVIEW_EXPORT_COLUMNS}
+        >
+          Overview CSV
+        </CsvExportButton>
+      </div>
+
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
         <RevenuePaceSurface insights={insights} />
         <ExceptionsRail exceptions={insights.exceptions} />
@@ -635,4 +752,3 @@ function InsightRows({
     </div>
   );
 }
-

@@ -143,6 +143,7 @@ export const QueuePanel = React.memo(
       const el = rowRefs.current.get(studentKey) ?? rowRefs.current.get(`card-${studentKey}`);
       if (!el) return false;
       el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      el.focus({ preventScroll: true });
       el.classList.add("row-flash");
       const onEnd = () => {
         el.classList.remove("row-flash");
@@ -353,6 +354,7 @@ const QueueCard = React.memo(function QueueCard({
       ].filter(Boolean).join(" ")}
       onClick={() => onSelectStudent(row.studentKey)}
       ref={(el) => onRowRef(`card-${row.studentKey}`, el)}
+      tabIndex={0}
     >
       <div className="queue-card-top">
         <div>
@@ -453,6 +455,7 @@ const QueueTableRow = React.memo(function QueueTableRow({
       ].filter(Boolean).join(" ")}
       onClick={() => onSelectStudent(row.studentKey)}
       ref={(el) => onRowRef(row.studentKey, el)}
+      tabIndex={0}
     >
       {/* Severity bar */}
       <td style={{ width: 4, padding: 0, position: "relative" }}>

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useSalesDimensions } from "@/hooks/use-sales-dimensions";
 import type { ExploreSeed, SalesTabProps, SalesWorkspaceTab } from "@/lib/sales-dashboard/types";
+import { ActionsTab } from "./tabs/actions-tab";
 import { PackagesTab } from "./tabs/packages-tab";
 import { ProgramsTab } from "./tabs/programs-tab";
 import { RepsTab } from "./tabs/reps-tab";
@@ -18,9 +19,10 @@ import { StudentsTab } from "./tabs/students-tab";
 // the ?tab= URL sync.
 // ----------------------------------------------------------------------------
 
-const TAB_KEYS: readonly SalesWorkspaceTab[] = ["overview", "reps", "programs", "packages", "students"];
+const TAB_KEYS: readonly SalesWorkspaceTab[] = ["actions", "overview", "reps", "programs", "packages", "students"];
 
 const TAB_LABELS: Record<SalesWorkspaceTab, string> = {
+  actions: "Actions",
   overview: "Overview",
   reps: "Reps",
   programs: "Programs",
@@ -28,7 +30,7 @@ const TAB_LABELS: Record<SalesWorkspaceTab, string> = {
   students: "Students",
 };
 
-const PANELS: Record<Exclude<SalesWorkspaceTab, "overview">, (props: SalesTabProps) => ReactNode> = {
+const PANELS: Record<Exclude<SalesWorkspaceTab, "actions" | "overview">, (props: SalesTabProps) => ReactNode> = {
   reps: RepsTab,
   programs: ProgramsTab,
   packages: PackagesTab,
@@ -36,7 +38,7 @@ const PANELS: Record<Exclude<SalesWorkspaceTab, "overview">, (props: SalesTabPro
 };
 
 function asWorkspaceTab(value: string | null): SalesWorkspaceTab {
-  return TAB_KEYS.includes(value as SalesWorkspaceTab) ? (value as SalesWorkspaceTab) : "overview";
+  return TAB_KEYS.includes(value as SalesWorkspaceTab) ? (value as SalesWorkspaceTab) : "actions";
 }
 
 interface WorkspaceTabsProps {
@@ -51,9 +53,10 @@ interface WorkspaceTabsProps {
   /** GM cross-link seed from the shell; consumed once on arrival. */
   seed: ExploreSeed | null;
   onSeedConsumed: () => void;
+  onOpenSources?: () => void;
 }
 
-export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed }: WorkspaceTabsProps) {
+export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed, onOpenSources }: WorkspaceTabsProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -76,7 +79,9 @@ export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed }: Work
     });
   }
 
-  const panelsTouched = activeTab !== "overview" || [...activated].some((tab) => tab !== "overview");
+  const panelsTouched =
+    (activeTab !== "actions" && activeTab !== "overview")
+    || [...activated].some((tab) => tab !== "actions" && tab !== "overview");
   const { dimensions, loading, error, invalidate } = useSalesDimensions({ enabled: panelsTouched });
 
   const selectTab = useCallback((tab: SalesWorkspaceTab) => {
@@ -88,7 +93,7 @@ export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed }: Work
       return next;
     });
     const params = new URLSearchParams(searchParams.toString());
-    if (tab === "overview") params.delete("tab");
+    if (tab === "actions") params.delete("tab");
     else params.set("tab", tab);
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
@@ -110,7 +115,7 @@ export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed }: Work
       return next;
     });
     const params = new URLSearchParams(searchParams.toString());
-    if (seed.tab === "overview") params.delete("tab");
+    if (seed.tab === "actions") params.delete("tab");
     else params.set("tab", seed.tab);
     if (seed.tab === "reps" && seed.rep) params.set("rep", seed.rep);
     const query = params.toString();
@@ -132,7 +137,7 @@ export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed }: Work
         ))}
       </TabsList>
 
-      {activeTab !== "overview" && error && !dimensions && !loading ? (
+      {activeTab !== "actions" && activeTab !== "overview" && error && !dimensions && !loading ? (
         <div
           role="alert"
           className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
@@ -143,6 +148,15 @@ export function WorkspaceTabs({ overview, from, to, seed, onSeedConsumed }: Work
           </Button>
         </div>
       ) : null}
+
+      <TabsContent value="actions" keepMounted>
+        <ActionsTab
+          from={from}
+          to={to}
+          active={activeTab === "actions"}
+          onOpenSources={onOpenSources}
+        />
+      </TabsContent>
 
       <TabsContent value="overview" keepMounted>
         {overview(activeTab === "overview")}

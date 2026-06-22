@@ -29,6 +29,50 @@ File: `src/app/api/sales-dashboard/route.ts:5-18`
 
 ---
 
+## Actions, dimensions, and transaction drills
+
+### `GET /api/sales-dashboard/actions`
+
+File: `src/app/api/sales-dashboard/actions/route.ts`
+
+- **Auth:** admin session.
+- **Request query:** `from` and `to` are required `YYYY-MM-DD` dates; `to` must be on or after `from`.
+- **Response 200:** a `SalesActionsPayload` with the GM action cockpit: period metadata, KPIs, chart points/annotations, ranked action items, dependency warnings, and match stats.
+- **Side effects:** none. Reads the cached sales payload and dimensions payload, plus Credit Control context when available.
+- **Errors:** `401`; `400 {"error":"Invalid query","details":...}`; `500 {"error": message}`.
+
+### `GET /api/sales-dashboard/dimensions`
+
+File: `src/app/api/sales-dashboard/dimensions/route.ts`
+
+- **Auth:** admin session.
+- **Request:** none.
+- **Response 200:** a `SalesDimensionsPayload` containing month-grain reps/programs/packages/additional-mix aggregates, the student directory, target metadata, and generation timestamp.
+- **Side effects:** none. Uses the `sales-dashboard` cache tag with the same live-row scoping as the dashboard payload.
+- **Errors:** `401`; `500 {"error": message}`.
+
+### `GET /api/sales-dashboard/transactions`
+
+File: `src/app/api/sales-dashboard/transactions/route.ts`
+
+- **Auth:** admin session.
+- **Request query:** optional `rep`, `program`, `band`, `student`, `from`, `to`, `limit`, and `offset`. Date params must be `YYYY-MM-DD`; `limit` defaults to `200` and clamps to `1000`; `offset` defaults to `0`.
+- **Response 200:** `{ "rows": SlimTransaction[], "total": number }`, newest first. `SlimTransaction` intentionally excludes the raw sheet `jsonb` payload.
+- **Side effects:** none.
+- **Errors:** `401`; `400 {"error":"Invalid query","details":...}`; `500 {"error": message}`.
+
+### `GET /api/sales-dashboard/transactions/export`
+
+File: `src/app/api/sales-dashboard/transactions/export/route.ts`
+
+- **Auth:** admin session.
+- **Request query:** same filters as `GET /api/sales-dashboard/transactions` except pagination is ignored: optional `rep`, `program`, `band`, `student`, `from`, and `to`.
+- **Response 200:** `text/csv; charset=utf-8` with `Content-Disposition: attachment; filename="sales-dashboard-transactions-...csv"`. The CSV includes a UTF-8 BOM for Excel compatibility and exports all matching `SlimTransaction` rows, not just the first page.
+- **Side effects:** none. The export uses the same run-scoped materialization and `filterSlimTransactions` predicate as the JSON transaction endpoint.
+- **Errors:** `401`; `400 {"error":"Invalid query","details":...}`; `500 {"error": message}`.
+
+---
+
 ## Source management
 
 These manage the per-month Google Sheet "sources" that feed the dashboard.

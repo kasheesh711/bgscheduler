@@ -167,6 +167,7 @@ How to run, secure, and observe the system.
 | [runbook.md](./operations/runbook.md) | Deploys, DB scripts, manual sync triggers, and sync-failure recovery. |
 | [auth-and-access.md](./operations/auth-and-access.md) | The two access gates: edge-middleware session check + login-time allowlist. |
 | [observability.md](./operations/observability.md) | What's logged, how to inspect sync/runtime state, and where signals live. |
+| [security-threat-remediation-plan.md](./operations/security-threat-remediation-plan.md) | Security threat register, remediation roadmap, and closure checklist. |
 
 ### Open questions & gaps
 

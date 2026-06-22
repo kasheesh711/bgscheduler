@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { CircleHelp, LogOut, RefreshCw, Search, X } from "lucide-react";
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
@@ -52,7 +53,18 @@ import { ToastNotification } from "./toast-notification";
 import { useKeyboardShortcuts, SHORTCUT_LIST } from "@/hooks/use-keyboard-shortcuts";
 import { useResizableSplit } from "@/hooks/use-resizable-split";
 
+export function resolveInitialCreditStudentKey(payload: DashboardPayload, requestedStudentKey: string | null | undefined): string {
+  const requested = requestedStudentKey?.trim() ?? "";
+  if (requested && payload.students.some((student) => student.studentKey === requested)) {
+    return requested;
+  }
+  return payload.studentQueue[0]?.studentKey ?? payload.students[0]?.studentKey ?? "";
+}
+
 export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser }) {
+  const searchParams = useSearchParams();
+  const requestedStudentKey = searchParams.get("studentKey")?.trim() ?? "";
+
   // ---------------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------------
@@ -90,6 +102,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
 
   const queuePanelRef = useRef<QueuePanelHandle>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const scrolledDeepLinkKeyRef = useRef("");
 
   // Mirror of `data` for stable callbacks that only need a point-in-time read
   // (keeps memoized children from re-rendering when handlers are recreated).
@@ -155,7 +168,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
         startTransition(() => {
           setData(payload);
           if (mode === "initial") {
-            setSelectedStudentKey(payload.studentQueue[0]?.studentKey ?? payload.students[0]?.studentKey ?? "");
+            setSelectedStudentKey(resolveInitialCreditStudentKey(payload, requestedStudentKey));
             const defaultDate = getDefaultCalendarDate(payload.calendar);
             setSelectedCalendarDate(defaultDate);
             setCalendarCursor(getCalendarCursorForView("month", parseDateKey(defaultDate)));
@@ -175,7 +188,7 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
         }
       }
     },
-    [],
+    [requestedStudentKey],
   );
 
   useEffect(() => {
@@ -334,6 +347,14 @@ export function DashboardShell({ sessionUser }: { sessionUser: AppSessionUser })
       setSelectedStudentKey(nextKey);
     }
   }, [adminScopedStudents, adminView, data, selectedStudent, selectedStudentKey, sortedQueue]);
+
+  useEffect(() => {
+    if (!data || !requestedStudentKey || selectedStudentKey !== requestedStudentKey) return;
+    if (!data.students.some((student) => student.studentKey === requestedStudentKey)) return;
+    if (scrolledDeepLinkKeyRef.current === requestedStudentKey) return;
+    scrolledDeepLinkKeyRef.current = requestedStudentKey;
+    queuePanelRef.current?.scrollToStudent(requestedStudentKey);
+  }, [data, requestedStudentKey, selectedStudentKey]);
 
   useEffect(() => {
     if (!data) return;

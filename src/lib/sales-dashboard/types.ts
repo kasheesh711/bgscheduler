@@ -375,7 +375,7 @@ export interface CoverageWindow {
   status: "covered" | "gap" | "open";
 }
 
-export type SalesWorkspaceTab = "overview" | "reps" | "programs" | "packages" | "students";
+export type SalesWorkspaceTab = "actions" | "overview" | "reps" | "programs" | "packages" | "students";
 
 /** GM command-center cross-link seed: shell switches tab + seeds the panel filter. */
 export interface ExploreSeed {
