@@ -88,7 +88,7 @@ export function InstitutionFilters({
         <Input
           id="inst-search"
           aria-label="Search institutions"
-          placeholder="Search by name or city…"
+          placeholder="Search by name…"
           value={searchDraft}
           onChange={(event) => setSearchDraft(event.target.value)}
         />
@@ -174,6 +174,30 @@ export function InstitutionFilters({
             ))}
           </SelectContent>
         </Select>
+      </div>
+
+      <div className="flex w-28 flex-col gap-1">
+        <label htmlFor="inst-min-acceptance" className="text-xs font-medium text-muted-foreground">
+          Min accept %
+        </label>
+        <Input
+          id="inst-min-acceptance"
+          aria-label="Minimum acceptance rate"
+          type="number"
+          inputMode="numeric"
+          min={0}
+          max={100}
+          placeholder="0"
+          value={value.minAcceptance ?? ""}
+          onChange={(event) =>
+            onChange(
+              mergeFilter(value, {
+                minAcceptance: parseNumericInput(event.target.value),
+                page: 1,
+              }),
+            )
+          }
+        />
       </div>
 
       <div className="flex w-28 flex-col gap-1">
