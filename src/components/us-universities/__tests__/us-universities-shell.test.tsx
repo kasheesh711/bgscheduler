@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({
-  useRouter: vi.fn(() => ({ replace: vi.fn() })),
+  useRouter: vi.fn(() => ({ replace: vi.fn(), push: vi.fn() })),
   usePathname: vi.fn(() => "/us-universities"),
   useSearchParams: vi.fn(() => null),
 }));
@@ -25,7 +25,7 @@ const OVERVIEW: UsUniversitiesOverview = {
 };
 
 describe("UsUniversitiesShell SSR", () => {
-  it("renders the header, KPI hero, charts, results anchor, and the browse table filter bar without running the fetch effect", () => {
+  it("renders the header, KPI hero, charts, and results anchor without running the fetch effect", () => {
     const html = renderToStaticMarkup(<UsUniversitiesShell overview={OVERVIEW} />);
     expect(html).toContain("US Universities");
     // KPI hero
@@ -34,9 +34,20 @@ describe("UsUniversitiesShell SSR", () => {
     expect(html).toContain("Admissions selectivity");
     // Results anchor
     expect(html).toContain('id="us-universities-results"');
-    // Table is rendered directly (no tab needed) with its filter bar.
-    expect(html).toContain("Search institutions");
-    // Loading copy renders because the AbortController fetch effect does not run under SSR.
-    expect(html).toContain("Loading institutions…");
+    // Sub-header renders (default cards view): count banner + toggle + CSV link present.
+    expect(html).toContain("of 200");
+    expect(html).toContain("Card view");
+    expect(html).toContain("Download CSV");
+  });
+});
+
+describe("UsUniversitiesShell results sub-header", () => {
+  it("renders the count banner, view toggle, sort control, and CSV anchor", () => {
+    const html = renderToStaticMarkup(<UsUniversitiesShell overview={OVERVIEW} />);
+    expect(html).toContain("of 200");
+    expect(html).toContain("Card view");
+    expect(html).toContain("Table view");
+    expect(html).toContain("/api/us-universities/export?");
+    expect(html).toContain("Download CSV");
   });
 });

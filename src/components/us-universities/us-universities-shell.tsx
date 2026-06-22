@@ -19,12 +19,34 @@ import {
   isSortableKey,
   toggleSort,
 } from "./institution-table";
+import { CountBanner } from "@/components/us-universities/count-banner";
+import { FilterChipTray } from "@/components/us-universities/filter-chip-tray";
+import { CardTableToggle, type ResultsView } from "@/components/us-universities/card-table-toggle";
+import { InstitutionCard } from "@/components/us-universities/institution-card";
+import { Download } from "lucide-react";
+import { buttonVariants } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { ComparePanel } from "./compare-panel";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { InstitutionProfileDialog } from "./institution-profile";
 import { InstitutionSearchCombobox } from "./institution-search-combobox";
 import { KpiHero } from "./kpi-hero";
+
+const SORT_OPTIONS: { value: string; label: string }[] = [
+  { value: "instName", label: "Name (A–Z)" },
+  { value: "acceptanceRate", label: "Acceptance %" },
+  { value: "satReadingP75", label: "SAT (read)" },
+  { value: "enrollmentTotal", label: "Enrollment" },
+  { value: "gradRateBach6yr", label: "Grad 6yr %" },
+  { value: "avgNetPrice", label: "Net price" },
+];
 
 function parseIds(value: string | null): number[] {
   return (value ?? "")
@@ -108,6 +130,7 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [resultsView, setResultsView] = useState<ResultsView>("cards");
 
   const abortRef = useRef<AbortController | null>(null);
   const query = buildSearchQuery(filters);
@@ -193,6 +216,38 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
       resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     },
     [filters, syncUrl],
+  );
+
+  const handleClearChip = useCallback(
+    (patch: Partial<FilterParams>) => {
+      const next = applyChartFilter(filters, patch);
+      setFilters(next);
+      syncUrl({ filters: next });
+    },
+    [filters, syncUrl],
+  );
+
+  const handleClearAll = useCallback(() => {
+    const next: FilterParams = {
+      sort: filters.sort,
+      dir: filters.dir,
+      pageSize: filters.pageSize,
+      page: 1,
+    };
+    setFilters(next);
+    syncUrl({ filters: next });
+  }, [filters, syncUrl]);
+
+  const handleSortChange = useCallback(
+    (next: string | null) => {
+      if (!next) return;
+      setFilters((current) => {
+        const updated = { ...current, sort: next, page: 1 };
+        syncUrl({ filters: updated });
+        return updated;
+      });
+    },
+    [syncUrl],
   );
 
   // Redirect legacy ?unitId= deep links to the dossier route on first render.
@@ -292,21 +347,88 @@ export function UsUniversitiesShell({ overview }: { overview: UsUniversitiesOver
       <Separator />
 
       <div id="us-universities-results" ref={resultsRef} className="min-h-0 flex-1 scroll-mt-4">
-        <InstitutionTable
-          rows={rows}
-          total={total}
-          loading={loading}
-          error={error}
-          filters={filters}
-          states={overview.states}
-          cip2Options={overview.cip2Options}
-          onSort={onSort}
-          onSelect={openDossier}
-          onAddCompare={addCompare}
-          onFilterChange={onFilterChange}
-          onPage={onPage}
-          compareIds={compareIds}
-        />
+        <div className="flex flex-col gap-3">
+          <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b bg-background/95 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+            <CountBanner count={loading ? null : total} total={overview.totalInstitutions} loading={loading} />
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTableToggle view={resultsView} onChange={setResultsView} />
+              <Select value={filters.sort ?? "instName"} onValueChange={handleSortChange}>
+                <SelectTrigger aria-label="Sort results" className="h-8 w-44 bg-background">
+                  <SelectValue placeholder="Sort by" />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {SORT_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <a
+                href={`/api/us-universities/export?${buildSearchQuery(filters)}`}
+                download
+                aria-label="Download current results as CSV"
+                className={buttonVariants({ variant: "outline", size: "sm" })}
+              >
+                <Download aria-hidden className="size-4" />
+                Download CSV
+              </a>
+            </div>
+          </div>
+
+          <FilterChipTray
+            filters={filters}
+            overview={overview}
+            onClear={handleClearChip}
+            onClearAll={handleClearAll}
+          />
+
+          {error ? (
+            <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+              {error}
+            </div>
+          ) : !loading && rows.length === 0 ? (
+            <div className="rounded-lg border bg-card p-10 text-center text-sm text-muted-foreground">
+              No universities match — remove a chip to widen.
+            </div>
+          ) : resultsView === "cards" ? (
+            <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(190px,1fr))]">
+              {loading
+                ? Array.from({ length: 8 }).map((_, index) => (
+                    <div
+                      key={`card-skeleton-${index}`}
+                      className="h-56 animate-pulse rounded-lg border bg-muted"
+                    />
+                  ))
+                : rows.map((row) => (
+                    <InstitutionCard
+                      key={row.unitId}
+                      row={row}
+                      inCompare={compareIds.includes(row.unitId)}
+                      compareFull={compareIds.length >= MAX_COMPARE}
+                      onSelect={openDossier}
+                      onAddCompare={addCompare}
+                    />
+                  ))}
+            </div>
+          ) : (
+            <InstitutionTable
+              rows={rows}
+              total={total}
+              loading={loading}
+              error={error}
+              filters={filters}
+              states={overview.states}
+              cip2Options={overview.cip2Options}
+              onSort={onSort}
+              onSelect={openDossier}
+              onAddCompare={addCompare}
+              onFilterChange={onFilterChange}
+              onPage={onPage}
+              compareIds={compareIds}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
