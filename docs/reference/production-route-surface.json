@@ -8,7 +8,7 @@
     "url": "https://bgscheduler-bl5sz78th-kevins-projects-6ebb4efc.vercel.app",
     "outputItems": 362
   },
-  "minSourceRouteCount": 144,
+  "minSourceRouteCount": 145,
   "criticalRoutes": [
     "/leave-requests",
     "/line-review",
@@ -128,6 +128,7 @@
     "/api/sales-dashboard/sources/[sourceId]",
     "/api/sales-dashboard/sources/seed",
     "/api/sales-dashboard/transactions",
+    "/api/sales-dashboard/transactions/export",
     "/api/search",
     "/api/search/assistant",
     "/api/search/range",

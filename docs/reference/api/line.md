@@ -1,6 +1,6 @@
 # LINE API Reference
 
-**Status:** Stable read/review paths; the Wise write-path is dry-run only (see [§ Wise actions](#wise-actions)). **Scope:** the 28 HTTP handlers under [`src/app/api/line/`](../../../src/app/api/line/).
+**Status:** Stable read/review paths; the Wise write-path is dry-run only (see [§ Wise actions](#wise-actions)). **Scope:** the 29 indexed non-`OPTIONS` HTTP handlers under [`src/app/api/line/`](../../../src/app/api/line/), plus two CORS `OPTIONS` preflight handlers for the OA-resolver extension endpoints.
 
 This page is the mechanical reference — method, path, auth, request/response shapes, side effects, and status codes per endpoint. Feature meaning, lifecycles, and data flows live in [`features/line-integration.md`](../../features/line-integration.md); that doc owns the "why" and links here for signatures.
 
@@ -271,6 +271,18 @@ Verify or reject an existing link by id ([`[contactId]/student-links/route.ts:78
 Refresh cached LINE profiles (display name / picture / status) for all contacts from the LINE API ([`refresh-profiles/route.ts:6-14`](../../../src/app/api/line/contacts/refresh-profiles/route.ts)).
 
 **Body:** none. **Side effect:** `refreshAllLineContactProfiles({ db })` fetches and updates every contact's profile. **Response:** **200** `{ result }`.
+
+### `POST /api/line/contacts/followers-reanchor`
+
+Run the combined LINE followers re-anchor plus backlog identity-recovery maintenance path. **Requires an admin session** ([`followers-reanchor/route.ts:15-41`](../../../src/app/api/line/contacts/followers-reanchor/route.ts)).
+
+**Query param:** `dryRun=true` skips follower re-anchor writes and runs backlog recovery in read-only dry-run mode. Omitted or any other value runs the live maintenance path ([:24](../../../src/app/api/line/contacts/followers-reanchor/route.ts)).
+
+**Body:** none.
+
+**Side effects:** when not dry-run, calls `runLineFollowersReanchor({ db })`; always calls `runLineBacklogRecovery({ db, dryRun })` ([:32-34](../../../src/app/api/line/contacts/followers-reanchor/route.ts)). The route comment notes that this live combined path double-fetches roster data and that the dedicated backlog-recovery cron route is the cleaner production vehicle ([:6-12](../../../src/app/api/line/contacts/followers-reanchor/route.ts)).
+
+**Responses:** **200** `{ reanchor, backlog }`; **401** when no admin session; **500** `{ "error": <message> }` on any thrown maintenance error.
 
 ---
 
