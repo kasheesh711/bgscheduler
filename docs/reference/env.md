@@ -198,7 +198,8 @@ Consumed in `src/lib/leave-requests/config.ts`.
 
 | Variable | In `.env.example`? | Purpose | Consumed at | Default / guard |
 |---|---|---|---|---|
-| `WISE_SESSION_OPERATIONS_VERIFIED` | No | Hard kill-switch for **writing back to Wise** (session location updates). Writeback is enabled **only** when this equals the string `"true"`. | `src/lib/wise/operations.ts:11`; `src/lib/line/operational.ts:21` | Defaults to *disabled* (anything but `"true"`) — fail-closed |
+| `WISE_SESSION_OPERATIONS_VERIFIED` | No | Hard kill-switch for LINE-proposed Wise cancel/reschedule actions. The current implementation still records only dry-runs even when this equals `"true"`. | `src/lib/wise/operations.ts:11`; `src/lib/line/operational.ts:21` | Defaults to *disabled* (anything but `"true"`) — fail-closed |
+| `WISE_SESSION_CREATE_VERIFIED` | No | Hard kill-switch for Progress Tests session creation in Wise after an admin booking confirmation and availability pre-check. | `src/lib/progress-tests/config.ts:50`; `src/lib/progress-tests/booking.ts:295` | Defaults to *disabled* (anything but `"true"`) — records `manual_required` with no Wise create call |
 | `SALES_DASHBOARD_CONNECTED_EMAIL` | No | Google account for the Sales Dashboard sync; also the fallback for the leave-requests connected email. | `src/lib/leave-requests/config.ts:13` | Falls back to `""` |
 | `SEED_ADMIN_EMAILS` | No (documented in run scripts) | Comma-separated admin emails for the one-off DB seed script. | `src/lib/db/seed.ts:31` | Empty → seed logs "No SEED_ADMIN_EMAILS set, skipping admin user seed" (`seed.ts:42`) |
 | `VERCEL_PROJECT_PRODUCTION_URL` | No (injected by Vercel) | Production hostname, used to derive the email public base URL on Vercel. | `src/lib/classrooms/schedule-email.ts:269` | Vercel-provided; part of cascade |
@@ -251,16 +252,16 @@ sequenceDiagram
 - **Prose says "9 required"; Zod says 7.** The discrepancy is explained above
   (the 2 `.default()` `WISE_*` vars are counted as required in prose). Worth
   aligning the prose to say "7 hard-required + 2 defaulted".
-- **Schema is missing ~15 live variables.** `OPENAI_*`, `ENABLE_AI_SCHEDULER`,
+- **Schema is missing ~16 live variables.** `OPENAI_*`, `ENABLE_AI_SCHEDULER`,
   all `SCHEDULE_EMAIL_*`, all `LEAVE_REQUESTS_*`, `WISE_SESSION_OPERATIONS_VERIFIED`,
-  `LINE_VALIDATION_LEAD_EMAILS`, `SALES_DASHBOARD_CONNECTED_EMAIL`,
+  `WISE_SESSION_CREATE_VERIFIED`, `LINE_VALIDATION_LEAD_EMAILS`, `SALES_DASHBOARD_CONNECTED_EMAIL`,
   `NEXT_PUBLIC_APP_URL`, and `SEED_ADMIN_EMAILS` are all read from `process.env`
   but absent from `src/lib/env.ts`. The schema is no longer a complete inventory.
 - **`.env.example` lists vars not in the schema and omits the optional LINE
   vars' siblings.** `.env.example` documents `OPENAI_*`, `SCHEDULE_EMAIL_*`,
   `LEAVE_REQUESTS_*`, and `NEXT_PUBLIC_APP_URL` (none in schema), while several
   live vars (`OPENAI_SCHEDULER_SHADOW_MODEL`, `OPENAI_SCHEDULER_REASONING_EFFORT`,
-  `WISE_SESSION_OPERATIONS_VERIFIED`, `LINE_VALIDATION_LEAD_EMAILS`,
+  `WISE_SESSION_OPERATIONS_VERIFIED`, `WISE_SESSION_CREATE_VERIFIED`, `LINE_VALIDATION_LEAD_EMAILS`,
   `SALES_DASHBOARD_CONNECTED_EMAIL`) appear in neither schema nor example.
 - **Redundant inline defaults.** `WISE_INSTITUTE_ID` / `WISE_NAMESPACE` literals
   are duplicated across ~12 call sites instead of being centralized — and

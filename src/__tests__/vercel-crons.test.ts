@@ -19,4 +19,10 @@ describe("vercel cron configuration", () => {
     expect(crons.get("/api/internal/sync-sales-dashboard")).toBe("10,40 * * * *");
     expect(crons.get("/api/internal/sync-credit-control")).toBe("20,50 * * * *");
   });
+
+  it("registers the one-shot Student Promotions July 1 Bangkok apply cron", () => {
+    const crons = new Map(loadVercelConfig().crons.map((cron) => [cron.path, cron.schedule]));
+
+    expect(crons.get("/api/internal/student-promotions/july-1")).toBe("5 17 30 6 *");
+  });
 });
