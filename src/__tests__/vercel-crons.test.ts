@@ -11,12 +11,26 @@ function loadVercelConfig(): VercelConfig {
 }
 
 describe("vercel cron configuration", () => {
-  it("runs Wise, Wise Activity, Sales Dashboard, and Credit Control on staggered 30-minute schedules", () => {
+  it("matches the full deployed cron registry", () => {
+    expect(loadVercelConfig().crons).toEqual([
+      { path: "/api/internal/sync-wise", schedule: "*/30 * * * *" },
+      { path: "/api/internal/sync-sales-dashboard", schedule: "10,40 * * * *" },
+      { path: "/api/internal/sync-competitor-intelligence", schedule: "25 18 * * 0" },
+      { path: "/api/internal/sync-credit-control", schedule: "20,50 * * * *" },
+      { path: "/api/internal/sync-progress-tests", schedule: "25,55 * * * *" },
+      { path: "/api/internal/progress-tests/admin-digest", schedule: "35 0 * * *" },
+      { path: "/api/internal/sync-wise-activity", schedule: "5,35 * * * *" },
+      { path: "/api/internal/sync-leave-requests", schedule: "15,45 * * * *" },
+      { path: "/api/internal/class-assignments/morning", schedule: "45 23 * * *" },
+      { path: "/api/internal/class-assignments/admin-email", schedule: "0,10,20,30 0 * * *" },
+      { path: "/api/internal/student-promotions/july-1", schedule: "5 17 30 6 *" },
+      { path: "/api/internal/cron-watchdog", schedule: "7,37 * * * *" },
+    ]);
+  });
+
+  it("keeps Student Promotions as the July 1 Bangkok one-shot apply", () => {
     const crons = new Map(loadVercelConfig().crons.map((cron) => [cron.path, cron.schedule]));
 
-    expect(crons.get("/api/internal/sync-wise")).toBe("*/30 * * * *");
-    expect(crons.get("/api/internal/sync-wise-activity")).toBe("5,35 * * * *");
-    expect(crons.get("/api/internal/sync-sales-dashboard")).toBe("10,40 * * * *");
-    expect(crons.get("/api/internal/sync-credit-control")).toBe("20,50 * * * *");
+    expect(crons.get("/api/internal/student-promotions/july-1")).toBe("5 17 30 6 *");
   });
 });

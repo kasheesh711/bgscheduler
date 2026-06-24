@@ -9,8 +9,12 @@ vi.mock("@/lib/student-promotions/data", () => ({
   getStudentPromotionRunDetail: vi.fn(),
   verifyStudentPromotionRun: vi.fn(),
 }));
+vi.mock("@/lib/data-health/cron-audit", () => ({
+  withCronInvocationAudit: vi.fn(),
+}));
 
 import { auth } from "@/lib/auth";
+import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import {
   applyVerifiedStudentPromotionRun,
   createStudentPromotionDryRun,
@@ -51,6 +55,7 @@ describe("student promotion routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     authMock.mockResolvedValue({ user: { email: "admin@example.com", name: "Admin" } });
+    vi.mocked(withCronInvocationAudit).mockImplementation((_, handler) => handler());
     vi.mocked(getLatestStudentPromotionRunDetail).mockResolvedValue(detail as never);
     vi.mocked(getStudentPromotionRunDetail).mockResolvedValue(detail as never);
     vi.mocked(createStudentPromotionDryRun).mockResolvedValue(detail as never);
@@ -160,6 +165,10 @@ describe("student promotion routes", () => {
 
     expect(res.status).toBe(200);
     expect(applyVerifiedStudentPromotionRun).toHaveBeenCalledWith({ trigger: "cron" });
+    expect(withCronInvocationAudit).toHaveBeenCalledWith(
+      { jobKey: "student_promotions_july_1", triggerSource: "cron", requestMethod: "GET" },
+      expect.any(Function),
+    );
   });
 
   it("blocks the cron outside the July 1, 2026 Bangkok target date", async () => {
@@ -174,5 +183,9 @@ describe("student promotion routes", () => {
 
     expect(res.status).toBe(409);
     expect(applyVerifiedStudentPromotionRun).not.toHaveBeenCalled();
+    expect(withCronInvocationAudit).toHaveBeenCalledWith(
+      { jobKey: "student_promotions_july_1", triggerSource: "cron", requestMethod: "GET" },
+      expect.any(Function),
+    );
   });
 });
