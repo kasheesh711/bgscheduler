@@ -163,7 +163,7 @@ The handler authenticates with `CRON_SECRET`, then calls `applyVerifiedStudentPr
 
 ## Internal handlers without a cron schedule
 
-These `/api/internal/*` route handlers exist on disk but are **not** listed in `vercel.json`, so Vercel Cron never invokes them. Verified by comparing the eight cron `path`s in `vercel.json` against the internal `route.ts` files under `src/app/api/internal/`.
+These `/api/internal/*` route handlers exist on disk but are **not** listed in `vercel.json`, so Vercel Cron never invokes them. Verified by comparing the scheduled cron `path`s in `vercel.json` against the internal `route.ts` files under `src/app/api/internal/`.
 
 ### `/api/internal/sync-room-utilization` — manual only (no GET handler)
 
@@ -174,6 +174,13 @@ These `/api/internal/*` route handlers exist on disk but are **not** listed in `
 - **Does:** `syncRoomUtilizationSessions(getDb())` and returns `{ ok: true, ...result }` ([`route.ts:38-39`](../../src/app/api/internal/sync-room-utilization/route.ts)).
 
 **Flag:** this job is **manual / not scheduled**. If it is meant to keep room-utilization data current on a cadence (like the other syncs), it is currently effectively disabled from the automation standpoint — see open questions.
+
+### `/api/internal/line-backlog-recovery` — manual only (not scheduled)
+
+- **Not in `vercel.json`** -> no automatic schedule.
+- **Exports `GET`** ([`route.ts:11`](../../src/app/api/internal/line-backlog-recovery/route.ts)), but Vercel Cron never invokes it because the path is not registered.
+- **Auth:** requires a valid `CRON_SECRET` bearer via `rejectInvalidCronSecret(request)` ([`route.ts:12-13`](../../src/app/api/internal/line-backlog-recovery/route.ts)).
+- **Does:** records a cron-invocation audit row with job key `line_backlog_recovery`, then calls `runLineBacklogRecovery({ db: getDb(), dryRun: false })` ([`route.ts:15-20`](../../src/app/api/internal/line-backlog-recovery/route.ts)).
 
 > No other `/api/internal/*` handler is missing from `vercel.json`: the remaining route directories map 1:1 to the registered cron entries.
 
