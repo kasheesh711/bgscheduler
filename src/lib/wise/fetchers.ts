@@ -360,6 +360,22 @@ export async function updateSessionLocation(
   );
 }
 
+/**
+ * Update the Wise subject field for one scheduled session.
+ * Student Promotions only calls this behind the verified session-subject gate.
+ */
+export async function updateSessionSubject(
+  client: WiseClient,
+  classId: string,
+  sessionId: string,
+  subject: string
+): Promise<WiseSessionUpdateResponse> {
+  return client.put<WiseSessionUpdateResponse>(
+    `/teacher/classes/${classId}/sessions/${sessionId}?updateType=SINGLE`,
+    { subject }
+  );
+}
+
 export interface WiseScheduleSessionInput {
   classId: string;
   userId: string;

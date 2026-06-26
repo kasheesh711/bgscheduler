@@ -1,6 +1,6 @@
 # Database Reference — Master Table Index
 
-Canonical lookup of **every table** in the BGScheduler Postgres database. All 82 tables
+Canonical lookup of **every table** in the BGScheduler Postgres database. All 85 tables
 are defined in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) via Drizzle ORM.
 This page is the index: it lists each table's SQL name, its Drizzle export name, the
 domain it belongs to, its **grain** (what one row represents), the feature that owns it,
@@ -25,7 +25,9 @@ which the ETL pipeline rewrites wholesale and then atomically promotes via
 A few tables are deliberately **snapshot-independent** (they survive snapshot rotation):
 `admin_users`, `google_oauth_tokens`, `tutor_aliases`, `cron_invocations`, `wise_activity_events`,
 `wise_activity_sync_runs`, `student_promotion_runs`, `student_promotion_grade_actions`,
-`student_promotion_course_actions`, `room_utilization_sessions`, and `past_session_blocks`
+`student_promotion_course_actions`, `student_promotion_future_session_actions`,
+`student_promotion_graduation_actions`, `student_promotion_pay_rate_impacts`,
+`room_utilization_sessions`, and `past_session_blocks`
 (`schema.ts:1347-1386`, the only cross-snapshot data table — see its note in
 [erd-core.md](./erd-core.md)).
 
@@ -40,11 +42,11 @@ A few tables are deliberately **snapshot-independent** (they survive snapshot ro
 | Payroll | 8 | [erd-payroll.md](./erd-payroll.md) |
 | Tutor Profiles | 2 | [erd-tutor-profiles.md](./erd-tutor-profiles.md) |
 | Leave Requests | 5 | [erd-leave-requests.md](./erd-leave-requests.md) |
-| Student Promotions | 3 | [erd-student-promotions.md](./erd-student-promotions.md) |
+| Student Promotions | 6 | [erd-student-promotions.md](./erd-student-promotions.md) |
 | AI & Proposals | 6 | [erd-ai-and-proposals.md](./erd-ai-and-proposals.md) |
 | LINE | 8 | [erd-line.md](./erd-line.md) |
 | Room Capacity | 4 | [erd-room-capacity.md](./erd-room-capacity.md) |
-| **Total** | **82** | |
+| **Total** | **85** | |
 
 ## Master table list
 
@@ -111,13 +113,16 @@ Line ranges: `schema.ts:447-610`.
 
 ### Student Promotions
 
-Line ranges: `schema.ts:649-733`.
+Line ranges: `schema.ts:1065-1243`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
 | `student_promotion_runs` | `studentPromotionRuns` | student-promotions | one audited dry-run/apply ledger for a target date (`schema.ts:649-679`) | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
 | `student_promotion_grade_actions` | `studentPromotionGradeActions` | student-promotions | one potential Wise registration grade update per accepted student within a run (`schema.ts:682-704`) | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
 | `student_promotion_course_actions` | `studentPromotionCourseActions` | student-promotions | one potential Wise class-subject update per class within a run (`schema.ts:706-733`) | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
+| `student_promotion_future_session_actions` | `studentPromotionFutureSessionActions` | student-promotions | one July 1+ future Wise session subject audit/update candidate per run and Wise session | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
+| `student_promotion_graduation_actions` | `studentPromotionGraduationActions` | student-promotions | one required Year 13 graduate disposition review per accepted student in a run | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
+| `student_promotion_pay_rate_impacts` | `studentPromotionPayRateImpacts` | student-promotions | one pay-rate review row per teacher + class + student band + current/target course pair | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
 
 ### Classrooms — assignment + email
 

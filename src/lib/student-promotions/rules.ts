@@ -3,7 +3,7 @@ export const STUDENT_PROMOTION_CRON_READY_AT_UTC = "2026-06-30T17:05:00.000Z";
 export const WISE_GRADE_REGISTRATION_FIELD_ID = "if89sblj";
 export const WISE_GRADE_REGISTRATION_FIELD_LABEL = "Current Year/Grade level";
 
-export type PromotionTransition = "year8_to_year9" | "year11_to_year12";
+export type PromotionTransition = "year8_to_year9" | "year11_to_year12" | "year13_to_university";
 
 export interface ParsedGrade {
   raw: string;
@@ -27,6 +27,42 @@ export const YEAR_11_SOURCE_SUBJECTS = [
   "Y9-11 / G8-10 (Int.) Master",
   "(2-STU) Y9-11 / G8-10 (Int.) Master",
 ] as const;
+
+export const YEAR_13_SOURCE_SUBJECTS = [
+  "Y12-13 / G11-12 (Int.)",
+  "(2-STU) Y12-13 / G11-12 (Int.)",
+  "(3-STU) Y12-13 / G11-12 (Int.)",
+  "Y12-13 / G11-12 (Int.) Master",
+  "(2-STU) Y12-13 / G11-12 (Int.) Master",
+  "(3-STU) Y12-13 / G11-12 (Int.) Master",
+] as const;
+
+export const GRADUATION_COURSE_SUBJECT_TARGETS: Record<string, { target: string; transition: "year13_to_university" }> = {
+  "Y12-13 / G11-12 (Int.)": {
+    target: "University",
+    transition: "year13_to_university",
+  },
+  "(2-STU) Y12-13 / G11-12 (Int.)": {
+    target: "(2-STU) University",
+    transition: "year13_to_university",
+  },
+  "(3-STU) Y12-13 / G11-12 (Int.)": {
+    target: "(3-STU) University",
+    transition: "year13_to_university",
+  },
+  "Y12-13 / G11-12 (Int.) Master": {
+    target: "University Master",
+    transition: "year13_to_university",
+  },
+  "(2-STU) Y12-13 / G11-12 (Int.) Master": {
+    target: "(2-STU) University Master",
+    transition: "year13_to_university",
+  },
+  "(3-STU) Y12-13 / G11-12 (Int.) Master": {
+    target: "(3-STU) University Master",
+    transition: "year13_to_university",
+  },
+};
 
 export const COURSE_SUBJECT_TARGETS: Record<string, { target: string | null; transition: PromotionTransition }> = {
   "Y2-8 / G1-7 (Int.)": {
@@ -100,10 +136,13 @@ export function formatPromotedGrade(currentYear: number): string {
 }
 
 export function requiredYearForTransition(transition: PromotionTransition): number {
-  return transition === "year8_to_year9" ? 8 : 11;
+  if (transition === "year8_to_year9") return 8;
+  if (transition === "year11_to_year12") return 11;
+  return 13;
 }
 
 export function gradeActionTypeFor(currentYear: number, subjects: string[]): string {
+  if (currentYear === 13) return "graduation_review";
   if (currentYear === 8 && subjects.some((subject) => COURSE_SUBJECT_TARGETS[subject]?.transition === "year8_to_year9")) {
     return "year8_course_and_grade";
   }
@@ -114,5 +153,7 @@ export function gradeActionTypeFor(currentYear: number, subjects: string[]): str
 }
 
 export function isUnmappedRangeCourseSubject(subject: string): boolean {
-  return RANGE_COURSE_PATTERN.test(subject) && !COURSE_SUBJECT_TARGETS[subject];
+  return RANGE_COURSE_PATTERN.test(subject)
+    && !COURSE_SUBJECT_TARGETS[subject]
+    && !GRADUATION_COURSE_SUBJECT_TARGETS[subject];
 }

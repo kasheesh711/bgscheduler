@@ -48,7 +48,8 @@ The **source of truth** is the code under `src/lib/wise/`:
   (default `696e1f4d90102225641cc413`).
 - **Writeback:** production mutations are narrowly scoped: classroom assignments write
   only OFFLINE session `location`; Student Promotions writes only registration field
-  `if89sblj` and verified class `subject` transitions.
+  `if89sblj`, verified class `subject` transitions, and gated single-session
+  subject updates for July 1+ school-curriculum payroll pay-band readiness.
 
 ---
 
@@ -494,6 +495,27 @@ apply window has opened.
 Before writing, the service re-fetches the participant registration data and skips
 the action if the current grade no longer matches the verified plan.
 
+### Session subject update — `updateSessionSubject`
+
+Used only by Student Promotions future-session pay-band guardrails after the
+grade/class promotion run is terminal and the session-subject verification gate is
+enabled.
+
+- **Endpoint:** `PUT /teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE`
+  — same single-occurrence Wise endpoint as room writeback.
+- **Body:** `{ subject }` — a single field; nothing else is written.
+- **Gate:** the application refuses this write unless
+  `WISE_SESSION_SUBJECT_UPDATE_VERIFIED=true` and the admin route receives exact
+  confirmation `apply-future-session-subjects`.
+- **Scope:** only mapped UK/US/IB school-curriculum future sessions starting on or
+  after `2026-07-01T00:00:00+07:00`.
+- **Returns:** `WiseSessionUpdateResponse`; request and response payloads are
+  retained on `student_promotion_future_session_actions`.
+
+Readback/refresh uses live FUTURE sessions first. Already-target or payroll-key
+equivalent subjects are marked idempotent and are not written again; drifted
+subjects are surfaced as exceptions.
+
 ### Course subject update — `updateWiseCourseSubject`
 
 Used only by Student Promotions for verified class-level course transitions.
@@ -570,6 +592,7 @@ above.
 | GET | `/institutes/{id}/trends` | `fetchWiseFeesPaidTrends` | read |
 | GET | `/institutes/{id}/fees/transactions` | `fetchWiseReceiptTransactions` | read (paginated) |
 | PUT | `/teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` | `updateSessionLocation` | **write** (OFFLINE only) |
+| PUT | `/teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` | `updateSessionSubject` | **write** (gated Student Promotions only) |
 | PUT | `/institutes/{id}/students/{studentId}/registration` | `updateWiseStudentRegistrationAnswers` | **write** (Student Promotions only) |
 | PUT | `/teacher/editClass` | `updateWiseCourseSubject` | **write** (Student Promotions only) |
 

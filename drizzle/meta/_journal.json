@@ -337,6 +337,20 @@
       "when": 1782113847289,
       "tag": "0047_high_excalibur",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1782470400000,
+      "tag": "0048_student_promotion_future_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1782474000000,
+      "tag": "0049_student_promotion_graduation_pay_rates",
+      "breakpoints": true
     }
   ]
 }

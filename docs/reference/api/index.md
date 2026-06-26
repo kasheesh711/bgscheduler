@@ -2,7 +2,7 @@
 
 The canonical lookup of every HTTP endpoint in BGScheduler. This page lists **method + path + group + auth + one-line purpose** only. For full request/response schemas, query parameters, and error shapes, follow the link on each group heading to the per-group detail page.
 
-All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **118**.
+All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **122**.
 
 ## How to read this index
 
@@ -257,6 +257,10 @@ Audited July 1, 2026 Wise student grade/course promotion workflow.
 | GET | `/api/student-promotions/runs/[runId]` | student-promotions | admin | Load one promotion run detail |
 | POST | `/api/student-promotions/runs/[runId]/verify` | student-promotions | admin | Verify a reviewed dry run for July 1 apply |
 | POST | `/api/student-promotions/runs/[runId]/apply` | student-promotions | admin | Manual fallback apply for a verified run |
+| POST | `/api/student-promotions/runs/[runId]/future-sessions/apply` | student-promotions | admin | Gated apply for pending July 1+ Wise session subject updates |
+| PATCH | `/api/student-promotions/runs/[runId]/graduation-actions/[actionId]` | student-promotions | admin | Set Year 13 graduate disposition |
+| PATCH | `/api/student-promotions/runs/[runId]/pay-rate-impacts/[impactId]/review` | student-promotions | admin | Mark pay-rate impact reviewed correct/incorrect |
+| POST | `/api/student-promotions/runs/[runId]/readback` | student-promotions | admin | Read-only live Wise readback after apply |
 
 ## [Tutor Profiles](./misc.md) — `/api/tutor-profiles`
 

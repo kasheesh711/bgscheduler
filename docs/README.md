@@ -104,7 +104,7 @@ declared maturity.
 | [Credit Control](./features/credit-control.md) | stable | Projects when each student's prepaid credit runs low/out; prioritized follow-up queue with outreach logging. |
 | [Payroll](./features/payroll.md) | stable | Reconciles tutor pay against Wise sessions/invoices per month; surfaces integrity issues; review + approve. |
 | [Wise Activity Audit](./features/wise-activity-audit.md) | stable | Read-only audit log of Wise operational/financial events + package-sales reconciliation workbench. |
-| [Student Promotions](./features/student-promotions.md) | stable, pending first production run | Audited July 1, 2026 Wise student grade/course promotion workflow with dry-run review and verified apply. |
+| [Student Promotions](./features/student-promotions.md) | stable, pending first production run | Audited July 1, 2026 Wise student grade/course/graduation workflow with future-session pay-band checks, pay-rate review, dry-run review, and verified apply. |
 | [LINE Integration](./features/line-integration.md) | stable (writeback dry-run) | LINE OA inbox: ingest, classify, draft replies, human-gated review. Scheduler write-path flag-gated/dry-run. |
 | [Proposals (Admin Holds)](./features/proposals.md) | experimental | Temporary admin "holds" on tutor slots, with same-tutor overlap detection. Local-only, never written to Wise. |
 | [AI Scheduler](./features/ai-scheduler.md) | experimental | LLM reads pasted chat, extracts a request, runs the deterministic search, drafts a parent reply. Never decides availability. |
