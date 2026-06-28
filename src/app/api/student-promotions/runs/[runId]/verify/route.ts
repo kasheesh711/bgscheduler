@@ -23,6 +23,9 @@ export async function POST(
     if (!endpointVerificationConfirmed) {
       return NextResponse.json({ error: "Endpoint verification confirmation is required" }, { status: 400 });
     }
+    if (!endpointVerificationNote.trim()) {
+      return NextResponse.json({ error: "Endpoint verification note is required" }, { status: 400 });
+    }
 
     return NextResponse.json({
       detail: await verifyStudentPromotionRun({ runId, actor, endpointVerificationNote }),
