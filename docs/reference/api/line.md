@@ -1,6 +1,6 @@
 # LINE API Reference
 
-**Status:** Stable read/review paths; the Wise write-path is dry-run only (see [§ Wise actions](#wise-actions)). **Scope:** the 28 HTTP handlers under [`src/app/api/line/`](../../../src/app/api/line/).
+**Status:** Stable read/review paths; the Wise write-path is dry-run only (see [§ Wise actions](#wise-actions)). **Scope:** the 29 documented non-`OPTIONS` HTTP handlers under [`src/app/api/line/`](../../../src/app/api/line/).
 
 This page is the mechanical reference — method, path, auth, request/response shapes, side effects, and status codes per endpoint. Feature meaning, lifecycles, and data flows live in [`features/line-integration.md`](../../features/line-integration.md); that doc owns the "why" and links here for signatures.
 
