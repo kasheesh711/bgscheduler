@@ -48,7 +48,7 @@ All four ledgers share the same `sync_status` enum — `running`, `success`, `fa
 | `credit_control_sync_runs` | Credit-control snapshot | Vercel cron + manual | `20,50 * * * *` | `ccsr_single_running_idx` |
 | `payroll_sync_runs` | Payroll month computation | **Manual only** (no cron) | — | `payroll_sync_runs_single_running_idx` |
 
-Cron schedules are registered in `vercel.json:2-31`. Note that **payroll has no cron entry** — it is invoked on demand via `POST /api/payroll/sync` and every run row is stamped `triggerType: "manual"` (`src/lib/payroll/sync.ts:264`). The Wise snapshot sync runs on the Pro plan with a generous function ceiling: `export const maxDuration = 800` (`src/app/api/internal/sync-wise/route.ts:6`).
+Cron schedules are registered in `vercel.json`. Note that **payroll has no cron entry** — it is invoked on demand via `POST /api/payroll/sync` and every run row is stamped `triggerType: "manual"` (`src/lib/payroll/sync.ts:264`). The Wise snapshot sync runs on the Pro plan with a generous function ceiling: `export const maxDuration = 800` (`src/app/api/internal/sync-wise/route.ts:6`).
 
 ### `sync_runs` — Wise tutor snapshot
 

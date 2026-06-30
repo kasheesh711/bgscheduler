@@ -1,6 +1,6 @@
 # Internal / Cron API
 
-Machine-to-machine endpoints that drive the scheduled ETL pipelines. They are invoked by Vercel Cron (HTTP `GET`) on a staggered schedule and by operators for manual reruns (HTTP `POST`). All endpoints live under `/api/internal/*`, which `src/middleware.ts` exempts from the session auth gate — each route enforces its own `CRON_SECRET` check instead.
+Machine-to-machine endpoints that drive the scheduled ETL pipelines. Vercel Cron invokes the scheduled entries with HTTP `GET`; some handlers additionally expose HTTP `POST` for manual reruns or cron-secret replay. All endpoints live under `/api/internal/*`, which `src/middleware.ts` exempts from the session auth gate — each route enforces its own `CRON_SECRET` or explicit session fallback instead.
 
 For the **meaning** of each pipeline (what a snapshot is, why syncs fail-closed, the data-integrity rules), see the corresponding feature docs. This page documents only the mechanical HTTP contract.
 
@@ -8,31 +8,38 @@ For the **meaning** of each pipeline (what a snapshot is, why syncs fail-closed,
 
 - **`CRON_SECRET` bearer auth.** The caller must send `Authorization: Bearer $CRON_SECRET`. Comparison is constant-time via `node:crypto.timingSafeEqual`, guarded by a length pre-check to avoid the `RangeError` that `timingSafeEqual` throws on length-mismatched buffers (`src/app/api/internal/sync-wise/route.ts:10`-`28`; shared helper at `src/lib/internal/cron-auth.ts:6`-`17`).
 - **No query params.** The cron `GET` routes do not read query params. Most routes read no body; manual/replay `POST` variants either read no body or use a route-specific confirmation body documented below.
-- **Single-flight guard.** Each pipeline prevents overlapping runs. The mechanism differs per family (DB row-state check + 20-minute stale recovery for Wise/credit-control; a partial unique index for leave-requests) — see each section.
+- **Single-flight guard.** Sync pipelines prevent overlapping runs where a second run could corrupt or duplicate work. The mechanism differs per family (DB row-state check + 20-minute stale recovery for Wise/credit-control; a partial unique index for leave-requests) — see each section.
 - **Missing secret is a server error.** If `process.env.CRON_SECRET` is unset, the route returns `500 {"error":"Server misconfigured"}` rather than `401`, so a misconfiguration is not silently treated as an auth failure (`src/lib/internal/cron-auth.ts:22`-`24`; `src/app/api/internal/sync-wise/route.ts:49`-`50`).
 
-The Vercel cron schedules for these paths (from `vercel.json`):
+The Vercel cron schedules for these paths (from `vercel.json`) and the route methods they export:
 
-| Path | Schedule (cron) |
-|------|-----------------|
-| `/api/internal/sync-wise` | `*/30 * * * *` (`vercel.json:4`-`5`) |
-| `/api/internal/sync-sales-dashboard` | `10,40 * * * *` (`vercel.json:8`-`9`) |
-| `/api/internal/sync-competitor-intelligence` | `25 18 * * 0` (`vercel.json:12`-`13`) |
-| `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:16`-`17`) |
-| `/api/internal/sync-progress-tests` | `25,55 * * * *` (`vercel.json:20`-`21`) |
-| `/api/internal/progress-tests/admin-digest` | `35 0 * * *` (`vercel.json:24`-`25`) |
-| `/api/internal/sync-wise-activity` | `5,35 * * * *` (`vercel.json:28`-`29`) |
-| `/api/internal/sync-leave-requests` | `15,45 * * * *` (`vercel.json:32`-`33`) |
-| `/api/internal/class-assignments/morning` | `45 23 * * *` (`vercel.json:36`-`37`) |
-| `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` (`vercel.json:40`-`41`) |
-| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` (`vercel.json:44`-`45`) |
-| `/api/internal/cron-watchdog` | `7,37 * * * *` (`vercel.json:48`-`49`) |
+| Path | Schedule (cron) | Exported methods | Auth notes |
+|------|-----------------|------------------|------------|
+| `/api/internal/sync-wise` | `*/30 * * * *` (`vercel.json:4`-`5`) | `GET`, `POST` | `GET` bearer only; `POST` bearer or Auth.js session |
+| `/api/internal/sync-sales-dashboard` | `10,40 * * * *` (`vercel.json:8`-`9`) | `GET`, `POST` | `GET` bearer only; `POST` bearer or Auth.js session |
+| `/api/internal/sync-competitor-intelligence` | `25 18 * * 0` (`vercel.json:12`-`13`) | `GET`, `POST` | `GET` bearer only; `POST` bearer or competitor-intelligence session |
+| `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:16`-`17`) | `GET`, `POST` | `GET` bearer only; `POST` bearer or Auth.js session |
+| `/api/internal/sync-progress-tests` | `25,55 * * * *` (`vercel.json:20`-`21`) | `GET`, `POST` | `GET` bearer only; `POST` bearer or Auth.js session |
+| `/api/internal/progress-tests/admin-digest` | `35 0 * * *` (`vercel.json:24`-`25`) | `GET` | bearer only |
+| `/api/internal/sync-wise-activity` | `5,35 * * * *` (`vercel.json:28`-`29`) | `GET` | bearer only |
+| `/api/internal/sync-leave-requests` | `15,45 * * * *` (`vercel.json:32`-`33`) | `GET`, `POST` | bearer only for both methods |
+| `/api/internal/class-assignments/morning` | `45 23 * * *` (`vercel.json:36`-`37`) | `GET` | bearer only |
+| `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` (`vercel.json:40`-`41`) | `GET` | bearer only |
+| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` (`vercel.json:44`-`45`) | `GET`, `POST` | bearer only for both methods; date-gated to July 1, 2026 Bangkok |
+| `/api/internal/cron-watchdog` | `7,37 * * * *` (`vercel.json:48`-`49`) | `GET`, `POST` | bearer only for both methods |
+
+Manual-only internal handlers that are **not** listed in `vercel.json`:
+
+| Path | Exported methods | Auth notes | Purpose |
+|------|------------------|------------|---------|
+| `/api/internal/sync-room-utilization` | `POST` | bearer or Auth.js session | Sync room-utilization sessions; documented with Room Capacity |
+| `/api/internal/line-backlog-recovery` | `GET` | bearer only | Run LINE backlog recovery; no automatic Vercel schedule |
 
 ---
 
 ## Wise snapshot sync
 
-Runs the full Wise ETL pipeline (`runFullSync`): fetch teachers/availability/leaves/sessions, normalize, write to snapshot tables, validate, and atomically promote a new active snapshot. On success it invalidates the `snapshot` cache tag so the in-memory search index rebuilds (`src/lib/sync/run-wise-sync.ts:160`-`162`).
+Runs the full Wise ETL pipeline (`runFullSync`): fetch teachers/availability/leaves/sessions, normalize, write to snapshot tables, validate, and atomically promote a new active snapshot. On success it invalidates the Next cached data tagged `snapshot` (`src/lib/sync/run-wise-sync.ts:160`-`162`); the in-memory search index rebuilds lazily when `ensureIndex()` observes a new active snapshot id.
 
 ### `GET /api/internal/sync-wise`
 

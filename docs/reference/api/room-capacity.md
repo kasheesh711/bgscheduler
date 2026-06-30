@@ -247,7 +247,7 @@ This is a local copy of the same constant-time pattern used by the other interna
 
 (Both 500 cases share the same status; the bodies differ — `"Server misconfigured"` for the auth-misconfig path vs. the sync error message — [`sync-room-utilization/route.ts:30-33`, `:40-43`](../../../src/app/api/internal/sync-room-utilization/route.ts).)
 
-**Scheduling — manual only.** This endpoint is **not** registered in [`vercel.json`](../../../vercel.json) (its cron list contains seven other paths, none of which is `sync-room-utilization`). Vercel Cron invokes endpoints via `GET`, and this handler exports only `POST`, so it is not auto-scheduled. It is triggered by:
+**Scheduling — manual only.** This endpoint is **not** registered in [`vercel.json`](../../../vercel.json). Vercel Cron invokes endpoints via `GET`, and this handler exports only `POST`, so it is not auto-scheduled. It is triggered by:
 
 - the room-capacity dashboard's refresh action, which `fetch`es `POST /api/internal/sync-room-utilization` ([`room-capacity-dashboard.tsx:375`](../../../src/components/room-capacity/room-capacity-dashboard.tsx));
 - an external `POST` with the `CRON_SECRET` bearer; or
