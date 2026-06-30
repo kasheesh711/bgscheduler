@@ -117,6 +117,45 @@ describe("cron status evaluation", () => {
     expect(result.lateAfterAt?.toISOString()).toBe("2026-06-14T20:25:00.000Z");
   });
 
+  it("does not mark the one-shot Student Promotions cron unknown before its July 1 event", () => {
+    const result = evaluateCronJobStatus({
+      job: job("student_promotions_july_1"),
+      now: new Date("2026-06-30T10:00:00.000Z"),
+      latestInvocation: null,
+      latestCronInvocation: null,
+      latestRun: null,
+      latestSuccessfulRun: null,
+      latestFailedRun: null,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("healthy");
+    expect(result.proof).toBe("none");
+    expect(result.nextExpectedAt?.toISOString()).toBe("2026-06-30T17:05:00.000Z");
+    expect(result.lastExpectedAt).toBeNull();
+  });
+
+  it("does not roll the one-shot Student Promotions cron forward as a daily job", () => {
+    const latest = run({
+      startedAt: new Date("2026-06-30T17:05:00.000Z"),
+      finishedAt: new Date("2026-06-30T17:07:00.000Z"),
+    });
+    const result = evaluateCronJobStatus({
+      job: job("student_promotions_july_1"),
+      now: new Date("2026-07-02T00:00:00.000Z"),
+      latestInvocation: null,
+      latestCronInvocation: null,
+      latestRun: latest,
+      latestSuccessfulRun: latest,
+      latestFailedRun: null,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("healthy");
+    expect(result.lastExpectedAt?.toISOString()).toBe("2026-06-30T17:05:00.000Z");
+    expect(result.nextExpectedAt).toBeNull();
+  });
+
   it("marks long-running jobs as failing after maxDuration plus buffer", () => {
     const running = run({
       status: "running",

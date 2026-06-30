@@ -163,7 +163,7 @@ The handler authenticates with `CRON_SECRET`, then calls `applyVerifiedStudentPr
 
 ## Internal handlers without a cron schedule
 
-These `/api/internal/*` route handlers exist on disk but are **not** listed in `vercel.json`, so Vercel Cron never invokes them. Verified by comparing the eight cron `path`s in `vercel.json` against the internal `route.ts` files under `src/app/api/internal/`.
+These `/api/internal/*` route handlers exist on disk but are **not** listed in `vercel.json`, so Vercel Cron never invokes them. Verified by comparing the twelve cron `path`s in `vercel.json` against the internal `route.ts` files under `src/app/api/internal/`.
 
 ### `/api/internal/sync-room-utilization` — manual only (no GET handler)
 
