@@ -22,6 +22,7 @@ export interface CronJobDefinition {
   feature: string;
   path: string;
   schedule: string | null;
+  oneShotAtUtc?: string;
   cadenceLabel: string;
   cadenceMinutes: number | null;
   lateAfterMinutes: number;
@@ -199,6 +200,7 @@ export const CRON_JOBS = [
     feature: "Student Promotions",
     path: "/api/internal/student-promotions/july-1",
     schedule: "5 17 30 6 *",
+    oneShotAtUtc: "2026-06-30T17:05:00.000Z",
     cadenceLabel: "July 1, 2026 00:05 Bangkok",
     cadenceMinutes: 365 * 24 * 60,
     lateAfterMinutes: 24 * 60,

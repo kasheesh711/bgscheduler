@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { NextRequest } from "next/server";
 
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
+vi.mock("@/lib/data-health/cron-audit", () => ({
+  withCronInvocationAudit: vi.fn((_input, handler) => handler()),
+}));
 vi.mock("@/lib/student-promotions/data", () => ({
   WISE_SESSION_SUBJECT_UPDATE_CONFIRMATION: "apply-future-session-subjects",
   applyStudentPromotionFutureSessionActions: vi.fn(),
@@ -16,6 +19,7 @@ vi.mock("@/lib/student-promotions/data", () => ({
 }));
 
 import { auth } from "@/lib/auth";
+import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import {
   applyStudentPromotionFutureSessionActions,
   applyVerifiedStudentPromotionRun,
@@ -80,6 +84,7 @@ describe("student promotion routes", () => {
     vi.mocked(updateStudentPromotionGraduationDisposition).mockResolvedValue(detail as never);
     vi.mocked(reviewStudentPromotionPayRateImpact).mockResolvedValue(detail as never);
     vi.mocked(runStudentPromotionReadback).mockResolvedValue({ runId: "run-1", gradeRows: [], courseRows: [] } as never);
+    vi.mocked(withCronInvocationAudit).mockImplementation(async (_input, handler) => handler());
     process.env.CRON_SECRET = "secret";
   });
 
@@ -240,6 +245,20 @@ describe("student promotion routes", () => {
     const res = await cronApply(request("http://test.local/api/internal/student-promotions/july-1"));
 
     expect(res.status).toBe(401);
+    expect(withCronInvocationAudit).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the internal cron secret is missing", async () => {
+    delete process.env.CRON_SECRET;
+
+    const res = await cronApply(request(
+      "http://test.local/api/internal/student-promotions/july-1",
+      undefined,
+      { authorization: "Bearer secret" },
+    ));
+
+    expect(res.status).toBe(500);
+    expect(withCronInvocationAudit).not.toHaveBeenCalled();
   });
 
   it("runs cron apply with a valid bearer secret", async () => {
@@ -253,6 +272,10 @@ describe("student promotion routes", () => {
     ));
 
     expect(res.status).toBe(200);
+    expect(withCronInvocationAudit).toHaveBeenCalledWith(
+      { jobKey: "student_promotions_july_1", triggerSource: "cron", requestMethod: "GET" },
+      expect.any(Function),
+    );
     expect(applyVerifiedStudentPromotionRun).toHaveBeenCalledWith({ trigger: "cron" });
   });
 

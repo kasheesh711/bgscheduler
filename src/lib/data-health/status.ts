@@ -164,8 +164,28 @@ function weeklyExpectation(job: CronJobDefinition, now: Date) {
   return { lastExpectedAt, nextExpectedAt, lateAfterAt };
 }
 
+function oneShotExpectation(job: CronJobDefinition, now: Date) {
+  if (!job.oneShotAtUtc) {
+    return { lastExpectedAt: null, nextExpectedAt: null, lateAfterAt: null };
+  }
+
+  const expectedAt = new Date(job.oneShotAtUtc);
+  if (Number.isNaN(expectedAt.getTime())) {
+    return { lastExpectedAt: null, nextExpectedAt: null, lateAfterAt: null };
+  }
+
+  const lateAfterAt = new Date(expectedAt.getTime() + job.lateAfterMinutes * 60 * 1000);
+  if (now.getTime() < expectedAt.getTime()) {
+    return { lastExpectedAt: null, nextExpectedAt: expectedAt, lateAfterAt };
+  }
+  return { lastExpectedAt: expectedAt, nextExpectedAt: null, lateAfterAt };
+}
+
 export function expectedWindowForJob(job: CronJobDefinition, now: Date) {
   if (job.manualOnly) return { lastExpectedAt: null, nextExpectedAt: null, lateAfterAt: null };
+  if (job.oneShotAtUtc) {
+    return oneShotExpectation(job, now);
+  }
   if (job.expectedBangkokWeekday !== undefined) {
     return weeklyExpectation(job, now);
   }
@@ -276,6 +296,25 @@ export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult 
   }
 
   if (proof === "none") {
+    const oneShotAt = job.oneShotAtUtc ? new Date(job.oneShotAtUtc) : null;
+    if (oneShotAt && !Number.isNaN(oneShotAt.getTime()) && now.getTime() < oneShotAt.getTime()) {
+      return {
+        status: "healthy",
+        proof,
+        proofLabel: "One-shot cron registered",
+        lastSeenAt: null,
+        lastSuccessAt: null,
+        lastFailureAt: null,
+        nextExpectedAt,
+        lastExpectedAt,
+        lateAfterAt,
+        durationMs: null,
+        responseStatus: null,
+        errorSummary: null,
+        healthDetail: "One-shot cron is registered and not due yet.",
+      };
+    }
+
     return {
       status: "unknown",
       proof,
@@ -312,9 +351,10 @@ export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult 
   }
 
   const isDailyWindow =
-    job.expectedBangkokMinute !== undefined ||
-    job.expectedBangkokWindowStartMinute !== undefined;
-  const usesCalendarWindow = isDailyWindow || job.expectedBangkokWeekday !== undefined;
+    !job.oneShotAtUtc &&
+    (job.expectedBangkokMinute !== undefined ||
+      job.expectedBangkokWindowStartMinute !== undefined);
+  const usesCalendarWindow = Boolean(job.oneShotAtUtc) || isDailyWindow || job.expectedBangkokWeekday !== undefined;
   const intervalEvidenceTooOld =
     !usesCalendarWindow &&
     lastSeenAt !== null &&
