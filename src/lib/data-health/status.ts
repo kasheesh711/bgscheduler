@@ -108,6 +108,35 @@ function bangkokLocalInstant(year: number, month: number, day: number, minuteOfD
   return new Date(Date.UTC(year, month, day, hour - 7, minute, 0, 0));
 }
 
+function oneShotExpectation(job: CronJobDefinition, now: Date) {
+  const startMinute = job.expectedBangkokWindowStartMinute ?? job.expectedBangkokMinute;
+  const endMinute = job.expectedBangkokWindowEndMinute ?? job.expectedBangkokMinute;
+  const parts = job.expectedBangkokDate?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!parts || startMinute === undefined || endMinute === undefined) {
+    return { lastExpectedAt: null, nextExpectedAt: null, lateAfterAt: null };
+  }
+
+  const year = Number(parts[1]);
+  const month = Number(parts[2]) - 1;
+  const day = Number(parts[3]);
+  const targetStart = bangkokLocalInstant(year, month, day, startMinute);
+  const targetEnd = bangkokLocalInstant(year, month, day, endMinute);
+
+  if (now.getTime() < targetStart.getTime()) {
+    return {
+      lastExpectedAt: null,
+      nextExpectedAt: targetStart,
+      lateAfterAt: null,
+    };
+  }
+
+  return {
+    lastExpectedAt: targetStart,
+    nextExpectedAt: null,
+    lateAfterAt: new Date(targetEnd.getTime() + job.lateAfterMinutes * 60 * 1000),
+  };
+}
+
 function dailyExpectation(job: CronJobDefinition, now: Date) {
   const parts = bangkokParts(now);
   const startMinute = job.expectedBangkokWindowStartMinute ?? job.expectedBangkokMinute;
@@ -166,6 +195,9 @@ function weeklyExpectation(job: CronJobDefinition, now: Date) {
 
 export function expectedWindowForJob(job: CronJobDefinition, now: Date) {
   if (job.manualOnly) return { lastExpectedAt: null, nextExpectedAt: null, lateAfterAt: null };
+  if (job.expectedBangkokDate !== undefined) {
+    return oneShotExpectation(job, now);
+  }
   if (job.expectedBangkokWeekday !== undefined) {
     return weeklyExpectation(job, now);
   }
@@ -312,9 +344,13 @@ export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult 
   }
 
   const isDailyWindow =
-    job.expectedBangkokMinute !== undefined ||
-    job.expectedBangkokWindowStartMinute !== undefined;
-  const usesCalendarWindow = isDailyWindow || job.expectedBangkokWeekday !== undefined;
+    job.expectedBangkokDate === undefined &&
+    (job.expectedBangkokMinute !== undefined ||
+      job.expectedBangkokWindowStartMinute !== undefined);
+  const usesCalendarWindow =
+    isDailyWindow ||
+    job.expectedBangkokWeekday !== undefined ||
+    job.expectedBangkokDate !== undefined;
   const intervalEvidenceTooOld =
     !usesCalendarWindow &&
     lastSeenAt !== null &&

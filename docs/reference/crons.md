@@ -4,7 +4,7 @@
 
 Every scheduled job in BGScheduler is a Vercel Cron entry. Vercel reads `vercel.json` at deploy time, and on each tick it issues an **HTTP `GET`** to the configured `path` with an `Authorization: Bearer $CRON_SECRET` header. There is no in-process scheduler — if a handler is not listed in `vercel.json`, nothing fires it automatically.
 
-After cron auth succeeds, each registered handler records a best-effort `cron_invocations` row. Data Health uses those rows as direct proof that Vercel reached the route; before rows exist for a job, it falls back to the job's durable run table and labels the proof as inferred.
+After cron auth succeeds, each registered handler records a best-effort `cron_invocations` row. Data Health uses those rows as direct proof that Vercel reached the route; before rows exist for a job, it falls back to the job's durable run table and labels the proof as inferred. If a platform timeout or process abort leaves an invocation row stuck in `running`, the cron watchdog marks it `failed` after the job's `maxDuration` plus a 60-second buffer so stale audit rows do not permanently masquerade as live work.
 
 This page is the mechanical reference: schedule, endpoint, auth, timeout, and what each handler does. Feature meaning and data flows live in the corresponding `features/*` docs (linked per cron).
 
@@ -179,13 +179,22 @@ The handler maps a `failed` result status to HTTP 500, otherwise HTTP 200 ([`rou
 
 This cron is a one-shot business event, not a recurring data sync. The Vercel expression is annual syntax, so the route adds a hard guard: it returns HTTP 409 unless the current Bangkok date is exactly `2026-07-01`. The apply service also refuses to run before `2026-07-01 00:05 Asia/Bangkok`.
 
-The handler authenticates with `CRON_SECRET`, then calls `applyVerifiedStudentPromotionRun({ trigger: "cron" })`. Each grade and course action revalidates current Wise state before writing, and per-action drift/errors are persisted without aborting the run. See the Student Promotions feature doc and API reference for the full review/apply flow.
+The handler authenticates with `CRON_SECRET`, records a direct `cron_invocations` row under `student_promotions_july_1`, then calls `applyVerifiedStudentPromotionRun({ trigger: "cron" })`. Each grade and course action revalidates current Wise state before writing, and per-action drift/errors are persisted without aborting the run. Data Health treats this cron as a one-shot `2026-07-01 00:05 Bangkok` window and does not infer health from the Student Promotions run table because that table mixes admin drafts with cron apply runs. See the Student Promotions feature doc and API reference for the full review/apply flow.
 
 ## 12. Cron watchdog — `/api/internal/cron-watchdog`
 
 **Schedule:** `7,37 * * * *`. **Does:** runs a best-effort watchdog sweep over cron invocation health.
 
-Both `GET` and `POST` call the same bearer-only handler. After `CRON_SECRET` auth, the route records the `cron_watchdog` job key and calls `runCronWatchdog(getDb())`, returning `{ ok: true, ...result }` on success or HTTP 500 with the thrown message on failure ([`route.ts:9-36`](../../src/app/api/internal/cron-watchdog/route.ts)).
+Both `GET` and `POST` call the same bearer-only handler. After `CRON_SECRET` auth, the route records the `cron_watchdog` job key and calls `runCronWatchdog(getDb())`, returning `{ ok: true, ...result }` on success or HTTP 500 with the thrown message on failure ([`route.ts:9-36`](../../src/app/api/internal/cron-watchdog/route.ts)). The sweep first marks abandoned `cron_invocations` rows failed, then evaluates health and sends alert/recovery emails.
+
+## Operational replay / backfill runbook
+
+Use this only after a deploy when Data Health reports stuck or missing cron evidence. Do not insert fake success rows, bypass route guards, or change `vercel.json` from an incident response.
+
+1. Trigger `/api/internal/cron-watchdog` once with `CRON_SECRET` to mark stale `cron_invocations` rows abandoned, then verify `/data-health`.
+2. If Credit Control still lacks a fresh success, manually run `/api/internal/sync-credit-control` with approved production access and verify `credit_control_sync_runs`.
+3. Replay Competitor Intelligence only with explicit approval for paid/vendor provider calls; otherwise leave it to the next weekly schedule after audit cleanup.
+4. Replay Student Promotions only when the Bangkok date is still `2026-07-01`, the route's own apply window is open, a verified target run exists, and stakeholders approve Wise writes. Invoke `/api/internal/student-promotions/july-1` with `CRON_SECRET`; do not bypass the date/apply guards.
 
 ---
 

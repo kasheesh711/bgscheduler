@@ -24,6 +24,16 @@ describe("data-health cron registry", () => {
     expect(paths).not.toContain("/api/internal/sync-room-utilization");
   });
 
+  it("models Student Promotions as a one-shot Bangkok date", () => {
+    const job = CRON_JOBS.find((candidate) => candidate.key === "student_promotions_july_1");
+
+    expect(job).toMatchObject({
+      schedule: "5 17 30 6 *",
+      expectedBangkokDate: "2026-07-01",
+      expectedBangkokMinute: 5,
+    });
+  });
+
   it("matches registered route methods to exported route handlers", () => {
     for (const job of CRON_JOBS) {
       const routePath = path.join(process.cwd(), "src", "app", ...job.path.split("/").filter(Boolean), "route.ts");

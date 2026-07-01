@@ -9,6 +9,7 @@ For the **meaning** of each pipeline (what a snapshot is, why syncs fail-closed,
 - **`CRON_SECRET` bearer auth.** The caller must send `Authorization: Bearer $CRON_SECRET`. Comparison is constant-time via `node:crypto.timingSafeEqual`, guarded by a length pre-check to avoid the `RangeError` that `timingSafeEqual` throws on length-mismatched buffers (`src/app/api/internal/sync-wise/route.ts:10`-`28`; shared helper at `src/lib/internal/cron-auth.ts:6`-`17`).
 - **No query params.** The cron `GET` routes do not read query params. Most routes read no body; manual/replay `POST` variants either read no body or use a route-specific confirmation body documented below.
 - **Single-flight guard.** Sync pipelines prevent overlapping runs where a second run could corrupt or duplicate work. The mechanism differs per family (DB row-state check + 20-minute stale recovery for Wise/credit-control; a partial unique index for leave-requests) — see each section.
+- **Cron invocation audit.** After cron auth succeeds, handlers write a best-effort `cron_invocations` row. The cron watchdog marks rows left in `running` past the route `maxDuration` plus 60 seconds as failed/abandoned before it evaluates health.
 - **Missing secret is a server error.** If `process.env.CRON_SECRET` is unset, the route returns `500 {"error":"Server misconfigured"}` rather than `401`, so a misconfiguration is not silently treated as an auth failure (`src/lib/internal/cron-auth.ts:22`-`24`; `src/app/api/internal/sync-wise/route.ts:49`-`50`).
 
 The Vercel cron schedules for these paths (from `vercel.json`) and the route methods they export:
@@ -273,6 +274,12 @@ Both methods call `applyVerifiedStudentPromotionRun({ trigger: "cron" })`. The
 service refuses to apply before `2026-07-01 00:05 Asia/Bangkok`, loads the newest
 verified run, and returns immediately if the run is already `applied` or
 `applied_with_errors`.
+
+After bearer auth succeeds, both methods record direct `cron_invocations`
+evidence under `student_promotions_july_1`. Data Health treats the schedule as a
+single `2026-07-01 00:05 Bangkok` expected window and intentionally does not
+infer health from the Student Promotions run table, because that table mixes
+admin drafts with cron apply runs.
 
 For each pending grade action it re-reads the student's Wise registration field
 before writing. For each pending course action it re-reads the Wise class subject

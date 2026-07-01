@@ -30,6 +30,7 @@ export interface CronJobDefinition {
   dangerous: boolean;
   confirmationLabel: string | null;
   expectedBangkokMinute?: number;
+  expectedBangkokDate?: string;
   expectedBangkokWeekday?: number;
   expectedBangkokWindowStartMinute?: number;
   expectedBangkokWindowEndMinute?: number;
@@ -206,6 +207,7 @@ export const CRON_JOBS = [
     manualOnly: false,
     dangerous: true,
     confirmationLabel: "Applies verified Wise student grade and course promotion writes.",
+    expectedBangkokDate: "2026-07-01",
     expectedBangkokMinute: 5,
     routeMethod: "GET",
   },

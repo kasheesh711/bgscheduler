@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { todayBangkok } from "@/lib/room-capacity/dates";
 import { applyVerifiedStudentPromotionRun } from "@/lib/student-promotions/data";
 import { studentPromotionErrorResponse } from "@/lib/student-promotions/api";
@@ -24,23 +25,29 @@ export async function GET(request: NextRequest) {
   if (secretStatus !== "valid") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  if (todayBangkok() !== STUDENT_PROMOTION_TARGET_DATE) {
-    return NextResponse.json({
-      error: "Student promotion cron is only allowed on July 1, 2026 Bangkok time",
-    }, { status: 409 });
-  }
 
-  try {
-    return NextResponse.json({
-      detail: await applyVerifiedStudentPromotionRun({ trigger: "cron" }),
-    });
-  } catch (error) {
-    return studentPromotionErrorResponse(
-      "/api/internal/student-promotions/july-1",
-      error,
-      "Student promotion cron failed",
-    );
-  }
+  return withCronInvocationAudit(
+    { jobKey: "student_promotions_july_1", triggerSource: "cron", requestMethod: request.method },
+    async () => {
+      if (todayBangkok() !== STUDENT_PROMOTION_TARGET_DATE) {
+        return NextResponse.json({
+          error: "Student promotion cron is only allowed on July 1, 2026 Bangkok time",
+        }, { status: 409 });
+      }
+
+      try {
+        return NextResponse.json({
+          detail: await applyVerifiedStudentPromotionRun({ trigger: "cron" }),
+        });
+      } catch (error) {
+        return studentPromotionErrorResponse(
+          "/api/internal/student-promotions/july-1",
+          error,
+          "Student promotion cron failed",
+        );
+      }
+    },
+  );
 }
 
 export async function POST(request: NextRequest) {
