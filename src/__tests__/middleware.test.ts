@@ -42,6 +42,12 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     expect(res.headers.get("location")).toBeNull();
   });
 
+  it("/api/classrooms/floor-plan-map bypasses auth as a public email-safe asset", async () => {
+    const res = await middleware(makeReq("/api/classrooms/floor-plan-map") as never, {} as never) as Response;
+
+    expect(res.headers.get("location")).toBeNull();
+  });
+
   it("/api/line/webhook bypasses middleware so LINE can post signed webhook events", async () => {
     const res = await middleware(makeReq("/api/line/webhook") as never, {} as never) as Response;
 
@@ -79,6 +85,16 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
   it("/api/line/contacts/oa-resolver/runs/:runId/commit still requires app auth", async () => {
     const res = await middleware(
       makeReq("/api/line/contacts/oa-resolver/runs/11111111-1111-1111-1111-111111111111/commit", false) as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/login");
+  });
+
+  it("does not let the OA resolver rows public regex match nested paths", async () => {
+    const res = await middleware(
+      makeReq("/api/line/contacts/oa-resolver/runs/11111111-1111-1111-1111-111111111111/rows/audit", false) as never,
       {} as never,
     ) as Response;
 
