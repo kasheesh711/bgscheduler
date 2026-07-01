@@ -1,16 +1,16 @@
 # API Reference — Master Index
 
-The canonical lookup of every HTTP endpoint in BGScheduler. This page lists **method + path + group + auth + one-line purpose** only. For full request/response schemas, query parameters, and error shapes, follow the link on each group heading to the per-group detail page.
+The canonical lookup of every HTTP endpoint in BGScheduler. This page lists **method + path + group + auth + one-line purpose** only. For full request/response schemas, query parameters, and error shapes, follow the link on each group heading where one exists.
 
-All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **122**.
+All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint rows: **158** (**159** HTTP method handlers; the Auth.js catch-all `GET, POST` row is listed once).
 
 ## How to read this index
 
 **Auth column** — three tiers, all verified against `src/middleware.ts` plus each route handler:
 
-- **public** — reachable without an authenticated session. `src/middleware.ts:4-15` allowlists `/api/auth/*`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/api/line/contacts/oa-resolver/worklist`, and `/api/line/contacts/oa-resolver/runs/{runId}/rows`. The non-`/api/auth` public routes enforce their own checks in-handler (LINE signature header or a bearer token), not an admin session.
-- **admin** — requires an authenticated Auth.js session. The middleware redirects unauthenticated requests to `/login` (`src/middleware.ts:25-29`); handlers additionally call `auth()` (or `requireCreditControlSession()` for credit-control) and return `401` when no session is present.
-- **cron** — `CRON_SECRET`-protected. `src/middleware.ts:13` lets `/api/internal/*` bypass the session gate; each handler then enforces a constant-time `Bearer ${CRON_SECRET}` check (`src/lib/internal/cron-auth.ts:6-26`, or an inline copy). Four internal routes additionally accept an admin session as a fallback when the cron secret is absent — see the **cron (or admin)** notes below.
+- **public** — reachable without an authenticated session and intentionally usable without an Auth.js session. `src/middleware.ts:4-15` allowlists `/api/auth/*`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/api/line/contacts/oa-resolver/worklist`, and `/api/line/contacts/oa-resolver/runs/{runId}/rows`. The non-`/api/auth` public routes are either deliberate unauthenticated static-asset behavior (`floor-plan-map`) or self-authenticate in-handler (LINE signature header or resolver bearer token).
+- **admin** — requires an authenticated Auth.js session. The middleware redirects unauthenticated requests to `/login` (`src/middleware.ts:25-29`); handlers additionally call `auth()` or a feature-specific session helper and return `401` when no session is present. Rows marked **admin (middleware-public)** bypass the middleware redirect only so the handler can return a JSON `401`.
+- **cron** — `CRON_SECRET`-protected. `src/middleware.ts:13` lets `/api/internal/*` bypass the session gate; each handler then enforces a constant-time `Bearer ${CRON_SECRET}` check (`src/lib/internal/cron-auth.ts:6-26`, or an inline copy). Some internal `POST` routes additionally accept an admin session as a fallback when the cron secret is absent — see the **cron (or admin)** notes below.
 
 > **Canonical-home rule:** this page owns only the mechanical endpoint inventory. Meaning, business rules, and flows live in the relevant `docs/features/*` pages; full per-endpoint signatures live in the linked per-group detail pages.
 
@@ -74,6 +74,22 @@ Side-by-side tutor comparison and candidate discovery.
 | POST | `/api/compare` | compare | admin | Compare 1-3 tutors for a week: schedules, conflicts, shared free slots |
 | POST | `/api/compare/discover` | compare | admin | Find candidate tutors with pre-computed conflict status |
 
+## Competitor Intelligence — `/api/competitor-intelligence`
+
+Competitor research command center, own-brand source management, evidence capture, and sync trigger.
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/competitor-intelligence` | competitor-intelligence | admin | Load the competitor-intelligence payload |
+| POST | `/api/competitor-intelligence/sync` | competitor-intelligence | admin | Manually trigger a competitor-intelligence sync |
+| POST | `/api/competitor-intelligence/manual-evidence` | competitor-intelligence | admin | Create manually captured competitor evidence |
+| GET | `/api/competitor-intelligence/own-sources` | competitor-intelligence | admin | List own-brand comparison sources |
+| POST | `/api/competitor-intelligence/own-sources` | competitor-intelligence | admin | Create or update an own-brand source |
+| PATCH | `/api/competitor-intelligence/own-sources/[sourceId]` | competitor-intelligence | admin | Update or disable an own-brand source |
+| PATCH | `/api/competitor-intelligence/sources/[sourceId]` | competitor-intelligence | admin | Update a competitor source status |
+| POST | `/api/competitor-intelligence/task-suggestions/[suggestionId]/accept` | competitor-intelligence | admin | Accept a suggested competitor-intelligence task |
+| PATCH | `/api/competitor-intelligence/tasks/[taskId]` | competitor-intelligence | admin | Update a competitor-intelligence task |
+
 ## [Credit Control](./credit-control.md) — `/api/credit-control`
 
 Student credit/payment tracking: payload load, per-student and bulk actions, action history, admin ownership, inactive flagging, and a manual sync trigger. All routes gate on `requireCreditControlSession()`.
@@ -106,6 +122,14 @@ Dropdown population for the search form.
 |---|---|---|---|---|
 | GET | `/api/filters` | filters | admin | Distinct subjects/curriculums/levels from the active snapshot |
 
+## Home Summary — `/api/home`
+
+Restricted-user landing summary.
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/home/summary` | home | admin | Load a session-scoped home summary for restricted users |
+
 ## [Internal / Cron](./internal-crons.md) — `/api/internal`
 
 Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/internal/cron-auth.ts`); bypass the session gate via `src/middleware.ts:13`. Routes tagged **cron (or admin)** also run if an authenticated admin session is present and the cron secret check did not pass.
@@ -115,8 +139,12 @@ Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/inter
 | GET | `/api/internal/sync-wise` | internal | cron (or admin on POST) | Run the full Wise snapshot sync (Vercel cron via GET) |
 | POST | `/api/internal/sync-wise` | internal | cron (or admin) | Manual full Wise snapshot sync (session or `curl`) |
 | GET | `/api/internal/sync-wise-activity` | internal | cron | Sync newest Wise activity audit events |
+| GET | `/api/internal/sync-competitor-intelligence` | internal | cron (or admin on POST) | Cron-trigger competitor-intelligence sync |
+| POST | `/api/internal/sync-competitor-intelligence` | internal | cron (or admin) | Manual competitor-intelligence sync (session or `curl`) |
 | GET | `/api/internal/sync-credit-control` | internal | cron (or admin on POST) | Cron-trigger a credit-control sync |
 | POST | `/api/internal/sync-credit-control` | internal | cron (or admin) | Manual credit-control sync (session or `curl`) |
+| GET | `/api/internal/sync-progress-tests` | internal | cron (or admin on POST) | Cron-trigger a progress-tests sync |
+| POST | `/api/internal/sync-progress-tests` | internal | cron (or admin) | Manual progress-tests sync (session or `curl`) |
 | GET | `/api/internal/sync-sales-dashboard` | internal | cron (or admin on POST) | Cron-trigger a sales-dashboard import |
 | POST | `/api/internal/sync-sales-dashboard` | internal | cron (or admin) | Manual sales-dashboard import (session or `curl`) |
 | GET | `/api/internal/sync-leave-requests` | internal | cron | Cron-trigger a leave-requests sync |
@@ -124,8 +152,12 @@ Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/inter
 | POST | `/api/internal/sync-room-utilization` | internal | cron (or admin) | Sync room-utilization sessions (session or `curl`) |
 | GET | `/api/internal/class-assignments/admin-email` | internal | cron | Send the daily admin classroom-schedule email |
 | GET | `/api/internal/class-assignments/morning` | internal | cron | Run the morning classroom-assignment automation |
+| GET | `/api/internal/progress-tests/admin-digest` | internal | cron | Send the daily progress-tests admin digest |
 | GET | `/api/internal/student-promotions/july-1` | internal | cron | Apply the verified July 1, 2026 student-promotion run |
 | POST | `/api/internal/student-promotions/july-1` | internal | cron | Cron-secret replay alias for the July 1 student-promotion apply |
+| GET | `/api/internal/cron-watchdog` | internal | cron | Sweep cron invocation health and mark stale cron state |
+| POST | `/api/internal/cron-watchdog` | internal | cron | Manual cron-watchdog replay with `CRON_SECRET` |
+| GET | `/api/internal/line-backlog-recovery` | internal | cron | Run LINE backlog recovery with `CRON_SECRET` |
 
 > **Admin-only sync (not cron):** `POST /api/admin/sync-wise` triggers the same Wise sync but is gated by an admin session via `auth()` (no `CRON_SECRET`) — see the [Admin](./misc.md) group.
 
@@ -177,10 +209,13 @@ LINE OA integration: inbound webhook, contact resolution & alias import, student
 | POST | `/api/line/contacts/alias-import/preview` | line | admin | Preview a contact alias import |
 | POST | `/api/line/contacts/alias-import/commit` | line | admin | Commit a contact alias import |
 | POST | `/api/line/contacts/refresh-profiles` | line | admin | Refresh all LINE contact profiles from LINE |
+| POST | `/api/line/contacts/followers-reanchor` | line | admin | Re-anchor LINE followers and run backlog recovery |
+| OPTIONS | `/api/line/contacts/oa-resolver/worklist` | line | public | CORS preflight for the resolver worklist extension route |
 | GET | `/api/line/contacts/oa-resolver/worklist` | line | public | OA-resolver worklist (bearer-token gated in-handler) |
 | GET | `/api/line/contacts/oa-resolver/runs` | line | admin | List OA-resolver runs |
 | POST | `/api/line/contacts/oa-resolver/runs` | line | admin | Start a new OA-resolver run |
 | GET | `/api/line/contacts/oa-resolver/runs/[runId]` | line | admin | Fetch a single OA-resolver run |
+| OPTIONS | `/api/line/contacts/oa-resolver/runs/[runId]/rows` | line | public | CORS preflight for resolver row submission |
 | POST | `/api/line/contacts/oa-resolver/runs/[runId]/rows` | line | public | Submit resolver rows (bearer-token gated in-handler) |
 | POST | `/api/line/contacts/oa-resolver/runs/[runId]/commit` | line | admin | Commit an OA-resolver run's results |
 
@@ -195,6 +230,19 @@ Tutor payroll: payload load, Wise-driven sync, review edits, and manual adjustme
 | PATCH | `/api/payroll/review` | payroll | admin | Update a payroll review entry |
 | POST | `/api/payroll/adjustments` | payroll | admin | Add a manual payroll adjustment |
 | DELETE | `/api/payroll/adjustments/[adjustmentId]` | payroll | admin | Delete a manual payroll adjustment |
+
+## Progress Tests — `/api/progress-tests`
+
+Progress-test operations for teacher/admin test planning and status updates.
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/progress-tests` | progress-tests | admin | Load progress-test payload, scoped by session role/access |
+| POST | `/api/progress-tests/book` | progress-tests | admin | Book a progress test |
+| POST | `/api/progress-tests/mark-at-home-submitted` | progress-tests | admin | Mark an at-home progress test as submitted |
+| POST | `/api/progress-tests/mark-complete` | progress-tests | admin | Mark a progress test complete |
+| POST | `/api/progress-tests/resend-email` | progress-tests | admin | Resend the progress-test teacher email |
+| POST | `/api/progress-tests/select-at-home` | progress-tests | admin | Select the at-home progress-test path |
 
 ## [Proposals](./proposals.md) — `/api/proposals`
 
@@ -244,7 +292,7 @@ Tutor availability search: range search, legacy slot search, and the public natu
 |---|---|---|---|---|
 | POST | `/api/search/range` | search | admin | Range search: time window + duration → availability grid |
 | POST | `/api/search` | search | admin | Legacy slot-based availability search |
-| POST | `/api/search/assistant` | search | public | Natural-language search assistant (public per middleware) |
+| POST | `/api/search/assistant` | search | admin (middleware-public) | Natural-language search assistant; handler returns JSON `401` instead of a login redirect |
 
 ## [Student Promotions](./student-promotions.md) — `/api/student-promotions`
 
@@ -281,6 +329,18 @@ Tutor combobox data source.
 |---|---|---|---|---|
 | GET | `/api/tutors` | tutors | admin | All tutor names/IDs/modes/subjects from the active snapshot |
 
+## US Universities — `/api/us-universities`
+
+Read-only admissions research console APIs.
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/us-universities` | us-universities | admin | Load university overview metrics |
+| GET | `/api/us-universities/search` | us-universities | admin | Search/filter university institutions |
+| GET | `/api/us-universities/compare` | us-universities | admin | Compare selected universities |
+| GET | `/api/us-universities/export` | us-universities | admin | Export filtered university rows as CSV |
+| GET | `/api/us-universities/institutions/[unitId]` | us-universities | admin | Load a single university profile |
+
 ## [Wise Activity](./wise-activity.md) — `/api/wise-activity`
 
 Wise audit-event workspace: paginated events, summary KPIs, manual backfill sync, and package-sales reconciliation.
@@ -295,4 +355,4 @@ Wise audit-event workspace: paginated events, summary KPIs, manual backfill sync
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD on 2026-07-01._
