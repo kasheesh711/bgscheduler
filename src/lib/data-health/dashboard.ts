@@ -229,11 +229,10 @@ function pickJobRuns(
   }
 
   if (job.key === "student_promotions_july_1") {
-    // The july-1 route is not audit-wrapped and its run table mixes admin
-    // drafts with the cron apply, so there is no trustworthy run evidence.
-    // Fail closed: no evidence -> "unknown" (alertable) instead of borrowing
-    // the room-utilization fallback, which would report this dangerous
-    // write-path cron as healthy without it ever firing.
+    // The run table mixes admin drafts with the cron apply, so this
+    // dangerous write-path cron must use direct cron_invocations proof only.
+    // Fail closed: no direct evidence -> "unknown" (alertable) instead of
+    // borrowing another table's health proof.
     return {
       latestRun: null,
       latestSuccessfulRun: null,

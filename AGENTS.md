@@ -18,7 +18,7 @@ The application is built, tested, deployed, and live at https://bgscheduler.verc
 - Next.js 16 App Router + TypeScript + Tailwind + shadcn/ui (`@base-ui/react` primitives)
 - Auth.js (NextAuth v5 beta) with Google provider + `admin_users` allowlist enforced in `src/middleware.ts`
 - Drizzle ORM + Neon Postgres (ap-southeast-1), Neon serverless HTTP driver
-- Vercel hosting with seven Vercel Cron entries (`vercel.json`) — five staggered `sync-*` jobs at 5-minute offsets plus two daily classroom-email/automation jobs — each guarded by `CRON_SECRET` and single-flight `running`-row guards. See [`docs/reference/crons.md`](docs/reference/crons.md).
+- Vercel hosting with twelve Vercel Cron entries (`vercel.json`) — six staggered high-frequency sync jobs at 5-minute offsets, one weekly competitor-intelligence sync, two progress-test jobs, two daily classroom-email/automation jobs, one Student Promotions one-shot, and a cron watchdog — each guarded by `CRON_SECRET`; sync pipelines use single-flight guards where overlapping writes would be unsafe. See [`docs/reference/crons.md`](docs/reference/crons.md).
 - In-memory `SearchIndex` singleton loaded from the active Postgres snapshot; stale-detected and rebuilt on snapshot change
 - Vitest unit/integration suite (see [Tests](#tests))
 

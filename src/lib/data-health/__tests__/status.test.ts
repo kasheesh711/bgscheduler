@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getCronJobDefinition } from "../cron-registry";
-import { evaluateCronJobStatus, type RunEvidence } from "../status";
+import { evaluateCronJobStatus, type InvocationEvidence, type RunEvidence } from "../status";
 
 function job(key: string) {
   const value = getCronJobDefinition(key);
@@ -13,6 +13,17 @@ function run(overrides: Partial<RunEvidence> = {}): RunEvidence {
     status: overrides.status ?? "success",
     startedAt: overrides.startedAt ?? new Date("2026-06-01T01:00:00.000Z"),
     finishedAt: overrides.finishedAt ?? new Date("2026-06-01T01:04:00.000Z"),
+    errorSummary: overrides.errorSummary ?? null,
+  };
+}
+
+function invocation(overrides: Partial<InvocationEvidence> = {}): InvocationEvidence {
+  return {
+    outcome: overrides.outcome ?? "success",
+    receivedAt: overrides.receivedAt ?? new Date("2026-06-30T17:05:00.000Z"),
+    finishedAt: overrides.finishedAt ?? new Date("2026-06-30T17:06:00.000Z"),
+    durationMs: overrides.durationMs ?? 60_000,
+    responseStatus: overrides.responseStatus ?? 200,
     errorSummary: overrides.errorSummary ?? null,
   };
 }
@@ -161,5 +172,60 @@ describe("cron status evaluation", () => {
     });
 
     expect(result.status).toBe("healthy");
+  });
+
+  it("evaluates Student Promotions as one one-shot Bangkok window before target time", () => {
+    const result = evaluateCronJobStatus({
+      job: job("student_promotions_july_1"),
+      now: new Date("2026-06-30T16:59:00.000Z"),
+      latestInvocation: null,
+      latestCronInvocation: null,
+      latestRun: null,
+      latestSuccessfulRun: null,
+      latestFailedRun: null,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("unknown");
+    expect(result.lastExpectedAt).toBeNull();
+    expect(result.nextExpectedAt?.toISOString()).toBe("2026-06-30T17:05:00.000Z");
+    expect(result.lateAfterAt).toBeNull();
+  });
+
+  it("keeps Student Promotions on the July 1 one-shot window after target time", () => {
+    const result = evaluateCronJobStatus({
+      job: job("student_promotions_july_1"),
+      now: new Date("2026-07-01T18:00:00.000Z"),
+      latestInvocation: null,
+      latestCronInvocation: null,
+      latestRun: null,
+      latestSuccessfulRun: null,
+      latestFailedRun: null,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("unknown");
+    expect(result.lastExpectedAt?.toISOString()).toBe("2026-06-30T17:05:00.000Z");
+    expect(result.nextExpectedAt).toBeNull();
+    expect(result.lateAfterAt?.toISOString()).toBe("2026-07-01T17:05:00.000Z");
+  });
+
+  it("does not mark Student Promotions late on later days after the one-shot succeeded", () => {
+    const direct = invocation();
+    const result = evaluateCronJobStatus({
+      job: job("student_promotions_july_1"),
+      now: new Date("2026-07-03T00:00:00.000Z"),
+      latestInvocation: direct,
+      latestCronInvocation: direct,
+      latestRun: null,
+      latestSuccessfulRun: null,
+      latestFailedRun: null,
+      runningRun: null,
+    });
+
+    expect(result.status).toBe("healthy");
+    expect(result.proof).toBe("direct");
+    expect(result.lastExpectedAt?.toISOString()).toBe("2026-06-30T17:05:00.000Z");
+    expect(result.nextExpectedAt).toBeNull();
   });
 });

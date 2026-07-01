@@ -23,6 +23,7 @@ import {
   createAppsScriptScheduleEmailSender,
   type ScheduleEmailSender,
 } from "@/lib/classrooms/schedule-email";
+import { markAbandonedCronInvocations } from "@/lib/data-health/cron-audit";
 import { getCronJobsHealth } from "@/lib/data-health/dashboard";
 import type { CronJobHealth, CronJobStatus } from "@/lib/data-health/types";
 import { APP_BASE_URL } from "@/lib/leave-requests/config";
@@ -58,6 +59,7 @@ export interface CronWatchdogSummary {
   alertsSent: number;
   recoveries: number;
   emailRecipients: number;
+  abandonedInvocationsMarked: number;
   skippedReason: string | null;
 }
 
@@ -65,6 +67,7 @@ export interface RunCronWatchdogOptions {
   now?: Date;
   sender?: ScheduleEmailSender;
   loadJobs?: (now: Date) => Promise<CronJobHealth[]>;
+  markAbandonedInvocations?: (db: Database, now: Date) => Promise<number>;
 }
 
 /** `failing` covers failed and stuck-running jobs; `unknown` covers never-ran. */
@@ -296,6 +299,7 @@ export async function runCronWatchdog(
   options: RunCronWatchdogOptions = {},
 ): Promise<CronWatchdogSummary> {
   const now = options.now ?? new Date();
+  const abandonedInvocationsMarked = await (options.markAbandonedInvocations ?? markAbandonedCronInvocations)(db, now);
   const jobs = await (options.loadJobs ?? getCronJobsHealth)(now);
 
   let lockClaimed: boolean;
@@ -313,6 +317,7 @@ export async function runCronWatchdog(
       alertsSent: 0,
       recoveries: 0,
       emailRecipients: 0,
+      abandonedInvocationsMarked,
       skippedReason: "cron_alert_state table unavailable",
     };
   }
@@ -325,12 +330,13 @@ export async function runCronWatchdog(
       alertsSent: 0,
       recoveries: 0,
       emailRecipients: 0,
+      abandonedInvocationsMarked,
       skippedReason: "another sweep is in flight",
     };
   }
 
   try {
-    return await runLockedSweep(db, now, jobs, options);
+    return await runLockedSweep(db, now, jobs, abandonedInvocationsMarked, options);
   } finally {
     await releaseSweepLock(db, now);
   }
@@ -340,6 +346,7 @@ async function runLockedSweep(
   db: Database,
   now: Date,
   jobs: CronJobHealth[],
+  abandonedInvocationsMarked: number,
   options: RunCronWatchdogOptions,
 ): Promise<CronWatchdogSummary> {
   const allStates = await db.select().from(schema.cronAlertState);
@@ -349,13 +356,13 @@ async function runLockedSweep(
   const base = { checked: sweep.checked.length, unhealthy: sweep.unhealthy.length };
 
   if (sweep.newAlerts.length === 0 && sweep.recoveries.length === 0) {
-    return { ...base, alertsSent: 0, recoveries: 0, emailRecipients: 0, skippedReason: null };
+    return { ...base, alertsSent: 0, recoveries: 0, emailRecipients: 0, abandonedInvocationsMarked, skippedReason: null };
   }
 
   const recipients = await loadAdminEmails(db);
   if (recipients.length === 0) {
     console.error("Cron watchdog found no admin recipients; episode state left unmarked for retry.");
-    return { ...base, alertsSent: 0, recoveries: 0, emailRecipients: 0, skippedReason: "no admin recipients" };
+    return { ...base, alertsSent: 0, recoveries: 0, emailRecipients: 0, abandonedInvocationsMarked, skippedReason: "no admin recipients" };
   }
 
   const content = buildWatchdogEmail({
@@ -382,7 +389,7 @@ async function runLockedSweep(
 
   if (sentCount === 0) {
     console.error("Cron watchdog could not deliver to any recipient; episode state left unmarked for retry.");
-    return { ...base, alertsSent: 0, recoveries: 0, emailRecipients: 0, skippedReason: "email delivery failed" };
+    return { ...base, alertsSent: 0, recoveries: 0, emailRecipients: 0, abandonedInvocationsMarked, skippedReason: "email delivery failed" };
   }
   if (sentCount < recipients.length) {
     // Partial delivery still closes out the episode below — see the
@@ -424,6 +431,7 @@ async function runLockedSweep(
     alertsSent: sweep.newAlerts.length,
     recoveries: sweep.recoveries.length,
     emailRecipients: sentCount,
+    abandonedInvocationsMarked,
     skippedReason: null,
   };
 }

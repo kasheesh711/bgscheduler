@@ -168,6 +168,7 @@ function makeFakeDb(state: FakeDbState): Database {
         set(values: Record<string, unknown>) {
           return {
             where() {
+              const result = Promise.resolve([]);
               if (table === schema.cronAlertState) {
                 if (values.lastStatus === "released") {
                   state.lockReleases.push(values);
@@ -175,7 +176,14 @@ function makeFakeDb(state: FakeDbState): Database {
                   state.updates.push(values);
                 }
               }
-              return Promise.resolve([]);
+              return {
+                returning() {
+                  return result;
+                },
+                then(resolve: (value: unknown[]) => unknown, reject: (reason: unknown) => unknown) {
+                  return result.then(resolve, reject);
+                },
+              };
             },
           };
         },
@@ -343,6 +351,30 @@ describe("buildWatchdogEmail", () => {
 // ── runCronWatchdog ───────────────────────────────────────────────────────
 
 describe("runCronWatchdog", () => {
+  it("marks abandoned cron invocations before loading health", async () => {
+    const state = freshState();
+    const order: string[] = [];
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: NOW,
+      sender: makeSender(),
+      markAbandonedInvocations: async () => {
+        order.push("cleanup");
+        return 2;
+      },
+      loadJobs: async () => {
+        order.push("health");
+        return [jobHealth({ key: "wise_snapshot", status: "healthy" })];
+      },
+    });
+
+    expect(order).toEqual(["cleanup", "health"]);
+    expect(result).toMatchObject({
+      checked: 1,
+      unhealthy: 0,
+      abandonedInvocationsMarked: 2,
+    });
+  });
+
   it("alerts once for a newly failing job and records the episode", async () => {
     const state = freshState();
     const sender = makeSender();

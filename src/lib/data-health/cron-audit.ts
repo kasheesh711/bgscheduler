@@ -1,8 +1,12 @@
-import { eq } from "drizzle-orm";
-import { getDb } from "@/lib/db";
+import { and, eq, lt, sql } from "drizzle-orm";
+import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { getCronJobDefinition, type CronJobKey } from "./cron-registry";
+import { CRON_JOBS, getCronJobDefinition, type CronJobKey } from "./cron-registry";
 import type { CronInvocationOutcome, CronTriggerSource } from "./types";
+
+export const ABANDONED_INVOCATION_BUFFER_MS = 60 * 1000;
+export const ABANDONED_CRON_INVOCATION_ERROR =
+  "Cron invocation marked failed because it exceeded maxDuration and the platform did not return a response.";
 
 interface AuditInput {
   jobKey: CronJobKey;
@@ -139,6 +143,69 @@ async function finishInvocation(
   } catch (error) {
     console.error("Failed to record cron invocation finish", error);
   }
+}
+
+function isMissingCronInvocationsTable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause = typeof error === "object" && error && "cause" in error
+    ? (error as { cause?: unknown }).cause
+    : undefined;
+  const causeMessage = cause instanceof Error ? cause.message : String(cause ?? "");
+  const causeCode = typeof cause === "object" && cause && "code" in cause
+    ? String((cause as { code?: unknown }).code)
+    : "";
+  return (
+    message.includes("cron_invocations") ||
+    causeMessage.includes("cron_invocations")
+  ) && (
+    message.includes("does not exist") ||
+    causeMessage.includes("does not exist") ||
+    message.includes("relation") ||
+    causeCode === "42P01"
+  );
+}
+
+export async function markAbandonedCronInvocations(
+  db: Database = getDb(),
+  now = new Date(),
+): Promise<number> {
+  let marked = 0;
+
+  try {
+    for (const job of CRON_JOBS) {
+      const abandonedAfterMs = job.maxDurationSeconds * 1000 + ABANDONED_INVOCATION_BUFFER_MS;
+      const cutoff = new Date(now.getTime() - abandonedAfterMs);
+      const rows = await db
+        .update(schema.cronInvocations)
+        .set({
+          finishedAt: sql<Date>`${schema.cronInvocations.receivedAt} + (${abandonedAfterMs} * interval '1 millisecond')`,
+          durationMs: abandonedAfterMs,
+          outcome: "failed",
+          errorSummary: `${ABANDONED_CRON_INVOCATION_ERROR} Threshold: ${job.maxDurationSeconds}s maxDuration + 60s buffer.`,
+          metadata: sql`${schema.cronInvocations.metadata} || ${JSON.stringify({
+            abandoned: true,
+            abandonedAt: now.toISOString(),
+            abandonedBy: "cron_watchdog",
+            abandonedReason: "maxDuration_exceeded",
+          })}::jsonb`,
+        })
+        .where(and(
+          eq(schema.cronInvocations.jobKey, job.key),
+          eq(schema.cronInvocations.outcome, "running"),
+          lt(schema.cronInvocations.receivedAt, cutoff),
+        ))
+        .returning({ id: schema.cronInvocations.id });
+      marked += rows.length;
+    }
+  } catch (error) {
+    if (isMissingCronInvocationsTable(error)) {
+      console.info("cron_invocations table is unavailable; abandoned invocation cleanup skipped.");
+      return marked;
+    }
+    throw error;
+  }
+
+  return marked;
 }
 
 export async function withCronInvocationAudit(

@@ -14,8 +14,12 @@ vi.mock("@/lib/student-promotions/data", () => ({
   updateStudentPromotionGraduationDisposition: vi.fn(),
   verifyStudentPromotionRun: vi.fn(),
 }));
+vi.mock("@/lib/data-health/cron-audit", () => ({
+  withCronInvocationAudit: vi.fn((_input, handler: () => Promise<Response>) => handler()),
+}));
 
 import { auth } from "@/lib/auth";
+import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import {
   applyStudentPromotionFutureSessionActions,
   applyVerifiedStudentPromotionRun,
@@ -71,6 +75,7 @@ describe("student promotion routes", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     authMock.mockResolvedValue({ user: { email: "admin@example.com", name: "Admin" } });
+    vi.mocked(withCronInvocationAudit).mockImplementation((_input, handler) => handler());
     vi.mocked(getLatestStudentPromotionRunDetail).mockResolvedValue(detail as never);
     vi.mocked(getStudentPromotionRunDetail).mockResolvedValue(detail as never);
     vi.mocked(createStudentPromotionDryRun).mockResolvedValue(detail as never);
@@ -240,6 +245,7 @@ describe("student promotion routes", () => {
     const res = await cronApply(request("http://test.local/api/internal/student-promotions/july-1"));
 
     expect(res.status).toBe(401);
+    expect(withCronInvocationAudit).not.toHaveBeenCalled();
   });
 
   it("runs cron apply with a valid bearer secret", async () => {
@@ -253,6 +259,14 @@ describe("student promotion routes", () => {
     ));
 
     expect(res.status).toBe(200);
+    expect(withCronInvocationAudit).toHaveBeenCalledWith(
+      {
+        jobKey: "student_promotions_july_1",
+        triggerSource: "cron",
+        requestMethod: "GET",
+      },
+      expect.any(Function),
+    );
     expect(applyVerifiedStudentPromotionRun).toHaveBeenCalledWith({ trigger: "cron" });
   });
 
@@ -267,6 +281,14 @@ describe("student promotion routes", () => {
     ));
 
     expect(res.status).toBe(409);
+    expect(withCronInvocationAudit).toHaveBeenCalledWith(
+      {
+        jobKey: "student_promotions_july_1",
+        triggerSource: "cron",
+        requestMethod: "GET",
+      },
+      expect.any(Function),
+    );
     expect(applyVerifiedStudentPromotionRun).not.toHaveBeenCalled();
   });
 });
