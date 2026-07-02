@@ -1,6 +1,6 @@
 # Database Enums Reference
 
-Postgres enum types defined as Drizzle `pgEnum` declarations in `src/lib/db/schema.ts` (lines 19–161). Each enum maps to a native Postgres `CREATE TYPE ... AS ENUM` type whose name is the first `pgEnum()` argument; the exported TypeScript constant (the `varName`) wraps it for column definitions.
+Postgres enum types defined as Drizzle `pgEnum` declarations in `src/lib/db/schema.ts` (lines 19–229). Each enum maps to a native Postgres `CREATE TYPE ... AS ENUM` type whose name is the first `pgEnum()` argument; the exported TypeScript constant (the `varName`) wraps it for column definitions.
 
 This page is the canonical home for the mechanical detail of every enum: its allowed values, default, and the table/column(s) that reference it. Meaning, rules, and workflow semantics live in the corresponding feature docs.
 
@@ -271,4 +271,81 @@ Tracks the outcome of writing an approved leave request back to its Google Sheet
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+## `progress_test_status`
+
+- **Variable**: `progressTestStatusEnum`
+- **Definition**: `src/lib/db/schema.ts:179`
+- **Values**: `accumulating`, `approaching`, `due`, `scheduled`, `completed`
+- **Used by**:
+  - `progress_test_cycle_state.status` — default `accumulating`
+
+Tracks a student's current progress-test cycle state.
+
+---
+
+## `progress_test_booking_status`
+
+- **Variable**: `progressTestBookingStatusEnum`
+- **Definition**: `src/lib/db/schema.ts:187`
+- **Values**: `recorded`, `dry_run`, `wise_created`, `manual_required`, `manual_confirmed`, `failed`
+- **Used by**:
+  - `progress_test_bookings.status` — default `recorded`
+
+Tracks whether a progress-test booking stayed local/manual or created a Wise session behind the gated write path.
+
+---
+
+## `competitor_sync_trigger`
+
+- **Variable**: `competitorSyncTriggerEnum`
+- **Definition**: `src/lib/db/schema.ts:196`
+- **Values**: `cron`, `manual`, `backfill`
+- **Used by**:
+  - `competitor_sync_runs.trigger_type`
+
+---
+
+## `competitor_entity_kind`
+
+- **Variable**: `competitorEntityKindEnum`
+- **Definition**: `src/lib/db/schema.ts:202`
+- **Values**: `competitor`, `own_brand`
+- **Used by**:
+  - `competitor_entities.kind`
+
+---
+
+## `competitor_source_type`
+
+- **Variable**: `competitorSourceTypeEnum`
+- **Definition**: `src/lib/db/schema.ts:207`
+- **Values**: `website`, `sitemap`, `instagram`, `facebook`, `serp`, `manual`
+- **Used by**:
+  - `competitor_sources.source_type`
+  - `competitor_source_runs.source_type`
+  - `competitor_vendor_usage.source_type`
+
+---
+
+## `competitor_source_status`
+
+- **Variable**: `competitorSourceStatusEnum`
+- **Definition**: `src/lib/db/schema.ts:216`
+- **Values**: `active`, `disabled`, `needs_review`, `archived`
+- **Used by**:
+  - `competitor_sources.status` — default `active`
+  - `competitor_serp_keywords.status` — default `active`
+
+---
+
+## `competitor_task_status`
+
+- **Variable**: `competitorTaskStatusEnum`
+- **Definition**: `src/lib/db/schema.ts:223`
+- **Values**: `todo`, `in_progress`, `blocked`, `done`, `ignored`
+- **Used by**:
+  - `competitor_tasks.status` — default `todo`
+
+---
+
+_Verified against HEAD on 2026-07-02._

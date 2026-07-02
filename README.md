@@ -18,8 +18,8 @@ layer; the handbook owns the depth.
 |---|---|
 | [`docs/handbook/`](docs/handbook/architecture.md) | System architecture, data flow, conventions, glossary, and the Next.js-16 gotchas |
 | [`docs/features/`](docs/features/) | One doc per feature — purpose, rules, and flows (the *why* and *what*) |
-| [`docs/reference/api/`](docs/reference/api/index.md) | Every HTTP endpoint: method, path, auth, purpose (117 handlers) |
-| [`docs/reference/database/`](docs/reference/database/index.md) | Every table and ER diagrams (82 tables) |
+| [`docs/reference/api/`](docs/reference/api/index.md) | Every HTTP endpoint: method, path, auth, purpose |
+| [`docs/reference/database/`](docs/reference/database/index.md) | Every table and ER diagrams (115 tables) |
 | [`docs/reference/crons.md`](docs/reference/crons.md) · [`docs/reference/env.md`](docs/reference/env.md) | Cron registry and environment-variable reference |
 | [`docs/operations/`](docs/operations/runbook.md) | Runbook, auth/access model, observability |
 
@@ -30,7 +30,7 @@ layer; the handbook owns the depth.
 
 - **Production**: [bgscheduler.vercel.app](https://bgscheduler.vercel.app) · **Repo**: [kasheesh711/bgscheduler](https://github.com/kasheesh711/bgscheduler)
 - **Stack**: Next.js 16 (App Router) · TypeScript · Tailwind v4 · shadcn/ui · Auth.js (Google) · Drizzle ORM · Neon Postgres (ap-southeast-1) · Vercel Pro
-- **Surface**: 15 admin features across 15 routed pages, 117 API handlers, 82 Postgres tables, 8 Vercel crons
+- **Surface**: 15+ admin features, 115 Postgres tables, and staggered Vercel crons; the API/page inventory lives in the handbook reference.
 - **Tests**: Vitest unit suite (`npm test`) plus a Testcontainers-backed integration suite (`npm run test:integration`)
 
 ## Features
@@ -98,20 +98,25 @@ These are enforced in code and must not be weakened without explicit approval (s
 
 ## Scheduled syncs
 
-Seven Vercel crons are declared in [`vercel.json`](vercel.json); all fire an
-HTTP `GET` with `Authorization: Bearer $CRON_SECRET`. The five `sync-*` jobs are
-staggered at 5-minute offsets and guarded against overlap. Full registry (schedules,
-timeouts, handlers) in [`docs/reference/crons.md`](docs/reference/crons.md).
+Twelve Vercel crons are declared in [`vercel.json`](vercel.json); all fire an
+HTTP `GET` with `Authorization: Bearer $CRON_SECRET`. The high-frequency `sync-*`
+jobs are staggered so they do not all hit Wise or Postgres in the same minute. Full
+registry (schedules, timeouts, handlers) in [`docs/reference/crons.md`](docs/reference/crons.md).
 
 | Cron | Schedule (UTC) |
 |---|---|
 | `sync-wise` (snapshot ETL) | `*/30 * * * *` |
-| `sync-wise-activity` (audit log) | `5,35 * * * *` |
 | `sync-sales-dashboard` | `10,40 * * * *` |
-| `sync-leave-requests` | `15,45 * * * *` |
+| `sync-competitor-intelligence` | `25 18 * * 0` |
 | `sync-credit-control` | `20,50 * * * *` |
+| `sync-progress-tests` | `25,55 * * * *` |
+| `progress-tests/admin-digest` | `35 0 * * *` |
+| `sync-wise-activity` (audit log) | `5,35 * * * *` |
+| `sync-leave-requests` | `15,45 * * * *` |
 | `class-assignments/morning` (assign + publish + tutor emails) | `45 23 * * *` (06:45 Bangkok) |
 | `class-assignments/admin-email` (daily readiness digest) | `0,10,20,30 0 * * *` (07:00–07:30 Bangkok) |
+| `student-promotions/july-1` | `5 17 30 6 *` |
+| `cron-watchdog` | `7,37 * * * *` |
 
 ## Local development
 
@@ -120,12 +125,11 @@ npm install
 npm run dev          # next dev → http://localhost:3000
 ```
 
-Copy [`.env.example`](.env.example) to `.env.local` and fill in the values. The core
-nine variables (`DATABASE_URL`, `AUTH_GOOGLE_ID/SECRET`, `AUTH_SECRET`,
-`WISE_USER_ID/API_KEY/NAMESPACE/INSTITUTE_ID`, `CRON_SECRET`) are validated at startup
-in [`src/lib/env.ts`](src/lib/env.ts); feature-specific variables (AI scheduler, LINE,
-schedule emails, leave-request sheet) are read where used. The complete list with
-sources and which feature needs each is in [`docs/reference/env.md`](docs/reference/env.md).
+Copy [`.env.example`](.env.example) to `.env.local` and fill in the values.
+[`src/lib/env.ts`](src/lib/env.ts) declares the core env schema, but that module is
+not currently imported at runtime; feature-specific variables are read where used. The
+complete list with sources and runtime behavior is in
+[`docs/reference/env.md`](docs/reference/env.md).
 
 ## Commands
 
@@ -171,4 +175,4 @@ curl -X POST https://bgscheduler.vercel.app/api/internal/sync-wise \
 Day-to-day operational procedures — deploys, manual sync recovery, debugging stale
 data — are in the [operations runbook](docs/operations/runbook.md).
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD on 2026-07-02._
