@@ -141,6 +141,7 @@ Mechanical lookup. Owns exact signatures, columns, schedules, and variables.
 | [enums.md](./reference/database/enums.md) | Every Postgres enum and its values. |
 | [erd-core.md](./reference/database/erd-core.md) | Snapshots, sync, audit, auth, tutors, normalization. |
 | [erd-sales-dashboard.md](./reference/database/erd-sales-dashboard.md) | Sales Dashboard tables. |
+| [erd-competitor-intelligence.md](./reference/database/erd-competitor-intelligence.md) | Competitor Intelligence tables. |
 | [erd-credit-control.md](./reference/database/erd-credit-control.md) | Credit Control tables. |
 | [erd-classrooms.md](./reference/database/erd-classrooms.md) | Classroom assignment + email tables. |
 | [erd-payroll.md](./reference/database/erd-payroll.md) | Payroll tables. |
@@ -150,6 +151,8 @@ Mechanical lookup. Owns exact signatures, columns, schedules, and variables.
 | [erd-line.md](./reference/database/erd-line.md) | LINE tables. |
 | [erd-room-capacity.md](./reference/database/erd-room-capacity.md) | Room Capacity tables. |
 | [erd-student-promotions.md](./reference/database/erd-student-promotions.md) | Student Promotions audit tables. |
+| [erd-progress-tests.md](./reference/database/erd-progress-tests.md) | Progress Tests tables. |
+| [erd-us-universities.md](./reference/database/erd-us-universities.md) | US Universities/IPEDS tables. |
 
 #### Other reference
 
@@ -187,4 +190,4 @@ feature itself, see [`features/ai-scheduler.md`](./features/ai-scheduler.md).
 
 The `docs/superpowers/` directory (older specs and plans) is likewise outside this handbook.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD on 2026-07-02._
