@@ -5,11 +5,12 @@
 //
 // Tab state lives in the URL (`?tab=`, mirroring the us-universities shell's
 // URL-as-source-of-truth pattern) so refresh/back/forward restore the active
-// tab. Implemented tabs: Overview / Profile / Checklist / Meetings / Notes;
-// the rest render structured "coming in phase N" placeholders. The Overview
-// tab also hosts the upcoming-deadlines list (CM-102), the month-grid
-// deadline calendar as a toggled sub-view (CM-100 — design §5.1 lists no
-// Calendar tab), and the announcements panel (CM-90).
+// tab. Implemented tabs: Overview / Profile / Checklist / Colleges /
+// Applications / Meetings / Notes; the phase-4 tabs render structured
+// "coming in phase N" placeholders. The Overview tab also hosts the
+// upcoming-deadlines list (CM-102), the month-grid deadline calendar as a
+// toggled sub-view (CM-100 — design §5.1 lists no Calendar tab), and the
+// announcements panel (CM-90).
 //
 // Server data arrives as props from the page (no client cache): every
 // successful mutation calls router.refresh() so the server component re-reads
@@ -54,10 +55,17 @@ import {
   type AdmissionsTaskOwner,
 } from "@/lib/admissions/meetings";
 import { AnnouncementsPanel } from "./announcements-panel";
+import { ApplicationsTab } from "./applications-tab";
 import { CalendarTab } from "./calendar-tab";
 import { ChecklistTab } from "./checklist-tab";
+import { CollegesTab } from "./colleges-tab";
 import type { CalendarItem } from "@/lib/admissions/calendar";
 import type { AdmissionsTaskDto } from "@/lib/admissions/checklists";
+import type { AdmissionsApplicationEventDto } from "@/lib/admissions/colleges";
+import type {
+  AdmissionsCollegeDocDto,
+  AdmissionsRecommenderWithCollegesDto,
+} from "@/lib/admissions/recommenders";
 import type {
   AdmissionsCaseDetail,
   AdmissionsCaseStatus,
@@ -94,16 +102,6 @@ const DEFAULT_CASE_TAB: CaseTabKey = "overview";
 const PLACEHOLDER_TABS: Partial<
   Record<CaseTabKey, { phase: number; description: string }>
 > = {
-  colleges: {
-    phase: 3,
-    description:
-      "The college list with rounds, deadlines, categories, per-college completeness, and add-from-US-Universities search.",
-  },
-  applications: {
-    phase: 3,
-    description:
-      "The decision-event timeline per college and the committed-college selector.",
-  },
   essays: {
     phase: 4,
     description:
@@ -449,14 +447,21 @@ export interface CaseDetailShellProps {
   calendarMonth: string;
   /** buildCaseCalendar items for calendarMonth; empty for parent viewers. */
   calendarItems: CalendarItem[];
+  /** Recommenders + links (CM-50/51); empty for parent viewers (student+ API). */
+  recommenders: AdmissionsRecommenderWithCollegesDto[];
+  /** College-doc rows (CM-46); empty for parent viewers (student+ API). */
+  collegeDocs: AdmissionsCollegeDocDto[];
+  /** Decision chains keyed by list item id (CM-43); empty for parent viewers. */
+  applicationEvents: Record<string, AdmissionsApplicationEventDto[]>;
   viewerRole: CaseRole;
   viewerEmail: string;
 }
 
 /**
  * Case detail workspace (design §5.1): sticky case header, 10-tab bar with
- * URL-driven state, phase-1 tabs (Overview / Profile / Meetings / Notes)
- * implemented and the rest as structured placeholders.
+ * URL-driven state; Overview / Profile / Checklist / Colleges / Applications /
+ * Meetings / Notes are implemented and the phase-4 tabs render structured
+ * placeholders.
  */
 export function CaseDetailShell({
   caseDetail,
@@ -465,6 +470,9 @@ export function CaseDetailShell({
   tasks,
   calendarMonth,
   calendarItems,
+  recommenders,
+  collegeDocs,
+  applicationEvents,
   viewerRole,
   viewerEmail,
 }: CaseDetailShellProps) {
@@ -1042,6 +1050,28 @@ export function CaseDetailShell({
             caseId={caseDetail.caseId}
             tasks={tasks}
             progress={caseDetail.progress}
+            viewerRole={viewerRole}
+          />
+        ) : null}
+
+        {activeTab === "colleges" ? (
+          <CollegesTab
+            caseId={caseDetail.caseId}
+            colleges={caseDetail.collegeList}
+            warnings={caseDetail.applicationWarnings}
+            recommenders={recommenders}
+            collegeDocs={collegeDocs}
+            viewerRole={viewerRole}
+          />
+        ) : null}
+
+        {activeTab === "applications" ? (
+          <ApplicationsTab
+            caseId={caseDetail.caseId}
+            colleges={caseDetail.collegeList}
+            committedListItemId={caseDetail.committedListItemId}
+            committedCollegeName={caseDetail.committedCollegeName}
+            eventsByItem={applicationEvents}
             viewerRole={viewerRole}
           />
         ) : null}

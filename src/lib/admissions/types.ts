@@ -11,6 +11,10 @@
 import type { AdmissionsAnnouncementDto } from "./announcements";
 import type { CalendarItem } from "./calendar";
 import type { AdmissionsChecklistProgress } from "./checklists";
+import type {
+  AdmissionsCollegeListRowDto,
+  ApplicationWarning,
+} from "./colleges";
 
 // ── Roles & access ──────────────────────────────────────────────────────
 
@@ -145,6 +149,13 @@ export interface AdmissionsCaseDetail {
   student: AdmissionsStudentDto;
   cohort: AdmissionsCohortDto;
   members: AdmissionsMemberDto[];
+  /**
+   * The case's live college list (Colleges tab, CM-40): items + live IPEDS
+   * stats + per-college completeness (CM-46), deadline ascending.
+   */
+  collegeList: AdmissionsCollegeListRowDto[];
+  /** WARN-only ED/REA plan conflicts (CM-45); empty when the plan is clean. */
+  applicationWarnings: ApplicationWarning[];
   /** Full checklist rollup (CM-24): done/total/percent/verifiedCount. */
   progress: AdmissionsChecklistProgress;
   /** Done-task percentage, 0–100 integer (= progress.percent). */

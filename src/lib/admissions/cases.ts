@@ -11,12 +11,16 @@
 // Phase 2 wiring: case creation instantiates the cohort's published checklist
 // (CM-21, seeding the default template when none exists), and the caseload +
 // case-detail reads project real checklist progress (CM-24), upcoming
-// deadlines (CM-101/102), and announcements (CM-90).
+// deadlines (CM-101/102), and announcements (CM-90). Phase 3 wiring: the
+// case detail also projects the college list with completeness (CM-40/46)
+// and WARN-only application-plan warnings (CM-45); deadlines now include
+// application rounds via the calendar's "application" source.
 
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import {
   adminUsers,
+  admissionsApplicationEvents,
   admissionsCaseMeetings,
   admissionsCaseMembers,
   admissionsCases,
@@ -48,12 +52,19 @@ import {
   type InstantiateChecklistResult,
 } from "./checklists";
 import {
+  computeApplicationWarnings,
+  deriveLatestEvents,
+  listCollegesForCase,
+  type ApplicationWarning,
+} from "./colleges";
+import {
   insertCaseMember,
   isUuidShaped,
   mapAdmissionsMemberRow,
   normalizeAdmissionsEmail,
   type AdmissionsActor,
 } from "./members";
+import { computeCollegeCompleteness } from "./recommenders";
 import type {
   AdmissionsCaseDetail,
   AdmissionsCaseStatus,
@@ -267,8 +278,9 @@ export async function createCase(
  *    (email fallback), latest meeting date (days-since-last-touch, Bangkok
  *    days), and the committed college name when set.
  * 4. Project checklist progress per case (CM-24, one batch query) and each
- *    case's nearest open deadline (CM-101: earliest open dated item, overdue
- *    included — the batch is capped at UPCOMING_DEADLINES_MAX_LIMIT open
+ *    case's nearest open deadline (CM-101: earliest open dated item across
+ *    calendar sources — tasks AND application-round deadlines — overdue
+ *    included; the batch is capped at UPCOMING_DEADLINES_MAX_LIMIT open
  *    items, so cases beyond the cap read null).
  *
  * @returns summaries sorted by updatedAt (newest first), then student name.
@@ -451,9 +463,17 @@ export async function getCaseloadForUser(
  * 3. Resolve the committed college name and the latest meeting date.
  * 4. Project the Overview tab's real data: checklist progress (CM-24), the
  *    next UPCOMING_DEADLINES_DEFAULT_LIMIT open deadlines (CM-102, overdue
- *    first — nextDeadline is the first of them), and the latest
- *    CASE_DETAIL_ANNOUNCEMENTS_LIMIT announcements visible on the case
- *    (CM-90: case-scoped rows merged with cohort broadcasts, newest first).
+ *    first, tasks + application deadlines — nextDeadline is the first of
+ *    them), and the latest CASE_DETAIL_ANNOUNCEMENTS_LIMIT announcements
+ *    visible on the case (CM-90: case-scoped rows merged with cohort
+ *    broadcasts, newest first).
+ * 5. Project the Colleges tab: the completeness rollup is computed FIRST by
+ *    the recommenders module (computeCollegeCompleteness owns CM-46) and
+ *    handed to listCollegesForCase through its completenessMap hook — the
+ *    colleges module carries it on the row DTO but never derives it. Then
+ *    the items' decision chains reduce to latest-event-per-item
+ *    (deriveLatestEvents) feeding the WARN-only ED/REA plan validation
+ *    (computeApplicationWarnings, CM-45).
  */
 export async function getCaseDetail(
   caseId: string,
@@ -525,6 +545,35 @@ export async function getCaseDetail(
   const announcements = (await listAnnouncementsForCase(caseId, db))
     .slice(0, CASE_DETAIL_ANNOUNCEMENTS_LIMIT);
 
+  // Colleges tab (CM-40/45/46): completeness first (recommenders module owns
+  // the rollup), handed to listCollegesForCase via its completenessMap hook.
+  const completenessMap = await computeCollegeCompleteness(caseId, db);
+  const collegeList = await listCollegesForCase(caseId, { completenessMap }, db);
+
+  let applicationWarnings: ApplicationWarning[] = [];
+  if (collegeList.length > 0) {
+    const eventRows = await db
+      .select({
+        listItemId: admissionsApplicationEvents.listItemId,
+        event: admissionsApplicationEvents.event,
+        eventDate: admissionsApplicationEvents.eventDate,
+        createdAt: admissionsApplicationEvents.createdAt,
+      })
+      .from(admissionsApplicationEvents)
+      .where(inArray(
+        admissionsApplicationEvents.listItemId,
+        collegeList.map((item) => item.id),
+      ));
+    const latestEvents = deriveLatestEvents(eventRows);
+    applicationWarnings = computeApplicationWarnings(
+      collegeList.map((item) => ({
+        id: item.id,
+        round: item.round,
+        latestEvent: latestEvents.get(item.id) ?? null,
+      })),
+    );
+  }
+
   return {
     caseId: caseRow.id,
     status: caseRow.status,
@@ -549,6 +598,8 @@ export async function getCaseDetail(
       graduationYear: cohortRow.graduationYear,
     },
     members,
+    collegeList,
+    applicationWarnings,
     progress,
     progressPercent: progress.percent,
     nextDeadline: upcomingDeadlines[0]?.date ?? null,

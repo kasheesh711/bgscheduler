@@ -13,9 +13,10 @@ import type { AdmissionsCohortDto } from "./types";
 /**
  * Detects a Postgres unique-constraint violation (SQLSTATE 23505) across
  * drivers: checks `code`, the duplicate-key message text, and any nested
- * `cause` chain.
+ * `cause` chain. Shared by admissions modules that map unique-index races
+ * to Error("Conflict") (e.g. recommenders.ts link creation).
  */
-function isUniqueViolation(error: unknown): boolean {
+export function isUniqueViolation(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const candidate = error as { code?: unknown; message?: unknown; cause?: unknown };
   if (candidate.code === "23505") return true;

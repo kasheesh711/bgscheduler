@@ -1,9 +1,11 @@
 // Admissions Case Management — deadline aggregation across modules (CM-100..102).
 //
 // Design: docs/casemanagementsystem_design.md §1 (calendar.ts owns deadline
-// aggregation) and §8 (Phase 2 delivers "calendar aggregates tasks"). Phase 2
-// aggregates ONLY admissions_case_tasks.dueDate; later phases add application
-// rounds, essay deadlines, and test registrations/sittings by appending one
+// aggregation) and §8 (Phase 2 delivered "calendar aggregates tasks"; Phase 3
+// adds application-round deadlines). Sources aggregated today:
+// admissions_case_tasks.dueDate ("task") and live college list items'
+// application deadlines ("application", collected by colleges.ts). Later
+// phases add essay deadlines and test registrations/sittings by appending one
 // collector per source to CALENDAR_COLLECTORS — the window filter, overdue
 // stamping, urgency sort, and DTO shape are source-agnostic. All dates are
 // "YYYY-MM-DD" strings compared on the Asia/Bangkok calendar; malformed dates
@@ -13,18 +15,19 @@ import { and, inArray, isNotNull, isNull } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { admissionsCaseTasks } from "@/lib/db/schema";
 import { BANGKOK_TIME_ZONE } from "@/lib/bangkok-time";
+import { collectApplicationDeadlineEntries } from "./colleges";
 import { isUuidShaped } from "./members";
 import type { AdmissionsTaskOwner } from "./meetings";
 
 /**
- * Dated-item source feeding the calendar. Phase 2: tasks only; later phases
- * widen this union ("application" | "essay" | "testing", design §8).
+ * Dated-item source feeding the calendar. Later phases widen this union
+ * further ("essay" | "testing", design §8).
  */
-export type CalendarItemSource = "task";
+export type CalendarItemSource = "task" | "application";
 
 /** One dated item on the per-case calendar / deadlines panel (CM-100/CM-102). */
 export interface CalendarItem {
-  /** Source row id (e.g. the admissions_case_tasks id). */
+  /** Source row id (a case-task id or a college-list-item id). */
   id: string;
   caseId: string;
   source: CalendarItemSource;
@@ -33,7 +36,7 @@ export interface CalendarItem {
   date: string;
   /** True when the date is before today (Bangkok) and the item is still open. */
   overdue: boolean;
-  /** Who the item is on (task owner); null for future ownerless sources. */
+  /** Who the item is on (task owner); null for ownerless sources (application). */
   ownerRole: AdmissionsTaskOwner | null;
 }
 
@@ -71,7 +74,7 @@ type CalendarCollector = (
   db: Database,
 ) => Promise<RawCalendarEntry[]>;
 
-/** Task collector (Phase 2): non-deleted admissions_case_tasks with a dueDate. */
+/** Task collector: non-deleted admissions_case_tasks with a dueDate. */
 const collectTaskEntries: CalendarCollector = async (caseIds, db) => {
   const rows = await db
     .select({
@@ -105,7 +108,20 @@ const collectTaskEntries: CalendarCollector = async (caseIds, db) => {
   return entries;
 };
 
-const CALENDAR_COLLECTORS: readonly CalendarCollector[] = [collectTaskEntries];
+/**
+ * Application-deadline collector (Phase 3): live college list items with a
+ * round deadline, batched across cases by colleges.ts (which owns the query
+ * and the "{instName} — {round} deadline" title). The entries arrive without
+ * `overdue` and with `completed` = submitted/complete, exactly the collector
+ * contract — the aggregator stamps overdue and applies windows/sorting.
+ */
+const collectApplicationEntries: CalendarCollector = (caseIds, db) =>
+  collectApplicationDeadlineEntries(caseIds, db);
+
+const CALENDAR_COLLECTORS: readonly CalendarCollector[] = [
+  collectTaskEntries,
+  collectApplicationEntries,
+];
 
 /**
  * Asia/Bangkok calendar date ("YYYY-MM-DD") for an instant (mirrors the
@@ -170,8 +186,8 @@ async function collectEntries(
  *
  * 1. Validate the window up front: both bounds "YYYY-MM-DD" with from <= to;
  *    a malformed caseId throws "NotFound" (routes translate to 404).
- * 2. Run every registered collector (Phase 2: tasks) and keep entries whose
- *    date falls inside [from, to] inclusive.
+ * 2. Run every registered collector (tasks + application deadlines) and keep
+ *    entries whose date falls inside [from, to] inclusive.
  * 3. Stamp `overdue` against today's Bangkok date — an item is overdue only
  *    when its date is strictly before today AND it is not completed; done
  *    items still render on the grid (historical record) but never as overdue.

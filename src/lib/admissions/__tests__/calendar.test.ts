@@ -50,12 +50,53 @@ function makeTaskRow(input: TaskRowInput) {
 /**
  * Mock read db for the task collector: select(fields).from().where() resolves
  * the provided rows. The where clause is ignored, so date-window filtering and
- * ordering must be proven in process.
+ * ordering must be proven in process. EVERY collector receives the same rows
+ * — task-shaped rows have no `deadline` field, so the application collector
+ * fail-closed skips them all (these suites exercise the task source alone).
  */
 function makeTaskDb(rows: Array<Record<string, unknown>>) {
   const select = vi.fn(() => ({
     from: () => ({ where: async () => rows }),
   }));
+  const db = { select } as unknown as Database;
+  return { db, select };
+}
+
+interface CollegeRowInput {
+  id: string;
+  caseId?: string;
+  instName?: string;
+  round?: string;
+  deadline: string | null;
+  appStatus?: string;
+}
+
+function makeCollegeRow(input: CollegeRowInput) {
+  return {
+    id: input.id,
+    caseId: input.caseId ?? CASE_ID,
+    instName: input.instName ?? `College ${input.id}`,
+    round: input.round ?? "rd",
+    deadline: input.deadline,
+    appStatus: input.appStatus ?? "researching",
+  };
+}
+
+/**
+ * Queue-based mock db for multi-source aggregation: the first select feeds
+ * the task collector, the second feeds the application collector (collector
+ * registration order). Merge/sort/overdue behavior is proven in process.
+ */
+function makeSourcesDb(
+  taskRows: Array<Record<string, unknown>>,
+  collegeRows: Array<Record<string, unknown>>,
+) {
+  const queue = [taskRows, collegeRows];
+  let i = 0;
+  const select = vi.fn(() => {
+    const rows = queue[i++] ?? [];
+    return { from: () => ({ where: async () => rows }) };
+  });
   const db = { select } as unknown as Database;
   return { db, select };
 }
@@ -160,6 +201,109 @@ describe("buildCaseCalendar", () => {
     expect(items).toHaveLength(1);
     expect(items[0].id).toBe("t-parent");
     expect(items[0].ownerRole).toBe("parent");
+  });
+});
+
+describe("task + application source aggregation", () => {
+  it("merges both sources into one date-ordered calendar (CM-100)", async () => {
+    const { db, select } = makeSourcesDb(
+      [
+        makeTaskRow({ id: "t-early", dueDate: "2026-07-05" }),
+        makeTaskRow({ id: "t-late", dueDate: "2026-07-20" }),
+      ],
+      [
+        makeCollegeRow({
+          id: "c-mid",
+          instName: "Harvard University",
+          round: "ed",
+          deadline: "2026-07-10",
+        }),
+      ],
+    );
+
+    const items = await buildCaseCalendar(
+      CASE_ID,
+      { from: "2026-07-01", to: "2026-07-31" },
+      NOW,
+      db,
+    );
+
+    // One query per source (task collector + application collector).
+    expect(select).toHaveBeenCalledTimes(2);
+    expect(items.map((item) => [item.id, item.source])).toEqual([
+      ["t-early", "task"],
+      ["c-mid", "application"],
+      ["t-late", "task"],
+    ]);
+    expect(items[1]).toMatchObject({
+      caseId: CASE_ID,
+      title: "Harvard University — ED deadline",
+      date: "2026-07-10",
+      ownerRole: null,
+    });
+    expect(Object.keys(items[1]).sort()).toEqual(CALENDAR_ITEM_KEYS);
+  });
+
+  it("stamps overdue on open past application deadlines, never on submitted ones", async () => {
+    const { db } = makeSourcesDb(
+      [],
+      [
+        makeCollegeRow({ id: "c-open-past", deadline: "2026-07-01", appStatus: "applying" }),
+        makeCollegeRow({ id: "c-submitted-past", deadline: "2026-07-01", appStatus: "submitted" }),
+        makeCollegeRow({ id: "c-open-future", deadline: "2026-07-20" }),
+      ],
+    );
+
+    const items = await buildCaseCalendar(
+      CASE_ID,
+      { from: "2026-07-01", to: "2026-07-31" },
+      NOW,
+      db,
+    );
+
+    expect(items.map((item) => [item.id, item.overdue])).toEqual([
+      ["c-open-past", true],
+      ["c-submitted-past", false],
+      ["c-open-future", false],
+    ]);
+  });
+
+  it("orders same-date items across sources deterministically (application before task)", async () => {
+    const { db } = makeSourcesDb(
+      [makeTaskRow({ id: "same-day-task", dueDate: "2026-07-10" })],
+      [makeCollegeRow({ id: "same-day-app", deadline: "2026-07-10" })],
+    );
+
+    const items = await buildCaseCalendar(
+      CASE_ID,
+      { from: "2026-07-01", to: "2026-07-31" },
+      NOW,
+      db,
+    );
+
+    expect(items.map((item) => item.source)).toEqual(["application", "task"]);
+  });
+
+  it("excludes submitted/complete applications from the deadlines panel but keeps open ones (CM-102)", async () => {
+    const { db } = makeSourcesDb(
+      [
+        makeTaskRow({ id: "t-open", dueDate: "2026-07-15" }),
+        makeTaskRow({ id: "t-done", status: "done", dueDate: "2026-07-03" }),
+      ],
+      [
+        makeCollegeRow({ id: "c-overdue", deadline: "2026-07-01", appStatus: "applying" }),
+        makeCollegeRow({ id: "c-complete", deadline: "2026-07-02", appStatus: "complete" }),
+        makeCollegeRow({ id: "c-future", deadline: "2026-08-01" }),
+      ],
+    );
+
+    const items = await getUpcomingDeadlines(CASE_ID, 10, NOW, db);
+
+    expect(items.map((item) => [item.id, item.source, item.overdue])).toEqual([
+      ["c-overdue", "application", true],
+      ["t-open", "task", false],
+      ["c-future", "application", false],
+    ]);
   });
 });
 

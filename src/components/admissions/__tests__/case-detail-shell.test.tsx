@@ -87,6 +87,8 @@ const CASE_DETAIL: AdmissionsCaseDetail = {
       updatedAt: "2026-06-02T03:00:00.000Z",
     },
   ],
+  collegeList: [],
+  applicationWarnings: [],
   progress: { done: 0, total: 0, percent: 0, verifiedCount: 0 },
   progressPercent: 0,
   nextDeadline: null,
@@ -152,6 +154,9 @@ function renderShell(overrides: {
       tasks={overrides.tasks ?? []}
       calendarMonth="2026-07"
       calendarItems={overrides.calendarItems ?? []}
+      recommenders={[]}
+      collegeDocs={[]}
+      applicationEvents={{}}
       viewerRole={overrides.viewerRole ?? "counselor"}
       viewerEmail="counselor.may@example.com"
     />,
@@ -414,9 +419,21 @@ describe("CaseDetailShell placeholder tabs", () => {
     expect(html).toContain('data-testid="checklist-add-task"');
   });
 
+  it("renders the live colleges tab instead of a placeholder", () => {
+    const html = renderShell({ tab: "colleges" });
+    expect(html).not.toContain("Coming in phase 3");
+    // The Colleges tab hosts the recommenders & documents panel.
+    expect(html).toContain('data-testid="recommenders-panel"');
+    expect(html).toContain('data-testid="add-college"');
+  });
+
+  it("renders the live applications tab instead of a placeholder", () => {
+    const html = renderShell({ tab: "applications" });
+    expect(html).not.toContain("Coming in phase 3");
+    expect(html).toContain("Committed college");
+  });
+
   it("renders structured coming-in-phase placeholders", () => {
-    expect(renderShell({ tab: "colleges" })).toContain("Coming in phase 3");
-    expect(renderShell({ tab: "applications" })).toContain("Coming in phase 3");
     expect(renderShell({ tab: "essays" })).toContain("Coming in phase 4");
     expect(renderShell({ tab: "activities" })).toContain("Coming in phase 4");
     expect(renderShell({ tab: "testing" })).toContain("Coming in phase 4");

@@ -1,6 +1,7 @@
 "use client";
 
 import { X } from "lucide-react";
+import { AddToCaseMenu } from "@/components/admissions/add-to-case-menu";
 import { Button } from "@/components/ui/button";
 import { chartColors } from "@/components/sales-dashboard/chart-canvas";
 import { cn } from "@/lib/utils";
@@ -10,10 +11,11 @@ import { compareColorIndex } from "./compare-colors";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Slim sticky bottom dock summarizing the compare shortlist (the `?compare=`
-// set). Renders one colored, removable chip per school, a Clear-all control,
-// and a "Compare (N)" button that opens the compare sheet. Color per school is
-// derived from its position in the shortlist via compareColorIndex so the dock,
-// the sheet, and any chart share one palette. Returns null when empty.
+// set). Renders one colored, removable chip per school — each with a staff-only
+// "Add to case" action (self-hiding AddToCaseMenu, PRD CM-41) — a Clear-all
+// control, and a "Compare (N)" button that opens the compare sheet. Color per
+// school is derived from its position in the shortlist via compareColorIndex so
+// the dock, the sheet, and any chart share one palette. Returns null when empty.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface ShortlistEntry {
@@ -79,6 +81,7 @@ export function ShortlistBar({
                 aria-hidden="true"
               />
               <span className="max-w-44 truncate text-foreground">{entry.name}</span>
+              <AddToCaseMenu unitId={entry.unitId} instName={entry.name} compact />
               <Button
                 variant="ghost"
                 size="icon-xs"

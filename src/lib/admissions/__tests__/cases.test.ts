@@ -758,7 +758,8 @@ describe("getCaseloadForUser", () => {
   it("carries real checklist progress and each case's nearest open deadline", async () => {
     // Queue: [admin hit], [cases A+B], [members -> none] (registry-name query
     // skipped), [meetings -> none] (committed-college query skipped),
-    // [progress rows], [deadline task rows].
+    // [progress rows], [deadline task rows]; the calendar's application
+    // collector then reads past the queue -> no application deadlines.
     const { db } = fakeDb([
       [{ id: "a1" }],
       [
@@ -788,6 +789,30 @@ describe("getCaseloadForUser", () => {
     expect(rowA).toMatchObject({ progressPercent: 50, nextDeadline: "2026-08-01" });
     const rowB = rows.find((row) => row.caseId === CASE_ID_B);
     expect(rowB).toMatchObject({ progressPercent: 0, nextDeadline: "2026-07-01" });
+  });
+
+  it("lets an application-round deadline win nextDeadline when it is nearest", async () => {
+    // Queue: [admin hit], [cases], [members -> none], [meetings -> none],
+    // [progress rows -> none], [deadline task rows], [application deadline
+    // item rows] — the calendar merges both sources for the caseload.
+    const { db } = fakeDb([
+      [{ id: "a1" }],
+      [caseJoinRow({ caseId: CASE_ID })],
+      [],
+      [],
+      [],
+      [
+        { id: "t1", caseId: CASE_ID, title: "Essay draft", owner: "student", status: "not_started", dueDate: "2026-09-01" },
+      ],
+      [
+        { id: "c1", caseId: CASE_ID, instName: "Harvard University", round: "ed", deadline: "2026-08-01", appStatus: "applying" },
+      ],
+    ]);
+
+    const rows = await getCaseloadForUser("admin@example.com", db, NOW);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].nextDeadline).toBe("2026-08-01");
   });
 
   it("reports null daysSinceLastTouch when no meeting exists and clamps future meetings to 0", async () => {
@@ -949,8 +974,9 @@ describe("getCaseDetail", () => {
 
   it("assembles the full detail DTO with members sorted oldest-first", async () => {
     // Queue: [case join], [members], [committed item], [meetings],
-    // [progress task rows], [deadline task rows],
-    // [announcements: cohort lookup], [announcement rows].
+    // [progress task rows], [deadline task rows], [application deadline
+    // items], [announcements: cohort lookup], [announcement rows],
+    // [completeness: item ids], [colleges: item rows].
     const { db } = fakeDb([
       [detailJoinRow(ITEM_ID)],
       [
@@ -970,6 +996,7 @@ describe("getCaseDetail", () => {
         { id: "t2", caseId: CASE_ID, title: "Essay draft", owner: "student", status: "not_started", dueDate: "2026-08-01" },
         { id: "t1", caseId: CASE_ID, title: "Send transcripts", owner: "counselor", status: "in_progress", dueDate: "2026-07-01" },
       ],
+      [],
       [{ cohortId: COHORT_ID }],
       [
         announcementRow("a1", new Date("2026-07-01T00:00:00Z")),
@@ -979,6 +1006,8 @@ describe("getCaseDetail", () => {
         announcementRow("a5", new Date("2026-07-05T00:00:00Z")),
         announcementRow("a6", new Date("2026-07-06T00:00:00Z")),
       ],
+      [],
+      [],
     ]);
 
     const detail = await getCaseDetail(CASE_ID, db, NOW);
@@ -1021,15 +1050,21 @@ describe("getCaseDetail", () => {
   });
 
   it("skips the committed-college query when no pointer is set", async () => {
-    // Queue: [case join], [members], [meetings], [progress], [deadlines],
-    // [announcements: cohort lookup], [announcement rows].
+    // Queue: [case join], [members], [meetings], [progress], [deadline
+    // tasks], [application deadline items], [announcements: cohort lookup],
+    // [announcement rows], [completeness: item ids], [colleges: item rows].
+    // No committed pointer, no IPEDS unitIds, and an empty college list, so
+    // the pointer, stats, and application-event queries are all skipped.
     const { db, selectCalls } = fakeDb([
       [detailJoinRow(null)],
       [],
       [],
       [],
       [],
+      [],
       [{ cohortId: COHORT_ID }],
+      [],
+      [],
       [],
     ]);
 
@@ -1041,7 +1076,109 @@ describe("getCaseDetail", () => {
     expect(detail.nextDeadline).toBeNull();
     expect(detail.upcomingDeadlines).toEqual([]);
     expect(detail.announcements).toEqual([]);
-    expect(selectCalls).toHaveLength(7);
+    expect(detail.collegeList).toEqual([]);
+    expect(detail.applicationWarnings).toEqual([]);
+    expect(selectCalls).toHaveLength(10);
+  });
+
+  const ITEM_A = "88888888-8888-4888-8888-888888888888";
+  const ITEM_B = "99999999-9999-4999-8999-999999999999";
+
+  function collegeItemRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: ITEM_A,
+      caseId: CASE_ID,
+      unitId: null,
+      instName: "University of Oxford",
+      city: null,
+      stateAbbr: null,
+      country: "GB",
+      isManual: true,
+      round: "ed",
+      deadline: "2026-08-15",
+      appStatus: "applying",
+      category: "unset",
+      aidOffered: null,
+      aidNotes: null,
+      deletedAt: null,
+      createdAt: new Date("2026-06-10T00:00:00Z"),
+      updatedAt: new Date("2026-06-10T00:00:00Z"),
+      ...overrides,
+    };
+  }
+
+  it("carries the college list with completeness and WARN-only plan warnings", async () => {
+    // Queue: [case join], [members], [meetings], [progress], [deadline
+    // tasks], [application deadline items], [announcements: cohort lookup],
+    // [announcement rows], [completeness: item ids], [completeness: links],
+    // [completeness: docs], [colleges: item rows], [application events].
+    // Manual (non-IPEDS) rows keep the stats query out of the queue.
+    const { db } = fakeDb([
+      [detailJoinRow(null)],
+      [],
+      [],
+      [],
+      [],
+      [
+        { id: ITEM_A, caseId: CASE_ID, instName: "University of Oxford", round: "ed", deadline: "2026-08-15", appStatus: "applying" },
+      ],
+      [{ cohortId: COHORT_ID }],
+      [],
+      [{ id: ITEM_A }, { id: ITEM_B }],
+      [{ listItemId: ITEM_A, submitted: true, askStatus: "agreed" }],
+      [
+        { listItemId: ITEM_A, docType: "transcript", sent: true },
+        { listItemId: ITEM_A, docType: "school_report", sent: true },
+      ],
+      [
+        collegeItemRow(),
+        collegeItemRow({ id: ITEM_B, instName: "University of Cambridge", round: "ed2", deadline: "2027-01-05" }),
+      ],
+      [
+        { listItemId: ITEM_A, event: "submitted", eventDate: "2026-08-10", createdAt: new Date("2026-08-10T00:00:00Z") },
+      ],
+    ]);
+
+    const detail = await getCaseDetail(CASE_ID, db, NOW);
+
+    // College list rows carry the recommenders-computed completeness (CM-46).
+    expect(detail.collegeList.map((row) => row.id)).toEqual([ITEM_A, ITEM_B]);
+    expect(detail.collegeList[0]).toMatchObject({ stats: null, stale: false });
+    expect(detail.collegeList[0].completeness).toEqual({
+      recsAgreed: 1,
+      recsSubmitted: 1,
+      recsTotal: 1,
+      transcriptSent: true,
+      schoolReportSent: true,
+      scoreSendsSent: 0,
+      complete: true,
+    });
+    expect(detail.collegeList[1].completeness).toEqual({
+      recsAgreed: 0,
+      recsSubmitted: 0,
+      recsTotal: 0,
+      transcriptSent: false,
+      schoolReportSent: false,
+      scoreSendsSent: 0,
+      complete: false,
+    });
+
+    // Two active ED/ED2 items — a "submitted" event does not deactivate, so
+    // the plan WARNS (never blocks, CM-45).
+    expect(detail.applicationWarnings).toHaveLength(1);
+    expect(detail.applicationWarnings[0]).toMatchObject({
+      code: "multiple_early_decision",
+      listItemIds: [ITEM_A, ITEM_B],
+    });
+
+    // The application deadline reaches the Overview panel via the calendar.
+    expect(detail.nextDeadline).toBe("2026-08-15");
+    expect(detail.upcomingDeadlines[0]).toMatchObject({
+      id: ITEM_A,
+      source: "application",
+      title: "University of Oxford — ED deadline",
+      overdue: false,
+    });
   });
 
   it("throws NotFound when the case is missing or soft-deleted", async () => {

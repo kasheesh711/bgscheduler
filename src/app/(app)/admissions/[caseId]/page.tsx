@@ -12,9 +12,19 @@ import {
   listCaseTasks,
   type AdmissionsTaskDto,
 } from "@/lib/admissions/checklists";
+import {
+  listApplicationEvents,
+  type AdmissionsApplicationEventDto,
+} from "@/lib/admissions/colleges";
 import { roleAtLeast } from "@/lib/admissions/config";
 import { listMeetings } from "@/lib/admissions/meetings";
 import { listNotesForRole } from "@/lib/admissions/notes";
+import {
+  listCollegeDocs,
+  listRecommenders,
+  type AdmissionsCollegeDocDto,
+  type AdmissionsRecommenderWithCollegesDto,
+} from "@/lib/admissions/recommenders";
 import { todayBangkok } from "@/lib/room-capacity/dates";
 import {
   CaseDetailShell,
@@ -76,21 +86,40 @@ async function CaseDetailBody({ caseId }: { caseId: string }) {
   let meetings: AdmissionsMeetingDto[];
   let tasks: AdmissionsTaskDto[];
   let calendarItems: CalendarItem[];
+  let recommenders: AdmissionsRecommenderWithCollegesDto[];
+  let collegeDocs: AdmissionsCollegeDocDto[];
+  const applicationEvents: Record<string, AdmissionsApplicationEventDto[]> = {};
   try {
-    [caseDetail, notes, meetings, tasks, calendarItems] = await Promise.all([
-      getCaseDetail(caseId),
-      // Role-shaped: family readers only ever receive shared_with_family rows.
-      listNotesForRole(caseId, access.role),
-      // The meeting log is staff-only (design §4); family viewers get none.
-      isStaff ? listMeetings(caseId) : Promise.resolve([]),
-      canViewChecklist ? listCaseTasks(caseId) : Promise.resolve([]),
-      canViewChecklist
-        ? buildCaseCalendar(caseId, {
-            from: `${calendarMonth}-01`,
-            to: `${calendarMonth}-${String(calendarMonthLastDay).padStart(2, "0")}`,
-          })
-        : Promise.resolve([]),
-    ]);
+    [caseDetail, notes, meetings, tasks, calendarItems, recommenders, collegeDocs] =
+      await Promise.all([
+        getCaseDetail(caseId),
+        // Role-shaped: family readers only ever receive shared_with_family rows.
+        listNotesForRole(caseId, access.role),
+        // The meeting log is staff-only (design §4); family viewers get none.
+        isStaff ? listMeetings(caseId) : Promise.resolve([]),
+        canViewChecklist ? listCaseTasks(caseId) : Promise.resolve([]),
+        canViewChecklist
+          ? buildCaseCalendar(caseId, {
+              from: `${calendarMonth}-01`,
+              to: `${calendarMonth}-${String(calendarMonthLastDay).padStart(2, "0")}`,
+            })
+          : Promise.resolve([]),
+        // Colleges/Applications data shares the checklist's student+ gate
+        // (design §4) — parents get their projection on the parent dashboard.
+        canViewChecklist ? listRecommenders(caseId) : Promise.resolve([]),
+        canViewChecklist ? listCollegeDocs(caseId) : Promise.resolve([]),
+      ]);
+
+    // Decision chains (CM-43) hang off the college list ids, so they load
+    // after the case detail resolves — one batched fan-out, oldest first.
+    if (canViewChecklist && caseDetail.collegeList.length > 0) {
+      const eventLists = await Promise.all(
+        caseDetail.collegeList.map((item) => listApplicationEvents(item.id)),
+      );
+      caseDetail.collegeList.forEach((item, index) => {
+        applicationEvents[item.id] = eventLists[index];
+      });
+    }
   } catch (error) {
     if (error instanceof Error && error.message === "NotFound") {
       notFound();
@@ -106,6 +135,9 @@ async function CaseDetailBody({ caseId }: { caseId: string }) {
       tasks={tasks}
       calendarMonth={calendarMonth}
       calendarItems={calendarItems}
+      recommenders={recommenders}
+      collegeDocs={collegeDocs}
+      applicationEvents={applicationEvents}
       viewerRole={access.role}
       viewerEmail={access.email}
     />
