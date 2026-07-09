@@ -21,6 +21,7 @@ import {
 } from "@/lib/admissions/cases";
 import { listCohorts } from "@/lib/admissions/cohorts";
 import { listCounselors } from "@/lib/admissions/counselors";
+import { listResources } from "@/lib/admissions/resources";
 import { CaseloadShell, CaseloadSkeleton } from "@/components/admissions/caseload-shell";
 
 function NoCaseYetCard() {
@@ -97,13 +98,24 @@ async function AdmissionsBody() {
     return <NoAccessCard />;
   }
 
-  const [caseload, cohorts, counselors] = await Promise.all([
+  const [caseload, cohorts, counselors, resourceGroups] = await Promise.all([
     getCaseloadForUser(email),
     listCohorts(),
     listCounselors(),
+    listResources(),
   ]);
 
-  return <CaseloadShell caseload={caseload} cohorts={cohorts} counselors={counselors} />;
+  return (
+    <CaseloadShell
+      caseload={caseload}
+      cohorts={cohorts}
+      counselors={counselors}
+      resourceGroups={resourceGroups}
+      // Presentation-only role for the resources panel affordances; the API
+      // re-resolves staff rights from Postgres on every write.
+      viewerRole={role === "counselor" ? "counselor" : "admin"}
+    />
+  );
 }
 
 export default function AdmissionsPage() {

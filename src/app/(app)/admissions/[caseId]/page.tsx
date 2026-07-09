@@ -30,6 +30,10 @@ import {
   type AdmissionsRecommenderWithCollegesDto,
 } from "@/lib/admissions/recommenders";
 import {
+  listResources,
+  type AdmissionsResourceTopicGroup,
+} from "@/lib/admissions/resources";
+import {
   ADMISSIONS_SECTION_KEYS,
   getSectionState,
   type AdmissionsSectionStateDto,
@@ -98,8 +102,9 @@ async function CaseDetailBody({ caseId }: { caseId: string }) {
     let tasks: AdmissionsTaskDto[];
     let bestScores: AdmissionsBestScore[];
     let sectionStates: AdmissionsSectionStateDto[];
+    let resourceGroups: AdmissionsResourceTopicGroup[];
     try {
-      [caseDetail, tasks, bestScores, sectionStates] = await Promise.all([
+      [caseDetail, tasks, bestScores, sectionStates, resourceGroups] = await Promise.all([
         getCaseDetail(caseId),
         listCaseTasks(caseId),
         getBestScores(caseId),
@@ -108,6 +113,8 @@ async function CaseDetailBody({ caseId }: { caseId: string }) {
             getSectionState(caseId, sectionKey),
           ),
         ),
+        // The resource library is global + student-readable (CM-92, design §4).
+        listResources(),
       ]);
     } catch (error) {
       if (error instanceof Error && error.message === "NotFound") {
@@ -121,6 +128,7 @@ async function CaseDetailBody({ caseId }: { caseId: string }) {
         tasks={tasks}
         bestScores={bestScores}
         sectionStates={sectionStates}
+        resourceGroups={resourceGroups}
         viewerRole={access.role}
         viewerEmail={access.email}
       />

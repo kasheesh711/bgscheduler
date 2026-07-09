@@ -3,25 +3,37 @@
 // ----------------------------------------------------------------------------
 // Admissions caseload — client shell for /admissions (design §5.1,
 // desktop-dense). Header KPI row (active cases + status counts), a
-// Table ↔ Board view toggle, the "New case" dialog, and the selected view.
-// Server props are authz-scoped (getCaseloadForUser); after a successful
-// create the shell refreshes the route so the server re-fetches.
+// Table ↔ Board view toggle, the "New case" dialog, the "Resources" library
+// dialog (CM-92 — the library is global, so it lives here rather than as a
+// per-case tab), and the selected view. Server props are authz-scoped
+// (getCaseloadForUser); after a successful create the shell refreshes the
+// route so the server re-fetches.
 // ----------------------------------------------------------------------------
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Columns3, Plus, Table2 } from "lucide-react";
+import { BookOpen, Columns3, Plus, Table2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import type { AdmissionsResourceTopicGroup } from "@/lib/admissions/resources";
 import type {
   AdmissionsCaseStatus,
   AdmissionsCaseSummary,
   AdmissionsCohortDto,
   AdmissionsCounselorDto,
+  CaseRole,
 } from "@/lib/admissions/types";
 import { CaseloadBoard } from "./caseload-board";
 import { CaseloadTable } from "./caseload-table";
 import { CreateCaseDialog } from "./create-case-dialog";
+import { ResourcesPanel } from "./resources-panel";
 
 /** Caseload view mode; the table is the desktop-dense default. */
 export type CaseloadView = "table" | "board";
@@ -91,13 +103,24 @@ export interface CaseloadShellProps {
   caseload: AdmissionsCaseSummary[];
   cohorts: AdmissionsCohortDto[];
   counselors: AdmissionsCounselorDto[];
+  /** Resource library topic groups (listResources, CM-92). */
+  resourceGroups: AdmissionsResourceTopicGroup[];
+  /** Postgres-agnostic session role — "counselor" or "admin" on this shell. */
+  viewerRole: CaseRole;
 }
 
 /** The /admissions counselor/admin workspace (caseload table + board). */
-export function CaseloadShell({ caseload, cohorts, counselors }: CaseloadShellProps) {
+export function CaseloadShell({
+  caseload,
+  cohorts,
+  counselors,
+  resourceGroups,
+  viewerRole,
+}: CaseloadShellProps) {
   const router = useRouter();
   const [view, setView] = useState<CaseloadView>("table");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [resourcesOpen, setResourcesOpen] = useState(false);
 
   const kpis = computeCaseloadKpis(caseload);
 
@@ -117,6 +140,15 @@ export function CaseloadShell({ caseload, cohorts, counselors }: CaseloadShellPr
         </div>
         <div className="flex items-center gap-2">
           <ViewToggle view={view} onChange={setView} />
+          <Button
+            type="button"
+            variant="outline"
+            data-testid="open-resources"
+            onClick={() => setResourcesOpen(true)}
+          >
+            <BookOpen aria-hidden className="size-4" />
+            Resources
+          </Button>
           <Button type="button" onClick={() => setDialogOpen(true)}>
             <Plus aria-hidden className="size-4" />
             New case
@@ -140,6 +172,19 @@ export function CaseloadShell({ caseload, cohorts, counselors }: CaseloadShellPr
         counselors={counselors}
         onCreated={handleCreated}
       />
+
+      {/* ── Resource library (CM-92 — global, staff-managed) ── */}
+      <Dialog open={resourcesOpen} onOpenChange={setResourcesOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Resource library</DialogTitle>
+            <DialogDescription>
+              Curated links shown to every student in their portal.
+            </DialogDescription>
+          </DialogHeader>
+          <ResourcesPanel groups={resourceGroups} viewerRole={viewerRole} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

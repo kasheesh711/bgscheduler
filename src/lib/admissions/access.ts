@@ -219,6 +219,35 @@ export async function requireCounselorOrAdmin(
 }
 
 /**
+ * Per-request admin check for the cross-case admin surfaces (design §2.2 —
+ * the JWT role claim shapes nav only, never rights): counselor registry,
+ * cohort creation, and template management. Resolved from Postgres on EVERY
+ * request so removing an email from `admin_users` revokes these surfaces
+ * instantly, not at JWT expiry.
+ *
+ * 1. Normalize the email; throw "Unauthorized" when empty.
+ * 2. Require an `admin_users` row; anyone else — including active registry
+ *    counselors — throws "Forbidden" (fail-closed).
+ *
+ * @returns the resolved admin access on success.
+ */
+export async function requireAdmissionsAdmin(
+  email: string,
+  db: Database = getDb(),
+): Promise<AdmissionsStaffAccess> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) throw new Error("Unauthorized");
+
+  const adminRows = await db
+    .select({ id: adminUsers.id })
+    .from(adminUsers)
+    .where(eq(adminUsers.email, normalized))
+    .limit(1);
+  if (adminRows.length === 0) throw new Error("Forbidden");
+  return { email: normalized, role: "admin", isAdmin: true };
+}
+
+/**
  * Translates guard/domain errors into the route-handler response contract
  * (mirror of progressTestsErrorResponse, plus NotFound→404 and Conflict→409
  * for the admissions optimistic-concurrency and existence semantics).

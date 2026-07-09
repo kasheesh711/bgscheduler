@@ -8,6 +8,7 @@ vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 import { auth } from "@/lib/auth";
 import {
   admissionsErrorResponse,
+  requireAdmissionsAdmin,
   requireAdmissionsSession,
   requireCaseAccess,
   requireCounselorOrAdmin,
@@ -297,6 +298,47 @@ describe("requireCounselorOrAdmin", () => {
     const staff = await requireCounselorOrAdmin("  STAFF@Example.com ", db);
 
     expect(staff.email).toBe("staff@example.com");
+  });
+});
+
+describe("requireAdmissionsAdmin", () => {
+  // Queue order: [adminUsers].
+  it("resolves an admin_users row to admin", async () => {
+    const { db, selectCalls } = fakeDb([[{ id: "a1" }]]);
+
+    await expect(requireAdmissionsAdmin("admin@example.com", db)).resolves.toEqual({
+      email: "admin@example.com",
+      role: "admin",
+      isAdmin: true,
+    });
+    expect(selectCalls).toHaveLength(1);
+  });
+
+  it("throws Forbidden for an active registry counselor (admin only, never role-upgraded)", async () => {
+    const { db } = fakeDb([[]]);
+
+    await expect(requireAdmissionsAdmin("staff@example.com", db)).rejects.toThrow("Forbidden");
+  });
+
+  it("throws Forbidden for a removed admin (instant revocation, design §2.2)", async () => {
+    const { db } = fakeDb([[]]);
+
+    await expect(requireAdmissionsAdmin("ex-admin@example.com", db)).rejects.toThrow("Forbidden");
+  });
+
+  it("throws Unauthorized for an empty email without querying", async () => {
+    const { db, selectCalls } = fakeDb([]);
+
+    await expect(requireAdmissionsAdmin("   ", db)).rejects.toThrow("Unauthorized");
+    expect(selectCalls).toHaveLength(0);
+  });
+
+  it("normalizes the email onto the returned access", async () => {
+    const { db } = fakeDb([[{ id: "a1" }]]);
+
+    const admin = await requireAdmissionsAdmin("  ADMIN@Example.com ", db);
+
+    expect(admin.email).toBe("admin@example.com");
   });
 });
 

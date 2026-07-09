@@ -30,7 +30,7 @@
 // college, concurrency mismatch) → Error("Conflict"); input-shape violations
 // throw descriptive Errors (routes' Zod schemas are the 400 boundary).
 
-import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import {
   admissionsApplicationEvents,
@@ -783,6 +783,25 @@ export async function addApplicationEvent(
       ) {
         throw new Error("Conflict");
       }
+
+      // CM-44 race safety: the read above is check-then-write, so two
+      // concurrent commits could both see a null pointer. This conditional
+      // self-referential UPDATE takes the case row lock and re-evaluates the
+      // pointer under it — a concurrent winner makes the WHERE miss, and the
+      // zero-row result surfaces as Conflict before any event is appended.
+      const guardRows = await tx
+        .update(admissionsCases)
+        .set({ updatedAt: new Date() })
+        .where(and(
+          eq(admissionsCases.id, input.access.caseId),
+          isNull(admissionsCases.deletedAt),
+          or(
+            isNull(admissionsCases.committedListItemId),
+            eq(admissionsCases.committedListItemId, item.id),
+          ),
+        ))
+        .returning({ id: admissionsCases.id });
+      if (guardRows.length === 0) throw new Error("Conflict");
     }
 
     const insertedRows = await tx
@@ -893,8 +912,11 @@ export interface CommittedCollegeResult {
  * 1. Load the live item scoped to the case (miss → NotFound) and the case row.
  * 2. Already committed to this item → idempotent no-op (no writes). Committed
  *    to a DIFFERENT item → Error("Conflict") — clearCommittedCollege first.
- * 3. Point the case at the item, append the "committed" event (eventDate
- *    defaults to today's Bangkok date), and audit the pointer diff.
+ * 3. Point the case at the item with a conditional UPDATE (`WHERE
+ *    committed_list_item_id IS NULL`, zero rows → Conflict — so a concurrent
+ *    commit race can never produce two committed items), append the
+ *    "committed" event (eventDate defaults to today's Bangkok date), and
+ *    audit the pointer diff.
  *
  * @returns the caseId, the committed item id, and the new case updatedAt.
  */
@@ -919,11 +941,20 @@ export async function setCommittedCollege(
     }
     if (caseRow.committedListItemId !== null) throw new Error("Conflict");
 
+    // CM-44 race safety: the pointer write itself carries the "still
+    // uncommitted" condition, so two concurrent commits can never both win —
+    // the loser's UPDATE matches zero rows (the row lock forces it to see the
+    // winner's pointer) and rolls back before appending its event.
     const now = new Date();
-    await tx
+    const updatedRows = await tx
       .update(admissionsCases)
       .set({ committedListItemId: item.id, updatedAt: now })
-      .where(eq(admissionsCases.id, caseRow.id));
+      .where(and(
+        eq(admissionsCases.id, caseRow.id),
+        isNull(admissionsCases.committedListItemId),
+      ))
+      .returning({ id: admissionsCases.id });
+    if (updatedRows.length === 0) throw new Error("Conflict");
 
     const eventDate = input.eventDate ?? getBangkokDateKey(now);
     await tx.insert(admissionsApplicationEvents).values({

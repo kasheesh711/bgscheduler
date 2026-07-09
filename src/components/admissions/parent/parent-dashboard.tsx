@@ -390,7 +390,11 @@ export function ParentDashboardView({
   return (
     <div
       data-testid="parent-dashboard"
-      className="mx-auto w-full max-w-screen-sm space-y-4 px-1 pt-2 pb-8 text-base"
+      // min-h-0 flex-1 overflow-y-auto: the (app) layout's <main> is a
+      // fixed-height overflow-hidden flex column, so this root must own its
+      // scrolling or everything below the first viewport is clipped
+      // (design §5.3 single-scroll page).
+      className="mx-auto min-h-0 w-full max-w-screen-sm flex-1 space-y-4 overflow-y-auto px-1 pt-2 pb-8 text-base"
     >
       {/* ── Language toggle (the ONLY buttons on the page, CM-131) ── */}
       <div

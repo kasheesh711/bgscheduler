@@ -12,11 +12,13 @@
 // - POST case-scoped: requireCaseAccess minRole counselor on THAT case.
 // - POST cohort-scoped: requireCounselorOrAdmin (admin or active registry
 //   counselor).
-// - PATCH/DELETE: requireCounselorOrAdmin. The target's scope lives on the
-//   stored row, not the request — client-supplied scope can never be trusted
-//   for rights, so mutations gate on the Postgres-resolved staff check
-//   (matches the design §2.2 matrix: announcements are counselor/admin-only
-//   writes) and run BEFORE body parsing.
+// - PATCH/DELETE: requireCounselorOrAdmin runs BEFORE body parsing (non-staff
+//   never read the body), then rights re-anchor on the STORED row's scope —
+//   never client-supplied ids: a case-scoped target additionally requires
+//   requireCaseAccess minRole counselor on THAT case (mutation is never
+//   looser than creation), while a cohort broadcast stays at the staff bar
+//   (matching POST). Scope is immutable, so the pre-transaction check cannot
+//   race a retarget.
 //
 // DELETE is a soft delete (announcementId query param); the lib retains the
 // row for the audit trail.
@@ -31,11 +33,38 @@ import {
 } from "@/lib/admissions/access";
 import {
   createAnnouncement,
+  getAnnouncementScope,
   listAnnouncementsForCase,
   listAnnouncementsForCohort,
   softDeleteAnnouncement,
   updateAnnouncement,
 } from "@/lib/admissions/announcements";
+import type { AdmissionsStaffAccess } from "@/lib/admissions/access";
+import type { CaseRole } from "@/lib/admissions/types";
+
+/** The actor stamped on a PATCH/DELETE audit row after scope re-anchoring. */
+interface AnnouncementMutationActor {
+  email: string;
+  role: CaseRole;
+}
+
+/**
+ * Re-anchors a mutation on the stored announcement's scope: case-scoped rows
+ * require counselor-level membership on THAT case (admins bypass inside
+ * requireCaseAccess); cohort broadcasts keep the already-verified staff bar.
+ * Throws NotFound/Forbidden exactly like the guards it delegates to.
+ */
+async function requireAnnouncementMutationAccess(
+  staff: AdmissionsStaffAccess,
+  announcementId: string,
+): Promise<AnnouncementMutationActor> {
+  const scope = await getAnnouncementScope(announcementId);
+  if (scope.caseId !== null) {
+    const access = await requireCaseAccess(staff.email, scope.caseId, "counselor");
+    return { email: access.email, role: access.role };
+  }
+  return { email: staff.email, role: staff.role };
+}
 
 const ROUTE = "/api/admissions/announcements";
 
@@ -181,10 +210,14 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
+    const actor = await requireAnnouncementMutationAccess(
+      staff,
+      parsed.data.announcementId,
+    );
     const announcement = await updateAnnouncement({
       announcementId: parsed.data.announcementId,
-      actorEmail: staff.email,
-      actorRole: staff.role,
+      actorEmail: actor.email,
+      actorRole: actor.role,
       title: parsed.data.title,
       body: parsed.data.body,
     });
@@ -209,10 +242,14 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
+    const actor = await requireAnnouncementMutationAccess(
+      staff,
+      parsed.data.announcementId,
+    );
     await softDeleteAnnouncement({
       announcementId: parsed.data.announcementId,
-      actorEmail: staff.email,
-      actorRole: staff.role,
+      actorEmail: actor.email,
+      actorRole: actor.role,
     });
     return NextResponse.json({ ok: true });
   } catch (error) {

@@ -13,6 +13,7 @@
 
 import { useCallback, useState } from "react";
 import { cn } from "@/lib/utils";
+import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -33,8 +34,7 @@ import type {
   AdmissionsTaskRecurrence,
 } from "@/lib/admissions/checklists";
 
-const SELECT_CLASSES =
-  "h-8 w-full rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30";
+const SELECT_CLASSES = cn(SELECT_FIELD_CLASSES, "h-8 w-full");
 
 /** Display labels for task owners (checklist rows + the owner select). */
 export const TASK_OWNER_LABELS: Record<AdmissionsTaskOwner, string> = {

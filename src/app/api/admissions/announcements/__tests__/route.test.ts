@@ -14,6 +14,7 @@ vi.mock("@/lib/admissions/access", async (importOriginal) => ({
 }));
 vi.mock("@/lib/admissions/announcements", () => ({
   createAnnouncement: vi.fn(),
+  getAnnouncementScope: vi.fn(),
   listAnnouncementsForCase: vi.fn(),
   listAnnouncementsForCohort: vi.fn(),
   softDeleteAnnouncement: vi.fn(),
@@ -24,6 +25,7 @@ import { auth } from "@/lib/auth";
 import { requireCaseAccess, requireCounselorOrAdmin } from "@/lib/admissions/access";
 import {
   createAnnouncement,
+  getAnnouncementScope,
   listAnnouncementsForCase,
   listAnnouncementsForCohort,
   softDeleteAnnouncement,
@@ -115,6 +117,8 @@ describe("/api/admissions/announcements", () => {
     vi.mocked(listAnnouncementsForCase).mockResolvedValue([CASE_ANNOUNCEMENT_DTO]);
     vi.mocked(listAnnouncementsForCohort).mockResolvedValue([COHORT_ANNOUNCEMENT_DTO]);
     vi.mocked(createAnnouncement).mockResolvedValue(CASE_ANNOUNCEMENT_DTO);
+    // Default mutation target: a case-scoped row (PATCH/DELETE re-anchor on it).
+    vi.mocked(getAnnouncementScope).mockResolvedValue({ caseId: CASE_ID, cohortId: null });
     vi.mocked(updateAnnouncement).mockResolvedValue(CASE_ANNOUNCEMENT_DTO);
     vi.mocked(softDeleteAnnouncement).mockResolvedValue(undefined);
   });
@@ -326,7 +330,7 @@ describe("/api/admissions/announcements", () => {
   });
 
   describe("PATCH", () => {
-    it("updates an announcement behind the staff gate", async () => {
+    it("updates a case-scoped announcement re-anchored on THAT case's counselor bar", async () => {
       const res = await PATCH(
         makeBodyRequest("PATCH", { announcementId: ANNOUNCEMENT_ID, title: "New title" }),
       );
@@ -334,6 +338,9 @@ describe("/api/admissions/announcements", () => {
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({ announcement: CASE_ANNOUNCEMENT_DTO });
       expect(requireCounselorOrAdmin).toHaveBeenCalledWith("counselor@example.com");
+      // The stored row's scope, never client input, drives the re-anchor.
+      expect(getAnnouncementScope).toHaveBeenCalledWith(ANNOUNCEMENT_ID);
+      expect(requireCaseAccess).toHaveBeenCalledWith("counselor@example.com", CASE_ID, "counselor");
       expect(updateAnnouncement).toHaveBeenCalledWith({
         announcementId: ANNOUNCEMENT_ID,
         actorEmail: "counselor@example.com",
@@ -341,6 +348,34 @@ describe("/api/admissions/announcements", () => {
         title: "New title",
         body: undefined,
       });
+    });
+
+    it("returns 403 for a staff counselor who is NOT a member of the target case", async () => {
+      // Registry counselor passes the staff gate but holds no membership on
+      // the announcement's case — mutation must be no looser than creation.
+      vi.mocked(requireCaseAccess).mockRejectedValue(new Error("Forbidden"));
+
+      const res = await PATCH(
+        makeBodyRequest("PATCH", { announcementId: ANNOUNCEMENT_ID, title: "x" }),
+      );
+
+      expect(res.status).toBe(403);
+      expect(updateAnnouncement).not.toHaveBeenCalled();
+    });
+
+    it("keeps cohort broadcasts at the staff bar (no case re-anchor)", async () => {
+      vi.mocked(getAnnouncementScope).mockResolvedValue({ caseId: null, cohortId: COHORT_ID });
+      vi.mocked(updateAnnouncement).mockResolvedValue(COHORT_ANNOUNCEMENT_DTO);
+
+      const res = await PATCH(
+        makeBodyRequest("PATCH", { announcementId: ANNOUNCEMENT_ID, title: "New title" }),
+      );
+
+      expect(res.status).toBe(200);
+      expect(requireCaseAccess).not.toHaveBeenCalled();
+      expect(updateAnnouncement).toHaveBeenCalledWith(
+        expect.objectContaining({ actorEmail: "counselor@example.com", actorRole: "counselor" }),
+      );
     });
 
     it("returns 403 before reading the body when the caller is not staff", async () => {
@@ -352,6 +387,7 @@ describe("/api/admissions/announcements", () => {
       );
 
       expect(res.status).toBe(403);
+      expect(getAnnouncementScope).not.toHaveBeenCalled();
       expect(updateAnnouncement).not.toHaveBeenCalled();
     });
 
@@ -378,7 +414,7 @@ describe("/api/admissions/announcements", () => {
     });
 
     it("returns 404 when the announcement does not exist", async () => {
-      vi.mocked(updateAnnouncement).mockRejectedValue(new Error("NotFound"));
+      vi.mocked(getAnnouncementScope).mockRejectedValue(new Error("NotFound"));
 
       const res = await PATCH(
         makeBodyRequest("PATCH", { announcementId: ANNOUNCEMENT_ID, title: "x" }),
@@ -386,6 +422,7 @@ describe("/api/admissions/announcements", () => {
 
       expect(res.status).toBe(404);
       await expect(res.json()).resolves.toEqual({ error: "Not found" });
+      expect(updateAnnouncement).not.toHaveBeenCalled();
     });
 
     it("returns 401 when unauthenticated", async () => {
@@ -401,17 +438,28 @@ describe("/api/admissions/announcements", () => {
   });
 
   describe("DELETE", () => {
-    it("soft-deletes an announcement behind the staff gate", async () => {
+    it("soft-deletes a case-scoped announcement re-anchored on THAT case's counselor bar", async () => {
       const res = await DELETE(makeDeleteRequest(`?announcementId=${ANNOUNCEMENT_ID}`));
 
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({ ok: true });
       expect(requireCounselorOrAdmin).toHaveBeenCalledWith("counselor@example.com");
+      expect(getAnnouncementScope).toHaveBeenCalledWith(ANNOUNCEMENT_ID);
+      expect(requireCaseAccess).toHaveBeenCalledWith("counselor@example.com", CASE_ID, "counselor");
       expect(softDeleteAnnouncement).toHaveBeenCalledWith({
         announcementId: ANNOUNCEMENT_ID,
         actorEmail: "counselor@example.com",
         actorRole: "counselor",
       });
+    });
+
+    it("returns 403 for a staff counselor who is NOT a member of the target case", async () => {
+      vi.mocked(requireCaseAccess).mockRejectedValue(new Error("Forbidden"));
+
+      const res = await DELETE(makeDeleteRequest(`?announcementId=${ANNOUNCEMENT_ID}`));
+
+      expect(res.status).toBe(403);
+      expect(softDeleteAnnouncement).not.toHaveBeenCalled();
     });
 
     it("returns 400 when announcementId is missing or not a uuid", async () => {

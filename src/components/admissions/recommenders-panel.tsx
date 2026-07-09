@@ -24,6 +24,7 @@ import { useRouter } from "next/navigation";
 import { Link2Icon, PlusIcon, Trash2Icon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -125,8 +126,7 @@ export function unlinkedColleges(
 
 // ── Internal helpers ────────────────────────────────────────────────────
 
-const SELECT_CLASSES =
-  "h-8 rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30";
+const SELECT_CLASSES = cn(SELECT_FIELD_CLASSES, "h-8");
 
 function readErrorMessage(payload: unknown, fallback: string): string {
   if (

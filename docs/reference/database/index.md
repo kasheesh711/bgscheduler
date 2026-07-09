@@ -1,6 +1,7 @@
 # Database Reference — Master Table Index
 
-Canonical lookup of **every table** in the BGScheduler Postgres database. All 85 tables
+Canonical lookup of **every table** in the BGScheduler Postgres database. All 110 tables
+indexed here (85 at the previous verification + 25 University Admissions `admissions_*` tables)
 are defined in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) via Drizzle ORM.
 This page is the index: it lists each table's SQL name, its Drizzle export name, the
 domain it belongs to, its **grain** (what one row represents), the feature that owns it,
@@ -29,7 +30,10 @@ A few tables are deliberately **snapshot-independent** (they survive snapshot ro
 `student_promotion_graduation_actions`, `student_promotion_pay_rate_impacts`,
 `room_utilization_sessions`, and `past_session_blocks`
 (`schema.ts:1347-1386`, the only cross-snapshot data table — see its note in
-[erd-core.md](./erd-core.md)).
+[erd-core.md](./erd-core.md)). The entire **University Admissions** domain (all 25
+`admissions_*` tables) is likewise snapshot-independent by design — its only ties to
+Wise/IPEDS data are plain soft-reference columns, never FKs
+([erd-university-admissions.md](./erd-university-admissions.md)).
 
 ## Domain map
 
@@ -46,7 +50,8 @@ A few tables are deliberately **snapshot-independent** (they survive snapshot ro
 | AI & Proposals | 6 | [erd-ai-and-proposals.md](./erd-ai-and-proposals.md) |
 | LINE | 8 | [erd-line.md](./erd-line.md) |
 | Room Capacity | 4 | [erd-room-capacity.md](./erd-room-capacity.md) |
-| **Total** | **85** | |
+| University Admissions | 25 | [erd-university-admissions.md](./erd-university-admissions.md) |
+| **Total** | **110** | |
 
 ## Master table list
 
@@ -214,6 +219,38 @@ Line ranges: `schema.ts:1785-1858`.
 | `room_capacity_forecast_drivers` | `roomCapacityForecastDrivers` | room-capacity | one scenario+month forecast driver row within a model run (`schema.ts:1799-1820`) | [Room capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) |
 | `room_capacity_demand_mix` | `roomCapacityDemandMix` | room-capacity | one weekday/time demand-mix bucket within a model run (`schema.ts:1822-1838`) | [Room capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) |
 | `room_capacity_package_mix` | `roomCapacityPackageMix` | room-capacity | one package-hour bucket within a model run (`schema.ts:1840-1858`) | [Room capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) |
+
+### University Admissions
+
+Line ranges: enums `schema.ts:233-334`, tables `schema.ts:2983-3396`. Owning feature: University Admissions case management (design: [`docs/casemanagementsystem_design.md`](../../casemanagementsystem_design.md); API: [university-admissions.md](../api/university-admissions.md)). All 25 tables are snapshot-independent; `wise_student_key` and `unit_id` are soft references, never FKs.
+
+| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
+|---|---|---|---|---|---|
+| `admissions_cohorts` | `admissionsCohorts` | admissions | one graduating-class cohort (unique on `name`) (`schema.ts:2989-2998`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_students` | `admissionsStudents` | admissions | one student identity record, soft-deletable (`schema.ts:3000-3017`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_cases` | `admissionsCases` | admissions | one admissions case; at most one live (`active`/`committed`) case per student via a partial unique index (`schema.ts:3019-3037`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_case_members` | `admissionsCaseMembers` | admissions | one email's membership on one case (unique on `case_id`+`email`) (`schema.ts:3039-3063`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_counselors` | `admissionsCounselors` | admissions | one global counselor registry row (unique on `email`; `active` gates sign-in) (`schema.ts:3065-3074`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_checklist_templates` | `admissionsChecklistTemplates` | admissions | one checklist-template version per cohort (unique on `cohort_id`+`version`) (`schema.ts:3076-3086`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_template_items` | `admissionsTemplateItems` | admissions | one checklist item within a template version (`schema.ts:3088-3102`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_case_tasks` | `admissionsCaseTasks` | admissions | one checklist task on a case (template-derived or custom) (`schema.ts:3104-3126`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_case_meetings` | `admissionsCaseMeetings` | admissions | one logged counselor meeting on a case (`schema.ts:3128-3141`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_college_list_items` | `admissionsCollegeListItems` | admissions | one college on a case's application list (IPEDS `unit_id` soft ref or manual entry) (`schema.ts:3143-3166`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_application_events` | `admissionsApplicationEvents` | admissions | one append-only decision event on a list item (`schema.ts:3168-3178`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_recommenders` | `admissionsRecommenders` | admissions | one recommendation writer for a case (`schema.ts:3180-3192`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_recommender_colleges` | `admissionsRecommenderColleges` | admissions | one recommender↔college link with submission state (unique on `recommender_id`+`list_item_id`) (`schema.ts:3194-3205`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_college_docs` | `admissionsCollegeDocs` | admissions | one supporting-doc send state per list item + `doc_type` (`schema.ts:3207-3218`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_essays` | `admissionsEssays` | admissions | one essay-tracker row on a case (soft `list_item_id` link) (`schema.ts:3220-3235`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_activities` | `admissionsActivities` | admissions | one extracurricular activity on the student-owned list (`schema.ts:3237-3251`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_test_sittings` | `admissionsTestSittings` | admissions | one standardized-test sitting for a case (`schema.ts:3253-3267`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_academic_records` | `admissionsAcademicRecords` | admissions | one academic-record payload per case + grading `system` + `effective_date` (`schema.ts:3269-3279`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_notes` | `admissionsNotes` | admissions | one case note with a mandatory explicit visibility (`schema.ts:3281-3294`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_announcements` | `admissionsAnnouncements` | admissions | one announcement targeting a cohort **xor** a case (CHECK constraint) (`schema.ts:3296-3314`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_resources` | `admissionsResources` | admissions | one link in the global resource library (`schema.ts:3316-3327`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_self_report_sections` | `admissionsSelfReportSections` | admissions | one guided self-report section per case (unique on `case_id`+`section_key`) (`schema.ts:3329-3342`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_audit_log` | `admissionsAuditLog` | admissions | one append-only audit entry per admissions write (`schema.ts:3344-3358`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_notification_log` | `admissionsNotificationLog` | admissions | one sent notification email (partial-unique `dedupe_key` for exactly-once sends) (`schema.ts:3360-3379`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_notification_runs` | `admissionsNotificationRuns` | admissions | one daily/weekly notification-cron run; single `running` guard (`schema.ts:3381-3396`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 
 ## Notes & caveats
 

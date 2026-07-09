@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 vi.mock("@/lib/admissions/calendar", () => ({
-  getUpcomingDeadlines: vi.fn(async () => []),
-  UPCOMING_DEADLINES_MAX_LIMIT: 100,
+  getOpenDeadlinesInRange: vi.fn(async () => []),
 }));
 vi.mock("@/lib/admissions/announcements", () => ({
   listAnnouncementsForCase: vi.fn(async () => []),
@@ -17,7 +16,7 @@ import {
   admissionsNotificationRuns,
   admissionsSelfReportSections,
 } from "@/lib/db/schema";
-import { getUpcomingDeadlines } from "@/lib/admissions/calendar";
+import { getOpenDeadlinesInRange } from "@/lib/admissions/calendar";
 import { listAnnouncementsForCase } from "@/lib/admissions/announcements";
 import {
   ADMISSIONS_SIGN_IN_URL,
@@ -41,7 +40,7 @@ const TODAY_KEY = "2026-07-01";
 const D7_KEY = "2026-07-08";
 const D2_KEY = "2026-07-03";
 
-const getUpcomingDeadlinesMock = vi.mocked(getUpcomingDeadlines);
+const getOpenDeadlinesInRangeMock = vi.mocked(getOpenDeadlinesInRange);
 const listAnnouncementsMock = vi.mocked(listAnnouncementsForCase);
 
 type Row = Record<string, unknown>;
@@ -221,7 +220,7 @@ describe("sendAdmissionsEmail", () => {
 });
 
 describe("buildDeadlineReminders", () => {
-  it("plans T-7d/T-48h reminders per assigned recipient, ignoring notification prefs (CM-112)", async () => {
+  it("plans windowed reminders per assigned recipient, ignoring notification prefs (CM-112)", async () => {
     const { db } = makeDb({
       selects: new Map<unknown, SelectBehavior>([
         [admissionsCases, { where: [{ id: CASE_ID }] }],
@@ -239,15 +238,22 @@ describe("buildDeadlineReminders", () => {
         }],
       ]),
     });
-    getUpcomingDeadlinesMock.mockResolvedValueOnce([
-      calendarItem({ id: "item-a", title: "Essay draft", date: D7_KEY, ownerRole: "student" }),
+    getOpenDeadlinesInRangeMock.mockResolvedValueOnce([
       calendarItem({ id: "item-b", title: "Verify transcript", date: D2_KEY, ownerRole: "counselor" }),
-      calendarItem({ id: "item-c", title: "Far future", date: "2026-07-20", ownerRole: "student" }),
+      calendarItem({ id: "item-a", title: "Essay draft", date: D7_KEY, ownerRole: "student" }),
       calendarItem({ id: "item-d", title: "Ownerless app deadline", date: D7_KEY, ownerRole: null }),
     ]);
 
     const reminders = await buildDeadlineReminders(NOW, db);
 
+    // One uncapped, batched range scan: [today, today+7] across every live case.
+    expect(getOpenDeadlinesInRangeMock).toHaveBeenCalledTimes(1);
+    expect(getOpenDeadlinesInRangeMock).toHaveBeenCalledWith(
+      [CASE_ID],
+      { from: TODAY_KEY, to: D7_KEY },
+      NOW,
+      db,
+    );
     expect(reminders).toEqual([
       {
         recipientEmail: "counselor@example.com",
@@ -273,6 +279,45 @@ describe("buildDeadlineReminders", () => {
       },
     ]);
   });
+
+  it("catches up mid-window items after a missed run (range scan, not exact-day)", async () => {
+    const { db } = makeDb({
+      selects: new Map<unknown, SelectBehavior>([
+        [admissionsCases, { where: [{ id: CASE_ID }] }],
+        [admissionsCaseMembers, { where: [memberRow({})] }],
+      ]),
+    });
+    getOpenDeadlinesInRangeMock.mockResolvedValueOnce([
+      // Due tomorrow (the exact-day T-2 scan yesterday was missed) → "2d".
+      calendarItem({ id: "item-t", title: "Due tomorrow", date: "2026-07-02" }),
+      // Due in 5 days (between the 2d and 7d marks) → "7d" catch-up.
+      calendarItem({ id: "item-m", title: "Due in five days", date: "2026-07-06" }),
+    ]);
+
+    const reminders = await buildDeadlineReminders(NOW, db);
+
+    expect(reminders).toEqual([{
+      recipientEmail: "student@example.com",
+      items: [
+        {
+          caseId: CASE_ID,
+          itemId: "item-t",
+          title: "Due tomorrow",
+          date: "2026-07-02",
+          window: "2d",
+          dedupeKey: "item-t:2d:student@example.com",
+        },
+        {
+          caseId: CASE_ID,
+          itemId: "item-m",
+          title: "Due in five days",
+          date: "2026-07-06",
+          window: "7d",
+          dedupeKey: "item-m:7d:student@example.com",
+        },
+      ],
+    }]);
+  });
 });
 
 describe("runDailyNotifications", () => {
@@ -288,7 +333,7 @@ describe("runDailyNotifications", () => {
     const { db, inserts, updates } = makeDb({
       selects: dailySelects([memberRow({})], 0),
     });
-    getUpcomingDeadlinesMock.mockResolvedValueOnce([
+    getOpenDeadlinesInRangeMock.mockResolvedValueOnce([
       calendarItem({ id: "item-a", title: "Essay draft" }),
       calendarItem({ id: "item-b", title: "SAT registration" }),
     ]);
@@ -320,7 +365,7 @@ describe("runDailyNotifications", () => {
     const { db, inserts } = makeDb({
       selects: dailySelects([memberRow({})], 0),
     });
-    getUpcomingDeadlinesMock.mockResolvedValueOnce([
+    getOpenDeadlinesInRangeMock.mockResolvedValueOnce([
       calendarItem({ id: "item-a", title: "Essay draft" }),
       calendarItem({ id: "item-b", title: "SAT registration" }),
       calendarItem({ id: "item-c", title: "Ask recommender" }),
@@ -336,18 +381,52 @@ describe("runDailyNotifications", () => {
       expect(body.html).toContain(title);
     }
     const logInserts = inserts.filter((call) => call.table === admissionsNotificationLog);
-    expect(logInserts).toHaveLength(1);
+    // One row for the combined email itself + one covered-window row per item
+    // (so the daily range re-plan never re-sends these windows).
+    expect(logInserts).toHaveLength(5);
     expect(logInserts[0].values.dedupeKey).toBe(
       `deadline-combined:student@example.com:${TODAY_KEY}`,
     );
+    expect(logInserts.slice(1).map((call) => call.values.dedupeKey)).toEqual([
+      "item-a:7d:student@example.com",
+      "item-b:7d:student@example.com",
+      "item-c:7d:student@example.com",
+      "item-d:7d:student@example.com",
+    ]);
+    // The covered rows record delivery without a second transport call.
+    expect(logInserts.slice(1).every((call) => call.values.resendEmailId === null)).toBe(true);
     expect(result.sentCount).toBe(1);
+  });
+
+  it("never re-plans an already-delivered window (daily range re-plan is idempotent)", async () => {
+    const { db, inserts } = makeDb({
+      selects: new Map<unknown, SelectBehavior>([
+        [admissionsCases, { where: [{ id: CASE_ID }] }],
+        [admissionsCaseMembers, { where: [memberRow({})] }],
+        // The per-item dedupe key is already logged (sent yesterday), so the
+        // pre-filter drops it before the cap decision and no email goes out.
+        [admissionsNotificationLog, {
+          where: [{ dedupeKey: "item-a:7d:student@example.com", value: 0 }],
+          limit: [],
+        }],
+      ]),
+    });
+    getOpenDeadlinesInRangeMock.mockResolvedValueOnce([
+      calendarItem({ id: "item-a", title: "Essay draft" }),
+    ]);
+
+    const result = await runDailyNotifications(NOW, db);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(inserts.filter((call) => call.table === admissionsNotificationLog)).toHaveLength(0);
+    expect(result).toEqual(expect.objectContaining({ sentCount: 0, skippedCount: 1 }));
   });
 
   it("counts today's already-sent interrupt emails toward the cap", async () => {
     const { db } = makeDb({
       selects: dailySelects([memberRow({})], INTERRUPT_DAILY_CAP),
     });
-    getUpcomingDeadlinesMock.mockResolvedValueOnce([
+    getOpenDeadlinesInRangeMock.mockResolvedValueOnce([
       calendarItem({ id: "item-a", title: "Essay draft" }),
     ]);
 

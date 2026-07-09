@@ -29,6 +29,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeftIcon, CalendarIcon, LockIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -364,8 +365,7 @@ function VisibilityBadge({ visibility }: { visibility: AdmissionsNoteVisibility 
   return <Badge variant="outline">Shared with family</Badge>;
 }
 
-const SELECT_CLASSES =
-  "h-8 w-full rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30";
+const SELECT_CLASSES = cn(SELECT_FIELD_CLASSES, "h-8 w-full");
 
 // ── Meeting form model ──────────────────────────────────────────────────
 
@@ -711,7 +711,10 @@ export function CaseDetailShell({
   const recentNotes = notes.slice(0, 3);
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 pb-10">
+    // min-h-0 flex-1 overflow-y-auto: the (app) layout's <main> is a
+    // fixed-height overflow-hidden flex column, so the shell must own its
+    // scrolling — this also gives the sticky header a scrolling ancestor.
+    <div className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-y-auto px-4 pb-10">
       {/* ── Sticky case header + tab bar ── */}
       <header className="sticky top-0 z-30 -mx-4 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur supports-backdrop-filter:bg-background/80">
         <div className="flex items-start justify-between gap-3">
@@ -1569,7 +1572,10 @@ export function CaseDetailShell({
 /** Suspense fallback for the case detail page (>300ms loads, design §5.4). */
 export function CaseDetailSkeleton() {
   return (
-    <div className="mx-auto w-full max-w-5xl animate-pulse px-4 pt-3" aria-hidden>
+    <div
+      className="mx-auto min-h-0 w-full max-w-5xl flex-1 animate-pulse overflow-y-auto px-4 pt-3"
+      aria-hidden
+    >
       <div className="h-3 w-16 rounded bg-muted" />
       <div className="mt-2 h-6 w-64 rounded bg-muted" />
       <div className="mt-2 h-3 w-40 rounded bg-muted" />

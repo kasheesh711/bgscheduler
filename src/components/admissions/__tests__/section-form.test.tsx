@@ -175,6 +175,38 @@ describe("SectionForm steps and fields", () => {
     expect(currentDot![0]).toContain('aria-current="step"');
   });
 
+  it("renders step dots as ≥44px step navigation, not a broken tabs pattern", () => {
+    const html = renderForm();
+    // No tab roles: the dots never implemented the full tablist contract
+    // (aria-selected / arrow keys / tabpanels), so they must not claim it.
+    expect(html).not.toContain('role="tablist"');
+    expect(html).not.toContain('role="tab"');
+    // Each dot button carries the §5.2 minimum touch target; the visible
+    // 12px dot is an aria-hidden span inside.
+    const dot = html.match(/<button[^>]*data-testid="step-dot-0"[^>]*>/);
+    expect(dot![0]).toContain("min-h-11");
+    expect(dot![0]).toContain("min-w-11");
+  });
+
+  it("wraps multiselect options in a ≥44px label so the option text is tappable", () => {
+    // Render step 2 by making the definition single-step? Simpler: the
+    // multiselect lives on step 2 — assert against the full second step via
+    // the sections-list host is out of scope, so assert the label classes on
+    // the first render of a section whose step 1 has the multiselect.
+    const definition = {
+      ...ABOUT_YOU,
+      steps: [ABOUT_YOU.steps[1]],
+    };
+    const html = renderForm({
+      section: makeSection({ definition }),
+    });
+    const checkbox = html.match(/<input[^>]*data-testid="field-favorite_subjects-[^"]*"[^>]*>/);
+    expect(checkbox).not.toBeNull();
+    // The wrapping label owns the hit area.
+    const labelBlock = html.match(/<label[^>]*class="[^"]*min-h-11[^"]*"[^>]*>/);
+    expect(labelBlock).not.toBeNull();
+  });
+
   it("renders helper microcopy, example placeholders, and live char counters", () => {
     const html = renderForm({
       section: makeSection({ payload: { preferred_name: "Mint" } }),

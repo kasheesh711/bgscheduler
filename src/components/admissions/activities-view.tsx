@@ -87,6 +87,7 @@ import {
   type AdmissionsUcBlock,
   type UcActivityCategory,
 } from "@/lib/admissions/activities";
+import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { roleAtLeast } from "@/lib/admissions/config";
 import type { CaseRole } from "@/lib/admissions/types";
 
@@ -114,8 +115,7 @@ export const COPY_FEEDBACK_MS = 2000;
 /** Which surface hosts the view: staff case tab or mobile student portal. */
 export type ActivitiesViewVariant = "tab" | "portal";
 
-const SELECT_CLASSES =
-  "h-8 w-full rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30";
+const SELECT_CLASSES = cn(SELECT_FIELD_CLASSES, "h-8 w-full");
 
 // ── Pure helpers (exported for tests) ───────────────────────────────────
 
@@ -551,6 +551,9 @@ function CopyFieldButton({
       type="button"
       size="xs"
       variant="ghost"
+      // ≥44px touch target on the student portal (design §5.2); the compact
+      // xs visuals (text/icon size) are kept.
+      className="min-h-11"
       disabled={disabled}
       onClick={onCopy}
       aria-label={`Copy ${fieldLabel}`}
@@ -843,9 +846,11 @@ export function ActivityEditor({
           </legend>
           <div className="flex flex-wrap gap-x-4 gap-y-1">
             {ADMISSIONS_ACTIVITY_GRADES.map((grade) => (
+              // min-h-11: the label (checkbox + text) is the tap target
+              // (design §5.2) — the 16px box alone is far too small.
               <label
                 key={grade}
-                className="flex items-center gap-1.5 text-sm text-foreground"
+                className="flex min-h-11 items-center gap-1.5 text-sm text-foreground"
               >
                 <input
                   type="checkbox"
@@ -1335,10 +1340,12 @@ export function ActivitiesView({
                       <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                         {activity.name}
                       </span>
+                      {/* min-h-11/min-w-11: ≥44px targets (design §5.2). */}
                       <Button
                         type="button"
                         size="icon-sm"
                         variant="ghost"
+                        className="min-h-11 min-w-11"
                         disabled={rankSaving || index === 0}
                         onClick={() => handleMoveRank(index, "up")}
                         aria-label={`Move ${activity.name} up`}
@@ -1349,6 +1356,7 @@ export function ActivitiesView({
                         type="button"
                         size="icon-sm"
                         variant="ghost"
+                        className="min-h-11 min-w-11"
                         disabled={rankSaving || index === rankIds.length - 1}
                         onClick={() => handleMoveRank(index, "down")}
                         aria-label={`Move ${activity.name} down`}
@@ -1359,6 +1367,7 @@ export function ActivitiesView({
                         type="button"
                         size="icon-sm"
                         variant="ghost"
+                        className="min-h-11 min-w-11"
                         disabled={rankSaving}
                         onClick={() => handleToggleRank(id)}
                         aria-label={`Remove ${activity.name} from the top ${MAX_COMMON_APP_RANKED_ACTIVITIES}`}
@@ -1397,6 +1406,7 @@ export function ActivitiesView({
                       type="button"
                       size="xs"
                       variant="outline"
+                      className="min-h-11"
                       disabled={rankSaving || rankFull}
                       onClick={() => handleToggleRank(activity.id)}
                       aria-label={`Add ${activity.name} to the top ${MAX_COMMON_APP_RANKED_ACTIVITIES}`}
@@ -1519,10 +1529,14 @@ export function ActivitiesView({
                           ) : null}
                         </div>
                         {canEdit ? (
-                          <div className="flex shrink-0 items-center gap-1">
+                          // gap-2 + min 44px buttons (design §5.2): the pair
+                          // renders in the student portal, where two tiny
+                          // ghost buttons 4px apart invite mis-taps.
+                          <div className="flex shrink-0 items-center gap-2">
                             <Button
                               size="xs"
                               variant="ghost"
+                              className="min-h-11"
                               data-testid={`activity-edit-${activity.id}`}
                               disabled={editorSaving || (editor !== null && !isEditing)}
                               onClick={() => handleOpenEdit(activity)}
@@ -1534,6 +1548,7 @@ export function ActivitiesView({
                             <Button
                               size="icon-sm"
                               variant="ghost"
+                              className="min-h-11 min-w-11"
                               disabled={deleteSaving}
                               onClick={() => setPendingDelete(activity)}
                               aria-label={`Delete ${activity.name}`}

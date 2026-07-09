@@ -198,7 +198,9 @@ const SURFACES: SurfaceContract[] = [
     module: meetingsRoute,
     urlSuffix: "/meetings",
     denied: [
-      { method: "GET", minRole: "student" },
+      // Meeting notes are a staff-only surface (design §4: minRole counselor
+      // for ALL methods — candid counselor notes never reach family readers).
+      { method: "GET", minRole: "counselor" },
       { method: "POST", minRole: "counselor" },
       { method: "PATCH", minRole: "counselor" },
     ],

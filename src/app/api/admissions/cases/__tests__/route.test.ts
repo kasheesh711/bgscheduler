@@ -9,14 +9,19 @@ vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/admissions/access", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/admissions/access")>();
-  return { ...actual, requireAdmissionsSession: vi.fn(), requireCaseAccess: vi.fn() };
+  return {
+    ...actual,
+    requireAdmissionsSession: vi.fn(),
+    requireCaseAccess: vi.fn(),
+    requireCounselorOrAdmin: vi.fn(),
+  };
 });
 vi.mock("@/lib/admissions/cases", () => ({
   createCase: vi.fn(),
   getCaseloadForUser: vi.fn(),
 }));
 
-import { requireAdmissionsSession } from "@/lib/admissions/access";
+import { requireAdmissionsSession, requireCounselorOrAdmin } from "@/lib/admissions/access";
 import { createCase, getCaseloadForUser } from "@/lib/admissions/cases";
 import { GET, POST } from "@/app/api/admissions/cases/route";
 
@@ -26,6 +31,9 @@ const COUNSELOR = { email: "staff@example.com", name: "Staff", role: "counselor"
 const ADMIN = { email: "admin@example.com", name: "Admin", role: "admin" as const };
 const STUDENT = { email: "ada@example.com", name: "Ada", role: "student" as const };
 const PARENT = { email: "mom@example.com", name: "Mom", role: "parent" as const };
+
+const COUNSELOR_STAFF = { email: "staff@example.com", role: "counselor" as const, isAdmin: false };
+const ADMIN_STAFF = { email: "admin@example.com", role: "admin" as const, isAdmin: true };
 
 const SUMMARY = {
   caseId: "11111111-1111-4111-8111-111111111111",
@@ -64,6 +72,7 @@ describe("/api/admissions/cases", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(requireAdmissionsSession).mockResolvedValue(COUNSELOR);
+    vi.mocked(requireCounselorOrAdmin).mockResolvedValue(COUNSELOR_STAFF);
     vi.mocked(getCaseloadForUser).mockResolvedValue([SUMMARY] as never);
     vi.mocked(createCase).mockResolvedValue({
       caseId: SUMMARY.caseId,
@@ -77,12 +86,15 @@ describe("/api/admissions/cases", () => {
       const res = await GET();
 
       expect(res.status).toBe(200);
+      // Staff rights re-resolved from Postgres (design §2.2), not the JWT.
+      expect(requireCounselorOrAdmin).toHaveBeenCalledWith("staff@example.com");
       expect(getCaseloadForUser).toHaveBeenCalledWith("staff@example.com");
       await expect(res.json()).resolves.toEqual({ cases: [SUMMARY] });
     });
 
     it("returns the caseload for an admin", async () => {
       vi.mocked(requireAdmissionsSession).mockResolvedValue(ADMIN);
+      vi.mocked(requireCounselorOrAdmin).mockResolvedValue(ADMIN_STAFF);
 
       const res = await GET();
 
@@ -92,6 +104,7 @@ describe("/api/admissions/cases", () => {
 
     it("returns 403 for a student session", async () => {
       vi.mocked(requireAdmissionsSession).mockResolvedValue(STUDENT);
+      vi.mocked(requireCounselorOrAdmin).mockRejectedValue(new Error("Forbidden"));
 
       const res = await GET();
 
@@ -102,6 +115,18 @@ describe("/api/admissions/cases", () => {
 
     it("returns 403 for a parent session", async () => {
       vi.mocked(requireAdmissionsSession).mockResolvedValue(PARENT);
+      vi.mocked(requireCounselorOrAdmin).mockRejectedValue(new Error("Forbidden"));
+
+      const res = await GET();
+
+      expect(res.status).toBe(403);
+      expect(getCaseloadForUser).not.toHaveBeenCalled();
+    });
+
+    it("returns 403 for a deactivated counselor despite a staff JWT (instant revocation)", async () => {
+      // JWT still says counselor, but the Postgres re-check denies.
+      vi.mocked(requireAdmissionsSession).mockResolvedValue(COUNSELOR);
+      vi.mocked(requireCounselorOrAdmin).mockRejectedValue(new Error("Forbidden"));
 
       const res = await GET();
 
@@ -177,6 +202,17 @@ describe("/api/admissions/cases", () => {
 
     it("returns 403 for a student session", async () => {
       vi.mocked(requireAdmissionsSession).mockResolvedValue(STUDENT);
+      vi.mocked(requireCounselorOrAdmin).mockRejectedValue(new Error("Forbidden"));
+
+      const res = await POST(postRequest(CREATE_BODY));
+
+      expect(res.status).toBe(403);
+      expect(createCase).not.toHaveBeenCalled();
+    });
+
+    it("returns 403 for a deactivated counselor despite a staff JWT (instant revocation)", async () => {
+      vi.mocked(requireAdmissionsSession).mockResolvedValue(COUNSELOR);
+      vi.mocked(requireCounselorOrAdmin).mockRejectedValue(new Error("Forbidden"));
 
       const res = await POST(postRequest(CREATE_BODY));
 

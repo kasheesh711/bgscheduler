@@ -3,18 +3,36 @@ import { NextRequest } from "next/server";
 
 // `@/lib/auth` instantiates NextAuth at import time and `@/lib/db` pulls the
 // Neon driver; stub both so the real requireAdmissionsSession guard can run.
+// The Postgres-resolved staff/admin guards (design §2.2) are mocked so their
+// per-test outcome models the registry/admin_users state.
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
+vi.mock("@/lib/admissions/access", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/admissions/access")>();
+  return {
+    ...actual,
+    requireAdmissionsAdmin: vi.fn(),
+    requireCounselorOrAdmin: vi.fn(),
+  };
+});
 vi.mock("@/lib/admissions/cohorts", () => ({
   listCohorts: vi.fn(),
   createCohort: vi.fn(),
 }));
 
 import { auth } from "@/lib/auth";
+import { requireAdmissionsAdmin, requireCounselorOrAdmin } from "@/lib/admissions/access";
 import { createCohort, listCohorts } from "@/lib/admissions/cohorts";
 import { GET, POST } from "@/app/api/admissions/cohorts/route";
 
 const authMock = auth as unknown as Mock;
+
+const ADMIN_STAFF = { email: "admin@example.com", role: "admin" as const, isAdmin: true };
+const COUNSELOR_STAFF = {
+  email: "counselor@example.com",
+  role: "counselor" as const,
+  isAdmin: false,
+};
 
 const ADMIN_SESSION = {
   user: { email: "admin@example.com", name: "Admin", allowedPages: null },
@@ -50,6 +68,7 @@ describe("GET /api/admissions/cohorts", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     authMock.mockResolvedValue(ADMIN_SESSION);
+    vi.mocked(requireCounselorOrAdmin).mockResolvedValue(ADMIN_STAFF);
     vi.mocked(listCohorts).mockResolvedValue([COHORT]);
   });
 
@@ -57,11 +76,13 @@ describe("GET /api/admissions/cohorts", () => {
     const res = await GET();
 
     expect(res.status).toBe(200);
+    expect(requireCounselorOrAdmin).toHaveBeenCalledWith("admin@example.com");
     await expect(res.json()).resolves.toEqual({ cohorts: [COHORT] });
   });
 
   it("returns the cohort list for a counselor session", async () => {
     authMock.mockResolvedValue(COUNSELOR_SESSION);
+    vi.mocked(requireCounselorOrAdmin).mockResolvedValue(COUNSELOR_STAFF);
 
     const res = await GET();
 
@@ -71,6 +92,17 @@ describe("GET /api/admissions/cohorts", () => {
 
   it("returns 403 for a student session (counselor+ only)", async () => {
     authMock.mockResolvedValue(STUDENT_SESSION);
+    vi.mocked(requireCounselorOrAdmin).mockRejectedValue(new Error("Forbidden"));
+
+    const res = await GET();
+
+    expect(res.status).toBe(403);
+    expect(listCohorts).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 for a deactivated counselor despite a staff JWT (instant revocation)", async () => {
+    authMock.mockResolvedValue(COUNSELOR_SESSION);
+    vi.mocked(requireCounselorOrAdmin).mockRejectedValue(new Error("Forbidden"));
 
     const res = await GET();
 
@@ -101,6 +133,7 @@ describe("POST /api/admissions/cohorts", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     authMock.mockResolvedValue(ADMIN_SESSION);
+    vi.mocked(requireAdmissionsAdmin).mockResolvedValue(ADMIN_STAFF);
     vi.mocked(createCohort).mockResolvedValue(COHORT);
   });
 
@@ -108,12 +141,24 @@ describe("POST /api/admissions/cohorts", () => {
     const res = await POST(postRequest({ name: "Class of 2027", graduationYear: "2027" }));
 
     expect(res.status).toBe(200);
+    expect(requireAdmissionsAdmin).toHaveBeenCalledWith("admin@example.com");
     expect(createCohort).toHaveBeenCalledWith("Class of 2027", 2027);
     await expect(res.json()).resolves.toEqual({ cohort: COHORT });
   });
 
   it("returns 403 for a counselor session (admin only)", async () => {
     authMock.mockResolvedValue(COUNSELOR_SESSION);
+    vi.mocked(requireAdmissionsAdmin).mockRejectedValue(new Error("Forbidden"));
+
+    const res = await POST(postRequest({ name: "Class of 2027", graduationYear: 2027 }));
+
+    expect(res.status).toBe(403);
+    expect(createCohort).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 for a removed admin despite an admin JWT (instant revocation)", async () => {
+    authMock.mockResolvedValue(ADMIN_SESSION);
+    vi.mocked(requireAdmissionsAdmin).mockRejectedValue(new Error("Forbidden"));
 
     const res = await POST(postRequest({ name: "Class of 2027", graduationYear: 2027 }));
 

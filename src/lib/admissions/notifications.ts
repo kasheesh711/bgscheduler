@@ -32,7 +32,7 @@ import {
   listAnnouncementsForCase,
   type AdmissionsAnnouncementDto,
 } from "./announcements";
-import { getUpcomingDeadlines, UPCOMING_DEADLINES_MAX_LIMIT } from "./calendar";
+import { getOpenDeadlinesInRange } from "./calendar";
 import { isUuidShaped, normalizeAdmissionsEmail } from "./members";
 import type { AdmissionsTaskOwner } from "./meetings";
 import type { AdmissionsMemberDto, AdmissionsRole } from "./types";
@@ -59,9 +59,11 @@ export const DEADLINE_REMINDER_WINDOWS: readonly DeadlineReminderWindow[] = ["7d
 
 const WINDOW_OFFSET_DAYS: Record<DeadlineReminderWindow, number> = { "7d": 7, "2d": 2 };
 
+// Range-based scan copy: an item can enter a window mid-range (e.g. created
+// 5 days out, or delivered late after a missed run), so labels say "within".
 const WINDOW_LABELS: Record<DeadlineReminderWindow, string> = {
-  "7d": "in 7 days",
-  "2d": "in 48 hours",
+  "7d": "within 7 days",
+  "2d": "within 48 hours",
 };
 
 /** Digest lookback: content created in the past 7 days (CM-110 batch tier). */
@@ -406,15 +408,24 @@ export async function notifyDirectMessage(
 // ── Deadline reminders (CM-110/CM-111/CM-112) ───────────────────────────
 
 /**
- * Scans every live (active/committed) case for calendar items due in exactly
- * 7 days or exactly 2 days (Bangkok calendar) and plans one reminder per
- * assigned recipient.
+ * Scans every live (active/committed) case for OPEN calendar items due within
+ * the next 7 Bangkok days and plans one reminder per assigned recipient.
  *
- * 1. Compute the two target date keys from `now` (T-7d and T-48h, CM-110).
+ * The scan is range-based, not exact-day: items due within 2 days plan the
+ * "2d" window, items due within 7 days plan the "7d" window (most-urgent
+ * window wins per day). Because the per-(item, window, recipient) dedupe key
+ * makes re-sends idempotent, a missed daily run self-heals — the next run
+ * still matches every item inside the window and delivers the reminders the
+ * outage skipped (an item due tomorrow after a missed day still gets its
+ * "2d" reminder). The item fetch is uncapped (getOpenDeadlinesInRange), so a
+ * backlog of overdue items can never starve reminder targets out of a cap.
+ *
+ * 1. Compute the window bounds from `now`: [today, today+7] Bangkok days.
  * 2. Load active/committed, non-deleted cases; nothing live → [].
  * 3. Load all ACTIVE members for those cases in one query.
- * 4. Per case, reuse getUpcomingDeadlines (open items only — completed items
- *    never remind) and keep items whose date matches a target key.
+ * 4. Fetch every open dated item inside the window in ONE batched pass
+ *    (completed items never remind) and assign each its most urgent window:
+ *    date <= today+2 → "2d", else "7d".
  * 5. Route each item by ownerRole to the matching active member emails
  *    (student item → student members, counselor item → counselor members,
  *    parent item → parent members); ownerless items (ownerRole null, e.g.
@@ -429,13 +440,11 @@ export async function buildDeadlineReminders(
   now: Date = new Date(),
   db: Database = getDb(),
 ): Promise<RecipientDeadlineReminders[]> {
-  const targetKeys = new Map<string, DeadlineReminderWindow>();
-  for (const window of DEADLINE_REMINDER_WINDOWS) {
-    targetKeys.set(
-      getBangkokDateKey(new Date(now.getTime() + WINDOW_OFFSET_DAYS[window] * DAY_MS)),
-      window,
-    );
-  }
+  const todayKey = getBangkokDateKey(now);
+  const windowBounds: Record<DeadlineReminderWindow, string> = {
+    "2d": getBangkokDateKey(new Date(now.getTime() + WINDOW_OFFSET_DAYS["2d"] * DAY_MS)),
+    "7d": getBangkokDateKey(new Date(now.getTime() + WINDOW_OFFSET_DAYS["7d"] * DAY_MS)),
+  };
 
   const caseRows = await db
     .select({ id: admissionsCases.id })
@@ -461,26 +470,31 @@ export async function buildDeadlineReminders(
     membersByCase.set(member.caseId, list);
   }
 
+  const items = await getOpenDeadlinesInRange(
+    caseIds,
+    { from: todayKey, to: windowBounds["7d"] },
+    now,
+    db,
+  );
+
   const byRecipient = new Map<string, DeadlineReminderItem[]>();
-  for (const caseId of caseIds) {
-    const items = await getUpcomingDeadlines(caseId, UPCOMING_DEADLINES_MAX_LIMIT, now, db);
-    for (const item of items) {
-      const window = targetKeys.get(item.date);
-      if (!window || item.ownerRole === null) continue;
-      const recipients = (membersByCase.get(caseId) ?? [])
-        .filter((member) => member.role === item.ownerRole);
-      for (const recipient of recipients) {
-        const planned = byRecipient.get(recipient.email) ?? [];
-        planned.push({
-          caseId,
-          itemId: item.id,
-          title: item.title,
-          date: item.date,
-          window,
-          dedupeKey: `${item.id}:${window}:${recipient.email}`,
-        });
-        byRecipient.set(recipient.email, planned);
-      }
+  for (const item of items) {
+    if (item.ownerRole === null) continue;
+    const window: DeadlineReminderWindow =
+      item.date <= windowBounds["2d"] ? "2d" : "7d";
+    const recipients = (membersByCase.get(item.caseId) ?? [])
+      .filter((member) => member.role === item.ownerRole);
+    for (const recipient of recipients) {
+      const planned = byRecipient.get(recipient.email) ?? [];
+      planned.push({
+        caseId: item.caseId,
+        itemId: item.id,
+        title: item.title,
+        date: item.date,
+        window,
+        dedupeKey: `${item.id}:${window}:${recipient.email}`,
+      });
+      byRecipient.set(recipient.email, planned);
     }
   }
 
@@ -517,13 +531,72 @@ function renderCombinedReminderHtml(items: DeadlineReminderItem[]): string {
 }
 
 /**
+ * Dedupe keys among `keys` that already carry a notification-log row — those
+ * reminder windows were delivered before, either individually or covered by
+ * an earlier combined email (recordCoveredReminder).
+ */
+async function findDeliveredDedupeKeys(
+  keys: readonly string[],
+  db: Database,
+): Promise<Set<string>> {
+  if (keys.length === 0) return new Set();
+  const rows = await db
+    .select({ dedupeKey: admissionsNotificationLog.dedupeKey })
+    .from(admissionsNotificationLog)
+    .where(inArray(admissionsNotificationLog.dedupeKey, [...keys]));
+  return new Set(
+    rows
+      .map((row) => row.dedupeKey)
+      .filter((key): key is string => typeof key === "string"),
+  );
+}
+
+/**
+ * Marks one reminder window delivered WITHOUT sending (a combined email
+ * already carried it): inserts the per-item dedupe row so later daily scans
+ * — which re-plan every open in-window item — never re-list the window. A
+ * unique violation means a concurrent run recorded it first (fine).
+ */
+async function recordCoveredReminder(
+  item: DeadlineReminderItem,
+  recipientEmail: string,
+  subject: string,
+  db: Database,
+): Promise<void> {
+  try {
+    await db
+      .insert(admissionsNotificationLog)
+      .values({
+        caseId: item.caseId,
+        recipientEmail,
+        category: "deadline_reminder",
+        tier: "interrupt",
+        subject,
+        resendEmailId: null,
+        dedupeKey: item.dedupeKey,
+        sentAt: new Date(),
+      })
+      .returning({ id: admissionsNotificationLog.id });
+  } catch (error) {
+    if (!isUniqueViolation(error, "admissions_notification_log_dedupe_key_idx")) {
+      throw error;
+    }
+  }
+}
+
+/**
  * Delivers one recipient's planned reminders, applying the CM-111 daily cap.
  *
- * 1. Count today's interrupt-tier log rows for the recipient (Bangkok day).
- * 2. When already-sent + planned would exceed INTERRUPT_DAILY_CAP, collapse
- *    everything into ONE combined email listing all items (dedupe key
- *    "deadline-combined:{recipient}:{today}" keeps re-runs idempotent).
- * 3. Otherwise send one email per item, each with its own dedupe key.
+ * 1. Drop windows already delivered (per-item dedupe keys — the range scan
+ *    re-plans every open in-window item daily, so this filter is what makes
+ *    the daily re-plan idempotent); nothing pending → all skipped.
+ * 2. Count today's interrupt-tier log rows for the recipient (Bangkok day).
+ * 3. When already-sent + pending would exceed INTERRUPT_DAILY_CAP, collapse
+ *    everything into ONE combined email (dedupe key
+ *    "deadline-combined:{recipient}:{today}" keeps same-day re-runs
+ *    idempotent) and record each covered item window (recordCoveredReminder)
+ *    so tomorrow's scan does not re-send a near-identical combined email.
+ * 4. Otherwise send one email per pending item with its own dedupe key.
  */
 async function deliverDeadlineReminders(
   recipient: RecipientDeadlineReminders,
@@ -531,25 +604,39 @@ async function deliverDeadlineReminders(
   db: Database,
 ): Promise<{ sent: number; skipped: number }> {
   const todayKey = getBangkokDateKey(now);
+
+  const delivered = await findDeliveredDedupeKeys(
+    recipient.items.map((item) => item.dedupeKey),
+    db,
+  );
+  const pending = recipient.items.filter((item) => !delivered.has(item.dedupeKey));
+  const alreadyDelivered = recipient.items.length - pending.length;
+  if (pending.length === 0) return { sent: 0, skipped: alreadyDelivered };
+
   const alreadySentToday = await countInterruptEmailsToday(recipient.recipientEmail, now, db);
 
-  if (alreadySentToday + recipient.items.length > INTERRUPT_DAILY_CAP) {
-    const caseIds = new Set(recipient.items.map((item) => item.caseId));
+  if (alreadySentToday + pending.length > INTERRUPT_DAILY_CAP) {
+    const caseIds = new Set(pending.map((item) => item.caseId));
+    const subject = `Reminder: ${pending.length} admissions deadlines coming up`;
     const result = await sendAdmissionsEmail({
       to: recipient.recipientEmail,
-      subject: `Reminder: ${recipient.items.length} admissions deadlines coming up`,
-      html: renderCombinedReminderHtml(recipient.items),
+      subject,
+      html: renderCombinedReminderHtml(pending),
       category: "deadline_reminder",
       tier: "interrupt",
-      caseId: caseIds.size === 1 ? recipient.items[0].caseId : null,
+      caseId: caseIds.size === 1 ? pending[0].caseId : null,
       dedupeKey: `deadline-combined:${recipient.recipientEmail}:${todayKey}`,
     }, db);
-    return result.skipped ? { sent: 0, skipped: 1 } : { sent: 1, skipped: 0 };
+    if (result.skipped) return { sent: 0, skipped: recipient.items.length };
+    for (const item of pending) {
+      await recordCoveredReminder(item, recipient.recipientEmail, subject, db);
+    }
+    return { sent: 1, skipped: alreadyDelivered };
   }
 
   let sent = 0;
-  let skipped = 0;
-  for (const item of recipient.items) {
+  let skipped = alreadyDelivered;
+  for (const item of pending) {
     const result = await sendAdmissionsEmail({
       to: recipient.recipientEmail,
       subject: `Reminder: "${item.title}" is due ${item.date} (${WINDOW_LABELS[item.window]})`,

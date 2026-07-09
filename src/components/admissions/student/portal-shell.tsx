@@ -14,8 +14,8 @@
 // + optimistic-tick pattern), Colleges (read-only — list composition is
 // counselor-only, design §2.4), Essays (the shared EssaysView, student
 // variant, CM-60..63), and More (case info + links + sign-out plus a stacked
-// menu whose entries — Activities, Testing, Self-report sections — each open
-// a full-screen sub-view with a back affordance, driven by `?sub=`).
+// menu whose entries — Activities, Testing, Self-report sections, Resources —
+// each open a full-screen sub-view with a back affordance, driven by `?sub=`).
 //
 // Write surface (design §2.4): every mutation in this shell is a student
 // self-report surface — ticking their own tasks (owner === "student" via
@@ -68,12 +68,14 @@ import {
 } from "../checklist-tab";
 import { TASK_OWNER_LABELS } from "../custom-task-dialog";
 import { EssaysView, type EssayCollegeOption } from "../essays-view";
+import { ResourcesPanel } from "../resources-panel";
 import { SectionsList } from "../sections-list";
 import { TestingView } from "../testing-view";
 import type {
   AdmissionsTaskDto,
   AdmissionsTaskStatus,
 } from "@/lib/admissions/checklists";
+import type { AdmissionsResourceTopicGroup } from "@/lib/admissions/resources";
 import type { AdmissionsSectionStateDto } from "@/lib/admissions/sections";
 import type {
   AdmissionsPhaseProgress,
@@ -155,9 +157,14 @@ export const MORE_SUBVIEWS = [
     label: "Self-report sections",
     description: "Guided forms your counselor uses to get to know you.",
   },
+  {
+    key: "resources",
+    label: "Resources",
+    description: "Helpful links curated by your counselors.",
+  },
 ] as const;
 
-/** Stable More sub-view key ("activities" | "testing" | "sections"). */
+/** Stable More sub-view key ("activities" | "testing" | "sections" | "resources"). */
 export type MoreSubViewKey = (typeof MORE_SUBVIEWS)[number]["key"];
 
 /**
@@ -747,7 +754,7 @@ function StudentMoreView({
         <CardHeader>
           <CardTitle>Your records</CardTitle>
           <CardDescription>
-            Activities, testing, and self-report sections.
+            Activities, testing, self-report sections, and resources.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -874,6 +881,7 @@ function StudentMoreSubView({
   caseDetail,
   bestScores,
   sectionStates,
+  resourceGroups,
   viewerRole,
   onBack,
 }: {
@@ -881,6 +889,7 @@ function StudentMoreSubView({
   caseDetail: AdmissionsCaseDetail;
   bestScores: AdmissionsBestScore[];
   sectionStates: AdmissionsSectionStateDto[];
+  resourceGroups: AdmissionsResourceTopicGroup[];
   viewerRole: CaseRole;
   onBack: () => void;
 }) {
@@ -924,6 +933,10 @@ function StudentMoreSubView({
           variant="student"
         />
       ) : null}
+
+      {subView === "resources" ? (
+        <ResourcesPanel groups={resourceGroups} viewerRole={viewerRole} />
+      ) : null}
     </div>
   );
 }
@@ -939,6 +952,8 @@ export interface StudentPortalShellProps {
   bestScores: AdmissionsBestScore[];
   /** Full self-report section states (getSectionState per key, CM-121). */
   sectionStates: AdmissionsSectionStateDto[];
+  /** Resource library topic groups (listResources, CM-92 — read-only here). */
+  resourceGroups: AdmissionsResourceTopicGroup[];
   /** Per-case role from requireCaseAccess — "student" on this shell today. */
   viewerRole: CaseRole;
   viewerEmail: string;
@@ -955,6 +970,7 @@ export function StudentPortalShell({
   tasks,
   bestScores,
   sectionStates,
+  resourceGroups,
   viewerRole,
   viewerEmail,
 }: StudentPortalShellProps) {
@@ -1049,6 +1065,7 @@ export function StudentPortalShell({
                 caseDetail={caseDetail}
                 bestScores={bestScores}
                 sectionStates={sectionStates}
+                resourceGroups={resourceGroups}
                 viewerRole={viewerRole}
                 onBack={() => handleSubViewChange(null)}
               />

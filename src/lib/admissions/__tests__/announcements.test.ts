@@ -5,6 +5,7 @@ vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 import { admissionsAnnouncements, admissionsAuditLog, admissionsCases } from "@/lib/db/schema";
 import {
   createAnnouncement,
+  getAnnouncementScope,
   listAnnouncementsForCase,
   listAnnouncementsForCohort,
   softDeleteAnnouncement,
@@ -117,6 +118,50 @@ function makeReadDb({
   const db = { select } as unknown as Database;
   return { db, select };
 }
+
+/** Minimal chainable fake for the scope lookup (select → from → where → limit). */
+function makeScopeDb(rows: Array<Record<string, unknown>>) {
+  const select = vi.fn(() => ({
+    from: () => ({ where: () => ({ limit: async () => rows }) }),
+  }));
+  const db = { select } as unknown as Database;
+  return { db, select };
+}
+
+const ANNOUNCEMENT_ID = "44444444-4444-4444-8444-444444444444";
+
+describe("getAnnouncementScope", () => {
+  it("returns the stored row's case scope", async () => {
+    const { db } = makeScopeDb([{ caseId: CASE_ID, cohortId: null }]);
+
+    await expect(getAnnouncementScope(ANNOUNCEMENT_ID, db)).resolves.toEqual({
+      caseId: CASE_ID,
+      cohortId: null,
+    });
+  });
+
+  it("returns the stored row's cohort scope", async () => {
+    const { db } = makeScopeDb([{ caseId: null, cohortId: COHORT_ID }]);
+
+    await expect(getAnnouncementScope(ANNOUNCEMENT_ID, db)).resolves.toEqual({
+      caseId: null,
+      cohortId: COHORT_ID,
+    });
+  });
+
+  it("throws NotFound for a missing or soft-deleted announcement", async () => {
+    const { db } = makeScopeDb([]);
+
+    await expect(getAnnouncementScope(ANNOUNCEMENT_ID, db)).rejects.toThrow("NotFound");
+  });
+
+  it("throws NotFound for a malformed id without querying", async () => {
+    const { db, select } = makeScopeDb([]);
+
+    await expect(getAnnouncementScope("not-a-uuid", db)).rejects.toThrow("NotFound");
+    expect(select).not.toHaveBeenCalled();
+  });
+});
 
 describe("createAnnouncement", () => {
   const baseInput = {

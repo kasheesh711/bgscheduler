@@ -3,14 +3,18 @@
 // Design: docs/casemanagementsystem_design.md §4 (`/cases` GET/POST, min role
 // counselor). The caseload is a staff surface: students and parents are
 // members of specific cases, never caseload viewers, so both roles 403 here
-// (fail-closed). Per-user scoping (admin = all cases, counselor = own active
-// memberships) lives in getCaseloadForUser.
+// (fail-closed). Staff rights are re-resolved from Postgres on EVERY request
+// via requireCounselorOrAdmin (design §2.2 — the JWT role claim shapes nav
+// only), so deactivating a counselor or removing an admin revokes this
+// surface instantly, not at JWT expiry. Per-user scoping (admin = all cases,
+// counselor = own active memberships) lives in getCaseloadForUser.
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import {
   admissionsErrorResponse,
   requireAdmissionsSession,
+  requireCounselorOrAdmin,
 } from "@/lib/admissions/access";
 import { createCase, getCaseloadForUser } from "@/lib/admissions/cases";
 
@@ -45,9 +49,7 @@ const CreateCaseSchema = z
 export async function GET() {
   try {
     const user = await requireAdmissionsSession();
-    if (user.role !== "counselor" && user.role !== "admin") {
-      throw new Error("Forbidden");
-    }
+    await requireCounselorOrAdmin(user.email);
 
     const cases = await getCaseloadForUser(user.email);
     return NextResponse.json({ cases });
@@ -63,9 +65,9 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const user = await requireAdmissionsSession();
-    if (user.role !== "counselor" && user.role !== "admin") {
-      throw new Error("Forbidden");
-    }
+    // Postgres-resolved staff check (design §2.2): createCase performs no
+    // actor re-validation, so this guard is the only gate on case creation.
+    const staff = await requireCounselorOrAdmin(user.email);
 
     let body: unknown;
     try {
@@ -92,7 +94,7 @@ export async function POST(request: NextRequest) {
       cohortId: parsed.data.cohortId,
       parentEmails: parsed.data.parentEmails,
       counselorEmails: parsed.data.counselorEmails,
-      createdBy: { email: user.email, role: user.role },
+      createdBy: { email: staff.email, role: staff.role },
     });
 
     return NextResponse.json(result);

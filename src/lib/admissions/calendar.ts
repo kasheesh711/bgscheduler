@@ -296,3 +296,42 @@ export async function getUpcomingDeadlinesForCases(
     .slice(0, clampedLimit)
     .map((entry) => toCalendarItem(entry, todayKey));
 }
+
+/**
+ * Every OPEN dated item inside an inclusive date window, across a batch of
+ * cases — the deadline-reminder scan (CM-110). Unlike
+ * getUpcomingDeadlinesForCases this is deliberately UNCAPPED: the reminder
+ * cron must see every open item in its window, so a backlog of overdue items
+ * on a neglected case can never starve future-dated reminder targets out of
+ * a row cap.
+ *
+ * 1. Validate the window ("YYYY-MM-DD", from <= to); drop non-uuid-shaped
+ *    caseIds (fail-closed skip); empty input returns [] without a query.
+ * 2. Run every collector once for the whole batch (one query per source).
+ * 3. Keep open (not completed) entries whose date falls inside [from, to]
+ *    inclusive, stamp `overdue` against today (Bangkok), and sort date
+ *    ascending with stable tiebreaks.
+ */
+export async function getOpenDeadlinesInRange(
+  caseIds: readonly string[],
+  window: CalendarWindow,
+  now: Date = new Date(),
+  db: Database = getDb(),
+): Promise<CalendarItem[]> {
+  assertDateOnly(window.from, "from");
+  assertDateOnly(window.to, "to");
+  if (window.from > window.to) {
+    throw new Error("Invalid calendar window: from must be on or before to");
+  }
+
+  const validCaseIds = caseIds.filter((id) => isUuidShaped(id));
+  if (validCaseIds.length === 0) return [];
+
+  const todayKey = getBangkokDateKey(now);
+  const entries = await collectEntries(validCaseIds, db);
+  return entries
+    .filter((entry) =>
+      !entry.completed && entry.date >= window.from && entry.date <= window.to)
+    .sort(compareByUrgency)
+    .map((entry) => toCalendarItem(entry, todayKey));
+}

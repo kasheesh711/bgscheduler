@@ -1,7 +1,16 @@
+// Staff/admin rights are re-resolved from Postgres on EVERY request
+// (requireCounselorOrAdmin / requireAdmissionsAdmin, design §2.2) — the JWT
+// role claim shapes nav only, so registry deactivation and admin removal
+// revoke these surfaces instantly.
+
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { admissionsErrorResponse, requireAdmissionsSession } from "@/lib/admissions/access";
-import { roleAtLeast } from "@/lib/admissions/config";
+import {
+  admissionsErrorResponse,
+  requireAdmissionsAdmin,
+  requireAdmissionsSession,
+  requireCounselorOrAdmin,
+} from "@/lib/admissions/access";
 import { createCohort, listCohorts } from "@/lib/admissions/cohorts";
 
 const CreateCohortSchema = z.object({
@@ -16,9 +25,7 @@ const CreateCohortSchema = z.object({
 export async function GET() {
   try {
     const user = await requireAdmissionsSession();
-    if (!roleAtLeast(user.role, "counselor")) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+    await requireCounselorOrAdmin(user.email);
 
     const cohorts = await listCohorts();
     return NextResponse.json({ cohorts });
@@ -34,9 +41,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const user = await requireAdmissionsSession();
-    if (user.role !== "admin") {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+    await requireAdmissionsAdmin(user.email);
 
     let body: unknown;
     try {

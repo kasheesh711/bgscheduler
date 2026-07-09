@@ -1,9 +1,12 @@
 // Admissions Case Management — meeting log routes (design §4, PRD CM-30/31).
 //
-// GET lists a case's meetings (minRole student — meetings are visible to the
-// student); POST logs a meeting + action-item tasks and PATCH edits a meeting
-// (both minRole counselor). requireCaseAccess runs BEFORE body parsing on
-// every method (design §4), so membership/role failures never read the body.
+// The meeting log is a staff working surface: the design §4 route table sets
+// minRole counselor for ALL methods (GET included), because meeting notes
+// carry candid counselor observations that must never reach the student or
+// parent surfaces (students get the action-item tasks instead). GET lists a
+// case's meetings; POST logs a meeting + action-item tasks; PATCH edits a
+// meeting. requireCaseAccess runs BEFORE body parsing on every method
+// (design §4), so membership/role failures never read the body.
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -53,7 +56,7 @@ export async function GET(
   try {
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
-    await requireCaseAccess(user.email, caseId, "student");
+    await requireCaseAccess(user.email, caseId, "counselor");
 
     const meetings = await listMeetings(caseId);
     return NextResponse.json({ meetings });

@@ -9,7 +9,7 @@
 // without override, duplicate membership, invalid member state) →
 // Error("Conflict") — admissionsErrorResponse maps both.
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import {
   admissionsCaseMembers,
@@ -541,6 +541,82 @@ export async function reInvite(
 
   dispatchInviteEmail(member, db);
   return member;
+}
+
+/**
+ * Activates every invited/bounced membership held by an email (PRD §3.7
+ * "Access activates only on exact email match"). Called from the sign-in
+ * callback (src/lib/auth.ts) BEFORE access resolution, so a freshly invited
+ * student or parent signing in with the exact invited address flips to
+ * "active" and passes resolveAdmissionsRole / requireCaseAccess (both filter
+ * on status "active") on the same request. Bounced rows activate too — the
+ * exact-email OAuth sign-in is stronger delivery proof than the bounce.
+ *
+ * 1. Normalize the email; empty → no-op ([]). Load the email's invited/
+ *    bounced rows; none → no-op without opening a transaction (the common
+ *    path for every already-active sign-in).
+ * 2. Inside one audited transaction, flip each row to "active" + stamp
+ *    activatedAt. The UPDATE re-checks status IN (invited, bounced) so a
+ *    concurrent revoke is never overwritten (fail-closed), and each flip
+ *    writes a paired "activate" audit row attributed to the member.
+ * 3. Revoked and already-active rows are never touched.
+ *
+ * @returns the activated membership DTOs (empty when nothing was pending).
+ */
+export async function activateMembershipsForEmail(
+  email: string,
+  db: Database = getDb(),
+): Promise<AdmissionsMemberDto[]> {
+  const normalized = normalizeAdmissionsEmail(email);
+  if (!normalized) return [];
+
+  const pendingRows = await db
+    .select()
+    .from(admissionsCaseMembers)
+    .where(and(
+      eq(admissionsCaseMembers.email, normalized),
+      inArray(admissionsCaseMembers.status, ["invited", "bounced"]),
+    ));
+  if (pendingRows.length === 0) return [];
+
+  return withAuditedTransaction(async (tx) => {
+    const now = new Date();
+    const activated: AdmissionsMemberDto[] = [];
+    for (const row of pendingRows) {
+      await tx
+        .update(admissionsCaseMembers)
+        .set({ status: "active", activatedAt: now, updatedAt: now })
+        .where(and(
+          eq(admissionsCaseMembers.id, row.id),
+          inArray(admissionsCaseMembers.status, ["invited", "bounced"]),
+        ));
+
+      await writeAuditLog(tx, {
+        caseId: row.caseId,
+        actorEmail: normalized,
+        actorRole: row.role,
+        entityType: "case_member",
+        entityId: row.id,
+        action: "activate",
+        diff: computeFieldDiff(
+          {
+            status: row.status,
+            activatedAt: row.activatedAt ? row.activatedAt.toISOString() : null,
+          },
+          { status: "active", activatedAt: now.toISOString() },
+          ["status", "activatedAt"],
+        ),
+      });
+
+      activated.push(mapAdmissionsMemberRow({
+        ...row,
+        status: "active",
+        activatedAt: now,
+        updatedAt: now,
+      }));
+    }
+    return activated;
+  }, db);
 }
 
 /**

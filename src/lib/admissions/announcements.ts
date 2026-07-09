@@ -208,6 +208,43 @@ export async function listAnnouncementsForCohort(
   return [...rows].sort(compareNewestFirst).map(toAnnouncementDto);
 }
 
+/** An announcement's immutable target scope (exactly one side is non-null). */
+export interface AdmissionsAnnouncementScope {
+  caseId: string | null;
+  cohortId: string | null;
+}
+
+/**
+ * Resolves a live announcement's target scope for route-level authorization
+ * (PATCH/DELETE re-anchor rights on the STORED row's scope, never on
+ * client-supplied ids). Scope is immutable after creation, so checking it
+ * before the mutating transaction cannot race a retarget.
+ *
+ * @returns the row's caseId/cohortId pair; malformed id, missing row, or a
+ *   soft-deleted row all throw "NotFound" (fail-closed).
+ */
+export async function getAnnouncementScope(
+  announcementId: string,
+  db: Database = getDb(),
+): Promise<AdmissionsAnnouncementScope> {
+  if (!isUuidShaped(announcementId)) throw new Error("NotFound");
+
+  const rows = await db
+    .select({
+      caseId: admissionsAnnouncements.caseId,
+      cohortId: admissionsAnnouncements.cohortId,
+    })
+    .from(admissionsAnnouncements)
+    .where(and(
+      eq(admissionsAnnouncements.id, announcementId),
+      isNull(admissionsAnnouncements.deletedAt),
+    ))
+    .limit(1);
+  const row = rows[0];
+  if (!row) throw new Error("NotFound");
+  return { caseId: row.caseId, cohortId: row.cohortId };
+}
+
 /**
  * Partially updates an announcement's title/body; the mutation and its audit
  * row commit atomically. Scope (cohortId/caseId) is immutable — retargeting

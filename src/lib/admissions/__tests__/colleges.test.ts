@@ -64,11 +64,18 @@ interface UpdateCall {
  * recording and a native `transaction` that hands the same fake back to
  * withAuditedTransaction. Each db.select() resolves to the next queued result
  * — the queue order must match the function's query order. Inserts synthesize
- * a returning row from the given values plus defaults.
+ * a returning row from the given values plus defaults. Updates default to
+ * returning one synthesized row (a matched UPDATE); pass `updateReturning`
+ * to queue explicit per-update returning results — `[]` simulates a
+ * conditional UPDATE losing its WHERE re-check (the CM-44 commit race).
  */
-function fakeDb(queue: unknown[][]) {
+function fakeDb(
+  queue: unknown[][],
+  options: { updateReturning?: unknown[][] } = {},
+) {
   let i = 0;
   let generated = 0;
+  let updateIndex = 0;
   const selectCalls: number[] = [];
   const inserts: InsertCall[] = [];
   const updates: UpdateCall[] = [];
@@ -110,9 +117,12 @@ function fakeDb(queue: unknown[][]) {
     update: (table: unknown) => ({
       set: (set: Record<string, unknown>) => {
         updates.push({ table, set });
+        const returning =
+          options.updateReturning?.[updateIndex++] ??
+          [{ id: `00000000-0000-4000-8000-fff${String(updates.length).padStart(9, "0")}` }];
         const b: Record<string, unknown> = {};
         b.where = () => b;
-        b.returning = () => Promise.resolve([]);
+        b.returning = () => Promise.resolve(returning);
         (b as { then: unknown }).then = (
           resolve: (value: unknown) => unknown,
           reject?: (error: unknown) => unknown,
@@ -585,6 +595,24 @@ describe("addApplicationEvent", () => {
     expect(eventInserts(inserts)).toHaveLength(1);
   });
 
+  it("throws Conflict when a concurrent commit claims the pointer mid-flight (CM-44)", async () => {
+    // The select saw a null pointer, but the row-locking guard UPDATE
+    // re-evaluates after the concurrent winner commits → zero rows.
+    const { db, inserts } = fakeDb(
+      [[itemRow()], [caseRow(null)]],
+      { updateReturning: [[]] },
+    );
+
+    await expect(
+      addApplicationEvent(
+        { access: ACCESS, listItemId: ITEM_ID, event: "committed", eventDate: "2027-05-01" },
+        db,
+      ),
+    ).rejects.toThrow("Conflict");
+    expect(eventInserts(inserts)).toHaveLength(0);
+    expect(auditInserts(inserts)).toHaveLength(0);
+  });
+
   it("rejects a malformed eventDate", async () => {
     const { db } = fakeDb([]);
 
@@ -709,6 +737,22 @@ describe("setCommittedCollege", () => {
     ).rejects.toThrow("Conflict");
     expect(updates).toHaveLength(0);
     expect(inserts).toHaveLength(0);
+  });
+
+  it("throws Conflict when a concurrent commit wins the pointer race (CM-44)", async () => {
+    // Both requests read committedListItemId = null; the loser's conditional
+    // UPDATE (`WHERE committed_list_item_id IS NULL`) matches zero rows.
+    const { db, inserts } = fakeDb(
+      [[itemRow()], [caseRow(null)]],
+      { updateReturning: [[]] },
+    );
+
+    await expect(
+      setCommittedCollege({ access: ACCESS, listItemId: ITEM_ID }, db),
+    ).rejects.toThrow("Conflict");
+    // No committed event and no audit row escape the rolled-back transaction.
+    expect(eventInserts(inserts)).toHaveLength(0);
+    expect(auditInserts(inserts)).toHaveLength(0);
   });
 
   it("no-ops idempotently when the same item is already committed", async () => {

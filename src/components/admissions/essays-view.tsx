@@ -61,6 +61,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { roleAtLeast } from "@/lib/admissions/config";
 import {
   ADMISSIONS_ESSAY_STATUSES,
@@ -171,8 +172,7 @@ export function buildAddEssayPayload(
 
 // ── Internal helpers ────────────────────────────────────────────────────
 
-const SELECT_CLASSES =
-  "rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30";
+const SELECT_CLASSES = SELECT_FIELD_CLASSES;
 
 /** "YYYY-MM-DD" → "D/M/YYYY" (repo-wide D/M convention); non-dates pass through. */
 function formatDateOnly(value: string): string {

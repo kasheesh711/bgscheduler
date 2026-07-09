@@ -6,6 +6,7 @@ import {
   UPCOMING_DEADLINES_DEFAULT_LIMIT,
   UPCOMING_DEADLINES_MAX_LIMIT,
   buildCaseCalendar,
+  getOpenDeadlinesInRange,
   getUpcomingDeadlines,
   getUpcomingDeadlinesForCases,
 } from "@/lib/admissions/calendar";
@@ -560,5 +561,60 @@ describe("getUpcomingDeadlinesForCases", () => {
 
     // CASE_ID (2222…) sorts before OTHER_CASE_ID (4444…); ids ascend within.
     expect(items.map((item) => item.id)).toEqual(["a-task", "b-task", "z-task"]);
+  });
+});
+
+describe("getOpenDeadlinesInRange", () => {
+  const WINDOW = { from: "2026-07-09", to: "2026-07-16" };
+
+  it("returns every open item inside the inclusive window with NO row cap (reminder scan)", async () => {
+    // 120 open items inside the window — more than UPCOMING_DEADLINES_MAX_LIMIT
+    // (100): a backlog must never starve reminder targets out of a cap.
+    const rows = Array.from({ length: 120 }, (_, index) =>
+      makeTaskRow({
+        id: `t-${String(index).padStart(3, "0")}`,
+        dueDate: "2026-07-16",
+      }));
+    const { db } = makeTaskDb(rows);
+
+    const items = await getOpenDeadlinesInRange([CASE_ID], WINDOW, NOW, db);
+
+    expect(items).toHaveLength(120);
+    expect(items.length).toBeGreaterThan(UPCOMING_DEADLINES_MAX_LIMIT);
+  });
+
+  it("keeps only open items whose date falls inside [from, to]", async () => {
+    const { db } = makeTaskDb([
+      makeTaskRow({ id: "before", dueDate: "2026-07-08" }),
+      makeTaskRow({ id: "on-from", dueDate: "2026-07-09" }),
+      makeTaskRow({ id: "inside", dueDate: "2026-07-12" }),
+      makeTaskRow({ id: "on-to", dueDate: "2026-07-16" }),
+      makeTaskRow({ id: "after", dueDate: "2026-07-17" }),
+      makeTaskRow({ id: "done", dueDate: "2026-07-12", status: "done" }),
+    ]);
+
+    const items = await getOpenDeadlinesInRange([CASE_ID], WINDOW, NOW, db);
+
+    expect(items.map((item) => item.id)).toEqual(["on-from", "inside", "on-to"]);
+  });
+
+  it("returns [] for an empty/malformed caseload without querying", async () => {
+    const { db, select } = makeTaskDb([]);
+
+    await expect(getOpenDeadlinesInRange([], WINDOW, NOW, db)).resolves.toEqual([]);
+    await expect(getOpenDeadlinesInRange(["nope"], WINDOW, NOW, db)).resolves.toEqual([]);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed or inverted window before querying", async () => {
+    const { db, select } = makeTaskDb([]);
+
+    await expect(
+      getOpenDeadlinesInRange([CASE_ID], { from: "soon", to: "2026-07-16" }, NOW, db),
+    ).rejects.toThrow("Invalid from");
+    await expect(
+      getOpenDeadlinesInRange([CASE_ID], { from: "2026-07-16", to: "2026-07-09" }, NOW, db),
+    ).rejects.toThrow("from must be on or before to");
+    expect(select).not.toHaveBeenCalled();
   });
 });

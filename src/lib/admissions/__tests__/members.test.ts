@@ -18,6 +18,7 @@ vi.mock("@/lib/admissions/notifications", () => ({
 import { admissionsAuditLog, admissionsCaseMembers } from "@/lib/db/schema";
 import { sendMemberInviteForCase } from "@/lib/admissions/notifications";
 import {
+  activateMembershipsForEmail,
   addMember,
   changeMemberEmail,
   getActiveCaseMembers,
@@ -612,6 +613,75 @@ describe("rejectStudentAsParent", () => {
     await expect(
       rejectStudentAsParent({ caseId: "nope", parentEmails: ["mom@example.com"] }, db),
     ).rejects.toThrow("NotFound");
+    expect(selectCalls).toHaveLength(0);
+  });
+});
+
+describe("activateMembershipsForEmail (PRD §3.7 exact-email activation)", () => {
+  it("flips every invited/bounced membership to active with activatedAt + an 'activate' audit row", async () => {
+    const invited = memberRow({
+      id: "m1",
+      email: "kid@example.com",
+      role: "student",
+      status: "invited",
+      activatedAt: null,
+    });
+    const bounced = memberRow({
+      id: "m2",
+      caseId: "22222222-2222-4222-8222-222222222222",
+      email: "kid@example.com",
+      role: "parent",
+      status: "bounced",
+      activatedAt: null,
+    });
+    const { db, inserts, updates } = fakeDb([[invited, bounced]]);
+
+    const activated = await activateMembershipsForEmail("Kid@Example.com ", db);
+
+    expect(activated).toHaveLength(2);
+    expect(activated.every((member) => member.status === "active")).toBe(true);
+    expect(activated.every((member) => member.activatedAt !== null)).toBe(true);
+
+    expect(updates).toHaveLength(2);
+    for (const update of updates) {
+      expect(update.table).toBe(admissionsCaseMembers);
+      expect(update.set).toMatchObject({ status: "active" });
+      expect(update.set.activatedAt).toBeInstanceOf(Date);
+    }
+
+    const audits = auditInserts(inserts);
+    expect(audits).toHaveLength(2);
+    expect(audits[0]).toMatchObject({
+      actorEmail: "kid@example.com",
+      actorRole: "student",
+      entityType: "case_member",
+      entityId: "m1",
+      action: "activate",
+    });
+    expect(audits[1]).toMatchObject({
+      actorRole: "parent",
+      entityId: "m2",
+      action: "activate",
+    });
+  });
+
+  it("no-ops without a transaction when the email has no invited/bounced rows", async () => {
+    // Revoked and active rows are filtered by the WHERE — the select returns
+    // nothing pending, so no update/audit writes happen at all.
+    const { db, inserts, updates, selectCalls } = fakeDb([[]]);
+
+    const activated = await activateMembershipsForEmail("mom@example.com", db);
+
+    expect(activated).toEqual([]);
+    expect(selectCalls).toHaveLength(1);
+    expect(updates).toHaveLength(0);
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("no-ops for an empty email without querying", async () => {
+    const { db, selectCalls } = fakeDb([]);
+
+    await expect(activateMembershipsForEmail("   ", db)).resolves.toEqual([]);
     expect(selectCalls).toHaveLength(0);
   });
 });

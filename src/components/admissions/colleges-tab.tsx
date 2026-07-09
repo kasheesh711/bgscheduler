@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -225,8 +226,7 @@ export function completenessItems(
 
 // ── Internal helpers ────────────────────────────────────────────────────
 
-const SELECT_CLASSES =
-  "h-8 rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30";
+const SELECT_CLASSES = cn(SELECT_FIELD_CLASSES, "h-8");
 
 /** Mirrors AID_AMOUNT_PATTERN in src/lib/admissions/colleges.ts (client 400 guard). */
 const AID_AMOUNT_PATTERN = /^\d{1,12}(\.\d{1,2})?$/;

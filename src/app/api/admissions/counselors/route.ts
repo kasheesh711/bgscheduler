@@ -1,8 +1,16 @@
+// Admin rights are re-resolved from Postgres on EVERY request
+// (requireAdmissionsAdmin, design §2.2) — the registry grants sign-in
+// capability, so a removed admin must lose this surface instantly, not at
+// JWT expiry.
+
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { admissionsErrorResponse, requireAdmissionsSession } from "@/lib/admissions/access";
+import {
+  admissionsErrorResponse,
+  requireAdmissionsAdmin,
+  requireAdmissionsSession,
+} from "@/lib/admissions/access";
 import { deactivateCounselor, listCounselors, upsertCounselor } from "@/lib/admissions/counselors";
-import type { AdmissionsSessionUser } from "@/lib/admissions/types";
 
 const UpsertCounselorSchema = z.object({
   email: z.string().email(),
@@ -25,13 +33,6 @@ const PatchCounselorSchema = z.union([
   }),
 ]);
 
-function requireAdmin(user: AdmissionsSessionUser): NextResponse | null {
-  if (user.role !== "admin") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-  return null;
-}
-
 /**
  * GET /api/admissions/counselors — lists the full counselor registry, active
  * and inactive (admin only — the registry grants sign-in capability).
@@ -39,8 +40,7 @@ function requireAdmin(user: AdmissionsSessionUser): NextResponse | null {
 export async function GET() {
   try {
     const user = await requireAdmissionsSession();
-    const forbidden = requireAdmin(user);
-    if (forbidden) return forbidden;
+    await requireAdmissionsAdmin(user.email);
 
     const counselors = await listCounselors();
     return NextResponse.json({ counselors });
@@ -56,8 +56,7 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const user = await requireAdmissionsSession();
-    const forbidden = requireAdmin(user);
-    if (forbidden) return forbidden;
+    const admin = await requireAdmissionsAdmin(user.email);
 
     let body: unknown;
     try {
@@ -75,7 +74,7 @@ export async function POST(request: NextRequest) {
       parsed.data.email,
       parsed.data.name,
       parsed.data.active,
-      { email: user.email, role: user.role },
+      { email: admin.email, role: admin.role },
     );
     return NextResponse.json({ counselor });
   } catch (error) {
@@ -91,8 +90,7 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const user = await requireAdmissionsSession();
-    const forbidden = requireAdmin(user);
-    if (forbidden) return forbidden;
+    const admin = await requireAdmissionsAdmin(user.email);
 
     let body: unknown;
     try {
@@ -106,7 +104,7 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
 
-    const actor = { email: user.email, role: user.role };
+    const actor = { email: admin.email, role: admin.role };
     const counselor =
       "name" in parsed.data
         ? await upsertCounselor(parsed.data.email, parsed.data.name, parsed.data.active, actor)

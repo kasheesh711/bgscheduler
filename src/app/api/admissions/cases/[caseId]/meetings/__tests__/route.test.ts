@@ -36,13 +36,6 @@ const COUNSELOR_ACCESS: CaseAccess = {
   isAdmin: false,
 };
 
-const STUDENT_ACCESS: CaseAccess = {
-  caseId: CASE_ID,
-  email: "student@example.com",
-  role: "student",
-  isAdmin: false,
-};
-
 const MEETING_DTO = {
   id: MEETING_ID,
   caseId: CASE_ID,
@@ -87,16 +80,25 @@ describe("/api/admissions/cases/[caseId]/meetings", () => {
   });
 
   describe("GET", () => {
-    it("returns the meeting list with minRole student", async () => {
-      signInAs("student@example.com", "student");
-      vi.mocked(requireCaseAccess).mockResolvedValue(STUDENT_ACCESS);
-
+    it("returns the meeting list with minRole counselor (staff-only surface, design §4)", async () => {
       const res = await GET(new Request("http://test.local"), makeCtx());
 
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({ meetings: [MEETING_DTO] });
-      expect(requireCaseAccess).toHaveBeenCalledWith("student@example.com", CASE_ID, "student");
+      expect(requireCaseAccess).toHaveBeenCalledWith("counselor@example.com", CASE_ID, "counselor");
       expect(listMeetings).toHaveBeenCalledWith(CASE_ID);
+    });
+
+    it("denies a student reader — meeting notes never reach the student surface", async () => {
+      signInAs("student@example.com", "student");
+      // requireCaseAccess enforces the counselor bar for the student member.
+      vi.mocked(requireCaseAccess).mockRejectedValue(new Error("Forbidden"));
+
+      const res = await GET(new Request("http://test.local"), makeCtx());
+
+      expect(res.status).toBe(403);
+      expect(requireCaseAccess).toHaveBeenCalledWith("student@example.com", CASE_ID, "counselor");
+      expect(listMeetings).not.toHaveBeenCalled();
     });
 
     it("returns 401 when unauthenticated", async () => {

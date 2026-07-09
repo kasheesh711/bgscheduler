@@ -2,7 +2,7 @@
 
 The canonical lookup of every HTTP endpoint in BGScheduler. This page lists **method + path + group + auth + one-line purpose** only. For full request/response schemas, query parameters, and error shapes, follow the link on each group heading to the per-group detail page.
 
-All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **122**.
+All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **145** (122 at the previous verification + 23 University Admissions routes: 22 `src/app/api/admissions/**/route.ts` files + `/api/internal/admissions-notifications`).
 
 ## How to read this index
 
@@ -11,6 +11,7 @@ All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint c
 - **public** — reachable without an authenticated session. `src/middleware.ts:4-15` allowlists `/api/auth/*`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/api/line/contacts/oa-resolver/worklist`, and `/api/line/contacts/oa-resolver/runs/{runId}/rows`. The non-`/api/auth` public routes enforce their own checks in-handler (LINE signature header or a bearer token), not an admin session.
 - **admin** — requires an authenticated Auth.js session. The middleware redirects unauthenticated requests to `/login` (`src/middleware.ts:25-29`); handlers additionally call `auth()` (or `requireCreditControlSession()` for credit-control) and return `401` when no session is present.
 - **cron** — `CRON_SECRET`-protected. `src/middleware.ts:13` lets `/api/internal/*` bypass the session gate; each handler then enforces a constant-time `Bearer ${CRON_SECRET}` check (`src/lib/internal/cron-auth.ts:6-26`, or an inline copy). Four internal routes additionally accept an admin session as a fallback when the cron secret is absent — see the **cron (or admin)** notes below.
+- **session + min role** — University Admissions only. These routes require an authenticated Auth.js session (`requireAdmissionsSession`) but are **not** admin-only: rights are re-resolved from Postgres per request (`requireCaseAccess` / `requireCounselorOrAdmin`, `src/lib/admissions/access.ts`) under the role ordering `parent < student < counselor < admin`. The Auth column shows the minimum role; see the [group page](./university-admissions.md) for the guard mechanics.
 
 > **Canonical-home rule:** this page owns only the mechanical endpoint inventory. Meaning, business rules, and flows live in the relevant `docs/features/*` pages; full per-endpoint signatures live in the linked per-group detail pages.
 
@@ -126,6 +127,8 @@ Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/inter
 | GET | `/api/internal/class-assignments/morning` | internal | cron | Run the morning classroom-assignment automation |
 | GET | `/api/internal/student-promotions/july-1` | internal | cron | Apply the verified July 1, 2026 student-promotion run |
 | POST | `/api/internal/student-promotions/july-1` | internal | cron | Cron-secret replay alias for the July 1 student-promotion apply |
+| GET | `/api/internal/admissions-notifications` | internal | cron | Daily admissions deadline-reminder scan (+ weekly digest on Bangkok Sundays); optional `?runType=` |
+| POST | `/api/internal/admissions-notifications` | internal | cron | Manual admissions-notification trigger (bearer only; optional `runType` body) |
 
 > **Admin-only sync (not cron):** `POST /api/admin/sync-wise` triggers the same Wise sync but is gated by an admin session via `auth()` (no `CRON_SECRET`) — see the [Admin](./misc.md) group.
 
@@ -280,6 +283,76 @@ Tutor combobox data source.
 | Method | Path | Group | Auth | Brief purpose |
 |---|---|---|---|---|
 | GET | `/api/tutors` | tutors | admin | All tutor names/IDs/modes/subjects from the active snapshot |
+
+## [University Admissions](./university-admissions.md) — `/api/admissions`
+
+University admissions case management: caseload + case CRUD, memberships, checklist tasks/templates, meetings, college list + decisions, recommenders, essays, activities, testing, calendar, self-report sections, parent dashboard, notes, announcements, resources, registries, and the per-case audit trail. Auth is **session + min role** (see the legend above): `requireCaseAccess` re-resolves the caller's per-case role from Postgres on every request; "(claim)" rows gate on the JWT role from `requireAdmissionsSession`; "staff" rows use `requireCounselorOrAdmin`.
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/admissions/cases` | admissions | session, counselor (claim) | Caseload for the signed-in staff user |
+| POST | `/api/admissions/cases` | admissions | session, counselor (claim) | Create a case (student + members + checklist) |
+| GET | `/api/admissions/cases/[caseId]` | admissions | session, min student | Full case detail (parents → parent dashboard) |
+| PATCH | `/api/admissions/cases/[caseId]` | admissions | session, min counselor | Update case lifecycle/profile (optimistic concurrency) |
+| GET | `/api/admissions/cases/[caseId]/members` | admissions | session, min counselor | List memberships (all statuses) |
+| POST | `/api/admissions/cases/[caseId]/members` | admissions | session, min counselor | Add a parent/counselor member |
+| PATCH | `/api/admissions/cases/[caseId]/members` | admissions | session, min counselor | Revoke / re-invite / change member email |
+| GET | `/api/admissions/cases/[caseId]/tasks` | admissions | session, min student | Checklist tasks + progress |
+| POST | `/api/admissions/cases/[caseId]/tasks` | admissions | session, min counselor | Create a custom task |
+| PATCH | `/api/admissions/cases/[caseId]/tasks` | admissions | session, min student (per action) | Task status / verify / update / delete actions |
+| DELETE | `/api/admissions/cases/[caseId]/tasks` | admissions | session, min counselor | Soft-delete a custom task (`?taskId=`) |
+| GET | `/api/admissions/cases/[caseId]/meetings` | admissions | session, min student | List the meeting log |
+| POST | `/api/admissions/cases/[caseId]/meetings` | admissions | session, min counselor | Log a meeting + action-item tasks |
+| PATCH | `/api/admissions/cases/[caseId]/meetings` | admissions | session, min counselor | Edit a meeting |
+| GET | `/api/admissions/cases/[caseId]/colleges` | admissions | session, min student | College list + IPEDS stats + completeness |
+| POST | `/api/admissions/cases/[caseId]/colleges` | admissions | session, min counselor | Add a college (IPEDS `unitId` or manual entry) |
+| PATCH | `/api/admissions/cases/[caseId]/colleges` | admissions | session, min counselor | Update plan fields (round/deadline/status/category/aid) |
+| DELETE | `/api/admissions/cases/[caseId]/colleges` | admissions | session, min counselor | Soft-delete a list item (`?itemId=`) |
+| GET | `/api/admissions/cases/[caseId]/colleges/[itemId]/events` | admissions | session, min student | Decision-event chain for one list item |
+| POST | `/api/admissions/cases/[caseId]/colleges/[itemId]/events` | admissions | session, min counselor | Append a decision event (`committed` moves the pointer) |
+| GET | `/api/admissions/cases/[caseId]/recommenders` | admissions | session, min student | Recommenders + college-doc rows |
+| POST | `/api/admissions/cases/[caseId]/recommenders` | admissions | session, min counselor | Create a recommender |
+| PATCH | `/api/admissions/cases/[caseId]/recommenders` | admissions | session, min counselor | update / link / submission / college_doc actions |
+| DELETE | `/api/admissions/cases/[caseId]/recommenders` | admissions | session, min counselor | Soft-delete a recommender (`?recommenderId=`) |
+| GET | `/api/admissions/cases/[caseId]/essays` | admissions | session, min student | Essay tracker rows |
+| POST | `/api/admissions/cases/[caseId]/essays` | admissions | session, min student | Add an essay row |
+| PATCH | `/api/admissions/cases/[caseId]/essays` | admissions | session, min student (staff fields counselor) | Update an essay |
+| DELETE | `/api/admissions/cases/[caseId]/essays` | admissions | session, min counselor | Soft-delete an essay (`?essayId=`) |
+| GET | `/api/admissions/cases/[caseId]/activities` | admissions | session, min student | Activities list, ranked first |
+| POST | `/api/admissions/cases/[caseId]/activities` | admissions | session, min student | Add an activity |
+| PATCH | `/api/admissions/cases/[caseId]/activities` | admissions | session, min student | update / rank (Common App top-10) actions |
+| DELETE | `/api/admissions/cases/[caseId]/activities` | admissions | session, min student | Soft-delete an activity (`?activityId=`) |
+| GET | `/api/admissions/cases/[caseId]/testing` | admissions | session, min student | Test sittings + best scores |
+| POST | `/api/admissions/cases/[caseId]/testing` | admissions | session, min student | Add a test sitting |
+| PATCH | `/api/admissions/cases/[caseId]/testing` | admissions | session, min student (`scoreReleasedToParent` counselor) | Update a sitting |
+| DELETE | `/api/admissions/cases/[caseId]/testing` | admissions | session, min student | Delete a sitting (`?sittingId=`) |
+| GET | `/api/admissions/cases/[caseId]/calendar` | admissions | session, min student | Dated items for a window + upcoming deadlines |
+| GET | `/api/admissions/cases/[caseId]/sections/[sectionKey]` | admissions | session, min student | Self-report section definition + saved state |
+| PUT | `/api/admissions/cases/[caseId]/sections/[sectionKey]` | admissions | session, min student | Autosave a partial section draft |
+| POST | `/api/admissions/cases/[caseId]/sections/[sectionKey]` | admissions | session, min student (`review` counselor) | submit / review state machine |
+| GET | `/api/admissions/cases/[caseId]/parent-dashboard` | admissions | session, min parent | Closed parent projection |
+| GET | `/api/admissions/cases/[caseId]/notes` | admissions | session, min student | Notes shaped for the reader's role |
+| POST | `/api/admissions/cases/[caseId]/notes` | admissions | session, min counselor | Create a note (explicit visibility) |
+| PATCH | `/api/admissions/cases/[caseId]/notes` | admissions | session, min counselor | Change a note's visibility |
+| GET | `/api/admissions/announcements` | admissions | session, min student (case) / staff (cohort) | List announcements for one target (`?caseId=` xor `?cohortId=`) |
+| POST | `/api/admissions/announcements` | admissions | session, min counselor (case) / staff (cohort) | Create an announcement |
+| PATCH | `/api/admissions/announcements` | admissions | session, staff | Edit an announcement |
+| DELETE | `/api/admissions/announcements` | admissions | session, staff | Soft-delete an announcement (`?announcementId=`) |
+| GET | `/api/admissions/resources` | admissions | session (any role) | Resource library grouped by topic |
+| POST | `/api/admissions/resources` | admissions | session, staff | Create a resource |
+| PATCH | `/api/admissions/resources` | admissions | session, staff | Update a resource |
+| DELETE | `/api/admissions/resources` | admissions | session, staff | Soft-delete a resource (`?resourceId=`) |
+| GET | `/api/admissions/cohorts` | admissions | session, counselor (claim) | List cohorts |
+| POST | `/api/admissions/cohorts` | admissions | session, admin (claim) | Create a cohort |
+| GET | `/api/admissions/cohorts/[cohortId]/templates` | admissions | session, counselor (claim) | Latest checklist template + version history |
+| POST | `/api/admissions/cohorts/[cohortId]/templates` | admissions | session, admin (claim) | create_version / push_new_items actions |
+| PATCH | `/api/admissions/cohorts/[cohortId]/templates` | admissions | session, admin (claim) | Publish a draft template version |
+| GET | `/api/admissions/counselors` | admissions | session, admin (claim) | Counselor registry (active + inactive) |
+| POST | `/api/admissions/counselors` | admissions | session, admin (claim) | Upsert a counselor registry row |
+| PATCH | `/api/admissions/counselors` | admissions | session, admin (claim) | Update or deactivate a registry row |
+| GET | `/api/admissions/audit/[caseId]` | admissions | session, admin | One page of a case's audit trail |
+
+> The admissions notification cron lives in the [Internal / Cron](./internal-crons.md) group above: `GET, POST /api/internal/admissions-notifications`.
 
 ## [Wise Activity](./wise-activity.md) — `/api/wise-activity`
 

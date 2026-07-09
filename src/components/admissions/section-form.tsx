@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { roleAtLeast } from "@/lib/admissions/config";
 import type {
   AdmissionsSectionDefinition,
@@ -139,8 +140,7 @@ export function canSubmitSection(
 
 type SectionFieldValue = string | string[];
 
-const SELECT_CLASSES =
-  "h-9 w-full rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30";
+const SELECT_CLASSES = cn(SELECT_FIELD_CLASSES, "h-9 w-full");
 
 /** The controlled value for a field from a saved payload (fail-closed to empty). */
 function toFieldValue(field: AdmissionsSectionField, payloadValue: unknown): SectionFieldValue {
@@ -342,6 +342,8 @@ export function SectionForm({
             <Button
               size="icon-sm"
               variant="ghost"
+              // 44px touch target (design §5.2) — the icon stays compact.
+              className="min-h-11 min-w-11"
               aria-label="Back to all sections"
               data-testid="section-form-back"
               onClick={onClose}
@@ -380,28 +382,36 @@ export function SectionForm({
           </p>
         ) : null}
 
-        {/* ── Step progress dots (design §5.2) ── */}
+        {/* ── Step progress dots (design §5.2) ──
+            Step NAVIGATION, not tabs: no tab roles (the full tablist contract
+            — aria-selected, arrow keys, tabpanels — does not apply here);
+            each dot is a ≥44px button (portal touch-target bar) carrying
+            aria-current="step", with the small dot as a visual inside. */}
         {definition.steps.length > 1 ? (
-          <div className="flex items-center gap-2" role="tablist" aria-label="Form steps">
+          <nav aria-label="Form steps" className="flex items-center gap-0.5">
             {definition.steps.map((formStep, index) => (
               <button
                 key={formStep.key}
                 type="button"
-                role="tab"
                 data-testid={`step-dot-${index}`}
                 aria-label={`Step ${index + 1}: ${formStep.title}`}
                 aria-current={index === stepIndex ? "step" : undefined}
-                className={cn(
-                  "size-3 rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-                  index === stepIndex ? "bg-primary" : "bg-muted",
-                )}
+                className="flex min-h-11 min-w-11 items-center justify-center rounded-full outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                 onClick={() => setStepIndex(index)}
-              />
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "size-3 rounded-full",
+                    index === stepIndex ? "bg-primary" : "bg-muted",
+                  )}
+                />
+              </button>
             ))}
             <span className="text-xs text-muted-foreground">
               Step {stepIndex + 1} of {definition.steps.length}: {step.title}
             </span>
-          </div>
+          </nav>
         ) : (
           <p className="text-xs font-medium text-muted-foreground">{step.title}</p>
         )}
@@ -481,19 +491,23 @@ export function SectionForm({
                   </select>
                 ) : null}
                 {field.type === "multiselect" ? (
-                  <ul className="flex flex-wrap gap-x-4 gap-y-1.5">
+                  <ul className="flex flex-wrap gap-x-4">
                     {(field.options ?? []).map((option) => (
-                      <li key={option} className="flex items-center gap-1.5 text-sm">
-                        <input
-                          type="checkbox"
-                          className="size-4 accent-primary"
-                          data-testid={`field-${field.key}-${option}`}
-                          checked={list.includes(option)}
-                          disabled={!canWrite}
-                          onChange={() => toggleOption(field, option)}
-                          aria-label={`${field.label}: ${option}`}
-                        />
-                        <span className="text-foreground">{option}</span>
+                      <li key={option}>
+                        {/* The label wraps input + text so the whole ≥44px
+                            row is tappable, not just the 16px checkbox. */}
+                        <label className="flex min-h-11 items-center gap-1.5 text-sm">
+                          <input
+                            type="checkbox"
+                            className="size-4 accent-primary"
+                            data-testid={`field-${field.key}-${option}`}
+                            checked={list.includes(option)}
+                            disabled={!canWrite}
+                            onChange={() => toggleOption(field, option)}
+                            aria-label={`${field.label}: ${option}`}
+                          />
+                          <span className="text-foreground">{option}</span>
+                        </label>
                       </li>
                     ))}
                   </ul>

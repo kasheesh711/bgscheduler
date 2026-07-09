@@ -3,8 +3,18 @@ import { NextRequest } from "next/server";
 
 // `@/lib/auth` instantiates NextAuth at import time and `@/lib/db` pulls the
 // Neon driver; stub both so the real requireAdmissionsSession guard can run.
+// The Postgres-resolved staff/admin guards (design §2.2) are mocked so their
+// per-test outcome models the registry/admin_users state.
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
+vi.mock("@/lib/admissions/access", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/admissions/access")>();
+  return {
+    ...actual,
+    requireAdmissionsAdmin: vi.fn(),
+    requireCounselorOrAdmin: vi.fn(),
+  };
+});
 // Stub only the db-backed template operations; everything else (schemas,
 // pure helpers) stays real.
 vi.mock("@/lib/admissions/checklists", async (importOriginal) => ({
@@ -17,6 +27,7 @@ vi.mock("@/lib/admissions/checklists", async (importOriginal) => ({
 }));
 
 import { auth } from "@/lib/auth";
+import { requireAdmissionsAdmin, requireCounselorOrAdmin } from "@/lib/admissions/access";
 import {
   createTemplateVersion,
   getLatestTemplate,
@@ -31,6 +42,13 @@ import type {
 } from "@/lib/admissions/checklists";
 
 const authMock = auth as unknown as Mock;
+
+const ADMIN_STAFF = { email: "admin@example.com", role: "admin" as const, isAdmin: true };
+const COUNSELOR_STAFF = {
+  email: "counselor@example.com",
+  role: "counselor" as const,
+  isAdmin: false,
+};
 
 const COHORT_ID = "44444444-4444-4444-8444-444444444444";
 const TEMPLATE_ID = "77777777-7777-4777-8777-777777777777";
@@ -125,6 +143,7 @@ describe("GET /api/admissions/cohorts/[cohortId]/templates", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     authMock.mockResolvedValue(ADMIN_SESSION);
+    vi.mocked(requireCounselorOrAdmin).mockResolvedValue(ADMIN_STAFF);
     vi.mocked(getLatestTemplate).mockResolvedValue(TEMPLATE_DTO);
     vi.mocked(listTemplateVersions).mockResolvedValue([VERSION_DTO]);
   });
@@ -143,6 +162,7 @@ describe("GET /api/admissions/cohorts/[cohortId]/templates", () => {
 
   it("returns the template payload for a counselor (read-only visibility)", async () => {
     authMock.mockResolvedValue(COUNSELOR_SESSION);
+    vi.mocked(requireCounselorOrAdmin).mockResolvedValue(COUNSELOR_STAFF);
 
     const res = await GET(new Request("http://test.local"), makeCtx());
 
@@ -165,6 +185,7 @@ describe("GET /api/admissions/cohorts/[cohortId]/templates", () => {
 
   it("returns 403 for a student session (counselor+ only)", async () => {
     authMock.mockResolvedValue(STUDENT_SESSION);
+    vi.mocked(requireCounselorOrAdmin).mockRejectedValue(new Error("Forbidden"));
 
     const res = await GET(new Request("http://test.local"), makeCtx());
 
@@ -195,6 +216,7 @@ describe("POST /api/admissions/cohorts/[cohortId]/templates", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     authMock.mockResolvedValue(ADMIN_SESSION);
+    vi.mocked(requireAdmissionsAdmin).mockResolvedValue(ADMIN_STAFF);
     vi.mocked(createTemplateVersion).mockResolvedValue(TEMPLATE_DTO);
     vi.mocked(pushNewItemsToCohortCases).mockResolvedValue(PUSH_RESULT);
   });
@@ -260,12 +282,23 @@ describe("POST /api/admissions/cohorts/[cohortId]/templates", () => {
 
   it("returns 403 for a counselor session (admin-only template ops)", async () => {
     authMock.mockResolvedValue(COUNSELOR_SESSION);
+    vi.mocked(requireAdmissionsAdmin).mockRejectedValue(new Error("Forbidden"));
 
     const res = await POST(makeRequest("POST", CREATE_VERSION_BODY), makeCtx());
 
     expect(res.status).toBe(403);
     expect(createTemplateVersion).not.toHaveBeenCalled();
     expect(pushNewItemsToCohortCases).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 for a removed admin despite an admin JWT (instant revocation)", async () => {
+    authMock.mockResolvedValue(ADMIN_SESSION);
+    vi.mocked(requireAdmissionsAdmin).mockRejectedValue(new Error("Forbidden"));
+
+    const res = await POST(makeRequest("POST", CREATE_VERSION_BODY), makeCtx());
+
+    expect(res.status).toBe(403);
+    expect(createTemplateVersion).not.toHaveBeenCalled();
   });
 
   it("returns 401 when unauthenticated", async () => {
@@ -333,6 +366,7 @@ describe("PATCH /api/admissions/cohorts/[cohortId]/templates", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     authMock.mockResolvedValue(ADMIN_SESSION);
+    vi.mocked(requireAdmissionsAdmin).mockResolvedValue(ADMIN_STAFF);
     vi.mocked(listTemplateVersions).mockResolvedValue([VERSION_DTO]);
     vi.mocked(publishTemplate).mockResolvedValue({
       ...TEMPLATE_DTO,
@@ -376,6 +410,7 @@ describe("PATCH /api/admissions/cohorts/[cohortId]/templates", () => {
 
   it("returns 403 for a counselor session (admin-only template ops)", async () => {
     authMock.mockResolvedValue(COUNSELOR_SESSION);
+    vi.mocked(requireAdmissionsAdmin).mockRejectedValue(new Error("Forbidden"));
 
     const res = await PATCH(makeRequest("PATCH", { templateId: TEMPLATE_ID }), makeCtx());
 

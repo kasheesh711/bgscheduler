@@ -27,6 +27,7 @@ import {
   getSectionDefinition,
   type AdmissionsSectionStateDto,
 } from "@/lib/admissions/sections";
+import type { AdmissionsResourceTopicGroup } from "@/lib/admissions/resources";
 import type { ThisWeekAction } from "@/lib/admissions/student-home";
 import type { AdmissionsBestScore } from "@/lib/admissions/testing";
 import type { AdmissionsCaseDetail, CaseRole } from "@/lib/admissions/types";
@@ -234,6 +235,24 @@ const SECTION_STATES: AdmissionsSectionStateDto[] = [
   },
 ];
 
+const RESOURCE_GROUPS: AdmissionsResourceTopicGroup[] = [
+  {
+    topic: "essays",
+    label: "Essays",
+    resources: [
+      {
+        id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        topic: "essays",
+        title: "College Essay Guy",
+        url: "https://www.collegeessayguy.com",
+        sortOrder: 0,
+        createdAt: "2026-07-01T03:00:00.000Z",
+        updatedAt: "2026-07-01T03:00:00.000Z",
+      },
+    ],
+  },
+];
+
 const ESSAY_ROW: AdmissionsEssayListRowDto = {
   id: "99999999-9999-4999-8999-999999999999",
   caseId: CASE_ID,
@@ -307,6 +326,7 @@ function renderShell(overrides: {
       tasks={overrides.tasks ?? [STUDENT_TASK, COUNSELOR_TASK]}
       bestScores={BEST_SCORES}
       sectionStates={SECTION_STATES}
+      resourceGroups={RESOURCE_GROUPS}
       viewerRole={overrides.viewerRole ?? "student"}
       viewerEmail="ploy@example.com"
     />,
@@ -361,7 +381,7 @@ describe("resolveActionView", () => {
 
 describe("resolveMoreSubView", () => {
   it("passes known sub-view keys through", () => {
-    expect(MORE_SUBVIEWS).toHaveLength(3);
+    expect(MORE_SUBVIEWS).toHaveLength(4);
     for (const entry of MORE_SUBVIEWS) {
       expect(resolveMoreSubView(entry.key)).toBe(entry.key);
     }
@@ -582,6 +602,18 @@ describe("StudentPortalShell more sub-views", () => {
     expect(html).toContain('data-testid="more-back"');
     expect(html).toContain('data-testid="sections-list"');
     expect(html).toContain('data-testid="section-card-about_you"');
+  });
+
+  it("opens the resource library full-screen as a read-only link list (CM-92)", () => {
+    const html = renderShell({ view: "more", sub: "resources" });
+    expect(html).toContain('data-testid="more-back"');
+    expect(html).toContain('data-testid="resources-panel"');
+    expect(html).toContain('data-testid="resource-group-essays"');
+    expect(html).toContain('href="https://www.collegeessayguy.com"');
+    // Student viewers never see the staff manage affordances.
+    expect(html).not.toContain('data-testid="resource-add-form"');
+    expect(html).not.toContain("Add resource");
+    expect(html).not.toContain("Delete");
   });
 
   it("ignores sub params outside the More view (fail-closed)", () => {

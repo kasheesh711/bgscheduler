@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { BANGKOK_TIME_ZONE } from "@/lib/bangkok-time";
+import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { roleAtLeast } from "@/lib/admissions/config";
 import {
   ADMISSIONS_TEST_TYPES,
@@ -206,8 +207,7 @@ export function buildSittingPatch(
 
 // ── Internal helpers ────────────────────────────────────────────────────
 
-const SELECT_CLASSES =
-  "h-8 rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30";
+const SELECT_CLASSES = cn(SELECT_FIELD_CLASSES, "h-8");
 
 /** "YYYY-MM-DD" → "D/M/YYYY" (repo-wide D/M convention); non-dates pass through. */
 function formatDateOnly(value: string): string {
@@ -461,7 +461,8 @@ export function TestingView({
                       <Button
                         size="icon-sm"
                         variant="ghost"
-                        className="ml-auto"
+                        // ≥44px touch target (design §5.2), compact visuals.
+                        className="ml-auto min-h-11 min-w-11"
                         disabled={busy}
                         aria-label={`Edit ${label} sitting on ${formatDateOnly(sitting.testDate)}`}
                         data-testid={`sitting-edit-${sitting.id}`}

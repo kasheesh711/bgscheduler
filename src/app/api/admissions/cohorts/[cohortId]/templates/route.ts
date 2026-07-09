@@ -9,10 +9,20 @@
 // (CM-21). PATCH publishes a draft version (admin only); publishing twice is
 // a 409 and a templateId outside this cohort is a 404 (fail-closed — no
 // cross-cohort publishing through the wrong URL).
+//
+// Staff/admin rights are re-resolved from Postgres on EVERY request
+// (requireCounselorOrAdmin / requireAdmissionsAdmin, design §2.2) — the JWT
+// role claim shapes nav only, so registry deactivation and admin removal
+// revoke template management instantly.
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { admissionsErrorResponse, requireAdmissionsSession } from "@/lib/admissions/access";
+import {
+  admissionsErrorResponse,
+  requireAdmissionsAdmin,
+  requireAdmissionsSession,
+  requireCounselorOrAdmin,
+} from "@/lib/admissions/access";
 import {
   createTemplateVersion,
   getLatestTemplate,
@@ -20,7 +30,6 @@ import {
   publishTemplate,
   pushNewItemsToCohortCases,
 } from "@/lib/admissions/checklists";
-import { roleAtLeast } from "@/lib/admissions/config";
 
 const ROUTE = "/api/admissions/cohorts/[cohortId]/templates";
 
@@ -71,9 +80,7 @@ export async function GET(
 ) {
   try {
     const user = await requireAdmissionsSession();
-    if (!roleAtLeast(user.role, "counselor")) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+    await requireCounselorOrAdmin(user.email);
     const { cohortId } = await ctx.params;
 
     const latest = await getLatestTemplate(cohortId);
@@ -90,9 +97,7 @@ export async function POST(
 ) {
   try {
     const user = await requireAdmissionsSession();
-    if (user.role !== "admin") {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+    const admin = await requireAdmissionsAdmin(user.email);
     const { cohortId } = await ctx.params;
 
     let body: unknown;
@@ -110,7 +115,7 @@ export async function POST(
       );
     }
 
-    const actor = { email: user.email, role: user.role };
+    const actor = { email: admin.email, role: admin.role };
 
     if (parsed.data.action === "push_new_items") {
       const result = await pushNewItemsToCohortCases(cohortId, actor);
@@ -142,9 +147,7 @@ export async function PATCH(
 ) {
   try {
     const user = await requireAdmissionsSession();
-    if (user.role !== "admin") {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+    const admin = await requireAdmissionsAdmin(user.email);
     const { cohortId } = await ctx.params;
 
     let body: unknown;
@@ -170,8 +173,8 @@ export async function PATCH(
     }
 
     const template = await publishTemplate(parsed.data.templateId, {
-      email: user.email,
-      role: user.role,
+      email: admin.email,
+      role: admin.role,
     });
     return NextResponse.json({ template });
   } catch (error) {
