@@ -22,6 +22,7 @@ import {
   writeAuditLog,
   type AdmissionsWriteDb,
 } from "./audit";
+import { sendMemberInviteForCase } from "./notifications";
 import type {
   AdmissionsMemberDto,
   AdmissionsMemberStatus,
@@ -82,6 +83,19 @@ function getInitialMemberState(role: AdmissionsRole, now: Date): InitialMemberSt
     return { status: "active", invitedAt: null, activatedAt: now };
   }
   return { status: "invited", invitedAt: now, activatedAt: null };
+}
+
+/**
+ * Fire-and-forget invite email for a freshly invited membership (PRD §3.7).
+ * Only "invited" rows get an email (counselors activate immediately, no
+ * invite); send failures are logged and never thrown — membership writes
+ * must never fail because email delivery did.
+ */
+function dispatchInviteEmail(member: AdmissionsMemberDto, db: Database): void {
+  if (member.status !== "invited") return;
+  void sendMemberInviteForCase(member, db).catch((error) => {
+    console.error("Failed to send admissions member invite email", error);
+  });
 }
 
 /**
@@ -208,6 +222,8 @@ export async function rejectStudentAsParent(
  * 4. Existing (caseId, email) row: none → fresh insert; revoked → reinstate
  *    in place (role + state reset, revokedAt cleared, audited as
  *    "reinstate"); any other status → Conflict (already a member).
+ * 5. After the transaction commits, an "invited" membership triggers the
+ *    invite email fire-and-forget (PRD §3.7; failures logged, never thrown).
  *
  * @returns the created or reinstated membership DTO.
  */
@@ -226,7 +242,7 @@ export async function addMember(
   if (!email) throw new Error("Case member email is required");
   if (input.role === "student") throw new Error("Conflict");
 
-  return withAuditedTransaction(async (tx) => {
+  const member = await withAuditedTransaction(async (tx) => {
     const studentEmail = await findCaseStudentEmail(tx, input.caseId);
     if (studentEmail === null) throw new Error("NotFound");
 
@@ -299,6 +315,9 @@ export async function addMember(
       updatedAt: now,
     });
   }, db);
+
+  dispatchInviteEmail(member, db);
+  return member;
 }
 
 /**
@@ -462,7 +481,9 @@ export async function changeMemberEmail(
 /**
  * Re-sends an invite by stamping a fresh invitedAt on an invited or bounced
  * membership (audited). Active members need no invite and revoked members
- * must be re-added via addMember — both Conflict.
+ * must be re-added via addMember — both Conflict. After the transaction
+ * commits, the invite email is re-sent fire-and-forget (PRD §3.7 one-click
+ * re-invite; failures logged, never thrown).
  *
  * @returns the updated membership DTO.
  */
@@ -474,7 +495,7 @@ export async function reInvite(
     throw new Error("NotFound");
   }
 
-  return withAuditedTransaction(async (tx) => {
+  const member = await withAuditedTransaction(async (tx) => {
     const rows = await tx
       .select()
       .from(admissionsCaseMembers)
@@ -517,6 +538,9 @@ export async function reInvite(
       updatedAt: now,
     });
   }, db);
+
+  dispatchInviteEmail(member, db);
+  return member;
 }
 
 /**

@@ -1,47 +1,27 @@
 // /admissions — counselor/admin caseload workspace (design §5.1) + role
-// routing for the family portal (design §5.2).
+// routing for the family portals (design §5.2/§5.3).
 //
 // Authz-scoped page: data is fetched with the session email via direct lib
 // calls — deliberately NO "use cache" here, since the caseload differs per
 // user and must never be cached cross-user. getCaseloadForUser is itself
-// fail-closed (non-admin, non-counselor → empty list). Students are routed
-// to their own case page (the mobile-first student portal); a student with
-// no live case gets a friendly empty state. Parents land on a placeholder
-// card until their portal ships in phase 5; any other role (e.g. teacher)
-// is denied (fail-closed).
+// fail-closed (non-admin, non-counselor → empty list). Students and parents
+// are routed to their own case page (the mobile-first student portal /
+// parent dashboard); a family member with no live case gets a friendly
+// empty state. Any other role (e.g. teacher) is denied (fail-closed).
 
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { Clock, ShieldAlert, UserRound } from "lucide-react";
+import { ShieldAlert, UserRound } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { auth } from "@/lib/auth";
-import { getCaseIdForStudentEmail, getCaseloadForUser } from "@/lib/admissions/cases";
+import {
+  getCaseIdForParentEmail,
+  getCaseIdForStudentEmail,
+  getCaseloadForUser,
+} from "@/lib/admissions/cases";
 import { listCohorts } from "@/lib/admissions/cohorts";
 import { listCounselors } from "@/lib/admissions/counselors";
 import { CaseloadShell, CaseloadSkeleton } from "@/components/admissions/caseload-shell";
-
-function PortalComingSoonCard() {
-  return (
-    <div className="mx-auto mt-8 w-full max-w-md">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Clock aria-hidden className="size-4 text-primary" />
-            Your portal is coming soon
-          </CardTitle>
-          <CardDescription>
-            The parent admissions portal is being built. Your counselor will let you
-            know as soon as it is ready.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">
-          In the meantime, reach out to your counselor directly with any questions about your
-          application plan.
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
 
 function NoCaseYetCard() {
   return (
@@ -102,7 +82,14 @@ async function AdmissionsBody() {
     return <NoCaseYetCard />;
   }
   if (role === "parent") {
-    return <PortalComingSoonCard />;
+    // Parent dashboard routing (design §5.3): land parents on their child's
+    // case. The case page re-runs requireCaseAccess and renders ONLY the
+    // parent projection for parent members — this lookup never grants rights.
+    const parentCaseId = await getCaseIdForParentEmail(email);
+    if (parentCaseId) {
+      redirect(`/admissions/${parentCaseId}`);
+    }
+    return <NoCaseYetCard />;
   }
   // Caseload renders only for counselors and admins (role null = legacy
   // full-access admin). Anything else — e.g. teacher — is denied, fail-closed.

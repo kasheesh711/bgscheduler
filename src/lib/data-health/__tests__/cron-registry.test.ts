@@ -19,6 +19,17 @@ describe("data-health cron registry", () => {
     expect(expected).toEqual(actual);
   });
 
+  it("registers the admissions notifications cron as a scheduled daily job", () => {
+    const job = SCHEDULED_CRON_JOBS.find(
+      (candidate) => candidate.path === "/api/internal/admissions-notifications",
+    );
+
+    expect(job).toBeDefined();
+    expect(job?.key).toBe("admissions_notifications");
+    expect(job?.schedule).toBe("12 1 * * *");
+    expect(job?.routeMethod).toBe("GET");
+  });
+
   it("declares the room utilization sync as manual-only", () => {
     const paths = SCHEDULED_CRON_JOBS.map((job) => job.path as string);
     expect(paths).not.toContain("/api/internal/sync-room-utilization");

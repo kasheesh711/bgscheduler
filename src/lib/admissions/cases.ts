@@ -19,8 +19,8 @@
 // essays (CM-60..63), activities (CM-70/71), test sittings (CM-80), section
 // summaries (CM-121) — plus the student home's "This Week" actions and
 // season-scoped phase rings (CM-120); deadlines now also include essay and
-// testing sources. getCaseIdForStudentEmail resolves the student portal's
-// landing case (design §5.2).
+// testing sources. getCaseIdForStudentEmail / getCaseIdForParentEmail
+// resolve the family portals' landing cases (design §5.2/§5.3).
 
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
@@ -465,22 +465,20 @@ export async function getCaseloadForUser(
 }
 
 /**
- * Resolves the case a student portal visitor lands on (design §5.2 routing):
- * the case where `email` holds an ACTIVE student membership on a live
+ * Shared family-portal landing resolution (design §5.2/§5.3 routing): the
+ * case where `email` holds an ACTIVE membership with `role` on a live
  * (active/committed, non-soft-deleted) case.
  *
  * Fail-closed like requireCaseAccess: only status "active" memberships count
- * (invited/revoked/bounced students have no portal case yet), so routing
- * never sends a student to a case the per-request guard would then deny.
- * The live-case partial unique index makes multiple matches unexpected; if
- * data drift ever produces more than one, the newest case wins (createdAt
- * descending, caseId tiebreak) for a deterministic landing.
- *
- * @returns the caseId, or null when the student has no live case.
+ * (invited/revoked/bounced members have no portal case yet), so routing
+ * never sends a visitor to a case the per-request guard would then deny.
+ * With multiple matches the newest case wins (createdAt descending, caseId
+ * tiebreak) for a deterministic landing.
  */
-export async function getCaseIdForStudentEmail(
+async function getCaseIdForFamilyEmail(
   email: string,
-  db: Database = getDb(),
+  role: "student" | "parent",
+  db: Database,
 ): Promise<string | null> {
   const normalized = normalizeAdmissionsEmail(email);
   if (!normalized) return null;
@@ -494,7 +492,7 @@ export async function getCaseIdForStudentEmail(
     .innerJoin(admissionsCases, eq(admissionsCaseMembers.caseId, admissionsCases.id))
     .where(and(
       eq(admissionsCaseMembers.email, normalized),
-      eq(admissionsCaseMembers.role, "student"),
+      eq(admissionsCaseMembers.role, role),
       eq(admissionsCaseMembers.status, "active"),
       inArray(admissionsCases.status, ["active", "committed"]),
       isNull(admissionsCases.deletedAt),
@@ -506,6 +504,43 @@ export async function getCaseIdForStudentEmail(
     (a.caseId < b.caseId ? -1 : a.caseId > b.caseId ? 1 : 0),
   );
   return sorted[0].caseId;
+}
+
+/**
+ * Resolves the case a student portal visitor lands on (design §5.2 routing):
+ * the case where `email` holds an ACTIVE student membership on a live
+ * (active/committed, non-soft-deleted) case.
+ *
+ * The live-case partial unique index makes multiple matches unexpected; if
+ * data drift ever produces more than one, the newest case wins (createdAt
+ * descending, caseId tiebreak) for a deterministic landing.
+ *
+ * @returns the caseId, or null when the student has no live case.
+ */
+export async function getCaseIdForStudentEmail(
+  email: string,
+  db: Database = getDb(),
+): Promise<string | null> {
+  return getCaseIdForFamilyEmail(email, "student", db);
+}
+
+/**
+ * Resolves the case a parent dashboard visitor lands on (design §5.3
+ * routing): the case where `email` holds an ACTIVE parent membership on a
+ * live (active/committed, non-soft-deleted) case.
+ *
+ * Unlike students, a parent may legitimately belong to multiple live cases
+ * (siblings); the newest case wins (createdAt descending, caseId tiebreak)
+ * for a deterministic landing — the case page's per-request guard still
+ * governs what they may see there.
+ *
+ * @returns the caseId, or null when the parent has no live case.
+ */
+export async function getCaseIdForParentEmail(
+  email: string,
+  db: Database = getDb(),
+): Promise<string | null> {
+  return getCaseIdForFamilyEmail(email, "parent", db);
 }
 
 /**

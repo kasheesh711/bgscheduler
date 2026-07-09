@@ -43,6 +43,7 @@ import {
   CASE_LIFECYCLE_TRANSITIONS,
   createCase,
   getCaseDetail,
+  getCaseIdForParentEmail,
   getCaseIdForStudentEmail,
   getCaseloadForUser,
   isValidCaseTransition,
@@ -1410,5 +1411,41 @@ describe("getCaseIdForStudentEmail", () => {
 
     // Newest first; the equal-createdAt tie breaks by caseId ascending.
     await expect(getCaseIdForStudentEmail("ada@example.com", db)).resolves.toBe(CASE_ID_B);
+  });
+});
+
+describe("getCaseIdForParentEmail", () => {
+  it("returns the caseId for an active parent membership on a live case", async () => {
+    const { db } = fakeDb([
+      [{ caseId: CASE_ID, createdAt: new Date("2026-06-01T00:00:00Z") }],
+    ]);
+
+    await expect(getCaseIdForParentEmail("Mom@Example.com ", db)).resolves.toBe(CASE_ID);
+  });
+
+  it("returns null when the parent has no live case", async () => {
+    const { db } = fakeDb([[]]);
+
+    await expect(getCaseIdForParentEmail("mom@example.com", db)).resolves.toBeNull();
+  });
+
+  it("returns null for an empty email without querying", async () => {
+    const { db, selectCalls } = fakeDb([]);
+
+    await expect(getCaseIdForParentEmail("   ", db)).resolves.toBeNull();
+    expect(selectCalls).toHaveLength(0);
+  });
+
+  it("lands deterministically on the newest case for multi-child parents", async () => {
+    const { db } = fakeDb([
+      [
+        { caseId: CASE_ID, createdAt: new Date("2026-05-01T00:00:00Z") },
+        { caseId: CASE_ID_C, createdAt: new Date("2026-06-01T00:00:00Z") },
+        { caseId: CASE_ID_B, createdAt: new Date("2026-06-01T00:00:00Z") },
+      ],
+    ]);
+
+    // Newest first; the equal-createdAt tie breaks by caseId ascending.
+    await expect(getCaseIdForParentEmail("mom@example.com", db)).resolves.toBe(CASE_ID_B);
   });
 });

@@ -2981,7 +2981,7 @@ export const ipedsCompletions = pgTable("ipeds_completions", {
 
 // ── Admissions Case Management ─────────────────────────────────────────
 // University admissions case management (design: docs/casemanagementsystem_design.md §3).
-// 23 tables, prefix admissions_. `wiseStudentKey` and `unitId` are plain
+// 25 tables, prefix admissions_. `wiseStudentKey` and `unitId` are plain
 // soft-reference columns — never FKs to Wise/snapshot or ipeds_* tables.
 // User-facing tables carry a soft-delete `deletedAt`; admissions_audit_log
 // is append-only (createdAt only, no UPDATE/DELETE code path).
@@ -3046,6 +3046,14 @@ export const admissionsCaseMembers = pgTable("admissions_case_members", {
   activatedAt: timestamp("activated_at", { withTimezone: true }),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
   addedByEmail: text("added_by_email"),
+  // Per-category notification downgrades (null = all defaults). Absent key =
+  // default tier; deadline reminders are never downgradable (CM-112), so they
+  // have no key here.
+  notificationPrefs: jsonb("notification_prefs").$type<{
+    announcements?: "digest" | "off";
+    tasks?: "digest" | "off";
+    comments?: "digest" | "off";
+  }>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -3347,4 +3355,42 @@ export const admissionsAuditLog = pgTable("admissions_audit_log", {
 }, (table) => [
   index("admissions_audit_log_case_created_idx").on(table.caseId, table.createdAt),
   index("admissions_audit_log_entity_idx").on(table.entityType, table.entityId),
+]);
+
+export const admissionsNotificationLog = pgTable("admissions_notification_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").references(() => admissionsCases.id),
+  recipientEmail: text("recipient_email").notNull(),
+  // deadline_reminder | direct_message | digest | invite | announcement
+  category: text("category").notNull(),
+  // interrupt | batch
+  tier: text("tier").notNull(),
+  subject: text("subject").notNull(),
+  resendEmailId: text("resend_email_id"),
+  dedupeKey: text("dedupe_key"),
+  sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_notification_log_recipient_sent_idx").on(table.recipientEmail, table.sentAt),
+  // Partial unique: dedupe keyed sends exactly once; keyless rows unconstrained.
+  uniqueIndex("admissions_notification_log_dedupe_key_idx")
+    .on(table.dedupeKey)
+    .where(sql`${table.dedupeKey} IS NOT NULL`),
+]);
+
+export const admissionsNotificationRuns = pgTable("admissions_notification_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  // daily | weekly
+  runType: text("run_type").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  sentCount: integer("sent_count").notNull().default(0),
+  skippedCount: integer("skipped_count").notNull().default(0),
+  errorSummary: text("error_summary"),
+}, (table) => [
+  uniqueIndex("admissions_notification_runs_single_running_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'running'`),
+  index("admissions_notification_runs_status_started_idx").on(table.status, table.startedAt),
 ]);

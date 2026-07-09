@@ -20,6 +20,10 @@ import { roleAtLeast } from "@/lib/admissions/config";
 import { listMeetings } from "@/lib/admissions/meetings";
 import { listNotesForRole } from "@/lib/admissions/notes";
 import {
+  buildParentDashboard,
+  type ParentDashboard,
+} from "@/lib/admissions/parent-projection";
+import {
   listCollegeDocs,
   listRecommenders,
   type AdmissionsCollegeDocDto,
@@ -39,6 +43,7 @@ import {
   CaseDetailShell,
   CaseDetailSkeleton,
 } from "@/components/admissions/case-detail-shell";
+import { ParentDashboardView } from "@/components/admissions/parent/parent-dashboard";
 import { StudentPortalShell } from "@/components/admissions/student/portal-shell";
 import type {
   AdmissionsCaseDetail,
@@ -48,9 +53,12 @@ import type {
 } from "@/lib/admissions/types";
 
 // Per-request membership checks + fresh reads on every navigation — this page
-// deliberately does NOT use "use cache" (revocation must be instant, §2.2).
-// Student members get the mobile-first portal shell (design §5.2); everyone
-// else (counselor/admin/parent) gets the staff case-detail shell.
+// deliberately does NOT use "use cache" (revocation must be instant, §2.2;
+// the parent projection must never be cached cross-user either). Student
+// members get the mobile-first portal shell (design §5.2); parent members get
+// ONLY the read-only parent dashboard built from the closed parent projection
+// (design §5.3 — never the staff or student shells, fail-closed); counselors
+// and admins get the staff case-detail shell.
 
 async function CaseDetailBody({ caseId }: { caseId: string }) {
   const session = await auth();
@@ -119,10 +127,29 @@ async function CaseDetailBody({ caseId }: { caseId: string }) {
     );
   }
 
+  // ── Parent dashboard branch (design §5.3, CM-130..131) ──
+  // Parents receive ONLY the closed parent projection (§2.3): every field is
+  // whitelisted field-by-field in buildParentDashboard, so staff commentary,
+  // aid fields, and unreleased scores are structurally unreachable. The
+  // staff/student shells below are never rendered for a parent (fail-closed).
+  if (access.role === "parent") {
+    let dashboard: ParentDashboard;
+    try {
+      dashboard = await buildParentDashboard(caseId);
+    } catch (error) {
+      if (error instanceof Error && error.message === "NotFound") {
+        notFound();
+      }
+      throw error;
+    }
+    return <ParentDashboardView dashboard={dashboard} />;
+  }
+
+  // Staff branch (counselor/admin only from here on).
   const isStaff = roleAtLeast(access.role, "counselor");
-  // Checklist reads are student+ (design §4); parents consume the progress
-  // rollup on the case detail instead of task rows. The calendar shares the
-  // same student+ gate — parents see the family-visible deadline list only.
+  // Checklist reads are student+ (design §4). Only counselors/admins reach
+  // this branch today (students and parents return above), but the gate stays
+  // role-derived so a future role below "student" fails closed here too.
   const canViewChecklist = roleAtLeast(access.role, "student");
 
   // Current Bangkok month window ("YYYY-MM-01".."YYYY-MM-<last>") for the
@@ -174,7 +201,8 @@ async function CaseDetailBody({ caseId }: { caseId: string }) {
         canViewChecklist ? listRecommenders(caseId) : Promise.resolve([]),
         canViewChecklist ? listCollegeDocs(caseId) : Promise.resolve([]),
         // Testing best scores + full self-report section states share the
-        // same student+ gate (design §4); parents get empty arrays.
+        // same student+ gate (design §4); parents get released milestones
+        // via their projection instead.
         canViewChecklist ? getBestScores(caseId) : Promise.resolve([]),
         canViewChecklist
           ? Promise.all(

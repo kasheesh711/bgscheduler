@@ -11,6 +11,7 @@ export type CronJobKey =
   | "classroom_morning"
   | "classroom_admin_email"
   | "student_promotions_july_1"
+  | "admissions_notifications"
   | "cron_watchdog"
   | "room_utilization"
   | "line_backlog_recovery"
@@ -207,6 +208,22 @@ export const CRON_JOBS = [
     dangerous: true,
     confirmationLabel: "Applies verified Wise student grade and course promotion writes.",
     expectedBangkokMinute: 5,
+    routeMethod: "GET",
+  },
+  {
+    key: "admissions_notifications",
+    label: "Admissions Notifications",
+    feature: "Admissions",
+    path: "/api/internal/admissions-notifications",
+    schedule: "12 1 * * *",
+    cadenceLabel: "Daily 08:12 Bangkok",
+    cadenceMinutes: 24 * 60,
+    lateAfterMinutes: 60,
+    maxDurationSeconds: 300,
+    manualOnly: false,
+    dangerous: true,
+    confirmationLabel: "Sends deadline reminder emails (and the weekly digest on Sundays) to admissions case members.",
+    expectedBangkokMinute: 8 * 60 + 12,
     routeMethod: "GET",
   },
   {

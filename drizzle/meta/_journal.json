@@ -365,6 +365,13 @@
       "when": 1783597639751,
       "tag": "0051_foamy_kabuki",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1783616757362,
+      "tag": "0052_light_namor",
+      "breakpoints": true
     }
   ]
 }

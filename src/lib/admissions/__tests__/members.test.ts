@@ -1,10 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // `@/lib/db` pulls the Neon driver at import time; stub it so the membership
 // functions can be unit-tested against a fake chainable db (no real database).
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 
+// The invite email hook is fire-and-forget from addMember/reInvite; stub the
+// notifications module so no transport code runs and the dispatch is
+// observable per test.
+vi.mock("@/lib/admissions/notifications", () => ({
+  sendMemberInviteForCase: vi.fn(async () => ({
+    skipped: false,
+    resendEmailId: null,
+    logId: null,
+  })),
+}));
+
 import { admissionsAuditLog, admissionsCaseMembers } from "@/lib/db/schema";
+import { sendMemberInviteForCase } from "@/lib/admissions/notifications";
 import {
   addMember,
   changeMemberEmail,
@@ -22,6 +34,12 @@ const MEMBER_ID = "99999999-9999-4999-8999-999999999999";
 const STUDENT_EMAIL = "ada@example.com";
 
 const ACTOR = { email: "staff@example.com", role: "counselor" as const };
+
+const inviteEmailMock = vi.mocked(sendMemberInviteForCase);
+
+afterEach(() => {
+  inviteEmailMock.mockClear();
+});
 
 interface InsertCall {
   table: unknown;
@@ -193,6 +211,13 @@ describe("addMember", () => {
         status: { old: null, new: "invited" },
       },
     });
+
+    // Invited member → invite email dispatched fire-and-forget (PRD §3.7).
+    expect(inviteEmailMock).toHaveBeenCalledTimes(1);
+    expect(inviteEmailMock).toHaveBeenCalledWith(
+      expect.objectContaining({ email: "mom@example.com", status: "invited" }),
+      db,
+    );
   });
 
   it("adds a counselor as immediately active", async () => {
@@ -207,6 +232,9 @@ describe("addMember", () => {
     expect(members[0]).toMatchObject({ role: "counselor", status: "active" });
     expect(members[0].activatedAt).toBeInstanceOf(Date);
     expect(members[0].invitedAt).toBeNull();
+
+    // Active memberships never trigger an invite email.
+    expect(inviteEmailMock).not.toHaveBeenCalled();
   });
 
   it("rejects a parent email equal to the case's student email with Conflict", async () => {
@@ -494,6 +522,13 @@ describe("reInvite", () => {
     const audits = auditInserts(inserts);
     expect(audits).toHaveLength(1);
     expect(audits[0]).toMatchObject({ action: "reinvite", entityId: MEMBER_ID });
+
+    // Re-invite re-sends the invite email fire-and-forget (PRD §3.7).
+    expect(inviteEmailMock).toHaveBeenCalledTimes(1);
+    expect(inviteEmailMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: MEMBER_ID, status: "invited" }),
+      db,
+    );
   });
 
   it("moves a bounced member back to invited", async () => {
