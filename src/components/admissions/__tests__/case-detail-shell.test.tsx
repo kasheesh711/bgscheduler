@@ -24,6 +24,8 @@ import {
   resolveCaseTab,
   type ProfileFormValues,
 } from "../case-detail-shell";
+import type { CalendarItem } from "@/lib/admissions/calendar";
+import type { AdmissionsTaskDto } from "@/lib/admissions/checklists";
 import type {
   AdmissionsCaseDetail,
   AdmissionsMeetingDto,
@@ -85,8 +87,11 @@ const CASE_DETAIL: AdmissionsCaseDetail = {
       updatedAt: "2026-06-02T03:00:00.000Z",
     },
   ],
+  progress: { done: 0, total: 0, percent: 0, verifiedCount: 0 },
   progressPercent: 0,
   nextDeadline: null,
+  upcomingDeadlines: [],
+  announcements: [],
   lastMeetingDate: "2026-07-05",
   createdAt: "2026-06-01T03:00:00.000Z",
   updatedAt: "2026-07-05T03:00:00.000Z",
@@ -130,17 +135,23 @@ const NOTES: AdmissionsNoteDto[] = [
 function renderShell(overrides: {
   tab?: string | null;
   viewerRole?: "counselor" | "student" | "parent" | "admin";
+  caseDetail?: AdmissionsCaseDetail;
   meetings?: AdmissionsMeetingDto[];
   notes?: AdmissionsNoteDto[];
+  tasks?: AdmissionsTaskDto[];
+  calendarItems?: CalendarItem[];
 } = {}): string {
   navState.params = overrides.tab != null
     ? new URLSearchParams(`tab=${overrides.tab}`)
     : null;
   return renderToStaticMarkup(
     <CaseDetailShell
-      caseDetail={CASE_DETAIL}
+      caseDetail={overrides.caseDetail ?? CASE_DETAIL}
       meetings={overrides.meetings ?? MEETINGS}
       notes={overrides.notes ?? NOTES}
+      tasks={overrides.tasks ?? []}
+      calendarMonth="2026-07"
+      calendarItems={overrides.calendarItems ?? []}
       viewerRole={overrides.viewerRole ?? "counselor"}
       viewerEmail="counselor.may@example.com"
     />,
@@ -300,9 +311,110 @@ describe("CaseDetailShell header + tabs", () => {
   });
 });
 
+describe("CaseDetailShell overview deadlines + calendar", () => {
+  const DEADLINE_DETAIL: AdmissionsCaseDetail = {
+    ...CASE_DETAIL,
+    nextDeadline: "2026-07-02",
+    upcomingDeadlines: [
+      {
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        caseId: CASE_ID,
+        source: "task",
+        title: "Submit FAFSA draft",
+        date: "2026-07-02",
+        overdue: true,
+        ownerRole: "student",
+      },
+      {
+        id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        caseId: CASE_ID,
+        source: "task",
+        title: "Essay outline",
+        date: "2026-07-20",
+        overdue: false,
+        ownerRole: "student",
+      },
+    ],
+  };
+
+  it("lists upcoming deadlines with overdue flagged in red", () => {
+    const html = renderShell({ caseDetail: DEADLINE_DETAIL });
+    const items = html.match(/data-testid="upcoming-deadline"/g) ?? [];
+    expect(items).toHaveLength(2);
+    expect(html).toContain("Submit FAFSA draft");
+    expect(html).toContain("2/7/2026 · Overdue");
+    expect(html).toContain("text-conflict");
+    expect(html).toContain("20/7/2026");
+  });
+
+  it("renders an empty state and no phase-2 stub copy without deadlines", () => {
+    const html = renderShell();
+    expect(html).toContain("No open deadlines");
+    expect(html).not.toContain("appear here from phase 2");
+  });
+
+  it("offers the calendar toggle to staff and students but not parents", () => {
+    expect(renderShell({ viewerRole: "counselor" })).toContain(
+      'data-testid="calendar-toggle"',
+    );
+    expect(renderShell({ viewerRole: "student" })).toContain(
+      'data-testid="calendar-toggle"',
+    );
+    expect(renderShell({ viewerRole: "parent" })).not.toContain(
+      'data-testid="calendar-toggle"',
+    );
+  });
+
+  it("keeps the month grid collapsed until toggled", () => {
+    // Static render = initial state; the CalendarTab sub-view mounts only
+    // after the toggle flips showCalendar.
+    const html = renderShell();
+    expect(html).not.toContain('data-testid="calendar-tab"');
+  });
+});
+
+describe("CaseDetailShell overview announcements", () => {
+  const ANNOUNCEMENT_DETAIL: AdmissionsCaseDetail = {
+    ...CASE_DETAIL,
+    announcements: [
+      {
+        id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        cohortId: CASE_DETAIL.cohort.id,
+        caseId: null,
+        title: "Common App opens Friday",
+        body: "Everyone should create an account this week.",
+        authorEmail: "counselor.may@example.com",
+        createdAt: "2026-07-05T03:00:00.000Z",
+        updatedAt: "2026-07-05T03:00:00.000Z",
+      },
+    ],
+  };
+
+  it("renders the announcements panel with the composer for staff", () => {
+    const html = renderShell({ caseDetail: ANNOUNCEMENT_DETAIL, viewerRole: "counselor" });
+    expect(html).toContain('data-testid="announcements-panel"');
+    expect(html).toContain("Common App opens Friday");
+    expect(html).toContain("Cohort broadcast");
+    expect(html).toContain('data-testid="announcement-submit"');
+    expect(html).toContain("Whole cohort (Class of 2027)");
+  });
+
+  it("renders a read-only announcements list for family viewers", () => {
+    const html = renderShell({ caseDetail: ANNOUNCEMENT_DETAIL, viewerRole: "parent" });
+    expect(html).toContain("Common App opens Friday");
+    expect(html).not.toContain('data-testid="announcement-submit"');
+  });
+});
+
 describe("CaseDetailShell placeholder tabs", () => {
+  it("renders the live checklist tab instead of a placeholder", () => {
+    const html = renderShell({ tab: "checklist" });
+    expect(html).not.toContain("Coming in phase 2");
+    // Counselor viewers get the add-task action from the real checklist tab.
+    expect(html).toContain('data-testid="checklist-add-task"');
+  });
+
   it("renders structured coming-in-phase placeholders", () => {
-    expect(renderShell({ tab: "checklist" })).toContain("Coming in phase 2");
     expect(renderShell({ tab: "colleges" })).toContain("Coming in phase 3");
     expect(renderShell({ tab: "applications" })).toContain("Coming in phase 3");
     expect(renderShell({ tab: "essays" })).toContain("Coming in phase 4");

@@ -3,14 +3,17 @@
 // ----------------------------------------------------------------------------
 // Admissions caseload — sortable/filterable table view (design §5.1).
 // Columns: student, cohort, status, counselors, progress, next deadline,
-// days-since-touch. Progress and next-deadline render "—" until the checklist
-// and college modules land (phase-1 placeholders: progressPercent = 0,
-// nextDeadline = null). Sorting and filtering are pure exported helpers so
-// they stay unit-testable without a DOM.
+// days-since-touch. Progress renders the live checklist percentage as a bar
+// (CM-24) and next deadline renders relative to today's Bangkok date with
+// overdue rows in --conflict red (CM-101/102); both arrive precomputed on the
+// caseload DTO (getCaseloadForUser). Sorting, filtering, and the deadline
+// formatter are pure exported helpers so they stay unit-testable without a
+// DOM.
 // ----------------------------------------------------------------------------
 
 import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Search } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -28,6 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { todayBangkok } from "@/lib/room-capacity/dates";
 import type { AdmissionsCaseStatus, AdmissionsCaseSummary } from "@/lib/admissions/types";
 import {
   CASE_STATUS_BADGE_CLASSES,
@@ -149,6 +153,78 @@ export function formatDaysSinceTouch(value: number | null): string {
   return `${value}d ago`;
 }
 
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** Rendered next-deadline cell: relative label + overdue flag (CM-101/102). */
+export interface NextDeadlineDisplay {
+  label: string;
+  /** True when the deadline is strictly before today (Bangkok). */
+  overdue: boolean;
+}
+
+function toUtcMillis(dateOnly: string): number {
+  const [year, month, day] = dateOnly.split("-").map(Number);
+  return Date.UTC(year, month - 1, day);
+}
+
+/**
+ * Formats a caseload row's next deadline relative to today's Bangkok date:
+ * "—" for none, "Nd overdue" (flagged) for past dates, "Due today",
+ * "Due tomorrow", else "In Nd". Malformed inputs pass through unflagged —
+ * never guessed as overdue (fail-closed).
+ */
+export function formatNextDeadline(
+  nextDeadline: string | null,
+  todayIso: string,
+): NextDeadlineDisplay {
+  if (nextDeadline === null) return { label: "—", overdue: false };
+  if (!DATE_ONLY_PATTERN.test(nextDeadline) || !DATE_ONLY_PATTERN.test(todayIso)) {
+    return { label: nextDeadline, overdue: false };
+  }
+  const diffDays = Math.round(
+    (toUtcMillis(nextDeadline) - toUtcMillis(todayIso)) / 86_400_000,
+  );
+  if (diffDays < 0) return { label: `${-diffDays}d overdue`, overdue: true };
+  if (diffDays === 0) return { label: "Due today", overdue: false };
+  if (diffDays === 1) return { label: "Due tomorrow", overdue: false };
+  return { label: `In ${diffDays}d`, overdue: false };
+}
+
+/** "YYYY-MM-DD" → "D/M/YYYY" (repo-wide D/M convention); non-dates pass through. */
+function formatDateOnly(value: string): string {
+  const match = DATE_ONLY_PATTERN.exec(value);
+  if (!match) return value;
+  return `${Number(match[3])}/${Number(match[2])}/${match[1]}`;
+}
+
+/** Compact checklist-progress bar + percentage (shared table/board cell). */
+export function CaseloadProgress({
+  percent,
+  studentName,
+}: {
+  percent: number;
+  studentName: string;
+}) {
+  return (
+    <span className="flex items-center gap-2">
+      <span
+        role="progressbar"
+        aria-label={`Checklist progress for ${studentName}`}
+        aria-valuenow={percent}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted"
+      >
+        <span
+          className="block h-full rounded-full bg-primary"
+          style={{ width: `${percent}%` }}
+        />
+      </span>
+      <span className="text-xs tabular-nums text-muted-foreground">{percent}%</span>
+    </span>
+  );
+}
+
 function compareCaseloadRows(
   a: AdmissionsCaseSummary,
   b: AdmissionsCaseSummary,
@@ -203,6 +279,7 @@ export interface CaseloadTableProps {
 export function CaseloadTable({ rows }: CaseloadTableProps) {
   const [filters, setFilters] = useState<CaseloadFilters>(DEFAULT_CASELOAD_FILTERS);
   const [sort, setSort] = useState<CaseloadSort>(DEFAULT_CASELOAD_SORT);
+  const todayIso = useMemo(() => todayBangkok(), []);
 
   const cohortOptions = useMemo(() => {
     const byId = new Map<string, string>();
@@ -299,37 +376,51 @@ export function CaseloadTable({ rows }: CaseloadTableProps) {
                 </TableCell>
               </TableRow>
             ) : (
-              visibleRows.map((row) => (
-                <TableRow key={row.caseId}>
-                  <TableCell>
-                    <span className="font-medium">{row.studentName}</span>
-                    {row.preferredName ? (
-                      <span className="ml-1.5 text-muted-foreground">({row.preferredName})</span>
-                    ) : null}
-                  </TableCell>
-                  <TableCell>
-                    {row.cohortName}
-                    <span className="ml-1.5 text-xs text-muted-foreground">{row.graduationYear}</span>
-                  </TableCell>
-                  <TableCell>
-                    <Badge className={CASE_STATUS_BADGE_CLASSES[row.status]}>
-                      {CASE_STATUS_LABELS[row.status]}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="max-w-52 truncate" title={row.counselorNames.join(", ")}>
-                    {row.counselorNames.length > 0 ? row.counselorNames.join(", ") : "—"}
-                  </TableCell>
-                  <TableCell className="tabular-nums text-muted-foreground">
-                    {row.progressPercent > 0 ? `${row.progressPercent}%` : "—"}
-                  </TableCell>
-                  <TableCell className="tabular-nums text-muted-foreground">
-                    {row.nextDeadline ?? "—"}
-                  </TableCell>
-                  <TableCell className="tabular-nums">
-                    {formatDaysSinceTouch(row.daysSinceLastTouch)}
-                  </TableCell>
-                </TableRow>
-              ))
+              visibleRows.map((row) => {
+                const deadline = formatNextDeadline(row.nextDeadline, todayIso);
+                return (
+                  <TableRow key={row.caseId}>
+                    <TableCell>
+                      <span className="font-medium">{row.studentName}</span>
+                      {row.preferredName ? (
+                        <span className="ml-1.5 text-muted-foreground">({row.preferredName})</span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell>
+                      {row.cohortName}
+                      <span className="ml-1.5 text-xs text-muted-foreground">{row.graduationYear}</span>
+                    </TableCell>
+                    <TableCell>
+                      <Badge className={CASE_STATUS_BADGE_CLASSES[row.status]}>
+                        {CASE_STATUS_LABELS[row.status]}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="max-w-52 truncate" title={row.counselorNames.join(", ")}>
+                      {row.counselorNames.length > 0 ? row.counselorNames.join(", ") : "—"}
+                    </TableCell>
+                    <TableCell>
+                      <CaseloadProgress
+                        percent={row.progressPercent}
+                        studentName={row.studentName}
+                      />
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        "tabular-nums",
+                        deadline.overdue
+                          ? "font-medium text-conflict"
+                          : "text-muted-foreground",
+                      )}
+                      title={row.nextDeadline ? formatDateOnly(row.nextDeadline) : undefined}
+                    >
+                      {deadline.label}
+                    </TableCell>
+                    <TableCell className="tabular-nums">
+                      {formatDaysSinceTouch(row.daysSinceLastTouch)}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>

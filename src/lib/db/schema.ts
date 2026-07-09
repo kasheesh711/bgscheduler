@@ -3292,6 +3292,7 @@ export const admissionsAnnouncements = pgTable("admissions_announcements", {
   title: text("title").notNull(),
   body: text("body").notNull(),
   authorEmail: text("author_email").notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [

@@ -7,6 +7,7 @@ import {
   DEFAULT_CASELOAD_FILTERS,
   filterCaseloadRows,
   formatDaysSinceTouch,
+  formatNextDeadline,
   sortCaseloadRows,
   toggleCaseloadSort,
 } from "../caseload-table";
@@ -155,6 +156,56 @@ describe("formatDaysSinceTouch", () => {
   });
 });
 
+describe("formatNextDeadline", () => {
+  const TODAY = "2026-07-09";
+
+  it("renders a placeholder for cases without a deadline", () => {
+    expect(formatNextDeadline(null, TODAY)).toEqual({ label: "—", overdue: false });
+  });
+
+  it("flags past deadlines as overdue with the day count", () => {
+    expect(formatNextDeadline("2026-07-06", TODAY)).toEqual({
+      label: "3d overdue",
+      overdue: true,
+    });
+    expect(formatNextDeadline("2026-06-09", TODAY)).toEqual({
+      label: "30d overdue",
+      overdue: true,
+    });
+  });
+
+  it("renders today/tomorrow/relative future labels without the overdue flag", () => {
+    expect(formatNextDeadline("2026-07-09", TODAY)).toEqual({
+      label: "Due today",
+      overdue: false,
+    });
+    expect(formatNextDeadline("2026-07-10", TODAY)).toEqual({
+      label: "Due tomorrow",
+      overdue: false,
+    });
+    expect(formatNextDeadline("2026-07-21", TODAY)).toEqual({
+      label: "In 12d",
+      overdue: false,
+    });
+  });
+
+  it("crosses month and year boundaries", () => {
+    expect(formatNextDeadline("2026-08-01", TODAY)).toEqual({
+      label: "In 23d",
+      overdue: false,
+    });
+    expect(formatNextDeadline("2027-07-09", TODAY).overdue).toBe(false);
+  });
+
+  it("passes malformed dates through without guessing overdue (fail-closed)", () => {
+    expect(formatNextDeadline("soon", TODAY)).toEqual({ label: "soon", overdue: false });
+    expect(formatNextDeadline("2026-07-06", "not-a-date")).toEqual({
+      label: "2026-07-06",
+      overdue: false,
+    });
+  });
+});
+
 describe("CaseloadTable", () => {
   it("renders one row per case with student, cohort, status, and counselors", () => {
     const html = renderToStaticMarkup(
@@ -179,11 +230,33 @@ describe("CaseloadTable", () => {
     expect(html).toContain("Nok, Mint");
   });
 
-  it("renders placeholders for the phase-1 progress and next-deadline columns", () => {
+  it("renders the live checklist progress as a bar with the percentage", () => {
     const html = renderToStaticMarkup(
-      <CaseloadTable rows={[summary({ progressPercent: 0, nextDeadline: null })]} />,
+      <CaseloadTable rows={[summary({ progressPercent: 40 })]} />,
     );
-    expect(html).toContain("—");
+    expect(html).toContain('role="progressbar"');
+    expect(html).toContain('aria-valuenow="40"');
+    expect(html).toContain("width:40%");
+    expect(html).toContain("40%");
+  });
+
+  it("renders the next deadline relative to today, red when overdue", () => {
+    const overdueHtml = renderToStaticMarkup(
+      <CaseloadTable rows={[summary({ nextDeadline: "2000-01-01" })]} />,
+    );
+    expect(overdueHtml).toContain("d overdue");
+    expect(overdueHtml).toContain("text-conflict");
+
+    const futureHtml = renderToStaticMarkup(
+      <CaseloadTable rows={[summary({ nextDeadline: "2999-12-31" })]} />,
+    );
+    expect(futureHtml).toContain("In ");
+    expect(futureHtml).not.toContain("text-conflict");
+
+    const noneHtml = renderToStaticMarkup(
+      <CaseloadTable rows={[summary({ nextDeadline: null })]} />,
+    );
+    expect(noneHtml).toContain("—");
   });
 
   it("renders the empty state when there are no cases", () => {

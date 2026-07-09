@@ -10,6 +10,7 @@ import {
   admissionsErrorResponse,
   requireAdmissionsSession,
   requireCaseAccess,
+  requireCounselorOrAdmin,
   resolveAdmissionsRole,
 } from "@/lib/admissions/access";
 import { roleAtLeast } from "@/lib/admissions/config";
@@ -250,6 +251,52 @@ describe("requireCaseAccess", () => {
     const access = await requireCaseAccess("  MOM@Example.com ", CASE_ID, "parent", db);
 
     expect(access.email).toBe("mom@example.com");
+  });
+});
+
+describe("requireCounselorOrAdmin", () => {
+  // Queue order: [adminUsers, (admissionsCounselors)].
+  it("resolves an admin_users row to admin without querying the registry", async () => {
+    const { db, selectCalls } = fakeDb([[{ id: "a1" }]]);
+
+    await expect(requireCounselorOrAdmin("admin@example.com", db)).resolves.toEqual({
+      email: "admin@example.com",
+      role: "admin",
+      isAdmin: true,
+    });
+    expect(selectCalls).toHaveLength(1);
+  });
+
+  it("resolves an active counselor registry row to counselor", async () => {
+    const { db, selectCalls } = fakeDb([[], [{ id: "c1" }]]);
+
+    await expect(requireCounselorOrAdmin("staff@example.com", db)).resolves.toEqual({
+      email: "staff@example.com",
+      role: "counselor",
+      isAdmin: false,
+    });
+    expect(selectCalls).toHaveLength(2);
+  });
+
+  it("throws Forbidden when neither admin nor active registry row matches (students/parents/strangers)", async () => {
+    const { db } = fakeDb([[], []]);
+
+    await expect(requireCounselorOrAdmin("kid@example.com", db)).rejects.toThrow("Forbidden");
+  });
+
+  it("throws Unauthorized for an empty email without querying", async () => {
+    const { db, selectCalls } = fakeDb([]);
+
+    await expect(requireCounselorOrAdmin("   ", db)).rejects.toThrow("Unauthorized");
+    expect(selectCalls).toHaveLength(0);
+  });
+
+  it("normalizes the email onto the returned access", async () => {
+    const { db } = fakeDb([[], [{ id: "c1" }]]);
+
+    const staff = await requireCounselorOrAdmin("  STAFF@Example.com ", db);
+
+    expect(staff.email).toBe("staff@example.com");
   });
 });
 

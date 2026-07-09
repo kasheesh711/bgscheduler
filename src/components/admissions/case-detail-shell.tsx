@@ -5,8 +5,11 @@
 //
 // Tab state lives in the URL (`?tab=`, mirroring the us-universities shell's
 // URL-as-source-of-truth pattern) so refresh/back/forward restore the active
-// tab. Phase-1 tabs are implemented (Overview / Profile / Meetings / Notes);
-// the rest render structured "coming in phase N" placeholders.
+// tab. Implemented tabs: Overview / Profile / Checklist / Meetings / Notes;
+// the rest render structured "coming in phase N" placeholders. The Overview
+// tab also hosts the upcoming-deadlines list (CM-102), the month-grid
+// deadline calendar as a toggled sub-view (CM-100 — design §5.1 lists no
+// Calendar tab), and the announcements panel (CM-90).
 //
 // Server data arrives as props from the page (no client cache): every
 // successful mutation calls router.refresh() so the server component re-reads
@@ -50,6 +53,11 @@ import {
   ADMISSIONS_TASK_OWNERS,
   type AdmissionsTaskOwner,
 } from "@/lib/admissions/meetings";
+import { AnnouncementsPanel } from "./announcements-panel";
+import { CalendarTab } from "./calendar-tab";
+import { ChecklistTab } from "./checklist-tab";
+import type { CalendarItem } from "@/lib/admissions/calendar";
+import type { AdmissionsTaskDto } from "@/lib/admissions/checklists";
 import type {
   AdmissionsCaseDetail,
   AdmissionsCaseStatus,
@@ -86,11 +94,6 @@ const DEFAULT_CASE_TAB: CaseTabKey = "overview";
 const PLACEHOLDER_TABS: Partial<
   Record<CaseTabKey, { phase: number; description: string }>
 > = {
-  checklist: {
-    phase: 2,
-    description:
-      "The 10-phase SummitEd checklist with per-task owners, due dates, verification, and progress rings.",
-  },
   colleges: {
     phase: 3,
     description:
@@ -440,6 +443,12 @@ export interface CaseDetailShellProps {
   meetings: AdmissionsMeetingDto[];
   /** Already role-filtered by listNotesForRole on the server. */
   notes: AdmissionsNoteDto[];
+  /** Live checklist tasks; empty for parent viewers (the tasks API is student+). */
+  tasks: AdmissionsTaskDto[];
+  /** Current Bangkok month ("YYYY-MM") the page fetched calendarItems for. */
+  calendarMonth: string;
+  /** buildCaseCalendar items for calendarMonth; empty for parent viewers. */
+  calendarItems: CalendarItem[];
   viewerRole: CaseRole;
   viewerEmail: string;
 }
@@ -453,6 +462,9 @@ export function CaseDetailShell({
   caseDetail,
   meetings,
   notes,
+  tasks,
+  calendarMonth,
+  calendarItems,
   viewerRole,
   viewerEmail,
 }: CaseDetailShellProps) {
@@ -462,6 +474,10 @@ export function CaseDetailShell({
   const searchParams = useSearchParams();
   const activeTab = resolveCaseTab(searchParams?.get("tab") ?? null);
   const isStaff = roleAtLeast(viewerRole, "counselor");
+  // The calendar API is student+ (design §4); parents only get the
+  // family-visible deadline list from the case detail payload.
+  const canViewCalendar = roleAtLeast(viewerRole, "student");
+  const [showCalendar, setShowCalendar] = useState(false);
 
   const { student, cohort } = caseDetail;
 
@@ -792,30 +808,70 @@ export function CaseDetailShell({
                   <span className="font-medium">{caseDetail.progressPercent}%</span>
                 </p>
                 <p className="text-muted-foreground">
-                  Phase progress rings arrive with the checklist in phase 2.
+                  {caseDetail.progress.done}/{caseDetail.progress.total} tasks
+                  done · {caseDetail.progress.verifiedCount} verified — details
+                  in the Checklist tab.
                 </p>
               </CardContent>
             </Card>
             <Card>
               <CardHeader>
                 <CardTitle>Upcoming deadlines</CardTitle>
+                {canViewCalendar ? (
+                  <CardAction>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      data-testid="calendar-toggle"
+                      aria-expanded={showCalendar}
+                      onClick={() => setShowCalendar((previous) => !previous)}
+                    >
+                      <CalendarIcon aria-hidden />
+                      {showCalendar ? "Hide calendar" : "Show calendar"}
+                    </Button>
+                  </CardAction>
+                ) : null}
               </CardHeader>
               <CardContent className="text-sm">
-                {caseDetail.nextDeadline ? (
-                  <p>
-                    Next deadline:{" "}
-                    <span className="font-medium">
-                      {formatDateOnly(caseDetail.nextDeadline)}
-                    </span>
-                  </p>
+                {caseDetail.upcomingDeadlines.length > 0 ? (
+                  <ul className="space-y-1.5">
+                    {caseDetail.upcomingDeadlines.map((item) => (
+                      <li
+                        key={item.id}
+                        data-testid="upcoming-deadline"
+                        className="flex items-center justify-between gap-2"
+                      >
+                        <span className="min-w-0 truncate">{item.title}</span>
+                        <span
+                          className={cn(
+                            "shrink-0 text-xs tabular-nums",
+                            item.overdue
+                              ? "font-medium text-conflict"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {formatDateOnly(item.date)}
+                          {item.overdue ? " · Overdue" : ""}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 ) : (
                   <p className="text-muted-foreground">
-                    No deadlines yet — checklist and college deadlines appear
-                    here from phase 2.
+                    No open deadlines — dated checklist items appear here.
                   </p>
                 )}
               </CardContent>
             </Card>
+            {canViewCalendar && showCalendar ? (
+              <div className="md:col-span-2">
+                <CalendarTab
+                  caseId={caseDetail.caseId}
+                  initialMonth={calendarMonth}
+                  initialItems={calendarItems}
+                />
+              </div>
+            ) : null}
             <Card>
               <CardHeader>
                 <CardTitle>Last meeting</CardTitle>
@@ -864,6 +920,15 @@ export function CaseDetailShell({
                 )}
               </CardContent>
             </Card>
+            <div className="md:col-span-2">
+              <AnnouncementsPanel
+                caseId={caseDetail.caseId}
+                cohortId={cohort.id}
+                cohortName={cohort.name}
+                announcements={caseDetail.announcements}
+                viewerRole={viewerRole}
+              />
+            </div>
           </div>
         ) : null}
 
@@ -970,6 +1035,15 @@ export function CaseDetailShell({
               )}
             </CardContent>
           </Card>
+        ) : null}
+
+        {activeTab === "checklist" ? (
+          <ChecklistTab
+            caseId={caseDetail.caseId}
+            tasks={tasks}
+            progress={caseDetail.progress}
+            viewerRole={viewerRole}
+          />
         ) : null}
 
         {activeTab === "meetings" ? (

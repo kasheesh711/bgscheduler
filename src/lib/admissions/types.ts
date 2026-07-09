@@ -5,7 +5,12 @@
 // builds against. Field names align with src/lib/db/schema.ts (admissions_*
 // tables) and docs/casemanagementsystem_design.md §1/§4/§5.1. All timestamps
 // in DTOs are ISO-8601 strings (serialized boundary); date-only columns are
-// "YYYY-MM-DD" strings.
+// "YYYY-MM-DD" strings. The type-only imports from sibling modules below are
+// erased at compile time — no runtime import cycle exists.
+
+import type { AdmissionsAnnouncementDto } from "./announcements";
+import type { CalendarItem } from "./calendar";
+import type { AdmissionsChecklistProgress } from "./checklists";
 
 // ── Roles & access ──────────────────────────────────────────────────────
 
@@ -140,8 +145,16 @@ export interface AdmissionsCaseDetail {
   student: AdmissionsStudentDto;
   cohort: AdmissionsCohortDto;
   members: AdmissionsMemberDto[];
+  /** Full checklist rollup (CM-24): done/total/percent/verifiedCount. */
+  progress: AdmissionsChecklistProgress;
+  /** Done-task percentage, 0–100 integer (= progress.percent). */
   progressPercent: number;
+  /** Earliest open deadline across modules ("YYYY-MM-DD"), or null. */
   nextDeadline: string | null;
+  /** Next open deadlines for the Overview tab (≤5, overdue first, CM-102). */
+  upcomingDeadlines: CalendarItem[];
+  /** Latest announcements visible on this case (≤5, newest first, CM-90). */
+  announcements: AdmissionsAnnouncementDto[];
   lastMeetingDate: string | null;
   createdAt: string;
   updatedAt: string;

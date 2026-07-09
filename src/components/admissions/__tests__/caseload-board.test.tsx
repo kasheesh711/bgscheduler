@@ -103,4 +103,34 @@ describe("CaseloadBoard", () => {
     const matches = html.match(/No cases/g) ?? [];
     expect(matches).toHaveLength(5);
   });
+
+  it("renders the live progress bar and next deadline on cards", () => {
+    const html = renderToStaticMarkup(
+      <CaseloadBoard
+        rows={[
+          summary({
+            caseId: "c1",
+            progressPercent: 65,
+            nextDeadline: "2999-12-31",
+          }),
+        ]}
+      />,
+    );
+    expect(html).toContain('role="progressbar"');
+    expect(html).toContain('aria-valuenow="65"');
+    expect(html).toContain("width:65%");
+    expect(html).toContain("65%");
+    expect(html).toContain("In ");
+    expect(html).not.toContain("Progress —");
+  });
+
+  it("flags overdue deadlines on cards in red", () => {
+    const html = renderToStaticMarkup(
+      <CaseloadBoard
+        rows={[summary({ caseId: "c1", nextDeadline: "2000-01-01" })]}
+      />,
+    );
+    expect(html).toContain("d overdue");
+    expect(html).toContain("text-conflict");
+  });
 });

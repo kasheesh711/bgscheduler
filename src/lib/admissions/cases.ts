@@ -8,9 +8,10 @@
 // neither an admin nor an active registry counselor; unknown transitions →
 // Error("Conflict"); missing cases → Error("NotFound").
 //
-// Phase-1 placeholders (checklists/colleges land in later phases):
-// progressPercent is 0 and nextDeadline is null until the checklist and
-// college modules provide real projections.
+// Phase 2 wiring: case creation instantiates the cohort's published checklist
+// (CM-21, seeding the default template when none exists), and the caseload +
+// case-detail reads project real checklist progress (CM-24), upcoming
+// deadlines (CM-101/102), and announcements (CM-90).
 
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
@@ -25,12 +26,27 @@ import {
   admissionsStudents,
 } from "@/lib/db/schema";
 import { todayBangkok } from "@/lib/room-capacity/dates";
+import { listAnnouncementsForCase } from "./announcements";
 import {
   computeFieldDiff,
   withAuditedTransaction,
   writeAuditLog,
   type AdmissionsWriteDb,
 } from "./audit";
+import {
+  getUpcomingDeadlines,
+  getUpcomingDeadlinesForCases,
+  UPCOMING_DEADLINES_DEFAULT_LIMIT,
+  UPCOMING_DEADLINES_MAX_LIMIT,
+} from "./calendar";
+import {
+  computeProgress,
+  computeProgressMap,
+  hasPublishedTemplate,
+  instantiateChecklist,
+  seedDefaultTemplate,
+  type InstantiateChecklistResult,
+} from "./checklists";
 import {
   insertCaseMember,
   isUuidShaped,
@@ -46,6 +62,9 @@ import type {
 } from "./types";
 
 const MS_PER_DAY = 86_400_000;
+
+/** Announcements included on a case-detail payload (Overview tab, CM-90). */
+export const CASE_DETAIL_ANNOUNCEMENTS_LIMIT = 5;
 
 /**
  * Valid lifecycle transitions (design §8 / PRD §5):
@@ -92,31 +111,42 @@ export interface CreateCaseInput {
   createdBy: AdmissionsActor;
 }
 
-/** createCase result: the new case, its student, and all membership rows. */
+/**
+ * createCase result: the new case, its student, all membership rows, and the
+ * checklist copied into the case (CM-21).
+ */
 export interface CreateCaseResult {
   caseId: string;
   studentId: string;
   members: AdmissionsMemberDto[];
+  checklist: InstantiateChecklistResult;
 }
 
 /**
- * Creates a case with its student and memberships in one audited transaction
- * (PRD CM-01).
+ * Creates a case with its student, memberships, and checklist in one audited
+ * transaction (PRD CM-01 + CM-21).
  *
  * 1. Normalize + dedupe all emails; reject a parent email equal to the
  *    student email and any counselor/family overlap (Conflict — the member
  *    unique key and the student≠parent rule both forbid it). At least one
  *    counselor is required.
- * 2. Link an existing admissions_students row by studentEmail, or insert a
+ * 2. Ensure the cohort has a published checklist template: when none exists,
+ *    seed + publish the default SummitEd template (own audited transaction —
+ *    template versioning is cohort-scoped, so it stays committed even if the
+ *    case write below fails). A missing cohort surfaces here as NotFound.
+ * 3. Link an existing admissions_students row by studentEmail, or insert a
  *    new one from the provided fields (existing rows are linked as-is, not
  *    updated).
- * 3. Linked students must not already have a live (active/committed) case —
+ * 4. Linked students must not already have a live (active/committed) case —
  *    Conflict (mirrors the partial unique index).
- * 4. Insert the case (status "active") and audit it.
- * 5. Insert memberships: student invited, parents invited, counselors active
+ * 5. Insert the case (status "active") and audit it.
+ * 6. Insert memberships: student invited, parents invited, counselors active
  *    — each with its own audit row (CM-05).
+ * 7. Instantiate the cohort's latest published checklist into
+ *    admissions_case_tasks inside the same transaction (CM-21), so every new
+ *    case starts with its checklist or is not created at all.
  *
- * @returns the new caseId, studentId, and membership DTOs.
+ * @returns the new caseId, studentId, membership DTOs, and checklist summary.
  */
 export async function createCase(
   input: CreateCaseInput,
@@ -143,6 +173,12 @@ export async function createCase(
   const familyEmails = new Set([studentEmail, ...parentEmails]);
   if (counselorEmails.some((email) => familyEmails.has(email))) {
     throw new Error("Conflict");
+  }
+
+  // CM-21: every new case gets a checklist. Seed + publish the default
+  // template when the cohort has no published version to instantiate.
+  if (!(await hasPublishedTemplate(input.cohortId, db))) {
+    await seedDefaultTemplate(input.cohortId, input.createdBy, db);
   }
 
   return withAuditedTransaction(async (tx) => {
@@ -203,7 +239,16 @@ export async function createCase(
       }));
     }
 
-    return { caseId: caseRow.id, studentId, members };
+    // CM-21: copy the cohort's latest published checklist into the new case
+    // inside this transaction — case + checklist commit or roll back together.
+    const checklist = await instantiateChecklist(
+      caseRow.id,
+      input.cohortId,
+      tx,
+      input.createdBy,
+    );
+
+    return { caseId: caseRow.id, studentId, members, checklist };
   }, db);
 }
 
@@ -221,7 +266,10 @@ export async function createCase(
  * 3. Enrich: active counselor members per case, registry display names
  *    (email fallback), latest meeting date (days-since-last-touch, Bangkok
  *    days), and the committed college name when set.
- * 4. progressPercent = 0 and nextDeadline = null (phase-1 placeholders).
+ * 4. Project checklist progress per case (CM-24, one batch query) and each
+ *    case's nearest open deadline (CM-101: earliest open dated item, overdue
+ *    included — the batch is capped at UPCOMING_DEADLINES_MAX_LIMIT open
+ *    items, so cases beyond the cap read null).
  *
  * @returns summaries sorted by updatedAt (newest first), then student name.
  */
@@ -347,6 +395,22 @@ export async function getCaseloadForUser(
     for (const row of itemRows) committedNameByItemId.set(row.id, row.instName);
   }
 
+  const progressByCase = await computeProgressMap(caseIds, db);
+  // Deadline items arrive sorted by urgency (earliest open date first), so
+  // the first item seen per case is that case's nearest open deadline.
+  const deadlineItems = await getUpcomingDeadlinesForCases(
+    caseIds,
+    UPCOMING_DEADLINES_MAX_LIMIT,
+    now,
+    db,
+  );
+  const nextDeadlineByCase = new Map<string, string>();
+  for (const item of deadlineItems) {
+    if (!nextDeadlineByCase.has(item.caseId)) {
+      nextDeadlineByCase.set(item.caseId, item.date);
+    }
+  }
+
   const todayIso = todayBangkok(now);
   const summaries = caseRows.map(({ caseRow, studentRow, cohortRow }): AdmissionsCaseSummary => {
     const counselorEmails = [...(counselorsByCase.get(caseRow.id) ?? [])].sort();
@@ -362,8 +426,8 @@ export async function getCaseloadForUser(
       status: caseRow.status,
       counselorEmails,
       counselorNames: counselorEmails.map((value) => nameByEmail.get(value) ?? value),
-      progressPercent: 0,
-      nextDeadline: null,
+      progressPercent: progressByCase.get(caseRow.id)?.percent ?? 0,
+      nextDeadline: nextDeadlineByCase.get(caseRow.id) ?? null,
       daysSinceLastTouch: lastMeeting === null ? null : computeDaysSince(lastMeeting, todayIso),
       committedCollegeName: caseRow.committedListItemId
         ? committedNameByItemId.get(caseRow.committedListItemId) ?? null
@@ -385,11 +449,16 @@ export async function getCaseloadForUser(
  * 2. Load ALL membership rows (every status — the members tab shows invited/
  *    revoked/bounced states), oldest first.
  * 3. Resolve the committed college name and the latest meeting date.
- * 4. progressPercent = 0 and nextDeadline = null (phase-1 placeholders).
+ * 4. Project the Overview tab's real data: checklist progress (CM-24), the
+ *    next UPCOMING_DEADLINES_DEFAULT_LIMIT open deadlines (CM-102, overdue
+ *    first — nextDeadline is the first of them), and the latest
+ *    CASE_DETAIL_ANNOUNCEMENTS_LIMIT announcements visible on the case
+ *    (CM-90: case-scoped rows merged with cohort broadcasts, newest first).
  */
 export async function getCaseDetail(
   caseId: string,
   db: Database = getDb(),
+  now: Date = new Date(),
 ): Promise<AdmissionsCaseDetail> {
   if (!isUuidShaped(caseId)) throw new Error("NotFound");
 
@@ -446,6 +515,16 @@ export async function getCaseDetail(
     }
   }
 
+  const progress = await computeProgress(caseId, db);
+  const upcomingDeadlines = await getUpcomingDeadlines(
+    caseId,
+    UPCOMING_DEADLINES_DEFAULT_LIMIT,
+    now,
+    db,
+  );
+  const announcements = (await listAnnouncementsForCase(caseId, db))
+    .slice(0, CASE_DETAIL_ANNOUNCEMENTS_LIMIT);
+
   return {
     caseId: caseRow.id,
     status: caseRow.status,
@@ -470,8 +549,11 @@ export async function getCaseDetail(
       graduationYear: cohortRow.graduationYear,
     },
     members,
-    progressPercent: 0,
-    nextDeadline: null,
+    progress,
+    progressPercent: progress.percent,
+    nextDeadline: upcomingDeadlines[0]?.date ?? null,
+    upcomingDeadlines,
+    announcements,
     lastMeetingDate,
     createdAt: caseRow.createdAt.toISOString(),
     updatedAt: caseRow.updatedAt.toISOString(),

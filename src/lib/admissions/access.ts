@@ -171,6 +171,53 @@ export async function requireCaseAccess(
   return { caseId, email: normalized, role, isAdmin: false };
 }
 
+/** Result of the Postgres-resolved staff check (requireCounselorOrAdmin). */
+export interface AdmissionsStaffAccess {
+  email: string;
+  role: "counselor" | "admin";
+  isAdmin: boolean;
+}
+
+/**
+ * Per-request staff check for cross-case surfaces that have no single caseId
+ * to anchor requireCaseAccess (e.g. cohort-scoped announcements, design §4 —
+ * announcements are counselor/admin-writable per the §2.2 matrix). Resolved
+ * from Postgres on EVERY request; the JWT role claim is never trusted for
+ * rights.
+ *
+ * 1. Normalize the email; throw "Unauthorized" when empty.
+ * 2. `admin_users` row → admin.
+ * 3. Otherwise an ACTIVE `admissions_counselors` registry row → counselor;
+ *    a deactivated registry row denies (fail-closed).
+ * 4. Anyone else (students, parents, strangers) throws "Forbidden".
+ *
+ * @returns the resolved staff access on success.
+ */
+export async function requireCounselorOrAdmin(
+  email: string,
+  db: Database = getDb(),
+): Promise<AdmissionsStaffAccess> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) throw new Error("Unauthorized");
+
+  const adminRows = await db
+    .select({ id: adminUsers.id })
+    .from(adminUsers)
+    .where(eq(adminUsers.email, normalized))
+    .limit(1);
+  if (adminRows.length > 0) {
+    return { email: normalized, role: "admin", isAdmin: true };
+  }
+
+  const counselorRows = await db
+    .select({ id: admissionsCounselors.id })
+    .from(admissionsCounselors)
+    .where(and(eq(admissionsCounselors.email, normalized), eq(admissionsCounselors.active, true)))
+    .limit(1);
+  if (counselorRows.length === 0) throw new Error("Forbidden");
+  return { email: normalized, role: "counselor", isAdmin: false };
+}
+
 /**
  * Translates guard/domain errors into the route-handler response contract
  * (mirror of progressTestsErrorResponse, plus NotFound→404 and Conflict→409

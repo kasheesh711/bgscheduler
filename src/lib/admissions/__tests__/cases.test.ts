@@ -8,7 +8,10 @@ import {
   admissionsAuditLog,
   admissionsCaseMembers,
   admissionsCases,
+  admissionsCaseTasks,
+  admissionsChecklistTemplates,
   admissionsStudents,
+  admissionsTemplateItems,
 } from "@/lib/db/schema";
 import {
   CASE_LIFECYCLE_TRANSITIONS,
@@ -19,6 +22,8 @@ import {
   updateCaseLifecycle,
   updateCaseProfile,
 } from "@/lib/admissions/cases";
+import { DEFAULT_TEMPLATE_NAME } from "@/lib/admissions/checklists";
+import { DEFAULT_CHECKLIST_ITEMS } from "@/lib/admissions/config";
 import type { AdmissionsCaseStatus } from "@/lib/admissions/types";
 
 const CASE_ID = "11111111-1111-4111-8111-111111111111";
@@ -27,6 +32,7 @@ const CASE_ID_C = "33333333-3333-4333-8333-333333333333";
 const COHORT_ID = "44444444-4444-4444-8444-444444444444";
 const STUDENT_ID = "55555555-5555-4555-8555-555555555555";
 const ITEM_ID = "66666666-6666-4666-8666-666666666666";
+const TEMPLATE_ID = "77777777-7777-4777-8777-777777777777";
 
 const ACTOR = { email: "staff@example.com", role: "counselor" as const };
 
@@ -74,8 +80,10 @@ function fakeDb(queue: unknown[][]) {
     insert: (table: unknown) => ({
       values: (values: Record<string, unknown>) => {
         inserts.push({ table, values });
+        // Generated ids are uuid-shaped so downstream shape checks
+        // (e.g. instantiateChecklist on the new case id) pass.
         const row = {
-          id: `generated-${generated++}`,
+          id: `00000000-0000-4000-8000-${String(generated++).padStart(12, "0")}`,
           invitedAt: null,
           activatedAt: null,
           revokedAt: null,
@@ -397,9 +405,51 @@ describe("createCase", () => {
     createdBy: ACTOR,
   };
 
+  const TEMPLATE_HIT = [{ id: TEMPLATE_ID }];
+
+  function templateRow(version: number) {
+    return {
+      id: TEMPLATE_ID,
+      cohortId: COHORT_ID,
+      version,
+      name: `Checklist v${version}`,
+      publishedAt: new Date("2026-06-15T00:00:00Z"),
+      createdAt: new Date("2026-06-15T00:00:00Z"),
+      updatedAt: new Date("2026-06-15T00:00:00Z"),
+    };
+  }
+
+  function templateItemRow(overrides: Record<string, unknown>) {
+    return {
+      id: "i1",
+      templateId: TEMPLATE_ID,
+      itemKey: "complete_intake_questionnaire",
+      phase: "about_you",
+      title: "Complete the intake questionnaire",
+      description: null,
+      defaultOwner: "student",
+      sortOrder: 0,
+      createdAt: new Date("2026-06-15T00:00:00Z"),
+      updatedAt: new Date("2026-06-15T00:00:00Z"),
+      ...overrides,
+    };
+  }
+
+  function taskInsertValues(inserts: InsertCall[]) {
+    const call = inserts.find((entry) => entry.table === admissionsCaseTasks);
+    return call ? (call.values as unknown as Array<Record<string, unknown>>) : null;
+  }
+
   it("creates the student, the case, and all membership rows with correct roles/statuses", async () => {
-    // Queue: [student lookup -> none]. New student skips the live-case check.
-    const { db, inserts } = fakeDb([[]]);
+    // Queue: [published-template probe -> hit], [student lookup -> none]
+    // (new student skips the live-case check), [instantiate: template],
+    // [instantiate: items].
+    const { db, inserts } = fakeDb([
+      TEMPLATE_HIT,
+      [],
+      [templateRow(2)],
+      [templateItemRow({})],
+    ]);
 
     const result = await createCase(INPUT, db);
 
@@ -432,16 +482,139 @@ describe("createCase", () => {
       "counselor",
     ]);
 
-    // One audit row for the case + one per membership (CM-05).
+    // One audit row for the case + one per membership (CM-05) + one for the
+    // checklist instantiation (CM-21).
     const audits = auditInserts(inserts);
-    expect(audits).toHaveLength(5);
+    expect(audits).toHaveLength(6);
     expect(audits[0]).toMatchObject({ entityType: "case", action: "create" });
-    expect(audits.slice(1).every((row) => row.entityType === "case_member")).toBe(true);
+    expect(audits.slice(1, 5).every((row) => row.entityType === "case_member")).toBe(true);
+    expect(audits[5]).toMatchObject({ entityType: "checklist", action: "instantiate" });
+  });
+
+  it("copies the cohort's latest published template into case tasks (CM-21)", async () => {
+    // Queue: [published-template probe -> hit], [student lookup -> none],
+    // [instantiate: template v3], [instantiate: 2 items].
+    const { db, inserts } = fakeDb([
+      TEMPLATE_HIT,
+      [],
+      [templateRow(3)],
+      [
+        templateItemRow({}),
+        templateItemRow({
+          id: "i2",
+          itemKey: "confirm_profile_details",
+          title: "Confirm profile and contact details",
+          defaultOwner: "counselor",
+          sortOrder: 1,
+        }),
+      ],
+    ]);
+
+    const result = await createCase(INPUT, db);
+
+    // No seeding happened — the cohort already had a published template.
+    expect(inserts.some((call) => call.table === admissionsChecklistTemplates)).toBe(false);
+
+    const tasks = taskInsertValues(inserts);
+    expect(tasks).toHaveLength(2);
+    expect(tasks?.[0]).toMatchObject({
+      caseId: result.caseId,
+      templateId: TEMPLATE_ID,
+      templateVersion: 3,
+      itemKey: "complete_intake_questionnaire",
+      phase: "about_you",
+      owner: "student",
+      status: "not_started",
+      sortOrder: 0,
+    });
+    expect(tasks?.[1]).toMatchObject({
+      caseId: result.caseId,
+      itemKey: "confirm_profile_details",
+      owner: "counselor",
+      status: "not_started",
+      sortOrder: 1,
+    });
+
+    expect(result.checklist).toEqual({
+      templateId: TEMPLATE_ID,
+      templateVersion: 3,
+      taskCount: 2,
+    });
+
+    const instantiateAudit = auditInserts(inserts).find(
+      (row) => row.entityType === "checklist",
+    );
+    expect(instantiateAudit).toMatchObject({
+      caseId: result.caseId,
+      action: "instantiate",
+      diff: {
+        templateId: { old: null, new: TEMPLATE_ID },
+        templateVersion: { old: null, new: 3 },
+        taskCount: { old: null, new: 2 },
+      },
+    });
+  });
+
+  it("seeds and publishes the default template when the cohort has none, then instantiates it", async () => {
+    // Queue: [published-template probe -> none], [seed: cohort exists],
+    // [seed: max version -> none], [student lookup -> none],
+    // [instantiate: seeded template], [instantiate: items].
+    const { db, inserts } = fakeDb([
+      [],
+      [{ id: COHORT_ID }],
+      [],
+      [],
+      [templateRow(1)],
+      [templateItemRow({})],
+    ]);
+
+    const result = await createCase(INPUT, db);
+
+    const seedInsert = inserts.find((call) => call.table === admissionsChecklistTemplates);
+    expect(seedInsert?.values).toMatchObject({
+      cohortId: COHORT_ID,
+      version: 1,
+      name: DEFAULT_TEMPLATE_NAME,
+    });
+    expect(seedInsert?.values.publishedAt).toBeInstanceOf(Date);
+
+    const itemInsert = inserts.find((call) => call.table === admissionsTemplateItems);
+    const seededItems = itemInsert?.values as unknown as Array<Record<string, unknown>>;
+    expect(seededItems).toHaveLength(DEFAULT_CHECKLIST_ITEMS.length);
+
+    const tasks = taskInsertValues(inserts);
+    expect(tasks).toHaveLength(1);
+    expect(tasks?.[0]).toMatchObject({
+      caseId: result.caseId,
+      templateId: TEMPLATE_ID,
+      templateVersion: 1,
+      status: "not_started",
+    });
+    expect(result.checklist).toEqual({
+      templateId: TEMPLATE_ID,
+      templateVersion: 1,
+      taskCount: 1,
+    });
+
+    const audits = auditInserts(inserts);
+    expect(audits.some(
+      (row) => row.entityType === "checklist_template" && row.action === "create",
+    )).toBe(true);
+    expect(audits.some(
+      (row) => row.entityType === "checklist" && row.action === "instantiate",
+    )).toBe(true);
   });
 
   it("links an existing student by email instead of creating a new row", async () => {
-    // Queue: [student lookup -> hit], [live-case check -> none].
-    const { db, inserts } = fakeDb([[{ id: STUDENT_ID }], []]);
+    // Queue: [published-template probe -> hit], [student lookup -> hit],
+    // [live-case check -> none], [instantiate: template], [instantiate: no items].
+    const { db, inserts } = fakeDb([
+      TEMPLATE_HIT,
+      [{ id: STUDENT_ID }],
+      [],
+      [templateRow(2)],
+      [],
+    ]);
 
     const result = await createCase(INPUT, db);
 
@@ -450,7 +623,7 @@ describe("createCase", () => {
   });
 
   it("throws Conflict when the linked student already has a live case", async () => {
-    const { db, inserts } = fakeDb([[{ id: STUDENT_ID }], [{ id: CASE_ID }]]);
+    const { db, inserts } = fakeDb([TEMPLATE_HIT, [{ id: STUDENT_ID }], [{ id: CASE_ID }]]);
 
     await expect(createCase(INPUT, db)).rejects.toThrow("Conflict");
     expect(inserts).toHaveLength(0);
@@ -482,7 +655,7 @@ describe("createCase", () => {
   });
 
   it("dedupes repeated parent emails after normalization", async () => {
-    const { db, inserts } = fakeDb([[]]);
+    const { db, inserts } = fakeDb([TEMPLATE_HIT, [], [templateRow(2)], []]);
 
     await createCase(
       { ...INPUT, parentEmails: ["Mom@Example.com", " mom@example.com "] },
@@ -580,6 +753,41 @@ describe("getCaseloadForUser", () => {
       daysSinceLastTouch: 8,
       committedCollegeName: "Stanford University",
     });
+  });
+
+  it("carries real checklist progress and each case's nearest open deadline", async () => {
+    // Queue: [admin hit], [cases A+B], [members -> none] (registry-name query
+    // skipped), [meetings -> none] (committed-college query skipped),
+    // [progress rows], [deadline task rows].
+    const { db } = fakeDb([
+      [{ id: "a1" }],
+      [
+        caseJoinRow({ caseId: CASE_ID, updatedAt: new Date("2026-07-08T00:00:00Z") }),
+        caseJoinRow({ caseId: CASE_ID_B, updatedAt: new Date("2026-07-07T00:00:00Z") }),
+      ],
+      [],
+      [],
+      [
+        { caseId: CASE_ID, status: "done", verifiedAt: new Date("2026-07-01T00:00:00Z") },
+        { caseId: CASE_ID, status: "in_progress", verifiedAt: null },
+        { caseId: CASE_ID_B, status: "not_started", verifiedAt: null },
+      ],
+      [
+        // A: the earlier task is done -> excluded; the open ones pick 2026-08-01.
+        { id: "t1", caseId: CASE_ID, title: "Done early", owner: "student", status: "done", dueDate: "2026-07-01" },
+        { id: "t2", caseId: CASE_ID, title: "Essay draft", owner: "student", status: "not_started", dueDate: "2026-08-01" },
+        { id: "t3", caseId: CASE_ID, title: "Later task", owner: "counselor", status: "in_progress", dueDate: "2026-09-01" },
+        // B: an overdue open task still counts as the nearest deadline.
+        { id: "t4", caseId: CASE_ID_B, title: "Overdue", owner: "student", status: "not_started", dueDate: "2026-07-01" },
+      ],
+    ]);
+
+    const rows = await getCaseloadForUser("admin@example.com", db, NOW);
+
+    const rowA = rows.find((row) => row.caseId === CASE_ID);
+    expect(rowA).toMatchObject({ progressPercent: 50, nextDeadline: "2026-08-01" });
+    const rowB = rows.find((row) => row.caseId === CASE_ID_B);
+    expect(rowB).toMatchObject({ progressPercent: 0, nextDeadline: "2026-07-01" });
   });
 
   it("reports null daysSinceLastTouch when no meeting exists and clamps future meetings to 0", async () => {
@@ -722,8 +930,27 @@ describe("getCaseDetail", () => {
     };
   }
 
+  // 2026-07-09 12:00 Bangkok — makes the 2026-07-01 deadline overdue.
+  const NOW = new Date("2026-07-09T05:00:00Z");
+
+  function announcementRow(id: string, createdAt: Date) {
+    return {
+      id,
+      cohortId: COHORT_ID,
+      caseId: null,
+      title: `Update ${id}`,
+      body: "Body",
+      authorEmail: "staff@example.com",
+      deletedAt: null,
+      createdAt,
+      updatedAt: createdAt,
+    };
+  }
+
   it("assembles the full detail DTO with members sorted oldest-first", async () => {
-    // Queue: [case join], [members], [committed item], [meetings].
+    // Queue: [case join], [members], [committed item], [meetings],
+    // [progress task rows], [deadline task rows],
+    // [announcements: cohort lookup], [announcement rows].
     const { db } = fakeDb([
       [detailJoinRow(ITEM_ID)],
       [
@@ -735,9 +962,26 @@ describe("getCaseDetail", () => {
         { meetingDate: "2026-06-20" },
         { meetingDate: "2026-07-02" },
       ],
+      [
+        { status: "done", verifiedAt: new Date("2026-07-01T00:00:00Z") },
+        { status: "not_started", verifiedAt: null },
+      ],
+      [
+        { id: "t2", caseId: CASE_ID, title: "Essay draft", owner: "student", status: "not_started", dueDate: "2026-08-01" },
+        { id: "t1", caseId: CASE_ID, title: "Send transcripts", owner: "counselor", status: "in_progress", dueDate: "2026-07-01" },
+      ],
+      [{ cohortId: COHORT_ID }],
+      [
+        announcementRow("a1", new Date("2026-07-01T00:00:00Z")),
+        announcementRow("a2", new Date("2026-07-02T00:00:00Z")),
+        announcementRow("a3", new Date("2026-07-03T00:00:00Z")),
+        announcementRow("a4", new Date("2026-07-04T00:00:00Z")),
+        announcementRow("a5", new Date("2026-07-05T00:00:00Z")),
+        announcementRow("a6", new Date("2026-07-06T00:00:00Z")),
+      ],
     ]);
 
-    const detail = await getCaseDetail(CASE_ID, db);
+    const detail = await getCaseDetail(CASE_ID, db, NOW);
 
     expect(detail).toMatchObject({
       caseId: CASE_ID,
@@ -753,23 +997,51 @@ describe("getCaseDetail", () => {
         externalLinks: { drive: "x" },
       },
       cohort: { id: COHORT_ID, name: "Class of 2027", graduationYear: 2027 },
-      progressPercent: 0,
-      nextDeadline: null,
+      progress: { done: 1, total: 2, percent: 50, verifiedCount: 1 },
+      progressPercent: 50,
+      nextDeadline: "2026-07-01",
       lastMeetingDate: "2026-07-02",
     });
     expect(detail.members.map((member) => member.id)).toEqual(["m1", "m2"]);
     expect(detail.members[0].invitedAt).toBe("2026-06-01T00:00:00.000Z");
+
+    // Deadlines: urgency order (overdue 2026-07-01 first), overdue stamped.
+    expect(detail.upcomingDeadlines.map((item) => item.id)).toEqual(["t1", "t2"]);
+    expect(detail.upcomingDeadlines[0]).toMatchObject({
+      date: "2026-07-01",
+      overdue: true,
+      source: "task",
+    });
+    expect(detail.upcomingDeadlines[1]).toMatchObject({ date: "2026-08-01", overdue: false });
+
+    // Announcements: newest first, capped at 5 (a1, the oldest, drops off).
+    expect(detail.announcements.map((row) => row.id)).toEqual([
+      "a6", "a5", "a4", "a3", "a2",
+    ]);
   });
 
   it("skips the committed-college query when no pointer is set", async () => {
-    // Queue: [case join], [members], [meetings].
-    const { db, selectCalls } = fakeDb([[detailJoinRow(null)], [], []]);
+    // Queue: [case join], [members], [meetings], [progress], [deadlines],
+    // [announcements: cohort lookup], [announcement rows].
+    const { db, selectCalls } = fakeDb([
+      [detailJoinRow(null)],
+      [],
+      [],
+      [],
+      [],
+      [{ cohortId: COHORT_ID }],
+      [],
+    ]);
 
-    const detail = await getCaseDetail(CASE_ID, db);
+    const detail = await getCaseDetail(CASE_ID, db, NOW);
 
     expect(detail.committedCollegeName).toBeNull();
     expect(detail.lastMeetingDate).toBeNull();
-    expect(selectCalls).toHaveLength(3);
+    expect(detail.progress).toEqual({ done: 0, total: 0, percent: 0, verifiedCount: 0 });
+    expect(detail.nextDeadline).toBeNull();
+    expect(detail.upcomingDeadlines).toEqual([]);
+    expect(detail.announcements).toEqual([]);
+    expect(selectCalls).toHaveLength(7);
   });
 
   it("throws NotFound when the case is missing or soft-deleted", async () => {
