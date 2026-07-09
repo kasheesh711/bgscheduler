@@ -69,6 +69,15 @@ A performance and UX overhaul of the existing BGScheduler tutor scheduling tool 
 - **Data integrity**: Fail-closed safety rules are non-negotiable
 - **Visual**: Keep GCal-style calendar grid and sky blue color palette
 - **Regression**: All 82 existing tests must continue to pass
+
+### University Admissions Case Management (in build)
+
+A case management system for the BeGifted university counseling team at `/admissions`, replacing per-student "SummitEd" Google Sheets workbooks with full functional parity (profile, 10-phase checklist, college list, application/decision tracking, essays, activities, testing, meetings, notes, announcements, resources, deadline calendar).
+
+- **Roles (4)**: `admin` (all cases) · `counselor` (new role, assigned cases only — hard wall) · `student` (own case, self-report sections only) · `parent` (own child's case, **view-only** curated dashboard). Google OAuth for all; per-case email membership resolves role at sign-in; every API request re-checks case membership in Postgres (`requireCaseAccess`).
+- **Key rules**: notes default staff-only with explicit per-item sharing; parent responses built only by a whitelisted projection helper; raw test scores parent-visible only after counselor release; append-only audit log with field diffs on sensitive mutations; retention indefinite (documented business decision).
+- **Integrations**: college list soft-references `ipeds_institutions.unitId` with add-to-case from `/us-universities`; email via existing Resend integration; mobile-first student/parent shells, desktop-dense staff workspace.
+- **Docs**: PRD at [docs/Casemanagementsystem_prd.md](docs/Casemanagementsystem_prd.md); design at [docs/casemanagementsystem_design.md](docs/casemanagementsystem_design.md).
 <!-- GSD:project-end -->
 
 <!-- GSD:stack-start source:codebase/STACK.md -->

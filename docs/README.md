@@ -110,6 +110,7 @@ declared maturity.
 | [AI Scheduler](./features/ai-scheduler.md) | experimental | LLM reads pasted chat, extracts a request, runs the deterministic search, drafts a parent reply. Never decides availability. |
 | [Data Health](./features/data-health.md) | stable | Ops command center for cron firing, data freshness, Wise snapshot fidelity, and unresolved normalization issues. |
 | [Leave Requests](./features/leave-requests.md) | in progress (uncommitted) | Tutor leave-request workflow. Present in the working tree but uncommitted; treat shapes as provisional. |
+| University Admissions Case Management | in build (PRD approved) | Counselor case management for university applications with student self-service and parent view-only dashboards. See the [PRD](./Casemanagementsystem_prd.md) and [design doc](./casemanagementsystem_design.md); feature doc lands with the build. |
 
 ### Reference
 
