@@ -351,6 +351,13 @@
       "when": 1782474000000,
       "tag": "0049_student_promotion_graduation_pay_rates",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1783593352347,
+      "tag": "0050_slim_proemial_gods",
+      "breakpoints": true
     }
   ]
 }

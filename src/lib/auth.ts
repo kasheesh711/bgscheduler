@@ -7,8 +7,9 @@ export async function signInCallback({
 }: {
   user: { email?: string | null };
 }): Promise<boolean> {
-  // Admins (admin_users) and teachers (matched to an active tutor contact) may
-  // sign in; everyone else is denied. See resolveUserAccess.
+  // Admins (admin_users), admissions counselors, teachers (matched to an active
+  // tutor contact), and admissions case members (students/parents) may sign in;
+  // everyone else is denied. See resolveUserAccess.
   const access = await resolveUserAccess(user.email);
   return access !== null;
 }

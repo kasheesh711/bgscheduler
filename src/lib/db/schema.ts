@@ -7,10 +7,12 @@ import {
   integer,
   date,
   doublePrecision,
+  numeric,
   pgEnum,
   jsonb,
   uniqueIndex,
   index,
+  check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -226,6 +228,110 @@ export const competitorTaskStatusEnum = pgEnum("competitor_task_status", [
   "blocked",
   "done",
   "ignored",
+]);
+
+export const admissionsCaseStatusEnum = pgEnum("admissions_case_status", [
+  "active",
+  "committed",
+  "completed",
+  "withdrawn",
+  "archived",
+]);
+
+export const admissionsMemberRoleEnum = pgEnum("admissions_member_role", [
+  "counselor",
+  "student",
+  "parent",
+]);
+
+export const admissionsMemberStatusEnum = pgEnum("admissions_member_status", [
+  "invited",
+  "active",
+  "revoked",
+  "bounced",
+]);
+
+export const admissionsTaskStatusEnum = pgEnum("admissions_task_status", [
+  "not_started",
+  "in_progress",
+  "done",
+]);
+
+export const admissionsTaskOwnerEnum = pgEnum("admissions_task_owner", [
+  "student",
+  "counselor",
+  "parent",
+]);
+
+export const admissionsAppRoundEnum = pgEnum("admissions_app_round", [
+  "ed",
+  "ed2",
+  "ea",
+  "rea",
+  "rd",
+  "rolling",
+  "priority",
+  "other",
+]);
+
+export const admissionsAppStatusEnum = pgEnum("admissions_app_status", [
+  "researching",
+  "applying",
+  "submitted",
+  "complete",
+]);
+
+export const admissionsDecisionEventEnum = pgEnum("admissions_decision_event", [
+  "submitted",
+  "deferred",
+  "waitlisted",
+  "accepted",
+  "denied",
+  "withdrawn",
+  "committed",
+]);
+
+export const admissionsEssayStatusEnum = pgEnum("admissions_essay_status", [
+  "not_started",
+  "brainstorming",
+  "drafting",
+  "feedback",
+  "final",
+]);
+
+export const admissionsTestTypeEnum = pgEnum("admissions_test_type", [
+  "sat",
+  "act",
+  "ap",
+  "ib",
+  "toefl",
+  "ielts",
+  "other",
+]);
+
+export const admissionsNoteVisibilityEnum = pgEnum("admissions_note_visibility", [
+  "staff_only",
+  "shared_with_family",
+]);
+
+export const admissionsRecStatusEnum = pgEnum("admissions_rec_status", [
+  "planned",
+  "asked",
+  "agreed",
+  "declined",
+]);
+
+export const admissionsSubmissionStateEnum = pgEnum("admissions_submission_state", [
+  "draft",
+  "submitted",
+  "reviewed",
+]);
+
+export const admissionsCollegeCategoryEnum = pgEnum("admissions_college_category", [
+  "reach",
+  "match",
+  "safety",
+  "unset",
 ]);
 
 // ── Snapshots & Sync ───────────────────────────────────────────────────
@@ -2871,4 +2977,373 @@ export const ipedsCompletions = pgTable("ipeds_completions", {
   index("ipeds_compl_year_unit_idx").on(table.dataYear, table.unitId),
   index("ipeds_compl_year_cip2_idx").on(table.dataYear, table.cip2),
   index("ipeds_compl_year_unit_count_idx").on(table.dataYear, table.unitId, table.count),
+]);
+
+// ── Admissions Case Management ─────────────────────────────────────────
+// University admissions case management (design: docs/casemanagementsystem_design.md §3).
+// 23 tables, prefix admissions_. `wiseStudentKey` and `unitId` are plain
+// soft-reference columns — never FKs to Wise/snapshot or ipeds_* tables.
+// User-facing tables carry a soft-delete `deletedAt`; admissions_audit_log
+// is append-only (createdAt only, no UPDATE/DELETE code path).
+
+export const admissionsCohorts = pgTable("admissions_cohorts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  graduationYear: integer("graduation_year").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_cohorts_name_idx").on(table.name),
+  index("admissions_cohorts_grad_year_idx").on(table.graduationYear),
+]);
+
+export const admissionsStudents = pgTable("admissions_students", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  fullName: text("full_name").notNull(),
+  preferredName: text("preferred_name"),
+  studentEmail: text("student_email").notNull(),
+  phone: text("phone"),
+  school: text("school"),
+  schoolCounselor: text("school_counselor"),
+  cohortId: uuid("cohort_id").notNull().references(() => admissionsCohorts.id),
+  wiseStudentKey: text("wise_student_key"),
+  externalLinks: jsonb("external_links").$type<Record<string, unknown>>().notNull().default({}),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_students_cohort_idx").on(table.cohortId),
+  index("admissions_students_email_idx").on(table.studentEmail),
+]);
+
+export const admissionsCases = pgTable("admissions_cases", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  studentId: uuid("student_id").notNull().references(() => admissionsStudents.id),
+  cohortId: uuid("cohort_id").notNull().references(() => admissionsCohorts.id),
+  status: admissionsCaseStatusEnum("status").notNull().default("active"),
+  statusChangedAt: timestamp("status_changed_at", { withTimezone: true }).notNull().defaultNow(),
+  committedListItemId: uuid("committed_list_item_id"),
+  driveFolder: text("drive_folder"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  // One live case per student (design §3: partial unique on studentId).
+  uniqueIndex("admissions_cases_live_student_idx")
+    .on(table.studentId)
+    .where(sql`${table.status} IN ('active', 'committed')`),
+  index("admissions_cases_cohort_status_idx").on(table.cohortId, table.status),
+  index("admissions_cases_student_idx").on(table.studentId),
+]);
+
+export const admissionsCaseMembers = pgTable("admissions_case_members", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  email: text("email").notNull(),
+  role: admissionsMemberRoleEnum("role").notNull(),
+  status: admissionsMemberStatusEnum("status").notNull().default("invited"),
+  invitedAt: timestamp("invited_at", { withTimezone: true }),
+  activatedAt: timestamp("activated_at", { withTimezone: true }),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  addedByEmail: text("added_by_email"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_case_members_case_email_idx").on(table.caseId, table.email),
+  index("admissions_case_members_email_status_idx").on(table.email, table.status),
+  index("admissions_case_members_case_status_idx").on(table.caseId, table.status),
+]);
+
+export const admissionsCounselors = pgTable("admissions_counselors", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull(),
+  name: text("name").notNull(),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_counselors_email_idx").on(table.email),
+]);
+
+export const admissionsChecklistTemplates = pgTable("admissions_checklist_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  cohortId: uuid("cohort_id").notNull().references(() => admissionsCohorts.id),
+  version: integer("version").notNull(),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_checklist_templates_cohort_version_idx").on(table.cohortId, table.version),
+]);
+
+export const admissionsTemplateItems = pgTable("admissions_template_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  templateId: uuid("template_id").notNull().references(() => admissionsChecklistTemplates.id),
+  itemKey: text("item_key").notNull(),
+  phase: text("phase").notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  defaultOwner: admissionsTaskOwnerEnum("default_owner").notNull().default("student"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_template_items_template_sort_idx").on(table.templateId, table.sortOrder),
+  index("admissions_template_items_template_key_idx").on(table.templateId, table.itemKey),
+]);
+
+export const admissionsCaseTasks = pgTable("admissions_case_tasks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  templateId: uuid("template_id"),
+  templateVersion: integer("template_version"),
+  itemKey: text("item_key"),
+  phase: text("phase").notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  owner: admissionsTaskOwnerEnum("owner").notNull(),
+  status: admissionsTaskStatusEnum("status").notNull().default("not_started"),
+  dueDate: date("due_date", { mode: "string" }),
+  verifiedByEmail: text("verified_by_email"),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  recurrence: jsonb("recurrence").$type<Record<string, unknown>>(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_case_tasks_case_status_idx").on(table.caseId, table.status),
+  index("admissions_case_tasks_case_due_idx").on(table.caseId, table.dueDate),
+]);
+
+export const admissionsCaseMeetings = pgTable("admissions_case_meetings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  meetingDate: date("meeting_date", { mode: "string" }).notNull(),
+  mode: text("mode"),
+  attendees: jsonb("attendees").$type<string[]>().notNull().default([]),
+  notes: text("notes"),
+  nextMeetingDate: date("next_meeting_date", { mode: "string" }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_case_meetings_case_date_idx").on(table.caseId, table.meetingDate),
+]);
+
+export const admissionsCollegeListItems = pgTable("admissions_college_list_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  // Soft reference into ipeds_institutions (dataYear, unitId) — never an FK.
+  unitId: integer("unit_id"),
+  instName: text("inst_name").notNull(),
+  city: text("city"),
+  stateAbbr: text("state_abbr"),
+  country: text("country").notNull(),
+  isManual: boolean("is_manual").notNull().default(false),
+  round: admissionsAppRoundEnum("round").notNull(),
+  deadline: date("deadline", { mode: "string" }),
+  appStatus: admissionsAppStatusEnum("app_status").notNull().default("researching"),
+  category: admissionsCollegeCategoryEnum("category").notNull().default("unset"),
+  aidOffered: numeric("aid_offered"),
+  aidNotes: text("aid_notes"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_college_list_items_case_idx").on(table.caseId),
+  index("admissions_college_list_items_case_deadline_idx").on(table.caseId, table.deadline),
+  index("admissions_college_list_items_unit_idx").on(table.unitId),
+]);
+
+export const admissionsApplicationEvents = pgTable("admissions_application_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  listItemId: uuid("list_item_id").notNull().references(() => admissionsCollegeListItems.id),
+  event: admissionsDecisionEventEnum("event").notNull(),
+  eventDate: date("event_date", { mode: "string" }).notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_application_events_item_date_idx").on(table.listItemId, table.eventDate),
+]);
+
+export const admissionsRecommenders = pgTable("admissions_recommenders", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  name: text("name").notNull(),
+  roleSubject: text("role_subject"),
+  contact: text("contact"),
+  askStatus: admissionsRecStatusEnum("ask_status").notNull().default("planned"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_recommenders_case_idx").on(table.caseId),
+]);
+
+export const admissionsRecommenderColleges = pgTable("admissions_recommender_colleges", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  recommenderId: uuid("recommender_id").notNull().references(() => admissionsRecommenders.id),
+  listItemId: uuid("list_item_id").notNull().references(() => admissionsCollegeListItems.id),
+  submitted: boolean("submitted").notNull().default(false),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_recommender_colleges_rec_item_idx").on(table.recommenderId, table.listItemId),
+  index("admissions_recommender_colleges_item_idx").on(table.listItemId),
+]);
+
+export const admissionsCollegeDocs = pgTable("admissions_college_docs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  listItemId: uuid("list_item_id").notNull().references(() => admissionsCollegeListItems.id),
+  docType: text("doc_type").notNull(),
+  testSittingId: uuid("test_sitting_id"),
+  sent: boolean("sent").notNull().default(false),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_college_docs_item_type_idx").on(table.listItemId, table.docType),
+]);
+
+export const admissionsEssays = pgTable("admissions_essays", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  listItemId: uuid("list_item_id"),
+  prompt: text("prompt").notNull(),
+  status: admissionsEssayStatusEnum("status").notNull().default("not_started"),
+  counselorStage: admissionsEssayStatusEnum("counselor_stage"),
+  deadline: date("deadline", { mode: "string" }),
+  driveUrl: text("drive_url"),
+  lastStudentUpdateAt: timestamp("last_student_update_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_essays_case_status_idx").on(table.caseId, table.status),
+]);
+
+export const admissionsActivities = pgTable("admissions_activities", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  name: text("name").notNull(),
+  fullDescription: text("full_description"),
+  commonApp: jsonb("common_app").$type<Record<string, unknown>>(),
+  uc: jsonb("uc").$type<Record<string, unknown>>(),
+  commonAppRank: integer("common_app_rank"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_activities_case_sort_idx").on(table.caseId, table.sortOrder),
+]);
+
+export const admissionsTestSittings = pgTable("admissions_test_sittings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  testType: admissionsTestTypeEnum("test_type").notNull(),
+  testDate: date("test_date", { mode: "string" }).notNull(),
+  registrationDeadline: date("registration_deadline", { mode: "string" }),
+  targetScore: text("target_score").notNull().default(""),
+  actualScore: text("actual_score"),
+  scoreReleasedToParent: boolean("score_released_to_parent").notNull().default(false),
+  accommodations: text("accommodations"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_test_sittings_case_date_idx").on(table.caseId, table.testDate),
+]);
+
+export const admissionsAcademicRecords = pgTable("admissions_academic_records", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  system: text("system").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+  effectiveDate: date("effective_date", { mode: "string" }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_academic_records_case_system_idx").on(table.caseId, table.system),
+]);
+
+export const admissionsNotes = pgTable("admissions_notes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  authorEmail: text("author_email").notNull(),
+  body: text("body").notNull(),
+  // NOT NULL with no default — the UI must force an explicit visibility choice.
+  visibility: admissionsNoteVisibilityEnum("visibility").notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_notes_case_created_idx").on(table.caseId, table.createdAt),
+  index("admissions_notes_case_visibility_idx").on(table.caseId, table.visibility),
+]);
+
+export const admissionsAnnouncements = pgTable("admissions_announcements", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  cohortId: uuid("cohort_id"),
+  caseId: uuid("case_id"),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  authorEmail: text("author_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  // Exactly one target: cohort broadcast XOR case-scoped announcement.
+  check(
+    "admissions_announcements_target_check",
+    sql`(${table.cohortId} IS NULL) <> (${table.caseId} IS NULL)`,
+  ),
+  index("admissions_announcements_cohort_idx").on(table.cohortId),
+  index("admissions_announcements_case_idx").on(table.caseId),
+]);
+
+export const admissionsResources = pgTable("admissions_resources", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  topic: text("topic").notNull(),
+  title: text("title").notNull(),
+  url: text("url").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_resources_topic_sort_idx").on(table.topic, table.sortOrder),
+]);
+
+export const admissionsSelfReportSections = pgTable("admissions_self_report_sections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  sectionKey: text("section_key").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+  state: admissionsSubmissionStateEnum("state").notNull().default("draft"),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }),
+  reviewedByEmail: text("reviewed_by_email"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  // One row per section per case — autosave upserts against this key.
+  uniqueIndex("admissions_self_report_sections_case_key_idx").on(table.caseId, table.sectionKey),
+]);
+
+export const admissionsAuditLog = pgTable("admissions_audit_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").references(() => admissionsCases.id),
+  actorEmail: text("actor_email").notNull(),
+  actorRole: text("actor_role").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id").notNull(),
+  action: text("action").notNull(),
+  diff: jsonb("diff").$type<Record<string, { old: unknown; new: unknown }>>(),
+  // Append-only: no updatedAt, no UPDATE/DELETE code path.
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_audit_log_case_created_idx").on(table.caseId, table.createdAt),
+  index("admissions_audit_log_entity_idx").on(table.entityType, table.entityId),
 ]);

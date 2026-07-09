@@ -26,6 +26,9 @@ export function hasPageAccess(
  * 1. Read the Auth.js session.
  * 2. Normalize email/name; throw "Unauthorized" when either is missing.
  * 3. Throw "Forbidden" when the user lacks access to `/progress-tests`.
+ * 4. Map the JWT role claim: "teacher" passes through; "admin" or an absent
+ *    role (legacy full-access admins) → "admin"; anything else (admissions
+ *    counselor/student/parent) → "Forbidden" (fail-closed, never guess upward).
  *
  * @returns the minimal authenticated user shape on success.
  */
@@ -42,8 +45,14 @@ export async function requireProgressTestsSession(): Promise<AppSessionUser> {
     throw new Error("Forbidden");
   }
 
-  const role = session?.user?.role === "teacher" ? "teacher" : "admin";
-  return { email, name, role };
+  const rawRole = session?.user?.role;
+  if (rawRole === "teacher") {
+    return { email, name, role: "teacher" };
+  }
+  if (rawRole === "admin" || rawRole === null || rawRole === undefined) {
+    return { email, name, role: "admin" };
+  }
+  throw new Error("Forbidden");
 }
 
 /**

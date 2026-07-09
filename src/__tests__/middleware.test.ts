@@ -151,3 +151,63 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     expect(res.headers.get("location")).toBeNull();
   });
 });
+
+describe("middleware — admissions page + API gating", () => {
+  it("/admissions passes through for /admissions-restricted users", async () => {
+    const res = await middleware(
+      makeReq("/admissions", true, "", ["/admissions"]) as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("/api/admissions/* passes through for /admissions-restricted users", async () => {
+    const res = await middleware(
+      makeReq("/api/admissions/cases", true, "", ["/admissions"]) as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("root / redirects single-page admissions users to /admissions", async () => {
+    const res = await middleware(
+      makeReq("/", true, "", ["/admissions"]) as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe("http://localhost/admissions");
+  });
+
+  it("admissions-restricted users get 403 JSON on other API namespaces", async () => {
+    const res = await middleware(
+      makeReq("/api/payroll", true, "", ["/admissions"]) as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({ error: "Forbidden" });
+  });
+
+  it("admissions-restricted users are redirected off other pages to their landing page", async () => {
+    const res = await middleware(
+      makeReq("/search", true, "", ["/admissions"]) as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe("http://localhost/admissions");
+  });
+
+  it("unauthenticated /api/admissions/* requires app auth like every other API path", async () => {
+    const res = await middleware(
+      makeReq("/api/admissions/cases", false) as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/login");
+  });
+});

@@ -21,7 +21,11 @@ describe("navigation tool registry", () => {
       "Data & Audit",
     ]);
     expect(sections[0].tools.map((tool) => tool.href)).toContain("/leave-requests");
-    expect(sections[1].tools.map((tool) => tool.href)).toEqual(["/progress-tests", "/student-promotions"]);
+    expect(sections[1].tools.map((tool) => tool.href)).toEqual([
+      "/progress-tests",
+      "/student-promotions",
+      "/admissions",
+    ]);
     expect(sections[3].tools.map((tool) => tool.href)).toEqual(["/competitor-intelligence"]);
   });
 
@@ -31,6 +35,15 @@ describe("navigation tool registry", () => {
     expect(tools.map((tool) => tool.href)).toEqual(["/progress-tests"]);
     expect(canAccessHref("/", ["/progress-tests"])).toBe(false);
     expect(canAccessHref("/api/home/summary", ["/progress-tests"])).toBe(false);
+  });
+
+  it("keeps only Admissions visible for /admissions-restricted counselors, students, and parents", () => {
+    const tools = filterToolsByAccess(NAV_TOOLS, ["/admissions"]);
+
+    expect(tools.map((tool) => tool.href)).toEqual(["/admissions"]);
+    expect(canAccessHref("/admissions", ["/admissions"])).toBe(true);
+    expect(canAccessHref("/", ["/admissions"])).toBe(false);
+    expect(activeSection("/admissions", ["/admissions"])).toBe("student-lifecycle");
   });
 
   it("allows Home only for full admins or multi-page restricted users", () => {
