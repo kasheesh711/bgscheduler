@@ -8,6 +8,7 @@
 // "YYYY-MM-DD" strings. The type-only imports from sibling modules below are
 // erased at compile time — no runtime import cycle exists.
 
+import type { AdmissionsActivityDto } from "./activities";
 import type { AdmissionsAnnouncementDto } from "./announcements";
 import type { CalendarItem } from "./calendar";
 import type { AdmissionsChecklistProgress } from "./checklists";
@@ -15,6 +16,13 @@ import type {
   AdmissionsCollegeListRowDto,
   ApplicationWarning,
 } from "./colleges";
+import type { AdmissionsEssayListRowDto } from "./essays";
+import type { AdmissionsSectionSummary } from "./sections";
+import type {
+  AdmissionsPhaseProgress,
+  ThisWeekAction,
+} from "./student-home";
+import type { AdmissionsTestSittingDto } from "./testing";
 
 // ── Roles & access ──────────────────────────────────────────────────────
 
@@ -166,6 +174,18 @@ export interface AdmissionsCaseDetail {
   upcomingDeadlines: CalendarItem[];
   /** Latest announcements visible on this case (≤5, newest first, CM-90). */
   announcements: AdmissionsAnnouncementDto[];
+  /** Live essay tracker rows (Essays tab, CM-60..63), most urgent first. */
+  essays: AdmissionsEssayListRowDto[];
+  /** Live activities (Activities tab, CM-70/71), ranked rows first. */
+  activities: AdmissionsActivityDto[];
+  /** Test sittings (Testing tab, CM-80), next sitting first. */
+  testSittings: AdmissionsTestSittingDto[];
+  /** Per-section self-report status (CM-121), definition display order. */
+  sections: AdmissionsSectionSummary[];
+  /** Ranked "This Week" next actions (student home, CM-120). */
+  thisWeek: ThisWeekAction[];
+  /** Season-relevant per-phase progress rings (CM-120), canonical order. */
+  phaseProgress: AdmissionsPhaseProgress[];
   lastMeetingDate: string | null;
   createdAt: string;
   updatedAt: string;

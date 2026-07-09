@@ -25,11 +25,21 @@ import {
   type AdmissionsCollegeDocDto,
   type AdmissionsRecommenderWithCollegesDto,
 } from "@/lib/admissions/recommenders";
+import {
+  ADMISSIONS_SECTION_KEYS,
+  getSectionState,
+  type AdmissionsSectionStateDto,
+} from "@/lib/admissions/sections";
+import {
+  getBestScores,
+  type AdmissionsBestScore,
+} from "@/lib/admissions/testing";
 import { todayBangkok } from "@/lib/room-capacity/dates";
 import {
   CaseDetailShell,
   CaseDetailSkeleton,
 } from "@/components/admissions/case-detail-shell";
+import { StudentPortalShell } from "@/components/admissions/student/portal-shell";
 import type {
   AdmissionsCaseDetail,
   AdmissionsMeetingDto,
@@ -39,6 +49,8 @@ import type {
 
 // Per-request membership checks + fresh reads on every navigation — this page
 // deliberately does NOT use "use cache" (revocation must be instant, §2.2).
+// Student members get the mobile-first portal shell (design §5.2); everyone
+// else (counselor/admin/parent) gets the staff case-detail shell.
 
 async function CaseDetailBody({ caseId }: { caseId: string }) {
   const session = await auth();
@@ -66,6 +78,47 @@ async function CaseDetailBody({ caseId }: { caseId: string }) {
     throw error;
   }
 
+  // ── Student portal branch (design §5.2, CM-120..122) ──
+  // Students get the mobile-first portal: the case detail (which carries
+  // thisWeek, phaseProgress, essays, activities, sittings, and section
+  // summaries), checklist tasks, best scores (CM-82), and the full
+  // self-report section states (CM-121 — the guided forms need definitions
+  // + saved answers). Staff surfaces — meetings, notes, recommenders,
+  // decision chains — are never queried for a student.
+  if (access.role === "student") {
+    let caseDetail: AdmissionsCaseDetail;
+    let tasks: AdmissionsTaskDto[];
+    let bestScores: AdmissionsBestScore[];
+    let sectionStates: AdmissionsSectionStateDto[];
+    try {
+      [caseDetail, tasks, bestScores, sectionStates] = await Promise.all([
+        getCaseDetail(caseId),
+        listCaseTasks(caseId),
+        getBestScores(caseId),
+        Promise.all(
+          ADMISSIONS_SECTION_KEYS.map((sectionKey) =>
+            getSectionState(caseId, sectionKey),
+          ),
+        ),
+      ]);
+    } catch (error) {
+      if (error instanceof Error && error.message === "NotFound") {
+        notFound();
+      }
+      throw error;
+    }
+    return (
+      <StudentPortalShell
+        caseDetail={caseDetail}
+        tasks={tasks}
+        bestScores={bestScores}
+        sectionStates={sectionStates}
+        viewerRole={access.role}
+        viewerEmail={access.email}
+      />
+    );
+  }
+
   const isStaff = roleAtLeast(access.role, "counselor");
   // Checklist reads are student+ (design §4); parents consume the progress
   // rollup on the case detail instead of task rows. The calendar shares the
@@ -88,9 +141,21 @@ async function CaseDetailBody({ caseId }: { caseId: string }) {
   let calendarItems: CalendarItem[];
   let recommenders: AdmissionsRecommenderWithCollegesDto[];
   let collegeDocs: AdmissionsCollegeDocDto[];
+  let bestScores: AdmissionsBestScore[];
+  let sectionStates: AdmissionsSectionStateDto[];
   const applicationEvents: Record<string, AdmissionsApplicationEventDto[]> = {};
   try {
-    [caseDetail, notes, meetings, tasks, calendarItems, recommenders, collegeDocs] =
+    [
+      caseDetail,
+      notes,
+      meetings,
+      tasks,
+      calendarItems,
+      recommenders,
+      collegeDocs,
+      bestScores,
+      sectionStates,
+    ] =
       await Promise.all([
         getCaseDetail(caseId),
         // Role-shaped: family readers only ever receive shared_with_family rows.
@@ -108,6 +173,16 @@ async function CaseDetailBody({ caseId }: { caseId: string }) {
         // (design §4) — parents get their projection on the parent dashboard.
         canViewChecklist ? listRecommenders(caseId) : Promise.resolve([]),
         canViewChecklist ? listCollegeDocs(caseId) : Promise.resolve([]),
+        // Testing best scores + full self-report section states share the
+        // same student+ gate (design §4); parents get empty arrays.
+        canViewChecklist ? getBestScores(caseId) : Promise.resolve([]),
+        canViewChecklist
+          ? Promise.all(
+              ADMISSIONS_SECTION_KEYS.map((sectionKey) =>
+                getSectionState(caseId, sectionKey),
+              ),
+            )
+          : Promise.resolve([]),
       ]);
 
     // Decision chains (CM-43) hang off the college list ids, so they load
@@ -138,6 +213,8 @@ async function CaseDetailBody({ caseId }: { caseId: string }) {
       recommenders={recommenders}
       collegeDocs={collegeDocs}
       applicationEvents={applicationEvents}
+      bestScores={bestScores}
+      sectionStates={sectionStates}
       viewerRole={access.role}
       viewerEmail={access.email}
     />

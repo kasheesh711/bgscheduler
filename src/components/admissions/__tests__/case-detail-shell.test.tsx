@@ -26,6 +26,10 @@ import {
 } from "../case-detail-shell";
 import type { CalendarItem } from "@/lib/admissions/calendar";
 import type { AdmissionsTaskDto } from "@/lib/admissions/checklists";
+import {
+  getSectionDefinition,
+  type AdmissionsSectionStateDto,
+} from "@/lib/admissions/sections";
 import type {
   AdmissionsCaseDetail,
   AdmissionsMeetingDto,
@@ -94,6 +98,12 @@ const CASE_DETAIL: AdmissionsCaseDetail = {
   nextDeadline: null,
   upcomingDeadlines: [],
   announcements: [],
+  essays: [],
+  activities: [],
+  testSittings: [],
+  sections: [],
+  thisWeek: [],
+  phaseProgress: [],
   lastMeetingDate: "2026-07-05",
   createdAt: "2026-06-01T03:00:00.000Z",
   updatedAt: "2026-07-05T03:00:00.000Z",
@@ -134,6 +144,19 @@ const NOTES: AdmissionsNoteDto[] = [
   },
 ];
 
+const SECTION_STATES: AdmissionsSectionStateDto[] = [
+  {
+    caseId: CASE_ID,
+    sectionKey: "about_you",
+    definition: getSectionDefinition("about_you")!,
+    payload: {},
+    state: "draft",
+    submittedAt: null,
+    reviewedByEmail: null,
+    updatedAt: null,
+  },
+];
+
 function renderShell(overrides: {
   tab?: string | null;
   viewerRole?: "counselor" | "student" | "parent" | "admin";
@@ -157,6 +180,8 @@ function renderShell(overrides: {
       recommenders={[]}
       collegeDocs={[]}
       applicationEvents={{}}
+      bestScores={[]}
+      sectionStates={SECTION_STATES}
       viewerRole={overrides.viewerRole ?? "counselor"}
       viewerEmail="counselor.may@example.com"
     />,
@@ -411,7 +436,7 @@ describe("CaseDetailShell overview announcements", () => {
   });
 });
 
-describe("CaseDetailShell placeholder tabs", () => {
+describe("CaseDetailShell live tabs", () => {
   it("renders the live checklist tab instead of a placeholder", () => {
     const html = renderShell({ tab: "checklist" });
     expect(html).not.toContain("Coming in phase 2");
@@ -433,10 +458,29 @@ describe("CaseDetailShell placeholder tabs", () => {
     expect(html).toContain("Committed college");
   });
 
-  it("renders structured coming-in-phase placeholders", () => {
-    expect(renderShell({ tab: "essays" })).toContain("Coming in phase 4");
-    expect(renderShell({ tab: "activities" })).toContain("Coming in phase 4");
-    expect(renderShell({ tab: "testing" })).toContain("Coming in phase 4");
+  it("renders the live essays tab (staff variant) instead of a placeholder", () => {
+    const html = renderShell({ tab: "essays" });
+    expect(html).not.toContain("Coming in phase 4");
+    expect(html).toContain('data-testid="add-essay"');
+    expect(html).toContain(
+      "No essays yet — add your first prompt to start tracking.",
+    );
+  });
+
+  it("renders the live activities tab instead of a placeholder", () => {
+    const html = renderShell({ tab: "activities" });
+    expect(html).not.toContain("Coming in phase 4");
+    expect(html).toContain('data-variant="tab"');
+    expect(html).toContain('data-testid="activities-add"');
+    expect(html).toContain('data-testid="activities-cap"');
+  });
+
+  it("renders the live testing tab (staff variant) instead of a placeholder", () => {
+    const html = renderShell({ tab: "testing" });
+    expect(html).not.toContain("Coming in phase 4");
+    expect(html).toContain('data-testid="testing-view"');
+    // Staff can add sittings (the add/edit form renders for student+).
+    expect(html).toContain("Add sitting");
   });
 });
 
@@ -451,6 +495,16 @@ describe("CaseDetailShell profile tab", () => {
     const html = renderShell({ tab: "profile", viewerRole: "parent" });
     expect(html).not.toContain("Edit profile");
     expect(html).toContain("Bangkok Prep");
+  });
+
+  it("hosts the self-report sections list (CM-121) on the profile tab", () => {
+    const html = renderShell({ tab: "profile" });
+    expect(html).toContain('data-testid="sections-list"');
+    expect(html).toContain('data-testid="section-card-about_you"');
+    // Other tabs do not render the sections list.
+    expect(renderShell({ tab: "overview" })).not.toContain(
+      'data-testid="sections-list"',
+    );
   });
 });
 

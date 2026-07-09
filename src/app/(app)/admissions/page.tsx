@@ -1,18 +1,21 @@
-// /admissions — counselor/admin caseload workspace (design §5.1).
+// /admissions — counselor/admin caseload workspace (design §5.1) + role
+// routing for the family portal (design §5.2).
 //
 // Authz-scoped page: data is fetched with the session email via direct lib
 // calls — deliberately NO "use cache" here, since the caseload differs per
 // user and must never be cached cross-user. getCaseloadForUser is itself
-// fail-closed (non-admin, non-counselor → empty list). Students and parents
-// land on a placeholder card until their portal ships in a later phase;
-// any other role (e.g. teacher) is denied (fail-closed).
+// fail-closed (non-admin, non-counselor → empty list). Students are routed
+// to their own case page (the mobile-first student portal); a student with
+// no live case gets a friendly empty state. Parents land on a placeholder
+// card until their portal ships in phase 5; any other role (e.g. teacher)
+// is denied (fail-closed).
 
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { Clock, ShieldAlert } from "lucide-react";
+import { Clock, ShieldAlert, UserRound } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { auth } from "@/lib/auth";
-import { getCaseloadForUser } from "@/lib/admissions/cases";
+import { getCaseIdForStudentEmail, getCaseloadForUser } from "@/lib/admissions/cases";
 import { listCohorts } from "@/lib/admissions/cohorts";
 import { listCounselors } from "@/lib/admissions/counselors";
 import { CaseloadShell, CaseloadSkeleton } from "@/components/admissions/caseload-shell";
@@ -27,13 +30,35 @@ function PortalComingSoonCard() {
             Your portal is coming soon
           </CardTitle>
           <CardDescription>
-            The student and parent admissions portal is being built. Your counselor will let you
+            The parent admissions portal is being built. Your counselor will let you
             know as soon as it is ready.
           </CardDescription>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
           In the meantime, reach out to your counselor directly with any questions about your
           application plan.
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function NoCaseYetCard() {
+  return (
+    <div className="mx-auto mt-8 w-full max-w-md">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <UserRound aria-hidden className="size-4 text-primary" />
+            No case yet
+          </CardTitle>
+          <CardDescription>
+            Your admissions case has not been set up yet. Your counselor will
+            invite you as soon as it is ready.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="text-sm text-muted-foreground">
+          If you think this is a mistake, reach out to your counselor directly.
         </CardContent>
       </Card>
     </div>
@@ -66,7 +91,17 @@ async function AdmissionsBody() {
   }
 
   const role = session?.user?.role ?? null;
-  if (role === "student" || role === "parent") {
+  if (role === "student") {
+    // Student portal routing (design §5.2): land students on their own case.
+    // The case page re-runs requireCaseAccess, so this lookup only decides
+    // where to send them — never what they may see.
+    const studentCaseId = await getCaseIdForStudentEmail(email);
+    if (studentCaseId) {
+      redirect(`/admissions/${studentCaseId}`);
+    }
+    return <NoCaseYetCard />;
+  }
+  if (role === "parent") {
     return <PortalComingSoonCard />;
   }
   // Caseload renders only for counselors and admins (role null = legacy

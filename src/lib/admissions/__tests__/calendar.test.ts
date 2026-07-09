@@ -51,8 +51,9 @@ function makeTaskRow(input: TaskRowInput) {
  * Mock read db for the task collector: select(fields).from().where() resolves
  * the provided rows. The where clause is ignored, so date-window filtering and
  * ordering must be proven in process. EVERY collector receives the same rows
- * — task-shaped rows have no `deadline` field, so the application collector
- * fail-closed skips them all (these suites exercise the task source alone).
+ * — task-shaped rows have no `deadline`/`testDate`/`registrationDeadline`
+ * fields, so the application, essay, and testing collectors all fail-closed
+ * skip them (these suites exercise the task source alone).
  */
 function makeTaskDb(rows: Array<Record<string, unknown>>) {
   const select = vi.fn(() => ({
@@ -82,16 +83,58 @@ function makeCollegeRow(input: CollegeRowInput) {
   };
 }
 
+interface EssayRowInput {
+  id: string;
+  caseId?: string;
+  prompt?: string;
+  status?: string;
+  counselorStage?: string | null;
+  deadline: string | null;
+}
+
+function makeEssayRow(input: EssayRowInput) {
+  return {
+    id: input.id,
+    caseId: input.caseId ?? CASE_ID,
+    prompt: input.prompt ?? `Essay ${input.id}`,
+    status: input.status ?? "drafting",
+    counselorStage: input.counselorStage ?? null,
+    deadline: input.deadline,
+  };
+}
+
+interface SittingRowInput {
+  id: string;
+  caseId?: string;
+  testType?: string;
+  testDate: string;
+  registrationDeadline?: string | null;
+  actualScore?: string | null;
+}
+
+function makeSittingRow(input: SittingRowInput) {
+  return {
+    id: input.id,
+    caseId: input.caseId ?? CASE_ID,
+    testType: input.testType ?? "sat",
+    testDate: input.testDate,
+    registrationDeadline: input.registrationDeadline ?? null,
+    actualScore: input.actualScore ?? null,
+  };
+}
+
 /**
- * Queue-based mock db for multi-source aggregation: the first select feeds
- * the task collector, the second feeds the application collector (collector
- * registration order). Merge/sort/overdue behavior is proven in process.
+ * Queue-based mock db for multi-source aggregation, one entry per collector
+ * in registration order: task, application, essay, testing (omitted sources
+ * read []). Merge/sort/overdue behavior is proven in process.
  */
 function makeSourcesDb(
   taskRows: Array<Record<string, unknown>>,
   collegeRows: Array<Record<string, unknown>>,
+  essayRows: Array<Record<string, unknown>> = [],
+  sittingRows: Array<Record<string, unknown>> = [],
 ) {
-  const queue = [taskRows, collegeRows];
+  const queue = [taskRows, collegeRows, essayRows, sittingRows];
   let i = 0;
   const select = vi.fn(() => {
     const rows = queue[i++] ?? [];
@@ -228,8 +271,8 @@ describe("task + application source aggregation", () => {
       db,
     );
 
-    // One query per source (task collector + application collector).
-    expect(select).toHaveBeenCalledTimes(2);
+    // One query per registered source (task, application, essay, testing).
+    expect(select).toHaveBeenCalledTimes(4);
     expect(items.map((item) => [item.id, item.source])).toEqual([
       ["t-early", "task"],
       ["c-mid", "application"],
@@ -304,6 +347,112 @@ describe("task + application source aggregation", () => {
       ["t-open", "task", false],
       ["c-future", "application", false],
     ]);
+  });
+});
+
+describe("four-source aggregation (task + application + essay + testing)", () => {
+  it("merges all four sources into one date-ordered calendar", async () => {
+    const { db, select } = makeSourcesDb(
+      [makeTaskRow({ id: "t-first", dueDate: "2026-07-05" })],
+      [
+        makeCollegeRow({
+          id: "c-second",
+          instName: "Harvard University",
+          round: "ed",
+          deadline: "2026-07-10",
+        }),
+      ],
+      [makeEssayRow({ id: "e-fourth", prompt: "Why us?", deadline: "2026-07-15" })],
+      [
+        makeSittingRow({
+          id: "s-1",
+          testType: "sat",
+          testDate: "2026-07-20",
+          registrationDeadline: "2026-07-12",
+        }),
+      ],
+    );
+
+    const items = await buildCaseCalendar(
+      CASE_ID,
+      { from: "2026-07-01", to: "2026-07-31" },
+      NOW,
+      db,
+    );
+
+    expect(select).toHaveBeenCalledTimes(4);
+    expect(items.map((item) => [item.id, item.source, item.title])).toEqual([
+      ["t-first", "task", "Task t-first"],
+      ["c-second", "application", "Harvard University — ED deadline"],
+      ["s-1:registration", "testing", "SAT registration deadline"],
+      ["e-fourth", "essay", "Essay: Why us?"],
+      ["s-1:sitting", "testing", "SAT sitting"],
+    ]);
+    // Essay/testing entries are student work; each carries the full DTO shape.
+    expect(items[2].ownerRole).toBe("student");
+    expect(items[3].ownerRole).toBe("student");
+    expect(Object.keys(items[3]).sort()).toEqual(CALENDAR_ITEM_KEYS);
+  });
+
+  it("stamps overdue on open past essay/testing dates, never on finished ones", async () => {
+    const { db } = makeSourcesDb(
+      [],
+      [],
+      [
+        makeEssayRow({ id: "e-open-past", deadline: "2026-07-01" }),
+        makeEssayRow({ id: "e-final-past", deadline: "2026-07-01", counselorStage: "final" }),
+      ],
+      [
+        makeSittingRow({ id: "s-open", testDate: "2026-07-02" }),
+        makeSittingRow({ id: "s-scored", testDate: "2026-07-02", actualScore: "1450" }),
+      ],
+    );
+
+    const items = await buildCaseCalendar(
+      CASE_ID,
+      { from: "2026-07-01", to: "2026-07-31" },
+      NOW,
+      db,
+    );
+
+    expect(items.map((item) => [item.id, item.overdue])).toEqual([
+      ["e-final-past", false],
+      ["e-open-past", true],
+      ["s-open:sitting", true],
+      ["s-scored:sitting", false],
+    ]);
+  });
+
+  it("drops finished essays and scored sittings from the deadlines panel (CM-102)", async () => {
+    const { db } = makeSourcesDb(
+      [makeTaskRow({ id: "t-open", dueDate: "2026-07-18" })],
+      [],
+      [
+        makeEssayRow({ id: "e-open", deadline: "2026-07-14" }),
+        // Student-set status "final" completes the essay even without a
+        // counselor stage (effective stage = counselorStage ?? status).
+        makeEssayRow({ id: "e-status-final", status: "final", deadline: "2026-07-01" }),
+      ],
+      [
+        makeSittingRow({
+          id: "s-open",
+          testType: "ielts",
+          testDate: "2026-07-16",
+          registrationDeadline: "2026-07-02",
+        }),
+        makeSittingRow({ id: "s-scored", testDate: "2026-07-03", actualScore: "1500" }),
+      ],
+    );
+
+    const items = await getUpcomingDeadlines(CASE_ID, 10, NOW, db);
+
+    expect(items.map((item) => [item.id, item.source, item.overdue])).toEqual([
+      ["s-open:registration", "testing", true],
+      ["e-open", "essay", false],
+      ["s-open:sitting", "testing", false],
+      ["t-open", "task", false],
+    ]);
+    expect(items[0].title).toBe("IELTS registration deadline");
   });
 });
 

@@ -14,7 +14,13 @@
 // deadlines (CM-101/102), and announcements (CM-90). Phase 3 wiring: the
 // case detail also projects the college list with completeness (CM-40/46)
 // and WARN-only application-plan warnings (CM-45); deadlines now include
-// application rounds via the calendar's "application" source.
+// application rounds via the calendar's "application" source. Phase 4
+// wiring: the case detail additionally carries the self-report surfaces —
+// essays (CM-60..63), activities (CM-70/71), test sittings (CM-80), section
+// summaries (CM-121) — plus the student home's "This Week" actions and
+// season-scoped phase rings (CM-120); deadlines now also include essay and
+// testing sources. getCaseIdForStudentEmail resolves the student portal's
+// landing case (design §5.2).
 
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
@@ -30,6 +36,7 @@ import {
   admissionsStudents,
 } from "@/lib/db/schema";
 import { todayBangkok } from "@/lib/room-capacity/dates";
+import { listActivitiesForCase } from "./activities";
 import { listAnnouncementsForCase } from "./announcements";
 import {
   computeFieldDiff,
@@ -57,6 +64,7 @@ import {
   listCollegesForCase,
   type ApplicationWarning,
 } from "./colleges";
+import { listEssaysForCase } from "./essays";
 import {
   insertCaseMember,
   isUuidShaped,
@@ -65,6 +73,9 @@ import {
   type AdmissionsActor,
 } from "./members";
 import { computeCollegeCompleteness } from "./recommenders";
+import { listSectionStates } from "./sections";
+import { buildThisWeek, getPhaseProgress } from "./student-home";
+import { listSittingsForCase } from "./testing";
 import type {
   AdmissionsCaseDetail,
   AdmissionsCaseStatus,
@@ -454,6 +465,50 @@ export async function getCaseloadForUser(
 }
 
 /**
+ * Resolves the case a student portal visitor lands on (design §5.2 routing):
+ * the case where `email` holds an ACTIVE student membership on a live
+ * (active/committed, non-soft-deleted) case.
+ *
+ * Fail-closed like requireCaseAccess: only status "active" memberships count
+ * (invited/revoked/bounced students have no portal case yet), so routing
+ * never sends a student to a case the per-request guard would then deny.
+ * The live-case partial unique index makes multiple matches unexpected; if
+ * data drift ever produces more than one, the newest case wins (createdAt
+ * descending, caseId tiebreak) for a deterministic landing.
+ *
+ * @returns the caseId, or null when the student has no live case.
+ */
+export async function getCaseIdForStudentEmail(
+  email: string,
+  db: Database = getDb(),
+): Promise<string | null> {
+  const normalized = normalizeAdmissionsEmail(email);
+  if (!normalized) return null;
+
+  const rows = await db
+    .select({
+      caseId: admissionsCaseMembers.caseId,
+      createdAt: admissionsCases.createdAt,
+    })
+    .from(admissionsCaseMembers)
+    .innerJoin(admissionsCases, eq(admissionsCaseMembers.caseId, admissionsCases.id))
+    .where(and(
+      eq(admissionsCaseMembers.email, normalized),
+      eq(admissionsCaseMembers.role, "student"),
+      eq(admissionsCaseMembers.status, "active"),
+      inArray(admissionsCases.status, ["active", "committed"]),
+      isNull(admissionsCases.deletedAt),
+    ));
+  if (rows.length === 0) return null;
+
+  const sorted = rows.slice().sort((a, b) =>
+    b.createdAt.getTime() - a.createdAt.getTime() ||
+    (a.caseId < b.caseId ? -1 : a.caseId > b.caseId ? 1 : 0),
+  );
+  return sorted[0].caseId;
+}
+
+/**
  * Full case detail for the case shell (design §5.1). Callers must have run
  * requireCaseAccess first — this is a pure projection.
  *
@@ -474,6 +529,13 @@ export async function getCaseloadForUser(
  *    the items' decision chains reduce to latest-event-per-item
  *    (deriveLatestEvents) feeding the WARN-only ED/REA plan validation
  *    (computeApplicationWarnings, CM-45).
+ * 6. Project the Phase 4 self-report + student-home blocks, each owned by
+ *    its module: essays (listEssaysForCase, CM-60..63 urgency order),
+ *    activities (listActivitiesForCase, CM-70/71 ranked-first order), test
+ *    sittings (listSittingsForCase, CM-80 upcoming-first order), section
+ *    summaries (listSectionStates, CM-121 display order), "This Week"
+ *    actions (buildThisWeek, CM-120), and season-scoped phase rings
+ *    (getPhaseProgress, CM-120).
  */
 export async function getCaseDetail(
   caseId: string,
@@ -550,6 +612,14 @@ export async function getCaseDetail(
   const completenessMap = await computeCollegeCompleteness(caseId, db);
   const collegeList = await listCollegesForCase(caseId, { completenessMap }, db);
 
+  // Phase 4 self-report + student-home projections (design §5.1/§5.2).
+  const essays = await listEssaysForCase(caseId, { now }, db);
+  const activities = await listActivitiesForCase(caseId, db);
+  const testSittings = await listSittingsForCase(caseId, { now }, db);
+  const sections = await listSectionStates(caseId, db);
+  const thisWeek = await buildThisWeek(caseId, { now }, db);
+  const phaseProgress = await getPhaseProgress(caseId, { now }, db);
+
   let applicationWarnings: ApplicationWarning[] = [];
   if (collegeList.length > 0) {
     const eventRows = await db
@@ -605,6 +675,12 @@ export async function getCaseDetail(
     nextDeadline: upcomingDeadlines[0]?.date ?? null,
     upcomingDeadlines,
     announcements,
+    essays,
+    activities,
+    testSittings,
+    sections,
+    thisWeek,
+    phaseProgress,
     lastMeetingDate,
     createdAt: caseRow.createdAt.toISOString(),
     updatedAt: caseRow.updatedAt.toISOString(),

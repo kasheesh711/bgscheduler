@@ -2,32 +2,37 @@
 //
 // Design: docs/casemanagementsystem_design.md §1 (calendar.ts owns deadline
 // aggregation) and §8 (Phase 2 delivered "calendar aggregates tasks"; Phase 3
-// adds application-round deadlines). Sources aggregated today:
-// admissions_case_tasks.dueDate ("task") and live college list items'
-// application deadlines ("application", collected by colleges.ts). Later
-// phases add essay deadlines and test registrations/sittings by appending one
-// collector per source to CALENDAR_COLLECTORS — the window filter, overdue
-// stamping, urgency sort, and DTO shape are source-agnostic. All dates are
-// "YYYY-MM-DD" strings compared on the Asia/Bangkok calendar; malformed dates
-// are skipped, never guessed (fail-closed).
+// added application-round deadlines; Phase 4 adds essay deadlines and test
+// registrations/sittings). Sources aggregated today:
+// admissions_case_tasks.dueDate ("task"), live college list items'
+// application deadlines ("application", collected by colleges.ts), live essay
+// deadlines ("essay", collected by essays.ts), and test registration
+// deadlines + sitting dates ("testing", collected by testing.ts, CM-81).
+// Adding a source = appending one collector to CALENDAR_COLLECTORS — the
+// window filter, overdue stamping, urgency sort, and DTO shape are
+// source-agnostic. All dates are "YYYY-MM-DD" strings compared on the
+// Asia/Bangkok calendar; malformed dates are skipped, never guessed
+// (fail-closed).
 
 import { and, inArray, isNotNull, isNull } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { admissionsCaseTasks } from "@/lib/db/schema";
 import { BANGKOK_TIME_ZONE } from "@/lib/bangkok-time";
 import { collectApplicationDeadlineEntries } from "./colleges";
+import { collectEssayDeadlineEntries } from "./essays";
 import { isUuidShaped } from "./members";
+import { collectTestingDeadlineEntries } from "./testing";
 import type { AdmissionsTaskOwner } from "./meetings";
 
-/**
- * Dated-item source feeding the calendar. Later phases widen this union
- * further ("essay" | "testing", design §8).
- */
-export type CalendarItemSource = "task" | "application";
+/** Dated-item source feeding the calendar (design §8, all four registered). */
+export type CalendarItemSource = "task" | "application" | "essay" | "testing";
 
 /** One dated item on the per-case calendar / deadlines panel (CM-100/CM-102). */
 export interface CalendarItem {
-  /** Source row id (a case-task id or a college-list-item id). */
+  /**
+   * Source row id: a case-task id, a college-list-item id, an essay id, or a
+   * kind-suffixed sitting id ("{sittingId}:registration" | "{sittingId}:sitting").
+   */
   id: string;
   caseId: string;
   source: CalendarItemSource;
@@ -118,9 +123,29 @@ const collectTaskEntries: CalendarCollector = async (caseIds, db) => {
 const collectApplicationEntries: CalendarCollector = (caseIds, db) =>
   collectApplicationDeadlineEntries(caseIds, db);
 
+/**
+ * Essay-deadline collector (Phase 4): live essays with a deadline, batched
+ * across cases by essays.ts (which owns the query and the "Essay: {prompt}"
+ * title). `completed` = effective stage (counselorStage ?? status) is
+ * "final"; ownerRole is "student" (essays are the student's work, §2.4).
+ */
+const collectEssayEntries: CalendarCollector = (caseIds, db) =>
+  collectEssayDeadlineEntries(caseIds, db);
+
+/**
+ * Testing collector (Phase 4, CM-81): every sitting contributes its
+ * registration deadline (when set) and its test date as separate entries,
+ * batched across cases by testing.ts. `completed` = the sitting has an
+ * actualScore; ownerRole is "student" (testing self-entries, §2.4).
+ */
+const collectTestingEntries: CalendarCollector = (caseIds, db) =>
+  collectTestingDeadlineEntries(caseIds, db);
+
 const CALENDAR_COLLECTORS: readonly CalendarCollector[] = [
   collectTaskEntries,
   collectApplicationEntries,
+  collectEssayEntries,
+  collectTestingEntries,
 ];
 
 /**
@@ -186,8 +211,9 @@ async function collectEntries(
  *
  * 1. Validate the window up front: both bounds "YYYY-MM-DD" with from <= to;
  *    a malformed caseId throws "NotFound" (routes translate to 404).
- * 2. Run every registered collector (tasks + application deadlines) and keep
- *    entries whose date falls inside [from, to] inclusive.
+ * 2. Run every registered collector (tasks, application deadlines, essay
+ *    deadlines, testing dates) and keep entries whose date falls inside
+ *    [from, to] inclusive.
  * 3. Stamp `overdue` against today's Bangkok date — an item is overdue only
  *    when its date is strictly before today AND it is not completed; done
  *    items still render on the grid (historical record) but never as overdue.

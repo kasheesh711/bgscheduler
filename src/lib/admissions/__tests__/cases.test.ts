@@ -1,8 +1,33 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // `@/lib/db` pulls the Neon driver at import time; stub it so the domain
 // functions can be unit-tested against a fake chainable db (no real database).
+// The Phase 4 sibling modules getCaseDetail projects are partially mocked
+// (student-home.test.ts pattern) so the detail assembly is tested in
+// isolation; their real calendar collectors (essays/testing) stay live via
+// the importOriginal spread and run against the queued fake db.
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
+vi.mock("@/lib/admissions/activities", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/admissions/activities")>()),
+  listActivitiesForCase: vi.fn(),
+}));
+vi.mock("@/lib/admissions/essays", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/admissions/essays")>()),
+  listEssaysForCase: vi.fn(),
+}));
+vi.mock("@/lib/admissions/sections", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/admissions/sections")>()),
+  listSectionStates: vi.fn(),
+}));
+vi.mock("@/lib/admissions/student-home", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/admissions/student-home")>()),
+  buildThisWeek: vi.fn(),
+  getPhaseProgress: vi.fn(),
+}));
+vi.mock("@/lib/admissions/testing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/admissions/testing")>()),
+  listSittingsForCase: vi.fn(),
+}));
 
 import {
   admissionsAuditLog,
@@ -13,10 +38,12 @@ import {
   admissionsStudents,
   admissionsTemplateItems,
 } from "@/lib/db/schema";
+import { listActivitiesForCase } from "@/lib/admissions/activities";
 import {
   CASE_LIFECYCLE_TRANSITIONS,
   createCase,
   getCaseDetail,
+  getCaseIdForStudentEmail,
   getCaseloadForUser,
   isValidCaseTransition,
   updateCaseLifecycle,
@@ -24,6 +51,10 @@ import {
 } from "@/lib/admissions/cases";
 import { DEFAULT_TEMPLATE_NAME } from "@/lib/admissions/checklists";
 import { DEFAULT_CHECKLIST_ITEMS } from "@/lib/admissions/config";
+import { listEssaysForCase } from "@/lib/admissions/essays";
+import { listSectionStates } from "@/lib/admissions/sections";
+import { buildThisWeek, getPhaseProgress } from "@/lib/admissions/student-home";
+import { listSittingsForCase } from "@/lib/admissions/testing";
 import type { AdmissionsCaseStatus } from "@/lib/admissions/types";
 
 const CASE_ID = "11111111-1111-4111-8111-111111111111";
@@ -121,6 +152,16 @@ function fakeDb(queue: unknown[][]) {
   };
   return { db: db as never, selectCalls, inserts, updates };
 }
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(listEssaysForCase).mockResolvedValue([]);
+  vi.mocked(listActivitiesForCase).mockResolvedValue([]);
+  vi.mocked(listSittingsForCase).mockResolvedValue([]);
+  vi.mocked(listSectionStates).mockResolvedValue([]);
+  vi.mocked(buildThisWeek).mockResolvedValue([]);
+  vi.mocked(getPhaseProgress).mockResolvedValue([]);
+});
 
 function auditInserts(inserts: InsertCall[]) {
   return inserts.filter((call) => call.table === admissionsAuditLog).map((call) => call.values);
@@ -758,8 +799,9 @@ describe("getCaseloadForUser", () => {
   it("carries real checklist progress and each case's nearest open deadline", async () => {
     // Queue: [admin hit], [cases A+B], [members -> none] (registry-name query
     // skipped), [meetings -> none] (committed-college query skipped),
-    // [progress rows], [deadline task rows]; the calendar's application
-    // collector then reads past the queue -> no application deadlines.
+    // [progress rows], [deadline task rows]; the calendar's application,
+    // essay, and testing collectors then read past the queue -> no other
+    // deadline sources.
     const { db } = fakeDb([
       [{ id: "a1" }],
       [
@@ -794,7 +836,8 @@ describe("getCaseloadForUser", () => {
   it("lets an application-round deadline win nextDeadline when it is nearest", async () => {
     // Queue: [admin hit], [cases], [members -> none], [meetings -> none],
     // [progress rows -> none], [deadline task rows], [application deadline
-    // item rows] — the calendar merges both sources for the caseload.
+    // item rows] — the calendar merges the sources for the caseload; the
+    // essay and testing collectors read past the queue -> [].
     const { db } = fakeDb([
       [{ id: "a1" }],
       [caseJoinRow({ caseId: CASE_ID })],
@@ -975,7 +1018,8 @@ describe("getCaseDetail", () => {
   it("assembles the full detail DTO with members sorted oldest-first", async () => {
     // Queue: [case join], [members], [committed item], [meetings],
     // [progress task rows], [deadline task rows], [application deadline
-    // items], [announcements: cohort lookup], [announcement rows],
+    // items], [essay deadline rows], [testing deadline rows],
+    // [announcements: cohort lookup], [announcement rows],
     // [completeness: item ids], [colleges: item rows].
     const { db } = fakeDb([
       [detailJoinRow(ITEM_ID)],
@@ -996,6 +1040,8 @@ describe("getCaseDetail", () => {
         { id: "t2", caseId: CASE_ID, title: "Essay draft", owner: "student", status: "not_started", dueDate: "2026-08-01" },
         { id: "t1", caseId: CASE_ID, title: "Send transcripts", owner: "counselor", status: "in_progress", dueDate: "2026-07-01" },
       ],
+      [],
+      [],
       [],
       [{ cohortId: COHORT_ID }],
       [
@@ -1051,12 +1097,16 @@ describe("getCaseDetail", () => {
 
   it("skips the committed-college query when no pointer is set", async () => {
     // Queue: [case join], [members], [meetings], [progress], [deadline
-    // tasks], [application deadline items], [announcements: cohort lookup],
-    // [announcement rows], [completeness: item ids], [colleges: item rows].
-    // No committed pointer, no IPEDS unitIds, and an empty college list, so
-    // the pointer, stats, and application-event queries are all skipped.
+    // tasks], [application deadline items], [essay deadline rows], [testing
+    // deadline rows], [announcements: cohort lookup], [announcement rows],
+    // [completeness: item ids], [colleges: item rows]. No committed pointer,
+    // no IPEDS unitIds, and an empty college list, so the pointer, stats,
+    // and application-event queries are all skipped; the Phase 4 blocks are
+    // module-mocked and issue no queries.
     const { db, selectCalls } = fakeDb([
       [detailJoinRow(null)],
+      [],
+      [],
       [],
       [],
       [],
@@ -1078,7 +1128,13 @@ describe("getCaseDetail", () => {
     expect(detail.announcements).toEqual([]);
     expect(detail.collegeList).toEqual([]);
     expect(detail.applicationWarnings).toEqual([]);
-    expect(selectCalls).toHaveLength(10);
+    expect(detail.essays).toEqual([]);
+    expect(detail.activities).toEqual([]);
+    expect(detail.testSittings).toEqual([]);
+    expect(detail.sections).toEqual([]);
+    expect(detail.thisWeek).toEqual([]);
+    expect(detail.phaseProgress).toEqual([]);
+    expect(selectCalls).toHaveLength(12);
   });
 
   const ITEM_A = "88888888-8888-4888-8888-888888888888";
@@ -1109,10 +1165,11 @@ describe("getCaseDetail", () => {
 
   it("carries the college list with completeness and WARN-only plan warnings", async () => {
     // Queue: [case join], [members], [meetings], [progress], [deadline
-    // tasks], [application deadline items], [announcements: cohort lookup],
-    // [announcement rows], [completeness: item ids], [completeness: links],
-    // [completeness: docs], [colleges: item rows], [application events].
-    // Manual (non-IPEDS) rows keep the stats query out of the queue.
+    // tasks], [application deadline items], [essay deadline rows], [testing
+    // deadline rows], [announcements: cohort lookup], [announcement rows],
+    // [completeness: item ids], [completeness: links], [completeness: docs],
+    // [colleges: item rows], [application events]. Manual (non-IPEDS) rows
+    // keep the stats query out of the queue.
     const { db } = fakeDb([
       [detailJoinRow(null)],
       [],
@@ -1122,6 +1179,8 @@ describe("getCaseDetail", () => {
       [
         { id: ITEM_A, caseId: CASE_ID, instName: "University of Oxford", round: "ed", deadline: "2026-08-15", appStatus: "applying" },
       ],
+      [],
+      [],
       [{ cohortId: COHORT_ID }],
       [],
       [{ id: ITEM_A }, { id: ITEM_B }],
@@ -1192,5 +1251,164 @@ describe("getCaseDetail", () => {
 
     await expect(getCaseDetail("nope", db)).rejects.toThrow("NotFound");
     expect(selectCalls).toHaveLength(0);
+  });
+
+  it("carries the Phase 4 self-report and student-home blocks from their owning modules", async () => {
+    const ESSAY_ROW = {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      caseId: CASE_ID,
+      listItemId: null,
+      prompt: "Personal statement",
+      status: "drafting" as const,
+      counselorStage: null,
+      deadline: "2026-07-20",
+      driveUrl: null,
+      lastStudentUpdateAt: "2026-07-01T00:00:00.000Z",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-07-01T00:00:00.000Z",
+      stalenessDays: 8,
+      effectiveStage: "drafting" as const,
+    };
+    const ACTIVITY = {
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      caseId: CASE_ID,
+      name: "Robotics club",
+      fullDescription: null,
+      commonApp: null,
+      uc: null,
+      commonAppRank: 1,
+      sortOrder: 0,
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    };
+    const SITTING = {
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      caseId: CASE_ID,
+      testType: "sat" as const,
+      testDate: "2026-08-22",
+      registrationDeadline: "2026-07-18",
+      targetScore: "1500",
+      actualScore: null,
+      scoreReleasedToParent: false,
+      accommodations: null,
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    };
+    const SECTION = {
+      sectionKey: "about_you" as const,
+      title: "About You",
+      state: "draft" as const,
+      submittedAt: null,
+      updatedAt: null,
+    };
+    const ACTION = {
+      kind: "essay" as const,
+      title: "Update essay: Personal statement",
+      dueDate: "2026-07-20",
+      overdue: false,
+      anchor: `essay:${ESSAY_ROW.id}`,
+    };
+    const RING = {
+      phase: "about_you" as const,
+      label: "About You",
+      done: 1,
+      total: 2,
+      percent: 50,
+      verifiedCount: 0,
+    };
+    vi.mocked(listEssaysForCase).mockResolvedValue([ESSAY_ROW]);
+    vi.mocked(listActivitiesForCase).mockResolvedValue([ACTIVITY]);
+    vi.mocked(listSittingsForCase).mockResolvedValue([SITTING]);
+    vi.mocked(listSectionStates).mockResolvedValue([SECTION]);
+    vi.mocked(buildThisWeek).mockResolvedValue([ACTION]);
+    vi.mocked(getPhaseProgress).mockResolvedValue([RING]);
+
+    // Queue: [case join], [members], [meetings], [progress], [deadline
+    // tasks], [application deadline items], [essay deadline rows — the live
+    // essay collector runs against the fake db], [testing deadline rows],
+    // [announcements: cohort lookup], [announcement rows], [completeness:
+    // item ids], [colleges: item rows]. The projected blocks themselves come
+    // from the module mocks above.
+    const { db } = fakeDb([
+      [detailJoinRow(null)],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [
+        { id: ESSAY_ROW.id, caseId: CASE_ID, prompt: "Personal statement", status: "drafting", counselorStage: null, deadline: "2026-07-20" },
+      ],
+      [],
+      [{ cohortId: COHORT_ID }],
+      [],
+      [],
+      [],
+    ]);
+
+    const detail = await getCaseDetail(CASE_ID, db, NOW);
+
+    expect(detail.essays).toEqual([ESSAY_ROW]);
+    expect(detail.activities).toEqual([ACTIVITY]);
+    expect(detail.testSittings).toEqual([SITTING]);
+    expect(detail.sections).toEqual([SECTION]);
+    expect(detail.thisWeek).toEqual([ACTION]);
+    expect(detail.phaseProgress).toEqual([RING]);
+
+    // Each block is delegated with the shared reference instant and db.
+    expect(listEssaysForCase).toHaveBeenCalledWith(CASE_ID, { now: NOW }, db);
+    expect(listActivitiesForCase).toHaveBeenCalledWith(CASE_ID, db);
+    expect(listSittingsForCase).toHaveBeenCalledWith(CASE_ID, { now: NOW }, db);
+    expect(listSectionStates).toHaveBeenCalledWith(CASE_ID, db);
+    expect(buildThisWeek).toHaveBeenCalledWith(CASE_ID, { now: NOW }, db);
+    expect(getPhaseProgress).toHaveBeenCalledWith(CASE_ID, { now: NOW }, db);
+
+    // The registered essay collector feeds the Overview deadlines panel.
+    expect(detail.nextDeadline).toBe("2026-07-20");
+    expect(detail.upcomingDeadlines).toHaveLength(1);
+    expect(detail.upcomingDeadlines[0]).toMatchObject({
+      id: ESSAY_ROW.id,
+      source: "essay",
+      title: "Essay: Personal statement",
+      date: "2026-07-20",
+      overdue: false,
+      ownerRole: "student",
+    });
+  });
+});
+
+describe("getCaseIdForStudentEmail", () => {
+  it("returns the caseId for an active student membership on a live case", async () => {
+    const { db } = fakeDb([
+      [{ caseId: CASE_ID, createdAt: new Date("2026-06-01T00:00:00Z") }],
+    ]);
+
+    await expect(getCaseIdForStudentEmail("Ada@Example.com ", db)).resolves.toBe(CASE_ID);
+  });
+
+  it("returns null when the student has no live case", async () => {
+    const { db } = fakeDb([[]]);
+
+    await expect(getCaseIdForStudentEmail("ada@example.com", db)).resolves.toBeNull();
+  });
+
+  it("returns null for an empty email without querying", async () => {
+    const { db, selectCalls } = fakeDb([]);
+
+    await expect(getCaseIdForStudentEmail("   ", db)).resolves.toBeNull();
+    expect(selectCalls).toHaveLength(0);
+  });
+
+  it("picks the newest case deterministically when data drift yields several", async () => {
+    const { db } = fakeDb([
+      [
+        { caseId: CASE_ID, createdAt: new Date("2026-05-01T00:00:00Z") },
+        { caseId: CASE_ID_C, createdAt: new Date("2026-06-01T00:00:00Z") },
+        { caseId: CASE_ID_B, createdAt: new Date("2026-06-01T00:00:00Z") },
+      ],
+    ]);
+
+    // Newest first; the equal-createdAt tie breaks by caseId ascending.
+    await expect(getCaseIdForStudentEmail("ada@example.com", db)).resolves.toBe(CASE_ID_B);
   });
 });

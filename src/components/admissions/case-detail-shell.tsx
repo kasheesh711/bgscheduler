@@ -5,12 +5,13 @@
 //
 // Tab state lives in the URL (`?tab=`, mirroring the us-universities shell's
 // URL-as-source-of-truth pattern) so refresh/back/forward restore the active
-// tab. Implemented tabs: Overview / Profile / Checklist / Colleges /
-// Applications / Meetings / Notes; the phase-4 tabs render structured
-// "coming in phase N" placeholders. The Overview tab also hosts the
-// upcoming-deadlines list (CM-102), the month-grid deadline calendar as a
-// toggled sub-view (CM-100 — design §5.1 lists no Calendar tab), and the
-// announcements panel (CM-90).
+// tab. All 10 tabs are implemented: Overview / Profile / Checklist /
+// Colleges / Applications / Essays / Activities / Testing / Meetings /
+// Notes. The Overview tab also hosts the upcoming-deadlines list (CM-102),
+// the month-grid deadline calendar as a toggled sub-view (CM-100 — design
+// §5.1 lists no Calendar tab), and the announcements panel (CM-90); the
+// Profile tab hosts the self-report sections list (CM-121 — staff variant,
+// so counselors can open a section and review it).
 //
 // Server data arrives as props from the page (no client cache): every
 // successful mutation calls router.refresh() so the server component re-reads
@@ -54,11 +55,15 @@ import {
   ADMISSIONS_TASK_OWNERS,
   type AdmissionsTaskOwner,
 } from "@/lib/admissions/meetings";
+import { ActivitiesView } from "./activities-view";
 import { AnnouncementsPanel } from "./announcements-panel";
 import { ApplicationsTab } from "./applications-tab";
 import { CalendarTab } from "./calendar-tab";
 import { ChecklistTab } from "./checklist-tab";
 import { CollegesTab } from "./colleges-tab";
+import { EssaysView, type EssayCollegeOption } from "./essays-view";
+import { SectionsList } from "./sections-list";
+import { TestingView } from "./testing-view";
 import type { CalendarItem } from "@/lib/admissions/calendar";
 import type { AdmissionsTaskDto } from "@/lib/admissions/checklists";
 import type { AdmissionsApplicationEventDto } from "@/lib/admissions/colleges";
@@ -66,6 +71,8 @@ import type {
   AdmissionsCollegeDocDto,
   AdmissionsRecommenderWithCollegesDto,
 } from "@/lib/admissions/recommenders";
+import type { AdmissionsSectionStateDto } from "@/lib/admissions/sections";
+import type { AdmissionsBestScore } from "@/lib/admissions/testing";
 import type {
   AdmissionsCaseDetail,
   AdmissionsCaseStatus,
@@ -96,28 +103,6 @@ export const CASE_TABS = [
 export type CaseTabKey = (typeof CASE_TABS)[number]["key"];
 
 const DEFAULT_CASE_TAB: CaseTabKey = "overview";
-
-/** Tabs that render a placeholder in phase 1, with the build phase and a
- * one-line description of what will land there (design §8). */
-const PLACEHOLDER_TABS: Partial<
-  Record<CaseTabKey, { phase: number; description: string }>
-> = {
-  essays: {
-    phase: 4,
-    description:
-      "The essay tracker with prompts, statuses, Drive links, and staleness indicators.",
-  },
-  activities: {
-    phase: 4,
-    description:
-      "Common App / UC activities with live character counters and Common App ranking.",
-  },
-  testing: {
-    phase: 4,
-    description:
-      "Test sittings with registration deadlines, target vs actual scores, and parent score release.",
-  },
-};
 
 /**
  * Resolves a raw `?tab=` value to a known tab key. Unknown or missing values
@@ -379,22 +364,6 @@ function VisibilityBadge({ visibility }: { visibility: AdmissionsNoteVisibility 
   return <Badge variant="outline">Shared with family</Badge>;
 }
 
-function PlaceholderPanel({ label, tabKey }: { label: string; tabKey: CaseTabKey }) {
-  const placeholder = PLACEHOLDER_TABS[tabKey];
-  if (!placeholder) return null;
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{label}</CardTitle>
-        <CardDescription>Coming in phase {placeholder.phase}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <p className="text-sm text-muted-foreground">{placeholder.description}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
 const SELECT_CLASSES =
   "h-8 w-full rounded-lg border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30";
 
@@ -453,15 +422,18 @@ export interface CaseDetailShellProps {
   collegeDocs: AdmissionsCollegeDocDto[];
   /** Decision chains keyed by list item id (CM-43); empty for parent viewers. */
   applicationEvents: Record<string, AdmissionsApplicationEventDto[]>;
+  /** Best actual score per test type (CM-82); empty for parent viewers. */
+  bestScores: AdmissionsBestScore[];
+  /** Full self-report section states (CM-121); empty for parent viewers. */
+  sectionStates: AdmissionsSectionStateDto[];
   viewerRole: CaseRole;
   viewerEmail: string;
 }
 
 /**
  * Case detail workspace (design §5.1): sticky case header, 10-tab bar with
- * URL-driven state; Overview / Profile / Checklist / Colleges / Applications /
- * Meetings / Notes are implemented and the phase-4 tabs render structured
- * placeholders.
+ * URL-driven state; every tab is implemented (Overview / Profile / Checklist /
+ * Colleges / Applications / Essays / Activities / Testing / Meetings / Notes).
  */
 export function CaseDetailShell({
   caseDetail,
@@ -473,6 +445,8 @@ export function CaseDetailShell({
   recommenders,
   collegeDocs,
   applicationEvents,
+  bestScores,
+  sectionStates,
   viewerRole,
   viewerEmail,
 }: CaseDetailShellProps) {
@@ -488,6 +462,17 @@ export function CaseDetailShell({
   const [showCalendar, setShowCalendar] = useState(false);
 
   const { student, cohort } = caseDetail;
+
+  // The case's live college list as {id, instName} options — the EssaysView
+  // add-form link targets and the TestingView score-send display names.
+  const collegeOptions = useMemo<EssayCollegeOption[]>(
+    () =>
+      caseDetail.collegeList.map((item) => ({
+        id: item.id,
+        instName: item.instName,
+      })),
+    [caseDetail.collegeList],
+  );
 
   // ── Tab navigation (URL is the source of truth) ──
   const handleTabChange = useCallback(
@@ -941,108 +926,118 @@ export function CaseDetailShell({
         ) : null}
 
         {activeTab === "profile" ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>Student profile</CardTitle>
-              <CardDescription>
-                Contact and school details captured at case creation.
-              </CardDescription>
-              {isStaff && !editingProfile ? (
-                <CardAction>
-                  <Button size="sm" variant="outline" onClick={startProfileEdit}>
-                    <PencilIcon aria-hidden />
-                    Edit profile
-                  </Button>
-                </CardAction>
-              ) : null}
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {profileConflict ? (
-                <ProfileConflictBanner
-                  conflict={profileConflict}
-                  onUseLatest={() => {
-                    if (profileConflict.currentVersion) {
-                      setProfileForm(profileConflict.currentVersion);
-                    }
-                    setProfileConflict(null);
-                  }}
-                  onDismiss={() => setProfileConflict(null)}
-                />
-              ) : null}
-              {editingProfile ? (
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void handleProfileSave();
-                  }}
-                  className="space-y-3"
-                >
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {PROFILE_FIELDS.map(({ key, label }) => (
-                      <label key={key} className="space-y-1 text-xs font-medium text-foreground">
-                        {label}
-                        {key === "fullName" ? (
-                          <span aria-hidden className="text-destructive">
-                            {" "}
-                            *
-                          </span>
-                        ) : null}
-                        <Input
-                          value={profileForm[key]}
-                          onChange={(event) =>
-                            setProfileForm((previous) => ({
-                              ...previous,
-                              [key]: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
-                    ))}
-                    <div className="space-y-1 text-xs font-medium text-foreground">
-                      Student email
-                      <Input value={student.studentEmail} disabled aria-label="Student email (read-only)" />
-                      <p className="text-[11px] font-normal text-muted-foreground">
-                        Email changes go through membership management.
-                      </p>
-                    </div>
-                  </div>
-                  {profileError ? (
-                    <p role="alert" className="text-sm text-destructive">
-                      {profileError}
-                    </p>
-                  ) : null}
-                  <div className="flex gap-2">
-                    <Button type="submit" size="sm" disabled={profileSaving}>
-                      {profileSaving ? "Saving…" : "Save changes"}
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Student profile</CardTitle>
+                <CardDescription>
+                  Contact and school details captured at case creation.
+                </CardDescription>
+                {isStaff && !editingProfile ? (
+                  <CardAction>
+                    <Button size="sm" variant="outline" onClick={startProfileEdit}>
+                      <PencilIcon aria-hidden />
+                      Edit profile
                     </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={handleProfileCancel}
-                      disabled={profileSaving}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                </form>
-              ) : (
-                <dl className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
-                  <FieldRow label="Full name" value={student.fullName} />
-                  <FieldRow label="Preferred name" value={student.preferredName} />
-                  <FieldRow label="Student email" value={student.studentEmail} />
-                  <FieldRow label="Phone" value={student.phone} />
-                  <FieldRow label="School" value={student.school} />
-                  <FieldRow label="School counselor" value={student.schoolCounselor} />
-                  <FieldRow label="Wise student key" value={student.wiseStudentKey} />
-                  <FieldRow
-                    label="Drive folder"
-                    value={caseDetail.driveFolder}
+                  </CardAction>
+                ) : null}
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {profileConflict ? (
+                  <ProfileConflictBanner
+                    conflict={profileConflict}
+                    onUseLatest={() => {
+                      if (profileConflict.currentVersion) {
+                        setProfileForm(profileConflict.currentVersion);
+                      }
+                      setProfileConflict(null);
+                    }}
+                    onDismiss={() => setProfileConflict(null)}
                   />
-                </dl>
-              )}
-            </CardContent>
-          </Card>
+                ) : null}
+                {editingProfile ? (
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void handleProfileSave();
+                    }}
+                    className="space-y-3"
+                  >
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {PROFILE_FIELDS.map(({ key, label }) => (
+                        <label key={key} className="space-y-1 text-xs font-medium text-foreground">
+                          {label}
+                          {key === "fullName" ? (
+                            <span aria-hidden className="text-destructive">
+                              {" "}
+                              *
+                            </span>
+                          ) : null}
+                          <Input
+                            value={profileForm[key]}
+                            onChange={(event) =>
+                              setProfileForm((previous) => ({
+                                ...previous,
+                                [key]: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                      ))}
+                      <div className="space-y-1 text-xs font-medium text-foreground">
+                        Student email
+                        <Input value={student.studentEmail} disabled aria-label="Student email (read-only)" />
+                        <p className="text-[11px] font-normal text-muted-foreground">
+                          Email changes go through membership management.
+                        </p>
+                      </div>
+                    </div>
+                    {profileError ? (
+                      <p role="alert" className="text-sm text-destructive">
+                        {profileError}
+                      </p>
+                    ) : null}
+                    <div className="flex gap-2">
+                      <Button type="submit" size="sm" disabled={profileSaving}>
+                        {profileSaving ? "Saving…" : "Save changes"}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={handleProfileCancel}
+                        disabled={profileSaving}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
+                ) : (
+                  <dl className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+                    <FieldRow label="Full name" value={student.fullName} />
+                    <FieldRow label="Preferred name" value={student.preferredName} />
+                    <FieldRow label="Student email" value={student.studentEmail} />
+                    <FieldRow label="Phone" value={student.phone} />
+                    <FieldRow label="School" value={student.school} />
+                    <FieldRow label="School counselor" value={student.schoolCounselor} />
+                    <FieldRow label="Wise student key" value={student.wiseStudentKey} />
+                    <FieldRow
+                      label="Drive folder"
+                      value={caseDetail.driveFolder}
+                    />
+                  </dl>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* ── Self-report sections (CM-121, staff variant → review) ── */}
+            <SectionsList
+              caseId={caseDetail.caseId}
+              sections={sectionStates}
+              viewerRole={viewerRole}
+              variant="staff"
+            />
+          </div>
         ) : null}
 
         {activeTab === "checklist" ? (
@@ -1073,6 +1068,37 @@ export function CaseDetailShell({
             committedCollegeName={caseDetail.committedCollegeName}
             eventsByItem={applicationEvents}
             viewerRole={viewerRole}
+          />
+        ) : null}
+
+        {activeTab === "essays" ? (
+          <EssaysView
+            caseId={caseDetail.caseId}
+            essays={caseDetail.essays}
+            collegeOptions={collegeOptions}
+            viewerRole={viewerRole}
+            variant="staff"
+          />
+        ) : null}
+
+        {activeTab === "activities" ? (
+          <ActivitiesView
+            caseId={caseDetail.caseId}
+            activities={caseDetail.activities}
+            viewerRole={viewerRole}
+            variant="tab"
+          />
+        ) : null}
+
+        {activeTab === "testing" ? (
+          <TestingView
+            caseId={caseDetail.caseId}
+            sittings={caseDetail.testSittings}
+            bestScores={bestScores}
+            collegeDocs={collegeDocs}
+            colleges={collegeOptions}
+            viewerRole={viewerRole}
+            variant="staff"
           />
         ) : null}
 
@@ -1501,12 +1527,6 @@ export function CaseDetailShell({
           </div>
         ) : null}
 
-        {PLACEHOLDER_TABS[activeTab] ? (
-          <PlaceholderPanel
-            label={CASE_TABS.find((tab) => tab.key === activeTab)?.label ?? activeTab}
-            tabKey={activeTab}
-          />
-        ) : null}
       </main>
 
       {/* ── Discard-changes confirmation (destructive action guard) ── */}
