@@ -83,4 +83,3 @@ npm run test:e2e:admissions
 Artifacts on failure are written to ignored `test-results/` and
 `playwright-report/` directories. The suite runs with one worker because the
 projects intentionally share pilot records.
-

@@ -29,11 +29,9 @@ export const admissionsAwardGradeLevelsSchema = z
   .refine((values) => new Set(values).size === values.length, {
     message: "Duplicate award grade levels are not allowed",
   });
-
 export const admissionsAwardRecognitionLevelsSchema = z
   .array(z.enum(ADMISSIONS_AWARD_RECOGNITION_LEVELS))
   .max(ADMISSIONS_AWARD_RECOGNITION_LEVELS.length)
   .refine((values) => new Set(values).size === values.length, {
     message: "Duplicate recognition levels are not allowed",
   });
-

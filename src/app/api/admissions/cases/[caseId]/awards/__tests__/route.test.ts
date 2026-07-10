@@ -122,4 +122,3 @@ describe("/api/admissions/cases/[caseId]/awards", () => {
     expect(softDeleteAward).toHaveBeenCalledWith({ access: ACCESS, awardId: AWARD_ID });
   });
 });
-

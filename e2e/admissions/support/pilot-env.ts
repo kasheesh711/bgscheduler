@@ -12,7 +12,6 @@ const storageEnvByRole: Record<AdmissionsE2ERole, string> = {
 function read(name: string): string | undefined {
   return process.env[name]?.trim() || undefined;
 }
-
 export const pilotEnv = Object.freeze({
   baseURL: read("ADMISSIONS_E2E_BASE_URL"),
   counselorCaseId: read("ADMISSIONS_E2E_COUNSELOR_CASE_ID"),
@@ -56,4 +55,3 @@ export function pilotSkipReason(
   }
   return null;
 }
-

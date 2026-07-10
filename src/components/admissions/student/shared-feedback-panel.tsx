@@ -17,7 +17,6 @@ function readError(payload: unknown): string {
     ? (payload as { error: string }).error
     : "Shared feedback could not be loaded.";
 }
-
 function formatDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -64,4 +63,3 @@ export function SharedFeedbackPanel({ caseId }: { caseId: string }) {
     </div>
   );
 }
-
