@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowDown, ArrowUp, ArrowUpDown, Download } from "lucide-react";
+import { AddToCaseMenu } from "@/components/admissions/add-to-case-menu";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Table,
@@ -313,19 +314,22 @@ export function InstitutionTable({
                     <TableCell className="text-right tabular-nums">{formatPct(row.gradRateBach6yr)}</TableCell>
                     <TableCell className="text-right tabular-nums">{formatInt(row.avgNetPrice, "$")}</TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant={inCompare ? "secondary" : "outline"}
-                        size="sm"
-                        disabled={inCompare || compareFull}
-                        onClick={() => onAddCompare(row.unitId)}
-                        aria-label={
-                          inCompare
-                            ? `${row.instName} is already in compare`
-                            : `Add ${row.instName} to compare`
-                        }
-                      >
-                        {inCompare ? "Added" : "Compare"}
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        <AddToCaseMenu unitId={row.unitId} instName={row.instName} compact />
+                        <Button
+                          variant={inCompare ? "secondary" : "outline"}
+                          size="sm"
+                          disabled={inCompare || compareFull}
+                          onClick={() => onAddCompare(row.unitId)}
+                          aria-label={
+                            inCompare
+                              ? `${row.instName} is already in compare`
+                              : `Add ${row.instName} to compare`
+                          }
+                        >
+                          {inCompare ? "Added" : "Compare"}
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );

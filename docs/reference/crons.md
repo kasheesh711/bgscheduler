@@ -26,6 +26,7 @@ The entries below are the complete contents of `vercel.json`. Schedules are UTC 
 | 10 | `0,10,20,30 0 * * *` | 4×/day, 00:00–00:30 UTC at :00/:10/:20/:30 (07:00–07:30 Bangkok) | `/api/internal/class-assignments/admin-email` | [`route.ts:7`](../../src/app/api/internal/class-assignments/admin-email/route.ts) | 300s ([:5](../../src/app/api/internal/class-assignments/admin-email/route.ts)) |
 | 11 | `5 17 30 6 *` | one-shot business event: 2026-06-30 17:05 UTC (2026-07-01 00:05 Bangkok); route hard-blocks all other Bangkok dates | `/api/internal/student-promotions/july-1` | [`route.ts`](../../src/app/api/internal/student-promotions/july-1/route.ts) | 800s |
 | 12 | `7,37 * * * *` | every 30 min, on :07/:37 | `/api/internal/cron-watchdog` | [`route.ts:28`](../../src/app/api/internal/cron-watchdog/route.ts) | 300s ([:7](../../src/app/api/internal/cron-watchdog/route.ts)) |
+| 13 | `12 1 * * *` | once daily, 01:12 UTC (08:12 Bangkok) | `/api/internal/admissions-notifications` | [`route.ts:73`](../../src/app/api/internal/admissions-notifications/route.ts) | 300s ([:20](../../src/app/api/internal/admissions-notifications/route.ts)) |
 
 The high-frequency sync jobs are **staggered at 5-minute offsets** across the half-hour so they do not all hit upstream APIs or the database in the same minute: Wise snapshot on :00/:30, activity audit on :05/:35, sales on :10/:40, leave requests on :15/:45, credit control on :20/:50, and progress tests on :25/:55. Competitor intelligence runs weekly at Monday 01:25 Bangkok to limit vendor spend.
 
@@ -47,7 +48,7 @@ gantt
 
 Every cron handler authenticates the inbound request by constant-time comparison of the `Authorization` header against `Bearer ${CRON_SECRET}`. The comparison length-pre-checks before `crypto.timingSafeEqual` to avoid the `RangeError` that function throws on length-mismatched buffers ([`sync-wise/route.ts:10-28`](../../src/app/api/internal/sync-wise/route.ts)). Two implementations of identical logic exist:
 
-- **Shared helper** `rejectInvalidCronSecret(request)` — returns a `NextResponse` (401 invalid / 500 missing-secret) or `null` when valid ([`cron-auth.ts:19-26`](../../src/lib/internal/cron-auth.ts)). Used by `sync-wise-activity`, `sync-leave-requests`, `class-assignments/morning`, and `class-assignments/admin-email`.
+- **Shared helper** `rejectInvalidCronSecret(request)` — returns a `NextResponse` (401 invalid / 500 missing-secret) or `null` when valid ([`cron-auth.ts:19-26`](../../src/lib/internal/cron-auth.ts)). Used by `sync-wise-activity`, `sync-leave-requests`, `class-assignments/morning`, `class-assignments/admin-email`, and `admissions-notifications`.
 - **Inline copies** — `sync-wise`, `sync-sales-dashboard`, `sync-credit-control`, `sync-room-utilization`, and `student-promotions/july-1` each define their own `hasValidCronSecret` with the same constant-time check rather than importing the helper.
 
 `CRON_SECRET` is a required environment variable; when unset, handlers return **HTTP 500 `{ "error": "Server misconfigured" }`** rather than running unauthenticated ([`cron-auth.ts:22-24`](../../src/lib/internal/cron-auth.ts)).
@@ -68,6 +69,7 @@ Vercel Cron always calls **`GET`**. Some handlers additionally export `POST` for
 | `class-assignments/morning` | yes | no | n/a |
 | `class-assignments/admin-email` | yes | no | n/a |
 | `student-promotions/july-1` | yes | yes (bearer only, replay alias) | no |
+| `admissions-notifications` | yes | yes (bearer only, optional `runType` body) | no ([`route.ts:91-92`](../../src/app/api/internal/admissions-notifications/route.ts)) |
 
 ---
 
@@ -159,11 +161,24 @@ This cron is a one-shot business event, not a recurring data sync. The Vercel ex
 
 The handler authenticates with `CRON_SECRET`, then calls `applyVerifiedStudentPromotionRun({ trigger: "cron" })`. Each grade and course action revalidates current Wise state before writing, and per-action drift/errors are persisted without aborting the run. See the Student Promotions feature doc and API reference for the full review/apply flow.
 
+## 9. Admissions notifications — `/api/internal/admissions-notifications`
+
+**Schedule:** `12 1 * * *` — once daily at **01:12 UTC = 08:12 Asia/Bangkok**. **Does:** sends University Admissions deadline-reminder emails, and on Bangkok Sundays additionally the weekly digest, via Resend.
+
+The handler authenticates with the shared `rejectInvalidCronSecret` helper, then wraps the pass in `withCronInvocationAudit` (job key `admissions_notifications`) and dispatches on an optional `runType` ([`route.ts:42-88`](../../src/app/api/internal/admissions-notifications/route.ts)):
+
+1. **Default (no `runType` — the Vercel cron case):** runs `runDailyNotifications` — scans every live (active/committed) case for calendar items due in exactly 7 days or exactly 2 days (Bangkok calendar) and emails the assigned member(s); interrupt sends are capped at **3 per recipient per Bangkok day**, with overflow collapsed into one combined email ([`notifications.ts:55, 528-566, 882-922`](../../src/lib/admissions/notifications.ts)). On a Bangkok **Sunday**, the same invocation then runs `runWeeklyDigest` (one batch-tier digest per case member with fresh content from the past 7 days).
+2. **Explicit `runType`** (`?runType=daily|weekly` on `GET`, JSON body on `POST`) runs exactly that orchestrator — the manual-trigger path.
+
+**Single-flight guard:** each orchestrator inserts a `running` row into `admissions_notification_runs`, protected by the partial unique index `admissions_notification_runs_single_running_idx` (`WHERE status = 'running'`); a concurrent insert's unique violation means "skip", and stale `running` rows are failed after **30 minutes** before each start ([`notifications.ts:71, 792-832`](../../src/lib/admissions/notifications.ts)). When every requested pass is skipped, the route returns **HTTP 202** with `skipped: true`; otherwise 200 with per-pass results ([`route.ts:62-63`](../../src/app/api/internal/admissions-notifications/route.ts)).
+
+**Idempotency:** every keyed send is recorded in `admissions_notification_log` under a partial-unique `dedupe_key` (per-item reminder keys, per-day combined-reminder and digest keys), so same-day re-runs re-send nothing. **`maxDuration = 300`** ([`route.ts:20`](../../src/app/api/internal/admissions-notifications/route.ts)). Full request/response detail: [university-admissions.md](./api/university-admissions.md#notification-cron).
+
 ---
 
 ## Internal handlers without a cron schedule
 
-These `/api/internal/*` route handlers exist on disk but are **not** listed in `vercel.json`, so Vercel Cron never invokes them. Verified by comparing the eight cron `path`s in `vercel.json` against the internal `route.ts` files under `src/app/api/internal/`.
+These `/api/internal/*` route handlers exist on disk but are **not** listed in `vercel.json`, so Vercel Cron never invokes them. Verified by comparing the cron `path`s in `vercel.json` against the internal `route.ts` files under `src/app/api/internal/`.
 
 ### `/api/internal/sync-room-utilization` — manual only (no GET handler)
 

@@ -110,6 +110,7 @@ declared maturity.
 | [AI Scheduler](./features/ai-scheduler.md) | experimental | LLM reads pasted chat, extracts a request, runs the deterministic search, drafts a parent reply. Never decides availability. |
 | [Data Health](./features/data-health.md) | stable | Ops command center for cron firing, data freshness, Wise snapshot fidelity, and unresolved normalization issues. |
 | [Leave Requests](./features/leave-requests.md) | in progress (uncommitted) | Tutor leave-request workflow. Present in the working tree but uncommitted; treat shapes as provisional. |
+| [University Admissions](./features/university-admissions.md) | built, pre-deploy | Counselor case management for university applications — cases, versioned checklists, college lists with decision chains, essays, activities, testing — with a mobile-first student portal and a view-only, Thai-first parent dashboard. PRD: [Casemanagementsystem_prd.md](./Casemanagementsystem_prd.md); design: [casemanagementsystem_design.md](./casemanagementsystem_design.md). |
 
 ### Reference
 
@@ -129,6 +130,7 @@ Mechanical lookup. Owns exact signatures, columns, schedules, and variables.
 | [room-capacity.md](./reference/api/room-capacity.md) | `/api/room-capacity/*`. |
 | [sales-dashboard.md](./reference/api/sales-dashboard.md) | `/api/sales-dashboard/*`. |
 | [student-promotions.md](./reference/api/student-promotions.md) | `/api/student-promotions/*` and the July 1 internal cron route. |
+| [university-admissions.md](./reference/api/university-admissions.md) | `/api/admissions/**` and the admissions-notifications internal cron route. |
 | [wise-activity.md](./reference/api/wise-activity.md) | `/api/wise-activity/*`. |
 | [internal-crons.md](./reference/api/internal-crons.md) | `/api/internal/*` — cron-triggered sync endpoints. |
 | [misc.md](./reference/api/misc.md) | Search, Tutors, Filters, Compare, Data Health, Auth & Admin. |
@@ -150,6 +152,7 @@ Mechanical lookup. Owns exact signatures, columns, schedules, and variables.
 | [erd-line.md](./reference/database/erd-line.md) | LINE tables. |
 | [erd-room-capacity.md](./reference/database/erd-room-capacity.md) | Room Capacity tables. |
 | [erd-student-promotions.md](./reference/database/erd-student-promotions.md) | Student Promotions audit tables. |
+| [erd-university-admissions.md](./reference/database/erd-university-admissions.md) | University Admissions case-management tables (`admissions_*`). |
 
 #### Other reference
 

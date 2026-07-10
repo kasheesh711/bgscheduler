@@ -17,6 +17,7 @@ export type NavToolId =
   | "scheduler-metrics"
   | "progress-tests"
   | "student-promotions"
+  | "admissions"
   | "sales-dashboard"
   | "credit-control"
   | "payroll"
@@ -61,7 +62,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     id: "student-lifecycle",
     label: "Student Lifecycle",
-    description: "Student academic progression and recurring progress-test workflows.",
+    description: "Student academic progression, progress-test workflows, and college-admissions cases.",
   },
   {
     id: "finance-revenue",
@@ -160,6 +161,13 @@ export const NAV_TOOLS: NavTool[] = [
     href: "/student-promotions",
     label: "Student Promotions",
     description: "Review and apply audited July promotion actions.",
+    section: "student-lifecycle",
+  },
+  {
+    id: "admissions",
+    href: "/admissions",
+    label: "Admissions",
+    description: "Manage college-admissions counseling cases, checklists, and deadlines.",
     section: "student-lifecycle",
   },
   {

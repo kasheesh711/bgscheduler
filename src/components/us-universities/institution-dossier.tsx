@@ -22,6 +22,7 @@ import { ArrowLeftIcon, ExternalLinkIcon, PlusIcon } from "lucide-react";
 import type { ChartConfiguration } from "chart.js";
 
 import { cn } from "@/lib/utils";
+import { AddToCaseMenu } from "@/components/admissions/add-to-case-menu";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -403,6 +404,7 @@ export function InstitutionDossier({
             <PlusIcon className="size-4" aria-hidden="true" />
             {inCompare ? "In shortlist" : "Add to shortlist"}
           </Button>
+          <AddToCaseMenu unitId={profile.unitId} instName={profile.instName} />
         </div>
       </header>
 

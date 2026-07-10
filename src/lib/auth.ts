@@ -7,8 +7,24 @@ export async function signInCallback({
 }: {
   user: { email?: string | null };
 }): Promise<boolean> {
-  // Admins (admin_users) and teachers (matched to an active tutor contact) may
-  // sign in; everyone else is denied. See resolveUserAccess.
+  // Admissions invite activation (PRD §3.7): an exact-email sign-in flips the
+  // email's invited/bounced case memberships to "active" BEFORE access
+  // resolution, so a freshly invited student/parent passes the active-only
+  // membership filters on this very sign-in. Failures are logged and never
+  // block sign-in for existing users; an invited-only user whose activation
+  // failed is still denied below (fail-closed).
+  if (user.email) {
+    try {
+      const { activateMembershipsForEmail } = await import("@/lib/admissions/members");
+      await activateMembershipsForEmail(user.email);
+    } catch (error) {
+      console.error("Failed to activate admissions memberships at sign-in", error);
+    }
+  }
+
+  // Admins (admin_users), admissions counselors, teachers (matched to an active
+  // tutor contact), and admissions case members (students/parents) may sign in;
+  // everyone else is denied. See resolveUserAccess.
   const access = await resolveUserAccess(user.email);
   return access !== null;
 }
