@@ -17,6 +17,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   admissionsErrorResponse,
+  assertCaseMutationAllowed,
   requireAdmissionsSession,
   requireCaseAccess,
 } from "@/lib/admissions/access";
@@ -26,6 +27,7 @@ import {
   getSectionState,
   reviewSection,
   saveSectionDraft,
+  setSectionFamilySharing,
   submitSection,
 } from "@/lib/admissions/sections";
 
@@ -35,11 +37,13 @@ const saveDraftSchema = z.object({
   // PARTIAL payload — per-field type/option/maxLength rules live in the lib
   // (validateSectionPayload, fail-closed against the section definition).
   payload: z.record(z.string(), z.unknown()),
+  expectedUpdatedAt: z.string().datetime().nullable(),
 });
 
 const sectionActionSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("submit") }),
-  z.object({ action: z.literal("review") }),
+  z.object({ action: z.literal("submit"), expectedUpdatedAt: z.string().datetime() }),
+  z.object({ action: z.literal("review"), expectedUpdatedAt: z.string().datetime() }),
+  z.object({ action: z.literal("share"), sharedWithFamily: z.boolean() }),
 ]);
 
 type SectionRouteContext = { params: Promise<{ caseId: string; sectionKey: string }> };
@@ -63,6 +67,7 @@ export async function PUT(request: Request, ctx: SectionRouteContext) {
     const user = await requireAdmissionsSession();
     const { caseId, sectionKey } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "student");
+    assertCaseMutationAllowed(access);
     if (getSectionDefinition(sectionKey) === null) throw new Error("NotFound");
 
     let body: unknown;
@@ -84,6 +89,7 @@ export async function PUT(request: Request, ctx: SectionRouteContext) {
       access,
       sectionKey,
       payload: parsed.data.payload,
+      expectedUpdatedAt: parsed.data.expectedUpdatedAt,
     });
     return NextResponse.json({ section });
   } catch (error) {
@@ -96,6 +102,7 @@ export async function POST(request: Request, ctx: SectionRouteContext) {
     const user = await requireAdmissionsSession();
     const { caseId, sectionKey } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "student");
+    assertCaseMutationAllowed(access);
     if (getSectionDefinition(sectionKey) === null) throw new Error("NotFound");
 
     let body: unknown;
@@ -113,18 +120,32 @@ export async function POST(request: Request, ctx: SectionRouteContext) {
       );
     }
 
-    if (parsed.data.action === "review") {
+    if (parsed.data.action === "review" || parsed.data.action === "share") {
       // Per-action gate (CM-121): review is counselor+ only — reject a
       // student attempt before any lib call. The lib re-enforces this
       // fail-closed.
       if (!roleAtLeast(access.role, "counselor")) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
-      const section = await reviewSection({ access, sectionKey });
+      const section = parsed.data.action === "review"
+        ? await reviewSection({
+            access,
+            sectionKey,
+            expectedUpdatedAt: parsed.data.expectedUpdatedAt,
+          })
+        : await setSectionFamilySharing({
+            access,
+            sectionKey,
+            sharedWithFamily: parsed.data.sharedWithFamily,
+          });
       return NextResponse.json({ section });
     }
 
-    const result = await submitSection({ access, sectionKey });
+    const result = await submitSection({
+      access,
+      sectionKey,
+      expectedUpdatedAt: parsed.data.expectedUpdatedAt,
+    });
     return NextResponse.json(result);
   } catch (error) {
     return admissionsErrorResponse(ROUTE, error, "Section action failed");

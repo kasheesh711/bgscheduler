@@ -13,6 +13,7 @@ import {
   listSectionStates,
   reviewSection,
   saveSectionDraft,
+  setSectionFamilySharing,
   submitSection,
 } from "@/lib/admissions/sections";
 import type { CaseAccess } from "@/lib/admissions/types";
@@ -21,6 +22,7 @@ const CASE_ID = "11111111-1111-4111-8111-111111111111";
 const ROW_ID = "22222222-2222-4222-8222-222222222222";
 
 const UPDATED_AT = new Date("2026-07-01T00:00:00Z");
+const SECTION_TOKEN = UPDATED_AT.toISOString();
 
 const COUNSELOR_ACCESS: CaseAccess = {
   caseId: CASE_ID,
@@ -59,9 +61,11 @@ interface UpdateCall {
  * fake back to withAuditedTransaction. Each db.select() resolves to the next
  * queued result — the queue order must match the function's query order.
  */
-function fakeDb(queue: unknown[][]) {
+function fakeDb(queue: unknown[][], options: { updateResults?: unknown[][] } = {}) {
   let i = 0;
   let generated = 0;
+  let returnedUpdate = 0;
+  const lockCalls: string[] = [];
   const inserts: InsertCall[] = [];
   const updates: UpdateCall[] = [];
 
@@ -70,6 +74,10 @@ function fakeDb(queue: unknown[][]) {
     for (const method of ["from", "where", "innerJoin", "leftJoin", "orderBy", "groupBy", "limit"]) {
       b[method] = () => b;
     }
+    b.for = (strength: string) => {
+      lockCalls.push(strength);
+      return b;
+    };
     (b as { then: unknown }).then = (
       resolve: (value: unknown) => unknown,
       reject?: (error: unknown) => unknown,
@@ -102,7 +110,9 @@ function fakeDb(queue: unknown[][]) {
         updates.push({ table, set });
         const b: Record<string, unknown> = {};
         b.where = () => b;
-        b.returning = () => Promise.resolve([]);
+        b.returning = () => Promise.resolve(
+          options.updateResults?.[returnedUpdate++] ?? [{ id: ROW_ID }],
+        );
         (b as { then: unknown }).then = (
           resolve: (value: unknown) => unknown,
           reject?: (error: unknown) => unknown,
@@ -116,7 +126,7 @@ function fakeDb(queue: unknown[][]) {
     ...tx,
     transaction: async (cb: (t: unknown) => Promise<unknown>) => cb(tx),
   };
-  return { db: db as never, inserts, updates };
+  return { db: db as never, inserts, lockCalls, updates };
 }
 
 function auditInserts(inserts: InsertCall[]) {
@@ -136,6 +146,7 @@ function sectionRow(overrides: Record<string, unknown> = {}) {
     sectionKey: "about_you",
     payload: { hometown: "Bangkok, Thailand" },
     state: "draft",
+    sharedWithFamily: false,
     submittedAt: null,
     reviewedByEmail: null,
     createdAt: new Date("2026-06-01T00:00:00Z"),
@@ -255,7 +266,7 @@ describe("saveSectionDraft", () => {
 
     await expect(
       saveSectionDraft(
-        { access: STUDENT_ACCESS, sectionKey: "about_you", payload: { hacker_field: "x" } },
+        { access: STUDENT_ACCESS, sectionKey: "about_you", expectedUpdatedAt: null, payload: { hacker_field: "x" } },
         db,
       ),
     ).rejects.toThrow('Unknown field "hacker_field" for section "about_you"');
@@ -268,7 +279,7 @@ describe("saveSectionDraft", () => {
 
     await expect(
       saveSectionDraft(
-        { access: PARENT_ACCESS, sectionKey: "about_you", payload: { hometown: "BKK" } },
+        { access: PARENT_ACCESS, sectionKey: "about_you", expectedUpdatedAt: null, payload: { hometown: "BKK" } },
         db,
       ),
     ).rejects.toThrow("Forbidden");
@@ -282,6 +293,7 @@ describe("saveSectionDraft", () => {
         {
           access: STUDENT_ACCESS,
           sectionKey: "about_you",
+          expectedUpdatedAt: null,
           payload: { preferred_name: "x".repeat(51) },
         },
         db,
@@ -297,6 +309,7 @@ describe("saveSectionDraft", () => {
         {
           access: STUDENT_ACCESS,
           sectionKey: "q_and_a_survey",
+          expectedUpdatedAt: null,
           payload: { preferred_environment: "The moon" },
         },
         db,
@@ -312,6 +325,7 @@ describe("saveSectionDraft", () => {
         {
           access: STUDENT_ACCESS,
           sectionKey: "about_you",
+          expectedUpdatedAt: null,
           payload: { favorite_subjects: ["Math", "Alchemy"] },
         },
         db,
@@ -320,10 +334,10 @@ describe("saveSectionDraft", () => {
   });
 
   it("materializes a missing row as a draft on first save", async () => {
-    const { db, inserts } = fakeDb([[]]);
+    const { db, inserts, lockCalls } = fakeDb([[], [{ id: CASE_ID }], []]);
 
     const state = await saveSectionDraft(
-      { access: STUDENT_ACCESS, sectionKey: "about_you", payload: { hometown: "  Bangkok  " } },
+      { access: STUDENT_ACCESS, sectionKey: "about_you", expectedUpdatedAt: null, payload: { hometown: "  Bangkok  " } },
       db,
     );
 
@@ -337,6 +351,7 @@ describe("saveSectionDraft", () => {
     });
     expect(state.state).toBe("draft");
     expect(state.payload).toEqual({ hometown: "Bangkok" });
+    expect(lockCalls).toEqual(["update", "update", "update"]);
 
     const audits = auditInserts(inserts);
     expect(audits).toHaveLength(1);
@@ -359,6 +374,7 @@ describe("saveSectionDraft", () => {
       {
         access: STUDENT_ACCESS,
         sectionKey: "about_you",
+        expectedUpdatedAt: SECTION_TOKEN,
         payload: { languages: "Thai, English", preferred_name: null },
       },
       db,
@@ -384,7 +400,7 @@ describe("saveSectionDraft", () => {
     const { db, inserts, updates } = fakeDb([[row]]);
 
     const state = await saveSectionDraft(
-      { access: STUDENT_ACCESS, sectionKey: "about_you", payload: { hometown: "Chiang Mai" } },
+      { access: STUDENT_ACCESS, sectionKey: "about_you", expectedUpdatedAt: SECTION_TOKEN, payload: { hometown: "Chiang Mai" } },
       db,
     );
 
@@ -414,7 +430,7 @@ describe("saveSectionDraft", () => {
     const { db, updates } = fakeDb([[row]]);
 
     const state = await saveSectionDraft(
-      { access: STUDENT_ACCESS, sectionKey: "about_you", payload: { hometown: "Chiang Mai" } },
+      { access: STUDENT_ACCESS, sectionKey: "about_you", expectedUpdatedAt: SECTION_TOKEN, payload: { hometown: "Chiang Mai" } },
       db,
     );
 
@@ -431,6 +447,7 @@ describe("saveSectionDraft", () => {
       {
         access: STUDENT_ACCESS,
         sectionKey: "about_you",
+        expectedUpdatedAt: SECTION_TOKEN,
         payload: { hometown: "Bangkok, Thailand", preferred_name: null },
       },
       db,
@@ -445,7 +462,7 @@ describe("saveSectionDraft", () => {
     const { db, inserts } = fakeDb([[sectionRow()]]);
 
     await saveSectionDraft(
-      { access: COUNSELOR_ACCESS, sectionKey: "about_you", payload: { hometown: "Phuket" } },
+      { access: COUNSELOR_ACCESS, sectionKey: "about_you", expectedUpdatedAt: SECTION_TOKEN, payload: { hometown: "Phuket" } },
       db,
     );
 
@@ -463,6 +480,7 @@ describe("saveSectionDraft", () => {
       {
         access: STUDENT_ACCESS,
         sectionKey: "about_you",
+        expectedUpdatedAt: SECTION_TOKEN,
         payload: { favorite_subjects: ["Math", "Physics", "Math"] },
       },
       db,
@@ -471,6 +489,35 @@ describe("saveSectionDraft", () => {
     expect(updates[0].set.payload).toEqual({ favorite_subjects: ["Math", "Physics"] });
     expect(state.payload).toEqual({ favorite_subjects: ["Math", "Physics"] });
   });
+
+  it("rejects a stale autosave token before merging or auditing", async () => {
+    const { db, inserts, updates } = fakeDb([[sectionRow()]]);
+
+    await expect(saveSectionDraft({
+      access: STUDENT_ACCESS,
+      sectionKey: "about_you",
+      expectedUpdatedAt: "2026-06-30T00:00:00.000Z",
+      payload: { hometown: "Chiang Mai" },
+    }, db)).rejects.toThrow("Conflict");
+    expect(updates).toHaveLength(0);
+    expect(auditInserts(inserts)).toHaveLength(0);
+  });
+
+  it("re-reads after the case lock and rejects a losing first-save race", async () => {
+    const { db, inserts } = fakeDb([
+      [],
+      [{ id: CASE_ID }],
+      [sectionRow()],
+    ]);
+
+    await expect(saveSectionDraft({
+      access: STUDENT_ACCESS,
+      sectionKey: "about_you",
+      expectedUpdatedAt: null,
+      payload: { hometown: "Chiang Mai" },
+    }, db)).rejects.toThrow("Conflict");
+    expect(sectionInserts(inserts)).toHaveLength(0);
+  });
 });
 
 describe("submitSection", () => {
@@ -478,7 +525,7 @@ describe("submitSection", () => {
     const { db, inserts, updates } = fakeDb([[sectionRow()]]);
 
     const result = await submitSection(
-      { access: STUDENT_ACCESS, sectionKey: "about_you" },
+      { access: STUDENT_ACCESS, sectionKey: "about_you", expectedUpdatedAt: SECTION_TOKEN },
       db,
     );
 
@@ -501,7 +548,7 @@ describe("submitSection", () => {
     const { db, updates } = fakeDb([[]]);
 
     await expect(
-      submitSection({ access: STUDENT_ACCESS, sectionKey: "about_you" }, db),
+      submitSection({ access: STUDENT_ACCESS, sectionKey: "about_you", expectedUpdatedAt: SECTION_TOKEN }, db),
     ).rejects.toThrow("Conflict");
     expect(updates).toHaveLength(0);
   });
@@ -510,15 +557,27 @@ describe("submitSection", () => {
     const { db } = fakeDb([[sectionRow({ state: "submitted", submittedAt: UPDATED_AT })]]);
 
     await expect(
-      submitSection({ access: STUDENT_ACCESS, sectionKey: "about_you" }, db),
+      submitSection({ access: STUDENT_ACCESS, sectionKey: "about_you", expectedUpdatedAt: SECTION_TOKEN }, db),
     ).rejects.toThrow("Conflict");
+  });
+
+  it("rejects submit when the draft changed after the caller loaded it", async () => {
+    const { db, inserts, updates } = fakeDb([[sectionRow()]]);
+
+    await expect(submitSection({
+      access: STUDENT_ACCESS,
+      sectionKey: "about_you",
+      expectedUpdatedAt: "2026-06-30T00:00:00.000Z",
+    }, db)).rejects.toThrow("Conflict");
+    expect(updates).toHaveLength(0);
+    expect(auditInserts(inserts)).toHaveLength(0);
   });
 
   it("forbids parents", async () => {
     const { db } = fakeDb([]);
 
     await expect(
-      submitSection({ access: PARENT_ACCESS, sectionKey: "about_you" }, db),
+      submitSection({ access: PARENT_ACCESS, sectionKey: "about_you", expectedUpdatedAt: SECTION_TOKEN }, db),
     ).rejects.toThrow("Forbidden");
   });
 });
@@ -530,7 +589,7 @@ describe("reviewSection", () => {
     ]);
 
     const state = await reviewSection(
-      { access: COUNSELOR_ACCESS, sectionKey: "about_you" },
+      { access: COUNSELOR_ACCESS, sectionKey: "about_you", expectedUpdatedAt: SECTION_TOKEN },
       db,
     );
 
@@ -547,7 +606,7 @@ describe("reviewSection", () => {
     const { db } = fakeDb([]);
 
     await expect(
-      reviewSection({ access: STUDENT_ACCESS, sectionKey: "about_you" }, db),
+      reviewSection({ access: STUDENT_ACCESS, sectionKey: "about_you", expectedUpdatedAt: SECTION_TOKEN }, db),
     ).rejects.toThrow("Forbidden");
   });
 
@@ -555,7 +614,7 @@ describe("reviewSection", () => {
     const { db } = fakeDb([[sectionRow()]]);
 
     await expect(
-      reviewSection({ access: COUNSELOR_ACCESS, sectionKey: "about_you" }, db),
+      reviewSection({ access: COUNSELOR_ACCESS, sectionKey: "about_you", expectedUpdatedAt: SECTION_TOKEN }, db),
     ).rejects.toThrow("Conflict");
   });
 
@@ -563,7 +622,44 @@ describe("reviewSection", () => {
     const { db } = fakeDb([[]]);
 
     await expect(
-      reviewSection({ access: COUNSELOR_ACCESS, sectionKey: "about_you" }, db),
+      reviewSection({ access: COUNSELOR_ACCESS, sectionKey: "about_you", expectedUpdatedAt: SECTION_TOKEN }, db),
     ).rejects.toThrow("NotFound");
+  });
+
+  it("rejects review when an autosave won the concurrency race", async () => {
+    const { db, inserts, updates } = fakeDb([[
+      sectionRow({ state: "submitted", submittedAt: UPDATED_AT }),
+    ]]);
+
+    await expect(reviewSection({
+      access: COUNSELOR_ACCESS,
+      sectionKey: "about_you",
+      expectedUpdatedAt: "2026-06-30T00:00:00.000Z",
+    }, db)).rejects.toThrow("Conflict");
+    expect(updates).toHaveLength(0);
+    expect(auditInserts(inserts)).toHaveLength(0);
+  });
+});
+
+describe("setSectionFamilySharing", () => {
+  it("lets counselors explicitly release and retract a saved section", async () => {
+    const { db, inserts, updates } = fakeDb([[sectionRow()]]);
+    const state = await setSectionFamilySharing({
+      access: COUNSELOR_ACCESS,
+      sectionKey: "about_you",
+      sharedWithFamily: true,
+    }, db);
+    expect(state.sharedWithFamily).toBe(true);
+    expect(updates[0].set).toMatchObject({ sharedWithFamily: true });
+    expect(auditInserts(inserts)[0]).toMatchObject({ action: "family_sharing" });
+  });
+
+  it("forbids students from releasing self-report data to parents", async () => {
+    const { db } = fakeDb([]);
+    await expect(setSectionFamilySharing({
+      access: STUDENT_ACCESS,
+      sectionKey: "about_you",
+      sharedWithFamily: true,
+    }, db)).rejects.toThrow("Forbidden");
   });
 });

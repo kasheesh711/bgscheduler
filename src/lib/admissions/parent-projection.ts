@@ -1,53 +1,78 @@
-// Admissions Case Management — parent projection: the ONLY builder of
-// parent-facing payloads (whitelist).
+// Admissions Case Management — the ONLY builder of family-facing case data.
 //
-// Design: docs/casemanagementsystem_design.md §2.3 (explicit DTO; "new fields
-// must be added to the DTO deliberately — leaks are structural, not
-// conventional"), §5.3 (parent single-scroll page contents). PRD CM-130 and
-// the §3 visibility rules (§3.6).
-//
-// Core rules:
-// - Every field on ParentDashboard is built FIELD-BY-FIELD from named source
-//   values — no spreads of database rows or sibling DTOs — so adding a column
-//   upstream can never leak here without a deliberate edit to this file.
-// - Forbidden by construction: aid fields (aidOffered/aidNotes), counselor
-//   commentary (counselorStage, staff_only note bodies), per-college
-//   completeness detail, unreleased scores (CM-83), member email addresses,
-//   wiseStudentKey, and anything audit-related. None of those source fields
-//   are ever assigned to the DTO.
-// - Raw test scores appear ONLY when a counselor set scoreReleasedToParent
-//   (CM-83); otherwise the `score` key is OMITTED entirely (never null), so
-//   serialized payloads carry no trace of an unreleased score.
-// - sharedNotes re-filters to visibility "shared_with_family" on top of
-//   notes.ts's role-shaped read (defense in depth, fail-closed).
-// - All date comparisons use Asia/Bangkok calendar semantics, matching
-//   calendar.ts / testing.ts.
-//
-// Error contract (admissionsErrorResponse maps these): malformed caseId /
-// missing case → Error("NotFound"); guards upstream (requireCaseAccess) own
-// Forbidden.
+// Parent payloads are a closed whitelist. Database/domain rows are never
+// spread into the response: every approved field is copied deliberately and
+// staff notes, audit attribution, internal ids, membership emails, Wise/OAuth
+// data, unreleased scores, accommodations, and private self-reflection stay
+// structurally unreachable.
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import {
+  admissionsApplicationEvents,
   admissionsCases,
+  admissionsCollegeListItems,
+  admissionsCollegeRequirements,
   admissionsCohorts,
+  admissionsFinancialAidOffers,
+  admissionsScholarships,
+  admissionsSelfReportSections,
   admissionsStudents,
 } from "@/lib/db/schema";
 import { BANGKOK_TIME_ZONE } from "@/lib/bangkok-time";
+import {
+  listAcademicRecordsForCase,
+  type AcademicRecordPayload,
+  type AdmissionsAcademicSystem,
+} from "./academics";
+import {
+  listActivitiesForCase,
+  type AdmissionsCommonAppBlock,
+  type AdmissionsUcBlock,
+} from "./activities";
 import { listAnnouncementsForCase } from "./announcements";
-import { getUpcomingDeadlines, type CalendarItemSource } from "./calendar";
-import { computeProgress } from "./checklists";
+import { listAwardsForCase } from "./awards";
+import {
+  getUpcomingDeadlines,
+  type CalendarItemSource,
+} from "./calendar";
+import {
+  computeProgress,
+  listCaseTasks,
+  type AdmissionsTaskRecurrence,
+  type AdmissionsTaskStatus,
+} from "./checklists";
 import {
   ADMISSIONS_APP_ROUND_LABELS,
-  listCollegesForCase,
   type AdmissionsAppRound,
   type AdmissionsAppStatus,
   type AdmissionsCollegeCategory,
+  type AdmissionsDecisionEvent,
 } from "./colleges";
 import type { AdmissionsPhaseKey } from "./config";
+import { listEssaysForCase, type AdmissionsEssayStatus } from "./essays";
 import { isUuidShaped } from "./members";
+import type { AdmissionsTaskOwner } from "./meetings";
 import { listNotesForRole } from "./notes";
+import {
+  computeCollegeCompleteness,
+  listRecommenders,
+  type AdmissionsCollegeCompleteness,
+  type AdmissionsRecommenderAskStatus,
+} from "./recommenders";
+import type { CollegeRequirementKind, ScholarshipStatus } from "./shared/college-details";
+import type {
+  AdmissionsAwardGradeLevel,
+  AdmissionsAwardRecognitionLevel,
+} from "./shared/awards";
+import type {
+  AdmissionsTestScoreDetails,
+  AdmissionsTestSittingStatus,
+} from "./shared/testing";
+import {
+  isSafeAdmissionsUrl,
+  normalizeAdmissionsUrl,
+} from "./shared/urls";
 import { getPhaseProgress } from "./student-home";
 import {
   listSittingsForCase,
@@ -56,125 +81,255 @@ import {
 } from "./testing";
 import type { AdmissionsCaseStatus } from "./types";
 
-/** Upcoming deadlines shown on the parent dashboard (design §5.3). */
-export const PARENT_UPCOMING_DEADLINES_LIMIT = 10;
-
-/** Announcements shown on the parent dashboard, newest first. */
+/** Full open-deadline feed, capped at the calendar domain's hard maximum. */
+export const PARENT_UPCOMING_DEADLINES_LIMIT = 100;
 export const PARENT_ANNOUNCEMENTS_LIMIT = 10;
 
-// ── Parent DTO (exhaustive and closed — design §2.3) ────────────────────
-
-/** Overall checklist progress for parents: counts only, no verification detail. */
 export interface ParentProgressSummary {
   done: number;
   total: number;
-  /** 0–100 integer; 0 when the case has no tasks. */
   percent: number;
 }
 
-/** One per-phase progress ring for parents (season-relevant phases only). */
 export interface ParentPhaseProgress {
   phase: AdmissionsPhaseKey;
   label: string;
   done: number;
   total: number;
-  /** 0–100 integer. */
   percent: number;
 }
 
-/**
- * One college list row for parents: name/round/status/deadline/category ONLY
- * (design §2.3) — no aid fields, no completeness detail, no IPEDS internals.
- */
+export interface ParentProfileField {
+  key: string;
+  label: string;
+  value: string | string[];
+}
+
+export interface ParentProfile {
+  preferredName: string | null;
+  phone: string | null;
+  school: string | null;
+  schoolCounselor: string | null;
+  graduationYear: number;
+  /** Present only when About You was explicitly shared with family. */
+  sharedDetails: ParentProfileField[];
+}
+
+export interface ParentAcademicRecord {
+  system: AdmissionsAcademicSystem;
+  effectiveDate: string;
+  payload: AcademicRecordPayload;
+}
+
+export interface ParentChecklistItem {
+  phase: string;
+  title: string;
+  description: string | null;
+  owner: AdmissionsTaskOwner;
+  status: AdmissionsTaskStatus;
+  dueDate: string | null;
+  recurrence: AdmissionsTaskRecurrence | null;
+}
+
+export interface ParentCollegeDecision {
+  event: AdmissionsDecisionEvent;
+  eventDate: string;
+}
+
+export interface ParentCollegeRequirement {
+  kind: CollegeRequirementKind;
+  title: string;
+  status: AdmissionsTaskStatus;
+  owner: AdmissionsTaskOwner;
+  dueDate: string | null;
+  required: boolean;
+  sourceUrl: string | null;
+}
+
 export interface ParentCollegeListEntry {
   instName: string;
   round: AdmissionsAppRound;
-  /** Display label for `round` (ADMISSIONS_APP_ROUND_LABELS). */
   roundLabel: string;
   appStatus: AdmissionsAppStatus;
-  /** Application deadline, "YYYY-MM-DD"; null when not set. */
   deadline: string | null;
   category: AdmissionsCollegeCategory;
+  firstChoiceMajor: string | null;
+  secondChoiceMajor: string | null;
+  admissionsUrl: string | null;
+  portalUrl: string | null;
+  completeness: AdmissionsCollegeCompleteness;
+  decisions: ParentCollegeDecision[];
+  requirements: ParentCollegeRequirement[];
 }
 
-/** One upcoming dated item for parents (aggregated calendar, CM-100). */
+export interface ParentRecommenderCollege {
+  collegeName: string;
+  submitted: boolean;
+  submittedAt: string | null;
+}
+
+export interface ParentRecommender {
+  name: string;
+  roleSubject: string | null;
+  askStatus: AdmissionsRecommenderAskStatus;
+  colleges: ParentRecommenderCollege[];
+}
+
+export interface ParentEssay {
+  collegeName: string | null;
+  prompt: string;
+  status: AdmissionsEssayStatus;
+  deadline: string | null;
+  /** Omitted unless the counselor explicitly shared this essay with family. */
+  googleDocUrl?: string;
+}
+
+export interface ParentActivity {
+  name: string;
+  fullDescription: string | null;
+  commonApp: AdmissionsCommonAppBlock | null;
+  uc: AdmissionsUcBlock | null;
+  commonAppRank: number | null;
+}
+
+export interface ParentAward {
+  title: string;
+  organization: string | null;
+  gradeLevels: AdmissionsAwardGradeLevel[];
+  recognitionLevels: AdmissionsAwardRecognitionLevel[];
+  awardDate: string | null;
+  commonAppRank: number | null;
+  ucEligibilityNarrative: string | null;
+  ucAchievementNarrative: string | null;
+}
+
 export interface ParentDeadline {
   source: CalendarItemSource;
   title: string;
-  /** "YYYY-MM-DD" (Asia/Bangkok calendar semantics). */
   date: string;
   overdue: boolean;
 }
 
-/** One announcement for parents — author identity deliberately omitted. */
 export interface ParentAnnouncement {
   title: string;
   body: string;
   createdAt: string;
 }
 
-/**
- * One test sitting's milestone flags for parents (CM-83): progress booleans
- * always; the raw score ONLY when a counselor released it — the `score` key
- * is omitted entirely (never null) for unreleased or non-numeric scores.
- */
 export interface ParentTestingMilestone {
   testType: AdmissionsTestType;
-  /** Test date, "YYYY-MM-DD". */
+  subject: string | null;
   testDate: string;
-  /** Registration window closed (deadline strictly before today, Bangkok) or no registration step (null deadline). */
+  registrationDeadline: string | null;
+  lateRegistrationDeadline: string | null;
+  status: AdmissionsTestSittingStatus;
   registered: boolean;
-  /** Test date is strictly before today (Bangkok). */
   taken: boolean;
-  /** A score has been recorded on the sitting. */
   scoreReceived: boolean;
-  /** Present ONLY when scoreReleasedToParent AND the score parses numerically. */
+  /** Present only when scoreReleasedToParent is true. */
   score?: number;
+  /** Present only when scoreReleasedToParent is true. */
+  scoreDetails?: AdmissionsTestScoreDetails;
 }
 
-/** One family-shared note — author identity deliberately omitted. */
+export interface ParentScholarship {
+  collegeName: string | null;
+  name: string;
+  provider: string | null;
+  url: string | null;
+  requirements: string | null;
+  deadline: string | null;
+  status: ScholarshipStatus;
+  outcome: string | null;
+  offeredAmount: string | null;
+}
+
+export interface ParentMoneyBreakdownItem {
+  label: string;
+  amount: number | null;
+}
+
+export interface ParentFinancialAidOffer {
+  collegeName: string;
+  currency: string;
+  awardYear: number;
+  costBreakdown: ParentMoneyBreakdownItem[];
+  giftAidBreakdown: ParentMoneyBreakdownItem[];
+  loanBreakdown: ParentMoneyBreakdownItem[];
+  workStudyAmount: string | null;
+  netCost: string | null;
+  remainingBalance: string | null;
+  totalCost: number;
+  totalGiftAid: number;
+  totalLoans: number;
+  derivedNetCost: number;
+  derivedRemainingBalance: number;
+}
+
 export interface ParentSharedNote {
   body: string;
   createdAt: string;
 }
 
-/**
- * The complete parent-facing payload (design §2.3). This interface is
- * exhaustive and closed: parent routes serve this shape and nothing else, and
- * every field is assembled field-by-field in buildParentDashboard — a new
- * field reaches parents only via a deliberate edit here.
- */
+/** Complete, closed family-facing case contract. */
 export interface ParentDashboard {
   studentName: string;
   cohortName: string;
   caseStatus: AdmissionsCaseStatus;
+  profile: ParentProfile;
+  academics: ParentAcademicRecord[];
   progress: ParentProgressSummary;
-  /** Season-relevant per-phase rings, canonical phase order. */
   phaseProgress: ParentPhaseProgress[];
-  /** College list, deadline ascending (nulls last). */
+  checklist: ParentChecklistItem[];
   collegeList: ParentCollegeListEntry[];
-  /** Next open deadlines (≤10), overdue first. */
+  recommenders: ParentRecommender[];
+  essays: ParentEssay[];
+  activities: ParentActivity[];
+  awards: ParentAward[];
   upcomingDeadlines: ParentDeadline[];
-  /** Case + cohort announcements (≤10), newest first. */
   announcements: ParentAnnouncement[];
-  /** Per-sitting milestone flags, next sitting first. */
   testingMilestones: ParentTestingMilestone[];
-  /** Only visibility "shared_with_family" notes, newest first. */
+  scholarships: ParentScholarship[];
+  financialAid: ParentFinancialAidOffer[];
   sharedNotes: ParentSharedNote[];
 }
 
-/** buildParentDashboard options. */
 export interface BuildParentDashboardOptions {
-  /** Reference instant for deadlines/milestones; defaults to the current time. */
   now?: Date;
 }
 
-// ── Internal helpers ────────────────────────────────────────────────────
+const PROFILE_FIELDS = [
+  ["preferred_name", "Preferred name"],
+  ["hometown", "Hometown"],
+  ["languages", "Languages"],
+  ["family_background", "Family background"],
+  ["school_life", "School life"],
+  ["date_of_birth", "Date of birth"],
+  ["pronouns", "Pronouns"],
+  ["gender_identity", "Gender identity"],
+  ["citizenship_status", "Citizenship or residency"],
+  ["countries_of_citizenship", "Countries of citizenship"],
+  ["birth_country", "Country of birth"],
+  ["years_in_current_country", "Years in current country"],
+  ["personal_email", "Personal email"],
+  ["primary_phone", "Primary phone"],
+  ["home_address", "Home address"],
+  ["household_members", "Household members"],
+  ["parent_guardian_education", "Parent or guardian education"],
+  ["parent_guardian_occupations", "Parent or guardian occupations"],
+  ["household_context", "Household context"],
+  ["current_school", "Current school"],
+  ["expected_graduation_date", "Expected graduation date"],
+  ["previous_schools", "Previous schools"],
+  ["curriculum_history", "Curriculum history"],
+  ["school_counselor_contact", "School counselor contact"],
+  ["first_language", "First language"],
+  ["language_proficiency", "Language proficiency"],
+] as const;
 
-/**
- * Asia/Bangkok calendar date ("YYYY-MM-DD") for an instant (mirrors the
- * private helper in calendar.ts / testing.ts / student-home.ts).
- */
+const SENSITIVE_BREAKDOWN_KEY =
+  /password|credential|oauth|token|secret|passport|national[ _-]?id/i;
+
 function getBangkokDateKey(now: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: BANGKOK_TIME_ZONE,
@@ -186,42 +341,68 @@ function getBangkokDateKey(now: Date): string {
   return `${pick("year")}-${pick("month")}-${pick("day")}`;
 }
 
-// ── Builder (the ONLY parent payload assembly point) ────────────────────
+function sharedProfileFields(
+  row: { payload: Record<string, unknown>; sharedWithFamily: boolean } | undefined,
+): ParentProfileField[] {
+  if (!row?.sharedWithFamily) return [];
+  const fields: ParentProfileField[] = [];
+  for (const [key, label] of PROFILE_FIELDS) {
+    const value = row.payload[key];
+    if (typeof value === "string" && value.trim()) {
+      fields.push({ key, label, value: value.trim() });
+      continue;
+    }
+    if (Array.isArray(value)) {
+      const values = value.filter((part): part is string => typeof part === "string" && part.trim() !== "");
+      if (values.length > 0) fields.push({ key, label, value: values });
+    }
+  }
+  return fields;
+}
 
-/**
- * Builds the parent dashboard payload for one case (design §2.3/§5.3, PRD
- * CM-130). Parent routes must call ONLY this helper — it is the structural
- * whitelist between staff data and the family surface.
- *
- * 1. Resolve the case header with a column-scoped select (status, student
- *    fullName, cohort name) joined through admissions_students and
- *    admissions_cohorts — sensitive student columns (wiseStudentKey, emails,
- *    externalLinks) are never even fetched. Malformed caseId or a missing/
- *    soft-deleted case throws "NotFound".
- * 2. progress: checklists.ts's CM-24 rollup reduced to {done, total, percent}
- *    (verification detail is staff-facing and dropped).
- * 3. phaseProgress: student-home.ts's season-relevant rings reduced to
- *    {phase, label, done, total, percent}.
- * 4. collegeList: colleges.ts's live rows reduced to name/round/status/
- *    deadline/category plus a display roundLabel — aid fields, completeness,
- *    and IPEDS internals never cross (design §2.3).
- * 5. upcomingDeadlines: calendar.ts's open items (≤10, overdue first) reduced
- *    to {source, title, date, overdue}.
- * 6. announcements: family-visible by design (CM-90), capped at 10 newest,
- *    reduced to {title, body, createdAt} — author email dropped.
- * 7. testingMilestones: per sitting {testType, testDate, registered, taken,
- *    scoreReceived} where registered = registration deadline strictly before
- *    today (Bangkok) or no registration step (null deadline), taken = test
- *    date strictly before today, scoreReceived = a score is recorded. The raw
- *    `score` is attached ONLY when scoreReleasedToParent (CM-83) AND it
- *    parses as a plain number (fail-closed) — otherwise the key is omitted
- *    entirely, so unreleased scores leave no trace in the serialized payload.
- * 8. sharedNotes: notes.ts's parent-shaped read re-filtered to
- *    "shared_with_family" (defense in depth), reduced to {body, createdAt} —
- *    author email and visibility dropped.
- *
- * @returns the closed ParentDashboard DTO.
- */
+/** Legacy rows can predate current write validation; family reads fail closed. */
+function safeFamilyUrl(value: string | null | undefined): string | null {
+  if (!value || !isSafeAdmissionsUrl(value)) return null;
+  return normalizeAdmissionsUrl(value, "family URL") ?? null;
+}
+
+function sanitizeAcademicPayload(payload: AcademicRecordPayload): AcademicRecordPayload {
+  return {
+    ...payload,
+    transcriptUrl: safeFamilyUrl(payload.transcriptUrl),
+    schoolProfileUrl: safeFamilyUrl(payload.schoolProfileUrl),
+  } as AcademicRecordPayload;
+}
+
+function moneyBreakdown(value: Record<string, number | null>): ParentMoneyBreakdownItem[] {
+  return Object.entries(value).flatMap(([rawLabel, amount]) => {
+    const label = rawLabel.trim();
+    if (!label || SENSITIVE_BREAKDOWN_KEY.test(label)) return [];
+    if (amount !== null && (typeof amount !== "number" || !Number.isFinite(amount))) return [];
+    return [{ label, amount }];
+  });
+}
+
+function sumBreakdown(value: ParentMoneyBreakdownItem[]): number {
+  return value.reduce((sum, item) => sum + (item.amount ?? 0), 0);
+}
+
+function moneyNumber(value: string | null): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+const EMPTY_COMPLETENESS: AdmissionsCollegeCompleteness = {
+  recsAgreed: 0,
+  recsSubmitted: 0,
+  recsTotal: 0,
+  transcriptSent: false,
+  schoolReportSent: false,
+  scoreSendsSent: 0,
+  complete: false,
+};
+
+/** Builds the family DTO field-by-field. Call only after requireCaseAccess. */
 export async function buildParentDashboard(
   caseId: string,
   options: BuildParentDashboardOptions = {},
@@ -231,45 +412,162 @@ export async function buildParentDashboard(
   const now = options.now ?? new Date();
   const todayKey = getBangkokDateKey(now);
 
-  // Step 1 — case header (column-scoped: no sensitive student columns).
-  const headerRows = await db
-    .select({
+  const [
+    headerRows,
+    collegeRows,
+    aboutYouRows,
+    scholarshipRows,
+    fullProgress,
+    rings,
+    taskRows,
+    deadlineRows,
+    announcementRows,
+    sittingRows,
+    noteRows,
+    academicRows,
+    awardRows,
+    activityRows,
+    essayRows,
+    recommenderRows,
+    completenessMap,
+  ] = await Promise.all([
+    db.select({
       status: admissionsCases.status,
       studentFullName: admissionsStudents.fullName,
+      preferredName: admissionsStudents.preferredName,
+      phone: admissionsStudents.phone,
+      school: admissionsStudents.school,
+      schoolCounselor: admissionsStudents.schoolCounselor,
       cohortName: admissionsCohorts.name,
-    })
-    .from(admissionsCases)
-    .innerJoin(admissionsStudents, eq(admissionsCases.studentId, admissionsStudents.id))
-    .innerJoin(admissionsCohorts, eq(admissionsCases.cohortId, admissionsCohorts.id))
-    .where(and(
-      eq(admissionsCases.id, caseId),
-      isNull(admissionsCases.deletedAt),
-      isNull(admissionsStudents.deletedAt),
-    ))
-    .limit(1);
+      graduationYear: admissionsCohorts.graduationYear,
+    }).from(admissionsCases)
+      .innerJoin(admissionsStudents, eq(admissionsCases.studentId, admissionsStudents.id))
+      .innerJoin(admissionsCohorts, eq(admissionsCases.cohortId, admissionsCohorts.id))
+      .where(and(
+        eq(admissionsCases.id, caseId),
+        isNull(admissionsCases.deletedAt),
+        isNull(admissionsStudents.deletedAt),
+      )).limit(1),
+    db.select({
+      id: admissionsCollegeListItems.id,
+      instName: admissionsCollegeListItems.instName,
+      round: admissionsCollegeListItems.round,
+      deadline: admissionsCollegeListItems.deadline,
+      appStatus: admissionsCollegeListItems.appStatus,
+      category: admissionsCollegeListItems.category,
+      firstChoiceMajor: admissionsCollegeListItems.firstChoiceMajor,
+      secondChoiceMajor: admissionsCollegeListItems.secondChoiceMajor,
+      admissionsUrl: admissionsCollegeListItems.admissionsUrl,
+      portalUrl: admissionsCollegeListItems.portalUrl,
+    }).from(admissionsCollegeListItems).where(and(
+      eq(admissionsCollegeListItems.caseId, caseId),
+      isNull(admissionsCollegeListItems.deletedAt),
+    )).orderBy(asc(admissionsCollegeListItems.deadline), asc(admissionsCollegeListItems.instName)),
+    db.select({
+      payload: admissionsSelfReportSections.payload,
+      sharedWithFamily: admissionsSelfReportSections.sharedWithFamily,
+    }).from(admissionsSelfReportSections).where(and(
+      eq(admissionsSelfReportSections.caseId, caseId),
+      eq(admissionsSelfReportSections.sectionKey, "about_you"),
+    )).limit(1),
+    db.select({
+      listItemId: admissionsScholarships.listItemId,
+      name: admissionsScholarships.name,
+      provider: admissionsScholarships.provider,
+      url: admissionsScholarships.url,
+      requirements: admissionsScholarships.requirements,
+      deadline: admissionsScholarships.deadline,
+      status: admissionsScholarships.status,
+      outcome: admissionsScholarships.outcome,
+      offeredAmount: admissionsScholarships.offeredAmount,
+    }).from(admissionsScholarships).where(and(
+      eq(admissionsScholarships.caseId, caseId),
+      isNull(admissionsScholarships.deletedAt),
+    )).orderBy(asc(admissionsScholarships.deadline), asc(admissionsScholarships.name)),
+    computeProgress(caseId, db),
+    getPhaseProgress(caseId, { now }, db),
+    listCaseTasks(caseId, db),
+    getUpcomingDeadlines(caseId, PARENT_UPCOMING_DEADLINES_LIMIT, now, db),
+    listAnnouncementsForCase(caseId, db),
+    listSittingsForCase(caseId, { now }, db),
+    listNotesForRole(caseId, "parent", db),
+    listAcademicRecordsForCase(caseId, db),
+    listAwardsForCase(caseId, { includeInternalNotes: false }, db),
+    listActivitiesForCase(caseId, db),
+    listEssaysForCase(caseId, { now }, db),
+    listRecommenders(caseId, db),
+    computeCollegeCompleteness(caseId, db),
+  ]);
+
   const header = headerRows[0];
   if (!header) throw new Error("NotFound");
+  const collegeIds = collegeRows.map((row) => row.id);
 
-  // Step 2 — overall progress (verifiedCount deliberately dropped).
-  const fullProgress = await computeProgress(caseId, db);
-  const progress: ParentProgressSummary = {
-    done: fullProgress.done,
-    total: fullProgress.total,
-    percent: fullProgress.percent,
-  };
+  const [requirementRows, aidRows, eventRows] = collegeIds.length === 0
+    ? [[], [], []] as const
+    : await Promise.all([
+        db.select({
+          listItemId: admissionsCollegeRequirements.listItemId,
+          kind: admissionsCollegeRequirements.kind,
+          title: admissionsCollegeRequirements.title,
+          status: admissionsCollegeRequirements.status,
+          owner: admissionsCollegeRequirements.owner,
+          dueDate: admissionsCollegeRequirements.dueDate,
+          required: admissionsCollegeRequirements.required,
+          sourceUrl: admissionsCollegeRequirements.sourceUrl,
+          sortOrder: admissionsCollegeRequirements.sortOrder,
+        }).from(admissionsCollegeRequirements).where(and(
+          inArray(admissionsCollegeRequirements.listItemId, collegeIds),
+          isNull(admissionsCollegeRequirements.deletedAt),
+        )).orderBy(asc(admissionsCollegeRequirements.sortOrder)),
+        db.select({
+          listItemId: admissionsFinancialAidOffers.listItemId,
+          currency: admissionsFinancialAidOffers.currency,
+          awardYear: admissionsFinancialAidOffers.awardYear,
+          costBreakdown: admissionsFinancialAidOffers.costBreakdown,
+          giftAidBreakdown: admissionsFinancialAidOffers.giftAidBreakdown,
+          loanBreakdown: admissionsFinancialAidOffers.loanBreakdown,
+          workStudyAmount: admissionsFinancialAidOffers.workStudyAmount,
+          netCost: admissionsFinancialAidOffers.netCost,
+          remainingBalance: admissionsFinancialAidOffers.remainingBalance,
+        }).from(admissionsFinancialAidOffers).where(
+          inArray(admissionsFinancialAidOffers.listItemId, collegeIds),
+        ),
+        db.select({
+          listItemId: admissionsApplicationEvents.listItemId,
+          event: admissionsApplicationEvents.event,
+          eventDate: admissionsApplicationEvents.eventDate,
+          createdAt: admissionsApplicationEvents.createdAt,
+        }).from(admissionsApplicationEvents).where(
+          inArray(admissionsApplicationEvents.listItemId, collegeIds),
+        ).orderBy(asc(admissionsApplicationEvents.eventDate), asc(admissionsApplicationEvents.createdAt)),
+      ]);
 
-  // Step 3 — per-phase rings (verifiedCount deliberately dropped).
-  const rings = await getPhaseProgress(caseId, { now }, db);
-  const phaseProgress: ParentPhaseProgress[] = rings.map((ring) => ({
-    phase: ring.phase,
-    label: ring.label,
-    done: ring.done,
-    total: ring.total,
-    percent: ring.percent,
-  }));
+  const collegeNameById = new Map(collegeRows.map((row) => [row.id, row.instName]));
+  const requirementsByCollege = new Map<string, ParentCollegeRequirement[]>();
+  for (const row of requirementRows) {
+    const requirement: ParentCollegeRequirement = {
+      kind: row.kind as CollegeRequirementKind,
+      title: row.title,
+      status: row.status,
+      owner: row.owner,
+      dueDate: row.dueDate,
+      required: row.required,
+      sourceUrl: safeFamilyUrl(row.sourceUrl),
+    };
+    const list = requirementsByCollege.get(row.listItemId);
+    if (list) list.push(requirement);
+    else requirementsByCollege.set(row.listItemId, [requirement]);
+  }
 
-  // Step 4 — college list (no aid, no completeness, no IPEDS internals).
-  const collegeRows = await listCollegesForCase(caseId, {}, db);
+  const decisionsByCollege = new Map<string, ParentCollegeDecision[]>();
+  for (const row of eventRows) {
+    const decision: ParentCollegeDecision = { event: row.event, eventDate: row.eventDate };
+    const list = decisionsByCollege.get(row.listItemId);
+    if (list) list.push(decision);
+    else decisionsByCollege.set(row.listItemId, [decision]);
+  }
+
   const collegeList: ParentCollegeListEntry[] = collegeRows.map((row) => ({
     instName: row.instName,
     round: row.round,
@@ -277,69 +575,197 @@ export async function buildParentDashboard(
     appStatus: row.appStatus,
     deadline: row.deadline,
     category: row.category,
+    firstChoiceMajor: row.firstChoiceMajor,
+    secondChoiceMajor: row.secondChoiceMajor,
+    admissionsUrl: safeFamilyUrl(row.admissionsUrl),
+    portalUrl: safeFamilyUrl(row.portalUrl),
+    completeness: completenessMap.get(row.id) ?? { ...EMPTY_COMPLETENESS },
+    decisions: decisionsByCollege.get(row.id) ?? [],
+    requirements: requirementsByCollege.get(row.id) ?? [],
   }));
 
-  // Step 5 — next open deadlines across modules (≤10, overdue first).
-  const deadlineItems = await getUpcomingDeadlines(
-    caseId,
-    PARENT_UPCOMING_DEADLINES_LIMIT,
-    now,
-    db,
-  );
-  const upcomingDeadlines: ParentDeadline[] = deadlineItems.map((item) => ({
-    source: item.source,
-    title: item.title,
-    date: item.date,
-    overdue: item.overdue,
+  const profile: ParentProfile = {
+    preferredName: header.preferredName,
+    phone: header.phone,
+    school: header.school,
+    schoolCounselor: header.schoolCounselor,
+    graduationYear: header.graduationYear,
+    sharedDetails: sharedProfileFields(aboutYouRows[0]),
+  };
+
+  const academics: ParentAcademicRecord[] = academicRows.map((row) => ({
+    system: row.system,
+    effectiveDate: row.effectiveDate,
+    payload: sanitizeAcademicPayload(row.payload),
   }));
 
-  // Step 6 — announcements (≤10 newest; author email dropped).
-  const announcementRows = (await listAnnouncementsForCase(caseId, db))
-    .slice(0, PARENT_ANNOUNCEMENTS_LIMIT);
-  const announcements: ParentAnnouncement[] = announcementRows.map((row) => ({
+  const checklist: ParentChecklistItem[] = taskRows.map((row) => ({
+    phase: row.phase,
     title: row.title,
-    body: row.body,
-    createdAt: row.createdAt,
+    description: row.description,
+    owner: row.owner,
+    status: row.status,
+    dueDate: row.dueDate,
+    recurrence: row.recurrence,
   }));
 
-  // Step 7 — testing milestones (raw score ONLY when released, CM-83).
-  const sittings = await listSittingsForCase(caseId, { now }, db);
-  const testingMilestones: ParentTestingMilestone[] = sittings.map((sitting) => {
+  const recommenders: ParentRecommender[] = recommenderRows.map((row) => ({
+    name: row.name,
+    roleSubject: row.roleSubject,
+    askStatus: row.askStatus,
+    colleges: row.colleges.flatMap((link) => {
+      const collegeName = collegeNameById.get(link.listItemId);
+      return collegeName
+        ? [{ collegeName, submitted: link.submitted, submittedAt: link.submittedAt }]
+        : [];
+    }),
+  }));
+
+  const essays: ParentEssay[] = essayRows.map((row) => {
+    const essay: ParentEssay = {
+      collegeName: row.listItemId ? collegeNameById.get(row.listItemId) ?? null : null,
+      prompt: row.prompt,
+      status: row.status,
+      deadline: row.deadline,
+    };
+    const googleDocUrl = row.sharedWithFamily ? safeFamilyUrl(row.driveUrl) : null;
+    if (googleDocUrl) essay.googleDocUrl = googleDocUrl;
+    return essay;
+  });
+
+  const activities: ParentActivity[] = activityRows.map((row) => ({
+    name: row.name,
+    fullDescription: row.fullDescription,
+    commonApp: row.commonApp,
+    uc: row.uc,
+    commonAppRank: row.commonAppRank,
+  }));
+
+  const awards: ParentAward[] = awardRows.map((row) => ({
+    title: row.title,
+    organization: row.organization,
+    gradeLevels: row.gradeLevels,
+    recognitionLevels: row.recognitionLevels,
+    awardDate: row.awardDate,
+    commonAppRank: row.commonAppRank,
+    ucEligibilityNarrative: row.ucEligibilityNarrative,
+    ucAchievementNarrative: row.ucAchievementNarrative,
+  }));
+
+  const testingMilestones: ParentTestingMilestone[] = sittingRows.map((sitting) => {
+    const status = sitting.status ?? "planned";
     const milestone: ParentTestingMilestone = {
       testType: sitting.testType,
+      subject: sitting.subject ?? null,
       testDate: sitting.testDate,
+      registrationDeadline: sitting.registrationDeadline,
+      lateRegistrationDeadline: sitting.lateRegistrationDeadline ?? null,
+      status,
       registered:
+        status !== "planned" && status !== "canceled" ||
         sitting.registrationDeadline === null ||
         sitting.registrationDeadline < todayKey,
-      taken: sitting.testDate < todayKey,
-      scoreReceived: sitting.actualScore !== null,
+      taken:
+        status === "taken" ||
+        status === "score_received" ||
+        sitting.testDate < todayKey,
+      scoreReceived: sitting.actualScore !== null || (sitting.scoreDetails ?? null) !== null,
     };
-    if (sitting.scoreReleasedToParent && sitting.actualScore !== null) {
-      const numericScore = parseScoreValue(sitting.actualScore);
-      if (numericScore !== null) milestone.score = numericScore;
+    if (sitting.scoreReleasedToParent) {
+      if (sitting.scoreDetails != null) milestone.scoreDetails = sitting.scoreDetails;
+      if (sitting.actualScore !== null) {
+        const numericScore = parseScoreValue(sitting.actualScore);
+        if (numericScore !== null) milestone.score = numericScore;
+      }
     }
     return milestone;
   });
 
-  // Step 8 — family-shared notes (re-filtered fail-closed; author dropped).
-  const noteRows = await listNotesForRole(caseId, "parent", db);
-  const sharedNotes: ParentSharedNote[] = noteRows
-    .filter((note) => note.visibility === "shared_with_family")
-    .map((note) => ({
-      body: note.body,
-      createdAt: note.createdAt,
-    }));
+  const scholarships: ParentScholarship[] = scholarshipRows.map((row) => ({
+    collegeName: row.listItemId ? collegeNameById.get(row.listItemId) ?? null : null,
+    name: row.name,
+    provider: row.provider,
+    url: safeFamilyUrl(row.url),
+    requirements: row.requirements,
+    deadline: row.deadline,
+    status: row.status as ScholarshipStatus,
+    outcome: row.outcome,
+    offeredAmount: row.offeredAmount,
+  }));
+
+  const financialAid: ParentFinancialAidOffer[] = aidRows.flatMap((row) => {
+    const collegeName = collegeNameById.get(row.listItemId);
+    if (!collegeName) return [];
+    const costBreakdown = moneyBreakdown(row.costBreakdown);
+    const giftAidBreakdown = moneyBreakdown(row.giftAidBreakdown);
+    const loanBreakdown = moneyBreakdown(row.loanBreakdown);
+    const totalCost = sumBreakdown(costBreakdown);
+    const totalGiftAid = sumBreakdown(giftAidBreakdown);
+    const totalLoans = sumBreakdown(loanBreakdown);
+    const derivedNetCost = row.netCost === null
+      ? Math.max(0, totalCost - totalGiftAid)
+      : moneyNumber(row.netCost);
+    const derivedRemainingBalance = row.remainingBalance === null
+      ? Math.max(0, derivedNetCost - totalLoans - moneyNumber(row.workStudyAmount))
+      : moneyNumber(row.remainingBalance);
+    return [{
+      collegeName,
+      currency: row.currency,
+      awardYear: row.awardYear,
+      costBreakdown,
+      giftAidBreakdown,
+      loanBreakdown,
+      workStudyAmount: row.workStudyAmount,
+      netCost: row.netCost,
+      remainingBalance: row.remainingBalance,
+      totalCost,
+      totalGiftAid,
+      totalLoans,
+      derivedNetCost,
+      derivedRemainingBalance,
+    }];
+  });
 
   return {
     studentName: header.studentFullName,
     cohortName: header.cohortName,
     caseStatus: header.status,
-    progress,
-    phaseProgress,
+    profile,
+    academics,
+    progress: {
+      done: fullProgress.done,
+      total: fullProgress.total,
+      percent: fullProgress.percent,
+    },
+    phaseProgress: rings.map((ring) => ({
+      phase: ring.phase,
+      label: ring.label,
+      done: ring.done,
+      total: ring.total,
+      percent: ring.percent,
+    })),
+    checklist,
     collegeList,
-    upcomingDeadlines,
-    announcements,
+    recommenders,
+    essays,
+    activities,
+    awards,
+    upcomingDeadlines: deadlineRows.map((item) => ({
+      source: item.source,
+      title: item.title,
+      date: item.date,
+      overdue: item.overdue,
+    })),
+    announcements: announcementRows.slice(0, PARENT_ANNOUNCEMENTS_LIMIT).map((row) => ({
+      title: row.title,
+      body: row.body,
+      createdAt: row.createdAt,
+    })),
     testingMilestones,
-    sharedNotes,
+    scholarships,
+    financialAid,
+    sharedNotes: noteRows
+      .filter((note) => note.visibility === "shared_with_family")
+      .map((note) => ({ body: note.body, createdAt: note.createdAt })),
   };
 }

@@ -30,7 +30,7 @@
 // college, concurrency mismatch) → Error("Conflict"); input-shape violations
 // throw descriptive Errors (routes' Zod schemas are the 400 boundary).
 
-import { and, asc, desc, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import {
   admissionsApplicationEvents,
@@ -47,6 +47,7 @@ import {
 } from "./audit";
 import { roleAtLeast } from "./config";
 import { isUuidShaped } from "./members";
+import { normalizeAdmissionsUrl } from "./shared/urls";
 import {
   ADMISSIONS_APP_ROUNDS,
   ADMISSIONS_APP_ROUND_LABELS,
@@ -60,7 +61,7 @@ import {
 } from "./shared/colleges";
 import type { CalendarItem, CalendarWindow } from "./calendar";
 import type { AdmissionsCollegeCompleteness } from "./recommenders";
-import type { CaseAccess } from "./types";
+import type { AdmissionsCaseStatus, CaseAccess } from "./types";
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const AID_AMOUNT_PATTERN = /^\d{1,12}(\.\d{1,2})?$/;
@@ -104,6 +105,10 @@ export interface AdmissionsCollegeListItemDto {
   deadline: string | null;
   appStatus: AdmissionsAppStatus;
   category: AdmissionsCollegeCategory;
+  firstChoiceMajor: string | null;
+  secondChoiceMajor: string | null;
+  admissionsUrl: string | null;
+  portalUrl: string | null;
   /** Merit/aid offered (CM-44); Postgres numeric serialized as a string. */
   aidOffered: string | null;
   aidNotes: string | null;
@@ -166,6 +171,16 @@ function normalizeInstName(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function normalizeNullableText(value: string | null | undefined): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  return value.trim() || null;
+}
+
+function normalizeExternalUrl(value: string | null | undefined, field: string): string | null | undefined {
+  return normalizeAdmissionsUrl(value, field);
+}
+
 /**
  * Asia/Bangkok calendar date ("YYYY-MM-DD") for an instant (mirrors the
  * private helper in calendar.ts / meetings.ts).
@@ -195,6 +210,10 @@ function toItemDto(row: CollegeListItemRow): AdmissionsCollegeListItemDto {
     deadline: row.deadline,
     appStatus: row.appStatus,
     category: row.category,
+    firstChoiceMajor: row.firstChoiceMajor,
+    secondChoiceMajor: row.secondChoiceMajor,
+    admissionsUrl: row.admissionsUrl,
+    portalUrl: row.portalUrl,
     aidOffered: row.aidOffered,
     aidNotes: row.aidNotes,
     createdAt: row.createdAt.toISOString(),
@@ -230,7 +249,8 @@ async function findLiveItem(
       eq(admissionsCollegeListItems.caseId, caseId),
       isNull(admissionsCollegeListItems.deletedAt),
     ))
-    .limit(1);
+    .limit(1)
+    .for("update");
   const row = rows[0];
   if (!row) throw new Error("NotFound");
   return row;
@@ -240,16 +260,25 @@ async function findLiveItem(
 async function findLiveCase(
   db: AdmissionsWriteDb,
   caseId: string,
-): Promise<{ id: string; committedListItemId: string | null; updatedAt: Date }> {
+): Promise<{
+  id: string;
+  status: AdmissionsCaseStatus;
+  committedListItemId: string | null;
+  statusChangedAt: Date;
+  updatedAt: Date;
+}> {
   const rows = await db
     .select({
       id: admissionsCases.id,
+      status: admissionsCases.status,
       committedListItemId: admissionsCases.committedListItemId,
+      statusChangedAt: admissionsCases.statusChangedAt,
       updatedAt: admissionsCases.updatedAt,
     })
     .from(admissionsCases)
     .where(and(eq(admissionsCases.id, caseId), isNull(admissionsCases.deletedAt)))
-    .limit(1);
+    .limit(1)
+    .for("update");
   const row = rows[0];
   if (!row) throw new Error("NotFound");
   return row;
@@ -273,6 +302,10 @@ export interface AddCollegeListItemInput {
   round: AdmissionsAppRound;
   deadline?: string | null;
   category?: AdmissionsCollegeCategory;
+  firstChoiceMajor?: string | null;
+  secondChoiceMajor?: string | null;
+  admissionsUrl?: string | null;
+  portalUrl?: string | null;
 }
 
 /**
@@ -440,6 +473,10 @@ export interface UpdateCollegeListItemInput {
   deadline?: string | null;
   appStatus?: AdmissionsAppStatus;
   category?: AdmissionsCollegeCategory;
+  firstChoiceMajor?: string | null;
+  secondChoiceMajor?: string | null;
+  admissionsUrl?: string | null;
+  portalUrl?: string | null;
   /** Non-negative decimal string (≤2 decimal places) or null to clear. */
   aidOffered?: string | null;
   aidNotes?: string | null;
@@ -450,6 +487,10 @@ const ITEM_DIFF_FIELDS = [
   "deadline",
   "appStatus",
   "category",
+  "firstChoiceMajor",
+  "secondChoiceMajor",
+  "admissionsUrl",
+  "portalUrl",
   "aidOffered",
   "aidNotes",
 ] as const;
@@ -489,6 +530,10 @@ export async function updateCollegeListItem(
   if (input.aidOffered != null && !AID_AMOUNT_PATTERN.test(input.aidOffered)) {
     throw new Error("Invalid aidOffered: expected a non-negative decimal amount");
   }
+  const firstChoiceMajor = normalizeNullableText(input.firstChoiceMajor);
+  const secondChoiceMajor = normalizeNullableText(input.secondChoiceMajor);
+  const admissionsUrl = normalizeExternalUrl(input.admissionsUrl, "admissionsUrl");
+  const portalUrl = normalizeExternalUrl(input.portalUrl, "portalUrl");
 
   return withAuditedTransaction(async (tx) => {
     const row = await findLiveItem(tx, input.itemId, input.access.caseId);
@@ -507,6 +552,10 @@ export async function updateCollegeListItem(
         deadline: input.deadline,
         appStatus: input.appStatus,
         category: input.category,
+        firstChoiceMajor,
+        secondChoiceMajor,
+        admissionsUrl,
+        portalUrl,
         aidOffered: input.aidOffered,
         aidNotes: input.aidNotes,
       },
@@ -521,6 +570,10 @@ export async function updateCollegeListItem(
     if ("deadline" in diff) setValues.deadline = input.deadline;
     if ("appStatus" in diff) setValues.appStatus = input.appStatus;
     if ("category" in diff) setValues.category = input.category;
+    if ("firstChoiceMajor" in diff) setValues.firstChoiceMajor = firstChoiceMajor;
+    if ("secondChoiceMajor" in diff) setValues.secondChoiceMajor = secondChoiceMajor;
+    if ("admissionsUrl" in diff) setValues.admissionsUrl = admissionsUrl;
+    if ("portalUrl" in diff) setValues.portalUrl = portalUrl;
     if ("aidOffered" in diff) setValues.aidOffered = input.aidOffered;
     if ("aidNotes" in diff) setValues.aidNotes = input.aidNotes;
 
@@ -704,10 +757,9 @@ export interface AddApplicationEventInput {
  * deferred → accepted are preserved verbatim. Counselor+ only; the insert
  * and its audit row commit atomically.
  *
- * Sane-chain rule: a "committed" event while ANOTHER item already holds the
- * case's committed pointer → Error("Conflict") (CM-44: exactly one committed
- * college per case). setCommittedCollege is the canonical commit path — it
- * moves the pointer and appends this event in one transaction.
+ * A "committed" event is rejected here. setCommittedCollege is the only
+ * canonical commit path: it moves the pointer, transitions the lifecycle,
+ * writes the audit entry, and appends the event in one transaction.
  *
  * @returns the created event DTO.
  */
@@ -720,39 +772,14 @@ export async function addApplicationEvent(
   if (!ADMISSIONS_DECISION_EVENTS.includes(input.event)) {
     throw new Error(`Invalid decision event: ${String(input.event)}`);
   }
+  // A commitment is never a generic append-only event: it must go through
+  // setCommittedCollege so the pointer, lifecycle, audit, and event commit in
+  // one transaction.
+  if (input.event === "committed") throw new Error("Conflict");
   assertDateOnly(input.eventDate, "eventDate");
 
   return withAuditedTransaction(async (tx) => {
     const item = await findLiveItem(tx, input.listItemId, input.access.caseId);
-
-    if (input.event === "committed") {
-      const caseRow = await findLiveCase(tx, input.access.caseId);
-      if (
-        caseRow.committedListItemId !== null &&
-        caseRow.committedListItemId !== item.id
-      ) {
-        throw new Error("Conflict");
-      }
-
-      // CM-44 race safety: the read above is check-then-write, so two
-      // concurrent commits could both see a null pointer. This conditional
-      // self-referential UPDATE takes the case row lock and re-evaluates the
-      // pointer under it — a concurrent winner makes the WHERE miss, and the
-      // zero-row result surfaces as Conflict before any event is appended.
-      const guardRows = await tx
-        .update(admissionsCases)
-        .set({ updatedAt: new Date() })
-        .where(and(
-          eq(admissionsCases.id, input.access.caseId),
-          isNull(admissionsCases.deletedAt),
-          or(
-            isNull(admissionsCases.committedListItemId),
-            eq(admissionsCases.committedListItemId, item.id),
-          ),
-        ))
-        .returning({ id: admissionsCases.id });
-      if (guardRows.length === 0) throw new Error("Conflict");
-    }
 
     const insertedRows = await tx
       .insert(admissionsApplicationEvents)
@@ -860,13 +887,15 @@ export interface CommittedCollegeResult {
  * event in ONE transaction, audited. Counselor+ only.
  *
  * 1. Load the live item scoped to the case (miss → NotFound) and the case row.
- * 2. Already committed to this item → idempotent no-op (no writes). Committed
- *    to a DIFFERENT item → Error("Conflict") — clearCommittedCollege first.
+ * 2. Only active/committed cases may record a commitment. Already committed
+ *    to this item with lifecycle status committed → idempotent no-op. A
+ *    DIFFERENT pointer → Error("Conflict") — clearCommittedCollege first.
  * 3. Point the case at the item with a conditional UPDATE (`WHERE
  *    committed_list_item_id IS NULL`, zero rows → Conflict — so a concurrent
  *    commit race can never produce two committed items), append the
  *    "committed" event (eventDate defaults to today's Bangkok date), and
- *    audit the pointer diff.
+ *    atomically transition an active case to lifecycle status "committed",
+ *    and audit the pointer + status diff.
  *
  * @returns the caseId, the committed item id, and the new case updatedAt.
  */
@@ -882,7 +911,12 @@ export async function setCommittedCollege(
     const item = await findLiveItem(tx, input.listItemId, input.access.caseId);
     const caseRow = await findLiveCase(tx, input.access.caseId);
 
+    if (caseRow.status !== "active" && caseRow.status !== "committed") {
+      throw new Error("Conflict");
+    }
+
     if (caseRow.committedListItemId === item.id) {
+      if (caseRow.status !== "committed") throw new Error("Conflict");
       return {
         caseId: caseRow.id,
         committedListItemId: item.id,
@@ -896,12 +930,19 @@ export async function setCommittedCollege(
     // the loser's UPDATE matches zero rows (the row lock forces it to see the
     // winner's pointer) and rolls back before appending its event.
     const now = new Date();
+    const lifecycleChanged = caseRow.status === "active";
     const updatedRows = await tx
       .update(admissionsCases)
-      .set({ committedListItemId: item.id, updatedAt: now })
+      .set({
+        committedListItemId: item.id,
+        status: "committed",
+        ...(lifecycleChanged ? { statusChangedAt: now } : {}),
+        updatedAt: now,
+      })
       .where(and(
         eq(admissionsCases.id, caseRow.id),
         isNull(admissionsCases.committedListItemId),
+        inArray(admissionsCases.status, ["active", "committed"]),
       ))
       .returning({ id: admissionsCases.id });
     if (updatedRows.length === 0) throw new Error("Conflict");
@@ -923,6 +964,9 @@ export async function setCommittedCollege(
       action: "commit_college",
       diff: {
         committedListItemId: { old: null, new: item.id },
+        ...(lifecycleChanged
+          ? { status: { old: caseRow.status, new: "committed" } }
+          : {}),
         eventDate: { old: null, new: eventDate },
       },
     });

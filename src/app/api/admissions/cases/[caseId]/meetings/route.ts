@@ -12,6 +12,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   admissionsErrorResponse,
+  assertCaseMutationAllowed,
   requireAdmissionsSession,
   requireCaseAccess,
 } from "@/lib/admissions/access";
@@ -27,7 +28,7 @@ const dateOnlySchema = z
 // re-validates owners fail-closed, this just gives a 400 instead of a 500.
 const actionItemSchema = z.object({
   title: z.string().trim().min(1, "Action item title must not be empty"),
-  owner: z.enum(["student", "counselor", "parent"]),
+  owner: z.enum(["student", "counselor"]),
   dueDate: dateOnlySchema.nullish(),
 });
 
@@ -73,6 +74,7 @@ export async function POST(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "counselor");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {
@@ -118,6 +120,7 @@ export async function PATCH(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "counselor");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {

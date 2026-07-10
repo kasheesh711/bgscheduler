@@ -149,7 +149,7 @@ describe("/api/admissions/cases", () => {
       const res = await GET();
 
       expect(res.status).toBe(500);
-      await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+      await expect(res.json()).resolves.toEqual({ error: "Caseload load failed" });
     });
   });
 

@@ -242,6 +242,10 @@ describe("createMeeting", () => {
       ...baseInput,
       actionItems: [{ title: "Task", owner: "teacher" as never, dueDate: null }],
     }, db)).rejects.toThrow(/Invalid action item owner/);
+    await expect(createMeeting({
+      ...baseInput,
+      actionItems: [{ title: "Task", owner: "parent", dueDate: null }],
+    }, db)).rejects.toThrow(/Invalid action item owner/);
     expect(transaction).not.toHaveBeenCalled();
     expect(ADMISSIONS_TASK_OWNERS).toEqual(["student", "counselor", "parent"]);
   });

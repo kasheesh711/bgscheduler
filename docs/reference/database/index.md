@@ -1,7 +1,7 @@
 # Database Reference — Master Table Index
 
-Canonical lookup of **every table** in the BGScheduler Postgres database. All 110 tables
-indexed here (85 at the previous verification + 25 University Admissions `admissions_*` tables)
+Canonical lookup of **every table** in the BGScheduler Postgres database. All **151 tables**
+indexed here, including 36 University Admissions `admissions_*` tables,
 are defined in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) via Drizzle ORM.
 This page is the index: it lists each table's SQL name, its Drizzle export name, the
 domain it belongs to, its **grain** (what one row represents), the feature that owns it,
@@ -29,8 +29,8 @@ A few tables are deliberately **snapshot-independent** (they survive snapshot ro
 `student_promotion_course_actions`, `student_promotion_future_session_actions`,
 `student_promotion_graduation_actions`, `student_promotion_pay_rate_impacts`,
 `room_utilization_sessions`, and `past_session_blocks`
-(`schema.ts:1347-1386`, the only cross-snapshot data table — see its note in
-[erd-core.md](./erd-core.md)). The entire **University Admissions** domain (all 25
+(`schema.ts`, the only cross-snapshot data table — see its note in
+[erd-core.md](./erd-core.md)). The entire **University Admissions** domain (all 36
 `admissions_*` tables) is likewise snapshot-independent by design — its only ties to
 Wise/IPEDS data are plain soft-reference columns, never FKs
 ([erd-university-admissions.md](./erd-university-admissions.md)).
@@ -39,19 +39,22 @@ Wise/IPEDS data are plain soft-reference columns, never FKs
 
 | Domain | Tables | ER diagram |
 |---|---|---|
-| Core (snapshots, sync, audit, auth, tutors, normalization) | 20 | [erd-core.md](./erd-core.md) |
+| Core (snapshots, sync, audit, auth, tutors, normalization) | 21 | [erd-core.md](./erd-core.md) |
 | Sales Dashboard | 7 | [erd-sales-dashboard.md](./erd-sales-dashboard.md) |
-| Credit Control | 10 | [erd-credit-control.md](./erd-credit-control.md) |
+| Credit Control | 11 | [erd-credit-control.md](./erd-credit-control.md) |
 | Classrooms (assignment + email) | 9 | [erd-classrooms.md](./erd-classrooms.md) |
 | Payroll | 8 | [erd-payroll.md](./erd-payroll.md) |
 | Tutor Profiles | 2 | [erd-tutor-profiles.md](./erd-tutor-profiles.md) |
 | Leave Requests | 5 | [erd-leave-requests.md](./erd-leave-requests.md) |
 | Student Promotions | 6 | [erd-student-promotions.md](./erd-student-promotions.md) |
 | AI & Proposals | 6 | [erd-ai-and-proposals.md](./erd-ai-and-proposals.md) |
-| LINE | 8 | [erd-line.md](./erd-line.md) |
+| LINE | 9 | [erd-line.md](./erd-line.md) |
 | Room Capacity | 4 | [erd-room-capacity.md](./erd-room-capacity.md) |
-| University Admissions | 25 | [erd-university-admissions.md](./erd-university-admissions.md) |
-| **Total** | **110** | |
+| Competitor Intelligence | 16 | schema source |
+| Progress Tests | 8 | schema source |
+| US Universities / IPEDS | 3 | schema source |
+| University Admissions | 36 | [erd-university-admissions.md](./erd-university-admissions.md) |
+| **Total** | **151** | |
 
 ## Master table list
 
@@ -67,6 +70,7 @@ Line ranges: `schema.ts:165-269`, `611-740`, `831-854`, `1347-1386`, `1744-1784`
 | `snapshots` | `snapshots` | core | versioned ETL snapshot; at most one `active=true` (`schema.ts:165-169`) | [Tutor search](../../features/tutor-search.md) (ETL) | [core](./erd-core.md) |
 | `sync_runs` | `syncRuns` | core | one Wise snapshot-sync run; partial-unique guard allows a single `running` row (`schema.ts:171-186`) | [Data health](../../features/data-health.md) | [core](./erd-core.md) |
 | `cron_invocations` | `cronInvocations` | core | one valid cron/admin invocation of a registered operational job (`schema.ts`) | [Data health](../../features/data-health.md) | [core](./erd-core.md) |
+| `cron_alert_state` | `cronAlertState` | core | one watchdog alert/dedup state per cron job | [Data health](../../features/data-health.md) | [core](./erd-core.md) |
 | `wise_activity_events` | `wiseActivityEvents` | core | one Wise audit event, deduped on `event_id` (`schema.ts:190-223`) | [Wise activity audit](../../features/wise-activity-audit.md) | [core](./erd-core.md) |
 | `wise_activity_sync_runs` | `wiseActivitySyncRuns` | core | one Wise-activity audit sync run; single `running` guard (`schema.ts:225-243`) | [Wise activity audit](../../features/wise-activity-audit.md) | [core](./erd-core.md) |
 | `admin_users` | `adminUsers` | core | one allowlisted admin email (unique on `email`) (`schema.ts:247-254`) | Auth ([middleware](../../../src/middleware.ts)) | [core](./erd-core.md) |
@@ -115,6 +119,7 @@ Line ranges: `schema.ts:447-610`.
 | `credit_control_follow_up_log` | `creditControlFollowUpLog` | credit-control | one follow-up action event (PK = `event_id`) (`schema.ts:576-589`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
 | `credit_control_inactive_students` | `creditControlInactiveStudents` | credit-control | one student manually marked inactive (PK = `student_key`) (`schema.ts:591-597`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
 | `credit_control_admin_ownership` | `creditControlAdminOwnership` | credit-control | one admin-owner assignment per student (PK = `student_key`) (`schema.ts:599-607`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
+| `credit_control_zero_balance_tracking` | `creditControlZeroBalanceTracking` | credit-control | one zero-balance tracking state per student | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
 
 ### Student Promotions
 
@@ -208,6 +213,7 @@ Line ranges: `schema.ts:1526-1740`.
 | `line_wise_action_logs` | `lineWiseActionLogs` | line | one Wise writeback action attempted from a LINE review (`schema.ts:1672-1687`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
 | `line_oa_resolver_runs` | `lineOaResolverRuns` | line | one OA-resolver run (unique on `token_hash`) (`schema.ts:1689-1713`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
 | `line_oa_resolver_rows` | `lineOaResolverRows` | line | one student worklist row in a resolver run (unique on run+student+code) (`schema.ts:1715-1740`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
+| `line_backlog_recovery_sync_runs` | `lineBacklogRecoverySyncRuns` | line | one LINE backlog-recovery sync run and cursor/result ledger | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
 
 ### Room Capacity
 
@@ -220,9 +226,57 @@ Line ranges: `schema.ts:1785-1858`.
 | `room_capacity_demand_mix` | `roomCapacityDemandMix` | room-capacity | one weekday/time demand-mix bucket within a model run (`schema.ts:1822-1838`) | [Room capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) |
 | `room_capacity_package_mix` | `roomCapacityPackageMix` | room-capacity | one package-hour bucket within a model run (`schema.ts:1840-1858`) | [Room capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) |
 
+### Competitor Intelligence
+
+Mechanical source: [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts).
+
+| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
+|---|---|---|---|---|---|
+| `competitor_entities` | `competitorEntities` | competitor-intelligence | one tracked competitor identity | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_sources` | `competitorSources` | competitor-intelligence | one configured evidence/source feed | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_sync_runs` | `competitorSyncRuns` | competitor-intelligence | one scheduled/manual intelligence sync | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_source_runs` | `competitorSourceRuns` | competitor-intelligence | one source execution within a sync | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_evidence_items` | `competitorEvidenceItems` | competitor-intelligence | one normalized evidence item | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_assets` | `competitorAssets` | competitor-intelligence | one captured competitor asset | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_serp_keywords` | `competitorSerpKeywords` | competitor-intelligence | one tracked search keyword | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_serp_observations` | `competitorSerpObservations` | competitor-intelligence | one keyword/rank observation | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_ai_runs` | `competitorAiRuns` | competitor-intelligence | one AI synthesis run | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_briefs` | `competitorBriefs` | competitor-intelligence | one generated/reviewed intelligence brief | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_war_room_snapshots` | `competitorWarRoomSnapshots` | competitor-intelligence | one persisted war-room snapshot | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_task_suggestions` | `competitorTaskSuggestions` | competitor-intelligence | one suggested follow-up task | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_tasks` | `competitorTasks` | competitor-intelligence | one accepted/manual competitor task | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_task_comments` | `competitorTaskComments` | competitor-intelligence | one task comment | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_task_events` | `competitorTaskEvents` | competitor-intelligence | one append-only task lifecycle event | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+| `competitor_vendor_usage` | `competitorVendorUsage` | competitor-intelligence | one vendor-usage/cost record | Competitor Intelligence | [schema](../../../src/lib/db/schema.ts) |
+
+### Progress Tests
+
+Mechanical source: [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts).
+
+| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
+|---|---|---|---|---|---|
+| `progress_test_attendance_ledger` | `progressTestAttendanceLedger` | progress-tests | one normalized attendance/session ledger row | Progress Tests | [schema](../../../src/lib/db/schema.ts) |
+| `progress_test_cycle_state` | `progressTestCycleState` | progress-tests | one student's progress-test cycle state | Progress Tests | [schema](../../../src/lib/db/schema.ts) |
+| `progress_test_bookings` | `progressTestBookings` | progress-tests | one progress-test booking | Progress Tests | [schema](../../../src/lib/db/schema.ts) |
+| `progress_test_email_runs` | `progressTestEmailRuns` | progress-tests | one operational progress-test email run | Progress Tests | [schema](../../../src/lib/db/schema.ts) |
+| `progress_test_notifications` | `progressTestNotifications` | progress-tests | one idempotent progress-test notification | Progress Tests | [schema](../../../src/lib/db/schema.ts) |
+| `progress_test_admin_digest_runs` | `progressTestAdminDigestRuns` | progress-tests | one admin digest run | Progress Tests | [schema](../../../src/lib/db/schema.ts) |
+| `progress_test_admin_digest_recipients` | `progressTestAdminDigestRecipients` | progress-tests | one recipient result within an admin digest run | Progress Tests | [schema](../../../src/lib/db/schema.ts) |
+| `progress_test_sync_runs` | `progressTestSyncRuns` | progress-tests | one progress-test data sync | Progress Tests | [schema](../../../src/lib/db/schema.ts) |
+
+### US Universities / IPEDS
+
+Mechanical source: [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts).
+
+| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
+|---|---|---|---|---|---|
+| `ipeds_import_runs` | `ipedsImportRuns` | us-universities | one IPEDS dataset import | US Universities | [schema](../../../src/lib/db/schema.ts) |
+| `ipeds_institutions` | `ipedsInstitutions` | us-universities | one institution per IPEDS data year and unit id | US Universities | [schema](../../../src/lib/db/schema.ts) |
+| `ipeds_completions` | `ipedsCompletions` | us-universities | one institution/CIP completion count per data year | US Universities | [schema](../../../src/lib/db/schema.ts) |
+
 ### University Admissions
 
-Line ranges: enums `schema.ts:233-334`, tables `schema.ts:2983-3396`. Owning feature: University Admissions case management (design: [`docs/casemanagementsystem_design.md`](../../casemanagementsystem_design.md); API: [university-admissions.md](../api/university-admissions.md)). All 25 tables are snapshot-independent; `wise_student_key` and `unit_id` are soft references, never FKs.
+Owning feature: University Admissions case management (design: [`docs/casemanagementsystem_design.md`](../../casemanagementsystem_design.md); API: [university-admissions.md](../api/university-admissions.md)). All 36 tables are snapshot-independent; `wise_student_key` and `unit_id` are soft references, never FKs.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
@@ -236,12 +290,19 @@ Line ranges: enums `schema.ts:233-334`, tables `schema.ts:2983-3396`. Owning fea
 | `admissions_case_tasks` | `admissionsCaseTasks` | admissions | one checklist task on a case (template-derived or custom) (`schema.ts:3104-3126`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_case_meetings` | `admissionsCaseMeetings` | admissions | one logged counselor meeting on a case (`schema.ts:3128-3141`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_college_list_items` | `admissionsCollegeListItems` | admissions | one college on a case's application list (IPEDS `unit_id` soft ref or manual entry) (`schema.ts:3143-3166`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_college_research` | `admissionsCollegeResearch` | admissions | at most one structured research/fit record per college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_interest_events` | `admissionsInterestEvents` | admissions | one demonstrated-interest event for a college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_college_requirements` | `admissionsCollegeRequirements` | admissions | one generic non-canonical requirement for a college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_financial_aid_offers` | `admissionsFinancialAidOffers` | admissions | at most one financial-aid comparison record per college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_scholarships` | `admissionsScholarships` | admissions | one case scholarship, optionally linked to a college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_application_events` | `admissionsApplicationEvents` | admissions | one append-only decision event on a list item (`schema.ts:3168-3178`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_recommenders` | `admissionsRecommenders` | admissions | one recommendation writer for a case (`schema.ts:3180-3192`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_recommender_colleges` | `admissionsRecommenderColleges` | admissions | one recommender↔college link with submission state (unique on `recommender_id`+`list_item_id`) (`schema.ts:3194-3205`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_college_docs` | `admissionsCollegeDocs` | admissions | one supporting-doc send state per list item + `doc_type` (`schema.ts:3207-3218`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_essays` | `admissionsEssays` | admissions | one essay-tracker row on a case (soft `list_item_id` link) (`schema.ts:3220-3235`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_essay_prompt_catalog` | `admissionsEssayPromptCatalog` | admissions | one institution/program/cycle prompt-catalog row | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_activities` | `admissionsActivities` | admissions | one extracurricular activity on the student-owned list (`schema.ts:3237-3251`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_awards` | `admissionsAwards` | admissions | one honors/award record, separate from activities | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_test_sittings` | `admissionsTestSittings` | admissions | one standardized-test sitting for a case (`schema.ts:3253-3267`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_academic_records` | `admissionsAcademicRecords` | admissions | one academic-record payload per case + grading `system` + `effective_date` (`schema.ts:3269-3279`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_notes` | `admissionsNotes` | admissions | one case note with a mandatory explicit visibility (`schema.ts:3281-3294`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
@@ -250,7 +311,11 @@ Line ranges: enums `schema.ts:233-334`, tables `schema.ts:2983-3396`. Owning fea
 | `admissions_self_report_sections` | `admissionsSelfReportSections` | admissions | one guided self-report section per case (unique on `case_id`+`section_key`) (`schema.ts:3329-3342`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_audit_log` | `admissionsAuditLog` | admissions | one append-only audit entry per admissions write (`schema.ts:3344-3358`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_notification_log` | `admissionsNotificationLog` | admissions | one sent notification email (partial-unique `dedupe_key` for exactly-once sends) (`schema.ts:3360-3379`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_notification_outbox` | `admissionsNotificationOutbox` | admissions | one transactionally queued/retryable notification | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_notification_runs` | `admissionsNotificationRuns` | admissions | one daily/weekly notification-cron run; single `running` guard (`schema.ts:3381-3396`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_import_runs` | `admissionsImportRuns` | admissions | one case + spreadsheet + source-fingerprint import ledger | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_import_issues` | `admissionsImportIssues` | admissions | one validation/resolution issue for an import run | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_import_mappings` | `admissionsImportMappings` | admissions | one source-key to target-record mapping within an import run | University Admissions | [university-admissions](./erd-university-admissions.md) |
 
 ## Notes & caveats
 
@@ -267,4 +332,7 @@ Line ranges: enums `schema.ts:233-334`, tables `schema.ts:2983-3396`. Owning fea
   top of `schema.ts` (`schema.ts:19-161`); their allowed values are listed on the relevant
   `erd-*.md` page, not here.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Table names and counts verified against `src/lib/db/schema.ts` after live
+migrations `0053–0054` on 2026-07-10.
+Older inline line-number annotations are retained as historical navigation hints;
+use the linked schema as the mechanical source of truth._

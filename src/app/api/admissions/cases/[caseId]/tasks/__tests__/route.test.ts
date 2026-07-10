@@ -94,7 +94,9 @@ function makeRequest(method: "POST" | "PATCH", body?: unknown) {
 }
 
 function makeDeleteRequest(taskId?: string) {
-  const query = taskId === undefined ? "" : `?taskId=${taskId}`;
+  const query = taskId === undefined
+    ? ""
+    : `?taskId=${taskId}&expectedUpdatedAt=${encodeURIComponent(TASK_DTO.updatedAt)}`;
   return new NextRequest(
     `http://test.local/api/admissions/cases/${CASE_ID}/tasks${query}`,
     { method: "DELETE" },
@@ -172,7 +174,7 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
       const res = await GET(new Request("http://test.local"), makeCtx());
 
       expect(res.status).toBe(500);
-      await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+      await expect(res.json()).resolves.toEqual({ error: "Task list failed" });
     });
   });
 
@@ -275,6 +277,16 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
       expect(createCustomTask).not.toHaveBeenCalled();
     });
 
+    it("does not assign new tasks to the view-only parent role", async () => {
+      const res = await POST(
+        makeRequest("POST", { title: "Review form", owner: "parent" }),
+        makeCtx(),
+      );
+
+      expect(res.status).toBe(400);
+      expect(createCustomTask).not.toHaveBeenCalled();
+    });
+
     it("returns 400 for a malformed recurrence (fail-closed)", async () => {
       const res = await POST(
         makeRequest("POST", {
@@ -360,7 +372,12 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
       vi.mocked(setTaskVerified).mockResolvedValue(verifiedTask);
 
       const res = await PATCH(
-        makeRequest("PATCH", { action: "verify", taskId: TASK_ID, verified: true }),
+        makeRequest("PATCH", {
+          action: "verify",
+          taskId: TASK_ID,
+          verified: true,
+          expectedUpdatedAt: TASK_DTO.updatedAt,
+        }),
         makeCtx(),
       );
 
@@ -370,6 +387,7 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
         access: COUNSELOR_ACCESS,
         taskId: TASK_ID,
         verified: true,
+        expectedUpdatedAt: TASK_DTO.updatedAt,
       });
     });
 
@@ -379,7 +397,12 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
       vi.mocked(setTaskVerified).mockRejectedValue(new Error("Forbidden"));
 
       const res = await PATCH(
-        makeRequest("PATCH", { action: "verify", taskId: TASK_ID, verified: true }),
+        makeRequest("PATCH", {
+          action: "verify",
+          taskId: TASK_ID,
+          verified: true,
+          expectedUpdatedAt: TASK_DTO.updatedAt,
+        }),
         makeCtx(),
       );
 
@@ -388,6 +411,7 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
         access: STUDENT_ACCESS,
         taskId: TASK_ID,
         verified: true,
+        expectedUpdatedAt: TASK_DTO.updatedAt,
       });
     });
 
@@ -395,12 +419,27 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
       vi.mocked(setTaskVerified).mockRejectedValue(new Error("Conflict"));
 
       const res = await PATCH(
-        makeRequest("PATCH", { action: "verify", taskId: TASK_ID, verified: true }),
+        makeRequest("PATCH", {
+          action: "verify",
+          taskId: TASK_ID,
+          verified: true,
+          expectedUpdatedAt: TASK_DTO.updatedAt,
+        }),
         makeCtx(),
       );
 
       expect(res.status).toBe(409);
       await expect(res.json()).resolves.toEqual({ error: "Conflict" });
+    });
+
+    it("requires the task concurrency token for verification", async () => {
+      const res = await PATCH(
+        makeRequest("PATCH", { action: "verify", taskId: TASK_ID, verified: true }),
+        makeCtx(),
+      );
+
+      expect(res.status).toBe(400);
+      expect(setTaskVerified).not.toHaveBeenCalled();
     });
   });
 
@@ -410,6 +449,7 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
         makeRequest("PATCH", {
           action: "update",
           taskId: TASK_ID,
+          expectedUpdatedAt: TASK_DTO.updatedAt,
           title: "Draft main essay v2",
           dueDate: "2026-09-01",
           recurrence: null,
@@ -422,6 +462,7 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
       expect(updateTask).toHaveBeenCalledWith({
         access: COUNSELOR_ACCESS,
         taskId: TASK_ID,
+        expectedUpdatedAt: TASK_DTO.updatedAt,
         title: "Draft main essay v2",
         description: undefined,
         owner: undefined,
@@ -437,7 +478,12 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
       vi.mocked(updateTask).mockRejectedValue(new Error("Forbidden"));
 
       const res = await PATCH(
-        makeRequest("PATCH", { action: "update", taskId: TASK_ID, title: "Hijacked" }),
+        makeRequest("PATCH", {
+          action: "update",
+          taskId: TASK_ID,
+          expectedUpdatedAt: TASK_DTO.updatedAt,
+          title: "Hijacked",
+        }),
         makeCtx(),
       );
 
@@ -458,20 +504,32 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
   describe("PATCH action=delete", () => {
     it("soft-deletes a custom task and returns ok", async () => {
       const res = await PATCH(
-        makeRequest("PATCH", { action: "delete", taskId: TASK_ID }),
+        makeRequest("PATCH", {
+          action: "delete",
+          taskId: TASK_ID,
+          expectedUpdatedAt: TASK_DTO.updatedAt,
+        }),
         makeCtx(),
       );
 
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({ ok: true });
-      expect(softDeleteTask).toHaveBeenCalledWith({ access: COUNSELOR_ACCESS, taskId: TASK_ID });
+      expect(softDeleteTask).toHaveBeenCalledWith({
+        access: COUNSELOR_ACCESS,
+        taskId: TASK_ID,
+        expectedUpdatedAt: TASK_DTO.updatedAt,
+      });
     });
 
     it("returns 409 for a template-derived task (never deletable)", async () => {
       vi.mocked(softDeleteTask).mockRejectedValue(new Error("Conflict"));
 
       const res = await PATCH(
-        makeRequest("PATCH", { action: "delete", taskId: TASK_ID }),
+        makeRequest("PATCH", {
+          action: "delete",
+          taskId: TASK_ID,
+          expectedUpdatedAt: TASK_DTO.updatedAt,
+        }),
         makeCtx(),
       );
 
@@ -485,7 +543,11 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
       vi.mocked(softDeleteTask).mockRejectedValue(new Error("Forbidden"));
 
       const res = await PATCH(
-        makeRequest("PATCH", { action: "delete", taskId: TASK_ID }),
+        makeRequest("PATCH", {
+          action: "delete",
+          taskId: TASK_ID,
+          expectedUpdatedAt: TASK_DTO.updatedAt,
+        }),
         makeCtx(),
       );
 
@@ -545,7 +607,11 @@ describe("/api/admissions/cases/[caseId]/tasks", () => {
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({ ok: true });
       expect(requireCaseAccess).toHaveBeenCalledWith("counselor@example.com", CASE_ID, "counselor");
-      expect(softDeleteTask).toHaveBeenCalledWith({ access: COUNSELOR_ACCESS, taskId: TASK_ID });
+      expect(softDeleteTask).toHaveBeenCalledWith({
+        access: COUNSELOR_ACCESS,
+        taskId: TASK_ID,
+        expectedUpdatedAt: TASK_DTO.updatedAt,
+      });
     });
 
     it("returns 409 for a template-derived task (never deletable)", async () => {

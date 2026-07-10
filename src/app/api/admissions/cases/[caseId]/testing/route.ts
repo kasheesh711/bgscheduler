@@ -13,6 +13,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   admissionsErrorResponse,
+  assertCaseMutationAllowed,
   requireAdmissionsSession,
   requireCaseAccess,
 } from "@/lib/admissions/access";
@@ -21,8 +22,10 @@ import {
   createSitting,
   getBestScores,
   listSittingsForCase,
+  normalizeTestScoreDetails,
   softDeleteSitting,
   updateSitting,
+  type AdmissionsTestScoreDetails,
 } from "@/lib/admissions/testing";
 
 const ROUTE = "/api/admissions/cases/[caseId]/testing";
@@ -34,11 +37,24 @@ const dateOnlySchema = z
 // Mirrors ADMISSIONS_TEST_TYPES (src/lib/admissions/testing.ts); the lib
 // re-validates types fail-closed, this just gives a 400 instead of a 500.
 const testTypeSchema = z.enum(["sat", "act", "ap", "ib", "toefl", "ielts", "other"]);
+const sittingStatusSchema = z.enum([
+  "planned",
+  "registered",
+  "taken",
+  "score_received",
+  "canceled",
+]);
+const scoreDetailsSchema = z.record(z.string(), z.unknown())
+  .transform((value) => value as AdmissionsTestScoreDetails);
 
 const createSittingSchema = z.object({
   testType: testTypeSchema,
   testDate: dateOnlySchema,
+  lateRegistrationDeadline: dateOnlySchema.nullish(),
+  status: sittingStatusSchema.optional(),
+  subject: z.string().nullish(),
   targetScore: z.string().optional(),
+  scoreDetails: scoreDetailsSchema.nullish(),
   accommodations: z.string().nullish(),
 });
 
@@ -48,11 +64,18 @@ const updateSittingSchema = z.object({
   testType: testTypeSchema.optional(),
   testDate: dateOnlySchema.optional(),
   registrationDeadline: dateOnlySchema.nullish(),
+  lateRegistrationDeadline: dateOnlySchema.nullish(),
+  status: sittingStatusSchema.optional(),
+  subject: z.string().nullish(),
   targetScore: z.string().optional(),
   actualScore: z.string().nullish(),
+  scoreDetails: scoreDetailsSchema.nullish(),
   accommodations: z.string().nullish(),
   scoreReleasedToParent: z.boolean().optional(),
-});
+}).refine(
+  (value) => !(value.actualScore !== undefined && value.scoreDetails !== undefined),
+  { message: "Provide actualScore or scoreDetails, not both" },
+);
 
 const deleteQuerySchema = z.object({ sittingId: z.string().uuid() });
 
@@ -83,6 +106,7 @@ export async function POST(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "student");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {
@@ -98,12 +122,27 @@ export async function POST(
         { status: 400 },
       );
     }
+    let scoreDetails = parsed.data.scoreDetails;
+    if (scoreDetails != null) {
+      try {
+        scoreDetails = normalizeTestScoreDetails(scoreDetails);
+      } catch (error) {
+        return NextResponse.json(
+          { error: error instanceof Error ? error.message : "Invalid scoreDetails" },
+          { status: 400 },
+        );
+      }
+    }
 
     const sitting = await createSitting({
       access,
       testType: parsed.data.testType,
       testDate: parsed.data.testDate,
+      lateRegistrationDeadline: parsed.data.lateRegistrationDeadline,
+      status: parsed.data.status,
+      subject: parsed.data.subject,
       targetScore: parsed.data.targetScore,
+      scoreDetails,
       accommodations: parsed.data.accommodations ?? null,
     });
     return NextResponse.json({ sitting });
@@ -120,6 +159,7 @@ export async function PATCH(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "student");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {
@@ -134,6 +174,17 @@ export async function PATCH(
         { error: "Invalid request", details: parsed.error.flatten() },
         { status: 400 },
       );
+    }
+    let scoreDetails = parsed.data.scoreDetails;
+    if (scoreDetails != null) {
+      try {
+        scoreDetails = normalizeTestScoreDetails(scoreDetails);
+      } catch (error) {
+        return NextResponse.json(
+          { error: error instanceof Error ? error.message : "Invalid scoreDetails" },
+          { status: 400 },
+        );
+      }
     }
 
     // Per-field gate (CM-83): scoreReleasedToParent is counselor+ only —
@@ -153,8 +204,12 @@ export async function PATCH(
       testType: parsed.data.testType,
       testDate: parsed.data.testDate,
       registrationDeadline: parsed.data.registrationDeadline,
+      lateRegistrationDeadline: parsed.data.lateRegistrationDeadline,
+      status: parsed.data.status,
+      subject: parsed.data.subject,
       targetScore: parsed.data.targetScore,
       actualScore: parsed.data.actualScore,
+      scoreDetails,
       accommodations: parsed.data.accommodations,
       scoreReleasedToParent: parsed.data.scoreReleasedToParent,
     });
@@ -172,6 +227,7 @@ export async function DELETE(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "student");
+    assertCaseMutationAllowed(access);
 
     const parsed = deleteQuerySchema.safeParse({
       sittingId: new URL(request.url).searchParams.get("sittingId"),

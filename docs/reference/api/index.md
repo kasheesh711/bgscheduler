@@ -2,7 +2,10 @@
 
 The canonical lookup of every HTTP endpoint in BGScheduler. This page lists **method + path + group + auth + one-line purpose** only. For full request/response schemas, query parameters, and error shapes, follow the link on each group heading to the per-group detail page.
 
-All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **145** (122 at the previous verification + 23 University Admissions routes: 22 `src/app/api/admissions/**/route.ts` files + `/api/internal/admissions-notifications`).
+All routes live under `src/app/api/**/route.ts` (Next.js App Router). Source
+route-handler count: **170**, of which **34** are under
+`src/app/api/admissions/**`. The protected admissions-notifications cron is
+counted in the internal namespace.
 
 ## How to read this index
 
@@ -11,7 +14,7 @@ All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint c
 - **public** — reachable without an authenticated session. `src/middleware.ts:4-15` allowlists `/api/auth/*`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/api/line/contacts/oa-resolver/worklist`, and `/api/line/contacts/oa-resolver/runs/{runId}/rows`. The non-`/api/auth` public routes enforce their own checks in-handler (LINE signature header or a bearer token), not an admin session.
 - **admin** — requires an authenticated Auth.js session. The middleware redirects unauthenticated requests to `/login` (`src/middleware.ts:25-29`); handlers additionally call `auth()` (or `requireCreditControlSession()` for credit-control) and return `401` when no session is present.
 - **cron** — `CRON_SECRET`-protected. `src/middleware.ts:13` lets `/api/internal/*` bypass the session gate; each handler then enforces a constant-time `Bearer ${CRON_SECRET}` check (`src/lib/internal/cron-auth.ts:6-26`, or an inline copy). Four internal routes additionally accept an admin session as a fallback when the cron secret is absent — see the **cron (or admin)** notes below.
-- **session + min role** — University Admissions only. These routes require an authenticated Auth.js session (`requireAdmissionsSession`) but are **not** admin-only: rights are re-resolved from Postgres per request (`requireCaseAccess` / `requireCounselorOrAdmin`, `src/lib/admissions/access.ts`) under the role ordering `parent < student < counselor < admin`. The Auth column shows the minimum role; see the [group page](./university-admissions.md) for the guard mechanics.
+- **session + min role** — University Admissions only. These routes require an authenticated Auth.js session (`requireAdmissionsSession`) but are **not** admin-only: rights are re-resolved from Postgres per request (`requireCaseAccess` / `requireCounselorOrAdmin`, `src/lib/admissions/access.ts`) under the role ordering `parent < student < counselor < admin`. Family access additionally requires an open portal and an accessible lifecycle. The Auth column shows the minimum role; see the [group page](./university-admissions.md) for the guard mechanics.
 
 > **Canonical-home rule:** this page owns only the mechanical endpoint inventory. Meaning, business rules, and flows live in the relevant `docs/features/*` pages; full per-endpoint signatures live in the linked per-group detail pages.
 
@@ -75,6 +78,19 @@ Side-by-side tutor comparison and candidate discovery.
 | POST | `/api/compare` | compare | admin | Compare 1-3 tutors for a week: schedules, conflicts, shared free slots |
 | POST | `/api/compare/discover` | compare | admin | Find candidate tutors with pre-computed conflict status |
 
+## Competitor Intelligence — `/api/competitor-intelligence`
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/competitor-intelligence` | competitor-intelligence | admin | Load the intelligence dashboard payload |
+| POST | `/api/competitor-intelligence/manual-evidence` | competitor-intelligence | admin | Add a manual evidence item |
+| GET, POST | `/api/competitor-intelligence/own-sources` | competitor-intelligence | admin | List/create BeGifted-owned intelligence sources |
+| PATCH | `/api/competitor-intelligence/own-sources/[sourceId]` | competitor-intelligence | admin | Update an owned source |
+| PATCH | `/api/competitor-intelligence/sources/[sourceId]` | competitor-intelligence | admin | Update a competitor source |
+| POST | `/api/competitor-intelligence/sync` | competitor-intelligence | admin | Trigger a manual intelligence sync |
+| POST | `/api/competitor-intelligence/task-suggestions/[suggestionId]/accept` | competitor-intelligence | admin | Accept a suggested task |
+| PATCH | `/api/competitor-intelligence/tasks/[taskId]` | competitor-intelligence | admin | Update a competitor task |
+
 ## [Credit Control](./credit-control.md) — `/api/credit-control`
 
 Student credit/payment tracking: payload load, per-student and bulk actions, action history, admin ownership, inactive flagging, and a manual sync trigger. All routes gate on `requireCreditControlSession()`.
@@ -107,6 +123,12 @@ Dropdown population for the search form.
 |---|---|---|---|---|
 | GET | `/api/filters` | filters | admin | Distinct subjects/curriculums/levels from the active snapshot |
 
+## Home — `/api/home`
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/home/summary` | home | session | Role-shaped landing-page summary |
+
 ## [Internal / Cron](./internal-crons.md) — `/api/internal`
 
 Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/internal/cron-auth.ts`); bypass the session gate via `src/middleware.ts:13`. Routes tagged **cron (or admin)** also run if an authenticated admin session is present and the cron secret check did not pass.
@@ -129,6 +151,11 @@ Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/inter
 | POST | `/api/internal/student-promotions/july-1` | internal | cron | Cron-secret replay alias for the July 1 student-promotion apply |
 | GET | `/api/internal/admissions-notifications` | internal | cron | Daily admissions deadline-reminder scan (+ weekly digest on Bangkok Sundays); optional `?runType=` |
 | POST | `/api/internal/admissions-notifications` | internal | cron | Manual admissions-notification trigger (bearer only; optional `runType` body) |
+| GET, POST | `/api/internal/cron-watchdog` | internal | cron | Evaluate registered cron freshness and send deduped alerts |
+| GET | `/api/internal/line-backlog-recovery` | internal | cron | Recover missed LINE webhook/backlog work |
+| GET | `/api/internal/progress-tests/admin-digest` | internal | cron | Send the daily progress-test admin digest |
+| GET, POST | `/api/internal/sync-competitor-intelligence` | internal | cron | Run competitor-intelligence source ingestion |
+| GET, POST | `/api/internal/sync-progress-tests` | internal | cron | Refresh progress-test state from Wise |
 
 > **Admin-only sync (not cron):** `POST /api/admin/sync-wise` triggers the same Wise sync but is gated by an admin session via `auth()` (no `CRON_SECRET`) — see the [Admin](./misc.md) group.
 
@@ -180,6 +207,7 @@ LINE OA integration: inbound webhook, contact resolution & alias import, student
 | POST | `/api/line/contacts/alias-import/preview` | line | admin | Preview a contact alias import |
 | POST | `/api/line/contacts/alias-import/commit` | line | admin | Commit a contact alias import |
 | POST | `/api/line/contacts/refresh-profiles` | line | admin | Refresh all LINE contact profiles from LINE |
+| POST | `/api/line/contacts/followers-reanchor` | line | admin | Re-anchor follower/contact identities |
 | GET | `/api/line/contacts/oa-resolver/worklist` | line | public | OA-resolver worklist (bearer-token gated in-handler) |
 | GET | `/api/line/contacts/oa-resolver/runs` | line | admin | List OA-resolver runs |
 | POST | `/api/line/contacts/oa-resolver/runs` | line | admin | Start a new OA-resolver run |
@@ -198,6 +226,17 @@ Tutor payroll: payload load, Wise-driven sync, review edits, and manual adjustme
 | PATCH | `/api/payroll/review` | payroll | admin | Update a payroll review entry |
 | POST | `/api/payroll/adjustments` | payroll | admin | Add a manual payroll adjustment |
 | DELETE | `/api/payroll/adjustments/[adjustmentId]` | payroll | admin | Delete a manual payroll adjustment |
+
+## Progress Tests — `/api/progress-tests`
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/progress-tests` | progress-tests | session, role-shaped | Admin worklist or teacher-scoped progress-test view |
+| POST | `/api/progress-tests/book` | progress-tests | admin | Book a progress test |
+| POST | `/api/progress-tests/select-at-home` | progress-tests | admin | Select the at-home pathway |
+| POST | `/api/progress-tests/mark-at-home-submitted` | progress-tests | admin | Record at-home submission |
+| POST | `/api/progress-tests/mark-complete` | progress-tests | admin | Mark a progress test complete |
+| POST | `/api/progress-tests/resend-email` | progress-tests | admin | Resend a progress-test email |
 
 ## [Proposals](./proposals.md) — `/api/proposals`
 
@@ -284,9 +323,25 @@ Tutor combobox data source.
 |---|---|---|---|---|
 | GET | `/api/tutors` | tutors | admin | All tutor names/IDs/modes/subjects from the active snapshot |
 
+## US Universities — `/api/us-universities`
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/us-universities` | us-universities | admin | Filtered/paginated IPEDS institution browse |
+| GET | `/api/us-universities/search` | us-universities | admin | Institution combobox search |
+| GET | `/api/us-universities/compare` | us-universities | admin | Compare selected institutions |
+| GET | `/api/us-universities/export` | us-universities | admin | Export filtered institution data |
+| GET | `/api/us-universities/institutions/[unitId]` | us-universities | admin | Institution dossier by IPEDS unit id |
+
 ## [University Admissions](./university-admissions.md) — `/api/admissions`
 
-University admissions case management: caseload + case CRUD, memberships, checklist tasks/templates, meetings, college list + decisions, recommenders, essays, activities, testing, calendar, self-report sections, parent dashboard, notes, announcements, resources, registries, and the per-case audit trail. Auth is **session + min role** (see the legend above): `requireCaseAccess` re-resolves the caller's per-case role from Postgres on every request; "(claim)" rows gate on the JWT role from `requireAdmissionsSession`; "staff" rows use `requireCounselorOrAdmin`.
+University admissions case management: hardened case/member/lifecycle controls;
+academics, awards, testing, college research/interest/requirements, prompts,
+scholarships and aid; family projection/communications; and one-time workbook
+imports. Auth is **session + min role** (see the legend above):
+`requireCaseAccess` re-resolves the caller's per-case role from Postgres on
+every request. Family roles also require an open portal; completed is read-only
+and withdrawn/archived are denied.
 
 | Method | Path | Group | Auth | Brief purpose |
 |---|---|---|---|---|
@@ -310,6 +365,10 @@ University admissions case management: caseload + case CRUD, memberships, checkl
 | DELETE | `/api/admissions/cases/[caseId]/colleges` | admissions | session, min counselor | Soft-delete a list item (`?itemId=`) |
 | GET | `/api/admissions/cases/[caseId]/colleges/[itemId]/events` | admissions | session, min student | Decision-event chain for one list item |
 | POST | `/api/admissions/cases/[caseId]/colleges/[itemId]/events` | admissions | session, min counselor | Append a decision event (`committed` moves the pointer) |
+| GET, PATCH | `/api/admissions/cases/[caseId]/colleges/[itemId]/research` | admissions | session, min student | Read/upsert structured college research and fit |
+| GET, POST, PATCH, DELETE | `/api/admissions/cases/[caseId]/colleges/[itemId]/interest-events` | admissions | session, min student | Demonstrated-interest event CRUD |
+| GET, POST, PATCH, DELETE | `/api/admissions/cases/[caseId]/colleges/[itemId]/requirements` | admissions | session, role/owner-shaped | Generic requirement CRUD and verification |
+| GET, PUT | `/api/admissions/cases/[caseId]/colleges/[itemId]/financial-aid` | admissions | session, student read / counselor write | Per-college financial-aid comparison |
 | GET | `/api/admissions/cases/[caseId]/recommenders` | admissions | session, min student | Recommenders + college-doc rows |
 | POST | `/api/admissions/cases/[caseId]/recommenders` | admissions | session, min counselor | Create a recommender |
 | PATCH | `/api/admissions/cases/[caseId]/recommenders` | admissions | session, min counselor | update / link / submission / college_doc actions |
@@ -318,19 +377,28 @@ University admissions case management: caseload + case CRUD, memberships, checkl
 | POST | `/api/admissions/cases/[caseId]/essays` | admissions | session, min student | Add an essay row |
 | PATCH | `/api/admissions/cases/[caseId]/essays` | admissions | session, min student (staff fields counselor) | Update an essay |
 | DELETE | `/api/admissions/cases/[caseId]/essays` | admissions | session, min counselor | Soft-delete an essay (`?essayId=`) |
+| POST | `/api/admissions/cases/[caseId]/essays/from-prompt` | admissions | session, min student | Create a case essay from an active catalog prompt |
 | GET | `/api/admissions/cases/[caseId]/activities` | admissions | session, min student | Activities list, ranked first |
 | POST | `/api/admissions/cases/[caseId]/activities` | admissions | session, min student | Add an activity |
 | PATCH | `/api/admissions/cases/[caseId]/activities` | admissions | session, min student | update / rank (Common App top-10) actions |
 | DELETE | `/api/admissions/cases/[caseId]/activities` | admissions | session, min student | Soft-delete an activity (`?activityId=`) |
+| GET, POST, PATCH, DELETE | `/api/admissions/cases/[caseId]/awards` | admissions | session, min student | Honors/awards CRUD + Common App top-five rank; internal notes staff-only |
+| GET, POST, PATCH, DELETE | `/api/admissions/cases/[caseId]/academics` | admissions | session, student read / counselor write | Validated US/IB/A-level-IGCSE academic records |
 | GET | `/api/admissions/cases/[caseId]/testing` | admissions | session, min student | Test sittings + best scores |
 | POST | `/api/admissions/cases/[caseId]/testing` | admissions | session, min student | Add a test sitting |
 | PATCH | `/api/admissions/cases/[caseId]/testing` | admissions | session, min student (`scoreReleasedToParent` counselor) | Update a sitting |
 | DELETE | `/api/admissions/cases/[caseId]/testing` | admissions | session, min student | Delete a sitting (`?sittingId=`) |
+| GET, POST, PATCH, DELETE | `/api/admissions/cases/[caseId]/scholarships` | admissions | session, min student | Scholarship tracker; outcome/amount counselor-only |
 | GET | `/api/admissions/cases/[caseId]/calendar` | admissions | session, min student | Dated items for a window + upcoming deadlines |
 | GET | `/api/admissions/cases/[caseId]/sections/[sectionKey]` | admissions | session, min student | Self-report section definition + saved state |
 | PUT | `/api/admissions/cases/[caseId]/sections/[sectionKey]` | admissions | session, min student | Autosave a partial section draft |
 | POST | `/api/admissions/cases/[caseId]/sections/[sectionKey]` | admissions | session, min student (`review` counselor) | submit / review state machine |
 | GET | `/api/admissions/cases/[caseId]/parent-dashboard` | admissions | session, min parent | Closed parent projection |
+| GET | `/api/admissions/family-cases` | admissions | session, parent claim | Leak-safe list for sibling switching |
+| GET, PATCH | `/api/admissions/notification-preferences` | admissions | session, active case member | Digest preferences; deadline reminders mandatory |
+| POST | `/api/admissions/cases/[caseId]/messages` | admissions | session, min counselor | Direct email to an active case member |
+| GET, POST | `/api/admissions/cases/[caseId]/imports` | admissions | session, min counselor | Import history; workbook preview/atomic commit |
+| GET, POST | `/api/admissions/prompt-catalog` | admissions | session read / counselor mutate | Annual-cycle essay prompt catalog |
 | GET | `/api/admissions/cases/[caseId]/notes` | admissions | session, min student | Notes shaped for the reader's role |
 | POST | `/api/admissions/cases/[caseId]/notes` | admissions | session, min counselor | Create a note (explicit visibility) |
 | PATCH | `/api/admissions/cases/[caseId]/notes` | admissions | session, min counselor | Change a note's visibility |
@@ -368,4 +436,5 @@ Wise audit-event workspace: paginated events, summary KPIs, manual backfill sync
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Route-handler count and admissions inventory verified against source on
+2026-07-10._

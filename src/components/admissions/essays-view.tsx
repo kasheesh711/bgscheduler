@@ -70,6 +70,7 @@ import {
 import { todayBangkok } from "@/lib/room-capacity/dates";
 import type { AdmissionsEssayListRowDto } from "@/lib/admissions/essays";
 import type { CaseRole } from "@/lib/admissions/types";
+import { EssayPromptChooser } from "./essay-prompt-chooser";
 
 // ── Pure helpers (exported for tests) ───────────────────────────────────
 
@@ -163,10 +164,12 @@ export function buildAddEssayPayload(
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     prompt: values.prompt.trim(),
-    listItemId: values.listItemId || null,
     driveUrl: values.driveUrl.trim() || null,
   };
-  if (isStaff) payload.deadline = values.deadline || null;
+  if (isStaff) {
+    payload.listItemId = values.listItemId || null;
+    payload.deadline = values.deadline || null;
+  }
   return payload;
 }
 
@@ -295,24 +298,26 @@ export function AddEssayFormFields({
           onChange={(event) => onChange({ ...values, prompt: event.target.value })}
         />
       </label>
-      <label className="block space-y-1 text-xs font-medium text-foreground">
-        College
-        <select
-          className={cn(SELECT_CLASSES, "h-9 w-full")}
-          value={values.listItemId}
-          data-testid="add-essay-college"
-          onChange={(event) =>
-            onChange({ ...values, listItemId: event.target.value })
-          }
-        >
-          <option value="">No college (personal statement)</option>
-          {collegeOptions.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.instName}
-            </option>
-          ))}
-        </select>
-      </label>
+      {showDeadline ? (
+        <label className="block space-y-1 text-xs font-medium text-foreground">
+          College
+          <select
+            className={cn(SELECT_CLASSES, "h-9 w-full")}
+            value={values.listItemId}
+            data-testid="add-essay-college"
+            onChange={(event) =>
+              onChange({ ...values, listItemId: event.target.value })
+            }
+          >
+            <option value="">No college (personal statement)</option>
+            {collegeOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.instName}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       {showDeadline ? (
         <label className="block space-y-1 text-xs font-medium text-foreground">
           Deadline
@@ -573,18 +578,25 @@ export function EssaysView({
           </CardDescription>
           {canEditStatus ? (
             <CardAction>
-              <Button
-                size="sm"
-                data-testid="add-essay"
-                onClick={() => {
-                  setAddForm(EMPTY_ADD_ESSAY_FORM);
-                  setAddError(null);
-                  setAddOpen(true);
-                }}
-              >
-                <PlusIcon aria-hidden />
-                Add essay
-              </Button>
+              <div className="flex flex-wrap justify-end gap-2">
+                <EssayPromptChooser
+                  caseId={caseId}
+                  collegeOptions={collegeOptions}
+                  viewerRole={viewerRole}
+                />
+                <Button
+                  size="sm"
+                  data-testid="add-essay"
+                  onClick={() => {
+                    setAddForm(EMPTY_ADD_ESSAY_FORM);
+                    setAddError(null);
+                    setAddOpen(true);
+                  }}
+                >
+                  <PlusIcon aria-hidden />
+                  Add manually
+                </Button>
+              </div>
             </CardAction>
           ) : null}
         </CardHeader>

@@ -47,10 +47,20 @@ const DASHBOARD: ParentDashboard = {
   studentName: "Nong Prae",
   cohortName: "Class of 2027",
   caseStatus: "active",
+  profile: {
+    preferredName: "Prae",
+    phone: null,
+    school: "Bangkok International School",
+    schoolCounselor: null,
+    graduationYear: 2027,
+    sharedDetails: [],
+  },
+  academics: [],
   progress: { done: 3, total: 10, percent: 30 },
   phaseProgress: [
     { phase: "essays", label: "Essays", done: 1, total: 4, percent: 25 },
   ],
+  checklist: [],
   collegeList: [
     {
       instName: "Brown University",
@@ -59,8 +69,27 @@ const DASHBOARD: ParentDashboard = {
       appStatus: "applying",
       deadline: "2026-11-01",
       category: "reach",
+      firstChoiceMajor: null,
+      secondChoiceMajor: null,
+      admissionsUrl: null,
+      portalUrl: null,
+      completeness: {
+        recsAgreed: 0,
+        recsSubmitted: 0,
+        recsTotal: 0,
+        transcriptSent: false,
+        schoolReportSent: false,
+        scoreSendsSent: 0,
+        complete: false,
+      },
+      decisions: [],
+      requirements: [],
     },
   ],
+  recommenders: [],
+  essays: [],
+  activities: [],
+  awards: [],
   upcomingDeadlines: [
     { source: "task", title: "Draft main essay", date: "2026-07-15", overdue: false },
   ],
@@ -68,8 +97,20 @@ const DASHBOARD: ParentDashboard = {
     { title: "Kickoff", body: "Welcome to the season!", createdAt: "2026-07-01T00:00:00.000Z" },
   ],
   testingMilestones: [
-    { testType: "sat", testDate: "2026-08-22", registered: true, taken: false, scoreReceived: false },
+    {
+      testType: "sat",
+      subject: null,
+      testDate: "2026-08-22",
+      registrationDeadline: "2026-07-18",
+      lateRegistrationDeadline: null,
+      status: "registered",
+      registered: true,
+      taken: false,
+      scoreReceived: false,
+    },
   ],
+  scholarships: [],
+  financialAid: [],
   sharedNotes: [
     { body: "Great progress this week", createdAt: "2026-07-02T00:00:00.000Z" },
   ],
@@ -190,7 +231,7 @@ describe("/api/admissions/cases/[caseId]/parent-dashboard", () => {
       const res = await GET(makeRequest(), makeCtx());
 
       expect(res.status).toBe(500);
-      await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+      await expect(res.json()).resolves.toEqual({ error: "Parent dashboard load failed" });
     });
   });
 });

@@ -76,6 +76,10 @@ const COLLEGE_DTO: AdmissionsCollegeListItemDto = {
   deadline: "2026-11-30",
   appStatus: "researching",
   category: "reach",
+  firstChoiceMajor: null,
+  secondChoiceMajor: null,
+  admissionsUrl: null,
+  portalUrl: null,
   aidOffered: null,
   aidNotes: null,
   createdAt: "2026-07-01T00:00:00.000Z",
@@ -187,7 +191,7 @@ describe("/api/admissions/cases/[caseId]/colleges", () => {
       const res = await GET(new Request("http://test.local"), makeCtx());
 
       expect(res.status).toBe(500);
-      await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+      await expect(res.json()).resolves.toEqual({ error: "College list failed" });
     });
   });
 
@@ -325,6 +329,10 @@ describe("/api/admissions/cases/[caseId]/colleges", () => {
         ...COLLEGE_DTO,
         round: "ea",
         appStatus: "applying",
+        firstChoiceMajor: "Computer Science",
+        secondChoiceMajor: "Economics",
+        admissionsUrl: "https://example.edu/admissions",
+        portalUrl: "https://portal.example.edu/",
         aidOffered: "12000.50",
       };
       vi.mocked(updateCollegeListItem).mockResolvedValue(updated);
@@ -335,6 +343,10 @@ describe("/api/admissions/cases/[caseId]/colleges", () => {
           expectedUpdatedAt: "2026-07-01T00:00:00.000Z",
           round: "ea",
           appStatus: "applying",
+          firstChoiceMajor: "Computer Science",
+          secondChoiceMajor: "Economics",
+          admissionsUrl: "https://example.edu/admissions",
+          portalUrl: "https://portal.example.edu",
           aidOffered: "12000.50",
         }),
         makeCtx(),
@@ -351,6 +363,10 @@ describe("/api/admissions/cases/[caseId]/colleges", () => {
         deadline: undefined,
         appStatus: "applying",
         category: undefined,
+        firstChoiceMajor: "Computer Science",
+        secondChoiceMajor: "Economics",
+        admissionsUrl: "https://example.edu/admissions",
+        portalUrl: "https://portal.example.edu",
         aidOffered: "12000.50",
         aidNotes: undefined,
       });

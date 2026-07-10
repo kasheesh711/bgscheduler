@@ -41,6 +41,7 @@ import {
 } from "./audit";
 import { roleAtLeast } from "./config";
 import { isUuidShaped } from "./members";
+import { normalizeAdmissionsUrl } from "./shared/urls";
 import { ADMISSIONS_ESSAY_STATUSES, type AdmissionsEssayStatus } from "./shared/essays";
 import type { CalendarItem, CalendarWindow } from "./calendar";
 import type { AdmissionsTaskOwner } from "./meetings";
@@ -77,6 +78,8 @@ export interface AdmissionsEssayDto {
   counselorStage: AdmissionsEssayStatus | null;
   deadline: string | null;
   driveUrl: string | null;
+  /** Controls whether the parent projection may expose the Google Docs link. */
+  sharedWithFamily?: boolean;
   /** Last student mutation instant; null when the student never touched the row. */
   lastStudentUpdateAt: string | null;
   createdAt: string;
@@ -110,9 +113,7 @@ function assertEssayStatus(value: string, field: string): void {
 
 /** Trims a driveUrl input; empty-after-trim collapses to null. */
 function normalizeDriveUrl(value: string | null): string | null {
-  if (value === null) return null;
-  const trimmed = value.trim();
-  return trimmed === "" ? null : trimmed;
+  return normalizeAdmissionsUrl(value, "driveUrl") ?? null;
 }
 
 /**
@@ -140,6 +141,7 @@ function toEssayDto(row: EssayRow): AdmissionsEssayDto {
     counselorStage: row.counselorStage,
     deadline: row.deadline,
     driveUrl: row.driveUrl,
+    sharedWithFamily: row.sharedWithFamily,
     lastStudentUpdateAt: row.lastStudentUpdateAt ? row.lastStudentUpdateAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -163,7 +165,8 @@ async function findLiveEssay(
       eq(admissionsEssays.caseId, caseId),
       isNull(admissionsEssays.deletedAt),
     ))
-    .limit(1);
+    .limit(1)
+    .for("update");
   const row = rows[0];
   if (!row) throw new Error("NotFound");
   return row;
@@ -201,6 +204,8 @@ export interface CreateEssayInput {
   listItemId?: string | null;
   deadline?: string | null;
   driveUrl?: string | null;
+  /** Counselor+ only; defaults false. */
+  sharedWithFamily?: boolean;
 }
 
 /**
@@ -226,6 +231,15 @@ export async function createEssay(
   db: Database = getDb(),
 ): Promise<AdmissionsEssayDto> {
   if (!roleAtLeast(input.access.role, "student")) throw new Error("Forbidden");
+  if (input.sharedWithFamily !== undefined && !roleAtLeast(input.access.role, "counselor")) {
+    throw new Error("Forbidden");
+  }
+  if (
+    input.access.role === "student" &&
+    (input.deadline !== undefined || input.listItemId !== undefined)
+  ) {
+    throw new Error("Forbidden");
+  }
 
   const prompt = input.prompt.trim();
   if (!prompt) throw new Error("Essay requires a non-empty prompt");
@@ -250,6 +264,7 @@ export async function createEssay(
         counselorStage: null,
         deadline: input.deadline ?? null,
         driveUrl,
+        sharedWithFamily: input.sharedWithFamily ?? false,
         lastStudentUpdateAt: input.access.role === "student" ? now : null,
       })
       .returning();
@@ -271,8 +286,9 @@ export async function createEssay(
           status: "not_started",
           deadline: input.deadline ?? null,
           driveUrl,
+          sharedWithFamily: input.sharedWithFamily ?? false,
         },
-        ["prompt", "listItemId", "status", "deadline", "driveUrl"],
+        ["prompt", "listItemId", "status", "deadline", "driveUrl", "sharedWithFamily"],
       ),
     });
 
@@ -300,6 +316,8 @@ export interface UpdateEssayInput {
   deadline?: string | null;
   /** Counselor+ only: relink to a live list item of the case; null unlinks. */
   listItemId?: string | null;
+  /** Counselor+ only: allow metadata/link in the family projection. */
+  sharedWithFamily?: boolean;
 }
 
 const ESSAY_DIFF_FIELDS = [
@@ -309,6 +327,7 @@ const ESSAY_DIFF_FIELDS = [
   "counselorStage",
   "deadline",
   "listItemId",
+  "sharedWithFamily",
 ] as const;
 
 /**
@@ -346,7 +365,8 @@ export async function updateEssay(
     !isStaff &&
     (input.counselorStage !== undefined ||
       input.deadline !== undefined ||
-      input.listItemId !== undefined)
+      input.listItemId !== undefined ||
+      input.sharedWithFamily !== undefined)
   ) {
     throw new Error("Forbidden");
   }
@@ -378,6 +398,7 @@ export async function updateEssay(
         counselorStage: input.counselorStage,
         deadline: input.deadline,
         listItemId: input.listItemId,
+        sharedWithFamily: input.sharedWithFamily,
       },
       ESSAY_DIFF_FIELDS,
     );
@@ -397,6 +418,7 @@ export async function updateEssay(
     if ("counselorStage" in diff) setValues.counselorStage = input.counselorStage;
     if ("deadline" in diff) setValues.deadline = input.deadline;
     if ("listItemId" in diff) setValues.listItemId = input.listItemId;
+    if ("sharedWithFamily" in diff) setValues.sharedWithFamily = input.sharedWithFamily;
     if (input.access.role === "student") setValues.lastStudentUpdateAt = now;
 
     await tx

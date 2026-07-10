@@ -10,6 +10,7 @@ vi.mock("next/navigation", () => ({
 import {
   EMPTY_SITTING_FORM,
   TestingView,
+  buildScoreDetails,
   buildSittingPatch,
   formatDeadlinePreview,
   isRegistrationOverdue,
@@ -43,8 +44,12 @@ function makeSitting(
     testType: "sat",
     testDate: "2099-10-03",
     registrationDeadline: "2099-08-29",
+    lateRegistrationDeadline: null,
+    status: "planned",
+    subject: null,
     targetScore: "1500",
     actualScore: null,
+    scoreDetails: null,
     scoreReleasedToParent: false,
     accommodations: null,
     createdAt: "2026-06-01T03:00:00.000Z",
@@ -244,8 +249,12 @@ describe("toSittingFormValues", () => {
       testType: "sat",
       testDate: "2099-10-03",
       registrationDeadline: "",
+      lateRegistrationDeadline: "",
+      status: "planned",
+      subject: "",
       targetScore: "1500",
       actualScore: "",
+      scoreFields: {},
       accommodations: "",
     });
   });
@@ -283,6 +292,23 @@ describe("buildSittingPatch", () => {
       accommodations: null,
       targetScore: "1550",
     });
+  });
+});
+
+describe("buildScoreDetails", () => {
+  it("builds typed SAT subscores and leaves totals for the API to derive", () => {
+    expect(buildScoreDetails("sat", { math: "780", readingWriting: "740" })).toEqual({
+      testType: "sat",
+      math: 780,
+      readingWriting: 740,
+    });
+  });
+
+  it("returns null for a blank score form and rejects incomplete typed scores", () => {
+    expect(buildScoreDetails("ielts", {})).toBeNull();
+    expect(() => buildScoreDetails("toefl", { reading: "28" })).toThrow(
+      "Listening score is required",
+    );
   });
 });
 

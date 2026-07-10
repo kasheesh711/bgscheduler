@@ -11,6 +11,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   admissionsErrorResponse,
+  assertCaseMutationAllowed,
   requireAdmissionsSession,
   requireCaseAccess,
 } from "@/lib/admissions/access";
@@ -57,6 +58,7 @@ export async function POST(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "counselor");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {
@@ -94,6 +96,7 @@ export async function PATCH(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "counselor");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {

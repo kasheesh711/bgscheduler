@@ -110,7 +110,7 @@ declared maturity.
 | [AI Scheduler](./features/ai-scheduler.md) | experimental | LLM reads pasted chat, extracts a request, runs the deterministic search, drafts a parent reply. Never decides availability. |
 | [Data Health](./features/data-health.md) | stable | Ops command center for cron firing, data freshness, Wise snapshot fidelity, and unresolved normalization issues. |
 | [Leave Requests](./features/leave-requests.md) | in progress (uncommitted) | Tutor leave-request workflow. Present in the working tree but uncommitted; treat shapes as provisional. |
-| [University Admissions](./features/university-admissions.md) | built, pre-deploy | Counselor case management for university applications — cases, versioned checklists, college lists with decision chains, essays, activities, testing — with a mobile-first student portal and a view-only, Thai-first parent dashboard. PRD: [Casemanagementsystem_prd.md](./Casemanagementsystem_prd.md); design: [casemanagementsystem_design.md](./casemanagementsystem_design.md). |
+| [University Admissions](./features/university-admissions.md) | migrations deployed; code/env blocked | Full-parity counselor case management with academics, awards, applications, research, requirements, essays/prompts, testing, money, transactional invitations, family projection, and one-time workbook import. Migrations `0053–0054` are live; code waits on four production env values. |
 
 ### Reference
 
@@ -168,7 +168,8 @@ How to run, secure, and observe the system.
 | Doc | Covers |
 |---|---|
 | [runbook.md](./operations/runbook.md) | Deploys, DB scripts, manual sync triggers, and sync-failure recovery. |
-| [auth-and-access.md](./operations/auth-and-access.md) | The two access gates: edge-middleware session check + login-time allowlist. |
+| [auth-and-access.md](./operations/auth-and-access.md) | Role resolution, page scope, per-case authorization, family lifecycle, Sheets consent, invitations, and parent projection. |
+| [admissions-import-rollout.md](./operations/admissions-import-rollout.md) | Admissions production preflight, migration/code rollout, invitation recovery, one-time import, and containment. |
 | [observability.md](./operations/observability.md) | What's logged, how to inspect sync/runtime state, and where signals live. |
 
 ### Open questions & gaps

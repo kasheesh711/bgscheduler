@@ -7,7 +7,7 @@
 // every case-scoped request re-resolves membership from Postgres here.
 
 import { NextResponse } from "next/server";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { getDb, type Database } from "@/lib/db";
 import {
@@ -18,7 +18,12 @@ import {
 } from "@/lib/db/schema";
 import { hasPageAccess } from "@/lib/progress-tests/api";
 import { ADMISSIONS_ROUTE, roleAtLeast } from "./config";
-import type { AdmissionsRole, AdmissionsSessionUser, CaseAccess, CaseRole } from "./types";
+import type {
+  AdmissionsRole,
+  AdmissionsSessionUser,
+  CaseAccess,
+  CaseRole,
+} from "./types";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -51,9 +56,14 @@ export async function resolveAdmissionsRole(
   const memberRows = await db
     .select({ role: admissionsCaseMembers.role })
     .from(admissionsCaseMembers)
+    .innerJoin(admissionsCases, eq(admissionsCaseMembers.caseId, admissionsCases.id))
     .where(and(
       eq(admissionsCaseMembers.email, normalized),
       eq(admissionsCaseMembers.status, "active"),
+      inArray(admissionsCaseMembers.role, ["student", "parent"]),
+      eq(admissionsCases.familyPortalOpen, true),
+      inArray(admissionsCases.status, ["active", "committed", "completed"]),
+      isNull(admissionsCases.deletedAt),
     ));
   if (memberRows.some((row) => row.role === "student")) return "student";
   if (memberRows.some((row) => row.role === "parent")) return "parent";
@@ -109,7 +119,11 @@ export async function requireAdmissionsSession(): Promise<AdmissionsSessionUser>
  * 4. Require an active `admissions_case_members` row for THIS case; a
  *    counselor membership additionally requires an active
  *    `admissions_counselors` registry row (deactivated counselors deny).
- * 5. Enforce `minRole` under parent < student < counselor < admin; below the
+ * 5. Family access is opt-in and lifecycle-aware: a closed family portal or
+ *    withdrawn/archived case denies every student/parent request. Completed
+ *    cases remain readable but return `familyReadOnly: true` so mutation
+ *    handlers can reject before parsing a body.
+ * 6. Enforce `minRole` under parent < student < counselor < admin; below the
  *    bar throws "Forbidden".
  *
  * @returns the resolved CaseAccess on success.
@@ -125,14 +139,27 @@ export async function requireCaseAccess(
   if (!UUID_PATTERN.test(caseId)) throw new Error("Forbidden");
 
   const adminRows = await db
-    .select({ id: adminUsers.id })
+    .select({ id: adminUsers.id, allowedPages: adminUsers.allowedPages })
     .from(adminUsers)
     .where(eq(adminUsers.email, normalized))
     .limit(1);
+  if (
+    adminRows.length > 0 &&
+    !hasPageAccess(adminRows[0].allowedPages, ADMISSIONS_ROUTE)
+  ) {
+    // Admin rows take precedence in global role resolution. Do not fall
+    // through to a counselor/family membership when the current admin row has
+    // explicitly removed Admissions from its allowed page set.
+    throw new Error("Forbidden");
+  }
   const isAdmin = adminRows.length > 0;
 
   const caseRows = await db
-    .select({ id: admissionsCases.id })
+    .select({
+      id: admissionsCases.id,
+      status: admissionsCases.status,
+      familyPortalOpen: admissionsCases.familyPortalOpen,
+    })
     .from(admissionsCases)
     .where(and(eq(admissionsCases.id, caseId), isNull(admissionsCases.deletedAt)))
     .limit(1);
@@ -157,6 +184,15 @@ export async function requireCaseAccess(
   if (memberRows.length === 0) throw new Error("Forbidden");
   const role: CaseRole = memberRows[0].role;
 
+  const isFamily = role === "student" || role === "parent";
+  if (isFamily) {
+    const caseRow = caseRows[0];
+    if (caseRow.familyPortalOpen !== true) throw new Error("Forbidden");
+    if (caseRow.status === "withdrawn" || caseRow.status === "archived") {
+      throw new Error("Forbidden");
+    }
+  }
+
   if (role === "counselor") {
     const counselorRows = await db
       .select({ id: admissionsCounselors.id })
@@ -168,7 +204,29 @@ export async function requireCaseAccess(
 
   if (!roleAtLeast(role, minRole)) throw new Error("Forbidden");
 
-  return { caseId, email: normalized, role, isAdmin: false };
+  return {
+    caseId,
+    email: normalized,
+    role,
+    isAdmin: false,
+    ...(isFamily && caseRows[0].status === "completed"
+      ? { familyReadOnly: true as const }
+      : {}),
+  };
+}
+
+/**
+ * Enforces the second half of completed-family read-only access. Mutation
+ * routes call this immediately after `requireCaseAccess` and before reading
+ * request input. Staff access and active/committed family access pass.
+ */
+export function assertCaseMutationAllowed(access: CaseAccess): void {
+  if (
+    (access.role === "student" || access.role === "parent") &&
+    access.familyReadOnly === true
+  ) {
+    throw new Error("Forbidden");
+  }
 }
 
 /** Result of the Postgres-resolved staff check (requireCounselorOrAdmin). */
@@ -201,11 +259,14 @@ export async function requireCounselorOrAdmin(
   if (!normalized) throw new Error("Unauthorized");
 
   const adminRows = await db
-    .select({ id: adminUsers.id })
+    .select({ id: adminUsers.id, allowedPages: adminUsers.allowedPages })
     .from(adminUsers)
     .where(eq(adminUsers.email, normalized))
     .limit(1);
   if (adminRows.length > 0) {
+    if (!hasPageAccess(adminRows[0].allowedPages, ADMISSIONS_ROUTE)) {
+      throw new Error("Forbidden");
+    }
     return { email: normalized, role: "admin", isAdmin: true };
   }
 
@@ -239,11 +300,14 @@ export async function requireAdmissionsAdmin(
   if (!normalized) throw new Error("Unauthorized");
 
   const adminRows = await db
-    .select({ id: adminUsers.id })
+    .select({ id: adminUsers.id, allowedPages: adminUsers.allowedPages })
     .from(adminUsers)
     .where(eq(adminUsers.email, normalized))
     .limit(1);
   if (adminRows.length === 0) throw new Error("Forbidden");
+  if (!hasPageAccess(adminRows[0].allowedPages, ADMISSIONS_ROUTE)) {
+    throw new Error("Forbidden");
+  }
   return { email: normalized, role: "admin", isAdmin: true };
 }
 
@@ -281,7 +345,7 @@ export function admissionsErrorResponse(route: string, error: unknown, fallbackM
 
   console.error(route, error);
   return NextResponse.json(
-    { error: error instanceof Error ? error.message : fallbackMessage },
+    { error: fallbackMessage },
     { status: 500 },
   );
 }

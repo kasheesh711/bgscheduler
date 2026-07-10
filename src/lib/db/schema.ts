@@ -309,6 +309,19 @@ export const admissionsTestTypeEnum = pgEnum("admissions_test_type", [
   "other",
 ]);
 
+export const admissionsTestSittingStatusEnum = pgEnum("admissions_test_sitting_status", [
+  "planned",
+  "registered",
+  "taken",
+  "score_received",
+  "canceled",
+]);
+
+export const admissionsNotificationOutboxStatusEnum = pgEnum(
+  "admissions_notification_outbox_status",
+  ["pending", "processing", "sent", "failed"],
+);
+
 export const admissionsNoteVisibilityEnum = pgEnum("admissions_note_visibility", [
   "staff_only",
   "shared_with_family",
@@ -3024,6 +3037,11 @@ export const admissionsCases = pgTable("admissions_cases", {
   statusChangedAt: timestamp("status_changed_at", { withTimezone: true }).notNull().defaultNow(),
   committedListItemId: uuid("committed_list_item_id"),
   driveFolder: text("drive_folder"),
+  // Family access is opt-in per case. Opening/closing is an audited staff
+  // action in the admissions domain; these columns preserve who opened it.
+  familyPortalOpen: boolean("family_portal_open").notNull().default(false),
+  familyPortalOpenedAt: timestamp("family_portal_opened_at", { withTimezone: true }),
+  familyPortalOpenedByEmail: text("family_portal_opened_by_email"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -3154,6 +3172,10 @@ export const admissionsCollegeListItems = pgTable("admissions_college_list_items
   deadline: date("deadline", { mode: "string" }),
   appStatus: admissionsAppStatusEnum("app_status").notNull().default("researching"),
   category: admissionsCollegeCategoryEnum("category").notNull().default("unset"),
+  firstChoiceMajor: text("first_choice_major"),
+  secondChoiceMajor: text("second_choice_major"),
+  admissionsUrl: text("admissions_url"),
+  portalUrl: text("portal_url"),
   aidOffered: numeric("aid_offered"),
   aidNotes: text("aid_notes"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
@@ -3163,6 +3185,102 @@ export const admissionsCollegeListItems = pgTable("admissions_college_list_items
   index("admissions_college_list_items_case_idx").on(table.caseId),
   index("admissions_college_list_items_case_deadline_idx").on(table.caseId, table.deadline),
   index("admissions_college_list_items_unit_idx").on(table.unitId),
+]);
+
+export const admissionsCollegeResearch = pgTable("admissions_college_research", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  listItemId: uuid("list_item_id").notNull().references(() => admissionsCollegeListItems.id),
+  fitRating: integer("fit_rating"),
+  sources: jsonb("sources").$type<Array<Record<string, unknown>>>().notNull().default([]),
+  campusVisitDate: date("campus_visit_date", { mode: "string" }),
+  campusVisitNotes: text("campus_visit_notes"),
+  academicNotes: text("academic_notes"),
+  opportunities: text("opportunities"),
+  questions: text("questions"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  check(
+    "admissions_college_research_fit_rating_check",
+    sql`${table.fitRating} IS NULL OR (${table.fitRating} >= 1 AND ${table.fitRating} <= 5)`,
+  ),
+  uniqueIndex("admissions_college_research_list_item_idx").on(table.listItemId),
+]);
+
+export const admissionsInterestEvents = pgTable("admissions_interest_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  listItemId: uuid("list_item_id").notNull().references(() => admissionsCollegeListItems.id),
+  type: text("type").notNull(),
+  eventDate: date("event_date", { mode: "string" }).notNull(),
+  notes: text("notes"),
+  actorEmail: text("actor_email").notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_interest_events_item_date_idx").on(table.listItemId, table.eventDate),
+]);
+
+export const admissionsCollegeRequirements = pgTable("admissions_college_requirements", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  listItemId: uuid("list_item_id").notNull().references(() => admissionsCollegeListItems.id),
+  kind: text("kind").notNull(),
+  title: text("title").notNull(),
+  status: admissionsTaskStatusEnum("status").notNull().default("not_started"),
+  owner: admissionsTaskOwnerEnum("owner").notNull().default("student"),
+  dueDate: date("due_date", { mode: "string" }),
+  required: boolean("required").notNull().default(true),
+  sourceUrl: text("source_url"),
+  notes: text("notes"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  verifiedByEmail: text("verified_by_email"),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_college_requirements_item_sort_idx").on(table.listItemId, table.sortOrder),
+  index("admissions_college_requirements_item_due_idx").on(table.listItemId, table.dueDate),
+]);
+
+export const admissionsFinancialAidOffers = pgTable("admissions_financial_aid_offers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  listItemId: uuid("list_item_id").notNull().references(() => admissionsCollegeListItems.id),
+  currency: text("currency").notNull().default("USD"),
+  awardYear: integer("award_year").notNull(),
+  costBreakdown: jsonb("cost_breakdown").$type<Record<string, number | null>>().notNull().default({}),
+  giftAidBreakdown: jsonb("gift_aid_breakdown").$type<Record<string, number | null>>().notNull().default({}),
+  loanBreakdown: jsonb("loan_breakdown").$type<Record<string, number | null>>().notNull().default({}),
+  workStudyAmount: numeric("work_study_amount"),
+  netCost: numeric("net_cost"),
+  remainingBalance: numeric("remaining_balance"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_financial_aid_offers_list_item_idx").on(table.listItemId),
+]);
+
+export const admissionsScholarships = pgTable("admissions_scholarships", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  listItemId: uuid("list_item_id").references(() => admissionsCollegeListItems.id),
+  name: text("name").notNull(),
+  provider: text("provider"),
+  url: text("url"),
+  requirements: text("requirements"),
+  deadline: date("deadline", { mode: "string" }),
+  status: text("status").notNull().default("researching"),
+  outcome: text("outcome"),
+  offeredAmount: numeric("offered_amount"),
+  notes: text("notes"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_scholarships_case_deadline_idx").on(table.caseId, table.deadline),
+  index("admissions_scholarships_list_item_idx").on(table.listItemId),
 ]);
 
 export const admissionsApplicationEvents = pgTable("admissions_application_events", {
@@ -3226,12 +3344,39 @@ export const admissionsEssays = pgTable("admissions_essays", {
   counselorStage: admissionsEssayStatusEnum("counselor_stage"),
   deadline: date("deadline", { mode: "string" }),
   driveUrl: text("drive_url"),
+  sharedWithFamily: boolean("shared_with_family").notNull().default(false),
   lastStudentUpdateAt: timestamp("last_student_update_at", { withTimezone: true }),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("admissions_essays_case_status_idx").on(table.caseId, table.status),
+]);
+
+export const admissionsEssayPromptCatalog = pgTable("admissions_essay_prompt_catalog", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  unitId: integer("unit_id"),
+  institution: text("institution").notNull(),
+  program: text("program").notNull().default(""),
+  cycle: text("cycle").notNull(),
+  promptKey: text("prompt_key").notNull(),
+  prompt: text("prompt").notNull(),
+  wordLimit: integer("word_limit"),
+  required: boolean("required").notNull().default(true),
+  sourceUrl: text("source_url"),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  verifiedByEmail: text("verified_by_email"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  check(
+    "admissions_essay_prompt_catalog_word_limit_check",
+    sql`${table.wordLimit} IS NULL OR ${table.wordLimit} > 0`,
+  ),
+  uniqueIndex("admissions_essay_prompt_catalog_identity_idx")
+    .on(table.institution, table.program, table.cycle, table.promptKey),
+  index("admissions_essay_prompt_catalog_unit_cycle_idx").on(table.unitId, table.cycle),
 ]);
 
 export const admissionsActivities = pgTable("admissions_activities", {
@@ -3250,16 +3395,55 @@ export const admissionsActivities = pgTable("admissions_activities", {
   index("admissions_activities_case_sort_idx").on(table.caseId, table.sortOrder),
 ]);
 
+export const admissionsAwards = pgTable("admissions_awards", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  title: text("title").notNull(),
+  organization: text("organization"),
+  gradeLevels: jsonb("grade_levels").$type<string[]>().notNull().default([]),
+  recognitionLevels: jsonb("recognition_levels").$type<string[]>().notNull().default([]),
+  awardDate: date("award_date", { mode: "string" }),
+  commonAppRank: integer("common_app_rank"),
+  ucEligibilityNarrative: text("uc_eligibility_narrative"),
+  ucAchievementNarrative: text("uc_achievement_narrative"),
+  internalNotes: text("internal_notes"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  check(
+    "admissions_awards_common_app_rank_check",
+    sql`${table.commonAppRank} IS NULL OR (${table.commonAppRank} >= 1 AND ${table.commonAppRank} <= 5)`,
+  ),
+  check(
+    "admissions_awards_uc_eligibility_length_check",
+    sql`${table.ucEligibilityNarrative} IS NULL OR char_length(${table.ucEligibilityNarrative}) <= 250`,
+  ),
+  check(
+    "admissions_awards_uc_achievement_length_check",
+    sql`${table.ucAchievementNarrative} IS NULL OR char_length(${table.ucAchievementNarrative}) <= 350`,
+  ),
+  uniqueIndex("admissions_awards_case_common_app_rank_idx")
+    .on(table.caseId, table.commonAppRank)
+    .where(sql`${table.deletedAt} IS NULL AND ${table.commonAppRank} IS NOT NULL`),
+  index("admissions_awards_case_date_idx").on(table.caseId, table.awardDate),
+]);
+
 export const admissionsTestSittings = pgTable("admissions_test_sittings", {
   id: uuid("id").primaryKey().defaultRandom(),
   caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
   testType: admissionsTestTypeEnum("test_type").notNull(),
   testDate: date("test_date", { mode: "string" }).notNull(),
   registrationDeadline: date("registration_deadline", { mode: "string" }),
+  lateRegistrationDeadline: date("late_registration_deadline", { mode: "string" }),
+  status: admissionsTestSittingStatusEnum("status").notNull().default("planned"),
+  subject: text("subject"),
   targetScore: text("target_score").notNull().default(""),
   actualScore: text("actual_score"),
+  scoreDetails: jsonb("score_details").$type<Record<string, unknown>>(),
   scoreReleasedToParent: boolean("score_released_to_parent").notNull().default(false),
   accommodations: text("accommodations"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -3272,10 +3456,14 @@ export const admissionsAcademicRecords = pgTable("admissions_academic_records", 
   system: text("system").notNull(),
   payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
   effectiveDate: date("effective_date", { mode: "string" }).notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("admissions_academic_records_case_system_idx").on(table.caseId, table.system),
+  uniqueIndex("admissions_academic_records_case_system_date_idx")
+    .on(table.caseId, table.system, table.effectiveDate)
+    .where(sql`${table.deletedAt} IS NULL`),
 ]);
 
 export const admissionsNotes = pgTable("admissions_notes", {
@@ -3332,6 +3520,7 @@ export const admissionsSelfReportSections = pgTable("admissions_self_report_sect
   sectionKey: text("section_key").notNull(),
   payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
   state: admissionsSubmissionStateEnum("state").notNull().default("draft"),
+  sharedWithFamily: boolean("shared_with_family").notNull().default(false),
   submittedAt: timestamp("submitted_at", { withTimezone: true }),
   reviewedByEmail: text("reviewed_by_email"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -3378,6 +3567,30 @@ export const admissionsNotificationLog = pgTable("admissions_notification_log", 
     .where(sql`${table.dedupeKey} IS NOT NULL`),
 ]);
 
+export const admissionsNotificationOutbox = pgTable("admissions_notification_outbox", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").references(() => admissionsCases.id),
+  memberId: uuid("member_id").references(() => admissionsCaseMembers.id),
+  recipientEmail: text("recipient_email").notNull(),
+  category: text("category").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+  dedupeKey: text("dedupe_key").notNull(),
+  status: admissionsNotificationOutboxStatusEnum("status").notNull().default("pending"),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  providerMessageId: text("provider_message_id"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_notification_outbox_dedupe_key_idx").on(table.dedupeKey),
+  index("admissions_notification_outbox_delivery_idx")
+    .on(table.status, table.nextAttemptAt),
+  index("admissions_notification_outbox_case_idx").on(table.caseId),
+]);
+
 export const admissionsNotificationRuns = pgTable("admissions_notification_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
   status: syncStatusEnum("status").notNull().default("running"),
@@ -3393,4 +3606,57 @@ export const admissionsNotificationRuns = pgTable("admissions_notification_runs"
     .on(table.status)
     .where(sql`${table.status} = 'running'`),
   index("admissions_notification_runs_status_started_idx").on(table.status, table.startedAt),
+]);
+
+export const admissionsImportRuns = pgTable("admissions_import_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  spreadsheetId: text("spreadsheet_id").notNull(),
+  spreadsheetUrl: text("spreadsheet_url").notNull(),
+  sourceFingerprint: text("source_fingerprint").notNull(),
+  status: text("status").notNull().default("preview"),
+  conflictPolicy: text("conflict_policy"),
+  sourceMetadata: jsonb("source_metadata").$type<Record<string, unknown>>().notNull().default({}),
+  summary: jsonb("summary").$type<Record<string, unknown>>().notNull().default({}),
+  createdByEmail: text("created_by_email").notNull(),
+  committedAt: timestamp("committed_at", { withTimezone: true }),
+  failedAt: timestamp("failed_at", { withTimezone: true }),
+  errorSummary: text("error_summary"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_import_runs_source_fingerprint_idx")
+    .on(table.caseId, table.spreadsheetId, table.sourceFingerprint),
+  index("admissions_import_runs_case_created_idx").on(table.caseId, table.createdAt),
+]);
+
+export const admissionsImportIssues = pgTable("admissions_import_issues", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => admissionsImportRuns.id),
+  severity: text("severity").notNull(),
+  code: text("code").notNull(),
+  sheetName: text("sheet_name"),
+  sourceRef: text("source_ref"),
+  message: text("message").notNull(),
+  details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
+  resolution: text("resolution"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_import_issues_run_severity_idx").on(table.runId, table.severity),
+]);
+
+export const admissionsImportMappings = pgTable("admissions_import_mappings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => admissionsImportRuns.id),
+  sourceType: text("source_type").notNull(),
+  sourceKey: text("source_key").notNull(),
+  targetType: text("target_type").notNull(),
+  targetId: text("target_id").notNull(),
+  sourceValueFingerprint: text("source_value_fingerprint"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_import_mappings_source_idx")
+    .on(table.runId, table.sourceType, table.sourceKey),
+  index("admissions_import_mappings_target_idx").on(table.targetType, table.targetId),
 ]);

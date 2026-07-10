@@ -13,6 +13,7 @@ import {
   admissionsCases,
   admissionsCaseTasks,
   admissionsNotificationLog,
+  admissionsNotificationOutbox,
   admissionsNotificationRuns,
   admissionsSelfReportSections,
 } from "@/lib/db/schema";
@@ -24,6 +25,9 @@ import {
   buildDeadlineReminders,
   buildWeeklyDigest,
   deriveStudentFirstName,
+  processAdmissionsNotificationOutbox,
+  queueDirectMessageOutbox,
+  queueMemberInviteOutbox,
   runDailyNotifications,
   runWeeklyDigest,
   sendAdmissionsEmail,
@@ -55,6 +59,7 @@ interface SelectBehavior {
 interface MockDbOptions {
   selects?: Map<unknown, SelectBehavior>;
   insertError?: (table: unknown) => Error | null;
+  conflictTables?: Set<unknown>;
 }
 
 /** Chainable mock db covering the select/insert/update shapes notifications.ts uses. */
@@ -81,19 +86,31 @@ function makeDb(options: MockDbOptions = {}) {
       },
     }),
     insert: (table: unknown) => ({
-      values: (values: Row) => ({
-        returning: async () => {
+      values: (values: Row) => {
+        const returning = async () => {
           const error = options.insertError?.(table) ?? null;
           if (error) throw error;
+          if (options.conflictTables?.has(table)) return [];
           inserts.push({ table, values });
           return [{ id: `id-${++idCounter}`, ...values }];
-        },
-      }),
+        };
+        return {
+          returning,
+          onConflictDoNothing: () => ({ returning }),
+        };
+      },
     }),
     update: (table: unknown) => ({
       set: (set: Row) => ({
-        where: async () => {
+        where: () => {
           updates.push({ table, set });
+          return {
+            returning: async () => [{ id: `updated-${updates.length}` }],
+            then: (
+              onFulfilled?: (value: undefined) => unknown,
+              onRejected?: (error: unknown) => unknown,
+            ) => Promise.resolve(undefined).then(onFulfilled, onRejected),
+          };
         },
       }),
     }),
@@ -183,6 +200,7 @@ describe("sendAdmissionsEmail", () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
     expect(url).toBe("https://api.resend.com/emails");
     expect(init.headers.Authorization).toBe("Bearer test-api-key");
+    expect(init.headers["Idempotency-Key"]).toMatch(/^admissions_[a-f0-9]{64}$/);
     expect(inserts).toHaveLength(1);
     expect(inserts[0].table).toBe(admissionsNotificationLog);
     expect(inserts[0].values).toEqual(expect.objectContaining({
@@ -219,11 +237,411 @@ describe("sendAdmissionsEmail", () => {
   });
 });
 
+describe("transactional notification outbox", () => {
+  const MEMBER_ID = "33333333-3333-4333-8333-333333333333";
+
+  function outboxRow(overrides: Row = {}): Row {
+    return {
+      id: "44444444-4444-4444-8444-444444444444",
+      caseId: CASE_ID,
+      memberId: MEMBER_ID,
+      recipientEmail: "student@example.com",
+      category: "invite",
+      payload: { studentFirstName: "Ada" },
+      dedupeKey: `member-invite:${MEMBER_ID}:v1`,
+      status: "pending",
+      attemptCount: 0,
+      nextAttemptAt: NOW,
+      lastAttemptAt: null,
+      sentAt: null,
+      providerMessageId: null,
+      lastError: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+      ...overrides,
+    };
+  }
+
+  function deliverableInviteMember(overrides: Row = {}): Row {
+    return {
+      id: MEMBER_ID,
+      caseId: CASE_ID,
+      email: "student@example.com",
+      status: "invited",
+      familyPortalOpen: true,
+      caseStatus: "active",
+      ...overrides,
+    };
+  }
+
+  function directMessageRow(overrides: Row = {}): Row {
+    return outboxRow({
+      category: "direct_message",
+      payload: {
+        senderName: "Kai Counselor",
+        subject: "Application update",
+        body: "Your checklist is ready.",
+      },
+      dedupeKey: `direct-message:${CASE_ID}:55555555-5555-4555-8555-555555555555`,
+      ...overrides,
+    });
+  }
+
+  function deliverableDirectMessageMember(overrides: Row = {}): Row {
+    return deliverableInviteMember({
+      role: "student",
+      status: "active",
+      ...overrides,
+    });
+  }
+
+  it("queues an invite with the business transaction's db handle", async () => {
+    const { db, inserts } = makeDb();
+
+    const id = await queueMemberInviteOutbox(db as never, {
+      caseId: CASE_ID,
+      memberId: MEMBER_ID,
+      recipientEmail: " Student@Example.com ",
+      studentFirstName: "Ada",
+      dedupeKey: `member-invite:${MEMBER_ID}:v1`,
+      now: NOW,
+    });
+
+    expect(id).toBe("id-1");
+    expect(inserts).toEqual([
+      expect.objectContaining({
+        table: admissionsNotificationOutbox,
+        values: expect.objectContaining({
+          caseId: CASE_ID,
+          memberId: MEMBER_ID,
+          recipientEmail: "student@example.com",
+          status: "pending",
+          attemptCount: 0,
+          payload: { studentFirstName: "Ada" },
+        }),
+      }),
+    ]);
+  });
+
+  it("queues a direct message idempotently with trimmed canonical payload", async () => {
+    const { db, inserts } = makeDb();
+
+    const row = await queueDirectMessageOutbox(db as never, {
+      caseId: CASE_ID,
+      memberId: MEMBER_ID,
+      recipientEmail: " Student@Example.com ",
+      senderName: " Kai Counselor ",
+      subject: " Application update ",
+      body: " Your checklist is ready. ",
+      dedupeKey: `direct-message:${CASE_ID}:55555555-5555-4555-8555-555555555555`,
+      now: NOW,
+    });
+
+    expect(row).toEqual({ id: "id-1", inserted: true });
+    expect(inserts).toEqual([expect.objectContaining({
+      table: admissionsNotificationOutbox,
+      values: expect.objectContaining({
+        caseId: CASE_ID,
+        memberId: MEMBER_ID,
+        recipientEmail: "student@example.com",
+        category: "direct_message",
+        status: "pending",
+        payload: {
+          senderName: "Kai Counselor",
+          subject: "Application update",
+          body: "Your checklist is ready.",
+        },
+      }),
+    })]);
+  });
+
+  it("resolves an identical direct-message replay to the existing outbox row", async () => {
+    const existing = directMessageRow();
+    const { db, inserts } = makeDb({
+      conflictTables: new Set([admissionsNotificationOutbox]),
+      selects: new Map([[admissionsNotificationOutbox, { limit: [existing] }]]),
+    });
+
+    const row = await queueDirectMessageOutbox(db as never, {
+      caseId: CASE_ID,
+      memberId: MEMBER_ID,
+      recipientEmail: "student@example.com",
+      senderName: "Kai Counselor",
+      subject: "Application update",
+      body: "Your checklist is ready.",
+      dedupeKey: String(existing.dedupeKey),
+      now: NOW,
+    });
+
+    expect(row).toEqual({ id: existing.id, inserted: false });
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("rejects reuse of a direct-message idempotency key for changed content", async () => {
+    const existing = directMessageRow();
+    const { db } = makeDb({
+      conflictTables: new Set([admissionsNotificationOutbox]),
+      selects: new Map([[admissionsNotificationOutbox, { limit: [existing] }]]),
+    });
+
+    await expect(queueDirectMessageOutbox(db as never, {
+      caseId: CASE_ID,
+      memberId: MEMBER_ID,
+      recipientEmail: "student@example.com",
+      senderName: "Kai Counselor",
+      subject: "Different subject",
+      body: "Your checklist is ready.",
+      dedupeKey: String(existing.dedupeKey),
+      now: NOW,
+    })).rejects.toThrow("Conflict");
+  });
+
+  it("claims, sends, logs, and marks a pending invite sent", async () => {
+    const { db, updates } = makeDb({
+      selects: new Map<unknown, SelectBehavior>([
+        [admissionsNotificationOutbox, { limit: [outboxRow()] }],
+        [admissionsCaseMembers, { limit: [deliverableInviteMember()] }],
+        [admissionsNotificationLog, { limit: [] }],
+      ]),
+    });
+
+    const result = await processAdmissionsNotificationOutbox({ now: NOW }, db);
+
+    expect(result).toEqual({ attempted: 1, sent: 1, skipped: 0, failed: 0, errors: [] });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchBody(fetchMock)).toEqual(expect.objectContaining({
+      to: ["student@example.com"],
+      subject: expect.stringContaining("Ada"),
+    }));
+    expect(updates[0]).toMatchObject({
+      table: admissionsNotificationOutbox,
+      set: { status: "processing", attemptCount: 1 },
+    });
+    expect(updates.at(-1)).toMatchObject({
+      table: admissionsNotificationOutbox,
+      set: { status: "sent", providerMessageId: "re_123" },
+    });
+  });
+
+  it("uses the notification-log dedupe key to finish a retry without re-sending", async () => {
+    const { db, updates } = makeDb({
+      selects: new Map<unknown, SelectBehavior>([
+        [admissionsNotificationOutbox, { limit: [outboxRow({ status: "failed", attemptCount: 2 })] }],
+        [admissionsCaseMembers, { limit: [deliverableInviteMember()] }],
+        [admissionsNotificationLog, { limit: [{ id: "already-sent" }] }],
+      ]),
+    });
+
+    const result = await processAdmissionsNotificationOutbox({ now: NOW }, db);
+
+    expect(result).toMatchObject({ attempted: 1, sent: 0, skipped: 1, failed: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updates.at(-1)).toMatchObject({
+      table: admissionsNotificationOutbox,
+      set: { status: "sent" },
+    });
+  });
+
+  it("keeps provider failures retryable with backoff and an error", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      json: async () => ({ message: "Resend unavailable" }),
+    });
+    const { db, updates } = makeDb({
+      selects: new Map<unknown, SelectBehavior>([
+        [admissionsNotificationOutbox, { limit: [outboxRow()] }],
+        [admissionsCaseMembers, { limit: [deliverableInviteMember()] }],
+        [admissionsNotificationLog, { limit: [] }],
+      ]),
+    });
+
+    const result = await processAdmissionsNotificationOutbox({ now: NOW }, db);
+
+    expect(result).toMatchObject({ attempted: 1, sent: 0, skipped: 0, failed: 1 });
+    expect(result.errors[0]).toContain("Resend unavailable");
+    const failedUpdate = updates.at(-1)?.set;
+    expect(failedUpdate).toMatchObject({ status: "failed", lastError: "Resend unavailable" });
+    expect((failedUpdate?.nextAttemptAt as Date).getTime()).toBeGreaterThan(NOW.getTime());
+  });
+
+  it("does not send an obsolete invite after the member activates", async () => {
+    const { db, updates } = makeDb({
+      selects: new Map<unknown, SelectBehavior>([
+        [admissionsNotificationOutbox, { limit: [outboxRow()] }],
+        [admissionsCaseMembers, {
+          limit: [deliverableInviteMember({ status: "active" })],
+        }],
+      ]),
+    });
+
+    const result = await processAdmissionsNotificationOutbox({ now: NOW }, db);
+
+    expect(result).toMatchObject({ attempted: 1, sent: 0, skipped: 1, failed: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updates.at(-1)).toMatchObject({
+      table: admissionsNotificationOutbox,
+      set: { status: "sent" },
+    });
+  });
+
+  it("does not deliver a retry after the family portal closes", async () => {
+    const { db, updates } = makeDb({
+      selects: new Map<unknown, SelectBehavior>([
+        [admissionsNotificationOutbox, {
+          limit: [outboxRow({ status: "failed", attemptCount: 1 })],
+        }],
+        [admissionsCaseMembers, {
+          limit: [deliverableInviteMember({ familyPortalOpen: false })],
+        }],
+      ]),
+    });
+
+    const result = await processAdmissionsNotificationOutbox({ now: NOW }, db);
+
+    expect(result).toMatchObject({ attempted: 1, sent: 0, skipped: 1, failed: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updates.at(-1)).toMatchObject({
+      table: admissionsNotificationOutbox,
+      set: { status: "sent" },
+    });
+  });
+
+  it.each(["withdrawn", "archived"])(
+    "does not deliver a retry after the case becomes %s",
+    async (caseStatus) => {
+      const { db } = makeDb({
+        selects: new Map<unknown, SelectBehavior>([
+          [admissionsNotificationOutbox, { limit: [outboxRow({ status: "failed" })] }],
+          [admissionsCaseMembers, {
+            limit: [deliverableInviteMember({ caseStatus })],
+          }],
+        ]),
+      });
+
+      const result = await processAdmissionsNotificationOutbox({ now: NOW }, db);
+
+      expect(result).toMatchObject({ sent: 0, skipped: 1, failed: 0 });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("delivers a queued direct message and reuses its dedupe key", async () => {
+    const row = directMessageRow();
+    const { db, updates, inserts } = makeDb({
+      selects: new Map<unknown, SelectBehavior>([
+        [admissionsNotificationOutbox, { limit: [row] }],
+        [admissionsCaseMembers, { limit: [deliverableDirectMessageMember()] }],
+        [admissionsNotificationLog, { limit: [] }],
+      ]),
+    });
+
+    const result = await processAdmissionsNotificationOutbox({ now: NOW }, db);
+
+    expect(result).toEqual({ attempted: 1, sent: 1, skipped: 0, failed: 0, errors: [] });
+    expect(fetchBody(fetchMock)).toEqual(expect.objectContaining({
+      to: ["student@example.com"],
+      subject: "Application update",
+      html: expect.stringContaining("Your checklist is ready."),
+    }));
+    const log = inserts.find((call) => call.table === admissionsNotificationLog);
+    expect(log?.values).toMatchObject({
+      category: "direct_message",
+      dedupeKey: row.dedupeKey,
+    });
+    expect(updates.at(-1)).toMatchObject({
+      table: admissionsNotificationOutbox,
+      set: { status: "sent", providerMessageId: "re_123" },
+    });
+  });
+
+  it("keeps a failed direct message queued for cron retry", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      json: async () => ({ message: "Resend unavailable" }),
+    });
+    const { db, updates } = makeDb({
+      selects: new Map<unknown, SelectBehavior>([
+        [admissionsNotificationOutbox, { limit: [directMessageRow()] }],
+        [admissionsCaseMembers, { limit: [deliverableDirectMessageMember()] }],
+        [admissionsNotificationLog, { limit: [] }],
+      ]),
+    });
+
+    const result = await processAdmissionsNotificationOutbox({ now: NOW }, db);
+
+    expect(result).toMatchObject({ attempted: 1, sent: 0, failed: 1 });
+    expect(updates.at(-1)?.set).toMatchObject({
+      status: "failed",
+      lastError: "Resend unavailable",
+    });
+  });
+
+  it("does not retry a family direct message after the portal closes", async () => {
+    const { db } = makeDb({
+      selects: new Map<unknown, SelectBehavior>([
+        [admissionsNotificationOutbox, { limit: [directMessageRow({ status: "failed" })] }],
+        [admissionsCaseMembers, {
+          limit: [deliverableDirectMessageMember({ familyPortalOpen: false })],
+        }],
+      ]),
+    });
+
+    const result = await processAdmissionsNotificationOutbox({ now: NOW }, db);
+
+    expect(result).toMatchObject({ attempted: 1, sent: 0, skipped: 1, failed: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["completed", "withdrawn", "archived"])(
+    "does not retry a direct message after the case becomes %s",
+    async (caseStatus) => {
+      const { db } = makeDb({
+        selects: new Map<unknown, SelectBehavior>([
+          [admissionsNotificationOutbox, {
+            limit: [directMessageRow({ status: "failed" })],
+          }],
+          [admissionsCaseMembers, {
+            limit: [deliverableDirectMessageMember({ caseStatus })],
+          }],
+        ]),
+      });
+
+      const result = await processAdmissionsNotificationOutbox({ now: NOW }, db);
+
+      expect(result).toMatchObject({ sent: 0, skipped: 1, failed: 0 });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("can deliver a staff direct message while the family portal is closed", async () => {
+    const row = directMessageRow({ recipientEmail: "counselor@example.com" });
+    const selects = new Map<unknown, SelectBehavior>([
+      [admissionsNotificationOutbox, { limit: [row] }],
+      [admissionsCaseMembers, {
+        limit: [deliverableDirectMessageMember({
+          email: "counselor@example.com",
+          role: "counselor",
+          familyPortalOpen: false,
+        })],
+      }],
+      [admissionsNotificationLog, { limit: [] }],
+    ]);
+    const staffDb = makeDb({ selects }).db;
+
+    const result = await processAdmissionsNotificationOutbox({ now: NOW }, staffDb);
+
+    expect(result).toMatchObject({ sent: 1, skipped: 0, failed: 0 });
+    expect(fetchBody(fetchMock)).toMatchObject({ to: ["counselor@example.com"] });
+  });
+});
+
 describe("buildDeadlineReminders", () => {
   it("plans windowed reminders per assigned recipient, ignoring notification prefs (CM-112)", async () => {
     const { db } = makeDb({
       selects: new Map<unknown, SelectBehavior>([
-        [admissionsCases, { where: [{ id: CASE_ID }] }],
+        [admissionsCases, { where: [{ id: CASE_ID, familyPortalOpen: true }] }],
         [admissionsCaseMembers, {
           where: [
             // Every downgradable category is "off" — deadline reminders must
@@ -283,7 +701,7 @@ describe("buildDeadlineReminders", () => {
   it("catches up mid-window items after a missed run (range scan, not exact-day)", async () => {
     const { db } = makeDb({
       selects: new Map<unknown, SelectBehavior>([
-        [admissionsCases, { where: [{ id: CASE_ID }] }],
+        [admissionsCases, { where: [{ id: CASE_ID, familyPortalOpen: true }] }],
         [admissionsCaseMembers, { where: [memberRow({})] }],
       ]),
     });
@@ -318,12 +736,32 @@ describe("buildDeadlineReminders", () => {
       ],
     }]);
   });
+
+  it("keeps counselor reminders running while a closed portal suppresses family email", async () => {
+    const { db } = makeDb({
+      selects: new Map<unknown, SelectBehavior>([
+        [admissionsCases, { where: [{ id: CASE_ID, familyPortalOpen: false }] }],
+        [admissionsCaseMembers, { where: [
+          memberRow({ role: "student", email: "student@example.com" }),
+          memberRow({ id: "member-2", role: "counselor", email: "staff@example.com" }),
+        ] }],
+      ]),
+    });
+    getOpenDeadlinesInRangeMock.mockResolvedValueOnce([
+      calendarItem({ id: "student-item", ownerRole: "student" }),
+      calendarItem({ id: "staff-item", ownerRole: "counselor" }),
+    ]);
+
+    const reminders = await buildDeadlineReminders(NOW, db);
+
+    expect(reminders.map((item) => item.recipientEmail)).toEqual(["staff@example.com"]);
+  });
 });
 
 describe("runDailyNotifications", () => {
   function dailySelects(members: Row[], todayInterruptCount: number): Map<unknown, SelectBehavior> {
     return new Map<unknown, SelectBehavior>([
-      [admissionsCases, { where: [{ id: CASE_ID }] }],
+      [admissionsCases, { where: [{ id: CASE_ID, familyPortalOpen: true }] }],
       [admissionsCaseMembers, { where: members }],
       [admissionsNotificationLog, { where: [{ value: todayInterruptCount }], limit: [] }],
     ]);
@@ -401,7 +839,7 @@ describe("runDailyNotifications", () => {
   it("never re-plans an already-delivered window (daily range re-plan is idempotent)", async () => {
     const { db, inserts } = makeDb({
       selects: new Map<unknown, SelectBehavior>([
-        [admissionsCases, { where: [{ id: CASE_ID }] }],
+        [admissionsCases, { where: [{ id: CASE_ID, familyPortalOpen: true }] }],
         [admissionsCaseMembers, { where: [memberRow({})] }],
         // The per-item dedupe key is already logged (sent yesterday), so the
         // pre-filter drops it before the cap decision and no email goes out.
@@ -485,7 +923,12 @@ describe("buildWeeklyDigest", () => {
 
   function digestSelects(members: Row[]): Map<unknown, SelectBehavior> {
     return new Map<unknown, SelectBehavior>([
-      [admissionsCases, { limit: [{ fullName: "Nara Chai", preferredName: null }] }],
+      [admissionsCases, { limit: [{
+        fullName: "Nara Chai",
+        preferredName: null,
+        familyPortalOpen: true,
+        caseStatus: "active",
+      }] }],
       [admissionsCaseTasks, {
         where: [
           {
@@ -546,6 +989,27 @@ describe("buildWeeklyDigest", () => {
     expect(parent?.sectionSubmissions).toEqual([]);
   });
 
+  it("keeps the counselor digest but suppresses family recipients when the portal closes", async () => {
+    listAnnouncementsMock.mockResolvedValueOnce([RECENT_ANNOUNCEMENT]);
+    const selects = digestSelects([
+      memberRow({ id: "m-c", email: "counselor@example.com", role: "counselor" }),
+      memberRow({ id: "m-s", email: "student@example.com", role: "student" }),
+      memberRow({ id: "m-p", email: "parent@example.com", role: "parent" }),
+    ]);
+    selects.set(admissionsCases, { limit: [{
+      fullName: "Nara Chai",
+      preferredName: null,
+      familyPortalOpen: false,
+      caseStatus: "active",
+    }] });
+    selects.set(admissionsSelfReportSections, { where: [] });
+    const { db } = makeDb({ selects });
+
+    const digest = await buildWeeklyDigest(CASE_ID, NOW, db);
+
+    expect(digest.recipients.map((recipient) => recipient.role)).toEqual(["counselor"]);
+  });
+
   it("respects per-category pref downgrades and drops fully-muted recipients (CM-112)", async () => {
     listAnnouncementsMock.mockResolvedValueOnce([RECENT_ANNOUNCEMENT]);
     const { db } = makeDb({
@@ -601,7 +1065,12 @@ describe("runWeeklyDigest", () => {
       selects: new Map<unknown, SelectBehavior>([
         [admissionsCases, {
           where: [{ id: CASE_ID }],
-          limit: [{ fullName: "Nara Chai", preferredName: null }],
+          limit: [{
+            fullName: "Nara Chai",
+            preferredName: null,
+            familyPortalOpen: true,
+            caseStatus: "active",
+          }],
         }],
         [admissionsCaseTasks, { where: [] }],
         [admissionsCaseMembers, {
@@ -651,7 +1120,12 @@ describe("member invites (PRD §3.7)", () => {
   it("sends a Thai-first invite containing ONLY the child's first name and the sign-in link", async () => {
     const { db, inserts } = makeDb({
       selects: new Map<unknown, SelectBehavior>([
-        [admissionsCases, { limit: [{ fullName: "Nara Chai Somsak", preferredName: null }] }],
+        [admissionsCases, { limit: [{
+          fullName: "Nara Chai Somsak",
+          preferredName: null,
+          familyPortalOpen: true,
+          caseStatus: "active",
+        }] }],
       ]),
     });
 

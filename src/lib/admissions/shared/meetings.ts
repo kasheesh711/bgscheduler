@@ -17,6 +17,12 @@ export const ADMISSIONS_TASK_OWNERS: readonly AdmissionsTaskOwner[] = [
   "parent",
 ];
 
+/** New work is assigned only to the student or counseling team. */
+export const ADMISSIONS_ASSIGNABLE_TASK_OWNERS = [
+  "student",
+  "counselor",
+] as const satisfies readonly AdmissionsTaskOwner[];
+
 /**
  * Phase stamped on admissions_case_tasks rows created from meeting action
  * items (CM-31). Deliberately NOT one of the 10 template phase keys — these

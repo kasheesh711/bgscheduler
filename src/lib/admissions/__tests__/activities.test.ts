@@ -72,7 +72,7 @@ function fakeDb(queue: unknown[][]) {
 
   function selectBuilder(rows: unknown[]) {
     const b: Record<string, unknown> = {};
-    for (const method of ["from", "where", "innerJoin", "leftJoin", "orderBy", "groupBy", "limit"]) {
+    for (const method of ["from", "where", "innerJoin", "leftJoin", "orderBy", "groupBy", "limit", "for"]) {
       b[method] = () => b;
     }
     (b as { then: unknown }).then = (

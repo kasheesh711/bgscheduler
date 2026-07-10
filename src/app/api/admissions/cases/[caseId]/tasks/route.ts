@@ -15,6 +15,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   admissionsErrorResponse,
+  assertCaseMutationAllowed,
   requireAdmissionsSession,
   requireCaseAccess,
 } from "@/lib/admissions/access";
@@ -35,9 +36,9 @@ const dateOnlySchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected "YYYY-MM-DD"');
 
-// Mirrors ADMISSIONS_TASK_OWNERS (src/lib/admissions/meetings.ts); the lib
-// re-validates owners fail-closed, this just gives a 400 instead of a 500.
-const taskOwnerSchema = z.enum(["student", "counselor", "parent"]);
+// Parent-owned rows remain readable for legacy history, but new work is
+// assigned only to the student or counseling team.
+const taskOwnerSchema = z.enum(["student", "counselor"]);
 
 // Mirrors ADMISSIONS_TASK_STATUSES (src/lib/admissions/checklists.ts).
 const taskStatusSchema = z.enum(["not_started", "in_progress", "done"]);
@@ -79,10 +80,12 @@ const patchTaskSchema = z.discriminatedUnion("action", [
     action: z.literal("verify"),
     taskId: z.string().uuid(),
     verified: z.boolean(),
+    expectedUpdatedAt: z.string().datetime(),
   }),
   z.object({
     action: z.literal("update"),
     taskId: z.string().uuid(),
+    expectedUpdatedAt: z.string().datetime(),
     title: z.string().trim().min(1, "Task title must not be empty").optional(),
     description: z.string().nullish(),
     owner: taskOwnerSchema.optional(),
@@ -93,10 +96,14 @@ const patchTaskSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("delete"),
     taskId: z.string().uuid(),
+    expectedUpdatedAt: z.string().datetime(),
   }),
 ]);
 
-const deleteQuerySchema = z.object({ taskId: z.string().uuid() });
+const deleteQuerySchema = z.object({
+  taskId: z.string().uuid(),
+  expectedUpdatedAt: z.string().datetime(),
+});
 
 export async function GET(
   _request: Request,
@@ -123,6 +130,7 @@ export async function POST(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "counselor");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {
@@ -166,6 +174,7 @@ export async function PATCH(
     // (CM-22); the lib enforces the higher counselor bar (and the student-
     // owned-task rule) per action from the CaseAccess passed in.
     const access = await requireCaseAccess(user.email, caseId, "student");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {
@@ -196,6 +205,7 @@ export async function PATCH(
           access,
           taskId: parsed.data.taskId,
           verified: parsed.data.verified,
+          expectedUpdatedAt: parsed.data.expectedUpdatedAt,
         });
         return NextResponse.json({ task });
       }
@@ -203,6 +213,7 @@ export async function PATCH(
         const task = await updateTask({
           access,
           taskId: parsed.data.taskId,
+          expectedUpdatedAt: parsed.data.expectedUpdatedAt,
           title: parsed.data.title,
           description: parsed.data.description,
           owner: parsed.data.owner,
@@ -213,7 +224,11 @@ export async function PATCH(
         return NextResponse.json({ task });
       }
       case "delete": {
-        await softDeleteTask({ access, taskId: parsed.data.taskId });
+        await softDeleteTask({
+          access,
+          taskId: parsed.data.taskId,
+          expectedUpdatedAt: parsed.data.expectedUpdatedAt,
+        });
         return NextResponse.json({ ok: true });
       }
     }
@@ -230,9 +245,11 @@ export async function DELETE(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "counselor");
+    assertCaseMutationAllowed(access);
 
     const parsed = deleteQuerySchema.safeParse({
       taskId: new URL(request.url).searchParams.get("taskId"),
+      expectedUpdatedAt: new URL(request.url).searchParams.get("expectedUpdatedAt"),
     });
     if (!parsed.success) {
       return NextResponse.json(
@@ -241,7 +258,11 @@ export async function DELETE(
       );
     }
 
-    await softDeleteTask({ access, taskId: parsed.data.taskId });
+    await softDeleteTask({
+      access,
+      taskId: parsed.data.taskId,
+      expectedUpdatedAt: parsed.data.expectedUpdatedAt,
+    });
     return NextResponse.json({ ok: true });
   } catch (error) {
     return admissionsErrorResponse(ROUTE, error, "Task delete failed");

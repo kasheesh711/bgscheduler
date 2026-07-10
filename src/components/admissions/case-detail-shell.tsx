@@ -1,17 +1,17 @@
 "use client";
 
 // ----------------------------------------------------------------------------
-// Admissions case detail shell (design §5.1) — sticky case header + tab bar.
+// Admissions case detail shell — sticky case header + five grouped areas.
 //
 // Tab state lives in the URL (`?tab=`, mirroring the us-universities shell's
 // URL-as-source-of-truth pattern) so refresh/back/forward restore the active
-// tab. All 10 tabs are implemented: Overview / Profile / Checklist /
-// Colleges / Applications / Essays / Activities / Testing / Meetings /
-// Notes. The Overview tab also hosts the upcoming-deadlines list (CM-102),
+// area. Legacy tab values still resolve to their original subsection. The
+// five areas are Overview / Student / Colleges & Applications / Money /
+// Casework. Overview also hosts the upcoming-deadlines list (CM-102),
 // the month-grid deadline calendar as a toggled sub-view (CM-100 — design
 // §5.1 lists no Calendar tab), and the announcements panel (CM-90); the
-// Profile tab hosts the self-report sections list (CM-121 — staff variant,
-// so counselors can open a section and review it).
+// while Student groups profile, academics, activities, awards, testing, and
+// self-report records.
 //
 // Server data arrives as props from the page (no client cache): every
 // successful mutation calls router.refresh() so the server component re-reads
@@ -53,16 +53,22 @@ import { Textarea } from "@/components/ui/textarea";
 import { BANGKOK_TIME_ZONE } from "@/lib/bangkok-time";
 import { roleAtLeast } from "@/lib/admissions/config";
 import {
-  ADMISSIONS_TASK_OWNERS,
+  ADMISSIONS_ASSIGNABLE_TASK_OWNERS,
   type AdmissionsTaskOwner,
 } from "@/lib/admissions/shared/meetings";
+import { AcademicsPanel } from "./academics-panel";
 import { ActivitiesView } from "./activities-view";
 import { AnnouncementsPanel } from "./announcements-panel";
 import { ApplicationsTab } from "./applications-tab";
+import { AwardsPanel } from "./awards-panel";
 import { CalendarTab } from "./calendar-tab";
+import { CaseworkPanel } from "./casework-panel";
 import { ChecklistTab } from "./checklist-tab";
+import { CollegeDetailsPanel } from "./college-details-panel";
 import { CollegesTab } from "./colleges-tab";
+import { DirectMessageComposer, NotificationPreferencesPanel } from "./communications-panel";
 import { EssaysView, type EssayCollegeOption } from "./essays-view";
+import { MoneyPanel } from "./money-panel";
 import { SectionsList } from "./sections-list";
 import { TestingView } from "./testing-view";
 import type { CalendarItem } from "@/lib/admissions/calendar";
@@ -83,24 +89,60 @@ import type {
 
 // ── Tabs ────────────────────────────────────────────────────────────────
 
-/** The 10 case tabs in canonical order (design §5.1). */
+/** The five grouped case areas in canonical order. */
 export const CASE_TABS = [
   { key: "overview", label: "Overview" },
-  { key: "profile", label: "Profile" },
-  { key: "checklist", label: "Checklist" },
-  { key: "colleges", label: "Colleges" },
-  { key: "applications", label: "Applications" },
-  { key: "essays", label: "Essays" },
-  { key: "activities", label: "Activities" },
-  { key: "testing", label: "Testing" },
-  { key: "meetings", label: "Meetings" },
-  { key: "notes", label: "Notes" },
+  { key: "student", label: "Student" },
+  { key: "colleges", label: "Colleges & Applications" },
+  { key: "money", label: "Money" },
+  { key: "casework", label: "Casework" },
 ] as const;
 
-/** Stable tab key ("overview" … "notes"). */
+/** Stable grouped area key. */
 export type CaseTabKey = (typeof CASE_TABS)[number]["key"];
 
 const DEFAULT_CASE_TAB: CaseTabKey = "overview";
+
+export const CASE_SUBSECTIONS = {
+  overview: [
+    { key: "overview", label: "Summary" },
+    { key: "checklist", label: "Checklist" },
+  ],
+  student: [
+    { key: "profile", label: "Profile" },
+    { key: "academics", label: "Academics" },
+    { key: "activities", label: "Activities" },
+    { key: "awards", label: "Awards" },
+    { key: "testing", label: "Testing" },
+    { key: "sections", label: "Self-report" },
+  ],
+  colleges: [
+    { key: "colleges", label: "College list" },
+    { key: "applications", label: "Applications" },
+    { key: "essays", label: "Essays" },
+    { key: "research", label: "Research & requirements" },
+  ],
+  money: [{ key: "money", label: "Aid & scholarships" }],
+  casework: [
+    { key: "access", label: "People & access" },
+    { key: "meetings", label: "Meetings" },
+    { key: "notes", label: "Notes & feedback" },
+  ],
+} as const;
+
+export type CaseSubsectionKey =
+  (typeof CASE_SUBSECTIONS)[keyof typeof CASE_SUBSECTIONS][number]["key"];
+
+const LEGACY_CASE_TAB_TARGETS: Record<string, { area: CaseTabKey; subsection: CaseSubsectionKey }> = {
+  profile: { area: "student", subsection: "profile" },
+  checklist: { area: "overview", subsection: "checklist" },
+  applications: { area: "colleges", subsection: "applications" },
+  essays: { area: "colleges", subsection: "essays" },
+  activities: { area: "student", subsection: "activities" },
+  testing: { area: "student", subsection: "testing" },
+  meetings: { area: "casework", subsection: "meetings" },
+  notes: { area: "casework", subsection: "notes" },
+};
 
 /**
  * Resolves a raw `?tab=` value to a known tab key. Unknown or missing values
@@ -108,7 +150,23 @@ const DEFAULT_CASE_TAB: CaseTabKey = "overview";
  */
 export function resolveCaseTab(raw: string | null): CaseTabKey {
   const match = CASE_TABS.find((tab) => tab.key === raw);
-  return match ? match.key : DEFAULT_CASE_TAB;
+  if (match) return match.key;
+  return raw && LEGACY_CASE_TAB_TARGETS[raw]
+    ? LEGACY_CASE_TAB_TARGETS[raw].area
+    : DEFAULT_CASE_TAB;
+}
+
+/** Resolve canonical `?sub=` values and every pre-grouping `?tab=` deep link. */
+export function resolveCaseSubsection(
+  rawTab: string | null,
+  rawSubsection: string | null,
+): CaseSubsectionKey {
+  const legacy = rawTab ? LEGACY_CASE_TAB_TARGETS[rawTab] : undefined;
+  if (legacy) return legacy.subsection;
+  const area = resolveCaseTab(rawTab);
+  const entries = CASE_SUBSECTIONS[area];
+  const match = entries.find((entry) => entry.key === rawSubsection);
+  return match?.key ?? entries[0].key;
 }
 
 // ── Status presentation ─────────────────────────────────────────────────
@@ -428,9 +486,8 @@ export interface CaseDetailShellProps {
 }
 
 /**
- * Case detail workspace (design §5.1): sticky case header, 10-tab bar with
- * URL-driven state; every tab is implemented (Overview / Profile / Checklist /
- * Colleges / Applications / Essays / Activities / Testing / Meetings / Notes).
+ * Case detail workspace: sticky case header plus URL-driven grouped areas and
+ * subsection navigation. Every pre-grouping `?tab=` deep link remains valid.
  */
 export function CaseDetailShell({
   caseDetail,
@@ -451,7 +508,12 @@ export function CaseDetailShell({
   const pathname = usePathname();
   // SSR-safe: useSearchParams() can be null outside a router provider.
   const searchParams = useSearchParams();
-  const activeTab = resolveCaseTab(searchParams?.get("tab") ?? null);
+  const rawTab = searchParams?.get("tab") ?? null;
+  const activeTab = resolveCaseTab(rawTab);
+  const activeSubsection = resolveCaseSubsection(
+    rawTab,
+    searchParams?.get("sub") ?? null,
+  );
   const isStaff = roleAtLeast(viewerRole, "counselor");
   // The calendar API is student+ (design §4); parents only get the
   // family-visible deadline list from the case detail payload.
@@ -477,10 +539,25 @@ export function CaseDetailShell({
       const params = new URLSearchParams(searchParams?.toString() ?? "");
       if (key === DEFAULT_CASE_TAB) params.delete("tab");
       else params.set("tab", key);
+      params.delete("sub");
       const query = params.toString();
       router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
     },
     [searchParams, pathname, router],
+  );
+
+  const handleSubsectionChange = useCallback(
+    (key: CaseSubsectionKey) => {
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
+      if (activeTab === DEFAULT_CASE_TAB) params.delete("tab");
+      else params.set("tab", activeTab);
+      const defaultSubsection = CASE_SUBSECTIONS[activeTab][0].key;
+      if (key === defaultSubsection) params.delete("sub");
+      else params.set("sub", key);
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    },
+    [activeTab, searchParams, pathname, router],
   );
 
   // ── Discard-confirmation dialog (destructive action guard) ──
@@ -750,7 +827,7 @@ export function CaseDetailShell({
         </div>
         <nav
           role="tablist"
-          aria-label="Case sections"
+          aria-label="Case areas"
           className="mt-2 flex gap-1 overflow-x-auto pb-2"
         >
           {CASE_TABS.map((tab) => {
@@ -776,6 +853,31 @@ export function CaseDetailShell({
             );
           })}
         </nav>
+        <nav
+          aria-label={`${CASE_TABS.find((tab) => tab.key === activeTab)?.label ?? "Case"} subsections`}
+          className="flex gap-1 overflow-x-auto border-t border-border/60 py-2"
+        >
+          {CASE_SUBSECTIONS[activeTab].map((subsection) => {
+            const selected = subsection.key === activeSubsection;
+            return (
+              <button
+                key={subsection.key}
+                type="button"
+                aria-current={selected ? "page" : undefined}
+                data-testid={`case-subsection-${subsection.key}`}
+                onClick={() => handleSubsectionChange(subsection.key)}
+                className={cn(
+                  "shrink-0 rounded-full border px-3 py-1 text-xs font-medium whitespace-nowrap outline-none transition-colors focus-visible:ring-3 focus-visible:ring-ring/50",
+                  selected
+                    ? "border-primary/30 bg-primary/10 text-primary"
+                    : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                )}
+              >
+                {subsection.label}
+              </button>
+            );
+          })}
+        </nav>
       </header>
 
       {/* ── Active panel ── */}
@@ -785,7 +887,7 @@ export function CaseDetailShell({
         aria-labelledby={`case-tab-${activeTab}`}
         className="mt-4"
       >
-        {activeTab === "overview" ? (
+        {activeSubsection === "overview" ? (
           <div className="grid gap-4 md:grid-cols-2">
             <Card>
               <CardHeader>
@@ -925,7 +1027,7 @@ export function CaseDetailShell({
           </div>
         ) : null}
 
-        {activeTab === "profile" ? (
+        {activeSubsection === "profile" ? (
           <div className="space-y-4">
             <Card>
               <CardHeader>
@@ -1030,17 +1132,10 @@ export function CaseDetailShell({
               </CardContent>
             </Card>
 
-            {/* ── Self-report sections (CM-121, staff variant → review) ── */}
-            <SectionsList
-              caseId={caseDetail.caseId}
-              sections={sectionStates}
-              viewerRole={viewerRole}
-              variant="staff"
-            />
           </div>
         ) : null}
 
-        {activeTab === "checklist" ? (
+        {activeSubsection === "checklist" ? (
           <ChecklistTab
             caseId={caseDetail.caseId}
             tasks={tasks}
@@ -1049,39 +1144,11 @@ export function CaseDetailShell({
           />
         ) : null}
 
-        {activeTab === "colleges" ? (
-          <CollegesTab
-            caseId={caseDetail.caseId}
-            colleges={caseDetail.collegeList}
-            warnings={caseDetail.applicationWarnings}
-            recommenders={recommenders}
-            collegeDocs={collegeDocs}
-            viewerRole={viewerRole}
-          />
+        {activeSubsection === "academics" ? (
+          <AcademicsPanel caseId={caseDetail.caseId} viewerRole={viewerRole} />
         ) : null}
 
-        {activeTab === "applications" ? (
-          <ApplicationsTab
-            caseId={caseDetail.caseId}
-            colleges={caseDetail.collegeList}
-            committedListItemId={caseDetail.committedListItemId}
-            committedCollegeName={caseDetail.committedCollegeName}
-            eventsByItem={applicationEvents}
-            viewerRole={viewerRole}
-          />
-        ) : null}
-
-        {activeTab === "essays" ? (
-          <EssaysView
-            caseId={caseDetail.caseId}
-            essays={caseDetail.essays}
-            collegeOptions={collegeOptions}
-            viewerRole={viewerRole}
-            variant="staff"
-          />
-        ) : null}
-
-        {activeTab === "activities" ? (
+        {activeSubsection === "activities" ? (
           <ActivitiesView
             caseId={caseDetail.caseId}
             activities={caseDetail.activities}
@@ -1090,7 +1157,11 @@ export function CaseDetailShell({
           />
         ) : null}
 
-        {activeTab === "testing" ? (
+        {activeSubsection === "awards" ? (
+          <AwardsPanel caseId={caseDetail.caseId} viewerRole={viewerRole} />
+        ) : null}
+
+        {activeSubsection === "testing" ? (
           <TestingView
             caseId={caseDetail.caseId}
             sittings={caseDetail.testSittings}
@@ -1102,7 +1173,64 @@ export function CaseDetailShell({
           />
         ) : null}
 
-        {activeTab === "meetings" ? (
+        {activeSubsection === "sections" ? (
+          <SectionsList
+            caseId={caseDetail.caseId}
+            sections={sectionStates}
+            viewerRole={viewerRole}
+            variant="staff"
+          />
+        ) : null}
+
+        {activeSubsection === "colleges" ? (
+          <CollegesTab
+            caseId={caseDetail.caseId}
+            colleges={caseDetail.collegeList}
+            warnings={caseDetail.applicationWarnings}
+            recommenders={recommenders}
+            collegeDocs={collegeDocs}
+            viewerRole={viewerRole}
+          />
+        ) : null}
+
+        {activeSubsection === "applications" ? (
+          <ApplicationsTab
+            caseId={caseDetail.caseId}
+            colleges={caseDetail.collegeList}
+            committedListItemId={caseDetail.committedListItemId}
+            committedCollegeName={caseDetail.committedCollegeName}
+            eventsByItem={applicationEvents}
+            viewerRole={viewerRole}
+          />
+        ) : null}
+
+        {activeSubsection === "essays" ? (
+          <EssaysView
+            caseId={caseDetail.caseId}
+            essays={caseDetail.essays}
+            collegeOptions={collegeOptions}
+            viewerRole={viewerRole}
+            variant="staff"
+          />
+        ) : null}
+
+        {activeSubsection === "research" ? (
+          <CollegeDetailsPanel
+            caseId={caseDetail.caseId}
+            colleges={caseDetail.collegeList}
+            viewerRole={viewerRole}
+          />
+        ) : null}
+
+        {activeSubsection === "money" ? (
+          <MoneyPanel
+            caseId={caseDetail.caseId}
+            colleges={caseDetail.collegeList}
+            viewerRole={viewerRole}
+          />
+        ) : null}
+
+        {activeSubsection === "meetings" ? (
           isStaff ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
@@ -1254,7 +1382,7 @@ export function CaseDetailShell({
                                     )
                                   }
                                 >
-                                  {ADMISSIONS_TASK_OWNERS.map((owner) => (
+                                  {ADMISSIONS_ASSIGNABLE_TASK_OWNERS.map((owner) => (
                                     <option key={owner} value={owner}>
                                       {owner}
                                     </option>
@@ -1404,7 +1532,7 @@ export function CaseDetailShell({
           )
         ) : null}
 
-        {activeTab === "notes" ? (
+        {activeSubsection === "notes" ? (
           <div className="space-y-4">
             {isStaff ? (
               <Card>
@@ -1525,6 +1653,41 @@ export function CaseDetailShell({
               </Card>
             )}
           </div>
+        ) : null}
+
+        {activeSubsection === "access" ? (
+          isStaff ? (
+            <div className="space-y-4">
+              <CaseworkPanel
+                key={caseDetail.updatedAt}
+                caseId={caseDetail.caseId}
+                status={caseDetail.status}
+                updatedAt={caseDetail.updatedAt}
+                driveFolder={caseDetail.driveFolder}
+                familyPortalOpen={caseDetail.familyPortalOpen}
+                familyPortalOpenedAt={caseDetail.familyPortalOpenedAt}
+                familyPortalOpenedByEmail={caseDetail.familyPortalOpenedByEmail}
+                externalLinks={caseDetail.student.externalLinks}
+                members={caseDetail.members}
+                viewerRole={viewerRole}
+                viewerEmail={viewerEmail}
+              />
+              <DirectMessageComposer
+                caseId={caseDetail.caseId}
+                members={caseDetail.members}
+                viewerEmail={viewerEmail}
+              />
+              <NotificationPreferencesPanel caseId={caseDetail.caseId} />
+            </div>
+          ) : (
+            <Card>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">
+                  Case operations are visible to counselors and admins only.
+                </p>
+              </CardContent>
+            </Card>
+          )
         ) : null}
 
       </main>

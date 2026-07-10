@@ -19,6 +19,7 @@ vi.mock("@/lib/admissions/sections", async (importOriginal) => ({
   getSectionState: vi.fn(),
   reviewSection: vi.fn(),
   saveSectionDraft: vi.fn(),
+  setSectionFamilySharing: vi.fn(),
   submitSection: vi.fn(),
 }));
 
@@ -29,6 +30,7 @@ import {
   getSectionState,
   reviewSection,
   saveSectionDraft,
+  setSectionFamilySharing,
   submitSection,
 } from "@/lib/admissions/sections";
 import { GET, POST, PUT } from "../route";
@@ -70,6 +72,7 @@ const SECTION_DTO: AdmissionsSectionStateDto = {
   definition: ABOUT_YOU_DEFINITION,
   payload: { preferred_name: "Mint" },
   state: "draft",
+  sharedWithFamily: false,
   submittedAt: null,
   reviewedByEmail: null,
   updatedAt: "2026-07-01T03:00:00.000Z",
@@ -108,6 +111,10 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
       notify: true,
     });
     vi.mocked(reviewSection).mockResolvedValue({ ...SECTION_DTO, state: "reviewed" });
+    vi.mocked(setSectionFamilySharing).mockResolvedValue({
+      ...SECTION_DTO,
+      sharedWithFamily: true,
+    });
   });
 
   describe("GET", () => {
@@ -152,7 +159,10 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
   describe("PUT", () => {
     it("autosaves a partial payload as the student", async () => {
       const res = await PUT(
-        makeRequest("PUT", { payload: { preferred_name: "Mint", hometown: "Bangkok" } }),
+        makeRequest("PUT", {
+          payload: { preferred_name: "Mint", hometown: "Bangkok" },
+          expectedUpdatedAt: SECTION_DTO.updatedAt,
+        }),
         makeCtx(),
       );
 
@@ -165,6 +175,7 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
         access: STUDENT_ACCESS,
         sectionKey: SECTION_KEY,
         payload: { preferred_name: "Mint", hometown: "Bangkok" },
+        expectedUpdatedAt: SECTION_DTO.updatedAt,
       });
     });
 
@@ -173,7 +184,10 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
       vi.mocked(requireCaseAccess).mockResolvedValue(COUNSELOR_ACCESS);
 
       const res = await PUT(
-        makeRequest("PUT", { payload: { preferred_name: "Mint" } }),
+        makeRequest("PUT", {
+          payload: { preferred_name: "Mint" },
+          expectedUpdatedAt: SECTION_DTO.updatedAt,
+        }),
         makeCtx(),
       );
 
@@ -207,6 +221,16 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
       expect(saveSectionDraft).not.toHaveBeenCalled();
     });
 
+    it("requires an explicit nullable concurrency token for autosave", async () => {
+      const res = await PUT(
+        makeRequest("PUT", { payload: { preferred_name: "Mint" } }),
+        makeCtx(),
+      );
+
+      expect(res.status).toBe(400);
+      expect(saveSectionDraft).not.toHaveBeenCalled();
+    });
+
     it("returns 403 for a parent, nothing written", async () => {
       signInAs("parent@example.com", "parent");
       vi.mocked(requireCaseAccess).mockRejectedValue(new Error("Forbidden"));
@@ -223,7 +247,10 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
 
   describe("POST action=submit", () => {
     it("submits as the student and returns the notify marker", async () => {
-      const res = await POST(makeRequest("POST", { action: "submit" }), makeCtx());
+      const res = await POST(makeRequest("POST", {
+        action: "submit",
+        expectedUpdatedAt: SECTION_DTO.updatedAt,
+      }), makeCtx());
 
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({
@@ -233,6 +260,7 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
       expect(submitSection).toHaveBeenCalledWith({
         access: STUDENT_ACCESS,
         sectionKey: SECTION_KEY,
+        expectedUpdatedAt: SECTION_DTO.updatedAt,
       });
       expect(reviewSection).not.toHaveBeenCalled();
     });
@@ -241,7 +269,10 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
       signInAs("counselor@example.com", "counselor");
       vi.mocked(requireCaseAccess).mockResolvedValue(COUNSELOR_ACCESS);
 
-      const res = await POST(makeRequest("POST", { action: "submit" }), makeCtx());
+      const res = await POST(makeRequest("POST", {
+        action: "submit",
+        expectedUpdatedAt: SECTION_DTO.updatedAt,
+      }), makeCtx());
 
       expect(res.status).toBe(200);
       expect(submitSection).toHaveBeenCalledWith(
@@ -252,10 +283,20 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
     it("returns 409 when the section is not a submittable draft", async () => {
       vi.mocked(submitSection).mockRejectedValue(new Error("Conflict"));
 
-      const res = await POST(makeRequest("POST", { action: "submit" }), makeCtx());
+      const res = await POST(makeRequest("POST", {
+        action: "submit",
+        expectedUpdatedAt: SECTION_DTO.updatedAt,
+      }), makeCtx());
 
       expect(res.status).toBe(409);
       await expect(res.json()).resolves.toEqual({ error: "Conflict" });
+    });
+
+    it("requires the section concurrency token for submit", async () => {
+      const res = await POST(makeRequest("POST", { action: "submit" }), makeCtx());
+
+      expect(res.status).toBe(400);
+      expect(submitSection).not.toHaveBeenCalled();
     });
   });
 
@@ -264,7 +305,10 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
       signInAs("counselor@example.com", "counselor");
       vi.mocked(requireCaseAccess).mockResolvedValue(COUNSELOR_ACCESS);
 
-      const res = await POST(makeRequest("POST", { action: "review" }), makeCtx());
+      const res = await POST(makeRequest("POST", {
+        action: "review",
+        expectedUpdatedAt: SECTION_DTO.updatedAt,
+      }), makeCtx());
 
       expect(res.status).toBe(200);
       await expect(res.json()).resolves.toEqual({
@@ -273,6 +317,7 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
       expect(reviewSection).toHaveBeenCalledWith({
         access: COUNSELOR_ACCESS,
         sectionKey: SECTION_KEY,
+        expectedUpdatedAt: SECTION_DTO.updatedAt,
       });
       expect(submitSection).not.toHaveBeenCalled();
     });
@@ -281,7 +326,10 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
       signInAs("admin@example.com", "admin");
       vi.mocked(requireCaseAccess).mockResolvedValue(ADMIN_ACCESS);
 
-      const res = await POST(makeRequest("POST", { action: "review" }), makeCtx());
+      const res = await POST(makeRequest("POST", {
+        action: "review",
+        expectedUpdatedAt: SECTION_DTO.updatedAt,
+      }), makeCtx());
 
       expect(res.status).toBe(200);
       expect(reviewSection).toHaveBeenCalledWith(
@@ -290,7 +338,10 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
     });
 
     it("returns 403 when a STUDENT attempts review (per-action gate)", async () => {
-      const res = await POST(makeRequest("POST", { action: "review" }), makeCtx());
+      const res = await POST(makeRequest("POST", {
+        action: "review",
+        expectedUpdatedAt: SECTION_DTO.updatedAt,
+      }), makeCtx());
 
       expect(res.status).toBe(403);
       await expect(res.json()).resolves.toEqual({ error: "Forbidden" });
@@ -302,9 +353,38 @@ describe("/api/admissions/cases/[caseId]/sections/[sectionKey]", () => {
       vi.mocked(requireCaseAccess).mockResolvedValue(COUNSELOR_ACCESS);
       vi.mocked(reviewSection).mockRejectedValue(new Error("Conflict"));
 
-      const res = await POST(makeRequest("POST", { action: "review" }), makeCtx());
+      const res = await POST(makeRequest("POST", {
+        action: "review",
+        expectedUpdatedAt: SECTION_DTO.updatedAt,
+      }), makeCtx());
 
       expect(res.status).toBe(409);
+    });
+  });
+
+  describe("POST action=share", () => {
+    it("lets a counselor explicitly release the section to family", async () => {
+      signInAs("counselor@example.com", "counselor");
+      vi.mocked(requireCaseAccess).mockResolvedValue(COUNSELOR_ACCESS);
+      const res = await POST(
+        makeRequest("POST", { action: "share", sharedWithFamily: true }),
+        makeCtx(),
+      );
+      expect(res.status).toBe(200);
+      expect(setSectionFamilySharing).toHaveBeenCalledWith({
+        access: COUNSELOR_ACCESS,
+        sectionKey: SECTION_KEY,
+        sharedWithFamily: true,
+      });
+    });
+
+    it("returns 403 when a student attempts to release family data", async () => {
+      const res = await POST(
+        makeRequest("POST", { action: "share", sharedWithFamily: true }),
+        makeCtx(),
+      );
+      expect(res.status).toBe(403);
+      expect(setSectionFamilySharing).not.toHaveBeenCalled();
     });
   });
 

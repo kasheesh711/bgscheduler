@@ -11,7 +11,9 @@
 // DOM.
 // ----------------------------------------------------------------------------
 
-import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -277,6 +279,7 @@ export interface CaseloadTableProps {
 
 /** Desktop-dense caseload table with toolbar filters + sortable headers. */
 export function CaseloadTable({ rows }: CaseloadTableProps) {
+  const router = useRouter();
   const [filters, setFilters] = useState<CaseloadFilters>(DEFAULT_CASELOAD_FILTERS);
   const [sort, setSort] = useState<CaseloadSort>(DEFAULT_CASELOAD_SORT);
   const todayIso = useMemo(() => todayBangkok(), []);
@@ -295,6 +298,25 @@ export function CaseloadTable({ rows }: CaseloadTableProps) {
   );
 
   const handleSort = (key: CaseloadSortKey) => setSort((current) => toggleCaseloadSort(current, key));
+
+  const openCaseFromRow = (
+    caseId: string,
+    event: MouseEvent<HTMLTableRowElement> | KeyboardEvent<HTMLTableRowElement>,
+  ) => {
+    if (
+      "key" in event &&
+      event.key !== "Enter"
+    ) {
+      return;
+    }
+    if (
+      event.target instanceof HTMLElement &&
+      event.target.closest("a,button,input,select,textarea,[role='button']")
+    ) {
+      return;
+    }
+    router.push(`/admissions/${caseId}`);
+  };
 
   return (
     <div className="flex flex-col gap-3">
@@ -379,9 +401,23 @@ export function CaseloadTable({ rows }: CaseloadTableProps) {
               visibleRows.map((row) => {
                 const deadline = formatNextDeadline(row.nextDeadline, todayIso);
                 return (
-                  <TableRow key={row.caseId}>
+                  <TableRow
+                    key={row.caseId}
+                    role="link"
+                    tabIndex={0}
+                    aria-label={`Open ${row.studentName}'s admissions case`}
+                    data-case-href={`/admissions/${row.caseId}`}
+                    className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                    onClick={(event) => openCaseFromRow(row.caseId, event)}
+                    onKeyDown={(event) => openCaseFromRow(row.caseId, event)}
+                  >
                     <TableCell>
-                      <span className="font-medium">{row.studentName}</span>
+                      <Link
+                        href={`/admissions/${row.caseId}`}
+                        className="rounded-sm font-medium outline-none hover:text-primary hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
+                      >
+                        {row.studentName}
+                      </Link>
                       {row.preferredName ? (
                         <span className="ml-1.5 text-muted-foreground">({row.preferredName})</span>
                       ) : null}

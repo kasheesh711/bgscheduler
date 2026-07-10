@@ -35,6 +35,7 @@ import {
   admissionsCases,
   admissionsCaseTasks,
   admissionsChecklistTemplates,
+  admissionsNotificationOutbox,
   admissionsStudents,
   admissionsTemplateItems,
 } from "@/lib/db/schema";
@@ -47,6 +48,7 @@ import {
   getCaseIdForStudentEmail,
   getCaseloadForUser,
   isValidCaseTransition,
+  projectCaseDetailForStudent,
   updateCaseLifecycle,
   updateCaseProfile,
 } from "@/lib/admissions/cases";
@@ -85,8 +87,9 @@ interface UpdateCall {
  * queued result — the queue order must match the function's query order.
  * Inserts synthesize a returning row from the given values plus defaults.
  */
-function fakeDb(queue: unknown[][]) {
+function fakeDb(queue: unknown[][], updateReturningQueue: unknown[][] = []) {
   let i = 0;
+  let updateReturningIndex = 0;
   let generated = 0;
   const selectCalls: number[] = [];
   const inserts: InsertCall[] = [];
@@ -137,7 +140,9 @@ function fakeDb(queue: unknown[][]) {
         updates.push({ table, set });
         const b: Record<string, unknown> = {};
         b.where = () => b;
-        b.returning = () => Promise.resolve([]);
+        b.returning = () => Promise.resolve(
+          updateReturningQueue[updateReturningIndex++] ?? [{ id: CASE_ID }],
+        );
         (b as { then: unknown }).then = (
           resolve: (value: unknown) => unknown,
           reject?: (error: unknown) => unknown,
@@ -256,6 +261,16 @@ describe("updateCaseLifecycle", () => {
     await expect(updateCaseLifecycle(CASE_ID, "withdrawn", ACTOR, db)).rejects.toThrow("Conflict");
   });
 
+  it("fails closed when another transaction wins the lifecycle compare-and-swap", async () => {
+    const { db, inserts } = fakeDb(
+      [[{ id: CASE_ID, status: "active" }]],
+      [[]],
+    );
+
+    await expect(updateCaseLifecycle(CASE_ID, "withdrawn", ACTOR, db)).rejects.toThrow("Conflict");
+    expect(auditInserts(inserts)).toHaveLength(0);
+  });
+
   it("throws NotFound for a missing case", async () => {
     const { db } = fakeDb([[]]);
 
@@ -270,10 +285,102 @@ describe("updateCaseLifecycle", () => {
   });
 });
 
+describe("projectCaseDetailForStudent", () => {
+  it("whitelists student data and excludes Wise, family membership, ids, and portal audit metadata", () => {
+    const projected = projectCaseDetailForStudent({
+      caseId: CASE_ID,
+      status: "active",
+      statusChangedAt: "2026-07-01T00:00:00.000Z",
+      committedListItemId: null,
+      committedCollegeName: null,
+      driveFolder: null,
+      familyPortalOpen: true,
+      familyPortalOpenedAt: "2026-07-01T00:00:00.000Z",
+      familyPortalOpenedByEmail: "private-admin@example.com",
+      student: {
+        id: STUDENT_ID,
+        fullName: "Ada Lovelace",
+        preferredName: "Ada",
+        studentEmail: "ada@example.com",
+        phone: null,
+        school: "Example School",
+        schoolCounselor: null,
+        wiseStudentKey: "WISE-SECRET",
+        externalLinks: {},
+      },
+      cohort: { id: COHORT_ID, name: "Class of 2027", graduationYear: 2027 },
+      members: [
+        {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          caseId: CASE_ID,
+          email: "parent-private@example.com",
+          role: "parent",
+          status: "active",
+          invitedAt: "2026-07-01T00:00:00.000Z",
+          activatedAt: "2026-07-01T00:00:00.000Z",
+          revokedAt: null,
+          addedByEmail: "private-admin@example.com",
+          createdAt: "2026-07-01T00:00:00.000Z",
+          updatedAt: "2026-07-01T00:00:00.000Z",
+        },
+        {
+          id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          caseId: CASE_ID,
+          email: "counselor@example.com",
+          role: "counselor",
+          status: "active",
+          invitedAt: null,
+          activatedAt: "2026-07-01T00:00:00.000Z",
+          revokedAt: null,
+          addedByEmail: "private-admin@example.com",
+          createdAt: "2026-07-01T00:00:00.000Z",
+          updatedAt: "2026-07-01T00:00:00.000Z",
+        },
+      ],
+      collegeList: [],
+      applicationWarnings: [],
+      progress: { done: 0, total: 0, percent: 0, verifiedCount: 0 },
+      progressPercent: 0,
+      nextDeadline: null,
+      upcomingDeadlines: [],
+      announcements: [],
+      essays: [],
+      activities: [],
+      testSittings: [],
+      sections: [],
+      thisWeek: [],
+      phaseProgress: [],
+      lastMeetingDate: null,
+      createdAt: "2026-07-01T00:00:00.000Z",
+      updatedAt: "2026-07-01T00:00:00.000Z",
+    });
+
+    expect(projected.counselors).toEqual([{ email: "counselor@example.com" }]);
+    const serialized = JSON.stringify(projected);
+    for (const forbidden of [
+      "WISE-SECRET",
+      "parent-private@example.com",
+      "private-admin@example.com",
+      "familyPortalOpenedAt",
+      "familyPortalOpenedByEmail",
+      "members",
+      STUDENT_ID,
+      COHORT_ID,
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
+});
+
 describe("updateCaseProfile", () => {
   const UPDATED_AT = new Date("2026-07-08T00:00:00Z");
 
-  function profileJoinRow(overrides: { driveFolder?: string | null } = {}) {
+  function profileJoinRow(overrides: {
+    driveFolder?: string | null;
+    familyPortalOpen?: boolean;
+    familyPortalOpenedAt?: Date | null;
+    familyPortalOpenedByEmail?: string | null;
+  } = {}) {
     return {
       caseRow: {
         id: CASE_ID,
@@ -283,6 +390,9 @@ describe("updateCaseProfile", () => {
         statusChangedAt: new Date("2026-06-01T00:00:00Z"),
         committedListItemId: null,
         driveFolder: overrides.driveFolder ?? null,
+        familyPortalOpen: overrides.familyPortalOpen ?? false,
+        familyPortalOpenedAt: overrides.familyPortalOpenedAt ?? null,
+        familyPortalOpenedByEmail: overrides.familyPortalOpenedByEmail ?? null,
         deletedAt: null,
         createdAt: new Date("2026-06-01T00:00:00Z"),
         updatedAt: UPDATED_AT,
@@ -366,6 +476,141 @@ describe("updateCaseProfile", () => {
     expect(audits[0]).toMatchObject({ entityType: "student", action: "update" });
   });
 
+  it("replaces student external links with normalized, audited http(s) URLs", async () => {
+    const { db, inserts, updates } = fakeDb([[profileJoinRow()]]);
+
+    await updateCaseProfile({
+      caseId: CASE_ID,
+      actor: ACTOR,
+      student: {
+        externalLinks: {
+          commonApp: "https://commonapp.org",
+          portfolio: "https://portfolio.example.com/ada",
+        },
+      },
+    }, db);
+
+    const studentUpdate = updates.find((call) => call.table === admissionsStudents);
+    expect(studentUpdate?.set.externalLinks).toEqual({
+      commonApp: "https://commonapp.org/",
+      portfolio: "https://portfolio.example.com/ada",
+    });
+    expect(auditInserts(inserts)[0]).toMatchObject({
+      entityType: "student",
+      action: "update",
+      diff: {
+        externalLinks: {
+          old: {},
+          new: {
+            commonApp: "https://commonapp.org/",
+            portfolio: "https://portfolio.example.com/ada",
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects unsafe student external-link schemes in domain logic", async () => {
+    const { db, updates } = fakeDb([[profileJoinRow()]]);
+
+    await expect(updateCaseProfile({
+      caseId: CASE_ID,
+      actor: ACTOR,
+      student: { externalLinks: { portal: "javascript:alert(1)" } },
+    }, db)).rejects.toThrow("Invalid student external link URL");
+    expect(updates).toHaveLength(0);
+  });
+
+  it("rejects credentials embedded in case and student links", async () => {
+    const drive = fakeDb([[profileJoinRow()]]);
+    await expect(updateCaseProfile({
+      caseId: CASE_ID,
+      actor: ACTOR,
+      driveFolder: "https://student:secret@drive.example.com/folder",
+    }, drive.db)).rejects.toThrow("Invalid driveFolder");
+    expect(drive.updates).toHaveLength(0);
+
+    const external = fakeDb([[profileJoinRow()]]);
+    await expect(updateCaseProfile({
+      caseId: CASE_ID,
+      actor: ACTOR,
+      student: { externalLinks: { portal: "https://ada:secret@example.edu/" } },
+    }, external.db)).rejects.toThrow("Invalid student external link URL");
+    expect(external.updates).toHaveLength(0);
+  });
+
+  it("opens the family portal with actor metadata and an audit entry", async () => {
+    const FAMILY_MEMBER_ID = "88888888-8888-4888-8888-888888888888";
+    const { db, inserts, updates } = fakeDb([
+      [profileJoinRow()],
+      [{ id: FAMILY_MEMBER_ID, email: "mom@example.com" }],
+      // Immediate best-effort delivery sees no due rows in this unit fake.
+      [],
+    ]);
+
+    await updateCaseProfile({
+      caseId: CASE_ID,
+      actor: ACTOR,
+      familyPortalOpen: true,
+    }, db);
+
+    const caseUpdate = updates.find((call) => call.table === admissionsCases);
+    expect(caseUpdate?.set).toMatchObject({
+      familyPortalOpen: true,
+      familyPortalOpenedByEmail: "staff@example.com",
+    });
+    expect(caseUpdate?.set.familyPortalOpenedAt).toBeInstanceOf(Date);
+    const outbox = inserts.find((call) => call.table === admissionsNotificationOutbox);
+    expect(outbox?.values).toMatchObject({
+      caseId: CASE_ID,
+      memberId: FAMILY_MEMBER_ID,
+      recipientEmail: "mom@example.com",
+      category: "invite",
+      status: "pending",
+      payload: { studentFirstName: "Ada" },
+    });
+    expect(String(outbox?.values.dedupeKey)).toContain(
+      `member-invite:portal-open:${CASE_ID}:${FAMILY_MEMBER_ID}:`,
+    );
+    expect(auditInserts(inserts)).toEqual([
+      expect.objectContaining({
+        caseId: CASE_ID,
+        entityType: "case",
+        action: "family_portal_open",
+        diff: expect.objectContaining({
+          familyPortalOpen: { old: false, new: true },
+          familyPortalOpenedByEmail: { old: null, new: "staff@example.com" },
+        }),
+      }),
+    ]);
+  });
+
+  it("closes the family portal without erasing its last-open metadata", async () => {
+    const openedAt = new Date("2026-07-01T00:00:00Z");
+    const { db, inserts, updates } = fakeDb([[
+      profileJoinRow({
+        familyPortalOpen: true,
+        familyPortalOpenedAt: openedAt,
+        familyPortalOpenedByEmail: "admin@example.com",
+      }),
+    ]]);
+
+    await updateCaseProfile({
+      caseId: CASE_ID,
+      actor: ACTOR,
+      familyPortalOpen: false,
+    }, db);
+
+    const caseUpdate = updates.find((call) => call.table === admissionsCases);
+    expect(caseUpdate?.set.familyPortalOpen).toBe(false);
+    expect(caseUpdate?.set.familyPortalOpenedAt).toBeUndefined();
+    expect(caseUpdate?.set.familyPortalOpenedByEmail).toBeUndefined();
+    expect(auditInserts(inserts)[0]).toMatchObject({
+      action: "family_portal_close",
+      diff: { familyPortalOpen: { old: true, new: false } },
+    });
+  });
+
   it("is a no-op returning the current token when nothing changed", async () => {
     const { db, inserts, updates } = fakeDb([[profileJoinRow()]]);
 
@@ -390,6 +635,19 @@ describe("updateCaseProfile", () => {
       driveFolder: "https://drive.example.com/x",
     }, db)).rejects.toThrow("Conflict");
     expect(updates).toHaveLength(0);
+  });
+
+  it("rolls back a portal change when the case concurrency token changes after read", async () => {
+    const { db, inserts } = fakeDb([[profileJoinRow()]], [[]]);
+
+    await expect(updateCaseProfile({
+      caseId: CASE_ID,
+      actor: ACTOR,
+      expectedUpdatedAt: UPDATED_AT.toISOString(),
+      familyPortalOpen: true,
+    }, db)).rejects.toThrow("Conflict");
+    expect(auditInserts(inserts)).toHaveLength(0);
+    expect(inserts.some((entry) => entry.table === admissionsNotificationOutbox)).toBe(false);
   });
 
   it("proceeds when expectedUpdatedAt matches the current token", async () => {
@@ -483,10 +741,11 @@ describe("createCase", () => {
   }
 
   it("creates the student, the case, and all membership rows with correct roles/statuses", async () => {
-    // Queue: [published-template probe -> hit], [student lookup -> none]
+    // Queue: [active counselor registry], [published-template probe -> hit], [student lookup -> none]
     // (new student skips the live-case check), [instantiate: template],
     // [instantiate: items].
     const { db, inserts } = fakeDb([
+      [{ email: "staff@example.com" }],
       TEMPLATE_HIT,
       [],
       [templateRow(2)],
@@ -534,9 +793,10 @@ describe("createCase", () => {
   });
 
   it("copies the cohort's latest published template into case tasks (CM-21)", async () => {
-    // Queue: [published-template probe -> hit], [student lookup -> none],
+    // Queue: [active counselor registry], [published-template probe -> hit], [student lookup -> none],
     // [instantiate: template v3], [instantiate: 2 items].
     const { db, inserts } = fakeDb([
+      [{ email: "staff@example.com" }],
       TEMPLATE_HIT,
       [],
       [templateRow(3)],
@@ -598,10 +858,11 @@ describe("createCase", () => {
   });
 
   it("seeds and publishes the default template when the cohort has none, then instantiates it", async () => {
-    // Queue: [published-template probe -> none], [seed: cohort exists],
+    // Queue: [active counselor registry], [published-template probe -> none], [seed: cohort exists],
     // [seed: max version -> none], [student lookup -> none],
     // [instantiate: seeded template], [instantiate: items].
     const { db, inserts } = fakeDb([
+      [{ email: "staff@example.com" }],
       [],
       [{ id: COHORT_ID }],
       [],
@@ -648,9 +909,10 @@ describe("createCase", () => {
   });
 
   it("links an existing student by email instead of creating a new row", async () => {
-    // Queue: [published-template probe -> hit], [student lookup -> hit],
+    // Queue: [active counselor registry], [published-template probe -> hit], [student lookup -> hit],
     // [live-case check -> none], [instantiate: template], [instantiate: no items].
     const { db, inserts } = fakeDb([
+      [{ email: "staff@example.com" }],
       TEMPLATE_HIT,
       [{ id: STUDENT_ID }],
       [],
@@ -665,7 +927,12 @@ describe("createCase", () => {
   });
 
   it("throws Conflict when the linked student already has a live case", async () => {
-    const { db, inserts } = fakeDb([TEMPLATE_HIT, [{ id: STUDENT_ID }], [{ id: CASE_ID }]]);
+    const { db, inserts } = fakeDb([
+      [{ email: "staff@example.com" }],
+      TEMPLATE_HIT,
+      [{ id: STUDENT_ID }],
+      [{ id: CASE_ID }],
+    ]);
 
     await expect(createCase(INPUT, db)).rejects.toThrow("Conflict");
     expect(inserts).toHaveLength(0);
@@ -697,7 +964,13 @@ describe("createCase", () => {
   });
 
   it("dedupes repeated parent emails after normalization", async () => {
-    const { db, inserts } = fakeDb([TEMPLATE_HIT, [], [templateRow(2)], []]);
+    const { db, inserts } = fakeDb([
+      [{ email: "staff@example.com" }],
+      TEMPLATE_HIT,
+      [],
+      [templateRow(2)],
+      [],
+    ]);
 
     await createCase(
       { ...INPUT, parentEmails: ["Mom@Example.com", " mom@example.com "] },
@@ -953,6 +1226,9 @@ describe("getCaseDetail", () => {
         statusChangedAt: new Date("2026-06-15T00:00:00Z"),
         committedListItemId,
         driveFolder: "https://drive.example.com/folder",
+        familyPortalOpen: true,
+        familyPortalOpenedAt: new Date("2026-06-16T00:00:00Z"),
+        familyPortalOpenedByEmail: "staff@example.com",
         deletedAt: null,
         createdAt: new Date("2026-06-01T00:00:00Z"),
         updatedAt: new Date("2026-07-01T00:00:00Z"),
@@ -1066,6 +1342,9 @@ describe("getCaseDetail", () => {
       committedListItemId: ITEM_ID,
       committedCollegeName: "Stanford University",
       driveFolder: "https://drive.example.com/folder",
+      familyPortalOpen: true,
+      familyPortalOpenedAt: "2026-06-16T00:00:00.000Z",
+      familyPortalOpenedByEmail: "staff@example.com",
       student: {
         id: STUDENT_ID,
         fullName: "Ada Lovelace",

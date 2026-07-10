@@ -77,7 +77,7 @@ describe("SectionsList", () => {
       /<span[^>]*data-testid="section-completion-about_you"[^>]*>([\s\S]*?)<\/span>/,
     );
     expect(aboutYou).not.toBeNull();
-    expect(aboutYou![1].replace(/<!-- -->/g, "")).toBe("2/10 answered");
+    expect(aboutYou![1].replace(/<!-- -->/g, "")).toBe("2/31 answered");
     const personality = html.match(
       /<span[^>]*data-testid="section-completion-personality"[^>]*>([\s\S]*?)<\/span>/,
     );

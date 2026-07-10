@@ -95,9 +95,9 @@ runs).
 | Variable | Schema (`src/lib/env.ts`) | Purpose | Consumed at | Runtime guard on absence |
 |---|---|---|---|---|
 | `DATABASE_URL` | `.url()` (line 4) | Neon Postgres connection string. The single backing store for snapshots, sync runs, activity events, payroll, etc. | `src/lib/db/index.ts:6`; `src/lib/db/seed.ts:6`; `src/lib/payroll/sync.ts:94` | `createDb()` throws `"DATABASE_URL is not set"` (`src/lib/db/index.ts:7-9`) |
-| `AUTH_GOOGLE_ID` | `.min(1)` (line 5) | Google OAuth client ID for Auth.js sign-in. | `src/lib/auth.ts:28`; `src/lib/auth-edge.ts:7`; also reused for Sales Dashboard OAuth at `src/lib/sales-dashboard/google-oauth.ts:142` | None at read site; Auth.js fails the OAuth flow if unset |
+| `AUTH_GOOGLE_ID` | `.min(1)` (line 5) | Google OAuth client ID for identity-only Auth.js sign-in and explicit staff Sheets consent. | `src/lib/auth.ts`; `src/lib/auth-edge.ts`; reused for token refresh in `src/lib/sales-dashboard/google-oauth.ts` | None at read site; Auth.js fails the OAuth flow if unset |
 | `AUTH_GOOGLE_SECRET` | `.min(1)` (line 6) | Google OAuth client secret. | `src/lib/auth.ts:29`; `src/lib/auth-edge.ts:8`; `src/lib/sales-dashboard/google-oauth.ts:143` | None at read site (falls back to `""` in google-oauth) |
-| `AUTH_SECRET` | `.min(1)` (line 7) | Auth.js session/JWT encryption key. Also used to sign Sales Dashboard OAuth state. | `src/lib/sales-dashboard/google-oauth.ts:38` (and implicitly by Auth.js core via `process.env`) | `google-oauth` reads it into `secret` (line 38) — see source for its own guard |
+| `AUTH_SECRET` | `.min(1)` (line 7) | Auth.js session/JWT encryption key and AES-256-GCM root for persisted staff Google tokens. | `src/lib/sales-dashboard/google-oauth.ts` (and implicitly by Auth.js core via `process.env`) | Google-token encryption throws when absent |
 | `WISE_USER_ID` | `.min(1)` (line 8) | Wise API user ID; half of the Basic-Auth credential pair. | `src/lib/wise/client.ts:161` (non-null `!`); `src/lib/classrooms/data.ts:1133`; guarded in `src/lib/wise-activity/reconciliation.ts:729,756` | `createWiseClient` uses `!` (no throw); reconciliation **does** guard: bails if `WISE_USER_ID` or `WISE_API_KEY` missing (`reconciliation.ts:729`) |
 | `WISE_API_KEY` | `.min(1)` (line 9) | Wise API key; the other half of the credential pair. | `src/lib/wise/client.ts:162` (non-null `!`); `src/lib/classrooms/data.ts:1134`; `reconciliation.ts:729,756` | Same as `WISE_USER_ID` — `!` at client, explicit guard in reconciliation |
 | `CRON_SECRET` | `.min(1)` (line 12) | Bearer secret protecting every internal cron/sync endpoint. | Central helper `src/lib/internal/cron-auth.ts:8`; also read directly in `src/app/api/internal/sync-wise/route.ts:16`, `sync-sales-dashboard/route.ts:16`, `sync-credit-control/route.ts:12`, `sync-room-utilization/route.ts:13` | `getCronSecretStatus` returns `"missing-secret"` → endpoint responds **500 "Server misconfigured"** (`cron-auth.ts:10,22-24`) |
@@ -183,6 +183,37 @@ All read with `?.trim()` and no schema entry; consumed in
 | `SCHEDULE_EMAIL_REPLY_TO` | Yes (line 34) | Reply-to address. | `schedule-email.ts:607` | Defaults to hard-coded `"kevhsh7@gmail.com"` |
 | `SCHEDULE_EMAIL_PUBLIC_BASE_URL` | No | Override for the public base URL used in email links. | `schedule-email.ts:266`; also `src/lib/leave-requests/config.ts:19` | First in a cascade (see below) |
 
+### University Admissions email and imports
+
+These variables are read directly by the admissions notification transport and
+are not declared in `src/lib/env.ts`.
+
+| Variable | In `.env.example`? | Purpose | Consumed at | Default / guard |
+|---|---|---|---|---|
+| `RESEND_API_KEY` | Yes | Authenticates the Resend API for invitations, direct messages, deadline reminders, and digests. | `src/lib/admissions/notifications.ts` | Missing/blank throws at send time. Required before opening any family portal. |
+| `ADMISSIONS_EMAIL_FROM` | Yes | Admissions sender in `Display Name <address>` form. | `src/lib/admissions/notifications.ts` | Falls back to `BeGifted Admissions <onboarding@resend.dev>`; the production-readiness check rejects that development sender. |
+| `ADMISSIONS_EMAIL_REPLY_TO` | Yes | Reply-to for admissions email. | `src/lib/admissions/notifications.ts` | Falls back to `kevhsh7@gmail.com`; the readiness check warns on that development fallback. |
+
+Admissions workbook imports do not use a shared spreadsheet-id environment
+variable. A counselor/admin pastes the copied student workbook URL and explicitly
+connects Google Sheets from the case UI. Ordinary login requests only
+`openid email profile`; a Google token is persisted only for an admin/counselor
+after the explicit Sheets consent flow. Admissions asks for the read-only Sheets
+scope and never stores a student/parent token.
+
+Production preflight must validate all three email values and the daily
+`admissions-notifications` cron before a case portal is opened. See the
+[admissions rollout runbook](../operations/admissions-import-rollout.md).
+Run `npm run check:admissions-production` with the production environment: it
+requires `DATABASE_URL`, `CRON_SECRET`, all three admissions email settings,
+and `NEXT_PUBLIC_APP_URL`; verifies migration hashes for `0050–0054`; checks
+the latest notification run and outbox; and reports whether any family portal
+is already open.
+
+**Current production blocker (2026-07-10):** `0053–0054` are installed, but
+`RESEND_API_KEY`, `ADMISSIONS_EMAIL_FROM`, `ADMISSIONS_EMAIL_REPLY_TO`, and
+`NEXT_PUBLIC_APP_URL` are missing. The parity code has not been deployed.
+
 ### Tutor leave requests (Google Sheets bridge)
 
 Consumed in `src/lib/leave-requests/config.ts`.
@@ -192,7 +223,7 @@ Consumed in `src/lib/leave-requests/config.ts`.
 | `LEAVE_REQUESTS_SPREADSHEET_ID` | Yes (line 37) | Google Sheet ID holding form responses. | `config.ts:2` | Defaults to a hard-coded sheet ID literal |
 | `LEAVE_REQUESTS_SHEET_NAME` | Yes (line 38) | Worksheet/tab name. | `config.ts:5` | Defaults to `"Form Responses 1"` |
 | `LEAVE_REQUESTS_CONNECTED_EMAIL` | Yes (line 39) | Google account with Sheets write scope. | `config.ts:13` | Falls back to `SALES_DASHBOARD_CONNECTED_EMAIL`, then `""` |
-| `NEXT_PUBLIC_APP_URL` | Yes (line 40) | Public app base URL (client-exposed `NEXT_PUBLIC_*`). | `config.ts:18` | First in the leave-requests base-URL cascade |
+| `NEXT_PUBLIC_APP_URL` | Yes (line 45) | Public app base URL (client-exposed `NEXT_PUBLIC_*`). | `config.ts:18` | First in the leave-requests base-URL cascade |
 
 ### Wise writeback safety + seed + Vercel-injected
 
@@ -251,10 +282,11 @@ sequenceDiagram
 - **Prose says "9 required"; Zod says 7.** The discrepancy is explained above
   (the 2 `.default()` `WISE_*` vars are counted as required in prose). Worth
   aligning the prose to say "7 hard-required + 2 defaulted".
-- **Schema is missing ~15 live variables.** `OPENAI_*`, `ENABLE_AI_SCHEDULER`,
+- **Schema is missing many live variables.** `OPENAI_*`, `ENABLE_AI_SCHEDULER`,
   all `SCHEDULE_EMAIL_*`, all `LEAVE_REQUESTS_*`, `WISE_SESSION_OPERATIONS_VERIFIED`,
   `LINE_VALIDATION_LEAD_EMAILS`, `SALES_DASHBOARD_CONNECTED_EMAIL`,
-  `NEXT_PUBLIC_APP_URL`, and `SEED_ADMIN_EMAILS` are all read from `process.env`
+  `NEXT_PUBLIC_APP_URL`, `SEED_ADMIN_EMAILS`, `RESEND_API_KEY`,
+  `ADMISSIONS_EMAIL_FROM`, and `ADMISSIONS_EMAIL_REPLY_TO` are all read from `process.env`
   but absent from `src/lib/env.ts`. The schema is no longer a complete inventory.
 - **`.env.example` lists vars not in the schema and omits the optional LINE
   vars' siblings.** `.env.example` documents `OPENAI_*`, `SCHEDULE_EMAIL_*`,
@@ -271,4 +303,5 @@ sequenceDiagram
   constructed with `undefined` credentials and fails at request time rather than
   at construction — unlike `reconciliation.ts:729`, which guards explicitly.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Admissions additions verified against the parity branch on 2026-07-10; the
+broader environment inventory retains its earlier code-audit notes._

@@ -135,7 +135,7 @@ describe("computeSectionCompletion", () => {
   it("counts non-empty strings and non-empty arrays across all steps", () => {
     expect(computeSectionCompletion(ABOUT_YOU, {})).toEqual({
       answered: 0,
-      total: 10,
+      total: 31,
       percent: 0,
     });
     expect(
@@ -146,7 +146,7 @@ describe("computeSectionCompletion", () => {
         languages: [],
         unknown_key: "never counted",
       }),
-    ).toEqual({ answered: 2, total: 10, percent: 20 });
+    ).toEqual({ answered: 2, total: 31, percent: 6 });
   });
 });
 
@@ -164,10 +164,11 @@ describe("canSubmitSection", () => {
 describe("SectionForm steps and fields", () => {
   it("renders one dot per step and only the current step's fields", () => {
     const html = renderForm();
-    expect(ABOUT_YOU.steps).toHaveLength(2);
+    expect(ABOUT_YOU.steps).toHaveLength(5);
     expect(html).toContain('data-testid="step-dot-0"');
     expect(html).toContain('data-testid="step-dot-1"');
-    expect(html).toContain("Step 1 of 2: The basics");
+    expect(html).toContain('data-testid="step-dot-4"');
+    expect(html).toContain("Step 1 of 5: The basics");
     // Step-1 field present; step-2 field absent until Next.
     expect(html).toContain('data-testid="field-preferred_name"');
     expect(html).not.toContain('data-testid="field-favorite_subjects"');
@@ -195,7 +196,7 @@ describe("SectionForm steps and fields", () => {
     // the first render of a section whose step 1 has the multiselect.
     const definition = {
       ...ABOUT_YOU,
-      steps: [ABOUT_YOU.steps[1]],
+      steps: [ABOUT_YOU.steps[4]],
     };
     const html = renderForm({
       section: makeSection({ definition }),

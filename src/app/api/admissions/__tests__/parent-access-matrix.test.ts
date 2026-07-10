@@ -60,11 +60,20 @@ import type { CaseAccess, CaseRole } from "@/lib/admissions/types";
 
 import * as caseDetailRoute from "@/app/api/admissions/cases/[caseId]/route";
 import * as activitiesRoute from "@/app/api/admissions/cases/[caseId]/activities/route";
+import * as academicsRoute from "@/app/api/admissions/cases/[caseId]/academics/route";
+import * as awardsRoute from "@/app/api/admissions/cases/[caseId]/awards/route";
 import * as calendarRoute from "@/app/api/admissions/cases/[caseId]/calendar/route";
 import * as collegesRoute from "@/app/api/admissions/cases/[caseId]/colleges/route";
 import * as collegeEventsRoute from "@/app/api/admissions/cases/[caseId]/colleges/[itemId]/events/route";
+import * as collegeResearchRoute from "@/app/api/admissions/cases/[caseId]/colleges/[itemId]/research/route";
+import * as interestEventsRoute from "@/app/api/admissions/cases/[caseId]/colleges/[itemId]/interest-events/route";
+import * as requirementsRoute from "@/app/api/admissions/cases/[caseId]/colleges/[itemId]/requirements/route";
+import * as financialAidRoute from "@/app/api/admissions/cases/[caseId]/colleges/[itemId]/financial-aid/route";
 import * as essaysRoute from "@/app/api/admissions/cases/[caseId]/essays/route";
+import * as essayFromPromptRoute from "@/app/api/admissions/cases/[caseId]/essays/from-prompt/route";
+import * as importsRoute from "@/app/api/admissions/cases/[caseId]/imports/route";
 import * as meetingsRoute from "@/app/api/admissions/cases/[caseId]/meetings/route";
+import * as messagesRoute from "@/app/api/admissions/cases/[caseId]/messages/route";
 import * as membersRoute from "@/app/api/admissions/cases/[caseId]/members/route";
 import * as notesRoute from "@/app/api/admissions/cases/[caseId]/notes/route";
 import * as parentDashboardRoute from "@/app/api/admissions/cases/[caseId]/parent-dashboard/route";
@@ -72,6 +81,7 @@ import * as recommendersRoute from "@/app/api/admissions/cases/[caseId]/recommen
 import * as sectionsRoute from "@/app/api/admissions/cases/[caseId]/sections/[sectionKey]/route";
 import * as tasksRoute from "@/app/api/admissions/cases/[caseId]/tasks/route";
 import * as testingRoute from "@/app/api/admissions/cases/[caseId]/testing/route";
+import * as scholarshipsRoute from "@/app/api/admissions/cases/[caseId]/scholarships/route";
 
 const authMock = auth as unknown as Mock;
 
@@ -84,12 +94,28 @@ const DASHBOARD: ParentDashboard = {
   studentName: "Nong Prae",
   cohortName: "Class of 2027",
   caseStatus: "active",
+  profile: {
+    preferredName: null,
+    phone: null,
+    school: null,
+    schoolCounselor: null,
+    graduationYear: 2027,
+    sharedDetails: [],
+  },
+  academics: [],
   progress: { done: 2, total: 8, percent: 25 },
   phaseProgress: [],
+  checklist: [],
   collegeList: [],
+  recommenders: [],
+  essays: [],
+  activities: [],
+  awards: [],
   upcomingDeadlines: [],
   announcements: [],
   testingMilestones: [],
+  scholarships: [],
+  financialAid: [],
   sharedNotes: [],
 };
 
@@ -135,13 +161,37 @@ const SURFACES: SurfaceContract[] = [
     file: "route.ts",
     module: caseDetailRoute,
     urlSuffix: "",
-    denied: [{ method: "PATCH", minRole: "counselor" }],
+    denied: [{ method: "PATCH", minRole: "student" }],
     allowed: ["GET"], // minRole "parent", but role-shaped: parents 403 → dashboard
+  },
+  {
+    file: "academics/route.ts",
+    module: academicsRoute,
+    urlSuffix: "/academics",
+    denied: [
+      { method: "GET", minRole: "student" },
+      { method: "POST", minRole: "counselor" },
+      { method: "PATCH", minRole: "counselor" },
+      { method: "DELETE", minRole: "counselor" },
+    ],
+    allowed: [],
   },
   {
     file: "activities/route.ts",
     module: activitiesRoute,
     urlSuffix: "/activities",
+    denied: [
+      { method: "GET", minRole: "student" },
+      { method: "POST", minRole: "student" },
+      { method: "PATCH", minRole: "student" },
+      { method: "DELETE", minRole: "student" },
+    ],
+    allowed: [],
+  },
+  {
+    file: "awards/route.ts",
+    module: awardsRoute,
+    urlSuffix: "/awards",
     denied: [
       { method: "GET", minRole: "student" },
       { method: "POST", minRole: "student" },
@@ -182,6 +232,50 @@ const SURFACES: SurfaceContract[] = [
     allowed: [],
   },
   {
+    file: "colleges/[itemId]/research/route.ts",
+    module: collegeResearchRoute,
+    urlSuffix: `/colleges/${ITEM_ID}/research`,
+    denied: [
+      { method: "GET", minRole: "student" },
+      { method: "PATCH", minRole: "student" },
+    ],
+    allowed: [],
+  },
+  {
+    file: "colleges/[itemId]/interest-events/route.ts",
+    module: interestEventsRoute,
+    urlSuffix: `/colleges/${ITEM_ID}/interest-events`,
+    denied: [
+      { method: "GET", minRole: "student" },
+      { method: "POST", minRole: "student" },
+      { method: "PATCH", minRole: "student" },
+      { method: "DELETE", minRole: "student" },
+    ],
+    allowed: [],
+  },
+  {
+    file: "colleges/[itemId]/requirements/route.ts",
+    module: requirementsRoute,
+    urlSuffix: `/colleges/${ITEM_ID}/requirements`,
+    denied: [
+      { method: "GET", minRole: "student" },
+      { method: "POST", minRole: "counselor" },
+      { method: "PATCH", minRole: "student" },
+      { method: "DELETE", minRole: "counselor" },
+    ],
+    allowed: [],
+  },
+  {
+    file: "colleges/[itemId]/financial-aid/route.ts",
+    module: financialAidRoute,
+    urlSuffix: `/colleges/${ITEM_ID}/financial-aid`,
+    denied: [
+      { method: "GET", minRole: "student" },
+      { method: "PUT", minRole: "counselor" },
+    ],
+    allowed: [],
+  },
+  {
     file: "essays/route.ts",
     module: essaysRoute,
     urlSuffix: "/essays",
@@ -190,6 +284,23 @@ const SURFACES: SurfaceContract[] = [
       { method: "POST", minRole: "student" },
       { method: "PATCH", minRole: "student" },
       { method: "DELETE", minRole: "counselor" },
+    ],
+    allowed: [],
+  },
+  {
+    file: "essays/from-prompt/route.ts",
+    module: essayFromPromptRoute,
+    urlSuffix: "/essays/from-prompt",
+    denied: [{ method: "POST", minRole: "student" }],
+    allowed: [],
+  },
+  {
+    file: "imports/route.ts",
+    module: importsRoute,
+    urlSuffix: "/imports",
+    denied: [
+      { method: "GET", minRole: "counselor" },
+      { method: "POST", minRole: "counselor" },
     ],
     allowed: [],
   },
@@ -204,6 +315,13 @@ const SURFACES: SurfaceContract[] = [
       { method: "POST", minRole: "counselor" },
       { method: "PATCH", minRole: "counselor" },
     ],
+    allowed: [],
+  },
+  {
+    file: "messages/route.ts",
+    module: messagesRoute,
+    urlSuffix: "/messages",
+    denied: [{ method: "POST", minRole: "counselor" }],
     allowed: [],
   },
   {
@@ -274,6 +392,18 @@ const SURFACES: SurfaceContract[] = [
     file: "testing/route.ts",
     module: testingRoute,
     urlSuffix: "/testing",
+    denied: [
+      { method: "GET", minRole: "student" },
+      { method: "POST", minRole: "student" },
+      { method: "PATCH", minRole: "student" },
+      { method: "DELETE", minRole: "student" },
+    ],
+    allowed: [],
+  },
+  {
+    file: "scholarships/route.ts",
+    module: scholarshipsRoute,
+    urlSuffix: "/scholarships",
     denied: [
       { method: "GET", minRole: "student" },
       { method: "POST", minRole: "student" },

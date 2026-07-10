@@ -205,7 +205,8 @@ async function findLiveActivity(
       eq(admissionsActivities.caseId, caseId),
       isNull(admissionsActivities.deletedAt),
     ))
-    .limit(1);
+    .limit(1)
+    .for("update");
   const row = rows[0];
   if (!row) throw new Error("NotFound");
   return row;

@@ -16,13 +16,16 @@
 // single-flight guard as wise_activity_sync_runs (partial unique index on
 // status='running'; stale rows failed after 30 minutes).
 
-import { and, count, eq, gte, inArray, isNull, lt, lte } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { and, count, eq, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import {
   admissionsCaseMembers,
   admissionsCases,
   admissionsCaseTasks,
+  admissionsCounselors,
   admissionsNotificationLog,
+  admissionsNotificationOutbox,
   admissionsNotificationRuns,
   admissionsSelfReportSections,
   admissionsStudents,
@@ -34,6 +37,7 @@ import {
 } from "./announcements";
 import { getOpenDeadlinesInRange } from "./calendar";
 import { isUuidShaped, normalizeAdmissionsEmail } from "./members";
+import type { AdmissionsWriteDb } from "./audit";
 import type { AdmissionsTaskOwner } from "./meetings";
 import type { AdmissionsMemberDto, AdmissionsRole } from "./types";
 
@@ -49,7 +53,8 @@ const DEFAULT_FROM = "BeGifted Admissions <onboarding@resend.dev>";
 const DEFAULT_REPLY_TO = "kevhsh7@gmail.com";
 
 /** Sign-in link included in invite emails (PRD §3.7 — the ONLY link/data). */
-export const ADMISSIONS_SIGN_IN_URL = "https://bgscheduler.vercel.app/login";
+export const ADMISSIONS_SIGN_IN_URL =
+  `${(process.env.NEXT_PUBLIC_APP_URL?.trim() || "https://bgscheduler.vercel.app").replace(/\/$/, "")}/login?callbackUrl=/admissions`;
 
 /** CM-111: max interrupt emails per recipient per Bangkok day before collapse. */
 export const INTERRUPT_DAILY_CAP = 3;
@@ -71,6 +76,12 @@ const WEEKLY_DIGEST_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Running rows older than this are marked failed before a new run starts. */
 const STALE_RUNNING_NOTIFICATION_RUN_MS = 30 * 60 * 1000;
+
+/** A claimed outbox row becomes reclaimable after this lease expires. */
+const OUTBOX_PROCESSING_LEASE_MS = 15 * 60 * 1000;
+
+/** Retry backoff by completed attempt; the final value is the permanent cap. */
+const OUTBOX_RETRY_BACKOFF_MS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 12 * 60 * 60_000] as const;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -194,6 +205,33 @@ export interface AdmissionsNotificationRunResult {
   errorSummary: string | null;
 }
 
+/** Result of one pending notification-outbox delivery pass. */
+export interface AdmissionsOutboxDeliveryResult {
+  attempted: number;
+  sent: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
+}
+
+/** Payload persisted for a member-invite outbox row. */
+export interface MemberInviteOutboxPayload extends Record<string, unknown> {
+  studentFirstName: string;
+}
+
+/** Payload persisted for a counselor direct-message outbox row. */
+export interface DirectMessageOutboxPayload extends Record<string, unknown> {
+  senderName: string;
+  subject: string;
+  body: string;
+}
+
+/** Result of inserting, or idempotently finding, one outbox row. */
+export interface QueuedAdmissionsOutboxRow {
+  id: string;
+  inserted: boolean;
+}
+
 // ── Shared helpers ──────────────────────────────────────────────────────
 
 /** Minimal HTML escaping for email bodies (mirrors schedule-email.ts). */
@@ -261,6 +299,10 @@ interface ResendEmailResponse {
   message?: string;
 }
 
+function resendIdempotencyKey(dedupeKey: string): string {
+  return `admissions_${createHash("sha256").update(dedupeKey).digest("hex")}`;
+}
+
 /**
  * Sends one email through Resend and records it in
  * admissions_notification_log.
@@ -306,6 +348,9 @@ export async function sendAdmissionsEmail(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
+      ...(dedupeKey
+        ? { "Idempotency-Key": resendIdempotencyKey(dedupeKey) }
+        : {}),
     },
     body: JSON.stringify({
       from,
@@ -370,14 +415,16 @@ async function countInterruptEmailsToday(
 // ── Direct messages (CM-110 interrupt) ──────────────────────────────────
 
 /**
- * Sends a counselor→member direct message immediately (interrupt tier,
- * CM-110). No dedupe key — every direct message is a deliberate send.
+ * Sends a counselor→member direct message (interrupt tier, CM-110).
+ * Transactional-outbox callers pass a stable dedupe key so a provider success
+ * followed by a worker failure remains safe to retry.
  *
  * @returns the transport result.
  */
 export async function notifyDirectMessage(
   input: DirectMessageInput,
   db: Database = getDb(),
+  options: { dedupeKey?: string } = {},
 ): Promise<SendAdmissionsEmailResult> {
   if (!isUuidShaped(input.caseId)) throw new Error("NotFound");
   if (!input.subject.trim()) throw new Error("Direct message subject must not be empty");
@@ -402,6 +449,7 @@ export async function notifyDirectMessage(
     category: "direct_message",
     tier: "interrupt",
     caseId: input.caseId,
+    dedupeKey: options.dedupeKey,
   }, db);
 }
 
@@ -447,13 +495,19 @@ export async function buildDeadlineReminders(
   };
 
   const caseRows = await db
-    .select({ id: admissionsCases.id })
+    .select({
+      id: admissionsCases.id,
+      familyPortalOpen: admissionsCases.familyPortalOpen,
+    })
     .from(admissionsCases)
     .where(and(
       inArray(admissionsCases.status, ["active", "committed"]),
       isNull(admissionsCases.deletedAt),
     ));
   const caseIds = caseRows.map((row) => row.id);
+  const familyPortalByCase = new Map(
+    caseRows.map((row) => [row.id, row.familyPortalOpen]),
+  );
   if (caseIds.length === 0) return [];
 
   const memberRows = await db
@@ -462,9 +516,23 @@ export async function buildDeadlineReminders(
     .where(and(
       inArray(admissionsCaseMembers.caseId, caseIds),
       eq(admissionsCaseMembers.status, "active"),
+      or(
+        ne(admissionsCaseMembers.role, "counselor"),
+        sql<boolean>`EXISTS (
+          SELECT 1 FROM ${admissionsCounselors}
+          WHERE ${admissionsCounselors.email} = ${admissionsCaseMembers.email}
+            AND ${admissionsCounselors.active} = true
+        )`,
+      ),
     ));
   const membersByCase = new Map<string, Array<{ email: string; role: AdmissionsRole }>>();
   for (const member of memberRows) {
+    if (
+      (member.role === "student" || member.role === "parent") &&
+      familyPortalByCase.get(member.caseId) !== true
+    ) {
+      continue;
+    }
     const list = membersByCase.get(member.caseId) ?? [];
     list.push({ email: member.email, role: member.role });
     membersByCase.set(member.caseId, list);
@@ -689,6 +757,8 @@ export async function buildWeeklyDigest(
     .select({
       fullName: admissionsStudents.fullName,
       preferredName: admissionsStudents.preferredName,
+      familyPortalOpen: admissionsCases.familyPortalOpen,
+      caseStatus: admissionsCases.status,
     })
     .from(admissionsCases)
     .innerJoin(admissionsStudents, eq(admissionsCases.studentId, admissionsStudents.id))
@@ -742,10 +812,25 @@ export async function buildWeeklyDigest(
     .where(and(
       eq(admissionsCaseMembers.caseId, caseId),
       eq(admissionsCaseMembers.status, "active"),
+      or(
+        ne(admissionsCaseMembers.role, "counselor"),
+        sql<boolean>`EXISTS (
+          SELECT 1 FROM ${admissionsCounselors}
+          WHERE ${admissionsCounselors.email} = ${admissionsCaseMembers.email}
+            AND ${admissionsCounselors.active} = true
+        )`,
+      ),
     ));
 
   const recipients: RecipientWeeklyDigest[] = [];
   for (const member of memberRows) {
+    if (
+      (member.role === "student" || member.role === "parent") &&
+      (studentRow.familyPortalOpen !== true ||
+        (studentRow.caseStatus !== "active" && studentRow.caseStatus !== "committed"))
+    ) {
+      continue;
+    }
     const prefs = member.notificationPrefs;
     const roleAnnouncements = announcements;
     const roleTasks = member.role === "parent" ? [] : newTasks;
@@ -811,14 +896,16 @@ function renderWeeklyDigestHtml(
  * The email deliberately contains ONLY the child's first name and the
  * sign-in link — no cohort, college, deadline, or any other case data.
  * Access activates only on exact email match at sign-in, so the invite
- * itself grants nothing. No dedupe key: re-invites must resend.
+ * itself grants nothing. Outbox callers pass a per-invitation dedupe key;
+ * direct/manual callers may omit one.
  *
  * @returns the transport result.
  */
 export async function sendMemberInvite(
-  member: AdmissionsMemberDto,
+  member: Pick<AdmissionsMemberDto, "caseId" | "email">,
   studentFirstName: string,
   db: Database = getDb(),
+  options: { dedupeKey?: string } = {},
 ): Promise<SendAdmissionsEmailResult> {
   const firstName = escapeHtml(studentFirstName.trim() || "Student");
   const subject = `คำเชิญเข้าใช้งานพอร์ทัลการสมัครมหาวิทยาลัยของ${studentFirstName.trim() || "Student"} — Invitation to ${studentFirstName.trim() || "Student"}'s university admissions portal`;
@@ -838,14 +925,14 @@ export async function sendMemberInvite(
     category: "invite",
     tier: "interrupt",
     caseId: member.caseId,
+    dedupeKey: options.dedupeKey,
   }, db);
 }
 
 /**
- * Invite hook for members.ts: resolves the case's student first name and
- * sends the invite. Callers fire-and-forget with their own
- * `.catch(console.error)` — this function throws on failure (NotFound for a
- * missing/deleted case, transport errors) so those failures ARE surfaced.
+ * Resolves the case's student first name and sends an invite immediately.
+ * Transactional membership flows use the outbox below; this helper remains
+ * useful for direct delivery and focused transport tests.
  *
  * @returns the transport result.
  */
@@ -868,6 +955,342 @@ export async function sendMemberInviteForCase(
   if (!row) throw new Error("NotFound");
 
   return sendMemberInvite(member, deriveStudentFirstName(row), db);
+}
+
+// ── Transactional notification outbox ─────────────────────────────────
+
+/**
+ * Adds a member invitation using the caller's transaction. The surrounding
+ * case/member write and this row therefore commit or roll back together.
+ */
+export async function queueMemberInviteOutbox(
+  tx: AdmissionsWriteDb,
+  input: {
+    caseId: string;
+    memberId: string;
+    recipientEmail: string;
+    studentFirstName: string;
+    dedupeKey: string;
+    now?: Date;
+  },
+): Promise<string> {
+  const recipientEmail = normalizeAdmissionsEmail(input.recipientEmail);
+  if (!isUuidShaped(input.caseId) || !isUuidShaped(input.memberId)) {
+    throw new Error("NotFound");
+  }
+  if (!recipientEmail || !input.dedupeKey.trim()) {
+    throw new Error("Notification outbox invite requires recipient and dedupe key");
+  }
+
+  const now = input.now ?? new Date();
+  const payload: MemberInviteOutboxPayload = {
+    studentFirstName: input.studentFirstName.trim() || "Student",
+  };
+  const rows = await tx
+    .insert(admissionsNotificationOutbox)
+    .values({
+      caseId: input.caseId,
+      memberId: input.memberId,
+      recipientEmail,
+      category: "invite",
+      payload,
+      dedupeKey: input.dedupeKey.trim(),
+      status: "pending",
+      attemptCount: 0,
+      nextAttemptAt: now,
+      updatedAt: now,
+    })
+    .returning({ id: admissionsNotificationOutbox.id });
+  const row = rows[0];
+  if (!row) throw new Error("Notification outbox insert returned no row");
+  return row.id;
+}
+
+/**
+ * Queues one counselor direct message in the caller's audited transaction.
+ * The unique outbox dedupe key is derived from a client-generated UUID. A
+ * replay with identical content resolves to the existing row; reusing the key
+ * for different content fails closed.
+ */
+export async function queueDirectMessageOutbox(
+  tx: AdmissionsWriteDb,
+  input: {
+    caseId: string;
+    memberId: string;
+    recipientEmail: string;
+    senderName: string;
+    subject: string;
+    body: string;
+    dedupeKey: string;
+    now?: Date;
+  },
+): Promise<QueuedAdmissionsOutboxRow> {
+  const recipientEmail = normalizeAdmissionsEmail(input.recipientEmail);
+  const senderName = input.senderName.trim();
+  const subject = input.subject.trim();
+  const body = input.body.trim();
+  const dedupeKey = input.dedupeKey.trim();
+  if (!isUuidShaped(input.caseId) || !isUuidShaped(input.memberId)) {
+    throw new Error("NotFound");
+  }
+  if (!recipientEmail || !senderName || !subject || !body || !dedupeKey) {
+    throw new Error("Invalid direct-message outbox payload");
+  }
+  if (senderName.length > 300 || subject.length > 300 || body.length > 20_000) {
+    throw new Error("Invalid direct-message outbox payload");
+  }
+
+  const now = input.now ?? new Date();
+  const payload: DirectMessageOutboxPayload = { senderName, subject, body };
+  const inserted = await tx
+    .insert(admissionsNotificationOutbox)
+    .values({
+      caseId: input.caseId,
+      memberId: input.memberId,
+      recipientEmail,
+      category: "direct_message",
+      payload,
+      dedupeKey,
+      status: "pending",
+      attemptCount: 0,
+      nextAttemptAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoNothing({ target: admissionsNotificationOutbox.dedupeKey })
+    .returning({ id: admissionsNotificationOutbox.id });
+  if (inserted[0]) return { id: inserted[0].id, inserted: true };
+
+  const existingRows = await tx
+    .select({
+      id: admissionsNotificationOutbox.id,
+      caseId: admissionsNotificationOutbox.caseId,
+      memberId: admissionsNotificationOutbox.memberId,
+      recipientEmail: admissionsNotificationOutbox.recipientEmail,
+      category: admissionsNotificationOutbox.category,
+      payload: admissionsNotificationOutbox.payload,
+    })
+    .from(admissionsNotificationOutbox)
+    .where(eq(admissionsNotificationOutbox.dedupeKey, dedupeKey))
+    .limit(1);
+  const existing = existingRows[0];
+  const existingPayload = existing?.payload;
+  if (
+    !existing ||
+    existing.caseId !== input.caseId ||
+    existing.memberId !== input.memberId ||
+    normalizeAdmissionsEmail(existing.recipientEmail) !== recipientEmail ||
+    existing.category !== "direct_message" ||
+    existingPayload.senderName !== payload.senderName ||
+    existingPayload.subject !== payload.subject ||
+    existingPayload.body !== payload.body
+  ) {
+    throw new Error("Conflict");
+  }
+  return { id: existing.id, inserted: false };
+}
+
+function parseMemberInvitePayload(payload: Record<string, unknown>): MemberInviteOutboxPayload {
+  const studentFirstName = payload.studentFirstName;
+  if (typeof studentFirstName !== "string" || !studentFirstName.trim()) {
+    throw new Error("Invalid member-invite outbox payload");
+  }
+  return { studentFirstName: studentFirstName.trim() };
+}
+
+function parseDirectMessagePayload(payload: Record<string, unknown>): DirectMessageOutboxPayload {
+  const senderName = payload.senderName;
+  const subject = payload.subject;
+  const body = payload.body;
+  if (
+    typeof senderName !== "string" || !senderName.trim() || senderName.trim().length > 300 ||
+    typeof subject !== "string" || !subject.trim() || subject.trim().length > 300 ||
+    typeof body !== "string" || !body.trim() || body.trim().length > 20_000
+  ) {
+    throw new Error("Invalid direct-message outbox payload");
+  }
+  return {
+    senderName: senderName.trim(),
+    subject: subject.trim(),
+    body: body.trim(),
+  };
+}
+
+function outboxRetryAt(now: Date, attemptCount: number): Date {
+  const index = Math.min(
+    Math.max(attemptCount - 1, 0),
+    OUTBOX_RETRY_BACKOFF_MS.length - 1,
+  );
+  return new Date(now.getTime() + OUTBOX_RETRY_BACKOFF_MS[index]);
+}
+
+/**
+ * Claims and delivers due outbox rows. The outbox dedupe key is also used by
+ * the notification log, so retrying after a partial success never re-sends.
+ */
+export async function processAdmissionsNotificationOutbox(
+  options: { ids?: readonly string[]; limit?: number; now?: Date } = {},
+  db: Database = getDb(),
+): Promise<AdmissionsOutboxDeliveryResult> {
+  const now = options.now ?? new Date();
+  const ids = options.ids?.filter(isUuidShaped) ?? [];
+  const limit = Math.min(Math.max(options.limit ?? 50, 1), 100);
+  if (options.ids && ids.length === 0) {
+    return { attempted: 0, sent: 0, skipped: 0, failed: 0, errors: [] };
+  }
+
+  const rows = await db
+    .select()
+    .from(admissionsNotificationOutbox)
+    .where(and(
+      inArray(admissionsNotificationOutbox.status, ["pending", "failed", "processing"]),
+      lte(admissionsNotificationOutbox.nextAttemptAt, now),
+      ...(options.ids ? [inArray(admissionsNotificationOutbox.id, ids)] : []),
+    ))
+    .limit(limit);
+
+  const result: AdmissionsOutboxDeliveryResult = {
+    attempted: 0,
+    sent: 0,
+    skipped: 0,
+    failed: 0,
+    errors: [],
+  };
+
+  for (const row of rows) {
+    const attemptCount = row.attemptCount + 1;
+    const claimed = await db
+      .update(admissionsNotificationOutbox)
+      .set({
+        status: "processing",
+        attemptCount,
+        lastAttemptAt: now,
+        nextAttemptAt: new Date(now.getTime() + OUTBOX_PROCESSING_LEASE_MS),
+        lastError: null,
+        updatedAt: now,
+      })
+      .where(and(
+        eq(admissionsNotificationOutbox.id, row.id),
+        inArray(admissionsNotificationOutbox.status, ["pending", "failed", "processing"]),
+        lte(admissionsNotificationOutbox.nextAttemptAt, now),
+      ))
+      .returning({ id: admissionsNotificationOutbox.id });
+    if (claimed.length === 0) continue;
+    result.attempted += 1;
+
+    try {
+      if (!row.memberId || !row.caseId || !["invite", "direct_message"].includes(row.category)) {
+        throw new Error(`Unsupported notification outbox category: ${row.category}`);
+      }
+      const members = await db
+        .select({
+          id: admissionsCaseMembers.id,
+          caseId: admissionsCaseMembers.caseId,
+          email: admissionsCaseMembers.email,
+          role: admissionsCaseMembers.role,
+          status: admissionsCaseMembers.status,
+          familyPortalOpen: admissionsCases.familyPortalOpen,
+          caseStatus: admissionsCases.status,
+        })
+        .from(admissionsCaseMembers)
+        .innerJoin(admissionsCases, eq(admissionsCaseMembers.caseId, admissionsCases.id))
+        .where(and(
+          eq(admissionsCaseMembers.id, row.memberId),
+          eq(admissionsCaseMembers.caseId, row.caseId),
+          isNull(admissionsCases.deletedAt),
+          or(
+            ne(admissionsCaseMembers.role, "counselor"),
+            sql<boolean>`EXISTS (
+              SELECT 1 FROM ${admissionsCounselors}
+              WHERE ${admissionsCounselors.email} = ${admissionsCaseMembers.email}
+                AND ${admissionsCounselors.active} = true
+            )`,
+          ),
+        ))
+        .limit(1);
+      const member = members[0];
+
+      const emailMatches = member &&
+        normalizeAdmissionsEmail(member.email) === normalizeAdmissionsEmail(row.recipientEmail);
+      const inviteIsDeliverable = row.category === "invite" && member && emailMatches &&
+        (member.status === "invited" || member.status === "bounced") &&
+        member.familyPortalOpen === true &&
+        ["active", "committed", "completed"].includes(member.caseStatus);
+      const directMessageIsDeliverable = row.category === "direct_message" && member && emailMatches &&
+        member.status === "active" &&
+        ["active", "committed"].includes(member.caseStatus) &&
+        (member.role === "counselor" || member.familyPortalOpen === true);
+
+      // A membership/status/email/portal change can make a queued delivery
+      // obsolete. Mark it terminal so retries never leak stale case content.
+      if (!inviteIsDeliverable && !directMessageIsDeliverable) {
+        await db
+          .update(admissionsNotificationOutbox)
+          .set({ status: "sent", sentAt: now, lastError: null, updatedAt: now })
+          .where(eq(admissionsNotificationOutbox.id, row.id));
+        result.skipped += 1;
+        continue;
+      }
+
+      const delivery = row.category === "invite"
+        ? await sendMemberInvite(
+          { caseId: row.caseId, email: row.recipientEmail },
+          parseMemberInvitePayload(row.payload).studentFirstName,
+          db,
+          { dedupeKey: row.dedupeKey },
+        )
+        : await notifyDirectMessage({
+          caseId: row.caseId,
+          recipientEmail: row.recipientEmail,
+          ...parseDirectMessagePayload(row.payload),
+        }, db, { dedupeKey: row.dedupeKey });
+      await db
+        .update(admissionsNotificationOutbox)
+        .set({
+          status: "sent",
+          sentAt: now,
+          providerMessageId: delivery.resendEmailId,
+          lastError: null,
+          updatedAt: now,
+        })
+        .where(eq(admissionsNotificationOutbox.id, row.id));
+      if (delivery.skipped) result.skipped += 1;
+      else result.sent += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Notification delivery failed";
+      await db
+        .update(admissionsNotificationOutbox)
+        .set({
+          status: "failed",
+          nextAttemptAt: outboxRetryAt(now, attemptCount),
+          lastError: message.slice(0, 2000),
+          updatedAt: now,
+        })
+        .where(eq(admissionsNotificationOutbox.id, row.id));
+      result.failed += 1;
+      result.errors.push(`${row.id}: ${message}`);
+    }
+  }
+
+  return result;
+}
+
+/** Attempts just-committed outbox rows without ever failing the business write. */
+export async function deliverAdmissionsOutboxBestEffort(
+  ids: readonly string[],
+  db: Database = getDb(),
+): Promise<AdmissionsOutboxDeliveryResult> {
+  try {
+    return await processAdmissionsNotificationOutbox({ ids }, db);
+  } catch (error) {
+    console.error("Admissions notification outbox: immediate delivery failed", error);
+    return {
+      attempted: 0,
+      sent: 0,
+      skipped: 0,
+      failed: ids.length,
+      errors: [error instanceof Error ? error.message : "Immediate delivery failed"],
+    };
+  }
 }
 
 // ── Run orchestrators (design §7 cron) ──────────────────────────────────
@@ -957,10 +1380,11 @@ function skippedRunResult(runType: "daily" | "weekly"): AdmissionsNotificationRu
  *
  * 1. Single-flight: sweep stale running rows, insert a running row; a fresh
  *    running row (<30min) already in flight → return `{ skipped: true }`.
- * 2. Plan reminders (buildDeadlineReminders) and deliver per recipient,
- *    applying the daily interrupt cap/collapse. Per-recipient failures are
- *    isolated (console.error + errorSummary), never abort the run — matching
- *    the sync orchestrator's fail-isolated discipline.
+ * 2. Retry the transactional outbox, then plan reminders
+ *    (buildDeadlineReminders) and deliver per recipient, applying the daily
+ *    interrupt cap/collapse. Per-recipient failures are isolated
+ *    (console.error + errorSummary), never abort the run — matching the sync
+ *    orchestrator's fail-isolated discipline.
  * 3. Finalize the run row with sent/skipped counts. Only a top-level crash
  *    marks the run failed (and rethrows).
  *
@@ -977,6 +1401,11 @@ export async function runDailyNotifications(
   let skippedCount = 0;
   const errors: string[] = [];
   try {
+    const outbox = await processAdmissionsNotificationOutbox({ now }, db);
+    sentCount += outbox.sent;
+    skippedCount += outbox.skipped;
+    errors.push(...outbox.errors);
+
     const reminders = await buildDeadlineReminders(now, db);
     for (const recipient of reminders) {
       try {

@@ -33,7 +33,10 @@ export interface AdmissionsAuditEntry {
  * Narrow write surface usable both against the plain Database singleton and
  * inside a transaction callback (either driver).
  */
-export type AdmissionsWriteDb = Pick<Database, "select" | "insert" | "update" | "delete">;
+export type AdmissionsWriteDb = Pick<
+  Database,
+  "select" | "insert" | "update" | "delete" | "execute"
+>;
 
 let admissionsWritePool: Pool | null = null;
 

@@ -149,6 +149,37 @@ describe("/api/admissions/cases/[caseId]/members", () => {
       );
     });
 
+    it("keeps revoked counselor reactivation on the existing add-member POST contract", async () => {
+      const reinstated = {
+        ...MEMBER,
+        email: "former.counselor@example.com",
+        role: "counselor" as const,
+        status: "active" as const,
+        invitedAt: null,
+        activatedAt: "2026-07-10T00:00:00.000Z",
+        revokedAt: null,
+      };
+      vi.mocked(addMember).mockResolvedValue(reinstated);
+
+      const res = await POST(
+        jsonRequest("POST", {
+          email: "former.counselor@example.com",
+          role: "counselor",
+        }),
+        routeContext(),
+      );
+
+      expect(res.status).toBe(200);
+      expect(addMember).toHaveBeenCalledWith(
+        expect.objectContaining({
+          caseId: CASE_ID,
+          email: "former.counselor@example.com",
+          role: "counselor",
+        }),
+      );
+      await expect(res.json()).resolves.toEqual({ member: reinstated });
+    });
+
     it("ignores adminOverride from a counselor session (fail-closed)", async () => {
       const res = await POST(
         jsonRequest("POST", { email: "mom@example.com", role: "parent", adminOverride: true }),
@@ -265,7 +296,11 @@ describe("/api/admissions/cases/[caseId]/members", () => {
 
     it("re-invites a member", async () => {
       const res = await PATCH(
-        jsonRequest("PATCH", { action: "reinvite", memberId: MEMBER_ID }),
+        jsonRequest("PATCH", {
+          action: "reinvite",
+          memberId: MEMBER_ID,
+          expectedUpdatedAt: MEMBER.updatedAt,
+        }),
         routeContext(),
       );
 
@@ -274,7 +309,18 @@ describe("/api/admissions/cases/[caseId]/members", () => {
         caseId: CASE_ID,
         memberId: MEMBER_ID,
         actor: { email: "staff@example.com", role: "counselor" },
+        expectedUpdatedAt: MEMBER.updatedAt,
       });
+    });
+
+    it("requires the membership concurrency token for re-invite", async () => {
+      const res = await PATCH(
+        jsonRequest("PATCH", { action: "reinvite", memberId: MEMBER_ID }),
+        routeContext(),
+      );
+
+      expect(res.status).toBe(400);
+      expect(reInvite).not.toHaveBeenCalled();
     });
 
     it("changes a member email with adminOverride gated off for counselors", async () => {
@@ -354,7 +400,11 @@ describe("/api/admissions/cases/[caseId]/members", () => {
       vi.mocked(reInvite).mockRejectedValue(new Error("Conflict"));
 
       const res = await PATCH(
-        jsonRequest("PATCH", { action: "reinvite", memberId: MEMBER_ID }),
+        jsonRequest("PATCH", {
+          action: "reinvite",
+          memberId: MEMBER_ID,
+          expectedUpdatedAt: MEMBER.updatedAt,
+        }),
         routeContext(),
       );
 

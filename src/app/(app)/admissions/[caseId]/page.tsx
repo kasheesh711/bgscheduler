@@ -7,7 +7,10 @@ import {
   buildCaseCalendar,
   type CalendarItem,
 } from "@/lib/admissions/calendar";
-import { getCaseDetail } from "@/lib/admissions/cases";
+import {
+  getCaseDetail,
+  projectCaseDetailForStudent,
+} from "@/lib/admissions/cases";
 import {
   listCaseTasks,
   type AdmissionsTaskDto,
@@ -17,6 +20,7 @@ import {
   type AdmissionsApplicationEventDto,
 } from "@/lib/admissions/colleges";
 import { roleAtLeast } from "@/lib/admissions/config";
+import { listLinkedFamilyCases } from "@/lib/admissions/family-cases";
 import { listMeetings } from "@/lib/admissions/meetings";
 import { listNotesForRole } from "@/lib/admissions/notes";
 import {
@@ -53,6 +57,7 @@ import type {
   AdmissionsCaseDetail,
   AdmissionsMeetingDto,
   AdmissionsNoteDto,
+  AdmissionsStudentCaseDetail,
   CaseAccess,
 } from "@/lib/admissions/types";
 
@@ -102,13 +107,13 @@ async function CaseDetailBody({ params }: { params: Promise<{ caseId: string }> 
   // + saved answers). Staff surfaces — meetings, notes, recommenders,
   // decision chains — are never queried for a student.
   if (access.role === "student") {
-    let caseDetail: AdmissionsCaseDetail;
+    let caseDetail: AdmissionsStudentCaseDetail;
     let tasks: AdmissionsTaskDto[];
     let bestScores: AdmissionsBestScore[];
     let sectionStates: AdmissionsSectionStateDto[];
     let resourceGroups: AdmissionsResourceTopicGroup[];
     try {
-      [caseDetail, tasks, bestScores, sectionStates, resourceGroups] = await Promise.all([
+      const [fullCaseDetail, loadedTasks, loadedBestScores, loadedSectionStates, loadedResourceGroups] = await Promise.all([
         getCaseDetail(caseId),
         listCaseTasks(caseId),
         getBestScores(caseId),
@@ -120,6 +125,11 @@ async function CaseDetailBody({ params }: { params: Promise<{ caseId: string }> 
         // The resource library is global + student-readable (CM-92, design §4).
         listResources(),
       ]);
+      caseDetail = projectCaseDetailForStudent(fullCaseDetail);
+      tasks = loadedTasks;
+      bestScores = loadedBestScores;
+      sectionStates = loadedSectionStates;
+      resourceGroups = loadedResourceGroups;
     } catch (error) {
       if (error instanceof Error && error.message === "NotFound") {
         notFound();
@@ -146,15 +156,25 @@ async function CaseDetailBody({ params }: { params: Promise<{ caseId: string }> 
   // staff/student shells below are never rendered for a parent (fail-closed).
   if (access.role === "parent") {
     let dashboard: ParentDashboard;
+    let linkedCases: Awaited<ReturnType<typeof listLinkedFamilyCases>>;
     try {
-      dashboard = await buildParentDashboard(caseId);
+      [dashboard, linkedCases] = await Promise.all([
+        buildParentDashboard(caseId),
+        listLinkedFamilyCases(access.email),
+      ]);
     } catch (error) {
       if (error instanceof Error && error.message === "NotFound") {
         notFound();
       }
       throw error;
     }
-    return <ParentDashboardView dashboard={dashboard} />;
+    return (
+      <ParentDashboardView
+        dashboard={dashboard}
+        linkedCases={linkedCases}
+        currentCaseHref={`/admissions/${caseId}`}
+      />
+    );
   }
 
   // Staff branch (counselor/admin only from here on).

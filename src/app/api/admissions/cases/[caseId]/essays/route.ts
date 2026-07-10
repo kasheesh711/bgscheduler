@@ -19,6 +19,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   admissionsErrorResponse,
+  assertCaseMutationAllowed,
   requireAdmissionsSession,
   requireCaseAccess,
 } from "@/lib/admissions/access";
@@ -29,6 +30,7 @@ import {
   softDeleteEssay,
   updateEssay,
 } from "@/lib/admissions/essays";
+import { admissionsHttpUrlSchema } from "@/lib/admissions/shared/urls";
 
 const ROUTE = "/api/admissions/cases/[caseId]/essays";
 
@@ -50,7 +52,8 @@ const createEssaySchema = z.object({
   prompt: z.string().trim().min(1, "Essay requires a non-empty prompt"),
   listItemId: z.string().uuid().nullish(),
   deadline: dateOnlySchema.nullish(),
-  driveUrl: z.string().nullish(),
+  driveUrl: admissionsHttpUrlSchema.nullish(),
+  sharedWithFamily: z.boolean().optional(),
 });
 
 // Omitted fields are left untouched; explicit nulls clear nullable fields.
@@ -61,10 +64,11 @@ const updateEssaySchema = z.object({
   expectedUpdatedAt: z.string().datetime().optional(),
   prompt: z.string().trim().min(1, "Essay requires a non-empty prompt").optional(),
   status: essayStatusSchema.optional(),
-  driveUrl: z.string().nullish(),
+  driveUrl: admissionsHttpUrlSchema.nullish(),
   counselorStage: essayStatusSchema.nullish(),
   deadline: dateOnlySchema.nullish(),
   listItemId: z.string().uuid().nullish(),
+  sharedWithFamily: z.boolean().optional(),
 });
 
 const deleteQuerySchema = z.object({ essayId: z.string().uuid() });
@@ -93,6 +97,7 @@ export async function POST(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "student");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {
@@ -108,6 +113,14 @@ export async function POST(
         { status: 400 },
       );
     }
+    if (
+      !roleAtLeast(access.role, "counselor") &&
+      (parsed.data.sharedWithFamily !== undefined ||
+        parsed.data.deadline !== undefined ||
+        parsed.data.listItemId !== undefined)
+    ) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const essay = await createEssay({
       access,
@@ -115,6 +128,7 @@ export async function POST(
       listItemId: parsed.data.listItemId,
       deadline: parsed.data.deadline,
       driveUrl: parsed.data.driveUrl,
+      sharedWithFamily: parsed.data.sharedWithFamily,
     });
     return NextResponse.json({ essay });
   } catch (error) {
@@ -130,6 +144,7 @@ export async function PATCH(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "student");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {
@@ -152,7 +167,8 @@ export async function PATCH(
     const wantsStaffFields =
       parsed.data.counselorStage !== undefined ||
       parsed.data.deadline !== undefined ||
-      parsed.data.listItemId !== undefined;
+      parsed.data.listItemId !== undefined ||
+      parsed.data.sharedWithFamily !== undefined;
     if (wantsStaffFields && !roleAtLeast(access.role, "counselor")) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
@@ -167,6 +183,7 @@ export async function PATCH(
       counselorStage: parsed.data.counselorStage,
       deadline: parsed.data.deadline,
       listItemId: parsed.data.listItemId,
+      sharedWithFamily: parsed.data.sharedWithFamily,
     });
     return NextResponse.json({ essay });
   } catch (error) {
@@ -182,6 +199,7 @@ export async function DELETE(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "counselor");
+    assertCaseMutationAllowed(access);
 
     const parsed = deleteQuerySchema.safeParse({
       essayId: new URL(request.url).searchParams.get("essayId"),

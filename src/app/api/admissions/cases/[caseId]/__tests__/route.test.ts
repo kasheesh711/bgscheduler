@@ -12,6 +12,7 @@ vi.mock("@/lib/admissions/access", async (importOriginal) => {
 });
 vi.mock("@/lib/admissions/cases", () => ({
   getCaseDetail: vi.fn(),
+  projectCaseDetailForStudent: vi.fn(),
   updateCaseLifecycle: vi.fn(),
   updateCaseProfile: vi.fn(),
 }));
@@ -19,6 +20,7 @@ vi.mock("@/lib/admissions/cases", () => ({
 import { requireAdmissionsSession, requireCaseAccess } from "@/lib/admissions/access";
 import {
   getCaseDetail,
+  projectCaseDetailForStudent,
   updateCaseLifecycle,
   updateCaseProfile,
 } from "@/lib/admissions/cases";
@@ -36,6 +38,9 @@ const DETAIL = {
   committedListItemId: null,
   committedCollegeName: null,
   driveFolder: null,
+  familyPortalOpen: false,
+  familyPortalOpenedAt: null,
+  familyPortalOpenedByEmail: null,
   student: {
     id: "55555555-5555-4555-8555-555555555555",
     fullName: "Ada Lovelace",
@@ -58,6 +63,30 @@ const DETAIL = {
   lastMeetingDate: null,
   createdAt: "2026-06-01T00:00:00.000Z",
   updatedAt: UPDATED_AT,
+};
+const STUDENT_DETAIL = {
+  caseId: CASE_ID,
+  status: "active",
+  driveFolder: null,
+  updatedAt: UPDATED_AT,
+  student: {
+    fullName: "Ada Lovelace",
+    preferredName: null,
+    studentEmail: "ada@example.com",
+    phone: null,
+    school: null,
+    schoolCounselor: null,
+    externalLinks: {},
+  },
+  cohort: { name: "Class of 2027", graduationYear: 2027 },
+  counselors: [{ email: "staff@example.com" }],
+  collegeList: [],
+  announcements: [],
+  essays: [],
+  activities: [],
+  testSittings: [],
+  thisWeek: [],
+  phaseProgress: [],
 };
 
 function caseAccess(role: "parent" | "student" | "counselor" | "admin") {
@@ -89,6 +118,7 @@ describe("/api/admissions/cases/[caseId]", () => {
     vi.mocked(requireAdmissionsSession).mockResolvedValue(COUNSELOR);
     vi.mocked(requireCaseAccess).mockResolvedValue(caseAccess("counselor"));
     vi.mocked(getCaseDetail).mockResolvedValue(DETAIL as never);
+    vi.mocked(projectCaseDetailForStudent).mockReturnValue(STUDENT_DETAIL as never);
     vi.mocked(updateCaseLifecycle).mockResolvedValue({
       caseId: CASE_ID,
       previousStatus: "active",
@@ -110,12 +140,14 @@ describe("/api/admissions/cases/[caseId]", () => {
       await expect(res.json()).resolves.toEqual({ case: DETAIL });
     });
 
-    it("returns the case detail for a student member", async () => {
+    it("returns only the closed student projection for a student member", async () => {
       vi.mocked(requireCaseAccess).mockResolvedValue(caseAccess("student"));
 
       const res = await GET(getRequest, routeContext());
 
       expect(res.status).toBe(200);
+      expect(projectCaseDetailForStudent).toHaveBeenCalledWith(DETAIL);
+      await expect(res.json()).resolves.toEqual({ case: STUDENT_DETAIL });
     });
 
     it("returns 403 pointing parents at their dashboard", async () => {
@@ -156,12 +188,12 @@ describe("/api/admissions/cases/[caseId]", () => {
   });
 
   describe("PATCH", () => {
-    it("applies a lifecycle transition and returns the refreshed detail", async () => {
-      const res = await PATCH(patchRequest({ status: "committed" }), routeContext());
+    it("applies an explicit lifecycle transition and returns the refreshed detail", async () => {
+      const res = await PATCH(patchRequest({ status: "withdrawn" }), routeContext());
 
       expect(res.status).toBe(200);
-      expect(requireCaseAccess).toHaveBeenCalledWith("staff@example.com", CASE_ID, "counselor");
-      expect(updateCaseLifecycle).toHaveBeenCalledWith(CASE_ID, "committed", {
+      expect(requireCaseAccess).toHaveBeenCalledWith("staff@example.com", CASE_ID, "student");
+      expect(updateCaseLifecycle).toHaveBeenCalledWith(CASE_ID, "withdrawn", {
         email: "staff@example.com",
         role: "counselor",
       });
@@ -186,25 +218,101 @@ describe("/api/admissions/cases/[caseId]", () => {
       expect(updateCaseLifecycle).not.toHaveBeenCalled();
     });
 
-    it("applies profile updates before the lifecycle transition when both are sent", async () => {
+    it("lets a student update their own non-security profile fields", async () => {
+      vi.mocked(requireCaseAccess).mockResolvedValue(caseAccess("student"));
       const res = await PATCH(
-        patchRequest({ status: "committed", driveFolder: "https://drive.example.com/x" }),
+        patchRequest({ student: { preferredName: "Ada", phone: "0812345678" } }),
         routeContext(),
       );
 
       expect(res.status).toBe(200);
-      expect(updateCaseProfile).toHaveBeenCalledTimes(1);
-      expect(updateCaseLifecycle).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(updateCaseProfile).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(updateCaseLifecycle).mock.invocationCallOrder[0],
+      expect(updateCaseProfile).toHaveBeenCalledWith(expect.objectContaining({
+        actor: expect.objectContaining({ role: "student" }),
+        student: { preferredName: "Ada", phone: "0812345678" },
+      }));
+      expect(projectCaseDetailForStudent).toHaveBeenCalled();
+    });
+
+    it("does not let a student change lifecycle, portal, Drive, or Wise identity fields", async () => {
+      vi.mocked(requireCaseAccess).mockResolvedValue(caseAccess("student"));
+      for (const body of [
+        { status: "withdrawn" },
+        { familyPortalOpen: false },
+        { driveFolder: "https://drive.example.com/other" },
+        { student: { wiseStudentKey: "WISE-SECRET" } },
+      ]) {
+        const res = await PATCH(patchRequest(body), routeContext());
+        expect(res.status).toBe(403);
+      }
+      expect(updateCaseProfile).not.toHaveBeenCalled();
+      expect(updateCaseLifecycle).not.toHaveBeenCalled();
+    });
+
+    it("accepts validated student external links", async () => {
+      const res = await PATCH(
+        patchRequest({
+          student: { externalLinks: { commonApp: "https://commonapp.org/app" } },
+        }),
+        routeContext(),
       );
+
+      expect(res.status).toBe(200);
+      expect(updateCaseProfile).toHaveBeenCalledWith(expect.objectContaining({
+        student: { externalLinks: { commonApp: "https://commonapp.org/app" } },
+      }));
+    });
+
+    it("rejects unsafe student external-link URLs", async () => {
+      const res = await PATCH(
+        patchRequest({ student: { externalLinks: { portal: "javascript:alert(1)" } } }),
+        routeContext(),
+      );
+
+      expect(res.status).toBe(400);
+      expect(updateCaseProfile).not.toHaveBeenCalled();
+    });
+
+    it("opens the family portal through the audited profile mutation", async () => {
+      const res = await PATCH(
+        patchRequest({ familyPortalOpen: true, expectedUpdatedAt: UPDATED_AT }),
+        routeContext(),
+      );
+
+      expect(res.status).toBe(200);
+      expect(updateCaseProfile).toHaveBeenCalledWith({
+        caseId: CASE_ID,
+        actor: { email: "staff@example.com", role: "counselor" },
+        expectedUpdatedAt: UPDATED_AT,
+        driveFolder: undefined,
+        familyPortalOpen: true,
+        student: undefined,
+      });
+      expect(updateCaseLifecycle).not.toHaveBeenCalled();
+    });
+
+    it("rejects mixed profile and lifecycle writes so partial success is impossible", async () => {
+      const res = await PATCH(
+        patchRequest({ status: "withdrawn", driveFolder: "https://drive.example.com/x" }),
+        routeContext(),
+      );
+
+      expect(res.status).toBe(400);
+      expect(updateCaseProfile).not.toHaveBeenCalled();
+      expect(updateCaseLifecycle).not.toHaveBeenCalled();
+    });
+
+    it("rejects a direct committed status because commitment belongs to the college event transaction", async () => {
+      const res = await PATCH(patchRequest({ status: "committed" }), routeContext());
+
+      expect(res.status).toBe(400);
+      expect(updateCaseLifecycle).not.toHaveBeenCalled();
     });
 
     it("returns 409 with both versions on a stale expectedUpdatedAt", async () => {
       const stale = "2026-07-01T00:00:00.000Z";
 
       const res = await PATCH(
-        patchRequest({ status: "committed", expectedUpdatedAt: stale }),
+        patchRequest({ status: "withdrawn", expectedUpdatedAt: stale }),
         routeContext(),
       );
 
@@ -220,7 +328,7 @@ describe("/api/admissions/cases/[caseId]", () => {
 
     it("proceeds when expectedUpdatedAt matches the current version", async () => {
       const res = await PATCH(
-        patchRequest({ status: "committed", expectedUpdatedAt: UPDATED_AT }),
+        patchRequest({ status: "withdrawn", expectedUpdatedAt: UPDATED_AT }),
         routeContext(),
       );
 
@@ -252,15 +360,15 @@ describe("/api/admissions/cases/[caseId]", () => {
     it("returns 401 when unauthenticated", async () => {
       vi.mocked(requireAdmissionsSession).mockRejectedValue(new Error("Unauthorized"));
 
-      const res = await PATCH(patchRequest({ status: "committed" }), routeContext());
+      const res = await PATCH(patchRequest({ status: "withdrawn" }), routeContext());
 
       expect(res.status).toBe(401);
     });
 
-    it("returns 403 when the member is below counselor (student/parent writes)", async () => {
+    it("returns 403 when the member is below student (parent writes)", async () => {
       vi.mocked(requireCaseAccess).mockRejectedValue(new Error("Forbidden"));
 
-      const res = await PATCH(patchRequest({ status: "committed" }), routeContext());
+      const res = await PATCH(patchRequest({ status: "withdrawn" }), routeContext());
 
       expect(res.status).toBe(403);
       expect(updateCaseLifecycle).not.toHaveBeenCalled();
@@ -277,7 +385,7 @@ describe("/api/admissions/cases/[caseId]", () => {
     it("returns 404 when the case disappears before the update", async () => {
       vi.mocked(getCaseDetail).mockRejectedValue(new Error("NotFound"));
 
-      const res = await PATCH(patchRequest({ status: "committed" }), routeContext());
+      const res = await PATCH(patchRequest({ status: "withdrawn" }), routeContext());
 
       expect(res.status).toBe(404);
     });

@@ -47,7 +47,7 @@ import {
   type AdmissionsTemplateItemSeed,
 } from "./config";
 import {
-  ADMISSIONS_TASK_OWNERS,
+  ADMISSIONS_ASSIGNABLE_TASK_OWNERS,
   MEETING_ACTION_ITEM_PHASE,
   type AdmissionsTaskOwner,
 } from "./meetings";
@@ -60,6 +60,11 @@ const ITEM_KEY_PATTERN = /^[a-z][a-z0-9_]*$/;
 type TemplateRow = typeof admissionsChecklistTemplates.$inferSelect;
 type TemplateItemRow = typeof admissionsTemplateItems.$inferSelect;
 type CaseTaskRow = typeof admissionsCaseTasks.$inferSelect;
+
+/** Ensures an optimistic-concurrency token always advances at millisecond precision. */
+function nextMutationTimestamp(previous: Date): Date {
+  return new Date(Math.max(Date.now(), previous.getTime() + 1));
+}
 
 // ── Types & validation schemas ──────────────────────────────────────────
 
@@ -246,7 +251,7 @@ function validateTemplateItems(items: readonly AdmissionsTemplateItemSeed[]): vo
     if (!isAdmissionsPhaseKey(item.phase)) {
       throw new Error(`Invalid template item phase: "${String(item.phase)}"`);
     }
-    if (!ADMISSIONS_TASK_OWNERS.includes(item.defaultOwner)) {
+    if (!ADMISSIONS_ASSIGNABLE_TASK_OWNERS.includes(item.defaultOwner as "student" | "counselor")) {
       throw new Error(`Invalid template item owner: "${String(item.defaultOwner)}"`);
     }
     if (!Number.isInteger(item.sortOrder) || item.sortOrder < 0) {
@@ -263,8 +268,9 @@ async function findLiveTask(
   db: AdmissionsWriteDb,
   taskId: string,
   caseId: string,
+  lockForUpdate = false,
 ): Promise<CaseTaskRow> {
-  const rows = await db
+  const query = db
     .select()
     .from(admissionsCaseTasks)
     .where(and(
@@ -273,6 +279,7 @@ async function findLiveTask(
       isNull(admissionsCaseTasks.deletedAt),
     ))
     .limit(1);
+  const rows = lockForUpdate ? await query.for("update") : await query;
   const row = rows[0];
   if (!row) throw new Error("NotFound");
   return row;
@@ -410,7 +417,7 @@ export async function publishTemplate(
       .where(eq(admissionsTemplateItems.templateId, templateId))
       .orderBy(asc(admissionsTemplateItems.sortOrder), asc(admissionsTemplateItems.itemKey));
 
-    const now = new Date();
+    const now = nextMutationTimestamp(template.updatedAt);
     await tx
       .update(admissionsChecklistTemplates)
       .set({ publishedAt: now, updatedAt: now })
@@ -787,11 +794,12 @@ export interface UpdateTaskStatusInput {
  *    shape-check taskId.
  * 2. Load the live task scoped to the access's case (miss → NotFound); a
  *    student caller on a non-student-owned task → Forbidden.
- * 3. Same status → no-op (idempotent toggle, no writes).
+ * 3. Lock the task row and treat same status as a no-op (idempotent toggle,
+ *    no writes).
  * 4. Apply the status; leaving "done" clears any counselor verification
  *    (fail-closed — a re-opened task is no longer verified).
- * 5. Audit fire-and-forget (design §3: task ticks are low-stakes row-level
- *    writes) — audit failures log via console.error, never block the tick.
+ * 5. Persist the status and append its audit entry in one transaction. An
+ *    audit failure rolls the status change back.
  *
  * @returns the updated task DTO.
  */
@@ -805,45 +813,47 @@ export async function updateTaskStatus(
   if (!roleAtLeast(input.access.role, "student")) throw new Error("Forbidden");
   if (!isUuidShaped(input.taskId)) throw new Error("NotFound");
 
-  const row = await findLiveTask(db, input.taskId, input.access.caseId);
-  if (input.access.role === "student" && row.owner !== "student") {
-    throw new Error("Forbidden");
-  }
-  if (row.status === input.status) return toTaskDto(row);
+  return withAuditedTransaction(async (tx) => {
+    const row = await findLiveTask(tx, input.taskId, input.access.caseId, true);
+    if (input.access.role === "student" && row.owner !== "student") {
+      throw new Error("Forbidden");
+    }
+    if (row.status === input.status) return toTaskDto(row);
 
-  const now = new Date();
-  const clearsVerification = input.status !== "done" && row.verifiedAt !== null;
-  const setValues = {
-    status: input.status,
-    updatedAt: now,
-    ...(clearsVerification ? { verifiedByEmail: null, verifiedAt: null } : {}),
-  };
-  await db
-    .update(admissionsCaseTasks)
-    .set(setValues)
-    .where(eq(admissionsCaseTasks.id, row.id));
+    const now = nextMutationTimestamp(row.updatedAt);
+    const clearsVerification = input.status !== "done" && row.verifiedAt !== null;
+    const setValues = {
+      status: input.status,
+      updatedAt: now,
+      ...(clearsVerification ? { verifiedByEmail: null, verifiedAt: null } : {}),
+    };
+    await tx
+      .update(admissionsCaseTasks)
+      .set(setValues)
+      .where(eq(admissionsCaseTasks.id, row.id));
 
-  void writeAuditLog(db, {
-    caseId: input.access.caseId,
-    actorEmail: input.access.email,
-    actorRole: input.access.role,
-    entityType: "task",
-    entityId: row.id,
-    action: "status_change",
-    diff: computeFieldDiff(
-      {
-        status: row.status,
-        verifiedAt: row.verifiedAt ? row.verifiedAt.toISOString() : null,
-      },
-      {
-        status: input.status,
-        ...(clearsVerification ? { verifiedAt: null } : {}),
-      },
-      ["status", "verifiedAt"],
-    ),
-  }).catch((error) => console.error("updateTaskStatus audit", error));
+    await writeAuditLog(tx, {
+      caseId: input.access.caseId,
+      actorEmail: input.access.email,
+      actorRole: input.access.role,
+      entityType: "task",
+      entityId: row.id,
+      action: "status_change",
+      diff: computeFieldDiff(
+        {
+          status: row.status,
+          verifiedAt: row.verifiedAt ? row.verifiedAt.toISOString() : null,
+        },
+        {
+          status: input.status,
+          ...(clearsVerification ? { verifiedAt: null } : {}),
+        },
+        ["status", "verifiedAt"],
+      ),
+    });
 
-  return toTaskDto({ ...row, ...setValues });
+    return toTaskDto({ ...row, ...setValues });
+  }, db);
 }
 
 /** setTaskVerified input; `access` must come from requireCaseAccess. */
@@ -851,13 +861,15 @@ export interface SetTaskVerifiedInput {
   access: CaseAccess;
   taskId: string;
   verified: boolean;
+  /** Optimistic-concurrency token (task updatedAt ISO). */
+  expectedUpdatedAt: string;
 }
 
 /**
  * Sets or clears the counselor verification stamp on a student-owned task
- * (CM-22). Counselor+ only; verification on a non-student-owned task is a
- * Conflict (the flag exists only for student self-report items). The write
- * and its audit row commit atomically.
+ * (CM-22). Counselor+ only; verification on a non-student-owned or non-done
+ * task is a Conflict (the flag exists only for completed student self-report
+ * items). The locked, token-checked write and its audit row commit atomically.
  *
  * @returns the updated task DTO (no-op when already in the requested state).
  */
@@ -869,20 +881,29 @@ export async function setTaskVerified(
   if (!isUuidShaped(input.taskId)) throw new Error("NotFound");
 
   return withAuditedTransaction(async (tx) => {
-    const row = await findLiveTask(tx, input.taskId, input.access.caseId);
+    const row = await findLiveTask(tx, input.taskId, input.access.caseId, true);
+    if (input.expectedUpdatedAt !== row.updatedAt.toISOString()) throw new Error("Conflict");
     if (row.owner !== "student") throw new Error("Conflict");
+    if (input.verified && row.status !== "done") throw new Error("Conflict");
 
     const isVerified = row.verifiedAt !== null;
     if (isVerified === input.verified) return toTaskDto(row);
 
-    const now = new Date();
+    const now = nextMutationTimestamp(row.updatedAt);
     const setValues = input.verified
       ? { verifiedByEmail: input.access.email, verifiedAt: now, updatedAt: now }
       : { verifiedByEmail: null, verifiedAt: null, updatedAt: now };
-    await tx
+    const updatedRows = await tx
       .update(admissionsCaseTasks)
       .set(setValues)
-      .where(eq(admissionsCaseTasks.id, row.id));
+      .where(and(
+        eq(admissionsCaseTasks.id, row.id),
+        eq(admissionsCaseTasks.updatedAt, row.updatedAt),
+        isNull(admissionsCaseTasks.deletedAt),
+        ...(input.verified ? [eq(admissionsCaseTasks.status, "done")] : []),
+      ))
+      .returning({ id: admissionsCaseTasks.id });
+    if (!updatedRows[0]) throw new Error("Conflict");
 
     await writeAuditLog(tx, {
       caseId: input.access.caseId,
@@ -938,7 +959,7 @@ export async function createCustomTask(
 
   const title = input.title.trim();
   if (!title) throw new Error("Task title must not be empty");
-  if (!ADMISSIONS_TASK_OWNERS.includes(input.owner)) {
+  if (!ADMISSIONS_ASSIGNABLE_TASK_OWNERS.includes(input.owner as "student" | "counselor")) {
     throw new Error(`Invalid task owner: ${String(input.owner)}`);
   }
   const phase = input.phase ?? MEETING_ACTION_ITEM_PHASE;
@@ -995,6 +1016,8 @@ export async function createCustomTask(
 export interface UpdateTaskInput {
   access: CaseAccess;
   taskId: string;
+  /** Optimistic-concurrency token (task updatedAt ISO). */
+  expectedUpdatedAt: string;
   title?: string;
   description?: string | null;
   owner?: AdmissionsTaskOwner;
@@ -1039,7 +1062,7 @@ export async function updateTask(
     title = input.title.trim();
     if (!title) throw new Error("Task title must not be empty");
   }
-  if (input.owner !== undefined && !ADMISSIONS_TASK_OWNERS.includes(input.owner)) {
+  if (input.owner !== undefined && !ADMISSIONS_ASSIGNABLE_TASK_OWNERS.includes(input.owner as "student" | "counselor")) {
     throw new Error(`Invalid task owner: ${String(input.owner)}`);
   }
   if (input.dueDate != null) assertDateOnly(input.dueDate, "dueDate");
@@ -1051,7 +1074,8 @@ export async function updateTask(
   }
 
   return withAuditedTransaction(async (tx) => {
-    const row = await findLiveTask(tx, input.taskId, input.access.caseId);
+    const row = await findLiveTask(tx, input.taskId, input.access.caseId, true);
+    if (input.expectedUpdatedAt !== row.updatedAt.toISOString()) throw new Error("Conflict");
 
     const diff = computeFieldDiff(
       row as unknown as Record<string, unknown>,
@@ -1068,7 +1092,7 @@ export async function updateTask(
     if (Object.keys(diff).length === 0) return toTaskDto(row);
 
     const setValues: Partial<typeof admissionsCaseTasks.$inferInsert> = {
-      updatedAt: new Date(),
+      updatedAt: nextMutationTimestamp(row.updatedAt),
     };
     if ("title" in diff) setValues.title = title;
     if ("description" in diff) setValues.description = input.description;
@@ -1077,10 +1101,16 @@ export async function updateTask(
     if ("recurrence" in diff) setValues.recurrence = recurrence;
     if ("sortOrder" in diff) setValues.sortOrder = input.sortOrder;
 
-    await tx
+    const updatedRows = await tx
       .update(admissionsCaseTasks)
       .set(setValues)
-      .where(eq(admissionsCaseTasks.id, row.id));
+      .where(and(
+        eq(admissionsCaseTasks.id, row.id),
+        eq(admissionsCaseTasks.updatedAt, row.updatedAt),
+        isNull(admissionsCaseTasks.deletedAt),
+      ))
+      .returning({ id: admissionsCaseTasks.id });
+    if (!updatedRows[0]) throw new Error("Conflict");
 
     await writeAuditLog(tx, {
       caseId: input.access.caseId,
@@ -1100,6 +1130,8 @@ export async function updateTask(
 export interface SoftDeleteTaskInput {
   access: CaseAccess;
   taskId: string;
+  /** Optimistic-concurrency token (task updatedAt ISO). */
+  expectedUpdatedAt: string;
 }
 
 /**
@@ -1116,14 +1148,21 @@ export async function softDeleteTask(
   if (!isUuidShaped(input.taskId)) throw new Error("NotFound");
 
   return withAuditedTransaction(async (tx) => {
-    const row = await findLiveTask(tx, input.taskId, input.access.caseId);
+    const row = await findLiveTask(tx, input.taskId, input.access.caseId, true);
+    if (input.expectedUpdatedAt !== row.updatedAt.toISOString()) throw new Error("Conflict");
     if (row.itemKey !== null) throw new Error("Conflict");
 
-    const now = new Date();
-    await tx
+    const now = nextMutationTimestamp(row.updatedAt);
+    const updatedRows = await tx
       .update(admissionsCaseTasks)
       .set({ deletedAt: now, updatedAt: now })
-      .where(eq(admissionsCaseTasks.id, row.id));
+      .where(and(
+        eq(admissionsCaseTasks.id, row.id),
+        eq(admissionsCaseTasks.updatedAt, row.updatedAt),
+        isNull(admissionsCaseTasks.deletedAt),
+      ))
+      .returning({ id: admissionsCaseTasks.id });
+    if (!updatedRows[0]) throw new Error("Conflict");
 
     await writeAuditLog(tx, {
       caseId: input.access.caseId,

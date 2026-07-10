@@ -271,4 +271,26 @@ Tracks the outcome of writing an approved leave request back to its Google Sheet
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+## University Admissions enums
+
+| SQL enum | Values |
+|---|---|
+| `admissions_case_status` | `active`, `committed`, `completed`, `withdrawn`, `archived` |
+| `admissions_member_role` | `counselor`, `student`, `parent` |
+| `admissions_member_status` | `invited`, `active`, `revoked`, `bounced` |
+| `admissions_task_status` | `not_started`, `in_progress`, `done` |
+| `admissions_task_owner` | `student`, `counselor`, `parent` (parent retained for legacy rows; new API tasks use student/counselor) |
+| `admissions_app_round` | `ed`, `ed2`, `ea`, `rea`, `rd`, `rolling`, `priority`, `other` |
+| `admissions_app_status` | `researching`, `applying`, `submitted`, `complete` |
+| `admissions_decision_event` | `submitted`, `deferred`, `waitlisted`, `accepted`, `denied`, `withdrawn`, `committed` |
+| `admissions_essay_status` | `not_started`, `brainstorming`, `drafting`, `feedback`, `final` |
+| `admissions_test_type` | `sat`, `act`, `ap`, `ib`, `toefl`, `ielts`, `other` |
+| `admissions_test_sitting_status` | `planned`, `registered`, `taken`, `score_received`, `canceled` |
+| `admissions_notification_outbox_status` | `pending`, `processing`, `sent`, `failed` |
+| `admissions_note_visibility` | `staff_only`, `shared_with_family` |
+| `admissions_rec_status` | `planned`, `asked`, `agreed`, `declined` |
+| `admissions_submission_state` | `draft`, `submitted`, `reviewed` |
+| `admissions_college_category` | `reach`, `match`, `safety`, `unset` |
+
+_Admissions enums verified against `src/lib/db/schema.ts` and migration `0053`
+on 2026-07-10; earlier sections retain their prior audit date._

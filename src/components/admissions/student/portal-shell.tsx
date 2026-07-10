@@ -26,7 +26,7 @@
 // release, section review) exist here.
 // ----------------------------------------------------------------------------
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -44,6 +44,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -57,7 +58,10 @@ import {
   type AdmissionsAppStatus,
 } from "@/lib/admissions/shared/colleges";
 import { todayBangkok } from "@/lib/room-capacity/dates";
+import { AcademicsPanel } from "../academics-panel";
 import { ActivitiesView } from "../activities-view";
+import { AwardsPanel } from "../awards-panel";
+import { CollegeDetailsPanel } from "../college-details-panel";
 import {
   canToggleTask,
   computeTaskProgress,
@@ -66,19 +70,24 @@ import {
   mergeTaskOverrides,
 } from "../checklist-tab";
 import { TASK_OWNER_LABELS } from "../custom-task-dialog";
+import { NotificationPreferencesPanel } from "../communications-panel";
 import { EssaysView, type EssayCollegeOption } from "../essays-view";
 import { ResourcesPanel } from "../resources-panel";
 import { SectionsList } from "../sections-list";
 import { TestingView } from "../testing-view";
+import { SharedFeedbackPanel } from "./shared-feedback-panel";
 import type { AdmissionsTaskDto, AdmissionsTaskStatus } from "@/lib/admissions/checklists";
-import type { AdmissionsCollegeListRowDto } from "@/lib/admissions/colleges";
+import type {
+  AdmissionsApplicationEventDto,
+  AdmissionsCollegeListRowDto,
+} from "@/lib/admissions/colleges";
 import type { AdmissionsResourceTopicGroup } from "@/lib/admissions/resources";
 import type { AdmissionsSectionStateDto } from "@/lib/admissions/sections";
 import type { AdmissionsPhaseProgress, ThisWeekActionKind } from "@/lib/admissions/student-home";
 import type { AdmissionsBestScore } from "@/lib/admissions/testing";
 import type {
-  AdmissionsCaseDetail,
   AdmissionsCaseStatus,
+  AdmissionsStudentCaseDetail,
   CaseRole,
 } from "@/lib/admissions/types";
 
@@ -117,18 +126,34 @@ export function resolveStudentView(raw: string | null): StudentViewKey {
  * open from its stacked menu). Unknown kinds stay on Home (fail-closed).
  */
 export function resolveActionView(kind: ThisWeekActionKind): StudentViewKey {
+  return resolveActionDestination(kind).view;
+}
+
+export interface StudentActionDestination {
+  view: StudentViewKey;
+  sub?: MoreSubViewKey;
+  item?: string;
+}
+
+/** Direct destination for a ranked home action, including More sub-views. */
+export function resolveActionDestination(
+  kind: ThisWeekActionKind,
+  anchor?: string,
+): StudentActionDestination {
+  const item = anchor?.includes(":") ? anchor.slice(anchor.indexOf(":") + 1) : undefined;
   switch (kind) {
     case "task":
-      return "tasks";
+      return { view: "tasks", item };
     case "application":
-      return "colleges";
+      return { view: "colleges", item };
     case "essay":
-      return "essays";
+      return { view: "essays", item };
     case "testing":
+      return { view: "more", sub: "testing", item };
     case "section":
-      return "more";
+      return { view: "more", sub: "sections", item };
     default:
-      return DEFAULT_STUDENT_VIEW;
+      return { view: DEFAULT_STUDENT_VIEW };
   }
 }
 
@@ -137,9 +162,19 @@ export function resolveActionView(kind: ThisWeekActionKind): StudentViewKey {
 /** The More view's stacked menu entries in display order (design §5.2). */
 export const MORE_SUBVIEWS = [
   {
+    key: "academics",
+    label: "Academics",
+    description: "Your counselor-verified GPA, curriculum, and transcript links.",
+  },
+  {
     key: "activities",
     label: "Activities",
     description: "Your Common App and UC activities list.",
+  },
+  {
+    key: "awards",
+    label: "Honors & Awards",
+    description: "Recognition, Common App ranking, and UC narratives.",
   },
   {
     key: "testing",
@@ -150,6 +185,11 @@ export const MORE_SUBVIEWS = [
     key: "sections",
     label: "Self-report sections",
     description: "Guided forms your counselor uses to get to know you.",
+  },
+  {
+    key: "feedback",
+    label: "Shared feedback",
+    description: "Counselor notes explicitly shared with your family.",
   },
   {
     key: "resources",
@@ -290,10 +330,10 @@ function PhaseRing({ ring }: { ring: AdmissionsPhaseProgress }) {
 
 function StudentHomeView({
   caseDetail,
-  onOpenView,
+  onOpenAction,
 }: {
-  caseDetail: AdmissionsCaseDetail;
-  onOpenView: (view: StudentViewKey) => void;
+  caseDetail: AdmissionsStudentCaseDetail;
+  onOpenAction: (destination: StudentActionDestination) => void;
 }) {
   const greetingName =
     caseDetail.student.preferredName ?? caseDetail.student.fullName;
@@ -324,7 +364,9 @@ function StudentHomeView({
                   <button
                     type="button"
                     data-testid="this-week-action"
-                    onClick={() => onOpenView(resolveActionView(action.kind))}
+                    onClick={() =>
+                      onOpenAction(resolveActionDestination(action.kind, action.anchor))
+                    }
                     className="flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50"
                   >
                     <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
@@ -652,18 +694,44 @@ function StudentTasksView({
 // ── Colleges view (read-only, design §2.4) ──────────────────────────────
 
 function StudentCollegesView({
+  caseId,
   colleges,
 }: {
+  caseId: string;
   colleges: AdmissionsCollegeListRowDto[];
 }) {
   const todayIso = useMemo(() => todayBangkok(), []);
+  const [eventsByCollege, setEventsByCollege] = useState<
+    Record<string, AdmissionsApplicationEventDto[]>
+  >({});
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all(
+      colleges.map(async (college) => {
+        const response = await fetch(
+          `/api/admissions/cases/${caseId}/colleges/${college.id}/events`,
+        );
+        const payload: unknown = await response.json().catch(() => null);
+        const events = response.ok && payload && typeof payload === "object" && "events" in payload && Array.isArray((payload as { events?: unknown }).events)
+          ? (payload as { events: AdmissionsApplicationEventDto[] }).events
+          : [];
+        return [college.id, events] as const;
+      }),
+    ).then((entries) => {
+      if (!cancelled) setEventsByCollege(Object.fromEntries(entries));
+    });
+    return () => { cancelled = true; };
+  }, [caseId, colleges]);
 
   return (
+    <div className="space-y-4">
     <Card>
       <CardHeader>
-        <CardTitle>Colleges</CardTitle>
+        <CardTitle>Colleges &amp; applications</CardTitle>
         <CardDescription>
-          Your college list — your counselor manages the list itself.
+          Decisions, events, and document completeness. Your counselor manages
+          the official college list and application state.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -710,6 +778,39 @@ function StudentCollegesView({
                       {APP_STATUS_LABELS[college.appStatus]}
                     </Badge>
                   </div>
+                  {college.completeness ? (
+                    <div className="grid grid-cols-2 gap-1 rounded-md bg-muted/50 p-2 text-xs sm:grid-cols-4">
+                      <span>
+                        Recs {college.completeness.recsSubmitted}/
+                        {college.completeness.recsTotal}
+                      </span>
+                      <span>
+                        Transcript {college.completeness.transcriptSent ? "sent" : "pending"}
+                      </span>
+                      <span>
+                        School report {college.completeness.schoolReportSent ? "sent" : "pending"}
+                      </span>
+                      <span>
+                        Scores {college.completeness.scoreSendsSent > 0 ? "sent" : "pending"}
+                      </span>
+                    </div>
+                  ) : null}
+                  {(eventsByCollege[college.id] ?? []).length > 0 ? (
+                    <div className="space-y-1 border-t border-border/60 pt-2">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        Application events
+                      </p>
+                      <ul className="flex flex-wrap gap-1.5">
+                        {eventsByCollege[college.id].map((event) => (
+                          <li key={event.id}>
+                            <Badge variant="outline">
+                              {event.event.replace("_", " ")} · {formatDateOnly(event.eventDate)}
+                            </Badge>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
                 </li>
               );
             })}
@@ -721,6 +822,12 @@ function StudentCollegesView({
         )}
       </CardContent>
     </Card>
+    <CollegeDetailsPanel
+      caseId={caseId}
+      colleges={colleges}
+      viewerRole="student"
+    />
+    </div>
   );
 }
 
@@ -731,15 +838,53 @@ function StudentMoreView({
   viewerEmail,
   onOpenSubView,
 }: {
-  caseDetail: AdmissionsCaseDetail;
+  caseDetail: AdmissionsStudentCaseDetail;
   viewerEmail: string;
   onOpenSubView: (key: MoreSubViewKey) => void;
 }) {
   const { student, cohort } = caseDetail;
-  const counselors = caseDetail.members.filter(
-    (member) => member.role === "counselor" && member.status === "active",
-  );
+  const counselors = caseDetail.counselors;
   const driveFolder = caseDetail.driveFolder;
+  const router = useRouter();
+  const [profileDraft, setProfileDraft] = useState({
+    fullName: student.fullName,
+    preferredName: student.preferredName ?? "",
+    phone: student.phone ?? "",
+    school: student.school ?? "",
+    schoolCounselor: student.schoolCounselor ?? "",
+  });
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileMessage, setProfileMessage] = useState<string | null>(null);
+
+  async function saveProfile(event: React.FormEvent) {
+    event.preventDefault();
+    setProfileBusy(true);
+    setProfileMessage(null);
+    try {
+      const response = await fetch(`/api/admissions/cases/${caseDetail.caseId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          expectedUpdatedAt: caseDetail.updatedAt,
+          student: {
+            fullName: profileDraft.fullName,
+            preferredName: profileDraft.preferredName || null,
+            phone: profileDraft.phone || null,
+            school: profileDraft.school || null,
+            schoolCounselor: profileDraft.schoolCounselor || null,
+          },
+        }),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(readErrorMessage(payload, "Profile could not be saved."));
+      setProfileMessage("Profile saved.");
+      router.refresh();
+    } catch (error) {
+      setProfileMessage(error instanceof Error ? error.message : "Profile could not be saved.");
+    } finally {
+      setProfileBusy(false);
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -748,7 +893,7 @@ function StudentMoreView({
         <CardHeader>
           <CardTitle>Your records</CardTitle>
           <CardDescription>
-            Activities, testing, self-report sections, and resources.
+            Academics, activities, awards, testing, feedback, and resources.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -818,6 +963,44 @@ function StudentMoreView({
         </CardContent>
       </Card>
 
+      <Card data-testid="student-profile-editor">
+        <CardHeader>
+          <CardTitle>Your profile</CardTitle>
+          <CardDescription>Keep your contact and school details current.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-3" onSubmit={saveProfile}>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {([
+                ["fullName", "Full name", true],
+                ["preferredName", "Preferred name", false],
+                ["phone", "Phone", false],
+                ["school", "School", false],
+                ["schoolCounselor", "School counselor", false],
+              ] as const).map(([field, label, required]) => (
+                <label key={field} className="space-y-1 text-xs font-medium text-foreground">
+                  {label}
+                  <Input
+                    required={required}
+                    value={profileDraft[field]}
+                    onChange={(event) => setProfileDraft((current) => ({
+                      ...current,
+                      [field]: event.target.value,
+                    }))}
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button type="submit" size="sm" disabled={profileBusy}>
+                {profileBusy ? "Saving…" : "Save profile"}
+              </Button>
+              {profileMessage ? <p role="status" className="text-xs text-muted-foreground">{profileMessage}</p> : null}
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
       {/* ── Links ── */}
       <Card>
         <CardHeader>
@@ -863,6 +1046,8 @@ function StudentMoreView({
           </Link>
         </CardContent>
       </Card>
+
+      <NotificationPreferencesPanel caseId={caseDetail.caseId} compact />
     </div>
   );
 }
@@ -880,7 +1065,7 @@ function StudentMoreSubView({
   onBack,
 }: {
   subView: MoreSubViewKey;
-  caseDetail: AdmissionsCaseDetail;
+  caseDetail: AdmissionsStudentCaseDetail;
   bestScores: AdmissionsBestScore[];
   sectionStates: AdmissionsSectionStateDto[];
   resourceGroups: AdmissionsResourceTopicGroup[];
@@ -909,6 +1094,20 @@ function StudentMoreSubView({
         />
       ) : null}
 
+      {subView === "academics" ? (
+        <AcademicsPanel
+          caseId={caseDetail.caseId}
+          viewerRole={viewerRole}
+        />
+      ) : null}
+
+      {subView === "awards" ? (
+        <AwardsPanel
+          caseId={caseDetail.caseId}
+          viewerRole={viewerRole}
+        />
+      ) : null}
+
       {subView === "testing" ? (
         <TestingView
           caseId={caseDetail.caseId}
@@ -931,6 +1130,10 @@ function StudentMoreSubView({
       {subView === "resources" ? (
         <ResourcesPanel groups={resourceGroups} viewerRole={viewerRole} />
       ) : null}
+
+      {subView === "feedback" ? (
+        <SharedFeedbackPanel caseId={caseDetail.caseId} />
+      ) : null}
     </div>
   );
 }
@@ -939,7 +1142,7 @@ function StudentMoreSubView({
 
 /** Props for the student portal shell — all data is server-fetched by the page. */
 export interface StudentPortalShellProps {
-  caseDetail: AdmissionsCaseDetail;
+  caseDetail: AdmissionsStudentCaseDetail;
   /** Live checklist tasks (the tasks API is student+). */
   tasks: AdmissionsTaskDto[];
   /** Best actual score per test type (getBestScores, CM-82). */
@@ -997,6 +1200,7 @@ export function StudentPortalShell({
       else params.set("view", key);
       // Switching (or re-tapping) a view always closes any open sub-view.
       params.delete("sub");
+      params.delete("item");
       const query = params.toString();
       router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
     },
@@ -1010,7 +1214,23 @@ export function StudentPortalShell({
       params.set("view", "more");
       if (key === null) params.delete("sub");
       else params.set("sub", key);
+      params.delete("item");
       router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [searchParams, pathname, router],
+  );
+
+  const handleActionOpen = useCallback(
+    (destination: StudentActionDestination) => {
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
+      if (destination.view === DEFAULT_STUDENT_VIEW) params.delete("view");
+      else params.set("view", destination.view);
+      if (destination.sub) params.set("sub", destination.sub);
+      else params.delete("sub");
+      if (destination.item) params.set("item", destination.item);
+      else params.delete("item");
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
     },
     [searchParams, pathname, router],
   );
@@ -1027,7 +1247,10 @@ export function StudentPortalShell({
           className="mx-auto w-full max-w-screen-sm pt-2 pb-28"
         >
           {activeView === "home" ? (
-            <StudentHomeView caseDetail={caseDetail} onOpenView={handleViewChange} />
+            <StudentHomeView
+              caseDetail={caseDetail}
+              onOpenAction={handleActionOpen}
+            />
           ) : null}
 
           {activeView === "tasks" ? (
@@ -1039,7 +1262,10 @@ export function StudentPortalShell({
           ) : null}
 
           {activeView === "colleges" ? (
-            <StudentCollegesView colleges={caseDetail.collegeList} />
+            <StudentCollegesView
+              caseId={caseDetail.caseId}
+              colleges={caseDetail.collegeList}
+            />
           ) : null}
 
           {activeView === "essays" ? (
