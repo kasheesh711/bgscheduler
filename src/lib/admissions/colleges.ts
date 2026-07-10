@@ -47,6 +47,17 @@ import {
 } from "./audit";
 import { roleAtLeast } from "./config";
 import { isUuidShaped } from "./members";
+import {
+  ADMISSIONS_APP_ROUNDS,
+  ADMISSIONS_APP_ROUND_LABELS,
+  ADMISSIONS_APP_STATUSES,
+  ADMISSIONS_COLLEGE_CATEGORIES,
+  ADMISSIONS_DECISION_EVENTS,
+  type AdmissionsAppRound,
+  type AdmissionsAppStatus,
+  type AdmissionsCollegeCategory,
+  type AdmissionsDecisionEvent,
+} from "./shared/colleges";
 import type { CalendarItem, CalendarWindow } from "./calendar";
 import type { AdmissionsCollegeCompleteness } from "./recommenders";
 import type { CaseAccess } from "./types";
@@ -59,83 +70,22 @@ type ApplicationEventRow = typeof admissionsApplicationEvents.$inferSelect;
 
 // ── Status unions (mirror pgEnums in schema.ts) ─────────────────────────
 
-/** Application round (mirrors admissions_app_round). */
-export type AdmissionsAppRound =
-  | "ed"
-  | "ed2"
-  | "ea"
-  | "rea"
-  | "rd"
-  | "rolling"
-  | "priority"
-  | "other";
-
-/** All valid application rounds, for boundary validation. */
-export const ADMISSIONS_APP_ROUNDS: readonly AdmissionsAppRound[] = [
-  "ed",
-  "ed2",
-  "ea",
-  "rea",
-  "rd",
-  "rolling",
-  "priority",
-  "other",
-];
-
-/** Display labels for application rounds (calendar titles, UI chips). */
-export const ADMISSIONS_APP_ROUND_LABELS: Record<AdmissionsAppRound, string> = {
-  ed: "ED",
-  ed2: "ED II",
-  ea: "EA",
-  rea: "REA",
-  rd: "RD",
-  rolling: "Rolling",
-  priority: "Priority",
-  other: "Other",
-};
-
-/** Application progress (mirrors admissions_app_status). */
-export type AdmissionsAppStatus = "researching" | "applying" | "submitted" | "complete";
-
-/** All valid application statuses, for boundary validation. */
-export const ADMISSIONS_APP_STATUSES: readonly AdmissionsAppStatus[] = [
-  "researching",
-  "applying",
-  "submitted",
-  "complete",
-];
-
-/** Reach/match/safety category (mirrors admissions_college_category). */
-export type AdmissionsCollegeCategory = "reach" | "match" | "safety" | "unset";
-
-/** All valid list categories, for boundary validation. */
-export const ADMISSIONS_COLLEGE_CATEGORIES: readonly AdmissionsCollegeCategory[] = [
-  "reach",
-  "match",
-  "safety",
-  "unset",
-];
-
-/** Decision-chain event (mirrors admissions_decision_event). */
-export type AdmissionsDecisionEvent =
-  | "submitted"
-  | "deferred"
-  | "waitlisted"
-  | "accepted"
-  | "denied"
-  | "withdrawn"
-  | "committed";
-
-/** All valid decision events, for boundary validation. */
-export const ADMISSIONS_DECISION_EVENTS: readonly AdmissionsDecisionEvent[] = [
-  "submitted",
-  "deferred",
-  "waitlisted",
-  "accepted",
-  "denied",
-  "withdrawn",
-  "committed",
-];
+// The round/status/category/decision unions and their closed value lists
+// live in the client-safe shared module (shared/colleges.ts); this module
+// re-exports them so existing consumers keep importing from "./colleges".
+export {
+  ADMISSIONS_APP_ROUNDS,
+  ADMISSIONS_APP_ROUND_LABELS,
+  ADMISSIONS_APP_STATUSES,
+  ADMISSIONS_COLLEGE_CATEGORIES,
+  ADMISSIONS_DECISION_EVENTS,
+} from "./shared/colleges";
+export type {
+  AdmissionsAppRound,
+  AdmissionsAppStatus,
+  AdmissionsCollegeCategory,
+  AdmissionsDecisionEvent,
+} from "./shared/colleges";
 
 // ── DTOs ────────────────────────────────────────────────────────────────
 

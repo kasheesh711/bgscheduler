@@ -55,8 +55,7 @@ import { BANGKOK_TIME_ZONE } from "@/lib/bangkok-time";
 import {
   ADMISSIONS_APP_ROUND_LABELS,
   type AdmissionsAppStatus,
-  type AdmissionsCollegeListRowDto,
-} from "@/lib/admissions/colleges";
+} from "@/lib/admissions/shared/colleges";
 import { todayBangkok } from "@/lib/room-capacity/dates";
 import { ActivitiesView } from "../activities-view";
 import {
@@ -71,16 +70,11 @@ import { EssaysView, type EssayCollegeOption } from "../essays-view";
 import { ResourcesPanel } from "../resources-panel";
 import { SectionsList } from "../sections-list";
 import { TestingView } from "../testing-view";
-import type {
-  AdmissionsTaskDto,
-  AdmissionsTaskStatus,
-} from "@/lib/admissions/checklists";
+import type { AdmissionsTaskDto, AdmissionsTaskStatus } from "@/lib/admissions/checklists";
+import type { AdmissionsCollegeListRowDto } from "@/lib/admissions/colleges";
 import type { AdmissionsResourceTopicGroup } from "@/lib/admissions/resources";
 import type { AdmissionsSectionStateDto } from "@/lib/admissions/sections";
-import type {
-  AdmissionsPhaseProgress,
-  ThisWeekActionKind,
-} from "@/lib/admissions/student-home";
+import type { AdmissionsPhaseProgress, ThisWeekActionKind } from "@/lib/admissions/student-home";
 import type { AdmissionsBestScore } from "@/lib/admissions/testing";
 import type {
   AdmissionsCaseDetail,

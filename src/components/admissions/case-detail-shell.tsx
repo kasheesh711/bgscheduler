@@ -55,7 +55,7 @@ import { roleAtLeast } from "@/lib/admissions/config";
 import {
   ADMISSIONS_TASK_OWNERS,
   type AdmissionsTaskOwner,
-} from "@/lib/admissions/meetings";
+} from "@/lib/admissions/shared/meetings";
 import { ActivitiesView } from "./activities-view";
 import { AnnouncementsPanel } from "./announcements-panel";
 import { ApplicationsTab } from "./applications-tab";
@@ -68,10 +68,7 @@ import { TestingView } from "./testing-view";
 import type { CalendarItem } from "@/lib/admissions/calendar";
 import type { AdmissionsTaskDto } from "@/lib/admissions/checklists";
 import type { AdmissionsApplicationEventDto } from "@/lib/admissions/colleges";
-import type {
-  AdmissionsCollegeDocDto,
-  AdmissionsRecommenderWithCollegesDto,
-} from "@/lib/admissions/recommenders";
+import type { AdmissionsCollegeDocDto, AdmissionsRecommenderWithCollegesDto } from "@/lib/admissions/recommenders";
 import type { AdmissionsSectionStateDto } from "@/lib/admissions/sections";
 import type { AdmissionsBestScore } from "@/lib/admissions/testing";
 import type {

@@ -41,6 +41,7 @@ import {
 } from "./audit";
 import { roleAtLeast } from "./config";
 import { isUuidShaped } from "./members";
+import { ADMISSIONS_ESSAY_STATUSES, type AdmissionsEssayStatus } from "./shared/essays";
 import type { CalendarItem, CalendarWindow } from "./calendar";
 import type { AdmissionsTaskOwner } from "./meetings";
 import type { CaseAccess } from "./types";
@@ -55,22 +56,11 @@ type EssayRow = typeof admissionsEssays.$inferSelect;
 
 // ── Status union (mirrors pgEnum in schema.ts) ──────────────────────────
 
-/** Essay progress stage (mirrors admissions_essay_status). */
-export type AdmissionsEssayStatus =
-  | "not_started"
-  | "brainstorming"
-  | "drafting"
-  | "feedback"
-  | "final";
-
-/** All valid essay stages, for boundary validation. */
-export const ADMISSIONS_ESSAY_STATUSES: readonly AdmissionsEssayStatus[] = [
-  "not_started",
-  "brainstorming",
-  "drafting",
-  "feedback",
-  "final",
-];
+// The essay-status union and its closed value list live in the client-safe
+// shared module (shared/essays.ts); this module re-exports them so existing
+// consumers keep importing from "./essays".
+export { ADMISSIONS_ESSAY_STATUSES } from "./shared/essays";
+export type { AdmissionsEssayStatus } from "./shared/essays";
 
 // ── DTOs ────────────────────────────────────────────────────────────────
 

@@ -44,12 +44,9 @@ import {
   ADMISSIONS_TEST_TYPES,
   ADMISSIONS_TEST_TYPE_LABELS,
   deriveRegistrationDeadline,
-} from "@/lib/admissions/testing";
-import type {
-  AdmissionsBestScore,
-  AdmissionsTestSittingDto,
-  AdmissionsTestType,
-} from "@/lib/admissions/testing";
+  type AdmissionsTestType,
+} from "@/lib/admissions/shared/testing";
+import type { AdmissionsBestScore, AdmissionsTestSittingDto } from "@/lib/admissions/testing";
 import type { AdmissionsCollegeDocDto } from "@/lib/admissions/recommenders";
 import type { CaseRole } from "@/lib/admissions/types";
 

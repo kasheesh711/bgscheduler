@@ -55,13 +55,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { roleAtLeast } from "@/lib/admissions/config";
-import { ADMISSIONS_APP_ROUND_LABELS } from "@/lib/admissions/colleges";
+import {
+  ADMISSIONS_APP_ROUND_LABELS,
+  type AdmissionsDecisionEvent,
+} from "@/lib/admissions/shared/colleges";
 import { todayBangkok } from "@/lib/room-capacity/dates";
-import type {
-  AdmissionsApplicationEventDto,
-  AdmissionsCollegeListRowDto,
-  AdmissionsDecisionEvent,
-} from "@/lib/admissions/colleges";
+import type { AdmissionsApplicationEventDto, AdmissionsCollegeListRowDto } from "@/lib/admissions/colleges";
 import type { CaseRole } from "@/lib/admissions/types";
 
 // ── Pure helpers (exported for tests) ───────────────────────────────────

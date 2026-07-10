@@ -17,24 +17,18 @@ import {
   writeAuditLog,
   type AdmissionsFieldDiff,
 } from "./audit";
+import {
+  ADMISSIONS_TASK_OWNERS,
+  MEETING_ACTION_ITEM_PHASE,
+  type AdmissionsTaskOwner,
+} from "./shared/meetings";
 import type { AdmissionsMeetingDto, CaseRole } from "./types";
 
-/** Checklist owner for meeting action items (mirrors admissions_task_owner). */
-export type AdmissionsTaskOwner = "student" | "counselor" | "parent";
-
-/** All valid action-item owners, for boundary validation. */
-export const ADMISSIONS_TASK_OWNERS: readonly AdmissionsTaskOwner[] = [
-  "student",
-  "counselor",
-  "parent",
-];
-
-/**
- * Phase stamped on admissions_case_tasks rows created from meeting action
- * items (CM-31). Deliberately NOT one of the 10 template phase keys — these
- * tasks are ad-hoc, so itemKey stays null and template linkage stays absent.
- */
-export const MEETING_ACTION_ITEM_PHASE = "custom";
+// Task-owner and action-item constants live in the client-safe shared module
+// (shared/meetings.ts); this module re-exports them so existing consumers
+// keep importing from "./meetings".
+export { ADMISSIONS_TASK_OWNERS, MEETING_ACTION_ITEM_PHASE } from "./shared/meetings";
+export type { AdmissionsTaskOwner } from "./shared/meetings";
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const MS_PER_DAY = 86_400_000;

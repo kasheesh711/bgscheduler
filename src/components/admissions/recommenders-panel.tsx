@@ -44,13 +44,12 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { roleAtLeast } from "@/lib/admissions/config";
-import { RECOMMENDER_ASK_STATUS_TRANSITIONS } from "@/lib/admissions/recommenders";
-import type {
-  AdmissionsCollegeDocDto,
-  AdmissionsCollegeDocType,
-  AdmissionsRecommenderAskStatus,
-  AdmissionsRecommenderWithCollegesDto,
-} from "@/lib/admissions/recommenders";
+import {
+  RECOMMENDER_ASK_STATUS_TRANSITIONS,
+  type AdmissionsCollegeDocType,
+  type AdmissionsRecommenderAskStatus,
+} from "@/lib/admissions/shared/recommenders";
+import type { AdmissionsCollegeDocDto, AdmissionsRecommenderWithCollegesDto } from "@/lib/admissions/recommenders";
 import type { CaseRole } from "@/lib/admissions/types";
 
 // ── Pure helpers (exported for tests) ───────────────────────────────────

@@ -39,11 +39,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { roleAtLeast } from "@/lib/admissions/config";
-import {
-  ADMISSIONS_RESOURCE_TOPICS,
-  type AdmissionsResourceDto,
-  type AdmissionsResourceTopicGroup,
-} from "@/lib/admissions/resources";
+import { ADMISSIONS_RESOURCE_TOPICS } from "@/lib/admissions/shared/resources";
+import type { AdmissionsResourceDto, AdmissionsResourceTopicGroup } from "@/lib/admissions/resources";
 import type { CaseRole } from "@/lib/admissions/types";
 
 const SELECT_CLASSES = cn(SELECT_FIELD_CLASSES, "h-8 w-full");

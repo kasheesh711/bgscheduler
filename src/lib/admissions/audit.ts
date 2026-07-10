@@ -9,9 +9,8 @@
 // back to a node-postgres Pool with explicit BEGIN/COMMIT/ROLLBACK.
 
 import { count, desc, eq } from "drizzle-orm";
-import { drizzle as drizzleNodePostgres } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
 import { getDb, type Database } from "@/lib/db";
+import type { Pool } from "pg";
 import * as schema from "@/lib/db/schema";
 import type { CaseRole } from "./types";
 
@@ -38,10 +37,16 @@ export type AdmissionsWriteDb = Pick<Database, "select" | "insert" | "update" | 
 
 let admissionsWritePool: Pool | null = null;
 
-function getAdmissionsWritePool(): Pool {
+// `pg` (and the node-postgres drizzle adapter below) are loaded lazily so this
+// module stays importable from client-component graphs — a static import drags
+// node builtins (dns/net/tls) into the browser bundle and breaks `next build`.
+async function getAdmissionsWritePool(): Promise<Pool> {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_URL is not set");
-  admissionsWritePool ??= new Pool({ connectionString: databaseUrl, max: 1 });
+  if (!admissionsWritePool) {
+    const { Pool: PgPool } = await import("pg");
+    admissionsWritePool = new PgPool({ connectionString: databaseUrl, max: 1 });
+  }
   return admissionsWritePool;
 }
 
@@ -89,7 +94,9 @@ export async function withAuditedTransaction<T>(
     if (!isNeonHttpTransactionUnsupported(error)) throw error;
   }
 
-  const client = await getAdmissionsWritePool().connect();
+  const pool = await getAdmissionsWritePool();
+  const client = await pool.connect();
+  const { drizzle: drizzleNodePostgres } = await import("drizzle-orm/node-postgres");
   try {
     await client.query("BEGIN");
     const txDb = drizzleNodePostgres(client, { schema }) as unknown as AdmissionsWriteDb;

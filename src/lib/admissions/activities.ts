@@ -47,114 +47,47 @@ import {
 } from "./audit";
 import { roleAtLeast } from "./config";
 import { isUuidShaped } from "./members";
+import {
+  MAX_ACTIVE_ACTIVITIES_PER_CASE,
+  MAX_COMMON_APP_RANKED_ACTIVITIES,
+  admissionsCommonAppBlockSchema,
+  admissionsUcBlockSchema,
+  type AdmissionsCommonAppBlock,
+  type AdmissionsUcBlock,
+} from "./shared/activities";
 import type { CaseAccess } from "./types";
 
 type ActivityRow = typeof admissionsActivities.$inferSelect;
 
-// ── Hard limits (CM-70/71) — UI counters must mirror these ──────────────
+// ── Hard limits, closed value lists, Zod blocks (CM-70/71) ──────────────
 
-/** Max live (non-deleted) activities per case (CM-70 "≤ ~20"). */
-export const MAX_ACTIVE_ACTIVITIES_PER_CASE = 20;
-
-/** Max activities in the Common App rank list (CM-71 "top 10"). */
-export const MAX_COMMON_APP_RANKED_ACTIVITIES = 10;
-
-/** Common App position/leadership hard char limit. */
-export const COMMON_APP_POSITION_MAX_CHARS = 50;
-
-/** Common App organization name hard char limit. */
-export const COMMON_APP_ORGANIZATION_MAX_CHARS = 100;
-
-/** Common App activity description hard char limit. */
-export const COMMON_APP_DESCRIPTION_MAX_CHARS = 150;
-
-/** Common App hours-per-week upper bound (a week has 168 hours). */
-export const COMMON_APP_HOURS_PER_WEEK_MAX = 168;
-
-/** Common App weeks-per-year upper bound. */
-export const COMMON_APP_WEEKS_PER_YEAR_MAX = 52;
-
-/** UC activity description hard char limit. */
-export const UC_DESCRIPTION_MAX_CHARS = 350;
-
-// ── Closed value lists ──────────────────────────────────────────────────
-
-/** Common App grade-level participation options ("post" = post-graduate). */
-export const ADMISSIONS_ACTIVITY_GRADES = ["9", "10", "11", "12", "post"] as const;
-
-/** One Common App grade-level option. */
-export type AdmissionsActivityGrade = (typeof ADMISSIONS_ACTIVITY_GRADES)[number];
-
-/** Common App participation-timing options. */
-export const ADMISSIONS_ACTIVITY_TIMINGS = ["school_year", "school_break", "all_year"] as const;
-
-/** One Common App participation-timing option. */
-export type AdmissionsActivityTiming = (typeof ADMISSIONS_ACTIVITY_TIMINGS)[number];
-
-/**
- * The official UC application activity categories (UC "Activities & awards"
- * section), encoded as stable snake_case keys.
- */
-export const UC_ACTIVITY_CATEGORIES = [
-  "award_or_honor",
-  "educational_prep_program",
-  "extracurricular_activity",
-  "other_coursework",
-  "volunteering_community_service",
-  "work_experience",
-] as const;
-
-/** One official UC activity category key. */
-export type UcActivityCategory = (typeof UC_ACTIVITY_CATEGORIES)[number];
-
-/** Display labels for the official UC categories (UI dropdown source). */
-export const UC_ACTIVITY_CATEGORY_LABELS: Record<UcActivityCategory, string> = {
-  award_or_honor: "Award or honor",
-  educational_prep_program: "Educational preparation program",
-  extracurricular_activity: "Extracurricular activity",
-  other_coursework: "Other coursework",
-  volunteering_community_service: "Volunteering / community service",
-  work_experience: "Work experience",
-};
-
-// ── Zod blocks (module-scope, .safeParse only) ──────────────────────────
-
-/**
- * Common App variant block stored in admissions_activities.common_app
- * (CM-70). Every field is optional — students fill drafts incrementally —
- * but each present field is HARD-capped; unknown keys are rejected
- * (strictObject). `grades` is a duplicate-free subset of
- * ADMISSIONS_ACTIVITY_GRADES.
- */
-export const admissionsCommonAppBlockSchema = z.strictObject({
-  position: z.string().max(COMMON_APP_POSITION_MAX_CHARS),
-  organization: z.string().max(COMMON_APP_ORGANIZATION_MAX_CHARS),
-  description: z.string().max(COMMON_APP_DESCRIPTION_MAX_CHARS),
-  hrsWeek: z.number().min(0).max(COMMON_APP_HOURS_PER_WEEK_MAX),
-  weeksYear: z.number().int().min(0).max(COMMON_APP_WEEKS_PER_YEAR_MAX),
-  grades: z
-    .array(z.enum(ADMISSIONS_ACTIVITY_GRADES))
-    .refine((grades) => new Set(grades).size === grades.length, {
-      message: "duplicate grade levels",
-    }),
-  timing: z.enum(ADMISSIONS_ACTIVITY_TIMINGS),
-}).partial();
-
-/** Parsed Common App block ({ position?, organization?, … }). */
-export type AdmissionsCommonAppBlock = z.infer<typeof admissionsCommonAppBlockSchema>;
-
-/**
- * UC variant block stored in admissions_activities.uc (CM-70): description
- * hard-capped at UC_DESCRIPTION_MAX_CHARS, category from the official UC
- * list. Fields optional (draft-friendly); unknown keys rejected.
- */
-export const admissionsUcBlockSchema = z.strictObject({
-  description: z.string().max(UC_DESCRIPTION_MAX_CHARS),
-  category: z.enum(UC_ACTIVITY_CATEGORIES),
-}).partial();
-
-/** Parsed UC block ({ description?, category? }). */
-export type AdmissionsUcBlock = z.infer<typeof admissionsUcBlockSchema>;
+// The activity hard limits, closed value lists, and Common App / UC block
+// schemas live in the client-safe shared module (shared/activities.ts);
+// this module re-exports them so existing consumers keep importing from
+// "./activities".
+export {
+  ADMISSIONS_ACTIVITY_GRADES,
+  ADMISSIONS_ACTIVITY_TIMINGS,
+  COMMON_APP_DESCRIPTION_MAX_CHARS,
+  COMMON_APP_HOURS_PER_WEEK_MAX,
+  COMMON_APP_ORGANIZATION_MAX_CHARS,
+  COMMON_APP_POSITION_MAX_CHARS,
+  COMMON_APP_WEEKS_PER_YEAR_MAX,
+  MAX_ACTIVE_ACTIVITIES_PER_CASE,
+  MAX_COMMON_APP_RANKED_ACTIVITIES,
+  UC_ACTIVITY_CATEGORIES,
+  UC_ACTIVITY_CATEGORY_LABELS,
+  UC_DESCRIPTION_MAX_CHARS,
+  admissionsCommonAppBlockSchema,
+  admissionsUcBlockSchema,
+} from "./shared/activities";
+export type {
+  AdmissionsActivityGrade,
+  AdmissionsActivityTiming,
+  AdmissionsCommonAppBlock,
+  AdmissionsUcBlock,
+  UcActivityCategory,
+} from "./shared/activities";
 
 // ── DTO ─────────────────────────────────────────────────────────────────
 

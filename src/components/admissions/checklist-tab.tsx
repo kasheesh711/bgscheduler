@@ -58,15 +58,10 @@ import {
   isAdmissionsPhaseKey,
   roleAtLeast,
 } from "@/lib/admissions/config";
-import { MEETING_ACTION_ITEM_PHASE } from "@/lib/admissions/meetings";
+import { MEETING_ACTION_ITEM_PHASE } from "@/lib/admissions/shared/meetings";
 import { todayBangkok } from "@/lib/room-capacity/dates";
 import { CustomTaskDialog, TASK_OWNER_LABELS } from "./custom-task-dialog";
-import type {
-  AdmissionsChecklistProgress,
-  AdmissionsTaskDto,
-  AdmissionsTaskRecurrence,
-  AdmissionsTaskStatus,
-} from "@/lib/admissions/checklists";
+import type { AdmissionsChecklistProgress, AdmissionsTaskDto, AdmissionsTaskRecurrence, AdmissionsTaskStatus } from "@/lib/admissions/checklists";
 import type { CaseRole } from "@/lib/admissions/types";
 
 // ── Pure helpers (exported for tests) ───────────────────────────────────

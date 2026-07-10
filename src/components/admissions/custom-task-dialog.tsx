@@ -28,11 +28,8 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   ADMISSIONS_TASK_OWNERS,
   type AdmissionsTaskOwner,
-} from "@/lib/admissions/meetings";
-import type {
-  AdmissionsTaskDto,
-  AdmissionsTaskRecurrence,
-} from "@/lib/admissions/checklists";
+} from "@/lib/admissions/shared/meetings";
+import type { AdmissionsTaskDto, AdmissionsTaskRecurrence } from "@/lib/admissions/checklists";
 
 const SELECT_CLASSES = cn(SELECT_FIELD_CLASSES, "h-8 w-full");
 

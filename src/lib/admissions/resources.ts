@@ -10,56 +10,30 @@
 // (requireCounselorOrAdmin); this module validates shape, not rights.
 
 import { and, asc, eq, isNull } from "drizzle-orm";
-import { z } from "zod";
 import { getDb, type Database } from "@/lib/db";
 import { admissionsResources } from "@/lib/db/schema";
 import { computeFieldDiff, withAuditedTransaction, writeAuditLog } from "./audit";
-import { ADMISSIONS_CHECKLIST_PHASES, type AdmissionsPhaseKey } from "./config";
+import {
+  ADMISSIONS_RESOURCE_TOPICS,
+  admissionsResourceUrlSchema,
+  isAdmissionsResourceTopic,
+} from "./shared/resources";
 import type { CaseRole } from "./types";
 
 const RESOURCE_DIFF_FIELDS = ["topic", "title", "url", "sortOrder"] as const;
 
 type ResourceRow = typeof admissionsResources.$inferSelect;
 
-/** Resource topic: one of the 10 checklist phase keys, or "general". */
-export type AdmissionsResourceTopic = AdmissionsPhaseKey | "general";
-
-/**
- * The canonical resource topics in display order (CM-92): the 10 checklist
- * phases from config.ts followed by the "general" catch-all bucket.
- */
-export const ADMISSIONS_RESOURCE_TOPICS: ReadonlyArray<{
-  key: AdmissionsResourceTopic;
-  label: string;
-}> = [
-  ...ADMISSIONS_CHECKLIST_PHASES,
-  { key: "general", label: "General" },
-];
-
-/** Type guard: is `value` a known resource topic key? */
-export function isAdmissionsResourceTopic(value: string): value is AdmissionsResourceTopic {
-  return ADMISSIONS_RESOURCE_TOPICS.some((entry) => entry.key === value);
-}
-
-/** Display label for a resource topic key, or null when the key is unknown. */
-export function getResourceTopicLabel(topic: string): string | null {
-  const entry = ADMISSIONS_RESOURCE_TOPICS.find((candidate) => candidate.key === topic);
-  return entry ? entry.label : null;
-}
-
-/**
- * Resource URL validation (CM-92): a well-formed absolute URL that MUST use
- * https — plain http, other schemes, and non-URLs are all rejected. Shared by
- * the lib mutations and the route body schemas so both layers enforce the
- * same rule.
- */
-export const admissionsResourceUrlSchema = z
-  .string()
-  .trim()
-  .url()
-  .refine((value) => value.startsWith("https://"), {
-    message: "Resource URLs must use https",
-  });
+// The topic list, topic guards, and https-only URL schema live in the
+// client-safe shared module (shared/resources.ts); this module re-exports
+// them so existing consumers keep importing from "./resources".
+export {
+  ADMISSIONS_RESOURCE_TOPICS,
+  admissionsResourceUrlSchema,
+  getResourceTopicLabel,
+  isAdmissionsResourceTopic,
+} from "./shared/resources";
+export type { AdmissionsResourceTopic } from "./shared/resources";
 
 /** One resource row serialized for API/UI consumers. */
 export interface AdmissionsResourceDto {

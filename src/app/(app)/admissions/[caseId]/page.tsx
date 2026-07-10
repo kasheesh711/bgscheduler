@@ -64,7 +64,11 @@ import type {
 // (design §5.3 — never the staff or student shells, fail-closed); counselors
 // and admins get the staff case-detail shell.
 
-async function CaseDetailBody({ caseId }: { caseId: string }) {
+async function CaseDetailBody({ params }: { params: Promise<{ caseId: string }> }) {
+  // Awaited inside the Suspense boundary — reading `params` in the page
+  // component itself would block the whole route's static shell (Next 16
+  // cacheComponents flags it as uncached data outside <Suspense>).
+  const { caseId } = await params;
   const session = await auth();
   const email = session?.user?.email;
   if (!email) {
@@ -257,16 +261,14 @@ async function CaseDetailBody({ caseId }: { caseId: string }) {
   );
 }
 
-export default async function AdmissionsCaseDetailPage({
+export default function AdmissionsCaseDetailPage({
   params,
 }: {
   params: Promise<{ caseId: string }>;
 }) {
-  const { caseId } = await params;
-
   return (
     <Suspense fallback={<CaseDetailSkeleton />}>
-      <CaseDetailBody caseId={caseId} />
+      <CaseDetailBody params={params} />
     </Suspense>
   );
 }

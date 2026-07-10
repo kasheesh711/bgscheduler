@@ -80,15 +80,15 @@ import {
   UC_ACTIVITY_CATEGORIES,
   UC_ACTIVITY_CATEGORY_LABELS,
   UC_DESCRIPTION_MAX_CHARS,
-  type AdmissionsActivityDto,
   type AdmissionsActivityGrade,
   type AdmissionsActivityTiming,
   type AdmissionsCommonAppBlock,
   type AdmissionsUcBlock,
   type UcActivityCategory,
-} from "@/lib/admissions/activities";
+} from "@/lib/admissions/shared/activities";
 import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { roleAtLeast } from "@/lib/admissions/config";
+import type { AdmissionsActivityDto } from "@/lib/admissions/activities";
 import type { CaseRole } from "@/lib/admissions/types";
 
 // ── Display labels ──────────────────────────────────────────────────────

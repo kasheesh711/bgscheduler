@@ -48,12 +48,7 @@ import {
   writeStoredParentLocale,
   type ParentLocale,
 } from "./strings";
-import type {
-  ParentDashboard,
-  ParentDeadline,
-  ParentPhaseProgress,
-  ParentTestingMilestone,
-} from "@/lib/admissions/parent-projection";
+import type { ParentDashboard, ParentDeadline, ParentPhaseProgress, ParentTestingMilestone } from "@/lib/admissions/parent-projection";
 
 // ── Section order (design §5.3 — tests assert this exact sequence) ──────
 

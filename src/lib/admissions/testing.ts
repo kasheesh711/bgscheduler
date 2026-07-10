@@ -49,12 +49,18 @@ import {
 } from "./audit";
 import { roleAtLeast } from "./config";
 import { isUuidShaped } from "./members";
+import {
+  ADMISSIONS_TEST_TYPES,
+  ADMISSIONS_TEST_TYPE_LABELS,
+  deriveRegistrationDeadline,
+  isAdmissionsTestType,
+  type AdmissionsTestType,
+} from "./shared/testing";
 import type { CalendarItem, CalendarWindow } from "./calendar";
 import type { AdmissionsTaskOwner } from "./meetings";
 import type { CaseAccess } from "./types";
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const DAY_IN_MS = 86_400_000;
 
 /** Strict numeric score shape ("1450", "34", "7.5"); anything else is skipped. */
 const SCORE_PATTERN = /^-?\d+(?:\.\d+)?$/;
@@ -63,67 +69,18 @@ type TestSittingRow = typeof admissionsTestSittings.$inferSelect;
 
 // ── Test-type union (mirrors pgEnum in schema.ts) ───────────────────────
 
-/** Standardized test type (mirrors admissions_test_type). */
-export type AdmissionsTestType =
-  | "sat"
-  | "act"
-  | "ap"
-  | "ib"
-  | "toefl"
-  | "ielts"
-  | "other";
-
-/** All valid test types, in canonical display order. */
-export const ADMISSIONS_TEST_TYPES: readonly AdmissionsTestType[] = [
-  "sat",
-  "act",
-  "ap",
-  "ib",
-  "toefl",
-  "ielts",
-  "other",
-];
-
-/** Type guard: is `value` a known admissions test type? */
-export function isAdmissionsTestType(value: string): value is AdmissionsTestType {
-  return ADMISSIONS_TEST_TYPES.includes(value as AdmissionsTestType);
-}
-
-/** Display label per test type (calendar titles, best-score chips). */
-export const ADMISSIONS_TEST_TYPE_LABELS: Record<AdmissionsTestType, string> = {
-  sat: "SAT",
-  act: "ACT",
-  ap: "AP",
-  ib: "IB",
-  toefl: "TOEFL",
-  ielts: "IELTS",
-  other: "Other test",
-};
-
-// ── Registration lead days (CM-80) ──────────────────────────────────────
-
-/**
- * Days between a test's registration deadline and its test date, per test
- * type (CM-80 auto-derivation):
- *
- * - SAT / ACT: regular registration closes ≈ 5 weeks before the sitting →
- *   35 days.
- * - AP / IB: exam registration is school-managed (no student-facing
- *   deadline) → null, no deadline derived.
- * - TOEFL / IELTS: seat booking typically closes ≈ 2 weeks before the test
- *   → 14 days.
- * - other: unknown test family → null (fail-closed — a deadline is never
- *   guessed; counselors can set one explicitly via update).
- */
-export const REGISTRATION_LEAD_DAYS: Record<AdmissionsTestType, number | null> = {
-  sat: 35,
-  act: 35,
-  ap: null,
-  ib: null,
-  toefl: 14,
-  ielts: 14,
-  other: null,
-};
+// The test-type union, its closed value list/labels, the registration lead
+// days, and the pure deriveRegistrationDeadline helper live in the
+// client-safe shared module (shared/testing.ts); this module re-exports them
+// so existing consumers keep importing from "./testing".
+export {
+  ADMISSIONS_TEST_TYPES,
+  ADMISSIONS_TEST_TYPE_LABELS,
+  REGISTRATION_LEAD_DAYS,
+  deriveRegistrationDeadline,
+  isAdmissionsTestType,
+} from "./shared/testing";
+export type { AdmissionsTestType } from "./shared/testing";
 
 // ── DTOs ────────────────────────────────────────────────────────────────
 
@@ -180,12 +137,6 @@ function normalizeNullableText(value: string | null): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
-/** Shifts a "YYYY-MM-DD" date by whole days (UTC arithmetic, DST-proof). */
-function shiftDateOnly(dateOnly: string, days: number): string {
-  const shifted = new Date(new Date(`${dateOnly}T00:00:00Z`).getTime() + days * DAY_IN_MS);
-  return shifted.toISOString().slice(0, 10);
-}
-
 /**
  * Asia/Bangkok calendar date ("YYYY-MM-DD") for an instant (mirrors the
  * private helper in calendar.ts / essays.ts).
@@ -237,24 +188,6 @@ async function findCaseSitting(
   const row = rows[0];
   if (!row) throw new Error("NotFound");
   return row;
-}
-
-// ── Registration-deadline derivation (CM-80) ────────────────────────────
-
-/**
- * Derives the registration deadline for a sitting: testDate minus the test
- * type's REGISTRATION_LEAD_DAYS. Types with a null lead (AP/IB
- * school-managed, "other" unknown) derive null — no deadline is ever guessed
- * (fail-closed). Pure date-only arithmetic; a malformed testDate throws.
- */
-export function deriveRegistrationDeadline(
-  testType: AdmissionsTestType,
-  testDate: string,
-): string | null {
-  assertDateOnly(testDate, "testDate");
-  const leadDays = REGISTRATION_LEAD_DAYS[testType];
-  if (leadDays === null) return null;
-  return shiftDateOnly(testDate, -leadDays);
 }
 
 // ── Create (CM-80, design §2.4) ─────────────────────────────────────────

@@ -65,10 +65,10 @@ import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { roleAtLeast } from "@/lib/admissions/config";
 import {
   ADMISSIONS_ESSAY_STATUSES,
-  type AdmissionsEssayListRowDto,
   type AdmissionsEssayStatus,
-} from "@/lib/admissions/essays";
+} from "@/lib/admissions/shared/essays";
 import { todayBangkok } from "@/lib/room-capacity/dates";
+import type { AdmissionsEssayListRowDto } from "@/lib/admissions/essays";
 import type { CaseRole } from "@/lib/admissions/types";
 
 // ── Pure helpers (exported for tests) ───────────────────────────────────

@@ -39,12 +39,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { roleAtLeast } from "@/lib/admissions/config";
-import type {
-  AdmissionsSectionDefinition,
-  AdmissionsSectionField,
-  AdmissionsSectionStateDto,
-  AdmissionsSubmissionState,
-} from "@/lib/admissions/sections";
+import type { AdmissionsSectionDefinition, AdmissionsSectionField, AdmissionsSectionStateDto, AdmissionsSubmissionState } from "@/lib/admissions/sections";
 import type { CaseRole } from "@/lib/admissions/types";
 
 /** Which shell hosts the form: staff sees the review action, students never do. */

@@ -81,20 +81,13 @@ import {
   ADMISSIONS_APP_ROUND_LABELS,
   ADMISSIONS_APP_STATUSES,
   ADMISSIONS_COLLEGE_CATEGORIES,
-} from "@/lib/admissions/colleges";
+  type AdmissionsAppRound,
+  type AdmissionsAppStatus,
+  type AdmissionsCollegeCategory,
+} from "@/lib/admissions/shared/colleges";
 import { RecommendersPanel } from "./recommenders-panel";
-import type {
-  AdmissionsAppRound,
-  AdmissionsAppStatus,
-  AdmissionsCollegeCategory,
-  AdmissionsCollegeCompleteness,
-  AdmissionsCollegeListRowDto,
-  ApplicationWarning,
-} from "@/lib/admissions/colleges";
-import type {
-  AdmissionsCollegeDocDto,
-  AdmissionsRecommenderWithCollegesDto,
-} from "@/lib/admissions/recommenders";
+import type { AdmissionsCollegeCompleteness, AdmissionsCollegeListRowDto, ApplicationWarning } from "@/lib/admissions/colleges";
+import type { AdmissionsCollegeDocDto, AdmissionsRecommenderWithCollegesDto } from "@/lib/admissions/recommenders";
 import type { CaseRole } from "@/lib/admissions/types";
 
 // ── Pure helpers (exported for tests) ───────────────────────────────────
