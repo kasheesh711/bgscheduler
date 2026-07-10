@@ -1,6 +1,17 @@
-import { describe, expect, it } from "vitest";
-import type { AdmissionsCaseSummary } from "@/lib/admissions/types";
-import { computeCaseloadKpis } from "../caseload-shell";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("next/navigation", () => ({
+  useRouter: vi.fn(() => ({ replace: vi.fn(), push: vi.fn(), refresh: vi.fn() })),
+}));
+
+import type {
+  AdmissionsCaseSummary,
+  AdmissionsCohortDto,
+  AdmissionsCounselorDto,
+  CaseRole,
+} from "@/lib/admissions/types";
+import { CaseloadShell, computeCaseloadKpis } from "../caseload-shell";
 
 function summary(overrides: Partial<AdmissionsCaseSummary> = {}): AdmissionsCaseSummary {
   return {
@@ -44,5 +55,56 @@ describe("computeCaseloadKpis", () => {
     const kpis = computeCaseloadKpis([]);
     expect(kpis.totalCases).toBe(0);
     expect(Object.values(kpis.statusCounts).every((count) => count === 0)).toBe(true);
+  });
+});
+
+// ── Manage affordance (admin-only) ──────────────────────────────────────
+
+const COHORTS: AdmissionsCohortDto[] = [
+  { id: "11111111-aaaa-4aaa-8aaa-111111111111", name: "Class of 2027", graduationYear: 2027 },
+];
+
+const COUNSELORS: AdmissionsCounselorDto[] = [
+  {
+    id: "22222222-bbbb-4bbb-8bbb-222222222222",
+    email: "mint@bg.com",
+    name: "Mint",
+    active: true,
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000Z",
+  },
+];
+
+function renderShell(viewerRole: CaseRole): string {
+  return renderToStaticMarkup(
+    <CaseloadShell
+      caseload={[summary()]}
+      cohorts={COHORTS}
+      counselors={COUNSELORS}
+      resourceGroups={[]}
+      viewerRole={viewerRole}
+    />,
+  );
+}
+
+describe("CaseloadShell manage affordance", () => {
+  it("shows the Manage button to admins only", () => {
+    const html = renderShell("admin");
+    expect(html).toContain('data-testid="open-manage"');
+    expect(html).toContain("Manage");
+  });
+
+  it("hides the Manage button (and its dialog) from counselors", () => {
+    const html = renderShell("counselor");
+    expect(html).not.toContain('data-testid="open-manage"');
+    expect(html).not.toContain('data-testid="manage-panel"');
+    // Non-admin affordances stay intact.
+    expect(html).toContain('data-testid="open-resources"');
+    expect(html).toContain("New case");
+  });
+
+  it("keeps the manage dialog closed (unmounted) until the button is pressed", () => {
+    const html = renderShell("admin");
+    expect(html).not.toContain('data-testid="manage-panel"');
   });
 });

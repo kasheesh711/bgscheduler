@@ -303,6 +303,14 @@ export function CreateCaseForm({ cohorts, counselors, onCreated, onCancel }: Cre
             </SelectContent>
           </Select>
           <FieldError message={errors["cohortId"]} />
+          {cohorts.length === 0 ? (
+            <p
+              data-testid="create-case-no-cohorts"
+              className="rounded-md bg-muted/60 px-2 py-1.5 text-xs text-muted-foreground"
+            >
+              No cohorts yet — ask an admin to add one in Manage.
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-medium text-muted-foreground">Counselor *</label>
@@ -322,6 +330,14 @@ export function CreateCaseForm({ cohorts, counselors, onCreated, onCancel }: Cre
             </SelectContent>
           </Select>
           <FieldError message={errors["counselorEmails"]} />
+          {activeCounselors.length === 0 ? (
+            <p
+              data-testid="create-case-no-counselors"
+              className="rounded-md bg-muted/60 px-2 py-1.5 text-xs text-muted-foreground"
+            >
+              No active counselors yet — ask an admin to add one in Manage.
+            </p>
+          ) : null}
         </div>
       </div>
 
