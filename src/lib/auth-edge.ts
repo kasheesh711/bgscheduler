@@ -8,8 +8,7 @@ export const { auth: edgeAuth } = NextAuth({
       clientSecret: process.env.AUTH_GOOGLE_SECRET,
       authorization: {
         params: {
-          scope: "openid email profile https://www.googleapis.com/auth/spreadsheets.readonly",
-          access_type: "offline",
+          scope: "openid email profile",
         },
       },
     }),

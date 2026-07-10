@@ -66,6 +66,11 @@ import {
 } from "./colleges";
 import { listEssaysForCase } from "./essays";
 import {
+  deliverAdmissionsOutboxBestEffort,
+  deriveStudentFirstName,
+  queueMemberInviteOutbox,
+} from "./notifications";
+import {
   insertCaseMember,
   isUuidShaped,
   mapAdmissionsMemberRow,
@@ -81,7 +86,9 @@ import type {
   AdmissionsCaseStatus,
   AdmissionsCaseSummary,
   AdmissionsMemberDto,
+  AdmissionsStudentCaseDetail,
 } from "./types";
+import { normalizeAdmissionsUrl } from "./shared/urls";
 
 const MS_PER_DAY = 86_400_000;
 
@@ -194,6 +201,18 @@ export async function createCase(
   if (parentEmails.includes(studentEmail)) throw new Error("Conflict");
   const familyEmails = new Set([studentEmail, ...parentEmails]);
   if (counselorEmails.some((email) => familyEmails.has(email))) {
+    throw new Error("Conflict");
+  }
+
+  const activeCounselorRows = await db
+    .select({ email: admissionsCounselors.email })
+    .from(admissionsCounselors)
+    .where(and(
+      inArray(admissionsCounselors.email, counselorEmails),
+      eq(admissionsCounselors.active, true),
+    ));
+  const activeCounselorEmails = new Set(activeCounselorRows.map((row) => row.email));
+  if (counselorEmails.some((email) => !activeCounselorEmails.has(email))) {
     throw new Error("Conflict");
   }
 
@@ -466,8 +485,8 @@ export async function getCaseloadForUser(
 
 /**
  * Shared family-portal landing resolution (design §5.2/§5.3 routing): the
- * case where `email` holds an ACTIVE membership with `role` on a live
- * (active/committed, non-soft-deleted) case.
+ * case where `email` holds an ACTIVE membership with `role` on a family-
+ * readable (active/committed/completed, portal-open, non-soft-deleted) case.
  *
  * Fail-closed like requireCaseAccess: only status "active" memberships count
  * (invited/revoked/bounced members have no portal case yet), so routing
@@ -494,7 +513,8 @@ async function getCaseIdForFamilyEmail(
       eq(admissionsCaseMembers.email, normalized),
       eq(admissionsCaseMembers.role, role),
       eq(admissionsCaseMembers.status, "active"),
-      inArray(admissionsCases.status, ["active", "committed"]),
+      inArray(admissionsCases.status, ["active", "committed", "completed"]),
+      eq(admissionsCases.familyPortalOpen, true),
       isNull(admissionsCases.deletedAt),
     ));
   if (rows.length === 0) return null;
@@ -508,8 +528,9 @@ async function getCaseIdForFamilyEmail(
 
 /**
  * Resolves the case a student portal visitor lands on (design §5.2 routing):
- * the case where `email` holds an ACTIVE student membership on a live
- * (active/committed, non-soft-deleted) case.
+ * the case where `email` holds an ACTIVE student membership on a family-
+ * readable, portal-open case. Completed cases remain readable; withdrawn and
+ * archived cases never resolve.
  *
  * The live-case partial unique index makes multiple matches unexpected; if
  * data drift ever produces more than one, the newest case wins (createdAt
@@ -527,7 +548,8 @@ export async function getCaseIdForStudentEmail(
 /**
  * Resolves the case a parent dashboard visitor lands on (design §5.3
  * routing): the case where `email` holds an ACTIVE parent membership on a
- * live (active/committed, non-soft-deleted) case.
+ * family-readable, portal-open case. Completed cases remain readable;
+ * withdrawn and archived cases never resolve.
  *
  * Unlike students, a parent may legitimately belong to multiple live cases
  * (siblings); the newest case wins (createdAt descending, caseId tiebreak)
@@ -686,6 +708,9 @@ export async function getCaseDetail(
     committedListItemId: caseRow.committedListItemId,
     committedCollegeName,
     driveFolder: caseRow.driveFolder,
+    familyPortalOpen: caseRow.familyPortalOpen,
+    familyPortalOpenedAt: caseRow.familyPortalOpenedAt?.toISOString() ?? null,
+    familyPortalOpenedByEmail: caseRow.familyPortalOpenedByEmail,
     student: {
       id: studentRow.id,
       fullName: studentRow.fullName,
@@ -719,6 +744,48 @@ export async function getCaseDetail(
     lastMeetingDate,
     createdAt: caseRow.createdAt.toISOString(),
     updatedAt: caseRow.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * Removes staff-only and security-sensitive fields before a student case DTO
+ * crosses an API or server-component boundary. Students receive their own
+ * contact/profile fields and active counselor email addresses, never Wise
+ * keys, membership ids/status history, parent emails, or portal audit data.
+ */
+export function projectCaseDetailForStudent(
+  detail: AdmissionsCaseDetail,
+): AdmissionsStudentCaseDetail {
+  return {
+    caseId: detail.caseId,
+    status: detail.status,
+    driveFolder: detail.driveFolder,
+    updatedAt: detail.updatedAt,
+    student: {
+      fullName: detail.student.fullName,
+      preferredName: detail.student.preferredName,
+      studentEmail: detail.student.studentEmail,
+      phone: detail.student.phone,
+      school: detail.student.school,
+      schoolCounselor: detail.student.schoolCounselor,
+      externalLinks: detail.student.externalLinks,
+    },
+    cohort: {
+      name: detail.cohort.name,
+      graduationYear: detail.cohort.graduationYear,
+    },
+    counselors: [...new Set(
+      detail.members
+        .filter((member) => member.role === "counselor" && member.status === "active")
+        .map((member) => member.email),
+    )].map((email) => ({ email })),
+    collegeList: detail.collegeList,
+    announcements: detail.announcements,
+    essays: detail.essays,
+    activities: detail.activities,
+    testSittings: detail.testSittings,
+    thisWeek: detail.thisWeek,
+    phaseProgress: detail.phaseProgress,
   };
 }
 
@@ -763,10 +830,16 @@ export async function updateCaseLifecycle(
     }
 
     const now = new Date();
-    await tx
+    const updatedRows = await tx
       .update(admissionsCases)
       .set({ status: nextStatus, statusChangedAt: now, updatedAt: now })
-      .where(eq(admissionsCases.id, caseId));
+      .where(and(
+        eq(admissionsCases.id, caseId),
+        eq(admissionsCases.status, previousStatus),
+        isNull(admissionsCases.deletedAt),
+      ))
+      .returning({ id: admissionsCases.id });
+    if (!updatedRows[0]) throw new Error("Conflict");
 
     await writeAuditLog(tx, {
       caseId,
@@ -799,6 +872,7 @@ export interface UpdateCaseStudentFields {
   school?: string | null;
   schoolCounselor?: string | null;
   wiseStudentKey?: string | null;
+  externalLinks?: Record<string, string>;
 }
 
 /** updateCaseProfile input — undefined fields are left untouched. */
@@ -808,6 +882,8 @@ export interface UpdateCaseProfileInput {
   /** Optimistic-concurrency token (case updatedAt ISO); mismatch → Conflict. */
   expectedUpdatedAt?: string;
   driveFolder?: string | null;
+  /** Staff-only API field; opening records actor + timestamp, closing retains them. */
+  familyPortalOpen?: boolean;
   student?: UpdateCaseStudentFields;
 }
 
@@ -824,6 +900,29 @@ const UPDATABLE_STUDENT_FIELDS = [
   "schoolCounselor",
   "wiseStudentKey",
 ] as const;
+
+const EXTERNAL_LINK_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,39}$/;
+
+function normalizeStudentExternalLinks(
+  value: Record<string, string>,
+): Record<string, string> {
+  const entries = Object.entries(value);
+  if (entries.length > 20) throw new Error("Student external links are limited to 20");
+  const normalized: Record<string, string> = {};
+  for (const [rawKey, rawUrl] of entries) {
+    const key = rawKey.trim();
+    if (!EXTERNAL_LINK_KEY_PATTERN.test(key)) {
+      throw new Error("Invalid student external link key");
+    }
+    if (typeof rawUrl !== "string" || rawUrl.length > 2048) {
+      throw new Error("Invalid student external link URL");
+    }
+    const url = normalizeAdmissionsUrl(rawUrl, "student external link URL");
+    if (!url) throw new Error("Invalid student external link URL");
+    normalized[key] = url;
+  }
+  return normalized;
+}
 
 /**
  * Updates case profile fields (driveFolder) and/or the linked student's
@@ -847,8 +946,15 @@ export async function updateCaseProfile(
   db: Database = getDb(),
 ): Promise<CaseProfileUpdateResult> {
   if (!isUuidShaped(input.caseId)) throw new Error("NotFound");
-
-  return withAuditedTransaction(async (tx) => {
+  if (
+    input.actor.role === "student" &&
+    (input.driveFolder !== undefined ||
+      input.familyPortalOpen !== undefined ||
+      input.student?.wiseStudentKey !== undefined)
+  ) {
+    throw new Error("Forbidden");
+  }
+  const mutation = await withAuditedTransaction(async (tx) => {
     const rows = await tx
       .select({ caseRow: admissionsCases, studentRow: admissionsStudents })
       .from(admissionsCases)
@@ -861,6 +967,9 @@ export async function updateCaseProfile(
       .limit(1);
     if (rows.length === 0) throw new Error("NotFound");
     const { caseRow, studentRow } = rows[0];
+    const driveFolder = input.driveFolder === undefined
+      ? undefined
+      : normalizeAdmissionsUrl(input.driveFolder, "driveFolder");
 
     if (
       input.expectedUpdatedAt !== undefined &&
@@ -869,12 +978,23 @@ export async function updateCaseProfile(
       throw new Error("Conflict");
     }
 
-    const casePatch: { driveFolder?: string | null } = {};
-    if (input.driveFolder !== undefined && input.driveFolder !== caseRow.driveFolder) {
-      casePatch.driveFolder = input.driveFolder;
+    const casePatch: {
+      driveFolder?: string | null;
+      familyPortalOpen?: boolean;
+      familyPortalOpenedAt?: Date;
+      familyPortalOpenedByEmail?: string;
+    } = {};
+    if (driveFolder !== undefined && driveFolder !== caseRow.driveFolder) {
+      casePatch.driveFolder = driveFolder;
+    }
+    const familyPortalChanged =
+      input.familyPortalOpen !== undefined &&
+      input.familyPortalOpen !== caseRow.familyPortalOpen;
+    if (familyPortalChanged) {
+      casePatch.familyPortalOpen = input.familyPortalOpen;
     }
 
-    const studentPatch: Record<string, string | null> = {};
+    const studentPatch: Record<string, string | null | Record<string, string>> = {};
     if (input.student) {
       if (input.student.fullName !== undefined) {
         const fullName = input.student.fullName.trim();
@@ -885,15 +1005,31 @@ export async function updateCaseProfile(
         const value = input.student[field];
         if (value !== undefined && value !== studentRow[field]) studentPatch[field] = value;
       }
+      if (input.student.externalLinks !== undefined) {
+        const externalLinks = normalizeStudentExternalLinks(input.student.externalLinks);
+        if (JSON.stringify(externalLinks) !== JSON.stringify(studentRow.externalLinks)) {
+          studentPatch.externalLinks = externalLinks;
+        }
+      }
     }
 
-    const caseChanged = casePatch.driveFolder !== undefined;
+    const driveFolderChanged = casePatch.driveFolder !== undefined;
+    const caseChanged = driveFolderChanged || familyPortalChanged;
     const studentChanged = Object.keys(studentPatch).length > 0;
     if (!caseChanged && !studentChanged) {
-      return { caseId: input.caseId, updatedAt: caseRow.updatedAt.toISOString() };
+      return {
+        caseId: input.caseId,
+        updatedAt: caseRow.updatedAt.toISOString(),
+        queuedOutboxIds: [] as string[],
+      };
     }
 
     const now = new Date();
+
+    if (familyPortalChanged && input.familyPortalOpen === true) {
+      casePatch.familyPortalOpenedAt = now;
+      casePatch.familyPortalOpenedByEmail = normalizeAdmissionsEmail(input.actor.email);
+    }
 
     if (studentChanged) {
       await tx
@@ -918,12 +1054,18 @@ export async function updateCaseProfile(
 
     // Bump the case row even when only student fields changed so the
     // optimistic-concurrency token always moves with the profile.
-    await tx
+    const updatedCaseRows = await tx
       .update(admissionsCases)
       .set({ ...casePatch, updatedAt: now })
-      .where(eq(admissionsCases.id, input.caseId));
+      .where(and(
+        eq(admissionsCases.id, input.caseId),
+        eq(admissionsCases.updatedAt, caseRow.updatedAt),
+        isNull(admissionsCases.deletedAt),
+      ))
+      .returning({ id: admissionsCases.id });
+    if (!updatedCaseRows[0]) throw new Error("Conflict");
 
-    if (caseChanged) {
+    if (driveFolderChanged) {
       await writeAuditLog(tx, {
         caseId: input.caseId,
         actorEmail: input.actor.email,
@@ -939,8 +1081,73 @@ export async function updateCaseProfile(
       });
     }
 
-    return { caseId: input.caseId, updatedAt: now.toISOString() };
+    if (familyPortalChanged) {
+      const opening = input.familyPortalOpen === true;
+      await writeAuditLog(tx, {
+        caseId: input.caseId,
+        actorEmail: input.actor.email,
+        actorRole: input.actor.role,
+        entityType: "case",
+        entityId: input.caseId,
+        action: opening ? "family_portal_open" : "family_portal_close",
+        diff: {
+          familyPortalOpen: {
+            old: caseRow.familyPortalOpen,
+            new: input.familyPortalOpen,
+          },
+          ...(opening
+            ? {
+                familyPortalOpenedAt: {
+                  old: caseRow.familyPortalOpenedAt?.toISOString() ?? null,
+                  new: now.toISOString(),
+                },
+                familyPortalOpenedByEmail: {
+                  old: caseRow.familyPortalOpenedByEmail,
+                  new: normalizeAdmissionsEmail(input.actor.email),
+                },
+              }
+            : {}),
+        },
+      });
+    }
+
+    const queuedOutboxIds: string[] = [];
+    if (familyPortalChanged && input.familyPortalOpen === true) {
+      const familyMembers = await tx
+        .select({
+          id: admissionsCaseMembers.id,
+          email: admissionsCaseMembers.email,
+        })
+        .from(admissionsCaseMembers)
+        .where(and(
+          eq(admissionsCaseMembers.caseId, input.caseId),
+          inArray(admissionsCaseMembers.role, ["student", "parent"]),
+          inArray(admissionsCaseMembers.status, ["invited", "bounced"]),
+        ));
+      const studentFirstName = deriveStudentFirstName(studentRow);
+      for (const member of familyMembers) {
+        queuedOutboxIds.push(await queueMemberInviteOutbox(tx, {
+          caseId: input.caseId,
+          memberId: member.id,
+          recipientEmail: member.email,
+          studentFirstName,
+          dedupeKey: `member-invite:portal-open:${input.caseId}:${member.id}:${now.toISOString()}`,
+          now,
+        }));
+      }
+    }
+
+    return {
+      caseId: input.caseId,
+      updatedAt: now.toISOString(),
+      queuedOutboxIds,
+    };
   }, db);
+
+  if (mutation.queuedOutboxIds.length > 0) {
+    await deliverAdmissionsOutboxBestEffort(mutation.queuedOutboxIds, db);
+  }
+  return { caseId: mutation.caseId, updatedAt: mutation.updatedAt };
 }
 
 /**

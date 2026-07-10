@@ -16,6 +16,7 @@ import {
   STUDENT_VIEWS,
   StudentPortalShell,
   THIS_WEEK_DISPLAY_LIMIT,
+  resolveActionDestination,
   resolveActionView,
   resolveMoreSubView,
   resolveStudentView,
@@ -30,7 +31,7 @@ import {
 import type { AdmissionsResourceTopicGroup } from "@/lib/admissions/resources";
 import type { ThisWeekAction } from "@/lib/admissions/student-home";
 import type { AdmissionsBestScore } from "@/lib/admissions/testing";
-import type { AdmissionsCaseDetail, CaseRole } from "@/lib/admissions/types";
+import type { AdmissionsStudentCaseDetail, CaseRole } from "@/lib/admissions/types";
 
 // ── Fixtures ────────────────────────────────────────────────────────────
 
@@ -96,6 +97,10 @@ const COLLEGE_ROW: AdmissionsCollegeListRowDto = {
   deadline: "2026-11-01",
   appStatus: "researching",
   category: "reach",
+  firstChoiceMajor: null,
+  secondChoiceMajor: null,
+  admissionsUrl: null,
+  portalUrl: null,
   aidOffered: null,
   aidNotes: null,
   createdAt: "2026-06-01T03:00:00.000Z",
@@ -105,50 +110,26 @@ const COLLEGE_ROW: AdmissionsCollegeListRowDto = {
   completeness: null,
 };
 
-const CASE_DETAIL: AdmissionsCaseDetail = {
+const CASE_DETAIL: AdmissionsStudentCaseDetail = {
   caseId: CASE_ID,
   status: "active",
-  statusChangedAt: "2026-07-01T03:00:00.000Z",
-  committedListItemId: null,
-  committedCollegeName: null,
   driveFolder: "https://drive.google.com/drive/folders/abc",
+  updatedAt: "2026-07-05T03:00:00.000Z",
   student: {
-    id: "11111111-1111-4111-8111-111111111111",
     fullName: "Ploy Srisuwan",
     preferredName: "Ploy",
     studentEmail: "ploy@example.com",
     phone: null,
     school: "Bangkok Prep",
     schoolCounselor: null,
-    wiseStudentKey: null,
     externalLinks: {},
   },
   cohort: {
-    id: "22222222-2222-4222-8222-222222222222",
     name: "Class of 2027",
     graduationYear: 2027,
   },
-  members: [
-    {
-      id: "33333333-3333-4333-8333-333333333333",
-      caseId: CASE_ID,
-      email: "counselor.may@example.com",
-      role: "counselor",
-      status: "active",
-      invitedAt: null,
-      activatedAt: "2026-06-01T03:00:00.000Z",
-      revokedAt: null,
-      addedByEmail: "admin@example.com",
-      createdAt: "2026-06-01T03:00:00.000Z",
-      updatedAt: "2026-06-01T03:00:00.000Z",
-    },
-  ],
+  counselors: [{ email: "counselor.may@example.com" }],
   collegeList: [COLLEGE_ROW],
-  applicationWarnings: [],
-  progress: { done: 1, total: 3, percent: 33, verifiedCount: 0 },
-  progressPercent: 33,
-  nextDeadline: "2026-07-01",
-  upcomingDeadlines: [],
   announcements: [
     {
       id: "66666666-6666-4666-8666-666666666666",
@@ -178,15 +159,6 @@ const CASE_DETAIL: AdmissionsCaseDetail = {
       updatedAt: "2026-06-01T03:00:00.000Z",
     },
   ],
-  sections: [
-    {
-      sectionKey: "about_you",
-      title: "About You",
-      state: "draft",
-      submittedAt: null,
-      updatedAt: null,
-    },
-  ],
   thisWeek: THIS_WEEK,
   phaseProgress: [
     {
@@ -206,9 +178,6 @@ const CASE_DETAIL: AdmissionsCaseDetail = {
       verifiedCount: 0,
     },
   ],
-  lastMeetingDate: null,
-  createdAt: "2026-06-01T03:00:00.000Z",
-  updatedAt: "2026-07-05T03:00:00.000Z",
 };
 
 const BEST_SCORES: AdmissionsBestScore[] = [
@@ -313,7 +282,7 @@ function renderShell(overrides: {
   view?: string | null;
   sub?: string | null;
   tasks?: AdmissionsTaskDto[];
-  caseDetail?: AdmissionsCaseDetail;
+  caseDetail?: AdmissionsStudentCaseDetail;
   viewerRole?: CaseRole;
 } = {}): string {
   const params = new URLSearchParams();
@@ -377,11 +346,29 @@ describe("resolveActionView", () => {
     expect(resolveActionView("testing")).toBe("more");
     expect(resolveActionView("section")).toBe("more");
   });
+
+  it("deep-links testing and sections to their exact More sub-view", () => {
+    expect(
+      resolveActionDestination(
+        "testing",
+        "testing:44444444-dddd-4ddd-8ddd-444444444444",
+      ),
+    ).toEqual({
+      view: "more",
+      sub: "testing",
+      item: "44444444-dddd-4ddd-8ddd-444444444444",
+    });
+    expect(resolveActionDestination("section", "section:about_you")).toEqual({
+      view: "more",
+      sub: "sections",
+      item: "about_you",
+    });
+  });
 });
 
 describe("resolveMoreSubView", () => {
   it("passes known sub-view keys through", () => {
-    expect(MORE_SUBVIEWS).toHaveLength(4);
+    expect(MORE_SUBVIEWS).toHaveLength(7);
     for (const entry of MORE_SUBVIEWS) {
       expect(resolveMoreSubView(entry.key)).toBe(entry.key);
     }
@@ -511,15 +498,14 @@ describe("StudentPortalShell colleges view", () => {
     expect(html).toContain("Researching");
   });
 
-  it("has no mutation affordances (list composition is counselor-only)", () => {
+  it("keeps list composition counselor-only while exposing student-owned research", () => {
     const html = renderShell({ view: "colleges" });
-    expect(html).not.toContain("<input");
-    expect(html).not.toContain("<select");
-    expect(html).not.toContain("<textarea");
-    // The only buttons on the page are the 5 bottom-nav items.
-    expect(countOccurrences(html, "<button")).toBe(STUDENT_VIEWS.length);
+    expect(html).toContain('data-testid="college-details-panel"');
+    expect(html).toContain("Save research");
+    expect(html).toContain("Add event");
+    expect(html).not.toContain("Add requirement");
     expect(html).not.toContain("Add college");
-    expect(html).not.toContain("Remove");
+    expect(html).not.toContain("Remove college");
   });
 
   it("shows an empty state when the list is empty", () => {
@@ -544,7 +530,7 @@ describe("StudentPortalShell staff-surface isolation", () => {
       // Notes composer (staff shell "Add a note" / "Post note").
       expect(html).not.toContain("Add a note");
       expect(html).not.toContain("Post note");
-      // Meeting log + member management + profile editing.
+      // Meeting log + member management + staff profile dialog.
       expect(html).not.toContain("Log meeting");
       expect(html).not.toContain("Edit profile");
       expect(html).not.toContain("Invite");
@@ -561,9 +547,11 @@ describe("StudentPortalShell more view", () => {
     const html = renderShell({ view: "more" });
     for (const entry of MORE_SUBVIEWS) {
       expect(html).toContain(`data-testid="more-menu-${entry.key}"`);
-      expect(html).toContain(entry.label);
+      expect(html).toContain(entry.label.replace("&", "&amp;"));
     }
     expect(html).toContain("Ploy Srisuwan");
+    expect(html).toContain('data-testid="student-profile-editor"');
+    expect(html).toContain("Save profile");
     expect(html).toContain("counselor.may@example.com");
     expect(html).toContain("https://drive.google.com/drive/folders/abc");
     expect(html).toContain("Sign out");

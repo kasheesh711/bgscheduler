@@ -18,9 +18,53 @@ vi.mock("next-auth/providers/google", () => ({
   default: () => ({ id: "google", name: "Google", type: "oauth" }),
 }));
 
-import { signInCallback } from "@/lib/auth";
+import {
+  GOOGLE_IDENTITY_SCOPE,
+  shouldPersistGoogleSheetsToken,
+  signInCallback,
+} from "@/lib/auth";
 import { resolveUserAccess } from "@/lib/auth-access";
 import { activateMembershipsForEmail } from "@/lib/admissions/members";
+
+describe("Google OAuth scope and token persistence", () => {
+  const sheetsReadScope =
+    "openid email profile https://www.googleapis.com/auth/spreadsheets.readonly";
+  const sheetsWriteScope =
+    "openid email profile https://www.googleapis.com/auth/spreadsheets";
+
+  it("keeps ordinary sign-in identity-only", () => {
+    expect(GOOGLE_IDENTITY_SCOPE).toBe("openid email profile");
+    expect(GOOGLE_IDENTITY_SCOPE).not.toContain("spreadsheets");
+  });
+
+  it("persists an explicit Google Sheets grant for staff", () => {
+    expect(shouldPersistGoogleSheetsToken(
+      { role: "admin", allowedPages: null },
+      { provider: "google", scope: sheetsReadScope },
+    )).toBe(true);
+    expect(shouldPersistGoogleSheetsToken(
+      { role: "counselor", allowedPages: ["/admissions"] },
+      { provider: "google", scope: sheetsWriteScope },
+    )).toBe(true);
+  });
+
+  it("never persists identity-only, non-Google, or family OAuth tokens", () => {
+    expect(shouldPersistGoogleSheetsToken(
+      { role: "admin", allowedPages: null },
+      { provider: "google", scope: GOOGLE_IDENTITY_SCOPE },
+    )).toBe(false);
+    expect(shouldPersistGoogleSheetsToken(
+      { role: "admin", allowedPages: null },
+      { provider: "github", scope: sheetsReadScope },
+    )).toBe(false);
+    for (const role of ["student", "parent"] as const) {
+      expect(shouldPersistGoogleSheetsToken(
+        { role, allowedPages: ["/admissions"] },
+        { provider: "google", scope: sheetsWriteScope },
+      )).toBe(false);
+    }
+  });
+});
 
 describe("signInCallback — TCOV-06 (admin allowlist + teacher access)", () => {
   beforeEach(() => {

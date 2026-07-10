@@ -12,6 +12,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import {
+  CASE_SUBSECTIONS,
   CASE_TABS,
   CaseDetailShell,
   CaseDetailSkeleton,
@@ -21,6 +22,7 @@ import {
   formatDateOnly,
   parseAttendees,
   parseProfileConflict,
+  resolveCaseSubsection,
   resolveCaseTab,
   type ProfileFormValues,
 } from "../case-detail-shell";
@@ -47,6 +49,9 @@ const CASE_DETAIL: AdmissionsCaseDetail = {
   committedListItemId: null,
   committedCollegeName: null,
   driveFolder: null,
+  familyPortalOpen: false,
+  familyPortalOpenedAt: null,
+  familyPortalOpenedByEmail: null,
   student: {
     id: "11111111-1111-4111-8111-111111111111",
     fullName: "Ploy Srisuwan",
@@ -159,6 +164,7 @@ const SECTION_STATES: AdmissionsSectionStateDto[] = [
 
 function renderShell(overrides: {
   tab?: string | null;
+  sub?: string | null;
   viewerRole?: "counselor" | "student" | "parent" | "admin";
   caseDetail?: AdmissionsCaseDetail;
   meetings?: AdmissionsMeetingDto[];
@@ -166,9 +172,10 @@ function renderShell(overrides: {
   tasks?: AdmissionsTaskDto[];
   calendarItems?: CalendarItem[];
 } = {}): string {
-  navState.params = overrides.tab != null
-    ? new URLSearchParams(`tab=${overrides.tab}`)
-    : null;
+  const params = new URLSearchParams();
+  if (overrides.tab != null) params.set("tab", overrides.tab);
+  if (overrides.sub != null) params.set("sub", overrides.sub);
+  navState.params = params.toString() ? params : null;
   return renderToStaticMarkup(
     <CaseDetailShell
       caseDetail={overrides.caseDetail ?? CASE_DETAIL}
@@ -203,6 +210,14 @@ describe("resolveCaseTab", () => {
     for (const tab of CASE_TABS) {
       expect(resolveCaseTab(tab.key)).toBe(tab.key);
     }
+  });
+
+  it("maps legacy deep links into their grouped area and subsection", () => {
+    expect(resolveCaseTab("profile")).toBe("student");
+    expect(resolveCaseSubsection("profile", null)).toBe("profile");
+    expect(resolveCaseTab("meetings")).toBe("casework");
+    expect(resolveCaseSubsection("meetings", null)).toBe("meetings");
+    expect(resolveCaseSubsection("student", "awards")).toBe("awards");
   });
 
   it("falls back to overview for unknown values (fail-closed)", () => {
@@ -311,25 +326,33 @@ describe("buildProfileFormValues", () => {
 // ── Shell rendering ─────────────────────────────────────────────────────
 
 describe("CaseDetailShell header + tabs", () => {
-  it("renders the sticky header and all 10 tabs", () => {
+  it("renders the sticky header and all case tabs", () => {
     const html = renderShell();
     expect(html).toContain("Ploy Srisuwan (Ploy)");
     expect(html).toContain("Class of 2027");
     expect(html).toContain("Active");
     expect(html).toContain("counselor.may@example.com");
-    for (const tab of CASE_TABS) {
-      expect(html).toContain(`>${tab.label}</button>`);
-    }
+    for (const tab of CASE_TABS) expect(html).toContain(`id="case-tab-${tab.key}"`);
     expect(html).toContain('role="tablist"');
-    expect(CASE_TABS).toHaveLength(10);
+    expect(html).toContain("Colleges &amp; Applications");
+    expect(CASE_TABS).toHaveLength(5);
+    expect(Object.keys(CASE_SUBSECTIONS)).toEqual([
+      "overview",
+      "student",
+      "colleges",
+      "money",
+      "casework",
+    ]);
   });
 
-  it("marks the URL-selected tab as active and renders its panel", () => {
+  it("preserves a legacy deep link while selecting its grouped area", () => {
     const html = renderShell({ tab: "meetings" });
-    const meetingsTab = html.match(/<button[^>]*id="case-tab-meetings"[^>]*>/);
-    expect(meetingsTab).not.toBeNull();
-    expect(meetingsTab![0]).toContain('aria-selected="true"');
-    expect(html).toContain('id="case-panel-meetings"');
+    const caseworkTab = html.match(/<button[^>]*id="case-tab-casework"[^>]*>/);
+    expect(caseworkTab).not.toBeNull();
+    expect(caseworkTab![0]).toContain('aria-selected="true"');
+    expect(html).toContain('id="case-panel-casework"');
+    expect(html).toContain('data-testid="case-subsection-meetings"');
+    expect(html).toContain("Meeting log");
   });
 
   it("defaults to the overview panel for unknown tab params", () => {
@@ -482,6 +505,23 @@ describe("CaseDetailShell live tabs", () => {
     // Staff can add sittings (the add/edit form renders for student+).
     expect(html).toContain("Add sitting");
   });
+
+  it("renders the staff-only Casework operations panel", () => {
+    const html = renderShell({ tab: "casework", viewerRole: "counselor" });
+    expect(html).toContain('data-testid="casework-panel"');
+    expect(html).toContain('data-testid="people-access-card"');
+    expect(html).toContain("People &amp; access");
+    expect(html).not.toContain('data-testid="audit-history"');
+  });
+
+  it("includes the admin audit viewer only for admins", () => {
+    const adminHtml = renderShell({ tab: "casework", viewerRole: "admin" });
+    expect(adminHtml).toContain('data-testid="audit-history"');
+
+    const studentHtml = renderShell({ tab: "casework", viewerRole: "student" });
+    expect(studentHtml).toContain("Case operations are visible to counselors and admins only.");
+    expect(studentHtml).not.toContain('data-testid="casework-panel"');
+  });
 });
 
 describe("CaseDetailShell profile tab", () => {
@@ -497,11 +537,14 @@ describe("CaseDetailShell profile tab", () => {
     expect(html).toContain("Bangkok Prep");
   });
 
-  it("hosts the self-report sections list (CM-121) on the profile tab", () => {
-    const html = renderShell({ tab: "profile" });
+  it("hosts self-report in its student subsection while preserving profile links", () => {
+    const html = renderShell({ tab: "student", sub: "sections" });
     expect(html).toContain('data-testid="sections-list"');
     expect(html).toContain('data-testid="section-card-about_you"');
-    // Other tabs do not render the sections list.
+    expect(renderShell({ tab: "profile" })).toContain("Student profile");
+    expect(renderShell({ tab: "profile" })).not.toContain(
+      'data-testid="sections-list"',
+    );
     expect(renderShell({ tab: "overview" })).not.toContain(
       'data-testid="sections-list"',
     );

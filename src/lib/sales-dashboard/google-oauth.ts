@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import { revalidateTag } from "next/cache";
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { withAuditedTransaction } from "@/lib/admissions/audit";
 
 export const SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
 export const SHEETS_WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
@@ -84,6 +85,25 @@ export function hasSheetsWriteScope(scope: string | null | undefined): boolean {
   return scopeSet(scope).has(SHEETS_WRITE_SCOPE);
 }
 
+/**
+ * A stored Sheets token is usable only while its owner is a current admin or
+ * an active admissions counselor. This is evaluated in the token query so a
+ * stale JWT or a counselor deactivation takes effect immediately.
+ */
+export function authorizedGoogleSheetsTokenOwnerClause() {
+  return sql<boolean>`(
+    EXISTS (
+      SELECT 1 FROM ${schema.adminUsers}
+      WHERE ${schema.adminUsers.email} = ${schema.googleOAuthTokens.email}
+    )
+    OR EXISTS (
+      SELECT 1 FROM ${schema.admissionsCounselors}
+      WHERE ${schema.admissionsCounselors.email} = ${schema.googleOAuthTokens.email}
+        AND ${schema.admissionsCounselors.active} = true
+    )
+  )`;
+}
+
 export async function storeGoogleOAuthTokenForUser(
   email: string,
   account: GoogleAccountLike | null | undefined,
@@ -93,29 +113,46 @@ export async function storeGoogleOAuthTokenForUser(
   const normalizedEmail = email.trim().toLowerCase();
   if (!normalizedEmail) return;
 
-  const [existing] = await db
-    .select()
-    .from(schema.googleOAuthTokens)
-    .where(eq(schema.googleOAuthTokens.email, normalizedEmail))
-    .limit(1);
+  await withAuditedTransaction(async (tx) => {
+    // Serialize OAuth writes with counselor activation/deactivation. Without
+    // this lock, a consent callback could pass its authority check, race a
+    // revocation, and leave a token that becomes usable if the email is later
+    // reactivated.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(
+      ${`google-sheets-token:${normalizedEmail}`}, 0
+    ))`);
 
-  await db
-    .insert(schema.googleOAuthTokens)
-    .values({
-      email: normalizedEmail,
-      accessTokenCiphertext: encryptToken(account.access_token),
-      refreshTokenCiphertext: account.refresh_token
-        ? encryptToken(account.refresh_token)
-        : existing?.refreshTokenCiphertext ?? null,
-      expiresAt: expiresAtFromAccount(account),
-      scope: account.scope ?? existing?.scope ?? null,
-      tokenType: account.token_type ?? existing?.tokenType ?? null,
-      lastError: null,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: schema.googleOAuthTokens.email,
-      set: {
+    // This is deliberately a generic Sheets-staff check, not an Admissions
+    // page guard: a page-restricted admin may legitimately connect Sheets for
+    // Sales Dashboard or Leave Requests without access to /admissions.
+    const adminRows = await tx.select({ id: schema.adminUsers.id })
+      .from(schema.adminUsers)
+      .where(eq(schema.adminUsers.email, normalizedEmail))
+      .limit(1);
+    if (adminRows.length === 0) {
+      const counselorRows = await tx.select({ id: schema.admissionsCounselors.id })
+        .from(schema.admissionsCounselors)
+        .where(and(
+          eq(schema.admissionsCounselors.email, normalizedEmail),
+          eq(schema.admissionsCounselors.active, true),
+        ))
+        .limit(1);
+      if (counselorRows.length === 0) throw new Error("Forbidden");
+    }
+
+    const [existing] = await tx
+      .select()
+      .from(schema.googleOAuthTokens)
+      .where(and(
+        eq(schema.googleOAuthTokens.email, normalizedEmail),
+        authorizedGoogleSheetsTokenOwnerClause(),
+      ))
+      .limit(1);
+
+    await tx
+      .insert(schema.googleOAuthTokens)
+      .values({
+        email: normalizedEmail,
         accessTokenCiphertext: encryptToken(account.access_token),
         refreshTokenCiphertext: account.refresh_token
           ? encryptToken(account.refresh_token)
@@ -125,8 +162,22 @@ export async function storeGoogleOAuthTokenForUser(
         tokenType: account.token_type ?? existing?.tokenType ?? null,
         lastError: null,
         updatedAt: new Date(),
-      },
-    });
+      })
+      .onConflictDoUpdate({
+        target: schema.googleOAuthTokens.email,
+        set: {
+          accessTokenCiphertext: encryptToken(account.access_token),
+          refreshTokenCiphertext: account.refresh_token
+            ? encryptToken(account.refresh_token)
+            : existing?.refreshTokenCiphertext ?? null,
+          expiresAt: expiresAtFromAccount(account),
+          scope: account.scope ?? existing?.scope ?? null,
+          tokenType: account.token_type ?? existing?.tokenType ?? null,
+          lastError: null,
+          updatedAt: new Date(),
+        },
+      });
+  }, db);
   revalidateTag(SALES_DASHBOARD_CACHE_TAG, "max");
 }
 
@@ -151,11 +202,14 @@ async function refreshAccessToken(
     await db
       .update(schema.googleOAuthTokens)
       .set({ lastError: message, updatedAt: new Date() })
-      .where(eq(schema.googleOAuthTokens.email, email));
+      .where(and(
+        eq(schema.googleOAuthTokens.email, email),
+        authorizedGoogleSheetsTokenOwnerClause(),
+      ));
     throw new MissingGoogleSheetsTokenError(message);
   }
 
-  await db
+  const refreshedRows = await db
     .update(schema.googleOAuthTokens)
     .set({
       accessTokenCiphertext: encryptToken(body.access_token),
@@ -165,7 +219,16 @@ async function refreshAccessToken(
       lastError: null,
       updatedAt: new Date(),
     })
-    .where(eq(schema.googleOAuthTokens.email, email));
+    .where(and(
+      eq(schema.googleOAuthTokens.email, email),
+      authorizedGoogleSheetsTokenOwnerClause(),
+    ))
+    .returning({ email: schema.googleOAuthTokens.email });
+  if (refreshedRows.length === 0) {
+    throw new MissingGoogleSheetsTokenError(
+      "Google Sheets access is no longer authorized for this account.",
+    );
+  }
   revalidateTag(SALES_DASHBOARD_CACHE_TAG, "max");
   return body.access_token;
 }
@@ -178,7 +241,10 @@ export async function getGoogleSheetsAccessToken(
   const [row] = await db
     .select()
     .from(schema.googleOAuthTokens)
-    .where(eq(schema.googleOAuthTokens.email, normalizedEmail))
+    .where(and(
+      eq(schema.googleOAuthTokens.email, normalizedEmail),
+      authorizedGoogleSheetsTokenOwnerClause(),
+    ))
     .limit(1);
   if (!row?.accessTokenCiphertext) throw new MissingGoogleSheetsTokenError();
   if (!hasSheetsReadScope(row.scope)) {
@@ -205,7 +271,10 @@ export async function getGoogleSheetsWriteAccessToken(
   const [row] = await db
     .select()
     .from(schema.googleOAuthTokens)
-    .where(eq(schema.googleOAuthTokens.email, normalizedEmail))
+    .where(and(
+      eq(schema.googleOAuthTokens.email, normalizedEmail),
+      authorizedGoogleSheetsTokenOwnerClause(),
+    ))
     .limit(1);
   if (!row?.accessTokenCiphertext) throw new MissingGoogleSheetsTokenError();
   if (!hasSheetsWriteScope(row.scope)) {
@@ -232,7 +301,10 @@ export async function getGoogleTokenStatus(email: string | null | undefined, db:
   const [row] = await db
     .select()
     .from(schema.googleOAuthTokens)
-    .where(eq(schema.googleOAuthTokens.email, normalizedEmail))
+    .where(and(
+      eq(schema.googleOAuthTokens.email, normalizedEmail),
+      authorizedGoogleSheetsTokenOwnerClause(),
+    ))
     .limit(1);
   return {
     connected: Boolean(row?.accessTokenCiphertext && hasSheetsReadScope(row.scope)),

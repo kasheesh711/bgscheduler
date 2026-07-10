@@ -8,6 +8,7 @@ vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 import { auth } from "@/lib/auth";
 import {
   admissionsErrorResponse,
+  assertCaseMutationAllowed,
   requireAdmissionsAdmin,
   requireAdmissionsSession,
   requireCaseAccess,
@@ -175,6 +176,17 @@ describe("requireCaseAccess", () => {
     await expect(requireCaseAccess("admin@example.com", CASE_ID, "parent", db)).rejects.toThrow("NotFound");
   });
 
+  it("honors a current admin page restriction instead of a stale admissions JWT", async () => {
+    const { db, selectCalls } = fakeDb([[
+      { id: "a1", allowedPages: ["/sales-dashboard"] },
+    ]]);
+
+    await expect(
+      requireCaseAccess("admin@example.com", CASE_ID, "parent", db),
+    ).rejects.toThrow("Forbidden");
+    expect(selectCalls).toHaveLength(1);
+  });
+
   it("throws Forbidden (not NotFound) for non-admins when the case does not exist", async () => {
     const { db } = fakeDb([[], []]);
 
@@ -219,13 +231,13 @@ describe("requireCaseAccess", () => {
   });
 
   it("grants a student member at minRole student and a parent member at minRole parent", async () => {
-    const student = fakeDb([[], [{ id: CASE_ID }], [{ role: "student" }]]);
+    const student = fakeDb([[], [{ id: CASE_ID, status: "active", familyPortalOpen: true }], [{ role: "student" }]]);
     await expect(requireCaseAccess("kid@example.com", CASE_ID, "student", student.db)).resolves.toMatchObject({
       role: "student",
       isAdmin: false,
     });
 
-    const parent = fakeDb([[], [{ id: CASE_ID }], [{ role: "parent" }]]);
+    const parent = fakeDb([[], [{ id: CASE_ID, status: "committed", familyPortalOpen: true }], [{ role: "parent" }]]);
     await expect(requireCaseAccess("mom@example.com", CASE_ID, "parent", parent.db)).resolves.toMatchObject({
       role: "parent",
       isAdmin: false,
@@ -247,11 +259,65 @@ describe("requireCaseAccess", () => {
   });
 
   it("normalizes the email onto the returned access", async () => {
-    const { db } = fakeDb([[], [{ id: CASE_ID }], [{ role: "parent" }]]);
+    const { db } = fakeDb([[], [{ id: CASE_ID, status: "active", familyPortalOpen: true }], [{ role: "parent" }]]);
 
     const access = await requireCaseAccess("  MOM@Example.com ", CASE_ID, "parent", db);
 
     expect(access.email).toBe("mom@example.com");
+  });
+
+  it("denies family access while the case portal is closed", async () => {
+    const { db } = fakeDb([
+      [],
+      [{ id: CASE_ID, status: "active", familyPortalOpen: false }],
+      [{ role: "student" }],
+    ]);
+
+    await expect(
+      requireCaseAccess("kid@example.com", CASE_ID, "student", db),
+    ).rejects.toThrow("Forbidden");
+  });
+
+  it.each(["withdrawn", "archived"] as const)(
+    "denies family deep links and APIs for %s cases even with active membership",
+    async (status) => {
+      const { db } = fakeDb([
+        [],
+        [{ id: CASE_ID, status, familyPortalOpen: true }],
+        [{ role: "parent" }],
+      ]);
+
+      await expect(
+        requireCaseAccess("mom@example.com", CASE_ID, "parent", db),
+      ).rejects.toThrow("Forbidden");
+    },
+  );
+
+  it("keeps completed family cases readable but marks them read-only", async () => {
+    const { db } = fakeDb([
+      [],
+      [{ id: CASE_ID, status: "completed", familyPortalOpen: true }],
+      [{ role: "student" }],
+    ]);
+
+    const access = await requireCaseAccess("kid@example.com", CASE_ID, "student", db);
+
+    expect(access).toMatchObject({ role: "student", familyReadOnly: true });
+    expect(() => assertCaseMutationAllowed(access)).toThrow("Forbidden");
+  });
+
+  it("lets staff retain access to closed archived cases", async () => {
+    const { db } = fakeDb([
+      [],
+      [{ id: CASE_ID, status: "archived", familyPortalOpen: false }],
+      [{ role: "counselor" }],
+      [{ id: "c1" }],
+    ]);
+
+    const access = await requireCaseAccess("staff@example.com", CASE_ID, "counselor", db);
+
+    expect(access).toMatchObject({ role: "counselor" });
+    expect(() => assertCaseMutationAllowed(access)).not.toThrow();
   });
 });
 
@@ -277,6 +343,16 @@ describe("requireCounselorOrAdmin", () => {
       isAdmin: false,
     });
     expect(selectCalls).toHaveLength(2);
+  });
+
+  it("does not fall through when a current admin row excludes admissions", async () => {
+    const { db, selectCalls } = fakeDb([[
+      { id: "a1", allowedPages: ["/progress-tests"] },
+    ]]);
+
+    await expect(requireCounselorOrAdmin("admin@example.com", db))
+      .rejects.toThrow("Forbidden");
+    expect(selectCalls).toHaveLength(1);
   });
 
   it("throws Forbidden when neither admin nor active registry row matches (students/parents/strangers)", async () => {
@@ -324,6 +400,15 @@ describe("requireAdmissionsAdmin", () => {
     const { db } = fakeDb([[]]);
 
     await expect(requireAdmissionsAdmin("ex-admin@example.com", db)).rejects.toThrow("Forbidden");
+  });
+
+  it("throws Forbidden when the current admin page list excludes admissions", async () => {
+    const { db } = fakeDb([[
+      { id: "a1", allowedPages: ["/sales-dashboard"] },
+    ]]);
+
+    await expect(requireAdmissionsAdmin("admin@example.com", db))
+      .rejects.toThrow("Forbidden");
   });
 
   it("throws Unauthorized for an empty email without querying", async () => {
@@ -381,11 +466,11 @@ describe("admissionsErrorResponse", () => {
     await expect(response.json()).resolves.toEqual({ error: "Conflict" });
   });
 
-  it("returns 500 with the error message for unexpected errors and logs them", async () => {
+  it("returns 500 with a safe fallback for unexpected errors and logs details server-side", async () => {
     const response = admissionsErrorResponse("/api/admissions/cases", new Error("boom"), "fallback");
 
     expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: "boom" });
+    await expect(response.json()).resolves.toEqual({ error: "fallback" });
     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
   });
 

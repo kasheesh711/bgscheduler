@@ -157,6 +157,6 @@ describe("GET /api/admissions/audit/[caseId]", () => {
     const res = await GET(getRequest(), routeParams());
 
     expect(res.status).toBe(500);
-    await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+    await expect(res.json()).resolves.toEqual({ error: "Audit trail load failed" });
   });
 });

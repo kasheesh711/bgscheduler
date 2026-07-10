@@ -56,7 +56,7 @@ const templateItemSchema = z.object({
   phase: templatePhaseSchema,
   title: z.string().trim().min(1, "Item title must not be empty"),
   description: z.string().nullish(),
-  defaultOwner: z.enum(["student", "counselor", "parent"]),
+  defaultOwner: z.enum(["student", "counselor"]),
   sortOrder: z.coerce.number().int().min(0),
 });
 

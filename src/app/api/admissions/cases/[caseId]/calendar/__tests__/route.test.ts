@@ -221,7 +221,7 @@ describe("/api/admissions/cases/[caseId]/calendar", () => {
       const res = await GET(makeRequest("?from=2026-07-01&to=2026-07-31"), makeCtx());
 
       expect(res.status).toBe(500);
-      await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+      await expect(res.json()).resolves.toEqual({ error: "Calendar load failed" });
     });
   });
 });

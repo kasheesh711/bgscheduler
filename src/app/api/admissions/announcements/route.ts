@@ -27,6 +27,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import {
   admissionsErrorResponse,
+  assertCaseMutationAllowed,
   requireAdmissionsSession,
   requireCaseAccess,
   requireCounselorOrAdmin,
@@ -61,6 +62,7 @@ async function requireAnnouncementMutationAccess(
   const scope = await getAnnouncementScope(announcementId);
   if (scope.caseId !== null) {
     const access = await requireCaseAccess(staff.email, scope.caseId, "counselor");
+    assertCaseMutationAllowed(access);
     return { email: access.email, role: access.role };
   }
   return { email: staff.email, role: staff.role };
@@ -162,6 +164,7 @@ export async function POST(request: NextRequest) {
     const { cohortId, caseId, title, body: announcementBody } = parsed.data;
     if (caseId !== undefined) {
       const access = await requireCaseAccess(user.email, caseId, "counselor");
+      assertCaseMutationAllowed(access);
       const announcement = await createAnnouncement({
         caseId,
         title,

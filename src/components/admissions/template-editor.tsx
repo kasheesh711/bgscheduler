@@ -51,7 +51,7 @@ import {
   ADMISSIONS_CHECKLIST_PHASES,
   getAdmissionsPhaseLabel,
 } from "@/lib/admissions/shared/config";
-import { ADMISSIONS_TASK_OWNERS } from "@/lib/admissions/shared/meetings";
+import { ADMISSIONS_ASSIGNABLE_TASK_OWNERS } from "@/lib/admissions/shared/meetings";
 import type { AdmissionsPhaseKey } from "@/lib/admissions/shared/config";
 import type { AdmissionsTaskOwner } from "@/lib/admissions/shared/meetings";
 import type { AdmissionsCohortDto } from "@/lib/admissions/types";
@@ -388,7 +388,7 @@ function TemplateItemRow({
               onChange({ defaultOwner: event.target.value as AdmissionsTaskOwner })
             }
           >
-            {ADMISSIONS_TASK_OWNERS.map((owner) => (
+            {ADMISSIONS_ASSIGNABLE_TASK_OWNERS.map((owner) => (
               <option key={owner} value={owner}>
                 {OWNER_LABELS[owner]}
               </option>

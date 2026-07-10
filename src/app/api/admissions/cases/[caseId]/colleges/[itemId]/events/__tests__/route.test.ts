@@ -85,6 +85,10 @@ const ROW_DTO: AdmissionsCollegeListRowDto = {
   deadline: "2026-11-30",
   appStatus: "submitted",
   category: "reach",
+  firstChoiceMajor: null,
+  secondChoiceMajor: null,
+  admissionsUrl: null,
+  portalUrl: null,
   aidOffered: null,
   aidNotes: null,
   createdAt: "2026-07-01T00:00:00.000Z",
@@ -176,7 +180,7 @@ describe("/api/admissions/cases/[caseId]/colleges/[itemId]/events", () => {
       const res = await GET(new Request("http://test.local"), makeCtx());
 
       expect(res.status).toBe(500);
-      await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+      await expect(res.json()).resolves.toEqual({ error: "Event list failed" });
     });
   });
 

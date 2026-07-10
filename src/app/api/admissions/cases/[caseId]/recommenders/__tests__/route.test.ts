@@ -133,6 +133,10 @@ const COLLEGE_ROW_DTO: AdmissionsCollegeListRowDto = {
   deadline: "2027-01-01",
   appStatus: "applying",
   category: "reach",
+  firstChoiceMajor: null,
+  secondChoiceMajor: null,
+  admissionsUrl: null,
+  portalUrl: null,
   aidOffered: null,
   aidNotes: null,
   createdAt: "2026-07-01T00:00:00.000Z",
@@ -250,7 +254,7 @@ describe("/api/admissions/cases/[caseId]/recommenders", () => {
       const res = await GET(new Request("http://test.local"), makeCtx());
 
       expect(res.status).toBe(500);
-      await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+      await expect(res.json()).resolves.toEqual({ error: "Recommender list failed" });
     });
   });
 

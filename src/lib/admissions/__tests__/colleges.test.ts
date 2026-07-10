@@ -82,7 +82,7 @@ function fakeDb(
 
   function selectBuilder(rows: unknown[]) {
     const b: Record<string, unknown> = {};
-    for (const method of ["from", "where", "innerJoin", "leftJoin", "orderBy", "groupBy", "limit"]) {
+    for (const method of ["from", "where", "innerJoin", "leftJoin", "orderBy", "groupBy", "limit", "for"]) {
       b[method] = () => b;
     }
     (b as { then: unknown }).then = (
@@ -178,8 +178,17 @@ function itemRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function caseRow(committedListItemId: string | null) {
-  return { id: CASE_ID, committedListItemId, updatedAt: UPDATED_AT };
+function caseRow(
+  committedListItemId: string | null,
+  status: "active" | "committed" | "completed" | "withdrawn" | "archived" = "active",
+) {
+  return {
+    id: CASE_ID,
+    status,
+    committedListItemId,
+    statusChangedAt: new Date("2026-06-01T00:00:00Z"),
+    updatedAt: UPDATED_AT,
+  };
 }
 
 describe("addCollegeListItem", () => {
@@ -332,6 +341,10 @@ describe("updateCollegeListItem", () => {
         deadline: "2026-11-01",
         appStatus: "applying",
         category: "reach",
+        firstChoiceMajor: "Computer Science",
+        secondChoiceMajor: "Economics",
+        admissionsUrl: "https://example.edu/admissions",
+        portalUrl: "https://portal.example.edu",
         aidOffered: "25000",
       },
       db,
@@ -344,9 +357,21 @@ describe("updateCollegeListItem", () => {
       deadline: "2026-11-01",
       appStatus: "applying",
       category: "reach",
+      firstChoiceMajor: "Computer Science",
+      secondChoiceMajor: "Economics",
+      admissionsUrl: "https://example.edu/admissions",
+      portalUrl: "https://portal.example.edu/",
       aidOffered: "25000",
     });
-    expect(result).toMatchObject({ round: "ed", deadline: "2026-11-01", aidOffered: "25000" });
+    expect(result).toMatchObject({
+      round: "ed",
+      deadline: "2026-11-01",
+      firstChoiceMajor: "Computer Science",
+      secondChoiceMajor: "Economics",
+      admissionsUrl: "https://example.edu/admissions",
+      portalUrl: "https://portal.example.edu/",
+      aidOffered: "25000",
+    });
 
     const audits = auditInserts(inserts);
     expect(audits).toHaveLength(1);
@@ -356,6 +381,10 @@ describe("updateCollegeListItem", () => {
       diff: {
         round: { old: "rd", new: "ed" },
         deadline: { old: "2027-01-01", new: "2026-11-01" },
+        firstChoiceMajor: { old: null, new: "Computer Science" },
+        secondChoiceMajor: { old: null, new: "Economics" },
+        admissionsUrl: { old: null, new: "https://example.edu/admissions" },
+        portalUrl: { old: null, new: "https://portal.example.edu/" },
         aidOffered: { old: null, new: "25000" },
       },
     });
@@ -422,6 +451,17 @@ describe("updateCollegeListItem", () => {
     await expect(
       updateCollegeListItem({ access: ACCESS, itemId: ITEM_ID, aidOffered: "-500" }, db),
     ).rejects.toThrow("Invalid aidOffered");
+  });
+
+  it("rejects application URLs containing embedded credentials before writing", async () => {
+    const { db, updates } = fakeDb([]);
+
+    await expect(updateCollegeListItem({
+      access: ACCESS,
+      itemId: ITEM_ID,
+      portalUrl: "https://student:secret@portal.example.edu/",
+    }, db)).rejects.toThrow("Invalid portalUrl");
+    expect(updates).toHaveLength(0);
   });
 });
 
@@ -572,8 +612,8 @@ describe("addApplicationEvent", () => {
     });
   });
 
-  it("throws Conflict for a committed event while another item is committed", async () => {
-    const { db, inserts } = fakeDb([[itemRow()], [caseRow(OTHER_ITEM_ID)]]);
+  it("requires all committed events to use the atomic committed-college path", async () => {
+    const { db, inserts, selectCalls } = fakeDb([]);
 
     await expect(
       addApplicationEvent(
@@ -582,35 +622,7 @@ describe("addApplicationEvent", () => {
       ),
     ).rejects.toThrow("Conflict");
     expect(inserts).toHaveLength(0);
-  });
-
-  it("allows a committed event when the pointer already references this item", async () => {
-    const { db, inserts } = fakeDb([[itemRow()], [caseRow(ITEM_ID)]]);
-
-    await addApplicationEvent(
-      { access: ACCESS, listItemId: ITEM_ID, event: "committed", eventDate: "2027-05-01" },
-      db,
-    );
-
-    expect(eventInserts(inserts)).toHaveLength(1);
-  });
-
-  it("throws Conflict when a concurrent commit claims the pointer mid-flight (CM-44)", async () => {
-    // The select saw a null pointer, but the row-locking guard UPDATE
-    // re-evaluates after the concurrent winner commits → zero rows.
-    const { db, inserts } = fakeDb(
-      [[itemRow()], [caseRow(null)]],
-      { updateReturning: [[]] },
-    );
-
-    await expect(
-      addApplicationEvent(
-        { access: ACCESS, listItemId: ITEM_ID, event: "committed", eventDate: "2027-05-01" },
-        db,
-      ),
-    ).rejects.toThrow("Conflict");
-    expect(eventInserts(inserts)).toHaveLength(0);
-    expect(auditInserts(inserts)).toHaveLength(0);
+    expect(selectCalls).toHaveLength(0);
   });
 
   it("rejects a malformed eventDate", async () => {
@@ -707,7 +719,11 @@ describe("setCommittedCollege", () => {
     expect(result).toMatchObject({ caseId: CASE_ID, committedListItemId: ITEM_ID });
     expect(updates).toHaveLength(1);
     expect(updates[0].table).toBe(admissionsCases);
-    expect(updates[0].set).toMatchObject({ committedListItemId: ITEM_ID });
+    expect(updates[0].set).toMatchObject({
+      committedListItemId: ITEM_ID,
+      status: "committed",
+    });
+    expect(updates[0].set.statusChangedAt).toBeInstanceOf(Date);
 
     const events = eventInserts(inserts);
     expect(events).toHaveLength(1);
@@ -724,6 +740,7 @@ describe("setCommittedCollege", () => {
       action: "commit_college",
       diff: {
         committedListItemId: { old: null, new: ITEM_ID },
+        status: { old: "active", new: "committed" },
         eventDate: { old: null, new: "2027-05-01" },
       },
     });
@@ -756,7 +773,10 @@ describe("setCommittedCollege", () => {
   });
 
   it("no-ops idempotently when the same item is already committed", async () => {
-    const { db, inserts, updates } = fakeDb([[itemRow()], [caseRow(ITEM_ID)]]);
+    const { db, inserts, updates } = fakeDb([
+      [itemRow()],
+      [caseRow(ITEM_ID, "committed")],
+    ]);
 
     const result = await setCommittedCollege({ access: ACCESS, listItemId: ITEM_ID }, db);
 
@@ -771,6 +791,31 @@ describe("setCommittedCollege", () => {
     await expect(
       setCommittedCollege({ access: STUDENT_ACCESS, listItemId: ITEM_ID }, db),
     ).rejects.toThrow("Forbidden");
+  });
+
+  it.each(["completed", "withdrawn", "archived"] as const)(
+    "rejects a committed-college event when the case is %s",
+    async (status) => {
+      const { db, inserts, updates } = fakeDb([[itemRow()], [caseRow(null, status)]]);
+
+      await expect(
+        setCommittedCollege({ access: ACCESS, listItemId: ITEM_ID }, db),
+      ).rejects.toThrow("Conflict");
+      expect(updates).toHaveLength(0);
+      expect(inserts).toHaveLength(0);
+    },
+  );
+
+  it("allows a cleared committed case to select a replacement without resetting statusChangedAt", async () => {
+    const { db, updates } = fakeDb([[itemRow()], [caseRow(null, "committed")]]);
+
+    await setCommittedCollege({ access: ACCESS, listItemId: ITEM_ID }, db);
+
+    expect(updates[0].set).toMatchObject({
+      committedListItemId: ITEM_ID,
+      status: "committed",
+    });
+    expect(updates[0].set.statusChangedAt).toBeUndefined();
   });
 });
 

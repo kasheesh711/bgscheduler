@@ -45,9 +45,11 @@ function makeCounselorRow(overrides: Record<string, unknown> = {}) {
  * Chainable tx fake covering the three query shapes counselors.ts issues:
  * select().from().where().limit() → `selected`,
  * insert().values().onConflictDoUpdate().returning() → [`upserted`],
- * update().set().where().returning() → [`updated`].
+ * update().set().where().returning() → [`updated`],
+ * delete().where() → token revocation result.
  */
 function makeTx(outcome: { selected?: unknown[]; upserted?: unknown; updated?: unknown } = {}) {
+  const execute = vi.fn(async () => []);
   const limit = vi.fn(async () => outcome.selected ?? []);
   const where = vi.fn(() => ({ limit }));
   const from = vi.fn(() => ({ where }));
@@ -63,9 +65,22 @@ function makeTx(outcome: { selected?: unknown[]; upserted?: unknown; updated?: u
   const set = vi.fn(() => ({ where: updateWhere }));
   const update = vi.fn(() => ({ set }));
 
+  const deleteWhere = vi.fn(async () => []);
+  const deleteFrom = vi.fn(() => ({ where: deleteWhere }));
+
   return {
-    tx: { select, insert, update } as never,
-    spies: { select, insert, values, onConflictDoUpdate, update, set },
+    tx: { execute, select, insert, update, delete: deleteFrom } as never,
+    spies: {
+      select,
+      insert,
+      values,
+      onConflictDoUpdate,
+      update,
+      set,
+      deleteFrom,
+      deleteWhere,
+      execute,
+    },
   };
 }
 
@@ -154,7 +169,7 @@ describe("upsertCounselor", () => {
   });
 
   it("audits an active flip when deactivating through the upsert path", async () => {
-    const { tx } = makeTx({
+    const { tx, spies } = makeTx({
       selected: [makeCounselorRow()],
       upserted: makeCounselorRow({ active: false }),
     });
@@ -165,6 +180,7 @@ describe("upsertCounselor", () => {
       action: "update",
       diff: { active: { old: true, new: false } },
     }));
+    expect(spies.deleteFrom).toHaveBeenCalledTimes(1);
   });
 
   it("short-circuits with no write and no audit row when nothing changed", async () => {
@@ -198,6 +214,8 @@ describe("deactivateCounselor", () => {
 
     expect(withAuditedTransactionMock).toHaveBeenCalledTimes(1);
     expect(spies.set).toHaveBeenCalledWith(expect.objectContaining({ active: false }));
+    expect(spies.deleteFrom).toHaveBeenCalledTimes(1);
+    expect(spies.deleteWhere).toHaveBeenCalledTimes(1);
     expect(writeAuditLogMock).toHaveBeenCalledWith(tx, {
       caseId: null,
       actorEmail: "admin@example.com",
@@ -225,6 +243,7 @@ describe("deactivateCounselor", () => {
 
     expect(dto.active).toBe(false);
     expect(spies.update).not.toHaveBeenCalled();
+    expect(spies.deleteFrom).toHaveBeenCalledTimes(1);
     expect(writeAuditLogMock).not.toHaveBeenCalled();
   });
 

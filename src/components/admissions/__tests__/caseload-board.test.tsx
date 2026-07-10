@@ -98,6 +98,15 @@ describe("CaseloadBoard", () => {
     expect(html).toContain("No cases");
   });
 
+  it("links every board card to its case detail page", () => {
+    const html = renderToStaticMarkup(
+      <CaseloadBoard rows={[summary({ caseId: "case-grace", studentName: "Grace Hopper" })]} />,
+    );
+
+    expect(html).toContain('href="/admissions/case-grace"');
+    expect(html).toContain("Open Grace Hopper&#x27;s admissions case");
+  });
+
   it("renders empty states for every column when there are no cases", () => {
     const html = renderToStaticMarkup(<CaseloadBoard rows={[]} />);
     const matches = html.match(/No cases/g) ?? [];

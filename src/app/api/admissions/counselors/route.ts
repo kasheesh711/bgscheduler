@@ -9,6 +9,7 @@ import {
   admissionsErrorResponse,
   requireAdmissionsAdmin,
   requireAdmissionsSession,
+  requireCounselorOrAdmin,
 } from "@/lib/admissions/access";
 import { deactivateCounselor, listCounselors, upsertCounselor } from "@/lib/admissions/counselors";
 
@@ -34,16 +35,20 @@ const PatchCounselorSchema = z.union([
 ]);
 
 /**
- * GET /api/admissions/counselors — lists the full counselor registry, active
- * and inactive (admin only — the registry grants sign-in capability).
+ * GET /api/admissions/counselors — admins see the full registry; counselors
+ * see only active choices for case assignment.
  */
 export async function GET() {
   try {
     const user = await requireAdmissionsSession();
-    await requireAdmissionsAdmin(user.email);
+    const access = await requireCounselorOrAdmin(user.email);
 
     const counselors = await listCounselors();
-    return NextResponse.json({ counselors });
+    return NextResponse.json({
+      counselors: access.role === "admin"
+        ? counselors
+        : counselors.filter((counselor) => counselor.active),
+    });
   } catch (error) {
     return admissionsErrorResponse("/api/admissions/counselors", error, "Counselors load failed");
   }

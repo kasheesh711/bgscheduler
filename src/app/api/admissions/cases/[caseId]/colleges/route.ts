@@ -16,6 +16,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   admissionsErrorResponse,
+  assertCaseMutationAllowed,
   requireAdmissionsSession,
   requireCaseAccess,
 } from "@/lib/admissions/access";
@@ -26,6 +27,7 @@ import {
   updateCollegeListItem,
   type AddCollegeEntry,
 } from "@/lib/admissions/colleges";
+import { admissionsHttpUrlSchema } from "@/lib/admissions/shared/urls";
 import { computeCollegeCompleteness } from "@/lib/admissions/recommenders";
 
 const ROUTE = "/api/admissions/cases/[caseId]/colleges";
@@ -90,6 +92,10 @@ const updateCollegeSchema = z.object({
   deadline: dateOnlySchema.nullish(),
   appStatus: appStatusSchema.optional(),
   category: collegeCategorySchema.optional(),
+  firstChoiceMajor: z.string().max(500).nullish(),
+  secondChoiceMajor: z.string().max(500).nullish(),
+  admissionsUrl: admissionsHttpUrlSchema.nullish(),
+  portalUrl: admissionsHttpUrlSchema.nullish(),
   aidOffered: aidAmountSchema.nullish(),
   aidNotes: z.string().nullish(),
 });
@@ -123,6 +129,7 @@ export async function POST(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "counselor");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {
@@ -164,6 +171,7 @@ export async function PATCH(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "counselor");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {
@@ -188,6 +196,10 @@ export async function PATCH(
       deadline: parsed.data.deadline,
       appStatus: parsed.data.appStatus,
       category: parsed.data.category,
+      firstChoiceMajor: parsed.data.firstChoiceMajor,
+      secondChoiceMajor: parsed.data.secondChoiceMajor,
+      admissionsUrl: parsed.data.admissionsUrl,
+      portalUrl: parsed.data.portalUrl,
       aidOffered: parsed.data.aidOffered,
       aidNotes: parsed.data.aidNotes,
     });
@@ -205,6 +217,7 @@ export async function DELETE(
     const user = await requireAdmissionsSession();
     const { caseId } = await ctx.params;
     const access = await requireCaseAccess(user.email, caseId, "counselor");
+    assertCaseMutationAllowed(access);
 
     const parsed = deleteQuerySchema.safeParse({
       itemId: new URL(request.url).searchParams.get("itemId"),

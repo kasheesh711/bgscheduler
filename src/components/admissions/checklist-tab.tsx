@@ -330,7 +330,7 @@ function TaskRow({
           <Button
             size="xs"
             variant={verified ? "outline" : "ghost"}
-            disabled={busy}
+            disabled={busy || (!verified && task.status !== "done")}
             onClick={() => onToggleVerified(task)}
             aria-label={
               verified
@@ -490,6 +490,7 @@ export function ChecklistTab({
             action: "verify",
             taskId: task.id,
             verified: task.verifiedAt === null,
+            expectedUpdatedAt: task.updatedAt,
           }),
         });
         const payload: unknown = await response.json().catch(() => null);
@@ -523,7 +524,11 @@ export function ChecklistTab({
       const response = await fetch(`/api/admissions/cases/${caseId}/tasks`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "delete", taskId: task.id }),
+        body: JSON.stringify({
+          action: "delete",
+          taskId: task.id,
+          expectedUpdatedAt: task.updatedAt,
+        }),
       });
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok) {

@@ -41,6 +41,7 @@ const CASE_ID = "11111111-1111-4111-8111-111111111111";
 const CASE_ID_B = "22222222-2222-4222-8222-222222222222";
 const TEMPLATE_ID = "77777777-7777-4777-8777-777777777777";
 const TASK_ID = "88888888-8888-4888-8888-888888888888";
+const TASK_TOKEN = "2026-07-01T00:00:00.000Z";
 
 const ACTOR = { email: "staff@example.com", role: "admin" as const };
 
@@ -79,10 +80,15 @@ interface UpdateCall {
  * Each db.select() resolves to the next queued result — the queue order must
  * match the function's query order.
  */
-function fakeDb(queue: unknown[][]) {
+function fakeDb(
+  queue: unknown[][],
+  options: { failAudit?: boolean; updateResults?: unknown[][] } = {},
+) {
   let i = 0;
   let generated = 0;
+  let returnedUpdate = 0;
   const selectCalls: number[] = [];
+  const lockCalls: string[] = [];
   const inserts: InsertCall[] = [];
   const updates: UpdateCall[] = [];
 
@@ -91,6 +97,10 @@ function fakeDb(queue: unknown[][]) {
     for (const method of ["from", "where", "innerJoin", "leftJoin", "orderBy", "groupBy", "limit"]) {
       b[method] = () => b;
     }
+    b.for = (strength: string) => {
+      lockCalls.push(strength);
+      return b;
+    };
     (b as { then: unknown }).then = (
       resolve: (value: unknown) => unknown,
       reject?: (error: unknown) => unknown,
@@ -122,7 +132,9 @@ function fakeDb(queue: unknown[][]) {
         return {
           returning: () => Promise.resolve(rows),
           then: (resolve: (value: unknown) => unknown, reject?: (error: unknown) => unknown) =>
-            Promise.resolve(undefined).then(resolve, reject),
+            (options.failAudit && table === admissionsAuditLog
+              ? Promise.reject(new Error("audit insert failed"))
+              : Promise.resolve(undefined)).then(resolve, reject),
         };
       },
     }),
@@ -131,7 +143,9 @@ function fakeDb(queue: unknown[][]) {
         updates.push({ table, set });
         const b: Record<string, unknown> = {};
         b.where = () => b;
-        b.returning = () => Promise.resolve([]);
+        b.returning = () => Promise.resolve(
+          options.updateResults?.[returnedUpdate++] ?? [{ id: TASK_ID }],
+        );
         (b as { then: unknown }).then = (
           resolve: (value: unknown) => unknown,
           reject?: (error: unknown) => unknown,
@@ -145,7 +159,7 @@ function fakeDb(queue: unknown[][]) {
     ...tx,
     transaction: async (cb: (t: unknown) => Promise<unknown>) => cb(tx),
   };
-  return { db: db as never, selectCalls, inserts, updates };
+  return { db: db as never, selectCalls, lockCalls, inserts, updates };
 }
 
 function auditInserts(inserts: InsertCall[]) {
@@ -243,7 +257,7 @@ describe("DEFAULT_CHECKLIST_ITEMS", () => {
       expect(item.itemKey).toMatch(/^[a-z][a-z0-9_]*$/);
       expect(keys.has(item.itemKey), item.itemKey).toBe(false);
       keys.add(item.itemKey);
-      expect(["student", "counselor", "parent"]).toContain(item.defaultOwner);
+      expect(["student", "counselor"]).toContain(item.defaultOwner);
       expect(item.title.trim().length).toBeGreaterThan(0);
       expect(item.sortOrder).toBe(index);
     });
@@ -351,6 +365,13 @@ describe("createTemplateVersion", () => {
     await expect(createTemplateVersion(
       COHORT_ID,
       [seedItem({ defaultOwner: "teacher" as never })],
+      ACTOR,
+      {},
+      db,
+    )).rejects.toThrow(/Invalid template item owner/);
+    await expect(createTemplateVersion(
+      COHORT_ID,
+      [seedItem({ defaultOwner: "parent" })],
       ACTOR,
       {},
       db,
@@ -687,7 +708,7 @@ describe("pushNewItemsToCohortCases", () => {
 
 describe("updateTaskStatus", () => {
   it("lets a student tick a student-owned task on their own case (audited)", async () => {
-    const { db, inserts, updates } = fakeDb([[taskRow({ owner: "student" })]]);
+    const { db, inserts, lockCalls, updates } = fakeDb([[taskRow({ owner: "student" })]]);
 
     const result = await updateTaskStatus(
       { access: STUDENT_ACCESS, taskId: TASK_ID, status: "done" },
@@ -698,6 +719,7 @@ describe("updateTaskStatus", () => {
     expect(updates).toHaveLength(1);
     expect(updates[0].table).toBe(admissionsCaseTasks);
     expect(updates[0].set).toMatchObject({ status: "done" });
+    expect(lockCalls).toEqual(["update"]);
 
     const audits = auditInserts(inserts);
     expect(audits).toHaveLength(1);
@@ -778,6 +800,21 @@ describe("updateTaskStatus", () => {
     expect(inserts).toHaveLength(0);
   });
 
+  it("fails the transaction when the audit insert fails", async () => {
+    const { db, inserts, updates } = fakeDb(
+      [[taskRow({ owner: "student" })]],
+      { failAudit: true },
+    );
+
+    await expect(updateTaskStatus(
+      { access: STUDENT_ACCESS, taskId: TASK_ID, status: "done" },
+      db,
+    )).rejects.toThrow("audit insert failed");
+
+    expect(updates).toHaveLength(1);
+    expect(auditInserts(inserts)).toHaveLength(1);
+  });
+
   it("rejects an unknown status before any query (fail-closed)", async () => {
     const { db, selectCalls } = fakeDb([]);
 
@@ -800,10 +837,12 @@ describe("updateTaskStatus", () => {
 
 describe("setTaskVerified", () => {
   it("stamps counselor verification on a student-owned task (audited)", async () => {
-    const { db, inserts, updates } = fakeDb([[taskRow({ owner: "student", status: "done" })]]);
+    const { db, inserts, lockCalls, updates } = fakeDb([[
+      taskRow({ owner: "student", status: "done" }),
+    ]]);
 
     const result = await setTaskVerified(
-      { access: COUNSELOR_ACCESS, taskId: TASK_ID, verified: true },
+      { access: COUNSELOR_ACCESS, taskId: TASK_ID, verified: true, expectedUpdatedAt: TASK_TOKEN },
       db,
     );
 
@@ -811,6 +850,7 @@ describe("setTaskVerified", () => {
     expect(updates[0].set).toMatchObject({ verifiedByEmail: "staff@example.com" });
     expect(updates[0].set.verifiedAt).toBeInstanceOf(Date);
     expect(result.verifiedByEmail).toBe("staff@example.com");
+    expect(lockCalls).toEqual(["update"]);
 
     const audits = auditInserts(inserts);
     expect(audits).toHaveLength(1);
@@ -821,7 +861,7 @@ describe("setTaskVerified", () => {
     const { db, selectCalls } = fakeDb([]);
 
     await expect(setTaskVerified(
-      { access: STUDENT_ACCESS, taskId: TASK_ID, verified: true },
+      { access: STUDENT_ACCESS, taskId: TASK_ID, verified: true, expectedUpdatedAt: TASK_TOKEN },
       db,
     )).rejects.toThrow("Forbidden");
     expect(selectCalls).toHaveLength(0);
@@ -831,9 +871,34 @@ describe("setTaskVerified", () => {
     const { db, updates } = fakeDb([[taskRow({ owner: "counselor" })]]);
 
     await expect(setTaskVerified(
-      { access: COUNSELOR_ACCESS, taskId: TASK_ID, verified: true },
+      { access: COUNSELOR_ACCESS, taskId: TASK_ID, verified: true, expectedUpdatedAt: TASK_TOKEN },
       db,
     )).rejects.toThrow("Conflict");
+    expect(updates).toHaveLength(0);
+  });
+
+  it("rejects marking a task verified unless its locked current status is done", async () => {
+    const { db, inserts, updates } = fakeDb([[taskRow({ owner: "student", status: "in_progress" })]]);
+
+    await expect(setTaskVerified({
+      access: COUNSELOR_ACCESS,
+      taskId: TASK_ID,
+      verified: true,
+      expectedUpdatedAt: TASK_TOKEN,
+    }, db)).rejects.toThrow("Conflict");
+    expect(updates).toHaveLength(0);
+    expect(auditInserts(inserts)).toHaveLength(0);
+  });
+
+  it("rejects a stale verification token", async () => {
+    const { db, updates } = fakeDb([[taskRow({ owner: "student", status: "done" })]]);
+
+    await expect(setTaskVerified({
+      access: COUNSELOR_ACCESS,
+      taskId: TASK_ID,
+      verified: true,
+      expectedUpdatedAt: "2026-06-30T00:00:00.000Z",
+    }, db)).rejects.toThrow("Conflict");
     expect(updates).toHaveLength(0);
   });
 
@@ -845,7 +910,7 @@ describe("setTaskVerified", () => {
     })]]);
 
     const result = await setTaskVerified(
-      { access: COUNSELOR_ACCESS, taskId: TASK_ID, verified: false },
+      { access: COUNSELOR_ACCESS, taskId: TASK_ID, verified: false, expectedUpdatedAt: TASK_TOKEN },
       db,
     );
 
@@ -857,7 +922,12 @@ describe("setTaskVerified", () => {
   it("is a no-op when already in the requested state", async () => {
     const { db, inserts, updates } = fakeDb([[taskRow({ owner: "student" })]]);
 
-    await setTaskVerified({ access: COUNSELOR_ACCESS, taskId: TASK_ID, verified: false }, db);
+    await setTaskVerified({
+      access: COUNSELOR_ACCESS,
+      taskId: TASK_ID,
+      verified: false,
+      expectedUpdatedAt: TASK_TOKEN,
+    }, db);
 
     expect(updates).toHaveLength(0);
     expect(inserts).toHaveLength(0);
@@ -987,6 +1057,11 @@ describe("createCustomTask", () => {
       title: "X",
       owner: "teacher" as never,
     }, db)).rejects.toThrow(/Invalid task owner/);
+    await expect(createCustomTask({
+      access: COUNSELOR_ACCESS,
+      title: "X",
+      owner: "parent",
+    }, db)).rejects.toThrow(/Invalid task owner/);
   });
 });
 
@@ -997,6 +1072,7 @@ describe("updateTask", () => {
     const result = await updateTask({
       access: COUNSELOR_ACCESS,
       taskId: TASK_ID,
+      expectedUpdatedAt: TASK_TOKEN,
       title: "Draft the FULL activities list",
       dueDate: "2026-09-01",
     }, db);
@@ -1026,11 +1102,25 @@ describe("updateTask", () => {
     await updateTask({
       access: COUNSELOR_ACCESS,
       taskId: TASK_ID,
+      expectedUpdatedAt: TASK_TOKEN,
       title: "Draft the activities list",
     }, db);
 
     expect(updates).toHaveLength(0);
     expect(inserts).toHaveLength(0);
+  });
+
+  it("rejects a stale shared-field edit and locks the task row", async () => {
+    const { db, lockCalls, updates } = fakeDb([[taskRow()]]);
+
+    await expect(updateTask({
+      access: COUNSELOR_ACCESS,
+      taskId: TASK_ID,
+      expectedUpdatedAt: "2026-06-30T00:00:00.000Z",
+      title: "Stale title",
+    }, db)).rejects.toThrow("Conflict");
+    expect(lockCalls).toEqual(["update"]);
+    expect(updates).toHaveLength(0);
   });
 
   it("forbids students", async () => {
@@ -1039,6 +1129,7 @@ describe("updateTask", () => {
     await expect(updateTask({
       access: STUDENT_ACCESS,
       taskId: TASK_ID,
+      expectedUpdatedAt: TASK_TOKEN,
       title: "X",
     }, db)).rejects.toThrow("Forbidden");
     expect(selectCalls).toHaveLength(0);
@@ -1050,6 +1141,7 @@ describe("updateTask", () => {
     await expect(updateTask({
       access: COUNSELOR_ACCESS,
       taskId: TASK_ID,
+      expectedUpdatedAt: TASK_TOKEN,
       recurrence: { freq: "monthly", until: "2026-12-31" } as never,
     }, db)).rejects.toThrow(/Invalid recurrence/);
     expect(selectCalls).toHaveLength(0);
@@ -1061,6 +1153,7 @@ describe("updateTask", () => {
     await expect(updateTask({
       access: COUNSELOR_ACCESS,
       taskId: TASK_ID,
+      expectedUpdatedAt: TASK_TOKEN,
       title: "X",
     }, db)).rejects.toThrow("NotFound");
   });
@@ -1071,24 +1164,33 @@ describe("softDeleteTask", () => {
     // Default taskRow carries an itemKey (template-derived).
     const { db, inserts, updates } = fakeDb([[taskRow()]]);
 
-    await expect(softDeleteTask({ access: COUNSELOR_ACCESS, taskId: TASK_ID }, db))
+    await expect(softDeleteTask({
+      access: COUNSELOR_ACCESS,
+      taskId: TASK_ID,
+      expectedUpdatedAt: TASK_TOKEN,
+    }, db))
       .rejects.toThrow("Conflict");
     expect(updates).toHaveLength(0);
     expect(inserts).toHaveLength(0);
   });
 
   it("soft-deletes a custom task (null itemKey) with an audit row", async () => {
-    const { db, inserts, updates } = fakeDb([[taskRow({
+    const { db, inserts, lockCalls, updates } = fakeDb([[taskRow({
       itemKey: null,
       templateId: null,
       templateVersion: null,
       phase: "custom",
     })]]);
 
-    await softDeleteTask({ access: COUNSELOR_ACCESS, taskId: TASK_ID }, db);
+    await softDeleteTask({
+      access: COUNSELOR_ACCESS,
+      taskId: TASK_ID,
+      expectedUpdatedAt: TASK_TOKEN,
+    }, db);
 
     expect(updates).toHaveLength(1);
     expect(updates[0].set.deletedAt).toBeInstanceOf(Date);
+    expect(lockCalls).toEqual(["update"]);
 
     const audits = auditInserts(inserts);
     expect(audits).toHaveLength(1);
@@ -1098,7 +1200,11 @@ describe("softDeleteTask", () => {
   it("forbids students", async () => {
     const { db, selectCalls } = fakeDb([]);
 
-    await expect(softDeleteTask({ access: STUDENT_ACCESS, taskId: TASK_ID }, db))
+    await expect(softDeleteTask({
+      access: STUDENT_ACCESS,
+      taskId: TASK_ID,
+      expectedUpdatedAt: TASK_TOKEN,
+    }, db))
       .rejects.toThrow("Forbidden");
     expect(selectCalls).toHaveLength(0);
   });
@@ -1106,8 +1212,27 @@ describe("softDeleteTask", () => {
   it("throws NotFound for a missing or already-deleted task", async () => {
     const { db } = fakeDb([[]]);
 
-    await expect(softDeleteTask({ access: COUNSELOR_ACCESS, taskId: TASK_ID }, db))
+    await expect(softDeleteTask({
+      access: COUNSELOR_ACCESS,
+      taskId: TASK_ID,
+      expectedUpdatedAt: TASK_TOKEN,
+    }, db))
       .rejects.toThrow("NotFound");
+  });
+
+  it("does not audit when the conditional delete loses a race", async () => {
+    const { db, inserts } = fakeDb([[taskRow({
+      itemKey: null,
+      templateId: null,
+      templateVersion: null,
+    })]], { updateResults: [[]] });
+
+    await expect(softDeleteTask({
+      access: COUNSELOR_ACCESS,
+      taskId: TASK_ID,
+      expectedUpdatedAt: TASK_TOKEN,
+    }, db)).rejects.toThrow("Conflict");
+    expect(auditInserts(inserts)).toHaveLength(0);
   });
 });
 

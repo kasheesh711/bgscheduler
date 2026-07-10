@@ -9,7 +9,11 @@ vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 vi.mock("@/lib/admissions/access", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/admissions/access")>();
-  return { ...actual, requireAdmissionsAdmin: vi.fn() };
+  return {
+    ...actual,
+    requireAdmissionsAdmin: vi.fn(),
+    requireCounselorOrAdmin: vi.fn(),
+  };
 });
 vi.mock("@/lib/admissions/counselors", () => ({
   listCounselors: vi.fn(),
@@ -18,7 +22,7 @@ vi.mock("@/lib/admissions/counselors", () => ({
 }));
 
 import { auth } from "@/lib/auth";
-import { requireAdmissionsAdmin } from "@/lib/admissions/access";
+import { requireAdmissionsAdmin, requireCounselorOrAdmin } from "@/lib/admissions/access";
 import {
   deactivateCounselor,
   listCounselors,
@@ -29,6 +33,11 @@ import { GET, PATCH, POST } from "@/app/api/admissions/counselors/route";
 const authMock = auth as unknown as Mock;
 
 const ADMIN_STAFF = { email: "admin@example.com", role: "admin" as const, isAdmin: true };
+const COUNSELOR_STAFF = {
+  email: "counselor@example.com",
+  role: "counselor" as const,
+  isAdmin: false,
+};
 
 const ADMIN_SESSION = {
   user: { email: "admin@example.com", name: "Admin", allowedPages: null },
@@ -65,6 +74,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   authMock.mockResolvedValue(ADMIN_SESSION);
   vi.mocked(requireAdmissionsAdmin).mockResolvedValue(ADMIN_STAFF);
+  vi.mocked(requireCounselorOrAdmin).mockResolvedValue(ADMIN_STAFF);
   vi.mocked(listCounselors).mockResolvedValue([COUNSELOR_DTO]);
   vi.mocked(upsertCounselor).mockResolvedValue(COUNSELOR_DTO);
   vi.mocked(deactivateCounselor).mockResolvedValue({ ...COUNSELOR_DTO, active: false });
@@ -78,19 +88,23 @@ describe("GET /api/admissions/counselors", () => {
     await expect(res.json()).resolves.toEqual({ counselors: [COUNSELOR_DTO] });
   });
 
-  it("returns 403 for a counselor session (admin only)", async () => {
+  it("returns only active assignment choices for a counselor session", async () => {
     authMock.mockResolvedValue(COUNSELOR_SESSION);
-    vi.mocked(requireAdmissionsAdmin).mockRejectedValue(new Error("Forbidden"));
+    vi.mocked(requireCounselorOrAdmin).mockResolvedValue(COUNSELOR_STAFF);
+    vi.mocked(listCounselors).mockResolvedValue([
+      COUNSELOR_DTO,
+      { ...COUNSELOR_DTO, id: "44444444-4444-4444-8444-444444444444", email: "inactive@example.com", active: false },
+    ]);
 
     const res = await GET();
 
-    expect(res.status).toBe(403);
-    expect(listCounselors).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ counselors: [COUNSELOR_DTO] });
   });
 
   it("returns 403 for a removed admin despite an admin JWT (instant revocation)", async () => {
     authMock.mockResolvedValue(ADMIN_SESSION);
-    vi.mocked(requireAdmissionsAdmin).mockRejectedValue(new Error("Forbidden"));
+    vi.mocked(requireCounselorOrAdmin).mockRejectedValue(new Error("Forbidden"));
 
     const res = await GET();
 
@@ -113,7 +127,7 @@ describe("GET /api/admissions/counselors", () => {
     const res = await GET();
 
     expect(res.status).toBe(500);
-    await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+    await expect(res.json()).resolves.toEqual({ error: "Counselors load failed" });
   });
 });
 

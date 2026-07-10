@@ -26,7 +26,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  ADMISSIONS_TASK_OWNERS,
+  ADMISSIONS_ASSIGNABLE_TASK_OWNERS,
   type AdmissionsTaskOwner,
 } from "@/lib/admissions/shared/meetings";
 import type { AdmissionsTaskDto, AdmissionsTaskRecurrence } from "@/lib/admissions/checklists";
@@ -251,7 +251,7 @@ export function CustomTaskDialog({
                   }))
                 }
               >
-                {ADMISSIONS_TASK_OWNERS.map((owner) => (
+                {ADMISSIONS_ASSIGNABLE_TASK_OWNERS.map((owner) => (
                   <option key={owner} value={owner}>
                     {TASK_OWNER_LABELS[owner]}
                   </option>

@@ -73,6 +73,7 @@ const ESSAY_DTO: AdmissionsEssayDto = {
   counselorStage: null,
   deadline: "2026-10-15",
   driveUrl: "https://docs.google.com/document/d/abc",
+  sharedWithFamily: false,
   lastStudentUpdateAt: "2026-07-01T00:00:00.000Z",
   createdAt: "2026-06-01T00:00:00.000Z",
   updatedAt: "2026-07-01T00:00:00.000Z",
@@ -157,7 +158,7 @@ describe("/api/admissions/cases/[caseId]/essays", () => {
       const res = await GET(new Request("http://test.local"), makeCtx());
 
       expect(res.status).toBe(500);
-      await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+      await expect(res.json()).resolves.toEqual({ error: "Essay list failed" });
     });
   });
 
@@ -166,8 +167,6 @@ describe("/api/admissions/cases/[caseId]/essays", () => {
       const res = await POST(
         makeRequest("POST", {
           prompt: "Why this college?",
-          listItemId: LIST_ITEM_ID,
-          deadline: "2026-11-01",
           driveUrl: "https://docs.google.com/document/d/xyz",
         }),
         makeCtx(),
@@ -179,9 +178,10 @@ describe("/api/admissions/cases/[caseId]/essays", () => {
       expect(createEssay).toHaveBeenCalledWith({
         access: STUDENT_ACCESS,
         prompt: "Why this college?",
-        listItemId: LIST_ITEM_ID,
-        deadline: "2026-11-01",
+        listItemId: undefined,
+        deadline: undefined,
         driveUrl: "https://docs.google.com/document/d/xyz",
+        sharedWithFamily: undefined,
       });
     });
 
@@ -198,7 +198,18 @@ describe("/api/admissions/cases/[caseId]/essays", () => {
         listItemId: undefined,
         deadline: undefined,
         driveUrl: undefined,
+        sharedWithFamily: undefined,
       });
+    });
+
+    it.each([
+      { listItemId: LIST_ITEM_ID },
+      { deadline: "2026-11-01" },
+      { sharedWithFamily: true },
+    ])("keeps staff-owned creation fields unavailable to students: %j", async (fields) => {
+      const res = await POST(makeRequest("POST", { prompt: "Prompt", ...fields }), makeCtx());
+      expect(res.status).toBe(403);
+      expect(createEssay).not.toHaveBeenCalled();
     });
 
     it("returns 400 for an empty prompt", async () => {
@@ -237,6 +248,8 @@ describe("/api/admissions/cases/[caseId]/essays", () => {
     });
 
     it("returns 404 when listItemId is not a live list item of the case", async () => {
+      signInAs("counselor@example.com", "counselor");
+      vi.mocked(requireCaseAccess).mockResolvedValue(COUNSELOR_ACCESS);
       vi.mocked(createEssay).mockRejectedValue(new Error("NotFound"));
 
       const res = await POST(
@@ -283,6 +296,7 @@ describe("/api/admissions/cases/[caseId]/essays", () => {
         counselorStage: undefined,
         deadline: undefined,
         listItemId: undefined,
+        sharedWithFamily: undefined,
       });
     });
 
@@ -317,6 +331,32 @@ describe("/api/admissions/cases/[caseId]/essays", () => {
       expect(updateEssay).not.toHaveBeenCalled();
     });
 
+    it("returns 403 when a student releases an essay to family", async () => {
+      const res = await PATCH(
+        makeRequest("PATCH", { essayId: ESSAY_ID, sharedWithFamily: true }),
+        makeCtx(),
+      );
+
+      expect(res.status).toBe(403);
+      expect(updateEssay).not.toHaveBeenCalled();
+    });
+
+    it("lets a counselor explicitly release an essay to family", async () => {
+      signInAs("counselor@example.com", "counselor");
+      vi.mocked(requireCaseAccess).mockResolvedValue(COUNSELOR_ACCESS);
+      const res = await PATCH(
+        makeRequest("PATCH", { essayId: ESSAY_ID, sharedWithFamily: true }),
+        makeCtx(),
+      );
+
+      expect(res.status).toBe(200);
+      expect(updateEssay).toHaveBeenCalledWith(expect.objectContaining({
+        access: COUNSELOR_ACCESS,
+        essayId: ESSAY_ID,
+        sharedWithFamily: true,
+      }));
+    });
+
     it("lets a counselor set counselorStage / deadline / listItemId", async () => {
       signInAs("counselor@example.com", "counselor");
       vi.mocked(requireCaseAccess).mockResolvedValue(COUNSELOR_ACCESS);
@@ -342,6 +382,7 @@ describe("/api/admissions/cases/[caseId]/essays", () => {
         counselorStage: "feedback",
         deadline: "2026-12-01",
         listItemId: LIST_ITEM_ID,
+        sharedWithFamily: undefined,
       });
     });
 

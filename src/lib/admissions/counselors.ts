@@ -6,9 +6,13 @@
 // with its append-only audit row via withAuditedTransaction (caseId: null —
 // registry edits are cross-case admin actions).
 
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
-import { admissionsCounselors } from "@/lib/db/schema";
+import {
+  adminUsers,
+  admissionsCounselors,
+  googleOAuthTokens,
+} from "@/lib/db/schema";
 import { computeFieldDiff, withAuditedTransaction, writeAuditLog } from "./audit";
 import type { AdmissionsCounselorDto, AdmissionsSessionUser } from "./types";
 
@@ -19,6 +23,22 @@ export type AdmissionsActor = Pick<AdmissionsSessionUser, "email" | "role">;
 const COUNSELOR_AUDIT_FIELDS = ["name", "active"] as const;
 
 type CounselorRow = typeof admissionsCounselors.$inferSelect;
+
+async function deleteOrphanedSheetsToken(
+  tx: Parameters<typeof writeAuditLog>[0],
+  normalizedEmail: string,
+): Promise<void> {
+  // An independently allowlisted admin remains authorized and keeps the
+  // connection. Counselor-only accounts lose stored Sheets credentials as
+  // part of the same transaction that revokes their staff role.
+  await tx.delete(googleOAuthTokens).where(and(
+    eq(googleOAuthTokens.email, normalizedEmail),
+    sql<boolean>`NOT EXISTS (
+      SELECT 1 FROM ${adminUsers}
+      WHERE ${adminUsers.email} = ${googleOAuthTokens.email}
+    )`,
+  ));
+}
 
 function toCounselorDto(row: CounselorRow): AdmissionsCounselorDto {
   return {
@@ -71,6 +91,9 @@ export async function upsertCounselor(
   if (!trimmedName) throw new Error("Counselor name is required");
 
   return withAuditedTransaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(
+      ${`google-sheets-token:${normalizedEmail}`}, 0
+    ))`);
     const existingRows = await tx
       .select()
       .from(admissionsCounselors)
@@ -83,7 +106,10 @@ export async function upsertCounselor(
       { name: trimmedName, active },
       COUNSELOR_AUDIT_FIELDS,
     );
-    if (existing && Object.keys(diff).length === 0) return toCounselorDto(existing);
+    if (existing && Object.keys(diff).length === 0) {
+      if (!active) await deleteOrphanedSheetsToken(tx, normalizedEmail);
+      return toCounselorDto(existing);
+    }
 
     const upsertedRows = await tx
       .insert(admissionsCounselors)
@@ -94,6 +120,8 @@ export async function upsertCounselor(
       })
       .returning();
     const upserted = upsertedRows[0];
+
+    if (!active) await deleteOrphanedSheetsToken(tx, normalizedEmail);
 
     await writeAuditLog(tx, {
       caseId: null,
@@ -132,6 +160,9 @@ export async function deactivateCounselor(
   if (!normalizedEmail) throw new Error("Counselor email is required");
 
   return withAuditedTransaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(
+      ${`google-sheets-token:${normalizedEmail}`}, 0
+    ))`);
     const rows = await tx
       .select()
       .from(admissionsCounselors)
@@ -139,13 +170,21 @@ export async function deactivateCounselor(
       .limit(1);
     const existing: CounselorRow | undefined = rows[0];
     if (!existing) throw new Error("NotFound");
-    if (!existing.active) return toCounselorDto(existing);
+    if (!existing.active) {
+      await deleteOrphanedSheetsToken(tx, normalizedEmail);
+      return toCounselorDto(existing);
+    }
 
     const updatedRows = await tx
       .update(admissionsCounselors)
       .set({ active: false, updatedAt: new Date() })
       .where(eq(admissionsCounselors.id, existing.id))
       .returning();
+
+    // Remove an orphaned counselor token in the same transaction. An account
+    // that is independently an admin keeps its connection and remains
+    // authorized by the token getters.
+    await deleteOrphanedSheetsToken(tx, normalizedEmail);
 
     await writeAuditLog(tx, {
       caseId: null,

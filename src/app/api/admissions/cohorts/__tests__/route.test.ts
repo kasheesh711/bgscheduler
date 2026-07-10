@@ -125,7 +125,7 @@ describe("GET /api/admissions/cohorts", () => {
     const res = await GET();
 
     expect(res.status).toBe(500);
-    await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+    await expect(res.json()).resolves.toEqual({ error: "Cohorts load failed" });
   });
 });
 
@@ -211,6 +211,6 @@ describe("POST /api/admissions/cohorts", () => {
     const res = await POST(postRequest({ name: "Class of 2027", graduationYear: 2027 }));
 
     expect(res.status).toBe(500);
-    await expect(res.json()).resolves.toEqual({ error: "connection refused" });
+    await expect(res.json()).resolves.toEqual({ error: "Cohort creation failed" });
   });
 });

@@ -7,8 +7,8 @@
 // Design: docs/casemanagementsystem_design.md — PRD CM-92 (resource library
 // topics mirror the 10 checklist phases plus a "general" bucket).
 
-import { z } from "zod";
 import { ADMISSIONS_CHECKLIST_PHASES, type AdmissionsPhaseKey } from "./config";
+import { admissionsHttpsUrlSchema } from "./urls";
 
 /** Resource topic: one of the 10 checklist phase keys, or "general". */
 export type AdmissionsResourceTopic = AdmissionsPhaseKey | "general";
@@ -42,10 +42,4 @@ export function getResourceTopicLabel(topic: string): string | null {
  * the lib mutations and the route body schemas so both layers enforce the
  * same rule.
  */
-export const admissionsResourceUrlSchema = z
-  .string()
-  .trim()
-  .url()
-  .refine((value) => value.startsWith("https://"), {
-    message: "Resource URLs must use https",
-  });
+export const admissionsResourceUrlSchema = admissionsHttpsUrlSchema;

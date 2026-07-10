@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import {
   admissionsErrorResponse,
+  assertCaseMutationAllowed,
   requireAdmissionsSession,
   requireCaseAccess,
 } from "@/lib/admissions/access";
@@ -43,6 +44,7 @@ const MemberActionSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("reinvite"),
     memberId: z.string().uuid(),
+    expectedUpdatedAt: z.string().datetime(),
   }),
   z.object({
     action: z.literal("change_email"),
@@ -76,6 +78,7 @@ export async function POST(request: NextRequest, context: MembersRouteContext) {
     const user = await requireAdmissionsSession();
     const { caseId } = await context.params;
     const access = await requireCaseAccess(user.email, caseId, "counselor");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {
@@ -121,6 +124,7 @@ export async function PATCH(request: NextRequest, context: MembersRouteContext) 
     const user = await requireAdmissionsSession();
     const { caseId } = await context.params;
     const access = await requireCaseAccess(user.email, caseId, "counselor");
+    assertCaseMutationAllowed(access);
 
     let body: unknown;
     try {
@@ -140,7 +144,12 @@ export async function PATCH(request: NextRequest, context: MembersRouteContext) 
     if (parsed.data.action === "revoke") {
       member = await revokeMember({ caseId, memberId: parsed.data.memberId, actor });
     } else if (parsed.data.action === "reinvite") {
-      member = await reInvite({ caseId, memberId: parsed.data.memberId, actor });
+      member = await reInvite({
+        caseId,
+        memberId: parsed.data.memberId,
+        actor,
+        expectedUpdatedAt: parsed.data.expectedUpdatedAt,
+      });
     } else {
       const adminOverride =
         access.role === "admin" && parsed.data.adminOverride === true;

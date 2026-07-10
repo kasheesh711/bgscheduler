@@ -19,6 +19,10 @@ import {
   isStalenessAmber,
   type EssayCollegeOption,
 } from "../essays-view";
+import {
+  buildEssayFromPromptPayload,
+  buildPromptCatalogQuery,
+} from "../essay-prompt-chooser";
 import type { AdmissionsEssayListRowDto } from "@/lib/admissions/essays";
 import type { CaseRole } from "@/lib/admissions/types";
 
@@ -166,7 +170,7 @@ describe("buildAddEssayPayload", () => {
         { prompt: "  Why us? ", listItemId: "", deadline: "", driveUrl: " " },
         false,
       ),
-    ).toEqual({ prompt: "Why us?", listItemId: null, driveUrl: null });
+    ).toEqual({ prompt: "Why us?", driveUrl: null });
   });
 
   it("includes the deadline for staff only (§2.4 counselor+ field)", () => {
@@ -182,10 +186,9 @@ describe("buildAddEssayPayload", () => {
       driveUrl: "https://docs.google.com/document/d/abc",
       deadline: "2026-11-01",
     });
-    // A student payload NEVER carries a deadline, even if form state has one.
+    // A student payload never carries staff-owned college linkage or deadline.
     expect(buildAddEssayPayload(values, false)).toEqual({
       prompt: "Why us?",
-      listItemId: COLLEGE_OPTIONS[0].id,
       driveUrl: "https://docs.google.com/document/d/abc",
     });
   });
@@ -263,14 +266,41 @@ describe("EssaysView role gates", () => {
     const html = renderView({ viewerRole: "parent" });
     expect(html).not.toContain("<select");
     expect(html).not.toContain('data-testid="add-essay"');
+    expect(html).not.toContain('data-testid="open-prompt-catalog"');
     expect(html).toContain(ESSAY_STATUS_LABELS.feedback);
   });
 
   it("offers the add-essay button to students and staff alike (self-report surface)", () => {
-    expect(renderView({ viewerRole: "student" })).toContain('data-testid="add-essay"');
+    const student = renderView({ viewerRole: "student" });
+    expect(student).toContain('data-testid="add-essay"');
+    expect(student).toContain('data-testid="open-prompt-catalog"');
     expect(renderView({ viewerRole: "counselor", variant: "staff" })).toContain(
       'data-testid="add-essay"',
     );
+  });
+});
+
+describe("essay prompt catalog chooser", () => {
+  it("builds a trimmed institution/cycle search", () => {
+    const query = new URLSearchParams(
+      buildPromptCatalogQuery("  Harvard  ", " 2026-27 "),
+    );
+    expect(query.get("institution")).toBe("Harvard");
+    expect(query.get("cycle")).toBe("2026-27");
+    expect(query.get("activeOnly")).toBe("true");
+  });
+
+  it("never lets a student set official college linkage or a deadline from the catalog", () => {
+    expect(
+      buildEssayFromPromptPayload({
+        promptId: "33333333-cccc-4ccc-8ccc-333333333333",
+        listItemId: COLLEGE_OPTIONS[0].id,
+        deadline: "2026-11-01",
+        isStaff: false,
+      }),
+    ).toEqual({
+      promptId: "33333333-cccc-4ccc-8ccc-333333333333",
+    });
   });
 });
 

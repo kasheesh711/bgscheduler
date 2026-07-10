@@ -10,6 +10,7 @@
 // ----------------------------------------------------------------------------
 
 import { useMemo } from "react";
+import Link from "next/link";
 import { GraduationCap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -48,7 +49,11 @@ export function groupCaseloadByStatus(
 function BoardCard({ row, todayIso }: { row: AdmissionsCaseSummary; todayIso: string }) {
   const deadline = formatNextDeadline(row.nextDeadline, todayIso);
   return (
-    <div className="flex flex-col gap-1.5 rounded-lg bg-card p-3 text-sm ring-1 ring-foreground/10">
+    <Link
+      href={`/admissions/${row.caseId}`}
+      aria-label={`Open ${row.studentName}'s admissions case`}
+      className="flex flex-col gap-1.5 rounded-lg bg-card p-3 text-sm ring-1 ring-foreground/10 outline-none transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring"
+    >
       <div>
         <span className="font-medium">{row.studentName}</span>
         {row.preferredName ? (
@@ -78,7 +83,7 @@ function BoardCard({ row, todayIso }: { row: AdmissionsCaseSummary; todayIso: st
           {formatDaysSinceTouch(row.daysSinceLastTouch)}
         </span>
       </div>
-    </div>
+    </Link>
   );
 }
 

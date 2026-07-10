@@ -31,9 +31,9 @@
 // state-machine violations → Error("Conflict"); payload-shape violations
 // throw descriptive Errors (routes' Zod schemas are the 400 boundary).
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
-import { admissionsSelfReportSections } from "@/lib/db/schema";
+import { admissionsCases, admissionsSelfReportSections } from "@/lib/db/schema";
 import {
   withAuditedTransaction,
   writeAuditLog,
@@ -45,6 +45,11 @@ import { isUuidShaped } from "./members";
 import type { CaseAccess } from "./types";
 
 type SectionRow = typeof admissionsSelfReportSections.$inferSelect;
+
+/** Ensures an optimistic-concurrency token always advances at millisecond precision. */
+function nextMutationTimestamp(previous: Date): Date {
+  return new Date(Math.max(Date.now(), previous.getTime() + 1));
+}
 
 // ── State union (mirrors admissions_submission_state pgEnum) ────────────
 
@@ -163,6 +168,178 @@ export const SECTION_DEFINITIONS: readonly AdmissionsSectionDefinition[] = [
             type: "textarea",
             maxLength: 600,
             helper: "Classes, clubs, commitments — what your week actually looks like.",
+          },
+        ],
+      },
+      {
+        key: "identity_and_citizenship",
+        title: "Identity & citizenship",
+        fields: [
+          {
+            key: "date_of_birth",
+            label: "Date of birth",
+            type: "text",
+            maxLength: 20,
+            helper: "Use YYYY-MM-DD where possible.",
+            example: "2009-04-18",
+          },
+          {
+            key: "pronouns",
+            label: "Pronouns",
+            type: "text",
+            maxLength: 40,
+            helper: "How you would like the counseling team to refer to you.",
+          },
+          {
+            key: "gender_identity",
+            label: "Gender identity",
+            type: "text",
+            maxLength: 80,
+            helper: "Optional; use the wording you are comfortable with.",
+          },
+          {
+            key: "citizenship_status",
+            label: "US citizenship or residency status",
+            type: "select",
+            options: [
+              "US citizen",
+              "US dual citizen",
+              "US permanent resident",
+              "Non-US citizen",
+              "Prefer not to say",
+            ],
+            helper: "This affects application and financial-aid requirements.",
+          },
+          {
+            key: "countries_of_citizenship",
+            label: "Countries of citizenship",
+            type: "text",
+            maxLength: 160,
+            helper: "Country names only; never enter passport or national-ID numbers.",
+          },
+          {
+            key: "birth_country",
+            label: "Country of birth",
+            type: "text",
+            maxLength: 80,
+            helper: "Country name only.",
+          },
+          {
+            key: "years_in_current_country",
+            label: "Years living in your current country",
+            type: "text",
+            maxLength: 40,
+            helper: "An estimate is fine.",
+          },
+        ],
+      },
+      {
+        key: "household_and_contact",
+        title: "Household & contact",
+        fields: [
+          {
+            key: "personal_email",
+            label: "Personal email",
+            type: "text",
+            maxLength: 160,
+            helper: "Use an address you will keep after graduation.",
+          },
+          {
+            key: "primary_phone",
+            label: "Primary phone",
+            type: "text",
+            maxLength: 40,
+            helper: "Include country code.",
+          },
+          {
+            key: "home_address",
+            label: "Home mailing address",
+            type: "textarea",
+            maxLength: 400,
+            helper: "Street, city, region, postal code, and country.",
+          },
+          {
+            key: "household_members",
+            label: "Household members",
+            type: "textarea",
+            maxLength: 600,
+            helper: "Who lives with you and their relationship to you.",
+          },
+          {
+            key: "parent_guardian_education",
+            label: "Parent or guardian education",
+            type: "textarea",
+            maxLength: 500,
+            helper: "Highest education and institutions, if known.",
+          },
+          {
+            key: "parent_guardian_occupations",
+            label: "Parent or guardian occupations",
+            type: "textarea",
+            maxLength: 500,
+            helper: "Current or most recent roles, if known.",
+          },
+          {
+            key: "household_context",
+            label: "Household context relevant to applications",
+            type: "textarea",
+            maxLength: 800,
+            helper: "Moves, caregiving, separation, financial context, or other circumstances you want your counselor to understand.",
+          },
+        ],
+      },
+      {
+        key: "school_and_languages",
+        title: "School history & languages",
+        fields: [
+          {
+            key: "current_school",
+            label: "Current school",
+            type: "text",
+            maxLength: 160,
+            helper: "Official school name used on your transcript.",
+          },
+          {
+            key: "expected_graduation_date",
+            label: "Expected graduation date",
+            type: "text",
+            maxLength: 20,
+            helper: "Use YYYY-MM-DD where possible.",
+          },
+          {
+            key: "previous_schools",
+            label: "Previous secondary schools",
+            type: "textarea",
+            maxLength: 800,
+            helper: "School, city/country, dates attended, and reason for transfer when relevant.",
+          },
+          {
+            key: "curriculum_history",
+            label: "Curriculum history",
+            type: "textarea",
+            maxLength: 600,
+            helper: "For example US, IB MYP/DP, IGCSE, A-level, or changes between systems.",
+          },
+          {
+            key: "school_counselor_contact",
+            label: "School counselor contact",
+            type: "textarea",
+            maxLength: 300,
+            helper: "Name and school email; do not include private login details.",
+          },
+          {
+            key: "first_language",
+            label: "First language",
+            type: "text",
+            maxLength: 80,
+            helper: "The language you learned first.",
+          },
+          {
+            key: "language_proficiency",
+            label: "Language proficiency",
+            type: "textarea",
+            maxLength: 500,
+            helper: "List speaking, reading, and writing proficiency for each language.",
           },
         ],
       },
@@ -656,6 +833,7 @@ export interface AdmissionsSectionStateDto {
   /** Saved answers keyed by field key; {} for a never-saved section. */
   payload: Record<string, unknown>;
   state: AdmissionsSubmissionState;
+  sharedWithFamily?: boolean;
   submittedAt: string | null;
   reviewedByEmail: string | null;
   /** Null for a virtual empty draft (no row persisted yet). */
@@ -667,6 +845,7 @@ export interface AdmissionsSectionSummary {
   sectionKey: AdmissionsSectionKey;
   title: string;
   state: AdmissionsSubmissionState;
+  sharedWithFamily?: boolean;
   submittedAt: string | null;
   /** Null when the section has never been saved. */
   updatedAt: string | null;
@@ -693,6 +872,7 @@ function toSectionDto(
     definition,
     payload: row.payload ?? {},
     state: row.state,
+    sharedWithFamily: row.sharedWithFamily,
     submittedAt: row.submittedAt ? row.submittedAt.toISOString() : null,
     reviewedByEmail: row.reviewedByEmail,
     updatedAt: row.updatedAt.toISOString(),
@@ -710,6 +890,7 @@ function toEmptyDraftDto(
     definition,
     payload: {},
     state: "draft",
+    sharedWithFamily: false,
     submittedAt: null,
     reviewedByEmail: null,
     updatedAt: null,
@@ -721,8 +902,9 @@ async function findSectionRow(
   db: AdmissionsWriteDb,
   caseId: string,
   sectionKey: string,
+  lockForUpdate = false,
 ): Promise<SectionRow | null> {
-  const rows = await db
+  const query = db
     .select()
     .from(admissionsSelfReportSections)
     .where(and(
@@ -730,7 +912,32 @@ async function findSectionRow(
       eq(admissionsSelfReportSections.sectionKey, sectionKey),
     ))
     .limit(1);
+  const rows = lockForUpdate ? await query.for("update") : await query;
   return rows[0] ?? null;
+}
+
+/**
+ * Locks an existing section row. When the virtual draft has not been
+ * materialized, lock the parent case and re-read so two first autosaves
+ * cannot both observe a missing row and race the unique key.
+ */
+async function findSectionRowForMutation(
+  db: AdmissionsWriteDb,
+  caseId: string,
+  sectionKey: string,
+): Promise<SectionRow | null> {
+  const existing = await findSectionRow(db, caseId, sectionKey, true);
+  if (existing) return existing;
+
+  const caseRows = await db
+    .select({ id: admissionsCases.id })
+    .from(admissionsCases)
+    .where(and(eq(admissionsCases.id, caseId), isNull(admissionsCases.deletedAt)))
+    .limit(1)
+    .for("update");
+  if (!caseRows[0]) throw new Error("NotFound");
+
+  return findSectionRow(db, caseId, sectionKey, true);
 }
 
 /** Result of validating a partial payload against a section definition. */
@@ -857,6 +1064,7 @@ export async function listSectionStates(
     .select({
       sectionKey: admissionsSelfReportSections.sectionKey,
       state: admissionsSelfReportSections.state,
+      sharedWithFamily: admissionsSelfReportSections.sharedWithFamily,
       submittedAt: admissionsSelfReportSections.submittedAt,
       updatedAt: admissionsSelfReportSections.updatedAt,
     })
@@ -870,6 +1078,7 @@ export async function listSectionStates(
       sectionKey: definition.id,
       title: definition.title,
       state: row?.state ?? "draft",
+      sharedWithFamily: row?.sharedWithFamily ?? false,
       submittedAt: row?.submittedAt ? row.submittedAt.toISOString() : null,
       updatedAt: row?.updatedAt ? row.updatedAt.toISOString() : null,
     };
@@ -882,6 +1091,8 @@ export async function listSectionStates(
 export interface SaveSectionDraftInput {
   access: CaseAccess;
   sectionKey: string;
+  /** Last section updatedAt observed by the caller; null for a virtual draft. */
+  expectedUpdatedAt: string | null;
   /** PARTIAL payload — only the provided keys change (autosave on blur). */
   payload: Record<string, unknown>;
 }
@@ -895,7 +1106,9 @@ export interface SaveSectionDraftInput {
  *    NotFound / descriptive Error. The payload is validated against the
  *    definition BEFORE any write: unknown keys rejected, per-field type /
  *    option / maxLength checks (fail-closed).
- * 2. Merge semantics: provided keys overwrite the stored payload; `null`,
+ * 2. Lock the existing row (or the parent case before first insert) and
+ *    compare expectedUpdatedAt. Merge semantics: provided keys overwrite
+ *    the locked current payload; `null`,
  *    empty strings, and empty arrays clear their key; untouched keys are
  *    preserved. A save with no effective change writes nothing (and never
  *    reverts state).
@@ -921,7 +1134,9 @@ export async function saveSectionDraft(
   const { updates, cleared } = validateSectionPayload(definition, input.payload);
 
   return withAuditedTransaction(async (tx) => {
-    const row = await findSectionRow(tx, input.access.caseId, input.sectionKey);
+    const row = await findSectionRowForMutation(tx, input.access.caseId, input.sectionKey);
+    const currentUpdatedAt = row?.updatedAt.toISOString() ?? null;
+    if (input.expectedUpdatedAt !== currentUpdatedAt) throw new Error("Conflict");
     const oldPayload: Record<string, unknown> = row?.payload ?? {};
 
     // Field-level diff limited to EFFECTIVE changes: skip same-value writes
@@ -943,7 +1158,7 @@ export async function saveSectionDraft(
       return row ? toSectionDto(definition, row) : toEmptyDraftDto(definition, input.access.caseId);
     }
 
-    const now = new Date();
+    const now = row === null ? new Date() : nextMutationTimestamp(row.updatedAt);
     const reverts = row !== null && row.state !== "draft";
     const auditDiff: AdmissionsFieldDiff = reverts
       ? { ...diff, state: { old: row.state, new: "draft" } }
@@ -971,10 +1186,15 @@ export async function saveSectionDraft(
           ? { state: "draft" as const, submittedAt: null, reviewedByEmail: null }
           : {}),
       };
-      await tx
+      const updatedRows = await tx
         .update(admissionsSelfReportSections)
         .set(setValues)
-        .where(eq(admissionsSelfReportSections.id, row.id));
+        .where(and(
+          eq(admissionsSelfReportSections.id, row.id),
+          eq(admissionsSelfReportSections.updatedAt, row.updatedAt),
+        ))
+        .returning({ id: admissionsSelfReportSections.id });
+      if (!updatedRows[0]) throw new Error("Conflict");
       saved = { ...row, ...setValues };
     }
 
@@ -1009,6 +1229,8 @@ export interface SubmitSectionResult {
 export interface SectionTransitionInput {
   access: CaseAccess;
   sectionKey: string;
+  /** Last section updatedAt observed by the caller. */
+  expectedUpdatedAt: string;
 }
 
 /**
@@ -1017,7 +1239,8 @@ export interface SectionTransitionInput {
  * attributed); parents never write.
  *
  * 1. Role gate; unknown sectionKey → NotFound.
- * 2. The section must have a persisted row in state "draft" — a never-saved
+ * 2. Lock the row and match expectedUpdatedAt. The section must have a
+ *    persisted row in state "draft" — a never-saved
  *    section (the empty virtual draft) or an already-submitted/reviewed one
  *    throws Error("Conflict"): there is nothing (new) to review.
  * 3. Stamps state "submitted" + submittedAt; the mutation and its audit row
@@ -1035,20 +1258,27 @@ export async function submitSection(
   if (!definition) throw new Error("NotFound");
 
   return withAuditedTransaction(async (tx) => {
-    const row = await findSectionRow(tx, input.access.caseId, input.sectionKey);
+    const row = await findSectionRow(tx, input.access.caseId, input.sectionKey, true);
     if (row === null || row.state !== "draft") throw new Error("Conflict");
+    if (input.expectedUpdatedAt !== row.updatedAt.toISOString()) throw new Error("Conflict");
 
-    const now = new Date();
+    const now = nextMutationTimestamp(row.updatedAt);
     const setValues = {
       state: "submitted" as const,
       submittedAt: now,
       reviewedByEmail: null,
       updatedAt: now,
     };
-    await tx
+    const updatedRows = await tx
       .update(admissionsSelfReportSections)
       .set(setValues)
-      .where(eq(admissionsSelfReportSections.id, row.id));
+      .where(and(
+        eq(admissionsSelfReportSections.id, row.id),
+        eq(admissionsSelfReportSections.state, "draft"),
+        eq(admissionsSelfReportSections.updatedAt, row.updatedAt),
+      ))
+      .returning({ id: admissionsSelfReportSections.id });
+    if (!updatedRows[0]) throw new Error("Conflict");
 
     await writeAuditLog(tx, {
       caseId: input.access.caseId,
@@ -1087,20 +1317,27 @@ export async function reviewSection(
   if (!definition) throw new Error("NotFound");
 
   return withAuditedTransaction(async (tx) => {
-    const row = await findSectionRow(tx, input.access.caseId, input.sectionKey);
+    const row = await findSectionRow(tx, input.access.caseId, input.sectionKey, true);
     if (row === null) throw new Error("NotFound");
     if (row.state !== "submitted") throw new Error("Conflict");
+    if (input.expectedUpdatedAt !== row.updatedAt.toISOString()) throw new Error("Conflict");
 
-    const now = new Date();
+    const now = nextMutationTimestamp(row.updatedAt);
     const setValues = {
       state: "reviewed" as const,
       reviewedByEmail: input.access.email,
       updatedAt: now,
     };
-    await tx
+    const updatedRows = await tx
       .update(admissionsSelfReportSections)
       .set(setValues)
-      .where(eq(admissionsSelfReportSections.id, row.id));
+      .where(and(
+        eq(admissionsSelfReportSections.id, row.id),
+        eq(admissionsSelfReportSections.state, "submitted"),
+        eq(admissionsSelfReportSections.updatedAt, row.updatedAt),
+      ))
+      .returning({ id: admissionsSelfReportSections.id });
+    if (!updatedRows[0]) throw new Error("Conflict");
 
     await writeAuditLog(tx, {
       caseId: input.access.caseId,
@@ -1116,5 +1353,42 @@ export async function reviewSection(
     });
 
     return toSectionDto(definition, { ...row, ...setValues });
+  }, db);
+}
+
+/** Counselor-only explicit release/retraction for the closed family projection. */
+export async function setSectionFamilySharing(
+  input: Omit<SectionTransitionInput, "expectedUpdatedAt"> & { sharedWithFamily: boolean },
+  db: Database = getDb(),
+): Promise<AdmissionsSectionStateDto> {
+  if (!roleAtLeast(input.access.role, "counselor")) throw new Error("Forbidden");
+  if (!isUuidShaped(input.access.caseId)) throw new Error("NotFound");
+  const definition = getSectionDefinition(input.sectionKey);
+  if (!definition) throw new Error("NotFound");
+
+  return withAuditedTransaction(async (tx) => {
+    const row = await findSectionRow(tx, input.access.caseId, input.sectionKey);
+    if (row === null) throw new Error("NotFound");
+    if (row.sharedWithFamily === input.sharedWithFamily) return toSectionDto(definition, row);
+    const now = new Date();
+    await tx.update(admissionsSelfReportSections)
+      .set({ sharedWithFamily: input.sharedWithFamily, updatedAt: now })
+      .where(eq(admissionsSelfReportSections.id, row.id));
+    await writeAuditLog(tx, {
+      caseId: input.access.caseId,
+      actorEmail: input.access.email,
+      actorRole: input.access.role,
+      entityType: "self_report_section",
+      entityId: row.id,
+      action: "family_sharing",
+      diff: {
+        sharedWithFamily: { old: row.sharedWithFamily, new: input.sharedWithFamily },
+      },
+    });
+    return toSectionDto(definition, {
+      ...row,
+      sharedWithFamily: input.sharedWithFamily,
+      updatedAt: now,
+    });
   }, db);
 }

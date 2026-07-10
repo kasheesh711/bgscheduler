@@ -16,6 +16,7 @@ import {
   deriveRegistrationDeadline,
   getBestScores,
   listSittingsForCase,
+  normalizeTestScoreDetails,
   parseScoreValue,
   REGISTRATION_LEAD_DAYS,
   softDeleteSitting,
@@ -84,7 +85,7 @@ function fakeDb(queue: unknown[][]) {
 
   function selectBuilder(rows: unknown[]) {
     const b: Record<string, unknown> = {};
-    for (const method of ["from", "where", "innerJoin", "leftJoin", "orderBy", "groupBy", "limit"]) {
+    for (const method of ["from", "where", "innerJoin", "leftJoin", "orderBy", "groupBy", "limit", "for"]) {
       b[method] = () => b;
     }
     (b as { then: unknown }).then = (
@@ -260,6 +261,49 @@ describe("createSitting", () => {
     expect(sittingInserts(inserts)[0].registrationDeadline).toBeNull();
     expect(result.registrationDeadline).toBeNull();
     expect(auditInserts(inserts)[0]).toMatchObject({ actorRole: "counselor" });
+  });
+
+  it("validates SAT subscores and derives the canonical aggregate/status", async () => {
+    const { db, inserts } = fakeDb([]);
+    const result = await createSitting({
+      access: STUDENT_ACCESS,
+      testType: "sat",
+      testDate: "2026-11-07",
+      lateRegistrationDeadline: "2026-10-20",
+      scoreDetails: { testType: "sat", math: 780, readingWriting: 720, total: 1500 },
+    }, db);
+
+    expect(sittingInserts(inserts)[0]).toMatchObject({
+      lateRegistrationDeadline: "2026-10-20",
+      status: "score_received",
+      actualScore: "1500",
+      scoreDetails: { testType: "sat", math: 780, readingWriting: 720, total: 1500 },
+    });
+    expect(result.actualScore).toBe("1500");
+    expect(result.status).toBe("score_received");
+  });
+
+  it("rejects score payloads that do not match the sitting type", async () => {
+    const { db, inserts } = fakeDb([]);
+    await expect(createSitting({
+      access: STUDENT_ACCESS,
+      testType: "sat",
+      testDate: "2026-11-07",
+      scoreDetails: { testType: "act", english: 30, math: 31, reading: 32, science: 33, composite: 32 },
+    }, db)).rejects.toThrow("testType does not match");
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("derives ACT, TOEFL, and IELTS aggregates from validated sections", () => {
+    expect(normalizeTestScoreDetails({
+      testType: "act", english: 35, math: 36, reading: 34, science: 33,
+    })).toMatchObject({ composite: 35 });
+    expect(normalizeTestScoreDetails({
+      testType: "toefl", reading: 28, listening: 27, speaking: 26, writing: 25,
+    })).toMatchObject({ total: 106 });
+    expect(normalizeTestScoreDetails({
+      testType: "ielts", listening: 8, reading: 7.5, writing: 7, speaking: 7.5,
+    })).toMatchObject({ overall: 7.5 });
   });
 
   it("rejects parent callers with Forbidden", async () => {
@@ -465,16 +509,15 @@ describe("updateSitting", () => {
 });
 
 describe("softDeleteSitting", () => {
-  it("deletes the sitting plus dependent score-send docs, audited", async () => {
+  it("soft-deletes the sitting and removes dependent score-send docs, audited", async () => {
     // Queue: [sitting row], [score-send doc ids].
-    const { db, inserts, deletes } = fakeDb([[sittingRow()], [{ id: DOC_ID }]]);
+    const { db, inserts, deletes, updates } = fakeDb([[sittingRow()], [{ id: DOC_ID }]]);
 
     await softDeleteSitting({ access: STUDENT_ACCESS, sittingId: SITTING_ID }, db);
 
-    expect(deletes.map((call) => call.table)).toEqual([
-      admissionsCollegeDocs,
-      admissionsTestSittings,
-    ]);
+    expect(deletes.map((call) => call.table)).toEqual([admissionsCollegeDocs]);
+    expect(updates.map((call) => call.table)).toEqual([admissionsTestSittings]);
+    expect(updates[0].set.deletedAt).toBeInstanceOf(Date);
 
     const audits = auditInserts(inserts);
     expect(audits).toHaveLength(1);
@@ -484,16 +527,17 @@ describe("softDeleteSitting", () => {
       actorRole: "student",
     });
     const diff = audits[0].diff as Record<string, { old: unknown; new: unknown }>;
-    expect(diff.deleted.old).toMatchObject({ id: SITTING_ID, testType: "sat" });
+    expect(diff.deletedAt.old).toBeNull();
     expect(diff.removedScoreSendDocIds.old).toEqual([DOC_ID]);
   });
 
   it("skips the doc delete when no score sends reference the sitting", async () => {
-    const { db, inserts, deletes } = fakeDb([[sittingRow()], []]);
+    const { db, inserts, deletes, updates } = fakeDb([[sittingRow()], []]);
 
     await softDeleteSitting({ access: COUNSELOR_ACCESS, sittingId: SITTING_ID }, db);
 
-    expect(deletes.map((call) => call.table)).toEqual([admissionsTestSittings]);
+    expect(deletes).toHaveLength(0);
+    expect(updates.map((call) => call.table)).toEqual([admissionsTestSittings]);
     const diff = auditInserts(inserts)[0].diff as Record<string, unknown>;
     expect("removedScoreSendDocIds" in diff).toBe(false);
   });
@@ -610,6 +654,62 @@ describe("getBestScores", () => {
     const best = await getBestScores(CASE_ID, db);
 
     expect(best[0]).toMatchObject({ sittingId: SITTING_ID_B, testDate: "2026-11-07" });
+  });
+
+  it("derives SAT and ACT superscores across sittings with fail-closed release semantics", async () => {
+    const { db } = fakeDb([[
+      {
+        id: SITTING_ID,
+        testType: "sat",
+        testDate: "2026-08-22",
+        actualScore: "1400",
+        scoreDetails: { testType: "sat", math: 780, readingWriting: 620, total: 1400 },
+        scoreReleasedToParent: true,
+      },
+      {
+        id: SITTING_ID_B,
+        testType: "sat",
+        testDate: "2026-11-07",
+        actualScore: "1420",
+        scoreDetails: { testType: "sat", math: 700, readingWriting: 720, total: 1420 },
+        scoreReleasedToParent: false,
+      },
+      {
+        id: SITTING_ID_C,
+        testType: "act",
+        testDate: "2026-09-12",
+        actualScore: "32",
+        scoreDetails: { testType: "act", english: 35, math: 30, reading: 34, science: 29, composite: 32 },
+        scoreReleasedToParent: true,
+      },
+      {
+        id: DOC_ID,
+        testType: "act",
+        testDate: "2026-10-10",
+        actualScore: "33",
+        scoreDetails: { testType: "act", english: 32, math: 36, reading: 31, science: 35, composite: 34 },
+        scoreReleasedToParent: true,
+      },
+    ]]);
+
+    const best = await getBestScores(CASE_ID, db);
+
+    expect(best[0]).toMatchObject({
+      testType: "sat",
+      actualScore: "1500",
+      numericScore: 1500,
+      scoreKind: "superscore",
+      contributingSittingIds: [SITTING_ID, SITTING_ID_B],
+      sectionScores: { math: 780, readingWriting: 720 },
+      scoreReleasedToParent: false,
+    });
+    expect(best[1]).toMatchObject({
+      testType: "act",
+      actualScore: "35",
+      scoreKind: "superscore",
+      sectionScores: { english: 35, math: 36, reading: 34, science: 35 },
+      scoreReleasedToParent: true,
+    });
   });
 
   it("fails closed to an empty list for a malformed caseId", async () => {

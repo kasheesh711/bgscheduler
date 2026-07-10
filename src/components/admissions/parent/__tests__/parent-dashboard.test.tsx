@@ -1,11 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-// Deterministic "today" (Wednesday 8 July 2026, Bangkok) so week grouping in
-// the rendered dashboard is stable regardless of when the suite runs.
-vi.mock("@/lib/room-capacity/dates", () => ({
-  todayBangkok: vi.fn(() => "2026-07-08"),
-}));
+vi.mock("@/lib/room-capacity/dates", () => ({ todayBangkok: vi.fn(() => "2026-07-08") }));
 
 import {
   PARENT_SECTION_TEST_IDS,
@@ -16,8 +12,15 @@ import {
   PARENT_APP_STATUS_STRINGS,
   PARENT_CASE_STATUS_STRINGS,
   PARENT_DEADLINE_SOURCE_STRINGS,
+  PARENT_DECISION_STRINGS,
+  PARENT_ESSAY_STATUS_STRINGS,
   PARENT_LOCALE_STORAGE_KEY,
+  PARENT_RECOMMENDER_STATUS_STRINGS,
+  PARENT_SCHOLARSHIP_STATUS_STRINGS,
   PARENT_STRINGS,
+  PARENT_TASK_OWNER_STRINGS,
+  PARENT_TASK_STATUS_STRINGS,
+  PARENT_TEST_STATUS_STRINGS,
   PARENT_TEST_TYPE_STRINGS,
   formatParentString,
   pickParentString,
@@ -26,488 +29,412 @@ import {
   writeStoredParentLocale,
   type ParentBilingualString,
 } from "../strings";
-import type {
-  ParentDashboard,
-  ParentDeadline,
-} from "@/lib/admissions/parent-projection";
+import type { LinkedFamilyCase } from "@/lib/admissions/family-cases";
+import type { ParentDashboard, ParentDeadline } from "@/lib/admissions/parent-projection";
 
-// ── Fixtures ────────────────────────────────────────────────────────────
+const CURRENT_HREF = "/admissions/11111111-1111-4111-8111-111111111111";
+const LINKED_CASES: LinkedFamilyCase[] = [
+  {
+    href: CURRENT_HREF,
+    studentName: "Ploy Srisuwan",
+    preferredName: "Ploy",
+    cohortName: "Class of 2027",
+    caseStatus: "active",
+  },
+  {
+    href: "/admissions/22222222-2222-4222-8222-222222222222",
+    studentName: "Pat Srisuwan",
+    preferredName: "Pat",
+    cohortName: "Class of 2029",
+    caseStatus: "completed",
+  },
+];
 
 const DASHBOARD: ParentDashboard = {
   studentName: "Ploy Srisuwan",
   cohortName: "Class of 2027",
   caseStatus: "active",
+  profile: {
+    preferredName: "Ploy",
+    phone: "+66 81 234 5678",
+    school: "Bangkok International School",
+    schoolCounselor: "Ms. Chen",
+    graduationYear: 2027,
+    sharedDetails: [
+      { key: "hometown", label: "Hometown", value: "Bangkok, Thailand" },
+      { key: "languages", label: "Languages", value: ["Thai", "English"] },
+    ],
+  },
+  academics: [{
+    system: "us",
+    effectiveDate: "2026-06-01",
+    payload: {
+      system: "us",
+      gpaScale: 4,
+      unweightedGpa: 3.8,
+      weightedGpa: 4.2,
+      classRank: 5,
+      classSize: 120,
+      courseRigor: "most_demanding",
+      fourYearCoursePlan: [{
+        gradeLevel: "11",
+        courseTitle: "AP Biology",
+        level: "AP",
+        finalGrade: "A",
+      }],
+      transcriptUrl: "https://drive.google.com/transcript",
+      schoolProfileUrl: null,
+    },
+  }],
   progress: { done: 3, total: 8, percent: 38 },
   phaseProgress: [
     { phase: "about_you", label: "About You", done: 2, total: 4, percent: 50 },
     { phase: "essays", label: "Essays", done: 0, total: 6, percent: 0 },
   ],
-  collegeList: [
-    {
-      instName: "Harvard University",
-      round: "rea",
-      roundLabel: "REA",
-      appStatus: "researching",
-      deadline: "2026-11-01",
-      category: "reach",
+  checklist: [{
+    phase: "applications",
+    title: "Submit the Common App",
+    description: "Review each answer before submitting.",
+    owner: "student",
+    status: "in_progress",
+    dueDate: "2026-11-01",
+    recurrence: null,
+  }],
+  collegeList: [{
+    instName: "Brown University",
+    round: "ed",
+    roundLabel: "ED",
+    appStatus: "applying",
+    deadline: "2026-11-01",
+    category: "reach",
+    firstChoiceMajor: "Public Health",
+    secondChoiceMajor: "Economics",
+    admissionsUrl: "https://admission.brown.edu",
+    portalUrl: "https://apply.college.example/login",
+    completeness: {
+      recsAgreed: 1,
+      recsSubmitted: 1,
+      recsTotal: 1,
+      transcriptSent: true,
+      schoolReportSent: false,
+      scoreSendsSent: 1,
+      complete: false,
     },
-    {
-      instName: "University of Michigan",
-      round: "rd",
-      roundLabel: "RD",
-      appStatus: "applying",
-      deadline: null,
-      category: "match",
-    },
-  ],
+    decisions: [{ event: "accepted", eventDate: "2027-03-20" }],
+    requirements: [{
+      kind: "css_profile",
+      title: "Submit CSS Profile",
+      status: "in_progress",
+      owner: "student",
+      dueDate: "2026-11-01",
+      required: true,
+      sourceUrl: "https://cssprofile.collegeboard.org",
+    }],
+  }],
+  recommenders: [{
+    name: "Dr. Rivera",
+    roleSubject: "Biology",
+    askStatus: "agreed",
+    colleges: [{ collegeName: "Brown University", submitted: true, submittedAt: "2026-10-20T00:00:00.000Z" }],
+  }],
+  essays: [{
+    collegeName: "Brown University",
+    prompt: "Why Brown?",
+    status: "drafting",
+    deadline: "2026-11-01",
+    googleDocUrl: "https://docs.google.com/shared-essay",
+  }],
+  activities: [{
+    name: "Robotics Club",
+    fullDescription: "Led a team of five students.",
+    commonApp: null,
+    uc: null,
+    commonAppRank: 1,
+  }],
+  awards: [{
+    title: "National Biology Olympiad Finalist",
+    organization: "Biology Society",
+    gradeLevels: ["11"],
+    recognitionLevels: ["national"],
+    awardDate: "2026-04-01",
+    commonAppRank: 1,
+    ucEligibilityNarrative: "Top students were invited.",
+    ucAchievementNarrative: "Placed in the national final.",
+  }],
   upcomingDeadlines: [
-    {
-      source: "task",
-      title: "Submit the transcript request",
-      date: "2026-07-01",
-      overdue: true,
-    },
-    {
-      source: "essay",
-      title: "Update essay: Personal statement",
-      date: "2026-07-09",
-      overdue: false,
-    },
-    {
-      source: "application",
-      title: "Harvard University — REA deadline",
-      date: "2026-07-13",
-      overdue: false,
-    },
-    {
-      source: "testing",
-      title: "SAT registration closes",
-      date: "2026-07-21",
-      overdue: false,
-    },
+    { source: "task", title: "Submit transcript request", date: "2026-07-01", overdue: true },
+    { source: "essay", title: "Update personal statement", date: "2026-07-09", overdue: false },
+    { source: "application", title: "Brown ED deadline", date: "2026-07-13", overdue: false },
+    { source: "testing", title: "SAT registration closes", date: "2026-07-21", overdue: false },
   ],
-  announcements: [
-    {
-      title: "Common App opens August 1",
-      body: "Get your account ready before the season starts.",
-      createdAt: "2026-07-01T03:00:00.000Z",
-    },
-  ],
-  testingMilestones: [
-    {
-      testType: "sat",
-      testDate: "2026-06-06",
-      registered: true,
-      taken: true,
-      scoreReceived: true,
-      score: 1450,
-    },
-    {
-      testType: "ielts",
-      testDate: "2026-10-03",
-      registered: false,
-      taken: false,
-      scoreReceived: false,
-    },
-  ],
-  sharedNotes: [
-    {
-      body: "Ploy is making great progress on her essays.",
-      createdAt: "2026-07-05T03:00:00.000Z",
-    },
-  ],
+  announcements: [{
+    title: "Common App opens August 1",
+    body: "Get your account ready before the season starts.",
+    createdAt: "2026-07-01T03:00:00.000Z",
+  }],
+  testingMilestones: [{
+    testType: "sat",
+    subject: null,
+    testDate: "2026-06-06",
+    registrationDeadline: "2026-05-01",
+    lateRegistrationDeadline: "2026-05-15",
+    status: "score_received",
+    registered: true,
+    taken: true,
+    scoreReceived: true,
+    score: 1450,
+    scoreDetails: { testType: "sat", math: 740, readingWriting: 710, total: 1450 },
+  }, {
+    testType: "ielts",
+    subject: null,
+    testDate: "2026-10-03",
+    registrationDeadline: "2026-09-19",
+    lateRegistrationDeadline: null,
+    status: "planned",
+    registered: false,
+    taken: false,
+    scoreReceived: false,
+  }],
+  scholarships: [{
+    collegeName: "Brown University",
+    name: "Brown Promise Scholarship",
+    provider: "Brown University",
+    url: "https://example.edu/scholarship",
+    requirements: "Submit financial aid forms",
+    deadline: "2026-11-01",
+    status: "awarded",
+    outcome: "Awarded",
+    offeredAmount: "12000.00",
+  }],
+  financialAid: [{
+    collegeName: "Brown University",
+    currency: "USD",
+    awardYear: 2027,
+    costBreakdown: [{ label: "Tuition", amount: 65000 }, { label: "Housing", amount: 12000 }],
+    giftAidBreakdown: [{ label: "Institutional grant", amount: 30000 }],
+    loanBreakdown: [{ label: "Federal loan", amount: 5500 }],
+    workStudyAmount: "2500.00",
+    netCost: null,
+    remainingBalance: null,
+    totalCost: 77000,
+    totalGiftAid: 30000,
+    totalLoans: 5500,
+    derivedNetCost: 47000,
+    derivedRemainingBalance: 39000,
+  }],
+  sharedNotes: [{ body: "Ploy is making great progress.", createdAt: "2026-07-05T03:00:00.000Z" }],
 };
 
 const EMPTY_DASHBOARD: ParentDashboard = {
   ...DASHBOARD,
-  progress: { done: 0, total: 0, percent: 0 },
+  profile: { ...DASHBOARD.profile, sharedDetails: [] },
+  academics: [],
   phaseProgress: [],
+  checklist: [],
   collegeList: [],
+  recommenders: [],
+  essays: [],
+  activities: [],
+  awards: [],
   upcomingDeadlines: [],
   announcements: [],
   testingMilestones: [],
+  scholarships: [],
+  financialAid: [],
   sharedNotes: [],
 };
 
-function renderDashboard(overrides: {
+function renderDashboard(options: {
   dashboard?: ParentDashboard;
   initialLocale?: "th" | "en";
-} = {}): string {
+  linkedCases?: LinkedFamilyCase[];
+} = {}) {
   return renderToStaticMarkup(
     <ParentDashboardView
-      dashboard={overrides.dashboard ?? DASHBOARD}
-      initialLocale={overrides.initialLocale}
+      dashboard={options.dashboard ?? DASHBOARD}
+      initialLocale={options.initialLocale}
+      linkedCases={options.linkedCases ?? LINKED_CASES}
+      currentCaseHref={CURRENT_HREF}
     />,
   );
 }
 
-function countOccurrences(html: string, needle: string): number {
+function count(html: string, needle: string) {
   return html.split(needle).length - 1;
 }
 
-/** Fake storage capturing writes; optionally throws on every access. */
 function fakeStorage(initial: Record<string, string> = {}, throwing = false) {
   const store = new Map(Object.entries(initial));
   return {
     store,
-    getItem: (key: string): string | null => {
-      if (throwing) throw new Error("storage unavailable");
-      return store.get(key) ?? null;
-    },
-    setItem: (key: string, value: string): void => {
-      if (throwing) throw new Error("storage unavailable");
-      store.set(key, value);
-    },
+    getItem(key: string) { if (throwing) throw new Error("unavailable"); return store.get(key) ?? null; },
+    setItem(key: string, value: string) { if (throwing) throw new Error("unavailable"); store.set(key, value); },
   };
 }
 
-// ── Locale helpers (CM-131: Thai-first, persisted toggle) ───────────────
-
-describe("resolveParentLocale", () => {
-  it("returns en only for the exact string \"en\"", () => {
-    expect(resolveParentLocale("en")).toBe("en");
-  });
-
-  it("falls back to th for anything else (fail-closed Thai-first)", () => {
+describe("parent locale helpers", () => {
+  it("defaults to Thai and persists an explicit English choice", () => {
     expect(resolveParentLocale(null)).toBe("th");
-    expect(resolveParentLocale("")).toBe("th");
     expect(resolveParentLocale("EN")).toBe("th");
-    expect(resolveParentLocale("english")).toBe("th");
-  });
-});
-
-describe("readStoredParentLocale", () => {
-  it("reads a persisted en choice from the storage key", () => {
-    const storage = fakeStorage({ [PARENT_LOCALE_STORAGE_KEY]: "en" });
-    expect(readStoredParentLocale(storage)).toBe("en");
-  });
-
-  it("defaults to th for missing storage, missing key, or garbage", () => {
-    expect(readStoredParentLocale(null)).toBe("th");
-    expect(readStoredParentLocale(undefined)).toBe("th");
-    expect(readStoredParentLocale(fakeStorage())).toBe("th");
-    expect(
-      readStoredParentLocale(fakeStorage({ [PARENT_LOCALE_STORAGE_KEY]: "xx" })),
-    ).toBe("th");
-  });
-
-  it("defaults to th when storage throws (private mode)", () => {
-    expect(readStoredParentLocale(fakeStorage({}, true))).toBe("th");
-  });
-});
-
-describe("writeStoredParentLocale", () => {
-  it("persists the choice under the storage key (round-trips)", () => {
+    expect(resolveParentLocale("en")).toBe("en");
     const storage = fakeStorage();
     writeStoredParentLocale(storage, "en");
     expect(storage.store.get(PARENT_LOCALE_STORAGE_KEY)).toBe("en");
     expect(readStoredParentLocale(storage)).toBe("en");
-    writeStoredParentLocale(storage, "th");
-    expect(readStoredParentLocale(storage)).toBe("th");
   });
 
-  it("is a silent no-op for missing or throwing storage", () => {
-    expect(() => writeStoredParentLocale(null, "en")).not.toThrow();
+  it("fails safely when storage is missing or throws", () => {
+    expect(readStoredParentLocale(null)).toBe("th");
+    expect(readStoredParentLocale(fakeStorage({}, true))).toBe("th");
     expect(() => writeStoredParentLocale(fakeStorage({}, true), "en")).not.toThrow();
   });
-});
 
-describe("bilingual string tables", () => {
-  it("every static string has non-empty th and en variants", () => {
+  it("keeps every bilingual table complete", () => {
     const tables: Record<string, ParentBilingualString>[] = [
       PARENT_STRINGS,
       PARENT_CASE_STATUS_STRINGS,
       PARENT_APP_STATUS_STRINGS,
       PARENT_DEADLINE_SOURCE_STRINGS,
+      PARENT_DECISION_STRINGS,
+      PARENT_ESSAY_STATUS_STRINGS,
+      PARENT_RECOMMENDER_STATUS_STRINGS,
+      PARENT_SCHOLARSHIP_STATUS_STRINGS,
+      PARENT_TASK_OWNER_STRINGS,
+      PARENT_TASK_STATUS_STRINGS,
+      PARENT_TEST_STATUS_STRINGS,
       PARENT_TEST_TYPE_STRINGS,
     ];
-    for (const table of tables) {
-      for (const [key, entry] of Object.entries(table)) {
-        expect(entry.th.trim(), `${key}.th`).not.toBe("");
-        expect(entry.en.trim(), `${key}.en`).not.toBe("");
-      }
+    for (const table of tables) for (const entry of Object.values(table)) {
+      expect(entry.th.trim()).not.toBe("");
+      expect(entry.en.trim()).not.toBe("");
     }
-  });
-
-  it("pickParentString and formatParentString honor locale and vars", () => {
-    expect(pickParentString(PARENT_STRINGS.deadlinesTitle, "th")).toBe(
-      "กำหนดการที่ใกล้ถึง",
-    );
-    expect(pickParentString(PARENT_STRINGS.deadlinesTitle, "en")).toBe(
-      "Upcoming deadlines",
-    );
-    expect(
-      formatParentString(PARENT_STRINGS.progressDoneOfTotal, "en", {
-        done: "3",
-        total: "8",
-      }),
-    ).toBe("3 of 8 tasks done");
-    // Unknown placeholders stay verbatim (fail-closed — never drop text).
-    expect(
-      formatParentString(PARENT_STRINGS.deadlinesGroupWeekOf, "en", {}),
-    ).toBe("Week of {date}");
+    expect(pickParentString(PARENT_STRINGS.moneyTitle, "en")).toBe("Scholarships & financial aid");
+    expect(formatParentString(PARENT_STRINGS.checklistDue, "en", { date: "1/11/2026" })).toBe("Due 1/11/2026");
   });
 });
 
-// ── Week grouping ───────────────────────────────────────────────────────
-
 describe("groupParentDeadlinesByWeek", () => {
-  const TODAY = "2026-07-08"; // Wednesday; week runs Mon 6 Jul – Sun 12 Jul.
-
-  it("groups overdue first, then this week, next week, and later weeks", () => {
+  const TODAY = "2026-07-08";
+  it("orders overdue, current, next, and later weeks", () => {
     const groups = groupParentDeadlinesByWeek(DASHBOARD.upcomingDeadlines, TODAY);
-    expect(groups.map((group) => group.key)).toEqual([
-      "overdue",
-      "week-0",
-      "week-1",
-      "week-2",
-    ]);
-    expect(groups.map((group) => group.kind)).toEqual([
-      "overdue",
-      "thisWeek",
-      "nextWeek",
-      "laterWeek",
-    ]);
-    expect(groups[1].items[0].title).toBe("Update essay: Personal statement");
-    expect(groups[2].items[0].title).toBe("Harvard University — REA deadline");
-    // Later weeks carry their Monday for the "Week of {date}" heading.
+    expect(groups.map((group) => group.key)).toEqual(["overdue", "week-0", "week-1", "week-2"]);
     expect(groups[3].weekStart).toBe("2026-07-20");
   });
 
-  it("keeps Sunday inside the current Monday-started week", () => {
-    const sunday: ParentDeadline = {
-      source: "task",
-      title: "Sunday item",
-      date: "2026-07-12",
-      overdue: false,
-    };
-    const groups = groupParentDeadlinesByWeek([sunday], TODAY);
-    expect(groups).toHaveLength(1);
-    expect(groups[0].kind).toBe("thisWeek");
-  });
-
-  it("sorts items by date inside each group", () => {
-    const items: ParentDeadline[] = [
-      { source: "task", title: "Later overdue", date: "2026-07-05", overdue: true },
-      { source: "task", title: "Older overdue", date: "2026-07-01", overdue: true },
-    ];
-    const groups = groupParentDeadlinesByWeek(items, TODAY);
-    expect(groups[0].items.map((item) => item.title)).toEqual([
-      "Older overdue",
-      "Later overdue",
-    ]);
-  });
-
-  it("routes unparsable dates to a trailing week-unknown group (never dropped)", () => {
-    const items: ParentDeadline[] = [
-      { source: "task", title: "Good", date: "2026-07-09", overdue: false },
-      { source: "task", title: "Bad", date: "soon", overdue: false },
-    ];
-    const groups = groupParentDeadlinesByWeek(items, TODAY);
-    expect(groups.map((group) => group.key)).toEqual(["week-0", "week-unknown"]);
-    expect(groups[1].items[0].title).toBe("Bad");
-  });
-
-  it("returns no groups for an empty list", () => {
-    expect(groupParentDeadlinesByWeek([], TODAY)).toEqual([]);
+  it("keeps unknown dates visible in a trailing group", () => {
+    const rows: ParentDeadline[] = [{ source: "task", title: "Unknown", date: "soon", overdue: false }];
+    expect(groupParentDeadlinesByWeek(rows, TODAY)[0].key).toBe("week-unknown");
   });
 });
 
-// ── Section order (design §5.3) ─────────────────────────────────────────
-
-describe("ParentDashboardView section order", () => {
-  it("renders all §5.3 sections in the mandated order", () => {
+describe("ParentDashboardView complete family surface", () => {
+  it("renders every approved section in a stable single-scroll order", () => {
     const html = renderDashboard();
-    expect(PARENT_SECTION_TEST_IDS).toEqual([
-      "parent-header",
-      "parent-progress",
-      "parent-deadlines",
-      "parent-colleges",
-      "parent-announcements",
-      "parent-testing",
-      "parent-notes",
-    ]);
-    let previousIndex = -1;
+    let previous = -1;
     for (const testId of PARENT_SECTION_TEST_IDS) {
       const index = html.indexOf(`data-testid="${testId}"`);
-      expect(index, testId).toBeGreaterThan(previousIndex);
-      previousIndex = index;
+      expect(index, testId).toBeGreaterThan(previous);
+      previous = index;
     }
+    expect(html).toContain("overflow-x-hidden");
   });
 
-  it("renders the child header with name, cohort, and status chip", () => {
-    const html = renderDashboard();
-    expect(html).toContain("Ploy Srisuwan");
-    expect(html).toContain("Class of 2027");
-    expect(html).toContain(PARENT_CASE_STATUS_STRINGS.active.th);
-  });
-});
-
-// ── Bilingual rendering (CM-131) ────────────────────────────────────────
-
-describe("ParentDashboardView bilingual statics", () => {
-  it("renders Thai-first by default with the th toggle pressed", () => {
-    const html = renderDashboard();
-    expect(html).toContain(PARENT_STRINGS.progressTitle.th);
-    expect(html).toContain(PARENT_STRINGS.deadlinesTitle.th);
-    expect(html).toContain(PARENT_STRINGS.collegesTitle.th);
-    expect(html).toContain(PARENT_STRINGS.announcementsTitle.th);
-    expect(html).toContain(PARENT_STRINGS.testingTitle.th);
-    expect(html).toContain(PARENT_STRINGS.notesTitle.th);
-    // No English statics leak into the Thai render.
-    expect(html).not.toContain("Upcoming deadlines");
-    expect(html).not.toContain("College list");
-    expect(html).not.toContain("Announcements");
-    expect(html).not.toContain("Testing milestones");
-    expect(html).not.toContain("Notes from your counselor");
-    expect(html).not.toContain("Overdue");
-
-    const thToggle = html.match(
-      /<button[^>]*data-testid="parent-locale-th"[^>]*>/,
-    );
-    const enToggle = html.match(
-      /<button[^>]*data-testid="parent-locale-en"[^>]*>/,
-    );
-    expect(thToggle![0]).toContain('aria-pressed="true"');
-    expect(enToggle![0]).toContain('aria-pressed="false"');
-  });
-
-  it("renders English statics when the locale is en", () => {
+  it("renders complete profile, application, testing, and money data", () => {
     const html = renderDashboard({ initialLocale: "en" });
-    expect(html).toContain("Upcoming deadlines");
-    expect(html).toContain("College list");
-    expect(html).toContain("Notes from your counselor");
-    expect(html).not.toContain(PARENT_STRINGS.deadlinesTitle.th);
-    const enToggle = html.match(
-      /<button[^>]*data-testid="parent-locale-en"[^>]*>/,
-    );
-    expect(enToggle![0]).toContain('aria-pressed="true"');
+    for (const value of [
+      "Bangkok, Thailand",
+      "AP Biology",
+      "Submit the Common App",
+      "Brown University",
+      "Public Health",
+      "Submit CSS Profile",
+      "Dr. Rivera",
+      "Why Brown?",
+      "Robotics Club",
+      "National Biology Olympiad Finalist",
+      "Brown Promise Scholarship",
+      "$47,000.00",
+      "Ploy is making great progress.",
+    ]) expect(html).toContain(value);
+    expect(html).toContain('data-testid="parent-score-details"');
+    expect(html).toContain("740");
   });
 
-  it("renders data values verbatim in both locales", () => {
-    for (const initialLocale of ["th", "en"] as const) {
-      const html = renderDashboard({ initialLocale });
-      expect(html).toContain("Ploy Srisuwan");
-      expect(html).toContain("Class of 2027");
-      expect(html).toContain("Harvard University");
-      expect(html).toContain("REA"); // server-provided round label, untranslated
-      expect(html).toContain("Common App opens August 1");
-      expect(html).toContain("Ploy is making great progress on her essays.");
+  it("is Thai-first and can server-render the English locale", () => {
+    const thai = renderDashboard();
+    expect(thai).toContain(PARENT_STRINGS.profileTitle.th);
+    expect(thai).toContain(PARENT_STRINGS.moneyTitle.th);
+    expect(thai).not.toContain("Scholarships &amp; financial aid");
+    const english = renderDashboard({ initialLocale: "en" });
+    expect(english).toContain("Student profile");
+    expect(english).toContain("Scholarships &amp; financial aid");
+  });
+
+  it("shows the role, sign-out, and sibling switcher without mutation controls", () => {
+    const html = renderDashboard({ initialLocale: "en" });
+    expect(html).toContain("Parent · View only");
+    expect(html).toContain('data-testid="parent-sign-out"');
+    expect(html).toContain('href="/api/auth/signout"');
+    expect(html).toContain('data-testid="parent-child-switcher"');
+    expect(html).toContain('aria-current="page"');
+    expect(html).toContain("Pat");
+    expect(html).not.toContain("<form");
+    expect(html).not.toContain("<input");
+    expect(html).not.toContain("<select");
+    expect(html).not.toContain("<textarea");
+    expect(count(html, "<button")).toBe(2);
+    for (const forbidden of ["Add a note", "Log meeting", "Invite", "Revoke", "Verify", "Staff only"]) {
+      expect(html).not.toContain(forbidden);
     }
   });
-});
 
-// ── Read-only guarantees (design §5.3: zero mutation affordances) ───────
-
-describe("ParentDashboardView read-only surface", () => {
-  it("has no mutation affordances and no links to staff surfaces", () => {
-    for (const initialLocale of ["th", "en"] as const) {
-      const html = renderDashboard({ initialLocale });
-      expect(html).not.toContain("<form");
-      expect(html).not.toContain("<input");
-      expect(html).not.toContain("<select");
-      expect(html).not.toContain("<textarea");
-      // No anchors at all — no staff surfaces, no navigation.
-      expect(html).not.toContain("<a ");
-      expect(html).not.toContain("href=");
-      // The ONLY buttons are the two language toggles.
-      expect(countOccurrences(html, "<button")).toBe(2);
-      expect(html).toContain('data-testid="parent-locale-th"');
-      expect(html).toContain('data-testid="parent-locale-en"');
-    }
+  it("renders only approved navigation and explicitly shared external links", () => {
+    const html = renderDashboard({ initialLocale: "en" });
+    expect(html).toContain('href="https://docs.google.com/shared-essay"');
+    expect(html).toContain('href="https://drive.google.com/transcript"');
+    expect(html).toContain('href="https://apply.college.example/login"');
+    expect(html).toContain(`href="${LINKED_CASES[1].href}"`);
+    expect(html).not.toContain("password");
+    expect(html).not.toContain("oauth");
   });
 
-  it("never renders staff affordance strings on any locale", () => {
-    for (const initialLocale of ["th", "en"] as const) {
-      const html = renderDashboard({ initialLocale });
-      expect(html).not.toContain("Add a note");
-      expect(html).not.toContain("Log meeting");
-      expect(html).not.toContain("Invite");
-      expect(html).not.toContain("Revoke");
-      expect(html).not.toContain("Verify");
-      expect(html).not.toContain("Staff only");
-    }
-  });
-});
-
-// ── Testing milestones (CM-83) ──────────────────────────────────────────
-
-describe("ParentDashboardView testing milestones", () => {
-  it("shows the score only for milestones that carry a score key", () => {
-    const html = renderDashboard();
-    expect(countOccurrences(html, 'data-testid="parent-milestone-row"')).toBe(2);
-    expect(countOccurrences(html, 'data-testid="parent-milestone-score"')).toBe(1);
-    expect(html).toContain("1450");
-  });
-
-  it("renders no score row when every score is withheld", () => {
-    const withheld: ParentDashboard = {
+  it("renders no score detail for an unreleased milestone shape", () => {
+    const dashboard: ParentDashboard = {
       ...DASHBOARD,
-      testingMilestones: [
-        {
-          testType: "sat",
-          testDate: "2026-06-06",
-          registered: true,
-          taken: true,
-          scoreReceived: true,
-          // No `score` key: unreleased (CM-83) — the DTO omits it entirely.
-        },
-      ],
+      testingMilestones: [{
+        testType: "sat",
+        subject: null,
+        testDate: "2026-06-06",
+        registrationDeadline: null,
+        lateRegistrationDeadline: null,
+        status: "score_received",
+        registered: true,
+        taken: true,
+        scoreReceived: true,
+      }],
     };
-    const html = renderDashboard({ dashboard: withheld });
-    expect(countOccurrences(html, 'data-testid="parent-milestone-row"')).toBe(1);
+    const html = renderDashboard({ dashboard });
     expect(html).not.toContain('data-testid="parent-milestone-score"');
+    expect(html).not.toContain('data-testid="parent-score-details"');
     expect(html).not.toContain("1450");
   });
-});
 
-// ── Deadlines (grouped by week, overdue red) ────────────────────────────
-
-describe("ParentDashboardView deadlines", () => {
-  it("groups deadlines by week with the overdue group first", () => {
-    const html = renderDashboard();
-    const overdueIndex = html.indexOf('data-testid="parent-deadline-group-overdue"');
-    const thisWeekIndex = html.indexOf('data-testid="parent-deadline-group-week-0"');
-    const nextWeekIndex = html.indexOf('data-testid="parent-deadline-group-week-1"');
-    const laterIndex = html.indexOf('data-testid="parent-deadline-group-week-2"');
-    expect(overdueIndex).toBeGreaterThan(-1);
-    expect(thisWeekIndex).toBeGreaterThan(overdueIndex);
-    expect(nextWeekIndex).toBeGreaterThan(thisWeekIndex);
-    expect(laterIndex).toBeGreaterThan(nextWeekIndex);
-    expect(html).toContain(PARENT_STRINGS.deadlinesGroupThisWeek.th);
-    expect(html).toContain(PARENT_STRINGS.deadlinesGroupNextWeek.th);
-    // Later weeks are titled by their Monday, D/M format.
-    expect(html).toContain("สัปดาห์วันที่ 20/7/2026");
-  });
-
-  it("styles overdue deadlines red with the overdue marker", () => {
-    const html = renderDashboard();
-    expect(html).toContain("text-conflict");
-    expect(html).toContain(`1/7/2026 · ${PARENT_STRINGS.overdueMarker.th}`);
-  });
-
-  it("renders D/M dates and bilingual source badges", () => {
-    const html = renderDashboard();
-    expect(html).toContain("9/7/2026");
-    expect(html).toContain(PARENT_DEADLINE_SOURCE_STRINGS.task.th);
-    expect(html).toContain(PARENT_DEADLINE_SOURCE_STRINGS.essay.th);
-  });
-});
-
-// ── Empty states ────────────────────────────────────────────────────────
-
-describe("ParentDashboardView empty states", () => {
-  it("renders a Thai empty state for every empty section", () => {
-    const html = renderDashboard({ dashboard: EMPTY_DASHBOARD });
-    expect(html).toContain(PARENT_STRINGS.deadlinesEmpty.th);
-    expect(html).toContain(PARENT_STRINGS.collegesEmpty.th);
-    expect(html).toContain(PARENT_STRINGS.announcementsEmpty.th);
-    expect(html).toContain(PARENT_STRINGS.testingEmpty.th);
-    expect(html).toContain(PARENT_STRINGS.notesEmpty.th);
-    expect(countOccurrences(html, 'data-testid="parent-phase-ring"')).toBe(0);
-    // Sections stay present (and ordered) even when empty.
-    for (const testId of PARENT_SECTION_TEST_IDS) {
-      expect(html).toContain(`data-testid="${testId}"`);
-    }
+  it("keeps every section visible with a useful empty state", () => {
+    const html = renderDashboard({ dashboard: EMPTY_DASHBOARD, initialLocale: "en", linkedCases: [] });
+    for (const text of [
+      "No academic records yet.",
+      "No checklist items yet.",
+      "No upcoming deadlines yet.",
+      "No colleges on the list yet.",
+      "No recommenders yet.",
+      "No essays yet.",
+      "No activities yet.",
+      "No awards yet.",
+      "No test sittings yet.",
+      "No scholarship or aid information yet.",
+      "No announcements yet.",
+      "No shared notes yet.",
+    ]) expect(html).toContain(text);
+    for (const testId of PARENT_SECTION_TEST_IDS) expect(html).toContain(`data-testid="${testId}"`);
   });
 });

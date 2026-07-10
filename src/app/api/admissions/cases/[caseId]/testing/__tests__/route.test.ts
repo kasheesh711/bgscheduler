@@ -12,7 +12,8 @@ vi.mock("@/lib/admissions/access", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/admissions/access")>()),
   requireCaseAccess: vi.fn(),
 }));
-vi.mock("@/lib/admissions/testing", () => ({
+vi.mock("@/lib/admissions/testing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/admissions/testing")>()),
   createSitting: vi.fn(),
   getBestScores: vi.fn(),
   listSittingsForCase: vi.fn(),
@@ -162,7 +163,7 @@ describe("/api/admissions/cases/[caseId]/testing", () => {
       const res = await GET(new Request("http://test.local"), makeCtx());
 
       expect(res.status).toBe(500);
-      await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+      await expect(res.json()).resolves.toEqual({ error: "Testing list failed" });
     });
   });
 
@@ -251,6 +252,36 @@ describe("/api/admissions/cases/[caseId]/testing", () => {
     it("returns 400 for a malformed testDate", async () => {
       const res = await POST(
         makeRequest("POST", { testType: "sat", testDate: "10/03/2026" }),
+        makeCtx(),
+      );
+
+      expect(res.status).toBe(400);
+      expect(createSitting).not.toHaveBeenCalled();
+    });
+
+    it("normalizes valid typed subscores before calling the domain", async () => {
+      const res = await POST(
+        makeRequest("POST", {
+          testType: "sat",
+          testDate: "2026-10-03",
+          scoreDetails: { testType: "sat", math: 780, readingWriting: 720 },
+        }),
+        makeCtx(),
+      );
+
+      expect(res.status).toBe(200);
+      expect(createSitting).toHaveBeenCalledWith(expect.objectContaining({
+        scoreDetails: { testType: "sat", math: 780, readingWriting: 720, total: 1500 },
+      }));
+    });
+
+    it("returns 400 for out-of-range typed subscores", async () => {
+      const res = await POST(
+        makeRequest("POST", {
+          testType: "sat",
+          testDate: "2026-10-03",
+          scoreDetails: { testType: "sat", math: 100, readingWriting: 720 },
+        }),
         makeCtx(),
       );
 

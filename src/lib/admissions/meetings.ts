@@ -18,7 +18,7 @@ import {
   type AdmissionsFieldDiff,
 } from "./audit";
 import {
-  ADMISSIONS_TASK_OWNERS,
+  ADMISSIONS_ASSIGNABLE_TASK_OWNERS,
   MEETING_ACTION_ITEM_PHASE,
   type AdmissionsTaskOwner,
 } from "./shared/meetings";
@@ -27,7 +27,11 @@ import type { AdmissionsMeetingDto, CaseRole } from "./types";
 // Task-owner and action-item constants live in the client-safe shared module
 // (shared/meetings.ts); this module re-exports them so existing consumers
 // keep importing from "./meetings".
-export { ADMISSIONS_TASK_OWNERS, MEETING_ACTION_ITEM_PHASE } from "./shared/meetings";
+export {
+  ADMISSIONS_ASSIGNABLE_TASK_OWNERS,
+  ADMISSIONS_TASK_OWNERS,
+  MEETING_ACTION_ITEM_PHASE,
+} from "./shared/meetings";
 export type { AdmissionsTaskOwner } from "./shared/meetings";
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -139,7 +143,7 @@ export async function createMeeting(
   const actionItems = input.actionItems ?? [];
   for (const item of actionItems) {
     if (!item.title.trim()) throw new Error("Action item title must not be empty");
-    if (!ADMISSIONS_TASK_OWNERS.includes(item.owner)) {
+    if (!ADMISSIONS_ASSIGNABLE_TASK_OWNERS.includes(item.owner as "student" | "counselor")) {
       throw new Error(`Invalid action item owner: ${String(item.owner)}`);
     }
     if (item.dueDate != null) assertDateOnly(item.dueDate, "action item dueDate");

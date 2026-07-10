@@ -163,16 +163,22 @@ The handler authenticates with `CRON_SECRET`, then calls `applyVerifiedStudentPr
 
 ## 9. Admissions notifications — `/api/internal/admissions-notifications`
 
-**Schedule:** `12 1 * * *` — once daily at **01:12 UTC = 08:12 Asia/Bangkok**. **Does:** sends University Admissions deadline-reminder emails, and on Bangkok Sundays additionally the weekly digest, via Resend.
+**Schedule:** `12 1 * * *` — once daily at **01:12 UTC = 08:12 Asia/Bangkok**. **Does:** retries the transactional admissions invitation/direct-message outbox, sends deadline-reminder emails, and on Bangkok Sundays additionally sends the weekly digest, via Resend.
 
 The handler authenticates with the shared `rejectInvalidCronSecret` helper, then wraps the pass in `withCronInvocationAudit` (job key `admissions_notifications`) and dispatches on an optional `runType` ([`route.ts:42-88`](../../src/app/api/internal/admissions-notifications/route.ts)):
 
-1. **Default (no `runType` — the Vercel cron case):** runs `runDailyNotifications` — scans every live (active/committed) case for calendar items due in exactly 7 days or exactly 2 days (Bangkok calendar) and emails the assigned member(s); interrupt sends are capped at **3 per recipient per Bangkok day**, with overflow collapsed into one combined email ([`notifications.ts:55, 528-566, 882-922`](../../src/lib/admissions/notifications.ts)). On a Bangkok **Sunday**, the same invocation then runs `runWeeklyDigest` (one batch-tier digest per case member with fresh content from the past 7 days).
+1. **Default (no `runType` — the Vercel cron case):** runs `runDailyNotifications`. It first claims due `pending`, `failed`, or expired-`processing` rows from `admissions_notification_outbox`, then scans live (active/committed) cases for calendar items due in the 7-day or 48-hour Bangkok windows. Interrupt sends are capped at **3 per recipient per Bangkok day**, with overflow collapsed into one combined email. On a Bangkok **Sunday**, the same invocation then runs `runWeeklyDigest` (one batch-tier digest per case member with fresh content from the past 7 days).
 2. **Explicit `runType`** (`?runType=daily|weekly` on `GET`, JSON body on `POST`) runs exactly that orchestrator — the manual-trigger path.
 
 **Single-flight guard:** each orchestrator inserts a `running` row into `admissions_notification_runs`, protected by the partial unique index `admissions_notification_runs_single_running_idx` (`WHERE status = 'running'`); a concurrent insert's unique violation means "skip", and stale `running` rows are failed after **30 minutes** before each start ([`notifications.ts:71, 792-832`](../../src/lib/admissions/notifications.ts)). When every requested pass is skipped, the route returns **HTTP 202** with `skipped: true`; otherwise 200 with per-pass results ([`route.ts:62-63`](../../src/app/api/internal/admissions-notifications/route.ts)).
 
-**Idempotency:** every keyed send is recorded in `admissions_notification_log` under a partial-unique `dedupe_key` (per-item reminder keys, per-day combined-reminder and digest keys), so same-day re-runs re-send nothing. **`maxDuration = 300`** ([`route.ts:20`](../../src/app/api/internal/admissions-notifications/route.ts)). Full request/response detail: [university-admissions.md](./api/university-admissions.md#notification-cron).
+**Notification outbox:** opening a family portal and eligible membership actions insert an invite row in the same transaction as the case/member change. Counselor direct messages similarly insert the message and append-only audit row in one transaction before delivery begins. The application attempts delivery immediately after commit. Failed attempts remain in the outbox with exponential retry times (1 minute, 5 minutes, 30 minutes, 2 hours, then a 12-hour cap). A 15-minute processing lease lets a later run reclaim a worker-abandoned row. Obsolete rows for revoked/activated/replaced-email/missing memberships are terminally skipped. Direct-message retries additionally require an active/committed case and, for family recipients, an open portal; staff recipients do not depend on portal state.
+
+**Idempotency:** the outbox has a unique `dedupe_key`; delivery reuses that key for both the Resend `Idempotency-Key` header and `admissions_notification_log`. Reminder, collapsed-reminder, and digest sends also use notification-log dedupe keys, so re-runs do not resend a keyed message.
+
+**Production readiness:** `RESEND_API_KEY`, a verified `ADMISSIONS_EMAIL_FROM`, and a monitored `ADMISSIONS_EMAIL_REPLY_TO` must be configured before a family portal is opened. The code has development fallbacks for sender/reply-to; those are not acceptable for production family rollout. Verify the most recent notification run and failed outbox rows after deploy. See the [admissions rollout runbook](../operations/admissions-import-rollout.md).
+
+**`maxDuration = 300`** ([`route.ts:20`](../../src/app/api/internal/admissions-notifications/route.ts)). Full request/response detail: [university-admissions.md](./api/university-admissions.md#notification-cron).
 
 ---
 
@@ -194,4 +200,4 @@ These `/api/internal/*` route handlers exist on disk but are **not** listed in `
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Admissions notification behavior verified against the parity branch on 2026-07-10._

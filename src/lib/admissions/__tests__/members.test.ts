@@ -4,19 +4,30 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // functions can be unit-tested against a fake chainable db (no real database).
 vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 
-// The invite email hook is fire-and-forget from addMember/reInvite; stub the
-// notifications module so no transport code runs and the dispatch is
-// observable per test.
+// Invitation writes queue transactionally; stub the outbox boundary so the
+// membership transaction and immediate post-commit kick are observable.
 vi.mock("@/lib/admissions/notifications", () => ({
-  sendMemberInviteForCase: vi.fn(async () => ({
-    skipped: false,
-    resendEmailId: null,
-    logId: null,
+  deriveStudentFirstName: vi.fn((student: { preferredName?: string | null; fullName?: string }) =>
+    student.preferredName || student.fullName?.split(/\s+/)[0] || "Student"),
+  queueMemberInviteOutbox: vi.fn(async () => "88888888-8888-4888-8888-888888888888"),
+  deliverAdmissionsOutboxBestEffort: vi.fn(async () => ({
+    attempted: 1,
+    sent: 1,
+    skipped: 0,
+    failed: 0,
+    errors: [],
   })),
 }));
 
-import { admissionsAuditLog, admissionsCaseMembers } from "@/lib/db/schema";
-import { sendMemberInviteForCase } from "@/lib/admissions/notifications";
+import {
+  admissionsAuditLog,
+  admissionsCaseMembers,
+  admissionsStudents,
+} from "@/lib/db/schema";
+import {
+  deliverAdmissionsOutboxBestEffort,
+  queueMemberInviteOutbox,
+} from "@/lib/admissions/notifications";
 import {
   activateMembershipsForEmail,
   addMember,
@@ -33,13 +44,16 @@ import {
 const CASE_ID = "11111111-1111-4111-8111-111111111111";
 const MEMBER_ID = "99999999-9999-4999-8999-999999999999";
 const STUDENT_EMAIL = "ada@example.com";
+const MEMBER_UPDATED_AT = "2026-06-02T00:00:00.000Z";
 
 const ACTOR = { email: "staff@example.com", role: "counselor" as const };
 
-const inviteEmailMock = vi.mocked(sendMemberInviteForCase);
+const queueInviteMock = vi.mocked(queueMemberInviteOutbox);
+const deliverOutboxMock = vi.mocked(deliverAdmissionsOutboxBestEffort);
 
 afterEach(() => {
-  inviteEmailMock.mockClear();
+  queueInviteMock.mockClear();
+  deliverOutboxMock.mockClear();
 });
 
 interface InsertCall {
@@ -58,10 +72,12 @@ interface UpdateCall {
  * back to withAuditedTransaction. Each db.select() resolves to the next
  * queued result — the queue order must match the function's query order.
  */
-function fakeDb(queue: unknown[][]) {
+function fakeDb(queue: unknown[][], options: { updateResults?: unknown[][] } = {}) {
   let i = 0;
   let generated = 0;
+  let returnedUpdate = 0;
   const selectCalls: number[] = [];
+  const lockCalls: string[] = [];
   const inserts: InsertCall[] = [];
   const updates: UpdateCall[] = [];
 
@@ -70,6 +86,10 @@ function fakeDb(queue: unknown[][]) {
     for (const method of ["from", "where", "innerJoin", "leftJoin", "orderBy", "groupBy", "limit"]) {
       b[method] = () => b;
     }
+    b.for = (strength: string) => {
+      lockCalls.push(strength);
+      return b;
+    };
     (b as { then: unknown }).then = (
       resolve: (value: unknown) => unknown,
       reject?: (error: unknown) => unknown,
@@ -107,7 +127,9 @@ function fakeDb(queue: unknown[][]) {
         updates.push({ table, set });
         const b: Record<string, unknown> = {};
         b.where = () => b;
-        b.returning = () => Promise.resolve([]);
+        b.returning = () => Promise.resolve(
+          options.updateResults?.[returnedUpdate++] ?? [{ id: MEMBER_ID }],
+        );
         (b as { then: unknown }).then = (
           resolve: (value: unknown) => unknown,
           reject?: (error: unknown) => unknown,
@@ -121,7 +143,7 @@ function fakeDb(queue: unknown[][]) {
     ...tx,
     transaction: async (cb: (t: unknown) => Promise<unknown>) => cb(tx),
   };
-  return { db: db as never, selectCalls, inserts, updates };
+  return { db: db as never, selectCalls, lockCalls, inserts, updates };
 }
 
 function memberRow(overrides: Record<string, unknown> = {}) {
@@ -179,7 +201,14 @@ describe("helpers", () => {
 describe("addMember", () => {
   it("adds a parent as an invited member with a paired audit row", async () => {
     // Queue: [case+student email], [existing (caseId,email) row -> none].
-    const { db, inserts } = fakeDb([[{ studentEmail: STUDENT_EMAIL }], []]);
+    const { db, inserts } = fakeDb([[
+      {
+        studentEmail: STUDENT_EMAIL,
+        fullName: "Ada Lovelace",
+        preferredName: "Ada",
+        familyPortalOpen: true,
+      },
+    ], []]);
 
     const dto = await addMember(
       { caseId: CASE_ID, email: " Mom@Example.com ", role: "parent", actor: ACTOR },
@@ -213,16 +242,26 @@ describe("addMember", () => {
       },
     });
 
-    // Invited member → invite email dispatched fire-and-forget (PRD §3.7).
-    expect(inviteEmailMock).toHaveBeenCalledTimes(1);
-    expect(inviteEmailMock).toHaveBeenCalledWith(
-      expect.objectContaining({ email: "mom@example.com", status: "invited" }),
+    expect(queueInviteMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        caseId: CASE_ID,
+        recipientEmail: "mom@example.com",
+        studentFirstName: "Ada",
+      }),
+    );
+    expect(deliverOutboxMock).toHaveBeenCalledWith(
+      ["88888888-8888-4888-8888-888888888888"],
       db,
     );
   });
 
   it("adds a counselor as immediately active", async () => {
-    const { db, inserts } = fakeDb([[{ studentEmail: STUDENT_EMAIL }], []]);
+    const { db, inserts } = fakeDb([
+      [{ studentEmail: STUDENT_EMAIL }],
+      [{ id: "active-counselor" }],
+      [],
+    ]);
 
     await addMember(
       { caseId: CASE_ID, email: "new-staff@example.com", role: "counselor", actor: ACTOR },
@@ -234,8 +273,9 @@ describe("addMember", () => {
     expect(members[0].activatedAt).toBeInstanceOf(Date);
     expect(members[0].invitedAt).toBeNull();
 
-    // Active memberships never trigger an invite email.
-    expect(inviteEmailMock).not.toHaveBeenCalled();
+    // Active counselor memberships never queue a family invite.
+    expect(queueInviteMock).not.toHaveBeenCalled();
+    expect(deliverOutboxMock).not.toHaveBeenCalled();
   });
 
   it("rejects a parent email equal to the case's student email with Conflict", async () => {
@@ -324,7 +364,7 @@ describe("addMember", () => {
 
 describe("revokeMember", () => {
   it("revokes an active member and writes the status diff", async () => {
-    const { db, inserts, updates } = fakeDb([[memberRow()]]);
+    const { db, inserts, lockCalls, updates } = fakeDb([[memberRow()]]);
 
     const dto = await revokeMember({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR }, db);
 
@@ -334,6 +374,7 @@ describe("revokeMember", () => {
 
     expect(dto.status).toBe("revoked");
     expect(dto.revokedAt).not.toBeNull();
+    expect(lockCalls).toEqual(["update"]);
 
     const audits = auditInserts(inserts);
     expect(audits).toHaveLength(1);
@@ -346,6 +387,15 @@ describe("revokeMember", () => {
 
   it("throws Conflict when the member is already revoked", async () => {
     const { db, updates } = fakeDb([[memberRow({ status: "revoked" })]]);
+
+    await expect(
+      revokeMember({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR }, db),
+    ).rejects.toThrow("Conflict");
+    expect(updates).toHaveLength(0);
+  });
+
+  it("does not revoke the case's sole student membership", async () => {
+    const { db, updates } = fakeDb([[memberRow({ role: "student" })]]);
 
     await expect(
       revokeMember({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR }, db),
@@ -368,6 +418,15 @@ describe("revokeMember", () => {
       revokeMember({ caseId: CASE_ID, memberId: "nope", actor: ACTOR }, db),
     ).rejects.toThrow("NotFound");
     expect(selectCalls).toHaveLength(0);
+  });
+
+  it("does not audit when the conditional revoke loses a race", async () => {
+    const { db, inserts } = fakeDb([[memberRow()]], { updateResults: [[]] });
+
+    await expect(
+      revokeMember({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR }, db),
+    ).rejects.toThrow("Conflict");
+    expect(auditInserts(inserts)).toHaveLength(0);
   });
 });
 
@@ -410,10 +469,85 @@ describe("changeMemberEmail", () => {
     expect(audits[1]).toMatchObject({ action: "create" });
   });
 
-  it("forces invited status even when the member is a counselor", async () => {
+  it("queues the replacement family invite atomically when the portal is open", async () => {
+    const { db } = fakeDb([
+      [{
+        studentEmail: STUDENT_EMAIL,
+        fullName: "Ada Lovelace",
+        preferredName: "Ada",
+        familyPortalOpen: true,
+      }],
+      [memberRow()],
+      [],
+    ]);
+
+    await changeMemberEmail(
+      {
+        caseId: CASE_ID,
+        memberId: MEMBER_ID,
+        newEmail: "replacement@example.com",
+        actor: ACTOR,
+      },
+      db,
+    );
+
+    expect(queueInviteMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        recipientEmail: "replacement@example.com",
+        studentFirstName: "Ada",
+        dedupeKey: expect.stringContaining("member-invite:email-change:"),
+      }),
+    );
+    expect(deliverOutboxMock).toHaveBeenCalledWith(
+      ["88888888-8888-4888-8888-888888888888"],
+      db,
+    );
+  });
+
+  it("keeps the canonical student profile email aligned with a student membership change", async () => {
+    const studentId = "77777777-7777-4777-8777-777777777777";
+    const { db, inserts, updates } = fakeDb([
+      [{
+        studentId,
+        studentEmail: STUDENT_EMAIL,
+        fullName: "Ada Lovelace",
+        preferredName: "Ada",
+        familyPortalOpen: false,
+      }],
+      [memberRow({ role: "student", email: STUDENT_EMAIL })],
+      [],
+    ]);
+
+    await changeMemberEmail(
+      {
+        caseId: CASE_ID,
+        memberId: MEMBER_ID,
+        newEmail: "new-ada@example.com",
+        actor: ACTOR,
+      },
+      db,
+    );
+
+    const studentUpdate = updates.find((call) => call.table === admissionsStudents);
+    expect(studentUpdate?.set).toMatchObject({ studentEmail: "new-ada@example.com" });
+    expect(auditInserts(inserts)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        entityType: "student",
+        entityId: studentId,
+        action: "email_change",
+        diff: {
+          studentEmail: { old: STUDENT_EMAIL, new: "new-ada@example.com" },
+        },
+      }),
+    ]));
+  });
+
+  it("keeps a registry-validated counselor active after an email change", async () => {
     const { db, inserts } = fakeDb([
       [{ studentEmail: STUDENT_EMAIL }],
       [memberRow({ role: "counselor", email: "old-staff@example.com" })],
+      [{ id: "active-counselor" }],
       [],
     ]);
 
@@ -422,7 +556,8 @@ describe("changeMemberEmail", () => {
       db,
     );
 
-    expect(memberInserts(inserts)[0]).toMatchObject({ role: "counselor", status: "invited" });
+    expect(memberInserts(inserts)[0]).toMatchObject({ role: "counselor", status: "active" });
+    expect(queueInviteMock).not.toHaveBeenCalled();
   });
 
   it("rejects a parent's new email equal to the student email with Conflict", async () => {
@@ -509,9 +644,20 @@ describe("reInvite", () => {
     const previousInvite = new Date("2026-06-01T00:00:00Z");
     const { db, inserts, updates } = fakeDb([
       [memberRow({ status: "invited", invitedAt: previousInvite, activatedAt: null })],
+      [{
+        studentEmail: STUDENT_EMAIL,
+        fullName: "Ada Lovelace",
+        preferredName: "Ada",
+        familyPortalOpen: true,
+      }],
     ]);
 
-    const dto = await reInvite({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR }, db);
+    const dto = await reInvite({
+      caseId: CASE_ID,
+      memberId: MEMBER_ID,
+      actor: ACTOR,
+      expectedUpdatedAt: MEMBER_UPDATED_AT,
+    }, db);
 
     expect(updates).toHaveLength(1);
     expect(updates[0].set).toMatchObject({ status: "invited" });
@@ -524,10 +670,16 @@ describe("reInvite", () => {
     expect(audits).toHaveLength(1);
     expect(audits[0]).toMatchObject({ action: "reinvite", entityId: MEMBER_ID });
 
-    // Re-invite re-sends the invite email fire-and-forget (PRD §3.7).
-    expect(inviteEmailMock).toHaveBeenCalledTimes(1);
-    expect(inviteEmailMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: MEMBER_ID, status: "invited" }),
+    expect(queueInviteMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        memberId: MEMBER_ID,
+        recipientEmail: "mom@example.com",
+        dedupeKey: `member-invite:reinvite:${MEMBER_ID}:${MEMBER_UPDATED_AT}`,
+      }),
+    );
+    expect(deliverOutboxMock).toHaveBeenCalledWith(
+      ["88888888-8888-4888-8888-888888888888"],
       db,
     );
   });
@@ -535,19 +687,48 @@ describe("reInvite", () => {
   it("moves a bounced member back to invited", async () => {
     const { db, updates } = fakeDb([
       [memberRow({ status: "bounced", invitedAt: new Date("2026-06-01T00:00:00Z"), activatedAt: null })],
+      [{
+        studentEmail: STUDENT_EMAIL,
+        fullName: "Ada Lovelace",
+        preferredName: null,
+        familyPortalOpen: true,
+      }],
     ]);
 
-    const dto = await reInvite({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR }, db);
+    const dto = await reInvite({
+      caseId: CASE_ID,
+      memberId: MEMBER_ID,
+      actor: ACTOR,
+      expectedUpdatedAt: MEMBER_UPDATED_AT,
+    }, db);
 
     expect(updates[0].set).toMatchObject({ status: "invited" });
     expect(dto.status).toBe("invited");
+  });
+
+  it("does not send an unusable invitation while the family portal is closed", async () => {
+    const { db } = fakeDb([
+      [memberRow({ status: "invited", activatedAt: null })],
+      [{
+        studentEmail: STUDENT_EMAIL,
+        fullName: "Ada Lovelace",
+        preferredName: "Ada",
+        familyPortalOpen: false,
+      }],
+    ]);
+
+    await expect(
+      reInvite({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR, expectedUpdatedAt: MEMBER_UPDATED_AT }, db),
+    ).rejects.toThrow("Conflict");
+    expect(queueInviteMock).not.toHaveBeenCalled();
+    expect(deliverOutboxMock).not.toHaveBeenCalled();
   });
 
   it("throws Conflict for an active member (nothing to invite)", async () => {
     const { db } = fakeDb([[memberRow({ status: "active" })]]);
 
     await expect(
-      reInvite({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR }, db),
+      reInvite({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR, expectedUpdatedAt: MEMBER_UPDATED_AT }, db),
     ).rejects.toThrow("Conflict");
   });
 
@@ -555,7 +736,7 @@ describe("reInvite", () => {
     const { db } = fakeDb([[memberRow({ status: "revoked" })]]);
 
     await expect(
-      reInvite({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR }, db),
+      reInvite({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR, expectedUpdatedAt: MEMBER_UPDATED_AT }, db),
     ).rejects.toThrow("Conflict");
   });
 
@@ -563,8 +744,47 @@ describe("reInvite", () => {
     const { db } = fakeDb([[]]);
 
     await expect(
-      reInvite({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR }, db),
+      reInvite({ caseId: CASE_ID, memberId: MEMBER_ID, actor: ACTOR, expectedUpdatedAt: MEMBER_UPDATED_AT }, db),
     ).rejects.toThrow("NotFound");
+  });
+
+  it("treats a retry of one committed re-invite action as an idempotent replay", async () => {
+    const current = memberRow({
+      status: "invited",
+      activatedAt: null,
+      updatedAt: new Date("2026-07-02T00:00:00Z"),
+    });
+    const { db, inserts, updates } = fakeDb([
+      [current],
+      [{ id: "existing-outbox-row" }],
+    ]);
+
+    const dto = await reInvite({
+      caseId: CASE_ID,
+      memberId: MEMBER_ID,
+      actor: ACTOR,
+      expectedUpdatedAt: MEMBER_UPDATED_AT,
+    }, db);
+
+    expect(dto.updatedAt).toBe("2026-07-02T00:00:00.000Z");
+    expect(updates).toHaveLength(0);
+    expect(auditInserts(inserts)).toHaveLength(0);
+    expect(queueInviteMock).not.toHaveBeenCalled();
+    expect(deliverOutboxMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale re-invite token that has no matching outbox action", async () => {
+    const { db } = fakeDb([
+      [memberRow({ status: "invited", updatedAt: new Date("2026-07-02T00:00:00Z") })],
+      [],
+    ]);
+
+    await expect(reInvite({
+      caseId: CASE_ID,
+      memberId: MEMBER_ID,
+      actor: ACTOR,
+      expectedUpdatedAt: MEMBER_UPDATED_AT,
+    }, db)).rejects.toThrow("Conflict");
   });
 });
 
@@ -683,6 +903,20 @@ describe("activateMembershipsForEmail (PRD §3.7 exact-email activation)", () =>
 
     await expect(activateMembershipsForEmail("   ", db)).resolves.toEqual([]);
     expect(selectCalls).toHaveLength(0);
+  });
+
+  it("audits and returns only memberships actually changed by the conditional update", async () => {
+    const invited = memberRow({
+      id: "m1",
+      email: "kid@example.com",
+      role: "student",
+      status: "invited",
+      activatedAt: null,
+    });
+    const { db, inserts } = fakeDb([[invited]], { updateResults: [[]] });
+
+    await expect(activateMembershipsForEmail("kid@example.com", db)).resolves.toEqual([]);
+    expect(auditInserts(inserts)).toHaveLength(0);
   });
 });
 

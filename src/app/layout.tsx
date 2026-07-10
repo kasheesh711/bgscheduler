@@ -13,8 +13,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "BeGifted Ops",
-  description: "Internal operations platform for BeGifted tools",
+  title: "BeGifted Portal",
+  description: "BeGifted education and admissions portal",
 };
 
 export default function RootLayout({

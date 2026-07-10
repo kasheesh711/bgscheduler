@@ -1,5 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
 import type { AdmissionsCaseSummary } from "@/lib/admissions/types";
 import {
   ALL_CASELOAD_FILTER,
@@ -228,6 +232,18 @@ describe("CaseloadTable", () => {
     expect(html).toContain("Class of 2027");
     expect(html).toContain("Committed");
     expect(html).toContain("Nok, Mint");
+  });
+
+  it("makes every case row keyboard-accessible and links to its detail page", () => {
+    const html = renderToStaticMarkup(
+      <CaseloadTable rows={[summary({ caseId: "case-ada", studentName: "Ada Lovelace" })]} />,
+    );
+
+    expect(html).toContain('role="link"');
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('data-case-href="/admissions/case-ada"');
+    expect(html).toContain('href="/admissions/case-ada"');
+    expect(html).toContain("Open Ada Lovelace&#x27;s admissions case");
   });
 
   it("renders the live checklist progress as a bar with the percentage", () => {

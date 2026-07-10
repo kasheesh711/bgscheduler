@@ -14,6 +14,8 @@ import { getDb, type Database } from "@/lib/db";
 import {
   admissionsCaseMembers,
   admissionsCases,
+  admissionsCounselors,
+  admissionsNotificationOutbox,
   admissionsStudents,
 } from "@/lib/db/schema";
 import {
@@ -22,7 +24,11 @@ import {
   writeAuditLog,
   type AdmissionsWriteDb,
 } from "./audit";
-import { sendMemberInviteForCase } from "./notifications";
+import {
+  deliverAdmissionsOutboxBestEffort,
+  deriveStudentFirstName,
+  queueMemberInviteOutbox,
+} from "./notifications";
 import type {
   AdmissionsMemberDto,
   AdmissionsMemberStatus,
@@ -40,6 +46,11 @@ export interface AdmissionsActor {
 }
 
 type CaseMemberRow = typeof admissionsCaseMembers.$inferSelect;
+
+/** Ensures an optimistic-concurrency token always advances at millisecond precision. */
+function nextMutationTimestamp(previous: Date): Date {
+  return new Date(Math.max(Date.now(), previous.getTime() + 1));
+}
 
 /** Lowercases and trims an email for storage/comparison (schema stores lowercase). */
 export function normalizeAdmissionsEmail(value: string): string {
@@ -85,29 +96,30 @@ function getInitialMemberState(role: AdmissionsRole, now: Date): InitialMemberSt
   return { status: "invited", invitedAt: now, activatedAt: null };
 }
 
-/**
- * Fire-and-forget invite email for a freshly invited membership (PRD §3.7).
- * Only "invited" rows get an email (counselors activate immediately, no
- * invite); send failures are logged and never thrown — membership writes
- * must never fail because email delivery did.
- */
-function dispatchInviteEmail(member: AdmissionsMemberDto, db: Database): void {
-  if (member.status !== "invited") return;
-  void sendMemberInviteForCase(member, db).catch((error) => {
-    console.error("Failed to send admissions member invite email", error);
-  });
+interface CaseStudentContext {
+  studentId: string;
+  studentEmail: string;
+  fullName: string;
+  preferredName: string | null;
+  familyPortalOpen: boolean;
 }
 
 /**
  * Loads the live case's student email (join through admissions_students).
  * Soft-deleted cases/students resolve to null — callers treat that as NotFound.
  */
-async function findCaseStudentEmail(
+async function findCaseStudentContext(
   db: AdmissionsWriteDb,
   caseId: string,
-): Promise<string | null> {
+): Promise<CaseStudentContext | null> {
   const rows = await db
-    .select({ studentEmail: admissionsStudents.studentEmail })
+    .select({
+      studentId: admissionsStudents.id,
+      studentEmail: admissionsStudents.studentEmail,
+      fullName: admissionsStudents.fullName,
+      preferredName: admissionsStudents.preferredName,
+      familyPortalOpen: admissionsCases.familyPortalOpen,
+    })
     .from(admissionsCases)
     .innerJoin(admissionsStudents, eq(admissionsCases.studentId, admissionsStudents.id))
     .where(and(
@@ -116,7 +128,35 @@ async function findCaseStudentEmail(
       isNull(admissionsStudents.deletedAt),
     ))
     .limit(1);
-  return rows.length > 0 ? normalizeAdmissionsEmail(rows[0].studentEmail) : null;
+  if (rows.length === 0) return null;
+  return {
+    studentId: rows[0].studentId,
+    studentEmail: normalizeAdmissionsEmail(rows[0].studentEmail),
+    fullName: rows[0].fullName,
+    preferredName: rows[0].preferredName,
+    familyPortalOpen: rows[0].familyPortalOpen,
+  };
+}
+
+async function findCaseStudentEmail(
+  db: AdmissionsWriteDb,
+  caseId: string,
+): Promise<string | null> {
+  return (await findCaseStudentContext(db, caseId))?.studentEmail ?? null;
+}
+
+async function assertActiveCounselorEmail(
+  db: AdmissionsWriteDb,
+  email: string,
+): Promise<void> {
+  const rows = await db.select({ id: admissionsCounselors.id })
+    .from(admissionsCounselors)
+    .where(and(
+      eq(admissionsCounselors.email, normalizeAdmissionsEmail(email)),
+      eq(admissionsCounselors.active, true),
+    ))
+    .limit(1);
+  if (!rows[0]) throw new Error("Conflict");
 }
 
 /**
@@ -181,6 +221,33 @@ export async function insertCaseMember(
   return mapAdmissionsMemberRow(row);
 }
 
+async function queueFamilyInvite(
+  tx: AdmissionsWriteDb,
+  input: {
+    member: AdmissionsMemberDto;
+    student: Pick<CaseStudentContext, "fullName" | "preferredName">;
+    reason: "member-add" | "email-change" | "reinvite";
+    now: Date;
+    /** Stable request token used to collapse retries of one re-invite action. */
+    dedupeToken?: string;
+  },
+): Promise<string | null> {
+  if (
+    (input.member.role !== "student" && input.member.role !== "parent") ||
+    input.member.status !== "invited"
+  ) {
+    return null;
+  }
+  return queueMemberInviteOutbox(tx, {
+    caseId: input.member.caseId,
+    memberId: input.member.id,
+    recipientEmail: input.member.email,
+    studentFirstName: deriveStudentFirstName(input.student),
+    dedupeKey: `member-invite:${input.reason}:${input.member.id}:${input.dedupeToken ?? input.now.toISOString()}`,
+    now: input.now,
+  });
+}
+
 /**
  * Guard for member payloads: rejects a parent email equal to the case's
  * student email unless adminOverride is set (PRD "same email as both student
@@ -213,7 +280,8 @@ export async function rejectStudentAsParent(
 /**
  * Adds a parent or counselor member to a case (audited).
  *
- * 1. Shape-check caseId; load the case + student email (miss → NotFound).
+ * 1. Shape-check caseId; load the case, student, and family-portal state
+ *    (miss → NotFound).
  * 2. Reject role "student" — a case has exactly one student membership,
  *    created with the case; the student's address changes via
  *    changeMemberEmail (Conflict).
@@ -222,8 +290,9 @@ export async function rejectStudentAsParent(
  * 4. Existing (caseId, email) row: none → fresh insert; revoked → reinstate
  *    in place (role + state reset, revokedAt cleared, audited as
  *    "reinstate"); any other status → Conflict (already a member).
- * 5. After the transaction commits, an "invited" membership triggers the
- *    invite email fire-and-forget (PRD §3.7; failures logged, never thrown).
+ * 5. When the family portal is open, a new/reinstated parent invitation is
+ *    queued in the same transaction. Delivery is attempted after commit and
+ *    failures remain retryable by the notification cron.
  *
  * @returns the created or reinstated membership DTO.
  */
@@ -242,11 +311,15 @@ export async function addMember(
   if (!email) throw new Error("Case member email is required");
   if (input.role === "student") throw new Error("Conflict");
 
-  const member = await withAuditedTransaction(async (tx) => {
-    const studentEmail = await findCaseStudentEmail(tx, input.caseId);
-    if (studentEmail === null) throw new Error("NotFound");
+  const mutation = await withAuditedTransaction(async (tx) => {
+    const student = await findCaseStudentContext(tx, input.caseId);
+    if (student === null) throw new Error("NotFound");
 
-    if (input.role === "parent" && email === studentEmail && !input.adminOverride) {
+    if (input.role === "counselor") {
+      await assertActiveCounselorEmail(tx, email);
+    }
+
+    if (input.role === "parent" && email === student.studentEmail && !input.adminOverride) {
       throw new Error("Conflict");
     }
 
@@ -261,17 +334,22 @@ export async function addMember(
     const existing = existingRows[0];
 
     if (!existing) {
-      return insertCaseMember(tx, {
+      const member = await insertCaseMember(tx, {
         caseId: input.caseId,
         email,
         role: input.role,
         actor: input.actor,
       });
+      const now = new Date();
+      const queuedOutboxId = student.familyPortalOpen
+        ? await queueFamilyInvite(tx, { member, student, reason: "member-add", now })
+        : null;
+      return { member, queuedOutboxId };
     }
 
     if (existing.status !== "revoked") throw new Error("Conflict");
 
-    const now = new Date();
+    const now = nextMutationTimestamp(existing.updatedAt);
     const state = getInitialMemberState(input.role, now);
     await tx
       .update(admissionsCaseMembers)
@@ -304,7 +382,7 @@ export async function addMember(
       ),
     });
 
-    return mapAdmissionsMemberRow({
+    const member = mapAdmissionsMemberRow({
       ...existing,
       role: input.role,
       status: state.status,
@@ -314,10 +392,16 @@ export async function addMember(
       addedByEmail: normalizeAdmissionsEmail(input.actor.email),
       updatedAt: now,
     });
+    const queuedOutboxId = student.familyPortalOpen
+      ? await queueFamilyInvite(tx, { member, student, reason: "member-add", now })
+      : null;
+    return { member, queuedOutboxId };
   }, db);
 
-  dispatchInviteEmail(member, db);
-  return member;
+  if (mutation.queuedOutboxId) {
+    await deliverAdmissionsOutboxBestEffort([mutation.queuedOutboxId], db);
+  }
+  return mutation.member;
 }
 
 /**
@@ -348,16 +432,24 @@ export async function revokeMember(
         eq(admissionsCaseMembers.id, input.memberId),
         eq(admissionsCaseMembers.caseId, input.caseId),
       ))
-      .limit(1);
+      .limit(1)
+      .for("update");
     const row = rows[0];
     if (!row) throw new Error("NotFound");
     if (row.status === "revoked") throw new Error("Conflict");
+    if (row.role === "student") throw new Error("Conflict");
 
-    const now = new Date();
-    await tx
+    const now = nextMutationTimestamp(row.updatedAt);
+    const updatedRows = await tx
       .update(admissionsCaseMembers)
       .set({ status: "revoked", revokedAt: now, updatedAt: now })
-      .where(eq(admissionsCaseMembers.id, row.id));
+      .where(and(
+        eq(admissionsCaseMembers.id, row.id),
+        eq(admissionsCaseMembers.status, row.status),
+        eq(admissionsCaseMembers.updatedAt, row.updatedAt),
+      ))
+      .returning({ id: admissionsCaseMembers.id });
+    if (!updatedRows[0]) throw new Error("Conflict");
 
     await writeAuditLog(tx, {
       caseId: input.caseId,
@@ -397,7 +489,12 @@ export async function revokeMember(
  *    unless adminOverride (Conflict).
  * 4. Any existing (caseId, newEmail) membership row → Conflict (unique key).
  * 5. Revoke the old row (audited as "email_change" with the email diff) and
- *    insert the new invited row (audited as "create").
+ *    insert a replacement. Family roles start invited; a registry-validated
+ *    counselor starts active because counselors do not use family invites.
+ *    For the student role, update the canonical admissions_students email in
+ *    the same transaction. When the family portal is open, queue the
+ *    replacement family invite in that transaction and attempt delivery after
+ *    commit.
  *
  * @returns the newly created invited membership DTO.
  */
@@ -417,9 +514,9 @@ export async function changeMemberEmail(
   const newEmail = normalizeAdmissionsEmail(input.newEmail);
   if (!newEmail) throw new Error("Case member email is required");
 
-  return withAuditedTransaction(async (tx) => {
-    const studentEmail = await findCaseStudentEmail(tx, input.caseId);
-    if (studentEmail === null) throw new Error("NotFound");
+  const mutation = await withAuditedTransaction(async (tx) => {
+    const student = await findCaseStudentContext(tx, input.caseId);
+    if (student === null) throw new Error("NotFound");
 
     const rows = await tx
       .select()
@@ -434,7 +531,11 @@ export async function changeMemberEmail(
     if (row.status === "revoked") throw new Error("Conflict");
     if (row.email === newEmail) throw new Error("Conflict");
 
-    if (row.role === "parent" && newEmail === studentEmail && !input.adminOverride) {
+    if (row.role === "counselor") {
+      await assertActiveCounselorEmail(tx, newEmail);
+    }
+
+    if (row.role === "parent" && newEmail === student.studentEmail && !input.adminOverride) {
       throw new Error("Conflict");
     }
 
@@ -448,7 +549,7 @@ export async function changeMemberEmail(
       .limit(1);
     if (duplicateRows.length > 0) throw new Error("Conflict");
 
-    const now = new Date();
+    const now = nextMutationTimestamp(row.updatedAt);
     await tx
       .update(admissionsCaseMembers)
       .set({ status: "revoked", revokedAt: now, updatedAt: now })
@@ -468,34 +569,71 @@ export async function changeMemberEmail(
       ),
     });
 
-    return insertCaseMember(tx, {
+    if (row.role === "student") {
+      await tx
+        .update(admissionsStudents)
+        .set({ studentEmail: newEmail, updatedAt: now })
+        .where(eq(admissionsStudents.id, student.studentId));
+      await writeAuditLog(tx, {
+        caseId: input.caseId,
+        actorEmail: input.actor.email,
+        actorRole: input.actor.role,
+        entityType: "student",
+        entityId: student.studentId,
+        action: "email_change",
+        diff: {
+          studentEmail: { old: student.studentEmail, new: newEmail },
+        },
+      });
+    }
+
+    const member = await insertCaseMember(tx, {
       caseId: input.caseId,
       email: newEmail,
       role: row.role,
       actor: input.actor,
-      initialStatus: "invited",
+      ...(row.role === "counselor" ? {} : { initialStatus: "invited" as const }),
     });
+    const queuedOutboxId =
+      student.familyPortalOpen && (member.role === "student" || member.role === "parent")
+        ? await queueFamilyInvite(tx, { member, student, reason: "email-change", now })
+        : null;
+    return { member, queuedOutboxId };
   }, db);
+
+  if (mutation.queuedOutboxId) {
+    await deliverAdmissionsOutboxBestEffort([mutation.queuedOutboxId], db);
+  }
+  return mutation.member;
 }
 
 /**
  * Re-sends an invite by stamping a fresh invitedAt on an invited or bounced
  * membership (audited). Active members need no invite and revoked members
- * must be re-added via addMember — both Conflict. After the transaction
- * commits, the invite email is re-sent fire-and-forget (PRD §3.7 one-click
- * re-invite; failures logged, never thrown).
+ * must be re-added via addMember; a closed family portal cannot send a usable
+ * family invite — all three cases return Conflict. The retryable invitation
+ * is queued in the same transaction and attempted immediately after commit.
+ * The caller supplies the membership updatedAt it observed; that token both
+ * protects the row update and gives retries of one action a stable outbox
+ * key, so concurrent requests cannot enqueue duplicate invitations.
  *
  * @returns the updated membership DTO.
  */
 export async function reInvite(
-  input: { caseId: string; memberId: string; actor: AdmissionsActor },
+  input: {
+    caseId: string;
+    memberId: string;
+    actor: AdmissionsActor;
+    /** Membership updatedAt observed by the caller; also scopes outbox idempotency. */
+    expectedUpdatedAt: string;
+  },
   db: Database = getDb(),
 ): Promise<AdmissionsMemberDto> {
   if (!isUuidShaped(input.caseId) || !isUuidShaped(input.memberId)) {
     throw new Error("NotFound");
   }
 
-  const member = await withAuditedTransaction(async (tx) => {
+  const mutation = await withAuditedTransaction(async (tx) => {
     const rows = await tx
       .select()
       .from(admissionsCaseMembers)
@@ -503,16 +641,45 @@ export async function reInvite(
         eq(admissionsCaseMembers.id, input.memberId),
         eq(admissionsCaseMembers.caseId, input.caseId),
       ))
-      .limit(1);
+      .limit(1)
+      .for("update");
     const row = rows[0];
     if (!row) throw new Error("NotFound");
     if (row.status !== "invited" && row.status !== "bounced") throw new Error("Conflict");
 
-    const now = new Date();
-    await tx
+    const dedupeToken = input.expectedUpdatedAt.trim();
+    if (!dedupeToken) throw new Error("Conflict");
+    const dedupeKey = `member-invite:reinvite:${row.id}:${dedupeToken}`;
+
+    // A retried request carries the same observed updatedAt. Once the first
+    // transaction commits, the row token changes, but its stable outbox key
+    // proves this exact action already committed. Return the current member
+    // without a second audit row, timestamp write, or delivery attempt.
+    if (row.updatedAt.toISOString() !== dedupeToken) {
+      const replayRows = await tx
+        .select({ id: admissionsNotificationOutbox.id })
+        .from(admissionsNotificationOutbox)
+        .where(and(
+          eq(admissionsNotificationOutbox.caseId, input.caseId),
+          eq(admissionsNotificationOutbox.memberId, row.id),
+          eq(admissionsNotificationOutbox.dedupeKey, dedupeKey),
+        ))
+        .limit(1);
+      if (!replayRows[0]) throw new Error("Conflict");
+      return { member: mapAdmissionsMemberRow(row), queuedOutboxId: null as string | null };
+    }
+
+    const now = nextMutationTimestamp(row.updatedAt);
+    const updatedRows = await tx
       .update(admissionsCaseMembers)
       .set({ status: "invited", invitedAt: now, updatedAt: now })
-      .where(eq(admissionsCaseMembers.id, row.id));
+      .where(and(
+        eq(admissionsCaseMembers.id, row.id),
+        inArray(admissionsCaseMembers.status, ["invited", "bounced"]),
+        eq(admissionsCaseMembers.updatedAt, row.updatedAt),
+      ))
+      .returning({ id: admissionsCaseMembers.id });
+    if (!updatedRows[0]) throw new Error("Conflict");
 
     await writeAuditLog(tx, {
       caseId: input.caseId,
@@ -531,16 +698,32 @@ export async function reInvite(
       ),
     });
 
-    return mapAdmissionsMemberRow({
+    const member = mapAdmissionsMemberRow({
       ...row,
       status: "invited",
       invitedAt: now,
       updatedAt: now,
     });
+    if (member.role !== "student" && member.role !== "parent") {
+      return { member, queuedOutboxId: null as string | null };
+    }
+    const student = await findCaseStudentContext(tx, input.caseId);
+    if (student === null) throw new Error("NotFound");
+    if (!student.familyPortalOpen) throw new Error("Conflict");
+    const queuedOutboxId = await queueFamilyInvite(tx, {
+      member,
+      student,
+      reason: "reinvite",
+      now,
+      dedupeToken,
+    });
+    return { member, queuedOutboxId };
   }, db);
 
-  dispatchInviteEmail(member, db);
-  return member;
+  if (mutation.queuedOutboxId) {
+    await deliverAdmissionsOutboxBestEffort([mutation.queuedOutboxId], db);
+  }
+  return mutation.member;
 }
 
 /**
@@ -552,10 +735,9 @@ export async function reInvite(
  * on status "active") on the same request. Bounced rows activate too — the
  * exact-email OAuth sign-in is stronger delivery proof than the bounce.
  *
- * 1. Normalize the email; empty → no-op ([]). Load the email's invited/
- *    bounced rows; none → no-op without opening a transaction (the common
- *    path for every already-active sign-in).
- * 2. Inside one audited transaction, flip each row to "active" + stamp
+ * 1. Normalize the email; empty → no-op ([]).
+ * 2. Inside one audited transaction, lock the email's eligible invited/
+ *    bounced rows, then flip each row to "active" + stamp
  *    activatedAt. The UPDATE re-checks status IN (invited, bounced) so a
  *    concurrent revoke is never overwritten (fail-closed), and each flip
  *    writes a paired "activate" audit row attributed to the member.
@@ -570,26 +752,51 @@ export async function activateMembershipsForEmail(
   const normalized = normalizeAdmissionsEmail(email);
   if (!normalized) return [];
 
-  const pendingRows = await db
-    .select()
-    .from(admissionsCaseMembers)
-    .where(and(
-      eq(admissionsCaseMembers.email, normalized),
-      inArray(admissionsCaseMembers.status, ["invited", "bounced"]),
-    ));
-  if (pendingRows.length === 0) return [];
-
   return withAuditedTransaction(async (tx) => {
-    const now = new Date();
+    // Select and lock inside the transaction. The old pre-transaction read
+    // allowed a revoke between the read and update, which could then be
+    // overwritten by sign-in activation.
+    const pendingRows = await tx
+      .select({
+        id: admissionsCaseMembers.id,
+        caseId: admissionsCaseMembers.caseId,
+        email: admissionsCaseMembers.email,
+        role: admissionsCaseMembers.role,
+        status: admissionsCaseMembers.status,
+        invitedAt: admissionsCaseMembers.invitedAt,
+        activatedAt: admissionsCaseMembers.activatedAt,
+        revokedAt: admissionsCaseMembers.revokedAt,
+        addedByEmail: admissionsCaseMembers.addedByEmail,
+        notificationPrefs: admissionsCaseMembers.notificationPrefs,
+        createdAt: admissionsCaseMembers.createdAt,
+        updatedAt: admissionsCaseMembers.updatedAt,
+      })
+      .from(admissionsCaseMembers)
+      .innerJoin(admissionsCases, eq(admissionsCaseMembers.caseId, admissionsCases.id))
+      .where(and(
+        eq(admissionsCaseMembers.email, normalized),
+        inArray(admissionsCaseMembers.status, ["invited", "bounced"]),
+        inArray(admissionsCaseMembers.role, ["student", "parent"]),
+        eq(admissionsCases.familyPortalOpen, true),
+        inArray(admissionsCases.status, ["active", "committed", "completed"]),
+        isNull(admissionsCases.deletedAt),
+      ))
+      .for("update");
+    if (pendingRows.length === 0) return [];
+
     const activated: AdmissionsMemberDto[] = [];
     for (const row of pendingRows) {
-      await tx
+      const now = nextMutationTimestamp(row.updatedAt);
+      const updatedRows = await tx
         .update(admissionsCaseMembers)
         .set({ status: "active", activatedAt: now, updatedAt: now })
         .where(and(
           eq(admissionsCaseMembers.id, row.id),
           inArray(admissionsCaseMembers.status, ["invited", "bounced"]),
-        ));
+          eq(admissionsCaseMembers.updatedAt, row.updatedAt),
+        ))
+        .returning({ id: admissionsCaseMembers.id });
+      if (!updatedRows[0]) continue;
 
       await writeAuditLog(tx, {
         caseId: row.caseId,

@@ -14,6 +14,7 @@ import { redirect } from "next/navigation";
 import { ShieldAlert, UserRound } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { auth } from "@/lib/auth";
+import { requireCounselorOrAdmin } from "@/lib/admissions/access";
 import {
   getCaseIdForParentEmail,
   getCaseIdForStudentEmail,
@@ -64,7 +65,7 @@ function NoAccessCard() {
   );
 }
 
-async function AdmissionsBody() {
+export async function AdmissionsBody() {
   const session = await auth();
   const email = session?.user?.email?.trim().toLowerCase();
   if (!email) {
@@ -98,6 +99,16 @@ async function AdmissionsBody() {
     return <NoAccessCard />;
   }
 
+  // The JWT role is presentation context only. Re-resolve current staff
+  // authority before any cross-case query so counselor/admin revocation takes
+  // effect immediately, even in a browser with a still-valid old session.
+  let staff: Awaited<ReturnType<typeof requireCounselorOrAdmin>>;
+  try {
+    staff = await requireCounselorOrAdmin(email);
+  } catch {
+    return <NoAccessCard />;
+  }
+
   const [caseload, cohorts, counselors, resourceGroups] = await Promise.all([
     getCaseloadForUser(email),
     listCohorts(),
@@ -113,7 +124,7 @@ async function AdmissionsBody() {
       resourceGroups={resourceGroups}
       // Presentation-only role for the resources panel affordances; the API
       // re-resolves staff rights from Postgres on every write.
-      viewerRole={role === "counselor" ? "counselor" : "admin"}
+      viewerRole={staff.role}
     />
   );
 }

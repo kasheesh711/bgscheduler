@@ -223,7 +223,6 @@ export function SectionForm({
   const [values, setValues] = useState<Record<string, SectionFieldValue>>(() =>
     buildInitialValues(definition, section.payload),
   );
-  const [savedPayload, setSavedPayload] = useState<Record<string, unknown>>(section.payload);
   const [state, setState] = useState<AdmissionsSubmissionState>(section.state);
   const [updatedAt, setUpdatedAt] = useState<string | null>(section.updatedAt);
   const [stepIndex, setStepIndex] = useState(0);
@@ -231,11 +230,18 @@ export function SectionForm({
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const flashTimerRef = useRef<number | null>(null);
+  const savedPayloadRef = useRef<Record<string, unknown>>(section.payload);
+  const updatedAtRef = useRef<string | null>(section.updatedAt);
+  // Blurs can fire faster than a round trip. Serialize autosaves so each
+  // partial field write uses the latest server token and merges into the
+  // locked current payload instead of racing a sibling field save.
+  const autosaveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const step = definition.steps[Math.min(stepIndex, definition.steps.length - 1)];
 
   const applySection = useCallback((next: AdmissionsSectionStateDto) => {
-    setSavedPayload(next.payload);
+    savedPayloadRef.current = next.payload;
+    updatedAtRef.current = next.updatedAt;
     setState(next.state);
     setUpdatedAt(next.updatedAt);
   }, []);
@@ -253,33 +259,44 @@ export function SectionForm({
   const autosaveField = useCallback(
     async (field: AdmissionsSectionField, rawValue: SectionFieldValue) => {
       if (!canWrite) return;
-      const payload = buildAutosavePayload(field, rawValue, savedPayload[field.key]);
-      if (payload === null) return;
-      setActionError(null);
-      setSaveStatus("saving");
-      try {
-        const response = await fetch(endpoint, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ payload }),
-        });
-        const body: unknown = await response.json().catch(() => null);
-        if (!response.ok) {
-          setSaveStatus("idle");
-          setActionError(readErrorMessage(body, "Failed to save your answer."));
-          return;
-        }
-        const next = readSectionFromPayload(body);
-        if (next) applySection(next);
-        flashSaved();
-      } catch (error) {
-        setSaveStatus("idle");
-        setActionError(
-          error instanceof Error ? error.message : "Failed to save your answer.",
+      const operation = autosaveQueueRef.current.then(async () => {
+        const payload = buildAutosavePayload(
+          field,
+          rawValue,
+          savedPayloadRef.current[field.key],
         );
-      }
+        if (payload === null) return;
+        setActionError(null);
+        setSaveStatus("saving");
+        try {
+          const response = await fetch(endpoint, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              payload,
+              expectedUpdatedAt: updatedAtRef.current,
+            }),
+          });
+          const body: unknown = await response.json().catch(() => null);
+          if (!response.ok) {
+            setSaveStatus("idle");
+            setActionError(readErrorMessage(body, "Failed to save your answer."));
+            return;
+          }
+          const next = readSectionFromPayload(body);
+          if (next) applySection(next);
+          flashSaved();
+        } catch (error) {
+          setSaveStatus("idle");
+          setActionError(
+            error instanceof Error ? error.message : "Failed to save your answer.",
+          );
+        }
+      });
+      autosaveQueueRef.current = operation;
+      await operation;
     },
-    [applySection, canWrite, endpoint, flashSaved, savedPayload],
+    [applySection, canWrite, endpoint, flashSaved],
   );
 
   const runAction = useCallback(
@@ -287,10 +304,11 @@ export function SectionForm({
       setActionError(null);
       setBusy(true);
       try {
+        await autosaveQueueRef.current;
         const response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action }),
+          body: JSON.stringify({ action, expectedUpdatedAt: updatedAtRef.current }),
         });
         const body: unknown = await response.json().catch(() => null);
         if (!response.ok) {

@@ -2,7 +2,11 @@ import { and, asc, eq } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { fetchGoogleSheetRows } from "@/lib/sales-dashboard/sheets";
-import { hasSheetsReadScope, hasSheetsWriteScope } from "@/lib/sales-dashboard/google-oauth";
+import {
+  authorizedGoogleSheetsTokenOwnerClause,
+  hasSheetsReadScope,
+  hasSheetsWriteScope,
+} from "@/lib/sales-dashboard/google-oauth";
 import {
   createAppsScriptScheduleEmailSender,
   type ScheduleEmailSender,
@@ -137,6 +141,7 @@ export async function resolveLeaveRequestsConnectedEmail(
       lastError: schema.googleOAuthTokens.lastError,
     })
     .from(schema.googleOAuthTokens)
+    .where(authorizedGoogleSheetsTokenOwnerClause())
     .orderBy(asc(schema.googleOAuthTokens.updatedAt));
   const selected = selectLeaveRequestsConnectedEmail({
     configuredEmail: LEAVE_REQUESTS_CONNECTED_EMAIL,

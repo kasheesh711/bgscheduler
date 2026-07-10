@@ -53,6 +53,8 @@ export interface CaseAccess {
   email: string;
   role: CaseRole;
   isAdmin: boolean;
+  /** Completed family cases stay readable, but every mutation must fail. */
+  familyReadOnly?: true;
 }
 
 // ── Status unions (mirror pgEnums in schema.ts) ─────────────────────────
@@ -154,6 +156,10 @@ export interface AdmissionsCaseDetail {
   committedListItemId: string | null;
   committedCollegeName: string | null;
   driveFolder: string | null;
+  /** Family routes are denied until staff explicitly opens this case portal. */
+  familyPortalOpen: boolean;
+  familyPortalOpenedAt: string | null;
+  familyPortalOpenedByEmail: string | null;
   student: AdmissionsStudentDto;
   cohort: AdmissionsCohortDto;
   members: AdmissionsMemberDto[];
@@ -189,6 +195,26 @@ export interface AdmissionsCaseDetail {
   lastMeetingDate: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Closed student-facing case contract; staff membership/audit data never enters it. */
+export interface AdmissionsStudentCaseDetail extends Pick<
+  AdmissionsCaseDetail,
+  | "caseId"
+  | "status"
+  | "driveFolder"
+  | "updatedAt"
+  | "collegeList"
+  | "announcements"
+  | "essays"
+  | "activities"
+  | "testSittings"
+  | "thisWeek"
+  | "phaseProgress"
+> {
+  student: Omit<AdmissionsStudentDto, "id" | "wiseStudentKey">;
+  cohort: Omit<AdmissionsCohortDto, "id">;
+  counselors: Array<{ email: string }>;
 }
 
 /** One meeting log row (design §4 meetings routes). */

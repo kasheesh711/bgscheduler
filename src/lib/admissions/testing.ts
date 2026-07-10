@@ -25,19 +25,16 @@
 //   and accommodations on their own case; counselor edits are attributed by
 //   audit actorRole.
 //
-// Schema gap (reported, not hand-fixed): admissions_test_sittings carries NO
-// deletedAt column (design §3 asks for soft-delete on user-facing tables), so
-// softDeleteSitting currently performs an audited HARD delete inside a
-// transaction, preserving the full row in the audit diff and removing
-// dependent score-send doc rows. When a migration adds deleted_at, the delete
-// flips to an UPDATE and reads gain an isNull(deletedAt) filter.
+// Sittings are soft-deleted; dependent score-send rows are removed in the same
+// audited transaction because they are soft references and must not claim a
+// score was sent from a deleted sitting.
 //
 // Error contract (admissionsErrorResponse maps these): missing rows /
 // malformed ids → Error("NotFound"); role violations → Error("Forbidden");
 // expectedUpdatedAt mismatch → Error("Conflict"); input-shape violations
 // throw descriptive Errors (routes' Zod schemas are the 400 boundary).
 
-import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import { admissionsCollegeDocs, admissionsTestSittings } from "@/lib/db/schema";
 import { BANGKOK_TIME_ZONE } from "@/lib/bangkok-time";
@@ -53,7 +50,12 @@ import {
   ADMISSIONS_TEST_TYPES,
   ADMISSIONS_TEST_TYPE_LABELS,
   deriveRegistrationDeadline,
+  getScoreDetailsAggregate,
+  isAdmissionsTestSittingStatus,
   isAdmissionsTestType,
+  normalizeTestScoreDetails,
+  type AdmissionsTestScoreDetails,
+  type AdmissionsTestSittingStatus,
   type AdmissionsTestType,
 } from "./shared/testing";
 import type { CalendarItem, CalendarWindow } from "./calendar";
@@ -74,13 +76,22 @@ type TestSittingRow = typeof admissionsTestSittings.$inferSelect;
 // client-safe shared module (shared/testing.ts); this module re-exports them
 // so existing consumers keep importing from "./testing".
 export {
+  ADMISSIONS_TEST_SITTING_STATUSES,
   ADMISSIONS_TEST_TYPES,
   ADMISSIONS_TEST_TYPE_LABELS,
   REGISTRATION_LEAD_DAYS,
+  admissionsTestScoreDetailsSchema,
   deriveRegistrationDeadline,
+  getScoreDetailsAggregate,
+  isAdmissionsTestSittingStatus,
   isAdmissionsTestType,
+  normalizeTestScoreDetails,
 } from "./shared/testing";
-export type { AdmissionsTestType } from "./shared/testing";
+export type {
+  AdmissionsTestScoreDetails,
+  AdmissionsTestSittingStatus,
+  AdmissionsTestType,
+} from "./shared/testing";
 
 // ── DTOs ────────────────────────────────────────────────────────────────
 
@@ -93,8 +104,12 @@ export interface AdmissionsTestSittingDto {
   testDate: string;
   /** Auto-derived at create (REGISTRATION_LEAD_DAYS), editable via update. */
   registrationDeadline: string | null;
+  lateRegistrationDeadline?: string | null;
+  status?: AdmissionsTestSittingStatus;
+  subject?: string | null;
   targetScore: string;
   actualScore: string | null;
+  scoreDetails?: AdmissionsTestScoreDetails | null;
   /** CM-83: parents may see raw scores only when a counselor set this true. */
   scoreReleasedToParent: boolean;
   accommodations: string | null;
@@ -114,6 +129,10 @@ export interface AdmissionsBestScore {
   numericScore: number;
   /** CM-83 release state of the best sitting's score. */
   scoreReleasedToParent: boolean;
+  /** Cross-sitting SAT/ACT section aggregation when more than one sitting contributes. */
+  scoreKind?: "single_sitting" | "superscore";
+  contributingSittingIds?: string[];
+  sectionScores?: Record<string, number>;
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────
@@ -126,6 +145,12 @@ function assertDateOnly(value: string, field: string): void {
 
 function assertTestType(value: string, field: string): void {
   if (!isAdmissionsTestType(value)) {
+    throw new Error(`Invalid ${field}: ${String(value)}`);
+  }
+}
+
+function assertSittingStatus(value: string, field: string): void {
+  if (!isAdmissionsTestSittingStatus(value)) {
     throw new Error(`Invalid ${field}: ${String(value)}`);
   }
 }
@@ -153,14 +178,26 @@ function getBangkokDateKey(now: Date): string {
 }
 
 function toSittingDto(row: TestSittingRow): AdmissionsTestSittingDto {
+  let scoreDetails: AdmissionsTestScoreDetails | null = null;
+  if (row.scoreDetails != null) {
+    try {
+      scoreDetails = normalizeTestScoreDetails(row.scoreDetails);
+    } catch {
+      scoreDetails = null;
+    }
+  }
   return {
     id: row.id,
     caseId: row.caseId,
     testType: row.testType,
     testDate: row.testDate,
     registrationDeadline: row.registrationDeadline,
+    lateRegistrationDeadline: row.lateRegistrationDeadline,
+    status: row.status,
+    subject: row.subject,
     targetScore: row.targetScore,
     actualScore: row.actualScore,
+    scoreDetails,
     scoreReleasedToParent: row.scoreReleasedToParent,
     accommodations: row.accommodations,
     createdAt: row.createdAt.toISOString(),
@@ -183,8 +220,10 @@ async function findCaseSitting(
     .where(and(
       eq(admissionsTestSittings.id, sittingId),
       eq(admissionsTestSittings.caseId, caseId),
+      isNull(admissionsTestSittings.deletedAt),
     ))
-    .limit(1);
+    .limit(1)
+    .for("update");
   const row = rows[0];
   if (!row) throw new Error("NotFound");
   return row;
@@ -198,7 +237,11 @@ export interface CreateSittingInput {
   testType: AdmissionsTestType;
   /** Test date, "YYYY-MM-DD". */
   testDate: string;
+  lateRegistrationDeadline?: string | null;
+  status?: AdmissionsTestSittingStatus;
+  subject?: string | null;
   targetScore?: string;
+  scoreDetails?: AdmissionsTestScoreDetails | null;
   accommodations?: string | null;
 }
 
@@ -226,9 +269,22 @@ export async function createSitting(
 
   assertTestType(input.testType, "testType");
   assertDateOnly(input.testDate, "testDate");
+  if (input.lateRegistrationDeadline != null) {
+    assertDateOnly(input.lateRegistrationDeadline, "lateRegistrationDeadline");
+  }
+  if (input.status !== undefined) assertSittingStatus(input.status, "status");
   const targetScore = (input.targetScore ?? "").trim();
+  const subject = normalizeNullableText(input.subject ?? null);
   const accommodations = normalizeNullableText(input.accommodations ?? null);
   const registrationDeadline = deriveRegistrationDeadline(input.testType, input.testDate);
+  const scoreDetails = input.scoreDetails == null
+    ? null
+    : normalizeTestScoreDetails(input.scoreDetails);
+  if (scoreDetails !== null && scoreDetails.testType !== input.testType) {
+    throw new Error("Invalid scoreDetails: testType does not match sitting");
+  }
+  const actualScore = scoreDetails === null ? null : getScoreDetailsAggregate(scoreDetails);
+  const status = input.status ?? (scoreDetails === null ? "planned" : "score_received");
 
   return withAuditedTransaction(async (tx) => {
     const insertedRows = await tx
@@ -238,8 +294,12 @@ export async function createSitting(
         testType: input.testType,
         testDate: input.testDate,
         registrationDeadline,
+        lateRegistrationDeadline: input.lateRegistrationDeadline ?? null,
+        status,
+        subject,
         targetScore,
-        actualScore: null,
+        actualScore,
+        scoreDetails,
         scoreReleasedToParent: false,
         accommodations,
       })
@@ -260,10 +320,18 @@ export async function createSitting(
           testType: input.testType,
           testDate: input.testDate,
           registrationDeadline,
+          lateRegistrationDeadline: input.lateRegistrationDeadline ?? null,
+          status,
+          subject,
           targetScore,
+          actualScore,
+          scoreDetails,
           accommodations,
         },
-        ["testType", "testDate", "registrationDeadline", "targetScore", "accommodations"],
+        [
+          "testType", "testDate", "registrationDeadline", "lateRegistrationDeadline",
+          "status", "subject", "targetScore", "actualScore", "scoreDetails", "accommodations",
+        ],
       ),
     });
 
@@ -285,10 +353,18 @@ export interface UpdateSittingInput {
   testDate?: string;
   /** Student-writable explicit deadline; null clears (see re-derivation rule). */
   registrationDeadline?: string | null;
+  /** Student-writable late-registration deadline; null clears. */
+  lateRegistrationDeadline?: string | null;
+  /** Student-writable sitting lifecycle. */
+  status?: AdmissionsTestSittingStatus;
+  /** Subject name for AP/IB/other exams; null clears. */
+  subject?: string | null;
   /** Student-writable. */
   targetScore?: string;
   /** Student-writable; null clears. */
   actualScore?: string | null;
+  /** Student-writable validated subscores; null clears typed and aggregate score. */
+  scoreDetails?: AdmissionsTestScoreDetails | null;
   /** Student-writable; null clears. */
   accommodations?: string | null;
   /** COUNSELOR-ONLY release flag (CM-83); a student attempt → Forbidden. */
@@ -299,8 +375,12 @@ const SITTING_DIFF_FIELDS = [
   "testType",
   "testDate",
   "registrationDeadline",
+  "lateRegistrationDeadline",
+  "status",
+  "subject",
   "targetScore",
   "actualScore",
+  "scoreDetails",
   "accommodations",
   "scoreReleasedToParent",
 ] as const;
@@ -347,9 +427,26 @@ export async function updateSitting(
   if (input.registrationDeadline != null) {
     assertDateOnly(input.registrationDeadline, "registrationDeadline");
   }
+  if (input.lateRegistrationDeadline != null) {
+    assertDateOnly(input.lateRegistrationDeadline, "lateRegistrationDeadline");
+  }
+  if (input.status !== undefined) assertSittingStatus(input.status, "status");
+  if (input.actualScore !== undefined && input.scoreDetails !== undefined) {
+    throw new Error("Provide actualScore or scoreDetails, not both");
+  }
   const targetScore = input.targetScore === undefined ? undefined : input.targetScore.trim();
-  const actualScore =
-    input.actualScore === undefined ? undefined : normalizeNullableText(input.actualScore);
+  const subject = input.subject === undefined ? undefined : normalizeNullableText(input.subject);
+  const parsedScoreDetails = input.scoreDetails === undefined
+    ? undefined
+    : input.scoreDetails === null
+      ? null
+      : normalizeTestScoreDetails(input.scoreDetails);
+  let actualScore = input.actualScore === undefined
+    ? undefined
+    : normalizeNullableText(input.actualScore);
+  if (parsedScoreDetails !== undefined) {
+    actualScore = parsedScoreDetails === null ? null : getScoreDetailsAggregate(parsedScoreDetails);
+  }
   const accommodations =
     input.accommodations === undefined ? undefined : normalizeNullableText(input.accommodations);
 
@@ -361,6 +458,14 @@ export async function updateSitting(
       input.expectedUpdatedAt !== row.updatedAt.toISOString()
     ) {
       throw new Error("Conflict");
+    }
+
+    const nextTestType = input.testType ?? row.testType;
+    const effectiveScoreDetails = parsedScoreDetails === undefined
+      ? row.scoreDetails == null ? null : normalizeTestScoreDetails(row.scoreDetails)
+      : parsedScoreDetails;
+    if (effectiveScoreDetails !== null && effectiveScoreDetails.testType !== nextTestType) {
+      throw new Error("Invalid scoreDetails: testType does not match sitting");
     }
 
     // Step 3 — "still-auto" re-derivation (see JSDoc).
@@ -384,8 +489,12 @@ export async function updateSitting(
         testType: input.testType,
         testDate: input.testDate,
         registrationDeadline,
+        lateRegistrationDeadline: input.lateRegistrationDeadline,
+        status: input.status,
+        subject,
         targetScore,
         actualScore,
+        scoreDetails: parsedScoreDetails,
         accommodations,
         scoreReleasedToParent: input.scoreReleasedToParent,
       },
@@ -400,8 +509,14 @@ export async function updateSitting(
     if ("testType" in diff) setValues.testType = input.testType;
     if ("testDate" in diff) setValues.testDate = input.testDate;
     if ("registrationDeadline" in diff) setValues.registrationDeadline = registrationDeadline;
+    if ("lateRegistrationDeadline" in diff) {
+      setValues.lateRegistrationDeadline = input.lateRegistrationDeadline;
+    }
+    if ("status" in diff) setValues.status = input.status;
+    if ("subject" in diff) setValues.subject = subject;
     if ("targetScore" in diff) setValues.targetScore = targetScore;
     if ("actualScore" in diff) setValues.actualScore = actualScore;
+    if ("scoreDetails" in diff) setValues.scoreDetails = parsedScoreDetails;
     if ("accommodations" in diff) setValues.accommodations = accommodations;
     if ("scoreReleasedToParent" in diff) {
       setValues.scoreReleasedToParent = input.scoreReleasedToParent;
@@ -438,12 +553,9 @@ export interface SoftDeleteSittingInput {
  * Deletes a test sitting (student or counselor — a sitting is the student's
  * own self-report row, design §2.4; parents never write).
  *
- * admissions_test_sittings has no deletedAt column (schema gap vs design §3),
- * so this is currently an audited HARD delete: the full row is preserved in
- * the audit diff, and dependent score-send doc rows
- * (admissions_college_docs.testSittingId is a soft reference, CM-82) are
- * removed in the same transaction so no doc row claims scores were sent for
- * a sitting that no longer exists. Everything commits atomically.
+ * The sitting itself is soft-deleted. Dependent score-send rows use a soft
+ * reference, so they are removed in the same audited transaction rather than
+ * retaining a claim that a deleted sitting's score was sent.
  */
 export async function softDeleteSitting(
   input: SoftDeleteSittingInput,
@@ -466,8 +578,10 @@ export async function softDeleteSitting(
         .delete(admissionsCollegeDocs)
         .where(eq(admissionsCollegeDocs.testSittingId, row.id));
     }
+    const now = new Date();
     await tx
-      .delete(admissionsTestSittings)
+      .update(admissionsTestSittings)
+      .set({ deletedAt: now, updatedAt: now })
       .where(eq(admissionsTestSittings.id, row.id));
 
     await writeAuditLog(tx, {
@@ -478,7 +592,7 @@ export async function softDeleteSitting(
       entityId: row.id,
       action: "delete",
       diff: {
-        deleted: { old: toSittingDto(row), new: null },
+        deletedAt: { old: null, new: now.toISOString() },
         ...(removedScoreSendDocIds.length > 0
           ? { removedScoreSendDocIds: { old: removedScoreSendDocIds, new: null } }
           : {}),
@@ -514,7 +628,10 @@ export async function listSittingsForCase(
   const rows = await db
     .select()
     .from(admissionsTestSittings)
-    .where(eq(admissionsTestSittings.caseId, caseId))
+    .where(and(
+      eq(admissionsTestSittings.caseId, caseId),
+      isNull(admissionsTestSittings.deletedAt),
+    ))
     .orderBy(asc(admissionsTestSittings.testDate), asc(admissionsTestSittings.id));
 
   return rows
@@ -571,12 +688,14 @@ export async function getBestScores(
       testType: admissionsTestSittings.testType,
       testDate: admissionsTestSittings.testDate,
       actualScore: admissionsTestSittings.actualScore,
+      scoreDetails: admissionsTestSittings.scoreDetails,
       scoreReleasedToParent: admissionsTestSittings.scoreReleasedToParent,
     })
     .from(admissionsTestSittings)
     .where(and(
       eq(admissionsTestSittings.caseId, caseId),
       isNotNull(admissionsTestSittings.actualScore),
+      isNull(admissionsTestSittings.deletedAt),
     ));
 
   const best = new Map<AdmissionsTestType, AdmissionsBestScore>();
@@ -597,6 +716,85 @@ export async function getBestScores(
     if (!current || isBetterScore(candidate, current)) {
       best.set(row.testType, candidate);
     }
+  }
+
+  type ScoreRow = (typeof rows)[number];
+  const writeSuperscore = (
+    testType: "sat" | "act",
+    contributors: Array<{ row: ScoreRow }>,
+    sectionScores: Record<string, number>,
+    numericScore: number,
+  ): void => {
+    const contributingRows = [...new Map(
+      contributors.map((entry) => [entry.row.id, entry.row]),
+    ).values()];
+    const latest = contributingRows.slice().sort((a, b) => {
+      if (a.testDate !== b.testDate) return a.testDate > b.testDate ? -1 : 1;
+      return a.id < b.id ? -1 : 1;
+    })[0];
+    best.set(testType, {
+      testType,
+      sittingId: latest.id,
+      testDate: latest.testDate,
+      actualScore: String(numericScore),
+      numericScore,
+      scoreReleasedToParent: contributingRows.every((row) => row.scoreReleasedToParent),
+      scoreKind: contributingRows.length > 1 ? "superscore" : "single_sitting",
+      contributingSittingIds: contributingRows.map((row) => row.id),
+      sectionScores,
+    });
+  };
+
+  type SatDetails = Extract<AdmissionsTestScoreDetails, { testType: "sat" }>;
+  const satRows: Array<{ row: ScoreRow; details: SatDetails }> = [];
+  type ActDetails = Extract<AdmissionsTestScoreDetails, { testType: "act" }>;
+  const actRows: Array<{ row: ScoreRow; details: ActDetails }> = [];
+  for (const row of rows) {
+    if (row.scoreDetails == null) continue;
+    try {
+      const details = normalizeTestScoreDetails(row.scoreDetails);
+      if (row.testType === "sat" && details.testType === "sat") satRows.push({ row, details });
+      if (row.testType === "act" && details.testType === "act") actRows.push({ row, details });
+    } catch {
+      // A malformed legacy JSON payload must never participate in a superscore.
+    }
+  }
+
+  if (satRows.length > 0) {
+    const choose = (section: "math" | "readingWriting") => satRows.slice().sort((a, b) => {
+      const delta = b.details[section] - a.details[section];
+      if (delta !== 0) return delta;
+      if (a.row.testDate !== b.row.testDate) return a.row.testDate > b.row.testDate ? -1 : 1;
+      return a.row.id < b.row.id ? -1 : 1;
+    })[0];
+    const contributors = [choose("math"), choose("readingWriting")];
+    const sectionScores = {
+      math: contributors[0].details.math,
+      readingWriting: contributors[1].details.readingWriting,
+    };
+    writeSuperscore("sat", contributors, sectionScores, sectionScores.math + sectionScores.readingWriting);
+  }
+
+  if (actRows.length > 0) {
+    const choose = (section: "english" | "math" | "reading" | "science") => actRows.slice().sort((a, b) => {
+      const delta = b.details[section] - a.details[section];
+      if (delta !== 0) return delta;
+      if (a.row.testDate !== b.row.testDate) return a.row.testDate > b.row.testDate ? -1 : 1;
+      return a.row.id < b.row.id ? -1 : 1;
+    })[0];
+    const contributors = [choose("english"), choose("math"), choose("reading"), choose("science")];
+    const sectionScores = {
+      english: contributors[0].details.english,
+      math: contributors[1].details.math,
+      reading: contributors[2].details.reading,
+      science: contributors[3].details.science,
+    };
+    writeSuperscore(
+      "act",
+      contributors,
+      sectionScores,
+      Math.round((sectionScores.english + sectionScores.math + sectionScores.reading + sectionScores.science) / 4),
+    );
   }
 
   return ADMISSIONS_TEST_TYPES
@@ -669,15 +867,20 @@ export async function collectTestingDeadlineEntries(
       testType: admissionsTestSittings.testType,
       testDate: admissionsTestSittings.testDate,
       registrationDeadline: admissionsTestSittings.registrationDeadline,
+      lateRegistrationDeadline: admissionsTestSittings.lateRegistrationDeadline,
+      status: admissionsTestSittings.status,
       actualScore: admissionsTestSittings.actualScore,
     })
     .from(admissionsTestSittings)
-    .where(inArray(admissionsTestSittings.caseId, validCaseIds));
+    .where(and(
+      inArray(admissionsTestSittings.caseId, validCaseIds),
+      isNull(admissionsTestSittings.deletedAt),
+    ));
 
   const entries: TestingDeadlineEntry[] = [];
   for (const row of rows) {
     const label = ADMISSIONS_TEST_TYPE_LABELS[row.testType];
-    const completed = row.actualScore !== null;
+    const completed = row.actualScore !== null || row.status === "canceled";
 
     if (row.registrationDeadline !== null && DATE_ONLY_PATTERN.test(row.registrationDeadline)) {
       entries.push({
@@ -686,6 +889,20 @@ export async function collectTestingDeadlineEntries(
         source: "testing",
         title: `${label} registration deadline`,
         date: row.registrationDeadline,
+        ownerRole: "student",
+        completed,
+      });
+    }
+    if (
+      row.lateRegistrationDeadline !== null &&
+      DATE_ONLY_PATTERN.test(row.lateRegistrationDeadline)
+    ) {
+      entries.push({
+        id: `${row.id}:late-registration`,
+        caseId: row.caseId,
+        source: "testing",
+        title: `${label} late registration deadline`,
+        date: row.lateRegistrationDeadline,
         ownerRole: "student",
         completed,
       });

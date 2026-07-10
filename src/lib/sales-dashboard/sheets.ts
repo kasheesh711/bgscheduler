@@ -6,6 +6,7 @@ interface GoogleSheetsValuesResponse {
 }
 
 interface GoogleSheetsMetadataResponse {
+  properties?: { title?: string };
   sheets?: Array<{ properties?: { title?: string } }>;
   error?: { message?: string };
 }
@@ -58,16 +59,31 @@ async function googleSheetsPut<T>(
   return body;
 }
 
-export async function listGoogleSheetTitles(email: string, spreadsheetId: string): Promise<string[]> {
+export interface GoogleSheetMetadata {
+  title: string | null;
+  sheetTitles: string[];
+}
+
+export async function getGoogleSheetMetadata(
+  email: string,
+  spreadsheetId: string,
+): Promise<GoogleSheetMetadata> {
   const accessToken = await getGoogleSheetsAccessToken(email);
   const body = await googleSheetsGet<GoogleSheetsMetadataResponse>(
     `${spreadsheetId}`,
     accessToken,
-    { fields: "sheets.properties.title" },
+    { fields: "properties.title,sheets.properties.title" },
   );
-  return (body.sheets ?? [])
-    .map((sheet) => sheet.properties?.title)
-    .filter((title): title is string => Boolean(title));
+  return {
+    title: body.properties?.title?.trim() || null,
+    sheetTitles: (body.sheets ?? [])
+      .map((sheet) => sheet.properties?.title)
+      .filter((title): title is string => Boolean(title)),
+  };
+}
+
+export async function listGoogleSheetTitles(email: string, spreadsheetId: string): Promise<string[]> {
+  return (await getGoogleSheetMetadata(email, spreadsheetId)).sheetTitles;
 }
 
 export async function fetchGoogleSheetRows(
@@ -84,6 +100,35 @@ export async function fetchGoogleSheetRows(
       majorDimension: "ROWS",
       valueRenderOption: "UNFORMATTED_VALUE",
       dateTimeRenderOption: "SERIAL_NUMBER",
+    },
+  );
+  return body.values ?? [];
+}
+
+/**
+ * Reads one explicit, bounded A1 range. Admissions workbook import uses this
+ * instead of whole-tab reads so hidden master grids and credential columns
+ * are never fetched accidentally.
+ */
+export async function fetchGoogleSheetRange(
+  email: string,
+  spreadsheetId: string,
+  sheetName: string,
+  cellRange: string,
+  valueRenderOption: "FORMATTED_VALUE" | "FORMULA" = "FORMATTED_VALUE",
+): Promise<unknown[][]> {
+  if (!/^[A-Z]+\d+:[A-Z]+\d+$/.test(cellRange)) {
+    throw new Error("Google Sheets range must be a bounded A1 rectangle");
+  }
+  const accessToken = await getGoogleSheetsAccessToken(email);
+  const fullRange = `${quoteSheetName(sheetName)}!${cellRange}`;
+  const body = await googleSheetsGet<GoogleSheetsValuesResponse>(
+    `${spreadsheetId}/values/${encodeURIComponent(fullRange)}`,
+    accessToken,
+    {
+      majorDimension: "ROWS",
+      valueRenderOption,
+      dateTimeRenderOption: "FORMATTED_STRING",
     },
   );
   return body.values ?? [];

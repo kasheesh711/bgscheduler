@@ -1,4 +1,5 @@
-// Admissions Case Management — client-safe test-type constants and the pure
+// Admissions Case Management — client-safe test-type constants, typed score
+// payloads, superscore helpers, and registration-deadline derivation.
 // registration-deadline derivation.
 //
 // Pure module: no database, audit, or server-only imports — safe to import
@@ -7,6 +8,8 @@
 //
 // Design: docs/casemanagementsystem_design.md — PRD CM-80 (test sittings,
 // registration-deadline auto-derivation).
+
+import { z } from "zod";
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_IN_MS = 86_400_000;
@@ -31,6 +34,121 @@ export const ADMISSIONS_TEST_TYPES: readonly AdmissionsTestType[] = [
   "ielts",
   "other",
 ];
+
+export const ADMISSIONS_TEST_SITTING_STATUSES = [
+  "planned",
+  "registered",
+  "taken",
+  "score_received",
+  "canceled",
+] as const;
+export type AdmissionsTestSittingStatus =
+  (typeof ADMISSIONS_TEST_SITTING_STATUSES)[number];
+
+export function isAdmissionsTestSittingStatus(
+  value: string,
+): value is AdmissionsTestSittingStatus {
+  return ADMISSIONS_TEST_SITTING_STATUSES.includes(value as AdmissionsTestSittingStatus);
+}
+
+const halfPointScoreSchema = z.number().min(0).max(9).refine(
+  (value) => Number.isInteger(value * 2),
+  { message: "IELTS section scores must use 0.5-point increments" },
+);
+
+export const admissionsTestScoreDetailsSchema = z.discriminatedUnion("testType", [
+  z.object({
+    testType: z.literal("sat"),
+    math: z.number().int().min(200).max(800),
+    readingWriting: z.number().int().min(200).max(800),
+    total: z.number().int().min(400).max(1600),
+  }).strict(),
+  z.object({
+    testType: z.literal("act"),
+    english: z.number().int().min(1).max(36),
+    math: z.number().int().min(1).max(36),
+    reading: z.number().int().min(1).max(36),
+    science: z.number().int().min(1).max(36),
+    writing: z.number().int().min(2).max(12).nullable().optional(),
+    composite: z.number().int().min(1).max(36),
+  }).strict(),
+  z.object({
+    testType: z.literal("ap"),
+    score: z.number().int().min(1).max(5),
+  }).strict(),
+  z.object({
+    testType: z.literal("ib"),
+    score: z.number().int().min(1).max(7),
+  }).strict(),
+  z.object({
+    testType: z.literal("toefl"),
+    reading: z.number().int().min(0).max(30),
+    listening: z.number().int().min(0).max(30),
+    speaking: z.number().int().min(0).max(30),
+    writing: z.number().int().min(0).max(30),
+    total: z.number().int().min(0).max(120),
+  }).strict(),
+  z.object({
+    testType: z.literal("ielts"),
+    listening: halfPointScoreSchema,
+    reading: halfPointScoreSchema,
+    writing: halfPointScoreSchema,
+    speaking: halfPointScoreSchema,
+    overall: halfPointScoreSchema,
+  }).strict(),
+  z.object({
+    testType: z.literal("other"),
+    score: z.number(),
+    scale: z.string().trim().min(1).max(80).nullable().optional(),
+  }).strict(),
+]);
+
+export type AdmissionsTestScoreDetails = z.infer<typeof admissionsTestScoreDetailsSchema>;
+
+/** Derives and verifies the aggregate fields before a score payload is stored. */
+export function normalizeTestScoreDetails(input: unknown): AdmissionsTestScoreDetails {
+  const loose = input as Record<string, unknown> | null;
+  if (!loose || typeof loose !== "object" || typeof loose.testType !== "string") {
+    throw new Error("Invalid scoreDetails: expected a typed score object");
+  }
+
+  const candidate = { ...loose };
+  if (loose.testType === "sat") {
+    candidate.total = Number(loose.math) + Number(loose.readingWriting);
+  } else if (loose.testType === "act") {
+    candidate.composite = Math.round(
+      (Number(loose.english) + Number(loose.math) + Number(loose.reading) + Number(loose.science)) / 4,
+    );
+  } else if (loose.testType === "toefl") {
+    candidate.total =
+      Number(loose.reading) + Number(loose.listening) + Number(loose.speaking) + Number(loose.writing);
+  } else if (loose.testType === "ielts") {
+    const average =
+      (Number(loose.listening) + Number(loose.reading) + Number(loose.writing) + Number(loose.speaking)) / 4;
+    candidate.overall = Math.round(average * 2) / 2;
+  }
+
+  const parsed = admissionsTestScoreDetailsSchema.safeParse(candidate);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const path = issue?.path.join(".");
+    throw new Error(`Invalid scoreDetails${path ? ` (${path})` : ""}: ${issue?.message ?? "malformed payload"}`);
+  }
+  return parsed.data;
+}
+
+/** Canonical aggregate score retained in the legacy actualScore column. */
+export function getScoreDetailsAggregate(details: AdmissionsTestScoreDetails): string {
+  switch (details.testType) {
+    case "sat": return String(details.total);
+    case "act": return String(details.composite);
+    case "toefl": return String(details.total);
+    case "ielts": return String(details.overall);
+    case "ap":
+    case "ib":
+    case "other": return String(details.score);
+  }
+}
 
 /** Type guard: is `value` a known admissions test type? */
 export function isAdmissionsTestType(value: string): value is AdmissionsTestType {

@@ -165,7 +165,7 @@ describe("/api/admissions/cases/[caseId]/activities", () => {
       const res = await GET(new Request("http://test.local"), makeCtx());
 
       expect(res.status).toBe(500);
-      await expect(res.json()).resolves.toEqual({ error: "DB exploded" });
+      await expect(res.json()).resolves.toEqual({ error: "Activity list failed" });
     });
   });
 

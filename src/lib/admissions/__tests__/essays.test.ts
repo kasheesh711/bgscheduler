@@ -70,7 +70,7 @@ function fakeDb(queue: unknown[][]) {
 
   function selectBuilder(rows: unknown[]) {
     const b: Record<string, unknown> = {};
-    for (const method of ["from", "where", "innerJoin", "leftJoin", "orderBy", "groupBy", "limit"]) {
+    for (const method of ["from", "where", "innerJoin", "leftJoin", "orderBy", "groupBy", "limit", "for"]) {
       b[method] = () => b;
     }
     (b as { then: unknown }).then = (
@@ -142,6 +142,7 @@ function essayRow(overrides: Record<string, unknown> = {}) {
     counselorStage: null,
     deadline: "2026-11-01",
     driveUrl: null,
+    sharedWithFamily: false,
     lastStudentUpdateAt: null,
     deletedAt: null,
     createdAt: new Date("2026-06-01T00:00:00Z"),
@@ -155,7 +156,7 @@ describe("createEssay", () => {
     const { db, inserts } = fakeDb([]);
 
     const result = await createEssay(
-      { access: STUDENT_ACCESS, prompt: "  Why this college?  ", deadline: "2026-12-01" },
+      { access: STUDENT_ACCESS, prompt: "  Why this college?  " },
       db,
     );
 
@@ -166,7 +167,7 @@ describe("createEssay", () => {
       prompt: "Why this college?",
       status: "not_started",
       counselorStage: null,
-      deadline: "2026-12-01",
+      deadline: null,
       listItemId: null,
       driveUrl: null,
     });
@@ -243,12 +244,55 @@ describe("createEssay", () => {
     const { db } = fakeDb([]);
 
     await expect(
-      createEssay({ access: STUDENT_ACCESS, prompt: "P", deadline: "soon" }, db),
+      createEssay({ access: COUNSELOR_ACCESS, prompt: "P", deadline: "soon" }, db),
     ).rejects.toThrow("Invalid deadline");
+  });
+
+  it("rejects an essay link containing embedded credentials before writing", async () => {
+    const { db, inserts } = fakeDb([]);
+
+    await expect(createEssay({
+      access: STUDENT_ACCESS,
+      prompt: "Personal statement",
+      driveUrl: "https://student:secret@docs.google.com/document/d/abc",
+    }, db)).rejects.toThrow("Invalid driveUrl");
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("keeps college linkage and deadlines counselor-owned on creation", async () => {
+    const { db } = fakeDb([]);
+    await expect(createEssay({
+      access: STUDENT_ACCESS,
+      prompt: "Supplement",
+      listItemId: LIST_ITEM_ID,
+    }, db)).rejects.toThrow("Forbidden");
+    await expect(createEssay({
+      access: STUDENT_ACCESS,
+      prompt: "Supplement",
+      deadline: "2026-11-01",
+    }, db)).rejects.toThrow("Forbidden");
   });
 });
 
 describe("updateEssay", () => {
+  it("lets counselors explicitly share an essay with family and forbids students", async () => {
+    const allowed = fakeDb([[essayRow()]]);
+    const result = await updateEssay({
+      access: COUNSELOR_ACCESS,
+      essayId: ESSAY_ID,
+      sharedWithFamily: true,
+    }, allowed.db);
+    expect(result.sharedWithFamily).toBe(true);
+    expect(allowed.updates[0].set).toMatchObject({ sharedWithFamily: true });
+    expect(auditInserts(allowed.inserts)[0]).toMatchObject({ action: "update" });
+
+    const denied = fakeDb([]);
+    await expect(updateEssay({
+      access: STUDENT_ACCESS,
+      essayId: ESSAY_ID,
+      sharedWithFamily: true,
+    }, denied.db)).rejects.toThrow("Forbidden");
+  });
   it("stamps lastStudentUpdateAt on a student status write", async () => {
     const { db, inserts, updates } = fakeDb([[essayRow({ status: "drafting" })]]);
 

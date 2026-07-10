@@ -41,9 +41,12 @@ import { BANGKOK_TIME_ZONE } from "@/lib/bangkok-time";
 import { SELECT_FIELD_CLASSES } from "@/components/admissions/field-classes";
 import { roleAtLeast } from "@/lib/admissions/config";
 import {
+  ADMISSIONS_TEST_SITTING_STATUSES,
   ADMISSIONS_TEST_TYPES,
   ADMISSIONS_TEST_TYPE_LABELS,
   deriveRegistrationDeadline,
+  type AdmissionsTestScoreDetails,
+  type AdmissionsTestSittingStatus,
   type AdmissionsTestType,
 } from "@/lib/admissions/shared/testing";
 import type { AdmissionsBestScore, AdmissionsTestSittingDto } from "@/lib/admissions/testing";
@@ -142,8 +145,12 @@ export interface SittingFormValues {
   testType: AdmissionsTestType;
   testDate: string;
   registrationDeadline: string;
+  lateRegistrationDeadline: string;
+  status: AdmissionsTestSittingStatus;
+  subject: string;
   targetScore: string;
   actualScore: string;
+  scoreFields: Record<string, string>;
   accommodations: string;
 }
 
@@ -152,8 +159,12 @@ export const EMPTY_SITTING_FORM: SittingFormValues = {
   testType: "sat",
   testDate: "",
   registrationDeadline: "",
+  lateRegistrationDeadline: "",
+  status: "planned",
+  subject: "",
   targetScore: "",
   actualScore: "",
+  scoreFields: {},
   accommodations: "",
 };
 
@@ -165,8 +176,16 @@ export function toSittingFormValues(
     testType: sitting.testType,
     testDate: sitting.testDate,
     registrationDeadline: sitting.registrationDeadline ?? "",
+    lateRegistrationDeadline: sitting.lateRegistrationDeadline ?? "",
+    status: sitting.status ?? "planned",
+    subject: sitting.subject ?? "",
     targetScore: sitting.targetScore,
     actualScore: sitting.actualScore ?? "",
+    scoreFields: sitting.scoreDetails
+      ? Object.fromEntries(Object.entries(sitting.scoreDetails)
+          .filter(([key]) => key !== "testType")
+          .map(([key, value]) => [key, value == null ? "" : String(value)]))
+      : {},
     accommodations: sitting.accommodations ?? "",
   };
 }
@@ -189,17 +208,89 @@ export function buildSittingPatch(
     patch.registrationDeadline =
       current.registrationDeadline === "" ? null : current.registrationDeadline;
   }
+  if (current.lateRegistrationDeadline !== initial.lateRegistrationDeadline) {
+    patch.lateRegistrationDeadline = current.lateRegistrationDeadline === ""
+      ? null : current.lateRegistrationDeadline;
+  }
+  if (current.status !== initial.status) patch.status = current.status;
+  if (current.subject.trim() !== initial.subject) {
+    patch.subject = current.subject.trim() === "" ? null : current.subject.trim();
+  }
   if (current.targetScore.trim() !== initial.targetScore) {
     patch.targetScore = current.targetScore.trim();
   }
   if (current.actualScore.trim() !== initial.actualScore) {
     patch.actualScore = current.actualScore.trim() === "" ? null : current.actualScore.trim();
   }
+  if (JSON.stringify(current.scoreFields) !== JSON.stringify(initial.scoreFields)) {
+    patch.scoreDetails = buildScoreDetails(current.testType, current.scoreFields);
+  }
   if (current.accommodations.trim() !== initial.accommodations) {
     patch.accommodations =
       current.accommodations.trim() === "" ? null : current.accommodations.trim();
   }
   return Object.keys(patch).length === 0 ? null : patch;
+}
+
+export const TEST_SCORE_FIELDS: Record<AdmissionsTestType, Array<{
+  key: string;
+  label: string;
+  optional?: boolean;
+  text?: boolean;
+}>> = {
+  sat: [
+    { key: "math", label: "Math" },
+    { key: "readingWriting", label: "Reading & Writing" },
+  ],
+  act: [
+    { key: "english", label: "English" },
+    { key: "math", label: "Math" },
+    { key: "reading", label: "Reading" },
+    { key: "science", label: "Science" },
+    { key: "writing", label: "Writing", optional: true },
+  ],
+  ap: [{ key: "score", label: "Score" }],
+  ib: [{ key: "score", label: "Score" }],
+  toefl: [
+    { key: "reading", label: "Reading" },
+    { key: "listening", label: "Listening" },
+    { key: "speaking", label: "Speaking" },
+    { key: "writing", label: "Writing" },
+  ],
+  ielts: [
+    { key: "listening", label: "Listening" },
+    { key: "reading", label: "Reading" },
+    { key: "writing", label: "Writing" },
+    { key: "speaking", label: "Speaking" },
+  ],
+  other: [
+    { key: "score", label: "Score" },
+    { key: "scale", label: "Scale", optional: true, text: true },
+  ],
+};
+
+/** Converts controlled score inputs into the API's typed discriminated payload. */
+export function buildScoreDetails(
+  testType: AdmissionsTestType,
+  fields: Record<string, string>,
+): AdmissionsTestScoreDetails | null {
+  const definitions = TEST_SCORE_FIELDS[testType];
+  if (definitions.every(({ key }) => (fields[key] ?? "").trim() === "")) return null;
+  const values: Record<string, unknown> = { testType };
+  for (const field of definitions) {
+    const raw = (fields[field.key] ?? "").trim();
+    if (!raw) {
+      if (field.optional) continue;
+      throw new Error(`${field.label} score is required.`);
+    }
+    if (field.text) values[field.key] = raw;
+    else {
+      const numeric = Number(raw);
+      if (!Number.isFinite(numeric)) throw new Error(`${field.label} must be a number.`);
+      values[field.key] = numeric;
+    }
+  }
+  return values as AdmissionsTestScoreDetails;
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────
@@ -326,6 +417,13 @@ export function TestingView({
       setActionError("Test date is required.");
       return;
     }
+    let scoreDetails: AdmissionsTestScoreDetails | null;
+    try {
+      scoreDetails = buildScoreDetails(form.testType, form.scoreFields);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Invalid score details.");
+      return;
+    }
     if (editing === null) {
       const created = await runMutation(
         () =>
@@ -335,7 +433,11 @@ export function TestingView({
             body: JSON.stringify({
               testType: form.testType,
               testDate: form.testDate,
+              lateRegistrationDeadline: form.lateRegistrationDeadline || null,
+              status: form.status,
+              subject: form.subject.trim() || null,
               targetScore: form.targetScore.trim(),
+              scoreDetails,
               accommodations: form.accommodations.trim() || null,
             }),
           }),
@@ -344,7 +446,14 @@ export function TestingView({
       if (created) setForm(EMPTY_SITTING_FORM);
       return;
     }
-    const patch = buildSittingPatch(initial, form);
+    let patch: Record<string, unknown> | null;
+    try {
+      patch = buildSittingPatch(initial, form);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Invalid score details.");
+      return;
+    }
+    if (patch?.scoreDetails !== undefined) delete patch.actualScore;
     if (patch === null) {
       cancelEdit();
       return;
@@ -410,6 +519,7 @@ export function TestingView({
                 data-testid={`best-score-${score.testType}`}
               >
                 {ADMISSIONS_TEST_TYPE_LABELS[score.testType]} {score.actualScore}
+                {score.scoreKind === "superscore" ? " superscore" : ""}
               </Badge>
             ))
           ) : (
@@ -440,6 +550,10 @@ export function TestingView({
                     <span className="text-sm font-medium text-foreground">
                       {formatDateOnly(sitting.testDate)}
                     </span>
+                    <Badge variant="outline">{(sitting.status ?? "planned").replaceAll("_", " ")}</Badge>
+                    {sitting.subject ? (
+                      <span className="text-xs text-muted-foreground">{sitting.subject}</span>
+                    ) : null}
                     {sitting.registrationDeadline ? (
                       <span
                         data-testid={`registration-chip-${sitting.id}`}
@@ -452,6 +566,11 @@ export function TestingView({
                       >
                         Register by {formatDateOnly(sitting.registrationDeadline)}
                         {overdue ? " · Overdue" : ""}
+                      </span>
+                    ) : null}
+                    {sitting.lateRegistrationDeadline ? (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                        Late registration {formatDateOnly(sitting.lateRegistrationDeadline)}
                       </span>
                     ) : null}
                     {canWrite ? (
@@ -473,6 +592,20 @@ export function TestingView({
                     Target {sitting.targetScore.trim() === "" ? "—" : sitting.targetScore} ·
                     Actual {sitting.actualScore ?? "—"}
                   </p>
+                  {sitting.scoreDetails ? (
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+                      {Object.entries(sitting.scoreDetails).flatMap(([key, value]) =>
+                        key === "testType" || value == null ? [] : [
+                          <div key={key}>
+                            <dt className="capitalize text-muted-foreground">
+                              {key.replace(/([A-Z])/g, " $1")}
+                            </dt>
+                            <dd className="font-medium text-foreground">{String(value)}</dd>
+                          </div>,
+                        ],
+                      )}
+                    </dl>
+                  ) : null}
                   {sitting.accommodations ? (
                     <p className="text-xs text-muted-foreground">
                       Accommodations: {sitting.accommodations}
@@ -549,6 +682,7 @@ export function TestingView({
                     setForm((previous) => ({
                       ...previous,
                       testType: event.target.value as AdmissionsTestType,
+                      scoreFields: {},
                     }))
                   }
                 >
@@ -570,6 +704,31 @@ export function TestingView({
                   }
                 />
               </label>
+              <label className="space-y-1 text-xs font-medium text-foreground">
+                Sitting status
+                <br />
+                <select
+                  className={cn(SELECT_CLASSES, "min-w-32")}
+                  data-testid="sitting-status-select"
+                  value={form.status}
+                  onChange={(event) => setForm((previous) => ({
+                    ...previous,
+                    status: event.target.value as AdmissionsTestSittingStatus,
+                  }))}
+                >
+                  {ADMISSIONS_TEST_SITTING_STATUSES.map((status) => (
+                    <option key={status} value={status}>{status.replaceAll("_", " ")}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="min-w-36 space-y-1 text-xs font-medium text-foreground">
+                Subject (AP, IB, or other)
+                <Input
+                  data-testid="sitting-subject-input"
+                  value={form.subject}
+                  onChange={(event) => setForm((previous) => ({ ...previous, subject: event.target.value }))}
+                />
+              </label>
               {editing ? (
                 <label className="space-y-1 text-xs font-medium text-foreground">
                   Registration deadline
@@ -587,6 +746,18 @@ export function TestingView({
                 </label>
               ) : null}
               <label className="space-y-1 text-xs font-medium text-foreground">
+                Late registration deadline
+                <Input
+                  type="date"
+                  data-testid="sitting-late-deadline-input"
+                  value={form.lateRegistrationDeadline}
+                  onChange={(event) => setForm((previous) => ({
+                    ...previous,
+                    lateRegistrationDeadline: event.target.value,
+                  }))}
+                />
+              </label>
+              <label className="space-y-1 text-xs font-medium text-foreground">
                 Target score
                 <Input
                   className="w-24"
@@ -597,19 +768,6 @@ export function TestingView({
                   }
                 />
               </label>
-              {editing ? (
-                <label className="space-y-1 text-xs font-medium text-foreground">
-                  Actual score
-                  <Input
-                    className="w-24"
-                    data-testid="sitting-actual-input"
-                    value={form.actualScore}
-                    onChange={(event) =>
-                      setForm((previous) => ({ ...previous, actualScore: event.target.value }))
-                    }
-                  />
-                </label>
-              ) : null}
               <label className="min-w-40 flex-1 space-y-1 text-xs font-medium text-foreground">
                 Accommodations
                 <Input
@@ -624,6 +782,32 @@ export function TestingView({
                 />
               </label>
             </div>
+            <fieldset className="rounded-md border border-border/60 p-2">
+              <legend className="px-1 text-xs font-medium text-foreground">
+                {ADMISSIONS_TEST_TYPE_LABELS[form.testType]} score details
+              </legend>
+              <div className="flex flex-wrap gap-2">
+                {TEST_SCORE_FIELDS[form.testType].map((field) => (
+                  <label key={field.key} className="space-y-1 text-xs font-medium text-foreground">
+                    {field.label}{field.optional ? " (optional)" : ""}
+                    <Input
+                      className="w-28"
+                      type={field.text ? "text" : "number"}
+                      step={form.testType === "ielts" ? "0.5" : undefined}
+                      data-testid={`sitting-score-${field.key}`}
+                      value={form.scoreFields[field.key] ?? ""}
+                      onChange={(event) => setForm((previous) => ({
+                        ...previous,
+                        scoreFields: { ...previous.scoreFields, [field.key]: event.target.value },
+                      }))}
+                    />
+                  </label>
+                ))}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Totals and superscores are derived from validated section scores.
+              </p>
+            </fieldset>
             <p data-testid="deadline-preview" className="text-xs text-muted-foreground">
               {formatDeadlinePreview(form.testType, form.testDate)}
             </p>
