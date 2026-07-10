@@ -154,4 +154,39 @@ describe("CreateCaseForm", () => {
     expect(html).toContain("Select a cohort");
     expect(html).toContain("Select a counselor");
   });
+
+  it("hides the empty-state hints when cohorts and active counselors exist", () => {
+    const html = renderToStaticMarkup(
+      <CreateCaseForm cohorts={COHORTS} counselors={COUNSELORS} onCreated={noop} onCancel={noop} />,
+    );
+    expect(html).not.toContain('data-testid="create-case-no-cohorts"');
+    expect(html).not.toContain('data-testid="create-case-no-counselors"');
+  });
+
+  it("shows the cohort hint when no cohorts exist", () => {
+    const html = renderToStaticMarkup(
+      <CreateCaseForm cohorts={[]} counselors={COUNSELORS} onCreated={noop} onCancel={noop} />,
+    );
+    expect(html).toContain('data-testid="create-case-no-cohorts"');
+    expect(html).toContain("No cohorts yet");
+    expect(html).toContain("ask an admin to add one in Manage");
+    expect(html).not.toContain('data-testid="create-case-no-counselors"');
+  });
+
+  it("shows the counselor hint when every counselor is inactive", () => {
+    const inactiveOnly = COUNSELORS.filter((counselor) => !counselor.active);
+    const html = renderToStaticMarkup(
+      <CreateCaseForm cohorts={COHORTS} counselors={inactiveOnly} onCreated={noop} onCancel={noop} />,
+    );
+    expect(html).toContain('data-testid="create-case-no-counselors"');
+    expect(html).toContain("No active counselors yet");
+    expect(html).not.toContain('data-testid="create-case-no-cohorts"');
+  });
+
+  it("shows the counselor hint when the counselor list is empty", () => {
+    const html = renderToStaticMarkup(
+      <CreateCaseForm cohorts={COHORTS} counselors={[]} onCreated={noop} onCancel={noop} />,
+    );
+    expect(html).toContain('data-testid="create-case-no-counselors"');
+  });
 });

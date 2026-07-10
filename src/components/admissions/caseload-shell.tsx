@@ -12,7 +12,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { BookOpen, Columns3, Plus, Table2 } from "lucide-react";
+import { BookOpen, Columns3, Plus, Settings, Table2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -33,6 +33,7 @@ import type {
 import { CaseloadBoard } from "./caseload-board";
 import { CaseloadTable } from "./caseload-table";
 import { CreateCaseDialog } from "./create-case-dialog";
+import { ManagePanel } from "./manage-panel";
 import { ResourcesPanel } from "./resources-panel";
 
 /** Caseload view mode; the table is the desktop-dense default. */
@@ -121,6 +122,7 @@ export function CaseloadShell({
   const [view, setView] = useState<CaseloadView>("table");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [resourcesOpen, setResourcesOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
 
   const kpis = computeCaseloadKpis(caseload);
 
@@ -140,6 +142,17 @@ export function CaseloadShell({
         </div>
         <div className="flex items-center gap-2">
           <ViewToggle view={view} onChange={setView} />
+          {viewerRole === "admin" ? (
+            <Button
+              type="button"
+              variant="outline"
+              data-testid="open-manage"
+              onClick={() => setManageOpen(true)}
+            >
+              <Settings aria-hidden className="size-4" />
+              Manage
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="outline"
@@ -185,6 +198,21 @@ export function CaseloadShell({
           <ResourcesPanel groups={resourceGroups} viewerRole={viewerRole} />
         </DialogContent>
       </Dialog>
+
+      {/* ── Manage (admin-only — counselors, cohorts, templates) ── */}
+      {viewerRole === "admin" ? (
+        <Dialog open={manageOpen} onOpenChange={setManageOpen}>
+          <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>Manage admissions</DialogTitle>
+              <DialogDescription>
+                Counselor registry, graduation cohorts, and checklist templates.
+              </DialogDescription>
+            </DialogHeader>
+            <ManagePanel counselors={counselors} cohorts={cohorts} />
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </div>
   );
 }
