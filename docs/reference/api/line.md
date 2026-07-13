@@ -1,6 +1,6 @@
 # LINE API Reference
 
-**Status:** Stable read/review paths; the Wise write-path is dry-run only (see [§ Wise actions](#wise-actions)). **Scope:** the 28 HTTP handlers under [`src/app/api/line/`](../../../src/app/api/line/).
+**Status:** Stable read/review paths; the Wise write-path is dry-run only (see [§ Wise actions](#wise-actions)). **Scope:** the 31 exported HTTP method handlers under [`src/app/api/line/`](../../../src/app/api/line/).
 
 This page is the mechanical reference — method, path, auth, request/response shapes, side effects, and status codes per endpoint. Feature meaning, lifecycles, and data flows live in [`features/line-integration.md`](../../features/line-integration.md); that doc owns the "why" and links here for signatures.
 
@@ -271,6 +271,14 @@ Verify or reject an existing link by id ([`[contactId]/student-links/route.ts:78
 Refresh cached LINE profiles (display name / picture / status) for all contacts from the LINE API ([`refresh-profiles/route.ts:6-14`](../../../src/app/api/line/contacts/refresh-profiles/route.ts)).
 
 **Body:** none. **Side effect:** `refreshAllLineContactProfiles({ db })` fetches and updates every contact's profile. **Response:** **200** `{ result }`.
+
+### `POST /api/line/contacts/followers-reanchor`
+
+Run the combined follower re-anchor plus backlog identity-recovery workflow ([`followers-reanchor/route.ts:15-40`](../../../src/app/api/line/contacts/followers-reanchor/route.ts)). **Requires an admin session.** `maxDuration = 300`.
+
+**Query param:** `dryRun=true` skips the re-anchor write path; backlog recovery still runs in read-only dry-run mode.
+
+**Body:** none. **Response:** **200** `{ reanchor, backlog }`; **401 `{ "error": "Unauthorized" }`** without a session; **500 `{ "error": <message> }`** when either workflow throws.
 
 ---
 

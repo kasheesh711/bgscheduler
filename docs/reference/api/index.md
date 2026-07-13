@@ -2,15 +2,16 @@
 
 The canonical lookup of every HTTP endpoint in BGScheduler. This page lists **method + path + group + auth + one-line purpose** only. For full request/response schemas, query parameters, and error shapes, follow the link on each group heading to the per-group detail page.
 
-All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **145** (122 at the previous verification + 23 University Admissions routes: 22 `src/app/api/admissions/**/route.ts` files + `/api/internal/admissions-notifications`).
+All routes live under `src/app/api/**/route.ts` (Next.js App Router). This index documents **222 exported HTTP method handlers across 157 API route files**. The Auth.js catch-all is one table row with two methods; CORS preflight `OPTIONS` handlers are listed when a route exports them.
 
 ## How to read this index
 
-**Auth column** — three tiers, all verified against `src/middleware.ts` plus each route handler:
+**Auth column** — access categories, all verified against `src/middleware.ts` plus each route handler:
 
-- **public** — reachable without an authenticated session. `src/middleware.ts:4-15` allowlists `/api/auth/*`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/api/line/contacts/oa-resolver/worklist`, and `/api/line/contacts/oa-resolver/runs/{runId}/rows`. The non-`/api/auth` public routes enforce their own checks in-handler (LINE signature header or a bearer token), not an admin session.
+- **public** — reachable without an authenticated session. `src/middleware.ts:4-15` allowlists `/api/auth/*`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/api/line/contacts/oa-resolver/worklist`, and `/api/line/contacts/oa-resolver/runs/{runId}/rows`. The non-`/api/auth` public routes either enforce their own checks in-handler (LINE signature header or a bearer token) or return CORS preflight headers only; they do not require an admin session.
 - **admin** — requires an authenticated Auth.js session. The middleware redirects unauthenticated requests to `/login` (`src/middleware.ts:25-29`); handlers additionally call `auth()` (or `requireCreditControlSession()` for credit-control) and return `401` when no session is present.
-- **cron** — `CRON_SECRET`-protected. `src/middleware.ts:13` lets `/api/internal/*` bypass the session gate; each handler then enforces a constant-time `Bearer ${CRON_SECRET}` check (`src/lib/internal/cron-auth.ts:6-26`, or an inline copy). Four internal routes additionally accept an admin session as a fallback when the cron secret is absent — see the **cron (or admin)** notes below.
+- **session / page access** — requires an authenticated Auth.js session, but not necessarily a full-access admin. Newer surfaces such as Progress Tests and Home Summary use `session.user.allowedPages` / `session.user.role` to scope access for teachers or restricted users.
+- **cron** — `CRON_SECRET`-protected. `src/middleware.ts:13` lets `/api/internal/*` bypass the session gate; each handler then enforces a constant-time `Bearer ${CRON_SECRET}` check (`src/lib/internal/cron-auth.ts:6-26`, or an inline copy). Some internal routes additionally accept an admin session as a fallback when the cron secret is absent — see the **cron (or admin)** notes below.
 - **session + min role** — University Admissions only. These routes require an authenticated Auth.js session (`requireAdmissionsSession`) but are **not** admin-only: rights are re-resolved from Postgres per request (`requireCaseAccess` / `requireCounselorOrAdmin`, `src/lib/admissions/access.ts`) under the role ordering `parent < student < counselor < admin`. The Auth column shows the minimum role; see the [group page](./university-admissions.md) for the guard mechanics.
 
 > **Canonical-home rule:** this page owns only the mechanical endpoint inventory. Meaning, business rules, and flows live in the relevant `docs/features/*` pages; full per-endpoint signatures live in the linked per-group detail pages.
@@ -75,6 +76,22 @@ Side-by-side tutor comparison and candidate discovery.
 | POST | `/api/compare` | compare | admin | Compare 1-3 tutors for a week: schedules, conflicts, shared free slots |
 | POST | `/api/compare/discover` | compare | admin | Find candidate tutors with pre-computed conflict status |
 
+## [Competitor Intelligence](./misc.md#competitor-intelligence) — `/api/competitor-intelligence`
+
+Competitive-market workspace: source monitoring, own-brand source registry, evidence capture, task workflow, and manual sync.
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/competitor-intelligence` | competitor-intelligence | admin + page access | Load the competitor-intelligence workspace payload |
+| POST | `/api/competitor-intelligence/manual-evidence` | competitor-intelligence | admin + page access | Create manually-entered competitor evidence |
+| GET | `/api/competitor-intelligence/own-sources` | competitor-intelligence | admin + page access | List own-brand monitored sources |
+| POST | `/api/competitor-intelligence/own-sources` | competitor-intelligence | admin + page access | Create or upsert an own-brand monitored source |
+| PATCH | `/api/competitor-intelligence/own-sources/[sourceId]` | competitor-intelligence | admin + page access | Update or disable an own-brand monitored source |
+| PATCH | `/api/competitor-intelligence/sources/[sourceId]` | competitor-intelligence | admin + page access | Update a competitor source's review/status state |
+| POST | `/api/competitor-intelligence/sync` | competitor-intelligence | admin + page access | Manually run the competitor-intelligence sync |
+| POST | `/api/competitor-intelligence/task-suggestions/[suggestionId]/accept` | competitor-intelligence | admin + page access | Promote a suggested competitor task into the task queue |
+| PATCH | `/api/competitor-intelligence/tasks/[taskId]` | competitor-intelligence | admin + page access | Update competitor task status, owner, priority, due date, or labels |
+
 ## [Credit Control](./credit-control.md) — `/api/credit-control`
 
 Student credit/payment tracking: payload load, per-student and bulk actions, action history, admin ownership, inactive flagging, and a manual sync trigger. All routes gate on `requireCreditControlSession()`.
@@ -107,6 +124,14 @@ Dropdown population for the search form.
 |---|---|---|---|---|
 | GET | `/api/filters` | filters | admin | Distinct subjects/curriculums/levels from the active snapshot |
 
+## [Home](./misc.md#home-summary) — `/api/home`
+
+Signed-in landing-page summaries and action badges.
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/home/summary` | home | session | Build the current user's home action badges and data-freshness summary |
+
 ## [Internal / Cron](./internal-crons.md) — `/api/internal`
 
 Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/internal/cron-auth.ts`); bypass the session gate via `src/middleware.ts:13`. Routes tagged **cron (or admin)** also run if an authenticated admin session is present and the cron secret check did not pass.
@@ -120,15 +145,23 @@ Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/inter
 | POST | `/api/internal/sync-credit-control` | internal | cron (or admin) | Manual credit-control sync (session or `curl`) |
 | GET | `/api/internal/sync-sales-dashboard` | internal | cron (or admin on POST) | Cron-trigger a sales-dashboard import |
 | POST | `/api/internal/sync-sales-dashboard` | internal | cron (or admin) | Manual sales-dashboard import (session or `curl`) |
+| GET | `/api/internal/sync-competitor-intelligence` | internal | cron (or admin on POST) | Cron-trigger a competitor-intelligence sync |
+| POST | `/api/internal/sync-competitor-intelligence` | internal | cron (or admin) | Manual competitor-intelligence sync (session or `curl`) |
+| GET | `/api/internal/sync-progress-tests` | internal | cron (or admin on POST) | Cron-trigger a progress-tests sync |
+| POST | `/api/internal/sync-progress-tests` | internal | cron (or admin) | Manual progress-tests sync (session or `curl`) |
 | GET | `/api/internal/sync-leave-requests` | internal | cron | Cron-trigger a leave-requests sync |
 | POST | `/api/internal/sync-leave-requests` | internal | cron | Trigger a leave-requests sync (same cron-secret check) |
 | POST | `/api/internal/sync-room-utilization` | internal | cron (or admin) | Sync room-utilization sessions (session or `curl`) |
+| GET | `/api/internal/progress-tests/admin-digest` | internal | cron | Send the progress-tests admin digest email |
 | GET | `/api/internal/class-assignments/admin-email` | internal | cron | Send the daily admin classroom-schedule email |
 | GET | `/api/internal/class-assignments/morning` | internal | cron | Run the morning classroom-assignment automation |
 | GET | `/api/internal/student-promotions/july-1` | internal | cron | Apply the verified July 1, 2026 student-promotion run |
 | POST | `/api/internal/student-promotions/july-1` | internal | cron | Cron-secret replay alias for the July 1 student-promotion apply |
 | GET | `/api/internal/admissions-notifications` | internal | cron | Daily admissions deadline-reminder scan (+ weekly digest on Bangkok Sundays); optional `?runType=` |
 | POST | `/api/internal/admissions-notifications` | internal | cron | Manual admissions-notification trigger (bearer only; optional `runType` body) |
+| GET | `/api/internal/cron-watchdog` | internal | cron | Sweep overdue cron audit rows and mark timed-out jobs |
+| POST | `/api/internal/cron-watchdog` | internal | cron | Manual cron-watchdog replay with the same bearer-secret check |
+| GET | `/api/internal/line-backlog-recovery` | internal | cron | Run LINE backlog identity recovery |
 
 > **Admin-only sync (not cron):** `POST /api/admin/sync-wise` triggers the same Wise sync but is gated by an admin session via `auth()` (no `CRON_SECRET`) — see the [Admin](./misc.md) group.
 
@@ -173,6 +206,7 @@ LINE OA integration: inbound webhook, contact resolution & alias import, student
 | GET | `/api/line/contacts/[contactId]/student-links` | line | admin | List a contact's student links |
 | POST | `/api/line/contacts/[contactId]/student-links` | line | admin | Add a student link to a contact |
 | PATCH | `/api/line/contacts/[contactId]/student-links` | line | admin | Update a contact's student links |
+| POST | `/api/line/contacts/followers-reanchor` | line | admin | Re-anchor LINE followers and run backlog identity recovery |
 | GET | `/api/line/contacts/link-validation` | line | admin | List contact-link validation tasks |
 | GET | `/api/line/contacts/link-validation/summary` | line | admin | Link-validation summary counts |
 | POST | `/api/line/contacts/link-validation/assign` | line | admin | Assign link-validation tasks to reviewers |
@@ -180,10 +214,12 @@ LINE OA integration: inbound webhook, contact resolution & alias import, student
 | POST | `/api/line/contacts/alias-import/preview` | line | admin | Preview a contact alias import |
 | POST | `/api/line/contacts/alias-import/commit` | line | admin | Commit a contact alias import |
 | POST | `/api/line/contacts/refresh-profiles` | line | admin | Refresh all LINE contact profiles from LINE |
+| OPTIONS | `/api/line/contacts/oa-resolver/worklist` | line | public | CORS preflight for the OA-resolver worklist endpoint |
 | GET | `/api/line/contacts/oa-resolver/worklist` | line | public | OA-resolver worklist (bearer-token gated in-handler) |
 | GET | `/api/line/contacts/oa-resolver/runs` | line | admin | List OA-resolver runs |
 | POST | `/api/line/contacts/oa-resolver/runs` | line | admin | Start a new OA-resolver run |
 | GET | `/api/line/contacts/oa-resolver/runs/[runId]` | line | admin | Fetch a single OA-resolver run |
+| OPTIONS | `/api/line/contacts/oa-resolver/runs/[runId]/rows` | line | public | CORS preflight for the OA-resolver row-submission endpoint |
 | POST | `/api/line/contacts/oa-resolver/runs/[runId]/rows` | line | public | Submit resolver rows (bearer-token gated in-handler) |
 | POST | `/api/line/contacts/oa-resolver/runs/[runId]/commit` | line | admin | Commit an OA-resolver run's results |
 
@@ -208,6 +244,19 @@ Tentative scheduling "holds" (proposal bundles) with confirm/release/extend life
 | POST | `/api/proposals` | proposals | admin | Create a proposal bundle (tentative holds) |
 | GET | `/api/proposals/active` | proposals | admin | List active proposal holds |
 | PATCH | `/api/proposals/items/[itemId]` | proposals | admin | Confirm, release, or extend a proposal item |
+
+## [Progress Tests](./misc.md#progress-tests) — `/api/progress-tests`
+
+Progress-test scheduling and completion workflow.
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/progress-tests` | progress-tests | session + page access | Load progress-test cycle state; teacher sessions are scoped to their students |
+| POST | `/api/progress-tests/book` | progress-tests | admin + page access | Book an in-center progress test |
+| POST | `/api/progress-tests/mark-at-home-submitted` | progress-tests | admin + page access | Mark an at-home progress test as submitted |
+| POST | `/api/progress-tests/mark-complete` | progress-tests | admin + page access | Mark a progress test cycle complete |
+| POST | `/api/progress-tests/resend-email` | progress-tests | admin + page access | Resend a progress-test teacher email |
+| POST | `/api/progress-tests/select-at-home` | progress-tests | admin + page access | Select the at-home progress-test option |
 
 ## [Room Capacity](./room-capacity.md) — `/api/room-capacity`
 
@@ -283,6 +332,18 @@ Tutor combobox data source.
 | Method | Path | Group | Auth | Brief purpose |
 |---|---|---|---|---|
 | GET | `/api/tutors` | tutors | admin | All tutor names/IDs/modes/subjects from the active snapshot |
+
+## [US Universities](./misc.md#us-universities) — `/api/us-universities`
+
+IPEDS-backed US university discovery, comparison, export, and profile detail.
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/us-universities` | us-universities | session + page access | Load US-university overview data |
+| GET | `/api/us-universities/compare` | us-universities | session + page access | Compare selected US universities |
+| GET | `/api/us-universities/export` | us-universities | session + page access | Export filtered US-university rows as CSV |
+| GET | `/api/us-universities/institutions/[unitId]` | us-universities | session + page access | Fetch one US-university institution profile |
+| GET | `/api/us-universities/search` | us-universities | session + page access | Search/filter US universities |
 
 ## [University Admissions](./university-admissions.md) — `/api/admissions`
 

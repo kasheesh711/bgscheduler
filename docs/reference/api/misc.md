@@ -1,17 +1,21 @@
-# Search, Tutors, Filters, Compare, Data Health, Auth & Admin API
+# Miscellaneous API
 
-HTTP reference for the search/compare workspace, tutor metadata, filter dropdowns, data-health dashboard, leave-request review, tutor business profiles, and the admin Wise-sync trigger. Eighteen endpoints across eight path families:
+HTTP reference for the search/compare workspace, tutor metadata, filter dropdowns, data-health dashboard, leave-request review, tutor business profiles, progress tests, competitor intelligence, US-university lookup, home summary, and the admin Wise-sync trigger. Forty exported HTTP method handlers across twelve path families:
 
 - **Search** — `/api/search`, `/api/search/range`, `/api/search/assistant`
 - **Compare** — `/api/compare`, `/api/compare/discover`
 - **Tutors** — `/api/tutors`
 - **Filters** — `/api/filters`
 - **Data Health** — `/api/data-health`
+- **Home Summary** — `/api/home/summary`
 - **Admin** — `/api/admin/sync-wise`
 - **Tutor Profiles** — `/api/tutor-profiles`, `/api/tutor-profiles/[canonicalKey]`, `/api/tutor-profiles/import-preview`, `/api/tutor-profiles/import-commit`
 - **Leave Requests** — `/api/leave-requests`, `/api/leave-requests/sync`, `/api/leave-requests/[requestId]`, `/api/leave-requests/[requestId]/wise-cancel-preview`
+- **Progress Tests** — `/api/progress-tests`, `/api/progress-tests/book`, `/api/progress-tests/mark-at-home-submitted`, `/api/progress-tests/mark-complete`, `/api/progress-tests/resend-email`, `/api/progress-tests/select-at-home`
+- **Competitor Intelligence** — `/api/competitor-intelligence`, `/api/competitor-intelligence/manual-evidence`, `/api/competitor-intelligence/own-sources`, `/api/competitor-intelligence/own-sources/[sourceId]`, `/api/competitor-intelligence/sources/[sourceId]`, `/api/competitor-intelligence/sync`, `/api/competitor-intelligence/task-suggestions/[suggestionId]/accept`, `/api/competitor-intelligence/tasks/[taskId]`
+- **US Universities** — `/api/us-universities`, `/api/us-universities/compare`, `/api/us-universities/export`, `/api/us-universities/institutions/[unitId]`, `/api/us-universities/search`
 
-For *what* these features mean (search/compare workflow, fail-closed availability rules, leave-request lifecycle, profile-import matching), see the relevant `docs/features/*` pages. This page documents mechanical request/response detail only.
+For *what* these features mean (search/compare workflow, fail-closed availability rules, leave-request lifecycle, profile-import matching), see the relevant `docs/features/*` pages where present. This page documents mechanical request/response detail only.
 
 ## Conventions shared across these endpoints
 
@@ -333,6 +337,78 @@ Preview the Wise session-cancellation actions for a leave request. **Preview onl
 - **Behavior:** `createWiseCancelPreview(db, requestId, { affectedSessionIds, actorEmail, actorName })` (`route.ts:27-31`, `data.ts:443`). The helper requires at least one valid session id (throws otherwise), sets `cancelPreviewSelected` on the chosen `leaveRequestAffectedSessions` rows, builds dry-run `DELETE` endpoint descriptors (each tagged `manualRequired: true`), updates `cancellationPreviewCount`, and writes a `wise_cancel_preview` activity-log entry with `status: "manual_required"` and `policy: "preview_only_manual_required"`. It then returns the refreshed detail via `getLeaveRequestDetail` (`data.ts:448-502`).
 - **Response** (`200`): `{ ok: true, detail: <refreshed leave-request detail> }` (`route.ts:32`).
 - **Errors:** this handler returns **`400`** on *any* thrown error (e.g. "Select at least one affected session." or "Selected affected sessions were not found.") — `route.ts:33-36` — not 500.
+
+---
+
+## Home Summary
+
+### `GET /api/home/summary`
+
+Builds the signed-in user's landing-page action badges and data-freshness summary. Source: `src/app/api/home/summary/route.ts`.
+
+- **Auth:** `auth()` requiring `session.user.email` -> `401`.
+- **Behavior:** calls `getHomeSummaryPayload({ allowedPages, email }, getDb())`, so restricted users receive only summaries they can access.
+- **Response** (`200`): `{ generatedAt, actions, freshness }`.
+- **Errors:** `500 { "error": <message | "Home summary failed"> }`.
+
+---
+
+## Progress Tests
+
+Progress-test read/write workflow. Source files live under `src/app/api/progress-tests/**/route.ts`.
+
+- **Auth:** `GET /api/progress-tests` uses `requireProgressTestsSession()` and allows signed-in admins or teachers with `/progress-tests` page access. Teachers are scoped to their own students. All mutating endpoints call `requireProgressTestsAdminSession()` and return `403` for teacher/non-admin sessions.
+- **Shared body validation:** mutating endpoints parse JSON first (`400 { "error": "Invalid JSON body" }`), then Zod-validate (`400 { "error": <flattened zod error> }`).
+- **Shared not-found shape:** student-cycle mutations return `404 { "error": "Enrollment not found" }` when the enrollment key does not resolve.
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | `/api/progress-tests` | none | progress-test dashboard payload |
+| POST | `/api/progress-tests/book` | `{ enrollmentKey, testDate, location?, modality?, scheduleMethod? }` | booking result |
+| POST | `/api/progress-tests/mark-at-home-submitted` | `{ enrollmentKey }` | `{ row }` |
+| POST | `/api/progress-tests/mark-complete` | `{ enrollmentKey }` | `{ row }` |
+| POST | `/api/progress-tests/resend-email` | `{ enrollmentKey }` | resend result |
+| POST | `/api/progress-tests/select-at-home` | `{ enrollmentKey }` | `{ row }` |
+
+---
+
+## Competitor Intelligence
+
+Competitor source/evidence/task workflow. Source files live under `src/app/api/competitor-intelligence/**/route.ts`.
+
+- **Auth:** every route calls `requireCompetitorIntelligenceSession()`, requiring a signed-in admin role plus `/competitor-intelligence` page access for restricted users. Missing session -> `401`; insufficient page/role access -> `403`.
+- **Validation:** JSON bodies are parsed through Zod `.parse()`. Zod failures currently flow through `competitorIntelligenceErrorResponse` and return a `500` envelope rather than the common `400 Invalid request` shape; this mirrors the current runtime behavior and was not changed by this audit.
+- **Sync:** the manual sync route uses `maxDuration = 800`; already-running sync errors return `409`.
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | `/api/competitor-intelligence` | none | competitor-intelligence workspace payload |
+| POST | `/api/competitor-intelligence/manual-evidence` | `{ entityId, title, contentText, canonicalUrl?, pricingSignal? }` | `{ evidence }` |
+| GET | `/api/competitor-intelligence/own-sources` | none | `{ sources }` |
+| POST | `/api/competitor-intelligence/own-sources` | `{ sourceType, label, url, handle?, status? }` | `201 { source }` |
+| PATCH | `/api/competitor-intelligence/own-sources/[sourceId]` | `{ sourceType, label, url, handle?, status? }` | `{ source }` |
+| PATCH | `/api/competitor-intelligence/sources/[sourceId]` | `{ status }` | `{ source }` |
+| POST | `/api/competitor-intelligence/sync` | none | `{ ok, result }` |
+| POST | `/api/competitor-intelligence/task-suggestions/[suggestionId]/accept` | none | `{ task }` |
+| PATCH | `/api/competitor-intelligence/tasks/[taskId]` | `{ status?, ownerEmail?, priority?, dueDate?, labels? }` | `{ task }` |
+
+---
+
+## US Universities
+
+IPEDS-backed US-university discovery and comparison endpoints. Source files live under `src/app/api/us-universities/**/route.ts`.
+
+- **Auth:** each handler calls `auth()` and returns `401` without a session. The middleware applies page access for restricted users via the `/us-universities` page/API namespace.
+- **Validation:** query parameters are Zod-validated where applicable; validation failures return `400 { "error": <flattened zod error> }`.
+- **Errors:** uncaught data-layer errors return `500 { "error": <message> }`.
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | `/api/us-universities` | none | overview payload |
+| GET | `/api/us-universities/search` | query filters | search result payload |
+| GET | `/api/us-universities/compare` | `unitIds` query/list | `{ institutions }`; `400` when no valid ids |
+| GET | `/api/us-universities/export` | query filters | CSV response |
+| GET | `/api/us-universities/institutions/[unitId]` | path `unitId` | institution profile; `404` when missing |
 
 ---
 
