@@ -7,7 +7,7 @@ For the **meaning** of each pipeline (what a snapshot is, why syncs fail-closed,
 ## Conventions shared by these endpoints
 
 - **`CRON_SECRET` bearer auth.** The caller must send `Authorization: Bearer $CRON_SECRET`. Comparison is constant-time via `node:crypto.timingSafeEqual`, guarded by a length pre-check to avoid the `RangeError` that `timingSafeEqual` throws on length-mismatched buffers (`src/app/api/internal/sync-wise/route.ts:10`-`28`; shared helper at `src/lib/internal/cron-auth.ts:6`-`17`).
-- **No query params.** The cron `GET` routes do not read query params. Most routes read no body; manual/replay `POST` variants either read no body or use a route-specific confirmation body documented below.
+- **Mostly no query params.** Most cron `GET` routes do not read query params. The admissions-notifications cron accepts optional `?runType=daily|weekly`, and room-utilization / follower maintenance routes have the route-specific inputs documented below.
 - **Single-flight guard.** Each pipeline prevents overlapping runs. The mechanism differs per family (DB row-state check + 20-minute stale recovery for Wise/credit-control; a partial unique index for leave-requests) — see each section.
 - **Missing secret is a server error.** If `process.env.CRON_SECRET` is unset, the route returns `500 {"error":"Server misconfigured"}` rather than `401`, so a misconfiguration is not silently treated as an auth failure (`src/lib/internal/cron-auth.ts:22`-`24`; `src/app/api/internal/sync-wise/route.ts:49`-`50`).
 
@@ -27,6 +27,7 @@ The Vercel cron schedules for these paths (from `vercel.json`):
 | `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` (`vercel.json:40`-`41`) |
 | `/api/internal/student-promotions/july-1` | `5 17 30 6 *` (`vercel.json:44`-`45`) |
 | `/api/internal/cron-watchdog` | `7,37 * * * *` (`vercel.json:48`-`49`) |
+| `/api/internal/admissions-notifications` | `12 1 * * *` (`vercel.json:52`-`53`) |
 
 ---
 
@@ -239,6 +240,194 @@ Response wiring: success at `src/app/api/internal/sync-leave-requests/route.ts:1
 
 ---
 
+## Sales Dashboard sync
+
+Imports refreshable Sales Dashboard sources plus the active projection source. Both methods share `handleSync()` in `src/app/api/internal/sync-sales-dashboard/route.ts`.
+
+### `GET /api/internal/sync-sales-dashboard`
+
+- **Auth:** `CRON_SECRET` bearer only. No session fallback.
+- **Request:** none.
+
+### `POST /api/internal/sync-sales-dashboard`
+
+- **Auth:** `CRON_SECRET` bearer or, when the secret is not valid, an Auth.js session with an email.
+- **Request:** none.
+
+### Responses
+
+| Status | When | Body |
+|--------|------|------|
+| `200` | Refreshable source import and projection import returned | `{"ok":true,"results":[...],"projectionResult":...}` |
+| `401` | Invalid secret and no accepted session fallback | `{"error":"Unauthorized"}` |
+| `409` | Connected Google Sheets token is missing | `{"error":"<message>"}` |
+| `500` | `CRON_SECRET` missing or any other import failure | `{"error":"<message>"}` |
+
+---
+
+## Competitor Intelligence sync
+
+Runs the competitor-intelligence source/AI sync. Both methods share `handleSync()` in `src/app/api/internal/sync-competitor-intelligence/route.ts`.
+
+### `GET /api/internal/sync-competitor-intelligence`
+
+- **Auth:** `CRON_SECRET` bearer only. No session fallback.
+- **Request:** none.
+
+### `POST /api/internal/sync-competitor-intelligence`
+
+- **Auth:** `CRON_SECRET` bearer or, when the secret is not valid, a session accepted by `requireCompetitorIntelligenceSession()`.
+- **Request:** none.
+
+### Responses
+
+| Status | When | Body |
+|--------|------|------|
+| `200` | Sync result status is `success` | `{"ok":true,"result":...}` |
+| `401` | Invalid secret and no accepted session fallback | `{"error":"Unauthorized"}` |
+| `409` | Sync helper reports another run is already running | `{"error":"<message>"}` |
+| `500` | `CRON_SECRET` missing or sync result/failure is non-success | `{"ok":false,"result":...}` or `{"error":"<message>"}` |
+
+---
+
+## Progress Tests sync
+
+Runs the Wise-backed progress-test sync. Both methods share `handleSync()` in `src/app/api/internal/sync-progress-tests/route.ts`.
+
+### `GET /api/internal/sync-progress-tests`
+
+- **Auth:** `CRON_SECRET` bearer only. No session fallback.
+- **Request:** none.
+
+### `POST /api/internal/sync-progress-tests`
+
+- **Auth:** `CRON_SECRET` bearer or, when the secret is not valid, any authenticated session.
+- **Request:** none.
+
+### Responses
+
+| Status | When | Body |
+|--------|------|------|
+| `200` | Sync completed with `success: true` | `ProgressTestSyncResult` plus `syncRunId` and `staleRunningSyncsFailed` |
+| `202` | A sync is already running | skipped result with `alreadyRunning: true` |
+| `401` | Invalid secret and no accepted session fallback | `{"error":"Unauthorized"}` |
+| `500` | `CRON_SECRET` missing or sync completed with `success: false` | `{"error":"Server misconfigured"}` or sync result |
+
+---
+
+## Wise Activity sync
+
+### `GET /api/internal/sync-wise-activity`
+
+Sync newest Wise activity audit events.
+
+- **Auth:** `CRON_SECRET` bearer only.
+- **Function config:** `maxDuration = 800`.
+- **Request:** none.
+- **Response:** `200 { "ok": true, "result": ... }`.
+- **Errors:** `409 { "error": <message> }` when another Wise Activity sync is already running; `401` for invalid secret; `500` for missing `CRON_SECRET` or other failures.
+
+---
+
+## Room Utilization sync
+
+### `POST /api/internal/sync-room-utilization`
+
+Sync room-utilization sessions. This route is not listed in `vercel.json`; it is a manual/session-or-secret endpoint.
+
+- **Auth:** `CRON_SECRET` bearer or an Auth.js session.
+- **Function config:** `maxDuration = 800`.
+- **Request:** none.
+- **Response:** `200 { "ok": true, ...result }`.
+- **Errors:** `401` for invalid secret with no session; `500` for missing `CRON_SECRET` when no session is present, or for sync failures.
+
+---
+
+## Classroom automation
+
+### `GET /api/internal/class-assignments/morning`
+
+Runs the morning classroom-assignment automation.
+
+- **Auth:** `CRON_SECRET` bearer only.
+- **Function config:** `maxDuration = 800`.
+- **Response:** `200` with the automation result.
+- **Errors:** `401` for invalid secret; `500 { "ok": false, "error": <message> }` for automation failures or missing `CRON_SECRET`.
+
+### `GET /api/internal/class-assignments/admin-email`
+
+Sends the admin classroom-schedule email.
+
+- **Auth:** `CRON_SECRET` bearer only.
+- **Function config:** `maxDuration = 300`.
+- **Response:** `200` with the email result unless `result.status === "failed"`.
+- **Errors:** `401` for invalid secret; `500` when the email result is failed, the helper throws, or `CRON_SECRET` is missing.
+
+---
+
+## Progress Test admin digest
+
+### `GET /api/internal/progress-tests/admin-digest`
+
+Sends the daily progress-test admin digest.
+
+- **Auth:** `CRON_SECRET` bearer only.
+- **Function config:** `maxDuration = 300`.
+- **Response:** `200` with the digest result unless `result.status === "failed"`.
+- **Errors:** `401` for invalid secret; `500` when the digest result is failed, the helper throws, or `CRON_SECRET` is missing.
+
+---
+
+## LINE backlog recovery
+
+### `GET /api/internal/line-backlog-recovery`
+
+Runs backlog identity recovery only; it intentionally does not call `runLineFollowersReanchor`.
+
+- **Auth:** `CRON_SECRET` bearer only.
+- **Function config:** `maxDuration = 300`.
+- **Request:** none.
+- **Response:** `200 { "ok": true, "result": ... }`.
+- **Errors:** `401` for invalid secret; `500` for missing `CRON_SECRET` or recovery failures.
+
+---
+
+## Cron watchdog
+
+### `GET, POST /api/internal/cron-watchdog`
+
+Sweeps stale cron invocations and emits the watchdog result. `POST` is a cron-secret replay alias.
+
+- **Auth:** `CRON_SECRET` bearer only.
+- **Function config:** `maxDuration = 300`.
+- **Request:** none.
+- **Response:** `200 { "ok": true, ...result }`.
+- **Errors:** `401` for invalid secret; `500` for missing `CRON_SECRET` or watchdog failures.
+
+---
+
+## Admissions notifications
+
+### `GET /api/internal/admissions-notifications`
+
+Daily admissions deadline-reminder scan; on Bangkok Sundays the default run also sends the weekly digest.
+
+- **Auth:** `CRON_SECRET` bearer only.
+- **Function config:** `maxDuration = 300`.
+- **Query params:** optional `runType=daily|weekly`; invalid values return `400 { "error": "Invalid runType", "details": ... }`.
+- **Response:** `200 { "ok": true, "skipped": false, "results": [...] }`; `202` with the same shape when every requested run was skipped by its single-flight guard.
+- **Errors:** `401` for invalid secret; `500` for missing `CRON_SECRET` or notification failures.
+
+### `POST /api/internal/admissions-notifications`
+
+Manual bearer-secret trigger for one or both admissions notification passes.
+
+- **Auth:** `CRON_SECRET` bearer only.
+- **Request body:** optional JSON `{ "runType": "daily" | "weekly" }`; an empty body means default behavior. Malformed JSON returns `400 { "error": "Invalid JSON body" }`; invalid `runType` returns `400 { "error": "Invalid runType", "details": ... }`.
+- **Responses/errors:** same as the `GET` route.
+
+---
+
 ## Student promotions July 1 apply
 
 Applies the newest verified Student Promotions run for target date `2026-07-01`.
@@ -282,4 +471,4 @@ the action row; they do not abort the whole run.
 | `500` | `CRON_SECRET` env var not set | `{"error":"Server misconfigured"}` |
 | `400`/`500` | Apply service rejected or failed | `{"error":"<message>"}` |
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_API route contracts verified against HEAD on 2026-07-20._

@@ -1,23 +1,28 @@
-# Search, Tutors, Filters, Compare, Data Health, Auth & Admin API
+# Search, Tutors, Filters, Compare, Data Health, Home & Admin API
 
-HTTP reference for the search/compare workspace, tutor metadata, filter dropdowns, data-health dashboard, leave-request review, tutor business profiles, and the admin Wise-sync trigger. Eighteen endpoints across eight path families:
+HTTP reference for the search/compare workspace, tutor metadata, filter dropdowns, data-health dashboard, home summary, leave-request review, tutor business profiles, competitor intelligence, progress tests, US universities, Auth.js, and the admin Wise-sync trigger. Forty-two exported HTTP method handlers across thirteen path families:
 
 - **Search** — `/api/search`, `/api/search/range`, `/api/search/assistant`
 - **Compare** — `/api/compare`, `/api/compare/discover`
 - **Tutors** — `/api/tutors`
 - **Filters** — `/api/filters`
 - **Data Health** — `/api/data-health`
+- **Home** — `/api/home/summary`
 - **Admin** — `/api/admin/sync-wise`
+- **Auth** — `/api/auth/[...nextauth]`
 - **Tutor Profiles** — `/api/tutor-profiles`, `/api/tutor-profiles/[canonicalKey]`, `/api/tutor-profiles/import-preview`, `/api/tutor-profiles/import-commit`
 - **Leave Requests** — `/api/leave-requests`, `/api/leave-requests/sync`, `/api/leave-requests/[requestId]`, `/api/leave-requests/[requestId]/wise-cancel-preview`
+- **Competitor Intelligence** — `/api/competitor-intelligence/**`
+- **Progress Tests** — `/api/progress-tests/**`
+- **US Universities** — `/api/us-universities/**`
 
-For *what* these features mean (search/compare workflow, fail-closed availability rules, leave-request lifecycle, profile-import matching), see the relevant `docs/features/*` pages. This page documents mechanical request/response detail only.
+For *what* these features mean (search/compare workflow, fail-closed availability rules, leave-request lifecycle, profile-import matching), see the relevant `docs/features/*` pages where available. This page documents mechanical request/response detail only.
 
 ## Conventions shared across these endpoints
 
-**Authentication.** Every handler in this group calls `auth()` from `@/lib/auth` as its first step and returns `401 { "error": "Unauthorized" }` when no session is present. The leave-request handlers additionally require an email — they check `!session?.user?.email` rather than just `!session` (`src/app/api/leave-requests/route.ts:9`, `[requestId]/route.ts:16`, `[requestId]/route.ts:28`, `[requestId]/wise-cancel-preview/route.ts:10`, `sync/route.ts:10`). All other handlers check `!session` (e.g. `src/app/api/compare/route.ts:114`, `src/app/api/search/route.ts:31`).
+**Authentication.** Most handlers in this page call `auth()` from `@/lib/auth` as their first step and return `401 { "error": "Unauthorized" }` when no session is present. The leave-request, home-summary, and US-university handlers additionally require an email — they check `!session?.user?.email` rather than just `!session`. Progress Tests and Competitor Intelligence use domain helpers that also enforce page-scope / role checks and return `403 { "error": "Forbidden" }` when a signed-in user lacks that surface.
 
-These paths are **admin** tier: none are in the middleware public-route allowlist except `/api/search/assistant`, so the global auth middleware also redirects unauthenticated browser requests to `/login` before the handler runs (`src/middleware.ts:4-15, 25-29`). `/api/search/assistant` is allowlisted as public in the middleware (`src/middleware.ts:8`) yet still enforces a session in-handler (`src/app/api/search/assistant/route.ts:136-139`) — see its section below.
+Most paths on this page are **admin** tier. Exceptions are `/api/auth/[...nextauth]` (public Auth.js handler), `/api/search/assistant` (public at the middleware but session-gated in-handler), `/api/home/summary` (any signed-in user; explicitly allowed for restricted users), and `GET /api/progress-tests` (teacher/admin progress-tests sessions). For all non-public paths, the global auth middleware redirects unauthenticated browser requests to `/login` before the handler runs (`src/middleware.ts:4-15, 25-29`).
 
 **Validation.** Most write/query bodies are validated with a Zod `.safeParse()`; on failure the handler returns `400 { "error": "Invalid request", "details": <flattened zod error> }`. Routes that parse a JSON body first wrap `request.json()` in `try/catch` and return `400 { "error": "Invalid JSON" }` on a parse failure. The leave-request `POST`/`PATCH` handlers are the exception: a JSON parse failure is swallowed and treated as an empty body (`{}`), not a 400 (`src/app/api/leave-requests/sync/route.ts:14-19`, `[requestId]/route.ts:33-38`, `[requestId]/wise-cancel-preview/route.ts:14-19`).
 
@@ -202,6 +207,20 @@ Session-gated manual trigger for registered data-health jobs. Source: `src/app/a
 
 ---
 
+## Home
+
+### `GET /api/home/summary`
+
+Signed-in landing payload scoped to the caller's page access. Source: `src/app/api/home/summary/route.ts`.
+
+- **Auth:** `auth()` requiring `session.user.email` -> `401`. Middleware explicitly lets restricted users call this route even when their only allowed pages are feature-specific (`src/middleware.ts:26-28`).
+- **Request:** no body or query params.
+- **Behavior:** calls `getHomeSummaryPayload({ allowedPages, email }, getDb())` so restricted users see only summaries relevant to their allowed surfaces.
+- **Response** (`200`): the home-summary payload from `src/lib/home/summary.ts`.
+- **Errors:** `500 { "error": <message | "Home summary failed"> }`.
+
+---
+
 ## Admin
 
 ### `POST /api/admin/sync-wise`
@@ -219,6 +238,18 @@ Manually trigger a full Wise snapshot sync from an **admin session** (distinct f
   - **`401`** — no admin session.
 
 > The Vercel cron drives `/api/internal/sync-wise`, not this route. See the Internal/Cron group for the cron-secret endpoint.
+
+---
+
+## Auth
+
+### `GET, POST /api/auth/[...nextauth]`
+
+Auth.js (NextAuth v5) catch-all route. Source: `src/app/api/auth/[...nextauth]/route.ts`.
+
+- **Auth:** public per middleware (`src/middleware.ts:7`).
+- **Implementation:** re-exports `GET` and `POST` from `handlers` in `@/lib/auth`; the OAuth/session/callback response bodies are framework-owned.
+- **Behavior:** Google sign-in is allowlist-gated in the Auth.js callbacks. Session JWTs carry `allowedPages` and `role` claims used by middleware and domain helpers.
 
 ---
 
@@ -336,4 +367,165 @@ Preview the Wise session-cancellation actions for a leave request. **Preview onl
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+## Competitor Intelligence
+
+Competitive-signal dashboard and task/source administration. All endpoints require an authenticated session with access to `/competitor-intelligence`; the domain helper rejects non-admin role claims and users without the page grant.
+
+### Shared behavior
+
+- **Auth:** `requireCompetitorIntelligenceSession()` -> `401` when no email/name, `403` when the role/page policy fails (`src/lib/competitor-intelligence/access.ts:18-29`).
+- **Error mapping:** `competitorIntelligenceErrorResponse()` maps `Unauthorized` to `401`, `Forbidden` to `403`, and every other thrown error to `500` with `{ "error": <message> }` (`access.ts:32-52`). Because these handlers call Zod `.parse(await request.json())`, malformed JSON and Zod validation failures currently flow through that `500` path rather than the more common `400` safe-parse envelope.
+
+### `GET /api/competitor-intelligence`
+
+- **Behavior:** `getCompetitorIntelligencePayload()`.
+- **Response** (`200`): the dashboard payload.
+- **Errors:** `401`, `403`, `500`.
+
+### `POST /api/competitor-intelligence/manual-evidence`
+
+- **Request body:** `{ entityId: uuid, title, contentText, canonicalUrl?, pricingSignal? }`.
+- **Behavior:** `createManualCompetitorEvidence(input, actorEmail)`.
+- **Response** (`200`): `{ evidence }`.
+- **Errors:** `401`, `403`, `500`.
+
+### `GET, POST /api/competitor-intelligence/own-sources`
+
+- **GET response** (`200`): `{ sources }`.
+- **POST request body:** `{ sourceType: "website"|"instagram"|"facebook", label, url, handle?, status? }`.
+- **POST response:** `201 { source }`.
+- **Errors:** `401`, `403`, `500`.
+
+### `PATCH /api/competitor-intelligence/own-sources/[sourceId]`
+
+- **Request body:** same source shape as the collection `POST`.
+- **Behavior:** `status: "disabled"` calls `disableOwnBrandSource`; all other statuses upsert the source by path id.
+- **Response** (`200`): `{ source }`.
+- **Errors:** `401`, `403`, `500`.
+
+### `PATCH /api/competitor-intelligence/sources/[sourceId]`
+
+- **Request body:** `{ status: "active"|"disabled"|"needs_review"|"archived" }`.
+- **Response** (`200`): `{ source }`.
+- **Errors:** `401`, `403`, `500`.
+
+### `POST /api/competitor-intelligence/sync`
+
+Manual session-gated sync trigger; the scheduled variant is `/api/internal/sync-competitor-intelligence`.
+
+- **Auth:** same competitor-intelligence session helper.
+- **Function config:** `maxDuration = 800`.
+- **Request:** none.
+- **Response:** `200 { ok: true, result }` when `result.status === "success"`; `500 { ok: false, result }` when the sync result is non-success.
+- **Errors:** `409 { "error": <message> }` when a sync is already running; otherwise `401`, `403`, `500`.
+
+### `POST /api/competitor-intelligence/task-suggestions/[suggestionId]/accept`
+
+- **Response** (`200`): `{ task }` from `acceptCompetitorTaskSuggestion`.
+- **Errors:** `401`, `403`, `500`.
+
+### `PATCH /api/competitor-intelligence/tasks/[taskId]`
+
+- **Request body:** optional patch fields: `status`, `ownerEmail`, `priority`, `dueDate`, `labels[]`.
+- **Response** (`200`): `{ task }`.
+- **Errors:** `401`, `403`, `500`.
+
+---
+
+## Progress Tests
+
+Progress-test booking and follow-up workflow. The read endpoint allows teacher sessions scoped to their own students; every write endpoint requires an admin role.
+
+### Shared behavior
+
+- **Auth:** `requireProgressTestsSession()` -> `401` for no session, `403` when the caller lacks `/progress-tests` or has an unsupported role. `requireProgressTestsAdminSession()` adds an admin-only bar for mutations (`src/lib/progress-tests/api.ts:31-78`).
+- **Write validation:** mutating routes read JSON inside a `try/catch`; malformed JSON returns `400 { "error": "Invalid JSON body" }`. Zod `safeParse` failures return `400 { "error": <flattened zod error> }`.
+- **Not found:** enrollment-targeted mutations return `404 { "error": "Enrollment not found" }` when the service returns no row.
+- **Fallback errors:** `progressTestsErrorResponse()` maps `Unauthorized` to `401`, `Forbidden` to `403`, and other thrown errors to `500`.
+
+### `GET /api/progress-tests`
+
+- **Auth:** progress-tests session; teacher and admin roles accepted.
+- **Behavior:** teachers are scoped through `resolveTeacherCanonicalKeys(user.email)`; admins see every enrollment.
+- **Response** (`200`): progress-tests dashboard payload.
+- **Errors:** `401`, `403`, `500`.
+
+### `POST /api/progress-tests/book`
+
+- **Auth:** admin progress-tests session.
+- **Request body:** `{ enrollmentKey, testDate, location?, modality?, scheduleMethod? }`; `testDate` is an ISO datetime and `scheduleMethod` defaults to `"parent_pick"`.
+- **Response** (`200`): booking result from `bookTest`.
+- **Errors:** `400`, `401`, `403`, `404`, `500`.
+
+### `POST /api/progress-tests/mark-at-home-submitted`
+
+- **Auth:** admin progress-tests session.
+- **Request body:** `{ enrollmentKey }`.
+- **Response** (`200`): `{ row }`.
+- **Errors:** `400`, `401`, `403`, `404`, `500`.
+
+### `POST /api/progress-tests/mark-complete`
+
+- **Auth:** admin progress-tests session.
+- **Request body:** `{ enrollmentKey }`.
+- **Response** (`200`): `{ row }`.
+- **Errors:** `400`, `401`, `403`, `404`, `500`.
+
+### `POST /api/progress-tests/resend-email`
+
+- **Auth:** admin progress-tests session.
+- **Request body:** `{ enrollmentKey }`.
+- **Response** (`200`): resend result from `resendTeacherEmail`.
+- **Errors:** `400`, `401`, `403`, `404`, `500`.
+
+### `POST /api/progress-tests/select-at-home`
+
+- **Auth:** admin progress-tests session.
+- **Request body:** `{ enrollmentKey }`.
+- **Response** (`200`): `{ row }`.
+- **Errors:** `400`, `401`, `403`, `404`, `500`.
+
+---
+
+## US Universities
+
+IPEDS-backed university overview, search, compare, profile, and export routes.
+
+### Shared behavior
+
+- **Auth:** `auth()` requiring `session.user.email` -> `401`.
+- **Query validation:** search/export use `FilterQuerySchema`; compare requires a non-empty `ids` query string; institution profiles coerce `[unitId]` to a positive integer. Validation failures return `400 { "error": <flattened zod error> }`.
+- **Fallback errors:** uncaught service errors return `500 { "error": <message | fallback> }`.
+
+### `GET /api/us-universities`
+
+- **Response** (`200`): overview payload from `getUsUniversitiesOverview`.
+- **Errors:** `401`, `500`.
+
+### `GET /api/us-universities/search`
+
+- **Query params:** the filter query accepted by `FilterQuerySchema`.
+- **Response** (`200`): search result from `searchInstitutions`.
+- **Errors:** `400`, `401`, `500`.
+
+### `GET /api/us-universities/compare`
+
+- **Query params:** `ids` as a comma-separated list; parsed ids are capped at `MAX_COMPARE`.
+- **Response** (`200`): `{ institutions }`.
+- **Errors:** `400 { "error": "No valid institution ids" }` when no numeric ids remain after parsing; otherwise `400`, `401`, `500`.
+
+### `GET /api/us-universities/export`
+
+- **Query params:** the same filter query as search.
+- **Response** (`200`): CSV body with `Content-Type: text/csv;charset=utf-8` and `Content-Disposition: attachment; filename="us-universities.csv"`.
+- **Errors:** `400`, `401`, `500`.
+
+### `GET /api/us-universities/institutions/[unitId]`
+
+- **Path param:** `unitId` coerced to a positive integer.
+- **Response** (`200`): institution profile payload.
+- **Errors:** `400`, `401`, `404 { "error": "Institution not found" }`, `500`.
+
+---
+
+_API route contracts verified against HEAD on 2026-07-20._
