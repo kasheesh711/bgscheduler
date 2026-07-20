@@ -1,6 +1,6 @@
 # LINE API Reference
 
-**Status:** Stable read/review paths; the Wise write-path is dry-run only (see [§ Wise actions](#wise-actions)). **Scope:** the 28 HTTP handlers under [`src/app/api/line/`](../../../src/app/api/line/).
+**Status:** Stable read/review paths; the Wise write-path is dry-run only (see [§ Wise actions](#wise-actions)). **Scope:** the 31 HTTP handlers under [`src/app/api/line/`](../../../src/app/api/line/).
 
 This page is the mechanical reference — method, path, auth, request/response shapes, side effects, and status codes per endpoint. Feature meaning, lifecycles, and data flows live in [`features/line-integration.md`](../../features/line-integration.md); that doc owns the "why" and links here for signatures.
 
@@ -272,6 +272,16 @@ Refresh cached LINE profiles (display name / picture / status) for all contacts 
 
 **Body:** none. **Side effect:** `refreshAllLineContactProfiles({ db })` fetches and updates every contact's profile. **Response:** **200** `{ result }`.
 
+### `POST /api/line/contacts/followers-reanchor`
+
+Run the combined follower reanchor plus backlog identity-recovery helper ([`followers-reanchor/route.ts:15-47`](../../../src/app/api/line/contacts/followers-reanchor/route.ts)). This is an admin-triggered maintenance route; the dedicated cron route for backlog-only recovery is `/api/internal/line-backlog-recovery`.
+
+**Auth:** admin session (`auth()` -> **401 `{ "error": "Unauthorized" }`**).
+
+**Query params:** `dryRun=true` skips reanchor writes and runs backlog recovery in read-only mode.
+
+**Response:** **200** `{ reanchor, backlog }`; **500 `{ "error": <message> }`** on reanchor/backlog failures.
+
 ---
 
 ## Contacts — alias import
@@ -366,4 +376,4 @@ Commit resolved rows from a run into verified contact↔student links. **Require
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_API route contracts verified against HEAD on 2026-07-20._

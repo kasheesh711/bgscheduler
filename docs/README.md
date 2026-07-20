@@ -133,7 +133,7 @@ Mechanical lookup. Owns exact signatures, columns, schedules, and variables.
 | [university-admissions.md](./reference/api/university-admissions.md) | `/api/admissions/**` and the admissions-notifications internal cron route. |
 | [wise-activity.md](./reference/api/wise-activity.md) | `/api/wise-activity/*`. |
 | [internal-crons.md](./reference/api/internal-crons.md) | `/api/internal/*` — cron-triggered sync endpoints. |
-| [misc.md](./reference/api/misc.md) | Search, Tutors, Filters, Compare, Data Health, Auth & Admin. |
+| [misc.md](./reference/api/misc.md) | Search, Tutors, Filters, Compare, Data Health, Home, Auth, Admin, Tutor Profiles, Leave Requests, Competitor Intelligence, Progress Tests, and US Universities. |
 
 #### Database — [`reference/database/`](./reference/database/index.md)
 

@@ -92,7 +92,7 @@ All 78 tables are defined in `src/lib/db/schema.ts` (Drizzle ORM) and migrated u
 
 > Snapshot-independent tables (survive snapshot rotation): `admin_users`, `google_oauth_tokens`, `tutor_aliases`, `wise_activity_events`, `wise_activity_sync_runs`, `room_utilization_sessions`, and `past_session_blocks`. Postgres enums for `status`/`category`/`role` columns are declared at the top of `schema.ts`.
 
-### API routes (110 endpoints — summary)
+### API routes (222 exported HTTP method handlers — summary)
 
 All routes live under `src/app/api/**/route.ts` (App Router). Auth tiers are **public** (middleware allowlist + in-handler signature/bearer checks), **admin** (Auth.js session), and **cron** (`CRON_SECRET`). **For the complete method+path+auth+purpose inventory and per-group request/response signatures, see [`docs/reference/api/index.md`](docs/reference/api/index.md)** — the canonical home for endpoint mechanics.
 
@@ -102,10 +102,10 @@ All routes live under `src/app/api/**/route.ts` (App Router). Auth tiers are **p
 | Compare | 2 | Compare 1-3 tutors; candidate discovery |
 | Tutors / Filters | 2 | Combobox source; dropdown facets |
 | AI Scheduler | 8 | Conversation CRUD, message turns, feedback, metrics |
-| LINE | 28 | Webhook, contacts, scheduler reviews, link validation, OA-resolver, Wise-action logs |
+| LINE | 31 | Webhook, contacts, scheduler reviews, link validation, OA-resolver, CORS preflights, Wise-action logs |
 | Class Assignments | 8 | Runs, overrides, publish + poll, teacher schedule, schedule email |
 | Classrooms | 2 | Room catalog; public floor-plan map |
-| Sales Dashboard | 10 | Payload, imports, sources CRUD/seed, projections |
+| Sales Dashboard | 13 | Payload, dimensions, transactions/export, imports, sources CRUD/seed, projections |
 | Credit Control | 8 | Payload, sync, single/bulk actions, history, ownership, inactive flag |
 | Payroll | 5 | Payload, sync, review, adjustments |
 | Room Capacity | 3 | Utilization, month view, forecast |
@@ -113,11 +113,17 @@ All routes live under `src/app/api/**/route.ts` (App Router). Auth tiers are **p
 | Proposals | 3 | Create bundle, list active, item lifecycle |
 | Wise Activity | 5 | Events, summary, manual sync, reconciliation (+ backfill) |
 | Leave Requests | 5 | List, detail, update, manual sync, Wise-cancel preview (**uncommitted**) |
-| Data Health | 1 | Sync status + issue counts |
-| Auth | 1 | Auth.js catch-all (public) |
+| Data Health | 2 | Sync status + issue counts; manual data-health job trigger |
+| Home | 1 | Signed-in landing summary scoped to allowed pages |
+| Auth | 2 | Auth.js catch-all GET/POST handlers (public) |
 | Admin | 1 | Admin-session Wise sync trigger |
-| Internal / Cron | 12 | Cron-triggered sync + automation jobs (`CRON_SECRET`) |
-| **Total** | **110** | Canonical count per the API index header. (Group rows mirror that index, whose per-group rows sum to 111 — the Auth catch-all `GET, POST /api/auth/[...nextauth]` is one route counted once.) |
+| Internal / Cron | 24 | Cron-triggered sync + automation jobs (`CRON_SECRET`) |
+| Student Promotions | 9 | July 1 promotion audit/apply/readback workflow |
+| University Admissions | 61 | Admissions case management, portal/admin resources, and role-scoped case APIs |
+| Competitor Intelligence | 9 | Competitive-signal dashboard, source admin, tasks, and sync |
+| Progress Tests | 6 | Progress-test payload, booking, status, and email actions |
+| US Universities | 5 | IPEDS overview, search, compare, profile, and CSV export |
+| **Total** | **222** | Exported HTTP method handlers across 157 API route files, verified by `npm run docs:audit`. |
 
 ### Frontend
 
