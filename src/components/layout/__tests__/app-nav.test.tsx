@@ -43,6 +43,15 @@ describe("AppNav", () => {
     expect(html).not.toContain("Leave Requests");
   });
 
+  it("adds Class Feedback to a restricted admin's nav when the fresh feature grant allows it", () => {
+    const html = renderToStaticMarkup(
+      <AppNav allowedPages={["/progress-tests"]} postClassFeedbackAccess />,
+    );
+
+    expect(html).toContain("Progress Tests");
+    expect(html).toContain("Class Feedback");
+  });
+
   it("marks the current section active", () => {
     vi.mocked(usePathname).mockReturnValue("/payroll");
 

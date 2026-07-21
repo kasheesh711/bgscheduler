@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getCronJobDefinition, type CronJobKey } from "@/lib/data-health/cron-registry";
 import { runDataHealthJob } from "@/lib/data-health/run-job";
+import { getPostClassCapabilities } from "@/lib/post-class-feedback/access";
 
 interface RunRouteContext {
   params: Promise<{ jobKey: string }>;
 }
+
+export const maxDuration = 800;
 
 export async function POST(request: NextRequest, context: RunRouteContext) {
   const session = await auth();
@@ -17,6 +20,13 @@ export async function POST(request: NextRequest, context: RunRouteContext) {
   const job = getCronJobDefinition(jobKey);
   if (!job) {
     return NextResponse.json({ error: "Unknown job" }, { status: 404 });
+  }
+
+  if (job.key.startsWith("post_class_feedback")) {
+    const capabilities = await getPostClassCapabilities(session.user.email);
+    if (!capabilities.includes("access_manager")) {
+      return NextResponse.json({ error: "Access manager capability required" }, { status: 403 });
+    }
   }
 
   const body = await request.json().catch(() => ({})) as { confirmed?: boolean };

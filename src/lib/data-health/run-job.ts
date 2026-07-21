@@ -11,6 +11,12 @@ import {
   importRefreshableSalesSources,
 } from "@/lib/sales-dashboard/data";
 import { runCronWatchdog } from "@/lib/internal/cron-watchdog";
+import {
+  processDuePostClassNotificationRetries,
+  sendPostClassAdminDigest,
+} from "@/lib/post-class-feedback/notifications";
+import { runPostClassReminderJob } from "@/lib/post-class-feedback/reminder-job";
+import { runPostClassFeedbackSync } from "@/lib/post-class-feedback/sync";
 import { runWiseSyncRequest } from "@/lib/sync/run-wise-sync";
 import { createWiseClient } from "@/lib/wise/client";
 import { syncWiseActivityEvents, WiseActivitySyncAlreadyRunningError } from "@/lib/wise-activity/sync";
@@ -92,6 +98,43 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
 
       if (jobKey === "credit_control") {
         return runCreditControlSyncRequest();
+      }
+
+      if (jobKey === "post_class_feedback") {
+        try {
+          const result = await runPostClassFeedbackSync({
+            triggerType: "manual",
+            actorEmail,
+          });
+          const retries = await processDuePostClassNotificationRetries();
+          return NextResponse.json({ ok: true, result, retries });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Post-class feedback sync failed";
+          return NextResponse.json(
+            { error: message },
+            { status: message.includes("already running") ? 409 : 500 },
+          );
+        }
+      }
+
+      if (jobKey === "post_class_feedback_digest") {
+        const result = await sendPostClassAdminDigest();
+        return NextResponse.json({ ok: true, result });
+      }
+
+      if (jobKey === "post_class_feedback_day_after" || jobKey === "post_class_feedback_deadline") {
+        const result = await runPostClassReminderJob(
+          jobKey === "post_class_feedback_day_after" ? "day_after" : "deadline",
+          { triggerType: "manual", actorEmail },
+        );
+        if (!result.ready) {
+          return NextResponse.json({
+            ok: false,
+            error: "Post-class reminder checkpoint still has unreconciled Wise sessions.",
+            result,
+          }, { status: 503 });
+        }
+        return NextResponse.json({ ok: true, result });
       }
 
       if (jobKey === "leave_requests") {

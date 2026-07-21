@@ -153,7 +153,8 @@ grouped by feature.
 
 | Variable | In `.env.example`? | Purpose | Consumed at | Default / guard |
 |---|---|---|---|---|
-| `OPENAI_API_KEY` | Yes (line 19) | OpenAI API key for the AI scheduler + LINE classifier. Also doubles as a feature gate. | `src/lib/ai/scheduler.ts:479,539`; `scheduler-conversation.ts:2341`; `src/lib/line/classifier.ts:93`; `src/lib/line/contact-aliases.ts:363` | `isAiSchedulerConfigured()` requires a non-empty trimmed value (`scheduler.ts:477-480`); `runAiScheduler` no-ops if missing (`scheduler.ts:539-540`) |
+| `OPENAI_API_KEY` | Yes (line 19) | OpenAI API key for the AI scheduler, LINE classifier, and de-identified Post-Class Feedback quality review. Also doubles as a feature gate. | `src/lib/ai/scheduler.ts`; `src/lib/line/classifier.ts`; `src/lib/line/contact-aliases.ts`; `src/lib/post-class-feedback/ai.ts` | Post-Class Feedback stores no source text in its AI run metadata and sends Responses requests with `store:false`; objective compliance continues if the model is unavailable. |
+| `OPENAI_POST_CLASS_FEEDBACK_MODEL` | No | Optional model override for Post-Class Feedback advisory quality review. | `src/lib/post-class-feedback/ai.ts` | Defaults to `gpt-5.4-mini`. |
 | `OPENAI_SCHEDULER_MODEL` | Yes (line 20) | Model name for the AI scheduler. | `src/lib/ai/scheduler.ts:462` | Falls back to `DEFAULT_AI_SCHEDULER_MODEL = "gpt-5.4-mini"` (`scheduler.ts:8,462`) |
 | `OPENAI_SCHEDULER_SHADOW_MODEL` | No | Optional secondary "shadow" model run alongside the primary. | `src/lib/ai/scheduler.ts:466` | `undefined` when unset (no shadow run) |
 | `OPENAI_SCHEDULER_REASONING_EFFORT` | No | Reasoning-effort tier (`none`/`low`/`medium`/`high`/`xhigh`). | `src/lib/ai/scheduler.ts:470` | Invalid/unset → `DEFAULT_AI_SCHEDULER_REASONING_EFFORT` (`scheduler.ts:474`) |
@@ -177,8 +178,8 @@ All read with `?.trim()` and no schema entry; consumed in
 |---|---|---|---|---|
 | `SCHEDULE_EMAIL_APPS_SCRIPT_URL` | Yes (line 29) | Primary Apps Script web-app URL that actually sends the email. | `schedule-email.ts:299` | None — primary transport endpoint |
 | `SCHEDULE_EMAIL_APPS_SCRIPT_SECRET` | Yes (line 30) | Shared secret authenticating to the primary Apps Script. | `schedule-email.ts:300` | None |
-| `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_URL` | Yes (line 31) | Fallback Apps Script URL. | `schedule-email.ts:291` | Optional backup transport |
-| `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET` | Yes (line 32) | Shared secret for the backup Apps Script. | `schedule-email.ts:292` | Optional |
+| `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_URL` | Yes (line 31) | Fallback Apps Script URL. | `schedule-email.ts:291` | Optional for classroom email; required before Post-Class Feedback can activate live enforcement. |
+| `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET` | Yes (line 32) | Shared secret for the backup Apps Script. | `schedule-email.ts:292` | Optional for classroom email; required before Post-Class Feedback can activate live enforcement. |
 | `SCHEDULE_EMAIL_SENDER_NAME` | Yes (line 33) | Display name for the sender. | `schedule-email.ts:606` | Defaults to `"BeGifted"` |
 | `SCHEDULE_EMAIL_REPLY_TO` | Yes (line 34) | Reply-to address. | `schedule-email.ts:607` | Defaults to hard-coded `"kevhsh7@gmail.com"` |
 | `SCHEDULE_EMAIL_PUBLIC_BASE_URL` | No | Override for the public base URL used in email links. | `schedule-email.ts:266`; also `src/lib/leave-requests/config.ts:19` | First in a cascade (see below) |
@@ -271,4 +272,4 @@ sequenceDiagram
   constructed with `undefined` credentials and fails at request time rather than
   at construction — unlike `reconciliation.ts:729`, which guards explicitly.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against the release tree on 2026-07-21._

@@ -7,6 +7,10 @@ export type CronJobKey =
   | "credit_control"
   | "progress_tests"
   | "progress_tests_digest"
+  | "post_class_feedback"
+  | "post_class_feedback_digest"
+  | "post_class_feedback_day_after"
+  | "post_class_feedback_deadline"
   | "leave_requests"
   | "classroom_morning"
   | "classroom_admin_email"
@@ -144,6 +148,69 @@ export const CRON_JOBS = [
     dangerous: false,
     confirmationLabel: null,
     expectedBangkokMinute: 7 * 60 + 35,
+    routeMethod: "GET",
+  },
+  {
+    key: "post_class_feedback",
+    label: "Post-class Feedback",
+    feature: "Class Feedback",
+    path: "/api/internal/sync-post-class-feedback",
+    schedule: "13,43 * * * *",
+    cadenceLabel: "Every 30 min",
+    cadenceMinutes: 30,
+    lateAfterMinutes: 45,
+    maxDurationSeconds: 800,
+    manualOnly: false,
+    dangerous: false,
+    confirmationLabel: null,
+    routeMethod: "GET",
+  },
+  {
+    key: "post_class_feedback_digest",
+    label: "Feedback Admin Digest",
+    feature: "Class Feedback",
+    path: "/api/internal/post-class-feedback/admin-digest",
+    schedule: "0 1 * * *",
+    cadenceLabel: "Daily 08:00 Bangkok",
+    cadenceMinutes: 24 * 60,
+    lateAfterMinutes: 60,
+    maxDurationSeconds: 300,
+    manualOnly: false,
+    dangerous: false,
+    confirmationLabel: null,
+    expectedBangkokMinute: 8 * 60,
+    routeMethod: "GET",
+  },
+  {
+    key: "post_class_feedback_day_after",
+    label: "Feedback Day-after Reminder",
+    feature: "Class Feedback",
+    path: "/api/internal/post-class-feedback/reminder-day-after",
+    schedule: "0 2 * * *",
+    cadenceLabel: "Daily 09:00 Bangkok",
+    cadenceMinutes: 24 * 60,
+    lateAfterMinutes: 60,
+    maxDurationSeconds: 800,
+    manualOnly: false,
+    dangerous: true,
+    confirmationLabel: "May email tutors whose post-class feedback is incomplete.",
+    expectedBangkokMinute: 9 * 60,
+    routeMethod: "GET",
+  },
+  {
+    key: "post_class_feedback_deadline",
+    label: "Feedback Deadline Reminder",
+    feature: "Class Feedback",
+    path: "/api/internal/post-class-feedback/reminder-deadline",
+    schedule: "0 10 * * *",
+    cadenceLabel: "Daily 17:00 Bangkok",
+    cadenceMinutes: 24 * 60,
+    lateAfterMinutes: 60,
+    maxDurationSeconds: 800,
+    manualOnly: false,
+    dangerous: true,
+    confirmationLabel: "May email tutors whose feedback is due tonight.",
+    expectedBangkokMinute: 17 * 60,
     routeMethod: "GET",
   },
   {

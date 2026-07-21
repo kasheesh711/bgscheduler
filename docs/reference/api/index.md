@@ -2,14 +2,15 @@
 
 The canonical lookup of every HTTP endpoint in BGScheduler. This page lists **method + path + group + auth + one-line purpose** only. For full request/response schemas, query parameters, and error shapes, follow the link on each group heading to the per-group detail page.
 
-All routes live under `src/app/api/**/route.ts` (Next.js App Router). Endpoint count: **145** (122 at the previous verification + 23 University Admissions routes: 22 `src/app/api/admissions/**/route.ts` files + `/api/internal/admissions-notifications`).
+All routes live under `src/app/api/**/route.ts` (Next.js App Router). The release tree contains **173 endpoint paths** (`route.ts` files), including 16 Post-Class Feedback paths (12 capability-gated admin paths and four cron-only paths).
 
 ## How to read this index
 
-**Auth column** — three tiers, all verified against `src/middleware.ts` plus each route handler:
+**Auth column** — access tiers verified against `src/middleware.ts` plus each route handler:
 
 - **public** — reachable without an authenticated session. `src/middleware.ts:4-15` allowlists `/api/auth/*`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/api/line/contacts/oa-resolver/worklist`, and `/api/line/contacts/oa-resolver/runs/{runId}/rows`. The non-`/api/auth` public routes enforce their own checks in-handler (LINE signature header or a bearer token), not an admin session.
 - **admin** — requires an authenticated Auth.js session. The middleware redirects unauthenticated requests to `/login` (`src/middleware.ts:25-29`); handlers additionally call `auth()` (or `requireCreditControlSession()` for credit-control) and return `401` when no session is present.
+- **admin + capability** — requires the admin session plus a fresh database grant for the named Post-Class Feedback capability. Grants are not cached in a JWT. An action capability implies `viewer`, but reviewer, finance, and access-manager mutations remain server-separated.
 - **cron** — `CRON_SECRET`-protected. `src/middleware.ts:13` lets `/api/internal/*` bypass the session gate; each handler then enforces a constant-time `Bearer ${CRON_SECRET}` check (`src/lib/internal/cron-auth.ts:6-26`, or an inline copy). Four internal routes additionally accept an admin session as a fallback when the cron secret is absent — see the **cron (or admin)** notes below.
 - **session + min role** — University Admissions only. These routes require an authenticated Auth.js session (`requireAdmissionsSession`) but are **not** admin-only: rights are re-resolved from Postgres per request (`requireCaseAccess` / `requireCounselorOrAdmin`, `src/lib/admissions/access.ts`) under the role ordering `parent < student < counselor < admin`. The Auth column shows the minimum role; see the [group page](./university-admissions.md) for the guard mechanics.
 
@@ -116,6 +117,10 @@ Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/inter
 | GET | `/api/internal/sync-wise` | internal | cron (or admin on POST) | Run the full Wise snapshot sync (Vercel cron via GET) |
 | POST | `/api/internal/sync-wise` | internal | cron (or admin) | Manual full Wise snapshot sync (session or `curl`) |
 | GET | `/api/internal/sync-wise-activity` | internal | cron | Sync newest Wise activity audit events |
+| GET | `/api/internal/sync-post-class-feedback` | internal | cron | Reconcile Wise post-class feedback, then process advisory AI checks and due reminder retries |
+| GET | `/api/internal/post-class-feedback/admin-digest` | internal | cron | Send the daily Post-Class Feedback admin digest |
+| GET | `/api/internal/post-class-feedback/reminder-day-after` | internal | cron | Reconcile source data, then send grouped 09:00 Bangkok day-after tutor reminders when healthy |
+| GET | `/api/internal/post-class-feedback/reminder-deadline` | internal | cron | Reconcile source data, then send grouped 17:00 Bangkok deadline-day tutor reminders when healthy |
 | GET | `/api/internal/sync-credit-control` | internal | cron (or admin on POST) | Cron-trigger a credit-control sync |
 | POST | `/api/internal/sync-credit-control` | internal | cron (or admin) | Manual credit-control sync (session or `curl`) |
 | GET | `/api/internal/sync-sales-dashboard` | internal | cron (or admin on POST) | Cron-trigger a sales-dashboard import |
@@ -198,6 +203,25 @@ Tutor payroll: payload load, Wise-driven sync, review edits, and manual adjustme
 | PATCH | `/api/payroll/review` | payroll | admin | Update a payroll review entry |
 | POST | `/api/payroll/adjustments` | payroll | admin | Add a manual payroll adjustment |
 | DELETE | `/api/payroll/adjustments/[adjustmentId]` | payroll | admin | Delete a manual payroll adjustment |
+
+## [Post-Class Feedback](../../features/post-class-feedback.md) — `/api/post-class-feedback`
+
+Read-only Wise feedback evidence, objective compliance, tutor reminders, human-reviewed deduction candidates, finance handoff, and feature setup. Every route reads the caller's feature capabilities from Postgres on each request. Mutations use idempotency keys and/or expected-version checks; there are no bulk deduction decisions.
+
+| Method | Path | Group | Auth | Brief purpose |
+|---|---|---|---|---|
+| GET | `/api/post-class-feedback` | post-class-feedback | admin + `viewer` | Load the date-filtered Operations/Analytics/Deductions/Audit/Settings dashboard payload, with action-only fields separated by capability |
+| GET | `/api/post-class-feedback/sessions/[sessionId]` | post-class-feedback | admin + `viewer` | Load one session's exact canonical source projection, immutable feedback-version history, assessments, issues, and reminders; AI concerns and reviewer/finance decision data are added only for the matching capability |
+| POST | `/api/post-class-feedback/review` | post-class-feedback | admin + `reviewer` | Approve, waive, or reopen one unprocessed deduction candidate |
+| POST | `/api/post-class-feedback/ai-review` | post-class-feedback | admin + `reviewer` | Confirm or dismiss one AI concern with a required note and expected version |
+| POST | `/api/post-class-feedback/finance` | post-class-feedback | admin + `finance` | Move, process, or create an immutable reversal offset for one deduction |
+| POST | `/api/post-class-feedback/finance-periods` | post-class-feedback | admin + `finance` | Open, close, or reopen one feature-owned finance period |
+| PATCH | `/api/post-class-feedback/settings` | post-class-feedback | admin + `access_manager` | Update shadow/live/paused mode, prospective effective date, Wise field mapping, or admin digest recipients |
+| PATCH | `/api/post-class-feedback/access` | post-class-feedback | admin + `access_manager` | Grant or revoke one capability for an existing allowlisted admin, with last-manager/self-lockout safeguards |
+| PATCH | `/api/post-class-feedback/tutor-emails` | post-class-feedback | admin + `access_manager` | Set or clear one canonical tutor's feature-owned primary reminder email |
+| POST | `/api/post-class-feedback/sync` | post-class-feedback | admin + `access_manager` | Run a manual 1–50-detail-call reconciliation, optionally over an inclusive Bangkok date range, then process AI/retry work |
+| POST | `/api/post-class-feedback/test-email` | post-class-feedback | admin + `access_manager` | Send a delivery test and record the successful setup checkpoint |
+| POST | `/api/post-class-feedback/shadow-review` | post-class-feedback | admin + `access_manager` | Confirm that a successful shadow sync was reviewed before prospective activation |
 
 ## [Proposals](./proposals.md) — `/api/proposals`
 
@@ -368,4 +392,4 @@ Wise audit-event workspace: paginated events, summary KPIs, manual backfill sync
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against the release tree on 2026-07-21._

@@ -14,6 +14,7 @@ export type NavToolId =
   | "class-assignments"
   | "tutor-profiles"
   | "room-capacity"
+  | "post-class-feedback"
   | "scheduler-metrics"
   | "progress-tests"
   | "student-promotions"
@@ -139,6 +140,13 @@ export const NAV_TOOLS: NavTool[] = [
     href: "/room-capacity",
     label: "Room Capacity",
     description: "Track room utilization and capacity pressure.",
+    section: "scheduling-tutors",
+  },
+  {
+    id: "post-class-feedback",
+    href: "/post-class-feedback",
+    label: "Class Feedback",
+    description: "Track Wise post-class feedback, reminders, and deduction review.",
     section: "scheduling-tutors",
   },
   {

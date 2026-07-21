@@ -21,6 +21,7 @@ describe("navigation tool registry", () => {
       "Data & Audit",
     ]);
     expect(sections[0].tools.map((tool) => tool.href)).toContain("/leave-requests");
+    expect(sections[0].tools.map((tool) => tool.href)).toContain("/post-class-feedback");
     expect(sections[1].tools.map((tool) => tool.href)).toEqual([
       "/progress-tests",
       "/student-promotions",
