@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { AppNav, AppNavSkeleton } from "@/components/layout/app-nav";
 import { StaleSnapshotBanner } from "@/components/layout/stale-snapshot-banner";
 import { auth } from "@/lib/auth";
+import { getPostClassCapabilities } from "@/lib/post-class-feedback/access";
 
 // Resolves the signed-in user's page access for nav filtering. Kept in its own
 // async component (wrapped in <Suspense> below) so the uncached auth() call does
@@ -10,7 +11,15 @@ import { auth } from "@/lib/auth";
 // so dynamic-param routes do not trigger a prerender error on the static shell.
 async function AppNavWithAccess() {
   const session = await auth();
-  return <AppNav allowedPages={session?.user?.allowedPages ?? null} />;
+  const capabilities = session?.user?.email
+    ? await getPostClassCapabilities(session.user.email)
+    : [];
+  return (
+    <AppNav
+      allowedPages={session?.user?.allowedPages ?? null}
+      postClassFeedbackAccess={capabilities.includes("viewer")}
+    />
+  );
 }
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {

@@ -27,7 +27,7 @@ you can read on demand.
    gotchas. Reads never call Wise; reads are pinned to one snapshot; sync must run before serve;
    fail-closed is the default; Next.js 16 cache/runtime conventions. Start here.
 2. **[`handbook/overview.md`](./handbook/overview.md)** — the system overview: what BGScheduler is,
-   the snapshot-and-index bet, and a one-paragraph tour of all fifteen features. The intended
+   the snapshot-and-index bet, and a one-paragraph tour of the documented feature set. The intended
    second stop in the reading order.
 3. **[`handbook/glossary.md`](./handbook/glossary.md)** — the domain vocabulary (snapshot, identity
    group, modality, fail-closed, …), one line each, cited to the code that defines it.
@@ -82,7 +82,7 @@ The cross-cutting mental model. Read these to understand the system as a whole.
 | Doc | What it covers |
 |---|---|
 | [not-the-nextjs-you-know.md](./handbook/not-the-nextjs-you-know.md) | First-read gotchas — the five assumptions this codebase breaks. |
-| [overview.md](./handbook/overview.md) | System overview — what BGScheduler is, the snapshot-and-index bet, and a one-paragraph tour of all fifteen features. |
+| [overview.md](./handbook/overview.md) | System overview — what BGScheduler is, the snapshot-and-index bet, and a tour of the established feature set. |
 | [architecture.md](./handbook/architecture.md) | Layered pipeline, snapshot-versioned data model, in-memory `SearchIndex`, fail-closed rule, request lifecycle. |
 | [data-flow.md](./handbook/data-flow.md) | The Wise → Postgres → in-memory ETL (the snapshot sync), end to end. |
 | [conventions.md](./handbook/conventions.md) | Handbook-level naming, imports, error handling, and module patterns. |
@@ -104,6 +104,7 @@ declared maturity.
 | [Credit Control](./features/credit-control.md) | stable | Projects when each student's prepaid credit runs low/out; prioritized follow-up queue with outreach logging. |
 | [Payroll](./features/payroll.md) | stable | Reconciles tutor pay against Wise sessions/invoices per month; surfaces integrity issues; review + approve. |
 | [Wise Activity Audit](./features/wise-activity-audit.md) | stable | Read-only audit log of Wise operational/financial events + package-sales reconciliation workbench. |
+| [Post-Class Feedback](./features/post-class-feedback.md) | in progress (shadow rollout) | Reconciles immutable Wise teacher-feedback evidence, compliance, reminders, AI quality review, and an internal deduction/finance workflow without writing to Wise or Payroll. |
 | [Student Promotions](./features/student-promotions.md) | stable, pending first production run | Audited July 1, 2026 Wise student grade/course/graduation workflow with future-session pay-band checks, pay-rate review, dry-run review, and verified apply. |
 | [LINE Integration](./features/line-integration.md) | stable (writeback dry-run) | LINE OA inbox: ingest, classify, draft replies, human-gated review. Scheduler write-path flag-gated/dry-run. |
 | [Proposals (Admin Holds)](./features/proposals.md) | experimental | Temporary admin "holds" on tutor slots, with same-tutor overlap detection. Local-only, never written to Wise. |
@@ -130,6 +131,7 @@ Mechanical lookup. Owns exact signatures, columns, schedules, and variables.
 | [room-capacity.md](./reference/api/room-capacity.md) | `/api/room-capacity/*`. |
 | [sales-dashboard.md](./reference/api/sales-dashboard.md) | `/api/sales-dashboard/*`. |
 | [student-promotions.md](./reference/api/student-promotions.md) | `/api/student-promotions/*` and the July 1 internal cron route. |
+| [post-class-feedback.md](./features/post-class-feedback.md#api-and-cron-surface) | `/api/post-class-feedback/*` and its four internal collection/reminder/digest routes (feature guide; master signatures remain in the API index). |
 | [university-admissions.md](./reference/api/university-admissions.md) | `/api/admissions/**` and the admissions-notifications internal cron route. |
 | [wise-activity.md](./reference/api/wise-activity.md) | `/api/wise-activity/*`. |
 | [internal-crons.md](./reference/api/internal-crons.md) | `/api/internal/*` — cron-triggered sync endpoints. |
@@ -152,6 +154,7 @@ Mechanical lookup. Owns exact signatures, columns, schedules, and variables.
 | [erd-line.md](./reference/database/erd-line.md) | LINE tables. |
 | [erd-room-capacity.md](./reference/database/erd-room-capacity.md) | Room Capacity tables. |
 | [erd-student-promotions.md](./reference/database/erd-student-promotions.md) | Student Promotions audit tables. |
+| [post-class-feedback.md](./features/post-class-feedback.md#durable-data-model) | Post-Class Feedback's 24-table source, compliance, notification, AI, access, and finance model. |
 | [erd-university-admissions.md](./reference/database/erd-university-admissions.md) | University Admissions case-management tables (`admissions_*`). |
 
 #### Other reference
@@ -190,4 +193,4 @@ feature itself, see [`features/ai-scheduler.md`](./features/ai-scheduler.md).
 
 The `docs/superpowers/` directory (older specs and plans) is likewise outside this handbook.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against the release tree on 2026-07-21._

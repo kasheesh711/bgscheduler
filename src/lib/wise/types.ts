@@ -65,7 +65,57 @@ export interface WiseSession {
   location?: string;
   classId?: string | WiseSessionClassId;
   studentCount?: number;
+  students?: Array<string | WiseUserReference>;
+  participants?: Array<string | WiseUserReference>;
+  creditsConsumed?: number;
+  duration?: number;
   metadata?: { recurrenceId?: string; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+export interface WiseFeedbackQuestion {
+  _id?: string;
+  questionId?: string;
+  questionText?: string;
+  text?: string;
+  title?: string;
+  type?: string;
+  required?: boolean;
+  [key: string]: unknown;
+}
+
+export interface WiseFeedbackAnswer {
+  _id?: string;
+  questionId?: string;
+  questionText?: string;
+  type?: string;
+  answer?: unknown;
+  [key: string]: unknown;
+}
+
+export interface WiseFeedbackSubmission {
+  _id?: string;
+  profile?: string;
+  answers?: WiseFeedbackAnswer[];
+  createdAt?: string;
+  updatedAt?: string;
+  creditsConsumed?: number;
+  sessionStatus?: string;
+  userId?: string | WiseUserReference;
+  [key: string]: unknown;
+}
+
+export interface WiseSessionDetail extends WiseSession {
+  feedbackForm?: {
+    questions?: WiseFeedbackQuestion[];
+    [key: string]: unknown;
+  };
+  feedbackSubmissions?: WiseFeedbackSubmission[];
+  [key: string]: unknown;
+}
+
+export interface WiseSessionDetailResponse {
+  data?: WiseSessionDetail;
   [key: string]: unknown;
 }
 

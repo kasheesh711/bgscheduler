@@ -230,6 +230,87 @@ export const competitorTaskStatusEnum = pgEnum("competitor_task_status", [
   "ignored",
 ]);
 
+export const postClassSourceStatusEnum = pgEnum("post_class_source_status", [
+  "ready",
+  "unavailable",
+  "form_drift",
+  "identity_review",
+]);
+
+export const postClassContentStatusEnum = pgEnum("post_class_content_status", [
+  "missing",
+  "blank",
+  "substantive",
+]);
+
+export const postClassTimingStatusEnum = pgEnum("post_class_timing_status", [
+  "not_due",
+  "on_time",
+  "late",
+  "unknown",
+]);
+
+export const postClassDeductionStatusEnum = pgEnum("post_class_deduction_status", [
+  "none",
+  "pending_review",
+  "approved",
+  "waived",
+  "processed",
+  "reversed",
+]);
+
+export const postClassEnforcementModeEnum = pgEnum("post_class_enforcement_mode", [
+  "shadow",
+  "live",
+  "paused",
+]);
+
+export const postClassCapabilityEnum = pgEnum("post_class_capability", [
+  "viewer",
+  "reviewer",
+  "finance",
+  "access_manager",
+]);
+
+export const postClassFeedbackProvenanceEnum = pgEnum("post_class_feedback_provenance", [
+  "manual",
+  "auto",
+  "unknown",
+]);
+
+export const postClassNotificationKindEnum = pgEnum("post_class_notification_kind", [
+  "tutor_day_after",
+  "tutor_deadline",
+  "admin_digest",
+  "test",
+]);
+
+export const postClassNotificationStatusEnum = pgEnum("post_class_notification_status", [
+  "pending",
+  "sending",
+  "sent",
+  "failed",
+  "cancelled",
+]);
+
+export const postClassAiStatusEnum = pgEnum("post_class_ai_status", [
+  "pending",
+  "running",
+  "succeeded",
+  "failed",
+]);
+
+export const postClassConcernDecisionEnum = pgEnum("post_class_concern_decision", [
+  "pending",
+  "confirmed",
+  "dismissed",
+]);
+
+export const postClassFinancePeriodStatusEnum = pgEnum("post_class_finance_period_status", [
+  "open",
+  "closed",
+]);
+
 export const admissionsCaseStatusEnum = pgEnum("admissions_case_status", [
   "active",
   "committed",
@@ -308,6 +389,19 @@ export const admissionsTestTypeEnum = pgEnum("admissions_test_type", [
   "ielts",
   "other",
 ]);
+
+export const admissionsTestSittingStatusEnum = pgEnum("admissions_test_sitting_status", [
+  "planned",
+  "registered",
+  "taken",
+  "score_received",
+  "canceled",
+]);
+
+export const admissionsNotificationOutboxStatusEnum = pgEnum(
+  "admissions_notification_outbox_status",
+  ["pending", "processing", "sent", "failed"],
+);
 
 export const admissionsNoteVisibilityEnum = pgEnum("admissions_note_visibility", [
   "staff_only",
@@ -1816,6 +1910,9 @@ export const tutorContacts = pgTable("tutor_contacts", {
   id: uuid("id").primaryKey().defaultRandom(),
   canonicalKey: text("canonical_key").notNull(),
   displayName: text("display_name").notNull(),
+  // Feature-owned delivery override for post-class feedback reminders. Existing
+  // consumers continue to use onsiteEmail/onlineEmail unless they opt into it.
+  primaryEmail: text("primary_email"),
   onsiteEmail: text("onsite_email"),
   onlineEmail: text("online_email"),
   onsitePhone: text("onsite_phone"),
@@ -2980,6 +3077,484 @@ export const ipedsCompletions = pgTable("ipeds_completions", {
 ]);
 
 // ── Admissions Case Management ─────────────────────────────────────────
+// ── Post-Class Feedback ───────────────────────────────────────────────
+// Wise remains read-only for this feature. Source evidence, compliance state,
+// and financial workflow state intentionally live in separate columns/tables so
+// a provider outage or AI opinion can never create a financial decision.
+
+export const postClassEnforcementWindows = pgTable("post_class_enforcement_windows", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  mode: postClassEnforcementModeEnum("mode").notNull(),
+  startsAt: timestamp("starts_at", { withTimezone: true }).notNull().defaultNow(),
+  endsAt: timestamp("ends_at", { withTimezone: true }),
+  policyEffectiveAt: timestamp("policy_effective_at", { withTimezone: true }),
+  actorEmail: text("actor_email").notNull(),
+  reason: text("reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("pc_enforcement_mode_start_idx").on(table.mode, table.startsAt),
+  index("pc_enforcement_open_idx").on(table.endsAt),
+]);
+
+export const postClassSettings = pgTable("post_class_settings", {
+  id: text("id").primaryKey().default("default"),
+  enforcementMode: postClassEnforcementModeEnum("enforcement_mode").notNull().default("shadow"),
+  currentWindowId: uuid("current_window_id").references(() => postClassEnforcementWindows.id),
+  policyEffectiveAt: timestamp("policy_effective_at", { withTimezone: true }),
+  policyVersion: integer("policy_version").notNull().default(1),
+  formMappingVersion: integer("form_mapping_version").notNull().default(1),
+  formMappingValid: boolean("form_mapping_valid").notNull().default(true),
+  emailDeliveryVerifiedAt: timestamp("email_delivery_verified_at", { withTimezone: true }),
+  shadowReviewedAt: timestamp("shadow_reviewed_at", { withTimezone: true }),
+  version: integer("version").notNull().default(1),
+  updatedByEmail: text("updated_by_email"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const postClassFieldMappings = pgTable("post_class_field_mappings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  mappingVersion: integer("mapping_version").notNull().default(1),
+  fieldKey: text("field_key").notNull(),
+  wiseQuestionText: text("wise_question_text").notNull(),
+  normalizedQuestionText: text("normalized_question_text").notNull(),
+  requiredForCompliance: boolean("required_for_compliance").notNull().default(true),
+  active: boolean("active").notNull().default(true),
+  updatedByEmail: text("updated_by_email"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_field_mapping_version_key_idx").on(table.mappingVersion, table.fieldKey),
+  index("pc_field_mapping_active_idx").on(table.active, table.mappingVersion),
+]);
+
+export const postClassAccessGrants = pgTable("post_class_access_grants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull(),
+  capability: postClassCapabilityEnum("capability").notNull(),
+  grantedByEmail: text("granted_by_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_access_email_capability_idx").on(table.email, table.capability),
+  index("pc_access_capability_idx").on(table.capability, table.email),
+]);
+
+export const postClassConfigAuditLog = pgTable("post_class_config_audit_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  entityType: text("entity_type").notNull(),
+  entityKey: text("entity_key").notNull(),
+  action: text("action").notNull(),
+  actorEmail: text("actor_email").notNull(),
+  beforeValue: jsonb("before_value").$type<Record<string, unknown> | null>(),
+  afterValue: jsonb("after_value").$type<Record<string, unknown> | null>(),
+  note: text("note"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("pc_config_audit_entity_idx").on(table.entityType, table.entityKey, table.createdAt),
+  index("pc_config_audit_actor_idx").on(table.actorEmail, table.createdAt),
+]);
+
+export const postClassDigestRecipients = pgTable("post_class_digest_recipients", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  updatedByEmail: text("updated_by_email"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_digest_recipient_email_idx").on(table.email),
+  index("pc_digest_recipient_enabled_idx").on(table.enabled, table.email),
+]);
+
+export const postClassSyncRuns = pgTable("post_class_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  triggerType: text("trigger_type").notNull().default("cron"),
+  actorEmail: text("actor_email"),
+  windowStart: date("window_start", { mode: "string" }).notNull(),
+  windowEnd: date("window_end", { mode: "string" }).notNull(),
+  detailCap: integer("detail_cap").notNull().default(50),
+  discoveredCount: integer("discovered_count").notNull().default(0),
+  sessionCount: integer("session_count").notNull().default(0),
+  detailFetchedCount: integer("detail_fetched_count").notNull().default(0),
+  versionInsertedCount: integer("version_inserted_count").notNull().default(0),
+  assessedCount: integer("assessed_count").notNull().default(0),
+  sourceIssueCount: integer("source_issue_count").notNull().default(0),
+  cursor: jsonb("cursor").$type<Record<string, unknown>>().notNull().default({}),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  errorSummary: text("error_summary"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("pc_sync_single_running_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'running'`),
+  index("pc_sync_status_started_idx").on(table.status, table.startedAt),
+  index("pc_sync_window_idx").on(table.windowStart, table.windowEnd),
+]);
+
+export const postClassSessions = pgTable("post_class_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseSessionId: text("wise_session_id").notNull(),
+  wiseClassId: text("wise_class_id").notNull(),
+  recurrenceId: text("recurrence_id"),
+  className: text("class_name"),
+  canonicalTutorKey: text("canonical_tutor_key"),
+  canonicalTutorName: text("canonical_tutor_name"),
+  wiseTeacherUserId: text("wise_teacher_user_id"),
+  scheduledStartAt: timestamp("scheduled_start_at", { withTimezone: true }).notNull(),
+  scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }).notNull(),
+  deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
+  finalStatus: text("final_status").notNull(),
+  creditsConsumed: doublePrecision("credits_consumed").notNull().default(0),
+  payableEligible: boolean("payable_eligible").notNull().default(false),
+  eligible: boolean("eligible").notNull().default(false),
+  eligibilityReason: text("eligibility_reason"),
+  sourceStatus: postClassSourceStatusEnum("source_status").notNull().default("unavailable"),
+  contentStatus: postClassContentStatusEnum("content_status").notNull().default("missing"),
+  timingStatus: postClassTimingStatusEnum("timing_status").notNull().default("not_due"),
+  deductionStatus: postClassDeductionStatusEnum("deduction_status").notNull().default("none"),
+  latestFeedbackVersionId: uuid("latest_feedback_version_id"),
+  firstOnTimeCompliantVersionId: uuid("first_on_time_compliant_version_id"),
+  enforcementMode: postClassEnforcementModeEnum("enforcement_mode").notNull().default("shadow"),
+  policyVersion: integer("policy_version").notNull().default(1),
+  lastObservedAt: timestamp("last_observed_at", { withTimezone: true }),
+  lastAssessedAt: timestamp("last_assessed_at", { withTimezone: true }),
+  sourceMetadata: jsonb("source_metadata").$type<Record<string, unknown>>().notNull().default({}),
+  version: integer("version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_sessions_wise_session_idx").on(table.wiseSessionId),
+  index("pc_sessions_tutor_end_idx").on(table.canonicalTutorKey, table.scheduledEndAt),
+  index("pc_sessions_deadline_idx").on(table.deadlineAt),
+  index("pc_sessions_ops_idx").on(table.eligible, table.sourceStatus, table.timingStatus),
+  index("pc_sessions_deduction_idx").on(table.deductionStatus, table.deadlineAt),
+]);
+
+export const postClassSessionParticipants = pgTable("post_class_session_participants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sessionId: uuid("session_id").notNull().references(() => postClassSessions.id, { onDelete: "cascade" }),
+  participantKey: text("participant_key").notNull(),
+  wiseStudentId: text("wise_student_id"),
+  studentName: text("student_name").notNull(),
+  creditsConsumed: doublePrecision("credits_consumed").notNull().default(0),
+  billable: boolean("billable").notNull().default(false),
+  raw: jsonb("raw").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_participants_session_key_idx").on(table.sessionId, table.participantKey),
+  index("pc_participants_student_idx").on(table.wiseStudentId),
+]);
+
+export const postClassFeedbackVersions = pgTable("post_class_feedback_versions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sessionId: uuid("session_id").notNull().references(() => postClassSessions.id, { onDelete: "cascade" }),
+  versionKey: text("version_key").notNull(),
+  wiseSubmissionId: text("wise_submission_id"),
+  contentHash: text("content_hash").notNull(),
+  profile: text("profile").notNull().default("teacher"),
+  provenance: postClassFeedbackProvenanceEnum("provenance").notNull().default("unknown"),
+  sourceCreatedAt: timestamp("source_created_at", { withTimezone: true }),
+  sourceTimestampTrustworthy: boolean("source_timestamp_trustworthy").notNull().default(false),
+  sourceTimestampKind: text("source_timestamp_kind"),
+  observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+  actorWiseUserId: text("actor_wise_user_id"),
+  actorName: text("actor_name"),
+  topics: text("topics").notNull().default(""),
+  performance: text("performance").notNull().default(""),
+  improvement: text("improvement").notNull().default(""),
+  homework: text("homework").notNull().default(""),
+  answers: jsonb("answers").$type<unknown[]>().notNull().default([]),
+  rawCharCount: integer("raw_char_count").notNull().default(0),
+  substantive: boolean("substantive").notNull().default(false),
+  compliant: boolean("compliant").notNull().default(false),
+  fieldFailures: jsonb("field_failures").$type<string[]>().notNull().default([]),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_feedback_session_version_idx").on(table.sessionId, table.versionKey),
+  index("pc_feedback_session_observed_idx").on(table.sessionId, table.observedAt),
+  index("pc_feedback_submission_idx").on(table.wiseSubmissionId),
+  index("pc_feedback_hash_idx").on(table.contentHash),
+]);
+
+export const postClassFeedbackEventLinks = pgTable("post_class_feedback_event_links", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sessionId: uuid("session_id").notNull().references(() => postClassSessions.id, { onDelete: "cascade" }),
+  feedbackVersionId: uuid("feedback_version_id").references(() => postClassFeedbackVersions.id, { onDelete: "set null" }),
+  wiseActivityEventId: uuid("wise_activity_event_id").references(() => wiseActivityEvents.id, { onDelete: "set null" }),
+  wiseEventId: text("wise_event_id").notNull(),
+  eventTimestamp: timestamp("event_timestamp", { withTimezone: true }).notNull(),
+  autoSubmitted: boolean("auto_submitted"),
+  linkConfidence: doublePrecision("link_confidence"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_event_links_session_event_idx").on(table.sessionId, table.wiseEventId),
+  index("pc_event_links_feedback_idx").on(table.feedbackVersionId),
+]);
+
+export const postClassAssessments = pgTable("post_class_assessments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sessionId: uuid("session_id").notNull().references(() => postClassSessions.id, { onDelete: "cascade" }),
+  feedbackVersionId: uuid("feedback_version_id").references(() => postClassFeedbackVersions.id, { onDelete: "set null" }),
+  assessmentKey: text("assessment_key").notNull(),
+  policyVersion: integer("policy_version").notNull(),
+  mappingVersion: integer("mapping_version").notNull(),
+  sourceStatus: postClassSourceStatusEnum("source_status").notNull(),
+  contentStatus: postClassContentStatusEnum("content_status").notNull(),
+  timingStatus: postClassTimingStatusEnum("timing_status").notNull(),
+  deductionStatus: postClassDeductionStatusEnum("deduction_status").notNull().default("none"),
+  enforcementMode: postClassEnforcementModeEnum("enforcement_mode").notNull(),
+  assessedAt: timestamp("assessed_at", { withTimezone: true }).notNull().defaultNow(),
+  requiredFieldsPassed: boolean("required_fields_passed").notNull().default(false),
+  combinedRawCharCount: integer("combined_raw_char_count").notNull().default(0),
+  fieldFailures: jsonb("field_failures").$type<string[]>().notNull().default([]),
+  objectiveViolation: boolean("objective_violation").notNull().default(false),
+  rawOnTime: boolean("raw_on_time").notNull().default(false),
+  adjustedCompliant: boolean("adjusted_compliant").notNull().default(false),
+  remediatedLate: boolean("remediated_late").notNull().default(false),
+  timingUnknown: boolean("timing_unknown").notNull().default(false),
+  timingEvidence: text("timing_evidence"),
+  sourceReady: boolean("source_ready").notNull().default(false),
+  details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_assessments_key_idx").on(table.assessmentKey),
+  index("pc_assessments_session_time_idx").on(table.sessionId, table.assessedAt),
+  index("pc_assessments_metrics_idx").on(table.sourceReady, table.adjustedCompliant, table.assessedAt),
+]);
+
+export const postClassSourceIssues = pgTable("post_class_source_issues", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  syncRunId: uuid("sync_run_id").references(() => postClassSyncRuns.id, { onDelete: "set null" }),
+  sessionId: uuid("session_id").references(() => postClassSessions.id, { onDelete: "cascade" }),
+  scope: text("scope").notNull(),
+  issueType: text("issue_type").notNull(),
+  severity: text("severity").notNull().default("warning"),
+  status: text("status").notNull().default("open"),
+  fingerprint: text("fingerprint").notNull(),
+  blocksEnforcement: boolean("blocks_enforcement").notNull().default(true),
+  message: text("message").notNull(),
+  details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
+  firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  resolvedByEmail: text("resolved_by_email"),
+}, (table) => [
+  uniqueIndex("pc_source_issues_fingerprint_idx").on(table.fingerprint),
+  index("pc_source_issues_status_idx").on(table.status, table.severity, table.lastSeenAt),
+  index("pc_source_issues_session_idx").on(table.sessionId),
+]);
+
+export const postClassNotificationRuns = pgTable("post_class_notification_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  kind: postClassNotificationKindEnum("kind").notNull(),
+  status: postClassNotificationStatusEnum("status").notNull().default("pending"),
+  scheduledFor: timestamp("scheduled_for", { withTimezone: true }).notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  triggerType: text("trigger_type").notNull().default("cron"),
+  actorEmail: text("actor_email"),
+  eligibleCount: integer("eligible_count").notNull().default(0),
+  deliveryCount: integer("delivery_count").notNull().default(0),
+  sentCount: integer("sent_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+  cancelledCount: integer("cancelled_count").notNull().default(0),
+  errorSummary: text("error_summary"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_notification_runs_idempotency_idx").on(table.idempotencyKey),
+  index("pc_notification_runs_kind_time_idx").on(table.kind, table.scheduledFor),
+  index("pc_notification_runs_status_idx").on(table.status, table.createdAt),
+]);
+
+export const postClassNotificationDeliveries = pgTable("post_class_notification_deliveries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => postClassNotificationRuns.id, { onDelete: "cascade" }),
+  canonicalTutorKey: text("canonical_tutor_key"),
+  recipientEmail: text("recipient_email").notNull(),
+  subject: text("subject").notNull(),
+  status: postClassNotificationStatusEnum("status").notNull().default("pending"),
+  idempotencyKey: text("idempotency_key").notNull(),
+  provider: text("provider"),
+  providerMessageId: text("provider_message_id"),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  finalError: text("final_error"),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_notification_delivery_idempotency_idx").on(table.idempotencyKey),
+  index("pc_notification_delivery_run_idx").on(table.runId),
+  index("pc_notification_delivery_retry_idx").on(table.status, table.nextAttemptAt),
+  index("pc_notification_delivery_tutor_idx").on(table.canonicalTutorKey, table.createdAt),
+]);
+
+export const postClassNotificationItems = pgTable("post_class_notification_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  deliveryId: uuid("delivery_id").notNull().references(() => postClassNotificationDeliveries.id, { onDelete: "cascade" }),
+  sessionId: uuid("session_id").notNull().references(() => postClassSessions.id, { onDelete: "cascade" }),
+  failureReasons: jsonb("failure_reasons").$type<string[]>().notNull().default([]),
+  rawCharCount: integer("raw_char_count").notNull().default(0),
+  deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_notification_item_delivery_session_idx").on(table.deliveryId, table.sessionId),
+  index("pc_notification_item_session_idx").on(table.sessionId),
+]);
+
+export const postClassNotificationAttempts = pgTable("post_class_notification_attempts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  deliveryId: uuid("delivery_id").notNull().references(() => postClassNotificationDeliveries.id, { onDelete: "cascade" }),
+  attemptNumber: integer("attempt_number").notNull(),
+  provider: text("provider").notNull(),
+  status: postClassNotificationStatusEnum("status").notNull(),
+  providerMessageId: text("provider_message_id"),
+  errorCode: text("error_code"),
+  errorMessage: text("error_message"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("pc_notification_attempt_number_idx").on(table.deliveryId, table.attemptNumber),
+  index("pc_notification_attempt_status_idx").on(table.status, table.startedAt),
+]);
+
+export const postClassAiRuns = pgTable("post_class_ai_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sessionId: uuid("session_id").notNull().references(() => postClassSessions.id, { onDelete: "cascade" }),
+  feedbackVersionId: uuid("feedback_version_id").notNull().references(() => postClassFeedbackVersions.id, { onDelete: "cascade" }),
+  status: postClassAiStatusEnum("status").notNull().default("pending"),
+  triggerReasons: jsonb("trigger_reasons").$type<string[]>().notNull().default([]),
+  model: text("model").notNull(),
+  requestHash: text("request_hash").notNull(),
+  redactionVersion: integer("redaction_version").notNull().default(1),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  errorMessage: text("error_message"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_ai_runs_request_hash_idx").on(table.requestHash),
+  index("pc_ai_runs_session_idx").on(table.sessionId, table.createdAt),
+  index("pc_ai_runs_status_idx").on(table.status, table.createdAt),
+]);
+
+export const postClassAiConcerns = pgTable("post_class_ai_concerns", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => postClassAiRuns.id, { onDelete: "cascade" }),
+  dimension: text("dimension").notNull(),
+  summary: text("summary").notNull(),
+  confidence: doublePrecision("confidence"),
+  decision: postClassConcernDecisionEnum("decision").notNull().default("pending"),
+  version: integer("version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_ai_concern_run_dimension_idx").on(table.runId, table.dimension),
+  index("pc_ai_concern_decision_idx").on(table.decision, table.updatedAt),
+]);
+
+export const postClassAiReviews = pgTable("post_class_ai_reviews", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  concernId: uuid("concern_id").notNull().references(() => postClassAiConcerns.id, { onDelete: "cascade" }),
+  decision: postClassConcernDecisionEnum("decision").notNull(),
+  note: text("note").notNull(),
+  actorEmail: text("actor_email").notNull(),
+  expectedVersion: integer("expected_version").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("pc_ai_reviews_concern_idx").on(table.concernId, table.createdAt),
+  index("pc_ai_reviews_actor_idx").on(table.actorEmail, table.createdAt),
+]);
+
+export const postClassFinancePeriods = pgTable("post_class_finance_periods", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  month: date("month", { mode: "string" }).notNull(),
+  status: postClassFinancePeriodStatusEnum("status").notNull().default("open"),
+  openedByEmail: text("opened_by_email").notNull(),
+  openedAt: timestamp("opened_at", { withTimezone: true }).notNull().defaultNow(),
+  closedByEmail: text("closed_by_email"),
+  closedAt: timestamp("closed_at", { withTimezone: true }),
+  closeReason: text("close_reason"),
+  reopenReason: text("reopen_reason"),
+  version: integer("version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_finance_period_month_idx").on(table.month),
+  index("pc_finance_period_status_idx").on(table.status, table.month),
+]);
+
+export const postClassDeductions = pgTable("post_class_deductions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  sessionId: uuid("session_id").notNull().references(() => postClassSessions.id, { onDelete: "restrict" }),
+  status: postClassDeductionStatusEnum("status").notNull().default("pending_review"),
+  amountMinor: integer("amount_minor").notNull().default(10000),
+  currency: text("currency").notNull().default("THB"),
+  defaultFinanceMonth: date("default_finance_month", { mode: "string" }).notNull(),
+  financePeriodId: uuid("finance_period_id").references(() => postClassFinancePeriods.id, { onDelete: "restrict" }),
+  waiverCategory: text("waiver_category"),
+  waiverNote: text("waiver_note"),
+  decisionByEmail: text("decision_by_email"),
+  decisionAt: timestamp("decision_at", { withTimezone: true }),
+  processingReference: text("processing_reference"),
+  processedByEmail: text("processed_by_email"),
+  processedAt: timestamp("processed_at", { withTimezone: true }),
+  version: integer("version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_deductions_session_idx").on(table.sessionId),
+  index("pc_deductions_status_idx").on(table.status, table.createdAt),
+  index("pc_deductions_period_idx").on(table.financePeriodId, table.status),
+]);
+
+export const postClassDeductionActions = pgTable("post_class_deduction_actions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  deductionId: uuid("deduction_id").notNull().references(() => postClassDeductions.id, { onDelete: "restrict" }),
+  action: text("action").notNull(),
+  fromStatus: postClassDeductionStatusEnum("from_status"),
+  toStatus: postClassDeductionStatusEnum("to_status").notNull(),
+  amountMinor: integer("amount_minor").notNull(),
+  financePeriodId: uuid("finance_period_id").references(() => postClassFinancePeriods.id, { onDelete: "restrict" }),
+  waiverCategory: text("waiver_category"),
+  note: text("note"),
+  reference: text("reference"),
+  actorEmail: text("actor_email").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+}, (table) => [
+  uniqueIndex("pc_deduction_actions_idempotency_idx").on(table.idempotencyKey),
+  index("pc_deduction_actions_deduction_idx").on(table.deductionId, table.occurredAt),
+  index("pc_deduction_actions_actor_idx").on(table.actorEmail, table.occurredAt),
+]);
+
+export const postClassDeductionOffsets = pgTable("post_class_deduction_offsets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  deductionId: uuid("deduction_id").notNull().references(() => postClassDeductions.id, { onDelete: "restrict" }),
+  financePeriodId: uuid("finance_period_id").notNull().references(() => postClassFinancePeriods.id, { onDelete: "restrict" }),
+  amountMinor: integer("amount_minor").notNull().default(-10_000),
+  currency: text("currency").notNull().default("THB"),
+  reason: text("reason").notNull(),
+  reference: text("reference").notNull(),
+  actorEmail: text("actor_email").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_deduction_offsets_deduction_idx").on(table.deductionId),
+  uniqueIndex("pc_deduction_offsets_idempotency_idx").on(table.idempotencyKey),
+  index("pc_deduction_offsets_period_idx").on(table.financePeriodId, table.createdAt),
+]);
+
 // University admissions case management (design: docs/casemanagementsystem_design.md §3).
 // 25 tables, prefix admissions_. `wiseStudentKey` and `unitId` are plain
 // soft-reference columns — never FKs to Wise/snapshot or ipeds_* tables.
@@ -3024,6 +3599,11 @@ export const admissionsCases = pgTable("admissions_cases", {
   statusChangedAt: timestamp("status_changed_at", { withTimezone: true }).notNull().defaultNow(),
   committedListItemId: uuid("committed_list_item_id"),
   driveFolder: text("drive_folder"),
+  // Family access is opt-in per case. Opening/closing is an audited staff
+  // action in the admissions domain; these columns preserve who opened it.
+  familyPortalOpen: boolean("family_portal_open").notNull().default(false),
+  familyPortalOpenedAt: timestamp("family_portal_opened_at", { withTimezone: true }),
+  familyPortalOpenedByEmail: text("family_portal_opened_by_email"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -3154,6 +3734,10 @@ export const admissionsCollegeListItems = pgTable("admissions_college_list_items
   deadline: date("deadline", { mode: "string" }),
   appStatus: admissionsAppStatusEnum("app_status").notNull().default("researching"),
   category: admissionsCollegeCategoryEnum("category").notNull().default("unset"),
+  firstChoiceMajor: text("first_choice_major"),
+  secondChoiceMajor: text("second_choice_major"),
+  admissionsUrl: text("admissions_url"),
+  portalUrl: text("portal_url"),
   aidOffered: numeric("aid_offered"),
   aidNotes: text("aid_notes"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
@@ -3163,6 +3747,102 @@ export const admissionsCollegeListItems = pgTable("admissions_college_list_items
   index("admissions_college_list_items_case_idx").on(table.caseId),
   index("admissions_college_list_items_case_deadline_idx").on(table.caseId, table.deadline),
   index("admissions_college_list_items_unit_idx").on(table.unitId),
+]);
+
+export const admissionsCollegeResearch = pgTable("admissions_college_research", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  listItemId: uuid("list_item_id").notNull().references(() => admissionsCollegeListItems.id),
+  fitRating: integer("fit_rating"),
+  sources: jsonb("sources").$type<Array<Record<string, unknown>>>().notNull().default([]),
+  campusVisitDate: date("campus_visit_date", { mode: "string" }),
+  campusVisitNotes: text("campus_visit_notes"),
+  academicNotes: text("academic_notes"),
+  opportunities: text("opportunities"),
+  questions: text("questions"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  check(
+    "admissions_college_research_fit_rating_check",
+    sql`${table.fitRating} IS NULL OR (${table.fitRating} >= 1 AND ${table.fitRating} <= 5)`,
+  ),
+  uniqueIndex("admissions_college_research_list_item_idx").on(table.listItemId),
+]);
+
+export const admissionsInterestEvents = pgTable("admissions_interest_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  listItemId: uuid("list_item_id").notNull().references(() => admissionsCollegeListItems.id),
+  type: text("type").notNull(),
+  eventDate: date("event_date", { mode: "string" }).notNull(),
+  notes: text("notes"),
+  actorEmail: text("actor_email").notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_interest_events_item_date_idx").on(table.listItemId, table.eventDate),
+]);
+
+export const admissionsCollegeRequirements = pgTable("admissions_college_requirements", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  listItemId: uuid("list_item_id").notNull().references(() => admissionsCollegeListItems.id),
+  kind: text("kind").notNull(),
+  title: text("title").notNull(),
+  status: admissionsTaskStatusEnum("status").notNull().default("not_started"),
+  owner: admissionsTaskOwnerEnum("owner").notNull().default("student"),
+  dueDate: date("due_date", { mode: "string" }),
+  required: boolean("required").notNull().default(true),
+  sourceUrl: text("source_url"),
+  notes: text("notes"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  verifiedByEmail: text("verified_by_email"),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_college_requirements_item_sort_idx").on(table.listItemId, table.sortOrder),
+  index("admissions_college_requirements_item_due_idx").on(table.listItemId, table.dueDate),
+]);
+
+export const admissionsFinancialAidOffers = pgTable("admissions_financial_aid_offers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  listItemId: uuid("list_item_id").notNull().references(() => admissionsCollegeListItems.id),
+  currency: text("currency").notNull().default("USD"),
+  awardYear: integer("award_year").notNull(),
+  costBreakdown: jsonb("cost_breakdown").$type<Record<string, number | null>>().notNull().default({}),
+  giftAidBreakdown: jsonb("gift_aid_breakdown").$type<Record<string, number | null>>().notNull().default({}),
+  loanBreakdown: jsonb("loan_breakdown").$type<Record<string, number | null>>().notNull().default({}),
+  workStudyAmount: numeric("work_study_amount"),
+  netCost: numeric("net_cost"),
+  remainingBalance: numeric("remaining_balance"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_financial_aid_offers_list_item_idx").on(table.listItemId),
+]);
+
+export const admissionsScholarships = pgTable("admissions_scholarships", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  listItemId: uuid("list_item_id").references(() => admissionsCollegeListItems.id),
+  name: text("name").notNull(),
+  provider: text("provider"),
+  url: text("url"),
+  requirements: text("requirements"),
+  deadline: date("deadline", { mode: "string" }),
+  status: text("status").notNull().default("researching"),
+  outcome: text("outcome"),
+  offeredAmount: numeric("offered_amount"),
+  notes: text("notes"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_scholarships_case_deadline_idx").on(table.caseId, table.deadline),
+  index("admissions_scholarships_list_item_idx").on(table.listItemId),
 ]);
 
 export const admissionsApplicationEvents = pgTable("admissions_application_events", {
@@ -3226,12 +3906,39 @@ export const admissionsEssays = pgTable("admissions_essays", {
   counselorStage: admissionsEssayStatusEnum("counselor_stage"),
   deadline: date("deadline", { mode: "string" }),
   driveUrl: text("drive_url"),
+  sharedWithFamily: boolean("shared_with_family").notNull().default(false),
   lastStudentUpdateAt: timestamp("last_student_update_at", { withTimezone: true }),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("admissions_essays_case_status_idx").on(table.caseId, table.status),
+]);
+
+export const admissionsEssayPromptCatalog = pgTable("admissions_essay_prompt_catalog", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  unitId: integer("unit_id"),
+  institution: text("institution").notNull(),
+  program: text("program").notNull().default(""),
+  cycle: text("cycle").notNull(),
+  promptKey: text("prompt_key").notNull(),
+  prompt: text("prompt").notNull(),
+  wordLimit: integer("word_limit"),
+  required: boolean("required").notNull().default(true),
+  sourceUrl: text("source_url"),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
+  verifiedByEmail: text("verified_by_email"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  check(
+    "admissions_essay_prompt_catalog_word_limit_check",
+    sql`${table.wordLimit} IS NULL OR ${table.wordLimit} > 0`,
+  ),
+  uniqueIndex("admissions_essay_prompt_catalog_identity_idx")
+    .on(table.institution, table.program, table.cycle, table.promptKey),
+  index("admissions_essay_prompt_catalog_unit_cycle_idx").on(table.unitId, table.cycle),
 ]);
 
 export const admissionsActivities = pgTable("admissions_activities", {
@@ -3250,16 +3957,55 @@ export const admissionsActivities = pgTable("admissions_activities", {
   index("admissions_activities_case_sort_idx").on(table.caseId, table.sortOrder),
 ]);
 
+export const admissionsAwards = pgTable("admissions_awards", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  title: text("title").notNull(),
+  organization: text("organization"),
+  gradeLevels: jsonb("grade_levels").$type<string[]>().notNull().default([]),
+  recognitionLevels: jsonb("recognition_levels").$type<string[]>().notNull().default([]),
+  awardDate: date("award_date", { mode: "string" }),
+  commonAppRank: integer("common_app_rank"),
+  ucEligibilityNarrative: text("uc_eligibility_narrative"),
+  ucAchievementNarrative: text("uc_achievement_narrative"),
+  internalNotes: text("internal_notes"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  check(
+    "admissions_awards_common_app_rank_check",
+    sql`${table.commonAppRank} IS NULL OR (${table.commonAppRank} >= 1 AND ${table.commonAppRank} <= 5)`,
+  ),
+  check(
+    "admissions_awards_uc_eligibility_length_check",
+    sql`${table.ucEligibilityNarrative} IS NULL OR char_length(${table.ucEligibilityNarrative}) <= 250`,
+  ),
+  check(
+    "admissions_awards_uc_achievement_length_check",
+    sql`${table.ucAchievementNarrative} IS NULL OR char_length(${table.ucAchievementNarrative}) <= 350`,
+  ),
+  uniqueIndex("admissions_awards_case_common_app_rank_idx")
+    .on(table.caseId, table.commonAppRank)
+    .where(sql`${table.deletedAt} IS NULL AND ${table.commonAppRank} IS NOT NULL`),
+  index("admissions_awards_case_date_idx").on(table.caseId, table.awardDate),
+]);
+
 export const admissionsTestSittings = pgTable("admissions_test_sittings", {
   id: uuid("id").primaryKey().defaultRandom(),
   caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
   testType: admissionsTestTypeEnum("test_type").notNull(),
   testDate: date("test_date", { mode: "string" }).notNull(),
   registrationDeadline: date("registration_deadline", { mode: "string" }),
+  lateRegistrationDeadline: date("late_registration_deadline", { mode: "string" }),
+  status: admissionsTestSittingStatusEnum("status").notNull().default("planned"),
+  subject: text("subject"),
   targetScore: text("target_score").notNull().default(""),
   actualScore: text("actual_score"),
+  scoreDetails: jsonb("score_details").$type<Record<string, unknown>>(),
   scoreReleasedToParent: boolean("score_released_to_parent").notNull().default(false),
   accommodations: text("accommodations"),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -3272,10 +4018,14 @@ export const admissionsAcademicRecords = pgTable("admissions_academic_records", 
   system: text("system").notNull(),
   payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
   effectiveDate: date("effective_date", { mode: "string" }).notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("admissions_academic_records_case_system_idx").on(table.caseId, table.system),
+  uniqueIndex("admissions_academic_records_case_system_date_idx")
+    .on(table.caseId, table.system, table.effectiveDate)
+    .where(sql`${table.deletedAt} IS NULL`),
 ]);
 
 export const admissionsNotes = pgTable("admissions_notes", {
@@ -3332,6 +4082,7 @@ export const admissionsSelfReportSections = pgTable("admissions_self_report_sect
   sectionKey: text("section_key").notNull(),
   payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
   state: admissionsSubmissionStateEnum("state").notNull().default("draft"),
+  sharedWithFamily: boolean("shared_with_family").notNull().default(false),
   submittedAt: timestamp("submitted_at", { withTimezone: true }),
   reviewedByEmail: text("reviewed_by_email"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -3378,6 +4129,30 @@ export const admissionsNotificationLog = pgTable("admissions_notification_log", 
     .where(sql`${table.dedupeKey} IS NOT NULL`),
 ]);
 
+export const admissionsNotificationOutbox = pgTable("admissions_notification_outbox", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").references(() => admissionsCases.id),
+  memberId: uuid("member_id").references(() => admissionsCaseMembers.id),
+  recipientEmail: text("recipient_email").notNull(),
+  category: text("category").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+  dedupeKey: text("dedupe_key").notNull(),
+  status: admissionsNotificationOutboxStatusEnum("status").notNull().default("pending"),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  providerMessageId: text("provider_message_id"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_notification_outbox_dedupe_key_idx").on(table.dedupeKey),
+  index("admissions_notification_outbox_delivery_idx")
+    .on(table.status, table.nextAttemptAt),
+  index("admissions_notification_outbox_case_idx").on(table.caseId),
+]);
+
 export const admissionsNotificationRuns = pgTable("admissions_notification_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
   status: syncStatusEnum("status").notNull().default("running"),
@@ -3393,4 +4168,57 @@ export const admissionsNotificationRuns = pgTable("admissions_notification_runs"
     .on(table.status)
     .where(sql`${table.status} = 'running'`),
   index("admissions_notification_runs_status_started_idx").on(table.status, table.startedAt),
+]);
+
+export const admissionsImportRuns = pgTable("admissions_import_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  caseId: uuid("case_id").notNull().references(() => admissionsCases.id),
+  spreadsheetId: text("spreadsheet_id").notNull(),
+  spreadsheetUrl: text("spreadsheet_url").notNull(),
+  sourceFingerprint: text("source_fingerprint").notNull(),
+  status: text("status").notNull().default("preview"),
+  conflictPolicy: text("conflict_policy"),
+  sourceMetadata: jsonb("source_metadata").$type<Record<string, unknown>>().notNull().default({}),
+  summary: jsonb("summary").$type<Record<string, unknown>>().notNull().default({}),
+  createdByEmail: text("created_by_email").notNull(),
+  committedAt: timestamp("committed_at", { withTimezone: true }),
+  failedAt: timestamp("failed_at", { withTimezone: true }),
+  errorSummary: text("error_summary"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_import_runs_source_fingerprint_idx")
+    .on(table.caseId, table.spreadsheetId, table.sourceFingerprint),
+  index("admissions_import_runs_case_created_idx").on(table.caseId, table.createdAt),
+]);
+
+export const admissionsImportIssues = pgTable("admissions_import_issues", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => admissionsImportRuns.id),
+  severity: text("severity").notNull(),
+  code: text("code").notNull(),
+  sheetName: text("sheet_name"),
+  sourceRef: text("source_ref"),
+  message: text("message").notNull(),
+  details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
+  resolution: text("resolution"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("admissions_import_issues_run_severity_idx").on(table.runId, table.severity),
+]);
+
+export const admissionsImportMappings = pgTable("admissions_import_mappings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => admissionsImportRuns.id),
+  sourceType: text("source_type").notNull(),
+  sourceKey: text("source_key").notNull(),
+  targetType: text("target_type").notNull(),
+  targetId: text("target_id").notNull(),
+  sourceValueFingerprint: text("source_value_fingerprint"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admissions_import_mappings_source_idx")
+    .on(table.runId, table.sourceType, table.sourceKey),
+  index("admissions_import_mappings_target_idx").on(table.targetType, table.targetId),
 ]);

@@ -21,14 +21,18 @@ The entries below are the complete contents of `vercel.json`. Schedules are UTC 
 | 5 | `25,55 * * * *` | every 30 min, on :25/:55 | `/api/internal/sync-progress-tests` | [`route.ts:41`](../../src/app/api/internal/sync-progress-tests/route.ts) | 300s ([:7](../../src/app/api/internal/sync-progress-tests/route.ts)) |
 | 6 | `35 0 * * *` | once daily, 00:35 UTC (07:35 Bangkok) | `/api/internal/progress-tests/admin-digest` | [`route.ts:8`](../../src/app/api/internal/progress-tests/admin-digest/route.ts) | 300s ([:6](../../src/app/api/internal/progress-tests/admin-digest/route.ts)) |
 | 7 | `5,35 * * * *` | every 30 min, on :05/:35 | `/api/internal/sync-wise-activity` | [`route.ts:11`](../../src/app/api/internal/sync-wise-activity/route.ts) | 800s ([:7](../../src/app/api/internal/sync-wise-activity/route.ts)) |
-| 8 | `15,45 * * * *` | every 30 min, on :15/:45 | `/api/internal/sync-leave-requests` | [`route.ts:24`](../../src/app/api/internal/sync-leave-requests/route.ts) | 800s ([:6](../../src/app/api/internal/sync-leave-requests/route.ts)) |
-| 9 | `45 23 * * *` | once daily, 23:45 UTC (06:45 Bangkok) | `/api/internal/class-assignments/morning` | [`route.ts:7`](../../src/app/api/internal/class-assignments/morning/route.ts) | 800s ([:5](../../src/app/api/internal/class-assignments/morning/route.ts)) |
-| 10 | `0,10,20,30 0 * * *` | 4×/day, 00:00–00:30 UTC at :00/:10/:20/:30 (07:00–07:30 Bangkok) | `/api/internal/class-assignments/admin-email` | [`route.ts:7`](../../src/app/api/internal/class-assignments/admin-email/route.ts) | 300s ([:5](../../src/app/api/internal/class-assignments/admin-email/route.ts)) |
-| 11 | `5 17 30 6 *` | one-shot business event: 2026-06-30 17:05 UTC (2026-07-01 00:05 Bangkok); route hard-blocks all other Bangkok dates | `/api/internal/student-promotions/july-1` | [`route.ts`](../../src/app/api/internal/student-promotions/july-1/route.ts) | 800s |
-| 12 | `7,37 * * * *` | every 30 min, on :07/:37 | `/api/internal/cron-watchdog` | [`route.ts:28`](../../src/app/api/internal/cron-watchdog/route.ts) | 300s ([:7](../../src/app/api/internal/cron-watchdog/route.ts)) |
-| 13 | `12 1 * * *` | once daily, 01:12 UTC (08:12 Bangkok) | `/api/internal/admissions-notifications` | [`route.ts:73`](../../src/app/api/internal/admissions-notifications/route.ts) | 300s ([:20](../../src/app/api/internal/admissions-notifications/route.ts)) |
+| 8 | `13,43 * * * *` | every 30 min, on :13/:43 | `/api/internal/sync-post-class-feedback` | [`route.ts`](../../src/app/api/internal/sync-post-class-feedback/route.ts) | 800s |
+| 9 | `0 1 * * *` | daily, 01:00 UTC (08:00 Bangkok) | `/api/internal/post-class-feedback/admin-digest` | [`route.ts`](../../src/app/api/internal/post-class-feedback/admin-digest/route.ts) | 300s |
+| 10 | `0 2 * * *` | daily, 02:00 UTC (09:00 Bangkok) | `/api/internal/post-class-feedback/reminder-day-after` | [`route.ts`](../../src/app/api/internal/post-class-feedback/reminder-day-after/route.ts) | 800s |
+| 11 | `0 10 * * *` | daily, 10:00 UTC (17:00 Bangkok) | `/api/internal/post-class-feedback/reminder-deadline` | [`route.ts`](../../src/app/api/internal/post-class-feedback/reminder-deadline/route.ts) | 800s |
+| 12 | `15,45 * * * *` | every 30 min, on :15/:45 | `/api/internal/sync-leave-requests` | [`route.ts:24`](../../src/app/api/internal/sync-leave-requests/route.ts) | 800s ([:6](../../src/app/api/internal/sync-leave-requests/route.ts)) |
+| 13 | `45 23 * * *` | once daily, 23:45 UTC (06:45 Bangkok) | `/api/internal/class-assignments/morning` | [`route.ts:7`](../../src/app/api/internal/class-assignments/morning/route.ts) | 800s ([:5](../../src/app/api/internal/class-assignments/morning/route.ts)) |
+| 14 | `0,10,20,30 0 * * *` | 4×/day, 00:00–00:30 UTC at :00/:10/:20/:30 (07:00–07:30 Bangkok) | `/api/internal/class-assignments/admin-email` | [`route.ts:7`](../../src/app/api/internal/class-assignments/admin-email/route.ts) | 300s ([:5](../../src/app/api/internal/class-assignments/admin-email/route.ts)) |
+| 15 | `5 17 30 6 *` | one-shot business event: 2026-06-30 17:05 UTC (2026-07-01 00:05 Bangkok); route hard-blocks all other Bangkok dates | `/api/internal/student-promotions/july-1` | [`route.ts`](../../src/app/api/internal/student-promotions/july-1/route.ts) | 800s |
+| 16 | `7,37 * * * *` | every 30 min, on :07/:37 | `/api/internal/cron-watchdog` | [`route.ts:28`](../../src/app/api/internal/cron-watchdog/route.ts) | 300s ([:7](../../src/app/api/internal/cron-watchdog/route.ts)) |
+| 17 | `12 1 * * *` | once daily, 01:12 UTC (08:12 Bangkok) | `/api/internal/admissions-notifications` | [`route.ts:73`](../../src/app/api/internal/admissions-notifications/route.ts) | 300s ([:20](../../src/app/api/internal/admissions-notifications/route.ts)) |
 
-The high-frequency sync jobs are **staggered at 5-minute offsets** across the half-hour so they do not all hit upstream APIs or the database in the same minute: Wise snapshot on :00/:30, activity audit on :05/:35, sales on :10/:40, leave requests on :15/:45, credit control on :20/:50, and progress tests on :25/:55. Competitor intelligence runs weekly at Monday 01:25 Bangkok to limit vendor spend.
+The high-frequency sync jobs are staggered across the half-hour so they do not all hit upstream APIs or the database in the same minute: Wise snapshot on :00/:30, activity audit on :05/:35, sales on :10/:40, Post-Class Feedback on :13/:43, leave requests on :15/:45, credit control on :20/:50, and progress tests on :25/:55. Competitor intelligence runs weekly at Monday 01:25 Bangkok to limit vendor spend.
 
 ```mermaid
 gantt
@@ -39,16 +43,17 @@ gantt
     sync-wise (:00)            :a1, 0, 1m
     sync-wise-activity (:05)   :a2, 5, 1m
     sync-sales-dashboard (:10) :a3, 10, 1m
-    sync-leave-requests (:15)  :a4, 15, 1m
-    sync-credit-control (:20)  :a5, 20, 1m
-    sync-progress-tests (:25)  :a6, 25, 1m
+    post-class-feedback (:13)  :a4, 13, 1m
+    sync-leave-requests (:15)  :a5, 15, 1m
+    sync-credit-control (:20)  :a6, 20, 1m
+    sync-progress-tests (:25)  :a7, 25, 1m
 ```
 
 ### Authentication (shared across all crons)
 
 Every cron handler authenticates the inbound request by constant-time comparison of the `Authorization` header against `Bearer ${CRON_SECRET}`. The comparison length-pre-checks before `crypto.timingSafeEqual` to avoid the `RangeError` that function throws on length-mismatched buffers ([`sync-wise/route.ts:10-28`](../../src/app/api/internal/sync-wise/route.ts)). Two implementations of identical logic exist:
 
-- **Shared helper** `rejectInvalidCronSecret(request)` — returns a `NextResponse` (401 invalid / 500 missing-secret) or `null` when valid ([`cron-auth.ts:19-26`](../../src/lib/internal/cron-auth.ts)). Used by `sync-wise-activity`, `sync-leave-requests`, `class-assignments/morning`, `class-assignments/admin-email`, and `admissions-notifications`.
+- **Shared helper** `rejectInvalidCronSecret(request)` — returns a `NextResponse` (401 invalid / 500 missing-secret) or `null` when valid ([`cron-auth.ts:19-26`](../../src/lib/internal/cron-auth.ts)). Used by `sync-wise-activity`, all four Post-Class Feedback handlers, `sync-leave-requests`, `class-assignments/morning`, `class-assignments/admin-email`, and `admissions-notifications`.
 - **Inline copies** — `sync-wise`, `sync-sales-dashboard`, `sync-credit-control`, `sync-room-utilization`, and `student-promotions/july-1` each define their own `hasValidCronSecret` with the same constant-time check rather than importing the helper.
 
 `CRON_SECRET` is a required environment variable; when unset, handlers return **HTTP 500 `{ "error": "Server misconfigured" }`** rather than running unauthenticated ([`cron-auth.ts:22-24`](../../src/lib/internal/cron-auth.ts)).
@@ -65,6 +70,10 @@ Vercel Cron always calls **`GET`**. Some handlers additionally export `POST` for
 | `sync-sales-dashboard` | yes | yes | yes ([`route.ts:64-65`](../../src/app/api/internal/sync-sales-dashboard/route.ts)) |
 | `sync-credit-control` | yes | yes | yes ([`route.ts:50-51`](../../src/app/api/internal/sync-credit-control/route.ts)) |
 | `sync-wise-activity` | yes | no (manual backfill lives at a separate route) | n/a |
+| `sync-post-class-feedback` | yes | no (manual backfill lives at `/api/post-class-feedback/sync`) | n/a |
+| `post-class-feedback/admin-digest` | yes | no | n/a |
+| `post-class-feedback/reminder-day-after` | yes | no | n/a |
+| `post-class-feedback/reminder-deadline` | yes | no | n/a |
 | `sync-leave-requests` | yes | yes (bearer only) | no ([`route.ts:24-30`](../../src/app/api/internal/sync-leave-requests/route.ts)) |
 | `class-assignments/morning` | yes | no | n/a |
 | `class-assignments/admin-email` | yes | no | n/a |
@@ -118,7 +127,41 @@ It pages newest-first and stops on the first of: empty page (`empty_page`), a sh
 
 **Single-flight guard:** a partial unique index on the sync-runs table makes a concurrent `running` insert raise a unique violation, which is surfaced as `WiseActivitySyncAlreadyRunningError` → **HTTP 409** ([`route.ts:24-26`](../../src/app/api/internal/sync-wise-activity/route.ts); [`sync.ts:165-167`](../../src/lib/wise-activity/sync.ts)). Abandoned runs are reaped via `markAbandonedRuns` using a 20-minute `STALE_RUNNING_MS` ([`sync.ts:13, 151`](../../src/lib/wise-activity/sync.ts)). See the wise-activity feature doc.
 
-## 5. Leave requests sync — `/api/internal/sync-leave-requests`
+## 5. Post-Class Feedback collection, reminders, and digest
+
+Four cron routes form one fail-closed workflow. All are registered in the Data Health cron registry and write `cron_invocations` evidence through `withCronInvocationAudit`.
+
+### Collection — `/api/internal/sync-post-class-feedback`
+
+**Schedule:** `13,43 * * * *`. **Does:** reconcile canonical Wise post-class feedback without writing to Wise.
+
+`runPostClassFeedbackSync({ triggerType: "cron" })` enumerates a rolling four-Bangkok-date `PAST` session window, prioritizes unlinked `SessionFeedbackSubmittedEvent` rows and old incomplete sessions, and fetches at most 50 canonical session-detail records with concurrency four. The capped candidate selector reserves bounded lanes for incomplete rechecks and newly ended rolling-window sessions, so a persistent event backlog cannot starve canonical reconciliation. The run preserves immutable `(session, submission/content)` evidence and assessments. Form drift or source issues produce a partial/fail-closed run; there are no reminders or deduction candidates from unavailable evidence.
+
+After collection, the route independently starts deterministic-suspect AI review and any due notification retries via `Promise.allSettled`. Either auxiliary task may fail without rolling back objective source reconciliation. A concurrent collector is rejected with HTTP 409 by the partial unique `running` index. **`maxDuration = 800`.**
+
+### Daily admin digest — `/api/internal/post-class-feedback/admin-digest`
+
+**Schedule:** `0 1 * * *` = **08:00 Bangkok**. **Does:** send one idempotent daily digest to the enabled allowlisted recipients configured inside the feature.
+
+The digest summarizes new violations since the prior successful digest's scheduled boundary (or the preceding 24 hours on first run), pending deduction reviews, pending AI concern reviews, open source/form issues, and final reminder failures. Source-issue and terminal-failure totals use uncapped aggregate queries while issue details remain a bounded sample. It links to the workspace and contains no feedback excerpts. The route returns HTTP 500 on job failure. **`maxDuration = 300`.**
+
+### Day-after tutor reminder — `/api/internal/post-class-feedback/reminder-day-after`
+
+**Schedule:** `0 2 * * *` = **09:00 Bangkok**. **Does:** remind each canonical tutor once, grouping yesterday's still-incomplete live obligations.
+
+### Deadline-day tutor reminder — `/api/internal/post-class-feedback/reminder-deadline`
+
+**Schedule:** `0 10 * * *` = **17:00 Bangkok**. **Does:** remind each canonical tutor once, grouping sessions whose deadline is today and whose current objective feedback is still incomplete.
+
+Both reminder routes first reconcile the exact Bangkok class date, combining Wise `PAST` discovery with persisted eligible obligations and draining sequential batches of at most 50 detail calls. Missing-from-`PAST` persisted rows are still reconciled. If the checkpoint backlog cannot drain within the bounded route budget, the handler returns HTTP 503, records a failed Data Health invocation, and sends nothing; the same recovery path is available from Data Health. A blocking global source issue or paused/form-drift setting suppresses every send; a session-scoped identity or billing issue suppresses only that session, so unrelated source-ready tutors are not silenced.
+
+Before each delivery (and every retry) the notification service rechecks source-ready live status, policy applicability, current objective content, and a source observation no older than 20 minutes. Late-but-complete remediation cancels further reminders without changing the historical violation. If any otherwise-active member of a grouped retry is stale, the whole delivery is deferred for a fresh reconciliation without consuming an email attempt; no partial subset is sent. Recipient resolution prefers the configured canonical-tutor primary email and accepts Wise onsite/online fallback only when it yields one unambiguous address.
+
+Delivery identity is durable in the notification tables. A failure receives up to three backup-relay retries after the initial primary attempt, with approximately 30/90/180-minute backoff. The collection cron processes due retries every 30 minutes. Tutor mail contains student/class, session date, failed fields/reasons, character count, deadline, and Wise link; it never contains feedback excerpts or deduction language. Both routes have **`maxDuration = 800`**.
+
+See [Wise Post-Class Feedback Tracking](../features/post-class-feedback.md) for policy, access, and finance semantics.
+
+## 6. Leave requests sync — `/api/internal/sync-leave-requests`
 
 **Schedule:** `15,45 * * * *`. **Does:** ingests tutor leave requests from a Google Sheet and matches them to tutors.
 
@@ -128,7 +171,7 @@ Calls `syncLeaveRequests(db, { triggerType: "cron" })` ([`route.ts:13`](../../sr
 
 > Note: the `src/lib/leave-requests/**` module is documented here but is treated as in-flight source — see open questions. The route handler and schedule are stable in `vercel.json`.
 
-## 6. Classroom morning automation — `/api/internal/class-assignments/morning`
+## 7. Classroom morning automation — `/api/internal/class-assignments/morning`
 
 **Schedule:** `45 23 * * *` — once daily at **23:45 UTC = 06:45 Asia/Bangkok**, just before the school day. **Does:** ensures a fresh Wise snapshot, then generates and (where eligible) publishes classroom room assignments for the next 7 Bangkok days, and emails the current day's tutor schedules.
 
@@ -141,7 +184,7 @@ Calls `runClassroomMorningAutomation()` ([`route.ts:12`](../../src/app/api/inter
 
 Errors return HTTP 500 with `{ ok: false, error }` ([`route.ts:14-17`](../../src/app/api/internal/class-assignments/morning/route.ts)). See the classroom-assignments feature doc for the assignment engine and Wise writeback policy.
 
-## 7. Classroom admin email — `/api/internal/class-assignments/admin-email`
+## 8. Classroom admin email — `/api/internal/class-assignments/admin-email`
 
 **Schedule:** `0,10,20,30 0 * * *` — four runs at **00:00, 00:10, 00:20, 00:30 UTC = 07:00–07:30 Asia/Bangkok**, i.e. a retry ladder in the ~15–45 minutes after the morning automation. **Does:** emails the day's classroom assignment summary to all admin users, retrying until ready or the final window.
 
@@ -153,7 +196,7 @@ Calls `sendAdminClassroomScheduleEmail()` ([`route.ts:12`](../../src/app/api/int
 
 The handler maps a `failed` result status to HTTP 500, otherwise HTTP 200 ([`route.ts:13-14`](../../src/app/api/internal/class-assignments/admin-email/route.ts)). See the classroom-assignments feature doc.
 
-## 8. Student promotions July 1 apply — `/api/internal/student-promotions/july-1`
+## 9. Student promotions July 1 apply — `/api/internal/student-promotions/july-1`
 
 **Schedule:** `5 17 30 6 *` — 17:05 UTC on June 30, which is **00:05 Asia/Bangkok on July 1**. **Does:** applies the newest verified Student Promotions run for target date `2026-07-01`.
 
@@ -161,7 +204,7 @@ This cron is a one-shot business event, not a recurring data sync. The Vercel ex
 
 The handler authenticates with `CRON_SECRET`, then calls `applyVerifiedStudentPromotionRun({ trigger: "cron" })`. Each grade and course action revalidates current Wise state before writing, and per-action drift/errors are persisted without aborting the run. See the Student Promotions feature doc and API reference for the full review/apply flow.
 
-## 9. Admissions notifications — `/api/internal/admissions-notifications`
+## 10. Admissions notifications — `/api/internal/admissions-notifications`
 
 **Schedule:** `12 1 * * *` — once daily at **01:12 UTC = 08:12 Asia/Bangkok**. **Does:** sends University Admissions deadline-reminder emails, and on Bangkok Sundays additionally the weekly digest, via Resend.
 
@@ -190,8 +233,6 @@ These `/api/internal/*` route handlers exist on disk but are **not** listed in `
 
 **Flag:** this job is **manual / not scheduled**. If it is meant to keep room-utilization data current on a cadence (like the other syncs), it is currently effectively disabled from the automation standpoint — see open questions.
 
-> No other `/api/internal/*` handler is missing from `vercel.json`: the remaining route directories map 1:1 to the registered cron entries.
-
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against the release tree on 2026-07-21._

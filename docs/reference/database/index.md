@@ -1,8 +1,9 @@
 # Database Reference — Master Table Index
 
-Canonical lookup of **every table** in the BGScheduler Postgres database. All 110 tables
-indexed here (85 at the previous verification + 25 University Admissions `admissions_*` tables)
-are defined in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) via Drizzle ORM.
+Canonical lookup of the BGScheduler Postgres database. The release tree defines **175 tables**
+in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts); this count is generated from the
+actual `pgTable(...)` declarations, including 24 Post-Class Feedback tables and 36 current
+University Admissions tables.
 This page is the index: it lists each table's SQL name, its Drizzle export name, the
 domain it belongs to, its **grain** (what one row represents), the feature that owns it,
 and a link to the domain's ER diagram.
@@ -28,9 +29,10 @@ A few tables are deliberately **snapshot-independent** (they survive snapshot ro
 `wise_activity_sync_runs`, `student_promotion_runs`, `student_promotion_grade_actions`,
 `student_promotion_course_actions`, `student_promotion_future_session_actions`,
 `student_promotion_graduation_actions`, `student_promotion_pay_rate_impacts`,
+all `post_class_*` tables,
 `room_utilization_sessions`, and `past_session_blocks`
 (`schema.ts:1347-1386`, the only cross-snapshot data table — see its note in
-[erd-core.md](./erd-core.md)). The entire **University Admissions** domain (all 25
+[erd-core.md](./erd-core.md)). The entire **University Admissions** domain (all 36
 `admissions_*` tables) is likewise snapshot-independent by design — its only ties to
 Wise/IPEDS data are plain soft-reference columns, never FKs
 ([erd-university-admissions.md](./erd-university-admissions.md)).
@@ -39,19 +41,23 @@ Wise/IPEDS data are plain soft-reference columns, never FKs
 
 | Domain | Tables | ER diagram |
 |---|---|---|
-| Core (snapshots, sync, audit, auth, tutors, normalization) | 20 | [erd-core.md](./erd-core.md) |
+| Core (snapshots, sync, audit, auth, tutors, normalization) | 21 | [erd-core.md](./erd-core.md) |
 | Sales Dashboard | 7 | [erd-sales-dashboard.md](./erd-sales-dashboard.md) |
-| Credit Control | 10 | [erd-credit-control.md](./erd-credit-control.md) |
+| Competitor Intelligence | 16 | — |
+| Credit Control | 11 | [erd-credit-control.md](./erd-credit-control.md) |
 | Classrooms (assignment + email) | 9 | [erd-classrooms.md](./erd-classrooms.md) |
 | Payroll | 8 | [erd-payroll.md](./erd-payroll.md) |
 | Tutor Profiles | 2 | [erd-tutor-profiles.md](./erd-tutor-profiles.md) |
 | Leave Requests | 5 | [erd-leave-requests.md](./erd-leave-requests.md) |
 | Student Promotions | 6 | [erd-student-promotions.md](./erd-student-promotions.md) |
+| Post-Class Feedback | 24 | [feature data model](../../features/post-class-feedback.md#durable-data-model) |
 | AI & Proposals | 6 | [erd-ai-and-proposals.md](./erd-ai-and-proposals.md) |
-| LINE | 8 | [erd-line.md](./erd-line.md) |
+| LINE | 9 | [erd-line.md](./erd-line.md) |
 | Room Capacity | 4 | [erd-room-capacity.md](./erd-room-capacity.md) |
-| University Admissions | 25 | [erd-university-admissions.md](./erd-university-admissions.md) |
-| **Total** | **110** | |
+| Progress Tests | 8 | — |
+| US Universities / IPEDS | 3 | — |
+| University Admissions | 36 | [erd-university-admissions.md](./erd-university-admissions.md) |
+| **Total** | **175** | |
 
 ## Master table list
 
@@ -128,6 +134,37 @@ Line ranges: `schema.ts:1065-1243`.
 | `student_promotion_future_session_actions` | `studentPromotionFutureSessionActions` | student-promotions | one July 1+ future Wise session subject audit/update candidate per run and Wise session | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
 | `student_promotion_graduation_actions` | `studentPromotionGraduationActions` | student-promotions | one required Year 13 graduate disposition review per accepted student in a run | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
 | `student_promotion_pay_rate_impacts` | `studentPromotionPayRateImpacts` | student-promotions | one pay-rate review row per teacher + class + student band + current/target course pair | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
+
+### Post-Class Feedback
+
+Line range: `schema.ts:3085-3560`. The feature also adds `tutor_contacts.primary_email` without changing that table's grain. Full constraints, partial/unique indexes, append-only triggers, and bootstrap rows are in [`0055_post_class_feedback.sql`](../../../drizzle/0055_post_class_feedback.sql); business meaning is in the [feature guide](../../features/post-class-feedback.md).
+
+| Table | Const | Domain | Grain (one row per …) | Owning feature | Reference |
+|---|---|---|---|---|---|
+| `post_class_enforcement_windows` | `postClassEnforcementWindows` | post-class-feedback | one prospective shadow/live/paused enforcement interval; at most one open window | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_settings` | `postClassSettings` | post-class-feedback | the singleton current operational settings projection (`id='default'`) | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_field_mappings` | `postClassFieldMappings` | post-class-feedback | one logical feedback field mapping in a mapping version | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_access_grants` | `postClassAccessGrants` | post-class-feedback | one feature capability granted to one allowlisted admin | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_config_audit_log` | `postClassConfigAuditLog` | post-class-feedback | one immutable configuration/access/AI-review audit event | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_digest_recipients` | `postClassDigestRecipients` | post-class-feedback | one configured admin-digest email | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_sync_runs` | `postClassSyncRuns` | post-class-feedback | one collector run and its inclusive Bangkok date window; single `running` guard | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_sessions` | `postClassSessions` | post-class-feedback | one canonical projection per Wise session (`wise_session_id` unique) | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_session_participants` | `postClassSessionParticipants` | post-class-feedback | one student participant within one tracked session | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_feedback_versions` | `postClassFeedbackVersions` | post-class-feedback | one immutable observed submission/content-hash version within a session | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_feedback_event_links` | `postClassFeedbackEventLinks` | post-class-feedback | one Wise feedback activity event associated with a session and optional version | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_assessments` | `postClassAssessments` | post-class-feedback | one immutable deterministic assessment key for a session/policy/mapping/evidence state | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_source_issues` | `postClassSourceIssues` | post-class-feedback | one deduplicated global/session source issue fingerprint | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_notification_runs` | `postClassNotificationRuns` | post-class-feedback | one idempotent tutor-reminder or admin-digest run | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_notification_deliveries` | `postClassNotificationDeliveries` | post-class-feedback | one grouped recipient delivery within a notification run | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_notification_items` | `postClassNotificationItems` | post-class-feedback | one tracked session included in a grouped delivery | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_notification_attempts` | `postClassNotificationAttempts` | post-class-feedback | one durable relay attempt number for a delivery | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_ai_runs` | `postClassAiRuns` | post-class-feedback | one de-identified quality-model request per immutable feedback version/prompt identity | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_ai_concerns` | `postClassAiConcerns` | post-class-feedback | one AI quality dimension concern within a run | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_ai_reviews` | `postClassAiReviews` | post-class-feedback | one immutable human confirm/dismiss decision for an AI concern | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_finance_periods` | `postClassFinancePeriods` | post-class-feedback | one open/closed feature finance month | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_deductions` | `postClassDeductions` | post-class-feedback | at most one ฿100 deduction decision record per Wise session | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_deduction_actions` | `postClassDeductionActions` | post-class-feedback | one immutable, idempotent review/finance state-transition ledger entry | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_deduction_offsets` | `postClassDeductionOffsets` | post-class-feedback | at most one immutable -฿100 correction offset for a processed deduction | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
 
 ### Classrooms — assignment + email
 
@@ -222,7 +259,7 @@ Line ranges: `schema.ts:1785-1858`.
 
 ### University Admissions
 
-Line ranges: enums `schema.ts:233-334`, tables `schema.ts:2983-3396`. Owning feature: University Admissions case management (design: [`docs/casemanagementsystem_design.md`](../../casemanagementsystem_design.md); API: [university-admissions.md](../api/university-admissions.md)). All 25 tables are snapshot-independent; `wise_student_key` and `unit_id` are soft references, never FKs.
+Line ranges: enums `schema.ts:314-429`, tables `schema.ts:3564-4227`. Owning feature: University Admissions case management (design: [`docs/casemanagementsystem_design.md`](../../casemanagementsystem_design.md); API: [university-admissions.md](../api/university-admissions.md)). All 36 tables are snapshot-independent; `wise_student_key` and `unit_id` are soft references, never FKs.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
@@ -236,12 +273,19 @@ Line ranges: enums `schema.ts:233-334`, tables `schema.ts:2983-3396`. Owning fea
 | `admissions_case_tasks` | `admissionsCaseTasks` | admissions | one checklist task on a case (template-derived or custom) (`schema.ts:3104-3126`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_case_meetings` | `admissionsCaseMeetings` | admissions | one logged counselor meeting on a case (`schema.ts:3128-3141`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_college_list_items` | `admissionsCollegeListItems` | admissions | one college on a case's application list (IPEDS `unit_id` soft ref or manual entry) (`schema.ts:3143-3166`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_college_research` | `admissionsCollegeResearch` | admissions | at most one structured research and fit record per college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_interest_events` | `admissionsInterestEvents` | admissions | one demonstrated-interest event for a college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_college_requirements` | `admissionsCollegeRequirements` | admissions | one non-canonical requirement for a college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_financial_aid_offers` | `admissionsFinancialAidOffers` | admissions | at most one financial-aid comparison record per college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_scholarships` | `admissionsScholarships` | admissions | one case scholarship, optionally linked to a college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_application_events` | `admissionsApplicationEvents` | admissions | one append-only decision event on a list item (`schema.ts:3168-3178`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_recommenders` | `admissionsRecommenders` | admissions | one recommendation writer for a case (`schema.ts:3180-3192`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_recommender_colleges` | `admissionsRecommenderColleges` | admissions | one recommender↔college link with submission state (unique on `recommender_id`+`list_item_id`) (`schema.ts:3194-3205`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_college_docs` | `admissionsCollegeDocs` | admissions | one supporting-doc send state per list item + `doc_type` (`schema.ts:3207-3218`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_essays` | `admissionsEssays` | admissions | one essay-tracker row on a case (soft `list_item_id` link) (`schema.ts:3220-3235`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_essay_prompt_catalog` | `admissionsEssayPromptCatalog` | admissions | one institution/program/cycle prompt-catalog row | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_activities` | `admissionsActivities` | admissions | one extracurricular activity on the student-owned list (`schema.ts:3237-3251`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_awards` | `admissionsAwards` | admissions | one honors or award record, separate from activities | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_test_sittings` | `admissionsTestSittings` | admissions | one standardized-test sitting for a case (`schema.ts:3253-3267`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_academic_records` | `admissionsAcademicRecords` | admissions | one academic-record payload per case + grading `system` + `effective_date` (`schema.ts:3269-3279`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_notes` | `admissionsNotes` | admissions | one case note with a mandatory explicit visibility (`schema.ts:3281-3294`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
@@ -250,7 +294,11 @@ Line ranges: enums `schema.ts:233-334`, tables `schema.ts:2983-3396`. Owning fea
 | `admissions_self_report_sections` | `admissionsSelfReportSections` | admissions | one guided self-report section per case (unique on `case_id`+`section_key`) (`schema.ts:3329-3342`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_audit_log` | `admissionsAuditLog` | admissions | one append-only audit entry per admissions write (`schema.ts:3344-3358`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_notification_log` | `admissionsNotificationLog` | admissions | one sent notification email (partial-unique `dedupe_key` for exactly-once sends) (`schema.ts:3360-3379`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_notification_outbox` | `admissionsNotificationOutbox` | admissions | one transactionally queued and retryable notification | University Admissions | [university-admissions](./erd-university-admissions.md) |
 | `admissions_notification_runs` | `admissionsNotificationRuns` | admissions | one daily/weekly notification-cron run; single `running` guard (`schema.ts:3381-3396`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_import_runs` | `admissionsImportRuns` | admissions | one case, spreadsheet, and source-fingerprint import ledger | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_import_issues` | `admissionsImportIssues` | admissions | one validation or resolution issue for an import run | University Admissions | [university-admissions](./erd-university-admissions.md) |
+| `admissions_import_mappings` | `admissionsImportMappings` | admissions | one source-key to target-record mapping within an import run | University Admissions | [university-admissions](./erd-university-admissions.md) |
 
 ## Notes & caveats
 
@@ -267,4 +315,4 @@ Line ranges: enums `schema.ts:233-334`, tables `schema.ts:2983-3396`. Owning fea
   top of `schema.ts` (`schema.ts:19-161`); their allowed values are listed on the relevant
   `erd-*.md` page, not here.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against the release schema after production migrations `0053–0054` and the Post-Class Feedback schema reconciliation on 2026-07-21._
