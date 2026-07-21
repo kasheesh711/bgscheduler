@@ -122,6 +122,7 @@ const ELIGIBILITY_REASON_LABELS: Record<FeedbackEligibilityReason, string> = {
   ended_positive_credits: "Ended with consumed credits",
   ended_payout_eligible: "Ended and payout-eligible",
   not_ended: "Session did not end",
+  cancelled: "Cancelled session",
   missed_or_no_show: "Missed / no-show",
   excluded_session_type: "Excluded session type",
   complimentary_or_trial: "Complimentary / trial",
@@ -129,8 +130,12 @@ const ELIGIBILITY_REASON_LABELS: Record<FeedbackEligibilityReason, string> = {
   billing_evidence_missing: "Billing or payout evidence needs review",
 };
 
-export function formatEligibilityReason(reason: FeedbackEligibilityReason | null): string {
-  return reason ? ELIGIBILITY_REASON_LABELS[reason] : "Eligibility evidence unavailable";
+export function formatEligibilityReason(reason: string | null): string {
+  if (!reason) return "Eligibility evidence unavailable";
+  if (Object.prototype.hasOwnProperty.call(ELIGIBILITY_REASON_LABELS, reason)) {
+    return ELIGIBILITY_REASON_LABELS[reason as FeedbackEligibilityReason];
+  }
+  return `Unknown eligibility reason: ${reason}`;
 }
 
 export function EligibilityBadge({

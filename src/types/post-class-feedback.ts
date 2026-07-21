@@ -1,3 +1,5 @@
+import type { SessionEligibilityReason } from "@/lib/post-class-feedback/types";
+
 export type FeedbackSourceStatus =
   | "ready"
   | "unavailable"
@@ -30,15 +32,7 @@ export type FeedbackWaiverCategory =
   | "duplicate_system_error"
   | "other";
 
-export type FeedbackEligibilityReason =
-  | "ended_positive_credits"
-  | "ended_payout_eligible"
-  | "not_ended"
-  | "missed_or_no_show"
-  | "excluded_session_type"
-  | "complimentary_or_trial"
-  | "non_billable"
-  | "billing_evidence_missing";
+export type FeedbackEligibilityReason = SessionEligibilityReason;
 
 export interface FeedbackCapabilities {
   viewer: boolean;

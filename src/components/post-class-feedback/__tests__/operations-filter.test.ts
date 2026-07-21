@@ -1,6 +1,12 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { FeedbackSessionRow } from "@/types/post-class-feedback";
-import { filterFeedbackSessions } from "../operations-tab";
+import type {
+  FeedbackEligibilityReason,
+  FeedbackSessionRow,
+  PostClassFeedbackPayload,
+} from "@/types/post-class-feedback";
+import { OperationsTab, filterFeedbackSessions } from "../operations-tab";
 
 function row(id: string, tutorName: string, student: string, overrides: Partial<FeedbackSessionRow> = {}): FeedbackSessionRow {
   const answer = { characters: 100, meaningful: true };
@@ -40,6 +46,7 @@ describe("post-class operations filters", () => {
     row("2", "Kanyarat S.", "Nichat", { timingStatus: "late", contentStatus: "blank", reminder: { lastKind: "deadline_day", lastSentAt: null, status: "failed", attempts: 3 } }),
     row("3", "Akasit P.", "Phattharaphon", { sourceStatus: "identity_review" }),
     row("4", "Warin S.", "Kanda", { eligible: false, eligibilityReason: "complimentary_or_trial", contentStatus: "missing", timingStatus: "late" }),
+    row("5", "Pimchanok T.", "Araya", { eligible: false, eligibilityReason: "cancelled", contentStatus: "missing", timingStatus: "late" }),
   ];
 
   it("matches canonical tutor and student names case-insensitively", () => {
@@ -59,6 +66,75 @@ describe("post-class operations filters", () => {
 
   it("labels known ineligible sessions as excluded instead of missing or late", () => {
     const filters = { query: "", outcome: "excluded", reminder: "all", source: "all" } as const;
-    expect(filterFeedbackSessions(sessions, filters).map((item) => item.id)).toEqual(["4"]);
+    expect(filterFeedbackSessions(sessions, filters).map((item) => item.id)).toEqual(["4", "5"]);
+  });
+
+  it("finds cancelled sessions by their eligibility label", () => {
+    const filters = { query: "cancelled", outcome: "all", reminder: "all", source: "all" } as const;
+    expect(filterFeedbackSessions(sessions, filters).map((item) => item.id)).toEqual(["5"]);
+  });
+
+  it("renders the empty state for an unmatched search without throwing", () => {
+    const filters = { query: "zzzz-no-match", outcome: "all", reminder: "all", source: "all" } as const;
+    const matches = filterFeedbackSessions(sessions, filters);
+    let markup = "";
+
+    expect(() => {
+      markup = renderToStaticMarkup(createElement(OperationsTab, {
+        payload: {
+          sessions: matches,
+          capabilities: { viewer: true, reviewer: false, finance: false, accessManager: false },
+        } as PostClassFeedbackPayload,
+        submitting: false,
+        onMutation: async () => undefined,
+      }));
+    }).not.toThrow();
+    expect(matches).toEqual([]);
+    expect(markup).toContain("No sessions match");
+  });
+
+  it("keeps unknown and null eligibility values searchable", () => {
+    const unusual = [
+      row("6", "Unknown reason", "Student", {
+        eligibilityReason: "future_wise_state" as FeedbackEligibilityReason,
+      }),
+      row("7", "No evidence", "Student", { eligibilityReason: null }),
+    ];
+
+    expect(filterFeedbackSessions(unusual, {
+      query: "future_wise_state",
+      outcome: "all",
+      reminder: "all",
+      source: "all",
+    }).map((item) => item.id)).toEqual(["6"]);
+    expect(filterFeedbackSessions(unusual, {
+      query: "eligibility evidence unavailable",
+      outcome: "all",
+      reminder: "all",
+      source: "all",
+    }).map((item) => item.id)).toEqual(["7"]);
+  });
+
+  it("normalizes only string search values when payload text is malformed", () => {
+    const malformed = row("8", "Fallback", "Still searchable", {
+      tutorName: null as unknown as string,
+      className: null as unknown as string,
+      subject: undefined as unknown as string,
+      wiseSessionId: 8 as unknown as string,
+      students: [null as unknown as string, "Still searchable"],
+    });
+
+    expect(() => filterFeedbackSessions([malformed], {
+      query: "still searchable",
+      outcome: "all",
+      reminder: "all",
+      source: "all",
+    })).not.toThrow();
+    expect(filterFeedbackSessions([malformed], {
+      query: "still searchable",
+      outcome: "all",
+      reminder: "all",
+      source: "all",
+    }).map((item) => item.id)).toEqual(["8"]);
   });
 });
