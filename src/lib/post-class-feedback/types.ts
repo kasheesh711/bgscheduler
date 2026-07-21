@@ -155,19 +155,24 @@ export interface SessionEligibilityInput {
   payoutEligible?: boolean | null;
 }
 
+export const SESSION_ELIGIBILITY_REASONS = [
+  "ended_positive_credits",
+  "ended_payout_eligible",
+  "not_ended",
+  "cancelled",
+  "missed_or_no_show",
+  "excluded_session_type",
+  "complimentary_or_trial",
+  "non_billable",
+  "billing_evidence_missing",
+] as const;
+
+export type SessionEligibilityReason = (typeof SESSION_ELIGIBILITY_REASONS)[number];
+
 export interface SessionEligibilityResult {
   status: "eligible" | "ineligible" | "ambiguous";
   eligible: boolean;
-  reason:
-    | "ended_positive_credits"
-    | "ended_payout_eligible"
-    | "not_ended"
-    | "cancelled"
-    | "missed_or_no_show"
-    | "excluded_session_type"
-    | "complimentary_or_trial"
-    | "non_billable"
-    | "billing_evidence_missing";
+  reason: SessionEligibilityReason;
 }
 
 export type AiSuspectReason =

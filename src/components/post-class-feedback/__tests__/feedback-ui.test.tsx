@@ -1,7 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { SESSION_ELIGIBILITY_REASONS } from "@/lib/post-class-feedback/types";
 import type { FeedbackSessionRow } from "@/types/post-class-feedback";
-import { OutcomeBadge, feedbackOutcome, formatRate } from "../feedback-ui";
+import {
+  OutcomeBadge,
+  feedbackOutcome,
+  formatEligibilityReason,
+  formatRate,
+} from "../feedback-ui";
 
 function session(overrides: Partial<FeedbackSessionRow> = {}): FeedbackSessionRow {
   const answer = { characters: 25, meaningful: true };
@@ -73,5 +79,18 @@ describe("post-class feedback outcome presentation", () => {
   it("formats either fractional or percentage API rates consistently", () => {
     expect(formatRate(0.74)).toBe("74.0%");
     expect(formatRate(74)).toBe("74.0%");
+  });
+
+  it("provides a label for every canonical eligibility reason", () => {
+    for (const reason of SESSION_ELIGIBILITY_REASONS) {
+      expect(formatEligibilityReason(reason)).not.toMatch(/^Unknown eligibility reason:/);
+      expect(formatEligibilityReason(reason).length).toBeGreaterThan(0);
+    }
+    expect(formatEligibilityReason("cancelled")).toBe("Cancelled session");
+  });
+
+  it("returns stable text for unknown and unavailable eligibility evidence", () => {
+    expect(formatEligibilityReason("future_wise_state")).toBe("Unknown eligibility reason: future_wise_state");
+    expect(formatEligibilityReason(null)).toBe("Eligibility evidence unavailable");
   });
 });

@@ -31,24 +31,32 @@ export interface OperationsFilters {
 
 const PAGE_SIZE = 25;
 
+function normalizeSearchValue(value: unknown): string {
+  return typeof value === "string" ? value.toLocaleLowerCase() : "";
+}
+
 export function filterFeedbackSessions(
   sessions: FeedbackSessionRow[],
   filters: OperationsFilters,
 ): FeedbackSessionRow[] {
-  const needle = filters.query.trim().toLocaleLowerCase();
+  const needle = normalizeSearchValue(filters.query).trim();
   return sessions.filter((session) => {
     if (filters.outcome !== "all" && feedbackOutcome(session) !== filters.outcome) return false;
     if (filters.reminder !== "all" && session.reminder.status !== filters.reminder) return false;
     if (filters.source !== "all" && session.sourceStatus !== filters.source) return false;
     if (!needle) return true;
-    return [
+    const eligibilityReason = typeof session.eligibilityReason === "string" || session.eligibilityReason === null
+      ? formatEligibilityReason(session.eligibilityReason)
+      : "";
+    const values: unknown[] = [
       session.tutorName,
       session.className,
       session.subject,
       session.wiseSessionId,
-      formatEligibilityReason(session.eligibilityReason),
-      ...session.students,
-    ].some((value) => value.toLocaleLowerCase().includes(needle));
+      eligibilityReason,
+      ...(Array.isArray(session.students) ? session.students : []),
+    ];
+    return values.some((value) => normalizeSearchValue(value).includes(needle));
   });
 }
 
