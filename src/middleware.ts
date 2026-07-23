@@ -33,6 +33,17 @@ function isPathAllowed(pathname: string, allowedPages: string[] | null): boolean
     pathname === "/api/post-class-feedback" ||
     pathname.startsWith("/api/post-class-feedback/")
   ) return true;
+  // Learning Plans uses a fresh database grant in its Server Components.
+  // Coarse-pass only the authenticated page namespace here; do not broaden
+  // this exception to similarly named pages or an API namespace.
+  if (
+    pathname === "/learning-plans" ||
+    pathname.startsWith("/learning-plans/")
+  ) return true;
+  if (
+    pathname === "/api/learning-plans" ||
+    pathname.startsWith("/api/learning-plans/")
+  ) return false;
   if (pathname === "/" && allowedPages.length > 1) return true;
   return allowedPages.some((page) => {
     return (

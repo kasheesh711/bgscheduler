@@ -1,6 +1,6 @@
 # Database Reference — Master Table Index
 
-Canonical lookup of the BGScheduler Postgres database. The release tree defines **175 tables**
+Canonical lookup of the BGScheduler Postgres database. The release tree defines **176 tables**
 in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts); this count is generated from the
 actual `pgTable(...)` declarations, including 24 Post-Class Feedback tables and 36 current
 University Admissions tables.
@@ -25,7 +25,8 @@ which the ETL pipeline rewrites wholesale and then atomically promotes via
 `snapshots.active`, `schema.ts:167`).
 
 A few tables are deliberately **snapshot-independent** (they survive snapshot rotation):
-`admin_users`, `google_oauth_tokens`, `tutor_aliases`, `cron_invocations`, `wise_activity_events`,
+`admin_users`, `learning_plan_access_grants`, `google_oauth_tokens`, `tutor_aliases`,
+`cron_invocations`, `wise_activity_events`,
 `wise_activity_sync_runs`, `student_promotion_runs`, `student_promotion_grade_actions`,
 `student_promotion_course_actions`, `student_promotion_future_session_actions`,
 `student_promotion_graduation_actions`, `student_promotion_pay_rate_impacts`,
@@ -41,7 +42,7 @@ Wise/IPEDS data are plain soft-reference columns, never FKs
 
 | Domain | Tables | ER diagram |
 |---|---|---|
-| Core (snapshots, sync, audit, auth, tutors, normalization) | 21 | [erd-core.md](./erd-core.md) |
+| Core (snapshots, sync, audit, auth, tutors, normalization) | 22 | [erd-core.md](./erd-core.md) |
 | Sales Dashboard | 7 | [erd-sales-dashboard.md](./erd-sales-dashboard.md) |
 | Competitor Intelligence | 16 | — |
 | Credit Control | 11 | [erd-credit-control.md](./erd-credit-control.md) |
@@ -57,7 +58,7 @@ Wise/IPEDS data are plain soft-reference columns, never FKs
 | Progress Tests | 8 | — |
 | US Universities / IPEDS | 3 | — |
 | University Admissions | 36 | [erd-university-admissions.md](./erd-university-admissions.md) |
-| **Total** | **175** | |
+| **Total** | **176** | |
 
 ## Master table list
 
@@ -76,6 +77,7 @@ Line ranges: `schema.ts:165-269`, `611-740`, `831-854`, `1347-1386`, `1744-1784`
 | `wise_activity_events` | `wiseActivityEvents` | core | one Wise audit event, deduped on `event_id` (`schema.ts:190-223`) | [Wise activity audit](../../features/wise-activity-audit.md) | [core](./erd-core.md) |
 | `wise_activity_sync_runs` | `wiseActivitySyncRuns` | core | one Wise-activity audit sync run; single `running` guard (`schema.ts:225-243`) | [Wise activity audit](../../features/wise-activity-audit.md) | [core](./erd-core.md) |
 | `admin_users` | `adminUsers` | core | one allowlisted admin email (unique on `email`) (`schema.ts:247-254`) | Auth ([middleware](../../../src/middleware.ts)) | [core](./erd-core.md) |
+| `learning_plan_access_grants` | `learningPlanAccessGrants` | core | one normalized email explicitly granted Learning Plans access (PK = `email`; no role or sign-in authority) (`schema.ts`) | [Learning Plans](../../features/learning-plans.md) authorization | [core](./erd-core.md) |
 | `google_oauth_tokens` | `googleOAuthTokens` | core | one Google OAuth token set per `email` (PK = email) (`schema.ts:256-266`) | Google OAuth (shared by [Sales Dashboard](../../features/sales-dashboard.md) + [Leave requests](../../features/leave-requests.md)) | [core](./erd-core.md) |
 | `tutor_identity_groups` | `tutorIdentityGroups` | core | one merged tutor identity within a snapshot (`schema.ts:611-620`) | [Tutor search](../../features/tutor-search.md) | [core](./erd-core.md) |
 | `tutor_identity_group_members` | `tutorIdentityGroupMembers` | core | one Wise teacher record mapped into an identity group, per snapshot (`schema.ts:622-633`) | [Tutor search](../../features/tutor-search.md) | [core](./erd-core.md) |

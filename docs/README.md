@@ -105,7 +105,7 @@ declared maturity.
 | [Payroll](./features/payroll.md) | stable | Reconciles tutor pay against Wise sessions/invoices per month; surfaces integrity issues; review + approve. |
 | [Wise Activity Audit](./features/wise-activity-audit.md) | stable | Read-only audit log of Wise operational/financial events + package-sales reconciliation workbench. |
 | [Post-Class Feedback](./features/post-class-feedback.md) | in progress (shadow rollout) | Reconciles immutable Wise teacher-feedback evidence, compliance, reminders, AI quality review, and an internal deduction/finance workflow without writing to Wise or Payroll. |
-| [Learning Plans](./features/learning-plans.md) | stable | Stateless Years 1–13 syllabus-plan builder with a dedicated A4 print/PDF report; no API, database, or external-system writes. |
+| [Learning Plans](./features/learning-plans.md) | stable | Stateless Years 1–13 syllabus-plan builder with a dedicated A4 print/PDF report; plan content stays unstored while access is database-backed. |
 | [Student Promotions](./features/student-promotions.md) | stable, pending first production run | Audited July 1, 2026 Wise student grade/course/graduation workflow with future-session pay-band checks, pay-rate review, dry-run review, and verified apply. |
 | [LINE Integration](./features/line-integration.md) | stable (writeback dry-run) | LINE OA inbox: ingest, classify, draft replies, human-gated review. Scheduler write-path flag-gated/dry-run. |
 | [Proposals (Admin Holds)](./features/proposals.md) | experimental | Temporary admin "holds" on tutor slots, with same-tutor overlap detection. Local-only, never written to Wise. |

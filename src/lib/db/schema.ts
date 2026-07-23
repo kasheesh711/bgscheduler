@@ -573,6 +573,23 @@ export const googleOAuthTokens = pgTable("google_oauth_tokens", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// ── Learning Plans Access ──────────────────────────────────────────────
+
+export const learningPlanAccessGrants = pgTable("learning_plan_access_grants", {
+  email: text("email").primaryKey(),
+  grantedByEmail: text("granted_by_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  check(
+    "learning_plan_access_email_normalized_check",
+    sql`${table.email} = lower(btrim(${table.email})) AND ${table.email} <> ''`,
+  ),
+  check(
+    "learning_plan_access_granted_by_nonblank_check",
+    sql`btrim(${table.grantedByEmail}) <> ''`,
+  ),
+]);
+
 // ── Sales Dashboard ────────────────────────────────────────────────────
 
 export const salesDashboardSources = pgTable("sales_dashboard_sources", {

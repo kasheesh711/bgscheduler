@@ -1,9 +1,15 @@
 # Auth & Access
 
-How BGScheduler decides who may use the app. There are exactly two gates, and a request must clear both to reach protected data:
+How BGScheduler decides who may use the app. Base authentication has two gates, and
+individual features may add a fresh, per-request authorization check close to their data:
 
 1. **The middleware gate** (`src/middleware.ts`) — runs on the **Edge runtime** for every request, decides _is there a valid session?_ and redirects to `/login` if not.
-2. **The allowlist check** (`signIn` callback in `src/lib/auth.ts`) — runs once **at login time** on the **Node.js runtime**, decides _is this Google identity permitted?_ by looking the email up in the `admin_users` table.
+2. **The identity-access check** (`signIn` callback in `src/lib/auth.ts`) — runs once **at
+   login time** on the **Node.js runtime** and resolves an administrator, active teacher,
+   Admissions role, or denial.
+
+Learning Plans adds a third, feature-specific check in the Node runtime. Its grant is read
+fresh on each request and never changes the base role stored in the JWT.
 
 Identity comes from **Auth.js v5 (NextAuth)** with a single **Google** OAuth provider. The package is `next-auth@5.0.0-beta.30` (`package.json:40`).
 
@@ -27,16 +33,20 @@ flowchart TD
     H --> I[signIn google]
     I --> J[Google OAuth consent]
     J --> K[signIn callback in src/lib/auth.ts]
-    K --> L{email in admin_users?}
+    K --> L{resolveUserAccess<br/>recognizes identity?}
     L -- no --> M[return false<br/>error=AccessDenied -> back to /login]
-    L -- yes --> N[store Google OAuth tokens<br/>then session issued JWT cookie]
+    L -- yes --> N[store role and allowedPages<br/>in issued JWT cookie]
     N --> E
 ```
 
 Two distinct decisions, made in two different places:
 
 - **"Are you logged in?"** is answered by the **session cookie**, checked at the edge on every request (`src/middleware.ts:25`) and re-checked inside each route/page.
-- **"Are you allowed?"** is answered **only once, at sign-in**, by the `signIn` callback's `admin_users` lookup (`src/lib/auth.ts:43-50`). After that, the session cookie is the proof of allowed-ness — there is no per-request DB allowlist check.
+- **"May this identity sign in?"** is answered at sign-in by the Node auth resolver. The
+  resulting role and `allowedPages` are stored in the JWT.
+- **"May this identity use a freshly gated feature?"** may be answered again by that
+  feature's server-side data-access layer. Learning Plans does this so a teacher grant can
+  change without promoting the teacher or waiting for a JWT refresh.
 
 ---
 
@@ -52,22 +62,26 @@ Two NextAuth instances are configured. They are **deliberately split** by runtim
 - **OAuth scope**: `openid email profile https://www.googleapis.com/auth/spreadsheets` with `access_type: "offline"` (`src/lib/auth.ts:32-33`). The Sheets **write** scope and offline access are requested because the same Google grant is reused to drive Google Sheets integrations (sales dashboard, leave-requests), not just to identify the user.
 - **Custom pages**: both `signIn` and `error` point at `/login` (`src/lib/auth.ts:38-41`), so OAuth errors land back on the login screen rather than a NextAuth default page.
 - **`signIn` callback** (`src/lib/auth.ts:43-50`): this is the access-control gate. It calls `signInCallback({ user })`; if the user is allowed **and** has an email, it stores the Google OAuth token for that user (`storeGoogleOAuthTokenForUser`, imported lazily from `@/lib/sales-dashboard/google-oauth`) and then returns the allow/deny boolean. **Returning `false` aborts sign-in** — NextAuth redirects back to `/login?error=AccessDenied`.
-- **`session` callback** (`src/lib/auth.ts:51-53`): pass-through; it returns the session unchanged.
+- **`jwt` / `session` callbacks**: resolve the user's role and page prefixes at sign-in,
+  store them in the JWT, and expose them as `session.user.role` and
+  `session.user.allowedPages`.
 
 > Note the side effect: a successful sign-in also **persists encrypted Google OAuth tokens** (`storeGoogleOAuthTokenForUser`, `src/lib/auth.ts:46-47`). Token encryption is keyed off `AUTH_SECRET` (`src/lib/sales-dashboard/google-oauth.ts:37-41`). So `AUTH_SECRET` protects both session cookies and stored OAuth refresh tokens.
 
-### The allowlist callback — `signInCallback`
+### The identity-access callback — `signInCallback`
 
-`signInCallback({ user })` (`src/lib/auth.ts:7-23`) is the single source of truth for "may this person in":
+`signInCallback({ user })` delegates the fail-closed sign-in decision to
+`resolveUserAccess`:
 
-1. Normalize the email: `user.email?.trim().toLowerCase()` (`src/lib/auth.ts:12`). Casing and surrounding whitespace are stripped before lookup.
-2. If there is no email, return `false` **without touching the database** (`src/lib/auth.ts:13`).
-3. Otherwise query `admin_users` for an exact email match, `limit(1)` (`src/lib/auth.ts:15-20`).
-4. Return `true` iff a row exists (`src/lib/auth.ts:22`).
+1. Normalize the Google email.
+2. Resolve an `admin_users` row first; admins keep the row's `allowedPages`
+   (`null` means full access).
+3. Otherwise resolve an active Admissions counselor, active tutor contact, or active
+   Admissions student/parent membership in that order.
+4. Return `false` when no supported identity exists.
 
-This behavior is locked by `src/lib/auth/__tests__/signin-callback.test.ts`: it asserts an allowlisted email is admitted, casing/whitespace is normalized before the lookup (`eq` called with the normalized string, test line 59), a non-allowlisted email is rejected, and a missing email returns `false` without calling `getDb()` (test lines 78-88).
-
-This is a **fail-closed allowlist**: unknown or empty identities are denied, never admitted.
+This behavior is locked by the sign-in and `auth-access` unit tests. Unknown or empty
+identities are denied, never admitted.
 
 ### NextAuth route handler — `src/app/api/auth/[...nextauth]`
 
@@ -83,7 +97,12 @@ That is the entire file (`src/app/api/auth/[...nextauth]/route.ts:1-3`). All of 
 
 ### Session strategy
 
-Neither NextAuth config sets a `session.strategy` and **no database adapter is configured** (no `adapter:` key in either file; `@auth/drizzle-adapter` is not a dependency in `package.json`). With no adapter, Auth.js v5 defaults to a **JWT session** stored in an encrypted cookie. This is what makes the edge gate possible: the middleware can validate the session cookie at the edge without a database round-trip (see below). The `admin_users` table is consulted only at the moment of sign-in, never on subsequent requests.
+Neither NextAuth config sets a `session.strategy` and **no database adapter is configured**
+(no `adapter:` key in either file; `@auth/drizzle-adapter` is not a dependency in
+`package.json`). With no adapter, Auth.js v5 defaults to a **JWT session** stored in an
+encrypted cookie. This lets middleware validate the cookie without a database round-trip.
+Base role and `allowedPages` claims are resolved at sign-in; fresh feature gates such as
+Learning Plans deliberately query their own authorization table per request.
 
 ---
 
@@ -200,6 +219,26 @@ The allowlist table doubles as the **notification recipient list** for several f
 - LINE link-validation reviewer resolution (`src/lib/line/link-validation.ts:292-293, 403-404, 531-532`).
 
 So adding/removing an `admin_users` row affects both **who can log in** and **who receives operational email**.
+
+### Least-privilege Learning Plans grants
+
+`learning_plan_access_grants` is deliberately separate from `admin_users`. A row is keyed
+by a normalized lowercase email and records only authorization for the Learning Plans
+builder and report.
+
+- The row never admits an otherwise unknown identity at sign-in.
+- Full admins retain their existing implicit access.
+- Restricted admins and active teachers may use a fresh grant; teachers remain
+  `role: "teacher"` with `allowedPages: ["/progress-tests"]`.
+- Counselor, student, parent, inactive-tutor, and unknown identities are denied even if a
+  stale or mistaken grant row exists.
+- The shared middleware performs the optimistic authenticated pass for the two Learning
+  Plans pages. Both server pages repeat the database-backed check before loading content.
+- Because the grant is not stored in the JWT, addition and revocation take effect on the
+  next request without signing out.
+
+This separation avoids adding granted teachers to admin notification recipients, LINE
+reviewer pools, Admissions admin bypasses, or the full-admin Progress Tests workflow.
 
 ---
 

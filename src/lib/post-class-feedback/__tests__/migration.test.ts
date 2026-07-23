@@ -111,7 +111,7 @@ describe("post-class feedback migration", () => {
   });
 
   it("is registered after the concurrent Student Promotions migrations", () => {
-    expect(journal.entries.at(-1)).toMatchObject({
+    expect(journal.entries.find((entry) => entry.idx === 55)).toMatchObject({
       idx: 55,
       tag: "0055_post_class_feedback",
     });

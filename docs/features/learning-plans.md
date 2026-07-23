@@ -5,9 +5,9 @@
 ## Purpose
 
 Learning Plans turns the committed BeGifted syllabus into a printable, student-specific
-curriculum plan. An admin chooses a year and the topics to include, adds the student name
-and optional tutor/notes context, previews the selected scope, and opens a dedicated report
-for printing or saving as PDF.
+curriculum plan. An authorized user chooses a year and the topics to include, adds the
+student name and optional tutor/notes context, previews the selected scope, and opens a
+dedicated report for printing or saving as PDF.
 
 This is intentionally a **stateless document generator**. It does not create a student
 record, save a plan, or synchronize anything. Its user-entered content and syllabus scope
@@ -22,22 +22,27 @@ the report renders.
   URL parameters, loads only the selected year's full syllabus, and renders the chosen
   topics and skills.
 
-Both routes require an authenticated **admin** session. An explicit non-admin role,
-including `teacher`, is denied. Sessions created before roles were added may have no role;
-those legacy sessions remain eligible for admin access.
+Both routes require an authenticated session plus the feature's server-authoritative access
+check:
 
-`allowedPages` uses an exact feature grant:
+- Full-access admins remain eligible without a feature-grant row.
+- A restricted admin with the exact `/learning-plans` entry remains eligible.
+- A restricted admin or active teacher may instead receive a normalized-email grant in
+  `learning_plan_access_grants`.
+- A teacher grant does not change the user's `teacher` role or
+  `allowedPages: ["/progress-tests"]`; Progress Tests therefore stays read-only and scoped
+  to that teacher's students.
+- Counselor, student, parent, unknown, inactive-tutor, and ungranted identities are denied.
+  A grant row by itself never makes an identity eligible to sign in.
 
-- `null` or `undefined` means full access.
-- A restricted admin needs the exact `/learning-plans` entry.
-- That one entry grants both the builder and its nested report route. A report-only
-  `/learning-plans/report` entry does not grant the feature.
-- An unauthenticated request is redirected to `/login` with the original path and query
-  preserved. Middleware redirects ordinary page-restricted users to their allowed landing
-  page; the feature-level guard terminates any mismatched role or report-only grant.
+Middleware performs only the optimistic session check for `/learning-plans` and its page
+subtree. The builder and report independently query the fresh grant in the Node runtime
+before loading feature content, so grant and revocation changes apply on the next request
+without waiting for the JWT session to refresh. The exception does not cover
+`/learning-plans-extra` or a future `/api/learning-plans` namespace.
 
-The feature-level policy lives in `src/lib/learning-plans/access-policy.ts`; the shared
-middleware remains the request-path enforcement layer.
+The pure role/page policy lives in `src/lib/learning-plans/access-policy.ts`; the fresh,
+server-only data-access check lives alongside it in `src/lib/learning-plans/access.ts`.
 
 ## Stateless URL contract
 
@@ -62,7 +67,7 @@ and header budgets. Keep the report stateless or move notes out of the query str
 raising it.
 
 The protected report URL itself remains within the accepted request budget at that cap for
-an authenticated admin. If a session has expired, however, middleware must embed that
+an authenticated user. If a session has expired, however, middleware must embed that
 already encoded URL inside the login callback; an extreme all-Thai, maximum-length link can
 then exceed the redirect-header budget. Sign in at `/login` first and reopen the original
 report link. Avoid forwarding the expanded login URL.
@@ -70,9 +75,9 @@ report link. Avoid forwarding the expanded login URL.
 The URL is deliberately the document state and can be copied, bookmarked, reopened, or sent
 to the print route without a database lookup. That also means `student`, `tutor`, and
 `notes` are intentionally visible in the browser address bar and may be retained in browser
-history, copied links, proxy/request logs, and other URL telemetry. Admins should treat the
-link as student information and must not put secrets or unnecessarily sensitive material in
-the notes field. The application itself does not persist these values.
+history, copied links, proxy/request logs, and other URL telemetry. Authorized users should
+treat the link as student information and must not put secrets or unnecessarily sensitive
+material in the notes field. The application itself does not persist these values.
 
 ## Committed syllabus data
 
@@ -93,7 +98,8 @@ Sheets at runtime.
 ## Print and PDF behavior
 
 The report is an A4-oriented HTML document. The report action uses the browser's print
-dialogue, so admins can print to paper or choose the browser's **Save as PDF** destination.
+dialogue, so authorized users can print to paper or choose the browser's **Save as PDF**
+destination.
 Print styles:
 
 - remove interactive controls and the application shell;
@@ -109,9 +115,11 @@ no server PDF service, file upload, or stored artifact.
 
 ## Boundaries and failure behavior
 
-Learning Plans has **no API endpoints, database tables, migrations, cron jobs, environment
-variables, or background sync**. It does not read from or write to Wise or Google Sheets.
-It also does not mutate any other BGScheduler feature.
+Learning Plans has **no API endpoints, plan-content persistence, cron jobs, environment
+variables, or background sync**. The only database state it owns is the
+`learning_plan_access_grants` authorization table; student names, notes, topic selections,
+and generated reports remain URL-backed and unstored. It does not read from or write to
+Wise or Google Sheets, and it does not mutate any other BGScheduler feature.
 
 The report fails closed on malformed URL state: a missing/blank student, an out-of-range or
 non-integer year, an over-length field, or malformed topic-code CSV is rejected rather than
@@ -129,16 +137,21 @@ diverge.
   4,981-skill totals and derives the complete topic index from every year file.
 - `src/lib/syllabus/__tests__/report-params.test.ts` — validates required fields, year
   bounds, length caps, uppercase topic CSV, array normalization, and all-topics omission.
-- `src/lib/learning-plans/__tests__/access-policy.test.ts` — covers full-access admins,
-  matching restricted admins, explicit non-admin denial, and prefix-confusion denial.
+- `src/lib/learning-plans/__tests__/access-policy.test.ts` and `access.test.ts` — cover
+  full-access admins, matching restricted admins, freshly granted active teachers,
+  inactive/ungranted identities, database failure, and explicit non-admin denial.
+- `src/lib/learning-plans/__tests__/migration.test.ts` — locks the normalized-email table
+  contract and the three approved idempotent bootstrap grants.
 - `src/__tests__/middleware.test.ts` and `src/lib/navigation/__tests__/tools.test.ts` —
-  cover route-prefix enforcement and navigation visibility for full and restricted access.
+  cover the exact authenticated page pass-through and navigation visibility without
+  changing Home or brand-link eligibility.
 - `src/components/learning-plan/__tests__/digit-safe.test.tsx` — verifies that dynamic
   report headings protect numeric runs without changing their text.
 - Browser verification covers form-to-report URL generation, the friendly invalid-link
   state, mixed/empty topic selection, multipage layout, and the print/PDF dialogue; there
   are no page-render or browser-automation tests for those flows yet.
 
-Run `npm test` for the unit suite and `npm run docs:audit` for handbook link/path checks.
+Run `npm test` for the unit suite and `npm run verify:release` for the production release
+gate.
 
 _Verified against production `main` on 2026-07-23._
