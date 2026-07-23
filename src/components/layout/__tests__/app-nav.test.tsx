@@ -26,6 +26,7 @@ describe("AppNav", () => {
     expect(html).toContain("Home");
     expect(html).toContain("Scheduling &amp; Tutors");
     expect(html).toContain("Student Lifecycle");
+    expect(html).toContain("Learning Plans");
     expect(html).toContain("Finance &amp; Revenue");
     expect(html).toContain("Data &amp; Audit");
     expect(html).toContain("tutor time-off requests");
@@ -39,6 +40,7 @@ describe("AppNav", () => {
 
     expect(html).toContain("Progress Tests");
     expect(html).not.toContain(">Home<");
+    expect(html).not.toContain("Learning Plans");
     expect(html).not.toContain("Credit Control");
     expect(html).not.toContain("Leave Requests");
   });
@@ -59,5 +61,16 @@ describe("AppNav", () => {
 
     expect(html).toContain("bg-primary/10 font-medium text-primary");
     expect(html).toContain("Payroll");
+  });
+
+  it("marks Learning Plans active for its nested report route", () => {
+    vi.mocked(usePathname).mockReturnValue("/learning-plans/report");
+
+    const html = renderToStaticMarkup(<AppNav allowedPages={null} />);
+    const learningPlansLink = html.match(/<a [^>]*href="\/learning-plans"[^>]*>/)?.[0];
+
+    expect(html).toContain("bg-primary/10 font-medium text-primary");
+    expect(html).toContain("Learning Plans");
+    expect(learningPlansLink).toContain("border-primary/30 bg-primary/10 text-primary");
   });
 });

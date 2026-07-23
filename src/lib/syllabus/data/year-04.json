@@ -1,0 +1,2173 @@
+{
+ "year": 4,
+ "topics": [
+  {
+   "code": "A",
+   "name": "Numbers",
+   "skills": [
+    {
+     "code": "A.1",
+     "description": "Even or odd"
+    },
+    {
+     "code": "A.2",
+     "description": "Even or odd: arithmetic rules"
+    },
+    {
+     "code": "A.3",
+     "description": "Skip-counting sequences - count by sixes"
+    },
+    {
+     "code": "A.4",
+     "description": "Skip-counting sequences - count by sevens"
+    },
+    {
+     "code": "A.5",
+     "description": "Skip-counting sequences - count by nines"
+    },
+    {
+     "code": "A.6",
+     "description": "Skip-counting puzzles"
+    },
+    {
+     "code": "A.7",
+     "description": "Number sequences"
+    },
+    {
+     "code": "A.8",
+     "description": "Ordinal numbers to 100th"
+    },
+    {
+     "code": "A.9",
+     "description": "Write numbers up to 10,000 in words: convert words to digits"
+    },
+    {
+     "code": "A.10",
+     "description": "Write numbers up to 10,000 in words: convert digits to words"
+    },
+    {
+     "code": "A.11",
+     "description": "Roman numerals"
+    }
+   ]
+  },
+  {
+   "code": "B",
+   "name": "Comparing and ordering",
+   "skills": [
+    {
+     "code": "B.1",
+     "description": "Compare numbers up to 1,000"
+    },
+    {
+     "code": "B.2",
+     "description": "Compare numbers up to 100,000"
+    },
+    {
+     "code": "B.3",
+     "description": "Compare numbers in tables: up to 100,000"
+    },
+    {
+     "code": "B.4",
+     "description": "Put numbers in order: up to 1,000"
+    },
+    {
+     "code": "B.5",
+     "description": "Put numbers in order: up to 100,000"
+    },
+    {
+     "code": "B.6",
+     "description": "Comparing - with addition and subtraction"
+    },
+    {
+     "code": "B.7",
+     "description": "Multi-step inequalities"
+    }
+   ]
+  },
+  {
+   "code": "C",
+   "name": "Place value",
+   "skills": [
+    {
+     "code": "C.1",
+     "description": "Place value models up to thousands"
+    },
+    {
+     "code": "C.2",
+     "description": "Place value names up to thousands"
+    },
+    {
+     "code": "C.3",
+     "description": "Place value names up to hundred thousands"
+    },
+    {
+     "code": "C.4",
+     "description": "Value of a digit"
+    },
+    {
+     "code": "C.5",
+     "description": "Convert to/from a number"
+    },
+    {
+     "code": "C.6",
+     "description": "Convert between place values"
+    },
+    {
+     "code": "C.7",
+     "description": "Convert from expanded form"
+    },
+    {
+     "code": "C.8",
+     "description": "Convert between standard and expanded form"
+    },
+    {
+     "code": "C.9",
+     "description": "Place value word problems"
+    }
+   ]
+  },
+  {
+   "code": "D",
+   "name": "Addition",
+   "skills": [
+    {
+     "code": "D.1",
+     "description": "Add a two-digit number to a three-digit number"
+    },
+    {
+     "code": "D.2",
+     "description": "Add a two-digit number to a three-digit number - word problems"
+    },
+    {
+     "code": "D.3",
+     "description": "Complete the addition sentence - add a two-digit number to a three-digit number"
+    },
+    {
+     "code": "D.4",
+     "description": "Balance addition equations - add a two-digit number to a three-digit number"
+    },
+    {
+     "code": "D.5",
+     "description": "Use compensation to add - up to three digits plus two-digits"
+    },
+    {
+     "code": "D.6",
+     "description": "Add two three-digit numbers"
+    },
+    {
+     "code": "D.7",
+     "description": "Addition input/output tables - up to three digits"
+    },
+    {
+     "code": "D.8",
+     "description": "Add two three-digit numbers - word problems"
+    },
+    {
+     "code": "D.9",
+     "description": "Complete the addition sentence - three-digit numbers"
+    },
+    {
+     "code": "D.10",
+     "description": "Balance addition equations - three-digit numbers"
+    },
+    {
+     "code": "D.11",
+     "description": "Add three or more numbers with up to three digits each"
+    },
+    {
+     "code": "D.12",
+     "description": "Add three or more numbers with up to three digits - word problems"
+    },
+    {
+     "code": "D.13",
+     "description": "Add multiples of 10, 100 or 1,000 to whole numbers"
+    },
+    {
+     "code": "D.14",
+     "description": "Addition patterns over increasing place values"
+    },
+    {
+     "code": "D.15",
+     "description": "Add two numbers with up to four digits"
+    },
+    {
+     "code": "D.16",
+     "description": "Addition input/output tables - up to four digits"
+    },
+    {
+     "code": "D.17",
+     "description": "Add two numbers with up to four digits - word problems"
+    },
+    {
+     "code": "D.18",
+     "description": "Complete the addition sentence - up to four digits"
+    },
+    {
+     "code": "D.19",
+     "description": "Balance addition equations - up to four digits"
+    },
+    {
+     "code": "D.20",
+     "description": "Add three or more numbers with up to four digits"
+    },
+    {
+     "code": "D.21",
+     "description": "Add three or more numbers with up to four digits - word problems"
+    },
+    {
+     "code": "D.22",
+     "description": "Addition up to four digits: fill in the missing digits"
+    }
+   ]
+  },
+  {
+   "code": "E",
+   "name": "Subtraction",
+   "skills": [
+    {
+     "code": "E.1",
+     "description": "Subtract a two-digit number from a three-digit number"
+    },
+    {
+     "code": "E.2",
+     "description": "Subtract a two-digit number from a three-digit number - word problems"
+    },
+    {
+     "code": "E.3",
+     "description": "Complete the subtraction sentence - three-digit numbers minus two-digit numbers"
+    },
+    {
+     "code": "E.4",
+     "description": "Balance subtraction equations - three-digit numbers minus two-digit numbers"
+    },
+    {
+     "code": "E.5",
+     "description": "Subtract three-digit numbers"
+    },
+    {
+     "code": "E.6",
+     "description": "Subtraction input/output tables - up to three digits"
+    },
+    {
+     "code": "E.7",
+     "description": "Subtract three-digit numbers - word problems"
+    },
+    {
+     "code": "E.8",
+     "description": "Complete the subtraction sentence - three-digit numbers"
+    },
+    {
+     "code": "E.9",
+     "description": "Balance subtraction equations - three-digit numbers"
+    },
+    {
+     "code": "E.10",
+     "description": "Subtract multiples of 10, 100 or 1,000 from whole numbers"
+    },
+    {
+     "code": "E.11",
+     "description": "Subtraction patterns over increasing place values"
+    },
+    {
+     "code": "E.12",
+     "description": "Subtract numbers with up to four digits"
+    },
+    {
+     "code": "E.13",
+     "description": "Subtraction input/output tables - up to four digits"
+    },
+    {
+     "code": "E.14",
+     "description": "Subtract numbers with up to four digits - word problems"
+    },
+    {
+     "code": "E.15",
+     "description": "Complete the subtraction sentence - up to four digits"
+    },
+    {
+     "code": "E.16",
+     "description": "Subtract across zeros"
+    },
+    {
+     "code": "E.17",
+     "description": "Subtraction up to four digits: fill in the missing digits"
+    }
+   ]
+  },
+  {
+   "code": "F",
+   "name": "Mixed operations: addition and subtraction",
+   "skills": [
+    {
+     "code": "F.1",
+     "description": "Input/output tables: add and subtract 1,000"
+    },
+    {
+     "code": "F.2",
+     "description": "Add and subtract data from tables"
+    },
+    {
+     "code": "F.3",
+     "description": "Addition and subtraction word problems"
+    },
+    {
+     "code": "F.4",
+     "description": "Two-step addition and subtraction word problems"
+    }
+   ]
+  },
+  {
+   "code": "G",
+   "name": "Understand multiplication",
+   "skills": [
+    {
+     "code": "G.1",
+     "description": "Count equal groups"
+    },
+    {
+     "code": "G.2",
+     "description": "Identify multiplication expressions for equal groups"
+    },
+    {
+     "code": "G.3",
+     "description": "Write multiplication sentences for equal groups"
+    },
+    {
+     "code": "G.4",
+     "description": "Relate addition and multiplication for equal groups"
+    },
+    {
+     "code": "G.5",
+     "description": "Identify multiplication expressions for arrays"
+    },
+    {
+     "code": "G.6",
+     "description": "Write multiplication sentences for arrays"
+    },
+    {
+     "code": "G.7",
+     "description": "Make arrays to model multiplication"
+    },
+    {
+     "code": "G.8",
+     "description": "Write multiplication sentences for number lines"
+    },
+    {
+     "code": "G.9",
+     "description": "Relate addition and multiplication"
+    }
+   ]
+  },
+  {
+   "code": "H",
+   "name": "Multiplication skill builders",
+   "skills": [
+    {
+     "code": "H.1",
+     "description": "Multiply by 0"
+    },
+    {
+     "code": "H.2",
+     "description": "Multiply by 1"
+    },
+    {
+     "code": "H.3",
+     "description": "Multiply by 2"
+    },
+    {
+     "code": "H.4",
+     "description": "Multiply by 3"
+    },
+    {
+     "code": "H.5",
+     "description": "Multiply by 4"
+    },
+    {
+     "code": "H.6",
+     "description": "Multiply by 5"
+    },
+    {
+     "code": "H.7",
+     "description": "Multiply by 6"
+    },
+    {
+     "code": "H.8",
+     "description": "Multiply by 7"
+    },
+    {
+     "code": "H.9",
+     "description": "Multiply by 8"
+    },
+    {
+     "code": "H.10",
+     "description": "Multiply by 9"
+    },
+    {
+     "code": "H.11",
+     "description": "Multiply by 10"
+    },
+    {
+     "code": "H.12",
+     "description": "Multiply by 11"
+    },
+    {
+     "code": "H.13",
+     "description": "Multiply by 12"
+    }
+   ]
+  },
+  {
+   "code": "I",
+   "name": "Multiplication fluency up to 10",
+   "skills": [
+    {
+     "code": "I.1",
+     "description": "Multiplication facts for 2, 5, 10"
+    },
+    {
+     "code": "I.2",
+     "description": "Multiplication facts for 2, 5, 10: true or false?"
+    },
+    {
+     "code": "I.3",
+     "description": "Multiplication facts for 2, 5, 10: sorting"
+    },
+    {
+     "code": "I.4",
+     "description": "Multiplication facts for 3, 4, 8"
+    },
+    {
+     "code": "I.5",
+     "description": "Multiplication facts for 3, 4, 8: true or false?"
+    },
+    {
+     "code": "I.6",
+     "description": "Multiplication facts for 3, 4, 8: sorting"
+    },
+    {
+     "code": "I.7",
+     "description": "Multiplication facts for 2, 3, 4, 5, 8, 10: find the missing factor"
+    },
+    {
+     "code": "I.8",
+     "description": "Multiplication facts for 6, 7, 9"
+    },
+    {
+     "code": "I.9",
+     "description": "Multiplication facts for 6, 7, 9: true or false?"
+    },
+    {
+     "code": "I.10",
+     "description": "Multiplication facts for 6, 7, 9: sorting"
+    },
+    {
+     "code": "I.11",
+     "description": "Multiplication facts for 6, 7, 9: find the missing factor"
+    },
+    {
+     "code": "I.12",
+     "description": "Multiplication facts up to 10"
+    },
+    {
+     "code": "I.13",
+     "description": "Multiplication facts up to 10: true or false?"
+    },
+    {
+     "code": "I.14",
+     "description": "Multiplication facts up to 10: sorting"
+    },
+    {
+     "code": "I.15",
+     "description": "Multiplication facts up to 10: find the missing factor"
+    },
+    {
+     "code": "I.16",
+     "description": "Multiplication facts up to 10: select the missing factors"
+    },
+    {
+     "code": "I.17",
+     "description": "Multiplication sentences up to 10: true or false?"
+    },
+    {
+     "code": "I.18",
+     "description": "Squares up to 10 x 10"
+    }
+   ]
+  },
+  {
+   "code": "J",
+   "name": "Multiplication fluency up to 12",
+   "skills": [
+    {
+     "code": "J.1",
+     "description": "Multiplication facts to 12"
+    },
+    {
+     "code": "J.2",
+     "description": "Multiplication facts up to 12: true or false?"
+    },
+    {
+     "code": "J.3",
+     "description": "Multiplication facts up to 12: sorting"
+    },
+    {
+     "code": "J.4",
+     "description": "Multiplication facts up to 12: find the missing factor"
+    },
+    {
+     "code": "J.5",
+     "description": "Multiplication facts up to 12: select the missing factors"
+    },
+    {
+     "code": "J.6",
+     "description": "Multiplication sentences up to 12: true or false?"
+    }
+   ]
+  },
+  {
+   "code": "K",
+   "name": "Factors and multiples",
+   "skills": [
+    {
+     "code": "K.1",
+     "description": "Divisibility rules for 2, 5 and 10"
+    },
+    {
+     "code": "K.2",
+     "description": "Choose the multiples of 2, 3, 4, 5, 8, 10"
+    },
+    {
+     "code": "K.3",
+     "description": "Choose the multiples of 6, 7, 9"
+    },
+    {
+     "code": "K.4",
+     "description": "Choose the multiples of a given number up to 10"
+    },
+    {
+     "code": "K.5",
+     "description": "Identify factors"
+    },
+    {
+     "code": "K.6",
+     "description": "Complete the factor pairs of a number"
+    }
+   ]
+  },
+  {
+   "code": "L",
+   "name": "Multiplication",
+   "skills": [
+    {
+     "code": "L.1",
+     "description": "Multiplication word problems"
+    },
+    {
+     "code": "L.2",
+     "description": "Multiplication word problems: find the missing factor"
+    },
+    {
+     "code": "L.3",
+     "description": "Compare numbers using multiplication"
+    },
+    {
+     "code": "L.4",
+     "description": "Compare numbers using multiplication: word problems"
+    },
+    {
+     "code": "L.5",
+     "description": "Multiply a one-digit number by 10 or 100"
+    },
+    {
+     "code": "L.6",
+     "description": "Multiply by a multiple of 10 using place value"
+    },
+    {
+     "code": "L.7",
+     "description": "Multiply by a multiple of 10"
+    },
+    {
+     "code": "L.8",
+     "description": "Multiply by multiples of 10 and 100"
+    },
+    {
+     "code": "L.9",
+     "description": "Multiplication patterns over increasing place values"
+    },
+    {
+     "code": "L.10",
+     "description": "Multiplication input/output tables"
+    },
+    {
+     "code": "L.11",
+     "description": "Multiplication input/output tables: find the rule"
+    },
+    {
+     "code": "L.12",
+     "description": "Multiply one-digit numbers by two-digit numbers using area models I"
+    },
+    {
+     "code": "L.13",
+     "description": "Multiply one-digit numbers by two-digit numbers using area models II"
+    },
+    {
+     "code": "L.14",
+     "description": "Multiply one-digit numbers by two-digit numbers"
+    },
+    {
+     "code": "L.15",
+     "description": "Multiply one-digit numbers by two-digit numbers: word problems"
+    },
+    {
+     "code": "L.16",
+     "description": "Multiply one-digit numbers by three-digit numbers using area models I"
+    },
+    {
+     "code": "L.17",
+     "description": "Multiply one-digit numbers by three-digit numbers using area models II"
+    },
+    {
+     "code": "L.18",
+     "description": "Multiply one-digit numbers by three-digit numbers"
+    },
+    {
+     "code": "L.19",
+     "description": "Multiply one-digit numbers by three-digit numbers: word problems"
+    },
+    {
+     "code": "L.20",
+     "description": "Multiply three or more numbers"
+    },
+    {
+     "code": "L.21",
+     "description": "Multiply three or more numbers: word problems"
+    }
+   ]
+  },
+  {
+   "code": "M",
+   "name": "Understand division",
+   "skills": [
+    {
+     "code": "M.1",
+     "description": "Divide by counting equal groups"
+    },
+    {
+     "code": "M.2",
+     "description": "Write division sentences for equal groups"
+    },
+    {
+     "code": "M.3",
+     "description": "Relate multiplication and division for equal groups"
+    },
+    {
+     "code": "M.4",
+     "description": "Write division sentences for arrays"
+    },
+    {
+     "code": "M.5",
+     "description": "Relate multiplication and division for arrays"
+    },
+    {
+     "code": "M.6",
+     "description": "Relate multiplication and division"
+    }
+   ]
+  },
+  {
+   "code": "N",
+   "name": "Division skill builders",
+   "skills": [
+    {
+     "code": "N.1",
+     "description": "Divide by 1"
+    },
+    {
+     "code": "N.2",
+     "description": "Divide by 2"
+    },
+    {
+     "code": "N.3",
+     "description": "Divide by 3"
+    },
+    {
+     "code": "N.4",
+     "description": "Divide by 4"
+    },
+    {
+     "code": "N.5",
+     "description": "Divide by 5"
+    },
+    {
+     "code": "N.6",
+     "description": "Divide by 6"
+    },
+    {
+     "code": "N.7",
+     "description": "Divide by 7"
+    },
+    {
+     "code": "N.8",
+     "description": "Divide by 8"
+    },
+    {
+     "code": "N.9",
+     "description": "Divide by 9"
+    },
+    {
+     "code": "N.10",
+     "description": "Divide by 10"
+    },
+    {
+     "code": "N.11",
+     "description": "Divide by 11"
+    },
+    {
+     "code": "N.12",
+     "description": "Divide by 12"
+    }
+   ]
+  },
+  {
+   "code": "O",
+   "name": "Division fluency up to 10",
+   "skills": [
+    {
+     "code": "O.1",
+     "description": "Division facts for 2, 5, 10"
+    },
+    {
+     "code": "O.2",
+     "description": "Division facts for 2, 5, 10: true or false?"
+    },
+    {
+     "code": "O.3",
+     "description": "Division facts for 2, 5, 10: sorting"
+    },
+    {
+     "code": "O.4",
+     "description": "Division facts for 3, 4, 8"
+    },
+    {
+     "code": "O.5",
+     "description": "Division facts for 3, 4, 8: true or false?"
+    },
+    {
+     "code": "O.6",
+     "description": "Division facts for 6, 7, 9"
+    },
+    {
+     "code": "O.7",
+     "description": "Division facts for 6, 7, 9: true or false?"
+    },
+    {
+     "code": "O.8",
+     "description": "Division facts up to 10"
+    },
+    {
+     "code": "O.9",
+     "description": "Division facts up to 10: true or false?"
+    },
+    {
+     "code": "O.10",
+     "description": "Division facts up to 10: sorting"
+    },
+    {
+     "code": "O.11",
+     "description": "Division facts up to 10: find the missing number"
+    },
+    {
+     "code": "O.12",
+     "description": "Division facts up to 10: select the missing numbers"
+    },
+    {
+     "code": "O.13",
+     "description": "Division sentences up to 10: true or false?"
+    }
+   ]
+  },
+  {
+   "code": "P",
+   "name": "Division fluency up to 12",
+   "skills": [
+    {
+     "code": "P.1",
+     "description": "Division facts up to 12"
+    },
+    {
+     "code": "P.2",
+     "description": "Division facts up to 12: true or false?"
+    },
+    {
+     "code": "P.3",
+     "description": "Division facts up to 12: sorting"
+    },
+    {
+     "code": "P.4",
+     "description": "Division facts up to 12: find the missing number"
+    },
+    {
+     "code": "P.5",
+     "description": "Division facts up to 12: select the missing numbers"
+    },
+    {
+     "code": "P.6",
+     "description": "Division sentences up to 12: true or false?"
+    }
+   ]
+  },
+  {
+   "code": "Q",
+   "name": "Division",
+   "skills": [
+    {
+     "code": "Q.1",
+     "description": "Division input/output tables"
+    },
+    {
+     "code": "Q.2",
+     "description": "Division word problems"
+    },
+    {
+     "code": "Q.3",
+     "description": "Division patterns over increasing place values"
+    },
+    {
+     "code": "Q.4",
+     "description": "Divide numbers ending in zeros"
+    },
+    {
+     "code": "Q.5",
+     "description": "Divide two-digit numbers by one-digit numbers: complete the table"
+    },
+    {
+     "code": "Q.6",
+     "description": "Divide two-digit numbers by one-digit numbers using area models"
+    },
+    {
+     "code": "Q.7",
+     "description": "Divide two-digit numbers by one-digit numbers"
+    },
+    {
+     "code": "Q.8",
+     "description": "Divide two-digit numbers by one-digit numbers: word problems"
+    },
+    {
+     "code": "Q.9",
+     "description": "Divide three-digit numbers by one-digit numbers using area models"
+    },
+    {
+     "code": "Q.10",
+     "description": "Divide using repeated subtraction"
+    },
+    {
+     "code": "Q.11",
+     "description": "Divide using partial quotients"
+    },
+    {
+     "code": "Q.12",
+     "description": "Divide three-digit numbers by one-digit numbers"
+    },
+    {
+     "code": "Q.13",
+     "description": "Divide three-digit numbers by one-digit numbers: word problems"
+    }
+   ]
+  },
+  {
+   "code": "R",
+   "name": "Mixed operations: multiplication and division",
+   "skills": [
+    {
+     "code": "R.1",
+     "description": "Multiplication and division facts up to 5: true or false?"
+    },
+    {
+     "code": "R.2",
+     "description": "Multiplication and division facts up to 10"
+    },
+    {
+     "code": "R.3",
+     "description": "Multiplication and division facts up to 10: true or false?"
+    },
+    {
+     "code": "R.4",
+     "description": "Multiplication and division facts up to 10: find the missing number"
+    },
+    {
+     "code": "R.5",
+     "description": "Multiplication and division facts up to 10: select the missing numbers"
+    },
+    {
+     "code": "R.6",
+     "description": "Multiplication and division facts up to 12"
+    },
+    {
+     "code": "R.7",
+     "description": "Multiplication and division facts up to 12: true or false?"
+    },
+    {
+     "code": "R.8",
+     "description": "Multiplication and division sentences up to 12: true or false?"
+    },
+    {
+     "code": "R.9",
+     "description": "Multiplication and division word problems"
+    },
+    {
+     "code": "R.10",
+     "description": "Multiplication and division: real-world patterns"
+    },
+    {
+     "code": "R.11",
+     "description": "Two-step multiplication and division word problems"
+    }
+   ]
+  },
+  {
+   "code": "S",
+   "name": "Mixed operations",
+   "skills": [
+    {
+     "code": "S.1",
+     "description": "Addition, subtraction, multiplication and division facts"
+    },
+    {
+     "code": "S.2",
+     "description": "Complete the addition, subtraction, multiplication or division sentence"
+    },
+    {
+     "code": "S.3",
+     "description": "Write numerical expressions"
+    },
+    {
+     "code": "S.4",
+     "description": "Add, subtract and multiply"
+    },
+    {
+     "code": "S.5",
+     "description": "Add, subtract, multiply and divide"
+    },
+    {
+     "code": "S.6",
+     "description": "Input/output tables"
+    },
+    {
+     "code": "S.7",
+     "description": "Input/output tables: find the rule"
+    },
+    {
+     "code": "S.8",
+     "description": "Comparison word problems: addition or multiplication?"
+    },
+    {
+     "code": "S.9",
+     "description": "Addition, subtraction and multiplication word problems"
+    },
+    {
+     "code": "S.10",
+     "description": "Addition, subtraction, multiplication and division word problems"
+    },
+    {
+     "code": "S.11",
+     "description": "Two-step mixed operation word problems"
+    },
+    {
+     "code": "S.12",
+     "description": "Numerical operations: find the missing sign"
+    }
+   ]
+  },
+  {
+   "code": "T",
+   "name": "Properties",
+   "skills": [
+    {
+     "code": "T.1",
+     "description": "Addition, subtraction, multiplication and division terms"
+    },
+    {
+     "code": "T.2",
+     "description": "Understanding brackets"
+    },
+    {
+     "code": "T.3",
+     "description": "Properties of addition"
+    },
+    {
+     "code": "T.4",
+     "description": "Complete the equation using properties of addition"
+    },
+    {
+     "code": "T.5",
+     "description": "Add using properties"
+    },
+    {
+     "code": "T.6",
+     "description": "Properties of multiplication"
+    },
+    {
+     "code": "T.7",
+     "description": "Distributive property: find the missing factor"
+    },
+    {
+     "code": "T.8",
+     "description": "Multiply using the distributive property"
+    },
+    {
+     "code": "T.9",
+     "description": "Solve using properties of multiplication"
+    },
+    {
+     "code": "T.10",
+     "description": "Multiply by 0 or 1: complete the sentence"
+    }
+   ]
+  },
+  {
+   "code": "U",
+   "name": "Integers",
+   "skills": [
+    {
+     "code": "U.1",
+     "description": "Understanding integers"
+    },
+    {
+     "code": "U.2",
+     "description": "Count on a number line with negative numbers"
+    },
+    {
+     "code": "U.3",
+     "description": "Graph integers on number lines"
+    },
+    {
+     "code": "U.4",
+     "description": "Compare and order integers using a number line"
+    }
+   ]
+  },
+  {
+   "code": "V",
+   "name": "Equations and variables",
+   "skills": [
+    {
+     "code": "V.1",
+     "description": "Identify equations"
+    },
+    {
+     "code": "V.2",
+     "description": "Solve for the variable: addition and subtraction"
+    },
+    {
+     "code": "V.3",
+     "description": "Solve for the variable: multiplication and division"
+    },
+    {
+     "code": "V.4",
+     "description": "Solve for the variable: addition, subtraction, multiplication and division"
+    },
+    {
+     "code": "V.5",
+     "description": "Write variable expressions"
+    },
+    {
+     "code": "V.6",
+     "description": "Write variable expressions from word problems"
+    },
+    {
+     "code": "V.7",
+     "description": "Write variable equations to represent word problems"
+    }
+   ]
+  },
+  {
+   "code": "W",
+   "name": "Rounding",
+   "skills": [
+    {
+     "code": "W.1",
+     "description": "Round to the nearest ten or hundred using a number line"
+    },
+    {
+     "code": "W.2",
+     "description": "Round to the nearest ten or hundred"
+    },
+    {
+     "code": "W.3",
+     "description": "Round to the nearest ten, hundred or thousand"
+    },
+    {
+     "code": "W.4",
+     "description": "Round money amounts"
+    },
+    {
+     "code": "W.5",
+     "description": "Rounding puzzles"
+    }
+   ]
+  },
+  {
+   "code": "X",
+   "name": "Estimation",
+   "skills": [
+    {
+     "code": "X.1",
+     "description": "Solve inequalities using estimation"
+    },
+    {
+     "code": "X.2",
+     "description": "Estimate sums: numbers up to three digits"
+    },
+    {
+     "code": "X.3",
+     "description": "Estimate sums: numbers up to four digits"
+    },
+    {
+     "code": "X.4",
+     "description": "Estimate sums: word problems"
+    },
+    {
+     "code": "X.5",
+     "description": "Estimate differences: numbers up to three digits"
+    },
+    {
+     "code": "X.6",
+     "description": "Estimate differences: numbers up to four digits"
+    },
+    {
+     "code": "X.7",
+     "description": "Estimate differences: word problems"
+    },
+    {
+     "code": "X.8",
+     "description": "Estimate products: multiply by one-digit numbers"
+    },
+    {
+     "code": "X.9",
+     "description": "Estimate products: multiply by two-digit numbers"
+    },
+    {
+     "code": "X.10",
+     "description": "Estimate products: word problems"
+    },
+    {
+     "code": "X.11",
+     "description": "Estimate quotients"
+    },
+    {
+     "code": "X.12",
+     "description": "Estimate quotients: word problems"
+    },
+    {
+     "code": "X.13",
+     "description": "Estimate sums, differences, products and quotients: word problems"
+    }
+   ]
+  },
+  {
+   "code": "Y",
+   "name": "Logical reasoning",
+   "skills": [
+    {
+     "code": "Y.1",
+     "description": "Guess the number"
+    },
+    {
+     "code": "Y.2",
+     "description": "Largest/smallest number possible"
+    },
+    {
+     "code": "Y.3",
+     "description": "Find the order"
+    },
+    {
+     "code": "Y.4",
+     "description": "Age puzzles"
+    },
+    {
+     "code": "Y.5",
+     "description": "Find two numbers based on sum and difference"
+    },
+    {
+     "code": "Y.6",
+     "description": "Find two numbers based on sum, difference, product and quotient"
+    }
+   ]
+  },
+  {
+   "code": "Z",
+   "name": "Patterns",
+   "skills": [
+    {
+     "code": "Z.1",
+     "description": "Repeating patterns"
+    },
+    {
+     "code": "Z.2",
+     "description": "Growing patterns"
+    },
+    {
+     "code": "Z.3",
+     "description": "Find the next shape in a pattern"
+    },
+    {
+     "code": "Z.4",
+     "description": "Complete a repeating pattern"
+    },
+    {
+     "code": "Z.5",
+     "description": "Make a repeating pattern"
+    },
+    {
+     "code": "Z.6",
+     "description": "Find the next row in a growing pattern"
+    }
+   ]
+  },
+  {
+   "code": "AA",
+   "name": "Understand fractions",
+   "skills": [
+    {
+     "code": "AA.1",
+     "description": "Understand fractions: fraction bars"
+    },
+    {
+     "code": "AA.2",
+     "description": "Understand fractions: area models"
+    },
+    {
+     "code": "AA.3",
+     "description": "Show fractions: fraction bars"
+    },
+    {
+     "code": "AA.4",
+     "description": "Show fractions: area models"
+    },
+    {
+     "code": "AA.5",
+     "description": "Match fractions to models"
+    },
+    {
+     "code": "AA.6",
+     "description": "Fractions of a group"
+    }
+   ]
+  },
+  {
+   "code": "BB",
+   "name": "Fractions on number lines",
+   "skills": [
+    {
+     "code": "BB.1",
+     "description": "Fractions of number lines: unit fractions"
+    },
+    {
+     "code": "BB.2",
+     "description": "Fractions of number lines"
+    },
+    {
+     "code": "BB.3",
+     "description": "Identify fractions on number lines"
+    },
+    {
+     "code": "BB.4",
+     "description": "Graph unit fractions on number lines"
+    },
+    {
+     "code": "BB.5",
+     "description": "Graph fractions on number lines"
+    }
+   ]
+  },
+  {
+   "code": "CC",
+   "name": "Fraction word problems",
+   "skills": [
+    {
+     "code": "CC.1",
+     "description": "Unit fractions: modelling word problems"
+    },
+    {
+     "code": "CC.2",
+     "description": "Unit fractions: word problems"
+    },
+    {
+     "code": "CC.3",
+     "description": "Fractions of a whole: modelling word problems"
+    },
+    {
+     "code": "CC.4",
+     "description": "Fractions of a whole: word problems"
+    },
+    {
+     "code": "CC.5",
+     "description": "Fractions of a group: word problems"
+    }
+   ]
+  },
+  {
+   "code": "DD",
+   "name": "Equivalent fractions",
+   "skills": [
+    {
+     "code": "DD.1",
+     "description": "Find equivalent fractions using area models: two models"
+    },
+    {
+     "code": "DD.2",
+     "description": "Find equivalent fractions using area models: one model"
+    },
+    {
+     "code": "DD.3",
+     "description": "Identify equivalent fractions on number lines"
+    },
+    {
+     "code": "DD.4",
+     "description": "Find equivalent fractions using number lines"
+    },
+    {
+     "code": "DD.5",
+     "description": "Graph equivalent fractions on number lines"
+    },
+    {
+     "code": "DD.6",
+     "description": "Select equivalent fractions"
+    },
+    {
+     "code": "DD.7",
+     "description": "Find equivalent fractions"
+    },
+    {
+     "code": "DD.8",
+     "description": "Graph fractions equivalent to 1 on number lines"
+    },
+    {
+     "code": "DD.9",
+     "description": "Write fractions in lowest terms"
+    }
+   ]
+  },
+  {
+   "code": "EE",
+   "name": "Compare and order fractions",
+   "skills": [
+    {
+     "code": "EE.1",
+     "description": "Graph and compare fractions with the same denominator on number lines"
+    },
+    {
+     "code": "EE.2",
+     "description": "Graph and compare fractions with the same numerator on number lines"
+    },
+    {
+     "code": "EE.3",
+     "description": "Graph and compare fractions on number lines"
+    },
+    {
+     "code": "EE.4",
+     "description": "Compare fractions"
+    },
+    {
+     "code": "EE.5",
+     "description": "Put fractions in order"
+    }
+   ]
+  },
+  {
+   "code": "FF",
+   "name": "Operations with fractions",
+   "skills": [
+    {
+     "code": "FF.1",
+     "description": "Decompose fractions into unit fractions"
+    },
+    {
+     "code": "FF.2",
+     "description": "Decompose fractions"
+    },
+    {
+     "code": "FF.3",
+     "description": "Add fractions with the same denominator using number lines"
+    },
+    {
+     "code": "FF.4",
+     "description": "Add fractions with the same denominator"
+    },
+    {
+     "code": "FF.5",
+     "description": "Subtract fractions with the same denominator using number lines"
+    },
+    {
+     "code": "FF.6",
+     "description": "Subtract fractions with the same denominator"
+    },
+    {
+     "code": "FF.7",
+     "description": "Add and subtract fractions with the same denominator using number lines"
+    },
+    {
+     "code": "FF.8",
+     "description": "Add and subtract fractions with the same denominator"
+    },
+    {
+     "code": "FF.9",
+     "description": "Compare sums and differences of fractions with the same denominator"
+    },
+    {
+     "code": "FF.10",
+     "description": "Add and subtract fractions with the same denominator: word problems"
+    },
+    {
+     "code": "FF.11",
+     "description": "Add three or more fractions with the same denominator"
+    },
+    {
+     "code": "FF.12",
+     "description": "Fractions of a number - unit fractions"
+    },
+    {
+     "code": "FF.13",
+     "description": "Fractions of a number - unit fractions: word problems"
+    },
+    {
+     "code": "FF.14",
+     "description": "Fractions of a number"
+    },
+    {
+     "code": "FF.15",
+     "description": "Fractions of a number: word problems"
+    }
+   ]
+  },
+  {
+   "code": "GG",
+   "name": "Decimals",
+   "skills": [
+    {
+     "code": "GG.1",
+     "description": "Model decimals and fractions"
+    },
+    {
+     "code": "GG.2",
+     "description": "What decimal number is illustrated?"
+    },
+    {
+     "code": "GG.3",
+     "description": "Convert fractions to decimals"
+    },
+    {
+     "code": "GG.4",
+     "description": "Convert decimals to fractions"
+    },
+    {
+     "code": "GG.5",
+     "description": "Understanding decimals expressed in words"
+    },
+    {
+     "code": "GG.6",
+     "description": "Round decimals to the nearest whole number"
+    },
+    {
+     "code": "GG.7",
+     "description": "Name the place value of a given digit"
+    },
+    {
+     "code": "GG.8",
+     "description": "Name the digit in a given place value"
+    },
+    {
+     "code": "GG.9",
+     "description": "One-tenth or one-hundredth more or less"
+    },
+    {
+     "code": "GG.10",
+     "description": "Number sequences involving decimals"
+    },
+    {
+     "code": "GG.11",
+     "description": "Graph decimals on number lines"
+    },
+    {
+     "code": "GG.12",
+     "description": "Decimal number lines"
+    },
+    {
+     "code": "GG.13",
+     "description": "Graph fractions as decimals on number lines"
+    }
+   ]
+  },
+  {
+   "code": "HH",
+   "name": "Compare and order decimals",
+   "skills": [
+    {
+     "code": "HH.1",
+     "description": "Compare decimals using models"
+    },
+    {
+     "code": "HH.2",
+     "description": "Compare decimals on number lines"
+    },
+    {
+     "code": "HH.3",
+     "description": "Inequalities with decimals"
+    },
+    {
+     "code": "HH.4",
+     "description": "Which decimals are greater/less?"
+    },
+    {
+     "code": "HH.5",
+     "description": "Which decimal comparisons are true?"
+    },
+    {
+     "code": "HH.6",
+     "description": "Put decimal numbers in order"
+    }
+   ]
+  },
+  {
+   "code": "II",
+   "name": "Operations with decimals",
+   "skills": [
+    {
+     "code": "II.1",
+     "description": "Add decimal numbers using blocks"
+    },
+    {
+     "code": "II.2",
+     "description": "Add decimal numbers"
+    },
+    {
+     "code": "II.3",
+     "description": "Subtract decimal numbers"
+    },
+    {
+     "code": "II.4",
+     "description": "Add and subtract decimal numbers"
+    },
+    {
+     "code": "II.5",
+     "description": "Add and subtract decimals: word problems"
+    },
+    {
+     "code": "II.6",
+     "description": "Add three or more decimal numbers"
+    },
+    {
+     "code": "II.7",
+     "description": "Add three or more decimal numbers: word problems"
+    },
+    {
+     "code": "II.8",
+     "description": "Estimate sums and differences of decimals"
+    },
+    {
+     "code": "II.9",
+     "description": "Multiply a decimal by 10 or 100"
+    },
+    {
+     "code": "II.10",
+     "description": "Divide a whole number by 10 or 100: decimal quotients"
+    },
+    {
+     "code": "II.11",
+     "description": "Divide a decimal by 10 or 100"
+    }
+   ]
+  },
+  {
+   "code": "JJ",
+   "name": "Money",
+   "skills": [
+    {
+     "code": "JJ.1",
+     "description": "Count coins and notes - up to £5 note"
+    },
+    {
+     "code": "JJ.2",
+     "description": "Purchases - do you have enough money - up to £10"
+    },
+    {
+     "code": "JJ.3",
+     "description": "Which picture shows more?"
+    },
+    {
+     "code": "JJ.4",
+     "description": "Making change"
+    },
+    {
+     "code": "JJ.5",
+     "description": "Inequalities with money"
+    },
+    {
+     "code": "JJ.6",
+     "description": "Put money amounts in order"
+    },
+    {
+     "code": "JJ.7",
+     "description": "Add and subtract money - up to £1"
+    },
+    {
+     "code": "JJ.8",
+     "description": "Add and subtract money amounts"
+    },
+    {
+     "code": "JJ.9",
+     "description": "Add and subtract money - word problems - up to £1"
+    },
+    {
+     "code": "JJ.10",
+     "description": "Add and subtract money amounts - word problems"
+    },
+    {
+     "code": "JJ.11",
+     "description": "Price lists"
+    }
+   ]
+  },
+  {
+   "code": "KK",
+   "name": "Time",
+   "skills": [
+    {
+     "code": "KK.1",
+     "description": "Match clocks and times"
+    },
+    {
+     "code": "KK.2",
+     "description": "Match analogue and digital clocks"
+    },
+    {
+     "code": "KK.3",
+     "description": "Read clocks and write times"
+    },
+    {
+     "code": "KK.4",
+     "description": "A.M. or P.M."
+    },
+    {
+     "code": "KK.5",
+     "description": "Write times"
+    },
+    {
+     "code": "KK.6",
+     "description": "Find the end time"
+    },
+    {
+     "code": "KK.7",
+     "description": "Find the elapsed time"
+    },
+    {
+     "code": "KK.8",
+     "description": "Find the elapsed time: word problems"
+    },
+    {
+     "code": "KK.9",
+     "description": "Read a calendar"
+    },
+    {
+     "code": "KK.10",
+     "description": "Relate time units"
+    },
+    {
+     "code": "KK.11",
+     "description": "Time patterns"
+    },
+    {
+     "code": "KK.12",
+     "description": "Convert between hours and fractions of hours"
+    },
+    {
+     "code": "KK.13",
+     "description": "Convert between 12-hour and 24-hour time"
+    },
+    {
+     "code": "KK.14",
+     "description": "Reading schedules - 12-hour time"
+    },
+    {
+     "code": "KK.15",
+     "description": "Reading schedules - 24-hour time"
+    },
+    {
+     "code": "KK.16",
+     "description": "Timelines"
+    }
+   ]
+  },
+  {
+   "code": "LL",
+   "name": "Coordinate plane",
+   "skills": [
+    {
+     "code": "LL.1",
+     "description": "Objects on a coordinate plane"
+    },
+    {
+     "code": "LL.2",
+     "description": "Graph points on a coordinate plane"
+    },
+    {
+     "code": "LL.3",
+     "description": "Coordinate planes as maps - find the coordinates"
+    },
+    {
+     "code": "LL.4",
+     "description": "Coordinate planes as maps - count the distance"
+    },
+    {
+     "code": "LL.5",
+     "description": "Coordinate planes as maps - find the distance or travel time"
+    },
+    {
+     "code": "LL.6",
+     "description": "Direction to starting point"
+    }
+   ]
+  },
+  {
+   "code": "MM",
+   "name": "Data and graphs",
+   "skills": [
+    {
+     "code": "MM.1",
+     "description": "Interpret tally charts"
+    },
+    {
+     "code": "MM.2",
+     "description": "Interpret frequency tables"
+    },
+    {
+     "code": "MM.3",
+     "description": "Create frequency tables"
+    },
+    {
+     "code": "MM.4",
+     "description": "Interpret bar graphs"
+    },
+    {
+     "code": "MM.5",
+     "description": "Use bar graphs to solve problems"
+    },
+    {
+     "code": "MM.6",
+     "description": "Interpret bar charts: two-step problems"
+    },
+    {
+     "code": "MM.7",
+     "description": "Create bar graphs"
+    },
+    {
+     "code": "MM.8",
+     "description": "Interpret bar graphs for grouped data"
+    },
+    {
+     "code": "MM.9",
+     "description": "Create bar graphs for grouped data"
+    },
+    {
+     "code": "MM.10",
+     "description": "Interpret line plots"
+    },
+    {
+     "code": "MM.11",
+     "description": "Create line plots"
+    },
+    {
+     "code": "MM.12",
+     "description": "Interpret pictograms"
+    },
+    {
+     "code": "MM.13",
+     "description": "Create pictograms"
+    },
+    {
+     "code": "MM.14",
+     "description": "Interpret line graphs"
+    },
+    {
+     "code": "MM.15",
+     "description": "Create line graphs"
+    },
+    {
+     "code": "MM.16",
+     "description": "Count shapes in a Venn diagram"
+    },
+    {
+     "code": "MM.17",
+     "description": "Sort shapes into a Venn diagram"
+    }
+   ]
+  },
+  {
+   "code": "NN",
+   "name": "Probability and statistics",
+   "skills": [
+    {
+     "code": "NN.1",
+     "description": "More, less and equally likely"
+    },
+    {
+     "code": "NN.2",
+     "description": "Certain, probable, unlikely and impossible"
+    },
+    {
+     "code": "NN.3",
+     "description": "Mean"
+    },
+    {
+     "code": "NN.4",
+     "description": "Range"
+    },
+    {
+     "code": "NN.5",
+     "description": "Interpret charts to find mean"
+    },
+    {
+     "code": "NN.6",
+     "description": "Interpret charts to find range"
+    }
+   ]
+  },
+  {
+   "code": "OO",
+   "name": "Metric units of measurement",
+   "skills": [
+    {
+     "code": "OO.1",
+     "description": "Read a thermometer"
+    },
+    {
+     "code": "OO.2",
+     "description": "Reasonable temperature"
+    },
+    {
+     "code": "OO.3",
+     "description": "Measure using a centimetre ruler"
+    },
+    {
+     "code": "OO.4",
+     "description": "Estimate lengths with centimetres and metres"
+    },
+    {
+     "code": "OO.5",
+     "description": "Measure with different metric units"
+    },
+    {
+     "code": "OO.6",
+     "description": "Which metric unit of length is appropriate?"
+    },
+    {
+     "code": "OO.7",
+     "description": "Compare and convert metric units of length"
+    },
+    {
+     "code": "OO.8",
+     "description": "Mixed metric units of length"
+    },
+    {
+     "code": "OO.9",
+     "description": "Which metric unit of mass is appropriate?"
+    },
+    {
+     "code": "OO.10",
+     "description": "Compare and convert metric units of mass"
+    },
+    {
+     "code": "OO.11",
+     "description": "Greater or smaller volume"
+    },
+    {
+     "code": "OO.12",
+     "description": "Measure liquid volumes - metric units"
+    },
+    {
+     "code": "OO.13",
+     "description": "Which metric unit of volume is appropriate?"
+    },
+    {
+     "code": "OO.14",
+     "description": "Compare and convert metric units of volume"
+    },
+    {
+     "code": "OO.15",
+     "description": "Conversion tables - metric units"
+    }
+   ]
+  },
+  {
+   "code": "PP",
+   "name": "Imperial units of measurement",
+   "skills": [
+    {
+     "code": "PP.1",
+     "description": "Which imperial unit of length is appropriate?"
+    },
+    {
+     "code": "PP.2",
+     "description": "Compare and convert imperial units of length"
+    },
+    {
+     "code": "PP.3",
+     "description": "Which imperial unit of weight is appropriate?"
+    },
+    {
+     "code": "PP.4",
+     "description": "Compare and convert imperial units of weight"
+    },
+    {
+     "code": "PP.5",
+     "description": "Which imperial unit of volume is appropriate?"
+    },
+    {
+     "code": "PP.6",
+     "description": "Compare and convert imperial units of volume"
+    },
+    {
+     "code": "PP.7",
+     "description": "Conversion tables - imperial units"
+    },
+    {
+     "code": "PP.8",
+     "description": "Choose the appropriate measuring tool"
+    }
+   ]
+  },
+  {
+   "code": "QQ",
+   "name": "Perimeter, area and volume",
+   "skills": [
+    {
+     "code": "QQ.1",
+     "description": "Perimeter of rectangles"
+    },
+    {
+     "code": "QQ.2",
+     "description": "Perimeter of rectilinear shapes"
+    },
+    {
+     "code": "QQ.3",
+     "description": "Perimeter of polygons"
+    },
+    {
+     "code": "QQ.4",
+     "description": "Perimeter: find the missing side length"
+    },
+    {
+     "code": "QQ.5",
+     "description": "Perimeter: word problems"
+    },
+    {
+     "code": "QQ.6",
+     "description": "Find the area of figures made of unit squares"
+    },
+    {
+     "code": "QQ.7",
+     "description": "Select figures with a given area"
+    },
+    {
+     "code": "QQ.8",
+     "description": "Select two figures with the same area"
+    },
+    {
+     "code": "QQ.9",
+     "description": "Tile a rectangle and find the area"
+    },
+    {
+     "code": "QQ.10",
+     "description": "Multiply to find the area of a rectangle made of unit squares"
+    },
+    {
+     "code": "QQ.11",
+     "description": "Create figures with a given area"
+    },
+    {
+     "code": "QQ.12",
+     "description": "Create rectangles with a given area"
+    },
+    {
+     "code": "QQ.13",
+     "description": "Find the area of rectangles and squares"
+    },
+    {
+     "code": "QQ.14",
+     "description": "Find the missing side length of a rectangle with a given area"
+    },
+    {
+     "code": "QQ.15",
+     "description": "Identify objects with volume"
+    },
+    {
+     "code": "QQ.16",
+     "description": "Volume of cuboids made of unit cubes"
+    }
+   ]
+  },
+  {
+   "code": "RR",
+   "name": "Lines and angles",
+   "skills": [
+    {
+     "code": "RR.1",
+     "description": "Lines, line segments and rays"
+    },
+    {
+     "code": "RR.2",
+     "description": "Angles greater than, less than or equal to a right angle"
+    },
+    {
+     "code": "RR.3",
+     "description": "Acute, right and obtuse angles"
+    },
+    {
+     "code": "RR.4",
+     "description": "Acute, right and obtuse angles - with a protractor"
+    },
+    {
+     "code": "RR.5",
+     "description": "Angles of 90, 180, 270 and 360 degrees"
+    },
+    {
+     "code": "RR.6",
+     "description": "Parallel and perpendicular lines"
+    }
+   ]
+  },
+  {
+   "code": "SS",
+   "name": "Two-dimensional figures",
+   "skills": [
+    {
+     "code": "SS.1",
+     "description": "Identify polygons"
+    },
+    {
+     "code": "SS.2",
+     "description": "Count and compare sides and vertices"
+    },
+    {
+     "code": "SS.3",
+     "description": "Draw polygons"
+    },
+    {
+     "code": "SS.4",
+     "description": "Is it a polygon?"
+    },
+    {
+     "code": "SS.5",
+     "description": "Regular and irregular polygons"
+    },
+    {
+     "code": "SS.6",
+     "description": "Plot points to draw a polygon"
+    }
+   ]
+  },
+  {
+   "code": "TT",
+   "name": "Triangles and quadrilaterals",
+   "skills": [
+    {
+     "code": "TT.1",
+     "description": "Acute, obtuse and right triangles"
+    },
+    {
+     "code": "TT.2",
+     "description": "Scalene, isosceles and equilateral triangles"
+    },
+    {
+     "code": "TT.3",
+     "description": "Parallel sides in quadrilaterals"
+    },
+    {
+     "code": "TT.4",
+     "description": "Identify parallelograms"
+    },
+    {
+     "code": "TT.5",
+     "description": "Identify trapeziums"
+    },
+    {
+     "code": "TT.6",
+     "description": "Identify rectangles"
+    },
+    {
+     "code": "TT.7",
+     "description": "Identify rhombuses"
+    },
+    {
+     "code": "TT.8",
+     "description": "Classify quadrilaterals"
+    },
+    {
+     "code": "TT.9",
+     "description": "Draw quadrilaterals"
+    }
+   ]
+  },
+  {
+   "code": "UU",
+   "name": "Symmetry and transformations",
+   "skills": [
+    {
+     "code": "UU.1",
+     "description": "Symmetry"
+    },
+    {
+     "code": "UU.2",
+     "description": "Identify lines of symmetry"
+    },
+    {
+     "code": "UU.3",
+     "description": "Draw lines of symmetry"
+    },
+    {
+     "code": "UU.4",
+     "description": "Count lines of symmetry"
+    },
+    {
+     "code": "UU.5",
+     "description": "Reflection, rotation and translation"
+    },
+    {
+     "code": "UU.6",
+     "description": "Translations"
+    },
+    {
+     "code": "UU.7",
+     "description": "Reflections"
+    }
+   ]
+  },
+  {
+   "code": "VV",
+   "name": "Three-dimensional figures",
+   "skills": [
+    {
+     "code": "VV.1",
+     "description": "Identify three-dimensional shapes"
+    },
+    {
+     "code": "VV.2",
+     "description": "Count vertices, edges and faces"
+    },
+    {
+     "code": "VV.3",
+     "description": "Identify faces of three-dimensional shapes"
+    },
+    {
+     "code": "VV.4",
+     "description": "Three-dimensional shapes in the real world I"
+    },
+    {
+     "code": "VV.5",
+     "description": "Three-dimensional shapes in the real world II"
+    }
+   ]
+  }
+ ]
+}

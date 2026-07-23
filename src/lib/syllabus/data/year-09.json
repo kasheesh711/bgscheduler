@@ -1,0 +1,1591 @@
+{
+ "year": 9,
+ "topics": [
+  {
+   "code": "A",
+   "name": "Number theory",
+   "skills": [
+    {
+     "code": "A.1",
+     "description": "Prime or composite"
+    },
+    {
+     "code": "A.2",
+     "description": "Prime factorisation"
+    },
+    {
+     "code": "A.3",
+     "description": "Highest common factor"
+    },
+    {
+     "code": "A.4",
+     "description": "Lowest common multiple"
+    },
+    {
+     "code": "A.5",
+     "description": "HCF and LCM: word problems"
+    },
+    {
+     "code": "A.6",
+     "description": "Classify numbers"
+    }
+   ]
+  },
+  {
+   "code": "B",
+   "name": "Integers",
+   "skills": [
+    {
+     "code": "B.1",
+     "description": "Integers on number lines"
+    },
+    {
+     "code": "B.2",
+     "description": "Graph integers on horizontal and vertical number lines"
+    },
+    {
+     "code": "B.3",
+     "description": "Compare and order integers"
+    }
+   ]
+  },
+  {
+   "code": "C",
+   "name": "Operations with integers",
+   "skills": [
+    {
+     "code": "C.1",
+     "description": "Add and subtract integers using number lines"
+    },
+    {
+     "code": "C.2",
+     "description": "Add and subtract integers using counters"
+    },
+    {
+     "code": "C.3",
+     "description": "Integer addition and subtraction rules"
+    },
+    {
+     "code": "C.4",
+     "description": "Add and subtract integers"
+    },
+    {
+     "code": "C.5",
+     "description": "Complete addition and subtraction sentences with integers"
+    },
+    {
+     "code": "C.6",
+     "description": "Add and subtract integers: word problems"
+    },
+    {
+     "code": "C.7",
+     "description": "Add and subtract three or more integers"
+    },
+    {
+     "code": "C.8",
+     "description": "Understand multiplying by a negative integer using a number line"
+    },
+    {
+     "code": "C.9",
+     "description": "Integer multiplication and division rules"
+    },
+    {
+     "code": "C.10",
+     "description": "Multiply and divide integers"
+    },
+    {
+     "code": "C.11",
+     "description": "Complete multiplication and division sentences with integers"
+    },
+    {
+     "code": "C.12",
+     "description": "Evaluate numerical expressions involving integers"
+    }
+   ]
+  },
+  {
+   "code": "D",
+   "name": "Rational numbers",
+   "skills": [
+    {
+     "code": "D.1",
+     "description": "Identify rational and irrational numbers"
+    },
+    {
+     "code": "D.2",
+     "description": "Convert between decimals and fractions or mixed numbers"
+    },
+    {
+     "code": "D.3",
+     "description": "Rational numbers on number lines"
+    },
+    {
+     "code": "D.4",
+     "description": "Compare and order rational numbers using number lines"
+    },
+    {
+     "code": "D.5",
+     "description": "Compare rational numbers"
+    },
+    {
+     "code": "D.6",
+     "description": "Put rational numbers in order"
+    },
+    {
+     "code": "D.7",
+     "description": "Compare and order rational numbers: word problems"
+    }
+   ]
+  },
+  {
+   "code": "E",
+   "name": "Operations with rational numbers",
+   "skills": [
+    {
+     "code": "E.1",
+     "description": "Add and subtract positive and negative decimals"
+    },
+    {
+     "code": "E.2",
+     "description": "Add and subtract positive and negative fractions"
+    },
+    {
+     "code": "E.3",
+     "description": "Add and subtract rational numbers"
+    },
+    {
+     "code": "E.4",
+     "description": "Add and subtract positive rational numbers: word problems"
+    },
+    {
+     "code": "E.5",
+     "description": "Apply addition and subtraction rules"
+    },
+    {
+     "code": "E.6",
+     "description": "Multiply and divide positive and negative decimals"
+    },
+    {
+     "code": "E.7",
+     "description": "Multiply and divide positive and negative fractions"
+    },
+    {
+     "code": "E.8",
+     "description": "Multiply and divide rational numbers"
+    },
+    {
+     "code": "E.9",
+     "description": "Multiply and divide positive rational numbers: word problems"
+    },
+    {
+     "code": "E.10",
+     "description": "Apply multiplication and division rules"
+    },
+    {
+     "code": "E.11",
+     "description": "Apply addition, subtraction, multiplication and division rules"
+    },
+    {
+     "code": "E.12",
+     "description": "Add, subtract, multiply and divide rational numbers"
+    },
+    {
+     "code": "E.13",
+     "description": "Evaluate numerical expressions involving rational numbers"
+    }
+   ]
+  },
+  {
+   "code": "F",
+   "name": "Indices",
+   "skills": [
+    {
+     "code": "F.1",
+     "description": "Understanding indices"
+    },
+    {
+     "code": "F.2",
+     "description": "Evaluate indices"
+    },
+    {
+     "code": "F.3",
+     "description": "Solve equations with variable indices"
+    },
+    {
+     "code": "F.4",
+     "description": "Powers of ten"
+    },
+    {
+     "code": "F.5",
+     "description": "Indices with negative bases"
+    },
+    {
+     "code": "F.6",
+     "description": "Indices with decimal and fractional bases"
+    },
+    {
+     "code": "F.7",
+     "description": "Understanding negative indices"
+    },
+    {
+     "code": "F.8",
+     "description": "Evaluate negative indices"
+    },
+    {
+     "code": "F.9",
+     "description": "Multiplication with indices"
+    },
+    {
+     "code": "F.10",
+     "description": "Division with indices"
+    },
+    {
+     "code": "F.11",
+     "description": "Multiplication and division with indices"
+    },
+    {
+     "code": "F.12",
+     "description": "Power rule"
+    },
+    {
+     "code": "F.13",
+     "description": "Evaluate expressions using properties of indices"
+    },
+    {
+     "code": "F.14",
+     "description": "Identify equivalent expressions involving indices I"
+    },
+    {
+     "code": "F.15",
+     "description": "Identify equivalent expressions involving indices II"
+    }
+   ]
+  },
+  {
+   "code": "G",
+   "name": "Roots",
+   "skills": [
+    {
+     "code": "G.1",
+     "description": "Square roots of perfect squares"
+    },
+    {
+     "code": "G.2",
+     "description": "Positive and negative square roots"
+    },
+    {
+     "code": "G.3",
+     "description": "Estimate positive and negative square roots"
+    },
+    {
+     "code": "G.4",
+     "description": "Relationship between squares and square roots"
+    },
+    {
+     "code": "G.5",
+     "description": "Solve equations involving squares and square roots"
+    },
+    {
+     "code": "G.6",
+     "description": "Cube roots of perfect cubes"
+    },
+    {
+     "code": "G.7",
+     "description": "Estimate cube roots"
+    }
+   ]
+  },
+  {
+   "code": "H",
+   "name": "Standard form",
+   "skills": [
+    {
+     "code": "H.1",
+     "description": "Convert between ordinary numbers and standard form"
+    },
+    {
+     "code": "H.2",
+     "description": "Standard form on calculators"
+    },
+    {
+     "code": "H.3",
+     "description": "Compare numbers written in standard form"
+    }
+   ]
+  },
+  {
+   "code": "I",
+   "name": "Ratios, rates and proportions",
+   "skills": [
+    {
+     "code": "I.1",
+     "description": "Identify equivalent ratios"
+    },
+    {
+     "code": "I.2",
+     "description": "Write an equivalent ratio"
+    },
+    {
+     "code": "I.3",
+     "description": "Equivalent ratios: word problems"
+    },
+    {
+     "code": "I.4",
+     "description": "Compare ratios: word problems"
+    },
+    {
+     "code": "I.5",
+     "description": "Unit rates"
+    },
+    {
+     "code": "I.6",
+     "description": "Equivalent rates"
+    },
+    {
+     "code": "I.7",
+     "description": "Calculate speed, distance or time: word problems"
+    },
+    {
+     "code": "I.8",
+     "description": "Compare rates: word problems"
+    },
+    {
+     "code": "I.9",
+     "description": "Ratios and rates: word problems"
+    },
+    {
+     "code": "I.10",
+     "description": "Scale drawings: word problems"
+    },
+    {
+     "code": "I.11",
+     "description": "Scale drawings: scale factor word problems"
+    },
+    {
+     "code": "I.12",
+     "description": "Do the ratios form a proportion?"
+    },
+    {
+     "code": "I.13",
+     "description": "Do the ratios form a proportion: word problems"
+    },
+    {
+     "code": "I.14",
+     "description": "Solve proportions"
+    },
+    {
+     "code": "I.15",
+     "description": "Solve proportions: word problems"
+    }
+   ]
+  },
+  {
+   "code": "J",
+   "name": "Direct and inverse proportions",
+   "skills": [
+    {
+     "code": "J.1",
+     "description": "Find the constant of proportionality from a table"
+    },
+    {
+     "code": "J.2",
+     "description": "Write equations for proportional relationships from tables"
+    },
+    {
+     "code": "J.3",
+     "description": "Identify proportional relationships by graphing"
+    },
+    {
+     "code": "J.4",
+     "description": "Find the constant of proportionality from a graph"
+    },
+    {
+     "code": "J.5",
+     "description": "Write equations for proportional relationships from graphs"
+    },
+    {
+     "code": "J.6",
+     "description": "Identify proportional relationships from graphs and equations"
+    },
+    {
+     "code": "J.7",
+     "description": "Identify proportional relationships from tables"
+    },
+    {
+     "code": "J.8",
+     "description": "Complete a table and graph a proportional relationship"
+    },
+    {
+     "code": "J.9",
+     "description": "Graph proportional relationships"
+    },
+    {
+     "code": "J.10",
+     "description": "Interpret graphs of proportional relationships"
+    },
+    {
+     "code": "J.11",
+     "description": "Write and solve equations for proportional relationships"
+    },
+    {
+     "code": "J.12",
+     "description": "Identify direct variation and inverse variation"
+    },
+    {
+     "code": "J.13",
+     "description": "Write inverse variation equations"
+    },
+    {
+     "code": "J.14",
+     "description": "Write and solve inverse variation equations"
+    }
+   ]
+  },
+  {
+   "code": "K",
+   "name": "Percents",
+   "skills": [
+    {
+     "code": "K.1",
+     "description": "Convert between percents, fractions and decimals"
+    },
+    {
+     "code": "K.2",
+     "description": "Convert between percents, fractions and decimals: word problems"
+    },
+    {
+     "code": "K.3",
+     "description": "Compare percents to fractions and decimals"
+    },
+    {
+     "code": "K.4",
+     "description": "Estimate percents of numbers"
+    },
+    {
+     "code": "K.5",
+     "description": "Percents of numbers and money amounts"
+    },
+    {
+     "code": "K.6",
+     "description": "Percents of numbers: word problems"
+    },
+    {
+     "code": "K.7",
+     "description": "Compare percents of numbers"
+    },
+    {
+     "code": "K.8",
+     "description": "Find what percent one number is of another"
+    },
+    {
+     "code": "K.9",
+     "description": "Find what percent one number is of another: word problems"
+    },
+    {
+     "code": "K.10",
+     "description": "Find the total given a part and a percent"
+    },
+    {
+     "code": "K.11",
+     "description": "Solve percent equations"
+    },
+    {
+     "code": "K.12",
+     "description": "Solve percent equations: word problems"
+    },
+    {
+     "code": "K.13",
+     "description": "Percent of change"
+    },
+    {
+     "code": "K.14",
+     "description": "Percent of change: word problems"
+    },
+    {
+     "code": "K.15",
+     "description": "Percent of change: find the original amount word problems"
+    }
+   ]
+  },
+  {
+   "code": "L",
+   "name": "Consumer maths",
+   "skills": [
+    {
+     "code": "L.1",
+     "description": "Price lists"
+    },
+    {
+     "code": "L.2",
+     "description": "Unit prices"
+    },
+    {
+     "code": "L.3",
+     "description": "Unit prices: find the total price"
+    },
+    {
+     "code": "L.4",
+     "description": "Percent of a number: VAT, discount and more"
+    },
+    {
+     "code": "L.5",
+     "description": "Find the percent: discount and mark-up"
+    },
+    {
+     "code": "L.6",
+     "description": "Sale prices: find the original price"
+    },
+    {
+     "code": "L.7",
+     "description": "Multi-step problems with percents"
+    },
+    {
+     "code": "L.8",
+     "description": "Estimate tips"
+    },
+    {
+     "code": "L.9",
+     "description": "Simple interest"
+    },
+    {
+     "code": "L.10",
+     "description": "Compound interest"
+    }
+   ]
+  },
+  {
+   "code": "M",
+   "name": "Measurement",
+   "skills": [
+    {
+     "code": "M.1",
+     "description": "Convert rates and measurements: metric units"
+    },
+    {
+     "code": "M.2",
+     "description": "Multi-step problems with metric unit conversions"
+    },
+    {
+     "code": "M.3",
+     "description": "Mixed metric units"
+    },
+    {
+     "code": "M.4",
+     "description": "Convert between square metres and hectares"
+    },
+    {
+     "code": "M.5",
+     "description": "Convert square and cubic units of length"
+    },
+    {
+     "code": "M.6",
+     "description": "Convert between cubic metres and litres"
+    },
+    {
+     "code": "M.7",
+     "description": "Convert rates and measurements: imperial units"
+    },
+    {
+     "code": "M.8",
+     "description": "Mixed imperial units"
+    },
+    {
+     "code": "M.9",
+     "description": "Convert between metric and imperial units"
+    },
+    {
+     "code": "M.10",
+     "description": "Precision"
+    },
+    {
+     "code": "M.11",
+     "description": "Greatest possible error"
+    },
+    {
+     "code": "M.12",
+     "description": "Minimum and maximum area and volume"
+    },
+    {
+     "code": "M.13",
+     "description": "Percent error"
+    },
+    {
+     "code": "M.14",
+     "description": "Percent error: area and volume"
+    }
+   ]
+  },
+  {
+   "code": "N",
+   "name": "Problem solving",
+   "skills": [
+    {
+     "code": "N.1",
+     "description": "Multi-step word problems"
+    },
+    {
+     "code": "N.2",
+     "description": "Multi-step word problems: identify reasonable answers"
+    },
+    {
+     "code": "N.3",
+     "description": "Guess-and-check word problems"
+    },
+    {
+     "code": "N.4",
+     "description": "Use Venn diagrams to solve problems"
+    }
+   ]
+  },
+  {
+   "code": "O",
+   "name": "Coordinate plane",
+   "skills": [
+    {
+     "code": "O.1",
+     "description": "Coordinate plane review"
+    },
+    {
+     "code": "O.2",
+     "description": "Quadrants and axes"
+    },
+    {
+     "code": "O.3",
+     "description": "Follow directions on a coordinate plane"
+    },
+    {
+     "code": "O.4",
+     "description": "Find the distance between two points"
+    }
+   ]
+  },
+  {
+   "code": "P",
+   "name": "Number sequences",
+   "skills": [
+    {
+     "code": "P.1",
+     "description": "Identify arithmetic and geometric sequences"
+    },
+    {
+     "code": "P.2",
+     "description": "Arithmetic sequences"
+    },
+    {
+     "code": "P.3",
+     "description": "Geometric sequences"
+    },
+    {
+     "code": "P.4",
+     "description": "Number sequences: mixed review"
+    },
+    {
+     "code": "P.5",
+     "description": "Number sequences: word problems"
+    },
+    {
+     "code": "P.6",
+     "description": "Evaluate variable expressions for arithmetic sequences"
+    },
+    {
+     "code": "P.7",
+     "description": "Evaluate variable expressions for geometric sequences"
+    },
+    {
+     "code": "P.8",
+     "description": "Write variable expressions for arithmetic sequences"
+    }
+   ]
+  },
+  {
+   "code": "Q",
+   "name": "Expressions and properties",
+   "skills": [
+    {
+     "code": "Q.1",
+     "description": "Write variable expressions"
+    },
+    {
+     "code": "Q.2",
+     "description": "Write variable expressions from diagrams"
+    },
+    {
+     "code": "Q.3",
+     "description": "Evaluate one-variable expressions"
+    },
+    {
+     "code": "Q.4",
+     "description": "Evaluate multi-variable expressions"
+    },
+    {
+     "code": "Q.5",
+     "description": "Evaluate radical expressions"
+    },
+    {
+     "code": "Q.6",
+     "description": "Evaluate rational expressions"
+    },
+    {
+     "code": "Q.7",
+     "description": "Identify terms and coefficients"
+    },
+    {
+     "code": "Q.8",
+     "description": "Properties of addition and multiplication"
+    },
+    {
+     "code": "Q.9",
+     "description": "Add and subtract like terms"
+    },
+    {
+     "code": "Q.10",
+     "description": "Multiply using the distributive property: area models"
+    },
+    {
+     "code": "Q.11",
+     "description": "Multiply using the distributive property"
+    },
+    {
+     "code": "Q.12",
+     "description": "Factors of linear expressions"
+    },
+    {
+     "code": "Q.13",
+     "description": "Sort factors of expressions"
+    },
+    {
+     "code": "Q.14",
+     "description": "Write equivalent expressions using properties"
+    },
+    {
+     "code": "Q.15",
+     "description": "Simplify linear expressions"
+    },
+    {
+     "code": "Q.16",
+     "description": "Identify equivalent linear expressions"
+    },
+    {
+     "code": "Q.17",
+     "description": "Identify equivalent linear expressions: word problems"
+    }
+   ]
+  },
+  {
+   "code": "R",
+   "name": "One-variable equations",
+   "skills": [
+    {
+     "code": "R.1",
+     "description": "Which x satisfies an equation?"
+    },
+    {
+     "code": "R.2",
+     "description": "Write an equation from words"
+    },
+    {
+     "code": "R.3",
+     "description": "Model and solve equations using algebra tiles"
+    },
+    {
+     "code": "R.4",
+     "description": "Write and solve equations that represent diagrams"
+    },
+    {
+     "code": "R.5",
+     "description": "Properties of equality"
+    },
+    {
+     "code": "R.6",
+     "description": "Solve two-step equations"
+    },
+    {
+     "code": "R.7",
+     "description": "Solve two-step equations: word problems"
+    },
+    {
+     "code": "R.8",
+     "description": "Solve multi-step equations"
+    },
+    {
+     "code": "R.9",
+     "description": "Solve multi-step equations with fractional coefficients"
+    },
+    {
+     "code": "R.10",
+     "description": "Solve equations involving like terms"
+    },
+    {
+     "code": "R.11",
+     "description": "Solve equations with variables on both sides"
+    },
+    {
+     "code": "R.12",
+     "description": "Solve equations: mixed review"
+    },
+    {
+     "code": "R.13",
+     "description": "Solve equations: complete the solution"
+    },
+    {
+     "code": "R.14",
+     "description": "Rearrange multi-variable equations"
+    }
+   ]
+  },
+  {
+   "code": "S",
+   "name": "One-variable inequalities",
+   "skills": [
+    {
+     "code": "S.1",
+     "description": "Solutions to inequalities"
+    },
+    {
+     "code": "S.2",
+     "description": "Graph inequalities on number lines"
+    },
+    {
+     "code": "S.3",
+     "description": "Write inequalities from number lines"
+    },
+    {
+     "code": "S.4",
+     "description": "Write and graph inequalities: word problems"
+    },
+    {
+     "code": "S.5",
+     "description": "Solve one-step inequalities"
+    },
+    {
+     "code": "S.6",
+     "description": "Graph solutions to one-step inequalities"
+    },
+    {
+     "code": "S.7",
+     "description": "One-step inequalities: word problems"
+    },
+    {
+     "code": "S.8",
+     "description": "Solve two-step linear inequalities"
+    },
+    {
+     "code": "S.9",
+     "description": "Graph solutions to two-step inequalities"
+    },
+    {
+     "code": "S.10",
+     "description": "Solve multi-step inequalities"
+    },
+    {
+     "code": "S.11",
+     "description": "Graph solutions to multi-step inequalities"
+    }
+   ]
+  },
+  {
+   "code": "T",
+   "name": "Functions",
+   "skills": [
+    {
+     "code": "T.1",
+     "description": "Identify functions"
+    },
+    {
+     "code": "T.2",
+     "description": "Identify independent and dependent variables"
+    },
+    {
+     "code": "T.3",
+     "description": "Evaluate a linear function: word problems"
+    },
+    {
+     "code": "T.4",
+     "description": "Rate of change"
+    },
+    {
+     "code": "T.5",
+     "description": "Constant rate of change: tables"
+    },
+    {
+     "code": "T.6",
+     "description": "Constant rate of change: graphs"
+    },
+    {
+     "code": "T.7",
+     "description": "Identify linear and nonlinear functions"
+    },
+    {
+     "code": "T.8",
+     "description": "Find values using function graphs"
+    },
+    {
+     "code": "T.9",
+     "description": "Complete a table for a function graph"
+    }
+   ]
+  },
+  {
+   "code": "U",
+   "name": "Linear functions",
+   "skills": [
+    {
+     "code": "U.1",
+     "description": "Does (x, y) satisfy the linear equation?"
+    },
+    {
+     "code": "U.2",
+     "description": "Complete a table for a linear equation"
+    },
+    {
+     "code": "U.3",
+     "description": "Complete a table and graph a linear equation"
+    },
+    {
+     "code": "U.4",
+     "description": "Interpret points on the graph of a line: word problems"
+    },
+    {
+     "code": "U.5",
+     "description": "Find the gradient of a graph"
+    },
+    {
+     "code": "U.6",
+     "description": "Find the gradient from two points"
+    },
+    {
+     "code": "U.7",
+     "description": "Find a missing coordinate using gradient"
+    },
+    {
+     "code": "U.8",
+     "description": "Find the gradient and y-intercept of a linear equation"
+    },
+    {
+     "code": "U.9",
+     "description": "Graph a line using gradient"
+    },
+    {
+     "code": "U.10",
+     "description": "Graph an equation in y=mx+c form"
+    },
+    {
+     "code": "U.11",
+     "description": "Write an equation in y=mx+c form from a gradient and y-intercept"
+    },
+    {
+     "code": "U.12",
+     "description": "Write an equation in y=mx+c form from a graph"
+    },
+    {
+     "code": "U.13",
+     "description": "Write an equation in y=mx+c form from a gradient and a point"
+    },
+    {
+     "code": "U.14",
+     "description": "Write an equation in y=mx+c form from two points"
+    },
+    {
+     "code": "U.15",
+     "description": "Write a linear equation from a table"
+    },
+    {
+     "code": "U.16",
+     "description": "Write a linear equation: word problems"
+    },
+    {
+     "code": "U.17",
+     "description": "Compare linear functions: graphs, tables and equations"
+    },
+    {
+     "code": "U.18",
+     "description": "Equations of horizontal and vertical lines"
+    },
+    {
+     "code": "U.19",
+     "description": "Graph a horizontal or vertical line"
+    },
+    {
+     "code": "U.20",
+     "description": "Linear equations: solve for y"
+    }
+   ]
+  },
+  {
+   "code": "V",
+   "name": "Monomials and polynomials",
+   "skills": [
+    {
+     "code": "V.1",
+     "description": "Identify monomials"
+    },
+    {
+     "code": "V.2",
+     "description": "Model polynomials with algebra tiles"
+    },
+    {
+     "code": "V.3",
+     "description": "Add and subtract polynomials using algebra tiles"
+    },
+    {
+     "code": "V.4",
+     "description": "Add and subtract polynomials"
+    },
+    {
+     "code": "V.5",
+     "description": "Add polynomials to find perimeter"
+    },
+    {
+     "code": "V.6",
+     "description": "Multiply monomials"
+    },
+    {
+     "code": "V.7",
+     "description": "Divide monomials"
+    },
+    {
+     "code": "V.8",
+     "description": "Multiply and divide monomials"
+    },
+    {
+     "code": "V.9",
+     "description": "Powers of monomials"
+    },
+    {
+     "code": "V.10",
+     "description": "Square and cube roots of monomials"
+    },
+    {
+     "code": "V.11",
+     "description": "Multiply a polynomial by a monomial"
+    },
+    {
+     "code": "V.12",
+     "description": "Multiply polynomials using algebra tiles"
+    },
+    {
+     "code": "V.13",
+     "description": "Multiply two binomials"
+    },
+    {
+     "code": "V.14",
+     "description": "Multiply two binomials: special cases"
+    },
+    {
+     "code": "V.15",
+     "description": "Multiply polynomials"
+    },
+    {
+     "code": "V.16",
+     "description": "Multiply polynomials to find area"
+    }
+   ]
+  },
+  {
+   "code": "W",
+   "name": "Quadratic functions",
+   "skills": [
+    {
+     "code": "W.1",
+     "description": "Does (x, y) satisfy the quadratic equation?"
+    },
+    {
+     "code": "W.2",
+     "description": "Characteristics of quadratic functions: graphs"
+    },
+    {
+     "code": "W.3",
+     "description": "Characteristics of quadratic functions: equations"
+    },
+    {
+     "code": "W.4",
+     "description": "Complete a function table: quadratic functions"
+    },
+    {
+     "code": "W.5",
+     "description": "Match quadratic functions and graphs"
+    }
+   ]
+  },
+  {
+   "code": "X",
+   "name": "Lines and angles",
+   "skills": [
+    {
+     "code": "X.1",
+     "description": "Identify complementary, supplementary, vertical, adjacent and congruent angles"
+    },
+    {
+     "code": "X.2",
+     "description": "Find measures of complementary, supplementary, vertical and adjacent angles"
+    },
+    {
+     "code": "X.3",
+     "description": "Identify alternate interior and alternate exterior angles"
+    },
+    {
+     "code": "X.4",
+     "description": "Transversals of parallel lines: name angle pairs"
+    },
+    {
+     "code": "X.5",
+     "description": "Transversals of parallel lines: find angle measures"
+    },
+    {
+     "code": "X.6",
+     "description": "Find lengths and measures of bisected line segments and angles"
+    }
+   ]
+  },
+  {
+   "code": "Y",
+   "name": "Two-dimensional figures",
+   "skills": [
+    {
+     "code": "Y.1",
+     "description": "Triangle inequality"
+    },
+    {
+     "code": "Y.2",
+     "description": "Find missing angles in triangles and quadrilaterals"
+    },
+    {
+     "code": "Y.3",
+     "description": "Exterior Angle Theorem"
+    },
+    {
+     "code": "Y.4",
+     "description": "Interior angles of polygons"
+    },
+    {
+     "code": "Y.5",
+     "description": "Parts of a circle"
+    }
+   ]
+  },
+  {
+   "code": "Z",
+   "name": "Three-dimensional figures",
+   "skills": [
+    {
+     "code": "Z.1",
+     "description": "Parts of three-dimensional figures"
+    },
+    {
+     "code": "Z.2",
+     "description": "Nets of three-dimensional figures"
+    },
+    {
+     "code": "Z.3",
+     "description": "Front, side and top view"
+    },
+    {
+     "code": "Z.4",
+     "description": "Base plans"
+    }
+   ]
+  },
+  {
+   "code": "AA",
+   "name": "Perimeter and area",
+   "skills": [
+    {
+     "code": "AA.1",
+     "description": "Area of triangles and quadrilaterals"
+    },
+    {
+     "code": "AA.2",
+     "description": "Area and perimeter of squares and rectangles: word problems"
+    },
+    {
+     "code": "AA.3",
+     "description": "Area of compound figures with triangles"
+    },
+    {
+     "code": "AA.4",
+     "description": "Circumference of circles"
+    },
+    {
+     "code": "AA.5",
+     "description": "Area of circles"
+    },
+    {
+     "code": "AA.6",
+     "description": "Circles: word problems"
+    },
+    {
+     "code": "AA.7",
+     "description": "Semicircles: calculate area, perimeter, radius and diameter"
+    },
+    {
+     "code": "AA.8",
+     "description": "Quarter circles: calculate area, perimeter and radius"
+    },
+    {
+     "code": "AA.9",
+     "description": "Area of compound figures with triangles, semicircles and quarter circles"
+    },
+    {
+     "code": "AA.10",
+     "description": "Area between two shapes"
+    }
+   ]
+  },
+  {
+   "code": "BB",
+   "name": "Volume and surface area",
+   "skills": [
+    {
+     "code": "BB.1",
+     "description": "Volume of prisms and cylinders"
+    },
+    {
+     "code": "BB.2",
+     "description": "Volume of compound figures"
+    },
+    {
+     "code": "BB.3",
+     "description": "Surface area of prisms and cylinders"
+    }
+   ]
+  },
+  {
+   "code": "CC",
+   "name": "Transformations",
+   "skills": [
+    {
+     "code": "CC.1",
+     "description": "Identify reflections, rotations and translations"
+    },
+    {
+     "code": "CC.2",
+     "description": "Translations: graph the image"
+    },
+    {
+     "code": "CC.3",
+     "description": "Translations: find the coordinates"
+    },
+    {
+     "code": "CC.4",
+     "description": "Translations: write the rule"
+    },
+    {
+     "code": "CC.5",
+     "description": "Reflections: graph the image"
+    },
+    {
+     "code": "CC.6",
+     "description": "Reflections: find the coordinates"
+    },
+    {
+     "code": "CC.7",
+     "description": "Rotations: graph the image"
+    },
+    {
+     "code": "CC.8",
+     "description": "Rotations: find the coordinates"
+    },
+    {
+     "code": "CC.9",
+     "description": "Reflections and rotations: write the rule"
+    },
+    {
+     "code": "CC.10",
+     "description": "Reflections, rotations and translations: graph the image"
+    },
+    {
+     "code": "CC.11",
+     "description": "Reflections, rotations and translations: find the coordinates"
+    },
+    {
+     "code": "CC.12",
+     "description": "Dilations: graph the image"
+    },
+    {
+     "code": "CC.13",
+     "description": "Dilations: find the coordinates"
+    },
+    {
+     "code": "CC.14",
+     "description": "Dilations: scale factor and classification"
+    }
+   ]
+  },
+  {
+   "code": "DD",
+   "name": "Congruence and similarity",
+   "skills": [
+    {
+     "code": "DD.1",
+     "description": "Identify congruent figures"
+    },
+    {
+     "code": "DD.2",
+     "description": "Congruence statements and corresponding parts"
+    },
+    {
+     "code": "DD.3",
+     "description": "Side lengths and angle measures of congruent figures"
+    },
+    {
+     "code": "DD.4",
+     "description": "Congruent triangles: SSS, SAS and ASA"
+    },
+    {
+     "code": "DD.5",
+     "description": "Identify similar figures"
+    },
+    {
+     "code": "DD.6",
+     "description": "Ratios in similar figures"
+    },
+    {
+     "code": "DD.7",
+     "description": "Similarity statements"
+    },
+    {
+     "code": "DD.8",
+     "description": "Side lengths and angle measures of similar figures"
+    },
+    {
+     "code": "DD.9",
+     "description": "Similar figures and indirect measurement"
+    }
+   ]
+  },
+  {
+   "code": "EE",
+   "name": "Triangles and trigonometry",
+   "skills": [
+    {
+     "code": "EE.1",
+     "description": "Pythagoras' theorem: find the length of the hypotenuse"
+    },
+    {
+     "code": "EE.2",
+     "description": "Pythagoras' theorem: find the missing leg length"
+    },
+    {
+     "code": "EE.3",
+     "description": "Pythagoras' theorem: find the missing leg or hypotenuse length"
+    },
+    {
+     "code": "EE.4",
+     "description": "Pythagoras' theorem: find the perimeter"
+    },
+    {
+     "code": "EE.5",
+     "description": "Pythagoras' theorem: word problems"
+    },
+    {
+     "code": "EE.6",
+     "description": "Converse of Pythagoras' theorem: is it a right triangle?"
+    },
+    {
+     "code": "EE.7",
+     "description": "Trigonometric ratios: sin, cos and tan"
+    },
+    {
+     "code": "EE.8",
+     "description": "Find trigonometric functions of special angles: sin, cos and tan"
+    },
+    {
+     "code": "EE.9",
+     "description": "Find trigonometric functions using a calculator"
+    }
+   ]
+  },
+  {
+   "code": "FF",
+   "name": "Constructions",
+   "skills": [
+    {
+     "code": "FF.1",
+     "description": "Construct the midpoint or perpendicular bisector of a segment"
+    },
+    {
+     "code": "FF.2",
+     "description": "Construct an angle bisector"
+    },
+    {
+     "code": "FF.3",
+     "description": "Construct a perpendicular line"
+    },
+    {
+     "code": "FF.4",
+     "description": "Construct parallel lines"
+    },
+    {
+     "code": "FF.5",
+     "description": "Construct an equilateral triangle or regular hexagon"
+    }
+   ]
+  },
+  {
+   "code": "GG",
+   "name": "Data and graphs",
+   "skills": [
+    {
+     "code": "GG.1",
+     "description": "Interpret tables"
+    },
+    {
+     "code": "GG.2",
+     "description": "Interpret bar graphs for categorical data"
+    },
+    {
+     "code": "GG.3",
+     "description": "Create bar graphs for categorical data"
+    },
+    {
+     "code": "GG.4",
+     "description": "Interpret line graphs"
+    },
+    {
+     "code": "GG.5",
+     "description": "Create line graphs"
+    },
+    {
+     "code": "GG.6",
+     "description": "Interpret line plots"
+    },
+    {
+     "code": "GG.7",
+     "description": "Create line plots"
+    },
+    {
+     "code": "GG.8",
+     "description": "Interpret stem-and-leaf plots"
+    },
+    {
+     "code": "GG.9",
+     "description": "Create stem-and-leaf plots"
+    },
+    {
+     "code": "GG.10",
+     "description": "Interpret bar graphs for grouped data"
+    },
+    {
+     "code": "GG.11",
+     "description": "Create bar graphs for grouped data"
+    },
+    {
+     "code": "GG.12",
+     "description": "Create frequency tables"
+    },
+    {
+     "code": "GG.13",
+     "description": "Interpret pie charts"
+    },
+    {
+     "code": "GG.14",
+     "description": "Pie charts and central angles"
+    },
+    {
+     "code": "GG.15",
+     "description": "Choose the best type of graph"
+    }
+   ]
+  },
+  {
+   "code": "HH",
+   "name": "Statistics",
+   "skills": [
+    {
+     "code": "HH.1",
+     "description": "Calculate mean, median, mode and range"
+    },
+    {
+     "code": "HH.2",
+     "description": "Interpret charts to find mean, median, mode and range"
+    },
+    {
+     "code": "HH.3",
+     "description": "Mean, median, mode and range: find the missing number"
+    },
+    {
+     "code": "HH.4",
+     "description": "Changes in mean, median, mode and range"
+    },
+    {
+     "code": "HH.5",
+     "description": "Identify an outlier"
+    },
+    {
+     "code": "HH.6",
+     "description": "Identify an outlier and describe the effect of removing it"
+    },
+    {
+     "code": "HH.7",
+     "description": "Describe distributions in line plots"
+    },
+    {
+     "code": "HH.8",
+     "description": "Identify representative, random and biased samples"
+    },
+    {
+     "code": "HH.9",
+     "description": "Create scatter plots"
+    },
+    {
+     "code": "HH.10",
+     "description": "Identify trends with scatter plots"
+    },
+    {
+     "code": "HH.11",
+     "description": "Make predictions with scatter plots"
+    },
+    {
+     "code": "HH.12",
+     "description": "Outliers in scatter plots"
+    }
+   ]
+  },
+  {
+   "code": "II",
+   "name": "Probability",
+   "skills": [
+    {
+     "code": "II.1",
+     "description": "Probability of simple events"
+    },
+    {
+     "code": "II.2",
+     "description": "Probability of simple events and opposite events"
+    },
+    {
+     "code": "II.3",
+     "description": "Probability of mutually exclusive events and overlapping events"
+    },
+    {
+     "code": "II.4",
+     "description": "Experimental probability"
+    },
+    {
+     "code": "II.5",
+     "description": "Make predictions using theoretical probability"
+    },
+    {
+     "code": "II.6",
+     "description": "Make predictions using experimental probability"
+    },
+    {
+     "code": "II.7",
+     "description": "Compound events: find the number of outcomes"
+    },
+    {
+     "code": "II.8",
+     "description": "Probability of compound events"
+    },
+    {
+     "code": "II.9",
+     "description": "Find the number of outcomes: word problems"
+    },
+    {
+     "code": "II.10",
+     "description": "Find probabilities using two-way frequency tables"
+    }
+   ]
+  }
+ ]
+}

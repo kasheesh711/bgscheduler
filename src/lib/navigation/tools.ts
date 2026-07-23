@@ -17,6 +17,7 @@ export type NavToolId =
   | "post-class-feedback"
   | "scheduler-metrics"
   | "progress-tests"
+  | "learning-plans"
   | "student-promotions"
   | "admissions"
   | "sales-dashboard"
@@ -63,7 +64,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     id: "student-lifecycle",
     label: "Student Lifecycle",
-    description: "Student academic progression, progress-test workflows, and college-admissions cases.",
+    description: "Student learning plans, academic progression, progress-test workflows, and college-admissions cases.",
   },
   {
     id: "finance-revenue",
@@ -163,6 +164,13 @@ export const NAV_TOOLS: NavTool[] = [
     description: "Track due, scheduled, and completed progress-test cycles.",
     section: "student-lifecycle",
     badgeKey: "progressTests",
+  },
+  {
+    id: "learning-plans",
+    href: "/learning-plans",
+    label: "Learning Plans",
+    description: "Generate printable General Mathematics plans by year and topic.",
+    section: "student-lifecycle",
   },
   {
     id: "student-promotions",

@@ -1,0 +1,1641 @@
+{
+ "year": 1,
+ "topics": [
+  {
+   "code": "A",
+   "name": "Numbers to 3",
+   "skills": [
+    {
+     "code": "A.1",
+     "description": "Identify numbers - up to 3"
+    },
+    {
+     "code": "A.2",
+     "description": "Choose the number that you hear - up to 3"
+    }
+   ]
+  },
+  {
+   "code": "B",
+   "name": "Counting to 3",
+   "skills": [
+    {
+     "code": "B.1",
+     "description": "Learn to count to 3"
+    },
+    {
+     "code": "B.2",
+     "description": "Count pictures - up to 3"
+    },
+    {
+     "code": "B.3",
+     "description": "Count on ten frames - up to 3"
+    },
+    {
+     "code": "B.4",
+     "description": "Count out stickers - up to 3"
+    },
+    {
+     "code": "B.5",
+     "description": "Show numbers on ten frames - up to 3"
+    },
+    {
+     "code": "B.6",
+     "description": "Represent numbers - up to 3"
+    }
+   ]
+  },
+  {
+   "code": "C",
+   "name": "Numbers to 5",
+   "skills": [
+    {
+     "code": "C.1",
+     "description": "Identify numbers - up to 5"
+    },
+    {
+     "code": "C.2",
+     "description": "Choose the number that you hear - up to 5"
+    }
+   ]
+  },
+  {
+   "code": "D",
+   "name": "Counting to 5",
+   "skills": [
+    {
+     "code": "D.1",
+     "description": "Learn to count to 5"
+    },
+    {
+     "code": "D.2",
+     "description": "Count pictures - up to 5"
+    },
+    {
+     "code": "D.3",
+     "description": "Count on ten frames - up to 5"
+    },
+    {
+     "code": "D.4",
+     "description": "Count out stickers - up to 5"
+    },
+    {
+     "code": "D.5",
+     "description": "Count cubes - up to 5"
+    },
+    {
+     "code": "D.6",
+     "description": "Show numbers with cubes - up to 5"
+    },
+    {
+     "code": "D.7",
+     "description": "Show numbers on ten frames - up to 5"
+    },
+    {
+     "code": "D.8",
+     "description": "Represent numbers - up to 5"
+    },
+    {
+     "code": "D.9",
+     "description": "What number comes next? - up to 5"
+    },
+    {
+     "code": "D.10",
+     "description": "Ordinal numbers - up to fifth"
+    }
+   ]
+  },
+  {
+   "code": "E",
+   "name": "One more and one less to 5",
+   "skills": [
+    {
+     "code": "E.1",
+     "description": "One more with pictures - up to 5"
+    },
+    {
+     "code": "E.2",
+     "description": "One more on frames - up to 5"
+    },
+    {
+     "code": "E.3",
+     "description": "One more - up to 5"
+    },
+    {
+     "code": "E.4",
+     "description": "One less with pictures - up to 5"
+    },
+    {
+     "code": "E.5",
+     "description": "One less on frames - up to 5"
+    },
+    {
+     "code": "E.6",
+     "description": "One less - up to 5"
+    }
+   ]
+  },
+  {
+   "code": "F",
+   "name": "Numbers to 10",
+   "skills": [
+    {
+     "code": "F.1",
+     "description": "Identify numbers - up to 10"
+    },
+    {
+     "code": "F.2",
+     "description": "Choose the number that you hear - up to 10"
+    },
+    {
+     "code": "F.3",
+     "description": "Convert from words to digits - up to 10"
+    },
+    {
+     "code": "F.4",
+     "description": "Convert from digits to words - up to 10"
+    },
+    {
+     "code": "F.5",
+     "description": "Write digits given words - up to 10"
+    },
+    {
+     "code": "F.6",
+     "description": "Write words given digits - up to 10"
+    }
+   ]
+  },
+  {
+   "code": "G",
+   "name": "Counting to 10",
+   "skills": [
+    {
+     "code": "G.1",
+     "description": "Learn to count to 10"
+    },
+    {
+     "code": "G.2",
+     "description": "Count pictures - up to 10"
+    },
+    {
+     "code": "G.3",
+     "description": "Count cubes - up to 10"
+    },
+    {
+     "code": "G.4",
+     "description": "Count on ten frames - up to 10"
+    },
+    {
+     "code": "G.5",
+     "description": "Count out stickers - up to 10"
+    },
+    {
+     "code": "G.6",
+     "description": "Show numbers with cubes - up to 10"
+    },
+    {
+     "code": "G.7",
+     "description": "Show numbers on ten frames - up to 10"
+    },
+    {
+     "code": "G.8",
+     "description": "Represent numbers - up to 10"
+    },
+    {
+     "code": "G.9",
+     "description": "Tally marks - up to 10"
+    }
+   ]
+  },
+  {
+   "code": "H",
+   "name": "One more and one less to 10",
+   "skills": [
+    {
+     "code": "H.1",
+     "description": "One more with pictures - up to 10"
+    },
+    {
+     "code": "H.2",
+     "description": "One more on frames - up to 10"
+    },
+    {
+     "code": "H.3",
+     "description": "One more - up to 10"
+    },
+    {
+     "code": "H.4",
+     "description": "One less with pictures - up to 10"
+    },
+    {
+     "code": "H.5",
+     "description": "One less on frames - up to 10"
+    },
+    {
+     "code": "H.6",
+     "description": "One less - up to 10"
+    },
+    {
+     "code": "H.7",
+     "description": "One more and one less with pictures - up to 10"
+    },
+    {
+     "code": "H.8",
+     "description": "One more and one less on frames - up to 10"
+    },
+    {
+     "code": "H.9",
+     "description": "One more and one less - up to 10"
+    }
+   ]
+  },
+  {
+   "code": "I",
+   "name": "Counting forward and back to 10",
+   "skills": [
+    {
+     "code": "I.1",
+     "description": "What number comes next? - up to 10"
+    },
+    {
+     "code": "I.2",
+     "description": "Count up and down to find the next number - up to 10"
+    },
+    {
+     "code": "I.3",
+     "description": "Count to fill a ten frame"
+    },
+    {
+     "code": "I.4",
+     "description": "Number lines - up to 10"
+    },
+    {
+     "code": "I.5",
+     "description": "Before, after and between - up to 10"
+    },
+    {
+     "code": "I.6",
+     "description": "Count forward and backward - up to 10"
+    },
+    {
+     "code": "I.7",
+     "description": "Complete a sequence - up to 10"
+    },
+    {
+     "code": "I.8",
+     "description": "Ordinal numbers - up to tenth"
+    }
+   ]
+  },
+  {
+   "code": "J",
+   "name": "Comparing up to 10",
+   "skills": [
+    {
+     "code": "J.1",
+     "description": "Fewer and more - compare by matching"
+    },
+    {
+     "code": "J.2",
+     "description": "Fewer, more and same"
+    },
+    {
+     "code": "J.3",
+     "description": "Are there enough?"
+    },
+    {
+     "code": "J.4",
+     "description": "Fewer and more - compare by counting"
+    },
+    {
+     "code": "J.5",
+     "description": "Fewer and more - compare in a mixed group"
+    },
+    {
+     "code": "J.6",
+     "description": "Compare two numbers - up to 10"
+    },
+    {
+     "code": "J.7",
+     "description": "Compare three numbers - up to 10"
+    },
+    {
+     "code": "J.8",
+     "description": "Put numbers up to 10 in order"
+    }
+   ]
+  },
+  {
+   "code": "K",
+   "name": "Numbers to 20",
+   "skills": [
+    {
+     "code": "K.1",
+     "description": "Identify numbers - up to 20"
+    },
+    {
+     "code": "K.2",
+     "description": "Write the number you hear - up to 20"
+    },
+    {
+     "code": "K.3",
+     "description": "Convert from words to digits - up to 20"
+    },
+    {
+     "code": "K.4",
+     "description": "Convert from digits to words - up to 20"
+    },
+    {
+     "code": "K.5",
+     "description": "Write digits given words - up to 20"
+    },
+    {
+     "code": "K.6",
+     "description": "Write words given digits - up to 20"
+    }
+   ]
+  },
+  {
+   "code": "L",
+   "name": "Counting to 20",
+   "skills": [
+    {
+     "code": "L.1",
+     "description": "Count pictures - up to 20"
+    },
+    {
+     "code": "L.2",
+     "description": "Count pictures in arrays and circles - up to 20"
+    },
+    {
+     "code": "L.3",
+     "description": "Count on ten frames - up to 20"
+    },
+    {
+     "code": "L.4",
+     "description": "Show numbers on ten frames - up to 20"
+    },
+    {
+     "code": "L.5",
+     "description": "Represent numbers - up to 20"
+    },
+    {
+     "code": "L.6",
+     "description": "Tally marks - up to 20"
+    }
+   ]
+  },
+  {
+   "code": "M",
+   "name": "One more and one less to 20",
+   "skills": [
+    {
+     "code": "M.1",
+     "description": "One more - up to 20"
+    },
+    {
+     "code": "M.2",
+     "description": "One less - up to 20"
+    },
+    {
+     "code": "M.3",
+     "description": "One more and one less - up to 20"
+    }
+   ]
+  },
+  {
+   "code": "N",
+   "name": "Counting forward and back to 20",
+   "skills": [
+    {
+     "code": "N.1",
+     "description": "Count up and down to find the next number - up to 20"
+    },
+    {
+     "code": "N.2",
+     "description": "Number lines - up to 20"
+    },
+    {
+     "code": "N.3",
+     "description": "Before, after and between - up to 20"
+    },
+    {
+     "code": "N.4",
+     "description": "Count forward and backward - up to 20"
+    },
+    {
+     "code": "N.5",
+     "description": "Complete a sequence - up to 20"
+    }
+   ]
+  },
+  {
+   "code": "O",
+   "name": "Comparing up to 20",
+   "skills": [
+    {
+     "code": "O.1",
+     "description": "More than, less than or equal to - compare by counting up to 20"
+    },
+    {
+     "code": "O.2",
+     "description": "Compare two numbers using number lines - up to 20"
+    },
+    {
+     "code": "O.3",
+     "description": "Compare two numbers - up to 20"
+    },
+    {
+     "code": "O.4",
+     "description": "Put numbers up to 20 in order"
+    }
+   ]
+  },
+  {
+   "code": "P",
+   "name": "Teen numbers",
+   "skills": [
+    {
+     "code": "P.1",
+     "description": "Count tens and ones - up to 20"
+    },
+    {
+     "code": "P.2",
+     "description": "Write tens and ones - up to 20"
+    },
+    {
+     "code": "P.3",
+     "description": "Make teen numbers"
+    },
+    {
+     "code": "P.4",
+     "description": "Partition teen numbers"
+    }
+   ]
+  },
+  {
+   "code": "Q",
+   "name": "Numbers and counting beyond 20",
+   "skills": [
+    {
+     "code": "Q.1",
+     "description": "Count on ten frames - up to 30"
+    },
+    {
+     "code": "Q.2",
+     "description": "Number lines - up to 30"
+    },
+    {
+     "code": "Q.3",
+     "description": "Count tens and ones - up to 30"
+    },
+    {
+     "code": "Q.4",
+     "description": "Count pictures - up to 100"
+    },
+    {
+     "code": "Q.5",
+     "description": "Count on the hundred chart"
+    },
+    {
+     "code": "Q.6",
+     "description": "Count up and down to find the next number - up to 100"
+    },
+    {
+     "code": "Q.7",
+     "description": "Complete a sequence - up to 100"
+    },
+    {
+     "code": "Q.8",
+     "description": "Count forward and backward - up to 100"
+    },
+    {
+     "code": "Q.9",
+     "description": "Estimate to the nearest ten - up to 100"
+    }
+   ]
+  },
+  {
+   "code": "R",
+   "name": "Skip-counting",
+   "skills": [
+    {
+     "code": "R.1",
+     "description": "Learn to skip-count by twos"
+    },
+    {
+     "code": "R.2",
+     "description": "Skip-count by twos"
+    },
+    {
+     "code": "R.3",
+     "description": "Skip-count by twos on ten frames"
+    },
+    {
+     "code": "R.4",
+     "description": "Learn to skip-count by fives"
+    },
+    {
+     "code": "R.5",
+     "description": "Skip-count by fives"
+    },
+    {
+     "code": "R.6",
+     "description": "Learn to skip-count by tens"
+    },
+    {
+     "code": "R.7",
+     "description": "Skip-count by tens"
+    },
+    {
+     "code": "R.8",
+     "description": "Count groups of ten"
+    },
+    {
+     "code": "R.9",
+     "description": "Learn to skip-count by twos, fives and tens"
+    },
+    {
+     "code": "R.10",
+     "description": "Skip-count by twos, fives and tens"
+    }
+   ]
+  },
+  {
+   "code": "S",
+   "name": "Understand addition up to 5",
+   "skills": [
+    {
+     "code": "S.1",
+     "description": "Put together numbers using cubes - sums up to 5"
+    },
+    {
+     "code": "S.2",
+     "description": "Addition sentences up to 5 - which model matches?"
+    },
+    {
+     "code": "S.3",
+     "description": "Addition sentences up to 5 - what does the model show?"
+    }
+   ]
+  },
+  {
+   "code": "T",
+   "name": "Addition up to 5",
+   "skills": [
+    {
+     "code": "T.1",
+     "description": "Add with cubes - sums up to 5"
+    },
+    {
+     "code": "T.2",
+     "description": "Add with pictures - sums up to 5"
+    },
+    {
+     "code": "T.3",
+     "description": "Addition facts - sums up to 5"
+    },
+    {
+     "code": "T.4",
+     "description": "Complete the addition sentence - sums up to 5"
+    }
+   ]
+  },
+  {
+   "code": "U",
+   "name": "Partition numbers up to 5",
+   "skills": [
+    {
+     "code": "U.1",
+     "description": "Partition numbers using cubes - sums up to 5"
+    },
+    {
+     "code": "U.2",
+     "description": "Partition numbers up to 5 - addition sentences"
+    },
+    {
+     "code": "U.3",
+     "description": "Make a number using addition - sums up to 5"
+    }
+   ]
+  },
+  {
+   "code": "V",
+   "name": "Addition word problems up to 5",
+   "skills": [
+    {
+     "code": "V.1",
+     "description": "Addition word problems with pictures - sums up to 5"
+    },
+    {
+     "code": "V.2",
+     "description": "Addition sentences for word problems with pictures - sums up to 5"
+    },
+    {
+     "code": "V.3",
+     "description": "Addition word problems - sums up to 5"
+    }
+   ]
+  },
+  {
+   "code": "W",
+   "name": "Understand addition up to 10",
+   "skills": [
+    {
+     "code": "W.1",
+     "description": "Put together numbers using cubes - sums up to 10"
+    },
+    {
+     "code": "W.2",
+     "description": "Addition sentences up to 10 - which model matches?"
+    },
+    {
+     "code": "W.3",
+     "description": "Addition sentences up to 10 - what does the model show?"
+    },
+    {
+     "code": "W.4",
+     "description": "Turn words into an addition sentence - sums up to 10"
+    }
+   ]
+  },
+  {
+   "code": "X",
+   "name": "Addition up to 10",
+   "skills": [
+    {
+     "code": "X.1",
+     "description": "Add with cubes - sums up to 10"
+    },
+    {
+     "code": "X.2",
+     "description": "Add with pictures - sums up to 10"
+    },
+    {
+     "code": "X.3",
+     "description": "Addition facts - sums up to 10"
+    },
+    {
+     "code": "X.4",
+     "description": "Complete the addition sentence to make 10 - with models"
+    },
+    {
+     "code": "X.5",
+     "description": "Complete the addition sentence to make 10"
+    },
+    {
+     "code": "X.6",
+     "description": "Complete the addition sentence - sums up to 10"
+    },
+    {
+     "code": "X.7",
+     "description": "Add doubles with models"
+    },
+    {
+     "code": "X.8",
+     "description": "Add doubles"
+    },
+    {
+     "code": "X.9",
+     "description": "Add doubles - complete the sentence"
+    },
+    {
+     "code": "X.10",
+     "description": "Add using doubles plus one"
+    },
+    {
+     "code": "X.11",
+     "description": "Add using doubles minus one"
+    },
+    {
+     "code": "X.12",
+     "description": "Add three numbers"
+    }
+   ]
+  },
+  {
+   "code": "Y",
+   "name": "Partition numbers up to 10",
+   "skills": [
+    {
+     "code": "Y.1",
+     "description": "Partition numbers using cubes - sums up to 10"
+    },
+    {
+     "code": "Y.2",
+     "description": "Decompose a number up to 10"
+    },
+    {
+     "code": "Y.3",
+     "description": "Partition numbers up to 10 - addition sentences"
+    },
+    {
+     "code": "Y.4",
+     "description": "Make a number using addition - sums up to 10"
+    }
+   ]
+  },
+  {
+   "code": "Z",
+   "name": "Addition word problems up to 10",
+   "skills": [
+    {
+     "code": "Z.1",
+     "description": "Addition word problems with pictures - sums up to 10"
+    },
+    {
+     "code": "Z.2",
+     "description": "Addition sentences for word problems with pictures - sums up to 10"
+    },
+    {
+     "code": "Z.3",
+     "description": "Addition word problems - sums up to 10"
+    }
+   ]
+  },
+  {
+   "code": "AA",
+   "name": "Addition up to 20",
+   "skills": [
+    {
+     "code": "AA.1",
+     "description": "Adding 1"
+    },
+    {
+     "code": "AA.2",
+     "description": "Adding 2"
+    },
+    {
+     "code": "AA.3",
+     "description": "Adding 3"
+    },
+    {
+     "code": "AA.4",
+     "description": "Adding 4"
+    },
+    {
+     "code": "AA.5",
+     "description": "Adding 5"
+    },
+    {
+     "code": "AA.6",
+     "description": "Adding 6"
+    },
+    {
+     "code": "AA.7",
+     "description": "Adding 7"
+    },
+    {
+     "code": "AA.8",
+     "description": "Adding 8"
+    },
+    {
+     "code": "AA.9",
+     "description": "Adding 9"
+    },
+    {
+     "code": "AA.10",
+     "description": "Adding 10"
+    },
+    {
+     "code": "AA.11",
+     "description": "Adding 0"
+    },
+    {
+     "code": "AA.12",
+     "description": "Add with pictures - sums up to 20"
+    },
+    {
+     "code": "AA.13",
+     "description": "Addition facts - sums up to 20"
+    },
+    {
+     "code": "AA.14",
+     "description": "Add any two numbers - sums up to 20"
+    },
+    {
+     "code": "AA.15",
+     "description": "Make a number using addition - sums up to 20"
+    },
+    {
+     "code": "AA.16",
+     "description": "Complete the addition sentence - sums up to 20"
+    },
+    {
+     "code": "AA.17",
+     "description": "Addition word problems - sums up to 20"
+    },
+    {
+     "code": "AA.18",
+     "description": "Related addition facts"
+    }
+   ]
+  },
+  {
+   "code": "BB",
+   "name": "Understand subtraction up to 5",
+   "skills": [
+    {
+     "code": "BB.1",
+     "description": "Take away cubes - numbers up to 5"
+    },
+    {
+     "code": "BB.2",
+     "description": "Subtraction sentences up to 5 - which model matches?"
+    },
+    {
+     "code": "BB.3",
+     "description": "Subtraction sentences up to 5 - what does the model show?"
+    },
+    {
+     "code": "BB.4",
+     "description": "Subtraction sentences up to 5 - what does the cube model show?"
+    }
+   ]
+  },
+  {
+   "code": "CC",
+   "name": "Subtraction up to 5",
+   "skills": [
+    {
+     "code": "CC.1",
+     "description": "Subtract with cubes - numbers up to 5"
+    },
+    {
+     "code": "CC.2",
+     "description": "Subtract with pictures - numbers up to 5"
+    },
+    {
+     "code": "CC.3",
+     "description": "Subtraction facts - numbers up to 5"
+    },
+    {
+     "code": "CC.4",
+     "description": "Complete the subtraction sentence - numbers up to 5"
+    }
+   ]
+  },
+  {
+   "code": "DD",
+   "name": "Subtraction word problems up to 5",
+   "skills": [
+    {
+     "code": "DD.1",
+     "description": "Subtraction word problems with pictures - numbers up to 5"
+    },
+    {
+     "code": "DD.2",
+     "description": "Subtraction sentences for word problems with pictures - numbers up to 5"
+    },
+    {
+     "code": "DD.3",
+     "description": "Use cube models to solve subtraction word problems - numbers up to 5"
+    },
+    {
+     "code": "DD.4",
+     "description": "Subtraction word problems - numbers up to 5"
+    }
+   ]
+  },
+  {
+   "code": "EE",
+   "name": "Understand subtraction up to 10",
+   "skills": [
+    {
+     "code": "EE.1",
+     "description": "Take away cubes - numbers up to 10"
+    },
+    {
+     "code": "EE.2",
+     "description": "Subtraction sentences up to 10 - which model matches?"
+    },
+    {
+     "code": "EE.3",
+     "description": "Subtraction sentences up to 10 - what does the model show?"
+    },
+    {
+     "code": "EE.4",
+     "description": "Subtraction sentences up to 10 - what does the cube model show?"
+    }
+   ]
+  },
+  {
+   "code": "FF",
+   "name": "Subtraction up to 10",
+   "skills": [
+    {
+     "code": "FF.1",
+     "description": "Subtract with cubes - numbers up to 10"
+    },
+    {
+     "code": "FF.2",
+     "description": "Subtract with pictures - numbers up to 10"
+    },
+    {
+     "code": "FF.3",
+     "description": "Subtraction facts - numbers up to 10"
+    },
+    {
+     "code": "FF.4",
+     "description": "Make a number using subtraction - numbers up to 10"
+    },
+    {
+     "code": "FF.5",
+     "description": "Complete the subtraction sentence - numbers up to 10"
+    },
+    {
+     "code": "FF.6",
+     "description": "Turn words into a subtraction sentence - numbers up to 10"
+    }
+   ]
+  },
+  {
+   "code": "GG",
+   "name": "Subtraction word problems up to 10",
+   "skills": [
+    {
+     "code": "GG.1",
+     "description": "Subtraction word problems with pictures - numbers up to 10"
+    },
+    {
+     "code": "GG.2",
+     "description": "Subtraction sentences for word problems with pictures - numbers up to 10"
+    },
+    {
+     "code": "GG.3",
+     "description": "Use cube models to solve subtraction word problems - numbers up to 10"
+    },
+    {
+     "code": "GG.4",
+     "description": "Subtraction word problems - numbers up to 10"
+    }
+   ]
+  },
+  {
+   "code": "HH",
+   "name": "Subtraction up to 20",
+   "skills": [
+    {
+     "code": "HH.1",
+     "description": "Subtracting 1"
+    },
+    {
+     "code": "HH.2",
+     "description": "Subtracting 2"
+    },
+    {
+     "code": "HH.3",
+     "description": "Subtracting 3"
+    },
+    {
+     "code": "HH.4",
+     "description": "Subtracting 4"
+    },
+    {
+     "code": "HH.5",
+     "description": "Subtracting 5"
+    },
+    {
+     "code": "HH.6",
+     "description": "Subtracting 6"
+    },
+    {
+     "code": "HH.7",
+     "description": "Subtracting 7"
+    },
+    {
+     "code": "HH.8",
+     "description": "Subtracting 8"
+    },
+    {
+     "code": "HH.9",
+     "description": "Subtracting 9"
+    },
+    {
+     "code": "HH.10",
+     "description": "Subtracting 10"
+    },
+    {
+     "code": "HH.11",
+     "description": "Subtracting 0"
+    },
+    {
+     "code": "HH.12",
+     "description": "Subtract with pictures - numbers up to 20"
+    },
+    {
+     "code": "HH.13",
+     "description": "Subtraction facts - numbers up to 20"
+    },
+    {
+     "code": "HH.14",
+     "description": "Make a number using subtraction - numbers up to 20"
+    },
+    {
+     "code": "HH.15",
+     "description": "Complete the subtraction sentence - numbers up to 20"
+    },
+    {
+     "code": "HH.16",
+     "description": "Subtraction word problems - numbers up to 20"
+    },
+    {
+     "code": "HH.17",
+     "description": "Related subtraction facts"
+    }
+   ]
+  },
+  {
+   "code": "II",
+   "name": "Mixed operations",
+   "skills": [
+    {
+     "code": "II.1",
+     "description": "Add or subtract - numbers up to 5"
+    },
+    {
+     "code": "II.2",
+     "description": "Add or subtract - numbers up to 10"
+    },
+    {
+     "code": "II.3",
+     "description": "Addition and subtraction facts - numbers up to 20"
+    },
+    {
+     "code": "II.4",
+     "description": "Related facts with models - numbers up to 5"
+    },
+    {
+     "code": "II.5",
+     "description": "Related facts with models - numbers up to 10"
+    },
+    {
+     "code": "II.6",
+     "description": "Sum and difference"
+    }
+   ]
+  },
+  {
+   "code": "JJ",
+   "name": "Patterns",
+   "skills": [
+    {
+     "code": "JJ.1",
+     "description": "Colour patterns"
+    },
+    {
+     "code": "JJ.2",
+     "description": "Size patterns"
+    },
+    {
+     "code": "JJ.3",
+     "description": "Shape patterns"
+    },
+    {
+     "code": "JJ.4",
+     "description": "Find the next shape in a pattern"
+    },
+    {
+     "code": "JJ.5",
+     "description": "Complete a pattern"
+    },
+    {
+     "code": "JJ.6",
+     "description": "Make a pattern"
+    },
+    {
+     "code": "JJ.7",
+     "description": "Growing patterns"
+    },
+    {
+     "code": "JJ.8",
+     "description": "Find the next shape in a growing pattern"
+    },
+    {
+     "code": "JJ.9",
+     "description": "Find the next row in a growing pattern"
+    }
+   ]
+  },
+  {
+   "code": "KK",
+   "name": "Positions",
+   "skills": [
+    {
+     "code": "KK.1",
+     "description": "In front of and behind"
+    },
+    {
+     "code": "KK.2",
+     "description": "Inside and outside"
+    },
+    {
+     "code": "KK.3",
+     "description": "Above and below"
+    },
+    {
+     "code": "KK.4",
+     "description": "Beside and next to"
+    },
+    {
+     "code": "KK.5",
+     "description": "Left, middle and right"
+    },
+    {
+     "code": "KK.6",
+     "description": "Top, middle and bottom"
+    },
+    {
+     "code": "KK.7",
+     "description": "Location in a grid"
+    }
+   ]
+  },
+  {
+   "code": "LL",
+   "name": "Same and different",
+   "skills": [
+    {
+     "code": "LL.1",
+     "description": "Different"
+    },
+    {
+     "code": "LL.2",
+     "description": "Same"
+    },
+    {
+     "code": "LL.3",
+     "description": "Same and different"
+    }
+   ]
+  },
+  {
+   "code": "MM",
+   "name": "Fractions",
+   "skills": [
+    {
+     "code": "MM.1",
+     "description": "Equal parts"
+    },
+    {
+     "code": "MM.2",
+     "description": "Identify halves"
+    },
+    {
+     "code": "MM.3",
+     "description": "Identify quarters"
+    },
+    {
+     "code": "MM.4",
+     "description": "Identify halves and quarters"
+    },
+    {
+     "code": "MM.5",
+     "description": "Make halves"
+    },
+    {
+     "code": "MM.6",
+     "description": "Make quarters"
+    },
+    {
+     "code": "MM.7",
+     "description": "Make halves and quarters"
+    }
+   ]
+  },
+  {
+   "code": "NN",
+   "name": "Classifying and sorting",
+   "skills": [
+    {
+     "code": "NN.1",
+     "description": "Classify shapes by colour"
+    },
+    {
+     "code": "NN.2",
+     "description": "Classify and sort by colour"
+    },
+    {
+     "code": "NN.3",
+     "description": "Classify and sort by shape"
+    },
+    {
+     "code": "NN.4",
+     "description": "Classify and sort"
+    },
+    {
+     "code": "NN.5",
+     "description": "Sort, count and compare"
+    },
+    {
+     "code": "NN.6",
+     "description": "Count shapes in a Venn diagram"
+    },
+    {
+     "code": "NN.7",
+     "description": "Sort shapes into a Venn diagram"
+    }
+   ]
+  },
+  {
+   "code": "OO",
+   "name": "Time",
+   "skills": [
+    {
+     "code": "OO.1",
+     "description": "Match digital clocks and times: to the hour"
+    },
+    {
+     "code": "OO.2",
+     "description": "Match analogue clocks and times with words: to the hour"
+    },
+    {
+     "code": "OO.3",
+     "description": "Match analogue clocks and times: to the hour"
+    },
+    {
+     "code": "OO.4",
+     "description": "Match analogue and digital clocks: to the hour"
+    },
+    {
+     "code": "OO.5",
+     "description": "Read clocks and write times: to the hour"
+    },
+    {
+     "code": "OO.6",
+     "description": "Match digital clocks and times: to the half hour"
+    },
+    {
+     "code": "OO.7",
+     "description": "Match analogue clocks and times with words: to the half hour"
+    },
+    {
+     "code": "OO.8",
+     "description": "Match analogue clocks and times: to the half hour"
+    },
+    {
+     "code": "OO.9",
+     "description": "Match analogue and digital clocks: to the half hour"
+    },
+    {
+     "code": "OO.10",
+     "description": "Read clocks and write times: to the half hour"
+    },
+    {
+     "code": "OO.11",
+     "description": "A.M. or P.M."
+    },
+    {
+     "code": "OO.12",
+     "description": "Times of everyday events"
+    },
+    {
+     "code": "OO.13",
+     "description": "Compare clocks"
+    }
+   ]
+  },
+  {
+   "code": "PP",
+   "name": "Days, months and seasons",
+   "skills": [
+    {
+     "code": "PP.1",
+     "description": "Days of the week"
+    },
+    {
+     "code": "PP.2",
+     "description": "Months of the year"
+    },
+    {
+     "code": "PP.3",
+     "description": "Seasons"
+    },
+    {
+     "code": "PP.4",
+     "description": "Read a calendar"
+    }
+   ]
+  },
+  {
+   "code": "QQ",
+   "name": "Data and graphs",
+   "skills": [
+    {
+     "code": "QQ.1",
+     "description": "Which pictograph is correct?"
+    },
+    {
+     "code": "QQ.2",
+     "description": "Interpret pictographs"
+    },
+    {
+     "code": "QQ.3",
+     "description": "Which tally chart is correct?"
+    },
+    {
+     "code": "QQ.4",
+     "description": "Interpret tally charts"
+    },
+    {
+     "code": "QQ.5",
+     "description": "Which table is correct?"
+    },
+    {
+     "code": "QQ.6",
+     "description": "Interpret data in tables"
+    }
+   ]
+  },
+  {
+   "code": "RR",
+   "name": "Probability",
+   "skills": [
+    {
+     "code": "RR.1",
+     "description": "More or less likely"
+    }
+   ]
+  },
+  {
+   "code": "SS",
+   "name": "Measurement",
+   "skills": [
+    {
+     "code": "SS.1",
+     "description": "Long and short"
+    },
+    {
+     "code": "SS.2",
+     "description": "Tall and short"
+    },
+    {
+     "code": "SS.3",
+     "description": "Wide and narrow"
+    },
+    {
+     "code": "SS.4",
+     "description": "Light and heavy"
+    },
+    {
+     "code": "SS.5",
+     "description": "Holds more or less"
+    },
+    {
+     "code": "SS.6",
+     "description": "Covers more or less"
+    },
+    {
+     "code": "SS.7",
+     "description": "Compare size, weight and capacity"
+    },
+    {
+     "code": "SS.8",
+     "description": "Measure length with objects"
+    },
+    {
+     "code": "SS.9",
+     "description": "Measure length with cubes"
+    },
+    {
+     "code": "SS.10",
+     "description": "Build cube models to measure length"
+    },
+    {
+     "code": "SS.11",
+     "description": "Measure height with cubes"
+    },
+    {
+     "code": "SS.12",
+     "description": "Build cube models to measure height"
+    }
+   ]
+  },
+  {
+   "code": "TT",
+   "name": "Money",
+   "skills": [
+    {
+     "code": "TT.1",
+     "description": "Coin values - 1p, 2p, 5p and 10p coins"
+    },
+    {
+     "code": "TT.2",
+     "description": "Coin values - 20p, 50p, £1 and £2"
+    },
+    {
+     "code": "TT.3",
+     "description": "Coin values"
+    },
+    {
+     "code": "TT.4",
+     "description": "Count money - 1p coins only"
+    },
+    {
+     "code": "TT.5",
+     "description": "Count money - 1p and 2p coins"
+    },
+    {
+     "code": "TT.6",
+     "description": "Count money - 1p, 2p and 5p coins"
+    },
+    {
+     "code": "TT.7",
+     "description": "Count money - 1p, 2p, 5p and 10p coins"
+    },
+    {
+     "code": "TT.8",
+     "description": "Equivalent groups of coins"
+    },
+    {
+     "code": "TT.9",
+     "description": "Exchanging groups of coins"
+    },
+    {
+     "code": "TT.10",
+     "description": "Exchanging coins"
+    },
+    {
+     "code": "TT.11",
+     "description": "Compare two groups of coins"
+    }
+   ]
+  },
+  {
+   "code": "UU",
+   "name": "Two-dimensional shapes",
+   "skills": [
+    {
+     "code": "UU.1",
+     "description": "Circles"
+    },
+    {
+     "code": "UU.2",
+     "description": "Triangles"
+    },
+    {
+     "code": "UU.3",
+     "description": "Squares and rectangles"
+    },
+    {
+     "code": "UU.4",
+     "description": "Hexagons"
+    },
+    {
+     "code": "UU.5",
+     "description": "Select two-dimensional shapes"
+    },
+    {
+     "code": "UU.6",
+     "description": "Name the two-dimensional shape"
+    },
+    {
+     "code": "UU.7",
+     "description": "Compose two-dimensional shapes"
+    }
+   ]
+  },
+  {
+   "code": "VV",
+   "name": "Two-dimensional shape attributes",
+   "skills": [
+    {
+     "code": "VV.1",
+     "description": "Curved parts"
+    },
+    {
+     "code": "VV.2",
+     "description": "Count sides and corners"
+    },
+    {
+     "code": "VV.3",
+     "description": "Compare sides and corners"
+    },
+    {
+     "code": "VV.4",
+     "description": "Introduction to symmetry"
+    },
+    {
+     "code": "VV.5",
+     "description": "Identify pictures with symmetry"
+    }
+   ]
+  },
+  {
+   "code": "WW",
+   "name": "Three-dimensional shapes",
+   "skills": [
+    {
+     "code": "WW.1",
+     "description": "Two-dimensional and three-dimensional shapes"
+    },
+    {
+     "code": "WW.2",
+     "description": "Describe three-dimensional shapes"
+    },
+    {
+     "code": "WW.3",
+     "description": "Describe three-dimensional shapes"
+    },
+    {
+     "code": "WW.4",
+     "description": "Cubes and cuboids"
+    },
+    {
+     "code": "WW.5",
+     "description": "Cones"
+    },
+    {
+     "code": "WW.6",
+     "description": "Cylinders"
+    },
+    {
+     "code": "WW.7",
+     "description": "Pyramids"
+    },
+    {
+     "code": "WW.8",
+     "description": "Name the three-dimensional shape"
+    },
+    {
+     "code": "WW.9",
+     "description": "Select three-dimensional shapes"
+    },
+    {
+     "code": "WW.10",
+     "description": "Identify shapes traced from solids"
+    }
+   ]
+  },
+  {
+   "code": "XX",
+   "name": "Shapes in the real world",
+   "skills": [
+    {
+     "code": "XX.1",
+     "description": "Two-dimensional shapes in the real world"
+    },
+    {
+     "code": "XX.2",
+     "description": "Three-dimensional shapes in the real world I"
+    },
+    {
+     "code": "XX.3",
+     "description": "Three-dimensional shapes in the real world II"
+    },
+    {
+     "code": "XX.4",
+     "description": "Three-dimensional shapes - above and below"
+    },
+    {
+     "code": "XX.5",
+     "description": "Three-dimensional shapes - beside and next to"
+    }
+   ]
+  },
+  {
+   "code": "YY",
+   "name": "Understand multiplication",
+   "skills": [
+    {
+     "code": "YY.1",
+     "description": "Count equal groups"
+    },
+    {
+     "code": "YY.2",
+     "description": "Identify multiplication expressions for equal groups"
+    },
+    {
+     "code": "YY.3",
+     "description": "Write multiplication sentences for equal groups"
+    },
+    {
+     "code": "YY.4",
+     "description": "Identify multiplication expressions for arrays"
+    },
+    {
+     "code": "YY.5",
+     "description": "Write multiplication sentences for arrays"
+    }
+   ]
+  },
+  {
+   "code": "ZZ",
+   "name": "Understand division",
+   "skills": [
+    {
+     "code": "ZZ.1",
+     "description": "Divide by counting equal groups"
+    },
+    {
+     "code": "ZZ.2",
+     "description": "Write division sentences for equal groups"
+    },
+    {
+     "code": "ZZ.3",
+     "description": "Write division sentences for arrays"
+    }
+   ]
+  }
+ ]
+}
