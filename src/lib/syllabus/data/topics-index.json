@@ -1,0 +1,2840 @@
+{
+ "years": [
+  {
+   "year": 1,
+   "topicCount": 52,
+   "skillCount": 331,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Numbers to 3",
+     "skillCount": 2
+    },
+    {
+     "code": "B",
+     "name": "Counting to 3",
+     "skillCount": 6
+    },
+    {
+     "code": "C",
+     "name": "Numbers to 5",
+     "skillCount": 2
+    },
+    {
+     "code": "D",
+     "name": "Counting to 5",
+     "skillCount": 10
+    },
+    {
+     "code": "E",
+     "name": "One more and one less to 5",
+     "skillCount": 6
+    },
+    {
+     "code": "F",
+     "name": "Numbers to 10",
+     "skillCount": 6
+    },
+    {
+     "code": "G",
+     "name": "Counting to 10",
+     "skillCount": 9
+    },
+    {
+     "code": "H",
+     "name": "One more and one less to 10",
+     "skillCount": 9
+    },
+    {
+     "code": "I",
+     "name": "Counting forward and back to 10",
+     "skillCount": 8
+    },
+    {
+     "code": "J",
+     "name": "Comparing up to 10",
+     "skillCount": 8
+    },
+    {
+     "code": "K",
+     "name": "Numbers to 20",
+     "skillCount": 6
+    },
+    {
+     "code": "L",
+     "name": "Counting to 20",
+     "skillCount": 6
+    },
+    {
+     "code": "M",
+     "name": "One more and one less to 20",
+     "skillCount": 3
+    },
+    {
+     "code": "N",
+     "name": "Counting forward and back to 20",
+     "skillCount": 5
+    },
+    {
+     "code": "O",
+     "name": "Comparing up to 20",
+     "skillCount": 4
+    },
+    {
+     "code": "P",
+     "name": "Teen numbers",
+     "skillCount": 4
+    },
+    {
+     "code": "Q",
+     "name": "Numbers and counting beyond 20",
+     "skillCount": 9
+    },
+    {
+     "code": "R",
+     "name": "Skip-counting",
+     "skillCount": 10
+    },
+    {
+     "code": "S",
+     "name": "Understand addition up to 5",
+     "skillCount": 3
+    },
+    {
+     "code": "T",
+     "name": "Addition up to 5",
+     "skillCount": 4
+    },
+    {
+     "code": "U",
+     "name": "Partition numbers up to 5",
+     "skillCount": 3
+    },
+    {
+     "code": "V",
+     "name": "Addition word problems up to 5",
+     "skillCount": 3
+    },
+    {
+     "code": "W",
+     "name": "Understand addition up to 10",
+     "skillCount": 4
+    },
+    {
+     "code": "X",
+     "name": "Addition up to 10",
+     "skillCount": 12
+    },
+    {
+     "code": "Y",
+     "name": "Partition numbers up to 10",
+     "skillCount": 4
+    },
+    {
+     "code": "Z",
+     "name": "Addition word problems up to 10",
+     "skillCount": 3
+    },
+    {
+     "code": "AA",
+     "name": "Addition up to 20",
+     "skillCount": 18
+    },
+    {
+     "code": "BB",
+     "name": "Understand subtraction up to 5",
+     "skillCount": 4
+    },
+    {
+     "code": "CC",
+     "name": "Subtraction up to 5",
+     "skillCount": 4
+    },
+    {
+     "code": "DD",
+     "name": "Subtraction word problems up to 5",
+     "skillCount": 4
+    },
+    {
+     "code": "EE",
+     "name": "Understand subtraction up to 10",
+     "skillCount": 4
+    },
+    {
+     "code": "FF",
+     "name": "Subtraction up to 10",
+     "skillCount": 6
+    },
+    {
+     "code": "GG",
+     "name": "Subtraction word problems up to 10",
+     "skillCount": 4
+    },
+    {
+     "code": "HH",
+     "name": "Subtraction up to 20",
+     "skillCount": 17
+    },
+    {
+     "code": "II",
+     "name": "Mixed operations",
+     "skillCount": 6
+    },
+    {
+     "code": "JJ",
+     "name": "Patterns",
+     "skillCount": 9
+    },
+    {
+     "code": "KK",
+     "name": "Positions",
+     "skillCount": 7
+    },
+    {
+     "code": "LL",
+     "name": "Same and different",
+     "skillCount": 3
+    },
+    {
+     "code": "MM",
+     "name": "Fractions",
+     "skillCount": 7
+    },
+    {
+     "code": "NN",
+     "name": "Classifying and sorting",
+     "skillCount": 7
+    },
+    {
+     "code": "OO",
+     "name": "Time",
+     "skillCount": 13
+    },
+    {
+     "code": "PP",
+     "name": "Days, months and seasons",
+     "skillCount": 4
+    },
+    {
+     "code": "QQ",
+     "name": "Data and graphs",
+     "skillCount": 6
+    },
+    {
+     "code": "RR",
+     "name": "Probability",
+     "skillCount": 1
+    },
+    {
+     "code": "SS",
+     "name": "Measurement",
+     "skillCount": 12
+    },
+    {
+     "code": "TT",
+     "name": "Money",
+     "skillCount": 11
+    },
+    {
+     "code": "UU",
+     "name": "Two-dimensional shapes",
+     "skillCount": 7
+    },
+    {
+     "code": "VV",
+     "name": "Two-dimensional shape attributes",
+     "skillCount": 5
+    },
+    {
+     "code": "WW",
+     "name": "Three-dimensional shapes",
+     "skillCount": 10
+    },
+    {
+     "code": "XX",
+     "name": "Shapes in the real world",
+     "skillCount": 5
+    },
+    {
+     "code": "YY",
+     "name": "Understand multiplication",
+     "skillCount": 5
+    },
+    {
+     "code": "ZZ",
+     "name": "Understand division",
+     "skillCount": 3
+    }
+   ]
+  },
+  {
+   "year": 2,
+   "topicCount": 49,
+   "skillCount": 365,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Counting and numbers",
+     "skillCount": 17
+    },
+    {
+     "code": "B",
+     "name": "Skip-counting",
+     "skillCount": 6
+    },
+    {
+     "code": "C",
+     "name": "Even and odd",
+     "skillCount": 4
+    },
+    {
+     "code": "D",
+     "name": "Comparing up to 10",
+     "skillCount": 3
+    },
+    {
+     "code": "E",
+     "name": "Understand addition",
+     "skillCount": 7
+    },
+    {
+     "code": "F",
+     "name": "Addition strategies up to 10",
+     "skillCount": 4
+    },
+    {
+     "code": "G",
+     "name": "Addition up to 10",
+     "skillCount": 4
+    },
+    {
+     "code": "H",
+     "name": "Addition word problems up to 10",
+     "skillCount": 4
+    },
+    {
+     "code": "I",
+     "name": "Understand subtraction",
+     "skillCount": 9
+    },
+    {
+     "code": "J",
+     "name": "Subtraction strategies up to 10",
+     "skillCount": 4
+    },
+    {
+     "code": "K",
+     "name": "Subtraction up to 10",
+     "skillCount": 4
+    },
+    {
+     "code": "L",
+     "name": "Subtraction word problems up to 10",
+     "skillCount": 5
+    },
+    {
+     "code": "M",
+     "name": "Addition and subtraction up to 10",
+     "skillCount": 3
+    },
+    {
+     "code": "N",
+     "name": "Addition and subtraction word problems up to 10",
+     "skillCount": 4
+    },
+    {
+     "code": "O",
+     "name": "Addition strategies up to 20",
+     "skillCount": 12
+    },
+    {
+     "code": "P",
+     "name": "Addition up to 20",
+     "skillCount": 15
+    },
+    {
+     "code": "Q",
+     "name": "Addition word problems up to 20",
+     "skillCount": 3
+    },
+    {
+     "code": "R",
+     "name": "Subtraction strategies up to 20",
+     "skillCount": 9
+    },
+    {
+     "code": "S",
+     "name": "Subtraction up to 20",
+     "skillCount": 14
+    },
+    {
+     "code": "T",
+     "name": "Subtraction word problems up to 20",
+     "skillCount": 2
+    },
+    {
+     "code": "U",
+     "name": "Addition and subtraction up to 20",
+     "skillCount": 2
+    },
+    {
+     "code": "V",
+     "name": "Addition and subtraction word problems up to 20",
+     "skillCount": 5
+    },
+    {
+     "code": "W",
+     "name": "True or false equations",
+     "skillCount": 4
+    },
+    {
+     "code": "X",
+     "name": "Complete the equation",
+     "skillCount": 4
+    },
+    {
+     "code": "Y",
+     "name": "Place value",
+     "skillCount": 11
+    },
+    {
+     "code": "Z",
+     "name": "Comparing up to 100",
+     "skillCount": 6
+    },
+    {
+     "code": "AA",
+     "name": "Addition and subtraction: multiples of ten",
+     "skillCount": 4
+    },
+    {
+     "code": "BB",
+     "name": "Addition strategies: two digits",
+     "skillCount": 12
+    },
+    {
+     "code": "CC",
+     "name": "Addition: two digits",
+     "skillCount": 7
+    },
+    {
+     "code": "DD",
+     "name": "Subtraction strategies: two digits",
+     "skillCount": 6
+    },
+    {
+     "code": "EE",
+     "name": "Subtraction: two digits",
+     "skillCount": 6
+    },
+    {
+     "code": "FF",
+     "name": "Addition and subtraction: two digits",
+     "skillCount": 2
+    },
+    {
+     "code": "GG",
+     "name": "Addition and subtraction word problems: two digits",
+     "skillCount": 3
+    },
+    {
+     "code": "HH",
+     "name": "Understand multiplication",
+     "skillCount": 10
+    },
+    {
+     "code": "II",
+     "name": "Multiplication",
+     "skillCount": 10
+    },
+    {
+     "code": "JJ",
+     "name": "Understand division",
+     "skillCount": 6
+    },
+    {
+     "code": "KK",
+     "name": "Division",
+     "skillCount": 9
+    },
+    {
+     "code": "LL",
+     "name": "Multiplication and division",
+     "skillCount": 4
+    },
+    {
+     "code": "MM",
+     "name": "Measurement",
+     "skillCount": 17
+    },
+    {
+     "code": "NN",
+     "name": "Time",
+     "skillCount": 17
+    },
+    {
+     "code": "OO",
+     "name": "Days, months and seasons",
+     "skillCount": 4
+    },
+    {
+     "code": "PP",
+     "name": "Money",
+     "skillCount": 12
+    },
+    {
+     "code": "QQ",
+     "name": "Data and graphs",
+     "skillCount": 12
+    },
+    {
+     "code": "RR",
+     "name": "Patterns",
+     "skillCount": 7
+    },
+    {
+     "code": "SS",
+     "name": "Two-dimensional shapes",
+     "skillCount": 12
+    },
+    {
+     "code": "TT",
+     "name": "Three-dimensional shapes",
+     "skillCount": 11
+    },
+    {
+     "code": "UU",
+     "name": "Spatial sense",
+     "skillCount": 8
+    },
+    {
+     "code": "VV",
+     "name": "Classifying and sorting",
+     "skillCount": 5
+    },
+    {
+     "code": "WW",
+     "name": "Fractions",
+     "skillCount": 16
+    }
+   ]
+  },
+  {
+   "year": 3,
+   "topicCount": 46,
+   "skillCount": 430,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Counting",
+     "skillCount": 4
+    },
+    {
+     "code": "B",
+     "name": "Skip-counting and number patterns",
+     "skillCount": 9
+    },
+    {
+     "code": "C",
+     "name": "Names of numbers",
+     "skillCount": 9
+    },
+    {
+     "code": "D",
+     "name": "Even and odd",
+     "skillCount": 5
+    },
+    {
+     "code": "E",
+     "name": "Place value",
+     "skillCount": 14
+    },
+    {
+     "code": "F",
+     "name": "Comparing and ordering",
+     "skillCount": 8
+    },
+    {
+     "code": "G",
+     "name": "Estimation and rounding",
+     "skillCount": 7
+    },
+    {
+     "code": "H",
+     "name": "Patterns",
+     "skillCount": 6
+    },
+    {
+     "code": "I",
+     "name": "Addition up to 20",
+     "skillCount": 13
+    },
+    {
+     "code": "J",
+     "name": "Subtraction up to 20",
+     "skillCount": 11
+    },
+    {
+     "code": "K",
+     "name": "Addition and subtraction up to 20",
+     "skillCount": 7
+    },
+    {
+     "code": "L",
+     "name": "Addition - two digits",
+     "skillCount": 20
+    },
+    {
+     "code": "M",
+     "name": "Subtraction - two digits",
+     "skillCount": 16
+    },
+    {
+     "code": "N",
+     "name": "Addition and subtraction - two digits",
+     "skillCount": 11
+    },
+    {
+     "code": "O",
+     "name": "Addition - three digits",
+     "skillCount": 16
+    },
+    {
+     "code": "P",
+     "name": "Subtraction - three digits",
+     "skillCount": 17
+    },
+    {
+     "code": "Q",
+     "name": "Addition and subtraction - three digits",
+     "skillCount": 4
+    },
+    {
+     "code": "R",
+     "name": "Understand multiplication",
+     "skillCount": 12
+    },
+    {
+     "code": "S",
+     "name": "Multiplication skill builders",
+     "skillCount": 11
+    },
+    {
+     "code": "T",
+     "name": "Multiplication fluency",
+     "skillCount": 15
+    },
+    {
+     "code": "U",
+     "name": "Multiplication word problems",
+     "skillCount": 3
+    },
+    {
+     "code": "V",
+     "name": "Multiplication with larger numbers",
+     "skillCount": 6
+    },
+    {
+     "code": "W",
+     "name": "Understand division",
+     "skillCount": 7
+    },
+    {
+     "code": "X",
+     "name": "Division skill builders",
+     "skillCount": 10
+    },
+    {
+     "code": "Y",
+     "name": "Division fluency",
+     "skillCount": 14
+    },
+    {
+     "code": "Z",
+     "name": "Division word problems",
+     "skillCount": 4
+    },
+    {
+     "code": "AA",
+     "name": "Division with larger numbers",
+     "skillCount": 4
+    },
+    {
+     "code": "BB",
+     "name": "Multiplication and division",
+     "skillCount": 4
+    },
+    {
+     "code": "CC",
+     "name": "Mixed operations",
+     "skillCount": 2
+    },
+    {
+     "code": "DD",
+     "name": "Properties",
+     "skillCount": 5
+    },
+    {
+     "code": "EE",
+     "name": "Money",
+     "skillCount": 18
+    },
+    {
+     "code": "FF",
+     "name": "Time",
+     "skillCount": 14
+    },
+    {
+     "code": "GG",
+     "name": "Days, months and seasons",
+     "skillCount": 5
+    },
+    {
+     "code": "HH",
+     "name": "Data and graphs",
+     "skillCount": 16
+    },
+    {
+     "code": "II",
+     "name": "Units of measurement",
+     "skillCount": 14
+    },
+    {
+     "code": "JJ",
+     "name": "Two-dimensional shapes",
+     "skillCount": 15
+    },
+    {
+     "code": "KK",
+     "name": "Three-dimensional shapes",
+     "skillCount": 9
+    },
+    {
+     "code": "LL",
+     "name": "Symmetry",
+     "skillCount": 3
+    },
+    {
+     "code": "MM",
+     "name": "Perimeter and area",
+     "skillCount": 9
+    },
+    {
+     "code": "NN",
+     "name": "Understand fractions",
+     "skillCount": 13
+    },
+    {
+     "code": "OO",
+     "name": "Fractions on number lines",
+     "skillCount": 8
+    },
+    {
+     "code": "PP",
+     "name": "Equivalent fractions",
+     "skillCount": 7
+    },
+    {
+     "code": "QQ",
+     "name": "Compare fractions",
+     "skillCount": 8
+    },
+    {
+     "code": "RR",
+     "name": "Add and subtract fractions",
+     "skillCount": 12
+    },
+    {
+     "code": "SS",
+     "name": "Probability",
+     "skillCount": 3
+    },
+    {
+     "code": "TT",
+     "name": "Financial literacy",
+     "skillCount": 2
+    }
+   ]
+  },
+  {
+   "year": 4,
+   "topicCount": 48,
+   "skillCount": 470,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Numbers",
+     "skillCount": 11
+    },
+    {
+     "code": "B",
+     "name": "Comparing and ordering",
+     "skillCount": 7
+    },
+    {
+     "code": "C",
+     "name": "Place value",
+     "skillCount": 9
+    },
+    {
+     "code": "D",
+     "name": "Addition",
+     "skillCount": 22
+    },
+    {
+     "code": "E",
+     "name": "Subtraction",
+     "skillCount": 17
+    },
+    {
+     "code": "F",
+     "name": "Mixed operations: addition and subtraction",
+     "skillCount": 4
+    },
+    {
+     "code": "G",
+     "name": "Understand multiplication",
+     "skillCount": 9
+    },
+    {
+     "code": "H",
+     "name": "Multiplication skill builders",
+     "skillCount": 13
+    },
+    {
+     "code": "I",
+     "name": "Multiplication fluency up to 10",
+     "skillCount": 18
+    },
+    {
+     "code": "J",
+     "name": "Multiplication fluency up to 12",
+     "skillCount": 6
+    },
+    {
+     "code": "K",
+     "name": "Factors and multiples",
+     "skillCount": 6
+    },
+    {
+     "code": "L",
+     "name": "Multiplication",
+     "skillCount": 21
+    },
+    {
+     "code": "M",
+     "name": "Understand division",
+     "skillCount": 6
+    },
+    {
+     "code": "N",
+     "name": "Division skill builders",
+     "skillCount": 12
+    },
+    {
+     "code": "O",
+     "name": "Division fluency up to 10",
+     "skillCount": 13
+    },
+    {
+     "code": "P",
+     "name": "Division fluency up to 12",
+     "skillCount": 6
+    },
+    {
+     "code": "Q",
+     "name": "Division",
+     "skillCount": 13
+    },
+    {
+     "code": "R",
+     "name": "Mixed operations: multiplication and division",
+     "skillCount": 11
+    },
+    {
+     "code": "S",
+     "name": "Mixed operations",
+     "skillCount": 12
+    },
+    {
+     "code": "T",
+     "name": "Properties",
+     "skillCount": 10
+    },
+    {
+     "code": "U",
+     "name": "Integers",
+     "skillCount": 4
+    },
+    {
+     "code": "V",
+     "name": "Equations and variables",
+     "skillCount": 7
+    },
+    {
+     "code": "W",
+     "name": "Rounding",
+     "skillCount": 5
+    },
+    {
+     "code": "X",
+     "name": "Estimation",
+     "skillCount": 13
+    },
+    {
+     "code": "Y",
+     "name": "Logical reasoning",
+     "skillCount": 6
+    },
+    {
+     "code": "Z",
+     "name": "Patterns",
+     "skillCount": 6
+    },
+    {
+     "code": "AA",
+     "name": "Understand fractions",
+     "skillCount": 6
+    },
+    {
+     "code": "BB",
+     "name": "Fractions on number lines",
+     "skillCount": 5
+    },
+    {
+     "code": "CC",
+     "name": "Fraction word problems",
+     "skillCount": 5
+    },
+    {
+     "code": "DD",
+     "name": "Equivalent fractions",
+     "skillCount": 9
+    },
+    {
+     "code": "EE",
+     "name": "Compare and order fractions",
+     "skillCount": 5
+    },
+    {
+     "code": "FF",
+     "name": "Operations with fractions",
+     "skillCount": 15
+    },
+    {
+     "code": "GG",
+     "name": "Decimals",
+     "skillCount": 13
+    },
+    {
+     "code": "HH",
+     "name": "Compare and order decimals",
+     "skillCount": 6
+    },
+    {
+     "code": "II",
+     "name": "Operations with decimals",
+     "skillCount": 11
+    },
+    {
+     "code": "JJ",
+     "name": "Money",
+     "skillCount": 11
+    },
+    {
+     "code": "KK",
+     "name": "Time",
+     "skillCount": 16
+    },
+    {
+     "code": "LL",
+     "name": "Coordinate plane",
+     "skillCount": 6
+    },
+    {
+     "code": "MM",
+     "name": "Data and graphs",
+     "skillCount": 17
+    },
+    {
+     "code": "NN",
+     "name": "Probability and statistics",
+     "skillCount": 6
+    },
+    {
+     "code": "OO",
+     "name": "Metric units of measurement",
+     "skillCount": 15
+    },
+    {
+     "code": "PP",
+     "name": "Imperial units of measurement",
+     "skillCount": 8
+    },
+    {
+     "code": "QQ",
+     "name": "Perimeter, area and volume",
+     "skillCount": 16
+    },
+    {
+     "code": "RR",
+     "name": "Lines and angles",
+     "skillCount": 6
+    },
+    {
+     "code": "SS",
+     "name": "Two-dimensional figures",
+     "skillCount": 6
+    },
+    {
+     "code": "TT",
+     "name": "Triangles and quadrilaterals",
+     "skillCount": 9
+    },
+    {
+     "code": "UU",
+     "name": "Symmetry and transformations",
+     "skillCount": 7
+    },
+    {
+     "code": "VV",
+     "name": "Three-dimensional figures",
+     "skillCount": 5
+    }
+   ]
+  },
+  {
+   "year": 5,
+   "topicCount": 48,
+   "skillCount": 459,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Place value and number sense",
+     "skillCount": 16
+    },
+    {
+     "code": "B",
+     "name": "Comparing and ordering",
+     "skillCount": 4
+    },
+    {
+     "code": "C",
+     "name": "Addition",
+     "skillCount": 16
+    },
+    {
+     "code": "D",
+     "name": "Subtraction",
+     "skillCount": 12
+    },
+    {
+     "code": "E",
+     "name": "Multiplication fluency",
+     "skillCount": 9
+    },
+    {
+     "code": "F",
+     "name": "Multiply by one-digit numbers",
+     "skillCount": 17
+    },
+    {
+     "code": "G",
+     "name": "Multiply by two-digit numbers",
+     "skillCount": 21
+    },
+    {
+     "code": "H",
+     "name": "Division fluency",
+     "skillCount": 7
+    },
+    {
+     "code": "I",
+     "name": "Division",
+     "skillCount": 27
+    },
+    {
+     "code": "J",
+     "name": "Mixed operations",
+     "skillCount": 9
+    },
+    {
+     "code": "K",
+     "name": "Mixed operations word problems",
+     "skillCount": 10
+    },
+    {
+     "code": "L",
+     "name": "Indices",
+     "skillCount": 2
+    },
+    {
+     "code": "M",
+     "name": "Number theory",
+     "skillCount": 10
+    },
+    {
+     "code": "N",
+     "name": "Integers",
+     "skillCount": 6
+    },
+    {
+     "code": "O",
+     "name": "Coordinate plane",
+     "skillCount": 5
+    },
+    {
+     "code": "P",
+     "name": "Variables, expressions and equations",
+     "skillCount": 9
+    },
+    {
+     "code": "Q",
+     "name": "Data and graphs",
+     "skillCount": 17
+    },
+    {
+     "code": "R",
+     "name": "Logical reasoning",
+     "skillCount": 3
+    },
+    {
+     "code": "S",
+     "name": "Patterns and sequences",
+     "skillCount": 9
+    },
+    {
+     "code": "T",
+     "name": "Money",
+     "skillCount": 6
+    },
+    {
+     "code": "U",
+     "name": "Metric units of measurement",
+     "skillCount": 9
+    },
+    {
+     "code": "V",
+     "name": "Imperial units of measurement",
+     "skillCount": 6
+    },
+    {
+     "code": "W",
+     "name": "Time",
+     "skillCount": 18
+    },
+    {
+     "code": "X",
+     "name": "Two-dimensional figures",
+     "skillCount": 9
+    },
+    {
+     "code": "Y",
+     "name": "Angle measurement",
+     "skillCount": 8
+    },
+    {
+     "code": "Z",
+     "name": "Symmetry and transformations",
+     "skillCount": 9
+    },
+    {
+     "code": "AA",
+     "name": "Three-dimensional figures",
+     "skillCount": 5
+    },
+    {
+     "code": "BB",
+     "name": "Perimeter",
+     "skillCount": 6
+    },
+    {
+     "code": "CC",
+     "name": "Area",
+     "skillCount": 12
+    },
+    {
+     "code": "DD",
+     "name": "Perimeter and area",
+     "skillCount": 2
+    },
+    {
+     "code": "EE",
+     "name": "Volume",
+     "skillCount": 2
+    },
+    {
+     "code": "FF",
+     "name": "Fractions and mixed numbers",
+     "skillCount": 9
+    },
+    {
+     "code": "GG",
+     "name": "Equivalent fractions",
+     "skillCount": 8
+    },
+    {
+     "code": "HH",
+     "name": "Compare and order fractions",
+     "skillCount": 9
+    },
+    {
+     "code": "II",
+     "name": "Understand fraction addition and subtraction",
+     "skillCount": 8
+    },
+    {
+     "code": "JJ",
+     "name": "Add and subtract fractions with the same denominator",
+     "skillCount": 11
+    },
+    {
+     "code": "KK",
+     "name": "Add and subtract fractions with different denominators",
+     "skillCount": 11
+    },
+    {
+     "code": "LL",
+     "name": "Multiply unit fractions and whole numbers",
+     "skillCount": 6
+    },
+    {
+     "code": "MM",
+     "name": "Multiply fractions and whole numbers",
+     "skillCount": 9
+    },
+    {
+     "code": "NN",
+     "name": "Relate fractions and decimals",
+     "skillCount": 11
+    },
+    {
+     "code": "OO",
+     "name": "Decimals up to hundredths",
+     "skillCount": 15
+    },
+    {
+     "code": "PP",
+     "name": "Decimals up to thousandths",
+     "skillCount": 9
+    },
+    {
+     "code": "QQ",
+     "name": "Add and subtract decimals",
+     "skillCount": 18
+    },
+    {
+     "code": "RR",
+     "name": "Multiply and divide decimals",
+     "skillCount": 6
+    },
+    {
+     "code": "SS",
+     "name": "Percents and ratios",
+     "skillCount": 14
+    },
+    {
+     "code": "TT",
+     "name": "Probability",
+     "skillCount": 3
+    },
+    {
+     "code": "UU",
+     "name": "Statistics",
+     "skillCount": 8
+    },
+    {
+     "code": "VV",
+     "name": "Financial literacy",
+     "skillCount": 3
+    }
+   ]
+  },
+  {
+   "year": 6,
+   "topicCount": 47,
+   "skillCount": 467,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Place value and number sense",
+     "skillCount": 12
+    },
+    {
+     "code": "B",
+     "name": "Comparing and ordering",
+     "skillCount": 4
+    },
+    {
+     "code": "C",
+     "name": "Addition and subtraction",
+     "skillCount": 11
+    },
+    {
+     "code": "D",
+     "name": "Multiplication fluency",
+     "skillCount": 6
+    },
+    {
+     "code": "E",
+     "name": "Multiplication",
+     "skillCount": 25
+    },
+    {
+     "code": "F",
+     "name": "Division fluency",
+     "skillCount": 6
+    },
+    {
+     "code": "G",
+     "name": "Division",
+     "skillCount": 20
+    },
+    {
+     "code": "H",
+     "name": "Number theory",
+     "skillCount": 9
+    },
+    {
+     "code": "I",
+     "name": "Fractions and mixed numbers",
+     "skillCount": 16
+    },
+    {
+     "code": "J",
+     "name": "Compare fractions",
+     "skillCount": 3
+    },
+    {
+     "code": "K",
+     "name": "Add and subtract fractions with the same denominator",
+     "skillCount": 8
+    },
+    {
+     "code": "L",
+     "name": "Add and subtract fractions with different denominators",
+     "skillCount": 19
+    },
+    {
+     "code": "M",
+     "name": "Multiply fractions",
+     "skillCount": 19
+    },
+    {
+     "code": "N",
+     "name": "Divide fractions",
+     "skillCount": 4
+    },
+    {
+     "code": "O",
+     "name": "Relate decimals and fractions",
+     "skillCount": 7
+    },
+    {
+     "code": "P",
+     "name": "Decimals",
+     "skillCount": 6
+    },
+    {
+     "code": "Q",
+     "name": "Compare decimals",
+     "skillCount": 5
+    },
+    {
+     "code": "R",
+     "name": "Compare decimals and fractions",
+     "skillCount": 3
+    },
+    {
+     "code": "S",
+     "name": "Add and subtract decimals",
+     "skillCount": 11
+    },
+    {
+     "code": "T",
+     "name": "Multiply decimals",
+     "skillCount": 14
+    },
+    {
+     "code": "U",
+     "name": "Divide decimals",
+     "skillCount": 11
+    },
+    {
+     "code": "V",
+     "name": "Integers",
+     "skillCount": 6
+    },
+    {
+     "code": "W",
+     "name": "Add and subtract integers",
+     "skillCount": 3
+    },
+    {
+     "code": "X",
+     "name": "Mixed operations",
+     "skillCount": 13
+    },
+    {
+     "code": "Y",
+     "name": "Problem solving",
+     "skillCount": 10
+    },
+    {
+     "code": "Z",
+     "name": "Ratios and rates",
+     "skillCount": 12
+    },
+    {
+     "code": "AA",
+     "name": "Percents",
+     "skillCount": 10
+    },
+    {
+     "code": "BB",
+     "name": "Money",
+     "skillCount": 12
+    },
+    {
+     "code": "CC",
+     "name": "Patterns and sequences",
+     "skillCount": 12
+    },
+    {
+     "code": "DD",
+     "name": "Coordinate plane",
+     "skillCount": 7
+    },
+    {
+     "code": "EE",
+     "name": "Variables, expressions and equations",
+     "skillCount": 20
+    },
+    {
+     "code": "FF",
+     "name": "Data and graphs",
+     "skillCount": 21
+    },
+    {
+     "code": "GG",
+     "name": "Probability",
+     "skillCount": 6
+    },
+    {
+     "code": "HH",
+     "name": "Statistics",
+     "skillCount": 14
+    },
+    {
+     "code": "II",
+     "name": "Time",
+     "skillCount": 11
+    },
+    {
+     "code": "JJ",
+     "name": "Metric units of measurement",
+     "skillCount": 10
+    },
+    {
+     "code": "KK",
+     "name": "Imperial units of measurement",
+     "skillCount": 7
+    },
+    {
+     "code": "LL",
+     "name": "Two-dimensional figures",
+     "skillCount": 9
+    },
+    {
+     "code": "MM",
+     "name": "Angles",
+     "skillCount": 9
+    },
+    {
+     "code": "NN",
+     "name": "Triangles and quadrilaterals",
+     "skillCount": 15
+    },
+    {
+     "code": "OO",
+     "name": "Symmetry and transformations",
+     "skillCount": 11
+    },
+    {
+     "code": "PP",
+     "name": "Three-dimensional figures",
+     "skillCount": 5
+    },
+    {
+     "code": "QQ",
+     "name": "Perimeter",
+     "skillCount": 3
+    },
+    {
+     "code": "RR",
+     "name": "Area",
+     "skillCount": 8
+    },
+    {
+     "code": "SS",
+     "name": "Perimeter and area",
+     "skillCount": 4
+    },
+    {
+     "code": "TT",
+     "name": "Volume",
+     "skillCount": 4
+    },
+    {
+     "code": "UU",
+     "name": "Financial literacy",
+     "skillCount": 6
+    }
+   ]
+  },
+  {
+   "year": 7,
+   "topicCount": 39,
+   "skillCount": 402,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Whole numbers",
+     "skillCount": 6
+    },
+    {
+     "code": "B",
+     "name": "Multiplication",
+     "skillCount": 8
+    },
+    {
+     "code": "C",
+     "name": "Division",
+     "skillCount": 6
+    },
+    {
+     "code": "D",
+     "name": "Indices and square roots",
+     "skillCount": 8
+    },
+    {
+     "code": "E",
+     "name": "Number theory",
+     "skillCount": 9
+    },
+    {
+     "code": "F",
+     "name": "Decimals",
+     "skillCount": 9
+    },
+    {
+     "code": "G",
+     "name": "Add and subtract decimals",
+     "skillCount": 5
+    },
+    {
+     "code": "H",
+     "name": "Multiply and divide decimals",
+     "skillCount": 12
+    },
+    {
+     "code": "I",
+     "name": "Fractions and mixed numbers",
+     "skillCount": 17
+    },
+    {
+     "code": "J",
+     "name": "Add and subtract fractions",
+     "skillCount": 15
+    },
+    {
+     "code": "K",
+     "name": "Multiply fractions",
+     "skillCount": 20
+    },
+    {
+     "code": "L",
+     "name": "Divide fractions",
+     "skillCount": 11
+    },
+    {
+     "code": "M",
+     "name": "Integers",
+     "skillCount": 7
+    },
+    {
+     "code": "N",
+     "name": "Add and subtract integers",
+     "skillCount": 14
+    },
+    {
+     "code": "O",
+     "name": "Multiply and divide integers",
+     "skillCount": 8
+    },
+    {
+     "code": "P",
+     "name": "Mixed operations",
+     "skillCount": 14
+    },
+    {
+     "code": "Q",
+     "name": "Rational numbers",
+     "skillCount": 6
+    },
+    {
+     "code": "R",
+     "name": "Problem solving and estimation",
+     "skillCount": 7
+    },
+    {
+     "code": "S",
+     "name": "Ratios and rates",
+     "skillCount": 18
+    },
+    {
+     "code": "T",
+     "name": "Percents",
+     "skillCount": 13
+    },
+    {
+     "code": "U",
+     "name": "Units of measurement",
+     "skillCount": 12
+    },
+    {
+     "code": "V",
+     "name": "Money",
+     "skillCount": 7
+    },
+    {
+     "code": "W",
+     "name": "Consumer maths",
+     "skillCount": 7
+    },
+    {
+     "code": "X",
+     "name": "Time",
+     "skillCount": 7
+    },
+    {
+     "code": "Y",
+     "name": "Coordinate plane",
+     "skillCount": 5
+    },
+    {
+     "code": "Z",
+     "name": "Number sequences",
+     "skillCount": 7
+    },
+    {
+     "code": "AA",
+     "name": "Expressions and properties",
+     "skillCount": 18
+    },
+    {
+     "code": "BB",
+     "name": "One-variable equations",
+     "skillCount": 16
+    },
+    {
+     "code": "CC",
+     "name": "One-variable inequalities",
+     "skillCount": 7
+    },
+    {
+     "code": "DD",
+     "name": "Two-variable equations",
+     "skillCount": 13
+    },
+    {
+     "code": "EE",
+     "name": "Lines and angles",
+     "skillCount": 10
+    },
+    {
+     "code": "FF",
+     "name": "Two-dimensional figures",
+     "skillCount": 9
+    },
+    {
+     "code": "GG",
+     "name": "Symmetry and transformations",
+     "skillCount": 9
+    },
+    {
+     "code": "HH",
+     "name": "Three-dimensional figures",
+     "skillCount": 4
+    },
+    {
+     "code": "II",
+     "name": "Perimeter, area and volume",
+     "skillCount": 19
+    },
+    {
+     "code": "JJ",
+     "name": "Data and graphs",
+     "skillCount": 20
+    },
+    {
+     "code": "KK",
+     "name": "Statistics",
+     "skillCount": 9
+    },
+    {
+     "code": "LL",
+     "name": "Probability",
+     "skillCount": 7
+    },
+    {
+     "code": "MM",
+     "name": "Financial literacy",
+     "skillCount": 3
+    }
+   ]
+  },
+  {
+   "year": 8,
+   "topicCount": 39,
+   "skillCount": 379,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Number theory",
+     "skillCount": 9
+    },
+    {
+     "code": "B",
+     "name": "Decimals",
+     "skillCount": 4
+    },
+    {
+     "code": "C",
+     "name": "Operations with decimals",
+     "skillCount": 13
+    },
+    {
+     "code": "D",
+     "name": "Fractions and mixed numbers",
+     "skillCount": 9
+    },
+    {
+     "code": "E",
+     "name": "Add and subtract fractions",
+     "skillCount": 6
+    },
+    {
+     "code": "F",
+     "name": "Multiply fractions",
+     "skillCount": 20
+    },
+    {
+     "code": "G",
+     "name": "Divide fractions",
+     "skillCount": 12
+    },
+    {
+     "code": "H",
+     "name": "Mixed operations: fractions",
+     "skillCount": 4
+    },
+    {
+     "code": "I",
+     "name": "Integers",
+     "skillCount": 4
+    },
+    {
+     "code": "J",
+     "name": "Operations with integers",
+     "skillCount": 12
+    },
+    {
+     "code": "K",
+     "name": "Rational numbers",
+     "skillCount": 7
+    },
+    {
+     "code": "L",
+     "name": "Operations with rational numbers",
+     "skillCount": 10
+    },
+    {
+     "code": "M",
+     "name": "Indices and roots",
+     "skillCount": 9
+    },
+    {
+     "code": "N",
+     "name": "Standard form",
+     "skillCount": 2
+    },
+    {
+     "code": "O",
+     "name": "Ratios, rates and proportions",
+     "skillCount": 20
+    },
+    {
+     "code": "P",
+     "name": "Proportional relationships",
+     "skillCount": 10
+    },
+    {
+     "code": "Q",
+     "name": "Percents",
+     "skillCount": 18
+    },
+    {
+     "code": "R",
+     "name": "Consumer maths",
+     "skillCount": 11
+    },
+    {
+     "code": "S",
+     "name": "Problem solving and estimation",
+     "skillCount": 5
+    },
+    {
+     "code": "T",
+     "name": "Units of measurement",
+     "skillCount": 12
+    },
+    {
+     "code": "U",
+     "name": "Coordinate plane",
+     "skillCount": 4
+    },
+    {
+     "code": "V",
+     "name": "Number sequences",
+     "skillCount": 8
+    },
+    {
+     "code": "W",
+     "name": "Expressions and properties",
+     "skillCount": 18
+    },
+    {
+     "code": "X",
+     "name": "One-variable equations",
+     "skillCount": 12
+    },
+    {
+     "code": "Y",
+     "name": "One-variable inequalities",
+     "skillCount": 9
+    },
+    {
+     "code": "Z",
+     "name": "Two-variable equations",
+     "skillCount": 10
+    },
+    {
+     "code": "AA",
+     "name": "Linear functions",
+     "skillCount": 8
+    },
+    {
+     "code": "BB",
+     "name": "Lines and angles",
+     "skillCount": 9
+    },
+    {
+     "code": "CC",
+     "name": "Two-dimensional figures",
+     "skillCount": 9
+    },
+    {
+     "code": "DD",
+     "name": "Three-dimensional figures",
+     "skillCount": 4
+    },
+    {
+     "code": "EE",
+     "name": "Perimeter and area",
+     "skillCount": 16
+    },
+    {
+     "code": "FF",
+     "name": "Volume and surface area",
+     "skillCount": 5
+    },
+    {
+     "code": "GG",
+     "name": "Transformations",
+     "skillCount": 13
+    },
+    {
+     "code": "HH",
+     "name": "Congruence and similarity",
+     "skillCount": 8
+    },
+    {
+     "code": "II",
+     "name": "Pythagoras' theorem",
+     "skillCount": 6
+    },
+    {
+     "code": "JJ",
+     "name": "Constructions",
+     "skillCount": 4
+    },
+    {
+     "code": "KK",
+     "name": "Data and graphs",
+     "skillCount": 15
+    },
+    {
+     "code": "LL",
+     "name": "Statistics",
+     "skillCount": 13
+    },
+    {
+     "code": "MM",
+     "name": "Probability",
+     "skillCount": 11
+    }
+   ]
+  },
+  {
+   "year": 9,
+   "topicCount": 35,
+   "skillCount": 344,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Number theory",
+     "skillCount": 6
+    },
+    {
+     "code": "B",
+     "name": "Integers",
+     "skillCount": 3
+    },
+    {
+     "code": "C",
+     "name": "Operations with integers",
+     "skillCount": 12
+    },
+    {
+     "code": "D",
+     "name": "Rational numbers",
+     "skillCount": 7
+    },
+    {
+     "code": "E",
+     "name": "Operations with rational numbers",
+     "skillCount": 13
+    },
+    {
+     "code": "F",
+     "name": "Indices",
+     "skillCount": 15
+    },
+    {
+     "code": "G",
+     "name": "Roots",
+     "skillCount": 7
+    },
+    {
+     "code": "H",
+     "name": "Standard form",
+     "skillCount": 3
+    },
+    {
+     "code": "I",
+     "name": "Ratios, rates and proportions",
+     "skillCount": 15
+    },
+    {
+     "code": "J",
+     "name": "Direct and inverse proportions",
+     "skillCount": 14
+    },
+    {
+     "code": "K",
+     "name": "Percents",
+     "skillCount": 15
+    },
+    {
+     "code": "L",
+     "name": "Consumer maths",
+     "skillCount": 10
+    },
+    {
+     "code": "M",
+     "name": "Measurement",
+     "skillCount": 14
+    },
+    {
+     "code": "N",
+     "name": "Problem solving",
+     "skillCount": 4
+    },
+    {
+     "code": "O",
+     "name": "Coordinate plane",
+     "skillCount": 4
+    },
+    {
+     "code": "P",
+     "name": "Number sequences",
+     "skillCount": 8
+    },
+    {
+     "code": "Q",
+     "name": "Expressions and properties",
+     "skillCount": 17
+    },
+    {
+     "code": "R",
+     "name": "One-variable equations",
+     "skillCount": 14
+    },
+    {
+     "code": "S",
+     "name": "One-variable inequalities",
+     "skillCount": 11
+    },
+    {
+     "code": "T",
+     "name": "Functions",
+     "skillCount": 9
+    },
+    {
+     "code": "U",
+     "name": "Linear functions",
+     "skillCount": 20
+    },
+    {
+     "code": "V",
+     "name": "Monomials and polynomials",
+     "skillCount": 16
+    },
+    {
+     "code": "W",
+     "name": "Quadratic functions",
+     "skillCount": 5
+    },
+    {
+     "code": "X",
+     "name": "Lines and angles",
+     "skillCount": 6
+    },
+    {
+     "code": "Y",
+     "name": "Two-dimensional figures",
+     "skillCount": 5
+    },
+    {
+     "code": "Z",
+     "name": "Three-dimensional figures",
+     "skillCount": 4
+    },
+    {
+     "code": "AA",
+     "name": "Perimeter and area",
+     "skillCount": 10
+    },
+    {
+     "code": "BB",
+     "name": "Volume and surface area",
+     "skillCount": 3
+    },
+    {
+     "code": "CC",
+     "name": "Transformations",
+     "skillCount": 14
+    },
+    {
+     "code": "DD",
+     "name": "Congruence and similarity",
+     "skillCount": 9
+    },
+    {
+     "code": "EE",
+     "name": "Triangles and trigonometry",
+     "skillCount": 9
+    },
+    {
+     "code": "FF",
+     "name": "Constructions",
+     "skillCount": 5
+    },
+    {
+     "code": "GG",
+     "name": "Data and graphs",
+     "skillCount": 15
+    },
+    {
+     "code": "HH",
+     "name": "Statistics",
+     "skillCount": 12
+    },
+    {
+     "code": "II",
+     "name": "Probability",
+     "skillCount": 10
+    }
+   ]
+  },
+  {
+   "year": 10,
+   "topicCount": 38,
+   "skillCount": 379,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Numbers",
+     "skillCount": 14
+    },
+    {
+     "code": "B",
+     "name": "Operations",
+     "skillCount": 7
+    },
+    {
+     "code": "C",
+     "name": "Ratios, rates and proportions",
+     "skillCount": 9
+    },
+    {
+     "code": "D",
+     "name": "Percents",
+     "skillCount": 8
+    },
+    {
+     "code": "E",
+     "name": "Expressions and properties",
+     "skillCount": 7
+    },
+    {
+     "code": "F",
+     "name": "Solve equations",
+     "skillCount": 18
+    },
+    {
+     "code": "G",
+     "name": "Problem solving",
+     "skillCount": 5
+    },
+    {
+     "code": "H",
+     "name": "Single-variable inequalities",
+     "skillCount": 15
+    },
+    {
+     "code": "I",
+     "name": "Relations and functions",
+     "skillCount": 14
+    },
+    {
+     "code": "J",
+     "name": "Direct and inverse variation",
+     "skillCount": 8
+    },
+    {
+     "code": "K",
+     "name": "Linear functions",
+     "skillCount": 27
+    },
+    {
+     "code": "L",
+     "name": "Simultaneous equations",
+     "skillCount": 12
+    },
+    {
+     "code": "M",
+     "name": "Linear inequalities",
+     "skillCount": 6
+    },
+    {
+     "code": "N",
+     "name": "Indices",
+     "skillCount": 14
+    },
+    {
+     "code": "O",
+     "name": "Number sequences",
+     "skillCount": 9
+    },
+    {
+     "code": "P",
+     "name": "Standard form",
+     "skillCount": 5
+    },
+    {
+     "code": "Q",
+     "name": "Exponential functions",
+     "skillCount": 8
+    },
+    {
+     "code": "R",
+     "name": "Monomials",
+     "skillCount": 5
+    },
+    {
+     "code": "S",
+     "name": "Polynomials",
+     "skillCount": 10
+    },
+    {
+     "code": "T",
+     "name": "Factorising",
+     "skillCount": 6
+    },
+    {
+     "code": "U",
+     "name": "Quadratic equations",
+     "skillCount": 12
+    },
+    {
+     "code": "V",
+     "name": "Rational functions and expressions",
+     "skillCount": 7
+    },
+    {
+     "code": "W",
+     "name": "Coordinate plane",
+     "skillCount": 5
+    },
+    {
+     "code": "X",
+     "name": "Transformations",
+     "skillCount": 15
+    },
+    {
+     "code": "Y",
+     "name": "Logic",
+     "skillCount": 2
+    },
+    {
+     "code": "Z",
+     "name": "Congruence",
+     "skillCount": 7
+    },
+    {
+     "code": "AA",
+     "name": "Similarity",
+     "skillCount": 6
+    },
+    {
+     "code": "BB",
+     "name": "Triangles and trigonometry",
+     "skillCount": 12
+    },
+    {
+     "code": "CC",
+     "name": "Perimeter and area",
+     "skillCount": 9
+    },
+    {
+     "code": "DD",
+     "name": "Three-dimensional figures",
+     "skillCount": 5
+    },
+    {
+     "code": "EE",
+     "name": "Surface area and volume",
+     "skillCount": 13
+    },
+    {
+     "code": "FF",
+     "name": "Circles",
+     "skillCount": 10
+    },
+    {
+     "code": "GG",
+     "name": "Geometric constructions",
+     "skillCount": 6
+    },
+    {
+     "code": "HH",
+     "name": "Vectors",
+     "skillCount": 6
+    },
+    {
+     "code": "II",
+     "name": "Measurement",
+     "skillCount": 15
+    },
+    {
+     "code": "JJ",
+     "name": "Data and graphs",
+     "skillCount": 12
+    },
+    {
+     "code": "KK",
+     "name": "Statistics",
+     "skillCount": 16
+    },
+    {
+     "code": "LL",
+     "name": "Probability",
+     "skillCount": 14
+    }
+   ]
+  },
+  {
+   "year": 11,
+   "topicCount": 40,
+   "skillCount": 387,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Numbers",
+     "skillCount": 10
+    },
+    {
+     "code": "B",
+     "name": "Percents",
+     "skillCount": 5
+    },
+    {
+     "code": "C",
+     "name": "Expressions and properties",
+     "skillCount": 5
+    },
+    {
+     "code": "D",
+     "name": "Solve equations",
+     "skillCount": 9
+    },
+    {
+     "code": "E",
+     "name": "Problem solving",
+     "skillCount": 3
+    },
+    {
+     "code": "F",
+     "name": "Single-variable inequalities",
+     "skillCount": 8
+    },
+    {
+     "code": "G",
+     "name": "Relations and functions",
+     "skillCount": 13
+    },
+    {
+     "code": "H",
+     "name": "Direct and inverse variation",
+     "skillCount": 8
+    },
+    {
+     "code": "I",
+     "name": "Linear functions",
+     "skillCount": 30
+    },
+    {
+     "code": "J",
+     "name": "Simultaneous equations",
+     "skillCount": 11
+    },
+    {
+     "code": "K",
+     "name": "Linear inequalities",
+     "skillCount": 6
+    },
+    {
+     "code": "L",
+     "name": "Indices",
+     "skillCount": 8
+    },
+    {
+     "code": "M",
+     "name": "Number sequences",
+     "skillCount": 9
+    },
+    {
+     "code": "N",
+     "name": "Standard form",
+     "skillCount": 4
+    },
+    {
+     "code": "O",
+     "name": "Exponential functions",
+     "skillCount": 8
+    },
+    {
+     "code": "P",
+     "name": "Monomials",
+     "skillCount": 5
+    },
+    {
+     "code": "Q",
+     "name": "Polynomials",
+     "skillCount": 10
+    },
+    {
+     "code": "R",
+     "name": "Factorising",
+     "skillCount": 8
+    },
+    {
+     "code": "S",
+     "name": "Quadratic equations and inequalities",
+     "skillCount": 16
+    },
+    {
+     "code": "T",
+     "name": "Function types",
+     "skillCount": 7
+    },
+    {
+     "code": "U",
+     "name": "Function operations",
+     "skillCount": 9
+    },
+    {
+     "code": "V",
+     "name": "Function transformations",
+     "skillCount": 4
+    },
+    {
+     "code": "W",
+     "name": "Radical expressions",
+     "skillCount": 7
+    },
+    {
+     "code": "X",
+     "name": "Fractional indices",
+     "skillCount": 6
+    },
+    {
+     "code": "Y",
+     "name": "Rational functions and expressions",
+     "skillCount": 7
+    },
+    {
+     "code": "Z",
+     "name": "Midpoints and distance",
+     "skillCount": 3
+    },
+    {
+     "code": "AA",
+     "name": "Transformations",
+     "skillCount": 21
+    },
+    {
+     "code": "BB",
+     "name": "Congruence",
+     "skillCount": 10
+    },
+    {
+     "code": "CC",
+     "name": "Similarity",
+     "skillCount": 10
+    },
+    {
+     "code": "DD",
+     "name": "Right triangles",
+     "skillCount": 5
+    },
+    {
+     "code": "EE",
+     "name": "Trigonometry",
+     "skillCount": 16
+    },
+    {
+     "code": "FF",
+     "name": "Perimeter and area",
+     "skillCount": 8
+    },
+    {
+     "code": "GG",
+     "name": "Three-dimensional figures",
+     "skillCount": 7
+    },
+    {
+     "code": "HH",
+     "name": "Surface area and volume",
+     "skillCount": 14
+    },
+    {
+     "code": "II",
+     "name": "Circles",
+     "skillCount": 19
+    },
+    {
+     "code": "JJ",
+     "name": "Vectors",
+     "skillCount": 12
+    },
+    {
+     "code": "KK",
+     "name": "Measurement",
+     "skillCount": 10
+    },
+    {
+     "code": "LL",
+     "name": "Data and graphs",
+     "skillCount": 9
+    },
+    {
+     "code": "MM",
+     "name": "Statistics",
+     "skillCount": 13
+    },
+    {
+     "code": "NN",
+     "name": "Probability",
+     "skillCount": 14
+    }
+   ]
+  },
+  {
+   "year": 12,
+   "topicCount": 31,
+   "skillCount": 290,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Equations",
+     "skillCount": 4
+    },
+    {
+     "code": "B",
+     "name": "Inequalities",
+     "skillCount": 10
+    },
+    {
+     "code": "C",
+     "name": "Functions",
+     "skillCount": 14
+    },
+    {
+     "code": "D",
+     "name": "Simultaneous equations",
+     "skillCount": 11
+    },
+    {
+     "code": "E",
+     "name": "Factorising",
+     "skillCount": 7
+    },
+    {
+     "code": "F",
+     "name": "Quadratic functions",
+     "skillCount": 12
+    },
+    {
+     "code": "G",
+     "name": "Complex numbers",
+     "skillCount": 7
+    },
+    {
+     "code": "H",
+     "name": "Polynomials",
+     "skillCount": 15
+    },
+    {
+     "code": "I",
+     "name": "Radical functions and expressions",
+     "skillCount": 13
+    },
+    {
+     "code": "J",
+     "name": "Rational indices",
+     "skillCount": 6
+    },
+    {
+     "code": "K",
+     "name": "Rational functions and expressions",
+     "skillCount": 7
+    },
+    {
+     "code": "L",
+     "name": "Function operations",
+     "skillCount": 12
+    },
+    {
+     "code": "M",
+     "name": "Families of functions",
+     "skillCount": 6
+    },
+    {
+     "code": "N",
+     "name": "Logarithms",
+     "skillCount": 9
+    },
+    {
+     "code": "O",
+     "name": "Exponential and logarithmic functions",
+     "skillCount": 13
+    },
+    {
+     "code": "P",
+     "name": "Parabolas",
+     "skillCount": 9
+    },
+    {
+     "code": "Q",
+     "name": "Angle measures",
+     "skillCount": 6
+    },
+    {
+     "code": "R",
+     "name": "Trigonometry",
+     "skillCount": 21
+    },
+    {
+     "code": "S",
+     "name": "Trigonometric functions",
+     "skillCount": 9
+    },
+    {
+     "code": "T",
+     "name": "Trigonometric identities",
+     "skillCount": 4
+    },
+    {
+     "code": "U",
+     "name": "Circles",
+     "skillCount": 6
+    },
+    {
+     "code": "V",
+     "name": "Circles in the coordinate plane",
+     "skillCount": 7
+    },
+    {
+     "code": "W",
+     "name": "Sequences and series",
+     "skillCount": 19
+    },
+    {
+     "code": "X",
+     "name": "Probability",
+     "skillCount": 17
+    },
+    {
+     "code": "Y",
+     "name": "Statistics",
+     "skillCount": 5
+    },
+    {
+     "code": "Z",
+     "name": "Data and graphs",
+     "skillCount": 6
+    },
+    {
+     "code": "AA",
+     "name": "Introduction to limits",
+     "skillCount": 3
+    },
+    {
+     "code": "BB",
+     "name": "Calculate limits",
+     "skillCount": 8
+    },
+    {
+     "code": "CC",
+     "name": "Limits and rational functions",
+     "skillCount": 5
+    },
+    {
+     "code": "DD",
+     "name": "Continuity",
+     "skillCount": 8
+    },
+    {
+     "code": "EE",
+     "name": "Introduction to derivatives",
+     "skillCount": 11
+    }
+   ]
+  },
+  {
+   "year": 13,
+   "topicCount": 37,
+   "skillCount": 278,
+   "topics": [
+    {
+     "code": "A",
+     "name": "Functions",
+     "skillCount": 15
+    },
+    {
+     "code": "B",
+     "name": "Families of functions",
+     "skillCount": 6
+    },
+    {
+     "code": "C",
+     "name": "Quadratic functions",
+     "skillCount": 9
+    },
+    {
+     "code": "D",
+     "name": "Polynomials",
+     "skillCount": 17
+    },
+    {
+     "code": "E",
+     "name": "Rational functions",
+     "skillCount": 3
+    },
+    {
+     "code": "F",
+     "name": "Exponential and logarithmic functions",
+     "skillCount": 17
+    },
+    {
+     "code": "G",
+     "name": "Radical functions",
+     "skillCount": 2
+    },
+    {
+     "code": "H",
+     "name": "Roots and rational indices",
+     "skillCount": 8
+    },
+    {
+     "code": "I",
+     "name": "Simultaneous equations",
+     "skillCount": 10
+    },
+    {
+     "code": "J",
+     "name": "Trigonometry",
+     "skillCount": 19
+    },
+    {
+     "code": "K",
+     "name": "Trigonometric functions",
+     "skillCount": 9
+    },
+    {
+     "code": "L",
+     "name": "Trigonometric identities",
+     "skillCount": 4
+    },
+    {
+     "code": "M",
+     "name": "Parabolas and circles",
+     "skillCount": 6
+    },
+    {
+     "code": "N",
+     "name": "Two-dimensional vectors",
+     "skillCount": 12
+    },
+    {
+     "code": "O",
+     "name": "Three-dimensional vectors",
+     "skillCount": 6
+    },
+    {
+     "code": "P",
+     "name": "Sequences and series",
+     "skillCount": 18
+    },
+    {
+     "code": "Q",
+     "name": "Probability",
+     "skillCount": 10
+    },
+    {
+     "code": "R",
+     "name": "Probability distributions",
+     "skillCount": 18
+    },
+    {
+     "code": "S",
+     "name": "Statistics",
+     "skillCount": 14
+    },
+    {
+     "code": "T",
+     "name": "Introduction to derivatives",
+     "skillCount": 7
+    },
+    {
+     "code": "U",
+     "name": "Derivative rules",
+     "skillCount": 7
+    },
+    {
+     "code": "V",
+     "name": "Calculate derivatives",
+     "skillCount": 14
+    },
+    {
+     "code": "W",
+     "name": "Derivative strategies",
+     "skillCount": 3
+    },
+    {
+     "code": "X",
+     "name": "Calculate higher derivatives",
+     "skillCount": 4
+    },
+    {
+     "code": "Y",
+     "name": "Rates of change",
+     "skillCount": 2
+    },
+    {
+     "code": "Z",
+     "name": "L'Hospital's rule",
+     "skillCount": 1
+    },
+    {
+     "code": "AA",
+     "name": "Analyse functions using the first derivative",
+     "skillCount": 6
+    },
+    {
+     "code": "BB",
+     "name": "Analyse functions using the second derivative",
+     "skillCount": 1
+    },
+    {
+     "code": "CC",
+     "name": "Optimisation",
+     "skillCount": 1
+    },
+    {
+     "code": "DD",
+     "name": "Linear approximation",
+     "skillCount": 1
+    },
+    {
+     "code": "EE",
+     "name": "Introduction to integration",
+     "skillCount": 7
+    },
+    {
+     "code": "FF",
+     "name": "Fundamental Theorem of Calculus",
+     "skillCount": 2
+    },
+    {
+     "code": "GG",
+     "name": "Antiderivatives and indefinite integrals",
+     "skillCount": 5
+    },
+    {
+     "code": "HH",
+     "name": "Definite integrals",
+     "skillCount": 4
+    },
+    {
+     "code": "II",
+     "name": "Integration techniques",
+     "skillCount": 4
+    },
+    {
+     "code": "JJ",
+     "name": "Differential equations",
+     "skillCount": 3
+    },
+    {
+     "code": "KK",
+     "name": "Applications of integration",
+     "skillCount": 3
+    }
+   ]
+  }
+ ]
+}

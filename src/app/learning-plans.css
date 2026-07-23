@@ -1,0 +1,160 @@
+/*
+  BeGifted Learning Plans
+
+  The standalone generator uses a warm orange/blue editorial theme. Every
+  palette, font, and semantic override is either namespaced or scoped to the
+  `.begifted` feature root so the Ops design system remains unchanged.
+*/
+@theme inline {
+  --color-begifted-orange-50: #fff4ec;
+  --color-begifted-orange-200: #ffc8a3;
+  --color-begifted-orange-500: #ff7518;
+  --color-begifted-orange-600: #ec5e00;
+
+  --color-begifted-blue-100: #cfe1f7;
+  --color-begifted-blue-700: #0b4685;
+
+  --color-begifted-neutral-50: #f6f8fb;
+  --color-begifted-neutral-100: #edf1f6;
+  --color-begifted-neutral-200: #dfe5ec;
+  --color-begifted-neutral-300: #c8d1dc;
+  --color-begifted-neutral-400: #a6b2c2;
+  --color-begifted-neutral-500: #7c889a;
+  --color-begifted-neutral-600: #5a6678;
+  --color-begifted-neutral-700: #3e4859;
+  --color-begifted-neutral-800: #283142;
+  --color-begifted-neutral-900: #16203a;
+
+  --font-begifted-display: var(--font-cormorant), var(--font-trirong), Georgia, serif;
+  --font-begifted-body: var(--font-sarabun), system-ui, -apple-system, "Helvetica Neue", sans-serif;
+
+  --shadow-begifted-sm: 0 2px 8px rgba(22, 32, 58, 0.08);
+  --shadow-begifted-md: 0 8px 24px rgba(22, 32, 58, 0.1);
+  --shadow-begifted-lg: 0 16px 40px rgba(22, 32, 58, 0.12);
+}
+
+@layer base {
+  .begifted {
+    --background: #ffffff;
+    --foreground: #16203a;
+    --card: #ffffff;
+    --card-foreground: #16203a;
+    --popover: #ffffff;
+    --popover-foreground: #16203a;
+    --primary: #ff7518;
+    --primary-foreground: #ffffff;
+    --secondary: #edf1f6;
+    --secondary-foreground: #283142;
+    --muted: #f6f8fb;
+    --muted-foreground: #7c889a;
+    --accent: #fff4ec;
+    --accent-foreground: #c24e00;
+    --destructive: #e5484d;
+    --border: #dfe5ec;
+    --input: #c8d1dc;
+    --ring: #126dce;
+    --font-sans: var(--font-begifted-body);
+
+    background: var(--background);
+    color: var(--color-begifted-neutral-700);
+    font-family: var(--font-begifted-body);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .begifted-display {
+    color: var(--color-begifted-neutral-900);
+    font-family: var(--font-begifted-display);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+  }
+
+  .begifted ::selection {
+    background: color-mix(
+      in oklab,
+      var(--color-begifted-orange-500) 26%,
+      transparent
+    );
+    color: var(--color-begifted-neutral-900);
+  }
+}
+
+@utility digits {
+  /* Cormorant's old-style figures mangle numerals ("11" → "ıı"). */
+  font-family: var(--font-begifted-body);
+}
+
+@utility eyebrow {
+  color: var(--color-begifted-orange-500);
+  font-family: var(--font-begifted-body);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+/* A4 is the intentional global print default for this internal Thailand tool. */
+@page {
+  size: A4;
+  margin: 14mm 12mm;
+}
+
+.report-root {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.report-root thead {
+  display: table-header-group;
+}
+
+.report-root tr {
+  break-inside: avoid;
+}
+
+.report-root h2,
+.report-root h3,
+.report-root h4 {
+  break-after: avoid;
+}
+
+@media print {
+  /*
+    BGScheduler's root body is a fixed-height, overflow-hidden flex shell.
+    Reset only print layout so multipage documents are not clipped.
+  */
+  html,
+  body {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  body {
+    display: block !important;
+  }
+
+  /* Restore the standalone report's white paper only when this print root is mounted. */
+  body:has(> [data-learning-plan-report]) {
+    background: #ffffff !important;
+  }
+
+  .print-hidden {
+    display: none !important;
+  }
+
+  .report-scroll {
+    display: block !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  .report-sheet {
+    margin: 0 !important;
+    max-width: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+}
