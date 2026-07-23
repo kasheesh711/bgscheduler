@@ -1,24 +1,11 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { notFound, redirect } from "next/navigation";
 
 import { LearningPlanForm } from "@/components/learning-plan/learning-plan-form";
-import { auth } from "@/lib/auth";
-import { hasLearningPlansAccess } from "@/lib/learning-plans/access-policy";
+import { requireLearningPlansAccess } from "@/lib/learning-plans/access";
 
 async function LearningPlansBody() {
-  const session = await auth();
-  if (!session?.user?.email) {
-    redirect("/login");
-  }
-  if (
-    !hasLearningPlansAccess(
-      session.user.allowedPages,
-      session.user.role,
-    )
-  ) {
-    notFound();
-  }
+  await requireLearningPlansAccess();
 
   return (
     <div className="begifted -mx-4 -my-3 min-h-0 flex-1 overflow-y-auto bg-white lg:-mx-6">

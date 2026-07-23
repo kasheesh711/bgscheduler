@@ -1,17 +1,13 @@
 import type { Metadata } from "next";
 import { Suspense, type ReactNode } from "react";
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
 
 import { PrintToolbar } from "@/components/learning-plan/print-toolbar";
 import { ReportChecklist } from "@/components/learning-plan/report-checklist";
 import { ReportCover } from "@/components/learning-plan/report-cover";
 import { ReportOverview } from "@/components/learning-plan/report-overview";
-import { auth } from "@/lib/auth";
-import {
-  hasLearningPlansAccess,
-  LEARNING_PLANS_ROUTE,
-} from "@/lib/learning-plans/access-policy";
+import { requireLearningPlansAccess } from "@/lib/learning-plans/access";
+import { LEARNING_PLANS_ROUTE } from "@/lib/learning-plans/access-policy";
 import { getYearSyllabus } from "@/lib/syllabus/get-year-syllabus";
 import {
   normalizeSearchParams,
@@ -30,6 +26,8 @@ export async function generateMetadata({
 }: {
   searchParams: SearchParams;
 }): Promise<Metadata> {
+  await requireLearningPlansAccess();
+
   const parsed = reportParamsSchema.safeParse(
     normalizeSearchParams(await searchParams),
   );
@@ -81,18 +79,7 @@ async function LearningPlanReportBody({
 }: {
   searchParams: SearchParams;
 }) {
-  const session = await auth();
-  if (!session?.user?.email) {
-    redirect("/login");
-  }
-  if (
-    !hasLearningPlansAccess(
-      session.user.allowedPages,
-      session.user.role,
-    )
-  ) {
-    notFound();
-  }
+  await requireLearningPlansAccess();
 
   const parsed = reportParamsSchema.safeParse(
     normalizeSearchParams(await searchParams),

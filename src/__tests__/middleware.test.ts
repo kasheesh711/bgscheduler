@@ -146,15 +146,40 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     },
   );
 
-  it("redirects restricted admins without learning-plans access to their landing page", async () => {
+  it.each(["/learning-plans", "/learning-plans/report"])(
+    "coarse-passes authenticated restricted users at %s so the fresh page guard can decide",
+    async (pathname) => {
+      const res = await middleware(
+        makeReq(pathname, true, "", ["/progress-tests"]) as never,
+        {} as never,
+      ) as Response;
+
+      expect(res.headers.get("location")).toBeNull();
+    },
+  );
+
+  it("does not coarse-pass a similarly prefixed page", async () => {
     const res = await middleware(
-      makeReq("/learning-plans/report", true, "", ["/progress-tests"]) as never,
+      makeReq("/learning-plans-extra", true, "", ["/progress-tests"]) as never,
       {} as never,
     ) as Response;
 
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toBe("http://localhost/progress-tests");
   });
+
+  it.each(["/api/learning-plans", "/api/learning-plans/report"])(
+    "does not map the Learning Plans page exception onto API namespace %s",
+    async (pathname) => {
+      const res = await middleware(
+        makeReq(pathname, true, "", ["/learning-plans"]) as never,
+        {} as never,
+      ) as Response;
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toEqual({ error: "Forbidden" });
+    },
+  );
 
   it("root / redirects to login when unauthenticated", async () => {
     const res = await middleware(makeReq("/", false) as never, {} as never) as Response;

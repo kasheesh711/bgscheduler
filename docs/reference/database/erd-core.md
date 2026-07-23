@@ -104,6 +104,11 @@ erDiagram
         uuid id PK
         text email
     }
+    learning_plan_access_grants {
+        text email PK
+        text granted_by_email
+        timestamp created_at
+    }
     google_oauth_tokens {
         text email PK
     }
@@ -225,6 +230,15 @@ activity sync, mirroring `sync_runs`.
 **Grain:** one row per allowlisted admin email. **Keys:** `id` (PK); unique index
 `admin_users_email_idx` on `email` (`schema.ts:253`). **No foreign keys.** Used by the
 auth layer to gate sign-in.
+
+### `learningPlanAccessGrants`
+**Grain:** one row per normalized lowercase email explicitly allowed to open the Learning
+Plans builder and report. **Keys:** `email` is the text primary key. **No foreign keys:** a
+grant may belong to either a restricted admin or an active teacher, so it intentionally
+does not imply `admin_users` membership. The server authorization layer combines the row
+with the already-authenticated role and, for teachers, a fresh active `tutor_contacts`
+email match. Row presence never grants sign-in, admin notifications, or another feature.
+`grantedByEmail` records provenance and `createdAt` records when the grant was created.
 
 ### `googleOAuthTokens` — `schema.ts:256-266`
 **Grain:** one row per admin email holding Google OAuth credentials. **Keys:** `email`

@@ -291,4 +291,54 @@ describe("progress-tests API routes", () => {
       expect(resendTeacherEmail).not.toHaveBeenCalled();
     });
   });
+
+  describe("Learning Plans teacher grants do not expand Progress Tests", () => {
+    it.each([
+      ["gift.m@begiftededucation.com", "Gift"],
+      ["tudda.tudsirivoravat@gmail.com", "Tudda"],
+    ])(
+      "keeps %s student-scoped and read-only",
+      async (email, canonicalKey) => {
+        authMock.mockResolvedValue({
+          user: {
+            email,
+            name: canonicalKey,
+            allowedPages: ["/progress-tests"],
+            role: "teacher",
+          },
+        });
+        vi.mocked(resolveTeacherCanonicalKeys).mockResolvedValue([canonicalKey]);
+
+        const getResponse = await GET();
+        expect(getResponse.status).toBe(200);
+        expect(getProgressTestsPayload).toHaveBeenCalledWith({
+          teacherCanonicalKeys: [canonicalKey],
+        });
+
+        const mutationResponses = await Promise.all([
+          bookRoute(postRequest("http://test.local/api/progress-tests/book", {
+            enrollmentKey: "class-1|student-1",
+            testDate: "2026-06-20T02:00:00.000Z",
+          })),
+          markCompleteRoute(postRequest(
+            "http://test.local/api/progress-tests/mark-complete",
+            { enrollmentKey: "class-1|student-1" },
+          )),
+          resendEmailRoute(postRequest(
+            "http://test.local/api/progress-tests/resend-email",
+            { enrollmentKey: "class-1|student-1" },
+          )),
+        ]);
+
+        expect(mutationResponses.map((response) => response.status)).toEqual([
+          403,
+          403,
+          403,
+        ]);
+        expect(bookTest).not.toHaveBeenCalled();
+        expect(markComplete).not.toHaveBeenCalled();
+        expect(resendTeacherEmail).not.toHaveBeenCalled();
+      },
+    );
+  });
 });

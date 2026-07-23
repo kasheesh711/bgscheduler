@@ -54,6 +54,47 @@ describe("AppNav", () => {
     expect(html).toContain("Class Feedback");
   });
 
+  it("adds Learning Plans to a restricted user's nav only when the fresh access decision allows it", () => {
+    const deniedHtml = renderToStaticMarkup(
+      <AppNav allowedPages={["/progress-tests"]} />,
+    );
+    const allowedHtml = renderToStaticMarkup(
+      <AppNav allowedPages={["/progress-tests"]} learningPlansAccess />,
+    );
+
+    expect(deniedHtml).not.toContain("Learning Plans");
+    expect(allowedHtml).toContain("Progress Tests");
+    expect(allowedHtml).toContain("Learning Plans");
+  });
+
+  it("does not let Learning Plans access change Home or the brand destination", () => {
+    const html = renderToStaticMarkup(
+      <AppNav allowedPages={["/progress-tests"]} learningPlansAccess />,
+    );
+    const brandLink = html.match(
+      /<a [^>]*href="([^"]+)"[^>]*>BeGifted Ops<\/a>/,
+    );
+
+    expect(html).not.toContain(">Home<");
+    expect(brandLink?.[1]).toBe("/progress-tests");
+  });
+
+  it("preserves the existing post-class Home and brand behavior", () => {
+    const html = renderToStaticMarkup(
+      <AppNav
+        allowedPages={["/progress-tests"]}
+        postClassFeedbackAccess
+      />,
+    );
+    const brandLink = html.match(
+      /<a [^>]*href="([^"]+)"[^>]*>BeGifted Ops<\/a>/,
+    );
+
+    expect(html).toContain(">Home<");
+    expect(brandLink?.[1]).toBe("/");
+    expect(html).toContain("Class Feedback");
+  });
+
   it("marks the current section active", () => {
     vi.mocked(usePathname).mockReturnValue("/payroll");
 

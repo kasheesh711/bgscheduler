@@ -61,6 +61,20 @@ describe("resolveUserAccess", () => {
     expect(access).toEqual({ role: "teacher", allowedPages: ["/progress-tests"] });
   });
 
+  it.each([
+    "gift.m@begiftededucation.com",
+    "tudda.tudsirivoravat@gmail.com",
+  ])("keeps granted teacher %s in the existing teacher role", async (email) => {
+    vi.mocked(resolveTeacherCanonicalKeys).mockResolvedValue(["teacher-key"]);
+
+    const access = await resolveUserAccess(email, fakeDb([]));
+
+    expect(access).toEqual({
+      role: "teacher",
+      allowedPages: ["/progress-tests"],
+    });
+  });
+
   it("lets teacher win over an admissions student membership (design §2.1 step 3 before 4)", async () => {
     vi.mocked(resolveAdmissionsRole).mockResolvedValue("student");
     vi.mocked(resolveTeacherCanonicalKeys).mockResolvedValue(["Aey"]);

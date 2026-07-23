@@ -22,6 +22,7 @@ import {
   type NavSectionId,
   type NavTool,
 } from "@/lib/navigation/tools";
+import { LEARNING_PLANS_ROUTE } from "@/lib/learning-plans/access-policy";
 import { cn } from "@/lib/utils";
 
 function navLinkClass(isActive: boolean) {
@@ -101,24 +102,39 @@ export function AppNavSkeleton() {
 export function AppNav({
   allowedPages,
   postClassFeedbackAccess = false,
+  learningPlansAccess = false,
 }: {
   allowedPages: string[] | null;
   postClassFeedbackAccess?: boolean;
+  learningPlansAccess?: boolean;
 }) {
   const pathname = usePathname();
   const [openSection, setOpenSection] = useState<NavSectionId | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [summary, setSummary] = useState<HomeSummaryPayload | null>(null);
-  const effectiveAllowedPages = useMemo(() => {
+  const postClassAllowedPages = useMemo(() => {
     if (!allowedPages || !postClassFeedbackAccess || allowedPages.includes("/post-class-feedback")) {
       return allowedPages;
     }
     return [...allowedPages, "/post-class-feedback"];
   }, [allowedPages, postClassFeedbackAccess]);
-  const sections = useMemo(() => visibleSections(effectiveAllowedPages), [effectiveAllowedPages]);
-  const activeSectionId = activeSection(pathname, effectiveAllowedPages);
-  const canAccessHome = canAccessHref(HOME_HREF, effectiveAllowedPages);
-  const brandHref = canAccessHome ? HOME_HREF : effectiveAllowedPages?.[0] ?? HOME_HREF;
+  const visibleAllowedPages = useMemo(() => {
+    if (!postClassAllowedPages) return null;
+
+    const withoutLegacyLearningPlans = postClassAllowedPages.filter(
+      (page) => page !== LEARNING_PLANS_ROUTE,
+    );
+    if (!learningPlansAccess) {
+      return withoutLegacyLearningPlans;
+    }
+    return [...withoutLegacyLearningPlans, LEARNING_PLANS_ROUTE];
+  }, [learningPlansAccess, postClassAllowedPages]);
+  const sections = useMemo(() => visibleSections(visibleAllowedPages), [visibleAllowedPages]);
+  const activeSectionId = activeSection(pathname, visibleAllowedPages);
+  // A fresh Learning Plans grant only changes tool visibility. Keep Home and
+  // the brand destination tied to the existing raw/post-class page behavior.
+  const canAccessHome = canAccessHref(HOME_HREF, postClassAllowedPages);
+  const brandHref = canAccessHome ? HOME_HREF : postClassAllowedPages?.[0] ?? HOME_HREF;
   const hasBadgedTools = sections.some((section) => section.tools.some((tool) => tool.badgeKey));
   const badgeSummary = hasBadgedTools ? summary : null;
 

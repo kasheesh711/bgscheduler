@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { AppNav, AppNavSkeleton } from "@/components/layout/app-nav";
 import { StaleSnapshotBanner } from "@/components/layout/stale-snapshot-banner";
 import { auth } from "@/lib/auth";
+import { getLearningPlansAccess } from "@/lib/learning-plans/access";
 import { getPostClassCapabilities } from "@/lib/post-class-feedback/access";
 
 // Resolves the signed-in user's page access for nav filtering. Kept in its own
@@ -11,12 +12,16 @@ import { getPostClassCapabilities } from "@/lib/post-class-feedback/access";
 // so dynamic-param routes do not trigger a prerender error on the static shell.
 async function AppNavWithAccess() {
   const session = await auth();
-  const capabilities = session?.user?.email
-    ? await getPostClassCapabilities(session.user.email)
-    : [];
+  const [capabilities, learningPlansAccess] = await Promise.all([
+    session?.user?.email
+      ? getPostClassCapabilities(session.user.email)
+      : Promise.resolve([]),
+    getLearningPlansAccess(),
+  ]);
   return (
     <AppNav
       allowedPages={session?.user?.allowedPages ?? null}
+      learningPlansAccess={learningPlansAccess}
       postClassFeedbackAccess={capabilities.includes("viewer")}
     />
   );

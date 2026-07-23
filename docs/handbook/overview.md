@@ -18,7 +18,7 @@ The sixteen features below are reachable from the top navigation (`src/component
 
 **Wise Activity Audit** — *stable*. A read-only, filterable timeline of operational and financial events inside Wise (session create/update/cancel/delete, billing, invoices, payouts, user and classroom changes) with full raw payloads for forensics, plus a package-sales reconciliation workbench that scores Wise receipt transactions against Sales-Dashboard rows and surfaces a sheet-vs-Wise revenue variance. See [docs/features/wise-activity-audit.md](../features/wise-activity-audit.md).
 
-**Learning Plans** — *stable*. A stateless Years 1–13 curriculum-plan builder backed by the syllabus committed in the repository. Admins choose a student, year, and topic scope, then open an A4 report that can be printed or saved as PDF. The plan is encoded in the protected report URL rather than stored: there are no API, database, cron, Wise, or Google-Sheets writes. See [docs/features/learning-plans.md](../features/learning-plans.md).
+**Learning Plans** — *stable*. A stateless Years 1–13 curriculum-plan builder backed by the syllabus committed in the repository. Authorized admins and explicitly granted active teachers choose a student, year, and topic scope, then open an A4 report that can be printed or saved as PDF. Plan content is encoded in the protected report URL rather than stored; only normalized-email feature grants are database-backed, with no API, cron, Wise, or Google-Sheets writes. See [docs/features/learning-plans.md](../features/learning-plans.md).
 
 **Student Promotions** — *stable, pending first production run*. An audited July 1, 2026 Wise promotion workflow: admins run a live-Wise dry run, review grade/course actions and skip buckets, verify the endpoint shapes with an approved note, and let the July 1 cron or manual fallback apply the verified grade registration and class-subject updates with per-action revalidation. See [docs/features/student-promotions.md](../features/student-promotions.md).
 
@@ -40,6 +40,6 @@ The sixteen features below are reachable from the top navigation (`src/component
 
 ## System scale
 
-At this revision the application comprises **82 database tables** (`pgTable` definitions in `src/lib/db/schema.ts`), **117 HTTP endpoints** (method exports across `src/app/api/**/route.ts`), and **24 admin pages** (the `page.tsx` files under the `src/app/(app)/` route group), plus the shell-free Learning Plans print report. For the mechanical inventory behind these numbers, see the [API reference index](../reference/api/index.md) and the [database reference index](../reference/database/index.md).
+At this revision the application comprises **176 database tables** (`pgTable` definitions in `src/lib/db/schema.ts`), **117 HTTP endpoints** (method exports across `src/app/api/**/route.ts`), and **24 admin pages** (the `page.tsx` files under the `src/app/(app)/` route group), plus the shell-free Learning Plans print report. For the mechanical inventory behind these numbers, see the [API reference index](../reference/api/index.md) and the [database reference index](../reference/database/index.md).
 
 _Verified against production `main` on 2026-07-23._
