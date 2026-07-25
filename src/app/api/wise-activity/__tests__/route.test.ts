@@ -156,7 +156,45 @@ describe("Wise activity API routes", () => {
         triggerType: "manual",
         lookbackDays: 45,
         maxPages: 700,
+        eventName: undefined,
+        startPage: 1,
+        stopOnKnownEvents: true,
       },
+    );
+  });
+
+  it("accepts an allowlisted event-name backfill and rejects an unknown one", async () => {
+    await postSync(request("http://test.local/api/wise-activity/sync", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        eventName: "SessionFeedbackSubmittedEvent",
+        startPage: 51,
+        stopOnKnownEvents: false,
+      }),
+    }));
+    expect(syncWiseActivityEvents).toHaveBeenLastCalledWith(
+      { db: true },
+      { client: true },
+      "institute-1",
+      expect.objectContaining({
+        eventName: "SessionFeedbackSubmittedEvent",
+        startPage: 51,
+        stopOnKnownEvents: false,
+      }),
+    );
+
+    // An event name outside the allowlist must not steer the crawl.
+    await postSync(request("http://test.local/api/wise-activity/sync", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ eventName: "SomeOtherEvent" }),
+    }));
+    expect(syncWiseActivityEvents).toHaveBeenLastCalledWith(
+      { db: true },
+      { client: true },
+      "institute-1",
+      expect.objectContaining({ eventName: undefined }),
     );
   });
 

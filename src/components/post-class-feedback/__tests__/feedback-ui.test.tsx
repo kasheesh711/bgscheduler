@@ -28,6 +28,7 @@ function session(overrides: Partial<FeedbackSessionRow> = {}): FeedbackSessionRo
     sourceStatus: "ready",
     contentStatus: "substantive",
     timingStatus: "on_time",
+    submittedBy: "tutor",
     combinedCharacterCount: 325,
     required: { topics: answer, performance: answer, improvement: answer },
     versionCount: 1,

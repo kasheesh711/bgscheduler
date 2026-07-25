@@ -15,6 +15,7 @@ import type {
   FeedbackEligibilityReason,
   FeedbackSessionRow,
   FeedbackSourceStatus,
+  FeedbackSubmitter,
   FeedbackTimingStatus,
 } from "@/types/post-class-feedback";
 
@@ -185,6 +186,32 @@ export function TimingBadge({ status }: { status: FeedbackTimingStatus }) {
   return (
     <Badge variant="outline" className="capitalize">
       {status.replaceAll("_", " ")}
+    </Badge>
+  );
+}
+
+const SUBMITTER_LABELS: Record<FeedbackSubmitter, string> = {
+  tutor: "Tutor",
+  admin: "Admin",
+  auto: "Auto",
+  other: "Other",
+  none: "None",
+};
+
+// Only a tutor submission reflects the tutor doing the work; admin and auto
+// are surfaced in warning tones so a rescued session cannot read as compliant.
+const SUBMITTER_TONES: Record<FeedbackSubmitter, string> = {
+  tutor: "border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-300",
+  admin: "border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-300",
+  auto: "border-orange-300 text-orange-700 dark:border-orange-700 dark:text-orange-300",
+  other: "border-slate-300 text-slate-600 dark:border-slate-600 dark:text-slate-300",
+  none: "border-red-300 text-red-700 dark:border-red-700 dark:text-red-300",
+};
+
+export function SubmitterBadge({ submitter }: { submitter: FeedbackSubmitter }) {
+  return (
+    <Badge variant="outline" className={SUBMITTER_TONES[submitter]}>
+      {SUBMITTER_LABELS[submitter]}
     </Badge>
   );
 }

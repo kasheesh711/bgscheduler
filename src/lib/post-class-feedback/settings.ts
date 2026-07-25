@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -85,45 +85,6 @@ export function postClassTutorEmailCoverageReady(
       .filter((email): email is string => Boolean(email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))));
     return wiseEmails.size === 1;
   });
-}
-
-async function emailSetupCoverage(db: Database) {
-  const [digestRecipients, contacts, eligibleTutors] = await Promise.all([
-    db.select({ email: schema.postClassDigestRecipients.email })
-      .from(schema.postClassDigestRecipients)
-      .innerJoin(
-        schema.adminUsers,
-        sql<boolean>`lower(btrim(${schema.adminUsers.email})) = lower(btrim(${schema.postClassDigestRecipients.email}))`,
-      )
-      .where(eq(schema.postClassDigestRecipients.enabled, true)),
-    db.select({
-      canonicalKey: schema.tutorContacts.canonicalKey,
-      primaryEmail: schema.tutorContacts.primaryEmail,
-      onsiteEmail: schema.tutorContacts.onsiteEmail,
-      onlineEmail: schema.tutorContacts.onlineEmail,
-    }).from(schema.tutorContacts).where(eq(schema.tutorContacts.active, true)),
-    db.selectDistinct({ canonicalKey: schema.postClassSessions.canonicalTutorKey })
-      .from(schema.postClassSessions)
-      .where(and(
-        eq(schema.postClassSessions.eligible, true),
-        isNotNull(schema.postClassSessions.canonicalTutorKey),
-      )),
-  ]);
-  const requiredTutorKeys = new Set([
-    ...contacts.map((contact) => contact.canonicalKey),
-    ...eligibleTutors.flatMap((row) => row.canonicalKey ? [row.canonicalKey] : []),
-  ]);
-  const tutorEmailsReady = postClassTutorEmailCoverageReady(requiredTutorKeys, contacts);
-  return { digestRecipientsReady: digestRecipients.length > 0, tutorEmailsReady };
-}
-
-function emailRelaysConfigured(): boolean {
-  return Boolean(
-    process.env.SCHEDULE_EMAIL_APPS_SCRIPT_URL?.trim() &&
-    process.env.SCHEDULE_EMAIL_APPS_SCRIPT_SECRET?.trim() &&
-    process.env.SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_URL?.trim() &&
-    process.env.SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET?.trim()
-  );
 }
 
 export async function updatePostClassSettings(
@@ -215,22 +176,13 @@ export async function updatePostClassSettings(
       if (!coverage.reviewer || !coverage.finance || !coverage.accessManager) {
         throw new PostClassValidationError("Assign reviewer, finance, and access-manager coverage before activation.");
       }
-      if (!current.emailDeliveryVerifiedAt) {
-        throw new PostClassValidationError("Send a successful test email before activation.");
-      }
-      if (!emailRelaysConfigured()) {
-        throw new PostClassValidationError("Configure both the primary and backup email relays before activation.");
-      }
       if (patch.mapping || !current.shadowReviewedAt) {
         throw new PostClassValidationError("Review a completed shadow sync before activation.");
       }
-      const emailCoverage = await emailSetupCoverage(tx);
-      if (!emailCoverage.digestRecipientsReady) {
-        throw new PostClassValidationError("Select at least one admin digest recipient before activation.");
-      }
-      if (!emailCoverage.tutorEmailsReady) {
-        throw new PostClassValidationError("Resolve every active tutor reminder-email conflict before activation.");
-      }
+      // Outbound tutor reminders and the admin digest are parked, so relay
+      // configuration, test-email delivery, digest recipients, and tutor-email
+      // coverage no longer gate activation. The notification subsystem remains
+      // in the tree but nothing dispatches it.
       const [priorLiveWindow] = await tx.select({ id: schema.postClassEnforcementWindows.id })
         .from(schema.postClassEnforcementWindows)
         .where(eq(schema.postClassEnforcementWindows.mode, "live"))

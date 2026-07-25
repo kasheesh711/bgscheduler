@@ -20,6 +20,7 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { WiseSessionDetail } from "@/lib/wise/types";
 import { getWiseSessionTeacherUserId, getWiseUserId } from "@/lib/wise/types";
+import { toFeedbackEventEvidence } from "./events";
 import { assessFeedbackContent, calculateFeedbackDeadline } from "./policy";
 import { DEFAULT_FEEDBACK_FIELD_MAPPINGS } from "./wise";
 import { withPostClassTransaction } from "./transaction";
@@ -126,6 +127,12 @@ export interface PostClassFeedbackRepository {
     classDate: string,
   ): Promise<PostClassSessionCandidate[]>;
   loadFeedbackEvents(sessionId: string): Promise<FeedbackEventEvidence[]>;
+  /**
+   * Oldest persisted `SessionFeedbackSubmittedEvent` timestamp, or null when
+   * none exist. Sessions whose deadline predates this instant cannot be judged
+   * late from event absence — the events simply were not collected yet.
+   */
+  loadFeedbackEventCoverageFloor(): Promise<Date | null>;
   loadHistoricalFeedbackVersions(sessionId: string): Promise<FeedbackVersion[]>;
   loadPreviousComplianceLock(
     sessionId: string,
@@ -252,14 +259,6 @@ function nestedString(value: unknown, paths: string[][]): string | null {
     const object = asRecord(nestedValue(value, path));
     const objectId = nonEmptyString(object._id) ?? nonEmptyString(object.id);
     if (objectId) return objectId;
-  }
-  return null;
-}
-
-function nestedBoolean(value: unknown, paths: string[][]): boolean | null {
-  for (const path of paths) {
-    const result = nestedValue(value, path);
-    if (typeof result === "boolean") return result;
   }
   return null;
 }
@@ -509,6 +508,13 @@ function timingEvidence(
   assessment: NonNullable<PostClassSessionObservation["assessment"]>,
   governing: FeedbackVersion | null,
 ): string {
+  // An immutable Wise activity event outranks every mutable submission
+  // timestamp, so it is reported as the evidence whenever it drove the verdict.
+  if (assessment.timingEvidenceSource === "activity_event") {
+    return assessment.timingStatus === "on_time"
+      ? "wise_activity_event_before_deadline"
+      : "wise_activity_event_no_tutor_submission";
+  }
   if (assessment.onTimeComplianceLocked) return "proven_before_deadline";
   if (assessment.timingStatus === "unknown") return "wise_timestamp_unavailable";
   if (governing?.sourceTimestampKind === "created" &&
@@ -808,30 +814,22 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
       eventTimestamp: schema.wiseActivityEvents.eventTimestamp,
       actorWiseUserId: schema.wiseActivityEvents.actorWiseUserId,
       actorName: schema.wiseActivityEvents.actorName,
+      actorRole: schema.wiseActivityEvents.actorRole,
       payload: schema.wiseActivityEvents.payload,
     }).from(schema.wiseActivityEvents).where(and(
       eq(schema.wiseActivityEvents.sessionId, sessionId),
       eq(schema.wiseActivityEvents.eventName, "SessionFeedbackSubmittedEvent"),
     )).orderBy(asc(schema.wiseActivityEvents.eventTimestamp));
-    return rows.map((row) => ({
-      activityEventRowId: row.rowId,
-      eventId: row.eventId,
-      sessionId,
-      submissionId: nestedString(row.payload, [
-        ["submissionId"],
-        ["feedbackSubmissionId"],
-        ["feedbackSubmission", "id"],
-        ["feedbackSubmission", "_id"],
-      ]),
-      eventTimestamp: row.eventTimestamp,
-      autoSubmitted: nestedBoolean(row.payload, [
-        ["autoSubmitted"],
-        ["feedback", "autoSubmitted"],
-        ["feedbackSubmission", "autoSubmitted"],
-      ]),
-      actorWiseUserId: row.actorWiseUserId,
-      actorName: row.actorName,
-    }));
+    return rows.map((row) => toFeedbackEventEvidence(sessionId, row));
+  }
+
+  async loadFeedbackEventCoverageFloor(): Promise<Date | null> {
+    const [row] = await this.db
+      .select({ oldest: sql<Date | null>`min(${schema.wiseActivityEvents.eventTimestamp})` })
+      .from(schema.wiseActivityEvents)
+      .where(eq(schema.wiseActivityEvents.eventName, "SessionFeedbackSubmittedEvent"));
+    if (!row?.oldest) return null;
+    return row.oldest instanceof Date ? row.oldest : new Date(row.oldest);
   }
 
   async loadHistoricalFeedbackVersions(sessionId: string): Promise<FeedbackVersion[]> {
@@ -1467,6 +1465,8 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
             governingVersionKey: assessment.governingVersionKey,
             onTimeVersionKey: assessment.onTimeVersionKey,
             onTimeComplianceLocked: assessment.onTimeComplianceLocked,
+            timingEvidenceSource: assessment.timingEvidenceSource,
+            submitterRoles: assessment.submitterRoles,
           },
         }).onConflictDoNothing({ target: schema.postClassAssessments.assessmentKey }).returning({
           id: schema.postClassAssessments.id,

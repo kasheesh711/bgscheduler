@@ -27,6 +27,7 @@ function row(id: string, tutorName: string, student: string, overrides: Partial<
     sourceStatus: "ready",
     contentStatus: "substantive",
     timingStatus: "on_time",
+    submittedBy: "tutor",
     combinedCharacterCount: 300,
     required: { topics: answer, performance: answer, improvement: answer },
     versionCount: 1,
@@ -50,32 +51,32 @@ describe("post-class operations filters", () => {
   ];
 
   it("matches canonical tutor and student names case-insensitively", () => {
-    const filters = { query: "pakorn", outcome: "all", reminder: "all", source: "all" } as const;
+    const filters = { query: "pakorn", outcome: "all", reminder: "all", source: "all", submitter: "all" } as const;
     expect(filterFeedbackSessions(sessions, filters).map((item) => item.id)).toEqual(["1"]);
   });
 
   it("combines objective outcome and reminder failure filters", () => {
-    const filters = { query: "", outcome: "missing", reminder: "failed", source: "all" } as const;
+    const filters = { query: "", outcome: "missing", reminder: "failed", source: "all", submitter: "all" } as const;
     expect(filterFeedbackSessions(sessions, filters).map((item) => item.id)).toEqual(["2"]);
   });
 
   it("surfaces identity review sessions under source-paused", () => {
-    const filters = { query: "", outcome: "source_paused", reminder: "all", source: "all" } as const;
+    const filters = { query: "", outcome: "source_paused", reminder: "all", source: "all", submitter: "all" } as const;
     expect(filterFeedbackSessions(sessions, filters).map((item) => item.id)).toEqual(["3"]);
   });
 
   it("labels known ineligible sessions as excluded instead of missing or late", () => {
-    const filters = { query: "", outcome: "excluded", reminder: "all", source: "all" } as const;
+    const filters = { query: "", outcome: "excluded", reminder: "all", source: "all", submitter: "all" } as const;
     expect(filterFeedbackSessions(sessions, filters).map((item) => item.id)).toEqual(["4", "5"]);
   });
 
   it("finds cancelled sessions by their eligibility label", () => {
-    const filters = { query: "cancelled", outcome: "all", reminder: "all", source: "all" } as const;
+    const filters = { query: "cancelled", outcome: "all", reminder: "all", source: "all", submitter: "all" } as const;
     expect(filterFeedbackSessions(sessions, filters).map((item) => item.id)).toEqual(["5"]);
   });
 
   it("renders the empty state for an unmatched search without throwing", () => {
-    const filters = { query: "zzzz-no-match", outcome: "all", reminder: "all", source: "all" } as const;
+    const filters = { query: "zzzz-no-match", outcome: "all", reminder: "all", source: "all", submitter: "all" } as const;
     const matches = filterFeedbackSessions(sessions, filters);
     let markup = "";
 
@@ -106,12 +107,14 @@ describe("post-class operations filters", () => {
       outcome: "all",
       reminder: "all",
       source: "all",
+      submitter: "all",
     }).map((item) => item.id)).toEqual(["6"]);
     expect(filterFeedbackSessions(unusual, {
       query: "eligibility evidence unavailable",
       outcome: "all",
       reminder: "all",
       source: "all",
+      submitter: "all",
     }).map((item) => item.id)).toEqual(["7"]);
   });
 
@@ -129,12 +132,14 @@ describe("post-class operations filters", () => {
       outcome: "all",
       reminder: "all",
       source: "all",
+      submitter: "all",
     })).not.toThrow();
     expect(filterFeedbackSessions([malformed], {
       query: "still searchable",
       outcome: "all",
       reminder: "all",
       source: "all",
+      submitter: "all",
     }).map((item) => item.id)).toEqual(["8"]);
   });
 });

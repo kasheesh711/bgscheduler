@@ -13,6 +13,7 @@ import type {
 import {
   EmptyPanel,
   OutcomeBadge,
+  SubmitterBadge,
   feedbackOutcome,
   formatBangkokDate,
   formatEligibilityReason,
@@ -27,6 +28,7 @@ export interface OperationsFilters {
   outcome: OutcomeFilter;
   reminder: ReminderFilter;
   source: "all" | FeedbackSessionRow["sourceStatus"];
+  submitter: "all" | FeedbackSessionRow["submittedBy"];
 }
 
 const PAGE_SIZE = 25;
@@ -44,6 +46,7 @@ export function filterFeedbackSessions(
     if (filters.outcome !== "all" && feedbackOutcome(session) !== filters.outcome) return false;
     if (filters.reminder !== "all" && session.reminder.status !== filters.reminder) return false;
     if (filters.source !== "all" && session.sourceStatus !== filters.source) return false;
+    if (filters.submitter !== "all" && session.submittedBy !== filters.submitter) return false;
     if (!needle) return true;
     const eligibilityReason = typeof session.eligibilityReason === "string" || session.eligibilityReason === null
       ? formatEligibilityReason(session.eligibilityReason)
@@ -147,6 +150,7 @@ function SessionQueue({
               <th className="px-2 py-2.5 font-medium">Session / students</th>
               <th className="px-2 py-2.5 font-medium">Deadline</th>
               <th className="px-2 py-2.5 font-medium">Characters</th>
+              <th className="px-2 py-2.5 font-medium">Submitted by</th>
               <th className="px-2 py-2.5 font-medium">Outcome / eligibility</th>
               <th className="px-2 py-2.5 font-medium">Reminder</th>
             </tr>
@@ -190,6 +194,7 @@ function SessionQueue({
                     {formatBangkokDate(session.deadlineAt, true)}
                   </td>
                   <td className="px-2 py-2.5"><CharacterMeter session={session} /></td>
+                  <td className="px-2 py-2.5"><SubmitterBadge submitter={session.submittedBy} /></td>
                   <td className="px-2 py-2.5">
                     <OutcomeBadge session={session} />
                     {!session.eligible ? (
@@ -235,13 +240,15 @@ export function OperationsTab({
   const [outcome, setOutcome] = useState<OutcomeFilter>("all");
   const [reminder, setReminder] = useState<ReminderFilter>("all");
   const [source, setSource] = useState<OperationsFilters["source"]>("all");
+  const [submitter, setSubmitter] = useState<OperationsFilters["submitter"]>("all");
 
   const sessions = useMemo(() => filterFeedbackSessions(payload.sessions, {
     query: deferredQuery,
     outcome,
     reminder,
     source,
-  }), [deferredQuery, outcome, payload.sessions, reminder, source]);
+    submitter,
+  }), [deferredQuery, outcome, payload.sessions, reminder, source, submitter]);
   const selected = payload.sessions.find((session) => session.id === selectedId) ?? null;
 
   async function handleMutation(request: FeedbackMutationRequest) {
@@ -282,6 +289,13 @@ export function OperationsTab({
             <option value="unavailable">Unavailable</option>
             <option value="form_drift">Form drift</option>
             <option value="identity_review">Identity review</option>
+          </NativeFilter>
+          <NativeFilter label="Submitted by" value={submitter} onChange={(value) => setSubmitter(value as OperationsFilters["submitter"])}>
+            <option value="all">Any submitter</option>
+            <option value="tutor">Tutor</option>
+            <option value="admin">Admin on behalf</option>
+            <option value="auto">Auto-submitted</option>
+            <option value="none">No submission</option>
           </NativeFilter>
           <span className="w-full text-[11px] text-muted-foreground sm:w-auto">Select a row to load exact Wise evidence.</span>
         </div>

@@ -43,9 +43,28 @@ The collector reads `feedbackSubmissions[]` from the canonical Wise session-deta
 - actor id/name and `manual | auto | unknown` provenance when the evidence proves them;
 - raw Unicode character count, deterministic content result, and field failures.
 
-Rows in `post_class_feedback_versions` are append-only. The unique session/version key prevents overlapping syncs from duplicating observations, while a changed content hash under the same Wise submission id creates a new immutable version. Blank auto-submissions are retained as evidence but do not govern compliance; substantive auto-submissions may count. The display projection uses the latest substantive teacher-profile version.
+Rows in `post_class_feedback_versions` are append-only. The unique session/version key prevents overlapping syncs from duplicating observations, while a changed content hash under the same Wise submission id creates a new immutable version. Auto-submissions are retained as evidence and still populate content, but they never prove that the tutor met the deadline. The display projection uses the latest substantive teacher-profile version.
 
-A `SessionFeedbackSubmittedEvent` in the persisted Wise Activity store is useful only when the event has a session id and a class id can be established. It moves that session ahead of the rolling-window backlog. The collector still re-fetches session detail and never treats the event payload alone as canonical feedback.
+## Timing and authorship from Wise activity events
+
+Session detail alone cannot establish either *when* feedback was written or *who* wrote it. Wise rarely returns `submission.updatedAt`, and an admin submitting on a tutor's behalf still writes a submission with `profile: "teacher"`. The persisted `SessionFeedbackSubmittedEvent` stream is the only immutable source for both.
+
+Each event carries `event.eventTimestamp`, an actor (`user.role` = `TEACHER` / `ADMIN` / `STUDENT` / `OWNER`), and `payload.session.autoSubmitted`. Auto-submissions arrive with **no actor object at all**. The event never carries a submission id and never carries scheduled times, so events are correlated to a session, not to an individual submission.
+
+`deriveEventTimingEvidence` (`src/lib/post-class-feedback/policy.ts`) applies:
+
+1. A **qualifying** event is `actorRole === "TEACHER"` and not auto-submitted. `ADMIN`, `STUDENT`, `OWNER`, and auto events never prove tutor compliance.
+2. The earliest qualifying event at or before the deadline proves `on_time`.
+3. No qualifying event, with the deadline inside event coverage, proves `late`.
+4. **Coverage floor (D-EVT-01).** If the deadline predates the oldest persisted feedback event, absence proves nothing and timing stays `unknown`. Without this, a historical backfill would manufacture universal non-compliance for every session predating the event store.
+
+Event evidence outranks the mutable submission timestamps and, like any newly discovered pre-deadline proof, can clear a prior violation lock (D-EVT-02). The verdict's basis is persisted on the append-only assessment as `timing_evidence` (`wise_activity_event_before_deadline` / `wise_activity_event_no_tutor_submission`) plus `details.timingEvidenceSource` and `details.submitterRoles`.
+
+The collector still re-fetches canonical session detail for content and never treats the event payload alone as feedback.
+
+## Observation versus enforcement
+
+Assessment and enforcement are separate (D-EVT-03). A session ending before `policyEffectiveAt` is still assessed and scored, so historical timeliness is visible in Operations and Analytics — but `deductionCandidate` requires `enforcementMode === "live"` **and** `policyApplies`, so such a session can never produce a deduction. A broken source or a `paused` feature still suspends assessment outright.
 
 ## Deadline and objective compliance
 
@@ -195,9 +214,11 @@ The `/post-class-feedback` workspace has up to five views, with restricted views
 - **Analytics** — headline KPIs, tutor ranking, length statistics, concerns, and Bangkok period trends.
 - **Deductions** — capability-specific reviewer/finance handoff with individual actions only.
 - **Audit** — configuration, AI-review, deduction, finance, reminder, and source history.
-- **Settings** — enforcement controls, rolling collection and bounded date-range backfill, Wise field mapping/source health, role matrix, tutor primary-email coverage, digest recipients, test email, shadow-review confirmation, and finance periods.
+- **Settings** — enforcement controls, rolling collection and bounded date-range backfill, Wise field mapping/source health, role matrix, shadow-review confirmation, and finance periods. The tutor-email and digest-recipient cards remain for the parked email subsystem but no longer gate anything.
 
-A persistent “Setup required” banner remains until the mapping, role coverage, primary email-relay test, configured primary and backup relays, digest recipients, tutor emails, shadow review, and activation are complete. Live activation is blocked server-side until every prerequisite passes; the effective time must be current or future and becomes immutable once recorded.
+Operations shows a **Submitted by** column and filter (`tutor` / `admin` / `auto` / `none`); Analytics adds **Tutor wrote**, **Admin rescued**, and **Auto-filled** counts per tutor, so a session rescued by an admin can never read as the tutor having done the work.
+
+A persistent “Setup required” banner remains until the mapping, role coverage, shadow review, and activation are complete. Live activation is blocked server-side until those pass; the effective time must be current or future and becomes immutable once recorded. Email relay configuration, test-email delivery, digest recipients, and tutor-email coverage were removed as activation gates when outbound email was parked.
 
 ## Durable data model
 
@@ -234,15 +255,15 @@ Focused coverage includes:
 
 After deploying the code and applying `0055_post_class_feedback.sql`, Kevin should complete these steps in the website's Settings view:
 
-1. Verify every active tutor's primary email or resolve the Wise-email fallback/conflict.
-2. Select the real daily admin-digest recipients.
-3. Assign the real reviewer, finance, and access-manager staff; `kevhsh7@gmail.com` is only the initial all-capabilities bootstrap.
-4. Send a successful email test.
-5. Verify the Wise form mapping and source health.
-6. Run a shadow sync, inspect the results, and explicitly confirm the shadow review.
-7. Open the required finance period(s).
-8. Activate live enforcement with a current-or-future Bangkok effective date.
+1. Assign the real reviewer, finance, and access-manager staff; `kevhsh7@gmail.com` is only the initial all-capabilities bootstrap.
+2. Verify the Wise form mapping and source health.
+3. Backfill the `SessionFeedbackSubmittedEvent` history (`POST /api/wise-activity/sync` with `eventName`, `startPage`, `stopOnKnownEvents: false`) so the coverage floor reaches as far back as Wise retains events, then drain session detail from Settings → “Backfill range”.
+4. Run a shadow sync, inspect the results, and explicitly confirm the shadow review.
+5. Open the required finance period(s).
+6. Activate live enforcement with a current-or-future Bangkok effective date.
+
+Tutor emails, digest recipients, and the email test are no longer prerequisites — outbound email is parked.
 
 Do not activate while the setup banner is incomplete. Pausing later creates a new excluded interval; resuming reuses the immutable original activation boundary and cannot retroactively penalize sessions in the paused interval.
 
-_Verified against HEAD + uncommitted WIP on 2026-07-21._
+_Verified against HEAD on 2026-07-26._

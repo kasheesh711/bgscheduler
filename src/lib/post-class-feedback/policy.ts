@@ -1,7 +1,11 @@
 import {
   POST_CLASS_REQUIRED_FIELDS,
+  type TimingEvidenceSource,
+  type EventTimingEvidence,
   type FeedbackContentAssessment,
+  type FeedbackEventEvidence,
   type FeedbackFieldAnswers,
+  type FeedbackSubmitterRole,
   type FeedbackVersion,
   type FieldAssessment,
   type PostClassRequiredField,
@@ -298,6 +302,79 @@ export function calculateFeedbackDeadline(scheduledEndAt: Date): Date {
   return new Date(Date.UTC(year, month - 1, day + 2, 16, 59, 59, 999));
 }
 
+/**
+ * Classify the actor Wise recorded on a feedback activity event.
+ *
+ * `autoSubmitted` wins over the actor role: Wise emits auto-submissions with
+ * no actor object at all, so an auto event can never be tutor-authored.
+ */
+export function feedbackSubmitterRole(event: FeedbackEventEvidence): FeedbackSubmitterRole {
+  if (event.autoSubmitted === true) return "AUTO";
+  const role = event.actorRole?.trim().toUpperCase();
+  if (role === "TEACHER" || role === "ADMIN" || role === "STUDENT") return role;
+  return "UNKNOWN";
+}
+
+/**
+ * Derive timing and authorship from the immutable Wise activity-event stream.
+ *
+ * The event store is the only evidence that distinguishes a tutor writing
+ * their own feedback from an admin filling it in or Wise auto-submitting —
+ * session detail records all three as `profile: "teacher"`.
+ *
+ * Steps:
+ *  1. A qualifying event is tutor-authored (`TEACHER`) and not auto-submitted.
+ *  2. Earliest qualifying event at or before the deadline proves `on_time`.
+ *  3. No qualifying event, with the deadline inside event coverage, proves `late`.
+ *  4. A deadline predating the coverage floor proves nothing (fail closed to
+ *     `unknown`) — the events were never collected, so their absence is not
+ *     evidence of tutor inaction.
+ */
+export function deriveEventTimingEvidence(input: {
+  events: FeedbackEventEvidence[];
+  deadlineAt: Date;
+  eventCoverageFrom: Date | null;
+}): EventTimingEvidence {
+  const { events, deadlineAt, eventCoverageFrom } = input;
+  const submitterRoles = [...new Set(events.map(feedbackSubmitterRole))].toSorted();
+
+  const qualifying = events
+    .filter((event) => feedbackSubmitterRole(event) === "TEACHER")
+    .toSorted((left, right) => left.eventTimestamp.getTime() - right.eventTimestamp.getTime());
+
+  const provenOnTime = qualifying.find((event) => event.eventTimestamp.getTime() <= deadlineAt.getTime());
+  if (provenOnTime) {
+    return {
+      status: "on_time",
+      provenAt: provenOnTime.eventTimestamp,
+      submitterRoles,
+      source: "activity_event",
+      coverageFrom: eventCoverageFrom,
+    };
+  }
+
+  // Absence of a tutor event only proves lateness where the event store
+  // actually covers the deadline. D-EVT-01.
+  const covered = Boolean(eventCoverageFrom && deadlineAt.getTime() >= eventCoverageFrom.getTime());
+  if (covered) {
+    return {
+      status: "late",
+      provenAt: qualifying[0]?.eventTimestamp ?? null,
+      submitterRoles,
+      source: "activity_event",
+      coverageFrom: eventCoverageFrom,
+    };
+  }
+
+  return {
+    status: "unknown",
+    provenAt: null,
+    submitterRoles,
+    source: "none",
+    coverageFrom: eventCoverageFrom,
+  };
+}
+
 export function evaluateSessionEligibility(
   input: SessionEligibilityInput,
 ): SessionEligibilityResult {
@@ -433,6 +510,11 @@ export function evaluateSessionCompliance(
   )
     ? input.previousOnTimeLock
     : null;
+  const eventTiming = input.eventTiming ?? null;
+  // Observation and enforcement are separate. Sessions ending before the
+  // policy effective instant are still assessed and scored so historical
+  // timeliness is visible, but they can never create a deduction. D-EVT-03.
+  const enforcementActive = input.enforcementMode === "live" && policyApplies;
   const assessmentBase = {
     sourceStatus: input.sourceStatus,
     contentStatus: content.contentStatus,
@@ -441,9 +523,15 @@ export function evaluateSessionCompliance(
     content,
     due,
     policyApplies,
+    timingEvidenceSource: "none" as TimingEvidenceSource,
+    submitterRoles: eventTiming?.submitterRoles ?? [],
   };
 
-  if (!sourceReady || !policyApplies || input.enforcementMode === "paused") {
+  // A broken source or a paused feature suspends assessment outright. Being
+  // outside the enforcement window does not: those sessions still flow through
+  // so historical timeliness is observable, with every enforcement output
+  // neutralised by `enforcementActive`.
+  if (!sourceReady || input.enforcementMode === "paused") {
     return {
       ...assessmentBase,
       timingStatus: due ? "unknown" : "not_due",
@@ -473,6 +561,64 @@ export function evaluateSessionCompliance(
     };
   }
 
+  // A Wise activity event is immutable server-side proof of when the tutor
+  // submitted, and the only evidence that separates tutor authorship from an
+  // admin submitting on their behalf or a Wise auto-submission. It therefore
+  // outranks the mutable submission timestamps below, and — like any newly
+  // discovered pre-deadline proof — can clear a prior violation lock. D-EVT-02.
+  if (eventTiming?.status === "on_time") {
+    const onTimeBase = {
+      ...assessmentBase,
+      timingStatus: "on_time" as const,
+      timingEvidenceSource: "activity_event" as TimingEvidenceSource,
+    };
+    // Timing and content stay independent: proving the tutor submitted on time
+    // does not excuse feedback that fails the objective content bar.
+    if (governingVersion && content.compliant) {
+      return {
+        ...onTimeBase,
+        onTimeVersionKey: versionKey(governingVersion),
+        onTimeComplianceLocked: true,
+        assessed: true,
+        rawOnTimeCompliant: true,
+        adjustedCompliant: true,
+        violation: false,
+        remediatedLate: false,
+        deductionCandidate: false,
+      };
+    }
+    return {
+      ...onTimeBase,
+      onTimeVersionKey: null,
+      onTimeComplianceLocked: false,
+      assessed: due,
+      rawOnTimeCompliant: false,
+      adjustedCompliant: false,
+      violation: due,
+      remediatedLate: false,
+      deductionCandidate: due && enforcementActive,
+    };
+  }
+
+  // Event-derived lateness is only meaningful once the deadline has passed —
+  // before that, a missing tutor event just means the tutor has not written it
+  // yet. Coverage-floor gating already happened in deriveEventTimingEvidence.
+  if (due && eventTiming?.status === "late") {
+    return {
+      ...assessmentBase,
+      timingStatus: "late",
+      timingEvidenceSource: "activity_event",
+      onTimeVersionKey: null,
+      onTimeComplianceLocked: false,
+      assessed: true,
+      rawOnTimeCompliant: false,
+      adjustedCompliant: false,
+      violation: true,
+      remediatedLate: Boolean(governingVersion && content.compliant),
+      deductionCandidate: enforcementActive,
+    };
+  }
+
   // Only a trustworthy Wise source timestamp proves raw on-time completion.
   // Observation time is retained as evidence, but it cannot manufacture a
   // source timestamp that Wise did not provide.
@@ -487,6 +633,7 @@ export function evaluateSessionCompliance(
     return {
       ...assessmentBase,
       timingStatus: "on_time",
+      timingEvidenceSource: "source_timestamp",
       onTimeVersionKey: versionKey(provenOnTimeVersion),
       onTimeComplianceLocked: true,
       assessed: true,
@@ -502,13 +649,15 @@ export function evaluateSessionCompliance(
   // compliant version existed then. A later untimestamped/late backfill cannot
   // erase it, but newly discovered trustworthy pre-deadline proof can.
   if (previousLock?.violationLocked) {
+    const lockedTimingUnknown = Boolean(
+      governingVersion &&
+      !trustedVersionTime(governingVersion) &&
+      !versionProvesLate(governingVersion, deadlineAt),
+    );
     return {
       ...assessmentBase,
-      timingStatus: governingVersion &&
-        !trustedVersionTime(governingVersion) &&
-        !versionProvesLate(governingVersion, deadlineAt)
-        ? "unknown"
-        : "late",
+      timingStatus: lockedTimingUnknown ? "unknown" : "late",
+      timingEvidenceSource: lockedTimingUnknown ? "none" : "source_timestamp",
       onTimeVersionKey: null,
       onTimeComplianceLocked: false,
       assessed: true,
@@ -516,7 +665,7 @@ export function evaluateSessionCompliance(
       adjustedCompliant: false,
       violation: true,
       remediatedLate: Boolean(governingVersion && content.compliant),
-      deductionCandidate: input.enforcementMode === "live",
+      deductionCandidate: enforcementActive,
     };
   }
 
@@ -558,6 +707,7 @@ export function evaluateSessionCompliance(
     return {
       ...assessmentBase,
       timingStatus,
+      timingEvidenceSource: timingUnknown ? "none" : "source_timestamp",
       onTimeVersionKey: null,
       onTimeComplianceLocked: false,
       assessed: true,
@@ -565,7 +715,7 @@ export function evaluateSessionCompliance(
       adjustedCompliant: timingUnknown,
       violation: !timingUnknown,
       remediatedLate: !timingUnknown,
-      deductionCandidate: !timingUnknown && input.enforcementMode === "live",
+      deductionCandidate: !timingUnknown && enforcementActive,
     };
   }
 
@@ -579,6 +729,6 @@ export function evaluateSessionCompliance(
     adjustedCompliant: false,
     violation: true,
     remediatedLate: false,
-    deductionCandidate: input.enforcementMode === "live",
+    deductionCandidate: enforcementActive,
   };
 }

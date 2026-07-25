@@ -12,6 +12,8 @@ import {
   todayBangkok,
 } from "@/lib/room-capacity/dates";
 
+import type { FeedbackSubmitter } from "@/types/post-class-feedback";
+
 import { PostClassValidationError } from "./errors";
 import {
   isPostClassTerminalReminderFailure,
@@ -78,6 +80,22 @@ function validateDate(value: string, label: string): string {
 export function defaultPostClassFeedbackRange(now = new Date()) {
   const today = todayBangkok(now);
   return { startDate: monthStart(today), endDate: endOfBangkokMonth(today) };
+}
+
+/**
+ * Collapse the roles observed on a session's feedback activity events into a
+ * single display value, worst-to-best: a tutor submission of their own is the
+ * only outcome that reflects the tutor doing the work.
+ */
+function submitterFromAssessment(details: unknown): FeedbackSubmitter {
+  const roles = details && typeof details === "object" && !Array.isArray(details)
+    ? (details as Record<string, unknown>).submitterRoles
+    : null;
+  if (!Array.isArray(roles) || roles.length === 0) return "none";
+  if (roles.includes("TEACHER")) return "tutor";
+  if (roles.includes("ADMIN")) return "admin";
+  if (roles.includes("AUTO")) return "auto";
+  return "other";
 }
 
 function fieldMeaningful(failures: string[], key: string, text: string): boolean {
@@ -358,6 +376,7 @@ export async function getPostClassFeedbackDashboard(
       sourceStatus: session.sourceStatus,
       contentStatus: session.contentStatus,
       timingStatus: session.timingStatus,
+      submittedBy: submitterFromAssessment(assessment?.details),
       combinedCharacterCount: assessment?.combinedRawCharCount ?? latest?.rawCharCount ?? 0,
       required: {
         topics: { characters: codePointLength(topics), meaningful: fieldMeaningful(failures, "topic", topics) },
@@ -433,6 +452,10 @@ export async function getPostClassFeedbackDashboard(
       .filter((row): row is (typeof sessionRows)[number] => row?.contentStatus === "substantive")
       .map((row) => row.combinedCharacterCount);
     const unresolvedViolations = tutorAssessments.filter((row) => row.objectiveViolation && deductionsBySession.get(row.sessionId)?.deduction.status !== "waived").length;
+    // Authorship split across every eligible session, not just assessed ones,
+    // so a tutor who never submitted still shows up as an auto/admin case.
+    const submitters = tutorSessions.map((session) =>
+      submitterFromAssessment(latestAssessmentBySession.get(session.id)?.details));
     const trendGroups = new Map<string, typeof assessedTutorSessions>();
     for (const session of assessedTutorSessions) {
       const period = bangkokBucket(session.scheduledEndAt, trendGranularity);
@@ -450,6 +473,9 @@ export async function getPostClassFeedbackDashboard(
       unresolvedViolations,
       meanCharacters: mean(characters),
       confirmedAiConcerns: tutorSessions.reduce((sum, session) => sum + (aiBySession.get(session.id)?.confirmed ?? 0), 0),
+      tutorAuthored: submitters.filter((value) => value === "tutor").length,
+      adminRescued: submitters.filter((value) => value === "admin").length,
+      autoFilled: submitters.filter((value) => value === "auto").length,
       trend: [...trendGroups.entries()].toSorted(([left], [right]) => left.localeCompare(right)).map(([period, periodSessions]) => ({
         period,
         adjustedComplianceRate: rate(periodSessions.filter((session) => {
@@ -631,19 +657,12 @@ export async function getPostClassFeedbackDashboard(
     finance: validAccessRows.some((row) => row.capability === "finance"),
     manager: validAccessRows.some((row) => row.capability === "access_manager"),
   };
-  const relayConfigured = Boolean(
-    process.env.SCHEDULE_EMAIL_APPS_SCRIPT_URL &&
-    process.env.SCHEDULE_EMAIL_APPS_SCRIPT_SECRET &&
-    process.env.SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_URL &&
-    process.env.SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET,
-  );
-  const tutorEmailCoverage = allTutorEmailRows.filter((row) => row.status === "primary" || row.status === "fallback").length;
+  // Email relay, admin digest recipients, and tutor email coverage no longer
+  // appear here: outbound reminders and the digest are parked, so they cannot
+  // gate activation.
   const setupItems = [
     { key: "mapping" as const, label: "Wise field mapping", complete: formMappingHealth === "healthy", detail: formMappingHealth === "healthy" ? "All required fields mapped" : "Mapping needs review" },
     { key: "roles" as const, label: "Role coverage", complete: coverage.reviewer && coverage.finance && coverage.manager, detail: `${coverage.reviewer ? 1 : 0}/1 reviewer, ${coverage.finance ? 1 : 0}/1 finance, ${coverage.manager ? 1 : 0}/1 access manager` },
-    { key: "email_relay" as const, label: "Email relay", complete: relayConfigured && Boolean(settings?.emailDeliveryVerifiedAt), detail: settings?.emailDeliveryVerifiedAt ? "Test email delivered" : relayConfigured ? "Send a test email" : "Email relay is not configured" },
-    { key: "digest_recipients" as const, label: "Admin digest recipients", complete: validDigestRecipients.length > 0, detail: validDigestRecipients.length > 0 ? `${validDigestRecipients.length} recipient${validDigestRecipients.length === 1 ? "" : "s"} selected` : "Select at least one allowlisted admin" },
-    { key: "tutor_emails" as const, label: "Tutor email coverage", complete: tutorEmailCoverage === allTutorEmailRows.length && allTutorEmailRows.length > 0, detail: `${tutorEmailCoverage}/${allTutorEmailRows.length} tutors have an unambiguous address` },
     { key: "shadow_review" as const, label: "Shadow review", complete: Boolean(settings?.shadowReviewedAt), detail: settings?.shadowReviewedAt ? `Reviewed ${settings.shadowReviewedAt.toISOString()}` : "Run and review a shadow sync" },
     { key: "activation" as const, label: "Prospective activation", complete: settings?.enforcementMode === "live", detail: settings?.enforcementMode === "live" ? `Live from ${iso(settings.policyEffectiveAt)}` : "Not live" },
   ];

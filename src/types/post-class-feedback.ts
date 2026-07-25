@@ -9,6 +9,13 @@ export type FeedbackSourceStatus =
 export type FeedbackContentStatus = "missing" | "blank" | "substantive";
 export type FeedbackTimingStatus = "not_due" | "on_time" | "late" | "unknown";
 export type FeedbackProvenance = "manual" | "auto" | "unknown";
+
+/**
+ * Who actually submitted the feedback, per the Wise activity-event stream.
+ * Session detail cannot distinguish these — an admin submitting on a tutor's
+ * behalf still writes a submission with `profile: "teacher"`.
+ */
+export type FeedbackSubmitter = "tutor" | "admin" | "auto" | "other" | "none";
 export type FeedbackEnforcementMode = "shadow" | "live" | "paused";
 export type FeedbackDeductionStatus =
   | "none"
@@ -99,6 +106,8 @@ export interface FeedbackSessionRow {
   sourceStatus: FeedbackSourceStatus;
   contentStatus: FeedbackContentStatus;
   timingStatus: FeedbackTimingStatus;
+  /** Who Wise recorded as submitting feedback for this session. */
+  submittedBy: FeedbackSubmitter;
   combinedCharacterCount: number;
   required: {
     topics: FeedbackQuestionSummary;
@@ -264,6 +273,12 @@ export interface FeedbackTutorMetric {
   unresolvedViolations: number;
   meanCharacters: number | null;
   confirmedAiConcerns: number;
+  /** Sessions where the tutor submitted their own feedback. */
+  tutorAuthored: number;
+  /** Sessions an admin filled in on the tutor's behalf. */
+  adminRescued: number;
+  /** Sessions Wise auto-submitted, where nobody wrote the feedback. */
+  autoFilled: number;
   trend: Array<{
     period: string;
     adjustedComplianceRate: number | null;
@@ -331,9 +346,6 @@ export interface FeedbackSetupItem {
   key:
     | "mapping"
     | "roles"
-    | "email_relay"
-    | "digest_recipients"
-    | "tutor_emails"
     | "shadow_review"
     | "activation";
   label: string;

@@ -110,6 +110,23 @@ export interface PreviousComplianceLock {
   deadlineAt?: Date;
 }
 
+/** Who Wise recorded as the submitting actor on a feedback activity event. */
+export type FeedbackSubmitterRole = "TEACHER" | "ADMIN" | "STUDENT" | "AUTO" | "UNKNOWN";
+
+/** Where a timing verdict came from. Persisted on the assessment. */
+export type TimingEvidenceSource = "activity_event" | "source_timestamp" | "none";
+
+export interface EventTimingEvidence {
+  status: TimingStatus;
+  /** Earliest qualifying tutor-authored event, when one exists. */
+  provenAt: Date | null;
+  /** Distinct roles observed across this session's feedback events. */
+  submitterRoles: FeedbackSubmitterRole[];
+  source: Extract<TimingEvidenceSource, "activity_event" | "none">;
+  /** Coverage floor consulted, echoed for audit reproducibility. */
+  coverageFrom: Date | null;
+}
+
 export interface SessionComplianceInput {
   sourceStatus: SourceStatus;
   scheduledEndAt: Date;
@@ -120,12 +137,18 @@ export interface SessionComplianceInput {
   policyVersion?: number;
   mappingVersion?: number;
   previousOnTimeLock?: PreviousComplianceLock | null;
+  /** Immutable Wise-side timing/authorship proof. Takes precedence over mutable submission timestamps. */
+  eventTiming?: EventTimingEvidence | null;
 }
 
 export interface SessionComplianceAssessment {
   sourceStatus: SourceStatus;
   contentStatus: ContentStatus;
   timingStatus: TimingStatus;
+  /** What proved the timing verdict. */
+  timingEvidenceSource: TimingEvidenceSource;
+  /** Roles observed on this session's feedback events, for display and analytics. */
+  submitterRoles: FeedbackSubmitterRole[];
   deadlineAt: Date;
   governingVersionKey: string | null;
   onTimeVersionKey: string | null;
@@ -198,6 +221,13 @@ export interface FeedbackEventEvidence {
   autoSubmitted?: boolean | null;
   actorWiseUserId?: string | null;
   actorName?: string | null;
+  /**
+   * Wise actor role on the event (`TEACHER`, `ADMIN`, `STUDENT`). Absent for
+   * auto-submitted events, which carry no actor at all. This is the only place
+   * tutor authorship can be established: an admin submitting on a tutor's
+   * behalf still writes a session-detail submission with `profile: "teacher"`.
+   */
+  actorRole?: string | null;
 }
 
 export interface CanonicalTutorResolution {
