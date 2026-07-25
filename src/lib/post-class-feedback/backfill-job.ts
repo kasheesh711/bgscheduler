@@ -59,6 +59,9 @@ export async function runPostClassBackfillJob(
   const clock = options.clock ?? Date.now;
   const startedAt = clock();
   const sync = options.sync ?? runPostClassFeedbackSync;
+  // Mirrors the ceiling `syncPostClassFeedback` applies to a manual backfill,
+  // so a short batch can be recognised as an exhausted pool.
+  const requestedCap = Math.max(1, Math.min(options.detailCap ?? 50, 400));
   const syncRuns: SyncPostClassFeedbackResult[] = [];
 
   let detailFetchedCount = 0;
@@ -80,8 +83,11 @@ export async function runPostClassBackfillJob(
     sessionSavedCount += result.sessionSavedCount;
     sourceIssueCount += result.sourceIssueCount;
 
-    // A short batch means no candidate remained for this window.
-    if (result.candidateCount === 0 || result.detailFetchedCount === 0) {
+    // A batch that selected fewer candidates than it was allowed to means the
+    // window's pool is exhausted. Testing only for zero work would keep
+    // re-running a drained window until the wall-clock budget expired, and
+    // would report `drained: false` for a window that was in fact complete.
+    if (result.candidateCount < requestedCap || result.detailFetchedCount === 0) {
       stoppedReason = "drained";
       break;
     }
