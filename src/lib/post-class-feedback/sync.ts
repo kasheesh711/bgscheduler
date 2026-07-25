@@ -7,7 +7,12 @@ import {
 } from "@/lib/wise/fetchers";
 import type { WiseSession, WiseSessionDetail } from "@/lib/wise/types";
 import { getWiseSessionClassId } from "@/lib/wise/types";
-import { calculateFeedbackDeadline, evaluateSessionCompliance, evaluateSessionEligibility } from "./policy";
+import {
+  calculateFeedbackDeadline,
+  deriveEventTimingEvidence,
+  evaluateSessionCompliance,
+  evaluateSessionEligibility,
+} from "./policy";
 import type {
   CanonicalTutorResolution,
   FeedbackVersion,
@@ -33,6 +38,13 @@ import {
 } from "./wise";
 
 const DEFAULT_DETAIL_CAP = 50;
+/**
+ * Manual backfills may request a larger batch than the cron. The rolling cron
+ * stays at 50 so a routine run can never monopolise the Wise API; a deliberate
+ * admin-triggered backfill has ~11k historical sessions to drain and would
+ * otherwise need hundreds of runs.
+ */
+const BACKFILL_DETAIL_CAP = 400;
 const DETAIL_CONCURRENCY = 4;
 const ROLLING_WINDOW_DAYS = 4;
 
@@ -185,8 +197,11 @@ export function buildPostClassSyncCandidates(input: {
   incompleteCandidates: PostClassSessionCandidate[];
   rollingCandidates: PostClassSessionCandidate[];
   cap?: number;
+  /** Raises the ceiling to BACKFILL_DETAIL_CAP for admin-triggered backfills. */
+  backfill?: boolean;
 }): PostClassSessionCandidate[] {
-  const cap = Math.max(0, Math.min(input.cap ?? DEFAULT_DETAIL_CAP, DEFAULT_DETAIL_CAP));
+  const ceiling = input.backfill ? BACKFILL_DETAIL_CAP : DEFAULT_DETAIL_CAP;
+  const cap = Math.max(0, Math.min(input.cap ?? DEFAULT_DETAIL_CAP, ceiling));
   return selectPostClassSyncCandidates(buildPostClassSyncCandidatePool(input), cap);
 }
 
@@ -417,7 +432,11 @@ function safeWiseIssue(
     issueType = "wise_auth";
     scope = "global";
     safeMessage = `Wise credentials were rejected (${status}).`;
-  } else if (status === 404) {
+  } else if (status === 404 || (status === 400 && /session not found/iu.test(message))) {
+    // Wise answers a deleted session with 400 "Session not found!", not 404.
+    // Treating that as a global contract breach would let one removed session
+    // mark every other session's source unavailable and suspend the whole
+    // feature. It is a per-session condition and stays session-scoped.
     issueType = "session_not_found";
     scope = "session";
     safeMessage = `Wise session ${sessionId} was not found.`;
@@ -514,7 +533,12 @@ export async function syncPostClassFeedback(
 ): Promise<SyncPostClassFeedbackResult> {
   const now = options.now ?? new Date();
   const triggerType = options.triggerType ?? "cron";
-  const detailCap = Math.max(1, Math.min(options.detailCap ?? DEFAULT_DETAIL_CAP, DEFAULT_DETAIL_CAP));
+  // Only an explicit manual date-range backfill may exceed the rolling cap.
+  const isBackfill = triggerType === "manual" &&
+    Boolean(options.startDate && options.endDate) &&
+    !options.reminderCheckpoint;
+  const detailCeiling = isBackfill ? BACKFILL_DETAIL_CAP : DEFAULT_DETAIL_CAP;
+  const detailCap = Math.max(1, Math.min(options.detailCap ?? DEFAULT_DETAIL_CAP, detailCeiling));
   if (options.reminderCheckpoint && (options.startDate || options.endDate)) {
     throw new Error("Reminder-checkpoint sync cannot be combined with a manual backfill window.");
   }
@@ -537,12 +561,16 @@ export async function syncPostClassFeedback(
   try {
     const [
       policy,
+      eventCoverageFrom,
       recentSessions,
       eventCandidates,
       incompleteCandidates,
       persistedCheckpointCandidates,
     ] = await Promise.all([
       dependencies.repository.loadPolicyContext(),
+      // Read once per run: sessions whose deadline predates the oldest
+      // collected feedback event cannot be judged late from event absence.
+      dependencies.repository.loadFeedbackEventCoverageFloor(),
       fetchWisePastSessionsByBangkokDate(
         dependencies.client,
         dependencies.instituteId,
@@ -750,6 +778,11 @@ export async function syncPostClassFeedback(
       else if (tutor.status === "ambiguous") sourceStatus = "identity_review";
       else if (eligibility.status === "ambiguous") sourceStatus = "unavailable";
 
+      const eventTiming = deriveEventTimingEvidence({
+        events,
+        deadlineAt: calculateFeedbackDeadline(sessionWithCurrentProjection.scheduledEndAt),
+        eventCoverageFrom,
+      });
       const assessment = eligibility.eligible
         ? evaluateSessionCompliance({
           sourceStatus,
@@ -761,6 +794,7 @@ export async function syncPostClassFeedback(
           policyVersion: policy.policyVersion,
           mappingVersion: policy.mappingVersion,
           previousOnTimeLock,
+          eventTiming,
         })
         : null;
       const saved = await dependencies.repository.saveObservation(runId, {

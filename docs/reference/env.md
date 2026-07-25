@@ -178,8 +178,8 @@ All read with `?.trim()` and no schema entry; consumed in
 |---|---|---|---|---|
 | `SCHEDULE_EMAIL_APPS_SCRIPT_URL` | Yes (line 29) | Primary Apps Script web-app URL that actually sends the email. | `schedule-email.ts:299` | None — primary transport endpoint |
 | `SCHEDULE_EMAIL_APPS_SCRIPT_SECRET` | Yes (line 30) | Shared secret authenticating to the primary Apps Script. | `schedule-email.ts:300` | None |
-| `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_URL` | Yes (line 31) | Fallback Apps Script URL. | `schedule-email.ts:291` | Optional for classroom email; required before Post-Class Feedback can activate live enforcement. |
-| `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET` | Yes (line 32) | Shared secret for the backup Apps Script. | `schedule-email.ts:292` | Optional for classroom email; required before Post-Class Feedback can activate live enforcement. |
+| `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_URL` | Yes (line 31) | Fallback Apps Script URL. | `schedule-email.ts:291` | Optional backup transport. |
+| `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET` | Yes (line 32) | Shared secret for the backup Apps Script. | `schedule-email.ts:292` | Optional backup transport. |
 | `SCHEDULE_EMAIL_SENDER_NAME` | Yes (line 33) | Display name for the sender. | `schedule-email.ts:606` | Defaults to `"BeGifted"` |
 | `SCHEDULE_EMAIL_REPLY_TO` | Yes (line 34) | Reply-to address. | `schedule-email.ts:607` | Defaults to hard-coded `"kevhsh7@gmail.com"` |
 | `SCHEDULE_EMAIL_PUBLIC_BASE_URL` | No | Override for the public base URL used in email links. | `schedule-email.ts:266`; also `src/lib/leave-requests/config.ts:19` | First in a cascade (see below) |

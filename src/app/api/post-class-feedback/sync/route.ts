@@ -16,7 +16,9 @@ const BangkokDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value)
 }, "Invalid calendar date");
 
 const BodySchema = z.object({
-  detailCap: z.number().int().min(1).max(50).optional(),
+  // Up to 400 is honoured only for an explicit start/end backfill window;
+  // syncPostClassFeedback clamps every other trigger back to 50.
+  detailCap: z.number().int().min(1).max(400).optional(),
   startDate: BangkokDateSchema.optional(),
   endDate: BangkokDateSchema.optional(),
 }).strict().refine((value) => Boolean(value.startDate) === Boolean(value.endDate), {

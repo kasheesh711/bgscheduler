@@ -93,6 +93,28 @@ describe("post-class feedback sync planning", () => {
     expect(candidates).toHaveLength(50);
   });
 
+  it("raises the ceiling to 400 only for an explicit backfill", () => {
+    const eventCandidates = Array.from({ length: 500 }, (_, index) => ({
+      sessionId: `s-${index}`,
+      classId: "class",
+      reason: "feedback_event" as const,
+    }));
+    expect(buildPostClassSyncCandidates({
+      cap: 500,
+      backfill: true,
+      eventCandidates,
+      incompleteCandidates: [],
+      rollingCandidates: [],
+    })).toHaveLength(400);
+    // Without the backfill flag the rolling cap still governs.
+    expect(buildPostClassSyncCandidates({
+      cap: 500,
+      eventCandidates,
+      incompleteCandidates: [],
+      rollingCandidates: [],
+    })).toHaveLength(50);
+  });
+
   it("targets the exact Bangkok class date for each reminder checkpoint", () => {
     // 16:30Z is still 23:30 on 31 July in Bangkok.
     const now = new Date("2026-07-31T16:30:00.000Z");
@@ -629,6 +651,7 @@ describe("post-class feedback sync planning", () => {
       listIncompleteRecheckCandidates: async () => [],
       listReminderCheckpointPersistedCandidates: async () => [],
       loadFeedbackEvents: async () => [],
+      loadFeedbackEventCoverageFloor: async () => null,
       loadHistoricalFeedbackVersions: async () => [],
       loadPreviousComplianceLock: async () => null,
       saveObservation: async (_runId, observation) => {
@@ -744,6 +767,7 @@ describe("post-class feedback sync planning", () => {
       listIncompleteRecheckCandidates: async () => [],
       listReminderCheckpointPersistedCandidates: async () => [],
       loadFeedbackEvents: async () => [],
+      loadFeedbackEventCoverageFloor: async () => null,
       loadHistoricalFeedbackVersions: async () => [],
       loadPreviousComplianceLock: async () => null,
       saveObservation: async (_runId, observation) => {
@@ -840,6 +864,7 @@ describe("post-class feedback sync planning", () => {
       listIncompleteRecheckCandidates: async () => [],
       listReminderCheckpointPersistedCandidates: async () => [],
       loadFeedbackEvents: async () => [],
+      loadFeedbackEventCoverageFloor: async () => null,
       loadHistoricalFeedbackVersions: async () => [],
       loadPreviousComplianceLock: async () => null,
       saveObservation: async (_runId, observation) => {
@@ -940,6 +965,7 @@ describe("post-class feedback sync planning", () => {
       listIncompleteRecheckCandidates: async () => [],
       listReminderCheckpointPersistedCandidates: async () => [],
       loadFeedbackEvents: async () => [],
+      loadFeedbackEventCoverageFloor: async () => null,
       loadHistoricalFeedbackVersions: async () => [],
       loadPreviousComplianceLock: async () => null,
       saveObservation: async (_runId, observation) => {
@@ -1033,6 +1059,7 @@ describe("post-class feedback sync planning", () => {
         return { candidates: planned, totalPending: planned.length };
       },
       loadFeedbackEvents: async () => [],
+      loadFeedbackEventCoverageFloor: async () => null,
       loadHistoricalFeedbackVersions: async () => [],
       loadPreviousComplianceLock: async () => null,
       saveObservation: async () => {
@@ -1134,6 +1161,7 @@ describe("post-class feedback sync planning", () => {
       listIncompleteRecheckCandidates: async () => [],
       listReminderCheckpointPersistedCandidates: async () => [],
       loadFeedbackEvents: async () => [],
+      loadFeedbackEventCoverageFloor: async () => null,
       loadHistoricalFeedbackVersions: async () => [],
       loadPreviousComplianceLock: async () => null,
       saveObservation: async (_runId, observation) => {
@@ -1178,5 +1206,203 @@ describe("post-class feedback sync planning", () => {
         current: { settingsVersion: 5, policyVersion: 2, mappingVersion: 8 },
       }),
     }));
+  });
+});
+
+describe("post-class feedback event-derived timing", () => {
+  // Class ends 2026-07-20; deadline is 2026-07-22T16:59:59.999Z.
+  const endedSession = {
+    _id: "session-1",
+    classId: { _id: "class-1", name: "Math" },
+    userId: "teacher-1",
+    scheduledStartTime: "2026-07-20T02:00:00.000Z",
+    scheduledEndTime: "2026-07-20T03:00:00.000Z",
+    meetingStatus: "ENDED",
+  };
+
+  function clientWithFeedback(): WiseClient {
+    return {
+      async get(path: string, params?: Record<string, string>) {
+        if (params?.status === "PAST") {
+          return { data: { sessions: [endedSession], page_count: 1 } };
+        }
+        void path;
+        return {
+          data: {
+            ...endedSession,
+            feedbackForm: {
+              questions: [
+                { _id: "q1", questionText: "Topics covered" },
+                { _id: "q2", questionText: "How the student did in class" },
+                { _id: "q3", questionText: "Need more work on" },
+              ],
+            },
+            feedbackSubmissions: [{
+              _id: "submission-1",
+              profile: "teacher",
+              creditsConsumed: 1,
+              // No updatedAt: the mutable timestamp cannot prove timing, which
+              // is exactly the gap the activity event closes.
+              createdAt: "2026-07-21T04:00:00.000Z",
+              answers: [
+                { questionId: "q1", answer: "Algebraic equations, worked examples, and checking strategies were covered in a structured sequence. ".repeat(2) },
+                { questionId: "q2", answer: "The student explained each method clearly, corrected calculation errors, and applied the final check independently. ".repeat(2) },
+                { questionId: "q3", answer: "Next, the student should practise mixed word problems because choosing the correct method will build confidence. ".repeat(2) },
+              ],
+            }],
+          },
+        };
+      },
+    } as unknown as WiseClient;
+  }
+
+  function repositoryWith(
+    events: Awaited<ReturnType<PostClassFeedbackRepository["loadFeedbackEvents"]>>,
+    coverageFrom: Date | null,
+    observations: PostClassSessionObservation[],
+  ): PostClassFeedbackRepository {
+    return {
+      beginSync: async () => "run-1",
+      completeSync: async () => undefined,
+      failSync: async () => undefined,
+      loadPolicyContext: async () => ({
+        settingsVersion: 1,
+        enforcementMode: "shadow",
+        policyEffectiveAt: null,
+        policyVersion: 1,
+        mappingVersion: 1,
+        mappings: [
+          { field: "topics", questionText: "Topics covered" },
+          { field: "performance", questionText: "How the student did in class" },
+          { field: "improvement", questionText: "Need more work on" },
+        ],
+      }),
+      loadSessionEnforcementContext: async () => ({
+        enforcementMode: "shadow",
+        policyEffectiveAt: new Date("2026-07-01T00:00:00.000Z"),
+      }),
+      listFeedbackEventCandidates: async () => [],
+      listIncompleteRecheckCandidates: async () => [],
+      listReminderCheckpointPersistedCandidates: async () => [],
+      loadFeedbackEvents: async () => events,
+      loadFeedbackEventCoverageFloor: async () => coverageFrom,
+      loadHistoricalFeedbackVersions: async () => [],
+      loadPreviousComplianceLock: async () => null,
+      saveObservation: async (_runId, observation) => {
+        observations.push(observation);
+        return { versionsInserted: 1, assessmentInserted: true };
+      },
+      recordSourceIssue: async () => undefined,
+      pauseForFormDrift: async () => undefined,
+    };
+  }
+
+  function feedbackEvent(at: string, role: string | null, autoSubmitted: boolean | null = null) {
+    return {
+      activityEventRowId: `row-${at}`,
+      eventId: `event-${at}`,
+      sessionId: "session-1",
+      submissionId: null,
+      eventTimestamp: new Date(at),
+      autoSubmitted,
+      actorWiseUserId: "teacher-1",
+      actorName: "Teacher One",
+      actorRole: role,
+    };
+  }
+
+  async function run(
+    events: ReturnType<typeof feedbackEvent>[],
+    coverageFrom: Date | null,
+  ): Promise<PostClassSessionObservation> {
+    const observations: PostClassSessionObservation[] = [];
+    await syncPostClassFeedback({
+      repository: repositoryWith(events, coverageFrom, observations),
+      client: clientWithFeedback(),
+      instituteId: "institute-1",
+      resolveTutor: async () => ({
+        status: "resolved",
+        canonicalKey: "Teacher One",
+        displayName: "Teacher One",
+        wiseTeacherUserId: "teacher-1",
+      }),
+    }, { now: new Date("2026-07-23T00:00:00.000Z") });
+    expect(observations).toHaveLength(1);
+    return observations[0];
+  }
+
+  it("keeps a Wise 400 'Session not found' session-scoped so one deleted session cannot suspend the feature", async () => {
+    const issues: Array<Record<string, unknown>> = [];
+    const observations: PostClassSessionObservation[] = [];
+    const repository = repositoryWith([], new Date("2026-03-31T00:00:00.000Z"), observations);
+    const failingClient = {
+      async get(path: string, params?: Record<string, string>) {
+        if (params?.status === "PAST") {
+          return { data: { sessions: [endedSession], page_count: 1 } };
+        }
+        void path;
+        // Wise answers a removed session this way instead of 404.
+        throw new Error('Wise API 400: {"status":400,"message":"Session not found!"} (https://api.wiseapp.live/…)');
+      },
+    } as unknown as WiseClient;
+
+    await syncPostClassFeedback({
+      repository: {
+        ...repository,
+        recordSourceIssue: async (issue) => { issues.push(issue as unknown as Record<string, unknown>); },
+      },
+      client: failingClient,
+      instituteId: "institute-1",
+      resolveTutor: async () => ({
+        status: "resolved",
+        canonicalKey: "Teacher One",
+        displayName: "Teacher One",
+        wiseTeacherUserId: "teacher-1",
+      }),
+    }, { now: new Date("2026-07-23T00:00:00.000Z") });
+
+    const recorded = issues.find((issue) => issue.issueType === "session_not_found");
+    expect(recorded).toMatchObject({ scope: "session", sessionId: "session-1" });
+    expect(issues.some((issue) => issue.scope === "global")).toBe(false);
+  });
+
+  it("proves on_time from a tutor event even when Wise supplies no updatedAt", async () => {
+    const observation = await run(
+      [feedbackEvent("2026-07-21T04:00:00.000Z", "TEACHER")],
+      new Date("2026-05-27T00:00:00.000Z"),
+    );
+    expect(observation.assessment?.timingStatus).toBe("on_time");
+    expect(observation.assessment?.timingEvidenceSource).toBe("activity_event");
+    expect(observation.assessment?.rawOnTimeCompliant).toBe(true);
+    expect(observation.assessment?.submitterRoles).toEqual(["TEACHER"]);
+  });
+
+  it("marks the tutor late when only an admin submitted on their behalf", async () => {
+    const observation = await run(
+      [feedbackEvent("2026-07-21T04:00:00.000Z", "ADMIN")],
+      new Date("2026-05-27T00:00:00.000Z"),
+    );
+    expect(observation.assessment?.timingStatus).toBe("late");
+    expect(observation.assessment?.rawOnTimeCompliant).toBe(false);
+    // Content is present and compliant, so this is a remediated-late outcome.
+    expect(observation.assessment?.remediatedLate).toBe(true);
+    expect(observation.assessment?.submitterRoles).toEqual(["ADMIN"]);
+  });
+
+  it("marks the tutor late when Wise auto-submitted the feedback", async () => {
+    const observation = await run(
+      [feedbackEvent("2026-07-21T04:00:00.000Z", null, true)],
+      new Date("2026-05-27T00:00:00.000Z"),
+    );
+    expect(observation.assessment?.timingStatus).toBe("late");
+    expect(observation.assessment?.submitterRoles).toEqual(["AUTO"]);
+  });
+
+  it("falls back to unknown when the deadline predates event coverage", async () => {
+    const observation = await run([], new Date("2026-07-23T00:00:00.000Z"));
+    expect(observation.assessment?.timingStatus).toBe("unknown");
+    expect(observation.assessment?.timingEvidenceSource).toBe("none");
+    // Fail-closed: no deduction may be manufactured from absent coverage.
+    expect(observation.assessment?.deductionCandidate).toBe(false);
   });
 });

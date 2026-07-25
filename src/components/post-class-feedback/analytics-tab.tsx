@@ -120,6 +120,9 @@ export function AnalyticsTab({ payload }: { payload: PostClassFeedbackPayload })
                 <TableHead>Eligible</TableHead>
                 <TableHead>Raw on-time</TableHead>
                 <TableHead>Adjusted</TableHead>
+                <TableHead>Tutor wrote</TableHead>
+                <TableHead>Admin rescued</TableHead>
+                <TableHead>Auto-filled</TableHead>
                 <TableHead>Open violations</TableHead>
                 <TableHead>Mean characters</TableHead>
                 <TableHead>AI concerns</TableHead>
@@ -142,6 +145,13 @@ export function AnalyticsTab({ payload }: { payload: PostClassFeedbackPayload })
                     )}>
                       {formatRate(metric.adjustedComplianceRate)}
                     </span>
+                  </TableCell>
+                  <TableCell className="tabular-nums">{metric.tutorAuthored}</TableCell>
+                  <TableCell className={cn("tabular-nums", metric.adminRescued > 0 && "text-amber-700")}>
+                    {metric.adminRescued}
+                  </TableCell>
+                  <TableCell className={cn("tabular-nums", metric.autoFilled > 0 && "text-orange-700")}>
+                    {metric.autoFilled}
                   </TableCell>
                   <TableCell>
                     <Badge variant={metric.unresolvedViolations > 0 ? "destructive" : "outline"}>{metric.unresolvedViolations}</Badge>

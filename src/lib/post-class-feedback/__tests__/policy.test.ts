@@ -3,11 +3,13 @@ import {
   assessFeedbackContent,
   calculateFeedbackDeadline,
   countUnicodeCodePoints,
+  deriveEventTimingEvidence,
   evaluateSessionCompliance,
   evaluateSessionEligibility,
+  feedbackSubmitterRole,
   isPlaceholderFeedback,
 } from "../policy";
-import type { FeedbackFieldAnswers, FeedbackVersion } from "../types";
+import type { FeedbackEventEvidence, FeedbackFieldAnswers, FeedbackVersion } from "../types";
 
 const completeFields = (suffix = ""): FeedbackFieldAnswers => ({
   topics: `${"Algebraic equations, worked examples, and checking strategies were covered in a structured sequence. ".repeat(2)}${suffix}`,
@@ -452,7 +454,7 @@ describe("post-class feedback policy", () => {
     expect(result.adjustedCompliant).toBe(true);
   });
 
-  it("does not assess source-paused or pre-activation sessions", () => {
+  it("does not assess a session whose source is broken", () => {
     const paused = evaluateSessionCompliance({
       sourceStatus: "form_drift",
       scheduledEndAt: new Date("2026-07-01T10:00:00.000Z"),
@@ -463,7 +465,11 @@ describe("post-class feedback policy", () => {
     });
     expect(paused.assessed).toBe(false);
     expect(paused.deductionCandidate).toBe(false);
+  });
 
+  it("observes pre-activation sessions but never makes them a deduction candidate", () => {
+    // Historical sessions are assessed so past timeliness is visible, while
+    // the enforcement boundary stays absolute.
     const historical = evaluateSessionCompliance({
       sourceStatus: "ready",
       scheduledEndAt: new Date("2026-06-30T10:00:00.000Z"),
@@ -473,6 +479,161 @@ describe("post-class feedback policy", () => {
       versions: [],
     });
     expect(historical.policyApplies).toBe(false);
-    expect(historical.violation).toBe(false);
+    expect(historical.assessed).toBe(true);
+    expect(historical.deductionCandidate).toBe(false);
+  });
+
+  it("keeps a paused feature fully unassessed regardless of evidence", () => {
+    const paused = evaluateSessionCompliance({
+      sourceStatus: "ready",
+      scheduledEndAt: new Date("2026-07-01T10:00:00.000Z"),
+      now: new Date("2026-07-05T00:00:00.000Z"),
+      policyEffectiveAt: new Date("2026-06-01T00:00:00.000Z"),
+      enforcementMode: "paused",
+      versions: [],
+    });
+    expect(paused.assessed).toBe(false);
+    expect(paused.deductionCandidate).toBe(false);
+  });
+});
+
+// Deadline for a session ending 2026-06-01 is 2026-06-03T16:59:59.999Z.
+const DEADLINE = new Date("2026-06-03T16:59:59.999Z");
+const COVERAGE_FROM = new Date("2026-05-27T00:00:00.000Z");
+
+function event(input: {
+  at: string;
+  role?: string | null;
+  autoSubmitted?: boolean | null;
+  id?: string;
+}): FeedbackEventEvidence {
+  return {
+    eventId: input.id ?? `event-${input.at}`,
+    sessionId: "session-1",
+    eventTimestamp: new Date(input.at),
+    autoSubmitted: input.autoSubmitted ?? null,
+    actorWiseUserId: null,
+    actorName: null,
+    actorRole: input.role ?? null,
+  };
+}
+
+describe("feedbackSubmitterRole", () => {
+  it("classifies an auto-submission as AUTO even though it carries no actor", () => {
+    expect(feedbackSubmitterRole(event({ at: "2026-06-02T01:00:00.000Z", autoSubmitted: true }))).toBe("AUTO");
+  });
+
+  it("prefers the auto flag over a populated actor role", () => {
+    const role = feedbackSubmitterRole(
+      event({ at: "2026-06-02T01:00:00.000Z", role: "TEACHER", autoSubmitted: true }),
+    );
+    expect(role).toBe("AUTO");
+  });
+
+  it("normalizes the Wise actor role and falls back to UNKNOWN", () => {
+    expect(feedbackSubmitterRole(event({ at: "2026-06-02T01:00:00.000Z", role: "teacher" }))).toBe("TEACHER");
+    expect(feedbackSubmitterRole(event({ at: "2026-06-02T01:00:00.000Z", role: "ADMIN" }))).toBe("ADMIN");
+    expect(feedbackSubmitterRole(event({ at: "2026-06-02T01:00:00.000Z", role: null }))).toBe("UNKNOWN");
+  });
+});
+
+describe("deriveEventTimingEvidence", () => {
+  it("proves on_time from a tutor-authored event before the deadline", () => {
+    const result = deriveEventTimingEvidence({
+      events: [event({ at: "2026-06-02T01:00:00.000Z", role: "TEACHER" })],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("on_time");
+    expect(result.provenAt?.toISOString()).toBe("2026-06-02T01:00:00.000Z");
+    expect(result.source).toBe("activity_event");
+  });
+
+  it("takes the earliest qualifying event when a tutor edits their feedback", () => {
+    const result = deriveEventTimingEvidence({
+      events: [
+        event({ at: "2026-06-05T09:00:00.000Z", role: "TEACHER", id: "late-edit" }),
+        event({ at: "2026-06-02T01:00:00.000Z", role: "TEACHER", id: "original" }),
+      ],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("on_time");
+    expect(result.provenAt?.toISOString()).toBe("2026-06-02T01:00:00.000Z");
+  });
+
+  it("proves late when the tutor submitted only after the deadline", () => {
+    const result = deriveEventTimingEvidence({
+      events: [event({ at: "2026-06-05T09:00:00.000Z", role: "TEACHER" })],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("late");
+    expect(result.provenAt?.toISOString()).toBe("2026-06-05T09:00:00.000Z");
+  });
+
+  it("does not let an admin submitting on the tutor's behalf prove compliance", () => {
+    const result = deriveEventTimingEvidence({
+      events: [event({ at: "2026-06-02T01:00:00.000Z", role: "ADMIN" })],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("late");
+    expect(result.provenAt).toBeNull();
+    expect(result.submitterRoles).toEqual(["ADMIN"]);
+  });
+
+  it("does not let an auto-submission prove compliance", () => {
+    const result = deriveEventTimingEvidence({
+      events: [event({ at: "2026-06-02T01:00:00.000Z", autoSubmitted: true })],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("late");
+    expect(result.submitterRoles).toEqual(["AUTO"]);
+  });
+
+  it("reports every distinct submitter role seen on the session", () => {
+    const result = deriveEventTimingEvidence({
+      events: [
+        event({ at: "2026-06-02T01:00:00.000Z", autoSubmitted: true, id: "a" }),
+        event({ at: "2026-06-02T02:00:00.000Z", role: "ADMIN", id: "b" }),
+        event({ at: "2026-06-02T03:00:00.000Z", role: "TEACHER", id: "c" }),
+      ],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("on_time");
+    expect(result.submitterRoles).toEqual(["ADMIN", "AUTO", "TEACHER"]);
+  });
+
+  it("fails closed to unknown when the deadline predates event coverage", () => {
+    const result = deriveEventTimingEvidence({
+      events: [],
+      deadlineAt: new Date("2026-04-10T16:59:59.999Z"),
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("unknown");
+    expect(result.source).toBe("none");
+  });
+
+  it("fails closed to unknown when no feedback events have ever been collected", () => {
+    const result = deriveEventTimingEvidence({
+      events: [],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: null,
+    });
+    expect(result.status).toBe("unknown");
+    expect(result.source).toBe("none");
+  });
+
+  it("still proves on_time for a pre-coverage session when a tutor event exists", () => {
+    // Absence is not evidence before coverage, but presence is always evidence.
+    const result = deriveEventTimingEvidence({
+      events: [event({ at: "2026-04-09T01:00:00.000Z", role: "TEACHER" })],
+      deadlineAt: new Date("2026-04-10T16:59:59.999Z"),
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("on_time");
   });
 });

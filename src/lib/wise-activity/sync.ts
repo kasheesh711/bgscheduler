@@ -18,6 +18,19 @@ export interface WiseActivitySyncOptions {
   triggerType?: WiseActivityTrigger;
   lookbackDays?: number;
   maxPages?: number;
+  /**
+   * Restrict the crawl to a single Wise event name (server-side filter). A
+   * targeted crawl reaches far deeper per page than the unfiltered feed.
+   */
+  eventName?: string;
+  /** First page to request. Lets a deep backfill resume mid-history. */
+  startPage?: number;
+  /**
+   * Stop once a full page contains only already-persisted events. Correct for
+   * the incremental cron, but it would halt a backfill on page one, so deep
+   * crawls must disable it.
+   */
+  stopOnKnownEvents?: boolean;
   now?: Date;
 }
 
@@ -146,6 +159,9 @@ export async function syncWiseActivityEvents(
   const triggerType = options.triggerType ?? "cron";
   const lookbackDays = options.lookbackDays ?? (triggerType === "manual" ? MANUAL_LOOKBACK_DAYS : CRON_LOOKBACK_DAYS);
   const maxPages = options.maxPages ?? (triggerType === "manual" ? MANUAL_MAX_PAGES : CRON_MAX_PAGES);
+  const startPage = Math.max(1, options.startPage ?? 1);
+  const stopOnKnownEvents = options.stopOnKnownEvents ?? true;
+  const eventName = options.eventName?.trim() || undefined;
   const cutoff = new Date(now.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
 
   await markAbandonedRuns(db, now);
@@ -158,7 +174,7 @@ export async function syncWiseActivityEvents(
         status: "running",
         triggerType,
         startedAt: now,
-        metadata: { lookbackDays, maxPages },
+        metadata: { lookbackDays, maxPages, startPage, eventName: eventName ?? null, stopOnKnownEvents },
       })
       .returning({ id: schema.wiseActivitySyncRuns.id });
     syncRunId = run.id;
@@ -175,10 +191,12 @@ export async function syncWiseActivityEvents(
   let stoppedReason = "max_pages";
 
   try {
-    for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
+    const lastPage = startPage + maxPages - 1;
+    for (let pageNumber = startPage; pageNumber <= lastPage; pageNumber += 1) {
       const events = await fetchWiseActivityEvents(client, instituteId, {
         pageNumber,
         pageSize: PAGE_SIZE,
+        eventName,
       });
       pagesFetched += 1;
       eventsFetched += events.length;
@@ -223,7 +241,7 @@ export async function syncWiseActivityEvents(
         stoppedReason = "lookback_reached";
         break;
       }
-      if (hitKnownPage) {
+      if (stopOnKnownEvents && hitKnownPage) {
         stoppedReason = "known_events";
         break;
       }
@@ -239,7 +257,7 @@ export async function syncWiseActivityEvents(
         insertedCount,
         oldestEventTimestamp,
         newestEventTimestamp,
-        metadata: { lookbackDays, maxPages, stoppedReason },
+        metadata: { lookbackDays, maxPages, startPage, eventName: eventName ?? null, stopOnKnownEvents, stoppedReason },
       })
       .where(eq(schema.wiseActivitySyncRuns.id, syncRunId));
 
@@ -267,7 +285,7 @@ export async function syncWiseActivityEvents(
         oldestEventTimestamp,
         newestEventTimestamp,
         errorSummary: message,
-        metadata: { lookbackDays, maxPages },
+        metadata: { lookbackDays, maxPages, startPage, eventName: eventName ?? null, stopOnKnownEvents },
       })
       .where(eq(schema.wiseActivitySyncRuns.id, syncRunId));
     throw error;
