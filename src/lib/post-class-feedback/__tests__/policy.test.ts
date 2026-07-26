@@ -617,6 +617,29 @@ describe("deriveEventTimingEvidence", () => {
     expect(result.source).toBe("none");
   });
 
+  it("reports the earliest tutor submission as the deciding instant", () => {
+    const result = deriveEventTimingEvidence({
+      events: [
+        event({ at: "2026-06-05T09:00:00.000Z", role: "TEACHER", id: "edit" }),
+        event({ at: "2026-06-02T01:00:00.000Z", role: "TEACHER", id: "first" }),
+        event({ at: "2026-06-01T10:00:00.000Z", role: "ADMIN", id: "admin-earlier" }),
+      ],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    // The admin event is earlier but cannot decide the verdict.
+    expect(result.provenAt?.toISOString()).toBe("2026-06-02T01:00:00.000Z");
+  });
+
+  it("reports no submission instant when only non-tutor events exist", () => {
+    const result = deriveEventTimingEvidence({
+      events: [event({ at: "2026-06-02T01:00:00.000Z", role: "ADMIN" })],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.provenAt).toBeNull();
+  });
+
   it("fails closed to unknown when no feedback events have ever been collected", () => {
     const result = deriveEventTimingEvidence({
       events: [],

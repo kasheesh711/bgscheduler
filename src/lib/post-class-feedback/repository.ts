@@ -1083,6 +1083,17 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
       const deadlineAt = assessment?.deadlineAt ?? calculateFeedbackDeadline(observation.session.scheduledEndAt);
       const rawSession = observation.candidate.rawSession ?? {};
       const recurrenceId = nonEmptyString(nestedValue(rawSession, ["metadata", "recurrenceId"]));
+      // Built once and shared by the insert and the conflict update. Keeping
+      // two copies in step is exactly how `subject` went unwritten before.
+      const sourceMetadata = {
+        syncRunId: runId,
+        candidateReason: observation.candidate.reason,
+        mappingStatus: observation.session.mapping.status,
+        mappingVersion,
+        settingsVersion: observation.settingsVersion,
+        subject: observation.session.subject,
+        questionIds: observation.session.questions.map((question) => question.id).filter(Boolean),
+      };
 
       const [session] = await tx.insert(schema.postClassSessions).values({
         wiseSessionId: observation.session.sessionId,
@@ -1107,14 +1118,7 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         policyVersion,
         lastObservedAt: observation.observedAt,
         lastAssessedAt: assessment ? observation.observedAt : null,
-        sourceMetadata: {
-          syncRunId: runId,
-          candidateReason: observation.candidate.reason,
-          mappingStatus: observation.session.mapping.status,
-          mappingVersion,
-          settingsVersion: observation.settingsVersion,
-          questionIds: observation.session.questions.map((question) => question.id).filter(Boolean),
-        },
+        sourceMetadata,
       }).onConflictDoUpdate({
         target: schema.postClassSessions.wiseSessionId,
         set: {
@@ -1139,14 +1143,7 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
           policyVersion,
           lastObservedAt: observation.observedAt,
           ...(assessment ? { lastAssessedAt: observation.observedAt } : {}),
-          sourceMetadata: {
-            syncRunId: runId,
-            candidateReason: observation.candidate.reason,
-            mappingStatus: observation.session.mapping.status,
-            mappingVersion,
-            settingsVersion: observation.settingsVersion,
-            questionIds: observation.session.questions.map((question) => question.id).filter(Boolean),
-          },
+          sourceMetadata,
           version: sql`${schema.postClassSessions.version} + 1`,
           updatedAt: observation.observedAt,
         },
@@ -1467,6 +1464,7 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
             onTimeComplianceLocked: assessment.onTimeComplianceLocked,
             timingEvidenceSource: assessment.timingEvidenceSource,
             submitterRoles: assessment.submitterRoles,
+            tutorSubmittedAt: assessment.tutorSubmittedAt?.toISOString() ?? null,
           },
         }).onConflictDoNothing({ target: schema.postClassAssessments.assessmentKey }).returning({
           id: schema.postClassAssessments.id,

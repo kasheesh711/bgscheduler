@@ -352,7 +352,13 @@ function participantFromUnknown(value: string | WiseUserReference): PostClassPar
   if (typeof value === "string") {
     return value.trim() ? { wiseStudentId: value, studentName: null } : null;
   }
-  const id = stringValue(value._id);
+  // Session-detail participants are keyed by `wiseUserId`; only the PAST-list
+  // `students[]` shape uses `_id`. Reading `_id` alone silently dropped every
+  // participant the collector ever saw.
+  const record = value as Record<string, unknown>;
+  const id = stringValue(value._id) ??
+    stringValue(record.wiseUserId) ??
+    stringValue(record.id);
   return id ? { wiseStudentId: id, studentName: stringValue(value.name) } : null;
 }
 
@@ -458,8 +464,17 @@ export function parseWisePostClassSession(input: {
     classId: getWiseSessionClassId(detail) ??
       (candidateSession ? getWiseSessionClassId(candidateSession) : undefined) ??
       input.classId,
+    // The session-detail endpoint returns `classId` as a bare string and puts
+    // the name/subject at the top level, so the `classId.name` helpers resolve
+    // to nothing there. Without these fallbacks every detail-only session
+    // renders as "Untitled class".
     className: getWiseSessionClassName(detail) ??
+      stringValue(detailRecord.className) ??
       (candidateSession ? getWiseSessionClassName(candidateSession) : undefined) ??
+      null,
+    subject: stringValue(detailClass.subject) ??
+      stringValue(detailRecord.classSubject) ??
+      stringValue(candidateClass.subject) ??
       null,
     scheduledStartAt,
     scheduledEndAt,

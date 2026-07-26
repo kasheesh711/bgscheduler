@@ -29,6 +29,7 @@ function session(overrides: Partial<FeedbackSessionRow> = {}): FeedbackSessionRo
     contentStatus: "substantive",
     timingStatus: "on_time",
     submittedBy: "tutor",
+    submittedAt: "2026-07-22T14:41:00.000Z",
     combinedCharacterCount: 325,
     required: { topics: answer, performance: answer, improvement: answer },
     versionCount: 1,

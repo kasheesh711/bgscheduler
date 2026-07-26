@@ -149,6 +149,8 @@ export interface SessionComplianceAssessment {
   timingEvidenceSource: TimingEvidenceSource;
   /** Roles observed on this session's feedback events, for display and analytics. */
   submitterRoles: FeedbackSubmitterRole[];
+  /** Earliest tutor-authored submission, i.e. the instant that decided the verdict. */
+  tutorSubmittedAt: Date | null;
   deadlineAt: Date;
   governingVersionKey: string | null;
   onTimeVersionKey: string | null;
@@ -259,6 +261,8 @@ export interface ParsedPostClassSession {
   sessionId: string;
   classId: string;
   className: string | null;
+  /** Wise classroom subject, surfaced in the session queue. */
+  subject: string | null;
   scheduledStartAt: Date;
   scheduledEndAt: Date;
   meetingStatus: string | null;
