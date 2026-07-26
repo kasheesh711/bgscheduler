@@ -6,6 +6,10 @@ import * as schema from "@/lib/db/schema";
 
 export const SHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
 export const SHEETS_WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+// Per-file Drive access, limited to files this app creates. Deliberately not
+// the full `drive` scope: that is restricted and would require Google
+// verification plus an annual security assessment for an External app.
+export const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const SALES_DASHBOARD_CACHE_TAG = "sales-dashboard";
 const REFRESH_SKEW_MS = 2 * 60 * 1000;
 
@@ -82,6 +86,10 @@ export function hasSheetsReadScope(scope: string | null | undefined): boolean {
 
 export function hasSheetsWriteScope(scope: string | null | undefined): boolean {
   return scopeSet(scope).has(SHEETS_WRITE_SCOPE);
+}
+
+export function hasDriveFileScope(scope: string | null | undefined): boolean {
+  return scopeSet(scope).has(DRIVE_FILE_SCOPE);
 }
 
 export async function storeGoogleOAuthTokenForUser(
@@ -220,6 +228,38 @@ export async function getGoogleSheetsWriteAccessToken(
   const refreshToken = decryptToken(row.refreshTokenCiphertext);
   if (!refreshToken) {
     throw new MissingGoogleSheetsTokenError("Google refresh token is missing. Reconnect Google Sheets.");
+  }
+  return refreshAccessToken(normalizedEmail, refreshToken, db);
+}
+
+/**
+ * Access token for Drive uploads. Mirrors the Sheets accessor, but asserts
+ * the Drive scope so a stale grant fails with an actionable message instead
+ * of a bare 403 from Google.
+ */
+export async function getGoogleDriveAccessToken(
+  email: string,
+  db: Database = getDb(),
+): Promise<string> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const [row] = await db
+    .select()
+    .from(schema.googleOAuthTokens)
+    .where(eq(schema.googleOAuthTokens.email, normalizedEmail))
+    .limit(1);
+  if (!row?.accessTokenCiphertext) throw new MissingGoogleSheetsTokenError();
+  if (!hasDriveFileScope(row.scope)) {
+    throw new MissingGoogleSheetsTokenError("Google Drive access is missing. Reconnect Google to grant it.");
+  }
+
+  const accessToken = decryptToken(row.accessTokenCiphertext);
+  if (!accessToken) throw new MissingGoogleSheetsTokenError();
+  const expiresAt = row.expiresAt?.getTime() ?? 0;
+  if (expiresAt && expiresAt > Date.now() + REFRESH_SKEW_MS) return accessToken;
+
+  const refreshToken = decryptToken(row.refreshTokenCiphertext);
+  if (!refreshToken) {
+    throw new MissingGoogleSheetsTokenError("Google refresh token is missing. Reconnect Google.");
   }
   return refreshAccessToken(normalizedEmail, refreshToken, db);
 }

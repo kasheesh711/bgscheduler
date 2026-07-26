@@ -311,6 +311,26 @@ export const postClassFinancePeriodStatusEnum = pgEnum("post_class_finance_perio
   "closed",
 ]);
 
+export const postClassPayoutRunStatusEnum = pgEnum("post_class_payout_run_status", [
+  "draft",
+  "published",
+]);
+
+export const postClassPayoutMatchStatusEnum = pgEnum("post_class_payout_match_status", [
+  "pending",
+  "matched",
+  "unmatched",
+  "ambiguous",
+  "no_sheet",
+]);
+
+export const postClassPayoutWriteStatusEnum = pgEnum("post_class_payout_write_status", [
+  "pending",
+  "written",
+  "failed",
+  "skipped",
+]);
+
 export const admissionsCaseStatusEnum = pgEnum("admissions_case_status", [
   "active",
   "committed",
@@ -3570,6 +3590,92 @@ export const postClassDeductionOffsets = pgTable("post_class_deduction_offsets",
   uniqueIndex("pc_deduction_offsets_deduction_idx").on(table.deductionId),
   uniqueIndex("pc_deduction_offsets_idempotency_idx").on(table.idempotencyKey),
   index("pc_deduction_offsets_period_idx").on(table.financePeriodId, table.createdAt),
+]);
+
+// ── Post-Class Feedback payout runs ─────────────────────────────────────
+//
+// A payout run is the 26th→25th window the tutor payout sheets use. It is a
+// selection and export window only: finance periods stay calendar-month and
+// keep gating approval and month close, so one run legitimately spans two
+// finance months.
+
+export const postClassPayoutRuns = pgTable("post_class_payout_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /** Anchor month, `YYYY-MM-01`. The run ends on the 25th of this month. */
+  anchorMonth: date("anchor_month", { mode: "string" }).notNull(),
+  windowStart: date("window_start", { mode: "string" }).notNull(),
+  windowEnd: date("window_end", { mode: "string" }).notNull(),
+  status: postClassPayoutRunStatusEnum("status").notNull().default("draft"),
+  publishedByEmail: text("published_by_email"),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+  /** Drive file id and link for the summary CSV, once uploaded. */
+  csvFileId: text("csv_file_id"),
+  csvUrl: text("csv_url"),
+  version: integer("version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_payout_runs_window_idx").on(table.windowStart, table.windowEnd),
+  uniqueIndex("pc_payout_runs_anchor_idx").on(table.anchorMonth),
+  index("pc_payout_runs_status_idx").on(table.status, table.windowEnd),
+]);
+
+/**
+ * Explicit tutor → payout spreadsheet mapping. An unmapped tutor is an
+ * exception the publish run reports; it never guesses at a destination.
+ */
+export const postClassTutorPayoutSheets = pgTable("post_class_tutor_payout_sheets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  canonicalKey: text("canonical_key").notNull(),
+  spreadsheetId: text("spreadsheet_id").notNull(),
+  sheetName: text("sheet_name").notNull(),
+  /** Numeric gid, required by the insertDimension batch request. */
+  sheetGid: integer("sheet_gid").notNull(),
+  active: boolean("active").notNull().default(true),
+  updatedByEmail: text("updated_by_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_tutor_payout_sheets_key_idx").on(table.canonicalKey),
+  index("pc_tutor_payout_sheets_active_idx").on(table.active, table.canonicalKey),
+]);
+
+/**
+ * One line per deduction per run. `writeStatus` is what makes re-pressing
+ * Publish safe: a line already `written` is skipped rather than inserted
+ * into the tutor's sheet a second time.
+ */
+export const postClassPayoutRunLines = pgTable("post_class_payout_run_lines", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => postClassPayoutRuns.id, { onDelete: "cascade" }),
+  deductionId: uuid("deduction_id").notNull().references(() => postClassDeductions.id, { onDelete: "restrict" }),
+  sessionId: uuid("session_id").notNull().references(() => postClassSessions.id, { onDelete: "restrict" }),
+  canonicalTutorKey: text("canonical_tutor_key"),
+  tutorName: text("tutor_name"),
+  wiseSessionId: text("wise_session_id").notNull(),
+  studentNames: jsonb("student_names").$type<string[]>().notNull().default([]),
+  scheduledStartAt: timestamp("scheduled_start_at", { withTimezone: true }).notNull(),
+  deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
+  tutorSubmittedAt: timestamp("tutor_submitted_at", { withTimezone: true }),
+  amountMinor: integer("amount_minor").notNull(),
+  currency: text("currency").notNull().default("THB"),
+  reason: text("reason").notNull().default(""),
+  matchStatus: postClassPayoutMatchStatusEnum("match_status").notNull().default("pending"),
+  spreadsheetId: text("spreadsheet_id"),
+  sheetName: text("sheet_name"),
+  matchedRowNumber: integer("matched_row_number"),
+  insertedRowNumber: integer("inserted_row_number"),
+  writeStatus: postClassPayoutWriteStatusEnum("write_status").notNull().default("pending"),
+  writeError: text("write_error"),
+  writtenAt: timestamp("written_at", { withTimezone: true }),
+  idempotencyKey: text("idempotency_key").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_payout_run_lines_run_deduction_idx").on(table.runId, table.deductionId),
+  uniqueIndex("pc_payout_run_lines_idempotency_idx").on(table.idempotencyKey),
+  index("pc_payout_run_lines_run_status_idx").on(table.runId, table.writeStatus),
+  index("pc_payout_run_lines_tutor_idx").on(table.runId, table.canonicalTutorKey),
 ]);
 
 // University admissions case management (design: docs/casemanagementsystem_design.md §3).

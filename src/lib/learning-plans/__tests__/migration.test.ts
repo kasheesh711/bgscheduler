@@ -79,9 +79,11 @@ describe("learning-plan access-grants migration", () => {
     expect(snapshot55.tables).toHaveProperty("public.post_class_access_grants");
     expect(snapshot55.tables).not.toHaveProperty("public.learning_plan_access_grants");
     expect(snapshot56.tables).toHaveProperty("public.learning_plan_access_grants");
-    expect(journal.entries.at(-1)).toMatchObject({
+    // Assert 0056 is registered, not that it is the newest entry — pinning
+    // it to the tail breaks on every subsequent migration.
+    expect(journal.entries).toContainEqual(expect.objectContaining({
       idx: 56,
       tag: "0056_learning_plan_access_grants",
-    });
+    }));
   });
 });
