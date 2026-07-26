@@ -28,6 +28,7 @@ function row(id: string, tutorName: string, student: string, overrides: Partial<
     contentStatus: "substantive",
     timingStatus: "on_time",
     submittedBy: "tutor",
+    submittedAt: "2026-07-22T14:41:00.000Z",
     combinedCharacterCount: 300,
     required: { topics: answer, performance: answer, improvement: answer },
     versionCount: 1,

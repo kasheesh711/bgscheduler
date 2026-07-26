@@ -262,4 +262,62 @@ describe("Wise post-class feedback parsing", () => {
     expect(parsed.feedbackVersions[0].fields.topics).toBe("teacher response");
     expect(parsed.submissionSessionStatuses).toEqual(["NO_SHOW", "ENDED"]);
   });
+
+  it("reads class name, subject and participants from the real session-detail shape", () => {
+    // The session-detail endpoint returns `classId` as a bare string with the
+    // name/subject at the top level, and participants keyed by `wiseUserId`.
+    // Reading only `classId.name` / `_id` produced "Untitled class" on 5,211
+    // production sessions and dropped every participant.
+    const parsed = parseWisePostClassSession({
+      candidateSession: null,
+      classId: "698e799d7cf248f04e231c84",
+      sessionId: "6a07fe3d959b60fa5b19e644",
+      observedAt: new Date("2026-07-24T00:00:00.000Z"),
+      detail: {
+        _id: "6a07fe3d959b60fa5b19e644",
+        classId: "698e799d7cf248f04e231c84",
+        className: "Chenghao (Chenghao.Zh) Zhang",
+        classSubject: "Y2-8 / G1-7 (Int.)",
+        title: "In-Person Session - Math",
+        meetingStatus: "ENDED",
+        scheduledStartTime: "2026-07-22T02:00:00.000Z",
+        scheduledEndTime: "2026-07-22T03:00:00.000Z",
+        participants: [{
+          wiseUserId: "696e2a7b43579bbada2093c1",
+          name: "Chenghao (Chenghao.Zh) Zhang",
+          credits: 1,
+          offline: false,
+        }],
+      } as never,
+    });
+
+    expect(parsed.className).toBe("Chenghao (Chenghao.Zh) Zhang");
+    expect(parsed.subject).toBe("Y2-8 / G1-7 (Int.)");
+    expect(parsed.participants).toEqual([{
+      wiseStudentId: "696e2a7b43579bbada2093c1",
+      studentName: "Chenghao (Chenghao.Zh) Zhang",
+    }]);
+  });
+
+  it("still prefers the PAST-list classId object when Wise supplies one", () => {
+    const parsed = parseWisePostClassSession({
+      candidateSession: null,
+      classId: "class-1",
+      sessionId: "session-1",
+      observedAt: new Date("2026-07-24T00:00:00.000Z"),
+      detail: {
+        _id: "session-1",
+        classId: { _id: "class-1", name: "Math Y5", subject: "Mathematics" },
+        className: "ignored-top-level",
+        meetingStatus: "ENDED",
+        scheduledStartTime: "2026-07-22T02:00:00.000Z",
+        scheduledEndTime: "2026-07-22T03:00:00.000Z",
+        students: [{ _id: "student-1", name: "Alice" }],
+      } as never,
+    });
+
+    expect(parsed.className).toBe("Math Y5");
+    expect(parsed.subject).toBe("Mathematics");
+    expect(parsed.participants).toEqual([{ wiseStudentId: "student-1", studentName: "Alice" }]);
+  });
 });

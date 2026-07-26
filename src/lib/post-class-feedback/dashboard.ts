@@ -204,8 +204,17 @@ export async function getPostClassFeedbackDashboard(
 
   const settings = settingsRows[0] ?? null;
   const sessionIds = sessions.map((session) => session.id);
+  const wiseSessionIds = sessions.map((session) => session.wiseSessionId);
   const sessionQueriesEnabled = sessionIds.length > 0;
-  const [participants, versions, assessments, deductionRows, notificationRows, aiConcernRows] = await Promise.all([
+  const [
+    participants,
+    versions,
+    assessments,
+    deductionRows,
+    notificationRows,
+    aiConcernRows,
+    tutorSubmissionRows,
+  ] = await Promise.all([
     sessionQueriesEnabled
       ? db.select().from(schema.postClassSessionParticipants)
         .where(inArray(schema.postClassSessionParticipants.sessionId, sessionIds))
@@ -268,7 +277,31 @@ export async function getPostClassFeedbackDashboard(
         .innerJoin(schema.postClassAiRuns, eq(schema.postClassAiConcerns.runId, schema.postClassAiRuns.id))
         .where(inArray(schema.postClassAiRuns.sessionId, sessionIds))
       : Promise.resolve([]),
+    // Earliest tutor-authored, non-auto submission per session, read straight
+    // from the immutable event stream. Deriving here rather than reading a
+    // persisted column means the column is correct for every historical
+    // session without re-observing any of them.
+    sessionQueriesEnabled
+      ? db.select({
+        wiseSessionId: schema.wiseActivityEvents.sessionId,
+        submittedAt: sql<Date | null>`min(${schema.wiseActivityEvents.eventTimestamp})`,
+      }).from(schema.wiseActivityEvents)
+        .where(and(
+          eq(schema.wiseActivityEvents.eventName, "SessionFeedbackSubmittedEvent"),
+          eq(schema.wiseActivityEvents.actorRole, "TEACHER"),
+          inArray(schema.wiseActivityEvents.sessionId, wiseSessionIds),
+          sql`coalesce(${schema.wiseActivityEvents.payload} -> 'session' ->> 'autoSubmitted', 'false') <> 'true'`,
+        ))
+        .groupBy(schema.wiseActivityEvents.sessionId)
+      : Promise.resolve([]),
   ]);
+
+  const tutorSubmittedByWiseSession = new Map<string, Date>();
+  for (const row of tutorSubmissionRows) {
+    if (!row.wiseSessionId || !row.submittedAt) continue;
+    const value = row.submittedAt instanceof Date ? row.submittedAt : new Date(row.submittedAt);
+    if (!Number.isNaN(value.getTime())) tutorSubmittedByWiseSession.set(row.wiseSessionId, value);
+  }
 
   const participantsBySession = new Map<string, string[]>();
   for (const participant of participants) {
@@ -377,6 +410,7 @@ export async function getPostClassFeedbackDashboard(
       contentStatus: session.contentStatus,
       timingStatus: session.timingStatus,
       submittedBy: submitterFromAssessment(assessment?.details),
+      submittedAt: iso(tutorSubmittedByWiseSession.get(session.wiseSessionId)),
       combinedCharacterCount: assessment?.combinedRawCharCount ?? latest?.rawCharCount ?? 0,
       required: {
         topics: { characters: codePointLength(topics), meaningful: fieldMeaningful(failures, "topic", topics) },

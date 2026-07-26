@@ -108,6 +108,8 @@ export interface FeedbackSessionRow {
   timingStatus: FeedbackTimingStatus;
   /** Who Wise recorded as submitting feedback for this session. */
   submittedBy: FeedbackSubmitter;
+  /** Earliest tutor-authored submission, from the Wise activity-event stream. */
+  submittedAt: string | null;
   combinedCharacterCount: number;
   required: {
     topics: FeedbackQuestionSummary;

@@ -142,7 +142,7 @@ function SessionQueue({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-auto">
-        <table className="w-full min-w-[860px] border-collapse text-left text-xs">
+        <table className="w-full min-w-[1000px] border-collapse text-left text-xs">
           <thead className="sticky top-0 z-10 border-b bg-card text-[11px] text-muted-foreground">
             <tr>
               <th className="w-8 px-3 py-2.5"><span className="sr-only">Selected</span></th>
@@ -151,6 +151,7 @@ function SessionQueue({
               <th className="px-2 py-2.5 font-medium">Deadline</th>
               <th className="px-2 py-2.5 font-medium">Characters</th>
               <th className="px-2 py-2.5 font-medium">Submitted by</th>
+              <th className="px-2 py-2.5 font-medium">Submitted</th>
               <th className="px-2 py-2.5 font-medium">Outcome / eligibility</th>
               <th className="px-2 py-2.5 font-medium">Reminder</th>
             </tr>
@@ -195,6 +196,11 @@ function SessionQueue({
                   </td>
                   <td className="px-2 py-2.5"><CharacterMeter session={session} /></td>
                   <td className="px-2 py-2.5"><SubmitterBadge submitter={session.submittedBy} /></td>
+                  <td className="px-2 py-2.5 whitespace-nowrap tabular-nums">
+                    {session.submittedAt
+                      ? formatBangkokDate(session.submittedAt, true)
+                      : <span className="text-muted-foreground">—</span>}
+                  </td>
                   <td className="px-2 py-2.5">
                     <OutcomeBadge session={session} />
                     {!session.eligible ? (

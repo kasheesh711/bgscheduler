@@ -208,9 +208,20 @@ function DetailBody({
           <div className="mt-1 text-xs font-medium tabular-nums">{detail.session.creditsConsumed.toLocaleString()} credits</div>
           <div className="mt-0.5 text-[10px] text-muted-foreground">{detail.session.payableEligible ? "Tutor payout-eligible" : "No payout eligibility observed"}</div>
         </div>
-        <div className="p-3">
+        <div className="border-b p-3 sm:border-r sm:border-b-0">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Deadline</div>
           <div className="mt-1 text-xs font-medium">{formatBangkokDate(detail.session.deadlineAt, true)}</div>
+        </div>
+        <div className="p-3">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Tutor submitted</div>
+          <div className="mt-1 text-xs font-medium">
+            {session.submittedAt ? formatBangkokDate(session.submittedAt, true) : "—"}
+          </div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground">
+            {session.submittedAt
+              ? "Earliest tutor-authored Wise event"
+              : "No tutor-authored submission observed"}
+          </div>
         </div>
       </div>
 

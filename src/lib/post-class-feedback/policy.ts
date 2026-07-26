@@ -525,6 +525,7 @@ export function evaluateSessionCompliance(
     policyApplies,
     timingEvidenceSource: "none" as TimingEvidenceSource,
     submitterRoles: eventTiming?.submitterRoles ?? [],
+    tutorSubmittedAt: eventTiming?.provenAt ?? null,
   };
 
   // A broken source or a paused feature suspends assessment outright. Being
