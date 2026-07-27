@@ -88,8 +88,13 @@ const POST_CLASS_FINANCE_LOCK_KEY = "post_class_feedback_finance";
  * Keeping the lock feature-wide is deliberate: a deduction with an implicit
  * default month must serialize with a close of that month just as an explicitly
  * assigned deduction does.
+ *
+ * Exported so the payout run can take the same lock while it selects its lines.
+ * Callers must reuse this rather than re-declaring the key string: a typo would
+ * take a *different* lock, silently removing all serialization, and no test
+ * could catch it.
  */
-async function lockPostClassFinance(db: Database): Promise<void> {
+export async function lockPostClassFinance(db: Database): Promise<void> {
   await db.execute(sql`select pg_advisory_xact_lock(hashtext(${POST_CLASS_FINANCE_LOCK_KEY}))`);
 }
 
