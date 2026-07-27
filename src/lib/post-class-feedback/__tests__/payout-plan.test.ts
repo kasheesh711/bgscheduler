@@ -41,6 +41,7 @@ function resolve(overrides: {
   scheduledStartAt?: Date;
   studentNames?: string[];
   claimedAnchorRows?: ReadonlySet<number>;
+  previouslyAttempted?: boolean;
 } = {}) {
   const raw = overrides.grid ?? grid();
   return resolvePayoutRowAction({
@@ -50,6 +51,7 @@ function resolve(overrides: {
     scheduledStartAt: overrides.scheduledStartAt ?? new Date("2026-07-25T06:00:00.000Z"),
     studentNames: overrides.studentNames ?? ["Grace Hopper"],
     claimedAnchorRows: overrides.claimedAnchorRows,
+    previouslyAttempted: overrides.previouslyAttempted,
   });
 }
 
@@ -105,7 +107,28 @@ describe("resolvePayoutRowAction", () => {
     // deduction.
     const raw = grid();
     raw.splice(3, 0, []);
-    expect(resolve({ grid: raw })).toEqual({ kind: "reuse_blank", anchorRowNumber: 3, rowNumber: 4 });
+    expect(resolve({ grid: raw, previouslyAttempted: true }))
+      .toEqual({ kind: "reuse_blank", anchorRowNumber: 3, rowNumber: 4 });
+  });
+
+  it("does not consume a blank row on a first attempt", () => {
+    // A blank row under the anchor before we have ever inserted for this line
+    // belongs to the sheet — typically the spacer above a totals row. Taking
+    // it would quietly restructure the tutor's payout sheet.
+    const raw = grid();
+    raw.splice(3, 0, []);
+    expect(resolve({ grid: raw })).toEqual({ kind: "insert", anchorRowNumber: 3, rowNumber: 4 });
+  });
+
+  it("inserts for the last class on the sheet rather than writing past the end", () => {
+    // `grid[rowNumber - 1]` is undefined past the end, which is not a blank
+    // row. Treating it as one skipped the insert for the final class on every
+    // sheet.
+    expect(resolve({
+      scheduledStartAt: new Date("2026-07-24T02:00:00.000Z"),
+      studentNames: ["Alan Turing"],
+      previouslyAttempted: true,
+    })).toEqual({ kind: "insert", anchorRowNumber: 4, rowNumber: 5 });
   });
 
   it("inserts when the row below the anchor is another deduction with a different marker", () => {

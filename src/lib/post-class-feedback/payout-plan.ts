@@ -84,6 +84,16 @@ export interface ResolvePayoutRowActionInput {
   studentNames: string[];
   /** Anchors already taken by earlier lines in this same pass. */
   claimedAnchorRows?: ReadonlySet<number>;
+  /**
+   * Whether a previous pass already tried to write this line.
+   *
+   * Required for blank-row reuse: an empty row under the anchor only means
+   * "our insert landed but the fill did not" if we have in fact inserted for
+   * this line before. On a first attempt an empty row belongs to the sheet —
+   * typically the spacer above a totals row — and consuming it would quietly
+   * restructure someone's payout sheet.
+   */
+  previouslyAttempted?: boolean;
   toleranceMinutes?: number;
 }
 
@@ -132,8 +142,11 @@ export function resolvePayoutRowAction(input: ResolvePayoutRowActionInput): Payo
   }
 
   const rowNumber = anchorRowNumber + 1;
-  // 1-based row `rowNumber` is grid index `rowNumber - 1`.
-  if (isBlankPayoutGridRow(input.grid[rowNumber - 1])) {
+  // 1-based row `rowNumber` is grid index `rowNumber - 1`. The row must
+  // actually exist: past the end of the grid is not a blank row, and treating
+  // it as one would skip the insert for the last class on every sheet.
+  const rowExists = rowNumber - 1 < input.grid.length;
+  if (input.previouslyAttempted && rowExists && isBlankPayoutGridRow(input.grid[rowNumber - 1])) {
     return { kind: "reuse_blank", anchorRowNumber, rowNumber };
   }
   return { kind: "insert", anchorRowNumber, rowNumber };
