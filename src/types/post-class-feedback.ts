@@ -290,6 +290,9 @@ export interface FeedbackTutorMetric {
 export interface FeedbackDeductionRow {
   id: string;
   sessionId: string;
+  /** Stable identity. Group by this, never by `tutorName`. */
+  tutorKey: string | null;
+  wiseSessionId: string | null;
   tutorName: string;
   className: string;
   students: string[];

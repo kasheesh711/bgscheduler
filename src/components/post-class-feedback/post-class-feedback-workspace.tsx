@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { signIn } from "next-auth/react";
 import {
   AlertTriangle,
+  Banknote,
   BarChart3,
   CheckCircle2,
   ClipboardList,
@@ -32,6 +33,7 @@ import {
   formatRate,
 } from "./feedback-ui";
 import { OperationsTab } from "./operations-tab";
+import { PayoutsTab } from "./payouts-tab";
 import { SettingsTab, type SettingsRequest } from "./settings-tab";
 
 /**
@@ -44,7 +46,7 @@ const PAYOUT_RECONSENT_SCOPE = "openid email profile"
   + " https://www.googleapis.com/auth/spreadsheets"
   + " https://www.googleapis.com/auth/drive.file";
 
-type WorkspaceTab = "operations" | "analytics" | "deductions" | "audit" | "settings";
+type WorkspaceTab = "operations" | "analytics" | "deductions" | "payouts" | "audit" | "settings";
 type Toast = { tone: "success" | "error"; message: string } | null;
 
 async function checkedJson<T>(response: Response, fallback: string): Promise<T> {
@@ -245,6 +247,9 @@ export function PostClassFeedbackWorkspace() {
           {payload?.capabilities.reviewer || payload?.capabilities.finance ? (
             <TabsTrigger value="deductions" className="px-2.5"><WalletCards />Deductions</TabsTrigger>
           ) : null}
+          {payload?.capabilities.finance ? (
+            <TabsTrigger value="payouts" className="px-2.5"><Banknote />Payouts</TabsTrigger>
+          ) : null}
           <TabsTrigger value="audit" className="px-2.5"><FileClock />Audit</TabsTrigger>
           {payload?.capabilities.accessManager ? (
             <TabsTrigger value="settings" className="px-2.5"><Settings />Settings</TabsTrigger>
@@ -275,6 +280,9 @@ export function PostClassFeedbackWorkspace() {
             <TabsContent value="analytics" className="mt-3 min-w-0"><AnalyticsTab payload={payload} /></TabsContent>
             {payload.capabilities.reviewer || payload.capabilities.finance ? (
               <TabsContent value="deductions" className="mt-3 min-w-0"><DeductionsTab payload={payload} submitting={submitting} onMutation={runMutation} /></TabsContent>
+            ) : null}
+            {payload.capabilities.finance ? (
+              <TabsContent value="payouts" className="mt-3 min-w-0"><PayoutsTab payload={payload} /></TabsContent>
             ) : null}
             <TabsContent value="audit" className="mt-3 min-w-0"><AuditTab payload={payload} /></TabsContent>
             {payload.capabilities.accessManager ? (

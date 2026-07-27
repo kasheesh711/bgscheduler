@@ -6,7 +6,7 @@
 
 Wise Post-Class Feedback Tracking replaces the spreadsheet-based comment queue with a durable, admin-only workspace at `/post-class-feedback`. It reads the canonical Wise session detail for each class, preserves every observed teacher-feedback version, evaluates an objective deadline/content policy, sends tutor reminders, and carries reviewed deduction candidates through a feature-owned finance handoff.
 
-The Google Sheet is requirements reference only. The feature does not import its historical queue and never falls back to the sheet in production. It is also strictly read-only toward Wise: it does not create, edit, backdate, or submit feedback, and it does not mutate Wise sessions. No deduction is written into Payroll automatically.
+The Google Sheet is requirements reference only. The feature does not import its historical queue and never falls back to the sheet in production. It is also strictly read-only toward Wise: it does not create, edit, backdate, or submit feedback, and it does not mutate Wise sessions. No deduction is written into the Payroll subsystem, automatically or otherwise — the payout handoff writes to the tutor payout spreadsheets, which are a separate finance artefact, and only when a finance user explicitly publishes a run.
 
 The rollout starts in `shadow` mode. An access manager must complete the setup checklist and choose a prospective effective date before live obligations can exist. Sessions ending before that effective instant stay out of enforcement permanently.
 
@@ -18,7 +18,8 @@ The rollout starts in `shadow` mode. An access manager must complete the setup c
 - The system never generates substitute comments, never fabricates activity, and never invents an author or source timestamp.
 - Kevin Hsieh has the same tutor compliance policy as every other tutor. The initial all-capabilities grant for `kevhsh7@gmail.com` is administrative access, not a tutor exemption.
 - AI is advisory. It cannot create, approve, waive, process, reverse, or otherwise transition a deduction.
-- Financial processing stays inside this workspace. There is no CSV handoff, deduction email, Wise mutation, or Payroll write.
+- No deduction email, no Wise mutation, no Payroll write. Review and decision stay inside this workspace; the only outbound financial artefact is the payout run described below, and it is never automatic.
+- A payout run writes only ever-new rows. It inserts a deduction row beneath a matched class row and never overwrites one, because overwriting a class row would destroy that class's earnings.
 
 ## Eligibility and identity
 
@@ -191,6 +192,42 @@ Finance actions:
 
 The processed deduction row and the append-only action/offset ledgers are protected by database triggers. All mutations are individual, capability-gated, audited, and protected by idempotency keys and/or expected-version checks.
 
+## Payout runs
+
+**Status: built, never yet run in production.** It cannot be until enforcement is `live` — in `shadow` no deduction rows exist at all — the payout Google account has granted Drive access, and migrations `0057`/`0058` are applied.
+
+Tutor pay runs on a **26th-to-25th** window, not a calendar month. A run anchored to `2026-07` covers 26 June through 25 July inclusive. Finance periods stay calendar months and continue to gate approval and month close; a payout run is a separate selection and export window layered on top, so one run legitimately spans two finance months.
+
+A run selects **only `approved` deductions** whose session ended inside its window. `pending_review` has had no human decision. `waived` is a decision not to deduct. A reversed deduction is excluded by the presence of its offset row, not by its `status` column — the reverse action never updates that column, so it still reads `processed` afterwards.
+
+Publishing does two things, in this order:
+
+1. Inserts one `Feedback deduction` row directly beneath each matched class row in the tutor's payout spreadsheet, carrying `-฿100`, the student, the reason, the deadline, and whether a tutor submission was ever observed.
+2. Uploads a summary CSV of every line — including the skipped and unmatched ones — to the payout Drive folder.
+
+### Rules the run will not bend
+
+- **Matching is in UTC.** Payout sheets record class times in UTC, not Bangkok; verified against production, where a session stored at `06:00Z` appears on the sheet as `06:00`. Treating them as Bangkok times would shift every match by seven hours.
+- **Live sessions log their actual start**, not the scheduled one (`10:26` against a `10:30` class), so matching allows ±15 minutes and takes the nearest row. A tie is reported `ambiguous` and nothing is written.
+- **No match, no write.** Unmatched, ambiguous, unmapped tutor, unresolved tutor, unrecognised sheet shape — each is recorded against its line with a reason and the sheet is left untouched.
+- **The tutor → spreadsheet mapping is explicit and managed.** An unmapped tutor is an exception, never a guess.
+- **A sheet that declares a different window is refused**, because the mapping has no month dimension and may have been re-pointed since.
+- **Publishing does not mark deductions `processed`.** That stays a separate decision: `process` requires the deduction's assigned finance month to be open, a 26→25 run spans two months, and June cannot close until exactly these deductions are processed — coupling them would make a routine payout a circular blocker.
+
+### Pressing Publish twice is safe
+
+Each inserted row carries a `BGS-PAYOUT {month} {deduction prefix}` marker in its notes cell, and **that marker, not the database, is the record of what was written** — a line's stored state can be lost to a crash between the Sheets call and the database write. Before anything else, a pass re-reads the grid and looks for the marker; if it is there, the row already landed. If instead the row below the anchor is blank *and this line has been attempted before*, the previous insert landed but its fill did not, and that row is reused rather than a second one inserted.
+
+This makes the notes cell on a deduction row **machine-owned**. Editing away a marker can cause a later publish to write that deduction a second time.
+
+Writes go bottom-up within each tab: inserting shifts every row below it, and the grid is read once per tab, so descending order keeps both the row numbers and the read copy accurate for the rows still to be written.
+
+### Guardrails before publishing
+
+An open blocking global source issue refuses the run outright — it is the same condition `revalidateDeductionCandidate` will not act under. Pending reviews and a materially unreconciled window (>2% of eligible sessions without trustworthy Wise evidence) also refuse, but a finance user may override by acknowledging the **exact count they were shown**, which is recorded in the audit log. As of 2026-07-27 the July window fails this gate: 1,271 of 1,304 eligible sessions are `unavailable`.
+
+If the sheets are written but the Drive upload then fails, the run stays `published` with the error recorded and the upload retried separately. The sheets are already money; a Drive failure must not make a run that moved money look like one that did not.
+
 ## Access model
 
 This feature adds four database-backed capabilities, read fresh on every request:
@@ -231,6 +268,7 @@ The feature owns 24 snapshot-independent tables. Exact definitions and constrain
 | Notifications | `post_class_notification_runs`, `post_class_notification_deliveries`, `post_class_notification_items`, `post_class_notification_attempts` | Grouped idempotent tutor reminders/admin digests and their durable retry trail. Successful setup-test delivery is recorded in settings plus the configuration audit log. |
 | AI | `post_class_ai_runs`, `post_class_ai_concerns`, `post_class_ai_reviews` | De-identified advisory runs, per-dimension findings, and required-note human decisions. |
 | Finance | `post_class_finance_periods`, `post_class_deductions`, `post_class_deduction_actions`, `post_class_deduction_offsets` | Open/closed months, one candidate per session, append-only decisions, and immutable correction offsets. |
+| Payout runs | `post_class_payout_runs`, `post_class_tutor_payout_sheets`, `post_class_payout_run_lines` | One run per 26th-to-25th window, the managed tutor → spreadsheet mapping, and one line per deduction per run recording its match and write outcome. |
 
 The feature also adds optional `primary_email` to `tutor_contacts`. Existing features continue to use their previous onsite/online selection behavior unless they explicitly opt into this field.
 
@@ -247,7 +285,11 @@ Focused coverage includes:
 - `src/lib/post-class-feedback/__tests__/sync.test.ts` — four-date windowing, priority/caps, inclusive dedupe, source issues, form drift, and idempotent resync.
 - `src/lib/post-class-feedback/__tests__/similarity.test.ts` — name redaction, trigram cosine similarity, and deterministic AI-trigger boundaries.
 - `src/lib/post-class-feedback/__tests__/access.test.ts` — fresh capability rules, implied viewer, last-manager, and self-lockout safeguards.
-- `src/lib/post-class-feedback/__tests__/migration.test.ts` — required tables, enums, indexes, append-only triggers, defaults, and initial access/settings seeds.
+- `src/lib/post-class-feedback/__tests__/migration.test.ts` — required tables, enums, indexes, append-only triggers, defaults, and initial access/settings seeds, plus the payout-run and source-restore migrations.
+- `src/lib/post-class-feedback/__tests__/payout-plan.test.ts` — the row-action decision table (already-written, blank-row reuse, unmatched, ambiguous), bottom-up ordering, the publish gate, and Bangkok-formatted CSV output.
+- `src/lib/post-class-feedback/__tests__/payout-writer.test.ts` — writes against an in-memory grid that really splices on insert, including recovery from a pass interrupted between the insert and the fill.
+- `src/lib/post-class-feedback/__tests__/payout-run.integration.test.ts` — publish end to end against real Postgres, including that a second publish issues zero Google writes.
+- `src/lib/post-class-feedback/__tests__/source-status-restore.integration.test.ts` — the run-wide source demotion and its one-statement recovery.
 - `src/lib/wise/__tests__/post-class-feedback-fetchers.test.ts` — Wise PAST pagination/date params and canonical session-detail request shape.
 - `src/components/post-class-feedback/__tests__/*` — workspace tabs, capability-specific controls, responsive/filter contracts, setup controls, and absence of synthetic-comment generation.
 
@@ -261,6 +303,15 @@ After deploying the code and applying `0055_post_class_feedback.sql`, Kevin shou
 4. Run a shadow sync, inspect the results, and explicitly confirm the shadow review.
 5. Open the required finance period(s).
 6. Activate live enforcement with a current-or-future Bangkok effective date.
+
+### Additional steps before the first payout run
+
+7. Apply `0057_post_class_payout_runs.sql` and `0058_post_class_source_status_restore.sql`.
+8. Sign in as the payout Google account and use **Reconnect Google** in the workspace header to grant `drive.file`, then confirm with `npx tsx scripts/verify-drive-upload.ts` that it can create a file in the payout Drive folder. If that returns 404 the folder is not visible to the account — share it as an Editor.
+9. Map each tutor to their payout spreadsheet and tab via `POST /api/post-class-feedback/payout-sheets`. An unmapped tutor is skipped, never guessed.
+10. Let reconciliation converge over the target window — the publish gate refuses a window where more than 2% of eligible sessions have no trustworthy Wise evidence.
+11. Run `scripts/verify-payout-sheet-write.ts`-style verification against a **scratch copy** of a real payout sheet before the first live publish, to confirm that `insertDimension` with `inheritFromBefore` does not disturb formulas beyond column H or a totals range.
+12. Publish for a single tutor first, eyeball the sheet and the CSV, then widen.
 
 Tutor emails, digest recipients, and the email test are no longer prerequisites — outbound email is parked.
 

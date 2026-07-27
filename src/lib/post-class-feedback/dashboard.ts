@@ -536,6 +536,10 @@ export async function getPostClassFeedbackDashboard(
     return {
       id: deduction.id,
       sessionId: deduction.sessionId,
+      // Carried so a payout view can group by identity rather than by display
+      // name — two tutors can share a name, and one tutor's name can change.
+      tutorKey: session?.canonicalTutorKey ?? null,
+      wiseSessionId: session?.wiseSessionId ?? null,
       tutorName: session?.canonicalTutorName ?? "Tutor needs review",
       className: session?.className ?? "Untitled class",
       students: participantsBySession.get(deduction.sessionId) ?? [],

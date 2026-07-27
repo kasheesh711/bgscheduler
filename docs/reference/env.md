@@ -194,6 +194,8 @@ Consumed in `src/lib/leave-requests/config.ts`.
 | `LEAVE_REQUESTS_SHEET_NAME` | Yes (line 38) | Worksheet/tab name. | `config.ts:5` | Defaults to `"Form Responses 1"` |
 | `LEAVE_REQUESTS_CONNECTED_EMAIL` | Yes (line 39) | Google account with Sheets write scope. | `config.ts:13` | Falls back to `SALES_DASHBOARD_CONNECTED_EMAIL`, then `""` |
 | `NEXT_PUBLIC_APP_URL` | Yes (line 40) | Public app base URL (client-exposed `NEXT_PUBLIC_*`). | `config.ts:18` | First in the leave-requests base-URL cascade |
+| `POST_CLASS_CONNECTED_EMAIL` | No | Google account that performs every payout-run write. Needs Sheets write **and** `drive.file`. | `payout-config.ts:11` | Falls back to `LEAVE_REQUESTS_CONNECTED_EMAIL`, then `SALES_DASHBOARD_CONNECTED_EMAIL`, then `kevhsh7@gmail.com` |
+| `POST_CLASS_PAYOUT_DRIVE_FOLDER_ID` | No | Drive folder the payout summary CSV is uploaded into. | `payout-config.ts:7` | Defaults to `17k6MWv3EQEJvJja-wsbb1kBPtL82oxzZ` |
 
 ### Wise writeback safety + seed + Vercel-injected
 

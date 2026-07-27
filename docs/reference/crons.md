@@ -22,6 +22,7 @@ The entries below are the complete contents of `vercel.json`. Schedules are UTC 
 | 6 | `35 0 * * *` | once daily, 00:35 UTC (07:35 Bangkok) | `/api/internal/progress-tests/admin-digest` | [`route.ts:8`](../../src/app/api/internal/progress-tests/admin-digest/route.ts) | 300s ([:6](../../src/app/api/internal/progress-tests/admin-digest/route.ts)) |
 | 7 | `5,35 * * * *` | every 30 min, on :05/:35 | `/api/internal/sync-wise-activity` | [`route.ts:11`](../../src/app/api/internal/sync-wise-activity/route.ts) | 800s ([:7](../../src/app/api/internal/sync-wise-activity/route.ts)) |
 | 8 | `13,43 * * * *` | every 30 min, on :13/:43 | `/api/internal/sync-post-class-feedback` | [`route.ts`](../../src/app/api/internal/sync-post-class-feedback/route.ts) | 800s |
+| 8b | `23,53 * * * *` | every 30 min, on :23/:53 | `/api/internal/post-class-feedback-backfill` | [`route.ts`](../../src/app/api/internal/post-class-feedback-backfill/route.ts) | 800s |
 | 9 | `15,45 * * * *` | every 30 min, on :15/:45 | `/api/internal/sync-leave-requests` | [`route.ts:24`](../../src/app/api/internal/sync-leave-requests/route.ts) | 800s ([:6](../../src/app/api/internal/sync-leave-requests/route.ts)) |
 | 10 | `45 23 * * *` | once daily, 23:45 UTC (06:45 Bangkok) | `/api/internal/class-assignments/morning` | [`route.ts:7`](../../src/app/api/internal/class-assignments/morning/route.ts) | 800s ([:5](../../src/app/api/internal/class-assignments/morning/route.ts)) |
 | 11 | `0,10,20,30 0 * * *` | 4×/day, 00:00–00:30 UTC at :00/:10/:20/:30 (07:00–07:30 Bangkok) | `/api/internal/class-assignments/admin-email` | [`route.ts:7`](../../src/app/api/internal/class-assignments/admin-email/route.ts) | 300s ([:5](../../src/app/api/internal/class-assignments/admin-email/route.ts)) |
@@ -68,6 +69,7 @@ Vercel Cron always calls **`GET`**. Some handlers additionally export `POST` for
 | `sync-credit-control` | yes | yes | yes ([`route.ts:50-51`](../../src/app/api/internal/sync-credit-control/route.ts)) |
 | `sync-wise-activity` | yes | no (manual backfill lives at a separate route) | n/a |
 | `sync-post-class-feedback` | yes | no (manual backfill lives at `/api/post-class-feedback/sync`) | n/a |
+| `post-class-feedback-backfill` | yes | yes (`?startDate=&endDate=` overrides the automatic window) | n/a |
 | `post-class-feedback/admin-digest` | yes | no | n/a — **parked**, no cron entry |
 | `post-class-feedback/reminder-day-after` | yes | no | n/a — **parked**, no cron entry |
 | `post-class-feedback/reminder-deadline` | yes | no | n/a — **parked**, no cron entry |
