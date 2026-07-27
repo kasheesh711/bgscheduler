@@ -111,6 +111,110 @@ export function parsePayoutSheet(grid: unknown[][]): PayoutSheetTable | null {
   return { headerRowNumber: headerIndex + 1, rows };
 }
 
+/** True when a raw grid row carries nothing in any cell. */
+export function isBlankPayoutGridRow(row: unknown[] | undefined): boolean {
+  // Read off the RAW grid, not `PayoutSheetTable.rows` — `parsePayoutSheet`
+  // drops blank rows, so a parsed table cannot answer this question at all.
+  // A short array is blank: Sheets truncates trailing empty cells.
+  if (!row) return true;
+  return row.every((cell) => cellText(cell) === "");
+}
+
+export interface PayoutSheetWindow {
+  /** Bangkok calendar dates, `YYYY-MM-DD`, or null when the sheet omits them. */
+  windowStart: string | null;
+  windowEnd: string | null;
+}
+
+const WINDOW_LABELS = {
+  windowStart: /^start\s*date$/iu,
+  windowEnd: /^end\s*date$/iu,
+} as const;
+
+/**
+ * Convert a Sheets serial or a written date to a `YYYY-MM-DD` Bangkok date.
+ *
+ * `fetchGoogleSheetRows` requests SERIAL_NUMBER, so a real date cell arrives as
+ * a number; a text cell arrives as whatever the tutor typed.
+ */
+function windowDateValue(value: unknown): string | null {
+  const serial = typeof value === "number" ? value : null;
+  if (serial !== null) {
+    const instant = serialToUtc(serial, null);
+    return instant ? instant.toISOString().slice(0, 10) : null;
+  }
+  const text = cellText(value);
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(text)) return text;
+
+  // Slashed dates are read as D/M/Y — the tenant's convention — but ONLY when
+  // the first component cannot be a month. `26/06/2026` is unambiguous;
+  // `06/07/2026` is not, and a wrong guess here would silently approve a
+  // mismatched sheet, so it is left unparsed and the guard simply abstains.
+  const slashed = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/u);
+  if (slashed) {
+    const [, first, second, year] = slashed;
+    if (Number(first) <= 12) return null;
+    return `${year}-${second.padStart(2, "0")}-${first.padStart(2, "0")}`;
+  }
+
+  const parsed = new Date(`${text} UTC`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
+
+/**
+ * Read the `START DATE` / `END DATE` preamble a payout sheet carries above its
+ * table.
+ *
+ * `post_class_tutor_payout_sheets` has no month dimension — one active row per
+ * tutor that someone re-points each month — so without this a run published
+ * after a re-point would write its deductions into the following month's sheet,
+ * silently, with date matching that still looks correct. Comparing against the
+ * sheet's own declared window is the only evidence available that the mapping
+ * still points where the run expects.
+ *
+ * Nulls mean "this sheet does not say", which is not the same as a mismatch;
+ * callers must only refuse on a positive disagreement.
+ */
+export function parsePayoutSheetWindow(grid: unknown[][]): PayoutSheetWindow {
+  const window: PayoutSheetWindow = { windowStart: null, windowEnd: null };
+  for (const row of grid) {
+    const cells = row ?? [];
+    for (let index = 0; index < cells.length; index += 1) {
+      const label = cellText(cells[index]);
+      if (!label) continue;
+      for (const [key, pattern] of Object.entries(WINDOW_LABELS)) {
+        if (!pattern.test(label)) continue;
+        // The value sits in the next cell that holds anything — sheets pad
+        // labels with merged or empty cells before the value.
+        for (let next = index + 1; next < cells.length; next += 1) {
+          if (cellText(cells[next]) === "") continue;
+          const parsed = windowDateValue(cells[next]);
+          if (parsed) window[key as keyof PayoutSheetWindow] ??= parsed;
+          break;
+        }
+      }
+    }
+  }
+  return window;
+}
+
+/**
+ * Whether a sheet's declared window is compatible with the run's.
+ *
+ * Absent dates are compatible: a sheet that does not declare its window cannot
+ * contradict the run, and refusing on silence would make every sheet without a
+ * preamble unwritable.
+ */
+export function payoutSheetWindowMatches(
+  sheet: PayoutSheetWindow,
+  run: { windowStart: string; windowEnd: string },
+): boolean {
+  if (sheet.windowStart && sheet.windowStart !== run.windowStart) return false;
+  if (sheet.windowEnd && sheet.windowEnd !== run.windowEnd) return false;
+  return true;
+}
+
 export type PayoutMatchStatus = "matched" | "unmatched" | "ambiguous";
 
 export interface PayoutMatchResult {

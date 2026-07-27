@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   DEDUCTION_SESSION_NAME,
+  isBlankPayoutGridRow,
   matchPayoutRow,
   normalizeStudentName,
   parsePayoutSheet,
+  parsePayoutSheetWindow,
+  payoutSheetWindowMatches,
   serialToUtc,
 } from "../payout-sheet";
 
@@ -189,5 +192,85 @@ describe("normalizeStudentName", () => {
   it("collapses whitespace and case", () => {
     expect(normalizeStudentName("  Ada   Lovelace ")).toBe("ada lovelace");
     expect(normalizeStudentName(null)).toBe("");
+  });
+});
+
+describe("parsePayoutSheetWindow", () => {
+  it("reads the preamble the real sheets carry", () => {
+    expect(parsePayoutSheetWindow(realSheet())).toEqual({
+      windowStart: "2026-06-26",
+      windowEnd: "2026-07-25",
+    });
+  });
+
+  it("reads a real date cell, which arrives as a serial", () => {
+    expect(parsePayoutSheetWindow([
+      ["START DATE", dateSerial("2026-06-26")],
+      ["END DATE", dateSerial("2026-07-25")],
+    ])).toEqual({ windowStart: "2026-06-26", windowEnd: "2026-07-25" });
+  });
+
+  it("skips padding cells between the label and its value", () => {
+    expect(parsePayoutSheetWindow([["START DATE", "", "", "26 Jun 2026"]]).windowStart)
+      .toBe("2026-06-26");
+  });
+
+  it("reports nulls when the sheet has no preamble", () => {
+    expect(parsePayoutSheetWindow([
+      ["Date", "Time", "Duration", "Credits deducted", "Session name", "Student name", "Payout amount"],
+    ])).toEqual({ windowStart: null, windowEnd: null });
+  });
+
+  it("reads an unambiguous slashed date as day-first", () => {
+    expect(parsePayoutSheetWindow([["START DATE", "26/06/2026"]]).windowStart)
+      .toBe("2026-06-26");
+  });
+
+  it("refuses to guess an ambiguous slashed date", () => {
+    // 06/07/2026 is 6 July or 7 June depending on convention. Guessing wrong
+    // would silently approve a sheet from the wrong month, so it abstains.
+    expect(parsePayoutSheetWindow([["START DATE", "06/07/2026"]]).windowStart).toBeNull();
+  });
+});
+
+describe("payoutSheetWindowMatches", () => {
+  const run = { windowStart: "2026-06-26", windowEnd: "2026-07-25" };
+
+  it("accepts the sheet the run is for", () => {
+    expect(payoutSheetWindowMatches(
+      { windowStart: "2026-06-26", windowEnd: "2026-07-25" },
+      run,
+    )).toBe(true);
+  });
+
+  it("rejects a sheet that has been re-pointed to another month", () => {
+    expect(payoutSheetWindowMatches(
+      { windowStart: "2026-07-26", windowEnd: "2026-08-25" },
+      run,
+    )).toBe(false);
+  });
+
+  it("accepts a sheet that declares nothing", () => {
+    // Silence is not disagreement. Refusing here would make every sheet
+    // without a preamble unwritable.
+    expect(payoutSheetWindowMatches({ windowStart: null, windowEnd: null }, run)).toBe(true);
+  });
+
+  it("rejects on a single disagreeing bound", () => {
+    expect(payoutSheetWindowMatches({ windowStart: null, windowEnd: "2026-08-25" }, run)).toBe(false);
+  });
+});
+
+describe("isBlankPayoutGridRow", () => {
+  it("recognises the blank row a half-finished publish leaves behind", () => {
+    expect(isBlankPayoutGridRow([])).toBe(true);
+    expect(isBlankPayoutGridRow(["", "", ""])).toBe(true);
+    expect(isBlankPayoutGridRow(undefined)).toBe(true);
+    expect(isBlankPayoutGridRow([null, undefined, "  "])).toBe(true);
+  });
+
+  it("does not mistake a real row for a blank one", () => {
+    expect(isBlankPayoutGridRow([dateSerial("2026-07-25"), timeSerial(6, 0)])).toBe(false);
+    expect(isBlankPayoutGridRow(["", "", "", 0])).toBe(false);
   });
 });
