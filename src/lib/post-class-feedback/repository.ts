@@ -9,6 +9,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  like,
   lt,
   lte,
   ne,
@@ -23,6 +24,14 @@ import { getWiseSessionTeacherUserId, getWiseUserId } from "@/lib/wise/types";
 import { toFeedbackEventEvidence } from "./events";
 import { assessFeedbackContent, calculateFeedbackDeadline } from "./policy";
 import { DEFAULT_FEEDBACK_FIELD_MAPPINGS } from "./wise";
+
+/**
+ * How long Wise gets to bring a session it reported missing back before the
+ * recheck lane stops paying to look for it. Sessions deleted in Wise never
+ * return, and they have no session row to auto-resolve against, so without a
+ * floor they occupy the queue permanently.
+ */
+const MISSING_SESSION_RETRY_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 import { withPostClassTransaction } from "./transaction";
 import type {
   CanonicalTutorResolution,
@@ -747,7 +756,20 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         eq(schema.postClassSourceIssues.scope, "session"),
         eq(schema.postClassSourceIssues.status, "open"),
         isNull(schema.postClassSourceIssues.sessionId),
-      )).orderBy(asc(schema.postClassSourceIssues.lastSeenAt)),
+        // A session Wise has reported missing for longer than the grace window
+        // is deleted, not late. It has no session row, so it can never
+        // auto-resolve, and re-fetching it every run spends a Wise call and a
+        // recheck slot a recoverable session could have used. The issue stays
+        // open and visible in Data Health — it is a real unresolved fact — it
+        // simply stops being retried.
+        or(
+          ne(schema.postClassSourceIssues.issueType, "session_not_found"),
+          gte(
+            schema.postClassSourceIssues.firstSeenAt,
+            new Date(Date.now() - MISSING_SESSION_RETRY_GRACE_MS),
+          ),
+        ),
+      )).orderBy(asc(schema.postClassSourceIssues.lastSeenAt)).limit(boundedLimit),
     ]);
     const queued: Array<{ candidate: PostClassSessionCandidate; queueAt: Date }> = rows.map((row) => ({
       candidate: {
@@ -1548,22 +1570,36 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         ));
       }
 
-      const resolvedFingerprints = [
+      // A session-scoped fingerprint is `{issueType}:{sessionId}:{status}`,
+      // where status is whatever Wise returned — so an exact list can only
+      // ever cover the statuses someone thought to enumerate. It did not:
+      // every one of the 228 missing-session issues in production was
+      // `:400` (Wise answers a deleted session with 400 "Session not found!",
+      // not 404) while the list named only `:404`, so none of them could ever
+      // resolve. Matching the `{issueType}:{sessionId}` stem instead resolves
+      // whatever status the issue was raised under.
+      //
+      // Fingerprints of already-resolved episodes carry a `:resolved:{uuid}`
+      // suffix, but the status filter below excludes them.
+      const resolvedStems = [
         ...(observation.tutor.status === "resolved"
           ? [`identity_ambiguous:${session.wiseSessionId}`]
           : []),
         ...(observation.eligibility.status !== "ambiguous"
           ? [`billing_evidence_missing:${session.wiseSessionId}`]
           : []),
-        `session_not_found:${session.wiseSessionId}:404`,
-        `contract_error:${session.wiseSessionId}:parse`,
+        `session_not_found:${session.wiseSessionId}`,
+        `contract_error:${session.wiseSessionId}`,
         `detail_retry:${session.wiseSessionId}`,
       ];
       await tx.update(schema.postClassSourceIssues).set(
         resolvedPostClassSessionIssueUpdate(session.id, observation.observedAt),
       ).where(and(
         eq(schema.postClassSourceIssues.status, "open"),
-        inArray(schema.postClassSourceIssues.fingerprint, resolvedFingerprints),
+        or(
+          inArray(schema.postClassSourceIssues.fingerprint, resolvedStems),
+          ...resolvedStems.map((stem) => like(schema.postClassSourceIssues.fingerprint, `${stem}:%`)),
+        ),
       ));
       if (observation.session.mapping.status === "ready" && settings?.formMappingValid) {
         await tx.update(schema.postClassSourceIssues).set({
