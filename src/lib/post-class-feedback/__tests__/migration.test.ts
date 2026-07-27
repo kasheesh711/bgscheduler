@@ -5,6 +5,14 @@ const migration = readFileSync(
   new URL("../../../../drizzle/0055_post_class_feedback.sql", import.meta.url),
   "utf8",
 );
+const payoutMigration = readFileSync(
+  new URL("../../../../drizzle/0057_post_class_payout_runs.sql", import.meta.url),
+  "utf8",
+);
+const restoreMigration = readFileSync(
+  new URL("../../../../drizzle/0058_post_class_source_status_restore.sql", import.meta.url),
+  "utf8",
+);
 const journal = JSON.parse(readFileSync(
   new URL("../../../../drizzle/meta/_journal.json", import.meta.url),
   "utf8",
@@ -114,6 +122,80 @@ describe("post-class feedback migration", () => {
     expect(journal.entries.find((entry) => entry.idx === 55)).toMatchObject({
       idx: 55,
       tag: "0055_post_class_feedback",
+    });
+  });
+});
+
+describe("payout run migration", () => {
+  it("creates the run, mapping, and line stores", () => {
+    for (const table of [
+      "post_class_payout_runs",
+      "post_class_tutor_payout_sheets",
+      "post_class_payout_run_lines",
+    ]) {
+      expect(payoutMigration).toContain(`CREATE TABLE IF NOT EXISTS "${table}"`);
+    }
+  });
+
+  it("declares the run, match, and write status enums", () => {
+    expect(payoutMigration).toContain(
+      `CREATE TYPE "public"."post_class_payout_run_status" AS ENUM('draft', 'published')`,
+    );
+    expect(payoutMigration).toContain(
+      `CREATE TYPE "public"."post_class_payout_match_status" AS ENUM('pending', 'matched', 'unmatched', 'ambiguous', 'no_sheet')`,
+    );
+    expect(payoutMigration).toContain(
+      `CREATE TYPE "public"."post_class_payout_write_status" AS ENUM('pending', 'written', 'failed', 'skipped')`,
+    );
+  });
+
+  it("makes a run's window, tutor mapping, and per-deduction line unique", () => {
+    // One run per window, one active sheet per tutor, one line per deduction —
+    // these are what make re-pressing Publish safe.
+    expect(payoutMigration).toMatch(/CREATE UNIQUE INDEX[^;]*"post_class_payout_runs"/);
+    expect(payoutMigration).toMatch(/CREATE UNIQUE INDEX[^;]*"post_class_tutor_payout_sheets"/);
+    expect(payoutMigration).toMatch(/CREATE UNIQUE INDEX[^;]*"post_class_payout_run_lines"/);
+  });
+
+  it("keeps every identifier within PostgreSQL's limit", () => {
+    const identifiers = [...payoutMigration.matchAll(/(?:CONSTRAINT|INDEX) "([^"]+)"/g)]
+      .map((match) => match[1]);
+    expect(identifiers.length).toBeGreaterThan(0);
+    for (const identifier of identifiers) {
+      expect(identifier.length, identifier).toBeLessThanOrEqual(63);
+    }
+  });
+
+  it("is registered in the journal", () => {
+    expect(journal.entries.find((entry) => entry.idx === 57)).toMatchObject({
+      idx: 57,
+      tag: "0057_post_class_payout_runs",
+    });
+  });
+});
+
+describe("source status restore migration", () => {
+  it("adds the nullable remembered status without touching source_status itself", () => {
+    expect(restoreMigration).toContain(
+      'ADD COLUMN IF NOT EXISTS "source_status_before" "post_class_source_status"',
+    );
+    // The demotion must stay fail-closed: this migration only adds the memory
+    // that makes recovery possible, it never relaxes a status or backfills one.
+    expect(restoreMigration).not.toMatch(/UPDATE "post_class_sessions"/);
+    expect(restoreMigration).not.toMatch(/ALTER COLUMN "source_status"/);
+    expect(restoreMigration).not.toMatch(/DROP COLUMN/);
+  });
+
+  it("indexes only the rows awaiting restore", () => {
+    expect(restoreMigration).toMatch(
+      /CREATE INDEX IF NOT EXISTS "pc_sessions_source_restore_idx"[\s\S]*WHERE "source_status_before" IS NOT NULL/,
+    );
+  });
+
+  it("is registered in the journal", () => {
+    expect(journal.entries.find((entry) => entry.idx === 58)).toMatchObject({
+      idx: 58,
+      tag: "0058_post_class_source_status_restore",
     });
   });
 });

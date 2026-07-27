@@ -3249,6 +3249,11 @@ export const postClassSessions = pgTable("post_class_sessions", {
   eligible: boolean("eligible").notNull().default(false),
   eligibilityReason: text("eligibility_reason"),
   sourceStatus: postClassSourceStatusEnum("source_status").notNull().default("unavailable"),
+  // Set only by the run-wide fail-closed demotion (REC-01), holding the status
+  // the row carried before source health became unprovable. A later healthy
+  // sync restores from it in one statement, so demotion and recovery are the
+  // same shape. Null means the row's `sourceStatus` is its own observation.
+  sourceStatusBefore: postClassSourceStatusEnum("source_status_before"),
   contentStatus: postClassContentStatusEnum("content_status").notNull().default("missing"),
   timingStatus: postClassTimingStatusEnum("timing_status").notNull().default("not_due"),
   deductionStatus: postClassDeductionStatusEnum("deduction_status").notNull().default("none"),
@@ -3268,6 +3273,9 @@ export const postClassSessions = pgTable("post_class_sessions", {
   index("pc_sessions_deadline_idx").on(table.deadlineAt),
   index("pc_sessions_ops_idx").on(table.eligible, table.sourceStatus, table.timingStatus),
   index("pc_sessions_deduction_idx").on(table.deductionStatus, table.deadlineAt),
+  index("pc_sessions_source_restore_idx")
+    .on(table.sourceStatusBefore)
+    .where(sql`${table.sourceStatusBefore} IS NOT NULL`),
 ]);
 
 export const postClassSessionParticipants = pgTable("post_class_session_participants", {

@@ -585,6 +585,15 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         eq(schema.postClassSourceIssues.status, "open"),
         ne(schema.postClassSourceIssues.issueType, "form_drift"),
       ));
+      // REC-01: source health is proven again, so undo the run-wide demotion in
+      // one statement. Rows observed first-hand since the demotion already
+      // cleared `sourceStatusBefore` in `saveObservation`, so this only touches
+      // rows whose status is still the demotion's placeholder.
+      await this.db.update(schema.postClassSessions).set({
+        sourceStatus: sql`${schema.postClassSessions.sourceStatusBefore}`,
+        sourceStatusBefore: null,
+        updatedAt: input.finishedAt,
+      }).where(isNotNull(schema.postClassSessions.sourceStatusBefore));
     }
   }
 
@@ -1112,6 +1121,13 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         eligible: observation.eligibility.eligible,
         eligibilityReason: observation.eligibility.reason,
         sourceStatus: observation.sourceStatus,
+        // REC-01: a first-hand observation supersedes any run-wide demotion, so
+        // the remembered status is discarded rather than restored later. This
+        // holds even when the observation itself is 'unavailable': the row was
+        // just looked at, and resurrecting a pre-demotion 'ready' without a
+        // fresh observation would be exactly the stale projection the
+        // fail-closed rule exists to prevent.
+        sourceStatusBefore: null,
         contentStatus: assessment?.contentStatus ?? latestContent?.contentStatus ?? "missing",
         timingStatus: assessment?.timingStatus ?? "not_due",
         enforcementMode: effectiveMode,
@@ -1137,6 +1153,7 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
           eligible: observation.eligibility.eligible,
           eligibilityReason: observation.eligibility.reason,
           sourceStatus: observation.sourceStatus,
+          sourceStatusBefore: null,
           contentStatus: assessment?.contentStatus ?? latestContent?.contentStatus ?? "missing",
           timingStatus: assessment?.timingStatus ?? "not_due",
           enforcementMode: effectiveMode,
@@ -1620,7 +1637,17 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         },
       });
       if (issue.scope === "global") {
+        // REC-01: the run-wide demotion stays exactly as fail-closed as it was
+        // — every eligible row goes to 'unavailable' the instant source health
+        // cannot be proven. What is new is that each row remembers what it
+        // carried, so `completeSync` can restore them all in one statement
+        // instead of one row per Wise detail fetch.
+        //
+        // `coalesce` keeps the FIRST demotion's value when a second global
+        // issue lands before recovery; without it the original status would be
+        // overwritten by the 'unavailable' this very statement is writing.
         await tx.update(schema.postClassSessions).set({
+          sourceStatusBefore: sql`coalesce(${schema.postClassSessions.sourceStatusBefore}, ${schema.postClassSessions.sourceStatus})`,
           sourceStatus: "unavailable",
           updatedAt: issue.observedAt,
         }).where(eq(schema.postClassSessions.eligible, true));
