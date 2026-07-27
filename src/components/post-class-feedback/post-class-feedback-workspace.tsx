@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { signIn } from "next-auth/react";
 import {
   AlertTriangle,
   BarChart3,
@@ -32,6 +33,16 @@ import {
 } from "./feedback-ui";
 import { OperationsTab } from "./operations-tab";
 import { SettingsTab, type SettingsRequest } from "./settings-tab";
+
+/**
+ * Declared here rather than imported from `@/lib/sales-dashboard/google-oauth`:
+ * that module pulls in node:crypto and the database, which must not reach the
+ * client bundle. Same approach as the leave-requests workspace. Keep in step
+ * with the sign-in scope in `src/lib/auth.ts`.
+ */
+const PAYOUT_RECONSENT_SCOPE = "openid email profile"
+  + " https://www.googleapis.com/auth/spreadsheets"
+  + " https://www.googleapis.com/auth/drive.file";
 
 type WorkspaceTab = "operations" | "analytics" | "deductions" | "audit" | "settings";
 type Toast = { tone: "success" | "error"; message: string } | null;
@@ -198,6 +209,21 @@ export function PostClassFeedbackWorkspace() {
             <RefreshCw className={cn(refreshing && "animate-spin")} />
             {refreshing ? "Refreshing…" : "Refresh"}
           </Button>
+          {payload?.payoutGoogle && !payload.payoutGoogle.driveReady ? (
+            <Button
+              variant="outline"
+              className="border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
+              title={`${payload.payoutGoogle.connectedEmail} has not granted Drive access. Payout CSV upload will fail until it does.`}
+              onClick={() => signIn("google", { callbackUrl: "/post-class-feedback" }, {
+                prompt: "consent",
+                access_type: "offline",
+                scope: PAYOUT_RECONSENT_SCOPE,
+              })}
+            >
+              <ShieldAlert />
+              Reconnect Google
+            </Button>
+          ) : null}
           {payload ? (
             <Badge variant="outline" className={cn(
               "h-8 gap-2 px-3 capitalize",

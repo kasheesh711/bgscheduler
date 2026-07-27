@@ -355,8 +355,19 @@ export interface FeedbackSetupItem {
   detail: string;
 }
 
+/**
+ * Google grants held by the single pinned account that performs every payout
+ * write. Null unless the viewer has the finance capability.
+ */
+export interface FeedbackPayoutGoogleStatus {
+  connectedEmail: string;
+  sheetsWriteReady: boolean;
+  driveReady: boolean;
+}
+
 export interface PostClassFeedbackPayload {
   capabilities: FeedbackCapabilities;
+  payoutGoogle: FeedbackPayoutGoogleStatus | null;
   settings: {
     mode: FeedbackEnforcementMode;
     effectiveAt: string | null;

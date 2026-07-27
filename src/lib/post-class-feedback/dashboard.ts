@@ -12,9 +12,15 @@ import {
   todayBangkok,
 } from "@/lib/room-capacity/dates";
 
+import {
+  hasDriveFileScope,
+  hasSheetsWriteScope,
+} from "@/lib/sales-dashboard/google-oauth";
+
 import type { FeedbackSubmitter } from "@/types/post-class-feedback";
 
 import { PostClassValidationError } from "./errors";
+import { payoutConnectedEmail } from "./payout-config";
 import {
   isPostClassTerminalReminderFailure,
   isPostClassAssessmentInDenominator,
@@ -701,6 +707,18 @@ export async function getPostClassFeedbackDashboard(
     { key: "activation" as const, label: "Prospective activation", complete: settings?.enforcementMode === "live", detail: settings?.enforcementMode === "live" ? `Live from ${iso(settings.policyEffectiveAt)}` : "Not live" },
   ];
 
+  // One pinned Google account performs every payout write, so only that
+  // account's grants matter. Reported to finance users so the missing Drive
+  // consent is visible before a publish fails on it, and deliberately kept out
+  // of `setup` — the payout handoff is not part of activation.
+  const payoutGoogleEmail = payoutConnectedEmail();
+  const [payoutToken] = canFinance
+    ? await db.select({ scope: schema.googleOAuthTokens.scope })
+      .from(schema.googleOAuthTokens)
+      .where(eq(schema.googleOAuthTokens.email, payoutGoogleEmail))
+      .limit(1)
+    : [];
+
   return {
     capabilities: {
       viewer: user.capabilities.includes("viewer"),
@@ -708,6 +726,13 @@ export async function getPostClassFeedbackDashboard(
       finance: user.capabilities.includes("finance"),
       accessManager: user.capabilities.includes("access_manager"),
     },
+    payoutGoogle: canFinance
+      ? {
+        connectedEmail: payoutGoogleEmail,
+        sheetsWriteReady: hasSheetsWriteScope(payoutToken?.scope),
+        driveReady: hasDriveFileScope(payoutToken?.scope),
+      }
+      : null,
     settings: {
       mode: settings?.enforcementMode ?? "shadow",
       effectiveAt: iso(settings?.policyEffectiveAt),
