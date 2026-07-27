@@ -101,6 +101,14 @@ export interface SyncPostClassFeedbackResult {
   windowEnd: string;
   discoveredCount: number;
   candidateCount: number;
+  /**
+   * Candidates still outstanding from the run's own date window, after the
+   * already-reconciled ones are filtered out. `candidateCount` counts all three
+   * lanes, so a saturated recheck queue pins it at the cap and says nothing
+   * about whether the window is finished; this does. Zero means the window is
+   * fully observed.
+   */
+  windowCandidateCount: number;
   detailFetchedCount: number;
   sessionSavedCount: number;
   sourceIssueCount: number;
@@ -653,6 +661,12 @@ export async function syncPostClassFeedback(
       );
     }
     const candidates = selectPostClassSyncCandidates(candidatePool, detailCap);
+    // Measured on the filtered pool rather than on what this batch selected:
+    // the question a backfill needs answered is "is any work left in this
+    // window", not "did this batch happen to pick some of it up".
+    const windowCandidateCount = candidatePool.filter(
+      (candidate) => candidate.reason === "rolling_window",
+    ).length;
 
     let detailFetchedCount = 0;
     let sessionSavedCount = 0;
@@ -938,6 +952,7 @@ export async function syncPostClassFeedback(
       windowEnd: endDate,
       discoveredCount: discovered.length,
       candidateCount: candidates.length,
+      windowCandidateCount,
       detailFetchedCount,
       sessionSavedCount,
       sourceIssueCount,

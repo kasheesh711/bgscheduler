@@ -8,6 +8,7 @@ export type CronJobKey =
   | "progress_tests"
   | "progress_tests_digest"
   | "post_class_feedback"
+  | "post_class_feedback_backfill"
   | "post_class_feedback_digest"
   | "post_class_feedback_day_after"
   | "post_class_feedback_deadline"
@@ -156,6 +157,21 @@ export const CRON_JOBS = [
     feature: "Class Feedback",
     path: "/api/internal/sync-post-class-feedback",
     schedule: "13,43 * * * *",
+    cadenceLabel: "Every 30 min",
+    cadenceMinutes: 30,
+    lateAfterMinutes: 45,
+    maxDurationSeconds: 800,
+    manualOnly: false,
+    dangerous: false,
+    confirmationLabel: null,
+    routeMethod: "GET",
+  },
+  {
+    key: "post_class_feedback_backfill",
+    label: "Post-class Feedback Backfill",
+    feature: "Class Feedback",
+    path: "/api/internal/post-class-feedback-backfill",
+    schedule: "23,53 * * * *",
     cadenceLabel: "Every 30 min",
     cadenceMinutes: 30,
     lateAfterMinutes: 45,
