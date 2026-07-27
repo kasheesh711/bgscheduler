@@ -400,6 +400,13 @@
       "when": 1784814723290,
       "tag": "0056_learning_plan_access_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1784814724290,
+      "tag": "0057_post_class_payout_runs",
+      "breakpoints": true
     }
   ]
 }
