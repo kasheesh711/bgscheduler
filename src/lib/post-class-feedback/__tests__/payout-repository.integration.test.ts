@@ -17,7 +17,7 @@ import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-hel
 import {
   preparePayoutRunPass,
   selectPayoutRunCandidates,
-  upsertTutorPayoutSheet,
+  upsertPayoutTutorName,
 } from "@/lib/post-class-feedback/payout-repository";
 import { payoutRunWindow } from "@/lib/post-class-feedback/payout-window";
 import { PostClassConflictError } from "@/lib/post-class-feedback/errors";
@@ -265,11 +265,10 @@ describe("preparePayoutRunPass", () => {
     await seedDeduction({ id: "b", endsAt: "2026-07-11T03:00:00.000Z", tutorKey: "mimi", status: "approved" });
     await seedDeduction({ id: "c", endsAt: "2026-07-12T03:00:00.000Z", tutorKey: null, status: "approved" });
     await seedDeduction({ id: "d", endsAt: "2026-07-13T03:00:00.000Z", tutorKey: "kevin", status: "pending_review" });
-    await upsertTutorPayoutSheet(appDb(), {
+    await upsertPayoutTutorName(appDb(), {
       canonicalKey: "kevin",
-      spreadsheetId: "book-1",
-      sheetName: "Kevin",
-      sheetGid: 0,
+      onsiteName: "Kevin (Kev) Y. Hsieh",
+      onlineName: "Kevin (Kev) Y. Hsieh Online",
       active: true,
       updatedByEmail: "admin@example.com",
     });

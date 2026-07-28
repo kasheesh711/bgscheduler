@@ -19,7 +19,7 @@ import { withPostClassTransaction } from "./transaction";
 
 export type PayoutRun = typeof schema.postClassPayoutRuns.$inferSelect;
 export type PayoutRunLine = typeof schema.postClassPayoutRunLines.$inferSelect;
-export type TutorPayoutSheet = typeof schema.postClassTutorPayoutSheets.$inferSelect;
+export type PayoutTutorName = typeof schema.postClassPayoutTutorNames.$inferSelect;
 
 export interface PayoutRunCandidate {
   deductionId: string;
@@ -224,29 +224,40 @@ export async function computePayoutRunCoverage(
   };
 }
 
-export async function loadActiveTutorPayoutSheets(
+/**
+ * Tutor → the exact identity strings the master ledger uses.
+ *
+ * A deduction only reaches a tutor's view if its ledger row carries one of
+ * these verbatim, because that view filters on an exact string match.
+ */
+export async function loadPayoutTutorNames(
   db: Database,
-): Promise<Map<string, TutorPayoutSheet>> {
-  const rows = await db.select().from(schema.postClassTutorPayoutSheets)
-    .where(eq(schema.postClassTutorPayoutSheets.active, true));
+): Promise<Map<string, PayoutTutorName>> {
+  const rows = await db.select().from(schema.postClassPayoutTutorNames)
+    .where(eq(schema.postClassPayoutTutorNames.active, true));
   return new Map(rows.map((row) => [row.canonicalKey, row]));
 }
 
-export async function upsertTutorPayoutSheet(db: Database, input: {
+/** Both identity strings for one tutor, onsite first. */
+export function payoutTutorNameStrings(mapping: PayoutTutorName): string[] {
+  return [mapping.onsiteName, mapping.onlineName].filter(
+    (name): name is string => Boolean(name && name.trim()),
+  );
+}
+
+export async function upsertPayoutTutorName(db: Database, input: {
   canonicalKey: string;
-  spreadsheetId: string;
-  sheetName: string;
-  sheetGid: number;
+  onsiteName: string;
+  onlineName: string | null;
   active: boolean;
   updatedByEmail: string;
-}): Promise<TutorPayoutSheet> {
-  const [row] = await db.insert(schema.postClassTutorPayoutSheets).values(input)
+}): Promise<PayoutTutorName> {
+  const [row] = await db.insert(schema.postClassPayoutTutorNames).values(input)
     .onConflictDoUpdate({
-      target: schema.postClassTutorPayoutSheets.canonicalKey,
+      target: schema.postClassPayoutTutorNames.canonicalKey,
       set: {
-        spreadsheetId: input.spreadsheetId,
-        sheetName: input.sheetName,
-        sheetGid: input.sheetGid,
+        onsiteName: input.onsiteName,
+        onlineName: input.onlineName,
         active: input.active,
         updatedByEmail: input.updatedByEmail,
         updatedAt: new Date(),
@@ -281,7 +292,7 @@ export interface PreparePayoutRunResult {
   run: PayoutRun;
   candidates: PayoutRunCandidate[];
   coverage: PayoutRunCoverage;
-  sheets: Map<string, TutorPayoutSheet>;
+  tutorNames: Map<string, PayoutTutorName>;
   lines: PayoutRunLine[];
 }
 
@@ -321,15 +332,15 @@ export async function preparePayoutRunPass(input: {
       );
     }
 
-    const [candidates, sheets] = await Promise.all([
+    const [candidates, tutorNames] = await Promise.all([
       selectPayoutRunCandidates(tx, input.window),
-      loadActiveTutorPayoutSheets(tx),
+      loadPayoutTutorNames(tx),
     ]);
     const coverage = await computePayoutRunCoverage(
       tx,
       input.window,
       candidates,
-      new Set(sheets.keys()),
+      new Set(tutorNames.keys()),
     );
 
     const now = new Date();
@@ -413,7 +424,7 @@ export async function preparePayoutRunPass(input: {
         asc(schema.postClassPayoutRunLines.scheduledStartAt),
       );
 
-    return { run: claimed, candidates, coverage, sheets, lines };
+    return { run: claimed, candidates, coverage, tutorNames, lines };
   });
 }
 
@@ -423,9 +434,14 @@ export interface PayoutLineMatchPatch {
   sheetName?: string | null;
   matchedRowNumber?: number | null;
   writeStatus?: "pending" | "written" | "failed" | "skipped";
-  insertedRowNumber?: number | null;
+  /** Ledger row the append landed on. */
+  masterRowNumber?: number | null;
   writeError?: string | null;
   writtenAt?: Date | null;
+  /** Reconcile bookkeeping — see migration 0059. */
+  markerMissCount?: number;
+  lastSeenInMasterAt?: Date | null;
+  reappendCount?: number;
 }
 
 /**

@@ -39,8 +39,11 @@ async function googleSheetsPost<T>(
   path: string,
   accessToken: string,
   payload: Record<string, unknown>,
+  params: Record<string, string> = {},
 ): Promise<T> {
-  const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${path}`, {
+  const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${path}`);
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  const response = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -209,4 +212,55 @@ export async function updateGoogleSheetRowValues(
       values: [values.map((value) => value ?? "")],
     },
   );
+}
+
+export interface GoogleSheetsAppendResult {
+  /** A1 range the appended rows landed on, e.g. `'Detailed'!A8282:H8282`. */
+  updatedRange: string | null;
+  /** 1-based row of the first appended row, parsed out of `updatedRange`. */
+  firstRowNumber: number | null;
+  updatedRows: number;
+}
+
+interface GoogleSheetsAppendResponse {
+  updates?: { updatedRange?: string; updatedRows?: number };
+  error?: { message?: string };
+}
+
+/**
+ * Append rows to the end of a sheet's data.
+ *
+ * `insertDataOption: INSERT_ROWS` makes Google add rows rather than overwrite
+ * whatever sits below the table, and `RAW` sends each value with the type it
+ * already has — a JS number becomes a numeric cell, a string stays text. That
+ * matters when appending to a typed column: `USER_ENTERED` would re-parse the
+ * value, and a row whose type differs from its column is treated by QUERY as a
+ * minority type and silently dropped from any view built on it.
+ */
+export async function appendGoogleSheetRows(
+  email: string,
+  spreadsheetId: string,
+  sheetName: string,
+  rows: Array<Array<string | number | null>>,
+  lastColumn = "H",
+): Promise<GoogleSheetsAppendResult> {
+  const accessToken = await getGoogleSheetsWriteAccessToken(email);
+  const range = `${quoteSheetName(sheetName)}!A:${lastColumn}`;
+  const body = await googleSheetsPost<GoogleSheetsAppendResponse>(
+    `${spreadsheetId}/values/${encodeURIComponent(range)}:append`,
+    accessToken,
+    { range, majorDimension: "ROWS", values: rows.map((row) => row.map((cell) => cell ?? "")) },
+    {
+      valueInputOption: "RAW",
+      insertDataOption: "INSERT_ROWS",
+      includeValuesInResponse: "false",
+    },
+  );
+  const updatedRange = body.updates?.updatedRange ?? null;
+  // `'Tab name'!A8282:H8282` — the row number is what lets a human find the
+  // appended line later, and what reconcile records.
+  const firstRowNumber = updatedRange
+    ? Number(updatedRange.match(/![A-Z]+(\d+)/u)?.[1] ?? "") || null
+    : null;
+  return { updatedRange, firstRowNumber, updatedRows: body.updates?.updatedRows ?? 0 };
 }

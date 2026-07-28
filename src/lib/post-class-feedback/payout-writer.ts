@@ -1,35 +1,35 @@
 import "server-only";
 
 import {
+  appendGoogleSheetRows,
   fetchGoogleSheetRows,
-  insertGoogleSheetRow,
-  updateGoogleSheetRowValues,
 } from "@/lib/sales-dashboard/sheets";
 
-import type { PayoutWritePlan } from "./payout-plan";
+import {
+  PAYOUT_MASTER_SHEET_NAME,
+  PAYOUT_MASTER_SPREADSHEET_ID,
+} from "./payout-config";
 
-// ── Writing deduction rows into tutor payout sheets ─────────────────────
+// ── Appending deductions to the master ledger ───────────────────────────
 //
-// The only module that talks to Google. The gateway is an interface so the
-// ordering and crash-recovery behaviour can be tested against a real grid that
-// actually shifts on insert, without a network.
+// The only module that talks to Google on the payout path. The gateway is an
+// interface so ordering and failure behaviour can be tested against an
+// in-memory ledger without a network.
+//
+// Appending, rather than inserting, is what makes this safe: nothing shifts, no
+// row numbers change under us, no formula is disturbed, and a failed call
+// leaves nothing behind to clean up.
 
-export interface PayoutSheetGateway {
-  readGrid(spreadsheetId: string, sheetName: string): Promise<unknown[][]>;
-  insertRow(spreadsheetId: string, sheetGid: number, afterRowNumber: number): Promise<void>;
-  updateRow(
-    spreadsheetId: string,
-    sheetName: string,
-    rowNumber: number,
-    values: Array<string | number | null>,
-  ): Promise<void>;
+export interface MasterLedgerGateway {
+  readGrid(): Promise<unknown[][]>;
+  /** Appends one row; resolves with the 1-based row it landed on, if known. */
+  appendRow(row: Array<string | number>): Promise<{ rowNumber: number | null }>;
 }
 
 /**
  * Google allows 60 write requests per minute per user, and one pinned account
- * performs every payout write in the system. Each line costs two writes, so
- * ~1.1s between calls keeps a run comfortably inside the quota at roughly 27
- * lines a minute.
+ * performs every payout write in the system. An append costs one write, so
+ * ~1.1s between calls keeps a run inside the quota with room to spare.
  */
 export const PAYOUT_GOOGLE_MIN_INTERVAL_MS = 1_100;
 
@@ -43,107 +43,95 @@ export function createPayoutRateGate(minIntervalMs = PAYOUT_GOOGLE_MIN_INTERVAL_
   };
 }
 
-export function createGooglePayoutSheetGateway(
+export function createGoogleMasterLedgerGateway(
   email: string,
   pace: () => Promise<void> = createPayoutRateGate(),
-): PayoutSheetGateway {
+  spreadsheetId: string = PAYOUT_MASTER_SPREADSHEET_ID,
+  sheetName: string = PAYOUT_MASTER_SHEET_NAME,
+): MasterLedgerGateway {
   return {
-    async readGrid(spreadsheetId, sheetName) {
+    async readGrid() {
       await pace();
       return fetchGoogleSheetRows(email, spreadsheetId, sheetName);
     },
-    async insertRow(spreadsheetId, sheetGid, afterRowNumber) {
+    async appendRow(row) {
       await pace();
-      await insertGoogleSheetRow(email, spreadsheetId, sheetGid, afterRowNumber);
-    },
-    async updateRow(spreadsheetId, sheetName, rowNumber, values) {
-      await pace();
-      await updateGoogleSheetRowValues(email, spreadsheetId, sheetName, rowNumber, values);
+      const result = await appendGoogleSheetRows(email, spreadsheetId, sheetName, [row]);
+      return { rowNumber: result.firstRowNumber };
     },
   };
 }
 
-export interface PayoutWriteOutcome {
+export interface MasterAppendPlan {
+  lineId: string;
+  deductionId: string;
+  marker: string;
+  row: Array<string | number>;
+}
+
+export interface MasterAppendOutcome {
   lineId: string;
   status: "written" | "failed";
   rowNumber: number | null;
   error: string | null;
 }
 
-export interface WritePayoutSheetPlansInput {
-  gateway: PayoutSheetGateway;
-  /** Already ordered bottom-up within each sheet by `orderPayoutWritesBottomUp`. */
-  plansBySheet: Map<string, PayoutWritePlan[]>;
+export interface AppendMasterDeductionsInput {
+  gateway: MasterLedgerGateway;
+  plans: MasterAppendPlan[];
   /** Persisted the moment each outcome is known — Google cannot be rolled back. */
-  onOutcome: (outcome: PayoutWriteOutcome) => Promise<void>;
+  onOutcome: (outcome: MasterAppendOutcome) => Promise<void>;
   /** Stop cleanly rather than overrun the platform function timeout. */
   deadlineAt?: number;
   clock?: () => number;
 }
 
-export interface WritePayoutSheetPlansResult {
-  outcomes: PayoutWriteOutcome[];
+export interface AppendMasterDeductionsResult {
+  outcomes: MasterAppendOutcome[];
   stoppedEarly: boolean;
 }
 
 /**
- * Apply every plan, sheet by sheet, one line at a time.
+ * Append one ledger row per deduction, one call at a time.
  *
- * Sequential on purpose: the writes into a single sheet are order-dependent,
- * and the whole run shares one Google account's quota.
+ * Deliberately not batched. A batched append that fails part-way gives no way
+ * to tell which rows landed, and the recovery for that is a re-read plus a
+ * marker scan — the same work, done later, with a window in which the ledger
+ * and the database disagree. One row per call makes every outcome unambiguous
+ * and gives an exact row number to record.
  *
- * A failure marks its line and the loop continues, mirroring how the
- * leave-requests sheet writeback records a per-row failure and carries on.
- * There is deliberately no in-loop retry: `sheets.ts` throws a bare Error with
- * no status, so a 429 (retryable), a 403 (never retryable) and a lost response
- * (the request may well have landed) are indistinguishable — and retrying a
- * non-idempotent insert on a lost response would duplicate a payout row. The
- * retry pass re-reads the grid instead, where the marker and blank-row checks
- * can tell what actually happened.
+ * A failure marks its line and the loop continues, mirroring the leave-requests
+ * sheet writeback. There is no in-loop retry: `sheets.ts` throws a bare Error
+ * with no status, so a 429, a 403 and a lost response are indistinguishable —
+ * and a lost response may well mean the append landed. Re-running the pass
+ * re-reads the ledger, where the marker says what actually happened.
  */
-export async function writePayoutSheetPlans(
-  input: WritePayoutSheetPlansInput,
-): Promise<WritePayoutSheetPlansResult> {
+export async function appendMasterDeductions(
+  input: AppendMasterDeductionsInput,
+): Promise<AppendMasterDeductionsResult> {
   const clock = input.clock ?? Date.now;
-  const outcomes: PayoutWriteOutcome[] = [];
+  const outcomes: MasterAppendOutcome[] = [];
   let stoppedEarly = false;
 
-  for (const plans of input.plansBySheet.values()) {
-    if (stoppedEarly) break;
-    for (const plan of plans) {
-      if (input.deadlineAt !== undefined && clock() >= input.deadlineAt) {
-        stoppedEarly = true;
-        break;
-      }
-      try {
-        if (!plan.reuseBlankRow) {
-          await input.gateway.insertRow(plan.spreadsheetId, plan.sheetGid, plan.anchorRowNumber);
-        }
-        await input.gateway.updateRow(
-          plan.spreadsheetId,
-          plan.sheetName,
-          plan.targetRowNumber,
-          plan.values,
-        );
-        const outcome: PayoutWriteOutcome = {
-          lineId: plan.lineId,
-          status: "written",
-          rowNumber: plan.targetRowNumber,
-          error: null,
-        };
-        outcomes.push(outcome);
-        await input.onOutcome(outcome);
-      } catch (error) {
-        const outcome: PayoutWriteOutcome = {
-          lineId: plan.lineId,
-          status: "failed",
-          rowNumber: null,
-          error: error instanceof Error ? error.message : "The payout sheet write failed.",
-        };
-        outcomes.push(outcome);
-        await input.onOutcome(outcome);
-      }
+  for (const plan of input.plans) {
+    if (input.deadlineAt !== undefined && clock() >= input.deadlineAt) {
+      stoppedEarly = true;
+      break;
     }
+    let outcome: MasterAppendOutcome;
+    try {
+      const { rowNumber } = await input.gateway.appendRow(plan.row);
+      outcome = { lineId: plan.lineId, status: "written", rowNumber, error: null };
+    } catch (error) {
+      outcome = {
+        lineId: plan.lineId,
+        status: "failed",
+        rowNumber: null,
+        error: error instanceof Error ? error.message : "The ledger append failed.",
+      };
+    }
+    outcomes.push(outcome);
+    await input.onOutcome(outcome);
   }
 
   return { outcomes, stoppedEarly };

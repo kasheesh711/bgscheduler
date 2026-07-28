@@ -3,20 +3,18 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import {
+  appendMasterDeductions,
   createPayoutRateGate,
-  writePayoutSheetPlans,
-  type PayoutSheetGateway,
-  type PayoutWriteOutcome,
+  type MasterAppendOutcome,
+  type MasterAppendPlan,
+  type MasterLedgerGateway,
 } from "../payout-writer";
 import {
-  buildPayoutSheetRowValues,
-  groupPayoutPlansBySheet,
-  orderPayoutWritesBottomUp,
+  buildMasterDeductionRow,
+  collectMasterMarkers,
+  parseMasterPayoutSheet,
   payoutRowMarker,
-  resolvePayoutRowAction,
-  type PayoutWritePlan,
-} from "../payout-plan";
-import { DEDUCTION_SESSION_NAME, parsePayoutSheet } from "../payout-sheet";
+} from "../payout-master";
 
 function dateSerial(iso: string): number {
   return Math.round(Date.parse(`${iso}T00:00:00.000Z`) / 86_400_000) + 25569;
@@ -25,246 +23,159 @@ function timeSerial(hours: number, minutes: number): number {
   return (hours * 60 + minutes) / 1440;
 }
 
-const HEADER = ["Date", "Time", "Duration", "Credits deducted", "Session name", "Student name", "Payout amount", "Notes"];
-const STUDENTS = ["Ada Lovelace", "Grace Hopper", "Alan Turing"];
+const HEADER = [
+  "Teacher name", "Session name", "Course name",
+  "Date", "Time", "Duration", "Credits deducted", "Payout amount",
+];
+const KEVIN = "Kevin (Kev) Y. Hsieh";
 
-/** Header on row 1, three classes on rows 2-4. */
-function initialGrid(): unknown[][] {
+function ledger(): unknown[][] {
   return [
     [...HEADER],
-    [dateSerial("2026-07-25"), timeSerial(9, 30), "60 mins", 1, "Class A", STUDENTS[0], 700, ""],
-    [dateSerial("2026-07-25"), timeSerial(6, 0), "60 mins", 1, "Class B", STUDENTS[1], 700, ""],
-    [dateSerial("2026-07-24"), timeSerial(2, 0), "60 mins", 1, "Class C", STUDENTS[2], 700, ""],
+    [KEVIN, "On-site Session - Math", "Grace Hopper", dateSerial("2026-07-25"), timeSerial(6, 0), "60 mins", 1, 700],
+    [KEVIN, "On-site Session - Science", "Ada Lovelace", dateSerial("2026-07-24"), timeSerial(9, 30), "60 mins", 1, 700],
   ];
 }
 
-/**
- * A gateway over a real in-memory grid: `insertRow` actually splices, so row
- * numbers shift underneath the caller exactly as they do in Sheets.
- */
-function fakeGateway(grid: unknown[][], options: { failOnCall?: number; throwBetween?: number } = {}) {
+/** An in-memory ledger that really grows on append, as Sheets does. */
+function fakeGateway(grid: unknown[][], options: { failOnCall?: number } = {}) {
   let calls = 0;
-  const gateway: PayoutSheetGateway = {
+  const gateway: MasterLedgerGateway = {
     async readGrid() {
       return grid.map((row) => [...row]);
     },
-    async insertRow(_spreadsheetId, _sheetGid, afterRowNumber) {
+    async appendRow(row) {
       calls += 1;
-      if (calls === options.failOnCall) throw new Error(`insert failed on call ${calls}`);
-      grid.splice(afterRowNumber, 0, []);
-      if (calls === options.throwBetween) throw new Error("crashed after insert, before update");
-    },
-    async updateRow(_spreadsheetId, _sheetName, rowNumber, values) {
-      calls += 1;
-      if (calls === options.failOnCall) throw new Error(`update failed on call ${calls}`);
-      grid[rowNumber - 1] = [...values];
+      if (calls === options.failOnCall) throw new Error("Google Sheets append failed (429)");
+      grid.push([...row]);
+      return { rowNumber: grid.length };
     },
   };
   return { gateway, callCount: () => calls };
 }
 
-const MARKERS = STUDENTS.map((_, index) =>
-  payoutRowMarker({ anchorMonth: "2026-07", deductionId: `0000000${index}-1111-2222-3333-444455556666` }));
-
-const CLASS_STARTS = [
-  new Date("2026-07-25T09:30:00.000Z"),
-  new Date("2026-07-25T06:00:00.000Z"),
-  new Date("2026-07-24T02:00:00.000Z"),
-];
-
-/**
- * Plan every student's deduction against a freshly read grid.
- *
- * `attempted` stands in for the line state the orchestrator carries: a line the
- * database has seen fail before may reuse a blank row, a fresh one may not.
- */
-function planAll(grid: unknown[][], attempted: ReadonlySet<string> = new Set()): PayoutWritePlan[] {
-  const table = parsePayoutSheet(grid)!;
-  const claimed = new Set<number>();
-  const plans: PayoutWritePlan[] = [];
-  for (const [index, student] of STUDENTS.entries()) {
-    const action = resolvePayoutRowAction({
-      grid,
-      table,
-      marker: MARKERS[index],
-      scheduledStartAt: CLASS_STARTS[index],
-      studentNames: [student],
-      claimedAnchorRows: claimed,
-      previouslyAttempted: attempted.has(`line-${index}`),
-    });
-    if (action.kind !== "insert" && action.kind !== "reuse_blank") continue;
-    claimed.add(action.anchorRowNumber);
-    plans.push({
-      lineId: `line-${index}`,
-      deductionId: `ded-${index}`,
-      spreadsheetId: "book-1",
-      sheetName: "Payouts",
-      sheetGid: 0,
-      anchorRowNumber: action.anchorRowNumber,
-      targetRowNumber: action.rowNumber,
-      reuseBlankRow: action.kind === "reuse_blank",
-      values: buildPayoutSheetRowValues({
-        anchorRow: grid[action.anchorRowNumber - 1],
-        studentName: student,
-        amountMinor: 10_000,
-        reason: "No feedback submitted",
-        deadlineAt: null,
-        tutorSubmittedAt: null,
-        marker: MARKERS[index],
-      }),
-      marker: MARKERS[index],
-    });
-  }
-  return orderPayoutWritesBottomUp(plans);
+function planFor(grid: unknown[][], student: string, deductionId: string): MasterAppendPlan {
+  const table = parseMasterPayoutSheet(grid)!;
+  const anchor = table.rows.find((row) => row.studentName === student)!;
+  const marker = payoutRowMarker({ anchorMonth: "2026-07", deductionId });
+  return {
+    lineId: `line-${student}`,
+    deductionId,
+    marker,
+    row: buildMasterDeductionRow({ anchor, amountMinor: 10_000, marker }),
+  };
 }
 
-async function runPass(
-  grid: unknown[][],
-  options: { failOnCall?: number; throwBetween?: number; attempted?: ReadonlySet<string> } = {},
-) {
-  const plans = planAll(grid, options.attempted);
-  const { gateway } = fakeGateway(grid, options);
-  const outcomes: PayoutWriteOutcome[] = [];
-  const result = await writePayoutSheetPlans({
+async function run(grid: unknown[][], plans: MasterAppendPlan[], options: { failOnCall?: number } = {}) {
+  const { gateway, callCount } = fakeGateway(grid, options);
+  const outcomes: MasterAppendOutcome[] = [];
+  const result = await appendMasterDeductions({
     gateway,
-    plansBySheet: groupPayoutPlansBySheet(plans),
+    plans,
     onOutcome: async (outcome) => { outcomes.push(outcome); },
   });
-  return { plans, outcomes, result };
+  return { outcomes, result, callCount };
 }
 
-function deductionRows(grid: unknown[][]) {
-  return grid.filter((row) => row[4] === DEDUCTION_SESSION_NAME);
-}
+describe("appendMasterDeductions", () => {
+  it("appends one ledger row per deduction and leaves every existing row untouched", async () => {
+    const grid = ledger();
+    const before = ledger();
+    const plans = [
+      planFor(grid, "Grace Hopper", "aaaaaaaa-1111-2222-3333-444455556666"),
+      planFor(grid, "Ada Lovelace", "bbbbbbbb-1111-2222-3333-444455556666"),
+    ];
 
-describe("writePayoutSheetPlans", () => {
-  it("puts each deduction directly beneath its own class and leaves the class untouched", async () => {
-    const grid = initialGrid();
-    const before = initialGrid();
-    const { outcomes } = await runPass(grid);
+    const { outcomes } = await run(grid, plans);
 
     expect(outcomes.every((outcome) => outcome.status === "written")).toBe(true);
-    expect(deductionRows(grid)).toHaveLength(3);
-    for (let index = 0; index < STUDENTS.length; index += 1) {
-      const classRowIndex = grid.findIndex((row) => row[4] === `Class ${"ABC"[index]}`);
-      expect(grid[classRowIndex + 1][4]).toBe(DEDUCTION_SESSION_NAME);
-      expect(grid[classRowIndex + 1][5]).toBe(STUDENTS[index]);
-      expect(grid[classRowIndex + 1][6]).toBe(-100);
-      // The class row's own earnings must survive intact.
-      expect(grid[classRowIndex][6]).toBe(700);
-    }
-    // Every original row is still present and unmodified.
-    for (const row of before) {
-      expect(grid.some((candidate) => JSON.stringify(candidate) === JSON.stringify(row))).toBe(true);
-    }
+    expect(grid).toHaveLength(5);
+    // Nothing shifted: the original rows are exactly where they were.
+    before.forEach((row, index) => expect(grid[index]).toEqual(row));
+    expect(outcomes.map((outcome) => outcome.rowNumber)).toEqual([4, 5]);
+  });
+
+  it("attributes each deduction to its anchor's tutor and keeps the amount negative", async () => {
+    const grid = ledger();
+    await run(grid, [planFor(grid, "Grace Hopper", "aaaaaaaa-1111-2222-3333-444455556666")]);
+
+    const appended = grid[3];
+    expect(appended[0]).toBe(KEVIN);
+    expect(appended[2]).toBe("Grace Hopper");
+    expect(appended[7]).toBe(-100);
+    // Typed exactly like the column it joins, so QUERY cannot drop it.
+    expect(typeof appended[3]).toBe("number");
+    expect(typeof appended[4]).toBe("number");
   });
 
   it("marks the failing line and keeps going", async () => {
-    const grid = initialGrid();
-    // Calls run insert,update,insert,update,... so call 4 is the second line's
-    // update — after its row has already been inserted.
-    const { outcomes } = await runPass(grid, { failOnCall: 4 });
+    const grid = ledger();
+    const plans = [
+      planFor(grid, "Grace Hopper", "aaaaaaaa-1111-2222-3333-444455556666"),
+      planFor(grid, "Ada Lovelace", "bbbbbbbb-1111-2222-3333-444455556666"),
+    ];
 
-    expect(outcomes.filter((outcome) => outcome.status === "written")).toHaveLength(2);
-    const failed = outcomes.filter((outcome) => outcome.status === "failed");
-    expect(failed).toHaveLength(1);
-    expect(failed[0].error).toContain("update failed");
-    // The failed insert left exactly one blank row behind.
-    expect(grid.filter((row) => row.length === 0)).toHaveLength(1);
+    const { outcomes } = await run(grid, plans, { failOnCall: 1 });
+
+    expect(outcomes[0].status).toBe("failed");
+    expect(outcomes[0].error).toContain("429");
+    expect(outcomes[1].status).toBe("written");
+    // Three original rows plus the one that succeeded. The failed append left
+    // nothing behind at all — no half-written row, nothing to clean up, which
+    // is the whole reason appending beats inserting here.
+    expect(grid).toHaveLength(4);
+    expect(grid[3][2]).toBe("Ada Lovelace");
   });
 
-  it("reuses the blank row on a retry instead of inserting a second one", async () => {
-    // The single most important behaviour here: an interrupted pass must not
-    // cost the tutor two deductions for one class.
-    const grid = initialGrid();
-    await runPass(grid, { failOnCall: 4 });
-    expect(deductionRows(grid)).toHaveLength(2);
+  it("leaves a re-runnable state: the marker of a failed line is absent from the ledger", async () => {
+    const grid = ledger();
+    const plans = [planFor(grid, "Grace Hopper", "aaaaaaaa-1111-2222-3333-444455556666")];
+    await run(grid, plans, { failOnCall: 1 });
 
-    const { outcomes } = await runPass(grid, { attempted: new Set(["line-1"]) });
+    const markers = collectMasterMarkers(parseMasterPayoutSheet(grid)!);
+    expect(markers.has(plans[0].marker)).toBe(false);
 
-    expect(outcomes.every((outcome) => outcome.status === "written")).toBe(true);
-    expect(deductionRows(grid)).toHaveLength(3);
-    expect(grid.filter((row) => row.length === 0)).toHaveLength(0);
-  });
-
-  it("recovers when the process dies between the insert and the update", async () => {
-    const grid = initialGrid();
-    await runPass(grid, { throwBetween: 1 });
-    expect(grid.filter((row) => row.length === 0)).toHaveLength(1);
-
-    const { outcomes } = await runPass(grid, { attempted: new Set(["line-2"]) });
-
-    expect(outcomes.every((outcome) => outcome.status === "written")).toBe(true);
-    expect(deductionRows(grid)).toHaveLength(3);
-  });
-
-  it("writes nothing on a second pass over a finished sheet", async () => {
-    const grid = initialGrid();
-    await runPass(grid);
-
-    const { plans, outcomes } = await runPass(grid);
-
-    expect(plans).toHaveLength(0);
-    expect(outcomes).toHaveLength(0);
-    expect(deductionRows(grid)).toHaveLength(3);
+    // Re-running writes it, and the marker is then findable.
+    await run(grid, plans);
+    expect(collectMasterMarkers(parseMasterPayoutSheet(grid)!).has(plans[0].marker)).toBe(true);
   });
 
   it("persists each outcome as it happens rather than at the end", async () => {
-    const grid = initialGrid();
-    const plans = planAll(grid);
-    const { gateway } = fakeGateway(grid);
+    const grid = ledger();
+    const plans = [
+      planFor(grid, "Grace Hopper", "aaaaaaaa-1111-2222-3333-444455556666"),
+      planFor(grid, "Ada Lovelace", "bbbbbbbb-1111-2222-3333-444455556666"),
+    ];
     const seen: string[] = [];
-    await writePayoutSheetPlans({
+    const { gateway } = fakeGateway(grid);
+    await appendMasterDeductions({
       gateway,
-      plansBySheet: groupPayoutPlansBySheet(plans),
-      onOutcome: async (outcome) => { seen.push(outcome.lineId); },
+      plans,
+      onOutcome: async (outcome) => { seen.push(`${outcome.lineId}:${outcome.status}`); },
     });
-    // A crash after the second line must leave the first two recorded.
-    expect(seen).toHaveLength(3);
+    // A crash after the first append must leave the first line recorded.
+    expect(seen).toEqual(["line-Grace Hopper:written", "line-Ada Lovelace:written"]);
   });
 
-  it("stops cleanly at its deadline and reports it", async () => {
-    const grid = initialGrid();
-    const plans = planAll(grid);
+  it("stops cleanly at its deadline without spending a call on the rest", async () => {
+    const grid = ledger();
+    const plans = [
+      planFor(grid, "Grace Hopper", "aaaaaaaa-1111-2222-3333-444455556666"),
+      planFor(grid, "Ada Lovelace", "bbbbbbbb-1111-2222-3333-444455556666"),
+    ];
     const { gateway, callCount } = fakeGateway(grid);
     let ticks = 0;
-    const result = await writePayoutSheetPlans({
+    const result = await appendMasterDeductions({
       gateway,
-      plansBySheet: groupPayoutPlansBySheet(plans),
+      plans,
       onOutcome: async () => undefined,
       deadlineAt: 100,
-      // First check is inside the budget, the next is past it.
       clock: () => (ticks++ === 0 ? 0 : 1_000),
     });
 
     expect(result.stoppedEarly).toBe(true);
     expect(result.outcomes).toHaveLength(1);
-    // The unwritten lines cost no Google calls at all.
-    expect(callCount()).toBe(2);
-  });
-
-  it("skips the insert for a plan that is reusing a blank row", async () => {
-    const grid = initialGrid();
-    grid.splice(3, 0, []);
-    const plans = planAll(grid, new Set(["line-1"]));
-    expect(plans.some((plan) => plan.reuseBlankRow)).toBe(true);
-
-    const inserted: number[] = [];
-    const { gateway } = fakeGateway(grid);
-    const spy: PayoutSheetGateway = {
-      ...gateway,
-      insertRow: async (spreadsheetId, sheetGid, afterRowNumber) => {
-        inserted.push(afterRowNumber);
-        return gateway.insertRow(spreadsheetId, sheetGid, afterRowNumber);
-      },
-    };
-    await writePayoutSheetPlans({
-      gateway: spy,
-      plansBySheet: groupPayoutPlansBySheet(plans),
-      onOutcome: async () => undefined,
-    });
-
-    expect(inserted).toHaveLength(plans.length - 1);
+    expect(callCount()).toBe(1);
   });
 });
 

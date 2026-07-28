@@ -21,3 +21,18 @@ export function payoutConnectedEmail(): string {
 export function payoutCsvFilename(windowStart: string, windowEnd: string): string {
   return `deductions-${windowStart}_${windowEnd}.csv`;
 }
+
+// ── The master payout ledger ────────────────────────────────────────────
+//
+// Deductions are appended here, not to a tutor's workbook: that workbook is a
+// `QUERY(IMPORTRANGE(...))` view over this tab, and writing into an array
+// formula's output breaks it. One row here reaches every view that filters on
+// its Teacher name.
+
+export const PAYOUT_MASTER_SPREADSHEET_ID =
+  process.env.POST_CLASS_PAYOUT_MASTER_SPREADSHEET_ID?.trim() ||
+  "16HG_gVjdqVbo_A-xcQB5aCZeK21Ema4Xr4YZFHldHJg";
+
+export const PAYOUT_MASTER_SHEET_NAME =
+  process.env.POST_CLASS_PAYOUT_MASTER_SHEET_NAME?.trim() ||
+  "Begifted Payouts Detailed";

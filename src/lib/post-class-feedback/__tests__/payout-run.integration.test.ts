@@ -1,10 +1,9 @@
 /**
  * Publishing a payout run, end to end, against real Postgres and a fake sheet.
  *
- * The fake gateway holds a real grid and really splices on insert, so row
- * numbers shift exactly as they do in Sheets. What is being pinned here is the
- * property that matters most: pressing Publish twice must not pay a tutor
- * twice.
+ * The fake gateway holds a real ledger that really grows on append. What is
+ * being pinned here is the property that matters most: pressing Publish twice
+ * must not pay a tutor twice.
  *
  * `npm run test:integration` (Docker), or point at a scratch database with
  * TEST_DATABASE_URL.
@@ -17,9 +16,9 @@ vi.mock("server-only", () => ({}));
 import { eq } from "drizzle-orm";
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
 import { publishPayoutRun, previewPayoutRun } from "@/lib/post-class-feedback/payout-run";
-import { upsertTutorPayoutSheet } from "@/lib/post-class-feedback/payout-repository";
-import { DEDUCTION_SESSION_NAME } from "@/lib/post-class-feedback/payout-sheet";
-import type { PayoutSheetGateway } from "@/lib/post-class-feedback/payout-writer";
+import { upsertPayoutTutorName } from "@/lib/post-class-feedback/payout-repository";
+import { DEDUCTION_SESSION_NAME } from "@/lib/post-class-feedback/payout-master";
+import type { MasterLedgerGateway } from "@/lib/post-class-feedback/payout-writer";
 import type { PostClassUser } from "@/lib/post-class-feedback/access";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -56,37 +55,40 @@ function timeSerial(hours: number, minutes: number): number {
   return (hours * 60 + minutes) / 1440;
 }
 
-const HEADER = ["Date", "Time", "Duration", "Credits deducted", "Session name", "Student name", "Payout amount", "Notes"];
+const HEADER = [
+  "Teacher name", "Session name", "Course name",
+  "Date", "Time", "Duration", "Credits deducted", "Payout amount",
+];
+const KEVIN = "Kevin (Kev) Y. Hsieh";
+const KEVIN_ONLINE = "Kevin (Kev) Y. Hsieh Online";
+const MIMI = "Mimi (Mimi) Somebody";
 
+/** The shared ledger: every tutor's rows in one tab. */
 function sheetGrid(): unknown[][] {
   return [
-    ["TUTOR", "Kevin"],
-    ["START DATE", "26 Jun 2026"],
-    ["END DATE", "25 Jul 2026"],
-    [],
     [...HEADER],
-    [dateSerial("2026-07-10"), timeSerial(3, 0), "60 mins", 1, "Math", "Grace Hopper", 700, ""],
-    [dateSerial("2026-07-11"), timeSerial(3, 0), "60 mins", 1, "Math", "Ada Lovelace", 700, ""],
+    [MIMI, "Online Session - Math", "Someone Else", dateSerial("2026-07-10"), timeSerial(3, 0), "60 mins", 1, 700],
+    [KEVIN, "On-site Session - Math", "Grace Hopper", dateSerial("2026-07-10"), timeSerial(3, 0), "60 mins", 1, 700],
+    [KEVIN_ONLINE, "Online Session - Math", "Ada Lovelace", dateSerial("2026-07-11"), timeSerial(3, 0), "60 mins", 1, 700],
   ];
 }
 
-function fakeGateway(grid: unknown[][], options: { failInsertAt?: number } = {}) {
+function fakeGateway(grid: unknown[][], options: { failAppendAt?: number } = {}) {
   const calls: string[] = [];
-  const gateway: PayoutSheetGateway = {
+  let appends = 0;
+  const gateway: MasterLedgerGateway = {
     async readGrid() {
       calls.push("read");
       return grid.map((row) => [...row]);
     },
-    async insertRow(_spreadsheetId, _sheetGid, afterRowNumber) {
-      calls.push(`insert@${afterRowNumber}`);
-      if (calls.filter((entry) => entry.startsWith("insert")).length === options.failInsertAt) {
-        throw new Error("Google Sheets batch update failed (429)");
+    async appendRow(row) {
+      appends += 1;
+      calls.push(`append#${appends}`);
+      if (appends === options.failAppendAt) {
+        throw new Error("Google Sheets append failed (429)");
       }
-      grid.splice(afterRowNumber, 0, []);
-    },
-    async updateRow(_spreadsheetId, _sheetName, rowNumber, values) {
-      calls.push(`update@${rowNumber}`);
-      grid[rowNumber - 1] = [...values];
+      grid.push([...row]);
+      return { rowNumber: grid.length };
     },
   };
   return { gateway, calls };
@@ -138,24 +140,24 @@ async function seedTwoDeductionsAndMapping(): Promise<void> {
     tutorKey: "kevin",
     student: "Ada Lovelace",
   });
-  await upsertTutorPayoutSheet(appDb(), {
+  await upsertPayoutTutorName(appDb(), {
     canonicalKey: "kevin",
-    spreadsheetId: "book-1",
-    sheetName: "Kevin",
-    sheetGid: 0,
+    onsiteName: KEVIN,
+    onlineName: KEVIN_ONLINE,
     active: true,
     updatedByEmail: "admin@example.com",
   });
 }
 
 function deductionRows(grid: unknown[][]) {
-  return grid.filter((row) => row[4] === DEDUCTION_SESSION_NAME);
+  // Session name is column B in the ledger, and carries the marker after it.
+  return grid.filter((row) => String(row[1] ?? "").startsWith(DEDUCTION_SESSION_NAME));
 }
 
 const uploadOk = async () => ({ fileId: "file-1", webViewLink: "https://drive/file-1", name: "x.csv" });
 
 describe("publishPayoutRun", () => {
-  it("writes one deduction row beneath each matched class and publishes the run", async () => {
+  it("appends one ledger row per deduction and publishes the run", async () => {
     await seedTwoDeductionsAndMapping();
     const grid = sheetGrid();
     const { gateway } = fakeGateway(grid);
@@ -174,11 +176,13 @@ describe("publishPayoutRun", () => {
     expect(view.lines.every((line) => line.writeStatus === "written")).toBe(true);
     expect(deductionRows(grid)).toHaveLength(2);
     for (const row of deductionRows(grid)) {
-      expect(row[6]).toBe(-100);
-      expect(String(row[7])).toContain("BGS-PAYOUT 2026-07");
+      expect(row[7]).toBe(-100);
+      expect(String(row[1])).toContain("BGS-PAYOUT 2026-07");
+      // Attributed to one of this tutor's ledger identities, never another's.
+      expect([KEVIN, KEVIN_ONLINE]).toContain(row[0]);
     }
-    // The classes keep their own earnings.
-    expect(grid.filter((row) => row[6] === 700)).toHaveLength(2);
+    // Every original class row keeps its own earnings, and nothing shifted.
+    expect(grid.filter((row) => row[7] === 700)).toHaveLength(3);
   });
 
   it("writes nothing on a second publish", async () => {
@@ -201,8 +205,8 @@ describe("publishPayoutRun", () => {
     );
 
     expect(deductionRows(grid)).toHaveLength(2);
-    expect(second.calls.some((call) => call.startsWith("insert"))).toBe(false);
-    expect(second.calls.some((call) => call.startsWith("update"))).toBe(false);
+    expect(second.calls.some((call) => call.startsWith("append"))).toBe(false);
+    expect(second.calls.includes("append#1")).toBe(false);
     expect(view.lines.every((line) => line.writeStatus === "written")).toBe(true);
   });
 
@@ -213,7 +217,7 @@ describe("publishPayoutRun", () => {
       ACTOR,
       { anchorMonth: "2026-07", expectedVersion: 1 },
       appDb(),
-      { gateway: fakeGateway(grid, { failInsertAt: 1 }).gateway, uploadCsv: uploadOk },
+      { gateway: fakeGateway(grid, { failAppendAt: 1 }).gateway, uploadCsv: uploadOk },
     );
     expect(first.lines.filter((line) => line.writeStatus === "failed")).toHaveLength(1);
     expect(deductionRows(grid)).toHaveLength(1);
@@ -229,7 +233,7 @@ describe("publishPayoutRun", () => {
     expect(deductionRows(grid)).toHaveLength(2);
   });
 
-  it("skips a tutor with no mapped sheet instead of guessing a destination", async () => {
+  it("skips a tutor with no mapped ledger identity instead of guessing one", async () => {
     await seedDeduction({
       wiseSessionId: "s-unmapped",
       endsAt: "2026-07-10T03:00:00.000Z",
@@ -247,15 +251,16 @@ describe("publishPayoutRun", () => {
 
     expect(view.lines[0].matchStatus).toBe("no_sheet");
     expect(view.lines[0].writeStatus).toBe("skipped");
-    expect(view.lines[0].writeError).toContain("No payout sheet is mapped for mimi");
+    expect(view.lines[0].writeError).toContain("No ledger name is mapped for mimi");
     expect(deductionRows(grid)).toHaveLength(0);
   });
 
-  it("refuses a sheet that has been re-pointed to another month", async () => {
+  it("refuses a ledger whose columns have moved", async () => {
+    // A reordered re-paste must be detected, not appended to under the wrong
+    // headings — that is how a deduction ends up in the wrong column entirely.
     await seedTwoDeductionsAndMapping();
     const grid = sheetGrid();
-    grid[1] = ["START DATE", "26 Jul 2026"];
-    grid[2] = ["END DATE", "25 Aug 2026"];
+    grid[0] = ["Date", "Teacher name", "Session name", "Course name", "Time", "Duration", "Credits deducted", "Payout amount"];
 
     const view = await publishPayoutRun(
       ACTOR,
@@ -265,7 +270,7 @@ describe("publishPayoutRun", () => {
     );
 
     expect(view.lines.every((line) => line.writeStatus === "skipped")).toBe(true);
-    expect(view.lines[0].writeError).toContain("2026-07-26");
+    expect(view.lines[0].writeError).toContain("columns are not where they are expected");
     expect(deductionRows(grid)).toHaveLength(0);
   });
 
@@ -276,11 +281,10 @@ describe("publishPayoutRun", () => {
       tutorKey: "kevin",
       student: "Nobody At All",
     });
-    await upsertTutorPayoutSheet(appDb(), {
+    await upsertPayoutTutorName(appDb(), {
       canonicalKey: "kevin",
-      spreadsheetId: "book-1",
-      sheetName: "Kevin",
-      sheetGid: 0,
+      onsiteName: KEVIN,
+      onlineName: KEVIN_ONLINE,
       active: true,
       updatedByEmail: "admin@example.com",
     });
@@ -378,6 +382,6 @@ describe("publishPayoutRun", () => {
 
     expect(view.lines).toHaveLength(1);
     expect(deductionRows(grid)).toHaveLength(1);
-    expect(String(deductionRows(grid)[0][5])).toBe("Grace Hopper");
+    expect(String(deductionRows(grid)[0][2])).toBe("Grace Hopper");
   });
 });
