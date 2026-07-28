@@ -414,6 +414,13 @@
       "when": 1784814725290,
       "tag": "0058_post_class_source_status_restore",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1784814726290,
+      "tag": "0059_post_class_payout_master",
+      "breakpoints": true
     }
   ]
 }

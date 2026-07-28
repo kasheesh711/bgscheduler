@@ -3629,8 +3629,32 @@ export const postClassPayoutRuns = pgTable("post_class_payout_runs", {
 ]);
 
 /**
- * Explicit tutor → payout spreadsheet mapping. An unmapped tutor is an
- * exception the publish run reports; it never guesses at a destination.
+ * Tutor → the exact identity strings the master payout ledger uses.
+ *
+ * A tutor's own workbook is a `QUERY(IMPORTRANGE(...))` view filtered on these
+ * strings, so a deduction only reaches them if its ledger row carries one
+ * verbatim. They are copied from the ledger, never constructed — an
+ * approximation produces a row that belongs to nobody.
+ */
+export const postClassPayoutTutorNames = pgTable("post_class_payout_tutor_names", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  canonicalKey: text("canonical_key").notNull(),
+  onsiteName: text("onsite_name").notNull(),
+  /** The " Online" twin, when the tutor has one. */
+  onlineName: text("online_name"),
+  active: boolean("active").notNull().default(true),
+  updatedByEmail: text("updated_by_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_payout_tutor_names_key_idx").on(table.canonicalKey),
+  uniqueIndex("pc_payout_tutor_names_onsite_idx").on(table.onsiteName),
+]);
+
+/**
+ * Superseded by `postClassPayoutTutorNames`. Deductions append to the shared
+ * master ledger, so there is no per-tutor spreadsheet to address. Retained only
+ * because migration 0057 created it; nothing reads or writes it.
  */
 export const postClassTutorPayoutSheets = pgTable("post_class_tutor_payout_sheets", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -3676,6 +3700,18 @@ export const postClassPayoutRunLines = pgTable("post_class_payout_run_lines", {
   writeStatus: postClassPayoutWriteStatusEnum("write_status").notNull().default("pending"),
   writeError: text("write_error"),
   writtenAt: timestamp("written_at", { withTimezone: true }),
+  /** 1-based row the append landed on in the master ledger. */
+  masterRowNumber: integer("master_row_number"),
+  /**
+   * Consecutive reconcile passes that could not find this line's marker in the
+   * ledger. One miss is never enough to re-append — a scan can race the
+   * ledger's own refresh — so re-appending requires two, and the decision is
+   * taken under the finance lock rather than by the scan.
+   */
+  markerMissCount: integer("marker_miss_count").notNull().default(0),
+  lastSeenInMasterAt: timestamp("last_seen_in_master_at", { withTimezone: true }),
+  /** Times this line has been re-appended. Above 3 raises an issue instead. */
+  reappendCount: integer("reappend_count").notNull().default(0),
   idempotencyKey: text("idempotency_key").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

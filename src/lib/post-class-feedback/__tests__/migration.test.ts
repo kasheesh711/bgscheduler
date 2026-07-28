@@ -13,6 +13,10 @@ const restoreMigration = readFileSync(
   new URL("../../../../drizzle/0058_post_class_source_status_restore.sql", import.meta.url),
   "utf8",
 );
+const masterMigration = readFileSync(
+  new URL("../../../../drizzle/0059_post_class_payout_master.sql", import.meta.url),
+  "utf8",
+);
 const journal = JSON.parse(readFileSync(
   new URL("../../../../drizzle/meta/_journal.json", import.meta.url),
   "utf8",
@@ -196,6 +200,41 @@ describe("source status restore migration", () => {
     expect(journal.entries.find((entry) => entry.idx === 58)).toMatchObject({
       idx: 58,
       tag: "0058_post_class_source_status_restore",
+    });
+  });
+});
+
+describe("payout master ledger migration", () => {
+  it("stores the two exact ledger identity strings per tutor", () => {
+    expect(masterMigration).toContain('CREATE TABLE IF NOT EXISTS "post_class_payout_tutor_names"');
+    expect(masterMigration).toContain('"onsite_name" text NOT NULL');
+    expect(masterMigration).toContain('"online_name" text');
+    // One tutor per key, and one tutor per ledger name — a name claimed twice
+    // would send one tutor's deduction into another's view.
+    expect(masterMigration).toMatch(/CREATE UNIQUE INDEX[^;]*"canonical_key"/);
+    expect(masterMigration).toMatch(/CREATE UNIQUE INDEX[^;]*"onsite_name"/);
+  });
+
+  it("adds the reconcile bookkeeping a re-appended row needs", () => {
+    for (const column of ["marker_miss_count", "last_seen_in_master_at", "reappend_count", "master_row_number"]) {
+      expect(masterMigration).toContain(`ADD COLUMN IF NOT EXISTS "${column}"`);
+    }
+    // Counters must start at zero, or the first reconcile pass could read a
+    // null as a miss and re-append a deduction that is already present.
+    expect(masterMigration).toContain('"marker_miss_count" integer DEFAULT 0 NOT NULL');
+    expect(masterMigration).toContain('"reappend_count" integer DEFAULT 0 NOT NULL');
+  });
+
+  it("touches no existing data", () => {
+    expect(masterMigration).not.toMatch(/\bUPDATE\b/);
+    expect(masterMigration).not.toMatch(/\bDELETE\b/);
+    expect(masterMigration).not.toMatch(/DROP (TABLE|COLUMN)/);
+  });
+
+  it("is registered in the journal", () => {
+    expect(journal.entries.find((entry) => entry.idx === 59)).toMatchObject({
+      idx: 59,
+      tag: "0059_post_class_payout_master",
     });
   });
 });
