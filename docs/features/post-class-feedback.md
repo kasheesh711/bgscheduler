@@ -194,7 +194,9 @@ The processed deduction row and the append-only action/offset ledgers are protec
 
 ## Payout runs
 
-**Status: built, never yet run in production.** It cannot be until enforcement is `live` — in `shadow` no deduction rows exist at all — the payout Google account has granted Drive access, and migrations `0057`/`0058` are applied.
+**Status: built, never yet run in production.** It cannot be until enforcement is `live` — in `shadow` no deduction rows exist at all — and migrations `0057`/`0058` are applied.
+
+Google access is settled. Verified 2026-07-28: `kevhsh7@gmail.com` holds both the Sheets write scope and `drive.file`, and **`drive.file` can create a file inside the payout folder even though the app did not create that folder** — the open question PR #46 shipped ahead of the publish service to answer. The broader `drive` scope is therefore not needed, which matters because it is *restricted* and would require Google verification plus an annual security assessment on an External consent screen. Enabling the Drive API on the Cloud project behind `AUTH_GOOGLE_ID` was a separate prerequisite from granting the scope, and failed with a message about the project rather than about permissions.
 
 Tutor pay runs on a **26th-to-25th** window, not a calendar month. A run anchored to `2026-07` covers 26 June through 25 July inclusive. Finance periods stay calendar months and continue to gate approval and month close; a payout run is a separate selection and export window layered on top, so one run legitimately spans two finance months.
 
@@ -307,7 +309,9 @@ After deploying the code and applying `0055_post_class_feedback.sql`, Kevin shou
 ### Additional steps before the first payout run
 
 7. Apply `0057_post_class_payout_runs.sql` and `0058_post_class_source_status_restore.sql`.
-8. Sign in as the payout Google account and use **Reconnect Google** in the workspace header to grant `drive.file`, then confirm with `npx tsx scripts/verify-drive-upload.ts` that it can create a file in the payout Drive folder. If that returns 404 the folder is not visible to the account — share it as an Editor.
+8. ~~Grant `drive.file` and prove it can write to the payout folder.~~ **Done 2026-07-28.** To re-verify after a credential or folder change:
+   `npx tsx --tsconfig scripts/tsconfig.json scripts/verify-drive-upload.ts`.
+   The three failures it distinguishes: the Drive API being disabled on the Cloud project (a project setting, not a permission); 404, meaning the account cannot see the folder, since Drive reports invisibility as absence; and a missing scope, needing re-consent via **Reconnect Google** in the workspace header.
 9. Map each tutor to their payout spreadsheet and tab via `POST /api/post-class-feedback/payout-sheets`. An unmapped tutor is skipped, never guessed.
 10. Let reconciliation converge over the target window — the publish gate refuses a window where more than 2% of eligible sessions have no trustworthy Wise evidence.
 11. Run `scripts/verify-payout-sheet-write.ts`-style verification against a **scratch copy** of a real payout sheet before the first live publish, to confirm that `insertDimension` with `inheritFromBefore` does not disturb formulas beyond column H or a totals range.

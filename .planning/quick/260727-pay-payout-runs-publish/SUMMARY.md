@@ -68,8 +68,11 @@ escape hatch (Docker daemon was down).
 
 ## Not done — owner gates
 
-1. Consent `drive.file` and run the probe. If it 404s the CSV-to-Drive path
-   needs its fallback.
+1. ~~Consent `drive.file` and run the probe.~~ **Cleared 2026-07-28.** `drive.file`
+   granted to kevhsh7@gmail.com, and it can create a file in a folder the app
+   does not own — so no fallback is needed and the broader `drive` scope stays
+   off the table. Enabling the Drive API on the Cloud project was a separate
+   prerequisite that the plan had not identified.
 2. Apply `0057` and `0058` to production.
 3. Flip enforcement `shadow` -> `live`.
 4. Map tutors to payout spreadsheets via `POST /api/post-class-feedback/payout-sheets`.
