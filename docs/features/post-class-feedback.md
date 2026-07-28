@@ -202,6 +202,13 @@ Tutor pay runs on a **26th-to-25th** window, not a calendar month. A run anchore
 
 A run selects **only `approved` deductions** whose session ended inside its window. `pending_review` has had no human decision. `waived` is a decision not to deduct. A reversed deduction is excluded by the presence of its offset row, not by its `status` column — the reverse action never updates that column, so it still reads `processed` afterwards.
 
+> **⚠️ The write path below is superseded and must not be implemented as written.**
+> Verified against the real sheets on 2026-07-29: a tutor's `Payouts` tab is not
+> data, it is a single `QUERY(IMPORTRANGE(...))` array formula in cell `A9`
+> filtered by the tutor's two identity strings and the date range. Inserting a
+> row into it would break the array to `#REF!` and destroy that tutor's payout
+> view. See **Where deductions actually go** below.
+
 Publishing does two things, in this order:
 
 1. Inserts one `Feedback deduction` row directly beneath each matched class row in the tutor's payout spreadsheet, carrying `-฿100`, the student, the reason, the deadline, and whether a tutor submission was ever observed.
@@ -215,6 +222,49 @@ Publishing does two things, in this order:
 - **The tutor → spreadsheet mapping is explicit and managed.** An unmapped tutor is an exception, never a guess.
 - **A sheet that declares a different window is refused**, because the mapping has no month dimension and may have been re-pointed since.
 - **Publishing does not mark deductions `processed`.** That stays a separate decision: `process` requires the deduction's assigned finance month to be open, a 26→25 run spans two months, and June cannot close until exactly these deductions are processed — coupling them would make a routine payout a circular blocker.
+
+### Where deductions actually go
+
+The per-tutor workbook is a **view**. The real store is a separate master
+workbook, `Begifted Payouts` → tab `Begifted Payouts Detailed`
+(`16HG_gVjdqVbo_A-xcQB5aCZeK21Ema4Xr4YZFHldHJg`, gid 110616983): ~8,278 literal
+rows covering every tutor. Each tutor's sheet re-queries it live, so a row
+appended to the master appears in that tutor's view and in their
+`TOTAL PAYOUTS` — itself a formula over the same range — with no further write.
+
+Its columns are **not** the ones the per-tutor view shows:
+
+| | A | B | C | D | E | F | G | H |
+|---|---|---|---|---|---|---|---|---|
+| Master | Teacher name | Session name | *Course name* | Date | Time | Duration | Credits deducted | Payout amount |
+
+Two traps. `Course name` actually holds the **student** name — the header is
+mislabelled. And `Date`/`Time` are **strings** (`"2026-07-29"`, `"12:00"`), not
+Google serials, so `serialToUtc` does not apply to this tab even though it does
+apply to the per-tutor view.
+
+Consequences for the design:
+
+- The write is an **append**, not an insert beneath a matched class row. That
+  removes `insertDimension`, bottom-up ordering, and blank-row recovery — the
+  three riskiest parts of the original plan — because nothing shifts and no
+  formula is disturbed.
+- There is **one** write target, so the per-tutor `post_class_tutor_payout_sheets`
+  mapping is the wrong shape. What is needed is tutor → the two `Teacher name`
+  strings the master uses (onsite and ` Online`), since that is what the view
+  filters on.
+- **The master is periodically refreshed by re-pasting an export.** Appended
+  deduction rows do not survive that. The database is the system of record, so
+  a refresh means the sheet has drifted from the ledger, and re-asserting it is
+  the same operation as publishing: a reconcile pass re-reads the master, finds
+  lines marked `written` whose marker is gone, returns them to `pending`, and
+  the next publish re-appends them. Without that pass a refresh silently
+  reverts every deduction with no error anywhere.
+- The marker therefore belongs **inside the Session name cell**
+  (`Feedback deduction · BGS-PAYOUT 2026-07 3f1c9a2b`) rather than a trailing
+  notes column: the master has no notes column, the view only imports `A2:H`,
+  and a marker outside that range would be invisible to the very query that has
+  to find it again.
 
 ### Pressing Publish twice is safe
 
