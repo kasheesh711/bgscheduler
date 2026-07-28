@@ -13,8 +13,17 @@
  * The connected account must have signed in since `drive.file` was added to
  * the sign-in scope, or there is no Drive-capable token to use.
  *
- *   npx tsx scripts/verify-drive-upload.ts
- *   npx tsx scripts/verify-drive-upload.ts --folder-id <id> --email <address>
+ *   npx tsx --tsconfig scripts/tsconfig.json scripts/verify-drive-upload.ts
+ *   npx tsx --tsconfig scripts/tsconfig.json scripts/verify-drive-upload.ts \
+ *     --folder-id <id> --email <address>
+ *
+ * The `--tsconfig` flag is required: `drive.ts` declares itself `server-only`,
+ * which Next resolves during its own build but plain `tsx` cannot. The scripts
+ * tsconfig maps that import to an empty stub. See `scripts/stubs/server-only.ts`
+ * for why the mapping is not in the root tsconfig.
+ *
+ * Reads DATABASE_URL and AUTH_SECRET from `.env.local` — a git worktree does not
+ * inherit it, so copy it in if this is a fresh worktree.
  *
  * Creates one small file in the target folder. Delete it afterwards.
  */
@@ -91,8 +100,13 @@ async function main(): Promise<void> {
     console.error("FAIL — the upload was refused.");
     console.error(error instanceof Error ? error.message : String(error));
     console.error(
-      "\nIf this is a 404, the connected account cannot see the folder."
-      + "\nShare it with that account as an Editor and retry before building on this path.",
+      "\nWhat the three known failures mean:"
+      + "\n  · 'has not been used in project' / 'is disabled' — the Drive API is off"
+      + "\n    for the Cloud project behind AUTH_GOOGLE_ID. Enable it in the console"
+      + "\n    and wait a minute. Nothing to do with scopes or the folder."
+      + "\n  · 404 — the connected account cannot SEE the folder. Drive hides what you"
+      + "\n    cannot access, so this is a permissions problem: share it as an Editor."
+      + "\n  · 403 insufficient permissions — the scope is missing; re-consent.",
     );
     process.exit(1);
   }
