@@ -211,11 +211,18 @@ export function PostClassFeedbackWorkspace() {
             <RefreshCw className={cn(refreshing && "animate-spin")} />
             {refreshing ? "Refreshing…" : "Refresh"}
           </Button>
-          {payload?.payoutGoogle && !payload.payoutGoogle.driveReady ? (
+          {payload?.payoutGoogle
+          && (!payload.payoutGoogle.driveReady || !payload.payoutGoogle.sheetsWriteReady) ? (
             <Button
               variant="outline"
               className="border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
-              title={`${payload.payoutGoogle.connectedEmail} has not granted Drive access. Payout CSV upload will fail until it does.`}
+              title={`${payload.payoutGoogle.connectedEmail} is missing ${
+                !payload.payoutGoogle.sheetsWriteReady && !payload.payoutGoogle.driveReady
+                  ? "Sheets write and Drive access"
+                  : !payload.payoutGoogle.sheetsWriteReady
+                    ? "Sheets write access"
+                    : "Drive access"
+              }. Payout publishing will stay unavailable until Google is reconnected.`}
               onClick={() => signIn("google", { callbackUrl: "/post-class-feedback" }, {
                 prompt: "consent",
                 access_type: "offline",

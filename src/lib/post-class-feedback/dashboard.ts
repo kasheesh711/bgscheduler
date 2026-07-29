@@ -301,6 +301,18 @@ export async function getPostClassFeedbackDashboard(
         .groupBy(schema.wiseActivityEvents.sessionId)
       : Promise.resolve([]),
   ]);
+  const deductionIds = deductionRows.map(({ deduction }) => deduction.id);
+  const writtenPayoutLines = deductionIds.length > 0
+    ? await db.selectDistinct({
+      deductionId: schema.postClassPayoutRunLines.deductionId,
+    }).from(schema.postClassPayoutRunLines).where(and(
+      inArray(schema.postClassPayoutRunLines.deductionId, deductionIds),
+      eq(schema.postClassPayoutRunLines.writeStatus, "written"),
+    ))
+    : [];
+  const writtenPayoutDeductionIds = new Set(
+    writtenPayoutLines.map((line) => line.deductionId),
+  );
 
   const tutorSubmittedByWiseSession = new Map<string, Date>();
   for (const row of tutorSubmissionRows) {
@@ -550,6 +562,7 @@ export async function getPostClassFeedbackDashboard(
       ].filter(Boolean).join(" · "),
       amount: deduction.amountMinor / 100,
       status: offset ? "reversed" as const : deduction.status,
+      payoutVerifiedWritten: writtenPayoutDeductionIds.has(deduction.id),
       processingMonth: offset
         ? periodById.get(offset.financePeriodId)?.month.slice(0, 7) ?? deduction.defaultFinanceMonth.slice(0, 7)
         : processingMonth?.slice(0, 7) ?? deduction.defaultFinanceMonth.slice(0, 7),

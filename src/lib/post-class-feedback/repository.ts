@@ -22,6 +22,7 @@ import * as schema from "@/lib/db/schema";
 import type { WiseSessionDetail } from "@/lib/wise/types";
 import { getWiseSessionTeacherUserId, getWiseUserId } from "@/lib/wise/types";
 import { toFeedbackEventEvidence } from "./events";
+import { lockPostClassFinance } from "./finance-lock";
 import { assessFeedbackContent, calculateFeedbackDeadline } from "./policy";
 import { DEFAULT_FEEDBACK_FIELD_MAPPINGS } from "./wise";
 
@@ -181,9 +182,16 @@ const CANONICAL_RECHECK_FRESHNESS_MS = 6 * 60 * 60 * 1000;
 const TERMINAL_INELIGIBLE_RECHECK_FRESHNESS_MS = 24 * 60 * 60 * 1000;
 
 export class PostClassFeedbackSyncAlreadyRunningError extends Error {
-  constructor() {
-    super("Post-class feedback sync is already running.");
+  constructor(message = "Post-class feedback sync is already running.") {
+    super(message);
     this.name = "PostClassFeedbackSyncAlreadyRunningError";
+  }
+}
+
+export class PostClassFeedbackSyncSourceFenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PostClassFeedbackSyncSourceFenceError";
   }
 }
 
@@ -194,6 +202,39 @@ export class PostClassPolicySnapshotConflictError extends Error {
   ) {
     super("Post-class feedback configuration changed during collection.");
     this.name = "PostClassPolicySnapshotConflictError";
+  }
+}
+
+/**
+ * A collector may persist source truth only while its durable run still owns
+ * the source-write lane. This rejects a zombie worker after stale-run recovery
+ * and extends the payout lease's source freeze across external Google writes.
+ */
+async function assertPostClassSyncSourceWriteFence(
+  db: Database,
+  runId: string,
+  now = new Date(),
+): Promise<void> {
+  const [run] = await db.select({
+    status: schema.postClassSyncRuns.status,
+  }).from(schema.postClassSyncRuns)
+    .where(eq(schema.postClassSyncRuns.id, runId))
+    .limit(1);
+  if (run?.status !== "running") {
+    throw new PostClassFeedbackSyncSourceFenceError(
+      "This post-class feedback sync no longer owns its running source-write lane.",
+    );
+  }
+  const [activePayout] = await db.select({
+    id: schema.postClassPayoutRuns.id,
+  }).from(schema.postClassPayoutRuns).where(and(
+    isNotNull(schema.postClassPayoutRuns.leaseToken),
+    gt(schema.postClassPayoutRuns.leaseExpiresAt, now),
+  )).limit(1);
+  if (activePayout) {
+    throw new PostClassFeedbackSyncSourceFenceError(
+      "Source persistence is deferred while a payout operation holds a live lease.",
+    );
   }
 }
 
@@ -540,28 +581,54 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
   constructor(private readonly db: Database) {}
 
   async beginSync(input: BeginPostClassSyncInput): Promise<string> {
-    await this.db
-      .update(schema.postClassSyncRuns)
-      .set({
-        status: "failed",
-        finishedAt: input.startedAt,
-        errorSummary: "Marked failed after remaining in running state for more than 20 minutes.",
-      })
-      .where(and(
-        eq(schema.postClassSyncRuns.status, "running"),
-        lte(schema.postClassSyncRuns.startedAt, new Date(input.startedAt.getTime() - STALE_RUNNING_MS)),
-      ));
     try {
-      const [run] = await this.db.insert(schema.postClassSyncRuns).values({
-        status: "running",
-        triggerType: input.triggerType,
-        actorEmail: input.actorEmail,
-        startedAt: input.startedAt,
-        windowStart: input.windowStart,
-        windowEnd: input.windowEnd,
-        detailCap: input.detailCap,
-      }).returning({ id: schema.postClassSyncRuns.id });
-      return run.id;
+      const runId = await withPostClassTransaction(this.db, async (tx) => {
+        await lockPostClassFinance(tx);
+        await tx
+          .update(schema.postClassSyncRuns)
+          .set({
+            status: "failed",
+            finishedAt: input.startedAt,
+            errorSummary: "Marked failed after remaining in running state for more than 20 minutes.",
+          })
+          .where(and(
+            eq(schema.postClassSyncRuns.status, "running"),
+            lte(
+              schema.postClassSyncRuns.startedAt,
+              new Date(input.startedAt.getTime() - STALE_RUNNING_MS),
+            ),
+          ));
+
+        // A payout pass releases the transaction lock while it performs
+        // irreversible Google appends. Its durable lease extends the source
+        // freeze across that interval: starting a collector here would let
+        // eligibility, matching cells, or a global source issue change under
+        // the append plan.
+        const [activePayout] = await tx.select({
+          leaseExpiresAt: schema.postClassPayoutRuns.leaseExpiresAt,
+        }).from(schema.postClassPayoutRuns).where(and(
+          isNotNull(schema.postClassPayoutRuns.leaseToken),
+          gt(schema.postClassPayoutRuns.leaseExpiresAt, input.startedAt),
+        )).limit(1);
+        if (activePayout) return null;
+
+        const [run] = await tx.insert(schema.postClassSyncRuns).values({
+          status: "running",
+          triggerType: input.triggerType,
+          actorEmail: input.actorEmail,
+          startedAt: input.startedAt,
+          windowStart: input.windowStart,
+          windowEnd: input.windowEnd,
+          detailCap: input.detailCap,
+        }).returning({ id: schema.postClassSyncRuns.id });
+        return run.id;
+      });
+      if (!runId) {
+        throw new PostClassFeedbackSyncAlreadyRunningError(
+          "Post-class feedback sync is deferred while a payout operation holds a live lease.",
+        );
+      }
+      return runId;
     } catch (error) {
       if (isUniqueViolation(error)) throw new PostClassFeedbackSyncAlreadyRunningError();
       throw error;
@@ -569,41 +636,48 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
   }
 
   async completeSync(input: CompletePostClassSyncInput): Promise<void> {
-    await this.db.update(schema.postClassSyncRuns).set({
-      status: "success",
-      finishedAt: input.finishedAt,
-      discoveredCount: input.discoveredCount,
-      sessionCount: input.sessionSavedCount,
-      detailFetchedCount: input.detailFetchedCount,
-      versionInsertedCount: input.versionInsertedCount,
-      assessedCount: input.assessedCount,
-      sourceIssueCount: input.sourceIssueCount,
-      metadata: {
-        ...input.metadata,
-        outcome: input.status,
-        candidateCount: input.candidateCount,
-      },
-    }).where(eq(schema.postClassSyncRuns.id, input.runId));
-    if (input.metadata?.globalSourceHealthy === true) {
-      await this.db.update(schema.postClassSourceIssues).set({
-        status: "resolved",
-        resolvedAt: input.finishedAt,
-        resolvedByEmail: "system:post-class-feedback",
-      }).where(and(
-        eq(schema.postClassSourceIssues.scope, "global"),
-        eq(schema.postClassSourceIssues.status, "open"),
-        ne(schema.postClassSourceIssues.issueType, "form_drift"),
-      ));
-      // REC-01: source health is proven again, so undo the run-wide demotion in
-      // one statement. Rows observed first-hand since the demotion already
-      // cleared `sourceStatusBefore` in `saveObservation`, so this only touches
-      // rows whose status is still the demotion's placeholder.
-      await this.db.update(schema.postClassSessions).set({
-        sourceStatus: sql`${schema.postClassSessions.sourceStatusBefore}`,
-        sourceStatusBefore: null,
-        updatedAt: input.finishedAt,
-      }).where(isNotNull(schema.postClassSessions.sourceStatusBefore));
-    }
+    await withPostClassTransaction(this.db, async (tx) => {
+      // Resolving a global issue and restoring the prior per-session source
+      // states changes both the close gates and the preview fingerprint. Keep
+      // that recovery atomic with every other finance transition.
+      await lockPostClassFinance(tx);
+      await assertPostClassSyncSourceWriteFence(tx, input.runId);
+      await tx.update(schema.postClassSyncRuns).set({
+        status: "success",
+        finishedAt: input.finishedAt,
+        discoveredCount: input.discoveredCount,
+        sessionCount: input.sessionSavedCount,
+        detailFetchedCount: input.detailFetchedCount,
+        versionInsertedCount: input.versionInsertedCount,
+        assessedCount: input.assessedCount,
+        sourceIssueCount: input.sourceIssueCount,
+        metadata: {
+          ...input.metadata,
+          outcome: input.status,
+          candidateCount: input.candidateCount,
+        },
+      }).where(eq(schema.postClassSyncRuns.id, input.runId));
+      if (input.metadata?.globalSourceHealthy === true) {
+        await tx.update(schema.postClassSourceIssues).set({
+          status: "resolved",
+          resolvedAt: input.finishedAt,
+          resolvedByEmail: "system:post-class-feedback",
+        }).where(and(
+          eq(schema.postClassSourceIssues.scope, "global"),
+          eq(schema.postClassSourceIssues.status, "open"),
+          ne(schema.postClassSourceIssues.issueType, "form_drift"),
+        ));
+        // REC-01: source health is proven again, so undo the run-wide demotion in
+        // one statement. Rows observed first-hand since the demotion already
+        // cleared `sourceStatusBefore` in `saveObservation`, so this only touches
+        // rows whose status is still the demotion's placeholder.
+        await tx.update(schema.postClassSessions).set({
+          sourceStatus: sql`${schema.postClassSessions.sourceStatusBefore}`,
+          sourceStatusBefore: null,
+          updatedAt: input.finishedAt,
+        }).where(isNotNull(schema.postClassSessions.sourceStatusBefore));
+      }
+    });
   }
 
   async failSync(input: { runId: string; finishedAt: Date; errorSummary: string }): Promise<void> {
@@ -1083,6 +1157,13 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
     observation: PostClassSessionObservation,
   ): Promise<SavePostClassObservationResult> {
     return withPostClassTransaction(this.db, async (tx) => {
+      // A source refresh can change coverage, candidate membership, and the
+      // signed payout obligations for an open window. Serialize those writes
+      // with preview-token validation, publication, review mutations, and
+      // closing so every finance transition observes one coherent source
+      // snapshot.
+      await lockPostClassFinance(tx);
+      await assertPostClassSyncSourceWriteFence(tx, runId);
       const [settings] = await tx.select().from(schema.postClassSettings)
         .limit(1)
         .for("update");
@@ -1622,6 +1703,8 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
 
   async recordSourceIssue(issue: PostClassSourceIssueInput): Promise<void> {
     await withPostClassTransaction(this.db, async (tx) => {
+      await lockPostClassFinance(tx);
+      await assertPostClassSyncSourceWriteFence(tx, issue.runId);
       const [session] = issue.sessionId
         ? await tx.select({ id: schema.postClassSessions.id })
           .from(schema.postClassSessions)
@@ -1698,6 +1781,8 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
 
   async pauseForFormDrift(input: { runId: string; observedAt: Date; reason: string }): Promise<void> {
     await withPostClassTransaction(this.db, async (tx) => {
+      await lockPostClassFinance(tx);
+      await assertPostClassSyncSourceWriteFence(tx, input.runId);
       const [current] = await tx.select().from(schema.postClassSettings).limit(1);
       if (!current || (current.enforcementMode === "paused" && !current.formMappingValid)) return;
       if (current.currentWindowId) {

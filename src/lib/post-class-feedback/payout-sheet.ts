@@ -1,9 +1,10 @@
 // ── Payout sheet cell helpers ───────────────────────────────────────────
 //
-// What remains of the original per-tutor sheet parser. Deductions are appended
-// to the shared master ledger (`payout-master.ts`), never written into a
-// tutor's workbook — that workbook is a `QUERY(IMPORTRANGE(...))` view, and
-// writing into an array formula's output breaks it to `#REF!`.
+// What remains of the original per-tutor workbook parser. Deductions are
+// appended to the app-owned `Feedback Deductions` tab (`payout-master.ts`),
+// never written into a tutor's workbook — that workbook is a
+// `QUERY(IMPORTRANGE(...))` view, and writing into an array formula's output
+// breaks it to `#REF!`.
 //
 // Both payout surfaces record class times in **UTC**, not Bangkok. Verified
 // against production: a session stored at `scheduled_start_at` 06:00Z appears

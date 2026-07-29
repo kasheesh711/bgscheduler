@@ -421,6 +421,13 @@
       "when": 1784814726290,
       "tag": "0059_post_class_payout_master",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1784814727290,
+      "tag": "0060_post_class_payout_durable_runs",
+      "breakpoints": true
     }
   ]
 }

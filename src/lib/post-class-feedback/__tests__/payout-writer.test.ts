@@ -5,6 +5,7 @@ vi.mock("server-only", () => ({}));
 import {
   appendMasterDeductions,
   createPayoutRateGate,
+  DuplicatePayoutAppendSignatureError,
   type MasterAppendOutcome,
   type MasterAppendPlan,
   type MasterLedgerGateway,
@@ -41,10 +42,13 @@ function ledger(): unknown[][] {
 function fakeGateway(grid: unknown[][], options: { failOnCall?: number } = {}) {
   let calls = 0;
   const gateway: MasterLedgerGateway = {
-    async readGrid() {
+    async readRawGrid() {
       return grid.map((row) => [...row]);
     },
-    async appendRow(row) {
+    async readDeductionGrid() {
+      return grid.map((row) => [...row]);
+    },
+    async appendDeductionRow(row: Array<string | number>) {
       calls += 1;
       if (calls === options.failOnCall) throw new Error("Google Sheets append failed (429)");
       grid.push([...row]);
@@ -60,7 +64,8 @@ function planFor(grid: unknown[][], student: string, deductionId: string): Maste
   const marker = payoutRowMarker({ anchorMonth: "2026-07", deductionId });
   return {
     lineId: `line-${student}`,
-    deductionId,
+    sourceType: "deduction",
+    sourceId: deductionId,
     marker,
     row: buildMasterDeductionRow({ anchor, amountMinor: 10_000, marker }),
   };
@@ -176,6 +181,23 @@ describe("appendMasterDeductions", () => {
     expect(result.stoppedEarly).toBe(true);
     expect(result.outcomes).toHaveLength(1);
     expect(callCount()).toBe(1);
+  });
+
+  it("rejects duplicate planned signatures before the first append", async () => {
+    const grid = ledger();
+    const first = planFor(
+      grid,
+      "Grace Hopper",
+      "aaaaaaaa-1111-2222-3333-444455556666",
+    );
+    const duplicate = { ...first, lineId: "line-duplicate", sourceId: "other" };
+    const { gateway, callCount } = fakeGateway(grid);
+    await expect(appendMasterDeductions({
+      gateway,
+      plans: [first, duplicate],
+      onOutcome: async () => undefined,
+    })).rejects.toBeInstanceOf(DuplicatePayoutAppendSignatureError);
+    expect(callCount()).toBe(0);
   });
 });
 

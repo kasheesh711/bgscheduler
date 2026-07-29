@@ -62,9 +62,10 @@ export async function GET(request: NextRequest) {
           startDate: window.startDate,
           endDate: window.endDate,
           // 400 is the ceiling a manual backfill is allowed; the rolling cron
-          // stays at 50 so routine runs never monopolise the Wise API.
-          detailCap: parsed.data.detailCap ?? 400,
-          maxBatches: parsed.data.maxBatches,
+          // stays at one 50-detail batch so routine runs never monopolise the
+          // Wise API. Explicit query parameters are the manual recovery path.
+          detailCap: parsed.data.detailCap ?? 50,
+          maxBatches: parsed.data.maxBatches ?? 1,
         });
         return NextResponse.json({ ok: true, window, result });
       } catch (error) {

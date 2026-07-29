@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildPayoutCorrectionRow,
   buildMasterDeductionRow,
   collectMasterMarkers,
   DEDUCTION_SESSION_NAME,
+  DuplicatePayoutSignatureError,
   extractPayoutMarker,
+  extractPayoutRowSignature,
   MASTER_COLUMNS,
   masterCellToUtc,
   matchMasterRow,
   parseMasterPayoutSheet,
+  payoutCorrectionMarker,
   payoutRowMarker,
   type MasterPayoutTable,
 } from "../payout-master";
@@ -99,6 +103,30 @@ describe("payoutRowMarker / extractPayoutMarker", () => {
   });
 });
 
+describe("payout correction rows", () => {
+  it("uses a distinct stable signature and a positive signed amount", () => {
+    const correctionMarker = payoutCorrectionMarker({
+      anchorMonth: "2026-07",
+      adjustmentId: "9a8b7c6d-5e4f-3210-abcd-ef0123456789",
+    });
+    const row = buildPayoutCorrectionRow({
+      source: table().rows.find((candidate) => candidate.teacherName === KEVIN)!,
+      amountMinor: 10_000,
+      marker: correctionMarker,
+      sourceMarker: MARKER,
+    });
+
+    expect(correctionMarker).toBe("BGS-PAYOUT-CORRECTION 2026-07 9a8b7c6d5e4f");
+    expect(row[MASTER_COLUMNS.payoutAmount]).toBe(100);
+    expect(row[MASTER_COLUMNS.sessionName]).toContain(correctionMarker);
+    expect(row[MASTER_COLUMNS.sessionName]).toContain(MARKER);
+    expect(extractPayoutRowSignature(row[MASTER_COLUMNS.sessionName])).toEqual({
+      marker: correctionMarker,
+      kind: "correction",
+    });
+  });
+});
+
 describe("parseMasterPayoutSheet", () => {
   it("reads the ledger and its typed cells", () => {
     const parsed = table();
@@ -124,6 +152,13 @@ describe("parseMasterPayoutSheet", () => {
     expect(parseMasterPayoutSheet(shuffled)).toBeNull();
   });
 
+  it("requires the exact A:H header contract, including middle columns", () => {
+    const wrongMiddleHeader = masterGrid();
+    wrongMiddleHeader[0] = [...HEADER];
+    wrongMiddleHeader[0][6] = "Credits";
+    expect(parseMasterPayoutSheet(wrongMiddleHeader)).toBeNull();
+  });
+
   it("refuses a tab with no recognisable header at all", () => {
     expect(parseMasterPayoutSheet([["a", "b"], ["c", "d"]])).toBeNull();
   });
@@ -136,6 +171,23 @@ describe("collectMasterMarkers", () => {
     const markers = collectMasterMarkers(parseMasterPayoutSheet(grid)!);
     expect(markers.get(MARKER)).toBe(6);
     expect(markers.size).toBe(1);
+  });
+
+  it("hard-blocks duplicate signatures instead of silently choosing a row", () => {
+    const grid = masterGrid();
+    const duplicate = [
+      KEVIN,
+      `${DEDUCTION_SESSION_NAME} · ${MARKER}`,
+      "Norraphat (Him.Vi) Viriyarojanakul",
+      dateSerial("2026-07-25"),
+      timeSerial(6, 0),
+      "—",
+      0,
+      -100,
+    ];
+    grid.push([...duplicate], [...duplicate]);
+    expect(() => collectMasterMarkers(parseMasterPayoutSheet(grid)!))
+      .toThrow(DuplicatePayoutSignatureError);
   });
 });
 

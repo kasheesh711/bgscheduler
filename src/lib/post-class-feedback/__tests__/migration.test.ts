@@ -17,6 +17,10 @@ const masterMigration = readFileSync(
   new URL("../../../../drizzle/0059_post_class_payout_master.sql", import.meta.url),
   "utf8",
 );
+const durablePayoutMigration = readFileSync(
+  new URL("../../../../drizzle/0060_post_class_payout_durable_runs.sql", import.meta.url),
+  "utf8",
+);
 const journal = JSON.parse(readFileSync(
   new URL("../../../../drizzle/meta/_journal.json", import.meta.url),
   "utf8",
@@ -235,6 +239,142 @@ describe("payout master ledger migration", () => {
     expect(journal.entries.find((entry) => entry.idx === 59)).toMatchObject({
       idx: 59,
       tag: "0059_post_class_payout_master",
+    });
+  });
+});
+
+describe("durable payout publishing migration", () => {
+  it("adds lifecycle leases, signed source identities, and durable audit stores", () => {
+    for (const status of ["publishing", "partial", "closed"]) {
+      expect(durablePayoutMigration).toContain(`ADD VALUE IF NOT EXISTS '${status}'`);
+    }
+    for (const column of [
+      "lease_token",
+      "lease_expires_at",
+      "source_identity",
+      "row_signature",
+      "pass_token",
+      "scheduled_end_at",
+      "finance_month",
+    ]) {
+      expect(durablePayoutMigration).toContain(`"${column}"`);
+    }
+    for (const table of [
+      "post_class_payout_adjustments",
+      "post_class_payout_exceptions",
+      "post_class_payout_roll_runs",
+      "post_class_payout_roll_outcomes",
+    ]) {
+      expect(durablePayoutMigration).toContain(`CREATE TABLE IF NOT EXISTS "${table}"`);
+    }
+  });
+
+  it("drops every reconciliation-only column", () => {
+    for (const column of [
+      "marker_miss_count",
+      "last_seen_in_master_at",
+      "reappend_count",
+      "master_row_number",
+    ]) {
+      expect(durablePayoutMigration).toContain(`DROP COLUMN IF EXISTS "${column}"`);
+    }
+  });
+
+  it("blocks rollout while any mutable-tab legacy write still needs an audited bootstrap", () => {
+    expect(durablePayoutMigration).toMatch(
+      /FROM "post_class_payout_run_lines"[\s\S]+WHERE "write_status" <> 'skipped'/u,
+    );
+    expect(durablePayoutMigration).toContain(
+      "0060 requires an audited legacy payout bootstrap before migration",
+    );
+  });
+
+  it("blocks duplicate legacy deduction rows before introducing global identities", () => {
+    const duplicateGuard = durablePayoutMigration.indexOf(
+      'GROUP BY "deduction_id"',
+    );
+    const firstMutation = durablePayoutMigration.indexOf(
+      'ALTER TYPE "public"."post_class_payout_run_status"',
+    );
+    expect(duplicateGuard).toBeGreaterThanOrEqual(0);
+    expect(duplicateGuard).toBeLessThan(firstMutation);
+    expect(durablePayoutMigration).toContain(
+      "the same deduction exists in multiple payout runs",
+    );
+  });
+
+  it("constrains payout line kinds to durable deduction rows", () => {
+    expect(durablePayoutMigration).toContain(
+      'CONSTRAINT "pc_payout_run_lines_kind_check"',
+    );
+    expect(durablePayoutMigration).toContain(
+      'CHECK ("line_kind" = \'deduction\')',
+    );
+  });
+
+  it("preserves legacy row evidence before dropping its old column", () => {
+    const copyEvidence = durablePayoutMigration.indexOf(
+      'SET "inserted_row_number" = COALESCE("inserted_row_number", "master_row_number")',
+    );
+    const dropEvidence = durablePayoutMigration.indexOf(
+      'DROP COLUMN IF EXISTS "master_row_number"',
+    );
+    expect(copyEvidence).toBeGreaterThan(-1);
+    expect(dropEvidence).toBeGreaterThan(copyEvidence);
+  });
+
+  it("allows only the audited processed-to-reversed deduction transition", () => {
+    expect(durablePayoutMigration).toContain(
+      'CREATE OR REPLACE FUNCTION "post_class_protect_processed_deduction"()',
+    );
+    expect(durablePayoutMigration).toContain('OLD."status" = \'processed\'');
+    expect(durablePayoutMigration).toContain('NEW."status" = \'reversed\'');
+    expect(durablePayoutMigration).toContain(
+      'NEW."version" = OLD."version" + 1',
+    );
+    expect(durablePayoutMigration).toContain(
+      "to_jsonb(NEW) - 'status' - 'version' - 'updated_at'",
+    );
+  });
+
+  it("replaces the old run-scoped line identity with global source and signature identities", () => {
+    expect(durablePayoutMigration).toContain(
+      'DROP INDEX IF EXISTS "pc_payout_run_lines_run_deduction_idx"',
+    );
+    expect(durablePayoutMigration).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "pc_payout_run_lines_source_identity_idx"',
+    );
+    expect(durablePayoutMigration).toMatch(
+      /GROUP BY "row_signature"\s+HAVING count\(\*\) > 1/u,
+    );
+    expect(durablePayoutMigration).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "pc_payout_run_lines_row_signature_idx"',
+    );
+  });
+
+  it("permits exactly one workbook date roll per closed payout run", () => {
+    expect(durablePayoutMigration).toMatch(
+      /CREATE UNIQUE INDEX IF NOT EXISTS "pc_payout_roll_runs_source_idx"\s+ON "post_class_payout_roll_runs" \("payout_run_id"\)/u,
+    );
+    expect(durablePayoutMigration).not.toContain(
+      "pc_payout_roll_runs_source_target_idx",
+    );
+  });
+
+  it("enforces ledger-name uniqueness across primary and alternate columns", () => {
+    expect(durablePayoutMigration).toContain(
+      'CREATE OR REPLACE FUNCTION "pc_enforce_payout_ledger_name_uniqueness"()',
+    );
+    expect(durablePayoutMigration).toContain("pg_advisory_xact_lock");
+    expect(durablePayoutMigration).toContain(
+      'CREATE TRIGGER "pc_payout_ledger_name_uniqueness"',
+    );
+  });
+
+  it("is registered in the journal", () => {
+    expect(journal.entries.find((entry) => entry.idx === 60)).toMatchObject({
+      idx: 60,
+      tag: "0060_post_class_payout_durable_runs",
     });
   });
 });

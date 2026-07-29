@@ -5,12 +5,7 @@ import {
   fetchGoogleSheetRows,
 } from "@/lib/sales-dashboard/sheets";
 
-import {
-  PAYOUT_MASTER_SHEET_NAME,
-  PAYOUT_MASTER_SPREADSHEET_ID,
-} from "./payout-config";
-
-// ── Appending deductions to the master ledger ───────────────────────────
+// ── Appending signed rows to the app-owned deductions tab ───────────────
 //
 // The only module that talks to Google on the payout path. The gateway is an
 // interface so ordering and failure behaviour can be tested against an
@@ -21,9 +16,12 @@ import {
 // leaves nothing behind to clean up.
 
 export interface MasterLedgerGateway {
-  readGrid(): Promise<unknown[][]>;
+  /** Finance-owned source. Never write to this tab. */
+  readRawGrid(): Promise<unknown[][]>;
+  /** App-owned append-only rows; read before every pass for idempotency. */
+  readDeductionGrid(): Promise<unknown[][]>;
   /** Appends one row; resolves with the 1-based row it landed on, if known. */
-  appendRow(row: Array<string | number>): Promise<{ rowNumber: number | null }>;
+  appendDeductionRow(row: Array<string | number>): Promise<{ rowNumber: number | null }>;
 }
 
 /**
@@ -44,19 +42,40 @@ export function createPayoutRateGate(minIntervalMs = PAYOUT_GOOGLE_MIN_INTERVAL_
 }
 
 export function createGoogleMasterLedgerGateway(
-  email: string,
-  pace: () => Promise<void> = createPayoutRateGate(),
-  spreadsheetId: string = PAYOUT_MASTER_SPREADSHEET_ID,
-  sheetName: string = PAYOUT_MASTER_SHEET_NAME,
+  input: {
+    email: string;
+    spreadsheetId: string;
+    sourceSheetName: string;
+    deductionsSheetName: string;
+    pace?: () => Promise<void>;
+  },
 ): MasterLedgerGateway {
+  const pace = input.pace ?? createPayoutRateGate();
   return {
-    async readGrid() {
+    async readRawGrid() {
       await pace();
-      return fetchGoogleSheetRows(email, spreadsheetId, sheetName);
+      return fetchGoogleSheetRows(
+        input.email,
+        input.spreadsheetId,
+        input.sourceSheetName,
+      );
     },
-    async appendRow(row) {
+    async readDeductionGrid() {
       await pace();
-      const result = await appendGoogleSheetRows(email, spreadsheetId, sheetName, [row]);
+      return fetchGoogleSheetRows(
+        input.email,
+        input.spreadsheetId,
+        input.deductionsSheetName,
+      );
+    },
+    async appendDeductionRow(row) {
+      await pace();
+      const result = await appendGoogleSheetRows(
+        input.email,
+        input.spreadsheetId,
+        input.deductionsSheetName,
+        [row],
+      );
       return { rowNumber: result.firstRowNumber };
     },
   };
@@ -64,13 +83,16 @@ export function createGoogleMasterLedgerGateway(
 
 export interface MasterAppendPlan {
   lineId: string;
-  deductionId: string;
+  sourceType: "deduction" | "adjustment";
+  sourceId: string;
   marker: string;
   row: Array<string | number>;
 }
 
 export interface MasterAppendOutcome {
   lineId: string;
+  sourceType: "deduction" | "adjustment";
+  sourceId: string;
   status: "written" | "failed";
   rowNumber: number | null;
   error: string | null;
@@ -91,6 +113,13 @@ export interface AppendMasterDeductionsResult {
   stoppedEarly: boolean;
 }
 
+export class DuplicatePayoutAppendSignatureError extends Error {
+  constructor(public readonly marker: string) {
+    super(`The payout append plan contains duplicate signature ${marker}.`);
+    this.name = "DuplicatePayoutAppendSignatureError";
+  }
+}
+
 /**
  * Append one ledger row per deduction, one call at a time.
  *
@@ -109,6 +138,14 @@ export interface AppendMasterDeductionsResult {
 export async function appendMasterDeductions(
   input: AppendMasterDeductionsInput,
 ): Promise<AppendMasterDeductionsResult> {
+  const markers = new Set<string>();
+  for (const plan of input.plans) {
+    if (markers.has(plan.marker)) {
+      // Validate the whole batch before the first irreversible append.
+      throw new DuplicatePayoutAppendSignatureError(plan.marker);
+    }
+    markers.add(plan.marker);
+  }
   const clock = input.clock ?? Date.now;
   const outcomes: MasterAppendOutcome[] = [];
   let stoppedEarly = false;
@@ -120,11 +157,20 @@ export async function appendMasterDeductions(
     }
     let outcome: MasterAppendOutcome;
     try {
-      const { rowNumber } = await input.gateway.appendRow(plan.row);
-      outcome = { lineId: plan.lineId, status: "written", rowNumber, error: null };
+      const { rowNumber } = await input.gateway.appendDeductionRow(plan.row);
+      outcome = {
+        lineId: plan.lineId,
+        sourceType: plan.sourceType,
+        sourceId: plan.sourceId,
+        status: "written",
+        rowNumber,
+        error: null,
+      };
     } catch (error) {
       outcome = {
         lineId: plan.lineId,
+        sourceType: plan.sourceType,
+        sourceId: plan.sourceId,
         status: "failed",
         rowNumber: null,
         error: error instanceof Error ? error.message : "The ledger append failed.",
@@ -136,3 +182,7 @@ export async function appendMasterDeductions(
 
   return { outcomes, stoppedEarly };
 }
+
+export type PayoutAppendPlan = MasterAppendPlan;
+export type PayoutAppendOutcome = MasterAppendOutcome;
+export const appendPayoutRows = appendMasterDeductions;

@@ -300,6 +300,8 @@ export interface FeedbackDeductionRow {
   reason: string;
   amount: number;
   status: FeedbackDeductionStatus;
+  /** True only after the negative line is durably verified in Feedback Deductions. */
+  payoutVerifiedWritten: boolean;
   processingMonth: string | null;
   referenceNote: string | null;
   waiverCategory: FeedbackWaiverCategory | null;

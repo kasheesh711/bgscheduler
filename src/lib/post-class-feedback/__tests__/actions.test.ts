@@ -9,6 +9,7 @@ import {
   assertPostClassFinanceIdempotentPayloadMatches,
   assertPostClassFinanceMonthActionInvariant,
   assertPostClassFinancePeriodIdempotentPayloadMatches,
+  assertPostClassProcessWriteInvariant,
   assertPostClassReviewIdempotentPayloadMatches,
   changePostClassFinancePeriod,
 } from "@/lib/post-class-feedback/actions";
@@ -224,6 +225,21 @@ describe("post-class finance invariants", () => {
       requestedMonth: "2026-09-01",
       defaultMonth: "2026-07-01",
       assignedMonth: "2026-08-01",
+    })).not.toThrow();
+  });
+
+  it("requires a verified payout-ledger write before processing", () => {
+    expect(() => assertPostClassProcessWriteInvariant({
+      action: "process",
+      hasVerifiedWrittenDeduction: false,
+    })).toThrow(/publish and verify/i);
+    expect(() => assertPostClassProcessWriteInvariant({
+      action: "process",
+      hasVerifiedWrittenDeduction: true,
+    })).not.toThrow();
+    expect(() => assertPostClassProcessWriteInvariant({
+      action: "move",
+      hasVerifiedWrittenDeduction: false,
     })).not.toThrow();
   });
 

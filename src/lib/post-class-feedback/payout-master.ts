@@ -1,15 +1,12 @@
 import { serialToUtc, normalizeStudentName } from "./payout-sheet";
 
-// ── The master payout ledger ────────────────────────────────────────────
+// ── Raw payout rows and the app-owned deduction tab ─────────────────────
 //
-// `Begifted Payouts` → tab `Begifted Payouts Detailed` is where every payout
-// line for every tutor actually lives. Each tutor's own workbook is a *view*
-// over it: one `QUERY(IMPORTRANGE(...))` array formula filtered by that
-// tutor's two identity strings and a date window. So a deduction is appended
-// here, once, and reaches the tutor's sheet and their TOTAL PAYOUTS by itself.
+// Finance owns the raw export. The app only reads it to find an exact anchor,
+// then appends a signed row to `Feedback Deductions`. A formula-only composite
+// tab unions those two A:H surfaces for tutor workbooks.
 //
-// Nothing may be written into a tutor's workbook: writing into an array
-// formula's output breaks it to `#REF!` and destroys their payout view.
+// Neither the raw export nor a tutor workbook is ever mutated by this module.
 //
 // Times are **UTC**, matching `scheduled_start_at` — verified against
 // production on the view this tab feeds. Treating them as Bangkok would shift
@@ -36,7 +33,10 @@ export const MASTER_COLUMN_COUNT = 8;
 
 /** What an appended deduction row says in the Session name column. */
 export const DEDUCTION_SESSION_NAME = "Feedback deduction";
+/** What an append-only compensating row says in the Session name column. */
+export const CORRECTION_SESSION_NAME = "Feedback correction";
 const MARKER_PREFIX = "BGS-PAYOUT";
+const CORRECTION_MARKER_PREFIX = "BGS-PAYOUT-CORRECTION";
 /**
  * 12 hex, not 8. A marker collision reads as "already written" and silently
  * skips a deduction — a fail-*open* money error — so the extra four characters
@@ -47,6 +47,12 @@ const MARKER_PATTERN = new RegExp(
   `${MARKER_PREFIX}\\s+(\\d{4}-\\d{2})\\s+([0-9a-f]{${MARKER_DEDUCTION_CHARS}})`,
   "iu",
 );
+const CORRECTION_MARKER_PATTERN = new RegExp(
+  `${CORRECTION_MARKER_PREFIX}\\s+(\\d{4}-\\d{2})\\s+([0-9a-f]{${MARKER_DEDUCTION_CHARS}})`,
+  "iu",
+);
+
+export type PayoutRowKind = "deduction" | "correction";
 
 export interface MasterPayoutRow {
   /** 1-based row number in the master tab. */
@@ -65,13 +71,26 @@ export interface MasterPayoutRow {
    */
   rawDate: unknown;
   rawTime: unknown;
-  /** Marker if this row is one a payout run appended, else null. */
+  /** Stable signature if this row is app-owned, else null. */
   marker: string | null;
+  rowKind: PayoutRowKind | null;
 }
 
 export interface MasterPayoutTable {
   headerRowNumber: number;
   rows: MasterPayoutRow[];
+}
+
+export class DuplicatePayoutSignatureError extends Error {
+  constructor(
+    public readonly signature: string,
+    public readonly rowNumbers: number[],
+  ) {
+    super(
+      `Duplicate payout signature ${signature} appears on rows ${rowNumbers.join(", ")}.`,
+    );
+    this.name = "DuplicatePayoutSignatureError";
+  }
 }
 
 function cellText(value: unknown): string {
@@ -123,13 +142,49 @@ export function payoutRowMarker(input: {
   return `${MARKER_PREFIX} ${input.anchorMonth} ${compact}`;
 }
 
-/** Pull a marker out of a Session name cell, or null if it carries none. */
+export function payoutCorrectionMarker(input: {
+  anchorMonth: string;
+  adjustmentId: string;
+}): string {
+  const compact = input.adjustmentId.replace(/-/gu, "").slice(0, MARKER_DEDUCTION_CHARS);
+  return `${CORRECTION_MARKER_PREFIX} ${input.anchorMonth} ${compact}`;
+}
+
+/** Pull a deduction marker out of a Session name cell. */
 export function extractPayoutMarker(sessionName: unknown): string | null {
   const match = cellText(sessionName).match(MARKER_PATTERN);
   return match ? `${MARKER_PREFIX} ${match[1]} ${match[2].toLowerCase()}` : null;
 }
 
-const HEADER_TOKENS = ["teacher name", "session name", "date", "payout amount"];
+/** Pull either app-owned row signature out of a Session name cell. */
+export function extractPayoutRowSignature(sessionName: unknown): {
+  marker: string;
+  kind: PayoutRowKind;
+} | null {
+  const text = cellText(sessionName);
+  const correction = text.match(CORRECTION_MARKER_PATTERN);
+  if (correction) {
+    return {
+      marker: `${CORRECTION_MARKER_PREFIX} ${correction[1]} ${correction[2].toLowerCase()}`,
+      kind: "correction",
+    };
+  }
+  const deduction = extractPayoutMarker(text);
+  return deduction ? { marker: deduction, kind: "deduction" } : null;
+}
+
+export const PAYOUT_LEDGER_HEADERS = [
+  "Teacher name",
+  "Session name",
+  "Course name",
+  "Date",
+  "Time",
+  "Duration",
+  "Credits deducted",
+  "Payout amount",
+] as const;
+const NORMALIZED_PAYOUT_LEDGER_HEADERS = PAYOUT_LEDGER_HEADERS.map((header) =>
+  header.toLocaleLowerCase("en-US"));
 
 /**
  * Locate the ledger table in a raw grid.
@@ -141,24 +196,18 @@ const HEADER_TOKENS = ["teacher name", "session name", "date", "payout amount"];
 export function parseMasterPayoutSheet(grid: unknown[][]): MasterPayoutTable | null {
   const headerIndex = grid.findIndex((row) => {
     const cells = (row ?? []).map((cell) => cellText(cell).toLocaleLowerCase("en-US"));
-    return HEADER_TOKENS.every((token) => cells.includes(token));
+    return NORMALIZED_PAYOUT_LEDGER_HEADERS.every(
+      (header, index) => cells[index] === header,
+    );
   });
   if (headerIndex === -1) return null;
-
-  // The columns must be where we think they are, not merely present.
-  const header = (grid[headerIndex] ?? []).map((cell) => cellText(cell).toLocaleLowerCase("en-US"));
-  if (header[MASTER_COLUMNS.teacherName] !== "teacher name"
-    || header[MASTER_COLUMNS.sessionName] !== "session name"
-    || header[MASTER_COLUMNS.date] !== "date"
-    || header[MASTER_COLUMNS.payoutAmount] !== "payout amount") {
-    return null;
-  }
 
   const rows: MasterPayoutRow[] = [];
   for (let index = headerIndex + 1; index < grid.length; index += 1) {
     const row = grid[index] ?? [];
     const teacherName = cellText(row[MASTER_COLUMNS.teacherName]);
     if (!teacherName) continue;
+    const signature = extractPayoutRowSignature(row[MASTER_COLUMNS.sessionName]);
     rows.push({
       rowNumber: index + 1,
       teacherName,
@@ -168,17 +217,26 @@ export function parseMasterPayoutSheet(grid: unknown[][]): MasterPayoutTable | n
       payoutAmount: numberValue(row[MASTER_COLUMNS.payoutAmount]),
       rawDate: row[MASTER_COLUMNS.date] ?? "",
       rawTime: row[MASTER_COLUMNS.time] ?? "",
-      marker: extractPayoutMarker(row[MASTER_COLUMNS.sessionName]),
+      marker: signature?.marker ?? null,
+      rowKind: signature?.kind ?? null,
     });
   }
   return { headerRowNumber: headerIndex + 1, rows };
 }
 
-/** Every marker present in the ledger, for the reconcile scan. */
+/** Every app-owned marker present in the dedicated tab, for retry idempotency. */
 export function collectMasterMarkers(table: MasterPayoutTable): Map<string, number> {
   const markers = new Map<string, number>();
   for (const row of table.rows) {
-    if (row.marker && !markers.has(row.marker)) markers.set(row.marker, row.rowNumber);
+    if (!row.marker) continue;
+    const firstRow = markers.get(row.marker);
+    if (firstRow !== undefined) {
+      throw new DuplicatePayoutSignatureError(
+        row.marker,
+        [firstRow, row.rowNumber],
+      );
+    }
+    markers.set(row.marker, row.rowNumber);
   }
   return markers;
 }
@@ -195,7 +253,7 @@ export interface MasterMatchResult {
 
 export interface MasterMatchInput {
   table: MasterPayoutTable;
-  /** The tutor's exact ledger identity strings — onsite and its ` Online` twin. */
+  /** The tutor's exact primary and optional alternate ledger identity strings. */
   teacherNames: string[];
   scheduledStartAt: Date;
   studentNames: string[];
@@ -319,5 +377,40 @@ export function buildMasterDeductionRow(
   // Numbers, not strings: the columns are numeric and USER_ENTERED is not used.
   row[MASTER_COLUMNS.credits] = 0;
   row[MASTER_COLUMNS.payoutAmount] = -Math.abs(input.amountMinor) / 100;
+  return row;
+}
+
+/** Preferred name now that the append target is the dedicated tab. */
+export const buildPayoutDeductionRow = buildMasterDeductionRow;
+
+export interface BuildPayoutCorrectionRowInput {
+  /** The landed negative row being compensated. */
+  source: MasterPayoutRow;
+  /** Positive signed minor units. */
+  amountMinor: number;
+  marker: string;
+  sourceMarker: string;
+}
+
+/**
+ * Append-only compensation for a deduction that already landed.
+ *
+ * Exact typed identity/date cells come from the landed deduction row, not from
+ * a later raw refresh. The positive amount restores what its negative row
+ * removed, while both stable markers keep the relationship auditable.
+ */
+export function buildPayoutCorrectionRow(
+  input: BuildPayoutCorrectionRowInput,
+): Array<string | number> {
+  const row: Array<string | number> = new Array(MASTER_COLUMN_COUNT).fill("");
+  row[MASTER_COLUMNS.teacherName] = input.source.teacherName;
+  row[MASTER_COLUMNS.sessionName] =
+    `${CORRECTION_SESSION_NAME} · ${input.marker} · reverses ${input.sourceMarker}`;
+  row[MASTER_COLUMNS.studentName] = input.source.studentName;
+  row[MASTER_COLUMNS.date] = input.source.rawDate as string | number;
+  row[MASTER_COLUMNS.time] = input.source.rawTime as string | number;
+  row[MASTER_COLUMNS.duration] = "—";
+  row[MASTER_COLUMNS.credits] = 0;
+  row[MASTER_COLUMNS.payoutAmount] = Math.abs(input.amountMinor) / 100;
   return row;
 }

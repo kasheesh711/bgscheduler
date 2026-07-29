@@ -18,7 +18,11 @@ vi.mock("server-only", () => ({}));
 
 import { eq, inArray } from "drizzle-orm";
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
-import { createDrizzlePostClassFeedbackRepository } from "@/lib/post-class-feedback/repository";
+import {
+  createDrizzlePostClassFeedbackRepository,
+  PostClassFeedbackSyncAlreadyRunningError,
+  PostClassFeedbackSyncSourceFenceError,
+} from "@/lib/post-class-feedback/repository";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
@@ -120,6 +124,47 @@ function completedRun(runId: string, globalSourceHealthy: boolean) {
 }
 
 describe("REC-01 run-wide source demotion and restore", () => {
+  it("defers a new source sync while a payout operation holds a live lease", async () => {
+    const repository = createDrizzlePostClassFeedbackRepository(appDb());
+    const startedAt = new Date("2026-07-29T04:00:00.000Z");
+    await handle.db.insert(schema.postClassPayoutRuns).values({
+      anchorMonth: "2026-07-01",
+      windowStart: "2026-06-26",
+      windowEnd: "2026-07-25",
+      status: "partial",
+      leaseToken: "11111111-1111-4111-8111-111111111111",
+      leaseExpiresAt: new Date(startedAt.getTime() + 15 * 60_000),
+    });
+
+    await expect(repository.beginSync({
+      triggerType: "cron",
+      actorEmail: null,
+      startedAt,
+      windowStart: "2026-07-25",
+      windowEnd: "2026-07-29",
+      detailCap: 50,
+    })).rejects.toBeInstanceOf(PostClassFeedbackSyncAlreadyRunningError);
+
+    expect(await handle.db.select().from(schema.postClassSyncRuns)).toHaveLength(0);
+  });
+
+  it("rejects source writes from a worker whose stale running row was failed", async () => {
+    const repository = createDrizzlePostClassFeedbackRepository(appDb());
+    const [run] = await handle.db.insert(schema.postClassSyncRuns).values({
+      status: "failed",
+      windowStart: "2026-07-01",
+      windowEnd: "2026-07-04",
+      finishedAt: new Date(),
+      errorSummary: "Recovered as stale.",
+    }).returning({ id: schema.postClassSyncRuns.id });
+
+    await expect(repository.recordSourceIssue(
+      globalIssue(run.id, "contract_error:zombie:parse"),
+    )).rejects.toBeInstanceOf(PostClassFeedbackSyncSourceFenceError);
+
+    expect(await handle.db.select().from(schema.postClassSourceIssues)).toHaveLength(0);
+  });
+
   it("demotes every eligible session and remembers what each one carried", async () => {
     const repository = createDrizzlePostClassFeedbackRepository(appDb());
     await seedSessions(appDb());
@@ -213,7 +258,8 @@ describe("REC-01 run-wide source demotion and restore", () => {
 
     await repository.completeSync(completedRun(runId, true));
     const afterFirst = await statuses(appDb());
-    await repository.completeSync(completedRun(runId, true));
+    const secondRunId = await startRun(appDb());
+    await repository.completeSync(completedRun(secondRunId, true));
 
     expect(await statuses(appDb())).toEqual(afterFirst);
   });
