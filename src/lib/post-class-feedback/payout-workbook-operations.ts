@@ -1,3 +1,4 @@
+import { REVIEWED_PAYOUT_TUTOR_MAPPINGS } from "./payout-tutor-mapping";
 import { payoutRunWindow, type PayoutRunWindow } from "./payout-window";
 
 export const PAYOUT_TAB_COLUMN_COUNT = 8;
@@ -54,14 +55,57 @@ function normalizedTutorIdentity(value: string): string {
     .trim();
 }
 
+function payoutWorkbookTutorCandidateKeys(tutorCell: string): Set<string> {
+  const candidates = new Set<string>([normalizedTutorIdentity(tutorCell)]);
+  const openingParen = tutorCell.indexOf("(");
+  const closingParen = tutorCell.indexOf(")", openingParen + 1);
+  if (openingParen < 0 || closingParen < 0) return candidates;
+
+  const leadingName = tutorCell.slice(0, openingParen).trim();
+  const parentheticalName = tutorCell.slice(openingParen + 1, closingParen).trim();
+  for (const candidate of [
+    leadingName,
+    parentheticalName,
+    `${leadingName} ${parentheticalName}`,
+  ]) {
+    const normalized = normalizedTutorIdentity(candidate);
+    if (normalized) candidates.add(normalized);
+  }
+  return candidates;
+}
+
+function withoutOnlineSuffix(value: string): string {
+  return value.replace(/\s+online$/iu, "").trim();
+}
+
+function reviewedPayoutWorkbookCanonicalKey(tutorCell: string): string | null {
+  const workbookIdentity = withoutOnlineSuffix(normalizedTutorIdentity(tutorCell));
+  return REVIEWED_PAYOUT_TUTOR_MAPPINGS.find((reviewed) =>
+    [reviewed.primaryLedgerName, reviewed.alternateLedgerName].some((value) =>
+      value !== null
+      && withoutOnlineSuffix(normalizedTutorIdentity(value)) === workbookIdentity))
+    ?.canonicalKey ?? null;
+}
+
 /** Conservative workbook TUTOR → canonical-key validation. */
 export function payoutWorkbookTutorMatchesKey(
   tutorCell: string,
   canonicalKey: string,
 ): boolean {
-  const cell = normalizedTutorIdentity(tutorCell);
+  const reviewedKey = reviewedPayoutWorkbookCanonicalKey(tutorCell);
+  if (reviewedKey) return reviewedKey === canonicalKey;
+
   const key = normalizedTutorIdentity(canonicalKey);
-  return cell === key || (!key.includes(" ") && cell.split(/\s+/u).includes(key));
+  return payoutWorkbookTutorCandidateKeys(tutorCell).has(key);
+}
+
+/** Resolve a TUTOR cell against the active Wise canonical-key catalog. */
+export function resolvePayoutWorkbookTutorKeys(
+  tutorCell: string,
+  canonicalKeys: readonly string[],
+): string[] {
+  return [...new Set(canonicalKeys.filter((key) =>
+    payoutWorkbookTutorMatchesKey(tutorCell, key)))];
 }
 
 function quoteFormulaSheetName(name: string): string {

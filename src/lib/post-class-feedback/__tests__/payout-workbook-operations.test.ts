@@ -9,6 +9,7 @@ import {
   payoutWorkbookTutorCell,
   payoutWorkbookTutorMatchesKey,
   planPayoutFormulaRepoint,
+  resolvePayoutWorkbookTutorKeys,
   substitutePayoutSourceRange,
 } from "../payout-workbook-operations";
 
@@ -161,6 +162,51 @@ describe("payout workbook operations", () => {
     ])).toBe("Kevin");
     expect(payoutWorkbookTutorMatchesKey("Kevin (Kev) Y. Hsieh", "Kevin")).toBe(true);
     expect(payoutWorkbookTutorMatchesKey("Someone Else", "Kevin")).toBe(false);
+  });
+
+  it("resolves compound and reviewed tutor identities without nickname collisions", () => {
+    const keys = [
+      "Fluke",
+      "Fluke-Supha",
+      "Nacha (Poi)",
+      "Paoju",
+      "Paojuu",
+      "Pat",
+      "Pat-Patt",
+      "Prae",
+      "Prae-Tarn",
+      "Win",
+      "Win-Bordin",
+    ];
+
+    expect(resolvePayoutWorkbookTutorKeys(
+      "Suphawisit (Fluke-Supha) Boonla",
+      keys,
+    )).toEqual(["Fluke-Supha"]);
+    expect(resolvePayoutWorkbookTutorKeys(
+      "Nacha (Poi) Srinakarin",
+      keys,
+    )).toEqual(["Nacha (Poi)"]);
+    expect(resolvePayoutWorkbookTutorKeys(
+      "Prohrak (Paoju) Kruengthomya",
+      keys,
+    )).toEqual(["Paojuu"]);
+    expect(resolvePayoutWorkbookTutorKeys(
+      "Prohrak (Paoju) Kruengthomya",
+      ["Paoju"],
+    )).toEqual([]);
+    expect(resolvePayoutWorkbookTutorKeys(
+      "Pattera (Pat-Patt) Sutanthavibul",
+      keys,
+    )).toEqual(["Pat-Patt"]);
+    expect(resolvePayoutWorkbookTutorKeys(
+      "Teeratarn (Prae-Tarn) Vipattipumiprathet",
+      keys,
+    )).toEqual(["Prae-Tarn"]);
+    expect(resolvePayoutWorkbookTutorKeys(
+      "Bordin (Win-Bordin) Tanasubchusri",
+      keys,
+    )).toEqual(["Win-Bordin"]);
   });
 
   it("rejects malformed inventory records instead of silently dropping them", () => {

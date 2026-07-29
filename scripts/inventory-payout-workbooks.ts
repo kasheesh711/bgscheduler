@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
-import { eq, isNotNull, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -24,7 +24,9 @@ import {
   parsePayoutWorkbookInventoryTsv,
   payoutWorkbookTutorCell,
   planPayoutFormulaRepoint,
+  resolvePayoutWorkbookTutorKeys,
 } from "@/lib/post-class-feedback/payout-workbook-operations";
+import { withPostClassTransaction } from "@/lib/post-class-feedback/transaction";
 import { createPayoutRateGate } from "@/lib/post-class-feedback/payout-writer";
 import {
   fetchGoogleSheetRange,
@@ -57,22 +59,6 @@ interface InventoryOutcome {
   error: string | null;
 }
 
-function normalize(value: string): string {
-  return value.toLocaleLowerCase("en-US")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
-}
-
-function resolveTutorKey(tutorCell: string, keys: readonly string[]): string[] {
-  const normalizedCell = normalize(tutorCell);
-  const tokens = new Set(normalizedCell.split(/\s+/u));
-  return keys.filter((key) => {
-    const normalizedKey = normalize(key);
-    return normalizedCell === normalizedKey
-      || (!normalizedKey.includes(" ") && tokens.has(normalizedKey));
-  });
-}
-
 async function main(): Promise<void> {
   if (process.argv.includes("--help") || process.argv.includes("-h")) {
     console.log(
@@ -95,12 +81,20 @@ async function main(): Promise<void> {
   }
 
   const db = getDb();
+  const activeSnapshots = await db.select({
+    id: schema.snapshots.id,
+  }).from(schema.snapshots).where(eq(schema.snapshots.active, true));
+  if (activeSnapshots.length !== 1) {
+    throw new Error(
+      `Expected exactly one active Wise snapshot; found ${activeSnapshots.length}.`,
+    );
+  }
+  const identitySnapshotId = activeSnapshots[0].id;
   const tutorRows = await db.select({
-    key: schema.postClassSessions.canonicalTutorKey,
-    count: sql<number>`count(*)`,
-  }).from(schema.postClassSessions)
-    .where(isNotNull(schema.postClassSessions.canonicalTutorKey))
-    .groupBy(schema.postClassSessions.canonicalTutorKey);
+    key: schema.tutorIdentityGroups.canonicalKey,
+  }).from(schema.tutorIdentityGroups)
+    .where(eq(schema.tutorIdentityGroups.snapshotId, identitySnapshotId))
+    .groupBy(schema.tutorIdentityGroups.canonicalKey);
   const tutorKeys = tutorRows
     .map((row) => row.key)
     .filter((key): key is string => Boolean(key));
@@ -155,7 +149,7 @@ async function main(): Promise<void> {
       );
       outcome.tutorCell = payoutWorkbookTutorCell(values);
       if (!outcome.tutorCell) throw new Error("The bounded preamble has no TUTOR value.");
-      const matches = resolveTutorKey(outcome.tutorCell, tutorKeys);
+      const matches = resolvePayoutWorkbookTutorKeys(outcome.tutorCell, tutorKeys);
       if (matches.length !== 1) {
         throw new Error(
           `TUTOR "${outcome.tutorCell}" resolves to ${matches.length} canonical keys`
@@ -235,11 +229,18 @@ async function main(): Promise<void> {
   }
 
   const errors = outcomes.filter((row) => row.error);
+  const finalActiveSnapshots = await db.select({
+    id: schema.snapshots.id,
+  }).from(schema.snapshots).where(eq(schema.snapshots.active, true));
+  const identitySnapshotStillActive = finalActiveSnapshots.length === 1
+    && finalActiveSnapshots[0].id === identitySnapshotId;
   const artifact = {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     environmentTarget: target.environmentTarget,
     workbooksFolderId: target.workbooksFolderId,
+    identitySnapshotId,
+    identitySnapshotStillActive,
     inputCount: inputs.length,
     validCount: outcomes.length - errors.length,
     errorCount: errors.length,
@@ -263,6 +264,11 @@ async function main(): Promise<void> {
   const outputPath = optionValue("--output");
   if (outputPath) writeJsonArtifact(outputPath, auditedArtifact);
   console.log(JSON.stringify(auditedArtifact, null, 2));
+  if (!identitySnapshotStillActive) {
+    throw new Error(
+      `Wise identity snapshot ${identitySnapshotId} changed during preflight; nothing was written.`,
+    );
+  }
   if (errors.length > 0) {
     throw new Error(`${errors.length} workbook(s) failed preflight; nothing was written.`);
   }
@@ -274,7 +280,18 @@ async function main(): Promise<void> {
 
   // All Google reads and every workbook validation completed before the first
   // database mutation.
-  await db.transaction(async (tx) => {
+  await withPostClassTransaction(db, async (tx) => {
+    const lockedActiveSnapshots = await tx.select({
+      id: schema.snapshots.id,
+    }).from(schema.snapshots)
+      .where(eq(schema.snapshots.active, true))
+      .for("update");
+    if (lockedActiveSnapshots.length !== 1
+      || lockedActiveSnapshots[0].id !== identitySnapshotId) {
+      throw new Error(
+        `Wise identity snapshot ${identitySnapshotId} changed before commit; nothing was written.`,
+      );
+    }
     await tx.update(schema.postClassTutorPayoutSheets).set({
       active: false,
       updatedByEmail: target.connectedEmail,
@@ -308,6 +325,7 @@ async function main(): Promise<void> {
       beforeValue: null,
       afterValue: {
         fleetSha256,
+        identitySnapshotId,
         workbookCount: outcomes.length,
         workbooksFolderId: target.workbooksFolderId,
       },

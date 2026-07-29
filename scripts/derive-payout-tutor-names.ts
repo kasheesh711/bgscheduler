@@ -38,6 +38,7 @@ import {
   isPayoutTutorBlockedUntilLedgerIdentity,
   REVIEWED_PAYOUT_TUTOR_MAPPINGS,
 } from "@/lib/post-class-feedback/payout-tutor-mapping";
+import { withPostClassTransaction } from "@/lib/post-class-feedback/transaction";
 import { fetchGoogleSheetRows } from "@/lib/sales-dashboard/sheets";
 
 function loadEnvFile(filePath: string): void {
@@ -270,7 +271,7 @@ async function main(): Promise<void> {
     // Reconcile the reviewed set atomically. A prior mapping for an explicitly
     // blocked or unassigned tutor must not remain active merely because this
     // run declined to upsert it.
-    await db.transaction(async (tx) => {
+    await withPostClassTransaction(db, async (tx) => {
       // A mapping identity participates in the preview token and determines
       // the exact tutor name written to Google. Serialize mapping commits with
       // payout claims/finalizers so neither can observe a half-reconciled set.

@@ -257,10 +257,15 @@ app adjustments because the refreshed source and app-owned deductions are
 separate tabs.
 
 Tutor workbooks remain views. The rollout inventory recursively scans
-`POST_CLASS_PAYOUT_WORKBOOKS_FOLDER_ID`, proves each workbook's current formula,
-and changes it to query `Payouts With Deductions`. Runtime publishing never
-writes a tutor workbook. The composite formula and tutor imports are rollout
-gates: if either is wrong, the adjustment may exist but not affect tutor totals.
+`POST_CLASS_PAYOUT_WORKBOOKS_FOLDER_ID`, resolves each live `TUTOR` cell against
+the active Wise identity catalog, proves each workbook's current formula, and
+changes it to query `Payouts With Deductions`. Reviewed identity overrides take
+precedence over nickname parsing, and a compound nickname such as `Win-Bordin`
+cannot collapse to `Win`. The inventory pins the active Wise snapshot for the
+whole fleet scan and rechecks it under the registry transaction before commit.
+Runtime publishing never writes a tutor workbook. The composite formula and
+tutor imports are rollout gates: if either is wrong, the adjustment may exist
+but not affect tutor totals.
 
 ### Preview, publish, CSV, and exceptions
 
@@ -476,9 +481,10 @@ migrations, the rollout owner should complete these steps:
     `Kevin (Kev) Y. Hsieh` → `Kevin`,
     `Prohrak (Paoju) Kruengthomya` → `Paojuu`, the online-only Samantha
     identity → `Samantha`, and the online-only Vasinee `(Prae)` identity →
-    `Prae`. Leave Kemjira, Roger, and Tulya unassigned because no canonical key
-    exists. Keep `Fluke-Supha`, `Muk`, `Nacha (Poi)`, and `Win-Bordin` blocked
-    until an exact source-ledger identity appears. Do not guess.
+    `Prae`. Leave Kemjira, Roger, and Tulya unassigned because no approved exact
+    source-ledger identity exists. Keep `Fluke-Supha`, `Muk`, `Nacha (Poi)`, and
+    `Win-Bordin` blocked until an exact source-ledger identity appears. Do not
+    guess.
 11. Let rolling collection plus the bounded :23/:53 drain converge. Require no
     blocking global issue and review every remaining non-ready/pending count in
     the exact preview.
