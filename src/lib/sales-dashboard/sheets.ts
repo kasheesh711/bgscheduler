@@ -437,12 +437,16 @@ interface GoogleSheetsAppendResponse {
 /**
  * Append rows to the end of a sheet's data.
  *
- * `insertDataOption: INSERT_ROWS` makes Google add rows rather than overwrite
- * whatever sits below the table, and `RAW` sends each value with the type it
- * already has — a JS number becomes a numeric cell, a string stays text. That
- * matters when appending to a typed column: `USER_ENTERED` would re-parse the
- * value, and a row whose type differs from its column is treated by QUERY as a
- * minority type and silently dropped from any view built on it.
+ * `insertDataOption: OVERWRITE` fills the first blank row in the existing grid
+ * instead of physically inserting a row. Physical insertion makes Sheets
+ * rewrite formulas which reference the append range (for example A2:H becomes
+ * A3:H), silently excluding the new payout row from a composite view.
+ *
+ * `RAW` sends each value with the type it already has — a JS number becomes a
+ * numeric cell, a string stays text. That matters when appending to a typed
+ * column: `USER_ENTERED` would re-parse the value, and a row whose type differs
+ * from its column is treated by QUERY as a minority type and silently dropped
+ * from any view built on it.
  */
 export async function appendGoogleSheetRows(
   email: string,
@@ -459,7 +463,7 @@ export async function appendGoogleSheetRows(
     { range, majorDimension: "ROWS", values: rows.map((row) => row.map((cell) => cell ?? "")) },
     {
       valueInputOption: "RAW",
-      insertDataOption: "INSERT_ROWS",
+      insertDataOption: "OVERWRITE",
       includeValuesInResponse: "false",
     },
   );

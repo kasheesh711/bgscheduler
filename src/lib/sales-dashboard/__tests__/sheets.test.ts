@@ -10,6 +10,7 @@ import {
   getGoogleSheetsWriteAccessToken,
 } from "../google-oauth";
 import {
+  appendGoogleSheetRows,
   batchUpdateGoogleSheetValues,
   batchUpdateGoogleSpreadsheet,
   fetchGoogleSheetRange,
@@ -139,6 +140,46 @@ describe("Google Sheets HTTP helpers", () => {
           values: [["=SUM(H9:H)"]],
         },
       ],
+    });
+  });
+
+  it("appends RAW rows without inserting and shifting referenced ranges", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+      updates: {
+        updatedRange: "'Feedback Deductions'!A2:H2",
+        updatedRows: 1,
+      },
+    }));
+
+    await expect(appendGoogleSheetRows(
+      "finance@example.com",
+      "sheet-123",
+      "Feedback Deductions",
+      [["Kevin", "Feedback deduction", "Student", 46228, 0.25, "—", 0, -100]],
+    )).resolves.toEqual({
+      updatedRange: "'Feedback Deductions'!A2:H2",
+      firstRowNumber: 2,
+      updatedRows: 1,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(url.toString()).toBe(
+      "https://sheets.googleapis.com/v4/spreadsheets/sheet-123/values/"
+      + "'Feedback%20Deductions'!A%3AH:append"
+      + "?valueInputOption=RAW&insertDataOption=OVERWRITE"
+      + "&includeValuesInResponse=false",
+    );
+    expect(init).toMatchObject({
+      method: "POST",
+      headers: {
+        Authorization: "Bearer write-token",
+        "Content-Type": "application/json",
+      },
+    });
+    expect(JSON.parse(String(init.body))).toEqual({
+      range: "'Feedback Deductions'!A:H",
+      majorDimension: "ROWS",
+      values: [["Kevin", "Feedback deduction", "Student", 46228, 0.25, "—", 0, -100]],
     });
   });
 
