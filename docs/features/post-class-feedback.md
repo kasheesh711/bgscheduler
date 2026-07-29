@@ -321,6 +321,11 @@ partial roll. On explicit
 `--commit`, the audited roll CLI closes that exact version before changing any
 dates. There is deliberately no close/date-roll API or UI button: only that CLI
 may close and repoint after the full-fleet workbook/composite checks.
+Read-heavy maintenance commands use a conservative 2.1-second shared-account
+cadence, preserving headroom beneath the Sheets per-user quota for concurrent
+application health reads. The lease-bound date roll uses 1.5 seconds: its five
+reads plus one write and readback per workbook remain quota-safe while the
+68-workbook fleet still fits inside the durable 15-minute roll lease.
 
 ### Guardrails
 

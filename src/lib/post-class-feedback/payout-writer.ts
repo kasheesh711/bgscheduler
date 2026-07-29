@@ -41,6 +41,54 @@ export function createPayoutRateGate(minIntervalMs = PAYOUT_GOOGLE_MIN_INTERVAL_
   };
 }
 
+/**
+ * Fleet maintenance performs several reads per workbook through the same
+ * connected account used by the live application. Keep that traffic well
+ * below the 60-request/minute per-user Sheets quota so a concurrent health
+ * read cannot make an otherwise valid full-fleet preflight fail near the end.
+ */
+export const PAYOUT_GOOGLE_MAINTENANCE_MIN_INTERVAL_MS = 2_100;
+export const PAYOUT_GOOGLE_ROLL_MIN_INTERVAL_MS = 1_500;
+export const PAYOUT_GOOGLE_ROLL_CALLS_PER_WORKBOOK = 7;
+export const PAYOUT_GOOGLE_ROLL_LEASE_SAFETY_MS = 2 * 60 * 1_000;
+
+export function createPayoutMaintenanceRateGate() {
+  return createPayoutRateGate(PAYOUT_GOOGLE_MAINTENANCE_MIN_INTERVAL_MS);
+}
+
+export function createPayoutRollRateGate() {
+  return createPayoutRateGate(PAYOUT_GOOGLE_ROLL_MIN_INTERVAL_MS);
+}
+
+export function assertPayoutRollFitsLease(
+  workbookCount: number,
+  leaseMs: number,
+): {
+  pacedCallCount: number;
+  minimumPacedDurationMs: number;
+  safetyMarginMs: number;
+} {
+  if (!Number.isInteger(workbookCount) || workbookCount <= 0) {
+    throw new Error("The payout roll requires a positive whole workbook count.");
+  }
+  const pacedCallCount = workbookCount * PAYOUT_GOOGLE_ROLL_CALLS_PER_WORKBOOK;
+  const minimumPacedDurationMs = Math.max(0, pacedCallCount - 1)
+    * PAYOUT_GOOGLE_ROLL_MIN_INTERVAL_MS;
+  const availableMs = leaseMs - PAYOUT_GOOGLE_ROLL_LEASE_SAFETY_MS;
+  if (minimumPacedDurationMs > availableMs) {
+    throw new Error(
+      `${workbookCount} payout workbooks cannot fit the worst-case Google`
+      + ` read/write pass inside the durable roll lease with`
+      + ` ${PAYOUT_GOOGLE_ROLL_LEASE_SAFETY_MS}ms safety margin.`,
+    );
+  }
+  return {
+    pacedCallCount,
+    minimumPacedDurationMs,
+    safetyMarginMs: leaseMs - minimumPacedDurationMs,
+  };
+}
+
 export function createGoogleMasterLedgerGateway(
   input: {
     email: string;

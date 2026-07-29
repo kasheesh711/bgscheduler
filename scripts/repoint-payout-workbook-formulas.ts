@@ -21,7 +21,7 @@ import {
   payoutWorkbookTutorMatchesKey,
   planPayoutFormulaRepoint,
 } from "@/lib/post-class-feedback/payout-workbook-operations";
-import { createPayoutRateGate } from "@/lib/post-class-feedback/payout-writer";
+import { createPayoutMaintenanceRateGate } from "@/lib/post-class-feedback/payout-writer";
 import {
   batchUpdateGoogleSheetValues,
   fetchGoogleSheetRange,
@@ -87,7 +87,7 @@ async function main(): Promise<void> {
   const priorById = new Map(
     (existingBackup?.entries ?? []).map((entry) => [entry.spreadsheetId, entry]),
   );
-  const pace = createPayoutRateGate();
+  const pace = createPayoutMaintenanceRateGate();
   const entries: PayoutFormulaBackupEntry[] = [];
   const currentById = new Map<string, { detail: string; total: string }>();
 

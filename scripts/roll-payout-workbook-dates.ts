@@ -30,6 +30,7 @@ import {
   finalizePayoutWorkbookRoll,
   inspectPayoutRunCloseReadiness,
   loadActivePayoutWorkbookRegistry,
+  PAYOUT_RUN_LEASE_MS,
   recordPayoutWorkbookRollOutcome,
   type PayoutRollOutcome,
   type PayoutWorkbookRegistryRow,
@@ -46,7 +47,10 @@ import {
   type PayoutWorkbookDateState,
 } from "@/lib/post-class-feedback/payout-workbook-operations";
 import { payoutBangkokDate } from "@/lib/post-class-feedback/payout-window";
-import { createPayoutRateGate } from "@/lib/post-class-feedback/payout-writer";
+import {
+  assertPayoutRollFitsLease,
+  createPayoutRollRateGate,
+} from "@/lib/post-class-feedback/payout-writer";
 import {
   batchUpdateGoogleSheetValues,
   fetchGoogleSheetRange,
@@ -379,12 +383,16 @@ async function main(): Promise<void> {
       + " has not ended in Bangkok.",
     );
   }
-  const pace = createPayoutRateGate();
+  const pace = createPayoutRollRateGate();
   const registry = await loadActivePayoutWorkbookRegistry(db);
   if (registry.length === 0) throw new Error("The active payout workbook registry is empty.");
   if (new Set(registry.map((row) => row.spreadsheetId)).size !== registry.length) {
     throw new Error("The active payout workbook registry contains duplicate spreadsheet IDs.");
   }
+  const leasePacingBudget = assertPayoutRollFitsLease(
+    registry.length,
+    PAYOUT_RUN_LEASE_MS,
+  );
   const registryIds = new Set(registry.map((row) => row.spreadsheetId));
   const inventoryIdSet = new Set(inventoryIds);
   const unregistered = inventoryIds.filter((id) => !registryIds.has(id));
@@ -443,6 +451,7 @@ async function main(): Promise<void> {
     inventorySha256,
     outgoingCount: preflight.filter((row) => row.dates.state === "outgoing").length,
     alreadyIncomingCount: preflight.filter((row) => row.dates.state === "incoming").length,
+    leasePacingBudget,
     manifestHash,
   };
   console.log(JSON.stringify(summary, null, 2));

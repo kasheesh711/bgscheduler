@@ -14,7 +14,7 @@ import {
   PAYOUT_TAB_COLUMN_COUNT,
   PAYOUT_TAB_HEADERS,
 } from "@/lib/post-class-feedback/payout-workbook-operations";
-import { createPayoutRateGate } from "@/lib/post-class-feedback/payout-writer";
+import { createPayoutMaintenanceRateGate } from "@/lib/post-class-feedback/payout-writer";
 import {
   batchUpdateGoogleSpreadsheet,
   fetchGoogleSheetRange,
@@ -81,7 +81,7 @@ async function main(): Promise<void> {
   loadPayoutScriptEnvironment();
   const target = requirePayoutGoogleTarget();
   const commit = process.argv.includes("--commit");
-  const pace = createPayoutRateGate();
+  const pace = createPayoutMaintenanceRateGate();
 
   await pace();
   const tabs = await listGoogleSheetProperties(

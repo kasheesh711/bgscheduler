@@ -27,7 +27,7 @@ import {
   resolvePayoutWorkbookTutorKeys,
 } from "@/lib/post-class-feedback/payout-workbook-operations";
 import { withPostClassTransaction } from "@/lib/post-class-feedback/transaction";
-import { createPayoutRateGate } from "@/lib/post-class-feedback/payout-writer";
+import { createPayoutMaintenanceRateGate } from "@/lib/post-class-feedback/payout-writer";
 import {
   fetchGoogleSheetRange,
   inspectGoogleSheetRange,
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
   const tutorKeys = tutorRows
     .map((row) => row.key)
     .filter((key): key is string => Boolean(key));
-  const pace = createPayoutRateGate();
+  const pace = createPayoutMaintenanceRateGate();
   const outcomes: InventoryOutcome[] = [];
   const claimed = new Map<string, string>();
 

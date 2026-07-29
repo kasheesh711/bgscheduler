@@ -4,8 +4,13 @@ vi.mock("server-only", () => ({}));
 
 import {
   appendMasterDeductions,
+  assertPayoutRollFitsLease,
+  createPayoutMaintenanceRateGate,
   createPayoutRateGate,
+  createPayoutRollRateGate,
   DuplicatePayoutAppendSignatureError,
+  PAYOUT_GOOGLE_MAINTENANCE_MIN_INTERVAL_MS,
+  PAYOUT_GOOGLE_ROLL_MIN_INTERVAL_MS,
   type MasterAppendOutcome,
   type MasterAppendPlan,
   type MasterLedgerGateway,
@@ -217,5 +222,53 @@ describe("createPayoutRateGate", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reserves shared-account quota headroom for fleet maintenance", async () => {
+    vi.useFakeTimers();
+    try {
+      const gate = createPayoutMaintenanceRateGate();
+      await gate();
+      let resolved = false;
+      const pending = gate().then(() => { resolved = true; });
+      await vi.advanceTimersByTimeAsync(
+        PAYOUT_GOOGLE_MAINTENANCE_MIN_INTERVAL_MS - 1,
+      );
+      expect(resolved).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(resolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("spaces calls by the lease-bound date-roll interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const gate = createPayoutRollRateGate();
+      await gate();
+      let resolved = false;
+      const pending = gate().then(() => { resolved = true; });
+      await vi.advanceTimersByTimeAsync(PAYOUT_GOOGLE_ROLL_MIN_INTERVAL_MS - 1);
+      expect(resolved).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(resolved).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a date-roll fleet that cannot fit the durable lease", () => {
+    expect(assertPayoutRollFitsLease(68, 15 * 60 * 1_000)).toEqual({
+      pacedCallCount: 476,
+      minimumPacedDurationMs: 712_500,
+      safetyMarginMs: 187_500,
+    });
+    expect(() => assertPayoutRollFitsLease(
+      75,
+      15 * 60 * 1_000,
+    )).toThrow(/cannot fit/);
   });
 });

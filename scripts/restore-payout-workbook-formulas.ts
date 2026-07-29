@@ -15,7 +15,7 @@ import {
   payoutWorkbookTutorCell,
   payoutWorkbookTutorMatchesKey,
 } from "@/lib/post-class-feedback/payout-workbook-operations";
-import { createPayoutRateGate } from "@/lib/post-class-feedback/payout-writer";
+import { createPayoutMaintenanceRateGate } from "@/lib/post-class-feedback/payout-writer";
 import {
   batchUpdateGoogleSheetValues,
   fetchGoogleSheetRange,
@@ -67,7 +67,7 @@ async function main(): Promise<void> {
     !== artifact.entries.length) {
     throw new Error("The backup artifact contains duplicate spreadsheet IDs.");
   }
-  const pace = createPayoutRateGate();
+  const pace = createPayoutMaintenanceRateGate();
   const current = new Map<string, { detail: string; total: string }>();
 
   // Validate the entire artifact/fleet before the first restore write.
