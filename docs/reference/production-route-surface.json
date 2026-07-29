@@ -1,21 +1,23 @@
 {
   "version": 1,
   "description": "Source route surface that must remain additive for production releases. Update intentionally when removing a route.",
-  "recordedAt": "2026-06-04T10:12:30.655Z",
+  "recordedAt": "2026-07-29T00:00:00.000Z",
   "productionDeployment": {
     "id": "dpl_5S1abfEyBEPRDdd2LZyRb2DNWRWK",
     "alias": "https://bgscheduler.vercel.app",
     "url": "https://bgscheduler-bl5sz78th-kevins-projects-6ebb4efc.vercel.app",
     "outputItems": 362
   },
-  "minSourceRouteCount": 197,
+  "minSourceRouteCount": 199,
   "criticalRoutes": [
     "/leave-requests",
     "/line-review",
     "/payroll",
     "/student-promotions",
     "/api/data-health/jobs/[jobKey]/run",
+    "/api/internal/post-class-feedback-backfill",
     "/api/internal/sync-leave-requests",
+    "/api/post-class-feedback/payout-runs",
     "/api/internal/student-promotions/july-1"
   ],
   "sourceRoutes": [
@@ -86,6 +88,7 @@
     "/api/internal/class-assignments/morning",
     "/api/internal/cron-watchdog",
     "/api/internal/line-backlog-recovery",
+    "/api/internal/post-class-feedback-backfill",
     "/api/internal/post-class-feedback/admin-digest",
     "/api/internal/post-class-feedback/reminder-day-after",
     "/api/internal/post-class-feedback/reminder-deadline",
@@ -139,6 +142,7 @@
     "/api/post-class-feedback/ai-review",
     "/api/post-class-feedback/finance",
     "/api/post-class-feedback/finance-periods",
+    "/api/post-class-feedback/payout-runs",
     "/api/post-class-feedback/review",
     "/api/post-class-feedback/sessions/[sessionId]",
     "/api/post-class-feedback/settings",

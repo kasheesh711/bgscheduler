@@ -104,7 +104,7 @@ declared maturity.
 | [Credit Control](./features/credit-control.md) | stable | Projects when each student's prepaid credit runs low/out; prioritized follow-up queue with outreach logging. |
 | [Payroll](./features/payroll.md) | stable | Reconciles tutor pay against Wise sessions/invoices per month; surfaces integrity issues; review + approve. |
 | [Wise Activity Audit](./features/wise-activity-audit.md) | stable | Read-only audit log of Wise operational/financial events + package-sales reconciliation workbench. |
-| [Post-Class Feedback](./features/post-class-feedback.md) | in progress (shadow rollout) | Reconciles immutable Wise teacher-feedback evidence, derives tutor timeliness and authorship from the Wise activity-event stream, runs AI quality review, and carries an internal deduction/finance workflow without writing to Wise or Payroll. Outbound tutor reminders and the admin digest are parked. |
+| [Post-Class Feedback](./features/post-class-feedback.md) | in progress (shadow rollout) | Reconciles immutable Wise teacher-feedback evidence, derives tutor timeliness and authorship, and carries reviewed deductions into a dedicated payout-adjustment tab behind an explicit finance publish and write kill switch. It never writes Wise or Payroll; outbound reminders/digest remain parked. |
 | [Learning Plans](./features/learning-plans.md) | stable | Stateless Years 1–13 syllabus-plan builder with a dedicated A4 print/PDF report; plan content stays unstored while access is database-backed. |
 | [Student Promotions](./features/student-promotions.md) | stable, pending first production run | Audited July 1, 2026 Wise student grade/course/graduation workflow with future-session pay-band checks, pay-rate review, dry-run review, and verified apply. |
 | [LINE Integration](./features/line-integration.md) | stable (writeback dry-run) | LINE OA inbox: ingest, classify, draft replies, human-gated review. Scheduler write-path flag-gated/dry-run. |
@@ -132,7 +132,7 @@ Mechanical lookup. Owns exact signatures, columns, schedules, and variables.
 | [room-capacity.md](./reference/api/room-capacity.md) | `/api/room-capacity/*`. |
 | [sales-dashboard.md](./reference/api/sales-dashboard.md) | `/api/sales-dashboard/*`. |
 | [student-promotions.md](./reference/api/student-promotions.md) | `/api/student-promotions/*` and the July 1 internal cron route. |
-| [post-class-feedback.md](./features/post-class-feedback.md#api-and-cron-surface) | `/api/post-class-feedback/*` and its four internal collection/reminder/digest routes (feature guide; master signatures remain in the API index). |
+| [post-class-feedback.md](./features/post-class-feedback.md#api-and-cron-surface) | `/api/post-class-feedback/*` and its five internal rolling/backfill/reminder/digest routes (feature guide; master signatures remain in the API index). |
 | [university-admissions.md](./reference/api/university-admissions.md) | `/api/admissions/**` and the admissions-notifications internal cron route. |
 | [wise-activity.md](./reference/api/wise-activity.md) | `/api/wise-activity/*`. |
 | [internal-crons.md](./reference/api/internal-crons.md) | `/api/internal/*` — cron-triggered sync endpoints. |
@@ -155,7 +155,7 @@ Mechanical lookup. Owns exact signatures, columns, schedules, and variables.
 | [erd-line.md](./reference/database/erd-line.md) | LINE tables. |
 | [erd-room-capacity.md](./reference/database/erd-room-capacity.md) | Room Capacity tables. |
 | [erd-student-promotions.md](./reference/database/erd-student-promotions.md) | Student Promotions audit tables. |
-| [post-class-feedback.md](./features/post-class-feedback.md#durable-data-model) | Post-Class Feedback's 24-table source, compliance, notification, AI, access, and finance model. |
+| [post-class-feedback.md](./features/post-class-feedback.md#durable-data-model) | Post-Class Feedback's 32-table source, compliance, notification, AI, access, finance, and durable payout/roll model. |
 | [erd-university-admissions.md](./reference/database/erd-university-admissions.md) | University Admissions case-management tables (`admissions_*`). |
 
 #### Other reference

@@ -30,7 +30,7 @@ The entries below are the complete contents of `vercel.json`. Schedules are UTC 
 | 13 | `7,37 * * * *` | every 30 min, on :07/:37 | `/api/internal/cron-watchdog` | [`route.ts:28`](../../src/app/api/internal/cron-watchdog/route.ts) | 300s ([:7](../../src/app/api/internal/cron-watchdog/route.ts)) |
 | 14 | `12 1 * * *` | once daily, 01:12 UTC (08:12 Bangkok) | `/api/internal/admissions-notifications` | [`route.ts:73`](../../src/app/api/internal/admissions-notifications/route.ts) | 300s ([:20](../../src/app/api/internal/admissions-notifications/route.ts)) |
 
-The high-frequency sync jobs are staggered across the half-hour so they do not all hit upstream APIs or the database in the same minute: Wise snapshot on :00/:30, activity audit on :05/:35, sales on :10/:40, Post-Class Feedback on :13/:43, leave requests on :15/:45, credit control on :20/:50, and progress tests on :25/:55. Competitor intelligence runs weekly at Monday 01:25 Bangkok to limit vendor spend.
+The high-frequency sync jobs are staggered across the half-hour so they do not all hit upstream APIs or the database in the same minute: Wise snapshot on :00/:30, activity audit on :05/:35, sales on :10/:40, Post-Class Feedback rolling collection on :13/:43, leave requests on :15/:45, credit control on :20/:50, bounded Post-Class Feedback history drain on :23/:53, and progress tests on :25/:55. Competitor intelligence runs weekly at Monday 01:25 Bangkok to limit vendor spend.
 
 ```mermaid
 gantt
@@ -44,14 +44,15 @@ gantt
     post-class-feedback (:13)  :a4, 13, 1m
     sync-leave-requests (:15)  :a5, 15, 1m
     sync-credit-control (:20)  :a6, 20, 1m
-    sync-progress-tests (:25)  :a7, 25, 1m
+    feedback-backfill (:23)    :a7, 23, 1m
+    sync-progress-tests (:25)  :a8, 25, 1m
 ```
 
 ### Authentication (shared across all crons)
 
 Every cron handler authenticates the inbound request by constant-time comparison of the `Authorization` header against `Bearer ${CRON_SECRET}`. The comparison length-pre-checks before `crypto.timingSafeEqual` to avoid the `RangeError` that function throws on length-mismatched buffers ([`sync-wise/route.ts:10-28`](../../src/app/api/internal/sync-wise/route.ts)). Two implementations of identical logic exist:
 
-- **Shared helper** `rejectInvalidCronSecret(request)` — returns a `NextResponse` (401 invalid / 500 missing-secret) or `null` when valid ([`cron-auth.ts:19-26`](../../src/lib/internal/cron-auth.ts)). Used by `sync-wise-activity`, all four Post-Class Feedback handlers, `sync-leave-requests`, `class-assignments/morning`, `class-assignments/admin-email`, and `admissions-notifications`.
+- **Shared helper** `rejectInvalidCronSecret(request)` — returns a `NextResponse` (401 invalid / 500 missing-secret) or `null` when valid ([`cron-auth.ts:19-26`](../../src/lib/internal/cron-auth.ts)). Used by `sync-wise-activity`, all five Post-Class Feedback handlers, `sync-leave-requests`, `class-assignments/morning`, `class-assignments/admin-email`, and `admissions-notifications`.
 - **Inline copies** — `sync-wise`, `sync-sales-dashboard`, `sync-credit-control`, `sync-room-utilization`, and `student-promotions/july-1` each define their own `hasValidCronSecret` with the same constant-time check rather than importing the helper.
 
 `CRON_SECRET` is a required environment variable; when unset, handlers return **HTTP 500 `{ "error": "Server misconfigured" }`** rather than running unauthenticated ([`cron-auth.ts:22-24`](../../src/lib/internal/cron-auth.ts)).
@@ -69,7 +70,7 @@ Vercel Cron always calls **`GET`**. Some handlers additionally export `POST` for
 | `sync-credit-control` | yes | yes | yes ([`route.ts:50-51`](../../src/app/api/internal/sync-credit-control/route.ts)) |
 | `sync-wise-activity` | yes | no (manual backfill lives at a separate route) | n/a |
 | `sync-post-class-feedback` | yes | no (manual backfill lives at `/api/post-class-feedback/sync`) | n/a |
-| `post-class-feedback-backfill` | yes | yes (`?startDate=&endDate=` overrides the automatic window) | n/a |
+| `post-class-feedback-backfill` | yes | no (bounded recovery controls are GET query parameters) | n/a |
 | `post-class-feedback/admin-digest` | yes | no | n/a — **parked**, no cron entry |
 | `post-class-feedback/reminder-day-after` | yes | no | n/a — **parked**, no cron entry |
 | `post-class-feedback/reminder-deadline` | yes | no | n/a — **parked**, no cron entry |
@@ -128,7 +129,7 @@ It pages newest-first and stops on the first of: empty page (`empty_page`), a sh
 
 ## 5. Post-Class Feedback collection
 
-One cron route reconciles canonical feedback. It is registered in the Data Health cron registry and writes `cron_invocations` evidence through `withCronInvocationAudit`.
+Two cron routes reconcile canonical feedback. Both are registered in the Data Health cron registry and write `cron_invocations` evidence through `withCronInvocationAudit`.
 
 > **Outbound email is parked.** The admin digest and the two tutor reminder routes still exist and remain runnable on demand from Data Health, but they have **no `vercel.json` cron entry** and are registered `manualOnly` so Data Health never reports them late. Nothing emails a tutor automatically.
 
@@ -136,9 +137,23 @@ One cron route reconciles canonical feedback. It is registered in the Data Healt
 
 **Schedule:** `13,43 * * * *`. **Does:** reconcile canonical Wise post-class feedback without writing to Wise.
 
-`runPostClassFeedbackSync({ triggerType: "cron" })` enumerates a rolling four-Bangkok-date `PAST` session window, prioritizes unlinked `SessionFeedbackSubmittedEvent` rows and old incomplete sessions, and fetches at most 50 canonical session-detail records with concurrency four (an explicit admin date-range backfill may request up to 400 per batch; the cron itself is always capped at 50). The capped candidate selector reserves bounded lanes for incomplete rechecks and newly ended rolling-window sessions, so a persistent event backlog cannot starve canonical reconciliation. The run preserves immutable `(session, submission/content)` evidence and assessments. Form drift or source issues produce a partial/fail-closed run; there are no reminders or deduction candidates from unavailable evidence.
+`runPostClassFeedbackSync({ triggerType: "cron" })` enumerates a rolling four-Bangkok-date `PAST` session window, prioritizes unlinked `SessionFeedbackSubmittedEvent` rows and old incomplete sessions, and fetches at most 50 canonical session-detail records with concurrency four. The capped candidate selector reserves bounded lanes for incomplete rechecks and newly ended rolling-window sessions, so a persistent event backlog cannot starve canonical reconciliation. The run preserves immutable `(session, submission/content)` evidence and assessments. Form drift or source issues produce a partial/fail-closed run; there are no reminders or deduction candidates from unavailable evidence.
 
-After collection, the route independently starts deterministic-suspect AI review and any due notification retries via `Promise.allSettled`. Either auxiliary task may fail without rolling back objective source reconciliation. A concurrent collector is rejected with HTTP 409 by the partial unique `running` index. **`maxDuration = 800`.**
+After collection, the route independently starts deterministic-suspect AI review and any due notification retries via `Promise.allSettled`. Either auxiliary task may fail without rolling back objective source reconciliation. A concurrent collector is rejected with HTTP 409 by the partial unique `running` index. Collection is also deferred while a payout run holds a live external-operation lease; conversely payout acquisition/close rejects a running collector, and every source write verifies its sync row is still `running` so a stale recovered worker cannot mutate finance evidence. **`maxDuration = 800`.**
+
+### Bounded historical drain — `/api/internal/post-class-feedback-backfill`
+
+**Schedule:** `23,53 * * * *`. **Does:** select the oldest unreconciled historical
+window and run exactly one batch of at most 50 canonical session-detail calls. The
+scheduled defaults are deliberately `detailCap=50` and `maxBatches=1`, so one
+invocation cannot silently multiply the per-batch cap.
+
+The same `GET` route accepts `startDate`, `endDate`, `detailCap`, and `maxBatches`
+query parameters for a deliberate `CRON_SECRET`-authenticated recovery pass.
+`startDate` and `endDate` must be supplied together; explicit bounds may request up
+to 400 details per batch and 50 batches. Those larger settings are manual
+operations, not scheduled defaults, and should be chosen only with Wise/API
+headroom observed. A concurrent collector returns HTTP 409. **`maxDuration = 800`.**
 
 ### Parked routes — digest and tutor reminders
 

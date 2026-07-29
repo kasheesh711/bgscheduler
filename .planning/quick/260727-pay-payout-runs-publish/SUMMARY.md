@@ -3,6 +3,7 @@ quick_id: 260727-pay
 slug: payout-runs-publish
 date: 2026-07-27
 status: complete
+superseded: 2026-07-29-dedicated-payout-tabs
 source: plan-mode (user-approved)
 plan: ~/.claude/plans/why-was-the-plan-breezy-tome.md
 branch: feat/payout-runs-publish
@@ -10,6 +11,16 @@ worktree: /Users/kevinhsieh/Developer/bgscheduler-payout
 ---
 
 # Payout runs: finish sections 6-8, and fix the reconciliation that blocks them
+
+> **Historical implementation record — superseded 2026-07-29.** The verification
+> counts and owner gates below describe the original per-tutor row-insertion
+> path through the earlier payout commits. They are not current-HEAD release
+> evidence. Production inspection proved tutor `Payouts` tabs are
+> `QUERY(IMPORTRANGE(...))` arrays, so inserting into them would break the view.
+> The approved replacement uses a finance-refreshed read-only source tab, an
+> app-owned append-only `Feedback Deductions` tab, and a formula-backed
+> `Payouts With Deductions` composite imported by tutor workbooks. See
+> `docs/features/post-class-feedback.md` for the current rollout contract.
 
 Started from "why was the plan not fully executed upon?" about the monthly
 payout-run plan. PR #46 shipped sections 1-5 inert and stopped at its own
@@ -66,16 +77,26 @@ rows, ten times.
 Integration ran against local Postgres 14 via the new `TEST_DATABASE_URL`
 escape hatch (Docker daemon was down).
 
-## Not done — owner gates
+## Historical owner gates (do not use as the current rollout checklist)
 
 1. ~~Consent `drive.file` and run the probe.~~ **Cleared 2026-07-28.** `drive.file`
    granted to kevhsh7@gmail.com, and it can create a file in a folder the app
    does not own — so no fallback is needed and the broader `drive` scope stays
    off the table. Enabling the Drive API on the Cloud project was a separate
    prerequisite that the plan had not identified.
-2. Apply `0057` and `0058` to production.
+2. Apply `0057` and `0058` to production. **Historical only:** the current
+   rollout also requires `0059` and `0060`.
 3. Flip enforcement `shadow` -> `live`.
-4. Map tutors to payout spreadsheets via `POST /api/post-class-feedback/payout-sheets`.
-5. Verify `insertDimension` against a scratch copy of a real payout sheet before
-   any live publish — formulas beyond column H and totals ranges are unproven.
-6. Let reconciliation converge; the publish gate correctly refuses today.
+4. ~~Map tutors to payout spreadsheets.~~ Superseded by exact canonical tutor →
+   source-ledger identity mappings; no runtime per-tutor workbook write exists.
+5. ~~Verify `insertDimension`.~~ Superseded. The dedicated adjustment tab is
+   append-only; tutor arrays must instead be cut over to the formula-backed composite
+   and verified recursively from the configured workbook-inventory folder.
+6. Let reconciliation converge; the current preview/publish gate counts every
+   non-ready source state and requires an explicit audited acknowledgement.
+
+Current rollout additionally requires the lifecycle/dedicated-tab migration,
+strict environment target validation, the default-off payout write switch,
+durable publishing single-flight, preview tokens, exact tutor canaries,
+CSV-only retry, post-close correction handling, current-head tests, and
+scratch/production formula evidence. The feature guide owns the ordered list.
