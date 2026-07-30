@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("server-only", () => ({}));
+
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { ScheduleEmailSender } from "@/lib/classrooms/schedule-email";
 import type { CronJobHealth } from "@/lib/data-health/types";
+import type { PayoutWindowStaleness } from "@/lib/post-class-feedback/payout-window-health";
 import {
   buildWatchdogEmail,
+  PAYOUT_WINDOW_JOB_KEY,
   runCronWatchdog,
   sweepCronJobs,
   SWEEP_LOCK_KEY,
@@ -191,6 +196,21 @@ function makeSender(impl?: ScheduleEmailSender["sendEmail"]): ScheduleEmailSende
 
 function loadJobs(jobs: CronJobHealth[]) {
   return async () => jobs;
+}
+
+function payoutWindow(overrides: Partial<PayoutWindowStaleness> = {}): PayoutWindowStaleness {
+  return {
+    stale: true,
+    anchorMonth: "2026-05",
+    windowEnd: "2026-05-25",
+    runStatus: "partial",
+    detail: "Payout window 2026-05 (ended 2026-05-25) is still partial; the automated finalize pass has not been able to publish it.",
+    ...overrides,
+  };
+}
+
+function loadPayoutWindow(staleness: PayoutWindowStaleness | null) {
+  return async () => staleness;
 }
 
 // ── sweepCronJobs ─────────────────────────────────────────────────────────
@@ -586,5 +606,91 @@ describe("runCronWatchdog", () => {
       }),
     ).rejects.toThrow("Failed query");
     expect(sender.sendEmail).not.toHaveBeenCalled();
+  });
+
+  // ── payout window entry ─────────────────────────────────────────────────
+  //
+  // The accrual cron firing on time proves nothing about whether the window
+  // it was meant to close actually published, so the payout window rides the
+  // sweep as its own synthetic entry.
+
+  it("alerts on a payout window left un-finalized past its month end", async () => {
+    const state = freshState();
+    const sender = makeSender();
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: NOW,
+      sender,
+      loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "healthy" })]),
+      loadPayoutWindow: loadPayoutWindow(payoutWindow()),
+    });
+
+    expect(result).toMatchObject({ checked: 2, unhealthy: 1, alertsSent: 1, recoveries: 0 });
+    expect(state.upserts).toHaveLength(1);
+    expect(state.upserts[0].values).toMatchObject({
+      jobKey: PAYOUT_WINDOW_JOB_KEY,
+      lastStatus: "failing",
+      lastAlertOutcome: "alerted",
+    });
+    const email = vi.mocked(sender.sendEmail).mock.calls[0][0];
+    expect(email.text).toContain("Payout Window Finalize [failing, new]");
+    expect(email.text).toContain("Payout window 2026-05 (ended 2026-05-25) is still partial");
+  });
+
+  it("sends a recovery once the stranded payout window publishes", async () => {
+    const state = freshState({
+      alertStates: [alertState({ jobKey: PAYOUT_WINDOW_JOB_KEY })],
+    });
+    const sender = makeSender();
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: NOW,
+      sender,
+      loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "healthy" })]),
+      loadPayoutWindow: loadPayoutWindow(payoutWindow({
+        stale: false,
+        runStatus: null,
+        detail: "Payout window 2026-05 is finalized.",
+      })),
+    });
+
+    expect(result).toMatchObject({ checked: 2, unhealthy: 0, alertsSent: 0, recoveries: 1 });
+    expect(state.updates[0]).toMatchObject({
+      lastStatus: "healthy",
+      lastAlertOutcome: "recovered",
+    });
+  });
+
+  it("adds no payout entry while the accrual cron is parked", async () => {
+    const state = freshState();
+    const sender = makeSender();
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: NOW,
+      sender,
+      loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "healthy" })]),
+      loadPayoutWindow: loadPayoutWindow(null),
+    });
+
+    expect(result).toMatchObject({ checked: 1, unhealthy: 0, alertsSent: 0 });
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("still sweeps every cron job when the payout window check throws", async () => {
+    const state = freshState();
+    const sender = makeSender();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await runCronWatchdog(makeFakeDb(state), {
+        now: NOW,
+        sender,
+        loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "failing" })]),
+        loadPayoutWindow: async () => {
+          throw new Error('relation "post_class_payout_runs" does not exist');
+        },
+      });
+
+      expect(result).toMatchObject({ checked: 1, unhealthy: 1, alertsSent: 1 });
+      expect(state.upserts[0].values).toMatchObject({ jobKey: "wise_snapshot" });
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });

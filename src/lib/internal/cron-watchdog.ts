@@ -23,9 +23,15 @@ import {
   createAppsScriptScheduleEmailSender,
   type ScheduleEmailSender,
 } from "@/lib/classrooms/schedule-email";
+import { getCronJobDefinition } from "@/lib/data-health/cron-registry";
 import { getCronJobsHealth } from "@/lib/data-health/dashboard";
 import type { CronJobHealth, CronJobStatus } from "@/lib/data-health/types";
 import { APP_BASE_URL } from "@/lib/leave-requests/config";
+import {
+  loadPayoutWindowStaleness,
+  PAYOUT_ACCRUAL_JOB_KEY,
+  type PayoutWindowStaleness,
+} from "@/lib/post-class-feedback/payout-window-health";
 
 export type CronAlertStateRow = typeof schema.cronAlertState.$inferSelect;
 
@@ -65,6 +71,68 @@ export interface RunCronWatchdogOptions {
   now?: Date;
   sender?: ScheduleEmailSender;
   loadJobs?: (now: Date) => Promise<CronJobHealth[]>;
+  loadPayoutWindow?: (db: Database, now: Date) => Promise<PayoutWindowStaleness | null>;
+}
+
+/**
+ * Synthetic swept entry for the payout finalize window. Not a cron route: the
+ * accrual cron firing on time says nothing about whether the window it was
+ * supposed to close actually reached `published`, and that gap used to be
+ * completely silent. Riding the sweep gets episode dedup, the digest email,
+ * and the recovery notice for free.
+ */
+export const PAYOUT_WINDOW_JOB_KEY = "post_class_payout_window";
+
+/** Project a staleness verdict onto the shape the sweep classifies. */
+export function payoutWindowJobHealth(staleness: PayoutWindowStaleness): CronJobHealth {
+  const accrual = getCronJobDefinition(PAYOUT_ACCRUAL_JOB_KEY);
+  return {
+    key: PAYOUT_WINDOW_JOB_KEY,
+    label: "Payout Window Finalize",
+    feature: "Class Feedback",
+    path: accrual?.path ?? "/api/internal/post-class-feedback/payout-accrual",
+    schedule: accrual?.schedule ?? null,
+    cadenceLabel: "Per payout window",
+    maxDurationSeconds: accrual?.maxDurationSeconds ?? 800,
+    manualOnly: false,
+    dangerous: true,
+    status: staleness.stale ? "failing" : "healthy",
+    proof: "inferred",
+    proofLabel: "Payout run status",
+    lastSeenAt: null,
+    lastSuccessAt: null,
+    lastFailureAt: null,
+    nextExpectedAt: null,
+    lastExpectedAt: staleness.windowEnd,
+    lateAfterAt: null,
+    durationMs: null,
+    responseStatus: null,
+    errorSummary: staleness.stale ? staleness.detail : null,
+    healthDetail: staleness.detail,
+    latestInvocation: null,
+    recentInvocations: [],
+    canRunManually: accrual?.manualOnly ?? true,
+  };
+}
+
+/**
+ * Never let the payout check take the watchdog down: this is a live 30-minute
+ * cron whose job is reporting on everything else, so a payout-side failure
+ * (missing table on an un-migrated database, a query error) degrades to "no
+ * payout entry this sweep" rather than a failed sweep.
+ */
+async function loadPayoutWindowJob(
+  db: Database,
+  now: Date,
+  options: RunCronWatchdogOptions,
+): Promise<CronJobHealth | null> {
+  try {
+    const staleness = await (options.loadPayoutWindow ?? loadPayoutWindowStaleness)(db, now);
+    return staleness ? payoutWindowJobHealth(staleness) : null;
+  } catch (error) {
+    console.error("Cron watchdog could not evaluate payout window staleness", error);
+    return null;
+  }
 }
 
 /** `failing` covers failed and stuck-running jobs; `unknown` covers never-ran. */
@@ -277,7 +345,8 @@ async function releaseSweepLock(db: Database, now: Date): Promise<void> {
 /**
  * Run one watchdog sweep.
  *
- * 1. Load every job's health via the shared /data-health derivation.
+ * 1. Load every job's health via the shared /data-health derivation, plus the
+ *    synthetic payout-window entry when the accrual cron is scheduled.
  * 2. Claim the single-flight sweep lock; if the cron_alert_state table is
  *    missing, fail safe with no alerting (un-deduped alerts every sweep
  *    would be spam); if another sweep holds the lock, skip this one.
@@ -296,7 +365,9 @@ export async function runCronWatchdog(
   options: RunCronWatchdogOptions = {},
 ): Promise<CronWatchdogSummary> {
   const now = options.now ?? new Date();
-  const jobs = await (options.loadJobs ?? getCronJobsHealth)(now);
+  const registryJobs = await (options.loadJobs ?? getCronJobsHealth)(now);
+  const payoutWindow = await loadPayoutWindowJob(db, now, options);
+  const jobs = payoutWindow ? [...registryJobs, payoutWindow] : registryJobs;
 
   let lockClaimed: boolean;
   try {
