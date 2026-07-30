@@ -13,9 +13,11 @@ import type { PostClassUser } from "./access";
 import { uploadCsvToDrive } from "./drive";
 import { PostClassValidationError } from "./errors";
 import {
+  buildAnchorFingerprintIndex,
   buildPayoutCorrectionRow,
   buildPayoutDeductionRow,
   collectMasterMarkers,
+  computeSourceAnchorFingerprint,
   matchMasterRow,
   parseMasterPayoutSheet,
 } from "./payout-master";
@@ -43,6 +45,7 @@ import {
   payoutTutorNameStrings,
   PAYOUT_RUN_LEASE_MS,
   readPayoutRunPreview,
+  recordPayoutAnchorMissingException,
   resolvePayoutException as resolvePayoutExceptionRecord,
   type PayoutAdjustment,
   type PayoutException,
@@ -213,6 +216,7 @@ function candidateLineView(
     sheetName: null,
     matchedRowNumber: null,
     insertedRowNumber: null,
+    sourceAnchorFingerprint: null,
     writeStatus: "pending",
     passToken: null,
     writeError: null,
@@ -344,37 +348,70 @@ async function planDedicatedAppends(input: {
 
   const signatures = collectMasterMarkers(dedicated);
   const claimedRawRows = new Set<number>();
-  let historicalAnchorError: string | null = null;
-  const needsNewRawAnchor = input.lines.some(
-    (line) => !signatures.has(line.rowSignature),
-  );
-  if (raw && needsNewRawAnchor) {
-    for (const sourceLine of input.sourceLines.filter(
-      (line) => line.writeStatus === "written",
-    )) {
-      const mapping = sourceLine.canonicalTutorKey
-        ? input.tutorNames.get(sourceLine.canonicalTutorKey)
-        : undefined;
-      if (!mapping) {
-        historicalAnchorError =
-          `Written payout line ${sourceLine.rowSignature} no longer has an exact tutor mapping.`;
-        break;
+  // canonicalTutorKey -> the reason this pass quarantines that tutor's
+  // pending lines. A drifted anchor now narrows the blast radius to its own
+  // tutor instead of failing every pending line in the run.
+  const quarantinedTutors = new Map<string, string>();
+  const fingerprintIndex = raw ? buildAnchorFingerprintIndex(raw) : null;
+
+  const quarantineTutor = async (sourceLine: PayoutRunLine, reason: string): Promise<void> => {
+    if (!sourceLine.canonicalTutorKey || quarantinedTutors.has(sourceLine.canonicalTutorKey)) return;
+    quarantinedTutors.set(sourceLine.canonicalTutorKey, reason);
+    await recordPayoutAnchorMissingException(input.db, {
+      runId: input.runId,
+      deductionId: sourceLine.deductionId,
+      canonicalTutorKey: sourceLine.canonicalTutorKey,
+      reason,
+    });
+  };
+
+  for (const sourceLine of input.sourceLines.filter(
+    (line) => line.writeStatus === "written",
+  )) {
+    if (sourceLine.sourceAnchorFingerprint) {
+      // Durable fingerprint recorded when this line was written: an O(1)
+      // lookup replaces the old re-match search entirely.
+      const anchor = fingerprintIndex?.get(sourceLine.sourceAnchorFingerprint);
+      if (anchor) {
+        claimedRawRows.add(anchor.rowNumber);
+      } else {
+        await quarantineTutor(
+          sourceLine,
+          `Written payout line ${sourceLine.rowSignature} anchor is no longer present in the source tab.`,
+        );
       }
-      const match = matchMasterRow({
-        table: raw,
-        teacherNames: payoutTutorNameStrings(mapping),
-        scheduledStartAt: sourceLine.scheduledStartAt,
-        studentNames: sourceLine.studentNames,
-        claimedRows: claimedRawRows,
-      });
-      if (match.status !== "matched" || !match.row) {
-        historicalAnchorError =
-          `Written payout line ${sourceLine.rowSignature} cannot be uniquely`
-          + " reconciled to the current read-only source.";
-        break;
-      }
-      claimedRawRows.add(match.row.rowNumber);
+      continue;
     }
+    // Pre-migration row: no durable fingerprint was recorded when it was
+    // written, so fall back to today's tolerance-based re-match. On failure,
+    // quarantine only this line's tutor instead of aborting the whole pass.
+    if (!raw) continue;
+    const mapping = sourceLine.canonicalTutorKey
+      ? input.tutorNames.get(sourceLine.canonicalTutorKey)
+      : undefined;
+    if (!mapping) {
+      await quarantineTutor(
+        sourceLine,
+        `Written payout line ${sourceLine.rowSignature} no longer has an exact tutor mapping.`,
+      );
+      continue;
+    }
+    const historicalMatch = matchMasterRow({
+      table: raw,
+      teacherNames: payoutTutorNameStrings(mapping),
+      scheduledStartAt: sourceLine.scheduledStartAt,
+      studentNames: sourceLine.studentNames,
+      claimedRows: claimedRawRows,
+    });
+    if (historicalMatch.status !== "matched" || !historicalMatch.row) {
+      await quarantineTutor(
+        sourceLine,
+        `Written payout line ${sourceLine.rowSignature} cannot be uniquely`
+        + " reconciled to the current read-only source.",
+      );
+      continue;
+    }
+    claimedRawRows.add(historicalMatch.row.rowNumber);
   }
   for (const line of input.lines) {
     const existingRow = signatures.get(line.rowSignature);
@@ -424,14 +461,14 @@ async function planDedicatedAppends(input: {
       });
       continue;
     }
-    if (historicalAnchorError) {
+    if (line.canonicalTutorKey && quarantinedTutors.has(line.canonicalTutorKey)) {
       await failDeductionLine(input.db, {
         runId: input.runId,
         leaseToken: input.leaseToken,
         line,
         matchStatus: "ambiguous",
-        kind: "historical_source_anchor",
-        reason: historicalAnchorError,
+        kind: "source_anchor_missing",
+        reason: quarantinedTutors.get(line.canonicalTutorKey)!,
         spreadsheetId: input.target.masterSpreadsheetId,
         sheetName: input.target.sourceSheetName,
       });
@@ -474,6 +511,7 @@ async function planDedicatedAppends(input: {
         spreadsheetId: input.target.masterSpreadsheetId,
         sheetName: input.target.deductionsSheetName,
         matchedRowNumber: match.row.rowNumber,
+        sourceAnchorFingerprint: computeSourceAnchorFingerprint(match.row),
         writeError: null,
       },
     });

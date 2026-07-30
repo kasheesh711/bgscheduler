@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { serialToUtc, normalizeStudentName } from "./payout-sheet";
 
 // ── Raw payout rows and the app-owned deduction tab ─────────────────────
@@ -71,6 +73,9 @@ export interface MasterPayoutRow {
    */
   rawDate: unknown;
   rawTime: unknown;
+  /** The Duration and Credits cells exactly as read, for the anchor fingerprint. */
+  rawDuration: unknown;
+  rawCredits: unknown;
   /** Stable signature if this row is app-owned, else null. */
   marker: string | null;
   rowKind: PayoutRowKind | null;
@@ -217,6 +222,8 @@ export function parseMasterPayoutSheet(grid: unknown[][]): MasterPayoutTable | n
       payoutAmount: numberValue(row[MASTER_COLUMNS.payoutAmount]),
       rawDate: row[MASTER_COLUMNS.date] ?? "",
       rawTime: row[MASTER_COLUMNS.time] ?? "",
+      rawDuration: row[MASTER_COLUMNS.duration] ?? "",
+      rawCredits: row[MASTER_COLUMNS.credits] ?? "",
       marker: signature?.marker ?? null,
       rowKind: signature?.kind ?? null,
     });
@@ -239,6 +246,49 @@ export function collectMasterMarkers(table: MasterPayoutTable): Map<string, numb
     markers.set(row.marker, row.rowNumber);
   }
   return markers;
+}
+
+const ANCHOR_FINGERPRINT_PREFIX = "payout-anchor:v1:";
+
+/**
+ * Durable identity for one raw anchor row, independent of its row number.
+ *
+ * Row numbers move whenever Finance re-pastes the source export, so a claim
+ * keyed on `rowNumber` alone silently drifts. Hashing the exact A:H cells this
+ * anchor was matched on gives `planDedicatedAppends` an O(1) claim lookup that
+ * survives a re-paste, as long as the anchor's own cells are unchanged. An
+ * exact fingerprint also cannot mis-claim the way a tolerance-based re-match
+ * can.
+ */
+export function computeSourceAnchorFingerprint(row: MasterPayoutRow): string {
+  const cells = [
+    row.teacherName,
+    row.sessionName,
+    row.studentName,
+    row.rawDate,
+    row.rawTime,
+    row.rawDuration,
+    row.rawCredits,
+    row.payoutAmount,
+  ];
+  const digest = createHash("sha256")
+    .update(JSON.stringify(cells), "utf8")
+    .digest("hex");
+  return `${ANCHOR_FINGERPRINT_PREFIX}${digest}`;
+}
+
+/** Fingerprint -> raw anchor row, so a growing written set stays an O(1) lookup. */
+export function buildAnchorFingerprintIndex(
+  table: MasterPayoutTable,
+): Map<string, MasterPayoutRow> {
+  const index = new Map<string, MasterPayoutRow>();
+  for (const row of table.rows) {
+    // Only raw anchor rows are ever claimed; an app-owned marker row is never
+    // proof of a different deduction's anchor.
+    if (row.marker) continue;
+    index.set(computeSourceAnchorFingerprint(row), row);
+  }
+  return index;
 }
 
 export type MasterMatchStatus = "matched" | "unmatched" | "ambiguous" | "clock_disagreement";

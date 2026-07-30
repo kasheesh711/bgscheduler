@@ -1100,6 +1100,7 @@ export interface PayoutLineMatchPatch {
   sheetName?: string | null;
   matchedRowNumber?: number | null;
   insertedRowNumber?: number | null;
+  sourceAnchorFingerprint?: string | null;
   writeStatus?: "pending" | "written" | "failed" | "skipped";
   writeError?: string | null;
   writtenAt?: Date | null;
@@ -1490,6 +1491,31 @@ export async function recordLateApprovalPayoutExceptionIfClosed(
     updatedAt: new Date(),
   }).where(eq(schema.postClassPayoutRuns.id, run.id));
   return exception;
+}
+
+/**
+ * One idempotent open exception per written line whose durable anchor
+ * fingerprint is no longer present in the raw source grid.
+ *
+ * `canonicalTutorKey` is accepted so call sites stay self-documenting about
+ * which tutor is being quarantined; `postClassPayoutExceptions` has no tutor
+ * column, so it is not itself persisted here.
+ */
+export async function recordPayoutAnchorMissingException(
+  db: Database,
+  input: {
+    runId: string;
+    deductionId: string;
+    canonicalTutorKey: string | null;
+    reason: string;
+  },
+): Promise<PayoutException> {
+  return upsertPayoutExceptionRecord(db, {
+    runId: input.runId,
+    deductionId: input.deductionId,
+    kind: "source_anchor_missing",
+    reason: input.reason,
+  });
 }
 
 export async function resolvePayoutException(db: Database, input: {

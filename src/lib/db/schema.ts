@@ -3766,6 +3766,13 @@ export const postClassPayoutRunLines = pgTable("post_class_payout_run_lines", {
   sheetName: text("sheet_name"),
   matchedRowNumber: integer("matched_row_number"),
   insertedRowNumber: integer("inserted_row_number"),
+  /**
+   * Durable hash of the raw anchor's A:H cells (`computeSourceAnchorFingerprint`).
+   * Row numbers move whenever Finance re-pastes the source export; this
+   * survives that, giving `planDedicatedAppends` an O(1) claim lookup instead
+   * of a re-match search. Null for rows written before this column existed.
+   */
+  sourceAnchorFingerprint: text("source_anchor_fingerprint"),
   writeStatus: postClassPayoutWriteStatusEnum("write_status").notNull().default("pending"),
   /** The publish lease which most recently claimed this line. */
   passToken: uuid("pass_token"),
