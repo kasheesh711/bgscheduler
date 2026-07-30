@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, isNull, or, sql } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -10,7 +10,17 @@ import {
   PostClassNotFoundError,
   PostClassValidationError,
 } from "./errors";
+import { lockPostClassFinance } from "./finance-lock";
+import {
+  assertPayoutWindowOpenForDeduction,
+  createPayoutAdjustment,
+  hasWrittenPayoutDeduction,
+  recordLateApprovalPayoutExceptionIfClosed,
+} from "./payout-repository";
+import { payoutBangkokDate } from "./payout-window";
 import { withPostClassTransaction } from "./transaction";
+
+export { lockPostClassFinance } from "./finance-lock";
 
 export const POST_CLASS_WAIVER_CATEGORIES = [
   "wise_system_outage",
@@ -81,18 +91,6 @@ interface DeductionCandidateEvidence {
   } | null;
 }
 
-const POST_CLASS_FINANCE_LOCK_KEY = "post_class_feedback_finance";
-
-/**
- * Finance-period state and deduction transitions share one transaction lock.
- * Keeping the lock feature-wide is deliberate: a deduction with an implicit
- * default month must serialize with a close of that month just as an explicitly
- * assigned deduction does.
- */
-async function lockPostClassFinance(db: Database): Promise<void> {
-  await db.execute(sql`select pg_advisory_xact_lock(hashtext(${POST_CLASS_FINANCE_LOCK_KEY}))`);
-}
-
 /** Pure invariant used by the approval path and focused concurrency tests. */
 export function assertPostClassApprovalPeriodInvariant(input: {
   financePeriodId: string | null;
@@ -133,6 +131,23 @@ export function assertPostClassFinanceMonthActionInvariant(input: {
     if (input.requestedMonth === input.assignedMonth) {
       throw new PostClassValidationError("The deduction is already assigned to that finance period.");
     }
+  }
+}
+
+/**
+ * Processing is the acknowledgement that a deduction has reached the payout
+ * ledger. Keeping this as a pure invariant makes the money-path ordering
+ * independently testable; the transaction path supplies the durable line
+ * observation.
+ */
+export function assertPostClassProcessWriteInvariant(input: {
+  action: FinanceInput["action"];
+  hasVerifiedWrittenDeduction: boolean;
+}): void {
+  if (input.action === "process" && !input.hasVerifiedWrittenDeduction) {
+    throw new PostClassValidationError(
+      "Publish and verify this deduction in the payout ledger before processing it.",
+    );
   }
 }
 
@@ -192,6 +207,76 @@ async function loadDeduction(
     .limit(1);
   if (!row) throw new PostClassNotFoundError("Deduction was not found.");
   return row;
+}
+
+/**
+ * A payout publisher releases the transaction-level finance lock before its
+ * irreversible Google append. Review and finance actions therefore fail
+ * closed while the deduction's 26→25 window has a live publish lease. Without
+ * this fence, a waiver could commit after selection but before append and
+ * leave an uncompensated negative row in the ledger.
+ */
+async function assertNoActivePayoutOperationForDeduction(
+  db: Database,
+  deductionId: string,
+  now = new Date(),
+): Promise<void> {
+  const [session] = await db.select({
+    scheduledEndAt: schema.postClassSessions.scheduledEndAt,
+  }).from(schema.postClassDeductions)
+    .innerJoin(
+      schema.postClassSessions,
+      eq(schema.postClassSessions.id, schema.postClassDeductions.sessionId),
+    )
+    .where(eq(schema.postClassDeductions.id, deductionId))
+    .limit(1);
+  if (!session) {
+    throw new PostClassNotFoundError("The deduction session was not found.");
+  }
+
+  const sessionDate = payoutBangkokDate(session.scheduledEndAt);
+  const activeRuns = await db.select({
+    windowStart: schema.postClassPayoutRuns.windowStart,
+    windowEnd: schema.postClassPayoutRuns.windowEnd,
+    leaseExpiresAt: schema.postClassPayoutRuns.leaseExpiresAt,
+  }).from(schema.postClassPayoutRuns).where(and(
+    isNotNull(schema.postClassPayoutRuns.leaseToken),
+    gt(schema.postClassPayoutRuns.leaseExpiresAt, now),
+  ));
+  const active = activeRuns.find((run) =>
+    run.windowStart <= sessionDate && sessionDate <= run.windowEnd);
+  if (active) {
+    throw new PostClassConflictError(
+      `A payout publish or CSV operation for this deduction is active until ${active.leaseExpiresAt?.toISOString()}. Try again after it finishes.`,
+    );
+  }
+}
+
+/**
+ * `failed` can mean Google accepted an append but the response was lost.
+ * `pending` can mean a worker stopped while a request was in flight. Until a
+ * fresh publish re-reads the dedicated tab's marker, removing the obligation
+ * could strand a negative row without its positive correction.
+ */
+async function assertNoUncertainPayoutWriteForDeduction(
+  db: Database,
+  deductionId: string,
+): Promise<void> {
+  const [uncertain] = await db.select({
+    writeStatus: schema.postClassPayoutRunLines.writeStatus,
+  }).from(schema.postClassPayoutRunLines).where(and(
+    eq(schema.postClassPayoutRunLines.deductionId, deductionId),
+    isNull(schema.postClassPayoutRunLines.retiredAt),
+    or(
+      eq(schema.postClassPayoutRunLines.writeStatus, "pending"),
+      eq(schema.postClassPayoutRunLines.writeStatus, "failed"),
+    ),
+  )).limit(1);
+  if (uncertain) {
+    throw new PostClassConflictError(
+      "This deduction has an uncertain payout append. Re-run Publish so the dedicated-tab marker is reconciled before changing the obligation.",
+    );
+  }
 }
 
 async function loadOpenPeriod(db: Database, month: string) {
@@ -487,9 +572,14 @@ export async function applyPostClassReviewAction(
 
     const current = await loadDeduction(tx, input.deductionId);
     if (current.version !== input.expectedVersion) throw new PostClassConflictError();
+    await assertNoActivePayoutOperationForDeduction(tx, current.id);
     if (current.status === "processed" || current.status === "reversed") {
       throw new PostClassValidationError("Processed deductions can only be corrected by Finance reversal.");
     }
+    const hasVerifiedWrittenDeduction = await hasWrittenPayoutDeduction(
+      tx,
+      current.id,
+    );
 
     const now = new Date();
     let toStatus: "pending_review" | "approved" | "waived";
@@ -508,6 +598,9 @@ export async function applyPostClassReviewAction(
       if (current.status !== "pending_review" && current.status !== "approved") {
         throw new PostClassValidationError("Only pending or approved deductions can be waived.");
       }
+      if (!hasVerifiedWrittenDeduction) {
+        await assertNoUncertainPayoutWriteForDeduction(tx, current.id);
+      }
       actionNote = requestedPayload.note;
       waiverCategory = requestedPayload.waiverCategory;
       waiverNote = actionNote;
@@ -516,6 +609,13 @@ export async function applyPostClassReviewAction(
       if (current.status !== "approved") {
         throw new PostClassValidationError("Only an unprocessed approved deduction can be reopened.");
       }
+      if (hasVerifiedWrittenDeduction) {
+        throw new PostClassValidationError(
+          "This deduction is already in the payout ledger. Waive it to append a positive correction.",
+        );
+      }
+      await assertNoUncertainPayoutWriteForDeduction(tx, current.id);
+      await assertPayoutWindowOpenForDeduction(tx, current.id);
       actionNote = requestedPayload.note;
       toStatus = "pending_review";
     }
@@ -559,6 +659,22 @@ export async function applyPostClassReviewAction(
         },
       }),
     ]);
+    if (input.action === "waive" && hasVerifiedWrittenDeduction) {
+      await createPayoutAdjustment(tx, {
+        deductionId: current.id,
+        kind: "waiver",
+        reason: actionNote!,
+        actorEmail: actor.email,
+        actionIdentity: input.idempotencyKey,
+      });
+    }
+    if (input.action === "approve") {
+      await recordLateApprovalPayoutExceptionIfClosed(tx, {
+        deductionId: current.id,
+        reason: actionNote
+          || `Approved after the payout window closed by ${actor.email}.`,
+      });
+    }
     return updated;
   });
 }
@@ -598,6 +714,15 @@ export async function applyPostClassFinanceAction(
 
     const current = await loadDeduction(tx, input.deductionId);
     if (current.version !== input.expectedVersion) throw new PostClassConflictError();
+    await assertNoActivePayoutOperationForDeduction(tx, current.id);
+    const hasVerifiedWrittenDeduction = await hasWrittenPayoutDeduction(
+      tx,
+      current.id,
+    );
+    assertPostClassProcessWriteInvariant({
+      action: input.action,
+      hasVerifiedWrittenDeduction,
+    });
     if (input.action === "process") {
       if (current.status !== "approved") {
         throw new PostClassValidationError("Only approved deductions can be processed.");
@@ -621,6 +746,13 @@ export async function applyPostClassFinanceAction(
       if (current.status !== "approved") {
         throw new PostClassValidationError("Only approved, unprocessed deductions can move month.");
       }
+      if (hasVerifiedWrittenDeduction) {
+        throw new PostClassValidationError(
+          "This deduction is already in the payout ledger and cannot move finance month.",
+        );
+      }
+      await assertNoUncertainPayoutWriteForDeduction(tx, current.id);
+      await assertPayoutWindowOpenForDeduction(tx, current.id);
       reason = requireText(input.reason ?? "", "Move reason");
     } else if (input.action === "process") {
       toStatus = "processed";
@@ -640,6 +772,18 @@ export async function applyPostClassFinanceAction(
         .limit(1);
       if (existingOffset) {
         throw new PostClassValidationError("This processed deduction already has a reversal offset.");
+      }
+      const [reversedDeduction] = await tx.update(schema.postClassDeductions).set({
+        status: "reversed",
+        version: current.version + 1,
+        updatedAt: now,
+      }).where(and(
+        eq(schema.postClassDeductions.id, current.id),
+        eq(schema.postClassDeductions.status, "processed"),
+        eq(schema.postClassDeductions.version, input.expectedVersion),
+      )).returning();
+      if (!reversedDeduction) {
+        throw new PostClassConflictError("The deduction changed while it was being reversed.");
       }
       await Promise.all([
         tx.insert(schema.postClassDeductionOffsets).values({
@@ -673,7 +817,14 @@ export async function applyPostClassFinanceAction(
           },
         }),
       ]);
-      return { ...current, status: "reversed" as const };
+      await createPayoutAdjustment(tx, {
+        deductionId: current.id,
+        kind: "reversal",
+        reason: reason!,
+        actorEmail: actor.email,
+        actionIdentity: input.idempotencyKey,
+      });
+      return reversedDeduction;
     }
 
     const [updated] = await tx

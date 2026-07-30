@@ -50,6 +50,10 @@ function rowSearchText(row: FeedbackDeductionRow): string {
     .toLocaleLowerCase();
 }
 
+export function canProcessFeedbackDeduction(row: FeedbackDeductionRow): boolean {
+  return row.status === "approved" && row.payoutVerifiedWritten;
+}
+
 export function DeductionsTab({
   payload,
   submitting,
@@ -206,7 +210,14 @@ export function DeductionsTab({
                   <TableCell><div className="max-w-60 whitespace-normal text-xs text-muted-foreground">{row.reason}</div></TableCell>
                   <TableCell className="font-semibold tabular-nums">{formatMoney(row.amount)}</TableCell>
                   <TableCell><DeductionBadge status={row.status} /></TableCell>
-                  <TableCell>{formatBangkokMonth(row.processingMonth)}</TableCell>
+                  <TableCell>
+                    <div>{formatBangkokMonth(row.processingMonth)}</div>
+                    {row.status === "approved" ? (
+                      <div className="text-[11px] text-muted-foreground">
+                        {row.payoutVerifiedWritten ? "Ledger verified" : "Publish required"}
+                      </div>
+                    ) : null}
+                  </TableCell>
                   <TableCell className="pr-4">
                     <div className="flex justify-end gap-1.5">
                       {row.status === "pending_review" ? (
@@ -216,9 +227,18 @@ export function DeductionsTab({
                         </>
                       ) : row.status === "approved" ? (
                         <>
-                          <Button size="xs" disabled={!payload.capabilities.finance || submitting} onClick={() => openDialog(row, "process")}>Process</Button>
-                          <Button size="xs" variant="outline" disabled={!payload.capabilities.finance || submitting} onClick={() => openDialog(row, "move")}>Move</Button>
-                          <Button size="xs" variant="ghost" disabled={!payload.capabilities.reviewer || submitting} onClick={() => openDialog(row, "reopen")}>Reopen</Button>
+                          <Button
+                            size="xs"
+                            disabled={!payload.capabilities.finance || submitting || !canProcessFeedbackDeduction(row)}
+                            title={row.payoutVerifiedWritten
+                              ? "Mark the verified payout deduction as processed"
+                              : "Publish and verify the payout deduction first"}
+                            onClick={() => openDialog(row, "process")}
+                          >
+                            Process
+                          </Button>
+                          <Button size="xs" variant="outline" disabled={!payload.capabilities.finance || submitting || row.payoutVerifiedWritten} onClick={() => openDialog(row, "move")}>Move</Button>
+                          <Button size="xs" variant="ghost" disabled={!payload.capabilities.reviewer || submitting || row.payoutVerifiedWritten} onClick={() => openDialog(row, "reopen")}>Reopen</Button>
                           <Button size="xs" variant="ghost" disabled={!payload.capabilities.reviewer || submitting} onClick={() => openDialog(row, "waive")}>Waive</Button>
                         </>
                       ) : row.status === "processed" ? (

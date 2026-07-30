@@ -10,7 +10,7 @@ import {
 //
 // Tutor payouts run 26th → 25th, not on calendar months. A run anchored to
 // "2026-07" covers 2026-06-26 through 2026-07-25 inclusive, matching the
-// START DATE / END DATE on the tutor payout sheets.
+// START DATE / END DATE in the tutor payout workbooks.
 //
 // Finance periods remain calendar months: they gate approval and month
 // close. A payout run is a separate selection and export window layered on
@@ -49,6 +49,28 @@ export function payoutRunWindow(anchorMonth: string): PayoutRunWindow {
     windowStart: `${priorMonth.slice(0, 7)}-26`,
     windowEnd: `${anchorMonth}-25`,
   };
+}
+
+/** The 26→25 payout window containing one Bangkok calendar date. */
+export function payoutRunWindowForBangkokDate(date: string): PayoutRunWindow {
+  const day = Number(date.slice(8, 10));
+  const anchorMonth = day <= 25
+    ? date.slice(0, 7)
+    : nextMonthStart(monthStart(date)).slice(0, 7);
+  return payoutRunWindow(anchorMonth);
+}
+
+/** Convert an instant to the ISO calendar date finance sees in Bangkok. */
+export function payoutBangkokDate(value: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
 /**

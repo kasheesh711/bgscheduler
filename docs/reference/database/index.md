@@ -1,8 +1,8 @@
 # Database Reference — Master Table Index
 
-Canonical lookup of the BGScheduler Postgres database. The release tree defines **176 tables**
+Canonical lookup of the BGScheduler Postgres database. This branch defines **184 tables**
 in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts); this count is generated from the
-actual `pgTable(...)` declarations, including 24 Post-Class Feedback tables and 36 current
+actual `pgTable(...)` declarations, including 32 Post-Class Feedback tables and 36 current
 University Admissions tables.
 This page is the index: it lists each table's SQL name, its Drizzle export name, the
 domain it belongs to, its **grain** (what one row represents), the feature that owns it,
@@ -51,14 +51,14 @@ Wise/IPEDS data are plain soft-reference columns, never FKs
 | Tutor Profiles | 2 | [erd-tutor-profiles.md](./erd-tutor-profiles.md) |
 | Leave Requests | 5 | [erd-leave-requests.md](./erd-leave-requests.md) |
 | Student Promotions | 6 | [erd-student-promotions.md](./erd-student-promotions.md) |
-| Post-Class Feedback | 24 | [feature data model](../../features/post-class-feedback.md#durable-data-model) |
+| Post-Class Feedback | 32 | [feature data model](../../features/post-class-feedback.md#durable-data-model) |
 | AI & Proposals | 6 | [erd-ai-and-proposals.md](./erd-ai-and-proposals.md) |
 | LINE | 9 | [erd-line.md](./erd-line.md) |
 | Room Capacity | 4 | [erd-room-capacity.md](./erd-room-capacity.md) |
 | Progress Tests | 8 | — |
 | US Universities / IPEDS | 3 | — |
 | University Admissions | 36 | [erd-university-admissions.md](./erd-university-admissions.md) |
-| **Total** | **176** | |
+| **Total** | **184** | |
 
 ## Master table list
 
@@ -139,7 +139,7 @@ Line ranges: `schema.ts:1065-1243`.
 
 ### Post-Class Feedback
 
-Line range: `schema.ts:3085-3560`. The feature also adds `tutor_contacts.primary_email` without changing that table's grain. Full constraints, partial/unique indexes, append-only triggers, and bootstrap rows are in [`0055_post_class_feedback.sql`](../../../drizzle/0055_post_class_feedback.sql); business meaning is in the [feature guide](../../features/post-class-feedback.md).
+Line range: `schema.ts:3125-3900`. The feature also adds `tutor_contacts.primary_email` without changing that table's grain. The 24-table base is in [`0055_post_class_feedback.sql`](../../../drizzle/0055_post_class_feedback.sql); payout lifecycle and dedicated-tab durability are extended by migrations `0057`, `0059`, and `0060`. Business meaning is in the [feature guide](../../features/post-class-feedback.md).
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | Reference |
 |---|---|---|---|---|---|
@@ -167,6 +167,14 @@ Line range: `schema.ts:3085-3560`. The feature also adds `tutor_contacts.primary
 | `post_class_deductions` | `postClassDeductions` | post-class-feedback | at most one ฿100 deduction decision record per Wise session | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
 | `post_class_deduction_actions` | `postClassDeductionActions` | post-class-feedback | one immutable, idempotent review/finance state-transition ledger entry | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
 | `post_class_deduction_offsets` | `postClassDeductionOffsets` | post-class-feedback | at most one immutable -฿100 correction offset for a processed deduction | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_payout_runs` | `postClassPayoutRuns` | post-class-feedback | one durable 26th–25th lifecycle, publish lease, acknowledgment snapshot, CSV state, and close decision per anchor month | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
+| `post_class_payout_tutor_names` | `postClassPayoutTutorNames` | post-class-feedback | one canonical tutor mapped to one or two exact source-ledger identity strings | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
+| `post_class_tutor_payout_sheets` | `postClassTutorPayoutSheets` | post-class-feedback | one validated tutor workbook identity used only by inventory, formula maintenance, and audited date rolling; never by the runtime payout writer | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
+| `post_class_payout_run_lines` | `postClassPayoutRunLines` | post-class-feedback | one immutable negative deduction obligation and its dedicated-tab write outcome within a payout run | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
+| `post_class_payout_adjustments` | `postClassPayoutAdjustments` | post-class-feedback | one append-only positive waiver/reversal correction obligation and external write outcome | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
+| `post_class_payout_exceptions` | `postClassPayoutExceptions` | post-class-feedback | one durable open/resolved finance blocker tied to a run and optional deduction/correction | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
+| `post_class_payout_roll_runs` | `postClassPayoutRollRuns` | post-class-feedback | one audited, resumable attempt to roll the exact registered tutor-workbook fleet to the next 26th–25th window | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
+| `post_class_payout_roll_outcomes` | `postClassPayoutRollOutcomes` | post-class-feedback | one durable before/after date-write outcome per workbook in a payout roll run | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
 
 ### Classrooms — assignment + email
 

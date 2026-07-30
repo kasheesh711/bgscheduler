@@ -20,6 +20,7 @@ function syncResult(
     windowEnd: "2026-07-20",
     discoveredCount: 80,
     candidateCount: hasMore ? 50 : 30,
+    windowCandidateCount: hasMore ? 50 : 30,
     detailFetchedCount: hasMore ? 50 : 30,
     sessionSavedCount: hasMore ? 50 : 30,
     sourceIssueCount: 0,

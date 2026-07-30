@@ -290,6 +290,9 @@ export interface FeedbackTutorMetric {
 export interface FeedbackDeductionRow {
   id: string;
   sessionId: string;
+  /** Stable identity. Group by this, never by `tutorName`. */
+  tutorKey: string | null;
+  wiseSessionId: string | null;
   tutorName: string;
   className: string;
   students: string[];
@@ -297,6 +300,8 @@ export interface FeedbackDeductionRow {
   reason: string;
   amount: number;
   status: FeedbackDeductionStatus;
+  /** True only after the negative line is durably verified in Feedback Deductions. */
+  payoutVerifiedWritten: boolean;
   processingMonth: string | null;
   referenceNote: string | null;
   waiverCategory: FeedbackWaiverCategory | null;
@@ -355,8 +360,19 @@ export interface FeedbackSetupItem {
   detail: string;
 }
 
+/**
+ * Google grants held by the single pinned account that performs every payout
+ * write. Null unless the viewer has the finance capability.
+ */
+export interface FeedbackPayoutGoogleStatus {
+  connectedEmail: string;
+  sheetsWriteReady: boolean;
+  driveReady: boolean;
+}
+
 export interface PostClassFeedbackPayload {
   capabilities: FeedbackCapabilities;
+  payoutGoogle: FeedbackPayoutGoogleStatus | null;
   settings: {
     mode: FeedbackEnforcementMode;
     effectiveAt: string | null;

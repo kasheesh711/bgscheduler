@@ -11,17 +11,26 @@ export type TestDb = ReturnType<typeof drizzle<typeof schema>>;
 interface Handle {
   db: TestDb;
   pool: Pool;
-  container: StartedPostgreSqlContainer;
+  /** Null when the suite is pointed at an external Postgres via TEST_DATABASE_URL. */
+  container: StartedPostgreSqlContainer | null;
 }
 
 export async function startTestDb(): Promise<Handle> {
-  const container = await new PostgreSqlContainer("postgres:16-alpine")
-    .withDatabase("bgscheduler_test")
-    .withUsername("test")
-    .withPassword("test")
-    .start();
+  // TEST_DATABASE_URL points the suite at an already-running Postgres instead
+  // of a container. Docker is the default because it guarantees a clean server;
+  // this escape hatch exists for machines without a running daemon. The target
+  // is migrated and truncated like any container, so it must be a scratch
+  // database — never a database holding data anyone wants to keep.
+  const externalUrl = process.env.TEST_DATABASE_URL?.trim();
+  const container = externalUrl
+    ? null
+    : await new PostgreSqlContainer("postgres:16-alpine")
+      .withDatabase("bgscheduler_test")
+      .withUsername("test")
+      .withPassword("test")
+      .start();
 
-  const pool = new Pool({ connectionString: container.getConnectionUri() });
+  const pool = new Pool({ connectionString: externalUrl || container!.getConnectionUri() });
   const db = drizzle(pool, { schema });
 
   await migrate(db, {
@@ -33,7 +42,7 @@ export async function startTestDb(): Promise<Handle> {
 
 export async function stopTestDb(h: Handle): Promise<void> {
   await h.pool.end();
-  await h.container.stop();
+  await h.container?.stop();
 }
 
 /**
@@ -61,7 +70,27 @@ export async function truncateAll(db: TestDb): Promise<void> {
       tutor_aliases,
       admin_users,
       sync_runs,
-      snapshots
+      snapshots,
+      post_class_payout_roll_outcomes,
+      post_class_payout_roll_runs,
+      post_class_payout_exceptions,
+      post_class_payout_adjustments,
+      post_class_payout_run_lines,
+      post_class_payout_runs,
+      post_class_payout_tutor_names,
+      post_class_tutor_payout_sheets,
+      post_class_config_audit_log,
+      post_class_deduction_offsets,
+      post_class_deduction_actions,
+      post_class_deductions,
+      post_class_finance_periods,
+      post_class_source_issues,
+      post_class_assessments,
+      post_class_feedback_event_links,
+      post_class_feedback_versions,
+      post_class_session_participants,
+      post_class_sessions,
+      post_class_sync_runs
     RESTART IDENTITY CASCADE
   `);
 }

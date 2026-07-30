@@ -45,6 +45,7 @@ yarn-error.log*
 # local seed/audit reports
 seed-reports/
 .playwright-mcp/
+.payout-ops/
 
 # typescript
 *.tsbuildinfo

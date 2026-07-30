@@ -47,6 +47,13 @@ const DEFAULT_DETAIL_CAP = 50;
 const BACKFILL_DETAIL_CAP = 400;
 const DETAIL_CONCURRENCY = 4;
 const ROLLING_WINDOW_DAYS = 4;
+/**
+ * CONTRACT-01 — how many session-detail payloads must breach the expected shape
+ * before the run treats it as a Wise contract change rather than a handful of
+ * malformed sessions. A real break fails most of the batch; a bad session fails
+ * only itself, over and over, because it never leaves the recheck queue.
+ */
+const MIN_WIDESPREAD_CONTRACT_BREACHES = 3;
 
 export interface SyncPostClassFeedbackDependencies {
   repository: PostClassFeedbackRepository;
@@ -94,6 +101,14 @@ export interface SyncPostClassFeedbackResult {
   windowEnd: string;
   discoveredCount: number;
   candidateCount: number;
+  /**
+   * Candidates still outstanding from the run's own date window, after the
+   * already-reconciled ones are filtered out. `candidateCount` counts all three
+   * lanes, so a saturated recheck queue pins it at the cap and says nothing
+   * about whether the window is finished; this does. Zero means the window is
+   * fully observed.
+   */
+  windowCandidateCount: number;
   detailFetchedCount: number;
   sessionSavedCount: number;
   sourceIssueCount: number;
@@ -412,7 +427,18 @@ function safeWiseIssue(
   const statusMatch = message.match(/Wise API\s+(\d{3})/i);
   const status = statusMatch ? Number(statusMatch[1]) : null;
   let issueType: PostClassSourceIssueInput["issueType"] = "contract_error";
-  let scope: PostClassSourceIssueInput["scope"] = "global";
+  // CONTRACT-01: this function classifies a failure that happened while
+  // fetching or parsing ONE session's detail, so the default scope is that
+  // session. Every failure that is genuinely about the whole run — a network
+  // outage, rejected credentials, rate limiting, a timeout, a 5xx, a config
+  // change under the run — sets `global` explicitly below.
+  //
+  // The default used to be `global`, and it was the direct cause of the June
+  // 2026 reconciliation collapse: ten unclassified per-session Wise 400s each
+  // fell through to here and demoted every eligible row in the table. A run
+  // where this genuinely reflects a Wise contract change still suspends
+  // enforcement run-wide, via the prevalence check in the fetch pass.
+  let scope: PostClassSourceIssueInput["scope"] = "session";
   let safeMessage = `Could not reconcile Wise session ${sessionId}.`;
   if (error instanceof PostClassSessionDataError) {
     scope = "session";
@@ -422,11 +448,21 @@ function safeWiseIssue(
     scope = "global";
     safeMessage = "Post-class feedback configuration changed during collection; the run was discarded.";
   } else if (isNetworkFailure(error)) {
+    // Reaching Wise at all failed, so nothing this run observed can be
+    // trusted — genuinely global, and stated explicitly now that the default
+    // is per-session.
     issueType = "wise_transient";
+    scope = "global";
     safeMessage = "The Wise feedback collector could not reach the Wise API.";
   } else if (error instanceof PostClassWiseSchemaError ||
     /session detail response was missing data/iu.test(message)) {
+    // CONTRACT-01: one payload that does not match the expected shape is a
+    // per-session condition, for the same reason session_not_found is below —
+    // a single malformed session must not mark every other session's source
+    // unavailable. A genuine contract change fails most of the batch, and the
+    // run escalates to a global issue on that prevalence instead.
     issueType = "contract_error";
+    scope = "session";
     safeMessage = "The Wise session-detail response no longer matches the expected contract.";
   } else if (status === 401 || status === 403) {
     issueType = "wise_auth";
@@ -625,12 +661,19 @@ export async function syncPostClassFeedback(
       );
     }
     const candidates = selectPostClassSyncCandidates(candidatePool, detailCap);
+    // Measured on the filtered pool rather than on what this batch selected:
+    // the question a backfill needs answered is "is any work left in this
+    // window", not "did this batch happen to pick some of it up".
+    const windowCandidateCount = candidatePool.filter(
+      (candidate) => candidate.reason === "rolling_window",
+    ).length;
 
     let detailFetchedCount = 0;
     let sessionSavedCount = 0;
     let versionInsertedCount = 0;
     let assessedCount = 0;
     let blockingGlobalSourceIssue = false;
+    let contractBreachCount = 0;
 
     // Fetch and parse the whole bounded batch before any financial candidate
     // can be created. This makes form-drift a true run-wide circuit breaker,
@@ -647,6 +690,7 @@ export async function syncPostClassFeedback(
         sourceIssueCount += 1;
         const issue = safeWiseIssue(error, candidate, runId, now);
         if (issue.scope === "global" && issue.blocksEnforcement) blockingGlobalSourceIssue = true;
+        if (issue.issueType === "contract_error") contractBreachCount += 1;
         await dependencies.repository.recordSourceIssue(issue);
         const retryIssue = durableSessionRetryIssue(issue, candidate);
         if (retryIssue) {
@@ -672,6 +716,7 @@ export async function syncPostClassFeedback(
         sourceIssueCount += 1;
         const issue = safeWiseIssue(error, candidate, runId, now);
         if (issue.scope === "global" && issue.blocksEnforcement) blockingGlobalSourceIssue = true;
+        if (issue.issueType === "contract_error") contractBreachCount += 1;
         await dependencies.repository.recordSourceIssue(issue);
         const retryIssue = durableSessionRetryIssue(issue, candidate);
         if (retryIssue) {
@@ -682,6 +727,30 @@ export async function syncPostClassFeedback(
       }
       return { candidate, detail, events, parsed };
     });
+
+    // CONTRACT-01: escalate on prevalence, not on the first occurrence. Wise
+    // changing its session-detail contract fails most of what the run touched,
+    // and that must still suspend enforcement run-wide; a few sessions with
+    // malformed payloads must not, or they would re-suspend the feature every
+    // 30 minutes forever, since a session that cannot be parsed never leaves
+    // the recheck queue.
+    if (contractBreachCount >= MIN_WIDESPREAD_CONTRACT_BREACHES
+      && contractBreachCount * 2 >= candidates.length) {
+      sourceIssueCount += 1;
+      blockingGlobalSourceIssue = true;
+      await dependencies.repository.recordSourceIssue({
+        runId,
+        scope: "global",
+        issueType: "contract_error",
+        severity: "error",
+        blocksEnforcement: true,
+        fingerprint: "contract_error:global:widespread",
+        message: "Most Wise session-detail responses in this run no longer match the expected contract.",
+        observedAt: now,
+        details: { contractBreachCount, candidateCount: candidates.length },
+      });
+    }
+
     const parsedCandidates = fetched.filter(
       (value): value is NonNullable<typeof value> => value !== null,
     );
@@ -883,6 +952,7 @@ export async function syncPostClassFeedback(
       windowEnd: endDate,
       discoveredCount: discovered.length,
       candidateCount: candidates.length,
+      windowCandidateCount,
       detailFetchedCount,
       sessionSavedCount,
       sourceIssueCount,

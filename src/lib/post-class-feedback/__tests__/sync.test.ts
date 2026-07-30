@@ -897,7 +897,7 @@ describe("post-class feedback sync planning", () => {
       .toBe(true);
   });
 
-  it("fails closed across the batch for DNS/network and systemic detail-schema failures", async () => {
+  it("fails closed across the batch for a DNS/network outage, and scopes a lone schema breach to its session", async () => {
     const sessions = ["healthy", "network", "schema"].map((id) => ({
       _id: id,
       classId: "class-1",
@@ -988,21 +988,225 @@ describe("post-class feedback sync planning", () => {
     }, { now: new Date("2026-07-24T00:00:00.000Z") });
 
     expect(result.status).toBe("partial");
+    // A network outage is genuinely global: nothing in the run can be trusted.
     expect(issues).toContainEqual(expect.objectContaining({
       scope: "global",
       issueType: "wise_transient",
     }));
     expect(issues).toContainEqual(expect.objectContaining({
-      scope: "global",
-      issueType: "contract_error",
-    }));
-    expect(issues).toContainEqual(expect.objectContaining({
       scope: "session",
       fingerprint: "detail_retry:network",
     }));
+    // CONTRACT-01: one malformed payload out of three is not a contract change.
+    // It is recorded against its own session, where it auto-resolves on the
+    // next successful observation, and does not escalate on its own.
     expect(issues).toContainEqual(expect.objectContaining({
       scope: "session",
-      fingerprint: "detail_retry:schema",
+      issueType: "contract_error",
+      fingerprint: "contract_error:schema:parse",
+    }));
+    expect(issues).not.toContainEqual(expect.objectContaining({
+      fingerprint: "contract_error:global:widespread",
+    }));
+    // The batch still fails closed — on the outage, which is the global signal.
+    expect(observations).toHaveLength(1);
+    expect(observations[0].sourceStatus).toBe("unavailable");
+    expect(observations[0].assessment?.deductionCandidate).toBe(false);
+  });
+
+  it("keeps an unclassified per-session Wise error off its healthy siblings", async () => {
+    // The June 2026 regression, in miniature. A Wise 400 that matches no
+    // classification branch used to fall through to scope 'global', which
+    // demoted every eligible row in the table — ten times over. One session's
+    // failure must stay one session's failure.
+    const sessions = ["healthy", "badreq"].map((id) => ({
+      _id: id,
+      classId: "class-1",
+      userId: "teacher-1",
+      scheduledStartTime: "2026-07-20T09:00:00.000Z",
+      scheduledEndTime: "2026-07-20T10:00:00.000Z",
+      meetingStatus: "ENDED",
+    }));
+    const fakeClient = {
+      async get(path: string, params?: Record<string, string>) {
+        if (params?.status === "PAST") return { data: { sessions, page_count: 1 } };
+        const id = path.split("/").at(-1)!;
+        if (id === "badreq") throw new Error("Wise API 400 Unexpected request");
+        return { data: {
+          ...sessions[0],
+          feedbackForm: { questions: [
+            { questionText: "Topics covered" },
+            { questionText: "How the student did in class" },
+            { questionText: "Need more work on" },
+            { questionText: "Homework and due date" },
+          ] },
+          feedbackSubmissions: [{
+            _id: "submission-healthy",
+            profile: "teacher",
+            creditsConsumed: 1,
+            createdAt: "2026-07-20T12:00:00.000Z",
+            answers: [],
+          }],
+        } };
+      },
+    } as unknown as WiseClient;
+    const observations: PostClassSessionObservation[] = [];
+    const issues: Array<{ scope: string; issueType?: string; fingerprint?: string }> = [];
+    const repository: PostClassFeedbackRepository = {
+      beginSync: async () => "run-badreq",
+      completeSync: async () => undefined,
+      failSync: async () => undefined,
+      loadPolicyContext: async () => ({
+        settingsVersion: 1,
+        enforcementMode: "live",
+        policyEffectiveAt: new Date("2026-07-19T00:00:00.000Z"),
+        policyVersion: 1,
+        mappingVersion: 1,
+        mappings: [
+          { field: "topics", questionText: "Topics covered" },
+          { field: "performance", questionText: "How the student did in class" },
+          { field: "improvement", questionText: "Need more work on" },
+          { field: "homework", questionText: "Homework and due date" },
+        ],
+      }),
+      loadSessionEnforcementContext: async () => ({
+        enforcementMode: "live",
+        policyEffectiveAt: new Date("2026-07-19T00:00:00.000Z"),
+      }),
+      listFeedbackEventCandidates: async () => [],
+      listIncompleteRecheckCandidates: async () => [],
+      listReminderCheckpointPersistedCandidates: async () => [],
+      loadFeedbackEvents: async () => [],
+      loadFeedbackEventCoverageFloor: async () => null,
+      loadHistoricalFeedbackVersions: async () => [],
+      loadPreviousComplianceLock: async () => null,
+      saveObservation: async (_runId, observation) => {
+        observations.push(observation);
+        return { versionsInserted: 1, assessmentInserted: true };
+      },
+      recordSourceIssue: async (issue) => { issues.push(issue); },
+      pauseForFormDrift: async () => undefined,
+    };
+
+    await syncPostClassFeedback({
+      repository,
+      client: fakeClient,
+      instituteId: "institute-1",
+      resolveTutor: async () => ({
+        status: "resolved",
+        canonicalKey: "Kevin",
+        displayName: "Kevin",
+        wiseTeacherUserId: "teacher-1",
+      }),
+    }, { now: new Date("2026-07-24T00:00:00.000Z") });
+
+    expect(issues).toContainEqual(expect.objectContaining({
+      scope: "session",
+      fingerprint: "contract_error:badreq:400",
+    }));
+    expect(issues.some((issue) => issue.scope === "global")).toBe(false);
+    // The sibling was fetched and parsed successfully, so it stays ready.
+    expect(observations).toHaveLength(1);
+    expect(observations[0].candidate.sessionId).toBe("healthy");
+    expect(observations[0].sourceStatus).toBe("ready");
+  });
+
+  it("escalates to a global contract breach when most of the batch fails to parse", async () => {
+    const ids = ["healthy", "schema-1", "schema-2", "schema-3"];
+    const sessions = ids.map((id) => ({
+      _id: id,
+      classId: "class-1",
+      userId: "teacher-1",
+      scheduledStartTime: "2026-07-20T09:00:00.000Z",
+      scheduledEndTime: "2026-07-20T10:00:00.000Z",
+      meetingStatus: "ENDED",
+    }));
+    const fakeClient = {
+      async get(path: string, params?: Record<string, string>) {
+        if (params?.status === "PAST") return { data: { sessions, page_count: 1 } };
+        const id = path.split("/").at(-1)!;
+        if (id.startsWith("schema")) {
+          return { data: {
+            ...sessions[1],
+            _id: id,
+            feedbackForm: { questions: [] },
+            feedbackSubmissions: { unexpected: true },
+          } };
+        }
+        return { data: {
+          ...sessions[0],
+          feedbackForm: { questions: [
+            { questionText: "Topics covered" },
+            { questionText: "How the student did in class" },
+            { questionText: "Need more work on" },
+            { questionText: "Homework and due date" },
+          ] },
+          feedbackSubmissions: [{
+            _id: "submission-healthy",
+            profile: "teacher",
+            creditsConsumed: 1,
+            createdAt: "2026-07-20T12:00:00.000Z",
+            answers: [],
+          }],
+        } };
+      },
+    } as unknown as WiseClient;
+    const observations: PostClassSessionObservation[] = [];
+    const issues: Array<{ scope: string; issueType?: string; fingerprint?: string }> = [];
+    const repository: PostClassFeedbackRepository = {
+      beginSync: async () => "run-contract",
+      completeSync: async () => undefined,
+      failSync: async () => undefined,
+      loadPolicyContext: async () => ({
+        settingsVersion: 1,
+        enforcementMode: "live",
+        policyEffectiveAt: new Date("2026-07-19T00:00:00.000Z"),
+        policyVersion: 1,
+        mappingVersion: 1,
+        mappings: [
+          { field: "topics", questionText: "Topics covered" },
+          { field: "performance", questionText: "How the student did in class" },
+          { field: "improvement", questionText: "Need more work on" },
+          { field: "homework", questionText: "Homework and due date" },
+        ],
+      }),
+      loadSessionEnforcementContext: async () => ({
+        enforcementMode: "live",
+        policyEffectiveAt: new Date("2026-07-19T00:00:00.000Z"),
+      }),
+      listFeedbackEventCandidates: async () => [],
+      listIncompleteRecheckCandidates: async () => [],
+      listReminderCheckpointPersistedCandidates: async () => [],
+      loadFeedbackEvents: async () => [],
+      loadFeedbackEventCoverageFloor: async () => null,
+      loadHistoricalFeedbackVersions: async () => [],
+      loadPreviousComplianceLock: async () => null,
+      saveObservation: async (_runId, observation) => {
+        observations.push(observation);
+        return { versionsInserted: 1, assessmentInserted: true };
+      },
+      recordSourceIssue: async (issue) => { issues.push(issue); },
+      pauseForFormDrift: async () => undefined,
+    };
+
+    await syncPostClassFeedback({
+      repository,
+      client: fakeClient,
+      instituteId: "institute-1",
+      resolveTutor: async () => ({
+        status: "resolved",
+        canonicalKey: "Kevin",
+        displayName: "Kevin",
+        wiseTeacherUserId: "teacher-1",
+      }),
+    }, { now: new Date("2026-07-24T00:00:00.000Z") });
+
+    // Three of four payloads breached the contract — that is Wise changing its
+    // shape, not three unlucky sessions, so enforcement suspends run-wide.
+    expect(issues).toContainEqual(expect.objectContaining({
+      scope: "global",
+      issueType: "contract_error",
+      fingerprint: "contract_error:global:widespread",
     }));
     expect(observations).toHaveLength(1);
     expect(observations[0].sourceStatus).toBe("unavailable");

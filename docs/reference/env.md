@@ -194,6 +194,23 @@ Consumed in `src/lib/leave-requests/config.ts`.
 | `LEAVE_REQUESTS_SHEET_NAME` | Yes (line 38) | Worksheet/tab name. | `config.ts:5` | Defaults to `"Form Responses 1"` |
 | `LEAVE_REQUESTS_CONNECTED_EMAIL` | Yes (line 39) | Google account with Sheets write scope. | `config.ts:13` | Falls back to `SALES_DASHBOARD_CONNECTED_EMAIL`, then `""` |
 | `NEXT_PUBLIC_APP_URL` | Yes (line 40) | Public app base URL (client-exposed `NEXT_PUBLIC_*`). | `config.ts:18` | First in the leave-requests base-URL cascade |
+| `POST_CLASS_PAYOUT_TARGET` | Yes | Declares whether the configured payout workbook is `scratch` or `production`. | `src/lib/post-class-feedback/payout-config.ts` | Required. Vercel Preview must use `scratch`; Vercel Production must use `production`. |
+| `POST_CLASS_PAYOUT_CONNECTED_EMAIL` | Yes | Pinned Google account that performs payout tab and CSV writes. Needs Sheets write and `drive.file`. | `src/lib/post-class-feedback/payout-config.ts` | Required; no account fallback. |
+| `POST_CLASS_PAYOUT_DRIVE_FOLDER_ID` | Yes | Drive folder for the payout summary CSV. | `src/lib/post-class-feedback/payout-config.ts` | Required; no live folder fallback. |
+| `POST_CLASS_PAYOUT_WORKBOOKS_FOLDER_ID` | Yes | Root folder recursively inventoried for tutor payout workbooks during the composite-tab cutover. | rollout/verification tooling | Required; no alias to the CSV folder. It may intentionally hold the same ID in production, but both variables must be explicit. |
+| `POST_CLASS_PAYOUT_MASTER_SPREADSHEET_ID` | Yes | Workbook containing the externally refreshed source, app-owned deductions, and composite tabs. | `src/lib/post-class-feedback/payout-config.ts` | Required; no live workbook fallback. |
+| `POST_CLASS_PAYOUT_SOURCE_SHEET_NAME` | Yes | Read-only source tab refreshed by finance. | `src/lib/post-class-feedback/payout-config.ts` | Required; recommended name `Begifted Payouts Detailed`. |
+| `POST_CLASS_PAYOUT_DEDUCTIONS_SHEET_NAME` | Yes | App-owned append-only payout-adjustment tab. | `src/lib/post-class-feedback/payout-config.ts` | Required; recommended name `Feedback Deductions`. |
+| `POST_CLASS_PAYOUT_COMPOSITE_SHEET_NAME` | Yes | Formula-backed union consumed by tutor workbooks. | `src/lib/post-class-feedback/payout-config.ts` | Required; recommended name `Payouts With Deductions`. |
+| `POST_CLASS_PAYOUT_WRITES_ENABLED` | Yes | Hard payout-write kill switch. | `src/lib/post-class-feedback/payout-config.ts`; payout-run API/service | Disabled unless the value is exactly lowercase `true`. Keep `false` during deploy, migration, preview, and shadow verification. |
+
+The payout target is fail-closed: missing identifiers, tab names, connected account,
+environment mismatch, or a disabled write switch prevents publication. Preview remains
+read-only so finance can inspect setup and coverage without enabling the money path.
+`POST_CLASS_PAYOUT_WRITES_ENABLED` gates runtime deduction/correction rows and CSV
+retry. Workbook maintenance is a separate operator workflow: it remains available
+while the switch is false but requires full-fleet preflight/readback and an explicit
+`--commit`; maintenance scripts default to dry-run.
 
 ### Wise writeback safety + seed + Vercel-injected
 

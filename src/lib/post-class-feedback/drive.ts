@@ -78,6 +78,14 @@ export async function uploadCsvToDrive(input: {
   const parsed = (await response.json()) as DriveFileResponse;
   if (!response.ok || !parsed.id) {
     const detail = parsed.error?.message || `Drive upload failed (${response.status})`;
+    // Granting the scope is only half of it: the Drive API must also be enabled
+    // on the Cloud project behind AUTH_GOOGLE_ID. Until it is, every call fails
+    // with 403 no matter which account consented or who owns the folder.
+    if (/has not been used in project|is disabled/iu.test(detail)) {
+      throw new Error(
+        `${detail} — this is a Google Cloud project setting, not a scope or folder problem.`,
+      );
+    }
     if (response.status === 404) {
       throw new Error(
         `${detail} — the connected Google account cannot see folder ${input.folderId}. Share the folder with it as an Editor.`,

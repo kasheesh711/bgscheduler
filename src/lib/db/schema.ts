@@ -313,7 +313,10 @@ export const postClassFinancePeriodStatusEnum = pgEnum("post_class_finance_perio
 
 export const postClassPayoutRunStatusEnum = pgEnum("post_class_payout_run_status", [
   "draft",
+  "publishing",
+  "partial",
   "published",
+  "closed",
 ]);
 
 export const postClassPayoutMatchStatusEnum = pgEnum("post_class_payout_match_status", [
@@ -3249,6 +3252,11 @@ export const postClassSessions = pgTable("post_class_sessions", {
   eligible: boolean("eligible").notNull().default(false),
   eligibilityReason: text("eligibility_reason"),
   sourceStatus: postClassSourceStatusEnum("source_status").notNull().default("unavailable"),
+  // Set only by the run-wide fail-closed demotion (REC-01), holding the status
+  // the row carried before source health became unprovable. A later healthy
+  // sync restores from it in one statement, so demotion and recovery are the
+  // same shape. Null means the row's `sourceStatus` is its own observation.
+  sourceStatusBefore: postClassSourceStatusEnum("source_status_before"),
   contentStatus: postClassContentStatusEnum("content_status").notNull().default("missing"),
   timingStatus: postClassTimingStatusEnum("timing_status").notNull().default("not_due"),
   deductionStatus: postClassDeductionStatusEnum("deduction_status").notNull().default("none"),
@@ -3268,6 +3276,9 @@ export const postClassSessions = pgTable("post_class_sessions", {
   index("pc_sessions_deadline_idx").on(table.deadlineAt),
   index("pc_sessions_ops_idx").on(table.eligible, table.sourceStatus, table.timingStatus),
   index("pc_sessions_deduction_idx").on(table.deductionStatus, table.deadlineAt),
+  index("pc_sessions_source_restore_idx")
+    .on(table.sourceStatusBefore)
+    .where(sql`${table.sourceStatusBefore} IS NOT NULL`),
 ]);
 
 export const postClassSessionParticipants = pgTable("post_class_session_participants", {
@@ -3594,7 +3605,7 @@ export const postClassDeductionOffsets = pgTable("post_class_deduction_offsets",
 
 // ── Post-Class Feedback payout runs ─────────────────────────────────────
 //
-// A payout run is the 26th→25th window the tutor payout sheets use. It is a
+// A payout run is the 26th→25th window the tutor payout workbooks display. It is a
 // selection and export window only: finance periods stay calendar-month and
 // keep gating approval and month close, so one run legitimately spans two
 // finance months.
@@ -3606,11 +3617,56 @@ export const postClassPayoutRuns = pgTable("post_class_payout_runs", {
   windowStart: date("window_start", { mode: "string" }).notNull(),
   windowEnd: date("window_end", { mode: "string" }).notNull(),
   status: postClassPayoutRunStatusEnum("status").notNull().default("draft"),
+  /** A publish owns this token until it finalizes or its 15-minute lease expires. */
+  leaseToken: uuid("lease_token"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  publishingByEmail: text("publishing_by_email"),
+  publishStartedAt: timestamp("publish_started_at", { withTimezone: true }),
   publishedByEmail: text("published_by_email"),
   publishedAt: timestamp("published_at", { withTimezone: true }),
+  publishAcknowledgements: jsonb("publish_acknowledgements").$type<{
+    confirmed: true;
+    pendingReviewDeductions: number;
+    nonReadySessions: number;
+    reason: string;
+    actorEmail: string;
+    recordedAt: string;
+    policyVersion: number;
+    coverage: {
+      eligibleSessions: number;
+      readySessions: number;
+      nonReadySessions: number;
+      unavailableSessions: number;
+      formDriftSessions: number;
+      identityReviewSessions: number;
+      pendingReviewDeductions: number;
+      unprovenApprovedDeductions: number;
+      approvedDeductions: number;
+      unmappedTutorKeys: string[];
+      nullTutorKeyLines: number;
+      blockingGlobalSourceIssues: number;
+    };
+    previewToken: string;
+    sourceFingerprint: string;
+    tutorFilter: string | null;
+  }>(),
   /** Drive file id and link for the summary CSV, once uploaded. */
   csvFileId: text("csv_file_id"),
   csvUrl: text("csv_url"),
+  csvStatus: text("csv_status").$type<"pending" | "uploaded" | "failed">().notNull().default("pending"),
+  csvError: text("csv_error"),
+  csvAttemptedAt: timestamp("csv_attempted_at", { withTimezone: true }),
+  closedByEmail: text("closed_by_email"),
+  closedAt: timestamp("closed_at", { withTimezone: true }),
+  closeReason: text("close_reason"),
+  dateRollStatus: text("date_roll_status")
+    .$type<"not_started" | "running" | "partial" | "completed">()
+    .notNull()
+    .default("not_started"),
+  dateRollStartedAt: timestamp("date_roll_started_at", { withTimezone: true }),
+  dateRolledAt: timestamp("date_rolled_at", { withTimezone: true }),
+  dateRolledByEmail: text("date_rolled_by_email"),
+  rolledToAnchorMonth: date("rolled_to_anchor_month", { mode: "string" }),
   version: integer("version").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -3618,11 +3674,47 @@ export const postClassPayoutRuns = pgTable("post_class_payout_runs", {
   uniqueIndex("pc_payout_runs_window_idx").on(table.windowStart, table.windowEnd),
   uniqueIndex("pc_payout_runs_anchor_idx").on(table.anchorMonth),
   index("pc_payout_runs_status_idx").on(table.status, table.windowEnd),
+  index("pc_payout_runs_lease_idx").on(table.status, table.leaseExpiresAt),
+  check(
+    "pc_payout_runs_csv_status_check",
+    sql`${table.csvStatus} in ('pending', 'uploaded', 'failed')`,
+  ),
+  check(
+    "pc_payout_runs_date_roll_status_check",
+    sql`${table.dateRollStatus} in ('not_started', 'running', 'partial', 'completed')`,
+  ),
 ]);
 
 /**
- * Explicit tutor → payout spreadsheet mapping. An unmapped tutor is an
- * exception the publish run reports; it never guesses at a destination.
+ * Tutor → the exact identity strings the master payout ledger uses.
+ *
+ * A tutor's own workbook is a `QUERY(IMPORTRANGE(...))` view filtered on these
+ * strings, so a deduction only reaches them if its ledger row carries one
+ * verbatim. They are copied from the ledger, never constructed — an
+ * approximation produces a row that belongs to nobody.
+ */
+export const postClassPayoutTutorNames = pgTable("post_class_payout_tutor_names", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  canonicalKey: text("canonical_key").notNull(),
+  primaryLedgerName: text("primary_ledger_name").notNull(),
+  /** A second exact ledger identity, when the tutor has one. */
+  alternateLedgerName: text("alternate_ledger_name"),
+  active: boolean("active").notNull().default(true),
+  updatedByEmail: text("updated_by_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_payout_tutor_names_key_idx").on(table.canonicalKey),
+  uniqueIndex("pc_payout_tutor_names_primary_idx").on(table.primaryLedgerName),
+  uniqueIndex("pc_payout_tutor_names_alternate_idx")
+    .on(table.alternateLedgerName)
+    .where(sql`${table.alternateLedgerName} is not null`),
+]);
+
+/**
+ * Superseded by `postClassPayoutTutorNames`. Deductions append to the shared
+ * master ledger, so there is no per-tutor spreadsheet to address. Retained only
+ * because migration 0057 created it; nothing reads or writes it.
  */
 export const postClassTutorPayoutSheets = pgTable("post_class_tutor_payout_sheets", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -3650,15 +3742,24 @@ export const postClassPayoutRunLines = pgTable("post_class_payout_run_lines", {
   runId: uuid("run_id").notNull().references(() => postClassPayoutRuns.id, { onDelete: "cascade" }),
   deductionId: uuid("deduction_id").notNull().references(() => postClassDeductions.id, { onDelete: "restrict" }),
   sessionId: uuid("session_id").notNull().references(() => postClassSessions.id, { onDelete: "restrict" }),
+  lineKind: text("line_kind").$type<"deduction">().notNull().default("deduction"),
+  /** Stable business identity, e.g. `deduction:<deduction uuid>`. */
+  sourceIdentity: text("source_identity").notNull(),
+  /** Stable signature written into the dedicated tab's Session name cell. */
+  rowSignature: text("row_signature").notNull(),
   canonicalTutorKey: text("canonical_tutor_key"),
   tutorName: text("tutor_name"),
   wiseSessionId: text("wise_session_id").notNull(),
+  className: text("class_name"),
   studentNames: jsonb("student_names").$type<string[]>().notNull().default([]),
   scheduledStartAt: timestamp("scheduled_start_at", { withTimezone: true }).notNull(),
+  scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }).notNull(),
   deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
   tutorSubmittedAt: timestamp("tutor_submitted_at", { withTimezone: true }),
+  /** Signed minor units: deductions are negative; corrections are separate positive rows. */
   amountMinor: integer("amount_minor").notNull(),
   currency: text("currency").notNull().default("THB"),
+  financeMonth: date("finance_month", { mode: "string" }),
   reason: text("reason").notNull().default(""),
   matchStatus: postClassPayoutMatchStatusEnum("match_status").notNull().default("pending"),
   spreadsheetId: text("spreadsheet_id"),
@@ -3666,16 +3767,155 @@ export const postClassPayoutRunLines = pgTable("post_class_payout_run_lines", {
   matchedRowNumber: integer("matched_row_number"),
   insertedRowNumber: integer("inserted_row_number"),
   writeStatus: postClassPayoutWriteStatusEnum("write_status").notNull().default("pending"),
+  /** The publish lease which most recently claimed this line. */
+  passToken: uuid("pass_token"),
   writeError: text("write_error"),
   writtenAt: timestamp("written_at", { withTimezone: true }),
+  /** A no-longer-approved line is retained for audit but is not a close blocker. */
+  retiredAt: timestamp("retired_at", { withTimezone: true }),
+  retiredReason: text("retired_reason"),
   idempotencyKey: text("idempotency_key").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
-  uniqueIndex("pc_payout_run_lines_run_deduction_idx").on(table.runId, table.deductionId),
   uniqueIndex("pc_payout_run_lines_idempotency_idx").on(table.idempotencyKey),
+  uniqueIndex("pc_payout_run_lines_source_identity_idx").on(table.sourceIdentity),
+  uniqueIndex("pc_payout_run_lines_row_signature_idx").on(table.rowSignature),
   index("pc_payout_run_lines_run_status_idx").on(table.runId, table.writeStatus),
   index("pc_payout_run_lines_tutor_idx").on(table.runId, table.canonicalTutorKey),
+  check("pc_payout_run_lines_kind_check", sql`${table.lineKind} = 'deduction'`),
+  check("pc_payout_run_lines_signed_check", sql`${table.amountMinor} < 0`),
+]);
+
+/**
+ * Append-only positive correction obligations created when finance waives or
+ * reverses a deduction after its negative row has already landed.
+ */
+export const postClassPayoutAdjustments = pgTable("post_class_payout_adjustments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  deductionId: uuid("deduction_id").notNull().references(() => postClassDeductions.id, { onDelete: "restrict" }),
+  sourceLineId: uuid("source_line_id").references(() => postClassPayoutRunLines.id, { onDelete: "restrict" }),
+  runId: uuid("run_id").references(() => postClassPayoutRuns.id, { onDelete: "set null" }),
+  kind: text("kind").$type<"waiver" | "reversal">().notNull(),
+  status: text("status").$type<"pending" | "written" | "failed" | "exception">().notNull().default("pending"),
+  /** Positive signed minor units which compensate the original negative row. */
+  amountMinor: integer("amount_minor").notNull().default(10_000),
+  currency: text("currency").notNull().default("THB"),
+  reason: text("reason").notNull(),
+  actorEmail: text("actor_email").notNull(),
+  sourceIdentity: text("source_identity").notNull(),
+  rowSignature: text("row_signature").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  passToken: uuid("pass_token"),
+  sheetRowNumber: integer("sheet_row_number"),
+  writeError: text("write_error"),
+  writtenAt: timestamp("written_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_payout_adjustments_idempotency_idx").on(table.idempotencyKey),
+  uniqueIndex("pc_payout_adjustments_source_identity_idx").on(table.sourceIdentity),
+  uniqueIndex("pc_payout_adjustments_row_signature_idx").on(table.rowSignature),
+  index("pc_payout_adjustments_deduction_idx").on(table.deductionId, table.status),
+  index("pc_payout_adjustments_run_idx").on(table.runId, table.status),
+  check("pc_payout_adjustments_kind_check", sql`${table.kind} in ('waiver', 'reversal')`),
+  check(
+    "pc_payout_adjustments_status_check",
+    sql`${table.status} in ('pending', 'written', 'failed', 'exception')`,
+  ),
+  check("pc_payout_adjustments_amount_check", sql`${table.amountMinor} > 0`),
+]);
+
+/** Durable, finance-owned blockers raised while a run is prepared or written. */
+export const postClassPayoutExceptions = pgTable("post_class_payout_exceptions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  runId: uuid("run_id").notNull().references(() => postClassPayoutRuns.id, { onDelete: "cascade" }),
+  deductionId: uuid("deduction_id").references(() => postClassDeductions.id, { onDelete: "restrict" }),
+  adjustmentId: uuid("adjustment_id").references(() => postClassPayoutAdjustments.id, { onDelete: "restrict" }),
+  kind: text("kind").notNull(),
+  status: text("status").$type<"open" | "resolved">().notNull().default("open"),
+  sourceIdentity: text("source_identity").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  reason: text("reason").notNull(),
+  resolutionNote: text("resolution_note"),
+  resolutionReference: text("resolution_reference"),
+  resolvedByEmail: text("resolved_by_email"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  version: integer("version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("pc_payout_exceptions_run_idx").on(table.runId, table.status),
+  index("pc_payout_exceptions_deduction_idx").on(table.deductionId, table.status),
+  index("pc_payout_exceptions_adjustment_idx").on(table.adjustmentId, table.status),
+  uniqueIndex("pc_payout_exceptions_source_identity_idx").on(table.sourceIdentity),
+  uniqueIndex("pc_payout_exceptions_idempotency_idx").on(table.idempotencyKey),
+  check("pc_payout_exceptions_status_check", sql`${table.status} in ('open', 'resolved')`),
+]);
+
+/** One audited attempt to roll every tutor workbook to the next 26→25 window. */
+export const postClassPayoutRollRuns = pgTable("post_class_payout_roll_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  payoutRunId: uuid("payout_run_id").notNull().references(() => postClassPayoutRuns.id, { onDelete: "restrict" }),
+  targetAnchorMonth: date("target_anchor_month", { mode: "string" }).notNull(),
+  targetWindowStart: date("target_window_start", { mode: "string" }).notNull(),
+  targetWindowEnd: date("target_window_end", { mode: "string" }).notNull(),
+  manifestHash: text("manifest_hash").notNull(),
+  status: text("status")
+    .$type<"running" | "partial" | "completed" | "failed">()
+    .notNull()
+    .default("running"),
+  leaseToken: uuid("lease_token").notNull(),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }).notNull(),
+  startedByEmail: text("started_by_email").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  totalWorkbooks: integer("total_workbooks").notNull().default(0),
+  succeededWorkbooks: integer("succeeded_workbooks").notNull().default(0),
+  failedWorkbooks: integer("failed_workbooks").notNull().default(0),
+  version: integer("version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_payout_roll_runs_source_idx").on(table.payoutRunId),
+  index("pc_payout_roll_runs_status_idx").on(table.status, table.leaseExpiresAt),
+  check(
+    "pc_payout_roll_runs_status_check",
+    sql`${table.status} in ('running', 'partial', 'completed', 'failed')`,
+  ),
+]);
+
+/** One CAS-fenced workbook outcome inside a date-roll attempt. */
+export const postClassPayoutRollOutcomes = pgTable("post_class_payout_roll_outcomes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  rollRunId: uuid("roll_run_id").notNull().references(() => postClassPayoutRollRuns.id, { onDelete: "cascade" }),
+  workbookId: text("workbook_id").notNull(),
+  workbookName: text("workbook_name").notNull(),
+  canonicalTutorKey: text("canonical_tutor_key"),
+  status: text("status")
+    .$type<"pending" | "already_target" | "verified" | "failed">()
+    .notNull()
+    .default("pending"),
+  beforeStartSerial: doublePrecision("before_start_serial"),
+  beforeEndSerial: doublePrecision("before_end_serial"),
+  afterStartSerial: doublePrecision("after_start_serial"),
+  afterEndSerial: doublePrecision("after_end_serial"),
+  previousWindowStart: date("previous_window_start", { mode: "string" }),
+  previousWindowEnd: date("previous_window_end", { mode: "string" }),
+  appliedWindowStart: date("applied_window_start", { mode: "string" }),
+  appliedWindowEnd: date("applied_window_end", { mode: "string" }),
+  error: text("error"),
+  attemptedAt: timestamp("attempted_at", { withTimezone: true }),
+  version: integer("version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("pc_payout_roll_outcomes_workbook_idx").on(table.rollRunId, table.workbookId),
+  index("pc_payout_roll_outcomes_status_idx").on(table.rollRunId, table.status),
+  check(
+    "pc_payout_roll_outcomes_status_check",
+    sql`${table.status} in ('pending', 'already_target', 'verified', 'failed')`,
+  ),
 ]);
 
 // University admissions case management (design: docs/casemanagementsystem_design.md §3).

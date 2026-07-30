@@ -2,7 +2,7 @@
 
 The canonical lookup of every HTTP endpoint in BGScheduler. This page lists **method + path + group + auth + one-line purpose** only. For full request/response schemas, query parameters, and error shapes, follow the link on each group heading to the per-group detail page.
 
-All routes live under `src/app/api/**/route.ts` (Next.js App Router). The release tree contains **173 endpoint paths** (`route.ts` files), including 16 Post-Class Feedback paths (12 capability-gated admin paths and four cron-only paths).
+All routes live under `src/app/api/**/route.ts` (Next.js App Router). This branch contains **175 endpoint paths** (`route.ts` files), including 18 Post-Class Feedback paths (13 capability-gated admin paths and five cron-only paths).
 
 ## How to read this index
 
@@ -118,6 +118,7 @@ Cron-triggered sync and automation jobs. `CRON_SECRET`-protected (`src/lib/inter
 | POST | `/api/internal/sync-wise` | internal | cron (or admin) | Manual full Wise snapshot sync (session or `curl`) |
 | GET | `/api/internal/sync-wise-activity` | internal | cron | Sync newest Wise activity audit events |
 | GET | `/api/internal/sync-post-class-feedback` | internal | cron | Reconcile Wise post-class feedback, then process advisory AI checks and due reminder retries |
+| GET | `/api/internal/post-class-feedback-backfill` | internal | cron | Drain one oldest unreconciled historical window; scheduled defaults are one batch and at most 50 detail calls |
 | GET | `/api/internal/post-class-feedback/admin-digest` | internal | cron | Send the daily Post-Class Feedback admin digest |
 | GET | `/api/internal/post-class-feedback/reminder-day-after` | internal | cron | Reconcile source data, then send grouped 09:00 Bangkok day-after tutor reminders when healthy |
 | GET | `/api/internal/post-class-feedback/reminder-deadline` | internal | cron | Reconcile source data, then send grouped 17:00 Bangkok deadline-day tutor reminders when healthy |
@@ -216,12 +217,34 @@ Read-only Wise feedback evidence, objective compliance, tutor reminders, human-r
 | POST | `/api/post-class-feedback/ai-review` | post-class-feedback | admin + `reviewer` | Confirm or dismiss one AI concern with a required note and expected version |
 | POST | `/api/post-class-feedback/finance` | post-class-feedback | admin + `finance` | Move, process, or create an immutable reversal offset for one deduction |
 | POST | `/api/post-class-feedback/finance-periods` | post-class-feedback | admin + `finance` | Open, close, or reopen one feature-owned finance period |
+| POST | `/api/post-class-feedback/payout-runs` | post-class-feedback | admin + `finance` | Preview or publish a 26th–25th payout run, retry only its CSV, or resolve one audited post-close exception |
 | PATCH | `/api/post-class-feedback/settings` | post-class-feedback | admin + `access_manager` | Update shadow/live/paused mode, prospective effective date, Wise field mapping, or admin digest recipients |
 | PATCH | `/api/post-class-feedback/access` | post-class-feedback | admin + `access_manager` | Grant or revoke one capability for an existing allowlisted admin, with last-manager/self-lockout safeguards |
 | PATCH | `/api/post-class-feedback/tutor-emails` | post-class-feedback | admin + `access_manager` | Set or clear one canonical tutor's feature-owned primary reminder email |
 | POST | `/api/post-class-feedback/sync` | post-class-feedback | admin + `access_manager` | Run a manual 1–50-detail-call reconciliation, optionally over an inclusive Bangkok date range, then process AI/retry work |
 | POST | `/api/post-class-feedback/test-email` | post-class-feedback | admin + `access_manager` | Send a delivery test and record the successful setup checkpoint |
 | POST | `/api/post-class-feedback/shadow-review` | post-class-feedback | admin + `access_manager` | Confirm that a successful shadow sync was reviewed before prospective activation |
+
+`POST /api/post-class-feedback/payout-runs` uses an action-discriminated body:
+
+- `preview`: `{ action, anchorMonth, tutorFilter? }`; read-only and returns a
+  deterministic, source/version-bound preview token. `tutorFilter` is an exact canonical tutor key for a
+  canary.
+- `publish`: `{ action, anchorMonth, expectedVersion, previewToken, tutorFilter?,
+  acknowledgements }`, where acknowledgements contain `confirmed: true`, a
+  required reason, and the exact pending-review/non-ready counts shown by the
+  preview.
+- `retry_csv`: `{ action, anchorMonth, expectedVersion }`; retries only the
+  Drive summary and never replays ledger writes.
+- `resolve_exception`: `{ action, exceptionId, expectedVersion, note,
+  externalReference }`; records a reviewed late approval, post-close waiver,
+  post-close reversal, or manual correction resolution.
+
+Publish and CSV retry require the exact
+`POST_CLASS_PAYOUT_WRITES_ENABLED=true` kill switch in addition to finance
+capability and complete Google target configuration. Run close/date-roll is
+intentionally absent from HTTP and the UI; the audited roll CLI owns that
+maintenance action after strict workbook/composite readback.
 
 ## [Proposals](./proposals.md) — `/api/proposals`
 

@@ -4,9 +4,9 @@
 
 ## Purpose
 
-Wise Post-Class Feedback Tracking replaces the spreadsheet-based comment queue with a durable, admin-only workspace at `/post-class-feedback`. It reads the canonical Wise session detail for each class, preserves every observed teacher-feedback version, evaluates an objective deadline/content policy, sends tutor reminders, and carries reviewed deduction candidates through a feature-owned finance handoff.
+Wise Post-Class Feedback Tracking replaces the spreadsheet-based comment queue with a durable, admin-only workspace at `/post-class-feedback`. It reads the canonical Wise session detail for each class, preserves every observed teacher-feedback version, evaluates an objective deadline/content policy, and carries reviewed deduction candidates through a feature-owned finance handoff. Reminder and digest code remains available for deliberate recovery testing, but automated outbound email is parked.
 
-The Google Sheet is requirements reference only. The feature does not import its historical queue and never falls back to the sheet in production. It is also strictly read-only toward Wise: it does not create, edit, backdate, or submit feedback, and it does not mutate Wise sessions. No deduction is written into Payroll automatically.
+The original feedback Google Sheet is requirements reference only. The feature does not import its historical queue and never falls back to it in production. It is also strictly read-only toward Wise: it does not create, edit, backdate, or submit feedback, and it does not mutate Wise sessions. No deduction is written into the Payroll subsystem, automatically or otherwise. The payout handoff appends to an app-owned adjustment tab in the finance payout workbook only when a finance user explicitly publishes a reviewed preview.
 
 The rollout starts in `shadow` mode. An access manager must complete the setup checklist and choose a prospective effective date before live obligations can exist. Sessions ending before that effective instant stay out of enforcement permanently.
 
@@ -18,7 +18,8 @@ The rollout starts in `shadow` mode. An access manager must complete the setup c
 - The system never generates substitute comments, never fabricates activity, and never invents an author or source timestamp.
 - Kevin Hsieh has the same tutor compliance policy as every other tutor. The initial all-capabilities grant for `kevhsh7@gmail.com` is administrative access, not a tutor exemption.
 - AI is advisory. It cannot create, approve, waive, process, reverse, or otherwise transition a deduction.
-- Financial processing stays inside this workspace. There is no CSV handoff, deduction email, Wise mutation, or Payroll write.
+- No deduction email, no Wise mutation, no Payroll write. Review and decision stay inside this workspace; the only outbound financial artefact is the payout run described below, and it is never automatic.
+- A payout run writes only ever-new adjustment rows to the dedicated `Feedback Deductions` tab. It never writes to the finance-refreshed source tab or a tutor workbook, and corrections are compensating rows rather than edits/deletes.
 
 ## Eligibility and identity
 
@@ -155,9 +156,12 @@ Similarity input is Unicode-normalized, lowercased, whitespace-collapsed text wi
 
 Each returned concern is independently `pending`, `confirmed`, or `dismissed`. A reviewer must supply a note and an expected version for every confirm/dismiss action. Model failure is stored as an AI-run failure and never blocks objective compliance processing.
 
-## Tutor reminders and admin digest
+## Parked tutor reminders and admin digest
 
-Two grouped tutor reminder checkpoints run in Bangkok time:
+The delivery implementation is retained, but all three email routes are
+unscheduled and `manualOnly` in Data Health. Nothing sends automatically. If
+automation is deliberately restored later, the two grouped tutor checkpoints
+would run in Bangkok time:
 
 - 09:00 on the day after class (`0 2 * * *` UTC);
 - 17:00 on deadline day (`0 10 * * *` UTC).
@@ -168,7 +172,13 @@ Delivery rechecks current content and requires a source observation no older tha
 
 Recipient resolution uses `tutor_contacts.primary_email` first. If that is blank, the onsite/online Wise-derived addresses are accepted only when they collapse to one unambiguous address; conflicts and missing addresses are not guessed. Delivery is durably idempotent. It makes one primary-relay attempt followed by up to three backup-relay retries at approximately 30, 90, and 180 minutes. Before a grouped retry, any otherwise-eligible stale member defers the whole delivery without consuming an email attempt; the service never sends a fresh subset and drops the stale remainder. A retry is cancelled when every member no longer needs a reminder.
 
-The internal admin digest runs daily at 08:00 Bangkok (`0 1 * * *` UTC) and reports new violations since the prior successful digest's scheduled boundary (or the preceding 24 hours on first run), pending deduction and AI reviews, open source/form issues, and terminal reminder failures. Issue and failure totals are uncapped; the message includes only a bounded issue-detail sample. Recipients are selected in Settings from existing allowlisted admins.
+The retained admin digest is designed for 08:00 Bangkok (`0 1 * * *` UTC) and
+reports new violations since the prior successful digest's scheduled boundary
+(or the preceding 24 hours on first run), pending deduction and AI reviews,
+open source/form issues, and terminal reminder failures. It also remains parked.
+Issue and failure totals are uncapped; the message includes only a bounded
+issue-detail sample. Recipients are selected in Settings from existing
+allowlisted admins.
 
 ## Review and finance workflow
 
@@ -191,6 +201,172 @@ Finance actions:
 
 The processed deduction row and the append-only action/offset ledgers are protected by database triggers. All mutations are individual, capability-gated, audited, and protected by idempotency keys and/or expected-version checks.
 
+## Payout runs
+
+**Status: implemented on the payout branch; never run against the production
+money path.** Production rollout requires the current migrations, exact tutor
+identity mappings, the three-tab workbook cutover, scratch evidence, and the
+write switch described below. Shadow enforcement creates no deduction rows.
+
+Tutor pay uses a **26th-to-25th** window. A run anchored to `2026-07` covers
+26 June through 25 July inclusive. A payout run is separate from calendar-month
+finance periods and can therefore span two finance months.
+
+A routine run selects approved, unprocessed deductions whose session ended
+inside the closed window. Pending review is not a decision; waived items are
+excluded. A correction is a new positive adjustment row, never an edit or
+deletion of a prior negative deduction. Processing is allowed only after the
+corresponding payout line has been published and verified.
+
+### Dedicated three-tab workbook
+
+The production workbook has three distinct responsibilities:
+
+| Tab | Owner | Contract |
+|---|---|---|
+| `Begifted Payouts Detailed` | Finance refresh process | Read-only source. Finance may replace/re-paste it; the app never writes here. |
+| `Feedback Deductions` | BGScheduler | Append-only A:H adjustment rows. Only the payout publisher writes here. |
+| `Payouts With Deductions` | BGScheduler formula | Exact `QUERY` union of the source and adjustment A:H ranges. Tutor workbooks query this composite, never either input directly. |
+
+Tab names are configuration, not hard-coded production targets. The names above
+are the recommended defaults. The workbook id, connected account, CSV folder,
+tutor-workbook inventory folder, and all three tab names must be explicit
+environment variables.
+
+The A:H contract remains:
+
+| A | B | C | D | E | F | G | H |
+|---|---|---|---|---|---|---|---|
+| Teacher name | Session name | Course name/student | Date | Time | Duration | Credits deducted | Payout amount |
+
+`Course name` is historically mislabeled and holds the student name. Read with
+`UNFORMATTED_VALUE`/`SERIAL_NUMBER`, source `Date` and `Time` cells are numeric
+Google date serials/day fractions and G:H are numeric. An app row copies the
+anchor cells exactly and appends with `RAW`; constructing date/time strings can
+make Sheets `QUERY` drop the row as a minority type. Matching uses the exact
+mapped teacher identity, student, and UTC session time with a ±15-minute
+tolerance for live start drift. A tie, clock disagreement, missing mapping,
+unresolved tutor, or unrecognized source shape produces no write and leaves a
+retryable partial run.
+
+Every adjustment carries a stable marker containing 12 hexadecimal identity
+characters inside the Session name cell. Before append, the publisher scans
+the app-owned deductions tab for that marker. Retrying after a crash therefore
+recovers a landed row without writing it twice. Finance refreshes cannot erase
+app adjustments because the refreshed source and app-owned deductions are
+separate tabs.
+
+Tutor workbooks remain views. The rollout inventory recursively scans
+`POST_CLASS_PAYOUT_WORKBOOKS_FOLDER_ID`, resolves each live `TUTOR` cell against
+the active Wise identity catalog, proves each workbook's current formula, and
+changes it to query `Payouts With Deductions`. Reviewed identity overrides take
+precedence over nickname parsing, and a compound nickname such as `Win-Bordin`
+cannot collapse to `Win`. The inventory pins the active Wise snapshot for the
+whole fleet scan and rechecks it under the registry transaction before commit.
+Runtime publishing never writes a tutor workbook. The composite formula and
+tutor imports are rollout gates: if either is wrong, the adjustment may exist
+but not affect tutor totals.
+
+### Preview, publish, CSV, and exceptions
+
+The Payouts tab is the only interactive money-path surface:
+
+1. `preview` is read-only and returns a deterministic token bound to the anchor
+   month, current run version, exact coverage counts, candidate identities, and
+   optional exact canonical tutor filter.
+2. `publish` requires that token, the same optional tutor filter, an explicit
+   confirmation checkbox, a meaningful audit reason, and the exact pending-review
+   and non-ready counts shown in the preview.
+3. The service claims a durable `publishing` lease, appends one line at a time,
+   persists each outcome immediately, and finalizes the pass. Source sync and
+   payout publication are bidirectionally fenced: neither can begin while the
+   other owns its durable lane, stale sync workers cannot persist, and the
+   finalizer rechecks the claimed source fingerprint after external writes.
+4. `retry_csv` uploads only the summary from persisted outcomes. It does not
+   replay Google Sheet rows.
+5. `resolve_exception` requires a note and external reference for reviewed
+   late approvals, post-close waivers, post-close reversals, and manual
+   corrections.
+
+A canary uses `tutorFilter=<exact canonical key>`. It may run only after the
+window ends, records the filter in the audit trail, and leaves the overall run
+`partial` while other required lines remain. It is not a display-only filter.
+
+Run states:
+
+| State | Meaning |
+|---|---|
+| `draft` | Read-only preview exists; nothing is currently writing. |
+| `publishing` | A durable single-flight lease owns the external write pass. |
+| `partial` | A canary, time-bounded pass, or mixed outcome left required work. |
+| `published` | Every required line is written and the source fingerprint still matches the confirmed full/canary pass. |
+| `closed` | Finance closed the run; later changes require an audited exception/correction. |
+
+Each line is `pending`, `written`, `failed`, or `skipped` and has kind
+`deduction` or `correction`. A run never claims success merely because the
+request ended; partial work remains visible and retryable.
+
+Month/date repointing is a maintenance operation, not part of Publish. Its
+strict-close preflight requires the prior run to be `published`, the CSV
+uploaded, naturally passing coverage, no running collector, the current full
+source fingerprint matching the published pass, no open exception or
+incomplete line/correction, and successful formula readback across the full
+tutor-workbook inventory. Every roll invocation
+also requires a freshly generated recursive Apps Script TSV via `--inventory`;
+its exact spreadsheet-ID set must equal the active maintenance registry, so a
+newly added or removed workbook cannot be silently omitted. Before the first
+close every workbook must still show the exact outgoing window; a mixed
+outgoing/incoming fleet is accepted only when resuming an already-audited
+partial roll. On explicit
+`--commit`, the audited roll CLI closes that exact version before changing any
+dates. There is deliberately no close/date-roll API or UI button: only that CLI
+may close and repoint after the full-fleet workbook/composite checks.
+Read-heavy maintenance commands use a conservative 2.1-second shared-account
+cadence, preserving headroom beneath the Sheets per-user quota for concurrent
+application health reads. The lease-bound date roll uses 1.5 seconds: its five
+reads plus one write and readback per workbook remain quota-safe while the
+68-workbook fleet still fits inside the durable 15-minute roll lease.
+
+### Guardrails
+
+- Production and Preview targets are distinct:
+  `POST_CLASS_PAYOUT_TARGET=production` is required on Vercel Production and
+  `scratch` on Preview.
+- Missing target/account/folder/tab configuration fails closed. There are no
+  embedded production ids or account fallbacks.
+- External payout writes are disabled unless
+  `POST_CLASS_PAYOUT_WRITES_ENABLED=true` exactly. Keep it false for deploy,
+  migration, preview, and shadow verification; enable it only for an approved
+  write window and turn it off again afterwards.
+- That switch gates runtime money rows, not workbook maintenance. Setup,
+  formula repoint, and restore tooling stays switch-independent but requires a
+  full-fleet preflight/readback and an explicit `--commit`; a dry run is the
+  default. Runtime publication must never be used as a maintenance shortcut.
+- The pinned account needs Sheets write and `drive.file`; the UI exposes both
+  grants and the write-switch state before finance can confirm.
+- An open blocking global source issue is absolute. Pending reviews and every
+  non-ready source state (`unavailable`, `form_drift`, `identity_review`) must
+  either clear or be explicitly acknowledged with the exact preview counts and
+  an audited reason. The coverage denominator includes non-ready sessions even
+  when billing evidence leaves eligibility unproven; unknown payable exposure
+  makes coverage worse and never disappears from the gate.
+- A running source collector blocks payout acquisition and close. A live payout
+  lease defers new collection, and every source write verifies its sync run is
+  still `running`, preventing a recovered stale worker from changing the
+  external append plan.
+- Routine full publication is after window close. A tutor canary is the only
+  deliberately partial rollout scope.
+- Publish does not process a deduction. Required order is
+  **approve → preview/publish → verify composite+tutor total → process**.
+- Pausing the write switch prevents future writes but does not undo rows already
+  appended. Rollback is a reviewed compensating correction; never delete or
+  overwrite a historical adjustment.
+
+Google scope was probed on 2026-07-28: `drive.file` can create a CSV inside the
+configured folder without the broader restricted `drive` scope. A credential,
+Cloud-project, workbook, or folder change requires a new scratch probe before
+production writes resume.
+
 ## Access model
 
 This feature adds four database-backed capabilities, read fresh on every request:
@@ -199,7 +375,7 @@ This feature adds four database-backed capabilities, read fresh on every request
 |---|---|
 | `viewer` | Operations, analytics, exact source feedback, immutable history, aggregate deduction/AI metrics, and a sanitized audit view. |
 | `reviewer` | Viewer access plus the reviewer deduction queue, AI-concern details, and individual decisions. |
-| `finance` | Viewer access plus the approved/processed finance queue, handoff/reversal, and finance-period actions. |
+| `finance` | Viewer access plus the approved/processed finance queue, payout preview/publish/CSV/exception controls, handoff/reversal, and finance-period actions. |
 | `access_manager` | Viewer access plus manual rolling sync/range backfill, mapping, mode, access, tutor-email, digest-recipient, email-test, and shadow-review settings. |
 
 Any action capability implies `viewer`. Migration `0055_post_class_feedback.sql` seeds viewer access for full allowlisted admins and seeds all four capabilities plus the initial digest recipient for `kevhsh7@gmail.com`. Access managers can grant roles only to existing `admin_users`. The service prevents self-removal of `access_manager` and prevents removal of the last access manager.
@@ -208,11 +384,15 @@ Reviewer, finance, and access-management payloads are assembled separately. A pl
 
 ## UI
 
-The `/post-class-feedback` workspace has up to five views, with restricted views present only when the server grants the matching capability:
+The `/post-class-feedback` workspace has up to six views, with restricted views present only when the server grants the matching capability:
 
 - **Operations** — filterable session queue, objective evidence, reminders, source state, AI concerns, exact feedback, immutable version history, and individual reviewer actions.
 - **Analytics** — headline KPIs, tutor ranking, length statistics, concerns, and Bangkok period trends.
 - **Deductions** — capability-specific reviewer/finance handoff with individual actions only.
+- **Payouts** — finance-only read-only preview, exact tutor canary, explicit
+  publish confirmation, run/line outcomes, CSV-only retry, and reviewed
+  post-close exception resolution. The write kill switch and Google readiness
+  are visible before confirmation.
 - **Audit** — configuration, AI-review, deduction, finance, reminder, and source history.
 - **Settings** — enforcement controls, rolling collection and bounded date-range backfill, Wise field mapping/source health, role matrix, shadow-review confirmation, and finance periods. The tutor-email and digest-recipient cards remain for the parked email subsystem but no longer gate anything.
 
@@ -222,7 +402,12 @@ A persistent “Setup required” banner remains until the mapping, role coverag
 
 ## Durable data model
 
-The feature owns 24 snapshot-independent tables. Exact definitions and constraints are in `src/lib/db/schema.ts` and migration `drizzle/0055_post_class_feedback.sql`.
+Migration `0055_post_class_feedback.sql` creates the 24-table base model. Payout
+migrations add eight tables for a current total of 32, covering the run, line,
+exact tutor-name mapping, exception/correction state, and resumable workbook
+date-roll audit required by the dedicated-tab handoff. Exact current
+definitions and constraints are in `src/lib/db/schema.ts` and the database
+reference.
 
 | Area | Tables | Purpose |
 |---|---|---|
@@ -231,12 +416,13 @@ The feature owns 24 snapshot-independent tables. Exact definitions and constrain
 | Notifications | `post_class_notification_runs`, `post_class_notification_deliveries`, `post_class_notification_items`, `post_class_notification_attempts` | Grouped idempotent tutor reminders/admin digests and their durable retry trail. Successful setup-test delivery is recorded in settings plus the configuration audit log. |
 | AI | `post_class_ai_runs`, `post_class_ai_concerns`, `post_class_ai_reviews` | De-identified advisory runs, per-dimension findings, and required-note human decisions. |
 | Finance | `post_class_finance_periods`, `post_class_deductions`, `post_class_deduction_actions`, `post_class_deduction_offsets` | Open/closed months, one candidate per session, append-only decisions, and immutable correction offsets. |
+| Payout runs | `post_class_payout_runs`, `post_class_payout_tutor_names`, `post_class_payout_run_lines`, `post_class_payout_adjustments`, `post_class_payout_exceptions`, `post_class_payout_roll_runs`, `post_class_payout_roll_outcomes` (plus the maintenance-only `post_class_tutor_payout_sheets` registry) | One lifecycle per 26th-to-25th window, exact tutor identities, immutable negative lines, positive correction obligations, reviewed blockers, and durable per-workbook date-roll outcomes. The per-tutor registry is refreshed from a recursive, TUTOR-cell-validated inventory and is used only for formula/date maintenance—not runtime payout targeting. |
 
 The feature also adds optional `primary_email` to `tutor_contacts`. Existing features continue to use their previous onsite/online selection behavior unless they explicitly opt into this field.
 
 ## API and cron surface
 
-The complete endpoint inventory is in [the API master index](../reference/api/index.md). Admin routes under `/api/post-class-feedback/*` call the fresh capability guard; internal routes use `CRON_SECRET` and cron-invocation audit. All four jobs and their manual recovery controls are surfaced in Data Health. Schedules and recovery behavior are documented in [the cron reference](../reference/crons.md). The two Wise read contracts used by the collector are documented in [the Wise API reference](../reference/wise-api.md).
+The complete endpoint inventory is in [the API master index](../reference/api/index.md). Admin routes under `/api/post-class-feedback/*` call the fresh capability guard; internal routes use `CRON_SECRET` and cron-invocation audit. Five internal routes exist: rolling collection, bounded historical drain, and the three parked email handlers. Their schedules and recovery behavior are documented in [the cron reference](../reference/crons.md). The two Wise read contracts used by the collector are documented in [the Wise API reference](../reference/wise-api.md).
 
 ## Tests
 
@@ -247,13 +433,29 @@ Focused coverage includes:
 - `src/lib/post-class-feedback/__tests__/sync.test.ts` — four-date windowing, priority/caps, inclusive dedupe, source issues, form drift, and idempotent resync.
 - `src/lib/post-class-feedback/__tests__/similarity.test.ts` — name redaction, trigram cosine similarity, and deterministic AI-trigger boundaries.
 - `src/lib/post-class-feedback/__tests__/access.test.ts` — fresh capability rules, implied viewer, last-manager, and self-lockout safeguards.
-- `src/lib/post-class-feedback/__tests__/migration.test.ts` — required tables, enums, indexes, append-only triggers, defaults, and initial access/settings seeds.
+- `src/lib/post-class-feedback/__tests__/migration.test.ts` — required tables, enums, indexes, append-only triggers, defaults, and initial access/settings seeds, plus the payout-run and source-restore migrations.
+- `src/lib/post-class-feedback/__tests__/payout-master.test.ts` — source/deduction
+  tab headers, UTC identity matching, stable markers, and typed adjustment rows.
+- `src/lib/post-class-feedback/__tests__/payout-plan.test.ts` — all-source-state
+  coverage gates, audited acknowledgements, lifecycle decisions, and
+  Bangkok-formatted CSV output.
+- `src/lib/post-class-feedback/__tests__/payout-writer.test.ts` — append-only
+  dedicated-tab writes, rate pacing, persisted outcomes, and marker idempotency.
+- `src/lib/post-class-feedback/__tests__/payout-run.integration.test.ts` —
+  preview token, closed-window/canary publication, durable single-flight,
+  partial recovery, CSV-only retry, corrections, and duplicate-write defense.
+- `src/app/api/post-class-feedback/payout-runs/__tests__/route.test.ts` and
+  `src/components/post-class-feedback/__tests__/payouts-tab.test.tsx` — action
+  schemas, kill-switch exposure, explicit confirmation, canary scope, row
+  references, CSV retry, and exception resolution.
+- `src/lib/post-class-feedback/__tests__/source-status-restore.integration.test.ts` — the run-wide source demotion and its one-statement recovery.
 - `src/lib/wise/__tests__/post-class-feedback-fetchers.test.ts` — Wise PAST pagination/date params and canonical session-detail request shape.
 - `src/components/post-class-feedback/__tests__/*` — workspace tabs, capability-specific controls, responsive/filter contracts, setup controls, and absence of synthetic-comment generation.
 
 ## Production setup checklist
 
-After deploying the code and applying `0055_post_class_feedback.sql`, Kevin should complete these steps in the website's Settings view:
+After deploying the code and applying the current Post-Class Feedback
+migrations, the rollout owner should complete these steps:
 
 1. Assign the real reviewer, finance, and access-manager staff; `kevhsh7@gmail.com` is only the initial all-capabilities bootstrap.
 2. Verify the Wise form mapping and source health.
@@ -262,8 +464,62 @@ After deploying the code and applying `0055_post_class_feedback.sql`, Kevin shou
 5. Open the required finance period(s).
 6. Activate live enforcement with a current-or-future Bangkok effective date.
 
+### Additional steps before the first payout run
+
+7. Apply `0057_post_class_payout_runs.sql`,
+   `0058_post_class_source_status_restore.sql`,
+   `0059_post_class_payout_master.sql`, and
+   `0060_post_class_payout_durable_runs.sql` before deploying code that reads
+   the new states.
+8. Configure every payout environment variable with
+   `POST_CLASS_PAYOUT_WRITES_ENABLED=false`. Preview uses a scratch workbook;
+   production names its production workbook explicitly. The CSV destination and
+   recursive tutor-workbook inventory root are separate required variables even
+   when they currently point to the same folder.
+9. Create/validate the source, `Feedback Deductions`, and
+   `Payouts With Deductions` tabs in scratch. Prove the composite A:H union,
+   recursively inventory every tutor workbook, and dry-run the formula cutover.
+   Any unexpected formula, duplicate workbook identity, missing access, or
+   out-of-folder workbook blocks rollout.
+10. Derive exact source-ledger tutor-name mappings in dry-run, review them, then
+    commit only approved mappings. The reviewed overrides are
+    `Kevin (Kev) Y. Hsieh` → `Kevin`,
+    `Prohrak (Paoju) Kruengthomya` → `Paojuu`, the online-only Samantha
+    identity → `Samantha`, and the online-only Vasinee `(Prae)` identity →
+    `Prae`. Leave Kemjira, Roger, and Tulya unassigned because no approved exact
+    source-ledger identity exists. Keep `Fluke-Supha`, `Muk`, `Nacha (Poi)`, and
+    `Win-Bordin` blocked until an exact source-ledger identity appears. Do not
+    guess.
+11. Let rolling collection plus the bounded :23/:53 drain converge. Require no
+    blocking global issue and review every remaining non-ready/pending count in
+    the exact preview.
+12. Run full unit, lint, typecheck, build, disposable-Postgres integration,
+    route-surface guard, scratch Google append/idempotency/CSV checks, and
+    browser QA. The production PR/check state must be current, not inferred from
+    the historical planning summary.
+13. Cut tutor workbooks to the formula-backed composite and verify source-only totals
+    are unchanged before enabling any deduction write.
+14. After a payout window closes, load a scratch preview for one exact canonical
+    tutor, set the scratch write switch to `true`, explicitly confirm with an
+    audit reason, publish, and verify: one dedicated-tab row, marker, composite
+    row, tutor view, total delta, and CSV. Turn the switch off immediately.
+15. Repeat the canary in production during an approved window. Process that
+    deduction only after the row and tutor total are verified. Observe a full
+    collector/backfill cycle before publishing the remaining tutors.
+16. Use the audited roll CLI—not the API/UI—to close and repoint only after all
+    required lines, CSV evidence, composite readback, and tutor-workbook
+    preflight are complete. Pass the fresh recursive Apps Script TSV with
+    `--inventory`; any difference from the active registry aborts before close.
+    Later approval/waiver/reversal changes use audited exceptions and
+    compensating correction rows.
+
 Tutor emails, digest recipients, and the email test are no longer prerequisites — outbound email is parked.
 
-Do not activate while the setup banner is incomplete. Pausing later creates a new excluded interval; resuming reuses the immutable original activation boundary and cannot retroactively penalize sessions in the paused interval.
+Do not activate enforcement while the setup banner is incomplete. Do not enable
+payout writes merely because enforcement is live: policy activation and the
+external money-path switch are separate approvals. Pausing later creates a new
+excluded interval; resuming reuses the immutable original activation boundary
+and cannot retroactively penalize sessions in the paused interval.
 
-_Verified against HEAD on 2026-07-26._
+_Updated for the dedicated-tab payout design and rollout contract on 2026-07-29.
+The historical per-tutor insert design is superseded._

@@ -271,4 +271,45 @@ Tracks the outcome of writing an approved leave request back to its Google Sheet
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+## `post_class_payout_run_status`
+
+- **Variable**: `postClassPayoutRunStatusEnum`
+- **Definition**: `src/lib/db/schema.ts`
+- **Values**: `draft`, `publishing`, `partial`, `published`, `closed`
+- **Used by**:
+  - `post_class_payout_runs.status` — default `draft`
+
+`publishing` owns a durable lease. `partial` means required lines remain after a
+canary, bounded pass, or mixed outcome; `closed` requires later financial changes
+to use the exception/correction workflow.
+
+---
+
+## `post_class_payout_match_status`
+
+- **Variable**: `postClassPayoutMatchStatusEnum`
+- **Definition**: `src/lib/db/schema.ts`
+- **Values**: `pending`, `matched`, `unmatched`, `ambiguous`, `no_sheet`
+- **Used by**:
+  - `post_class_payout_run_lines.match_status` — default `pending`
+
+The historical name `no_sheet` now covers a missing/unrecognized configured
+source tab or exact tutor-ledger mapping; it never authorizes a guessed write.
+
+---
+
+## `post_class_payout_write_status`
+
+- **Variable**: `postClassPayoutWriteStatusEnum`
+- **Definition**: `src/lib/db/schema.ts`
+- **Values**: `pending`, `written`, `failed`, `skipped`
+- **Used by**:
+  - `post_class_payout_run_lines.write_status` — default `pending`
+
+Positive correction obligations use check-constrained text states
+`pending | written | exception`; durable payout exceptions use
+`open | resolved`.
+
+---
+
+_Verified against the dedicated-tab payout branch on 2026-07-29._

@@ -33,6 +33,10 @@
       "schedule": "13,43 * * * *"
     },
     {
+      "path": "/api/internal/post-class-feedback-backfill",
+      "schedule": "23,53 * * * *"
+    },
+    {
       "path": "/api/internal/sync-leave-requests",
       "schedule": "15,45 * * * *"
     },

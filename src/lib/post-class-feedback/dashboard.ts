@@ -12,9 +12,15 @@ import {
   todayBangkok,
 } from "@/lib/room-capacity/dates";
 
+import {
+  hasDriveFileScope,
+  hasSheetsWriteScope,
+} from "@/lib/sales-dashboard/google-oauth";
+
 import type { FeedbackSubmitter } from "@/types/post-class-feedback";
 
 import { PostClassValidationError } from "./errors";
+import { payoutConnectedEmail } from "./payout-config";
 import {
   isPostClassTerminalReminderFailure,
   isPostClassAssessmentInDenominator,
@@ -295,6 +301,18 @@ export async function getPostClassFeedbackDashboard(
         .groupBy(schema.wiseActivityEvents.sessionId)
       : Promise.resolve([]),
   ]);
+  const deductionIds = deductionRows.map(({ deduction }) => deduction.id);
+  const writtenPayoutLines = deductionIds.length > 0
+    ? await db.selectDistinct({
+      deductionId: schema.postClassPayoutRunLines.deductionId,
+    }).from(schema.postClassPayoutRunLines).where(and(
+      inArray(schema.postClassPayoutRunLines.deductionId, deductionIds),
+      eq(schema.postClassPayoutRunLines.writeStatus, "written"),
+    ))
+    : [];
+  const writtenPayoutDeductionIds = new Set(
+    writtenPayoutLines.map((line) => line.deductionId),
+  );
 
   const tutorSubmittedByWiseSession = new Map<string, Date>();
   for (const row of tutorSubmissionRows) {
@@ -530,6 +548,10 @@ export async function getPostClassFeedbackDashboard(
     return {
       id: deduction.id,
       sessionId: deduction.sessionId,
+      // Carried so a payout view can group by identity rather than by display
+      // name — two tutors can share a name, and one tutor's name can change.
+      tutorKey: session?.canonicalTutorKey ?? null,
+      wiseSessionId: session?.wiseSessionId ?? null,
       tutorName: session?.canonicalTutorName ?? "Tutor needs review",
       className: session?.className ?? "Untitled class",
       students: participantsBySession.get(deduction.sessionId) ?? [],
@@ -540,6 +562,7 @@ export async function getPostClassFeedbackDashboard(
       ].filter(Boolean).join(" · "),
       amount: deduction.amountMinor / 100,
       status: offset ? "reversed" as const : deduction.status,
+      payoutVerifiedWritten: writtenPayoutDeductionIds.has(deduction.id),
       processingMonth: offset
         ? periodById.get(offset.financePeriodId)?.month.slice(0, 7) ?? deduction.defaultFinanceMonth.slice(0, 7)
         : processingMonth?.slice(0, 7) ?? deduction.defaultFinanceMonth.slice(0, 7),
@@ -701,6 +724,18 @@ export async function getPostClassFeedbackDashboard(
     { key: "activation" as const, label: "Prospective activation", complete: settings?.enforcementMode === "live", detail: settings?.enforcementMode === "live" ? `Live from ${iso(settings.policyEffectiveAt)}` : "Not live" },
   ];
 
+  // One pinned Google account performs every payout write, so only that
+  // account's grants matter. Reported to finance users so the missing Drive
+  // consent is visible before a publish fails on it, and deliberately kept out
+  // of `setup` — the payout handoff is not part of activation.
+  const payoutGoogleEmail = payoutConnectedEmail();
+  const [payoutToken] = canFinance
+    ? await db.select({ scope: schema.googleOAuthTokens.scope })
+      .from(schema.googleOAuthTokens)
+      .where(eq(schema.googleOAuthTokens.email, payoutGoogleEmail))
+      .limit(1)
+    : [];
+
   return {
     capabilities: {
       viewer: user.capabilities.includes("viewer"),
@@ -708,6 +743,13 @@ export async function getPostClassFeedbackDashboard(
       finance: user.capabilities.includes("finance"),
       accessManager: user.capabilities.includes("access_manager"),
     },
+    payoutGoogle: canFinance
+      ? {
+        connectedEmail: payoutGoogleEmail,
+        sheetsWriteReady: hasSheetsWriteScope(payoutToken?.scope),
+        driveReady: hasDriveFileScope(payoutToken?.scope),
+      }
+      : null,
     settings: {
       mode: settings?.enforcementMode ?? "shadow",
       effectiveAt: iso(settings?.policyEffectiveAt),

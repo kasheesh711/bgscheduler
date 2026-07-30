@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { signIn } from "next-auth/react";
 import {
   AlertTriangle,
+  Banknote,
   BarChart3,
   CheckCircle2,
   ClipboardList,
@@ -31,9 +33,20 @@ import {
   formatRate,
 } from "./feedback-ui";
 import { OperationsTab } from "./operations-tab";
+import { PayoutsTab } from "./payouts-tab";
 import { SettingsTab, type SettingsRequest } from "./settings-tab";
 
-type WorkspaceTab = "operations" | "analytics" | "deductions" | "audit" | "settings";
+/**
+ * Declared here rather than imported from `@/lib/sales-dashboard/google-oauth`:
+ * that module pulls in node:crypto and the database, which must not reach the
+ * client bundle. Same approach as the leave-requests workspace. Keep in step
+ * with the sign-in scope in `src/lib/auth.ts`.
+ */
+const PAYOUT_RECONSENT_SCOPE = "openid email profile"
+  + " https://www.googleapis.com/auth/spreadsheets"
+  + " https://www.googleapis.com/auth/drive.file";
+
+type WorkspaceTab = "operations" | "analytics" | "deductions" | "payouts" | "audit" | "settings";
 type Toast = { tone: "success" | "error"; message: string } | null;
 
 async function checkedJson<T>(response: Response, fallback: string): Promise<T> {
@@ -198,6 +211,28 @@ export function PostClassFeedbackWorkspace() {
             <RefreshCw className={cn(refreshing && "animate-spin")} />
             {refreshing ? "Refreshing…" : "Refresh"}
           </Button>
+          {payload?.payoutGoogle
+          && (!payload.payoutGoogle.driveReady || !payload.payoutGoogle.sheetsWriteReady) ? (
+            <Button
+              variant="outline"
+              className="border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
+              title={`${payload.payoutGoogle.connectedEmail} is missing ${
+                !payload.payoutGoogle.sheetsWriteReady && !payload.payoutGoogle.driveReady
+                  ? "Sheets write and Drive access"
+                  : !payload.payoutGoogle.sheetsWriteReady
+                    ? "Sheets write access"
+                    : "Drive access"
+              }. Payout publishing will stay unavailable until Google is reconnected.`}
+              onClick={() => signIn("google", { callbackUrl: "/post-class-feedback" }, {
+                prompt: "consent",
+                access_type: "offline",
+                scope: PAYOUT_RECONSENT_SCOPE,
+              })}
+            >
+              <ShieldAlert />
+              Reconnect Google
+            </Button>
+          ) : null}
           {payload ? (
             <Badge variant="outline" className={cn(
               "h-8 gap-2 px-3 capitalize",
@@ -218,6 +253,9 @@ export function PostClassFeedbackWorkspace() {
           <TabsTrigger value="analytics" className="px-2.5"><BarChart3 />Analytics</TabsTrigger>
           {payload?.capabilities.reviewer || payload?.capabilities.finance ? (
             <TabsTrigger value="deductions" className="px-2.5"><WalletCards />Deductions</TabsTrigger>
+          ) : null}
+          {payload?.capabilities.finance ? (
+            <TabsTrigger value="payouts" className="px-2.5"><Banknote />Payouts</TabsTrigger>
           ) : null}
           <TabsTrigger value="audit" className="px-2.5"><FileClock />Audit</TabsTrigger>
           {payload?.capabilities.accessManager ? (
@@ -249,6 +287,9 @@ export function PostClassFeedbackWorkspace() {
             <TabsContent value="analytics" className="mt-3 min-w-0"><AnalyticsTab payload={payload} /></TabsContent>
             {payload.capabilities.reviewer || payload.capabilities.finance ? (
               <TabsContent value="deductions" className="mt-3 min-w-0"><DeductionsTab payload={payload} submitting={submitting} onMutation={runMutation} /></TabsContent>
+            ) : null}
+            {payload.capabilities.finance ? (
+              <TabsContent value="payouts" className="mt-3 min-w-0"><PayoutsTab payload={payload} /></TabsContent>
             ) : null}
             <TabsContent value="audit" className="mt-3 min-w-0"><AuditTab payload={payload} /></TabsContent>
             {payload.capabilities.accessManager ? (

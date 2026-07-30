@@ -9,6 +9,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  like,
   lt,
   lte,
   ne,
@@ -21,8 +22,17 @@ import * as schema from "@/lib/db/schema";
 import type { WiseSessionDetail } from "@/lib/wise/types";
 import { getWiseSessionTeacherUserId, getWiseUserId } from "@/lib/wise/types";
 import { toFeedbackEventEvidence } from "./events";
+import { lockPostClassFinance } from "./finance-lock";
 import { assessFeedbackContent, calculateFeedbackDeadline } from "./policy";
 import { DEFAULT_FEEDBACK_FIELD_MAPPINGS } from "./wise";
+
+/**
+ * How long Wise gets to bring a session it reported missing back before the
+ * recheck lane stops paying to look for it. Sessions deleted in Wise never
+ * return, and they have no session row to auto-resolve against, so without a
+ * floor they occupy the queue permanently.
+ */
+const MISSING_SESSION_RETRY_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 import { withPostClassTransaction } from "./transaction";
 import type {
   CanonicalTutorResolution,
@@ -172,9 +182,16 @@ const CANONICAL_RECHECK_FRESHNESS_MS = 6 * 60 * 60 * 1000;
 const TERMINAL_INELIGIBLE_RECHECK_FRESHNESS_MS = 24 * 60 * 60 * 1000;
 
 export class PostClassFeedbackSyncAlreadyRunningError extends Error {
-  constructor() {
-    super("Post-class feedback sync is already running.");
+  constructor(message = "Post-class feedback sync is already running.") {
+    super(message);
     this.name = "PostClassFeedbackSyncAlreadyRunningError";
+  }
+}
+
+export class PostClassFeedbackSyncSourceFenceError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PostClassFeedbackSyncSourceFenceError";
   }
 }
 
@@ -185,6 +202,39 @@ export class PostClassPolicySnapshotConflictError extends Error {
   ) {
     super("Post-class feedback configuration changed during collection.");
     this.name = "PostClassPolicySnapshotConflictError";
+  }
+}
+
+/**
+ * A collector may persist source truth only while its durable run still owns
+ * the source-write lane. This rejects a zombie worker after stale-run recovery
+ * and extends the payout lease's source freeze across external Google writes.
+ */
+async function assertPostClassSyncSourceWriteFence(
+  db: Database,
+  runId: string,
+  now = new Date(),
+): Promise<void> {
+  const [run] = await db.select({
+    status: schema.postClassSyncRuns.status,
+  }).from(schema.postClassSyncRuns)
+    .where(eq(schema.postClassSyncRuns.id, runId))
+    .limit(1);
+  if (run?.status !== "running") {
+    throw new PostClassFeedbackSyncSourceFenceError(
+      "This post-class feedback sync no longer owns its running source-write lane.",
+    );
+  }
+  const [activePayout] = await db.select({
+    id: schema.postClassPayoutRuns.id,
+  }).from(schema.postClassPayoutRuns).where(and(
+    isNotNull(schema.postClassPayoutRuns.leaseToken),
+    gt(schema.postClassPayoutRuns.leaseExpiresAt, now),
+  )).limit(1);
+  if (activePayout) {
+    throw new PostClassFeedbackSyncSourceFenceError(
+      "Source persistence is deferred while a payout operation holds a live lease.",
+    );
   }
 }
 
@@ -531,28 +581,54 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
   constructor(private readonly db: Database) {}
 
   async beginSync(input: BeginPostClassSyncInput): Promise<string> {
-    await this.db
-      .update(schema.postClassSyncRuns)
-      .set({
-        status: "failed",
-        finishedAt: input.startedAt,
-        errorSummary: "Marked failed after remaining in running state for more than 20 minutes.",
-      })
-      .where(and(
-        eq(schema.postClassSyncRuns.status, "running"),
-        lte(schema.postClassSyncRuns.startedAt, new Date(input.startedAt.getTime() - STALE_RUNNING_MS)),
-      ));
     try {
-      const [run] = await this.db.insert(schema.postClassSyncRuns).values({
-        status: "running",
-        triggerType: input.triggerType,
-        actorEmail: input.actorEmail,
-        startedAt: input.startedAt,
-        windowStart: input.windowStart,
-        windowEnd: input.windowEnd,
-        detailCap: input.detailCap,
-      }).returning({ id: schema.postClassSyncRuns.id });
-      return run.id;
+      const runId = await withPostClassTransaction(this.db, async (tx) => {
+        await lockPostClassFinance(tx);
+        await tx
+          .update(schema.postClassSyncRuns)
+          .set({
+            status: "failed",
+            finishedAt: input.startedAt,
+            errorSummary: "Marked failed after remaining in running state for more than 20 minutes.",
+          })
+          .where(and(
+            eq(schema.postClassSyncRuns.status, "running"),
+            lte(
+              schema.postClassSyncRuns.startedAt,
+              new Date(input.startedAt.getTime() - STALE_RUNNING_MS),
+            ),
+          ));
+
+        // A payout pass releases the transaction lock while it performs
+        // irreversible Google appends. Its durable lease extends the source
+        // freeze across that interval: starting a collector here would let
+        // eligibility, matching cells, or a global source issue change under
+        // the append plan.
+        const [activePayout] = await tx.select({
+          leaseExpiresAt: schema.postClassPayoutRuns.leaseExpiresAt,
+        }).from(schema.postClassPayoutRuns).where(and(
+          isNotNull(schema.postClassPayoutRuns.leaseToken),
+          gt(schema.postClassPayoutRuns.leaseExpiresAt, input.startedAt),
+        )).limit(1);
+        if (activePayout) return null;
+
+        const [run] = await tx.insert(schema.postClassSyncRuns).values({
+          status: "running",
+          triggerType: input.triggerType,
+          actorEmail: input.actorEmail,
+          startedAt: input.startedAt,
+          windowStart: input.windowStart,
+          windowEnd: input.windowEnd,
+          detailCap: input.detailCap,
+        }).returning({ id: schema.postClassSyncRuns.id });
+        return run.id;
+      });
+      if (!runId) {
+        throw new PostClassFeedbackSyncAlreadyRunningError(
+          "Post-class feedback sync is deferred while a payout operation holds a live lease.",
+        );
+      }
+      return runId;
     } catch (error) {
       if (isUniqueViolation(error)) throw new PostClassFeedbackSyncAlreadyRunningError();
       throw error;
@@ -560,32 +636,48 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
   }
 
   async completeSync(input: CompletePostClassSyncInput): Promise<void> {
-    await this.db.update(schema.postClassSyncRuns).set({
-      status: "success",
-      finishedAt: input.finishedAt,
-      discoveredCount: input.discoveredCount,
-      sessionCount: input.sessionSavedCount,
-      detailFetchedCount: input.detailFetchedCount,
-      versionInsertedCount: input.versionInsertedCount,
-      assessedCount: input.assessedCount,
-      sourceIssueCount: input.sourceIssueCount,
-      metadata: {
-        ...input.metadata,
-        outcome: input.status,
-        candidateCount: input.candidateCount,
-      },
-    }).where(eq(schema.postClassSyncRuns.id, input.runId));
-    if (input.metadata?.globalSourceHealthy === true) {
-      await this.db.update(schema.postClassSourceIssues).set({
-        status: "resolved",
-        resolvedAt: input.finishedAt,
-        resolvedByEmail: "system:post-class-feedback",
-      }).where(and(
-        eq(schema.postClassSourceIssues.scope, "global"),
-        eq(schema.postClassSourceIssues.status, "open"),
-        ne(schema.postClassSourceIssues.issueType, "form_drift"),
-      ));
-    }
+    await withPostClassTransaction(this.db, async (tx) => {
+      // Resolving a global issue and restoring the prior per-session source
+      // states changes both the close gates and the preview fingerprint. Keep
+      // that recovery atomic with every other finance transition.
+      await lockPostClassFinance(tx);
+      await assertPostClassSyncSourceWriteFence(tx, input.runId);
+      await tx.update(schema.postClassSyncRuns).set({
+        status: "success",
+        finishedAt: input.finishedAt,
+        discoveredCount: input.discoveredCount,
+        sessionCount: input.sessionSavedCount,
+        detailFetchedCount: input.detailFetchedCount,
+        versionInsertedCount: input.versionInsertedCount,
+        assessedCount: input.assessedCount,
+        sourceIssueCount: input.sourceIssueCount,
+        metadata: {
+          ...input.metadata,
+          outcome: input.status,
+          candidateCount: input.candidateCount,
+        },
+      }).where(eq(schema.postClassSyncRuns.id, input.runId));
+      if (input.metadata?.globalSourceHealthy === true) {
+        await tx.update(schema.postClassSourceIssues).set({
+          status: "resolved",
+          resolvedAt: input.finishedAt,
+          resolvedByEmail: "system:post-class-feedback",
+        }).where(and(
+          eq(schema.postClassSourceIssues.scope, "global"),
+          eq(schema.postClassSourceIssues.status, "open"),
+          ne(schema.postClassSourceIssues.issueType, "form_drift"),
+        ));
+        // REC-01: source health is proven again, so undo the run-wide demotion in
+        // one statement. Rows observed first-hand since the demotion already
+        // cleared `sourceStatusBefore` in `saveObservation`, so this only touches
+        // rows whose status is still the demotion's placeholder.
+        await tx.update(schema.postClassSessions).set({
+          sourceStatus: sql`${schema.postClassSessions.sourceStatusBefore}`,
+          sourceStatusBefore: null,
+          updatedAt: input.finishedAt,
+        }).where(isNotNull(schema.postClassSessions.sourceStatusBefore));
+      }
+    });
   }
 
   async failSync(input: { runId: string; finishedAt: Date; errorSummary: string }): Promise<void> {
@@ -738,7 +830,20 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         eq(schema.postClassSourceIssues.scope, "session"),
         eq(schema.postClassSourceIssues.status, "open"),
         isNull(schema.postClassSourceIssues.sessionId),
-      )).orderBy(asc(schema.postClassSourceIssues.lastSeenAt)),
+        // A session Wise has reported missing for longer than the grace window
+        // is deleted, not late. It has no session row, so it can never
+        // auto-resolve, and re-fetching it every run spends a Wise call and a
+        // recheck slot a recoverable session could have used. The issue stays
+        // open and visible in Data Health — it is a real unresolved fact — it
+        // simply stops being retried.
+        or(
+          ne(schema.postClassSourceIssues.issueType, "session_not_found"),
+          gte(
+            schema.postClassSourceIssues.firstSeenAt,
+            new Date(Date.now() - MISSING_SESSION_RETRY_GRACE_MS),
+          ),
+        ),
+      )).orderBy(asc(schema.postClassSourceIssues.lastSeenAt)).limit(boundedLimit),
     ]);
     const queued: Array<{ candidate: PostClassSessionCandidate; queueAt: Date }> = rows.map((row) => ({
       candidate: {
@@ -1052,6 +1157,13 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
     observation: PostClassSessionObservation,
   ): Promise<SavePostClassObservationResult> {
     return withPostClassTransaction(this.db, async (tx) => {
+      // A source refresh can change coverage, candidate membership, and the
+      // signed payout obligations for an open window. Serialize those writes
+      // with preview-token validation, publication, review mutations, and
+      // closing so every finance transition observes one coherent source
+      // snapshot.
+      await lockPostClassFinance(tx);
+      await assertPostClassSyncSourceWriteFence(tx, runId);
       const [settings] = await tx.select().from(schema.postClassSettings)
         .limit(1)
         .for("update");
@@ -1112,6 +1224,13 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         eligible: observation.eligibility.eligible,
         eligibilityReason: observation.eligibility.reason,
         sourceStatus: observation.sourceStatus,
+        // REC-01: a first-hand observation supersedes any run-wide demotion, so
+        // the remembered status is discarded rather than restored later. This
+        // holds even when the observation itself is 'unavailable': the row was
+        // just looked at, and resurrecting a pre-demotion 'ready' without a
+        // fresh observation would be exactly the stale projection the
+        // fail-closed rule exists to prevent.
+        sourceStatusBefore: null,
         contentStatus: assessment?.contentStatus ?? latestContent?.contentStatus ?? "missing",
         timingStatus: assessment?.timingStatus ?? "not_due",
         enforcementMode: effectiveMode,
@@ -1137,6 +1256,7 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
           eligible: observation.eligibility.eligible,
           eligibilityReason: observation.eligibility.reason,
           sourceStatus: observation.sourceStatus,
+          sourceStatusBefore: null,
           contentStatus: assessment?.contentStatus ?? latestContent?.contentStatus ?? "missing",
           timingStatus: assessment?.timingStatus ?? "not_due",
           enforcementMode: effectiveMode,
@@ -1531,22 +1651,36 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         ));
       }
 
-      const resolvedFingerprints = [
+      // A session-scoped fingerprint is `{issueType}:{sessionId}:{status}`,
+      // where status is whatever Wise returned — so an exact list can only
+      // ever cover the statuses someone thought to enumerate. It did not:
+      // every one of the 228 missing-session issues in production was
+      // `:400` (Wise answers a deleted session with 400 "Session not found!",
+      // not 404) while the list named only `:404`, so none of them could ever
+      // resolve. Matching the `{issueType}:{sessionId}` stem instead resolves
+      // whatever status the issue was raised under.
+      //
+      // Fingerprints of already-resolved episodes carry a `:resolved:{uuid}`
+      // suffix, but the status filter below excludes them.
+      const resolvedStems = [
         ...(observation.tutor.status === "resolved"
           ? [`identity_ambiguous:${session.wiseSessionId}`]
           : []),
         ...(observation.eligibility.status !== "ambiguous"
           ? [`billing_evidence_missing:${session.wiseSessionId}`]
           : []),
-        `session_not_found:${session.wiseSessionId}:404`,
-        `contract_error:${session.wiseSessionId}:parse`,
+        `session_not_found:${session.wiseSessionId}`,
+        `contract_error:${session.wiseSessionId}`,
         `detail_retry:${session.wiseSessionId}`,
       ];
       await tx.update(schema.postClassSourceIssues).set(
         resolvedPostClassSessionIssueUpdate(session.id, observation.observedAt),
       ).where(and(
         eq(schema.postClassSourceIssues.status, "open"),
-        inArray(schema.postClassSourceIssues.fingerprint, resolvedFingerprints),
+        or(
+          inArray(schema.postClassSourceIssues.fingerprint, resolvedStems),
+          ...resolvedStems.map((stem) => like(schema.postClassSourceIssues.fingerprint, `${stem}:%`)),
+        ),
       ));
       if (observation.session.mapping.status === "ready" && settings?.formMappingValid) {
         await tx.update(schema.postClassSourceIssues).set({
@@ -1569,6 +1703,8 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
 
   async recordSourceIssue(issue: PostClassSourceIssueInput): Promise<void> {
     await withPostClassTransaction(this.db, async (tx) => {
+      await lockPostClassFinance(tx);
+      await assertPostClassSyncSourceWriteFence(tx, issue.runId);
       const [session] = issue.sessionId
         ? await tx.select({ id: schema.postClassSessions.id })
           .from(schema.postClassSessions)
@@ -1620,7 +1756,17 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         },
       });
       if (issue.scope === "global") {
+        // REC-01: the run-wide demotion stays exactly as fail-closed as it was
+        // — every eligible row goes to 'unavailable' the instant source health
+        // cannot be proven. What is new is that each row remembers what it
+        // carried, so `completeSync` can restore them all in one statement
+        // instead of one row per Wise detail fetch.
+        //
+        // `coalesce` keeps the FIRST demotion's value when a second global
+        // issue lands before recovery; without it the original status would be
+        // overwritten by the 'unavailable' this very statement is writing.
         await tx.update(schema.postClassSessions).set({
+          sourceStatusBefore: sql`coalesce(${schema.postClassSessions.sourceStatusBefore}, ${schema.postClassSessions.sourceStatus})`,
           sourceStatus: "unavailable",
           updatedAt: issue.observedAt,
         }).where(eq(schema.postClassSessions.eligible, true));
@@ -1635,6 +1781,8 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
 
   async pauseForFormDrift(input: { runId: string; observedAt: Date; reason: string }): Promise<void> {
     await withPostClassTransaction(this.db, async (tx) => {
+      await lockPostClassFinance(tx);
+      await assertPostClassSyncSourceWriteFence(tx, input.runId);
       const [current] = await tx.select().from(schema.postClassSettings).limit(1);
       if (!current || (current.enforcementMode === "paused" && !current.formMappingValid)) return;
       if (current.currentWindowId) {
