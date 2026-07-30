@@ -34,6 +34,8 @@ function run(overrides: Partial<PostClassShadowSyncEvidence> = {}): PostClassSha
       mappingVersion: 4,
       candidateCount: 10,
       readySessionCount: 10,
+      rollingSelectedCount: 10,
+      rollingSavedCount: 10,
       globalSourceHealthy: true,
       mappingObservedHealthy: true,
     },
@@ -50,6 +52,7 @@ function classify(
     mappingVersion: 4,
     mappingUpdatedAt: MAPPING_UPDATED_AT,
     openBlockingGlobalIssues: 0,
+    recentReadiness: { eligible: 100, ready: 100 },
     ...overrides,
   });
 }
@@ -121,47 +124,107 @@ describe("classifyPostClassShadowReviewEvidence", () => {
     expect(blockedKeys(verdict)).toContain("no_open_global_issues");
   });
 
-  describe("session-issue rates", () => {
-    const messy = metadata({ readySessionCount: 4 });
+  describe("recent-window scoping", () => {
+    // The production regression this scoping was built for. That run's whole
+    // pool was 25 readable of 50 candidates — 50%, below the bar — but 25 of
+    // those candidates were April/May sessions surfaced by the unbounded event
+    // lane, which can never be enforced. Judged on the recent window alone the
+    // pipeline was flawless, and the gate must say so.
+    it("ignores historical backlog and passes on a clean recent window", () => {
+      const verdict = classify(
+        run({
+          detailFetchedCount: 25,
+          sessionCount: 20,
+          metadata: {
+            ...run().metadata,
+            candidateCount: 50,
+            readySessionCount: 1,
+            rollingSelectedCount: 5,
+            rollingSavedCount: 5,
+          },
+        }),
+        { recentReadiness: { eligible: 291, ready: 291 } },
+      );
 
-    it("blocks when too many sessions are unresolved, and reports the exact count", () => {
-      const verdict = classify(messy);
-      expect(verdict.ready).toBe(false);
-      expect(blockedKeys(verdict)).toContain("resolvable_rate");
-      expect(verdict.acknowledgeableTotal).toBe(6);
+      expect(verdict.ready).toBe(true);
     });
 
+    it("blocks when the recent window itself is unresolved", () => {
+      const verdict = classify(run(), {
+        recentReadiness: { eligible: 100, ready: 40 },
+      });
+      expect(verdict.ready).toBe(false);
+      expect(blockedKeys(verdict)).toContain("resolvable_rate");
+      expect(verdict.acknowledgeableTotal).toBe(60);
+    });
+
+    it("blocks when too few recent sessions exist to judge on", () => {
+      const verdict = classify(run(), { recentReadiness: { eligible: 5, ready: 5 } });
+      expect(verdict.ready).toBe(false);
+      expect(blockedKeys(verdict)).toContain("recent_sample");
+    });
+
+    it("blocks when recent sessions could not be read from Wise", () => {
+      const verdict = classify(metadata({ rollingSavedCount: 1 }));
+      expect(blockedKeys(verdict)).toContain("readable_rate");
+    });
+
+    // Scoping makes a zero denominator legitimately reachable, so the
+    // short-circuit that used to treat "no candidates" as a pass had to go. A
+    // run that read nothing recent has proven nothing.
+    it("blocks rather than vacuously passing when the run read nothing recent", () => {
+      const verdict = classify(metadata({ rollingSelectedCount: 0, rollingSavedCount: 0 }));
+      expect(verdict.ready).toBe(false);
+      expect(blockedKeys(verdict)).toContain("readable_rate");
+    });
+
+    it("fails closed on a run predating recent-window reporting", () => {
+      const legacy = run();
+      delete legacy.metadata.rollingSelectedCount;
+      delete legacy.metadata.rollingSavedCount;
+      const verdict = classify(legacy);
+      expect(verdict.ready).toBe(false);
+      expect(blockedKeys(verdict)).toContain("readable_rate");
+    });
+  });
+
+  describe("acknowledgement", () => {
+    // 40 of 100 resolved — well under the bar, so the rate genuinely blocks and
+    // the exact count to echo is 60.
+    const messy = { recentReadiness: { eligible: 100, ready: 40 } };
+
     it("passes when the exact count is acknowledged with a reason", () => {
-      const verdict = classify(messy, {
-        acknowledgements: { sessionIssues: 6, reason: "Six known deleted classes, checked in Wise." },
+      const verdict = classify(run(), {
+        ...messy,
+        acknowledgements: { sessionIssues: 60, reason: "Known backlog, checked in Wise." },
       });
       expect(verdict.ready).toBe(true);
     });
 
     it("rejects a stale count", () => {
-      const verdict = classify(messy, {
-        acknowledgements: { sessionIssues: 5, reason: "Looks fine." },
+      const verdict = classify(run(), {
+        ...messy,
+        acknowledgements: { sessionIssues: 55, reason: "Looks fine." },
       });
       expect(verdict.ready).toBe(false);
       expect(blockedKeys(verdict)).toContain("resolvable_rate");
     });
 
     it("rejects an acknowledgement with no reason", () => {
-      const verdict = classify(messy, { acknowledgements: { sessionIssues: 6, reason: "  " } });
+      const verdict = classify(run(), {
+        ...messy,
+        acknowledgements: { sessionIssues: 60, reason: "  " },
+      });
       expect(verdict.ready).toBe(false);
     });
 
     it("never lets an acknowledgement clear an absolute condition", () => {
-      const verdict = classify(metadata({ readySessionCount: 4, globalSourceHealthy: false }), {
-        acknowledgements: { sessionIssues: 6, reason: "Accepting the unresolved sessions." },
+      const verdict = classify(metadata({ globalSourceHealthy: false }), {
+        ...messy,
+        acknowledgements: { sessionIssues: 60, reason: "Accepting the unresolved sessions." },
       });
       expect(verdict.ready).toBe(false);
       expect(blockedKeys(verdict)).toEqual(["global_source_healthy"]);
-    });
-
-    it("blocks when most candidates could not be read from Wise", () => {
-      const verdict = classify(run({ detailFetchedCount: 3 }));
-      expect(blockedKeys(verdict)).toContain("readable_rate");
     });
   });
 
@@ -175,6 +238,7 @@ describe("classifyPostClassShadowReviewEvidence", () => {
       "detail_fetched",
       "sessions_seen",
       "sessions_assessed",
+      "recent_sample",
       "readable_rate",
       "resolvable_rate",
     ]);

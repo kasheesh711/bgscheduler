@@ -635,6 +635,39 @@ export async function countOpenBlockingGlobalSourceIssues(db: Database): Promise
   return rows.length;
 }
 
+export interface PostClassRecentReadiness {
+  eligible: number;
+  ready: number;
+}
+
+/**
+ * How much of the period about to be enforced has actually resolved.
+ *
+ * The activation gate's resolvability signal. Measured from persisted state
+ * rather than from a sync run's counters, because one run sees at most 50
+ * candidates and — with the event and recheck lanes unbounded by date — as few
+ * as one of them may be recent. A run-level rate therefore says almost nothing
+ * about the period being enforced, which is the only period that matters:
+ * sessions ending before the activation instant can be assessed but can never
+ * produce a deduction (`policyApplies`, policy.ts).
+ *
+ * Counts only `eligible` sessions. A cancelled or non-billable class is
+ * correctly non-ready and must not drag the rate down.
+ */
+export async function loadPostClassRecentSessionReadiness(
+  db: Database,
+  input: { since: Date },
+): Promise<PostClassRecentReadiness> {
+  const [row] = await db.select({
+    eligible: sql<number>`count(*)`,
+    ready: sql<number>`count(*) filter (where ${schema.postClassSessions.sourceStatus} = 'ready')`,
+  }).from(schema.postClassSessions).where(and(
+    gte(schema.postClassSessions.scheduledEndAt, input.since),
+    eq(schema.postClassSessions.eligible, true),
+  ));
+  return { eligible: Number(row?.eligible ?? 0), ready: Number(row?.ready ?? 0) };
+}
+
 /**
  * Close an issue whose subject Wise deleted (REC-03).
  *

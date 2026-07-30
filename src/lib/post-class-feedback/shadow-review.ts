@@ -24,8 +24,14 @@
 
 /** Sessions must resolve at this rate before the gate passes unacknowledged. */
 const MIN_RESOLVABLE_RATIO = 0.8;
-/** Candidates must be readable from Wise at this rate. */
+/** Recent candidates must be readable from Wise at this rate. */
 const MIN_READABLE_RATIO = 0.8;
+/**
+ * Below this many recent eligible sessions there is not enough evidence to
+ * judge, and a small sample could pass on luck. Sized to observed volume of
+ * ~50-70 eligible sessions a day; a judgement call, not a derived figure.
+ */
+const MIN_RECENT_SAMPLE = 20;
 
 export interface PostClassShadowSyncEvidence {
   id: string;
@@ -44,6 +50,7 @@ export type PostClassShadowConditionKey =
   | "detail_fetched"
   | "sessions_seen"
   | "sessions_assessed"
+  | "recent_sample"
   | "readable_rate"
   | "resolvable_rate";
 
@@ -75,6 +82,11 @@ export interface PostClassShadowReviewInput {
   mappingUpdatedAt: Date;
   /** Live count, not a historical per-run figure. */
   openBlockingGlobalIssues: number;
+  /**
+   * Persisted state over the trailing collector window — the period whose
+   * behaviour predicts the period about to be enforced.
+   */
+  recentReadiness: { eligible: number; ready: number };
   acknowledgements?: {
     sessionIssues?: number;
     reason?: string;
@@ -213,42 +225,65 @@ export function classifyPostClassShadowReviewEvidence(
       : "That run assessed no sessions, so compliance was never exercised.",
   });
 
-  const candidateCount = metadataNumber(run.metadata, "candidateCount");
-  const hasCandidateCount = Number.isFinite(candidateCount) && candidateCount > 0;
-  const readableRatio = ratio(run.detailFetchedCount, candidateCount);
-  const unreadable = hasCandidateCount
-    ? Math.max(0, candidateCount - run.detailFetchedCount)
-    : 0;
-  const readable = !hasCandidateCount || readableRatio >= MIN_READABLE_RATIO;
+  // Both rates below are scoped to the recent collector window. Measured over
+  // a run's whole candidate pool instead, they are dominated by the unbounded
+  // event and recheck lanes: in production a run routinely observes nineteen
+  // months-old sessions and one current one, so the unscoped rate described a
+  // historical backlog that can never be enforced. Sessions ending before the
+  // activation instant are assessed but can never produce a deduction.
+  const { eligible: recentEligible, ready: recentReady } = input.recentReadiness;
+  const enoughRecent = recentEligible >= MIN_RECENT_SAMPLE;
+  conditions.push({
+    key: "recent_sample",
+    passed: enoughRecent,
+    detail: enoughRecent
+      ? `${recentEligible} eligible sessions in the recent window to judge on.`
+      : `Only ${recentEligible} eligible sessions in the recent window — too few to prove the`
+        + " pipeline works. Let the collector run over a period that contains classes.",
+  });
+
+  const rollingSelected = metadataNumber(run.metadata, "rollingSelectedCount");
+  const rollingSaved = metadataNumber(run.metadata, "rollingSavedCount");
+  // Fail closed on absent metadata and on a zero denominator alike. A run that
+  // read nothing recent has proven nothing, and treating that as a pass would
+  // make this gate weaker than the one it replaced.
+  const hasRollingCounts = Number.isFinite(rollingSelected) && Number.isFinite(rollingSaved);
+  const readableRatio = ratio(rollingSaved, rollingSelected);
+  const unreadable = hasRollingCounts ? Math.max(0, rollingSelected - rollingSaved) : 0;
+  const readable = hasRollingCounts
+    && rollingSelected > 0
+    && readableRatio >= MIN_READABLE_RATIO;
   conditions.push({
     key: "readable_rate",
     passed: readable,
     detail: readable
-      ? `${percent(readableRatio)} of candidates were readable from Wise.`
-      : `Only ${percent(readableRatio)} of ${candidateCount} candidates could be read from Wise`
-        + ` (${unreadable} failed). That usually means a Wise access or contract problem rather`
-        + " than messy data.",
+      ? `${percent(readableRatio)} of recent sessions were readable from Wise`
+        + ` (${rollingSaved} of ${rollingSelected}; the run also touched`
+        + ` ${metadataNumber(run.metadata, "candidateCount") || run.sessionCount} older candidates,`
+        + " which are not judged here)."
+      : !hasRollingCounts
+        ? "That run predates recent-window reporting. Run a fresh shadow sync."
+        : rollingSelected === 0
+          ? "That run read no sessions from the recent window, so it proves nothing about the"
+            + " period about to be enforced. Run a fresh shadow sync."
+          : `Only ${percent(readableRatio)} of ${rollingSelected} recent sessions could be read`
+            + ` from Wise (${unreadable} failed). That usually means a Wise access or contract`
+            + " problem rather than messy data.",
     ...(readable ? {} : { acknowledgeCount: unreadable }),
   });
 
-  const readySessionCount = metadataNumber(run.metadata, "readySessionCount");
-  const hasReadyCount = Number.isFinite(readySessionCount);
-  const resolvableRatio = ratio(readySessionCount, run.sessionCount);
-  const unresolved = hasReadyCount
-    ? Math.max(0, run.sessionCount - readySessionCount)
-    : run.sessionCount;
-  const resolvable = hasReadyCount
-    && (run.sessionCount === 0 || resolvableRatio >= MIN_RESOLVABLE_RATIO);
+  const resolvableRatio = ratio(recentReady, recentEligible);
+  const unresolved = Math.max(0, recentEligible - recentReady);
+  const resolvable = enoughRecent && resolvableRatio >= MIN_RESOLVABLE_RATIO;
   conditions.push({
     key: "resolvable_rate",
     passed: resolvable,
     detail: resolvable
-      ? `${percent(resolvableRatio)} of observed sessions resolved cleanly.`
-      : hasReadyCount
-        ? `${unresolved} of ${run.sessionCount} sessions could not be resolved to a tutor and`
-          + " billing evidence. A few is normal; this many usually means tutor aliases or"
-          + " billing mapping need attention."
-        : "That run predates resolvability reporting. Run a fresh shadow sync.",
+      ? `${percent(resolvableRatio)} of recent eligible sessions resolved cleanly`
+        + ` (${recentReady} of ${recentEligible}).`
+      : `${unresolved} of ${recentEligible} recent eligible sessions could not be resolved to a`
+        + " tutor and billing evidence. A few is normal; this many usually means tutor aliases or"
+        + " billing mapping need attention.",
     ...(resolvable ? {} : { acknowledgeCount: unresolved }),
   });
 

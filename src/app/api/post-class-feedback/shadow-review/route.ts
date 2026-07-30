@@ -7,9 +7,15 @@ import * as schema from "@/lib/db/schema";
 import { requirePostClassCapability } from "@/lib/post-class-feedback/access";
 import { postClassFeedbackErrorResponse } from "@/lib/post-class-feedback/api";
 import { PostClassConflictError, PostClassValidationError } from "@/lib/post-class-feedback/errors";
-import { countOpenBlockingGlobalSourceIssues } from "@/lib/post-class-feedback/repository";
+import {
+  countOpenBlockingGlobalSourceIssues,
+  loadPostClassRecentSessionReadiness,
+} from "@/lib/post-class-feedback/repository";
 import { classifyPostClassShadowReviewEvidence } from "@/lib/post-class-feedback/shadow-review";
 import { markPostClassShadowReviewed } from "@/lib/post-class-feedback/settings";
+
+/** Mirrors the collector's `ROLLING_WINDOW_DAYS`; see the comment at its use. */
+const RECENT_READINESS_DAYS = 4;
 
 const BodySchema = z.object({
   expectedVersion: z.number().int().positive(),
@@ -45,7 +51,10 @@ export async function POST(request: NextRequest) {
     if (mappings.length === 0) {
       throw new PostClassValidationError("Configure the current Wise form mapping before confirming review.");
     }
-    const [recentSyncs, openBlockingGlobalIssues] = await Promise.all([
+    // Matches the collector's own rolling span, so the gate judges exactly the
+    // period the live system is designed to keep reconciled.
+    const recentSince = new Date(Date.now() - RECENT_READINESS_DAYS * 24 * 60 * 60 * 1000);
+    const [recentSyncs, openBlockingGlobalIssues, recentReadiness] = await Promise.all([
       db.select({
         id: schema.postClassSyncRuns.id,
         finishedAt: schema.postClassSyncRuns.finishedAt,
@@ -59,12 +68,14 @@ export async function POST(request: NextRequest) {
         .orderBy(desc(schema.postClassSyncRuns.finishedAt))
         .limit(20),
       countOpenBlockingGlobalSourceIssues(db),
+      loadPostClassRecentSessionReadiness(db, { since: recentSince }),
     ]);
     const verdict = classifyPostClassShadowReviewEvidence(recentSyncs, {
       policyVersion: settings.policyVersion,
       mappingVersion: settings.formMappingVersion,
       mappingUpdatedAt,
       openBlockingGlobalIssues,
+      recentReadiness,
       acknowledgements: {
         sessionIssues: input.acknowledgeSessionIssues,
         reason: input.reason,

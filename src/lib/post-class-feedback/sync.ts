@@ -670,6 +670,14 @@ export async function syncPostClassFeedback(
       );
     }
     const candidates = selectPostClassSyncCandidates(candidatePool, detailCap);
+    // Readability of the recent period, for the activation gate. Selected
+    // rather than discovered: the rolling lane holds a reserved slot count, so
+    // comparing against everything Wise reported for the window would measure
+    // this run's throughput cap, not whether Wise answers for current classes.
+    const rollingSelected = new Set(candidates
+      .filter((candidate) => candidate.reason === "rolling_window")
+      .map((candidate) => candidate.sessionId));
+    let rollingSavedCount = 0;
     // Measured on the filtered pool rather than on what this batch selected:
     // the question a backfill needs answered is "is any work left in this
     // window", not "did this batch happen to pick some of it up".
@@ -897,6 +905,7 @@ export async function syncPostClassFeedback(
       versionInsertedCount += saved.versionsInserted;
       assessedCount += saved.assessmentInserted ? 1 : 0;
       sessionSavedCount += 1;
+      if (rollingSelected.has(candidate.sessionId)) rollingSavedCount += 1;
       if (sourceStatus === "identity_review") {
         sourceIssueCount += 1;
         await dependencies.repository.recordSourceIssue({
@@ -967,6 +976,12 @@ export async function syncPostClassFeedback(
         // and resolvability as rates rather than on the presence of any single
         // messy session.
         readySessionCount,
+        // Recent-period readability. The unscoped counters above are dominated
+        // by the unbounded event and recheck lanes, which routinely fill a run
+        // with months-old backlog — a rate over them says nothing about whether
+        // Wise answers for the classes about to be enforced.
+        rollingSelectedCount: rollingSelected.size,
+        rollingSavedCount,
         ...(retired ? { retiredDeletedSessions: retired.retiredSessions } : {}),
         // Global source health is independent from session-scoped identity,
         // billing, or not-found issues that keep individual rows non-ready.

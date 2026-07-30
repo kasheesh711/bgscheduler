@@ -23,6 +23,7 @@ vi.mock("@/lib/post-class-feedback/api", () => ({
 }));
 vi.mock("@/lib/post-class-feedback/repository", () => ({
   countOpenBlockingGlobalSourceIssues: vi.fn(),
+  loadPostClassRecentSessionReadiness: vi.fn(),
 }));
 vi.mock("@/lib/post-class-feedback/settings", () => ({
   markPostClassShadowReviewed: vi.fn(),
@@ -30,7 +31,10 @@ vi.mock("@/lib/post-class-feedback/settings", () => ({
 vi.mock("@/lib/db", () => ({ getDb: vi.fn(() => fakeDb) }));
 
 import { requirePostClassCapability } from "@/lib/post-class-feedback/access";
-import { countOpenBlockingGlobalSourceIssues } from "@/lib/post-class-feedback/repository";
+import {
+  countOpenBlockingGlobalSourceIssues,
+  loadPostClassRecentSessionReadiness,
+} from "@/lib/post-class-feedback/repository";
 import { markPostClassShadowReviewed } from "@/lib/post-class-feedback/settings";
 import * as schema from "@/lib/db/schema";
 import { POST } from "../route";
@@ -50,11 +54,16 @@ const fakeDb = {
   select() {
     return {
       from(table: unknown) {
+        // Throw on anything unrecognised. A silent fallback would hand the
+        // next query added here a pile of sync-run rows and let these tests
+        // pass while measuring nothing.
         const rows = table === schema.postClassSettings
           ? (state.settings ? [state.settings] : [])
           : table === schema.postClassFieldMappings
             ? state.mappings
-            : state.syncRuns;
+            : table === schema.postClassSyncRuns
+              ? state.syncRuns
+              : (() => { throw new Error("fake db: unexpected table"); })();
         const chain = {
           where: () => chain,
           orderBy: () => chain,
@@ -79,6 +88,8 @@ function syncRun(overrides: Record<string, unknown> = {}) {
       mappingVersion: 1,
       candidateCount: 10,
       readySessionCount: 10,
+      rollingSelectedCount: 10,
+      rollingSavedCount: 10,
       globalSourceHealthy: true,
       mappingObservedHealthy: true,
     },
@@ -111,6 +122,7 @@ beforeEach(() => {
     email: "manager@example.com",
   } as never);
   vi.mocked(countOpenBlockingGlobalSourceIssues).mockResolvedValue(0);
+  vi.mocked(loadPostClassRecentSessionReadiness).mockResolvedValue({ eligible: 100, ready: 100 });
   vi.mocked(markPostClassShadowReviewed).mockResolvedValue({ id: "default" } as never);
 });
 
@@ -191,16 +203,14 @@ describe("POST /api/post-class-feedback/shadow-review", () => {
 
   describe("acknowledgement", () => {
     beforeEach(() => {
-      state.syncRuns = [syncRun({
-        metadata: { ...syncRun().metadata, readySessionCount: 4 },
-      })];
+      vi.mocked(loadPostClassRecentSessionReadiness).mockResolvedValue({ eligible: 100, ready: 40 });
     });
 
     it("reports the exact count to acknowledge", async () => {
       const response = await POST(request({ expectedVersion: 3 }));
 
       await expect(response.json()).resolves.toMatchObject({
-        error: expect.stringContaining("Acknowledge the exact count (6)"),
+        error: expect.stringContaining("Acknowledge the exact count (60)"),
       });
       expect(markPostClassShadowReviewed).not.toHaveBeenCalled();
     });
@@ -208,7 +218,7 @@ describe("POST /api/post-class-feedback/shadow-review", () => {
     it("rejects a stale count from a tab left open", async () => {
       const response = await POST(request({
         expectedVersion: 3,
-        acknowledgeSessionIssues: 5,
+        acknowledgeSessionIssues: 55,
         reason: "Checked them all in Wise.",
       }));
 
@@ -219,7 +229,7 @@ describe("POST /api/post-class-feedback/shadow-review", () => {
     it("rejects the exact count with no reason", async () => {
       const response = await POST(request({
         expectedVersion: 3,
-        acknowledgeSessionIssues: 6,
+        acknowledgeSessionIssues: 60,
       }));
 
       expect(response.status).toBe(400);
@@ -229,8 +239,8 @@ describe("POST /api/post-class-feedback/shadow-review", () => {
     it("accepts the exact count with a reason and records both", async () => {
       const response = await POST(request({
         expectedVersion: 3,
-        acknowledgeSessionIssues: 6,
-        reason: "Six classes deleted in Wise on 25 July; verified.",
+        acknowledgeSessionIssues: 60,
+        reason: "Known pre-period backlog; verified in Wise.",
       }));
 
       expect(response.status).toBe(200);
@@ -240,8 +250,8 @@ describe("POST /api/post-class-feedback/shadow-review", () => {
         3,
         "sync-1",
         expect.objectContaining({
-          acknowledgedSessionIssues: 6,
-          reason: "Six classes deleted in Wise on 25 July; verified.",
+          acknowledgedSessionIssues: 60,
+          reason: "Known pre-period backlog; verified in Wise.",
         }),
       );
     });
