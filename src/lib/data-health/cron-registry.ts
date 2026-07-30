@@ -12,6 +12,7 @@ export type CronJobKey =
   | "post_class_feedback_digest"
   | "post_class_feedback_day_after"
   | "post_class_feedback_deadline"
+  | "post_class_feedback_payout_accrual"
   | "leave_requests"
   | "classroom_morning"
   | "classroom_admin_email"
@@ -227,6 +228,21 @@ export const CRON_JOBS = [
     manualOnly: true,
     dangerous: true,
     confirmationLabel: "May email tutors whose feedback is due tonight.",
+    routeMethod: "GET",
+  },
+  {
+    key: "post_class_feedback_payout_accrual",
+    label: "Payout Accrual (parked)",
+    feature: "Class Feedback",
+    path: "/api/internal/post-class-feedback/payout-accrual",
+    schedule: null,
+    cadenceLabel: "Parked \u2014 no cron",
+    cadenceMinutes: null,
+    lateAfterMinutes: 0,
+    maxDurationSeconds: 800,
+    manualOnly: true,
+    dangerous: true,
+    confirmationLabel: "Appends real payout deductions to the master ledger.",
     routeMethod: "GET",
   },
   {
