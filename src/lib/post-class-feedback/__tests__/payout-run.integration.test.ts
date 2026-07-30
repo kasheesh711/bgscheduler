@@ -925,3 +925,159 @@ describe("publishPayoutRun", () => {
     expect(String(deductionRows(grid)[0][2])).toBe("Grace Hopper");
   });
 });
+
+describe("source-anchor fingerprint quarantine", () => {
+  it("quarantines only the tutor whose written anchor drifted; other tutors keep appending", async () => {
+    await seedDeduction({
+      wiseSessionId: "s-kevin-first",
+      endsAt: "2026-07-10T03:00:00.000Z",
+      tutorKey: "kevin",
+      student: "Grace Hopper",
+    });
+    await seedDeduction({
+      wiseSessionId: "s-mimi-first",
+      endsAt: "2026-07-10T03:00:00.000Z",
+      tutorKey: "mimi",
+      student: "Someone Else",
+    });
+    await upsertPayoutTutorName(appDb(), {
+      canonicalKey: "kevin",
+      primaryLedgerName: KEVIN,
+      alternateLedgerName: KEVIN_ONLINE,
+      active: true,
+      updatedByEmail: "admin@example.com",
+    });
+    await upsertPayoutTutorName(appDb(), {
+      canonicalKey: "mimi",
+      primaryLedgerName: MIMI,
+      alternateLedgerName: null,
+      active: true,
+      updatedByEmail: "admin@example.com",
+    });
+
+    const rawGrid = sheetGrid();
+    const dedicatedGrid: unknown[][] = [[...HEADER]];
+    const splitGateway: MasterLedgerGateway = {
+      async readRawGrid() {
+        return rawGrid.map((row) => [...row]);
+      },
+      async readDeductionGrid() {
+        return dedicatedGrid.map((row) => [...row]);
+      },
+      async appendDeductionRow(row) {
+        dedicatedGrid.push([...row]);
+        return { rowNumber: dedicatedGrid.length };
+      },
+    };
+
+    const first = await publish(
+      ACTOR,
+      { anchorMonth: "2026-07" },
+      appDb(),
+      { gateway: splitGateway, uploadCsv: uploadOk },
+    );
+    expect(first.run.status).toBe("published");
+    expect(deductionRows(dedicatedGrid)).toHaveLength(2);
+
+    // Finance deletes Kevin's landed anchor row from the raw export before
+    // the next pass -- simulating a re-paste that dropped it.
+    const kevinAnchorIndex = rawGrid.findIndex((row) => row[0] === KEVIN);
+    expect(kevinAnchorIndex).toBeGreaterThanOrEqual(0);
+    rawGrid.splice(kevinAnchorIndex, 1);
+
+    // New obligations for both tutors this pass, each with its own findable
+    // raw anchor.
+    await seedDeduction({
+      wiseSessionId: "s-kevin-second",
+      endsAt: "2026-07-12T03:00:00.000Z",
+      tutorKey: "kevin",
+      student: "New Kevin Student",
+    });
+    await seedDeduction({
+      wiseSessionId: "s-mimi-second",
+      endsAt: "2026-07-13T03:00:00.000Z",
+      tutorKey: "mimi",
+      student: "New Mimi Student",
+    });
+    rawGrid.push([
+      KEVIN, "On-site Session - Math", "New Kevin Student",
+      dateSerial("2026-07-12"), timeSerial(3, 0), "60 mins", 1, 700,
+    ]);
+    rawGrid.push([
+      MIMI, "Online Session - Math", "New Mimi Student",
+      dateSerial("2026-07-13"), timeSerial(3, 0), "60 mins", 1, 700,
+    ]);
+
+    const second = await publish(
+      ACTOR,
+      { anchorMonth: "2026-07" },
+      appDb(),
+      { gateway: splitGateway, uploadCsv: uploadOk },
+    );
+
+    expect(second.run.status).toBe("partial");
+    const kevinSecondLine = second.lines.find((line) => line.wiseSessionId === "s-kevin-second");
+    expect(kevinSecondLine?.writeStatus).toBe("skipped");
+    expect(kevinSecondLine?.matchStatus).toBe("ambiguous");
+    expect(kevinSecondLine?.writeError).toMatch(/anchor is no longer present in the source tab/iu);
+
+    // Mimi's line is untouched by Kevin's drifted anchor -- it still appends.
+    const mimiSecondLine = second.lines.find((line) => line.wiseSessionId === "s-mimi-second");
+    expect(mimiSecondLine?.writeStatus).toBe("written");
+    expect(deductionRows(dedicatedGrid)).toHaveLength(3);
+
+    const exceptions = await handle.db.select().from(schema.postClassPayoutExceptions);
+    const anchorExceptions = exceptions.filter((exception) => exception.kind === "source_anchor_missing");
+    expect(anchorExceptions).toHaveLength(1);
+  });
+
+  it("falls back to matchMasterRow when a written line has no durable fingerprint (pre-migration row)", async () => {
+    await seedDeduction({
+      wiseSessionId: "s-kevin-legacy",
+      endsAt: "2026-07-10T03:00:00.000Z",
+      tutorKey: "kevin",
+      student: "Grace Hopper",
+    });
+    await upsertPayoutTutorName(appDb(), {
+      canonicalKey: "kevin",
+      primaryLedgerName: KEVIN,
+      alternateLedgerName: KEVIN_ONLINE,
+      active: true,
+      updatedByEmail: "admin@example.com",
+    });
+    const grid = sheetGrid();
+
+    const first = await publish(
+      ACTOR,
+      { anchorMonth: "2026-07" },
+      appDb(),
+      { gateway: fakeGateway(grid).gateway, uploadCsv: uploadOk },
+    );
+    expect(first.lines[0].writeStatus).toBe("written");
+    expect(first.lines[0].sourceAnchorFingerprint).not.toBeNull();
+
+    // Simulate a row written before this migration existed.
+    await handle.db.update(schema.postClassPayoutRunLines)
+      .set({ sourceAnchorFingerprint: null })
+      .where(eq(schema.postClassPayoutRunLines.id, first.lines[0].id));
+
+    await seedDeduction({
+      wiseSessionId: "s-kevin-legacy-second",
+      endsAt: "2026-07-11T03:00:00.000Z",
+      tutorKey: "kevin",
+      student: "Ada Lovelace",
+    });
+
+    const second = await publish(
+      ACTOR,
+      { anchorMonth: "2026-07" },
+      appDb(),
+      { gateway: fakeGateway(grid).gateway, uploadCsv: uploadOk },
+    );
+
+    const secondLine = second.lines.find((line) => line.wiseSessionId === "s-kevin-legacy-second");
+    expect(secondLine?.writeStatus).toBe("written");
+    expect(second.exceptions.filter((exception) => exception.kind === "source_anchor_missing"))
+      .toHaveLength(0);
+  });
+});

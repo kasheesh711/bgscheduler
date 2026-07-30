@@ -12,7 +12,7 @@ import {
   type PayoutRunDependencies,
   type PayoutRunView,
 } from "./payout-run";
-import { payoutBangkokDate, payoutRunWindowForBangkokDate } from "./payout-window";
+import { payoutBangkokDate, payoutRunWindow, payoutRunWindowForBangkokDate } from "./payout-window";
 
 // ── Continuous payout accrual and automated finalize ────────────────────
 //
@@ -111,6 +111,17 @@ export async function runPayoutAccrualPass(
  * Append any remainder and reach `published` once the window has ended and
  * coverage is clean.
  *
+ * Deliberately **not** `payoutRunWindowForBangkokDate(payoutBangkokDate(now))`
+ * -- that resolves "the window containing `now`", which by construction
+ * always satisfies `now <= windowEnd` (it rolls the anchor forward once the
+ * 25th passes), so that comparison would be a tautology and this pass could
+ * never proceed. Finalize instead targets `now`'s own Bangkok calendar month
+ * as the anchor: once the 26th arrives, that anchor's own window (26th of
+ * the prior month through the 25th of this one) has provably just ended,
+ * and stays targeted for the rest of this calendar month so a transient
+ * failure keeps retrying the same window until the next month rolls the
+ * anchor forward.
+ *
  * No `mode` is passed: finalize only ever runs after `windowEnd`, so the
  * unmodified operator-mode window guard never blocks it, and CSV upload
  * stays enabled exactly like today's manual publish. A source-fingerprint
@@ -123,7 +134,7 @@ export async function runPayoutFinalizePass(
   dependencies: PayoutRunDependencies = {},
   now: Date = new Date(),
 ): Promise<{ skipped: string } | PayoutRunView> {
-  const window = payoutRunWindowForBangkokDate(payoutBangkokDate(now));
+  const window = payoutRunWindow(payoutBangkokDate(now).slice(0, 7));
   if (payoutBangkokDate(now) <= window.windowEnd) {
     return { skipped: "window-not-ended" };
   }

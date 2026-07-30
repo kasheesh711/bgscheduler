@@ -21,6 +21,10 @@ const durablePayoutMigration = readFileSync(
   new URL("../../../../drizzle/0060_post_class_payout_durable_runs.sql", import.meta.url),
   "utf8",
 );
+const sourceAnchorMigration = readFileSync(
+  new URL("../../../../drizzle/0061_payout_line_source_anchor.sql", import.meta.url),
+  "utf8",
+);
 const journal = JSON.parse(readFileSync(
   new URL("../../../../drizzle/meta/_journal.json", import.meta.url),
   "utf8",
@@ -375,6 +379,28 @@ describe("durable payout publishing migration", () => {
     expect(journal.entries.find((entry) => entry.idx === 60)).toMatchObject({
       idx: 60,
       tag: "0060_post_class_payout_durable_runs",
+    });
+  });
+});
+
+describe("payout line source anchor migration", () => {
+  it("adds only the nullable durable fingerprint column", () => {
+    expect(sourceAnchorMigration).toContain("source_anchor_fingerprint");
+    expect(sourceAnchorMigration).toContain(
+      'ALTER TABLE "post_class_payout_run_lines" ADD COLUMN "source_anchor_fingerprint" text;',
+    );
+  });
+
+  it("touches no existing data", () => {
+    expect(sourceAnchorMigration).not.toMatch(/\bUPDATE\b/);
+    expect(sourceAnchorMigration).not.toMatch(/\bDELETE\b/);
+    expect(sourceAnchorMigration).not.toMatch(/DROP (TABLE|COLUMN)/);
+  });
+
+  it("is registered in the journal", () => {
+    expect(journal.entries.find((entry) => entry.idx === 61)).toMatchObject({
+      idx: 61,
+      tag: "0061_payout_line_source_anchor",
     });
   });
 });
