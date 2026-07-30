@@ -1229,6 +1229,12 @@ export async function finalizePayoutRunPass(db: Database, input: {
   csvUrl: string | null;
   csvError: string | null;
   forcePartial?: boolean;
+  /**
+   * An in-window accrual pass never uploads a CSV. `true` leaves
+   * `csvStatus`/`csvFileId`/`csvUrl`/`csvError`/`csvAttemptedAt` completely
+   * untouched instead of rewriting them to a failed/pending state every tick.
+   */
+  skipCsv?: boolean;
 }): Promise<PayoutRun> {
   return withPostClassTransaction(db, async (tx) => {
     await lockPostClassFinance(tx);
@@ -1286,11 +1292,13 @@ export async function finalizePayoutRunPass(db: Database, input: {
         publishedByEmail: input.actorEmail,
         publishedAt: sql`coalesce(${schema.postClassPayoutRuns.publishedAt}, now())`,
       } : {}),
-      csvStatus: input.csvFileId ? "uploaded" : "failed",
-      csvFileId: input.csvFileId,
-      csvUrl: input.csvUrl,
-      csvError: input.csvError?.slice(0, 500) ?? null,
-      csvAttemptedAt: now,
+      ...(input.skipCsv ? {} : {
+        csvStatus: input.csvFileId ? "uploaded" : "failed",
+        csvFileId: input.csvFileId,
+        csvUrl: input.csvUrl,
+        csvError: input.csvError?.slice(0, 500) ?? null,
+        csvAttemptedAt: now,
+      }),
       version: current.version + 1,
       updatedAt: now,
     }).where(and(

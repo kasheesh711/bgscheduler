@@ -683,10 +683,18 @@ export async function publishPayoutRun(
     tutorFilter?: string | null;
     acknowledgements: PayoutPublishAcknowledgements;
     expectedVersion: number;
+    /**
+     * `"accrual"` is the unattended in-window append pass: it skips the
+     * window-ended guard, can never mint `published`, and skips the whole
+     * CSV/Drive leg. Omitted/`"operator"` is today's manual publish, byte-
+     * for-byte unchanged.
+     */
+    mode?: "operator" | "accrual";
   },
   db: Database = getDb(),
   dependencies: PayoutRunDependencies = {},
 ): Promise<PayoutRunView> {
+  const mode = input.mode ?? "operator";
   if (!input.previewToken) {
     throw new PostClassValidationError("Preview this payout run before publishing it.");
   }
@@ -702,7 +710,7 @@ export async function publishPayoutRun(
   }
   const window = payoutRunWindow(input.anchorMonth);
   const operationNow = new Date(dependencies.now?.() ?? Date.now());
-  if (payoutBangkokDate(operationNow) <= window.windowEnd) {
+  if (mode !== "accrual" && payoutBangkokDate(operationNow) <= window.windowEnd) {
     throw new PostClassValidationError(
       `Payout window ${window.windowStart}–${window.windowEnd} has not ended in Bangkok.`,
     );
@@ -872,8 +880,9 @@ export async function publishPayoutRun(
         }
       }
     }
-  } else if (!dependencies.uploadCsv) {
+  } else if (mode !== "accrual" && !dependencies.uploadCsv) {
     // Zero-obligation runs intentionally skip Sheets scope and all tab reads.
+    // Accrual never uploads a CSV, so it never needs Drive scope either.
     await assertPayoutGoogleAccess(db, target.connectedEmail, {
       sheets: false,
       drive: true,
@@ -882,31 +891,37 @@ export async function publishPayoutRun(
 
   const finalLines = await loadPayoutRunLines(db, acquired.run.id);
   const finalAdjustments = await loadPayoutAdjustments(db, acquired.run.id, finalLines);
-  const csv = payoutCsv(window, finalLines, finalAdjustments);
   let csvFileId: string | null = null;
   let csvUrl: string | null = null;
   let csvError: string | null = null;
-  try {
-    if (!dependencies.uploadCsv && (pendingLines.length > 0 || pendingAdjustments.length > 0)
-      && dependencies.gateway) {
-      await assertPayoutGoogleAccess(db, target.connectedEmail, {
-        sheets: false,
-        drive: true,
+  if (mode !== "accrual") {
+    // Uploading and discarding a CSV every accrual tick would still burn a
+    // Drive write for nothing -- an in-window pass can never reach
+    // `published` (see `forcePartial` below), so it skips this whole leg via
+    // `skipCsv` instead of paying for an artifact no one can look at yet.
+    const csv = payoutCsv(window, finalLines, finalAdjustments);
+    try {
+      if (!dependencies.uploadCsv && (pendingLines.length > 0 || pendingAdjustments.length > 0)
+        && dependencies.gateway) {
+        await assertPayoutGoogleAccess(db, target.connectedEmail, {
+          sheets: false,
+          drive: true,
+        });
+      }
+      const uploaded = await uploadPayoutCsv({
+        target,
+        window,
+        runVersion: acquired.run.version,
+        csv,
+        upload: dependencies.uploadCsv ?? uploadCsvToDrive,
       });
+      csvFileId = uploaded.fileId;
+      csvUrl = uploaded.webViewLink;
+    } catch (error) {
+      csvError = error instanceof Error
+        ? error.message
+        : "The payout CSV could not be uploaded.";
     }
-    const uploaded = await uploadPayoutCsv({
-      target,
-      window,
-      runVersion: acquired.run.version,
-      csv,
-      upload: dependencies.uploadCsv ?? uploadCsvToDrive,
-    });
-    csvFileId = uploaded.fileId;
-    csvUrl = uploaded.webViewLink;
-  } catch (error) {
-    csvError = error instanceof Error
-      ? error.message
-      : "The payout CSV could not be uploaded.";
   }
 
   const run = await finalizePayoutRunPass(db, {
@@ -916,7 +931,14 @@ export async function publishPayoutRun(
     csvFileId,
     csvUrl,
     csvError,
-    forcePartial: !acquired.selectionComplete || stoppedEarly,
+    skipCsv: mode === "accrual",
+    // An in-window accrual pass can never mint `published`: forcing partial
+    // whenever the window has not yet ended makes that mathematically true
+    // regardless of how complete this pass's obligations are, so the run can
+    // never oscillate partial -> published -> partial as deductions accrue.
+    forcePartial: mode === "accrual" && payoutBangkokDate(operationNow) <= window.windowEnd
+      ? true
+      : (!acquired.selectionComplete || stoppedEarly),
   });
   const snapshot = await readPayoutRunPreview(db, {
     window,
