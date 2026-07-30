@@ -435,6 +435,13 @@
       "when": 1784814728290,
       "tag": "0061_payout_line_source_anchor",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1784814729290,
+      "tag": "0062_post_class_deleted_sessions",
+      "breakpoints": true
     }
   ]
 }

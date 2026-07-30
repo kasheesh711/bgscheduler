@@ -17,6 +17,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import type { AnyColumn, SQL } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type { WiseSessionDetail } from "@/lib/wise/types";
@@ -33,6 +34,78 @@ import { DEFAULT_FEEDBACK_FIELD_MAPPINGS } from "./wise";
  * floor they occupy the queue permanently.
  */
 const MISSING_SESSION_RETRY_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * REC-03: Wise's own record that a session no longer exists.
+ *
+ * A deleted session answers every detail fetch with HTTP 400 "Session not
+ * found!", and it can never auto-resolve: resolution requires a successful
+ * observation, and a feedback event only stops being a candidate once a
+ * successful observation links it. Left alone it occupies the highest-priority
+ * candidate lane forever. `SessionDeletedEvent` is already mirrored into
+ * `wise_activity_events` with an indexed `session_id`, so the collector can
+ * simply decline to ask. Anti-joined on that index this costs nothing measurable
+ * next to the event scan the lane already pays for.
+ */
+function deletedInWise(wiseSessionId: SQL | AnyColumn): SQL {
+  // The alias is load-bearing. The highest-priority candidate lane selects FROM
+  // `wise_activity_events` itself, so an unaliased subquery over the same table
+  // binds both sides of the correlation to the *inner* instance: the predicate
+  // degrades to `inner.session_id = inner.session_id`, true for every row the
+  // moment any deletion event exists, and the lane returns nothing at all.
+  return sql`exists (
+    select 1 from ${schema.wiseActivityEvents} as deletion_event
+    where deletion_event.event_name = 'SessionDeletedEvent'
+      and deletion_event.session_id = ${wiseSessionId}
+  )`;
+}
+
+/** The candidate-lane form: propose a session only while Wise still has it. */
+function notDeletedInWise(wiseSessionId: SQL | AnyColumn): SQL {
+  return sql`not ${deletedInWise(wiseSessionId)}`;
+}
+
+/**
+ * REC-02, generalised: a session Wise has reported missing for longer than the
+ * grace window is not coming back, whichever lane proposed it.
+ *
+ * Deletion evidence is the precise signal and `notDeletedInWise` is preferred,
+ * but the `SessionDeletedEvent` mirror only reaches back to 2026-05-27. Sessions
+ * that disappeared before that floor have no evidence either way, so they get
+ * time rather than a guess. The issue row deliberately stays `open` — it is a
+ * real unresolved fact and remains visible in Data Health; it just stops being
+ * retried.
+ */
+function notAbandonedMissingSession(wiseSessionId: SQL | AnyColumn): SQL {
+  const cutoff = new Date(Date.now() - MISSING_SESSION_RETRY_GRACE_MS);
+  // Aliased for the same reason as `deletedInWise`: one caller of this predicate
+  // selects FROM `post_class_source_issues`.
+  return sql`not exists (
+    select 1 from ${schema.postClassSourceIssues} as abandoned_issue
+    where abandoned_issue.status = 'open'
+      and abandoned_issue.issue_type = 'session_not_found'
+      and abandoned_issue.first_seen_at < ${cutoff}
+      and ${aliasedIssueWiseSessionId("abandoned_issue")} = ${wiseSessionId}
+  )`;
+}
+
+/**
+ * The Wise session id an issue refers to. Orphan issues — raised before the
+ * session ever got a row, which is 228 of the 230 seen in production — carry it
+ * only in `details.retryCandidate`; linked ones reach it through `session_id`.
+ */
+function aliasedIssueWiseSessionId(alias: string): SQL {
+  return sql`coalesce(
+    ${sql.raw(alias)}.details->'retryCandidate'->>'sessionId',
+    (select retired_session.wise_session_id from ${schema.postClassSessions} as retired_session
+     where retired_session.id = ${sql.raw(alias)}.session_id)
+  )`;
+}
+
+/** The same expression bound to the outer `post_class_source_issues` row. */
+function issueWiseSessionId(): SQL {
+  return aliasedIssueWiseSessionId("post_class_source_issues");
+}
 import { withPostClassTransaction } from "./transaction";
 import type {
   CanonicalTutorResolution,
@@ -175,6 +248,15 @@ export interface PostClassFeedbackRepository {
     freshAfter: Date,
     checkpointStartedAt: Date,
   ): Promise<{ candidates: PostClassSessionCandidate[]; totalPending: number }>;
+  /**
+   * REC-03. Close out sessions Wise has deleted: resolve their open
+   * session-scoped issues and mark the row terminal. Optional so the many
+   * hand-rolled test fakes of this interface keep compiling.
+   */
+  retireDeletedWiseSessions?(input: {
+    runId: string;
+    observedAt: Date;
+  }): Promise<{ retiredIssues: number; retiredSessions: number }>;
 }
 
 const STALE_RUNNING_MS = 20 * 60 * 1000;
@@ -534,6 +616,50 @@ export function resolvedPostClassSessionIssueUpdate(
   };
 }
 
+/**
+ * Open source issues that suspend enforcement feature-wide.
+ *
+ * The predicate every money-adjacent gate agrees on — `revalidateDeductionCandidate`,
+ * the payout publish coverage, the notification suppressor — kept in one place so
+ * the shadow-review gate cannot drift from them. Scope matters: a session-scoped
+ * issue is a fact about one row and blocks only that row.
+ */
+export async function countOpenBlockingGlobalSourceIssues(db: Database): Promise<number> {
+  const rows = await db.select({ id: schema.postClassSourceIssues.id })
+    .from(schema.postClassSourceIssues)
+    .where(and(
+      eq(schema.postClassSourceIssues.scope, "global"),
+      eq(schema.postClassSourceIssues.status, "open"),
+      eq(schema.postClassSourceIssues.blocksEnforcement, true),
+    ));
+  return rows.length;
+}
+
+/**
+ * Close an issue whose subject Wise deleted (REC-03).
+ *
+ * Sibling of `resolvedPostClassSessionIssueUpdate`, which cannot serve here: it
+ * writes `sessionId`, and 228 of the 230 issues seen in production are orphans
+ * with no session row to point at. `status` stays `"resolved"` rather than
+ * gaining a new value — every consumer filters on `"open"`, and a new value
+ * would slip past the fingerprint-archival branch in `recordSourceIssue` and
+ * silently reopen. `details.retiredReason` is what distinguishes a retirement
+ * from a genuine recovery.
+ */
+export function retiredPostClassSourceIssueUpdate(retiredAt: Date): {
+  status: "resolved";
+  resolvedAt: Date;
+  resolvedByEmail: string;
+  lastSeenAt: Date;
+} {
+  return {
+    status: "resolved",
+    resolvedAt: retiredAt,
+    resolvedByEmail: "system:post-class-feedback",
+    lastSeenAt: retiredAt,
+  };
+}
+
 export function postClassSourceStatusForIssue(
   issue: Pick<PostClassSourceIssueInput, "scope" | "issueType">,
 ): "identity_review" | "unavailable" {
@@ -767,6 +893,12 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
           eq(schema.wiseActivityEvents.eventName, "SessionFeedbackSubmittedEvent"),
           isNotNull(schema.wiseActivityEvents.sessionId),
           isNull(schema.postClassFeedbackEventLinks.id),
+          // Both filters must live inside the query, before the LIMIT. Dropping
+          // these candidates after the fact would stop the fetches but not let
+          // the paging loop reach the live sessions queued behind them, so a
+          // backlog of dead sessions would still starve the run.
+          notDeletedInWise(schema.wiseActivityEvents.sessionId),
+          notAbandonedMissingSession(schema.wiseActivityEvents.sessionId),
         ))
         .orderBy(desc(schema.wiseActivityEvents.eventTimestamp))
         .limit(batchSize)
@@ -806,6 +938,9 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
           eq(schema.postClassSessions.eligible, true),
           eq(schema.postClassSessions.eligibilityReason, "billing_evidence_missing"),
         ),
+        isNull(schema.postClassSessions.wiseDeletedAt),
+        notDeletedInWise(schema.postClassSessions.wiseSessionId),
+        notAbandonedMissingSession(schema.postClassSessions.wiseSessionId),
       )).orderBy(
         asc(schema.postClassSessions.updatedAt),
         asc(schema.postClassSessions.scheduledEndAt),
@@ -816,9 +951,16 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         scheduledStartAt: schema.postClassSessions.scheduledStartAt,
         scheduledEndAt: schema.postClassSessions.scheduledEndAt,
         queueAt: schema.postClassSessions.updatedAt,
-      }).from(schema.postClassSessions).where(inArray(
-        schema.postClassSessions.eligibilityReason,
-        [...KNOWN_INELIGIBLE_REASON_VALUES],
+      }).from(schema.postClassSessions).where(and(
+        inArray(
+          schema.postClassSessions.eligibilityReason,
+          [...KNOWN_INELIGIBLE_REASON_VALUES],
+        ),
+        // The one-terminal-row-per-run readmission exists so corrected Wise
+        // status or billing can recover. A deleted session has nothing to
+        // recover to, so it must not consume that slot.
+        isNull(schema.postClassSessions.wiseDeletedAt),
+        notDeletedInWise(schema.postClassSessions.wiseSessionId),
       )).orderBy(
         asc(schema.postClassSessions.updatedAt),
         asc(schema.postClassSessions.scheduledEndAt),
@@ -843,6 +985,8 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
             new Date(Date.now() - MISSING_SESSION_RETRY_GRACE_MS),
           ),
         ),
+        // Proven deletion needs no grace period at all.
+        notDeletedInWise(issueWiseSessionId()),
       )).orderBy(asc(schema.postClassSourceIssues.lastSeenAt)).limit(boundedLimit),
     ]);
     const queued: Array<{ candidate: PostClassSessionCandidate; queueAt: Date }> = rows.map((row) => ({
@@ -1062,21 +1206,77 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
       contentStatus: schema.postClassSessions.contentStatus,
       timingStatus: schema.postClassSessions.timingStatus,
       eligibilityReason: schema.postClassSessions.eligibilityReason,
+      wiseDeletedAt: schema.postClassSessions.wiseDeletedAt,
       updatedAt: schema.postClassSessions.updatedAt,
     }).from(schema.postClassSessions).where(inArray(
       schema.postClassSessions.wiseSessionId,
       candidates.map((candidate) => candidate.sessionId),
     ));
     const byId = new Map(rows.map((row) => [row.wiseSessionId, row]));
-    const fetchable = candidates.filter((candidate) => shouldFetchPostClassCandidate({
-      candidateReason: candidate.reason,
-      existing: byId.get(candidate.sessionId),
-      now,
-    }));
+    const fetchable = candidates.filter((candidate) => {
+      // Belt and braces behind the lane filters: a row already known deleted is
+      // never worth a Wise call, whichever lane proposed it.
+      if (byId.get(candidate.sessionId)?.wiseDeletedAt) return false;
+      return shouldFetchPostClassCandidate({
+        candidateReason: candidate.reason,
+        existing: byId.get(candidate.sessionId),
+        now,
+      });
+    });
     return prioritizeUnseenRollingCandidates(
       fetchable,
       new Set(rows.map((row) => row.wiseSessionId)),
     ).slice(0, cap);
+  }
+
+  /**
+   * REC-03: close out every session Wise has deleted.
+   *
+   * Runs at the top of a sync, before candidates are listed, so the lane
+   * filters and this sweep always agree about what is dead. Two statements:
+   *
+   * 1. Resolve open session-scoped issues whose subject has a
+   *    `SessionDeletedEvent`. Covers both `session_not_found` and the
+   *    `detail_retry` `contract_error` rows raised alongside them, and reaches
+   *    orphan issues (no session row) through `details.retryCandidate`.
+   * 2. Mark any session row we do hold terminal — `wiseDeletedAt` for the fact,
+   *    `eligible = false` so every existing eligibility-gated path drops it
+   *    without needing to learn a new concept.
+   *
+   * Takes the finance lock and the source-write fence for the same reason
+   * `recordSourceIssue` does: it writes the source-truth surface a payout run
+   * may be reading under lease.
+   */
+  async retireDeletedWiseSessions(input: {
+    runId: string;
+    observedAt: Date;
+  }): Promise<{ retiredIssues: number; retiredSessions: number }> {
+    return withPostClassTransaction(this.db, async (tx) => {
+      await lockPostClassFinance(tx);
+      await assertPostClassSyncSourceWriteFence(tx, input.runId);
+      const retiredIssues = await tx.update(schema.postClassSourceIssues).set({
+        ...retiredPostClassSourceIssueUpdate(input.observedAt),
+        details: sql`coalesce(${schema.postClassSourceIssues.details}, '{}'::jsonb)
+          || jsonb_build_object('retiredReason', 'wise_session_deleted')`,
+      }).where(and(
+        eq(schema.postClassSourceIssues.scope, "session"),
+        eq(schema.postClassSourceIssues.status, "open"),
+        deletedInWise(issueWiseSessionId()),
+      )).returning({ id: schema.postClassSourceIssues.id });
+      const retiredSessions = await tx.update(schema.postClassSessions).set({
+        wiseDeletedAt: input.observedAt,
+        eligible: false,
+        eligibilityReason: "deleted_in_wise",
+        updatedAt: input.observedAt,
+      }).where(and(
+        isNull(schema.postClassSessions.wiseDeletedAt),
+        deletedInWise(schema.postClassSessions.wiseSessionId),
+      )).returning({ id: schema.postClassSessions.id });
+      return {
+        retiredIssues: retiredIssues.length,
+        retiredSessions: retiredSessions.length,
+      };
+    });
   }
 
   async filterReminderCheckpointCandidates(

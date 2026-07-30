@@ -190,6 +190,13 @@ export const SESSION_ELIGIBILITY_REASONS = [
   "complimentary_or_trial",
   "non_billable",
   "billing_evidence_missing",
+  /**
+   * Wise deleted the session (REC-03). Deliberately absent from
+   * `KNOWN_INELIGIBLE_REASON_VALUES`: that list feeds the one-terminal-row-
+   * per-run readmission lane, which exists so corrected Wise status or billing
+   * can recover. A deleted session has nothing to recover to.
+   */
+  "deleted_in_wise",
 ] as const;
 
 export type SessionEligibilityReason = (typeof SESSION_ELIGIBILITY_REASONS)[number];

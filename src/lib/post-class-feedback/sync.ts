@@ -593,8 +593,17 @@ export async function syncPostClassFeedback(
     detailCap,
   });
   let sourceIssueCount = 0;
+  let readySessionCount = 0;
 
   try {
+    // REC-03, before anything is listed: retire the sessions Wise has deleted,
+    // so the candidate lanes below and the issue table agree about what is dead.
+    // Not counted into sourceIssueCount — a deletion is a Wise lifecycle
+    // transition we have proof of, not a gap in our own source evidence.
+    const retired = await dependencies.repository.retireDeletedWiseSessions?.({
+      runId,
+      observedAt: now,
+    });
     const [
       policy,
       eventCoverageFrom,
@@ -846,6 +855,10 @@ export async function syncPostClassFeedback(
       else if (blockingGlobalSourceIssue) sourceStatus = "unavailable";
       else if (tutor.status === "ambiguous") sourceStatus = "identity_review";
       else if (eligibility.status === "ambiguous") sourceStatus = "unavailable";
+      // Resolvability, for the activation gate. Deliberately not derived from
+      // `sourceIssueCount`, which double-counts a failed fetch (the issue plus
+      // its durable retry row) and folds in run-wide escalations.
+      if (sourceStatus === "ready") readySessionCount += 1;
 
       const eventTiming = deriveEventTimingEvidence({
         events,
@@ -913,7 +926,17 @@ export async function syncPostClassFeedback(
       }
     });
 
-    const status = sourceIssueCount > 0 ? "partial" : "success";
+    // A run is "partial" when its own evidence cannot be trusted run-wide, not
+    // when an individual session had messy data. `sourceIssueCount > 0` used to
+    // decide this, which meant one ambiguous tutor identity or one session with
+    // incomplete billing evidence — facts about that row, which `policy.ts`
+    // already refuses to assess or deduct against — marked the whole run
+    // untrustworthy. That is the counter the activation gate keyed on, so a
+    // single messy session out of fifty blocked the feature permanently.
+    // `sourceIssueCount` survives unchanged on the run row and in Data Health
+    // as the honest per-session tally. Note the widespread-contract-breach
+    // escalation above already sets `blockingGlobalSourceIssue`.
+    const status = blockingGlobalSourceIssue || firstFormDrift ? "partial" : "success";
     await dependencies.repository.completeSync({
       runId,
       finishedAt: new Date(),
@@ -939,8 +962,14 @@ export async function syncPostClassFeedback(
             checkpointRemainingCount: Math.max(0, checkpointPendingCount - candidates.length),
           }
           : {}),
+        // Sessions whose evidence resolved cleanly. With `candidateCount` and
+        // `detailFetchedCount` this lets the activation gate judge readability
+        // and resolvability as rates rather than on the presence of any single
+        // messy session.
+        readySessionCount,
+        ...(retired ? { retiredDeletedSessions: retired.retiredSessions } : {}),
         // Global source health is independent from session-scoped identity,
-        // billing, or not-found issues that can keep the run "partial".
+        // billing, or not-found issues that keep individual rows non-ready.
         globalSourceHealthy: !blockingGlobalSourceIssue && !firstFormDrift,
         mappingObservedHealthy: parsedCandidates.length > 0 && !firstFormDrift,
       },

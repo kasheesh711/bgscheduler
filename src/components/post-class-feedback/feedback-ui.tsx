@@ -129,6 +129,7 @@ const ELIGIBILITY_REASON_LABELS: Record<FeedbackEligibilityReason, string> = {
   complimentary_or_trial: "Complimentary / trial",
   non_billable: "Zero-credit, non-payable",
   billing_evidence_missing: "Billing or payout evidence needs review",
+  deleted_in_wise: "Deleted in Wise",
 };
 
 export function formatEligibilityReason(reason: string | null): string {

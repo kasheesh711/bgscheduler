@@ -3257,6 +3257,13 @@ export const postClassSessions = pgTable("post_class_sessions", {
   // sync restores from it in one statement, so demotion and recovery are the
   // same shape. Null means the row's `sourceStatus` is its own observation.
   sourceStatusBefore: postClassSourceStatusEnum("source_status_before"),
+  // When we learned Wise deleted this session, proven by a `SessionDeletedEvent`
+  // in the activity mirror (REC-03). Deliberately a fact of its own rather than
+  // a `sourceStatus` value: deletion is a legitimate Wise lifecycle transition,
+  // not a source-health defect, and every `sourceStatus <> 'ready'` reader
+  // treats its subject as blocking — which would keep a deleted session in the
+  // payout coverage denominator forever, the exact drag this removes.
+  wiseDeletedAt: timestamp("wise_deleted_at", { withTimezone: true }),
   contentStatus: postClassContentStatusEnum("content_status").notNull().default("missing"),
   timingStatus: postClassTimingStatusEnum("timing_status").notNull().default("not_due"),
   deductionStatus: postClassDeductionStatusEnum("deduction_status").notNull().default("none"),
@@ -3279,6 +3286,9 @@ export const postClassSessions = pgTable("post_class_sessions", {
   index("pc_sessions_source_restore_idx")
     .on(table.sourceStatusBefore)
     .where(sql`${table.sourceStatusBefore} IS NOT NULL`),
+  index("pc_sessions_wise_deleted_idx")
+    .on(table.wiseDeletedAt)
+    .where(sql`${table.wiseDeletedAt} IS NOT NULL`),
 ]);
 
 export const postClassSessionParticipants = pgTable("post_class_session_participants", {

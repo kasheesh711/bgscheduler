@@ -25,6 +25,10 @@ const sourceAnchorMigration = readFileSync(
   new URL("../../../../drizzle/0061_payout_line_source_anchor.sql", import.meta.url),
   "utf8",
 );
+const deletedSessionsMigration = readFileSync(
+  new URL("../../../../drizzle/0062_post_class_deleted_sessions.sql", import.meta.url),
+  "utf8",
+);
 const journal = JSON.parse(readFileSync(
   new URL("../../../../drizzle/meta/_journal.json", import.meta.url),
   "utf8",
@@ -401,6 +405,36 @@ describe("payout line source anchor migration", () => {
     expect(journal.entries.find((entry) => entry.idx === 61)).toMatchObject({
       idx: 61,
       tag: "0061_payout_line_source_anchor",
+    });
+  });
+});
+
+describe("deleted-session migration", () => {
+  it("adds only the nullable deletion timestamp and its partial index", () => {
+    expect(deletedSessionsMigration).toContain(
+      'ALTER TABLE "post_class_sessions" ADD COLUMN "wise_deleted_at" timestamp with time zone;',
+    );
+    expect(deletedSessionsMigration).toContain("pc_sessions_wise_deleted_idx");
+  });
+
+  it("adds no enum value", () => {
+    // Deliberate: deletion is a fact of its own, not a `source_status`. Every
+    // `source_status <> 'ready'` reader treats its subject as blocking, which
+    // would park deleted sessions in the payout coverage denominator forever.
+    expect(deletedSessionsMigration).not.toMatch(/ALTER TYPE/);
+    expect(deletedSessionsMigration).not.toMatch(/CREATE TYPE/);
+  });
+
+  it("touches no existing data", () => {
+    expect(deletedSessionsMigration).not.toMatch(/\bUPDATE\b/);
+    expect(deletedSessionsMigration).not.toMatch(/\bDELETE\b/);
+    expect(deletedSessionsMigration).not.toMatch(/DROP (TABLE|COLUMN)/);
+  });
+
+  it("is registered in the journal", () => {
+    expect(journal.entries.find((entry: { idx: number }) => entry.idx === 62)).toMatchObject({
+      idx: 62,
+      tag: "0062_post_class_deleted_sessions",
     });
   });
 });
