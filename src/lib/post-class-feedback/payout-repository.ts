@@ -118,6 +118,10 @@ export async function selectPayoutRunCandidates(
       eq(schema.postClassDeductions.status, "approved"),
       eq(schema.postClassSessions.eligible, true),
       eq(schema.postClassSessions.sourceStatus, "ready"),
+      // Belt and braces behind `eligible`, which the REC-03 retirement clears:
+      // a session Wise has deleted must never reach a payout line, and that
+      // guarantee should not rest on a single column.
+      isNull(schema.postClassSessions.wiseDeletedAt),
       isNull(schema.postClassDeductionOffsets.id),
     ))
     .orderBy(
@@ -197,6 +201,11 @@ export async function computePayoutRunCoverage(
   const inWindow = and(
     gte(schema.postClassSessions.scheduledEndAt, start),
     lt(schema.postClassSessions.scheduledEndAt, endExclusive),
+    // A session Wise deleted leaves the denominator entirely rather than
+    // sitting in `nonReadySessions` forever. It can never become ready, so
+    // counting it would permanently inflate the unreconciled ratio that gates
+    // publication — blocking payouts over sessions that no longer exist.
+    isNull(schema.postClassSessions.wiseDeletedAt),
   );
   const [sessionCounts] = await db.select({
     // The denominator includes every proven-eligible session plus any

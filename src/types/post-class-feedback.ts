@@ -358,6 +358,12 @@ export interface FeedbackSetupItem {
   label: string;
   complete: boolean;
   detail: string;
+  /**
+   * Why this item cannot be completed yet, when the server can say. A durable
+   * surface for the shadow-review gate, whose reasons previously existed only
+   * as a transient toast on a failed confirmation attempt.
+   */
+  blockers?: Array<{ key: string; detail: string }>;
 }
 
 /**
@@ -377,6 +383,12 @@ export interface PostClassFeedbackPayload {
     mode: FeedbackEnforcementMode;
     effectiveAt: string | null;
     sourceHealth: "healthy" | "degraded" | "unavailable";
+    /**
+     * Open source issues, split by scope. Global issues suspend enforcement;
+     * session-scoped ones affect only their own row and are shown so an
+     * operator can see what is messy rather than only that something is.
+     */
+    openSourceIssues: { global: number; session: number };
     sourceLastSyncedAt: string | null;
     formMappingHealth: "healthy" | "drift" | "unmapped";
     mapping: {

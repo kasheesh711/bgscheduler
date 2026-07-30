@@ -697,13 +697,21 @@ export async function getPostClassFeedbackDashboard(
   ].toSorted((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 150);
 
   const latestSync = syncRuns[0] ?? null;
-  const blockingIssues = openIssues.filter((issue) => issue.blocksEnforcement);
-  const latestSyncOutcome = latestSync?.metadata && typeof latestSync.metadata.outcome === "string"
-    ? latestSync.metadata.outcome
-    : null;
+  // Scope matters here for the same reason it matters at every other gate: a
+  // session-scoped issue is a fact about one row, and one messy row does not
+  // make the source unhealthy. Counting them here pinned this badge at
+  // "degraded" indefinitely, since a `session_not_found` for a session Wise
+  // deleted can never resolve.
+  const blockingGlobalIssues = openIssues.filter((issue) =>
+    issue.blocksEnforcement && issue.scope === "global");
+  const sessionScopedIssues = openIssues.filter((issue) => issue.scope !== "global");
+  const latestSyncGloballyHealthy = latestSync?.metadata?.globalSourceHealthy === true;
   const sourceHealth = !latestSync
     ? "unavailable"
-    : latestSync.status === "success" && latestSyncOutcome === "success" && blockingIssues.length === 0
+    : latestSync.status === "success"
+      && latestSyncGloballyHealthy
+      && blockingGlobalIssues.length === 0
+      && settings?.formMappingValid !== false
       ? "healthy"
       : "degraded";
   const activeMappings = mappings.filter((mapping) => mapping.mappingVersion === settings?.formMappingVersion);
@@ -754,6 +762,10 @@ export async function getPostClassFeedbackDashboard(
       mode: settings?.enforcementMode ?? "shadow",
       effectiveAt: iso(settings?.policyEffectiveAt),
       sourceHealth,
+      openSourceIssues: {
+        global: blockingGlobalIssues.length,
+        session: sessionScopedIssues.length,
+      },
       sourceLastSyncedAt: iso(latestSync?.finishedAt),
       formMappingHealth,
       mapping: {

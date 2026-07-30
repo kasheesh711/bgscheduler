@@ -383,6 +383,13 @@ function postClassNotificationEvidence(run: PostClassNotificationRun | null): Ru
   };
 }
 
+/**
+ * Left keyed on `metadata.outcome` deliberately. That flag now means "this run
+ * could not be trusted run-wide" rather than "some session in this run had
+ * messy data", so this reports what it always intended to. Before that change
+ * every run was `partial`, `lastSuccessAt` never matched, and Data Health
+ * showed the collector as having never succeeded.
+ */
 function postClassFeedbackOutcome(run: PostClassFeedbackRun): string {
   const metadata = run.metadata && typeof run.metadata === "object" && !Array.isArray(run.metadata)
     ? run.metadata as Record<string, unknown>
