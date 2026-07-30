@@ -218,6 +218,28 @@ excluded. A correction is a new positive adjustment row, never an edit or
 deletion of a prior negative deduction. Processing is allowed only after the
 corresponding payout line has been published and verified.
 
+**Continuous accrual (parked, manual-only).** Deductions no longer have to
+wait for the window to close before they land. A parked, cron-secret-guarded
+route, `/api/internal/post-class-feedback/payout-accrual` (never scheduled --
+see [crons.md](../reference/crons.md)), runs two passes: an auto-approval/
+reopen sweep first -- a `pending_review` deduction
+past a grace period (`POST_CLASS_AUTO_APPROVE_GRACE_HOURS`, default 24h) on a
+`live`-enforced, source-`ready` session auto-approves with no reviewer click,
+and an `approved`-but-unwritten deduction that loses proof (ineligible
+session, or source no longer `ready`) auto-reopens back to `pending_review` --
+then either an accrual pass or the automated finalize pass. The accrual pass
+appends newly-approved, source-ready deductions to the same app-owned
+`Feedback Deductions` tab as a manual publish, under `mode: "accrual"`: it can
+never reach `published` while the window is still open, and it never uploads
+or touches the CSV artifact, since discarding a fresh CSV on every tick would
+still cost a Drive write for nothing. Once the window has ended, the
+automated finalize pass runs the same auto-approval/reopen sweep and then
+publishes in the ordinary (operator) mode, reaching `published` with CSV
+upload enabled exactly like a manual publish once coverage is clean. The
+existing manual publish path described below, and its `/post-class-feedback`
+UI, are completely unchanged -- `mode` defaults to `"operator"` for every
+caller that does not pass it.
+
 ### Dedicated three-tab workbook
 
 The production workbook has three distinct responsibilities:
@@ -298,8 +320,8 @@ Run states:
 |---|---|
 | `draft` | Read-only preview exists; nothing is currently writing. |
 | `publishing` | A durable single-flight lease owns the external write pass. |
-| `partial` | A canary, time-bounded pass, or mixed outcome left required work. |
-| `published` | Every required line is written and the source fingerprint still matches the confirmed full/canary pass. |
+| `partial` | A canary, time-bounded pass, an in-window accrual pass, or mixed outcome left required work. An accrual pass forces this status even when every obligation it saw is written, since it can never mint `published` while the window is open. |
+| `published` | Every required line is written and the source fingerprint still matches the confirmed full/canary pass. Reached either by a manual operator publish once the window has ended, or by the automated finalize pass the first time it runs with clean coverage after the window ends. |
 | `closed` | Finance closed the run; later changes require an audited exception/correction. |
 
 Each line is `pending`, `written`, `failed`, or `skipped` and has kind

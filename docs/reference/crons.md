@@ -74,6 +74,7 @@ Vercel Cron always calls **`GET`**. Some handlers additionally export `POST` for
 | `post-class-feedback/admin-digest` | yes | no | n/a — **parked**, no cron entry |
 | `post-class-feedback/reminder-day-after` | yes | no | n/a — **parked**, no cron entry |
 | `post-class-feedback/reminder-deadline` | yes | no | n/a — **parked**, no cron entry |
+| `post-class-feedback/payout-accrual` | yes | no | n/a — parked, no cron entry |
 | `sync-leave-requests` | yes | yes (bearer only) | no ([`route.ts:24-30`](../../src/app/api/internal/sync-leave-requests/route.ts)) |
 | `class-assignments/morning` | yes | no | n/a |
 | `class-assignments/admin-email` | yes | no | n/a |
@@ -158,6 +159,10 @@ headroom observed. A concurrent collector returns HTTP 409. **`maxDuration = 800
 ### Parked routes — digest and tutor reminders
 
 `/api/internal/post-class-feedback/admin-digest`, `/api/internal/post-class-feedback/reminder-day-after`, and `/api/internal/post-class-feedback/reminder-deadline` are retained but unscheduled. They keep their `CRON_SECRET` guard and their `dangerous` confirmation in Data Health, so a deliberate manual run is still possible. Restoring automation means re-adding the `vercel.json` entries and flipping `manualOnly` back to `false` in `src/lib/data-health/cron-registry.ts`.
+
+### Parked route — payout accrual
+
+`/api/internal/post-class-feedback/payout-accrual` is also parked: `manualOnly: true`, `dangerous: true`, and no `vercel.json` entry, so it runs only when deliberately triggered from the Data Health job list. It runs the Piece 1 auto-approve/reopen sweep, then either the in-window accrual pass or the post-window automated finalize pass (each in `payout-accrual.ts`), appending or publishing real payout deductions under `POST_CLASS_PAYOUT_WRITES_ENABLED` exactly like the manual publish path. A later, separate change is expected to give it a real schedule once rollout gates clear.
 
 See [Wise Post-Class Feedback Tracking](../features/post-class-feedback.md) for policy, access, and finance semantics.
 
