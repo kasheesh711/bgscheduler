@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   currentPayoutRunWindow,
+  lastEndedPayoutRunWindow,
   payoutRunRangeUtc,
   payoutRunWindow,
 } from "../payout-window";
@@ -54,6 +55,31 @@ describe("currentPayoutRunWindow", () => {
   it("uses the Bangkok date, not UTC", () => {
     // 25 Jul 18:00Z is already 26 Jul in Bangkok, so the run has rolled.
     expect(currentPayoutRunWindow(new Date("2026-07-25T18:00:00.000Z")).anchorMonth).toBe("2026-08");
+  });
+});
+
+describe("lastEndedPayoutRunWindow", () => {
+  it("names the prior month's window while the current one is still open", () => {
+    expect(lastEndedPayoutRunWindow("2026-07-20")).toEqual({
+      anchorMonth: "2026-06",
+      windowStart: "2026-05-26",
+      windowEnd: "2026-06-25",
+    });
+  });
+
+  it("names the window that just closed on the 26th", () => {
+    expect(lastEndedPayoutRunWindow("2026-07-26").anchorMonth).toBe("2026-07");
+  });
+
+  it("crosses a year boundary", () => {
+    expect(lastEndedPayoutRunWindow("2027-01-05").anchorMonth).toBe("2026-12");
+  });
+
+  it("always names a window that has actually ended", () => {
+    for (const day of ["01", "25", "26", "28", "31"]) {
+      const window = lastEndedPayoutRunWindow(`2026-07-${day}`);
+      expect(window.windowEnd < `2026-07-${day}`).toBe(true);
+    }
   });
 });
 

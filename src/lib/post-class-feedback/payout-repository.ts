@@ -12,6 +12,7 @@ import {
   isNull,
   lt,
   ne,
+  notInArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -338,6 +339,37 @@ export async function getPayoutRunByAnchor(
 ): Promise<PayoutRun | null> {
   const [row] = await db.select().from(schema.postClassPayoutRuns)
     .where(eq(schema.postClassPayoutRuns.anchorMonth, anchorMonthDate(anchorMonth)))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * The oldest payout run whose 26→25 window has already ended in Bangkok and
+ * that has not reached a terminal finalized state.
+ *
+ * This is the automated finalize pass's target selector. Deriving that target
+ * from the current calendar month instead strands any window that failed to
+ * finalize before the month rolled over: the anchor moves forward to a window
+ * that has not ended, the pass skips, and the stranded window is never retried
+ * automatically again. Ordering by `anchorMonth` drains a backlog oldest-first
+ * so the roll CLI's strict-close preflight unblocks in period order.
+ *
+ * `published` and `closed` are the only statuses that mean "nothing left to
+ * finalize"; `draft`/`publishing`/`partial` all still owe a pass. A run another
+ * actor is mid-publish on is deliberately still selected — the lease guard in
+ * `acquirePayoutRunLease` rejects the collision, which the caller turns into a
+ * skip and retries next tick.
+ */
+export async function findOldestUnfinalizedPayoutRun(
+  db: Database,
+  input: { bangkokDate: string },
+): Promise<PayoutRun | null> {
+  const [row] = await db.select().from(schema.postClassPayoutRuns)
+    .where(and(
+      lt(schema.postClassPayoutRuns.windowEnd, input.bangkokDate),
+      notInArray(schema.postClassPayoutRuns.status, ["published", "closed"]),
+    ))
+    .orderBy(asc(schema.postClassPayoutRuns.anchorMonth))
     .limit(1);
   return row ?? null;
 }

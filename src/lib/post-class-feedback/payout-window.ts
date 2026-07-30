@@ -60,6 +60,18 @@ export function payoutRunWindowForBangkokDate(date: string): PayoutRunWindow {
   return payoutRunWindow(anchorMonth);
 }
 
+/**
+ * The most recently ended 26→25 window as of a Bangkok date — the window
+ * immediately before the one containing `date`, so its `windowEnd` is always
+ * strictly in the past. Used to ask "did anyone finalize the period that just
+ * closed?" without re-deriving month arithmetic at the call site.
+ */
+export function lastEndedPayoutRunWindow(date: string): PayoutRunWindow {
+  const containing = payoutRunWindowForBangkokDate(date);
+  const priorMonth = monthStart(addBangkokDays(`${containing.anchorMonth}-01`, -1));
+  return payoutRunWindow(priorMonth.slice(0, 7));
+}
+
 /** Convert an instant to the ISO calendar date finance sees in Bangkok. */
 export function payoutBangkokDate(value: Date): string {
   const parts = new Intl.DateTimeFormat("en-US", {
