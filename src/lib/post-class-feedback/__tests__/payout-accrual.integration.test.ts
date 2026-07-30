@@ -77,8 +77,20 @@ const DAY_B = `${ANCHOR_YEAR_MONTH}-11`;
 /** One day past the anchor month's own 25th -- the window has just ended. */
 const DAY_AFTER_END = `${ANCHOR_YEAR_MONTH}-26`;
 
+function addMonths(yearMonth: string, months: number): string {
+  const [year, month] = yearMonth.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1 + months, 1)).toISOString().slice(0, 7);
+}
+
 const MID_WINDOW = new Date(`${DAY_A}T04:00:00.000Z`);
 const POST_WINDOW = new Date(`${DAY_AFTER_END}T04:00:00.000Z`);
+/**
+ * Day 10, two calendar months after the anchor month. Deriving the finalize
+ * anchor from this date's own month yields a window ending on its 25th, which
+ * has *not* ended -- so the anchor month's stranded window is only reachable
+ * by selecting it from the database.
+ */
+const TWO_MONTHS_LATER = new Date(`${addMonths(ANCHOR_YEAR_MONTH, 2)}-10T04:00:00.000Z`);
 
 const HEADER = [
   "Teacher name", "Session name", "Course name",
@@ -335,6 +347,53 @@ describe("runPayoutFinalizePass", () => {
     expect(view.run.status).toBe("published");
     expect(view.run.csvFileId).toBe("file-1");
     expect(view.lines.every((line) => line.writeStatus === "written")).toBe(true);
+    expect(deductionRows(grid)).toHaveLength(1);
+  });
+
+  // Regression: the pass used to derive its anchor from `now`'s own calendar
+  // month, so a window that failed to finalize before the month rolled over
+  // was never retried -- the anchor moved forward to a window that had not
+  // ended, the pass skipped, and the stranded window silently reverted to
+  // needing a manual operator publish (which also kept the roll CLI's
+  // strict-close preflight blocked on `not_published`).
+  it("still finalizes a run whose window ended two months ago", async () => {
+    await seedKevinLedgerMapping();
+    await seedApprovedDeduction({
+      wiseSessionId: "s-finalize-stranded",
+      endsAtDay: DAY_A,
+      student: "Grace Hopper",
+    });
+    // An accrual pass created the run in-window; every finalize attempt from
+    // the 26th to month end failed, leaving it short of `published`.
+    await handle.db.insert(schema.postClassPayoutRuns).values({
+      anchorMonth: `${ANCHOR_YEAR_MONTH}-01`,
+      windowStart: `${PRIOR_ANCHOR_YEAR_MONTH}-26`,
+      windowEnd: `${ANCHOR_YEAR_MONTH}-25`,
+      status: "partial",
+    });
+    const grid = sheetGrid();
+
+    const view = expectRunView(await runPayoutFinalizePass(appDb(), {
+      gateway: fakeGateway(grid).gateway,
+      uploadCsv: uploadOk,
+      resolveGoogleTarget: () => TEST_TARGET,
+      now: () => TWO_MONTHS_LATER.getTime(),
+    }, TWO_MONTHS_LATER));
+
+    expect(view.window.anchorMonth).toBe(ANCHOR_YEAR_MONTH);
+    expect(view.run.status).toBe("published");
+    expect(view.run.csvFileId).toBe("file-1");
+    expect(view.lines.every((line) => line.writeStatus === "written")).toBe(true);
+    expect(deductionRows(grid)).toHaveLength(1);
+
+    // Idempotent: the now-published run drops out of the selector, and the
+    // current window has not ended, so the next hourly tick does nothing.
+    await expect(runPayoutFinalizePass(appDb(), {
+      gateway: fakeGateway(grid).gateway,
+      uploadCsv: uploadOk,
+      resolveGoogleTarget: () => TEST_TARGET,
+      now: () => TWO_MONTHS_LATER.getTime(),
+    }, TWO_MONTHS_LATER)).resolves.toEqual({ skipped: "window-not-ended" });
     expect(deductionRows(grid)).toHaveLength(1);
   });
 });
