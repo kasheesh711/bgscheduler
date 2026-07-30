@@ -240,6 +240,28 @@ existing manual publish path described below, and its `/post-class-feedback`
 UI, are completely unchanged -- `mode` defaults to `"operator"` for every
 caller that does not pass it.
 
+**Which window finalize targets.** The finalize pass selects the *oldest*
+payout run whose window has ended and whose status is not yet
+`published`/`closed` (`findOldestUnfinalizedPayoutRun`), so a window that
+fails to finalize keeps being retried however many months pass. Deriving the
+anchor from the current calendar month instead stranded such a window on the
+1st of the next month -- the anchor rolled forward to a window that had not
+ended, the pass skipped, and the period silently reverted to needing a manual
+operator publish, which also left the roll CLI's strict-close preflight
+blocked on `not_published`. Only when no un-finalized run exists does the pass
+fall back to the window anchored to today's own calendar month, still behind
+the "window has ended" guard; that fallback is the only branch that can create
+a run row, which is what keeps it from minting an empty `published` run for
+some older window the system never observed. The selector excludes
+`published`/`closed`, so the pass is idempotent and safe to run hourly.
+
+**Alerting.** A window still un-finalized once its anchor month has passed is
+surfaced by the cron watchdog as a synthetic `post_class_payout_window` entry
+(`classifyPayoutWindowStaleness`), which rides the existing episode dedup,
+digest email, and recovery notice. A window with no run row at all is flagged
+the same way rather than auto-published. The check is gated on the accrual
+cron actually having a schedule, so while the route is parked it stays inert.
+
 ### Dedicated three-tab workbook
 
 The production workbook has three distinct responsibilities:

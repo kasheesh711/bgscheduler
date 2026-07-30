@@ -164,6 +164,8 @@ headroom observed. A concurrent collector returns HTTP 409. **`maxDuration = 800
 
 `/api/internal/post-class-feedback/payout-accrual` is also parked: `manualOnly: true`, `dangerous: true`, and no `vercel.json` entry, so it runs only when deliberately triggered from the Data Health job list. It runs the Piece 1 auto-approve/reopen sweep, then either the in-window accrual pass or the post-window automated finalize pass (each in `payout-accrual.ts`), appending or publishing real payout deductions under `POST_CLASS_PAYOUT_WRITES_ENABLED` exactly like the manual publish path. A later, separate change is expected to give it a real schedule once rollout gates clear.
 
+The finalize pass targets the oldest payout run whose window has ended and that has not reached `published`/`closed`, not the window named by the current calendar month, so a finalize that fails for the whole 26th-to-month-end stretch is still retried in the following month instead of silently reverting to a manual operator publish. A window left un-finalized once its anchor month has passed is reported by the cron watchdog (`/api/internal/cron-watchdog`, registry row 13) as a synthetic `post_class_payout_window` entry; that check is gated on this route having a schedule, so it stays inert while the route is parked and arms itself when the schedule is added.
+
 See [Wise Post-Class Feedback Tracking](../features/post-class-feedback.md) for policy, access, and finance semantics.
 
 ## 6. Leave requests sync — `/api/internal/sync-leave-requests`
