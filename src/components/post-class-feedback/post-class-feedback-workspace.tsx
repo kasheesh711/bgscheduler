@@ -248,20 +248,27 @@ export function PostClassFeedbackWorkspace() {
       {invalidRange ? <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">The end date must be on or after the start date.</div> : null}
 
       <Tabs value={activeTab} onValueChange={(value) => { if (value) setActiveTab(value as WorkspaceTab); }} className="min-h-0 min-w-0 max-w-full flex-1">
-        <TabsList variant="line" className="mb-3 h-10 w-full max-w-full justify-start gap-4 overflow-x-auto border-b px-1">
-          <TabsTrigger value="operations" className="px-2.5"><ClipboardList />Operations</TabsTrigger>
-          <TabsTrigger value="analytics" className="px-2.5"><BarChart3 />Analytics</TabsTrigger>
-          {payload?.capabilities.reviewer || payload?.capabilities.finance ? (
-            <TabsTrigger value="deductions" className="px-2.5"><WalletCards />Deductions</TabsTrigger>
-          ) : null}
-          {payload?.capabilities.finance ? (
-            <TabsTrigger value="payouts" className="px-2.5"><Banknote />Payouts</TabsTrigger>
-          ) : null}
-          <TabsTrigger value="audit" className="px-2.5"><FileClock />Audit</TabsTrigger>
-          {payload?.capabilities.accessManager ? (
-            <TabsTrigger value="settings" className="px-2.5"><Settings />Settings</TabsTrigger>
-          ) : null}
-        </TabsList>
+        {/* The horizontal scroll lives on this wrapper, not on TabsList. On the list itself
+            `overflow-x-auto` also forces `overflow-y: auto`, and a horizontal scrollbar then eats
+            ~15px of the list's fixed height — the `h-[calc(100%-1px)]` triggers collapse and the
+            labels plus the `after:bottom-[-5px]` underline get sliced. `h-10!` is important because
+            the primitive's `group-data-horizontal/tabs:h-8` otherwise wins the specificity tie. */}
+        <div className="mb-3 max-w-full overflow-x-auto pb-1">
+          <TabsList variant="line" className="h-10! w-max min-w-full justify-start gap-4 border-b px-1">
+            <TabsTrigger value="operations" className="px-2.5"><ClipboardList />Operations</TabsTrigger>
+            <TabsTrigger value="analytics" className="px-2.5"><BarChart3 />Analytics</TabsTrigger>
+            {payload?.capabilities.reviewer || payload?.capabilities.finance ? (
+              <TabsTrigger value="deductions" className="px-2.5"><WalletCards />Deductions</TabsTrigger>
+            ) : null}
+            {payload?.capabilities.finance ? (
+              <TabsTrigger value="payouts" className="px-2.5"><Banknote />Payouts</TabsTrigger>
+            ) : null}
+            <TabsTrigger value="audit" className="px-2.5"><FileClock />Audit</TabsTrigger>
+            {payload?.capabilities.accessManager ? (
+              <TabsTrigger value="settings" className="px-2.5"><Settings />Settings</TabsTrigger>
+            ) : null}
+          </TabsList>
+        </div>
 
         {loading && !payload ? <LoadingSurface /> : error && !payload ? (
           <div className="rounded-xl border bg-card shadow-sm">
