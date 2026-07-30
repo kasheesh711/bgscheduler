@@ -105,6 +105,12 @@ The collector records safe source issues without feedback text. Authentication o
 
 Any missing or ambiguous required-field mapping trips a run-wide circuit breaker, closes the current enforcement window, changes Settings to `paused`, marks the mapping invalid, and prevents reminders or candidates. An access manager must repair the mapping, run a healthy reassessment in shadow mode, reconfirm the shadow review, and explicitly resume live enforcement. Sessions ending inside the resulting paused interval remain outside enforcement rather than being penalized retroactively.
 
+**Sessions deleted in Wise (REC-03).** Wise answers a detail fetch for a deleted session with HTTP 400 `Session not found!`. Such a session can never auto-resolve — resolution requires a successful observation, and its feedback event only stops being a candidate once a successful observation links it — so before this it re-entered the highest-priority candidate lane on every run indefinitely. Production accumulated 230 open issues from 121 deleted sessions, consuming roughly 30 of each run's 50 Wise calls.
+
+The deletion is proven by a `SessionDeletedEvent` in the `wise_activity_events` mirror, which the collector now consults. Every candidate lane declines to propose a session with that evidence, and a sweep at the top of each run resolves its open session-scoped issues (`session_not_found` and the `detail_retry` rows raised beside them) and marks any session row it holds `wise_deleted_at` + `eligible = false` + `eligibility_reason = 'deleted_in_wise'`. Deletion is recorded as a fact of its own rather than a `source_status` value: every `source_status <> 'ready'` reader treats its subject as blocking, so a `deleted` status would park those sessions in the payout coverage denominator permanently. `deleted_in_wise` is deliberately **not** in `KNOWN_INELIGIBLE_REASON_VALUES`, since that list feeds the one-terminal-row-per-run readmission lane and a deleted session has nothing to recover to.
+
+The event mirror only reaches back to 2026-05-27, so sessions that disappeared earlier have no evidence either way. They are not retired on a guess; the REC-02 grace window (7 days from first sighting) simply stops them being retried, and their issue rows stay `open` and visible in Data Health.
+
 ## Collection and reconciliation
 
 The scheduled collector runs at `13,43 * * * *` (UTC cron expression, every 30 minutes). A normal run:
@@ -443,6 +449,16 @@ The `/post-class-feedback` workspace has up to six views, with restricted views 
 Operations shows a **Submitted by** column and filter (`tutor` / `admin` / `auto` / `none`); Analytics adds **Tutor wrote**, **Admin rescued**, and **Auto-filled** counts per tutor, so a session rescued by an admin can never read as the tutor having done the work.
 
 A persistent “Setup required” banner remains until the mapping, role coverage, shadow review, and activation are complete. Live activation is blocked server-side until those pass; the effective time must be current or future and becomes immutable once recorded. Email relay configuration, test-email delivery, digest recipients, and tutor-email coverage were removed as activation gates when outbound email was parked.
+
+### What the shadow review actually checks
+
+`classifyPostClassShadowReviewEvidence` judges the newest sync run matching the current policy and mapping version and finishing after the mapping was last edited. It reports every condition, passed or not, so the blocking reason is a durable checklist rather than one undifferentiated sentence.
+
+**Absolute** — `globalSourceHealthy` and `mappingObservedHealthy` on the run (the latter is what actually proves the current mapping parsed a real Wise payload), zero open blocking **global** source issues queried live at gate time, and non-empty detail/session/assessment counts. Missing metadata fails closed; the remedy is one fresh shadow sync.
+
+**Acknowledgeable** — readability (`detailFetchedCount / candidateCount`) and resolvability (`readySessionCount / sessionCount`), both required at 80%. Below that an access manager may proceed only by echoing the exact server-computed count with a reason, both recorded in `post_class_config_audit_log`. This mirrors `assertPayoutRunPublishable`, which gates the actual movement of money the same way.
+
+The gate previously required `metadata.outcome === "success"`, i.e. that the run recorded no source issue of any kind. That conflated pipeline health with per-row data tidiness — uniquely, since every other money-adjacent gate filters to `scope = 'global'` — so a single session with an ambiguous tutor identity or one deleted in Wise blocked activation permanently. It also bought nothing: `evaluateSessionCompliance` already refuses to assess or produce a deduction candidate for any session whose `sourceStatus !== "ready"`. Correspondingly, a run is now `partial` only when a blocking global issue, form drift, or a widespread contract breach makes the whole run untrustworthy; `sourceIssueCount` still records every per-session issue honestly.
 
 ## Durable data model
 
