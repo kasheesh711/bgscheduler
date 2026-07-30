@@ -30,7 +30,7 @@ Phase: 12 (LINE Backlog Identity Recovery (IDENT-07)) — EXECUTING
 Plan: 5 of 5 (phase complete)
 Next: `/gsd-plan-phase 11` — create executable plans
 Status: Ready to execute
-Last activity: 2026-07-30 - Completed quick task 260730-fwu: Continuous payout accrual: write deductions at deadline instead of on publish
+Last activity: 2026-07-30 - Completed quick task 260730-j0c: Finalize pass targets oldest un-finalized payout run + stale-window alert
 
 Progress: [██████████] 97%
 
@@ -139,6 +139,7 @@ None blocking roadmap execution.
 | 260416-jrb | Add tutor name search to left search panel | 2026-04-16 | 5816d55 | [260416-jrb-add-tutor-name-search-to-left-search-pan](./quick/260416-jrb-add-tutor-name-search-to-left-search-pan/) |
 | 260416-klm | Polish tutor dropdown UX - idiot proof | 2026-04-16 | 5816d55 | [260416-klm-polish-tutor-dropdown-ux-make-it-idiot-p](./quick/260416-klm-polish-tutor-dropdown-ux-make-it-idiot-p/) |
 | 260730-fwu | Continuous payout accrual: write deductions at deadline instead of on publish | 2026-07-30 | 33ec5f2 | [260730-fwu-continuous-payout-accrual-write-deductio](./quick/260730-fwu-continuous-payout-accrual-write-deductio/) |
+| 260730-j0c | Finalize pass targets oldest un-finalized payout run + stale-window alert | 2026-07-30 | 9efe2c1 | [260730-j0c-finalize-pass-targets-oldest-un-finalize](./quick/260730-j0c-finalize-pass-targets-oldest-un-finalize/) |
 | Phase 10-vpol-01-view-transitions P01 | 216 | 2 tasks | 2 files |
 | Phase 10-vpol-01-view-transitions P02 | 4min | 2 tasks | 2 files |
 | Phase 11 P03 | 31515093 | 2 tasks | 3 files |
