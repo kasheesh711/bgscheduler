@@ -682,7 +682,13 @@ describe("post-class feedback sync planning", () => {
     }, { now: new Date("2026-07-24T00:00:00.000Z") });
 
     expect(result.discoveredCount).toBe(6);
-    expect(result.status).toBe("partial");
+    // One session had an ambiguous tutor identity. That is a fact about that
+    // row — `evaluateSessionCompliance` already refuses to assess or deduct
+    // against it — not evidence the run cannot be trusted, so the run stays
+    // "success" while `sourceIssueCount` still records it. This assertion read
+    // "partial" until the activation gate stopped conflating the two.
+    expect(result.status).toBe("success");
+    expect(result.sourceIssueCount).toBeGreaterThan(0);
     expect(result.detailFetchedCount).toBe(6);
     expect(observations).toHaveLength(6);
     expect(observations.every((observation) => observation.session.meetingStatus === "ENDED"))
@@ -791,11 +797,16 @@ describe("post-class feedback sync planning", () => {
     }, { now: new Date("2026-07-21T00:00:00.000Z") });
 
     expect(result).toMatchObject({
-      status: "partial",
+      // 40 of 50 candidates failed their detail fetch, all session-scoped. The
+      // run itself is still globally healthy, so it reports "success" and the
+      // shortfall shows up as `sourceIssueCount` — and as a failed readability
+      // rate at the activation gate, which is where a 20% read rate belongs.
+      status: "success",
       candidateCount: 50,
       detailFetchedCount: 10,
       sessionSavedCount: 10,
     });
+    expect(result.sourceIssueCount).toBeGreaterThan(0);
     expect(detailSessionIds.filter((id) => id.startsWith("event-failure-"))).toHaveLength(40);
     expect(detailSessionIds.filter((id) => id.startsWith("rolling-live-"))).toHaveLength(10);
     expect(observations).toHaveLength(10);
@@ -1292,11 +1303,13 @@ describe("post-class feedback sync planning", () => {
 
     expect(detailCalls).toBe(1);
     expect(result).toMatchObject({
-      status: "partial",
+      // A single 404 detail is session-scoped, so the run stays "success".
+      status: "success",
       discoveredCount: 0,
       candidateCount: 1,
       checkpoint: { pendingCount: 1, selectedCount: 1, hasMore: false },
     });
+    expect(result.sourceIssueCount).toBeGreaterThan(0);
     expect(markedUnavailable).toBe(true);
     expect(issues).toContainEqual(expect.objectContaining({
       fingerprint: "session_not_found:wise-omitted:404",

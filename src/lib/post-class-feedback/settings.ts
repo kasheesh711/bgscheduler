@@ -353,11 +353,24 @@ export async function updatePostClassTutorPrimaryEmail(
   });
 }
 
+/**
+ * `evidence` records what the confirming human was actually shown. When the
+ * gate passed on an acknowledgement rather than cleanly, the audit row is the
+ * only durable statement of which count they accepted and why — the settings
+ * row keeps just a timestamp.
+ */
+export interface PostClassShadowReviewEvidence {
+  acknowledgedSessionIssues: number | null;
+  reason: string | null;
+  conditions: Array<{ key: string; passed: boolean }>;
+}
+
 export async function markPostClassShadowReviewed(
   actorEmail: string,
   db: Database = getDb(),
   expectedVersion?: number,
   evidenceSyncRunId?: string,
+  evidence?: PostClassShadowReviewEvidence,
 ) {
   return withPostClassTransaction(db, async (tx) => {
     const [settings] = await tx.select().from(schema.postClassSettings).limit(1);
@@ -387,6 +400,9 @@ export async function markPostClassShadowReviewed(
       afterValue: {
         shadowReviewedAt: now.toISOString(),
         evidenceSyncRunId: evidenceSyncRunId ?? null,
+        acknowledgedSessionIssues: evidence?.acknowledgedSessionIssues ?? null,
+        acknowledgementReason: evidence?.reason ?? null,
+        conditions: evidence?.conditions ?? null,
       },
     });
     return updated;
