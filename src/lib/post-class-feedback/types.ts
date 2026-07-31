@@ -298,6 +298,14 @@ export interface PostClassSessionObservation {
   tutor: CanonicalTutorResolution;
   eligibility: SessionEligibilityResult;
   sourceStatus: SourceStatus;
+  /**
+   * True only when `sourceStatus` was forced to 'unavailable' by the run-wide
+   * fail-closed demotion (a blocking global source issue), not by a per-session
+   * verdict. On this path saveObservation stashes the prior source_status into
+   * `source_status_before` (keep-first), so completeSync's REC-01 bulk restore
+   * heals the row on the next healthy run. Absent/false for every other status.
+   */
+  globalSourceDemotion?: boolean;
   assessment: SessionComplianceAssessment | null;
   enforcementMode: EnforcementMode;
   events: FeedbackEventEvidence[];

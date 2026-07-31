@@ -24,6 +24,7 @@ import {
   PostClassFeedbackSyncSourceFenceError,
 } from "@/lib/post-class-feedback/repository";
 import type { Database } from "@/lib/db";
+import type { PostClassSessionObservation } from "@/lib/post-class-feedback/types";
 import * as schema from "@/lib/db/schema";
 
 let handle: Awaited<ReturnType<typeof startTestDb>>;
@@ -104,6 +105,86 @@ function globalIssue(runId: string, fingerprint: string) {
     fingerprint,
     message: "The Wise session-detail response no longer matches the expected contract.",
     observedAt: new Date("2026-07-04T03:00:00.000Z"),
+  };
+}
+
+async function seedReadyEligible(db: Database, id: string): Promise<void> {
+  const at = new Date("2026-07-01T03:00:00.000Z");
+  await db.insert(schema.postClassSessions).values({
+    wiseSessionId: id,
+    wiseClassId: "class-1",
+    scheduledStartAt: at,
+    scheduledEndAt: at,
+    deadlineAt: at,
+    finalStatus: "ENDED",
+    eligible: true,
+    sourceStatus: "ready",
+  });
+}
+
+/**
+ * The minimal observation `syncPostClassFeedback` hands to saveObservation on
+ * the run-wide demotion path: an eligible session forced to 'unavailable' with
+ * `globalSourceDemotion` set. Versions default to 1/1/1 to match the empty
+ * settings snapshot the source-write fence reads.
+ */
+function globalDemotionObservation(id: string, opts?: {
+  sourceStatus?: SourceStatus;
+  globalSourceDemotion?: boolean;
+}): PostClassSessionObservation {
+  const at = new Date("2026-07-04T03:00:00.000Z");
+  return {
+    settingsVersion: 1,
+    policyVersion: 1,
+    mappingVersion: 1,
+    candidate: {
+      sessionId: id,
+      classId: "class-1",
+      reason: "incomplete_recheck",
+      scheduledStartAt: at,
+      scheduledEndAt: at,
+    },
+    session: {
+      sessionId: id,
+      classId: "class-1",
+      className: "Math",
+      subject: "Math",
+      scheduledStartAt: at,
+      scheduledEndAt: at,
+      meetingStatus: "ENDED",
+      classType: null,
+      sessionType: null,
+      attendanceStatus: null,
+      submissionSessionStatuses: [],
+      complimentaryOrTrial: null,
+      creditsConsumed: 1,
+      participants: [],
+      participantsAuthoritative: false,
+      questions: [],
+      mapping: {
+        status: "ready",
+        byField: {},
+        missingRequiredFields: [],
+        ambiguousFields: [],
+        unmappedQuestionIds: [],
+        reason: null,
+      },
+      feedbackVersions: [],
+    },
+    feedbackVersionHistory: [],
+    tutor: {
+      status: "resolved",
+      canonicalKey: "kevin",
+      displayName: "Kevin",
+      wiseTeacherUserId: "teacher-1",
+    },
+    eligibility: { status: "eligible", eligible: true, reason: "ended_positive_credits" },
+    sourceStatus: opts?.sourceStatus ?? "unavailable",
+    globalSourceDemotion: opts?.globalSourceDemotion ?? true,
+    assessment: null,
+    enforcementMode: "shadow",
+    events: [],
+    observedAt: at,
   };
 }
 
@@ -323,5 +404,61 @@ describe("REC-01 run-wide source demotion and restore", () => {
     expect(restored).toHaveLength(200);
     expect(restored.every((row) => row.sourceStatus === "ready")).toBe(true);
     expect(restored.every((row) => row.sourceStatusBefore === null)).toBe(true);
+  });
+});
+
+describe("REC-01 saveObservation run-wide demotion capture", () => {
+  it("remembers the prior source_status when the demotion is written through saveObservation", async () => {
+    const repository = createDrizzlePostClassFeedbackRepository(appDb());
+    await seedReadyEligible(appDb(), "g-1");
+    const runId = await startRun(appDb());
+
+    await repository.saveObservation(runId, globalDemotionObservation("g-1"));
+
+    // Without capturing source_status_before here, completeSync's bulk restore
+    // (keyed on source_status_before IS NOT NULL) can never heal a row the
+    // run-wide demotion reached through saveObservation — the production stall.
+    expect(await statuses(appDb())).toMatchObject({ "g-1": ["unavailable", "ready"] });
+  });
+
+  it("keeps the first remembered status if a later demotion re-saves the same row", async () => {
+    const repository = createDrizzlePostClassFeedbackRepository(appDb());
+    await seedReadyEligible(appDb(), "g-1");
+    const runId = await startRun(appDb());
+
+    await repository.saveObservation(runId, globalDemotionObservation("g-1"));
+    await repository.saveObservation(runId, globalDemotionObservation("g-1"));
+
+    // Keep-first: the second demotion must not overwrite the remembered 'ready'
+    // with the 'unavailable' it is itself writing.
+    expect(await statuses(appDb())).toMatchObject({ "g-1": ["unavailable", "ready"] });
+  });
+
+  it("a healthy sync restores a row the demotion reached through saveObservation", async () => {
+    const repository = createDrizzlePostClassFeedbackRepository(appDb());
+    await seedReadyEligible(appDb(), "g-1");
+    const runId = await startRun(appDb());
+    await repository.saveObservation(runId, globalDemotionObservation("g-1"));
+
+    await repository.completeSync(completedRun(runId, true));
+
+    expect(await statuses(appDb())).toMatchObject({ "g-1": ["ready", null] });
+  });
+
+  it("a per-session 'unavailable' observation still supersedes, remembering nothing", async () => {
+    const repository = createDrizzlePostClassFeedbackRepository(appDb());
+    await seedReadyEligible(appDb(), "g-1");
+    const runId = await startRun(appDb());
+
+    // Not a run-wide demotion but a real first-hand verdict about this row (e.g.
+    // ambiguous billing evidence). REC-01 must NOT remember or later restore it —
+    // resurrecting the pre-demotion 'ready' would be the stale projection the
+    // fail-closed rule exists to prevent.
+    await repository.saveObservation(runId, globalDemotionObservation("g-1", {
+      sourceStatus: "unavailable",
+      globalSourceDemotion: false,
+    }));
+
+    expect(await statuses(appDb())).toMatchObject({ "g-1": ["unavailable", null] });
   });
 });

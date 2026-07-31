@@ -1470,7 +1470,9 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         // holds even when the observation itself is 'unavailable': the row was
         // just looked at, and resurrecting a pre-demotion 'ready' without a
         // fresh observation would be exactly the stale projection the
-        // fail-closed rule exists to prevent.
+        // fail-closed rule exists to prevent. On insert there is no prior row at
+        // all, so a run-wide demotion of a first observation has nothing to
+        // remember — the remember-on-demotion case is the onConflict update below.
         sourceStatusBefore: null,
         contentStatus: assessment?.contentStatus ?? latestContent?.contentStatus ?? "missing",
         timingStatus: assessment?.timingStatus ?? "not_due",
@@ -1497,7 +1499,18 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
           eligible: observation.eligibility.eligible,
           eligibilityReason: observation.eligibility.reason,
           sourceStatus: observation.sourceStatus,
-          sourceStatusBefore: null,
+          // REC-01: a genuine first-hand observation supersedes any run-wide
+          // demotion and discards the remembered status (null) — resurrecting a
+          // pre-demotion 'ready' without fresh proof is the exact stale
+          // projection the fail-closed rule prevents. The exception is when THIS
+          // write is itself the run-wide fail-closed demotion
+          // (`globalSourceDemotion`): that is not a verdict about this row, so it
+          // remembers the prior source_status — keep-first, mirroring the bulk
+          // demotion's coalesce in `recordSourceIssue` — so `completeSync`'s
+          // restore heals the row instead of it being stuck 'unavailable' forever.
+          sourceStatusBefore: observation.globalSourceDemotion
+            ? sql`coalesce(${schema.postClassSessions.sourceStatusBefore}, ${schema.postClassSessions.sourceStatus})`
+            : null,
           contentStatus: assessment?.contentStatus ?? latestContent?.contentStatus ?? "missing",
           timingStatus: assessment?.timingStatus ?? "not_due",
           enforcementMode: effectiveMode,

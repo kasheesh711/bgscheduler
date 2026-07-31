@@ -859,10 +859,23 @@ export async function syncPostClassFeedback(
         sessionWithCurrentProjection.scheduledEndAt,
       );
       let sourceStatus: "ready" | "form_drift" | "identity_review" | "unavailable" = "ready";
-      if (firstFormDrift || parsed.mapping.status === "form_drift") sourceStatus = "form_drift";
-      else if (blockingGlobalSourceIssue) sourceStatus = "unavailable";
-      else if (tutor.status === "ambiguous") sourceStatus = "identity_review";
-      else if (eligibility.status === "ambiguous") sourceStatus = "unavailable";
+      // Whether the run-wide fail-closed demotion — not a per-session verdict —
+      // is what forced this row to 'unavailable'. Only on this path does
+      // saveObservation remember the prior source_status (source_status_before),
+      // so completeSync's REC-01 restore can heal the row once source health is
+      // proven again. A per-session 'unavailable' (ambiguous eligibility) is a
+      // real first-hand observation and must never be resurrected to a stale state.
+      let globalSourceDemotion = false;
+      if (firstFormDrift || parsed.mapping.status === "form_drift") {
+        sourceStatus = "form_drift";
+      } else if (blockingGlobalSourceIssue) {
+        sourceStatus = "unavailable";
+        globalSourceDemotion = true;
+      } else if (tutor.status === "ambiguous") {
+        sourceStatus = "identity_review";
+      } else if (eligibility.status === "ambiguous") {
+        sourceStatus = "unavailable";
+      }
       // Resolvability, for the activation gate. Deliberately not derived from
       // `sourceIssueCount`, which double-counts a failed fetch (the issue plus
       // its durable retry row) and folds in run-wide escalations.
@@ -897,6 +910,7 @@ export async function syncPostClassFeedback(
         tutor,
         eligibility,
         sourceStatus,
+        globalSourceDemotion,
         assessment,
         enforcementMode: enforcement.enforcementMode,
         events,
