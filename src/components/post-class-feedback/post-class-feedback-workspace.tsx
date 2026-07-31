@@ -248,7 +248,14 @@ export function PostClassFeedbackWorkspace() {
       {invalidRange ? <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">The end date must be on or after the start date.</div> : null}
 
       <Tabs value={activeTab} onValueChange={(value) => { if (value) setActiveTab(value as WorkspaceTab); }} className="min-h-0 min-w-0 max-w-full flex-1">
-        <TabsList variant="line" className="mb-3 h-10 w-full max-w-full justify-start gap-4 overflow-x-auto border-b px-1">
+        {/* h-10! (important) is required: the shared primitive sets `group-data-horizontal/tabs:h-8`
+            via a `:where([data-orientation=horizontal])` variant that ties `.h-10` on specificity and
+            wins on source order, pinning the list to 32px. No `overflow-*` on the list: `overflow-x-*`
+            forces `overflow-y` to `auto`, whose clip both slices the labels and hides the active-tab
+            `after:bottom-[-5px]` underline (and, as a scroll container, collapses the row to 0 inside
+            this page's bounded flex-column chain). With a definite height and visible overflow the row
+            renders full-height; if it is wider than the viewport the workspace scrolls horizontally. */}
+        <TabsList variant="line" className="mb-3 h-10! w-full max-w-full justify-start gap-4 border-b px-1">
           <TabsTrigger value="operations" className="px-2.5"><ClipboardList />Operations</TabsTrigger>
           <TabsTrigger value="analytics" className="px-2.5"><BarChart3 />Analytics</TabsTrigger>
           {payload?.capabilities.reviewer || payload?.capabilities.finance ? (
