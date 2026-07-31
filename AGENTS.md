@@ -188,7 +188,7 @@ Production Wise snapshot sync is live (`*/30 * * * *`) with a single-flight guar
 ## Deployment
 - **Production**: https://bgscheduler.vercel.app
 - **Repo**: https://github.com/kasheesh711/bgscheduler
-- **Deploy**: `npx vercel --prod` or push to `main` (once Git integration triggers)
+- **Deploy**: push to `main` — Vercel Git integration auto-deploys production. Guarded manual path (only from the Vercel-linked worktree, on `main`): `npm run deploy:prod` (runs `verify:release` + `scripts/assert-production-deploy-ready.mjs`, then `vercel --prod`). Do **not** run a bare `npx vercel --prod` from an unlinked worktree — it creates a stray Vercel project instead of deploying.
 - **Database**: Neon Postgres `ep-calm-mud-a1d7pmsi.ap-southeast-1.aws.neon.tech`
 
 ## Environment Variables (9 required)

@@ -33,8 +33,14 @@ Calendar date picker deployed 2026-04-10: click the week label to open a month-g
 ## Running Commands
 
 ```bash
-# Deploy to production
-npx vercel --prod
+# Deploy to production — push to main; Vercel Git integration auto-deploys.
+# The bgscheduler Vercel project is linked ONLY to the /Users/.../Scheduling worktree.
+# Do NOT run a bare `npx vercel --prod`: from any other (unlinked) worktree it
+# silently creates a new stray Vercel project instead of deploying.
+# Guarded manual path (from the linked worktree, on main): npm run deploy:prod
+#   -> runs verify:release, then scripts/assert-production-deploy-ready.mjs
+#      (refuses non-main branch, dirty tree, or HEAD != origin/main), then vercel --prod.
+git push origin <branch>:main
 
 # Run tests
 npm test
