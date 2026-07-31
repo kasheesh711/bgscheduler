@@ -91,6 +91,25 @@ async function queuedSessionIds(limit = 50): Promise<string[]> {
   return candidates.map((candidate) => candidate.sessionId);
 }
 
+async function seedEligibleSession(input: {
+  wiseSessionId: string;
+  sourceStatus: "ready" | "unavailable";
+  updatedAt: Date;
+}): Promise<void> {
+  const at = new Date("2026-07-20T09:00:00.000Z");
+  await handle.db.insert(schema.postClassSessions).values({
+    wiseSessionId: input.wiseSessionId,
+    wiseClassId: "class-1",
+    scheduledStartAt: at,
+    scheduledEndAt: at,
+    deadlineAt: at,
+    finalStatus: "ENDED",
+    eligible: true,
+    sourceStatus: input.sourceStatus,
+    updatedAt: input.updatedAt,
+  });
+}
+
 describe("REC-02 recheck queue and missing sessions", () => {
   it("still retries a recently missing session", async () => {
     const runId = await startRun();
@@ -180,5 +199,37 @@ describe("REC-02 recheck queue and missing sessions", () => {
     const queued = await queuedSessionIds();
     expect(queued).toContain("recoverable");
     expect(queued.some((id) => id.startsWith("dead-"))).toBe(false);
+  });
+});
+
+describe("REC-04 non-ready-first recheck ordering", () => {
+  it("admits the demoted backlog into the capped slice even when the ready rows are older", async () => {
+    // Reproduces the production starvation: a run-wide fail-closed demotion left
+    // ~2.5k eligible rows 'unavailable', and because the recheck lane ordered
+    // purely by updated_at the older already-'ready' rows filled every detailCap
+    // slice while the demoted backlog was never re-observed. Here the ready rows
+    // PRECEDE the unavailable ones in updated_at, so an updated_at-only order
+    // buries the backlog — the lane must surface the non-ready rows first.
+    const olderReady = new Date("2026-07-30T08:00:00.000Z");
+    const newerUnavailable = new Date("2026-07-30T08:26:00.000Z");
+    for (let index = 0; index < 3; index += 1) {
+      await seedEligibleSession({
+        wiseSessionId: `ready-${index}`,
+        sourceStatus: "ready",
+        updatedAt: olderReady,
+      });
+      await seedEligibleSession({
+        wiseSessionId: `unavail-${index}`,
+        sourceStatus: "unavailable",
+        updatedAt: newerUnavailable,
+      });
+    }
+
+    // Pool of six eligible rows against a cap of three: only half make the slice.
+    const queued = await queuedSessionIds(3);
+
+    expect(queued).toHaveLength(3);
+    expect(queued.every((id) => id.startsWith("unavail-"))).toBe(true);
+    expect(queued.some((id) => id.startsWith("ready-"))).toBe(false);
   });
 });

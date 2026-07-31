@@ -975,6 +975,14 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
         notDeletedInWise(schema.postClassSessions.wiseSessionId),
         notAbandonedMissingSession(schema.postClassSessions.wiseSessionId),
       )).orderBy(
+        // REC-04: not-yet-ready rows sort first. A run-wide fail-closed demotion
+        // resets every eligible row's `updated_at` to the same instant, so an
+        // `updated_at`-only order lets the already-`ready` rows fill the detailCap
+        // slice and the demoted `unavailable` backlog is never re-observed —
+        // permanent non-convergence. `source_status = 'ready'` is false for the
+        // non-ready rows, and false sorts before true, so the backlog enters the
+        // slice and each run drains detailCap of it. Ties keep the prior order.
+        asc(sql`${schema.postClassSessions.sourceStatus} = 'ready'`),
         asc(schema.postClassSessions.updatedAt),
         asc(schema.postClassSessions.scheduledEndAt),
       ).limit(boundedLimit),
