@@ -13,6 +13,14 @@ const envSchema = z.object({
   LINE_CHANNEL_SECRET: z.string().min(1).optional(),
   LINE_CHANNEL_ACCESS_TOKEN: z.string().min(1).optional(),
   ENABLE_LINE_SCHEDULER: z.string().optional(),
+  // Comma-separated LINE user IDs allowed to drive the schedule bot. Unset or
+  // empty disables the bot entirely — it is fail-closed by construction, so a
+  // parent messaging the OA can never reach it.
+  LINE_SCHEDULE_BOT_ADMIN_IDS: z.string().optional(),
+  // Days a parent schedule link stays live. Defaults to 30.
+  STUDENT_SCHEDULE_LINK_TTL_DAYS: z.coerce.number().int().positive().optional(),
+  // Absolute origin used to build parent links; previews link to themselves.
+  APP_BASE_URL: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

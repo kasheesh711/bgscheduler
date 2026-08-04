@@ -25,6 +25,7 @@ describe("navigation tool registry", () => {
     expect(sections[0].tools.map((tool) => tool.href)).toContain("/post-class-feedback");
     expect(sections[1].tools.map((tool) => tool.href)).toEqual([
       "/progress-tests",
+      "/student-schedule",
       "/learning-plans",
       "/student-promotions",
       "/admissions",

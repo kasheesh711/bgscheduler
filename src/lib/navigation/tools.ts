@@ -17,6 +17,7 @@ export type NavToolId =
   | "post-class-feedback"
   | "scheduler-metrics"
   | "progress-tests"
+  | "student-schedule"
   | "learning-plans"
   | "student-promotions"
   | "admissions"
@@ -164,6 +165,13 @@ export const NAV_TOOLS: NavTool[] = [
     description: "Track due, scheduled, and completed progress-test cycles.",
     section: "student-lifecycle",
     badgeKey: "progressTests",
+  },
+  {
+    id: "student-schedule",
+    href: "/student-schedule",
+    label: "Student Schedule",
+    description: "Pull a student's monthly calendar to print or send to a parent.",
+    section: "student-lifecycle",
   },
   {
     id: "learning-plans",

@@ -8,6 +8,11 @@ function isPublicRoute(pathname: string) {
     pathname === "/api/search/assistant" ||
     pathname === "/api/classrooms/floor-plan-map" ||
     pathname === "/api/line/webhook" ||
+    // Parent schedule links are opened from a LINE message, so they carry no
+    // session. Access is the capability token in the path and nothing else —
+    // see src/lib/student-schedule/links.ts. Note the trailing slash: it keeps
+    // the authenticated /student-schedule admin page out of this allowlist.
+    pathname.startsWith("/schedule/") ||
     pathname === "/api/line/contacts/oa-resolver/worklist" ||
     /^\/api\/line\/contacts\/oa-resolver\/runs\/[^/]+\/rows$/.test(pathname) ||
     pathname.startsWith("/api/internal/")

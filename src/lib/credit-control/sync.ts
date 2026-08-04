@@ -13,6 +13,7 @@ import {
 import { aggregateStudentRemaining, computeChurnTransitions } from "@/lib/credit-control/churn";
 import { buildDashboardStudentKey, buildStudentPackageKey, normalizeText } from "@/lib/credit-control/helpers";
 import {
+  creditSessionTeacher,
   durationMsToMinutes,
   fetchCreditSessions,
   fetchCreditStudents,
@@ -427,6 +428,7 @@ async function buildSessionRows(
   function addSessions(sessions: WiseCreditSession[], kind: "past" | "future") {
     for (const session of sessions) {
       const durationMinutes = durationMsToMinutes(session.duration);
+      const teacher = creditSessionTeacher(session);
       for (const studentId of session.students) {
         const pair = pairsByKey.get(`${session.classId._id}|${studentId}`);
         if (!pair) continue;
@@ -449,6 +451,9 @@ async function buildSessionRows(
           durationMinutes,
           meetingStatus: session.meetingStatus.toUpperCase(),
           sessionKind: kind,
+          wiseTeacherUserId: teacher.wiseTeacherUserId,
+          wiseTeacherId: teacher.wiseTeacherId,
+          teacherName: teacher.teacherName,
           teacherFeedback: kind === "past" ? feedbackBySessionId.get(session._id) ?? "" : null,
           creditApplied: kind === "past"
             ? positiveCreditByPairSession.get(`${pair.wiseClassId}|${pair.wiseStudentId}|${session._id}`) ?? 0

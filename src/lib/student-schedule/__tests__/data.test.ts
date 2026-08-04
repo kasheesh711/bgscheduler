@@ -1,0 +1,156 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  bangkokMonthInstantWindow,
+  buildStudentSchedulePayload,
+  parseStudentDisplay,
+  type StudentScheduleRow,
+} from "@/lib/student-schedule/data";
+import { TEACHER_TBC, type StudentScheduleStudent } from "@/lib/student-schedule/types";
+
+const STUDENT: StudentScheduleStudent = {
+  studentKey: "aadhiya srisethi::nok srisethi",
+  wiseStudentId: "stu_1",
+  studentName: "Aadhiya (Aadhu.Sr) Srisethi",
+  parentName: "Nok Srisethi",
+  code: "Aadhu.Sr",
+  shortName: "Aadhu",
+};
+
+function row(overrides: Partial<StudentScheduleRow> = {}): StudentScheduleRow {
+  return {
+    wiseSessionId: "ses_1",
+    studentKey: STUDENT.studentKey,
+    wiseStudentId: "stu_1",
+    studentName: STUDENT.studentName,
+    parentName: STUDENT.parentName,
+    subject: "Mathematics",
+    packageName: "Maths 20-pack",
+    // 10:00 Bangkok on 4 Aug 2026.
+    scheduledStartTime: new Date("2026-08-04T03:00:00Z"),
+    scheduledEndTime: new Date("2026-08-04T04:30:00Z"),
+    durationMinutes: 90,
+    meetingStatus: "SCHEDULED",
+    teacherName: "Kru Nok",
+    ...overrides,
+  };
+}
+
+function build(rows: StudentScheduleRow[], monthKey = "2026-08") {
+  return buildStudentSchedulePayload({
+    rows,
+    student: STUDENT,
+    monthKey,
+    generatedAt: new Date("2026-08-01T00:00:00Z"),
+  });
+}
+
+describe("buildStudentSchedulePayload", () => {
+  it("formats a session in Bangkok time", () => {
+    const payload = build([row()]);
+    expect(payload.sessions).toHaveLength(1);
+    expect(payload.sessions[0]).toMatchObject({
+      dateKey: "2026-08-04",
+      startLabel: "10:00",
+      endLabel: "11:30",
+      subject: "Mathematics",
+      teacherName: "Kru Nok",
+    });
+    expect(payload.monthLabel).toBe("August 2026");
+  });
+
+  it("omits cancelled sessions in both Wise spellings", () => {
+    const payload = build([
+      row({ wiseSessionId: "a", meetingStatus: "CANCELLED" }),
+      row({ wiseSessionId: "b", meetingStatus: "CANCELED" }),
+      row({ wiseSessionId: "c", meetingStatus: "cancelled" }),
+      row({ wiseSessionId: "d", meetingStatus: "ENDED" }),
+    ]);
+    expect(payload.sessions.map((session) => session.wiseSessionId)).toEqual(["d"]);
+  });
+
+  it("renders TEACHER_TBC rather than dropping a teacherless session", () => {
+    const payload = build([
+      row({ wiseSessionId: "a", teacherName: null }),
+      row({ wiseSessionId: "b", teacherName: "   " }),
+    ]);
+    expect(payload.sessions).toHaveLength(2);
+    expect(payload.sessions.every((s) => s.teacherName === TEACHER_TBC)).toBe(true);
+  });
+
+  it("shows a class once when a student holds two package rows for it", () => {
+    const payload = build([
+      row({ wiseSessionId: "dup", packageName: "Maths 20-pack" }),
+      row({ wiseSessionId: "dup", packageName: "Maths top-up" }),
+    ]);
+    expect(payload.sessions).toHaveLength(1);
+  });
+
+  it("sorts chronologically regardless of input order", () => {
+    const payload = build([
+      row({ wiseSessionId: "late", scheduledStartTime: new Date("2026-08-20T03:00:00Z") }),
+      row({ wiseSessionId: "early", scheduledStartTime: new Date("2026-08-02T03:00:00Z") }),
+    ]);
+    expect(payload.sessions.map((s) => s.wiseSessionId)).toEqual(["early", "late"]);
+  });
+
+  it("falls back to the package name when Wise gives no subject", () => {
+    const payload = build([row({ subject: "  " })]);
+    expect(payload.sessions[0].subject).toBe("Maths 20-pack");
+  });
+
+  it("tolerates a missing end time", () => {
+    const payload = build([row({ scheduledEndTime: null })]);
+    expect(payload.sessions[0].endLabel).toBe("");
+    expect(payload.sessions[0].endTime).toBeNull();
+  });
+
+  it("returns an empty session list for a month with no classes", () => {
+    const payload = build([]);
+    expect(payload.sessions).toEqual([]);
+    expect(payload.monthKey).toBe("2026-08");
+  });
+});
+
+describe("bangkokMonthInstantWindow", () => {
+  it("spans the Bangkok month, not the UTC month", () => {
+    const { start, end } = bangkokMonthInstantWindow("2026-08");
+    // Bangkok is UTC+7: August starts at 17:00 UTC on 31 July.
+    expect(start.toISOString()).toBe("2026-07-31T17:00:00.000Z");
+    expect(end.toISOString()).toBe("2026-08-31T17:00:00.000Z");
+  });
+
+  it("puts a late-UTC session on the next Bangkok day inside the right month", () => {
+    // 2026-07-31T18:00Z is 2026-08-01 01:00 in Bangkok — August, not July.
+    const instant = new Date("2026-07-31T18:00:00Z");
+    const august = bangkokMonthInstantWindow("2026-08");
+    const july = bangkokMonthInstantWindow("2026-07");
+
+    expect(instant >= august.start && instant < august.end).toBe(true);
+    expect(instant >= july.start && instant < july.end).toBe(false);
+
+    const payload = build([row({ scheduledStartTime: instant })]);
+    expect(payload.sessions[0].dateKey).toBe("2026-08-01");
+    expect(payload.sessions[0].startLabel).toBe("01:00");
+  });
+});
+
+describe("parseStudentDisplay", () => {
+  it("extracts the bracketed code preserving its casing", () => {
+    expect(parseStudentDisplay("Aadhiya (Aadhu.Sr) Srisethi")).toEqual({
+      code: "Aadhu.Sr",
+      shortName: "Aadhu",
+    });
+  });
+
+  it("drops the family suffix for the short name", () => {
+    expect(parseStudentDisplay("Bee (Bee.Sr)").shortName).toBe("Bee");
+  });
+
+  it("falls back to the first word when there is no code", () => {
+    expect(parseStudentDisplay("Somchai Jaidee")).toEqual({
+      code: null,
+      shortName: "Somchai",
+    });
+  });
+});

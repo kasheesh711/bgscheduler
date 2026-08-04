@@ -35,117 +35,45 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { todayBangkok } from "@/lib/room-capacity/dates";
+import {
+  CALENDAR_DAY_HEADERS,
+  addMonths,
+  buildMonthGrid,
+  formatMonthLabel,
+  getMondayKey,
+  getMonthKey,
+  getMonthWindow,
+  isMonthKey,
+  type CalendarGridCell,
+} from "@/lib/calendar/month-grid";
 import type { CalendarItem } from "@/lib/admissions/calendar";
 
 // ── Pure helpers (exported for tests) ───────────────────────────────────
 
-const MONTH_KEY_PATTERN = /^\d{4}-\d{2}$/;
+// Grid math lives in @/lib/calendar/month-grid so Server Components and the
+// print/public schedule routes can share it without importing this "use client"
+// module. Re-exported below so existing importers and tests are unaffected.
+export {
+  CALENDAR_DAY_HEADERS,
+  addMonths,
+  buildMonthGrid,
+  formatMonthLabel,
+  getMondayKey,
+  getMonthKey,
+  getMonthWindow,
+  type CalendarGridCell,
+};
+
 const DATE_KEY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
-
-const MONTH_NAMES = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
-/** Day-of-week headers, Monday-start (mirrors WeekCalendar). */
-export const CALENDAR_DAY_HEADERS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"] as const;
 
 /** Max deadline chips shown per day cell before the "+N more" overflow. */
 export const MAX_VISIBLE_DAY_CHIPS = 2;
-
-/** One cell of the 6×7 month grid. */
-export interface CalendarGridCell {
-  /** "YYYY-MM-DD" date key of the cell. */
-  dateKey: string;
-  /** True when the cell belongs to the viewed month (chips render only here). */
-  inMonth: boolean;
-}
 
 /** One week bucket of the mobile list fallback. */
 export interface CalendarWeekGroup {
   /** Monday of the week, "YYYY-MM-DD". */
   weekStart: string;
   items: CalendarItem[];
-}
-
-function toUtcDate(dateKey: string): Date {
-  const [year, month, day] = dateKey.split("-").map(Number);
-  return new Date(Date.UTC(year, month - 1, day));
-}
-
-function toDateKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-/** "YYYY-MM-DD" → "YYYY-MM" month key; non-dates pass through unchanged. */
-export function getMonthKey(dateKey: string): string {
-  return DATE_KEY_PATTERN.test(dateKey) ? dateKey.slice(0, 7) : dateKey;
-}
-
-/**
- * Adds `delta` months to a "YYYY-MM" key (delta may be negative; crosses year
- * boundaries). Throws on a malformed key — never guesses a month.
- */
-export function addMonths(monthKey: string, delta: number): string {
-  if (!MONTH_KEY_PATTERN.test(monthKey)) {
-    throw new Error(`Invalid month key: expected "YYYY-MM", got "${monthKey}"`);
-  }
-  const [year, month] = monthKey.split("-").map(Number);
-  const total = year * 12 + (month - 1) + delta;
-  const nextYear = Math.floor(total / 12);
-  const nextMonth = (total % 12 + 12) % 12 + 1;
-  return `${nextYear}-${String(nextMonth).padStart(2, "0")}`;
-}
-
-/** "YYYY-MM" → "July 2026"; malformed keys pass through unchanged. */
-export function formatMonthLabel(monthKey: string): string {
-  if (!MONTH_KEY_PATTERN.test(monthKey)) return monthKey;
-  const [year, month] = monthKey.split("-").map(Number);
-  const name = MONTH_NAMES[month - 1];
-  return name ? `${name} ${year}` : monthKey;
-}
-
-/**
- * Inclusive first..last-day window for a "YYYY-MM" month key — the exact
- * `from`/`to` pair sent to the calendar API (leap years handled by Date.UTC
- * day-0 arithmetic).
- */
-export function getMonthWindow(monthKey: string): { from: string; to: string } {
-  if (!MONTH_KEY_PATTERN.test(monthKey)) {
-    throw new Error(`Invalid month key: expected "YYYY-MM", got "${monthKey}"`);
-  }
-  const [year, month] = monthKey.split("-").map(Number);
-  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  return {
-    from: `${monthKey}-01`,
-    to: `${monthKey}-${String(lastDay).padStart(2, "0")}`,
-  };
-}
-
-/** Monday ("YYYY-MM-DD") of the week containing `dateKey`. */
-export function getMondayKey(dateKey: string): string {
-  const date = toUtcDate(dateKey);
-  const offset = (date.getUTCDay() + 6) % 7;
-  date.setUTCDate(date.getUTCDate() - offset);
-  return toDateKey(date);
-}
-
-/**
- * Builds the Monday-start 6×7 grid (42 cells) for a "YYYY-MM" month key,
- * mirroring the WeekCalendar layout. Cells before/after the month carry
- * `inMonth: false` and render dimmed without chips.
- */
-export function buildMonthGrid(monthKey: string): CalendarGridCell[] {
-  const { from } = getMonthWindow(monthKey);
-  const gridStart = toUtcDate(getMondayKey(from));
-  const cells: CalendarGridCell[] = [];
-  for (let index = 0; index < 42; index += 1) {
-    const cell = new Date(gridStart);
-    cell.setUTCDate(gridStart.getUTCDate() + index);
-    const dateKey = toDateKey(cell);
-    cells.push({ dateKey, inMonth: getMonthKey(dateKey) === monthKey });
-  }
-  return cells;
 }
 
 /** Groups items by their "YYYY-MM-DD" date, preserving input order per day. */
@@ -270,7 +198,7 @@ export interface CalendarTabProps {
 export function CalendarTab({ caseId, initialMonth, initialItems }: CalendarTabProps) {
   const todayKey = useMemo(() => todayBangkok(), []);
   const [viewMonth, setViewMonth] = useState(
-    MONTH_KEY_PATTERN.test(initialMonth) ? initialMonth : getMonthKey(todayBangkok()),
+    isMonthKey(initialMonth) ? initialMonth : getMonthKey(todayBangkok()),
   );
   const [itemsByMonth, setItemsByMonth] = useState<Record<string, CalendarItem[]>>(
     () => ({ [initialMonth]: initialItems }),

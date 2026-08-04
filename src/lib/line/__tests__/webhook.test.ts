@@ -20,6 +20,7 @@ describe("handleLineWebhookPost", () => {
       duplicateEvents: 1,
       ignoredEvents: 2,
       retractedMessages: 1,
+      groupCommands: [],
     });
   });
 
@@ -43,6 +44,7 @@ describe("handleLineWebhookPost", () => {
         duplicateEvents: 1,
         ignoredEvents: 2,
         retractedMessages: 1,
+        groupCommands: 0,
       },
     });
     expect(recordLineWebhookPayload).toHaveBeenCalledWith(expect.anything(), { events: [{ webhookEventId: "event-1" }] });

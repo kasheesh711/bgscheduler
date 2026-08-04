@@ -35,11 +35,30 @@ export interface LineReviewActor {
   name?: string | null;
 }
 
+/**
+ * A text message from a LINE group/room chat, surfaced for the schedule bot's
+ * command router.
+ *
+ * Group messages are deliberately NOT persisted as `line_messages`: that table
+ * requires a `threadId`+`contactId`, and `line_threads` is unique per LINE user
+ * — the conversation model is structurally 1:1. Groups are a command channel,
+ * not a conversation, so they are handed straight to the router and audited to
+ * their own table. The parent review pipeline never sees them.
+ */
+export interface LineGroupCommand {
+  groupId: string;
+  lineUserId: string;
+  text: string;
+  replyToken: string | null;
+  message: Record<string, unknown>;
+}
+
 export interface LineWebhookIngestResult {
   createdMessageIds: string[];
   duplicateEvents: number;
   ignoredEvents: number;
   retractedMessages: number;
+  groupCommands: LineGroupCommand[];
 }
 
 export interface LineMessageForProcessing {
@@ -410,6 +429,7 @@ export async function recordLineWebhookPayload(
     duplicateEvents: 0,
     ignoredEvents: 0,
     retractedMessages: 0,
+    groupCommands: [],
   };
 
   for (const eventRaw of events) {
@@ -417,6 +437,29 @@ export async function recordLineWebhookPayload(
     const source = asRecord(event.source);
     const sourceType = asString(source.type);
     const lineUserId = asString(source.userId);
+
+    // Group/room text messages are collected as commands and never persisted
+    // (see LineGroupCommand). Everything else about non-user sources — joins,
+    // leaves, non-text messages, missing sender — keeps falling through to the
+    // ignore branch below exactly as before.
+    if (sourceType === "group" || sourceType === "room") {
+      const groupId = asString(source.groupId) ?? asString(source.roomId);
+      const groupMessage = asRecord(event.message);
+      const groupText = asString(groupMessage.type) === "text"
+        ? asString(groupMessage.text)
+        : undefined;
+      if (event.type === "message" && groupId && lineUserId && groupText) {
+        result.groupCommands.push({
+          groupId,
+          lineUserId,
+          text: groupText,
+          replyToken: asString(event.replyToken) ?? null,
+          message: groupMessage,
+        });
+        continue;
+      }
+    }
+
     if (sourceType !== "user" || !lineUserId) {
       result.ignoredEvents += 1;
       continue;

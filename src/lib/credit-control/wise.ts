@@ -21,6 +21,17 @@ export const WiseCreditStudentSchema = z.object({
   }).passthrough()).default([]),
 }).passthrough();
 
+// Wise returns the owning teacher on every session in this feed. The fields are
+// all optional because Wise omits them on unassigned/system-generated sessions —
+// a missing teacher must surface as "TBC" downstream, never as a guess.
+const WiseSessionUserRefSchema = z.union([
+  z.string(),
+  z.object({
+    _id: z.string().optional(),
+    name: z.string().optional(),
+  }).passthrough(),
+]);
+
 export const WiseCreditSessionSchema = z.object({
   _id: z.string(),
   classId: z.object({
@@ -34,6 +45,9 @@ export const WiseCreditSessionSchema = z.object({
   meetingStatus: z.string(),
   duration: z.coerce.number().optional(),
   students: z.array(z.string()).default([]),
+  userId: WiseSessionUserRefSchema.optional(),
+  teacherId: z.string().optional(),
+  teacherName: z.string().optional(),
 }).passthrough();
 
 export const WiseSessionCreditsSchema = z.object({
@@ -104,6 +118,28 @@ function minDate(a: Date, b: Date): Date {
 export function durationMsToMinutes(durationMs: number | undefined): number {
   if (!durationMs || !Number.isFinite(durationMs) || durationMs <= 0) return 0;
   return Math.round(durationMs / 60_000);
+}
+
+/**
+ * Extracts the teaching identity off a Wise session. `userId` arrives either as
+ * a bare id string or as an expanded `{_id, name}` reference depending on the
+ * endpoint, so both shapes are handled. Blank values normalize to `null` — a
+ * session with no resolvable teacher is stored as null and rendered "TBC",
+ * never inferred from the class name or the package.
+ */
+export function creditSessionTeacher(session: WiseCreditSession): {
+  wiseTeacherUserId: string | null;
+  wiseTeacherId: string | null;
+  teacherName: string | null;
+} {
+  const userRef = session.userId;
+  const refId = typeof userRef === "string" ? userRef : userRef?._id ?? null;
+  const refName = typeof userRef === "string" ? null : userRef?.name ?? null;
+  return {
+    wiseTeacherUserId: refId?.trim() || null,
+    wiseTeacherId: session.teacherId?.trim() || null,
+    teacherName: (session.teacherName ?? refName ?? "").trim() || null,
+  };
 }
 
 export async function fetchCreditStudents(

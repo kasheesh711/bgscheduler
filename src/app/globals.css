@@ -3,6 +3,7 @@
 @import "shadcn/tailwind.css";
 @import "./credit-control.css";
 @import "./learning-plans.css";
+@import "./student-schedule.css";
 
 @custom-variant dark (&:is(.dark *));
 

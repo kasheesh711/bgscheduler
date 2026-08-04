@@ -1,0 +1,73 @@
+/* ---------------------------------------------------------------------------
+   Student monthly schedule — print rules.
+
+   A month grid needs the wide edge of the paper, but learning-plans.css already
+   declares a global portrait `@page` (both files land in globals.css, so the
+   at-rule is document-wide). A NAMED page keeps landscape scoped to this report
+   instead of flipping every other printable page in the app.
+   --------------------------------------------------------------------------- */
+
+@page schedule-landscape {
+  size: A4 landscape;
+  margin: 10mm;
+}
+
+.schedule-report-root {
+  page: schedule-landscape;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+@media print {
+  /*
+    Same reset as the learning-plan report: the app's root body is a
+    fixed-height, overflow-hidden flex shell that clips multipage print.
+  */
+  html,
+  body {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  body {
+    display: block !important;
+  }
+
+  body:has(> [data-student-schedule-report]) {
+    background: #ffffff !important;
+  }
+
+  .schedule-scroll {
+    display: block !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  .schedule-sheet {
+    margin: 0 !important;
+    max-width: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* A class must never be split across two sheets of paper. */
+  .schedule-day-cell,
+  .schedule-session {
+    break-inside: avoid;
+  }
+
+  .schedule-week-row {
+    break-inside: avoid;
+  }
+
+  /* The month grid is desktop-only on screen; printing must always show it. */
+  .schedule-month-grid {
+    display: block !important;
+  }
+
+  .schedule-mobile-list {
+    display: none !important;
+  }
+}

@@ -147,3 +147,45 @@ export async function pushLineTextMessage(input: {
     response: responsePayload,
   };
 }
+
+/**
+ * Replies into the conversation a webhook event came from, using its
+ * `replyToken`. Works in 1:1, group and multi-person chats, and unlike a push
+ * it consumes no message quota and needs no destination ID — which is what
+ * makes the group command path work without resolving anyone's identity.
+ *
+ * The token is valid for ONE MINUTE after the webhook is received, so callers
+ * that do slow work first must be prepared to fall back to
+ * `pushLineTextMessage({ to: groupId })`. Failures throw so that fallback can
+ * be chosen deliberately rather than silently swallowed.
+ */
+export async function replyLineMessage(input: {
+  replyToken: string;
+  text: string;
+}): Promise<{ sentMessageId: string | null; response: Record<string, unknown> }> {
+  const response = await fetch(`${LINE_API_BASE}/v2/bot/message/reply`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${lineAccessToken()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      replyToken: input.replyToken,
+      messages: [{ type: "text", text: input.text }],
+    }),
+  });
+
+  const payload = asRecord(await response.json().catch(() => ({})));
+  if (!response.ok) {
+    throw new Error(typeof payload.message === "string"
+      ? payload.message
+      : `LINE reply returned HTTP ${response.status}`);
+  }
+
+  const sentMessages = Array.isArray(payload.sentMessages) ? payload.sentMessages : [];
+  const first = asRecord(sentMessages[0]);
+  return {
+    sentMessageId: typeof first.id === "string" ? first.id : null,
+    response: payload,
+  };
+}

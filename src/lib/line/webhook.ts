@@ -1,5 +1,5 @@
 import type { Database } from "@/lib/db";
-import { recordLineWebhookPayload } from "@/lib/line/data";
+import { recordLineWebhookPayload, type LineGroupCommand } from "@/lib/line/data";
 import { verifyLineSignature } from "@/lib/line/signature";
 
 export interface LineWebhookHandlerResult {
@@ -11,6 +11,7 @@ export interface LineWebhookHandlerResult {
     duplicateEvents?: number;
     ignoredEvents?: number;
     retractedMessages?: number;
+    groupCommands?: number;
   };
 }
 
@@ -20,6 +21,8 @@ export async function handleLineWebhookPost(input: {
   signature: string | null;
   channelSecret: string | undefined;
   scheduleProcessing: (lineMessageId: string) => void;
+  /** Optional so existing callers and tests keep working unchanged. */
+  scheduleGroupCommand?: (command: LineGroupCommand) => void;
 }): Promise<LineWebhookHandlerResult> {
   if (!verifyLineSignature({
     rawBody: input.rawBody,
@@ -46,6 +49,9 @@ export async function handleLineWebhookPost(input: {
   for (const messageId of ingest.createdMessageIds) {
     input.scheduleProcessing(messageId);
   }
+  for (const command of ingest.groupCommands) {
+    input.scheduleGroupCommand?.(command);
+  }
 
   return {
     status: 200,
@@ -55,6 +61,7 @@ export async function handleLineWebhookPost(input: {
       duplicateEvents: ingest.duplicateEvents,
       ignoredEvents: ingest.ignoredEvents,
       retractedMessages: ingest.retractedMessages,
+      groupCommands: ingest.groupCommands.length,
     },
   };
 }

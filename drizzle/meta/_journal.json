@@ -442,6 +442,13 @@
       "when": 1784814729290,
       "tag": "0062_post_class_deleted_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1785869029776,
+      "tag": "0063_student_schedule_links",
+      "breakpoints": true
     }
   ]
 }

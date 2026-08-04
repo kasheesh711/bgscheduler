@@ -1237,12 +1237,25 @@ export const creditControlSessions = pgTable("credit_control_sessions", {
   sessionKind: text("session_kind").notNull(),
   teacherFeedback: text("teacher_feedback"),
   creditApplied: doublePrecision("credit_applied").notNull().default(0),
+  // Teaching identity as Wise reports it on the session feed. Nullable: an
+  // unresolved teacher renders "Teacher TBC" on the parent-facing schedule
+  // rather than being guessed or dropped.
+  wiseTeacherUserId: text("wise_teacher_user_id"),
+  wiseTeacherId: text("wise_teacher_id"),
+  teacherName: text("teacher_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("cc_sessions_snapshot_session_student_idx").on(table.snapshotId, table.wiseSessionId, table.wiseStudentId),
   index("cc_sessions_snapshot_kind_idx").on(table.snapshotId, table.sessionKind),
   index("cc_sessions_package_idx").on(table.snapshotId, table.packageKey),
   index("cc_sessions_start_idx").on(table.snapshotId, table.scheduledStartTime),
+  // NOTE: a (snapshot_id, student_key, scheduled_start_time) index was
+  // considered for the per-student monthly schedule query and deliberately NOT
+  // added. Measured on production (67.8M rows / 39GB across 3,367 retained
+  // snapshots): cc_sessions_start_idx narrows to the ~22.8k rows of the active
+  // snapshot and the month query runs in 12.9ms. Building another index on a
+  // table this size takes a SHARE lock that blocks the credit-control sync for
+  // as long as it runs — a real cost for no measurable gain.
 ]);
 
 export const creditControlCreditHistory = pgTable("credit_control_credit_history", {
@@ -4601,4 +4614,88 @@ export const admissionsImportMappings = pgTable("admissions_import_mappings", {
   uniqueIndex("admissions_import_mappings_source_idx")
     .on(table.runId, table.sourceType, table.sourceKey),
   index("admissions_import_mappings_target_idx").on(table.targetType, table.targetId),
+]);
+
+// ── Student monthly schedule (parent-facing) ────────────────────────────
+
+/**
+ * Capability tokens for the public `/schedule/{token}` parent view. Only the
+ * SHA-256 hash is stored (same discipline as `line_oa_resolver_runs`), so a
+ * database read cannot reconstruct a live link. A row grants read access to
+ * exactly one (studentKey, monthKey) pair and is expiring + revocable.
+ */
+export const studentScheduleLinks = pgTable("student_schedule_links", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tokenHash: text("token_hash").notNull(),
+  studentKey: text("student_key").notNull(),
+  wiseStudentId: text("wise_student_id").notNull(),
+  studentName: text("student_name").notNull(),
+  monthKey: text("month_key").notNull(),
+  createdByEmail: text("created_by_email"),
+  createdByLineUserId: text("created_by_line_user_id"),
+  sentToLineUserId: text("sent_to_line_user_id"),
+  // Set instead of sentToLineUserId when the link was delivered into a LINE
+  // group chat rather than a 1:1 conversation.
+  sentToGroupId: text("sent_to_group_id"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  viewCount: integer("view_count").notNull().default(0),
+  lastViewedAt: timestamp("last_viewed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("student_schedule_links_token_hash_idx").on(table.tokenHash),
+  index("student_schedule_links_student_idx").on(table.studentKey, table.createdAt),
+]);
+
+/**
+ * Short-lived confirm state for the LINE schedule bot. The row is the ONLY
+ * thing a "yes" acts on, so an expired or missing row means nothing is sent
+ * (SCHED-BOT-03 fail-closed confirm gate).
+ *
+ * Scoped per conversation, not per user: `scopeKey` is the group ID for a group
+ * command and the literal "dm" for a direct message, so one admin can have a
+ * group confirm and a DM confirm alive at the same time without either
+ * clobbering the other.
+ */
+export const lineScheduleBotPending = pgTable("line_schedule_bot_pending", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  lineUserId: text("line_user_id").notNull(),
+  scopeKey: text("scope_key").notNull().default("dm"),
+  groupId: text("group_id"),
+  studentKey: text("student_key").notNull(),
+  wiseStudentId: text("wise_student_id").notNull(),
+  studentName: text("student_name").notNull(),
+  parentName: text("parent_name").notNull().default(""),
+  // Empty for a group command — the destination is the group, not a person.
+  targetLineUserId: text("target_line_user_id").notNull().default(""),
+  targetDisplayName: text("target_display_name").notNull().default(""),
+  monthKey: text("month_key").notNull(),
+  sessionCount: integer("session_count").notNull().default(0),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("line_schedule_bot_pending_scope_idx").on(table.lineUserId, table.scopeKey),
+]);
+
+/**
+ * Every schedule link delivered into a LINE group.
+ *
+ * Doubles as the audit log and as the "has this group already received this
+ * student?" lookup that decides whether a confirm step is required. Exact-code
+ * matching prevents sending the wrong student; this table is what catches the
+ * other half — the right code typed in the wrong family's group — by forcing a
+ * confirmation the first time any student appears in a given group.
+ */
+export const lineGroupScheduleSends = pgTable("line_group_schedule_sends", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  groupId: text("group_id").notNull(),
+  studentKey: text("student_key").notNull(),
+  studentName: text("student_name").notNull(),
+  monthKey: text("month_key").notNull(),
+  requestedByLineUserId: text("requested_by_line_user_id").notNull(),
+  linkId: uuid("link_id").references(() => studentScheduleLinks.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("line_group_schedule_sends_group_student_idx").on(table.groupId, table.studentKey),
+  index("line_group_schedule_sends_created_idx").on(table.createdAt),
 ]);

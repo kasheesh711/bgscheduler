@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { lineChannelSecret, lineSchedulerEnabled } from "@/lib/line/client";
 import { handleLineWebhookPost } from "@/lib/line/webhook";
 import { processLineMessageForScheduler } from "@/lib/line/review-service";
+import { handleScheduleBotGroupCommand } from "@/lib/line/schedule-bot-group";
 
 export const maxDuration = 60;
 
@@ -24,6 +25,15 @@ export async function POST(request: NextRequest) {
           await processLineMessageForScheduler(db, lineMessageId);
         } catch (error) {
           console.error("LINE scheduler processing failed", error);
+        }
+      });
+    },
+    scheduleGroupCommand: (command) => {
+      after(async () => {
+        try {
+          await handleScheduleBotGroupCommand({ db, ...command });
+        } catch (error) {
+          console.error("LINE group command processing failed", error);
         }
       });
     },

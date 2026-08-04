@@ -18,6 +18,7 @@ import {
 import { executeSchedulerTurn, schedulerRunMetadata } from "@/lib/ai/scheduler-service";
 import { fetchLineProfile, pushLineTextMessage } from "@/lib/line/client";
 import { classifyLineSchedulerMessage, type LineSchedulerClassification } from "@/lib/line/classifier";
+import { handleScheduleBotCommand } from "@/lib/line/schedule-bot";
 import {
   createLineSchedulerReview,
   getLineMessageForProcessing,
@@ -131,6 +132,20 @@ export async function processLineMessageForScheduler(
 ): Promise<{ review: LineSchedulerReviewDto | null; category?: string }> {
   const lineMessage = await getLineMessageForProcessing(db, lineMessageId);
   if (!lineMessage || !lineMessage.text.trim()) return { review: null };
+
+  // Schedule-bot commands are intercepted before anything else: they come from
+  // allowlisted staff, not parents, so they must not reach the classifier (an
+  // OpenAI call) or land in the parent scheduling queue. Non-admin senders and
+  // non-commands fall straight through with no side effects (SCHED-BOT-01).
+  const scheduleBot = await handleScheduleBotCommand({
+    db,
+    lineUserId: lineMessage.lineUserId,
+    text: lineMessage.text,
+  }).catch((error) => {
+    console.error("[line] schedule bot command failed", error);
+    return { handled: false as const };
+  });
+  if (scheduleBot.handled) return { review: null, category: "schedule_bot" };
 
   const profile = await fetchLineProfile(lineMessage.lineUserId).catch(() => null);
   await updateLineContactProfile(db, lineMessage.lineUserId, profile).catch(() => undefined);
