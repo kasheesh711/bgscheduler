@@ -4,7 +4,14 @@ import { auth } from "@/lib/auth";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { runCreditControlSyncRequest } from "@/lib/credit-control/run-sync-request";
 
-export const maxDuration = 300;
+// 800s to match every other heavy sync route (sync-wise, sync-sales-dashboard,
+// sync-wise-activity, sync-room-utilization, sync-leave-requests). This route
+// was the last one left at 300s while its successful runs take 372-390s — i.e.
+// permanently over its own limit — which produced recurring "Task timed out
+// after 300 seconds" failures on Vercel from 2026-06-16 onward. A timeout kills
+// the function mid-run and strands the sync_runs row in "running" until the
+// watchdog fails it 30 minutes later.
+export const maxDuration = 800;
 
 type CronSecretStatus = "valid" | "invalid" | "missing-secret";
 
