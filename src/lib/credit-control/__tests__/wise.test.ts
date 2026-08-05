@@ -4,6 +4,7 @@ import {
   durationMsToMinutes,
   fetchCreditSessions,
   fetchCreditStudents,
+  fetchInstituteSessionsForDays,
   fetchSessionCredits,
 } from "@/lib/credit-control/wise";
 import {
@@ -187,6 +188,112 @@ describe("credit-control Wise fetchers", () => {
       "/institutes/institute-1/classes/class-1/students/student-1/sessionCredits",
       { fetchHistory: "true" },
     );
+  });
+});
+
+describe("fetchInstituteSessionsForDays", () => {
+  it("issues PAST for a day before today and FUTURE for a day after", async () => {
+    const get = vi.fn<WiseClient["get"]>().mockResolvedValue({ data: { sessions: [], count: 0 } });
+    await fetchInstituteSessionsForDays(fakeClient(get), "institute-1", ["2026-08-12", "2026-08-14"], "2026-08-13");
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenCalledWith("/institutes/institute-1/sessions", {
+      status: "PAST", paginateBy: "DATE", startDate: "2026-08-12", endDate: "2026-08-13",
+      page_number: "1", page_size: "100",
+    });
+    expect(get).toHaveBeenCalledWith("/institutes/institute-1/sessions", {
+      status: "FUTURE", paginateBy: "DATE", startDate: "2026-08-14", endDate: "2026-08-15",
+      page_number: "1", page_size: "100",
+    });
+  });
+
+  it("issues BOTH PAST and FUTURE for todayKey itself, same date/endDate window", async () => {
+    const get = vi.fn<WiseClient["get"]>().mockResolvedValue({ data: { sessions: [], count: 0 } });
+    await fetchInstituteSessionsForDays(fakeClient(get), "institute-1", ["2026-08-13"], "2026-08-13");
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenCalledWith("/institutes/institute-1/sessions", {
+      status: "PAST", paginateBy: "DATE", startDate: "2026-08-13", endDate: "2026-08-14",
+      page_number: "1", page_size: "100",
+    });
+    expect(get).toHaveBeenCalledWith("/institutes/institute-1/sessions", {
+      status: "FUTURE", paginateBy: "DATE", startDate: "2026-08-13", endDate: "2026-08-14",
+      page_number: "1", page_size: "100",
+    });
+  });
+
+  it("paginates a single day when a full page comes back, and stops on a short page", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      _id: `session-${index}`,
+      classId: { _id: "class-1", name: "Math", subject: "Math" },
+      scheduledStartTime: "2026-08-13T03:00:00.000Z",
+      meetingStatus: "UPCOMING",
+      students: ["student-1"],
+    }));
+    const get = vi
+      .fn<WiseClient["get"]>()
+      .mockResolvedValueOnce({ data: { sessions: firstPage, count: 101 } })
+      .mockResolvedValueOnce({
+        data: {
+          sessions: [{
+            _id: "session-100",
+            classId: { _id: "class-1", name: "Math", subject: "Math" },
+            scheduledStartTime: "2026-08-13T03:00:00.000Z",
+            meetingStatus: "UPCOMING",
+            students: ["student-1"],
+          }],
+          count: 101,
+        },
+      });
+
+    const sessions = await fetchInstituteSessionsForDays(fakeClient(get), "institute-1", ["2026-08-13"], "2026-08-01");
+
+    expect(sessions).toHaveLength(101);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenNthCalledWith(1, "/institutes/institute-1/sessions", {
+      status: "FUTURE", paginateBy: "DATE", startDate: "2026-08-13", endDate: "2026-08-14",
+      page_number: "1", page_size: "100",
+    });
+    expect(get).toHaveBeenNthCalledWith(2, "/institutes/institute-1/sessions", {
+      status: "FUTURE", paginateBy: "DATE", startDate: "2026-08-13", endDate: "2026-08-14",
+      page_number: "2", page_size: "100",
+    });
+  });
+
+  it("flattens results across multiple days into one array", async () => {
+    const get = vi
+      .fn<WiseClient["get"]>()
+      .mockResolvedValueOnce({
+        data: {
+          sessions: [{
+            _id: "session-a",
+            classId: { _id: "class-1", name: "Math", subject: "Math" },
+            scheduledStartTime: "2026-08-01T03:00:00.000Z",
+            meetingStatus: "UPCOMING",
+            students: ["student-1"],
+          }],
+          count: 1,
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          sessions: [{
+            _id: "session-b",
+            classId: { _id: "class-2", name: "Science", subject: "Science" },
+            scheduledStartTime: "2026-08-02T03:00:00.000Z",
+            meetingStatus: "UPCOMING",
+            students: ["student-2"],
+          }],
+          count: 1,
+        },
+      });
+
+    const sessions = await fetchInstituteSessionsForDays(
+      fakeClient(get),
+      "institute-1",
+      ["2026-08-01", "2026-08-02"],
+      "2026-08-05",
+    );
+
+    expect(sessions.map((session) => session._id).sort()).toEqual(["session-a", "session-b"]);
   });
 });
 

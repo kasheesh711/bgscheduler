@@ -189,6 +189,76 @@ export async function fetchCreditSessions(
   return all;
 }
 
+/**
+ * Fetches institute-wide sessions for a set of Bangkok calendar days, issued
+ * concurrently -- the WiseClient's own FIFO limiter (`client.ts:136-156`)
+ * throttles them; no second limiter is added here. `status` is REQUIRED by
+ * the endpoint (confirmed against the live API: omitting it returns zero
+ * sessions), so each day is classified against `todayKey`: earlier days fetch
+ * PAST, later days fetch FUTURE, and `todayKey` itself fetches BOTH (two
+ * requests) since a single day can hold sessions on both sides of "now".
+ *
+ * `days` and `todayKey` are plain "YYYY-MM-DD" strings compared lexically --
+ * this function does no timezone math itself; callers own that
+ * (see `student-schedule/live.ts`).
+ */
+export async function fetchInstituteSessionsForDays(
+  client: WiseClient,
+  instituteId: string,
+  days: string[],
+  todayKey: string,
+): Promise<WiseCreditSession[]> {
+  const requests: { date: string; status: "PAST" | "FUTURE" }[] = [];
+  for (const date of days) {
+    if (date === todayKey) {
+      requests.push({ date, status: "PAST" }, { date, status: "FUTURE" });
+    } else if (date < todayKey) {
+      requests.push({ date, status: "PAST" });
+    } else {
+      requests.push({ date, status: "FUTURE" });
+    }
+  }
+
+  const pages = await Promise.all(
+    requests.map((request) => fetchSessionsForOneDay(client, instituteId, request.date, request.status)),
+  );
+  return pages.flat();
+}
+
+async function fetchSessionsForOneDay(
+  client: WiseClient,
+  instituteId: string,
+  date: string,
+  status: "PAST" | "FUTURE",
+): Promise<WiseCreditSession[]> {
+  const all: WiseCreditSession[] = [];
+  for (let page = 1; ; page += 1) {
+    const response = await client.get<unknown>(`/institutes/${instituteId}/sessions`, {
+      status,
+      paginateBy: "DATE",
+      startDate: date,
+      endDate: nextDateKey(date),
+      page_number: String(page),
+      page_size: String(PAGE_SIZE),
+    });
+    const parsed = WiseSessionsEnvelopeSchema.parse(response);
+    const sessions = parsed.data.sessions;
+    all.push(...sessions);
+    if (sessions.length < PAGE_SIZE) break;
+  }
+  return all;
+}
+
+/**
+ * "YYYY-MM-DD" -> the next calendar date string. Pure UTC-anchored string
+ * math, deliberately NOT using Bangkok offset conversion -- `date` already
+ * carries whatever calendar meaning the caller intends; this just adds one
+ * day to it.
+ */
+function nextDateKey(date: string): string {
+  return isoDate(addUtcDays(new Date(`${date}T00:00:00.000Z`), 1));
+}
+
 export async function fetchSessionCredits(
   client: WiseClient,
   instituteId: string,
