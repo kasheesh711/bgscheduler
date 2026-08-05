@@ -190,10 +190,13 @@ DATABASE_URL='postgres://…' SEED_ADMIN_EMAILS='a@x.com,b@x.com' npm run db:see
 
 `package.json:19`–`:33` registers `tsx` scripts for payout-workbook tooling,
 credit-control ownership seeding, tutor-profile seeding, room-capacity model
-import, room-utilization sync, AI-scheduler evaluation, and LINE test-data
-cleanup, plus the two release guards (`guard:sales-dashboard-scope`,
-`guard:production-route-surface`). None are part of routine operation — read the
-file under `scripts/` before pointing any of them at production.
+import, room-utilization sync, AI-scheduler evaluation, LINE test-data
+cleanup, and a read-only LINE user ID harvest (`npm run line:find-user-ids`,
+`scripts/find-line-user-ids.ts` — prints inbound LINE DMs matching a code word
+plus a paste-ready, de-duplicated `lineUserId` list), plus the two release
+guards (`guard:sales-dashboard-scope`, `guard:production-route-surface`). None
+are part of routine operation — read the file under `scripts/` before pointing
+any of them at production.
 
 ---
 
@@ -217,6 +220,30 @@ requests, schedule email, AI scheduler); those degrade the feature instead of
 crashing the app. Full inventory in [`reference/env.md`](../reference/env.md).
 
 `CRON_SECRET` is the highest-leverage operational secret — see §5.
+
+### 4.1 Onboarding a new schedule-bot admin operator
+
+Access to the `/schedule` bot is gated solely by `LINE_SCHEDULE_BOT_ADMIN_IDS`
+(above) — there is no self-service enrolment, and a non-technical operator
+cannot look up their own LINE user id. This is the recipe:
+
+1. The operator adds the BeGifted LINE Official Account as a friend.
+2. The operator DMs the OA one message containing the code word `BGSCHED` plus
+   their name (e.g. `BGSCHED Kittiya`). This writes a `line_contacts` row and
+   fetches their display name via the normal non-admin fall-through path
+   (`src/lib/line/review-service.ts`). The bot stays silent — that is the
+   fail-closed gate working, not a failure.
+3. Run `npm run line:find-user-ids` (§3.3) to print matching DMs and a
+   ready-to-paste, de-duplicated `lineUserId` list. Narrow the search with
+   `--match=<code>` / `--since=<days>`.
+4. Append the id(s) to `LINE_SCHEDULE_BOT_ADMIN_IDS` in the production Vercel
+   environment and redeploy — env vars are baked in at build time, so a
+   redeploy is required before the new operator is recognised.
+5. The operator verifies by DMing `/schedule help` and getting the admin help
+   menu back. Silence means the id did not land.
+
+Group chats additionally need `/schedule setup staff` (or `setup family`) once
+per chat.
 
 ---
 

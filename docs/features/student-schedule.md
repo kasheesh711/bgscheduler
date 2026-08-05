@@ -281,7 +281,9 @@ about the schedule itself:
   which disables the bot entirely; a non-allowlisted sender gets `handled: false` and **no reply at
   all**, so a parent messaging the OA sees no evidence it exists
   (`src/lib/line/schedule-bot.ts:112`-`124`, `:226`; group equivalent
-  `schedule-bot-group.ts:275`-`278`).
+  `schedule-bot-group.ts:275`-`278`). Onboarding a new admin operator onto the
+  allowlist is documented in
+  [`operations/runbook.md` §4.1](../operations/runbook.md#41-onboarding-a-new-schedule-bot-admin-operator).
 - **The default command does not message a parent.** A bare `/schedule <code>` replies to the
   requester (DM) or into the originating chat (group); only the trailing `send` verb resolves and
   messages a parent — see [Purpose](#purpose) for the citations.

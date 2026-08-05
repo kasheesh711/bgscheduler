@@ -226,6 +226,7 @@ npm run room-utilization:sync        # Room Capacity sync is manualOnly — no c
 npm run ai-scheduler:evaluate
 npm run ai-scheduler:compare-models
 npm run line:test-data:cleanup
+npm run line:find-user-ids           # Harvest LINE user IDs for the schedule-bot allowlist (read-only)
 npm run payout:inventory
 npm run payout:setup-master-tabs
 npm run payout:repoint-workbooks

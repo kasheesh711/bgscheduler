@@ -176,6 +176,7 @@
 | `ai-scheduler:evaluate` | `tsx scripts/evaluate-ai-scheduler.ts` | Run AI-scheduler eval harness |
 | `ai-scheduler:compare-models` | `tsx scripts/compare-ai-scheduler-models.ts` | Compare AI-scheduler models |
 | `line:test-data:cleanup` | `tsx scripts/delete-line-test-data.ts` | Delete LINE test data (guarded by `CONFIRM_DELETE_LINE_TEST_DATA`) |
+| `line:find-user-ids` | `tsx scripts/find-line-user-ids.ts` | Harvest LINE user IDs for the schedule-bot allowlist (read-only) |
 | `payout:inventory` | `npx tsx --tsconfig scripts/tsconfig.json scripts/inventory-payout-workbooks.ts` | Inventory payout workbooks in Drive |
 | `payout:setup-master-tabs` | `… scripts/setup-payout-master-tabs.ts` | Create the payout master workbook tabs |
 | `payout:repoint-workbooks` | `… scripts/repoint-payout-workbook-formulas.ts` | Repoint tutor-workbook QUERY formulas at the master |
