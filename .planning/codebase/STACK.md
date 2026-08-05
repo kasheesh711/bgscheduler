@@ -139,6 +139,7 @@
 | `ai-scheduler:evaluate` | `tsx scripts/evaluate-ai-scheduler.ts` | Run AI-scheduler eval harness |
 | `ai-scheduler:compare-models` | `tsx scripts/compare-ai-scheduler-models.ts` | Compare AI-scheduler models |
 | `line:test-data:cleanup` | `tsx scripts/delete-line-test-data.ts` | Delete LINE test data |
+| `line:find-user-ids` | `tsx scripts/find-line-user-ids.ts` | Harvest LINE user IDs for the schedule-bot allowlist (read-only) |
 | `guard:sales-dashboard-scope` | `node scripts/check-sales-dashboard-scope.mjs` | Guard sales-dashboard change scope |
 
 > `tsx` is invoked by the seed/script commands but is **not** a declared dependency in `package.json` (resolved via `npx`/global).

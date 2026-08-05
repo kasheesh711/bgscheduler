@@ -157,6 +157,7 @@ npm run room-utilization:sync
 npm run ai-scheduler:evaluate
 npm run ai-scheduler:compare-models
 npm run line:test-data:cleanup
+npm run line:find-user-ids
 npm run guard:sales-dashboard-scope
 ```
 

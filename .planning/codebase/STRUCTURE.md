@@ -275,7 +275,7 @@ Scheduling/
 
 **`scripts/`:**
 - Purpose: One-off / scheduled operational scripts run via `tsx` or `node`
-- Contains: seeds (`seed-credit-control-admin-ownership.ts`, `seed-tutor-business-profiles.ts`), AI scheduler evals (`evaluate-ai-scheduler*.ts`, `compare-ai-scheduler-models.ts`, `replay-ai-scheduler-runs.ts`), `import-room-capacity-model.ts`, `sync-room-utilization.ts`, `delete-line-test-data.ts`, `check-sales-dashboard-scope.mjs`
+- Contains: seeds (`seed-credit-control-admin-ownership.ts`, `seed-tutor-business-profiles.ts`), AI scheduler evals (`evaluate-ai-scheduler*.ts`, `compare-ai-scheduler-models.ts`, `replay-ai-scheduler-runs.ts`), `import-room-capacity-model.ts`, `sync-room-utilization.ts`, `delete-line-test-data.ts`, `find-line-user-ids.ts`, `check-sales-dashboard-scope.mjs`
 - Wired to npm scripts (see `package.json`)
 
 **`docs/`:**
