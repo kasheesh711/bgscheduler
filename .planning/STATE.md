@@ -30,7 +30,7 @@ Phase: 12 (LINE Backlog Identity Recovery (IDENT-07)) — EXECUTING
 Plan: 5 of 5 (phase complete)
 Next: `/gsd-plan-phase 11` — create executable plans
 Status: Ready to execute
-Last activity: 2026-08-05 - Completed quick task 260805-llm: Fix stale docs after the LINE schedule-bot allowlist change (reconciled scope after upstream doc regeneration 241deb5; also backfilled 260805-k2j)
+Last activity: 2026-08-05 - Completed quick task 260805-on4: Live-refresh the student monthly schedule so /schedule never serves a stale time (fail-soft live Wise overlay on the credit-control snapshot read path, on branch feat/student-schedule-live-refresh)
 
 Progress: [██████████] 97%
 
@@ -144,6 +144,7 @@ None blocking roadmap execution.
 | 260730-v7p | Fix clipped tab bar on post-class-feedback page | 2026-07-30 | be74191 | [260730-v7p-fix-clipped-tab-bar-on-post-class-feedba](./quick/260730-v7p-fix-clipped-tab-bar-on-post-class-feedba/) |
 | 260805-k2j | Add read-only LINE user ID harvest script for the schedule bot allowlist | 2026-08-05 | c52e907 | [260805-k2j-add-read-only-line-user-id-harvest-scrip](./quick/260805-k2j-add-read-only-line-user-id-harvest-scrip/) |
 | 260805-llm | Fix stale docs after the LINE schedule-bot allowlist change | 2026-08-05 | 7ad5d53 | [260805-llm-fix-stale-docs-after-the-line-schedule-b](./quick/260805-llm-fix-stale-docs-after-the-line-schedule-b/) |
+| 260805-on4 | Live-refresh the student monthly schedule so /schedule never serves a stale time | 2026-08-05 | 1c89a4b | [260805-on4-live-refresh-the-student-monthly-schedul](./quick/260805-on4-live-refresh-the-student-monthly-schedul/) |
 | Phase 10-vpol-01-view-transitions P01 | 216 | 2 tasks | 2 files |
 | Phase 10-vpol-01-view-transitions P02 | 4min | 2 tasks | 2 files |
 | Phase 11 P03 | 31515093 | 2 tasks | 3 files |
