@@ -87,6 +87,56 @@ const FEATURES = [
     file: 'docs/features/leave-requests.md',
     paths: ['src/lib/leave-requests', 'drizzle/0036_tutor_leave_requests.sql', 'the leave_request* tables in src/lib/db/schema.ts'],
     notes: 'IN PROGRESS and UNCOMMITTED at this revision. Document ONLY what exists (e.g. config.ts and the leave_request* tables). Explicitly state that routes/UI are pending. Do NOT edit the source.' },
+
+  // ── Added 2026-08-05 ────────────────────────────────────────────────
+  // The eight entries below were missing. That mattered beyond a coverage
+  // gap: the Reconcile phase rewrites AGENTS.md, docs/README.md and
+  // .planning/codebase/* FROM this list, so the four that already had docs
+  // (learning-plans, post-class-feedback, student-promotions,
+  // university-admissions) would have been silently dropped from every index.
+  { key: 'student-schedule', title: 'Student Schedule', maturity: 'stable',
+    file: 'docs/features/student-schedule.md',
+    paths: ['src/lib/student-schedule (types.ts, data.ts, links.ts)', 'src/lib/calendar/month-grid.ts', 'src/lib/line/schedule-bot.ts', 'src/lib/line/schedule-bot-group.ts', 'src/lib/line/schedule-bot-command.ts', 'src/lib/line/schedule-bot-copy.ts', 'src/lib/line/mentions.ts', 'src/app/api/student-schedule', 'src/app/(app)/student-schedule', 'src/app/(print)/student-schedule', 'src/app/schedule/[token]', 'src/components/student-schedule', 'src/app/student-schedule.css'],
+    notes: [
+      'NEWEST feature (commits 2a17065..9f72002, shipped 2026-08-05). Reads the ACTIVE credit-control snapshot — it owns no sync of its own.',
+      'Load-bearing facts to state explicitly, all verifiable in source:',
+      '(1) /schedule/[token] is the app FIRST public unauthenticated PAGE. Every other middleware bypass is an API. The allowlist entry is a prefix with a deliberate trailing slash so /student-schedule stays authenticated (src/middleware.ts).',
+      '(2) The capability token is 32 random bytes; ONLY its SHA-256 hash is stored. Every resolution failure — malformed, unknown, expired, revoked — renders one identical page so it cannot be used as an oracle (src/lib/student-schedule/links.ts).',
+      '(3) credit_control_sessions gained wise_teacher_user_id / wise_teacher_id / teacher_name; Wise already returned these and the Zod schema was dropping them. A null teacher renders "Teacher TBC", never a guess.',
+      '(4) The LINE bot is fail-closed behind LINE_SCHEDULE_BOT_ADMIN_IDS: unset/empty disables it entirely and a non-allowlisted sender gets NO reply at all.',
+      '(5) Trigger is the /schedule text prefix OR an isSelf mention; the mention only exists in the LINE MOBILE app, which is why the prefix is primary.',
+      '(6) LINE emits NO webhook for messages an Official Account itself sends, so /schedule can never work when typed in OA Manager — that text goes straight to the parent. Staff use /student-schedule -> Copy parent link.',
+      '(7) Groups declare a family/staff audience once (line_group_settings) and confirm each new student (line_group_schedule_sends). Audience picks the message template only; it grants nothing.',
+      'Cross-link to docs/features/line-integration.md, which already carries the bot rules.',
+    ].join(' ') },
+  { key: 'post-class-feedback', title: 'Post-Class Feedback', maturity: 'stable',
+    file: 'docs/features/post-class-feedback.md',
+    paths: ['src/lib/post-class-feedback', 'src/app/api/post-class-feedback', 'src/app/(app)/post-class-feedback', 'src/components/post-class-feedback'],
+    notes: 'Largest subsystem by table count (~32 tables). A doc already exists — REFRESH it against code, do not discard its structure.' },
+  { key: 'learning-plans', title: 'Learning Plans', maturity: 'stable',
+    file: 'docs/features/learning-plans.md',
+    paths: ['src/lib/learning-plans', 'src/lib/syllabus', 'src/app/api/learning-plans', 'src/app/(app)/learning-plans', 'src/app/(print)/learning-plans', 'src/components/learning-plan'],
+    notes: 'Has its own (print) A4 report route and a capability-gated access model. A doc already exists — REFRESH it.' },
+  { key: 'student-promotions', title: 'Student Promotions', maturity: 'stable',
+    file: 'docs/features/student-promotions.md',
+    paths: ['src/lib/student-promotions', 'src/app/api/student-promotions', 'src/app/(app)/student-promotions', 'src/components/student-promotions'],
+    notes: 'Year-rollover automation. A doc already exists — REFRESH it. NOTE: this feature has in-flight uncommitted work in a separate worktree; document what is on THIS commit only.' },
+  { key: 'university-admissions', title: 'University Admissions', maturity: 'stable',
+    file: 'docs/features/university-admissions.md',
+    paths: ['src/lib/admissions', 'src/app/api/admissions', 'src/app/(app)/admissions', 'src/components/admissions'],
+    notes: '~36 tables; four roles (admin/counselor/student/parent) with per-case membership re-checked on every request. A doc already exists — REFRESH it.' },
+  { key: 'progress-tests', title: 'Progress Tests', maturity: 'stable',
+    file: 'docs/features/progress-tests.md',
+    paths: ['src/lib/progress-tests', 'src/app/api/progress-tests', 'src/app/(app)/progress-tests', 'src/components/progress-tests'],
+    notes: 'NO doc exists yet — write from scratch. Every-8-classes cycle tracker built on a durable attendance ledger that survives snapshot rotation.' },
+  { key: 'competitor-intelligence', title: 'Competitor Intelligence', maturity: 'stable',
+    file: 'docs/features/competitor-intelligence.md',
+    paths: ['src/lib/competitor-intelligence', 'src/app/api/competitor-intelligence', 'src/app/(app)/competitor-intelligence', 'src/components/competitor-intelligence'],
+    notes: 'NO doc exists yet — write from scratch. Verify whether its cron is registered in vercel.json and say so plainly.' },
+  { key: 'us-universities', title: 'US Universities (IPEDS)', maturity: 'stable',
+    file: 'docs/features/us-universities.md',
+    paths: ['src/lib/us-universities', 'src/app/api/us-universities', 'src/app/(app)/us-universities', 'src/components/us-universities'],
+    notes: 'NO doc exists yet — write from scratch. IPEDS-derived reference DB feeding the admissions college list; 6-digit CIP codes and fail-closed data rules.' },
 ]
 
 const FOUNDATION = [

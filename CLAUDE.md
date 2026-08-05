@@ -74,7 +74,7 @@ A performance and UX overhaul of the existing BGScheduler tutor scheduling tool 
 - **Deployment**: Vercel Pro plan (30-minute cron, 800s sync function timeout)
 - **Data integrity**: Fail-closed safety rules are non-negotiable
 - **Visual**: Keep GCal-style calendar grid and sky blue color palette
-- **Regression**: All 82 existing tests must continue to pass
+- **Regression**: All 369 existing test files must continue to pass
 
 ### University Admissions Case Management (in build)
 
@@ -89,20 +89,20 @@ A case management system for the BeGifted university counseling team at `/admiss
 <!-- GSD:stack-start source:codebase/STACK.md -->
 ## Technology Stack
 
-No stack changes from the locked baseline — all versions current as of 2026-05-31.
+No stack changes from the locked baseline — all versions current as of 2026-08-05.
 
-- **Languages**: TypeScript ^5.9.3 (all of `src/`); SQL (PostgreSQL) via Drizzle migrations in `drizzle/` (35 files). Config tooling in `.mjs`.
+- **Languages**: TypeScript ^5.9.3 (all of `src/`); SQL (PostgreSQL) via Drizzle migrations in `drizzle/` (65 files). Config tooling in `.mjs`.
 - **Runtime**: Node.js (no version pinned), Vercel Serverless Functions. TS target ES2017, module `esnext`, `moduleResolution: bundler`. Package manager npm (`package-lock.json`).
 - **Framework**: Next.js 16.2.2 (App Router, `cacheComponents: true` — the only custom `next.config.ts` setting; uses `"use cache"` + `cacheTag`/`cacheLife`). React / React DOM 19.2.4. UI under `src/app/`, authed routes in the `(app)` group.
 - **Testing**: Vitest ^4.1.2 with two projects — `unit` (node env, `src/**/*.test.ts(x)`) and `integration` (`*.integration.test.ts`, serial forks). `testcontainers` spins up ephemeral Postgres for the 3 integration suites. `@vitest/coverage-v8` for coverage.
-- **DB / ORM**: `drizzle-orm` 0.45.2 (schema with ~78 tables at `src/lib/db/schema.ts`). `@neondatabase/serverless` is the primary driver (neon-http, singleton on `globalThis.__bgscheduler_db`). `pg` ^8.21.0 is used ONLY where transactions are required (payroll sync via `node-postgres`), since neon-http has no transaction support. `drizzle-kit` ^0.31.10 for migrations.
+- **DB / ORM**: `drizzle-orm` 0.45.2 (schema with 188 tables + 61 pgEnums at `src/lib/db/schema.ts`). `@neondatabase/serverless` is the primary driver (neon-http, singleton on `globalThis.__bgscheduler_db`). `pg` ^8.21.0 is used ONLY where transactions are required (payroll sync via `node-postgres`), since neon-http has no transaction support. `drizzle-kit` ^0.31.10 for migrations.
 - **Auth / validation**: `next-auth` 5.0.0-beta.30 (Auth.js v5, Google provider + `admin_users` allowlist; edge variant `src/lib/auth-edge.ts` backs middleware). `zod` ^4.3.6 (centralized env schema + per-route body schemas).
 - **AI scheduler**: no vendor SDK — calls OpenAI's Responses API directly over `fetch`; reads `OPENAI_*` from `process.env`, gated by `ENABLE_AI_SCHEDULER`.
 - **Sheets ingest**: no Google client lib — leave-request import hits OAuth + Sheets over `fetch`. `xlsx` ^0.18.5 parses sales-dashboard/projection imports.
 - **UI / styling**: Tailwind CSS ^4 (theme in `src/app/globals.css`, OKLCH tokens; no `tailwind.config`), `shadcn` ^4.1.2 over `@base-ui/react` 1.3.0, `cmdk`, `lucide-react`, `class-variance-authority` + `clsx` + `tailwind-merge` (`cn()`), `chart.js`. Fonts: Inter + JetBrains Mono via `next/font/google`.
 - **Dates**: `date-fns` + `date-fns-tz` (Asia/Bangkok), `uuid`.
-- **Config**: strict TS, path alias `@/*` → `./src/*`. ESLint 9 flat config (`next/core-web-vitals` + `next/typescript`, no custom rules). `src/lib/env.ts` validates 9 required env vars at startup (+ 3 optional LINE vars); function `maxDuration` is set per-route (most sync/import routes 800s on Vercel Pro), NOT in `vercel.json`.
-- **Platform**: Vercel Pro with 7 staggered crons (Wise snapshot `*/30`, plus sales/credit-control/wise-activity/leave-requests/class-assignment crons); Neon Postgres (ap-southeast-1); Docker for integration tests. External: Wise API, OpenAI (when enabled), Google Sheets, LINE Messaging API.
+- **Config**: strict TS, path alias `@/*` → `./src/*`. ESLint 9 flat config (`next/core-web-vitals` + `next/typescript`, no custom rules). `src/lib/env.ts` declares 15 env vars — 7 hard-required, 2 defaulted, 6 optional (3 LINE + `LINE_SCHEDULE_BOT_ADMIN_IDS`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`); function `maxDuration` is set per-route (most sync/import routes 800s on Vercel Pro), NOT in `vercel.json`.
+- **Platform**: Vercel Pro with 15 crons (Wise snapshot `*/30`, plus sales/credit-control/wise-activity/leave-requests/progress-tests/post-class-feedback/competitor-intelligence/class-assignment jobs); Neon Postgres (ap-southeast-1); Docker for integration tests. External: Wise API, OpenAI (when enabled), Google Sheets, LINE Messaging API.
 
 _Full detail: [.planning/codebase/STACK.md](.planning/codebase/STACK.md) and the [docs/ handbook](docs/README.md)._
 <!-- GSD:stack-end -->
@@ -130,7 +130,7 @@ _Full detail: [.planning/codebase/CONVENTIONS.md](.planning/codebase/CONVENTIONS
 <!-- GSD:architecture-start source:ARCHITECTURE.md -->
 ## Architecture
 
-**Pattern**: snapshot-versioned ETL + in-memory query index, extended into a multi-domain admin platform. Wise (the source of truth) is slow and rate-limited, so it is never queried on the request path — a background sync pulls all tutor data, normalizes it through six domain modules, persists it to Postgres tables keyed by an immutable `snapshot_id`, and serves search/compare reads from a process-global in-memory index. The same spine now hosts ~15 feature subsystems (search/compare, sales dashboard, credit control, payroll, leave requests, LINE/AI review, classroom assignment, room capacity, AI scheduler), each with its own sync/import pipeline and tables. Scale: **~78 tables, ~110 HTTP route handlers, 7 crons, 14 in-app pages, ~130 test files**.
+**Pattern**: snapshot-versioned ETL + in-memory query index, extended into a multi-domain admin platform. Wise (the source of truth) is slow and rate-limited, so it is never queried on the request path — a background sync pulls all tutor data, normalizes it through six domain modules, persists it to Postgres tables keyed by an immutable `snapshot_id`, and serves search/compare reads from a process-global in-memory index. The same spine now hosts 22 feature subsystems (search/compare, sales dashboard, credit control, payroll, leave requests, LINE/AI review, classroom assignment, room capacity, AI scheduler, student schedule, post-class feedback, learning plans, student promotions, university admissions, progress tests, competitor intelligence, US universities), each with its own sync/import pipeline and tables. Scale: **188 tables, 241 endpoints across 178 `route.ts` files, 15 crons, 25 in-app pages, 369 test files**.
 
 - **Core invariants**:
   - **Snapshot persistence** — tutor writes scoped to `snapshot_id`; one atomic `UPDATE` flips a candidate to `active = true` after a successful sync; failed syncs preserve the prior snapshot. `past_session_blocks` is the sole cross-snapshot table (keyed by `group_canonical_key`).

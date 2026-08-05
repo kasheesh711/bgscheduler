@@ -1,19 +1,27 @@
 # Database Reference — Tutor Profiles
 
-Scope: the two standalone tables that hold human-curated tutor metadata — contact details (`tutorContacts`) and the parent-facing / internal business profile (`tutorBusinessProfiles`). Both are keyed off a `canonicalKey` string rather than a foreign key, and neither is snapshot-scoped.
+Scope: the two standalone tables that hold human-curated tutor metadata that Wise does not store — contact/delivery details (`tutorContacts`) and the parent-facing / internal business profile (`tutorBusinessProfiles`).
 
-For the full column-by-column reference (types, defaults, indexes), see [docs/reference/database/index.md](./index.md). This page covers grain, key columns, and relationships only.
+Both are keyed off a `canonicalKey` **text** value rather than a foreign key, and neither carries a `snapshotId`, so both survive snapshot rotation while the snapshot-scoped tutor tables are replaced underneath them.
+
+| Table (varName) | SQL name | schema.ts lines |
+|---|---|---|
+| `tutorContacts` | `tutor_contacts` | 1962–1980 |
+| `tutorBusinessProfiles` | `tutor_business_profiles` | 1982–2016 |
+
+Full column lists live in [docs/reference/database/index.md](./index.md); enum values live in [enums.md](./enums.md). This page covers grain, keys, and relationships only.
 
 ## ER Diagram
 
-Both tables are independent of the snapshot-versioned core data model. They have no SQL foreign keys to `snapshots`, `tutors`, or `tutor_identity_groups`; the only linkage is the `canonicalKey` text value (and the `displayName`/`sourceNames` strings), which is correlated by application logic, not enforced at the database level. The core tables are shown as a single stub node to make that soft, non-FK relationship explicit.
+Neither table declares a SQL foreign key — there is no `.references(...)` call anywhere in either definition (`src/lib/db/schema.ts:1962-1980`, `:1982-2016`). The only linkage to core tutor data is the shared `canonicalKey` string, which also appears on the snapshot-scoped `tutorIdentityGroups.canonicalKey` (`src/lib/db/schema.ts:1519`) and is correlated by application code. Core tutor data is therefore drawn as a single stub node to make that soft, non-FK relationship explicit.
 
 ```mermaid
 erDiagram
     tutorContacts {
         uuid id PK
-        text canonical_key UK "unique index"
+        text canonical_key UK "unique index; soft join key"
         text display_name
+        text primary_email "delivery override"
         boolean active
     }
 
@@ -26,10 +34,11 @@ erDiagram
 
     CORE_TUTOR_DATA {
         uuid snapshot_id "snapshots / tutors / tutor_identity_groups"
+        text canonical_key "tutor_identity_groups.canonical_key"
     }
 
-    tutorContacts |o..o| CORE_TUTOR_DATA : "canonical_key / name (soft, no FK)"
-    tutorBusinessProfiles |o..o| CORE_TUTOR_DATA : "canonical_key / name (soft, no FK)"
+    tutorContacts |o..o| CORE_TUTOR_DATA : "canonical_key (soft, no FK)"
+    tutorBusinessProfiles |o..o| CORE_TUTOR_DATA : "canonical_key (soft, no FK)"
     tutorContacts |o..o| tutorBusinessProfiles : "shared canonical_key (no FK)"
 ```
 
@@ -37,40 +46,46 @@ erDiagram
 
 ### `tutorContacts` — `tutor_contacts`
 
-Source: `src/lib/db/schema.ts` lines 1057-1073.
+Source: `src/lib/db/schema.ts:1962-1980`.
 
-Grain: one row per logical tutor contact record, identified by `canonicalKey`. Uniqueness is enforced by `tutor_contacts_canonical_key_idx`, a `uniqueIndex` on `canonicalKey` (schema.ts line 1070), so there is at most one contact row per canonical key.
+**Grain**: one row per logical tutor contact record, identified by `canonicalKey`. Uniqueness is enforced by `tutor_contacts_canonical_key_idx`, a `uniqueIndex` on `canonicalKey` (`src/lib/db/schema.ts:1978`), so there is at most one contact row per canonical key. `id` is a surrogate `uuid` PK (`defaultRandom()`, line 1963); `canonicalKey` is the natural key.
 
-Key columns:
-- `id` — `uuid` primary key, `defaultRandom()` (line 1058). Surrogate PK; the natural key is `canonicalKey`.
-- `canonicalKey` — `text`, `notNull`, carries the unique index (lines 1059, 1070). The application-level join key.
-- `displayName` — `text`, `notNull` (line 1060).
-- `onsiteEmail` / `onlineEmail` / `onsitePhone` / `onlinePhone` — nullable `text` (lines 1061-1064). Contact details are split by modality (onsite vs. online variant), mirroring the online/offline-pair identity model.
-- `sourceNames` — `jsonb` typed `string[]`, `notNull`, defaults to `[]` (line 1065). Records the underlying name strings this contact was assembled from.
-- `active` — `boolean`, `notNull`, defaults `true` (line 1066); indexed by `tutor_contacts_active_idx` (line 1071) for filtering live records.
-- `createdAt` / `updatedAt` — timezone-aware `timestamp`, `notNull`, `defaultNow()` (lines 1067-1068).
+**Key columns**:
+- `canonicalKey` (`text`, not null, unique index) — the application-level join key onto core tutor data.
+- `displayName` (`text`, not null, line 1965).
+- `primaryEmail` (nullable `text`, line 1968) — a feature-owned delivery override added for post-class feedback reminders. The schema comment at lines 1966–1967 states that existing consumers keep using `onsiteEmail`/`onlineEmail` unless they opt into it.
+- `onsiteEmail` / `onlineEmail` / `onsitePhone` / `onlinePhone` (nullable `text`, lines 1969–1972) — contact details split by modality, mirroring the online/offline-pair identity model.
+- `sourceNames` (`jsonb` typed `string[]`, not null, default `[]`, line 1973) — the underlying Wise name strings this contact was assembled from; used for name-based matching fallbacks.
+- `active` (`boolean`, not null, default `true`, line 1974), indexed by `tutor_contacts_active_idx` (line 1979).
+- `createdAt` / `updatedAt` (timezone-aware `timestamp`, not null, `defaultNow()`, lines 1975–1976).
 
-Relationships: none enforced in SQL. The row is correlated to the snapshot-based core tutor data (`tutors`, `tutor_identity_groups`, and their `snapshots`) and to `tutorBusinessProfiles` only through the shared `canonicalKey` value (and `displayName` / `sourceNames` strings), resolved by application code rather than a database foreign key.
+**Email precedence is decided in application code, not the schema.** `resolvePostClassTutorRecipient` returns `primaryEmail` when set (`source: "primary"`), otherwise falls back to the de-duplicated set of `onsiteEmail`/`onlineEmail` only when exactly one distinct address remains (`source: "wise_fallback"`), and returns `null` with `source: "conflict"` when the two disagree — a fail-closed resolution (`src/lib/post-class-feedback/notifications.ts:190-203`).
+
+**Write path**: rows are seeded idempotently. The classroom schedule-email backfill selects existing canonical keys, inserts only the missing ones, and still guards the write with `.onConflictDoNothing({ target: schema.tutorContacts.canonicalKey })` (`src/lib/classrooms/schedule-email.ts:172-190`).
+
+**Read paths** (all filter on `active = true`): post-class feedback recipient resolution (`src/lib/post-class-feedback/notifications.ts:402-408`), progress-test teacher identity resolution by email (`src/lib/progress-tests/teacher-access.ts:48-63`), learning-plan tutor authorization (`src/lib/learning-plans/access.ts:43-59`, which lowercases and trims both sides in SQL), and leave-request tutor matching (`src/lib/leave-requests/matching.ts:78-80`).
+
+**Relationships**: none enforced in SQL. Correlated to snapshot-based core tutor data (`tutor_identity_groups` → `snapshots`) and to `tutorBusinessProfiles` only through the shared `canonicalKey` value. Note that `classroomScheduleEmailRecipients` also carries a `canonicalKey` `text` column (`src/lib/db/schema.ts:2039`), but its enforced FK is `groupId → tutorIdentityGroups.id` (line 2038), not a reference to `tutorContacts`.
 
 ### `tutorBusinessProfiles` — `tutor_business_profiles`
 
-Source: `src/lib/db/schema.ts` lines 1074-1109.
+Source: `src/lib/db/schema.ts:1982-2016`.
 
-Grain: one row per tutor business profile, keyed directly on `canonicalKey` as the primary key (line 1075). Because `canonicalKey` is the PK, there is exactly one business profile per canonical key.
+**Grain**: one row per tutor business profile, keyed directly on `canonicalKey` as the primary key (line 1983) — there is no surrogate id, so there is exactly one profile per canonical key. Writes go through an upsert on that key: `.onConflictDoUpdate({ target: schema.tutorBusinessProfiles.canonicalKey, ... })` (`src/lib/tutor-business-profiles.ts:369-374`).
 
-Key columns:
-- `canonicalKey` — `text` primary key (line 1075). No separate surrogate id; the natural key is the PK.
-- `displayName` — `text`, `notNull` (line 1076); indexed by `tutor_business_profiles_display_name_idx` (line 1106).
-- `parentSafeSummary` / `internalNotes` — `text`, `notNull`, default `""` (lines 1077-1078). Split between parent-facing copy and internal-only notes.
-- `education` — `jsonb` array of `{ institution, country?, program?, notes? }`, `notNull`, default `[]` (lines 1079-1084).
-- `languages` — `jsonb` array of `{ language, proficiency, verificationSource? }`, `notNull`, default `[]` (lines 1085-1089).
-- Young-learner fit fields: `englishProficiency`, `youngLearnerFit` (both `text`, default `"unknown"`, lines 1090-1091), `youngestComfortableAge` (nullable `integer`, line 1092), `youngLearnerNotes` (`text`, default `""`, line 1093).
-- Tag/array columns (`jsonb` typed `string[]`, `notNull`, default `[]`): `teachingStyleTags` (1094), `strengthTags` (1096), `curriculumExperience` (1097).
-- Free-text notes (`text`, `notNull`, default `""`): `teachingStyleNotes` (1095), `studentFitNotes` (1098), `doNotUseForNotes` (1099).
-- Review/audit fields: `verifiedBy` (nullable `text`, line 1100), `lastReviewedAt` (nullable timezone-aware `timestamp`, line 1101).
-- `active` — `boolean`, `notNull`, default `true` (line 1102); indexed by `tutor_business_profiles_active_idx` (line 1107).
-- `createdAt` / `updatedAt` — timezone-aware `timestamp`, `notNull`, `defaultNow()` (lines 1103-1104).
+**Key columns** (grouped; full types and defaults in [index.md](./index.md)):
+- `canonicalKey` (`text` PK) and `displayName` (`text`, not null, line 1984, indexed by `tutor_business_profiles_display_name_idx`, line 2014).
+- Narrative copy, split parent-facing vs. internal: `parentSafeSummary`, `internalNotes` (`text`, not null, default `""`, lines 1985–1986).
+- Structured `jsonb` arrays: `education` (`{ institution, country?, program?, notes? }`, lines 1987–1992) and `languages` (`{ language, proficiency, verificationSource? }`, lines 1993–1997), both not null with default `[]`.
+- Young-learner fit: `englishProficiency` and `youngLearnerFit` (`text`, not null, default `"unknown"` — the fail-closed default, lines 1998–1999), `youngestComfortableAge` (nullable `integer`, line 2000), `youngLearnerNotes` (line 2001).
+- Tag arrays (`jsonb` typed `string[]`, not null, default `[]`): `teachingStyleTags` (2002), `strengthTags` (2004), `curriculumExperience` (2005).
+- Free-text notes (`text`, not null, default `""`): `teachingStyleNotes` (2003), `studentFitNotes` (2006), `doNotUseForNotes` (2007).
+- Review/audit: `verifiedBy` (nullable `text`, line 2008), `lastReviewedAt` (nullable timezone-aware `timestamp`, line 2009).
+- `active` (`boolean`, not null, default `true`, line 2010), indexed by `tutor_business_profiles_active_idx` (line 2015); active-only reads filter on it (`src/lib/tutor-business-profiles.ts:221-223`).
+- `createdAt` / `updatedAt` (timezone-aware `timestamp`, not null, `defaultNow()`, lines 2011–2012).
 
-Relationships: none enforced in SQL. Correlated to the core snapshot-based tutor data and to `tutorContacts` solely via the shared `canonicalKey` (and `displayName`), resolved in application code, not by a database foreign key.
+**`updatedAt` is load-bearing beyond auditing**: the search index derives a profile version string from `count(*)` plus `max(updated_at)` over this table (`getTutorProfileVersion`, `src/lib/search/index.ts:128-137`), so editing any profile changes the version and triggers an in-memory index rebuild independently of snapshot promotion.
+
+**Relationships**: none enforced in SQL. Correlated to core snapshot-based tutor data and to `tutorContacts` solely via the shared `canonicalKey`, resolved in application code rather than by a database foreign key.
 
 _Verified against HEAD + uncommitted WIP on 2026-05-31._

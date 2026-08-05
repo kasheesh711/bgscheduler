@@ -1,131 +1,155 @@
 # Tutor Search
 
-The search code carries no `@deprecated` markers and is the live primary entry point of the application.
+**Status: stable**
 
 ## Purpose
 
-Tutor Search answers one question for non-technical admin staff: *which tutors are free for a class at this time, and are they qualified for it?* An admin picks a day (or date), a time window, a class duration, and optional subject/curriculum/level/modality/tutor filters. The system returns a grid of qualified tutors with each candidate sub-slot marked available or blocked, plus a "Needs Review" section for tutors whose data could not be safely resolved.
+Tutor Search answers one question for non-technical admin staff: *which tutors are free for a class at this time, and are they qualified to teach it?* An admin picks a day (recurring) or a date (one-time), a time window, a class duration, and optional subject / curriculum / level / modality / named-tutor filters. The system slices the window into fixed-length sub-slots and returns a grid of tutors with each sub-slot marked available or blocked — clicking a blocked cell opens a popover with the blocking session's details (`availability-grid.tsx:199-221`) — plus a separate "Needs Review" list for tutors that would otherwise be Available for that sub-slot but whose underlying Wise data could not be resolved safely.
 
-It is the primary entry point of the application (`/` redirects to `/search`) and feeds directly into the Compare workflow on the right-hand panel. Two supporting read endpoints — filters and tutors — populate the form's dropdowns and the tutor combobox from the active snapshot.
+It is the workspace admin staff live in: `/search` is a first-class nav tool (`src/lib/navigation/tools.ts:101-105`) and the left half of the page feeds the Compare panel on the right (see [tutor-compare](./tutor-compare.md)). Two supporting read endpoints — filters and tutors — populate the form's dropdowns and the tutor combobox from the active snapshot.
 
-The defining performance characteristic is that **all search logic runs against an in-memory index**, not the database. The entire active snapshot is loaded once into a process-global `SearchIndex` singleton; every search, range search, and compare query reads from that structure with zero additional DB round-trips on the hot path (`src/lib/search/index.ts`, `src/lib/search/engine.ts`).
+The defining characteristic is that **the tutor dataset is never re-queried on the hot path**. The entire active snapshot is denormalized once into a process-global `SearchIndex` singleton, and search, range search, compare, proposals, the AI scheduler, room capacity, and the LINE operational planner all read from that in-memory structure (`src/lib/search/index.ts:83-90`, `:354`; the list of `ensureIndex` callers is not closed — `src/lib/line/operational.ts:527` is an easily-missed one).
+
+The hot path is not query-free, though. Even on the fully cached path `ensureIndex` still issues an active-snapshot `SELECT` plus a `count(*)::text` / `max(updated_at)::text` aggregate over `tutor_business_profiles` as a staleness probe (`index.ts:368-375` calling `:128-137`), and `executeRangeSearch` then reads — and reconciles — proposal holds (`range-search.ts:115-116`). What the index buys is that the tutor tables themselves are read once per snapshot, not once per request.
 
 ## Conceptual data model
 
-Tutor Search is **read-only**. It writes nothing. It loads the active snapshot's normalized tutor data into memory and queries it.
+Tutor Search writes no *tutor* tables — it loads the active snapshot's normalized tutor data into memory and queries it there. It is not side-effect-free, though: **every `POST /api/search/range` mutates `proposal_items`.** `executeRangeSearch` calls `listActiveProposalHolds(db)` with no options (`range-search.ts:116`), so `opts.reconcile !== false` is true (`src/lib/proposals/data.ts:263`) and `reconcileProposalState` runs (`data.ts:253-256`). That issues an `UPDATE proposal_items SET status='expired'` for lapsed pending holds (`data.ts:171-188`) and an `UPDATE proposal_items SET status='auto_resolved'` for confirmed holds a real Wise session now covers (`data.ts:239-250`) — even when the admin never touches a hold. See [proposals](./proposals.md).
 
-`buildIndex()` loads, in parallel, the following snapshot-scoped tables and denormalizes them into one aggregate per tutor (`src/lib/search/index.ts:142`–`344`):
+`buildIndex()` locates the single `active` snapshot, then loads every snapshot-scoped tutor table in parallel and folds them into one `IndexedTutorGroup` aggregate per logical tutor (`src/lib/search/index.ts:142-344`):
 
-- **Snapshots** — locates the single `active` snapshot; all subsequent reads are scoped to its `snapshotId` (`index.ts:144`).
-- **Sync runs** — finds the most recent successful sync that promoted the active snapshot, to derive `syncedAt` for staleness checks (`index.ts:155`).
-- **Tutor identity groups** + **members** — the logical tutor and its underlying Wise teacher records (online/onsite variants) (`index.ts:169`, `:176`).
-- **Subject/level qualifications** — subject + curriculum + level + examPrep per group (`index.ts:181`).
-- **Recurring availability windows** — weekday + minute range + modality (`index.ts:185`).
-- **Dated leaves** — exact leave windows that block availability (`index.ts:188`).
-- **Future session blocks** — Wise sessions that block a weekday/time, with a precomputed `isBlocking` flag (`index.ts:192`).
-- **Data issues** — unresolved normalization problems, matched to groups by canonical key / id / display name; their presence routes a tutor to Needs Review (`index.ts:216`, `:232`).
-- **Tutor business profiles** — optional enrichment attached by canonical key (`index.ts:220`, `:317`).
+- **Snapshots** — finds the one row with `active = true`; every subsequent read is scoped to its id (`index.ts:144-154`).
+- **Sync runs** — the most recent `success` run that promoted this snapshot, which supplies `syncedAt` for staleness (`index.ts:155-166`).
+- **Tutor identity groups** and **members** — the logical tutor plus the underlying Wise teacher records (online/onsite variants) (`index.ts:169-179`).
+- **Subject/level qualifications** — subject + curriculum + level + optional exam prep, used for filtering (`index.ts:181-183`).
+- **Recurring availability windows** — weekday + minute range + modality; a tutor is only ever "available" inside one of these (`index.ts:185-187`).
+- **Dated leaves** — absolute leave intervals that block regardless of sessions (`index.ts:189-191`).
+- **Future session blocks** — Wise sessions carrying the ETL's precomputed `isBlocking` flag (`index.ts:192-215`).
+- **Data issues** — unresolved normalization problems, matched to a group by canonical key, group id, or display name; their presence forces Needs Review (`index.ts:216-247`).
+- **Tutor business profiles** — optional editorial enrichment attached by `canonicalKey` (`index.ts:220`, `:317`).
 
-The two supporting endpoints read the same snapshot tables directly (not via the index): filters reads `subject_level_qualifications` (`src/lib/data/filters.ts`); tutors reads `tutor_identity_groups` joined to `subject_level_qualifications` (`src/lib/data/tutors.ts`). Both are wrapped in Next.js `"use cache"` functions tagged `snapshot` so they invalidate when a new snapshot is promoted.
+The index also builds a `byWeekday` map so a slot search starts from the candidates that have *any* window on that weekday instead of scanning all groups (`index.ts:322-331`).
 
-The column-level definitions of every table above (snapshots, sync runs, identity groups/members, qualifications, availability windows, leaves, session blocks, data issues) live in the Drizzle schema, which is the authoritative source: `src/lib/db/schema.ts`. There is no standalone database-reference doc under `docs/reference/` yet.
+The two supporting endpoints bypass the index and query the same snapshot tables directly: filters reads qualifications (`src/lib/data/filters.ts:37-48`); tutors issues two independent selects — identity groups and qualifications — inside one `Promise.all` (`src/lib/data/tutors.ts:58-74`) and merges them in memory through a `groupId → Set<subject>` map (`tutors.ts:31-53`). There is no SQL join.
+
+Grain, keys, and column-level detail for all of these tables live in the [core ERD](../reference/database/erd-core.md); business profiles are in the [tutor-profiles ERD](../reference/database/erd-tutor-profiles.md); the proposal-hold tables that overlay the grid are in the [AI & proposals ERD](../reference/database/erd-ai-and-proposals.md).
 
 ## API surface
 
-There is no standalone API-reference doc under `docs/reference/` yet; for each endpoint the route handler and its Zod request schema are the authoritative request/response contract. This section lists purpose and the handler path.
+Full request/response schemas, error shapes, and per-field tables live in the [misc API reference](../reference/api/misc.md); this section gives purpose only.
 
-- **`POST /api/search/range`** — the primary search. Takes a time window + class duration, generates fixed-length sub-slots, and returns an availability grid (`true` / blocking-session details per cell) plus Needs Review. Handler: `src/app/api/search/range/route.ts`.
-- **`POST /api/search`** — legacy slot-based search kept for backward compatibility; caller supplies explicit slots and gets per-slot availability + an intersection across slots. Handler: `src/app/api/search/route.ts`.
-- **`GET /api/filters`** — distinct subjects, curriculums, levels from the active snapshot, for dropdown population. Handler: `src/app/api/filters/route.ts`.
-- **`GET /api/tutors`** — all tutors (id, display name, supported modes, subjects) sorted by name, for the tutor combobox. Handler: `src/app/api/tutors/route.ts`.
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/search/range` | The primary search: time window + duration → sub-slot availability grid, blocking-session detail, and Needs Review. Handler `src/app/api/search/range/route.ts`. |
+| `POST /api/search` | Legacy slot-based search: caller supplies explicit slots, gets per-slot available/needsReview plus the intersection across all slots. Handler `src/app/api/search/route.ts`. |
+| `GET /api/filters` | Populates the search form's qualification dropdowns from the active snapshot. Handler `src/app/api/filters/route.ts`. |
+| `GET /api/tutors` | The data source for the searchable tutor combobox, read from the active snapshot. Handler `src/app/api/tutors/route.ts`. |
 
-A third route, **`POST /api/search/assistant`** (`src/app/api/search/assistant/route.ts`), lives under the same path prefix but belongs to the AI Scheduler feature — it drives an LLM conversation that ultimately produces the same range-search-shaped suggestions. It is documented with that feature, not here.
+`POST /api/search/assistant` shares the path prefix but belongs to the [AI Scheduler](./ai-scheduler.md) — it drives an LLM turn that ultimately calls the same `executeSearch`. It is the only search-family path in the middleware's public allowlist — which covers several unrelated paths besides it (`src/middleware.ts:4-19`) — yet it still returns 401 without a session in-handler (`assistant/route.ts:136-138`); see the [AI scheduler API reference](../reference/api/ai-scheduler.md).
 
-All four endpoints in scope are auth-gated: they return `401` if there is no session (`auth()` at `route.ts:31`, guard at `:32`, 401 return at `:33` in search; `auth()` at `:6`, guard at `:7`, 401 return at `:8` in filters/tutors), `400` on invalid JSON or Zod validation failure, and `500` on internal error.
+Only the two POST endpoints follow the full house pattern, which the repo convention scopes to mutating routes: `auth()` → JSON parse → Zod `safeParse` → business logic in `try/catch` (`range/route.ts:7-55`, `search/route.ts:31-34`). The two GETs take no request body, so they legitimately have neither a `request.json()` step nor a Zod schema — their whole shape is `auth()` then `try/catch` (`filters/route.ts:5-17`, `tutors/route.ts:5-18`). Exact status codes and error payloads for all four are in the [misc API reference](../reference/api/misc.md).
 
 ## UI
 
-- **Page**: `src/app/(app)/search/page.tsx` — an `async` server component that awaits `getFilterOptions()` and `getTutorList()` at the server-component level (`page.tsx:8`–`9`), then passes both as props into the client workspace, which it wraps in `<Suspense fallback={<SearchSkeleton />}>` (`page.tsx:12`). Because the two awaits resolve before the JSX renders, the Suspense fallback covers only the client workspace's own suspension (e.g. its `useSearchParams` read), not the data loads.
-- **Orchestrator**: `src/components/search/search-workspace.tsx` — the `"use client"` split-panel shell. Left half is search; right half is the Compare panel (`compare/compare-panel.tsx`). It owns the `RangeSearchResponse` state, deep-link handling (`?tutors=`, `?week=`), keyboard week navigation, fullscreen toggle, and proposal-hold overlay wiring. The search feature proper is the left half.
+**Page** — `src/app/(app)/search/page.tsx`. An async Server Component that calls `await connection()` — opting the route out of prerendering under `cacheComponents` — then awaits `getFilterOptions()` and `getTutorList()` sequentially and passes both into the client shell wrapped in `<Suspense fallback={<SearchSkeleton />}>` (`page.tsx:9-20`). Both loads therefore resolve before the JSX exists (`page.tsx:9-12` awaits all three, and the JSX is only returned at `:14-21`), so the boundary demonstrably cannot be streaming those loads in. Whether the fallback ever paints under `cacheComponents` is a runtime question that needs a running dev server to answer, and this doc does not settle it. The route-level `src/app/(app)/search/loading.tsx` renders the same skeleton during navigation.
+
+**Orchestrator** — `src/components/search/search-workspace.tsx`, the `"use client"` split-panel shell. The left half is search, the right half is the Compare panel; a fullscreen toggle collapses search to zero width (`search-workspace.tsx:284-354`). It owns the `RangeSearchResponse` state, `?tutors=` / `?week=` deep links (`:100-114`), non-navigating URL sync (`:123-137`), Arrow-key week navigation, Esc-to-exit-fullscreen, and the proposal-hold overlay.
 
 Key search-side components under `src/components/search/`:
-- **`search-form.tsx`** — the compact 3-row form: recurring/one-time toggle, tutor combobox (shadcn Command + Popover), day/date + From/To time selects, duration + mode + Search button, subject/curriculum/level dropdowns, and an "N filters active · Clear all" summary. Posts to `/api/search/range`. Defaults are tuned to the tutor working window (15:00–20:00, 90 min) so staff get useful results on first click (`search-form.tsx:86`–`89`).
-- **`recommended-slots.tsx`** — renders the auto-ranked hero slot cards derived client-side from the range response.
-- **`search-results.tsx`** / **`availability-grid.tsx`** / **`results-view.tsx`** — the availability grid table and result rows.
-- **`recent-searches.tsx`** — last-10 searches persisted in `localStorage`.
-- **`copy-for-parent-drawer.tsx`**, **`copy-button.tsx`** — parent-message composition from the selected slots.
 
-Supporting client-side ranking logic lives in `src/lib/search/recommend.ts` (`getRecommendedSlots`), which the workspace and `recommended-slots.tsx` consume to build the hero cards.
+- **`search-form.tsx`** — the compact form: recurring/one-time toggle, multi-select tutor combobox (`Command` + `Popover`), day-or-date + From/To selects at 15-minute granularity, duration + mode + Search, and the three qualification dropdowns. The "N filters active · Clear all" summary is **not** scoped to those three dropdowns: `activeFilterCount` sums subject + curriculum + level + a non-`either` modality + `selectedTutorIds.length` (`search-form.tsx:110-115`), so up to five inputs including every selected named tutor, and its Clear all resets all of them (`:518-530`). A second, unrelated "Clear all" above the tutor combobox clears only the tutor chips (`:242-250`). Defaults are 15:00–20:00 at 90 minutes (`search-form.tsx:87-89`); the source comment says they reflect the tutor working window so staff don't have to know it (`:85-86`) — that comment is the only evidence in the repo for the 3–8pm rationale. Posts to `/api/search/range` (`:138`).
+- **`recommended-slots.tsx`** — the hero cards, ranked client-side from the response by `getRecommendedSlots`.
+- **`search-results.tsx`** — result header (snapshot id prefix, latency, Stale badge, warnings), multi-select state, and the Compare / Mark-proposed actions.
+- **`availability-grid.tsx`** — the grid table itself: `✓` for free, a dot or lock icon that opens a **click** popover with the blocking session (or proposal hold) detail, mode badges, quick-add-to-compare, and the separate Needs Review table. The trigger is a bare Base UI `<Popover>` with no `openOnHover` prop here or in the primitive (`availability-grid.tsx:199-221`, `src/components/ui/popover.tsx:8-14`), so the click-to-open default applies; the `cursor-help` class at `availability-grid.tsx:202` is cosmetic and reads misleadingly.
+- **`recent-searches.tsx`** — last 10 searches deduped and persisted in `localStorage` (`STORAGE_KEY = "bgscheduler-recent-searches"`, `MAX_RECENTS = 10`).
+- **`copy-button.tsx`** / **`copy-for-parent-drawer.tsx`** — clipboard summaries and the editable parent-message draft built from selected slots.
+- **`proposal-hold-modal.tsx`** / **`active-holds-drawer.tsx`** — create and manage tentative holds (see [proposals](./proposals.md)).
+
+A stale-snapshot banner is rendered app-wide but only shows on the search/scheduler/compare workspaces (`src/components/layout/stale-snapshot-banner.tsx:18-28`), using a separate 2-hour threshold from the 90-minute API warning.
 
 ## Data flow
 
-A search request flows: form → range endpoint → in-memory index → engine → grid response. The index is built lazily on the first request after a snapshot change and reused thereafter.
+Form → range endpoint → in-memory index → engine → grid. The index is built lazily on the first request after a snapshot (or profile) change and reused for every request after that.
 
 ```mermaid
 flowchart TD
     A[SearchForm submit] -->|POST /api/search/range| B[range route handler]
-    B --> C{auth + Zod valid?}
+    B --> C{auth + Zod + sub-slots fit?}
     C -->|no| C1[401 / 400]
     C -->|yes| D["executeRangeSearch()"]
     D --> E["generateSubSlots()<br/>window + duration → fixed slots"]
     D --> F["ensureIndex(db)"]
-    F -->|cached & snapshot fresh| G[reuse SearchIndex singleton]
-    F -->|stale or first call| H["buildIndex(db)<br/>parallel load of active snapshot"]
+    F -->|snapshot id + profile version match| G[reuse SearchIndex singleton]
+    F -->|first call, or changed| H["buildIndex(db)<br/>parallel load of active snapshot"]
     H --> G
-    D --> I["executeSearch(index, slots)"]
-    I --> J["per sub-slot: byWeekday lookup,<br/>window cover, modality, qualification,<br/>session block, leave checks"]
+    G --> I["executeSearch(index, slots)"]
+    I --> J["per sub-slot searchSlot():<br/>byWeekday → modality → window cover<br/>→ qualifications → sessions → leaves"]
     J --> K[available / needsReview per slot]
-    D --> L["getBlockingSessions()<br/>fill blocked-cell details"]
-    D --> M[merge proposal holds]
-    K --> N[grid rows sorted by availability]
-    L --> N
+    D --> L["listActiveProposalHolds()<br/>overlay holds on free cells"]
+    K --> M["getBlockingSessions()<br/>backfill blocked-cell detail"]
+    L --> N[grid rows sorted by free-cell count]
     M --> N
     N --> O[RangeSearchResponse JSON]
-    O --> P[SearchResults grid + RecommendedSlots]
+    O --> P[AvailabilityGrid + RecommendedSlots]
 ```
 
-Step detail:
-
-1. **`generateSubSlots(startTime, endTime, durationMinutes)`** walks the window in non-overlapping `durationMinutes` steps; an empty result (window shorter than duration) returns `400` (`range-search.ts:41`, route guard at `range/route.ts:31`).
-2. **`ensureIndex(db)`** returns the cached singleton if the active snapshot id and tutor-profile version still match, otherwise rebuilds (`index.ts:354`). Concurrent first-time callers coalesce onto a single in-flight build promise (`index.ts:358`, `:396`).
-3. **`executeSearch`** runs each sub-slot through `searchSlot`, then computes an intersection of tutors available in *all* slots for the legacy shape (`engine.ts:22`, `:323`).
-4. **`searchSlot`** resolves the weekday, pulls candidates from `index.byWeekday`, and filters by modality, availability-window coverage, qualifications, session blocking, and leaves before classifying each tutor as Available or Needs Review (`engine.ts:60`).
-5. **`executeRangeSearch`** reshapes per-slot results into a per-tutor grid (`true` where free), back-fills blocked cells with `getBlockingSessions` detail, overlays active proposal holds, optionally filters to requested `tutorGroupIds`, and sorts rows by free-cell count (`range-search.ts:103`).
+1. **`generateSubSlots`** walks the window in non-overlapping `durationMinutes` steps; a window shorter than the duration yields zero slots and the route returns 400 (`range-search.ts:41-68`, `range/route.ts:30-36`).
+2. **`ensureIndex`** returns the cached singleton when the active snapshot id *and* the tutor-profile version both still match; otherwise it rebuilds (`index.ts:365-389`). Confirming that match is itself two queries — an active-snapshot select and the profile-version aggregate — run in parallel on every request (`index.ts:368-375`, `:128-137`).
+3. **`executeSearch`** stamps snapshot metadata, runs each sub-slot through `searchSlot`, and computes the cross-slot intersection (`engine.ts:22-58`, `:323-342`).
+4. **`searchSlot`** resolves the weekday, pulls candidates from `byWeekday`, and applies modality → availability-window coverage → qualification filters → session blocking → leave blocking before classifying each survivor Available or Needs Review (`engine.ts:60-150`).
+5. **`executeRangeSearch`** pivots per-slot results into per-tutor rows, overlays active proposal holds, backfills blocked cells with `getBlockingSessions` detail, optionally prunes to requested `tutorGroupIds`, and sorts rows by free-cell count descending (`range-search.ts:103-233`).
 
 ## Business rules & edge cases
 
-- **Fail-closed to Needs Review, never silently dropped.** A tutor with any `dataIssue`, or with unresolved modality (`supportedModes.length === 0`), is routed to `needsReview` with reasons rather than appearing as Available (`engine.ts:86`–`92`, `:142`). Unresolved supported-modality maps to an empty modes array at index-build time (`index.ts:265`–`270`).
-- **Mode mismatch is a hard skip, not a review.** If the slot requests a specific mode and the group does not support it at all, the candidate is dropped entirely (`engine.ts:93`–`97`). The same modality check is applied a second time at the availability-window granularity (`engine.ts:104`).
-- **Availability window must fully cover the slot.** A window qualifies only if `startMinute <= slot.start` and `endMinute >= slot.end` on the matching weekday (`engine.ts:100`–`106`).
-- **Recurring vs one-time blocking differ.** Recurring mode blocks if *any* future session overlaps the same weekday + minute range (`isBlockedRecurring`, `engine.ts:155`). One-time mode blocks only when a session falls on the exact calendar date and overlaps (`isBlockedOneTime`, `engine.ts:173`).
-- **Cancelled sessions never block.** Only sessions with the precomputed `isBlocking` flag are considered; cancelled/non-blocking sessions are skipped in every blocking check (`engine.ts:163`, `:182`, `:211`). The flag itself is set fail-closed upstream (unknown status → blocking) in the normalization pipeline.
-- **Multi-day leave blocks every weekday it touches, in full.** A leave longer than 24h is treated as whole-day coverage for each calendar day in its span — no minute-of-day math on middle days. Single-day leaves use minute-of-day overlap on the leave's own weekday (`hasRecurringLeaveConflict`, `engine.ts:251`–`289`, with the REL-04 rationale in the docstring at `:240`).
-- **Snapshot freshness is surfaced, not enforced.** `executeSearch` stamps `snapshotMeta.stale = true` and pushes a warning when the snapshot is older than the API stale threshold (90 minutes), but still returns results (`engine.ts:30`–`38`; threshold `API_STALE_THRESHOLD_MS` in `src/lib/ops/stale.ts`).
-- **No active snapshot is a hard failure.** `buildIndex` throws `"No active snapshot found"` if no snapshot is `active` (`index.ts:150`); the supporting endpoints throw the same via `getActiveSnapshotIdOrThrow` (`src/lib/data/active-snapshot.ts`). Note the asymmetry: if a snapshot was active and later disappears, `ensureIndex` returns the *stale cached* index rather than throwing (`index.ts:384`–`386`).
-- **Range duration is constrained.** `durationMinutes` is validated to exactly 60, 90, or 120 by the Zod schema (`range-search.ts:22`–`27`).
-- **Optional tutor pre-filter.** `range` accepts `tutorGroupIds`; when present, the grid and Needs Review map are pruned to that set *after* the full search runs (`range-search.ts:207`–`215`).
-- **Proposal holds overlay availability.** A free cell that overlaps an active proposal hold for the same tutor (matched by `tutorCanonicalKey`) is downgraded to a `proposal_hold` blocking entry in the grid (`range-search.ts:144`, `:166`; client mirror in `search-workspace.tsx:194`–`235`).
-- **Client-side recommendation ranking.** `getRecommendedSlots` ranks sub-slots by count of fully-available qualified tutors, drops zero-availability slots, breaks ties by earliest start, and tags the top three "Best / Strong / Good fit" (`recommend.ts:20`–`70`).
-- **Caching invalidation.** `getFilterOptions` / `getTutorList` are `"use cache"` with `cacheTag("snapshot")` and `cacheLife("hours")` (`src/lib/data/filters.ts`, `src/lib/data/tutors.ts`); the in-memory index instead invalidates on snapshot-id or tutor-profile-version change inside `ensureIndex`.
+- **Fail-closed to Needs Review, never silently available — but only among candidates that would otherwise be Available.** Any `dataIssue` on the group, or an empty `supportedModes` array (unresolved modality), collects a review reason (`engine.ts:85-92`) which is consulted at the very end of the loop to push the tutor into `needsReview` instead of `available` (`engine.ts:142-146`). Unresolved modality becomes an empty array at index-build time (`index.ts:265-270`). Crucially, those reasons are read *after* the candidate has already survived the group-level mode skip (`:93-97`), availability-window coverage (`:108`), qualification filters (`:111`), session blocking (`:118`) and leave blocking (`:125`) — every one of which is a bare `continue`. A tutor with a data issue or unresolved modality who has no covering window, is busy, or is on leave is dropped and appears in **neither** list. Needs Review therefore means "would be Available for this sub-slot, but the data is unresolved" — it is not a roster of every tutor with unresolved data (`engine.ts:79-147`).
+- **Mode mismatch is a hard skip, not a review.** If the slot asks for a specific modality and the group does not support it at all, the candidate is dropped entirely (`engine.ts:93-97`); the same check is re-applied at window granularity (`engine.ts:104`).
+- **The availability window must fully contain the slot** — `w.startMinute <= slotStart && w.endMinute >= slotEnd` on the matching weekday (`engine.ts:100-106`). Partial overlap is not availability.
+- **Recurring vs one-time blocking differ.** Recurring blocks when *any* future session overlaps the same weekday + minute range, i.e. a session next Tuesday blocks every Tuesday (`engine.ts:155-168`). One-time blocks only on exact calendar-date overlap (`engine.ts:173-188`).
+- **Only `isBlocking` sessions block.** Cancelled sessions are non-blocking; unknown statuses are marked blocking upstream in normalization. Every blocking check skips `!s.isBlocking` rows (`engine.ts:163`, `:183`, `:211`).
+- **The recurring-leave branch is duration-based, not calendar-based (REL-04).** `hasRecurringLeaveConflict` splits on `leaveEnd - leaveStart > 24h` (`engine.ts:260-261`) — *not* on how many calendar days the leave touches. Over 24h, the leave is walked day-by-day and blocks any matching weekday with no minute-of-day math, because middle days are wholly inside the leave (the assumption is documented at `engine.ts:240-250`). At or under 24h, the code assumes `leaveStart` and `leaveEnd` share a calendar day and compares `leaveStart`'s weekday and minute-of-day window directly (`engine.ts:279-286`).
+- **A leave that crosses midnight but lasts ≤24h blocks nothing — a fail-OPEN gap.** The ≤24h branch's same-calendar-day assumption does not hold for a cross-midnight leave, and the resulting minute window is inverted. Reproduced with Mon 2026-08-03 20:00 → Tue 2026-08-04 10:00 Asia/Bangkok (14h): `isMultiDay` is `false`, `leaveStartMin` is 1200 and `leaveEndMin` is 600, so `leaveStartMin < endMinute && leaveEndMin > startMinute` (`engine.ts:284`) is false for Mon 20:00–21:30, Mon 15:00–16:30 **and** Tue 09:00–10:30. Not even the day the leave starts on is blocked, and the tutor is returned Available across their own leave. This contradicts the project's non-negotiable fail-closed rule, and it is TZ-independent — it reproduces under `TZ=Asia/Bangkok` exactly as under `TZ=UTC`. See Open questions.
+- **All three leave code paths are runtime-TZ-coupled.** The multi-day walk reads `cursor.getDay()` (`engine.ts:269`); the ≤24h branch reads `leaveStart.getDay()` and `leaveStart.getHours()/getMinutes()` (`engine.ts:279-283`); and `hasOneTimeLeaveConflict` builds its comparison interval with `new Date(dateStr)` plus `targetStart.setHours(...)` / `targetEnd.setHours(...)` (`engine.ts:300-304`). All are runtime-local getters/setters. On a non-Bangkok runtime the weekday match, the minute-of-day window, and the one-time comparison interval all shift: verified for date `2026-08-05` at `startMinute` 540, `targetStart` is `2026-08-05T09:00:00Z` under `TZ=UTC` but `2026-08-05T02:00:00Z` under `TZ=Asia/Bangkok` — a 7-hour shift in the window compared against leave instants, i.e. wrong leave verdicts for one-time searches. Nothing in the repo pins `TZ` (no entry in `src/lib/env.ts`, `vercel.json`, or `next.config.ts`); whether the production Vercel runtime sets it is outside the repo and was not checked.
+- **Leaves are checked after sessions and are equally disqualifying** — a tutor on leave is dropped from the slot, not flagged (`engine.ts:120-125`).
+- **Duration is a closed set.** Zod accepts only 60, 90, or 120 minutes (`range-search.ts:22-27`); day-of-week is bounded 0–6, and an out-of-range weekday returns an empty slot result rather than an error (`engine.ts:70-72`).
+- **Snapshot staleness warns, never withholds.** `snapshotMeta.stale` flips and `STALE_SEARCH_WARNING` is pushed into `warnings[]` past `API_STALE_THRESHOLD_MS` (90 minutes), but results are still returned (`engine.ts:30-38`; `src/lib/ops/stale.ts:2-5`).
+- **No active snapshot is a hard failure on first build, but a soft one afterwards.** `buildIndex` throws `"No active snapshot found"` (`index.ts:150-152`) and the supporting loaders throw the same via `getActiveSnapshotIdOrThrow` (`src/lib/data/active-snapshot.ts:12-14`). If a snapshot was active and later vanishes mid-life, `ensureIndex` deliberately returns the cached index instead of throwing (`index.ts:384-386`).
+- **Concurrent index builds coalesce (REL-02).** The in-flight build promise is assigned to the `globalThis` singleton synchronously, before any `await`, so concurrent first-time callers reuse one build rather than stampeding the database (`index.ts:354-401`).
+- **The index is `globalThis`-anchored so it survives HMR** (`index.ts:94-97`), and it is invalidated two ways: passively via the snapshot-id/profile-version check in `ensureIndex`, and actively via `clearSearchIndex()` after a tutor-profile edit or import commit (`src/app/api/tutor-profiles/[canonicalKey]/route.ts:51`, `src/app/api/tutor-profiles/import-commit/route.ts:61`).
+- **Named-tutor filtering happens after the search, not before it.** `tutorGroupIds` prunes both the grid and the Needs Review map once the full search has run (`range-search.ts:207-215`) — filtering never changes an availability verdict.
+- **Proposal holds downgrade free cells.** A cell the engine returned as free is rewritten to a `proposal_hold` blocking entry when an active hold for the same `tutorCanonicalKey` overlaps it (`range-search.ts:144-168`); the client re-applies the same rule after creating or acting on a hold, without re-searching (`search-workspace.tsx:194-235`).
+- **Blocked cells can legitimately have no detail, for more than one reason.** A cell is initialized to `[]` (`range-search.ts:163`) and is only ever backfilled from `getBlockingSessions`, which scans `group.sessionBlocks` and nothing else (`engine.ts:210-211`, `range-search.ts:194-203`); when it returns nothing the cell stays empty and the grid renders a muted em-dash instead of a popover (`availability-grid.tsx:226-233`). Three distinct engine rejections land there: no availability window fully covers the sub-slot (`engine.ts:100-108`), the covering window's modality does not match the requested mode (`engine.ts:104`), and a leave conflict, which is checked *after* the session check and so never contributes a session detail (`engine.ts:120-125`). Because the ≤24h-branch leave math is minute-scoped (`engine.ts:279-286`), the same tutor can be `true` for one sub-slot and a bare em-dash for the next purely because of a leave.
+- **Two server-side layers derive the one-time weekday differently — and the client is split too.** The range layer uses `weekdayForIsoDate`, which anchors the ISO date at `+07:00` and then calls `.getDay()` (`src/lib/proposals/overlap.ts:45-47`), at `range-search.ts:143` and `:192`; the engine's `searchSlot` uses the runtime-local `new Date(slot.date).getDay()` on the bare date string (`engine.ts:68`). Both run on the server. On the client, only *one* of the two derivations is genuinely Bangkok-anchored: `getBangkokWeekdayForIsoDate` formats through `Intl` with `timeZone: "Asia/Bangkok"` and is TZ-independent (`src/lib/bangkok-time.ts:16-20`, `:44-51`, used at `recommended-slots.tsx:31` and `copy-for-parent-drawer.tsx:24`). The proposal-hold overlay does **not** — it re-derives with `new Date(\`${date}T00:00:00+07:00\`).getDay()` (`search-workspace.tsx:208-212`), byte-for-byte the same construction as `weekdayForIsoDate`, i.e. a runtime-local `.getDay()` on a Bangkok-anchored instant. Verified: for `2026-08-05` that expression returns `2` under `TZ=UTC` and `3` under `TZ=Asia/Bangkok`. Because it runs in the browser, an admin whose machine is not on Bangkok time mis-derives the weekday for the hold overlay — arguably a likelier exposure than the server one, since a browser's timezone is the user's, not a deployment setting. See Open questions.
+- **Recommendation ranking is entirely client-side.** `getRecommendedSlots` ranks sub-slots by fully-available tutor count, drops zero-availability slots, breaks ties by earliest start, and tags the top three Best / Strong / Good fit with generated reason strings (`src/lib/search/recommend.ts:20-70`).
+- **Dropdown caches invalidate on snapshot promotion.** `getFilterOptions` and `getTutorList` are `"use cache"` with `cacheTag("snapshot")` + `cacheLife("hours")` (`filters.ts:52-55`, `tutors.ts:80-83`); a successful sync calls `revalidateTag("snapshot", { expire: 0 })` (`src/lib/sync/run-wise-sync.ts:161`).
 
 ## Tests
 
-Search-engine and index logic (`src/lib/search/__tests__/`):
-- **`engine.test.ts`** — recurring blocking, cancelled-session non-blocking, Needs Review routing for data issues and unresolved modality, mode filtering, subject/curriculum/level filtering, multi-slot intersection, one-time exact-date blocking, the 90-minute stale threshold, and REL-04 multi-day vs single-day leave overlap.
-- **`index.test.ts`** — REL-02 race-free coalescing of concurrent builds, cached-index reuse when the snapshot matches, single-rebuild-under-race, TCOV-01 denormalization (one group per row, child rows attached by groupId, supported-modes/data-issue mapping in the documented parallel-load order), `byWeekday` population (entry per weekday, dedupe per weekday, omission when no windows), and the snapshot-active race fallback returning the cached index without throwing.
-- **`recommend.test.ts`** — empty-input guards, Best/Strong/Good tiering, ranking by available-tutor count DESC, start-time tie-break, zero-availability filtering, limit handling, modality reason strings, and the 3+-tutor "variety" reason.
-- **`parser.test.ts`** — free-text slot parsing: single/multi/comma-separated slots, abbreviated day names, en-dash separators, default mode, and unparseable-input warnings.
+Engine, index, and ranking (`src/lib/search/__tests__/`):
 
-API route tests:
-- **`src/app/api/search/range/__tests__/route.test.ts`** — 401 unauthenticated, 400 on Zod failure, 400 when the window is shorter than the duration, 200 response shape, proposal-hold cells marked blocked, and 500 when `ensureIndex` throws.
+- **`engine.test.ts`** — recurring blocking, cancelled sessions not blocking, Needs Review routing for data issues and unresolved modality, mode filtering, subject/curriculum/level filtering, multi-slot intersection, one-time exact-date blocking, the 90-minute stale threshold, and the REL-04 leave cases. The REL-04 coverage is a >24h leave (Mon 14:00 → Wed 10:00, `engine.test.ts:327-344`) and a same-calendar-day leave (Mon 14:00 → Mon 16:00, `:346-378`) — the ≤24h cross-midnight case that fails open is **not** covered by any test.
+- **`index.test.ts`** — REL-02 coalescing of concurrent first-time callers, cached reuse when the snapshot id matches, exactly-one rebuild under a stale-cache race, TCOV-01 denormalization (one group per row, child rows attached by `groupId`, supported-modes and data-issue mapping in the documented parallel-load order), `byWeekday` population/dedupe/omission, and the snapshot-active race fallback returning the cached index without throwing.
+- **`recommend.test.ts`** — empty-input guards, Best/Strong/Good tiering, ranking by tutor count descending, start-time tie-break, zero-availability filtering, the `limit` parameter, modality reason strings, pluralization, and the 3+-tutor "variety" reason.
+- **`parser.test.ts`** — free-text slot parsing: single, comma-separated, abbreviated day names, en-dash separators, default mode, and unparseable-input warnings.
+
+Route handlers:
+
+- **`src/app/api/search/range/__tests__/route.test.ts`** — 401 unauthenticated, 400 on Zod failure, 400 when the window is shorter than the duration, 200 response shape, proposal holds rendering as blocked cells, and 500 when `ensureIndex` throws.
 - **`src/app/api/search/__tests__/route.test.ts`** — 401 / 400 / 200 shape / 500-on-index-throw for the legacy endpoint.
-- **`src/app/api/filters/__tests__/route.test.ts`** and **`src/app/api/tutors/__tests__/route.test.ts`** — 401 unauthenticated, 200 with sorted values, and 500 on loader failure.
+- **`src/app/api/filters/__tests__/route.test.ts`**, **`src/app/api/tutors/__tests__/route.test.ts`** — 401, 200 with sorted values, 500 on loader failure.
+
+Pure data builders: **`src/lib/data/__tests__/filters.test.ts`** (sorted distinct facets) and **`src/lib/data/__tests__/tutors.test.ts`** (modality→modes mapping, sorted tutors with deduped subjects).
+
+There are no component tests under `src/components/search/` — the UI is exercised only indirectly through the route and engine suites.
 
 ## Open questions
 
-- **`searchSlot` weekday derivation for one-time mode** uses `new Date(slot.date).getDay()` (`engine.ts:68`), which is local-timezone dependent, whereas the range layer uses `weekdayForIsoDate` (`range-search.ts:142`). For dates near a day boundary in `Asia/Bangkok` these could disagree. Is the legacy `/api/search` path still exercised with one-time mode, or is range now the only consumer? If legacy is effectively dead, this divergence may be moot.
-- **The legacy `/api/search` endpoint** is labelled "kept for backward compatibility" — is any current UI still calling it, or is it retained only for external/bookmarked callers? Confirming would clarify whether the two weekday-derivation paths need to be reconciled.
-- **`getBlockingSessions` supports both modes but the grid only ever calls it after a slot is already not-`true`** (`range-search.ts:182`–`204`); the proposal-hold branch short-circuits before it. Worth confirming no blocked cell can end up with an empty detail array that the UI renders as a bare "blocked" with no reason.
-- **`parser.ts` (`parseSlotInput`)** has its own test suite but no in-scope caller was found among the read files (the form posts structured params, not free text). Is it wired to a slot-input UI elsewhere, reserved for the AI scheduler, or dead code?
+- **Is `POST /api/search` (legacy slot search) still reachable by any caller?** The in-repo half is settled: `grep '"/api/search"'` across `src/` returns zero hits, the form posts to `/api/search/range` (`search-form.tsx:138`), and the legacy shape's `intersection` field has no consumer. Whether an external or bookmarked caller exists is not knowable from the repo — so "retire it" cannot be recommended from source alone.
+- **Should the two one-time weekday derivations be reconciled?** `engine.ts:68` uses runtime-local `new Date(date).getDay()`; `range-search.ts:143` and `:192` use `weekdayForIsoDate` (`overlap.ts:45-47`). They agree **only** when the runtime timezone is `Asia/Bangkok`. On a UTC runtime they differ by exactly one day, because `new Date("2026-08-05T00:00:00+07:00")` is the instant `2026-08-04T17:00Z` and `.getDay()` reads it in local (UTC) time. Reproduced for `2026-08-05`: under `TZ=UTC` the engine returns `3` and `weekdayForIsoDate` returns `2`; under `TZ=Asia/Bangkok` both return `3`. Note which side is wrong: on UTC it is `weekdayForIsoDate` that misreports, while `engine.ts:68` returns the correct Bangkok weekday for a date-only string. The consequence is **not** confined to the unused legacy endpoint — in the live `/api/search/range` path that weekday is passed to `findProposalHoldForSlot` → `proposalHoldBlocksSearchSlot` (`range-search.ts:141-152`), which for a one-time search against a recurring-scope hold compares `hold.weekday === search.weekday` (`overlap.ts:102-104`). On a UTC runtime recurring holds are therefore matched against the previous day's weekday in one-time range searches. `src/lib/ai/scheduler-conversation.ts` shares the same helper and the same exposure.
+- **Is the serverless runtime's `TZ` pinned to `Asia/Bangkok`?** Nothing in the repo sets it — a `TZ` grep across `src/lib/env.ts`, `vercel.json`, and `next.config.ts` returns nothing. The production Vercel runtime environment is outside the repo and was not inspected, so this stays open. **Four** search paths silently depend on it, all in the live flow: `engine.ts:68` (one-time weekday), both branches of `hasRecurringLeaveConflict` (`engine.ts:269`, `:279-283`), and `hasOneTimeLeaveConflict`'s comparison interval (`engine.ts:300-304`). A fifth exposure is client-side and not fixable by a server `TZ` setting at all (`search-workspace.tsx:208-212`). Should these be rewritten against `date-fns-tz`/`Intl` the way `src/lib/bangkok-time.ts:44-51` already is, rather than relying on an unasserted deployment setting?
+- **Should the ≤24h cross-midnight leave gap be treated as a fail-closed violation and fixed?** A leave of ≤24h that spans midnight takes the single-day branch of `hasRecurringLeaveConflict` and blocks nothing at all (`engine.ts:260-286`; reproduced above). The REL-04 comment (`engine.ts:240-250`) states the invariant as "leaveStart and leaveEnd are by definition on the same calendar day" for that branch, which is false for cross-midnight leaves. The engine test suite covers the multi-day vs single-day cases but not this one. Is a duration split the right discriminator at all, or should the branch key off calendar-day span?
+- **When does the `/search` `<Suspense>` boundary actually render its fallback?** `page.tsx:9-12` awaits `connection()` and both data loaders before returning JSX, so the boundary cannot be streaming those loads in. Whether it renders at all under Next 16's `cacheComponents` dynamic render is a runtime question — it needs a dev-server observation, not a source read, to answer.
+- **Is `src/lib/search/parser.ts` (`parseSlotInput`) dead code?** It has a full test suite but its only importer is that test file. Was it superseded by the structured form and the AI scheduler's own extraction, or is a free-text slot input still planned?
+- **Are `results-view.tsx`, `slot-builder.tsx`, `slot-chips.tsx`, `slot-input.tsx`, and `ai-scheduler-panel.tsx` dead?** None of the five has an importer anywhere in `src/`. `ai-scheduler-panel.tsx:87` is the only code in the repo that calls `POST /api/search/assistant`, which means that endpoint currently has no in-app UI consumer — is it retained for an external caller, or is the panel pending re-integration?
+- **Should the online/onsite modality heuristic be trusted for search filtering?** The known unreliability of location-based modality detection feeds `supportedModes`, which search uses as a *hard skip* (`engine.ts:93-97`) rather than a Needs-Review signal. Whether a mis-derived modality should silently exclude a tutor from results is a product decision, not a code one.
 
 _Verified against HEAD + uncommitted WIP on 2026-05-31._

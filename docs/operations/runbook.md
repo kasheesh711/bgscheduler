@@ -1,586 +1,967 @@
 # Operations Runbook
 
-Day-to-day operational procedures for BGScheduler: deploying, running database
-scripts, manually triggering each scheduled sync, and recovering when a sync
-fails. This is the page to open when something is wrong with data freshness or a
-cron, or when you need to run a one-off command against production.
+Day-to-day procedures for running BGScheduler in production: shipping a deploy,
+running the database and test scripts, triggering every scheduled job by hand,
+and recovering when a sync stalls or fails. Open this page when data looks
+stale, a job is red on `/data-health`, or you need to run a one-off command
+against the production database.
 
-> Scope note. This runbook owns the **how-to** of running and recovering the
-> system. For the meaning of the data-health surface (what each issue type means,
-> the fail-closed rules), see [features/data-health.md](../features/data-health.md).
-> Coding/style conventions live in [handbook/conventions.md](../handbook/conventions.md).
+> **Scope.** This runbook owns the *how-to*. The *what it means* lives
+> elsewhere: job semantics and the fail-closed data rules in
+> [`features/data-health.md`](../features/data-health.md); the mechanical cron
+> registry in [`reference/crons.md`](../reference/crons.md); environment
+> variables in [`reference/env.md`](../reference/env.md); endpoint signatures in
+> [`reference/api/index.md`](../reference/api/index.md); table and column detail
+> in [`reference/database/index.md`](../reference/database/index.md).
 
 ---
 
 ## 1. Quick reference
 
-| What | Command / value |
+| What | Value / command |
 | --- | --- |
 | Production URL | `https://bgscheduler.vercel.app` |
-| Deploy to production | `npm run deploy:prod` |
-| Run unit tests | `npm test` |
-| Generate a migration | `npm run db:generate` |
-| Apply migrations | `DATABASE_URL=... npm run db:migrate` |
-| Seed aliases + admins | `DATABASE_URL=... SEED_ADMIN_EMAILS=... npm run db:seed` |
-| Cron auth header | `Authorization: Bearer $CRON_SECRET` |
-| Sync function timeout | `maxDuration = 800` seconds (Wise sync) |
-| Single-flight stale cutoff | 20 minutes (`STALE_RUNNING_SYNC_MS`) |
-
-The full npm script list is in `package.json:5`. The required environment
-variables are validated at startup in `src/lib/env.ts:3` (see
-[§3](#3-environment-variables)).
+| Guarded production deploy | `npm run deploy:prod` (`package.json:35`) |
+| Release verification chain | `npm run verify:release` (`package.json:34`) |
+| Unit tests | `npm test` (`package.json:11`) |
+| Generate a migration | `npm run db:generate` (`package.json:16`) |
+| Apply migrations | `DATABASE_URL=… npm run db:migrate` (`package.json:17`) |
+| Seed aliases + admins | `DATABASE_URL=… SEED_ADMIN_EMAILS=… npm run db:seed` (`package.json:18`) |
+| Cron auth header | `Authorization: Bearer $CRON_SECRET` (`src/lib/internal/cron-auth.ts:13`) |
+| Wise sync function timeout | `maxDuration = 800` s (`src/app/api/internal/sync-wise/route.ts:7`) |
+| Abandoned-run cutoff (Wise) | 20 minutes (`src/lib/sync/run-wise-sync.ts:10`) |
+| Snapshot retention | 30 newest + the active one (`src/lib/sync/snapshot-pruning.ts:5`, `:64`–`:70`) |
+| Scheduled crons | 15 (`vercel.json:2`–`vercel.json:63`) |
+| Registered jobs (incl. manual-only) | 21 (`src/lib/data-health/cron-registry.ts:46`–`:373`) |
+| Committed migrations | 65 `.sql` files in `drizzle/`, `0000_*` … `0064_line_group_settings.sql` |
+| Operator dashboard | `/data-health` (`src/app/(app)/data-health/page.tsx`) |
 
 ---
 
 ## 2. Deploy
 
-The app deploys to Vercel. There is no custom build configuration — `next.config.ts`
-is default and `vercel.json` only declares crons (`vercel.json:1`).
+There is almost no build configuration to reason about: `next.config.ts` sets
+only `cacheComponents: true` (`next.config.ts:3`–`:5`), and `vercel.json`
+declares nothing but the cron list (`vercel.json:2`–`:63`). `.vercelignore`
+keeps `.claude`, `.planning`, `.superpowers`, `coverage`, and `*.xlsx` out of
+the upload.
 
-### Deploy to production
+### 2.1 The guarded path
 
 ```bash
 npm run deploy:prod
 ```
 
-`npm run deploy:prod` runs the release verification chain, refuses dirty
-worktrees, refuses non-`main` branches, refuses commits that do not match
-`origin/main`, and then calls `npx vercel --prod`. Before deploying anything
-that touches the database schema, apply migrations first (see
-[§4](#4-database-scripts)) — a deploy does **not** run migrations.
+One script, three gates before anything reaches Vercel (`package.json:34`–`:35`):
 
-### Pre-deploy checklist
-
-```bash
-npm run typecheck   # tsc --noEmit            (package.json:10)
-npm run lint        # eslint                  (package.json:9)
-npm test            # vitest run --project unit (package.json:11)
-npm run guard:production-route-surface
+```mermaid
+flowchart TD
+  A["npm run deploy:prod"] --> B["verify:release"]
+  B --> B1["typecheck — tsc --noEmit"]
+  B1 --> B2["npm test — vitest unit project"]
+  B2 --> B3["next build"]
+  B3 --> B4["typecheck again"]
+  B4 --> B5["git diff --check — whitespace / conflict markers"]
+  B5 --> B6["guard:production-route-surface"]
+  B6 --> C["assert-production-deploy-ready.mjs"]
+  C --> C1{"branch == main?"}
+  C1 -- no --> X["exit 1"]
+  C1 -- yes --> C2{"worktree clean?"}
+  C2 -- no --> X
+  C2 -- yes --> C3{"HEAD == origin/main?"}
+  C3 -- no --> X
+  C3 -- yes --> D["npx vercel --prod"]
 ```
 
-> Schema-affecting features must migrate before they deploy. The README is
-> explicit that classroom tables and the new Wise session columns require
-> `npm run db:migrate` to exist in production before the feature is used
-> (`README.md:74`).
+**`verify:release`** (`package.json:34`) is
+`typecheck → test → build → typecheck → git diff --check → guard:production-route-surface`.
+The second `typecheck` is deliberate — `next build` rewrites
+`tsconfig.tsbuildinfo`, and re-running catches a build that mutated type state.
+
+**`guard:production-route-surface`** (`package.json:33`) walks every `page.tsx`
+and `route.ts` under `src/app` (`scripts/check-production-route-surface.mjs:9`–`:45`)
+and compares the result with the committed manifest at
+`docs/reference/production-route-surface.json` (`:7`). It throws if the route
+count drops below `minSourceRouteCount`, or if any manifest route or any of the
+seven `criticalRoutes` disappeared (`:81`–`:112`). For an *intentional* route
+removal, refresh the manifest in the same change:
+
+```bash
+node scripts/check-production-route-surface.mjs --update
+```
+
+**`assert-production-deploy-ready.mjs`** refuses to deploy from a branch other
+than `main` (override via `PRODUCTION_BRANCH`,
+`scripts/assert-production-deploy-ready.mjs:5`), from a dirty worktree (`:22`–`:33`),
+or when `HEAD` does not equal `origin/main` (`:35`–`:41`). It never fetches, so
+run `git fetch` yourself first — otherwise the `origin/main` ref it compares
+against is whatever your last fetch left behind.
+
+### 2.2 Deploying by pushing
+
+Vercel's Git integration builds `main`, so the normal path is:
+
+```bash
+git push origin <branch>:main
+```
+
+This skips every local gate in §2.1. If you push directly, run
+`npm run verify:release` beforehand.
+
+### 2.3 Worktree caveat for `vercel --prod`
+
+`npx vercel --prod` deploys the project linked in `.vercel/` **in the current
+directory**. This repo checkout has no `.vercel/` directory, so a bare
+`npx vercel --prod` here would prompt to link — and non-interactively it can
+create a *new* Vercel project instead of deploying the existing one. Only run
+`deploy:prod` from the worktree actually linked to the `bgscheduler` project.
+
+### 2.4 Migrations are not part of the deploy
+
+Nothing in `deploy:prod` (`package.json:35`) or the Vercel build runs
+`drizzle-kit migrate`. A deploy that expects a new table will fail at runtime
+until you apply migrations yourself (§3.2). **Migrate first, then deploy.**
+
+Two tables degrade *silently* rather than loudly when their migration is
+missing, which makes this easy to miss:
+
+- `cron_invocations` — `fetchCronInvocations` catches the missing-relation error,
+  logs, and returns `[]`, so every job quietly falls back to run-table inference
+  (`src/lib/data-health/dashboard.ts:831`–`:838`).
+- `cron_alert_state` — the watchdog disables alerting entirely with
+  `skippedReason: "cron_alert_state table unavailable"` rather than spamming
+  un-deduped alerts (`src/lib/internal/cron-watchdog.ts:376`–`:388`).
 
 ---
 
-## 3. Environment variables
+## 3. npm scripts
 
-`src/lib/env.ts:20` validates `process.env` with a Zod schema **at module load**.
-If any required variable is missing or malformed, `getEnv()` logs the flattened
-field errors and throws `Invalid environment variables` (`src/lib/env.ts:22`),
-which crashes the importing process/function. Required and optional variables:
+`package.json:5`–`:35` is the full list. The operationally relevant subset:
 
-| Variable | Required? | Notes |
+### 3.1 Tests
+
+| Script | Command | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | yes | must be a URL (`src/lib/env.ts:4`) |
-| `AUTH_GOOGLE_ID` | yes | Google OAuth client id |
-| `AUTH_GOOGLE_SECRET` | yes | Google OAuth client secret |
-| `AUTH_SECRET` | yes | Auth.js session encryption key |
-| `WISE_USER_ID` | yes | Wise API user id |
-| `WISE_API_KEY` | yes | Wise API key |
-| `WISE_NAMESPACE` | defaulted | defaults to `begifted-education` (`src/lib/env.ts:10`) |
-| `WISE_INSTITUTE_ID` | defaulted | defaults to `696e1f4d90102225641cc413` (`src/lib/env.ts:11`) |
-| `CRON_SECRET` | yes | protects every `/api/internal/*` sync (`src/lib/env.ts:12`) |
-| `LINE_CHANNEL_SECRET` | optional | LINE integration |
-| `LINE_CHANNEL_ACCESS_TOKEN` | optional | LINE integration |
-| `ENABLE_LINE_SCHEDULER` | optional | feature flag |
-
-The README documents additional runtime variables consumed by leave-requests and
-the schedule-email Apps Script (`README.md:110`–`README.md:118`) that are **not**
-part of the `src/lib/env.ts` schema — those modules read `process.env` directly,
-so a missing value degrades that feature rather than crashing startup.
-
-`CRON_SECRET` is the single most operationally important secret: rotating or
-clearing it changes how every internal sync responds (see
-[§6](#6-the-single-flight-guard-and-cron-auth)).
-
----
-
-## 4. Database scripts
-
-Drizzle is configured in `drizzle.config.ts:3`: schema at `./src/lib/db/schema.ts`,
-migrations emitted to `./drizzle`, dialect `postgresql`, credentials from
-`DATABASE_URL` (`drizzle.config.ts:8`). All three commands read `DATABASE_URL`
-from the environment, so always prefix them with the target connection string.
-
-### `npm run db:generate` — author a migration
-
-```bash
-npm run db:generate    # drizzle-kit generate  (package.json:16)
-```
-
-Diffs `src/lib/db/schema.ts` against the committed migration history in
-`drizzle/` and writes a new timestamped `.sql` file plus a `meta/` snapshot.
-This does **not** touch any database — review the generated SQL, then commit it.
-
-### `npm run db:migrate` — apply migrations
-
-```bash
-DATABASE_URL='postgres://...' npm run db:migrate    # drizzle-kit migrate (package.json:17)
-```
-
-Applies any unapplied `drizzle/*.sql` files to the target database. Run this
-against production **before** deploying code that depends on the new schema.
-
-> Migration files are sequentially numbered but the directory has gaps (e.g.
-> `0009`, `0010`, `0025` are absent from the committed set, and the highest at
-> HEAD is `0037_payroll_rate_cards.sql`). drizzle-kit tracks applied migrations
-> in its `meta` journal, not by filename arithmetic, so apply with
-> `db:migrate` rather than hand-running individual files. There is **no**
-> `db:push` script — never push schema directly to production.
-
-### `npm run db:seed` — seed aliases and admins
-
-```bash
-DATABASE_URL='postgres://...' SEED_ADMIN_EMAILS='a@x.com,b@y.com' npm run db:seed
-```
-
-`src/lib/db/seed.ts:5` runs `tsx src/lib/db/seed.ts`. It is idempotent:
-
-- Inserts four tutor aliases (`Kev→Kevin`, `Paoju→Paojuu`, `Poi→Nacha (Poi)`,
-  `Sam→Samantha`) with `onConflictDoNothing` on `fromKey` (`src/lib/db/seed.ts:15`).
-- Splits `SEED_ADMIN_EMAILS` on commas and inserts each into `admin_users` with
-  `onConflictDoNothing` on `email` (`src/lib/db/seed.ts:31`). If the variable is
-  unset it logs `No SEED_ADMIN_EMAILS set, skipping admin user seed` and seeds
-  only aliases (`src/lib/db/seed.ts:41`).
-- On any error it logs `Seed failed:` and exits non-zero (`src/lib/db/seed.ts:48`).
-
-Note this seed driver uses the Neon **HTTP** client (`src/lib/db/seed.ts:1`).
-
-### Other one-off scripts
-
-`package.json` also defines operational `tsx` scripts outside the Drizzle set —
-e.g. `credit-control:seed-admin-ownership`, `tutor-profiles:seed`,
-`room-capacity:import-model`, `room-utilization:sync`, and the
-`guard:sales-dashboard-scope` check (`package.json:19`–`package.json:26`). These
-are feature-specific bootstrap utilities; consult the relevant feature doc before
-running them.
-
----
-
-## 5. Tests
-
-| Script | Command | Purpose |
-| --- | --- | --- |
-| `npm test` | `vitest run --project unit` (`package.json:11`) | the default CI gate — unit suite only |
-| `npm run test:watch` | `vitest --project unit` (`package.json:12`) | watch mode for the unit project |
-| `npm run test:integration` | `vitest run --project integration` (`package.json:13`) | container-backed integration suite |
+| `npm test` | `vitest run --project unit` (`package.json:11`) | node env, `src/**/*.test.ts(x)`, excludes `*.integration.test.ts` (`vitest.config.ts:26`–`:35`) |
+| `npm run test:watch` | `vitest --project unit` (`package.json:12`) | same project, watch mode |
+| `npm run test:integration` | `vitest run --project integration` (`package.json:13`) | `*.integration.test.ts`, forks pool, `fileParallelism: false`, `maxWorkers: 1`, 60 s test/hook timeouts (`vitest.config.ts:36`–`:50`). **Needs Docker** — these suites boot ephemeral Postgres via `testcontainers`. |
 | `npm run test:all` | `vitest run` (`package.json:14`) | both projects |
-| `npm run test:coverage` | `vitest run --project unit --coverage` (`package.json:15`) | v8 coverage of the unit project |
+| `npm run test:coverage` | `vitest run --project unit --coverage` (`package.json:15`) | v8 provider, `text` + `html` reporters (`vitest.config.ts:13`–`:24`) |
 
-Two Vitest projects are configured in `vitest.config.ts:23`:
+`vitest.config.ts:4` pins `process.env.TZ = "Asia/Bangkok"` for every run, so
+local and CI agree on midnight boundaries. Do not override `TZ`.
 
-- **`unit`** — `node` environment, matches `src/**/*.test.ts(x)`, **excludes**
-  `*.integration.test.ts` (`vitest.config.ts:30`). This is what `npm test` runs.
-- **`integration`** — matches `src/**/*.integration.test.ts`, runs in a single
-  forked worker (`fileParallelism: false`, `maxWorkers: 1`) with 60s test/hook
-  timeouts (`vitest.config.ts:43`). Integration specs use
-  `@testcontainers/postgresql` (a `devDependency`, `package.json:52`), so the
-  integration project needs Docker available locally. The orchestrator,
-  past-sessions diff hook, and snapshot-pruning all ship `*.integration.test.ts`
-  suites under `src/lib/sync/__tests__/`.
+`npm run typecheck` (`package.json:10`) and `npm run lint` (`:9`) round out the
+quality gates.
+
+### 3.2 Database
+
+All three Drizzle commands read `DATABASE_URL` from the environment — schema
+`./src/lib/db/schema.ts`, output `./drizzle`, dialect `postgresql`
+(`drizzle.config.ts:4`–`:9`). There is no environment selector: always prefix
+the command with the connection string you intend to hit.
+
+```bash
+# 1. Author a migration (touches no database)
+npm run db:generate
+
+# 2. Apply pending migrations to a target database
+DATABASE_URL='postgres://…' npm run db:migrate
+
+# 3. Seed aliases + admin allowlist (idempotent)
+DATABASE_URL='postgres://…' SEED_ADMIN_EMAILS='a@x.com,b@x.com' npm run db:seed
+```
+
+- **`db:generate`** diffs `schema.ts` against the committed history in `drizzle/`
+  and writes a new `.sql` plus a `meta/` snapshot. Read the emitted SQL before
+  committing — drizzle-kit will happily produce a large catch-up migration when
+  the local `meta/` snapshot has drifted.
+- **`db:migrate`** applies pending files in order. There are currently 65,
+  `0000_*` through `0064_line_group_settings.sql`.
+- **`db:seed`** (`src/lib/db/seed.ts`) throws immediately if `DATABASE_URL` is
+  unset (`:6`–`:9`). It upserts four tutor aliases with `onConflictDoNothing`
+  (`:14`–`:28`), inserts every address in `SEED_ADMIN_EMAILS` into `admin_users`
+  — also `onConflictDoNothing`, so it can **add** an admin but never remove one
+  (`:31`–`:43`) — and upserts a hard-coded page-restricted user scoped to
+  `/progress-tests` (`:47`–`:60`). With no `SEED_ADMIN_EMAILS` it logs and skips
+  the admin step (`:41`–`:43`).
+
+### 3.3 Guards and one-off maintenance scripts
+
+`package.json:19`–`:33` registers `tsx` scripts for payout-workbook tooling,
+credit-control ownership seeding, tutor-profile seeding, room-capacity model
+import, room-utilization sync, AI-scheduler evaluation, and LINE test-data
+cleanup, plus the two release guards (`guard:sales-dashboard-scope`,
+`guard:production-route-surface`). None are part of routine operation — read the
+file under `scripts/` before pointing any of them at production.
 
 ---
 
-## 6. The single-flight guard and cron auth
+## 4. Environment variables
 
-Every scheduled sync lives under `/api/internal/*` and is gated by a constant-time
-`CRON_SECRET` comparison. The Wise snapshot sync additionally enforces a
-**single-flight guard** so two runs can never overlap.
+`src/lib/env.ts:3`–`:24` validates `process.env` with Zod **at module load**. On
+failure it logs `parsed.error.flatten().fieldErrors` and throws
+`Invalid environment variables` (`:30`–`:33`), which crashes the importing
+function — a missing variable is a hard boot failure, not a degraded mode.
 
-### 6.1 Cron authentication
+Required: `DATABASE_URL` (must parse as a URL), `AUTH_GOOGLE_ID`,
+`AUTH_GOOGLE_SECRET`, `AUTH_SECRET`, `WISE_USER_ID`, `WISE_API_KEY`,
+`CRON_SECRET`. Defaulted: `WISE_NAMESPACE` → `begifted-education`,
+`WISE_INSTITUTE_ID` → `696e1f4d90102225641cc413` (`:10`–`:11`). Optional:
+`LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER`,
+`LINE_SCHEDULE_BOT_ADMIN_IDS`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`
+(`:13`–`:23`).
 
-Two equivalent constant-time check implementations exist:
+Many features read `process.env` directly rather than through this schema (leave
+requests, schedule email, AI scheduler); those degrade the feature instead of
+crashing the app. Full inventory in [`reference/env.md`](../reference/env.md).
 
-- The shared helper `getCronSecretStatus` / `rejectInvalidCronSecret` in
-  `src/lib/internal/cron-auth.ts:6`, used by the activity, leave-requests, and
-  classroom crons.
-- An inline copy `hasValidCronSecret` in
-  `src/app/api/internal/sync-wise/route.ts:10`, the sales-dashboard route, the
-  credit-control route, and the room-utilization route.
+`CRON_SECRET` is the highest-leverage operational secret — see §5.
 
-Both return one of three states and map them to HTTP responses:
+---
 
-| State | Condition | Response |
+## 5. Cron authentication and manual triggering
+
+### 5.1 How the auth check works
+
+Every internal route authenticates by comparing the **whole** `Authorization`
+header against `Bearer ${CRON_SECRET}` in constant time. The shared helper is
+`getCronSecretStatus` (`src/lib/internal/cron-auth.ts:6`–`:17`):
+
+```ts
+const received = Buffer.from(authHeader);
+const known = Buffer.from(`Bearer ${cronSecret}`);
+const valid = received.length === known.length && timingSafeEqual(received, known);
+```
+
+The length pre-check exists because `crypto.timingSafeEqual` throws a
+`RangeError` on length-mismatched buffers; it is O(1) and does not leak the
+secret's length by timing — the `REL-07` note at
+`src/app/api/internal/sync-wise/route.ts:12`–`:15`.
+
+Three outcomes, and the distinction matters during triage:
+
+| Status | Response | Meaning |
 | --- | --- | --- |
-| `valid` | header equals `Bearer $CRON_SECRET` | run the sync |
-| `invalid` | header present but wrong | `401 Unauthorized` |
-| `missing-secret` | `CRON_SECRET` env var unset | `500 Server misconfigured` |
+| `valid` | job runs | header matched |
+| `invalid` | `401 {"error":"Unauthorized"}` | wrong or missing header |
+| `missing-secret` | `500 {"error":"Server misconfigured"}` | `CRON_SECRET` unset **on the server** |
 
-The comparison length-pre-checks before `timingSafeEqual` to avoid the
-`RangeError` that `crypto.timingSafeEqual` throws on mismatched-length buffers,
-and the pre-check is O(1) so it does not leak the secret length
-(`src/app/api/internal/sync-wise/route.ts:11`, `src/lib/internal/cron-auth.ts:12`).
+`rejectInvalidCronSecret` wraps that into "rejection response or `null`"
+(`src/lib/internal/cron-auth.ts:19`–`:26`). A blanket `500 Server misconfigured`
+from a cron path therefore means the environment variable is gone, not that the
+job crashed.
 
-**Operational consequence:** if you see every internal sync returning
-`500 {"error":"Server misconfigured"}`, `CRON_SECRET` is unset in that
-environment — fix the env var, do not touch the route code.
+Five routes predate the shared helper and inline the identical check:
+`sync-wise` (`src/app/api/internal/sync-wise/route.ts:11`–`:29`),
+`sync-credit-control` (`:18`–`:31`), `sync-sales-dashboard` (`:15`–`:22`),
+`sync-competitor-intelligence` (`:11`–`:18`), `sync-room-utilization` (`:12`–`:24`),
+and `student-promotions/july-1` (`:10`–`:17`).
 
-### 6.2 GET vs POST and session fallback
+### 5.2 Admin-session fallback
 
-The Wise sync, sales-dashboard, and credit-control routes accept **both** verbs:
+Some routes also accept a signed-in Auth.js session on `POST`, so an admin can
+trigger them from the browser. `sync-wise` does this via
+`handleSync(request, { allowSessionAuth: true })`
+(`src/app/api/internal/sync-wise/route.ts:45`–`:59`, `:74`–`:76`); the invocation
+is then audited with `triggerSource: "admin"` and the actor's email. Same
+pattern in `sync-credit-control` (`:43`–`:56`), `sync-progress-tests` (`:19`–`:32`),
+`sync-sales-dashboard` (`:28`–`:42`), `sync-competitor-intelligence` (`:24`–`:37`,
+via `requireCompetitorIntelligenceSession`), and `sync-room-utilization`
+(`:30`–`:40`). Everything else is cron-secret-only.
 
-```mermaid
-flowchart TD
-  A[Request] --> B{Authorization == Bearer CRON_SECRET?}
-  B -- valid --> R[Run sync]
-  B -- invalid/missing --> C{Verb / allowSessionAuth}
-  C -- "GET (cron only)" --> X[401 or 500]
-  C -- "POST + logged-in Auth.js session" --> R
-  C -- "POST, no session" --> X
-```
+### 5.3 The scheduled crons
 
-- `GET` is what Vercel cron calls; it does **not** allow session auth
-  (`allowSessionAuth: false`, `src/app/api/internal/sync-wise/route.ts:57`).
-- `POST` allows an authenticated Auth.js admin session as an alternative to the
-  secret (`allowSessionAuth: true`, `src/app/api/internal/sync-wise/route.ts:62`).
-  This is what lets a logged-in admin trigger a sync from the browser/UI without
-  knowing `CRON_SECRET`.
+All 15 entries in `vercel.json` fire an HTTP **GET** carrying the bearer header.
+Schedules are UTC; Bangkok is UTC+7. A unit test asserts `vercel.json` and the
+registry's `SCHEDULED_CRON_JOBS` are the same list
+(`src/lib/data-health/__tests__/cron-registry.test.ts:6`–`:20`).
 
-The activity, leave-requests, classroom-morning, and classroom-admin-email routes
-use `rejectInvalidCronSecret` directly and therefore require the secret on **all**
-verbs (no session fallback) — e.g. `src/app/api/internal/sync-wise-activity/route.ts:12`,
-`src/app/api/internal/sync-leave-requests/route.ts:9`.
+| Path | Schedule (UTC) | Bangkok | Registry key | Route `maxDuration` | Methods |
+| --- | --- | --- | --- | --- | --- |
+| `/api/internal/sync-wise` | `*/30 * * * *` | :00 / :30 | `wise_snapshot` | 800 s | GET, POST¹ |
+| `/api/internal/sync-wise-activity` | `5,35 * * * *` | :05 / :35 | `wise_activity` | 800 s | GET |
+| `/api/internal/cron-watchdog` | `7,37 * * * *` | :07 / :37 | `cron_watchdog` | 300 s | GET, POST |
+| `/api/internal/sync-sales-dashboard` | `10,40 * * * *` | :10 / :40 | `sales_dashboard` | 800 s | GET, POST¹ |
+| `/api/internal/sync-post-class-feedback` | `13,43 * * * *` | :13 / :43 | `post_class_feedback` | 800 s | GET |
+| `/api/internal/sync-leave-requests` | `15,45 * * * *` | :15 / :45 | `leave_requests` | 800 s | GET, POST |
+| `/api/internal/sync-credit-control` | `20,50 * * * *` | :20 / :50 | `credit_control` | 800 s² | GET, POST¹ |
+| `/api/internal/post-class-feedback-backfill` | `23,53 * * * *` | :23 / :53 | `post_class_feedback_backfill` | 800 s | GET |
+| `/api/internal/sync-progress-tests` | `25,55 * * * *` | :25 / :55 | `progress_tests` | 300 s | GET, POST¹ |
+| `/api/internal/progress-tests/admin-digest` | `35 0 * * *` | daily 07:35 | `progress_tests_digest` | 300 s | GET |
+| `/api/internal/admissions-notifications` | `12 1 * * *` | daily 08:12 | `admissions_notifications` | 300 s | GET, POST |
+| `/api/internal/class-assignments/morning` | `45 23 * * *` | daily 06:45 | `classroom_morning` | 800 s | GET |
+| `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` | daily 07:00–07:30 | `classroom_admin_email` | 300 s | GET |
+| `/api/internal/sync-competitor-intelligence` | `25 18 * * 0` | Mon 01:25 | `competitor_intelligence` | 800 s | GET, POST¹ |
+| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` | 2026-07-01 00:05 | `student_promotions_july_1` | 800 s | GET, POST |
 
-There is also a dedicated admin-only trigger at `POST /api/admin/sync-wise`
-(`src/app/api/admin/sync-wise/route.ts`) that requires an Auth.js session (`401`
-otherwise) and then calls the same `runWiseSyncRequest()` as the cron path.
+¹ `POST` additionally accepts an Auth.js admin session (§5.2).
+² The route sets `maxDuration = 800` with an explicit comment that 300 s was
+permanently under its own runtime (`src/app/api/internal/sync-credit-control/route.ts:7`–`:14`),
+while the registry still records `maxDurationSeconds: 300`
+(`src/lib/data-health/cron-registry.ts:118`). Data Health's "stuck" test uses the
+**registry** value (`src/lib/data-health/status.ts:239`), so a credit-control run
+between ~300 s and 800 s is reported as `failing` while it is still legitimately
+executing. Treat that specific verdict with suspicion — check `credit_control_sync_runs`.
 
-### 6.3 The single-flight guard (Wise snapshot sync)
+Minutes are deliberately staggered — 0/30, 5/35, 7/37, 10/40, 13/43, 15/45,
+20/50, 23/53, 25/55 — so no two 30-minute jobs hit the Wise API or Neon in the
+same minute; a test asserts the daily admissions cron avoids every used minute
+(`src/__tests__/vercel-crons.test.ts:29`–`:40`).
 
-The guard lives in `src/lib/sync/run-wise-sync.ts`. Before starting work,
-`acquireSyncRun` does three things in order (`src/lib/sync/run-wise-sync.ts:88`):
+### 5.4 Manual-only registry jobs
 
-1. **Fail stale runs.** `failStaleRunningSyncs` marks any `sync_runs` row still
-   `status='running'` whose `started_at` is older than
-   `STALE_RUNNING_SYNC_MS` (20 minutes, `src/lib/sync/run-wise-sync.ts:10`) as
-   `failed`, stamping `finished_at` and the error summary
-   *"Sync marked failed because it was still running after 20 minutes; likely
-   timed out or the request was aborted."* (`src/lib/sync/run-wise-sync.ts:39`,
-   `:51`).
-2. **Check for a live run.** If a `running` row still exists after step 1, return
-   a **skip** result (`src/lib/sync/run-wise-sync.ts:95`).
-3. **Insert the guard row.** Otherwise insert a new `sync_runs` row with
-   `status='running'` (`src/lib/sync/run-wise-sync.ts:100`).
+Six registered jobs are deliberately absent from `vercel.json`
+(`manualOnly: true`). `/data-health` reports them as `manual-only` and never as
+late (`src/lib/data-health/status.ts:199`–`:215`).
 
-The insert is backstopped by a **partial unique index** that allows at most one
-`running` row at a time — `sync_runs_single_running_idx` on `(status) WHERE
-status='running'` (`drizzle/0013_sync_run_single_flight.sql`). If two requests
-race past step 2, one insert hits a `23505` unique violation; `acquireSyncRun`
-catches it (`isUniqueViolation`, `src/lib/sync/run-wise-sync.ts:42`) and converts
-it into the same skip result instead of erroring (`src/lib/sync/run-wise-sync.ts:107`).
-
-When skipped, `runWiseSyncRequest` returns **HTTP 202** with a body containing
-`skipped: true`, `alreadyRunning: true`, the in-flight `runningStartedAt`, and the
-count of `staleRunningSyncsFailed` (`src/lib/sync/run-wise-sync.ts:148`). A 202
-from a manual trigger is normal and means "a sync is already in progress" — it is
-**not** an error.
-
-```mermaid
-flowchart TD
-  S[runWiseSyncRequest] --> F[failStaleRunningSyncs:\nrunning > 20 min -> failed]
-  F --> Q{running row exists?}
-  Q -- yes --> SK[Return 202 skipped]
-  Q -- no --> I[INSERT running row]
-  I -- unique violation 23505 --> SK
-  I -- ok --> RUN[runFullSync]
-  RUN --> OK{success?}
-  OK -- yes --> RV["revalidateTag('snapshot')\n+ 200"]
-  OK -- no --> E[500 with errorSummary]
-```
-
-On success the route calls `revalidateTag("snapshot", { expire: 0 })`
-(`src/lib/sync/run-wise-sync.ts:161`) and returns 200; on failure it returns
-500 with the orchestrator's `errorSummary` (`src/lib/sync/run-wise-sync.ts:164`).
-
-> Other syncs have their own guards. Wise-activity and leave-requests throw a
-> typed `…AlreadyRunningError` that their routes translate to **HTTP 409**
-> (`src/app/api/internal/sync-wise-activity/route.ts:24`,
-> `src/app/api/internal/sync-leave-requests/route.ts:16`). These are independent
-> mechanisms from the Wise-snapshot 20-minute guard above.
-
-### 6.4 How a fresh snapshot reaches live queries
-
-A successful Wise sync promotes a new snapshot (see [§8](#8-snapshot-promotion-and-rollback)),
-but search/compare read from an **in-memory index singleton**, not Postgres
-directly. `ensureIndex` re-checks the active snapshot id on each call and rebuilds
-the index when the cached `snapshotId` no longer matches the DB's `active=true`
-row (`src/lib/search/index.ts:366`–`:380`). The `revalidateTag("snapshot")` call
-after a successful sync invalidates the Next.js data cache so the next request
-observes the new snapshot. Net effect: a promoted snapshot becomes visible to
-users on the next query, without a redeploy.
-
----
-
-## 7. The crons and how to trigger each manually
-
-`vercel.json:2` registers twelve crons. All scheduled entries are `GET /api/internal/*` and all
-require `Authorization: Bearer $CRON_SECRET`. The schedules are staggered so the
-30-minute-ish jobs do not all fire on the same minute.
-
-| Path | Schedule (UTC) | Verb(s) accepted | maxDuration | Manual-trigger notes |
+| Path | Registry key | Method | `dangerous` | Why parked |
 | --- | --- | --- | --- | --- |
-| `/api/internal/sync-wise` | `*/30 * * * *` (`vercel.json:5`) | GET + POST(session) | 800s (`…/sync-wise/route.ts:6`) | single-flight; 202 if already running |
-| `/api/internal/sync-wise-activity` | `5,35 * * * *` (`vercel.json:29`) | GET only | 800s (`…/sync-wise-activity/route.ts:7`) | 409 if already running |
-| `/api/internal/sync-sales-dashboard` | `10,40 * * * *` (`vercel.json:9`) | GET + POST(session) | 800s (`…/sync-sales-dashboard/route.ts:10`) | 409 on missing Google token |
-| `/api/internal/sync-competitor-intelligence` | `25 18 * * 0` (`vercel.json:13`) | GET + POST(session) | 800s (`…/sync-competitor-intelligence/route.ts:7`) | weekly Monday 01:25 Bangkok; manual admin refresh remains available |
-| `/api/internal/sync-leave-requests` | `15,45 * * * *` (`vercel.json:33`) | GET + POST | 800s (`…/sync-leave-requests/route.ts:6`) | 409 if already running |
-| `/api/internal/sync-credit-control` | `20,50 * * * *` (`vercel.json:17`) | GET + POST(session) | 300s (`…/sync-credit-control/route.ts:6`) | — |
-| `/api/internal/sync-progress-tests` | `25,55 * * * *` (`vercel.json:21`) | GET + POST(session) | 300s (`…/sync-progress-tests/route.ts:7`) | progress-test data sync |
-| `/api/internal/progress-tests/admin-digest` | `35 0 * * *` (`vercel.json:25`) | GET only | 300s (`…/progress-tests/admin-digest/route.ts:6`) | daily admin digest at 07:35 Bangkok |
-| `/api/internal/class-assignments/morning` | `45 23 * * *` (`vercel.json:37`) | GET only | 800s (`…/morning/route.ts:5`) | daily room-assignment automation |
-| `/api/internal/class-assignments/admin-email` | `0,10,20,30 0 * * *` (`vercel.json:41`) | GET only | 300s (`…/admin-email/route.ts:5`) | retried 4x; 500 if email send failed |
-| `/api/internal/student-promotions/july-1` | `5 17 30 6 *` (`vercel.json:45`) | GET + POST | 800s (`…/student-promotions/july-1/route.ts:6`) | one-shot July 1, 2026 Bangkok guard; applies newest verified run |
-| `/api/internal/cron-watchdog` | `7,37 * * * *` (`vercel.json:49`) | GET + POST | 300s (`…/cron-watchdog/route.ts:7`) | cron audit watchdog sweep |
+| `/api/internal/post-class-feedback/admin-digest` | `post_class_feedback_digest` | GET | yes | emails the admin digest (`cron-registry.ts:188`–`:202`) |
+| `/api/internal/post-class-feedback/reminder-day-after` | `post_class_feedback_day_after` | GET | yes | may email tutors with incomplete feedback (`:203`–`:217`) |
+| `/api/internal/post-class-feedback/reminder-deadline` | `post_class_feedback_deadline` | GET | yes | may email tutors whose feedback is due tonight (`:218`–`:232`) |
+| `/api/internal/post-class-feedback/payout-accrual` | `post_class_feedback_payout_accrual` | GET | yes | appends real deductions to the master payout ledger (`:233`–`:247`) |
+| `/api/internal/sync-room-utilization` | `room_utilization` | **POST only** | no | manual utilization refresh (`:343`–`:357`) |
+| `/api/internal/line-backlog-recovery` | `line_backlog_recovery` | GET | no | one-shot LINE contact backlog recovery (`:358`–`:372`) |
 
-> The morning/admin-email schedules (`23:45 UTC` and the four `00:xx UTC` slots)
-> correspond to the README's "6:45 Bangkok" automation and "7:00–7:30 Bangkok"
-> email retries (`README.md:72`–`README.md:73`); Bangkok is UTC+7.
+### 5.5 Triggering by hand with curl
 
-### Manual triggers (copy/paste)
-
-The canonical manual trigger documented in the README is the Wise sync
-(`README.md:134`):
+**Method matters.** Most internal routes export only `GET`; `curl -X POST`
+against a GET-only route returns `405`, not a run. `sync-room-utilization` is the
+inverse — POST only.
 
 ```bash
-# Wise snapshot sync (POST works for both admin session and CRON_SECRET)
-curl -X POST https://bgscheduler.vercel.app/api/internal/sync-wise \
+export CRON_SECRET='…'
+export BASE='https://bgscheduler.vercel.app'
+
+# Wise snapshot ETL — GET or POST
+curl -s -X POST "$BASE/api/internal/sync-wise" \
+  -H "Authorization: Bearer $CRON_SECRET"
+
+# GET-only routes
+curl -s "$BASE/api/internal/sync-wise-activity"          -H "Authorization: Bearer $CRON_SECRET"
+curl -s "$BASE/api/internal/sync-post-class-feedback"    -H "Authorization: Bearer $CRON_SECRET"
+curl -s "$BASE/api/internal/class-assignments/morning"   -H "Authorization: Bearer $CRON_SECRET"
+curl -s "$BASE/api/internal/class-assignments/admin-email" -H "Authorization: Bearer $CRON_SECRET"
+curl -s "$BASE/api/internal/progress-tests/admin-digest" -H "Authorization: Bearer $CRON_SECRET"
+curl -s "$BASE/api/internal/line-backlog-recovery"       -H "Authorization: Bearer $CRON_SECRET"
+
+# GET or POST
+curl -s "$BASE/api/internal/sync-leave-requests"         -H "Authorization: Bearer $CRON_SECRET"
+curl -s "$BASE/api/internal/sync-credit-control"         -H "Authorization: Bearer $CRON_SECRET"
+curl -s "$BASE/api/internal/sync-progress-tests"         -H "Authorization: Bearer $CRON_SECRET"
+curl -s "$BASE/api/internal/sync-sales-dashboard"        -H "Authorization: Bearer $CRON_SECRET"
+curl -s "$BASE/api/internal/sync-competitor-intelligence" -H "Authorization: Bearer $CRON_SECRET"
+curl -s "$BASE/api/internal/cron-watchdog"               -H "Authorization: Bearer $CRON_SECRET"
+
+# POST-only route
+curl -s -X POST "$BASE/api/internal/sync-room-utilization" \
   -H "Authorization: Bearer $CRON_SECRET"
 ```
 
-The cron path is `GET`; to reproduce exactly what Vercel cron sends, use `-X GET`:
+Routes that take parameters:
 
 ```bash
-# Wise activity audit (GET only)
-curl https://bgscheduler.vercel.app/api/internal/sync-wise-activity \
+# Admissions notifications — runType picks one orchestrator. Omit it for the
+# cron default: the daily deadline scan, plus the weekly digest on Bangkok
+# Sundays (src/app/api/internal/admissions-notifications/route.ts:56-61).
+curl -s "$BASE/api/internal/admissions-notifications?runType=weekly" \
   -H "Authorization: Bearer $CRON_SECRET"
 
-# Sales dashboard
-curl -X POST https://bgscheduler.vercel.app/api/internal/sync-sales-dashboard \
-  -H "Authorization: Bearer $CRON_SECRET"
+curl -s -X POST "$BASE/api/internal/admissions-notifications" \
+  -H "Authorization: Bearer $CRON_SECRET" \
+  -H 'content-type: application/json' \
+  -d '{"runType":"daily"}'
 
-# Competitor intelligence
-curl -X POST https://bgscheduler.vercel.app/api/internal/sync-competitor-intelligence \
-  -H "Authorization: Bearer $CRON_SECRET"
-
-# Credit control
-curl -X POST https://bgscheduler.vercel.app/api/internal/sync-credit-control \
-  -H "Authorization: Bearer $CRON_SECRET"
-
-# Leave requests
-curl -X POST https://bgscheduler.vercel.app/api/internal/sync-leave-requests \
-  -H "Authorization: Bearer $CRON_SECRET"
-
-# Classroom morning automation (GET only)
-curl https://bgscheduler.vercel.app/api/internal/class-assignments/morning \
-  -H "Authorization: Bearer $CRON_SECRET"
-
-# Admin classroom schedule email (GET only)
-curl https://bgscheduler.vercel.app/api/internal/class-assignments/admin-email \
+# Post-class feedback backfill. With no parameters it picks the oldest
+# unreconciled window itself and drains one 50-detail batch; explicit dates and
+# higher caps are the manual recovery path (detailCap <= 400, maxBatches <= 50,
+# startDate/endDate must be supplied together)
+# — src/app/api/internal/post-class-feedback-backfill/route.ts:19-30, :51-69.
+curl -s "$BASE/api/internal/post-class-feedback-backfill?startDate=2026-05-01&endDate=2026-05-07&detailCap=400&maxBatches=10" \
   -H "Authorization: Bearer $CRON_SECRET"
 ```
 
-### Manual Wise-activity backfill (admin session, not CRON_SECRET)
+The July-1 promotion cron is date-gated: on any Bangkok date other than
+`STUDENT_PROMOTION_TARGET_DATE` it returns `409` with
+`"Student promotion cron is only allowed on July 1, 2026 Bangkok time"`
+(`src/app/api/internal/student-promotions/july-1/route.ts:27`–`:31`). Its `POST`
+simply delegates to `GET` (`:46`–`:48`).
 
-`POST /api/wise-activity/sync` (`src/app/api/wise-activity/sync/route.ts`) is the
-operator backfill path. It requires an **Auth.js session** (returns 401
-otherwise), not the cron secret, and accepts an optional JSON body with
-`lookbackDays` (clamped 1–365, default 30) and `maxPages` (clamped 1–1000,
-default 500). It returns 409 if an activity sync is already running. Use this when
-the audit log needs more history than the cron's smaller default window provides.
+### 5.6 Triggering from the UI
 
-### Room-utilization sync (no cron)
+`/data-health` renders a **Run** control for every registry job — the payload
+maps all 21 `CRON_JOBS` into `manualActions`
+(`src/lib/data-health/dashboard.ts:975`). The control POSTs to
+`/api/data-health/jobs/{jobKey}/run`, which:
 
-`POST /api/internal/sync-room-utilization` exists
-(`src/app/api/internal/sync-room-utilization/route.ts:25`) and accepts either the
-cron secret or an Auth.js session, **but it is not registered in `vercel.json`**.
-It runs only when triggered manually (or via the `room-utilization:sync` npm
-script, `package.json:22`). See [Open questions](#open-questions).
+1. requires an Auth.js session (`src/app/api/data-health/jobs/[jobKey]/run/route.ts:14`–`:17`);
+2. rejects unknown keys with `404` (`:20`–`:23`);
+3. requires the `access_manager` capability for any `post_class_feedback*` job (`:25`–`:30`);
+4. refuses a `dangerous` job unless the body carries `confirmed: true`, returning
+   `409 {"error":"Confirmation required","confirmationLabel":…}` (`:33`–`:41`).
+   The UI shows a `window.confirm` with that label first
+   (`src/components/data-health/data-health-dashboard.tsx:474`).
+
+Dispatch is `runDataHealthJob` (`src/lib/data-health/run-job.ts:28`–`:198`) — the
+same functions the cron routes call, wrapped in the invocation audit with
+`triggerSource: "admin"`.
+
+> **Gotcha.** `runDataHealthJob` implements 14 of the 21 registry keys. Seven
+> have a Run button but fall through to `404 {"error":"Unknown job"}`
+> (`src/lib/data-health/run-job.ts:195`): `progress_tests`,
+> `progress_tests_digest`, `post_class_feedback_backfill`,
+> `post_class_feedback_payout_accrual`, `student_promotions_july_1`,
+> `admissions_notifications`, `line_backlog_recovery`. Use curl (§5.5) for those.
+
+There is also a session-only trigger for the Wise sync alone:
+`POST /api/admin/sync-wise` (`src/app/api/admin/sync-wise/route.ts:8`–`:23`),
+audited as `wise_snapshot` / `admin`.
+
+### 5.7 Response-status decoder
+
+| Status | Meaning |
+| --- | --- |
+| `200` | job ran and reported success |
+| `202` | **skipped** — the single-flight guard found a run already in progress (`src/lib/sync/run-wise-sync.ts:149`; also credit-control `:146`, progress-tests `:147`, admissions `route.ts:63`) |
+| `400` | bad query/body (backfill dates, `runType`) |
+| `401` | wrong/missing `Authorization` header, or no admin session |
+| `403` | Data Health run without the `access_manager` capability |
+| `404` | unknown job key, or a registry job `runDataHealthJob` does not implement |
+| `405` | wrong HTTP method for that route |
+| `409` | already-running conflict raised as an error (wise-activity, leave-requests, post-class, competitor), confirmation required, missing Google Sheets token (`sync-sales-dashboard/route.ts:64`), or the July-1 date gate |
+| `500` | `CRON_SECRET` unset on the server, or the job threw |
+| `503` | post-class reminder checkpoint still has unreconciled Wise sessions (`src/lib/data-health/run-job.ts:130`–`:136`) |
 
 ---
 
-## 8. Snapshot promotion and rollback
+## 6. The single-flight guard and abandoned-run recovery
 
-The Wise sync is **fail-safe by construction**: a failed run never replaces the
-live data, and there is no separate "rollback" step to run — rollback is implicit.
+### 6.1 Why it exists
 
-### What promotion does
+Vercel will start a second invocation of a 30-minute cron while the first is
+still working, and an operator hitting the curl endpoint mid-run does the same.
+Two concurrent Wise syncs would double the Wise API load and race on snapshot
+promotion. The guard turns the second caller into a no-op.
 
-`runFullSync` (`src/lib/sync/orchestrator.ts:50`) builds a *candidate* snapshot
-with `active: false` (`src/lib/sync/orchestrator.ts:71`), writes all normalized
-data under that `snapshotId`, then decides whether to promote:
+### 6.2 How it works for the Wise snapshot sync
 
-- It computes `unresolvedRatio = identityIssues / max(groups, 1)` and only
-  promotes when `unresolvedRatio < 0.5` — i.e. **>50% unresolved identity groups
-  blocks promotion** (`src/lib/sync/orchestrator.ts:473`).
-- Promotion is a **single atomic UPDATE**. One statement flips the new snapshot
-  to `active=true` and every previously-active row to `active=false`, scoped by
-  `WHERE active=true OR id=:snapshotId` (`src/lib/sync/orchestrator.ts:488`). The
-  comment notes PostgreSQL MVCC guarantees readers always see exactly one active
-  row — never a window with zero (`src/lib/sync/orchestrator.ts:480`).
+The primitive is a **partial unique index** on `sync_runs`:
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS "sync_runs_single_running_idx"
+ON "sync_runs" ("status")
+WHERE "status" = 'running';
+```
+
+(`drizzle/0013_sync_run_single_flight.sql:33`–`:35`, mirrored in
+`src/lib/db/schema.ts:473`–`:475`.) At most one `sync_runs` row can be `running`
+at a time; a second insert raises Postgres `23505`, which
+`isUniqueViolation` detects (`src/lib/sync/run-wise-sync.ts:42`–`:49`).
+
+`acquireSyncRun` (`src/lib/sync/run-wise-sync.ts:88`–`:118`) runs three steps:
+
+```mermaid
+sequenceDiagram
+  participant C as Caller (cron / curl / admin)
+  participant G as acquireSyncRun
+  participant DB as Postgres sync_runs
+  C->>G: runWiseSyncRequest()
+  G->>DB: 1. failStaleRunningSyncs(now)<br/>UPDATE running rows older than 20 min -> failed
+  DB-->>G: count of reclaimed rows
+  G->>DB: 2. findRunningSyncRun()
+  alt a running row still exists
+    DB-->>G: {id, startedAt}
+    G-->>C: 202 {skipped:true, alreadyRunning:true, runningStartedAt, …}
+  else no running row
+    G->>DB: 3. INSERT status='running'
+    alt unique violation 23505
+      DB-->>G: error 23505
+      G->>DB: findRunningSyncRun() — re-read the winner
+      G-->>C: 202 skipped
+    else insert wins
+      DB-->>G: syncRunId
+      G-->>C: proceed to runFullSync()
+    end
+  end
+```
+
+The unique-violation branch is what makes the guard race-safe: read-then-insert
+is not atomic, so two callers can both clear step 2, and the loser is caught by
+the index and converted into the same `202 skipped` response (`:106`–`:117`). If
+the violation fires but no running row can be found afterwards, the error is
+re-thrown rather than swallowed (`:111`–`:113`).
+
+The skipped payload is a **success-shaped** `202` carrying `skipped: true`,
+`alreadyRunning: true`, the in-flight `syncRunId`, `runningStartedAt`, and
+`staleRunningSyncsFailed` (`:120`–`:140`, `:149`). The audit layer classifies it
+as `outcome: "skipped"`, not a failure
+(`src/lib/data-health/cron-audit.ts:61`–`:70`), so a skipped run does not trip the
+watchdog.
+
+### 6.3 Abandoned-run recovery
+
+A function killed at `maxDuration`, or an aborted request, leaves the `sync_runs`
+row stuck at `running` forever — and because the index permits only one such row,
+*every* subsequent sync would skip. The reclaim therefore runs first, on every
+attempt (`src/lib/sync/run-wise-sync.ts:92`):
+
+```ts
+export const STALE_RUNNING_SYNC_MS = 20 * 60 * 1000;
+```
+
+(`src/lib/sync/run-wise-sync.ts:10`.) `failStaleRunningSyncs` (`:51`–`:72`) flips
+any `running` row whose `startedAt` is older than 20 minutes to `failed`, sets
+`finishedAt`, and writes the fixed error string:
+
+> "Sync marked failed because it was still running after 20 minutes; likely timed
+> out or the request was aborted." (`:39`–`:40`)
+
+The number of reclaimed rows is echoed back as `staleRunningSyncsFailed` in the
+response body (`:155`–`:158`), so a curl trigger tells you whether it just cleaned
+up after a crash.
+
+**Self-healing window.** The route allows 800 s but the reclaim cutoff is 1200 s,
+so a genuinely timed-out sync is reclaimed automatically by a later cron tick
+roughly 20 minutes after it started. You rarely need to intervene; when you do,
+see §9.2.
+
+Migration `0013` performed the same cleanup once at deploy time — failing every
+stale row, then failing all but the newest duplicate `running` row — before
+creating the index (`drizzle/0013_sync_run_single_flight.sql:1`–`:31`).
+
+### 6.4 Guard coverage across the other syncs
+
+Every domain replicates the `*_sync_runs` + partial-unique-index discipline
+(`src/lib/db/schema.ts:473`, `:567`, `:666`, `:758`, `:864`, `:1177`, `:1773`,
+`:2107`, `:2677`, `:2992`, `:3243`, `:4560`), but the *recovery* behaviour
+differs. This is the single most useful table for incident triage:
+
+| Domain | Run table | Stale reclaim | Skip signal |
+| --- | --- | --- | --- |
+| Wise snapshot | `sync_runs` | 20 min (`src/lib/sync/run-wise-sync.ts:10`) | `202` skipped payload (`:149`) |
+| Credit control | `credit_control_sync_runs` | 20 min (`src/lib/credit-control/run-sync-request.ts:9`) | `202` skipped payload (`:145`–`:147`) |
+| Progress tests | `progress_test_sync_runs` | 20 min (`src/lib/progress-tests/config.ts:27`) | `202` skipped payload (`run-sync-request.ts:146`–`:148`) |
+| Wise activity | `wise_activity_sync_runs` | 20 min (`src/lib/wise-activity/sync.ts:13`, `:136`–`:140`) | throws `WiseActivitySyncAlreadyRunningError` (`:182`) → `409` |
+| Post-class feedback | `post_class_sync_runs` | 20 min (`src/lib/post-class-feedback/repository.ts:262`, `:751`–`:757`) | throws `PostClassFeedbackSyncAlreadyRunningError` (`:786`, `:792`) → `409` |
+| Competitor intelligence | `competitor_sync_runs` | 20 min (`src/lib/competitor-intelligence/sync.ts:40`–`:42`) | message contains "already running" → `409` (`route.ts:59`) |
+| Sales dashboard | `sales_dashboard_import_runs`, `…_projection_import_runs` | 20 min per source (`src/lib/sales-dashboard/import-guard.ts:6`–`:9`) | per-source guard |
+| Cron watchdog | `cron_alert_state` sentinel row | 6 min (`src/lib/internal/cron-watchdog.ts:50`) | `skippedReason: "another sweep is in flight"` (`:391`–`:401`) |
+| **Leave requests** | `leave_request_sync_runs` | **none** | throws `LeaveRequestSyncAlreadyRunningError` (`src/lib/leave-requests/sync.ts:385`) → `409` |
+
+**The leave-requests gap is real.** `syncLeaveRequests` inserts a run row that
+defaults to `status = 'running'` and converts a unique-index violation into
+`LeaveRequestSyncAlreadyRunningError` (`src/lib/leave-requests/sync.ts:372`–`:387`),
+but nothing sweeps stale `running` rows in that table — no `STALE_*` constant
+exists anywhere under `src/lib/leave-requests/`. A normal crash is still covered
+because both terminal paths write a status, but a function killed at
+`maxDuration` or a lost Neon connection strands the row, and every subsequent
+leave-requests sync returns `409` until someone clears it by hand (§9.2).
+
+The watchdog protects its own sweep with a sentinel `cron_alert_state` row
+claimed by a conditional upsert whose `setWhere` fires only when the previous
+holder released it or went stale (`src/lib/internal/cron-watchdog.ts:298`–`:323`).
+It uses a row rather than a transaction or advisory lock because the neon-http
+driver supports neither (`:41`–`:50`).
+
+---
+
+## 7. Snapshot lifecycle and rollback
+
+### 7.1 What "rollback" means here
+
+There is no rollback command, and none is needed: **a failed sync cannot damage
+the live snapshot, because promotion is the last step.** `runFullSync` writes an
+entire candidate snapshot with `active: false`
+(`src/lib/sync/orchestrator.ts:71`–`:75`) and only flips it live after
+validation. Any throw before that point leaves the previous `active = true` row
+untouched.
 
 ```mermaid
 flowchart TD
-  C[Create candidate snapshot active=false] --> W[Write normalized data under snapshotId]
-  W --> R{unresolvedRatio < 0.5?}
-  R -- yes --> P[Atomic UPDATE: candidate active=true,\nprior active=false]
-  P --> SR[sync_runs: status=success,\npromotedSnapshotId set]
-  SR --> PR[pruneOldSnapshots]
-  R -- no --> SR2[sync_runs: status=success,\npromotedSnapshotId=null]
-  SR2 --> KEEP[Prior snapshot stays active]
+  A["runFullSync starts"] --> B["INSERT snapshots(active=false) -> candidate"]
+  B --> C["fetch teachers / availability / leaves / sessions from Wise"]
+  C --> D["normalize + write candidate-scoped rows"]
+  D --> E["PAST-01 diff hook<br/>runs BEFORE promotion — needs the prior snapshot still active"]
+  E --> F["write data_issues + snapshot_stats"]
+  F --> G{"unresolvedRatio &lt; 0.5 ?"}
+  G -- no --> H["promotedSnapshotId = null<br/>candidate stays active=false<br/>PRIOR SNAPSHOT KEEPS SERVING"]
+  G -- yes --> I["single atomic UPDATE:<br/>active = (id = candidate)"]
+  I --> J["sync_runs -> success, promotedSnapshotId set"]
+  J --> K["pruneOldSnapshots — best effort"]
+  H --> J
+  C -.throw.-> X["catch: sync_runs -> failed + errorSummary<br/>candidate orphaned, active row untouched"]
+  D -.throw.-> X
+  E -.throw.-> X
 ```
 
-> Subtle: even when the completeness gate blocks promotion, the run is still
-> marked `status='success'` with `promotedSnapshotId=null`
-> (`src/lib/sync/orchestrator.ts:509`). The candidate snapshot rows persist but
-> stay `active=false`. So "success with no promotion" is a real state — check
-> `promotedSnapshotId`, not just `status`, when verifying that live data actually
-> advanced.
+### 7.2 The promotion gate
 
-### Rollback = "a failed sync preserves the previous active snapshot"
+```ts
+const unresolvedRatio = identityIssues.length / Math.max(groups.length, 1);
+const shouldPromote = unresolvedRatio < 0.5;
+```
 
-If `runFullSync` throws anywhere before the promotion UPDATE, the `catch` block
-sets the run's `sync_runs` row to `status='failed'` with the error message in
-`errorSummary` and returns `success:false` / `promotedSnapshotId:null`
-(`src/lib/sync/orchestrator.ts:561`). Because promotion is the **last** mutation
-and the candidate was created `active=false`, the previously-active snapshot is
-never touched — the live index keeps serving the last good data. There is nothing
-to undo.
+(`src/lib/sync/orchestrator.ts:473`–`:476`.) If more than half the identity
+groups failed to resolve, the candidate is written and stats recorded but the
+snapshot is **not** promoted: `promotedSnapshotId` stays `null` while the sync
+still reports `success: true` (`:478`–`:501`, `:550`–`:560`). That is deliberate
+— the run worked; the data was judged untrustworthy. On `/data-health` it looks
+like a successful sync whose active snapshot id did not change.
 
-If the `sync_runs` cleanup UPDATE itself fails inside the catch, the error is
-logged (`[sync-orchestrator] cleanup failed for syncRunId=…`) but swallowed so the
-primary error is not masked (`src/lib/sync/orchestrator.ts:573`). The
-consequence: a row can be left in `running` state — which is exactly what the
-20-minute stale-run sweep ([§6.3](#63-the-single-flight-guard-wise-snapshot-sync))
-later cleans up on the next sync attempt.
+### 7.3 The atomic promotion
 
-### Per-teacher error isolation
+Promotion is one statement, carrying the `REL-01` design ID
+(`src/lib/sync/orchestrator.ts:481`–`:498`):
 
-A single teacher failing to fetch does **not** abort the sync. The orchestrator
-catches per-teacher errors and records a `completeness` data_issue, then continues
-(`src/lib/sync/orchestrator.ts:249`). Similarly the past-sessions diff hook and
-the modality-conflict pass emit data_issues without aborting
-(`src/lib/sync/orchestrator.ts:407`). So a sync can be `success` and still have
-many issues — that surfaces on `/data-health`, not as a failure.
+```sql
+UPDATE snapshots
+SET active = (id = <candidate>)
+WHERE active = true OR id = <candidate>;
+```
 
-### Snapshot retention / pruning
+Postgres MVCC plus the row locks held for one statement mean concurrent readers
+see either the old active row or the new one — never a moment with zero rows
+matching `active = true`. The bounded `WHERE` avoids rewriting the whole table on
+every promote.
 
-After a **promoted** run, `pruneOldSnapshots` runs (`src/lib/sync/orchestrator.ts:526`).
-It keeps the most recent `SNAPSHOT_RETENTION_COUNT = 30` snapshots by `created_at`
-plus the active one, and hard-deletes the rest along with all their child rows
-(`src/lib/sync/snapshot-pruning.ts:5`, `:49`). Pruning is best-effort: if it
-throws, the failure is logged and recorded in the run's `metadata.pruning`, but
-the sync still reports success (`src/lib/sync/orchestrator.ts:527`). Manual
-rollback to a snapshot older than the last 30 is therefore not generally possible
-— old snapshots are physically gone.
+### 7.4 Failure path
 
-> **Manual emergency rollback.** There is no app endpoint to re-promote a prior
-> snapshot. If you must force the live snapshot back to a specific id, you would
-> reproduce the orchestrator's atomic flip directly against the DB — set the
-> chosen snapshot `active=true` and all others `active=false` in one transaction —
-> and the in-memory index will rebuild on the next query
-> ([§6.4](#64-how-a-fresh-snapshot-reaches-live-queries)). This is an unusual,
-> manual operation; prefer simply re-running the sync, which self-heals from the
-> last good snapshot.
+The whole pipeline sits in one `try`/`catch` (`src/lib/sync/orchestrator.ts:60`,
+`:561`). On throw:
 
----
+1. `sync_runs` is set to `failed` with `finishedAt` and the error message
+   (`:564`–`:572`).
+2. If even *that* update fails, the cleanup error is logged to Vercel with the
+   primary error inline so an operator can see why a row is stuck at `running` —
+   the `REL-06` note at `:573`–`:585`. The cleanup error is swallowed so it
+   cannot mask the real cause.
+3. `runWiseSyncRequest` returns HTTP `500` because `result.success` is false
+   (`src/lib/sync/run-wise-sync.ts:164`–`:166`), and `revalidateTag("snapshot")`
+   is **not** called (`:160`–`:162`), so cached reads keep serving the last good
+   snapshot.
 
-## 9. When a sync fails: where to look
+The orphaned candidate rows stay in the database until pruning removes them.
 
-Work from the in-app surface outward to the platform logs.
+### 7.5 Per-teacher error isolation
 
-### 9.1 `/data-health` (start here for the Wise snapshot sync)
+A single bad teacher does not fail the sync. Availability/leave fetch failures
+are caught per teacher and recorded as `completeness` data issues
+(`src/lib/sync/orchestrator.ts:249`–`:259`), as are missing Wise user ids
+(`:162`–`:174`). Same for the PAST-01 diff hook, whose per-group errors become
+data issues rather than aborting (`:400`–`:418`). Only a top-level failure —
+Wise unreachable, database down — fails the run.
 
-`GET /api/data-health` (`src/app/api/data-health/route.ts`) requires an admin
-session and returns the operational summary used by the `/data-health` page:
+### 7.6 Pruning and the practical retention limit
 
-- `lastSuccessfulSync`, `lastFailedSync`, and **`lastFailureError`** — the
-  `errorSummary` of the most recent failed run (the first thing to read).
-- `staleAgeMs` / `staleMinutes` — time since the last successful finish.
-- `activeSnapshotId` and `stats` (teacher / identity-group counts, total issues).
-- `issuesByType`, `unresolvedAliases`, `unresolvedModality`, `unmappedTags`.
-- `recentSyncs` — the last 10 `sync_runs` with `status`, timestamps,
-  `teacherCount`, and `errorSummary`.
+After a successful promotion, `pruneOldSnapshots` keeps the 30 most recent
+snapshots by `createdAt` **plus** any snapshot flagged active, then hard-deletes
+the rest along with their child rows across twelve tables
+(`src/lib/sync/snapshot-pruning.ts:5`, `:64`–`:74`, `:88`–`:179`). Pruning is
+best-effort: a failure is logged and recorded in `sync_runs.metadata.pruning`
+without failing the sync (`src/lib/sync/orchestrator.ts:520`–`:548`).
 
-Interpretation cheat-sheet:
+Practical consequence: **you can only "roll back" to a snapshot still inside the
+retention window.** There is no supported re-promote command; doing it manually
+means flipping `snapshots.active` yourself, after which the in-memory index
+rebuilds from the new active snapshot on the next request (§7.7).
 
-| Symptom on `/data-health` | Likely cause | Next step |
-| --- | --- | --- |
-| `staleMinutes` climbing well past 30 | crons not firing, or every run skipping | check `recentSyncs` for stuck `running` rows; check Vercel cron logs |
-| recent run `failed` with an error string | exception in `runFullSync` | read `lastFailureError`; reproduce with a manual trigger |
-| a run stuck `running` | a previous invocation timed out/aborted | next sync auto-fails it after 20 min ([§6.3](#63-the-single-flight-guard-wise-snapshot-sync)); or trigger a sync to sweep it now |
-| `success` but `activeSnapshotId` unchanged | completeness gate blocked promotion (>50% unresolved identity) | investigate identity issues; `promotedSnapshotId` was null |
-| every manual trigger returns 202 | a real sync is in flight | wait for it to finish, or check it isn't a stuck `running` row |
+### 7.7 Getting fresh data in front of users
 
-For what each issue type means and the fail-closed rules behind "Needs Review",
-see [features/data-health.md](../features/data-health.md).
+Two independent mechanisms:
 
-### 9.2 The HTTP response from a manual trigger
+- **Cache tags.** On success, `revalidateTag("snapshot", { expire: 0 })`
+  (`src/lib/sync/run-wise-sync.ts:161`) invalidates the `"use cache"` entries
+  tagged `snapshot` in `src/lib/data/tutors.ts:82` and `src/lib/data/filters.ts:54`.
+- **In-memory index.** `ensureIndex` (`src/lib/search/index.ts:354`) compares the
+  cached index's `snapshotId` and `profileVersion` against the database and
+  rebuilds when either changed (`:366`–`:388`). Concurrent callers coalesce onto
+  a single build promise assigned synchronously before the first `await`
+  (REL-02, `:391`–`:399`), so a snapshot flip cannot cause a rebuild stampede.
+  If **no** snapshot is active it returns the stale cached index rather than
+  nothing (`:384`–`:386`).
 
-Triggering the sync by `curl` tells you a lot immediately:
-
-| Response | Meaning | Source |
-| --- | --- | --- |
-| `200` + `success:true` | sync ran; check `promotedSnapshotId` | `src/lib/sync/run-wise-sync.ts:160` |
-| `202` + `skipped:true` | already running — not an error | `src/lib/sync/run-wise-sync.ts:148` |
-| `500` + `error:"Server misconfigured"` | `CRON_SECRET` unset in env | `src/app/api/internal/sync-wise/route.ts:49` |
-| `401` + `error:"Unauthorized"` | wrong/absent secret (GET) or no session (POST) | `src/app/api/internal/sync-wise/route.ts:53` |
-| `500` + `errorSummary` | `runFullSync` threw; the string is the cause | `src/lib/sync/run-wise-sync.ts:164` |
-| `409` (activity / leave-requests) | that sync's own already-running guard | `…/sync-wise-activity/route.ts:24` |
-
-### 9.3 Vercel platform logs
-
-The sync runs as a serverless function with `maxDuration = 800`
-(`src/app/api/internal/sync-wise/route.ts:6`). For failures that don't show a
-clean `errorSummary` (timeouts, OOM, cold-start crashes, env-validation throws),
-read the function/runtime logs in the Vercel dashboard for the
-`/api/internal/sync-wise` invocation. Two log lines are emitted specifically to
-aid diagnosis:
-
-- `[sync-orchestrator] cleanup failed for syncRunId=… after primary error "…"` —
-  the sync failed **and** couldn't update its own `sync_runs` row; the row may be
-  stuck `running` (`src/lib/sync/orchestrator.ts:581`).
-- `[sync-orchestrator] snapshot pruning failed for syncRunId=…` — promotion
-  succeeded but pruning didn't; live data is fine (`src/lib/sync/orchestrator.ts:529`).
-
-If the function exceeds 800s it is killed by the platform with no `errorSummary`
-write; the `running` row then waits for the next sync's 20-minute sweep to be
-marked `failed`. The README notes monitoring sync duration headroom against the
-800s ceiling as an ongoing concern.
-
-### 9.4 The database (last resort)
-
-When the in-app surface is itself broken, query `sync_runs` directly (ordered by
-`started_at desc`) to see statuses, `error_summary`, `snapshot_id`, and
-`promoted_snapshot_id`; and `snapshots` to confirm exactly one row has
-`active=true`. The single-flight invariant is enforced by
-`sync_runs_single_running_idx` (`drizzle/0013_sync_run_single_flight.sql`), so a
-manual insert of a second `running` row will be rejected by the unique index.
+If a sync promoted but the UI still looks old, suspect the in-memory index of
+that particular serverless instance; a redeploy clears every instance.
 
 ---
 
-## Open questions
+## 8. Observability: where the evidence lives
 
-- **`/api/internal/sync-room-utilization` has no cron.** It lives under the
-  `internal` namespace and accepts the cron secret
-  (`src/app/api/internal/sync-room-utilization/route.ts:25`) but is absent from
-  `vercel.json`. Is it intended to be cron-driven (a missing entry) or strictly a
-  manual/admin operation invoked via the `room-utilization:sync` script?
-- **Migration numbering gaps.** `drizzle/` skips `0009`, `0010`, and `0025`
-  (highest at HEAD is `0037`). Were these intentionally squashed/removed, and is
-  the `meta` journal authoritative for what production has applied? Confirm before
-  relying on filename order during a manual recovery.
-- **Per-sync guard semantics differ.** The Wise snapshot sync uses a DB
-  single-flight row + 20-minute sweep, while activity/leave-requests use an
-  in-process `AlreadyRunningError` → 409. Sales-dashboard and credit-control
-  routes show no overlap guard in their route handlers — is overlap protection
-  handled inside `importRefreshableSalesSources` /
-  `runCreditControlSyncRequest`, or can those two genuinely run concurrently?
-- **Emergency manual rollback is undocumented as a supported procedure.** The
-  fail-closed design means re-running the sync is the intended recovery, but there
-  is no first-class endpoint to re-promote a specific older snapshot. Should one
-  exist, given pruning physically deletes snapshots beyond the most recent 30?
+### 8.1 `cron_invocations` — direct proof
+
+Every audit-wrapped route writes a row *before* the handler runs and updates it
+after. `withCronInvocationAudit` (`src/lib/data-health/cron-audit.ts:144`–`:159`)
+inserts with `outcome: "running"` plus job key, path, schedule, trigger source,
+actor email, and request method (`:84`–`:112`), then records `finishedAt`,
+`durationMs`, `responseStatus`, the derived outcome, an extracted `errorSummary`,
+and linked run ids (`:114`–`:142`). Table definition: `src/lib/db/schema.ts:479`–`:499`.
+
+Outcome derivation (`:61`–`:70`), in order: body `skipped === true` or a message
+containing "already running" → `skipped`; body `ok === false` or
+`success === false` → `failed`; HTTP `202` → `skipped`; HTTP ≥ 400 → `failed`;
+otherwise `success`. **A 200 with `success: false` in the body still counts as
+failed** — exactly what an errored sync returns.
+
+Audit writes are best-effort: a failure to record start or finish is logged with
+`console.error` and never blocks the job (`:108`–`:111`, `:139`–`:141`).
+
+One scheduled route is **not** audit-wrapped and produces no `cron_invocations`
+rows at all: `/api/internal/student-promotions/july-1` — it does its own secret
+check and calls the orchestrator directly
+(`src/app/api/internal/student-promotions/july-1/route.ts:19`–`:44`). Data Health
+compensates explicitly rather than guessing (§8.2).
+
+### 8.2 Per-domain run tables — durable proof
+
+`/data-health` reads the 8 most recent rows (`RECENT_LIMIT`,
+`src/lib/data-health/dashboard.ts:17`) from each domain run table
+(`:769`–`:786`): `sync_runs`, `wise_activity_sync_runs`,
+`sales_dashboard_import_runs`, `sales_dashboard_projection_import_runs`,
+`competitor_sync_runs`, `credit_control_sync_runs`, `leave_request_sync_runs`,
+`progress_test_sync_runs`, `progress_test_admin_digest_runs`,
+`post_class_sync_runs`, `post_class_notification_runs`,
+`classroom_assignment_runs`, `classroom_admin_email_runs`, and the newest
+`room_utilization_sessions` row.
+
+`pickJobRuns` (`:142`) maps each registry key to exactly one of those tables. Two
+deliberate exceptions:
+
+- **`student_promotions_july_1` maps to no evidence at all** (`:274`–`:288`). Its
+  route is not audit-wrapped and its run table mixes admin drafts with the cron
+  apply, so the code fails closed to `unknown` — an alertable state — rather than
+  reporting a dangerous write-path cron as healthy without it ever firing.
+- **`cron_watchdog` maps to no run table** (`:306`–`:314`); its health comes only
+  from its own `cron_invocations` rows.
+
+Only `room_utilization` reaches the fallback branch, so stale utilization rows
+can never stand in as another job's health proof (`:317`–`:319`).
+
+`fetchCronInvocations` ranks the latest 8 invocations **per job key** with a
+window function rather than taking a global limit (`:808`–`:830`), because a
+global window let chatty 30-minute jobs push a daily job's only invocation out
+within hours.
+
+### 8.3 How a status is decided
+
+`evaluateCronJobStatus` (`src/lib/data-health/status.ts:195`–`:363`) resolves in
+strict order:
+
+```mermaid
+flowchart TD
+  A["job"] --> B{"manualOnly?"}
+  B -- yes --> M["manual-only"]
+  B -- no --> C{"a run in flight?"}
+  C -- yes --> D{"now &gt; start + registry maxDuration + 60 s?"}
+  D -- yes --> F1["failing — 'Running longer than Ns maxDuration'"]
+  D -- no --> R["running"]
+  C -- no --> E{"any evidence at all?"}
+  E -- no --> U["unknown — 'No invocation or run-table evidence found'"]
+  E -- yes --> G{"latest failure newer than latest success?"}
+  G -- yes --> F2["failing — 'Latest observed run failed after the latest success'"]
+  G -- no --> H{"evidence older than lateAfterMinutes,<br/>or missed the expected window?"}
+  H -- yes --> L["late"]
+  H -- no --> OK["healthy"]
+```
+
+`STUCK_BUFFER_MS` is 60 s (`:6`) and the stuck test uses the **registry's**
+`maxDurationSeconds` (`:238`–`:240`), not the route's `export const maxDuration` —
+the source of the credit-control discrepancy in §5.3. `proof` is `"direct"` when
+a `cron_invocations` row backs the verdict, `"inferred"` when only a run table
+does (`:220`).
+
+Expected windows are computed three ways: interval crons parse the minute field
+(`:57`–`:92`), daily jobs use `expectedBangkokMinute` or the window bounds
+(`:111`–`:135`), weekly jobs add `expectedBangkokWeekday` (`:137`–`:165`).
+
+### 8.4 The watchdog
+
+`/api/internal/cron-watchdog` sweeps every 30 minutes (`vercel.json:56`–`:57`) and
+emails full-access admins when a job turns `failing`, `late`, or `unknown`
+(`src/lib/internal/cron-watchdog.ts:52`, `:139`–`:141`). Key behaviours:
+
+- **Episode dedup** — one email per job per failure episode, persisted in
+  `cron_alert_state`. An episode opens on the first unhealthy sweep
+  (`lastAlertOutcome = "alerted"`) and closes when a recovery notice goes out,
+  which re-arms the next alert (`:152`–`:171`, `:466`–`:491`).
+- **Recipients** are `admin_users` rows with `allowedPages IS NULL` —
+  page-restricted users are excluded because they cannot open the `/data-health`
+  link the alert points at (`:250`–`:262`).
+- **Delivery-gated persistence** — episode state is written only after at least
+  one recipient accepted the email, so a total delivery failure is retried next
+  sweep (`:454`–`:457`). Partial delivery still closes the episode and the failed
+  addresses are only logged (`:11`–`:17`, `:458`–`:464`).
+- **Self-exclusion** — the watchdog never alerts about itself (`:39`, `:160`).
+- **Fail-safe** — a missing `cron_alert_state` disables alerting entirely rather
+  than spamming un-deduped alerts (`:376`–`:388`).
+- **Synthetic payout entry** — a non-route "Payout Window Finalize" job rides the
+  sweep so a payout window that never reached `published` is not silently missed
+  (`:77`–`:116`); a failure evaluating it degrades to "no entry this sweep"
+  (`:118`–`:136`).
+
+### 8.5 Staleness thresholds
+
+| Threshold | Value | Where |
+| --- | --- | --- |
+| API stale warning | 90 min | `src/lib/ops/stale.ts:2` |
+| In-app stale banner | 2 h | `src/lib/ops/stale.ts:3` |
+
+Both measure the age of the last **successful** `sync_runs.finishedAt`
+(`src/lib/data-health/dashboard.ts:952`–`:954`). Staleness is a warning, never a
+reason to withhold data.
+
+---
+
+## 9. When a sync fails
+
+### 9.1 Triage order
+
+```mermaid
+flowchart TD
+  A["Something looks stale / a job is red"] --> B["Open /data-health"]
+  B --> C{"Job status?"}
+  C -- "manual-only" --> M["Expected — not in vercel.json.<br/>Run it from the UI or curl if you need it."]
+  C -- "running" --> R["A run is in flight. Wait.<br/>It turns 'failing' at registry maxDuration + 60 s."]
+  C -- "unknown" --> U["No evidence. Check the route is deployed,<br/>CRON_SECRET is set, cron_invocations exists."]
+  C -- "late" --> L["The route did not fire — cron delivery or auth.<br/>Check Vercel logs."]
+  C -- "failing" --> F["Read errorSummary on the job card"]
+  F --> F1{"errorSummary text?"}
+  F1 -- "'Wise API 4xx/5xx'" --> W["Upstream Wise — see 9.4"]
+  F1 -- "'still running after 20 minutes'" --> S["A prior run was reclaimed. Usually self-heals."]
+  F1 -- "'Running longer than Ns maxDuration'" --> T["Stuck row — see 9.2 (check credit-control caveat 5.3)"]
+  F1 -- other --> Q["Query cron_invocations + the domain run table — 9.3"]
+```
+
+### 9.2 Clearing a stuck `running` row
+
+First confirm it is genuinely stuck rather than in flight. The Wise, credit
+control, progress-test, wise-activity, post-class, competitor and sales guards
+all reclaim automatically after 20 minutes (§6.4), so wait one cron tick before
+intervening.
+
+```sql
+-- Wise snapshot: what is holding the lock?
+SELECT id, status, started_at, now() - started_at AS age, error_summary
+FROM sync_runs
+WHERE status = 'running';
+
+-- Manual reclaim (the sync itself does this after 20 minutes)
+UPDATE sync_runs
+SET status = 'failed',
+    finished_at = now(),
+    error_summary = COALESCE(error_summary, 'Manually reclaimed stuck running row')
+WHERE status = 'running'
+  AND started_at < now() - interval '20 minutes';
+```
+
+**Leave requests need manual intervention** — there is no automatic reclaim
+(§6.4):
+
+```sql
+SELECT id, status, trigger_type, started_at, now() - started_at AS age
+FROM leave_request_sync_runs
+WHERE status = 'running';
+
+UPDATE leave_request_sync_runs
+SET status = 'failed',
+    finished_at = now(),
+    error_summary = 'Manually reclaimed stuck running row'
+WHERE status = 'running'
+  AND started_at < now() - interval '20 minutes';
+```
+
+The partial unique index means only one row per table can be `running`, so these
+statements can never touch more than one row each.
+
+### 9.3 Useful queries
+
+```sql
+-- Last 20 invocations across all jobs, newest first
+SELECT job_key, trigger_source, actor_email, received_at, duration_ms,
+       response_status, outcome, error_summary
+FROM cron_invocations
+ORDER BY received_at DESC
+LIMIT 20;
+
+-- Everything that failed or skipped in the last 24 hours
+SELECT job_key, outcome, response_status, error_summary, received_at
+FROM cron_invocations
+WHERE outcome IN ('failed', 'skipped')
+  AND received_at > now() - interval '24 hours'
+ORDER BY received_at DESC;
+
+-- Wise sync history, including what each run promoted
+SELECT id, status, started_at, finished_at, teacher_count,
+       snapshot_id, promoted_snapshot_id, error_summary
+FROM sync_runs
+ORDER BY started_at DESC
+LIMIT 10;
+
+-- Current active snapshot + its stats
+SELECT s.id, s.created_at, st.total_wise_teachers, st.total_identity_groups,
+       st.resolved_groups, st.unresolved_groups, st.total_data_issues
+FROM snapshots s
+LEFT JOIN snapshot_stats st ON st.snapshot_id = s.id
+WHERE s.active = true;
+
+-- Open watchdog alert episodes
+SELECT job_key, last_status, last_alert_outcome, last_alerted_at,
+       last_recovered_at, error_summary
+FROM cron_alert_state
+WHERE last_alert_outcome = 'alerted'
+ORDER BY last_alerted_at DESC;
+```
+
+### 9.4 Reading a Wise API error
+
+Errors surface as `Wise API <status>: <body> (<url>)`
+(`src/lib/wise/client.ts:124`, `:133`). What the client did before giving up:
+
+- Only `408, 429, 500, 502, 503, 504` are retried — the `RETRYABLE_STATUS_CODES`
+  set at `src/lib/wise/client.ts:23`–`:30`. Permanent 4xx (401/403/404/422)
+  **fail fast** with no retry budget spent (`:121`–`:125`).
+- Retryable statuses and network-level failures back off `1s, 2s, 4s`
+  (`:105`–`:113`, `:127`–`:133`), with `maxRetries` defaulting to 3 (`:49`).
+- `createWiseClient()` raises concurrency to 15 for sync work (`:159`–`:166`);
+  the constructor default is 5 (`:48`).
+
+So `Wise API 401` means credentials, immediately — not a transient blip.
+`Wise API 429` means the retry budget was exhausted against rate limiting and
+the run genuinely could not complete.
+
+### 9.5 The sync "succeeded" but the snapshot did not change
+
+Check `promoted_snapshot_id` on the newest `sync_runs` row. If it is `null`
+while `status = 'success'`, the promotion gate blocked it: more than 50 % of
+identity groups were unresolved (§7.2). Look at
+`snapshot_stats.unresolved_groups` for that candidate snapshot and the
+`alias`-type rows in `data_issues`. The fix is data — add the missing mappings to
+`tutor_aliases` — not a re-run.
+
+### 9.6 Where to read logs
+
+- **Vercel function logs** are the only place `console.error` output lands. High-signal
+  prefixes: `[sync-orchestrator]` for pruning and cleanup failures
+  (`src/lib/sync/orchestrator.ts:529`, `:543`, `:581`) and the watchdog's
+  un-prefixed messages (`src/lib/internal/cron-watchdog.ts:133`, `:341`, `:428`,
+  `:450`, `:455`, `:461`).
+- **Never** expect request bodies, secrets, or environment values in logs — the
+  logging convention forbids it.
+- `/data-health` is the aggregated view; §9.3 is the raw one.
+
+---
+
+## 10. Routine checks
+
+| Cadence | Check |
+| --- | --- |
+| Daily | `/data-health` overall status — anything `failing`, `late`, or `unknown` |
+| Daily | Watchdog emails: one per job per episode; a recovery notice closes it |
+| Weekly | Wise sync duration against the 800 s ceiling (`sync_runs.finished_at - started_at`) |
+| Weekly | `snapshot_stats.unresolved_groups` trend — creeping toward the 50 % gate |
+| Per release | `npm run verify:release` green; migrations applied **before** the deploy |
+| Per migration | Confirm `cron_invocations` and `cron_alert_state` exist, or direct proof and watchdog alerting silently degrade (§2.4, §8.1, §8.4) |
+
+---
 
 _Verified against HEAD + uncommitted WIP on 2026-05-31._

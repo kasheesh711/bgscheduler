@@ -1,130 +1,253 @@
-# Database Reference — LINE Domain
+# Database Reference — LINE Domain (ER Diagram)
 
-This document covers the eight tables that back the LINE Official Account (OA) integration: contact identity, conversation threads and messages, contact↔student linking, the human-in-the-loop AI scheduler review queue, the Wise writeback audit log, and the OA resolver worklist used to attach LINE chats to credit-control students.
+The LINE domain is the only subsystem in BGScheduler whose data arrives **push-first**: a LINE webhook POST is the write trigger, not a cron-driven pull. Its 12 tables fall into four clusters that share `line_contacts` as the single identity anchor:
 
-All tables are defined in `src/lib/db/schema.ts`. Line ranges are cited per table below. Enum value sets are defined at `src/lib/db/schema.ts:108-132`.
+1. **Conversation store** — `lineContacts` → `lineThreads` → `lineMessages`, the durable transcript of the Official Account inbox, written by `recordLineWebhookPayload` (`src/lib/line/data.ts:422-524`).
+2. **Identity linkage** — `lineContactStudentLinks`, the (contact ↔ student) mapping every downstream write gate consults, plus the OA-resolver harvest tables (`lineOaResolverRuns` / `lineOaResolverRows`) and the backlog-recovery run ledger (`lineBacklogRecoverySyncRuns`) that feed it.
+3. **AI review queue** — `lineSchedulerReviews` (one review per inbound message) and its `lineWiseActionLogs` audit trail; the Wise write path defaults to dry run (`dryRun` defaults to `true`, schema.ts:2598).
+4. **Schedule bot** — `lineScheduleBotPending`, `lineGroupSettings`, `lineGroupScheduleSends`: the confirm gate, per-group audience, and delivery audit for pushing a parent-facing monthly schedule link into LINE.
 
-For the full column-by-column listing (types, defaults, indexes) see the database [index](./index.md). This page documents grain, keys, and relationships only — it does not restate every column.
+Four Postgres enums are LINE-specific and appear throughout: `lineMessageDirectionEnum` (`inbound` / `outbound`, schema.ts:110–113), `lineSchedulerClassifierCategoryEnum` (`scheduling_request` / `scheduling_change` / `non_scheduling` / `unclear`, schema.ts:115–120), `lineSchedulerReviewStatusEnum` (`pending_review` / `approved_sent` / `accepted_no_send` / `rejected` / `dismissed`, schema.ts:122–128), and `lineContactStudentLinkStatusEnum` (`suggested` / `verified` / `rejected`, schema.ts:130–134). See [`./enums.md`](./enums.md).
 
-## ER Diagram
+All 12 tables below are defined in `src/lib/db/schema.ts`. Full per-column type and constraint detail lives in [`./index.md`](./index.md) — this page covers grain, keys, and relationships only. For purpose, business rules, and flows see [`../../features/line-integration.md`](../../features/line-integration.md).
 
-Core/sibling tables referenced from this domain (`aiSchedulerConversations`, `aiSchedulerMessages`, `aiSchedulerRuns`) are shown as stub nodes; they are owned by the AI scheduler domain, not here.
+## Scope
+
+Exactly 12 tables (varName — `schema.ts` line range):
+
+| Table (var) | Postgres table | Lines |
+|---|---|---|
+| `lineContacts` | `line_contacts` | 2434–2451 |
+| `lineThreads` | `line_threads` | 2452–2467 |
+| `lineMessages` | `line_messages` | 2468–2502 |
+| `lineContactStudentLinks` | `line_contact_student_links` | 2503–2543 |
+| `lineSchedulerReviews` | `line_scheduler_reviews` | 2544–2592 |
+| `lineWiseActionLogs` | `line_wise_action_logs` | 2593–2609 |
+| `lineOaResolverRuns` | `line_oa_resolver_runs` | 2610–2635 |
+| `lineOaResolverRows` | `line_oa_resolver_rows` | 2636–2662 |
+| `lineBacklogRecoverySyncRuns` | `line_backlog_recovery_sync_runs` | 2663–2684 |
+| `lineScheduleBotPending` | `line_schedule_bot_pending` | 4660–4688 |
+| `lineGroupSettings` | `line_group_settings` | 4689–4706 |
+| `lineGroupScheduleSends` | `line_group_schedule_sends` | 4707–4719 |
+
+## Relationship model
+
+**`lineContacts.id` is the domain's hub.** It is the FK target for `lineThreads.contactId`, `lineMessages.contactId`, `lineContactStudentLinks.contactId`, and `lineSchedulerReviews.contactId` (all `onDelete: "cascade"`), plus `lineOaResolverRows.committedContactId` (`onDelete: "set null"`). Deleting a contact therefore removes its entire transcript, its student links, and its reviews, but leaves the OA-resolver worklist row intact with a nulled pointer.
+
+**The conversation store is keyed by LINE identifiers, not surrogate ids.** `lineContacts.lineUserId` and `lineThreads.lineUserId` each carry a unique index (schema.ts:2448, 2463), so a contact and its thread are both upserted with `onConflictDoUpdate` on that column (`src/lib/line/data.ts:333-343`, `:396-403`). This makes threads **1:1 with contacts in practice** even though the FK alone would permit many.
+
+**Cross-domain FKs into the AI scheduler.** `lineThreads.aiSchedulerConversationId` (schema.ts:2456–2457) and `lineSchedulerReviews.conversationId` / `.schedulerMessageId` / `.schedulerRunId` (schema.ts:2551–2556) reference the AI-scheduler tables (`aiSchedulerConversations` schema.ts:2344, `aiSchedulerMessages` schema.ts:2365, `aiSchedulerRuns` schema.ts:2383), all with `onDelete: "set null"` — a purged scheduler conversation must not delete the LINE audit trail. Those three appear below as a single `AI_SCHEDULER` stub node; see [`./erd-ai-and-proposals.md`](./erd-ai-and-proposals.md).
+
+**One FK into the student-schedule domain.** `lineGroupScheduleSends.linkId` → `studentScheduleLinks.id` (`onDelete: "set null"`, schema.ts:4714) — the capability token minted for the public `/schedule/{token}` parent view (`studentScheduleLinks`, schema.ts:4627). Stubbed below.
+
+**No FKs at all to Wise or to the core scheduling snapshot.** `wiseStudentId`, `studentKey`, `wiseSessionIds`, `groupId`, and `lineUserId` are loose strings everywhere they appear. In particular the three schedule-bot tables (`lineScheduleBotPending`, `lineGroupSettings`, `lineGroupScheduleSends`) declare **no** FK to `lineContacts` and join to everything else purely by `studentKey` / `groupId` / `lineUserId` text. `lineBacklogRecoverySyncRuns` has no FKs and no referents in either direction.
+
+**Uniqueness that encodes a business rule** (rather than mere de-duplication):
+
+- `line_messages_webhook_event_idx` on `webhookEventId` (schema.ts:2496) is the webhook idempotency key — ingest inserts with `onConflictDoNothing` on it and counts the miss as `duplicateEvents` (`src/lib/line/data.ts:516-520`).
+- `line_scheduler_reviews_inbound_message_idx` on `inboundMessageId` (schema.ts:2587) makes the review queue exactly one row per inbound message; a second classification pass is a no-op (`src/lib/line/data.ts:777`).
+- `line_contact_student_links_contact_student_idx` on (`contactId`, `studentKey`) (schema.ts:2527) makes a link idempotent per contact/student pair.
+- `line_schedule_bot_pending_scope_idx` on (`lineUserId`, `scopeKey`) (schema.ts:4677) lets one admin hold a DM confirm and a group confirm at the same time without either clobbering the other.
+- `line_backlog_recovery_sync_runs_single_running_idx` is a **partial** unique index on `status` where `status = 'running'` (schema.ts:2677–2679) — the same single-flight guard the other `*_sync_runs` tables use.
+
+## ER diagram
 
 ```mermaid
 erDiagram
     lineContacts {
         uuid id PK
-        text line_user_id UK
-        text display_name
+        text lineUserId UK
+        text displayName
     }
     lineThreads {
         uuid id PK
-        uuid contact_id FK
-        uuid ai_scheduler_conversation_id FK
-        text status
+        uuid contactId FK
+        uuid aiSchedulerConversationId FK
+        text lineUserId UK
     }
     lineMessages {
         uuid id PK
-        uuid thread_id FK
-        uuid contact_id FK
-        enum direction
-        enum classifier_category
+        uuid threadId FK
+        uuid contactId FK
+        text webhookEventId UK
+        line_message_direction direction
     }
     lineContactStudentLinks {
         uuid id PK
-        uuid contact_id FK
-        text student_key
-        enum status
+        uuid contactId FK
+        text studentKey "UK with contactId"
+        line_contact_student_link_status status
     }
     lineSchedulerReviews {
         uuid id PK
-        uuid thread_id FK
-        uuid contact_id FK
-        uuid inbound_message_id FK
-        uuid conversation_id FK
-        uuid scheduler_message_id FK
-        uuid scheduler_run_id FK
-        enum status
+        uuid threadId FK
+        uuid contactId FK
+        uuid inboundMessageId FK "unique"
+        uuid conversationId FK
+        line_scheduler_review_status status
     }
     lineWiseActionLogs {
         uuid id PK
-        uuid line_review_id FK
-        text action_type
-        bool dry_run
+        uuid lineReviewId FK
+        text actionType
+        boolean dryRun "defaults true"
     }
     lineOaResolverRuns {
         uuid id PK
-        text token_hash UK
+        text tokenHash UK
         text status
+        timestamptz expiresAt
     }
     lineOaResolverRows {
         uuid id PK
-        uuid run_id FK
-        text student_key
-        uuid committed_contact_id FK
-        uuid committed_link_id FK
+        uuid runId FK
+        uuid committedContactId FK
+        uuid committedLinkId FK
+        text studentKey
+    }
+    lineBacklogRecoverySyncRuns {
+        uuid id PK
+        sync_status status "single-running guard"
+        boolean dryRun
+    }
+    lineScheduleBotPending {
+        uuid id PK
+        text lineUserId "UK with scopeKey"
+        text scopeKey "dm or group id"
+        text studentKey "soft link"
+        timestamptz expiresAt
+    }
+    lineGroupSettings {
+        text groupId PK
+        text audience "family or staff"
+        text setByLineUserId
+    }
+    lineGroupScheduleSends {
+        uuid id PK
+        uuid linkId FK
+        text groupId "soft link"
+        text studentKey "soft link"
     }
 
-    aiSchedulerConversations {
-        uuid id PK
+    AI_SCHEDULER {
+        stub note "aiSchedulerConversations / Messages / Runs"
     }
-    aiSchedulerMessages {
-        uuid id PK
+    STUDENT_SCHEDULE_LINKS {
+        stub note "studentScheduleLinks (parent view tokens)"
     }
-    aiSchedulerRuns {
-        uuid id PK
+    WISE_ENTITIES {
+        stub note "Wise students / sessions"
     }
 
-    lineContacts ||--o{ lineThreads : "contact_id (cascade)"
-    lineContacts ||--o{ lineMessages : "contact_id (cascade)"
-    lineContacts ||--o{ lineContactStudentLinks : "contact_id (cascade)"
-    lineContacts ||--o{ lineSchedulerReviews : "contact_id (cascade)"
-    lineThreads  ||--o{ lineMessages : "thread_id (cascade)"
-    lineThreads  ||--o{ lineSchedulerReviews : "thread_id (cascade)"
-    lineMessages ||--|| lineSchedulerReviews : "inbound_message_id (cascade, unique)"
-    lineSchedulerReviews ||--o{ lineWiseActionLogs : "line_review_id (set null)"
-    lineOaResolverRuns ||--o{ lineOaResolverRows : "run_id (cascade)"
-    lineContacts ||--o{ lineOaResolverRows : "committed_contact_id (set null)"
-    lineContactStudentLinks ||--o{ lineOaResolverRows : "committed_link_id (set null)"
+    lineContacts ||--o{ lineThreads : "contactId (cascade)"
+    lineContacts ||--o{ lineMessages : "contactId (cascade)"
+    lineContacts ||--o{ lineContactStudentLinks : "contactId (cascade)"
+    lineContacts ||--o{ lineSchedulerReviews : "contactId (cascade)"
+    lineThreads ||--o{ lineMessages : "threadId (cascade)"
+    lineThreads ||--o{ lineSchedulerReviews : "threadId (cascade)"
+    lineMessages ||--o| lineSchedulerReviews : "inboundMessageId (unique)"
+    lineSchedulerReviews ||--o{ lineWiseActionLogs : "lineReviewId (set null)"
+    lineOaResolverRuns ||--o{ lineOaResolverRows : "runId (cascade)"
+    lineOaResolverRows }o--o| lineContacts : "committedContactId (set null)"
+    lineOaResolverRows }o--o| lineContactStudentLinks : "committedLinkId (set null)"
+    lineGroupScheduleSends }o--o| STUDENT_SCHEDULE_LINKS : "linkId (set null)"
 
-    aiSchedulerConversations ||--o{ lineThreads : "ai_scheduler_conversation_id (set null)"
-    aiSchedulerConversations ||--o{ lineSchedulerReviews : "conversation_id (set null)"
-    aiSchedulerMessages ||--o{ lineSchedulerReviews : "scheduler_message_id (set null)"
-    aiSchedulerRuns ||--o{ lineSchedulerReviews : "scheduler_run_id (set null)"
+    lineThreads }o--o| AI_SCHEDULER : "aiSchedulerConversationId (set null)"
+    lineSchedulerReviews }o--o| AI_SCHEDULER : "conversationId / schedulerMessageId / schedulerRunId"
+
+    lineContactStudentLinks }o..o| WISE_ENTITIES : "wiseStudentId (no FK)"
+    lineSchedulerReviews }o..o{ WISE_ENTITIES : "candidateSessions / proposedWiseActions (no FK)"
+    lineWiseActionLogs }o..o{ WISE_ENTITIES : "wiseSessionIds (no FK)"
+    lineContactStudentLinks }o..o{ lineScheduleBotPending : "studentKey (no FK)"
+    lineContactStudentLinks }o..o{ lineGroupScheduleSends : "studentKey (no FK)"
+    lineGroupSettings }o..o{ lineGroupScheduleSends : "groupId (no FK)"
 ```
 
-## Tables
+> Dashed edges (`..`) are soft links by string identifier, not enforced foreign keys. `AI_SCHEDULER`, `STUDENT_SCHEDULE_LINKS`, and `WISE_ENTITIES` are stub nodes standing in for the AI-scheduler tables, the parent-schedule token table, and external Wise records; none is expanded here. `lineBacklogRecoverySyncRuns` is intentionally drawn with no edges — it has none.
 
-### `lineContacts` (schema.ts:1526-1543)
+## Per-table description
 
-One row per LINE user (the identity that messages the OA). Keyed by `id` (uuid); `line_user_id` is unique (`line_contacts_user_id_idx`), making it the natural external key from LINE webhook payloads. Carries the LINE profile snapshot (`display_name`, `picture_url`, `status_message`, full `profile_raw` jsonb) plus loose human-entered labels (`linked_parent_label`, `linked_student_label`) and `first_seen_at` / `last_seen_at` lifecycle timestamps. This is the hub of the domain: threads, messages, student links, scheduler reviews, and committed resolver rows all reference it.
+### `lineContacts` (schema.ts:2434–2451)
+**Grain:** one row per LINE user the Official Account has seen — the identity anchor for the whole domain.
+**Key columns:** `id` (PK); `lineUserId` (unique, schema.ts:2448); LINE profile mirror `displayName` / `pictureUrl` / `statusMessage`; `profileRaw` jsonb (default `{}`); admin-maintained `linkedParentLabel` / `linkedStudentLabel`; `firstSeenAt` / `lastSeenAt` / `createdAt` / `updatedAt`.
+**Write path:** `upsertLineContact` inserts and `onConflictDoUpdate`s on `lineUserId`, refreshing `lastSeenAt` on every inbound event while leaving profile fields untouched when no profile was fetched (the set clause passes `undefined`, not `null` — `src/lib/line/data.ts:333-343`). The two label columns are set separately by `updateLineContactLabels` (`src/lib/line/data.ts:366-382`).
+**Relationships:** parent of `lineThreads`, `lineMessages`, `lineContactStudentLinks`, and `lineSchedulerReviews` (all cascade). Referenced non-cascading by `lineOaResolverRows.committedContactId`. Secondary index on `lastSeenAt` (schema.ts:2449).
 
-### `lineThreads` (schema.ts:1544-1559)
+### `lineThreads` (schema.ts:2452–2467)
+**Grain:** one row per 1:1 LINE conversation. The unique index on `lineUserId` (schema.ts:2463) makes this effectively one thread per contact — `getOrCreateLineThread` upserts on that column (`src/lib/line/data.ts:389-405`).
+**Key columns:** `id` (PK); `contactId` (FK, not null, cascade); `lineUserId` (unique); `aiSchedulerConversationId` (nullable FK, set null); `status` (free-form `text`, default `"active"`); `lastMessageAt`; `createdAt` / `updatedAt`.
+**Relationships:** child of `lineContacts`; parent of `lineMessages` and `lineSchedulerReviews`. `aiSchedulerConversationId` is written by `linkLineThreadConversation` (`src/lib/line/data.ts:408-420`) when a LINE thread is promoted into an AI-scheduler conversation. Indexes on `aiSchedulerConversationId` and `lastMessageAt` (schema.ts:2464–2465).
+**Note:** `status` is plain `text`, not a Postgres enum, and no code path in `src/` moves it off the `"active"` default.
 
-One row per LINE conversation thread, one-to-one with a contact in practice — `line_user_id` is unique (`line_threads_user_id_idx`). References `lineContacts.id` via `contact_id` (cascade delete) and optionally links to the AI scheduler conversation it drives through `ai_scheduler_conversation_id` → `aiSchedulerConversations.id` (set null on delete). `status` defaults to `"active"` (free-text, not an enum). `last_message_at` tracks recency for inbox sorting.
+### `lineMessages` (schema.ts:2468–2502)
+**Grain:** one row per message in a 1:1 thread, in **both** directions (`direction` is `lineMessageDirectionEnum`). Group and room messages are deliberately **not** persisted here — they are collected as transient `LineGroupCommand` objects and handed to the schedule bot instead (`src/lib/line/data.ts:441-461`).
+**Key columns:** `id` (PK); `threadId` / `contactId` (FKs, not null, cascade); `direction`; LINE identifiers `lineMessageId` and `webhookEventId` (both uniquely indexed, schema.ts:2496–2497); `sourceType` (default `"user"`); `messageType`; `text`; `replyToken`; `eventTimestamp`; `isRedelivery`; the retraction pair `isRetracted` / `retractedAt`; the classifier block `classifierCategory` / `classifierConfidence` / `classifierSummary` / `classifierPayload` / `classifiedAt`; the human-correction block `classificationReviewedCategory` / `classificationReviewedCorrect` / `classificationReviewedByEmail` / `classificationReviewedByName` / `classificationReviewedAt`; `raw` jsonb (the full webhook event); `createdAt`.
+**Idempotency:** ingest inserts with `onConflictDoNothing` targeting `webhookEventId`; a conflict increments `duplicateEvents` rather than erroring (`src/lib/line/data.ts:500-520`). LINE `unsend` events become an `UPDATE … SET isRetracted = true, retractedAt = now()` matched on `lineMessageId` — the row is never deleted (`src/lib/line/data.ts:475-480`).
+**Two classification layers:** the classifier writes the `classifier*` columns; an admin correcting it writes the parallel `classificationReviewed*` columns instead of overwriting the model's output, which is what makes accuracy metrics computable (`src/lib/line/data.ts:1209-1217`). Separate indexes cover each layer (schema.ts:2499–2500), plus (`threadId`, `createdAt`) for transcript reads (schema.ts:2498).
+**Outbound rows** are inserted by `insertOutboundLineMessage` with `direction: "outbound"`, `messageType: "text"`, and no `webhookEventId` (`src/lib/line/data.ts:969-993`).
 
-### `lineMessages` (schema.ts:1560-1594)
+### `lineContactStudentLinks` (schema.ts:2503–2543)
+**Grain:** one row per (`contactId`, `studentKey`) pair — the claim that a given LINE user is associated with a given student. Unique on that pair (schema.ts:2527).
+**Key columns:** `id` (PK); `contactId` (FK, not null, cascade); `wiseStudentId` / `studentKey` / `studentName` / `parentName`; `status` (`lineContactStudentLinkStatusEnum`, default `suggested`); `confidence` (double); `evidence` jsonb; provenance `sourceKind` / `sourceRunId`; the quarantine flag `isPhantom` (default false); reviewer audit `reviewedByEmail` / `reviewedByName` / `reviewedAt`; the validation-assignment block `validationAssignedToEmail` / `validationAssignedToName` / `validationAssignedRunId` / `validationAssignedAt` / `validationNote`; `createdAt` / `updatedAt`.
+**Fail-closed rule (IDENT-02):** automated producers **always** write `status: "suggested"`, never `"verified"` — the message-content matcher (`src/lib/line/student-links.ts:519`), the OA-resolver commit (`src/lib/line/oa-resolver.ts:938`, which additionally preserves an existing `verified` status rather than downgrading it, `:909`), and the backlog-recovery job (stated invariant, `src/lib/line/backlog-recovery.ts:18`). Only a human review flips a row to `verified`.
+**`isPhantom` (D-04 / IDENT-05):** quarantines OA-resolver rows harvested from a chat-surface namespace whose `lineUserId` values are not usable Messaging-API IDs. Every active read filters `isPhantom = false` via `realContactCondition()` (`src/lib/line/link-validation.ts:246-248`, also `:737`; `src/lib/line/student-links.ts:734`; `src/lib/line/schedule-bot.ts:157`); the dedicated `"phantom"` scope is the archive view that returns only quarantined rows, with no status constraint (`src/lib/line/link-validation.ts:422-431`).
+**Indexing:** eight indexes (schema.ts:2527–2541), three of which are **partial**, filtered to `sourceKind = 'line_oa_resolver'` — they back the resolver validation worklist's run-scoped, assignee-scoped, and reviewed-history sort orders.
+**Relationships:** child of `lineContacts`; referenced by `lineOaResolverRows.committedLinkId`. Soft-linked by `studentKey` to the schedule-bot tables and to Wise student records.
 
-One row per inbound or outbound LINE message event. References both `lineThreads.id` (`thread_id`, cascade) and `lineContacts.id` (`contact_id`, cascade). `direction` is the `line_message_direction` enum (`inbound` | `outbound`). Idempotency is enforced by two unique indexes — `webhook_event_id` (`line_messages_webhook_event_idx`) and `line_message_id` (`line_messages_line_message_idx`) — so re-delivered webhooks do not duplicate rows. Beyond the raw message fields (`message_type`, `text`, `reply_token`, `event_timestamp`, `is_redelivery`, `is_retracted`, `raw` jsonb), the row carries the inline classifier verdict (`classifier_category` of enum `line_scheduler_classifier_category`: `scheduling_request` | `scheduling_change` | `non_scheduling` | `unclear`, plus `classifier_confidence`/`classifier_summary`/`classifier_payload`/`classified_at`) and a separate human review-of-classification block (`classification_reviewed_*` columns).
+### `lineSchedulerReviews` (schema.ts:2544–2592)
+**Grain:** exactly one row per inbound message that entered the AI review queue — enforced by the unique index on `inboundMessageId` (schema.ts:2587), so re-processing is a no-op (`onConflictDoNothing`, `src/lib/line/data.ts:777`).
+**Key columns:** `id` (PK); `threadId` / `contactId` / `inboundMessageId` (FKs, not null, cascade); the nullable AI-scheduler triple `conversationId` / `schedulerMessageId` / `schedulerRunId` (set null); the classifier snapshot `classifierCategory` (not null) / `classifierConfidence` / `classifierSummary` / `classifierPayload`; `status` (`lineSchedulerReviewStatusEnum`, default `pending_review`); the operational plan `intentType` (default `"new_request"`) / `intentPayload`; the draft `proposedDraft` / `selectedSuggestion` / `finalText`; the rejection-feedback triple `rejectionReason` / `reasonCategory` / `staffCorrection`; `selectedTutorIds`; the student-gate columns `studentLinkOverride` / `verifiedStudentKeys` / `matchedStudentKeys`; the Wise-action plan `candidateSessions` / `proposedWiseActions` / `adminSelectedSessionIds` / `writebackStatus` (default `"not_applicable"`); send outcome `sendLineMessageId` / `sendResponse` / `sendError`; reviewer audit `reviewedByEmail` / `reviewedByName` / `reviewedAt`; `createdAt` / `updatedAt`.
+**Student-link gate:** approval requires at least one verified student key unless the reviewer sets `studentLinkOverride` explicitly (`src/lib/line/review-service.ts:478`), and the override is persisted on the row (`:497`, `:565`) so the exception is auditable rather than invisible.
+**Relationships:** child of `lineThreads`, `lineContacts`, and `lineMessages`; parent of `lineWiseActionLogs`. Also read cross-domain by the AI-scheduler data layer (`src/lib/ai/scheduler-data.ts:227`). Indexes on (`status`, `createdAt`), `conversationId`, and (`intentType`, `createdAt`) (schema.ts:2588–2590).
 
-### `lineContactStudentLinks` (schema.ts:1595-1622)
+### `lineWiseActionLogs` (schema.ts:2593–2609)
+**Grain:** one row per attempted Wise mutation originating from a LINE review — the append-only audit of the write path.
+**Key columns:** `id` (PK); `lineReviewId` (nullable FK, set null — the log outlives its review); `actionType` (free-form `text`); `status` (default `"dry_run"`); `dryRun` (boolean, **default true**, schema.ts:2598); `wiseSessionIds` jsonb array; `requestPayload` / `responsePayload` jsonb; `errorMessage`; actor audit `createdByEmail` / `createdByName`; `createdAt`.
+**Safety posture:** both `status` and `dryRun` default to the non-mutating value, so a caller that forgets to pass them records a dry run rather than implying a live Wise write; `createLineWiseActionLog` re-applies the same default in code (`input.dryRun ?? true`, `src/lib/line/data.ts:1016`).
+**Relationships:** child of `lineSchedulerReviews`. Single index on (`lineReviewId`, `createdAt`) (schema.ts:2607). `wiseSessionIds` is a soft reference to Wise sessions — no FK.
 
-One row per (contact, student) association — a suggested or confirmed link between a LINE contact and a Wise student. References `lineContacts.id` (`contact_id`, cascade). Uniqueness is on `(contact_id, student_key)` (`line_contact_student_links_contact_student_idx`). `status` is the `line_contact_student_link_status` enum (`suggested` | `verified` | `rejected`, default `suggested`). Identifies the student by `wise_student_id` / `student_key` / `student_name` (plus `parent_name`), records match `confidence` and `evidence` jsonb, a reviewer block (`reviewed_by_*`/`reviewed_at`), and a validation-workbench assignment block (`validation_assigned_to_*`, `validation_assigned_run_id`, `validation_assigned_at`, `validation_note`). Note `validation_assigned_run_id` is a plain uuid column with no FK constraint in this definition.
+### `lineOaResolverRuns` (schema.ts:2610–2635)
+**Grain:** one row per OA-resolver session — a time-boxed, token-authenticated worklist an operator works through to attach LINE identities to credit-control students.
+**Key columns:** `id` (PK); `tokenHash` (unique, schema.ts:2631) and `tokenPrefix`; `status` (default `"active"`); `worklistSource` (default `"current_credit_control_snapshot"`); the count rollups `totalRows` / `pendingRows` / `matchedRows` / `ambiguousRows` / `noMatchRows` / `errorRows` / `needsManualCodeRows` / `committedRows`; creator audit `createdByEmail` / `createdByName`; `expiresAt` (not null) / `committedAt`; `createdAt` / `updatedAt`.
+**Token discipline:** only the SHA-256 hash is stored (`tokenHash()`, `src/lib/line/oa-resolver.ts:124-125`), with `tokenPrefix` kept purely as a human-readable label (`src/lib/line/oa-resolver.ts:565`), so a database read cannot reconstruct a live token. TTL is 8 hours (`TOKEN_TTL_MS`, `src/lib/line/oa-resolver.ts:111`, applied at `:569`), and lookup requires both a hash match **and** `expiresAt > now()` (`:601-602`). Expiry is reflected only in the *derived* status computed by `runStatus()` (`:150-152`) — the stored `status` column is not rewritten when a run lapses.
+**Relationships:** parent of `lineOaResolverRows` (cascade). Indexes on (`status`, `createdAt`) and (`createdByEmail`, `createdAt`) (schema.ts:2632–2633).
 
-### `lineSchedulerReviews` (schema.ts:1623-1671)
+### `lineOaResolverRows` (schema.ts:2636–2662)
+**Grain:** one row per (`runId`, `studentKey`, `searchCode`) worklist item — a single student the operator must locate in the LINE OA console. Unique on that triple (schema.ts:2658).
+**Key columns:** `id` (PK); `runId` (FK, not null, cascade); `wiseStudentId` / `studentKey` / `studentName` / `parentName`; `searchCode`; `status` (default `"pending"`); the captured result `lineOaAccountId` / `lineUserId` / `lineChatUrl` / `chatTitle`; `matchMode` / `captureMode`; `errorMessage`; `evidence` jsonb; the commit pointers `committedContactId` → `lineContacts.id` and `committedLinkId` → `lineContactStudentLinks.id` (both nullable, set null); `createdAt` / `updatedAt`.
+**Status flow:** rows are seeded `pending`, or `needs_manual_code` when no search code could be derived from the student name (`src/lib/line/oa-resolver.ts:321`); the operator drives them to `matched` / `ambiguous` / `no_match` / `error`; commit walks the `matched` + `ambiguous` set, sets each row to `committed` (`src/lib/line/oa-resolver.ts:1071`), and rolls the parent run to `committed` only when no `matched`/`ambiguous` rows remain (`:1089-1090`).
+**Relationships:** child of `lineOaResolverRuns`; soft parent (via the two commit pointers) of the contact and link it produced. Indexes on (`runId`, `status`) and `lineUserId` (schema.ts:2659–2660).
 
-One row per inbound message that enters the human-in-the-loop scheduler review queue — the central record where a staff member approves, edits, or rejects an AI-drafted reply before it is sent back over LINE. The grain is one review per inbound message: `inbound_message_id` → `lineMessages.id` is unique (`line_scheduler_reviews_inbound_message_idx`, cascade). It also references `lineThreads.id` (`thread_id`, cascade) and `lineContacts.id` (`contact_id`, cascade), and three AI scheduler tables with set-null semantics: `conversation_id` → `aiSchedulerConversations.id`, `scheduler_message_id` → `aiSchedulerMessages.id`, `scheduler_run_id` → `aiSchedulerRuns.id`. `classifier_category` (same classifier enum) is required here. `status` is the `line_scheduler_review_status` enum (`pending_review` | `approved_sent` | `accepted_no_send` | `rejected` | `dismissed`, default `pending_review`). The bulk of the table captures the draft/decision lifecycle: intent (`intent_type`/`intent_payload`), the proposed and final reply text (`proposed_draft`, `selected_suggestion`, `final_text`), rejection/correction fields, tutor and student selections (`selected_tutor_ids`, `verified_student_keys`, `matched_student_keys`, `student_link_override`), candidate sessions and proposed Wise actions (`candidate_sessions`, `proposed_wise_actions`, `admin_selected_session_ids`), the LINE send outcome (`writeback_status`, `send_line_message_id`, `send_response`, `send_error`), and a reviewer block.
+### `lineBacklogRecoverySyncRuns` (schema.ts:2663–2684)
+**Grain:** intended as one row per LINE backlog-identity-recovery run (IDENT-07) — the job that fetches the full OA follower roster and proposes `suggested` links against human-verified resolver targets.
+**Key columns:** `id` (PK); `status` (`syncStatusEnum` — `running` / `success` / `failed`, default `running`, schema.ts:21–25); `triggerType` (not null); `startedAt` / `finishedAt`; the count rollups `followerCount` / `targetsCount` / `matchedCount` / `insertedCount`; `dryRun`; `errorSummary`; `metadata` jsonb.
+**Constraints:** partial unique index on `status` where `status = 'running'` (schema.ts:2677–2679) — the standard single-flight guard — plus an index on (`status`, `startedAt`) (schema.ts:2680).
+**Status — defined but unwritten:** no code in `src/` reads or writes this table. `runLineBacklogRecovery` returns its counts to the caller (`src/lib/line/backlog-recovery.ts:106-115`) and the cron route `GET /api/internal/line-backlog-recovery` echoes them in the JSON response without persisting a run row (`src/app/api/internal/line-backlog-recovery/route.ts:19-20`); run observability comes from the `withCronInvocationAudit` wrapper instead (`:15-16`). The table was created by `drizzle/0042_special_titania.sql` and stays empty. See [Open questions](#open-questions).
+**Relationships:** none — no FKs in either direction.
 
-### `lineWiseActionLogs` (schema.ts:1672-1688)
+### `lineScheduleBotPending` (schema.ts:4660–4688)
+**Grain:** one row per live confirm prompt, scoped per conversation rather than per user — unique on (`lineUserId`, `scopeKey`) (schema.ts:4677). `scopeKey` is the literal `"dm"` for a direct message (`DM_SCOPE`, `src/lib/line/schedule-bot.ts:186`) or `` `group:${groupId}` `` for a group command (`scopeKeyFor`, `src/lib/line/schedule-bot-group.ts:128-130`), so one admin can hold a DM confirm and a group confirm simultaneously without either clobbering the other.
+**Key columns:** `id` (PK); `lineUserId` / `scopeKey` / `groupId`; the staged student `studentKey` / `wiseStudentId` / `studentName` / `parentName`; the destination `targetLineUserId` / `targetDisplayName` (both default `""` — empty for a group command, where the destination is the group, not a person, schema.ts:4669–4671); `monthKey`; `sessionCount`; `expiresAt` (not null); `createdAt`.
+**Fail-closed gate (SCHED-BOT-03 / GRP-BOT-04):** the row is the *only* thing a "yes" acts on. TTL is 5 minutes (`PENDING_TTL_MINUTES`, `src/lib/line/schedule-bot.ts:76` and `src/lib/line/schedule-bot-group.ts:85`), and a missing **or** expired row sends nothing and reports the expiry (`src/lib/line/schedule-bot.ts:472-477`; `src/lib/line/schedule-bot-group.ts:516-520`). A new command overwrites the staged row via `onConflictDoUpdate` on the (`lineUserId`, `scopeKey`) pair, resetting `createdAt` and `expiresAt` (`src/lib/line/schedule-bot.ts:425-442`). The row is deleted after delivery — and also after a *failed* delivery (`src/lib/line/schedule-bot-group.ts:614`, `:618`).
+**Relationships:** no FKs. Soft-linked to `lineContactStudentLinks` by `studentKey` and to a chat by `groupId`. There is no TTL sweeper; expired rows are cleared lazily on the next confirm attempt.
 
-One row per Wise writeback action attempt originating from a scheduler review — the audit trail for session changes pushed to Wise. References `lineSchedulerReviews.id` via `line_review_id` with **set null** on delete (so the log survives if its review is removed; the FK is nullable). `action_type` is free text; `status` defaults to `"dry_run"` and `dry_run` defaults to `true`, reflecting a dry-run-first writeback policy. Captures the affected `wise_session_ids`, the `request_payload` / `response_payload` jsonb, an `error_message`, and an actor block (`created_by_email`/`created_by_name`).
+### `lineGroupSettings` (schema.ts:4689–4706)
+**Grain:** one row per LINE group chat — `groupId` is the primary key directly (a `text` PK, no surrogate id, and no secondary indexes).
+**Key columns:** `groupId` (PK); `audience` (`"family"` → Thai parent template, `"staff"` → English admin template, per the in-schema comment at schema.ts:4691); `setByLineUserId`; `createdAt` / `updatedAt`.
+**Business rule:** the bot cannot distinguish a family group (a parent reads whatever it posts) from a staff coordination group, so it asks once and remembers rather than guessing (schema.ts:4684–4687). `audience` **selects the template only — it grants nothing and relaxes no gate** (schema.ts:4687). Reads normalize anything that is not exactly `"family"` to `"staff"` (`src/lib/line/schedule-bot-group.ts:181`); a missing row means the chat was never set up, and a bare `YES` in an unregistered chat asks for setup rather than defaulting (`src/lib/line/schedule-bot-group.ts:528-533`). Written by `setGroupAudience` as an upsert on the `groupId` PK (`src/lib/line/schedule-bot-group.ts:192-197`), either via an explicit `setup family|staff` command (`:298-306`) or as a side effect of the one-time FAMILY/STAFF confirm reply (`:522-524`).
+**Relationships:** no FKs. Soft-linked to `lineGroupScheduleSends` by `groupId`. Note the shape asymmetry with the rest of the domain — `audience` is plain `text`, not a Postgres enum, despite having exactly two legal values.
 
-### `lineOaResolverRuns` (schema.ts:1689-1714)
+### `lineGroupScheduleSends` (schema.ts:4707–4719)
+**Grain:** one row per schedule link actually delivered into a LINE group — simultaneously the audit log and the "has this group already received this student?" lookup.
+**Key columns:** `id` (PK); `groupId` / `studentKey` / `studentName` / `monthKey`; `requestedByLineUserId`; `linkId` (nullable FK → `studentScheduleLinks.id`, set null); `createdAt`.
+**Business rule (GRP-BOT-04):** exact nickname-code matching prevents sending the *wrong student*; this table catches the other half — the *right* code typed in the *wrong family's* group — by forcing a confirmation the first time any student appears in a given group (schema.ts:4701–4705). `groupHasSeenStudent` is the (`groupId`, `studentKey`) existence check (`src/lib/line/schedule-bot-group.ts:207-212`) consulted before deciding whether the confirm step can be skipped (`:426`).
+**Write timing:** inserted **after** the message is confirmed sent, and its failure is caught and logged rather than thrown — a bookkeeping error must not look like a failed send (`src/lib/line/schedule-bot-group.ts:621-633`).
+**Relationships:** child of `studentScheduleLinks` via `linkId`; soft-linked to `lineGroupSettings` by `groupId` and to student records by `studentKey`. Indexes on (`groupId`, `studentKey`) and `createdAt` (schema.ts:4717–4718).
 
-One row per OA resolver run — a token-scoped batch job that walks a credit-control worklist to discover LINE OA chats for students. The run is addressed by a hashed token: `token_hash` is unique (`line_oa_resolver_runs_token_hash_idx`), with `token_prefix` stored for display. `status` defaults to `"active"` (free text) and `worklist_source` defaults to `"current_credit_control_snapshot"`. Holds denormalized progress counters (`total_rows`, `pending_rows`, `matched_rows`, `ambiguous_rows`, `no_match_rows`, `error_rows`, `needs_manual_code_rows`, `committed_rows`), an actor block, and a required `expires_at` (token expiry) plus `committed_at`. Parent of `lineOaResolverRows`.
+## Open questions
 
-### `lineOaResolverRows` (schema.ts:1715-1743)
-
-One row per student worklist entry within a resolver run. References `lineOaResolverRuns.id` via `run_id` (cascade). Uniqueness is on `(run_id, student_key, search_code)` (`line_oa_resolver_rows_run_student_code_idx`). Identifies the student (`wise_student_id`, `student_key`, `student_name`, `parent_name`) and the discovered LINE chat (`line_oa_account_id`, `line_user_id`, `line_chat_url`, `chat_title`), with `search_code`, `match_mode`, `capture_mode`, `status` (default `"pending"`, free text), `error_message`, and `evidence` jsonb. On commit it points back into the live tables via `committed_contact_id` → `lineContacts.id` and `committed_link_id` → `lineContactStudentLinks.id`, both set null on delete — the bridge from a resolver run to the persistent contact/link records.
+- **`lineBacklogRecoverySyncRuns` has no producer or consumer.** The table, its single-running partial unique index, and migration `drizzle/0042_special_titania.sql` all exist, but a repo-wide grep finds references only in `src/lib/db/schema.ts` and the Drizzle migration metadata. Neither `runLineBacklogRecovery` nor its cron route writes a run row. Is this instrumentation that was planned but never wired up, or a table to drop?
+- **`lineContactStudentLinks.isPhantom` is never set to `true` by application code.** Every reference in `src/` is a *read* filter; the only writer would be an out-of-band SQL quarantine after `drizzle/0040_nifty_mercury.sql` added the column. How phantom rows actually get flagged (and whether new ones can still be created) matters, because the schedule bot's SCHED-BOT-02 gate depends on that filter.
+- **Two `text` columns with a fixed value domain.** `lineThreads.status` defaults to `"active"` and no code path in `src/` ever changes it; `lineGroupSettings.audience` accepts only `"family"` or `"staff"` but is not a `pgEnum` (reads coerce everything else to `"staff"`). Both are candidates for an enum — or, for `lineThreads.status`, removal — pending intent.
 
 _Verified against HEAD + uncommitted WIP on 2026-05-31._

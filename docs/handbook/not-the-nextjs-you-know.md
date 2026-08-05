@@ -1,32 +1,42 @@
 # Not the Next.js You Know
 
-> First-read gotchas. If you've written Next.js apps before, the architecture here will violate a few assumptions you didn't know you had. Read this before touching `src/lib/search/` or `src/lib/sync/`.
+> First-read gotchas. If you've shipped Next.js apps before, this codebase violates assumptions you
+> didn't know you had. Read this before touching `src/lib/search/` or `src/lib/sync/`.
 
-The repo's `AGENTS.md` opens with a blunt warning:
+`AGENTS.md` opens with a blunt warning:
 
-> **This is NOT the Next.js you know.** This version has breaking changes — APIs, conventions, and file structure may all differ from your training data.
+> **This is NOT the Next.js you know.** This version has breaking changes — APIs, conventions, and
+> file structure may all differ from your training data. Read the relevant guide in
+> `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
 
-That warning is real, and it's broader than the framework. This page elevates it into the five surprises that actually bite, each verified against code.
+That warning is literal — the bundled docs tree really ships (`node_modules/next/dist/docs/` contains
+`01-app`, `02-pages`, `03-architecture`, `04-community`, `index.md`), and Next is **16.2.2**
+(`package.json:48`). But the warning is also *narrower than the real problem*: most of what will trip
+you up here is architectural, not framework. Below are the five surprises that actually bite, each
+verified against code.
 
 ---
 
-## TL;DR — the five surprises
+## TL;DR
 
 | # | Surprise | Why it bites |
 |---|----------|--------------|
-| 1 | **Reads never call Wise.** Search/compare answer from an in-memory object. | If the index is empty or stale, you get a 500 or old data — not a live fetch. |
-| 2 | **Reads are pinned to one snapshot.** Every query reads `WHERE snapshot_id = <active>`. | Mixed-snapshot reads are impossible by construction. Promotion is the only way data changes. |
-| 3 | **Sync must run before serve.** No active snapshot → reads throw. | A fresh DB serves nothing until the first successful sync promotes a snapshot. |
-| 4 | **Fail-closed is the default, not a feature.** Unknown/unresolved → blocked or "Needs Review". | A tutor is never "Available" unless the data *proves* it. Silence means blocked. |
-| 5 | **Next.js 16 cache + runtime conventions.** `cacheComponents`, `"use cache"`, `revalidateTag(tag, { expire })`, `globalThis` singletons, `maxDuration = 800`. | Patterns from Next 13/14 muscle memory are wrong or incomplete here. |
+| 1 | **Tutor search/compare reads never call Wise.** They answer from an in-memory object. | Debugging "wrong schedule" by hunting for a live API call finds nothing. There isn't one. |
+| 2 | **Reads are pinned to one snapshot.** Every load is `WHERE snapshot_id = <active>`. | Mixed-version reads are impossible by construction. Promotion is the only way data changes. |
+| 3 | **Sync must run before serve.** No active snapshot → `buildIndex` throws. | A fresh DB serves 500s until the first sync promotes a snapshot. |
+| 4 | **Fail-closed is the default posture, not a feature flag.** Unknown → blocked / "Needs Review". | A tutor is never "Available" unless the data *proves* it. Loosening a check breaks a Change-Control rule. |
+| 5 | **Next.js 16 conventions.** `cacheComponents`, `"use cache"`, `revalidateTag(tag, opts)`, `connection()`, async `params`, `middleware` deprecated. | Next 13/14/15 muscle memory produces code that is quietly wrong here. |
 
 ---
 
-## 1. Reads never hit Wise live
+## 1. The tutor read path never hits Wise live
 
-The mental model you probably have — "API route → query the data source → return" — is wrong here. Every search and compare request answers from a **module-level object held in server memory**. The Wise API is touched *only* by the sync job.
+The mental model you probably have — *API route → query the data source → return* — is wrong for
+search and compare. Both answer from a **denormalized aggregate held in server memory**. The Wise API
+is touched only by sync pipelines.
 
-The index is anchored on `globalThis`, not a plain module variable, so it survives Hot Module Replacement in dev (`src/lib/search/index.ts:94-97`):
+The index is anchored on `globalThis`, not a module-scope `let`, so it survives Hot Module
+Replacement in dev (`src/lib/search/index.ts:94-97`):
 
 ```ts
 declare global {
@@ -35,51 +45,103 @@ declare global {
 }
 ```
 
-`SearchIndex` is a fully denormalized aggregate — every tutor group with its qualifications, availability windows, leaves, session blocks, and data issues already joined in memory, plus a `byWeekday` map for O(1) day lookup (`src/lib/search/index.ts:65-90`). It's built once and queried many times.
+`SearchIndex` carries every tutor group with its qualifications, availability windows, leaves,
+session blocks, data issues, and business profile already joined — plus a `byWeekday` map for O(1)
+day lookup (`src/lib/search/index.ts:65-90`, built at `:322-331`). Built once, queried many times.
 
-**Proof that reads are pure in-memory:**
+**Proof the hot path is pure in-memory:**
 
-- `executeSearch(index, request)` takes the index as an argument and iterates `index.byWeekday` / `group.sessionBlocks` / `group.leaves` — no DB, no HTTP (`src/lib/search/engine.ts:22-150`).
-- The search engine module imports nothing from `@/lib/wise/*` and nothing from `@/lib/db` — only the index types and timezone/ops helpers (`src/lib/search/engine.ts:1-17`).
-- The `/api/compare` route's only data source is `await ensureIndex(db)` (`src/app/api/compare/route.ts:138`); conflict and free-slot detection run against the returned `index.tutorGroups` (`src/app/api/compare/route.ts:200-227`).
-- The **only** files that import the Wise client/fetchers are the sync orchestrator and its helpers (`src/lib/sync/orchestrator.ts:4-11`).
-
-So the entire `@/lib/wise/*` surface — client, fetchers, retry/backoff — exists to feed the sync pipeline, never to serve a user request.
+- `executeSearch(index, request)` takes the index as an argument and iterates `index.byWeekday` /
+  `group.sessionBlocks` / `group.leaves` — no DB, no HTTP (`src/lib/search/engine.ts:22-58`,
+  `:60-150`).
+- No file under `src/lib/search/**` or `src/lib/data/**` imports `@/lib/wise/*` at all.
+  `src/lib/search/compare.ts` imports exactly three things: `date-fns-tz`, index types, compare types
+  (`src/lib/search/compare.ts:1-3`).
+- `/api/search`'s entire data acquisition is `await ensureIndex(db)` before calling the engine
+  (`src/app/api/search/route.ts:51-56`). `/api/compare` is the same shape
+  (`src/app/api/compare/route.ts:138`).
+- Even the normalization layer imports **only Wise *types***, never the client —
+  `src/lib/normalization/sessions.ts:1-8`, `src/lib/normalization/availability.ts:1`. A grep for
+  `wise/client|wise/fetchers` across `src/lib/normalization/` returns nothing.
 
 ```mermaid
 flowchart LR
-  Cron["Vercel cron\n*/30"] -->|writes| PG[(Postgres\nsnapshot tables)]
-  Wise["Wise API"] -->|fetched by sync only| Cron
-  PG -->|buildIndex once| IDX["SearchIndex\n(globalThis object)"]
-  User["Admin UI"] -->|"POST /api/search,/api/compare"| IDX
-  IDX -->|"answers in-memory"| User
-  User -. never .-> Wise
+  Wise["Wise API"] -->|"fetched by sync only"| Orch["runFullSync()"]
+  Orch -->|writes snapshot rows| PG[("Neon Postgres<br/>snapshot tables")]
+  PG -->|"buildIndex() once"| IDX["SearchIndex<br/>(globalThis object, RAM)"]
+  UI["Admin UI"] -->|"/api/search · /api/compare"| IDX
+  IDX -->|"answers in-memory"| UI
+  UI -. never .-> Wise
 ```
 
-> **Gotcha:** debugging "why is this tutor showing the wrong schedule?" — do **not** look at a live Wise call. There isn't one. Look at the last promoted snapshot's rows and the in-memory index built from them.
+### One index, many readers
 
-### Who else reads the index
+`ensureIndex(db)` is the single read entry point, and search/compare are not its only callers — range
+search, compare discovery, proposals, room capacity, the LINE operational planner, and the AI
+scheduler all read the same singleton:
 
-`ensureIndex(db)` is the single read entry point and it has many callers besides search/compare — range search, discovery, proposals, room capacity, the LINE operational flow, and the AI scheduler service all read from the same singleton (verified callers: `src/app/api/search/route.ts:54`, `src/app/api/compare/route.ts:138`, `src/app/api/compare/discover/route.ts:57`, `src/app/api/proposals/route.ts:64`, `src/lib/search/range-search.ts:115`, `src/lib/room-capacity/data.ts:409`, `src/lib/line/operational.ts:527`, `src/lib/ai/scheduler-service.ts:60`). One object, many readers. None of them call Wise.
+| Caller | Line |
+|---|---|
+| `src/app/api/search/route.ts` | `:54` |
+| `src/app/api/compare/route.ts` | `:138` |
+| `src/app/api/compare/discover/route.ts` | `:57` |
+| `src/app/api/proposals/route.ts` | `:64` |
+| `src/lib/search/range-search.ts` | `:115` |
+| `src/lib/room-capacity/data.ts` | `:409` |
+| `src/lib/line/operational.ts` | `:527` |
+| `src/lib/ai/scheduler-service.ts` | `:60` |
+
+None of them call Wise. One of them degrades instead of throwing: the LINE planner wraps the call in
+`.catch(() => null)` and returns no suggestions if the index is unavailable
+(`src/lib/line/operational.ts:527`).
+
+### The scope caveat you must not over-generalize
+
+"Reads never hit Wise" is a property of the **tutor search/compare path**, not of the app. Other
+subsystems own their own Wise-calling lineages, and at least one calls Wise inside an
+admin-triggered request: classroom assignment fetches live future sessions during a run
+(`src/lib/classrooms/data.ts:889`, `:993`; client built from env at `:1151-1158`; reached from
+`POST /api/class-assignments/run` → `runClassroomAssignment`,
+`src/app/api/class-assignments/run/route.ts:39`). Payroll, credit control, Wise activity, progress
+tests, post-class feedback, room utilization, and student promotions likewise construct a Wise client
+directly. **Check the subsystem before assuming its reads are offline.**
+
+> **Gotcha:** debugging "why does this tutor show the wrong schedule?" — do not hunt for a live Wise
+> call in the search path. Look at the last promoted snapshot's rows and the index built from them.
 
 ---
 
-## 2. Reads are pinned to one snapshot
+## 2. Reads are pinned to exactly one snapshot
 
-All tutor data is versioned under a `snapshot_id`, and exactly one snapshot is `active = true` at a time. `buildIndex` finds that active snapshot and loads **only its rows** — every parallel query is filtered `WHERE snapshotId = <active>` (`src/lib/search/index.ts:142-222`):
+All tutor data is versioned by `snapshot_id`, and exactly one snapshot has `active = true`.
+`buildIndex` finds that snapshot and loads **only its rows** — every parallel query is filtered
+`WHERE snapshotId = <active>` (`src/lib/search/index.ts:142-222`):
 
 ```ts
 const [activeSnapshot] = await db
   .select().from(schema.snapshots)
   .where(eq(schema.snapshots.active, true)).limit(1);
-// ...all subsequent loads: .where(eq(<table>.snapshotId, snapshotId))
+// ...every subsequent load: .where(eq(<table>.snapshotId, snapshotId))
 ```
 
-This is why a query can never see a half-written or mixed-version dataset: the candidate snapshot a sync is *writing* has `active = false`, so the index never loads it until promotion flips the flag.
+That is why a query can never observe a half-written dataset: the snapshot a sync is *writing* is
+inserted with `active: false` (`src/lib/sync/orchestrator.ts:71-75`), so the index cannot load it
+until promotion flips the flag.
 
-### Staleness = the snapshot id (or profile version) changed
+**Corollary that surprises people: tutor group ids are snapshot-scoped, not stable.** A `tutorGroupId`
+a client held five minutes ago may not exist in the new active snapshot. `/api/compare` handles this
+by falling back to `canonical_key` — it looks the stale id up in `tutor_identity_groups`, maps to the
+canonical key, and re-resolves against the active snapshot, warning
+`"Tutor selection was refreshed after the latest Wise sync"`
+(`src/app/api/compare/route.ts:60-108`, warning emitted at `:157-159`). `canonicalKey` is denormalized
+onto the in-memory group (D-04) exactly so this needs no extra DB round-trip
+(`src/lib/search/index.ts:67-71`, `:260-263`).
 
-`ensureIndex` doesn't poll Wise or time out the cache. On each call it compares the cached index's `snapshotId` and `profileVersion` against the DB's current active snapshot. If both match, it returns the cached object untouched (`src/lib/search/index.ts:366-389`):
+### "Stale index" means the snapshot id (or profile version) changed
+
+`ensureIndex` does not poll and does not time out. Each call compares the cached index's `snapshotId`
+**and** `profileVersion` against the DB. Both match → the cached object is returned untouched
+(`src/lib/search/index.ts:377-383`):
 
 ```ts
 if (activeSnapshot
@@ -89,25 +151,43 @@ if (activeSnapshot
 }
 ```
 
-So the index is invalidated by a **promotion** (new active snapshot id) or a **tutor-business-profile edit** (profile version string changes — see `getTutorProfileVersion`, `src/lib/search/index.ts:128-137`). Profile edits force an explicit `clearSearchIndex()` (`src/app/api/tutor-profiles/[canonicalKey]/route.ts:51`, `src/app/api/tutor-profiles/import-commit/route.ts:61`).
+So the index is invalidated by a **promotion** (new active snapshot id) or a **tutor-business-profile
+edit** — `profileVersion` is a `count:maxUpdatedAt` string over `tutor_business_profiles`
+(`src/lib/search/index.ts:128-137`). Profile mutations additionally force an eager
+`clearSearchIndex()` (`src/app/api/tutor-profiles/[canonicalKey]/route.ts:51`,
+`src/app/api/tutor-profiles/import-commit/route.ts:61`; the clear itself at
+`src/lib/search/index.ts:123-126`) — but that only clears *the serverless instance that handled the
+mutation*. Every other instance self-heals on its next `ensureIndex` via the `profileVersion` compare.
+That two-tier design is deliberate; don't "fix" it by adding cross-instance signalling.
 
-> **Concurrency note:** first-time concurrent callers don't both rebuild. `ensureIndex` stores the in-flight build promise on `globalThis` synchronously, before any `await`, so a second caller arriving mid-build returns the same promise (the singleton-promise pattern, `src/lib/search/index.ts:354-401`).
+If the DB reports *no* active snapshot but a cached index exists, `ensureIndex` keeps serving the
+cache rather than throwing (`src/lib/search/index.ts:384-386`).
 
-### "Stale" in API responses is a *different*, softer notion
+> **Concurrency:** concurrent first-time callers do not both rebuild. `ensureIndex` assigns the
+> in-flight build promise to `globalThis` **synchronously, before any `await`**, so a second caller
+> arriving mid-build returns the same promise — the singleton-promise pattern, documented inline as
+> REL-02 (`src/lib/search/index.ts:354-401`, assignment at `:396-399`).
 
-Don't confuse index-invalidation with the `stale` flag in responses. That flag is purely an **age check** against the last sync's wall-clock time — it never triggers a rebuild, it just adds a warning string (`src/app/api/compare/route.ts:142-149`, `src/lib/search/engine.ts:30-38`):
+### `stale` in an API response is a *different*, softer notion
+
+Don't conflate index invalidation with the `stale` flag in responses. That flag is a pure wall-clock
+age check against the last promoted sync's `finishedAt` (`src/lib/search/index.ts:155-166`). It never
+triggers a rebuild — it just appends a warning string (`src/lib/search/engine.ts:30-38`,
+`src/app/api/compare/route.ts:143-149`):
 
 ```ts
 stale: Date.now() - index.syncedAt.getTime() > API_STALE_THRESHOLD_MS
 ```
 
-`API_STALE_THRESHOLD_MS` is **90 minutes** (`src/lib/ops/stale.ts:2`) — three missed 30-minute crons of headroom. A separate banner threshold of **2 hours** lives at `src/lib/ops/stale.ts:3`. Stale data is still served; the user just sees a warning.
+`API_STALE_THRESHOLD_MS` is **90 minutes** — three missed 30-minute crons of headroom — and a separate
+UI banner threshold sits at **2 hours** (`src/lib/ops/stale.ts:2-3`). Stale data is still served; the
+user just sees a warning.
 
 ---
 
 ## 3. Sync-before-serve: no snapshot, no answers
 
-A fresh database serves **nothing**. `buildIndex` throws if no snapshot is active (`src/lib/search/index.ts:150-152`):
+A fresh database serves **nothing**. `buildIndex` throws (`src/lib/search/index.ts:150-152`):
 
 ```ts
 if (!activeSnapshot) {
@@ -115,20 +195,28 @@ if (!activeSnapshot) {
 }
 ```
 
-There is no eager build on boot and no lazy "fetch from Wise if empty" fallback. `buildIndex` is reached *only* through `ensureIndex` (no other caller exists in `src/`). So until a sync has promoted a first snapshot, every read route 500s. The system genuinely is **sync-first**.
+There is no eager build at boot and no "fetch from Wise if empty" fallback. `buildIndex` has exactly
+one caller in `src/` — `ensureIndex` (`src/lib/search/index.ts:388`). So until a sync promotes a first
+snapshot, `/api/search` returns 500 with that message (`src/app/api/search/route.ts:57-59`). The
+system genuinely is sync-first.
 
 ### How a snapshot becomes servable
 
-The sync orchestrator runs the full ETL — fetch teachers → resolve identities → fetch availability/leaves/sessions → normalize → write to the candidate snapshot (`active = false`) → validate → **promote** (`src/lib/sync/orchestrator.ts:50-560`). Two safety gates stand between "written" and "servable":
+`runFullSync` is one try/catch spanning fetch → resolve identities → fetch availability/leaves → fetch
+future sessions → normalize → write candidate rows → validate → promote
+(`src/lib/sync/orchestrator.ts:50-600`). Two gates stand between "written" and "servable".
 
-**Completeness gate.** If more than 50% of identity groups are unresolved, the snapshot is *not* promoted and the previous active snapshot keeps serving (`src/lib/sync/orchestrator.ts:473-476`):
+**Completeness gate.** More than 50% unresolved identity groups → no promotion; the previous active
+snapshot keeps serving (`src/lib/sync/orchestrator.ts:473-476`):
 
 ```ts
 const unresolvedRatio = identityIssues.length / Math.max(groups.length, 1);
 const shouldPromote = unresolvedRatio < 0.5;   // >50% unresolved = don't promote
 ```
 
-**Atomic promotion.** Promotion is a *single* `UPDATE` that clears the old active row and sets the new one in one statement, so a concurrent reader sees either the old or the new active snapshot — never zero (`src/lib/sync/orchestrator.ts:488-498`):
+**Atomic promotion.** Promotion is a *single* `UPDATE` that clears the old active row and sets the new
+one in one statement, so a concurrent reader sees either the old or the new active snapshot — never
+zero (REL-01, `src/lib/sync/orchestrator.ts:488-498`):
 
 ```ts
 await db.update(schema.snapshots)
@@ -139,39 +227,67 @@ await db.update(schema.snapshots)
   ));
 ```
 
-A failed sync never reaches this line — it lands in the `catch`, marks the run `failed`, and leaves the prior snapshot active (`src/lib/sync/orchestrator.ts:561-599`).
+A failed sync never reaches that line: it lands in the `catch`, marks the run `failed`, and leaves the
+prior snapshot active (`src/lib/sync/orchestrator.ts:561-599`).
+
+Ordering constraint worth knowing: the PAST-01 diff hook — which captures sessions that dropped out of
+Wise's FUTURE response into the cross-snapshot `past_session_blocks` table — **must run before
+promotion**, while the prior snapshot is still `active = true`
+(`src/lib/sync/orchestrator.ts:400-418`; rationale at `src/lib/sync/past-sessions-diff-hook.ts:6-25`).
+Post-promotion, old snapshots are pruned to a retention window of **30**
+(`src/lib/sync/snapshot-pruning.ts:5`, invoked at `src/lib/sync/orchestrator.ts:526`), with the active
+snapshot always protected (`src/lib/sync/snapshot-pruning.ts:64-70`). Pruning failures are logged and
+recorded in `sync_runs.metadata`, never fatal (`src/lib/sync/orchestrator.ts:520-548`).
 
 ```mermaid
 sequenceDiagram
-  participant Cron as Vercel cron
+  participant Cron as Vercel cron (*/30)
+  participant Guard as runWiseSyncRequest
   participant Orch as runFullSync
   participant PG as Postgres
   participant IDX as SearchIndex
-  Cron->>Orch: trigger (every 30m)
-  Orch->>PG: insert snapshot (active=false)
-  Orch->>PG: write normalized rows
-  Orch->>Orch: unresolvedRatio < 0.5 ?
-  alt passes gate
-    Orch->>PG: atomic UPDATE active flag
-    Note over PG: new snapshot is now active
-    Note over IDX: next ensureIndex() sees<br/>new id → rebuilds
-  else fails gate / errors
-    Orch->>PG: mark run failed
-    Note over PG: prior snapshot stays active
+  Cron->>Guard: GET /api/internal/sync-wise
+  Guard->>PG: fail `running` rows older than 20m
+  alt another sync genuinely running
+    Guard-->>Cron: HTTP 202 skipped
+  else acquired
+    Guard->>Orch: runFullSync(syncRunId)
+    Orch->>PG: insert snapshot (active=false)
+    Orch->>PG: write normalized rows
+    Orch->>Orch: PAST-01 diff hook (pre-promotion)
+    Orch->>Orch: unresolvedRatio < 0.5 ?
+    alt gate passes
+      Orch->>PG: single atomic UPDATE of `active`
+      Note over IDX: next ensureIndex() sees a<br/>new snapshot id → rebuilds
+    else gate fails / error thrown
+      Orch->>PG: mark run failed
+      Note over PG: prior snapshot stays active
+    end
   end
 ```
 
-### Single-flight: syncs don't stack
+### Single-flight: syncs do not stack
 
-Crons fire every 30 minutes (`vercel.json`), but a slow sync won't overlap with the next trigger. `runWiseSyncRequest` acquires a guard: it first fails any `running` row older than 20 minutes (abandoned/timed-out), then refuses to start if another sync is genuinely running, returning HTTP 202 instead (`src/lib/sync/run-wise-sync.ts:88-167`, stale cutoff at `:10`). On success it nudges the Next cache: `revalidateTag("snapshot", { expire: 0 })` (`src/lib/sync/run-wise-sync.ts:160-162`) — see surprise 5 for what that tag actually feeds.
+The Wise snapshot cron fires every 30 minutes (`vercel.json:3-6`), but a slow run will not overlap the
+next trigger. `runWiseSyncRequest` first fails any `running` row older than **20 minutes**
+(abandoned/timed-out — `src/lib/sync/run-wise-sync.ts:10`, `:51-72`), then refuses to start if another
+sync is genuinely running, returning **HTTP 202** with a `skipped` body rather than an error
+(`src/lib/sync/run-wise-sync.ts:88-118`, `:148-150`). A unique-violation on insert is treated as the
+same "already running" case (`:106-117`).
+
+On success it nudges the Next cache — `revalidateTag("snapshot", { expire: 0 })`
+(`src/lib/sync/run-wise-sync.ts:160-162`). See surprise 5 for what that tag actually feeds (hint: not
+the index).
 
 ---
 
 ## 4. Fail-closed is the default posture
 
-The non-negotiable product rule (`AGENTS.md`): *never return a tutor as available unless the system can prove availability from normalized Wise data.* This is enforced in two places, and both default to "block" on uncertainty.
+The non-negotiable rule from `AGENTS.md`: *never return a tutor as available unless the system can
+prove availability from normalized Wise data.* Two enforcement points, both defaulting to "block".
 
-**Unknown session status → blocking.** Only an explicit allowlist of statuses is non-blocking; everything else — including a missing status — blocks (`src/lib/normalization/sessions.ts:33-51`):
+**Unknown session status → blocking.** Only an explicit allowlist is non-blocking; everything else,
+including a missing status, blocks (`src/lib/normalization/sessions.ts:33-51`):
 
 ```ts
 const NON_BLOCKING_STATUSES = new Set([
@@ -179,15 +295,18 @@ const NON_BLOCKING_STATUSES = new Set([
 ]);
 
 export function isBlockingStatus(status: string | undefined): boolean {
-  if (!status) return true;                 // fail-closed
+  if (!status) return true;                          // fail-closed
   if (NON_BLOCKING_STATUSES.has(status.toUpperCase())) return false;
-  return true;                              // unknown → still blocks
+  return true;                                       // unknown → still blocks
 }
 ```
 
-So a brand-new Wise status value the parser has never seen will block availability rather than leak a false "free" slot. Cancelled sessions, correctly, do **not** block.
+A brand-new Wise status the parser has never seen blocks availability rather than leaking a false
+"free" slot. Cancelled sessions, correctly, do **not** block.
 
-**Unresolved identity/modality/qualification → "Needs Review", never "Available".** In the search engine, any tutor group carrying data issues, or with no resolved modality, is routed to the `needsReview` bucket instead of `available` (`src/lib/search/engine.ts:83-97, 142-146`):
+**Unresolved identity / modality / qualification → "Needs Review", never "Available".** Any group
+carrying data issues, or with no resolved modality, is routed to the `needsReview` bucket
+(`src/lib/search/engine.ts:83-97`, `:142-147`):
 
 ```ts
 if (group.dataIssues.length > 0) {
@@ -201,53 +320,160 @@ if (reviewReasons.length > 0) needsReview.push({ ...result, reasons: reviewReaso
 else available.push(result);
 ```
 
-`supportedModes` is empty precisely when the group's modality resolved to `"unresolved"` (`src/lib/search/index.ts:265-270`), which is the orchestrator's safe default until modality is derived (`src/lib/sync/orchestrator.ts:118`).
+`supportedModes` is empty precisely when the group's modality is `"unresolved"`
+(`src/lib/search/index.ts:265-270`) — which is the orchestrator's *initial* value for every group,
+before modality is derived (`src/lib/sync/orchestrator.ts:118`, derived at `:315-337`).
 
-> **Gotcha:** if you "fix" a tutor not appearing as available by loosening one of these checks, you are weakening a documented non-negotiable rule. `AGENTS.md` → Change Control forbids it without explicit approval.
+Note the asymmetry between the two blocking modes, since it surprises people:
+
+- **Recurring** — any blocking session on the same weekday/time overlaps, regardless of date
+  (`src/lib/search/engine.ts:155-168`).
+- **One-time** — only a blocking session on the same calendar day overlaps
+  (`src/lib/search/engine.ts:173-188`).
+
+> **Gotcha:** if you "fix" a tutor not showing as available by loosening one of these checks, you are
+> weakening a documented non-negotiable rule. `AGENTS.md` → Change Control forbids that without
+> explicit approval.
 
 ---
 
 ## 5. Next.js 16 specifics
 
-`AGENTS.md` tells you to read `node_modules/next/dist/docs/` before writing code. Here's what's actually in play (Next.js **16.2.2**, confirmed via `node_modules/next/package.json`). Skim any one of these and you'll write Next-13-era code that's subtly wrong.
+Next **16.2.2** (`package.json:48`). Skip any of these and you'll write Next-13-era code that is
+quietly wrong. Every claim below is checkable in the bundled docs tree.
 
-### `cacheComponents` is on
+### `cacheComponents` is on, project-wide
 
-`next.config.ts` enables it project-wide:
+`next.config.ts` sets exactly one option (`next.config.ts:3-5`):
 
 ```ts
 const nextConfig: NextConfig = { cacheComponents: true };
 ```
 
-This turns on the `"use cache"` directive family. The codebase uses it for the *cacheable data-fetch layer* — not for the in-memory index. Examples: `src/lib/credit-control/service.ts:28-30` and `src/lib/sales-dashboard/data.ts:886-888` mark functions `"use cache"` then call `cacheTag(...)` + `cacheLife({ stale, revalidate, expire })`.
+Two things follow. First, `cacheComponents` **replaces** `experimental.ppr` / `experimental.useCache`
+/ `experimental.dynamicIO` as a single unified flag — the route-level `experimental_ppr` segment
+option is gone
+(`node_modules/next/dist/docs/01-app/03-api-reference/05-config/01-next-config-js/cacheComponents.md:52`;
+`.../02-guides/upgrading/version-16.md:587`). Second, data fetching in Server Components is
+**excluded from prerender unless explicitly cached** — that's the whole point of the flag
+(`cacheComponents.md:6`).
+
+The codebase uses `"use cache"` for the cacheable data-fetch layer — never for the in-memory index.
+Canonical shape (`src/lib/data/filters.ts:52-58`, `src/lib/data/tutors.ts:80-86`):
+
+```ts
+export async function getFilterOptions(): Promise<FilterOptions> {
+  "use cache";
+  cacheTag("snapshot");
+  cacheLife("hours");
+  return loadFilterOptions(getDb());
+}
+```
+
+`cacheLife` accepts named profiles (`"hours"`, `"days"` — `src/lib/data/past-sessions.ts:87-89`) or an
+explicit object (`cacheLife({ stale: 60, revalidate: 60, expire: 300 })`,
+`src/lib/credit-control/service.ts:31-33`).
+
+> **Less obvious:** with `cacheComponents` on, Next uses React `<Activity>` to keep the previous
+> route **mounted and hidden** during client-side navigation instead of unmounting it
+> (`cacheComponents.md:32-45`). Client state survives back/forward navigation. If a component assumes
+> "unmount = reset", it will misbehave here.
 
 ### The `"snapshot"` cache tag ≠ the SearchIndex
 
-This is the easiest thing to get wrong. The `revalidateTag("snapshot", { expire: 0 })` call after a successful sync (`src/lib/sync/run-wise-sync.ts:161`) does **not** invalidate the in-memory `SearchIndex` — that object is plain `globalThis` state, invalidated lazily by the snapshot-id comparison in surprise 2. The `"snapshot"` tag instead feeds the `"use cache"` data layer behind `/api/filters` and `/api/tutors` (`src/lib/data/filters.ts:54`, `src/lib/data/tutors.ts:82`). Two independent caching mechanisms, same trigger.
+The easiest thing to get wrong. `revalidateTag("snapshot", { expire: 0 })` after a successful sync
+(`src/lib/sync/run-wise-sync.ts:161`) does **not** invalidate the in-memory `SearchIndex` — that is
+plain `globalThis` state, invalidated lazily by the snapshot-id comparison in surprise 2. The tag
+feeds the `"use cache"` data layer only: `src/lib/data/filters.ts:54` and
+`src/lib/data/tutors.ts:82`. Two independent caching mechanisms, one trigger.
 
-Also note the **Next 16 signature**: `revalidateTag(tag, { expire: 0 })` and `revalidateTag(tag, "max")` take a second profile/options argument that older Next versions don't have (used at `src/lib/sales-dashboard/data.ts:91`). Tests assert the exact shape `revalidateTag("snapshot", { expire: 0 })` (`src/app/api/internal/sync-wise/__tests__/route.test.ts:183`).
+Note also that `past-sessions` is a **separate tag** the sync deliberately does not sweep, because
+captured past data is immutable once written (`src/lib/data/past-sessions.ts:11-16`, `:88`; the hook's
+matching no-invalidation note at `src/lib/sync/past-sessions-diff-hook.ts:21-25`).
 
-### `globalThis`-anchored singletons (not module-scope)
+### `revalidateTag` takes a second argument now
 
-Both the DB client and the search index are stored on `globalThis`, deliberately, so they survive HMR in dev (`src/lib/db/index.ts:16-27`, `src/lib/search/index.ts:94-113`). If you add another expensive singleton, follow this pattern — a bare `let _x` module variable gets wiped on every hot reload.
+Calling `revalidateTag(tag)` bare is **deprecated** in Next 16
+(`node_modules/next/dist/docs/01-app/03-api-reference/04-functions/revalidateTag.md:22`); the
+signature is `revalidateTag(tag, profile: string | { expire?: number })` (`revalidateTag.md:29`).
+Both forms are in use here — `{ expire: 0 }` for the webhook-style immediate case
+(`src/lib/sync/run-wise-sync.ts:161`, which is the documented pattern for external callers,
+`revalidateTag.md:136`) and `"max"` for stale-while-revalidate
+(`src/lib/sales-dashboard/data.ts:99`). Tests assert the exact call shape, so drift fails CI
+(`src/app/api/internal/sync-wise/__tests__/route.test.ts:183`, `:202`).
 
-### Route-handler runtime knobs
+### Request APIs are async — no synchronous escape hatch left
 
-- **`maxDuration = 800`** on the sync route — Pro-plan headroom for a full Wise sync (`src/app/api/internal/sync-wise/route.ts:6`). The cron hits `GET`; manual triggers use `POST` with either a session or the `CRON_SECRET` bearer (constant-time compared, `:10-28`).
-- **Auth gate is edge middleware**, not per-route boilerplate. `src/middleware.ts` runs `edgeAuth` on every non-static request, redirects unauthenticated users to `/login`, and exempts an explicit public-route allowlist — note `/api/internal/*` is public to middleware because those routes do their own `CRON_SECRET`/session check (`src/middleware.ts:4-36`).
+Next 15's temporary sync compatibility for `cookies`, `headers`, `draftMode`, `params`, and
+`searchParams` is **fully removed** in 16 (`version-16.md:294-305`). In-repo that means route/page
+params are Promises you must await: `params: Promise<{ caseId: string }>`
+(`src/app/(app)/admissions/[caseId]/page.tsx:267`), `searchParams: Promise<SearchParamsShape>`
+(`src/app/(app)/us-universities/[unitId]/page.tsx:118-122`).
 
-### Other locked conventions
+### `connection()` opts a page out of prerender
 
-- **Neon HTTP driver**, not a pooled TCP client: `drizzle(drizzle-orm/neon-http)` over `neon(DATABASE_URL)` (`src/lib/db/index.ts:1-12`). Each query is a stateless HTTPS round-trip — relevant when you reason about transactions.
-- **All time is `Asia/Bangkok`.** `TIMEZONE = "Asia/Bangkok"` is the single constant the normalization and "now" math key off (`src/lib/normalization/timezone.ts:3`; compare's "current Monday" uses `toZonedTime(..., TIMEZONE)`, `src/app/api/compare/route.ts:33-41`). Do not introduce a second clock.
+With `cacheComponents` on, a Server Component that must run per-request awaits `connection()` from
+`next/server` before its work — see `/search`, whose whole body is gated on it
+(`src/app/(app)/search/page.tsx:1-22`). `connection()` replaces `unstable_noStore`
+(`node_modules/next/dist/docs/01-app/03-api-reference/04-functions/connection.md:50`). There is zero
+`unstable_cache` usage in `src/`; don't reintroduce it.
+
+### `middleware.ts` is a deprecated filename — and staying anyway
+
+Next 16 renamed the file convention to `proxy.ts`
+(`node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/proxy.md:11`,
+`version-16.md:617`). This repo still ships `src/middleware.ts` **on purpose**: `proxy` runs on
+`nodejs` and the edge runtime is *not* supported there, and the docs say to keep `middleware` if you
+need edge (`version-16.md:619`). The auth gate is an edge Auth.js instance with a DB-free `jwt`
+callback built precisely for that constraint (`src/lib/auth-edge.ts:4`, comment at `:23-24`).
+
+So: do **not** run the `middleware-to-proxy` codemod here without solving the edge-runtime question
+first. What the file does:
+
+- `edgeAuth` wraps every non-static request; unauthenticated → redirect to `/login` with a
+  `callbackUrl` (`src/middleware.ts:63-77`, matcher at `:93-95`).
+- Per-user page scoping: `allowedPages === null` means full access, otherwise the pathname must match
+  an allowed prefix as a page *or* as its `/api` namespace; API misses get 403, page misses get
+  redirected to the user's landing page (`src/middleware.ts:22-61`, `:78-88`).
+- `/api/internal/*` is exempt from the gate (`src/middleware.ts:18`) because those routes do their own
+  `CRON_SECRET` check.
+
+### Route-handler runtime knobs live in the route file
+
+- **`maxDuration` is per-route**, not in `vercel.json`. The Wise sync route sets
+  `export const maxDuration = 800` (`src/app/api/internal/sync-wise/route.ts:7`). `vercel.json` holds
+  only the 15 cron entries — see [`../reference/crons.md`](../reference/crons.md).
+- The cron hits **`GET`**; manual triggers use **`POST`** with either an Auth.js session or the
+  `CRON_SECRET` bearer, compared in **constant time** with a length pre-check (REL-07,
+  `src/app/api/internal/sync-wise/route.ts:11-29`, `:69-76`). The shared helper for other cron routes
+  is `src/lib/internal/cron-auth.ts:6-17`.
+
+### Two more locked conventions
+
+- **`globalThis`-anchored singletons, not module-scope `let`.** Both the DB client and the search
+  index live on `globalThis` so they survive HMR (`src/lib/db/index.ts:16-27`,
+  `src/lib/search/index.ts:94-113`). A bare `let _x` is wiped on every hot reload.
+- **Neon HTTP driver, not a pooled TCP client.** `drizzle(drizzle-orm/neon-http)` over
+  `neon(DATABASE_URL)` (`src/lib/db/index.ts:1-11`). Each query is a stateless HTTPS round-trip, so
+  there are **no transactions** on this client; subsystems that need them reach for `pg` separately.
+- **All time is `Asia/Bangkok`.** `TIMEZONE = "Asia/Bangkok"` is the single constant normalization and
+  "now" math key off (`src/lib/normalization/timezone.ts:3`; compare's "current Monday" is
+  `toZonedTime(new Date(), TIMEZONE)`, `src/app/api/compare/route.ts:33-41`). Do not introduce a
+  second clock.
 
 ---
 
 ## Where to go next
 
-- In-memory index internals → `src/lib/search/index.ts`
-- Read-path query logic → `src/lib/search/engine.ts`, `src/lib/search/compare.ts`
-- ETL + promotion → `src/lib/sync/orchestrator.ts`, single-flight guard → `src/lib/sync/run-wise-sync.ts`
-- Cron schedule + function limits → `vercel.json`, `src/app/api/internal/sync-wise/route.ts`
+| You want | Go to |
+|---|---|
+| Index internals + stale detection | `src/lib/search/index.ts` |
+| Read-path query logic | `src/lib/search/engine.ts`, `src/lib/search/compare.ts`, `src/lib/search/range-search.ts` |
+| ETL + promotion | `src/lib/sync/orchestrator.ts` |
+| Single-flight guard + cache sweep | `src/lib/sync/run-wise-sync.ts` |
+| Cron schedule | `vercel.json`, plus [`../reference/crons.md`](../reference/crons.md) |
+| The whole-system model | [`architecture.md`](./architecture.md), [`data-flow.md`](./data-flow.md) |
+| House style + naming rules | [`conventions.md`](./conventions.md) |
+| Vocabulary (snapshot, identity group, modality) | [`glossary.md`](./glossary.md) |
 
 _Verified against HEAD + uncommitted WIP on 2026-05-31._

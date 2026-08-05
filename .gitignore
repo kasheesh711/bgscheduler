@@ -60,3 +60,9 @@ IPEDS/
 
 # graphify generated knowledge-graph cache
 graphify-out/
+
+# Ad-hoc debugging scratch scripts. These routinely read .env.local for a
+# DATABASE_URL, so they must never be committed — one slipped onto main via
+# `git add -A` before this rule existed.
+*-tmp.mjs
+*-tmp.js

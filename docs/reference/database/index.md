@@ -1,328 +1,300 @@
 # Database Reference — Master Table Index
 
-Canonical lookup of the BGScheduler Postgres database. This branch defines **184 tables**
-in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts); this count is generated from the
-actual `pgTable(...)` declarations, including 32 Post-Class Feedback tables and 36 current
-University Admissions tables.
-This page is the index: it lists each table's SQL name, its Drizzle export name, the
-domain it belongs to, its **grain** (what one row represents), the feature that owns it,
-and a link to the domain's ER diagram.
+The canonical lookup for every table in the BGScheduler Postgres database: **188 tables**, all
+declared in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) (4,719 lines) with Drizzle ORM
+and migrated under [`drizzle/`](../../../drizzle) (65 `.sql` files, latest `0064_line_group_settings.sql`).
+The count is mechanical: `grep -c "^export const .* = pgTable" src/lib/db/schema.ts` → `188`.
 
-- **Mechanical detail** (full column lists, types, defaults, indexes, FK targets) lives
-  on the per-domain `erd-*.md` pages linked in the last column.
-- **Meaning** (purpose, business rules, flows, why a table exists) lives in the
-  [feature docs](../../features/) — each owning-feature cell names the relevant feature.
-- Grain was inferred from each table's columns and verified against `schema.ts` at the
-  line ranges cited per domain section below.
+This page answers "what is this table, what is one row of it, and who owns it". It is a
+**directory, not a column dump** — every row cites the exact `schema.ts` line range, which is the
+authoritative source for columns, types, defaults, indexes, and check constraints. Per-domain
+relationship diagrams live on the `erd-*.md` pages linked in the ERD column; enum value sets live
+in [`enums.md`](./enums.md); feature meaning, rules, and flows live under
+[`docs/features/`](../../features/).
 
-## How to read the grain column
+## Domains
 
-The grain answers "one row per **what**?". A `PK` of `uuid id` alone does not define
-grain — the grain is the natural business key, usually visible as the table's
-`uniqueIndex(...)`. Where a table is snapshot-scoped, the grain is implicitly *within a
-snapshot* (almost all tutor/normalization rows carry a `snapshotId` FK to `snapshots`,
-which the ETL pipeline rewrites wholesale and then atomically promotes via
-`snapshots.active`, `schema.ts:167`).
+Ten domain groupings. `core` is the original snapshot/ETL spine plus every newer subsystem that
+hangs off it directly; the other nine are self-contained lineages with their own sync/import
+machinery.
 
-A few tables are deliberately **snapshot-independent** (they survive snapshot rotation):
-`admin_users`, `learning_plan_access_grants`, `google_oauth_tokens`, `tutor_aliases`,
-`cron_invocations`, `wise_activity_events`,
-`wise_activity_sync_runs`, `student_promotion_runs`, `student_promotion_grade_actions`,
-`student_promotion_course_actions`, `student_promotion_future_session_actions`,
-`student_promotion_graduation_actions`, `student_promotion_pay_rate_impacts`,
-all `post_class_*` tables,
-`room_utilization_sessions`, and `past_session_blocks`
-(`schema.ts:1347-1386`, the only cross-snapshot data table — see its note in
-[erd-core.md](./erd-core.md)). The entire **University Admissions** domain (all 36
-`admissions_*` tables) is likewise snapshot-independent by design — its only ties to
-Wise/IPEDS data are plain soft-reference columns, never FKs
-([erd-university-admissions.md](./erd-university-admissions.md)).
+| Domain | Tables | ERD page(s) |
+|---|---:|---|
+| `core` | 124 | [erd-core.md](./erd-core.md) — plus dedicated pages for two sub-areas: [erd-student-promotions.md](./erd-student-promotions.md) (6 tables) and [erd-university-admissions.md](./erd-university-admissions.md) (36 tables) |
+| `sales-dashboard` | 7 | [erd-sales-dashboard.md](./erd-sales-dashboard.md) |
+| `credit-control` | 11 | [erd-credit-control.md](./erd-credit-control.md) |
+| `classrooms` | 9 | [erd-classrooms.md](./erd-classrooms.md) |
+| `payroll` | 8 | [erd-payroll.md](./erd-payroll.md) |
+| `tutor-profiles` | 2 | [erd-tutor-profiles.md](./erd-tutor-profiles.md) |
+| `leave-requests` | 5 | [erd-leave-requests.md](./erd-leave-requests.md) |
+| `ai-and-proposals` | 6 | [erd-ai-and-proposals.md](./erd-ai-and-proposals.md) |
+| `line` | 12 | [erd-line.md](./erd-line.md) |
+| `room-capacity` | 4 | [erd-room-capacity.md](./erd-room-capacity.md) |
+| **Total** | **188** | |
 
-## Domain map
+### What is inside `core`
 
-| Domain | Tables | ER diagram |
-|---|---|---|
-| Core (snapshots, sync, audit, auth, tutors, normalization) | 22 | [erd-core.md](./erd-core.md) |
-| Sales Dashboard | 7 | [erd-sales-dashboard.md](./erd-sales-dashboard.md) |
-| Competitor Intelligence | 16 | — |
-| Credit Control | 11 | [erd-credit-control.md](./erd-credit-control.md) |
-| Classrooms (assignment + email) | 9 | [erd-classrooms.md](./erd-classrooms.md) |
-| Payroll | 8 | [erd-payroll.md](./erd-payroll.md) |
-| Tutor Profiles | 2 | [erd-tutor-profiles.md](./erd-tutor-profiles.md) |
-| Leave Requests | 5 | [erd-leave-requests.md](./erd-leave-requests.md) |
-| Student Promotions | 6 | [erd-student-promotions.md](./erd-student-promotions.md) |
-| Post-Class Feedback | 32 | [feature data model](../../features/post-class-feedback.md#durable-data-model) |
-| AI & Proposals | 6 | [erd-ai-and-proposals.md](./erd-ai-and-proposals.md) |
-| LINE | 9 | [erd-line.md](./erd-line.md) |
-| Room Capacity | 4 | [erd-room-capacity.md](./erd-room-capacity.md) |
-| Progress Tests | 8 | — |
-| US Universities / IPEDS | 3 | — |
-| University Admissions | 36 | [erd-university-admissions.md](./erd-university-admissions.md) |
-| **Total** | **184** | |
+124 tables is too coarse to navigate, so the sub-areas are:
 
-## Master table list
+| Sub-area | Tables | Prefix / anchor |
+|---|---:|---|
+| Snapshot & sync control plane, cron observability, Wise activity audit, auth & access | 9 | `snapshots` … `learning_plan_access_grants` |
+| Competitor intelligence | 16 | `competitor_*` |
+| Student promotion | 6 | `student_promotion_*` |
+| Tutor identity, normalization, session blocks, data health | 13 | the snapshot-scoped ETL output plus `past_session_blocks`, `room_utilization_sessions`, `data_issues`, `snapshot_stats` |
+| Progress tests | 8 | `progress_test_*` |
+| US universities (IPEDS) | 3 | `ipeds_*` |
+| Post-class feedback — config, evidence, notifications, AI, finance, payout | 32 | `post_class_*` |
+| University admissions case management | 36 | `admissions_*` |
+| Student monthly schedule (parent-facing) | 1 | `student_schedule_links` |
+| **Total** | **124** | |
 
-Columns: **Table** (SQL name) · **Const** (Drizzle export in `schema.ts`) · **Domain** ·
-**Grain** (one row per …) · **Owning feature** · **ERD**.
+## Reading the Grain column
 
-### Core — snapshots, sync, audit, auth, tutors, normalization
+"Grain" states what exactly one row is. Where a `uniqueIndex` enforces the grain, that index is the
+evidence; where the primary key is a natural key (an email, a `student_key`, a `group_id`), the row
+says so. Where nothing enforces it, the grain cell says the shape is conventional, not constrained.
+Three recurring patterns are worth naming once:
 
-Line ranges: `schema.ts:165-269`, `611-740`, `831-854`, `1347-1386`, `1744-1784`.
+- **Snapshot-scoped.** Thirteen tables carry a `snapshotId` FK to `snapshots` and are rewritten
+  wholesale by each ETL run; readers only ever see the row set where `snapshots.active = true`
+  (`schema.ts:456-460`). `credit_control_snapshots` runs the same pattern on its own independent
+  lineage (`schema.ts:1150-1160`). See [Snapshot scoping](#snapshot-scoping) for the exact list.
+- **Snapshot-independent.** Everything else. Rows keyed by a durable natural key (email,
+  `student_key`, `canonical_key`, `wise_session_id`, `group_canonical_key`, `enrollment_key`)
+  deliberately survive snapshot rotation. `past_session_blocks` carries the schema comment naming
+  itself the one cross-snapshot *tutor data* table (`schema.ts:2242-2244`).
+- **Single-flight run ledgers.** Most `*_sync_runs` tables carry a partial
+  `uniqueIndex(...).where(status = 'running')`, so a second concurrent run cannot insert — the
+  guard is in Postgres, not application code. Example: `sync_runs_single_running_idx`
+  (`schema.ts:473-475`).
 
-| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
-|---|---|---|---|---|---|
-| `snapshots` | `snapshots` | core | versioned ETL snapshot; at most one `active=true` (`schema.ts:165-169`) | [Tutor search](../../features/tutor-search.md) (ETL) | [core](./erd-core.md) |
-| `sync_runs` | `syncRuns` | core | one Wise snapshot-sync run; partial-unique guard allows a single `running` row (`schema.ts:171-186`) | [Data health](../../features/data-health.md) | [core](./erd-core.md) |
-| `cron_invocations` | `cronInvocations` | core | one valid cron/admin invocation of a registered operational job (`schema.ts`) | [Data health](../../features/data-health.md) | [core](./erd-core.md) |
-| `wise_activity_events` | `wiseActivityEvents` | core | one Wise audit event, deduped on `event_id` (`schema.ts:190-223`) | [Wise activity audit](../../features/wise-activity-audit.md) | [core](./erd-core.md) |
-| `wise_activity_sync_runs` | `wiseActivitySyncRuns` | core | one Wise-activity audit sync run; single `running` guard (`schema.ts:225-243`) | [Wise activity audit](../../features/wise-activity-audit.md) | [core](./erd-core.md) |
-| `admin_users` | `adminUsers` | core | one allowlisted admin email (unique on `email`) (`schema.ts:247-254`) | Auth ([middleware](../../../src/middleware.ts)) | [core](./erd-core.md) |
-| `learning_plan_access_grants` | `learningPlanAccessGrants` | core | one normalized email explicitly granted Learning Plans access (PK = `email`; no role or sign-in authority) (`schema.ts`) | [Learning Plans](../../features/learning-plans.md) authorization | [core](./erd-core.md) |
-| `google_oauth_tokens` | `googleOAuthTokens` | core | one Google OAuth token set per `email` (PK = email) (`schema.ts:256-266`) | Google OAuth (shared by [Sales Dashboard](../../features/sales-dashboard.md) + [Leave requests](../../features/leave-requests.md)) | [core](./erd-core.md) |
-| `tutor_identity_groups` | `tutorIdentityGroups` | core | one merged tutor identity within a snapshot (`schema.ts:611-620`) | [Tutor search](../../features/tutor-search.md) | [core](./erd-core.md) |
-| `tutor_identity_group_members` | `tutorIdentityGroupMembers` | core | one Wise teacher record mapped into an identity group, per snapshot (`schema.ts:622-633`) | [Tutor search](../../features/tutor-search.md) | [core](./erd-core.md) |
-| `tutor_aliases` | `tutorAliases` | core | one nickname→canonical alias mapping (unique on `from_key`); snapshot-independent (`schema.ts:635-642`) | [Tutor search](../../features/tutor-search.md) (identity) | [core](./erd-core.md) |
-| `tutors` | `tutors` | core | one logical tutor display record per identity group, per snapshot (`schema.ts:644-653`) | [Tutor search](../../features/tutor-search.md) | [core](./erd-core.md) |
-| `raw_teacher_tags` | `rawTeacherTags` | core | one raw Wise tag value for a teacher, per snapshot (`schema.ts:657-666`) | [Tutor search](../../features/tutor-search.md) (qualifications) | [core](./erd-core.md) |
-| `subject_level_qualifications` | `subjectLevelQualifications` | core | one normalized subject/curriculum/level qualification for a group, per snapshot (`schema.ts:668-680`) | [Tutor search](../../features/tutor-search.md) | [core](./erd-core.md) |
-| `recurring_availability_windows` | `recurringAvailabilityWindows` | core | one weekday+time availability window for a teacher, per snapshot (`schema.ts:684-696`) | [Tutor search](../../features/tutor-search.md) | [core](./erd-core.md) |
-| `dated_leaves` | `datedLeaves` | core | one exact leave interval for a teacher, per snapshot (`schema.ts:698-708`) | [Tutor search](../../features/tutor-search.md) | [core](./erd-core.md) |
-| `future_session_blocks` | `futureSessionBlocks` | core | one future Wise session blocking a tutor, per snapshot (`schema.ts:710-737`) | [Tutor search](../../features/tutor-search.md) / [Tutor compare](../../features/tutor-compare.md) | [core](./erd-core.md) |
-| `room_utilization_sessions` | `roomUtilizationSessions` | core | one Wise session with its normalized room label, deduped on `wise_session_id`; snapshot-independent (`schema.ts:831-851`) | [Room capacity](../../features/room-capacity.md) (utilization) | [core](./erd-core.md) |
-| `past_session_blocks` | `pastSessionBlocks` | core | one historical Wise session, deduped on `wise_session_id`; the only cross-snapshot data table (`schema.ts:1347-1386`) | [Tutor compare](../../features/tutor-compare.md) (history fallback) | [core](./erd-core.md) |
-| `data_issues` | `dataIssues` | core | one unresolved normalization issue, per snapshot (`schema.ts:1744-1758`) | [Data health](../../features/data-health.md) | [core](./erd-core.md) |
-| `snapshot_stats` | `snapshotStats` | core | one stats roll-up per snapshot (unique on `snapshot_id`) (`schema.ts:1762-1777`) | [Data health](../../features/data-health.md) | [core](./erd-core.md) |
+## All 188 tables
 
-### Sales Dashboard
+| Table (SQL name) | Const (varName) | Domain | Grain — one row per… | Owning feature | ERD | `schema.ts` |
+|---|---|---|---|---|---|---|
+| `snapshots` | `snapshots` | core | Wise ETL snapshot; `active` marks the single promoted one | [Tutor Search](../../features/tutor-search.md) | [core](./erd-core.md) | 456-460 |
+| `sync_runs` | `syncRuns` | core | full-sync attempt; partial unique index permits at most one `running` | [Data Health](../../features/data-health.md) | [core](./erd-core.md) | 462-477 |
+| `cron_invocations` | `cronInvocations` | core | invocation of an internal cron or manual job (`job_key` + `received_at`); not unique-constrained | [Data Health](../../features/data-health.md) | [core](./erd-core.md) | 479-499 |
+| `cron_alert_state` | `cronAlertState` | core | cron job key (PK `job_key`) — watchdog alert dedup and recovery state | [Data Health](../../features/data-health.md) | [core](./erd-core.md) | 505-514 |
+| `wise_activity_events` | `wiseActivityEvents` | core | Wise activity event (unique `event_id`); snapshot-independent audit mirror | [Wise Activity Audit](../../features/wise-activity-audit.md) | [core](./erd-core.md) | 518-551 |
+| `wise_activity_sync_runs` | `wiseActivitySyncRuns` | core | activity-audit sync attempt; single-running guard | [Wise Activity Audit](../../features/wise-activity-audit.md) | [core](./erd-core.md) | 553-571 |
+| `admin_users` | `adminUsers` | core | allowlisted admin email (unique `email`); `allowed_pages` null = full access | Auth / middleware | [core](./erd-core.md) | 575-585 |
+| `google_oauth_tokens` | `googleOAuthTokens` | core | connected Google account (PK `email`); tokens stored as ciphertext | [Sales Dashboard](../../features/sales-dashboard.md) owns the shared layer (`src/lib/sales-dashboard/google-oauth.ts`); Leave Requests + Post-Class read it | [core](./erd-core.md) | 587-597 |
+| `learning_plan_access_grants` | `learningPlanAccessGrants` | core | email granted learning-plan access (PK `email`; a check constraint forces lower/trimmed, non-blank) | [Learning Plans](../../features/learning-plans.md) | [core](./erd-core.md) | 601-614 |
+| `competitor_entities` | `competitorEntities` | core | tracked competitor or own brand (unique `slug`) | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 795-814 |
+| `competitor_sources` | `competitorSources` | core | monitored source — unique (`entity_id`, `source_type`, `url`) | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 816-842 |
+| `competitor_sync_runs` | `competitorSyncRuns` | core | competitor sync attempt; single-running guard | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 844-869 |
+| `competitor_source_runs` | `competitorSourceRuns` | core | one source fetched inside one sync run; carries that source's usage units and estimated cost | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 871-894 |
+| `competitor_evidence_items` | `competitorEvidenceItems` | core | captured evidence item (unique `item_key`) | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 896-927 |
+| `competitor_assets` | `competitorAssets` | core | stored binary asset belonging to an evidence item (unique `storage_key`) | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 929-945 |
+| `competitor_serp_keywords` | `competitorSerpKeywords` | core | tracked keyword — unique (`keyword`, `language`, `location`, `device`) | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 947-966 |
+| `competitor_serp_observations` | `competitorSerpObservations` | core | observed SERP result (unique `observation_key`) | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 968-994 |
+| `competitor_ai_runs` | `competitorAiRuns` | core | AI generation run (brief, war room, or task suggestions), typed by `run_type` | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 996-1013 |
+| `competitor_briefs` | `competitorBriefs` | core | brief date (unique `brief_date`) | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 1015-1036 |
+| `competitor_war_room_snapshots` | `competitorWarRoomSnapshots` | core | week (unique `week_start`) of war-room matrix + content angles | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 1038-1061 |
+| `competitor_task_suggestions` | `competitorTaskSuggestions` | core | AI-suggested task awaiting accept/ignore | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 1063-1084 |
+| `competitor_tasks` | `competitorTasks` | core | human-owned competitor task | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 1086-1108 |
+| `competitor_task_comments` | `competitorTaskComments` | core | comment on a task | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 1110-1119 |
+| `competitor_task_events` | `competitorTaskEvents` | core | task lifecycle event; append-only (`created_at` only) | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 1121-1130 |
+| `competitor_vendor_usage` | `competitorVendorUsage` | core | unique (`usage_month`, `provider`, `source_type`) — spend-cap accounting | [Competitor Intelligence](../../features/competitor-intelligence.md) | [core](./erd-core.md) | 1132-1146 |
+| `student_promotion_runs` | `studentPromotionRuns` | core | promotion run for a `target_date` (draft → verified → applied) | [Student Promotions](../../features/student-promotions.md) | [promotions](./erd-student-promotions.md) | 1343-1374 |
+| `student_promotion_grade_actions` | `studentPromotionGradeActions` | core | unique (`run_id`, `wise_student_id`) — one planned grade bump | [Student Promotions](../../features/student-promotions.md) | [promotions](./erd-student-promotions.md) | 1376-1398 |
+| `student_promotion_course_actions` | `studentPromotionCourseActions` | core | unique (`run_id`, `wise_class_id`) — one planned course transition | [Student Promotions](../../features/student-promotions.md) | [promotions](./erd-student-promotions.md) | 1400-1421 |
+| `student_promotion_future_session_actions` | `studentPromotionFutureSessionActions` | core | unique (`run_id`, `wise_session_id`) — one future session to re-subject | [Student Promotions](../../features/student-promotions.md) | [promotions](./erd-student-promotions.md) | 1423-1448 |
+| `student_promotion_graduation_actions` | `studentPromotionGraduationActions` | core | unique (`run_id`, `wise_student_id`) flagged as graduating; needs a human disposition | [Student Promotions](../../features/student-promotions.md) | [promotions](./erd-student-promotions.md) | 1450-1471 |
+| `student_promotion_pay_rate_impacts` | `studentPromotionPayRateImpacts` | core | unique (`run_id`, `impact_key`) — the tutor pay-rate delta a course move causes | [Student Promotions](../../features/student-promotions.md) | [promotions](./erd-student-promotions.md) | 1473-1512 |
+| `tutor_identity_groups` | `tutorIdentityGroups` | core | resolved tutor identity per snapshot; `canonical_key` is the stable cross-snapshot anchor | [Tutor Search](../../features/tutor-search.md) | [core](./erd-core.md) | 1516-1525 |
+| `tutor_identity_group_members` | `tutorIdentityGroupMembers` | core | Wise teacher record inside an identity group, per snapshot | [Tutor Search](../../features/tutor-search.md) | [core](./erd-core.md) | 1527-1538 |
+| `tutor_aliases` | `tutorAliases` | core | alias mapping `from_key` → `to_key` (unique `from_key`); snapshot-independent | [Tutor Search](../../features/tutor-search.md) | [core](./erd-core.md) | 1540-1547 |
+| `tutors` | `tutors` | core | identity group per snapshot — the denormalized read aggregate | [Tutor Search](../../features/tutor-search.md) | [core](./erd-core.md) | 1549-1558 |
+| `raw_teacher_tags` | `rawTeacherTags` | core | raw Wise tag value per teacher per snapshot (pre-normalization evidence) | [Tutor Search](../../features/tutor-search.md) | [core](./erd-core.md) | 1562-1571 |
+| `subject_level_qualifications` | `subjectLevelQualifications` | core | parsed subject/curriculum/level/examPrep qualification per group per snapshot | [Tutor Search](../../features/tutor-search.md) | [core](./erd-core.md) | 1573-1585 |
+| `recurring_availability_windows` | `recurringAvailabilityWindows` | core | weekday availability window per teacher per snapshot (minutes since Bangkok midnight) | [Tutor Search](../../features/tutor-search.md) | [core](./erd-core.md) | 1589-1601 |
+| `dated_leaves` | `datedLeaves` | core | merged dated leave interval per teacher per snapshot | [Tutor Search](../../features/tutor-search.md) | [core](./erd-core.md) | 1603-1613 |
+| `future_session_blocks` | `futureSessionBlocks` | core | future Wise session per snapshot; `is_blocking` defaults **true** (fail-closed) | [Tutor Search](../../features/tutor-search.md) | [core](./erd-core.md) | 1615-1642 |
+| `room_utilization_sessions` | `roomUtilizationSessions` | core | Wise session (unique `wise_session_id`) with a normalized room label; snapshot-independent | [Room Capacity](../../features/room-capacity.md) | [core](./erd-core.md) | 1736-1756 |
+| `past_session_blocks` | `pastSessionBlocks` | core | Wise session captured after it dropped out of the FUTURE feed (unique `wise_session_id`, first-observation-wins); the only cross-snapshot tutor data table | [Tutor Compare](../../features/tutor-compare.md) | [core](./erd-core.md) | 2255-2294 |
+| `data_issues` | `dataIssues` | core | normalization/sync issue raised during one snapshot's ETL | [Data Health](../../features/data-health.md) | [core](./erd-core.md) | 2685-2699 |
+| `snapshot_stats` | `snapshotStats` | core | snapshot (unique `snapshot_id`) — the counts the promotion gate is measured against | [Data Health](../../features/data-health.md) | [core](./erd-core.md) | 2703-2719 |
+| `progress_test_attendance_ledger` | `progressTestAttendanceLedger` | core | unique (`wise_session_id`, `wise_student_id`) counted toward a progress-test cycle; cross-snapshot | [Progress Tests](../../features/progress-tests.md) | [core](./erd-core.md) | 2812-2836 |
+| `progress_test_cycle_state` | `progressTestCycleState` | core | enrollment key (PK) = student × class — current count, status, booked test | [Progress Tests](../../features/progress-tests.md) | [core](./erd-core.md) | 2838-2872 |
+| `progress_test_bookings` | `progressTestBookings` | core | booking attempt for one enrollment's cycle (`dry_run` defaults true) | [Progress Tests](../../features/progress-tests.md) | [core](./erd-core.md) | 2874-2895 |
+| `progress_test_email_runs` | `progressTestEmailRuns` | core | teacher heads-up email run (unique `idempotency_key`) | [Progress Tests](../../features/progress-tests.md) | [core](./erd-core.md) | 2897-2916 |
+| `progress_test_notifications` | `progressTestNotifications` | core | outbound notification to one recipient (unique `idempotency_key`) | [Progress Tests](../../features/progress-tests.md) | [core](./erd-core.md) | 2918-2935 |
+| `progress_test_admin_digest_runs` | `progressTestAdminDigestRuns` | core | digest date — unique on both `digest_date` and `idempotency_key` | [Progress Tests](../../features/progress-tests.md) | [core](./erd-core.md) | 2937-2957 |
+| `progress_test_admin_digest_recipients` | `progressTestAdminDigestRecipients` | core | recipient of one admin digest run | [Progress Tests](../../features/progress-tests.md) | [core](./erd-core.md) | 2959-2973 |
+| `progress_test_sync_runs` | `progressTestSyncRuns` | core | progress-test sync attempt; single-running guard | [Progress Tests](../../features/progress-tests.md) | [core](./erd-core.md) | 2975-2995 |
+| `ipeds_import_runs` | `ipedsImportRuns` | core | IPEDS import run for a `data_year`; partial unique permits one `running` per year | [US Universities](../../features/us-universities.md) | [core](./erd-core.md) | 3004-3019 |
+| `ipeds_institutions` | `ipedsInstitutions` | core | institution per unique (`data_year`, `unit_id`) — directory, admissions, cost, outcomes | [US Universities](../../features/us-universities.md) | [core](./erd-core.md) | 3021-3113 |
+| `ipeds_completions` | `ipedsCompletions` | core | completions count per data year × unit × CIP code × award level (indexed, not unique-constrained) | [US Universities](../../features/us-universities.md) | [core](./erd-core.md) | 3115-3130 |
+| `post_class_enforcement_windows` | `postClassEnforcementWindows` | core | enforcement-mode window (`shadow`/`live`/`paused`); the open window has a null `ends_at` | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3138-3150 |
+| `post_class_settings` | `postClassSettings` | core | the feature's single settings row (PK `id`, defaults to `"default"`) | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3152-3166 |
+| `post_class_field_mappings` | `postClassFieldMappings` | core | unique (`mapping_version`, `field_key`) — Wise question text → compliance field | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3168-3182 |
+| `post_class_access_grants` | `postClassAccessGrants` | core | unique (`email`, `capability`) — one granted capability | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3184-3194 |
+| `post_class_config_audit_log` | `postClassConfigAuditLog` | core | config change with before/after values; append-only | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3196-3209 |
+| `post_class_digest_recipients` | `postClassDigestRecipients` | core | admin digest recipient email (unique `email`) | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3211-3221 |
+| `post_class_sync_runs` | `postClassSyncRuns` | core | post-class sync attempt over a date window; single-running guard | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3223-3248 |
+| `post_class_sessions` | `postClassSessions` | core | Wise session in feedback scope (unique `wise_session_id`), carrying source/content/timing/deduction status | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3250-3305 |
+| `post_class_session_participants` | `postClassSessionParticipants` | core | unique (`session_id`, `participant_key`) — who consumed credit | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3307-3321 |
+| `post_class_feedback_versions` | `postClassFeedbackVersions` | core | unique (`session_id`, `version_key`) — one observed feedback submission | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3323-3352 |
+| `post_class_feedback_event_links` | `postClassFeedbackEventLinks` | core | unique (`session_id`, `wise_event_id`) — links a version to activity-mirror evidence | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3354-3367 |
+| `post_class_assessments` | `postClassAssessments` | core | assessment key (unique) — one compliance evaluation at a policy + mapping version | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3369-3398 |
+| `post_class_source_issues` | `postClassSourceIssues` | core | source-health defect fingerprint (unique); `blocks_enforcement` defaults true | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3400-3420 |
+| `post_class_notification_runs` | `postClassNotificationRuns` | core | notification run of one kind at one scheduled time (unique `idempotency_key`) | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3422-3445 |
+| `post_class_notification_deliveries` | `postClassNotificationDeliveries` | core | one recipient's email inside a run (unique `idempotency_key`) | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3447-3469 |
+| `post_class_notification_items` | `postClassNotificationItems` | core | unique (`delivery_id`, `session_id`) — the sessions listed in that email | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3471-3482 |
+| `post_class_notification_attempts` | `postClassNotificationAttempts` | core | unique (`delivery_id`, `attempt_number`) — one provider try and its outcome | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3484-3498 |
+| `post_class_ai_runs` | `postClassAiRuns` | core | AI review request over a feedback version (unique `request_hash`) | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3500-3519 |
+| `post_class_ai_concerns` | `postClassAiConcerns` | core | unique (`run_id`, `dimension`) — one concern awaiting confirm/dismiss | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3521-3534 |
+| `post_class_ai_reviews` | `postClassAiReviews` | core | human decision recorded against a concern; append-only, CAS via `expected_version` | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3536-3547 |
+| `post_class_finance_periods` | `postClassFinancePeriods` | core | calendar month (unique `month`) — the open/closed gate for deductions | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3549-3565 |
+| `post_class_deductions` | `postClassDeductions` | core | session (unique `session_id`) — at most one deduction per session, ever | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3567-3589 |
+| `post_class_deduction_actions` | `postClassDeductionActions` | core | deduction state transition (unique `idempotency_key`); append-only | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3591-3610 |
+| `post_class_deduction_offsets` | `postClassDeductionOffsets` | core | deduction (unique `deduction_id`) — its compensating offset row | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3612-3627 |
+| `post_class_payout_runs` | `postClassPayoutRuns` | core | 26th→25th payout window; unique on `anchor_month` and on (`window_start`, `window_end`); publish is lease-fenced | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3636-3709 |
+| `post_class_payout_tutor_names` | `postClassPayoutTutorNames` | core | tutor `canonical_key` (unique) → the exact ledger identity strings, copied never constructed | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3719-3735 |
+| `post_class_tutor_payout_sheets` | `postClassTutorPayoutSheets` | core | tutor `canonical_key` (unique) → workbook + tab. **Superseded** by `post_class_payout_tutor_names`; retained only because migration 0057 created it, and nothing reads or writes it (`schema.ts:3737-3741`) | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3742-3756 |
+| `post_class_payout_run_lines` | `postClassPayoutRunLines` | core | deduction line on a payout run; `source_identity` (`deduction:<uuid>`), `row_signature`, and `idempotency_key` are each **globally** unique, and a check forces `amount_minor < 0` | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3763-3818 |
+| `post_class_payout_adjustments` | `postClassPayoutAdjustments` | core | positive correction obligation (`waiver` or `reversal`) against an already-written negative line; check forces `amount_minor > 0` | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3824-3857 |
+| `post_class_payout_exceptions` | `postClassPayoutExceptions` | core | finance blocker raised while preparing or writing a run (unique `source_identity`) | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3860-3884 |
+| `post_class_payout_roll_runs` | `postClassPayoutRollRuns` | core | date-roll attempt per payout run (unique `payout_run_id`); lease-fenced | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3887-3916 |
+| `post_class_payout_roll_outcomes` | `postClassPayoutRollOutcomes` | core | unique (`roll_run_id`, `workbook_id`) — CAS-fenced before/after date serials | [Post-Class Feedback](../../features/post-class-feedback.md) | [core](./erd-core.md) | 3919-3949 |
+| `admissions_cohorts` | `admissionsCohorts` | core | graduating cohort (unique `name`) | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 3957-3966 |
+| `admissions_students` | `admissionsStudents` | core | admissions student; `wise_student_key` is a soft reference, never an FK; soft-delete | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 3968-3985 |
+| `admissions_cases` | `admissionsCases` | core | case; a partial unique index enforces one live (`active`/`committed`) case per student | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 3987-4010 |
+| `admissions_case_members` | `admissionsCaseMembers` | core | unique (`case_id`, `email`) — the row that resolves role at sign-in | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4012-4036 |
+| `admissions_counselors` | `admissionsCounselors` | core | counselor (unique `email`) available for case assignment | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4038-4047 |
+| `admissions_checklist_templates` | `admissionsChecklistTemplates` | core | unique (`cohort_id`, `version`) | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4049-4059 |
+| `admissions_template_items` | `admissionsTemplateItems` | core | checklist item inside one template version | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4061-4075 |
+| `admissions_case_tasks` | `admissionsCaseTasks` | core | task on a case (materialized from a template item, or ad hoc); soft-delete | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4077-4099 |
+| `admissions_case_meetings` | `admissionsCaseMeetings` | core | meeting logged on a case; soft-delete | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4101-4114 |
+| `admissions_college_list_items` | `admissionsCollegeListItems` | core | college on one case's list; `unit_id` is a soft IPEDS reference, never an FK; soft-delete | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4116-4143 |
+| `admissions_college_research` | `admissionsCollegeResearch` | core | college list item (unique `list_item_id`) — its research notes and 1-5 fit rating (check-constrained) | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4145-4164 |
+| `admissions_interest_events` | `admissionsInterestEvents` | core | demonstrated-interest event on a list item; soft-delete | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4166-4178 |
+| `admissions_college_requirements` | `admissionsCollegeRequirements` | core | requirement item on a list item (owner + status + due date); soft-delete | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4180-4200 |
+| `admissions_financial_aid_offers` | `admissionsFinancialAidOffers` | core | list item (unique `list_item_id`) — its cost/gift-aid/loan breakdown | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4202-4218 |
+| `admissions_scholarships` | `admissionsScholarships` | core | scholarship tracked on a case, optionally tied to a list item; soft-delete | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4220-4239 |
+| `admissions_application_events` | `admissionsApplicationEvents` | core | decision/status event on a list item (submitted, deferred, accepted, …) | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4241-4251 |
+| `admissions_recommenders` | `admissionsRecommenders` | core | recommender on a case; soft-delete | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4253-4265 |
+| `admissions_recommender_colleges` | `admissionsRecommenderColleges` | core | unique (`recommender_id`, `list_item_id`) — per-college submission state | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4267-4278 |
+| `admissions_college_docs` | `admissionsCollegeDocs` | core | document row for a list item (transcript, scores, …); indexed by (`list_item_id`, `doc_type`), not unique | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4280-4291 |
+| `admissions_essays` | `admissionsEssays` | core | essay on a case, optionally scoped to a list item; soft-delete | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4293-4309 |
+| `admissions_essay_prompt_catalog` | `admissionsEssayPromptCatalog` | core | unique (`institution`, `program`, `cycle`, `prompt_key`) — the reusable prompt library | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4311-4335 |
+| `admissions_activities` | `admissionsActivities` | core | extracurricular activity on a case; soft-delete | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4337-4351 |
+| `admissions_awards` | `admissionsAwards` | core | award/honor on a case; partial unique on (`case_id`, `common_app_rank`) among live rows, rank check-constrained 1-5 | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4353-4385 |
+| `admissions_test_sittings` | `admissionsTestSittings` | core | test sitting on a case; raw scores stay staff-only until `score_released_to_parent` | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4387-4406 |
+| `admissions_academic_records` | `admissionsAcademicRecords` | core | partial unique (`case_id`, `system`, `effective_date`) among live rows | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4408-4422 |
+| `admissions_notes` | `admissionsNotes` | core | note on a case; `visibility` is NOT NULL **with no default**, forcing an explicit choice | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4424-4437 |
+| `admissions_announcements` | `admissionsAnnouncements` | core | announcement; a check constraint enforces cohort-scoped XOR case-scoped | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4439-4457 |
+| `admissions_resources` | `admissionsResources` | core | curated resource link under a topic; soft-delete | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4459-4470 |
+| `admissions_self_report_sections` | `admissionsSelfReportSections` | core | unique (`case_id`, `section_key`) — the autosave upsert target for student self-report | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4472-4486 |
+| `admissions_audit_log` | `admissionsAuditLog` | core | audited mutation with a field-level `diff`; append-only (`created_at` only) | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4488-4502 |
+| `admissions_notification_log` | `admissionsNotificationLog` | core | email actually sent; partial unique on `dedupe_key` where non-null | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4504-4523 |
+| `admissions_notification_outbox` | `admissionsNotificationOutbox` | core | queued notification (unique `dedupe_key`) with its retry schedule | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4525-4547 |
+| `admissions_notification_runs` | `admissionsNotificationRuns` | core | daily/weekly digest run; single-running guard | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4549-4564 |
+| `admissions_import_runs` | `admissionsImportRuns` | core | workbook import into one case — unique (`case_id`, `spreadsheet_id`, `source_fingerprint`) | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4566-4586 |
+| `admissions_import_issues` | `admissionsImportIssues` | core | issue raised by one import run | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4588-4602 |
+| `admissions_import_mappings` | `admissionsImportMappings` | core | unique (`run_id`, `source_type`, `source_key`) → the row it created or updated | [University Admissions](../../features/university-admissions.md) | [admissions](./erd-university-admissions.md) | 4604-4617 |
+| `student_schedule_links` | `studentScheduleLinks` | core | issued capability token (unique `token_hash`; SHA-256 only, never the token) granting read of exactly one (`student_key`, `month_key`) | [Student Schedule](../../features/student-schedule.md) | [core](./erd-core.md) | 4627-4648 |
+| `sales_dashboard_sources` | `salesDashboardSources` | sales-dashboard | source-month workbook; unique `source_month` while `archived_at IS NULL` | [Sales Dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) | 618-648 |
+| `sales_dashboard_import_runs` | `salesDashboardImportRuns` | sales-dashboard | import attempt against a source; partial unique = one `running` per source | [Sales Dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) | 650-669 |
+| `sales_dashboard_normal_rows` | `salesDashboardNormalRows` | sales-dashboard | parsed row of the `normal` tab — unique (`import_run_id`, `row_number`) | [Sales Dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) | 671-696 |
+| `sales_dashboard_additional_rows` | `salesDashboardAdditionalRows` | sales-dashboard | parsed row of the `additional` tab — unique (`import_run_id`, `row_number`) | [Sales Dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) | 698-716 |
+| `sales_dashboard_projection_sources` | `salesDashboardProjectionSources` | sales-dashboard | scenario-projection workbook; partial unique permits one `active` | [Sales Dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) | 718-741 |
+| `sales_dashboard_projection_import_runs` | `salesDashboardProjectionImportRuns` | sales-dashboard | projection import attempt; one `running` per source | [Sales Dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) | 743-761 |
+| `sales_dashboard_projection_months` | `salesDashboardProjectionMonths` | sales-dashboard | unique (`import_run_id`, `scenario`, `projection_month`) | [Sales Dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) | 763-791 |
+| `credit_control_snapshots` | `creditControlSnapshots` | credit-control | credit-control snapshot on its own lineage; `active` marks the promoted one | [Credit Control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) | 1150-1160 |
+| `credit_control_sync_runs` | `creditControlSyncRuns` | credit-control | credit-control sync attempt; single-running guard | [Credit Control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) | 1162-1180 |
+| `credit_control_students` | `creditControlStudents` | credit-control | unique (`snapshot_id`, `wise_student_id`) | [Credit Control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) | 1182-1195 |
+| `credit_control_packages` | `creditControlPackages` | credit-control | unique (`snapshot_id`, `wise_class_id`, `wise_student_id`) — one prepaid package holding | [Credit Control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) | 1197-1220 |
+| `credit_control_sessions` | `creditControlSessions` | credit-control | unique (`snapshot_id`, `wise_session_id`, `wise_student_id`); an unresolved teacher stays null and renders "Teacher TBC" rather than being guessed | [Credit Control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) | 1222-1259 |
+| `credit_control_credit_history` | `creditControlCreditHistory` | credit-control | unique (`snapshot_id`, `wise_credit_history_id`, `wise_student_id`, `wise_class_id`) | [Credit Control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) | 1261-1278 |
+| `credit_control_follow_up_state` | `creditControlFollowUpState` | credit-control | `student_key` (PK) — current follow-up status; survives snapshot rotation | [Credit Control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) | 1280-1290 |
+| `credit_control_follow_up_log` | `creditControlFollowUpLog` | credit-control | follow-up action event; append-only | [Credit Control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) | 1292-1305 |
+| `credit_control_inactive_students` | `creditControlInactiveStudents` | credit-control | `student_key` (PK) marked inactive — `manual` or `auto-churn` | [Credit Control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) | 1307-1317 |
+| `credit_control_zero_balance_tracking` | `creditControlZeroBalanceTracking` | credit-control | `student_key` (PK) continuously at ≤0 credits; the row is cleared on recovery | [Credit Control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) | 1322-1329 |
+| `credit_control_admin_ownership` | `creditControlAdminOwnership` | credit-control | `student_key` (PK) → the owning admin | [Credit Control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) | 1331-1339 |
+| `classroom_rooms` | `classroomRooms` | classrooms | bookable room (unique `name`) with capacity, TV flag, and category | [Classroom Assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) | 1646-1659 |
+| `classroom_assignment_runs` | `classroomAssignmentRuns` | classrooms | assignment run for one `assignment_date` against one snapshot | [Classroom Assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) | 1661-1685 |
+| `classroom_assignment_rows` | `classroomAssignmentRows` | classrooms | unique (`run_id`, `wise_session_id`) — the assigned room plus its rule trace | [Classroom Assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) | 1687-1732 |
+| `classroom_publish_jobs` | `classroomPublishJobs` | classrooms | publish job writing eligible rows' `location` back to Wise | [Classroom Assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) | 1921-1941 |
+| `classroom_automation_events` | `classroomAutomationEvents` | classrooms | event inside one automation batch (the reconciliation trace) | [Classroom Assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) | 1943-1960 |
+| `classroom_schedule_email_runs` | `classroomScheduleEmailRuns` | classrooms | tutor-schedule email send run for one assignment run | [Classroom Assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) | 2018-2032 |
+| `classroom_schedule_email_recipients` | `classroomScheduleEmailRecipients` | classrooms | tutor recipient inside a schedule email run | [Classroom Assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) | 2034-2051 |
+| `classroom_admin_email_runs` | `classroomAdminEmailRuns` | classrooms | admin notification email run (unique `idempotency_key`) | [Classroom Assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) | 2053-2073 |
+| `classroom_admin_email_recipients` | `classroomAdminEmailRecipients` | classrooms | recipient inside an admin email run | [Classroom Assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) | 2075-2089 |
+| `payroll_sync_runs` | `payrollSyncRuns` | payroll | payroll-month sync attempt; single-running guard across all months | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) | 1760-1778 |
+| `payroll_reviews` | `payrollReviews` | payroll | payroll month (unique `payroll_month`) — its draft/approved review state | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) | 1780-1794 |
+| `payroll_teacher_tiers` | `payrollTeacherTiers` | payroll | unique (`payroll_month`, `wise_teacher_id`) — the tier observed that month | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) | 1796-1810 |
+| `payroll_payout_invoices` | `payrollPayoutInvoices` | payroll | Wise payout event (unique `event_id`) | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) | 1812-1838 |
+| `payroll_session_observations` | `payrollSessionObservations` | payroll | unique (`payroll_month`, `wise_session_id`) — the taught-hours evidence | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) | 1840-1865 |
+| `payroll_adjustments` | `payrollAdjustments` | payroll | manual correction entered against a payroll month | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) | 1867-1883 |
+| `payroll_rate_card_versions` | `payrollRateCardVersions` | payroll | rate-card version; partial unique permits at most one `active` | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) | 1885-1900 |
+| `payroll_rate_rules` | `payrollRateRules` | payroll | unique (`version_id`, `student_band`, `normalized_course_key`, `tier_key`) — one expected rate | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) | 1902-1919 |
+| `tutor_contacts` | `tutorContacts` | tutor-profiles | tutor `canonical_key` (unique) — contact details and delivery-email overrides; not snapshot-scoped | [Tutor Profiles](../../features/tutor-profiles.md) | [tutor-profiles](./erd-tutor-profiles.md) | 1962-1980 |
+| `tutor_business_profiles` | `tutorBusinessProfiles` | tutor-profiles | tutor `canonical_key` (PK) — editorial parent-safe summary, fit, tags | [Tutor Profiles](../../features/tutor-profiles.md) | [tutor-profiles](./erd-tutor-profiles.md) | 1982-2016 |
+| `leave_request_sync_runs` | `leaveRequestSyncRuns` | leave-requests | Google-Sheet sync attempt; single-running guard | [Leave Requests](../../features/leave-requests.md) | [leave-requests](./erd-leave-requests.md) | 2093-2111 |
+| `leave_requests` | `leaveRequests` | leave-requests | source sheet row — unique (`spreadsheet_id`, `sheet_name`, `source_row_number`) | [Leave Requests](../../features/leave-requests.md) | [leave-requests](./erd-leave-requests.md) | 2113-2169 |
+| `leave_request_affected_sessions` | `leaveRequestAffectedSessions` | leave-requests | unique (`leave_request_id`, `wise_session_id`) the leave window overlaps | [Leave Requests](../../features/leave-requests.md) | [leave-requests](./erd-leave-requests.md) | 2171-2200 |
+| `leave_request_activity_logs` | `leaveRequestActivityLogs` | leave-requests | action taken on a leave request; append-only | [Leave Requests](../../features/leave-requests.md) | [leave-requests](./erd-leave-requests.md) | 2202-2216 |
+| `leave_request_notifications` | `leaveRequestNotifications` | leave-requests | outbound notification (unique `idempotency_key`) | [Leave Requests](../../features/leave-requests.md) | [leave-requests](./erd-leave-requests.md) | 2218-2234 |
+| `proposal_bundles` | `proposalBundles` | ai-and-proposals | bundle of tentative holds offered to one student/parent (`student_label` is free text, not an FK) | [Proposals](../../features/proposals.md) | [ai-and-proposals](./erd-ai-and-proposals.md) | 2300-2310 |
+| `proposal_items` | `proposalItems` | ai-and-proposals | held tutor slot inside a bundle; never written back to Wise | [Proposals](../../features/proposals.md) | [ai-and-proposals](./erd-ai-and-proposals.md) | 2312-2340 |
+| `ai_scheduler_conversations` | `aiSchedulerConversations` | ai-and-proposals | scheduler chat workspace | [AI Scheduler](../../features/ai-scheduler.md) | [ai-and-proposals](./erd-ai-and-proposals.md) | 2344-2363 |
+| `ai_scheduler_messages` | `aiSchedulerMessages` | ai-and-proposals | message in a conversation (`admin`/`parent`/`assistant`/`system`) | [AI Scheduler](../../features/ai-scheduler.md) | [ai-and-proposals](./erd-ai-and-proposals.md) | 2365-2381 |
+| `ai_scheduler_runs` | `aiSchedulerRuns` | ai-and-proposals | one parse + solve run; `input_preview_redacted` is the only inbound text retained | [AI Scheduler](../../features/ai-scheduler.md) | [ai-and-proposals](./erd-ai-and-proposals.md) | 2383-2405 |
+| `ai_scheduler_feedback` | `aiSchedulerFeedback` | ai-and-proposals | human accept/edit/reject action on a run, optionally tied to a LINE review | [AI Scheduler](../../features/ai-scheduler.md) | [ai-and-proposals](./erd-ai-and-proposals.md) | 2407-2430 |
+| `line_contacts` | `lineContacts` | line | LINE user (unique `line_user_id`) | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 2434-2450 |
+| `line_threads` | `lineThreads` | line | LINE user's conversation (unique `line_user_id`), optionally bound to a scheduler chat | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 2452-2466 |
+| `line_messages` | `lineMessages` | line | LINE message (unique `webhook_event_id`, unique `line_message_id`) plus its classifier verdict | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 2468-2501 |
+| `line_contact_student_links` | `lineContactStudentLinks` | line | unique (`contact_id`, `student_key`) — suggested/verified/rejected identity link | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 2503-2542 |
+| `line_scheduler_reviews` | `lineSchedulerReviews` | line | inbound message routed to human review (unique `inbound_message_id`) | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 2544-2591 |
+| `line_wise_action_logs` | `lineWiseActionLogs` | line | proposed or executed Wise action from a review; `dry_run` defaults true | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 2593-2608 |
+| `line_oa_resolver_runs` | `lineOaResolverRuns` | line | resolver worklist session (unique `token_hash`, hash only) with an expiry | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 2610-2634 |
+| `line_oa_resolver_rows` | `lineOaResolverRows` | line | unique (`run_id`, `student_key`, `search_code`) — one lookup task | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 2636-2661 |
+| `line_backlog_recovery_sync_runs` | `lineBacklogRecoverySyncRuns` | line | follower backlog-recovery attempt; single-running guard | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 2663-2681 |
+| `line_schedule_bot_pending` | `lineScheduleBotPending` | line | pending confirm — unique (`line_user_id`, `scope_key`); `scope_key` is the group id, or the literal `"dm"` | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 4660-4678 |
+| `line_group_settings` | `lineGroupSettings` | line | LINE group id (PK) — its `audience` (`family` → Thai parent template, `staff` → English admin template); selects wording only, grants nothing | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 4689-4696 |
+| `line_group_schedule_sends` | `lineGroupScheduleSends` | line | schedule link delivered into a group; doubles as the "has this group seen this student?" confirm lookup | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 4707-4719 |
+| `room_capacity_model_runs` | `roomCapacityModelRuns` | room-capacity | imported forecast model run (unique `source_fingerprint`) | [Room Capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) | 2726-2738 |
+| `room_capacity_forecast_drivers` | `roomCapacityForecastDrivers` | room-capacity | model run × scenario × month — leads, revenue, hours, utilization | [Room Capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) | 2740-2761 |
+| `room_capacity_demand_mix` | `roomCapacityDemandMix` | room-capacity | session-shape bucket in a model run (weekday, start, duration, mode, size) | [Room Capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) | 2763-2779 |
+| `room_capacity_package_mix` | `roomCapacityPackageMix` | room-capacity | package-hour bucket in a model run — its share and average revenue | [Room Capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) | 2781-2795 |
 
-Line ranges: `schema.ts:270-446`.
+## Snapshot scoping
 
-| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
-|---|---|---|---|---|---|
-| `sales_dashboard_sources` | `salesDashboardSources` | sales-dashboard | one monthly Google-Sheet sales source (unique active source per `source_month`) (`schema.ts:270-300`) | [Sales dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) |
-| `sales_dashboard_import_runs` | `salesDashboardImportRuns` | sales-dashboard | one sales import run; single `running` per source (`schema.ts:302-321`) | [Sales dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) |
-| `sales_dashboard_normal_rows` | `salesDashboardNormalRows` | sales-dashboard | one normalized "normal" sales row (unique on `import_run_id`+`row_number`) (`schema.ts:323-348`) | [Sales dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) |
-| `sales_dashboard_additional_rows` | `salesDashboardAdditionalRows` | sales-dashboard | one "additional" sales row (unique on `import_run_id`+`row_number`) (`schema.ts:350-368`) | [Sales dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) |
-| `sales_dashboard_projection_sources` | `salesDashboardProjectionSources` | sales-dashboard | one projection-workbook source (single `active`) (`schema.ts:370-393`) | [Sales dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) |
-| `sales_dashboard_projection_import_runs` | `salesDashboardProjectionImportRuns` | sales-dashboard | one projection import run; single `running` per source (`schema.ts:395-413`) | [Sales dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) |
-| `sales_dashboard_projection_months` | `salesDashboardProjectionMonths` | sales-dashboard | one projected month per scenario (unique on `import_run_id`+`scenario`+`projection_month`) (`schema.ts:415-443`) | [Sales dashboard](../../features/sales-dashboard.md) | [sales-dashboard](./erd-sales-dashboard.md) |
+Exactly **13** tables carry a `snapshotId` column referencing `snapshots.id`, and are therefore
+rewritten per ETL run:
 
-### Credit Control
+`sync_runs` (both `snapshot_id` and `promoted_snapshot_id`) · `tutor_identity_groups` ·
+`tutor_identity_group_members` · `tutors` · `raw_teacher_tags` · `subject_level_qualifications` ·
+`recurring_availability_windows` · `dated_leaves` · `future_session_blocks` · `data_issues` ·
+`snapshot_stats` · `classroom_assignment_runs` · `classroom_assignment_rows`
+(`leave_request_affected_sessions` also references `snapshots.id`, but nullably — it pins the
+snapshot a match was computed against rather than being scoped to it).
 
-Line ranges: `schema.ts:447-610`.
+**Every other table is snapshot-independent** and survives snapshot rotation, either because it has
+no snapshot lineage at all (`admin_users`, `google_oauth_tokens`, `tutor_aliases`, the whole
+`admissions_*`, `competitor_*`, `ipeds_*`, `post_class_*`, `payroll_*`, `sales_dashboard_*`,
+`room_capacity_*`, `line_*`, `leave_request*`, `proposal_*`, `ai_scheduler_*`, and
+`progress_test_*` families) or because it is keyed by a durable natural key
+(`past_session_blocks.wise_session_id`, `room_utilization_sessions.wise_session_id`, the five
+credit-control sidecars keyed by `student_key`, the two tutor-profile tables keyed by
+`canonical_key`). The credit-control tables carry a `snapshot_id`, but to
+`credit_control_snapshots` — an independent lineage, not the Wise ETL one.
 
-| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
-|---|---|---|---|---|---|
-| `credit_control_snapshots` | `creditControlSnapshots` | credit-control | one credit-control snapshot; `active` flag (`schema.ts:447-457`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
-| `credit_control_sync_runs` | `creditControlSyncRuns` | credit-control | one credit-control sync run; single `running` guard (`schema.ts:459-477`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
-| `credit_control_students` | `creditControlStudents` | credit-control | one student per snapshot (unique on `snapshot_id`+`wise_student_id`) (`schema.ts:479-492`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
-| `credit_control_packages` | `creditControlPackages` | credit-control | one class+student package per snapshot (unique on `snapshot_id`+`wise_class_id`+`wise_student_id`) (`schema.ts:494-517`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
-| `credit_control_sessions` | `creditControlSessions` | credit-control | one session+student per snapshot (unique on `snapshot_id`+`wise_session_id`+`wise_student_id`) (`schema.ts:519-543`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
-| `credit_control_credit_history` | `creditControlCreditHistory` | credit-control | one credit-history entry per snapshot (unique on snapshot+history+student+class) (`schema.ts:545-562`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
-| `credit_control_follow_up_state` | `creditControlFollowUpState` | credit-control | current follow-up status per student (PK = `student_key`); snapshot-independent (`schema.ts:564-574`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
-| `credit_control_follow_up_log` | `creditControlFollowUpLog` | credit-control | one follow-up action event (PK = `event_id`) (`schema.ts:576-589`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
-| `credit_control_inactive_students` | `creditControlInactiveStudents` | credit-control | one student manually marked inactive (PK = `student_key`) (`schema.ts:591-597`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
-| `credit_control_admin_ownership` | `creditControlAdminOwnership` | credit-control | one admin-owner assignment per student (PK = `student_key`) (`schema.ts:599-607`) | [Credit control](../../features/credit-control.md) | [credit-control](./erd-credit-control.md) |
+Three deviations are documented in the schema itself and worth knowing: `past_session_blocks`
+(`schema.ts:2236-2254`) and the progress-test pair (`schema.ts:2797-2811`) both store a nullable,
+**non-FK** `*_snapshot_id` for provenance so snapshots can be pruned without cascading.
 
-### Student Promotions
+## Where the rest of the detail lives
 
-Line ranges: `schema.ts:1065-1243`.
+- **Columns, types, defaults, indexes, check constraints** — [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts), at the line ranges in the table above. That file is the source of truth; nothing else restates it.
+- **Enum value sets** — [`enums.md`](./enums.md).
+- **Relationships and diagrams** — the `erd-*.md` page named in the ERD column.
+- **Migrations** — [`drizzle/`](../../../drizzle), applied with `npm run db:migrate`.
+- **Feature meaning, rules, and flows** — [`docs/features/`](../../features/).
+- **Endpoint mechanics** — [`docs/reference/api/index.md`](../api/index.md).
 
-| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
-|---|---|---|---|---|---|
-| `student_promotion_runs` | `studentPromotionRuns` | student-promotions | one audited dry-run/apply ledger for a target date (`schema.ts:649-679`) | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
-| `student_promotion_grade_actions` | `studentPromotionGradeActions` | student-promotions | one potential Wise registration grade update per accepted student within a run (`schema.ts:682-704`) | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
-| `student_promotion_course_actions` | `studentPromotionCourseActions` | student-promotions | one potential Wise class-subject update per class within a run (`schema.ts:706-733`) | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
-| `student_promotion_future_session_actions` | `studentPromotionFutureSessionActions` | student-promotions | one July 1+ future Wise session subject audit/update candidate per run and Wise session | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
-| `student_promotion_graduation_actions` | `studentPromotionGraduationActions` | student-promotions | one required Year 13 graduate disposition review per accepted student in a run | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
-| `student_promotion_pay_rate_impacts` | `studentPromotionPayRateImpacts` | student-promotions | one pay-rate review row per teacher + class + student band + current/target course pair | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
-
-### Post-Class Feedback
-
-Line range: `schema.ts:3125-3900`. The feature also adds `tutor_contacts.primary_email` without changing that table's grain. The 24-table base is in [`0055_post_class_feedback.sql`](../../../drizzle/0055_post_class_feedback.sql); payout lifecycle and dedicated-tab durability are extended by migrations `0057`, `0059`, and `0060`. Business meaning is in the [feature guide](../../features/post-class-feedback.md).
-
-| Table | Const | Domain | Grain (one row per …) | Owning feature | Reference |
-|---|---|---|---|---|---|
-| `post_class_enforcement_windows` | `postClassEnforcementWindows` | post-class-feedback | one prospective shadow/live/paused enforcement interval; at most one open window | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_settings` | `postClassSettings` | post-class-feedback | the singleton current operational settings projection (`id='default'`) | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_field_mappings` | `postClassFieldMappings` | post-class-feedback | one logical feedback field mapping in a mapping version | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_access_grants` | `postClassAccessGrants` | post-class-feedback | one feature capability granted to one allowlisted admin | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_config_audit_log` | `postClassConfigAuditLog` | post-class-feedback | one immutable configuration/access/AI-review audit event | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_digest_recipients` | `postClassDigestRecipients` | post-class-feedback | one configured admin-digest email | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_sync_runs` | `postClassSyncRuns` | post-class-feedback | one collector run and its inclusive Bangkok date window; single `running` guard | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_sessions` | `postClassSessions` | post-class-feedback | one canonical projection per Wise session (`wise_session_id` unique) | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_session_participants` | `postClassSessionParticipants` | post-class-feedback | one student participant within one tracked session | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_feedback_versions` | `postClassFeedbackVersions` | post-class-feedback | one immutable observed submission/content-hash version within a session | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_feedback_event_links` | `postClassFeedbackEventLinks` | post-class-feedback | one Wise feedback activity event associated with a session and optional version | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_assessments` | `postClassAssessments` | post-class-feedback | one immutable deterministic assessment key for a session/policy/mapping/evidence state | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_source_issues` | `postClassSourceIssues` | post-class-feedback | one deduplicated global/session source issue fingerprint | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_notification_runs` | `postClassNotificationRuns` | post-class-feedback | one idempotent tutor-reminder or admin-digest run | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_notification_deliveries` | `postClassNotificationDeliveries` | post-class-feedback | one grouped recipient delivery within a notification run | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_notification_items` | `postClassNotificationItems` | post-class-feedback | one tracked session included in a grouped delivery | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_notification_attempts` | `postClassNotificationAttempts` | post-class-feedback | one durable relay attempt number for a delivery | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_ai_runs` | `postClassAiRuns` | post-class-feedback | one de-identified quality-model request per immutable feedback version/prompt identity | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_ai_concerns` | `postClassAiConcerns` | post-class-feedback | one AI quality dimension concern within a run | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_ai_reviews` | `postClassAiReviews` | post-class-feedback | one immutable human confirm/dismiss decision for an AI concern | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_finance_periods` | `postClassFinancePeriods` | post-class-feedback | one open/closed feature finance month | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_deductions` | `postClassDeductions` | post-class-feedback | at most one ฿100 deduction decision record per Wise session | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_deduction_actions` | `postClassDeductionActions` | post-class-feedback | one immutable, idempotent review/finance state-transition ledger entry | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_deduction_offsets` | `postClassDeductionOffsets` | post-class-feedback | at most one immutable -฿100 correction offset for a processed deduction | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
-| `post_class_payout_runs` | `postClassPayoutRuns` | post-class-feedback | one durable 26th–25th lifecycle, publish lease, acknowledgment snapshot, CSV state, and close decision per anchor month | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
-| `post_class_payout_tutor_names` | `postClassPayoutTutorNames` | post-class-feedback | one canonical tutor mapped to one or two exact source-ledger identity strings | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
-| `post_class_tutor_payout_sheets` | `postClassTutorPayoutSheets` | post-class-feedback | one validated tutor workbook identity used only by inventory, formula maintenance, and audited date rolling; never by the runtime payout writer | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
-| `post_class_payout_run_lines` | `postClassPayoutRunLines` | post-class-feedback | one immutable negative deduction obligation and its dedicated-tab write outcome within a payout run | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
-| `post_class_payout_adjustments` | `postClassPayoutAdjustments` | post-class-feedback | one append-only positive waiver/reversal correction obligation and external write outcome | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
-| `post_class_payout_exceptions` | `postClassPayoutExceptions` | post-class-feedback | one durable open/resolved finance blocker tied to a run and optional deduction/correction | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
-| `post_class_payout_roll_runs` | `postClassPayoutRollRuns` | post-class-feedback | one audited, resumable attempt to roll the exact registered tutor-workbook fleet to the next 26th–25th window | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
-| `post_class_payout_roll_outcomes` | `postClassPayoutRollOutcomes` | post-class-feedback | one durable before/after date-write outcome per workbook in a payout roll run | [Post-Class Feedback](../../features/post-class-feedback.md) | [payout runs](../../features/post-class-feedback.md#payout-runs) |
-
-### Classrooms — assignment + email
-
-Line ranges: `schema.ts:741-830`, `1016-1056`, `1110-1184`.
-
-| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
-|---|---|---|---|---|---|
-| `classroom_rooms` | `classroomRooms` | classrooms | one physical room in the catalog (unique on `name`); snapshot-independent (`schema.ts:741-754`) | [Classroom assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) |
-| `classroom_assignment_runs` | `classroomAssignmentRuns` | classrooms | one room-assignment run for a Bangkok date (`schema.ts:756-780`) | [Classroom assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) |
-| `classroom_assignment_rows` | `classroomAssignmentRows` | classrooms | one session's room assignment within a run (unique on `run_id`+`wise_session_id`) (`schema.ts:782-827`) | [Classroom assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) |
-| `classroom_publish_jobs` | `classroomPublishJobs` | classrooms | one Wise-publish job for an assignment run (`schema.ts:1016-1036`) | [Classroom assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) |
-| `classroom_automation_events` | `classroomAutomationEvents` | classrooms | one automation/reconciliation event in an assignment batch (`schema.ts:1038-1055`) | [Classroom assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) |
-| `classroom_schedule_email_runs` | `classroomScheduleEmailRuns` | classrooms | one tutor-schedule email run for an assignment run (`schema.ts:1110-1124`) | [Classroom assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) |
-| `classroom_schedule_email_recipients` | `classroomScheduleEmailRecipients` | classrooms | one tutor recipient of a schedule-email run (`schema.ts:1126-1143`) | [Classroom assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) |
-| `classroom_admin_email_runs` | `classroomAdminEmailRuns` | classrooms | one admin-notification email run per date (unique on `idempotency_key`) (`schema.ts:1145-1165`) | [Classroom assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) |
-| `classroom_admin_email_recipients` | `classroomAdminEmailRecipients` | classrooms | one recipient of an admin-email run (`schema.ts:1167-1181`) | [Classroom assignments](../../features/classroom-assignments.md) | [classrooms](./erd-classrooms.md) |
-
-### Payroll
-
-Line ranges: `schema.ts:855-1015`.
-
-| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
-|---|---|---|---|---|---|
-| `payroll_sync_runs` | `payrollSyncRuns` | payroll | one payroll sync run for a month; single `running` guard (`schema.ts:855-873`) | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) |
-| `payroll_reviews` | `payrollReviews` | payroll | one payroll review per month (unique on `payroll_month`) (`schema.ts:875-889`) | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) |
-| `payroll_teacher_tiers` | `payrollTeacherTiers` | payroll | one teacher's tier for a month (unique on `payroll_month`+`wise_teacher_id`) (`schema.ts:891-905`) | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) |
-| `payroll_payout_invoices` | `payrollPayoutInvoices` | payroll | one payout-invoice event (unique on `event_id`) (`schema.ts:907-933`) | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) |
-| `payroll_session_observations` | `payrollSessionObservations` | payroll | one observed teaching session for a month (unique on `payroll_month`+`wise_session_id`) (`schema.ts:935-960`) | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) |
-| `payroll_adjustments` | `payrollAdjustments` | payroll | one manual payroll adjustment for a month (`schema.ts:962-978`) | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) |
-| `payroll_rate_card_versions` | `payrollRateCardVersions` | payroll | one rate-card version; single `active` (`schema.ts:980-995`) | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) |
-| `payroll_rate_rules` | `payrollRateRules` | payroll | one rate rule within a version (unique on version+band+course+tier) (`schema.ts:997-1014`) | [Payroll](../../features/payroll.md) | [payroll](./erd-payroll.md) |
-
-### Tutor Profiles
-
-Line ranges: `schema.ts:1057-1109`.
-
-| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
-|---|---|---|---|---|---|
-| `tutor_contacts` | `tutorContacts` | tutor-profiles | one tutor's contact record (unique on `canonical_key`) (`schema.ts:1057-1072`) | [Tutor profiles](../../features/tutor-profiles.md) | [tutor-profiles](./erd-tutor-profiles.md) |
-| `tutor_business_profiles` | `tutorBusinessProfiles` | tutor-profiles | one tutor's business/teaching profile (PK = `canonical_key`) (`schema.ts:1074-1108`) | [Tutor profiles](../../features/tutor-profiles.md) | [tutor-profiles](./erd-tutor-profiles.md) |
-
-### Leave Requests
-
-Line ranges: `schema.ts:1185-1326`.
-
-| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
-|---|---|---|---|---|---|
-| `leave_request_sync_runs` | `leaveRequestSyncRuns` | leave-requests | one leave-request sheet sync run; single `running` guard (`schema.ts:1185-1203`) | [Leave requests](../../features/leave-requests.md) | [leave-requests](./erd-leave-requests.md) |
-| `leave_requests` | `leaveRequests` | leave-requests | one tutor leave request, keyed to a source sheet row (unique on spreadsheet+sheet+row) (`schema.ts:1205-1261`) | [Leave requests](../../features/leave-requests.md) | [leave-requests](./erd-leave-requests.md) |
-| `leave_request_affected_sessions` | `leaveRequestAffectedSessions` | leave-requests | one Wise session overlapping a leave request (unique on `leave_request_id`+`wise_session_id`) (`schema.ts:1263-1292`) | [Leave requests](../../features/leave-requests.md) | [leave-requests](./erd-leave-requests.md) |
-| `leave_request_activity_logs` | `leaveRequestActivityLogs` | leave-requests | one action/audit entry for a leave request (`schema.ts:1294-1308`) | [Leave requests](../../features/leave-requests.md) | [leave-requests](./erd-leave-requests.md) |
-| `leave_request_notifications` | `leaveRequestNotifications` | leave-requests | one notification email for a leave request (unique on `idempotency_key`) (`schema.ts:1310-1325`) | [Leave requests](../../features/leave-requests.md) | [leave-requests](./erd-leave-requests.md) |
-
-### AI & Proposals
-
-Line ranges: `schema.ts:1392-1522`.
-
-| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
-|---|---|---|---|---|---|
-| `proposal_bundles` | `proposalBundles` | ai-and-proposals | one parent-proposal bundle (local hold) (`schema.ts:1392-1402`) | [Proposals](../../features/proposals.md) | [ai-and-proposals](./erd-ai-and-proposals.md) |
-| `proposal_items` | `proposalItems` | ai-and-proposals | one tutor/time hold within a bundle (`schema.ts:1404-1432`) | [Proposals](../../features/proposals.md) | [ai-and-proposals](./erd-ai-and-proposals.md) |
-| `ai_scheduler_conversations` | `aiSchedulerConversations` | ai-and-proposals | one AI-scheduler conversation (`schema.ts:1436-1455`) | [AI scheduler](../../features/ai-scheduler.md) | [ai-and-proposals](./erd-ai-and-proposals.md) |
-| `ai_scheduler_messages` | `aiSchedulerMessages` | ai-and-proposals | one message in a scheduler conversation (`schema.ts:1457-1473`) | [AI scheduler](../../features/ai-scheduler.md) | [ai-and-proposals](./erd-ai-and-proposals.md) |
-| `ai_scheduler_runs` | `aiSchedulerRuns` | ai-and-proposals | one scheduler model/solver run (audit) (`schema.ts:1475-1497`) | [AI scheduler](../../features/ai-scheduler.md) | [ai-and-proposals](./erd-ai-and-proposals.md) |
-| `ai_scheduler_feedback` | `aiSchedulerFeedback` | ai-and-proposals | one staff feedback/correction event on a scheduler run (`schema.ts:1499-1522`) | [AI scheduler](../../features/ai-scheduler.md) | [ai-and-proposals](./erd-ai-and-proposals.md) |
-
-### LINE
-
-Line ranges: `schema.ts:1526-1740`.
-
-| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
-|---|---|---|---|---|---|
-| `line_contacts` | `lineContacts` | line | one LINE contact (unique on `line_user_id`) (`schema.ts:1526-1542`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
-| `line_threads` | `lineThreads` | line | one LINE conversation thread per contact (unique on `line_user_id`) (`schema.ts:1544-1558`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
-| `line_messages` | `lineMessages` | line | one LINE message (unique on `webhook_event_id` and `line_message_id`) (`schema.ts:1560-1593`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
-| `line_contact_student_links` | `lineContactStudentLinks` | line | one contact→student link (unique on `contact_id`+`student_key`) (`schema.ts:1595-1621`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
-| `line_scheduler_reviews` | `lineSchedulerReviews` | line | one scheduler review for an inbound LINE message (unique on `inbound_message_id`) (`schema.ts:1623-1670`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
-| `line_wise_action_logs` | `lineWiseActionLogs` | line | one Wise writeback action attempted from a LINE review (`schema.ts:1672-1687`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
-| `line_oa_resolver_runs` | `lineOaResolverRuns` | line | one OA-resolver run (unique on `token_hash`) (`schema.ts:1689-1713`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
-| `line_oa_resolver_rows` | `lineOaResolverRows` | line | one student worklist row in a resolver run (unique on run+student+code) (`schema.ts:1715-1740`) | [LINE integration](../../features/line-integration.md) | [line](./erd-line.md) |
-
-### Room Capacity
-
-Line ranges: `schema.ts:1785-1858`.
-
-| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
-|---|---|---|---|---|---|
-| `room_capacity_model_runs` | `roomCapacityModelRuns` | room-capacity | one capacity-forecast model run (unique on `source_fingerprint`) (`schema.ts:1785-1797`) | [Room capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) |
-| `room_capacity_forecast_drivers` | `roomCapacityForecastDrivers` | room-capacity | one scenario+month forecast driver row within a model run (`schema.ts:1799-1820`) | [Room capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) |
-| `room_capacity_demand_mix` | `roomCapacityDemandMix` | room-capacity | one weekday/time demand-mix bucket within a model run (`schema.ts:1822-1838`) | [Room capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) |
-| `room_capacity_package_mix` | `roomCapacityPackageMix` | room-capacity | one package-hour bucket within a model run (`schema.ts:1840-1858`) | [Room capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) |
-
-### University Admissions
-
-Line ranges: enums `schema.ts:314-429`, tables `schema.ts:3564-4227`. Owning feature: University Admissions case management (design: [`docs/casemanagementsystem_design.md`](../../casemanagementsystem_design.md); API: [university-admissions.md](../api/university-admissions.md)). All 36 tables are snapshot-independent; `wise_student_key` and `unit_id` are soft references, never FKs.
-
-| Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
-|---|---|---|---|---|---|
-| `admissions_cohorts` | `admissionsCohorts` | admissions | one graduating-class cohort (unique on `name`) (`schema.ts:2989-2998`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_students` | `admissionsStudents` | admissions | one student identity record, soft-deletable (`schema.ts:3000-3017`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_cases` | `admissionsCases` | admissions | one admissions case; at most one live (`active`/`committed`) case per student via a partial unique index (`schema.ts:3019-3037`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_case_members` | `admissionsCaseMembers` | admissions | one email's membership on one case (unique on `case_id`+`email`) (`schema.ts:3039-3063`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_counselors` | `admissionsCounselors` | admissions | one global counselor registry row (unique on `email`; `active` gates sign-in) (`schema.ts:3065-3074`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_checklist_templates` | `admissionsChecklistTemplates` | admissions | one checklist-template version per cohort (unique on `cohort_id`+`version`) (`schema.ts:3076-3086`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_template_items` | `admissionsTemplateItems` | admissions | one checklist item within a template version (`schema.ts:3088-3102`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_case_tasks` | `admissionsCaseTasks` | admissions | one checklist task on a case (template-derived or custom) (`schema.ts:3104-3126`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_case_meetings` | `admissionsCaseMeetings` | admissions | one logged counselor meeting on a case (`schema.ts:3128-3141`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_college_list_items` | `admissionsCollegeListItems` | admissions | one college on a case's application list (IPEDS `unit_id` soft ref or manual entry) (`schema.ts:3143-3166`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_college_research` | `admissionsCollegeResearch` | admissions | at most one structured research and fit record per college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_interest_events` | `admissionsInterestEvents` | admissions | one demonstrated-interest event for a college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_college_requirements` | `admissionsCollegeRequirements` | admissions | one non-canonical requirement for a college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_financial_aid_offers` | `admissionsFinancialAidOffers` | admissions | at most one financial-aid comparison record per college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_scholarships` | `admissionsScholarships` | admissions | one case scholarship, optionally linked to a college-list item | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_application_events` | `admissionsApplicationEvents` | admissions | one append-only decision event on a list item (`schema.ts:3168-3178`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_recommenders` | `admissionsRecommenders` | admissions | one recommendation writer for a case (`schema.ts:3180-3192`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_recommender_colleges` | `admissionsRecommenderColleges` | admissions | one recommender↔college link with submission state (unique on `recommender_id`+`list_item_id`) (`schema.ts:3194-3205`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_college_docs` | `admissionsCollegeDocs` | admissions | one supporting-doc send state per list item + `doc_type` (`schema.ts:3207-3218`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_essays` | `admissionsEssays` | admissions | one essay-tracker row on a case (soft `list_item_id` link) (`schema.ts:3220-3235`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_essay_prompt_catalog` | `admissionsEssayPromptCatalog` | admissions | one institution/program/cycle prompt-catalog row | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_activities` | `admissionsActivities` | admissions | one extracurricular activity on the student-owned list (`schema.ts:3237-3251`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_awards` | `admissionsAwards` | admissions | one honors or award record, separate from activities | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_test_sittings` | `admissionsTestSittings` | admissions | one standardized-test sitting for a case (`schema.ts:3253-3267`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_academic_records` | `admissionsAcademicRecords` | admissions | one academic-record payload per case + grading `system` + `effective_date` (`schema.ts:3269-3279`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_notes` | `admissionsNotes` | admissions | one case note with a mandatory explicit visibility (`schema.ts:3281-3294`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_announcements` | `admissionsAnnouncements` | admissions | one announcement targeting a cohort **xor** a case (CHECK constraint) (`schema.ts:3296-3314`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_resources` | `admissionsResources` | admissions | one link in the global resource library (`schema.ts:3316-3327`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_self_report_sections` | `admissionsSelfReportSections` | admissions | one guided self-report section per case (unique on `case_id`+`section_key`) (`schema.ts:3329-3342`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_audit_log` | `admissionsAuditLog` | admissions | one append-only audit entry per admissions write (`schema.ts:3344-3358`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_notification_log` | `admissionsNotificationLog` | admissions | one sent notification email (partial-unique `dedupe_key` for exactly-once sends) (`schema.ts:3360-3379`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_notification_outbox` | `admissionsNotificationOutbox` | admissions | one transactionally queued and retryable notification | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_notification_runs` | `admissionsNotificationRuns` | admissions | one daily/weekly notification-cron run; single `running` guard (`schema.ts:3381-3396`) | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_import_runs` | `admissionsImportRuns` | admissions | one case, spreadsheet, and source-fingerprint import ledger | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_import_issues` | `admissionsImportIssues` | admissions | one validation or resolution issue for an import run | University Admissions | [university-admissions](./erd-university-admissions.md) |
-| `admissions_import_mappings` | `admissionsImportMappings` | admissions | one source-key to target-record mapping within an import run | University Admissions | [university-admissions](./erd-university-admissions.md) |
-
-## Notes & caveats
-
-- **Domain vs. owning feature.** `room_utilization_sessions` is grouped in the **core**
-  domain (it is a snapshot-independent Wise-session capture defined in the core section
-  of `schema.ts`), but it is written and read by
-  [`src/lib/room-capacity/utilization.ts`](../../../src/lib/room-capacity/utilization.ts),
-  so its owning feature is Room capacity. Similarly `google_oauth_tokens` is a core/auth
-  table but is exercised by the Sales Dashboard and Leave Requests Google integrations.
-- **Snapshot scoping.** Tables in the Core (tutor/normalization) and Credit Control
-  sections carry a `snapshotId`/`snapshot_id` FK; their grain is *within a snapshot*. The
-  exceptions are flagged inline above and in [erd-core.md](./erd-core.md).
-- **Enums.** Several `status`/`category`/`role` columns are Postgres enums declared at the
-  top of `schema.ts` (`schema.ts:19-161`); their allowed values are listed on the relevant
-  `erd-*.md` page, not here.
-
-_Verified against the release schema after production migrations `0053–0054` and the Post-Class Feedback schema reconciliation on 2026-07-21._
+_Verified against HEAD + uncommitted WIP on 2026-05-31._
