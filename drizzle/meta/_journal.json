@@ -449,6 +449,13 @@
       "when": 1785869029776,
       "tag": "0063_student_schedule_links",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1785893228151,
+      "tag": "0064_line_group_settings",
+      "breakpoints": true
     }
   ]
 }

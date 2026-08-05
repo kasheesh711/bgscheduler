@@ -280,12 +280,53 @@ export function adminScheduleLinkReply({
   ].join("\n");
 }
 
+/**
+ * One-time setup question, asked the first time the bot is used in a chat.
+ *
+ * Folds the audience question together with the first student's confirmation:
+ * the FAMILY/STAFF reply both registers the chat and authorises that first
+ * post, so a new group costs one extra message rather than two.
+ */
+export function groupSetupPrompt({
+  studentName,
+  code,
+  monthKey,
+  sessionCount,
+}: {
+  studentName: string;
+  code: string | null;
+  monthKey: string;
+  sessionCount: number;
+}): string {
+  const who = code ? `${studentName} (${code})` : studentName;
+  return [
+    "First time I've been used in this chat.",
+    "",
+    "Reply FAMILY if a parent can read what I post here,",
+    "or STAFF if this chat is internal only.",
+    "",
+    `I'll then post: 📅 ${who} · ${formatMonthLabel(monthKey)} · ${sessionCount} ${sessionCount === 1 ? "class" : "classes"}`,
+  ].join("\n");
+}
+
+export function groupAudienceSet(audience: "family" | "staff"): string {
+  return audience === "family"
+    ? "Got it — this is a family chat, so I'll post schedules in Thai for the parent."
+    : "Got it — staff chat. I'll post schedules in English with the class count.";
+}
+
+export const GROUP_SETUP_NEEDED = [
+  "This chat isn't set up yet.",
+  "Send /schedule with a student code and I'll ask which kind of chat it is.",
+].join("\n");
+
 export const GROUP_PENDING_EXPIRED = "That confirmation expired. Send /schedule with the student code again.";
 export const GROUP_CANCELLED = "Cancelled — nothing was sent.";
 export const GROUP_HELP = [
-  "/schedule Aadhu.Sr — I reply here with a link to that student's schedule.",
+  "/schedule Aadhu.Sr — post that student's schedule here.",
   "/schedule Aadhu.Sr 2026-09 — a specific month.",
-  "/schedule Aadhu.Sr send — send it straight to the parent (needs a verified LINE contact).",
+  "/schedule setup family — a parent can read this chat (Thai messages).",
+  "/schedule setup staff — internal chat (English messages).",
 ].join("\n");
 export const GROUP_SEND_FAILED = "Couldn't post the schedule just now. Please try again.";
 export const GROUP_NO_SNAPSHOT = "Schedule data isn't available right now. Please try again shortly.";

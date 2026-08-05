@@ -4678,6 +4678,24 @@ export const lineScheduleBotPending = pgTable("line_schedule_bot_pending", {
 ]);
 
 /**
+ * Per-group audience for the schedule bot, set once by an admin the first time
+ * the bot is used in that chat.
+ *
+ * The bot cannot tell a family group (a parent reads whatever it posts) from a
+ * staff coordination group, and the two need different wording. Rather than
+ * guess, it asks once and remembers. `audience` selects the template only — it
+ * grants nothing and relaxes no gate.
+ */
+export const lineGroupSettings = pgTable("line_group_settings", {
+  groupId: text("group_id").primaryKey(),
+  /** "family" → Thai parent template · "staff" → English admin template. */
+  audience: text("audience").notNull(),
+  setByLineUserId: text("set_by_line_user_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
  * Every schedule link delivered into a LINE group.
  *
  * Doubles as the audit log and as the "has this group already received this

@@ -27,6 +27,23 @@ export const YES_PATTERN = /^(yes|y|ยืนยัน|ใช่|ok|okay)$/i;
 export const NO_PATTERN = /^(no|n|cancel|ยกเลิก|ไม่)$/i;
 export const HELP_PATTERN = /^(help|\?|ช่วย)$/i;
 
+/**
+ * Answers to the one-time "is this chat family-facing or staff-only?" question,
+ * and the `setup <audience>` verb that changes it later.
+ */
+export const FAMILY_PATTERN = /^(family|parent|ครอบครัว|ผู้ปกครอง)$/i;
+export const STAFF_PATTERN = /^(staff|internal|admin|ทีมงาน)$/i;
+export const SETUP_PATTERN = /^setup\s+(family|parent|staff|internal|admin)$/i;
+
+export type GroupAudience = "family" | "staff";
+
+/** Maps a FAMILY/STAFF reply (or a `setup <x>` argument) to the stored value. */
+export function parseAudience(value: string): GroupAudience | null {
+  if (FAMILY_PATTERN.test(value)) return "family";
+  if (STAFF_PATTERN.test(value)) return "staff";
+  return null;
+}
+
 export type TriggerKind = "prefix" | "mention" | "none";
 
 /**

@@ -45,9 +45,12 @@ import {
   COMMAND_PATTERN,
   HELP_PATTERN,
   NO_PATTERN,
+  SETUP_PATTERN,
   YES_PATTERN,
   detectTrigger,
   exactCodeMatches,
+  parseAudience,
+  type GroupAudience,
   type TriggerKind,
 } from "@/lib/line/schedule-bot-command";
 import { isScheduleBotAdmin } from "@/lib/line/schedule-bot";
@@ -68,8 +71,11 @@ import {
   GROUP_NO_SNAPSHOT,
   GROUP_PENDING_EXPIRED,
   GROUP_SEND_FAILED,
+  GROUP_SETUP_NEEDED,
   adminScheduleLinkReply,
+  groupAudienceSet,
   groupConfirmPrompt,
+  groupSetupPrompt,
   groupEmptyMonth,
   groupNotExactCode,
   parentSchedulePushMessage,
@@ -95,6 +101,8 @@ export interface GroupBotResult {
     | "help"
     | "not_exact"
     | "empty_month"
+    | "awaiting_setup"
+    | "audience_set"
     | "awaiting_confirm"
     | "sent"
     | "cancelled"
@@ -139,6 +147,36 @@ async function say(
     }
   }
   await deps.push({ to: groupId, text });
+}
+
+/** The chat's audience, or null when it has never been set up (GRP-BOT-06). */
+export async function groupAudience(
+  db: Database,
+  groupId: string,
+): Promise<GroupAudience | null> {
+  const [row] = await db
+    .select({ audience: schema.lineGroupSettings.audience })
+    .from(schema.lineGroupSettings)
+    .where(eq(schema.lineGroupSettings.groupId, groupId))
+    .limit(1);
+  if (!row) return null;
+  return row.audience === "family" ? "family" : "staff";
+}
+
+async function setGroupAudience(
+  db: Database,
+  groupId: string,
+  audience: GroupAudience,
+  setByLineUserId: string,
+  now: Date,
+): Promise<void> {
+  await db
+    .insert(schema.lineGroupSettings)
+    .values({ groupId, audience, setByLineUserId, createdAt: now, updatedAt: now })
+    .onConflictDoUpdate({
+      target: schema.lineGroupSettings.groupId,
+      set: { audience, setByLineUserId, updatedAt: now },
+    });
 }
 
 /** True when this group has already received this student's schedule (GRP-BOT-04). */
@@ -220,6 +258,25 @@ export async function handleScheduleBotGroupCommand(
     await clearPending(db, lineUserId, groupId);
     await say(deps, target, GROUP_CANCELLED);
     return { handled: true, action: "cancelled" };
+  }
+
+  // `setup family|staff` — change a chat's audience at any time.
+  const setupMatch = SETUP_PATTERN.exec(command);
+  if (setupMatch) {
+    const audience = parseAudience(setupMatch[1]);
+    if (audience) {
+      await setGroupAudience(db, groupId, audience, lineUserId, deps.now());
+      await say(deps, target, groupAudienceSet(audience));
+      trace({ groupId, lineUserId, trigger: kind, admin: true, command, outcome: `setup_${audience}` });
+      return { handled: true, action: "audience_set" };
+    }
+  }
+
+  // A bare FAMILY/STAFF answers the one-time setup question, and doubles as the
+  // confirmation for the student that triggered it.
+  const audienceReply = parseAudience(command);
+  if (audienceReply) {
+    return confirmGroupSend(db, deps, target, lineUserId, audienceReply);
   }
 
   if (YES_PATTERN.test(command)) {
@@ -325,24 +382,13 @@ async function startGroupSend(
     return { handled: true, action: "empty_month" };
   }
 
-  // Default path: the link goes back to whoever asked, in the conversation they
-  // asked in. The requester IS the recipient, so there is no third party to
-  // mis-address — GRP-BOT-04's confirm step would be pure friction here and is
-  // skipped. Only the explicit `send` verb targets a parent.
-  if (!pushToParent) {
-    return deliver(db, deps, target, {
-      lineUserId,
-      studentKey: student.studentKey,
-      wiseStudentId: student.wiseStudentId,
-      studentName: student.studentName,
-      monthKey,
-      sessionCount: schedule.sessions.length,
-      audience: "requester",
-    });
-  }
+  const audience = await groupAudience(db, target.groupId);
 
   // GRP-BOT-04 — a student this chat has already received goes straight out.
-  if (await groupHasSeenStudent(db, target.groupId, student.studentKey)) {
+  // Anything else waits for a human: a group may contain a family, so a valid
+  // code typed in the WRONG group would otherwise leak that child's schedule,
+  // which exact-code matching cannot catch.
+  if (audience && !pushToParent && await groupHasSeenStudent(db, target.groupId, student.studentKey)) {
     return deliver(db, deps, target, {
       lineUserId,
       studentKey: student.studentKey,
@@ -350,7 +396,7 @@ async function startGroupSend(
       studentName: student.studentName,
       monthKey,
       sessionCount: schedule.sessions.length,
-      audience: "parent",
+      audience,
     });
   }
 
@@ -382,9 +428,23 @@ async function startGroupSend(
       set: { ...pendingRow, createdAt: now },
     });
 
+  const code = parseStudentDisplay(student.studentName).code;
+
+  // An unregistered chat is asked which audience it is; that reply doubles as
+  // this student's confirmation, so a new group costs one message, not two.
+  if (!audience) {
+    await say(deps, target, groupSetupPrompt({
+      studentName: student.studentName,
+      code,
+      monthKey,
+      sessionCount: schedule.sessions.length,
+    }));
+    return { handled: true, action: "awaiting_setup" };
+  }
+
   await say(deps, target, groupConfirmPrompt({
     studentName: student.studentName,
-    code: parseStudentDisplay(student.studentName).code,
+    code,
     monthKey,
     sessionCount: schedule.sessions.length,
     ttlMinutes: PENDING_TTL_MINUTES,
@@ -393,11 +453,19 @@ async function startGroupSend(
   return { handled: true, action: "awaiting_confirm" };
 }
 
+/**
+ * Acts on a pending request.
+ *
+ * `audienceReply` is set when the admin answered the one-time FAMILY/STAFF
+ * setup question — that registers the chat AND authorises the pending student
+ * in one go. A plain YES confirms against an already-registered chat.
+ */
 async function confirmGroupSend(
   db: Database,
   deps: GroupBotDeps,
   target: { groupId: string; replyToken: string | null },
   lineUserId: string,
+  audienceReply?: GroupAudience,
 ): Promise<GroupBotResult> {
   const now = deps.now();
   const [pending] = await db
@@ -416,6 +484,19 @@ async function confirmGroupSend(
     return { handled: true, action: "pending_expired" };
   }
 
+  if (audienceReply) {
+    await setGroupAudience(db, target.groupId, audienceReply, lineUserId, now);
+  }
+
+  // Registered audience wins; a FAMILY/STAFF reply has just written it.
+  const audience = audienceReply ?? await groupAudience(db, target.groupId);
+  if (!audience) {
+    // A YES with no registered audience — the chat was never set up, so there
+    // is no safe template to choose. Ask rather than guess.
+    await say(deps, target, GROUP_SETUP_NEEDED);
+    return { handled: true, action: "awaiting_setup" };
+  }
+
   return deliver(db, deps, target, {
     lineUserId,
     studentKey: pending.studentKey,
@@ -423,7 +504,7 @@ async function confirmGroupSend(
     studentName: pending.studentName,
     monthKey: pending.monthKey,
     sessionCount: pending.sessionCount,
-    audience: "parent",
+    audience,
   });
 }
 
@@ -431,7 +512,8 @@ async function confirmGroupSend(
  * Mints the link, posts it into the originating conversation, and records the
  * send.
  *
- * `audience` only selects the wording. Either way the message lands in the chat
+ * `audience` only selects the wording — it grants nothing. Either way the
+ * message lands in the chat
  * the command came from — for "requester" that is an admin who will forward it
  * by hand; for "parent" it is the Thai template the family reads directly.
  */
@@ -446,7 +528,7 @@ async function deliver(
     studentName: string;
     monthKey: string;
     sessionCount: number;
-    audience: "requester" | "parent";
+    audience: GroupAudience;
   },
 ): Promise<GroupBotResult> {
   let token: string;
@@ -473,7 +555,7 @@ async function deliver(
 
   const url = studentScheduleLinkUrl(deps.baseUrl, token);
   const display = parseStudentDisplay(student.studentName);
-  const text = student.audience === "parent"
+  const text = student.audience === "family"
     ? parentSchedulePushMessage({
       shortName: display.shortName,
       monthKey: student.monthKey,

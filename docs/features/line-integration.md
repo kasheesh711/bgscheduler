@@ -136,6 +136,20 @@ A separate, parallel flow links contacts to students: the **OA resolver** (`src/
 
 **Destructive cleanup is double-guarded.** `deleteLineTestData` refuses to run unless `confirm === "delete-line-test-data"` and supports a `dryRun` plan (`src/lib/line/test-data-cleanup.ts:211-227`).
 
+### Schedule bot (`/schedule`)
+
+**The bot cannot see messages sent from LINE Official Account Manager.** LINE's webhook event set — Message, Edit, Unsend, Follow, Unfollow, Join, Leave, Member join/leave, Postback, Video viewing complete, Beacon, Account link — is entirely *user*-initiated. There is no event for messages the Official Account itself sends. A staff member typing `/schedule Copter.Th` into an OA Manager chat sends that literal text **to the parent**; the server never sees it and cannot intercept it. No server-side change can alter this. Staff working in OA Manager should instead use `/student-schedule` → **Copy parent link** and paste. Only a browser extension inside `chat.line.biz` (like `extensions/line-oa-resolver/`) could bridge that surface.
+
+**Two working surfaces.** A 1:1 DM to the OA from a staff member's own LINE account, and any group the OA has been added to. Both require the sender's LINE user ID in `LINE_SCHEDULE_BOT_ADMIN_IDS`; a non-allowlisted sender gets **no reply at all**, so a parent cannot discover the bot or probe the student roster with it (`src/lib/line/schedule-bot-group.ts`, `schedule-bot.ts`).
+
+**A command must address the bot.** Either the `/schedule` text prefix or an `isSelf` mention (`detectTrigger`, `src/lib/line/schedule-bot-command.ts`). The mention path only works in the LINE **mobile** app — the desktop and web clients offer no bot in their mention picker — which is why the typed prefix is the primary trigger. Without a trigger, ordinary conversation is ignored and falls through to the normal classifier path.
+
+**Exact code match only.** Anything short of exactly one exact nickname-code hit lists candidates and sends nothing (`exactCodeMatches`). `searchCurrentLineStudents` also ranks substring and parent-name hits, which is right for a web UI but far too loose when the output is a link to a specific child's schedule.
+
+**Groups declare their audience once, and confirm each new student.** The first `/schedule` in a chat asks FAMILY or STAFF, stored in `line_group_settings`; that reply doubles as the first student's confirmation. Thereafter each *new* student in that chat needs a YES before anything is posted, while a student already sent there goes straight through (`line_group_schedule_sends`). This is the guard against a **valid** code typed in the **wrong** family's group — the one mistake exact-code matching cannot catch. `audience` selects the message template only (Thai parent template vs English admin format); it grants nothing and relaxes no gate. DMs skip both steps, because there the requester is the only recipient.
+
+**Only one Official Account can be in a LINE group at a time** — if a group already has another OA, BeGifted cannot join it.
+
 ## Tests
 
 Library unit tests live in `src/lib/line/__tests__/` and cover: webhook ingest/dedupe/retraction (`webhook.test.ts`), signature verification (`signature.test.ts`), the LINE HTTP client incl. push retry-key 409 handling (`client.test.ts`), classifier confidence banding (`confidence.test.ts`), the review service end-to-end incl. promote/approve/reject paths (`review-service.test.ts`), deterministic operational planning (`operational.test.ts`), student-code parsing and matching (`student-links.test.ts`, `contact-aliases.test.ts`), link validation incl. round-robin and lead gating (`link-validation.test.ts`), the OA resolver and its extension-candidate normalization (`oa-resolver.test.ts`, `oa-resolver-extension-candidates.test.ts`), and the test-data cleanup planner (`test-data-cleanup.test.ts`).

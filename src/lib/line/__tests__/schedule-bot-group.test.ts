@@ -219,55 +219,134 @@ describe("GRP-BOT-03 exact code only", () => {
   });
 });
 
-describe("default path — reply to whoever asked", () => {
+/** Select-queue shorthand: [audience lookup, has-seen lookup]. */
+const UNREGISTERED: unknown[][] = [[]];
+const STAFF_GROUP = (seen = false): unknown[][] => [[{ audience: "staff" }], seen ? [{ id: "prior" }] : []];
+const FAMILY_GROUP = (seen = false): unknown[][] => [[{ audience: "family" }], seen ? [{ id: "prior" }] : []];
+
+describe("GRP-BOT-06 per-group audience", () => {
   beforeEach(() => {
     vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
     vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(12) as never);
     vi.mocked(mintStudentScheduleLink).mockResolvedValue(LINK as never);
   });
 
-  it("replies immediately with the link — no confirm step", async () => {
+  it("asks which kind of chat it is before posting anything", async () => {
     const d = deps();
-    const { db } = makeDb();
+    const { db } = makeDb(UNREGISTERED);
+
+    const result = await call(db, d, "/schedule Aadhu.Sr");
+
+    expect(result.action).toBe("awaiting_setup");
+    // Nothing was posted and no link exists yet.
+    expect(mintStudentScheduleLink).not.toHaveBeenCalled();
+    const prompt = d.reply.mock.calls[0][0].text as string;
+    expect(prompt).toContain("FAMILY");
+    expect(prompt).toContain("STAFF");
+    expect(prompt).toContain("Aadhu.Sr");
+    expect(prompt).toContain("12 classes");
+  });
+
+  it("registers the chat and posts the Thai template on FAMILY", async () => {
+    const d = deps();
+    const { db, inserts } = makeDb([[{
+      lineUserId: ADMIN, scopeKey: `group:${GROUP}`, studentKey: "k", wiseStudentId: "stu_1",
+      studentName: "Aadhiya (Aadhu.Sr) Srisethi", monthKey: "2026-08", sessionCount: 12,
+      expiresAt: new Date(NOW.getTime() + 60_000), createdAt: NOW,
+    }]]);
+
+    const result = await call(db, d, "/schedule FAMILY");
+
+    expect(result.action).toBe("sent");
+    const text = d.reply.mock.calls[0][0].text as string;
+    expect(text).toContain("น้องAadhu");
+    expect(text).not.toContain("Srisethi");
+    // The audience was persisted.
+    expect(inserts.some((e) => (e.row as Record<string, unknown>).audience === "family")).toBe(true);
+  });
+
+  it("registers the chat and posts the English template on STAFF", async () => {
+    const d = deps();
+    const { db, inserts } = makeDb([[{
+      lineUserId: ADMIN, scopeKey: `group:${GROUP}`, studentKey: "k", wiseStudentId: "stu_1",
+      studentName: "Aadhiya (Aadhu.Sr) Srisethi", monthKey: "2026-08", sessionCount: 12,
+      expiresAt: new Date(NOW.getTime() + 60_000), createdAt: NOW,
+    }]]);
+
+    const result = await call(db, d, "/schedule STAFF");
+
+    expect(result.action).toBe("sent");
+    const text = d.reply.mock.calls[0][0].text as string;
+    expect(text).toContain("12 classes");
+    expect(text).toContain("https://example.test/schedule/tok_abc");
+    expect(inserts.some((e) => (e.row as Record<string, unknown>).audience === "staff")).toBe(true);
+  });
+
+  it("changes a registered chat's audience with setup", async () => {
+    const d = deps();
+    const { db, inserts } = makeDb();
+    const result = await call(db, d, "/schedule setup staff");
+    expect(result.action).toBe("audience_set");
+    expect(inserts.some((e) => (e.row as Record<string, unknown>).audience === "staff")).toBe(true);
+    expect(mintStudentScheduleLink).not.toHaveBeenCalled();
+  });
+});
+
+describe("GRP-BOT-04 confirm each new student in a chat", () => {
+  beforeEach(() => {
+    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(12) as never);
+    vi.mocked(mintStudentScheduleLink).mockResolvedValue(LINK as never);
+  });
+
+  it("asks before a student this chat has not received before", async () => {
+    // The guard against a VALID code typed in the WRONG family's group, which
+    // exact-code matching cannot catch.
+    const d = deps();
+    const { db } = makeDb(FAMILY_GROUP(false));
+
+    const result = await call(db, d, "/schedule Aadhu.Sr");
+
+    expect(result.action).toBe("awaiting_confirm");
+    expect(mintStudentScheduleLink).not.toHaveBeenCalled();
+    expect(d.reply.mock.calls[0][0].text).toContain("12 classes");
+  });
+
+  it("posts immediately for a student this chat has already received", async () => {
+    const d = deps();
+    const { db } = makeDb(STAFF_GROUP(true));
 
     const result = await call(db, d, "/schedule Aadhu.Sr");
 
     expect(result.action).toBe("sent");
-    expect(d.reply).toHaveBeenCalledTimes(1);
-    const text = d.reply.mock.calls[0][0].text as string;
-    expect(text).toContain("https://example.test/schedule/tok_abc");
-    expect(text).toContain("Aadhu.Sr");
-    expect(text).toContain("12 classes");
+    expect(d.reply.mock.calls[0][0].text).toContain("https://example.test/schedule/tok_abc");
   });
 
-  it("never resolves or messages a parent", async () => {
+  it("posts to the chat, never to a user id", async () => {
     const d = deps();
-    const { db } = makeDb();
+    const { db } = makeDb(STAFF_GROUP(true));
     await call(db, d, "/schedule Aadhu.Sr");
-    // Everything went to the originating chat, nothing to a user id.
     for (const [arg] of d.push.mock.calls) expect(arg.to).toBe(GROUP);
-    expect(vi.mocked(mintStudentScheduleLink).mock.calls[0][1]).toMatchObject({
-      sentToGroupId: GROUP,
-    });
+    expect(vi.mocked(mintStudentScheduleLink).mock.calls[0][1]).toMatchObject({ sentToGroupId: GROUP });
   });
 
   it("works via a mobile mention too", async () => {
     const d = deps();
-    const { db } = makeDb();
+    const { db } = makeDb(STAFF_GROUP(true));
     const result = await call(db, d, "@BeGifted Aadhu.Sr", { message: SELF_MENTION });
     expect(result.action).toBe("sent");
   });
 
   it("accepts an explicit month", async () => {
     const d = deps();
-    const { db } = makeDb();
+    const { db } = makeDb(STAFF_GROUP(true));
     await call(db, d, "/schedule Aadhu.Sr 2026-09");
     expect(vi.mocked(getStudentMonthlySchedule).mock.calls[0][1]).toMatchObject({ monthKey: "2026-09" });
   });
 
   it("falls back to a push at the chat when the reply token has expired", async () => {
     const d = deps(vi.fn().mockRejectedValue(new Error("Invalid reply token")));
-    const { db } = makeDb();
+    const { db } = makeDb(STAFF_GROUP(true));
     const result = await call(db, d, "/schedule Aadhu.Sr");
     expect(result.action).toBe("sent");
     expect(d.push.mock.calls[0][0].to).toBe(GROUP);
@@ -275,8 +354,21 @@ describe("default path — reply to whoever asked", () => {
 
   it("reports failure rather than claiming success when both channels fail", async () => {
     const d = deps(vi.fn().mockRejectedValue(new Error("no")), vi.fn().mockRejectedValue(new Error("no")));
-    const { db } = makeDb();
+    const { db } = makeDb(STAFF_GROUP(true));
     expect((await call(db, d, "/schedule Aadhu.Sr")).action).toBe("send_failed");
+  });
+
+  it("refuses a YES in a chat that was never set up", async () => {
+    const d = deps();
+    const { db } = makeDb([[{
+      lineUserId: ADMIN, scopeKey: `group:${GROUP}`, studentKey: "k", wiseStudentId: "stu_1",
+      studentName: "Aadhiya (Aadhu.Sr) Srisethi", monthKey: "2026-08", sessionCount: 12,
+      expiresAt: new Date(NOW.getTime() + 60_000), createdAt: NOW,
+    }], []]);
+
+    const result = await call(db, d, "/schedule yes");
+    expect(result.action).toBe("awaiting_setup");
+    expect(mintStudentScheduleLink).not.toHaveBeenCalled();
   });
 });
 
@@ -289,7 +381,7 @@ describe("GRP-BOT-04 send verb still confirms", () => {
 
   it("asks before the first send of a student into this chat", async () => {
     const d = deps();
-    const { db, inserts } = makeDb([[]]); // no prior send
+    const { db, inserts } = makeDb([[{ audience: "staff" }]]); // registered, no prior send
 
     const result = await call(db, d, "/schedule Aadhu.Sr send");
 
@@ -319,13 +411,13 @@ describe("GRP-BOT-04 send verb still confirms", () => {
     expect(mintStudentScheduleLink).not.toHaveBeenCalled();
   });
 
-  it("uses the Thai parent template once confirmed", async () => {
+  it("uses the Thai parent template in a family chat once confirmed", async () => {
     const d = deps();
     const { db } = makeDb([[{
       lineUserId: ADMIN, scopeKey: `group:${GROUP}`, studentKey: "k", wiseStudentId: "stu_1",
       studentName: "Aadhiya (Aadhu.Sr) Srisethi", monthKey: "2026-08", sessionCount: 12,
       expiresAt: new Date(NOW.getTime() + 60_000), createdAt: NOW,
-    }], [{ id: "c" }], [{ id: "t" }]]);
+    }], [{ audience: "family" }]]);
 
     const result = await call(db, d, "/schedule yes");
     expect(result.action).toBe("sent");
