@@ -229,10 +229,11 @@ cannot look up their own LINE user id. This is the recipe:
 
 1. The operator adds the BeGifted LINE Official Account as a friend.
 2. The operator DMs the OA one message containing the code word `BGSCHED` plus
-   their name (e.g. `BGSCHED Kittiya`). This writes a `line_contacts` row and
-   fetches their display name via the normal non-admin fall-through path
-   (`src/lib/line/review-service.ts`). The bot stays silent — that is the
-   fail-closed gate working, not a failure.
+   their name (e.g. `BGSCHED Kittiya`). Ingest writes the `line_contacts` row
+   (`upsertLineContact`, `src/lib/line/data.ts:498`), then the normal non-admin
+   fall-through fetches and stores their display name
+   (`src/lib/line/review-service.ts:150`-`151`). The bot stays silent — that is
+   the fail-closed gate working, not a failure.
 3. Run `npm run line:find-user-ids` (§3.3) to print matching DMs and a
    ready-to-paste, de-duplicated `lineUserId` list. Narrow the search with
    `--match=<code>` / `--since=<days>`.
