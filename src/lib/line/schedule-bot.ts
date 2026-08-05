@@ -34,6 +34,7 @@ import * as schema from "@/lib/db/schema";
 import { pushLineTextMessage } from "@/lib/line/client";
 import { searchCurrentLineStudents } from "@/lib/line/student-links";
 import {
+  ANSWER_PATTERN,
   COMMAND_PATTERN,
   HELP_PATTERN,
   NO_PATTERN,
@@ -184,6 +185,19 @@ async function reply(
 /** Confirm state for this module is always DM-scoped; groups use "group:<id>". */
 const DM_SCOPE = "dm";
 
+/** True when a confirmation is outstanding for this admin's DM thread. */
+async function hasPendingDm(db: Database, lineUserId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: schema.lineScheduleBotPending.id })
+    .from(schema.lineScheduleBotPending)
+    .where(and(
+      eq(schema.lineScheduleBotPending.lineUserId, lineUserId),
+      eq(schema.lineScheduleBotPending.scopeKey, DM_SCOPE),
+    ))
+    .limit(1);
+  return Boolean(row);
+}
+
 async function clearPending(db: Database, lineUserId: string): Promise<void> {
   await db
     .delete(schema.lineScheduleBotPending)
@@ -219,8 +233,16 @@ export async function handleScheduleBotCommand(
   // message an admin sends the OA was treated as a student code — typing "ok"
   // got back "No student matches ok" — and it swallowed staff messages that
   // belonged in the normal review queue.
+  // A bare YES/NO is accepted when a confirmation is outstanding, because the
+  // prompt asks for exactly that and does not mention the prefix.
   const trigger = detectTrigger(raw, []);
-  if (trigger.kind === "none") return { handled: false };
+  if (trigger.kind === "none") {
+    if (!ANSWER_PATTERN.test(raw) || !(await hasPendingDm(db, lineUserId))) {
+      return { handled: false };
+    }
+    trigger.kind = "answer";
+    trigger.command = raw;
+  }
   const trimmed = trigger.command;
   if (!trimmed) {
     await reply(deps, lineUserId, ADMIN_HELP);

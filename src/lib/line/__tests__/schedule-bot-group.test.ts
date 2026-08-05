@@ -247,6 +247,56 @@ describe("GRP-BOT-06 per-group audience", () => {
     expect(prompt).toContain("12 classes");
   });
 
+  it("accepts a BARE STAFF reply, exactly as the prompt asks", async () => {
+    // Regression, seen in production: the prompt says "Reply FAMILY or STAFF",
+    // but every message needed the /schedule prefix, so a bare STAFF was
+    // silently dropped and the setup question just repeated.
+    const d = deps();
+    const { db, inserts } = makeDb([
+      [{ expiresAt: new Date(NOW.getTime() + 60_000) }],   // hasPendingQuestion
+      [{
+        lineUserId: ADMIN, scopeKey: `group:${GROUP}`, studentKey: "k", wiseStudentId: "stu_1",
+        studentName: "Teethad (Copter.Th) Thamprida", monthKey: "2026-08", sessionCount: 6,
+        expiresAt: new Date(NOW.getTime() + 60_000), createdAt: NOW,
+      }],
+    ]);
+
+    const result = await call(db, d, "STAFF");
+
+    expect(result.action).toBe("sent");
+    expect(inserts.some((e) => (e.row as Record<string, unknown>).audience === "staff")).toBe(true);
+  });
+
+  it("accepts a bare YES when a confirmation is outstanding", async () => {
+    const d = deps();
+    const { db } = makeDb([
+      [{ expiresAt: new Date(NOW.getTime() + 60_000) }],
+      [{
+        lineUserId: ADMIN, scopeKey: `group:${GROUP}`, studentKey: "k", wiseStudentId: "stu_1",
+        studentName: "Teethad (Copter.Th) Thamprida", monthKey: "2026-08", sessionCount: 6,
+        expiresAt: new Date(NOW.getTime() + 60_000), createdAt: NOW,
+      }],
+      [{ audience: "staff" }],
+    ]);
+
+    expect((await call(db, d, "yes")).action).toBe("sent");
+  });
+
+  it("ignores a bare answer word with no pending question", async () => {
+    // Ordinary conversation must never be read as an answer.
+    const d = deps();
+    const { db } = makeDb([[]]); // no pending row
+    expect(await call(db, d, "ok")).toEqual({ handled: false });
+    expect(sent(d)).toHaveLength(0);
+  });
+
+  it("ignores a bare answer word from a non-admin", async () => {
+    const d = deps();
+    const { db } = makeDb();
+    expect(await call(db, d, "STAFF", { lineUserId: PARENT })).toEqual({ handled: false });
+    expect(sent(d)).toHaveLength(0);
+  });
+
   it("registers the chat and posts the Thai template on FAMILY", async () => {
     const d = deps();
     const { db, inserts } = makeDb([[{

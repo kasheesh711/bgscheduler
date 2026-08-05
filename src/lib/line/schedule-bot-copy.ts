@@ -124,6 +124,19 @@ export interface ScheduleBotCandidate {
 }
 
 /**
+ * "Teethad (Copter.Th) Thamprida" — Wise names already embed the nickname code
+ * in brackets, so appending it again produced "Teethad (Copter.Th) Thamprida
+ * (Copter.Th)". Only append when the name does not already carry it.
+ */
+export function studentLabel(studentName: string, code: string | null): string {
+  const name = studentName.trim();
+  if (!code) return name;
+  return name.toLowerCase().includes(`(${code.toLowerCase()})`)
+    ? name
+    : `${name} (${code})`;
+}
+
+/**
  * The confirm prompt. Echoes student, month, class count AND recipient so a
  * mistyped code is visible before anything is pushed — this is the last human
  * checkpoint before a message reaches a parent. Keep all four fields.
@@ -145,7 +158,7 @@ export function adminConfirmPrompt({
   parentName: string;
   ttlMinutes: number;
 }): string {
-  const who = code ? `${studentName} (${code})` : studentName;
+  const who = studentLabel(studentName, code);
   const parentSuffix = parentName.trim() ? ` (parent: ${parentName.trim()})` : "";
   return [
     `📅 ${who}`,
@@ -218,7 +231,7 @@ export function groupConfirmPrompt({
   sessionCount: number;
   ttlMinutes: number;
 }): string {
-  const who = code ? `${studentName} (${code})` : studentName;
+  const who = studentLabel(studentName, code);
   return [
     `📅 ${who}`,
     `${formatMonthLabel(monthKey)} · ${sessionCount} ${sessionCount === 1 ? "class" : "classes"}`,
@@ -269,7 +282,7 @@ export function adminScheduleLinkReply({
   url: string;
   expiresAt: Date;
 }): string {
-  const who = code ? `${studentName} (${code})` : studentName;
+  const who = studentLabel(studentName, code);
   return [
     `📅 ${who}`,
     `${formatMonthLabel(monthKey)} · ${sessionCount} ${sessionCount === 1 ? "class" : "classes"}`,
@@ -298,7 +311,7 @@ export function groupSetupPrompt({
   monthKey: string;
   sessionCount: number;
 }): string {
-  const who = code ? `${studentName} (${code})` : studentName;
+  const who = studentLabel(studentName, code);
   return [
     "First time I've been used in this chat.",
     "",

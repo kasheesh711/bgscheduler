@@ -15,6 +15,7 @@ import {
   groupEmptyMonth,
   groupNotExactCode,
   parentSchedulePushMessage,
+  studentLabel,
   PUBLIC_PAGE_COPY,
 } from "@/lib/line/schedule-bot-copy";
 
@@ -194,5 +195,27 @@ describe("public page copy", () => {
     expect(PUBLIC_PAGE_COPY.expired.toLowerCase()).not.toContain("not found");
     expect(PUBLIC_PAGE_COPY.expired.toLowerCase()).not.toContain("revoked");
     expect(PUBLIC_PAGE_COPY.expired.toLowerCase()).not.toContain("invalid");
+  });
+});
+
+describe("studentLabel", () => {
+  it("does not repeat a code the Wise name already carries", () => {
+    // Regression seen in production: "Teethad (Copter.Th) Thamprida (Copter.Th)".
+    expect(studentLabel("Teethad (Copter.Th) Thamprida", "Copter.Th"))
+      .toBe("Teethad (Copter.Th) Thamprida");
+  });
+
+  it("appends the code when the name lacks it", () => {
+    expect(studentLabel("Teethad Thamprida", "Copter.Th"))
+      .toBe("Teethad Thamprida (Copter.Th)");
+  });
+
+  it("matches case-insensitively", () => {
+    expect(studentLabel("Teethad (copter.th) Thamprida", "Copter.Th"))
+      .toBe("Teethad (copter.th) Thamprida");
+  });
+
+  it("passes the name through when there is no code", () => {
+    expect(studentLabel("Somchai Jaidee", null)).toBe("Somchai Jaidee");
   });
 });

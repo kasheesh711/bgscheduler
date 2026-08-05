@@ -42,6 +42,7 @@ import { pushLineTextMessage, replyLineMessage } from "@/lib/line/client";
 import { readMentionees } from "@/lib/line/mentions";
 import { searchCurrentLineStudents } from "@/lib/line/student-links";
 import {
+  ANSWER_PATTERN,
   COMMAND_PATTERN,
   HELP_PATTERN,
   NO_PATTERN,
@@ -149,6 +150,23 @@ async function say(
   await deps.push({ to: groupId, text });
 }
 
+/** True when a live pending question exists for this admin in this chat. */
+async function hasPendingQuestion(
+  db: Database,
+  lineUserId: string,
+  groupId: string,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ expiresAt: schema.lineScheduleBotPending.expiresAt })
+    .from(schema.lineScheduleBotPending)
+    .where(and(
+      eq(schema.lineScheduleBotPending.lineUserId, lineUserId),
+      eq(schema.lineScheduleBotPending.scopeKey, scopeKeyFor(groupId)),
+    ))
+    .limit(1);
+  return Boolean(row);
+}
+
 /** The chat's audience, or null when it has never been set up (GRP-BOT-06). */
 export async function groupAudience(
   db: Database,
@@ -228,10 +246,27 @@ export async function handleScheduleBotGroupCommand(
 ): Promise<GroupBotResult> {
   // GRP-BOT-01 — the message must address the bot, by typed prefix or mention.
   const mentionees = readMentionees(message ?? {});
-  const { kind, command } = detectTrigger(text, mentionees);
+  const detected = detectTrigger(text, mentionees);
+  let { kind, command } = detected;
+
+  // …except when the bot has just asked this admin a question. Its prompts say
+  // "Reply FAMILY or STAFF" and "Reply YES", so a bare answer has to work or
+  // the bot ignores the exact reply it requested. Deliberately ordered cheap
+  // checks first — the pending lookup only runs for an allowlisted admin who
+  // typed one of a handful of short words.
   if (kind === "none") {
-    trace({ groupId, lineUserId, trigger: "none" });
-    return { handled: false };
+    const bare = text.trim();
+    if (
+      ANSWER_PATTERN.test(bare) &&
+      isScheduleBotAdmin(lineUserId) &&
+      await hasPendingQuestion(db, lineUserId, groupId)
+    ) {
+      kind = "answer";
+      command = bare;
+    } else {
+      trace({ groupId, lineUserId, trigger: "none" });
+      return { handled: false };
+    }
   }
 
   // GRP-BOT-02 — silent for anyone who is not an allowlisted admin. Note the

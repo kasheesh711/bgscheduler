@@ -35,6 +35,22 @@ export const FAMILY_PATTERN = /^(family|parent|ครอบครัว|ผู�
 export const STAFF_PATTERN = /^(staff|internal|admin|ทีมงาน)$/i;
 export const SETUP_PATTERN = /^setup\s+(family|parent|staff|internal|admin)$/i;
 
+/**
+ * The short words the bot asks people to reply with.
+ *
+ * The prompts say "Reply FAMILY or STAFF" and "Reply YES", so these must work
+ * WITHOUT the /schedule prefix — otherwise the bot ignores the exact answer it
+ * just asked for. Callers accept a bare answer only when an allowlisted admin
+ * has a live pending question in that conversation; everything else still
+ * requires an explicit trigger.
+ */
+export const ANSWER_PATTERN = new RegExp(
+  `^(${[YES_PATTERN, NO_PATTERN, FAMILY_PATTERN, STAFF_PATTERN]
+    .map((pattern) => pattern.source.replace(/^\^\(|\)\$$/g, ""))
+    .join("|")})$`,
+  "i",
+);
+
 export type GroupAudience = "family" | "staff";
 
 /** Maps a FAMILY/STAFF reply (or a `setup <x>` argument) to the stored value. */
@@ -44,7 +60,7 @@ export function parseAudience(value: string): GroupAudience | null {
   return null;
 }
 
-export type TriggerKind = "prefix" | "mention" | "none";
+export type TriggerKind = "prefix" | "mention" | "answer" | "none";
 
 /**
  * Detects how (or whether) a message addresses the bot, returning the command
