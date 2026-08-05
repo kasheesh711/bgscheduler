@@ -122,13 +122,14 @@ runs).
 > `src/lib/room-capacity/utilization.ts:433` reads `process.env.WISE_INSTITUTE_ID`
 > with **no fallback**, so for that path the variable is effectively required.
 
-### Optional — LINE feature flag + credentials (3)
+### Optional — LINE feature flag + credentials (4)
 
 | Variable | Schema (`src/lib/env.ts`) | Purpose | Consumed at | Behavior |
 |---|---|---|---|---|
 | `LINE_CHANNEL_SECRET` | `.min(1).optional()` (line 13) | LINE Messaging API channel secret; used to verify inbound webhook signatures and as a feature gate. | `src/lib/line/client.ts:21,26` | Part of the `lineSchedulerEnabled()` AND-gate (`client.ts:19-23`); exposed via `lineChannelSecret()` |
 | `LINE_CHANNEL_ACCESS_TOKEN` | `.min(1).optional()` (line 14) | LINE Messaging API bot access token; used as `Authorization: Bearer` for outbound LINE calls. | `src/lib/line/client.ts:22,30` | Part of the same AND-gate; `lineAccessToken()` **throws** `"LINE_CHANNEL_ACCESS_TOKEN is not configured"` if read while unset (`client.ts:31`) |
 | `ENABLE_LINE_SCHEDULER` | `.optional()` (line 15) | Feature flag for the LINE scheduler. **Opt-out**, not opt-in. | `src/lib/line/client.ts:20` | `lineSchedulerEnabled()` is true unless this is exactly the string `"false"` **and** both LINE credentials are present (`client.ts:20-22`) |
+| `LINE_SCHEDULE_BOT_ADMIN_IDS` | `.optional()` (`src/lib/env.ts:19`) | Comma-separated LINE user IDs allowed to drive the `/schedule` bot. Covers the admin operator team, not a single person — see the [Operations Runbook onboarding recipe](../operations/runbook.md#onboarding-a-new-schedule-bot-admin-operator). | `src/lib/line/schedule-bot.ts:112` (`scheduleBotAdminIds`), `:121` (`isScheduleBotAdmin`) | Empty/unset → empty set → bot fully disabled (fail-closed by construction) |
 
 ```mermaid
 flowchart LR

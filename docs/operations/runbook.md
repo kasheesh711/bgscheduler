@@ -153,10 +153,28 @@ Note this seed driver uses the Neon **HTTP** client (`src/lib/db/seed.ts:1`).
 
 `package.json` also defines operational `tsx` scripts outside the Drizzle set —
 e.g. `credit-control:seed-admin-ownership`, `tutor-profiles:seed`,
-`room-capacity:import-model`, `room-utilization:sync`, and the
+`room-capacity:import-model`, `room-utilization:sync`, `line:find-user-ids`, and the
 `guard:sales-dashboard-scope` check (`package.json:19`–`package.json:26`). These
 are feature-specific bootstrap utilities; consult the relevant feature doc before
 running them.
+
+### Onboarding a new schedule-bot admin operator
+
+Access to the `/schedule` LINE bot is gated by `LINE_SCHEDULE_BOT_ADMIN_IDS` (§3) — non-technical
+operators cannot find their own LINE user ID, so use this recipe:
+
+1. The operator adds the BeGifted LINE Official Account as a friend.
+2. The operator DMs the OA one message containing the code word `BGSCHED` plus their name (e.g.
+   `BGSCHED Kittiya`). This writes a `line_contacts` row and fetches their display name via the
+   normal non-admin fall-through path (`src/lib/line/review-service.ts`).
+3. Run `npm run line:find-user-ids` (`scripts/find-line-user-ids.ts`, read-only) to print matching
+   DMs and a ready-to-paste, de-duplicated `lineUserId` list. Narrow the match or window with
+   `--match=<code>` / `--since=<days>` if needed.
+4. Append the new ID(s) to `LINE_SCHEDULE_BOT_ADMIN_IDS` in the production Vercel environment
+   variables and redeploy — env vars are baked in at build time, so a redeploy is required before
+   the new operator is recognized.
+5. The operator verifies access by DMing `/schedule help` and confirming they get the admin help
+   menu back.
 
 ---
 
