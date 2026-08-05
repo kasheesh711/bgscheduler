@@ -39,12 +39,17 @@ import { and, desc, eq } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { pushLineTextMessage, replyLineMessage } from "@/lib/line/client";
-import { mentionsSelf, readMentionees, stripMentions } from "@/lib/line/mentions";
+import { readMentionees } from "@/lib/line/mentions";
+import { searchCurrentLineStudents } from "@/lib/line/student-links";
 import {
-  nicknameCodes,
-  normalizeLineStudentCode,
-  searchCurrentLineStudents,
-} from "@/lib/line/student-links";
+  COMMAND_PATTERN,
+  HELP_PATTERN,
+  NO_PATTERN,
+  YES_PATTERN,
+  detectTrigger,
+  exactCodeMatches,
+  type TriggerKind,
+} from "@/lib/line/schedule-bot-command";
 import { isScheduleBotAdmin } from "@/lib/line/schedule-bot";
 import {
   getStudentMonthlySchedule,
@@ -63,6 +68,7 @@ import {
   GROUP_NO_SNAPSHOT,
   GROUP_PENDING_EXPIRED,
   GROUP_SEND_FAILED,
+  adminScheduleLinkReply,
   groupConfirmPrompt,
   groupEmptyMonth,
   groupNotExactCode,
@@ -73,10 +79,7 @@ const PENDING_TTL_MINUTES = 5;
 const MAX_CANDIDATES = 5;
 const DEFAULT_BASE_URL = "https://bgscheduler.vercel.app";
 
-const YES_PATTERN = /^(yes|y|ยืนยัน|ใช่|ok|okay)$/i;
-const NO_PATTERN = /^(no|n|cancel|ยกเลิก|ไม่)$/i;
-const HELP_PATTERN = /^(help|\?|ช่วย)$/i;
-const COMMAND_PATTERN = /^([A-Za-z0-9._\-฀-๿]{2,40})(?:\s+(\d{4}-\d{2}))?$/;
+// Command grammar is shared with the 1:1 path — see schedule-bot-command.ts.
 
 export interface GroupBotDeps {
   reply: typeof replyLineMessage;
@@ -161,18 +164,8 @@ export async function groupHasSeenStudent(
  * and parent-name hits too, which is right for an admin staring at a web UI but
  * far too loose when the result is posted into a family's chat.
  */
-export function exactCodeMatches<T extends { studentName: string }>(
-  query: string,
-  candidates: readonly T[],
-): T[] {
-  const normalized = normalizeLineStudentCode(query);
-  if (!normalized) return [];
-  return candidates.filter((candidate) =>
-    nicknameCodes(candidate.studentName).includes(normalized));
-}
-
 /**
- * Routes one @-mention in a group chat.
+ * Routes one command from a group chat.
  *
  * @returns `{handled: false}` with no reply when the bot was not mentioned or
  *   the sender is not an allowlisted admin.
@@ -195,16 +188,24 @@ export async function handleScheduleBotGroupCommand(
   },
   overrides: Partial<GroupBotDeps> = {},
 ): Promise<GroupBotResult> {
-  // GRP-BOT-01 — only an explicit @-mention of this bot is a command.
+  // GRP-BOT-01 — the message must address the bot, by typed prefix or mention.
   const mentionees = readMentionees(message ?? {});
-  if (!mentionsSelf(mentionees)) return { handled: false };
+  const { kind, command } = detectTrigger(text, mentionees);
+  if (kind === "none") {
+    trace({ groupId, lineUserId, trigger: "none" });
+    return { handled: false };
+  }
 
-  // GRP-BOT-02 — silent for anyone who is not an allowlisted admin.
-  if (!isScheduleBotAdmin(lineUserId)) return { handled: false };
+  // GRP-BOT-02 — silent for anyone who is not an allowlisted admin. Note the
+  // command text is NOT traced here: a parent who happens to type "/schedule"
+  // must not have their message copied into our logs.
+  if (!isScheduleBotAdmin(lineUserId)) {
+    trace({ groupId, lineUserId, trigger: kind, admin: false });
+    return { handled: false };
+  }
 
   const deps = resolveDeps(overrides);
   const target = { groupId, replyToken };
-  const command = stripMentions(text, mentionees);
   if (!command) {
     await say(deps, target, GROUP_HELP);
     return { handled: true, action: "help" };
@@ -226,13 +227,52 @@ export async function handleScheduleBotGroupCommand(
   }
 
   const match = COMMAND_PATTERN.exec(command);
-  if (!match) return { handled: false };
+  if (!match) {
+    // Addressed the bot but the rest is not a command — say so rather than
+    // going silent, since the sender is a known admin expecting a reply.
+    trace({ groupId, lineUserId, trigger: kind, admin: true, command, outcome: "unparsed" });
+    await say(deps, target, GROUP_HELP);
+    return { handled: true, action: "help" };
+  }
 
   const query = match[1];
   const monthKey = match[2] ?? getMonthKey(todayBangkok(deps.now()));
-  if (!isMonthKey(monthKey)) return { handled: false };
+  const pushToParent = Boolean(match[3]);
+  if (!isMonthKey(monthKey)) {
+    await say(deps, target, GROUP_HELP);
+    return { handled: true, action: "help" };
+  }
 
-  return startGroupSend(db, deps, target, lineUserId, query, monthKey);
+  trace({ groupId, lineUserId, trigger: kind, admin: true, command, outcome: pushToParent ? "send" : "reply" });
+  return startGroupSend(db, deps, target, lineUserId, query, monthKey, pushToParent);
+}
+
+/**
+ * One structured line per inbound command attempt.
+ *
+ * This path was completely invisible in production for hours — group events
+ * are not persisted, and both entry gates returned silently — so every exit
+ * now leaves a trace. IDs are truncated, and `command` is only ever recorded
+ * for allowlisted admins so a parent's message text never reaches the logs.
+ */
+function trace(fields: {
+  groupId: string;
+  lineUserId: string;
+  trigger: TriggerKind;
+  admin?: boolean;
+  command?: string;
+  outcome?: string;
+}): void {
+  const short = (value: string) => (value.length > 10 ? `${value.slice(0, 6)}…${value.slice(-3)}` : value);
+  const parts = [
+    `chat=${short(fields.groupId)}`,
+    `sender=${short(fields.lineUserId)}`,
+    `trigger=${fields.trigger}`,
+  ];
+  if (fields.admin !== undefined) parts.push(`admin=${fields.admin ? "yes" : "no"}`);
+  if (fields.admin && fields.command !== undefined) parts.push(`command=${JSON.stringify(fields.command)}`);
+  if (fields.outcome) parts.push(`outcome=${fields.outcome}`);
+  console.log(`[schedule-bot] ${parts.join(" ")}`);
 }
 
 async function clearPending(
@@ -255,6 +295,7 @@ async function startGroupSend(
   lineUserId: string,
   query: string,
   monthKey: string,
+  pushToParent: boolean,
 ): Promise<GroupBotResult> {
   const candidates = await searchCurrentLineStudents(db, query, MAX_CANDIDATES);
 
@@ -284,7 +325,23 @@ async function startGroupSend(
     return { handled: true, action: "empty_month" };
   }
 
-  // GRP-BOT-04 — a student this group has already received goes straight out.
+  // Default path: the link goes back to whoever asked, in the conversation they
+  // asked in. The requester IS the recipient, so there is no third party to
+  // mis-address — GRP-BOT-04's confirm step would be pure friction here and is
+  // skipped. Only the explicit `send` verb targets a parent.
+  if (!pushToParent) {
+    return deliver(db, deps, target, {
+      lineUserId,
+      studentKey: student.studentKey,
+      wiseStudentId: student.wiseStudentId,
+      studentName: student.studentName,
+      monthKey,
+      sessionCount: schedule.sessions.length,
+      audience: "requester",
+    });
+  }
+
+  // GRP-BOT-04 — a student this chat has already received goes straight out.
   if (await groupHasSeenStudent(db, target.groupId, student.studentKey)) {
     return deliver(db, deps, target, {
       lineUserId,
@@ -292,6 +349,8 @@ async function startGroupSend(
       wiseStudentId: student.wiseStudentId,
       studentName: student.studentName,
       monthKey,
+      sessionCount: schedule.sessions.length,
+      audience: "parent",
     });
   }
 
@@ -363,10 +422,19 @@ async function confirmGroupSend(
     wiseStudentId: pending.wiseStudentId,
     studentName: pending.studentName,
     monthKey: pending.monthKey,
+    sessionCount: pending.sessionCount,
+    audience: "parent",
   });
 }
 
-/** Mints the link, posts it into the group, and records the send. */
+/**
+ * Mints the link, posts it into the originating conversation, and records the
+ * send.
+ *
+ * `audience` only selects the wording. Either way the message lands in the chat
+ * the command came from — for "requester" that is an admin who will forward it
+ * by hand; for "parent" it is the Thai template the family reads directly.
+ */
 async function deliver(
   db: Database,
   deps: GroupBotDeps,
@@ -377,6 +445,8 @@ async function deliver(
     wiseStudentId: string;
     studentName: string;
     monthKey: string;
+    sessionCount: number;
+    audience: "requester" | "parent";
   },
 ): Promise<GroupBotResult> {
   let token: string;
@@ -401,12 +471,23 @@ async function deliver(
     return { handled: true, action: "send_failed" };
   }
 
-  const text = parentSchedulePushMessage({
-    shortName: parseStudentDisplay(student.studentName).shortName,
-    monthKey: student.monthKey,
-    url: studentScheduleLinkUrl(deps.baseUrl, token),
-    expiresAt,
-  });
+  const url = studentScheduleLinkUrl(deps.baseUrl, token);
+  const display = parseStudentDisplay(student.studentName);
+  const text = student.audience === "parent"
+    ? parentSchedulePushMessage({
+      shortName: display.shortName,
+      monthKey: student.monthKey,
+      url,
+      expiresAt,
+    })
+    : adminScheduleLinkReply({
+      studentName: student.studentName,
+      code: display.code,
+      monthKey: student.monthKey,
+      sessionCount: student.sessionCount,
+      url,
+      expiresAt,
+    });
 
   try {
     await say(deps, target, text);

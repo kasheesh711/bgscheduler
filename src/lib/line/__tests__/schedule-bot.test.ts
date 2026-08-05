@@ -8,9 +8,12 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/line/student-links", () => ({
-  searchCurrentLineStudents: vi.fn(),
-}));
+// Partial: the shared command grammar uses the real nicknameCodes /
+// normalizeLineStudentCode for exact-code matching.
+vi.mock("@/lib/line/student-links", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/line/student-links")>();
+  return { ...actual, searchCurrentLineStudents: vi.fn() };
+});
 vi.mock("@/lib/student-schedule/data", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/student-schedule/data")>();
   return { ...actual, getStudentMonthlySchedule: vi.fn() };
@@ -145,7 +148,7 @@ describe("SCHED-BOT-01 sender allowlist", () => {
     const { db } = makeDb([]);
 
     const result = await handleScheduleBotCommand(
-      { db, lineUserId: OUTSIDER, text: "Aadhu.Sr" },
+      { db, lineUserId: OUTSIDER, text: "/schedule Aadhu.Sr send" },
       deps(push),
     );
 
@@ -163,7 +166,7 @@ describe("SCHED-BOT-01 sender allowlist", () => {
       const push = vi.fn();
       const { db } = makeDb([]);
       const result = await handleScheduleBotCommand(
-        { db, lineUserId: ADMIN, text: "Aadhu.Sr" },
+        { db, lineUserId: ADMIN, text: "/schedule Aadhu.Sr send" },
         deps(push),
       );
       expect(result).toEqual({ handled: false });
@@ -185,7 +188,7 @@ describe("SCHED-BOT-02 verified link required", () => {
     const { db, inserts } = makeDb([[]]); // no verified contacts
 
     const result = await handleScheduleBotCommand(
-      { db, lineUserId: ADMIN, text: "Aadhu.Sr" },
+      { db, lineUserId: ADMIN, text: "/schedule Aadhu.Sr send" },
       deps(push),
     );
 
@@ -204,7 +207,7 @@ describe("SCHED-BOT-02 verified link required", () => {
     ]]);
 
     const result = await handleScheduleBotCommand(
-      { db, lineUserId: ADMIN, text: "Aadhu.Sr" },
+      { db, lineUserId: ADMIN, text: "/schedule Aadhu.Sr send" },
       deps(push),
     );
 
@@ -222,7 +225,7 @@ describe("SCHED-BOT-03 explicit confirm", () => {
     const { db, inserts } = makeDb([[contactRow()]]);
 
     const result = await handleScheduleBotCommand(
-      { db, lineUserId: ADMIN, text: "Aadhu.Sr" },
+      { db, lineUserId: ADMIN, text: "/schedule Aadhu.Sr send" },
       deps(push),
     );
 
@@ -248,7 +251,7 @@ describe("SCHED-BOT-03 explicit confirm", () => {
     const { db, inserts } = makeDb([]);
 
     const result = await handleScheduleBotCommand(
-      { db, lineUserId: ADMIN, text: "aadhu" },
+      { db, lineUserId: ADMIN, text: "/schedule aadhu send" },
       deps(push),
     );
 
@@ -276,7 +279,7 @@ describe("SCHED-BOT-03 explicit confirm", () => {
     }]]);
 
     const result = await handleScheduleBotCommand(
-      { db, lineUserId: ADMIN, text: "yes" },
+      { db, lineUserId: ADMIN, text: "/schedule yes" },
       deps(push),
     );
 
@@ -290,7 +293,7 @@ describe("SCHED-BOT-03 explicit confirm", () => {
     const { db } = makeDb([[]]);
 
     const result = await handleScheduleBotCommand(
-      { db, lineUserId: ADMIN, text: "YES" },
+      { db, lineUserId: ADMIN, text: "/schedule YES" },
       deps(push),
     );
 
@@ -303,7 +306,7 @@ describe("SCHED-BOT-03 explicit confirm", () => {
     const { db, deletes } = makeDb([]);
 
     const result = await handleScheduleBotCommand(
-      { db, lineUserId: ADMIN, text: "no" },
+      { db, lineUserId: ADMIN, text: "/schedule no" },
       deps(push),
     );
 
@@ -321,7 +324,7 @@ describe("SCHED-BOT-04 non-empty month", () => {
     const { db, inserts } = makeDb([[contactRow()]]);
 
     const result = await handleScheduleBotCommand(
-      { db, lineUserId: ADMIN, text: "Aadhu.Sr" },
+      { db, lineUserId: ADMIN, text: "/schedule Aadhu.Sr send" },
       deps(push),
     );
 
@@ -360,7 +363,7 @@ describe("happy path", () => {
     ]);
 
     const result = await handleScheduleBotCommand(
-      { db, lineUserId: ADMIN, text: "yes" },
+      { db, lineUserId: ADMIN, text: "/schedule yes" },
       deps(push),
     );
 
@@ -407,7 +410,7 @@ describe("happy path", () => {
     }]]);
 
     const result = await handleScheduleBotCommand(
-      { db, lineUserId: ADMIN, text: "yes" },
+      { db, lineUserId: ADMIN, text: "/schedule yes" },
       deps(push),
     );
 
@@ -425,7 +428,7 @@ describe("command parsing", () => {
     const { db } = makeDb([[contactRow()]]);
 
     await handleScheduleBotCommand(
-      { db, lineUserId: ADMIN, text: "Aadhu.Sr 2026-09" },
+      { db, lineUserId: ADMIN, text: "/schedule Aadhu.Sr 2026-09 send" },
       deps(push),
     );
 
@@ -438,7 +441,7 @@ describe("command parsing", () => {
     const push = vi.fn();
     const { db } = makeDb([]);
     const result = await handleScheduleBotCommand(
-      { db, lineUserId: ADMIN, text: "help" },
+      { db, lineUserId: ADMIN, text: "/schedule help" },
       deps(push),
     );
     expect(result.action).toBe("help");
@@ -454,5 +457,77 @@ describe("command parsing", () => {
     );
     expect(result).toEqual({ handled: false });
     expect(push).not.toHaveBeenCalled();
+  });
+
+  it("ignores an admin's ordinary short message", async () => {
+    // Regression: without a required prefix, ANY 2-40 char message from an
+    // admin was read as a student code, so typing "ok" replied "No student
+    // matches ok" and swallowed staff messages meant for the review queue.
+    for (const text of ["ok", "hello", "ครับ", "Aadhu.Sr"]) {
+      const push = vi.fn();
+      const { db } = makeDb([]);
+      const result = await handleScheduleBotCommand(
+        { db, lineUserId: ADMIN, text },
+        deps(push),
+      );
+      expect(result).toEqual({ handled: false });
+      expect(push).not.toHaveBeenCalled();
+      expect(searchCurrentLineStudents).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe("default path — reply to the requesting admin", () => {
+  beforeEach(() => {
+    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(12) as never);
+    vi.mocked(mintStudentScheduleLink).mockResolvedValue({
+      token: "tok_abc", expiresAt: new Date("2026-09-04T03:00:00Z"), id: "link-1",
+    } as never);
+  });
+
+  it("hands the link back to the admin without touching any parent", async () => {
+    const push = vi.fn().mockResolvedValue({ retryKey: "r", sentMessageId: "m", response: {} });
+    const { db } = makeDb([]);
+
+    const result = await handleScheduleBotCommand(
+      { db, lineUserId: ADMIN, text: "/schedule Aadhu.Sr" },
+      deps(push),
+    );
+
+    expect(result.action).toBe("sent");
+    // The whole point: no verified contact lookup, no parent message.
+    expect(parentPushes(push)).toHaveLength(0);
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(push.mock.calls[0][0].to).toBe(ADMIN);
+
+    const text = push.mock.calls[0][0].text as string;
+    expect(text).toContain("https://example.test/schedule/tok_abc");
+    expect(text).toContain("Aadhu.Sr");
+    expect(text).toContain("12 classes");
+    expect(text).toContain("Paste it to the parent");
+  });
+
+  it("still refuses a partial code", async () => {
+    const push = vi.fn();
+    const { db } = makeDb([]);
+    const result = await handleScheduleBotCommand(
+      { db, lineUserId: ADMIN, text: "/schedule aadhu" },
+      deps(push),
+    );
+    expect(result.action).toBe("ambiguous");
+    expect(mintStudentScheduleLink).not.toHaveBeenCalled();
+  });
+
+  it("still refuses an empty month", async () => {
+    vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(0) as never);
+    const push = vi.fn();
+    const { db } = makeDb([]);
+    const result = await handleScheduleBotCommand(
+      { db, lineUserId: ADMIN, text: "/schedule Aadhu.Sr" },
+      deps(push),
+    );
+    expect(result.action).toBe("empty_month");
+    expect(mintStudentScheduleLink).not.toHaveBeenCalled();
   });
 });

@@ -247,11 +247,45 @@ export function groupEmptyMonth(studentName: string, monthKey: string): string {
   return `${studentName} has no classes in ${formatMonthLabel(monthKey)}.`;
 }
 
-export const GROUP_PENDING_EXPIRED = "That confirmation expired. Mention me with the student code again.";
+/**
+ * The default reply: the link handed back to the admin who asked for it, in
+ * their own conversation. English, because the audience is staff — they paste
+ * the link into the parent's chat themselves, optionally alongside the Thai
+ * template. Names the student and class count so a mistyped code is obvious
+ * before anything is forwarded.
+ */
+export function adminScheduleLinkReply({
+  studentName,
+  code,
+  monthKey,
+  sessionCount,
+  url,
+  expiresAt,
+}: {
+  studentName: string;
+  code: string | null;
+  monthKey: string;
+  sessionCount: number;
+  url: string;
+  expiresAt: Date;
+}): string {
+  const who = code ? `${studentName} (${code})` : studentName;
+  return [
+    `📅 ${who}`,
+    `${formatMonthLabel(monthKey)} · ${sessionCount} ${sessionCount === 1 ? "class" : "classes"}`,
+    "",
+    url,
+    "",
+    `Link expires ${formatBangkokDmy(expiresAt)}. Paste it to the parent.`,
+  ].join("\n");
+}
+
+export const GROUP_PENDING_EXPIRED = "That confirmation expired. Send /schedule with the student code again.";
 export const GROUP_CANCELLED = "Cancelled — nothing was sent.";
 export const GROUP_HELP = [
-  "Mention me with a student code to post their schedule here.",
-  "Example: Aadhu.Sr — or Aadhu.Sr 2026-09 for a specific month.",
+  "/schedule Aadhu.Sr — I reply here with a link to that student's schedule.",
+  "/schedule Aadhu.Sr 2026-09 — a specific month.",
+  "/schedule Aadhu.Sr send — send it straight to the parent (needs a verified LINE contact).",
 ].join("\n");
 export const GROUP_SEND_FAILED = "Couldn't post the schedule just now. Please try again.";
 export const GROUP_NO_SNAPSHOT = "Schedule data isn't available right now. Please try again shortly.";

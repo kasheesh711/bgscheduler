@@ -34,6 +34,14 @@ import * as schema from "@/lib/db/schema";
 import { pushLineTextMessage } from "@/lib/line/client";
 import { searchCurrentLineStudents } from "@/lib/line/student-links";
 import {
+  COMMAND_PATTERN,
+  HELP_PATTERN,
+  NO_PATTERN,
+  YES_PATTERN,
+  detectTrigger,
+  exactCodeMatches,
+} from "@/lib/line/schedule-bot-command";
+import {
   getStudentMonthlySchedule,
   parseStudentDisplay,
 } from "@/lib/student-schedule/data";
@@ -52,6 +60,7 @@ import {
   ADMIN_SEND_FAILED,
   adminAmbiguous,
   adminConfirmPrompt,
+  adminScheduleLinkReply,
   adminEmptyMonth,
   adminMultipleContacts,
   adminNoVerifiedContact,
@@ -67,11 +76,7 @@ const PENDING_TTL_MINUTES = 5;
 const MAX_CANDIDATES = 5;
 const DEFAULT_BASE_URL = "https://bgscheduler.vercel.app";
 
-const YES_PATTERN = /^(yes|y|ยืนยัน|ใช่|ok|okay)$/i;
-const NO_PATTERN = /^(no|n|cancel|ยกเลิก|ไม่)$/i;
-const HELP_PATTERN = /^(help|\?|ช่วย)$/i;
-/** `<code>` optionally followed by `YYYY-MM`. Codes are alnum, dot, dash, Thai. */
-const COMMAND_PATTERN = /^([A-Za-z0-9._\-฀-๿]{2,40})(?:\s+(\d{4}-\d{2}))?$/;
+// Command grammar is shared with the group path — see schedule-bot-command.ts.
 
 export interface ScheduleBotDeps {
   /** Injected so tests never reach api.line.me. */
@@ -207,8 +212,20 @@ export async function handleScheduleBotCommand(
   if (!isScheduleBotAdmin(lineUserId)) return { handled: false };
 
   const deps = resolveDeps(overrides);
-  const trimmed = text.trim();
-  if (!trimmed) return { handled: false };
+  const raw = text.trim();
+  if (!raw) return { handled: false };
+
+  // A command must be explicitly addressed to the bot. Without this, ANY short
+  // message an admin sends the OA was treated as a student code — typing "ok"
+  // got back "No student matches ok" — and it swallowed staff messages that
+  // belonged in the normal review queue.
+  const trigger = detectTrigger(raw, []);
+  if (trigger.kind === "none") return { handled: false };
+  const trimmed = trigger.command;
+  if (!trimmed) {
+    await reply(deps, lineUserId, ADMIN_HELP);
+    return { handled: true, action: "help" };
+  }
 
   if (HELP_PATTERN.test(trimmed)) {
     await reply(deps, lineUserId, ADMIN_HELP);
@@ -226,13 +243,91 @@ export async function handleScheduleBotCommand(
   }
 
   const match = COMMAND_PATTERN.exec(trimmed);
-  if (!match) return { handled: false };
+  if (!match) {
+    await reply(deps, lineUserId, ADMIN_HELP);
+    return { handled: true, action: "help" };
+  }
 
   const query = match[1];
   const monthKey = match[2] ?? getMonthKey(todayBangkok(deps.now()));
-  if (!isMonthKey(monthKey)) return { handled: false };
+  const pushToParent = Boolean(match[3]);
+  if (!isMonthKey(monthKey)) {
+    await reply(deps, lineUserId, ADMIN_HELP);
+    return { handled: true, action: "help" };
+  }
+
+  // Default: hand the link back to the admin who asked, so they can forward it
+  // themselves. Only the explicit `send` verb resolves and messages a parent,
+  // which is what requires a verified contact link (and reaches ~7 students).
+  if (!pushToParent) {
+    return replyWithLink(db, deps, lineUserId, query, monthKey);
+  }
 
   return startSend(db, deps, lineUserId, query, monthKey);
+}
+
+/**
+ * Resolves the student, mints a link, and replies to the requesting admin.
+ * Nothing is sent to any third party on this path, so it needs neither a
+ * verified contact link nor a confirmation step.
+ */
+async function replyWithLink(
+  db: Database,
+  deps: ScheduleBotDeps,
+  lineUserId: string,
+  query: string,
+  monthKey: string,
+): Promise<ScheduleBotResult> {
+  const matches = await searchCurrentLineStudents(db, query, MAX_CANDIDATES);
+  const exact = exactCodeMatches(query, matches);
+
+  if (matches.length === 0) {
+    await reply(deps, lineUserId, adminNotFound(query));
+    return { handled: true, action: "not_found" };
+  }
+  if (exact.length !== 1) {
+    await reply(deps, lineUserId, adminAmbiguous(query, matches.map((row) => ({
+      code: parseStudentDisplay(row.studentName).code,
+      studentName: row.studentName,
+    }))));
+    return { handled: true, action: "ambiguous" };
+  }
+
+  const student = exact[0];
+  const schedule = await getStudentMonthlySchedule(db, {
+    studentKey: student.studentKey,
+    monthKey,
+  });
+  if (!schedule) {
+    await reply(deps, lineUserId, ADMIN_NO_SNAPSHOT);
+    return { handled: true, action: "no_snapshot" };
+  }
+  if (schedule.sessions.length === 0) {
+    await reply(deps, lineUserId, adminEmptyMonth(student.studentName, monthKey));
+    return { handled: true, action: "empty_month" };
+  }
+
+  const { token, expiresAt } = await mintStudentScheduleLink(db, {
+    studentKey: student.studentKey,
+    wiseStudentId: student.wiseStudentId,
+    studentName: student.studentName,
+    monthKey,
+    createdByLineUserId: lineUserId,
+    ttlDays: deps.ttlDays,
+    now: deps.now(),
+  });
+
+  const display = parseStudentDisplay(student.studentName);
+  await reply(deps, lineUserId, adminScheduleLinkReply({
+    studentName: student.studentName,
+    code: display.code,
+    monthKey,
+    sessionCount: schedule.sessions.length,
+    url: studentScheduleLinkUrl(deps.baseUrl, token),
+    expiresAt,
+  }));
+
+  return { handled: true, action: "sent" };
 }
 
 async function startSend(
