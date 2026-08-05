@@ -17,6 +17,9 @@ const envSchema = z.object({
   // empty disables the bot entirely — it is fail-closed by construction, so a
   // parent messaging the OA can never reach it.
   LINE_SCHEDULE_BOT_ADMIN_IDS: z.string().optional(),
+  // Opt-out kill switch for the live Wise overlay on /schedule. Exactly
+  // "false" disables it; unset or any other value leaves it enabled.
+  ENABLE_STUDENT_SCHEDULE_LIVE: z.string().optional(),
   // Days a parent schedule link stays live. Defaults to 30.
   STUDENT_SCHEDULE_LINK_TTL_DAYS: z.coerce.number().int().positive().optional(),
   // Absolute origin used to build parent links; previews link to themselves.
