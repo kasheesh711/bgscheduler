@@ -18,14 +18,14 @@ schema.
 
 `README.md` / `AGENTS.md` / `CLAUDE.md` all repeat a table titled
 **"Environment Variables (9 required)"**. That count does not match the literal
-Zod schema. Here is the exact reconciliation, derived from `src/lib/env.ts:3-16`:
+Zod schema. Here is the exact reconciliation, derived from `src/lib/env.ts:3-24`:
 
 | Bucket | Zod modifier | Count | Variables |
 |---|---|---|---|
 | **Hard-required** (fails parse if unset/empty) | `.url()` or `.min(1)` | **7** | `DATABASE_URL`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_SECRET`, `WISE_USER_ID`, `WISE_API_KEY`, `CRON_SECRET` |
 | **Defaulted** (parses fine when unset; falls back to a literal) | `.default(...)` | **2** | `WISE_NAMESPACE` → `"begifted-education"`, `WISE_INSTITUTE_ID` → `"696e1f4d90102225641cc413"` |
-| **Optional** (may be absent; if present must be non-empty for the two `.min(1)` ones) | `.optional()` | **3** | `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER` |
-| **Total declared in schema** | | **12** | |
+| **Optional** (may be absent; if present must be non-empty for the two `.min(1)` ones) | `.optional()` | **6** | `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER`, `LINE_SCHEDULE_BOT_ADMIN_IDS`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL` |
+| **Total declared in schema** | | **15** | |
 
 So the **strict Zod truth is 7 hard-required variables**, not 9. The "9" in the
 prose is the count of the *nine documented operational variables* — the 7
@@ -33,14 +33,15 @@ hard-required ones plus the 2 `WISE_*` variables that carry `.default(...)`
 literals. The two defaulted variables are documented as "required" because
 production overrides them, but the schema will happily parse without them.
 
-The three optional LINE/feature-flag variables in the schema
-(`src/lib/env.ts:13-15`) are omitted from the prose "9" entirely.
+The six optional variables in the schema (`src/lib/env.ts:13-23`) — four
+LINE-related plus the two student-schedule-link variables below — are omitted
+from the prose "9" entirely.
 
 ---
 
 ## Critical caveat: the validated `env` object is never imported
 
-`src/lib/env.ts:29` eagerly runs validation at module-eval time:
+`src/lib/env.ts:37` eagerly runs validation at module-eval time:
 
 ```ts
 export const env = getEnv(); // safeParse(process.env); throws on failure
@@ -86,7 +87,7 @@ flowchart TD
 
 ## Schema-declared variables (`src/lib/env.ts`)
 
-These are the 12 variables the Zod schema knows about. "Runtime guard" describes
+These are the 15 variables the Zod schema knows about. "Runtime guard" describes
 what the *actual consumer* does on absence (since the schema validation never
 runs).
 
@@ -140,6 +141,22 @@ flowchart LR
   T -->|yes| ON["lineSchedulerEnabled() = true"]
   T -->|no| OFF
 ```
+
+### Optional — student-schedule links (2)
+
+Not LINE credentials — kept separate from the "Optional — LINE feature flag + credentials (4)"
+section above. Both back the parent-facing student-schedule link (`POST
+/api/student-schedule/link`, and the LINE `/schedule` bot's DM and group-chat flows).
+
+| Variable | Schema (`src/lib/env.ts`) | Purpose | Consumed at | Behavior |
+|---|---|---|---|---|
+| `STUDENT_SCHEDULE_LINK_TTL_DAYS` | `z.coerce.number().int().positive().optional()` (line 21) | Days a minted parent schedule link stays valid before expiring. | `src/app/api/student-schedule/link/route.ts:55`; `src/lib/line/schedule-bot.ts:134`; `src/lib/line/schedule-bot-group.ts:124` | Unset or non-positive → falls back to `DEFAULT_LINK_TTL_DAYS = 30` (`src/lib/student-schedule/links.ts:27`) |
+| `APP_BASE_URL` | `z.string().url().optional()` (line 23) | Absolute origin used to build the student-schedule link URL. | `src/app/api/student-schedule/link/route.ts:19`; `src/lib/line/schedule-bot.ts:131`; `src/lib/line/schedule-bot-group.ts:121` | Unset → the admin API route falls back to the inbound request's own origin; the LINE bot falls back to the hardcoded `DEFAULT_BASE_URL = "https://bgscheduler.vercel.app"` (`schedule-bot.ts:78`) |
+
+> Same name, unrelated variable: `src/lib/leave-requests/config.ts` also exports a constant
+> called `APP_BASE_URL`, derived from `NEXT_PUBLIC_APP_URL` / `VERCEL_URL` (see the base-URL
+> cascades note further below) — that is a different value from `process.env.APP_BASE_URL`
+> documented here.
 
 ---
 

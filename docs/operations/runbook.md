@@ -86,6 +86,9 @@ which crashes the importing process/function. Required and optional variables:
 | `LINE_CHANNEL_SECRET` | optional | LINE integration |
 | `LINE_CHANNEL_ACCESS_TOKEN` | optional | LINE integration |
 | `ENABLE_LINE_SCHEDULER` | optional | feature flag |
+| `LINE_SCHEDULE_BOT_ADMIN_IDS` | optional | comma-separated LINE user IDs allowed to drive the `/schedule` bot; empty/unset disables it, fail-closed by construction (`src/lib/env.ts:19`) — see the [onboarding recipe](#onboarding-a-new-schedule-bot-admin-operator) below |
+| `STUDENT_SCHEDULE_LINK_TTL_DAYS` | optional | days a parent schedule link stays live before expiring; defaults to 30 (`src/lib/env.ts:21`) |
+| `APP_BASE_URL` | optional | absolute origin used to build parent schedule links; unset means previews/localhost link to themselves (`src/lib/env.ts:23`) |
 
 The README documents additional runtime variables consumed by leave-requests and
 the schedule-email Apps Script (`README.md:110`–`README.md:118`) that are **not**
@@ -154,7 +157,7 @@ Note this seed driver uses the Neon **HTTP** client (`src/lib/db/seed.ts:1`).
 `package.json` also defines operational `tsx` scripts outside the Drizzle set —
 e.g. `credit-control:seed-admin-ownership`, `tutor-profiles:seed`,
 `room-capacity:import-model`, `room-utilization:sync`, `line:find-user-ids`, and the
-`guard:sales-dashboard-scope` check (`package.json:19`–`package.json:26`). These
+`guard:sales-dashboard-scope` check (`package.json:19`–`package.json:33`). These
 are feature-specific bootstrap utilities; consult the relevant feature doc before
 running them.
 
