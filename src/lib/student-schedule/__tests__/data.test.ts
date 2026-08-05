@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import type { WiseCreditSession } from "@/lib/credit-control/wise";
 import {
   bangkokMonthInstantWindow,
   buildStudentSchedulePayload,
+  mergeLiveSessionsIntoRows,
   parseStudentDisplay,
   type StudentScheduleRow,
 } from "@/lib/student-schedule/data";
@@ -32,6 +34,20 @@ function row(overrides: Partial<StudentScheduleRow> = {}): StudentScheduleRow {
     durationMinutes: 90,
     meetingStatus: "SCHEDULED",
     teacherName: "Kru Nok",
+    ...overrides,
+  };
+}
+
+function liveSession(overrides: Partial<WiseCreditSession> = {}): WiseCreditSession {
+  return {
+    _id: "ses_1",
+    classId: { _id: "class_1", name: "Math Class", subject: "Math" },
+    // 16:00 Bangkok on 4 Aug 2026 -- deliberately different from row()'s 10:00.
+    scheduledStartTime: new Date("2026-08-04T09:00:00Z"),
+    scheduledEndTime: new Date("2026-08-04T10:30:00Z"),
+    meetingStatus: "UPCOMING",
+    duration: 5_400_000,
+    students: ["stu_1"],
     ...overrides,
   };
 }
@@ -152,5 +168,101 @@ describe("parseStudentDisplay", () => {
       code: null,
       shortName: "Somchai",
     });
+  });
+});
+
+describe("mergeLiveSessionsIntoRows", () => {
+  it("takes the live time/status/duration on a matched session, keeps the snapshot subject/package/teacher", () => {
+    const merged = mergeLiveSessionsIntoRows({
+      snapshotRows: [row({ wiseSessionId: "ses_1" })],
+      liveSessions: [liveSession({
+        _id: "ses_1",
+        scheduledStartTime: new Date("2026-08-04T09:00:00Z"),
+        scheduledEndTime: new Date("2026-08-04T10:30:00Z"),
+        meetingStatus: "RESCHEDULED",
+        duration: 5_400_000,
+      })],
+      student: STUDENT,
+    });
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({
+      wiseSessionId: "ses_1",
+      scheduledStartTime: new Date("2026-08-04T09:00:00Z"),
+      scheduledEndTime: new Date("2026-08-04T10:30:00Z"),
+      meetingStatus: "RESCHEDULED",
+      durationMinutes: 90,
+      subject: "Mathematics",
+      packageName: "Maths 20-pack",
+      teacherName: "Kru Nok",
+    });
+  });
+
+  it("synthesizes a live-only session with no package, subject from classId.subject", () => {
+    const merged = mergeLiveSessionsIntoRows({
+      snapshotRows: [],
+      liveSessions: [liveSession({
+        _id: "ses_new",
+        classId: { _id: "class_2", name: "Science Class", subject: "Science" },
+        userId: { _id: "teacher_1", name: "Kru Somchai" },
+      })],
+      student: STUDENT,
+    });
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({
+      wiseSessionId: "ses_new",
+      packageName: "",
+      subject: "Science",
+      teacherName: "Kru Somchai",
+      studentKey: STUDENT.studentKey,
+      wiseStudentId: STUDENT.wiseStudentId,
+    });
+  });
+
+  it("falls back to classId.name for subject when classId.subject is blank", () => {
+    const merged = mergeLiveSessionsIntoRows({
+      snapshotRows: [],
+      liveSessions: [liveSession({
+        _id: "ses_new",
+        classId: { _id: "class_2", name: "Science Class", subject: undefined },
+      })],
+      student: STUDENT,
+    });
+
+    expect(merged[0].subject).toBe("Science Class");
+  });
+
+  it("drops a snapshot-only session with no live counterpart", () => {
+    const merged = mergeLiveSessionsIntoRows({
+      snapshotRows: [row({ wiseSessionId: "ses_gone" })],
+      liveSessions: [],
+      student: STUDENT,
+    });
+
+    expect(merged).toEqual([]);
+  });
+
+  it("propagates a live CANCELLED status on a matched session", () => {
+    const merged = mergeLiveSessionsIntoRows({
+      snapshotRows: [row({ wiseSessionId: "ses_1", meetingStatus: "SCHEDULED" })],
+      liveSessions: [liveSession({ _id: "ses_1", meetingStatus: "CANCELLED" })],
+      student: STUDENT,
+    });
+
+    expect(merged[0].meetingStatus).toBe("CANCELLED");
+  });
+
+  it("synthesizes rows for every live session when the snapshot has none", () => {
+    const merged = mergeLiveSessionsIntoRows({
+      snapshotRows: [],
+      liveSessions: [
+        liveSession({ _id: "ses_a" }),
+        liveSession({ _id: "ses_b" }),
+      ],
+      student: STUDENT,
+    });
+
+    expect(merged.map((m) => m.wiseSessionId).sort()).toEqual(["ses_a", "ses_b"]);
   });
 });

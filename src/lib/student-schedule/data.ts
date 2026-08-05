@@ -29,6 +29,12 @@ import {
   isMonthKey,
 } from "@/lib/calendar/month-grid";
 import {
+  creditSessionTeacher,
+  durationMsToMinutes,
+  type WiseCreditSession,
+} from "@/lib/credit-control/wise";
+import { fetchLiveMonthSessions } from "@/lib/student-schedule/live";
+import {
   TEACHER_TBC,
   type StudentSchedulePayload,
   type StudentScheduleSession,
@@ -155,6 +161,72 @@ export function buildStudentSchedulePayload({
 }
 
 /**
+ * Merges a live Wise sweep into the snapshot's rows for one student's month.
+ * Pure -- no DB, no clock -- so merge semantics are unit-testable directly.
+ *
+ *   - Matched (same wiseSessionId in both) -- takes the live session's time/
+ *     end-time/status/duration; keeps the snapshot row's subject, package, and
+ *     teacher (the sweep carries no package context).
+ *   - Live-only (a new class the snapshot has never seen) -- synthesizes a row
+ *     with no package (buildStudentSchedulePayload already falls back to
+ *     `subject || packageName || "Class"`) and the session's own teacher via
+ *     `creditSessionTeacher`.
+ *   - Snapshot-only (the snapshot has it, the live sweep does not) -- dropped:
+ *     a full successful sweep means Wise no longer has that session this month.
+ *
+ * `liveSessions` must already be trimmed to the exact Bangkok month window --
+ * this function does not re-derive it (see `getStudentMonthlySchedule`, which
+ * reuses `bangkokMonthInstantWindow` for both its DB query and this trim).
+ */
+export function mergeLiveSessionsIntoRows({
+  snapshotRows,
+  liveSessions,
+  student,
+}: {
+  snapshotRows: readonly StudentScheduleRow[];
+  liveSessions: readonly WiseCreditSession[];
+  student: Pick<StudentScheduleRow, "studentKey" | "wiseStudentId" | "studentName" | "parentName">;
+}): StudentScheduleRow[] {
+  const liveById = new Map(liveSessions.map((session) => [session._id, session]));
+  const seenSessionIds = new Set<string>();
+  const merged: StudentScheduleRow[] = [];
+
+  for (const row of snapshotRows) {
+    seenSessionIds.add(row.wiseSessionId);
+    const live = liveById.get(row.wiseSessionId);
+    if (!live) continue; // snapshot-only: Wise no longer has this session -- drop it
+    merged.push({
+      ...row,
+      scheduledStartTime: live.scheduledStartTime,
+      scheduledEndTime: live.scheduledEndTime ?? null,
+      durationMinutes: durationMsToMinutes(live.duration),
+      meetingStatus: live.meetingStatus,
+    });
+  }
+
+  for (const session of liveSessions) {
+    if (seenSessionIds.has(session._id)) continue; // already merged above
+    const teacher = creditSessionTeacher(session);
+    merged.push({
+      wiseSessionId: session._id,
+      studentKey: student.studentKey,
+      wiseStudentId: student.wiseStudentId,
+      studentName: student.studentName,
+      parentName: student.parentName,
+      subject: session.classId.subject?.trim() || session.classId.name?.trim() || "",
+      packageName: "",
+      scheduledStartTime: session.scheduledStartTime,
+      scheduledEndTime: session.scheduledEndTime ?? null,
+      durationMinutes: durationMsToMinutes(session.duration),
+      meetingStatus: session.meetingStatus,
+      teacherName: teacher.teacherName,
+    });
+  }
+
+  return merged;
+}
+
+/**
  * Loads one student's Bangkok-month schedule from the active credit-control
  * snapshot.
  *
@@ -171,7 +243,7 @@ export async function getStudentMonthlySchedule(
   }
 
   const [snapshot] = await db
-    .select({ id: schema.creditControlSnapshots.id })
+    .select({ id: schema.creditControlSnapshots.id, generatedAt: schema.creditControlSnapshots.generatedAt })
     .from(schema.creditControlSnapshots)
     .where(eq(schema.creditControlSnapshots.active, true))
     .orderBy(desc(schema.creditControlSnapshots.generatedAt))
@@ -217,10 +289,23 @@ export async function getStudentMonthlySchedule(
     ))
     .orderBy(asc(schema.creditControlSessions.scheduledStartTime));
 
+  const snapshotRows: StudentScheduleRow[] = rows.map((row) => ({ ...row, parentName: studentRow.parentName }));
+
+  const live = await fetchLiveMonthSessions({ wiseStudentId: studentRow.wiseStudentId, monthKey });
+  const liveSessionsInMonth = live.ok
+    ? live.sessions.filter((session) => (
+      session.scheduledStartTime >= start && session.scheduledStartTime < end
+    ))
+    : [];
+
+  const finalRows = live.ok
+    ? mergeLiveSessionsIntoRows({ snapshotRows, liveSessions: liveSessionsInMonth, student: studentRow })
+    : snapshotRows;
+
   const display = parseStudentDisplay(studentRow.studentName);
 
   return buildStudentSchedulePayload({
-    rows: rows.map((row) => ({ ...row, parentName: studentRow.parentName })),
+    rows: finalRows,
     student: {
       studentKey: studentRow.studentKey,
       wiseStudentId: studentRow.wiseStudentId,
@@ -230,7 +315,7 @@ export async function getStudentMonthlySchedule(
       shortName: display.shortName,
     },
     monthKey,
-    generatedAt: new Date(),
+    generatedAt: live.ok ? new Date() : snapshot.generatedAt,
   });
 }
 
