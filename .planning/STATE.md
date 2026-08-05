@@ -30,7 +30,7 @@ Phase: 12 (LINE Backlog Identity Recovery (IDENT-07)) — EXECUTING
 Plan: 5 of 5 (phase complete)
 Next: `/gsd-plan-phase 11` — create executable plans
 Status: Ready to execute
-Last activity: 2026-07-30 - Completed quick task 260730-v7p: Fix clipped tab bar on post-class-feedback page
+Last activity: 2026-08-05 - Completed quick task 260805-llm: Fix stale docs after the LINE schedule-bot allowlist change (reconciled scope after upstream doc regeneration 241deb5; also backfilled 260805-k2j)
 
 Progress: [██████████] 97%
 
@@ -142,6 +142,8 @@ None blocking roadmap execution.
 | 260730-j0c | Finalize pass targets oldest un-finalized payout run + stale-window alert | 2026-07-30 | 9efe2c1 | [260730-j0c-finalize-pass-targets-oldest-un-finalize](./quick/260730-j0c-finalize-pass-targets-oldest-un-finalize/) |
 | 260730-n7z | Retire Wise-deleted sessions and fix the shadow-review activation gate | 2026-07-30 | d65f9b4 | [260730-n7z-retire-wise-deleted-sessions-and-fix-the](./quick/260730-n7z-retire-wise-deleted-sessions-and-fix-the/) |
 | 260730-v7p | Fix clipped tab bar on post-class-feedback page | 2026-07-30 | be74191 | [260730-v7p-fix-clipped-tab-bar-on-post-class-feedba](./quick/260730-v7p-fix-clipped-tab-bar-on-post-class-feedba/) |
+| 260805-k2j | Add read-only LINE user ID harvest script for the schedule bot allowlist | 2026-08-05 | c52e907 | [260805-k2j-add-read-only-line-user-id-harvest-scrip](./quick/260805-k2j-add-read-only-line-user-id-harvest-scrip/) |
+| 260805-llm | Fix stale docs after the LINE schedule-bot allowlist change | 2026-08-05 | 7ad5d53 | [260805-llm-fix-stale-docs-after-the-line-schedule-b](./quick/260805-llm-fix-stale-docs-after-the-line-schedule-b/) |
 | Phase 10-vpol-01-view-transitions P01 | 216 | 2 tasks | 2 files |
 | Phase 10-vpol-01-view-transitions P02 | 4min | 2 tasks | 2 files |
 | Phase 11 P03 | 31515093 | 2 tasks | 3 files |
