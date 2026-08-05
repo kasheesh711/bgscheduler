@@ -19,8 +19,15 @@ import { createWiseClient } from "@/lib/wise/client";
 import { getMonthWindow } from "@/lib/calendar/month-grid";
 import { addBangkokDays, datesBetweenBangkok, todayBangkok } from "@/lib/room-capacity/dates";
 
-const DEFAULT_DEADLINE_MS = 4_000;
+// Measured against production (6 cold months, one student): min 1178ms,
+// p50 1485ms, p95 2783ms. The current month is always the slowest because
+// "today" needs both a PAST and a FUTURE sweep. 8s leaves ~3x headroom over
+// p95 so a merely slow Wise day falls back to the snapshot only when Wise is
+// genuinely unhealthy, rather than flapping between live and stale.
+const DEFAULT_DEADLINE_MS = 8_000;
 const CACHE_TTL_MS = 60_000;
+/** Prune threshold. Entries are ~10 sessions each, so this stays trivial. */
+const CACHE_MAX_ENTRIES = 500;
 
 interface LiveMonthCacheEntry {
   sessions: WiseCreditSession[];
@@ -36,6 +43,19 @@ function liveMonthSessionsCache(): Map<string, LiveMonthCacheEntry> {
     globalThis.__bgscheduler_liveMonthSessionsCache = new Map();
   }
   return globalThis.__bgscheduler_liveMonthSessionsCache;
+}
+
+/**
+ * Drops expired entries once the map grows past `CACHE_MAX_ENTRIES`. TTL alone
+ * only stops a stale entry being *served* — it never removes it, so without
+ * this a long-lived Fluid Compute instance accumulates one entry per
+ * (student × month) ever requested and never gives the memory back.
+ */
+function pruneExpired(cache: Map<string, LiveMonthCacheEntry>, now: number): void {
+  if (cache.size <= CACHE_MAX_ENTRIES) return;
+  for (const [key, entry] of cache) {
+    if (entry.expiresAt <= now) cache.delete(key);
+  }
 }
 
 /**
@@ -127,6 +147,7 @@ export async function fetchLiveMonthSessions({
 
   try {
     const sessions = await withDeadline(sweepMonth(wiseStudentId, monthKey), deadlineMs);
+    pruneExpired(cache, now);
     cache.set(cacheKey, { sessions, expiresAt: now + CACHE_TTL_MS });
     return { sessions, ok: true };
   } catch (error) {
