@@ -23,6 +23,7 @@
     "ai-scheduler:evaluate": "tsx scripts/evaluate-ai-scheduler.ts",
     "ai-scheduler:compare-models": "tsx scripts/compare-ai-scheduler-models.ts",
     "line:test-data:cleanup": "tsx scripts/delete-line-test-data.ts",
+    "line:find-user-ids": "tsx scripts/find-line-user-ids.ts",
     "payout:inventory": "npx tsx --tsconfig scripts/tsconfig.json scripts/inventory-payout-workbooks.ts",
     "payout:setup-master-tabs": "npx tsx --tsconfig scripts/tsconfig.json scripts/setup-payout-master-tabs.ts",
     "payout:repoint-workbooks": "npx tsx --tsconfig scripts/tsconfig.json scripts/repoint-payout-workbook-formulas.ts",
