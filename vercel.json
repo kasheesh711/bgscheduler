@@ -26,7 +26,7 @@
     },
     {
       "path": "/api/internal/sync-wise-activity",
-      "schedule": "5,35 * * * *"
+      "schedule": "2,17,32,47 * * * *"
     },
     {
       "path": "/api/internal/sync-post-class-feedback",
