@@ -283,10 +283,15 @@ export async function getPostClassFeedbackDashboard(
         .innerJoin(schema.postClassAiRuns, eq(schema.postClassAiConcerns.runId, schema.postClassAiRuns.id))
         .where(inArray(schema.postClassAiRuns.sessionId, sessionIds))
       : Promise.resolve([]),
-    // Earliest tutor-authored, non-auto submission per session, read straight
-    // from the immutable event stream. Deriving here rather than reading a
-    // persisted column means the column is correct for every historical
-    // session without re-observing any of them.
+    // Earliest non-auto submission per session, read straight from the
+    // immutable event stream. Deriving here rather than reading a persisted
+    // column means the column is correct for every historical session without
+    // re-observing any of them. The actor role is deliberately not filtered:
+    // Wise stamps it from the account's role, not from authorship, so a
+    // `TEACHER` predicate hid a tutor's own submission whenever that tutor also
+    // held an admin account (D-EVT-04). This matches the qualifying rule in
+    // `deriveEventTimingEvidence`, so the column never disagrees with the
+    // verdict beside it.
     sessionQueriesEnabled
       ? db.select({
         wiseSessionId: schema.wiseActivityEvents.sessionId,
@@ -294,7 +299,6 @@ export async function getPostClassFeedbackDashboard(
       }).from(schema.wiseActivityEvents)
         .where(and(
           eq(schema.wiseActivityEvents.eventName, "SessionFeedbackSubmittedEvent"),
-          eq(schema.wiseActivityEvents.actorRole, "TEACHER"),
           inArray(schema.wiseActivityEvents.sessionId, wiseSessionIds),
           sql`coalesce(${schema.wiseActivityEvents.payload} -> 'session' ->> 'autoSubmitted', 'false') <> 'true'`,
         ))

@@ -196,6 +196,29 @@ export interface FeedbackEventAssociation {
   linkConfidence: number | null;
 }
 
+/**
+ * One `SessionFeedbackSubmittedEvent` from the Wise activity mirror — the
+ * immutable record of when a submission actually happened.
+ *
+ * `actorRole` is audit detail, not a gate: Wise stamps it from the account's
+ * role rather than from authorship, so a tutor who also holds an admin account
+ * appears as `ADMIN` on their own submission (D-EVT-04). `isSessionTutor`
+ * answers the question the role cannot — whether the actor is the session's own
+ * Wise teacher.
+ */
+export interface FeedbackSubmissionEvent {
+  id: string;
+  wiseEventId: string;
+  eventTimestamp: string;
+  actorWiseUserId: string | null;
+  actorName: string | null;
+  actorRole: string | null;
+  autoSubmitted: boolean | null;
+  isSessionTutor: boolean;
+  countedAsProof: boolean;
+  notCountedReason: "auto_submitted" | "after_deadline" | null;
+}
+
 export interface FeedbackSessionSourceIssue {
   id: string;
   scope: string;
@@ -249,6 +272,7 @@ export interface PostClassFeedbackSessionDetail {
   evidence: {
     versions: FeedbackSessionDetailVersion[];
     eventAssociations: FeedbackEventAssociation[];
+    feedbackEvents: FeedbackSubmissionEvent[];
   };
   assessments: FeedbackSessionAssessment[];
   sourceIssues: FeedbackSessionSourceIssue[];

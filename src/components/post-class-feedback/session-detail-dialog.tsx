@@ -34,6 +34,7 @@ import type {
   FeedbackSessionDetailVersion,
   FeedbackSessionRow,
   FeedbackSourceAnswer,
+  FeedbackSubmissionEvent,
   FeedbackWaiverCategory,
   PostClassFeedbackSessionDetail,
 } from "@/types/post-class-feedback";
@@ -155,6 +156,142 @@ function EvidenceMetadata({ version }: { version: FeedbackSessionDetailVersion }
   );
 }
 
+const TIMING_EVIDENCE_EXPLANATIONS: Record<string, string> = {
+  wise_activity_event_before_deadline: "A Wise submission event landed at or before the deadline, which proves the feedback existed in time.",
+  wise_activity_event_no_tutor_submission: "Wise recorded no human submission event at or before the deadline, and the event store covers that deadline — so the absence is itself proof of lateness.",
+  proven_before_deadline: "A compliant version was already locked on time by an earlier assessment; later edits cannot undo that lock.",
+  wise_timestamp_unavailable: "Wise supplied no trustworthy timestamp and the deadline predates event coverage, so timing is unprovable either way. Fails open — no deduction.",
+  wise_created_at_late_lower_bound: "The submission's own creation time is after the deadline, so it cannot have held on-time content.",
+  wise_source_created_at: "Wise supplied a trustworthy updatedAt on the submission, and it decided the verdict.",
+  observed_state: "No event or trustworthy timestamp applied; the verdict comes from the state observed at the deadline.",
+};
+
+const NOT_COUNTED_REASONS: Record<string, string> = {
+  auto_submitted: "Wise auto-submitted this — never proof of a human submission",
+  after_deadline: "Landed after the deadline",
+};
+
+/**
+ * Chronological account of every instant that bears on the timing verdict,
+ * against the deadline.
+ *
+ * This is the artifact for resolving a disputed deduction: it shows when the
+ * feedback first appeared in Wise, who Wise says submitted it, when we first
+ * saw it, and — in words — why the verdict came out the way it did. Wise's
+ * actor role is shown but labelled as account role, since it no longer gates
+ * the verdict (D-EVT-04).
+ */
+function TimingEvidenceTimeline({
+  deadlineAt,
+  events,
+  versions,
+  outcome,
+  timingEvidence,
+}: {
+  deadlineAt: string;
+  events: FeedbackSubmissionEvent[];
+  versions: FeedbackSessionDetailVersion[];
+  outcome: Pick<FeedbackSessionRow, "sourceStatus" | "contentStatus" | "timingStatus">;
+  timingEvidence: string | null;
+}) {
+  const entries = useMemo(() => {
+    const rows: Array<{
+      key: string;
+      at: string;
+      kind: "event" | "version" | "deadline";
+      title: string;
+      detail: string;
+      tone: "good" | "bad" | "neutral";
+    }> = [
+      {
+        key: "deadline",
+        at: deadlineAt,
+        kind: "deadline",
+        title: "Feedback deadline",
+        detail: "23:59:59.999 Bangkok, two calendar days after the class ended",
+        tone: "neutral",
+      },
+    ];
+    for (const event of events) {
+      rows.push({
+        key: `event-${event.id}`,
+        at: event.eventTimestamp,
+        kind: "event",
+        title: "Wise recorded a submission",
+        detail: [
+          event.actorName || event.actorWiseUserId || "Actor not recorded by Wise",
+          event.actorRole ? `account role ${event.actorRole}` : "no account role recorded",
+          event.isSessionTutor ? "this session's own tutor" : null,
+          event.countedAsProof
+            ? null
+            : NOT_COUNTED_REASONS[event.notCountedReason ?? ""] ?? "Not counted",
+        ].filter(Boolean).join(" · "),
+        tone: event.countedAsProof ? "good" : "bad",
+      });
+    }
+    for (const version of versions) {
+      rows.push({
+        key: `version-${version.id}`,
+        at: version.observedAt,
+        kind: "version",
+        title: version.compliant ? "We first saw compliant feedback" : "We first saw this feedback",
+        detail: [
+          `${version.combinedCharacterCount.toLocaleString()} characters`,
+          version.compliant ? "meets the content bar" : "below the content bar",
+          version.submittedAt
+            ? `Wise ${version.sourceTimestampKind} time ${formatBangkokDate(version.submittedAt, true)}${version.sourceTimestampTrustworthy ? "" : " (untrusted)"}`
+            : "no Wise timestamp",
+        ].join(" · "),
+        tone: "neutral",
+      });
+    }
+    return rows.toSorted((left, right) => Date.parse(left.at) - Date.parse(right.at));
+  }, [deadlineAt, events, versions]);
+
+  const explanation = timingEvidence ? TIMING_EVIDENCE_EXPLANATIONS[timingEvidence] : null;
+
+  return (
+    <section className="rounded-lg border bg-card p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <FileClock className="size-4 text-sky-600" aria-hidden="true" />
+        <h3 className="text-xs font-semibold">Timing evidence</h3>
+        <OutcomeBadge session={outcome} />
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Every instant that bears on the verdict, in Bangkok time. Timing is decided by Wise&apos;s own immutable event stream, never by when our sync happened to run.
+      </p>
+      <ol className="mt-3 space-y-2">
+        {entries.map((entry) => (
+          <li
+            key={entry.key}
+            className={cn(
+              "rounded-lg border-l-4 bg-background/70 px-3 py-2 text-xs",
+              entry.kind === "deadline" && "border-l-slate-400 bg-slate-50 dark:bg-slate-900",
+              entry.tone === "good" && entry.kind !== "deadline" && "border-l-emerald-500",
+              entry.tone === "bad" && entry.kind !== "deadline" && "border-l-rose-500",
+              entry.tone === "neutral" && entry.kind !== "deadline" && "border-l-slate-300",
+            )}
+          >
+            <div className="flex flex-wrap items-baseline gap-2">
+              <span className="font-mono font-semibold tabular-nums">{formatBangkokDate(entry.at, true)}</span>
+              <span className={cn("font-medium", entry.kind === "deadline" && "uppercase tracking-wide")}>{entry.title}</span>
+              {entry.kind === "event" && entry.tone === "good"
+                ? <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[9px] text-emerald-800">Counted as proof</Badge>
+                : null}
+            </div>
+            <div className="mt-0.5 text-[11px] text-muted-foreground">{entry.detail}</div>
+          </li>
+        ))}
+      </ol>
+      {explanation ? (
+        <p className="mt-3 rounded-lg border bg-muted/40 p-2 text-[11px] text-muted-foreground">
+          <span className="font-medium text-foreground">Why this verdict: </span>{explanation}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 function DetailLoading() {
   return (
     <div className="flex min-h-80 items-center justify-center" aria-live="polite" aria-busy="true">
@@ -213,17 +350,25 @@ function DetailBody({
           <div className="mt-1 text-xs font-medium">{formatBangkokDate(detail.session.deadlineAt, true)}</div>
         </div>
         <div className="p-3">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Tutor submitted</div>
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Feedback submitted</div>
           <div className="mt-1 text-xs font-medium">
             {session.submittedAt ? formatBangkokDate(session.submittedAt, true) : "—"}
           </div>
           <div className="mt-0.5 text-[10px] text-muted-foreground">
             {session.submittedAt
-              ? "Earliest tutor-authored Wise event"
-              : "No tutor-authored submission observed"}
+              ? "Earliest non-auto Wise event"
+              : "No human submission observed"}
           </div>
         </div>
       </div>
+
+      <TimingEvidenceTimeline
+        deadlineAt={detail.session.deadlineAt}
+        events={detail.evidence.feedbackEvents}
+        versions={detail.evidence.versions}
+        outcome={detail.session}
+        timingEvidence={detail.assessments[0]?.timingEvidence ?? null}
+      />
 
       {!detail.session.eligible ? (
         <div className={cn(
@@ -373,7 +518,7 @@ function DetailBody({
 
         <section className="rounded-lg border bg-card p-3">
           <h3 className="text-xs font-semibold">Wise event associations</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Events accelerate discovery; session detail remains canonical.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Links an event to the submission version it produced. Timing itself is decided by the evidence timeline above.</p>
           {detail.evidence.eventAssociations.length > 0 ? (
             <div className="mt-3 space-y-2">
               {detail.evidence.eventAssociations.map((event) => (

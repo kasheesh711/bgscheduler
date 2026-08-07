@@ -1,10 +1,48 @@
-import { asc, desc, eq, or } from "drizzle-orm";
+import { and, asc, desc, eq, or } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
 import type { PostClassUser } from "./access";
 import { PostClassNotFoundError } from "./errors";
+import { feedbackSubmitterRole } from "./policy";
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Why a Wise feedback event did or did not prove the submission on time.
+ *
+ * Mirrors `deriveEventTimingEvidence` so the dialog and the policy cannot
+ * drift: an auto-submission never qualifies, and a qualifying event only
+ * proves compliance when it lands at or before the deadline.
+ */
+export function eventProofOutcome(
+  event: { eventTimestamp: Date; actorRole: string | null; payload: Record<string, unknown> },
+  deadlineAt: Date,
+): { countedAsProof: boolean; reason: "auto_submitted" | "after_deadline" | null } {
+  const autoSubmitted = autoSubmittedFlag(event.payload);
+  const role = feedbackSubmitterRole({
+    eventId: "",
+    sessionId: "",
+    eventTimestamp: event.eventTimestamp,
+    autoSubmitted,
+    actorWiseUserId: null,
+    actorName: null,
+    actorRole: event.actorRole,
+  });
+  if (role === "AUTO") return { countedAsProof: false, reason: "auto_submitted" };
+  if (event.eventTimestamp.getTime() > deadlineAt.getTime()) {
+    return { countedAsProof: false, reason: "after_deadline" };
+  }
+  return { countedAsProof: true, reason: null };
+}
+
+/** Wise carries the auto-submission flag at `payload.session.autoSubmitted`. */
+function autoSubmittedFlag(payload: Record<string, unknown>): boolean | null {
+  const session = asRecord(payload.session);
+  const value = session.autoSubmitted;
+  return typeof value === "boolean" ? value : null;
+}
 
 function iso(value: Date | null | undefined): string | null {
   return value ? value.toISOString() : null;
@@ -47,16 +85,31 @@ export function serializePostClassFeedbackAnswer(value: unknown) {
   };
 }
 
+/**
+ * Load one session's full evidence record.
+ *
+ * `identifier` accepts either our internal UUID or the Wise session id, so an
+ * admin holding only a Wise id from a Wise screen can open the same record
+ * without a database round trip. The UUID branch is guarded by a pattern test
+ * because Postgres rejects a non-UUID literal against a `uuid` column outright.
+ */
 export async function getPostClassFeedbackSessionDetail(
-  sessionId: string,
+  identifier: string,
   user: PostClassUser,
   db: Database = getDb(),
 ) {
   const [session] = await db.select().from(schema.postClassSessions)
-    .where(eq(schema.postClassSessions.id, sessionId)).limit(1);
+    .where(UUID_PATTERN.test(identifier)
+      ? or(
+        eq(schema.postClassSessions.id, identifier),
+        eq(schema.postClassSessions.wiseSessionId, identifier),
+      )
+      : eq(schema.postClassSessions.wiseSessionId, identifier))
+    .limit(1);
   if (!session) throw new PostClassNotFoundError("Post-class feedback session was not found.");
+  const sessionId = session.id;
 
-  const [participants, versions, assessments, eventLinks, notificationItems, aiRows, sourceIssues] = await Promise.all([
+  const [participants, versions, assessments, eventLinks, feedbackEvents, notificationItems, aiRows, sourceIssues] = await Promise.all([
     db.select().from(schema.postClassSessionParticipants)
       .where(eq(schema.postClassSessionParticipants.sessionId, sessionId))
       .orderBy(asc(schema.postClassSessionParticipants.studentName)),
@@ -72,6 +125,23 @@ export async function getPostClassFeedbackSessionDetail(
     db.select().from(schema.postClassFeedbackEventLinks)
       .where(eq(schema.postClassFeedbackEventLinks.sessionId, sessionId))
       .orderBy(desc(schema.postClassFeedbackEventLinks.eventTimestamp)),
+    // Read the activity mirror directly rather than through the link table:
+    // this is the exact evidence set `deriveEventTimingEvidence` consumes
+    // (`repository.loadFeedbackEvents`), so the timeline shows what actually
+    // decided the verdict, including events the parser could not bind to a
+    // submission.
+    db.select({
+      id: schema.wiseActivityEvents.id,
+      eventId: schema.wiseActivityEvents.eventId,
+      eventTimestamp: schema.wiseActivityEvents.eventTimestamp,
+      actorWiseUserId: schema.wiseActivityEvents.actorWiseUserId,
+      actorName: schema.wiseActivityEvents.actorName,
+      actorRole: schema.wiseActivityEvents.actorRole,
+      payload: schema.wiseActivityEvents.payload,
+    }).from(schema.wiseActivityEvents).where(and(
+      eq(schema.wiseActivityEvents.sessionId, session.wiseSessionId),
+      eq(schema.wiseActivityEvents.eventName, "SessionFeedbackSubmittedEvent"),
+    )).orderBy(asc(schema.wiseActivityEvents.eventTimestamp)),
     db.select({
       item: schema.postClassNotificationItems,
       delivery: schema.postClassNotificationDeliveries,
@@ -198,6 +268,29 @@ export async function getPostClassFeedbackSessionDetail(
         autoSubmitted: event.autoSubmitted,
         linkConfidence: event.linkConfidence,
       })),
+      // Every Wise feedback-submission event for this session, with the actor
+      // Wise recorded and whether it proved the submission on time. The actor
+      // role is audit detail only — since D-EVT-04 it no longer gates the
+      // verdict, because Wise stamps the account's role rather than authorship.
+      feedbackEvents: feedbackEvents.map((event) => {
+        const outcome = eventProofOutcome(event, session.deadlineAt);
+        return {
+          id: event.id,
+          wiseEventId: event.eventId,
+          eventTimestamp: event.eventTimestamp.toISOString(),
+          actorWiseUserId: event.actorWiseUserId,
+          actorName: event.actorName,
+          actorRole: event.actorRole,
+          autoSubmitted: autoSubmittedFlag(event.payload),
+          isSessionTutor: Boolean(
+            event.actorWiseUserId &&
+            session.wiseTeacherUserId &&
+            event.actorWiseUserId === session.wiseTeacherUserId,
+          ),
+          countedAsProof: outcome.countedAsProof,
+          notCountedReason: outcome.reason,
+        };
+      }),
     },
     assessments: assessments.map((assessment) => ({
       id: assessment.id,
