@@ -572,15 +572,41 @@ describe("deriveEventTimingEvidence", () => {
     expect(result.provenAt?.toISOString()).toBe("2026-06-05T09:00:00.000Z");
   });
 
-  it("does not let an admin submitting on the tutor's behalf prove compliance", () => {
+  // D-EVT-04. Wise stamps `actorRole` from the account's role, not from who
+  // wrote the text, so a tutor who also holds an admin account has their own
+  // on-time submission recorded as ADMIN.
+  it("proves on_time from an ADMIN-role event before the deadline", () => {
     const result = deriveEventTimingEvidence({
       events: [event({ at: "2026-06-02T01:00:00.000Z", role: "ADMIN" })],
       deadlineAt: DEADLINE,
       eventCoverageFrom: COVERAGE_FROM,
     });
-    expect(result.status).toBe("late");
-    expect(result.provenAt).toBeNull();
+    expect(result.status).toBe("on_time");
+    expect(result.provenAt?.toISOString()).toBe("2026-06-02T01:00:00.000Z");
     expect(result.submitterRoles).toEqual(["ADMIN"]);
+  });
+
+  // Accepted consequence of the role-blind rule: a STUDENT-role actor also
+  // qualifies. Timing and content stay independent, so weak feedback still
+  // fails on the content bar.
+  it("proves on_time from a STUDENT-role event before the deadline", () => {
+    const result = deriveEventTimingEvidence({
+      events: [event({ at: "2026-06-02T01:00:00.000Z", role: "STUDENT" })],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("on_time");
+    expect(result.submitterRoles).toEqual(["STUDENT"]);
+  });
+
+  it("proves on_time from an event whose actor role Wise did not record", () => {
+    const result = deriveEventTimingEvidence({
+      events: [event({ at: "2026-06-02T01:00:00.000Z", role: null })],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("on_time");
+    expect(result.submitterRoles).toEqual(["UNKNOWN"]);
   });
 
   it("does not let an auto-submission prove compliance", () => {
@@ -617,26 +643,36 @@ describe("deriveEventTimingEvidence", () => {
     expect(result.source).toBe("none");
   });
 
-  it("reports the earliest tutor submission as the deciding instant", () => {
+  it("reports the earliest human submission as the deciding instant", () => {
     const result = deriveEventTimingEvidence({
       events: [
         event({ at: "2026-06-05T09:00:00.000Z", role: "TEACHER", id: "edit" }),
-        event({ at: "2026-06-02T01:00:00.000Z", role: "TEACHER", id: "first" }),
+        event({ at: "2026-06-02T01:00:00.000Z", role: "TEACHER", id: "later-teacher" }),
         event({ at: "2026-06-01T10:00:00.000Z", role: "ADMIN", id: "admin-earlier" }),
       ],
       deadlineAt: DEADLINE,
       eventCoverageFrom: COVERAGE_FROM,
     });
-    // The admin event is earlier but cannot decide the verdict.
-    expect(result.provenAt?.toISOString()).toBe("2026-06-02T01:00:00.000Z");
+    // The ADMIN event is earliest and now decides the verdict.
+    expect(result.provenAt?.toISOString()).toBe("2026-06-01T10:00:00.000Z");
   });
 
-  it("reports no submission instant when only non-tutor events exist", () => {
+  it("reports no submission instant when every event is an auto-submission", () => {
     const result = deriveEventTimingEvidence({
-      events: [event({ at: "2026-06-02T01:00:00.000Z", role: "ADMIN" })],
+      events: [event({ at: "2026-06-02T01:00:00.000Z", autoSubmitted: true })],
       deadlineAt: DEADLINE,
       eventCoverageFrom: COVERAGE_FROM,
     });
+    expect(result.provenAt).toBeNull();
+  });
+
+  it("keeps the auto flag decisive even when the actor role would qualify", () => {
+    const result = deriveEventTimingEvidence({
+      events: [event({ at: "2026-06-02T01:00:00.000Z", role: "TEACHER", autoSubmitted: true })],
+      deadlineAt: DEADLINE,
+      eventCoverageFrom: COVERAGE_FROM,
+    });
+    expect(result.status).toBe("late");
     expect(result.provenAt).toBeNull();
   });
 

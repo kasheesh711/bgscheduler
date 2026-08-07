@@ -1594,15 +1594,19 @@ describe("post-class feedback event-derived timing", () => {
     expect(observation.assessment?.submitterRoles).toEqual(["TEACHER"]);
   });
 
-  it("marks the tutor late when only an admin submitted on their behalf", async () => {
+  // D-EVT-04. Wise stamps `actorRole` from the account's role, not from who
+  // wrote the text, so a tutor holding an admin account submits their own
+  // feedback and Wise records ADMIN. The role is kept as audit detail on
+  // `submitterRoles` but no longer gates the verdict.
+  it("proves on_time from an ADMIN-role event and still records the role", async () => {
     const observation = await run(
       [feedbackEvent("2026-07-21T04:00:00.000Z", "ADMIN")],
       new Date("2026-05-27T00:00:00.000Z"),
     );
-    expect(observation.assessment?.timingStatus).toBe("late");
-    expect(observation.assessment?.rawOnTimeCompliant).toBe(false);
-    // Content is present and compliant, so this is a remediated-late outcome.
-    expect(observation.assessment?.remediatedLate).toBe(true);
+    expect(observation.assessment?.timingStatus).toBe("on_time");
+    expect(observation.assessment?.timingEvidenceSource).toBe("activity_event");
+    expect(observation.assessment?.rawOnTimeCompliant).toBe(true);
+    expect(observation.assessment?.remediatedLate).toBe(false);
     expect(observation.assessment?.submitterRoles).toEqual(["ADMIN"]);
   });
 

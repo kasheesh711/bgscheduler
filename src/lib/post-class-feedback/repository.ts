@@ -719,6 +719,10 @@ function timingEvidence(
 ): string {
   // An immutable Wise activity event outranks every mutable submission
   // timestamp, so it is reported as the evidence whenever it drove the verdict.
+  // `..._no_tutor_submission` is kept verbatim even though D-EVT-04 widened the
+  // qualifying rule past the `TEACHER` role: the string is persisted on every
+  // historical assessment row, and renaming it would split one fact across two
+  // codes. It now reads "no qualifying human submission before the deadline".
   if (assessment.timingEvidenceSource === "activity_event") {
     return assessment.timingStatus === "on_time"
       ? "wise_activity_event_before_deadline"

@@ -316,14 +316,22 @@ export function feedbackSubmitterRole(event: FeedbackEventEvidence): FeedbackSub
 }
 
 /**
- * Derive timing and authorship from the immutable Wise activity-event stream.
+ * Derive timing from the immutable Wise activity-event stream.
  *
- * The event store is the only evidence that distinguishes a tutor writing
- * their own feedback from an admin filling it in or Wise auto-submitting —
- * session detail records all three as `profile: "teacher"`.
+ * The event store is the only evidence of *when* feedback was written — session
+ * detail records a tutor, an admin, and a Wise auto-submission all alike as
+ * `profile: "teacher"`, and Wise rarely returns a trustworthy `updatedAt`.
+ *
+ * **D-EVT-04 — the actor role is not an authorship gate.** Wise stamps
+ * `actorRole` from the *account's* role, not from who wrote the text: a tutor
+ * who also holds an admin account submits their own feedback and Wise records
+ * `ADMIN`. Gating on `TEACHER` therefore discarded genuine pre-deadline tutor
+ * submissions and proved lateness against them. Any human-actor event now
+ * qualifies; `submitterRoles` still records every role observed, so who
+ * submitted stays fully auditable even though it no longer changes the verdict.
  *
  * Steps:
- *  1. A qualifying event is tutor-authored (`TEACHER`) and not auto-submitted.
+ *  1. A qualifying event is any event Wise did not auto-submit.
  *  2. Earliest qualifying event at or before the deadline proves `on_time`.
  *  3. No qualifying event, with the deadline inside event coverage, proves `late`.
  *  4. A deadline predating the coverage floor proves nothing (fail closed to
@@ -339,7 +347,7 @@ export function deriveEventTimingEvidence(input: {
   const submitterRoles = [...new Set(events.map(feedbackSubmitterRole))].toSorted();
 
   const qualifying = events
-    .filter((event) => feedbackSubmitterRole(event) === "TEACHER")
+    .filter((event) => feedbackSubmitterRole(event) !== "AUTO")
     .toSorted((left, right) => left.eventTimestamp.getTime() - right.eventTimestamp.getTime());
 
   const provenOnTime = qualifying.find((event) => event.eventTimestamp.getTime() <= deadlineAt.getTime());
@@ -562,9 +570,9 @@ export function evaluateSessionCompliance(
     };
   }
 
-  // A Wise activity event is immutable server-side proof of when the tutor
-  // submitted, and the only evidence that separates tutor authorship from an
-  // admin submitting on their behalf or a Wise auto-submission. It therefore
+  // A Wise activity event is immutable server-side proof of when the feedback
+  // was submitted, and the only evidence that separates a human submission from
+  // a Wise auto-submission. It therefore
   // outranks the mutable submission timestamps below, and — like any newly
   // discovered pre-deadline proof — can clear a prior violation lock. D-EVT-02.
   if (eventTiming?.status === "on_time") {
