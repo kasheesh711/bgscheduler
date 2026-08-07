@@ -304,7 +304,7 @@ Running list of unresolved questions: [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUEST
 | `LEAVE_REQUESTS_SHEET_NAME` | Source tab, defaults to `Form Responses 1` |
 | `LEAVE_REQUESTS_CONNECTED_EMAIL` | Google OAuth token owner for cron/read/writeback; must have full Sheets scope for status writes |
 
-> The table above is the historical required-vars contract and is preserved verbatim. It is **no longer the complete picture**: `src/lib/env.ts` validates 9 required vars plus 6 optional ones (`LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER`, `LINE_SCHEDULE_BOT_ADMIN_IDS`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`) and does **not** declare the three `LEAVE_REQUESTS_*` vars, which are read directly from `process.env` in `src/lib/leave-requests/config.ts:1-5`. Roughly 50 environment variables are read across the codebase in total. The reconciled inventory is [`docs/reference/env.md`](docs/reference/env.md).
+> The table above is the historical required-vars contract and is preserved verbatim. It is **no longer the complete picture**: `src/lib/env.ts` validates 9 required vars plus 9 optional ones (`LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER`, `LINE_SCHEDULE_BOT_ADMIN_IDS`, `ENABLE_STUDENT_SCHEDULE_LIVE`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`, `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS`) and does **not** declare the three `LEAVE_REQUESTS_*` vars, which are read directly from `process.env` in `src/lib/leave-requests/config.ts:1-5`. Roughly 50 environment variables are read across the codebase in total. The reconciled inventory is [`docs/reference/env.md`](docs/reference/env.md).
 
 ## Admin Users (9 allowlisted)
 - aoengnatchasmith@gmail.com

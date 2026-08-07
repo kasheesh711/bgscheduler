@@ -18,20 +18,20 @@ Three inventories are reconciled here, and none of them agree:
 
 `AGENTS.md:287` heads its table "Environment Variables (9 required)", and `CLAUDE.md:104` / `CLAUDE.md:120` repeat "9 required env vars at startup (+ 3 optional LINE vars)". Neither matches the literal schema.
 
-`src/lib/env.ts:3`–`24` declares **15** keys in three buckets:
+`src/lib/env.ts:3`–`35` declares **18** keys in three buckets:
 
 | Bucket | Zod modifier | Count | Variables |
 |---|---|---|---|
 | **Hard-required** — `safeParse` fails when unset or empty | `.url()` ×1, `.min(1)` ×6 | **7** | `DATABASE_URL`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_SECRET`, `WISE_USER_ID`, `WISE_API_KEY`, `CRON_SECRET` |
 | **Defaulted** — parse succeeds when unset; a source literal is substituted | `.default(…)` | **2** | `WISE_NAMESPACE` → `"begifted-education"`, `WISE_INSTITUTE_ID` → `"696e1f4d90102225641cc413"` |
-| **Optional** — may be absent entirely | `.optional()` | **6** | `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER`, `LINE_SCHEDULE_BOT_ADMIN_IDS`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL` |
-| **Total declared** | | **15** | |
+| **Optional** — may be absent entirely | `.optional()` | **9** | `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER`, `LINE_SCHEDULE_BOT_ADMIN_IDS`, `ENABLE_STUDENT_SCHEDULE_LIVE`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`, `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS` |
+| **Total declared** | | **18** | |
 
 **The strict Zod truth is 7 hard-required keys, not 9.** The prose "9" is the 7 hard-required keys *plus* the 2 `WISE_*` keys carrying `.default(…)` literals (`src/lib/env.ts:10`–`11`). Those two are operationally expected in production, but the schema parses without them.
 
-The prose also undercounts the optional tail. It says "3 optional LINE vars"; the schema declares **6** optional keys (`src/lib/env.ts:13`–`23`). The three omitted — `LINE_SCHEDULE_BOT_ADMIN_IDS`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL` — belong to the student-schedule / LINE schedule-bot feature.
+The prose also undercounts the optional tail. It says "3 optional LINE vars"; the schema declares **9** optional keys (`src/lib/env.ts:13`–`34`). The six omitted — `LINE_SCHEDULE_BOT_ADMIN_IDS`, `ENABLE_STUDENT_SCHEDULE_LIVE`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`, `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS` — belong to the student-schedule / LINE schedule-bot features and to maintenance mode.
 
-Accurate phrasing: **7 hard-required + 2 defaulted + 6 optional = 15 declared; 71 named keys read at runtime.**
+Accurate phrasing: **7 hard-required + 2 defaulted + 9 optional = 18 declared; 71 named keys read at runtime.**
 
 `README.md:172`–`179` already carries the corrected 7/2/6 breakdown, but states that `src/lib/env.ts` "throws at startup if they don't parse". That is the one claim in the repo that the next section contradicts.
 
@@ -120,6 +120,8 @@ Ordered as declared.
 | `LINE_SCHEDULE_BOT_ADMIN_IDS` | `.optional()` — L19 | Comma-separated LINE user IDs allowed to drive the student schedule bot | `src/lib/line/schedule-bot.ts:112`–`124` | **Fail-closed (SCHED-BOT-01):** unset or empty yields an empty `Set`, and `isScheduleBotAdmin` requires `ids.size > 0` (`schedule-bot.ts:121`–`124`), so a parent messaging the OA can never reach the bot. Documented at `src/lib/env.ts:16`–`18`. To onboard a new admin operator, see [runbook §4.1](../operations/runbook.md#41-onboarding-a-new-schedule-bot-admin-operator) |
 | `STUDENT_SCHEDULE_LINK_TTL_DAYS` | `z.coerce.number().int().positive().optional()` — L21 | Days a parent schedule link stays live | `src/app/api/student-schedule/link/route.ts:55`; `src/lib/line/schedule-bot.ts:134`; `src/lib/line/schedule-bot-group.ts:124` | `DEFAULT_LINK_TTL_DAYS = 30` (`src/lib/student-schedule/links.ts:27`). All three consumers use `Number(...) || DEFAULT`, so `0` and non-numeric values also land on 30 — the `.int().positive()` guard never runs |
 | `APP_BASE_URL` | `.url().optional()` — L23 | Absolute origin used to build parent-facing schedule links | `src/app/api/student-schedule/link/route.ts:19`; `src/lib/line/schedule-bot.ts:131`; `src/lib/line/schedule-bot-group.ts:121` | The API route falls back to `request.nextUrl.origin`, so previews link to themselves (`src/lib/env.ts:22`). The two bot paths fall back to `DEFAULT_BASE_URL = "https://bgscheduler.vercel.app"` (`src/lib/line/schedule-bot.ts:78`, `src/lib/line/schedule-bot-group.ts:87`) |
+| `MAINTENANCE_MODE` | `.optional()` — L31 | Takes the staff UI offline while all 15 crons keep running | `src/lib/maintenance.ts` → `src/middleware.ts` | **Fail-open (MAINT-01):** the test is `=== "true"`, so unset, empty, `"TRUE"`, or a typo all leave the site serving. Deliberately the inverse polarity of `ENABLE_STUDENT_SCHEDULE_LIVE` — that flag defaults on, this one defaults off, because a bad env value must never black out production. Middleware reads `process.env` directly (edge runtime); the declaration here is inventory parity only. Changing it needs a redeploy. See [runbook §4.2](../operations/runbook.md#42-taking-the-site-offline-maintenance-mode) |
+| `MAINTENANCE_BYPASS_EMAILS` | `.optional()` — L34 | Comma-separated emails admitted through the maintenance gate | `src/lib/maintenance.ts` → `src/middleware.ts` | **Fail-closed (MAINT-03):** unset or empty yields an empty `Set`, so nobody bypasses. Mirrors `LINE_SCHEDULE_BOT_ADMIN_IDS`. Matched case-insensitively against `req.auth.user.email` after trimming |
 
 ---
 

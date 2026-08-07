@@ -24,6 +24,14 @@ const envSchema = z.object({
   STUDENT_SCHEDULE_LINK_TTL_DAYS: z.coerce.number().int().positive().optional(),
   // Absolute origin used to build parent links; previews link to themselves.
   APP_BASE_URL: z.string().url().optional(),
+  // Takes the staff UI offline while the crons keep running (MAINT-01). Exactly
+  // "true" engages it; unset or any other value leaves the site up. Declared
+  // here for inventory parity only — src/middleware.ts runs on the edge and
+  // reads process.env directly, because this module throws on a partial env.
+  MAINTENANCE_MODE: z.string().optional(),
+  // Comma-separated emails allowed through the maintenance gate. Unset or empty
+  // means nobody bypasses — fail-closed, like LINE_SCHEDULE_BOT_ADMIN_IDS.
+  MAINTENANCE_BYPASS_EMAILS: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -246,6 +246,77 @@ cannot look up their own LINE user id. This is the recipe:
 Group chats additionally need `/schedule setup staff` (or `setup family`) once
 per chat.
 
+### 4.2 Taking the site offline (maintenance mode)
+
+`MAINTENANCE_MODE` blocks the staff UI while **every cron keeps running**, so
+there is no data gap to backfill on resume. Vercel's Pause Project cannot serve
+this purpose: pausing blocks the production deployment, and all 15 crons target
+that same deployment.
+
+The gate lives in `src/middleware.ts`, above `isPublicRoute`, and is implemented
+in `src/lib/maintenance.ts` (`MAINT-01`–`MAINT-05`).
+
+| Surface | While on |
+| --- | --- |
+| The 25 `(app)` pages and their APIs | `503` |
+| `/api/internal/*` — all 15 crons | runs normally |
+| `/schedule/{token}` — parent links | renders normally |
+| `/login`, `/api/auth/*` | reachable, so a bypass admin can sign in |
+| An email in `MAINTENANCE_BYPASS_EMAILS` | full access |
+| `/api/line/webhook` | `503` — see the caveat below |
+
+**Turning it on:**
+
+1. Set `MAINTENANCE_MODE=true` and `MAINTENANCE_BYPASS_EMAILS=<your email>` in
+   the production Vercel environment.
+2. Redeploy. Env vars are baked in at build time, so nothing takes effect until
+   you do — the same constraint as §4.1. Using the existing build cache is fine.
+
+**Turning it off:** set `MAINTENANCE_MODE=false` (or delete it) and redeploy.
+Nothing else to undo — no stranded `running` rows, no backfill, because the
+syncs never stopped.
+
+**Verifying.** Expect `503`, `200`, `503` from:
+
+```bash
+curl -s -o /dev/null -w "%{http_code} %{url_effective}\n" \
+  https://bgscheduler.vercel.app/search \
+  https://bgscheduler.vercel.app/schedule/x \
+  https://bgscheduler.vercel.app/api/line/webhook
+```
+
+Then confirm the crons are unaffected — this is the check that matters:
+
+```sql
+SELECT job_key, outcome, response_status, received_at
+FROM cron_invocations
+WHERE received_at > now() - interval '40 minutes'
+ORDER BY received_at DESC LIMIT 15;
+```
+
+Every row should read `outcome = 'succeeded'` with `received_at` after the
+redeploy. A `503` in `response_status` means an exempt prefix is wrong — turn
+the flag off immediately and fix `MAINTENANCE_EXEMPT_PREFIXES`.
+
+**⚠ The LINE caveat.** `/api/line/webhook` is deliberately **not** exempt. LINE
+does not redeliver webhooks by default, so inbound OA messages arriving during a
+maintenance window are **lost, not queued** — no thread, no contact row, no
+scheduler review. After turning maintenance off:
+
+- Read the LINE OA app manually for the window; nothing replays.
+- Check the LINE Developers console — a run of failed deliveries can leave the
+  endpoint flagged and needing a re-verify.
+
+To trade that away, add `"/api/line/webhook"` to `MAINTENANCE_EXEMPT_PREFIXES`
+(`src/lib/maintenance.ts`). It is a one-line change.
+
+**Polarity.** The flag is opt-in: only the exact string `"true"` engages it.
+Unset, empty, `"TRUE"`, or a typo all leave the site serving. This is the
+inverse of `ENABLE_STUDENT_SCHEDULE_LIVE` on purpose — that flag defaults on and
+opts out; this one defaults off and opts in, because a bad env value must never
+black out production. `MAINTENANCE_BYPASS_EMAILS` runs the other way and is
+fail-closed: unset means nobody bypasses.
+
 ---
 
 ## 5. Cron authentication and manual triggering
