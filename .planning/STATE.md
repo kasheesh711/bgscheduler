@@ -30,7 +30,7 @@ Phase: 12 (LINE Backlog Identity Recovery (IDENT-07)) — EXECUTING
 Plan: 5 of 5 (phase complete)
 Next: `/gsd-plan-phase 11` — create executable plans
 Status: Ready to execute
-Last activity: 2026-08-07 - Completed quick task 260807-d12: Add MAINTENANCE_MODE kill switch to middleware (in-app off switch that blocks the staff UI while all 15 crons keep running; fail-open flag, fail-closed bypass allowlist, on branch feat/maintenance-mode — not pushed, not deployed)
+Last activity: 2026-08-07 - Completed quick task 260807-o3b: Post-class feedback role-blind event timing proof (Wise stamps actorRole from the account's role, not authorship, so a tutor holding an admin account had their own on-time submissions judged late; qualifying rule widened to any non-auto event, timing-evidence timeline added to the session dialog, activity mirror moved to 15-minute cadence; reassess applied in prod — 871 sessions late→on_time, 4 deductions waived; on branch feat/maintenance-mode — not pushed, not deployed)
 
 Progress: [██████████] 97%
 
@@ -146,6 +146,7 @@ None blocking roadmap execution.
 | 260805-llm | Fix stale docs after the LINE schedule-bot allowlist change | 2026-08-05 | 7ad5d53 | [260805-llm-fix-stale-docs-after-the-line-schedule-b](./quick/260805-llm-fix-stale-docs-after-the-line-schedule-b/) |
 | 260805-on4 | Live-refresh the student monthly schedule so /schedule never serves a stale time | 2026-08-05 | 1c89a4b | [260805-on4-live-refresh-the-student-monthly-schedul](./quick/260805-on4-live-refresh-the-student-monthly-schedul/) |
 | 260807-d12 | Add MAINTENANCE_MODE kill switch to middleware | 2026-08-07 | 71d008c | [260807-d12-add-maintenance-mode-kill-switch-to-midd](./quick/260807-d12-add-maintenance-mode-kill-switch-to-midd/) |
+| 260807-o3b | Post-class feedback: role-blind event timing proof | 2026-08-07 | a80e640 | [260807-o3b-post-class-role-blind-event-timing-proof](./quick/260807-o3b-post-class-role-blind-event-timing-proof/) |
 | Phase 10-vpol-01-view-transitions P01 | 216 | 2 tasks | 2 files |
 | Phase 10-vpol-01-view-transitions P02 | 4min | 2 tasks | 2 files |
 | Phase 11 P03 | 31515093 | 2 tasks | 3 files |
