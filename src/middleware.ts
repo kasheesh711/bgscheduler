@@ -1,4 +1,10 @@
 import { edgeAuth } from "@/lib/auth-edge";
+import {
+  isMaintenanceBypassEmail,
+  isMaintenanceExempt,
+  isMaintenanceMode,
+  maintenanceResponse,
+} from "@/lib/maintenance";
 import { NextResponse } from "next/server";
 
 function isPublicRoute(pathname: string) {
@@ -62,6 +68,18 @@ function isPathAllowed(pathname: string, allowedPages: string[] | null): boolean
 
 export default edgeAuth((req) => {
   const { pathname, search } = req.nextUrl;
+
+  // MAINT-04 — see src/lib/maintenance.ts. This MUST stay above isPublicRoute:
+  // that allowlist passes /api/line/webhook, so a gate placed after it would
+  // wave through the one path maintenance mode is meant to close. Off by
+  // default, so this is a no-op unless MAINTENANCE_MODE is exactly "true".
+  if (
+    isMaintenanceMode() &&
+    !isMaintenanceExempt(pathname) &&
+    !isMaintenanceBypassEmail(req.auth?.user?.email)
+  ) {
+    return maintenanceResponse(pathname);
+  }
 
   if (isPublicRoute(pathname)) {
     return NextResponse.next();
