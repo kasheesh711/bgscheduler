@@ -847,4 +847,49 @@ describe("assignClassrooms", () => {
     expect(midday.ruleTrace).toContain(`assigned by continuity: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
     expect(afternoon.ruleTrace).toContain(`assigned by sticky room: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
   });
+
+  it("does not let a sticky claim squat the capacity-demoted Relax (TV) and starve a later group", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          wiseSessionId: "morning-group",
+          tutorDisplayName: "Tutor One",
+          groupId: "morning-group",
+          studentCount: 6,
+          classType: "GROUP",
+          startMinute: 9 * 60,
+          endMinute: 10 * 60,
+        }),
+        session({
+          wiseSessionId: "afternoon-solo",
+          tutorDisplayName: "Tutor One",
+          groupId: "afternoon-solo",
+          studentCount: 1,
+          startMinute: 11 * 60,
+          endMinute: 12 * 60,
+        }),
+        session({
+          wiseSessionId: "overlapping-group",
+          tutorDisplayName: "Tutor Two",
+          groupId: "overlapping-group",
+          studentCount: 6,
+          classType: "GROUP",
+          startMinute: 11 * 60,
+          endMinute: 12 * 60,
+        }),
+      ],
+      roomsFor("Focus", "Cool", "Relax (TV)"),
+    );
+
+    const morningGroup = result.rows.find((row) => row.wiseSessionId === "morning-group")!;
+    const afternoonSolo = result.rows.find((row) => row.wiseSessionId === "afternoon-solo")!;
+    const overlappingGroup = result.rows.find((row) => row.wiseSessionId === "overlapping-group")!;
+
+    expect(morningGroup.assignedRoom).toBe("Relax (TV)");
+    expect(afternoonSolo.assignedRoom).not.toBe("Relax (TV)");
+    expect(afternoonSolo.status).toBe("assigned");
+    expect(afternoonSolo.ruleTrace).not.toContain("assigned by sticky room: Relax (TV)");
+    expect(overlappingGroup.assignedRoom).toBe("Relax (TV)");
+    expect(result.rows.some((row) => row.status === "no_room")).toBe(false);
+  });
 });

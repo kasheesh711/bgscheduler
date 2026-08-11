@@ -19,6 +19,9 @@ export const REMOTE_NO_ROOM_NEEDED = "REMOTE_NO_ROOM_NEEDED";
 export const ONLINE_CENTER_CONNECTION_GAP_MINUTES = 60;
 export const GENERAL_CONTINUITY_GAP_MINUTES = 15;
 
+/** Soft-scoring penalty that pushes an over-large room behind every other candidate. */
+const DEMOTED_ROOM_SCORE = 2_000;
+
 export type AssignmentRowStatus = "assigned" | "needs_review" | "no_room" | "remote";
 
 export interface AssignmentSession {
@@ -188,7 +191,7 @@ function isRelaxRoom(roomName: string): boolean {
 function roomPriorityScore(room: ClassroomRoomDefinition, minCapacity: number): number {
   const coreRank = CORE_TEACHING_ROOM_RANK.get(room.name);
   if (coreRank !== undefined) return coreRank;
-  if (isRelaxRoom(room.name) && minCapacity <= 3) return 2_000;
+  if (isRelaxRoom(room.name) && minCapacity <= 3) return DEMOTED_ROOM_SCORE;
   return 1_000;
 }
 
@@ -436,6 +439,14 @@ export function assignClassrooms(
     const roomAvailable = (roomName: string): boolean =>
       isAvailable(occupancy, roomName, session, session.wiseSessionId) &&
       isAvailable(protectedClaims, roomName, session, session.wiseSessionId);
+    // Soft scoring demotes an over-large room for a small session (Relax (TV) for <= 3 seats).
+    // pickBestRoom honors that ranking; sticky reuse must respect it too, or a tutor's morning
+    // group class would let them squat the only big room all day.
+    const roomDemotedForSession = (roomName: string): boolean => {
+      const definition = roomByName.get(roomName);
+      if (!definition) return false;
+      return roomPriorityScore(definition, minCapacity) >= DEMOTED_ROOM_SCORE;
+    };
     const pickRoom = (candidates: ClassroomRoomDefinition[]): string | null => {
       const picked = candidates.find((room) => roomOk(room.name) && roomAvailable(room.name));
       return picked?.name ?? null;
@@ -536,7 +547,13 @@ export function assignClassrooms(
       const last = latestPriorRoomForTutor(tutorNorm, session.startMinute);
       if (last) {
         const gap = session.startMinute - last.endMinute;
-        if (gap >= 0 && roomOk(last.room) && roomAvailable(last.room) && !(last.room === ROOM_JOY && !isGift)) {
+        if (
+          gap >= 0 &&
+          roomOk(last.room) &&
+          roomAvailable(last.room) &&
+          !(last.room === ROOM_JOY && !isGift) &&
+          !roomDemotedForSession(last.room)
+        ) {
           assignedRoom = last.room;
           ruleTrace.push(`assigned by sticky room: ${last.room}`);
         }
