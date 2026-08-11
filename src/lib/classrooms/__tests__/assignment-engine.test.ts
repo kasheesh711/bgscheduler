@@ -967,4 +967,49 @@ describe("assignClassrooms", () => {
     expect(emptyOptions).toEqual(noOptions);
     expect(explicitEmptyContext).toEqual(noOptions);
   });
+
+  it("does not stake a priority claim on a room an external block already occupies", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          wiseSessionId: "ras",
+          groupId: "ras",
+          tutorDisplayName: "Rasna (Ras) Rajkitkul",
+          startMinute: 10 * 60,
+          endMinute: 11 * 60,
+        }),
+        session({
+          wiseSessionId: "generic",
+          groupId: "generic",
+          tutorDisplayName: "Generic Tutor",
+          startMinute: 10 * 60 + 30,
+          endMinute: 11 * 60,
+        }),
+      ],
+      roomsFor("Never Ever (TV)", "Remember (TV)"),
+      new Map(),
+      {
+        externalRoomBlocks: [{
+          wiseSessionId: "external",
+          className: "External class",
+          location: "Never Ever (TV)",
+          startMinute: 10 * 60,
+          endMinute: 10 * 60 + 30,
+        }],
+      },
+    );
+
+    const ras = result.rows.find((row) => row.wiseSessionId === "ras")!;
+    const generic = result.rows.find((row) => row.wiseSessionId === "generic")!;
+
+    // Ras's priority claim on Never Ever (TV) is unusable (the external block overlaps her window),
+    // so it must not be staked -- otherwise it fences the room off from the generic session, which
+    // starts after the block ends and could legitimately use it.
+    expect(result.rows.some((row) => row.status === "no_room")).toBe(false);
+    expect(generic.assignedRoom).toBe("Never Ever (TV)");
+    expect(generic.status).toBe("assigned");
+    expect(ras.assignedRoom).not.toBe("Never Ever (TV)");
+    expect(ras.assignedRoom).toBe("Remember (TV)");
+    expect(ras.status).toBe("assigned");
+  });
 });

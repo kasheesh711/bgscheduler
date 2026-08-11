@@ -407,6 +407,11 @@ export function assignClassrooms(
     return normalizeTutorName(a.tutorDisplayName).localeCompare(normalizeTutorName(b.tutorDisplayName));
   });
 
+  // Claim pre-passes. Each stakes a protected interval so a later generic session cannot take a room
+  // an earlier-sorted high-priority session is pinned to. Every pre-pass checks BOTH protectedClaims
+  // (no two claims on the same room/interval) and occupancy (which already holds the external room
+  // blocks -- carried rows and live Wise blocks). Skipping the occupancy check would let a session
+  // stake a claim the cascade can never honor, fencing the room off from everyone else for nothing.
   const protectedClaims = new Map<string, OccupancyInterval[]>();
   for (const room of activeRooms) protectedClaims.set(normalizedPhysicalRoom(room.name), []);
 
@@ -417,6 +422,7 @@ export function assignClassrooms(
     if (!roomByName.has(facts.overrideRoom)) continue;
     if (!roomPassesConstraints(roomByName.get(facts.overrideRoom), session, facts.minCapacity, facts.needsTv)) continue;
     if (!isAvailable(protectedClaims, facts.overrideRoom, session, session.wiseSessionId)) continue;
+    if (!isAvailable(occupancy, facts.overrideRoom, session, session.wiseSessionId)) continue;
 
     addRoomInterval(protectedClaims, facts.overrideRoom, session);
     validOverrideBySessionId.add(session.wiseSessionId);
@@ -440,6 +446,7 @@ export function assignClassrooms(
       continue;
     }
     if (!isAvailable(protectedClaims, priorityPreferredRoom, session, session.wiseSessionId)) continue;
+    if (!isAvailable(occupancy, priorityPreferredRoom, session, session.wiseSessionId)) continue;
 
     addRoomInterval(protectedClaims, priorityPreferredRoom, session);
     priorityPreferredRoomClaimBySessionId.add(session.wiseSessionId);
@@ -454,6 +461,7 @@ export function assignClassrooms(
     if (!facts.requiresCenterRoom) continue;
     if (!roomPassesConstraints(roomByName.get(facts.preferredRoom), session, facts.minCapacity, facts.needsTv)) continue;
     if (!isAvailable(protectedClaims, facts.preferredRoom, session, session.wiseSessionId)) continue;
+    if (!isAvailable(occupancy, facts.preferredRoom, session, session.wiseSessionId)) continue;
 
     addRoomInterval(protectedClaims, facts.preferredRoom, session);
     preferredRoomClaimBySessionId.add(session.wiseSessionId);
