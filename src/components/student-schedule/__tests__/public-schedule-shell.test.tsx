@@ -62,11 +62,11 @@ describe("PublicScheduleShell", () => {
     expect(calendar).toContain("lg:max-w-5xl");
   });
 
-  it("splits the calendar slot into a print-safe grid and a screen-only dot map", () => {
+  it("splits the calendar slot into a print-safe grid and a screen-only mini calendar", () => {
     const html = render();
     expect(html).toContain("hidden lg:block print:block");
     expect(html).toContain("lg:hidden print:hidden");
-    expect(html).toContain('data-testid="parent-dot-grid"');
+    expect(html).toContain('data-testid="parent-mini-calendar"');
   });
 
   it("renders the toggle with Thai labels and no pressed segment before hydration", () => {

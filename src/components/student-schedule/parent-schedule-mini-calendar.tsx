@@ -1,19 +1,21 @@
 "use client";
 
 // ----------------------------------------------------------------------------
-// Parent dot grid — the phone-sized "calendar view" of the public page.
+// Parent mini calendar — the phone-sized "calendar view" of the public page.
 //
-// A month grid with readable session text does not fit a 375px screen, so
-// below lg the calendar view is a jump map instead: one dot per session in
-// the subject's colour (same buildSubjectColorMap as the agenda and the
-// admin grid, so all surfaces agree), and tapping a day hands the dateKey
-// back to the shell, which returns to the agenda scrolled to that day.
-// Navigation only — it never renders session text and never writes the
-// stored view preference.
+// A full month grid with session text does not fit a 375px screen, so below
+// lg the calendar view is a compressed month of micro chips: each session is
+// a truncated subject label on that subject's colour tint (the same
+// rgba-tint-plus-colour-edge formula as the agenda cards and the desktop
+// grid's SessionBlock, via the shared buildSubjectColorMap, so every surface
+// agrees). Tapping a day hands the dateKey back to the shell, which returns
+// to the agenda scrolled to that day. Navigation only — chips carry no
+// time/teacher detail and taps never write the stored view preference.
 // ----------------------------------------------------------------------------
 
 import { cn } from "@/lib/utils";
 import { buildMonthGrid, dayOfMonth } from "@/lib/calendar/month-grid";
+import { rgba } from "@/components/compare/session-colors";
 import { buildSubjectColorMap } from "./schedule-month-calendar";
 import {
   PUBLIC_PAGE_COPY,
@@ -25,44 +27,49 @@ import type {
   StudentScheduleSession,
 } from "@/lib/student-schedule/types";
 
-/** Dots drawn per day before collapsing the rest into a "+N". */
-export const DOT_CAP = 4;
+/** Chips drawn per day before collapsing the rest into a "+N". */
+export const CHIP_CAP = 3;
 
 /** First palette entry, for the impossible miss on an empty-subject session. */
 const FALLBACK_COLOR = "#3b82f6";
 
-export interface DotGridDay {
+export interface MiniCalendarChip {
+  subject: string;
+  color: string;
+}
+
+export interface MiniCalendarDay {
   dateKey: string;
   inMonth: boolean;
   day: number;
   isToday: boolean;
   /** 0 for out-of-month and empty days. */
   sessionCount: number;
-  /** One colour per session, capped at DOT_CAP. */
-  dots: string[];
-  /** Sessions beyond DOT_CAP. */
+  /** One chip per session, capped at CHIP_CAP. */
+  chips: MiniCalendarChip[];
+  /** Sessions beyond CHIP_CAP. */
   overflow: number;
 }
 
-export interface DotGridModel {
+export interface MiniCalendarModel {
   /** Exactly 42 cells, Monday-start — same grid maths as the month calendar. */
-  days: DotGridDay[];
-  /** Subject → colour in order of first appearance. */
-  legend: Array<{ subject: string; color: string }>;
+  days: MiniCalendarDay[];
 }
 
 /**
  * Pure model behind the component, exported so behaviour is testable without
- * DOM events: dot colours, the DOT_CAP overflow, today detection, and the
- * out-of-month blanks.
+ * DOM events: chip subjects/colours, the CHIP_CAP overflow, today detection,
+ * and the out-of-month blanks.
  */
-export function buildParentDotGridModel(
+export function buildParentMiniCalendarModel(
   payload: StudentSchedulePayload,
   todayKey?: string,
-): DotGridModel {
+): MiniCalendarModel {
   const subjectColors = buildSubjectColorMap(payload.sessions);
-  const colorFor = (session: StudentScheduleSession) =>
-    subjectColors.get(session.subject) ?? FALLBACK_COLOR;
+  const chipFor = (session: StudentScheduleSession): MiniCalendarChip => ({
+    subject: session.subject,
+    color: subjectColors.get(session.subject) ?? FALLBACK_COLOR,
+  });
 
   const byDate = new Map<string, StudentScheduleSession[]>();
   for (const session of payload.sessions) {
@@ -79,18 +86,15 @@ export function buildParentDotGridModel(
       day: dayOfMonth(cell.dateKey),
       isToday: todayKey !== undefined && cell.dateKey === todayKey,
       sessionCount: sessions.length,
-      dots: sessions.slice(0, DOT_CAP).map(colorFor),
-      overflow: Math.max(0, sessions.length - DOT_CAP),
+      chips: sessions.slice(0, CHIP_CAP).map(chipFor),
+      overflow: Math.max(0, sessions.length - CHIP_CAP),
     };
   });
 
-  return {
-    days,
-    legend: [...subjectColors].map(([subject, color]) => ({ subject, color })),
-  };
+  return { days };
 }
 
-export function ParentScheduleDotGrid({
+export function ParentScheduleMiniCalendar({
   payload,
   todayKey,
   onSelectDay,
@@ -100,10 +104,10 @@ export function ParentScheduleDotGrid({
   /** Called with the tapped day's dateKey; only session days are tappable. */
   onSelectDay: (dateKey: string) => void;
 }) {
-  const model = buildParentDotGridModel(payload, todayKey);
+  const model = buildParentMiniCalendarModel(payload, todayKey);
 
   return (
-    <div data-testid="parent-dot-grid">
+    <div data-testid="parent-mini-calendar">
       <div className="grid grid-cols-7 text-center text-xs font-medium text-muted-foreground">
         {THAI_WEEKDAY_INITIALS.map((header) => (
           <div key={header} className="py-1.5">
@@ -111,15 +115,13 @@ export function ParentScheduleDotGrid({
           </div>
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-1">
+      <div className="grid grid-cols-7 gap-x-1 gap-y-1.5">
         {model.days.map((cell) => {
           const dayNumber = (
             <span
               className={cn(
                 "text-sm tabular-nums",
-                cell.inMonth
-                  ? "text-foreground"
-                  : "text-muted-foreground/40",
+                cell.inMonth ? "text-foreground" : "text-muted-foreground/40",
                 cell.isToday &&
                   "inline-flex size-6 items-center justify-center rounded-full bg-primary font-semibold text-primary-foreground",
               )}
@@ -127,33 +129,15 @@ export function ParentScheduleDotGrid({
               {cell.day}
             </span>
           );
-          const dotRow = (
-            <span className="flex min-h-1.5 items-center gap-0.5">
-              {cell.dots.map((color, index) => (
-                <span
-                  key={index}
-                  aria-hidden
-                  className="size-1.5 rounded-full"
-                  style={{ backgroundColor: color }}
-                />
-              ))}
-              {cell.overflow > 0 && (
-                <span className="text-[10px] leading-none text-muted-foreground">
-                  +{cell.overflow}
-                </span>
-              )}
-            </span>
-          );
 
           if (cell.sessionCount === 0) {
             return (
               <div
                 key={cell.dateKey}
-                data-testid="dot-day"
-                className="flex min-h-11 flex-col items-center justify-center gap-1 rounded-md"
+                data-testid="mini-day"
+                className="flex min-h-11 flex-col items-center rounded-md pt-0.5"
               >
                 {dayNumber}
-                {dotRow}
               </div>
             );
           }
@@ -161,31 +145,32 @@ export function ParentScheduleDotGrid({
             <button
               key={cell.dateKey}
               type="button"
-              data-testid="dot-day"
+              data-testid="mini-day"
               aria-label={`${formatThaiDayHeading(cell.dateKey)} · ${cell.sessionCount} ${PUBLIC_PAGE_COPY.classUnit}`}
               onClick={() => onSelectDay(cell.dateKey)}
-              className="flex min-h-11 flex-col items-center justify-center gap-1 rounded-md outline-none transition-colors hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50"
+              className="flex min-h-11 flex-col items-stretch gap-0.5 rounded-md pt-0.5 pb-1 outline-none transition-colors hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50"
             >
-              {dayNumber}
-              {dotRow}
+              <span className="self-center">{dayNumber}</span>
+              {cell.chips.map((chip, index) => (
+                <span
+                  key={index}
+                  className="w-full truncate rounded-[3px] px-1 py-px text-left text-[9px] leading-tight font-medium text-foreground"
+                  style={{
+                    backgroundColor: rgba(chip.color, 0.18),
+                    borderLeft: `2px solid ${chip.color}`,
+                  }}
+                >
+                  {chip.subject}
+                </span>
+              ))}
+              {cell.overflow > 0 && (
+                <span className="text-[9px] leading-none text-muted-foreground">
+                  +{cell.overflow}
+                </span>
+              )}
             </button>
           );
         })}
-      </div>
-      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1">
-        {model.legend.map(({ subject, color }) => (
-          <span
-            key={subject}
-            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
-          >
-            <span
-              aria-hidden
-              className="size-2 rounded-full"
-              style={{ backgroundColor: color }}
-            />
-            {subject}
-          </span>
-        ))}
       </div>
     </div>
   );

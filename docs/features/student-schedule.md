@@ -152,9 +152,10 @@ a session-count badge), and an **agenda ⇄ calendar view toggle**:
   resizes/rotation keep working via CSS while in auto.
 - **The calendar view is two shapes:** at `lg`+ it is `ScheduleMonthCalendar`'s month grid in the
   `max-w-5xl` column the desktop page had before the agenda redesign; below `lg` it is the
-  **dot-grid jump map** (`parent-schedule-dot-grid.tsx`) — one dot per session in the shared
-  subject colour, Thai weekday initials, a `+N` overflow past 4 dots, and a subject legend. Tapping
-  a day returns to the agenda scrolled to that day (via its `data-date`); dot taps are navigation
+  **mini calendar** (`parent-schedule-mini-calendar.tsx`) — one micro chip per session, the
+  truncated subject name on that subject's colour tint (the SessionBlock formula), Thai weekday
+  initials, and a `+N` overflow past 3 chips. Tapping
+  a day returns to the agenda scrolled to that day (via its `data-date`); those taps are navigation
   and **never** write the preference.
 - **Explicit toggle choices persist** in `localStorage["bgscheduler.schedule.view"]`
   (admissions-locale pattern: try/catch, garbage fails closed to auto). A stored preference is
@@ -179,15 +180,15 @@ shared with the admissions calendar via `src/lib/calendar/month-grid.ts`.
 parent page's default mobile view: a day-by-day list of session cards, one section per day that
 has sessions, headed by the Thai weekday + day number (`formatThaiDayHeading`). With `todayKey` it
 badges today ("วันนี้"), dims past days (visual only — never dropped), and anchors
-`id="agenda-scroll-target"` on the first day at or after today. Scroll-to-today (and the dot
-grid's scroll-to-day, via each section's `data-date`) is owned by `PublicScheduleShell`'s
+`id="agenda-scroll-target"` on the first day at or after today. Scroll-to-today (and the mini
+calendar's scroll-to-day, via each section's `data-date`) is owned by `PublicScheduleShell`'s
 pending-scroll effect, which runs after the commit that revealed the agenda so a scroll never
 fires against a `display:none` subtree. The agenda is deliberately a **separate component** rather
 than a third branch of `ScheduleMonthCalendar`: the calendar's
 `.schedule-month-grid`/`.schedule-mobile-list` class names are force-toggled by the print CSS, so
 its markup is load-bearing for the A4 report, and the two audiences want different type scales and
 states. Content cannot drift between the surfaces because all of them render the same payload, and
-the agenda and dot grid import the same `buildSubjectColorMap` for their colours.
+the agenda and mini calendar import the same `buildSubjectColorMap` for their colours.
 
 The three surfaces are **not** byte-identical, though, because they differ in component and props:
 
@@ -195,7 +196,7 @@ The three surfaces are **not** byte-identical, though, because they differ in co
 |---|---|---|---|
 | Workspace | `ScheduleMonthCalendar` | `todayKey={todayKey}` (`student-schedule-workspace.tsx:257`) | the calendar's own English empty state |
 | Print report | `ScheduleMonthCalendar` | *omitted* (`report/page.tsx:115`) | the calendar's own English empty state |
-| Parent page | `ParentScheduleAgenda` + `ScheduleMonthCalendar` (lg+ calendar view) + `ParentScheduleDotGrid` (sub-lg calendar view) | `todayKey={todayBangkok()}` on all three | the page's Thai/English `PUBLIC_PAGE_COPY.emptyMonth` in a card, no toggle |
+| Parent page | `ParentScheduleAgenda` + `ScheduleMonthCalendar` (lg+ calendar view) + `ParentScheduleMiniCalendar` (sub-lg calendar view) | `todayKey={todayBangkok()}` on all three | the page's Thai/English `PUBLIC_PAGE_COPY.emptyMonth` in a card, no toggle |
 
 - **`todayKey` draws the today marker** — a filled badge on the matching grid cell in the calendar
   (`schedule-month-calendar.tsx:179`-`181`), the "วันนี้" badge + scroll anchor in the agenda. The
@@ -215,7 +216,7 @@ print-time swap that forces the month grid on and the mobile list off (`:65`-`72
 nuance: while in auto view, print output follows **paper** width, not screen width — portrait A4
 (≈794 CSS px) is below `lg`, so a desktop screen showing the grid still prints the agenda unless
 the paper is landscape. Forced views print what they show, and a forced calendar always prints the
-month grid (`print:block` on the grid wrapper, `print:hidden` on the dot grid — the dot map is
+month grid (`print:block` on the grid wrapper, `print:hidden` on the mini calendar — it is
 navigation, not a document).
 
 ## Data flow
@@ -392,13 +393,13 @@ Run with `npm test`. Tests sit in sibling `__tests__/` directories.
 - **`src/components/student-schedule/__tests__/schedule-view-preference.test.ts`** — the toggle's
   zero-flash contract as exact class strings for auto/forced views, plus storage helpers failing
   closed to auto on garbage or a throwing localStorage.
-- **`src/components/student-schedule/__tests__/parent-schedule-dot-grid.test.tsx`** — 42
-  Monday-start cells, one dot per session in shared-map colours, the DOT_CAP `+N` overflow, blank
+- **`src/components/student-schedule/__tests__/parent-schedule-mini-calendar.test.tsx`** — 42
+  Monday-start cells, one subject chip per session in shared-map colours, the CHIP_CAP `+N` overflow, blank
   out-of-month cells, today only with `todayKey`, buttons only on session days, Thai aria-labels,
   and the first-appearance legend.
 - **`src/components/student-schedule/__tests__/public-schedule-shell.test.tsx`** — the SSR auto
   contract (agenda `lg:hidden`, calendar `hidden lg:block lg:max-w-5xl`), the print-safe
-  grid/dot-grid split, the Thai toggle with neither segment pressed before hydration, and every
+  grid/mini-calendar split, the Thai toggle with neither segment pressed before hydration, and every
   slot mounted inside the scroll-owning shell.
 - **`src/lib/calendar/__tests__/month-grid.test.ts`** — grid construction, leap February, year
   boundaries in both directions, throwing on a malformed key, Monday resolution, D/M formatting.

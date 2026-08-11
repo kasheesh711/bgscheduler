@@ -12,7 +12,7 @@
 // (persisted) or a stored preference (applied in an effect) forces a view.
 //
 // The agenda and the desktop month grid arrive as server-rendered slots;
-// only the dot grid renders here because its day taps need a callback.
+// only the mini calendar renders here because its day taps need a callback.
 // Scroll-to-today lives here too (it replaced agenda-today-scroller.tsx):
 // scrollIntoView on a display:none subtree is a no-op, so the pending-scroll
 // effect keyed on state runs after the commit that revealed the agenda.
@@ -21,7 +21,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CalendarDaysIcon, ListIcon } from "lucide-react";
 
-import { ParentScheduleDotGrid } from "./parent-schedule-dot-grid";
+import { ParentScheduleMiniCalendar } from "./parent-schedule-mini-calendar";
 import {
   readStoredScheduleView,
   resolveViewContainerClasses,
@@ -106,7 +106,7 @@ export function PublicScheduleShell({
     writeStoredScheduleView(window.localStorage, next);
   };
 
-  // Dot-grid taps navigate; they never write the stored preference.
+  // Mini-calendar taps navigate; they never write the stored preference.
   const jumpToDay = (dateKey: string) => {
     setView("agenda");
     setPendingScroll({ kind: "day", dateKey });
@@ -155,10 +155,10 @@ export function PublicScheduleShell({
           {/* The month grid's own week-list branch is lg:hidden, so this
               wrapper leaves exactly the grid at lg+ and nothing below it.
               print: variants keep a forced-calendar print on the grid —
-              the dot grid is navigation, not a document. */}
+              the mini calendar is navigation, not a document. */}
           <div className="hidden lg:block print:block">{desktopCalendar}</div>
           <div className="lg:hidden print:hidden">
-            <ParentScheduleDotGrid
+            <ParentScheduleMiniCalendar
               payload={payload}
               todayKey={todayKey}
               onSelectDay={jumpToDay}
