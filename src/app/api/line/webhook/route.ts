@@ -2,8 +2,6 @@ import { after, type NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { lineChannelSecret, lineSchedulerEnabled } from "@/lib/line/client";
 import { handleLineWebhookPost } from "@/lib/line/webhook";
-import { processLineMessageForScheduler } from "@/lib/line/review-service";
-import { handleScheduleBotGroupCommand } from "@/lib/line/schedule-bot-group";
 
 export const maxDuration = 60;
 
@@ -22,6 +20,9 @@ export async function POST(request: NextRequest) {
     scheduleProcessing: (lineMessageId) => {
       after(async () => {
         try {
+          // Loaded lazily: this drags in the AI-scheduler and search subtrees,
+          // which are only ever needed after the 200 has gone back to LINE.
+          const { processLineMessageForScheduler } = await import("@/lib/line/review-service");
           await processLineMessageForScheduler(db, lineMessageId);
         } catch (error) {
           console.error("LINE scheduler processing failed", error);
@@ -31,6 +32,9 @@ export async function POST(request: NextRequest) {
     scheduleGroupCommand: (command) => {
       after(async () => {
         try {
+          // Loaded lazily for the same reason — keeps the pre-response cold
+          // start to the ingest path only.
+          const { handleScheduleBotGroupCommand } = await import("@/lib/line/schedule-bot-group");
           await handleScheduleBotGroupCommand({ db, ...command });
         } catch (error) {
           console.error("LINE group command processing failed", error);

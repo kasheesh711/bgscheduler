@@ -46,7 +46,7 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { pushLineTextMessage, replyLineMessage } from "@/lib/line/client";
 import { readMentionees } from "@/lib/line/mentions";
-import { searchCurrentLineStudents } from "@/lib/line/student-links";
+import { searchCurrentLineStudentsWithSnapshot } from "@/lib/line/student-links";
 import {
   ANSWER_PATTERN,
   COMMAND_PATTERN,
@@ -472,7 +472,12 @@ async function startGroupSend(
   monthKey: string,
   pushToParent: boolean,
 ): Promise<GroupBotResult> {
-  const candidates = await searchCurrentLineStudents(db, query, MAX_CANDIDATES);
+  // The chat's settings are independent of the student lookup — resolve both
+  // concurrently so neither waits behind the other's roundtrips.
+  const [{ snapshot, rows: candidates }, settings] = await Promise.all([
+    searchCurrentLineStudentsWithSnapshot(db, query, MAX_CANDIDATES),
+    groupSettings(db, target.groupId),
+  ]);
 
   // GRP-BOT-03 — exactly one exact code hit, or nothing is sent.
   const exact = exactCodeMatches(query, candidates);
@@ -485,9 +490,15 @@ async function startGroupSend(
   }
 
   const student = exact[0];
+  // Snapshot + student ride along from the search, and the live Wise sweep
+  // only runs to rescue an empty snapshot month — the message needs a session
+  // count the ≤30-min-old snapshot answers, and the minted link re-fetches
+  // live data at view time anyway.
   const schedule = await getStudentMonthlySchedule(db, {
     studentKey: student.studentKey,
     monthKey,
+    liveSweep: "rescue",
+    preResolved: snapshot ? { snapshot, student } : undefined,
   });
   if (!schedule) {
     await say(deps, target, GROUP_NO_SNAPSHOT);
@@ -500,7 +511,6 @@ async function startGroupSend(
     return { handled: true, action: "empty_month" };
   }
 
-  const settings = await groupSettings(db, target.groupId);
   const audience = settings?.audience ?? null;
 
   // GRP-BOT-07 — instant mode: this chat's admins have switched the confirm

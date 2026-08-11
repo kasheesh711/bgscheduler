@@ -234,23 +234,42 @@ export function mergeLiveSessionsIntoRows({
  *   (unknown key, or no snapshot has been generated yet). Callers must treat
  *   null as "not found" and never fall back to a name search.
  */
+/** When the live overlay sweep runs: every call, only to rescue an empty snapshot month, or never. */
+export type StudentScheduleLiveSweepMode = "always" | "rescue" | "never";
+
+/**
+ * Snapshot + student already resolved by the caller (the schedule-bot search
+ * returns both), so this function can skip its own two lookups. The snapshot
+ * may be one promotion stale by the time the sessions query runs; retired
+ * snapshot rows are retained, so the read stays internally consistent.
+ */
+export interface PreResolvedScheduleContext {
+  snapshot: { id: string; generatedAt: Date };
+  student: { studentKey: string; wiseStudentId: string; studentName: string; parentName: string };
+}
+
 export async function getStudentMonthlySchedule(
   db: Database,
-  { studentKey, monthKey }: { studentKey: string; monthKey: string },
+  { studentKey, monthKey, liveSweep = "always", preResolved }: {
+    studentKey: string;
+    monthKey: string;
+    liveSweep?: StudentScheduleLiveSweepMode;
+    preResolved?: PreResolvedScheduleContext;
+  },
 ): Promise<StudentSchedulePayload | null> {
   if (!isMonthKey(monthKey)) {
     throw new Error(`Invalid month key: expected "YYYY-MM", got "${monthKey}"`);
   }
 
-  const [snapshot] = await db
+  const snapshot = preResolved?.snapshot ?? (await db
     .select({ id: schema.creditControlSnapshots.id, generatedAt: schema.creditControlSnapshots.generatedAt })
     .from(schema.creditControlSnapshots)
     .where(eq(schema.creditControlSnapshots.active, true))
     .orderBy(desc(schema.creditControlSnapshots.generatedAt))
-    .limit(1);
+    .limit(1))[0];
   if (!snapshot) return null;
 
-  const [studentRow] = await db
+  const studentRow = preResolved?.student ?? (await db
     .select({
       wiseStudentId: schema.creditControlStudents.wiseStudentId,
       studentKey: schema.creditControlStudents.studentKey,
@@ -262,7 +281,7 @@ export async function getStudentMonthlySchedule(
       eq(schema.creditControlStudents.snapshotId, snapshot.id),
       eq(schema.creditControlStudents.studentKey, studentKey),
     ))
-    .limit(1);
+    .limit(1))[0];
   if (!studentRow) return null;
 
   const { start, end } = bangkokMonthInstantWindow(monthKey);
@@ -291,7 +310,17 @@ export async function getStudentMonthlySchedule(
 
   const snapshotRows: StudentScheduleRow[] = rows.map((row) => ({ ...row, parentName: studentRow.parentName }));
 
-  const live = await fetchLiveMonthSessions({ wiseStudentId: studentRow.wiseStudentId, monthKey });
+  // "rescue" sweeps only when the snapshot month is empty at the PAYLOAD level
+  // (mirroring the CANCELLED filter the payload builder applies), so a month
+  // whose snapshot rows are all cancelled still gets a live look before a
+  // caller like the schedule bot refuses it as empty (GRP-BOT-05).
+  const snapshotHasVisibleSessions = snapshotRows.some(
+    (row) => !CANCELLED_PATTERN.test(row.meetingStatus.trim()),
+  );
+  const runSweep = liveSweep === "always" || (liveSweep === "rescue" && !snapshotHasVisibleSessions);
+  const live = runSweep
+    ? await fetchLiveMonthSessions({ wiseStudentId: studentRow.wiseStudentId, monthKey })
+    : { sessions: [], ok: false as const };
   const liveSessionsInMonth = live.ok
     ? live.sessions.filter((session) => (
       session.scheduledStartTime >= start && session.scheduledStartTime < end

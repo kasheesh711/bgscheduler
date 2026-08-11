@@ -66,3 +66,7 @@ graphify-out/
 # `git add -A` before this rule existed.
 *-tmp.mjs
 *-tmp.js
+
+# oh-my-claudecode operational state (`.omc/skills/` is the committable exception)
+.omc/*
+!.omc/skills/

@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { matchNamesToDirectory, SUGGEST_SHORTLIST_MIN_SCORE } from "@/lib/line/name-matcher";
@@ -172,13 +172,23 @@ function linkToDto(row: LinkRow, currentStudent?: LineStudentDirectoryRow | null
   };
 }
 
-async function activeCreditControlSnapshotId(db: Database): Promise<string | null> {
+async function activeCreditControlSnapshot(
+  db: Database,
+): Promise<{ id: string; generatedAt: Date } | null> {
   const [snapshot] = await db
-    .select({ id: schema.creditControlSnapshots.id })
+    .select({
+      id: schema.creditControlSnapshots.id,
+      generatedAt: schema.creditControlSnapshots.generatedAt,
+    })
     .from(schema.creditControlSnapshots)
     .where(eq(schema.creditControlSnapshots.active, true))
+    .orderBy(desc(schema.creditControlSnapshots.generatedAt))
     .limit(1);
-  return snapshot?.id ?? null;
+  return snapshot ?? null;
+}
+
+async function activeCreditControlSnapshotId(db: Database): Promise<string | null> {
+  return (await activeCreditControlSnapshot(db))?.id ?? null;
 }
 
 export async function listCurrentLineStudents(db: Database): Promise<LineStudentDirectoryRow[]> {
@@ -630,12 +640,33 @@ export function searchLineStudentRows(
     }));
 }
 
+export interface LineStudentSearchResult {
+  snapshot: { id: string; generatedAt: Date } | null;
+  rows: LineStudentSearchRow[];
+}
+
+/**
+ * Same search, but also hands back the active snapshot it ran against so a
+ * caller that immediately fetches a schedule (the LINE schedule bot) can pass
+ * both through instead of re-resolving them.
+ */
+export async function searchCurrentLineStudentsWithSnapshot(
+  db: Database,
+  query: string,
+  limit = 20,
+): Promise<LineStudentSearchResult> {
+  const snapshot = await activeCreditControlSnapshot(db);
+  if (!snapshot) return { snapshot: null, rows: [] };
+  const students = await listCurrentLineStudentsForSnapshot(db, snapshot.id);
+  return { snapshot, rows: searchLineStudentRows(students, query, limit) };
+}
+
 export async function searchCurrentLineStudents(
   db: Database,
   query: string,
   limit = 20,
 ): Promise<LineStudentSearchRow[]> {
-  return searchLineStudentRows(await listCurrentLineStudents(db), query, limit);
+  return (await searchCurrentLineStudentsWithSnapshot(db, query, limit)).rows;
 }
 
 export const searchActiveLineStudents = searchCurrentLineStudents;

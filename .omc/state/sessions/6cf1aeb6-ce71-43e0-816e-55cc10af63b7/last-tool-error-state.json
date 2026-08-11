@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"echo \\\"=== viewport exports ===\\\" && grep -rn \\\"export const viewport\\\\|viewport:\\\" src/ --include=*.tsx --include=*.ts && echo \\\"=== viewport meta ===\\\" && grep -rn \\\"viewport\\\" src/app/ ...",
-  "error": "Exit code 1\n=== viewport exports ===",
-  "timestamp": "2026-08-11T02:54:38.090Z",
-  "retry_count": 3
-}

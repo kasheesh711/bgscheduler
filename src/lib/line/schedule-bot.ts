@@ -32,7 +32,7 @@ import { and, eq } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { pushLineTextMessage } from "@/lib/line/client";
-import { searchCurrentLineStudents } from "@/lib/line/student-links";
+import { searchCurrentLineStudentsWithSnapshot } from "@/lib/line/student-links";
 import {
   ANSWER_PATTERN,
   COMMAND_PATTERN,
@@ -318,7 +318,7 @@ async function replyWithLink(
   query: string,
   monthKey: string,
 ): Promise<ScheduleBotResult> {
-  const matches = await searchCurrentLineStudents(db, query, MAX_CANDIDATES);
+  const { snapshot, rows: matches } = await searchCurrentLineStudentsWithSnapshot(db, query, MAX_CANDIDATES);
   const exact = exactCodeMatches(query, matches);
 
   if (matches.length === 0) {
@@ -334,9 +334,12 @@ async function replyWithLink(
   }
 
   const student = exact[0];
+  // Snapshot data answers the reply; the minted link stays live at view time.
   const schedule = await getStudentMonthlySchedule(db, {
     studentKey: student.studentKey,
     monthKey,
+    liveSweep: "rescue",
+    preResolved: snapshot ? { snapshot, student } : undefined,
   });
   if (!schedule) {
     await reply(deps, lineUserId, ADMIN_NO_SNAPSHOT);
@@ -377,7 +380,7 @@ async function startSend(
   query: string,
   monthKey: string,
 ): Promise<ScheduleBotResult> {
-  const matches = await searchCurrentLineStudents(db, query, MAX_CANDIDATES);
+  const { snapshot, rows: matches } = await searchCurrentLineStudentsWithSnapshot(db, query, MAX_CANDIDATES);
 
   if (matches.length === 0) {
     await reply(deps, lineUserId, adminNotFound(query));
@@ -409,6 +412,8 @@ async function startSend(
   const schedule = await getStudentMonthlySchedule(db, {
     studentKey: student.studentKey,
     monthKey,
+    liveSweep: "rescue",
+    preResolved: snapshot ? { snapshot, student } : undefined,
   });
   if (!schedule) {
     await reply(deps, lineUserId, ADMIN_NO_SNAPSHOT);

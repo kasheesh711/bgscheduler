@@ -42,8 +42,14 @@ Those gates are owned by [LINE Integration](./line-integration.md#schedule-bot-g
 describes only what the schedule feature itself contributes.
 
 This is the newest feature in the repo (commits `2a17065`…`9f72002`, 2026-08-05) and it **owns no
-sync of its own**. Every session it renders comes from the *active credit-control snapshot* — see
-[Conceptual data model](#conceptual-data-model).
+sync of its own**. Every session it renders starts from the *active credit-control snapshot* — see
+[Conceptual data model](#conceptual-data-model) — optionally corrected by a **live Wise overlay**:
+`getStudentMonthlySchedule` accepts a `liveSweep` mode (`"always" | "rescue" | "never"`,
+`src/lib/student-schedule/data.ts`). The parent page, admin APIs and print report use the default
+`"always"` (fresh Wise data at view time, fail-soft to the snapshot on error/deadline); the LINE
+schedule bot passes `"rescue"`, sweeping only when the snapshot month is payload-empty — its message
+needs a session count the ≤~36-min-old snapshot already answers, and the minted link re-fetches live
+data when opened.
 
 ## Conceptual data model
 
@@ -83,9 +89,10 @@ family/staff audience) and `line_group_schedule_sends` (delivery audit + the "ha
 received this student?" lookup) are written by the bot. They are documented in
 [LINE Integration](./line-integration.md#conceptual-data-model).
 
-There is **no snapshot lineage, no sync run table and no cron** for this feature. Freshness is
-entirely inherited from the credit-control sync, and retention of old credit-control snapshots is
-that feature's concern (see [Credit Control](./credit-control.md)).
+There is **no snapshot lineage, no sync run table and no cron** for this feature. Baseline freshness
+is inherited from the credit-control sync; the live Wise overlay (above) corrects it at read time for
+`"always"`-mode callers. Retention of old credit-control snapshots is that feature's concern (see
+[Credit Control](./credit-control.md)).
 
 ## API surface
 

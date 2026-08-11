@@ -1,13 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/student-schedule/live", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/student-schedule/live")>();
+  return { ...actual, fetchLiveMonthSessions: vi.fn() };
+});
 
 import type { WiseCreditSession } from "@/lib/credit-control/wise";
+import type { Database } from "@/lib/db";
 import {
   bangkokMonthInstantWindow,
   buildStudentSchedulePayload,
+  getStudentMonthlySchedule,
   mergeLiveSessionsIntoRows,
   parseStudentDisplay,
   type StudentScheduleRow,
 } from "@/lib/student-schedule/data";
+import { fetchLiveMonthSessions } from "@/lib/student-schedule/live";
 import { TEACHER_TBC, type StudentScheduleStudent } from "@/lib/student-schedule/types";
 
 const STUDENT: StudentScheduleStudent = {
@@ -264,5 +272,109 @@ describe("mergeLiveSessionsIntoRows", () => {
     });
 
     expect(merged.map((m) => m.wiseSessionId).sort()).toEqual(["ses_a", "ses_b"]);
+  });
+});
+
+describe("getStudentMonthlySchedule live-sweep modes", () => {
+  const SNAPSHOT = { id: "snap-1", generatedAt: new Date("2026-08-01T00:00:00Z") };
+  const STUDENT_ROW = {
+    wiseStudentId: "stu_1",
+    studentKey: STUDENT.studentKey,
+    studentName: STUDENT.studentName,
+    parentName: STUDENT.parentName,
+  };
+
+  /** Ordered select-result queue, consumed one per db.select() call. */
+  function makeDb(selectResults: unknown[][]) {
+    const queue = [...selectResults];
+    let selects = 0;
+    function chain(result: unknown[]) {
+      const node: Record<string, unknown> = {};
+      for (const m of ["from", "innerJoin", "where", "limit", "orderBy"]) node[m] = () => node;
+      node.then = (resolve: (v: unknown[]) => unknown) => Promise.resolve(result).then(resolve);
+      node.catch = () => node;
+      return node;
+    }
+    const db = {
+      select: () => {
+        selects += 1;
+        return chain(queue.shift() ?? []);
+      },
+    };
+    return { db: db as unknown as Database, selectCount: () => selects };
+  }
+
+  const sessionRow = () => row();
+  const cancelledRow = () => row({ meetingStatus: "CANCELLED" });
+
+  beforeEach(() => {
+    vi.mocked(fetchLiveMonthSessions).mockReset();
+    vi.mocked(fetchLiveMonthSessions).mockResolvedValue({ sessions: [liveSession()], ok: true });
+  });
+
+  it("sweeps and merges by default (mode omitted)", async () => {
+    const { db } = makeDb([[SNAPSHOT], [STUDENT_ROW], [sessionRow()]]);
+    const payload = await getStudentMonthlySchedule(db, { studentKey: STUDENT.studentKey, monthKey: "2026-08" });
+    expect(fetchLiveMonthSessions).toHaveBeenCalledOnce();
+    expect(payload?.sessions.length).toBeGreaterThan(0);
+  });
+
+  it("never sweeps in \"never\" mode and reports the snapshot's generatedAt", async () => {
+    const { db } = makeDb([[SNAPSHOT], [STUDENT_ROW], [sessionRow()]]);
+    const payload = await getStudentMonthlySchedule(db, {
+      studentKey: STUDENT.studentKey, monthKey: "2026-08", liveSweep: "never",
+    });
+    expect(fetchLiveMonthSessions).not.toHaveBeenCalled();
+    expect(payload?.generatedAt).toBe(SNAPSHOT.generatedAt.toISOString());
+  });
+
+  it("skips the sweep in \"rescue\" mode when the snapshot month has sessions", async () => {
+    const { db } = makeDb([[SNAPSHOT], [STUDENT_ROW], [sessionRow()]]);
+    const payload = await getStudentMonthlySchedule(db, {
+      studentKey: STUDENT.studentKey, monthKey: "2026-08", liveSweep: "rescue",
+    });
+    expect(fetchLiveMonthSessions).not.toHaveBeenCalled();
+    expect(payload?.sessions).toHaveLength(1);
+    expect(payload?.generatedAt).toBe(SNAPSHOT.generatedAt.toISOString());
+  });
+
+  it("sweeps in \"rescue\" mode when the snapshot month is empty (GRP-BOT-05 edge)", async () => {
+    const { db } = makeDb([[SNAPSHOT], [STUDENT_ROW], []]);
+    const payload = await getStudentMonthlySchedule(db, {
+      studentKey: STUDENT.studentKey, monthKey: "2026-08", liveSweep: "rescue",
+    });
+    expect(fetchLiveMonthSessions).toHaveBeenCalledOnce();
+    expect(payload?.sessions).toHaveLength(1); // the live-only session was rescued
+  });
+
+  it("treats an all-cancelled snapshot month as empty and still sweeps", async () => {
+    const { db } = makeDb([[SNAPSHOT], [STUDENT_ROW], [cancelledRow()]]);
+    await getStudentMonthlySchedule(db, {
+      studentKey: STUDENT.studentKey, monthKey: "2026-08", liveSweep: "rescue",
+    });
+    expect(fetchLiveMonthSessions).toHaveBeenCalledOnce();
+  });
+
+  it("fails soft when the rescue sweep itself fails", async () => {
+    vi.mocked(fetchLiveMonthSessions).mockResolvedValue({ sessions: [], ok: false });
+    const { db } = makeDb([[SNAPSHOT], [STUDENT_ROW], []]);
+    const payload = await getStudentMonthlySchedule(db, {
+      studentKey: STUDENT.studentKey, monthKey: "2026-08", liveSweep: "rescue",
+    });
+    expect(payload?.sessions).toHaveLength(0);
+    expect(payload?.generatedAt).toBe(SNAPSHOT.generatedAt.toISOString());
+  });
+
+  it("consumes only the sessions query when preResolved context is supplied", async () => {
+    const { db, selectCount } = makeDb([[sessionRow()]]);
+    const payload = await getStudentMonthlySchedule(db, {
+      studentKey: STUDENT.studentKey,
+      monthKey: "2026-08",
+      liveSweep: "never",
+      preResolved: { snapshot: SNAPSHOT, student: STUDENT_ROW },
+    });
+    expect(selectCount()).toBe(1);
+    expect(payload?.student.studentName).toBe(STUDENT.studentName);
+    expect(payload?.student.parentName).toBe(STUDENT.parentName);
   });
 });

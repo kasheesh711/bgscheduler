@@ -254,6 +254,17 @@ instantly. `/schedule setup confirm` restores the default at any time; neither
 direction needs a deploy. The toggle refuses until the chat has declared its
 audience.
 
+**Reading schedule-bot latency.** Both routers emit one completion line per
+handled command — filter Vercel logs for `[schedule-bot]`; the group path looks
+like `chat=… sender=… outcome=sent elapsed_ms=NNN`, the DM path carries
+`scope=dm`. `elapsed_ms` is the user-perceived duration from webhook handoff to
+the terminal action. Two related knobs: all serverless functions are pinned to
+`sin1` next to Neon (`vercel.json` `"regions"`; rollback = revert that key and
+redeploy), and the bot fetches schedules with `liveSweep: "rescue"`, so a live
+Wise sweep only runs when the snapshot month is empty — a
+`fetchLiveMonthSessions: live sweep failed` line on the bot path therefore
+implies an empty-month rescue attempt, not the normal case.
+
 ### 4.2 Taking the site offline (maintenance mode)
 
 `MAINTENANCE_MODE` blocks the staff UI while **every cron keeps running**, so

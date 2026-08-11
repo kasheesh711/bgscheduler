@@ -68,7 +68,7 @@ flowchart TB
         end
     end
 
-    subgraph pg["Neon Postgres — ap-southeast-1"]
+    subgraph pg["Neon Postgres — ap-southeast-1<br/>(Vercel functions pinned sin1, co-located)"]
         Snap["snapshots<br/>exactly one active = true"]
         SyncRuns["sync_runs<br/>partial unique index on status='running'"]
         Tables["snapshot-scoped tables<br/>tutor_identity_groups · members<br/>qualifications · availability · leaves<br/>future_session_blocks · data_issues · stats"]

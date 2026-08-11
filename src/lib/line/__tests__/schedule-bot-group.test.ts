@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/line/student-links", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/line/student-links")>();
-  return { ...actual, searchCurrentLineStudents: vi.fn() };
+  return { ...actual, searchCurrentLineStudentsWithSnapshot: vi.fn() };
 });
 vi.mock("@/lib/student-schedule/data", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/student-schedule/data")>();
@@ -25,7 +25,7 @@ vi.mock("@/lib/student-schedule/links", async (importOriginal) => {
   return { ...actual, mintStudentScheduleLink: vi.fn() };
 });
 
-import { searchCurrentLineStudents } from "@/lib/line/student-links";
+import { searchCurrentLineStudentsWithSnapshot } from "@/lib/line/student-links";
 import { getStudentMonthlySchedule } from "@/lib/student-schedule/data";
 import { mintStudentScheduleLink } from "@/lib/student-schedule/links";
 import { handleScheduleBotGroupCommand } from "@/lib/line/schedule-bot-group";
@@ -36,6 +36,7 @@ const ADMIN = "Uadmin000000000000000000000000001";
 const PARENT = "Uparent00000000000000000000000001";
 const GROUP = "Cgroup000000000000000000000000001";
 const NOW = new Date("2026-08-05T03:00:00Z");
+const SNAP = { id: "snap-1", generatedAt: NOW };
 
 const SELF_MENTION = { mention: { mentionees: [{ index: 0, length: 9, type: "user", isSelf: true }] } };
 
@@ -163,7 +164,7 @@ describe("GRP-BOT-01 must address the bot", () => {
     const { db } = makeDb();
     expect(await call(db, d, "Aadhu.Sr")).toEqual({ handled: false });
     expect(sent(d)).toHaveLength(0);
-    expect(searchCurrentLineStudents).not.toHaveBeenCalled();
+    expect(searchCurrentLineStudentsWithSnapshot).not.toHaveBeenCalled();
   });
 
   it("ignores a mention of another member", async () => {
@@ -185,7 +186,7 @@ describe("GRP-BOT-02 sender allowlist", () => {
 
     expect(result).toEqual({ handled: false });
     expect(sent(d)).toHaveLength(0);
-    expect(searchCurrentLineStudents).not.toHaveBeenCalled();
+    expect(searchCurrentLineStudentsWithSnapshot).not.toHaveBeenCalled();
   });
 
   it("is disabled entirely when the allowlist is unset", async () => {
@@ -199,7 +200,7 @@ describe("GRP-BOT-02 sender allowlist", () => {
 
 describe("GRP-BOT-03 exact code only", () => {
   it("refuses a partial code even when search returns one student", async () => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [student()] } as never);
     const d = deps();
     const { db, inserts } = makeDb();
 
@@ -212,7 +213,7 @@ describe("GRP-BOT-03 exact code only", () => {
   });
 
   it("reports an unknown code without listing anyone", async () => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [] } as never);
     const d = deps();
     const { db } = makeDb();
     const result = await call(db, d, "/schedule Aadhu.Sn");
@@ -238,7 +239,7 @@ const INSTANT_GROUP = (audience: "family" | "staff" = "staff"): unknown[][] =>
 
 describe("GRP-BOT-06 per-group audience", () => {
   beforeEach(() => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [student()] } as never);
     vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(12) as never);
     vi.mocked(mintStudentScheduleLink).mockResolvedValue(LINK as never);
   });
@@ -356,7 +357,7 @@ describe("GRP-BOT-06 per-group audience", () => {
 
 describe("GRP-BOT-04 confirm each new student in a chat", () => {
   beforeEach(() => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [student()] } as never);
     vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(12) as never);
     vi.mocked(mintStudentScheduleLink).mockResolvedValue(LINK as never);
   });
@@ -436,7 +437,7 @@ describe("GRP-BOT-04 confirm each new student in a chat", () => {
 
 describe("GRP-BOT-04 send verb still confirms", () => {
   beforeEach(() => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [student()] } as never);
     vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(12) as never);
     vi.mocked(mintStudentScheduleLink).mockResolvedValue(LINK as never);
   });
@@ -491,7 +492,7 @@ describe("GRP-BOT-04 send verb still confirms", () => {
 
 describe("GRP-BOT-07 instant mode", () => {
   beforeEach(() => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [student()] } as never);
     vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(12) as never);
     vi.mocked(mintStudentScheduleLink).mockResolvedValue(LINK as never);
   });
@@ -507,6 +508,14 @@ describe("GRP-BOT-07 instant mode", () => {
     // Only the audit row — no pending row was ever staged.
     expect(inserts).toHaveLength(1);
     expect(d.reply.mock.calls[0][0].text).toContain("https://example.test/schedule/tok_abc");
+    // The bot never pays the live Wise sweep and reuses the search's snapshot.
+    expect(vi.mocked(getStudentMonthlySchedule).mock.calls[0][1]).toMatchObject({
+      liveSweep: "rescue",
+      preResolved: {
+        snapshot: SNAP,
+        student: expect.objectContaining({ studentKey: "aadhiya srisethi::nok srisethi" }),
+      },
+    });
   });
 
   it("skips the confirm even for the send verb, using the family template", async () => {
@@ -589,7 +598,7 @@ describe("GRP-BOT-07 instant mode", () => {
 
 describe("GRP-BOT-05 non-empty month", () => {
   it("refuses to hand back a blank calendar", async () => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [student()] } as never);
     vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(0) as never);
     const d = deps();
     const { db } = makeDb();
@@ -605,7 +614,7 @@ describe("command parsing", () => {
     const { db } = makeDb();
     const result = await call(db, d, "/schedule");
     expect(result.action).toBe("help");
-    expect(searchCurrentLineStudents).not.toHaveBeenCalled();
+    expect(searchCurrentLineStudentsWithSnapshot).not.toHaveBeenCalled();
   });
 
   it("replies with help rather than going silent on an unparseable command", async () => {

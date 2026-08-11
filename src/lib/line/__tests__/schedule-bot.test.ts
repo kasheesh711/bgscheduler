@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // normalizeLineStudentCode for exact-code matching.
 vi.mock("@/lib/line/student-links", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/line/student-links")>();
-  return { ...actual, searchCurrentLineStudents: vi.fn() };
+  return { ...actual, searchCurrentLineStudentsWithSnapshot: vi.fn() };
 });
 vi.mock("@/lib/student-schedule/data", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/student-schedule/data")>();
@@ -23,7 +23,7 @@ vi.mock("@/lib/student-schedule/links", async (importOriginal) => {
   return { ...actual, mintStudentScheduleLink: vi.fn() };
 });
 
-import { searchCurrentLineStudents } from "@/lib/line/student-links";
+import { searchCurrentLineStudentsWithSnapshot } from "@/lib/line/student-links";
 import { getStudentMonthlySchedule } from "@/lib/student-schedule/data";
 import { mintStudentScheduleLink } from "@/lib/student-schedule/links";
 import {
@@ -38,6 +38,7 @@ const PARENT = "Uparent00000000000000000000000001";
 const OUTSIDER = "Uoutsider000000000000000000000001";
 
 const NOW = new Date("2026-08-05T03:00:00Z");
+const SNAP = { id: "snap-1", generatedAt: NOW };
 
 /**
  * Minimal chainable Drizzle stand-in. `selectResults` is consumed in order, one
@@ -155,7 +156,7 @@ describe("SCHED-BOT-01 sender allowlist", () => {
     expect(result).toEqual({ handled: false });
     expect(push).not.toHaveBeenCalled();
     // Nothing was even looked up — a parent must not be able to probe the roster.
-    expect(searchCurrentLineStudents).not.toHaveBeenCalled();
+    expect(searchCurrentLineStudentsWithSnapshot).not.toHaveBeenCalled();
   });
 
   it("disables the bot when the allowlist is unset or blank", async () => {
@@ -183,7 +184,7 @@ describe("SCHED-BOT-01 sender allowlist", () => {
 
 describe("SCHED-BOT-02 verified link required", () => {
   it("refuses when the student has no verified contact", async () => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [student()] } as never);
     const push = vi.fn();
     const { db, inserts } = makeDb([[]]); // no verified contacts
 
@@ -199,7 +200,7 @@ describe("SCHED-BOT-02 verified link required", () => {
   });
 
   it("refuses to guess when several contacts are verified", async () => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [student()] } as never);
     const push = vi.fn();
     const { db, inserts } = makeDb([[
       contactRow(PARENT, "Khun Nok"),
@@ -219,7 +220,7 @@ describe("SCHED-BOT-02 verified link required", () => {
 
 describe("SCHED-BOT-03 explicit confirm", () => {
   it("never sends on the first message — it writes a pending row and asks", async () => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [student()] } as never);
     vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(12) as never);
     const push = vi.fn();
     const { db, inserts } = makeDb([[contactRow()]]);
@@ -243,10 +244,13 @@ describe("SCHED-BOT-03 explicit confirm", () => {
   });
 
   it("lists candidates and picks nothing when the code is ambiguous", async () => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([
-      student(),
-      student({ studentKey: "b", studentName: "Bee (Bee.Sr) Srisethi" }),
-    ] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({
+      snapshot: SNAP,
+      rows: [
+        student(),
+        student({ studentKey: "b", studentName: "Bee (Bee.Sr) Srisethi" }),
+      ],
+    } as never);
     const push = vi.fn();
     const { db, inserts } = makeDb([]);
 
@@ -318,7 +322,7 @@ describe("SCHED-BOT-03 explicit confirm", () => {
 
 describe("SCHED-BOT-04 non-empty month", () => {
   it("refuses to push a month with no classes", async () => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [student()] } as never);
     vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(0) as never);
     const push = vi.fn();
     const { db, inserts } = makeDb([[contactRow()]]);
@@ -422,7 +426,7 @@ describe("happy path", () => {
 
 describe("command parsing", () => {
   it("accepts an explicit month", async () => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [student()] } as never);
     vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(3) as never);
     const push = vi.fn();
     const { db } = makeDb([[contactRow()]]);
@@ -445,7 +449,7 @@ describe("command parsing", () => {
       deps(push),
     );
     expect(result.action).toBe("help");
-    expect(searchCurrentLineStudents).not.toHaveBeenCalled();
+    expect(searchCurrentLineStudentsWithSnapshot).not.toHaveBeenCalled();
   });
 
   it("leaves free-form prose to the normal classifier path", async () => {
@@ -472,14 +476,14 @@ describe("command parsing", () => {
       );
       expect(result).toEqual({ handled: false });
       expect(push).not.toHaveBeenCalled();
-      expect(searchCurrentLineStudents).not.toHaveBeenCalled();
+      expect(searchCurrentLineStudentsWithSnapshot).not.toHaveBeenCalled();
     }
   });
 });
 
 describe("default path — reply to the requesting admin", () => {
   beforeEach(() => {
-    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue({ snapshot: SNAP, rows: [student()] } as never);
     vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(12) as never);
     vi.mocked(mintStudentScheduleLink).mockResolvedValue({
       token: "tok_abc", expiresAt: new Date("2026-09-04T03:00:00Z"), id: "link-1",
@@ -506,6 +510,12 @@ describe("default path — reply to the requesting admin", () => {
     expect(text).toContain("Aadhu.Sr");
     expect(text).toContain("12 classes");
     expect(text).toContain("Paste it to the parent");
+
+    // The bot never pays the live Wise sweep and reuses the search's snapshot.
+    expect(vi.mocked(getStudentMonthlySchedule).mock.calls[0][1]).toMatchObject({
+      liveSweep: "rescue",
+      preResolved: { snapshot: SNAP, student: expect.objectContaining({ studentKey: expect.any(String) }) },
+    });
   });
 
   it("still refuses a partial code", async () => {
