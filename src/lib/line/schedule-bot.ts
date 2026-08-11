@@ -215,6 +215,24 @@ async function clearPending(db: Database, lineUserId: string): Promise<void> {
  *   its normal processing as if this module did not exist.
  */
 export async function handleScheduleBotCommand(
+  input: { db: Database; lineUserId: string; text: string },
+  overrides: Partial<ScheduleBotDeps> = {},
+): Promise<ScheduleBotResult> {
+  const startedMs = Date.now();
+  const result = await routeScheduleBotCommand(input, overrides);
+  // One completion line per handled command with the user-perceived duration.
+  // T0 excludes getLineMessageForProcessing, which runs before this router in
+  // review-service.ts. Silent non-admin exits stay unlogged (SCHED-BOT-01).
+  if (result.handled && result.action) {
+    const short = (value: string) => (value.length > 10 ? `${value.slice(0, 6)}…${value.slice(-3)}` : value);
+    console.log(
+      `[schedule-bot] sender=${short(input.lineUserId)} scope=dm outcome=${result.action} elapsed_ms=${Date.now() - startedMs}`,
+    );
+  }
+  return result;
+}
+
+async function routeScheduleBotCommand(
   {
     db,
     lineUserId,

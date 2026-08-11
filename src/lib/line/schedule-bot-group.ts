@@ -265,6 +265,34 @@ export async function groupHasSeenStudent(
  *   the sender is not an allowlisted admin.
  */
 export async function handleScheduleBotGroupCommand(
+  input: {
+    db: Database;
+    groupId: string;
+    lineUserId: string;
+    text: string;
+    replyToken: string | null;
+    message?: Record<string, unknown>;
+  },
+  overrides: Partial<GroupBotDeps> = {},
+): Promise<GroupBotResult> {
+  const startedMs = Date.now();
+  const result = await routeGroupCommand(input, overrides);
+  // One completion line per handled command, with the user-perceived duration
+  // from webhook handoff to terminal action. Silent non-admin exits already
+  // trace inside the router and must stay unmarked here (GRP-BOT-02).
+  if (result.handled && result.action) {
+    trace({
+      groupId: input.groupId,
+      lineUserId: input.lineUserId,
+      admin: true,
+      outcome: result.action,
+      elapsedMs: Date.now() - startedMs,
+    });
+  }
+  return result;
+}
+
+async function routeGroupCommand(
   {
     db,
     groupId,
@@ -403,20 +431,22 @@ export async function handleScheduleBotGroupCommand(
 function trace(fields: {
   groupId: string;
   lineUserId: string;
-  trigger: TriggerKind;
+  trigger?: TriggerKind;
   admin?: boolean;
   command?: string;
   outcome?: string;
+  elapsedMs?: number;
 }): void {
   const short = (value: string) => (value.length > 10 ? `${value.slice(0, 6)}…${value.slice(-3)}` : value);
   const parts = [
     `chat=${short(fields.groupId)}`,
     `sender=${short(fields.lineUserId)}`,
-    `trigger=${fields.trigger}`,
   ];
+  if (fields.trigger) parts.push(`trigger=${fields.trigger}`);
   if (fields.admin !== undefined) parts.push(`admin=${fields.admin ? "yes" : "no"}`);
   if (fields.admin && fields.command !== undefined) parts.push(`command=${JSON.stringify(fields.command)}`);
   if (fields.outcome) parts.push(`outcome=${fields.outcome}`);
+  if (fields.elapsedMs !== undefined) parts.push(`elapsed_ms=${fields.elapsedMs}`);
   console.log(`[schedule-bot] ${parts.join(" ")}`);
 }
 
