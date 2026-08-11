@@ -209,6 +209,33 @@ describe("runCreditControlSync", () => {
     expect(snapshotLinkIndex).toBeLessThan(events.indexOf(sessionInsertEvents[0]));
   });
 
+  it("persists the trimmed Wise session title, blank when Wise omits it", async () => {
+    const [titled, untitled] = makeFutureSessions(2);
+    titled.title = "  In-Person Session-Biology HL  ";
+    vi.mocked(fetchCreditSessions).mockImplementation(async (_client, _instituteId, status) => (
+      status === "PAST" ? [] : [titled, untitled]
+    ));
+    const { db, events } = makeDbMock();
+
+    await runCreditControlSync(
+      db,
+      fakeClient(),
+      "institute-1",
+      new Date("2026-05-26T08:00:00.000Z"),
+      { syncRunId: "run-1" },
+    );
+
+    const sessionRows = events
+      .filter((event): event is InsertEvent => (
+        event.type === "insert" && event.table === schema.creditControlSessions
+      ))
+      .flatMap((event) => event.rows) as Array<{ wiseSessionId: string; title: string }>;
+
+    expect(sessionRows.find((row) => row.wiseSessionId === titled._id)?.title)
+      .toBe("In-Person Session-Biology HL");
+    expect(sessionRows.find((row) => row.wiseSessionId === untitled._id)?.title).toBe("");
+  });
+
   it("dedupes duplicate Wise session/student rows before inserting sessions", async () => {
     const duplicateSession = makeFutureSessions(1)[0];
     vi.mocked(fetchCreditSessions).mockImplementation(async (_client, _instituteId, status) => (

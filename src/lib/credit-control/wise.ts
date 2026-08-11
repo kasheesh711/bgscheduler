@@ -34,6 +34,7 @@ const WiseSessionUserRefSchema = z.union([
 
 export const WiseCreditSessionSchema = z.object({
   _id: z.string(),
+  title: z.string().optional(),
   classId: z.object({
     _id: z.string(),
     name: z.string().optional(),

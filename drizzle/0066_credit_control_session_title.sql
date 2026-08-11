@@ -1,0 +1,1 @@
+ALTER TABLE "credit_control_sessions" ADD COLUMN "title" text DEFAULT '' NOT NULL;

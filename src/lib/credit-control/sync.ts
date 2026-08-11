@@ -446,6 +446,7 @@ async function buildSessionRows(
           studentName: pair.studentName,
           packageName: pair.packageName,
           subject: pair.subject,
+          title: session.title?.trim() ?? "",
           scheduledStartTime: session.scheduledStartTime,
           scheduledEndTime: session.scheduledEndTime,
           durationMinutes,

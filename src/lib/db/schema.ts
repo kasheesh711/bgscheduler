@@ -1230,6 +1230,9 @@ export const creditControlSessions = pgTable("credit_control_sessions", {
   studentName: text("student_name").notNull(),
   packageName: text("package_name").notNull(),
   subject: text("subject").notNull().default(""),
+  // Wise session title ("In-Person Session-Biology HL") — the only field that
+  // names the class itself; `subject` holds BeGifted's level bands.
+  title: text("title").notNull().default(""),
   scheduledStartTime: timestamp("scheduled_start_time", { withTimezone: true }).notNull(),
   scheduledEndTime: timestamp("scheduled_end_time", { withTimezone: true }),
   durationMinutes: integer("duration_minutes").notNull().default(0),
