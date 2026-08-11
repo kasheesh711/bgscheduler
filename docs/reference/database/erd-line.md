@@ -5,7 +5,7 @@ The LINE domain is the only subsystem in BGScheduler whose data arrives **push-f
 1. **Conversation store** — `lineContacts` → `lineThreads` → `lineMessages`, the durable transcript of the Official Account inbox, written by `recordLineWebhookPayload` (`src/lib/line/data.ts:422-524`).
 2. **Identity linkage** — `lineContactStudentLinks`, the (contact ↔ student) mapping every downstream write gate consults, plus the OA-resolver harvest tables (`lineOaResolverRuns` / `lineOaResolverRows`) and the backlog-recovery run ledger (`lineBacklogRecoverySyncRuns`) that feed it.
 3. **AI review queue** — `lineSchedulerReviews` (one review per inbound message) and its `lineWiseActionLogs` audit trail; the Wise write path defaults to dry run (`dryRun` defaults to `true`, schema.ts:2598).
-4. **Schedule bot** — `lineScheduleBotPending`, `lineGroupSettings`, `lineGroupScheduleSends`: the confirm gate, per-group audience, and delivery audit for pushing a parent-facing monthly schedule link into LINE.
+4. **Schedule bot** — `lineScheduleBotPending`, `lineGroupSettings`, `lineGroupScheduleSends`: the confirm gate, per-group audience + instant-mode flag, and delivery audit for pushing a parent-facing monthly schedule link into LINE.
 
 Four Postgres enums are LINE-specific and appear throughout: `lineMessageDirectionEnum` (`inbound` / `outbound`, schema.ts:110–113), `lineSchedulerClassifierCategoryEnum` (`scheduling_request` / `scheduling_change` / `non_scheduling` / `unclear`, schema.ts:115–120), `lineSchedulerReviewStatusEnum` (`pending_review` / `approved_sent` / `accepted_no_send` / `rejected` / `dismissed`, schema.ts:122–128), and `lineContactStudentLinkStatusEnum` (`suggested` / `verified` / `rejected`, schema.ts:130–134). See [`./enums.md`](./enums.md).
 
@@ -27,7 +27,7 @@ Exactly 12 tables (varName — `schema.ts` line range):
 | `lineOaResolverRows` | `line_oa_resolver_rows` | 2636–2662 |
 | `lineBacklogRecoverySyncRuns` | `line_backlog_recovery_sync_runs` | 2663–2684 |
 | `lineScheduleBotPending` | `line_schedule_bot_pending` | 4660–4688 |
-| `lineGroupSettings` | `line_group_settings` | 4689–4706 |
+| `lineGroupSettings` | `line_group_settings` | 4692–4706 |
 | `lineGroupScheduleSends` | `line_group_schedule_sends` | 4707–4719 |
 
 ## Relationship model
@@ -120,6 +120,7 @@ erDiagram
     lineGroupSettings {
         text groupId PK
         text audience "family or staff"
+        boolean skipConfirm "GRP-BOT-07 instant mode"
         text setByLineUserId
     }
     lineGroupScheduleSends {
@@ -231,17 +232,17 @@ erDiagram
 **Fail-closed gate (SCHED-BOT-03 / GRP-BOT-04):** the row is the *only* thing a "yes" acts on. TTL is 5 minutes (`PENDING_TTL_MINUTES`, `src/lib/line/schedule-bot.ts:76` and `src/lib/line/schedule-bot-group.ts:85`), and a missing **or** expired row sends nothing and reports the expiry (`src/lib/line/schedule-bot.ts:472-477`; `src/lib/line/schedule-bot-group.ts:516-520`). A new command overwrites the staged row via `onConflictDoUpdate` on the (`lineUserId`, `scopeKey`) pair, resetting `createdAt` and `expiresAt` (`src/lib/line/schedule-bot.ts:425-442`). The row is deleted after delivery — and also after a *failed* delivery (`src/lib/line/schedule-bot-group.ts:614`, `:618`).
 **Relationships:** no FKs. Soft-linked to `lineContactStudentLinks` by `studentKey` and to a chat by `groupId`. There is no TTL sweeper; expired rows are cleared lazily on the next confirm attempt.
 
-### `lineGroupSettings` (schema.ts:4689–4706)
+### `lineGroupSettings` (schema.ts:4692–4706)
 **Grain:** one row per LINE group chat — `groupId` is the primary key directly (a `text` PK, no surrogate id, and no secondary indexes).
-**Key columns:** `groupId` (PK); `audience` (`"family"` → Thai parent template, `"staff"` → English admin template, per the in-schema comment at schema.ts:4691); `setByLineUserId`; `createdAt` / `updatedAt`.
-**Business rule:** the bot cannot distinguish a family group (a parent reads whatever it posts) from a staff coordination group, so it asks once and remembers rather than guessing (schema.ts:4684–4687). `audience` **selects the template only — it grants nothing and relaxes no gate** (schema.ts:4687). Reads normalize anything that is not exactly `"family"` to `"staff"` (`src/lib/line/schedule-bot-group.ts:181`); a missing row means the chat was never set up, and a bare `YES` in an unregistered chat asks for setup rather than defaulting (`src/lib/line/schedule-bot-group.ts:528-533`). Written by `setGroupAudience` as an upsert on the `groupId` PK (`src/lib/line/schedule-bot-group.ts:192-197`), either via an explicit `setup family|staff` command (`:298-306`) or as a side effect of the one-time FAMILY/STAFF confirm reply (`:522-524`).
+**Key columns:** `groupId` (PK); `audience` (`"family"` → Thai parent template, `"staff"` → English admin template, per the in-schema comment at schema.ts:4694); `skipConfirm` (boolean, default false — GRP-BOT-07 instant mode); `setByLineUserId`; `createdAt` / `updatedAt`.
+**Business rule:** the bot cannot distinguish a family group (a parent reads whatever it posts) from a staff coordination group, so it asks once and remembers rather than guessing (schema.ts:4684–4687). `audience` **selects the template only — it grants nothing and relaxes no gate** (schema.ts:4687); `skipConfirm` is the one setting that **does** relax a gate — while true, the GRP-BOT-04 confirm (including the `send` verb's force-confirm) is skipped for this chat (schema.ts:4696–4701, `src/lib/line/schedule-bot-group.ts:476-488`). Reads normalize anything that is not exactly `"family"` to `"staff"` (`src/lib/line/schedule-bot-group.ts:194`); a missing row means the chat was never set up, and a bare `YES` in an unregistered chat asks for setup rather than defaulting (`:596-601`). Written by `setGroupAudience` as an upsert on the `groupId` PK (`:199-215`), either via an explicit `setup family|staff` command (`:337-346`) or as a side effect of the one-time FAMILY/STAFF confirm reply (`:590-592`) — the upsert's set-clause deliberately omits `skipConfirm`, so changing the audience never resets instant mode (`:209-214`). `skipConfirm` is written only by `setGroupConfirmMode` (`:222-237`) via the `setup instant|confirm` command (`:348-361`), which refuses (no insert) when the chat has no settings row.
 **Relationships:** no FKs. Soft-linked to `lineGroupScheduleSends` by `groupId`. Note the shape asymmetry with the rest of the domain — `audience` is plain `text`, not a Postgres enum, despite having exactly two legal values.
 
-### `lineGroupScheduleSends` (schema.ts:4707–4719)
+### `lineGroupScheduleSends` (schema.ts:4717–4729)
 **Grain:** one row per schedule link actually delivered into a LINE group — simultaneously the audit log and the "has this group already received this student?" lookup.
 **Key columns:** `id` (PK); `groupId` / `studentKey` / `studentName` / `monthKey`; `requestedByLineUserId`; `linkId` (nullable FK → `studentScheduleLinks.id`, set null); `createdAt`.
-**Business rule (GRP-BOT-04):** exact nickname-code matching prevents sending the *wrong student*; this table catches the other half — the *right* code typed in the *wrong family's* group — by forcing a confirmation the first time any student appears in a given group (schema.ts:4701–4705). `groupHasSeenStudent` is the (`groupId`, `studentKey`) existence check (`src/lib/line/schedule-bot-group.ts:207-212`) consulted before deciding whether the confirm step can be skipped (`:426`).
-**Write timing:** inserted **after** the message is confirmed sent, and its failure is caught and logged rather than thrown — a bookkeeping error must not look like a failed send (`src/lib/line/schedule-bot-group.ts:621-633`).
+**Business rule (GRP-BOT-04):** exact nickname-code matching prevents sending the *wrong student*; this table catches the other half — the *right* code typed in the *wrong family's* group — by forcing a confirmation the first time any student appears in a given group (schema.ts:4711–4715). `groupHasSeenStudent` is the (`groupId`, `studentKey`) existence check (`src/lib/line/schedule-bot-group.ts:239-253`) consulted before deciding whether the confirm step can be skipped (`:494`); in an instant-mode chat (GRP-BOT-07) the lookup is skipped entirely, though deliveries are still recorded here (`:476-488`).
+**Write timing:** inserted **after** the message is confirmed sent, and its failure is caught and logged rather than thrown — a bookkeeping error must not look like a failed send (`src/lib/line/schedule-bot-group.ts:688-701`).
 **Relationships:** child of `studentScheduleLinks` via `linkId`; soft-linked to `lineGroupSettings` by `groupId` and to student records by `studentKey`. Indexes on (`groupId`, `studentKey`) and `createdAt` (schema.ts:4717–4718).
 
 ## Open questions

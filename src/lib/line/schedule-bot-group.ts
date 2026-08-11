@@ -28,6 +28,12 @@
 //               requests for a student this group has already received go
 //               straight through.
 //   GRP-BOT-05  Non-empty month — never post a blank calendar to parents.
+//   GRP-BOT-07  Instant mode (opt-in, per group). `setup instant` sets
+//               skip_confirm on the chat's settings row; while set, the
+//               GRP-BOT-04 confirm is skipped entirely — including the `send`
+//               verb. `setup confirm` restores it. The toggle refuses in a
+//               chat that has never declared an audience, and GRP-BOT-01/02/03
+//               and 05 are unaffected either way.
 //
 // The verified-student-link gate is deliberately NOT applied here: the
 // destination is the group everyone is already in, so it would block delivery
@@ -46,6 +52,7 @@ import {
   COMMAND_PATTERN,
   HELP_PATTERN,
   NO_PATTERN,
+  SETUP_MODE_PATTERN,
   SETUP_PATTERN,
   YES_PATTERN,
   detectTrigger,
@@ -75,6 +82,7 @@ import {
   GROUP_SETUP_NEEDED,
   adminScheduleLinkReply,
   groupAudienceSet,
+  groupConfirmModeSet,
   groupConfirmPrompt,
   groupSetupPrompt,
   groupEmptyMonth,
@@ -104,6 +112,7 @@ export interface GroupBotResult {
     | "empty_month"
     | "awaiting_setup"
     | "audience_set"
+    | "mode_set"
     | "awaiting_confirm"
     | "sent"
     | "cancelled"
@@ -167,18 +176,24 @@ async function hasPendingQuestion(
   return Boolean(row);
 }
 
-/** The chat's audience, or null when it has never been set up (GRP-BOT-06). */
-export async function groupAudience(
+/** The chat's settings, or null when it has never been set up (GRP-BOT-06). */
+export async function groupSettings(
   db: Database,
   groupId: string,
-): Promise<GroupAudience | null> {
+): Promise<{ audience: GroupAudience; skipConfirm: boolean } | null> {
   const [row] = await db
-    .select({ audience: schema.lineGroupSettings.audience })
+    .select({
+      audience: schema.lineGroupSettings.audience,
+      skipConfirm: schema.lineGroupSettings.skipConfirm,
+    })
     .from(schema.lineGroupSettings)
     .where(eq(schema.lineGroupSettings.groupId, groupId))
     .limit(1);
   if (!row) return null;
-  return row.audience === "family" ? "family" : "staff";
+  return {
+    audience: row.audience === "family" ? "family" : "staff",
+    skipConfirm: row.skipConfirm === true,
+  };
 }
 
 async function setGroupAudience(
@@ -193,8 +208,31 @@ async function setGroupAudience(
     .values({ groupId, audience, setByLineUserId, createdAt: now, updatedAt: now })
     .onConflictDoUpdate({
       target: schema.lineGroupSettings.groupId,
+      // skipConfirm is deliberately absent — changing the audience must never
+      // silently reset a chat's instant mode (GRP-BOT-07).
       set: { audience, setByLineUserId, updatedAt: now },
     });
+}
+
+/**
+ * GRP-BOT-07 toggle. Fail-closed: refuses (returns false) when the chat has
+ * never been set up — instant mode presupposes a registered audience, and the
+ * toggle must never invent one.
+ */
+async function setGroupConfirmMode(
+  db: Database,
+  groupId: string,
+  skipConfirm: boolean,
+  setByLineUserId: string,
+  now: Date,
+): Promise<boolean> {
+  const settings = await groupSettings(db, groupId);
+  if (!settings) return false;
+  await db
+    .update(schema.lineGroupSettings)
+    .set({ skipConfirm, setByLineUserId, updatedAt: now })
+    .where(eq(schema.lineGroupSettings.groupId, groupId));
+  return true;
 }
 
 /** True when this group has already received this student's schedule (GRP-BOT-04). */
@@ -307,6 +345,21 @@ export async function handleScheduleBotGroupCommand(
     }
   }
 
+  // `setup instant|confirm` — flip the chat's confirm gate (GRP-BOT-07).
+  const modeMatch = SETUP_MODE_PATTERN.exec(command);
+  if (modeMatch) {
+    const instant = modeMatch[1].toLowerCase() === "instant";
+    const updated = await setGroupConfirmMode(db, groupId, instant, lineUserId, deps.now());
+    if (!updated) {
+      trace({ groupId, lineUserId, trigger: kind, admin: true, command, outcome: "setup_mode_unregistered" });
+      await say(deps, target, GROUP_SETUP_NEEDED);
+      return { handled: true, action: "awaiting_setup" };
+    }
+    trace({ groupId, lineUserId, trigger: kind, admin: true, command, outcome: instant ? "setup_instant" : "setup_confirm" });
+    await say(deps, target, groupConfirmModeSet(instant));
+    return { handled: true, action: "mode_set" };
+  }
+
   // A bare FAMILY/STAFF answers the one-time setup question, and doubles as the
   // confirmation for the student that triggered it.
   const audienceReply = parseAudience(command);
@@ -417,7 +470,22 @@ async function startGroupSend(
     return { handled: true, action: "empty_month" };
   }
 
-  const audience = await groupAudience(db, target.groupId);
+  const settings = await groupSettings(db, target.groupId);
+  const audience = settings?.audience ?? null;
+
+  // GRP-BOT-07 — instant mode: this chat's admins have switched the confirm
+  // off, so a registered chat posts immediately, `send` verb included.
+  if (settings?.skipConfirm) {
+    return deliver(db, deps, target, {
+      lineUserId,
+      studentKey: student.studentKey,
+      wiseStudentId: student.wiseStudentId,
+      studentName: student.studentName,
+      monthKey,
+      sessionCount: schedule.sessions.length,
+      audience: settings.audience,
+    });
+  }
 
   // GRP-BOT-04 — a student this chat has already received goes straight out.
   // Anything else waits for a human: a group may contain a family, so a valid
@@ -524,7 +592,7 @@ async function confirmGroupSend(
   }
 
   // Registered audience wins; a FAMILY/STAFF reply has just written it.
-  const audience = audienceReply ?? await groupAudience(db, target.groupId);
+  const audience = audienceReply ?? (await groupSettings(db, target.groupId))?.audience ?? null;
   if (!audience) {
     // A YES with no registered audience — the chat was never set up, so there
     // is no safe template to choose. Ask rather than guess.

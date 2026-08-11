@@ -1,0 +1,1 @@
+ALTER TABLE "line_group_settings" ADD COLUMN "skip_confirm" boolean DEFAULT false NOT NULL;

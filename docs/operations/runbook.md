@@ -33,7 +33,7 @@ against the production database.
 | Snapshot retention | 30 newest + the active one (`src/lib/sync/snapshot-pruning.ts:5`, `:64`–`:70`) |
 | Scheduled crons | 15 (`vercel.json:2`–`vercel.json:63`) |
 | Registered jobs (incl. manual-only) | 21 (`src/lib/data-health/cron-registry.ts:46`–`:373`) |
-| Committed migrations | 65 `.sql` files in `drizzle/`, `0000_*` … `0064_line_group_settings.sql` |
+| Committed migrations | 66 `.sql` files in `drizzle/`, `0000_*` … `0065_line_group_settings_skip_confirm.sql` |
 | Operator dashboard | `/data-health` (`src/app/(app)/data-health/page.tsx`) |
 
 ---
@@ -177,7 +177,7 @@ DATABASE_URL='postgres://…' SEED_ADMIN_EMAILS='a@x.com,b@x.com' npm run db:see
   committing — drizzle-kit will happily produce a large catch-up migration when
   the local `meta/` snapshot has drifted.
 - **`db:migrate`** applies pending files in order. There are currently 65,
-  `0000_*` through `0064_line_group_settings.sql`.
+  `0000_*` through `0065_line_group_settings_skip_confirm.sql`.
 - **`db:seed`** (`src/lib/db/seed.ts`) throws immediately if `DATABASE_URL` is
   unset (`:6`–`:9`). It upserts four tutor aliases with `onConflictDoNothing`
   (`:14`–`:28`), inserts every address in `SEED_ADMIN_EMAILS` into `admin_users`
@@ -245,6 +245,14 @@ cannot look up their own LINE user id. This is the recipe:
 
 Group chats additionally need `/schedule setup staff` (or `setup family`) once
 per chat.
+
+A trusted group chat can opt out of the per-student `YES` confirmations with
+`/schedule setup instant` (GRP-BOT-07) — after that, every `/schedule` command
+in that chat posts immediately, `send` verb included. The switch is per-group,
+so once any allowlisted admin flips it, every admin's commands in that chat post
+instantly. `/schedule setup confirm` restores the default at any time; neither
+direction needs a deploy. The toggle refuses until the chat has declared its
+audience.
 
 ### 4.2 Taking the site offline (maintenance mode)
 

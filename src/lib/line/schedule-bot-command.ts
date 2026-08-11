@@ -35,6 +35,9 @@ export const FAMILY_PATTERN = /^(family|parent|ครอบครัว|ผู�
 export const STAFF_PATTERN = /^(staff|internal|admin|ทีมงาน)$/i;
 export const SETUP_PATTERN = /^setup\s+(family|parent|staff|internal|admin)$/i;
 
+/** `setup instant` switches a chat's confirm gate off; `setup confirm` restores it (GRP-BOT-07). */
+export const SETUP_MODE_PATTERN = /^setup\s+(instant|confirm)$/i;
+
 /**
  * The short words the bot asks people to reply with.
  *

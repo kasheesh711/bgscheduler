@@ -328,6 +328,22 @@ export function groupAudienceSet(audience: "family" | "staff"): string {
     : "Got it — staff chat. I'll post schedules in English with the class count.";
 }
 
+/**
+ * Confirmation for the `setup instant` / `setup confirm` toggle (GRP-BOT-07).
+ *
+ * The "on" message carries the caution deliberately: while instant mode is on,
+ * a valid code typed in the wrong chat posts with no checkpoint, so the warning
+ * (and the way back) travels with the switch itself.
+ */
+export function groupConfirmModeSet(instant: boolean): string {
+  return instant
+    ? [
+      "Got it — instant mode. I'll post schedules here immediately, no YES needed.",
+      "Double-check the code before sending. /schedule setup confirm turns the check back on.",
+    ].join("\n")
+    : "Got it — I'll ask for a YES before posting each new schedule here.";
+}
+
 export const GROUP_SETUP_NEEDED = [
   "This chat isn't set up yet.",
   "Send /schedule with a student code and I'll ask which kind of chat it is.",
@@ -340,6 +356,8 @@ export const GROUP_HELP = [
   "/schedule Aadhu.Sr 2026-09 — a specific month.",
   "/schedule setup family — a parent can read this chat (Thai messages).",
   "/schedule setup staff — internal chat (English messages).",
+  "/schedule setup instant — post immediately, skip the YES confirmation.",
+  "/schedule setup confirm — ask for a YES first (default).",
 ].join("\n");
 export const GROUP_SEND_FAILED = "Couldn't post the schedule just now. Please try again.";
 export const GROUP_NO_SNAPSHOT = "Schedule data isn't available right now. Please try again shortly.";

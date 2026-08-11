@@ -34,7 +34,9 @@ and the optional trailing `send` verb is load-bearing:
 - **`send` is what reaches a parent's own thread.** Only `/schedule <code> send` routes the DM path
   to `startSend` and its verified-contact + confirm gates (`schedule-bot.ts:288`, `:355`); in a
   group it forces the confirm by disqualifying the already-delivered fast path
-  (`schedule-bot-group.ts:426`). Rationale in commit `339ccc0`.
+  (`schedule-bot-group.ts:494`). Rationale in commit `339ccc0`. One carve-out: in a chat switched
+  to instant mode (`/schedule setup instant`, GRP-BOT-07) the group-side force-confirm is waived
+  along with every other confirm in that chat (`schedule-bot-group.ts:476`-`488`).
 
 Those gates are owned by [LINE Integration](./line-integration.md#schedule-bot-gates); this page
 describes only what the schedule feature itself contributes.
@@ -304,9 +306,12 @@ about the schedule itself:
   FAMILY or STAFF, stored in `line_group_settings`; that reply doubles as the first student's
   confirmation. Each new student in that chat then needs a `YES`, while a student the chat has
   already received goes straight through via `line_group_schedule_sends`
-  (`schedule-bot-group.ts:420`-`488`). **Audience selects the message template only — Thai parent
+  (`schedule-bot-group.ts:490`-`504`). **Audience selects the message template only — Thai parent
   copy vs the English admin format — it grants nothing and relaxes no gate**
-  (`:546`-`554`, ternary at `:593`-`607`).
+  (ternary at `:661`-`675`). A chat can opt out of the per-student confirm entirely:
+  `/schedule setup instant` sets `skip_confirm` on its settings row (GRP-BOT-07) and every later
+  command posts immediately; `/schedule setup confirm` restores the default. The toggle is
+  admin-only and refuses until the chat has declared an audience (`:222`-`237`, `:348`-`361`).
 - **Parent copy names the nickname, never the legal name**, states the expiry, and says the link
   self-updates (`schedule-bot-copy.ts:66`-`96`).
 

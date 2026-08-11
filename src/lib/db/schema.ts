@@ -4684,12 +4684,22 @@ export const lineScheduleBotPending = pgTable("line_schedule_bot_pending", {
  * The bot cannot tell a family group (a parent reads whatever it posts) from a
  * staff coordination group, and the two need different wording. Rather than
  * guess, it asks once and remembers. `audience` selects the template only — it
- * grants nothing and relaxes no gate.
+ * grants nothing and relaxes no gate. `skipConfirm` is the one setting that
+ * DOES relax a gate (GRP-BOT-07): while set, the per-student YES confirmation
+ * is skipped for this chat. It can only be flipped by an allowlisted admin via
+ * the in-chat `setup instant` / `setup confirm` commands.
  */
 export const lineGroupSettings = pgTable("line_group_settings", {
   groupId: text("group_id").primaryKey(),
   /** "family" → Thai parent template · "staff" → English admin template. */
   audience: text("audience").notNull(),
+  /**
+   * Instant mode (GRP-BOT-07): when true, /schedule posts into this chat
+   * immediately — no first-time-per-student YES, and the `send` verb no longer
+   * forces a confirm. The toggle refuses until the chat has a registered
+   * audience, so a true value implies a valid template choice.
+   */
+  skipConfirm: boolean("skip_confirm").notNull().default(false),
   setByLineUserId: text("set_by_line_user_id").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

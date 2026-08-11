@@ -26,7 +26,7 @@ The docs are organized into five trees, each with a distinct job:
 route group (plus `src/app/login/page.tsx`, the token-gated parent page
 `src/app/schedule/[token]/page.tsx`, and two shell-free print reports under `src/app/(print)/`),
 21 navigation tools in six sections (`src/lib/navigation/tools.ts`), 15 Vercel Cron entries
-(`vercel.json`), 65 Drizzle migrations (latest `drizzle/0064_line_group_settings.sql`), and 369
+(`vercel.json`), 66 Drizzle migrations (latest `drizzle/0065_line_group_settings_skip_confirm.sql`), and 369
 Vitest test files. The mechanical inventories behind those numbers live in
 [`reference/api/index.md`](./reference/api/index.md) and
 [`reference/database/index.md`](./reference/database/index.md).

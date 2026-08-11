@@ -43,6 +43,8 @@ function makeDb(selectResults: unknown[][] = []) {
   const queue = [...selectResults];
   const inserts: Array<{ row: unknown }> = [];
   const deletes: unknown[] = [];
+  const updates: Array<{ row: unknown }> = [];
+  const conflictSets: unknown[] = [];
 
   function chain(result: unknown[]) {
     const node: Record<string, unknown> = {};
@@ -57,17 +59,24 @@ function makeDb(selectResults: unknown[][] = []) {
     insert: () => ({
       values: (row: unknown) => {
         inserts.push({ row });
-        const node: Record<string, unknown> = { onConflictDoUpdate: () => node };
+        const node: Record<string, unknown> = {
+          onConflictDoUpdate: (arg: unknown) => { conflictSets.push(arg); return node; },
+        };
         node.then = (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve);
         node.catch = () => node;
         return node;
       },
     }),
+    update: () => ({
+      set: (row: unknown) => ({
+        where: () => { updates.push({ row }); return Promise.resolve(undefined); },
+      }),
+    }),
     delete: () => ({
       where: (c: unknown) => { deletes.push(c); return Promise.resolve(undefined); },
     }),
   };
-  return { db: db as unknown as Database, inserts, deletes };
+  return { db: db as unknown as Database, inserts, deletes, updates, conflictSets };
 }
 
 function student(overrides: Record<string, unknown> = {}) {
@@ -219,10 +228,13 @@ describe("GRP-BOT-03 exact code only", () => {
   });
 });
 
-/** Select-queue shorthand: [audience lookup, has-seen lookup]. */
+/** Select-queue shorthand: [settings lookup, has-seen lookup]. */
 const UNREGISTERED: unknown[][] = [[]];
 const STAFF_GROUP = (seen = false): unknown[][] => [[{ audience: "staff" }], seen ? [{ id: "prior" }] : []];
 const FAMILY_GROUP = (seen = false): unknown[][] => [[{ audience: "family" }], seen ? [{ id: "prior" }] : []];
+/** Instant-mode chat: settings lookup only — the has-seen lookup is skipped (GRP-BOT-07). */
+const INSTANT_GROUP = (audience: "family" | "staff" = "staff"): unknown[][] =>
+  [[{ audience, skipConfirm: true }]];
 
 describe("GRP-BOT-06 per-group audience", () => {
   beforeEach(() => {
@@ -474,6 +486,104 @@ describe("GRP-BOT-04 send verb still confirms", () => {
     const text = d.reply.mock.calls[0][0].text as string;
     expect(text).toContain("น้องAadhu");
     expect(text).not.toContain("Srisethi");
+  });
+});
+
+describe("GRP-BOT-07 instant mode", () => {
+  beforeEach(() => {
+    vi.mocked(searchCurrentLineStudents).mockResolvedValue([student()] as never);
+    vi.mocked(getStudentMonthlySchedule).mockResolvedValue(schedule(12) as never);
+    vi.mocked(mintStudentScheduleLink).mockResolvedValue(LINK as never);
+  });
+
+  it("posts immediately for a student this chat has never received", async () => {
+    const d = deps();
+    const { db, inserts } = makeDb(INSTANT_GROUP());
+
+    const result = await call(db, d, "/schedule Aadhu.Sr");
+
+    expect(result.action).toBe("sent");
+    expect(mintStudentScheduleLink).toHaveBeenCalled();
+    // Only the audit row — no pending row was ever staged.
+    expect(inserts).toHaveLength(1);
+    expect(d.reply.mock.calls[0][0].text).toContain("https://example.test/schedule/tok_abc");
+  });
+
+  it("skips the confirm even for the send verb, using the family template", async () => {
+    const d = deps();
+    const { db } = makeDb(INSTANT_GROUP("family"));
+
+    const result = await call(db, d, "/schedule Aadhu.Sr send");
+
+    expect(result.action).toBe("sent");
+    const text = d.reply.mock.calls[0][0].text as string;
+    expect(text).toContain("น้องAadhu");
+    expect(text).not.toContain("Srisethi");
+  });
+
+  it("still confirms when the settings row carries an explicit skipConfirm: false", async () => {
+    const d = deps();
+    const { db } = makeDb([[{ audience: "staff", skipConfirm: false }], []]);
+
+    const result = await call(db, d, "/schedule Aadhu.Sr");
+
+    expect(result.action).toBe("awaiting_confirm");
+    expect(mintStudentScheduleLink).not.toHaveBeenCalled();
+  });
+
+  it("flips the flag on with setup instant in a registered chat", async () => {
+    const d = deps();
+    const { db, updates } = makeDb([[{ audience: "staff" }]]);
+
+    const result = await call(db, d, "/schedule setup instant");
+
+    expect(result.action).toBe("mode_set");
+    expect((updates[0].row as Record<string, unknown>).skipConfirm).toBe(true);
+    expect(d.reply.mock.calls[0][0].text).toContain("instant");
+    expect(mintStudentScheduleLink).not.toHaveBeenCalled();
+  });
+
+  it("restores the gate with setup confirm", async () => {
+    const d = deps();
+    const { db, updates } = makeDb([[{ audience: "staff", skipConfirm: true }]]);
+
+    const result = await call(db, d, "/schedule setup confirm");
+
+    expect(result.action).toBe("mode_set");
+    expect((updates[0].row as Record<string, unknown>).skipConfirm).toBe(false);
+    expect(d.reply.mock.calls[0][0].text).toContain("YES");
+  });
+
+  it("refuses the toggle in a chat that was never set up", async () => {
+    const d = deps();
+    const { db, updates } = makeDb([[]]);
+
+    const result = await call(db, d, "/schedule setup instant");
+
+    expect(result.action).toBe("awaiting_setup");
+    expect(updates).toHaveLength(0);
+    expect(d.reply.mock.calls[0][0].text).toContain("isn't set up yet");
+  });
+
+  it("stays silent for a non-admin typing the toggle", async () => {
+    const d = deps();
+    const { db, updates } = makeDb();
+    expect(await call(db, d, "/schedule setup instant", { lineUserId: PARENT })).toEqual({ handled: false });
+    expect(updates).toHaveLength(0);
+    expect(sent(d)).toHaveLength(0);
+  });
+
+  it("keeps the flag untouched when the audience changes", async () => {
+    // Pins the setGroupAudience upsert set-clause: a `setup family` must never
+    // silently reset a chat's instant mode.
+    const d = deps();
+    const { db, conflictSets } = makeDb();
+
+    await call(db, d, "/schedule setup family");
+
+    expect(conflictSets).toHaveLength(1);
+    const set = (conflictSets[0] as { set: Record<string, unknown> }).set;
+    expect(Object.keys(set)).not.toContain("skipConfirm");
   });
 });
 

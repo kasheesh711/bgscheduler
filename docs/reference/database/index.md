@@ -2,7 +2,7 @@
 
 The canonical lookup for every table in the BGScheduler Postgres database: **188 tables**, all
 declared in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) (4,719 lines) with Drizzle ORM
-and migrated under [`drizzle/`](../../../drizzle) (65 `.sql` files, latest `0064_line_group_settings.sql`).
+and migrated under [`drizzle/`](../../../drizzle) (66 `.sql` files, latest `0065_line_group_settings_skip_confirm.sql`).
 The count is mechanical: `grep -c "^export const .* = pgTable" src/lib/db/schema.ts` → `188`.
 
 This page answers "what is this table, what is one row of it, and who owns it". It is a
@@ -255,7 +255,7 @@ Three recurring patterns are worth naming once:
 | `line_oa_resolver_rows` | `lineOaResolverRows` | line | unique (`run_id`, `student_key`, `search_code`) — one lookup task | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 2636-2661 |
 | `line_backlog_recovery_sync_runs` | `lineBacklogRecoverySyncRuns` | line | follower backlog-recovery attempt; single-running guard | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 2663-2681 |
 | `line_schedule_bot_pending` | `lineScheduleBotPending` | line | pending confirm — unique (`line_user_id`, `scope_key`); `scope_key` is the group id, or the literal `"dm"` | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 4660-4678 |
-| `line_group_settings` | `lineGroupSettings` | line | LINE group id (PK) — its `audience` (`family` → Thai parent template, `staff` → English admin template); selects wording only, grants nothing | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 4689-4696 |
+| `line_group_settings` | `lineGroupSettings` | line | LINE group id (PK) — its `audience` (`family` → Thai parent template, `staff` → English admin template; selects wording only) and `skip_confirm` (GRP-BOT-07 instant mode — the one flag that relaxes the confirm gate) | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 4692-4706 |
 | `line_group_schedule_sends` | `lineGroupScheduleSends` | line | schedule link delivered into a group; doubles as the "has this group seen this student?" confirm lookup | [LINE Integration](../../features/line-integration.md) | [line](./erd-line.md) | 4707-4719 |
 | `room_capacity_model_runs` | `roomCapacityModelRuns` | room-capacity | imported forecast model run (unique `source_fingerprint`) | [Room Capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) | 2726-2738 |
 | `room_capacity_forecast_drivers` | `roomCapacityForecastDrivers` | room-capacity | model run × scenario × month — leads, revenue, hours, utilization | [Room Capacity](../../features/room-capacity.md) | [room-capacity](./erd-room-capacity.md) | 2740-2761 |

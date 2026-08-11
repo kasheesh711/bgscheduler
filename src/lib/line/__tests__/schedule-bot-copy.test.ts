@@ -11,6 +11,8 @@ import {
   adminSent,
   formatBangkokDmy,
   formatThaiMonth,
+  GROUP_HELP,
+  groupConfirmModeSet,
   groupConfirmPrompt,
   groupEmptyMonth,
   groupNotExactCode,
@@ -184,6 +186,22 @@ describe("group replies", () => {
   it("keeps the empty-month notice free of internal wording", () => {
     expect(groupEmptyMonth("Aadhiya", "2026-08"))
       .toBe("Aadhiya has no classes in August 2026.");
+  });
+
+  it("warns about the lost checkpoint and names the way back when instant mode turns on", () => {
+    const text = groupConfirmModeSet(true);
+    expect(text).toContain("instant mode");
+    expect(text).toContain("no YES needed");
+    expect(text).toContain("/schedule setup confirm");
+  });
+
+  it("says the YES gate is back when instant mode turns off", () => {
+    expect(groupConfirmModeSet(false)).toContain("YES");
+  });
+
+  it("advertises the instant-mode toggle in help", () => {
+    expect(GROUP_HELP).toContain("/schedule setup instant");
+    expect(GROUP_HELP).toContain("/schedule setup confirm");
   });
 });
 
