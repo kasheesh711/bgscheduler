@@ -432,14 +432,92 @@ describe("assignClassrooms", () => {
     expect(result.rows[0].ruleTrace).toContain("assigned by override: Turn The Page (TV)");
   });
 
-  it("requires a TV-capable room for Rasna without pinning her to one exact room", () => {
+  it("assigns Ras to Never Ever (TV) when available", () => {
+    const result = assignClassrooms([
+      session({ tutorDisplayName: "Rasna (Ras) Rajkitkul" }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    expect(result.rows[0].preferredRoom).toBe("Never Ever (TV)");
+    expect(result.rows[0].assignedRoom).toBe("Never Ever (TV)");
+    expect(result.rows[0].ruleTrace).toContain("assigned priority preferred room: Never Ever (TV)");
+  });
+
+  it("gives Ras Never Ever (TV) over overlapping Mandy and Calvin sessions", () => {
+    const result = assignClassrooms([
+      session({
+        groupId: "mandy",
+        wiseSessionId: "mandy",
+        tutorDisplayName: "Mandy (Mandy) Boontanrart",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        groupId: "calvin",
+        wiseSessionId: "calvin",
+        tutorDisplayName: "Calvin (Calvin) Lim Wen Quan",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        groupId: "ras",
+        wiseSessionId: "ras",
+        tutorDisplayName: "Rasna (Ras) Rajkitkul",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    const ras = result.rows.find((row) => row.wiseSessionId === "ras")!;
+    const mandy = result.rows.find((row) => row.wiseSessionId === "mandy")!;
+    const calvin = result.rows.find((row) => row.wiseSessionId === "calvin")!;
+    expect(ras.assignedRoom).toBe("Never Ever (TV)");
+    expect(mandy.assignedRoom).not.toBe("Never Ever (TV)");
+    expect(calvin.assignedRoom).not.toBe("Never Ever (TV)");
+  });
+
+  it("still assigns Mandy to Never Ever (TV) when Ras is absent", () => {
+    const result = assignClassrooms([
+      session({ tutorDisplayName: "Mandy (Mandy) Boontanrart" }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    expect(result.rows[0].preferredRoom).toBe("Never Ever (TV)");
+    expect(result.rows[0].assignedRoom).toBe("Never Ever (TV)");
+  });
+
+  it("protects Ras's Never Ever (TV) priority from an earlier overlapping generic session", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          wiseSessionId: "generic",
+          tutorDisplayName: "Generic Tutor",
+          startMinute: 9 * 60,
+          endMinute: 11 * 60,
+        }),
+        session({
+          wiseSessionId: "ras",
+          tutorDisplayName: "Ras",
+          startMinute: 10 * 60,
+          endMinute: 11 * 60,
+        }),
+      ],
+      roomsFor("Never Ever (TV)", "Remember (TV)"),
+    );
+
+    const generic = result.rows.find((row) => row.wiseSessionId === "generic")!;
+    const ras = result.rows.find((row) => row.wiseSessionId === "ras")!;
+    expect(generic.assignedRoom).not.toBe("Never Ever (TV)");
+    expect(ras.preferredRoom).toBe("Never Ever (TV)");
+    expect(ras.assignedRoom).toBe("Never Ever (TV)");
+  });
+
+  it("falls back to another TV room when Never Ever (TV) is not in the catalog", () => {
     const result = assignClassrooms(
       [session({ tutorDisplayName: "Rasna", studentCount: 1 })],
       roomsFor("Focus", "Iconic (TV)"),
     );
 
     expect(result.rows[0].needsTv).toBe(true);
-    expect(result.rows[0].preferredRoom).toBeNull();
+    expect(result.rows[0].preferredRoom).toBe("Never Ever (TV)");
     expect(result.rows[0].assignedRoom).toBe("Iconic (TV)");
   });
 

@@ -128,6 +128,8 @@ export const PREFERRED_BY_TUTOR = new Map<string, string>(
     ["Mandy (Mandy) Boontanrart Online", "Never Ever (TV)"],
     ["Calvin (Calvin) Lim Wen Quan", "Never Ever (TV)"],
     ["Calvin (Calvin) Lim Wen Quan Online", "Never Ever (TV)"],
+    ["Rasna (Ras) Rajkitkul", "Never Ever (TV)"],
+    ["Rasna (Ras) Rajkitkul Online", "Never Ever (TV)"],
     ["Narongsak (Sagotty) Sriwiran", "Relax (TV)"],
     ["Narongsak (Sagotty) Sriwiran Online", "Relax (TV)"],
     ["Thandolkhawathn (June) Choochaisangrathn", "Big Memories (TV)"],
@@ -155,6 +157,8 @@ const PRIORITY_PREFERRED_ROOM_BY_TUTOR = new Map<string, string>(
     ["Kevin (Kev) Y. Hsieh Online", ROOM_THINK_OUTSIDE_THE_BOX],
     ["Rachata (Mek) Sakpuaram", "Iconic (TV)"],
     ["Rachata (Mek) Sakpuaram Online", "Iconic (TV)"],
+    ["Rasna (Ras) Rajkitkul", "Never Ever (TV)"],
+    ["Rasna (Ras) Rajkitkul Online", "Never Ever (TV)"],
   ].flatMap(([name, room]) => tutorRuleAliases(name).map((alias) => [normalizeTutorName(alias), room])),
 );
 
