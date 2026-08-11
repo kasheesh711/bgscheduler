@@ -47,6 +47,13 @@ const THAI_WEEKDAYS = [
 ]; // Indexed by Date#getUTCDay (0 = Sunday).
 
 /**
+ * Monday-start abbreviated weekday headers for the parent dot grid.
+ * Hard-coded rather than derived from THAI_WEEKDAYS — the short forms
+ * (พ vs พฤ) are conventional, not mechanical truncations.
+ */
+export const THAI_WEEKDAY_INITIALS = ["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"] as const;
+
+/**
  * "2026-08-03" → "วันจันทร์ที่ 3", the day heading on the public agenda page.
  *
  * dateKey is already the Bangkok calendar day and the weekday of a calendar
@@ -126,6 +133,9 @@ export const PUBLIC_PAGE_COPY = {
   today: "วันนี้",
   classUnit: "คาบเรียน",
   minutesUnit: "นาที",
+  viewAgenda: "รายการ",
+  viewCalendar: "ปฏิทิน",
+  viewToggleLabel: "มุมมอง",
   emptyMonth: "เดือนนี้ยังไม่มีคาบเรียนค่ะ / No classes scheduled this month.",
   /**
    * Shown for EVERY resolution failure — expired, revoked, unknown, malformed.

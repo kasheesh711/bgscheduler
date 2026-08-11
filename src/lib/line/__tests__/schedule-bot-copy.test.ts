@@ -20,6 +20,7 @@ import {
   parentSchedulePushMessage,
   studentLabel,
   PUBLIC_PAGE_COPY,
+  THAI_WEEKDAY_INITIALS,
 } from "@/lib/line/schedule-bot-copy";
 
 describe("formatThaiMonth", () => {
@@ -229,6 +230,16 @@ describe("public page copy", () => {
     expect(PUBLIC_PAGE_COPY.expired.toLowerCase()).not.toContain("not found");
     expect(PUBLIC_PAGE_COPY.expired.toLowerCase()).not.toContain("revoked");
     expect(PUBLIC_PAGE_COPY.expired.toLowerCase()).not.toContain("invalid");
+  });
+
+  it("labels the view toggle in Thai", () => {
+    expect(PUBLIC_PAGE_COPY.viewAgenda).toBe("รายการ");
+    expect(PUBLIC_PAGE_COPY.viewCalendar).toBe("ปฏิทิน");
+    expect(PUBLIC_PAGE_COPY.viewToggleLabel.length).toBeGreaterThan(0);
+  });
+
+  it("orders the dot-grid weekday initials Monday-first", () => {
+    expect(THAI_WEEKDAY_INITIALS).toEqual(["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"]);
   });
 });
 
