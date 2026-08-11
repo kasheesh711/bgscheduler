@@ -7,12 +7,12 @@
 Student Schedule answers one question for one child: *what classes does this student have this
 month?* An admin looks a student up by nickname code, pages through months, and then either prints
 the month as a PDF or hands the parent a link. The parent opens that link on their phone — with no
-account, no login, and no app — and sees the same calendar the admin just previewed.
+account, no login, and no app — and sees the same classes the admin just previewed.
 
-Three surfaces render the **same** payload through the **same** calendar component, so the classes
-staff preview are the classes the family receives. They are not pixel-identical — each passes
-different props and the parent page wraps the calendar in Thai copy; the differences are enumerated
-under [UI](#ui).
+Three surfaces render the **same** payload, so the classes staff preview are the classes the family
+receives. The two admin surfaces render `ScheduleMonthCalendar`; the parent page renders the
+phone-first `ParentScheduleAgenda`, which shares the same subject colours via
+`buildSubjectColorMap`. The differences are enumerated under [UI](#ui).
 
 | Surface | Route | Audience |
 |---|---|---|
@@ -136,41 +136,55 @@ shared `PrintToolbar` that calls `window.print()`. It lives in the `(print)` rou
 no `AppNav` chrome, but its URL is still under the `/student-schedule` namespace — which is what
 keeps it inside a restricted user's `allowedPages` prefix.
 
-**`/schedule/{token}`** (`src/app/schedule/[token]/page.tsx`) is the public parent page: Thai-first
-heading built from the student's nickname (never the legal name), `robots: noindex/nofollow`
-(`:32`-`35`), the calendar, and a Bangkok "last updated" footer. It sits outside every route group,
-so it renders without nav or admin chrome.
+**`/schedule/{token}`** (`src/app/schedule/[token]/page.tsx`) is the public parent page, built
+phone-first for LINE's in-app browser: `robots: noindex/nofollow`, a per-route `viewport` export
+(`viewportFit: "cover"` so safe-area insets apply on notched phones), and a page root that **owns
+its own scrolling** (`min-h-0 flex-1 overflow-y-auto`) because the root layout's body is a
+fixed-height `overflow-hidden` flex shell that would otherwise clip everything below the first
+viewport — the same trap the admissions parent dashboard documents. Inside the scroller: a sticky
+Thai-first header (nickname — never the legal name — plus `formatThaiMonth` and a session-count
+badge), the agenda, and a Bangkok "last updated" footer. The whole page renders in Sarabun via the
+`font-thai` theme token, and the Suspense fallback is a skeleton mirroring the loaded layout rather
+than a blank screen (the live Wise merge can hold first byte for a couple of seconds). It sits
+outside every route group, so it renders without nav or admin chrome.
 
 **`ScheduleMonthCalendar`** (`src/components/student-schedule/schedule-month-calendar.tsx`) is the
-one component all three surfaces render, from the one payload. It is presentational and
-deliberately **not** `"use client"` — no fetching, no clock — so nothing about the rendered classes
-can drift between surfaces. It draws the Monday-start 6×7 grid on `lg` and up, a week-grouped list
-below that, and colours blocks by **subject** (not tutor) from a six-colour palette assigned in
-order of first appearance (`:36`-`63`). Grid maths is shared with the admissions calendar via
-`src/lib/calendar/month-grid.ts`.
+component both **admin** surfaces render. It is presentational and deliberately **not**
+`"use client"` — no fetching, no clock. It draws the Monday-start 6×7 grid on `lg` and up, a
+week-grouped list below that, and colours blocks by **subject** (not tutor) from a six-colour
+palette assigned in order of first appearance (`:36`-`63`). Grid maths is shared with the
+admissions calendar via `src/lib/calendar/month-grid.ts`.
 
-The three surfaces are **not** byte-identical, though, because they pass different props:
+**`ParentScheduleAgenda`** (`src/components/student-schedule/parent-schedule-agenda.tsx`) is the
+component the **parent** page renders: a day-by-day list of session cards, one section per day that
+has sessions, headed by the Thai weekday + day number (`formatThaiDayHeading`). With `todayKey` it
+badges today ("วันนี้"), dims past days (visual only — never dropped), and anchors
+`id="agenda-scroll-target"` on the first day at or after today, which the tiny client-side
+`AgendaTodayScroller` scrolls to once after hydration. It is deliberately a **separate component**
+rather than a third branch of `ScheduleMonthCalendar`: the calendar's
+`.schedule-month-grid`/`.schedule-mobile-list` class names are force-toggled by the print CSS, so
+its markup is load-bearing for the A4 report, and the two audiences want different type scales and
+states. Content cannot drift between the three surfaces because all of them render the same
+payload, and the agenda imports the same `buildSubjectColorMap` for its colours.
 
-| | `todayKey` | Empty month renders |
-|---|---|---|
-| Workspace | `todayKey={todayKey}` (`student-schedule-workspace.tsx:257`) | the component's own English empty state |
-| Print report | *omitted* (`report/page.tsx:115`) | the component's own English empty state |
-| Parent page | `todayKey={todayBangkok()}` (`schedule/[token]/page.tsx:83`) | the page's Thai/English `PUBLIC_PAGE_COPY.emptyMonth` |
+The three surfaces are **not** byte-identical, though, because they differ in component and props:
 
-- **`todayKey` draws a filled primary-coloured badge on the matching day cell**; the prop is
-  optional and omitting it draws none (prop doc at `schedule-month-calendar.tsx:119`, badge branch
-  at `:179`-`181`). The print report is the one surface that does not pass it, so whenever the
-  viewed month contains today the printed sheet carries no today marker and the preview does — the
-  classes are identical, the day highlight is not. (The code does not record *why* the report omits
-  it; a printed month outliving the day it was printed is the obvious reading, not a documented
-  one.)
+| | Component | `todayKey` | Empty month renders |
+|---|---|---|---|
+| Workspace | `ScheduleMonthCalendar` | `todayKey={todayKey}` (`student-schedule-workspace.tsx:257`) | the calendar's own English empty state |
+| Print report | `ScheduleMonthCalendar` | *omitted* (`report/page.tsx:115`) | the calendar's own English empty state |
+| Parent page | `ParentScheduleAgenda` | `todayKey={todayBangkok()}` | the page's Thai/English `PUBLIC_PAGE_COPY.emptyMonth` in a card |
+
+- **`todayKey` draws the today marker** — a filled badge on the matching grid cell in the calendar
+  (`schedule-month-calendar.tsx:179`-`181`), the "วันนี้" badge + scroll anchor in the agenda. The
+  print report is the one surface that does not pass it, so whenever the viewed month contains
+  today the printed sheet carries no today marker and the preview does — the classes are identical,
+  the day highlight is not. (The code does not record *why* the report omits it; a printed month
+  outliving the day it was printed is the obvious reading, not a documented one.)
 - **A zero-session month diverges by design.** The workspace and the print report fall through to
-  the component's `No classes scheduled in {monthLabel}.` (`schedule-month-calendar.tsx:128`-`140`),
-  while the parent page short-circuits before rendering the component at all and shows its own
-  bilingual line (`schedule/[token]/page.tsx:78`-`84`, copy at
-  `src/lib/line/schedule-bot-copy.ts:105`).
-- **The parent page also adds a Thai-first header** built by `formatThaiMonth` around the student's
-  nickname (`schedule/[token]/page.tsx:70`-`75`), which neither admin surface has.
+  the calendar's `No classes scheduled in {monthLabel}.` (`schedule-month-calendar.tsx:128`-`140`),
+  while the parent page short-circuits before rendering the agenda at all and shows its own
+  bilingual line in a card (copy at `src/lib/line/schedule-bot-copy.ts`).
 
 Print behaviour lives in `src/app/student-schedule.css` (imported by `globals.css`): a **named**
 `@page schedule-landscape` so this report prints landscape without flipping any other printable page
@@ -204,7 +218,8 @@ flowchart TD
   U --> R[resolveStudentScheduleLink]
   R -->|null for every failure| E[one identical expired page]
   R -->|grant| G
-  G --> C[ScheduleMonthCalendar]
+  G -->|admin surfaces| C[ScheduleMonthCalendar]
+  G -->|parent page| P[ParentScheduleAgenda]
 ```
 
 Two properties fall out of this shape:
@@ -276,9 +291,10 @@ come back empty.
 
 Unlike the compare view, the month grid has **no "+N more" overflow** — day cells grow instead,
 because a parent-facing document must not silently omit a class
-(`schedule-month-calendar.tsx:9`-`13`). Subject colours are assigned by order of first appearance
-rather than hashed, after a content hash produced two indistinguishable blues in a real month
-(`:45`-`53`).
+(`schedule-month-calendar.tsx:9`-`13`). The parent agenda holds the same line: every session
+renders as its own card, and past days are dimmed but never dropped. Subject colours are assigned
+by order of first appearance rather than hashed, after a content hash produced two
+indistinguishable blues in a real month (`:45`-`53`).
 
 ### LINE delivery, in brief
 
@@ -341,6 +357,11 @@ Run with `npm test`. Tests sit in sibling `__tests__/` directories.
   Monday-start grid, distinct-and-deterministic subject colours, every class on a busy day (never a
   `+N more`), the TBC placeholder, both grid and mobile list present, empty state, and label
   formatting including the missing-end-time case.
+- **`src/components/student-schedule/__tests__/parent-schedule-agenda.test.tsx`** — sections only
+  for days with sessions, Thai weekday headings, the today badge and past-day dimming (and their
+  absence without `todayKey`), the scroll anchor on today / the next upcoming day / absent when the
+  month is entirely past, the TBC placeholder, chronological order, and the same label formatting
+  cases as the calendar.
 - **`src/lib/calendar/__tests__/month-grid.test.ts`** — grid construction, leap February, year
   boundaries in both directions, throwing on a malformed key, Monday resolution, D/M formatting.
 - **LINE side** — `schedule-bot.test.ts`, `schedule-bot-group.test.ts`, `schedule-bot-copy.test.ts`

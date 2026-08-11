@@ -10,6 +10,7 @@ import {
   adminNotFound,
   adminSent,
   formatBangkokDmy,
+  formatThaiDayHeading,
   formatThaiMonth,
   GROUP_HELP,
   groupConfirmModeSet,
@@ -31,6 +32,21 @@ describe("formatThaiMonth", () => {
   it("passes malformed keys through untouched", () => {
     expect(formatThaiMonth("2026-8")).toBe("2026-8");
     expect(formatThaiMonth("nope")).toBe("nope");
+  });
+});
+
+describe("formatThaiDayHeading", () => {
+  it("renders the Thai weekday and day number for the agenda heading", () => {
+    // August 2026: the 1st is a Saturday.
+    expect(formatThaiDayHeading("2026-08-01")).toBe("วันเสาร์ที่ 1");
+    expect(formatThaiDayHeading("2026-08-03")).toBe("วันจันทร์ที่ 3");
+    expect(formatThaiDayHeading("2026-08-11")).toBe("วันอังคารที่ 11");
+    expect(formatThaiDayHeading("2026-08-31")).toBe("วันจันทร์ที่ 31");
+  });
+
+  it("passes malformed keys through untouched", () => {
+    expect(formatThaiDayHeading("2026-08")).toBe("2026-08");
+    expect(formatThaiDayHeading("nope")).toBe("nope");
   });
 });
 
