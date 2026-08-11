@@ -74,12 +74,12 @@ The floor-plan map route has no `auth()` call at all (`src/app/api/classrooms/fl
 ## UI
 
 - **Page** — `src/app/(app)/class-assignments/page.tsx` is a five-line wrapper that renders the client workspace. Nav entry ("Class Assignments", section `scheduling-tutors`, shortcut-eligible) is declared in `src/lib/navigation/tools.ts:125` and rendered by `src/components/layout/app-nav.tsx`.
-- **Workspace** — `src/components/class-assignments/class-assignments-workspace.tsx` is the whole operational surface: date input, "Force reassign" checkbox, Refresh, the combined **"Sync Wise, then run"** action, "Publish to Wise", and "Email schedules". Above the tabs it renders a snapshot freshness banner (`:704`), a live-Wise-room-blocker warning banner (`:723`), and a seven-tile run summary (`:743`).
+- **Workspace** — `src/components/class-assignments/class-assignments-workspace.tsx` is the whole operational surface: date input, "Force reassign" checkbox, Refresh, the combined **"Sync Wise, then run"** action, "Publish to Wise", and "Email schedules". Above the tabs it renders a snapshot freshness banner (`:706`), a live-Wise-room-blocker warning banner (`:725`), and an eight-tile run summary (`:745`) including a client-computed Room switches tile.
 - **Four tabs** (`:776`), defaulting to Floor Plan:
   - **Floor Plan** — `floor-plan-occupancy.tsx`, an SVG center map driven by the hand-authored geometry in `src/lib/classrooms/floor-plan.ts`, paired with `room-occupancy-heatmap.tsx`. Both are scrubbed by a shared timeline: `assignment-timeline-controls.tsx` is purely presentational (play/pause, reset, a range slider, and a speed `<select>` offering 5 / 15 / 30 schedule-minutes per real second — `:23`, `:91`–`:95`), while the `requestAnimationFrame` playback loop and its `playing` / `playbackSpeed` state live in the workspace itself (`class-assignments-workspace.tsx:241`–`:243`, `:286`–`:321`).
   - **Room Calendar** — `room-calendar-view.tsx`, a GCal-style room-column day grid with lane packing for overlaps.
   - **Rows** — the editable assignment table with a per-row override `<select>`.
-  - **Tutor Schedule** — per-tutor blocks; disabled until the run has rows.
+  - **Tutor Schedule** — per-tutor blocks; disabled until the run has rows; each tutor's card header shows an outline badge with their room-switch count for the day when it's greater than zero.
 - **Shared popover** — `assignment-detail-popover.tsx` is the click target on both the floor plan and the calendar; it shows the row's status/warnings and offers the same override control.
 - **Client sync helper** — `src/components/class-assignments/sync-flow.ts` drives the sync-first flow: it POSTs `/api/admin/sync-wise`, and if a sync is already running it polls `/api/class-assignments` until a snapshot promoted *after* that sync started appears, with a 12-minute client timeout (`sync-flow.ts:4`, `:58`, `:99`).
 - **Visualization math** is deliberately outside React in `src/lib/classrooms/visualization.ts` (`buildTimelineBounds`, `buildRoomOccupancyState`, `buildHeatmapCells`, `buildRoomCalendarEvents`) so it is unit-testable.
@@ -167,7 +167,7 @@ flowchart TD
 
 ## Tests
 
-Sixteen test files, 154 test declarations (158 executed cases once the one parameterized block expands):
+Sixteen test files, 158 test declarations (162 executed cases once the one parameterized block expands):
 
 - **`src/lib/classrooms/__tests__/assignment-engine.test.ts`** (41 declarations → 45 executed cases; one `it.each` covers 5 preferred-room tutors at `:350`–`:380`) — capacity inference and the missing-capacity warning, TV requirement, external live-block availability, online/`SCHEDULED` remote handling, the 60-minute online-center rule, the Gift/Joy hard pin, priority-room protection, continuity, overrides, overflow ordering, and no-room. Override coverage is partial: valid overrides are asserted at `:417`, `:485` and `:520`, and `invalid_override_room` at `:516` (inactive room) and `:592` (unknown room) — but the *occupied*-override branch is not covered anywhere. `override_room_unavailable` (`assignment-engine.ts:432`) appears in exactly one place in the repo, its own `warnings.push`, and is asserted by no test.
 - **`reconciliation.test.ts`** (9) — carry-forward with preserved publish state, canceled removal, fitting new sessions against carried blocks, reschedule detection, minimal-displacement unlock, override protection, same-day continuity seeding from a carried row, and remote carried rows seeding nothing.

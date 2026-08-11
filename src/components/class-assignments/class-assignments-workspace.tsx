@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
-import { buildTimelineBounds, minuteToTimeLabel, snapTimelinePlaybackMinute } from "@/lib/classrooms/visualization";
+import { buildRoomChurnSummary, buildTimelineBounds, minuteToTimeLabel, snapTimelinePlaybackMinute } from "@/lib/classrooms/visualization";
 import { AssignmentTimelineControls } from "./assignment-timeline-controls";
 import { FloorPlanOccupancy } from "./floor-plan-occupancy";
 import { RoomCalendarView } from "./room-calendar-view";
@@ -347,6 +347,8 @@ export function ClassAssignmentsWorkspace() {
   const tutors = useMemo(() => {
     return [...new Set(rows.map((row) => row.tutorDisplayName))].sort((a, b) => a.localeCompare(b));
   }, [rows]);
+
+  const churnSummary = useMemo(() => buildRoomChurnSummary(rows), [rows]);
 
   useEffect(() => {
     setSelectedTutors((current) => {
@@ -740,7 +742,7 @@ export function ClassAssignmentsWorkspace() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-7">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-8">
         <div className="rounded-lg border bg-card p-3">
           <div className="text-xs text-muted-foreground">Run</div>
           <div className="mt-1 text-sm font-medium">{run ? run.status : "Not generated"}</div>
@@ -764,6 +766,10 @@ export function ClassAssignmentsWorkspace() {
         <div className="rounded-lg border bg-card p-3">
           <div className="text-xs text-muted-foreground">Remote</div>
           <div className="mt-1 text-lg font-semibold">{run?.remoteCount ?? 0}</div>
+        </div>
+        <div className="rounded-lg border bg-card p-3">
+          <div className="text-xs text-muted-foreground">Room switches</div>
+          <div className="mt-1 text-lg font-semibold">{churnSummary.totalSwitches}</div>
         </div>
         <div className="rounded-lg border bg-card p-3">
           <div className="text-xs text-muted-foreground">Wise publish</div>
@@ -962,9 +968,17 @@ export function ClassAssignmentsWorkspace() {
                         if (a.endMinute !== b.endMinute) return a.endMinute - b.endMinute;
                         return a.id.localeCompare(b.id);
                       });
+                    const tutorSwitchCount = churnSummary.switchesByTutor.get(tutor) ?? 0;
                     return (
                       <div key={tutor} className="rounded-lg border p-3">
-                        <div className="mb-2 text-sm font-semibold">{tutor}</div>
+                        <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                          <span>{tutor}</span>
+                          {tutorSwitchCount > 0 && (
+                            <Badge variant="outline">
+                              {tutorSwitchCount} room switch{tutorSwitchCount === 1 ? "" : "es"}
+                            </Badge>
+                          )}
+                        </div>
                         <div className="space-y-2">
                           {tutorRows.map((row) => (
                             <div key={row.id} className="rounded-md border-l-4 border-primary bg-muted/40 p-2 text-xs">

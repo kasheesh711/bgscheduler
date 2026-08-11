@@ -3,10 +3,11 @@ import {
   FLOOR_PLAN_ASSIGNABLE_ROOM_NAMES,
   getFloorPlanGeometry,
 } from "../floor-plan";
-import { DEFAULT_CLASSROOM_ROOMS, NO_ROOM_AVAILABLE } from "../rooms";
+import { DEFAULT_CLASSROOM_ROOMS, NO_ROOM_AVAILABLE, ROOM_JOY } from "../rooms";
 import {
   buildHeatmapCells,
   buildRoomCalendarEvents,
+  buildRoomChurnSummary,
   buildRoomOccupancyState,
   buildTimelineBounds,
   snapTimelinePlaybackMinute,
@@ -208,5 +209,59 @@ describe("classroom visualization helpers", () => {
     expect(events.map((event) => event.lane).sort()).toEqual([0, 1]);
     expect(events.every((event) => event.laneCount === 2)).toBe(true);
     expect(events.every((event) => event.hasRoomConflict)).toBe(true);
+  });
+});
+
+describe("buildRoomChurnSummary", () => {
+  it("counts each physical-room change across a tutor's day", () => {
+    const summary = buildRoomChurnSummary([
+      row({ id: "a1", assignedRoom: "Focus", startMinute: 9 * 60, endMinute: 10 * 60 }),
+      row({ id: "b1", assignedRoom: "Cool", startMinute: 10 * 60 + 15, endMinute: 11 * 60 }),
+      row({ id: "a2", assignedRoom: "Focus", startMinute: 11 * 60 + 30, endMinute: 12 * 60 + 30 }),
+    ]);
+
+    expect(summary.totalSwitches).toBe(2);
+    expect(summary.switchesByTutor.get("Tutor One")).toBe(2);
+  });
+
+  it("does not count a remote session as a room change", () => {
+    const summary = buildRoomChurnSummary([
+      row({ id: "a1", assignedRoom: "Focus", startMinute: 9 * 60, endMinute: 10 * 60 }),
+      row({
+        id: "remote",
+        assignedRoom: REMOTE_NO_ROOM_NEEDED,
+        status: "remote",
+        sessionType: "SCHEDULED",
+        startMinute: 10 * 60 + 15,
+        endMinute: 11 * 60,
+      }),
+      row({ id: "a2", assignedRoom: "Focus", startMinute: 11 * 60 + 15, endMinute: 12 * 60 }),
+    ]);
+
+    expect(summary.totalSwitches).toBe(0);
+    expect(summary.switchesByTutor.has("Tutor One")).toBe(false);
+  });
+
+  it("treats Joy and Joy (TV) as the same physical room", () => {
+    const summary = buildRoomChurnSummary([
+      row({ id: "joy1", assignedRoom: "Joy", startMinute: 9 * 60, endMinute: 10 * 60 }),
+      row({ id: "joy2", assignedRoom: ROOM_JOY, startMinute: 10 * 60 + 15, endMinute: 11 * 60 }),
+    ]);
+
+    expect(summary.totalSwitches).toBe(0);
+  });
+
+  it("sums switches across multiple tutors", () => {
+    const summary = buildRoomChurnSummary([
+      row({ id: "t1-a", tutorDisplayName: "Tutor One", assignedRoom: "Focus", startMinute: 9 * 60, endMinute: 10 * 60 }),
+      row({ id: "t1-b", tutorDisplayName: "Tutor One", assignedRoom: "Cool", startMinute: 10 * 60 + 30, endMinute: 11 * 60 + 30 }),
+      row({ id: "t2-a", tutorDisplayName: "Tutor Two", assignedRoom: "OMG", startMinute: 9 * 60, endMinute: 10 * 60 }),
+      row({ id: "t2-b", tutorDisplayName: "Tutor Two", assignedRoom: "Nerd", startMinute: 10 * 60 + 30, endMinute: 11 * 60 + 30 }),
+      row({ id: "t2-c", tutorDisplayName: "Tutor Two", assignedRoom: "Nerd", startMinute: 12 * 60, endMinute: 13 * 60 }),
+    ]);
+
+    expect(summary.switchesByTutor.get("Tutor One")).toBe(1);
+    expect(summary.switchesByTutor.get("Tutor Two")).toBe(1);
+    expect(summary.totalSwitches).toBe(2);
   });
 });

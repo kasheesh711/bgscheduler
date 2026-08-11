@@ -1,6 +1,6 @@
 import { getFloorPlanGeometry, sortRoomsByFloorPlan } from "./floor-plan";
 import { NO_ROOM_AVAILABLE } from "./rooms";
-import { REMOTE_NO_ROOM_NEEDED } from "./assignment-engine";
+import { normalizedPhysicalRoom, REMOTE_NO_ROOM_NEEDED } from "./assignment-engine";
 
 export interface ClassroomVisualizationRoom {
   id: string;
@@ -358,4 +358,51 @@ export function groupCellsByRoom<TRow extends ClassroomVisualizationRow>(
     grouped.set(cell.roomName, group);
   }
   return [...grouped.values()];
+}
+
+export interface RoomChurnSummary {
+  totalSwitches: number;
+  switchesByTutor: Map<string, number>;
+}
+
+/**
+ * Counts how often each tutor changes physical room across the day.
+ *
+ * 1. Drop rows that hold no physical room (remote sessions and `NO_ROOM_AVAILABLE`).
+ * 2. Group the survivors by exact `tutorDisplayName`.
+ * 3. Sort each tutor's rows by start, then end, then id for a stable order.
+ * 4. Count one switch per adjacent pair whose physical room differs, so
+ *    `Joy` and `Joy (TV)` never register as a change.
+ */
+export function buildRoomChurnSummary<TRow extends ClassroomVisualizationRow>(
+  rows: TRow[],
+): RoomChurnSummary {
+  const byTutor = new Map<string, TRow[]>();
+  for (const row of rows) {
+    if (shouldSkipRoomOccupancy(row)) continue;
+    if (row.assignedRoom === NO_ROOM_AVAILABLE) continue;
+    const list = byTutor.get(row.tutorDisplayName) ?? [];
+    list.push(row);
+    byTutor.set(row.tutorDisplayName, list);
+  }
+
+  const switchesByTutor = new Map<string, number>();
+  let totalSwitches = 0;
+  for (const [tutorDisplayName, tutorRows] of byTutor) {
+    const sorted = [...tutorRows].sort((a, b) => {
+      if (a.startMinute !== b.startMinute) return a.startMinute - b.startMinute;
+      if (a.endMinute !== b.endMinute) return a.endMinute - b.endMinute;
+      return a.id.localeCompare(b.id);
+    });
+    let switches = 0;
+    for (let i = 1; i < sorted.length; i += 1) {
+      if (normalizedPhysicalRoom(sorted[i].assignedRoom) !== normalizedPhysicalRoom(sorted[i - 1].assignedRoom)) {
+        switches += 1;
+      }
+    }
+    if (switches > 0) switchesByTutor.set(tutorDisplayName, switches);
+    totalSwitches += switches;
+  }
+
+  return { totalSwitches, switchesByTutor };
 }
