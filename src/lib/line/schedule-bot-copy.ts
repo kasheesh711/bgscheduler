@@ -42,6 +42,27 @@ export function formatThaiMonth(monthKey: string): string {
   return name ? `${name} ${year}` : monthKey;
 }
 
+const THAI_WEEKDAYS = [
+  "อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์",
+]; // Indexed by Date#getUTCDay (0 = Sunday).
+
+/**
+ * "2026-08-03" → "วันจันทร์ที่ 3", the day heading on the public agenda page.
+ *
+ * dateKey is already the Bangkok calendar day and the weekday of a calendar
+ * date is timezone-independent, so pure Date.UTC arithmetic is correct here
+ * (same date-only convention as src/lib/calendar/month-grid.ts). Malformed
+ * keys pass through unchanged, matching formatThaiMonth's contract.
+ */
+export function formatThaiDayHeading(dateKey: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!match) return dateKey;
+  const utc = new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
+  );
+  return `วัน${THAI_WEEKDAYS[utc.getUTCDay()]}ที่ ${Number(match[3])}`;
+}
+
 /**
  * Bangkok D/M/YYYY, the repo-wide date convention. Built from parts because
  * Intl zero-pads ("04/09/2026") and the rest of the app renders "4/9/2026".
@@ -102,6 +123,9 @@ export const PUBLIC_PAGE_COPY = {
   brand: "BeGifted Education",
   updatedPrefix: "อัปเดตล่าสุด",
   teacherLabel: "ครู",
+  today: "วันนี้",
+  classUnit: "คาบเรียน",
+  minutesUnit: "นาที",
   emptyMonth: "เดือนนี้ยังไม่มีคาบเรียนค่ะ / No classes scheduled this month.",
   /**
    * Shown for EVERY resolution failure — expired, revoked, unknown, malformed.
