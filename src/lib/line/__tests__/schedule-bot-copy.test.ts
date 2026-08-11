@@ -238,6 +238,11 @@ describe("public page copy", () => {
     expect(PUBLIC_PAGE_COPY.viewToggleLabel.length).toBeGreaterThan(0);
   });
 
+  it("names both modalities in Thai", () => {
+    expect(PUBLIC_PAGE_COPY.modalityOnline).toBe("ออนไลน์");
+    expect(PUBLIC_PAGE_COPY.modalityOnsite).toBe("ที่สถาบัน");
+  });
+
   it("orders the dot-grid weekday initials Monday-first", () => {
     expect(THAI_WEEKDAY_INITIALS).toEqual(["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"]);
   });

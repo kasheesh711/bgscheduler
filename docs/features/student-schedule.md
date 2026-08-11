@@ -92,6 +92,29 @@ also fills a blank snapshot title (and supplies titles for live-only sessions), 
 correct even before the next sync backfills the column. Other consumers of the `subject` column
 (progress-tests, the LINE operational planner) are untouched.
 
+The title also answers **where** the class happens, via `deriveSessionModality`. This table has no
+`session_type`, `location` or `class_type` column, so the title prefix is the only modality signal
+on this surface — and cross-joining the active snapshot against the tutor snapshot's Wise fields
+(2026-08-11) showed it is a reliable one, every prefix landing on one side with >99.5% agreement:
+
+| Title prefix | Rows | Wise `session_type` | Physical room |
+|---|---:|---|---|
+| `In-Person ` | 5,815 | OFFLINE | yes |
+| `On-site ` | 2,613 | OFFLINE | yes |
+| `Live ` | 2,443 | SCHEDULED | none |
+| `Online ` | 1,010 | SCHEDULED | none |
+
+So `{online, live}` → **online** and `{in-person, on-site}` → **onsite**; "Live" is BeGifted's other
+word for an online class, which is why it counts as online despite sitting in neither of the repo's
+older token sets. Anything else (a bare "Mock test ISEB", a blank title) is **unknown** and renders
+nothing — a parent document stays silent rather than guessing. `modalityDisplay`
+(`src/components/student-schedule/modality-display.ts`) maps the token to a lucide icon plus a Thai
+label ("ออนไลน์" / "ที่สถาบัน"), following the repo's modality convention of icon-and-word — colour
+and border on these surfaces belong to the subject. The agenda card carries the full tag in its
+right rail; the month grid has room only for the glyph, which the admin workspace and the A4 report
+inherit; the phone mini-calendar chips deliberately carry neither, since a 9px truncated chip
+cannot spare the width and a tap already opens that day in the agenda.
+
 **Write — capability tokens** ([`erd-core.md`](../reference/database/erd-core.md),
 [`index.md`](../reference/database/index.md)). `student_schedule_links` is the feature's only owned
 table: one row per issued parent link, granting read of exactly one `(student_key, month_key)` pair,

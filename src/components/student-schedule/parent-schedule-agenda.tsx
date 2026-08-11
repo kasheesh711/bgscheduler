@@ -19,6 +19,7 @@
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { modalityDisplay } from "./modality-display";
 import { buildSubjectColorMap } from "./schedule-month-calendar";
 import {
   PUBLIC_PAGE_COPY,
@@ -58,6 +59,7 @@ function AgendaSessionCard({
   session: StudentScheduleSession;
   color: string;
 }) {
+  const modality = modalityDisplay(session.modality);
   return (
     <Card
       size="sm"
@@ -81,11 +83,25 @@ function AgendaSessionCard({
             {session.teacherName}
           </div>
         </div>
-        {session.durationMinutes > 0 && (
-          <span className="shrink-0 pt-0.5 text-xs whitespace-nowrap tabular-nums text-muted-foreground">
-            {session.durationMinutes} {PUBLIC_PAGE_COPY.minutesUnit}
-          </span>
-        )}
+        {/* Right rail: duration over the modality tag, so every tag lines up
+            down the card edge and the month is scannable without reading. */}
+        <div className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
+          {session.durationMinutes > 0 && (
+            <span className="text-xs whitespace-nowrap tabular-nums text-muted-foreground">
+              {session.durationMinutes} {PUBLIC_PAGE_COPY.minutesUnit}
+            </span>
+          )}
+          {modality && (
+            <Badge
+              variant="outline"
+              data-testid="agenda-modality"
+              className="gap-1 px-1.5 py-0 text-[10px] font-medium whitespace-nowrap"
+            >
+              <modality.Icon aria-hidden />
+              {modality.label}
+            </Badge>
+          )}
+        </div>
       </div>
     </Card>
   );

@@ -11,6 +11,7 @@ import {
   bangkokMonthInstantWindow,
   buildStudentSchedulePayload,
   deriveDisplaySubject,
+  deriveSessionModality,
   getStudentMonthlySchedule,
   mergeLiveSessionsIntoRows,
   parseStudentDisplay,
@@ -169,6 +170,44 @@ describe("deriveDisplaySubject", () => {
     expect(deriveDisplaySubject({ ...base, title: "  " })).toBe("Y12-13 / G11-12 (Int.)");
     expect(deriveDisplaySubject({ title: "", subject: " ", packageName: "Maths 20-pack" })).toBe("Maths 20-pack");
     expect(deriveDisplaySubject({ title: "", subject: " ", packageName: "" })).toBe("Class");
+  });
+});
+
+describe("deriveSessionModality", () => {
+  it("reads onsite off the two physical prefixes", () => {
+    // Cross-checked against Wise: both sides are OFFLINE with a real room.
+    expect(deriveSessionModality("In-Person Session-Biology HL")).toBe("onsite");
+    expect(deriveSessionModality("On-site Session - Science")).toBe("onsite");
+    expect(deriveSessionModality("in person session - math")).toBe("onsite");
+    expect(deriveSessionModality("In-Person - English")).toBe("onsite");
+  });
+
+  it("counts Live as online, like Online", () => {
+    // Both are Wise SCHEDULED with no room — "Live" is BeGifted's other word
+    // for an online class, so it must not fall through to unknown.
+    expect(deriveSessionModality("Live Session - Physics")).toBe("online");
+    expect(deriveSessionModality("Online Session - Math")).toBe("online");
+    expect(deriveSessionModality("Online Google Meet")).toBe("online");
+  });
+
+  it("fails closed on anything it cannot read", () => {
+    expect(deriveSessionModality("Mock test ISEB - Baikao")).toBe("unknown");
+    expect(deriveSessionModality("Quadratics Groundwork (Y8-9)")).toBe("unknown");
+    expect(deriveSessionModality("")).toBe("unknown");
+    expect(deriveSessionModality("   ")).toBe("unknown");
+  });
+
+  it("rides along on the payload", () => {
+    const payload = build([
+      row({ wiseSessionId: "a", title: "Live Session - Physics" }),
+      row({ wiseSessionId: "b", title: "In-Person Session-Biology HL" }),
+      row({ wiseSessionId: "c", title: "" }),
+    ]);
+    expect(payload.sessions.map((session) => session.modality)).toEqual([
+      "online",
+      "onsite",
+      "unknown",
+    ]);
   });
 });
 

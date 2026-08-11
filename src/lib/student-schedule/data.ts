@@ -36,6 +36,7 @@ import {
 import { fetchLiveMonthSessions } from "@/lib/student-schedule/live";
 import {
   TEACHER_TBC,
+  type StudentScheduleModality,
   type StudentSchedulePayload,
   type StudentScheduleSession,
   type StudentScheduleStudent,
@@ -92,6 +93,31 @@ export function deriveDisplaySubject(row: {
     return title.replace(MODALITY_TITLE_PATTERN, "").trim() || title;
   }
   return row.subject.trim() || row.packageName.trim() || "Class";
+}
+
+const ONLINE_TITLE_PATTERN = /^\s*(?:online|live)\b/i;
+const ONSITE_TITLE_PATTERN = /^\s*(?:in[- ]?person|on[- ]?site)\b/i;
+
+/**
+ * Where the class happens, read off the same title prefix `deriveDisplaySubject`
+ * strips. This table has no `session_type` or `location` column, so the title is
+ * the only signal here — and it is a good one. Cross-joining the active snapshot
+ * against the tutor snapshot's Wise fields (2026-08-11) put every prefix on one
+ * side with >99.5% agreement:
+ *
+ *   In-Person 5,815 · On-site 2,613 → Wise OFFLINE, with a physical room
+ *   Live      2,443 · Online  1,010 → Wise SCHEDULED, no room
+ *
+ * "Live" is BeGifted's other word for an online class, which is why it counts as
+ * online despite sitting in neither of the repo's older token sets. Anything the
+ * two patterns do not match (a bare "Mock test ISEB", a blank title on a row
+ * predating the column) is "unknown" and renders no indicator — never guessed.
+ */
+export function deriveSessionModality(title: string): StudentScheduleModality {
+  const trimmed = title.trim();
+  if (ONLINE_TITLE_PATTERN.test(trimmed)) return "online";
+  if (ONSITE_TITLE_PATTERN.test(trimmed)) return "onsite";
+  return "unknown";
 }
 
 function formatBangkokTime(value: Date): string {
@@ -168,6 +194,7 @@ export function buildStudentSchedulePayload({
       endLabel: row.scheduledEndTime ? formatBangkokTime(row.scheduledEndTime) : "",
       subject: deriveDisplaySubject(row),
       packageName: row.packageName.trim(),
+      modality: deriveSessionModality(row.title),
       teacherName: row.teacherName?.trim() || TEACHER_TBC,
       durationMinutes: row.durationMinutes,
       meetingStatus: row.meetingStatus.trim().toUpperCase(),

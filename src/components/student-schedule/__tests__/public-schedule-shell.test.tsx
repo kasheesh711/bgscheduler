@@ -25,6 +25,7 @@ const payload: StudentSchedulePayload = {
       endLabel: "17:30",
       subject: "Mathematics",
       packageName: "Maths pack",
+      modality: "onsite",
       teacherName: "Kru Nok",
       durationMinutes: 90,
       meetingStatus: "SCHEDULED",

@@ -9,6 +9,13 @@
 /** Shown when Wise reports no teacher for a session (fail-closed, never guessed). */
 export const TEACHER_TBC = "Teacher TBC";
 
+/**
+ * Where a class happens. Same closed token set the rest of the repo uses
+ * (`src/lib/classrooms/session-mode.ts`, `src/lib/search/types.ts`), and
+ * "unknown" is a real answer here — see `deriveSessionModality`.
+ */
+export type StudentScheduleModality = "online" | "onsite" | "unknown";
+
 export interface StudentScheduleSession {
   wiseSessionId: string;
   /** Bangkok calendar day, "YYYY-MM-DD". */
@@ -22,6 +29,8 @@ export interface StudentScheduleSession {
   endLabel: string;
   subject: string;
   packageName: string;
+  /** Derived from the Wise session title; "unknown" renders no indicator. */
+  modality: StudentScheduleModality;
   /** Resolved teacher, or TEACHER_TBC. Never blank. */
   teacherName: string;
   durationMinutes: number;

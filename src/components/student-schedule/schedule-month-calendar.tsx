@@ -24,6 +24,7 @@ import {
   getMondayKey,
 } from "@/lib/calendar/month-grid";
 import { rgba } from "@/components/compare/session-colors";
+import { modalityDisplay } from "./modality-display";
 import type {
   StudentSchedulePayload,
   StudentScheduleSession,
@@ -89,6 +90,7 @@ function SessionBlock({
   color: string;
   compact?: boolean;
 }) {
+  const modality = modalityDisplay(session.modality);
   return (
     <div
       data-testid="schedule-session"
@@ -101,7 +103,12 @@ function SessionBlock({
         borderLeft: `3px solid ${color}`,
       }}
     >
-      <div className="font-semibold tabular-nums" style={{ color }}>
+      <div className="flex items-center gap-1 font-semibold tabular-nums" style={{ color }}>
+        {modality && (
+          // Icon only — a cell this narrow has no room for the word, and the
+          // glyph prints as inline SVG on the A4 report.
+          <modality.Icon aria-label={modality.label} className="size-2.5 shrink-0" />
+        )}
         {timeRange(session)}
       </div>
       <div className="truncate font-medium text-foreground">{session.subject}</div>

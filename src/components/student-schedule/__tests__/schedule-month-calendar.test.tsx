@@ -17,6 +17,7 @@ function session(
     endLabel: "17:30",
     subject: "Mathematics",
     packageName: "Maths pack",
+    modality: "onsite",
     teacherName: "Kru Nok",
     durationMinutes: 90,
     meetingStatus: "SCHEDULED",
@@ -138,6 +139,17 @@ describe("ScheduleMonthCalendar", () => {
     expect(html).toContain("16:00–17:30");
     expect(html).toContain("Physics");
     expect(html).toContain("Kru Ploy");
+  });
+
+  it("marks a block's modality with a glyph, and draws none when unknown", () => {
+    // No room for a word in a grid cell, so the icon carries it; it prints as
+    // inline SVG on the A4 report.
+    const known = render([session({ wiseSessionId: "a", dateKey: "2026-08-03", modality: "online" })]);
+    expect(known).toContain("<svg");
+    expect(known).toContain("ออนไลน์");
+
+    const unknown = render([session({ wiseSessionId: "a", dateKey: "2026-08-03", modality: "unknown" })]);
+    expect(unknown).not.toContain("<svg");
   });
 
   it("drops the dash when Wise gave no end time", () => {

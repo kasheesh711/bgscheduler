@@ -14,6 +14,7 @@ function session(
     endLabel: "17:30",
     subject: "Mathematics",
     packageName: "Maths pack",
+    modality: "onsite",
     teacherName: "Kru Nok",
     durationMinutes: 90,
     meetingStatus: "SCHEDULED",
@@ -139,6 +140,25 @@ describe("ParentScheduleAgenda", () => {
     expect(html).toContain("Physics");
     expect(html).toContain("Kru Ploy");
     expect(html).toContain("90 นาที");
+  });
+
+  it("tags each card with where the class happens", () => {
+    const html = render([
+      session({ wiseSessionId: "a", dateKey: "2026-08-03", modality: "onsite" }),
+      session({ wiseSessionId: "b", dateKey: "2026-08-04", modality: "online" }),
+    ]);
+    expect(html.match(/data-testid="agenda-modality"/g)).toHaveLength(2);
+    expect(html).toContain("ที่สถาบัน");
+    expect(html).toContain("ออนไลน์");
+  });
+
+  it("stays silent about an unknown modality rather than guessing", () => {
+    const html = render([
+      session({ wiseSessionId: "a", dateKey: "2026-08-03", modality: "unknown" }),
+    ]);
+    expect(html).not.toContain('data-testid="agenda-modality"');
+    expect(html).not.toContain("ที่สถาบัน");
+    expect(html).not.toContain("ออนไลน์");
   });
 
   it("drops the dash when Wise gave no end time", () => {

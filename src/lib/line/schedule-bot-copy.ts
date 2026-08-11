@@ -136,6 +136,8 @@ export const PUBLIC_PAGE_COPY = {
   viewAgenda: "รายการ",
   viewCalendar: "ปฏิทิน",
   viewToggleLabel: "มุมมอง",
+  modalityOnline: "ออนไลน์",
+  modalityOnsite: "ที่สถาบัน",
   emptyMonth: "เดือนนี้ยังไม่มีคาบเรียนค่ะ / No classes scheduled this month.",
   /**
    * Shown for EVERY resolution failure — expired, revoked, unknown, malformed.
