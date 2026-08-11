@@ -695,4 +695,156 @@ describe("assignClassrooms", () => {
     expect(result.rows[0].assignedRoom).toBe(NO_ROOM_AVAILABLE);
     expect(result.rows[0].status).toBe("no_room");
   });
+
+  it("keeps a tutor in their sticky room across a 30-minute gap instead of moving to a freed higher-priority room", () => {
+    const result = assignClassrooms([
+      session({
+        wiseSessionId: "blocker",
+        tutorDisplayName: "Blocker Tutor",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        wiseSessionId: "first",
+        tutorDisplayName: "Generic Tutor",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        wiseSessionId: "second",
+        tutorDisplayName: "Generic Tutor",
+        startMinute: 10 * 60 + 30,
+        endMinute: 11 * 60 + 30,
+      }),
+    ], roomsFor(ROOM_THINK_OUTSIDE_THE_BOX, "Hakuna Matata"));
+
+    const first = result.rows.find((row) => row.wiseSessionId === "first")!;
+    const second = result.rows.find((row) => row.wiseSessionId === "second")!;
+    expect(first.assignedRoom).toBe("Hakuna Matata");
+    expect(second.assignedRoom).toBe("Hakuna Matata");
+    expect(second.ruleTrace).toContain("assigned by sticky room: Hakuna Matata");
+  });
+
+  it("does not let a sticky claim steal Mek's protected Iconic (TV) claim", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          wiseSessionId: "generic-first",
+          tutorDisplayName: "Generic Tutor",
+          startMinute: 9 * 60,
+          endMinute: 10 * 60,
+        }),
+        session({
+          wiseSessionId: "generic-second",
+          tutorDisplayName: "Generic Tutor",
+          startMinute: 10 * 60 + 20,
+          endMinute: 11 * 60 + 20,
+        }),
+        session({
+          wiseSessionId: "mek",
+          tutorDisplayName: "Rachata (Mek) Sakpuaram",
+          startMinute: 10 * 60 + 30,
+          endMinute: 11 * 60 + 30,
+        }),
+      ],
+      roomsFor("Iconic (TV)", "Remember (TV)"),
+    );
+
+    const genericFirst = result.rows.find((row) => row.wiseSessionId === "generic-first")!;
+    const genericSecond = result.rows.find((row) => row.wiseSessionId === "generic-second")!;
+    const mek = result.rows.find((row) => row.wiseSessionId === "mek")!;
+    expect(genericFirst.assignedRoom).toBe("Iconic (TV)");
+    expect(genericSecond.assignedRoom).not.toBe("Iconic (TV)");
+    expect(genericSecond.ruleTrace).not.toContain("assigned by sticky room: Iconic (TV)");
+    expect(mek.assignedRoom).toBe("Iconic (TV)");
+  });
+
+  it("lets a displaced preferred tutor (Ek) return to OMG on their next session instead of sticking to the fallback room", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          wiseSessionId: "override-blocker",
+          tutorDisplayName: "Tutor Two",
+          groupId: "blocker",
+          startMinute: 9 * 60,
+          endMinute: 10 * 60,
+        }),
+        session({
+          wiseSessionId: "ek-first",
+          tutorDisplayName: "Apivit (Ek) Sirithana",
+          startMinute: 9 * 60,
+          endMinute: 10 * 60,
+        }),
+        session({
+          wiseSessionId: "ek-second",
+          tutorDisplayName: "Apivit (Ek) Sirithana",
+          startMinute: 10 * 60 + 30,
+          endMinute: 11 * 60 + 30,
+        }),
+      ],
+      roomsFor("OMG", "Cool"),
+      new Map([["override-blocker", "OMG"]]),
+    );
+
+    const ekFirst = result.rows.find((row) => row.wiseSessionId === "ek-first")!;
+    const ekSecond = result.rows.find((row) => row.wiseSessionId === "ek-second")!;
+    expect(ekFirst.assignedRoom).not.toBe("OMG");
+    expect(ekSecond.preferredRoom).toBe("OMG");
+    expect(ekSecond.assignedRoom).toBe("OMG");
+    expect(ekSecond.ruleTrace).toContain("assigned preferred room: OMG");
+  });
+
+  it("uses general continuity (not sticky) when the gap is 15 minutes or less", () => {
+    const result = assignClassrooms([
+      session({
+        wiseSessionId: "first",
+        tutorDisplayName: "Tutor One",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        wiseSessionId: "second",
+        tutorDisplayName: "Tutor One",
+        startMinute: 10 * 60 + 15,
+        endMinute: 11 * 60,
+      }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    const first = result.rows.find((row) => row.wiseSessionId === "first")!;
+    const second = result.rows.find((row) => row.wiseSessionId === "second")!;
+    expect(second.ruleTrace).toContain(`assigned by continuity: ${first.assignedRoom}`);
+    expect(second.ruleTrace.some((trace) => trace.startsWith("assigned by sticky room:"))).toBe(false);
+  });
+
+  it("keeps one tutor in the same room across three sessions with mixed gaps including 90 minutes", () => {
+    const result = assignClassrooms([
+      session({
+        wiseSessionId: "morning",
+        tutorDisplayName: "Generic Tutor",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        wiseSessionId: "midday",
+        tutorDisplayName: "Generic Tutor",
+        startMinute: 10 * 60 + 15,
+        endMinute: 11 * 60,
+      }),
+      session({
+        wiseSessionId: "afternoon",
+        tutorDisplayName: "Generic Tutor",
+        startMinute: 12 * 60 + 30,
+        endMinute: 13 * 60 + 30,
+      }),
+    ], DEFAULT_CLASSROOM_ROOMS);
+
+    const morning = result.rows.find((row) => row.wiseSessionId === "morning")!;
+    const midday = result.rows.find((row) => row.wiseSessionId === "midday")!;
+    const afternoon = result.rows.find((row) => row.wiseSessionId === "afternoon")!;
+    expect(morning.assignedRoom).toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+    expect(midday.assignedRoom).toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+    expect(afternoon.assignedRoom).toBe(ROOM_THINK_OUTSIDE_THE_BOX);
+    expect(midday.ruleTrace).toContain(`assigned by continuity: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
+    expect(afternoon.ruleTrace).toContain(`assigned by sticky room: ${ROOM_THINK_OUTSIDE_THE_BOX}`);
+  });
 });

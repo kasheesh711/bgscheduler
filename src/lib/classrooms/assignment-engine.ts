@@ -17,6 +17,7 @@ import {
 
 export const REMOTE_NO_ROOM_NEEDED = "REMOTE_NO_ROOM_NEEDED";
 export const ONLINE_CENTER_CONNECTION_GAP_MINUTES = 60;
+export const GENERAL_CONTINUITY_GAP_MINUTES = 15;
 
 export type AssignmentRowStatus = "assigned" | "needs_review" | "no_room" | "remote";
 
@@ -80,8 +81,16 @@ export interface ExternalRoomBlock {
   endMinute: number;
 }
 
+export interface FixedTutorAssignment {
+  tutorDisplayName: string;
+  startMinute: number;
+  endMinute: number;
+  room: string;
+}
+
 export interface AssignmentOptions {
   externalRoomBlocks?: ExternalRoomBlock[];
+  fixedTutorAssignments?: FixedTutorAssignment[];
 }
 
 interface AssignmentSessionFacts {
@@ -135,7 +144,7 @@ function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): b
   return aStart < bEnd && bStart < aEnd;
 }
 
-function normalizedPhysicalRoom(value: string): string {
+export function normalizedPhysicalRoom(value: string): string {
   return value.trim().toLowerCase().replace(/\s+\(tv\)$/, "");
 }
 
@@ -312,6 +321,35 @@ export function assignClassrooms(
   }
 
   const lastByTutor = new Map<string, { endMinute: number; room: string }>();
+
+  const fixedByTutor = new Map<string, FixedTutorAssignment[]>();
+  for (const fixed of options.fixedTutorAssignments ?? []) {
+    const tutorNorm = normalizeTutorName(fixed.tutorDisplayName);
+    const list = fixedByTutor.get(tutorNorm) ?? [];
+    list.push(fixed);
+    fixedByTutor.set(tutorNorm, list);
+  }
+  for (const list of fixedByTutor.values()) {
+    list.sort((a, b) => a.endMinute - b.endMinute);
+  }
+
+  const latestPriorRoomForTutor = (
+    tutorNorm: string,
+    startMinute: number,
+  ): { endMinute: number; room: string } | null => {
+    const dynamic = lastByTutor.get(tutorNorm) ?? null;
+    const fixedForTutor = fixedByTutor.get(tutorNorm) ?? [];
+    let latestFixed: { endMinute: number; room: string } | null = null;
+    for (const entry of fixedForTutor) {
+      if (entry.endMinute <= startMinute) latestFixed = entry;
+    }
+    if (!dynamic) return latestFixed;
+    if (!latestFixed) return dynamic;
+    return latestFixed.endMinute > dynamic.endMinute
+      ? { endMinute: latestFixed.endMinute, room: latestFixed.room }
+      : dynamic;
+  };
+
   const centerRoomRequiredBySessionId = buildCenterRoomRequirementMap(sessions);
   const factsBySessionId = new Map(
     sessions.map((session) => [
@@ -453,7 +491,7 @@ export function assignClassrooms(
     }
 
     if (!assignedRoom && isOnlineSession(session.sessionType)) {
-      const last = lastByTutor.get(tutorNorm);
+      const last = latestPriorRoomForTutor(tutorNorm, session.startMinute);
       if (last) {
         const gap = session.startMinute - last.endMinute;
         if (gap >= 0 && gap < ONLINE_CENTER_CONNECTION_GAP_MINUTES && roomOk(last.room) && roomAvailable(last.room)) {
@@ -469,10 +507,10 @@ export function assignClassrooms(
     }
 
     if (!assignedRoom) {
-      const last = lastByTutor.get(tutorNorm);
+      const last = latestPriorRoomForTutor(tutorNorm, session.startMinute);
       if (last) {
         const gap = session.startMinute - last.endMinute;
-        if (gap >= 0 && gap <= 15 && roomOk(last.room) && roomAvailable(last.room)) {
+        if (gap >= 0 && gap <= GENERAL_CONTINUITY_GAP_MINUTES && roomOk(last.room) && roomAvailable(last.room)) {
           if (!(last.room === ROOM_JOY && !isGift)) {
             assignedRoom = last.room;
             ruleTrace.push(`assigned by continuity: ${last.room}`);
@@ -491,6 +529,17 @@ export function assignClassrooms(
       if (!(preferredRoom === ROOM_JOY && !isGift)) {
         assignedRoom = preferredRoom;
         ruleTrace.push(`assigned preferred room: ${preferredRoom}`);
+      }
+    }
+
+    if (!assignedRoom) {
+      const last = latestPriorRoomForTutor(tutorNorm, session.startMinute);
+      if (last) {
+        const gap = session.startMinute - last.endMinute;
+        if (gap >= 0 && roomOk(last.room) && roomAvailable(last.room) && !(last.room === ROOM_JOY && !isGift)) {
+          assignedRoom = last.room;
+          ruleTrace.push(`assigned by sticky room: ${last.room}`);
+        }
       }
     }
 
