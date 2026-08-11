@@ -78,6 +78,20 @@ them and `creditSessionTeacher` normalizes both shapes Wise uses (a bare id stri
 written at `sync.ts:431`, `:454`-`456`). A `null` teacher renders **"Teacher TBC"** and is never
 guessed (`src/lib/student-schedule/types.ts:10`, applied at `data.ts:138`).
 
+The same play added a `title` column (migration `drizzle/0066_credit_control_session_title.sql`):
+the Wise session `title` ("In-Person Session-Biology HL") is the only field that names the class
+itself — at BeGifted, `classId.subject` holds level bands ("Y12-13 / G11-12 (Int.)") and the
+classroom `name` is the student's own name — and `WiseCreditSessionSchema` had been passing it
+through untyped. The parent-facing class label is now `deriveDisplaySubject`
+(`src/lib/student-schedule/data.ts`): the title with its modality prefix stripped
+("In-Person/On-site/Online/Live Session-" → "Biology HL", fail-open to the full title on an
+unrecognized pattern), falling back to the legacy `subject` → `packageName` → `"Class"` chain for
+rows that predate the column. The payload's `subject` field carries this label, so all three
+render surfaces and `buildSubjectColorMap` pick it up with no component changes; the live overlay
+also fills a blank snapshot title (and supplies titles for live-only sessions), so labels are
+correct even before the next sync backfills the column. Other consumers of the `subject` column
+(progress-tests, the LINE operational planner) are untouched.
+
 **Write — capability tokens** ([`erd-core.md`](../reference/database/erd-core.md),
 [`index.md`](../reference/database/index.md)). `student_schedule_links` is the feature's only owned
 table: one row per issued parent link, granting read of exactly one `(student_key, month_key)` pair,

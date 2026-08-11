@@ -60,11 +60,38 @@ export interface StudentScheduleRow {
   parentName: string;
   subject: string;
   packageName: string;
+  title: string;
   scheduledStartTime: Date;
   scheduledEndTime: Date | null;
   durationMinutes: number;
   meetingStatus: string;
   teacherName: string | null;
+}
+
+// "In-Person Session-Biology HL" → "Biology HL". Tolerates the spaced and
+// tight hyphen variants Wise emits, plus en/em dashes and a colon.
+const MODALITY_TITLE_PATTERN =
+  /^\s*(?:in[- ]?person|on[- ]?site|online|live)\s+session\s*[-–—:]\s*/i;
+
+/**
+ * The parent-facing class label. The Wise session `title` is the only field
+ * that names the class itself ("In-Person Session-Biology HL") — at BeGifted,
+ * `subject` holds level bands ("Y12-13 / G11-12 (Int.)") and `packageName` is
+ * the classroom name, which is the student's own name. So: title first with
+ * the modality prefix stripped (fail-open to the full title when the pattern
+ * doesn't match), then the legacy subject → packageName → "Class" chain for
+ * rows that predate the title column.
+ */
+export function deriveDisplaySubject(row: {
+  title: string;
+  subject: string;
+  packageName: string;
+}): string {
+  const title = row.title.trim();
+  if (title) {
+    return title.replace(MODALITY_TITLE_PATTERN, "").trim() || title;
+  }
+  return row.subject.trim() || row.packageName.trim() || "Class";
 }
 
 function formatBangkokTime(value: Date): string {
@@ -139,7 +166,7 @@ export function buildStudentSchedulePayload({
       endTime: row.scheduledEndTime?.toISOString() ?? null,
       startLabel: formatBangkokTime(row.scheduledStartTime),
       endLabel: row.scheduledEndTime ? formatBangkokTime(row.scheduledEndTime) : "",
-      subject: row.subject.trim() || row.packageName.trim() || "Class",
+      subject: deriveDisplaySubject(row),
       packageName: row.packageName.trim(),
       teacherName: row.teacherName?.trim() || TEACHER_TBC,
       durationMinutes: row.durationMinutes,
@@ -197,6 +224,9 @@ export function mergeLiveSessionsIntoRows({
     if (!live) continue; // snapshot-only: Wise no longer has this session -- drop it
     merged.push({
       ...row,
+      // A snapshot row from before the title column backfilled still gets the
+      // live title; a populated snapshot title is kept as-is.
+      title: row.title.trim() || live.title?.trim() || "",
       scheduledStartTime: live.scheduledStartTime,
       scheduledEndTime: live.scheduledEndTime ?? null,
       durationMinutes: durationMsToMinutes(live.duration),
@@ -215,6 +245,7 @@ export function mergeLiveSessionsIntoRows({
       parentName: student.parentName,
       subject: session.classId.subject?.trim() || session.classId.name?.trim() || "",
       packageName: "",
+      title: session.title?.trim() ?? "",
       scheduledStartTime: session.scheduledStartTime,
       scheduledEndTime: session.scheduledEndTime ?? null,
       durationMinutes: durationMsToMinutes(session.duration),
@@ -293,6 +324,7 @@ export async function getStudentMonthlySchedule(
       studentName: schema.creditControlSessions.studentName,
       subject: schema.creditControlSessions.subject,
       packageName: schema.creditControlSessions.packageName,
+      title: schema.creditControlSessions.title,
       scheduledStartTime: schema.creditControlSessions.scheduledStartTime,
       scheduledEndTime: schema.creditControlSessions.scheduledEndTime,
       durationMinutes: schema.creditControlSessions.durationMinutes,

@@ -10,6 +10,7 @@ import type { Database } from "@/lib/db";
 import {
   bangkokMonthInstantWindow,
   buildStudentSchedulePayload,
+  deriveDisplaySubject,
   getStudentMonthlySchedule,
   mergeLiveSessionsIntoRows,
   parseStudentDisplay,
@@ -36,6 +37,7 @@ function row(overrides: Partial<StudentScheduleRow> = {}): StudentScheduleRow {
     parentName: STUDENT.parentName,
     subject: "Mathematics",
     packageName: "Maths 20-pack",
+    title: "",
     // 10:00 Bangkok on 4 Aug 2026.
     scheduledStartTime: new Date("2026-08-04T03:00:00Z"),
     scheduledEndTime: new Date("2026-08-04T04:30:00Z"),
@@ -123,6 +125,14 @@ describe("buildStudentSchedulePayload", () => {
     expect(payload.sessions[0].subject).toBe("Maths 20-pack");
   });
 
+  it("prefers the session title over the level-band subject", () => {
+    // Real BeGifted shape: `subject` is a level band, `title` names the class.
+    const payload = build([
+      row({ title: "In-Person Session-Biology HL", subject: "Y12-13 / G11-12 (Int.)" }),
+    ]);
+    expect(payload.sessions[0].subject).toBe("Biology HL");
+  });
+
   it("tolerates a missing end time", () => {
     const payload = build([row({ scheduledEndTime: null })]);
     expect(payload.sessions[0].endLabel).toBe("");
@@ -133,6 +143,32 @@ describe("buildStudentSchedulePayload", () => {
     const payload = build([]);
     expect(payload.sessions).toEqual([]);
     expect(payload.monthKey).toBe("2026-08");
+  });
+});
+
+describe("deriveDisplaySubject", () => {
+  const base = { subject: "Y12-13 / G11-12 (Int.)", packageName: "Ditdanai (Rei.Ok) Okada" };
+
+  it("strips every attested modality prefix", () => {
+    expect(deriveDisplaySubject({ ...base, title: "In-Person Session-Biology HL" })).toBe("Biology HL");
+    expect(deriveDisplaySubject({ ...base, title: "Online Session - Math" })).toBe("Math");
+    expect(deriveDisplaySubject({ ...base, title: "On-site Session - Science" })).toBe("Science");
+    expect(deriveDisplaySubject({ ...base, title: "Live Session - Physics" })).toBe("Physics");
+    expect(deriveDisplaySubject({ ...base, title: "In-Person Session – Chemistry" })).toBe("Chemistry");
+  });
+
+  it("passes an unrecognized title through untouched", () => {
+    expect(deriveDisplaySubject({ ...base, title: "Physics Workshop" })).toBe("Physics Workshop");
+  });
+
+  it("keeps the full title when stripping would leave nothing", () => {
+    expect(deriveDisplaySubject({ ...base, title: "Online Session - " })).toBe("Online Session -");
+  });
+
+  it("falls back through subject then packageName then Class when the title is blank", () => {
+    expect(deriveDisplaySubject({ ...base, title: "  " })).toBe("Y12-13 / G11-12 (Int.)");
+    expect(deriveDisplaySubject({ title: "", subject: " ", packageName: "Maths 20-pack" })).toBe("Maths 20-pack");
+    expect(deriveDisplaySubject({ title: "", subject: " ", packageName: "" })).toBe("Class");
   });
 });
 
@@ -204,6 +240,39 @@ describe("mergeLiveSessionsIntoRows", () => {
       packageName: "Maths 20-pack",
       teacherName: "Kru Nok",
     });
+  });
+
+  it("fills a blank snapshot title from the live session, but never overwrites one", () => {
+    const merged = mergeLiveSessionsIntoRows({
+      snapshotRows: [
+        row({ wiseSessionId: "ses_1", title: "" }),
+        row({ wiseSessionId: "ses_2", title: "In-Person Session-Biology HL" }),
+      ],
+      liveSessions: [
+        liveSession({ _id: "ses_1", title: "Online Session - Math" }),
+        liveSession({ _id: "ses_2", title: "Some Other Title" }),
+      ],
+      student: STUDENT,
+    });
+
+    expect(merged.map((m) => m.title)).toEqual([
+      "Online Session - Math",
+      "In-Person Session-Biology HL",
+    ]);
+  });
+
+  it("carries the live title onto a live-only session", () => {
+    const merged = mergeLiveSessionsIntoRows({
+      snapshotRows: [],
+      liveSessions: [liveSession({
+        _id: "ses_new",
+        title: "In-Person Session-Biology HL",
+        classId: { _id: "class_2", name: "Science Class", subject: "Science" },
+      })],
+      student: STUDENT,
+    });
+
+    expect(merged[0].title).toBe("In-Person Session-Biology HL");
   });
 
   it("synthesizes a live-only session with no package, subject from classId.subject", () => {
