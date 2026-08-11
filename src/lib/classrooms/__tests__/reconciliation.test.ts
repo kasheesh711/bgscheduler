@@ -359,4 +359,74 @@ describe("reconcileClassroomAssignments", () => {
     expect(result.rows.map((row) => row.wiseSessionId).sort()).toEqual(["existing", "new"]);
     expect(result.rows.filter((row) => row.assignedRoom === NO_ROOM_AVAILABLE)).toHaveLength(1);
   });
+
+  it("gives a pending online session a center room when its only chain neighbor is a carried onsite session", () => {
+    const tutorOverrides = { tutorDisplayName: "Tutor One", groupId: "group-1" };
+    const onsiteOverrides = {
+      ...tutorOverrides,
+      wiseSessionId: "existing-onsite",
+      sessionType: "OFFLINE",
+      startMinute: 9 * 60,
+      endMinute: 10 * 60,
+    };
+    const carried = previous({ ...onsiteOverrides, assignedRoom: "Room A" });
+    const pendingOnline = session({
+      ...tutorOverrides,
+      wiseSessionId: "new-online",
+      sessionType: "SCHEDULED",
+      startMinute: 10 * 60 + 30,
+      endMinute: 11 * 60 + 30,
+    });
+
+    const result = reconcileClassroomAssignments({
+      sessions: [session(onsiteOverrides), pendingOnline],
+      previousRows: [carried],
+      rooms,
+    });
+
+    const onlineRow = result.rows.find((row) => row.wiseSessionId === "new-online")!;
+    expect(onlineRow.status).not.toBe("remote");
+    expect(onlineRow.assignedRoom).toBe("Room A");
+    expect(onlineRow.ruleTrace).toContain("assigned by online continuity: Room A");
+  });
+
+  it("keeps a pending online session remote when it has no onsite chain neighbor, even with unrelated carried context", () => {
+    const carried = previous({
+      wiseSessionId: "other-tutor-onsite",
+      tutorDisplayName: "Tutor Two",
+      groupId: "group-2",
+      sessionType: "OFFLINE",
+      assignedRoom: "Room A",
+      startMinute: 9 * 60,
+      endMinute: 10 * 60,
+    });
+    const pendingOnline = session({
+      wiseSessionId: "new-online",
+      tutorDisplayName: "Tutor One",
+      groupId: "group-1",
+      sessionType: "SCHEDULED",
+      startMinute: 12 * 60,
+      endMinute: 13 * 60,
+    });
+
+    const result = reconcileClassroomAssignments({
+      sessions: [
+        session({
+          wiseSessionId: "other-tutor-onsite",
+          tutorDisplayName: "Tutor Two",
+          groupId: "group-2",
+          sessionType: "OFFLINE",
+          startMinute: 9 * 60,
+          endMinute: 10 * 60,
+        }),
+        pendingOnline,
+      ],
+      previousRows: [carried],
+      rooms,
+    });
+
+    const onlineRow = result.rows.find((row) => row.wiseSessionId === "new-online")!;
+    expect(onlineRow.status).toBe("remote");
+    expect(onlineRow.assignedRoom).toBe(REMOTE_NO_ROOM_NEEDED);
+  });
 });

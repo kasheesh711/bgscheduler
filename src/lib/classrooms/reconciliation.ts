@@ -4,6 +4,7 @@ import {
   REMOTE_NO_ROOM_NEEDED,
   type AssignmentResultRow,
   type AssignmentSession,
+  type ContextSession,
   type ExternalRoomBlock,
   type FixedTutorAssignment,
 } from "./assignment-engine";
@@ -130,6 +131,22 @@ function rowToExternalBlock(row: ReconciledAssignmentRow): ExternalRoomBlock | n
     location: row.assignedRoom,
     startMinute: row.startMinute,
     endMinute: row.endMinute,
+  };
+}
+
+/**
+ * Projects a carried row into the minimal shape assignClassrooms needs to fold it into the
+ * center-room chain walk (see ContextSession). Passed for every carried row regardless of status --
+ * a full, non-reconciled run over the same final session set would see all of them.
+ */
+function rowToContextSession(row: ReconciledAssignmentRow): ContextSession {
+  return {
+    wiseSessionId: row.wiseSessionId,
+    tutorDisplayName: row.tutorDisplayName,
+    groupId: row.groupId,
+    startMinute: row.startMinute,
+    endMinute: row.endMinute,
+    sessionType: row.sessionType,
   };
 }
 
@@ -335,6 +352,13 @@ export function reconcileClassroomAssignments(input: ReconcileInput): Reconcilia
     {
       externalRoomBlocks: fixedBlocks(fixedRows, externalRoomBlocks),
       fixedTutorAssignments: fixedTutorAssignmentsFrom(fixedRows),
+      // fixedRows is exactly today's still-carried rows (any status) at this point in the
+      // reconcile. A full run would see all of them when walking the online<->onsite center-room
+      // chain, so pass them as context -- without re-assigning, re-occupying, or re-seeding
+      // continuity for them (that is already handled by externalRoomBlocks / fixedTutorAssignments
+      // above). On the unlock-retry call, previously-unlocked rows have already moved out of
+      // fixedRows and into the `sessions` argument itself, so nothing is ever double-counted.
+      contextSessions: fixedRows.map(rowToContextSession),
     },
   ).rows;
 

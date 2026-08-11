@@ -892,4 +892,79 @@ describe("assignClassrooms", () => {
     expect(overlappingGroup.assignedRoom).toBe("Relax (TV)");
     expect(result.rows.some((row) => row.status === "no_room")).toBe(false);
   });
+
+  it("computes the center-room chain through contextSessions but never assigns, occupies, or seeds continuity for them", () => {
+    const result = assignClassrooms(
+      [
+        session({
+          wiseSessionId: "online",
+          tutorDisplayName: "Tutor One",
+          groupId: "group-1",
+          sessionType: "SCHEDULED",
+          startMinute: 10 * 60 + 30,
+          endMinute: 11 * 60 + 30,
+        }),
+        session({
+          wiseSessionId: "unrelated",
+          tutorDisplayName: "Tutor Two",
+          groupId: "group-2",
+          startMinute: 9 * 60,
+          endMinute: 10 * 60,
+        }),
+      ],
+      rememberOnlyRoom,
+      new Map(),
+      {
+        contextSessions: [
+          {
+            wiseSessionId: "context-onsite",
+            tutorDisplayName: "Tutor One",
+            groupId: "group-1",
+            startMinute: 9 * 60,
+            endMinute: 10 * 60,
+            sessionType: "OFFLINE",
+          },
+        ],
+      },
+    );
+
+    expect(result.rows).toHaveLength(2);
+    expect(result.rows.map((row) => row.wiseSessionId).sort()).toEqual(["online", "unrelated"]);
+
+    const online = result.rows.find((row) => row.wiseSessionId === "online")!;
+    const unrelated = result.rows.find((row) => row.wiseSessionId === "unrelated")!;
+    expect(online.status).not.toBe("remote");
+    expect(online.assignedRoom).toBe("Remember (TV)");
+    expect(online.ruleTrace).toContain("assigned priority-scored standard room: Remember (TV)");
+    // The context session occupies 9-10 in this same room in a full run's terms, but it must never
+    // seed occupancy here -- "unrelated" (a different tutor, same 9-10 slot) still gets the room.
+    expect(unrelated.assignedRoom).toBe("Remember (TV)");
+    expect(unrelated.status).toBe("assigned");
+  });
+
+  it("produces identical results whether options.contextSessions is omitted, empty, or absent entirely", () => {
+    const sessions = [
+      session({
+        wiseSessionId: "onsite",
+        tutorDisplayName: "Tutor One",
+        sessionType: "OFFLINE",
+        startMinute: 9 * 60,
+        endMinute: 10 * 60,
+      }),
+      session({
+        wiseSessionId: "online",
+        tutorDisplayName: "Tutor One",
+        sessionType: "SCHEDULED",
+        startMinute: 10 * 60 + 30,
+        endMinute: 11 * 60 + 30,
+      }),
+    ];
+
+    const noOptions = assignClassrooms(sessions, DEFAULT_CLASSROOM_ROOMS);
+    const emptyOptions = assignClassrooms(sessions, DEFAULT_CLASSROOM_ROOMS, new Map(), {});
+    const explicitEmptyContext = assignClassrooms(sessions, DEFAULT_CLASSROOM_ROOMS, new Map(), { contextSessions: [] });
+
+    expect(emptyOptions).toEqual(noOptions);
+    expect(explicitEmptyContext).toEqual(noOptions);
+  });
 });

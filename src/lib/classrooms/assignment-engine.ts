@@ -91,9 +91,27 @@ export interface FixedTutorAssignment {
   room: string;
 }
 
+/**
+ * Minimal session shape for center-room chain context. Carried-but-unchanged sessions are passed
+ * through as context so buildCenterRoomRequirementMap can see a tutor's full same-day schedule
+ * when walking the online<->onsite adjacency chain -- without those sessions being (re-)assigned
+ * a room, occupying a room, or seeding continuity for anyone else (there is no assignedRoom field
+ * on this type at all, by design).
+ */
+export interface ContextSession {
+  wiseSessionId: string;
+  tutorDisplayName: string;
+  groupId: string;
+  startMinute: number;
+  endMinute: number;
+  sessionType?: string | null;
+}
+
 export interface AssignmentOptions {
   externalRoomBlocks?: ExternalRoomBlock[];
   fixedTutorAssignments?: FixedTutorAssignment[];
+  /** Same-day sessions to fold into the center-room chain walk only; see ContextSession. */
+  contextSessions?: ContextSession[];
 }
 
 interface AssignmentSessionFacts {
@@ -215,11 +233,11 @@ function sessionPriority(session: AssignmentSession): number {
   return 3;
 }
 
-function tutorKey(session: AssignmentSession): string {
+function tutorKey(session: ContextSession): string {
   return session.groupId || normalizeTutorName(session.tutorDisplayName);
 }
 
-function sortedTutorSessions(sessions: AssignmentSession[]): AssignmentSession[] {
+function sortedTutorSessions(sessions: ContextSession[]): ContextSession[] {
   return [...sessions].sort((a, b) => {
     if (a.startMinute !== b.startMinute) return a.startMinute - b.startMinute;
     if (a.endMinute !== b.endMinute) return a.endMinute - b.endMinute;
@@ -232,8 +250,8 @@ function isConnectedGap(gapMinutes: number): boolean {
 }
 
 function onlineSessionRequiresCenterRoom(
-  session: AssignmentSession,
-  tutorSessions: AssignmentSession[],
+  session: ContextSession,
+  tutorSessions: ContextSession[],
 ): boolean {
   if (!isOnlineSession(session.sessionType)) return true;
 
@@ -262,16 +280,38 @@ function onlineSessionRequiresCenterRoom(
   return false;
 }
 
-function buildCenterRoomRequirementMap(sessions: AssignmentSession[]): Map<string, boolean> {
-  const byTutor = new Map<string, AssignmentSession[]>();
+/**
+ * Builds the online-session center-room requirement map.
+ *
+ * 1. Buckets pending sessions by tutor (groupId, falling back to normalized display name).
+ * 2. Folds contextSessions (e.g. this day's carried rows) into the same tutor buckets, skipping any
+ *    id already present in `sessions` -- this lets a pending online session see a carried onsite
+ *    neighbor (or vice versa) when walking the adjacency chain, matching what a full, non-reconciled
+ *    run over the same final session set would see.
+ * 3. Walks the <60-minute transitive chain per pending session to decide whether it is adjacent to
+ *    an onsite session and therefore still needs a center room. Context sessions never receive a
+ *    requirement entry of their own -- they are not being (re-)assigned by this call.
+ */
+function buildCenterRoomRequirementMap(
+  sessions: AssignmentSession[],
+  contextSessions: ContextSession[] = [],
+): Map<string, boolean> {
+  const pendingIds = new Set(sessions.map((session) => session.wiseSessionId));
+  const byTutor = new Map<string, ContextSession[]>();
   for (const session of sessions) {
     const key = tutorKey(session);
     byTutor.set(key, [...(byTutor.get(key) ?? []), session]);
+  }
+  for (const context of contextSessions) {
+    if (pendingIds.has(context.wiseSessionId)) continue;
+    const key = tutorKey(context);
+    byTutor.set(key, [...(byTutor.get(key) ?? []), context]);
   }
 
   const requirements = new Map<string, boolean>();
   for (const tutorSessions of byTutor.values()) {
     for (const session of tutorSessions) {
+      if (!pendingIds.has(session.wiseSessionId)) continue;
       requirements.set(
         session.wiseSessionId,
         !isOnlineSession(session.sessionType) || onlineSessionRequiresCenterRoom(session, tutorSessions),
@@ -353,7 +393,7 @@ export function assignClassrooms(
       : dynamic;
   };
 
-  const centerRoomRequiredBySessionId = buildCenterRoomRequirementMap(sessions);
+  const centerRoomRequiredBySessionId = buildCenterRoomRequirementMap(sessions, options.contextSessions ?? []);
   const factsBySessionId = new Map(
     sessions.map((session) => [
       session.wiseSessionId,
