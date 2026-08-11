@@ -5,6 +5,7 @@ import {
   type AssignmentResultRow,
   type AssignmentSession,
   type ExternalRoomBlock,
+  type FixedTutorAssignment,
 } from "./assignment-engine";
 import {
   NO_ROOM_AVAILABLE,
@@ -233,6 +234,17 @@ function fixedBlocks(rows: ReconciledAssignmentRow[], externalRoomBlocks: Extern
   ];
 }
 
+function fixedTutorAssignmentsFrom(rows: ReconciledAssignmentRow[]): FixedTutorAssignment[] {
+  return rows
+    .filter((row) => blocksRoom(row))
+    .map((row) => ({
+      tutorDisplayName: row.tutorDisplayName,
+      startMinute: row.startMinute,
+      endMinute: row.endMinute,
+      room: row.assignedRoom,
+    }));
+}
+
 function summarize(rows: ReconciledAssignmentRow[], events: ClassroomAutomationEvent[]): Record<string, number> {
   const summary: Record<string, number> = {
     carried: rows.filter((row) => row.changeType === "carried").length,
@@ -312,7 +324,10 @@ export function reconcileClassroomAssignments(input: ReconcileInput): Reconcilia
     sessions,
     input.rooms,
     overrides,
-    { externalRoomBlocks: fixedBlocks(fixedRows, externalRoomBlocks) },
+    {
+      externalRoomBlocks: fixedBlocks(fixedRows, externalRoomBlocks),
+      fixedTutorAssignments: fixedTutorAssignmentsFrom(fixedRows),
+    },
   ).rows;
 
   let finalCarriedRows = carriedRows;

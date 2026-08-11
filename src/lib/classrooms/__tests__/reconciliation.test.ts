@@ -209,4 +209,68 @@ describe("reconcileClassroomAssignments", () => {
       changeType: "carried",
     });
   });
+
+  it("seeds same-day continuity from a carried row so a new session lands in the tutor's held room, not the sort-order-first room", () => {
+    const existingOverrides = {
+      wiseSessionId: "existing",
+      tutorDisplayName: "Tutor One",
+      groupId: "group-1",
+      startMinute: 9 * 60,
+      endMinute: 10 * 60,
+    };
+    const carried = previous({ ...existingOverrides, assignedRoom: "Room B" });
+    const newSession = session({
+      wiseSessionId: "new",
+      tutorDisplayName: "Tutor One",
+      groupId: "group-1",
+      startMinute: 11 * 60,
+      endMinute: 12 * 60,
+    });
+
+    const result = reconcileClassroomAssignments({
+      sessions: [session(existingOverrides), newSession],
+      previousRows: [carried],
+      rooms,
+    });
+
+    const existingRow = result.rows.find((row) => row.wiseSessionId === "existing")!;
+    const newRow = result.rows.find((row) => row.wiseSessionId === "new")!;
+    expect(existingRow.changeType).toBe("carried");
+    expect(existingRow.assignedRoom).toBe("Room B");
+    expect(newRow.assignedRoom).toBe("Room B");
+    expect(newRow.ruleTrace).toContain("assigned by sticky room: Room B");
+  });
+
+  it("does not seed continuity from a remote carried row", () => {
+    const remoteOverrides = {
+      wiseSessionId: "existing",
+      tutorDisplayName: "Tutor One",
+      groupId: "group-1",
+      sessionType: "SCHEDULED",
+      startMinute: 9 * 60,
+      endMinute: 10 * 60,
+    };
+    const carried = previous({
+      ...remoteOverrides,
+      assignedRoom: REMOTE_NO_ROOM_NEEDED,
+      status: "remote",
+    });
+    const newSession = session({
+      wiseSessionId: "new",
+      tutorDisplayName: "Tutor One",
+      groupId: "group-1",
+      startMinute: 11 * 60,
+      endMinute: 12 * 60,
+    });
+
+    const result = reconcileClassroomAssignments({
+      sessions: [session(remoteOverrides), newSession],
+      previousRows: [carried],
+      rooms,
+    });
+
+    const newRow = result.rows.find((row) => row.wiseSessionId === "new")!;
+    expect(newRow.assignedRoom).toBe("Room A");
+    expect(newRow.ruleTrace.some((trace) => trace.startsWith("assigned by sticky room:"))).toBe(false);
+  });
 });
