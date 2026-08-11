@@ -273,4 +273,90 @@ describe("reconcileClassroomAssignments", () => {
     expect(newRow.assignedRoom).toBe("Room A");
     expect(newRow.ruleTrace.some((trace) => trace.startsWith("assigned by sticky room:"))).toBe(false);
   });
+
+  it("does not double-book the room held by a carried needs_review row", () => {
+    const carried = previous({
+      wiseSessionId: "existing",
+      assignedRoom: "Room A",
+      status: "needs_review",
+      warnings: ["needs_review_missing_capacity"],
+    });
+    const overlapping = session({
+      wiseSessionId: "new",
+      tutorDisplayName: "Tutor Two",
+      groupId: "group-2",
+      startMinute: 9 * 60 + 30,
+      endMinute: 10 * 60 + 30,
+    });
+
+    const result = reconcileClassroomAssignments({
+      sessions: [session({ wiseSessionId: "existing" }), overlapping],
+      previousRows: [carried],
+      rooms,
+    });
+
+    const existingRow = result.rows.find((row) => row.wiseSessionId === "existing")!;
+    const newRow = result.rows.find((row) => row.wiseSessionId === "new")!;
+    expect(existingRow).toMatchObject({ status: "needs_review", assignedRoom: "Room A", changeType: "carried" });
+    expect(newRow.assignedRoom).toBe("Room B");
+  });
+
+  it("seeds same-day continuity from a carried needs_review row", () => {
+    const existingOverrides = {
+      wiseSessionId: "existing",
+      tutorDisplayName: "Tutor One",
+      groupId: "group-1",
+      startMinute: 9 * 60,
+      endMinute: 10 * 60,
+    };
+    const carried = previous({
+      ...existingOverrides,
+      assignedRoom: "Room B",
+      status: "needs_review",
+      warnings: ["needs_review_missing_capacity"],
+    });
+    const newSession = session({
+      wiseSessionId: "new",
+      tutorDisplayName: "Tutor One",
+      groupId: "group-1",
+      startMinute: 11 * 60,
+      endMinute: 12 * 60,
+    });
+
+    const result = reconcileClassroomAssignments({
+      sessions: [session(existingOverrides), newSession],
+      previousRows: [carried],
+      rooms,
+    });
+
+    const newRow = result.rows.find((row) => row.wiseSessionId === "new")!;
+    expect(newRow.assignedRoom).toBe("Room B");
+    expect(newRow.ruleTrace).toContain("assigned by sticky room: Room B");
+  });
+
+  it("unlocks a carried needs_review row when it is the only way to place an overlapping pending session", () => {
+    const singleRoom = [rooms[0]];
+    const oldRow = previous({
+      wiseSessionId: "existing",
+      assignedRoom: "Room A",
+      status: "needs_review",
+      warnings: ["needs_review_missing_capacity"],
+    });
+    const newSession = session({
+      wiseSessionId: "new",
+      tutorDisplayName: "Tutor Two",
+      groupId: "group-2",
+      startMinute: 9 * 60,
+      endMinute: 10 * 60,
+    });
+
+    const result = reconcileClassroomAssignments({
+      sessions: [session({ wiseSessionId: "existing" }), newSession],
+      previousRows: [oldRow],
+      rooms: singleRoom,
+    });
+
+    expect(result.rows.map((row) => row.wiseSessionId).sort()).toEqual(["existing", "new"]);
+    expect(result.rows.filter((row) => row.assignedRoom === NO_ROOM_AVAILABLE)).toHaveLength(1);
+  });
 });

@@ -106,16 +106,24 @@ function rowsOverlap(
   return left.startMinute < right.endMinute && right.startMinute < left.endMinute;
 }
 
-function blocksRoom(row: Pick<ReconciledAssignmentRow, "status" | "assignedRoom">): boolean {
+/**
+ * Whether a row currently occupies a real physical room. Broader than "assigned by design": a
+ * needs_review row (e.g. needs_review_missing_capacity) still carries a real assignedRoom, and a
+ * full engine run adds any such row to occupancy and lastByTutor exactly like an assigned one --
+ * assignment-engine.ts only excludes the NO_ROOM_AVAILABLE / REMOTE_NO_ROOM_NEEDED sentinels, not
+ * the needs_review status. The reconciled path must match, or it silently double-books the room a
+ * carried needs_review row holds (HI-01) and fails to seed continuity from it (MD-02).
+ */
+function holdsRoom(row: Pick<ReconciledAssignmentRow, "status" | "assignedRoom">): boolean {
   return (
-    row.status === "assigned" &&
+    (row.status === "assigned" || row.status === "needs_review") &&
     row.assignedRoom !== NO_ROOM_AVAILABLE &&
     row.assignedRoom !== REMOTE_NO_ROOM_NEEDED
   );
 }
 
 function rowToExternalBlock(row: ReconciledAssignmentRow): ExternalRoomBlock | null {
-  if (!blocksRoom(row)) return null;
+  if (!holdsRoom(row)) return null;
   return {
     wiseSessionId: row.wiseSessionId,
     className: row.studentName ?? row.title ?? null,
@@ -236,7 +244,7 @@ function fixedBlocks(rows: ReconciledAssignmentRow[], externalRoomBlocks: Extern
 
 function fixedTutorAssignmentsFrom(rows: ReconciledAssignmentRow[]): FixedTutorAssignment[] {
   return rows
-    .filter((row) => blocksRoom(row))
+    .filter((row) => holdsRoom(row))
     .map((row) => ({
       tutorDisplayName: row.tutorDisplayName,
       startMinute: row.startMinute,
@@ -335,11 +343,14 @@ export function reconcileClassroomAssignments(input: ReconcileInput): Reconcilia
   const failedDynamicRows = assignedDynamicRows.filter((row) => row.status === "no_room");
 
   if (failedDynamicRows.length > 0) {
+    // A carried needs_review row genuinely holds a room (see holdsRoom above), so it is just as
+    // displaceable as an assigned row when it is the only thing blocking a pending session that
+    // otherwise has nowhere to go.
     const unlockSessionIds = new Set(
       finalCarriedRows
         .filter((row) =>
           !row.overrideRoom &&
-          blocksRoom(row) &&
+          holdsRoom(row) &&
           failedDynamicRows.some((failed) => rowsOverlap(row, failed))
         )
         .map((row) => row.wiseSessionId),
