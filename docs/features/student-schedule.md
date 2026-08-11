@@ -141,31 +141,53 @@ phone-first for LINE's in-app browser: `robots: noindex/nofollow`, a per-route `
 (`viewportFit: "cover"` so safe-area insets apply on notched phones), and a page root that **owns
 its own scrolling** (`min-h-0 flex-1 overflow-y-auto`) because the root layout's body is a
 fixed-height `overflow-hidden` flex shell that would otherwise clip everything below the first
-viewport — the same trap the admissions parent dashboard documents. Inside the scroller: a sticky
-Thai-first header (nickname — never the legal name — plus `formatThaiMonth` and a session-count
-badge), the agenda, and a Bangkok "last updated" footer. The whole page renders in Sarabun via the
-`font-thai` theme token, and the Suspense fallback is a skeleton mirroring the loaded layout rather
-than a blank screen (the live Wise merge can hold first byte for a couple of seconds). It sits
-outside every route group, so it renders without nav or admin chrome.
+viewport — the same trap the admissions parent dashboard documents. The loaded page is composed by
+the client-side **`PublicScheduleShell`** (`public-schedule-shell.tsx`), which owns the scroll
+region, the sticky Thai-first header (nickname — never the legal name — plus `formatThaiMonth` and
+a session-count badge), and an **agenda ⇄ calendar view toggle**:
+
+- **Defaults are screen-size-aware and JS-free.** View state starts `null` (= auto), rendered as
+  responsive class pairs from `resolveViewContainerClasses` (`schedule-view-preference.ts`), so the
+  SSR HTML alone shows the agenda below `lg` and the calendar at `lg`+ — no hydration flash, and
+  resizes/rotation keep working via CSS while in auto.
+- **The calendar view is two shapes:** at `lg`+ it is `ScheduleMonthCalendar`'s month grid in the
+  `max-w-5xl` column the desktop page had before the agenda redesign; below `lg` it is the
+  **dot-grid jump map** (`parent-schedule-dot-grid.tsx`) — one dot per session in the shared
+  subject colour, Thai weekday initials, a `+N` overflow past 4 dots, and a subject legend. Tapping
+  a day returns to the agenda scrolled to that day (via its `data-date`); dot taps are navigation
+  and **never** write the preference.
+- **Explicit toggle choices persist** in `localStorage["bgscheduler.schedule.view"]`
+  (admissions-locale pattern: try/catch, garbage fails closed to auto). A stored preference is
+  applied in a mount effect — the one accepted flash, only for parents who previously toggled
+  against their size default.
+
+The whole page renders in Sarabun via the `font-thai` theme token, and the Suspense fallback is a
+skeleton mirroring the loaded layout (header, toggle row, agenda cards) rather than a blank screen
+(the live Wise merge can hold first byte for a couple of seconds). It sits outside every route
+group, so it renders without nav or admin chrome.
 
 **`ScheduleMonthCalendar`** (`src/components/student-schedule/schedule-month-calendar.tsx`) is the
-component both **admin** surfaces render. It is presentational and deliberately **not**
-`"use client"` — no fetching, no clock. It draws the Monday-start 6×7 grid on `lg` and up, a
-week-grouped list below that, and colours blocks by **subject** (not tutor) from a six-colour
-palette assigned in order of first appearance (`:36`-`63`). Grid maths is shared with the
-admissions calendar via `src/lib/calendar/month-grid.ts`.
+component both **admin** surfaces render, and the parent page's desktop calendar view. It is
+presentational and deliberately **not** `"use client"` — no fetching, no clock. It draws the
+Monday-start 6×7 grid on `lg` and up, a week-grouped list below that, and colours blocks by
+**subject** (not tutor) from a six-colour palette assigned in order of first appearance
+(`:36`-`63`). On the parent page the shell mounts it inside a `hidden lg:block` wrapper, so only
+its grid branch can ever show there (its own week-list branch is `lg:hidden`). Grid maths is
+shared with the admissions calendar via `src/lib/calendar/month-grid.ts`.
 
 **`ParentScheduleAgenda`** (`src/components/student-schedule/parent-schedule-agenda.tsx`) is the
-component the **parent** page renders: a day-by-day list of session cards, one section per day that
+parent page's default mobile view: a day-by-day list of session cards, one section per day that
 has sessions, headed by the Thai weekday + day number (`formatThaiDayHeading`). With `todayKey` it
 badges today ("วันนี้"), dims past days (visual only — never dropped), and anchors
-`id="agenda-scroll-target"` on the first day at or after today, which the tiny client-side
-`AgendaTodayScroller` scrolls to once after hydration. It is deliberately a **separate component**
-rather than a third branch of `ScheduleMonthCalendar`: the calendar's
+`id="agenda-scroll-target"` on the first day at or after today. Scroll-to-today (and the dot
+grid's scroll-to-day, via each section's `data-date`) is owned by `PublicScheduleShell`'s
+pending-scroll effect, which runs after the commit that revealed the agenda so a scroll never
+fires against a `display:none` subtree. The agenda is deliberately a **separate component** rather
+than a third branch of `ScheduleMonthCalendar`: the calendar's
 `.schedule-month-grid`/`.schedule-mobile-list` class names are force-toggled by the print CSS, so
 its markup is load-bearing for the A4 report, and the two audiences want different type scales and
-states. Content cannot drift between the three surfaces because all of them render the same
-payload, and the agenda imports the same `buildSubjectColorMap` for its colours.
+states. Content cannot drift between the surfaces because all of them render the same payload, and
+the agenda and dot grid import the same `buildSubjectColorMap` for their colours.
 
 The three surfaces are **not** byte-identical, though, because they differ in component and props:
 
@@ -173,7 +195,7 @@ The three surfaces are **not** byte-identical, though, because they differ in co
 |---|---|---|---|
 | Workspace | `ScheduleMonthCalendar` | `todayKey={todayKey}` (`student-schedule-workspace.tsx:257`) | the calendar's own English empty state |
 | Print report | `ScheduleMonthCalendar` | *omitted* (`report/page.tsx:115`) | the calendar's own English empty state |
-| Parent page | `ParentScheduleAgenda` | `todayKey={todayBangkok()}` | the page's Thai/English `PUBLIC_PAGE_COPY.emptyMonth` in a card |
+| Parent page | `ParentScheduleAgenda` + `ScheduleMonthCalendar` (lg+ calendar view) + `ParentScheduleDotGrid` (sub-lg calendar view) | `todayKey={todayBangkok()}` on all three | the page's Thai/English `PUBLIC_PAGE_COPY.emptyMonth` in a card, no toggle |
 
 - **`todayKey` draws the today marker** — a filled badge on the matching grid cell in the calendar
   (`schedule-month-calendar.tsx:179`-`181`), the "วันนี้" badge + scroll anchor in the agenda. The
@@ -189,7 +211,12 @@ The three surfaces are **not** byte-identical, though, because they differ in co
 Print behaviour lives in `src/app/student-schedule.css` (imported by `globals.css`): a **named**
 `@page schedule-landscape` so this report prints landscape without flipping any other printable page
 in the app (`:10`-`19`), `break-inside: avoid` on day cells and session blocks (`:55`-`63`), and a
-print-time swap that forces the month grid on and the mobile list off (`:65`-`72`).
+print-time swap that forces the month grid on and the mobile list off (`:65`-`72`). One parent-page
+nuance: while in auto view, print output follows **paper** width, not screen width — portrait A4
+(≈794 CSS px) is below `lg`, so a desktop screen showing the grid still prints the agenda unless
+the paper is landscape. Forced views print what they show, and a forced calendar always prints the
+month grid (`print:block` on the grid wrapper, `print:hidden` on the dot grid — the dot map is
+navigation, not a document).
 
 ## Data flow
 
@@ -362,6 +389,17 @@ Run with `npm test`. Tests sit in sibling `__tests__/` directories.
   absence without `todayKey`), the scroll anchor on today / the next upcoming day / absent when the
   month is entirely past, the TBC placeholder, chronological order, and the same label formatting
   cases as the calendar.
+- **`src/components/student-schedule/__tests__/schedule-view-preference.test.ts`** — the toggle's
+  zero-flash contract as exact class strings for auto/forced views, plus storage helpers failing
+  closed to auto on garbage or a throwing localStorage.
+- **`src/components/student-schedule/__tests__/parent-schedule-dot-grid.test.tsx`** — 42
+  Monday-start cells, one dot per session in shared-map colours, the DOT_CAP `+N` overflow, blank
+  out-of-month cells, today only with `todayKey`, buttons only on session days, Thai aria-labels,
+  and the first-appearance legend.
+- **`src/components/student-schedule/__tests__/public-schedule-shell.test.tsx`** — the SSR auto
+  contract (agenda `lg:hidden`, calendar `hidden lg:block lg:max-w-5xl`), the print-safe
+  grid/dot-grid split, the Thai toggle with neither segment pressed before hydration, and every
+  slot mounted inside the scroll-owning shell.
 - **`src/lib/calendar/__tests__/month-grid.test.ts`** — grid construction, leap February, year
   boundaries in both directions, throwing on a malformed key, Monday resolution, D/M formatting.
 - **LINE side** — `schedule-bot.test.ts`, `schedule-bot-group.test.ts`, `schedule-bot-copy.test.ts`

@@ -16,6 +16,8 @@
 // page must own its scrolling (min-h-0 flex-1 overflow-y-auto) or everything
 // below the first viewport is clipped — the pattern documented in
 // src/components/admissions/parent/parent-dashboard.tsx.
+// PublicScheduleShell owns that scroll region for the loaded page, plus the
+// agenda/calendar view toggle (agenda below lg, month grid at lg+ by default).
 //
 // Reachability requires the `/schedule/` prefix in src/middleware.ts.
 // ----------------------------------------------------------------------------
@@ -28,7 +30,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ParentScheduleAgenda } from "@/components/student-schedule/parent-schedule-agenda";
-import { AgendaTodayScroller } from "@/components/student-schedule/agenda-today-scroller";
+import { PublicScheduleShell } from "@/components/student-schedule/public-schedule-shell";
+import { ScheduleMonthCalendar } from "@/components/student-schedule/schedule-month-calendar";
 import { resolveStudentScheduleLink } from "@/lib/student-schedule/links";
 import {
   getStudentMonthlySchedule,
@@ -78,6 +81,7 @@ function ScheduleFallback() {
         <div className="mx-auto max-w-screen-sm space-y-2">
           <Skeleton className="h-3 w-28" />
           <Skeleton className="h-6 w-52" />
+          <Skeleton className="mt-2 h-[52px] w-full rounded-lg" />
         </div>
       </div>
       <div className="mx-auto w-full max-w-screen-sm space-y-4 px-4 py-4">
@@ -108,14 +112,45 @@ async function PublicScheduleBody({ params }: { params: Params }) {
   if (!payload) return <ExpiredNotice />;
 
   const shortName = parseStudentDisplay(payload.student.studentName).shortName;
+  const todayKey = todayBangkok();
+
+  if (payload.sessions.length === 0) {
+    return (
+      <div
+        lang="th"
+        className="font-thai min-h-0 w-full flex-1 overflow-y-auto text-base"
+      >
+        <header className="sticky top-0 z-10 border-b bg-background/95 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 backdrop-blur supports-[backdrop-filter]:bg-background/85">
+          <div className="mx-auto flex max-w-screen-sm items-end justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-muted-foreground">
+                {PUBLIC_PAGE_COPY.title}
+              </p>
+              <h1 className="mt-0.5 truncate text-lg leading-tight font-semibold">
+                น้อง{shortName} · {formatThaiMonth(payload.monthKey)}
+              </h1>
+            </div>
+          </div>
+        </header>
+        <main className="mx-auto w-full max-w-screen-sm px-4 py-4">
+          <Card className="px-6 py-10 text-center text-sm text-muted-foreground">
+            {PUBLIC_PAGE_COPY.emptyMonth}
+          </Card>
+          <footer className="mt-8 border-t pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] text-center text-xs text-muted-foreground">
+            {PUBLIC_PAGE_COPY.brand} · {PUBLIC_PAGE_COPY.updatedPrefix}{" "}
+            {formatBangkokDateTime(payload.generatedAt)}
+          </footer>
+        </main>
+      </div>
+    );
+  }
 
   return (
-    <div
-      lang="th"
-      className="font-thai min-h-0 w-full flex-1 overflow-y-auto text-base"
-    >
-      <header className="sticky top-0 z-10 border-b bg-background/95 px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 backdrop-blur supports-[backdrop-filter]:bg-background/85">
-        <div className="mx-auto flex max-w-screen-sm items-end justify-between gap-3">
+    <PublicScheduleShell
+      payload={payload}
+      todayKey={todayKey}
+      headerRow={
+        <div className="flex items-end justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs font-medium text-muted-foreground">
               {PUBLIC_PAGE_COPY.title}
@@ -124,32 +159,20 @@ async function PublicScheduleBody({ params }: { params: Params }) {
               น้อง{shortName} · {formatThaiMonth(payload.monthKey)}
             </h1>
           </div>
-          {payload.sessions.length > 0 && (
-            <Badge variant="secondary" className="shrink-0 tabular-nums">
-              {payload.sessions.length} {PUBLIC_PAGE_COPY.classUnit}
-            </Badge>
-          )}
+          <Badge variant="secondary" className="shrink-0 tabular-nums">
+            {payload.sessions.length} {PUBLIC_PAGE_COPY.classUnit}
+          </Badge>
         </div>
-      </header>
-
-      <main className="mx-auto w-full max-w-screen-sm px-4 py-4">
-        {payload.sessions.length === 0 ? (
-          <Card className="px-6 py-10 text-center text-sm text-muted-foreground">
-            {PUBLIC_PAGE_COPY.emptyMonth}
-          </Card>
-        ) : (
-          <>
-            <ParentScheduleAgenda payload={payload} todayKey={todayBangkok()} />
-            <AgendaTodayScroller />
-          </>
-        )}
-
+      }
+      agenda={<ParentScheduleAgenda payload={payload} todayKey={todayKey} />}
+      desktopCalendar={<ScheduleMonthCalendar payload={payload} todayKey={todayKey} />}
+      footer={
         <footer className="mt-8 border-t pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] text-center text-xs text-muted-foreground">
           {PUBLIC_PAGE_COPY.brand} · {PUBLIC_PAGE_COPY.updatedPrefix}{" "}
           {formatBangkokDateTime(payload.generatedAt)}
         </footer>
-      </main>
-    </div>
+      }
+    />
   );
 }
 

@@ -100,7 +100,8 @@ function AgendaSessionCard({
  *   • today's section is highlighted and badged "วันนี้",
  *   • past days are dimmed (visual only — never dropped),
  *   • the first section at or after today carries id="agenda-scroll-target"
- *     for AgendaTodayScroller. A month entirely in the past gets no anchor.
+ *     for the shell's scroll-to-today. A month entirely in the past gets no
+ *     anchor.
  * Without it, none of those states render (the print-safe default).
  */
 export function ParentScheduleAgenda({
@@ -130,7 +131,10 @@ export function ParentScheduleAgenda({
             data-today={isToday || undefined}
             data-past={isPast || undefined}
             id={dateKey === scrollTargetKey ? "agenda-scroll-target" : undefined}
-            className={cn("scroll-mt-20", isPast && "opacity-60")}
+            className={cn(
+              "scroll-mt-[calc(8.5rem+env(safe-area-inset-top))]",
+              isPast && "opacity-60",
+            )}
           >
             <div className="mb-1.5 flex items-center gap-2">
               <h2
