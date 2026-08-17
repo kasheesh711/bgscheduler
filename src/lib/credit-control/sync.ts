@@ -57,8 +57,10 @@ export interface CreditControlSyncResult {
   errorSummary?: string;
 }
 
-const PAST_WINDOW_DAYS = 120;
-const FUTURE_WINDOW_DAYS = 180;
+/** Days of past sessions each snapshot retains; the report's queryable floor. */
+export const PAST_WINDOW_DAYS = 120;
+/** Days of future sessions each snapshot retains; the report's queryable ceiling. */
+export const FUTURE_WINDOW_DAYS = 180;
 const CREDIT_PAIR_CONCURRENCY = 8;
 const FEEDBACK_CONCURRENCY = 6;
 export const CREDIT_CONTROL_INSERT_CHUNK_SIZE = 100;

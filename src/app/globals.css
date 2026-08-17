@@ -4,6 +4,7 @@
 @import "./credit-control.css";
 @import "./learning-plans.css";
 @import "./student-schedule.css";
+@import "./student-report.css";
 
 @custom-variant dark (&:is(.dark *));
 

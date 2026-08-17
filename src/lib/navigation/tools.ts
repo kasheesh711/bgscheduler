@@ -18,6 +18,7 @@ export type NavToolId =
   | "scheduler-metrics"
   | "progress-tests"
   | "student-schedule"
+  | "student-report"
   | "learning-plans"
   | "student-promotions"
   | "admissions"
@@ -171,6 +172,13 @@ export const NAV_TOOLS: NavTool[] = [
     href: "/student-schedule",
     label: "Student Schedule",
     description: "Pull a student's monthly calendar to print or send to a parent.",
+    section: "student-lifecycle",
+  },
+  {
+    id: "student-report",
+    href: "/student-report",
+    label: "Parent Report",
+    description: "Class and credit statement for a family over a date range — print or CSV.",
     section: "student-lifecycle",
   },
   {

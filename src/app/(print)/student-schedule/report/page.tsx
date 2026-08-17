@@ -95,7 +95,7 @@ async function StudentScheduleReportBody({
 
   return (
     <ReportShell>
-      <PrintToolbar />
+      <PrintToolbar backHref="/student-schedule" backLabel="Back to Student Schedule" />
       <div className="schedule-report-root">
         <div className="schedule-sheet mx-auto my-8 max-w-[277mm] rounded-md bg-white p-[10mm] shadow-lg">
           <header className="mb-4 flex items-end justify-between border-b pb-3">

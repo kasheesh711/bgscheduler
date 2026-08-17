@@ -26,6 +26,7 @@ describe("navigation tool registry", () => {
     expect(sections[1].tools.map((tool) => tool.href)).toEqual([
       "/progress-tests",
       "/student-schedule",
+      "/student-report",
       "/learning-plans",
       "/student-promotions",
       "/admissions",

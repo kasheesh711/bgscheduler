@@ -5,7 +5,13 @@ import { ArrowLeft, Download } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
-export function PrintToolbar() {
+export function PrintToolbar({
+  backHref = "/learning-plans",
+  backLabel = "Back to form",
+}: {
+  backHref?: string;
+  backLabel?: string;
+}) {
   async function handlePrint() {
     // Prevent PDFs from capturing fallback typefaces.
     await document.fonts.ready;
@@ -19,10 +25,10 @@ export function PrintToolbar() {
           variant="ghost"
           size="sm"
           nativeButton={false}
-          render={<Link href="/learning-plans" />}
+          render={<Link href={backHref} />}
         >
           <ArrowLeft data-icon="inline-start" />
-          Back to form
+          {backLabel}
         </Button>
         <div className="flex items-center gap-3">
           <p className="hidden text-xs text-begifted-neutral-400 sm:block">
