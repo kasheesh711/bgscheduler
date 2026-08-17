@@ -20,6 +20,17 @@ import { nicknameCodes, normalizeLineStudentCode } from "@/lib/line/student-link
  */
 export const TRIGGER_PREFIX = "/schedule";
 
+/** Second command family: credit balances + the daily run-out digest. */
+export const CREDIT_TRIGGER_PREFIX = "/credit";
+
+/** Which command family a trigger addressed. Mentions map to "schedule". */
+export type BotVerb = "schedule" | "credit";
+
+const TRIGGER_PREFIXES: ReadonlyArray<{ verb: BotVerb; prefix: string }> = [
+  { verb: "schedule", prefix: TRIGGER_PREFIX },
+  { verb: "credit", prefix: CREDIT_TRIGGER_PREFIX },
+];
+
 /** `<code> [YYYY-MM] [send]`. */
 export const COMMAND_PATTERN = /^([A-Za-z0-9._\-฀-๿]{2,40})(?:\s+(\d{4}-\d{2}))?(?:\s+(send))?$/i;
 
@@ -37,6 +48,12 @@ export const SETUP_PATTERN = /^setup\s+(family|parent|staff|internal|admin)$/i;
 
 /** `setup instant` switches a chat's confirm gate off; `setup confirm` restores it (GRP-BOT-07). */
 export const SETUP_MODE_PATTERN = /^setup\s+(instant|confirm)$/i;
+
+/**
+ * `/credit setup [on|off]` — registers (or unregisters) the current staff group
+ * as a daily credit-digest target. Bare `setup` means on.
+ */
+export const CREDIT_SETUP_PATTERN = /^setup(?:\s+(on|off))?$/i;
 
 /**
  * The short words the bot asks people to reply with.
@@ -67,23 +84,27 @@ export type TriggerKind = "prefix" | "mention" | "answer" | "none";
 
 /**
  * Detects how (or whether) a message addresses the bot, returning the command
- * with the trigger removed.
+ * with the trigger removed and the command family (`verb`) it addressed.
  *
  * Pass `[]` for mentionees in a 1:1 conversation — there is nothing to mention
- * there, so only the prefix applies.
+ * there, so only the prefix applies. A mention always maps to the schedule
+ * family — that is the only behaviour the mention path has ever had.
  */
 export function detectTrigger(
   text: string,
   mentionees: readonly LineMentionee[],
-): { kind: TriggerKind; command: string } {
+): { kind: TriggerKind; verb: BotVerb; command: string } {
   const trimmed = text.trim();
-  if (trimmed.toLowerCase().startsWith(TRIGGER_PREFIX)) {
-    return { kind: "prefix", command: trimmed.slice(TRIGGER_PREFIX.length).trim() };
+  const lower = trimmed.toLowerCase();
+  for (const { verb, prefix } of TRIGGER_PREFIXES) {
+    if (lower.startsWith(prefix)) {
+      return { kind: "prefix", verb, command: trimmed.slice(prefix.length).trim() };
+    }
   }
   if (mentionsSelf(mentionees)) {
-    return { kind: "mention", command: stripMentions(text, mentionees) };
+    return { kind: "mention", verb: "schedule", command: stripMentions(text, mentionees) };
   }
-  return { kind: "none", command: "" };
+  return { kind: "none", verb: "schedule", command: "" };
 }
 
 /**

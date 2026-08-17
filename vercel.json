@@ -60,6 +60,10 @@
     {
       "path": "/api/internal/admissions-notifications",
       "schedule": "12 1 * * *"
+    },
+    {
+      "path": "/api/internal/line-credit-digest",
+      "schedule": "3 2 * * *"
     }
   ]
 }

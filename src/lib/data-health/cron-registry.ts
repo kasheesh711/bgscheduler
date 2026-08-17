@@ -21,6 +21,7 @@ export type CronJobKey =
   | "cron_watchdog"
   | "room_utilization"
   | "line_backlog_recovery"
+  | "line_credit_digest"
   | "competitor_intelligence";
 
 export interface CronJobDefinition {
@@ -323,6 +324,22 @@ export const CRON_JOBS = [
     dangerous: true,
     confirmationLabel: "Sends deadline reminder emails (and the weekly digest on Sundays) to admissions case members.",
     expectedBangkokMinute: 8 * 60 + 12,
+    routeMethod: "GET",
+  },
+  {
+    key: "line_credit_digest",
+    label: "LINE Credit Digest",
+    feature: "Credit Control",
+    path: "/api/internal/line-credit-digest",
+    schedule: "3 2 * * *",
+    cadenceLabel: "Daily 09:03 Bangkok",
+    cadenceMinutes: 24 * 60,
+    lateAfterMinutes: 60,
+    maxDurationSeconds: 300,
+    manualOnly: false,
+    dangerous: true,
+    confirmationLabel: "Pushes the credit-runout digest to registered LINE staff groups.",
+    expectedBangkokMinute: 9 * 60 + 3,
     routeMethod: "GET",
   },
   {

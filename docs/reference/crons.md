@@ -33,10 +33,11 @@ Rows are in `vercel.json` order. Schedules are **UTC**; the business timezone is
 | 13 | `/api/internal/student-promotions/july-1` | `5 17 30 6 *` | 1 Jul 00:05 (annual) | `student_promotions_july_1` | 800s | One-shot Wise grade/course promotion writeback |
 | 14 | `/api/internal/cron-watchdog` | `7,37 * * * *` | :07 / :37 hourly | `cron_watchdog` | 300s | Sweep every cron's health, email admins on new failures |
 | 15 | `/api/internal/admissions-notifications` | `12 1 * * *` | 08:12 daily | `admissions_notifications` | 300s | Deadline reminders daily; weekly digest on Bangkok Sundays |
+| 16 | `/api/internal/line-credit-digest` | `3 2 * * *` | 09:03 daily | `line_credit_digest` | 300s | Push the credit-runout digest (next 7 days) to registered LINE staff groups |
 
-Schedule rows: [`vercel.json:3-62`](../../vercel.json). Registry rows with labels, cadence, and lateness budgets: [`cron-registry.ts:46-373`](../../src/lib/data-health/cron-registry.ts).
+Schedule rows: [`vercel.json`](../../vercel.json). Registry rows with labels, cadence, and lateness budgets: [`cron-registry.ts`](../../src/lib/data-health/cron-registry.ts).
 
-Cadence breakdown: **9** half-hourly, **4** daily, **1** weekly, **1** dated one-shot.
+Cadence breakdown: **9** half-hourly, **5** daily, **1** weekly, **1** dated one-shot.
 
 ### Stagger
 

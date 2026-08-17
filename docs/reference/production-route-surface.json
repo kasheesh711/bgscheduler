@@ -8,7 +8,7 @@
     "url": "https://bgscheduler-bl5sz78th-kevins-projects-6ebb4efc.vercel.app",
     "outputItems": 362
   },
-  "minSourceRouteCount": 207,
+  "minSourceRouteCount": 211,
   "criticalRoutes": [
     "/leave-requests",
     "/line-review",
@@ -88,6 +88,7 @@
     "/api/internal/class-assignments/morning",
     "/api/internal/cron-watchdog",
     "/api/internal/line-backlog-recovery",
+    "/api/internal/line-credit-digest",
     "/api/internal/post-class-feedback-backfill",
     "/api/internal/post-class-feedback/admin-digest",
     "/api/internal/post-class-feedback/payout-accrual",

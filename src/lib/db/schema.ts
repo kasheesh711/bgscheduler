@@ -4703,6 +4703,14 @@ export const lineGroupSettings = pgTable("line_group_settings", {
    * audience, so a true value implies a valid template choice.
    */
   skipConfirm: boolean("skip_confirm").notNull().default(false),
+  /**
+   * Daily credit-runout digest target (CRED-BOT). Set by `/credit setup` in the
+   * chat; the digest sender re-checks `audience = 'staff'` at send time, so a
+   * chat later flipped to family silently stops receiving it.
+   */
+  creditDigestEnabled: boolean("credit_digest_enabled").notNull().default(false),
+  creditDigestSetByLineUserId: text("credit_digest_set_by_line_user_id"),
+  creditDigestUpdatedAt: timestamp("credit_digest_updated_at", { withTimezone: true }),
   setByLineUserId: text("set_by_line_user_id").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -4717,6 +4725,33 @@ export const lineGroupSettings = pgTable("line_group_settings", {
  * other half — the right code typed in the wrong family's group — by forcing a
  * confirmation the first time any student appears in a given group.
  */
+/**
+ * One row per Bangkok calendar day for the LINE credit-runout digest. The
+ * unique digest_date index is the single-flight guard: any existing row (sent,
+ * partial, failed, or skipped) is terminal for that day, so a same-day re-run
+ * short-circuits rather than posting twice. Mirrors
+ * progress_test_admin_digest_runs.
+ */
+export const lineCreditDigestRuns = pgTable("line_credit_digest_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  digestDate: date("digest_date", { mode: "string" }).notNull(),
+  status: text("status").notNull().default("pending"),
+  idempotencyKey: text("idempotency_key").notNull(),
+  runsOutCount: integer("runs_out_count").notNull().default(0),
+  alreadyOutCount: integer("already_out_count").notNull().default(0),
+  groupCount: integer("group_count").notNull().default(0),
+  attemptedCount: integer("attempted_count").notNull().default(0),
+  successCount: integer("success_count").notNull().default(0),
+  failedCount: integer("failed_count").notNull().default(0),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("line_credit_digest_runs_date_idx").on(table.digestDate),
+  uniqueIndex("line_credit_digest_runs_idempotency_idx").on(table.idempotencyKey),
+]);
+
 export const lineGroupScheduleSends = pgTable("line_group_schedule_sends", {
   id: uuid("id").primaryKey().defaultRandom(),
   groupId: text("group_id").notNull(),

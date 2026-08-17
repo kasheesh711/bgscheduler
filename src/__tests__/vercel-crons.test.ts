@@ -51,6 +51,25 @@ describe("vercel cron configuration", () => {
     expect(crons.get("/api/internal/admissions-notifications")).toBe("12 1 * * *");
   });
 
+  it("runs the LINE credit digest daily at 09:03 Bangkok (02:03 UTC)", () => {
+    const crons = new Map(loadVercelConfig().crons.map((cron) => [cron.path, cron.schedule]));
+
+    expect(crons.get("/api/internal/line-credit-digest")).toBe("3 2 * * *");
+  });
+
+  it("staggers the LINE credit digest away from every other cron minute", () => {
+    const otherMinuteFields = loadVercelConfig()
+      .crons.filter((cron) => cron.path !== "/api/internal/line-credit-digest")
+      .map((cron) => cron.schedule.split(" ")[0]);
+    const usedMinutes = new Set(
+      otherMinuteFields.flatMap((field) =>
+        field === "*/30" ? [0, 30] : field.split(",").map((minute) => Number(minute)),
+      ),
+    );
+
+    expect(usedMinutes.has(3)).toBe(false);
+  });
+
   it("staggers the admissions notifications cron away from every other cron minute", () => {
     const otherMinuteFields = loadVercelConfig()
       .crons.filter((cron) => cron.path !== "/api/internal/admissions-notifications")

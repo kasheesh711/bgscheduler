@@ -15,6 +15,7 @@
 
 import { BANGKOK_TIME_ZONE } from "@/lib/bangkok-time";
 import { formatMonthLabel } from "@/lib/calendar/month-grid";
+import { REPORT_MAX_STUDENTS } from "@/lib/student-report/params";
 
 const THAI_MONTHS = [
   "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
@@ -403,6 +404,242 @@ export const ADMIN_CANCELLED = "Cancelled — nothing was sent.";
 export const ADMIN_HELP = [
   "Send a student code (e.g. Aadhu.Sr) for this month, or \"Aadhu.Sr 2026-09\" for a specific month.",
   "YES confirms, NO cancels.",
+  "/credit Aadhu.Sr — that family's credit balances + report link.",
 ].join("\n");
 export const ADMIN_SEND_FAILED = "Could not send the LINE message. Nothing was delivered — try again, or send the link manually from /student-schedule.";
 export const ADMIN_NO_SNAPSHOT = "No active credit-control snapshot yet, so I can't read schedules. Try again after the next sync.";
+
+// ── Credit bot ──────────────────────────────────────────────────────────
+//
+// All credit copy is STAFF-facing English. It never renders in a family group:
+// the credit bot's CRED-BOT-G1 gate exits silently anywhere the stored
+// audience is not exactly "staff" (see credit-bot.ts).
+
+const DATETIME_PARTS_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  timeZone: BANGKOK_TIME_ZONE,
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+/** Bangkok "17 Aug 09:50" for the data-as-of caveat lines. */
+function formatBangkokDayTime(value: Date): string {
+  const parts = new Map(
+    DATETIME_PARTS_FORMATTER.formatToParts(value).map((part) => [part.type, part.value]),
+  );
+  return `${parts.get("day")} ${parts.get("month")} ${parts.get("hour")}:${parts.get("minute")}`;
+}
+
+/** "4" · "4.5" · "4.29" · "-1.5" — at most 2 decimals, trailing zeros trimmed. */
+export function formatCredits(value: number): string {
+  return String(Number(value.toFixed(2)));
+}
+
+function creditsNoun(value: number): string {
+  return Math.abs(Number(value.toFixed(2))) === 1 ? "credit" : "credits";
+}
+
+/** "2026-08-18" → "18/8" (repo-wide D/M convention, year dropped). */
+function shortDmFromKey(dateKey: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!match) return dateKey;
+  return `${Number(match[3])}/${Number(match[2])}`;
+}
+
+/** "2026-08-17" → "17/8/2026". */
+function dmyFromKey(dateKey: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!match) return dateKey;
+  return `${Number(match[3])}/${Number(match[2])}/${match[1]}`;
+}
+
+const EN_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Weekday of a calendar date is timezone-independent (see formatThaiDayHeading). */
+function weekdayFromKey(dateKey: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
+  if (!match) return "";
+  const utc = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  return EN_WEEKDAYS[utc.getUTCDay()];
+}
+
+function dataAsOfLine(generatedAt: Date): string {
+  return `Data as of ${formatBangkokDayTime(generatedAt)} Wise sync.`;
+}
+
+export const CREDIT_HELP_DM = [
+  "/credit Aadhu.Sr — that family's credit balances + a report link.",
+  "/credit setup — type it in a STAFF group to turn on the daily run-out digest there.",
+].join("\n");
+
+export const CREDIT_HELP_GROUP = [
+  "/credit Aadhu.Sr — that family's credit balances + a report link.",
+  "/credit setup — post the daily run-out digest in this chat every morning.",
+  "/credit setup off — stop the daily digest here.",
+].join("\n");
+
+export const CREDIT_SETUP_DM =
+  "Type /credit setup inside the staff group that should receive the daily digest.";
+
+export const CREDIT_NO_SNAPSHOT =
+  "No active credit-control snapshot yet, so I can't read balances. Try again after the next sync.";
+
+export function creditNotExact(query: string, candidates: ScheduleBotCandidate[]): string {
+  if (candidates.length === 0) return `No student matches "${query}".`;
+  return [
+    `"${query}" isn't an exact code. Try /credit with the full code:`,
+    ...candidates.map((candidate) => (
+      candidate.code
+        ? `• ${candidate.code} — ${candidate.studentName}`
+        : `• ${candidate.studentName}`
+    )),
+  ].join("\n");
+}
+
+export function creditDigestRegistered(enabled: boolean): string {
+  return enabled
+    ? [
+      "✅ Daily credit digest ON for this chat.",
+      "Every morning I'll post which students run out of credits within 7 days.",
+      "/credit setup off turns it off.",
+    ].join("\n")
+    : "Daily credit digest OFF for this chat.";
+}
+
+/**
+ * The /credit reply: one 💳 block per sibling (queried student first), then the
+ * Parent Report link and the snapshot-age caveat. Balances are raw Wise
+ * remaining so the message always agrees with the page the link opens.
+ */
+export function creditBalanceReply({
+  students,
+  url,
+  truncatedCount,
+  generatedAt,
+}: {
+  students: Array<{
+    studentName: string;
+    totalRemaining: number;
+    packages: Array<{ subject: string; packageName: string; remainingCredits: number }>;
+  }>;
+  url: string;
+  truncatedCount: number;
+  generatedAt: Date;
+}): string {
+  const lines: string[] = [];
+  for (const student of students) {
+    if (student.packages.length === 0) {
+      lines.push(`💳 ${student.studentName} — no active packages`);
+      continue;
+    }
+    lines.push(
+      `💳 ${student.studentName} — ${formatCredits(student.totalRemaining)} ${creditsNoun(student.totalRemaining)} left`,
+    );
+    for (const pkg of student.packages) {
+      lines.push(`• ${pkg.subject || pkg.packageName}: ${formatCredits(pkg.remainingCredits)}`);
+    }
+  }
+  lines.push("", "Report (last 30 days):", url);
+  if (truncatedCount > 0) {
+    lines.push(`Report covers the first ${REPORT_MAX_STUDENTS} students (+${truncatedCount} more).`);
+  }
+  lines.push("", dataAsOfLine(generatedAt));
+  return lines.join("\n");
+}
+
+export interface CreditDigestRunOutRow {
+  /** Bangkok date the package hits ≤ 0. */
+  exhaustDateBkk: string;
+  /** Nickname code, or the full student name when no code exists. */
+  label: string;
+  subject: string;
+  remainingCredits: number;
+}
+
+export interface CreditDigestAlreadyOutRow {
+  label: string;
+  subject: string;
+  remainingCredits: number;
+  /** Bangkok date of the next scheduled class. */
+  nextClassBkk: string;
+}
+
+/** LINE hard-caps a text message at 5,000 chars; leave headroom for safety. */
+const DIGEST_CHAR_BUDGET = 4500;
+
+/**
+ * The daily digest posted into registered staff groups. Grouped by exhaust
+ * date; the "already out" bucket leads because those families are the most
+ * urgent. Truncates to the LINE text cap with an explicit "+N more" line so a
+ * long list reads as truncated, never as complete.
+ */
+export function creditDigestMessage({
+  digestDateBkk,
+  runsOut,
+  alreadyOut,
+  dashboardUrl,
+  generatedAt,
+}: {
+  digestDateBkk: string;
+  runsOut: CreditDigestRunOutRow[];
+  alreadyOut: CreditDigestAlreadyOutRow[];
+  dashboardUrl: string;
+  generatedAt: Date;
+}): string {
+  const footer = ["", `Dashboard: ${dashboardUrl}`, dataAsOfLine(generatedAt)];
+
+  if (runsOut.length === 0 && alreadyOut.length === 0) {
+    return [
+      `✅ Credit check (${dmyFromKey(digestDateBkk)}) — no students running out in the next 7 days.`,
+      ...footer,
+    ].join("\n");
+  }
+
+  const lines: string[] = [
+    `⚠️ Credit runout — next 7 days (${dmyFromKey(digestDateBkk)})`,
+  ];
+
+  const entries: string[][] = [];
+  if (alreadyOut.length > 0) {
+    entries.push(["", "Already out, classes still scheduled:"]);
+    for (const row of alreadyOut) {
+      entries.push([
+        `• ${row.label} — ${row.subject} (${formatCredits(row.remainingCredits)}, next class ${shortDmFromKey(row.nextClassBkk)})`,
+      ]);
+    }
+  }
+  if (runsOut.length > 0) {
+    entries.push(["", "Runs out:"]);
+    let currentDate = "";
+    for (const row of runsOut) {
+      if (row.exhaustDateBkk !== currentDate) {
+        currentDate = row.exhaustDateBkk;
+        entries.push([`${shortDmFromKey(currentDate)} (${weekdayFromKey(currentDate)})`]);
+      }
+      entries.push([
+        `• ${row.label} — ${row.subject} (${formatCredits(row.remainingCredits)} left)`,
+      ]);
+    }
+  }
+
+  // Flatten entry groups until the budget runs out; count dropped student rows.
+  let used = lines.join("\n").length + footer.join("\n").length;
+  let dropped = 0;
+  for (const group of entries) {
+    const chunk = group.join("\n");
+    if (dropped === 0 && used + chunk.length + 1 <= DIGEST_CHAR_BUDGET) {
+      lines.push(...group);
+      used += chunk.length + 1;
+    } else if (group[0]?.startsWith("•")) {
+      dropped += 1;
+    }
+  }
+  if (dropped > 0) {
+    lines.push(`…+${dropped} more — see the dashboard.`);
+  }
+
+  lines.push(...footer);
+  return lines.join("\n");
+}

@@ -139,14 +139,19 @@ beforeEach(() => {
 
 describe("detectTrigger", () => {
   it("accepts the /schedule prefix, case-insensitively", () => {
-    expect(detectTrigger("/schedule Aadhu.Sr", [])).toEqual({ kind: "prefix", command: "Aadhu.Sr" });
-    expect(detectTrigger("/SCHEDULE Aadhu.Sr", [])).toEqual({ kind: "prefix", command: "Aadhu.Sr" });
-    expect(detectTrigger("  /schedule   Aadhu.Sr  ", [])).toEqual({ kind: "prefix", command: "Aadhu.Sr" });
+    expect(detectTrigger("/schedule Aadhu.Sr", [])).toEqual({ kind: "prefix", verb: "schedule", command: "Aadhu.Sr" });
+    expect(detectTrigger("/SCHEDULE Aadhu.Sr", [])).toEqual({ kind: "prefix", verb: "schedule", command: "Aadhu.Sr" });
+    expect(detectTrigger("  /schedule   Aadhu.Sr  ", [])).toEqual({ kind: "prefix", verb: "schedule", command: "Aadhu.Sr" });
+  });
+
+  it("routes the /credit prefix to the credit verb", () => {
+    expect(detectTrigger("/credit Aadhu.Sr", [])).toEqual({ kind: "prefix", verb: "credit", command: "Aadhu.Sr" });
+    expect(detectTrigger("/CREDIT setup", [])).toEqual({ kind: "prefix", verb: "credit", command: "setup" });
   });
 
   it("still accepts a mobile @-mention", () => {
     const m = [{ index: 0, length: 9, type: "user", isSelf: true }];
-    expect(detectTrigger("@BeGifted Aadhu.Sr", m)).toEqual({ kind: "mention", command: "Aadhu.Sr" });
+    expect(detectTrigger("@BeGifted Aadhu.Sr", m)).toEqual({ kind: "mention", verb: "schedule", command: "Aadhu.Sr" });
   });
 
   it("ignores ordinary conversation", () => {

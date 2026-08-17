@@ -9,7 +9,10 @@ import {
   adminNoVerifiedContact,
   adminNotFound,
   adminSent,
+  creditBalanceReply,
+  creditDigestMessage,
   formatBangkokDmy,
+  formatCredits,
   formatThaiDayHeading,
   formatThaiMonth,
   GROUP_HELP,
@@ -267,5 +270,124 @@ describe("studentLabel", () => {
 
   it("passes the name through when there is no code", () => {
     expect(studentLabel("Somchai Jaidee", null)).toBe("Somchai Jaidee");
+  });
+});
+
+describe("credit copy", () => {
+  const GENERATED_AT = new Date("2026-08-05T01:50:00Z"); // 08:50 Bangkok
+
+  it("renders one block per sibling with per-package lines and the caveat", () => {
+    const text = creditBalanceReply({
+      students: [
+        {
+          studentName: "Teethad (Copter.Th) Thamprida",
+          totalRemaining: 4.5,
+          packages: [
+            { subject: "Mathematics", packageName: "Maths 20", remainingCredits: 3.5 },
+            { subject: "", packageName: "Physics 10", remainingCredits: 1 },
+          ],
+        },
+        { studentName: "Jidapa (Jasmine.Th) Thamprida", totalRemaining: 0, packages: [] },
+      ],
+      url: "https://example.test/student-report/report?student=a&from=2026-07-06&to=2026-08-05",
+      truncatedCount: 0,
+      generatedAt: GENERATED_AT,
+    });
+
+    expect(text).toContain("💳 Teethad (Copter.Th) Thamprida — 4.5 credits left");
+    expect(text).toContain("• Mathematics: 3.5");
+    // Blank subject falls back to the package name.
+    expect(text).toContain("• Physics 10: 1");
+    expect(text).toContain("💳 Jidapa (Jasmine.Th) Thamprida — no active packages");
+    expect(text).toContain("Report (last 30 days):");
+    expect(text).toContain("https://example.test/student-report/report");
+    expect(text).not.toContain("first 8 students");
+    expect(text).toContain("Data as of 5 Aug 08:50 Wise sync.");
+  });
+
+  it("singularizes a 1-credit balance and notes a truncated link", () => {
+    const text = creditBalanceReply({
+      students: [{
+        studentName: "A (A.Bb) C",
+        totalRemaining: 1,
+        packages: [{ subject: "Math", packageName: "M", remainingCredits: 1 }],
+      }],
+      url: "https://example.test/r",
+      truncatedCount: 2,
+      generatedAt: GENERATED_AT,
+    });
+
+    expect(text).toContain("— 1 credit left");
+    expect(text).toContain("Report covers the first 8 students (+2 more).");
+  });
+
+  it("formats digest rows grouped by date with weekday and D/M dates", () => {
+    const text = creditDigestMessage({
+      digestDateBkk: "2026-08-05",
+      runsOut: [
+        { exhaustDateBkk: "2026-08-06", label: "Copter.Th", subject: "Physics", remainingCredits: 1.5 },
+        { exhaustDateBkk: "2026-08-06", label: "Mint.Ch", subject: "Chemistry", remainingCredits: 1 },
+        { exhaustDateBkk: "2026-08-08", label: "Ann.Bb", subject: "Biology", remainingCredits: 2 },
+      ],
+      alreadyOut: [
+        { label: "Zed.Aa", subject: "Maths", remainingCredits: -1.5, nextClassBkk: "2026-08-07" },
+      ],
+      dashboardUrl: "https://example.test/credit-control",
+      generatedAt: GENERATED_AT,
+    });
+
+    expect(text).toContain("⚠️ Credit runout — next 7 days (5/8/2026)");
+    expect(text).toContain("Already out, classes still scheduled:");
+    expect(text).toContain("• Zed.Aa — Maths (-1.5, next class 7/8)");
+    expect(text).toContain("6/8 (Thu)");
+    expect(text).toContain("• Copter.Th — Physics (1.5 left)");
+    expect(text).toContain("8/8 (Sat)");
+    expect(text).toContain("• Ann.Bb — Biology (2 left)");
+    // The date header appears once for the two same-day students.
+    expect(text.match(/6\/8 \(Thu\)/g)).toHaveLength(1);
+    expect(text).toContain("Dashboard: https://example.test/credit-control");
+    expect(text).toContain("Data as of 5 Aug 08:50 Wise sync.");
+  });
+
+  it("sends a heartbeat line when nothing is running out", () => {
+    const text = creditDigestMessage({
+      digestDateBkk: "2026-08-05",
+      runsOut: [],
+      alreadyOut: [],
+      dashboardUrl: "https://example.test/credit-control",
+      generatedAt: GENERATED_AT,
+    });
+
+    expect(text).toContain("✅ Credit check (5/8/2026) — no students running out in the next 7 days.");
+    expect(text).toContain("Dashboard:");
+  });
+
+  it("truncates a very long digest under the LINE cap with a +N more line", () => {
+    const runsOut = Array.from({ length: 400 }, (_, index) => ({
+      exhaustDateBkk: "2026-08-06",
+      label: `Student${index}.Xx`,
+      subject: "Some Fairly Long Subject Name",
+      remainingCredits: 1.5,
+    }));
+
+    const text = creditDigestMessage({
+      digestDateBkk: "2026-08-05",
+      runsOut,
+      alreadyOut: [],
+      dashboardUrl: "https://example.test/credit-control",
+      generatedAt: GENERATED_AT,
+    });
+
+    expect(text.length).toBeLessThan(5000);
+    expect(text).toMatch(/…\+\d+ more — see the dashboard\./);
+    expect(text).toContain("Dashboard:"); // footer survives truncation
+  });
+
+  it("trims credit numbers without losing real decimals", () => {
+    expect(formatCredits(4)).toBe("4");
+    expect(formatCredits(4.5)).toBe("4.5");
+    expect(formatCredits(4.29)).toBe("4.29");
+    expect(formatCredits(-1.5)).toBe("-1.5");
+    expect(formatCredits(12.857142)).toBe("12.86");
   });
 });

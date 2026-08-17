@@ -42,6 +42,7 @@ import {
   detectTrigger,
   exactCodeMatches,
 } from "@/lib/line/schedule-bot-command";
+import { handleCreditCommand, type CreditBotAction } from "@/lib/line/credit-bot";
 import {
   getStudentMonthlySchedule,
   parseStudentDisplay,
@@ -102,7 +103,8 @@ export interface ScheduleBotResult {
     | "cancelled"
     | "pending_expired"
     | "no_snapshot"
-    | "send_failed";
+    | "send_failed"
+    | CreditBotAction;
 }
 
 /**
@@ -254,6 +256,22 @@ async function routeScheduleBotCommand(
   // A bare YES/NO is accepted when a confirmation is outstanding, because the
   // prompt asks for exactly that and does not mention the prefix.
   const trigger = detectTrigger(raw, []);
+
+  // The credit family has its own sub-grammar and reply set — hand it off
+  // whole. The admin gate above still applies, and the classifier is still
+  // skipped, exactly as for /schedule.
+  if (trigger.kind === "prefix" && trigger.verb === "credit") {
+    return handleCreditCommand({
+      db,
+      lineUserId,
+      command: trigger.command,
+      surface: { kind: "dm" },
+      respond: (text) => reply(deps, lineUserId, text),
+      now: deps.now,
+      baseUrl: deps.baseUrl,
+    });
+  }
+
   if (trigger.kind === "none") {
     if (!ANSWER_PATTERN.test(raw) || !(await hasPendingDm(db, lineUserId))) {
       return { handled: false };

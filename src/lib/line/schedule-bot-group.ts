@@ -62,6 +62,7 @@ import {
   type TriggerKind,
 } from "@/lib/line/schedule-bot-command";
 import { isScheduleBotAdmin } from "@/lib/line/schedule-bot";
+import { handleCreditCommand, type CreditBotAction } from "@/lib/line/credit-bot";
 import {
   getStudentMonthlySchedule,
   parseStudentDisplay,
@@ -118,7 +119,8 @@ export interface GroupBotResult {
     | "cancelled"
     | "pending_expired"
     | "no_snapshot"
-    | "send_failed";
+    | "send_failed"
+    | CreditBotAction;
 }
 
 function resolveDeps(overrides: Partial<GroupBotDeps> = {}): GroupBotDeps {
@@ -345,6 +347,21 @@ async function routeGroupCommand(
 
   const deps = resolveDeps(overrides);
   const target = { groupId, replyToken };
+
+  // Credit family — its own sub-grammar and gates (CRED-BOT-G1 staff-only,
+  // silent otherwise). GRP-BOT-01/02 have already passed above.
+  if (kind === "prefix" && detected.verb === "credit") {
+    return handleCreditCommand({
+      db,
+      lineUserId,
+      command,
+      surface: { kind: "group", groupId },
+      respond: (text) => say(deps, target, text),
+      now: deps.now,
+      baseUrl: deps.baseUrl,
+    });
+  }
+
   if (!command) {
     await say(deps, target, GROUP_HELP);
     return { handled: true, action: "help" };
