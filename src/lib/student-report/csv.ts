@@ -24,6 +24,7 @@ export const CLASSES_CSV_COLUMNS: CsvColumn<ClassesCsvRow>[] = [
   { key: "packageName", header: "Package", value: (row) => row.packageName },
   { key: "subjectBand", header: "Level band", value: (row) => row.subjectBand },
   { key: "wiseSessionId", header: "Wise session id", value: (row) => row.wiseSessionId },
+  { key: "source", header: "Source", value: (row) => row.source },
 ];
 
 export interface SummaryCsvRow {

@@ -63,6 +63,26 @@ function payloadFixture(): ParentReportPayload {
             packageName: "Math package",
             subjectBand: "Y8-9",
             meetingStatus: "ENDED",
+            source: "snapshot",
+            timeApproximate: false,
+          },
+          {
+            wiseSessionId: "wise-ledger",
+            dateKey: "2026-04-17",
+            weekday: "Fri",
+            startLabel: "14:29",
+            durationMinutes: 91,
+            classLabel: "Y9-11",
+            modality: "unknown",
+            teacher: "Kevin (Kev) Y. Hsieh Online",
+            bucket: "attended",
+            creditApplied: 1.5,
+            hasFeedback: false,
+            packageName: "Math package",
+            subjectBand: "Y9-11",
+            meetingStatus: "ENDED",
+            source: "ledger",
+            timeApproximate: true,
           },
         ],
         bucketTotals: [
@@ -94,7 +114,7 @@ function payloadFixture(): ParentReportPayload {
 describe("CSV columns", () => {
   it("emits the exact classes header", () => {
     expect(serializeCsv([], CLASSES_CSV_COLUMNS, { includeBom: false })).toBe(
-      '"Student","Date","Day","Time","Mins","Class","Mode","Teacher","Status","Credit","Feedback","Package","Level band","Wise session id"',
+      '"Student","Date","Day","Time","Mins","Class","Mode","Teacher","Status","Credit","Feedback","Package","Level band","Wise session id","Source"',
     );
   });
 
@@ -114,17 +134,20 @@ describe("CSV columns", () => {
 describe("CSV flattening", () => {
   it("emits one row per class and relies on the shared serializer for commas", () => {
     const rows = flattenClassesForCsv(payloadFixture());
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
       studentLabel: "Student.Code",
       classLabel: "Math, Advanced",
       bucket: "attended",
       hasFeedback: true,
+      source: "snapshot",
     });
+    expect(rows[1]).toMatchObject({ source: "ledger" });
 
     const csv = serializeCsv(rows, CLASSES_CSV_COLUMNS, { includeBom: false });
     expect(csv).toContain('"Math, Advanced"');
     expect(csv).toContain('"yes"');
+    expect(csv).toContain('"ledger"');
   });
 
   it("emits status totals and every attended summary line per student", () => {

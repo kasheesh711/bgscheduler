@@ -3,14 +3,17 @@ import { describe, expect, it } from "vitest";
 import { TEACHER_TBC } from "@/lib/student-schedule/types";
 import {
   buildClassRow,
+  buildLedgerClassRow,
   buildParentReportPayload,
   classifySession,
+  isLedgerClassCandidate,
+  packageMetaKey,
   summarizeAttended,
   summarizeBuckets,
 } from "../build";
 import { resolveReportWindow } from "../window";
 
-import type { ReportSessionInput } from "../build";
+import type { ReportLedgerEntryInput, ReportSessionInput } from "../build";
 import type { ReportClassRow, ReportStudent } from "../types";
 
 const STUDENT_A: ReportStudent = {
@@ -68,6 +71,26 @@ function classRow(overrides: Partial<ReportClassRow> = {}): ReportClassRow {
     packageName: "Math package",
     subjectBand: "Y8-9 / G7-8 (Int.)",
     meetingStatus: "ENDED",
+    source: "snapshot",
+    timeApproximate: false,
+    ...overrides,
+  };
+}
+
+function ledgerEntry(
+  overrides: Partial<ReportLedgerEntryInput> = {},
+): ReportLedgerEntryInput {
+  return {
+    wiseCreditHistoryId: "ledger-1",
+    wiseStudentId: STUDENT_A.wiseStudentId,
+    wiseClassId: "class-1",
+    credit: 1.5,
+    type: "SESSION",
+    meetingStatus: "ENDED",
+    durationMinutes: 91,
+    createdAtWise: new Date("2026-04-17T07:29:49.473Z"),
+    rawTeacherName: "Kevin (Kev) Y. Hsieh Online",
+    rawClassroomSubject: "Y9-11 / G8-10 (Int.)",
     ...overrides,
   };
 }
@@ -240,7 +263,8 @@ describe("buildParentReportPayload", () => {
         }),
       ]]]),
       packagesByStudentId: new Map(),
-      ledgerByStudentId: new Map(),
+      ledgerEntriesByStudentId: new Map(),
+      packageMetaByClassKey: new Map(),
       generatedAt: new Date("2026-08-17T06:00:00.000Z"),
     });
 
@@ -264,7 +288,11 @@ describe("buildParentReportPayload", () => {
         }),
       ]]]),
       packagesByStudentId: new Map(),
-      ledgerByStudentId: new Map([[STUDENT_A.wiseStudentId, { entries: 2, netCredit: -1 }]]),
+      ledgerEntriesByStudentId: new Map([[STUDENT_A.wiseStudentId, [
+        ledgerEntry({ wiseCreditHistoryId: "topup", type: "CREDIT", meetingStatus: null, credit: 0.5 }),
+        ledgerEntry({ wiseCreditHistoryId: "spend", type: "CREDIT", meetingStatus: null, credit: -1.5 }),
+      ]]]),
+      packageMetaByClassKey: new Map(),
       generatedAt: new Date("2026-08-17T06:00:00.000Z"),
     });
 
@@ -289,6 +317,105 @@ describe("buildParentReportPayload", () => {
       snapshotCeilingDateKey: "2027-02-13",
       floorWarning: true,
       ceilingWarning: true,
+    });
+  });
+
+  it("backfills a class row from a ledger charge the snapshot no longer holds", () => {
+    const payload = buildParentReportPayload({
+      snapshot: { id: "snapshot-3", generatedAt: new Date("2026-08-17T05:00:00.000Z") },
+      window: resolveReportWindow("2026-04-01", "2026-08-17"),
+      students: [STUDENT_A],
+      sessionsByStudentId: new Map([[STUDENT_A.wiseStudentId, [
+        session({
+          wiseSessionId: "kevin-2",
+          title: "Live Session - Math",
+          teacherName: "Kevin (Kev) Y. Hsieh Online",
+          scheduledStartTime: new Date("2026-04-24T07:30:00.000Z"),
+          creditApplied: 1.5,
+        }),
+      ]]]),
+      packagesByStudentId: new Map(),
+      ledgerEntriesByStudentId: new Map([[STUDENT_A.wiseStudentId, [
+        // Matches the snapshot session above — must NOT duplicate.
+        ledgerEntry({ wiseCreditHistoryId: "kevin-2", createdAtWise: new Date("2026-04-24T07:33:00.000Z") }),
+        // Pre-floor charge with no session row — must be synthesized.
+        ledgerEntry({ wiseCreditHistoryId: "kevin-1" }),
+      ]]]),
+      packageMetaByClassKey: new Map(),
+      generatedAt: new Date("2026-08-17T06:00:00.000Z"),
+    });
+
+    const rows = payload.students[0].rows;
+    expect(rows.map((row) => row.wiseSessionId)).toEqual(["kevin-1", "kevin-2"]);
+    expect(rows[0]).toMatchObject({
+      source: "ledger",
+      timeApproximate: true,
+      dateKey: "2026-04-17",
+      weekday: "Fri",
+      startLabel: "14:29",
+      durationMinutes: 91,
+      teacher: "Kevin (Kev) Y. Hsieh Online",
+      classLabel: "Y9-11 / G8-10 (Int.)",
+      modality: "unknown",
+      bucket: "attended",
+      creditApplied: 1.5,
+    });
+    expect(rows[1]).toMatchObject({ source: "snapshot", timeApproximate: false });
+
+    const teacherLine = payload.students[0].summaries.find(
+      (line) => line.dimension === "teacher" && line.key === "Kevin (Kev) Y. Hsieh Online",
+    );
+    expect(teacherLine).toMatchObject({ sessions: 2, credits: 3 });
+    expect(payload.students[0].ledger).toEqual({ entries: 2, netCredit: 3 });
+  });
+
+  it("labels ledger rows from the package pair and falls back to TEACHER_TBC", () => {
+    const payload = buildParentReportPayload({
+      snapshot: { id: "snapshot-4", generatedAt: new Date("2026-08-17T05:00:00.000Z") },
+      window: resolveReportWindow("2026-04-01", "2026-08-17"),
+      students: [STUDENT_A],
+      sessionsByStudentId: new Map(),
+      packagesByStudentId: new Map(),
+      ledgerEntriesByStudentId: new Map([[STUDENT_A.wiseStudentId, [
+        ledgerEntry({ rawTeacherName: null, rawClassroomSubject: null }),
+      ]]]),
+      packageMetaByClassKey: new Map([[
+        packageMetaKey(STUDENT_A.wiseStudentId, "class-1"),
+        { packageName: "Package name", subject: "Y9-11 / G8-10 (Int.)" },
+      ]]),
+      generatedAt: new Date("2026-08-17T06:00:00.000Z"),
+    });
+
+    expect(payload.students[0].rows[0]).toMatchObject({
+      teacher: TEACHER_TBC,
+      classLabel: "Y9-11 / G8-10 (Int.)",
+      packageName: "Package name",
+    });
+  });
+});
+
+describe("isLedgerClassCandidate", () => {
+  it("accepts only placeable SESSION charges and skips cancellations", () => {
+    expect(isLedgerClassCandidate(ledgerEntry())).toBe(true);
+    expect(isLedgerClassCandidate(ledgerEntry({ type: "CREDIT", meetingStatus: null }))).toBe(false);
+    expect(isLedgerClassCandidate(ledgerEntry({ type: null }))).toBe(false);
+    expect(isLedgerClassCandidate(ledgerEntry({ createdAtWise: null }))).toBe(false);
+    expect(isLedgerClassCandidate(ledgerEntry({ meetingStatus: "CANCELLED" }))).toBe(false);
+    expect(isLedgerClassCandidate(ledgerEntry({ meetingStatus: "canceled" }))).toBe(false);
+  });
+});
+
+describe("buildLedgerClassRow", () => {
+  it("keeps unknown ledger statuses fail-closed and never invents feedback", () => {
+    const row = buildLedgerClassRow(
+      ledgerEntry({ meetingStatus: "MISSED" }) as ReportLedgerEntryInput & { createdAtWise: Date },
+      undefined,
+    );
+    expect(row).toMatchObject({
+      bucket: "other:MISSED",
+      hasFeedback: false,
+      modality: "unknown",
+      source: "ledger",
     });
   });
 });

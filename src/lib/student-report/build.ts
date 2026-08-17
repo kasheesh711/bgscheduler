@@ -51,6 +51,31 @@ export interface ReportSessionInput {
   teacherFeedback: string | null;
 }
 
+/** One window-scoped credit-ledger entry, with the identity fields the raw
+ * Wise payload carries for SESSION-type charges. */
+export interface ReportLedgerEntryInput {
+  wiseCreditHistoryId: string;
+  wiseStudentId: string;
+  wiseClassId: string;
+  credit: number;
+  type: string | null;
+  meetingStatus: string | null;
+  durationMinutes: number;
+  createdAtWise: Date | null;
+  rawTeacherName: string | null;
+  rawClassroomSubject: string | null;
+}
+
+/** Package identity for one (student, class) pair, used to label ledger rows. */
+export interface ReportPackageMeta {
+  packageName: string;
+  subject: string;
+}
+
+export function packageMetaKey(wiseStudentId: string, wiseClassId: string): string {
+  return `${wiseStudentId}|${wiseClassId}`;
+}
+
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -94,6 +119,60 @@ export function buildClassRow(session: ReportSessionInput): ReportClassRow {
     packageName: session.packageName,
     subjectBand: session.subject,
     meetingStatus: session.meetingStatus,
+    source: "snapshot",
+    timeApproximate: false,
+  };
+}
+
+/**
+ * Whether a ledger entry stands in for a class the snapshot no longer holds.
+ * Only SESSION-type charges with a placeable timestamp qualify; CANCELLED
+ * charges are skipped (in-window cancellations already appear as snapshot
+ * rows, and pre-floor ones carry no balance information).
+ */
+export function isLedgerClassCandidate<
+  T extends { type: string | null; meetingStatus: string | null; createdAtWise: Date | null },
+>(entry: T): entry is T & { createdAtWise: Date } {
+  if (entry.type !== "SESSION") return false;
+  if (!entry.createdAtWise) return false;
+  return !CANCELLED_PATTERN.test((entry.meetingStatus ?? "").trim());
+}
+
+/**
+ * Shapes one ledger charge into a report class row. The ledger has no session
+ * title, so the class label falls back to the package subject and the modality
+ * is fail-closed `unknown`; the timestamp is the charge time, flagged
+ * approximate. A charge with no resolvable teacher renders TEACHER_TBC.
+ */
+export function buildLedgerClassRow(
+  entry: ReportLedgerEntryInput & { createdAtWise: Date },
+  packageMeta: ReportPackageMeta | undefined,
+): ReportClassRow {
+  const chargedAt = entry.createdAtWise;
+  const subject = entry.rawClassroomSubject?.trim() || packageMeta?.subject.trim() || "";
+  const packageName = packageMeta?.packageName ?? "";
+  const meetingStatus = (entry.meetingStatus ?? "").trim();
+  return {
+    wiseSessionId: entry.wiseCreditHistoryId,
+    dateKey: bangkokDateKey(chargedAt),
+    weekday: WEEKDAY_FORMATTER.format(chargedAt),
+    startLabel: TIME_FORMATTER.format(chargedAt),
+    durationMinutes: entry.durationMinutes,
+    classLabel: deriveDisplaySubject({ title: "", subject, packageName }),
+    modality: "unknown",
+    teacher: entry.rawTeacherName?.trim() || TEACHER_TBC,
+    bucket: classifySession({
+      meetingStatus,
+      sessionKind: "past",
+      creditApplied: entry.credit,
+    }),
+    creditApplied: entry.credit,
+    hasFeedback: false,
+    packageName,
+    subjectBand: subject,
+    meetingStatus,
+    source: "ledger",
+    timeApproximate: true,
   };
 }
 
@@ -211,8 +290,11 @@ function deduplicateAndSortSessions(
  * Assembles the complete parent report without reading a database or clock.
  *
  * 1. Keep students in requested order and deduplicate/sort each student's sessions.
- * 2. Build per-student rows, status totals, attended summaries, packages, and ledger.
- * 3. Summarize all student rows together and attach snapshot bounds and warnings.
+ * 2. Backfill class rows from ledger charges whose session the snapshot no
+ *    longer holds (pre-floor or deleted in Wise), merged in timestamp order.
+ * 3. Build per-student rows, status totals, attended summaries, packages, and
+ *    the ledger movement aggregate over every window-scoped entry.
+ * 4. Summarize all student rows together and attach snapshot bounds and warnings.
  */
 export function buildParentReportPayload(input: {
   snapshot: { id: string; generatedAt: Date };
@@ -220,13 +302,41 @@ export function buildParentReportPayload(input: {
   students: ReportStudent[];
   sessionsByStudentId: ReadonlyMap<string, ReportSessionInput[]>;
   packagesByStudentId: ReadonlyMap<string, ReportPackageRow[]>;
-  ledgerByStudentId: ReadonlyMap<string, { entries: number; netCredit: number }>;
+  ledgerEntriesByStudentId: ReadonlyMap<string, ReportLedgerEntryInput[]>;
+  packageMetaByClassKey: ReadonlyMap<string, ReportPackageMeta>;
   generatedAt: Date;
 }): ParentReportPayload {
   const allRows: ReportClassRow[] = [];
   const students = input.students.map((student) => {
-    const sessions = input.sessionsByStudentId.get(student.wiseStudentId) ?? [];
-    const rows = deduplicateAndSortSessions(sessions).map(buildClassRow);
+    const sessions = deduplicateAndSortSessions(
+      input.sessionsByStudentId.get(student.wiseStudentId) ?? [],
+    );
+    const sessionIds = new Set(sessions.map((session) => session.wiseSessionId));
+    const ledgerEntries = input.ledgerEntriesByStudentId.get(student.wiseStudentId) ?? [];
+
+    // A SESSION-type ledger entry's Wise id IS the session id, so any charge
+    // absent from the session set is a class the snapshot cannot show.
+    const rows = [
+      ...sessions.map((session) => ({
+        time: session.scheduledStartTime.getTime(),
+        row: buildClassRow(session),
+      })),
+      ...ledgerEntries
+        .filter(isLedgerClassCandidate)
+        .filter((entry) => !sessionIds.has(entry.wiseCreditHistoryId))
+        .map((entry) => ({
+          time: entry.createdAtWise.getTime(),
+          row: buildLedgerClassRow(
+            entry,
+            input.packageMetaByClassKey.get(
+              packageMetaKey(entry.wiseStudentId, entry.wiseClassId),
+            ),
+          ),
+        })),
+    ]
+      .sort((left, right) => left.time - right.time)
+      .map((timed) => timed.row);
+
     allRows.push(...rows);
     return {
       student,
@@ -234,9 +344,11 @@ export function buildParentReportPayload(input: {
       bucketTotals: summarizeBuckets(rows),
       summaries: summarizeAttended(rows),
       packages: input.packagesByStudentId.get(student.wiseStudentId) ?? [],
-      ledger: input.ledgerByStudentId.get(student.wiseStudentId) ?? {
-        entries: 0,
-        netCredit: 0,
+      ledger: {
+        entries: ledgerEntries.length,
+        netCredit: round2(
+          ledgerEntries.reduce((sum, entry) => sum + entry.credit, 0),
+        ),
       },
     };
   });

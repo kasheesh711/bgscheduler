@@ -74,24 +74,19 @@ export function StatTile({
 export function ClassTable({ rows }: { rows: ReportClassRow[] }) {
   if (rows.length === 0) return <EmptyState />;
 
-  const durationMinutes = rows.reduce(
-    (total, row) => total + row.durationMinutes,
-    0,
-  );
   const credits = rows.reduce(
     (total, row) => total + row.creditApplied,
     0,
   );
+  const hasLedgerRows = rows.some((row) => row.source === "ledger");
 
   return (
+    <>
     <table className="w-full border-collapse">
       <thead>
         <tr>
           <th className={HEADER_CELL_CLASS}>Date</th>
           <th className={HEADER_CELL_CLASS}>Time</th>
-          <th className={`${HEADER_CELL_CLASS} ${NUMERIC_CELL_CLASS}`}>
-            Mins
-          </th>
           <th className={HEADER_CELL_CLASS}>Class</th>
           <th className={HEADER_CELL_CLASS}>Mode</th>
           <th className={HEADER_CELL_CLASS}>Teacher</th>
@@ -109,9 +104,7 @@ export function ClassTable({ rows }: { rows: ReportClassRow[] }) {
             </td>
             <td className={`${BODY_CELL_CLASS} digits whitespace-nowrap`}>
               {row.startLabel}
-            </td>
-            <td className={`${BODY_CELL_CLASS} ${NUMERIC_CELL_CLASS}`}>
-              {formatNumber(row.durationMinutes)}
+              {row.timeApproximate ? " †" : ""}
             </td>
             <td className={BODY_CELL_CLASS}>{row.classLabel}</td>
             <td className={BODY_CELL_CLASS}>{row.modality}</td>
@@ -136,9 +129,6 @@ export function ClassTable({ rows }: { rows: ReportClassRow[] }) {
           <td className="digits py-1 text-xs" colSpan={2}>
             Total · {rows.length} sessions
           </td>
-          <td className={`py-1 text-xs ${NUMERIC_CELL_CLASS}`}>
-            {formatNumber(durationMinutes)}
-          </td>
           <td className="py-1 text-xs" colSpan={4} />
           <td className={`py-1 text-xs ${NUMERIC_CELL_CLASS}`}>
             {formatNumber(credits)}
@@ -146,6 +136,13 @@ export function ClassTable({ rows }: { rows: ReportClassRow[] }) {
         </tr>
       </tfoot>
     </table>
+    {hasLedgerRows ? (
+      <p className="mt-2 text-[10px] text-begifted-neutral-500">
+        † Reconstructed from the billing ledger; the time shown is the charge
+        timestamp (approximate).
+      </p>
+    ) : null}
+    </>
   );
 }
 
@@ -167,8 +164,7 @@ export function SummaryTable({
         <table className="mt-3 w-full border-collapse">
           <thead>
             <tr>
-              <th className={HEADER_CELL_CLASS}>Dimension</th>
-              <th className={HEADER_CELL_CLASS}>Key</th>
+              <th className={HEADER_CELL_CLASS}>Teacher</th>
               <th className={`${HEADER_CELL_CLASS} ${NUMERIC_CELL_CLASS}`}>
                 Sessions
               </th>
@@ -186,7 +182,6 @@ export function SummaryTable({
                 key={`${line.dimension}:${line.key}`}
                 className="even:bg-begifted-neutral-50"
               >
-                <td className={BODY_CELL_CLASS}>{line.dimension}</td>
                 <td className={BODY_CELL_CLASS}>{line.key}</td>
                 <td className={`${BODY_CELL_CLASS} ${NUMERIC_CELL_CLASS}`}>
                   {formatNumber(line.sessions)}
@@ -206,6 +201,18 @@ export function SummaryTable({
   );
 }
 
+/** True when any balance is not a whole 0.5-credit step (after 2dp rounding). */
+function hasFractionalBalances(packages: ReportPackageRow[]): boolean {
+  return packages.some((row) =>
+    [
+      row.totalCredits,
+      row.consumedCredits,
+      row.remainingCredits,
+      row.availableCredits,
+    ].some((value) => !Number.isInteger(Math.round(value * 100) / 100 * 2)),
+  );
+}
+
 export function PackagesTable({
   packages,
 }: {
@@ -214,6 +221,7 @@ export function PackagesTable({
   if (packages.length === 0) return <EmptyState />;
 
   return (
+    <>
     <table className="mt-3 w-full border-collapse">
       <thead>
         <tr>
@@ -272,5 +280,12 @@ export function PackagesTable({
         ))}
       </tbody>
     </table>
+    {hasFractionalBalances(packages) ? (
+      <p className="mt-2 text-[10px] text-begifted-neutral-500">
+        Fractional balances mirror pro-rated credit top-ups recorded in Wise;
+        per-class charges are always 0.5-credit steps.
+      </p>
+    ) : null}
+    </>
   );
 }

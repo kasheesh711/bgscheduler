@@ -13,16 +13,20 @@
 // predicate itself.
 // ----------------------------------------------------------------------------
 
-import { and, asc, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 
 import { getActiveCreditSnapshot } from "@/lib/credit-control/db";
 import * as schema from "@/lib/db/schema";
 import { parseStudentDisplay } from "@/lib/student-schedule/data";
-import { buildParentReportPayload } from "./build";
+import { buildParentReportPayload, packageMetaKey } from "./build";
 import { resolveReportWindow } from "./window";
 
 import type { Database } from "@/lib/db";
-import type { ReportSessionInput } from "./build";
+import type {
+  ReportLedgerEntryInput,
+  ReportPackageMeta,
+  ReportSessionInput,
+} from "./build";
 import type { ParentReportResult, ReportPackageRow, ReportStudent } from "./types";
 
 /**
@@ -116,6 +120,7 @@ export async function getParentClassReport(
     db
       .select({
         wiseStudentId: schema.creditControlPackages.wiseStudentId,
+        wiseClassId: schema.creditControlPackages.wiseClassId,
         packageName: schema.creditControlPackages.packageName,
         subject: schema.creditControlPackages.subject,
         classType: schema.creditControlPackages.classType,
@@ -135,8 +140,19 @@ export async function getParentClassReport(
       ),
     db
       .select({
+        wiseCreditHistoryId: schema.creditControlCreditHistory.wiseCreditHistoryId,
         wiseStudentId: schema.creditControlCreditHistory.wiseStudentId,
+        wiseClassId: schema.creditControlCreditHistory.wiseClassId,
         credit: schema.creditControlCreditHistory.credit,
+        type: schema.creditControlCreditHistory.type,
+        meetingStatus: schema.creditControlCreditHistory.meetingStatus,
+        durationMinutes: schema.creditControlCreditHistory.durationMinutes,
+        createdAtWise: schema.creditControlCreditHistory.createdAtWise,
+        // SESSION-type charges carry the teaching identity and classroom only
+        // inside the raw Wise payload; `userId` may be a bare id string, in
+        // which case `->> 'name'` is NULL and the row renders TEACHER_TBC.
+        rawTeacherName: sql<string | null>`${schema.creditControlCreditHistory.raw} -> 'userId' ->> 'name'`,
+        rawClassroomSubject: sql<string | null>`${schema.creditControlCreditHistory.raw} -> 'classroom' ->> 'subject'`,
       })
       .from(schema.creditControlCreditHistory)
       .where(
@@ -157,21 +173,22 @@ export async function getParentClassReport(
   }
 
   const packagesByStudentId = new Map<string, ReportPackageRow[]>();
-  for (const { wiseStudentId, ...pkg } of packageRows) {
+  const packageMetaByClassKey = new Map<string, ReportPackageMeta>();
+  for (const { wiseStudentId, wiseClassId, ...pkg } of packageRows) {
     const existing = packagesByStudentId.get(wiseStudentId);
     if (existing) existing.push(pkg);
     else packagesByStudentId.set(wiseStudentId, [pkg]);
+    packageMetaByClassKey.set(packageMetaKey(wiseStudentId, wiseClassId), {
+      packageName: pkg.packageName,
+      subject: pkg.subject,
+    });
   }
 
-  const ledgerByStudentId = new Map<string, { entries: number; netCredit: number }>();
+  const ledgerEntriesByStudentId = new Map<string, ReportLedgerEntryInput[]>();
   for (const row of historyRows) {
-    const current = ledgerByStudentId.get(row.wiseStudentId) ?? { entries: 0, netCredit: 0 };
-    current.entries += 1;
-    current.netCredit += row.credit;
-    ledgerByStudentId.set(row.wiseStudentId, current);
-  }
-  for (const totals of ledgerByStudentId.values()) {
-    totals.netCredit = Math.round(totals.netCredit * 100) / 100;
+    const existing = ledgerEntriesByStudentId.get(row.wiseStudentId);
+    if (existing) existing.push(row);
+    else ledgerEntriesByStudentId.set(row.wiseStudentId, [row]);
   }
 
   return {
@@ -182,7 +199,8 @@ export async function getParentClassReport(
       students,
       sessionsByStudentId,
       packagesByStudentId,
-      ledgerByStudentId,
+      ledgerEntriesByStudentId,
+      packageMetaByClassKey,
       generatedAt: input.now ?? new Date(),
     }),
   };

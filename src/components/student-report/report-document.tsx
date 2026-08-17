@@ -12,7 +12,6 @@ import { formatBangkokDateTime } from "@/lib/bangkok-time";
 import type {
   BucketTotal,
   ParentReportPayload,
-  SessionBucket,
 } from "@/lib/student-report/types";
 
 function formatNumber(value: number): string {
@@ -20,54 +19,17 @@ function formatNumber(value: number): string {
   return String(Object.is(rounded, -0) ? 0 : rounded);
 }
 
-function totalFor(
-  totals: readonly BucketTotal[],
-  bucket: SessionBucket,
-): BucketTotal {
-  return (
-    totals.find((total) => total.bucket === bucket) ?? {
-      bucket,
-      sessions: 0,
-      hours: 0,
-      credits: 0,
-    }
-  );
-}
-
-function TotalsGrid({ totals }: { totals: BucketTotal[] }) {
-  const attended = totalFor(totals, "attended");
-  const upcoming = totalFor(totals, "upcoming");
-
-  return (
-    <div className="grid grid-cols-4 gap-3">
-      <StatTile
-        value={formatNumber(attended.sessions)}
-        label="Attended classes"
-      />
-      <StatTile
-        value={formatNumber(attended.hours)}
-        label="Hours attended"
-      />
-      <StatTile
-        value={formatNumber(attended.credits)}
-        label="Credits used"
-        tone="orange"
-      />
-      <StatTile
-        value={formatNumber(upcoming.sessions)}
-        label="Upcoming classes"
-      />
-    </div>
-  );
+function creditsUsed(totals: readonly BucketTotal[]): number {
+  return totals.find((total) => total.bucket === "attended")?.credits ?? 0;
 }
 
 export function ReportDocument({ payload }: { payload: ParentReportPayload }) {
   const { meta } = payload;
   const snapshotAsOf = formatBangkokDateTime(meta.snapshotGeneratedAt);
   const generatedAt = formatBangkokDateTime(meta.generatedAt);
-  const multiMonth =
-    meta.window.fromDateKey.slice(0, 7) !==
-    meta.window.toDateKey.slice(0, 7);
+  const hasLedgerRows = payload.students.some((section) =>
+    section.rows.some((row) => row.source === "ledger"),
+  );
 
   return (
     <article className="begifted report-root">
@@ -95,23 +57,18 @@ export function ReportDocument({ payload }: { payload: ParentReportPayload }) {
 
       {meta.floorWarning || meta.ceilingWarning ? (
         <div className="digits mt-6 border-l-4 border-begifted-orange-500 bg-begifted-orange-50 px-4 py-3 text-sm text-begifted-neutral-700">
-          This statement window extends beyond the data held for this period
-          (records cover {meta.snapshotFloorDateKey} – {meta.snapshotCeilingDateKey}).
-          Classes outside that range are not shown.
+          This statement window extends beyond the session records held for
+          this period (full detail covers {meta.snapshotFloorDateKey} –{" "}
+          {meta.snapshotCeilingDateKey}).{" "}
+          {hasLedgerRows
+            ? "Earlier classes are reconstructed from the billing ledger and marked †; their times are charge timestamps (approximate)."
+            : "Classes outside that range are not shown."}
         </div>
       ) : null}
 
-      <div data-testid="combined-stat-tiles" className="mt-6">
-        <TotalsGrid totals={payload.combined.bucketTotals} />
-      </div>
-
       {payload.students.map((section, index) => {
-        const classAndTeacherLines = section.summaries.filter((line) =>
-          multiMonth
-            ? ["class", "teacher", "month", "modality"].includes(
-                line.dimension,
-              )
-            : line.dimension === "class" || line.dimension === "teacher",
+        const teacherLines = section.summaries.filter(
+          (line) => line.dimension === "teacher",
         );
         const netCredit = formatNumber(section.ledger.netCredit);
 
@@ -132,8 +89,12 @@ export function ReportDocument({ payload }: { payload: ParentReportPayload }) {
               ) : null}
             </div>
 
-            <div className="mt-5">
-              <TotalsGrid totals={section.bucketTotals} />
+            <div className="mt-5 grid grid-cols-4 gap-3">
+              <StatTile
+                value={formatNumber(creditsUsed(section.bucketTotals))}
+                label="Credits used"
+                tone="orange"
+              />
             </div>
 
             <div className="mt-8">
@@ -142,8 +103,8 @@ export function ReportDocument({ payload }: { payload: ParentReportPayload }) {
 
             <div className="mt-8">
               <SummaryTable
-                lines={classAndTeacherLines}
-                title="Summary by class & teacher"
+                lines={teacherLines}
+                title="Summary by teacher"
               />
             </div>
 

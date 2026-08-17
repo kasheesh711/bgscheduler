@@ -20,6 +20,11 @@ export interface ReportClassRow {
   packageName: string;
   subjectBand: string;
   meetingStatus: string;
+  /** Where the row came from: a snapshot session, or a billing-ledger charge
+   * whose session is no longer held (pre-floor or deleted in Wise). */
+  source: "snapshot" | "ledger";
+  /** Ledger rows are timestamped by the charge, not the scheduled start. */
+  timeApproximate: boolean;
 }
 
 export interface BucketTotal {

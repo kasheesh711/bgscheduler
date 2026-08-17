@@ -25,6 +25,8 @@ function classRow(overrides: Partial<ReportClassRow> = {}): ReportClassRow {
     packageName: "Mathematics package",
     subjectBand: "Y8-9 / G7-8 (Int.)",
     meetingStatus: "ENDED",
+    source: "snapshot",
+    timeApproximate: false,
     ...overrides,
   };
 }
@@ -177,9 +179,10 @@ function render(payload: ParentReportPayload = PAYLOAD): string {
 describe("ReportDocument", () => {
   it("renders a data-range warning only when a window warning is set", () => {
     const warningText =
-      "This statement window extends beyond the data held for this period";
+      "This statement window extends beyond the session records held";
 
     expect(render()).toContain(warningText);
+    expect(render()).toContain("Classes outside that range are not shown.");
 
     const clearPayload: ParentReportPayload = {
       ...PAYLOAD,
@@ -190,6 +193,54 @@ describe("ReportDocument", () => {
       },
     };
     expect(render(clearPayload)).not.toContain(warningText);
+  });
+
+  it("marks ledger-backfilled rows and explains them in the warning and footnote", () => {
+    const ledgerPayload: ParentReportPayload = {
+      ...PAYLOAD,
+      students: [
+        {
+          ...PAYLOAD.students[0],
+          rows: [
+            classRow({
+              wiseSessionId: "session-ledger",
+              dateKey: "2026-04-17",
+              startLabel: "14:29",
+              source: "ledger",
+              timeApproximate: true,
+            }),
+            ...PAYLOAD.students[0].rows,
+          ],
+        },
+      ],
+    };
+
+    const html = render(ledgerPayload);
+    expect(html).toContain("14:29 †");
+    expect(html).toContain("Reconstructed from the billing ledger");
+    expect(html).toContain("reconstructed from the billing ledger and marked");
+    expect(html).not.toContain("Classes outside that range are not shown.");
+  });
+
+  it("footnotes fractional package balances only when one exists", () => {
+    const footnote = "Fractional balances mirror pro-rated credit top-ups";
+    expect(render()).not.toContain(footnote);
+
+    const fractionalPayload: ParentReportPayload = {
+      ...PAYLOAD,
+      students: [
+        {
+          ...PAYLOAD.students[0],
+          packages: [
+            {
+              ...PAYLOAD.students[0].packages[0],
+              remainingCredits: 2.6900000000000004,
+            },
+          ],
+        },
+      ],
+    };
+    expect(render(fractionalPayload)).toContain(footnote);
   });
 
   it("preserves unknown statuses and unresolved teachers verbatim", () => {
@@ -214,14 +265,34 @@ describe("ReportDocument", () => {
     expect(render()).toContain("Package balances — as of");
   });
 
-  it("shows the combined attended-session count in the overview tile", () => {
+  it("shows exactly one credits-used card per student and no other stat cards", () => {
     const html = render();
-    const combinedStart = html.indexOf('data-testid="combined-stat-tiles"');
-    const firstStudent = html.indexOf('data-testid="student-report-section"');
-    const combinedMarkup = html.slice(combinedStart, firstStudent);
 
-    expect(combinedMarkup).toMatch(
-      /<p[^>]*>1<\/p><p[^>]*>Attended classes<\/p>/,
-    );
+    expect(html).not.toContain('data-testid="combined-stat-tiles"');
+    expect(html.match(/Credits used/g)).toHaveLength(2);
+    expect(html).toMatch(/<p[^>]*>1<\/p><p[^>]*>Credits used<\/p>/);
+    expect(html).not.toContain("Attended classes");
+    expect(html).not.toContain("Hours attended");
+    expect(html).not.toContain("Upcoming classes");
+  });
+
+  it("summarizes by teacher only", () => {
+    const html = render();
+
+    expect(html).toContain("Summary by teacher");
+    expect(html).not.toContain("Summary by class &amp; teacher");
+    const summaryStart = html.indexOf("Summary by teacher");
+    const summaryMarkup = html.slice(summaryStart, html.indexOf("Package balances"));
+    expect(summaryMarkup).toContain("Kru Mint");
+    expect(summaryMarkup).not.toContain("2026-07");
+    expect(summaryMarkup).not.toContain("modality");
+    expect(summaryMarkup).not.toContain("Dimension");
+  });
+
+  it("omits the minutes column from the class table", () => {
+    const html = render();
+
+    expect(html).not.toContain(">Mins<");
+    expect(html).toContain("Total · 4 sessions");
   });
 });
