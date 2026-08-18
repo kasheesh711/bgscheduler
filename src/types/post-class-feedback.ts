@@ -330,6 +330,12 @@ export interface FeedbackDeductionRow {
   referenceNote: string | null;
   waiverCategory: FeedbackWaiverCategory | null;
   decisionNote: string | null;
+  /** Reviewer (or the auto-approval sweep actor) behind the approve/waive decision. */
+  decisionByEmail: string | null;
+  decisionAt: string | null;
+  /** Finance operator who marked the deduction processed. */
+  processedByEmail: string | null;
+  processedAt: string | null;
   version: number;
   updatedAt: string;
 }

@@ -573,6 +573,13 @@ export async function getPostClassFeedbackDashboard(
       referenceNote: user.capabilities.includes("finance") ? offset?.reference ?? deduction.processingReference : null,
       waiverCategory: user.capabilities.includes("reviewer") ? deduction.waiverCategory : null,
       decisionNote: user.capabilities.includes("reviewer") ? deduction.waiverNote : null,
+      // Audit facts, deliberately ungated within the row-level capability
+      // filter above: finance-only users need decision identity in the CSV
+      // export as payroll evidence, and the values are internal admin emails.
+      decisionByEmail: deduction.decisionByEmail,
+      decisionAt: deduction.decisionAt?.toISOString() ?? null,
+      processedByEmail: deduction.processedByEmail,
+      processedAt: deduction.processedAt?.toISOString() ?? null,
       version: deduction.version,
       updatedAt: (offset?.createdAt ?? deduction.updatedAt).toISOString(),
     };

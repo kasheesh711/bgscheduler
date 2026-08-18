@@ -15,6 +15,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { CsvExportButton } from "@/components/sales-dashboard/csv-export-button";
+import type { CsvColumn } from "@/lib/sales-dashboard/csv";
 import type {
   FeedbackDeductionRow,
   FeedbackDeductionStatus,
@@ -44,6 +46,34 @@ const ACTION_LABELS: Record<DialogAction, string> = {
   reverse: "Record reversal",
 };
 
+/**
+ * CSV columns for the deductions export: the on-screen table order first,
+ * then decision/processing metadata, then stable identifiers. Timestamps are
+ * pre-formatted to Bangkok wall time — the dto ships ISO strings, and letting
+ * `csvValue` emit them raw would hand a Thai finance recipient UTC instants.
+ * Amount stays a raw number so spreadsheets can sum the column.
+ */
+export const DEDUCTION_EXPORT_COLUMNS: CsvColumn<FeedbackDeductionRow>[] = [
+  { key: "tutor", header: "Tutor", value: (row) => row.tutorName },
+  { key: "sessionEndAt", header: "Session end (Bangkok)", value: (row) => (row.sessionEndAt ? formatBangkokDate(row.sessionEndAt, true) : "") },
+  { key: "className", header: "Class", value: (row) => row.className },
+  { key: "students", header: "Students", value: (row) => row.students },
+  { key: "reason", header: "Reason", value: (row) => row.reason },
+  { key: "amount", header: "Amount (THB)", value: (row) => row.amount },
+  { key: "status", header: "Status", value: (row) => row.status },
+  { key: "ledgerVerified", header: "Ledger verified", value: (row) => (row.payoutVerifiedWritten ? "yes" : "no") },
+  { key: "processingMonth", header: "Processing month", value: (row) => row.processingMonth },
+  { key: "referenceNote", header: "Processing reference", value: (row) => row.referenceNote },
+  { key: "waiverCategory", header: "Waiver category", value: (row) => row.waiverCategory },
+  { key: "decisionNote", header: "Decision note", value: (row) => row.decisionNote },
+  { key: "decisionByEmail", header: "Decision by", value: (row) => row.decisionByEmail },
+  { key: "decisionAt", header: "Decision at (Bangkok)", value: (row) => (row.decisionAt ? formatBangkokDate(row.decisionAt, true) : "") },
+  { key: "processedByEmail", header: "Processed by", value: (row) => row.processedByEmail },
+  { key: "processedAt", header: "Processed at (Bangkok)", value: (row) => (row.processedAt ? formatBangkokDate(row.processedAt, true) : "") },
+  { key: "wiseSessionId", header: "Wise session", value: (row) => row.wiseSessionId },
+  { key: "deductionId", header: "Deduction ID", value: (row) => row.id },
+];
+
 function rowSearchText(row: FeedbackDeductionRow): string {
   return [row.tutorName, row.className, ...row.students, row.reason, row.processingMonth ?? ""]
     .join(" ")
@@ -58,10 +88,14 @@ export function DeductionsTab({
   payload,
   submitting,
   onMutation,
+  startDate,
+  endDate,
 }: {
   payload: PostClassFeedbackPayload;
   submitting: boolean;
   onMutation: (request: FeedbackMutationRequest) => Promise<void>;
+  startDate: string;
+  endDate: string;
 }) {
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
@@ -179,6 +213,13 @@ export function DeductionsTab({
             <option value="processed">Processed</option>
             <option value="reversed">Reversed</option>
           </select>
+          <CsvExportButton
+            filename={`feedback-deductions-${startDate}-to-${endDate}.csv`}
+            rows={rows}
+            columns={DEDUCTION_EXPORT_COLUMNS}
+            disabled={rows.length === 0}
+            title="Download the filtered deduction rows with decision metadata"
+          />
         </div>
 
         {rows.length === 0 ? (

@@ -293,7 +293,7 @@ export function PostClassFeedbackWorkspace() {
             <TabsContent value="operations" className="mt-3 min-w-0"><OperationsTab payload={payload} submitting={submitting} onMutation={runMutation} /></TabsContent>
             <TabsContent value="analytics" className="mt-3 min-w-0"><AnalyticsTab payload={payload} /></TabsContent>
             {payload.capabilities.reviewer || payload.capabilities.finance ? (
-              <TabsContent value="deductions" className="mt-3 min-w-0"><DeductionsTab payload={payload} submitting={submitting} onMutation={runMutation} /></TabsContent>
+              <TabsContent value="deductions" className="mt-3 min-w-0"><DeductionsTab payload={payload} submitting={submitting} onMutation={runMutation} startDate={startDate} endDate={endDate} /></TabsContent>
             ) : null}
             {payload.capabilities.finance ? (
               <TabsContent value="payouts" className="mt-3 min-w-0"><PayoutsTab payload={payload} /></TabsContent>
