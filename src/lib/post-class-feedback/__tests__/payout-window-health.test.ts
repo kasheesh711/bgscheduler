@@ -90,21 +90,27 @@ describe("classifyPayoutWindowStaleness", () => {
 
 describe("loadPayoutWindowStaleness", () => {
   /**
-   * The accrual route ships parked, so the check is inert and never touches
-   * the database. When that registry entry gains a schedule this test must be
-   * updated to cover the armed path — that failure is the intended prompt to
-   * re-read the alerting behaviour before the cron goes live.
+   * The accrual route is now armed with an hourly schedule (see
+   * cron-registry.ts), so this suite covers the live query path instead of
+   * the inert parked short-circuit it used to prove.
    */
-  it("returns null, without querying, while the accrual cron is parked", async () => {
-    expect(getCronJobDefinition(PAYOUT_ACCRUAL_JOB_KEY)?.schedule).toBeNull();
+  it("confirms the accrual cron carries a schedule", () => {
+    expect(getCronJobDefinition(PAYOUT_ACCRUAL_JOB_KEY)?.schedule).not.toBeNull();
+  });
 
+  it("queries and returns a staleness verdict now that the cron is armed", async () => {
+    const emptyChain = {
+      where: () => emptyChain,
+      orderBy: () => emptyChain,
+      limit: () => Promise.resolve([]),
+    };
     const db = {
-      select() {
-        throw new Error("loadPayoutWindowStaleness must not query while parked");
-      },
+      select: () => ({ from: () => emptyChain }),
     } as unknown as Database;
 
-    await expect(loadPayoutWindowStaleness(db, new Date("2026-06-02T03:00:00.000Z")))
-      .resolves.toBeNull();
+    const result = await loadPayoutWindowStaleness(db, new Date("2026-06-02T03:00:00.000Z"));
+
+    expect(result).not.toBeNull();
+    expect(result).toMatchObject({ stale: true, anchorMonth: "2026-05", runStatus: null });
   });
 });

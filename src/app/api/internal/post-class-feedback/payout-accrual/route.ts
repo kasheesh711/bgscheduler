@@ -9,12 +9,12 @@ import {
 
 export const maxDuration = 800;
 
-// Parked: no vercel.json entry. Reachable only manually from Data Health
-// (manualOnly + dangerous in cron-registry.ts) until a later, separate flip
-// adds a schedule. Runs the accrual pass unconditionally, then the finalize
-// pass -- which itself no-ops with { skipped: "window-not-ended" } until the
-// 26th-to-25th payout window has ended, so a single invocation is always
-// "accrue, then finalize if the window has ended".
+// Armed: hourly vercel.json cron (33 * * * *), and also runnable manually
+// from Data Health (dangerous + confirm-gated in cron-registry.ts). Runs the
+// accrual pass unconditionally, then the finalize pass -- which itself no-ops
+// with { skipped: "window-not-ended" } until the 26th-to-25th payout window
+// has ended, so a single invocation is always "accrue, then finalize if the
+// window has ended".
 export async function GET(request: NextRequest) {
   const rejection = rejectInvalidCronSecret(request);
   if (rejection) return rejection;

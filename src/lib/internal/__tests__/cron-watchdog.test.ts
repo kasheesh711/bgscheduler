@@ -659,7 +659,7 @@ describe("runCronWatchdog", () => {
     });
   });
 
-  it("adds no payout entry while the accrual cron is parked", async () => {
+  it("adds no payout entry when the staleness loader yields nothing", async () => {
     const state = freshState();
     const sender = makeSender();
     const result = await runCronWatchdog(makeFakeDb(state), {

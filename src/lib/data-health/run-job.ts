@@ -15,6 +15,7 @@ import {
   processDuePostClassNotificationRetries,
   sendPostClassAdminDigest,
 } from "@/lib/post-class-feedback/notifications";
+import { runPayoutAccrualPass, runPayoutFinalizePass } from "@/lib/post-class-feedback/payout-accrual";
 import { runPostClassReminderJob } from "@/lib/post-class-feedback/reminder-job";
 import { runPostClassFeedbackSync } from "@/lib/post-class-feedback/sync";
 import { runWiseSyncRequest } from "@/lib/sync/run-wise-sync";
@@ -135,6 +136,17 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
           }, { status: 503 });
         }
         return NextResponse.json({ ok: true, result });
+      }
+
+      if (jobKey === "post_class_feedback_payout_accrual") {
+        try {
+          const accrual = await runPayoutAccrualPass();
+          const finalize = await runPayoutFinalizePass();
+          return NextResponse.json({ ok: true, accrual, finalize });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Post-class payout accrual failed";
+          return NextResponse.json({ error: message }, { status: 500 });
+        }
       }
 
       if (jobKey === "leave_requests") {
