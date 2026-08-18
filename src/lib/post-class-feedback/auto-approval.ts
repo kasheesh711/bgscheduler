@@ -27,8 +27,26 @@ const SYSTEM_ACTOR = {
   name: "Post-class Auto-Approval",
 };
 
-function autoApproveGraceHours(): number {
-  return Number(process.env.POST_CLASS_AUTO_APPROVE_GRACE_HOURS ?? 24);
+const DEFAULT_AUTO_APPROVE_GRACE_HOURS = 24;
+
+/**
+ * Resolve the auto-approval grace window from the environment, defaulting to
+ * 24 hours whenever the value is absent, blank, non-numeric, or negative.
+ *
+ * The bare `Number(raw ?? 24)` it replaces had two live failure modes once
+ * the accrual cron is scheduled: `""` coerces to `0` (immediate
+ * auto-approval, no grace at all) and a value like `"24h"` coerces to `NaN`,
+ * which poisons the deadline `Date` handed to the query. An explicit `"0"`
+ * remains allowed -- that is a deliberate immediate-approval mode, distinct
+ * from a blank or malformed value.
+ */
+export function resolveAutoApproveGraceHours(
+  raw: string | undefined = process.env.POST_CLASS_AUTO_APPROVE_GRACE_HOURS,
+): number {
+  const trimmed = raw?.trim();
+  if (!trimmed) return DEFAULT_AUTO_APPROVE_GRACE_HOURS;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_AUTO_APPROVE_GRACE_HOURS;
 }
 
 /**
@@ -42,7 +60,7 @@ export async function runPostClassAutoApprovals(
   db: Database = getDb(),
   now: Date = new Date(),
 ): Promise<{ approved: number; failed: number }> {
-  const graceMs = autoApproveGraceHours() * 60 * 60 * 1_000;
+  const graceMs = resolveAutoApproveGraceHours() * 60 * 60 * 1_000;
   const deadline = new Date(now.getTime() - graceMs);
   const candidates = await db.select({
     deductionId: schema.postClassDeductions.id,
