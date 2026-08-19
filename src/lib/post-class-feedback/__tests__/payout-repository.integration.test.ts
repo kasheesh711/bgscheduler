@@ -306,9 +306,11 @@ describe("selectPayoutRunCandidates", () => {
     expect(candidate.reason).toBe("Feedback was incomplete at the deadline");
   });
 
-  it("uses the first teacher submission and ignores an earlier admin event", async () => {
+  it("counts any non-auto human submission regardless of actor role (D-EVT-04)", async () => {
+    // Wise stamps the account's role, not authorship: a tutor holding an admin
+    // account submits as ADMIN. Only auto-submissions are excluded.
     const deductionId = await seedDeduction({
-      id: "teacher-submission",
+      id: "admin-submission",
       endsAt: "2026-07-10T03:00:00.000Z",
       tutorKey: "kevin",
       status: "approved",
@@ -317,6 +319,12 @@ describe("selectPayoutRunCandidates", () => {
       .from(schema.postClassDeductions)
       .where(eq(schema.postClassDeductions.id, deductionId));
     const events = await handle.db.insert(schema.wiseActivityEvents).values([
+      {
+        eventId: "auto-role-less-event",
+        eventName: "SessionFeedbackSubmittedEvent",
+        eventTimestamp: new Date("2026-07-10T00:30:00.000Z"),
+        actorRole: null,
+      },
       {
         eventId: "admin-feedback-event",
         eventName: "SessionFeedbackSubmittedEvent",
@@ -335,14 +343,68 @@ describe("selectPayoutRunCandidates", () => {
       eventTimestamp: schema.wiseActivityEvents.eventTimestamp,
     });
     await handle.db.insert(schema.postClassFeedbackEventLinks).values(
-      events.map((event) => ({
+      events.map((event, index) => ({
         sessionId: deduction.sessionId,
         wiseActivityEventId: event.id,
         wiseEventId: event.eventId,
         eventTimestamp: event.eventTimestamp,
-        autoSubmitted: false,
+        // The earliest event is the Wise auto-submission; the human ones carry
+        // NULL / false, mirroring production rows.
+        autoSubmitted: index === 0 ? true : index === 1 ? null : false,
       })),
     );
+
+    const [candidate] = await selectPayoutRunCandidates(appDb(), WINDOW);
+    expect(candidate.tutorSubmittedAt?.toISOString())
+      .toBe("2026-07-10T01:00:00.000Z");
+  });
+
+  it("derives the submission time from a teacher link whose autoSubmitted is unrecorded", async () => {
+    // Production teacher links carry NULL autoSubmitted; only Wise auto
+    // submissions are stamped true. NULL must count as a tutor submission.
+    const deductionId = await seedDeduction({
+      id: "null-auto-submission",
+      endsAt: "2026-07-10T03:00:00.000Z",
+      tutorKey: "kevin",
+      status: "approved",
+    });
+    const [deduction] = await handle.db.select()
+      .from(schema.postClassDeductions)
+      .where(eq(schema.postClassDeductions.id, deductionId));
+    const events = await handle.db.insert(schema.wiseActivityEvents).values([
+      {
+        eventId: "auto-feedback-event",
+        eventName: "SessionFeedbackSubmittedEvent",
+        eventTimestamp: new Date("2026-07-10T01:00:00.000Z"),
+        actorRole: "TEACHER",
+      },
+      {
+        eventId: "manual-feedback-event",
+        eventName: "SessionFeedbackSubmittedEvent",
+        eventTimestamp: new Date("2026-07-10T02:00:00.000Z"),
+        actorRole: "TEACHER",
+      },
+    ]).returning({
+      id: schema.wiseActivityEvents.id,
+      eventId: schema.wiseActivityEvents.eventId,
+      eventTimestamp: schema.wiseActivityEvents.eventTimestamp,
+    });
+    await handle.db.insert(schema.postClassFeedbackEventLinks).values([
+      {
+        sessionId: deduction.sessionId,
+        wiseActivityEventId: events[0].id,
+        wiseEventId: events[0].eventId,
+        eventTimestamp: events[0].eventTimestamp,
+        autoSubmitted: true,
+      },
+      {
+        sessionId: deduction.sessionId,
+        wiseActivityEventId: events[1].id,
+        wiseEventId: events[1].eventId,
+        eventTimestamp: events[1].eventTimestamp,
+        autoSubmitted: null,
+      },
+    ]);
 
     const [candidate] = await selectPayoutRunCandidates(appDb(), WINDOW);
     expect(candidate.tutorSubmittedAt?.toISOString())
@@ -488,6 +550,89 @@ describe("acquirePayoutRunLease", () => {
 
     expect(finalized.status).toBe("partial");
     expect(finalized.publishedAt).toBeNull();
+  });
+
+  it("does not treat a newly derivable submission time as drift on a written line that stored none", async () => {
+    // Legacy rows were written while the submission subquery dropped
+    // NULL-autoSubmitted links, so they stored no timestamp. Deriving one now
+    // must not brick the publish path.
+    const { line } = await seedWrittenPayoutDeduction();
+    const [written] = await handle.db.select({
+      tutorSubmittedAt: schema.postClassPayoutRunLines.tutorSubmittedAt,
+    }).from(schema.postClassPayoutRunLines)
+      .where(eq(schema.postClassPayoutRunLines.id, line.id));
+    expect(written.tutorSubmittedAt).toBeNull();
+    const [event] = await handle.db.insert(schema.wiseActivityEvents).values({
+      eventId: "late-discovered-submission",
+      eventName: "SessionFeedbackSubmittedEvent",
+      eventTimestamp: new Date("2026-07-10T05:00:00.000Z"),
+      actorRole: "TEACHER",
+    }).returning({
+      id: schema.wiseActivityEvents.id,
+      eventId: schema.wiseActivityEvents.eventId,
+      eventTimestamp: schema.wiseActivityEvents.eventTimestamp,
+    });
+    await handle.db.insert(schema.postClassFeedbackEventLinks).values({
+      sessionId: line.sessionId,
+      wiseActivityEventId: event.id,
+      wiseEventId: event.eventId,
+      eventTimestamp: event.eventTimestamp,
+      autoSubmitted: null,
+    });
+
+    const acquired = await acquireRun();
+    const finalized = await releaseRun(acquired, false);
+
+    expect(finalized.status).toBe("published");
+  });
+
+  it("still flags drift when a written line's stored submission time changes", async () => {
+    const deductionId = await seedDeduction({
+      id: "stored-submission-drift",
+      endsAt: "2026-07-10T03:00:00.000Z",
+      tutorKey: "kevin",
+      status: "approved",
+    });
+    const [deduction] = await handle.db.select()
+      .from(schema.postClassDeductions)
+      .where(eq(schema.postClassDeductions.id, deductionId));
+    const [event] = await handle.db.insert(schema.wiseActivityEvents).values({
+      eventId: "original-submission-event",
+      eventName: "SessionFeedbackSubmittedEvent",
+      eventTimestamp: new Date("2026-07-10T04:00:00.000Z"),
+      actorRole: "TEACHER",
+    }).returning({
+      id: schema.wiseActivityEvents.id,
+      eventId: schema.wiseActivityEvents.eventId,
+      eventTimestamp: schema.wiseActivityEvents.eventTimestamp,
+    });
+    await handle.db.insert(schema.postClassFeedbackEventLinks).values({
+      sessionId: deduction.sessionId,
+      wiseActivityEventId: event.id,
+      wiseEventId: event.eventId,
+      eventTimestamp: event.eventTimestamp,
+      autoSubmitted: null,
+    });
+    const acquired = await acquireRun();
+    const [line] = acquired.lines;
+    expect(line.tutorSubmittedAt?.toISOString()).toBe("2026-07-10T04:00:00.000Z");
+    await markPayoutLine(appDb(), {
+      runId: acquired.run.id,
+      lineId: line.id,
+      leaseToken: acquired.leaseToken,
+      patch: {
+        matchStatus: "matched",
+        writeStatus: "written",
+        insertedRowNumber: 42,
+        writtenAt: new Date(),
+      },
+    });
+    await releaseRun(acquired, false);
+    await handle.db.update(schema.postClassFeedbackEventLinks).set({
+      eventTimestamp: new Date("2026-07-11T04:00:00.000Z"),
+    }).where(eq(schema.postClassFeedbackEventLinks.wiseActivityEventId, event.id));
+
+    await expect(acquireRun()).rejects.toBeInstanceOf(PostClassConflictError);
   });
 
   it("rejects a second pass while the first 15-minute lease is active", async () => {

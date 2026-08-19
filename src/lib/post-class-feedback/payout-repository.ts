@@ -149,8 +149,13 @@ export async function selectPayoutRunCandidates(
     )
     .where(and(
       inArray(schema.postClassFeedbackEventLinks.sessionId, sessionIds),
-      ne(schema.postClassFeedbackEventLinks.autoSubmitted, true),
-      sql`lower(btrim(coalesce(${schema.wiseActivityEvents.actorRole}, ''))) = 'teacher'`,
+      // Genuine human submissions carry a NULL autoSubmitted; `<> true`
+      // would drop them under three-valued logic, so the predicate must be
+      // NULL-safe. No actor-role gate: Wise stamps the account's role, not
+      // authorship, so any non-auto event qualifies (D-EVT-04) — matching
+      // `deriveEventTimingEvidence` and the dashboard's Submitted column.
+      // Must stay identical to the drift query's predicate below.
+      sql`${schema.postClassFeedbackEventLinks.autoSubmitted} IS DISTINCT FROM true`,
     ))
     .groupBy(schema.postClassFeedbackEventLinks.sessionId);
   const assessments = await db.select({
@@ -475,8 +480,11 @@ async function findWrittenPayoutLinePayloadDrift(
     )
     .where(and(
       inArray(schema.postClassFeedbackEventLinks.sessionId, sessionIds),
-      eq(schema.postClassFeedbackEventLinks.autoSubmitted, false),
-      sql`lower(btrim(coalesce(${schema.wiseActivityEvents.actorRole}, ''))) = 'teacher'`,
+      // Identical to the candidate query's predicate above: NULL means "not
+      // proven auto" and the actor role is deliberately not gated (D-EVT-04).
+      // Any divergence between the two queries makes freshly written lines
+      // register as payload drift on the very next pass.
+      sql`${schema.postClassFeedbackEventLinks.autoSubmitted} IS DISTINCT FROM true`,
     ))
     .groupBy(schema.postClassFeedbackEventLinks.sessionId);
   const assessments = await db.select({
@@ -547,7 +555,11 @@ async function findWrittenPayoutLinePayloadDrift(
       || !sameInstant(line.scheduledStartAt, current.scheduledStartAt)
       || !sameInstant(line.scheduledEndAt, current.scheduledEndAt)
       || !sameInstant(line.deadlineAt, current.deadlineAt)
-      || !sameInstant(line.tutorSubmittedAt, current.tutorSubmittedAt)
+      // Rows written while the submission subquery dropped NULL-autoSubmitted
+      // links stored no timestamp; a newly derivable value does not contradict
+      // the blank cell Google received, so only a stored value can drift.
+      || (line.tutorSubmittedAt !== null
+        && !sameInstant(line.tutorSubmittedAt, current.tutorSubmittedAt))
       || line.amountMinor !== current.amountMinor
       || line.currency !== current.currency
       || line.financeMonth !== current.financeMonth
