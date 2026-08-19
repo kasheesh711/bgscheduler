@@ -174,7 +174,16 @@ async function refreshAccessToken(
       updatedAt: new Date(),
     })
     .where(eq(schema.googleOAuthTokens.email, email));
-  revalidateTag(SALES_DASHBOARD_CACHE_TAG, "max");
+  // The refreshed token is already persisted above. Outside a Next.js request
+  // context (the scripts/ maintenance CLIs run this module via tsx),
+  // revalidateTag throws an invariant — swallow it so a background refresh
+  // never aborts a long fleet operation; the app-side cache sweep still runs
+  // whenever a request context exists.
+  try {
+    revalidateTag(SALES_DASHBOARD_CACHE_TAG, "max");
+  } catch (error) {
+    console.error("sales-dashboard cache revalidation skipped:", error instanceof Error ? error.message : error);
+  }
   return body.access_token;
 }
 
