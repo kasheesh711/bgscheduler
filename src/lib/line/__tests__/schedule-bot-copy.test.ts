@@ -286,8 +286,9 @@ describe("credit copy", () => {
             { subject: "Mathematics", packageName: "Maths 20", remainingCredits: 3.5 },
             { subject: "", packageName: "Physics 10", remainingCredits: 1 },
           ],
+          archivedCount: 0,
         },
-        { studentName: "Jidapa (Jasmine.Th) Thamprida", totalRemaining: 0, packages: [] },
+        { studentName: "Jidapa (Jasmine.Th) Thamprida", totalRemaining: 0, packages: [], archivedCount: 0 },
       ],
       url: "https://example.test/student-report/report?student=a&from=2026-07-06&to=2026-08-05",
       truncatedCount: 0,
@@ -311,6 +312,7 @@ describe("credit copy", () => {
         studentName: "A (A.Bb) C",
         totalRemaining: 1,
         packages: [{ subject: "Math", packageName: "M", remainingCredits: 1 }],
+        archivedCount: 0,
       }],
       url: "https://example.test/r",
       truncatedCount: 2,
@@ -321,16 +323,50 @@ describe("credit copy", () => {
     expect(text).toContain("Report covers the first 8 students (+2 more).");
   });
 
+  it("appends the hidden-count line after the package bullets", () => {
+    const text = creditBalanceReply({
+      students: [{
+        studentName: "A (A.Bb) C",
+        totalRemaining: 5,
+        packages: [{ subject: "Math", packageName: "M", remainingCredits: 5 }],
+        archivedCount: 2,
+      }],
+      url: "https://example.test/r",
+      truncatedCount: 0,
+      generatedAt: GENERATED_AT,
+    });
+
+    const lines = text.split("\n");
+    expect(lines.indexOf("🗂 2 finished packages hidden")).toBe(lines.indexOf("• Math: 5") + 1);
+  });
+
+  it("singularizes the hidden-count line and shows it under a fully-archived student", () => {
+    const text = creditBalanceReply({
+      students: [{
+        studentName: "A (A.Bb) C",
+        totalRemaining: 0,
+        packages: [],
+        archivedCount: 1,
+      }],
+      url: "https://example.test/r",
+      truncatedCount: 0,
+      generatedAt: GENERATED_AT,
+    });
+
+    expect(text).toContain("💳 A (A.Bb) C — no active packages");
+    expect(text).toContain("🗂 1 finished package hidden");
+  });
+
   it("formats digest rows grouped by date with weekday and D/M dates", () => {
     const text = creditDigestMessage({
       digestDateBkk: "2026-08-05",
       runsOut: [
-        { exhaustDateBkk: "2026-08-06", label: "Copter.Th", subject: "Physics", remainingCredits: 1.5 },
-        { exhaustDateBkk: "2026-08-06", label: "Mint.Ch", subject: "Chemistry", remainingCredits: 1 },
-        { exhaustDateBkk: "2026-08-08", label: "Ann.Bb", subject: "Biology", remainingCredits: 2 },
+        { exhaustDateBkk: "2026-08-06", label: "Copter.Th", subject: "Physics", remainingCredits: 1.5, studentKey: "s-copter" },
+        { exhaustDateBkk: "2026-08-06", label: "Mint.Ch", subject: "Chemistry", remainingCredits: 1, studentKey: "s-mint" },
+        { exhaustDateBkk: "2026-08-08", label: "Ann.Bb", subject: "Biology", remainingCredits: 2, studentKey: "s-ann" },
       ],
       alreadyOut: [
-        { label: "Zed.Aa", subject: "Maths", remainingCredits: -1.5, nextClassBkk: "2026-08-07" },
+        { label: "Zed.Aa", subject: "Maths", remainingCredits: -1.5, nextClassBkk: "2026-08-07", studentKey: "s-zed" },
       ],
       dashboardUrl: "https://example.test/credit-control",
       generatedAt: GENERATED_AT,
@@ -345,8 +381,55 @@ describe("credit copy", () => {
     expect(text).toContain("• Ann.Bb — Biology (2 left)");
     // The date header appears once for the two same-day students.
     expect(text.match(/6\/8 \(Thu\)/g)).toHaveLength(1);
+    // No ownership map → everyone is unassigned → the solo section header is
+    // suppressed and the output keeps the pre-grouping shape.
+    expect(text).not.toContain("👤");
     expect(text).toContain("Dashboard: https://example.test/credit-control");
     expect(text).toContain("Data as of 5 Aug 08:50 Wise sync.");
+  });
+
+  it("sections the digest per assigned admin in registry order, Unassigned last", () => {
+    const ownership = new Map([
+      ["s-zed", { key: "kem", name: "Kem" }],
+      ["s-copter", { key: "palm", name: "Palm" }],
+      ["s-mint", { key: "kem", name: "Kem" }],
+      // s-ann deliberately unmapped → Unassigned.
+    ]);
+    const text = creditDigestMessage({
+      digestDateBkk: "2026-08-05",
+      runsOut: [
+        { exhaustDateBkk: "2026-08-06", label: "Copter.Th", subject: "Physics", remainingCredits: 1.5, studentKey: "s-copter" },
+        { exhaustDateBkk: "2026-08-06", label: "Mint.Ch", subject: "Chemistry", remainingCredits: 1, studentKey: "s-mint" },
+        { exhaustDateBkk: "2026-08-08", label: "Ann.Bb", subject: "Biology", remainingCredits: 2, studentKey: "s-ann" },
+      ],
+      alreadyOut: [
+        { label: "Zed.Aa", subject: "Maths", remainingCredits: -1.5, nextClassBkk: "2026-08-07", studentKey: "s-zed" },
+      ],
+      dashboardUrl: "https://example.test/credit-control",
+      generatedAt: GENERATED_AT,
+      adminOwnership: ownership,
+    });
+
+    // Registry order: Palm before Kem; Unassigned trails.
+    const palmAt = text.indexOf("👤 Palm");
+    const kemAt = text.indexOf("👤 Kem");
+    const unassignedAt = text.indexOf("👤 Unassigned");
+    expect(palmAt).toBeGreaterThan(-1);
+    expect(kemAt).toBeGreaterThan(palmAt);
+    expect(unassignedAt).toBeGreaterThan(kemAt);
+
+    // Inside Kem's section the already-out row leads the runs-out block.
+    const kemSection = text.slice(kemAt, unassignedAt);
+    expect(kemSection).toContain("Already out, classes still scheduled:");
+    expect(kemSection).toContain("• Zed.Aa — Maths (-1.5, next class 7/8)");
+    expect(kemSection.indexOf("Already out")).toBeLessThan(kemSection.indexOf("Runs out:"));
+    expect(kemSection).toContain("• Mint.Ch — Chemistry (1 left)");
+
+    // The same exhaust date is re-announced per section (Palm and Kem both
+    // have a 6/8 student).
+    expect(text.match(/6\/8 \(Thu\)/g)).toHaveLength(2);
+    expect(text.slice(palmAt, kemAt)).toContain("• Copter.Th — Physics (1.5 left)");
+    expect(text.slice(unassignedAt)).toContain("• Ann.Bb — Biology (2 left)");
   });
 
   it("sends a heartbeat line when nothing is running out", () => {
@@ -368,6 +451,7 @@ describe("credit copy", () => {
       label: `Student${index}.Xx`,
       subject: "Some Fairly Long Subject Name",
       remainingCredits: 1.5,
+      studentKey: `s-${index}`,
     }));
 
     const text = creditDigestMessage({
@@ -381,6 +465,41 @@ describe("credit copy", () => {
     expect(text.length).toBeLessThan(5000);
     expect(text).toMatch(/…\+\d+ more — see the dashboard\./);
     expect(text).toContain("Dashboard:"); // footer survives truncation
+  });
+
+  it("never strands an admin header whose rows were all truncated away", () => {
+    // Palm's rows exhaust the budget; every Kem row is dropped, so the Kem
+    // header must not render (a header may only appear above its own rows).
+    const ownership = new Map<string, { key: string; name: string }>();
+    const runsOut = Array.from({ length: 400 }, (_, index) => {
+      const key = `s-${index}`;
+      ownership.set(key, index < 200 ? { key: "palm", name: "Palm" } : { key: "kem", name: "Kem" });
+      return {
+        exhaustDateBkk: "2026-08-06",
+        label: `Student${index}.Xx`,
+        subject: "Some Fairly Long Subject Name",
+        remainingCredits: 1.5,
+        studentKey: key,
+      };
+    });
+
+    const text = creditDigestMessage({
+      digestDateBkk: "2026-08-05",
+      runsOut,
+      alreadyOut: [],
+      dashboardUrl: "https://example.test/credit-control",
+      generatedAt: GENERATED_AT,
+      adminOwnership: ownership,
+    });
+
+    expect(text.length).toBeLessThan(5000);
+    expect(text).toContain("👤 Palm");
+    expect(text).not.toContain("👤 Kem");
+    expect(text).toMatch(/…\+\d+ more — see the dashboard\./);
+    // Dropped-row count covers every student row that did not render.
+    const rendered = (text.match(/^• /gm) ?? []).length;
+    const dropped = Number(/…\+(\d+) more/.exec(text)?.[1]);
+    expect(rendered + dropped).toBe(400);
   });
 
   it("trims credit numbers without losing real decimals", () => {

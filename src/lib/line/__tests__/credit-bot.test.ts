@@ -273,6 +273,125 @@ describe("DM balance reply", () => {
   });
 });
 
+describe("CRED-BOT-R1 finished-package filter", () => {
+  const KEY = "solo (solo.aa) a::";
+
+  function soloStudent() {
+    // Blank parent → no sibling fan-out, so the queue is just packages (+ the
+    // pair query when a package sits at ≤ 0).
+    return student({ studentKey: KEY, studentName: "Solo (Solo.Aa) A", parentName: "" });
+  }
+
+  function run(db: Database, respond = vi.fn().mockResolvedValue(undefined)) {
+    return handleCreditCommand({
+      db,
+      lineUserId: ADMIN,
+      command: "Solo.Aa",
+      surface: { kind: "dm" },
+      respond,
+      now: () => NOW,
+      baseUrl: "https://example.test",
+    }).then(() => respond.mock.calls[0][0] as string);
+  }
+
+  it("hides a drained package with no upcoming classes and counts it", async () => {
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue(
+      { snapshot: SNAP, rows: [soloStudent()] } as never,
+    );
+    const { db, queue } = makeDb([
+      [
+        { studentKey: KEY, wiseClassId: "class-live", wiseStudentId: "stu_1", subject: "Y9-11 / G8-10 (Int.)", packageName: "Solo", remainingCredits: 6 },
+        { studentKey: KEY, wiseClassId: "class-old", wiseStudentId: "stu_1", subject: "Y2-8 / G1-7 (Int.)", packageName: "Solo", remainingCredits: 0 },
+      ],
+      // Pair query: only the live payband still has upcoming sessions.
+      [{ wiseClassId: "class-live", wiseStudentId: "stu_1" }],
+    ]);
+
+    const text = await run(db);
+
+    expect(queue).toHaveLength(0);
+    // Total sums visible rows only, and the stale payband line is gone.
+    expect(text).toContain("💳 Solo (Solo.Aa) A — 6 credits left");
+    expect(text).toContain("• Y9-11 / G8-10 (Int.): 6");
+    expect(text).not.toContain("Y2-8");
+    expect(text).toContain("🗂 1 finished package hidden");
+  });
+
+  it("keeps a drained package visible while classes are still booked", async () => {
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue(
+      { snapshot: SNAP, rows: [soloStudent()] } as never,
+    );
+    const { db } = makeDb([
+      [{ studentKey: KEY, wiseClassId: "class-sat", wiseStudentId: "stu_1", subject: "SAT", packageName: "Solo", remainingCredits: -45.5 }],
+      [{ wiseClassId: "class-sat", wiseStudentId: "stu_1" }],
+    ]);
+
+    const text = await run(db);
+
+    expect(text).toContain("💳 Solo (Solo.Aa) A — -45.5 credits left");
+    expect(text).toContain("• SAT: -45.5");
+    expect(text).not.toContain("🗂");
+  });
+
+  it("keeps a positive package visible even with nothing booked yet", async () => {
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue(
+      { snapshot: SNAP, rows: [soloStudent()] } as never,
+    );
+    const { db } = makeDb([
+      [
+        { studentKey: KEY, wiseClassId: "class-sat", wiseStudentId: "stu_1", subject: "SAT", packageName: "Solo", remainingCredits: 40 },
+        { studentKey: KEY, wiseClassId: "class-old", wiseStudentId: "stu_1", subject: "11+/13+", packageName: "Solo", remainingCredits: 0 },
+      ],
+      [], // no upcoming sessions at all
+    ]);
+
+    const text = await run(db);
+
+    expect(text).toContain("• SAT: 40");
+    expect(text).toContain("🗂 1 finished package hidden");
+  });
+
+  it("shows no-active-packages plus the hidden count when everything is finished", async () => {
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue(
+      { snapshot: SNAP, rows: [soloStudent()] } as never,
+    );
+    const { db } = makeDb([
+      [
+        { studentKey: KEY, wiseClassId: "camp", wiseStudentId: "stu_1", subject: "13-17 Jul | 8:30-15:00", packageName: "Creative STEAM Camp: Year 3–4", remainingCredits: 0 },
+        { studentKey: KEY, wiseClassId: "receipt", wiseStudentId: "stu_1", subject: "Package: Creative STEAM (Receipt)", packageName: "Solo", remainingCredits: 0 },
+      ],
+      [],
+    ]);
+
+    const text = await run(db);
+
+    expect(text).toContain("💳 Solo (Solo.Aa) A — no active packages");
+    expect(text).toContain("🗂 2 finished packages hidden");
+    // The student still rides the report link even with nothing visible.
+    const url = new URL(text.split("\n").find((line) => line.startsWith("https://"))!);
+    expect(url.searchParams.getAll("student")).toEqual([KEY]);
+  });
+
+  it("skips the pair query entirely when every package is positive", async () => {
+    vi.mocked(searchCurrentLineStudentsWithSnapshot).mockResolvedValue(
+      { snapshot: SNAP, rows: [soloStudent()] } as never,
+    );
+    // A sentinel entry sits behind the packages select; it must survive the
+    // command untouched — consuming it means the pair query ran needlessly.
+    const sentinel = [{ wiseClassId: "never-read", wiseStudentId: "never-read" }];
+    const { db, queue } = makeDb([
+      [{ studentKey: KEY, wiseClassId: "class-live", wiseStudentId: "stu_1", subject: "Math", packageName: "Solo", remainingCredits: 3 }],
+      sentinel,
+    ]);
+
+    const text = await run(db);
+
+    expect(queue).toEqual([sentinel]);
+    expect(text).toContain("• Math: 3");
+    expect(text).not.toContain("🗂");
+  });
+});
+
 describe("CRED-BOT-G1 staff-chat gate", () => {
   it.each([
     ["family audience", [{ audience: "family" }]],

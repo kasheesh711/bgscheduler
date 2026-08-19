@@ -15,6 +15,11 @@
 
 import { BANGKOK_TIME_ZONE } from "@/lib/bangkok-time";
 import { formatMonthLabel } from "@/lib/calendar/month-grid";
+import {
+  ADMIN_OWNER_REGISTRY,
+  UNASSIGNED_ADMIN_KEY,
+  UNASSIGNED_ADMIN_NAME,
+} from "@/lib/credit-control/config";
 import { REPORT_MAX_STUDENTS } from "@/lib/student-report/params";
 
 const THAI_MONTHS = [
@@ -511,7 +516,11 @@ export function creditDigestRegistered(enabled: boolean): string {
 /**
  * The /credit reply: one 💳 block per sibling (queried student first), then the
  * Parent Report link and the snapshot-age caveat. Balances are raw Wise
- * remaining so the message always agrees with the page the link opens.
+ * remaining over the VISIBLE packages only: finished packages (≤ 0 credits
+ * with no upcoming class — old paybands, ended camps, receipt classrooms) are
+ * hidden and surface as a per-student `🗂 N hidden` count. The linked report
+ * still lists everything, so a family total here can read HIGHER than the
+ * report page when hidden stale packages are negative.
  */
 export function creditBalanceReply({
   students,
@@ -523,6 +532,7 @@ export function creditBalanceReply({
     studentName: string;
     totalRemaining: number;
     packages: Array<{ subject: string; packageName: string; remainingCredits: number }>;
+    archivedCount: number;
   }>;
   url: string;
   truncatedCount: number;
@@ -532,13 +542,18 @@ export function creditBalanceReply({
   for (const student of students) {
     if (student.packages.length === 0) {
       lines.push(`💳 ${student.studentName} — no active packages`);
-      continue;
+    } else {
+      lines.push(
+        `💳 ${student.studentName} — ${formatCredits(student.totalRemaining)} ${creditsNoun(student.totalRemaining)} left`,
+      );
+      for (const pkg of student.packages) {
+        lines.push(`• ${pkg.subject || pkg.packageName}: ${formatCredits(pkg.remainingCredits)}`);
+      }
     }
-    lines.push(
-      `💳 ${student.studentName} — ${formatCredits(student.totalRemaining)} ${creditsNoun(student.totalRemaining)} left`,
-    );
-    for (const pkg of student.packages) {
-      lines.push(`• ${pkg.subject || pkg.packageName}: ${formatCredits(pkg.remainingCredits)}`);
+    if (student.archivedCount > 0) {
+      lines.push(
+        `🗂 ${student.archivedCount} finished ${student.archivedCount === 1 ? "package" : "packages"} hidden`,
+      );
     }
   }
   lines.push("", "Report (last 30 days):", url);
@@ -556,6 +571,8 @@ export interface CreditDigestRunOutRow {
   label: string;
   subject: string;
   remainingCredits: number;
+  /** Credit-control student key — joins to admin ownership for grouping. */
+  studentKey: string;
 }
 
 export interface CreditDigestAlreadyOutRow {
@@ -564,16 +581,29 @@ export interface CreditDigestAlreadyOutRow {
   remainingCredits: number;
   /** Bangkok date of the next scheduled class. */
   nextClassBkk: string;
+  /** Credit-control student key — joins to admin ownership for grouping. */
+  studentKey: string;
 }
 
 /** LINE hard-caps a text message at 5,000 chars; leave headroom for safety. */
 const DIGEST_CHAR_BUDGET = 4500;
 
 /**
- * The daily digest posted into registered staff groups. Grouped by exhaust
- * date; the "already out" bucket leads because those families are the most
- * urgent. Truncates to the LINE text cap with an explicit "+N more" line so a
- * long list reads as truncated, never as complete.
+ * The daily digest posted into registered staff groups, sectioned per assigned
+ * admin (credit_control_admin_ownership): registry order first, then any
+ * unrecognized adminKeys (label-sorted, kept distinct rather than folded into
+ * Unassigned), then Unassigned last; admins with nothing to report are
+ * omitted. Inside each section the "already out" bucket leads because those
+ * families are the most urgent, then "runs out" grouped by exhaust date (a
+ * date header can repeat across sections — intended). When the ONLY section
+ * is Unassigned the 👤 header is suppressed and the output matches the
+ * pre-grouping format exactly.
+ *
+ * Truncates to the LINE text cap with an explicit "+N more" line so a long
+ * list reads as truncated, never as complete. Structural lines (admin/date
+ * headers, sub-labels) are committed only together with their first student
+ * row, so truncation can never strand a header or misattribute a row to the
+ * wrong admin.
  */
 export function creditDigestMessage({
   digestDateBkk,
@@ -581,12 +611,14 @@ export function creditDigestMessage({
   alreadyOut,
   dashboardUrl,
   generatedAt,
+  adminOwnership,
 }: {
   digestDateBkk: string;
   runsOut: CreditDigestRunOutRow[];
   alreadyOut: CreditDigestAlreadyOutRow[];
   dashboardUrl: string;
   generatedAt: Date;
+  adminOwnership?: ReadonlyMap<string, { key: string; name: string }>;
 }): string {
   const footer = ["", `Dashboard: ${dashboardUrl}`, dataAsOfLine(generatedAt)];
 
@@ -601,38 +633,95 @@ export function creditDigestMessage({
     `⚠️ Credit runout — next 7 days (${dmyFromKey(digestDateBkk)})`,
   ];
 
-  const entries: string[][] = [];
-  if (alreadyOut.length > 0) {
-    entries.push(["", "Already out, classes still scheduled:"]);
-    for (const row of alreadyOut) {
-      entries.push([
-        `• ${row.label} — ${row.subject} (${formatCredits(row.remainingCredits)}, next class ${shortDmFromKey(row.nextClassBkk)})`,
-      ]);
-    }
+  // Partition both buckets by owning admin. Filtering preserves the callers'
+  // global sort (date, then label) inside every section.
+  const ownerOf = (studentKey: string) =>
+    adminOwnership?.get(studentKey) ?? { key: UNASSIGNED_ADMIN_KEY, name: UNASSIGNED_ADMIN_NAME };
+  interface AdminSection {
+    key: string;
+    name: string;
+    alreadyOut: CreditDigestAlreadyOutRow[];
+    runsOut: CreditDigestRunOutRow[];
   }
-  if (runsOut.length > 0) {
-    entries.push(["", "Runs out:"]);
-    let currentDate = "";
-    for (const row of runsOut) {
-      if (row.exhaustDateBkk !== currentDate) {
-        currentDate = row.exhaustDateBkk;
-        entries.push([`${shortDmFromKey(currentDate)} (${weekdayFromKey(currentDate)})`]);
+  const sections = new Map<string, AdminSection>();
+  const sectionFor = (studentKey: string): AdminSection => {
+    const owner = ownerOf(studentKey);
+    const existing = sections.get(owner.key);
+    if (existing) return existing;
+    const created: AdminSection = { key: owner.key, name: owner.name, alreadyOut: [], runsOut: [] };
+    sections.set(owner.key, created);
+    return created;
+  };
+  for (const row of alreadyOut) sectionFor(row.studentKey).alreadyOut.push(row);
+  for (const row of runsOut) sectionFor(row.studentKey).runsOut.push(row);
+
+  const registryRank = new Map<string, number>(
+    ADMIN_OWNER_REGISTRY.map((admin, index) => [admin.key, index]),
+  );
+  const rank = (key: string): number =>
+    registryRank.get(key)
+      ?? (key === UNASSIGNED_ADMIN_KEY ? Number.MAX_SAFE_INTEGER : ADMIN_OWNER_REGISTRY.length);
+  const ordered = [...sections.values()].sort(
+    (a, b) => rank(a.key) - rank(b.key) || a.name.localeCompare(b.name),
+  );
+  const suppressHeaders = ordered.length === 1 && ordered[0].key === UNASSIGNED_ADMIN_KEY;
+
+  const entries: string[][] = [];
+  for (const section of ordered) {
+    if (!suppressHeaders) {
+      entries.push(["", `👤 ${section.name}`]);
+    }
+    if (section.alreadyOut.length > 0) {
+      entries.push(suppressHeaders
+        ? ["", "Already out, classes still scheduled:"]
+        : ["Already out, classes still scheduled:"]);
+      for (const row of section.alreadyOut) {
+        entries.push([
+          `• ${row.label} — ${row.subject} (${formatCredits(row.remainingCredits)}, next class ${shortDmFromKey(row.nextClassBkk)})`,
+        ]);
       }
-      entries.push([
-        `• ${row.label} — ${row.subject} (${formatCredits(row.remainingCredits)} left)`,
-      ]);
+    }
+    if (section.runsOut.length > 0) {
+      entries.push(suppressHeaders || section.alreadyOut.length > 0
+        ? ["", "Runs out:"]
+        : ["Runs out:"]);
+      let currentDate = "";
+      for (const row of section.runsOut) {
+        if (row.exhaustDateBkk !== currentDate) {
+          currentDate = row.exhaustDateBkk;
+          entries.push([`${shortDmFromKey(currentDate)} (${weekdayFromKey(currentDate)})`]);
+        }
+        entries.push([
+          `• ${row.label} — ${row.subject} (${formatCredits(row.remainingCredits)} left)`,
+        ]);
+      }
     }
   }
 
-  // Flatten entry groups until the budget runs out; count dropped student rows.
+  // Flatten entry groups until the budget runs out; count dropped student
+  // rows. Structural groups (headers, date lines) are held pending and only
+  // flushed together with the first "•" row that fits under them — once a row
+  // has been dropped nothing further flushes, so no header renders without at
+  // least one of its own rows beneath it.
   let used = lines.join("\n").length + footer.join("\n").length;
   let dropped = 0;
+  let pending: string[][] = [];
+  let pendingChars = 0;
   for (const group of entries) {
+    if (!group[0]?.startsWith("•")) {
+      pending.push(group);
+      pendingChars += group.join("\n").length + 1;
+      continue;
+    }
     const chunk = group.join("\n");
-    if (dropped === 0 && used + chunk.length + 1 <= DIGEST_CHAR_BUDGET) {
+    if (dropped === 0 && used + pendingChars + chunk.length + 1 <= DIGEST_CHAR_BUDGET) {
+      for (const held of pending) lines.push(...held);
+      used += pendingChars;
+      pending = [];
+      pendingChars = 0;
       lines.push(...group);
       used += chunk.length + 1;
-    } else if (group[0]?.startsWith("•")) {
+    } else {
       dropped += 1;
     }
   }

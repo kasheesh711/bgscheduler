@@ -54,6 +54,7 @@ describe("computeCreditRunouts", () => {
       label: "Copter.Th",
       subject: "Physics",
       remainingCredits: 1.5,
+      studentKey: pkg().studentKey,
     }]);
   });
 
@@ -97,6 +98,7 @@ describe("computeCreditRunouts", () => {
       subject: "Physics",
       remainingCredits: -1.5,
       nextClassBkk: TODAY,
+      studentKey: pkg().studentKey,
     }]);
   });
 
@@ -216,14 +218,19 @@ function makeDb(selectResults: unknown[][], options: { insertError?: unknown } =
 
 const STAFF_GROUP = { groupId: "Cstaff000000000000000000000000001" };
 
-/** Select queue for a full send: terminal-check, snapshot, then the 4-way load. */
+/**
+ * Select queue for a full send: terminal-check, snapshot, the 4-way load,
+ * then the admin-ownership lookup (raw credit_control_admin_ownership rows;
+ * consumed only when at least one package was flagged).
+ */
 function fullQueue({
   packages = [pkg()],
   sessions = [session()],
   inactive = [] as Array<{ studentKey: string }>,
   groups = [STAFF_GROUP],
+  ownership = [] as Array<{ studentKey: string; adminKey: string }>,
 } = {}) {
-  return [[], [SNAP], packages, sessions, inactive, groups];
+  return [[], [SNAP], packages, sessions, inactive, groups, ownership];
 }
 
 function okPush() {
@@ -260,7 +267,42 @@ describe("sendLineCreditDigest", () => {
     expect(arg.text).toContain("⚠️ Credit runout — next 7 days (5/8/2026)");
     expect(arg.text).toContain("6/8 (Thu)");
     expect(arg.text).toContain("• Copter.Th — Physics (1.5 left)");
+    // No ownership rows → the solo Unassigned section keeps the legacy shape.
+    expect(arg.text).not.toContain("👤");
     expect(arg.text).toContain("Dashboard: https://example.test/credit-control");
+  });
+
+  it("sections the digest by assigned admin from the ownership table", async () => {
+    const push = okPush();
+    const otherStudent = {
+      ...pkg(),
+      studentKey: "ann (ann.bb) b::parent b",
+      packageKey: "pkg-2",
+      studentName: "Ann (Ann.Bb) B",
+      subject: "Biology",
+    };
+    const { db } = makeDb(fullQueue({
+      packages: [pkg(), otherStudent],
+      sessions: [
+        session(),
+        session({ packageKey: "pkg-2", scheduledStartTime: bkk("2026-08-07"), durationMinutes: 90 }),
+      ],
+      ownership: [
+        { studentKey: pkg().studentKey, adminKey: "kem" },
+        // Ann has no ownership row → Unassigned.
+      ],
+    }));
+
+    const result = await sendLineCreditDigest(db, NOW, { push, baseUrl: "https://example.test" });
+
+    expect(result.status).toBe("sent");
+    const text: string = push.mock.calls[0][0].text;
+    const kemAt = text.indexOf("👤 Kem");
+    const unassignedAt = text.indexOf("👤 Unassigned");
+    expect(kemAt).toBeGreaterThan(-1);
+    expect(unassignedAt).toBeGreaterThan(kemAt);
+    expect(text.slice(kemAt, unassignedAt)).toContain("• Copter.Th — Physics (1.5 left)");
+    expect(text.slice(unassignedAt)).toContain("• Ann.Bb — Biology (1.5 left)");
   });
 
   it("uses the same retry key for the same date and group on every run", async () => {

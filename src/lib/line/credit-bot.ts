@@ -17,10 +17,25 @@
 //                at all: balances, refusal text, and even the help must never
 //                appear where a parent can read them.
 //
-// Balance semantics: raw Wise remainingCredits summed over non-excluded
-// packages — deliberately the same numbers as the /student-report page the
+// Balance semantics: raw Wise remainingCredits summed over non-excluded,
+// non-finished packages — the same numbers as the /student-report page the
 // reply links to (NOT the dashboard's adjusted-remaining, which subtracts
-// pending deductions).
+// pending deductions), except that FINISHED packages are hidden here:
+//
+//   CRED-BOT-R1  A package with remainingCredits ≤ 0 and no UPCOMING future
+//                session for its (wiseClassId, wiseStudentId) pair is treated
+//                as finished — old paybands after a year move, ended summer
+//                camps, receipt-only classrooms. Hidden rows surface as a
+//                per-student "🗂 N finished packages hidden" count, and the
+//                family total sums visible rows only (it can therefore read
+//                HIGHER than the report page, which still lists everything,
+//                when the hidden stale rows are negative). A drained package
+//                with classes still booked stays visible — that family needs
+//                a top-up, not silence. Wise itself exposes no archived flag
+//                (verified 2026-08-19: ended camps return hidden=false,
+//                isSuspended=false), so this session-based rule is the truth
+//                source. Name-keyword matching was rejected — a student
+//                nicknamed "Summer" would match a summer-camp filter.
 // ----------------------------------------------------------------------------
 
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
@@ -81,6 +96,8 @@ export interface CreditStudentBalance {
   code: string | null;
   totalRemaining: number;
   packages: Array<{ subject: string; packageName: string; remainingCredits: number }>;
+  /** Finished packages hidden from the reply (CRED-BOT-R1). */
+  archivedCount: number;
 }
 
 export type CreditBalanceLookup =
@@ -113,6 +130,10 @@ async function rawStaffGroup(db: Database, groupId: string): Promise<boolean> {
  *    in every parent-less student on the snapshot.
  * 3. Package balances for every sibling; excluded packages (pretest/trial)
  *    are filtered exactly as the dashboard and report do.
+ * 4. Finished packages — ≤ 0 remaining with no UPCOMING future session for
+ *    the (wiseClassId, wiseStudentId) pair — are hidden and counted into
+ *    `archivedCount` instead (CRED-BOT-R1). The pair query only runs when at
+ *    least one package is at ≤ 0.
  *
  * Students on the credit-control inactive list are deliberately included —
  * this is raw snapshot truth, matching the report page the reply links to.
@@ -161,6 +182,8 @@ export async function loadCreditBalances(
   const packageRows = await db
     .select({
       studentKey: schema.creditControlPackages.studentKey,
+      wiseClassId: schema.creditControlPackages.wiseClassId,
+      wiseStudentId: schema.creditControlPackages.wiseStudentId,
       subject: schema.creditControlPackages.subject,
       packageName: schema.creditControlPackages.packageName,
       remainingCredits: schema.creditControlPackages.remainingCredits,
@@ -172,8 +195,36 @@ export async function loadCreditBalances(
       isNull(schema.creditControlPackages.excludedReason),
     ));
 
+  // CRED-BOT-R1 — only packages at ≤ 0 can be finished, so the pair lookup is
+  // skipped entirely for the common all-positive family.
+  const upcomingPairs = new Set<string>();
+  if (packageRows.some((row) => row.remainingCredits <= 0)) {
+    const pairRows = await db
+      .select({
+        wiseClassId: schema.creditControlSessions.wiseClassId,
+        wiseStudentId: schema.creditControlSessions.wiseStudentId,
+      })
+      .from(schema.creditControlSessions)
+      .where(and(
+        eq(schema.creditControlSessions.snapshotId, snapshot.id),
+        inArray(schema.creditControlSessions.studentKey, studentKeys),
+        eq(schema.creditControlSessions.sessionKind, "future"),
+        eq(schema.creditControlSessions.meetingStatus, "UPCOMING"),
+      ));
+    for (const row of pairRows) {
+      upcomingPairs.add(`${row.wiseClassId}|${row.wiseStudentId}`);
+    }
+  }
+
   const packagesByStudent = new Map<string, CreditStudentBalance["packages"]>();
+  const archivedByStudent = new Map<string, number>();
   for (const row of packageRows) {
+    const finished = row.remainingCredits <= 0
+      && !upcomingPairs.has(`${row.wiseClassId}|${row.wiseStudentId}`);
+    if (finished) {
+      archivedByStudent.set(row.studentKey, (archivedByStudent.get(row.studentKey) ?? 0) + 1);
+      continue;
+    }
     const list = packagesByStudent.get(row.studentKey) ?? [];
     list.push({
       subject: row.subject,
@@ -194,6 +245,7 @@ export async function loadCreditBalances(
         packages.reduce((sum, pkg) => sum + pkg.remainingCredits, 0),
       ),
       packages,
+      archivedCount: archivedByStudent.get(studentKey) ?? 0,
     };
   });
 

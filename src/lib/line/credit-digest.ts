@@ -24,6 +24,9 @@
 // line_credit_digest_runs row for the date short-circuits any re-run, and the
 // per-(date, group) deterministic push retry key makes a webhook-level retry a
 // no-op even without the row.
+//
+// The message is sectioned per assigned admin (credit_control_admin_ownership,
+// joined by studentKey); students with no owner row land under "Unassigned".
 // ----------------------------------------------------------------------------
 
 import { v5 as uuidv5 } from "uuid";
@@ -32,6 +35,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { lineSchedulerEnabled, pushLineTextMessage } from "@/lib/line/client";
+import { bulkGetCreditAdminOwnership } from "@/lib/credit-control/db";
 import { computeProjection } from "@/lib/credit-control/projection";
 import {
   addBangkokDays,
@@ -142,6 +146,7 @@ export function computeCreditRunouts(input: CreditRunoutInput): CreditRunouts {
         subject,
         remainingCredits: pkg.remainingCredits,
         nextClassBkk: upcoming[0].bkk,
+        studentKey: pkg.studentKey,
       });
       continue;
     }
@@ -163,6 +168,7 @@ export function computeCreditRunouts(input: CreditRunoutInput): CreditRunouts {
         label,
         subject,
         remainingCredits: pkg.remainingCredits,
+        studentKey: pkg.studentKey,
       });
     }
   }
@@ -336,6 +342,14 @@ export async function sendLineCreditDigest(
     return base({ ...counts, message: "LINE credit digest was already created concurrently." });
   }
 
+  // Owner per flagged student, for the per-admin message sections. Fetched
+  // after the run row is claimed so skip/race exits never issue the query;
+  // empty buckets (all-clear) short-circuit inside the reader.
+  const flaggedStudentKeys = [...new Set(
+    [...alreadyOut, ...runsOut].map((row) => row.studentKey),
+  )];
+  const adminOwnership = await bulkGetCreditAdminOwnership(flaggedStudentKeys, db);
+
   const baseUrl = overrides.baseUrl
     ?? process.env.APP_BASE_URL?.trim()
     ?? DEFAULT_BASE_URL;
@@ -345,6 +359,7 @@ export async function sendLineCreditDigest(
     alreadyOut,
     dashboardUrl: `${baseUrl}/credit-control`,
     generatedAt: snapshot.generatedAt,
+    adminOwnership,
   });
 
   const push = overrides.push ?? pushLineTextMessage;
