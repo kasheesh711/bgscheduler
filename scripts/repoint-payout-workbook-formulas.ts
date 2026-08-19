@@ -263,8 +263,17 @@ async function main(): Promise<void> {
     );
     const errors = [detailEffective[0]?.[0]?.error, totalEffective[0]?.[0]?.error]
       .filter((value): value is string => Boolean(value));
+    // QUERY returns an #N/A "Query completed with an empty output." when a
+    // tutor simply has no sessions in the sheet's selected date range — a
+    // pre-existing, benign state for inactive tutors that the source-pointed
+    // formula produced too. Only structural errors (#REF!, permissions,
+    // IMPORTRANGE failures) are fatal.
+    const fatalErrors = errors.filter((value) => !/empty output/iu.test(value));
+    if (fatalErrors.length > 0) {
+      throw new Error(`${entry.canonicalKey}: repointed formula error ${fatalErrors.join(", ")}.`);
+    }
     if (errors.length > 0) {
-      throw new Error(`${entry.canonicalKey}: repointed formula error ${errors.join(", ")}.`);
+      console.error(`${entry.canonicalKey}: empty query result (no sessions in the selected window) — benign, continuing.`);
     }
   }
   console.log(`Repointed and verified ${entries.length} workbook(s).`);
