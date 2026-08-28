@@ -6,7 +6,9 @@ import {
   buildLedgerClassRow,
   buildParentReportPayload,
   classifySession,
+  collectFeedbackWiseSessionIds,
   isLedgerClassCandidate,
+  normalizeReportFeedback,
   packageMetaKey,
   summarizeAttended,
   summarizeBuckets,
@@ -14,7 +16,7 @@ import {
 import { resolveReportWindow } from "../window";
 
 import type { ReportLedgerEntryInput, ReportSessionInput } from "../build";
-import type { ReportClassRow, ReportStudent } from "../types";
+import type { ReportClassFeedback, ReportClassRow, ReportStudent } from "../types";
 
 const STUDENT_A: ReportStudent = {
   studentKey: "student-a::parent-a",
@@ -50,7 +52,16 @@ function session(overrides: Partial<ReportSessionInput> = {}): ReportSessionInpu
     sessionKind: "past",
     creditApplied: 1,
     teacherName: "Kru Mint",
-    teacherFeedback: "Good work",
+    ...overrides,
+  };
+}
+
+function feedback(overrides: Partial<ReportClassFeedback> = {}): ReportClassFeedback {
+  return {
+    topics: "Fractions",
+    performance: "Worked hard",
+    improvement: "Times tables",
+    homework: "Worksheet 3",
     ...overrides,
   };
 }
@@ -67,7 +78,7 @@ function classRow(overrides: Partial<ReportClassRow> = {}): ReportClassRow {
     teacher: "Kru Mint",
     bucket: "attended",
     creditApplied: 1,
-    hasFeedback: true,
+    feedback: null,
     packageName: "Math package",
     subjectBand: "Y8-9 / G7-8 (Int.)",
     meetingStatus: "ENDED",
@@ -143,16 +154,15 @@ describe("classifySession", () => {
 
 describe("buildClassRow", () => {
   it("falls back to TEACHER_TBC for null and whitespace-only teachers", () => {
-    expect(buildClassRow(session({ teacherName: null })).teacher).toBe(TEACHER_TBC);
-    expect(buildClassRow(session({ teacherName: "   " })).teacher).toBe(TEACHER_TBC);
+    expect(buildClassRow(session({ teacherName: null }), null).teacher).toBe(TEACHER_TBC);
+    expect(buildClassRow(session({ teacherName: "   " }), null).teacher).toBe(TEACHER_TBC);
   });
 
   it("derives modality and formats a Bangkok midnight rollover", () => {
     const row = buildClassRow(session({
       title: "In-Person Session-Biology HL",
       scheduledStartTime: new Date("2026-06-01T17:30:00.000Z"),
-      teacherFeedback: "   ",
-    }));
+    }), null);
 
     expect(row).toMatchObject({
       classLabel: "Biology HL",
@@ -160,8 +170,63 @@ describe("buildClassRow", () => {
       dateKey: "2026-06-02",
       weekday: "Tue",
       startLabel: "00:30",
-      hasFeedback: false,
+      feedback: null,
     });
+  });
+
+  it("carries the provided feedback through unchanged", () => {
+    expect(buildClassRow(session(), feedback()).feedback).toEqual(feedback());
+  });
+});
+
+describe("normalizeReportFeedback", () => {
+  it("trims outer whitespace per field while keeping interior newlines", () => {
+    expect(normalizeReportFeedback(feedback({
+      performance: "  Line one\nLine two  ",
+      homework: "\n",
+    }))).toEqual(feedback({
+      performance: "Line one\nLine two",
+      homework: "",
+    }));
+  });
+
+  it("collapses undefined and all-blank records to null", () => {
+    expect(normalizeReportFeedback(undefined)).toBeNull();
+    expect(normalizeReportFeedback({
+      topics: "  ",
+      performance: "",
+      improvement: "\n\n",
+      homework: " ",
+    })).toBeNull();
+  });
+
+  it("keeps a record with a single non-blank field", () => {
+    expect(normalizeReportFeedback({
+      topics: "",
+      performance: "",
+      improvement: "",
+      homework: "Read chapter 4",
+    })).toEqual({
+      topics: "",
+      performance: "",
+      improvement: "",
+      homework: "Read chapter 4",
+    });
+  });
+});
+
+describe("collectFeedbackWiseSessionIds", () => {
+  it("unions snapshot session ids with ledger class candidates, deduplicated", () => {
+    expect(collectFeedbackWiseSessionIds(
+      [session({ wiseSessionId: "s1" }), session({ wiseSessionId: "shared" })],
+      [
+        ledgerEntry({ wiseCreditHistoryId: "shared" }),
+        ledgerEntry({ wiseCreditHistoryId: "pre-floor" }),
+        ledgerEntry({ wiseCreditHistoryId: "topup", type: "CREDIT", meetingStatus: null }),
+        ledgerEntry({ wiseCreditHistoryId: "unplaced", createdAtWise: null }),
+        ledgerEntry({ wiseCreditHistoryId: "cancelled", meetingStatus: "CANCELLED" }),
+      ],
+    )).toEqual(["s1", "shared", "pre-floor"]);
   });
 });
 
@@ -265,6 +330,7 @@ describe("buildParentReportPayload", () => {
       packagesByStudentId: new Map(),
       ledgerEntriesByStudentId: new Map(),
       packageMetaByClassKey: new Map(),
+      feedbackByWiseSessionId: new Map(),
       generatedAt: new Date("2026-08-17T06:00:00.000Z"),
     });
 
@@ -293,6 +359,7 @@ describe("buildParentReportPayload", () => {
         ledgerEntry({ wiseCreditHistoryId: "spend", type: "CREDIT", meetingStatus: null, credit: -1.5 }),
       ]]]),
       packageMetaByClassKey: new Map(),
+      feedbackByWiseSessionId: new Map(),
       generatedAt: new Date("2026-08-17T06:00:00.000Z"),
     });
 
@@ -342,6 +409,7 @@ describe("buildParentReportPayload", () => {
         ledgerEntry({ wiseCreditHistoryId: "kevin-1" }),
       ]]]),
       packageMetaByClassKey: new Map(),
+      feedbackByWiseSessionId: new Map(),
       generatedAt: new Date("2026-08-17T06:00:00.000Z"),
     });
 
@@ -383,6 +451,7 @@ describe("buildParentReportPayload", () => {
         packageMetaKey(STUDENT_A.wiseStudentId, "class-1"),
         { packageName: "Package name", subject: "Y9-11 / G8-10 (Int.)" },
       ]]),
+      feedbackByWiseSessionId: new Map(),
       generatedAt: new Date("2026-08-17T06:00:00.000Z"),
     });
 
@@ -391,6 +460,75 @@ describe("buildParentReportPayload", () => {
       classLabel: "Y9-11 / G8-10 (Int.)",
       packageName: "Package name",
     });
+  });
+
+  it("attaches normalized feedback to snapshot and ledger rows by session id", () => {
+    const payload = buildParentReportPayload({
+      snapshot: { id: "snapshot-5", generatedAt: new Date("2026-08-17T05:00:00.000Z") },
+      window: resolveReportWindow("2026-04-01", "2026-08-17"),
+      students: [STUDENT_A, STUDENT_B],
+      sessionsByStudentId: new Map([
+        [STUDENT_A.wiseStudentId, [
+          session({ wiseSessionId: "with-feedback" }),
+          session({
+            wiseSessionId: "without-feedback",
+            scheduledStartTime: new Date("2026-06-02T03:00:00.000Z"),
+          }),
+        ]],
+        // Group class: the sibling holds the same Wise session and must
+        // receive the same feedback.
+        [STUDENT_B.wiseStudentId, [
+          session({
+            wiseSessionId: "with-feedback",
+            wiseStudentId: STUDENT_B.wiseStudentId,
+            studentKey: STUDENT_B.studentKey,
+          }),
+        ]],
+      ]),
+      packagesByStudentId: new Map(),
+      ledgerEntriesByStudentId: new Map([[STUDENT_A.wiseStudentId, [
+        ledgerEntry({ wiseCreditHistoryId: "pre-floor" }),
+      ]]]),
+      packageMetaByClassKey: new Map(),
+      feedbackByWiseSessionId: new Map([
+        ["with-feedback", feedback({ performance: "  Focused all class  " })],
+        ["pre-floor", feedback({ topics: "Algebra review" })],
+        ["all-blank", feedback({ topics: " ", performance: "", improvement: "", homework: "" })],
+      ]),
+      generatedAt: new Date("2026-08-17T06:00:00.000Z"),
+    });
+
+    const [ledgerRow, fedRow, bareRow] = payload.students[0].rows;
+    expect(ledgerRow).toMatchObject({
+      source: "ledger",
+      feedback: feedback({ topics: "Algebra review" }),
+    });
+    expect(fedRow.feedback).toEqual(feedback({ performance: "Focused all class" }));
+    expect(bareRow.feedback).toBeNull();
+    expect(payload.students[1].rows[0].feedback).toEqual(
+      feedback({ performance: "Focused all class" }),
+    );
+  });
+
+  it("leaves every row's feedback null when the lookup map is empty", () => {
+    const payload = buildParentReportPayload({
+      snapshot: { id: "snapshot-6", generatedAt: new Date("2026-08-17T05:00:00.000Z") },
+      window: resolveReportWindow("2026-04-01", "2026-08-17"),
+      students: [STUDENT_A],
+      sessionsByStudentId: new Map([[STUDENT_A.wiseStudentId, [session()]]]),
+      packagesByStudentId: new Map(),
+      ledgerEntriesByStudentId: new Map([[STUDENT_A.wiseStudentId, [
+        ledgerEntry({ wiseCreditHistoryId: "pre-floor" }),
+      ]]]),
+      packageMetaByClassKey: new Map(),
+      feedbackByWiseSessionId: new Map(),
+      generatedAt: new Date("2026-08-17T06:00:00.000Z"),
+    });
+
+    expect(payload.students[0].rows).toHaveLength(2);
+    for (const row of payload.students[0].rows) {
+      expect(row.feedback).toBeNull();
+    }
   });
 });
 
@@ -410,12 +548,22 @@ describe("buildLedgerClassRow", () => {
     const row = buildLedgerClassRow(
       ledgerEntry({ meetingStatus: "MISSED" }) as ReportLedgerEntryInput & { createdAtWise: Date },
       undefined,
+      null,
     );
     expect(row).toMatchObject({
       bucket: "other:MISSED",
-      hasFeedback: false,
+      feedback: null,
       modality: "unknown",
       source: "ledger",
     });
+  });
+
+  it("carries the provided feedback through unchanged", () => {
+    const row = buildLedgerClassRow(
+      ledgerEntry() as ReportLedgerEntryInput & { createdAtWise: Date },
+      undefined,
+      feedback(),
+    );
+    expect(row.feedback).toEqual(feedback());
   });
 });

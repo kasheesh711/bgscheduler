@@ -134,7 +134,31 @@ describe("GET /api/student-report", () => {
       studentKeys: ["student::one", "student::two"],
       from: "2026-05-01",
       to: "2026-06-01",
+      includeFeedback: true,
     });
+  });
+
+  it("forwards feedback=0 as includeFeedback: false", async () => {
+    vi.mocked(getParentClassReport).mockResolvedValue({ status: "ok", payload });
+    const response = await getReport(
+      reportRequest("student=a%3A%3Ab&from=2026-05-01&to=2026-06-01&feedback=0"),
+    );
+
+    expect(response.status).toBe(200);
+    expect(vi.mocked(getParentClassReport)).toHaveBeenCalledWith(database, {
+      studentKeys: ["a::b"],
+      from: "2026-05-01",
+      to: "2026-06-01",
+      includeFeedback: false,
+    });
+  });
+
+  it("400s on an unrecognized feedback value", async () => {
+    const response = await getReport(
+      reportRequest("student=a%3A%3Ab&from=2026-05-01&to=2026-06-01&feedback=2"),
+    );
+    expect(response.status).toBe(400);
+    expect(getParentClassReport).not.toHaveBeenCalled();
   });
 
   it("500s with the failure message when the report loader throws", async () => {

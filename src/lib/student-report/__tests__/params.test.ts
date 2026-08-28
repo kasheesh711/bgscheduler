@@ -38,6 +38,15 @@ describe("normalizeReportParams", () => {
     });
     expect(reportParamsSchema.safeParse(normalized).success).toBe(false);
   });
+
+  it("maps the feedback key using its first value when repeated", () => {
+    expect(normalizeReportParams({
+      student: "student::one",
+      from: "2026-05-01",
+      to: "2026-08-17",
+      feedback: ["0", "1"],
+    })).toMatchObject({ includeFeedback: "0" });
+  });
 });
 
 describe("reportParamsSchema", () => {
@@ -70,6 +79,19 @@ describe("reportParamsSchema", () => {
       to: "2026-08-17",
     }).success).toBe(true);
   });
+
+  it("defaults feedback to included and only feedback=0 turns it off", () => {
+    const parse = (includeFeedback?: string) =>
+      reportParamsSchema.safeParse({ ...valid, includeFeedback });
+
+    const absent = parse(undefined);
+    expect(absent.success && absent.data.includeFeedback).toBe(true);
+    const on = parse("1");
+    expect(on.success && on.data.includeFeedback).toBe(true);
+    const off = parse("0");
+    expect(off.success && off.data.includeFeedback).toBe(false);
+    expect(parse("2").success).toBe(false);
+  });
 });
 
 describe("buildReportSearch", () => {
@@ -89,5 +111,28 @@ describe("buildReportSearch", () => {
     ]);
     expect(params.get("from")).toBe("2026-05-01");
     expect(params.get("to")).toBe("2026-08-17");
+  });
+
+  it("keeps default-on URLs byte-identical and emits feedback=0 only when off", () => {
+    const base = {
+      studentKeys: ["student::one"],
+      from: "2026-05-01",
+      to: "2026-08-17",
+    };
+
+    const omitted = buildReportSearch(base);
+    expect(omitted).not.toContain("feedback");
+    expect(buildReportSearch({ ...base, includeFeedback: true })).toBe(omitted);
+
+    const off = buildReportSearch({ ...base, includeFeedback: false });
+    expect(off).toBe(`${omitted}&feedback=0`);
+
+    // Full round trip: URL → normalize → schema recovers the boolean.
+    const raw: Record<string, string | string[]> = {};
+    for (const [key, value] of new URLSearchParams(off)) {
+      raw[key] = key === "student" ? [value] : value;
+    }
+    const parsed = reportParamsSchema.safeParse(normalizeReportParams(raw));
+    expect(parsed.success && parsed.data.includeFeedback).toBe(false);
   });
 });

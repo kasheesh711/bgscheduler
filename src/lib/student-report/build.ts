@@ -11,6 +11,7 @@ import type {
   BucketTotal,
   KnownSessionBucket,
   ParentReportPayload,
+  ReportClassFeedback,
   ReportClassRow,
   ReportPackageRow,
   ReportStudent,
@@ -48,7 +49,6 @@ export interface ReportSessionInput {
   sessionKind: string;
   creditApplied: number;
   teacherName: string | null;
-  teacherFeedback: string | null;
 }
 
 /** One window-scoped credit-ledger entry, with the identity fields the raw
@@ -102,8 +102,51 @@ export function classifySession(row: {
   return `other:${status || "(blank)"}`;
 }
 
+/**
+ * Normalizes one stored feedback record for display: outer whitespace trimmed
+ * per field (interior newlines are meaningful and kept for pre-wrap
+ * rendering), and a record whose four fields are all blank collapses to null
+ * so the report never renders an empty feedback block.
+ */
+export function normalizeReportFeedback(
+  feedback: ReportClassFeedback | undefined,
+): ReportClassFeedback | null {
+  if (!feedback) return null;
+  const trimmed: ReportClassFeedback = {
+    topics: feedback.topics.trim(),
+    performance: feedback.performance.trim(),
+    improvement: feedback.improvement.trim(),
+    homework: feedback.homework.trim(),
+  };
+  const hasText =
+    trimmed.topics !== "" ||
+    trimmed.performance !== "" ||
+    trimmed.improvement !== "" ||
+    trimmed.homework !== "";
+  return hasText ? trimmed : null;
+}
+
+/**
+ * Every Wise session id a feedback lookup should cover: snapshot sessions plus
+ * ledger class candidates (a SESSION-type charge's Wise id IS the session id,
+ * so pre-floor classes reconstructed from the ledger can still carry feedback).
+ */
+export function collectFeedbackWiseSessionIds(
+  sessions: readonly Pick<ReportSessionInput, "wiseSessionId">[],
+  ledgerEntries: readonly ReportLedgerEntryInput[],
+): string[] {
+  const ids = new Set<string>(sessions.map((session) => session.wiseSessionId));
+  for (const entry of ledgerEntries) {
+    if (isLedgerClassCandidate(entry)) ids.add(entry.wiseCreditHistoryId);
+  }
+  return [...ids];
+}
+
 /** Shapes one snapshot session into a Bangkok-local report class row. */
-export function buildClassRow(session: ReportSessionInput): ReportClassRow {
+export function buildClassRow(
+  session: ReportSessionInput,
+  feedback: ReportClassFeedback | null,
+): ReportClassRow {
   return {
     wiseSessionId: session.wiseSessionId,
     dateKey: bangkokDateKey(session.scheduledStartTime),
@@ -115,7 +158,7 @@ export function buildClassRow(session: ReportSessionInput): ReportClassRow {
     teacher: session.teacherName?.trim() || TEACHER_TBC,
     bucket: classifySession(session),
     creditApplied: session.creditApplied,
-    hasFeedback: Boolean(session.teacherFeedback?.trim()),
+    feedback,
     packageName: session.packageName,
     subjectBand: session.subject,
     meetingStatus: session.meetingStatus,
@@ -142,11 +185,14 @@ export function isLedgerClassCandidate<
  * Shapes one ledger charge into a report class row. The ledger has no session
  * title, so the class label falls back to the package subject and the modality
  * is fail-closed `unknown`; the timestamp is the charge time, flagged
- * approximate. A charge with no resolvable teacher renders TEACHER_TBC.
+ * approximate. A charge with no resolvable teacher renders TEACHER_TBC. The
+ * charge id is the Wise session id, so ledger rows can still carry post-class
+ * feedback looked up by that id.
  */
 export function buildLedgerClassRow(
   entry: ReportLedgerEntryInput & { createdAtWise: Date },
   packageMeta: ReportPackageMeta | undefined,
+  feedback: ReportClassFeedback | null,
 ): ReportClassRow {
   const chargedAt = entry.createdAtWise;
   const subject = entry.rawClassroomSubject?.trim() || packageMeta?.subject.trim() || "";
@@ -167,7 +213,7 @@ export function buildLedgerClassRow(
       creditApplied: entry.credit,
     }),
     creditApplied: entry.credit,
-    hasFeedback: false,
+    feedback,
     packageName,
     subjectBand: subject,
     meetingStatus,
@@ -292,9 +338,11 @@ function deduplicateAndSortSessions(
  * 1. Keep students in requested order and deduplicate/sort each student's sessions.
  * 2. Backfill class rows from ledger charges whose session the snapshot no
  *    longer holds (pre-floor or deleted in Wise), merged in timestamp order.
- * 3. Build per-student rows, status totals, attended summaries, packages, and
+ * 3. Attach normalized tutor feedback by Wise session id (an absent entry —
+ *    including the whole map when feedback is excluded — yields null).
+ * 4. Build per-student rows, status totals, attended summaries, packages, and
  *    the ledger movement aggregate over every window-scoped entry.
- * 4. Summarize all student rows together and attach snapshot bounds and warnings.
+ * 5. Summarize all student rows together and attach snapshot bounds and warnings.
  */
 export function buildParentReportPayload(input: {
   snapshot: { id: string; generatedAt: Date };
@@ -304,6 +352,7 @@ export function buildParentReportPayload(input: {
   packagesByStudentId: ReadonlyMap<string, ReportPackageRow[]>;
   ledgerEntriesByStudentId: ReadonlyMap<string, ReportLedgerEntryInput[]>;
   packageMetaByClassKey: ReadonlyMap<string, ReportPackageMeta>;
+  feedbackByWiseSessionId: ReadonlyMap<string, ReportClassFeedback>;
   generatedAt: Date;
 }): ParentReportPayload {
   const allRows: ReportClassRow[] = [];
@@ -319,7 +368,12 @@ export function buildParentReportPayload(input: {
     const rows = [
       ...sessions.map((session) => ({
         time: session.scheduledStartTime.getTime(),
-        row: buildClassRow(session),
+        row: buildClassRow(
+          session,
+          normalizeReportFeedback(
+            input.feedbackByWiseSessionId.get(session.wiseSessionId),
+          ),
+        ),
       })),
       ...ledgerEntries
         .filter(isLedgerClassCandidate)
@@ -330,6 +384,9 @@ export function buildParentReportPayload(input: {
             entry,
             input.packageMetaByClassKey.get(
               packageMetaKey(entry.wiseStudentId, entry.wiseClassId),
+            ),
+            normalizeReportFeedback(
+              input.feedbackByWiseSessionId.get(entry.wiseCreditHistoryId),
             ),
           ),
         })),

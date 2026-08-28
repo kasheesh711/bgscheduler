@@ -11,6 +11,12 @@
 // silently dropped. Credit-history rows with a null createdAtWise cannot be
 // placed inside the window and are excluded from movement by the range
 // predicate itself.
+//
+// The one exception to snapshot scoping is the tutor-feedback lookup: the
+// post-class tables are not snapshot-versioned — post_class_sessions is keyed
+// by a unique wise_session_id and never rotated — so feedback is joined by
+// session id alone. That is also why ledger-reconstructed pre-floor classes
+// can still carry feedback.
 // ----------------------------------------------------------------------------
 
 import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
@@ -18,7 +24,11 @@ import { and, asc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { getActiveCreditSnapshot } from "@/lib/credit-control/db";
 import * as schema from "@/lib/db/schema";
 import { parseStudentDisplay } from "@/lib/student-schedule/data";
-import { buildParentReportPayload, packageMetaKey } from "./build";
+import {
+  buildParentReportPayload,
+  collectFeedbackWiseSessionIds,
+  packageMetaKey,
+} from "./build";
 import { resolveReportWindow } from "./window";
 
 import type { Database } from "@/lib/db";
@@ -27,7 +37,44 @@ import type {
   ReportPackageMeta,
   ReportSessionInput,
 } from "./build";
-import type { ParentReportResult, ReportPackageRow, ReportStudent } from "./types";
+import type {
+  ParentReportResult,
+  ReportClassFeedback,
+  ReportPackageRow,
+  ReportStudent,
+} from "./types";
+
+/**
+ * Latest stored post-class feedback for each of the given Wise session ids.
+ * Sessions without a stored feedback version are simply absent from the map;
+ * blank-field filtering is the builder's job (`normalizeReportFeedback`).
+ */
+async function fetchFeedbackByWiseSessionId(
+  db: Database,
+  wiseSessionIds: readonly string[],
+): Promise<Map<string, ReportClassFeedback>> {
+  if (wiseSessionIds.length === 0) return new Map();
+  const rows = await db
+    .select({
+      wiseSessionId: schema.postClassSessions.wiseSessionId,
+      topics: schema.postClassFeedbackVersions.topics,
+      performance: schema.postClassFeedbackVersions.performance,
+      improvement: schema.postClassFeedbackVersions.improvement,
+      homework: schema.postClassFeedbackVersions.homework,
+    })
+    .from(schema.postClassSessions)
+    .innerJoin(
+      schema.postClassFeedbackVersions,
+      eq(
+        schema.postClassFeedbackVersions.id,
+        schema.postClassSessions.latestFeedbackVersionId,
+      ),
+    )
+    .where(inArray(schema.postClassSessions.wiseSessionId, [...wiseSessionIds]));
+  return new Map(
+    rows.map(({ wiseSessionId, ...feedback }) => [wiseSessionId, feedback]),
+  );
+}
 
 /**
  * Loads the parent class report for 1..N students over an inclusive Bangkok
@@ -38,7 +85,10 @@ import type { ParentReportResult, ReportPackageRow, ReportStudent } from "./type
  *    closed with the complete missing list.
  * 3. Fetch window-scoped sessions, point-in-time packages, and window-scoped
  *    credit-history movement in parallel, all keyed by snapshotId first.
- * 4. Assemble the payload with the pure builder.
+ * 4. When feedback is included, fetch the latest post-class feedback for the
+ *    union of snapshot and ledger-candidate session ids; when excluded, skip
+ *    the query entirely so no feedback text enters the payload.
+ * 5. Assemble the payload with the pure builder.
  */
 export async function getParentClassReport(
   db: Database,
@@ -46,6 +96,7 @@ export async function getParentClassReport(
     studentKeys: readonly string[];
     from: string;
     to: string;
+    includeFeedback: boolean;
     now?: Date;
   },
 ): Promise<ParentReportResult> {
@@ -105,7 +156,6 @@ export async function getParentClassReport(
         sessionKind: schema.creditControlSessions.sessionKind,
         creditApplied: schema.creditControlSessions.creditApplied,
         teacherName: schema.creditControlSessions.teacherName,
-        teacherFeedback: schema.creditControlSessions.teacherFeedback,
       })
       .from(schema.creditControlSessions)
       .where(
@@ -191,6 +241,13 @@ export async function getParentClassReport(
     else ledgerEntriesByStudentId.set(row.wiseStudentId, [row]);
   }
 
+  const feedbackByWiseSessionId = input.includeFeedback
+    ? await fetchFeedbackByWiseSessionId(
+        db,
+        collectFeedbackWiseSessionIds(sessionRows, historyRows),
+      )
+    : new Map<string, ReportClassFeedback>();
+
   return {
     status: "ok",
     payload: buildParentReportPayload({
@@ -201,6 +258,7 @@ export async function getParentClassReport(
       packagesByStudentId,
       ledgerEntriesByStudentId,
       packageMetaByClassKey,
+      feedbackByWiseSessionId,
       generatedAt: input.now ?? new Date(),
     }),
   };

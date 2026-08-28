@@ -21,6 +21,7 @@ export async function GET(request: NextRequest) {
       student: request.nextUrl.searchParams.getAll("student"),
       from: request.nextUrl.searchParams.get("from") ?? undefined,
       to: request.nextUrl.searchParams.get("to") ?? undefined,
+      feedback: request.nextUrl.searchParams.get("feedback") ?? undefined,
     }),
   );
   if (!parsed.success) {
@@ -35,6 +36,7 @@ export async function GET(request: NextRequest) {
       studentKeys: parsed.data.students,
       from: parsed.data.from,
       to: parsed.data.to,
+      includeFeedback: parsed.data.includeFeedback,
     });
 
     if (result.status === "no-snapshot") {

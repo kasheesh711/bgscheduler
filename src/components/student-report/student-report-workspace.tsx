@@ -11,6 +11,7 @@ import {
 
 import { ReportDocument } from "@/components/student-report/report-document";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -52,6 +53,7 @@ interface ReportRange {
 
 interface LoadedReportRequest extends ReportRange {
   studentKeys: string[];
+  includeFeedback: boolean;
 }
 
 const DATE_PRESETS = [
@@ -110,10 +112,12 @@ function reportRequestMatches(
   request: LoadedReportRequest,
   selected: readonly StudentOption[],
   range: ReportRange,
+  includeFeedback: boolean,
 ): boolean {
   return (
     request.from === range.from &&
     request.to === range.to &&
+    request.includeFeedback === includeFeedback &&
     request.studentKeys.length === selected.length &&
     request.studentKeys.every(
       (studentKey, index) => studentKey === selected[index]?.studentKey,
@@ -132,6 +136,7 @@ export function StudentReportWorkspace() {
   const [activePreset, setActivePreset] = useState<DatePreset | null>(
     "this-month",
   );
+  const [includeFeedback, setIncludeFeedback] = useState(true);
   const [payload, setPayload] = useState<ParentReportPayload | null>(null);
   const [loadedRequest, setLoadedRequest] =
     useState<LoadedReportRequest | null>(null);
@@ -285,6 +290,7 @@ export function StudentReportWorkspace() {
       studentKeys: selected.map((student) => student.studentKey),
       from: range.from,
       to: range.to,
+      includeFeedback,
     };
 
     setLoading(true);
@@ -337,7 +343,7 @@ export function StudentReportWorkspace() {
         setLoading(false);
       }
     }
-  }, [range, selected]);
+  }, [includeFeedback, range, selected]);
 
   const openPrintView = useCallback(() => {
     if (!loadedRequest) return;
@@ -358,7 +364,7 @@ export function StudentReportWorkspace() {
   const previewIsStale = Boolean(
     payload &&
       loadedRequest &&
-      !reportRequestMatches(loadedRequest, selected, range),
+      !reportRequestMatches(loadedRequest, selected, range, includeFeedback),
   );
 
   return (
@@ -554,6 +560,21 @@ export function StudentReportWorkspace() {
                 {rangeError}
               </p>
             )}
+
+            <div className="space-y-1 pt-1">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm">
+                <Checkbox
+                  checked={includeFeedback}
+                  onCheckedChange={() =>
+                    setIncludeFeedback((current) => !current)
+                  }
+                />
+                <span>Include tutor feedback</span>
+              </label>
+              <p className="pl-6 text-xs text-muted-foreground">
+                Per-class notes from the tutor appear under each class row.
+              </p>
+            </div>
           </section>
         </CardContent>
 

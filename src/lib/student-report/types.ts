@@ -5,6 +5,18 @@ export type KnownSessionBucket = "attended" | "ended-no-credit" | "cancelled" | 
 /** Known buckets plus fail-closed `other:<verbatim status>` strings. */
 export type SessionBucket = KnownSessionBucket | (string & {});
 
+/**
+ * The tutor's post-class feedback for one session, from the latest stored
+ * post-class-feedback version. Plain text (never HTML); interior newlines are
+ * meaningful. `improvement` renders under the label "Needs work".
+ */
+export interface ReportClassFeedback {
+  topics: string;
+  performance: string;
+  improvement: string;
+  homework: string;
+}
+
 export interface ReportClassRow {
   wiseSessionId: string;
   dateKey: string;
@@ -16,7 +28,8 @@ export interface ReportClassRow {
   teacher: string;
   bucket: SessionBucket;
   creditApplied: number;
-  hasFeedback: boolean;
+  /** Null when the session has no stored feedback or feedback was excluded. */
+  feedback: ReportClassFeedback | null;
   packageName: string;
   subjectBand: string;
   meetingStatus: string;

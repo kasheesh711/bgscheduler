@@ -4,12 +4,20 @@
    The report prints portrait A4 via the app-wide default @page declared in
    learning-plans.css, and reuses that file's .report-root/.report-sheet/
    .report-scroll print resets and break guards by using the same class names.
-   The only per-report rule needed here is the body background hook, keyed on
-   this report's data attribute (same pattern as student-schedule.css).
+   The only per-report rules needed here are the body background hook, keyed
+   on this report's data attribute (same pattern as student-schedule.css), and
+   the class-row/feedback-row pairing guard below.
 ---------------------------------------------------------------------------- */
 
 @media print {
   body:has(> [data-student-report]) {
     background: #ffffff !important;
   }
+}
+
+/* Keep a class row glued to its tutor-feedback sub-row across page breaks.
+   The attribute is set only on class rows that a feedback row follows, so
+   this stays inert for the learning-plan report sharing .report-root. */
+.report-root tr[data-feedback-parent] {
+  break-after: avoid-page;
 }

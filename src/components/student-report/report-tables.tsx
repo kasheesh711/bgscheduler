@@ -1,6 +1,9 @@
+import { Fragment } from "react";
+
 import { DigitSafe } from "@/components/learning-plan/digit-safe";
 
 import type {
+  ReportClassFeedback,
   ReportClassRow,
   ReportPackageRow,
   SessionBucket,
@@ -42,6 +45,45 @@ function statusTone(bucket: SessionBucket): string {
 
 function EmptyState() {
   return <p className={EMPTY_STATE_CLASS}>No rows in this period.</p>;
+}
+
+const FEEDBACK_FIELDS: readonly {
+  key: keyof ReportClassFeedback;
+  label: string;
+}[] = [
+  { key: "topics", label: "Topics" },
+  { key: "performance", label: "Performance" },
+  { key: "improvement", label: "Needs work" },
+  { key: "homework", label: "Homework" },
+];
+
+/** Full-width tutor-feedback sub-row rendered directly under a class row. */
+function ClassFeedbackRow({
+  feedback,
+  stripeClass,
+}: {
+  feedback: ReportClassFeedback;
+  stripeClass: string | undefined;
+}) {
+  return (
+    <tr className={stripeClass} data-testid="class-feedback-row">
+      <td colSpan={7} className="pt-0 pb-2 pl-3 align-top">
+        {FEEDBACK_FIELDS.map(({ key, label }) =>
+          feedback[key] === "" ? null : (
+            <p
+              key={key}
+              className="text-[10px] leading-snug text-begifted-neutral-600 whitespace-pre-wrap"
+            >
+              <span className="font-semibold uppercase tracking-[0.08em] text-begifted-neutral-400">
+                {label}:{" "}
+              </span>
+              {feedback[key]}
+            </p>
+          ),
+        )}
+      </td>
+    </tr>
+  );
 }
 
 export function StatTile({
@@ -97,32 +139,49 @@ export function ClassTable({ rows }: { rows: ReportClassRow[] }) {
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
-          <tr key={row.wiseSessionId} className="even:bg-begifted-neutral-50">
-            <td className={`${BODY_CELL_CLASS} digits whitespace-nowrap`}>
-              {formatShortDate(row.dateKey)} {row.weekday}
-            </td>
-            <td className={`${BODY_CELL_CLASS} digits whitespace-nowrap`}>
-              {row.startLabel}
-              {row.timeApproximate ? " †" : ""}
-            </td>
-            <td className={BODY_CELL_CLASS}>{row.classLabel}</td>
-            <td className={BODY_CELL_CLASS}>{row.modality}</td>
-            <td className={BODY_CELL_CLASS}>{row.teacher}</td>
-            <td className={BODY_CELL_CLASS}>
-              <span
-                className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${statusTone(
-                  row.bucket,
-                )}`}
+        {/* Striping is index-based (not nth-child) so a class row and its
+            feedback sub-row always share one stripe. */}
+        {rows.map((row, index) => {
+          const stripeClass =
+            index % 2 === 1 ? "bg-begifted-neutral-50" : undefined;
+          return (
+            <Fragment key={row.wiseSessionId}>
+              <tr
+                className={stripeClass}
+                data-feedback-parent={row.feedback ? "" : undefined}
               >
-                {row.bucket}
-              </span>
-            </td>
-            <td className={`${BODY_CELL_CLASS} ${NUMERIC_CELL_CLASS}`}>
-              {formatNumber(row.creditApplied)}
-            </td>
-          </tr>
-        ))}
+                <td className={`${BODY_CELL_CLASS} digits whitespace-nowrap`}>
+                  {formatShortDate(row.dateKey)} {row.weekday}
+                </td>
+                <td className={`${BODY_CELL_CLASS} digits whitespace-nowrap`}>
+                  {row.startLabel}
+                  {row.timeApproximate ? " †" : ""}
+                </td>
+                <td className={BODY_CELL_CLASS}>{row.classLabel}</td>
+                <td className={BODY_CELL_CLASS}>{row.modality}</td>
+                <td className={BODY_CELL_CLASS}>{row.teacher}</td>
+                <td className={BODY_CELL_CLASS}>
+                  <span
+                    className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap ${statusTone(
+                      row.bucket,
+                    )}`}
+                  >
+                    {row.bucket}
+                  </span>
+                </td>
+                <td className={`${BODY_CELL_CLASS} ${NUMERIC_CELL_CLASS}`}>
+                  {formatNumber(row.creditApplied)}
+                </td>
+              </tr>
+              {row.feedback ? (
+                <ClassFeedbackRow
+                  feedback={row.feedback}
+                  stripeClass={stripeClass}
+                />
+              ) : null}
+            </Fragment>
+          );
+        })}
       </tbody>
       <tfoot>
         <tr className="font-bold text-begifted-neutral-900 border-t-2 border-begifted-neutral-900">

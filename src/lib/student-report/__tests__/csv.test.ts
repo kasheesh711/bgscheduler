@@ -59,7 +59,12 @@ function payloadFixture(): ParentReportPayload {
             teacher: "Kru Mint",
             bucket: "attended",
             creditApplied: 1,
-            hasFeedback: true,
+            feedback: {
+              topics: "Fractions\nand decimals",
+              performance: "Worked hard",
+              improvement: "",
+              homework: "Worksheet 3",
+            },
             packageName: "Math package",
             subjectBand: "Y8-9",
             meetingStatus: "ENDED",
@@ -77,7 +82,7 @@ function payloadFixture(): ParentReportPayload {
             teacher: "Kevin (Kev) Y. Hsieh Online",
             bucket: "attended",
             creditApplied: 1.5,
-            hasFeedback: false,
+            feedback: null,
             packageName: "Math package",
             subjectBand: "Y9-11",
             meetingStatus: "ENDED",
@@ -114,7 +119,7 @@ function payloadFixture(): ParentReportPayload {
 describe("CSV columns", () => {
   it("emits the exact classes header", () => {
     expect(serializeCsv([], CLASSES_CSV_COLUMNS, { includeBom: false })).toBe(
-      '"Student","Date","Day","Time","Mins","Class","Mode","Teacher","Status","Credit","Feedback","Package","Level band","Wise session id","Source"',
+      '"Student","Date","Day","Time","Mins","Class","Mode","Teacher","Status","Credit","Feedback","Topics","Performance","Needs work","Homework","Package","Level band","Wise session id","Source"',
     );
   });
 
@@ -139,15 +144,19 @@ describe("CSV flattening", () => {
       studentLabel: "Student.Code",
       classLabel: "Math, Advanced",
       bucket: "attended",
-      hasFeedback: true,
+      feedback: { performance: "Worked hard" },
       source: "snapshot",
     });
-    expect(rows[1]).toMatchObject({ source: "ledger" });
+    expect(rows[1]).toMatchObject({ source: "ledger", feedback: null });
 
     const csv = serializeCsv(rows, CLASSES_CSV_COLUMNS, { includeBom: false });
     expect(csv).toContain('"Math, Advanced"');
     expect(csv).toContain('"yes"');
     expect(csv).toContain('"ledger"');
+    // Interior newlines survive inside one quoted Topics field.
+    expect(csv).toContain('"Fractions\nand decimals"');
+    // The feedback-less ledger row emits "no" plus four empty text cells.
+    expect(csv).toContain('"no","","","",""');
   });
 
   it("emits status totals and every attended summary line per student", () => {

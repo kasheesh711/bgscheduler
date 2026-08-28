@@ -98,6 +98,7 @@ async function StudentReportBody({
     studentKeys: parsed.data.students,
     from: parsed.data.from,
     to: parsed.data.to,
+    includeFeedback: parsed.data.includeFeedback,
   });
 
   if (result.status === "no-snapshot") {

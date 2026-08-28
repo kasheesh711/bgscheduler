@@ -21,7 +21,7 @@ function classRow(overrides: Partial<ReportClassRow> = {}): ReportClassRow {
     teacher: "Kru Mint",
     bucket: "attended",
     creditApplied: 1,
-    hasFeedback: true,
+    feedback: null,
     packageName: "Mathematics package",
     subjectBand: "Y8-9 / G7-8 (Int.)",
     meetingStatus: "ENDED",
@@ -68,7 +68,14 @@ const PAYLOAD: ParentReportPayload = {
         activated: true,
       },
       rows: [
-        classRow(),
+        classRow({
+          feedback: {
+            topics: "Quadratic factorisation",
+            performance: "Focused well\nAsked good questions",
+            improvement: "Word problems",
+            homework: "",
+          },
+        }),
         classRow({
           wiseSessionId: "session-upcoming",
           dateKey: "2026-08-20",
@@ -79,7 +86,6 @@ const PAYLOAD: ParentReportPayload = {
           modality: "online",
           bucket: "upcoming",
           creditApplied: 0,
-          hasFeedback: false,
           meetingStatus: "SCHEDULED",
         }),
         classRow({
@@ -88,7 +94,6 @@ const PAYLOAD: ParentReportPayload = {
           weekday: "Fri",
           bucket: "cancelled",
           creditApplied: 0,
-          hasFeedback: false,
           meetingStatus: "CANCELLED",
         }),
         classRow({
@@ -98,7 +103,6 @@ const PAYLOAD: ParentReportPayload = {
           teacher: TEACHER_TBC,
           bucket: "other:NO_SHOW",
           creditApplied: 0,
-          hasFeedback: false,
           meetingStatus: "NO_SHOW",
         }),
       ],
@@ -294,5 +298,77 @@ describe("ReportDocument", () => {
 
     expect(html).not.toContain(">Mins<");
     expect(html).toContain("Total · 4 sessions");
+  });
+
+  it("renders one feedback sub-row per feedback-bearing class row", () => {
+    const html = render();
+
+    expect(html.match(/data-testid="class-feedback-row"/g)).toHaveLength(1);
+    expect(html.match(/data-feedback-parent/g)).toHaveLength(1);
+    expect(html).toContain("whitespace-pre-wrap");
+    expect(html).toContain("Quadratic factorisation");
+    // Interior newline reaches the markup for pre-wrap rendering.
+    expect(html).toContain("Focused well\nAsked good questions");
+  });
+
+  it("labels feedback fields and skips blank ones", () => {
+    const html = render();
+
+    expect(html).toContain("Topics:");
+    expect(html).toContain("Performance:");
+    expect(html).toContain("Needs work:");
+    // Homework is blank on the only feedback-bearing row, so its label is
+    // omitted entirely.
+    expect(html).not.toContain("Homework:");
+  });
+
+  it("renders no feedback rows when every row's feedback is null", () => {
+    const bare: ParentReportPayload = {
+      ...PAYLOAD,
+      students: [
+        {
+          ...PAYLOAD.students[0],
+          rows: PAYLOAD.students[0].rows.map((row) => ({
+            ...row,
+            feedback: null,
+          })),
+        },
+      ],
+    };
+
+    const html = render(bare);
+    expect(html).not.toContain("class-feedback-row");
+    expect(html).not.toContain("data-feedback-parent");
+  });
+
+  it("renders feedback on a ledger-backfilled row alongside its dagger", () => {
+    const ledgerPayload: ParentReportPayload = {
+      ...PAYLOAD,
+      students: [
+        {
+          ...PAYLOAD.students[0],
+          rows: [
+            classRow({
+              wiseSessionId: "session-ledger",
+              dateKey: "2026-04-17",
+              startLabel: "14:29",
+              source: "ledger",
+              timeApproximate: true,
+              feedback: {
+                topics: "Algebra review",
+                performance: "",
+                improvement: "",
+                homework: "",
+              },
+            }),
+          ],
+        },
+      ],
+    };
+
+    const html = render(ledgerPayload);
+    expect(html).toContain("14:29 †");
+    expect(html).toContain("Algebra review");
+    expect(html.match(/data-testid="class-feedback-row"/g)).toHaveLength(1);
   });
 });
