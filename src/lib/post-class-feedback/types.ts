@@ -93,8 +93,16 @@ export interface FeedbackContentAssessment {
   contentStatus: ContentStatus;
   combinedRawCharacterCount: number;
   fields: Record<PostClassRequiredField, FieldAssessment>;
+  /** Informational per-field state; never the deduction basis on its own. */
   failedFields: PostClassRequiredField[];
+  /** Informational strings (`improvement:empty`, …) for the per-field UI. */
   failureReasons: string[];
+  /**
+   * The reasons that actually violate the content bar: only
+   * `combined_characters:N/300` and `all_fields_placeholder`. Persisted as the
+   * assessment's field_failures and rendered as the deduction reason.
+   */
+  violationReasons: string[];
 }
 
 export interface PreviousComplianceLock {

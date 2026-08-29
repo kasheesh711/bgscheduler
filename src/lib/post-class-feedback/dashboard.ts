@@ -403,7 +403,9 @@ export async function getPostClassFeedbackDashboard(
   const sessionRows = sessions.map((session) => {
     const latest = session.latestFeedbackVersionId ? versionsById.get(session.latestFeedbackVersionId) ?? null : null;
     const assessment = latestAssessmentBySession.get(session.id) ?? null;
-    const failures = assessment?.fieldFailures ?? latest?.fieldFailures ?? [];
+    // Per-field flags come from the version's informational failures; the
+    // assessment's field_failures now carries only bar-violating reasons.
+    const failures = latest?.fieldFailures ?? [];
     const notification = latestNotificationBySession.get(session.id) ?? null;
     const deductionResult = deductionsBySession.get(session.id) ?? null;
     const ai = aiBySession.get(session.id) ?? { pending: 0, confirmed: 0, concerns: [] };
@@ -801,7 +803,9 @@ export async function getPostClassFeedbackDashboard(
       pendingDeductionAmount: pendingDeductions.reduce((sum, row) => sum + row.deduction.amountMinor / 100, 0),
       reminderFailures,
       late: assessed.filter((row) => row.timingStatus === "late").length,
-      incomplete: assessed.filter((row) => !row.requiredFieldsPassed).length,
+      // Content-bar violations only (char count / all-placeholder) — an empty
+      // field alone is informational, not incomplete.
+      incomplete: assessed.filter((row) => (row.fieldFailures?.length ?? 0) > 0).length,
       waived: deductionRows.filter((row) => row.deduction.status === "waived").length,
       meanCharacters: mean(substantiveCounts),
       medianCharacters: median(substantiveCounts),

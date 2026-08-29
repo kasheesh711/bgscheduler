@@ -4,6 +4,7 @@ import { useDeferredValue, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { POST_CLASS_MIN_COMBINED_CHARACTERS } from "@/lib/post-class-feedback/policy";
 import { cn } from "@/lib/utils";
 import type {
   FeedbackMutationRequest,
@@ -92,12 +93,12 @@ function NativeFilter({
 function CharacterMeter({ session }: { session: FeedbackSessionRow }) {
   if (!session.eligible) return <span className="text-xs text-muted-foreground">Not assessed</span>;
   const count = session.combinedCharacterCount;
-  const complete = count >= 300;
-  const percent = Math.min(100, (count / 300) * 100);
+  const complete = count >= POST_CLASS_MIN_COMBINED_CHARACTERS;
+  const percent = Math.min(100, (count / POST_CLASS_MIN_COMBINED_CHARACTERS) * 100);
   return (
     <div className="min-w-24">
       <div className={cn("text-xs font-medium tabular-nums", complete ? "text-emerald-700" : "text-amber-700")}>
-        {count.toLocaleString()} / 300
+        {count.toLocaleString()} / {POST_CLASS_MIN_COMBINED_CHARACTERS}
       </div>
       <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
         <div

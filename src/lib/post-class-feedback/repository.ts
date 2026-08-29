@@ -1825,7 +1825,10 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
           assessedAt: observation.observedAt,
           requiredFieldsPassed: assessment.content.failedFields.length === 0,
           combinedRawCharCount: assessment.content.combinedRawCharacterCount,
-          fieldFailures: assessment.content.failureReasons,
+          // Violating reasons only (char count / all-placeholder): this is
+          // what payout reasons and tutor reminders render. Per-field detail
+          // stays on the version rows.
+          fieldFailures: assessment.content.violationReasons,
           objectiveViolation: assessment.violation,
           rawOnTime: assessment.rawOnTimeCompliant,
           adjustedCompliant: assessment.adjustedCompliant,

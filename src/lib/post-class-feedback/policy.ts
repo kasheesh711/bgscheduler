@@ -265,17 +265,33 @@ export function assessFeedbackContent(
       ? [`combined_characters:${combinedRawCharacterCount}/${POST_CLASS_MIN_COMBINED_CHARACTERS}`]
       : []),
   ];
+  // The content bar is the combined character minimum. Individual empty
+  // fields are informational only (business decision, 2026-08-29) — but the
+  // count must be carried by real language somewhere: a form whose every
+  // non-empty field is placeholder/gibberish cannot buy compliance with
+  // repeated filler.
+  const hasMeaningfulLanguage = POST_CLASS_REQUIRED_FIELDS.some((field) => {
+    const failures = fieldAssessments[field].failures;
+    return !failures.includes("empty") && !failures.includes("placeholder");
+  });
+  const violationReasons = [
+    ...(combinedRawCharacterCount < POST_CLASS_MIN_COMBINED_CHARACTERS
+      ? [`combined_characters:${combinedRawCharacterCount}/${POST_CLASS_MIN_COMBINED_CHARACTERS}`]
+      : []),
+    ...(combinedRawCharacterCount >= POST_CLASS_MIN_COMBINED_CHARACTERS && !hasMeaningfulLanguage
+      ? ["all_fields_placeholder"]
+      : []),
+  ];
 
   return {
-    compliant:
-      failedFields.length === 0 &&
-      combinedRawCharacterCount >= POST_CLASS_MIN_COMBINED_CHARACTERS,
+    compliant: violationReasons.length === 0,
     contentStatus:
       nonEmptyCount === 0 ? "blank" : "substantive",
     combinedRawCharacterCount,
     fields: fieldAssessments,
     failedFields,
     failureReasons,
+    violationReasons,
   };
 }
 

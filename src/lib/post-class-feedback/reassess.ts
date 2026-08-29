@@ -54,6 +54,8 @@ export interface PostClassReassessOutcome {
   from: TimingStatus;
   to: TimingStatus;
   changed: boolean;
+  /** Which rule cleared the open deduction, when one cleared. */
+  cleared: "timing" | "content" | null;
   provenAt: Date | null;
   deductionWaived: boolean;
 }
@@ -101,6 +103,10 @@ export async function reassessPostClassSessions(options: {
     canonicalTutorName: schema.postClassSessions.canonicalTutorName,
     scheduledEndAt: schema.postClassSessions.scheduledEndAt,
     timingStatus: schema.postClassSessions.timingStatus,
+    // The session's deduction projection: lets the pass detect a verdict that
+    // cleared without a timing flip (e.g. a content-rule change) while an
+    // open deduction still stands.
+    deductionStatus: schema.postClassSessions.deductionStatus,
   }).from(schema.postClassSessions)
     .where(and(
       eq(schema.postClassSessions.eligible, true),
@@ -154,7 +160,18 @@ export async function reassessPostClassSessions(options: {
         eventTiming,
       });
 
-      const changed = assessment.timingStatus !== row.timingStatus;
+      const timingChanged = assessment.timingStatus !== row.timingStatus;
+      // A rule change can clear a verdict without moving the timing status
+      // (e.g. the char-count content bar clearing a field-empty violation on
+      // an event-proven on_time session). An open deduction on a session the
+      // current policy no longer finds violating is a change worth writing.
+      const openDeduction = row.deductionStatus === "pending_review"
+        || row.deductionStatus === "approved";
+      const violationCleared = !assessment.violation && openDeduction;
+      const changed = timingChanged || violationCleared;
+      const cleared: "timing" | "content" | null = !assessment.violation && openDeduction
+        ? (timingChanged ? "timing" : "content")
+        : null;
       let deductionWaived = false;
       if (changed && apply) {
         await writeReassessedVerdict(db, {
@@ -173,7 +190,12 @@ export async function reassessPostClassSessions(options: {
         });
       }
       if (changed && apply && !assessment.violation) {
-        deductionWaived = await waiveClearedDeduction(db, row.id, row.wiseSessionId);
+        deductionWaived = await waiveClearedDeduction(
+          db,
+          row.id,
+          row.wiseSessionId,
+          cleared ?? "timing",
+        );
         if (deductionWaived) result.deductionsWaived += 1;
       }
 
@@ -185,6 +207,7 @@ export async function reassessPostClassSessions(options: {
         from: row.timingStatus,
         to: assessment.timingStatus,
         changed,
+        cleared,
         provenAt: assessment.tutorSubmittedAt,
         deductionWaived,
       });
@@ -242,7 +265,7 @@ async function writeReassessedVerdict(
     assessedAt: input.assessedAt,
     requiredFieldsPassed: assessment.content.failedFields.length === 0,
     combinedRawCharCount: assessment.content.combinedRawCharacterCount,
-    fieldFailures: assessment.content.failureReasons,
+    fieldFailures: assessment.content.violationReasons,
     objectiveViolation: assessment.violation,
     rawOnTime: assessment.rawOnTimeCompliant,
     adjustedCompliant: assessment.adjustedCompliant,
@@ -289,6 +312,7 @@ async function waiveClearedDeduction(
   db: Database,
   sessionId: string,
   wiseSessionId: string,
+  clearedBy: "timing" | "content",
 ): Promise<boolean> {
   const [deduction] = await db.select({
     id: schema.postClassDeductions.id,
@@ -305,13 +329,29 @@ async function waiveClearedDeduction(
   if (!deduction) return false;
   if (await hasWrittenPayoutDeduction(db, deduction.id)) return false;
 
+  // Reason-scoped notes and idempotency keys: a timing clearance and a later
+  // content clearance must never collide on the same key with different
+  // payloads (the idempotent-replay check compares category and note).
+  const reason = clearedBy === "timing"
+    ? {
+      waiverCategory: "incorrect_session_tutor_data" as const,
+      note: "Reassessment proved a qualifying Wise submission event at or before the deadline.",
+      idempotencyKey: `reassess-waive:${wiseSessionId}`,
+    }
+    : {
+      waiverCategory: "other" as const,
+      note: "Reassessment under the char-count content bar: combined feedback meets "
+        + "the 300-character minimum; an empty field alone no longer deducts.",
+      idempotencyKey: `reassess-waive:content:${wiseSessionId}`,
+    };
+
   await applyPostClassReviewAction(SYSTEM_ACTOR, {
     deductionId: deduction.id,
     action: "waive",
-    waiverCategory: "incorrect_session_tutor_data",
-    note: "Reassessment proved a qualifying Wise submission event at or before the deadline.",
+    waiverCategory: reason.waiverCategory,
+    note: reason.note,
     expectedVersion: deduction.version,
-    idempotencyKey: `reassess-waive:${wiseSessionId}`,
+    idempotencyKey: reason.idempotencyKey,
   }, db);
   return true;
 }

@@ -20,6 +20,7 @@ interface SessionRow {
   canonicalTutorName: string | null;
   scheduledEndAt: Date;
   timingStatus: "not_due" | "on_time" | "late" | "unknown";
+  deductionStatus?: "none" | "pending_review" | "approved" | "waived";
 }
 
 /**
@@ -37,7 +38,10 @@ function fakeDb(rows: SessionRow[]): Database {
   return { select: () => chain } as unknown as Database;
 }
 
-function version(input: { observedAt: string }): FeedbackVersion {
+function version(input: {
+  observedAt: string;
+  fields?: { topics: string; performance: string; improvement: string; homework: string };
+}): FeedbackVersion {
   return {
     versionKey: `submission-1:${input.observedAt}`,
     submissionId: "submission-1",
@@ -51,7 +55,7 @@ function version(input: { observedAt: string }): FeedbackVersion {
     actorWiseUserId: "teacher-1",
     actorName: "Kevin (Kev) Y. Hsieh",
     answers: [],
-    fields: {
+    fields: input.fields ?? {
       topics: TOPICS,
       performance: PERFORMANCE,
       improvement: IMPROVEMENT,
@@ -184,6 +188,56 @@ describe("reassessPostClassSessions", () => {
     });
 
     expect(result.outcomes[0].to).toBe("unknown");
+  });
+
+  it("detects a content clearance on an unchanged timing verdict (char-count bar)", async () => {
+    // Event-proven on_time with an empty improvement field and 300+ combined
+    // characters: the old field-required rule deducted it; the char-count bar
+    // clears it with no timing flip. The open deduction makes that a change.
+    const result = await reassessPostClassSessions({
+      apply: false,
+      now: new Date("2026-08-07T00:00:00.000Z"),
+      db: fakeDb([{
+        ...LATE_SESSION,
+        timingStatus: "on_time",
+        deductionStatus: "pending_review",
+      }]),
+      repository: fakeRepository({
+        versions: [version({
+          observedAt: "2026-08-05T17:13:26.912Z",
+          fields: { topics: TOPICS, performance: PERFORMANCE, improvement: "", homework: "" },
+        })],
+        events: [feedbackEvent({ at: ON_TIME_EVENT_AT, role: "TEACHER" })],
+      }),
+    });
+
+    expect(result.changed).toBe(1);
+    expect(result.outcomes[0]).toMatchObject({
+      from: "on_time",
+      to: "on_time",
+      changed: true,
+      cleared: "content",
+      deductionWaived: false,
+    });
+  });
+
+  it("does not report a change when timing holds and no deduction is open", async () => {
+    const result = await reassessPostClassSessions({
+      apply: false,
+      now: new Date("2026-08-07T00:00:00.000Z"),
+      db: fakeDb([{
+        ...LATE_SESSION,
+        timingStatus: "on_time",
+        deductionStatus: "waived",
+      }]),
+      repository: fakeRepository({
+        versions: [version({ observedAt: "2026-08-05T17:13:26.912Z" })],
+        events: [feedbackEvent({ at: ON_TIME_EVENT_AT, role: "TEACHER" })],
+      }),
+    });
+
+    expect(result.changed).toBe(0);
+    expect(result.outcomes[0]).toMatchObject({ changed: false, cleared: null });
   });
 
   it("reports a per-session failure without aborting the pass", async () => {

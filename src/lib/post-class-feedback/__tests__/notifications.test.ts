@@ -103,6 +103,25 @@ describe("post-class notification lifecycle", () => {
     ])).toEqual({ disposition: "send", activeIndexes: [0] });
   });
 
+  it("does not remind a class with empty fields but 300+ combined characters", () => {
+    // Char-count-only bar (2026-08-29): field emptiness is informational.
+    const emptyFieldButLong = membership({
+      requiredFieldsPassed: false,
+      combinedRawCharCount: 470,
+      contentViolationReasons: [],
+    });
+    expect(emptyFieldButLong).toBe("inactive");
+  });
+
+  it("keeps reminding an all-placeholder class even past 300 characters", () => {
+    const placeholderOnly = membership({
+      requiredFieldsPassed: false,
+      combinedRawCharCount: 350,
+      contentViolationReasons: ["all_fields_placeholder"],
+    });
+    expect(placeholderOnly).toBe("active");
+  });
+
   it("cancels retries after late content remediation without erasing the violation", () => {
     const remediatedLate = membership({
       adjustedCompliant: false,

@@ -490,7 +490,7 @@ function DetailBody({
           <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
             <section className="overflow-hidden rounded-lg border bg-card">
               <div className="flex items-center justify-between border-b px-3 py-2">
-                <h3 className="text-xs font-semibold">Mapped required fields</h3>
+                <h3 className="text-xs font-semibold">Mapped fields (informational — the bar is 300 combined characters)</h3>
                 <span className="text-[11px] tabular-nums text-muted-foreground">{selectedVersion.combinedCharacterCount} total characters</span>
               </div>
               <AnswerRow label="Topics covered" answer={selectedVersion.required.topics} />
@@ -542,7 +542,7 @@ function DetailBody({
                   </div>
                   <div className="mt-2 grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2">
                     <span>Policy v{assessment.policyVersion} · mapping v{assessment.mappingVersion}</span>
-                    <span>{assessment.combinedRawCharCount} characters · {assessment.requiredFieldsPassed ? "fields passed" : "fields failed"}</span>
+                    <span>{assessment.combinedRawCharCount} characters · {assessment.requiredFieldsPassed ? "all fields filled" : "some fields empty (informational)"}</span>
                     <span>{assessment.rawOnTime ? "Raw on-time" : "Not proven on-time"}</span>
                     <span>{assessment.adjustedCompliant ? "Adjusted compliant" : assessment.remediatedLate ? "Remediated late" : "Not adjusted compliant"}</span>
                   </div>

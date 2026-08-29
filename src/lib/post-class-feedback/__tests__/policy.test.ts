@@ -97,15 +97,38 @@ describe("post-class feedback policy", () => {
     )).toBe(false);
   });
 
-  it("requires all three fields and a combined minimum of 300 raw characters", () => {
+  it("holds the content bar at 300 combined characters; empty fields are informational", () => {
     expect(assessFeedbackContent(completeFields()).compliant).toBe(true);
-    expect(assessFeedbackContent({ ...completeFields(), topics: "" }).compliant).toBe(false);
-    expect(assessFeedbackContent({
+
+    // An empty individual field alone no longer violates when the combined
+    // count is met (char-count-only bar, 2026-08-29) — it stays visible as an
+    // informational failure but produces no violating reason.
+    const emptyTopics = assessFeedbackContent({ ...completeFields(), topics: "" });
+    expect(emptyTopics.compliant).toBe(true);
+    expect(emptyTopics.failureReasons).toContain("topics:empty");
+    expect(emptyTopics.violationReasons).toEqual([]);
+
+    // 299 combined chars fails; the 1000-char homework proves it is excluded
+    // from the count.
+    const short = assessFeedbackContent({
       topics: "T".repeat(99),
       performance: "P".repeat(100),
       improvement: "I".repeat(100),
       homework: "H".repeat(1000),
-    }).compliant).toBe(false);
+    });
+    expect(short.compliant).toBe(false);
+    expect(short.violationReasons).toContain("combined_characters:299/300");
+
+    // 300+ characters of pure placeholder cannot buy compliance.
+    const placeholderOnly = assessFeedbackContent({
+      topics: "good ".repeat(70),
+      performance: "",
+      improvement: "",
+      homework: "",
+    });
+    expect(placeholderOnly.combinedRawCharacterCount).toBeGreaterThanOrEqual(300);
+    expect(placeholderOnly.compliant).toBe(false);
+    expect(placeholderOnly.violationReasons).toContain("all_fields_placeholder");
   });
 
   it("requires ENDED plus positive credits or explicit payout eligibility", () => {
@@ -190,7 +213,9 @@ describe("post-class feedback policy", () => {
         version({ id: "good", sourceCreatedAt: "2026-07-02T10:00:00.000Z", observedAt: "2026-07-02T10:01:00.000Z" }),
         version({
           id: "regressed",
-          fields: { ...completeFields(), topics: "N/A" },
+          // A genuine regression under the char-count bar: substantive but far
+          // below 300 combined characters.
+          fields: { topics: "Short note.", performance: "", improvement: "", homework: "" },
           sourceCreatedAt: "2026-07-04T00:00:00.000Z",
           observedAt: "2026-07-04T00:01:00.000Z",
         }),
@@ -216,7 +241,7 @@ describe("post-class feedback policy", () => {
         }),
         version({
           id: "regressed-before-deadline",
-          fields: { ...completeFields(), topics: "N/A" },
+          fields: { topics: "Short note.", performance: "", improvement: "", homework: "" },
           sourceCreatedAt: "2026-07-03T10:00:00.000Z",
           observedAt: "2026-07-03T10:01:00.000Z",
         }),

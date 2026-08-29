@@ -82,11 +82,21 @@ export function classifyPostClassReminderMembership(input: {
   adjustedCompliant: boolean;
   requiredFieldsPassed: boolean;
   combinedRawCharCount: number;
+  /**
+   * The assessment's persisted violating reasons. Post char-count-bar rows
+   * carry only `combined_characters:*` / `all_fields_placeholder`; a
+   * non-empty list means the content bar is genuinely unmet.
+   */
+  contentViolationReasons?: string[];
   lastObservedAt: Date | null;
   freshAfter: Date;
 }): PostClassReminderMembershipState {
-  const currentContentCompliant = input.requiredFieldsPassed &&
-    input.combinedRawCharCount >= POST_CLASS_MIN_COMBINED_CHARACTERS;
+  // The content bar is the combined character minimum (2026-08-29): an empty
+  // individual field no longer makes a class reminder-worthy on its own.
+  // `requiredFieldsPassed` stays in the input as informational context only.
+  const currentContentCompliant =
+    input.combinedRawCharCount >= POST_CLASS_MIN_COMBINED_CHARACTERS &&
+    !(input.contentViolationReasons ?? []).includes("all_fields_placeholder");
   const otherwiseEligible = input.eligible &&
     input.enforcementMode === "live" &&
     input.sourceStatus === "ready" &&
@@ -322,6 +332,7 @@ function stillNeedsReminder(input: {
     adjustedCompliant: assessment.adjustedCompliant,
     requiredFieldsPassed: assessment.requiredFieldsPassed,
     combinedRawCharCount: assessment.combinedRawCharCount,
+    contentViolationReasons: assessment.fieldFailures,
     lastObservedAt: session.lastObservedAt,
     freshAfter: input.freshAfter ?? new Date(0),
   }) === "active";
@@ -585,6 +596,7 @@ async function reminderContent(db: Database, deliveryId: string, now: Date) {
       adjustedCompliant: assessment.adjustedCompliant,
       requiredFieldsPassed: assessment.requiredFieldsPassed,
       combinedRawCharCount: assessment.combinedRawCharCount,
+      contentViolationReasons: assessment.fieldFailures,
       lastObservedAt: row.session.lastObservedAt,
       freshAfter,
     });
