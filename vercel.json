@@ -38,10 +38,6 @@
       "schedule": "23,53 * * * *"
     },
     {
-      "path": "/api/internal/post-class-feedback/payout-accrual",
-      "schedule": "33 * * * *"
-    },
-    {
       "path": "/api/internal/sync-leave-requests",
       "schedule": "15,45 * * * *"
     },

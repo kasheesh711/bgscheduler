@@ -1206,7 +1206,7 @@ export async function markPayoutAdjustment(
     runId: string;
     adjustmentId: string;
     leaseToken: string;
-    status: "pending" | "written" | "failed" | "exception";
+    status: "pending" | "written" | "failed" | "exception" | "superseded";
     sheetRowNumber?: number | null;
     writeError?: string | null;
     writtenAt?: Date | null;
@@ -1317,7 +1317,7 @@ export async function finalizePayoutRunPass(db: Database, input: {
     const incompleteLines = lines.some((line) =>
       line.retiredAt === null && line.writeStatus !== "written");
     const incompleteAdjustments = adjustments.some((adjustment) =>
-      adjustment.status !== "written");
+      adjustment.status !== "written" && adjustment.status !== "superseded");
     const openExceptions = exceptions.some((exception) => exception.status === "open");
     const finalSourceSnapshot = await readPayoutRunPreview(tx, {
       window: {
@@ -1780,7 +1780,10 @@ export async function inspectPayoutRunCloseReadiness(
     });
   }
   const incompleteAdjustments = adjustments.filter(
-    (adjustment) => adjustment.status !== "written").length;
+    // `superseded` is as final as `written`: the correction was applied to
+    // the ledger by hand (INC-260829), so it owes the sheet nothing.
+    (adjustment) => adjustment.status !== "written"
+      && adjustment.status !== "superseded").length;
   if (incompleteAdjustments > 0) {
     blockers.push({
       code: "incomplete_adjustments",

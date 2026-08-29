@@ -741,6 +741,9 @@ export async function publishPayoutRun(
   );
   const pendingAdjustments = acquired.adjustments.filter((adjustment) =>
     adjustment.status !== "written"
+    // `superseded` is terminal: the correction already reached the ledger
+    // outside the system (INC-260829 manual fix) and must never be appended.
+    && adjustment.status !== "superseded"
     && (!input.tutorFilter || (
       (adjustment.sourceLineId
         ? sourceLineById.get(adjustment.sourceLineId)

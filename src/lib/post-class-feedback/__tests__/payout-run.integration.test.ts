@@ -23,6 +23,7 @@ import {
 import type { PayoutPublishAcknowledgements } from "@/lib/post-class-feedback/payout-plan";
 import {
   createPayoutAdjustment,
+  inspectPayoutRunCloseReadiness,
   upsertPayoutTutorName,
 } from "@/lib/post-class-feedback/payout-repository";
 import {
@@ -646,6 +647,46 @@ describe("publishPayoutRun", () => {
     expect(correctionRows(grid)[0][7]).toBe(100);
     expect(String(correctionRows(grid)[0][1])).toContain(adjustment.rowSignature);
     expect(String(correctionRows(grid)[0][1])).toContain(sourceLine.rowSignature);
+  });
+
+  it("never appends a superseded correction and treats it as complete (INC-260829)", async () => {
+    await seedTwoDeductionsAndMapping();
+    const grid = sheetGrid();
+    const first = await publish(
+      ACTOR,
+      { anchorMonth: "2026-07" },
+      appDb(),
+      { gateway: fakeGateway(grid).gateway, uploadCsv: uploadOk },
+    );
+    const sourceLine = first.lines.find((line) => line.wiseSessionId === "s-grace")!;
+    const adjustment = await createPayoutAdjustment(appDb(), {
+      deductionId: sourceLine.deductionId,
+      kind: "waiver",
+      reason: "Waived after the payout row landed",
+      actorEmail: ACTOR.email,
+      actionIdentity: "waiver:s-grace:superseded",
+    });
+    // The correction was applied to the ledger by hand; the system owes the
+    // sheet nothing for it.
+    await handle.db.update(schema.postClassPayoutAdjustments)
+      .set({ status: "superseded" })
+      .where(eq(schema.postClassPayoutAdjustments.id, adjustment.id));
+
+    const second = await publish(
+      ACTOR,
+      { anchorMonth: "2026-07" },
+      appDb(),
+      { gateway: fakeGateway(grid).gateway, uploadCsv: uploadOk },
+    );
+
+    expect(second.run.status).toBe("published");
+    expect(second.adjustments).toHaveLength(1);
+    expect(second.adjustments[0].status).toBe("superseded");
+    expect(correctionRows(grid)).toHaveLength(0);
+
+    const readiness = await inspectPayoutRunCloseReadiness(appDb(), { anchorMonth: "2026-07" });
+    expect(readiness.blockers.map((blocker) => blocker.code))
+      .not.toContain("incomplete_adjustments");
   });
 
   it("keeps a transient correction failure retryable without creating an exception", async () => {

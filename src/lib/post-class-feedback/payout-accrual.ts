@@ -43,7 +43,8 @@ const SYSTEM_ACTOR: PostClassUser = {
 /** Every obligation this preview knows about is already durably written. */
 function isEverythingAlreadyWritten(view: PayoutRunView): boolean {
   return view.lines.every((line) => line.persisted && line.writeStatus === "written")
-    && view.adjustments.every((adjustment) => adjustment.status === "written");
+    && view.adjustments.every((adjustment) =>
+      adjustment.status === "written" || adjustment.status === "superseded");
 }
 
 /**

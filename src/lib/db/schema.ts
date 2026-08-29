@@ -3830,7 +3830,12 @@ export const postClassPayoutAdjustments = pgTable("post_class_payout_adjustments
   sourceLineId: uuid("source_line_id").references(() => postClassPayoutRunLines.id, { onDelete: "restrict" }),
   runId: uuid("run_id").references(() => postClassPayoutRuns.id, { onDelete: "set null" }),
   kind: text("kind").$type<"waiver" | "reversal">().notNull(),
-  status: text("status").$type<"pending" | "written" | "failed" | "exception">().notNull().default("pending"),
+  /**
+   * `superseded` is terminal: the correction was applied to the ledger
+   * outside the system (INC-260829 manual sheet fix), so no pass may ever
+   * append it, and it does not block run close.
+   */
+  status: text("status").$type<"pending" | "written" | "failed" | "exception" | "superseded">().notNull().default("pending"),
   /** Positive signed minor units which compensate the original negative row. */
   amountMinor: integer("amount_minor").notNull().default(10_000),
   currency: text("currency").notNull().default("THB"),
@@ -3854,7 +3859,7 @@ export const postClassPayoutAdjustments = pgTable("post_class_payout_adjustments
   check("pc_payout_adjustments_kind_check", sql`${table.kind} in ('waiver', 'reversal')`),
   check(
     "pc_payout_adjustments_status_check",
-    sql`${table.status} in ('pending', 'written', 'failed', 'exception')`,
+    sql`${table.status} in ('pending', 'written', 'failed', 'exception', 'superseded')`,
   ),
   check("pc_payout_adjustments_amount_check", sql`${table.amountMinor} > 0`),
 ]);

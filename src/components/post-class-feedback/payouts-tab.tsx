@@ -83,7 +83,7 @@ interface PayoutAdjustment {
   deductionId: string;
   sourceLineId: string | null;
   kind: "waiver" | "reversal";
-  status: "pending" | "written" | "failed" | "exception";
+  status: "pending" | "written" | "failed" | "exception" | "superseded";
   amountMinor: number;
   currency: string;
   reason: string;

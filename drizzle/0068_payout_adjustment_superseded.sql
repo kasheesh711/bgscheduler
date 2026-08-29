@@ -1,0 +1,2 @@
+ALTER TABLE "post_class_payout_adjustments" DROP CONSTRAINT "pc_payout_adjustments_status_check";--> statement-breakpoint
+ALTER TABLE "post_class_payout_adjustments" ADD CONSTRAINT "pc_payout_adjustments_status_check" CHECK ("post_class_payout_adjustments"."status" in ('pending', 'written', 'failed', 'exception', 'superseded'));

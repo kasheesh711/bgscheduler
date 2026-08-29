@@ -233,15 +233,18 @@ export const CRON_JOBS = [
   },
   {
     key: "post_class_feedback_payout_accrual",
-    label: "Payout Accrual",
+    // Re-parked after INC-260829: the scheduled pass converted unreviewed
+    // deductions into ledger writes. Sheet writes now happen only through a
+    // deliberate finance publish (Payouts tab) or this Run-now button.
+    label: "Payout Accrual (parked)",
     feature: "Class Feedback",
     path: "/api/internal/post-class-feedback/payout-accrual",
-    schedule: "33 * * * *",
-    cadenceLabel: "Hourly",
-    cadenceMinutes: 60,
-    lateAfterMinutes: 180,
+    schedule: null,
+    cadenceLabel: "Parked — no cron",
+    cadenceMinutes: null,
+    lateAfterMinutes: 0,
     maxDurationSeconds: 800,
-    manualOnly: false,
+    manualOnly: true,
     dangerous: true,
     confirmationLabel: "Appends real payout deductions to the master ledger.",
     routeMethod: "GET",

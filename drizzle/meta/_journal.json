@@ -477,6 +477,13 @@
       "when": 1786981960050,
       "tag": "0067_line_credit_digest",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1787992439472,
+      "tag": "0068_payout_adjustment_superseded",
+      "breakpoints": true
     }
   ]
 }

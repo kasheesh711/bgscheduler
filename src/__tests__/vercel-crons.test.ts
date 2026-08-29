@@ -70,23 +70,10 @@ describe("vercel cron configuration", () => {
     expect(usedMinutes.has(3)).toBe(false);
   });
 
-  it("runs the payout accrual hourly on minute 33", () => {
+  it("keeps the payout accrual parked — no scheduled entry (INC-260829)", () => {
     const crons = new Map(loadVercelConfig().crons.map((cron) => [cron.path, cron.schedule]));
 
-    expect(crons.get("/api/internal/post-class-feedback/payout-accrual")).toBe("33 * * * *");
-  });
-
-  it("staggers the payout accrual away from every other cron minute", () => {
-    const otherMinuteFields = loadVercelConfig()
-      .crons.filter((cron) => cron.path !== "/api/internal/post-class-feedback/payout-accrual")
-      .map((cron) => cron.schedule.split(" ")[0]);
-    const usedMinutes = new Set(
-      otherMinuteFields.flatMap((field) =>
-        field === "*/30" ? [0, 30] : field.split(",").map((minute) => Number(minute)),
-      ),
-    );
-
-    expect(usedMinutes.has(33)).toBe(false);
+    expect(crons.has("/api/internal/post-class-feedback/payout-accrual")).toBe(false);
   });
 
   it("staggers the admissions notifications cron away from every other cron minute", () => {
