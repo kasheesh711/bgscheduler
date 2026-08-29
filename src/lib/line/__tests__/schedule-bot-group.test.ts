@@ -149,6 +149,11 @@ describe("detectTrigger", () => {
     expect(detectTrigger("/CREDIT setup", [])).toEqual({ kind: "prefix", verb: "credit", command: "setup" });
   });
 
+  it("routes the /report prefix to the report verb", () => {
+    expect(detectTrigger("/report Aadhu.Sr 60", [])).toEqual({ kind: "prefix", verb: "report", command: "Aadhu.Sr 60" });
+    expect(detectTrigger("/REPORT Aadhu.Sr", [])).toEqual({ kind: "prefix", verb: "report", command: "Aadhu.Sr" });
+  });
+
   it("still accepts a mobile @-mention", () => {
     const m = [{ index: 0, length: 9, type: "user", isSelf: true }];
     expect(detectTrigger("@BeGifted Aadhu.Sr", m)).toEqual({ kind: "mention", verb: "schedule", command: "Aadhu.Sr" });

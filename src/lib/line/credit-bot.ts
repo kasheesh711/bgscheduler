@@ -108,9 +108,10 @@ export type CreditBalanceLookup =
 /**
  * Reads the chat's stored audience RAW. `null` covers both "no settings row"
  * and any value that is not exactly "staff" — the caller treats all of those
- * as not-a-staff-chat (CRED-BOT-G1 fail-closed).
+ * as not-a-staff-chat. Backs both CRED-BOT-G1 here and REP-BOT-G1 in
+ * report-bot.ts (fail-closed for both).
  */
-async function rawStaffGroup(db: Database, groupId: string): Promise<boolean> {
+export async function rawStaffGroup(db: Database, groupId: string): Promise<boolean> {
   const [row] = await db
     .select({ audience: schema.lineGroupSettings.audience })
     .from(schema.lineGroupSettings)
@@ -119,29 +120,36 @@ async function rawStaffGroup(db: Database, groupId: string): Promise<boolean> {
   return row?.audience === "staff";
 }
 
+/** One resolved family member, in reply order (queried student first). */
+export interface FamilyStudent {
+  studentKey: string;
+  studentName: string;
+}
+
+export type FamilyStudentsLookup =
+  | { status: "no_snapshot" }
+  | { status: "not_exact"; candidates: ScheduleBotCandidate[] }
+  | {
+      status: "ok";
+      snapshot: { id: string; generatedAt: Date };
+      students: FamilyStudent[];
+    };
+
 /**
- * Resolves a nickname code to the whole family's package balances on the
- * active credit-control snapshot.
+ * Resolves a nickname code to the whole family on the active credit-control
+ * snapshot. Shared by /credit (balances) and /report (Parent Report link).
  *
  * 1. Ranked directory search, then exact-code narrowing — one exact bracketed
  *    -code hit or nothing (same rule as the schedule bot's link path).
  * 2. Sibling fan-out by parentName within the snapshot. A blank parentName
  *    must NOT fan out: the column defaults to "" and matching it would sweep
  *    in every parent-less student on the snapshot.
- * 3. Package balances for every sibling; excluded packages (pretest/trial)
- *    are filtered exactly as the dashboard and report do.
- * 4. Finished packages — ≤ 0 remaining with no UPCOMING future session for
- *    the (wiseClassId, wiseStudentId) pair — are hidden and counted into
- *    `archivedCount` instead (CRED-BOT-R1). The pair query only runs when at
- *    least one package is at ≤ 0.
- *
- * Students on the credit-control inactive list are deliberately included —
- * this is raw snapshot truth, matching the report page the reply links to.
+ * 3. Queried student first, then siblings in name order; de-duped by key.
  */
-export async function loadCreditBalances(
+export async function resolveFamilyStudents(
   db: Database,
   query: string,
-): Promise<CreditBalanceLookup> {
+): Promise<FamilyStudentsLookup> {
   const { snapshot, rows } = await searchCurrentLineStudentsWithSnapshot(db, query, MAX_CANDIDATES);
   if (!snapshot) return { status: "no_snapshot" };
 
@@ -177,6 +185,43 @@ export async function loadCreditBalances(
   for (const row of siblingRows) {
     if (!ordered.has(row.studentKey)) ordered.set(row.studentKey, row.studentName);
   }
+  return {
+    status: "ok",
+    snapshot,
+    students: [...ordered.entries()].map(([studentKey, studentName]) => ({
+      studentKey,
+      studentName,
+    })),
+  };
+}
+
+/**
+ * Resolves a nickname code to the whole family's package balances on the
+ * active credit-control snapshot.
+ *
+ * 1. Family resolution via resolveFamilyStudents (search, exact-code, sibling
+ *    fan-out, queried-first order).
+ * 2. Package balances for every sibling; excluded packages (pretest/trial)
+ *    are filtered exactly as the dashboard and report do.
+ * 3. Finished packages — ≤ 0 remaining with no UPCOMING future session for
+ *    the (wiseClassId, wiseStudentId) pair — are hidden and counted into
+ *    `archivedCount` instead (CRED-BOT-R1). The pair query only runs when at
+ *    least one package is at ≤ 0.
+ *
+ * Students on the credit-control inactive list are deliberately included —
+ * this is raw snapshot truth, matching the report page the reply links to.
+ */
+export async function loadCreditBalances(
+  db: Database,
+  query: string,
+): Promise<CreditBalanceLookup> {
+  const family = await resolveFamilyStudents(db, query);
+  if (family.status !== "ok") return family;
+
+  const { snapshot } = family;
+  const ordered = new Map(
+    family.students.map((student) => [student.studentKey, student.studentName]),
+  );
   const studentKeys = [...ordered.keys()];
 
   const packageRows = await db

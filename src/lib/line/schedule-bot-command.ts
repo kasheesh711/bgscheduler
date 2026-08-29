@@ -23,16 +23,30 @@ export const TRIGGER_PREFIX = "/schedule";
 /** Second command family: credit balances + the daily run-out digest. */
 export const CREDIT_TRIGGER_PREFIX = "/credit";
 
+/** Third command family: the Parent Report print link for a chosen window. */
+export const REPORT_TRIGGER_PREFIX = "/report";
+
 /** Which command family a trigger addressed. Mentions map to "schedule". */
-export type BotVerb = "schedule" | "credit";
+export type BotVerb = "schedule" | "credit" | "report";
 
 const TRIGGER_PREFIXES: ReadonlyArray<{ verb: BotVerb; prefix: string }> = [
   { verb: "schedule", prefix: TRIGGER_PREFIX },
   { verb: "credit", prefix: CREDIT_TRIGGER_PREFIX },
+  { verb: "report", prefix: REPORT_TRIGGER_PREFIX },
 ];
 
 /** `<code> [YYYY-MM] [send]`. */
 export const COMMAND_PATTERN = /^([A-Za-z0-9._\-฀-๿]{2,40})(?:\s+(\d{4}-\d{2}))?(?:\s+(send))?$/i;
+
+/**
+ * `<code> [days | from to]` — trailing args pick the Parent Report window.
+ * The code is a single token (bracketed nickname codes never contain spaces),
+ * so `/report 42` queries the code "42" while `/report Aadhu.Sr 42` asks for
+ * 42 trailing days. A lone trailing date matches neither branch and fails the
+ * whole pattern, which the bot answers with help.
+ */
+export const REPORT_COMMAND_PATTERN =
+  /^([A-Za-z0-9._\-฀-๿]{2,40})(?:\s+(\d{1,3})|\s+(\d{4}-\d{2}-\d{2})\s+(\d{4}-\d{2}-\d{2}))?$/i;
 
 export const YES_PATTERN = /^(yes|y|ยืนยัน|ใช่|ok|okay)$/i;
 export const NO_PATTERN = /^(no|n|cancel|ยกเลิก|ไม่)$/i;

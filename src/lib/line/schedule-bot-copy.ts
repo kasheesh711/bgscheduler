@@ -410,6 +410,7 @@ export const ADMIN_HELP = [
   "Send a student code (e.g. Aadhu.Sr) for this month, or \"Aadhu.Sr 2026-09\" for a specific month.",
   "YES confirms, NO cancels.",
   "/credit Aadhu.Sr — that family's credit balances + report link.",
+  "/report Aadhu.Sr — that family's Parent Report print link.",
 ].join("\n");
 export const ADMIN_SEND_FAILED = "Could not send the LINE message. Nothing was delivered — try again, or send the link manually from /student-schedule.";
 export const ADMIN_NO_SNAPSHOT = "No active credit-control snapshot yet, so I can't read schedules. Try again after the next sync.";
@@ -561,6 +562,66 @@ export function creditBalanceReply({
     lines.push(`Report covers the first ${REPORT_MAX_STUDENTS} students (+${truncatedCount} more).`);
   }
   lines.push("", dataAsOfLine(generatedAt));
+  return lines.join("\n");
+}
+
+export const REPORT_HELP = [
+  "/report Aadhu.Sr — that family's Parent Report print link (last 30 days).",
+  "/report Aadhu.Sr 60 — the last 60 days instead (1-365).",
+  "/report Aadhu.Sr 2026-08-01 2026-08-28 — an exact date range.",
+].join("\n");
+
+export const REPORT_INVALID_RANGE = [
+  "That range doesn't work.",
+  "Days must be 1-365, and an exact range needs YYYY-MM-DD YYYY-MM-DD with the start on or before the end.",
+].join("\n");
+
+export const REPORT_NO_SNAPSHOT =
+  "No active credit-control snapshot yet, so I can't look up students. Try again after the next sync.";
+
+export function reportNotExact(query: string, candidates: ScheduleBotCandidate[]): string {
+  if (candidates.length === 0) return `No student matches "${query}".`;
+  return [
+    `"${query}" isn't an exact code. Try /report with the full code:`,
+    ...candidates.map((candidate) => (
+      candidate.code
+        ? `• ${candidate.code} — ${candidate.studentName}`
+        : `• ${candidate.studentName}`
+    )),
+  ].join("\n");
+}
+
+/**
+ * The /report reply: one 📄 line per family member (queried student first),
+ * the window, and the Parent Report print link. No snapshot-age caveat — the
+ * reply carries no snapshot data, and the linked page renders live at click
+ * time. `days` is null for an explicit from/to range.
+ */
+export function reportLinkReply({
+  students,
+  from,
+  to,
+  days,
+  url,
+  truncatedCount,
+}: {
+  students: Array<{ studentName: string }>;
+  from: string;
+  to: string;
+  days: number | null;
+  url: string;
+  truncatedCount: number;
+}): string {
+  const range = `${dmyFromKey(from)} – ${dmyFromKey(to)}`;
+  const lines: string[] = students.map((student) => `📄 ${student.studentName}`);
+  lines.push(
+    "",
+    days === null ? `Report (${range}):` : `Report (last ${days} days, ${range}):`,
+    url,
+  );
+  if (truncatedCount > 0) {
+    lines.push(`Report covers the first ${REPORT_MAX_STUDENTS} students (+${truncatedCount} more).`);
+  }
   return lines.join("\n");
 }
 

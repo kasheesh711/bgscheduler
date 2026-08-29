@@ -43,6 +43,7 @@ import {
   exactCodeMatches,
 } from "@/lib/line/schedule-bot-command";
 import { handleCreditCommand, type CreditBotAction } from "@/lib/line/credit-bot";
+import { handleReportCommand, type ReportBotAction } from "@/lib/line/report-bot";
 import {
   getStudentMonthlySchedule,
   parseStudentDisplay,
@@ -104,7 +105,8 @@ export interface ScheduleBotResult {
     | "pending_expired"
     | "no_snapshot"
     | "send_failed"
-    | CreditBotAction;
+    | CreditBotAction
+    | ReportBotAction;
 }
 
 /**
@@ -262,6 +264,19 @@ async function routeScheduleBotCommand(
   // skipped, exactly as for /schedule.
   if (trigger.kind === "prefix" && trigger.verb === "credit") {
     return handleCreditCommand({
+      db,
+      lineUserId,
+      command: trigger.command,
+      surface: { kind: "dm" },
+      respond: (text) => reply(deps, lineUserId, text),
+      now: deps.now,
+      baseUrl: deps.baseUrl,
+    });
+  }
+
+  // Same hand-off for the report family (REP-BOT-G1 lives inside).
+  if (trigger.kind === "prefix" && trigger.verb === "report") {
+    return handleReportCommand({
       db,
       lineUserId,
       command: trigger.command,

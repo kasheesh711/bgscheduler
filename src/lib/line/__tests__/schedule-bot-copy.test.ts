@@ -21,6 +21,9 @@ import {
   groupEmptyMonth,
   groupNotExactCode,
   parentSchedulePushMessage,
+  REPORT_HELP,
+  reportLinkReply,
+  reportNotExact,
   studentLabel,
   PUBLIC_PAGE_COPY,
   THAI_WEEKDAY_INITIALS,
@@ -171,6 +174,7 @@ describe("admin refusals", () => {
     expect(ADMIN_HELP).toContain("Aadhu.Sr");
     expect(ADMIN_HELP).toContain("2026-09");
     expect(ADMIN_HELP).toContain("YES");
+    expect(ADMIN_HELP).toContain("/report");
   });
 });
 
@@ -270,6 +274,63 @@ describe("studentLabel", () => {
 
   it("passes the name through when there is no code", () => {
     expect(studentLabel("Somchai Jaidee", null)).toBe("Somchai Jaidee");
+  });
+});
+
+describe("report copy", () => {
+  it("lists every family member, the labeled window, and the link — no caveat", () => {
+    const text = reportLinkReply({
+      students: [
+        { studentName: "Teethad (Copter.Th) Thamprida" },
+        { studentName: "Jidapa (Jasmine.Th) Thamprida" },
+      ],
+      from: "2026-07-06",
+      to: "2026-08-05",
+      days: 30,
+      url: "https://example.test/student-report/report?student=a&from=2026-07-06&to=2026-08-05",
+      truncatedCount: 0,
+    });
+
+    expect(text.indexOf("📄 Teethad (Copter.Th)")).toBeLessThan(
+      text.indexOf("📄 Jidapa (Jasmine.Th)"),
+    );
+    expect(text).toContain("Report (last 30 days, 6/7/2026 – 5/8/2026):");
+    expect(text).toContain("https://example.test/student-report/report");
+    expect(text).not.toContain("first 8 students");
+    expect(text).not.toContain("Data as of");
+  });
+
+  it("drops the last-N-days wording for an explicit range and notes truncation", () => {
+    const text = reportLinkReply({
+      students: [{ studentName: "A (A.Bb) C" }],
+      from: "2026-08-01",
+      to: "2026-08-20",
+      days: null,
+      url: "https://example.test/r",
+      truncatedCount: 2,
+    });
+
+    expect(text).toContain("Report (1/8/2026 – 20/8/2026):");
+    expect(text).not.toContain("last");
+    expect(text).toContain("Report covers the first 8 students (+2 more).");
+  });
+
+  it("help shows all three command forms", () => {
+    expect(REPORT_HELP).toContain("/report Aadhu.Sr —");
+    expect(REPORT_HELP).toContain("/report Aadhu.Sr 60");
+    expect(REPORT_HELP).toContain("/report Aadhu.Sr 2026-08-01 2026-08-28");
+  });
+
+  it("lists candidates for a non-exact code and a bare message for none", () => {
+    const text = reportNotExact("Thamprida", [
+      { code: "Copter.Th", studentName: "Teethad (Copter.Th) Thamprida" },
+      { code: null, studentName: "Someone Codeless" },
+    ]);
+    expect(text).toContain("Try /report with the full code:");
+    expect(text).toContain("• Copter.Th — Teethad (Copter.Th) Thamprida");
+    expect(text).toContain("• Someone Codeless");
+
+    expect(reportNotExact("zz", [])).toBe('No student matches "zz".');
   });
 });
 
