@@ -24,7 +24,7 @@ import type { WiseSessionDetail } from "@/lib/wise/types";
 import { getWiseSessionTeacherUserId, getWiseUserId } from "@/lib/wise/types";
 import { toFeedbackEventEvidence } from "./events";
 import { lockPostClassFinance } from "./finance-lock";
-import { assessFeedbackContent, calculateFeedbackDeadline } from "./policy";
+import { assessFeedbackContent, calculateFeedbackDeadline, compareVersions } from "./policy";
 import { DEFAULT_FEEDBACK_FIELD_MAPPINGS } from "./wise";
 
 /**
@@ -705,16 +705,17 @@ function latestTeacherVersion(versions: FeedbackVersion[]): FeedbackVersion | nu
   return versions
     .filter((version) => version.profile?.trim().toLowerCase() === "teacher")
     .filter((version) => assessFeedbackContent(version.fields).contentStatus === "substantive")
-    .toSorted((left, right) => {
-      const leftTime = left.sourceCreatedAt?.getTime() ?? left.observedAt.getTime();
-      const rightTime = right.sourceCreatedAt?.getTime() ?? right.observedAt.getTime();
-      return leftTime - rightTime || left.observedAt.getTime() - right.observedAt.getTime();
-    })
+    // Shared Wise-clock ordering (policy.ts): ingestion time never outranks a
+    // Wise time, so this stays byte-identical to the governing-version choice.
+    .toSorted(compareVersions)
     .at(-1) ?? null;
 }
 
-function timingEvidence(
-  assessment: NonNullable<PostClassSessionObservation["assessment"]>,
+export function timingEvidence(
+  assessment: Pick<
+    NonNullable<PostClassSessionObservation["assessment"]>,
+    "timingEvidenceSource" | "timingStatus" | "onTimeComplianceLocked" | "deadlineAt"
+  >,
   governing: FeedbackVersion | null,
 ): string {
   // An immutable Wise activity event outranks every mutable submission
@@ -1228,9 +1229,6 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
     return {
       locked: Boolean(onTimeAssessment && feedback),
       versionKey: feedback?.versionKey ?? null,
-      provedAt: feedback
-        ? feedback.sourceCreatedAt ?? feedback.observedAt
-        : violation?.assessedAt ?? null,
       violationLocked: Boolean(violation),
       policyVersion,
       mappingVersion,
@@ -1696,11 +1694,14 @@ class DrizzlePostClassFeedbackRepository implements PostClassFeedbackRepository 
           ? storedVersions.filter((row) => row.wiseSubmissionId === event.submissionId)
           : storedVersions.length === 1 ? storedVersions : [];
         const byDistance = candidates
+          // Wise-vs-Wise only: a version Wise gave no time cannot be placed
+          // near an event by our ingestion clock (INC-260829 follow-up), so it
+          // simply gets no timed link.
+          .filter((candidate) => candidate.sourceCreatedAt !== null)
           .map((candidate) => ({
             candidate,
             distance: Math.abs(
-              (candidate.sourceCreatedAt ?? candidate.observedAt).getTime() -
-              event.eventTimestamp.getTime(),
+              candidate.sourceCreatedAt!.getTime() - event.eventTimestamp.getTime(),
             ),
           }))
           .filter(({ distance }) => distance <= 5 * 60 * 1000)

@@ -137,9 +137,9 @@ function EvidenceMetadata({ version }: { version: FeedbackSessionDetailVersion }
         </div>
       </div>
       <div className="border-b p-3 sm:border-r sm:border-b-0">
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Observed</div>
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Synced</div>
         <div className="mt-1 text-xs font-medium">{formatBangkokDate(version.observedAt, true)}</div>
-        <div className="mt-0.5 text-[10px] text-muted-foreground">Immutable local observation</div>
+        <div className="mt-0.5 text-[10px] text-muted-foreground">Ingestion bookkeeping — not timing evidence</div>
       </div>
       <div className="p-3">
         <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Provenance / actor</div>
@@ -171,15 +171,86 @@ const NOT_COUNTED_REASONS: Record<string, string> = {
   after_deadline: "Landed after the deadline",
 };
 
+interface TimingEvidenceEntry {
+  key: string;
+  at: string;
+  kind: "event" | "version" | "deadline";
+  title: string;
+  detail: string;
+  tone: "good" | "bad" | "neutral";
+}
+
+/**
+ * Only Wise-reported instants belong on the chronology: the deadline, Wise
+ * activity events, and each version's own Wise timestamp. A version Wise gave
+ * no timestamp cannot be placed on that axis — it is returned separately for
+ * an undated footnote, never interleaved by our sync clock (INC-260829).
+ */
+export function buildTimingEvidenceEntries(
+  deadlineAt: string,
+  events: FeedbackSubmissionEvent[],
+  versions: FeedbackSessionDetailVersion[],
+): { entries: TimingEvidenceEntry[]; undatedVersions: FeedbackSessionDetailVersion[] } {
+  const rows: TimingEvidenceEntry[] = [
+    {
+      key: "deadline",
+      at: deadlineAt,
+      kind: "deadline",
+      title: "Feedback deadline",
+      detail: "23:59:59.999 Bangkok, two calendar days after the class ended",
+      tone: "neutral",
+    },
+  ];
+  for (const event of events) {
+    rows.push({
+      key: `event-${event.id}`,
+      at: event.eventTimestamp,
+      kind: "event",
+      title: "Wise recorded a submission",
+      detail: [
+        event.actorName || event.actorWiseUserId || "Actor not recorded by Wise",
+        event.actorRole ? `account role ${event.actorRole}` : "no account role recorded",
+        event.isSessionTutor ? "this session's own tutor" : null,
+        event.countedAsProof
+          ? null
+          : NOT_COUNTED_REASONS[event.notCountedReason ?? ""] ?? "Not counted",
+      ].filter(Boolean).join(" · "),
+      tone: event.countedAsProof ? "good" : "bad",
+    });
+  }
+  for (const version of versions) {
+    if (!version.submittedAt) continue;
+    rows.push({
+      key: `version-${version.id}`,
+      at: version.submittedAt,
+      kind: "version",
+      title: version.compliant
+        ? "Compliant feedback content in Wise"
+        : "Feedback content recorded in Wise",
+      detail: [
+        `${version.combinedCharacterCount.toLocaleString()} characters`,
+        version.compliant ? "meets the content bar" : "below the content bar",
+        `Wise ${version.sourceTimestampKind} time${version.sourceTimestampTrustworthy ? "" : " (untrusted)"}`,
+      ].join(" · "),
+      tone: "neutral",
+    });
+  }
+  return {
+    entries: rows.toSorted((left, right) => Date.parse(left.at) - Date.parse(right.at)),
+    undatedVersions: versions.filter((version) => !version.submittedAt),
+  };
+}
+
 /**
  * Chronological account of every instant that bears on the timing verdict,
  * against the deadline.
  *
  * This is the artifact for resolving a disputed deduction: it shows when the
- * feedback first appeared in Wise, who Wise says submitted it, when we first
- * saw it, and — in words — why the verdict came out the way it did. Wise's
- * actor role is shown but labelled as account role, since it no longer gates
- * the verdict (D-EVT-04).
+ * feedback appeared in Wise, who Wise says submitted it, and — in words — why
+ * the verdict came out the way it did. Every plotted instant is Wise's own;
+ * our sync clock never appears on the chronology (INC-260829). Wise's actor
+ * role is shown but labelled as account role, since it no longer gates the
+ * verdict (D-EVT-04).
  */
 function TimingEvidenceTimeline({
   deadlineAt,
@@ -194,59 +265,10 @@ function TimingEvidenceTimeline({
   outcome: Pick<FeedbackSessionRow, "sourceStatus" | "contentStatus" | "timingStatus">;
   timingEvidence: string | null;
 }) {
-  const entries = useMemo(() => {
-    const rows: Array<{
-      key: string;
-      at: string;
-      kind: "event" | "version" | "deadline";
-      title: string;
-      detail: string;
-      tone: "good" | "bad" | "neutral";
-    }> = [
-      {
-        key: "deadline",
-        at: deadlineAt,
-        kind: "deadline",
-        title: "Feedback deadline",
-        detail: "23:59:59.999 Bangkok, two calendar days after the class ended",
-        tone: "neutral",
-      },
-    ];
-    for (const event of events) {
-      rows.push({
-        key: `event-${event.id}`,
-        at: event.eventTimestamp,
-        kind: "event",
-        title: "Wise recorded a submission",
-        detail: [
-          event.actorName || event.actorWiseUserId || "Actor not recorded by Wise",
-          event.actorRole ? `account role ${event.actorRole}` : "no account role recorded",
-          event.isSessionTutor ? "this session's own tutor" : null,
-          event.countedAsProof
-            ? null
-            : NOT_COUNTED_REASONS[event.notCountedReason ?? ""] ?? "Not counted",
-        ].filter(Boolean).join(" · "),
-        tone: event.countedAsProof ? "good" : "bad",
-      });
-    }
-    for (const version of versions) {
-      rows.push({
-        key: `version-${version.id}`,
-        at: version.observedAt,
-        kind: "version",
-        title: version.compliant ? "We first saw compliant feedback" : "We first saw this feedback",
-        detail: [
-          `${version.combinedCharacterCount.toLocaleString()} characters`,
-          version.compliant ? "meets the content bar" : "below the content bar",
-          version.submittedAt
-            ? `Wise ${version.sourceTimestampKind} time ${formatBangkokDate(version.submittedAt, true)}${version.sourceTimestampTrustworthy ? "" : " (untrusted)"}`
-            : "no Wise timestamp",
-        ].join(" · "),
-        tone: "neutral",
-      });
-    }
-    return rows.toSorted((left, right) => Date.parse(left.at) - Date.parse(right.at));
-  }, [deadlineAt, events, versions]);
+  const { entries, undatedVersions } = useMemo(
+    () => buildTimingEvidenceEntries(deadlineAt, events, versions),
+    [deadlineAt, events, versions],
+  );
 
   const explanation = timingEvidence ? TIMING_EVIDENCE_EXPLANATIONS[timingEvidence] : null;
 
@@ -283,6 +305,17 @@ function TimingEvidenceTimeline({
           </li>
         ))}
       </ol>
+      {undatedVersions.length > 0 ? (
+        <ul className="mt-2 space-y-1">
+          {undatedVersions.map((version) => (
+            <li key={`undated-${version.id}`} className="rounded-lg border border-dashed px-3 py-2 text-[11px] text-muted-foreground">
+              Content on file ({version.combinedCharacterCount.toLocaleString()} characters,
+              {" "}{version.compliant ? "meets the content bar" : "below the content bar"}) —
+              Wise supplied no timestamp, so it has no place on this chronology.
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {explanation ? (
         <p className="mt-3 rounded-lg border bg-muted/40 p-2 text-[11px] text-muted-foreground">
           <span className="font-medium text-foreground">Why this verdict: </span>{explanation}
@@ -430,7 +463,11 @@ function DetailBody({
                     Version {versions.length - index}
                     {governing ? <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[9px] text-emerald-800">Governing</Badge> : null}
                   </span>
-                  <span className="mt-1 block text-[10px] text-muted-foreground">Observed {formatBangkokDate(version.observedAt, true)}</span>
+                  <span className="mt-1 block text-[10px] text-muted-foreground">
+                    {version.submittedAt
+                      ? `Wise ${version.sourceTimestampKind} ${formatBangkokDate(version.submittedAt, true)}`
+                      : `Synced ${formatBangkokDate(version.observedAt, true)}`}
+                  </span>
                   <span className="block truncate text-[10px] text-muted-foreground">{version.submissionId || version.contentHash.slice(0, 12)}</span>
                 </button>
               );

@@ -31,6 +31,8 @@
     "payout:derive-tutor-names": "npx tsx --tsconfig scripts/tsconfig.json scripts/derive-payout-tutor-names.ts",
     "payout:roll-workbooks": "npx tsx --tsconfig scripts/tsconfig.json scripts/roll-payout-workbook-dates.ts",
     "payout:backfill-submitted": "npx tsx --tsconfig scripts/tsconfig.json scripts/backfill-payout-tutor-submitted.ts",
+    "payout:remove-netted": "npx tsx --tsconfig scripts/tsconfig.json scripts/remove-netted-payout-rows.ts",
+    "payout:reconcile-sheet": "npx tsx --tsconfig scripts/tsconfig.json scripts/report-payout-sheet-reconciliation.ts",
     "guard:sales-dashboard-scope": "node scripts/check-sales-dashboard-scope.mjs",
     "guard:production-route-surface": "node scripts/check-production-route-surface.mjs",
     "verify:release": "npm run typecheck && npm test && npm run build && npm run typecheck && git diff --check && npm run guard:production-route-surface",

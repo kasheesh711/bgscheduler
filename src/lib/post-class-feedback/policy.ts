@@ -443,19 +443,31 @@ export function evaluateSessionEligibility(
   };
 }
 
-function versionKey(version: FeedbackVersion): string {
+export function feedbackVersionKey(version: FeedbackVersion): string {
   return version.submissionId
     ? `${version.submissionId}:${version.contentHash}`
     : version.contentHash;
 }
 
-function compareVersions(left: FeedbackVersion, right: FeedbackVersion): number {
-  // Even an untrusted createdAt cannot prove when mutable content was written,
-  // but it still orders distinct submissions. Observation time breaks ties for
-  // mutable same-ID versions that retain one creation timestamp.
-  const leftTime = left.sourceCreatedAt?.getTime() ?? left.observedAt.getTime();
-  const rightTime = right.sourceCreatedAt?.getTime() ?? right.observedAt.getTime();
-  if (leftTime !== rightTime) return leftTime - rightTime;
+/**
+ * Chronological order of feedback versions, on Wise's clock only.
+ *
+ * Wise-reported creation instants are the one truthful axis; when a version
+ * carries none, our ingestion clock cannot place it on that axis, so it sorts
+ * after every Wise-timed version instead of being ranked against them
+ * (INC-260829 follow-up: an ingestion time must never outrank a Wise time).
+ * `observedAt` remains only as a deterministic tiebreak — between two
+ * Wise-timed versions sharing one creation instant (mutable same-ID edits),
+ * or among versions Wise gave no time at all.
+ */
+export function compareVersions(left: FeedbackVersion, right: FeedbackVersion): number {
+  const leftSource = left.sourceCreatedAt?.getTime() ?? null;
+  const rightSource = right.sourceCreatedAt?.getTime() ?? null;
+  if (leftSource !== null && rightSource !== null && leftSource !== rightSource) {
+    return leftSource - rightSource;
+  }
+  if (leftSource === null && rightSource !== null) return 1;
+  if (leftSource !== null && rightSource === null) return -1;
   return left.observedAt.getTime() - right.observedAt.getTime();
 }
 
@@ -527,7 +539,7 @@ export function evaluateSessionCompliance(
     sourceStatus: input.sourceStatus,
     contentStatus: content.contentStatus,
     deadlineAt,
-    governingVersionKey: governingVersion ? versionKey(governingVersion) : null,
+    governingVersionKey: governingVersion ? feedbackVersionKey(governingVersion) : null,
     content,
     due,
     policyApplies,
@@ -586,7 +598,7 @@ export function evaluateSessionCompliance(
     if (governingVersion && content.compliant) {
       return {
         ...onTimeBase,
-        onTimeVersionKey: versionKey(governingVersion),
+        onTimeVersionKey: feedbackVersionKey(governingVersion),
         onTimeComplianceLocked: true,
         assessed: true,
         rawOnTimeCompliant: true,
@@ -643,7 +655,7 @@ export function evaluateSessionCompliance(
       ...assessmentBase,
       timingStatus: "on_time",
       timingEvidenceSource: "source_timestamp",
-      onTimeVersionKey: versionKey(provenOnTimeVersion),
+      onTimeVersionKey: feedbackVersionKey(provenOnTimeVersion),
       onTimeComplianceLocked: true,
       assessed: true,
       rawOnTimeCompliant: true,

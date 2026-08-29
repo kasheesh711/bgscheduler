@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assessFeedbackContent,
   calculateFeedbackDeadline,
+  compareVersions,
   countUnicodeCodePoints,
   deriveEventTimingEvidence,
   evaluateSessionCompliance,
@@ -319,6 +320,32 @@ describe("post-class feedback policy", () => {
     expect(result.governingVersionKey).toBe("newer:newer");
   });
 
+  it("never lets an ingestion time outrank a Wise time in version order (INC-260829)", () => {
+    const untimedSeenFirst = version({
+      id: "untimed",
+      sourceCreatedAt: null,
+      observedAt: "2026-07-02T09:00:00.000Z",
+    });
+    const wiseTimed = version({
+      id: "wise-timed",
+      sourceCreatedAt: "2026-07-02T10:00:00.000Z",
+      observedAt: "2026-07-02T12:00:00.000Z",
+    });
+
+    // A version Wise never timestamped cannot be placed on Wise's clock, so
+    // it sorts after every Wise-timed version — even one our sync saw later.
+    expect([untimedSeenFirst, wiseTimed].toSorted(compareVersions)
+      .map((entry) => entry.contentHash)).toEqual(["wise-timed", "untimed"]);
+    expect(compareVersions(untimedSeenFirst, wiseTimed)).toBeGreaterThan(0);
+  });
+
+  it("tie-breaks versions without any Wise time deterministically by observation", () => {
+    const first = version({ id: "a", sourceCreatedAt: null, observedAt: "2026-07-02T09:00:00.000Z" });
+    const second = version({ id: "b", sourceCreatedAt: null, observedAt: "2026-07-02T10:00:00.000Z" });
+    expect([second, first].toSorted(compareVersions)
+      .map((entry) => entry.contentHash)).toEqual(["a", "b"]);
+  });
+
   it("gives timing-unknown compliant feedback the benefit of the doubt", () => {
     const result = evaluateSessionCompliance({
       sourceStatus: "ready",
@@ -345,7 +372,6 @@ describe("post-class feedback policy", () => {
       previousOnTimeLock: {
         locked: false,
         versionKey: null,
-        provedAt: new Date("2026-07-03T17:00:00.000Z"),
         violationLocked: true,
       },
       versions: [version({ sourceCreatedAt: null, observedAt: "2026-07-04T00:01:00.000Z" })],
@@ -361,7 +387,6 @@ describe("post-class feedback policy", () => {
     const staleLock = {
       locked: true,
       versionKey: "old-mapping-version",
-      provedAt: new Date("2026-07-02T10:00:00.000Z"),
       violationLocked: false,
       policyVersion: 1,
       mappingVersion: 1,
@@ -395,7 +420,6 @@ describe("post-class feedback policy", () => {
       previousOnTimeLock: {
         locked: false,
         versionKey: null,
-        provedAt: new Date("2026-07-03T17:00:00.000Z"),
         violationLocked: true,
         policyVersion: 1,
         mappingVersion: 1,
@@ -422,7 +446,6 @@ describe("post-class feedback policy", () => {
       previousOnTimeLock: {
         locked: false,
         versionKey: null,
-        provedAt: new Date("2026-07-03T17:00:00.000Z"),
         violationLocked: true,
         policyVersion: 1,
         mappingVersion: 1,

@@ -100,7 +100,6 @@ export interface FeedbackContentAssessment {
 export interface PreviousComplianceLock {
   locked: boolean;
   versionKey: string | null;
-  provedAt: Date | null;
   /** Once a deadline assessment proves a violation, later backfill cannot erase it. */
   violationLocked?: boolean;
   /** Locks are valid only for the policy and mapping that produced them. */

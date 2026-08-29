@@ -41,7 +41,11 @@ interface ReportRow {
   tutorName: string;
   wiseSessionId: string;
   dbStatus: string;
-  sheetStatus: "present" | "absent" | "amount-changed" | "n/a";
+  /**
+   * `netted-removed`: the row was deliberately deleted as one half of a
+   * waived −/+ pair (payout:remove-netted). Expected-absent, not a problem.
+   */
+  sheetStatus: "present" | "absent" | "amount-changed" | "netted-removed" | "n/a";
   sheetRowNumber: number | null;
   sheetAmount: number | null;
   expectedAmount: number | null;
@@ -88,17 +92,52 @@ async function buildReport(db: Database, anchor: string): Promise<ReportRow[]> {
     .where(eq(schema.postClassPayoutRunLines.runId, run.id));
   const adjustments = await db.select().from(schema.postClassPayoutAdjustments)
     .where(eq(schema.postClassPayoutAdjustments.runId, run.id));
+  const deductionStatuses = new Map(
+    (lines.length > 0
+      ? await db.select({
+        id: schema.postClassDeductions.id,
+        status: schema.postClassDeductions.status,
+      }).from(schema.postClassDeductions)
+        .where(inArray(schema.postClassDeductions.id, lines.map((line) => line.deductionId)))
+      : []
+    ).map((row) => [row.id, row.status]),
+  );
+  const writtenAdjustmentByDeduction = new Map(
+    adjustments
+      .filter((adjustment) => adjustment.status === "written")
+      .map((adjustment) => [adjustment.deductionId, adjustment]),
+  );
+  const writtenLineMarkerByDeduction = new Map(
+    lines
+      .filter((line) => line.writeStatus === "written")
+      .map((line) => [line.deductionId, line.rowSignature]),
+  );
+  // A waived/reversed deduction whose written −row AND written +row are BOTH
+  // gone was removed as a netted pair — expected-absent, not attention-worthy.
+  // One half missing while the other remains is still a problem.
+  const isNettedRemoved = (deductionId: string): boolean => {
+    const status = deductionStatuses.get(deductionId);
+    if (status !== "waived" && status !== "reversed") return false;
+    const adjustment = writtenAdjustmentByDeduction.get(deductionId);
+    const lineMarker = writtenLineMarkerByDeduction.get(deductionId);
+    return Boolean(adjustment) && Boolean(lineMarker)
+      && !markerRows.has(adjustment!.rowSignature)
+      && !markerRows.has(lineMarker!);
+  };
 
   const report: ReportRow[] = [];
   for (const line of lines) {
     const expected = line.amountMinor / 100;
     const sheet = sheetStatusFor(markerRows.get(line.rowSignature), expected);
+    const netted = line.writeStatus === "written"
+      && sheet.status === "absent"
+      && isNettedRemoved(line.deductionId);
     report.push({
       kind: line.writeStatus === "written" ? "written-line" : "skipped-line",
       tutorName: line.tutorName ?? "(unnamed)",
       wiseSessionId: line.wiseSessionId,
       dbStatus: `${line.writeStatus}${line.retiredAt ? "+retired" : ""}`,
-      sheetStatus: sheet.status,
+      sheetStatus: netted ? "netted-removed" : sheet.status,
       sheetRowNumber: sheet.rowNumber,
       sheetAmount: sheet.amount,
       expectedAmount: expected,
@@ -108,12 +147,15 @@ async function buildReport(db: Database, anchor: string): Promise<ReportRow[]> {
   for (const adjustment of adjustments) {
     const expected = Math.abs(adjustment.amountMinor) / 100;
     const sheet = sheetStatusFor(markerRows.get(adjustment.rowSignature), expected);
+    const netted = adjustment.status === "written"
+      && sheet.status === "absent"
+      && isNettedRemoved(adjustment.deductionId);
     report.push({
       kind: "adjustment",
       tutorName: "",
       wiseSessionId: adjustment.deductionId,
       dbStatus: adjustment.status,
-      sheetStatus: sheet.status,
+      sheetStatus: netted ? "netted-removed" : sheet.status,
       sheetRowNumber: sheet.rowNumber,
       sheetAmount: sheet.amount,
       expectedAmount: expected,
@@ -188,8 +230,11 @@ async function main(): Promise<void> {
     console.log(`  ${String(count).padStart(4)}  ${key}`);
   }
   const attention = report.filter((row) =>
-    (row.kind === "written-line" && row.sheetStatus !== "present")
+    (row.kind === "written-line"
+      && row.sheetStatus !== "present" && row.sheetStatus !== "netted-removed")
     || (row.kind === "adjustment" && row.dbStatus === "superseded" && row.sheetStatus === "present")
+    || (row.kind === "adjustment" && row.dbStatus === "written"
+      && row.sheetStatus !== "present" && row.sheetStatus !== "netted-removed")
     || (row.kind === "skipped-line" && row.sheetStatus === "present")
     || row.kind === "unwritten-candidate"
     || row.sheetStatus === "amount-changed");

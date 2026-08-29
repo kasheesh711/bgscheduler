@@ -11,10 +11,11 @@ import {
   calculateFeedbackDeadline,
   deriveEventTimingEvidence,
   evaluateSessionCompliance,
+  feedbackVersionKey,
 } from "./policy";
-import { createDrizzlePostClassFeedbackRepository } from "./repository";
+import { createDrizzlePostClassFeedbackRepository, timingEvidence } from "./repository";
 import type { PostClassFeedbackRepository } from "./repository";
-import type { TimingStatus } from "./types";
+import type { FeedbackVersion, TimingStatus } from "./types";
 
 // ── Reassess persisted evidence ─────────────────────────────────────────
 //
@@ -164,6 +165,10 @@ export async function reassessPostClassSessions(options: {
           mappingVersion: policy.mappingVersion,
           enforcementMode: enforcement.enforcementMode,
           assessment,
+          governingVersion: assessment.governingVersionKey
+            ? versions.find((version) =>
+              feedbackVersionKey(version) === assessment.governingVersionKey) ?? null
+            : null,
           assessedAt: now,
         });
       }
@@ -210,6 +215,7 @@ async function writeReassessedVerdict(
     mappingVersion: number;
     enforcementMode: "shadow" | "live" | "paused";
     assessment: Awaited<ReturnType<typeof evaluateSessionCompliance>>;
+    governingVersion: FeedbackVersion | null;
     assessedAt: Date;
   },
 ): Promise<void> {
@@ -242,11 +248,10 @@ async function writeReassessedVerdict(
     adjustedCompliant: assessment.adjustedCompliant,
     remediatedLate: assessment.remediatedLate,
     timingUnknown: assessment.timingStatus === "unknown",
-    timingEvidence: assessment.timingEvidenceSource === "activity_event"
-      ? assessment.timingStatus === "on_time"
-        ? "wise_activity_event_before_deadline"
-        : "wise_activity_event_no_tutor_submission"
-      : "observed_state",
+    // Same evidence-code derivation as the collector (repository.ts), so a
+    // reassessed session explains its verdict identically — including the
+    // trusted-Wise-timestamp and created-at-lower-bound codes.
+    timingEvidence: timingEvidence(assessment, input.governingVersion),
     sourceReady: assessment.sourceStatus === "ready" && assessment.assessed,
     details: {
       due: assessment.due,
