@@ -890,6 +890,92 @@ describe("acquirePayoutRunLease", () => {
     expect(line.insertedRowNumber).toBe(12);
   });
 
+  it("reinstates a ledger-removed waived deduction into a generation-2 line (INC-260829)", async () => {
+    await upsertPayoutTutorName(appDb(), {
+      canonicalKey: "kevin",
+      primaryLedgerName: "Kevin (Kev) Y. Hsieh",
+      alternateLedgerName: null,
+      active: true,
+      updatedByEmail: "admin@example.com",
+    });
+    const deductionId = await seedDeduction({ id: "a", endsAt: "2026-07-10T03:00:00.000Z", tutorKey: "kevin", status: "approved" });
+    const first = await acquireRun();
+    await handle.db.update(schema.postClassPayoutRunLines).set({
+      matchStatus: "matched",
+      writeStatus: "written",
+      insertedRowNumber: 12,
+      writtenAt: new Date(),
+    }).where(eq(schema.postClassPayoutRunLines.runId, first.run.id));
+    await releaseRun(first, false);
+
+    const actor = { email: "reviewer@example.com", name: "Reviewer" };
+    const [beforeWaive] = await handle.db.select({ version: schema.postClassDeductions.version })
+      .from(schema.postClassDeductions).where(eq(schema.postClassDeductions.id, deductionId));
+    await applyPostClassReviewAction(actor, {
+      deductionId,
+      action: "waive",
+      waiverCategory: "other",
+      note: "Handled by hand on the ledger.",
+      expectedVersion: beforeWaive.version,
+      idempotencyKey: "t-reinstate-waive",
+    }, appDb());
+
+    // Refused while the written row is still live on the ledger.
+    const [afterWaive] = await handle.db.select({ version: schema.postClassDeductions.version })
+      .from(schema.postClassDeductions).where(eq(schema.postClassDeductions.id, deductionId));
+    await expect(applyPostClassReviewAction(actor, {
+      deductionId,
+      action: "reinstate",
+      note: "Re-charge attempt.",
+      expectedVersion: afterWaive.version,
+      idempotencyKey: "t-reinstate-refused",
+    }, appDb())).rejects.toThrow(/still on the payout ledger/iu);
+
+    // Simulate the ledger removal: retire the written line, supersede the
+    // waiver correction that never reached the sheet.
+    await handle.db.update(schema.postClassPayoutRunLines).set({
+      retiredAt: new Date(),
+      retiredReason: "Removed from the ledger (netted pair, INC-260829)",
+    }).where(eq(schema.postClassPayoutRunLines.runId, first.run.id));
+    await handle.db.update(schema.postClassPayoutAdjustments).set({ status: "superseded" })
+      .where(eq(schema.postClassPayoutAdjustments.deductionId, deductionId));
+
+    await applyPostClassReviewAction(actor, {
+      deductionId,
+      action: "reinstate",
+      note: "Re-charge: content below the bar; waiver was incident cleanup only.",
+      expectedVersion: afterWaive.version,
+      idempotencyKey: "t-reinstate",
+    }, appDb());
+    const [reinstated] = await handle.db.select()
+      .from(schema.postClassDeductions).where(eq(schema.postClassDeductions.id, deductionId));
+    expect(reinstated.status).toBe("pending_review");
+    expect(reinstated.waiverCategory).toBeNull();
+    expect(reinstated.decisionByEmail).toBeNull();
+
+    // Human approval (seeded directly; the review path is covered elsewhere).
+    await handle.db.update(schema.postClassDeductions).set({
+      status: "approved",
+      decisionByEmail: "reviewer@example.com",
+      decisionAt: new Date(),
+      version: reinstated.version + 1,
+    }).where(eq(schema.postClassDeductions.id, deductionId));
+
+    const candidates = await selectPayoutRunCandidates(appDb(), WINDOW);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].generation).toBe(2);
+
+    const second = await acquireRun();
+    const gen1 = second.lines.find((line) => line.sourceIdentity === `deduction:${deductionId}`)!;
+    const gen2 = second.lines.find((line) => line.sourceIdentity === `deduction:${deductionId}:g2`)!;
+    expect(gen1.writeStatus).toBe("written");
+    expect(gen1.retiredAt).not.toBeNull();
+    expect(gen1.insertedRowNumber).toBe(12);
+    expect(gen2.writeStatus).toBe("pending");
+    expect(gen2.rowSignature).not.toBe(gen1.rowSignature);
+    expect(gen2.rowSignature).toMatch(/^BGS-PAYOUT 2026-07 [0-9a-f]{12}$/u);
+  });
+
   it("keeps a written line whose deduction was system-approved, without retiring it (INC-260829)", async () => {
     // Simulates the incident's historical rows: the line reached the sheet
     // while auto-approval could still plan lines. The human-decision filter

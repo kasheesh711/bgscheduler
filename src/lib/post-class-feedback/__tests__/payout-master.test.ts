@@ -94,6 +94,25 @@ describe("payoutRowMarker / extractPayoutMarker", () => {
     expect(extractPayoutMarker(null)).toBeNull();
   });
 
+  it("gives a reinstated generation a distinct marker in the same format", () => {
+    const gen1 = payoutRowMarker({ anchorMonth: "2026-07", deductionId: "3f1c9a2b-4d5e-0000-0000-000000000000" });
+    const gen2 = payoutRowMarker({
+      anchorMonth: "2026-07",
+      deductionId: "3f1c9a2b-4d5e-0000-0000-000000000000",
+      generation: 2,
+    });
+    expect(gen1).not.toBe(gen2);
+    expect(gen2).toMatch(/^BGS-PAYOUT 2026-07 [0-9a-f]{12}$/u);
+    // Generation 1 stays byte-identical to the historical form.
+    expect(payoutRowMarker({
+      anchorMonth: "2026-07",
+      deductionId: "3f1c9a2b-4d5e-0000-0000-000000000000",
+      generation: 1,
+    })).toBe(gen1);
+    // Extraction treats it like any other deduction marker.
+    expect(extractPayoutMarker(`${DEDUCTION_SESSION_NAME} · ${gen2}`)).toBe(gen2);
+  });
+
   it("does not confuse two deductions that share the first eight characters", () => {
     // At 8 hex a collision reads as already-written and silently skips a
     // deduction. This is why the marker is 12.

@@ -79,6 +79,12 @@ export interface PayoutRunCandidate {
   studentNames: string[];
   tutorSubmittedAt: Date | null;
   reason: string;
+  /**
+   * 1 + the number of this deduction's written lines already removed from the
+   * ledger (retired). A reinstated deduction plans its fresh row under the
+   * next generation's identity (INC-260829 re-charge).
+   */
+  generation: number;
 }
 
 function anchorMonthDate(anchorMonth: string): string {
@@ -174,6 +180,22 @@ export async function selectPayoutRunCandidates(
   }).from(schema.postClassAssessments)
     .where(inArray(schema.postClassAssessments.sessionId, sessionIds))
     .orderBy(asc(schema.postClassAssessments.assessedAt));
+  // A reinstated deduction (INC-260829 re-charge) has written lines that were
+  // deliberately removed from the ledger; its fresh row plans under the next
+  // generation's identity.
+  const removedWritten = await db.select({
+    deductionId: schema.postClassPayoutRunLines.deductionId,
+    removed: sql<number>`count(*)`,
+  }).from(schema.postClassPayoutRunLines)
+    .where(and(
+      inArray(schema.postClassPayoutRunLines.deductionId, rows.map((row) => row.deductionId)),
+      eq(schema.postClassPayoutRunLines.writeStatus, "written"),
+      isNotNull(schema.postClassPayoutRunLines.retiredAt),
+    ))
+    .groupBy(schema.postClassPayoutRunLines.deductionId);
+  const removedByDeduction = new Map(
+    removedWritten.map((row) => [row.deductionId, Number(row.removed)]),
+  );
 
   const studentsBySession = new Map<string, string[]>();
   for (const row of participants) {
@@ -201,6 +223,7 @@ export async function selectPayoutRunCandidates(
     ].toSorted(),
     tutorSubmittedAt: submittedBySession.get(row.sessionId) ?? null,
     reason: reasonBySession.get(row.sessionId) ?? "Feedback was incomplete at the deadline",
+    generation: 1 + (removedByDeduction.get(row.deductionId) ?? 0),
   }));
 }
 
@@ -448,7 +471,10 @@ async function findWrittenPayoutLinePayloadDrift(
   lines: PayoutRunLine[],
   tutorNames: ReadonlyMap<string, PayoutTutorName>,
 ): Promise<PayoutRunLine[]> {
-  const written = lines.filter((line) => line.writeStatus === "written");
+  // Ledger-removed (retired) written lines are off the sheet by design and
+  // carry no immutable row to protect.
+  const written = lines.filter((line) =>
+    line.writeStatus === "written" && line.retiredAt === null);
   if (written.length === 0) return [];
   const deductionIds = written.map((line) => line.deductionId);
   const rows = await db.select({
@@ -624,6 +650,10 @@ export async function readPayoutRunPreview(
   const retainedWrittenObligations = lines
     .filter((line) =>
       line.writeStatus === "written"
+      // A retired written line was deliberately removed from the ledger
+      // (netted pair / reinstatement); it is no longer an obligation the
+      // sheet carries.
+      && line.retiredAt === null
       && !selectedCandidateIds.has(line.deductionId)
       && (!input.tutorFilter || line.canonicalTutorKey === input.tutorFilter))
     .map((line) => {
@@ -666,10 +696,11 @@ export async function readPayoutRunPreview(
         ? tutorNames.get(candidate.canonicalTutorKey)
         : undefined;
       return {
-        sourceIdentity: payoutDeductionSourceIdentity(candidate.deductionId),
+        sourceIdentity: payoutDeductionSourceIdentity(candidate.deductionId, candidate.generation),
         rowSignature: payoutRowMarker({
           anchorMonth: input.window.anchorMonth,
           deductionId: candidate.deductionId,
+          generation: candidate.generation,
         }),
         sessionId: candidate.sessionId,
         wiseSessionId: candidate.wiseSessionId,
@@ -894,7 +925,7 @@ export async function acquirePayoutRunLease(input: {
     if (snapshot.selectedCandidates.length > 0) {
       const selectedByIdentity = new Map(
         snapshot.selectedCandidates.map((candidate) => [
-          payoutDeductionSourceIdentity(candidate.deductionId),
+          payoutDeductionSourceIdentity(candidate.deductionId, candidate.generation),
           candidate,
         ]),
       );
@@ -945,6 +976,7 @@ export async function acquirePayoutRunLease(input: {
             rowSignature: payoutRowMarker({
               anchorMonth: input.window.anchorMonth,
               deductionId: candidate.deductionId,
+              generation: candidate.generation,
             }),
             canonicalTutorKey: candidate.canonicalTutorKey,
             tutorName: candidate.tutorName,
@@ -973,6 +1005,7 @@ export async function acquirePayoutRunLease(input: {
             idempotencyKey: payoutLineIdempotencyKey({
               runId: claimed.id,
               deductionId: candidate.deductionId,
+              generation: candidate.generation,
             }),
             updatedAt: now,
           }).where(and(
@@ -1036,10 +1069,11 @@ export async function acquirePayoutRunLease(input: {
           deductionId: candidate.deductionId,
           sessionId: candidate.sessionId,
           lineKind: "deduction" as const,
-          sourceIdentity: payoutDeductionSourceIdentity(candidate.deductionId),
+          sourceIdentity: payoutDeductionSourceIdentity(candidate.deductionId, candidate.generation),
           rowSignature: payoutRowMarker({
             anchorMonth: input.window.anchorMonth,
             deductionId: candidate.deductionId,
+            generation: candidate.generation,
           }),
           canonicalTutorKey: candidate.canonicalTutorKey,
           tutorName: candidate.tutorName,
@@ -1058,6 +1092,7 @@ export async function acquirePayoutRunLease(input: {
           idempotencyKey: payoutLineIdempotencyKey({
             runId: claimed.id,
             deductionId: candidate.deductionId,
+            generation: candidate.generation,
           }),
         })),
       ).onConflictDoUpdate({
@@ -1758,7 +1793,11 @@ export async function inspectPayoutRunCloseReadiness(
     });
   }
   const writtenIds = new Set(
-    lines.filter((line) => line.writeStatus === "written").map((line) => line.deductionId),
+    lines
+      // A retired written line was removed from the ledger; a reinstated
+      // candidate still owes a fresh row.
+      .filter((line) => line.writeStatus === "written" && line.retiredAt === null)
+      .map((line) => line.deductionId),
   );
   const approvedUnpublished = candidates.filter(
     (candidate) => !writtenIds.has(candidate.deductionId),

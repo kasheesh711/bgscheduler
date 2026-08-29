@@ -41,7 +41,7 @@ interface Actor {
 
 interface ReviewInput {
   deductionId: string;
-  action: "approve" | "waive" | "reopen";
+  action: "approve" | "waive" | "reopen" | "reinstate";
   note: string;
   waiverCategory?: PostClassWaiverCategory;
   expectedVersion: number;
@@ -549,7 +549,9 @@ function reviewPayload(input: ReviewInput): {
     throw new PostClassValidationError("Waiver category is only valid when waiving a deduction.");
   }
   return {
-    note: input.action === "reopen" ? requireText(input.note, "Reopen reason") : note,
+    note: input.action === "reopen" || input.action === "reinstate"
+      ? requireText(input.note, input.action === "reopen" ? "Reopen reason" : "Reinstate reason")
+      : note,
     waiverCategory: null,
     expectedVersion: input.expectedVersion,
     targetStatus: input.action === "approve" ? "approved" : "pending_review",
@@ -606,6 +608,30 @@ export async function applyPostClassReviewAction(
       waiverCategory = requestedPayload.waiverCategory;
       waiverNote = actionNote;
       toStatus = "waived";
+    } else if (input.action === "reinstate") {
+      // Re-charge a waived deduction (INC-260829). Allowed only when every
+      // previously written row is provably OFF the ledger (retired) — a live
+      // written row would double once the reinstated deduction plans its
+      // fresh generation.
+      if (current.status !== "waived") {
+        throw new PostClassValidationError("Only a waived deduction can be reinstated.");
+      }
+      const [liveWrittenLine] = await tx.select({ id: schema.postClassPayoutRunLines.id })
+        .from(schema.postClassPayoutRunLines)
+        .where(and(
+          eq(schema.postClassPayoutRunLines.deductionId, current.id),
+          eq(schema.postClassPayoutRunLines.writeStatus, "written"),
+          isNull(schema.postClassPayoutRunLines.retiredAt),
+        )).limit(1);
+      if (liveWrittenLine) {
+        throw new PostClassValidationError(
+          "This deduction's row is still on the payout ledger; it cannot be reinstated.",
+        );
+      }
+      await assertNoUncertainPayoutWriteForDeduction(tx, current.id);
+      await assertPayoutWindowOpenForDeduction(tx, current.id);
+      actionNote = requestedPayload.note;
+      toStatus = "pending_review";
     } else {
       if (current.status !== "approved") {
         throw new PostClassValidationError("Only an unprocessed approved deduction can be reopened.");
@@ -627,8 +653,10 @@ export async function applyPostClassReviewAction(
         status: toStatus,
         waiverCategory,
         waiverNote,
-        decisionByEmail: input.action === "reopen" ? null : actor.email,
-        decisionAt: input.action === "reopen" ? null : now,
+        decisionByEmail: input.action === "reopen" || input.action === "reinstate"
+          ? null
+          : actor.email,
+        decisionAt: input.action === "reopen" || input.action === "reinstate" ? null : now,
         version: current.version + 1,
         updatedAt: now,
       })

@@ -20,6 +20,13 @@ describe("payoutLineIdempotencyKey", () => {
     expect(payoutLineIdempotencyKey({ runId: "run-1", deductionId: "ded-1" }))
       .not.toBe(payoutLineIdempotencyKey({ runId: "run-2", deductionId: "ded-1" }));
   });
+
+  it("separates a reinstated generation while keeping generation 1 byte-identical", () => {
+    expect(payoutLineIdempotencyKey({ runId: "run-1", deductionId: "ded-1", generation: 1 }))
+      .toBe("payout:run-1:ded-1");
+    expect(payoutLineIdempotencyKey({ runId: "run-1", deductionId: "ded-1", generation: 2 }))
+      .toBe("payout:run-1:ded-1:g2");
+  });
 });
 
 describe("payoutPreviewToken", () => {

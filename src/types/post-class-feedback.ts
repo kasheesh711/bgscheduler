@@ -468,7 +468,7 @@ export type FeedbackMutationRequest =
       endpoint: "/api/post-class-feedback/review";
       body: {
         deductionId: string;
-        action: "approve" | "waive" | "reopen";
+        action: "approve" | "waive" | "reopen" | "reinstate";
         note: string;
         waiverCategory?: FeedbackWaiverCategory;
         expectedVersion: number;

@@ -58,7 +58,11 @@ interface NettedPair {
   lineMarker: string;
   correctionMarker: string;
   lineRow: MasterPayoutRow;
-  correctionRow: MasterPayoutRow;
+  /**
+   * Null when the correction was `superseded` (applied outside the system and
+   * never written): only the lone −฿100 row is deleted then.
+   */
+  correctionRow: MasterPayoutRow | null;
 }
 
 interface SkippedPair {
@@ -118,29 +122,42 @@ async function planPairs(db: Database, markerRows: Map<string, MasterPayoutRow>)
   for (const row of rows) {
     const skip = (reason: string) =>
       skipped.push({ deductionId: row.deductionId, wiseSessionId: row.wiseSessionId, reason });
-    if (row.adjustmentStatus !== "written") {
+    if (row.adjustmentStatus !== "written" && row.adjustmentStatus !== "superseded") {
       // A non-terminal correction still needs its source deduction row on the
       // tab to publish; deleting the pair would wedge it permanently.
-      skip(`adjustment is ${row.adjustmentStatus}, not written`);
+      skip(`adjustment is ${row.adjustmentStatus}, not terminal`);
       continue;
     }
     const lineRow = markerRows.get(row.lineMarker);
-    const correctionRow = markerRows.get(row.correctionMarker);
-    if (!lineRow || !correctionRow) {
-      skip(`sheet is missing the ${!lineRow ? "deduction" : "correction"} row`);
+    const correctionRow = markerRows.get(row.correctionMarker) ?? null;
+    if (!lineRow) {
+      skip("sheet is missing the deduction row");
       continue;
     }
     if (lineRow.payoutAmount !== row.amountMinor / 100) {
       skip(`deduction row amount ${lineRow.payoutAmount} != expected ${row.amountMinor / 100}`);
       continue;
     }
-    if (correctionRow.payoutAmount !== Math.abs(row.adjustmentAmountMinor) / 100) {
-      skip(`correction row amount ${correctionRow.payoutAmount} != expected ${Math.abs(row.adjustmentAmountMinor) / 100}`);
-      continue;
-    }
-    if (!correctionRow.sessionName.toLowerCase().includes(row.lineMarker.toLowerCase())) {
-      skip("correction row does not reference the deduction marker");
-      continue;
+    if (row.adjustmentStatus === "superseded") {
+      // The correction was applied outside the system; its marker must NOT be
+      // on the tab — delete only the lone −row.
+      if (correctionRow) {
+        skip("superseded correction unexpectedly has a sheet row");
+        continue;
+      }
+    } else {
+      if (!correctionRow) {
+        skip("sheet is missing the correction row");
+        continue;
+      }
+      if (correctionRow.payoutAmount !== Math.abs(row.adjustmentAmountMinor) / 100) {
+        skip(`correction row amount ${correctionRow.payoutAmount} != expected ${Math.abs(row.adjustmentAmountMinor) / 100}`);
+        continue;
+      }
+      if (!correctionRow.sessionName.toLowerCase().includes(row.lineMarker.toLowerCase())) {
+        skip("correction row does not reference the deduction marker");
+        continue;
+      }
     }
     pairs.push({
       deductionId: row.deductionId,
@@ -207,15 +224,20 @@ async function main(): Promise<void> {
   for (const pair of pairs) {
     console.log(
       `  remove  ${pair.tutorName ?? "(unnamed)"}  ${pair.wiseSessionId}`
-      + `  rows ${pair.lineRow.rowNumber} (−) + ${pair.correctionRow.rowNumber} (+)`,
+      + `  rows ${pair.lineRow.rowNumber} (−)`
+      + `${pair.correctionRow ? ` + ${pair.correctionRow.rowNumber} (+)` : "  [superseded correction — lone row]"}`,
     );
   }
   for (const entry of skipped) {
     console.log(`  SKIP    ${entry.wiseSessionId}  ${entry.reason}`);
   }
-  const expectedRemaining = table.rows.length - pairs.length * 2;
+  const rowsToDelete = pairs.reduce(
+    (total, pair) => total + (pair.correctionRow ? 2 : 1),
+    0,
+  );
+  const expectedRemaining = table.rows.length - rowsToDelete;
   console.log(
-    `\nPlanned: ${pairs.length} netted pairs (${pairs.length * 2} rows) to delete,`
+    `\nPlanned: ${pairs.length} netted deductions (${rowsToDelete} rows) to delete,`
     + ` ${skipped.length} skipped; ${table.rows.length} rows now → ${expectedRemaining} after.`,
   );
   if (pairs.length === 0 || !commit) return;
@@ -239,14 +261,16 @@ async function main(): Promise<void> {
         tutorName: pair.tutorName,
         wiseSessionId: pair.wiseSessionId,
         deductionRow: snapshotRow(pair.lineRow),
-        correctionRow: snapshotRow(pair.correctionRow),
+        correctionRow: pair.correctionRow ? snapshotRow(pair.correctionRow) : null,
       })),
     },
   );
 
   // Delete descending so earlier requests never shift later indices.
   const rowNumbers = pairs
-    .flatMap((pair) => [pair.lineRow.rowNumber, pair.correctionRow.rowNumber])
+    .flatMap((pair) => pair.correctionRow
+      ? [pair.lineRow.rowNumber, pair.correctionRow.rowNumber]
+      : [pair.lineRow.rowNumber])
     .toSorted((left, right) => right - left);
   for (let start = 0; start < rowNumbers.length; start += DELETE_CHUNK_SIZE) {
     const chunk = rowNumbers.slice(start, start + DELETE_CHUNK_SIZE);
@@ -279,7 +303,9 @@ async function main(): Promise<void> {
   const remainingMarkers = new Set(
     after.rows.map((row) => row.marker).filter((marker): marker is string => Boolean(marker)),
   );
-  const removedMarkers = pairs.flatMap((pair) => [pair.lineMarker, pair.correctionMarker]);
+  const removedMarkers = pairs.flatMap((pair) => pair.correctionRow
+    ? [pair.lineMarker, pair.correctionMarker]
+    : [pair.lineMarker]);
   const stillPresent = removedMarkers.filter((marker) => remainingMarkers.has(marker));
   const expectedRetained = [...markerRows.keys()].filter(
     (marker) => !removedMarkers.includes(marker),
@@ -293,12 +319,15 @@ async function main(): Promise<void> {
   }
   console.log(`Readback OK: ${after.rows.length} rows remain, all retained markers intact.`);
 
-  // Null the now-stale cosmetic row-number labels (display-only columns).
+  // Retire the removed lines (the durable ledger-removed flag reinstatement
+  // checks) and null the now-stale cosmetic row-number labels.
   await withPostClassTransaction(db, async (tx) => {
     await lockPostClassFinance(tx);
     await tx.update(schema.postClassPayoutRunLines).set({
       insertedRowNumber: null,
       matchedRowNumber: null,
+      retiredAt: new Date(),
+      retiredReason: "Removed from the ledger (netted pair, INC-260829)",
       updatedAt: new Date(),
     }).where(inArray(schema.postClassPayoutRunLines.id, pairs.map((pair) => pair.lineId)));
     await tx.update(schema.postClassPayoutAdjustments).set({

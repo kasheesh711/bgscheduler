@@ -21,12 +21,21 @@ import { PostClassValidationError } from "./errors";
 export function payoutLineIdempotencyKey(input: {
   runId: string;
   deductionId: string;
+  generation?: number;
 }): string {
-  return `payout:${input.runId}:${input.deductionId}`;
+  const base = `payout:${input.runId}:${input.deductionId}`;
+  return (input.generation ?? 1) > 1 ? `${base}:g${input.generation}` : base;
 }
 
-export function payoutDeductionSourceIdentity(deductionId: string): string {
-  return `deduction:${deductionId}`;
+/**
+ * Stable business identity for a deduction's ledger line. `generation` covers
+ * reinstatement (INC-260829 re-charge): a deduction whose original written row
+ * was deliberately removed from the ledger may earn one fresh row, and that
+ * row needs an identity the unique indexes accept. Generation 1 stays
+ * byte-identical to the historical format.
+ */
+export function payoutDeductionSourceIdentity(deductionId: string, generation = 1): string {
+  return generation > 1 ? `deduction:${deductionId}:g${generation}` : `deduction:${deductionId}`;
 }
 
 export function payoutAdjustmentSourceIdentity(adjustmentId: string): string {

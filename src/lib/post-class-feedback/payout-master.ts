@@ -142,8 +142,21 @@ export function masterCellToUtc(dateCell: unknown, timeCell: unknown): Date | nu
 export function payoutRowMarker(input: {
   anchorMonth: string;
   deductionId: string;
+  /**
+   * Reinstatement generation (INC-260829 re-charge). Generation 1 keeps the
+   * historical UUID-prefix form; a later generation derives its 12 hex chars
+   * from a hash so the fresh row's marker can never collide with the removed
+   * original while keeping the exact `BGS-PAYOUT <anchor> <12hex>` format.
+   */
+  generation?: number;
 }): string {
-  const compact = input.deductionId.replace(/-/gu, "").slice(0, MARKER_DEDUCTION_CHARS);
+  const generation = input.generation ?? 1;
+  const compact = generation > 1
+    ? createHash("sha256")
+      .update(`${input.deductionId}:g${generation}`)
+      .digest("hex")
+      .slice(0, MARKER_DEDUCTION_CHARS)
+    : input.deductionId.replace(/-/gu, "").slice(0, MARKER_DEDUCTION_CHARS);
   return `${MARKER_PREFIX} ${input.anchorMonth} ${compact}`;
 }
 

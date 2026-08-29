@@ -26,7 +26,7 @@ import type {
 } from "@/types/post-class-feedback";
 import { DeductionBadge, EmptyPanel, KpiCell, formatBangkokDate, formatBangkokMonth, formatMoney } from "./feedback-ui";
 
-type DialogAction = "approve" | "waive" | "reopen" | "move" | "process" | "reverse";
+type DialogAction = "approve" | "waive" | "reopen" | "reinstate" | "move" | "process" | "reverse";
 
 const WAIVER_OPTIONS: Array<{ value: FeedbackWaiverCategory; label: string }> = [
   { value: "wise_system_outage", label: "Wise / system outage" },
@@ -42,6 +42,7 @@ const ACTION_LABELS: Record<DialogAction, string> = {
   approve: "Approve deduction",
   waive: "Waive violation",
   reopen: "Reopen review",
+  reinstate: "Reinstate deduction",
   move: "Move processing month",
   process: "Mark processed",
   reverse: "Record reversal",
@@ -143,7 +144,7 @@ export function DeductionsTab({
 
   async function submitAction() {
     if (!activeRow || !action || (noteRequired && !note.trim())) return;
-    if (action === "approve" || action === "waive" || action === "reopen") {
+    if (action === "approve" || action === "waive" || action === "reopen" || action === "reinstate") {
       await onMutation({
         endpoint: "/api/post-class-feedback/review",
         body: {
@@ -175,7 +176,7 @@ export function DeductionsTab({
 
   const financeAction = action === "move" || action === "process" || action === "reverse";
   const referenceRequired = action === "process" || action === "reverse";
-  const noteRequired = action === "waive" || action === "reopen" || action === "move" || action === "reverse";
+  const noteRequired = action === "waive" || action === "reopen" || action === "reinstate" || action === "move" || action === "reverse";
   const selectableFinancePeriods = payload.financePeriods.filter((period) =>
     period.status === "open" && (
       action !== "move" || period.month > (activeRow?.processingMonth ?? "")
@@ -285,6 +286,16 @@ export function DeductionsTab({
                         </>
                       ) : row.status === "processed" ? (
                         <Button size="xs" variant="outline" disabled={!payload.capabilities.finance || submitting} onClick={() => openDialog(row, "reverse")}>Reverse</Button>
+                      ) : row.status === "waived" ? (
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          disabled={!payload.capabilities.reviewer || submitting}
+                          title="Re-charge: allowed only when the original ledger row was removed"
+                          onClick={() => openDialog(row, "reinstate")}
+                        >
+                          Reinstate
+                        </Button>
                       ) : (
                         <span className="text-xs text-muted-foreground">Immutable</span>
                       )}

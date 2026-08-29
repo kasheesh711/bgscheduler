@@ -10,7 +10,7 @@ import { postClassFeedbackErrorResponse } from "@/lib/post-class-feedback/api";
 
 const BodySchema = z.object({
   deductionId: z.string().uuid(),
-  action: z.enum(["approve", "waive", "reopen"]),
+  action: z.enum(["approve", "waive", "reopen", "reinstate"]),
   note: z.string().max(2_000).default(""),
   waiverCategory: z.enum(POST_CLASS_WAIVER_CATEGORIES).optional(),
   expectedVersion: z.number().int().positive(),
