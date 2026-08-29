@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withCronInvocationAudit } from "@/lib/data-health/cron-audit";
 import { rejectInvalidCronSecret } from "@/lib/internal/cron-auth";
 import { processPostClassAiReviews } from "@/lib/post-class-feedback/ai";
+import { runPostClassDeductionHygiene } from "@/lib/post-class-feedback/auto-approval";
 import { processDuePostClassNotificationRetries } from "@/lib/post-class-feedback/notifications";
 import {
   PostClassFeedbackSyncAlreadyRunningError,
@@ -19,15 +20,20 @@ export async function GET(request: NextRequest) {
     async () => {
       try {
         const result = await runPostClassFeedbackSync({ triggerType: "cron" });
-        const [ai, retries] = await Promise.allSettled([
+        const [ai, retries, hygiene] = await Promise.allSettled([
           processPostClassAiReviews(),
           processDuePostClassNotificationRetries(),
+          // Reopen unproven approvals and waive deductions on sessions the
+          // sync just found ineligible (e.g. cancelled in Wise) — releases
+          // claims only, never approves.
+          runPostClassDeductionHygiene(),
         ]);
         return NextResponse.json({
           ok: true,
           result,
           ai: ai.status === "fulfilled" ? ai.value : { failed: true },
           retries: retries.status === "fulfilled" ? retries.value : { failed: true },
+          hygiene: hygiene.status === "fulfilled" ? hygiene.value : { failed: true },
         });
       } catch (error) {
         if (error instanceof PostClassFeedbackSyncAlreadyRunningError) {

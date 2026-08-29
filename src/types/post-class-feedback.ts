@@ -37,6 +37,7 @@ export type FeedbackWaiverCategory =
   | "pre_approved_exception"
   | "tutor_emergency"
   | "duplicate_system_error"
+  | "class_cancelled"
   | "other";
 
 export type FeedbackEligibilityReason = SessionEligibilityReason;

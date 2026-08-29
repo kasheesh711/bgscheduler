@@ -28,6 +28,7 @@ export const POST_CLASS_WAIVER_CATEGORIES = [
   "pre_approved_exception",
   "tutor_emergency",
   "duplicate_system_error",
+  "class_cancelled",
   "other",
 ] as const;
 

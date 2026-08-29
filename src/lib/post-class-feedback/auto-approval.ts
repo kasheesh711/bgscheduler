@@ -112,6 +112,66 @@ export async function runPostClassAutoApprovals(
 }
 
 /**
+ * System actor for the unattended waivers below. Waiving RELEASES a money
+ * claim -- the fail-safe direction -- so unlike the approve sweep it is not
+ * env-gated.
+ */
+const INELIGIBLE_WAIVER_ACTOR = {
+  email: "system:post-class-ineligible-waive",
+  name: "Post-class Ineligible Waiver",
+};
+
+/**
+ * Waive every `pending_review` deduction whose session is no longer eligible.
+ *
+ * A deduction candidate is only ever created for an eligible session, but a
+ * class can be cancelled (or turn no-show / non-billable) in Wise AFTER the
+ * candidate was raised. Such a deduction cannot stand -- and it must not sit
+ * in the review queue demanding a human decision for a class that no longer
+ * counts. The waiver note carries Wise's eligibility reason; a cancellation
+ * gets its own category.
+ */
+export async function runPostClassIneligibleWaivers(
+  db: Database = getDb(),
+): Promise<{ waived: number; failed: number }> {
+  const candidates = await db.select({
+    deductionId: schema.postClassDeductions.id,
+    version: schema.postClassDeductions.version,
+    eligibilityReason: schema.postClassSessions.eligibilityReason,
+  }).from(schema.postClassDeductions)
+    .innerJoin(
+      schema.postClassSessions,
+      eq(schema.postClassDeductions.sessionId, schema.postClassSessions.id),
+    )
+    .where(and(
+      eq(schema.postClassDeductions.status, "pending_review"),
+      eq(schema.postClassSessions.eligible, false),
+    ));
+
+  let waived = 0;
+  let failed = 0;
+  for (const candidate of candidates) {
+    const reason = candidate.eligibilityReason ?? "ineligible";
+    try {
+      await applyPostClassReviewAction(INELIGIBLE_WAIVER_ACTOR, {
+        deductionId: candidate.deductionId,
+        action: "waive",
+        note: `Automated waiver: the session is no longer eligible (${reason}); `
+          + "a deduction cannot stand on an ineligible class.",
+        waiverCategory: reason === "cancelled" ? "class_cancelled" : "other",
+        expectedVersion: candidate.version,
+        idempotencyKey: `ineligible-waive:${candidate.deductionId}`,
+      }, db);
+      waived += 1;
+    } catch (error) {
+      console.error("[post-class-ineligible-waive]", error);
+      failed += 1;
+    }
+  }
+  return { waived, failed };
+}
+
+/**
  * Reopen every `approved`, not-yet-written deduction that has lost proof --
  * its session is no longer eligible, or its source is no longer `ready`.
  *
@@ -174,7 +234,9 @@ export async function runPostClassAutoReopens(
  * Single entry point the accrual/finalize passes call before every preview.
  *
  * Reopen runs first: a deduction reopened this tick must not simultaneously
- * be treated as a stale `approved` row by the approve sweep in the same tick.
+ * be treated as a stale `approved` row by the approve sweep in the same tick
+ * -- and a reopened ineligible deduction is then waived by the ineligible
+ * sweep in this very tick rather than lingering in the review queue.
  */
 export async function runPostClassAutoApprovalSweep(
   db: Database = getDb(),
@@ -184,13 +246,39 @@ export async function runPostClassAutoApprovalSweep(
   approveFailed: number;
   reopened: number;
   reopenFailed: number;
+  waived: number;
+  waiveFailed: number;
 }> {
-  const reopenResult = await runPostClassAutoReopens(db);
+  const hygiene = await runPostClassDeductionHygiene(db);
   const approveResult = await runPostClassAutoApprovals(db, now);
   return {
     approved: approveResult.approved,
     approveFailed: approveResult.failed,
+    ...hygiene,
+  };
+}
+
+/**
+ * The safety-restoring half of the sweep, with no approve leg: reopen
+ * unproven approvals, then waive deductions on no-longer-eligible sessions.
+ * Runs on every collection tick (sync-post-class-feedback route) so a class
+ * cancelled in Wise clears its own review item within a sync cycle, without
+ * any payout pass involved.
+ */
+export async function runPostClassDeductionHygiene(
+  db: Database = getDb(),
+): Promise<{
+  reopened: number;
+  reopenFailed: number;
+  waived: number;
+  waiveFailed: number;
+}> {
+  const reopenResult = await runPostClassAutoReopens(db);
+  const waiveResult = await runPostClassIneligibleWaivers(db);
+  return {
     reopened: reopenResult.reopened,
     reopenFailed: reopenResult.failed,
+    waived: waiveResult.waived,
+    waiveFailed: waiveResult.failed,
   };
 }

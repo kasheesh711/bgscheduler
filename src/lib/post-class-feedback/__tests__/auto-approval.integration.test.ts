@@ -19,6 +19,7 @@ import {
   runPostClassAutoApprovals,
   runPostClassAutoApprovalSweep,
   runPostClassAutoReopens,
+  runPostClassIneligibleWaivers,
 } from "@/lib/post-class-feedback/auto-approval";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -56,6 +57,7 @@ async function seedSession(input: {
   wiseSessionId: string;
   deadlineAt: Date;
   eligible?: boolean;
+  eligibilityReason?: string;
   sourceStatus?: "ready" | "unavailable" | "form_drift" | "identity_review";
   enforcementMode?: "shadow" | "live" | "paused";
 }): Promise<string> {
@@ -70,6 +72,7 @@ async function seedSession(input: {
     deadlineAt: input.deadlineAt,
     finalStatus: "ENDED",
     eligible: input.eligible ?? true,
+    eligibilityReason: input.eligibilityReason ?? null,
     sourceStatus: input.sourceStatus ?? "ready",
     enforcementMode: input.enforcementMode ?? "live",
   }).returning({ id: schema.postClassSessions.id });
@@ -181,6 +184,75 @@ describe("runPostClassAutoApprovals", () => {
   });
 });
 
+describe("runPostClassIneligibleWaivers", () => {
+  it("waives a pending deduction on a cancelled class, no review needed", async () => {
+    const sessionId = await seedSession({
+      wiseSessionId: "s-cancelled",
+      deadlineAt: hoursAgo(1),
+      eligible: false,
+      eligibilityReason: "cancelled",
+    });
+    const deductionId = await seedDeduction({ sessionId, status: "pending_review" });
+
+    const result = await runPostClassIneligibleWaivers(appDb());
+
+    expect(result).toEqual({ waived: 1, failed: 0 });
+    const [deduction] = await handle.db.select().from(schema.postClassDeductions)
+      .where(eq(schema.postClassDeductions.id, deductionId));
+    expect(deduction.status).toBe("waived");
+    expect(deduction.waiverCategory).toBe("class_cancelled");
+    expect(deduction.decisionByEmail).toBe("system:post-class-ineligible-waive");
+    expect(deduction.waiverNote).toContain("cancelled");
+  });
+
+  it("uses the generic category for other ineligibility reasons", async () => {
+    const sessionId = await seedSession({
+      wiseSessionId: "s-no-show",
+      deadlineAt: hoursAgo(1),
+      eligible: false,
+      eligibilityReason: "missed_or_no_show",
+    });
+    const deductionId = await seedDeduction({ sessionId, status: "pending_review" });
+
+    const result = await runPostClassIneligibleWaivers(appDb());
+
+    expect(result).toEqual({ waived: 1, failed: 0 });
+    const [deduction] = await handle.db.select().from(schema.postClassDeductions)
+      .where(eq(schema.postClassDeductions.id, deductionId));
+    expect(deduction.status).toBe("waived");
+    expect(deduction.waiverCategory).toBe("other");
+    expect(deduction.waiverNote).toContain("missed_or_no_show");
+  });
+
+  it("leaves pending deductions on eligible sessions for human review", async () => {
+    const sessionId = await seedSession({
+      wiseSessionId: "s-still-eligible",
+      deadlineAt: hoursAgo(1),
+    });
+    const deductionId = await seedDeduction({ sessionId, status: "pending_review" });
+
+    const result = await runPostClassIneligibleWaivers(appDb());
+
+    expect(result).toEqual({ waived: 0, failed: 0 });
+    expect(await deductionStatus(deductionId)).toBe("pending_review");
+  });
+
+  it("is a no-op on a second identical run", async () => {
+    const sessionId = await seedSession({
+      wiseSessionId: "s-cancelled-twice",
+      deadlineAt: hoursAgo(1),
+      eligible: false,
+      eligibilityReason: "cancelled",
+    });
+    await seedDeduction({ sessionId, status: "pending_review" });
+
+    expect(await runPostClassIneligibleWaivers(appDb()))
+      .toEqual({ waived: 1, failed: 0 });
+    expect(await runPostClassIneligibleWaivers(appDb()))
+      .toEqual({ waived: 0, failed: 0 });
+  });
+});
+
 describe("runPostClassAutoReopens", () => {
   it("reopens an approved deduction that lost proof (session no longer eligible)", async () => {
     const sessionId = await seedSession({
@@ -258,9 +330,14 @@ describe("runPostClassAutoApprovalSweep", () => {
       approveFailed: 0,
       reopened: 1,
       reopenFailed: 0,
+      // The reopened deduction sits on an ineligible session, so the
+      // ineligible-waive leg clears it in the same tick — no review item
+      // survives for a class that no longer counts.
+      waived: 1,
+      waiveFailed: 0,
     });
     expect(await deductionStatus(approveDeductionId)).toBe("approved");
-    expect(await deductionStatus(reopenDeductionId)).toBe("pending_review");
+    expect(await deductionStatus(reopenDeductionId)).toBe("waived");
   });
 
   it("is a no-op on a second identical run", async () => {
@@ -284,6 +361,8 @@ describe("runPostClassAutoApprovalSweep", () => {
       approveFailed: 0,
       reopened: 0,
       reopenFailed: 0,
+      waived: 0,
+      waiveFailed: 0,
     });
     const actionsAfterSecond = await handle.db.select()
       .from(schema.postClassDeductionActions);

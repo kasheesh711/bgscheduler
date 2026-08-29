@@ -53,6 +53,7 @@ const WAIVER_CATEGORIES: Array<{ value: FeedbackWaiverCategory; label: string }>
   { value: "pre_approved_exception", label: "Pre-approved exception" },
   { value: "tutor_emergency", label: "Tutor emergency" },
   { value: "duplicate_system_error", label: "Duplicate / system error" },
+  { value: "class_cancelled", label: "Class cancelled" },
   { value: "other", label: "Other" },
 ];
 
