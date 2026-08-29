@@ -20,6 +20,7 @@
 
 import { randomUUID } from "node:crypto";
 
+import { eq } from "drizzle-orm";
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
@@ -174,6 +175,10 @@ async function seedApprovedDeduction(input: {
     status: "approved",
     amountMinor: 10_000,
     defaultFinanceMonth: `${input.endsAtDay.slice(0, 7)}-01`,
+    // Mirrors `applyPostClassReviewAction`: every approval records its human
+    // actor, and only human-decided deductions plan payout lines (INC-260829).
+    decisionByEmail: "reviewer@example.com",
+    decisionAt: at,
   }).returning({ id: schema.postClassDeductions.id });
   return deduction.id;
 }
@@ -214,6 +219,28 @@ describe("runPayoutAccrualPass", () => {
     expect(view.run.status).toBe("partial");
     expect(view.lines.every((line) => line.writeStatus === "written")).toBe(true);
     expect(deductionRows(grid)).toHaveLength(1);
+  });
+
+  it("never plans a line for a system-approved deduction (INC-260829)", async () => {
+    await seedKevinLedgerMapping();
+    const deductionId = await seedApprovedDeduction({
+      wiseSessionId: "s-accrual-system-approved",
+      endsAtDay: DAY_A,
+      student: "Grace Hopper",
+    });
+    await handle.db.update(schema.postClassDeductions)
+      .set({ decisionByEmail: "system:post-class-auto-approve" })
+      .where(eq(schema.postClassDeductions.id, deductionId));
+    const grid = sheetGrid();
+
+    const result = await runPayoutAccrualPass(appDb(), {
+      gateway: fakeGateway(grid).gateway,
+      resolveGoogleTarget: () => TEST_TARGET,
+      now: () => MID_WINDOW.getTime(),
+    }, MID_WINDOW);
+
+    expect("skipped" in result).toBe(true);
+    expect(deductionRows(grid)).toHaveLength(0);
   });
 
   it("never touches csvStatus/csvFileId/csvAttemptedAt across repeated in-window passes", async () => {

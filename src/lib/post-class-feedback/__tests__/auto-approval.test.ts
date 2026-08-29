@@ -10,7 +10,29 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { resolveAutoApproveGraceHours } from "@/lib/post-class-feedback/auto-approval";
+import {
+  resolveAutoApproveEnabled,
+  resolveAutoApproveGraceHours,
+} from "@/lib/post-class-feedback/auto-approval";
+
+describe("resolveAutoApproveEnabled", () => {
+  it("is off when the variable is absent — approvals are human-only by default", () => {
+    expect(resolveAutoApproveEnabled(undefined)).toBe(false);
+  });
+
+  it("is off for blank, whitespace, and non-true values", () => {
+    expect(resolveAutoApproveEnabled("")).toBe(false);
+    expect(resolveAutoApproveEnabled("  ")).toBe(false);
+    expect(resolveAutoApproveEnabled("false")).toBe(false);
+    expect(resolveAutoApproveEnabled("1")).toBe(false);
+    expect(resolveAutoApproveEnabled("TRUE")).toBe(false);
+  });
+
+  it("is on only for an explicit true", () => {
+    expect(resolveAutoApproveEnabled("true")).toBe(true);
+    expect(resolveAutoApproveEnabled(" true ")).toBe(true);
+  });
+});
 
 describe("resolveAutoApproveGraceHours", () => {
   it("defaults to 24 when the variable is absent", () => {

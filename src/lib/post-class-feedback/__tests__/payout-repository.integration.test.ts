@@ -189,6 +189,13 @@ async function seedDeduction(input: {
   status: DeductionStatus;
   student?: string;
   reversedIntoPeriodId?: string;
+  /**
+   * Decision attribution. Defaults to a human reviewer for any decided status
+   * (mirroring `applyPostClassReviewAction`, which always stamps the actor);
+   * pass `null` to simulate a legacy row with no recorded decision, or a
+   * `system:*` actor to simulate an auto-approval (INC-260829).
+   */
+  decisionByEmail?: string | null;
 }): Promise<string> {
   const at = new Date(input.endsAt);
   const [session] = await handle.db.insert(schema.postClassSessions).values({
@@ -216,6 +223,10 @@ async function seedDeduction(input: {
     status: input.status,
     amountMinor: 10_000,
     defaultFinanceMonth: `${input.endsAt.slice(0, 7)}-01`,
+    decisionByEmail: input.decisionByEmail !== undefined
+      ? input.decisionByEmail
+      : (input.status === "pending_review" ? null : "reviewer@example.com"),
+    decisionAt: input.status === "pending_review" ? null : at,
   }).returning({ id: schema.postClassDeductions.id });
 
   if (input.reversedIntoPeriodId) {
@@ -240,6 +251,27 @@ describe("selectPayoutRunCandidates", () => {
 
     const candidates = await selectPayoutRunCandidates(appDb(), WINDOW);
     expect(candidates.map((row) => row.wiseSessionId)).toEqual(["approved"]);
+  });
+
+  it("excludes approved deductions without a human decision actor (INC-260829)", async () => {
+    await seedDeduction({ id: "human", endsAt: "2026-07-10T03:00:00.000Z", tutorKey: "kevin", status: "approved" });
+    await seedDeduction({
+      id: "system-approved",
+      endsAt: "2026-07-11T03:00:00.000Z",
+      tutorKey: "kevin",
+      status: "approved",
+      decisionByEmail: "system:post-class-auto-approve",
+    });
+    await seedDeduction({
+      id: "no-decision-actor",
+      endsAt: "2026-07-12T03:00:00.000Z",
+      tutorKey: "kevin",
+      status: "approved",
+      decisionByEmail: null,
+    });
+
+    const candidates = await selectPayoutRunCandidates(appDb(), WINDOW);
+    expect(candidates.map((row) => row.wiseSessionId)).toEqual(["human"]);
   });
 
   it("excludes a deduction with a durable reversal offset", async () => {
@@ -856,6 +888,42 @@ describe("acquirePayoutRunLease", () => {
     const line = second.lines.find((row) => row.deductionId === deductionId)!;
     expect(line.writeStatus).toBe("written");
     expect(line.insertedRowNumber).toBe(12);
+  });
+
+  it("keeps a written line whose deduction was system-approved, without retiring it (INC-260829)", async () => {
+    // Simulates the incident's historical rows: the line reached the sheet
+    // while auto-approval could still plan lines. The human-decision filter
+    // must drop the deduction from new planning, but the written line stays a
+    // retained obligation — never retired, never re-touched.
+    await upsertPayoutTutorName(appDb(), {
+      canonicalKey: "kevin",
+      primaryLedgerName: "Kevin (Kev) Y. Hsieh",
+      alternateLedgerName: null,
+      active: true,
+      updatedByEmail: "admin@example.com",
+    });
+    const deductionId = await seedDeduction({ id: "a", endsAt: "2026-07-10T03:00:00.000Z", tutorKey: "kevin", status: "approved" });
+    const first = await acquireRun();
+    await handle.db.update(schema.postClassPayoutRunLines).set({
+      matchStatus: "matched",
+      writeStatus: "written",
+      insertedRowNumber: 12,
+      writtenAt: new Date(),
+    }).where(eq(schema.postClassPayoutRunLines.runId, first.run.id));
+    await releaseRun(first, false);
+
+    await handle.db.update(schema.postClassDeductions)
+      .set({ decisionByEmail: "system:post-class-auto-approve" })
+      .where(eq(schema.postClassDeductions.id, deductionId));
+
+    const preview = await readPayoutRunPreview(appDb(), { window: WINDOW });
+    expect(preview.candidates).toHaveLength(0);
+
+    const second = await acquireRun();
+    const line = second.lines.find((row) => row.deductionId === deductionId)!;
+    expect(line.writeStatus).toBe("written");
+    expect(line.insertedRowNumber).toBe(12);
+    expect(line.retiredAt).toBeNull();
   });
 
   it("retires a line whose deduction stopped being approved between passes", async () => {

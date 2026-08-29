@@ -26,10 +26,14 @@ import * as schema from "@/lib/db/schema";
 let handle: Awaited<ReturnType<typeof startTestDb>>;
 
 beforeAll(async () => {
+  // The approve sweep is opt-in and off by default (INC-260829); this suite
+  // exercises the sweep itself, so switch it on for the duration.
+  process.env.POST_CLASS_AUTO_APPROVE_ENABLED = "true";
   handle = await startTestDb();
 }, 60_000);
 
 afterAll(async () => {
+  delete process.env.POST_CLASS_AUTO_APPROVE_ENABLED;
   if (handle) await stopTestDb(handle);
 });
 
@@ -128,6 +132,24 @@ describe("runPostClassAutoApprovals", () => {
     const [deduction] = await handle.db.select().from(schema.postClassDeductions)
       .where(eq(schema.postClassDeductions.id, deductionId));
     expect(deduction.decisionByEmail).toBe("system:post-class-auto-approve");
+  });
+
+  it("is a no-op while the enable flag is off, whatever the backlog (INC-260829)", async () => {
+    const sessionId = await seedSession({
+      wiseSessionId: "s-disabled-sweep",
+      deadlineAt: hoursAgo(GRACE_HOURS + 100),
+    });
+    const deductionId = await seedDeduction({ sessionId, status: "pending_review" });
+    await seedActionableAssessment(sessionId);
+
+    delete process.env.POST_CLASS_AUTO_APPROVE_ENABLED;
+    try {
+      const result = await runPostClassAutoApprovals(appDb(), NOW);
+      expect(result).toEqual({ approved: 0, failed: 0 });
+      expect(await deductionStatus(deductionId)).toBe("pending_review");
+    } finally {
+      process.env.POST_CLASS_AUTO_APPROVE_ENABLED = "true";
+    }
   });
 
   it("skips a deduction still inside the grace window", async () => {

@@ -30,6 +30,19 @@ const SYSTEM_ACTOR = {
 const DEFAULT_AUTO_APPROVE_GRACE_HOURS = 24;
 
 /**
+ * Auto-approval is opt-in and off by default (INC-260829). The armed accrual
+ * cron once converted the entire pending_review backlog into sheet writes with
+ * no human decision; approvals are now human-only unless this flag is an
+ * explicit `"true"`. The reopen sweep is deliberately NOT behind this flag --
+ * reopening restores safety, approving moves money.
+ */
+export function resolveAutoApproveEnabled(
+  raw: string | undefined = process.env.POST_CLASS_AUTO_APPROVE_ENABLED,
+): boolean {
+  return raw?.trim() === "true";
+}
+
+/**
  * Resolve the auto-approval grace window from the environment, defaulting to
  * 24 hours whenever the value is absent, blank, non-numeric, or negative.
  *
@@ -60,6 +73,7 @@ export async function runPostClassAutoApprovals(
   db: Database = getDb(),
   now: Date = new Date(),
 ): Promise<{ approved: number; failed: number }> {
+  if (!resolveAutoApproveEnabled()) return { approved: 0, failed: 0 };
   const graceMs = resolveAutoApproveGraceHours() * 60 * 60 * 1_000;
   const deadline = new Date(now.getTime() - graceMs);
   const candidates = await db.select({

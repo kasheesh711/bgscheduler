@@ -9,10 +9,12 @@ import {
   gte,
   gt,
   inArray,
+  isNotNull,
   isNull,
   lt,
   ne,
   notInArray,
+  notLike,
   or,
   sql,
 } from "drizzle-orm";
@@ -116,6 +118,13 @@ export async function selectPayoutRunCandidates(
       gte(schema.postClassSessions.scheduledEndAt, start),
       lt(schema.postClassSessions.scheduledEndAt, endExclusive),
       eq(schema.postClassDeductions.status, "approved"),
+      // New money moves only on a human decision (INC-260829): a `system:*`
+      // actor may flip status to `approved`, but its rows must never plan a
+      // payout line. Already-written system-approved lines are unaffected —
+      // they persist as retained written obligations, and the retirement
+      // sweep only touches non-written lines.
+      isNotNull(schema.postClassDeductions.decisionByEmail),
+      notLike(schema.postClassDeductions.decisionByEmail, "system:%"),
       eq(schema.postClassSessions.eligible, true),
       eq(schema.postClassSessions.sourceStatus, "ready"),
       // Belt and braces behind `eligible`, which the REC-03 retirement clears:

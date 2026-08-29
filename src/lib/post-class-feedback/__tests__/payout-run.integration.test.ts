@@ -140,6 +140,10 @@ async function seedDeduction(input: {
     status: "approved",
     amountMinor: 10_000,
     defaultFinanceMonth: `${input.endsAt.slice(0, 7)}-01`,
+    // Mirrors `applyPostClassReviewAction`: every approval records its human
+    // actor, and only human-decided deductions plan payout lines (INC-260829).
+    decisionByEmail: "reviewer@example.com",
+    decisionAt: at,
   });
 }
 
