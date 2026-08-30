@@ -14,6 +14,8 @@ import {
   resolvePayoutException,
   retryPayoutRunCsv,
 } from "@/lib/post-class-feedback/payout-run";
+import { verifyPayoutSheet } from "@/lib/post-class-feedback/payout-sheet-verify";
+import { getDb } from "@/lib/db";
 
 // Google row writes are paced under a ten-minute application budget and a
 // durable lease. Keep platform headroom above that budget.
@@ -50,6 +52,12 @@ const BodySchema = z.discriminatedUnion("action", [
     action: z.literal("retry_csv"),
     anchorMonth: AnchorMonth,
     expectedVersion: ExpectedVersion,
+  }).strict(),
+  z.object({
+    // Read-only ledger verification: one Sheets read, zero writes, no
+    // acknowledgements — safe on any run state.
+    action: z.literal("verify_sheet"),
+    anchorMonth: AnchorMonth,
   }).strict(),
   z.object({
     action: z.literal("resolve_exception"),
@@ -122,6 +130,11 @@ export async function POST(request: NextRequest) {
         },
       });
       return NextResponse.json({ ok: true, ...view, writeCapability: payoutWriteCapability() });
+    }
+
+    if (body.action === "verify_sheet") {
+      const verification = await verifyPayoutSheet(getDb(), body.anchorMonth);
+      return NextResponse.json({ ok: true, verification, writeCapability });
     }
 
     if (body.action === "retry_csv") {

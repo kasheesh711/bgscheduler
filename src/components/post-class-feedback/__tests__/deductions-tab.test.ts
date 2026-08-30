@@ -19,6 +19,7 @@ function row(overrides: Partial<FeedbackDeductionRow> = {}): FeedbackDeductionRo
     amount: 100,
     status: "approved",
     payoutVerifiedWritten: false,
+    payoutLedgerState: "none",
     processingMonth: "2026-07",
     referenceNote: null,
     waiverCategory: null,

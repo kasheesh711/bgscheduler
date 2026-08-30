@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { currentPayoutRunWindow, payoutRunWindow } from "@/lib/post-class-feedback/payout-window";
 import { cn } from "@/lib/utils";
 import type { FeedbackMutationRequest, PostClassFeedbackPayload } from "@/types/post-class-feedback";
 import { AnalyticsTab } from "./analytics-tab";
@@ -106,10 +107,36 @@ function WorkspaceToast({ toast, onClose }: { toast: Toast; onClose: () => void 
   );
 }
 
+function shiftAnchorMonth(anchorMonth: string, deltaMonths: number): string {
+  const year = Number(anchorMonth.slice(0, 4));
+  const month = Number(anchorMonth.slice(5, 7));
+  const shifted = new Date(Date.UTC(year, month - 1 + deltaMonths, 1));
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
 export function PostClassFeedbackWorkspace() {
-  const initialRange = useRef(currentBangkokMonthRange());
-  const [startDate, setStartDate] = useState(initialRange.current.startDate);
-  const [endDate, setEndDate] = useState(initialRange.current.endDate);
+  // Deduction review runs on the 26th→25th payout window, so that is the
+  // default range; the calendar-month preset and free pickers remain.
+  const initialWindow = useRef(currentPayoutRunWindow());
+  const [startDate, setStartDate] = useState(initialWindow.current.windowStart);
+  const [endDate, setEndDate] = useState(initialWindow.current.windowEnd);
+  const [windowAnchor, setWindowAnchor] = useState<string | null>(
+    initialWindow.current.anchorMonth,
+  );
+
+  const applyPayoutWindow = useCallback((anchorMonth: string) => {
+    const window = payoutRunWindow(anchorMonth);
+    setWindowAnchor(window.anchorMonth);
+    setStartDate(window.windowStart);
+    setEndDate(window.windowEnd);
+  }, []);
+
+  const applyCalendarMonth = useCallback(() => {
+    const range = currentBangkokMonthRange();
+    setWindowAnchor(null);
+    setStartDate(range.startDate);
+    setEndDate(range.endDate);
+  }, []);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("operations");
   const [payload, setPayload] = useState<PostClassFeedbackPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -155,6 +182,16 @@ export function PostClassFeedbackWorkspace() {
     return () => activeController.current?.abort();
   }, [loadPayload]);
 
+  // Live decisions feed: background-refresh every 60 seconds (house pattern,
+  // see credit-control). The sequence guard + AbortController above make a
+  // poll racing a manual refresh harmless, and a failed background refresh
+  // keeps the last good payload with the stale banner.
+  useEffect(() => {
+    if (endDate < startDate) return;
+    const interval = window.setInterval(() => void loadPayload(true), 60_000);
+    return () => window.clearInterval(interval);
+  }, [endDate, startDate, loadPayload]);
+
   useEffect(() => {
     if (!payload) return;
     if (activeTab === "deductions" && !payload.capabilities.reviewer && !payload.capabilities.finance) {
@@ -199,13 +236,53 @@ export function PostClassFeedbackWorkspace() {
           <p className="mt-1 text-sm text-muted-foreground">Track Wise feedback evidence, reminders, quality review, and manual deductions.</p>
         </div>
         <div className="flex flex-wrap items-end gap-2">
+          <div className="grid gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            Range
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="icon-xs"
+                title="Previous payout window"
+                onClick={() => applyPayoutWindow(shiftAnchorMonth(
+                  windowAnchor ?? currentPayoutRunWindow().anchorMonth,
+                  -1,
+                ))}
+              >
+                ‹<span className="sr-only">Previous payout window</span>
+              </Button>
+              <Button
+                variant={windowAnchor ? "secondary" : "outline"}
+                size="xs"
+                title="26th → 25th payout window"
+                onClick={() => applyPayoutWindow(
+                  windowAnchor ?? currentPayoutRunWindow().anchorMonth,
+                )}
+              >
+                Payout window
+              </Button>
+              <Button
+                variant="outline"
+                size="icon-xs"
+                title="Next payout window"
+                onClick={() => applyPayoutWindow(shiftAnchorMonth(
+                  windowAnchor ?? currentPayoutRunWindow().anchorMonth,
+                  1,
+                ))}
+              >
+                ›<span className="sr-only">Next payout window</span>
+              </Button>
+              <Button variant="outline" size="xs" title="Bangkok calendar month" onClick={applyCalendarMonth}>
+                Month
+              </Button>
+            </div>
+          </div>
           <label className="grid gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             From
-            <Input type="date" className="w-36 bg-card" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+            <Input type="date" className="w-36 bg-card" value={startDate} onChange={(event) => { setWindowAnchor(null); setStartDate(event.target.value); }} />
           </label>
           <label className="grid gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             To
-            <Input type="date" className="w-36 bg-card" min={startDate} value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+            <Input type="date" className="w-36 bg-card" min={startDate} value={endDate} onChange={(event) => { setWindowAnchor(null); setEndDate(event.target.value); }} />
           </label>
           <Button variant="outline" disabled={refreshing || invalidRange} onClick={() => void loadPayload(true)}>
             <RefreshCw className={cn(refreshing && "animate-spin")} />

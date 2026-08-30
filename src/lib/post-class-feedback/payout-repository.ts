@@ -1410,7 +1410,12 @@ export async function finalizePayoutRunPass(db: Database, input: {
   });
 }
 
-/** Finance action guard: a correction is valid only after a negative row landed. */
+/**
+ * Finance action guard: a correction is valid only after a negative row
+ * landed AND is still on the ledger. A retired written line was deliberately
+ * removed from the sheet (netted pair / reinstatement), so it neither
+ * verifies a Process, blocks a reopen, nor anchors a correction.
+ */
 export async function findWrittenPayoutDeductionLine(
   db: Database,
   deductionId: string,
@@ -1419,6 +1424,7 @@ export async function findWrittenPayoutDeductionLine(
     .where(and(
       eq(schema.postClassPayoutRunLines.deductionId, deductionId),
       eq(schema.postClassPayoutRunLines.writeStatus, "written"),
+      isNull(schema.postClassPayoutRunLines.retiredAt),
     ))
     .orderBy(asc(schema.postClassPayoutRunLines.writtenAt))
     .limit(1);

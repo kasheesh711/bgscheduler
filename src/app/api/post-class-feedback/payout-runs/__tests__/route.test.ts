@@ -22,6 +22,12 @@ vi.mock("@/lib/post-class-feedback/payout-run", () => ({
   resolvePayoutException: vi.fn(),
   retryPayoutRunCsv: vi.fn(),
 }));
+vi.mock("@/lib/post-class-feedback/payout-sheet-verify", () => ({
+  verifyPayoutSheet: vi.fn(),
+}));
+vi.mock("@/lib/db", () => ({
+  getDb: vi.fn(() => ({})),
+}));
 
 import { requirePostClassCapability } from "@/lib/post-class-feedback/access";
 import {
@@ -35,6 +41,7 @@ import {
   resolvePayoutException,
   retryPayoutRunCsv,
 } from "@/lib/post-class-feedback/payout-run";
+import { verifyPayoutSheet } from "@/lib/post-class-feedback/payout-sheet-verify";
 import { POST } from "../route";
 
 const actor = { email: "finance@example.com", capabilities: ["finance", "viewer"] };
@@ -143,6 +150,27 @@ describe("POST /api/post-class-feedback/payout-runs", () => {
         nonReadySessions: 3,
         reason: "Finance checked this exact canary preview.",
       },
+    });
+  });
+
+  it("verifies the sheet read-only with no acknowledgements", async () => {
+    vi.mocked(verifyPayoutSheet).mockResolvedValue({
+      anchorMonth: "2026-07",
+      checkedAt: "2026-08-30T08:00:00.000Z",
+      sheetRowCount: 52,
+      summary: { present: 52, ledgerRemoved: 106, missing: 0, amountChanged: 0, unwrittenApproved: 34 },
+      rows: [],
+      attention: [],
+      perTutor: [],
+    });
+
+    const response = await POST(request({ action: "verify_sheet", anchorMonth: "2026-07" }));
+
+    expect(response.status).toBe(200);
+    expect(verifyPayoutSheet).toHaveBeenCalledWith(expect.anything(), "2026-07");
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      verification: { sheetRowCount: 52, summary: { present: 52 } },
     });
   });
 

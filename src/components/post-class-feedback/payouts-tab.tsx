@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import type { PayoutSheetVerifyResult } from "@/lib/post-class-feedback/payout-sheet-verify";
 import type { PostClassFeedbackPayload } from "@/types/post-class-feedback";
 
 import { EmptyPanel, KpiCell, formatMoney } from "./feedback-ui";
@@ -307,6 +308,8 @@ export function PayoutsTab({ payload }: { payload: PostClassFeedbackPayload }) {
   const [publishReason, setPublishReason] = useState("");
   const [exceptionDrafts, setExceptionDrafts] = useState<Record<string, ExceptionDraft>>({});
   const [error, setError] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [verification, setVerification] = useState<PayoutSheetVerifyResult | null>(null);
 
   const call = useCallback(async (body: Record<string, unknown>) => {
     const response = await fetch("/api/post-class-feedback/payout-runs", {
@@ -354,6 +357,21 @@ export function PayoutsTab({ payload }: { payload: PostClassFeedbackPayload }) {
       setLoading(false);
     }
   }, [anchorMonth, call, resetConfirmation, tutorFilter]);
+
+  const verifySheet = useCallback(async () => {
+    setVerifying(true);
+    setError(null);
+    try {
+      const next = await call({ action: "verify_sheet", anchorMonth }) as unknown as {
+        verification: PayoutSheetVerifyResult;
+      };
+      setVerification(next.verification);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The sheet verification failed.");
+    } finally {
+      setVerifying(false);
+    }
+  }, [anchorMonth, call]);
 
   const publish = useCallback(async () => {
     if (!view) return;
@@ -471,6 +489,7 @@ export function PayoutsTab({ payload }: { payload: PostClassFeedbackPayload }) {
             onChange={(event) => {
               setAnchorMonth(event.target.value);
               setView(null);
+              setVerification(null);
               resetConfirmation();
             }}
           />
@@ -495,6 +514,14 @@ export function PayoutsTab({ payload }: { payload: PostClassFeedbackPayload }) {
         <Button variant="outline" disabled={loading} onClick={() => void preview()}>
           <RefreshCw className={cn(loading && "animate-spin")} />
           {loading ? "Loading…" : "Load preview"}
+        </Button>
+        <Button
+          variant="outline"
+          disabled={verifying}
+          title="Read-only check: is every ledger row for this window actually on the sheet?"
+          onClick={() => void verifySheet()}
+        >
+          {verifying ? "Verifying…" : "Verify sheet"}
         </Button>
         {view ? (
           <>
@@ -532,6 +559,75 @@ export function PayoutsTab({ payload }: { payload: PostClassFeedbackPayload }) {
 
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800" role="alert">{error}</div>
+      ) : null}
+
+      {verification ? (
+        <section className={cn(
+          "rounded-xl border px-4 py-3 text-sm",
+          verification.attention.length === 0
+            ? "border-emerald-200 bg-emerald-50 text-emerald-950"
+            : "border-red-200 bg-red-50 text-red-950",
+        )}>
+          <div className="font-semibold">
+            {verification.attention.length === 0
+              ? `Ledger verified: all ${verification.summary.present} rows present`
+                + ` (${verification.summary.ledgerRemoved} deliberately removed)`
+              : `${verification.attention.length} ledger discrepancies need attention`}
+          </div>
+          <p className="mt-0.5 text-xs opacity-80">
+            {verification.anchorMonth} window · {verification.sheetRowCount} rows on the sheet
+            · {verification.summary.unwrittenApproved} approved awaiting publish
+            · checked {new Date(verification.checkedAt).toLocaleTimeString("en-GB", { timeZone: "Asia/Bangkok" })} Bangkok
+          </p>
+          {verification.attention.length > 0 ? (
+            <ul className="mt-2 space-y-1 text-xs">
+              {verification.attention.slice(0, 20).map((row) => (
+                <li key={`${row.kind}-${row.marker || row.wiseSessionId}`}>
+                  <span className="font-medium">{row.tutorName || "(correction)"}</span>
+                  {" · "}{row.wiseSessionId}{" · "}{row.kind}{" · "}
+                  {row.sheetStatus === "amount-changed"
+                    ? `amount ${row.sheetAmount} on sheet, expected ${row.expectedAmount}`
+                    : row.kind === "unwritten-candidate"
+                      ? "approved, not yet on the ledger (publish required)"
+                      : `sheet row ${row.sheetStatus} (db: ${row.dbStatus})`}
+                </li>
+              ))}
+              {verification.attention.length > 20 ? (
+                <li className="opacity-70">…and {verification.attention.length - 20} more.</li>
+              ) : null}
+            </ul>
+          ) : null}
+          {verification.perTutor.length > 0 ? (
+            <div className="mt-3 overflow-x-auto">
+              <table className="min-w-96 text-xs">
+                <thead>
+                  <tr className="text-left opacity-70">
+                    <th className="pr-4 font-medium">Tutor</th>
+                    <th className="pr-4 font-medium">Ledger rows</th>
+                    <th className="pr-4 font-medium">On sheet</th>
+                    <th className="pr-4 font-medium">Expected ฿</th>
+                    <th className="pr-4 font-medium">Sheet ฿</th>
+                    <th className="font-medium">Awaiting publish</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {verification.perTutor.map((tutor) => (
+                    <tr key={tutor.tutorName} className={cn(
+                      (tutor.missingRows > 0 || tutor.expectedTotal !== tutor.sheetTotal) && "font-semibold",
+                    )}>
+                      <td className="pr-4">{tutor.tutorName}</td>
+                      <td className="pr-4 tabular-nums">{tutor.expectedRows}</td>
+                      <td className="pr-4 tabular-nums">{tutor.presentRows}{tutor.missingRows > 0 ? ` (−${tutor.missingRows})` : ""}</td>
+                      <td className="pr-4 tabular-nums">{formatMoney(tutor.expectedTotal)}</td>
+                      <td className="pr-4 tabular-nums">{formatMoney(tutor.sheetTotal)}</td>
+                      <td className="tabular-nums">{tutor.unwrittenApproved || ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </section>
       ) : null}
 
       {view && !view.writeCapability.enabled ? (

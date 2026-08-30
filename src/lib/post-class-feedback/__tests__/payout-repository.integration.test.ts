@@ -23,6 +23,7 @@ import {
   finalizePayoutCsvRetry,
   finalizePayoutWorkbookRoll,
   finalizePayoutRunPass,
+  hasWrittenPayoutDeduction,
   markPayoutLine,
   readPayoutRunPreview,
   recordLateApprovalPayoutExceptionIfClosed,
@@ -888,6 +889,29 @@ describe("acquirePayoutRunLease", () => {
     const line = second.lines.find((row) => row.deductionId === deductionId)!;
     expect(line.writeStatus).toBe("written");
     expect(line.insertedRowNumber).toBe(12);
+  });
+
+  it("treats a retired written line as no longer in the ledger", async () => {
+    const deductionId = await seedDeduction({ id: "a", endsAt: "2026-07-10T03:00:00.000Z", tutorKey: "kevin", status: "approved" });
+    const first = await acquireRun();
+    await handle.db.update(schema.postClassPayoutRunLines).set({
+      matchStatus: "matched",
+      writeStatus: "written",
+      insertedRowNumber: 7,
+      writtenAt: new Date(),
+    }).where(eq(schema.postClassPayoutRunLines.runId, first.run.id));
+    await releaseRun(first, false);
+
+    expect(await hasWrittenPayoutDeduction(appDb(), deductionId)).toBe(true);
+
+    await handle.db.update(schema.postClassPayoutRunLines).set({
+      retiredAt: new Date(),
+      retiredReason: "Removed from the ledger (netted pair, INC-260829)",
+    }).where(eq(schema.postClassPayoutRunLines.runId, first.run.id));
+
+    // The Process gate, reopen refusal, correction anchoring, and the
+    // dashboard "Ledger verified" flag all key on this.
+    expect(await hasWrittenPayoutDeduction(appDb(), deductionId)).toBe(false);
   });
 
   it("reinstates a ledger-removed waived deduction into a generation-2 line (INC-260829)", async () => {

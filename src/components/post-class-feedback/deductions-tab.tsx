@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { CsvExportButton } from "@/components/sales-dashboard/csv-export-button";
+import { cn } from "@/lib/utils";
 import type { CsvColumn } from "@/lib/sales-dashboard/csv";
 import type {
   FeedbackDeductionRow,
@@ -112,10 +113,21 @@ export function DeductionsTab({
 
   const rows = useMemo(() => {
     const needle = deferredQuery.trim().toLocaleLowerCase();
-    return payload.deductions.filter((row) => {
-      if (status !== "all" && row.status !== status) return false;
-      return !needle || rowSearchText(row).includes(needle);
-    });
+    return payload.deductions
+      .filter((row) => {
+        if (status !== "all" && row.status !== status) return false;
+        return !needle || rowSearchText(row).includes(needle);
+      })
+      // Live decisions feed: undecided rows first (oldest class first, so the
+      // longest-waiting review tops the queue), then decided rows newest
+      // decision first.
+      .toSorted((left, right) => {
+        const leftPending = left.status === "pending_review";
+        const rightPending = right.status === "pending_review";
+        if (leftPending !== rightPending) return leftPending ? -1 : 1;
+        if (leftPending) return left.sessionEndAt.localeCompare(right.sessionEndAt);
+        return (right.decisionAt ?? right.updatedAt).localeCompare(left.decisionAt ?? left.updatedAt);
+      });
   }, [deferredQuery, payload.deductions, status]);
 
   const statusCount = (target: FeedbackDeductionStatus) => payload.deductions.filter((row) => row.status === target).length;
@@ -235,6 +247,7 @@ export function DeductionsTab({
                 <TableHead>Reason</TableHead>
                 <TableHead>Amount</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Decided</TableHead>
                 <TableHead>Processing month</TableHead>
                 <TableHead className="pr-4 text-right">Action</TableHead>
               </TableRow>
@@ -254,10 +267,29 @@ export function DeductionsTab({
                   <TableCell className="font-semibold tabular-nums">{formatMoney(row.amount)}</TableCell>
                   <TableCell><DeductionBadge status={row.status} /></TableCell>
                   <TableCell>
+                    {row.decisionByEmail ? (
+                      <>
+                        <div className="max-w-44 truncate text-xs">{row.decisionByEmail}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {row.decisionAt ? formatBangkokDate(row.decisionAt, true) : ""}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground">Awaiting review</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
                     <div>{formatBangkokMonth(row.processingMonth)}</div>
                     {row.status === "approved" ? (
+                      <div className={cn(
+                        "text-[11px]",
+                        row.payoutLedgerState === "written" ? "text-emerald-700" : "text-amber-700",
+                      )}>
+                        {row.payoutLedgerState === "written" ? "Ledger verified" : "Publish required"}
+                      </div>
+                    ) : row.status === "waived" && row.payoutLedgerState !== "none" ? (
                       <div className="text-[11px] text-muted-foreground">
-                        {row.payoutVerifiedWritten ? "Ledger verified" : "Publish required"}
+                        {row.payoutLedgerState === "removed" ? "Row removed from ledger" : "Netting pending"}
                       </div>
                     ) : null}
                   </TableCell>

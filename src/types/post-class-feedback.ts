@@ -325,8 +325,14 @@ export interface FeedbackDeductionRow {
   reason: string;
   amount: number;
   status: FeedbackDeductionStatus;
-  /** True only after the negative line is durably verified in Feedback Deductions. */
+  /** True only while a live (non-retired) negative line sits in Feedback Deductions. */
   payoutVerifiedWritten: boolean;
+  /**
+   * `written` = a live ledger row exists; `removed` = its row was written and
+   * later deliberately removed (netted pair / reinstatement); `none` = never
+   * written.
+   */
+  payoutLedgerState: "written" | "removed" | "none";
   processingMonth: string | null;
   referenceNote: string | null;
   waiverCategory: FeedbackWaiverCategory | null;

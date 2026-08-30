@@ -309,13 +309,19 @@ export async function getPostClassFeedbackDashboard(
   const writtenPayoutLines = deductionIds.length > 0
     ? await db.selectDistinct({
       deductionId: schema.postClassPayoutRunLines.deductionId,
+      // A retired written line was removed from the ledger (netted pair /
+      // reinstatement) — it must not read as "verified written".
+      retired: sql<boolean>`${schema.postClassPayoutRunLines.retiredAt} is not null`,
     }).from(schema.postClassPayoutRunLines).where(and(
       inArray(schema.postClassPayoutRunLines.deductionId, deductionIds),
       eq(schema.postClassPayoutRunLines.writeStatus, "written"),
     ))
     : [];
   const writtenPayoutDeductionIds = new Set(
-    writtenPayoutLines.map((line) => line.deductionId),
+    writtenPayoutLines.filter((line) => !line.retired).map((line) => line.deductionId),
+  );
+  const removedPayoutDeductionIds = new Set(
+    writtenPayoutLines.filter((line) => line.retired).map((line) => line.deductionId),
   );
 
   const tutorSubmittedByWiseSession = new Map<string, Date>();
@@ -569,6 +575,11 @@ export async function getPostClassFeedbackDashboard(
       amount: deduction.amountMinor / 100,
       status: offset ? "reversed" as const : deduction.status,
       payoutVerifiedWritten: writtenPayoutDeductionIds.has(deduction.id),
+      payoutLedgerState: writtenPayoutDeductionIds.has(deduction.id)
+        ? "written" as const
+        : removedPayoutDeductionIds.has(deduction.id)
+          ? "removed" as const
+          : "none" as const,
       processingMonth: offset
         ? periodById.get(offset.financePeriodId)?.month.slice(0, 7) ?? deduction.defaultFinanceMonth.slice(0, 7)
         : processingMonth?.slice(0, 7) ?? deduction.defaultFinanceMonth.slice(0, 7),
