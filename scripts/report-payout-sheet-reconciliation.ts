@@ -92,38 +92,16 @@ async function buildReport(db: Database, anchor: string): Promise<ReportRow[]> {
     .where(eq(schema.postClassPayoutRunLines.runId, run.id));
   const adjustments = await db.select().from(schema.postClassPayoutAdjustments)
     .where(eq(schema.postClassPayoutAdjustments.runId, run.id));
-  const deductionStatuses = new Map(
-    (lines.length > 0
-      ? await db.select({
-        id: schema.postClassDeductions.id,
-        status: schema.postClassDeductions.status,
-      }).from(schema.postClassDeductions)
-        .where(inArray(schema.postClassDeductions.id, lines.map((line) => line.deductionId)))
-      : []
-    ).map((row) => [row.id, row.status]),
-  );
-  const writtenAdjustmentByDeduction = new Map(
-    adjustments
-      .filter((adjustment) => adjustment.status === "written")
-      .map((adjustment) => [adjustment.deductionId, adjustment]),
-  );
-  const writtenLineMarkerByDeduction = new Map(
+  // `retired_at` on a written line is the authoritative "removed from the
+  // ledger" flag (netted-pair removal / reinstatement). A retired line's
+  // absence is expected; so is the absence of any correction belonging to a
+  // deduction whose row was removed, and of a superseded correction that was
+  // never written.
+  const retiredWrittenDeductionIds = new Set(
     lines
-      .filter((line) => line.writeStatus === "written")
-      .map((line) => [line.deductionId, line.rowSignature]),
+      .filter((line) => line.writeStatus === "written" && line.retiredAt !== null)
+      .map((line) => line.deductionId),
   );
-  // A waived/reversed deduction whose written −row AND written +row are BOTH
-  // gone was removed as a netted pair — expected-absent, not attention-worthy.
-  // One half missing while the other remains is still a problem.
-  const isNettedRemoved = (deductionId: string): boolean => {
-    const status = deductionStatuses.get(deductionId);
-    if (status !== "waived" && status !== "reversed") return false;
-    const adjustment = writtenAdjustmentByDeduction.get(deductionId);
-    const lineMarker = writtenLineMarkerByDeduction.get(deductionId);
-    return Boolean(adjustment) && Boolean(lineMarker)
-      && !markerRows.has(adjustment!.rowSignature)
-      && !markerRows.has(lineMarker!);
-  };
 
   const report: ReportRow[] = [];
   for (const line of lines) {
@@ -131,7 +109,7 @@ async function buildReport(db: Database, anchor: string): Promise<ReportRow[]> {
     const sheet = sheetStatusFor(markerRows.get(line.rowSignature), expected);
     const netted = line.writeStatus === "written"
       && sheet.status === "absent"
-      && isNettedRemoved(line.deductionId);
+      && line.retiredAt !== null;
     report.push({
       kind: line.writeStatus === "written" ? "written-line" : "skipped-line",
       tutorName: line.tutorName ?? "(unnamed)",
@@ -147,9 +125,10 @@ async function buildReport(db: Database, anchor: string): Promise<ReportRow[]> {
   for (const adjustment of adjustments) {
     const expected = Math.abs(adjustment.amountMinor) / 100;
     const sheet = sheetStatusFor(markerRows.get(adjustment.rowSignature), expected);
-    const netted = adjustment.status === "written"
-      && sheet.status === "absent"
-      && isNettedRemoved(adjustment.deductionId);
+    const netted = sheet.status === "absent"
+      && (adjustment.status === "superseded"
+        || (adjustment.status === "written"
+          && retiredWrittenDeductionIds.has(adjustment.deductionId)));
     report.push({
       kind: "adjustment",
       tutorName: "",
@@ -168,7 +147,9 @@ async function buildReport(db: Database, anchor: string): Promise<ReportRow[]> {
   const window = payoutRunWindow(anchor);
   const { start, endExclusive } = payoutRunRangeUtc(window);
   const writtenDeductionIds = new Set(
-    lines.filter((line) => line.writeStatus === "written").map((line) => line.deductionId),
+    lines
+      .filter((line) => line.writeStatus === "written" && line.retiredAt === null)
+      .map((line) => line.deductionId),
   );
   const candidates = await db.select({
     deductionId: schema.postClassDeductions.id,
