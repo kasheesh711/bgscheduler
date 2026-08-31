@@ -3,6 +3,7 @@ import "server-only";
 import { getCronJobDefinition } from "@/lib/data-health/cron-registry";
 import { getDb, type Database } from "@/lib/db";
 
+import { PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK } from "./payout-config";
 import {
   findOldestUnfinalizedPayoutRun,
   getPayoutRunByAnchor,
@@ -100,7 +101,13 @@ export async function loadPayoutWindowStaleness(
 ): Promise<PayoutWindowStaleness | null> {
   if (!getCronJobDefinition(PAYOUT_ACCRUAL_JOB_KEY)?.schedule) return null;
   const today = payoutBangkokDate(now);
-  const pending = await findOldestUnfinalizedPayoutRun(db, { bangkokDate: today });
+  // Only windows the automation owns: pre-floor runs (the INC-260829-era
+  // 2026-08 window) are deliberately operator decisions, so their closure is
+  // Payouts-tab work, never a cron-health alert.
+  const pending = await findOldestUnfinalizedPayoutRun(db, {
+    bangkokDate: today,
+    windowStartAtOrAfter: PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK,
+  });
   const lastEnded = lastEndedPayoutRunWindow(today);
   const lastEndedRun = await getPayoutRunByAnchor(db, lastEnded.anchorMonth);
   return classifyPayoutWindowStaleness({

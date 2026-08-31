@@ -90,24 +90,22 @@ describe("classifyPayoutWindowStaleness", () => {
 
 describe("loadPayoutWindowStaleness", () => {
   /**
-   * Re-parked after INC-260829: the scheduled accrual pass is gone, so the
-   * loader must short-circuit to null instead of alerting on windows nothing
-   * is expected to finalize automatically. This tripwire flips again if the
-   * registry entry ever regains a schedule.
+   * Re-armed for unattended charging: the hourly accrual pass finalizes
+   * windows again, so the staleness monitor must be live. This tripwire
+   * flips back if the registry entry ever loses its schedule.
    */
-  it("confirms the accrual cron is parked (no schedule)", () => {
-    expect(getCronJobDefinition(PAYOUT_ACCRUAL_JOB_KEY)?.schedule).toBeNull();
+  it("confirms the accrual cron is armed hourly", () => {
+    expect(getCronJobDefinition(PAYOUT_ACCRUAL_JOB_KEY)?.schedule).toBe("33 * * * *");
   });
 
-  it("short-circuits to null while the cron is parked", async () => {
+  it("queries for stale windows now that the cron is armed", async () => {
     const db = {
       select: () => {
-        throw new Error("parked loader must not query");
+        throw new Error("loader reached the database");
       },
     } as unknown as Database;
 
-    const result = await loadPayoutWindowStaleness(db, new Date("2026-06-02T03:00:00.000Z"));
-
-    expect(result).toBeNull();
+    await expect(loadPayoutWindowStaleness(db, new Date("2026-10-02T03:00:00.000Z")))
+      .rejects.toThrow("loader reached the database");
   });
 });

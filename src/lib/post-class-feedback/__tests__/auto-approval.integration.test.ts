@@ -47,7 +47,8 @@ function appDb(): Database {
 }
 
 const GRACE_HOURS = 24;
-const NOW = new Date("2026-07-15T12:00:00.000Z");
+// Inside the first unattended-charging window (2026-08-26 onward, MID-SEP).
+const NOW = new Date("2026-09-15T12:00:00.000Z");
 
 function hoursAgo(hours: number): Date {
   return new Date(NOW.getTime() - hours * 60 * 60 * 1_000);
@@ -107,7 +108,7 @@ async function seedDeduction(input: {
     sessionId: input.sessionId,
     status: input.status,
     amountMinor: 10_000,
-    defaultFinanceMonth: "2026-07-01",
+    defaultFinanceMonth: "2026-09-01",
   }).returning({ id: schema.postClassDeductions.id });
   return deduction.id;
 }
@@ -159,6 +160,22 @@ describe("runPostClassAutoApprovals", () => {
     const sessionId = await seedSession({
       wiseSessionId: "s-in-grace",
       deadlineAt: hoursAgo(GRACE_HOURS - 1),
+    });
+    const deductionId = await seedDeduction({ sessionId, status: "pending_review" });
+    await seedActionableAssessment(sessionId);
+
+    const result = await runPostClassAutoApprovals(appDb(), NOW);
+
+    expect(result).toEqual({ approved: 0, failed: 0 });
+    expect(await deductionStatus(deductionId)).toBe("pending_review");
+  });
+
+  it("skips a class before the automation floor — the INC-260829 backlog stays human", async () => {
+    const sessionId = await seedSession({
+      wiseSessionId: "s-before-floor",
+      // 2026-08-20 Bangkok: proven, past-deadline, but inside the pre-automation
+      // 2026-08 window that only a human may decide.
+      deadlineAt: new Date("2026-08-20T16:59:59.999Z"),
     });
     const deductionId = await seedDeduction({ sessionId, status: "pending_review" });
     await seedActionableAssessment(sessionId);

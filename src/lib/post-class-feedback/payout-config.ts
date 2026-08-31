@@ -146,3 +146,60 @@ export function requirePayoutGoogleTarget(input: {
 export function payoutCsvFilename(windowStart: string, windowEnd: string): string {
   return `deductions-${windowStart}_${windowEnd}.csv`;
 }
+
+// ── Unattended charging (post-INC-260829 re-enable) ─────────────────────
+//
+// INC-260829: an armed accrual cron converted the entire pending_review
+// backlog into sheet writes with no human decision. The flag below is the
+// single opt-in for the whole unattended pipeline — the approve sweep, the
+// payout-candidate carve-out, and the ledger-retirement pass all key on it,
+// so flipping it off instantly restores human-only money movement.
+
+/**
+ * Unattended charging is opt-in and off by default (INC-260829). Approvals
+ * are human-only unless this flag is an explicit `"true"`. The reopen sweep
+ * is deliberately NOT behind this flag — reopening restores safety,
+ * approving moves money.
+ */
+export function resolveAutoApproveEnabled(
+  raw: string | undefined = process.env.POST_CLASS_AUTO_APPROVE_ENABLED,
+): boolean {
+  return raw?.trim() === "true";
+}
+
+const DEFAULT_AUTO_APPROVE_GRACE_HOURS = 24;
+
+/**
+ * Resolve the auto-approval grace window from the environment, defaulting to
+ * 24 hours whenever the value is absent, blank, non-numeric, or negative.
+ *
+ * The bare `Number(raw ?? 24)` it replaces had two live failure modes once
+ * the accrual cron is scheduled: `""` coerces to `0` (immediate
+ * auto-approval, no grace at all) and a value like `"24h"` coerces to `NaN`,
+ * which poisons the deadline `Date` handed to the query. An explicit `"0"`
+ * remains allowed — that is a deliberate immediate-approval mode, distinct
+ * from a blank or malformed value.
+ */
+export function resolveAutoApproveGraceHours(
+  raw: string | undefined = process.env.POST_CLASS_AUTO_APPROVE_GRACE_HOURS,
+): number {
+  const trimmed = raw?.trim();
+  if (!trimmed) return DEFAULT_AUTO_APPROVE_GRACE_HOURS;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_AUTO_APPROVE_GRACE_HOURS;
+}
+
+/**
+ * The audited actor email the unattended approve sweep signs with. While the
+ * flag above is on, `selectPayoutRunCandidates` admits exactly this system
+ * actor into payout planning — the sole exception to the human-decision rule.
+ */
+export const PAYOUT_AUTO_APPROVE_ACTOR_EMAIL = "system:post-class-auto-approve";
+
+/**
+ * Earliest Bangkok class date unattended charging may touch — the start of
+ * the 2026-09 payout window, the first fully automated period. Everything
+ * earlier (the INC-260829 backlog and the settled 2026-08 ledger) remains a
+ * human decision in the review UI.
+ */
+export const PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK = "2026-08-26";

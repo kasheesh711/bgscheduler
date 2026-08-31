@@ -441,7 +441,7 @@ Six of the 21 handlers under `src/app/api/internal/**` are **not** in `vercel.js
 | `/api/internal/post-class-feedback/admin-digest` | `post_class_feedback_digest` | GET | 300s | Parked with the reminder lane |
 | `/api/internal/post-class-feedback/reminder-day-after` | `post_class_feedback_day_after` | GET | 800s | Parked — emails tutors |
 | `/api/internal/post-class-feedback/reminder-deadline` | `post_class_feedback_deadline` | GET | 800s | Parked — emails tutors |
-| `/api/internal/post-class-feedback/payout-accrual` | `post_class_feedback_payout_accrual` | GET | 800s | Parked — writes real payout deductions |
+| `/api/internal/post-class-feedback/payout-accrual` | `post_class_feedback_payout_accrual` | GET | 800s | Hourly (`33 * * * *`) — unattended charging; writes real payout deductions |
 
 ### `/api/internal/sync-room-utilization` — manual, and structurally un-schedulable
 
@@ -466,7 +466,7 @@ The registry comment states the intent plainly: outbound tutor reminders and the
 
 Both reminder routes refuse to send when their checkpoint still has unreconciled Wise sessions, returning **`503`** with the result attached ([`reminder-day-after/route.ts:18-23`](../../src/app/api/internal/post-class-feedback/reminder-day-after/route.ts), [`reminder-deadline/route.ts:18-23`](../../src/app/api/internal/post-class-feedback/reminder-deadline/route.ts)) — a reminder built on incomplete data would email the wrong tutors.
 
-The payout-accrual route documents itself as parked in-file: "no vercel.json entry… until a later, separate flip adds a schedule". It runs the accrual pass unconditionally then the finalize pass, which itself no-ops with `{ skipped: "window-not-ended" }` until the 26th-to-25th payout window has closed ([`payout-accrual/route.ts:12-32`](../../src/app/api/internal/post-class-feedback/payout-accrual/route.ts)). Because the accrual cron is parked, the watchdog compensates with the synthetic `post_class_payout_window` health entry described in [Shared mechanics §4](#4-the-watchdog-closes-the-loop).
+The payout-accrual route is scheduled hourly (`33 * * * *`) for unattended charging. Each tick runs the auto-approval/reopen sweep, the ledger-retirement pass, the accrual pass, then the finalize pass — which no-ops with `{ skipped: "window-not-ended" }` until the 26th-to-25th payout window has closed **plus a 3-Bangkok-day settlement lag** ([`payout-accrual/route.ts`](../../src/app/api/internal/post-class-feedback/payout-accrual/route.ts)). The sweep approves nothing unless `POST_CLASS_AUTO_APPROVE_ENABLED` is `true`, and the synthetic `post_class_payout_window` health entry described in [Shared mechanics §4](#4-the-watchdog-closes-the-loop) is live whenever the schedule is present.
 
 ---
 

@@ -1,12 +1,20 @@
 import "server-only";
 
-import { and, eq, isNull, lte, ne, or } from "drizzle-orm";
+import { and, eq, gte, isNull, lte, ne, or } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
+import { bangkokDateStartUtc, todayBangkok } from "@/lib/room-capacity/dates";
 
 import { applyPostClassReviewAction } from "./actions";
+import {
+  PAYOUT_AUTO_APPROVE_ACTOR_EMAIL,
+  PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK,
+  resolveAutoApproveEnabled,
+  resolveAutoApproveGraceHours,
+} from "./payout-config";
 import { hasWrittenPayoutDeduction } from "./payout-repository";
+import { lastEndedPayoutRunWindow } from "./payout-window";
 
 // ── Continuous auto-approval and reopen sweep ───────────────────────────
 //
@@ -23,51 +31,40 @@ import { hasWrittenPayoutDeduction } from "./payout-repository";
  * -- the same audit trail shape a human reviewer action produces.
  */
 const SYSTEM_ACTOR = {
-  email: "system:post-class-auto-approve",
+  email: PAYOUT_AUTO_APPROVE_ACTOR_EMAIL,
   name: "Post-class Auto-Approval",
 };
 
-const DEFAULT_AUTO_APPROVE_GRACE_HOURS = 24;
+// The flag/grace resolvers moved to payout-config.ts so the payout candidate
+// selection can share them without an import cycle; re-exported here because
+// this module is their long-standing public home.
+export { resolveAutoApproveEnabled, resolveAutoApproveGraceHours } from "./payout-config";
 
 /**
- * Auto-approval is opt-in and off by default (INC-260829). The armed accrual
- * cron once converted the entire pending_review backlog into sheet writes with
- * no human decision; approvals are now human-only unless this flag is an
- * explicit `"true"`. The reopen sweep is deliberately NOT behind this flag --
- * reopening restores safety, approving moves money.
+ * Lower inclusive UTC bound of the unattended-charging scope: the later of
+ * the `PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK` policy floor and the start of the
+ * last-ended payout window. Scoping to {current, last-ended} keeps the sweep
+ * off ancient backlogs forever — a months-late flag stays a visible human
+ * decision — and the floor keeps the INC-260829-era 2026-08 window human
+ * even while it is still the last-ended one.
  */
-export function resolveAutoApproveEnabled(
-  raw: string | undefined = process.env.POST_CLASS_AUTO_APPROVE_ENABLED,
-): boolean {
-  return raw?.trim() === "true";
-}
-
-/**
- * Resolve the auto-approval grace window from the environment, defaulting to
- * 24 hours whenever the value is absent, blank, non-numeric, or negative.
- *
- * The bare `Number(raw ?? 24)` it replaces had two live failure modes once
- * the accrual cron is scheduled: `""` coerces to `0` (immediate
- * auto-approval, no grace at all) and a value like `"24h"` coerces to `NaN`,
- * which poisons the deadline `Date` handed to the query. An explicit `"0"`
- * remains allowed -- that is a deliberate immediate-approval mode, distinct
- * from a blank or malformed value.
- */
-export function resolveAutoApproveGraceHours(
-  raw: string | undefined = process.env.POST_CLASS_AUTO_APPROVE_GRACE_HOURS,
-): number {
-  const trimmed = raw?.trim();
-  if (!trimmed) return DEFAULT_AUTO_APPROVE_GRACE_HOURS;
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_AUTO_APPROVE_GRACE_HOURS;
+export function autoChargeLowerBoundUtc(now: Date = new Date()): Date {
+  const lastEnded = lastEndedPayoutRunWindow(todayBangkok(now));
+  const scopeStart = lastEnded.windowStart > PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK
+    ? lastEnded.windowStart
+    : PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK;
+  return bangkokDateStartUtc(scopeStart);
 }
 
 /**
  * Approve every `pending_review` deduction whose grace period has elapsed on
- * a `live`-enforced, source-`ready` session.
+ * a `live`-enforced, source-`ready` session inside the unattended-charging
+ * scope (`autoChargeLowerBoundUtc`).
  *
  * The grace window exists so a late-arriving Wise event that clears the
- * violation still wins before money moves.
+ * violation still wins before money moves; an explicit
+ * `POST_CLASS_AUTO_APPROVE_GRACE_HOURS=0` is the deliberate charge-at-deadline
+ * mode.
  */
 export async function runPostClassAutoApprovals(
   db: Database = getDb(),
@@ -89,6 +86,7 @@ export async function runPostClassAutoApprovals(
       eq(schema.postClassSessions.enforcementMode, "live"),
       eq(schema.postClassSessions.sourceStatus, "ready"),
       lte(schema.postClassSessions.deadlineAt, deadline),
+      gte(schema.postClassSessions.scheduledEndAt, autoChargeLowerBoundUtc(now)),
     ));
 
   let approved = 0;

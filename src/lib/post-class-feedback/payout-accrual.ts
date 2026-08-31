@@ -1,11 +1,17 @@
 import "server-only";
 
 import { getDb, type Database } from "@/lib/db";
+import { addBangkokDays } from "@/lib/room-capacity/dates";
 
 import type { PostClassUser } from "./access";
-import { runPostClassAutoApprovalSweep } from "./auto-approval";
+import {
+  runPostClassAutoApprovalSweep,
+  runPostClassDeductionHygiene,
+} from "./auto-approval";
 import { PostClassConflictError } from "./errors";
+import { PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK } from "./payout-config";
 import type { PayoutPublishAcknowledgements } from "./payout-plan";
+import { runPayoutLedgerRetirement } from "./payout-retirement";
 import {
   previewPayoutRun,
   publishPayoutRun,
@@ -39,6 +45,17 @@ const SYSTEM_ACTOR: PostClassUser = {
   role: "admin",
   capabilities: ["viewer", "reviewer", "finance", "access_manager"],
 };
+
+/**
+ * Bangkok days a window must have been over before the unattended finalize
+ * may adopt it. The feedback deadline is 23:59:59 Bangkok two days after the
+ * class date, so the last classes of a window (the 24th/25th) can still
+ * produce brand-new proven violations through the 27th; flags also need the
+ * activity mirror's next sync to prove themselves. Finalizing on the 26th
+ * would strand those stragglers as approved-but-unwritten on a `published`
+ * run, so the pass waits out the full settlement tail instead.
+ */
+const PAYOUT_SETTLEMENT_LAG_BANGKOK_DAYS = 3;
 
 /** Every obligation this preview knows about is already durably written. */
 function isEverythingAlreadyWritten(view: PayoutRunView): boolean {
@@ -81,6 +98,28 @@ export async function runPayoutAccrualPass(
   now: Date = new Date(),
 ): Promise<{ skipped: string } | PayoutRunView> {
   await runPostClassAutoApprovalSweep(db, now);
+  // Auto-un-charge before planning: rows whose violation cleared (or whose
+  // class became ineligible) leave the ledger by deletion, so the publish
+  // below never nets a +฿100 correction against them. A retirement failure
+  // is deliberately non-fatal — the old netting path still self-corrects,
+  // and the deleted pair is cleaned up on a later tick.
+  try {
+    const retirement = await runPayoutLedgerRetirement(db, {
+      now,
+      sheetOps: dependencies.retirementSheetOps,
+      resolveGoogleTarget: dependencies.resolveGoogleTarget
+        ? () => dependencies.resolveGoogleTarget!({ forWrite: false })
+        : undefined,
+    });
+    if (retirement.retiredLines > 0) {
+      // The freshly retired lines now read as unwritten, so the reopen and
+      // ineligible-waive sweeps can finish those deductions' lifecycles in
+      // this very tick instead of the next one.
+      await runPostClassDeductionHygiene(db);
+    }
+  } catch (error) {
+    console.error("[payout-accrual] retirement pass failed", error);
+  }
   const window = payoutRunWindowForBangkokDate(payoutBangkokDate(now));
   const view = await previewPayoutRun(SYSTEM_ACTOR, {
     anchorMonth: window.anchorMonth,
@@ -140,10 +179,21 @@ async function resolveFinalizeWindow(
   db: Database,
   today: string,
 ): Promise<PayoutRunWindow | null> {
-  const pending = await findOldestUnfinalizedPayoutRun(db, { bangkokDate: today });
+  // Both branches see the clock shifted back by the settlement lag: a window
+  // only becomes adoptable once `windowEnd` is that many Bangkok days in the
+  // past, and the automation floor keeps the pre-automation (INC-260829-era)
+  // windows an operator decision forever.
+  const settledCutoff = addBangkokDays(today, -PAYOUT_SETTLEMENT_LAG_BANGKOK_DAYS);
+  const pending = await findOldestUnfinalizedPayoutRun(db, {
+    bangkokDate: settledCutoff,
+    windowStartAtOrAfter: PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK,
+  });
   if (pending) return payoutRunWindow(pending.anchorMonth.slice(0, 7));
   const window = payoutRunWindow(today.slice(0, 7));
-  return today > window.windowEnd ? window : null;
+  return window.windowStart >= PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK
+    && settledCutoff > window.windowEnd
+    ? window
+    : null;
 }
 
 /**

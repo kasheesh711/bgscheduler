@@ -28,6 +28,10 @@ import {
   PostClassValidationError,
 } from "./errors";
 import { lockPostClassFinance } from "./finance-lock";
+import {
+  PAYOUT_AUTO_APPROVE_ACTOR_EMAIL,
+  resolveAutoApproveEnabled,
+} from "./payout-config";
 import { payoutCorrectionMarker, payoutRowMarker } from "./payout-master";
 import {
   assertPayoutRunPublishable,
@@ -124,13 +128,23 @@ export async function selectPayoutRunCandidates(
       gte(schema.postClassSessions.scheduledEndAt, start),
       lt(schema.postClassSessions.scheduledEndAt, endExclusive),
       eq(schema.postClassDeductions.status, "approved"),
-      // New money moves only on a human decision (INC-260829): a `system:*`
-      // actor may flip status to `approved`, but its rows must never plan a
-      // payout line. Already-written system-approved lines are unaffected —
-      // they persist as retained written obligations, and the retirement
-      // sweep only touches non-written lines.
+      // New money moves only on a deliberate decision (INC-260829): a
+      // `system:*` actor must never plan a payout line — with exactly one
+      // carve-out. While `POST_CLASS_AUTO_APPROVE_ENABLED` is `"true"`, the
+      // audited auto-approve sweep (`PAYOUT_AUTO_APPROVE_ACTOR_EMAIL`) is the
+      // accepted decision-maker for the unattended charging pipeline; the
+      // sweep itself scopes what it may approve (current/last-ended windows
+      // at or after `PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK`). Every other system
+      // actor stays excluded, and flipping the flag off instantly restores
+      // human-only planning. Already-written lines are unaffected either way —
+      // they persist as retained written obligations.
       isNotNull(schema.postClassDeductions.decisionByEmail),
-      notLike(schema.postClassDeductions.decisionByEmail, "system:%"),
+      resolveAutoApproveEnabled()
+        ? or(
+          notLike(schema.postClassDeductions.decisionByEmail, "system:%"),
+          eq(schema.postClassDeductions.decisionByEmail, PAYOUT_AUTO_APPROVE_ACTOR_EMAIL),
+        )
+        : notLike(schema.postClassDeductions.decisionByEmail, "system:%"),
       eq(schema.postClassSessions.eligible, true),
       eq(schema.postClassSessions.sourceStatus, "ready"),
       // Belt and braces behind `eligible`, which the REC-03 retirement clears:
@@ -408,12 +422,24 @@ export async function getPayoutRunByAnchor(
  */
 export async function findOldestUnfinalizedPayoutRun(
   db: Database,
-  input: { bangkokDate: string },
+  input: {
+    bangkokDate: string;
+    /**
+     * Optional inclusive lower bound on `windowStart`. The unattended
+     * finalize pass passes `PAYOUT_AUTO_CHARGE_FLOOR_BANGKOK` so it never
+     * adopts a pre-automation window (the INC-260829-era 2026-08 run stays
+     * an operator decision); operator-facing callers omit it.
+     */
+    windowStartAtOrAfter?: string;
+  },
 ): Promise<PayoutRun | null> {
   const [row] = await db.select().from(schema.postClassPayoutRuns)
     .where(and(
       lt(schema.postClassPayoutRuns.windowEnd, input.bangkokDate),
       notInArray(schema.postClassPayoutRuns.status, ["published", "closed"]),
+      ...(input.windowStartAtOrAfter
+        ? [gte(schema.postClassPayoutRuns.windowStart, input.windowStartAtOrAfter)]
+        : []),
     ))
     .orderBy(asc(schema.postClassPayoutRuns.anchorMonth))
     .limit(1);

@@ -70,10 +70,10 @@ describe("vercel cron configuration", () => {
     expect(usedMinutes.has(3)).toBe(false);
   });
 
-  it("keeps the payout accrual parked — no scheduled entry (INC-260829)", () => {
+  it("arms the payout accrual hourly for unattended charging", () => {
     const crons = new Map(loadVercelConfig().crons.map((cron) => [cron.path, cron.schedule]));
 
-    expect(crons.has("/api/internal/post-class-feedback/payout-accrual")).toBe(false);
+    expect(crons.get("/api/internal/post-class-feedback/payout-accrual")).toBe("33 * * * *");
   });
 
   it("staggers the admissions notifications cron away from every other cron minute", () => {

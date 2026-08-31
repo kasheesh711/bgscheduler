@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import {
+  autoChargeLowerBoundUtc,
   resolveAutoApproveEnabled,
   resolveAutoApproveGraceHours,
 } from "@/lib/post-class-feedback/auto-approval";
@@ -61,5 +62,28 @@ describe("resolveAutoApproveGraceHours", () => {
   it("accepts ordinary and fractional hour values", () => {
     expect(resolveAutoApproveGraceHours("36")).toBe(36);
     expect(resolveAutoApproveGraceHours("1.5")).toBe(1.5);
+  });
+});
+
+describe("autoChargeLowerBoundUtc", () => {
+  it("clamps to the automation floor while the last-ended window predates it", () => {
+    // Mid-September: the last-ended window is 2026-07-26..2026-08-25 (the
+    // INC-260829-era period), so the floor wins — Bangkok 2026-08-26 00:00.
+    expect(autoChargeLowerBoundUtc(new Date("2026-09-15T12:00:00.000Z")).toISOString())
+      .toBe("2026-08-25T17:00:00.000Z");
+  });
+
+  it("still clamps to the floor on the first day after the window rolls", () => {
+    // Sep 26 Bangkok: the last-ended window is 2026-08-26..2026-09-25, whose
+    // start equals the floor exactly.
+    expect(autoChargeLowerBoundUtc(new Date("2026-09-26T01:00:00.000Z")).toISOString())
+      .toBe("2026-08-25T17:00:00.000Z");
+  });
+
+  it("advances with the last-ended window once past the floor", () => {
+    // Mid-November: last-ended window is 2026-09-26..2026-10-25, so months-old
+    // flags fall out of the unattended scope and stay human decisions.
+    expect(autoChargeLowerBoundUtc(new Date("2026-11-10T12:00:00.000Z")).toISOString())
+      .toBe("2026-09-25T17:00:00.000Z");
   });
 });

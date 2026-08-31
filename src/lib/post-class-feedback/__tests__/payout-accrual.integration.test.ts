@@ -77,6 +77,8 @@ const DAY_A = `${ANCHOR_YEAR_MONTH}-10`;
 const DAY_B = `${ANCHOR_YEAR_MONTH}-11`;
 /** One day past the anchor month's own 25th -- the window has just ended. */
 const DAY_AFTER_END = `${ANCHOR_YEAR_MONTH}-26`;
+/** First day past the 3-day settlement lag -- finalize may now adopt the window. */
+const DAY_SETTLED = `${ANCHOR_YEAR_MONTH}-29`;
 
 function addMonths(yearMonth: string, months: number): string {
   const [year, month] = yearMonth.split("-").map(Number);
@@ -84,7 +86,8 @@ function addMonths(yearMonth: string, months: number): string {
 }
 
 const MID_WINDOW = new Date(`${DAY_A}T04:00:00.000Z`);
-const POST_WINDOW = new Date(`${DAY_AFTER_END}T04:00:00.000Z`);
+const JUST_ENDED = new Date(`${DAY_AFTER_END}T04:00:00.000Z`);
+const POST_WINDOW = new Date(`${DAY_SETTLED}T04:00:00.000Z`);
 /**
  * Day 10, two calendar months after the anchor month. Deriving the finalize
  * anchor from this date's own month yields a window ending on its 25th, which
@@ -243,6 +246,60 @@ describe("runPayoutAccrualPass", () => {
     expect(deductionRows(grid)).toHaveLength(0);
   });
 
+  it("plans a line for the auto-approve actor's decision while unattended charging is on", async () => {
+    await seedKevinLedgerMapping();
+    const deductionId = await seedApprovedDeduction({
+      wiseSessionId: "s-accrual-auto-actor",
+      endsAtDay: DAY_A,
+      student: "Grace Hopper",
+    });
+    await handle.db.update(schema.postClassDeductions)
+      .set({ decisionByEmail: "system:post-class-auto-approve" })
+      .where(eq(schema.postClassDeductions.id, deductionId));
+    const grid = sheetGrid();
+
+    process.env.POST_CLASS_AUTO_APPROVE_ENABLED = "true";
+    try {
+      const view = expectRunView(await runPayoutAccrualPass(appDb(), {
+        gateway: fakeGateway(grid).gateway,
+        resolveGoogleTarget: () => TEST_TARGET,
+        now: () => MID_WINDOW.getTime(),
+      }, MID_WINDOW));
+
+      expect(view.run.status).toBe("partial");
+      expect(deductionRows(grid)).toHaveLength(1);
+    } finally {
+      delete process.env.POST_CLASS_AUTO_APPROVE_ENABLED;
+    }
+  });
+
+  it("still refuses every other system actor even while unattended charging is on", async () => {
+    await seedKevinLedgerMapping();
+    const deductionId = await seedApprovedDeduction({
+      wiseSessionId: "s-accrual-other-system",
+      endsAtDay: DAY_A,
+      student: "Grace Hopper",
+    });
+    await handle.db.update(schema.postClassDeductions)
+      .set({ decisionByEmail: "system:post-class-payout-accrual" })
+      .where(eq(schema.postClassDeductions.id, deductionId));
+    const grid = sheetGrid();
+
+    process.env.POST_CLASS_AUTO_APPROVE_ENABLED = "true";
+    try {
+      const result = await runPayoutAccrualPass(appDb(), {
+        gateway: fakeGateway(grid).gateway,
+        resolveGoogleTarget: () => TEST_TARGET,
+        now: () => MID_WINDOW.getTime(),
+      }, MID_WINDOW);
+
+      expect("skipped" in result).toBe(true);
+      expect(deductionRows(grid)).toHaveLength(0);
+    } finally {
+      delete process.env.POST_CLASS_AUTO_APPROVE_ENABLED;
+    }
+  });
+
   it("never touches csvStatus/csvFileId/csvAttemptedAt across repeated in-window passes", async () => {
     await seedKevinLedgerMapping();
     await seedApprovedDeduction({
@@ -353,6 +410,26 @@ describe("runPayoutFinalizePass", () => {
   it("no-ops before the window has ended", async () => {
     const result = await runPayoutFinalizePass(appDb(), {}, MID_WINDOW);
     expect(result).toEqual({ skipped: "window-not-ended" });
+  });
+
+  it("waits out the settlement lag: the last classes' deadlines are still live on the 26th", async () => {
+    await seedKevinLedgerMapping();
+    await seedApprovedDeduction({
+      wiseSessionId: "s-finalize-lagged",
+      endsAtDay: DAY_A,
+      student: "Grace Hopper",
+    });
+    const grid = sheetGrid();
+
+    const result = await runPayoutFinalizePass(appDb(), {
+      gateway: fakeGateway(grid).gateway,
+      uploadCsv: uploadOk,
+      resolveGoogleTarget: () => TEST_TARGET,
+      now: () => JUST_ENDED.getTime(),
+    }, JUST_ENDED);
+
+    expect(result).toEqual({ skipped: "window-not-ended" });
+    expect(deductionRows(grid)).toHaveLength(0);
   });
 
   it("reaches published once the window has ended and coverage is clean", async () => {

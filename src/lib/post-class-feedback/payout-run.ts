@@ -61,6 +61,7 @@ import {
   type MasterLedgerGateway,
   type PayoutAppendPlan,
 } from "./payout-writer";
+import type { PayoutRetirementSheetOps } from "./payout-retirement";
 import {
   payoutBangkokDate,
   payoutRunWindow,
@@ -150,6 +151,8 @@ export interface PayoutRunDependencies {
    * strict runtime resolver, including the write kill switch.
    */
   resolveGoogleTarget?: (input: { forWrite: boolean }) => PayoutGoogleTarget;
+  /** Test seam for the unattended ledger-retirement pass (payout-retirement.ts). */
+  retirementSheetOps?: PayoutRetirementSheetOps;
 }
 
 function resolveWriteTarget(dependencies: PayoutRunDependencies): PayoutGoogleTarget {
