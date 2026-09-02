@@ -693,4 +693,44 @@ describe("runCronWatchdog", () => {
       errorSpy.mockRestore();
     }
   });
+  // cron_invocations is append-only and nothing pruned it. Retention rides
+  // the watchdog, but it is bookkeeping: a failed prune must never suppress
+  // an alert digest.
+  it("reports the cron_invocations rows the retention sweep removed", async () => {
+    const state = freshState();
+    const sender = makeSender();
+    const pruneInvocations = vi.fn(async () => 512);
+
+    const result = await runCronWatchdog(makeFakeDb(state), {
+      now: NOW,
+      sender,
+      loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "healthy" })]),
+      loadPayoutWindow: loadPayoutWindow(null),
+      pruneInvocations,
+    });
+
+    expect(pruneInvocations).toHaveBeenCalledWith(expect.anything(), NOW);
+    expect(result.invocationsPruned).toBe(512);
+  });
+
+  it("still alerts when the retention sweep throws", async () => {
+    const state = freshState();
+    const sender = makeSender();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await runCronWatchdog(makeFakeDb(state), {
+        now: NOW,
+        sender,
+        loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", status: "failing" })]),
+        loadPayoutWindow: loadPayoutWindow(null),
+        pruneInvocations: async () => {
+          throw new Error('relation "cron_invocations" does not exist');
+        },
+      });
+
+      expect(result).toMatchObject({ checked: 1, unhealthy: 1, alertsSent: 1, invocationsPruned: 0 });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });

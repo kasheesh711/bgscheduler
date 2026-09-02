@@ -1,4 +1,4 @@
-import { and, eq, inArray, lte } from "drizzle-orm";
+import { and, eq, lte } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { fetchWiseActivityEvents } from "@/lib/wise/fetchers";
@@ -215,23 +215,21 @@ export async function syncWiseActivityEvents(
         newestEventTimestamp = maxDate(newestEventTimestamp, row.eventTimestamp as Date);
       }
 
-      const eventIds = rows.map((row) => row.eventId);
-      const existingRows = eventIds.length
-        ? await db
-          .select({ eventId: schema.wiseActivityEvents.eventId })
-          .from(schema.wiseActivityEvents)
-          .where(inArray(schema.wiseActivityEvents.eventId, eventIds))
-        : [];
-      const hitKnownPage = eventIds.length > 0 && existingRows.length === eventIds.length;
-
+      // The upsert's RETURNING already answers "was every event on this page
+      // already persisted?" — a page that inserts nothing is, by definition,
+      // fully known. The separate pre-SELECT this replaces asked Postgres the
+      // same question one statement earlier.
+      let insertedOnPage = 0;
       if (rows.length > 0) {
         const inserted = await db
           .insert(schema.wiseActivityEvents)
           .values(rows)
           .onConflictDoNothing({ target: schema.wiseActivityEvents.eventId })
           .returning({ id: schema.wiseActivityEvents.id });
+        insertedOnPage = inserted.length;
         insertedCount += inserted.length;
       }
+      const hitKnownPage = rows.length > 0 && insertedOnPage === 0;
 
       if (events.length < PAGE_SIZE) {
         stoppedReason = "short_page";

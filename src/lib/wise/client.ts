@@ -13,6 +13,20 @@ interface QueuedRequest<T> {
   reject: (reason: unknown) => void;
 }
 
+/**
+ * EFF-00: per-instance Wise request tally. Wise is the slowest dependency in
+ * every sync, but no run ever recorded how many calls it actually made, so
+ * "is this sync API-bound?" could only be guessed. Counted per logical call
+ * (retries included), bucketed by a normalized path.
+ */
+export interface WiseClientStats {
+  requests: number;
+  byPath: Record<string, number>;
+}
+
+/** Matches a Mongo-style 24-hex object id segment. */
+const OBJECT_ID_SEGMENT = /^[0-9a-f]{24}$/i;
+
 export class WiseClient {
   // REL-05: only these HTTP status codes are considered transient and worth
   // retrying. Permanent 4xx (401/403/404/422) fail fast — no retry budget
@@ -40,6 +54,9 @@ export class WiseClient {
   private activeRequests = 0;
   private queue: QueuedRequest<unknown>[] = [];
 
+  // EFF-00 request tally
+  private stats: WiseClientStats = { requests: 0, byPath: {} };
+
   constructor(config: WiseClientConfig) {
     this.userId = config.userId;
     this.apiKey = config.apiKey;
@@ -60,7 +77,31 @@ export class WiseClient {
     };
   }
 
+  /**
+   * Collapse id segments so the histogram has one bucket per endpoint shape,
+   * not one per teacher: `/institutes/{id}/teachers/{id}/availability`. The
+   * instituteId is itself a 24-hex object id, so it collapses too.
+   */
+  static normalizeStatsPath(path: string): string {
+    return path
+      .split("/")
+      .map((segment) => (OBJECT_ID_SEGMENT.test(segment) ? "{id}" : segment))
+      .join("/");
+  }
+
+  private recordRequest(path: string): void {
+    const key = WiseClient.normalizeStatsPath(path);
+    this.stats.requests += 1;
+    this.stats.byPath[key] = (this.stats.byPath[key] ?? 0) + 1;
+  }
+
+  /** Snapshot of this client's Wise call tally (EFF-00). */
+  getStats(): WiseClientStats {
+    return { requests: this.stats.requests, byPath: { ...this.stats.byPath } };
+  }
+
   async get<T>(path: string, params?: Record<string, string>, init?: RequestInit): Promise<T> {
+    this.recordRequest(path);
     const url = new URL(`${this.baseUrl}${path}`);
     if (params) {
       for (const [k, v] of Object.entries(params)) {
@@ -71,6 +112,7 @@ export class WiseClient {
   }
 
   async post<T>(path: string, body: unknown): Promise<T> {
+    this.recordRequest(path);
     return this.withConcurrency(() =>
       this.fetchWithRetry<T>(`${this.baseUrl}${path}`, {
         method: "POST",
@@ -80,6 +122,7 @@ export class WiseClient {
   }
 
   async put<T>(path: string, body: unknown): Promise<T> {
+    this.recordRequest(path);
     return this.withConcurrency(() =>
       this.fetchWithRetry<T>(`${this.baseUrl}${path}`, {
         method: "PUT",
@@ -154,6 +197,18 @@ export class WiseClient {
         });
     }
   }
+}
+
+/**
+ * The busiest normalized paths, for a sync run's metadata. Bounded so an
+ * unexpectedly wide histogram can never bloat the persisted JSON.
+ */
+export function topWisePaths(stats: WiseClientStats, limit = 10): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(stats.byPath)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit),
+  );
 }
 
 export function createWiseClient(): WiseClient {

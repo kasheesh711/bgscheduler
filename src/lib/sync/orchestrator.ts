@@ -1,7 +1,7 @@
 import { eq, or, sql } from "drizzle-orm";
 import { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { WiseClient } from "@/lib/wise/client";
+import { topWisePaths, WiseClient } from "@/lib/wise/client";
 import {
   getWiseSessionTeacherUserId,
   getWiseTagName,
@@ -500,9 +500,16 @@ export async function runFullSync(
       promotedSnapshotId = snapshotId;
     }
 
+    // EFF-00: persist how long the run took and how much of it was Wise. The
+    // duration was previously only ever returned to the caller, so a finished
+    // run left no record of its own cost.
+    const wiseStats = client.getStats();
     const successMetadata = {
       diffHookDurationMs: diffHookResult.durationMs,
       pastSessionsCapturedCount: diffHookResult.capturedCount,
+      durationMs: Date.now() - startTime,
+      wiseCallCount: wiseStats.requests,
+      wiseTopPaths: topWisePaths(wiseStats),
     };
 
     // Update sync run
@@ -568,6 +575,10 @@ export async function runFullSync(
           status: "failed",
           finishedAt: new Date(),
           errorSummary: errorMessage,
+          metadata: {
+            durationMs: Date.now() - startTime,
+            wiseCallCount: client.getStats().requests,
+          },
         })
         .where(eq(schema.syncRuns.id, syncRunId))
         .catch((cleanupErr) => {

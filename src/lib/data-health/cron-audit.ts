@@ -58,6 +58,53 @@ function extractLinkedRunIds(body: unknown): Record<string, unknown> {
   return linked;
 }
 
+/** Longest string value kept verbatim in a response digest. */
+const DIGEST_STRING_MAX_LENGTH = 200;
+/** Hard ceiling on the serialized digest; cron_invocations is append-only. */
+const DIGEST_MAX_BYTES = 2_048;
+
+function digestSize(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
+}
+
+/**
+ * Size-capped digest of a cron route's response body.
+ *
+ * Every invocation used to persist the whole response verbatim, so one chatty
+ * route (a backfill returning per-session rows) could write megabytes a day
+ * into an append-only table. Nothing reads `metadata.response` — health
+ * derivation goes through `errorSummary`, `linkedRunIds`, `durationMs` and
+ * `responseStatus` — so only top-level scalars are kept (strings truncated),
+ * while arrays and objects collapse to their size. Keys are then dropped
+ * until the serialized digest fits {@link DIGEST_MAX_BYTES}.
+ */
+export function buildResponseDigest(body: unknown): Record<string, unknown> {
+  if (!isRecord(body)) return {};
+
+  const digest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (value === null || typeof value === "number" || typeof value === "boolean") {
+      digest[key] = value;
+    } else if (typeof value === "string") {
+      digest[key] =
+        value.length > DIGEST_STRING_MAX_LENGTH ? `${value.slice(0, DIGEST_STRING_MAX_LENGTH)}...` : value;
+    } else if (Array.isArray(value)) {
+      digest[key] = { arrayLength: value.length };
+    } else if (isRecord(value)) {
+      digest[key] = { keyCount: Object.keys(value).length };
+    }
+  }
+
+  if (digestSize(digest) <= DIGEST_MAX_BYTES) return digest;
+
+  const capped: Record<string, unknown> = { truncated: true };
+  for (const [key, value] of Object.entries(digest)) {
+    if (digestSize({ ...capped, [key]: value }) > DIGEST_MAX_BYTES) break;
+    capped[key] = value;
+  }
+  return capped;
+}
+
 function determineOutcome(status: number, body: unknown): CronInvocationOutcome {
   if (isRecord(body)) {
     const message = `${stringValue(body.error) ?? ""} ${stringValue(body.message) ?? ""}`.toLowerCase();
@@ -132,7 +179,7 @@ async function finishInvocation(
         errorSummary: summarizeError(body, response.status),
         linkedRunIds: extractLinkedRunIds(body),
         metadata: {
-          response: isRecord(body) ? body : {},
+          response: buildResponseDigest(body),
         },
       })
       .where(eq(schema.cronInvocations.id, started.id));

@@ -24,6 +24,7 @@ import {
   type ScheduleEmailSender,
 } from "@/lib/classrooms/schedule-email";
 import { getCronJobDefinition } from "@/lib/data-health/cron-registry";
+import { pruneCronInvocations } from "@/lib/data-health/cron-retention";
 import { getCronJobsHealth } from "@/lib/data-health/dashboard";
 import type { CronJobHealth, CronJobStatus } from "@/lib/data-health/types";
 import { APP_BASE_URL } from "@/lib/leave-requests/config";
@@ -65,13 +66,19 @@ export interface CronWatchdogSummary {
   recoveries: number;
   emailRecipients: number;
   skippedReason: string | null;
+  /** Rows removed from cron_invocations by the retention sweep. */
+  invocationsPruned: number;
 }
+
+/** The alerting sweep's own result; retention is bolted on by the caller. */
+type CronWatchdogSweepSummary = Omit<CronWatchdogSummary, "invocationsPruned">;
 
 export interface RunCronWatchdogOptions {
   now?: Date;
   sender?: ScheduleEmailSender;
   loadJobs?: (now: Date) => Promise<CronJobHealth[]>;
   loadPayoutWindow?: (db: Database, now: Date) => Promise<PayoutWindowStaleness | null>;
+  pruneInvocations?: (db: Database, now: Date) => Promise<number>;
 }
 
 /**
@@ -358,6 +365,10 @@ async function releaseSweepLock(db: Database, now: Date): Promise<void> {
  *    total delivery failure is retried on the next sweep.
  * 6. Release the lock.
  *
+ * The cron_invocations retention sweep rides along first, in its own
+ * try/catch: it is bookkeeping, and a failed prune must never suppress an
+ * alert digest.
+ *
  * @returns counts for the route's JSON summary.
  */
 export async function runCronWatchdog(
@@ -365,6 +376,23 @@ export async function runCronWatchdog(
   options: RunCronWatchdogOptions = {},
 ): Promise<CronWatchdogSummary> {
   const now = options.now ?? new Date();
+
+  let invocationsPruned = 0;
+  try {
+    invocationsPruned = await (options.pruneInvocations ?? pruneCronInvocations)(db, now);
+  } catch (error) {
+    console.error("Cron watchdog failed to prune cron_invocations", error);
+  }
+
+  const summary = await runWatchdogSweep(db, now, options);
+  return { ...summary, invocationsPruned };
+}
+
+async function runWatchdogSweep(
+  db: Database,
+  now: Date,
+  options: RunCronWatchdogOptions,
+): Promise<CronWatchdogSweepSummary> {
   const registryJobs = await (options.loadJobs ?? getCronJobsHealth)(now);
   const payoutWindow = await loadPayoutWindowJob(db, now, options);
   const jobs = payoutWindow ? [...registryJobs, payoutWindow] : registryJobs;
@@ -412,7 +440,7 @@ async function runLockedSweep(
   now: Date,
   jobs: CronJobHealth[],
   options: RunCronWatchdogOptions,
-): Promise<CronWatchdogSummary> {
+): Promise<CronWatchdogSweepSummary> {
   const allStates = await db.select().from(schema.cronAlertState);
   const states = allStates.filter((state) => state.jobKey !== SWEEP_LOCK_KEY);
 

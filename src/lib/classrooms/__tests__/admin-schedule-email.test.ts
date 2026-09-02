@@ -199,7 +199,7 @@ describe("sendAdminClassroomScheduleEmail", () => {
 
     const result = await sendAdminClassroomScheduleEmail(db as never, {
       assignmentDate: "2026-05-26",
-      now: new Date("2026-05-26T00:30:00.000Z"),
+      now: new Date("2026-05-26T00:36:00.000Z"),
       sender,
     });
 

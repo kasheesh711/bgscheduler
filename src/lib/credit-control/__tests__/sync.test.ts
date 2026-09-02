@@ -39,12 +39,17 @@ type UpdateEvent = {
   type: "update";
   table: unknown;
   setValue: Record<string, unknown>;
+  /** True once `.where(...)` runs, i.e. the UPDATE is not table-wide. */
+  bounded: boolean;
 };
 
 type DbEvent = InsertEvent | UpdateEvent;
 
 function fakeClient(): WiseClient {
-  return { get: vi.fn() } as unknown as WiseClient;
+  return {
+    get: vi.fn(),
+    getStats: vi.fn(() => ({ requests: 0, byPath: {} })),
+  } as unknown as WiseClient;
 }
 
 function makeStudent(): WiseCreditStudent {
@@ -130,9 +135,13 @@ function makeDbMock(options: {
     })),
     update: vi.fn((table: unknown) => ({
       set: vi.fn((setValue: Record<string, unknown>) => {
-        events.push({ type: "update", table, setValue });
+        const event: UpdateEvent = { type: "update", table, setValue, bounded: false };
+        events.push(event);
         return {
-          where: vi.fn().mockResolvedValue([]),
+          where: vi.fn(() => {
+            event.bounded = true;
+            return Promise.resolve([]);
+          }),
         };
       }),
     })),
@@ -171,8 +180,11 @@ describe("runCreditControlSync", () => {
     vi.mocked(fetchSessionTeacherFeedback).mockResolvedValue("");
   });
 
-  it("uses 100-row chunks for credit-control inserts", () => {
-    expect(CREDIT_CONTROL_INSERT_CHUNK_SIZE).toBe(100);
+  // 500 rows x 22 columns on credit_control_sessions is ~11k bind parameters,
+  // well inside the 65,535 Postgres allows, so the ceiling stays safe.
+  it("uses 500-row chunks for credit-control inserts", () => {
+    expect(CREDIT_CONTROL_INSERT_CHUNK_SIZE).toBe(500);
+    expect(CREDIT_CONTROL_INSERT_CHUNK_SIZE * 22).toBeLessThan(65_535);
   });
 
   it("attaches the candidate snapshot id before inserting snapshot rows", async () => {
@@ -205,8 +217,54 @@ describe("runCreditControlSync", () => {
     ));
 
     expect(snapshotLinkIndex).toBeGreaterThan(-1);
-    expect(sessionInsertEvents.map((event) => event.rows.length)).toEqual([100, 1]);
+    expect(sessionInsertEvents.map((event) => event.rows.length)).toEqual([101]);
     expect(snapshotLinkIndex).toBeLessThan(events.indexOf(sessionInsertEvents[0]));
+  });
+
+  // REL-01: the promote is a single bounded UPDATE. Without a WHERE it
+  // rewrote every credit_control_snapshots row on every sync.
+  it("promotes the snapshot with a bounded UPDATE", async () => {
+    const { db, events } = makeDbMock();
+
+    await runCreditControlSync(
+      db,
+      fakeClient(),
+      "institute-1",
+      new Date("2026-05-26T08:00:00.000Z"),
+      { syncRunId: "run-1" },
+    );
+
+    const promotion = events.find((event): event is UpdateEvent => (
+      event.type === "update" &&
+      event.table === schema.creditControlSnapshots
+    ));
+
+    expect(promotion).toBeDefined();
+    expect(promotion?.bounded).toBe(true);
+  });
+
+  it("records the run's Wise call count in sync-run metadata", async () => {
+    const { db, events } = makeDbMock();
+    const client = {
+      get: vi.fn(),
+      getStats: vi.fn(() => ({
+        requests: 42,
+        byPath: { "/institutes/{id}/students": 2, "/institutes/{id}/sessions": 40 },
+      })),
+    } as unknown as WiseClient;
+
+    await runCreditControlSync(
+      db,
+      client,
+      "institute-1",
+      new Date("2026-05-26T08:00:00.000Z"),
+      { syncRunId: "run-1" },
+    );
+
+    expect(latestUpdate(events, "success")?.setValue.metadata).toMatchObject({
+      wiseCallCount: 42,
+      wiseTopPaths: { "/institutes/{id}/sessions": 40, "/institutes/{id}/students": 2 },
+    });
   });
 
   it("persists the trimmed Wise session title, blank when Wise omits it", async () => {
@@ -274,6 +332,11 @@ describe("runCreditControlSync", () => {
       new Error(`Failed query: insert into credit_control_sessions values ${"x".repeat(5_000)}`),
       dbCause,
     );
+    // 501 sessions spill past the 500-row chunk ceiling, so a second chunk
+    // exists for the failure to land in.
+    vi.mocked(fetchCreditSessions).mockImplementation(async (_client, _instituteId, status) => (
+      status === "PAST" ? [] : makeFutureSessions(501)
+    ));
     const { db, events } = makeDbMock({
       failSessionChunkIndex: 1,
       insertError: drizzleError,

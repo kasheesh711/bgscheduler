@@ -16,7 +16,12 @@ import {
 import { REMOTE_NO_ROOM_NEEDED } from "./assignment-engine";
 
 const ADMIN_EMAIL_ACTOR = "cron@classroom-admin-email";
-const FINAL_RETRY_MINUTE = 7 * 60 + 30;
+/**
+ * Bangkok minute of the cron's LAST tick (`4,14,24,36 0 * * *` UTC =
+ * 07:04-07:36 Bangkok). At or past this minute the run stops waiting for a
+ * clean assignment and forces the failure summary out.
+ */
+const FINAL_RETRY_MINUTE = 7 * 60 + 36;
 
 export interface AdminScheduleEmailResult {
   status: "sent" | "partial" | "failed" | "pending" | "skipped";

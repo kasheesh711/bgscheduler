@@ -83,14 +83,9 @@ function makeDb(existingEventIds: string[] = []) {
         return { returning, onConflictDoNothing };
       }),
     })),
-    select: vi.fn(() => ({
-      from: vi.fn((table: unknown) => ({
-        where: vi.fn(async () => {
-          if (table !== schema.wiseActivityEvents) return [];
-          return [...knownEventIds].map((eventId) => ({ eventId }));
-        }),
-      })),
-    })),
+    // No `select` on purpose: the crawl learns "this page was already known"
+    // from the upsert's RETURNING, never from a pre-SELECT. Re-adding one
+    // would fail here loudly instead of quietly doubling the statement count.
   };
 
   return { db, state };
@@ -170,7 +165,7 @@ describe("Wise activity sync", () => {
       makeWiseEvent(`event-${index}`, `2026-05-28T05:${String(index).padStart(2, "0")}:00.000Z`),
     );
     vi.mocked(fetchWiseActivityEvents).mockResolvedValue(events);
-    const { db } = makeDb(events.map((event) => event.event?.eventId ?? ""));
+    const { db, state } = makeDb(events.map((event) => event.event?.eventId ?? ""));
 
     const result = await syncWiseActivityEvents(
       db as never,
@@ -187,6 +182,9 @@ describe("Wise activity sync", () => {
     expect(result.insertedCount).toBe(0);
     expect(result.pagesFetched).toBe(1);
     expect(result.stoppedReason).toBe("known_events");
+    // One statement per page: the upsert. The known-page verdict comes from
+    // its RETURNING being empty, not from a separate existence query.
+    expect(state.eventInsertBatches).toHaveLength(1);
   });
 
   it("passes an event-name filter through to the Wise events endpoint", async () => {

@@ -1,8 +1,8 @@
 import { revalidateTag } from "next/cache";
-import { inArray, sql } from "drizzle-orm";
+import { eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import type { WiseClient } from "@/lib/wise/client";
+import { topWisePaths, type WiseClient } from "@/lib/wise/client";
 import {
   CHURN_INACTIVITY_DAYS,
   CREDIT_CONTROL_CACHE_TAG,
@@ -61,9 +61,13 @@ export interface CreditControlSyncResult {
 export const PAST_WINDOW_DAYS = 120;
 /** Days of future sessions each snapshot retains; the report's queryable ceiling. */
 export const FUTURE_WINDOW_DAYS = 180;
-const CREDIT_PAIR_CONCURRENCY = 8;
+/** Matches the WiseClient limiter (`createWiseClient` maxConcurrency 15), so
+ *  the pair fan-out saturates the client instead of throttling below it. */
+const CREDIT_PAIR_CONCURRENCY = 15;
 const FEEDBACK_CONCURRENCY = 6;
-export const CREDIT_CONTROL_INSERT_CHUNK_SIZE = 100;
+/** credit_control_sessions has 22 columns, so 500 rows is ~11k bind
+ *  parameters per statement — well under the Postgres 65,535 ceiling. */
+export const CREDIT_CONTROL_INSERT_CHUNK_SIZE = 500;
 const ERROR_MESSAGE_MAX_LENGTH = 2_000;
 const ERROR_SUMMARY_MAX_LENGTH = 2_000;
 const DB_ERROR_FIELDS = [
@@ -700,9 +704,21 @@ export async function runCreditControlSync(
     await insertChunks(db, schema.creditControlSessions, sessionRows, "credit_control_sessions");
     await insertChunks(db, schema.creditControlCreditHistory, histories, "credit_control_credit_history");
 
+    // Atomic promotion via a single UPDATE: PostgreSQL MVCC + the row-level
+    // lock held for the duration of one statement guarantee that concurrent
+    // readers see either the prior-active row or the new-active row — never a
+    // moment with zero matches on `active = true`. The bounded WHERE restricts
+    // the rewrite to (a) the previous active row(s) and (b) the candidate
+    // snapshot, avoiding a full-table rewrite per promote (REL-01).
     await db
       .update(schema.creditControlSnapshots)
-      .set({ active: sql`(${schema.creditControlSnapshots.id} = ${snapshot.id})` });
+      .set({ active: sql`(${schema.creditControlSnapshots.id} = ${snapshot.id})` })
+      .where(
+        or(
+          eq(schema.creditControlSnapshots.active, true),
+          eq(schema.creditControlSnapshots.id, snapshot.id),
+        ),
+      );
 
     // Churn lifecycle (best-effort; never roll back the promoted snapshot).
     try {
@@ -711,6 +727,7 @@ export async function runCreditControlSync(
       console.error("[credit-control] churn maintenance failed", churnError);
     }
 
+    const wiseStats = client.getStats();
     await db
       .update(schema.creditControlSyncRuns)
       .set({
@@ -724,6 +741,10 @@ export async function runCreditControlSync(
         metadata: {
           failedCreditPairs,
           creditHistoryRows: histories.length,
+          // EFF-00: how much of this run was Wise, recorded per run so the
+          // API cost of a sync is measurable instead of inferred.
+          wiseCallCount: wiseStats.requests,
+          wiseTopPaths: topWisePaths(wiseStats),
         },
       })
       .where(sql`${schema.creditControlSyncRuns.id} = ${run.id}`);

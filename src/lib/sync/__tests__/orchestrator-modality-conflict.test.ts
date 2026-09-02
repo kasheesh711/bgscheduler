@@ -169,6 +169,9 @@ function makeClient(sessionType: string) {
       }
       throw new Error(`fake WiseClient: unmocked path ${path}`);
     },
+    getStats() {
+      return { requests: 0, byPath: {} };
+    },
   };
 }
 

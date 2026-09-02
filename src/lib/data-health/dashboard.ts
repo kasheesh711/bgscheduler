@@ -1,4 +1,4 @@
-import { desc, eq, getTableColumns, lte, sql } from "drizzle-orm";
+import { desc, eq, getTableColumns, gte, lte, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { isApiSnapshotStale } from "@/lib/ops/stale";
@@ -805,7 +805,19 @@ async function fetchAllRuns(db: Database) {
   };
 }
 
-const INVOCATIONS_PER_JOB = 8;
+/**
+ * Invocations kept visible per job. Exported because the retention sweep must
+ * never delete a row this read window would still surface.
+ */
+export const INVOCATIONS_PER_JOB = 8;
+
+/**
+ * How far back the ranking window scans. Health only ever reads the newest
+ * few rows per job, so ranking the whole (unbounded, append-only) table on
+ * every dashboard load is pure waste — 45 days is far longer than the
+ * slowest registered cadence (annual jobs fall back to run-table proof).
+ */
+const INVOCATIONS_LOOKBACK_DAYS = 45;
 
 /**
  * Latest invocations per jobKey (not a global recency window). A global
@@ -813,7 +825,8 @@ const INVOCATIONS_PER_JOB = 8;
  * out of the window within hours, flipping its health evidence to stale
  * fallbacks; ranking per jobKey keeps every job's own proof visible.
  */
-async function fetchCronInvocations(db: Database): Promise<CronInvocation[]> {
+async function fetchCronInvocations(db: Database, now = new Date()): Promise<CronInvocation[]> {
+  const cutoff = new Date(now.getTime() - INVOCATIONS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
   try {
     const ranked = db
       .select({
@@ -821,6 +834,7 @@ async function fetchCronInvocations(db: Database): Promise<CronInvocation[]> {
         rowNumber: sql<number>`row_number() over (partition by ${schema.cronInvocations.jobKey} order by ${schema.cronInvocations.receivedAt} desc)`.as("row_number"),
       })
       .from(schema.cronInvocations)
+      .where(gte(schema.cronInvocations.receivedAt, cutoff))
       .as("ranked");
     const rows = await db
       .select()
@@ -877,7 +891,7 @@ function overallFromJobs(jobs: CronJobHealth[]): DataHealthDashboardPayload["ove
  */
 export async function getCronJobsHealth(now = new Date()): Promise<CronJobHealth[]> {
   const db = getDb();
-  const invocations = await fetchCronInvocations(db);
+  const invocations = await fetchCronInvocations(db, now);
   const allRuns = await fetchAllRuns(db);
   return buildCronJobs(invocations, allRuns, now);
 }
@@ -946,7 +960,7 @@ export async function getDataHealthDashboardPayload(now = new Date()): Promise<D
     issueDetails = issueDetailsFromIssues(issues);
   }
 
-  const invocations = await fetchCronInvocations(db);
+  const invocations = await fetchCronInvocations(db, now);
   const allRuns = await fetchAllRuns(db);
   const cronJobs = buildCronJobs(invocations, allRuns, now);
   const staleAgeMs = lastSuccess?.finishedAt
