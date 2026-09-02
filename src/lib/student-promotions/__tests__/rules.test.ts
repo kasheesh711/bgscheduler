@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   COURSE_SUBJECT_TARGETS,
+  GRADUATION_COURSE_SUBJECT_TARGETS,
   formatPromotedGrade,
   gradeActionTypeFor,
   isUnmappedRangeCourseSubject,
@@ -30,6 +31,12 @@ describe("student promotion rules", () => {
     expect(COURSE_SUBJECT_TARGETS["(3-STU) Y2-8 / G1-7 (Int.) Master"].target).toBeNull();
   });
 
+  it("maps exact Year 13 school-curriculum subjects to University variants", () => {
+    expect(GRADUATION_COURSE_SUBJECT_TARGETS["Y12-13 / G11-12 (Int.)"].target).toBe("University");
+    expect(GRADUATION_COURSE_SUBJECT_TARGETS["(2-STU) Y12-13 / G11-12 (Int.)"].target).toBe("(2-STU) University");
+    expect(GRADUATION_COURSE_SUBJECT_TARGETS["(3-STU) Y12-13 / G11-12 (Int.) Master"].target).toBe("(3-STU) University Master");
+  });
+
   it("does not silently accept spacing, receipt, or trial variants as exact course mappings", () => {
     expect(isUnmappedRangeCourseSubject("Y 2-8 / G1-7 (Int.)")).toBe(true);
     expect(isUnmappedRangeCourseSubject("(2-STU) Y9-11 / G8-10 (Int.) for receipt")).toBe(true);
@@ -39,6 +46,7 @@ describe("student promotion rules", () => {
   it("only marks course-grade actions for students already in the matching source band", () => {
     expect(gradeActionTypeFor(8, ["Y2-8 / G1-7 (Int.)"])).toBe("year8_course_and_grade");
     expect(gradeActionTypeFor(11, ["Y9-11 / G8-10 (Int.)"])).toBe("year11_course_and_grade");
+    expect(gradeActionTypeFor(13, ["Y12-13 / G11-12 (Int.)"])).toBe("graduation_review");
     expect(gradeActionTypeFor(8, ["Y9-11 / G8-10 (Int.)"])).toBe("grade_increment_only");
   });
 });

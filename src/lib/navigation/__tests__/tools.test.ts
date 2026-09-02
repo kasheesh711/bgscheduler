@@ -3,6 +3,7 @@ import {
   activeSection,
   canAccessHref,
   filterToolsByAccess,
+  isActivePath,
   NAV_TOOLS,
   shortcutTools,
   visibleSections,
@@ -21,7 +22,15 @@ describe("navigation tool registry", () => {
       "Data & Audit",
     ]);
     expect(sections[0].tools.map((tool) => tool.href)).toContain("/leave-requests");
-    expect(sections[1].tools.map((tool) => tool.href)).toEqual(["/progress-tests", "/student-promotions"]);
+    expect(sections[0].tools.map((tool) => tool.href)).toContain("/post-class-feedback");
+    expect(sections[1].tools.map((tool) => tool.href)).toEqual([
+      "/progress-tests",
+      "/learning-plans",
+      "/student-promotions",
+    ]);
+    const learningPlansTool = NAV_TOOLS.find((tool) => tool.id === "learning-plans");
+    expect(learningPlansTool?.badgeKey).toBeUndefined();
+    expect(learningPlansTool?.shortcut).toBeUndefined();
     expect(sections[3].tools.map((tool) => tool.href)).toEqual(["/competitor-intelligence"]);
   });
 
@@ -29,6 +38,7 @@ describe("navigation tool registry", () => {
     const tools = filterToolsByAccess(NAV_TOOLS, ["/progress-tests"]);
 
     expect(tools.map((tool) => tool.href)).toEqual(["/progress-tests"]);
+    expect(tools.map((tool) => tool.href)).not.toContain("/learning-plans");
     expect(canAccessHref("/", ["/progress-tests"])).toBe(false);
     expect(canAccessHref("/api/home/summary", ["/progress-tests"])).toBe(false);
   });
@@ -43,6 +53,8 @@ describe("navigation tool registry", () => {
   it("detects active sections and curated shortcuts", () => {
     expect(activeSection("/credit-control", null)).toBe("finance-revenue");
     expect(activeSection("/competitor-intelligence", null)).toBe("market-intelligence");
+    expect(activeSection("/learning-plans/report", null)).toBe("student-lifecycle");
+    expect(isActivePath("/learning-plans/report", "/learning-plans")).toBe(true);
     expect(shortcutTools(null).map((tool) => tool.href)).toEqual([
       "/scheduler",
       "/search",

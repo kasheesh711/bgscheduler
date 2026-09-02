@@ -2,7 +2,7 @@
 
 BeGifted Ops (historically "BGScheduler", still the production hostname at `bgscheduler.vercel.app`) is the internal admin console that BeGifted Education's non-technical staff use to run their tutoring operation on top of the [Wise](https://api.wiseapp.live) scheduling platform. Wise (tenant `begifted-education`, institute `696e1f4d90102225641cc413`) is the single source of truth for tutors, sessions, leaves, and money; this application periodically pulls that data into versioned Postgres snapshots, normalizes it through a fail-closed pipeline, and serves it back through purpose-built workspaces for searching tutors, comparing schedules, assigning classrooms, chasing renewals, reconciling payroll, auditing activity, and more. Every user-facing page sits behind a Google-OAuth admin gate (`src/middleware.ts`), and almost nothing writes back to Wise without an explicit human click.
 
-The fifteen features below are reachable from the top navigation (`src/components/layout/app-nav.tsx`), grouped into a "Scheduling Tools" menu and a row of operational dashboards. Each maturity badge is taken from the feature's own detail page; follow the link for the rules, flows, and the "why" behind each one.
+The established features below are reached from the application navigation or from a parent workspace. Navigation is grouped by operational area in `src/lib/navigation/tools.ts`. Each maturity badge is taken from the feature's own detail page; follow the link for the rules, flows, and the "why" behind each one.
 
 ## Features
 
@@ -17,6 +17,8 @@ The fifteen features below are reachable from the top navigation (`src/component
 **Payroll** — *stable*. Reconciles tutor pay against Wise for a chosen Asia/Bangkok calendar month. It pulls every ended teaching session and every payout invoice, joins them to the active tutor-identity snapshot and each teacher's tier, aggregates paid hours and amounts per tutor, and surfaces data-integrity issues (missing/orphan invoices, tier gaps, duration mismatches, expected-rate variances) for an admin to review, adjust, and approve. See [docs/features/payroll.md](../features/payroll.md).
 
 **Wise Activity Audit** — *stable*. A read-only, filterable timeline of operational and financial events inside Wise (session create/update/cancel/delete, billing, invoices, payouts, user and classroom changes) with full raw payloads for forensics, plus a package-sales reconciliation workbench that scores Wise receipt transactions against Sales-Dashboard rows and surfaces a sheet-vs-Wise revenue variance. See [docs/features/wise-activity-audit.md](../features/wise-activity-audit.md).
+
+**Learning Plans** — *stable*. A stateless Years 1–13 curriculum-plan builder backed by the syllabus committed in the repository. Admins choose a student, year, and topic scope, then open an A4 report that can be printed or saved as PDF. The plan is encoded in the report URL rather than stored: there are no API, database, cron, Wise, or Google-Sheets writes. See [docs/features/learning-plans.md](../features/learning-plans.md).
 
 **Student Promotions** — *stable, pending first production run*. An audited July 1, 2026 Wise promotion workflow: admins run a live-Wise dry run, review grade/course actions and skip buckets, verify the endpoint shapes with an approved note, and let the July 1 cron or manual fallback apply the verified grade registration and class-subject updates with per-action revalidation. See [docs/features/student-promotions.md](../features/student-promotions.md).
 
@@ -38,6 +40,10 @@ The fifteen features below are reachable from the top navigation (`src/component
 
 ## System scale
 
-At this revision the application comprises **82 database tables** (`pgTable` definitions in `src/lib/db/schema.ts`), **117 HTTP endpoints** (method exports across `src/app/api/**/route.ts`), and **15 admin pages** (the `page.tsx` files under the `src/app/(app)/` route group). For the mechanical inventory behind these numbers, see the [API reference index](../reference/api/index.md) and the [database reference index](../reference/database/index.md).
+The application changes frequently, so this overview deliberately does not pin feature,
+route, page, or table counts. For the current mechanical inventories, see the
+[API reference index](../reference/api/index.md), the
+[database reference index](../reference/database/index.md), and
+`src/lib/navigation/tools.ts`.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD + uncommitted WIP on 2026-07-23._

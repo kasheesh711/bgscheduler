@@ -26,6 +26,7 @@ describe("AppNav", () => {
     expect(html).toContain("Home");
     expect(html).toContain("Scheduling &amp; Tutors");
     expect(html).toContain("Student Lifecycle");
+    expect(html).toContain("Learning Plans");
     expect(html).toContain("Finance &amp; Revenue");
     expect(html).toContain("Data &amp; Audit");
     expect(html).toContain("tutor time-off requests");
@@ -39,16 +40,28 @@ describe("AppNav", () => {
 
     expect(html).toContain("Progress Tests");
     expect(html).not.toContain(">Home<");
+    expect(html).not.toContain("Learning Plans");
     expect(html).not.toContain("Credit Control");
     expect(html).not.toContain("Leave Requests");
   });
 
+  it("adds Class Feedback to a restricted admin's nav when the fresh feature grant allows it", () => {
+    const html = renderToStaticMarkup(
+      <AppNav allowedPages={["/progress-tests"]} postClassFeedbackAccess />,
+    );
+
+    expect(html).toContain("Progress Tests");
+    expect(html).toContain("Class Feedback");
+  });
+
   it("marks the current section active", () => {
-    vi.mocked(usePathname).mockReturnValue("/payroll");
+    vi.mocked(usePathname).mockReturnValue("/learning-plans/report");
 
     const html = renderToStaticMarkup(<AppNav allowedPages={null} />);
+    const learningPlansLink = html.match(/<a [^>]*href="\/learning-plans"[^>]*>/)?.[0];
 
     expect(html).toContain("bg-primary/10 font-medium text-primary");
-    expect(html).toContain("Payroll");
+    expect(html).toContain("Learning Plans");
+    expect(learningPlansLink).toContain("border-primary/30 bg-primary/10 text-primary");
   });
 });

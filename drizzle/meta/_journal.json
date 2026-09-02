@@ -323,6 +323,27 @@
       "when": 1782104795624,
       "tag": "0045_flippant_jazinda",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1782470400000,
+      "tag": "0046_student_promotion_future_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1782474000000,
+      "tag": "0047_student_promotion_graduation_pay_rates",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1784592000000,
+      "tag": "0048_post_class_feedback",
+      "breakpoints": true
     }
   ]
 }

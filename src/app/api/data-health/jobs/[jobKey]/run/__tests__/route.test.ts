@@ -3,9 +3,13 @@ import { NextRequest, NextResponse } from "next/server";
 
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/data-health/run-job", () => ({ runDataHealthJob: vi.fn() }));
+vi.mock("@/lib/post-class-feedback/access", () => ({
+  getPostClassCapabilities: vi.fn(),
+}));
 
 import { auth } from "@/lib/auth";
 import { runDataHealthJob } from "@/lib/data-health/run-job";
+import { getPostClassCapabilities } from "@/lib/post-class-feedback/access";
 import { POST } from "../route";
 
 const authMock = auth as unknown as Mock;
@@ -26,6 +30,7 @@ describe("POST /api/data-health/jobs/[jobKey]/run", () => {
     vi.resetAllMocks();
     authMock.mockResolvedValue({ user: { email: "admin@example.com" } });
     vi.mocked(runDataHealthJob).mockResolvedValue(NextResponse.json({ ok: true }) as never);
+    vi.mocked(getPostClassCapabilities).mockResolvedValue(["access_manager"]);
   });
 
   it("requires an admin session", async () => {
@@ -64,5 +69,27 @@ describe("POST /api/data-health/jobs/[jobKey]/run", () => {
 
     expect(res.status).toBe(404);
     expect(runDataHealthJob).not.toHaveBeenCalled();
+  });
+
+  it("requires access-manager capability for post-class feedback recovery jobs", async () => {
+    vi.mocked(getPostClassCapabilities).mockResolvedValue(["viewer"]);
+
+    const res = await POST(request(), context("post_class_feedback_day_after"));
+
+    expect(res.status).toBe(403);
+    expect(runDataHealthJob).not.toHaveBeenCalled();
+  });
+
+  it("allows an access manager to run post-class feedback recovery jobs", async () => {
+    const res = await POST(
+      request({ confirmed: true }),
+      context("post_class_feedback_deadline"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(runDataHealthJob).toHaveBeenCalledWith(
+      "post_class_feedback_deadline",
+      "admin@example.com",
+    );
   });
 });

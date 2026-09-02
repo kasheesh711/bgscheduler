@@ -29,6 +29,10 @@
       "schedule": "5,35 * * * *"
     },
     {
+      "path": "/api/internal/sync-post-class-feedback",
+      "schedule": "12,42 * * * *"
+    },
+    {
       "path": "/api/internal/sync-leave-requests",
       "schedule": "15,45 * * * *"
     },

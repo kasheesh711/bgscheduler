@@ -8,9 +8,17 @@ export const maxDuration = 800;
 
 const DEFAULT_INSTITUTE_ID = "696e1f4d90102225641cc413";
 
+// Only event names the app already understands may be crawled, so an arbitrary
+// caller cannot steer the crawl at an unbounded feed.
+const BACKFILLABLE_EVENT_NAMES = new Set(["SessionFeedbackSubmittedEvent"]);
+
 function numberOption(value: unknown, fallback: number, min: number, max: number): number {
   if (typeof value !== "number" || !Number.isInteger(value)) return fallback;
   return Math.min(max, Math.max(min, value));
+}
+
+function eventNameOption(value: unknown): string | undefined {
+  return typeof value === "string" && BACKFILLABLE_EVENT_NAMES.has(value) ? value : undefined;
 }
 
 export async function POST(request: NextRequest) {
@@ -34,8 +42,13 @@ export async function POST(request: NextRequest) {
       process.env.WISE_INSTITUTE_ID ?? DEFAULT_INSTITUTE_ID,
       {
         triggerType: "manual",
-        lookbackDays: numberOption(input.lookbackDays, 30, 1, 365),
+        lookbackDays: numberOption(input.lookbackDays, 30, 1, 400),
         maxPages: numberOption(input.maxPages, 500, 1, 1_000),
+        eventName: eventNameOption(input.eventName),
+        startPage: numberOption(input.startPage, 1, 1, 5_000),
+        // A targeted backfill must not stop on the first already-known page —
+        // on a re-run that is page one.
+        stopOnKnownEvents: input.stopOnKnownEvents !== false,
       },
     );
     return NextResponse.json({ ok: true, result });

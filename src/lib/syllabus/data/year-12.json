@@ -1,0 +1,1351 @@
+{
+ "year": 12,
+ "topics": [
+  {
+   "code": "A",
+   "name": "Equations",
+   "skills": [
+    {
+     "code": "A.1",
+     "description": "Solve linear equations"
+    },
+    {
+     "code": "A.2",
+     "description": "Solve linear equations: word problems"
+    },
+    {
+     "code": "A.3",
+     "description": "Solve absolute value equations"
+    },
+    {
+     "code": "A.4",
+     "description": "Graph solutions to absolute value equations"
+    }
+   ]
+  },
+  {
+   "code": "B",
+   "name": "Inequalities",
+   "skills": [
+    {
+     "code": "B.1",
+     "description": "Graph a linear inequality in one variable"
+    },
+    {
+     "code": "B.2",
+     "description": "Graph a linear inequality in the coordinate plane"
+    },
+    {
+     "code": "B.3",
+     "description": "Write inequalities from graphs"
+    },
+    {
+     "code": "B.4",
+     "description": "Write a linear inequality: word problems"
+    },
+    {
+     "code": "B.5",
+     "description": "Solve linear inequalities"
+    },
+    {
+     "code": "B.6",
+     "description": "Graph solutions to linear inequalities"
+    },
+    {
+     "code": "B.7",
+     "description": "Solve absolute value inequalities"
+    },
+    {
+     "code": "B.8",
+     "description": "Graph solutions to absolute value inequalities"
+    },
+    {
+     "code": "B.9",
+     "description": "Graph solutions to quadratic inequalities"
+    },
+    {
+     "code": "B.10",
+     "description": "Solve quadratic inequalities"
+    }
+   ]
+  },
+  {
+   "code": "C",
+   "name": "Functions",
+   "skills": [
+    {
+     "code": "C.1",
+     "description": "Domain and range"
+    },
+    {
+     "code": "C.2",
+     "description": "Identify functions"
+    },
+    {
+     "code": "C.3",
+     "description": "Evaluate functions"
+    },
+    {
+     "code": "C.4",
+     "description": "Find values using function graphs"
+    },
+    {
+     "code": "C.5",
+     "description": "Complete a table for a function graph"
+    },
+    {
+     "code": "C.6",
+     "description": "Find the gradient of a linear function"
+    },
+    {
+     "code": "C.7",
+     "description": "Gradients of parallel and perpendicular lines"
+    },
+    {
+     "code": "C.8",
+     "description": "Graph a linear function"
+    },
+    {
+     "code": "C.9",
+     "description": "Write linear equations in standard form"
+    },
+    {
+     "code": "C.10",
+     "description": "Write linear equations in point-gradient form"
+    },
+    {
+     "code": "C.11",
+     "description": "Write an equation for a parallel or perpendicular line"
+    },
+    {
+     "code": "C.12",
+     "description": "Linear functions over unit intervals"
+    },
+    {
+     "code": "C.13",
+     "description": "Complete a function table: absolute value functions"
+    },
+    {
+     "code": "C.14",
+     "description": "Graph an absolute value function"
+    }
+   ]
+  },
+  {
+   "code": "D",
+   "name": "Simultaneous equations",
+   "skills": [
+    {
+     "code": "D.1",
+     "description": "Is (x, y) a solution to the simultaneous equations?"
+    },
+    {
+     "code": "D.2",
+     "description": "Solve simultaneous equations by graphing"
+    },
+    {
+     "code": "D.3",
+     "description": "Solve simultaneous equations by graphing: word problems"
+    },
+    {
+     "code": "D.4",
+     "description": "Find the number of solutions to simultaneous equations"
+    },
+    {
+     "code": "D.5",
+     "description": "Solve simultaneous equations using substitution"
+    },
+    {
+     "code": "D.6",
+     "description": "Solve simultaneous equations using substitution: word problems"
+    },
+    {
+     "code": "D.7",
+     "description": "Solve simultaneous equations using elimination"
+    },
+    {
+     "code": "D.8",
+     "description": "Solve simultaneous equations using elimination: word problems"
+    },
+    {
+     "code": "D.9",
+     "description": "Solve simultaneous equations using any method"
+    },
+    {
+     "code": "D.10",
+     "description": "Solve simultaneous equations using any method: word problems"
+    },
+    {
+     "code": "D.11",
+     "description": "Solve nonlinear simultaneous equations"
+    }
+   ]
+  },
+  {
+   "code": "E",
+   "name": "Factorising",
+   "skills": [
+    {
+     "code": "E.1",
+     "description": "Factorise out a monomial"
+    },
+    {
+     "code": "E.2",
+     "description": "Factorise quadratics using algebra tiles"
+    },
+    {
+     "code": "E.3",
+     "description": "Factorise quadratics"
+    },
+    {
+     "code": "E.4",
+     "description": "Factorise using a quadratic pattern"
+    },
+    {
+     "code": "E.5",
+     "description": "Factorise by grouping"
+    },
+    {
+     "code": "E.6",
+     "description": "Factorise sums and differences of cubes"
+    },
+    {
+     "code": "E.7",
+     "description": "Factorise polynomials"
+    }
+   ]
+  },
+  {
+   "code": "F",
+   "name": "Quadratic functions",
+   "skills": [
+    {
+     "code": "F.1",
+     "description": "Characteristics of quadratic functions"
+    },
+    {
+     "code": "F.2",
+     "description": "Complete a function table: quadratic functions"
+    },
+    {
+     "code": "F.3",
+     "description": "Find a quadratic function"
+    },
+    {
+     "code": "F.4",
+     "description": "Graph a quadratic function"
+    },
+    {
+     "code": "F.5",
+     "description": "Match quadratic functions and graphs"
+    },
+    {
+     "code": "F.6",
+     "description": "Solve a quadratic equation using square roots"
+    },
+    {
+     "code": "F.7",
+     "description": "Solve a quadratic equation using the zero product property"
+    },
+    {
+     "code": "F.8",
+     "description": "Solve a quadratic equation by factorising"
+    },
+    {
+     "code": "F.9",
+     "description": "Complete the square"
+    },
+    {
+     "code": "F.10",
+     "description": "Solve a quadratic equation using the quadratic formula"
+    },
+    {
+     "code": "F.11",
+     "description": "Modelling projectile motion with quadratic equations"
+    },
+    {
+     "code": "F.12",
+     "description": "Using the discriminant"
+    }
+   ]
+  },
+  {
+   "code": "G",
+   "name": "Complex numbers",
+   "skills": [
+    {
+     "code": "G.1",
+     "description": "Introduction to complex numbers"
+    },
+    {
+     "code": "G.2",
+     "description": "Add and subtract complex numbers"
+    },
+    {
+     "code": "G.3",
+     "description": "Complex conjugates"
+    },
+    {
+     "code": "G.4",
+     "description": "Multiply and divide complex numbers"
+    },
+    {
+     "code": "G.5",
+     "description": "Add, subtract, multiply and divide complex numbers"
+    },
+    {
+     "code": "G.6",
+     "description": "Absolute values of complex numbers"
+    },
+    {
+     "code": "G.7",
+     "description": "Powers of i"
+    }
+   ]
+  },
+  {
+   "code": "H",
+   "name": "Polynomials",
+   "skills": [
+    {
+     "code": "H.1",
+     "description": "Polynomial vocabulary"
+    },
+    {
+     "code": "H.2",
+     "description": "Add and subtract polynomials"
+    },
+    {
+     "code": "H.3",
+     "description": "Multiply polynomials"
+    },
+    {
+     "code": "H.4",
+     "description": "Divide polynomials using long division"
+    },
+    {
+     "code": "H.5",
+     "description": "Solve polynomial equations"
+    },
+    {
+     "code": "H.6",
+     "description": "Find the roots of factorised polynomials"
+    },
+    {
+     "code": "H.7",
+     "description": "Write a polynomial from its roots"
+    },
+    {
+     "code": "H.8",
+     "description": "Rational root theorem"
+    },
+    {
+     "code": "H.9",
+     "description": "Descartes' Rule of Signs"
+    },
+    {
+     "code": "H.10",
+     "description": "Match polynomials and graphs"
+    },
+    {
+     "code": "H.11",
+     "description": "Fundamental Theorem of Algebra"
+    },
+    {
+     "code": "H.12",
+     "description": "Pascal's triangle"
+    },
+    {
+     "code": "H.13",
+     "description": "Pascal's triangle and the Binomial Theorem"
+    },
+    {
+     "code": "H.14",
+     "description": "Binomial Theorem I"
+    },
+    {
+     "code": "H.15",
+     "description": "Binomial Theorem II"
+    }
+   ]
+  },
+  {
+   "code": "I",
+   "name": "Radical functions and expressions",
+   "skills": [
+    {
+     "code": "I.1",
+     "description": "Roots of integers"
+    },
+    {
+     "code": "I.2",
+     "description": "Roots of rational numbers"
+    },
+    {
+     "code": "I.3",
+     "description": "Find roots using a calculator"
+    },
+    {
+     "code": "I.4",
+     "description": "Nth roots"
+    },
+    {
+     "code": "I.5",
+     "description": "Simplify radical expressions with variables I"
+    },
+    {
+     "code": "I.6",
+     "description": "Simplify radical expressions with variables II"
+    },
+    {
+     "code": "I.7",
+     "description": "Multiply radical expressions"
+    },
+    {
+     "code": "I.8",
+     "description": "Divide radical expressions"
+    },
+    {
+     "code": "I.9",
+     "description": "Add and subtract radical expressions"
+    },
+    {
+     "code": "I.10",
+     "description": "Simplify radical expressions using the distributive property"
+    },
+    {
+     "code": "I.11",
+     "description": "Simplify radical expressions using conjugates"
+    },
+    {
+     "code": "I.12",
+     "description": "Domain and range of radical functions"
+    },
+    {
+     "code": "I.13",
+     "description": "Solve radical equations"
+    }
+   ]
+  },
+  {
+   "code": "J",
+   "name": "Rational indices",
+   "skills": [
+    {
+     "code": "J.1",
+     "description": "Evaluate rational indices"
+    },
+    {
+     "code": "J.2",
+     "description": "Multiplication with rational indices"
+    },
+    {
+     "code": "J.3",
+     "description": "Division with rational indices"
+    },
+    {
+     "code": "J.4",
+     "description": "Power rule"
+    },
+    {
+     "code": "J.5",
+     "description": "Simplify expressions involving rational indices I"
+    },
+    {
+     "code": "J.6",
+     "description": "Simplify expressions involving rational indices II"
+    }
+   ]
+  },
+  {
+   "code": "K",
+   "name": "Rational functions and expressions",
+   "skills": [
+    {
+     "code": "K.1",
+     "description": "Rational functions: asymptotes and excluded values"
+    },
+    {
+     "code": "K.2",
+     "description": "Evaluate rational expressions I"
+    },
+    {
+     "code": "K.3",
+     "description": "Evaluate rational expressions II"
+    },
+    {
+     "code": "K.4",
+     "description": "Simplify rational expressions"
+    },
+    {
+     "code": "K.5",
+     "description": "Multiply and divide rational expressions"
+    },
+    {
+     "code": "K.6",
+     "description": "Add and subtract rational expressions"
+    },
+    {
+     "code": "K.7",
+     "description": "Solve rational equations"
+    }
+   ]
+  },
+  {
+   "code": "L",
+   "name": "Function operations",
+   "skills": [
+    {
+     "code": "L.1",
+     "description": "Add and subtract functions"
+    },
+    {
+     "code": "L.2",
+     "description": "Multiply functions"
+    },
+    {
+     "code": "L.3",
+     "description": "Divide functions"
+    },
+    {
+     "code": "L.4",
+     "description": "Composition of linear functions: find a value"
+    },
+    {
+     "code": "L.5",
+     "description": "Composition of linear functions: find an equation"
+    },
+    {
+     "code": "L.6",
+     "description": "Composition of linear and quadratic functions: find a value"
+    },
+    {
+     "code": "L.7",
+     "description": "Composition of linear and quadratic functions: find an equation"
+    },
+    {
+     "code": "L.8",
+     "description": "Identify inverse functions"
+    },
+    {
+     "code": "L.9",
+     "description": "Find values of inverse functions from tables"
+    },
+    {
+     "code": "L.10",
+     "description": "Find values of inverse functions from graphs"
+    },
+    {
+     "code": "L.11",
+     "description": "Graphs of inverse functions"
+    },
+    {
+     "code": "L.12",
+     "description": "Find inverse functions and relations"
+    }
+   ]
+  },
+  {
+   "code": "M",
+   "name": "Families of functions",
+   "skills": [
+    {
+     "code": "M.1",
+     "description": "Translations of functions"
+    },
+    {
+     "code": "M.2",
+     "description": "Reflections of functions"
+    },
+    {
+     "code": "M.3",
+     "description": "Dilations of functions"
+    },
+    {
+     "code": "M.4",
+     "description": "Transformations of functions"
+    },
+    {
+     "code": "M.5",
+     "description": "Function transformation rules"
+    },
+    {
+     "code": "M.6",
+     "description": "Describe function transformations"
+    }
+   ]
+  },
+  {
+   "code": "N",
+   "name": "Logarithms",
+   "skills": [
+    {
+     "code": "N.1",
+     "description": "Convert between exponential and logarithmic form: rational bases"
+    },
+    {
+     "code": "N.2",
+     "description": "Evaluate logarithms"
+    },
+    {
+     "code": "N.3",
+     "description": "Change of base formula"
+    },
+    {
+     "code": "N.4",
+     "description": "Identify properties of logarithms"
+    },
+    {
+     "code": "N.5",
+     "description": "Product property of logarithms"
+    },
+    {
+     "code": "N.6",
+     "description": "Quotient property of logarithms"
+    },
+    {
+     "code": "N.7",
+     "description": "Power property of logarithms"
+    },
+    {
+     "code": "N.8",
+     "description": "Properties of logarithms: mixed review"
+    },
+    {
+     "code": "N.9",
+     "description": "Evaluate logarithms: mixed review"
+    }
+   ]
+  },
+  {
+   "code": "O",
+   "name": "Exponential and logarithmic functions",
+   "skills": [
+    {
+     "code": "O.1",
+     "description": "Domain and range of exponential and logarithmic functions"
+    },
+    {
+     "code": "O.2",
+     "description": "Evaluate exponential functions"
+    },
+    {
+     "code": "O.3",
+     "description": "Match exponential functions and graphs"
+    },
+    {
+     "code": "O.4",
+     "description": "Solve exponential equations by rewriting the base"
+    },
+    {
+     "code": "O.5",
+     "description": "Solve exponential equations using common logarithms"
+    },
+    {
+     "code": "O.6",
+     "description": "Solve logarithmic equations I"
+    },
+    {
+     "code": "O.7",
+     "description": "Solve logarithmic equations II"
+    },
+    {
+     "code": "O.8",
+     "description": "Identify linear and exponential functions"
+    },
+    {
+     "code": "O.9",
+     "description": "Exponential functions over unit intervals"
+    },
+    {
+     "code": "O.10",
+     "description": "Describe linear and exponential growth and decay"
+    },
+    {
+     "code": "O.11",
+     "description": "Exponential growth and decay: word problems"
+    },
+    {
+     "code": "O.12",
+     "description": "Compound interest: word problems"
+    },
+    {
+     "code": "O.13",
+     "description": "Continuously compounded interest: word problems"
+    }
+   ]
+  },
+  {
+   "code": "P",
+   "name": "Parabolas",
+   "skills": [
+    {
+     "code": "P.1",
+     "description": "Identify the direction a parabola opens"
+    },
+    {
+     "code": "P.2",
+     "description": "Find the vertex of a parabola"
+    },
+    {
+     "code": "P.3",
+     "description": "Find the focus or directrix of a parabola"
+    },
+    {
+     "code": "P.4",
+     "description": "Find the axis of symmetry of a parabola"
+    },
+    {
+     "code": "P.5",
+     "description": "Write equations of parabolas in vertex form from graphs"
+    },
+    {
+     "code": "P.6",
+     "description": "Write equations of parabolas in vertex form using properties"
+    },
+    {
+     "code": "P.7",
+     "description": "Convert equations of parabolas from general to vertex form"
+    },
+    {
+     "code": "P.8",
+     "description": "Find properties of a parabola from equations in general form"
+    },
+    {
+     "code": "P.9",
+     "description": "Graph parabolas"
+    }
+   ]
+  },
+  {
+   "code": "Q",
+   "name": "Angle measures",
+   "skills": [
+    {
+     "code": "Q.1",
+     "description": "Convert between radians and degrees"
+    },
+    {
+     "code": "Q.2",
+     "description": "Radians and arc length"
+    },
+    {
+     "code": "Q.3",
+     "description": "Quadrants"
+    },
+    {
+     "code": "Q.4",
+     "description": "Graphs of angles"
+    },
+    {
+     "code": "Q.5",
+     "description": "Coterminal angles"
+    },
+    {
+     "code": "Q.6",
+     "description": "Reference angles"
+    }
+   ]
+  },
+  {
+   "code": "R",
+   "name": "Trigonometry",
+   "skills": [
+    {
+     "code": "R.1",
+     "description": "Pythagoras' Theorem and its converse"
+    },
+    {
+     "code": "R.2",
+     "description": "Special right triangles"
+    },
+    {
+     "code": "R.3",
+     "description": "Trigonometric ratios: sin, cos and tan"
+    },
+    {
+     "code": "R.4",
+     "description": "Trigonometric ratios: csc, sec and cot"
+    },
+    {
+     "code": "R.5",
+     "description": "Trigonometric ratios in similar right triangles"
+    },
+    {
+     "code": "R.6",
+     "description": "Find trigonometric ratios using the unit circle"
+    },
+    {
+     "code": "R.7",
+     "description": "Sin, cos and tan of special angles"
+    },
+    {
+     "code": "R.8",
+     "description": "Csc, sec and cot of special angles"
+    },
+    {
+     "code": "R.9",
+     "description": "Find trigonometric functions using a calculator"
+    },
+    {
+     "code": "R.10",
+     "description": "Inverses of sin, cos and tan"
+    },
+    {
+     "code": "R.11",
+     "description": "Inverses of csc, sec and cot"
+    },
+    {
+     "code": "R.12",
+     "description": "Solve trigonometric equations I"
+    },
+    {
+     "code": "R.13",
+     "description": "Solve trigonometric equations II"
+    },
+    {
+     "code": "R.14",
+     "description": "Trigonometric ratios: find a side length"
+    },
+    {
+     "code": "R.15",
+     "description": "Trigonometric ratios: find an angle measure"
+    },
+    {
+     "code": "R.16",
+     "description": "Solve a right triangle"
+    },
+    {
+     "code": "R.17",
+     "description": "Sine Rule"
+    },
+    {
+     "code": "R.18",
+     "description": "Cosine Rule"
+    },
+    {
+     "code": "R.19",
+     "description": "Solve a triangle"
+    },
+    {
+     "code": "R.20",
+     "description": "Area of a triangle: sine formula"
+    },
+    {
+     "code": "R.21",
+     "description": "Area of a triangle: Sine Rule"
+    }
+   ]
+  },
+  {
+   "code": "S",
+   "name": "Trigonometric functions",
+   "skills": [
+    {
+     "code": "S.1",
+     "description": "Find properties of sine functions"
+    },
+    {
+     "code": "S.2",
+     "description": "Write equations of sine functions from graphs"
+    },
+    {
+     "code": "S.3",
+     "description": "Write equations of sine functions using properties"
+    },
+    {
+     "code": "S.4",
+     "description": "Graph sine functions"
+    },
+    {
+     "code": "S.5",
+     "description": "Find properties of cosine functions"
+    },
+    {
+     "code": "S.6",
+     "description": "Write equations of cosine functions from graphs"
+    },
+    {
+     "code": "S.7",
+     "description": "Write equations of cosine functions using properties"
+    },
+    {
+     "code": "S.8",
+     "description": "Graph cosine functions"
+    },
+    {
+     "code": "S.9",
+     "description": "Graph sine and cosine functions"
+    }
+   ]
+  },
+  {
+   "code": "T",
+   "name": "Trigonometric identities",
+   "skills": [
+    {
+     "code": "T.1",
+     "description": "Complementary angle identities"
+    },
+    {
+     "code": "T.2",
+     "description": "Symmetry and periodicity of trigonometric functions"
+    },
+    {
+     "code": "T.3",
+     "description": "Find trigonometric ratios using a Pythagorean or reciprocal identity"
+    },
+    {
+     "code": "T.4",
+     "description": "Find trigonometric ratios using multiple identities"
+    }
+   ]
+  },
+  {
+   "code": "U",
+   "name": "Circles",
+   "skills": [
+    {
+     "code": "U.1",
+     "description": "Central angles"
+    },
+    {
+     "code": "U.2",
+     "description": "Arcs and chords"
+    },
+    {
+     "code": "U.3",
+     "description": "Tangent lines"
+    },
+    {
+     "code": "U.4",
+     "description": "Inscribed angles"
+    },
+    {
+     "code": "U.5",
+     "description": "Angles in inscribed right triangles"
+    },
+    {
+     "code": "U.6",
+     "description": "Angles in inscribed quadrilaterals"
+    }
+   ]
+  },
+  {
+   "code": "V",
+   "name": "Circles in the coordinate plane",
+   "skills": [
+    {
+     "code": "V.1",
+     "description": "Find the centre of a circle"
+    },
+    {
+     "code": "V.2",
+     "description": "Find the radius or diameter of a circle"
+    },
+    {
+     "code": "V.3",
+     "description": "Write equations of circles in standard form from graphs"
+    },
+    {
+     "code": "V.4",
+     "description": "Write equations of circles in standard form using properties"
+    },
+    {
+     "code": "V.5",
+     "description": "Convert equations of circles from general to standard form"
+    },
+    {
+     "code": "V.6",
+     "description": "Find properties of circles from equations in general form"
+    },
+    {
+     "code": "V.7",
+     "description": "Graph circles"
+    }
+   ]
+  },
+  {
+   "code": "W",
+   "name": "Sequences and series",
+   "skills": [
+    {
+     "code": "W.1",
+     "description": "Classify formulas and sequences"
+    },
+    {
+     "code": "W.2",
+     "description": "Find terms of an arithmetic sequence"
+    },
+    {
+     "code": "W.3",
+     "description": "Find terms of a geometric sequence"
+    },
+    {
+     "code": "W.4",
+     "description": "Find terms of a recursive sequence"
+    },
+    {
+     "code": "W.5",
+     "description": "Evaluate formulas for sequences"
+    },
+    {
+     "code": "W.6",
+     "description": "Write a formula for an arithmetic sequence"
+    },
+    {
+     "code": "W.7",
+     "description": "Write a formula for a geometric sequence"
+    },
+    {
+     "code": "W.8",
+     "description": "Write a formula for a recursive sequence"
+    },
+    {
+     "code": "W.9",
+     "description": "Sequences: mixed review"
+    },
+    {
+     "code": "W.10",
+     "description": "Introduction to sigma notation"
+    },
+    {
+     "code": "W.11",
+     "description": "Identify arithmetic and geometric series"
+    },
+    {
+     "code": "W.12",
+     "description": "Find the sum of a finite arithmetic or geometric series"
+    },
+    {
+     "code": "W.13",
+     "description": "Introduction to partial sums"
+    },
+    {
+     "code": "W.14",
+     "description": "Partial sums of arithmetic series"
+    },
+    {
+     "code": "W.15",
+     "description": "Partial sums of geometric series"
+    },
+    {
+     "code": "W.16",
+     "description": "Partial sums: mixed review"
+    },
+    {
+     "code": "W.17",
+     "description": "Convergent and divergent geometric series"
+    },
+    {
+     "code": "W.18",
+     "description": "Find the value of an infinite geometric series"
+    },
+    {
+     "code": "W.19",
+     "description": "Write a repeating decimal as a fraction"
+    }
+   ]
+  },
+  {
+   "code": "X",
+   "name": "Probability",
+   "skills": [
+    {
+     "code": "X.1",
+     "description": "Introduction to probability"
+    },
+    {
+     "code": "X.2",
+     "description": "Theoretical and experimental probability"
+    },
+    {
+     "code": "X.3",
+     "description": "Compound events: find the number of outcomes"
+    },
+    {
+     "code": "X.4",
+     "description": "Factorials"
+    },
+    {
+     "code": "X.5",
+     "description": "Calculate probabilities of events"
+    },
+    {
+     "code": "X.6",
+     "description": "Counting principle"
+    },
+    {
+     "code": "X.7",
+     "description": "Permutations"
+    },
+    {
+     "code": "X.8",
+     "description": "Permutation and combination notation"
+    },
+    {
+     "code": "X.9",
+     "description": "Find probabilities using permutations and combinations"
+    },
+    {
+     "code": "X.10",
+     "description": "Find probabilities using two-way frequency tables"
+    },
+    {
+     "code": "X.11",
+     "description": "Identify independent events"
+    },
+    {
+     "code": "X.12",
+     "description": "Probability of independent and dependent events"
+    },
+    {
+     "code": "X.13",
+     "description": "Geometric probability"
+    },
+    {
+     "code": "X.14",
+     "description": "Find conditional probabilities"
+    },
+    {
+     "code": "X.15",
+     "description": "Independence and conditional probability"
+    },
+    {
+     "code": "X.16",
+     "description": "Find conditional probabilities using two-way frequency tables"
+    },
+    {
+     "code": "X.17",
+     "description": "Find probabilities using the addition rule"
+    }
+   ]
+  },
+  {
+   "code": "Y",
+   "name": "Statistics",
+   "skills": [
+    {
+     "code": "Y.1",
+     "description": "Mean, median, mode and range"
+    },
+    {
+     "code": "Y.2",
+     "description": "Quartiles"
+    },
+    {
+     "code": "Y.3",
+     "description": "Identify biased samples"
+    },
+    {
+     "code": "Y.4",
+     "description": "Mean absolute deviation"
+    },
+    {
+     "code": "Y.5",
+     "description": "Variance and standard deviation"
+    }
+   ]
+  },
+  {
+   "code": "Z",
+   "name": "Data and graphs",
+   "skills": [
+    {
+     "code": "Z.1",
+     "description": "Interpret bar graphs for continuous data"
+    },
+    {
+     "code": "Z.2",
+     "description": "Create bar graphs for continuous data"
+    },
+    {
+     "code": "Z.3",
+     "description": "Interpret stem-and-leaf plots"
+    },
+    {
+     "code": "Z.4",
+     "description": "Box plots"
+    },
+    {
+     "code": "Z.5",
+     "description": "Interpret a scatter plot"
+    },
+    {
+     "code": "Z.6",
+     "description": "Scatter plots: line of best fit"
+    }
+   ]
+  },
+  {
+   "code": "AA",
+   "name": "Introduction to limits",
+   "skills": [
+    {
+     "code": "AA.1",
+     "description": "Find limits using graphs"
+    },
+    {
+     "code": "AA.2",
+     "description": "Find one-sided limits using graphs"
+    },
+    {
+     "code": "AA.3",
+     "description": "Determine if a limit exists"
+    }
+   ]
+  },
+  {
+   "code": "BB",
+   "name": "Calculate limits",
+   "skills": [
+    {
+     "code": "BB.1",
+     "description": "Find limits using addition, subtraction and multiplication laws"
+    },
+    {
+     "code": "BB.2",
+     "description": "Find limits using the division law"
+    },
+    {
+     "code": "BB.3",
+     "description": "Find limits using power and root laws"
+    },
+    {
+     "code": "BB.4",
+     "description": "Find limits using limit laws"
+    },
+    {
+     "code": "BB.5",
+     "description": "Find limits of polynomials and rational functions"
+    },
+    {
+     "code": "BB.6",
+     "description": "Find limits involving factorisation and rationalisation"
+    },
+    {
+     "code": "BB.7",
+     "description": "Find limits involving absolute value functions"
+    },
+    {
+     "code": "BB.8",
+     "description": "Find limits involving trigonometric functions"
+    }
+   ]
+  },
+  {
+   "code": "CC",
+   "name": "Limits and rational functions",
+   "skills": [
+    {
+     "code": "CC.1",
+     "description": "Find limits at vertical asymptotes using graphs"
+    },
+    {
+     "code": "CC.2",
+     "description": "Determine end behaviour using graphs"
+    },
+    {
+     "code": "CC.3",
+     "description": "Determine end behaviour of polynomial and rational functions"
+    },
+    {
+     "code": "CC.4",
+     "description": "Find the limit at a vertical asymptote of a rational function I"
+    },
+    {
+     "code": "CC.5",
+     "description": "Find the limit at a vertical asymptote of a rational function II"
+    }
+   ]
+  },
+  {
+   "code": "DD",
+   "name": "Continuity",
+   "skills": [
+    {
+     "code": "DD.1",
+     "description": "Identify graphs of continuous functions"
+    },
+    {
+     "code": "DD.2",
+     "description": "Determine continuity using graphs"
+    },
+    {
+     "code": "DD.3",
+     "description": "Determine one-sided continuity using graphs"
+    },
+    {
+     "code": "DD.4",
+     "description": "Find and analyse points of discontinuity using graphs"
+    },
+    {
+     "code": "DD.5",
+     "description": "Determine continuity on an interval using graphs"
+    },
+    {
+     "code": "DD.6",
+     "description": "Determine the continuity of a piecewise function at a point"
+    },
+    {
+     "code": "DD.7",
+     "description": "Make a piecewise function continuous"
+    },
+    {
+     "code": "DD.8",
+     "description": "Intermediate Value Theorem"
+    }
+   ]
+  },
+  {
+   "code": "EE",
+   "name": "Introduction to derivatives",
+   "skills": [
+    {
+     "code": "EE.1",
+     "description": "Average rate of change I"
+    },
+    {
+     "code": "EE.2",
+     "description": "Average rate of change II"
+    },
+    {
+     "code": "EE.3",
+     "description": "Find instantaneous rates of change"
+    },
+    {
+     "code": "EE.4",
+     "description": "Velocity as a rate of change"
+    },
+    {
+     "code": "EE.5",
+     "description": "Find values of derivatives using limits"
+    },
+    {
+     "code": "EE.6",
+     "description": "Find the gradient of a tangent line using limits"
+    },
+    {
+     "code": "EE.7",
+     "description": "Find equations of tangent lines using limits"
+    },
+    {
+     "code": "EE.8",
+     "description": "Power rule I"
+    },
+    {
+     "code": "EE.9",
+     "description": "Power rule II"
+    },
+    {
+     "code": "EE.10",
+     "description": "Find derivatives of polynomials"
+    },
+    {
+     "code": "EE.11",
+     "description": "Find second derivatives of polynomials"
+    }
+   ]
+  }
+ ]
+}

@@ -191,10 +191,21 @@ Both POST endpoints below drive the **same** ingest function `syncWiseActivityEv
 
 | Field | Default | Clamp | Maps to |
 |-------|---------|-------|---------|
-| `lookbackDays` | `30` | `[1, 365]` | how many days back to page before stopping (`lookback_reached`) |
+| `lookbackDays` | `30` | `[1, 400]` | how many days back to page before stopping (`lookback_reached`) |
 | `maxPages` | `500` | `[1, 1000]` | hard page cap |
+| `eventName` | none | allowlist | restricts the crawl to one Wise event name via the server-side `eventName` filter. Only `SessionFeedbackSubmittedEvent` is accepted; any other value is ignored so a caller cannot steer the crawl at an arbitrary feed. |
+| `startPage` | `1` | `[1, 5000]` | first page to request, so a deep backfill can resume mid-history |
+| `stopOnKnownEvents` | `true` | boolean | when `false`, the crawl does **not** stop on a full page of already-persisted events. Required for a re-runnable deep backfill, where page one is always known. |
 
-(`numberOption` at [`sync/route.ts:11-14`](../../../src/app/api/wise-activity/sync/route.ts); wired at [`sync/route.ts:37-38`](../../../src/app/api/wise-activity/sync/route.ts).)
+(`numberOption` / `eventNameOption` at [`sync/route.ts`](../../../src/app/api/wise-activity/sync/route.ts).)
+
+**Deep-history backfill.** A filtered crawl reaches far further per page than the unfiltered feed. As of 2026-07-26 the tenant's `SessionFeedbackSubmittedEvent` history is ~341 pages (~17,000 events) back to 2026-03-31:
+
+```json
+{ "eventName": "SessionFeedbackSubmittedEvent", "startPage": 1, "maxPages": 400, "lookbackDays": 400, "stopOnKnownEvents": false }
+```
+
+Note this holds the single-flight lock for the duration, so the `5,35 * * * *` activity cron will 409 while it runs and resume on its next tick.
 
 **Errors:** 401; **409** `Wise activity sync is already running` ([`sync/route.ts:43-45`](../../../src/app/api/wise-activity/sync/route.ts)); 500 `{ "error": <message ?? "Wise activity sync failed"> }` ([`sync/route.ts:46-47`](../../../src/app/api/wise-activity/sync/route.ts)).
 

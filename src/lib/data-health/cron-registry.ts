@@ -7,6 +7,10 @@ export type CronJobKey =
   | "credit_control"
   | "progress_tests"
   | "progress_tests_digest"
+  | "post_class_feedback"
+  | "post_class_feedback_digest"
+  | "post_class_feedback_day_after"
+  | "post_class_feedback_deadline"
   | "leave_requests"
   | "classroom_morning"
   | "classroom_admin_email"
@@ -143,6 +147,69 @@ export const CRON_JOBS = [
     dangerous: false,
     confirmationLabel: null,
     expectedBangkokMinute: 7 * 60 + 35,
+    routeMethod: "GET",
+  },
+  {
+    key: "post_class_feedback",
+    label: "Post-class Feedback",
+    feature: "Class Feedback",
+    path: "/api/internal/sync-post-class-feedback",
+    schedule: "12,42 * * * *",
+    cadenceLabel: "Every 30 min",
+    cadenceMinutes: 30,
+    lateAfterMinutes: 45,
+    maxDurationSeconds: 800,
+    manualOnly: false,
+    dangerous: false,
+    confirmationLabel: null,
+    routeMethod: "GET",
+  },
+  // Parked: outbound tutor reminders and the admin digest have no Vercel cron
+  // entry. They stay registered as manual-only so Data Health never reports
+  // them late, while the routes remain runnable from the Data Health job list.
+  {
+    key: "post_class_feedback_digest",
+    label: "Feedback Admin Digest (parked)",
+    feature: "Class Feedback",
+    path: "/api/internal/post-class-feedback/admin-digest",
+    schedule: null,
+    cadenceLabel: "Parked — no cron",
+    cadenceMinutes: null,
+    lateAfterMinutes: 0,
+    maxDurationSeconds: 300,
+    manualOnly: true,
+    dangerous: true,
+    confirmationLabel: "Emails the admin digest. Reminders are parked; only run deliberately.",
+    routeMethod: "GET",
+  },
+  {
+    key: "post_class_feedback_day_after",
+    label: "Feedback Day-after Reminder (parked)",
+    feature: "Class Feedback",
+    path: "/api/internal/post-class-feedback/reminder-day-after",
+    schedule: null,
+    cadenceLabel: "Parked — no cron",
+    cadenceMinutes: null,
+    lateAfterMinutes: 0,
+    maxDurationSeconds: 800,
+    manualOnly: true,
+    dangerous: true,
+    confirmationLabel: "May email tutors whose post-class feedback is incomplete.",
+    routeMethod: "GET",
+  },
+  {
+    key: "post_class_feedback_deadline",
+    label: "Feedback Deadline Reminder (parked)",
+    feature: "Class Feedback",
+    path: "/api/internal/post-class-feedback/reminder-deadline",
+    schedule: null,
+    cadenceLabel: "Parked — no cron",
+    cadenceMinutes: null,
+    lateAfterMinutes: 0,
+    maxDurationSeconds: 800,
+    manualOnly: true,
+    dangerous: true,
+    confirmationLabel: "May email tutors whose feedback is due tonight.",
     routeMethod: "GET",
   },
   {

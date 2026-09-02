@@ -19,6 +19,7 @@ import {
   fetchWiseStudentRegistrationData,
   scheduleWiseSession,
   updateSessionLocation,
+  updateSessionSubject,
   updateWiseCourseSubject,
   updateWiseStudentRegistrationAnswers,
 } from "../fetchers";
@@ -391,6 +392,28 @@ describe("Wise fetchers", () => {
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({ location: "Joy" }),
+      }),
+    );
+  });
+
+  it("updates a single session subject with PUT body { subject }", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: 200, data: { ok: true } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    global.fetch = fetchMock as typeof fetch;
+
+    await updateSessionSubject(makeClient(), "class-1", "session-1", "Y9-11 / G8-10 (Int.)");
+
+    const calledUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(calledUrl.pathname).toBe("/teacher/classes/class-1/sessions/session-1");
+    expect(calledUrl.searchParams.get("updateType")).toBe("SINGLE");
+    expect(fetchMock.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ subject: "Y9-11 / G8-10 (Int.)" }),
       }),
     );
   });

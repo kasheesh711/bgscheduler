@@ -185,7 +185,7 @@ function invocationIsRunning(invocation: InvocationEvidence | null): boolean {
 }
 
 function runIsFailure(run: RunEvidence | null): boolean {
-  return run?.status === "failed";
+  return run?.status === "failed" || run?.status === "partial";
 }
 
 function runIsRunning(run: RunEvidence | null): boolean {

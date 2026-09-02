@@ -14,8 +14,10 @@ export type NavToolId =
   | "class-assignments"
   | "tutor-profiles"
   | "room-capacity"
+  | "post-class-feedback"
   | "scheduler-metrics"
   | "progress-tests"
+  | "learning-plans"
   | "student-promotions"
   | "sales-dashboard"
   | "credit-control"
@@ -61,7 +63,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     id: "student-lifecycle",
     label: "Student Lifecycle",
-    description: "Student academic progression and recurring progress-test workflows.",
+    description: "Student learning plans, academic progression, and recurring progress-test workflows.",
   },
   {
     id: "finance-revenue",
@@ -141,6 +143,13 @@ export const NAV_TOOLS: NavTool[] = [
     section: "scheduling-tutors",
   },
   {
+    id: "post-class-feedback",
+    href: "/post-class-feedback",
+    label: "Class Feedback",
+    description: "Track Wise post-class feedback, reminders, and deduction review.",
+    section: "scheduling-tutors",
+  },
+  {
     id: "scheduler-metrics",
     href: "/scheduler/metrics",
     label: "Scheduler Metrics",
@@ -154,6 +163,13 @@ export const NAV_TOOLS: NavTool[] = [
     description: "Track due, scheduled, and completed progress-test cycles.",
     section: "student-lifecycle",
     badgeKey: "progressTests",
+  },
+  {
+    id: "learning-plans",
+    href: "/learning-plans",
+    label: "Learning Plans",
+    description: "Generate printable General Mathematics plans by year and topic.",
+    section: "student-lifecycle",
   },
   {
     id: "student-promotions",

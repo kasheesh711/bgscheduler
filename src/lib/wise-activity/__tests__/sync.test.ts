@@ -188,4 +188,70 @@ describe("Wise activity sync", () => {
     expect(result.pagesFetched).toBe(1);
     expect(result.stoppedReason).toBe("known_events");
   });
+
+  it("passes an event-name filter through to the Wise events endpoint", async () => {
+    vi.mocked(fetchWiseActivityEvents).mockResolvedValue([
+      makeWiseEvent("feedback-1", "2026-05-28T05:00:00.000Z"),
+    ]);
+    const { db } = makeDb();
+
+    await syncWiseActivityEvents(db as never, {} as never, "institute-1", {
+      triggerType: "manual",
+      now: new Date("2026-05-28T07:00:00.000Z"),
+      eventName: "SessionFeedbackSubmittedEvent",
+    });
+
+    expect(fetchWiseActivityEvents).toHaveBeenCalledWith({} as never, "institute-1", {
+      pageNumber: 1,
+      pageSize: 50,
+      eventName: "SessionFeedbackSubmittedEvent",
+    });
+  });
+
+  it("keeps crawling past already-known pages when stopOnKnownEvents is disabled", async () => {
+    // Every event on page one is known. The incremental cron stops here; a
+    // backfill must not, or a re-run would never reach unseen history.
+    const knownPage = Array.from({ length: 50 }, (_, index) =>
+      makeWiseEvent(`known-${index}`, `2026-05-28T05:${String(index).padStart(2, "0")}:00.000Z`),
+    );
+    vi.mocked(fetchWiseActivityEvents)
+      .mockResolvedValueOnce(knownPage)
+      .mockResolvedValueOnce([makeWiseEvent("fresh-1", "2026-04-01T05:00:00.000Z")]);
+    const { db, state } = makeDb(knownPage.map((event) => event.event?.eventId ?? ""));
+
+    const result = await syncWiseActivityEvents(db as never, {} as never, "institute-1", {
+      triggerType: "manual",
+      now: new Date("2026-05-28T07:00:00.000Z"),
+      lookbackDays: 400,
+      maxPages: 10,
+      eventName: "SessionFeedbackSubmittedEvent",
+      stopOnKnownEvents: false,
+    });
+
+    expect(result.pagesFetched).toBe(2);
+    expect(result.stoppedReason).toBe("short_page");
+    expect(result.insertedCount).toBe(1);
+    expect(state.eventInsertBatches.at(-1)?.map((row) => row.eventId)).toEqual(["fresh-1"]);
+  });
+
+  it("resumes a deep crawl from an explicit start page", async () => {
+    vi.mocked(fetchWiseActivityEvents).mockResolvedValue([]);
+    const { db } = makeDb();
+
+    const result = await syncWiseActivityEvents(db as never, {} as never, "institute-1", {
+      triggerType: "manual",
+      now: new Date("2026-05-28T07:00:00.000Z"),
+      startPage: 120,
+      maxPages: 5,
+      eventName: "SessionFeedbackSubmittedEvent",
+      stopOnKnownEvents: false,
+    });
+
+    expect(fetchWiseActivityEvents).toHaveBeenCalledWith({} as never, "institute-1", {
+      pageNumber: 120,
+      pageSize: 50,
+      eventName: "SessionFeedbackSubmittedEvent",
+    });
+    expect(result.stoppedReason).toBe("empty_page");
+  });
 });

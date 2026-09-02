@@ -25,6 +25,14 @@ function isPublicRoute(pathname: string) {
 function isPathAllowed(pathname: string, allowedPages: string[] | null): boolean {
   if (!allowedPages) return true;
   if (pathname === "/api/home/summary") return true;
+  // Post-class feedback uses fresh database capabilities on every page/API
+  // request, so legacy JWT page prefixes must not override those grants.
+  if (
+    pathname === "/post-class-feedback" ||
+    pathname.startsWith("/post-class-feedback/") ||
+    pathname === "/api/post-class-feedback" ||
+    pathname.startsWith("/api/post-class-feedback/")
+  ) return true;
   if (pathname === "/" && allowedPages.length > 1) return true;
   return allowedPages.some((page) => {
     return (

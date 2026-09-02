@@ -1,7 +1,6 @@
 # Database Reference — Master Table Index
 
-Canonical lookup of **every table** in the BGScheduler Postgres database. All 82 tables
-are defined in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) via Drizzle ORM.
+Canonical lookup of the documented BGScheduler Postgres table surface. The 85-table handbook baseline plus the 24 Post-Class Feedback tables gives **109 documented tables**, all defined in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) via Drizzle ORM.
 This page is the index: it lists each table's SQL name, its Drizzle export name, the
 domain it belongs to, its **grain** (what one row represents), the feature that owns it,
 and a link to the domain's ER diagram.
@@ -25,9 +24,11 @@ which the ETL pipeline rewrites wholesale and then atomically promotes via
 A few tables are deliberately **snapshot-independent** (they survive snapshot rotation):
 `admin_users`, `google_oauth_tokens`, `tutor_aliases`, `cron_invocations`, `wise_activity_events`,
 `wise_activity_sync_runs`, `student_promotion_runs`, `student_promotion_grade_actions`,
-`student_promotion_course_actions`, `room_utilization_sessions`, and `past_session_blocks`
-(`schema.ts:1347-1386`, the only cross-snapshot data table — see its note in
-[erd-core.md](./erd-core.md)).
+`student_promotion_course_actions`, `student_promotion_future_session_actions`,
+`student_promotion_graduation_actions`, `student_promotion_pay_rate_impacts`,
+all `post_class_*` tables,
+`room_utilization_sessions`, and `past_session_blocks`. The last remains the core
+cross-snapshot session-history table described in [erd-core.md](./erd-core.md).
 
 ## Domain map
 
@@ -40,11 +41,12 @@ A few tables are deliberately **snapshot-independent** (they survive snapshot ro
 | Payroll | 8 | [erd-payroll.md](./erd-payroll.md) |
 | Tutor Profiles | 2 | [erd-tutor-profiles.md](./erd-tutor-profiles.md) |
 | Leave Requests | 5 | [erd-leave-requests.md](./erd-leave-requests.md) |
-| Student Promotions | 3 | [erd-student-promotions.md](./erd-student-promotions.md) |
+| Student Promotions | 6 | [erd-student-promotions.md](./erd-student-promotions.md) |
+| Post-Class Feedback | 24 | [feature data model](../../features/post-class-feedback.md#durable-data-model) |
 | AI & Proposals | 6 | [erd-ai-and-proposals.md](./erd-ai-and-proposals.md) |
 | LINE | 8 | [erd-line.md](./erd-line.md) |
 | Room Capacity | 4 | [erd-room-capacity.md](./erd-room-capacity.md) |
-| **Total** | **82** | |
+| **Total** | **109** | |
 
 ## Master table list
 
@@ -111,13 +113,47 @@ Line ranges: `schema.ts:447-610`.
 
 ### Student Promotions
 
-Line ranges: `schema.ts:649-733`.
+Line ranges: `schema.ts:1065-1243`.
 
 | Table | Const | Domain | Grain (one row per …) | Owning feature | ERD |
 |---|---|---|---|---|---|
 | `student_promotion_runs` | `studentPromotionRuns` | student-promotions | one audited dry-run/apply ledger for a target date (`schema.ts:649-679`) | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
 | `student_promotion_grade_actions` | `studentPromotionGradeActions` | student-promotions | one potential Wise registration grade update per accepted student within a run (`schema.ts:682-704`) | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
 | `student_promotion_course_actions` | `studentPromotionCourseActions` | student-promotions | one potential Wise class-subject update per class within a run (`schema.ts:706-733`) | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
+| `student_promotion_future_session_actions` | `studentPromotionFutureSessionActions` | student-promotions | one July 1+ future Wise session subject audit/update candidate per run and Wise session | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
+| `student_promotion_graduation_actions` | `studentPromotionGraduationActions` | student-promotions | one required Year 13 graduate disposition review per accepted student in a run | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
+| `student_promotion_pay_rate_impacts` | `studentPromotionPayRateImpacts` | student-promotions | one pay-rate review row per teacher + class + student band + current/target course pair | [Student promotions](../../features/student-promotions.md) | [student-promotions](./erd-student-promotions.md) |
+
+### Post-Class Feedback
+
+Line range: `schema.ts:2938-3407`. The feature also adds `tutor_contacts.primary_email` (`schema.ts:1771`) without changing that table's grain. Full constraints, partial/unique indexes, append-only triggers, and bootstrap rows are in [`0048_post_class_feedback.sql`](../../../drizzle/0048_post_class_feedback.sql); business meaning is in the [feature guide](../../features/post-class-feedback.md).
+
+| Table | Const | Domain | Grain (one row per …) | Owning feature | Reference |
+|---|---|---|---|---|---|
+| `post_class_enforcement_windows` | `postClassEnforcementWindows` | post-class-feedback | one prospective shadow/live/paused enforcement interval; at most one open window | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_settings` | `postClassSettings` | post-class-feedback | the singleton current operational settings projection (`id='default'`) | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_field_mappings` | `postClassFieldMappings` | post-class-feedback | one logical feedback field mapping in a mapping version | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_access_grants` | `postClassAccessGrants` | post-class-feedback | one feature capability granted to one allowlisted admin | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_config_audit_log` | `postClassConfigAuditLog` | post-class-feedback | one immutable configuration/access/AI-review audit event | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_digest_recipients` | `postClassDigestRecipients` | post-class-feedback | one configured admin-digest email | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_sync_runs` | `postClassSyncRuns` | post-class-feedback | one collector run and its inclusive Bangkok date window; single `running` guard | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_sessions` | `postClassSessions` | post-class-feedback | one canonical projection per Wise session (`wise_session_id` unique) | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_session_participants` | `postClassSessionParticipants` | post-class-feedback | one student participant within one tracked session | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_feedback_versions` | `postClassFeedbackVersions` | post-class-feedback | one immutable observed submission/content-hash version within a session | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_feedback_event_links` | `postClassFeedbackEventLinks` | post-class-feedback | one Wise feedback activity event associated with a session and optional version | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_assessments` | `postClassAssessments` | post-class-feedback | one immutable deterministic assessment key for a session/policy/mapping/evidence state | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_source_issues` | `postClassSourceIssues` | post-class-feedback | one deduplicated global/session source issue fingerprint | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_notification_runs` | `postClassNotificationRuns` | post-class-feedback | one idempotent tutor-reminder or admin-digest run | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_notification_deliveries` | `postClassNotificationDeliveries` | post-class-feedback | one grouped recipient delivery within a notification run | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_notification_items` | `postClassNotificationItems` | post-class-feedback | one tracked session included in a grouped delivery | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_notification_attempts` | `postClassNotificationAttempts` | post-class-feedback | one durable relay attempt number for a delivery | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_ai_runs` | `postClassAiRuns` | post-class-feedback | one de-identified quality-model request per immutable feedback version/prompt identity | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_ai_concerns` | `postClassAiConcerns` | post-class-feedback | one AI quality dimension concern within a run | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_ai_reviews` | `postClassAiReviews` | post-class-feedback | one immutable human confirm/dismiss decision for an AI concern | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_finance_periods` | `postClassFinancePeriods` | post-class-feedback | one open/closed feature finance month | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_deductions` | `postClassDeductions` | post-class-feedback | at most one ฿100 deduction decision record per Wise session | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_deduction_actions` | `postClassDeductionActions` | post-class-feedback | one immutable, idempotent review/finance state-transition ledger entry | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
+| `post_class_deduction_offsets` | `postClassDeductionOffsets` | post-class-feedback | at most one immutable -฿100 correction offset for a processed deduction | [Post-Class Feedback](../../features/post-class-feedback.md) | [data model](../../features/post-class-feedback.md#durable-data-model) |
 
 ### Classrooms — assignment + email
 
@@ -224,5 +260,8 @@ Line ranges: `schema.ts:1785-1858`.
 - **Enums.** Several `status`/`category`/`role` columns are Postgres enums declared at the
   top of `schema.ts` (`schema.ts:19-161`); their allowed values are listed on the relevant
   `erd-*.md` page, not here.
+- **Post-Class Feedback contact override.** `tutor_contacts.primary_email` belongs to the
+  Post-Class Feedback reminder workflow. Existing tutor-profile/classroom consumers retain
+  their previous onsite/online email-selection behavior.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against HEAD + uncommitted WIP on 2026-07-21._

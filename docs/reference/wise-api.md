@@ -48,7 +48,10 @@ The **source of truth** is the code under `src/lib/wise/`:
   (default `696e1f4d90102225641cc413`).
 - **Writeback:** production mutations are narrowly scoped: classroom assignments write
   only OFFLINE session `location`; Student Promotions writes only registration field
-  `if89sblj` and verified class `subject` transitions.
+  `if89sblj`, verified class `subject` transitions, and gated single-session
+  subject updates for July 1+ school-curriculum payroll pay-band readiness. **Post-Class
+  Feedback performs no Wise mutation**: it reads canonical session detail and stores
+  evidence, reminders, and financial review state only inside BGScheduler.
 
 ---
 
@@ -187,6 +190,7 @@ classroom publish path) inherit the default of 5.
 | `src/lib/credit-control/run-sync-request.ts:140` | Credit-control sync |
 | `src/lib/room-capacity/utilization.ts:436` | Room utilization (all institute sessions) |
 | `src/lib/classrooms/morning-automation.ts:187` | Morning auto-assignment |
+| `src/lib/post-class-feedback/sync.ts` | Post-Class Feedback PAST-window discovery and canonical session-detail reconciliation |
 
 The classroom **publish** writeback instead uses `createWiseClientFromEnv()`
 (default concurrency 5, throws on missing creds) — `classrooms/data.ts:1132`.
@@ -281,6 +285,30 @@ rather than reading the polymorphic fields directly.
 > **not** return past sessions. Historical compare views fall back to the nearest
 > future occurrence (deduped by `recurrenceId`). See `handbook/data-flow.md` and the
 > "Known Issues" notes in the root docs.
+
+### Past sessions by Bangkok date — `fetchWisePastSessionsByBangkokDate`
+
+This read is owned by the Post-Class Feedback collector and is deliberately separate from the snapshot sync's `FUTURE` session fetch.
+
+- **Endpoint:** `GET /institutes/{instituteId}/sessions`
+- **Params:** `status=PAST`, `paginateBy=DATE`, inclusive `startDate` and `endDate` in `YYYY-MM-DD` Bangkok calendar form, 1-based `page_number`, and `page_size` (collector default `100`).
+- **Pagination:** follows `data.page_count` when present; otherwise stops on a short page.
+- **Returns:** all `WiseSession[]` rows across the inclusive date window. The feature then retains only rows whose normalized `meetingStatus` is `ENDED` before requesting detail.
+
+Normal collection supplies a rolling four-Bangkok-date window. Manual recovery may supply a different inclusive date pair; the collector still caps canonical detail fetches at 50 per run.
+
+### Canonical session detail and feedback — `fetchWiseSessionDetail`
+
+This is the canonical source for Post-Class Feedback evidence.
+
+- **Endpoint:** `GET /user/classes/{classId}/sessions/{sessionId}`
+- **Params:** `showLiveClassInsight=true`, `showFeedbackConfig=true`, `showFeedbackSubmission=true`.
+- **Returns:** a `WiseSessionDetail`, extending `WiseSession` with optional `feedbackForm.questions[]` and `feedbackSubmissions[]`.
+- **Validation:** a missing/non-object `data` envelope throws. Required-question mapping, teacher-profile filtering, and content/timing rules are enforced by `src/lib/post-class-feedback/wise.ts` and `policy.ts`, not by this transport helper.
+
+The collector considers only submissions whose `profile` is `teacher`. It retains the exact answer array, submission id, content hash, actor/provenance when provable, Wise `updatedAt`/`createdAt` when trustworthy, and the separate local observation time. A missing source timestamp is never replaced with observation time for on-time proof.
+
+Persisted `SessionFeedbackSubmittedEvent` rows from `/institutes/{id}/events` can prioritize a dirty session and provide a timestamp/provenance association when unambiguous, but the event contract is not treated as canonical feedback. The collector always reconciles against this session-detail response before changing its projection or objective assessment.
 
 ### Accepted students — `fetchWiseAcceptedStudents`
 
@@ -494,6 +522,27 @@ apply window has opened.
 Before writing, the service re-fetches the participant registration data and skips
 the action if the current grade no longer matches the verified plan.
 
+### Session subject update — `updateSessionSubject`
+
+Used only by Student Promotions future-session pay-band guardrails after the
+grade/class promotion run is terminal and the session-subject verification gate is
+enabled.
+
+- **Endpoint:** `PUT /teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE`
+  — same single-occurrence Wise endpoint as room writeback.
+- **Body:** `{ subject }` — a single field; nothing else is written.
+- **Gate:** the application refuses this write unless
+  `WISE_SESSION_SUBJECT_UPDATE_VERIFIED=true` and the admin route receives exact
+  confirmation `apply-future-session-subjects`.
+- **Scope:** only mapped UK/US/IB school-curriculum future sessions starting on or
+  after `2026-07-01T00:00:00+07:00`.
+- **Returns:** `WiseSessionUpdateResponse`; request and response payloads are
+  retained on `student_promotion_future_session_actions`.
+
+Readback/refresh uses live FUTURE sessions first. Already-target or payroll-key
+equivalent subjects are marked idempotent and are not written again; drifted
+subjects are surfaced as exceptions.
+
 ### Course subject update — `updateWiseCourseSubject`
 
 Used only by Student Promotions for verified class-level course transitions.
@@ -557,6 +606,8 @@ above.
 | GET | `/institutes/{id}/teachers` | `fetchAllTeachers` | read |
 | GET | `/institutes/{id}/teachers/{userId}/availability` | `fetchTeacherAvailability` / `fetchTeacherFullAvailability` | read |
 | GET | `/institutes/{id}/sessions` | `fetchAllFutureSessions` / `fetchAllInstituteSessions` | read (paginated) |
+| GET | `/institutes/{id}/sessions?status=PAST&paginateBy=DATE` | `fetchWisePastSessionsByBangkokDate` | read (paginated, inclusive Bangkok dates) |
+| GET | `/user/classes/{classId}/sessions/{sessionId}` | `fetchWiseSessionDetail` | read (canonical feedback form/submissions) |
 | GET | `/institutes/v3/{id}/students` | `fetchWiseAcceptedStudents` | read (paginated) |
 | GET | `/institutes/{id}/participants/{studentId}?showRegistrationData=true` | `fetchWiseStudentRegistrationData` | read |
 | GET | `/user/v2/classes/{classId}?full=true` | `fetchWiseCourse` | read |
@@ -570,6 +621,7 @@ above.
 | GET | `/institutes/{id}/trends` | `fetchWiseFeesPaidTrends` | read |
 | GET | `/institutes/{id}/fees/transactions` | `fetchWiseReceiptTransactions` | read (paginated) |
 | PUT | `/teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` | `updateSessionLocation` | **write** (OFFLINE only) |
+| PUT | `/teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` | `updateSessionSubject` | **write** (gated Student Promotions only) |
 | PUT | `/institutes/{id}/students/{studentId}/registration` | `updateWiseStudentRegistrationAnswers` | **write** (Student Promotions only) |
 | PUT | `/teacher/editClass` | `updateWiseCourseSubject` | **write** (Student Promotions only) |
 
@@ -581,4 +633,4 @@ above.
 - [`docs/reference/crons.md`](./crons.md) — the cron schedules that drive the syncs.
 - `AGENTS.md` — the live Wise contract description this page was cross-checked against.
 
-_Verified against d56f8c6 + uncommitted WIP on 2026-05-31._
+_Verified against HEAD + uncommitted WIP on 2026-07-21._

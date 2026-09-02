@@ -16,6 +16,8 @@ import {
   WiseInstituteTrendsResponse,
   WiseFeeTransaction,
   WiseFeeTransactionsResponse,
+  WiseSessionDetail,
+  WiseSessionDetailResponse,
 } from "./types";
 import { addDays } from "date-fns";
 
@@ -142,6 +144,63 @@ export async function fetchAllInstituteSessions(
   }
 
   return all;
+}
+
+/**
+ * Fetch Wise PAST sessions for an inclusive pair of Bangkok calendar dates.
+ * Wise's date-window endpoint expects YYYY-MM-DD rather than UTC instants.
+ */
+export async function fetchWisePastSessionsByBangkokDate(
+  client: WiseClient,
+  instituteId: string,
+  startDate: string,
+  endDate: string,
+  pageSize = 100,
+): Promise<WiseSession[]> {
+  const all: WiseSession[] = [];
+  for (let pageNumber = 1; ; pageNumber += 1) {
+    const res = await client.get<WiseSessionsResponse>(
+      `/institutes/${instituteId}/sessions`,
+      {
+        status: "PAST",
+        paginateBy: "DATE",
+        startDate,
+        endDate,
+        page_number: String(pageNumber),
+        page_size: String(pageSize),
+      },
+    );
+    const sessions = res.data?.sessions ?? [];
+    all.push(...sessions);
+    const pageCount = res.data?.page_count;
+    if (typeof pageCount === "number" ? pageNumber >= pageCount : sessions.length < pageSize) {
+      break;
+    }
+  }
+  return all;
+}
+
+/**
+ * Fetch the canonical Wise session representation used for post-class
+ * feedback. This feature is strictly read-only toward Wise.
+ */
+export async function fetchWiseSessionDetail(
+  client: WiseClient,
+  classId: string,
+  sessionId: string,
+): Promise<WiseSessionDetail> {
+  const res = await client.get<WiseSessionDetailResponse>(
+    `/user/classes/${classId}/sessions/${sessionId}`,
+    {
+      showLiveClassInsight: "true",
+      showFeedbackConfig: "true",
+      showFeedbackSubmission: "true",
+    },
+  );
+  if (!res.data || typeof res.data !== "object") {
+    throw new Error(`Wise session detail response was missing data for session ${sessionId}`);
+  }
+  return res.data;
 }
 
 /**
@@ -357,6 +416,22 @@ export async function updateSessionLocation(
   return client.put<WiseSessionUpdateResponse>(
     `/teacher/classes/${classId}/sessions/${sessionId}?updateType=SINGLE`,
     { location }
+  );
+}
+
+/**
+ * Update the Wise subject field for one scheduled session.
+ * Student Promotions only calls this behind the verified session-subject gate.
+ */
+export async function updateSessionSubject(
+  client: WiseClient,
+  classId: string,
+  sessionId: string,
+  subject: string
+): Promise<WiseSessionUpdateResponse> {
+  return client.put<WiseSessionUpdateResponse>(
+    `/teacher/classes/${classId}/sessions/${sessionId}?updateType=SINGLE`,
+    { subject }
   );
 }
 

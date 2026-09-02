@@ -94,6 +94,19 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     expect(res.headers.get("location")).toContain("callbackUrl=%2Fsearch");
   });
 
+  it("redirects unauthenticated learning-plan reports to login with callbackUrl preserved", async () => {
+    const res = await middleware(
+      makeReq("/learning-plans/report", false) as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/login");
+    expect(res.headers.get("location")).toContain(
+      "callbackUrl=%2Flearning-plans%2Freport",
+    );
+  });
+
   it("preserves query string in callbackUrl when redirecting to login", async () => {
     const res = await middleware(makeReq("/search", false, "tutors=g1,g2") as never, {} as never) as Response;
 
@@ -107,6 +120,40 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     const res = await middleware(makeReq("/search", true) as never, {} as never) as Response;
 
     expect(res.headers.get("location")).toBeNull();
+  });
+
+  it.each(["/learning-plans", "/learning-plans/report"])(
+    "%s passes through for full-access admins",
+    async (pathname) => {
+      const res = await middleware(
+        makeReq(pathname, true, "", null) as never,
+        {} as never,
+      ) as Response;
+
+      expect(res.headers.get("location")).toBeNull();
+    },
+  );
+
+  it.each(["/learning-plans", "/learning-plans/report"])(
+    "%s passes through for restricted admins with the matching prefix",
+    async (pathname) => {
+      const res = await middleware(
+        makeReq(pathname, true, "", ["/learning-plans"]) as never,
+        {} as never,
+      ) as Response;
+
+      expect(res.headers.get("location")).toBeNull();
+    },
+  );
+
+  it("redirects restricted admins without learning-plans access to their landing page", async () => {
+    const res = await middleware(
+      makeReq("/learning-plans/report", true, "", ["/progress-tests"]) as never,
+      {} as never,
+    ) as Response;
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe("http://localhost/progress-tests");
   });
 
   it("root / redirects to login when unauthenticated", async () => {

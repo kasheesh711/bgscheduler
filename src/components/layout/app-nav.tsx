@@ -81,15 +81,27 @@ function ToolLink({
   );
 }
 
-export function AppNav({ allowedPages }: { allowedPages: string[] | null }) {
+export function AppNav({
+  allowedPages,
+  postClassFeedbackAccess = false,
+}: {
+  allowedPages: string[] | null;
+  postClassFeedbackAccess?: boolean;
+}) {
   const pathname = usePathname();
   const [openSection, setOpenSection] = useState<NavSectionId | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [summary, setSummary] = useState<HomeSummaryPayload | null>(null);
-  const sections = useMemo(() => visibleSections(allowedPages), [allowedPages]);
-  const activeSectionId = activeSection(pathname, allowedPages);
-  const canAccessHome = canAccessHref(HOME_HREF, allowedPages);
-  const brandHref = canAccessHome ? HOME_HREF : allowedPages?.[0] ?? HOME_HREF;
+  const effectiveAllowedPages = useMemo(() => {
+    if (!allowedPages || !postClassFeedbackAccess || allowedPages.includes("/post-class-feedback")) {
+      return allowedPages;
+    }
+    return [...allowedPages, "/post-class-feedback"];
+  }, [allowedPages, postClassFeedbackAccess]);
+  const sections = useMemo(() => visibleSections(effectiveAllowedPages), [effectiveAllowedPages]);
+  const activeSectionId = activeSection(pathname, effectiveAllowedPages);
+  const canAccessHome = canAccessHref(HOME_HREF, effectiveAllowedPages);
+  const brandHref = canAccessHome ? HOME_HREF : effectiveAllowedPages?.[0] ?? HOME_HREF;
   const hasBadgedTools = sections.some((section) => section.tools.some((tool) => tool.badgeKey));
   const badgeSummary = hasBadgedTools ? summary : null;
 

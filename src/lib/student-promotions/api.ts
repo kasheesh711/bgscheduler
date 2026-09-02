@@ -44,7 +44,7 @@ export function studentPromotionErrorResponse(route: string, error: unknown, fal
     return NextResponse.json({ error: error.message }, { status: 404 });
   }
 
-  if (error instanceof Error && /(required|cannot|only|no verified|no pending|before July 1)/i.test(error.message)) {
+  if (error instanceof Error && /(required|cannot|only|must be|blocked|no verified|no pending|before July 1)/i.test(error.message)) {
     return NextResponse.json({ error: error.message }, { status: 400 });
   }
 

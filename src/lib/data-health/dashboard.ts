@@ -29,6 +29,8 @@ type LeaveRun = typeof schema.leaveRequestSyncRuns.$inferSelect;
 type ProgressTestRun = typeof schema.progressTestSyncRuns.$inferSelect;
 type ProgressTestDigestRun = typeof schema.progressTestAdminDigestRuns.$inferSelect;
 type RoomUtilizationSession = typeof schema.roomUtilizationSessions.$inferSelect;
+type PostClassFeedbackRun = typeof schema.postClassSyncRuns.$inferSelect;
+type PostClassNotificationRun = typeof schema.postClassNotificationRuns.$inferSelect;
 
 function iso(value: Date | string | null | undefined): string | null {
   if (!value) return null;
@@ -149,6 +151,8 @@ function pickJobRuns(
     leave: LeaveRun[];
     progressTests: ProgressTestRun[];
     progressTestDigest: ProgressTestDigestRun[];
+    postClassFeedback: PostClassFeedbackRun[];
+    postClassNotifications: PostClassNotificationRun[];
     classroom: ClassroomRun[];
     adminEmail: ClassroomAdminEmailRun[];
     roomUtilization: RoomUtilizationSession[];
@@ -225,6 +229,45 @@ function pickJobRuns(
       latestSuccessfulRun: runEvidence(digestRunEvidence(latestSuccessful(allRuns.progressTestDigest, (run) => run.sentAt ?? run.updatedAt, new Set(["sent", "skipped"])))),
       latestFailedRun: runEvidence(digestRunEvidence(latestFailed(allRuns.progressTestDigest, (run) => run.updatedAt))),
       runningRun: runEvidence(digestRunEvidence(latestRunning(allRuns.progressTestDigest, (run) => run.createdAt))),
+    };
+  }
+
+  if (job.key === "post_class_feedback") {
+    const rows = allRuns.postClassFeedback.map((run) => ({
+      ...run,
+      status: postClassFeedbackOutcome(run),
+    }));
+    return {
+      latestRun: postClassFeedbackEvidence(allRuns.postClassFeedback[0] ?? null),
+      latestSuccessfulRun: runEvidence(latestSuccessful(rows, (run) => run.finishedAt)),
+      latestFailedRun: runEvidence(latestFailed(rows, (run) => run.finishedAt)),
+      runningRun: runEvidence(latestRunning(rows, (run) => run.startedAt)),
+    };
+  }
+
+  if (
+    job.key === "post_class_feedback_digest" ||
+    job.key === "post_class_feedback_day_after" ||
+    job.key === "post_class_feedback_deadline"
+  ) {
+    const kind = job.key === "post_class_feedback_digest"
+      ? "admin_digest"
+      : job.key === "post_class_feedback_day_after" ? "tutor_day_after" : "tutor_deadline";
+    const rows = allRuns.postClassNotifications.filter((run) => run.kind === kind);
+    return {
+      latestRun: postClassNotificationEvidence(rows[0] ?? null),
+      latestSuccessfulRun: postClassNotificationEvidence(latestBy(
+        rows.filter((run) => run.status === "sent" || run.status === "cancelled"),
+        (run) => run.finishedAt ?? run.updatedAt,
+      )),
+      latestFailedRun: postClassNotificationEvidence(latestBy(
+        rows.filter((run) => run.status === "failed"),
+        (run) => run.finishedAt ?? run.updatedAt,
+      )),
+      runningRun: postClassNotificationEvidence(latestBy(
+        rows.filter((run) => run.status === "pending" || run.status === "sending"),
+        (run) => run.startedAt ?? run.createdAt,
+      )),
     };
   }
 
@@ -324,6 +367,39 @@ function digestRunEvidence(run: ProgressTestDigestRun | null): { status: string;
     startedAt: run.createdAt,
     finishedAt: run.sentAt ?? run.updatedAt,
     errorSummary: run.lastError,
+  };
+}
+
+function postClassNotificationEvidence(run: PostClassNotificationRun | null): RunEvidence | null {
+  if (!run) return null;
+  const status = run.status === "sent" || run.status === "cancelled"
+    ? "success"
+    : run.status === "sending" || run.status === "pending" ? "running" : run.status;
+  return {
+    status,
+    startedAt: run.startedAt ?? run.createdAt,
+    finishedAt: run.finishedAt,
+    errorSummary: run.errorSummary,
+  };
+}
+
+function postClassFeedbackOutcome(run: PostClassFeedbackRun): string {
+  const metadata = run.metadata && typeof run.metadata === "object" && !Array.isArray(run.metadata)
+    ? run.metadata as Record<string, unknown>
+    : {};
+  return metadata.outcome === "partial" ? "partial" : run.status;
+}
+
+function postClassFeedbackEvidence(run: PostClassFeedbackRun | null): RunEvidence | null {
+  if (!run) return null;
+  const status = postClassFeedbackOutcome(run);
+  return {
+    status,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    errorSummary: status === "partial"
+      ? `${run.sourceIssueCount} source issue${run.sourceIssueCount === 1 ? "" : "s"}`
+      : run.errorSummary,
   };
 }
 
@@ -428,6 +504,17 @@ function buildDomains(
       recordCountLabel: `${allRuns.activity[0]?.insertedCount ?? 0} inserted last run`,
       issueCount: allRuns.activity[0]?.status === "failed" ? 1 : 0,
       detail: "Read-only Wise audit event ingestion.",
+    },
+    {
+      key: "post_class_feedback",
+      label: "Post-class Feedback",
+      status: domainStatusFor(jobByKey.get("post_class_feedback")),
+      freshnessLabel: freshnessLabel(iso(allRuns.postClassFeedback.find((run) => postClassFeedbackOutcome(run) === "success")?.finishedAt), now),
+      lastSuccessAt: iso(allRuns.postClassFeedback.find((run) => postClassFeedbackOutcome(run) === "success")?.finishedAt),
+      lastRunAt: iso(allRuns.postClassFeedback[0]?.startedAt),
+      recordCountLabel: `${allRuns.postClassFeedback[0]?.sessionCount ?? 0} sessions reconciled`,
+      issueCount: allRuns.postClassFeedback[0]?.sourceIssueCount ?? 0,
+      detail: "Read-only Wise feedback evidence, reminders, and fail-closed policy assessment.",
     },
     {
       key: "sales_dashboard",
@@ -546,6 +633,32 @@ function buildRecentRuns(allRuns: Parameters<typeof pickJobRuns>[1]): RunHistory
       countLabel: `${run.insertedCount} inserted`,
       errorSummary: run.errorSummary,
     })),
+    ...allRuns.postClassFeedback.map((run) => runHistoryItem({
+      id: run.id,
+      jobKey: "post_class_feedback",
+      label: "Post-class Feedback",
+      status: postClassFeedbackOutcome(run),
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      triggerType: run.triggerType,
+      countLabel: `${run.sessionCount} sessions / ${run.sourceIssueCount} issues`,
+      errorSummary: run.errorSummary,
+    })),
+    ...allRuns.postClassNotifications.map((run) => runHistoryItem({
+      id: run.id,
+      jobKey: run.kind === "admin_digest"
+        ? "post_class_feedback_digest"
+        : run.kind === "tutor_day_after"
+          ? "post_class_feedback_day_after"
+          : run.kind === "tutor_deadline" ? "post_class_feedback_deadline" : "post_class_feedback",
+      label: run.kind === "admin_digest" ? "Feedback Admin Digest" : "Feedback Reminder",
+      status: run.status,
+      startedAt: run.startedAt ?? run.createdAt,
+      finishedAt: run.finishedAt,
+      triggerType: run.triggerType,
+      countLabel: `${run.sentCount}/${run.deliveryCount} sent`,
+      errorSummary: run.errorSummary,
+    })),
     ...allRuns.salesImports.map((run) => runHistoryItem({
       id: run.id,
       jobKey: "sales_dashboard",
@@ -640,6 +753,8 @@ async function fetchAllRuns(db: Database) {
     leave,
     progressTests,
     progressTestDigest,
+    postClassFeedback,
+    postClassNotifications,
     classroom,
     adminEmail,
     roomUtilization,
@@ -653,6 +768,8 @@ async function fetchAllRuns(db: Database) {
     db.select().from(schema.leaveRequestSyncRuns).orderBy(desc(schema.leaveRequestSyncRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.progressTestSyncRuns).orderBy(desc(schema.progressTestSyncRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.progressTestAdminDigestRuns).orderBy(desc(schema.progressTestAdminDigestRuns.createdAt)).limit(RECENT_LIMIT),
+    db.select().from(schema.postClassSyncRuns).orderBy(desc(schema.postClassSyncRuns.startedAt)).limit(RECENT_LIMIT),
+    db.select().from(schema.postClassNotificationRuns).orderBy(desc(schema.postClassNotificationRuns.createdAt)).limit(RECENT_LIMIT * 4),
     db
       .select()
       .from(schema.classroomAssignmentRuns)
@@ -673,6 +790,8 @@ async function fetchAllRuns(db: Database) {
     leave,
     progressTests,
     progressTestDigest,
+    postClassFeedback,
+    postClassNotifications,
     classroom,
     adminEmail,
     roomUtilization,
