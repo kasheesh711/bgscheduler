@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   UnearnedRevenueDashboard,
   UnearnedRevenueLotTraceLinks,
+  UnearnedRevenueStudentDetailContent,
+  UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT,
 } from "@/components/unearned-revenue/unearned-revenue-dashboard";
 import {
   FIFO_PACKAGE_MODEL,
@@ -11,6 +13,7 @@ import {
   type TraceAnchor,
   type UnearnedRevenueDashboardPayload,
   type UnearnedRevenueLotDetail,
+  type UnearnedRevenueStudentDetailPayload,
 } from "@/lib/unearned-revenue/types";
 
 const navigation = vi.hoisted(() => ({
@@ -173,6 +176,64 @@ function lot(sourceTrace: TraceAnchor | null): UnearnedRevenueLotDetail {
   };
 }
 
+function studentDetail(): UnearnedRevenueStudentDetailPayload {
+  const student = payload().students[0];
+  const source = trace(404, "A22:AZ22");
+
+  return {
+    periodEnd: "2026-09-03",
+    canonicalModel: LEGACY_ACCOUNT_MODEL,
+    modelVersion: FIFO_PACKAGE_MODEL,
+    student: {
+      ...student,
+      studentName: "Alexandria-Cassandra Extremely Long Student Display Name for Drawer Regression",
+      ledgerRemainingCredits: 987_654_321.25,
+      remainingPaidCredits: 987_654_321.25,
+      legacyClosingLiabilityThb: 987_654_321_098.76,
+      fifoClosingLiabilityThb: 987_654_321_198.76,
+      canonicalClosingLiabilityThb: 987_654_321_098.76,
+      fifoVsLegacyDifferenceThb: 100,
+      attributedLiabilityThb: 987_654_320_000,
+      residualLiabilityThb: 1_098.76,
+      attributionPercent: 99.9,
+    },
+    accounts: [{
+      accountId: "account-with-an-unusually-long-stable-identifier-000000000000000001",
+      classId: "class-1",
+      className: "Years 9–11 International Mathematics and Advanced Sciences Programme with a Long Account Name",
+      classSubject: "Mathematics / Physics / Chemistry",
+      ledgerRemainingCredits: 987_654_321.25,
+      openingPaidCredits: 987_654_321.25,
+      deferredPaidCredits: 0,
+      recognizedPaidCredits: 0,
+      closingPaidCredits: 987_654_321.25,
+      legacyClosingLiabilityThb: 987_654_321_098.76,
+      fifoOpeningLiabilityThb: 987_654_321_198.76,
+      fifoDeferredNewLiabilityThb: 0,
+      fifoRecognizedRevenueThb: 0,
+      fifoClosingLiabilityThb: 987_654_321_198.76,
+      canonicalClosingLiabilityThb: 987_654_321_098.76,
+      attributedLiabilityThb: 987_654_320_000,
+      residualLiabilityThb: 1_098.76,
+      reviewState: "NEEDS_REVIEW",
+      trace: trace(303, "A123:AZ123"),
+    }],
+    lots: [{
+      ...lot(source),
+      packageName: "Extremely Long Premium International Programme Package Name with Weekend Add-on",
+      transactionNumber: "TRANSACTION-WITH-A-LONG-REFERENCE-000000000000000001",
+      originalCredits: 987_654_321.25,
+      packageCredits: 987_654_321.25,
+      openingCredits: 987_654_321.25,
+      remainingCredits: 987_654_321.25,
+      unitRateThb: 987_654.32,
+      netPaymentThb: 987_654_321_098.76,
+      openingLiabilityThb: 987_654_321_098.76,
+      closingLiabilityThb: 987_654_321_098.76,
+    }],
+  };
+}
+
 describe("UnearnedRevenueDashboard", () => {
   beforeEach(() => {
     navigation.query = "period=2026-09-03&scope=positive";
@@ -217,6 +278,32 @@ describe("UnearnedRevenueDashboard", () => {
 
     expect(html).toContain('data-selected-student="student-1"');
     expect(html).toContain("student=student-1");
+  });
+
+  it("contains long student detail and large THB values without making the drawer the horizontal scroller", () => {
+    const detail = studentDetail();
+    const html = renderToStaticMarkup(<UnearnedRevenueStudentDetailContent detail={detail} />);
+    const dialogClasses = UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT.dialog.split(" ");
+    const scrollBodyClasses = UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT.scrollBody.split(" ");
+
+    expect(dialogClasses).toContain("overflow-hidden");
+    expect(dialogClasses).toContain("min-w-0");
+    expect(dialogClasses).toContain("sm:w-[min(1180px,calc(100vw-2rem))]");
+    expect(dialogClasses).not.toContain("overflow-y-auto");
+    expect(scrollBodyClasses).toEqual(expect.arrayContaining([
+      "min-h-0",
+      "min-w-0",
+      "overflow-y-auto",
+      "overflow-x-hidden",
+    ]));
+    expect(UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT.accountTable).toBe("min-w-[920px]");
+    expect(html).toContain("Alexandria-Cassandra Extremely Long Student Display Name for Drawer Regression");
+    expect(html).toContain("Years 9–11 International Mathematics and Advanced Sciences Programme with a Long Account Name");
+    expect(html).toContain("987,654,321,098.76");
+    expect(html).toContain('data-slot="table-container" class="relative w-full overflow-x-auto"');
+    expect(html).toContain("min-w-[920px]");
+    expect(html).toContain("Open formula");
+    expect(html).toContain("Open source row");
   });
 });
 

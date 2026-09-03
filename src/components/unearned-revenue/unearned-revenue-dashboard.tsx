@@ -185,6 +185,130 @@ export function UnearnedRevenueLotTraceLinks({ lot }: { lot: UnearnedRevenueLotD
   );
 }
 
+export const UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT = {
+  dialog: "top-0 right-0 bottom-0 left-auto flex h-dvh w-full min-w-0 max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none p-0 sm:w-[min(1180px,calc(100vw-2rem))] sm:max-w-none",
+  scrollBody: "min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden",
+  content: "min-w-0 space-y-6 p-5",
+  accountSection: "min-w-0 space-y-2",
+  accountFrame: "min-w-0 overflow-hidden rounded-lg border",
+  accountTable: "min-w-[920px]",
+} as const;
+
+export function UnearnedRevenueStudentDetailContent({
+  detail,
+}: {
+  detail: UnearnedRevenueStudentDetailPayload;
+}) {
+  return (
+    <div
+      role="region"
+      aria-label={`${detail.student.studentName || detail.student.studentId} liability details`}
+      className={UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT.content}
+    >
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricCard label="Closing liability" value={money.format(detail.student.canonicalClosingLiabilityThb)} primary />
+        <MetricCard label="Remaining paid credits" value={quantity.format(detail.student.remainingPaidCredits)} />
+        <MetricCard label="Attributed" value={`${percent.format(detail.student.attributionPercent)}%`} note={`${money.format(detail.student.residualLiabilityThb)} residual`} />
+      </div>
+
+      <section className={UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT.accountSection}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">Class-account reconciliation</h3>
+            <p className="text-xs text-muted-foreground">Each WISE student/class account rolls into the student total.</p>
+          </div>
+          <TraceLink href={detail.student.trace.url} />
+        </div>
+        <div className={UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT.accountFrame}>
+          <Table className={UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT.accountTable}>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Class account</TableHead>
+                <TableHead className="text-right">Ledger credits</TableHead>
+                <TableHead className="text-right">Paid credits</TableHead>
+                <TableHead className="text-right">Legacy</TableHead>
+                <TableHead className="text-right">FIFO</TableHead>
+                <TableHead className="text-right">Canonical</TableHead>
+                <TableHead>Review</TableHead>
+                <TableHead>Trace</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {detail.accounts.map((account) => (
+                <TableRow key={account.accountId}>
+                  <TableCell>
+                    <div className="font-medium">{account.className || account.classId}</div>
+                    <div className="text-xs text-muted-foreground">{account.classSubject || account.accountId}</div>
+                  </TableCell>
+                  <TableCell className="text-right font-mono">{quantity.format(account.ledgerRemainingCredits)}</TableCell>
+                  <TableCell className="text-right font-mono">{quantity.format(account.closingPaidCredits)}</TableCell>
+                  <TableCell className="text-right font-mono">{money.format(account.legacyClosingLiabilityThb)}</TableCell>
+                  <TableCell className="text-right font-mono">{money.format(account.fifoClosingLiabilityThb)}</TableCell>
+                  <TableCell className="text-right font-mono font-semibold">{money.format(account.canonicalClosingLiabilityThb)}</TableCell>
+                  <TableCell><Badge variant="outline">{account.reviewState.replaceAll("_", " ")}</Badge></TableCell>
+                  <TableCell><TraceLink href={account.trace.url} /></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </section>
+
+      <section className="min-w-0 space-y-2">
+        <div>
+          <h3 className="font-semibold">Package lots</h3>
+          <p className="text-xs text-muted-foreground">Paid lots are consumed oldest-first within each class account, before complimentary credits.</p>
+        </div>
+        <div className="min-w-0 space-y-3">
+          {detail.lots.length === 0 && (
+            <div className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">No active lot movement for this period.</div>
+          )}
+          {detail.lots.map((lot) => (
+            <Card key={lot.lotId} className={cn("min-w-0", ["OPENING", "AMBIGUOUS", "UNATTRIBUTED"].includes(lot.lotKind) && "border-amber-300 bg-amber-50/40")}>
+              <CardContent className="min-w-0 p-4">
+                <div className="flex min-w-0 flex-col justify-between gap-3 sm:flex-row">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="break-words font-semibold">{unearnedRevenueLotLabel(lot)}</div>
+                      <Badge variant="outline">{lot.matchStatus.replaceAll("_", " ")}</Badge>
+                      <span className="text-xs text-muted-foreground">{confidenceLabel(lot)}</span>
+                    </div>
+                    <div className="mt-1 break-words text-xs text-muted-foreground">
+                      {lot.transactionNumber || "No transaction number"}
+                      {lot.transactionDate ? ` · ${formatDate(lot.transactionDate)}` : ""}
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-left sm:text-right">
+                    <div className="font-mono text-lg font-semibold">{money.format(lot.closingLiabilityThb)}</div>
+                    <div className="text-xs text-muted-foreground">{quantity.format(lot.remainingCredits)} credits remaining</div>
+                  </div>
+                </div>
+                <div className="mt-4 grid min-w-0 grid-cols-2 gap-3 text-xs sm:grid-cols-4 lg:grid-cols-7">
+                  {[
+                    ["Original", quantity.format(lot.originalCredits)],
+                    ["Recovered deficit", quantity.format(lot.negativeRecoveryCredits)],
+                    ["Opening", quantity.format(lot.openingCredits)],
+                    ["Deferred", quantity.format(lot.deferredCredits)],
+                    ["Recognized", quantity.format(lot.recognizedCredits)],
+                    ["Unit rate", money.format(lot.unitRateThb)],
+                    ["Net payment", money.format(lot.netPaymentThb)],
+                  ].map(([label, value]) => (
+                    <div className="min-w-0" key={label}>
+                      <div className="text-muted-foreground">{label}</div>
+                      <div className="mt-1 break-words font-mono font-medium">{value}</div>
+                    </div>
+                  ))}
+                </div>
+                <UnearnedRevenueLotTraceLinks lot={lot} />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function StudentDetailDrawer({
   studentId,
   period,
@@ -212,119 +336,21 @@ function StudentDetailDrawer({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="top-0 right-0 bottom-0 left-auto h-dvh w-full max-w-full translate-x-0 translate-y-0 content-start overflow-y-auto rounded-none p-0 sm:max-w-5xl">
-        <DialogHeader className="sticky top-0 z-10 border-b bg-background/95 px-5 py-4 backdrop-blur">
-          <DialogTitle>{detail?.student.studentName || "Student liability detail"}</DialogTitle>
-          <DialogDescription>
+      <DialogContent className={UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT.dialog}>
+        <DialogHeader className="shrink-0 border-b bg-background/95 px-5 py-4 pr-14 backdrop-blur">
+          <DialogTitle className="break-words">{detail?.student.studentName || "Student liability detail"}</DialogTitle>
+          <DialogDescription className="break-words">
             {detail ? `${detail.student.studentId} · data through ${formatDate(detail.periodEnd)}` : "Loading formula-backed account and package rows…"}
           </DialogDescription>
         </DialogHeader>
-        {error && <div className="m-5 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-destructive">{error}</div>}
-        {!detail && !error && <div className="p-5 text-sm text-muted-foreground">Loading…</div>}
-        {detail && (
-          <div className="space-y-6 p-5">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <MetricCard label="Closing liability" value={money.format(detail.student.canonicalClosingLiabilityThb)} primary />
-              <MetricCard label="Remaining paid credits" value={quantity.format(detail.student.remainingPaidCredits)} />
-              <MetricCard label="Attributed" value={`${percent.format(detail.student.attributionPercent)}%`} note={`${money.format(detail.student.residualLiabilityThb)} residual`} />
-            </div>
-
-            <section className="space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="font-semibold">Class-account reconciliation</h3>
-                  <p className="text-xs text-muted-foreground">Each WISE student/class account rolls into the student total.</p>
-                </div>
-                <TraceLink href={detail.student.trace.url} />
-              </div>
-              <div className="rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Class account</TableHead>
-                      <TableHead className="text-right">Ledger credits</TableHead>
-                      <TableHead className="text-right">Paid credits</TableHead>
-                      <TableHead className="text-right">Legacy</TableHead>
-                      <TableHead className="text-right">FIFO</TableHead>
-                      <TableHead className="text-right">Canonical</TableHead>
-                      <TableHead>Review</TableHead>
-                      <TableHead>Trace</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {detail.accounts.map((account) => (
-                      <TableRow key={account.accountId}>
-                        <TableCell>
-                          <div className="font-medium">{account.className || account.classId}</div>
-                          <div className="text-xs text-muted-foreground">{account.classSubject || account.accountId}</div>
-                        </TableCell>
-                        <TableCell className="text-right font-mono">{quantity.format(account.ledgerRemainingCredits)}</TableCell>
-                        <TableCell className="text-right font-mono">{quantity.format(account.closingPaidCredits)}</TableCell>
-                        <TableCell className="text-right font-mono">{money.format(account.legacyClosingLiabilityThb)}</TableCell>
-                        <TableCell className="text-right font-mono">{money.format(account.fifoClosingLiabilityThb)}</TableCell>
-                        <TableCell className="text-right font-mono font-semibold">{money.format(account.canonicalClosingLiabilityThb)}</TableCell>
-                        <TableCell><Badge variant="outline">{account.reviewState.replaceAll("_", " ")}</Badge></TableCell>
-                        <TableCell><TraceLink href={account.trace.url} /></TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </section>
-
-            <section className="space-y-2">
-              <div>
-                <h3 className="font-semibold">Package lots</h3>
-                <p className="text-xs text-muted-foreground">Paid lots are consumed oldest-first within each class account, before complimentary credits.</p>
-              </div>
-              <div className="space-y-3">
-                {detail.lots.length === 0 && (
-                  <div className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">No active lot movement for this period.</div>
-                )}
-                {detail.lots.map((lot) => (
-                  <Card key={lot.lotId} className={cn(["OPENING", "AMBIGUOUS", "UNATTRIBUTED"].includes(lot.lotKind) && "border-amber-300 bg-amber-50/40")}>
-                    <CardContent className="p-4">
-                      <div className="flex flex-col justify-between gap-3 sm:flex-row">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <div className="font-semibold">{unearnedRevenueLotLabel(lot)}</div>
-                            <Badge variant="outline">{lot.matchStatus.replaceAll("_", " ")}</Badge>
-                            <span className="text-xs text-muted-foreground">{confidenceLabel(lot)}</span>
-                          </div>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {lot.transactionNumber || "No transaction number"}
-                            {lot.transactionDate ? ` · ${formatDate(lot.transactionDate)}` : ""}
-                          </div>
-                        </div>
-                        <div className="text-left sm:text-right">
-                          <div className="font-mono text-lg font-semibold">{money.format(lot.closingLiabilityThb)}</div>
-                          <div className="text-xs text-muted-foreground">{quantity.format(lot.remainingCredits)} credits remaining</div>
-                        </div>
-                      </div>
-                      <div className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4 lg:grid-cols-7">
-                        {[
-                          ["Original", quantity.format(lot.originalCredits)],
-                          ["Recovered deficit", quantity.format(lot.negativeRecoveryCredits)],
-                          ["Opening", quantity.format(lot.openingCredits)],
-                          ["Deferred", quantity.format(lot.deferredCredits)],
-                          ["Recognized", quantity.format(lot.recognizedCredits)],
-                          ["Unit rate", money.format(lot.unitRateThb)],
-                          ["Net payment", money.format(lot.netPaymentThb)],
-                        ].map(([label, value]) => (
-                          <div key={label}>
-                            <div className="text-muted-foreground">{label}</div>
-                            <div className="mt-1 font-mono font-medium">{value}</div>
-                          </div>
-                        ))}
-                      </div>
-                      <UnearnedRevenueLotTraceLinks lot={lot} />
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </section>
-          </div>
-        )}
+        <div
+          data-slot="unearned-revenue-student-detail-scroll"
+          className={UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT.scrollBody}
+        >
+          {error && <div className="m-5 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-destructive">{error}</div>}
+          {!detail && !error && <div className="p-5 text-sm text-muted-foreground">Loading…</div>}
+          {detail && <UnearnedRevenueStudentDetailContent detail={detail} />}
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -550,7 +576,7 @@ export function UnearnedRevenueDashboard({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" render={<a href={payload.metadata.workbookUrl} target="_blank" rel="noreferrer" />}>
+            <Button nativeButton={false} variant="outline" render={<a href={payload.metadata.workbookUrl} target="_blank" rel="noreferrer" />}>
               <FileSpreadsheet className="size-4" /> Workbook
             </Button>
             {canManage && (
