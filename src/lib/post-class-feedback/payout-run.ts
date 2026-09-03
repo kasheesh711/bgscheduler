@@ -937,6 +937,7 @@ export async function publishPayoutRun(
     csvFileId,
     csvUrl,
     csvError,
+    now: operationNow,
     skipCsv: mode === "accrual",
     // An in-window accrual pass can never mint `published`: forcing partial
     // whenever the window has not yet ended makes that mathematically true

@@ -1358,10 +1358,12 @@ export async function finalizePayoutRunPass(db: Database, input: {
    * untouched instead of rewriting them to a failed/pending state every tick.
    */
   skipCsv?: boolean;
+  /** Keeps the lease check on the same injected clock used to acquire it. */
+  now?: Date;
 }): Promise<PayoutRun> {
   return withPostClassTransaction(db, async (tx) => {
     await lockPostClassFinance(tx);
-    const now = new Date();
+    const now = input.now ?? new Date();
     const [current] = await tx.select().from(schema.postClassPayoutRuns)
       .where(and(
         eq(schema.postClassPayoutRuns.id, input.runId),
