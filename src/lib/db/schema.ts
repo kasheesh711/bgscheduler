@@ -1212,6 +1212,13 @@ export const creditControlPackages = pgTable("credit_control_packages", {
   availableCredits: doublePrecision("available_credits").notNull().default(0),
   bookedSessions: doublePrecision("booked_sessions").notNull().default(0),
   excludedReason: text("excluded_reason"),
+  // CRED-01 dirty-pair reuse. When a pair's credits are carried forward from the
+  // previous snapshot instead of refetched from Wise, this keeps the instant the
+  // balance was actually OBSERVED, not the instant the row was written. createdAt
+  // is always ~run time and so cannot express staleness. Pairs at or near the
+  // alert threshold are never reused, so anything a human is asked about stays
+  // fetched every run.
+  creditsObservedAt: timestamp("credits_observed_at", { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("cc_packages_snapshot_pair_idx").on(table.snapshotId, table.wiseClassId, table.wiseStudentId),
@@ -1522,9 +1529,41 @@ export const tutorIdentityGroups = pgTable("tutor_identity_groups", {
   canonicalKey: text("canonical_key").notNull(),
   displayName: text("display_name").notNull(),
   supportedModality: modalityEnum("supported_modality").notNull().default("unresolved"),
+  // AVAIL-01 leave-completeness watermark. Wise leaves are fetched in tiers (near
+  // window every run, far window on a slower cadence), so the snapshot can be
+  // complete to different dates for different tutors. The search engine treats a
+  // MISSING leave row as "no leave" (engine.ts hasOneTimeLeaveConflict uses
+  // Array.some), which is fail-OPEN — so any slot after this instant must route to
+  // Needs Review rather than Available. Null means "completeness unknown": treated
+  // as fail-closed beyond today. A group is only as complete as its least-complete
+  // Wise teacher row, so this is the MIN across the group's members.
+  leavesCompleteThrough: timestamp("leaves_complete_through", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index("tig_snapshot_idx").on(table.snapshotId),
+]);
+
+// ── Wise availability fetch cache ────────────────────────────────────────
+//
+// AVAIL-02. Not snapshot data: a cross-snapshot cache of the FAR leave window
+// (days 28-182), which costs 22 of the 26 Wise calls per teacher per run and in
+// practice yields almost nothing — the whole institute held 21 leave rows when
+// this was built, one of them beyond day 28. Wise rejects any availability span
+// wider than 7 days (HTTP 400), so the only lever is fetching the far windows
+// LESS OFTEN, not more widely.
+//
+// Read rule, load-bearing: a miss, a stale row, or a read error is ALWAYS a live
+// fetch. Never fall back to an empty leave set — that would silently mark a tutor
+// Available during real leave.
+export const wiseTeacherAvailabilityCache = pgTable("wise_teacher_availability_cache", {
+  teacherUserId: text("teacher_user_id").primaryKey(),
+  farLeaves: jsonb("far_leaves").$type<unknown[]>().notNull().default([]),
+  farHorizonDays: integer("far_horizon_days").notNull(),
+  farWindowStartDay: integer("far_window_start_day").notNull(),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+  fetchError: text("fetch_error"),
+}, (table) => [
+  index("wtac_fetched_at_idx").on(table.fetchedAt),
 ]);
 
 export const tutorIdentityGroupMembers = pgTable("tutor_identity_group_members", {

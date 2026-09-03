@@ -13,6 +13,11 @@ import {
   fetchAllTeachers,
   fetchInstituteLocations,
   fetchTeacherAvailability,
+  fetchTeacherFarLeaves,
+  fetchTeacherFullAvailability,
+  fetchTeacherNearAvailability,
+  resolveFarHorizonMaxAgeMinutes,
+  DEFAULT_FAR_HORIZON_MAX_AGE_MINUTES,
   fetchWiseAcceptedStudents,
   fetchWiseCourse,
   fetchWiseCourseParticipants,
@@ -702,5 +707,194 @@ describe("Wise fetchers", () => {
       amountMinor: 10_000,
       amount: 100,
     }]);
+  });
+});
+
+// ── AVAIL-01 near/far leave tiering ──────────────────────────────────────
+
+describe("availability tiering", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const FROM = new Date("2026-09-02T03:00:00.000Z");
+
+  interface RecordedWindow {
+    startDay: number;
+    endDay: number;
+  }
+
+  /**
+   * Fake client that records the day offset of every availability window it is
+   * asked for, relative to the FIRST window it sees (which is always day 0).
+   */
+  function makeTieringClient(options: { rejectAtStartDay?: number } = {}) {
+    const windows: RecordedWindow[] = [];
+    let origin: number | null = null;
+
+    const client = {
+      async get(_path: string, params?: Record<string, string>) {
+        const start = new Date(params!.startTime).getTime();
+        const end = new Date(params!.endTime).getTime();
+        if (origin === null) origin = start;
+        const startDay = Math.round((start - origin) / DAY_MS);
+        const endDay = Math.round((end - origin) / DAY_MS);
+        windows.push({ startDay, endDay });
+
+        if (options.rejectAtStartDay !== undefined && startDay === options.rejectAtStartDay) {
+          throw new Error(`429 RATE_LIMITED at day ${startDay}`);
+        }
+
+        return {
+          data: {
+            // Only window 0 carries workingHours, as Wise does.
+            ...(startDay === 0
+              ? { workingHours: { slots: [{ day: 1, startTime: "09:00", endTime: "17:00" }] } }
+              : {}),
+            leaves: [{ _id: `leave-day-${startDay}`, startTime: params!.startTime, endTime: params!.endTime }],
+          },
+        };
+      },
+    };
+
+    return { client: client as unknown as WiseClient, windows };
+  }
+
+  function sortedStartDays(windows: RecordedWindow[]): number[] {
+    return windows.map((w) => w.startDay).sort((a, b) => a - b);
+  }
+
+  it("near tier covers days 0-28 in four windows and returns workingHours from window 0", async () => {
+    const { client, windows } = makeTieringClient();
+
+    const near = await fetchTeacherNearAvailability(client, "inst-1", "u-1", 28, FROM);
+
+    expect(sortedStartDays(windows)).toEqual([0, 7, 14, 21]);
+    expect(windows.every((w) => w.endDay - w.startDay === 7)).toBe(true);
+    expect(near.workingHours?.slots).toHaveLength(1);
+    expect(near.leaves.map((l) => l._id)).toEqual([
+      "leave-day-0",
+      "leave-day-7",
+      "leave-day-14",
+      "leave-day-21",
+    ]);
+  });
+
+  it("far tier returns 22 windows of leaves and no workingHours", async () => {
+    const { client, windows } = makeTieringClient();
+
+    const far = await fetchTeacherFarLeaves(client, "inst-1", "u-1", 28, 180, FROM);
+
+    expect(windows).toHaveLength(22);
+    expect(far.leaves).toHaveLength(22);
+    expect(Object.hasOwn(far, "workingHours")).toBe(false);
+  });
+
+  it("far tier windows start at nearDays and run past the horizon, never short of it", async () => {
+    const calls: { start: Date; end: Date }[] = [];
+    const client = {
+      async get(_path: string, params?: Record<string, string>) {
+        calls.push({ start: new Date(params!.startTime), end: new Date(params!.endTime) });
+        return { data: { leaves: [] } };
+      },
+    } as unknown as WiseClient;
+
+    await fetchTeacherFarLeaves(client, "inst-1", "u-1", 28, 180, FROM);
+
+    const dayOffsets = calls
+      .map((c) => Math.round((c.start.getTime() - FROM.getTime()) / DAY_MS))
+      .sort((a, b) => a - b);
+    expect(dayOffsets[0]).toBe(28);
+    expect(dayOffsets).toHaveLength(22);
+    expect(dayOffsets[21]).toBe(175);
+
+    const lastEnd = Math.max(...calls.map((c) => Math.round((c.end.getTime() - FROM.getTime()) / DAY_MS)));
+    expect(lastEnd).toBe(182);
+    expect(lastEnd).toBeGreaterThanOrEqual(180);
+  });
+
+  it("full availability tiles the same 26 windows the single-tier loop produced", async () => {
+    const { client, windows } = makeTieringClient();
+
+    const full = await fetchTeacherFullAvailability(client, "inst-1", "u-1", 180);
+
+    const starts = sortedStartDays(windows);
+    expect(starts).toEqual(Array.from({ length: 26 }, (_, i) => i * 7));
+    // Exact tiling: each window begins where the previous ended — no gap, no
+    // duplicated span.
+    const sorted = [...windows].sort((a, b) => a.startDay - b.startDay);
+    for (let i = 1; i < sorted.length; i += 1) {
+      expect(sorted[i].startDay).toBe(sorted[i - 1].endDay);
+    }
+    expect(full.workingHours?.slots).toHaveLength(1);
+    expect(full.leaves).toHaveLength(26);
+  });
+
+  it("full availability equals near ++ far for the same horizon", async () => {
+    // Separate clients: each labels window days relative to its own first
+    // window, and fetchTeacherFullAvailability picks its own `from`.
+    const single = makeTieringClient();
+    const full = await fetchTeacherFullAvailability(single.client, "inst-1", "u-1", 180);
+
+    const tiered = makeTieringClient();
+    const near = await fetchTeacherNearAvailability(tiered.client, "inst-1", "u-1", 28, FROM);
+    const far = await fetchTeacherFarLeaves(tiered.client, "inst-1", "u-1", 28, 180, FROM);
+
+    expect(full.leaves?.map((l) => l._id)).toEqual(
+      [...near.leaves, ...far.leaves].map((l) => l._id),
+    );
+    expect(single.windows).toHaveLength(26);
+    expect(tiered.windows).toHaveLength(26);
+    expect(full.workingHours).toEqual(near.workingHours);
+  });
+
+  it("clamps the split point so a horizon below the near tier still tiles exactly", async () => {
+    const { client, windows } = makeTieringClient();
+
+    await fetchTeacherFullAvailability(client, "inst-1", "u-1", 14);
+
+    expect(sortedStartDays(windows)).toEqual([0, 7]);
+  });
+
+  it("rejects the whole teacher fetch when any far window fails (fail-closed, not allSettled)", async () => {
+    const { client } = makeTieringClient({ rejectAtStartDay: 63 });
+
+    await expect(
+      fetchTeacherFarLeaves(client, "inst-1", "u-1", 0, 180, FROM),
+    ).rejects.toThrow("429 RATE_LIMITED");
+  });
+
+  it("rejects the whole near fetch when any near window fails", async () => {
+    const { client } = makeTieringClient({ rejectAtStartDay: 14 });
+
+    await expect(
+      fetchTeacherNearAvailability(client, "inst-1", "u-1", 28, FROM),
+    ).rejects.toThrow("429 RATE_LIMITED");
+  });
+});
+
+describe("resolveFarHorizonMaxAgeMinutes", () => {
+  const original = process.env.WISE_FAR_HORIZON_MAX_AGE_MINUTES;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.WISE_FAR_HORIZON_MAX_AGE_MINUTES;
+    else process.env.WISE_FAR_HORIZON_MAX_AGE_MINUTES = original;
+  });
+
+  it("defaults to 360 minutes", () => {
+    delete process.env.WISE_FAR_HORIZON_MAX_AGE_MINUTES;
+    expect(resolveFarHorizonMaxAgeMinutes()).toBe(DEFAULT_FAR_HORIZON_MAX_AGE_MINUTES);
+    expect(DEFAULT_FAR_HORIZON_MAX_AGE_MINUTES).toBe(360);
+  });
+
+  it("honours 0 as always-live", () => {
+    process.env.WISE_FAR_HORIZON_MAX_AGE_MINUTES = "0";
+    expect(resolveFarHorizonMaxAgeMinutes()).toBe(0);
+  });
+
+  it("falls back to the default for junk and negative values", () => {
+    process.env.WISE_FAR_HORIZON_MAX_AGE_MINUTES = "not-a-number";
+    expect(resolveFarHorizonMaxAgeMinutes()).toBe(360);
+    process.env.WISE_FAR_HORIZON_MAX_AGE_MINUTES = "-5";
+    expect(resolveFarHorizonMaxAgeMinutes()).toBe(360);
+    process.env.WISE_FAR_HORIZON_MAX_AGE_MINUTES = "";
+    expect(resolveFarHorizonMaxAgeMinutes()).toBe(360);
   });
 });

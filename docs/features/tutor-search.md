@@ -4,6 +4,17 @@
 
 ## Purpose
 
+> **Data freshness, by tier (AVAIL-01, 2026-09-04).** Working hours, session
+> blocks and leaves within the next 28 days come from the snapshot promoted at
+> most 30 minutes ago. Leaves 28–182 days out are refreshed every 6 hours from a
+> fetch cache. Beyond the fetched horizon a tutor is reported **Needs Review**,
+> never Available — the engine decides leave conflicts with `Array.some()`, so an
+> unfetched leave is indistinguishable from no leave, and that ambiguity now
+> resolves conservatively. Recurring (dateless) searches are exempt, since they
+> imply no bounded date. See
+> [`reference/wise-api.md`](../reference/wise-api.md#nearfar-tiering-avail-01-2026-09-04).
+
+
 Tutor Search answers the question admin staff ask dozens of times a day: *which tutors are provably free for a class at this time, and are they qualified to teach it?* An admin picks a weekday (recurring) or a calendar date (one-time), a time window, a class duration, and optional modality / subject / curriculum / level / named-tutor filters. The system slices the window into fixed-length sub-slots and returns a grid — one row per tutor, one column per sub-slot — where each cell is either free or blocked, with the blocking Wise session (or admin proposal hold) available in a popover. Tutors whose underlying Wise data could not be resolved safely are listed separately under **Needs Review** rather than shown as available.
 
 It is the primary workspace of the app. `/search` is a nav shortcut in the Scheduling & Tutors section (`src/lib/navigation/tools.ts:102-109`), and the left half of the page feeds the Compare calendar on the right (see [Tutor Compare](./tutor-compare.md)). The form's dropdowns and tutor combobox are populated by two server loaders — `getFilterOptions()` and `getTutorList()` — awaited in the page Server Component and handed down as props (`src/app/(app)/search/page.tsx:11-12`; the combobox iterates the `tutorList` prop at `src/components/search/search-form.tsx:294`). The two thin GET endpoints that wrap the same loaders (`/api/filters`, `/api/tutors`) are not on the form's path at all.

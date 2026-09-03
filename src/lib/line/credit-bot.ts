@@ -372,6 +372,7 @@ export async function handleCreditCommand(
     url,
     truncatedCount: lookup.students.length - linkedKeys.length,
     generatedAt: lookup.snapshotGeneratedAt,
+    now: ctx.now(),
   }));
   return { handled: true, action: "credit_balance" };
 }

@@ -25,6 +25,7 @@ function makeTutorGroup(overrides: Partial<IndexedTutorGroup> = {}): IndexedTuto
       { weekday: 1, startMinute: 900, endMinute: 1020, modality: "online", wiseTeacherId: "wise-1" },
     ],
     leaves: [],
+    leavesCompleteThrough: null,
     sessionBlocks: [],
     dataIssues: [],
     ...overrides,

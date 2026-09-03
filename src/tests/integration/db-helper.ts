@@ -68,6 +68,7 @@ export async function truncateAll(db: TestDb): Promise<void> {
       tutor_identity_group_members,
       tutor_identity_groups,
       tutor_aliases,
+      wise_teacher_availability_cache,
       admin_users,
       sync_runs,
       snapshots,

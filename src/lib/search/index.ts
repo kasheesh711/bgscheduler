@@ -75,6 +75,11 @@ export interface IndexedTutorGroup {
   wiseRecords: IndexedWiseRecord[];
   availabilityWindows: IndexedAvailabilityWindow[];
   leaves: IndexedLeave[];
+  // AVAIL-01 leave-completeness watermark. Leaves are fetched in tiers, so the
+  // snapshot can be complete to different dates for different tutors. `leaves`
+  // being empty past this instant means "we never asked", NOT "no leave" — the
+  // engine must route such slots to Needs Review. Null = completeness unknown.
+  leavesCompleteThrough: Date | null;
   sessionBlocks: IndexedSessionBlock[];
   dataIssues: IndexedDataIssue[];
   businessProfile?: IndexedTutorBusinessProfile;
@@ -290,6 +295,11 @@ export async function buildIndex(db: Database): Promise<SearchIndex> {
         startTime: new Date(l.startTime),
         endTime: new Date(l.endTime),
       })),
+      // AVAIL-01: null on snapshots written before the column existed; the
+      // engine treats null as "not complete" and falls back to the near horizon.
+      leavesCompleteThrough: group.leavesCompleteThrough
+        ? new Date(group.leavesCompleteThrough)
+        : null,
       sessionBlocks: gSessions.map((s) => ({
         startTime: new Date(s.startTime),
         endTime: new Date(s.endTime),

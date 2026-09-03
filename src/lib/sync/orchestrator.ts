@@ -1,4 +1,5 @@
 import { eq, or, sql } from "drizzle-orm";
+import { addDays } from "date-fns";
 import { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { topWisePaths, WiseClient } from "@/lib/wise/client";
@@ -7,8 +8,23 @@ import {
   getWiseTagName,
   getWiseTeacherDisplayName,
   getWiseTeacherUserId,
+  type WiseLeave,
 } from "@/lib/wise/types";
-import { fetchAllTeachers, fetchTeacherFullAvailability, fetchAllFutureSessions } from "@/lib/wise/fetchers";
+import {
+  fetchAllTeachers,
+  fetchAllFutureSessions,
+  fetchTeacherFarLeaves,
+  fetchTeacherNearAvailability,
+  NEAR_HORIZON_DAYS,
+  resolveAvailabilityHorizonDays,
+  resolveFarHorizonMaxAgeMinutes,
+} from "@/lib/wise/fetchers";
+import {
+  isFarCacheFresh,
+  loadFarLeaveCache,
+  saveFarLeaveCache,
+  type FarLeaveCacheUpsert,
+} from "@/lib/wise/availability-cache";
 import { resolveIdentities, AliasMapping } from "@/lib/normalization/identity";
 import { normalizeWorkingHours } from "@/lib/normalization/availability";
 import { normalizeLeaves } from "@/lib/normalization/leaves";
@@ -152,6 +168,45 @@ export async function runFullSync(
     const rawTagRows: typeof schema.rawTeacherTags.$inferInsert[] = [];
     const qualificationRows: typeof schema.subjectLevelQualifications.$inferInsert[] = [];
 
+    // ── AVAIL-01 near/far leave tiering ──
+    // The near tier (days 0..28) is fetched live for every teacher, every run.
+    // The far tier (days 28..horizon) is 22 of the 26 Wise calls per teacher and
+    // is reused from `wise_teacher_availability_cache` while fresh. A miss, a
+    // stale row, or a cache read error always falls through to a live fetch —
+    // never to an empty leave set (see availability-cache.ts for why).
+    const nearHorizonDays = NEAR_HORIZON_DAYS;
+    const farHorizonDays = resolveAvailabilityHorizonDays();
+    const farCacheShape = { farHorizonDays, farWindowStartDay: nearHorizonDays };
+    const farMaxAgeMinutes = resolveFarHorizonMaxAgeMinutes();
+    // One instant for the whole loop: watermarks stay comparable across teachers,
+    // and anchoring on run start rather than per-teacher time is the conservative
+    // (earlier watermark) direction.
+    const leaveFetchNow = new Date(startTime);
+
+    const farLeaveCache = await loadFarLeaveCache(
+      db,
+      wiseTeachers
+        .map((teacher) => getWiseTeacherUserId(teacher))
+        .filter((userId): userId is string => Boolean(userId)),
+    );
+    const farCacheUpserts: FarLeaveCacheUpsert[] = [];
+    let farTierFetched = 0;
+    let farTierCacheHits = 0;
+
+    // AVAIL-01 leave-completeness watermark, per identity group. A group is only
+    // as complete as its LEAST-complete Wise teacher row: without the min, one
+    // identity variant failing its fetch while the other succeeds leaves the
+    // group searchable with a partial leave set — fail-open. A member we could
+    // not fetch at all contributes `leaveFetchNow`, i.e. "nothing in the future
+    // is proven", which routes the whole group to Needs Review.
+    const groupLeavesCompleteThrough = new Map<string, Date>();
+    function recordLeaveCompleteness(groupId: string, completeThrough: Date) {
+      const existing = groupLeavesCompleteThrough.get(groupId);
+      if (!existing || completeThrough.getTime() < existing.getTime()) {
+        groupLeavesCompleteThrough.set(groupId, completeThrough);
+      }
+    }
+
     // Process teachers with availability
     for (const teacher of wiseTeachers) {
       const groupId = teacherToGroupId.get(teacher._id);
@@ -160,6 +215,9 @@ export async function runFullSync(
       const teacherUserId = getWiseTeacherUserId(teacher);
 
       if (!teacherUserId) {
+        // AVAIL-01: no user id means no leaves were fetched for this member at
+        // all, so the group's watermark collapses to "now".
+        recordLeaveCompleteness(groupId, leaveFetchNow);
         allIssues.push({
           snapshotId,
           type: "completeness",
@@ -173,11 +231,61 @@ export async function runFullSync(
       }
 
       try {
-        const { workingHours, leaves } = await fetchTeacherFullAvailability(
+        const near = await fetchTeacherNearAvailability(
           client,
           instituteId,
-          teacherUserId
+          teacherUserId,
+          nearHorizonDays,
+          leaveFetchNow,
         );
+        const workingHours = near.workingHours;
+
+        // Far tier: reuse the cached leaves when fresh, else fetch live and
+        // queue the row for the single batched upsert after this loop.
+        const cachedFar = farLeaveCache.get(teacherUserId);
+        let farLeaves: WiseLeave[];
+        let farFetchedAt: Date;
+
+        if (isFarCacheFresh(cachedFar, leaveFetchNow, farMaxAgeMinutes, farCacheShape)) {
+          farLeaves = cachedFar!.farLeaves;
+          farFetchedAt = cachedFar!.fetchedAt;
+          farTierCacheHits += 1;
+        } else {
+          const far = await fetchTeacherFarLeaves(
+            client,
+            instituteId,
+            teacherUserId,
+            nearHorizonDays,
+            farHorizonDays,
+            leaveFetchNow,
+          );
+          farLeaves = far.leaves;
+          farFetchedAt = leaveFetchNow;
+          farTierFetched += 1;
+          farCacheUpserts.push({
+            teacherUserId,
+            farLeaves,
+            farHorizonDays,
+            farWindowStartDay: nearHorizonDays,
+            fetchedAt: leaveFetchNow,
+            fetchError: null,
+          });
+        }
+
+        // Both tiers landed. The far tier is anchored on the instant it was
+        // actually OBSERVED (which for a cache hit is older than this run), so a
+        // long WISE_FAR_HORIZON_MAX_AGE_MINUTES can never over-claim coverage.
+        const nearCompleteThrough = addDays(leaveFetchNow, nearHorizonDays);
+        const farCompleteThrough = addDays(farFetchedAt, farHorizonDays);
+        recordLeaveCompleteness(
+          groupId,
+          farCompleteThrough > nearCompleteThrough ? farCompleteThrough : nearCompleteThrough,
+        );
+
+        // normalizeLeaves de-duplicates and merges touching intervals, so the
+        // leave straddling the day-28 window boundary appearing in both tiers is
+        // harmless.
+        const leaves = [...near.leaves, ...farLeaves];
 
         // Normalize and store working hours
         const windows = normalizeWorkingHours(workingHours?.slots);
@@ -247,6 +355,11 @@ export async function runFullSync(
           }))
         );
       } catch (err) {
+        // AVAIL-01: this member contributed no leaves, but a sibling identity
+        // variant may still have supplied availability windows that keep the
+        // group searchable. Collapse the group's watermark to "now" so those
+        // slots route to Needs Review instead of Available.
+        recordLeaveCompleteness(groupId, leaveFetchNow);
         allIssues.push({
           snapshotId,
           type: "completeness",
@@ -258,6 +371,11 @@ export async function runFullSync(
         });
       }
     }
+
+    // AVAIL-01: one batched upsert for every far tier fetched live this run.
+    // saveFarLeaveCache swallows write failures — the sync has already produced
+    // correct data, and a cache write must never fail a healthy run.
+    await saveFarLeaveCache(db, farCacheUpserts);
 
     // 8. Fetch and normalize future sessions
     const wiseSessions = await fetchAllFutureSessions(client, instituteId);
@@ -325,7 +443,13 @@ export async function runFullSync(
 
       await db
         .update(schema.tutorIdentityGroups)
-        .set({ supportedModality: modality })
+        .set({
+          supportedModality: modality,
+          // AVAIL-01: min across the group's members, set in the same UPDATE that
+          // already writes supportedModality. Null (no member recorded one) means
+          // "completeness unknown" and the engine treats it as fail-closed.
+          leavesCompleteThrough: groupLeavesCompleteThrough.get(gId) ?? null,
+        })
         .where(eq(schema.tutorIdentityGroups.id, gId));
 
       // Record per-teacher modality so windows can be inserted once with final values.
@@ -510,6 +634,13 @@ export async function runFullSync(
       durationMs: Date.now() - startTime,
       wiseCallCount: wiseStats.requests,
       wiseTopPaths: topWisePaths(wiseStats),
+      // AVAIL-01: the cache hit ratio is how you tell whether the tiering is
+      // actually saving calls. farTierFetched * (farHorizonDays - nearHorizonDays)/7
+      // is the Wise-call cost the cache did NOT avoid this run.
+      farTierFetched,
+      farTierCacheHits,
+      nearHorizonDays,
+      farHorizonDays,
     };
 
     // Update sync run

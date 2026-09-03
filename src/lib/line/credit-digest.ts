@@ -360,6 +360,7 @@ export async function sendLineCreditDigest(
     dashboardUrl: `${baseUrl}/credit-control`,
     generatedAt: snapshot.generatedAt,
     adminOwnership,
+    now,
   });
 
   const push = overrides.push ?? pushLineTextMessage;

@@ -211,11 +211,30 @@ export function topWisePaths(stats: WiseClientStats, limit = 10): Record<string,
   );
 }
 
+export const DEFAULT_WISE_MAX_CONCURRENCY = 15;
+
+/**
+ * AVAIL-00: in-flight cap, operator-tunable via WISE_MAX_CONCURRENCY.
+ *
+ * The limiter is per WiseClient instance, so it caps one job, not the institute.
+ * When Wise returns 429 RATE_LIMITED, lowering this converts failing runs into
+ * slower successful ones — the opposite of the usual instinct. Raising it past
+ * the default is rarely right: several Wise-facing crons overlap, so the real
+ * institute-wide ceiling is already a multiple of this number.
+ */
+export function resolveWiseMaxConcurrency(): number {
+  const raw = process.env.WISE_MAX_CONCURRENCY;
+  if (!raw) return DEFAULT_WISE_MAX_CONCURRENCY;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_WISE_MAX_CONCURRENCY;
+  return parsed;
+}
+
 export function createWiseClient(): WiseClient {
   return new WiseClient({
     userId: process.env.WISE_USER_ID!,
     apiKey: process.env.WISE_API_KEY!,
     namespace: process.env.WISE_NAMESPACE ?? "begifted-education",
-    maxConcurrency: 15,
+    maxConcurrency: resolveWiseMaxConcurrency(),
   });
 }

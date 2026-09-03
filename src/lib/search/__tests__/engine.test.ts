@@ -19,6 +19,7 @@ function makeTutor(overrides: Partial<IndexedTutorGroup> = {}): IndexedTutorGrou
       { weekday: 1, startMinute: 540, endMinute: 1020, modality: "both", wiseTeacherId: "t1" },
     ],
     leaves: [],
+    leavesCompleteThrough: null,
     sessionBlocks: [],
     dataIssues: [],
     ...overrides,
@@ -376,5 +377,107 @@ describe("executeSearch — REL-04 leave overlap (recurring mode)", () => {
       ],
     };
     expect(executeSearch(index, cReq).perSlotResults[0].available).toHaveLength(1);
+  });
+});
+
+// ── AVAIL-01 leave-completeness watermark ────────────────────────────────
+
+describe("executeSearch — leave completeness (AVAIL-01)", () => {
+  const NOW = new Date("2026-09-02T03:00:00.000Z"); // Wed 2026-09-02 10:00 Bangkok
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function oneTimeRequest(date: string): SearchRequest {
+    return {
+      searchMode: "one_time",
+      slots: [{ id: "s1", date, start: "09:00", end: "10:00", mode: "either" }],
+    };
+  }
+
+  function search(tutor: IndexedTutorGroup, req: SearchRequest) {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    return executeSearch(makeIndex([tutor]), req);
+  }
+
+  const LEAVE_REASON = "Leave data not fetched for this date";
+
+  it("keeps a slot inside the watermark Available, exactly as before", () => {
+    const tutor = makeTutor({ leavesCompleteThrough: new Date("2026-09-30T03:00:00.000Z") });
+    const result = search(tutor, oneTimeRequest("2026-09-07"));
+
+    expect(result.perSlotResults[0].available).toHaveLength(1);
+    expect(result.perSlotResults[0].needsReview).toHaveLength(0);
+  });
+
+  it("routes a slot past the watermark to Needs Review, not Available", () => {
+    const tutor = makeTutor({ leavesCompleteThrough: new Date("2026-09-30T03:00:00.000Z") });
+    const result = search(tutor, oneTimeRequest("2026-12-07"));
+
+    expect(result.perSlotResults[0].available).toHaveLength(0);
+    expect(result.perSlotResults[0].needsReview).toHaveLength(1);
+    expect(result.perSlotResults[0].needsReview[0].reasons).toContain(LEAVE_REASON);
+  });
+
+  it("does not report a tutor with a null watermark Available beyond the near horizon", () => {
+    const tutor = makeTutor({ leavesCompleteThrough: null });
+    const result = search(tutor, oneTimeRequest("2026-11-02")); // 61 days out
+
+    expect(result.perSlotResults[0].available).toHaveLength(0);
+    expect(result.perSlotResults[0].needsReview[0].reasons).toContain(LEAVE_REASON);
+  });
+
+  it("does not push every tutor into Needs Review on a pre-migration snapshot", () => {
+    // Null watermark falls back to the 28-day near horizon, so ordinary
+    // near-term searches against a snapshot written before the column existed
+    // behave exactly as they did.
+    const tutor = makeTutor({ leavesCompleteThrough: null });
+    const result = search(tutor, oneTimeRequest("2026-09-07")); // 5 days out
+
+    expect(result.perSlotResults[0].available).toHaveLength(1);
+    expect(result.perSlotResults[0].needsReview).toHaveLength(0);
+  });
+
+  it("still excludes a tutor with a KNOWN leave past the watermark", () => {
+    const tutor = makeTutor({
+      leavesCompleteThrough: new Date("2026-09-30T03:00:00.000Z"),
+      leaves: [
+        {
+          startTime: new Date("2026-12-07T00:00:00"),
+          endTime: new Date("2026-12-08T00:00:00"),
+        },
+      ],
+    });
+    const result = search(tutor, oneTimeRequest("2026-12-07"));
+
+    expect(result.perSlotResults[0].available).toHaveLength(0);
+    expect(result.perSlotResults[0].needsReview).toHaveLength(0);
+  });
+
+  it("leaves recurring searches unchanged — a recurring slot has no bounded date", () => {
+    const tutor = makeTutor({ leavesCompleteThrough: new Date("2020-01-01T00:00:00.000Z") });
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const result = executeSearch(makeIndex([tutor]), {
+      searchMode: "recurring",
+      slots: [{ id: "s1", dayOfWeek: 1, start: "09:00", end: "10:00", mode: "either" }],
+    });
+
+    expect(result.perSlotResults[0].available).toHaveLength(1);
+    expect(result.perSlotResults[0].needsReview).toHaveLength(0);
+  });
+
+  it("keeps the watermark reason alongside other review reasons", () => {
+    const tutor = makeTutor({
+      leavesCompleteThrough: new Date("2026-09-30T03:00:00.000Z"),
+      dataIssues: [{ type: "tag", message: "Unmapped tag" }],
+    });
+    const result = search(tutor, oneTimeRequest("2026-12-07"));
+
+    const reasons = result.perSlotResults[0].needsReview[0].reasons;
+    expect(reasons).toContain(LEAVE_REASON);
+    expect(reasons.some((r) => r.includes("Unmapped tag"))).toBe(true);
   });
 });

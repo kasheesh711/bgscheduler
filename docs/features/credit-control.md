@@ -4,6 +4,22 @@
 
 ## Purpose
 
+> **Balance freshness (CRED-01, 2026-09-04).** The sync no longer refetches every
+> (class, student) pair from Wise on every run. A pair is always refetched when it
+> is new, when its balance sits at or near the alert band, when one of its
+> sessions has ended since the last observation, or when the last observation is
+> older than `CREDIT_REFRESH_MAX_AGE_MINUTES` (default 180). Everything else is
+> carried forward with its original `credits_observed_at`.
+>
+> The safety argument: credits fall only through attendance, which forces a
+> refetch, so a carried balance can only *under*-state — and under-stating keeps a
+> student in the follow-up queue rather than dropping them out of it. The
+> unguarded case is a top-up or a manual adjustment made inside Wise, which has no
+> signal at all; that is bounded by the max-age. Because low-balance pairs are
+> never reused, every balance the dashboard ranks or the LINE `/credit` bot quotes
+> is still at most 30 minutes old.
+
+
 Credit Control keeps a student's prepaid class credits from running out unnoticed. Twice an hour a sync pulls every student the institute returns, their per-class credit packages, their past sessions and their future bookings out of Wise into a fresh Postgres snapshot. The read path then walks each package's balance forward session by session to find the day it drops below the two-credit alert threshold and the day it hits zero, ranks the at-risk students into a prioritized worklist, and lets an admin record the outreach they did.
 
 The users are the BeGifted admin/sales staff who own renewals — the six named owners in `ADMIN_OWNER_REGISTRY` (`src/lib/credit-control/config.ts:28-35`). Each student can be assigned to one owning admin, so a staff member can scope the dashboard to "my students", see who needs a call today, copy a ready-made Thai LINE message for the parent (`ui-helpers.ts:463-507`), and mark the student `contacted` / `pending-callback` / `resolved`. The feature is **read-only toward Wise**: every Wise call in `src/lib/credit-control/wise.ts` is a `client.get(...)` (`wise.ts:152`, `:176`, `:237`, `:269`, `:281`); nothing is written back.

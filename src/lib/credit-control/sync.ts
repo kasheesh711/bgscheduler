@@ -1,5 +1,5 @@
 import { revalidateTag } from "next/cache";
-import { eq, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { topWisePaths, type WiseClient } from "@/lib/wise/client";
@@ -12,6 +12,11 @@ import {
 } from "@/lib/credit-control/config";
 import { aggregateStudentRemaining, computeChurnTransitions } from "@/lib/credit-control/churn";
 import { buildDashboardStudentKey, buildStudentPackageKey, normalizeText } from "@/lib/credit-control/helpers";
+import {
+  decidePairRefresh,
+  getCreditRefreshMaxAgeMinutes,
+  type PriorPairCredits,
+} from "@/lib/credit-control/refresh-policy";
 import {
   creditSessionTeacher,
   durationMsToMinutes,
@@ -36,9 +41,48 @@ interface PairRecord {
   classType?: string;
 }
 
+/**
+ * One `sessionCreditHistory` movement, normalized so a freshly fetched Wise
+ * entry and a row carried forward from the previous snapshot are the same
+ * shape downstream (CRED-01).
+ */
+interface PairHistoryEntry {
+  wiseCreditHistoryId: string;
+  credit: number;
+  type: string | null;
+  meetingStatus: string | null;
+  durationMinutes: number;
+  createdAtWise: Date | null;
+  raw: Record<string, unknown>;
+}
+
 interface PairCreditRecord extends PairRecord {
   credits: WiseSessionCredits["credits"];
-  history: WiseSessionCredits["sessionCreditHistory"];
+  history: PairHistoryEntry[];
+  /** When the balance was OBSERVED, not when the row was written. */
+  creditsObservedAt: Date;
+}
+
+/** The previous snapshot's row for one pair, plus its carry-forward payload. */
+interface PriorPairRow extends PriorPairCredits {
+  credits: WiseSessionCredits["credits"];
+}
+
+interface PriorSnapshotCredits {
+  snapshotId: string;
+  byPair: Map<string, PriorPairRow>;
+}
+
+interface CarriedPair {
+  pair: PairRecord;
+  prior: PriorPairRow;
+  /** "reuse" = quiet pair aged forward; "skip" = excluded, never read. */
+  action: "reuse" | "skip";
+}
+
+interface PairRefreshPlan {
+  refetch: PairRecord[];
+  carried: CarriedPair[];
 }
 
 interface SessionCreditRows {
@@ -65,6 +109,8 @@ export const FUTURE_WINDOW_DAYS = 180;
  *  the pair fan-out saturates the client instead of throttling below it. */
 const CREDIT_PAIR_CONCURRENCY = 15;
 const FEEDBACK_CONCURRENCY = 6;
+/** Pair keys per carried-history SELECT, so the IN list stays a sane statement size. */
+const CARRIED_HISTORY_KEY_CHUNK_SIZE = 400;
 /** credit_control_sessions has 22 columns, so 500 rows is ~11k bind
  *  parameters per statement — well under the Postgres 65,535 ceiling. */
 export const CREDIT_CONTROL_INSERT_CHUNK_SIZE = 500;
@@ -244,6 +290,11 @@ function parentNameFor(student: WiseCreditStudent): string {
   return student.parents.find((parent) => parent.name)?.name?.trim() ?? "";
 }
 
+/** Identity of a (class, student) pair everywhere in this module. */
+function pairKey(wiseClassId: string, wiseStudentId: string): string {
+  return `${wiseClassId}|${wiseStudentId}`;
+}
+
 function packageExclusionReason(packageName: string, subject: string): string | null {
   const haystack = `${normalizeText(packageName)} ${normalizeText(subject)}`;
   return EXCLUDED_PACKAGE_KEYWORDS.find((keyword) => haystack.includes(keyword)) ?? null;
@@ -268,7 +319,7 @@ function collectPairs(
 
   function addPair(student: WiseCreditStudent, wiseClassId: string, packageName: string, subject: string, classType?: string) {
     const parentName = parentNameFor(student);
-    const key = `${wiseClassId}|${student._id}`;
+    const key = pairKey(wiseClassId, student._id);
     const existing = pairs.get(key);
     pairs.set(key, {
       wiseStudentId: student._id,
@@ -301,6 +352,14 @@ function collectPairs(
     for (const studentId of session.students) {
       const student = studentsById.get(studentId);
       if (!student) continue;
+      // NOTE: deliberately NOT gated on `student.activated`, unlike the roster
+      // branch above. Measured 2026-09-04: 770 of 1,271 students in the active
+      // snapshot are de-activated, and 120 of them still have future sessions
+      // (3,529 rows). Those rows are the ONLY source for the parent monthly
+      // schedule (student-schedule/data.ts builds the calendar from
+      // credit_control_sessions), so gating here blanks a real parent-facing
+      // page to save a few hundred Wise calls. The pair still costs one
+      // sessionCredits GET; the dirty-pair policy is what narrows that.
       addPair(student, classroom.id, classroom.name, classroom.subject, classroom.classType);
     }
   }
@@ -350,20 +409,39 @@ function buildPackageRows(
       availableCredits: pair.credits.available,
       bookedSessions: pair.credits.bookedSessions,
       excludedReason: packageExclusionReason(pair.packageName, pair.subject),
+      creditsObservedAt: pair.creditsObservedAt,
     };
   });
+}
+
+function toHistoryEntries(history: WiseSessionCredits["sessionCreditHistory"]): PairHistoryEntry[] {
+  return history.map((entry) => ({
+    wiseCreditHistoryId: entry._id,
+    credit: Number(entry.credit) || 0,
+    type: entry.type ?? null,
+    meetingStatus: entry.meetingStatus ?? null,
+    durationMinutes: durationMsToMinutes(entry.duration),
+    createdAtWise: entry.createdAt ?? null,
+    raw: JSON.parse(JSON.stringify(entry)) as Record<string, unknown>,
+  }));
 }
 
 async function fetchPairCredits(
   client: WiseClient,
   instituteId: string,
   pairs: PairRecord[],
+  observedAt: Date,
 ): Promise<{ records: PairCreditRecord[]; failed: number }> {
   let failed = 0;
   const results = await mapLimit(pairs, CREDIT_PAIR_CONCURRENCY, async (pair) => {
     try {
       const credits = await fetchSessionCredits(client, instituteId, pair.wiseClassId, pair.wiseStudentId);
-      return { ...pair, credits: credits.credits, history: credits.sessionCreditHistory } satisfies PairCreditRecord;
+      return {
+        ...pair,
+        credits: credits.credits,
+        history: toHistoryEntries(credits.sessionCreditHistory),
+        creditsObservedAt: observedAt,
+      } satisfies PairCreditRecord;
     } catch {
       failed += 1;
       return null;
@@ -375,6 +453,202 @@ async function fetchPairCredits(
   };
 }
 
+/** The instant a PAST-feed session finished, however Wise described it. */
+function sessionEndInstant(session: WiseCreditSession): Date {
+  if (session.scheduledEndTime) return session.scheduledEndTime;
+  const durationMs = Number(session.duration);
+  if (Number.isFinite(durationMs) && durationMs > 0) {
+    return new Date(session.scheduledStartTime.getTime() + durationMs);
+  }
+  return session.scheduledStartTime;
+}
+
+/**
+ * Latest end instant per pair across the PAST feed already fetched this run.
+ * Attendance is the only way credits fall, so this is the free change signal
+ * that lets a quiet pair be carried forward (CRED-01). Deliberately ignores
+ * `meetingStatus`: a cancellation can also move credits, so any past session
+ * counts.
+ */
+function buildLastSessionEndMap(pastSessions: WiseCreditSession[]): Map<string, Date> {
+  const lastEndByPair = new Map<string, Date>();
+  for (const session of pastSessions) {
+    const endedAt = sessionEndInstant(session);
+    for (const studentId of session.students) {
+      const key = pairKey(session.classId._id, studentId);
+      const current = lastEndByPair.get(key);
+      if (!current || endedAt.getTime() > current.getTime()) {
+        lastEndByPair.set(key, endedAt);
+      }
+    }
+  }
+  return lastEndByPair;
+}
+
+/**
+ * Reads the active (i.e. previous) snapshot's per-pair balances plus the
+ * pending deductions the dashboard would subtract from them, so the reuse
+ * decision runs on the same adjusted figure a human sees. Returns null on any
+ * failure — the caller then refetches every pair rather than carrying nothing
+ * forward, because a package row with zeroed credits reads as a drained
+ * balance and triggers false follow-up.
+ */
+async function loadPriorSnapshotCredits(db: Database): Promise<PriorSnapshotCredits | null> {
+  try {
+    const [snapshot] = await db
+      .select({ id: schema.creditControlSnapshots.id })
+      .from(schema.creditControlSnapshots)
+      .where(eq(schema.creditControlSnapshots.active, true))
+      .orderBy(desc(schema.creditControlSnapshots.generatedAt))
+      .limit(1);
+    if (!snapshot) return null;
+
+    const [packages, pendingSessions] = await Promise.all([
+      db
+        .select({
+          wiseClassId: schema.creditControlPackages.wiseClassId,
+          wiseStudentId: schema.creditControlPackages.wiseStudentId,
+          totalCredits: schema.creditControlPackages.totalCredits,
+          consumedCredits: schema.creditControlPackages.consumedCredits,
+          remainingCredits: schema.creditControlPackages.remainingCredits,
+          availableCredits: schema.creditControlPackages.availableCredits,
+          bookedSessions: schema.creditControlPackages.bookedSessions,
+          excludedReason: schema.creditControlPackages.excludedReason,
+          creditsObservedAt: schema.creditControlPackages.creditsObservedAt,
+        })
+        .from(schema.creditControlPackages)
+        .where(eq(schema.creditControlPackages.snapshotId, snapshot.id)),
+      // Mirrors shouldCountAsPendingDeduction (packages.ts:212): an ENDED past
+      // session with no applied credit and blank teacher feedback.
+      db
+        .select({
+          wiseClassId: schema.creditControlSessions.wiseClassId,
+          wiseStudentId: schema.creditControlSessions.wiseStudentId,
+          durationMinutes: schema.creditControlSessions.durationMinutes,
+        })
+        .from(schema.creditControlSessions)
+        .where(and(
+          eq(schema.creditControlSessions.snapshotId, snapshot.id),
+          eq(schema.creditControlSessions.sessionKind, "past"),
+          eq(schema.creditControlSessions.meetingStatus, "ENDED"),
+          eq(schema.creditControlSessions.creditApplied, 0),
+          sql`coalesce(btrim(${schema.creditControlSessions.teacherFeedback}), '') in ('', '0')`,
+        )),
+    ]);
+
+    const pendingMinutesByPair = new Map<string, number>();
+    for (const row of pendingSessions) {
+      const key = pairKey(row.wiseClassId, row.wiseStudentId);
+      pendingMinutesByPair.set(key, (pendingMinutesByPair.get(key) ?? 0) + (row.durationMinutes ?? 0));
+    }
+
+    const byPair = new Map<string, PriorPairRow>();
+    for (const row of packages) {
+      const key = pairKey(row.wiseClassId, row.wiseStudentId);
+      byPair.set(key, {
+        remainingCredits: row.remainingCredits ?? 0,
+        pendingDeductionCredits: (pendingMinutesByPair.get(key) ?? 0) / 60,
+        excludedReason: row.excludedReason,
+        creditsObservedAt: row.creditsObservedAt,
+        credits: {
+          total: row.totalCredits ?? 0,
+          consumed: row.consumedCredits ?? 0,
+          remaining: row.remainingCredits ?? 0,
+          available: row.availableCredits ?? 0,
+          bookedSessions: row.bookedSessions ?? 0,
+        },
+      });
+    }
+
+    return { snapshotId: snapshot.id, byPair };
+  } catch (error) {
+    console.error("[credit-control] prior snapshot read failed; refetching every pair", error);
+    return null;
+  }
+}
+
+/** Splits this run's pairs into the ones Wise must be asked about and the ones carried forward. */
+function planPairRefresh(options: {
+  pairs: PairRecord[];
+  prior: PriorSnapshotCredits | null;
+  lastSessionEnds: Map<string, Date>;
+  now: Date;
+  maxAgeMinutes: number;
+}): PairRefreshPlan {
+  const plan: PairRefreshPlan = { refetch: [], carried: [] };
+  for (const pair of options.pairs) {
+    const key = pairKey(pair.wiseClassId, pair.wiseStudentId);
+    const prior = options.prior?.byPair.get(key) ?? null;
+    const decision = decidePairRefresh({
+      prior,
+      currentlyExcluded: packageExclusionReason(pair.packageName, pair.subject) !== null,
+      lastSessionEndAt: options.lastSessionEnds.get(key) ?? null,
+      now: options.now,
+      maxAgeMinutes: options.maxAgeMinutes,
+    });
+
+    if (decision.action === "refetch" || !prior) {
+      plan.refetch.push(pair);
+      continue;
+    }
+    plan.carried.push({ pair, prior, action: decision.action });
+  }
+  return plan;
+}
+
+/**
+ * Loads the previous snapshot's credit-history rows for the carried pairs so
+ * they can be re-inserted under the new snapshot id. History is never
+ * fabricated: `creditApplied` on past sessions is derived from it, so a
+ * missing row would turn an already-charged session back into a pending
+ * deduction and understate the balance.
+ */
+async function loadCarriedHistory(
+  db: Database,
+  priorSnapshotId: string,
+  keys: string[],
+): Promise<Map<string, PairHistoryEntry[]>> {
+  const historyByPair = new Map<string, PairHistoryEntry[]>();
+  for (const part of chunk(keys, CARRIED_HISTORY_KEY_CHUNK_SIZE)) {
+    const rows = await db
+      .select({
+        wiseCreditHistoryId: schema.creditControlCreditHistory.wiseCreditHistoryId,
+        wiseClassId: schema.creditControlCreditHistory.wiseClassId,
+        wiseStudentId: schema.creditControlCreditHistory.wiseStudentId,
+        credit: schema.creditControlCreditHistory.credit,
+        type: schema.creditControlCreditHistory.type,
+        meetingStatus: schema.creditControlCreditHistory.meetingStatus,
+        durationMinutes: schema.creditControlCreditHistory.durationMinutes,
+        createdAtWise: schema.creditControlCreditHistory.createdAtWise,
+        raw: schema.creditControlCreditHistory.raw,
+      })
+      .from(schema.creditControlCreditHistory)
+      .where(and(
+        eq(schema.creditControlCreditHistory.snapshotId, priorSnapshotId),
+        inArray(
+          sql`${schema.creditControlCreditHistory.wiseClassId} || '|' || ${schema.creditControlCreditHistory.wiseStudentId}`,
+          part,
+        ),
+      ));
+
+    for (const row of rows) {
+      const key = pairKey(row.wiseClassId, row.wiseStudentId);
+      const entries = historyByPair.get(key) ?? [];
+      entries.push({
+        wiseCreditHistoryId: row.wiseCreditHistoryId,
+        credit: row.credit ?? 0,
+        type: row.type,
+        meetingStatus: row.meetingStatus,
+        durationMinutes: row.durationMinutes ?? 0,
+        createdAtWise: row.createdAtWise,
+        raw: row.raw ?? {},
+      });
+      historyByPair.set(key, entries);
+    }
+  }
+  return historyByPair;
+}
+
 async function buildSessionRows(
   client: WiseClient,
   snapshotId: string,
@@ -382,29 +656,33 @@ async function buildSessionRows(
   pastSessions: WiseCreditSession[],
   futureSessions: WiseCreditSession[],
 ): Promise<SessionCreditRows> {
-  const pairsByKey = new Map(creditPairs.map((pair) => [`${pair.wiseClassId}|${pair.wiseStudentId}`, pair]));
+  const pairsByKey = new Map(creditPairs.map((pair) => [pairKey(pair.wiseClassId, pair.wiseStudentId), pair]));
   const positiveCreditByPairSession = new Map<string, number>();
   const histories: Array<typeof schema.creditControlCreditHistory.$inferInsert> = [];
 
   for (const pair of creditPairs) {
+    // Recomputed from THIS run's names, so a carried-forward history row keys
+    // to the same package as the pair's fresh session rows.
     const packageKey = buildStudentPackageKey(pair.studentName, pair.packageName);
     for (const history of pair.history) {
-      const credit = Number(history.credit) || 0;
-      if (credit > 0) {
-        positiveCreditByPairSession.set(`${pair.wiseClassId}|${pair.wiseStudentId}|${history._id}`, credit);
+      if (history.credit > 0) {
+        positiveCreditByPairSession.set(
+          `${pairKey(pair.wiseClassId, pair.wiseStudentId)}|${history.wiseCreditHistoryId}`,
+          history.credit,
+        );
       }
       histories.push({
         snapshotId,
-        wiseCreditHistoryId: history._id,
+        wiseCreditHistoryId: history.wiseCreditHistoryId,
         wiseStudentId: pair.wiseStudentId,
         wiseClassId: pair.wiseClassId,
         packageKey,
-        credit,
+        credit: history.credit,
         type: history.type,
         meetingStatus: history.meetingStatus,
-        durationMinutes: durationMsToMinutes(history.duration),
-        createdAtWise: history.createdAt,
-        raw: JSON.parse(JSON.stringify(history)) as Record<string, unknown>,
+        durationMinutes: history.durationMinutes,
+        createdAtWise: history.createdAtWise,
+        raw: history.raw,
       });
     }
   }
@@ -663,7 +941,52 @@ export async function runCreditControlSync(
     ]);
 
     const pairs = collectPairs(students, pastSessions, futureSessions);
-    const { records: creditPairs, failed: failedCreditPairs } = await fetchPairCredits(client, instituteId, pairs);
+
+    // CRED-01: ask Wise only about the pairs whose balance could matter this
+    // run; carry the quiet ones forward from the previous snapshot.
+    const prior = await loadPriorSnapshotCredits(db);
+    const plan = planPairRefresh({
+      pairs,
+      prior,
+      lastSessionEnds: buildLastSessionEndMap(pastSessions),
+      now,
+      maxAgeMinutes: getCreditRefreshMaxAgeMinutes(),
+    });
+
+    let refetchPairs = plan.refetch;
+    let carriedPairs = plan.carried;
+    let carriedRecords: PairCreditRecord[] = [];
+    if (carriedPairs.length > 0 && prior) {
+      try {
+        const historyByPair = await loadCarriedHistory(
+          db,
+          prior.snapshotId,
+          carriedPairs.map(({ pair }) => pairKey(pair.wiseClassId, pair.wiseStudentId)),
+        );
+        carriedRecords = carriedPairs.map(({ pair, prior: priorRow }) => ({
+          ...pair,
+          credits: priorRow.credits,
+          history: historyByPair.get(pairKey(pair.wiseClassId, pair.wiseStudentId)) ?? [],
+          creditsObservedAt: priorRow.creditsObservedAt,
+        }));
+      } catch (historyError) {
+        console.error("[credit-control] carried history read failed; refetching those pairs", historyError);
+        refetchPairs = [...refetchPairs, ...carriedPairs.map(({ pair }) => pair)];
+        carriedPairs = [];
+        carriedRecords = [];
+      }
+    }
+
+    const pairsReused = carriedPairs.filter(({ action }) => action === "reuse").length;
+    const pairsSkippedExcluded = carriedPairs.filter(({ action }) => action === "skip").length;
+
+    const { records: fetchedPairs, failed: failedCreditPairs } = await fetchPairCredits(
+      client,
+      instituteId,
+      refetchPairs,
+      now,
+    );
+    const creditPairs = [...fetchedPairs, ...carriedRecords];
 
     const [snapshot] = await db
       .insert(schema.creditControlSnapshots)
@@ -745,6 +1068,12 @@ export async function runCreditControlSync(
           // API cost of a sync is measurable instead of inferred.
           wiseCallCount: wiseStats.requests,
           wiseTopPaths: topWisePaths(wiseStats),
+          // CRED-01: the sessionCredits fan-out, split into what it cost and
+          // what it saved, so the reuse rule is measurable next to the call
+          // count it is meant to cut.
+          pairsRefetched: refetchPairs.length,
+          pairsReused,
+          pairsSkippedExcluded,
         },
       })
       .where(sql`${schema.creditControlSyncRuns.id} = ${run.id}`);

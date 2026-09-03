@@ -57,51 +57,215 @@ export async function fetchTeacherAvailability(
 }
 
 /**
- * Fetch recurring workingHours (single 7-day window) and all leaves
- * across the 180-day horizon (26 seven-day windows).
+ * Fetch recurring workingHours (single 7-day window) and all leaves across the
+ * availability horizon, stitched from 7-day windows because Wise rejects any
+ * wider span with HTTP 400 ("Difference between end date and start date should
+ * not be more then a week", probed 2026-09-02).
+ *
+ * AVAIL-00: the horizon is operator-tunable via WISE_AVAILABILITY_HORIZON_DAYS.
+ * Lowering it is the emergency valve when Wise throttles us — at 159 teachers the
+ * default costs 26 calls each per run, and cutting to 28 days costs 4. It is a
+ * blunt instrument: leaves beyond the horizon are simply not fetched, and the
+ * search engine treats an absent leave row as "no leave". Prefer the tiered
+ * fetchers below, which keep full coverage; reach for this only to stop bleeding.
+ */
+export const DEFAULT_AVAILABILITY_HORIZON_DAYS = 180;
+export const AVAILABILITY_WINDOW_DAYS = 7;
+
+export function resolveAvailabilityHorizonDays(): number {
+  const raw = process.env.WISE_AVAILABILITY_HORIZON_DAYS;
+  if (!raw) return DEFAULT_AVAILABILITY_HORIZON_DAYS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < AVAILABILITY_WINDOW_DAYS) {
+    return DEFAULT_AVAILABILITY_HORIZON_DAYS;
+  }
+  return parsed;
+}
+
+/**
+ * AVAIL-01 near/far leave tiering.
+ *
+ * Days 0..NEAR_HORIZON_DAYS are the "near" tier — fetched live every run, because
+ * that is the window admins actually book into. Days NEAR_HORIZON_DAYS..horizon
+ * are the "far" tier: 22 of the 26 Wise calls per teacher per run, yielding
+ * almost nothing in practice (the whole active snapshot held 21 leave rows when
+ * this was built, exactly one of them beyond day 28). The far tier is therefore
+ * cached across runs — see `src/lib/wise/availability-cache.ts`.
+ */
+export const NEAR_HORIZON_DAYS = 28;
+
+export const DEFAULT_FAR_HORIZON_MAX_AGE_MINUTES = 360;
+
+/**
+ * AVAIL-01: how long a cached far-leave row may be reused, tunable via
+ * WISE_FAR_HORIZON_MAX_AGE_MINUTES. `0` disables the cache entirely (every run
+ * fetches the far tier live) — the setting to reach for if far-horizon leaves
+ * ever start mattering, or to prove the cache is what changed behaviour.
+ */
+export function resolveFarHorizonMaxAgeMinutes(): number {
+  const raw = process.env.WISE_FAR_HORIZON_MAX_AGE_MINUTES;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_FAR_HORIZON_MAX_AGE_MINUTES;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_FAR_HORIZON_MAX_AGE_MINUTES;
+  return parsed;
+}
+
+/**
+ * Day offsets of the 7-day windows tiling [startDay, endDay).
+ *
+ * The last window is never truncated — it always spans a full
+ * AVAILABILITY_WINDOW_DAYS, so coverage runs slightly PAST endDay rather than
+ * short of it. Erring long is the fail-closed direction: a short final window
+ * would silently drop leaves the caller believes it fetched.
+ */
+function availabilityWindowStarts(startDay: number, endDay: number): number[] {
+  const starts: number[] = [];
+  for (let day = startDay; day < endDay; day += AVAILABILITY_WINDOW_DAYS) {
+    starts.push(day);
+  }
+  return starts;
+}
+
+/**
+ * Fetch the leave-only windows tiling [startDay, endDay).
+ *
+ * `Promise.all` is LOAD-BEARING (AVAIL-01) — do not soften it to `allSettled`.
+ * If any window rejects the whole teacher fetch must reject, so the orchestrator
+ * drops that teacher from the snapshot instead of persisting a partial leave
+ * set. The search engine decides leave conflicts with `Array.some()`, so a
+ * missing leave row reads as "no leave" and reports the tutor Available.
+ */
+async function fetchLeaveWindows(
+  client: WiseClient,
+  instituteId: string,
+  teacherUserId: string,
+  from: Date,
+  startDay: number,
+  endDay: number
+): Promise<NonNullable<WiseAvailabilityResponse["leaves"]>> {
+  const responses = await Promise.all(
+    availabilityWindowStarts(startDay, endDay).map((day) =>
+      fetchTeacherAvailability(
+        client,
+        instituteId,
+        teacherUserId,
+        addDays(from, day),
+        addDays(from, day + AVAILABILITY_WINDOW_DAYS)
+      )
+    )
+  );
+
+  const leaves: NonNullable<WiseAvailabilityResponse["leaves"]> = [];
+  for (const response of responses) {
+    if (response.leaves) leaves.push(...response.leaves);
+  }
+  return leaves;
+}
+
+/**
+ * Near tier: recurring workingHours plus every leave in days 0..nearDays.
+ *
+ * The first window is awaited BEFORE the rest are issued (as the single-tier
+ * fetcher always did) so a hard failure — auth, 429 — costs one Wise call for
+ * this teacher rather than a full fan-out.
+ */
+export async function fetchTeacherNearAvailability(
+  client: WiseClient,
+  instituteId: string,
+  teacherUserId: string,
+  nearDays: number = NEAR_HORIZON_DAYS,
+  from: Date = new Date()
+): Promise<{
+  workingHours: WiseAvailabilityResponse["workingHours"];
+  leaves: NonNullable<WiseAvailabilityResponse["leaves"]>;
+}> {
+  // Window 0 carries workingHours; every other window is leaves-only.
+  const firstWindow = await fetchTeacherAvailability(
+    client,
+    instituteId,
+    teacherUserId,
+    from,
+    addDays(from, AVAILABILITY_WINDOW_DAYS)
+  );
+
+  const leaves = [...(firstWindow.leaves ?? [])];
+  leaves.push(
+    ...(await fetchLeaveWindows(
+      client,
+      instituteId,
+      teacherUserId,
+      from,
+      AVAILABILITY_WINDOW_DAYS,
+      nearDays
+    ))
+  );
+
+  return { workingHours: firstWindow.workingHours, leaves };
+}
+
+/**
+ * Far tier: leaves in days nearDays..horizonDays. Returns no workingHours —
+ * recurring hours come from the near tier's first window and never change with
+ * the window offset.
+ */
+export async function fetchTeacherFarLeaves(
+  client: WiseClient,
+  instituteId: string,
+  teacherUserId: string,
+  nearDays: number = NEAR_HORIZON_DAYS,
+  horizonDays: number = resolveAvailabilityHorizonDays(),
+  from: Date = new Date()
+): Promise<{ leaves: NonNullable<WiseAvailabilityResponse["leaves"]> }> {
+  return {
+    leaves: await fetchLeaveWindows(
+      client,
+      instituteId,
+      teacherUserId,
+      from,
+      nearDays,
+      horizonDays
+    ),
+  };
+}
+
+/**
+ * Single-tier fetch of workingHours + the full leave horizon, composed from the
+ * two tiers so all three functions share one window-tiling implementation.
+ *
+ * The near/far split point is clamped to the horizon, so the composed window set
+ * is byte-identical to the pre-tiering loop for every horizon: at 180 days both
+ * produce the 26 windows starting at day 0, 7, … 175. `from` is shared by both
+ * tiers so the boundary tiles exactly — no gap, no lost overlap.
  */
 export async function fetchTeacherFullAvailability(
   client: WiseClient,
   instituteId: string,
   teacherUserId: string,
-  horizonDays: number = 180
+  horizonDays: number = resolveAvailabilityHorizonDays()
 ): Promise<{
   workingHours: WiseAvailabilityResponse["workingHours"];
   leaves: WiseAvailabilityResponse["leaves"];
 }> {
-  const now = new Date();
-  const windowCount = Math.ceil(horizonDays / 7);
+  const from = new Date();
+  const nearDays = Math.min(NEAR_HORIZON_DAYS, horizonDays);
 
-  // First window gives us workingHours + first batch of leaves
-  const firstWindow = await fetchTeacherAvailability(
+  const near = await fetchTeacherNearAvailability(
     client,
     instituteId,
     teacherUserId,
-    now,
-    addDays(now, 7)
+    nearDays,
+    from
+  );
+  const far = await fetchTeacherFarLeaves(
+    client,
+    instituteId,
+    teacherUserId,
+    nearDays,
+    horizonDays,
+    from
   );
 
-  const workingHours = firstWindow.workingHours;
-  const allLeaves = [...(firstWindow.leaves ?? [])];
-
-  // Remaining windows for leaves only
-  const leavePromises: Promise<WiseAvailabilityResponse>[] = [];
-  for (let i = 1; i < windowCount; i++) {
-    const start = addDays(now, i * 7);
-    const end = addDays(start, 7);
-    leavePromises.push(
-      fetchTeacherAvailability(client, instituteId, teacherUserId, start, end)
-    );
-  }
-
-  const leaveResults = await Promise.all(leavePromises);
-  for (const result of leaveResults) {
-    if (result.leaves) {
-      allLeaves.push(...result.leaves);
-    }
-  }
-
-  return { workingHours, leaves: allLeaves };
+  return { workingHours: near.workingHours, leaves: [...near.leaves, ...far.leaves] };
 }
 
 /**

@@ -32,6 +32,7 @@ function makeTutorGroup(): IndexedTutorGroup {
     wiseRecords: [],
     availabilityWindows: [],
     leaves: [],
+    leavesCompleteThrough: null,
     sessionBlocks: [],
     dataIssues: [],
   };

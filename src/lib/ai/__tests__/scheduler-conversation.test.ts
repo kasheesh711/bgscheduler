@@ -28,6 +28,7 @@ function group(overrides: Partial<IndexedTutorGroup> = {}): IndexedTutorGroup {
       { weekday: 0, startMinute: 9 * 60, endMinute: 11 * 60, modality: "both", wiseTeacherId: "wise-1" },
     ],
     leaves: overrides.leaves ?? [],
+    leavesCompleteThrough: null,
     sessionBlocks: overrides.sessionBlocks ?? [],
     dataIssues: overrides.dataIssues ?? [],
     businessProfile: overrides.businessProfile,

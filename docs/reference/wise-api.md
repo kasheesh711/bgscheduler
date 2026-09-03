@@ -33,7 +33,7 @@ answer — lives in the matching [`docs/features/*`](../features/) page.
 - **Retry/backoff:** up to 3 retries, exponential `1s / 2s / 4s`, but **only** for network errors and the transient status set `{408, 429, 500, 502, 503, 504}`. Permanent 4xx (401/403/404/422 and any other unlisted status) fail fast ([`client.ts:37-44`](../../src/lib/wise/client.ts), [`:158-177`](../../src/lib/wise/client.ts)).
 - **Concurrency:** a FIFO queue caps in-flight requests **per client instance**. The production factory `createWiseClient()` sets **15** ([`client.ts:214-221`](../../src/lib/wise/client.ts)); the class default is **5** ([`client.ts:65`](../../src/lib/wise/client.ts)); Student Promotions builds its own at **6** ([`student-promotions/data.ts:305`](../../src/lib/student-promotions/data.ts)). There is no global limiter, which is why cron stagger is load-bearing (see [`crons.md`](./crons.md)).
 - **Request counting (new):** every `get`/`post`/`put` is tallied by normalized path on the client instance and persisted per run — `sync_runs.metadata.wiseCallCount` / `.wiseTopPaths` and `credit_control_sync_runs.metadata`. See [The EFF-00 request counter](#the-eff-00-request-counter).
-- **Availability is stitched, and must be:** the 180-day leave horizon is assembled from **26 seven-day windows** per teacher. A probe run on **2026-09-02** confirmed Wise **rejects any wider span with HTTP 400** — see [The 7-day availability ceiling](#the-7-day-availability-ceiling).
+- **Availability is stitched, and must be:** the 180-day leave horizon is assembled from **26 seven-day windows** per teacher. A probe run on **2026-09-02** confirmed Wise **rejects any wider span with HTTP 400** — see [The 7-day availability ceiling](#the-7-day-availability-ceiling). Since 2026-09-04 those windows are fetched in two tiers (near every run, far every 6 hours) — see [Near/far tiering](#nearfar-tiering-avail-01-2026-09-04).
 - **Institute scoping:** most endpoints nest under `/institutes/{instituteId}`; callers pass `WISE_INSTITUTE_ID` (default `696e1f4d90102225641cc413`). A minority sit under `/user/...` or `/teacher/...`.
 - **Writeback is narrow and gated:** four mutating helpers exist. Classroom assignment writes only OFFLINE session `location`; Student Promotions writes registration answers, class `subject`, and (behind a flag + typed confirmation) single-session `subject`; Progress Tests creates a session behind `WISE_SESSION_CREATE_VERIFIED`. **Post-Class Feedback performs no Wise mutation at all.**
 
@@ -301,11 +301,49 @@ per teacher ([`orchestrator.ts:176`](../../src/lib/sync/orchestrator.ts)). It as
 - Returns `{ workingHours, leaves }` with leaves concatenated across all windows,
   **not** de-duplicated here; overlap merging happens in `normalizeLeaves`.
 
-So one teacher = **26** availability GETs, and the outer per-teacher loop is
-sequential (`for … await`) even though the limiter allows 15 in flight
-([`orchestrator.ts:175-180`](../../src/lib/sync/orchestrator.ts)). This is by far the dominant request volume of a
-snapshot sync — roughly 82% of all Wise traffic on the derived estimate in
-[`docs/proposals/2026-09-02-cron-efficiency-and-wise-webhooks.md`](../proposals/2026-09-02-cron-efficiency-and-wise-webhooks.md).
+#### Near/far tiering (AVAIL-01, 2026-09-04)
+
+A full-horizon fetch is **26** availability GETs per teacher. Measured on
+2026-09-04 that was 3,542 calls per run across 159 teachers, ~170k/day, and it
+was the direct cause of a production incident: Wise began returning
+`429 RATE_LIMITED` on 2026-09-02, runs stretched from ~150 s to ~750 s against
+the 800 s function ceiling, and roughly 37% of syncs failed.
+
+The horizon is now fetched in two tiers, because windows 5–26 exist only to
+collect leaves and the whole active snapshot held **21 leave rows, exactly one of
+them beyond day 28**:
+
+| Tier | Days | Windows | Cadence | Supplies |
+|---|---|---|---|---|
+| Near | 0–28 | 4 | every run (`*/30`) | `workingHours` (window 0 only) + near leaves |
+| Far | 28–182 | 22 | `WISE_FAR_HORIZON_MAX_AGE_MINUTES` (default 360) | leaves only, via `wise_teacher_availability_cache` |
+
+So a typical run costs **4** GETs per teacher and a refresh run costs 26,
+averaging ~930 calls/run instead of 3,542.
+
+**The rule that makes this safe:** a cache miss, a stale row, a recorded fetch
+error, or a horizon-shape change is **always** a live fetch. Never an empty leave
+set — `src/lib/search/engine.ts` decides leave conflicts with `Array.some()`, so a
+leave row that was never fetched is indistinguishable from "no leave" and the
+tutor would be reported Available during real leave.
+
+Completeness is now explicit rather than assumed. Each sync writes
+`tutor_identity_groups.leaves_complete_through` — the **minimum** across the
+group's Wise teacher rows, so one failed identity variant collapses the whole
+group — and the search engine routes any slot beyond that instant to **Needs
+Review** instead of Available. That also closes a pre-existing hole: before this,
+a search past day 182 returned Available on working-hours alone, with no leave
+data behind it at all. Recurring (dateless) searches are deliberately exempt,
+since they imply no bounded date to compare against.
+
+The outer per-teacher loop stays sequential (`for … await`) even though the
+limiter allows 15 in flight. That is deliberate while Wise is throttling:
+parallelising it would raise the request rate, not lower it.
+
+Operator valves: `WISE_AVAILABILITY_HORIZON_DAYS` (default 180) shrinks the
+horizon outright as an emergency measure — it is blunt, because leaves past the
+horizon simply are not fetched — and `WISE_MAX_CONCURRENCY` (default 15) lowers
+the in-flight cap, which converts 429 failures into slower successful runs.
 
 #### The 7-day availability ceiling
 

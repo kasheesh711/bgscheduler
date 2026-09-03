@@ -13,6 +13,7 @@ import {
   creditDigestMessage,
   formatBangkokDmy,
   formatCredits,
+  formatDataAge,
   formatThaiDayHeading,
   formatThaiMonth,
   GROUP_HELP,
@@ -336,6 +337,7 @@ describe("report copy", () => {
 
 describe("credit copy", () => {
   const GENERATED_AT = new Date("2026-08-05T01:50:00Z"); // 08:50 Bangkok
+  const NOW = new Date("2026-08-05T04:40:00Z"); // 2h 50m after the snapshot
 
   it("renders one block per sibling with per-package lines and the caveat", () => {
     const text = creditBalanceReply({
@@ -354,6 +356,7 @@ describe("credit copy", () => {
       url: "https://example.test/student-report/report?student=a&from=2026-07-06&to=2026-08-05",
       truncatedCount: 0,
       generatedAt: GENERATED_AT,
+      now: NOW,
     });
 
     expect(text).toContain("💳 Teethad (Copter.Th) Thamprida — 4.5 credits left");
@@ -364,7 +367,7 @@ describe("credit copy", () => {
     expect(text).toContain("Report (last 30 days):");
     expect(text).toContain("https://example.test/student-report/report");
     expect(text).not.toContain("first 8 students");
-    expect(text).toContain("Data as of 5 Aug 08:50 Wise sync.");
+    expect(text).toContain("Data as of 2h 50m ago (5 Aug 08:50 Wise sync).");
   });
 
   it("singularizes a 1-credit balance and notes a truncated link", () => {
@@ -418,6 +421,20 @@ describe("credit copy", () => {
     expect(text).toContain("🗂 1 finished package hidden");
   });
 
+  // CRED-01: a clock time alone reads as "just now" at any age, which is what
+  // made a carried-forward balance illegible mid-conversation.
+  it("renders the data age as an age, not a clock time", () => {
+    const at = new Date("2026-08-05T01:50:00Z");
+    expect(formatDataAge(at, new Date("2026-08-05T01:50:30Z"))).toBe("just now");
+    expect(formatDataAge(at, new Date("2026-08-05T02:02:00Z"))).toBe("12m");
+    expect(formatDataAge(at, new Date("2026-08-05T03:50:00Z"))).toBe("2h");
+    expect(formatDataAge(at, new Date("2026-08-05T04:40:00Z"))).toBe("2h 50m");
+    expect(formatDataAge(at, new Date("2026-08-06T05:00:00Z"))).toBe("1d 3h");
+    expect(formatDataAge(at, new Date("2026-08-06T01:50:00Z"))).toBe("1d");
+    // A snapshot stamped ahead of the reader's clock never renders negative.
+    expect(formatDataAge(at, new Date("2026-08-05T01:00:00Z"))).toBe("just now");
+  });
+
   it("formats digest rows grouped by date with weekday and D/M dates", () => {
     const text = creditDigestMessage({
       digestDateBkk: "2026-08-05",
@@ -431,6 +448,7 @@ describe("credit copy", () => {
       ],
       dashboardUrl: "https://example.test/credit-control",
       generatedAt: GENERATED_AT,
+      now: NOW,
     });
 
     expect(text).toContain("⚠️ Credit runout — next 7 days (5/8/2026)");
@@ -446,7 +464,7 @@ describe("credit copy", () => {
     // suppressed and the output keeps the pre-grouping shape.
     expect(text).not.toContain("👤");
     expect(text).toContain("Dashboard: https://example.test/credit-control");
-    expect(text).toContain("Data as of 5 Aug 08:50 Wise sync.");
+    expect(text).toContain("Data as of 2h 50m ago (5 Aug 08:50 Wise sync).");
   });
 
   it("sections the digest per assigned admin in registry order, Unassigned last", () => {

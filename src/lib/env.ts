@@ -33,6 +33,12 @@ const envSchema = z.object({
   // Comma-separated emails allowed through the maintenance gate. Unset or empty
   // means nobody bypasses — fail-closed, like LINE_SCHEDULE_BOT_ADMIN_IDS.
   MAINTENANCE_BYPASS_EMAILS: z.string().optional(),
+  // Minutes a quiet credit-control pair's balance may be carried forward
+  // instead of refetched from Wise (CRED-01). Defaults to 180; "0" is the
+  // off-switch that refetches every pair. Declared here for inventory parity —
+  // src/lib/credit-control/refresh-policy.ts reads process.env at call time so
+  // the value can be changed without a module reload.
+  CREDIT_REFRESH_MAX_AGE_MINUTES: z.coerce.number().min(0).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

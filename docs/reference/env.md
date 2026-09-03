@@ -25,8 +25,23 @@ Four inventories are reconciled here, and none of them agree:
 |---|---|---|---|
 | **Hard-required** — `safeParse` fails when unset *or* empty | `.url()` ×1 (`DATABASE_URL`, L4); `.min(1)` ×6 (L5–L9, L12) | **7** | `DATABASE_URL`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_SECRET`, `WISE_USER_ID`, `WISE_API_KEY`, `CRON_SECRET` |
 | **Defaulted** — parse succeeds when unset; a source literal is substituted | `.default(…)` (L10–L11) | **2** | `WISE_NAMESPACE` → `"begifted-education"`, `WISE_INSTITUTE_ID` → `"696e1f4d90102225641cc413"` |
-| **Optional** — may be absent entirely | `.optional()` (L13–L15, L19, L23, L25, L27, L32, L35) | **9** | `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER`, `LINE_SCHEDULE_BOT_ADMIN_IDS`, `ENABLE_STUDENT_SCHEDULE_LIVE`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`, `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS` |
-| **Total declared** | | **18** | |
+| **Optional** — may be absent entirely | `.optional()` (L13–L15, L19, L23, L25, L27, L32, L35, L42) | **10** | `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER`, `LINE_SCHEDULE_BOT_ADMIN_IDS`, `ENABLE_STUDENT_SCHEDULE_LIVE`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`, `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS`, `CREDIT_REFRESH_MAX_AGE_MINUTES` |
+| **Total declared** | | **19** | |
+
+### Wise traffic controls (AVAIL-01 / CRED-01, added 2026-09-04)
+
+Four knobs govern how hard the app hits the Wise API. Only the last is declared in
+`src/lib/env.ts`; the other three are read straight from `process.env` at call time
+so they can be changed without a module reload. Each has a safe default and an
+off-switch, and all four exist because Wise began rate-limiting the institute on
+2026-09-02 — see [`wise-api.md`](./wise-api.md#nearfar-tiering-avail-01-2026-09-04).
+
+| Variable | Default | Effect | Read at |
+|---|---|---|---|
+| `WISE_FAR_HORIZON_MAX_AGE_MINUTES` | `360` | How long a cached far-horizon (days 28–182) leave set may be reused. `0` = always fetch live. Junk or negative falls back to the default. | `src/lib/wise/fetchers.ts` |
+| `WISE_AVAILABILITY_HORIZON_DAYS` | `180` | Shrinks the availability horizon outright. **Blunt emergency valve** — leaves past the horizon are simply not fetched, so the search engine has no leave data there. Prefer the tiering above. | `src/lib/wise/fetchers.ts` |
+| `WISE_MAX_CONCURRENCY` | `15` | In-flight cap per `WiseClient`. Lowering it converts `429 RATE_LIMITED` failures into slower successful runs — the opposite of the usual instinct. | `src/lib/wise/client.ts` |
+| `CREDIT_REFRESH_MAX_AGE_MINUTES` | `180` | How long a quiet credit-control pair's balance may be carried forward instead of refetched. `0` = refetch every pair (feature off). Pairs at or near the alert band are **never** reused regardless. | `src/lib/credit-control/refresh-policy.ts` |
 
 **The strict Zod truth is 7 hard-required keys, not 9.** The prose "9" is the 7 hard-required keys *plus* the 2 `WISE_*` keys carrying `.default(…)` literals — that is, the nine keys with no `.optional()` modifier. Those two are operationally expected in production, but the schema parses without them.
 

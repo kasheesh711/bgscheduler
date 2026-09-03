@@ -471,8 +471,34 @@ function weekdayFromKey(dateKey: string): string {
   return EN_WEEKDAYS[utc.getUTCDay()];
 }
 
-function dataAsOfLine(generatedAt: Date): string {
-  return `Data as of ${formatBangkokDayTime(generatedAt)} Wise sync.`;
+/**
+ * "just now" · "12m" · "2h 50m" · "1d 3h" — how old the data is, not when it
+ * was taken. A clock time alone reads as "just now" at any age; an age reads
+ * as an age. Clamped at zero so a snapshot stamped slightly ahead of the
+ * reader's clock never renders a negative.
+ */
+export function formatDataAge(generatedAt: Date, now: Date): string {
+  const totalMinutes = Math.floor(Math.max(0, now.getTime() - generatedAt.getTime()) / 60_000);
+  if (totalMinutes < 1) return "just now";
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  return `${minutes}m`;
+}
+
+/**
+ * CRED-01 made the balance behind this line potentially hours old for quiet
+ * packages, so the caveat leads with the AGE and keeps the absolute stamp in
+ * parentheses. "just now" drops the relative half entirely.
+ */
+function dataAsOfLine(generatedAt: Date, now: Date): string {
+  const age = formatDataAge(generatedAt, now);
+  const stamp = `${formatBangkokDayTime(generatedAt)} Wise sync`;
+  return age === "just now"
+    ? `Data as of just now (${stamp}).`
+    : `Data as of ${age} ago (${stamp}).`;
 }
 
 export const CREDIT_HELP_DM = [
@@ -528,6 +554,7 @@ export function creditBalanceReply({
   url,
   truncatedCount,
   generatedAt,
+  now = new Date(),
 }: {
   students: Array<{
     studentName: string;
@@ -538,6 +565,7 @@ export function creditBalanceReply({
   url: string;
   truncatedCount: number;
   generatedAt: Date;
+  now?: Date;
 }): string {
   const lines: string[] = [];
   for (const student of students) {
@@ -561,7 +589,7 @@ export function creditBalanceReply({
   if (truncatedCount > 0) {
     lines.push(`Report covers the first ${REPORT_MAX_STUDENTS} students (+${truncatedCount} more).`);
   }
-  lines.push("", dataAsOfLine(generatedAt));
+  lines.push("", dataAsOfLine(generatedAt, now));
   return lines.join("\n");
 }
 
@@ -673,6 +701,7 @@ export function creditDigestMessage({
   dashboardUrl,
   generatedAt,
   adminOwnership,
+  now = new Date(),
 }: {
   digestDateBkk: string;
   runsOut: CreditDigestRunOutRow[];
@@ -680,8 +709,9 @@ export function creditDigestMessage({
   dashboardUrl: string;
   generatedAt: Date;
   adminOwnership?: ReadonlyMap<string, { key: string; name: string }>;
+  now?: Date;
 }): string {
-  const footer = ["", `Dashboard: ${dashboardUrl}`, dataAsOfLine(generatedAt)];
+  const footer = ["", `Dashboard: ${dashboardUrl}`, dataAsOfLine(generatedAt, now)];
 
   if (runsOut.length === 0 && alreadyOut.length === 0) {
     return [

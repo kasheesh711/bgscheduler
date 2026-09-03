@@ -484,6 +484,13 @@
       "when": 1787992439472,
       "tag": "0068_payout_adjustment_superseded",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1788459388476,
+      "tag": "0069_wise_availability_cache",
+      "breakpoints": true
     }
   ]
 }

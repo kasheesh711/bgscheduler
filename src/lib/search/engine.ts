@@ -15,6 +15,44 @@ import {
 } from "./types";
 import { parseTimeToMinutes } from "@/lib/normalization/timezone";
 import { API_STALE_THRESHOLD_MS, STALE_SEARCH_WARNING } from "@/lib/ops/stale";
+import { NEAR_HORIZON_DAYS } from "@/lib/wise/fetchers";
+import { addDays } from "date-fns";
+
+/**
+ * AVAIL-01 fail-closed leave completeness.
+ *
+ * Leaves are fetched in tiers (near window every sync, far window on a slower
+ * cadence), so a snapshot is complete only up to each group's
+ * `leavesCompleteThrough`. Past that instant an empty `group.leaves` means "we
+ * never asked", not "no leave" — and both leave checks below use `Array.some()`,
+ * which reports false either way and would mark the tutor Available. Slots past
+ * the watermark are therefore routed to Needs Review.
+ */
+export const LEAVE_COMPLETENESS_REVIEW_REASON = "Leave data not fetched for this date";
+
+/**
+ * Watermark to use when a group carries none.
+ *
+ * Null is "completeness unknown", which must fail closed — but treating it as
+ * "complete through now" would put EVERY tutor into Needs Review for every
+ * future date on any snapshot written before the column existed, i.e. the whole
+ * search page until the next successful sync. Snapshots predating the column
+ * fetched the full 180-day horizon unconditionally, so assuming the near tier
+ * (28 days) is both true of them and strictly more conservative than reality.
+ */
+function effectiveLeaveWatermark(group: IndexedTutorGroup, fallback: Date): Date {
+  return group.leavesCompleteThrough ?? fallback;
+}
+
+/**
+ * The instant a dated slot ends, built exactly as hasOneTimeLeaveConflict builds
+ * its target window so the two agree on what the slot occupies.
+ */
+function slotEndInstant(dateStr: string, endMinute: number): Date {
+  const end = new Date(dateStr);
+  end.setHours(Math.floor(endMinute / 60), endMinute % 60, 0, 0);
+  return end;
+}
 
 /**
  * Execute a search against the in-memory index.
@@ -26,6 +64,9 @@ export function executeSearch(
 ): SearchResponse {
   const startTime = Date.now();
   const warnings: string[] = [];
+
+  // AVAIL-01 fallback watermark for groups whose completeness is unknown.
+  const leaveWatermarkFallback = addDays(new Date(startTime), NEAR_HORIZON_DAYS);
 
   const snapshotMeta: SnapshotMeta = {
     snapshotId: index.snapshotId,
@@ -40,7 +81,13 @@ export function executeSearch(
   const perSlotResults: SlotResult[] = [];
 
   for (const slot of request.slots) {
-    const result = searchSlot(index, slot, request.searchMode, request.filters);
+    const result = searchSlot(
+      index,
+      slot,
+      request.searchMode,
+      request.filters,
+      leaveWatermarkFallback,
+    );
     perSlotResults.push(result);
   }
 
@@ -61,7 +108,8 @@ function searchSlot(
   index: SearchIndex,
   slot: SearchSlot,
   mode: "recurring" | "one_time",
-  filters?: SearchFilters
+  filters: SearchFilters | undefined,
+  leaveWatermarkFallback: Date,
 ): SlotResult {
   const startMinute = parseTimeToMinutes(slot.start);
   const endMinute = parseTimeToMinutes(slot.end);
@@ -94,6 +142,18 @@ function searchSlot(
       if (!group.supportedModes.includes(slot.mode)) {
         continue; // Skip — doesn't match mode at all
       }
+    }
+
+    // AVAIL-01: leave data may not reach this date. Only one_time slots carry a
+    // concrete date; a recurring slot repeats indefinitely, so "the furthest date
+    // it implies" is unbounded and no watermark comparison is well-defined —
+    // recurring behaviour is deliberately left unchanged.
+    if (
+      mode === "one_time" &&
+      slot.date &&
+      slotEndInstant(slot.date, endMinute) > effectiveLeaveWatermark(group, leaveWatermarkFallback)
+    ) {
+      reviewReasons.push(LEAVE_COMPLETENESS_REVIEW_REASON);
     }
 
     // Check availability window covers the slot

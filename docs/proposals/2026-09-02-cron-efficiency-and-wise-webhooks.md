@@ -1,6 +1,30 @@
 # Cron efficiency and Wise webhooks — evaluation and proposal
 
-**Status:** proposal (evaluation complete; Tier 1 fixes shipped alongside this document; Tier 2/3 designed, not built).
+**Status:** partly delivered. Tier 1 shipped 2026-09-02. **EFF-12 (tiered leave horizon) and EFF-05 (credit-control
+dirty-pair narrowing) shipped 2026-09-04** in response to a live incident — Wise began rate-limiting the institute on
+2026-09-02 and ~37% of tutor-snapshot syncs were failing. See the "What shipped" note below; the rest of this document
+is the evaluation as written on 2026-09-02 and its estimates have since been replaced by measurements.
+
+> ### What shipped on 2026-09-04
+>
+> - **EFF-09 is closed, negative.** Wise rejects any availability span over 7 days (HTTP 400), so the 26-window stitch
+>   is mandatory. The lever is cadence, not width.
+> - **EFF-12 built as near/far tiering.** Days 0–28 every run (4 windows); days 28–182 every 6 hours from
+>   `wise_teacher_availability_cache` (22 windows). A cache miss, stale row, recorded fetch error or horizon change is
+>   always a live fetch — never an empty leave set. Measured driver: the whole active snapshot held **21 leave rows,
+>   exactly one beyond day 28**, and rediscovering it cost 167,904 calls/day.
+> - **A completeness watermark replaces an assumption.** `tutor_identity_groups.leaves_complete_through` (the minimum
+>   across a group's Wise teacher rows) now bounds what the search engine will call Available; past it the answer is
+>   Needs Review. This also closes a pre-existing fail-open beyond day 182, and the partial-group case where one failed
+>   identity variant hid that variant's leaves.
+> - **EFF-05 built, with a correction.** Narrowing is by business risk, not only change detection: pairs at or near the
+>   alert band are never reused, so every balance a human reads stays ≤30 minutes old. Measured on 2026-09-04, **62%**
+>   of packages sit in that hot band — far more than this document assumed — so the realistic saving is roughly a third
+>   of the per-pair calls, not the 60–80% estimated here.
+> - **One proposed "cheap win" was rejected on measurement.** Skipping de-activated students would have removed 3,529
+>   future session rows for 120 students, blanking the parent monthly schedule, which reads the same table. Reverted and
+>   pinned with a test.
+
 **Verified against:** `origin/main` `fed828d` on 2026-09-02, plus the Wise webhook documentation at
 <https://wise-app.gitbook.io/wise-app/wise-api-integration/webhooks-integration> (and its `webhook-retry-mechanism` /
 `webhook-event-samples/*` sub-pages) fetched the same day.

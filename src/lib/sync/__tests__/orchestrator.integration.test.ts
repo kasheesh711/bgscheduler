@@ -19,8 +19,9 @@
 //       { startTime, endTime },
 //     )
 //       -> { data: { workingHours?: { slots }, leaves?: WiseLeave[] } }
-//       Called once for the first 7-day window and 25 more times for leaves
-//       across the default 180-day horizon.
+//       AVAIL-01: called in two tiers — 4 near windows (days 0-28) every run,
+//       then 22 far windows (days 28-182) unless a fresh
+//       wise_teacher_availability_cache row covers them.
 //   - get<WiseSessionsResponse>(
 //       `/institutes/${instituteId}/sessions`,
 //       { status: "FUTURE", paginateBy: "COUNT", page_number, page_size },
@@ -30,12 +31,15 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { eq, sql } from "drizzle-orm";
+import { addDays } from "date-fns";
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
 import { runFullSync } from "@/lib/sync/orchestrator";
+import { normalizeLeaves } from "@/lib/normalization/leaves";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import type {
   WiseAvailabilityEnvelope,
+  WiseLeave,
   WiseSession,
   WiseSessionsResponse,
   WiseTeacher,
@@ -65,7 +69,13 @@ type FakeWiseResponse =
 
 interface FakeWiseClient {
   get<T = FakeWiseResponse>(path: string, params?: Record<string, string>): Promise<T>;
+  // EFF-00: runFullSync reads client.getStats() on both the success and the
+  // failure path. Without it every test in this file dies in the catch block
+  // with "client.getStats is not a function", masking the real assertion.
+  getStats(): { requests: number; byPath: Record<string, number> };
 }
+
+const NO_STATS = () => ({ requests: 0, byPath: {} as Record<string, number> });
 
 function makeClient(opts: {
   teachers: WiseTeacher[];
@@ -103,6 +113,7 @@ function makeClient(opts: {
 
       throw new Error(`fake WiseClient: unmocked path ${path}`);
     },
+    getStats: NO_STATS,
   };
 }
 
@@ -176,6 +187,84 @@ function unresolvedIdentityClient(): FakeWiseClient {
     ]),
     sessions: [],
   });
+}
+
+/**
+ * AVAIL-01 — window-aware fake Wise.
+ *
+ * Returns the fixture leaves that INTERSECT the requested 7-day window, the way
+ * Wise does, so a leave straddling the near/far boundary comes back from both
+ * tiers. Records the first window start per teacher, which is the orchestrator's
+ * own `from` instant — the anchor the single-tier expectation is rebuilt from.
+ */
+function makeLeaveWindowClient(opts: {
+  teachers: WiseTeacher[];
+  leavesByUserId: Map<string, WiseLeave[]>;
+}) {
+  const firstWindowStart = new Map<string, Date>();
+  const windowsByUserId = new Map<string, { start: Date; end: Date }[]>();
+
+  const client: FakeWiseClient = {
+    async get<T>(path: string, params?: Record<string, string>): Promise<T> {
+      if (path === `/institutes/${instituteId}/teachers`) {
+        return { data: { teachers: opts.teachers } } as T;
+      }
+
+      const availabilityMatch = path.match(
+        new RegExp(`/institutes/${instituteId}/teachers/([^/]+)/availability`),
+      );
+      if (availabilityMatch) {
+        const userId = availabilityMatch[1];
+        const start = new Date(params!.startTime);
+        const end = new Date(params!.endTime);
+        if (!firstWindowStart.has(userId)) firstWindowStart.set(userId, start);
+        windowsByUserId.set(userId, [...(windowsByUserId.get(userId) ?? []), { start, end }]);
+
+        const leaves = (opts.leavesByUserId.get(userId) ?? []).filter(
+          (leave) => new Date(leave.startTime) < end && new Date(leave.endTime) > start,
+        );
+
+        return {
+          data: {
+            ...(start.getTime() === firstWindowStart.get(userId)!.getTime()
+              ? { workingHours: { slots: [{ day: 1, startTime: "10:00", endTime: "12:00" }] } }
+              : {}),
+            leaves,
+          },
+        } as T;
+      }
+
+      if (path === `/institutes/${instituteId}/sessions`) {
+        return {
+          data: { sessions: [], page_number: 1, page_count: 1, totalRecords: 0 },
+        } as T;
+      }
+
+      throw new Error(`fake WiseClient: unmocked path ${path}`);
+    },
+    getStats: NO_STATS,
+  };
+
+  return { client, firstWindowStart, windowsByUserId };
+}
+
+/**
+ * The leave multiset the PRE-TIERING single-tier loop would have collected:
+ * 26 contiguous 7-day windows from `from`. Deliberately an independent
+ * reimplementation of the old path rather than a call into the new fetchers.
+ */
+function singleTierLeaves(from: Date, fixtures: WiseLeave[]): WiseLeave[] {
+  const collected: WiseLeave[] = [];
+  for (let i = 0; i < 26; i += 1) {
+    const start = addDays(from, i * 7);
+    const end = addDays(start, 7);
+    collected.push(
+      ...fixtures.filter(
+        (leave) => new Date(leave.startTime) < end && new Date(leave.endTime) > start,
+      ),
+    );
+  }
+  return collected;
 }
 
 async function seedExistingSnapshots(count: number) {
@@ -353,5 +442,87 @@ describe("runFullSync — TCOV-02 integration (real Postgres)", () => {
       .where(eq(schema.syncRuns.id, result.syncRunId));
     const metadata = syncRun.metadata as { pruning?: unknown } | null;
     expect(metadata?.pruning).toBeUndefined();
+  });
+
+  it("AVAIL-01: near+far merge writes the same dated_leaves as the single-tier path", async () => {
+    const teachers: WiseTeacher[] = [
+      { _id: "t-lily-onsite", userId: { _id: "u-lily-onsite", name: "Alice (Lily) Smith" }, tags: [] },
+      { _id: "t-lily-online", userId: { _id: "u-lily-online", name: "Alice (Lily) Smith Online" }, tags: [] },
+    ];
+
+    // One leave inside the near tier, one straddling the day-28 boundary (so it
+    // is returned by BOTH tiers and must dedupe), one deep in the far tier.
+    const base = new Date();
+    const fixtures: WiseLeave[] = [
+      {
+        _id: "leave-near",
+        startTime: addDays(base, 3).toISOString(),
+        endTime: addDays(base, 4).toISOString(),
+      },
+      {
+        _id: "leave-straddling-day-28",
+        startTime: addDays(base, 27).toISOString(),
+        endTime: addDays(base, 29).toISOString(),
+      },
+      {
+        _id: "leave-far",
+        startTime: addDays(base, 100).toISOString(),
+        endTime: addDays(base, 101).toISOString(),
+      },
+    ];
+
+    const { client, firstWindowStart, windowsByUserId } = makeLeaveWindowClient({
+      teachers,
+      leavesByUserId: new Map([
+        ["u-lily-onsite", fixtures],
+        ["u-lily-online", fixtures],
+      ]),
+    });
+
+    const result = await runFullSync(
+      handle.db as unknown as Database,
+      client as never,
+      instituteId,
+    );
+    expect(result.success).toBe(true);
+
+    // Both tiers ran: 4 near windows + 22 far windows, tiling days 0..182.
+    for (const userId of ["u-lily-onsite", "u-lily-online"]) {
+      expect(windowsByUserId.get(userId)).toHaveLength(26);
+    }
+
+    const from = firstWindowStart.get("u-lily-onsite")!;
+    const expected = normalizeLeaves(singleTierLeaves(from, fixtures));
+    expect(expected).toHaveLength(3);
+
+    const rows = await handle.db
+      .select()
+      .from(schema.datedLeaves)
+      .where(eq(schema.datedLeaves.wiseTeacherId, "t-lily-onsite"));
+
+    const actual = rows
+      .map((row) => ({ start: new Date(row.startTime).getTime(), end: new Date(row.endTime).getTime() }))
+      .sort((a, b) => a.start - b.start);
+    const wanted = expected
+      .map((leave) => ({ start: leave.startTime.getTime(), end: leave.endTime.getTime() }))
+      .sort((a, b) => a.start - b.start);
+
+    expect(actual).toEqual(wanted);
+
+    // The far tier was fetched live, so it is now cached for the next run.
+    const cached = await handle.db.select().from(schema.wiseTeacherAvailabilityCache);
+    expect(cached.map((row) => row.teacherUserId).sort()).toEqual([
+      "u-lily-online",
+      "u-lily-onsite",
+    ]);
+    expect(cached[0].farHorizonDays).toBe(180);
+    expect(cached[0].farWindowStartDay).toBe(28);
+
+    // The group carries a full-horizon leave watermark.
+    const [group] = await handle.db.select().from(schema.tutorIdentityGroups);
+    expect(group.leavesCompleteThrough).not.toBeNull();
+    expect(new Date(group.leavesCompleteThrough!).getTime()).toBeGreaterThan(
+      addDays(from, 179).getTime(),
+    );
   });
 });
