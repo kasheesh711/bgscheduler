@@ -1,8 +1,10 @@
 import {
   FIFO_PACKAGE_MODEL,
+  FIFO_PACKAGE_MODEL_V1,
   LEGACY_ACCOUNT_MODEL,
   type UnearnedRevenueCanonicalModel,
   type UnearnedRevenueLotKind,
+  type UnearnedRevenueMatchConfidence,
   type UnearnedRevenueMatchStatus,
   type UnearnedRevenuePeriodKind,
   type UnearnedRevenueReviewState,
@@ -14,6 +16,7 @@ export const WORKBOOK_LIMITS = {
   periods: 500,
   students: 20_000,
   accounts: 20_000,
+  receipts: 10_000,
   lots: 100_000,
 } as const;
 
@@ -38,6 +41,10 @@ export interface ParsedWorkbookStatus {
   modelVersion: string;
   modelMode: "CANONICAL" | "SHADOW";
   reviewConditions: string[];
+  compositeVerifiedCount?: number;
+  receiptCandidateCount?: number;
+  reversalConflictCount?: number;
+  missingReceiptEvidenceCount?: number;
 }
 
 export interface ParsedWorkbookPeriod {
@@ -62,6 +69,10 @@ export interface ParsedWorkbookPeriod {
   fallbackValuedCount: number;
   negativeBalanceCount: number;
   apiVarianceCount: number;
+  compositeVerifiedCount?: number;
+  receiptCandidateCount?: number;
+  reversalConflictCount?: number;
+  missingReceiptEvidenceCount?: number;
   sourceRow: number;
 }
 
@@ -124,6 +135,9 @@ export interface ParsedWorkbookLot {
   className: string;
   lotKind: UnearnedRevenueLotKind;
   matchStatus: UnearnedRevenueMatchStatus;
+  matchConfidence?: UnearnedRevenueMatchConfidence;
+  matchRuleId?: string;
+  matchEvidence?: Record<string, unknown>;
   reviewState: UnearnedRevenueReviewState;
   packageName: string;
   transactionNumber: string;
@@ -144,9 +158,23 @@ export interface ParsedWorkbookLot {
   recognizedRevenueThb: string;
   closingLiabilityThb: string;
   candidateSalesKeys: string;
+  candidateReceiptIds?: string;
   sourceSpreadsheetId: string | null;
   sourceSheetId: number | null;
   sourceRow: number | null;
+  creditEventSpreadsheetId?: string | null;
+  creditEventSheetId?: number | null;
+  creditEventRow?: number | null;
+  receiptId?: string;
+  receiptType?: string;
+  receiptStatus?: string;
+  receiptChargedAt?: string | null;
+  receiptAmountThb?: string;
+  receiptCurrency?: string;
+  receiptNote?: string;
+  receiptStudentId?: string;
+  receiptClassId?: string;
+  receiptSourceRow?: number | null;
   formulaRow: number;
 }
 
@@ -171,6 +199,7 @@ interface WorkbookParseInput {
   accountFormulas: unknown[][];
   lots: unknown[][];
   lotFormulas: unknown[][];
+  receipts?: unknown[][];
 }
 
 function text(value: unknown): string {
@@ -217,6 +246,26 @@ export function googleSheetDate(value: unknown, label: string): string {
 
 function optionalDate(value: unknown, label: string): string | null {
   return text(value) ? googleSheetDate(value, label) : null;
+}
+
+function optionalInteger(value: unknown, label: string): number | null {
+  return text(value) ? integer(value, label) : null;
+}
+
+function jsonObject(value: unknown, label: string): Record<string, unknown> {
+  if (!text(value)) return {};
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  try {
+    const parsed: unknown = JSON.parse(text(value));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Fall through to a contract error with the field name.
+  }
+  throw new UnearnedRevenueWorkbookError(`${label} must be a JSON object`);
 }
 
 function assertNoFormulaError(rows: unknown[][], label: string): void {
@@ -295,11 +344,13 @@ function parseStatus(startRows: unknown[][], endRows: unknown[][]): ParsedWorkbo
     throw new UnearnedRevenueWorkbookError("Workbook is not in a QA-passed PUBLISHED state");
   }
   const schemaVersion = integer(requiredStatus(start, "workbook_schema_version"), "workbook_schema_version");
-  if (schemaVersion !== 2) {
+  if (schemaVersion !== 2 && schemaVersion !== 3) {
     throw new UnearnedRevenueWorkbookError(`Unsupported workbook schema version ${schemaVersion}`);
   }
   const canonicalRaw = requiredStatus(start, "canonical_model");
-  if (canonicalRaw !== LEGACY_ACCOUNT_MODEL && canonicalRaw !== FIFO_PACKAGE_MODEL) {
+  if (canonicalRaw !== LEGACY_ACCOUNT_MODEL
+    && canonicalRaw !== FIFO_PACKAGE_MODEL_V1
+    && canonicalRaw !== FIFO_PACKAGE_MODEL) {
     throw new UnearnedRevenueWorkbookError(`Unsupported canonical model ${canonicalRaw}`);
   }
   const modelMode = requiredStatus(start, "model_mode");
@@ -307,7 +358,12 @@ function parseStatus(startRows: unknown[][], endRows: unknown[][]): ParsedWorkbo
     throw new UnearnedRevenueWorkbookError(`Unsupported model mode ${modelMode}`);
   }
   const modelVersion = requiredStatus(start, "candidate_model_version");
-  if (canonicalRaw === FIFO_PACKAGE_MODEL && modelVersion !== FIFO_PACKAGE_MODEL) {
+  if (schemaVersion >= 3 && modelVersion !== FIFO_PACKAGE_MODEL) {
+    throw new UnearnedRevenueWorkbookError(
+      `Workbook schema V3 must use candidate model ${FIFO_PACKAGE_MODEL}`,
+    );
+  }
+  if (canonicalRaw !== LEGACY_ACCOUNT_MODEL && modelVersion !== canonicalRaw) {
     throw new UnearnedRevenueWorkbookError("Canonical FIFO version does not match the runtime model version");
   }
   return {
@@ -317,11 +373,15 @@ function parseStatus(startRows: unknown[][], endRows: unknown[][]): ParsedWorkbo
     sourceRevision: requiredStatus(start, "publication_revision"),
     cutoff: googleSheetDate(requiredStatus(start, "published_cutoff"), "published_cutoff"),
     generatedAtBangkok: requiredStatus(start, "generated_at_bangkok"),
-    canonicalModel: canonicalRaw,
+    canonicalModel: canonicalRaw as UnearnedRevenueCanonicalModel,
     modelVersion,
     modelMode,
     reviewConditions: (start.get("review_conditions") ?? "")
       .split(";").map((item) => item.trim()).filter((item) => item && item !== "NONE"),
+    compositeVerifiedCount: Number(start.get("composite_verified_event_count") ?? 0) || 0,
+    receiptCandidateCount: Number(start.get("receipt_candidate_event_count") ?? 0) || 0,
+    reversalConflictCount: Number(start.get("reversal_conflict_count") ?? 0) || 0,
+    missingReceiptEvidenceCount: Number(start.get("missing_receipt_evidence_count") ?? 0) || 0,
   };
 }
 
@@ -372,7 +432,7 @@ function reviewState(value: unknown, label: string): UnearnedRevenueReviewState 
 
 function lotKind(value: unknown, label: string): UnearnedRevenueLotKind {
   const result = text(value);
-  if (!["OPENING", "PAID_PACKAGE", "COMPLIMENTARY", "AMBIGUOUS", "UNATTRIBUTED"].includes(result)) {
+  if (!["OPENING", "PAID_PACKAGE", "COMPLIMENTARY", "COMPOSITE_CANDIDATE", "AMBIGUOUS", "UNATTRIBUTED"].includes(result)) {
     throw new UnearnedRevenueWorkbookError(`${label} has invalid lot_kind`);
   }
   return result as UnearnedRevenueLotKind;
@@ -380,10 +440,18 @@ function lotKind(value: unknown, label: string): UnearnedRevenueLotKind {
 
 function matchStatus(value: unknown, label: string): UnearnedRevenueMatchStatus {
   const result = text(value);
-  if (!["FROZEN_OPENING", "EXACT_TRANSACTION", "UNIQUE_HEURISTIC", "OVERRIDE", "COMPLIMENTARY_MATCH", "AMBIGUOUS", "UNATTRIBUTED"].includes(result)) {
+  if (!["FROZEN_OPENING", "EXACT_TRANSACTION", "UNIQUE_HEURISTIC", "RECEIPT_IDENTIFIER_CHAIN", "COMPOSITE_VERIFIED", "COMPOSITE_CANDIDATE", "OVERRIDE", "COMPLIMENTARY_MATCH", "AMBIGUOUS", "UNATTRIBUTED"].includes(result)) {
     throw new UnearnedRevenueWorkbookError(`${label} has invalid match_status`);
   }
   return result as UnearnedRevenueMatchStatus;
+}
+
+function matchConfidence(value: unknown, label: string): UnearnedRevenueMatchConfidence {
+  const result = text(value);
+  if (!["COMPOSITE_VERIFIED", "FINANCE_REVIEWED", "EXACT", "CANDIDATE", "RESIDUAL", "COMPLIMENTARY"].includes(result)) {
+    throw new UnearnedRevenueWorkbookError(`${label} has invalid match_confidence`);
+  }
+  return result as UnearnedRevenueMatchConfidence;
 }
 
 function difference(left: string, right: string): number {
@@ -409,9 +477,79 @@ function reviewCount(reviewConditions: string[], prefix: string): number {
 }
 
 export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedWorkbookContract {
-  for (const [label, rows] of Object.entries(input)) assertNoFormulaError(rows, label);
+  for (const [label, rows] of Object.entries(input)) {
+    if (Array.isArray(rows)) assertNoFormulaError(rows, label);
+  }
   const status = parseStatus(input.statusStart, input.statusEnd);
   assertQa(input.qa);
+
+  if (status.workbookSchemaVersion >= 3 && !input.receipts) {
+    throw new UnearnedRevenueWorkbookError("Workbook schema V3 is missing SRC_Wise_Receipt data");
+  }
+  const receiptRows = input.receipts ?? [[
+    "receipt_id", "receipt_type", "receipt_status", "charged_at", "receipt_date",
+    "created_at", "amount_minor", "amount_thb", "currency", "note", "student_id",
+    "student_name", "class_id", "classroom_name", "classroom_subject", "parent_ids",
+    "parent_names", "identifiers", "payload_checksum", "source_row", "output_run_id",
+    "source_fingerprint",
+  ]];
+  const receiptTable = table(receiptRows, "SRC_Wise_Receipt", WORKBOOK_LIMITS.receipts, [
+    "receipt_id", "receipt_type", "receipt_status", "charged_at", "receipt_date",
+    "amount_thb", "currency", "note", "student_id", "class_id", "payload_checksum", "source_row",
+    "output_run_id", "source_fingerprint",
+  ]);
+  const receiptEvidenceById = new Map<string, {
+    sourceRow: number;
+    type: string;
+    status: string;
+    chargedAt: string;
+    amountThb: string;
+    currency: string;
+    note: string;
+    studentId: string;
+    classId: string;
+  }>();
+  for (const { row, sourceRow } of receiptTable.records) {
+    assertLineage(
+      receiptTable.get(row, "output_run_id"),
+      receiptTable.get(row, "source_fingerprint"),
+      status,
+      "SRC_Wise_Receipt",
+      sourceRow,
+    );
+    const receiptId = text(receiptTable.get(row, "receipt_id"));
+    if (!receiptId) throw new UnearnedRevenueWorkbookError(`SRC_Wise_Receipt row ${sourceRow} has no receipt ID`);
+    if (receiptEvidenceById.has(receiptId)) {
+      throw new UnearnedRevenueWorkbookError(`SRC_Wise_Receipt contains duplicate receipt ID ${receiptId}`);
+    }
+    const declaredSourceRow = integer(receiptTable.get(row, "source_row"), `SRC_Wise_Receipt row ${sourceRow} source_row`);
+    if (declaredSourceRow !== sourceRow) {
+      throw new UnearnedRevenueWorkbookError(`SRC_Wise_Receipt row ${sourceRow} has an inconsistent source_row`);
+    }
+    const checksum = text(receiptTable.get(row, "payload_checksum"));
+    if (!/^[a-f0-9]{64}$/i.test(checksum)) {
+      throw new UnearnedRevenueWorkbookError(`SRC_Wise_Receipt row ${sourceRow} has an invalid payload checksum`);
+    }
+    const amountThb = numeric(
+      receiptTable.get(row, "amount_thb"),
+      `SRC_Wise_Receipt row ${sourceRow} amount_thb`,
+    );
+    const chargedAt = text(receiptTable.get(row, "charged_at"));
+    if (chargedAt && Number.isNaN(new Date(chargedAt).getTime())) {
+      throw new UnearnedRevenueWorkbookError(`SRC_Wise_Receipt row ${sourceRow} charged_at is invalid`);
+    }
+    receiptEvidenceById.set(receiptId, {
+      sourceRow,
+      type: text(receiptTable.get(row, "receipt_type")),
+      status: text(receiptTable.get(row, "receipt_status")),
+      chargedAt,
+      amountThb,
+      currency: text(receiptTable.get(row, "currency")),
+      note: text(receiptTable.get(row, "note")),
+      studentId: text(receiptTable.get(row, "student_id")),
+      classId: text(receiptTable.get(row, "class_id")),
+    });
+  }
 
   const periodTable = table(input.periods, "Model Comparison", WORKBOOK_LIMITS.periods, [
     "period_end", "period_kind", "is_latest", "legacy_closing_liability_thb",
@@ -454,6 +592,10 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
       fallbackValuedCount: 0,
       negativeBalanceCount: 0,
       apiVarianceCount: reviewCount(status.reviewConditions, "API_VARIANCE"),
+      compositeVerifiedCount: 0,
+      receiptCandidateCount: 0,
+      reversalConflictCount: reviewCount(status.reviewConditions, "RECEIPT_REVERSAL_CONFLICT"),
+      missingReceiptEvidenceCount: reviewCount(status.reviewConditions, "MISSING_RECEIPT_EVIDENCE"),
       sourceRow,
     };
   });
@@ -551,7 +693,7 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
     };
   });
 
-  const lotTable = table(input.lots, "CALC_Package_Lot_Period", WORKBOOK_LIMITS.lots, [
+  const lotRequired = [
     "period_end", "lot_id", "account_id", "student_id", "class_id", "student_name", "class_name",
     "lot_kind", "match_status", "review_state", "package_name", "sales_key", "transaction_date",
     "credit_event_key", "original_credits", "negative_recovery_credits", "opening_paid_credits",
@@ -560,7 +702,18 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
     "closing_liability_thb", "identity_difference_thb", "source_file_id", "source_sheet_id", "source_row",
     "candidate_sales_keys", "transaction_number", "package_credits", "net_payment_thb",
     "output_run_id", "source_fingerprint",
-  ]);
+  ];
+  if (status.workbookSchemaVersion >= 3) {
+    lotRequired.push(
+      "match_confidence", "match_rule_id", "match_evidence", "candidate_receipt_ids",
+      "sales_source_file_id", "sales_source_sheet_id", "sales_source_row",
+      "credit_event_source_file_id", "credit_event_source_sheet_id", "credit_event_source_row",
+      "receipt_id", "receipt_type", "receipt_status", "receipt_charged_at",
+      "receipt_amount_thb", "receipt_currency", "receipt_note", "receipt_student_id",
+      "receipt_class_id", "receipt_source_row",
+    );
+  }
+  const lotTable = table(input.lots, "CALC_Package_Lot_Period", WORKBOOK_LIMITS.lots, lotRequired);
   const lots: ParsedWorkbookLot[] = lotTable.records.map(({ row, sourceRow }) => {
     for (let column = 22; column <= 27; column += 1) {
       formulaCell(input.lotFormulas, sourceRow, column, "CALC_Package_Lot_Period");
@@ -573,9 +726,15 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
     }
     const identity = numberValue(lotTable.get(row, "identity_difference_thb"), `Lot row ${sourceRow} identity`);
     if (Math.abs(identity) > 1) throw new UnearnedRevenueWorkbookError(`Lot row ${sourceRow} does not roll forward`);
-    const sourceSpreadsheet = text(lotTable.get(row, "source_file_id"));
-    const sourceSheetRaw = lotTable.get(row, "source_sheet_id");
-    const sourceRowRaw = lotTable.get(row, "source_row");
+    const v3 = status.workbookSchemaVersion >= 3;
+    const sourceSpreadsheet = text(lotTable.get(row, v3 ? "sales_source_file_id" : "source_file_id"));
+    const sourceSheetRaw = lotTable.get(row, v3 ? "sales_source_sheet_id" : "source_sheet_id");
+    const sourceRowRaw = lotTable.get(row, v3 ? "sales_source_row" : "source_row");
+    const creditEventSpreadsheet = text(lotTable.get(row, "credit_event_source_file_id"));
+    const receiptChargedAtRaw = text(lotTable.get(row, "receipt_charged_at"));
+    if (receiptChargedAtRaw && Number.isNaN(new Date(receiptChargedAtRaw).getTime())) {
+      throw new UnearnedRevenueWorkbookError(`Lot row ${sourceRow} receipt_charged_at is invalid`);
+    }
     return {
       periodEnd: googleSheetDate(lotTable.get(row, "period_end"), `Lot row ${sourceRow} period_end`),
       lotId: text(lotTable.get(row, "lot_id")),
@@ -586,6 +745,17 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
       className: text(lotTable.get(row, "class_name")),
       lotKind: lotKind(lotTable.get(row, "lot_kind"), `Lot row ${sourceRow}`),
       matchStatus: matchStatus(lotTable.get(row, "match_status"), `Lot row ${sourceRow}`),
+      matchConfidence: matchConfidence(
+        text(lotTable.get(row, "match_confidence")) || (
+          text(lotTable.get(row, "match_status")) === "OVERRIDE" ? "FINANCE_REVIEWED"
+            : text(lotTable.get(row, "match_status")) === "EXACT_TRANSACTION" ? "EXACT"
+              : ["AMBIGUOUS", "UNATTRIBUTED", "FROZEN_OPENING"].includes(text(lotTable.get(row, "match_status"))) ? "RESIDUAL"
+                : "CANDIDATE"
+        ),
+        `Lot row ${sourceRow}`,
+      ),
+      matchRuleId: text(lotTable.get(row, "match_rule_id")),
+      matchEvidence: jsonObject(lotTable.get(row, "match_evidence"), `Lot row ${sourceRow} match_evidence`),
       reviewState: reviewState(lotTable.get(row, "review_state"), `Lot row ${sourceRow}`),
       packageName: text(lotTable.get(row, "package_name")),
       transactionNumber: text(lotTable.get(row, "transaction_number")),
@@ -606,9 +776,23 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
       recognizedRevenueThb: numeric(lotTable.get(row, "recognized_revenue_thb"), "recognized_revenue_thb"),
       closingLiabilityThb: numeric(lotTable.get(row, "closing_liability_thb"), "closing_liability_thb"),
       candidateSalesKeys: text(lotTable.get(row, "candidate_sales_keys")),
+      candidateReceiptIds: text(lotTable.get(row, "candidate_receipt_ids")),
       sourceSpreadsheetId: sourceSpreadsheet || null,
-      sourceSheetId: text(sourceSheetRaw) ? integer(sourceSheetRaw, "source_sheet_id") : null,
-      sourceRow: text(sourceRowRaw) ? integer(sourceRowRaw, "source_row") : null,
+      sourceSheetId: optionalInteger(sourceSheetRaw, "sales_source_sheet_id"),
+      sourceRow: optionalInteger(sourceRowRaw, "sales_source_row"),
+      creditEventSpreadsheetId: creditEventSpreadsheet || null,
+      creditEventSheetId: optionalInteger(lotTable.get(row, "credit_event_source_sheet_id"), "credit_event_source_sheet_id"),
+      creditEventRow: optionalInteger(lotTable.get(row, "credit_event_source_row"), "credit_event_source_row"),
+      receiptId: text(lotTable.get(row, "receipt_id")),
+      receiptType: text(lotTable.get(row, "receipt_type")),
+      receiptStatus: text(lotTable.get(row, "receipt_status")),
+      receiptChargedAt: receiptChargedAtRaw || null,
+      receiptAmountThb: numeric(lotTable.get(row, "receipt_amount_thb") || 0, "receipt_amount_thb"),
+      receiptCurrency: text(lotTable.get(row, "receipt_currency")),
+      receiptNote: text(lotTable.get(row, "receipt_note")),
+      receiptStudentId: text(lotTable.get(row, "receipt_student_id")),
+      receiptClassId: text(lotTable.get(row, "receipt_class_id")),
+      receiptSourceRow: optionalInteger(lotTable.get(row, "receipt_source_row"), "receipt_source_row"),
       formulaRow: sourceRow,
     };
   });
@@ -659,6 +843,33 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
       || !accountKeys.has(`${lot.periodEnd}\u0000${lot.accountId}`)) {
       throw new UnearnedRevenueWorkbookError(`Lot ${lot.lotId} has no matching period/student/account row`);
     }
+    if (lot.receiptId) {
+      const receiptEvidence = receiptEvidenceById.get(lot.receiptId);
+      if (!receiptEvidence) {
+        throw new UnearnedRevenueWorkbookError(`Lot ${lot.lotId} references unknown receipt ${lot.receiptId}`);
+      }
+      if (lot.receiptSourceRow !== receiptEvidence.sourceRow) {
+        throw new UnearnedRevenueWorkbookError(`Lot ${lot.lotId} has an inconsistent receipt trace row`);
+      }
+      const lotChargedAt = lot.receiptChargedAt ? new Date(lot.receiptChargedAt).getTime() : null;
+      const evidenceChargedAt = receiptEvidence.chargedAt
+        ? new Date(receiptEvidence.chargedAt).getTime()
+        : null;
+      if (
+        lot.receiptType !== receiptEvidence.type
+        || lot.receiptStatus !== receiptEvidence.status
+        || lotChargedAt !== evidenceChargedAt
+        || difference(lot.receiptAmountThb ?? "0", receiptEvidence.amountThb) > 0.00000001
+        || lot.receiptCurrency !== receiptEvidence.currency
+        || lot.receiptNote !== receiptEvidence.note
+        || lot.receiptStudentId !== receiptEvidence.studentId
+        || lot.receiptClassId !== receiptEvidence.classId
+      ) {
+        throw new UnearnedRevenueWorkbookError(`Lot ${lot.lotId} has receipt metadata inconsistent with SRC_Wise_Receipt`);
+      }
+    } else if (lot.receiptSourceRow !== null) {
+      throw new UnearnedRevenueWorkbookError(`Lot ${lot.lotId} has a receipt trace row without a receipt ID`);
+    }
   }
 
   for (const period of periods) {
@@ -681,8 +892,16 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
     assertClose(Number(period.openingLiabilityThb) + Number(period.deferredNewLiabilityThb) - Number(period.recognizedRevenueThb), Number(period.closingLiabilityThb), "finance roll-forward");
     period.ambiguousCount = periodLots.filter((row) => row.matchStatus === "AMBIGUOUS" && Number(row.closingLiabilityThb) > 0).length;
     period.unattributedCount = periodLots.filter((row) => row.matchStatus === "UNATTRIBUTED" && Number(row.closingLiabilityThb) > 0).length;
-    period.fallbackValuedCount = periodLots.filter((row) => ["AMBIGUOUS", "UNATTRIBUTED"].includes(row.lotKind) && Number(row.closingLiabilityThb) > 0).length;
+    period.fallbackValuedCount = periodLots.filter((row) => ["AMBIGUOUS", "UNATTRIBUTED", "COMPOSITE_CANDIDATE"].includes(row.lotKind) && Number(row.closingLiabilityThb) > 0).length;
     period.negativeBalanceCount = periodAccounts.filter((row) => Number(row.ledgerRemainingCredits) < -0.001).length;
+    period.compositeVerifiedCount = periodLots.filter((row) => row.matchStatus === "COMPOSITE_VERIFIED").length;
+    period.receiptCandidateCount = periodLots.filter((row) => row.matchStatus === "COMPOSITE_CANDIDATE").length;
+    if (period.isLatest) {
+      period.compositeVerifiedCount = Math.max(period.compositeVerifiedCount ?? 0, status.compositeVerifiedCount ?? 0);
+      period.receiptCandidateCount = Math.max(period.receiptCandidateCount ?? 0, status.receiptCandidateCount ?? 0);
+      period.reversalConflictCount = status.reversalConflictCount ?? 0;
+      period.missingReceiptEvidenceCount = status.missingReceiptEvidenceCount ?? 0;
+    }
   }
 
   return {
@@ -695,6 +914,9 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
       periods: periods.length,
       students: students.length,
       accounts: accounts.length,
+      ...(status.workbookSchemaVersion >= 3
+        ? { receipts: receiptTable.records.length }
+        : {}),
       lots: lots.length,
     },
   };

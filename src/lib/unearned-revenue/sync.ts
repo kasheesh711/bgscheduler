@@ -26,6 +26,7 @@ const REQUIRED_TABS = [
   "CALC_Account_Period",
   "CALC_Package_Lot_Period",
 ] as const;
+const V3_TRACE_TABS = ["SRC_Wise_Receipt"] as const;
 
 export interface UnearnedRevenueSyncResult {
   ok: boolean;
@@ -78,6 +79,12 @@ export function assertStableSheetIds(
       throw new Error(`Workbook tab changed during import: ${title}`);
     }
   }
+  for (const title of V3_TRACE_TABS) {
+    if (before.has(title) !== after.has(title)
+      || (before.has(title) && before.get(title)?.sheetId !== after.get(title)?.sheetId)) {
+      throw new Error(`Workbook tab changed during import: ${title}`);
+    }
+  }
 }
 
 export async function readUnearnedRevenueWorkbook(
@@ -87,7 +94,25 @@ export async function readUnearnedRevenueWorkbook(
   const startProperties = assertRequiredTabs(await listGoogleSheetProperties(email, spreadsheetId));
   const statusRange = rangesForLimit("Model Status", "C", WORKBOOK_LIMITS.status);
   const statusStart = await fetchGoogleSheetRange(email, spreadsheetId, statusRange);
-  const [qa, periods, periodFormulas, students, studentFormulas, accounts, accountFormulas, lots, lotFormulas] = await Promise.all([
+  const receiptRowsPromise: Promise<unknown[][] | undefined> = startProperties.has("SRC_Wise_Receipt")
+    ? fetchGoogleSheetRange(
+      email,
+      spreadsheetId,
+      rangesForLimit("SRC_Wise_Receipt", "V", WORKBOOK_LIMITS.receipts),
+    )
+    : Promise.resolve(undefined);
+  const [
+    qa,
+    periods,
+    periodFormulas,
+    students,
+    studentFormulas,
+    accounts,
+    accountFormulas,
+    lots,
+    lotFormulas,
+    receipts,
+  ] = await Promise.all([
     fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("QA Checks", "H", WORKBOOK_LIMITS.qa)),
     fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("Model Comparison", "V", WORKBOOK_LIMITS.periods)),
     fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("Model Comparison", "V", WORKBOOK_LIMITS.periods), { valueRenderOption: "FORMULA" }),
@@ -95,8 +120,9 @@ export async function readUnearnedRevenueWorkbook(
     fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Student_Period", "Y", WORKBOOK_LIMITS.students), { valueRenderOption: "FORMULA" }),
     fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Account_Period", "AC", WORKBOOK_LIMITS.accounts)),
     fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Account_Period", "AC", WORKBOOK_LIMITS.accounts), { valueRenderOption: "FORMULA" }),
-    fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Package_Lot_Period", "AN", WORKBOOK_LIMITS.lots)),
-    fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Package_Lot_Period", "AN", WORKBOOK_LIMITS.lots), { valueRenderOption: "FORMULA" }),
+    fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Package_Lot_Period", "BJ", WORKBOOK_LIMITS.lots)),
+    fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Package_Lot_Period", "BJ", WORKBOOK_LIMITS.lots), { valueRenderOption: "FORMULA" }),
+    receiptRowsPromise,
   ]);
   const statusEnd = await fetchGoogleSheetRange(email, spreadsheetId, statusRange);
   const endProperties = assertRequiredTabs(await listGoogleSheetProperties(email, spreadsheetId));
@@ -113,11 +139,17 @@ export async function readUnearnedRevenueWorkbook(
     accountFormulas,
     lots,
     lotFormulas,
+    receipts,
   });
+  if (contract.status.workbookSchemaVersion >= 3 && !startProperties.has("SRC_Wise_Receipt")) {
+    throw new Error("Workbook schema V3 is missing required tab: SRC_Wise_Receipt");
+  }
   return {
     contract,
     sheetIds: Object.fromEntries(
-      REQUIRED_TABS.map((title) => [title, startProperties.get(title)!.sheetId]),
+      [...REQUIRED_TABS, ...V3_TRACE_TABS]
+        .filter((title) => startProperties.has(title))
+        .map((title) => [title, startProperties.get(title)!.sheetId]),
     ),
   };
 }
@@ -223,6 +255,10 @@ export async function importUnearnedRevenueContract(input: {
       fallbackValuedCount: row.fallbackValuedCount,
       negativeBalanceCount: row.negativeBalanceCount,
       apiVarianceCount: row.apiVarianceCount,
+      compositeVerifiedCount: row.compositeVerifiedCount ?? 0,
+      receiptCandidateCount: row.receiptCandidateCount ?? 0,
+      reversalConflictCount: row.reversalConflictCount ?? 0,
+      missingReceiptEvidenceCount: row.missingReceiptEvidenceCount ?? 0,
       traceSpreadsheetId: spreadsheetId,
       traceSheetId: sheetIds["Model Comparison"],
       traceRow: row.sourceRow,
@@ -296,6 +332,9 @@ export async function importUnearnedRevenueContract(input: {
       className: row.className,
       lotKind: row.lotKind,
       matchStatus: row.matchStatus,
+      matchConfidence: row.matchConfidence ?? "RESIDUAL",
+      matchRuleId: row.matchRuleId ?? "",
+      matchEvidence: row.matchEvidence ?? {},
       reviewState: row.reviewState,
       packageName: row.packageName,
       transactionNumber: row.transactionNumber,
@@ -316,6 +355,7 @@ export async function importUnearnedRevenueContract(input: {
       recognizedRevenueThb: row.recognizedRevenueThb,
       closingLiabilityThb: row.closingLiabilityThb,
       candidateSalesKeys: row.candidateSalesKeys,
+      candidateReceiptIds: row.candidateReceiptIds ?? "",
       formulaSpreadsheetId: spreadsheetId,
       formulaSheetId: sheetIds["CALC_Package_Lot_Period"],
       formulaRow: row.formulaRow,
@@ -324,6 +364,23 @@ export async function importUnearnedRevenueContract(input: {
       sourceSheetId: row.sourceSheetId,
       sourceRow: row.sourceRow,
       sourceA1: row.sourceRow ? sourceA1(row.sourceRow) : null,
+      creditEventSpreadsheetId: row.creditEventSpreadsheetId ?? null,
+      creditEventSheetId: row.creditEventSheetId ?? null,
+      creditEventRow: row.creditEventRow ?? null,
+      creditEventA1: row.creditEventRow ? sourceA1(row.creditEventRow) : null,
+      receiptSpreadsheetId: row.receiptSourceRow ? spreadsheetId : null,
+      receiptSheetId: row.receiptSourceRow ? sheetIds["SRC_Wise_Receipt"] ?? null : null,
+      receiptRow: row.receiptSourceRow ?? null,
+      receiptA1: row.receiptSourceRow ? `A${row.receiptSourceRow}:V${row.receiptSourceRow}` : null,
+      receiptId: row.receiptId ?? "",
+      receiptType: row.receiptType ?? "",
+      receiptStatus: row.receiptStatus ?? "",
+      receiptChargedAt: row.receiptChargedAt ? parseTimestamp(row.receiptChargedAt, "receipt_charged_at") : null,
+      receiptAmountThb: row.receiptAmountThb ?? "0.00000000",
+      receiptCurrency: row.receiptCurrency ?? "",
+      receiptNote: row.receiptNote ?? "",
+      receiptStudentId: row.receiptStudentId ?? "",
+      receiptClassId: row.receiptClassId ?? "",
     }))));
 
     // A transaction owns one pg client; keep its statements serial. pg currently

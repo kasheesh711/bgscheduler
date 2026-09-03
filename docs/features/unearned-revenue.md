@@ -1,6 +1,6 @@
 # Unearned Revenue
 
-**Status: stable (read-only; FIFO shadow until Finance approval).** The dashboard is registered under
+**Status: stable (read-only; FIFO V2 shadow until Finance approval).** The dashboard is registered under
 **Finance & Revenue** at `/unearned-revenue`. A daily importer runs at 01:30 Bangkok and only promotes
 a workbook run after the workbook declares itself `PUBLISHED` and every hard accounting check passes.
 
@@ -22,25 +22,38 @@ The workbook calculates two models on every refresh:
 
 - `LEGACY_ACCOUNT_RATE` values each student/class account using the existing program rate. It remains
   canonical until Finance approves the exact live FIFO version and run in `Package Control`.
-- `FIFO_PACKAGE_LOT_V1` attributes paid credit events to sales packages and consumes paid lots
-  oldest-first before complimentary credits. A protected 1 March 2026 opening lot freezes the opening
-  paid credits and liability. Purchases repair a negative balance before creating deferred liability.
+- `FIFO_PACKAGE_LOT_V2` uses a three-way evidence bridge — sales row ↔ WISE fee receipt ↔ WISE credit
+  event — and consumes paid lots oldest-first before complimentary credits. Receipts prove package
+  identity and price but never replace the credit ledger as the balance authority. A protected 1 March
+  2026 opening lot freezes the opening paid credits and liability. Purchases repair a negative balance
+  before creating deferred liability.
 
-An approval is version-specific. Changing the FIFO algorithm version makes the new result shadow
-again automatically. Finance can also select the legacy model in `Package Control`. The dashboard
-uses the workbook's published canonical fields and labels the other result and its delta as audit
-evidence.
+An approval is version- and run-specific. The first V2 cutover must name the exact currently published,
+QA-passed shadow run; after that cutover, later refreshes stay canonical while V2 is unchanged. A V1
+approval is stale automatically. Finance can also select the legacy model in `Package Control`. The
+dashboard uses the workbook's published canonical fields and labels the other result and its delta as
+audit evidence.
 
 ## Package attribution
 
-The workbook tries, in order, an active Finance override, a unique exact transaction-number match,
-then a unique match on normalized student nickname, program bucket, credit quantity, and a transaction
-date within 21 days. Conflicting candidates remain `AMBIGUOUS`; events with no candidate remain
-`UNATTRIBUTED`. Both are visible review conditions and use the pinned program rate rather than being
-presented as a real package.
+The workbook tries, in order, an active Finance override, a unique direct transaction-ID match, a unique
+receipt/invoice-identifier chain, and then a strict three-way composite match. A composite is automatic
+only when the paid sales row says `Recorded in WISE? = TRUE`, the WISE receipt is a positive THB
+`CHARGED` payment, receipt student/class IDs equal the ledger event, credits agree within 0.001, money
+agrees within THB 0.01, sales-to-receipt dates are within three Bangkok days, receipt-to-event dates are
+within 21 days, recognized program buckets agree, and all three nodes have exactly one qualifying
+counterpart globally. Names and notes are displayed as supporting evidence but cannot prove a match.
+
+Near matches are `COMPOSITE_CANDIDATE`; conflicting matches are `AMBIGUOUS`; events with no candidate
+are `UNATTRIBUTED`. Those rows, synthetic opening lots, and any other residual use the pinned program
+rate instead of being presented as a real package. A negative `Marked as unpaid` receipt reverses only
+a unique preceding positive receipt for the same student, class, and absolute amount within 21 days.
+Unpaired or non-unique reversals remain review conditions.
 
 `Package Control` is deliberately stable and editable so Google version history preserves Finance's
-decisions. The generated package/model tabs are staged and swapped. Invalid, duplicate, or
+decisions. Column J optionally records a `wise_receipt_id` for an override. Generated
+`SRC_Wise_Receipt` and `IDX_Receipt_Match` tabs preserve normalized receipt evidence and every candidate
+edge; all generated package/model tabs are staged and swapped. Invalid, duplicate, or
 over-allocated overrides stop publication; ambiguous and residual lots do not.
 
 ## Reporting periods and drilldown
@@ -55,16 +68,20 @@ The student table aggregates all class accounts by stable WISE student ID. Selec
 the drilldown is shareable and browser navigation works.
 
 Every finance, student, account, and lot amount retains a numeric Google sheet ID, row, and A1 anchor.
-Formula links use `#gid=<sheetId>&range=<A1>`. A matched lot also has a separate link to the immutable
-source spreadsheet, source sheet ID, and source row. Opening, ambiguous, and unattributed lots have no
-invented source link.
+Formula links use `#gid=<sheetId>&range=<A1>`. A matched lot can expose four independent links: its
+formula, original sales row, original credit-ledger row, and normalized WISE receipt evidence row.
+Opening, ambiguous, and unattributed lots never receive invented source links.
 
 ## Publication and failure model
 
-The importer uses bounded reads: 200 status/QA rows, 500 period/comparison rows, 20,000 student and
-account rows, and 100,000 lot rows. It reads model formulas separately and rejects missing or malformed
-formula rows. It also rereads `Model Status` and sheet properties after all model tabs; a status change
-or generated-tab ID rotation aborts the run.
+The publisher fetches WISE fee transactions from 1 March 2026 through cutoff in non-overlapping Bangkok
+windows with complete pagination and a 10,000-row global safety limit. A failed/truncated receipt fetch
+or conflicting duplicate receipt ID blocks workbook publication. The website importer uses bounded
+reads: 200 status/QA rows, 500 period/comparison rows, 10,000 receipt rows, 20,000 student and account
+rows, and 100,000 lot rows. It reads model formulas separately and rejects missing or malformed
+formula rows. For V3 it validates receipt IDs, checksums, run lineage, embedded row numbers, and every
+lot-to-receipt trace and metadata mirror. It also rereads `Model Status` and sheet properties after all
+model tabs; a status change or generated-tab ID rotation aborts the run.
 
 A complete snapshot is staged in one database transaction, cross-level totals and lineages are
 validated, and only then is it atomically promoted. The source run ID, fingerprint, revision, and

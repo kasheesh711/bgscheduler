@@ -116,6 +116,10 @@ function payload(
       fallbackValuedCount: 4,
       negativeBalanceCount: 5,
       apiVarianceCount: 6,
+      compositeVerifiedCount: 7,
+      receiptCandidateCount: 8,
+      reversalConflictCount: 1,
+      missingReceiptEvidenceCount: 2,
       reviewConditions: ["PACKAGE_UNATTRIBUTED:3"],
     },
     students: [{
@@ -153,6 +157,9 @@ function lot(sourceTrace: TraceAnchor | null): UnearnedRevenueLotDetail {
     accountId: "account-1",
     lotKind: sourceTrace ? "PAID_PACKAGE" : "OPENING",
     matchStatus: sourceTrace ? "EXACT_TRANSACTION" : "FROZEN_OPENING",
+    matchConfidence: sourceTrace ? "EXACT" : "RESIDUAL",
+    matchRuleId: sourceTrace ? "MATCH-DIRECT-TRANSACTION-ID" : "OPENING",
+    matchEvidence: {},
     reviewState: "NO_REVIEW",
     packageName: sourceTrace ? "10-credit package" : "",
     transactionNumber: sourceTrace ? "TX-1" : "",
@@ -171,7 +178,12 @@ function lot(sourceTrace: TraceAnchor | null): UnearnedRevenueLotDetail {
     recognizedRevenueThb: 200,
     closingLiabilityThb: 800,
     candidateSalesKeys: [],
+    candidateReceiptIds: [],
     formulaTrace: trace(303, "AA9"),
+    salesTrace: sourceTrace,
+    creditEventTrace: sourceTrace,
+    receiptTrace: null,
+    receipt: null,
     sourceTrace,
   };
 }
@@ -244,12 +256,14 @@ describe("UnearnedRevenueDashboard", () => {
   it("renders shadow values, actual-cutoff semantics, charts, residuals, and both responsive student layouts", () => {
     const html = renderToStaticMarkup(<UnearnedRevenueDashboard initialPayload={payload()} />);
 
-    expect(html).toContain("FIFO shadow · legacy canonical");
+    expect(html).toContain("FIFO V2 shadow · legacy canonical");
+    expect(html).toContain("Legacy is still the official number");
+    expect(html).toContain("Liability tied to exact packages");
     expect(html).toContain("03 Sept 2026 (latest completed day)");
     expect(html).not.toContain("30 Sept 2026");
     expect(html).toContain("Column chart of completed month-end closing unearned revenue");
     expect(html).toContain("Waterfall chart showing opening plus deferred minus recognized equals closing liability");
-    expect(html).toContain("THB 1,100.00 residual");
+    expect(html).toContain("THB 1,100.00 still residual");
     expect(html).toContain('class="hidden md:block"');
     expect(html).toContain('class="divide-y md:hidden"');
     expect(html.match(/Ada Student/g)).toHaveLength(2);
@@ -267,9 +281,9 @@ describe("UnearnedRevenueDashboard", () => {
       })} />,
     );
 
-    expect(html).toContain("FIFO canonical");
+    expect(html).toContain("FIFO V2 canonical");
     expect(html).toContain("Canonical package-lot model");
-    expect(html).not.toContain("FIFO shadow · legacy canonical");
+    expect(html).not.toContain("FIFO V2 shadow · legacy canonical");
   });
 
   it("opens the URL-selected student drawer state", () => {
@@ -303,7 +317,8 @@ describe("UnearnedRevenueDashboard", () => {
     expect(html).toContain('data-slot="table-container" class="relative w-full overflow-x-auto"');
     expect(html).toContain("min-w-[920px]");
     expect(html).toContain("Open formula");
-    expect(html).toContain("Open source row");
+    expect(html).toContain("Open sales row");
+    expect(html).toContain("Open credit event");
   });
 });
 
@@ -313,16 +328,50 @@ describe("UnearnedRevenueLotTraceLinks", () => {
     const html = renderToStaticMarkup(<UnearnedRevenueLotTraceLinks lot={lot(source)} />);
 
     expect(html).toContain("Open formula");
-    expect(html).toContain("Open source row");
+    expect(html).toContain("Open sales row");
+    expect(html).toContain("Open credit event");
     expect(html).toContain("gid=303&amp;range=AA9");
     expect(html).toContain("gid=404&amp;range=A22:AZ22");
+  });
+
+  it("renders independent Wise receipt evidence and the V2 match audit", () => {
+    const receiptTrace = trace(505, "A31:V31");
+    const receiptLot: UnearnedRevenueLotDetail = {
+      ...lot(trace(404, "A22:AZ22")),
+      matchStatus: "COMPOSITE_VERIFIED",
+      matchConfidence: "COMPOSITE_VERIFIED",
+      matchRuleId: "MATCH-COMPOSITE-VERIFIED-V2",
+      matchEvidence: { amount_difference_thb: 0, credit_difference: 0 },
+      receiptTrace,
+      receipt: {
+        id: "receipt-1",
+        type: "OFFLINE_PAYMENT",
+        status: "CHARGED",
+        chargedAt: "2026-03-03T10:00:00+07:00",
+        amountThb: 1000,
+        currency: "THB",
+        note: "Paid offline",
+        studentId: "student-1",
+        classId: "class-1",
+      },
+    };
+    const links = renderToStaticMarkup(<UnearnedRevenueLotTraceLinks lot={receiptLot} />);
+    const detail = studentDetail();
+    detail.lots = [receiptLot];
+    const audit = renderToStaticMarkup(<UnearnedRevenueStudentDetailContent detail={detail} />);
+
+    expect(links).toContain("Open receipt evidence");
+    expect(links).toContain("gid=505&amp;range=A31:V31");
+    expect(audit).toContain("Composite verified");
+    expect(audit).toContain("MATCH-COMPOSITE-VERIFIED-V2");
+    expect(audit).toContain("Matching evidence");
   });
 
   it("keeps the formula link but labels an absent synthetic source row", () => {
     const html = renderToStaticMarkup(<UnearnedRevenueLotTraceLinks lot={lot(null)} />);
 
     expect(html).toContain("Open formula");
-    expect(html).not.toContain("Open source row</a>");
-    expect(html).toContain("No source row for this synthetic lot");
+    expect(html).not.toContain("Open sales row</a>");
+    expect(html).toContain("No source links for this synthetic opening lot");
   });
 });

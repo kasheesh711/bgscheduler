@@ -10,7 +10,7 @@ export function unearnedRevenueModelPresentation(model: UnearnedRevenueCanonical
   const fifoCanonical = model === FIFO_PACKAGE_MODEL;
   return {
     fifoCanonical,
-    badgeLabel: fifoCanonical ? "FIFO canonical" : "FIFO shadow · legacy canonical",
+    badgeLabel: fifoCanonical ? "FIFO V2 canonical" : "FIFO V2 shadow · legacy canonical",
   } as const;
 }
 
@@ -57,6 +57,7 @@ export function unearnedRevenueLotLabel(
 ): string {
   if (lot.lotKind === "OPENING") return "Opening balance (synthetic lot)";
   if (lot.lotKind === "AMBIGUOUS") return "Ambiguous package (residual)";
+  if (lot.lotKind === "COMPOSITE_CANDIDATE") return "Receipt-backed candidate (residual)";
   if (lot.lotKind === "UNATTRIBUTED") return "Unattributed purchase (residual)";
   if (lot.lotKind === "COMPLIMENTARY") return lot.packageName || "Complimentary credits";
   return lot.packageName || lot.transactionNumber || "Paid package";

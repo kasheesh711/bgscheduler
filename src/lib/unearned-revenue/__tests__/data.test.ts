@@ -155,7 +155,15 @@ describe("unearned revenue dashboard queries", () => {
           sourceSpreadsheetId: null, sourceSheetId: null, sourceRow: null, sourceA1: null },
         { ...lotBase, lotId: "matched", lotKind: "PAID_PACKAGE", matchStatus: "EXACT_TRANSACTION",
           packageName: "Math 10", sourceSpreadsheetId: "sales-workbook", sourceSheetId: 205,
-          sourceRow: 44, sourceA1: "A44:AZ44" },
+          sourceRow: 44, sourceA1: "A44:AZ44", matchConfidence: "COMPOSITE_VERIFIED",
+          matchRuleId: "MATCH-COMPOSITE-VERIFIED-V2", matchEvidence: { credit_difference: 0 },
+          candidateReceiptIds: "receipt-1", creditEventSpreadsheetId: "credit-ledger",
+          creditEventSheetId: 206, creditEventRow: 45, creditEventA1: "A45:AZ45",
+          receiptSpreadsheetId: "workbook-1", receiptSheetId: 207, receiptRow: 46,
+          receiptA1: "A46:V46", receiptId: "receipt-1", receiptType: "OFFLINE_PAYMENT",
+          receiptStatus: "CHARGED", receiptChargedAt: new Date("2026-09-01T10:00:00+07:00"),
+          receiptAmountThb: "105.00000000", receiptCurrency: "THB", receiptNote: "Paid offline",
+          receiptStudentId: "wise-student-1", receiptClassId: "class-1" },
       ]]],
     ]));
 
@@ -164,5 +172,8 @@ describe("unearned revenue dashboard queries", () => {
     expect(detail.lots[0].sourceTrace).toBeNull();
     expect(detail.lots[1].formulaTrace.url).toContain("#gid=104&range=AA10");
     expect(detail.lots[1].sourceTrace?.url).toContain("#gid=205&range=A44%3AAZ44");
+    expect(detail.lots[1].creditEventTrace?.url).toContain("#gid=206&range=A45%3AAZ45");
+    expect(detail.lots[1].receiptTrace?.url).toContain("#gid=207&range=A46%3AV46");
+    expect(detail.lots[1].receipt).toMatchObject({ id: "receipt-1", amountThb: 105 });
   });
 });

@@ -196,4 +196,55 @@ describe("unearned revenue atomic snapshot import", () => {
     expect(events.some((event) => event.type === "insert")).toBe(false);
     expect(events.some((event) => event.table === schema.unearnedRevenueSnapshots)).toBe(false);
   });
+
+  it("persists V2 match evidence and independent receipt and credit-event anchors", async () => {
+    const input = contract();
+    input.status.workbookSchemaVersion = 3;
+    input.status.modelVersion = "FIFO_PACKAGE_LOT_V2";
+    input.rowCounts.receipts = 1;
+    Object.assign(input.lots[0], {
+      matchStatus: "COMPOSITE_VERIFIED",
+      matchConfidence: "COMPOSITE_VERIFIED",
+      matchRuleId: "MATCH-COMPOSITE-VERIFIED-V2",
+      matchEvidence: { credit_difference: 0, amount_difference_thb: 0 },
+      candidateReceiptIds: "receipt-1",
+      creditEventSpreadsheetId: "credit-ledger",
+      creditEventSheetId: 88,
+      creditEventRow: 19,
+      receiptId: "receipt-1",
+      receiptType: "OFFLINE_PAYMENT",
+      receiptStatus: "CHARGED",
+      receiptChargedAt: "2026-09-01T10:00:00+07:00",
+      receiptAmountThb: "105.00000000",
+      receiptCurrency: "THB",
+      receiptNote: "Paid offline",
+      receiptStudentId: "student-1",
+      receiptClassId: "class-1",
+      receiptSourceRow: 31,
+    });
+    const { db, events } = fakeDb();
+    await importUnearnedRevenueContract({
+      db,
+      syncRunId: "sync-v2",
+      spreadsheetId: "workbook",
+      contract: input,
+      sheetIds: { ...sheetIds, SRC_Wise_Receipt: 77 },
+    });
+
+    const lotInsert = events.find((event) => (
+      event.type === "insert" && event.table === schema.unearnedRevenueLotPeriods
+    ));
+    expect(lotInsert?.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        matchConfidence: "COMPOSITE_VERIFIED",
+        matchRuleId: "MATCH-COMPOSITE-VERIFIED-V2",
+        creditEventSpreadsheetId: "credit-ledger",
+        creditEventA1: "A19:AZ19",
+        receiptSpreadsheetId: "workbook",
+        receiptSheetId: 77,
+        receiptA1: "A31:V31",
+        receiptId: "receipt-1",
+      }),
+    ]));
+  });
 });

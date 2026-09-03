@@ -164,22 +164,23 @@ function StudentLiability({ row, shadow }: { row: UnearnedRevenueStudentRow; sha
 }
 
 function confidenceLabel(lot: UnearnedRevenueLotDetail): string {
-  if (lot.matchStatus === "EXACT_TRANSACTION") return "High";
-  if (lot.matchStatus === "OVERRIDE") return "Finance reviewed";
-  if (lot.matchStatus === "COMPLIMENTARY_MATCH") return "Matched · zero value";
-  if (lot.matchStatus === "UNIQUE_HEURISTIC") return "Medium";
-  if (lot.matchStatus === "FROZEN_OPENING") return "Frozen opening";
-  return "Estimated residual";
+  if (lot.matchConfidence === "COMPOSITE_VERIFIED") return "Composite verified";
+  if (lot.matchConfidence === "FINANCE_REVIEWED") return "Finance reviewed";
+  if (lot.matchConfidence === "CANDIDATE") return "Candidate";
+  if (lot.matchConfidence === "COMPLIMENTARY") return "Matched · zero value";
+  if (lot.matchConfidence === "EXACT") return "Exact match";
+  return "Residual";
 }
 
 export function UnearnedRevenueLotTraceLinks({ lot }: { lot: UnearnedRevenueLotDetail }) {
   return (
     <div className="mt-4 flex flex-wrap gap-4 border-t pt-3">
       <TraceLink href={lot.formulaTrace.url}>Open formula</TraceLink>
-      {lot.sourceTrace ? (
-        <TraceLink href={lot.sourceTrace.url}>Open source row</TraceLink>
-      ) : (
-        <span className="text-xs text-muted-foreground">No source row for this synthetic lot</span>
+      {lot.salesTrace && <TraceLink href={lot.salesTrace.url}>Open sales row</TraceLink>}
+      {lot.creditEventTrace && <TraceLink href={lot.creditEventTrace.url}>Open credit event</TraceLink>}
+      {lot.receiptTrace && <TraceLink href={lot.receiptTrace.url}>Open receipt evidence</TraceLink>}
+      {!lot.salesTrace && !lot.creditEventTrace && !lot.receiptTrace && (
+        <span className="text-xs text-muted-foreground">No source links for this synthetic opening lot</span>
       )}
     </div>
   );
@@ -264,7 +265,7 @@ export function UnearnedRevenueStudentDetailContent({
             <div className="rounded-lg border border-dashed p-5 text-sm text-muted-foreground">No active lot movement for this period.</div>
           )}
           {detail.lots.map((lot) => (
-            <Card key={lot.lotId} className={cn("min-w-0", ["OPENING", "AMBIGUOUS", "UNATTRIBUTED"].includes(lot.lotKind) && "border-amber-300 bg-amber-50/40")}>
+            <Card key={lot.lotId} className={cn("min-w-0", ["OPENING", "AMBIGUOUS", "UNATTRIBUTED", "COMPOSITE_CANDIDATE"].includes(lot.lotKind) && "border-amber-300 bg-amber-50/40")}>
               <CardContent className="min-w-0 p-4">
                 <div className="flex min-w-0 flex-col justify-between gap-3 sm:flex-row">
                   <div className="min-w-0">
@@ -273,10 +274,25 @@ export function UnearnedRevenueStudentDetailContent({
                       <Badge variant="outline">{lot.matchStatus.replaceAll("_", " ")}</Badge>
                       <span className="text-xs text-muted-foreground">{confidenceLabel(lot)}</span>
                     </div>
+                    {lot.receipt && (
+                      <div className="mt-1 break-words text-xs text-muted-foreground">
+                        Receipt {lot.receipt.id} · {money.format(lot.receipt.amountThb)} · {lot.receipt.status}
+                      </div>
+                    )}
                     <div className="mt-1 break-words text-xs text-muted-foreground">
                       {lot.transactionNumber || "No transaction number"}
                       {lot.transactionDate ? ` · ${formatDate(lot.transactionDate)}` : ""}
                     </div>
+                    {lot.matchRuleId && (
+                      <div className="mt-1 break-words font-mono text-[11px] text-muted-foreground">
+                        Match rule: {lot.matchRuleId}
+                      </div>
+                    )}
+                    {lot.candidateReceiptIds.length > 0 && (
+                      <div className="mt-1 break-words text-xs text-amber-800">
+                        Candidate receipts: {lot.candidateReceiptIds.join(", ")}
+                      </div>
+                    )}
                   </div>
                   <div className="shrink-0 text-left sm:text-right">
                     <div className="font-mono text-lg font-semibold">{money.format(lot.closingLiabilityThb)}</div>
@@ -299,6 +315,14 @@ export function UnearnedRevenueStudentDetailContent({
                     </div>
                   ))}
                 </div>
+                {Object.keys(lot.matchEvidence).length > 0 && (
+                  <details className="mt-3 rounded-md border bg-background/70 px-3 py-2 text-xs">
+                    <summary className="cursor-pointer font-medium">Matching evidence</summary>
+                    <pre className="mt-2 max-w-full overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">
+                      {JSON.stringify(lot.matchEvidence, null, 2)}
+                    </pre>
+                  </details>
+                )}
                 <UnearnedRevenueLotTraceLinks lot={lot} />
               </CardContent>
             </Card>
@@ -603,6 +627,15 @@ export function UnearnedRevenueDashboard({
           </div>
         )}
 
+        {shadow && (
+          <div className="rounded-lg border border-sky-200 bg-sky-50/70 p-3 text-sm text-sky-950">
+            <div className="font-medium">Legacy is still the official number</div>
+            <div className="mt-1 text-xs leading-relaxed">
+              FIFO V2 is a review copy that links a sales row, Wise receipt, and credit event. Finance must approve this exact workbook run before it can replace the legacy value.
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3">
           <label className="text-xs font-medium text-muted-foreground" htmlFor="period-select">Reporting period</label>
           <select
@@ -626,8 +659,8 @@ export function UnearnedRevenueDashboard({
           <MetricCard label="Newly deferred" value={money.format(selected.deferredNewLiabilityThb)} />
           <MetricCard label="Recognized revenue" value={money.format(selected.recognizedRevenueThb)} />
           <MetricCard label="Remaining paid credits" value={quantity.format(selected.remainingPaidCredits)} />
-          <MetricCard label="Attribution coverage" value={`${percent.format(selected.attributionPercent)}%`} note={`${money.format(selected.residualLiabilityThb)} residual`} />
-          <MetricCard label="FIFO candidate" value={money.format(selected.fifoClosingLiabilityThb)} note={shadow ? `Delta ${money.format(selected.fifoVsLegacyDifferenceThb)}` : "Canonical package-lot model"} />
+          <MetricCard label="Liability tied to exact packages" value={`${percent.format(selected.attributionPercent)}%`} note={`${money.format(selected.residualLiabilityThb)} still residual`} />
+          <MetricCard label="FIFO V2 candidate" value={money.format(selected.fifoClosingLiabilityThb)} note={shadow ? `Delta ${money.format(selected.fifoVsLegacyDifferenceThb)}` : "Canonical package-lot model"} />
           <MetricCard label="Legacy comparator" value={money.format(selected.legacyClosingLiabilityThb)} note={!shadow ? `Delta ${money.format(-selected.fifoVsLegacyDifferenceThb)} vs FIFO` : "Canonical until Finance approval"} />
         </section>
 
@@ -646,6 +679,10 @@ export function UnearnedRevenueDashboard({
           <CardHeader className="pb-2"><CardTitle className="text-base">Data quality and review conditions</CardTitle></CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+              <QualityCard label="Composite verified" value={payload.quality.compositeVerifiedCount} />
+              <QualityCard label="Receipt candidates" value={payload.quality.receiptCandidateCount} tone="warn" />
+              <QualityCard label="Reversal conflicts" value={payload.quality.reversalConflictCount} tone="warn" />
+              <QualityCard label="Missing receipt evidence" value={payload.quality.missingReceiptEvidenceCount} tone="warn" />
               <QualityCard label="Ambiguous lots" value={payload.quality.ambiguousCount} tone="warn" />
               <QualityCard label="Unattributed lots" value={payload.quality.unattributedCount} tone="warn" />
               <QualityCard label="Fallback-valued lots" value={payload.quality.fallbackValuedCount} tone="warn" />

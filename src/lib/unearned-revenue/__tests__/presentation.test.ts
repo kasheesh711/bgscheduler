@@ -13,11 +13,15 @@ describe("unearned revenue dashboard presentation", () => {
   it("clearly distinguishes legacy shadow mode from an approved FIFO cutover", () => {
     expect(unearnedRevenueModelPresentation("LEGACY_ACCOUNT_RATE")).toMatchObject({
       fifoCanonical: false,
-      badgeLabel: "FIFO shadow · legacy canonical",
+      badgeLabel: "FIFO V2 shadow · legacy canonical",
     });
     expect(unearnedRevenueModelPresentation("FIFO_PACKAGE_LOT_V1")).toMatchObject({
+      fifoCanonical: false,
+      badgeLabel: "FIFO V2 shadow · legacy canonical",
+    });
+    expect(unearnedRevenueModelPresentation("FIFO_PACKAGE_LOT_V2")).toMatchObject({
       fifoCanonical: true,
-      badgeLabel: "FIFO canonical",
+      badgeLabel: "FIFO V2 canonical",
     });
   });
 

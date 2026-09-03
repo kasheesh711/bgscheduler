@@ -44,9 +44,10 @@ one `active` row. It retains the exact numeric generated-tab IDs and imported ro
 
 ### `unearned_revenue_periods`
 
-`schema.ts:4905–4936`. One finance total per snapshot and reporting date. It carries period semantics,
-canonical/legacy/FIFO balances, roll-forward components, paid credits, attribution, population and
-quality counts, plus the exact formula anchor.
+One finance total per snapshot and reporting date. It carries period semantics, canonical/legacy/FIFO
+balances, roll-forward components, paid credits, attribution, population and quality counts—including
+composite-verified, receipt-candidate, reversal-conflict, and missing-receipt-evidence counts—plus the
+exact formula anchor.
 
 ### `unearned_revenue_student_periods`
 
@@ -62,10 +63,11 @@ formula anchor.
 
 ### `unearned_revenue_lot_periods`
 
-`schema.ts:5006–5050`. One package lot per snapshot and reporting date. It records lot/match/review
-classification, package and credit-event lineage, purchase metadata, negative recovery, FIFO credit
-and THB roll-forward, candidate sales keys, a required formula anchor, and an optional original sales
-row anchor. The latter is absent for synthetic opening and unresolved lots.
+One package lot per snapshot and reporting date. It records lot/match/review classification, V2 match
+confidence/rule/JSON evidence, package and credit-event lineage, candidate sales and receipt IDs,
+receipt identity/amount/status, negative recovery, and the FIFO credit and THB roll-forward. Formula,
+original sales-row, original credit-event, and normalized receipt-row anchors are stored independently;
+synthetic or unresolved lots leave evidence anchors absent rather than inventing provenance.
 
 All detail rows cascade from their snapshot. Operational retention keeps detail for the active and
 immediately preceding successful snapshots while preserving every sync and snapshot header.

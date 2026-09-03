@@ -1,10 +1,12 @@
 export const UNEARNED_REVENUE_ROUTE = "/unearned-revenue";
 export const UNEARNED_REVENUE_WORKBOOK_ID = "1AY6sAjw3rwAhdJCzMWR6qW0utBU91sv-JZWH1223mZc";
-export const FIFO_PACKAGE_MODEL = "FIFO_PACKAGE_LOT_V1" as const;
+export const FIFO_PACKAGE_MODEL = "FIFO_PACKAGE_LOT_V2" as const;
+export const FIFO_PACKAGE_MODEL_V1 = "FIFO_PACKAGE_LOT_V1" as const;
 export const LEGACY_ACCOUNT_MODEL = "LEGACY_ACCOUNT_RATE" as const;
 
 export type UnearnedRevenueCanonicalModel =
   | typeof LEGACY_ACCOUNT_MODEL
+  | typeof FIFO_PACKAGE_MODEL_V1
   | typeof FIFO_PACKAGE_MODEL;
 
 export type UnearnedRevenuePeriodKind = "MONTH_END" | "LATEST";
@@ -12,12 +14,16 @@ export type UnearnedRevenueLotKind =
   | "OPENING"
   | "PAID_PACKAGE"
   | "COMPLIMENTARY"
+  | "COMPOSITE_CANDIDATE"
   | "AMBIGUOUS"
   | "UNATTRIBUTED";
 export type UnearnedRevenueMatchStatus =
   | "FROZEN_OPENING"
   | "EXACT_TRANSACTION"
   | "UNIQUE_HEURISTIC"
+  | "RECEIPT_IDENTIFIER_CHAIN"
+  | "COMPOSITE_VERIFIED"
+  | "COMPOSITE_CANDIDATE"
   | "OVERRIDE"
   | "COMPLIMENTARY_MATCH"
   | "AMBIGUOUS"
@@ -28,6 +34,13 @@ export type UnearnedRevenueReviewState =
   | "REVIEWED"
   | "REVIEWED_RESIDUAL";
 export type UnearnedRevenueCapability = "viewer" | "access_manager";
+export type UnearnedRevenueMatchConfidence =
+  | "COMPOSITE_VERIFIED"
+  | "FINANCE_REVIEWED"
+  | "EXACT"
+  | "CANDIDATE"
+  | "RESIDUAL"
+  | "COMPLIMENTARY";
 
 export interface TraceAnchor {
   spreadsheetId: string;
@@ -83,6 +96,10 @@ export interface UnearnedRevenueQuality {
   fallbackValuedCount: number;
   negativeBalanceCount: number;
   apiVarianceCount: number;
+  compositeVerifiedCount: number;
+  receiptCandidateCount: number;
+  reversalConflictCount: number;
+  missingReceiptEvidenceCount: number;
   reviewConditions: string[];
 }
 
@@ -153,6 +170,9 @@ export interface UnearnedRevenueLotDetail {
   accountId: string;
   lotKind: UnearnedRevenueLotKind;
   matchStatus: UnearnedRevenueMatchStatus;
+  matchConfidence: UnearnedRevenueMatchConfidence;
+  matchRuleId: string;
+  matchEvidence: Record<string, unknown>;
   reviewState: UnearnedRevenueReviewState;
   packageName: string;
   transactionNumber: string;
@@ -171,7 +191,23 @@ export interface UnearnedRevenueLotDetail {
   recognizedRevenueThb: number;
   closingLiabilityThb: number;
   candidateSalesKeys: string[];
+  candidateReceiptIds: string[];
   formulaTrace: TraceAnchor;
+  salesTrace: TraceAnchor | null;
+  creditEventTrace: TraceAnchor | null;
+  receiptTrace: TraceAnchor | null;
+  receipt: {
+    id: string;
+    type: string;
+    status: string;
+    chargedAt: string | null;
+    amountThb: number;
+    currency: string;
+    note: string;
+    studentId: string;
+    classId: string;
+  } | null;
+  /** @deprecated Compatibility alias for salesTrace. */
   sourceTrace: TraceAnchor | null;
 }
 

@@ -8,6 +8,7 @@ import { makeTraceAnchor } from "./trace";
 import { getUnearnedRevenueConnectedEmail } from "./sync";
 import {
   FIFO_PACKAGE_MODEL,
+  FIFO_PACKAGE_MODEL_V1,
   LEGACY_ACCOUNT_MODEL,
   type UnearnedRevenueCapability,
   type UnearnedRevenueCanonicalModel,
@@ -42,7 +43,9 @@ function numberFromDb(value: string | number): number {
 }
 
 function canonicalModel(value: string): UnearnedRevenueCanonicalModel {
-  return value === FIFO_PACKAGE_MODEL ? FIFO_PACKAGE_MODEL : LEGACY_ACCOUNT_MODEL;
+  if (value === FIFO_PACKAGE_MODEL) return FIFO_PACKAGE_MODEL;
+  if (value === FIFO_PACKAGE_MODEL_V1) return FIFO_PACKAGE_MODEL_V1;
+  return LEGACY_ACCOUNT_MODEL;
 }
 
 function periodKind(value: string): UnearnedRevenuePeriodKind {
@@ -241,6 +244,10 @@ export async function getUnearnedRevenueDashboard(
       fallbackValuedCount: selectedRow.fallbackValuedCount,
       negativeBalanceCount: selectedRow.negativeBalanceCount,
       apiVarianceCount: selectedRow.apiVarianceCount,
+      compositeVerifiedCount: selectedRow.compositeVerifiedCount,
+      receiptCandidateCount: selectedRow.receiptCandidateCount,
+      reversalConflictCount: selectedRow.reversalConflictCount,
+      missingReceiptEvidenceCount: selectedRow.missingReceiptEvidenceCount,
       reviewConditions: snapshot.reviewConditions,
     },
     students: studentRows.map(studentPayload),
@@ -332,6 +339,13 @@ export async function getUnearnedRevenueStudentDetail(
       accountId: row.accountId,
       lotKind: row.lotKind as UnearnedRevenueStudentDetailPayload["lots"][number]["lotKind"],
       matchStatus: row.matchStatus as UnearnedRevenueStudentDetailPayload["lots"][number]["matchStatus"],
+      matchConfidence: (row.matchConfidence || (
+        row.matchStatus === "OVERRIDE" ? "FINANCE_REVIEWED"
+          : row.matchStatus === "EXACT_TRANSACTION" ? "EXACT"
+            : "RESIDUAL"
+      )) as UnearnedRevenueStudentDetailPayload["lots"][number]["matchConfidence"],
+      matchRuleId: row.matchRuleId ?? "",
+      matchEvidence: row.matchEvidence ?? {},
       reviewState: reviewState(row.reviewState),
       packageName: row.packageName,
       transactionNumber: row.transactionNumber,
@@ -350,12 +364,50 @@ export async function getUnearnedRevenueStudentDetail(
       recognizedRevenueThb: numberFromDb(row.recognizedRevenueThb),
       closingLiabilityThb: numberFromDb(row.closingLiabilityThb),
       candidateSalesKeys: row.candidateSalesKeys.split(";").map((item) => item.trim()).filter(Boolean),
+      candidateReceiptIds: (row.candidateReceiptIds ?? "").split(";").map((item) => item.trim()).filter(Boolean),
       formulaTrace: makeTraceAnchor({
         spreadsheetId: row.formulaSpreadsheetId,
         sheetId: row.formulaSheetId,
         row: row.formulaRow,
         a1: row.formulaA1,
       }),
+      salesTrace: row.sourceSpreadsheetId && row.sourceSheetId !== null && row.sourceRow !== null && row.sourceA1
+        ? makeTraceAnchor({
+            spreadsheetId: row.sourceSpreadsheetId,
+            sheetId: row.sourceSheetId,
+            row: row.sourceRow,
+            a1: row.sourceA1,
+          })
+        : null,
+      creditEventTrace: row.creditEventSpreadsheetId && Number.isInteger(row.creditEventSheetId)
+        && Number.isInteger(row.creditEventRow) && row.creditEventA1
+        ? makeTraceAnchor({
+            spreadsheetId: row.creditEventSpreadsheetId,
+            sheetId: row.creditEventSheetId!,
+            row: row.creditEventRow!,
+            a1: row.creditEventA1,
+          })
+        : null,
+      receiptTrace: row.receiptSpreadsheetId && Number.isInteger(row.receiptSheetId)
+        && Number.isInteger(row.receiptRow) && row.receiptA1
+        ? makeTraceAnchor({
+            spreadsheetId: row.receiptSpreadsheetId,
+            sheetId: row.receiptSheetId!,
+            row: row.receiptRow!,
+            a1: row.receiptA1,
+          })
+        : null,
+      receipt: row.receiptId ? {
+        id: row.receiptId,
+        type: row.receiptType,
+        status: row.receiptStatus,
+        chargedAt: row.receiptChargedAt?.toISOString() ?? null,
+        amountThb: numberFromDb(row.receiptAmountThb),
+        currency: row.receiptCurrency,
+        note: row.receiptNote,
+        studentId: row.receiptStudentId,
+        classId: row.receiptClassId,
+      } : null,
       sourceTrace: row.sourceSpreadsheetId && row.sourceSheetId !== null && row.sourceRow !== null && row.sourceA1
         ? makeTraceAnchor({
             spreadsheetId: row.sourceSpreadsheetId,

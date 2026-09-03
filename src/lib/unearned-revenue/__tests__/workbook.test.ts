@@ -117,6 +117,46 @@ function fixture() {
   };
 }
 
+function v3Fixture() {
+  const input = fixture();
+  for (const statusRows of [input.statusStart, input.statusEnd]) {
+    statusRows.find((row) => row[0] === "workbook_schema_version")![1] = 3;
+    statusRows.find((row) => row[0] === "candidate_model_version")![1] = "FIFO_PACKAGE_LOT_V2";
+  }
+  input.periods[1][11] = "FIFO_PACKAGE_LOT_V2";
+  input.students[1][22] = "FIFO_PACKAGE_LOT_V2";
+  const v3LotHeaders = [
+    "match_confidence", "match_rule_id", "match_evidence", "candidate_receipt_ids",
+    "sales_source_file_id", "sales_source_sheet_id", "sales_source_row",
+    "credit_event_source_file_id", "credit_event_source_sheet_id", "credit_event_source_row",
+    "receipt_id", "receipt_type", "receipt_status", "receipt_charged_at",
+    "receipt_amount_thb", "receipt_currency", "receipt_note", "receipt_student_id",
+    "receipt_class_id", "receipt_source_row",
+  ];
+  input.lots[0].push(...v3LotHeaders);
+  const v3LotValues = [
+    "RESIDUAL", "MATCH-OPENING-V2", "{}", "", "", "", "", "", "", "",
+    "", "", "", "", 0, "", "", "", "", "",
+  ];
+  input.lots[1].push(...v3LotValues);
+  input.lotFormulas[1].push(...v3LotValues);
+  return {
+    ...input,
+    receipts: [[
+      "receipt_id", "receipt_type", "receipt_status", "charged_at", "receipt_date",
+      "created_at", "amount_minor", "amount_thb", "currency", "note", "student_id",
+      "student_name", "class_id", "classroom_name", "classroom_subject", "parent_ids",
+      "parent_names", "identifiers", "payload_checksum", "source_row", "output_run_id",
+      "source_fingerprint",
+    ], [
+      "receipt-1", "PAYMENT", "CHARGED", "2026-03-10T10:00:00+07:00", "2026-03-10",
+      "2026-03-10T10:00:00+07:00", 10_000, 100, "TH", "", "student-1", "Ada",
+      "class-1", "Math", "Mathematics", "", "", "invoice-1", "a".repeat(64), 2,
+      runId, fingerprint,
+    ]],
+  };
+}
+
 describe("unearned revenue workbook contract", () => {
   it("accepts a published, formula-backed, cross-level reconciled snapshot", () => {
     const result = parseUnearnedRevenueWorkbook(fixture());
@@ -182,5 +222,38 @@ describe("unearned revenue workbook contract", () => {
     input.accounts[1][19] = 98;
 
     expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/account\/canonical total/i);
+  });
+
+  it("accepts a V3 receipt bridge and records its bounded evidence count", () => {
+    const result = parseUnearnedRevenueWorkbook(v3Fixture());
+
+    expect(result.status.modelVersion).toBe("FIFO_PACKAGE_LOT_V2");
+    expect(result.rowCounts).toMatchObject({ receipts: 1 });
+  });
+
+  it("rejects a V3 lot whose receipt trace does not resolve to the receipt evidence tab", () => {
+    const input = v3Fixture();
+    const receiptIdColumn = input.lots[0].indexOf("receipt_id");
+    const receiptSourceRowColumn = input.lots[0].indexOf("receipt_source_row");
+    input.lots[1][receiptIdColumn] = "missing-receipt";
+    input.lots[1][receiptSourceRowColumn] = 2;
+
+    expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/unknown receipt/i);
+  });
+
+  it("rejects a V3 receipt row whose embedded trace row is stale", () => {
+    const input = v3Fixture();
+    input.receipts[1][19] = 99;
+
+    expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/inconsistent source_row/i);
+  });
+
+  it("rejects V3 when the workbook advertises the stale V1 algorithm", () => {
+    const input = v3Fixture();
+    for (const statusRows of [input.statusStart, input.statusEnd]) {
+      statusRows.find((row) => row[0] === "candidate_model_version")![1] = "FIFO_PACKAGE_LOT_V1";
+    }
+
+    expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/must use candidate model FIFO_PACKAGE_LOT_V2/i);
   });
 });

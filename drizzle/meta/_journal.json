@@ -498,6 +498,13 @@
       "when": 1788463254393,
       "tag": "0070_unearned_revenue_dashboard",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1788475589915,
+      "tag": "0071_unearned_revenue_receipt_bridge",
+      "breakpoints": true
     }
   ]
 }
