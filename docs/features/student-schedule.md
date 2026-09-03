@@ -1,277 +1,312 @@
 # Student Schedule
 
-**Status: stable**
+**Status: stable** — all three render surfaces, both minting paths and the LINE delivery bot are
+built and unit-tested, and the feature landed on `main` in `2a17065` (2026-08-05); whether that is
+deployed to production is a runtime fact the repo cannot attest. The last commit touching a
+student-schedule-only file is `076c3ed` (2026-08-17), which gave the print report its
+`backHref="/student-schedule"` back link; the bot files this feature shares with the LINE credit and
+report bots changed later still (`b9c0e19` 2026-08-17, `9bc2b43` 2026-08-19, `8148ac9` 2026-08-29).
+The one runtime switch is an *opt-out*: `ENABLE_STUDENT_SCHEDULE_LIVE="false"` turns
+off the live Wise overlay and every surface falls back to the snapshot
+(`src/lib/student-schedule/live.ts:66-68`). There is no sync, no cron and no feature flag that has
+to be turned *on*.
 
 ## Purpose
 
-Student Schedule answers one question for one child: *what classes does this student have this
-month?* An admin looks a student up by nickname code, pages through months, and then either prints
-the month as a PDF or hands the parent a link. The parent opens that link on their phone — with no
-account, no login, and no app — and sees the same classes the admin just previewed.
+Student Schedule answers one question for one child: *which classes does this student have this
+month?* An admin looks a student up by nickname code or name, pages through months, and then either
+prints the month as an A4 PDF or hands the parent a link
+(`src/components/student-schedule/student-schedule-workspace.tsx:6-10`).
+The parent opens that link on their phone — no account, no login, no app
+(`src/app/schedule/[token]/page.tsx:2-5`) — and sees the same classes the admin previewed, because
+one presentational component renders the same payload on every surface
+(`src/components/student-schedule/schedule-month-calendar.tsx:4-8`).
 
-Three surfaces render the **same** payload, so the classes staff preview are the classes the family
-receives. The two admin surfaces render `ScheduleMonthCalendar`; the parent page renders the
-phone-first `ParentScheduleAgenda`, which shares the same subject colours via
-`buildSubjectColorMap`. The differences are enumerated under [UI](#ui).
+One payload, `StudentSchedulePayload`, feeds every surface. Every display string in it — the Bangkok
+calendar day, `HH:mm` labels, the month label — is precomputed on the server so no client ever
+re-derives a time from an instant (`src/lib/student-schedule/types.ts:1-7`, `:19-60`).
 
-| Surface | Route | Audience |
-|---|---|---|
-| Admin workspace | `/student-schedule` | admin session |
-| Print / PDF report | `/student-schedule/report` | admin session |
-| Public parent page | `/schedule/{token}` | capability token only |
+| Surface | Route | Audience | Renders |
+|---|---|---|---|
+| Admin workspace | `/student-schedule` | admin session | `ScheduleMonthCalendar` |
+| Print / PDF report | `/student-schedule/report` | admin session | `ScheduleMonthCalendar`, landscape A4 |
+| Public parent page | `/schedule/{token}` | capability token only | `ParentScheduleAgenda` (phone) · `ScheduleMonthCalendar` (desktop) · `ParentScheduleMiniCalendar` (phone calendar view) |
 
-Delivery has two routes: **copy a link** from the workspace and paste it wherever staff already
-talk to the family, or drive the **LINE schedule bot** from inside LINE. The bot's grammar is
-`<code> [YYYY-MM] [send]` behind a `/schedule` trigger (`src/lib/line/schedule-bot-command.ts:24`),
-and the optional trailing `send` verb is load-bearing:
+Delivery has two routes. **Copy parent link** on the workspace mints a token and puts the URL on
+the clipboard, for staff to paste wherever they already talk to the family
+(`student-schedule-workspace.tsx:131-150`). The **LINE schedule bot** lets an allowlisted admin type
+`/schedule <code> [YYYY-MM] [send]` inside LINE — in a 1:1 chat with the Official Account, where the
+link comes back to the admin and `send` can push it to a verified parent, or in a group the OA
+belongs to, where the link is posted into that same group
+(`src/lib/line/schedule-bot-command.ts:21`, `:39`). The bot's gate rules are owned by
+[LINE Integration § Schedule bot](./line-integration.md#schedule-bot); this page states only what
+the schedule feature itself relies on.
 
-- **`/schedule <code>` (no verb) hands the link back to whoever asked.** In a DM it mints and
-  replies to the requesting admin, who forwards it themselves (`pushToParent` at
-  `schedule-bot.ts:275`, branch at `:281`-`286`, `replyWithLink` at `:296`). In a group it posts
-  into the chat the command came from — never into some other conversation
-  (`schedule-bot-group.ts:332`, `:339`; `deliver` at `:555` posts via `say(deps, target, …)` at
-  `:610`).
-- **`send` is what reaches a parent's own thread.** Only `/schedule <code> send` routes the DM path
-  to `startSend` and its verified-contact + confirm gates (`schedule-bot.ts:288`, `:355`); in a
-  group it forces the confirm by disqualifying the already-delivered fast path
-  (`schedule-bot-group.ts:494`). Rationale in commit `339ccc0`. One carve-out: in a chat switched
-  to instant mode (`/schedule setup instant`, GRP-BOT-07) the group-side force-confirm is waived
-  along with every other confirm in that chat (`schedule-bot-group.ts:476`-`488`).
-
-Those gates are owned by [LINE Integration](./line-integration.md#schedule-bot-gates); this page
-describes only what the schedule feature itself contributes.
-
-This is the newest feature in the repo (commits `2a17065`…`9f72002`, 2026-08-05) and it **owns no
-sync of its own**. Every session it renders starts from the *active credit-control snapshot* — see
-[Conceptual data model](#conceptual-data-model) — optionally corrected by a **live Wise overlay**:
-`getStudentMonthlySchedule` accepts a `liveSweep` mode (`"always" | "rescue" | "never"`,
-`src/lib/student-schedule/data.ts`). The parent page, admin APIs and print report use the default
-`"always"` (fresh Wise data at view time, fail-soft to the snapshot on error/deadline); the LINE
-schedule bot passes `"rescue"`, sweeping only when the snapshot month is payload-empty — its message
-needs a session count the ≤~36-min-old snapshot already answers, and the minted link re-fetches live
-data when opened.
+The feature **owns no sync**. Its base rows come from the *active credit-control snapshot*
+(`src/lib/student-schedule/data.ts:4-8`), and a **live Wise overlay** corrects them at read time
+(`src/lib/student-schedule/live.ts:1-14`). Nothing it fetches from Wise is ever persisted.
 
 ## Conceptual data model
 
-Full column and index detail lives in the reference pages; this section describes what each table
-*means* here.
+Columns, indexes and relationships live in the reference pages linked below; this section says what
+each table *means* to this feature.
 
-**Read — the credit-control lineage** ([`erd-credit-control.md`](../reference/database/erd-credit-control.md)).
+### Read — the credit-control lineage
+
+[`erd-credit-control.md`](../reference/database/erd-credit-control.md) ·
+[Credit Control](./credit-control.md)
+
 `getStudentMonthlySchedule` resolves the single `active` credit-control snapshot, looks the student
-up inside it, and reads that snapshot's session rows for the month
-(`src/lib/student-schedule/data.ts:173`-`218`). It is the **grain** that makes
-`credit_control_sessions` the source rather than the Wise tutor snapshot: its unique key is
-`(snapshot_id, wise_session_id, wise_student_id)`, one row per (student, session), with `subject`
-and `student_key` on that row (`src/lib/db/schema.ts:1228`, `:1232`, `:1248`). The tutor snapshot's
-`future_session_blocks` also carries `subject`, but a row there is one snapshot × identity-group ×
-session with a single nullable `student_name` and no student key
-(`src/lib/db/schema.ts:1615`-`1637`), so it cannot answer "what does *this child* have this month?".
-The credit-control window is the sync's past 120 / future 180 days
-(`src/lib/credit-control/sync.ts:60`-`61`).
+up **inside that snapshot**, and reads that snapshot's session rows for the month
+(`src/lib/student-schedule/data.ts:322-368`). `credit_control_sessions` is the source rather than
+the Wise tutor snapshot because of its grain: one row per (student, session), carrying the student
+key, the subject and the package (`src/lib/db/schema.ts:1222-1262`) — the tutor snapshot's session
+blocks are keyed by identity group, not by student, and cannot answer "what does *this child* have
+this month". The **snapshot's** window is whatever the credit-control sync covers: past 120 /
+future 180 days (`src/lib/credit-control/sync.ts:61`, `:63`). A month outside that window
+contributes no snapshot rows — but it is not necessarily empty: with the live overlay on (the
+default for the parent page, the admin API and the report) the sweep goes straight to Wise for the
+requested month and synthesizes live-only rows, so the month is populated from Wise whenever the
+overlay runs and succeeds. It renders empty only when the overlay is disabled, fails, or the caller
+asked for `"never"` (see [The read path](#the-read-path)).
 
-That table gained three teacher columns for this feature: `wise_teacher_user_id`, `wise_teacher_id`,
-`teacher_name` (migration `drizzle/0063_student_schedule_links.sql`). **No new Wise request was
-added** — Wise already returned the owning teacher on the endpoint credit control calls, and
-`WiseCreditSessionSchema` was passing the fields through without reading them; the schema now names
-them and `creditSessionTeacher` normalizes both shapes Wise uses (a bare id string or an expanded
-`{_id, name}` ref), blanks becoming `null` (`src/lib/credit-control/wise.ts:24`-`51`, `:130`-`143`,
-written at `sync.ts:431`, `:454`-`456`). A `null` teacher renders **"Teacher TBC"** and is never
-guessed (`src/lib/student-schedule/types.ts:10`, applied at `data.ts:138`).
+Two schema additions — four columns across two migrations — widened that table for this feature.
+Column names, types and nullability are in
+[`erd-credit-control.md`](../reference/database/erd-credit-control.md); what they *mean* here:
 
-The same play added a `title` column (migration `drizzle/0066_credit_control_session_title.sql`):
-the Wise session `title` ("In-Person Session-Biology HL") is the only field that names the class
-itself — at BeGifted, `classId.subject` holds level bands ("Y12-13 / G11-12 (Int.)") and the
-classroom `name` is the student's own name — and `WiseCreditSessionSchema` had been passing it
-through untyped. The parent-facing class label is now `deriveDisplaySubject`
-(`src/lib/student-schedule/data.ts`): the title with its modality prefix stripped
-("In-Person/On-site/Online/Live Session-" → "Biology HL", fail-open to the full title on an
-unrecognized pattern), falling back to the legacy `subject` → `packageName` → `"Class"` chain for
-rows that predate the column. The payload's `subject` field carries this label, so all three
-render surfaces and `buildSubjectColorMap` pick it up with no component changes; the live overlay
-also fills a blank snapshot title (and supplies titles for live-only sessions), so labels are
-correct even before the next sync backfills the column. Other consumers of the `subject` column
-(progress-tests, the LINE operational planner) are untouched.
+- **A teacher identity trio** (`drizzle/0063_student_schedule_links.sql`; `schema.ts:1243-1248`).
+  Wise reports the owning teacher on this session feed, but `WiseCreditSessionSchema` did not
+  declare the fields, so nothing read them; `2a17065` named them and added `creditSessionTeacher`,
+  which accepts both shapes Wise uses (a bare id string or an expanded `{_id, name}` reference) and
+  normalizes blanks to `null` (`src/lib/credit-control/wise.ts:24-33`, `:49-51`, `:131-144`; written
+  at `sync.ts:437`, `:461-463`). A `null` teacher renders the literal **"Teacher TBC"** — never
+  dropped, never inferred from the class or package name (`types.ts:9-10`; `data.ts:198`). The
+  `2a17065` diff adds only optional Zod fields and a normalizer, no new fetch, so the sync issues no
+  extra Wise request for them; whether Wise in fact populates them on every session is a runtime
+  property of the Wise API the repo cannot attest — hence the TBC fallback.
+- **The session title** (`drizzle/0066_credit_control_session_title.sql`, commit `659aa7f`;
+  `schema.ts:1233-1235`; written at `sync.ts:455`). The Wise session title ("In-Person
+  Session-Biology HL") is the only field that names the class: at BeGifted `subject` holds level
+  bands ("Y12-13 / G11-12 (Int.)") and `packageName` is the classroom, which is the student's own
+  name (`data.ts:78-85`). It drives both the parent-facing class label (`deriveDisplaySubject`) and
+  the modality (`deriveSessionModality`) — see [Business rules](#business-rules--edge-cases).
 
-The title also answers **where** the class happens, via `deriveSessionModality`. This table has no
-`session_type`, `location` or `class_type` column, so the title prefix is the only modality signal
-on this surface — and cross-joining the active snapshot against the tutor snapshot's Wise fields
-(2026-08-11) showed it is a reliable one, every prefix landing on one side with >99.5% agreement:
+The bot's student directory is the same snapshot: `searchCurrentLineStudentsWithSnapshot` resolves
+the active snapshot and searches its students (`src/lib/line/student-links.ts:653-662`), and hands
+the snapshot back so the schedule read can skip its own two lookups (`data.ts:299-307`, `:322`,
+`:330`).
 
-| Title prefix | Rows | Wise `session_type` | Physical room |
-|---|---:|---|---|
-| `In-Person ` | 5,815 | OFFLINE | yes |
-| `On-site ` | 2,613 | OFFLINE | yes |
-| `Live ` | 2,443 | SCHEDULED | none |
-| `Online ` | 1,010 | SCHEDULED | none |
+### Read — live Wise overlay (not a table)
 
-So `{online, live}` → **online** and `{in-person, on-site}` → **onsite**; "Live" is BeGifted's other
-word for an online class, which is why it counts as online despite sitting in neither of the repo's
-older token sets. Anything else (a bare "Mock test ISEB", a blank title) is **unknown** and renders
-nothing — a parent document stays silent rather than guessing. `modalityDisplay`
-(`src/components/student-schedule/modality-display.ts`) maps the token to a lucide icon plus a Thai
-label ("ออนไลน์" / "ที่สถาบัน"), following the repo's modality convention of icon-and-word — colour
-and border on these surfaces belong to the subject. The agenda card carries the full tag in its
-right rail; the month grid has room only for the glyph, which the admin workspace and the A4 report
-inherit; the phone mini-calendar chips deliberately carry neither, since a 9px truncated chip
-cannot spare the width and a tap already opens that day in the agenda.
+`fetchLiveMonthSessions` sweeps the requested Bangkok month straight from Wise, scoped to one
+student, so a reschedule, cancellation or brand-new class is visible on the next read rather than
+the next sync (`live.ts:1-9`). The successful, already-student-filtered result is memoized for 60 s
+on a `globalThis`-anchored `Map` keyed `wiseStudentId:monthKey` (`live.ts:28`, `:37-46`, `:117-127`,
+`:151`); the institute-wide sweep is never cached, so one student's sessions can never leak into
+another's request. The map is pruned of expired entries once it passes 500 entries (`live.ts:30`,
+`:54-59`). Nothing here is written to Postgres.
 
-**Write — capability tokens** ([`erd-core.md`](../reference/database/erd-core.md),
-[`index.md`](../reference/database/index.md)). `student_schedule_links` is the feature's only owned
-table: one row per issued parent link, granting read of exactly one `(student_key, month_key)` pair,
-expiring and revocable, with view accounting. Only the SHA-256 hash of the token is stored.
+### Write — capability tokens
 
-**Write — LINE bot state** ([`erd-line.md`](../reference/database/erd-line.md)).
-`line_schedule_bot_pending` (the outstanding confirm), `line_group_settings` (a chat's
-family/staff audience) and `line_group_schedule_sends` (delivery audit + the "has this group already
-received this student?" lookup) are written by the bot. They are documented in
-[LINE Integration](./line-integration.md#conceptual-data-model).
+[`erd-core.md` § 9](../reference/database/erd-core.md) ·
+[`index.md`](../reference/database/index.md)
 
-There is **no snapshot lineage, no sync run table and no cron** for this feature. Baseline freshness
-is inherited from the credit-control sync; the live Wise overlay (above) corrects it at read time for
-`"always"`-mode callers. Retention of old credit-control snapshots is that feature's concern (see
-[Credit Control](./credit-control.md)).
+`student_schedule_links` is the feature's only owned table (`schema.ts:4635-4656`): one row per
+issued parent link, granting read of exactly one `(student_key, month_key)` pair, expiring and
+revocable, carrying provenance (admin email or LINE user id) and delivery (a LINE user id *or* a
+group id), plus a view count. **Only the SHA-256 hash of the token is stored**
+(`src/lib/student-schedule/links.ts:8-9`, `:98`). It has no foreign keys — the student columns are
+soft references into Wise.
+
+### Write — LINE bot state
+
+[`erd-line.md`](../reference/database/erd-line.md) ·
+[LINE Integration § Conceptual data model](./line-integration.md#conceptual-data-model)
+
+Three tables are written only by the bot and are documented on the LINE page; what matters here:
+
+- `line_schedule_bot_pending` (`schema.ts:4668-4686`) — the outstanding "reply YES" question, one
+  row per (admin, conversation). It is the **only** thing a YES acts on; a missing or expired row
+  sends nothing.
+- `line_group_settings` (`schema.ts:4700-4722`) — a chat's declared `family`/`staff` audience and
+  its `skip_confirm` instant-mode flag (`drizzle/0064_line_group_settings.sql`,
+  `0065_line_group_settings_skip_confirm.sql`). Audience selects wording only.
+- `line_group_schedule_sends` (`schema.ts:4760-4772`) — every link posted into a group; doubles as
+  the "has this chat already received this student?" lookup. Its `link_id` is a **real foreign key**
+  to `student_schedule_links`, nullable and `ON DELETE SET NULL`, so pruning a link keeps the send
+  record (`schema.ts:4767`; `drizzle/0063_student_schedule_links.sql:50`). This is the one relational
+  edge the feature has — the student columns elsewhere are genuinely FK-free.
+
+The DM `send` path additionally **reads** `line_contact_student_links` + `line_contacts` to find a
+verified recipient (`src/lib/line/schedule-bot.ts:143-174`) and **writes** a mirror of the delivered
+message into `line_messages` on a best-effort basis (`:584-616`).
+
+There is no snapshot lineage, no `*_sync_runs` ledger and no `vercel.json` entry for this feature
+(all 17 cron paths in `vercel.json` belong to other subsystems). Baseline freshness is inherited
+from the credit-control sync; the live overlay corrects it at read time.
 
 ## API surface
 
-Query parameters, status codes and response bodies live in
-[`reference/api/misc.md § Student schedule`](../reference/api/misc.md#student-schedule) — that is
-the canonical home; this table carries purpose only.
+Request/response shapes, status codes and error bodies are in
+[`reference/api/student-schedule-and-report.md § Student monthly schedule`](../reference/api/student-schedule-and-report.md#student-monthly-schedule); this table
+carries purpose only.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/student-schedule` | Read one student's Bangkok-month payload — the workspace's only data call. |
-| POST | `/api/student-schedule/link` | Mint the parent-facing `/schedule/{token}` link for a student-month. |
+| `GET` | `/api/student-schedule` | Read one student's Bangkok-month payload — the workspace's only data call (`src/app/api/student-schedule/route.ts`). |
+| `POST` | `/api/student-schedule/link` | Mint the parent-facing `/schedule/{token}` link for a student-month (`src/app/api/student-schedule/link/route.ts`). |
 
-Both require an admin session in-handler (`src/app/api/student-schedule/route.ts:14`-`17`,
-`link/route.ts:23`-`26`) on top of the middleware gate.
+Both gate on `auth()` in-handler on top of the middleware session check (`route.ts:14-17`,
+`link/route.ts:23-26`), follow the repo's auth → parse → `safeParse` → try/catch ladder, and answer
+`404` when the student does not resolve on the active snapshot (`route.ts:35-37`,
+`link/route.ts:51-53`).
 
-The workspace also consumes the existing LINE student directory, `GET /api/line/students`
-(`student-schedule-workspace.tsx:73`), rather than reimplementing code ranking — see
-[`reference/api/line.md`](../reference/api/line.md).
+Two endpoints owned by other features are part of the working surface:
+
+- `GET /api/line/students` — the student directory the workspace searches (typeahead, minimum two
+  characters), so code ranking is shared with the LINE tooling rather than reimplemented
+  (`student-schedule-workspace.tsx:73`; [`reference/api/line.md`](../reference/api/line.md)).
+- `POST /api/line/webhook` — the bot's only entry point. DM text reaches `handleScheduleBotCommand`
+  through `processLineMessageForScheduler` *before* the classifier
+  (`src/lib/line/review-service.ts:136-148`); group text is collected as a transient
+  `LineGroupCommand` and dispatched to `handleScheduleBotGroupCommand` in an `after()` job
+  (`src/lib/line/data.ts:38-54`, `:441-461`; `src/lib/line/webhook.ts:52-53`;
+  `src/app/api/line/webhook/route.ts:32-43`).
 
 The public parent page is **not** an API: `/schedule/{token}` is a Server Component that resolves
-the token and reads the schedule directly.
+the token and reads the schedule in-process.
 
 ## UI
 
-**`/student-schedule`** (`src/app/(app)/student-schedule/page.tsx`) is an async Server Component
-that re-checks the session and renders the client shell `StudentScheduleWorkspace` inside
-`<Suspense>`. The workspace does the whole job in one screen: a debounced student search (200 ms,
-minimum two characters, `AbortController` per keystroke — `student-schedule-workspace.tsx:65`-`84`),
-prev/next/"This month" month navigation (`setMonthKey` handlers at `:205`, `:216`, `:224`, inside
-the control row at `:200`-`228`), **Copy parent link** (`copyParentLink` at `:131`-`149`, button at
-`:231`) and **Print / Save PDF** (`openPrintView` at `:122`-`129`, button at `:235`). Nav
-registration is `src/lib/navigation/tools.ts:169`-`175` (student-lifecycle section).
+### `/student-schedule` — admin workspace
 
-There is deliberately **no "send to parent" button**. Pushing a message to a family runs through
-the bot's confirm gate, so it cannot be a one-click action on a page where a mis-click sends to the
-wrong child (`student-schedule-workspace.tsx:12`-`14`).
+`src/app/(app)/student-schedule/page.tsx` re-checks the session, redirects to `/login` without one,
+and renders the client shell inside `<Suspense>` (`:7-18`). Nav registration is
+`src/lib/navigation/tools.ts:170-176` (Student Lifecycle section, no count badge).
 
-**`/student-schedule/report`** (`src/app/(print)/student-schedule/report/page.tsx`) is the printable
-sheet: same auth check, Zod-validated `studentKey` + `month` query, an A4 sheet wrapper, and the
-shared `PrintToolbar` that calls `window.print()`. It lives in the `(print)` route group so it gets
-no `AppNav` chrome, but its URL is still under the `/student-schedule` namespace — which is what
-keeps it inside a restricted user's `allowedPages` prefix.
+`StudentScheduleWorkspace` (`src/components/student-schedule/student-schedule-workspace.tsx`) does
+the whole job on one screen: a debounced student search (200 ms, minimum two characters, an
+`AbortController` per keystroke — `:65-84`), a month strip with prev / next / "This month"
+(`:200-228`), **Copy parent link** (`:131-150`, button `:231-234`) and **Print / Save PDF**, which
+opens the report in a new tab (`:122-129`, button `:235-238`). The calendar is `ScheduleMonthCalendar`
+with today's Bangkok date passed in for the today ring (`:257`).
 
-**`/schedule/{token}`** (`src/app/schedule/[token]/page.tsx`) is the public parent page, built
-phone-first for LINE's in-app browser: `robots: noindex/nofollow`, a per-route `viewport` export
-(`viewportFit: "cover"` so safe-area insets apply on notched phones), and a page root that **owns
-its own scrolling** (`min-h-0 flex-1 overflow-y-auto`) because the root layout's body is a
-fixed-height `overflow-hidden` flex shell that would otherwise clip everything below the first
-viewport — the same trap the admissions parent dashboard documents. The loaded page is composed by
-the client-side **`PublicScheduleShell`** (`public-schedule-shell.tsx`), which owns the scroll
-region, the sticky Thai-first header (nickname — never the legal name — plus `formatThaiMonth` and
-a session-count badge), and an **agenda ⇄ calendar view toggle**:
+There is deliberately **no "send to parent" button**: pushing to a family runs through the bot's
+confirm gate so a wrong student cannot be pushed with one click (`:12-14`).
 
-- **Defaults are screen-size-aware and JS-free.** View state starts `null` (= auto), rendered as
-  responsive class pairs from `resolveViewContainerClasses` (`schedule-view-preference.ts`), so the
-  SSR HTML alone shows the agenda below `lg` and the calendar at `lg`+ — no hydration flash, and
-  resizes/rotation keep working via CSS while in auto.
-- **The calendar view is two shapes:** at `lg`+ it is `ScheduleMonthCalendar`'s month grid in the
-  `max-w-5xl` column the desktop page had before the agenda redesign; below `lg` it is the
-  **mini calendar** (`parent-schedule-mini-calendar.tsx`) — one micro chip per session, the
-  truncated subject name on that subject's colour tint (the SessionBlock formula), Thai weekday
-  initials, and a `+N` overflow past 3 chips. Tapping
-  a day returns to the agenda scrolled to that day (via its `data-date`); those taps are navigation
-  and **never** write the preference.
-- **Explicit toggle choices persist** in `localStorage["bgscheduler.schedule.view"]`
-  (admissions-locale pattern: try/catch, garbage fails closed to auto). A stored preference is
-  applied in a mount effect — the one accepted flash, only for parents who previously toggled
-  against their size default.
+### `/student-schedule/report` — print / PDF
 
-The whole page renders in Sarabun via the `font-thai` theme token, and the Suspense fallback is a
-skeleton mirroring the loaded layout (header, toggle row, agenda cards) rather than a blank screen
-(the live Wise merge can hold first byte for a couple of seconds). It sits outside every route
-group, so it renders without nav or admin chrome.
+`src/app/(print)/student-schedule/report/page.tsx` is the printable sheet: same session check
+(`:80-81`), Zod-validated `studentKey` + `month` query (`:26-29`), `robots: noindex/nofollow`
+(`:24`), an A4 sheet wrapper and the shared `PrintToolbar` whose back link points at
+`/student-schedule` (`:98`; `src/components/learning-plan/print-toolbar.tsx:8-13`). It lives in the
+`(print)` route group, which has no layout of its own, so it renders without `AppNav` — but its URL
+stays under the `/student-schedule` namespace, which keeps it inside a restricted user's
+`allowedPages` prefix (`src/middleware.ts:59-66`).
 
-**`ScheduleMonthCalendar`** (`src/components/student-schedule/schedule-month-calendar.tsx`) is the
-component both **admin** surfaces render, and the parent page's desktop calendar view. It is
-presentational and deliberately **not** `"use client"` — no fetching, no clock. It draws the
-Monday-start 6×7 grid on `lg` and up, a week-grouped list below that, and colours blocks by
-**subject** (not tutor) from a six-colour palette assigned in order of first appearance
-(`:36`-`63`). On the parent page the shell mounts it inside a `hidden lg:block` wrapper, so only
-its grid branch can ever show there (its own week-list branch is `lg:hidden`). Grid maths is
-shared with the admissions calendar via `src/lib/calendar/month-grid.ts`.
+Print rules are in `src/app/student-schedule.css` (imported by `globals.css:6`): a **named**
+`@page schedule-landscape` so this report prints landscape without flipping the app's other
+printable pages, which share a global portrait `@page` (`:1-19`); a reset of the fixed-height
+`overflow-hidden` body (`:21-39`); `break-inside: avoid` on day cells, session blocks and week rows
+so a class is never split across sheets (`:55-63`); and a print-time swap that forces the month grid
+on and the mobile week list off (`:65-72`). The report renders the calendar **without `todayKey`**
+(`report/page.tsx:115`), so a printed month carries no today marker even when the preview does.
 
-**`ParentScheduleAgenda`** (`src/components/student-schedule/parent-schedule-agenda.tsx`) is the
-parent page's default mobile view: a day-by-day list of session cards, one section per day that
-has sessions, headed by the Thai weekday + day number (`formatThaiDayHeading`). With `todayKey` it
-badges today ("วันนี้"), dims past days (visual only — never dropped), and anchors
-`id="agenda-scroll-target"` on the first day at or after today. Scroll-to-today (and the mini
-calendar's scroll-to-day, via each section's `data-date`) is owned by `PublicScheduleShell`'s
-pending-scroll effect, which runs after the commit that revealed the agenda so a scroll never
-fires against a `display:none` subtree. The agenda is deliberately a **separate component** rather
-than a third branch of `ScheduleMonthCalendar`: the calendar's
-`.schedule-month-grid`/`.schedule-mobile-list` class names are force-toggled by the print CSS, so
-its markup is load-bearing for the A4 report, and the two audiences want different type scales and
-states. Content cannot drift between the surfaces because all of them render the same payload, and
-the agenda and mini calendar import the same `buildSubjectColorMap` for their colours.
+### `/schedule/{token}` — public parent page
 
-The three surfaces are **not** byte-identical, though, because they differ in component and props:
+`src/app/schedule/[token]/page.tsx` sits outside every route group and is the only page in the app
+that renders student data without a session (`:1-3`). It is built for LINE's in-app browser:
+`robots: noindex/nofollow` (`:44-47`), a per-route `viewport` with `viewportFit: "cover"` so
+safe-area insets apply on notched phones (`:51-56`), Sarabun via the `font-thai` token
+(`src/app/globals.css:17`; `src/app/layout.tsx:31-32`), and a page root that **owns its own
+scrolling** because the root layout's body is a fixed-height `overflow-hidden` flex shell
+(`layout.tsx:61`; page comment `:15-20`). The Suspense fallback is a skeleton mirroring the loaded
+layout rather than a blank screen, because the live Wise merge runs before first byte and is allowed
+up to an 8-second deadline (`live.ts:27`) — how long it actually takes is not something the repo
+measures (`:76-98`).
 
-| | Component | `todayKey` | Empty month renders |
+Resolution and rendering (`:100-177`): the token is resolved; **any** failure renders
+`ExpiredNotice` (`:104-106`); a grant whose student no longer resolves renders the same notice
+(`:108-112`); a zero-session month renders a bilingual empty card with no view toggle
+(`:117-146`); otherwise `PublicScheduleShell` composes the page. The heading uses the student's
+**nickname**, never the legal name (`:114`, `:159`).
+
+`PublicScheduleShell` (`src/components/student-schedule/public-schedule-shell.tsx`) owns the scroll
+region, the sticky Thai-first header with a session-count badge, and the **agenda ⇄ calendar
+toggle**:
+
+- **Screen-size-aware, JS-free defaults.** View state starts `null` (= auto), rendered as responsive
+  class pairs from `resolveViewContainerClasses`, so the SSR HTML alone selects the agenda below
+  `lg` and the calendar at `lg`+ — no hydration flash, and resizes keep working through CSS
+  (`public-schedule-shell.tsx:7-12`, `:97-99`;
+  `schedule-view-preference.ts:59-90`).
+- **Two calendar shapes.** At `lg`+ the calendar view is `ScheduleMonthCalendar`'s month grid in a
+  `max-w-5xl` column; below `lg` it is `ParentScheduleMiniCalendar` — one micro chip per session
+  (truncated subject on that subject's colour tint), Thai weekday initials, and a `+N` marker past
+  three chips (`parent-schedule-mini-calendar.tsx:31`, `:64-95`). Tapping a day returns to the
+  agenda scrolled to that day via its `data-date`; taps are navigation and never write the
+  preference (`public-schedule-shell.tsx:109-113`, `:159-166`).
+- **Explicit choices persist** in `localStorage["bgscheduler.schedule.view"]`, read once in a mount
+  effect with try/catch and garbage failing closed to auto (`schedule-view-preference.ts:15`,
+  `:21-48`; `public-schedule-shell.tsx:65-81`).
+- **Scroll-to-today** is a pending-scroll effect that runs after the commit that revealed the
+  agenda, because `scrollIntoView` on a `display:none` subtree is a no-op (`:16-18`, `:83-95`).
+
+### Shared components
+
+**`ScheduleMonthCalendar`** (`schedule-month-calendar.tsx`) is presentational — no fetching, no
+clock, not `"use client"` — so the workspace, the report and the parent page's desktop view render
+exactly the same markup for the same payload (`:3-8`). It draws the Monday-start 6×7 grid at `lg`+
+and a week-grouped list below (`:161-232`), colours blocks by **subject** from a six-colour palette
+assigned by order of first appearance (`:37-64`), shows the modality as an icon only (`:107-111`),
+and renders an explicit empty state instead of a blank grid (`:135-147`). Grid maths comes from
+`src/lib/calendar/month-grid.ts`, shared with the admissions calendar (`month-grid.ts:1-12`).
+
+**`ParentScheduleAgenda`** (`parent-schedule-agenda.tsx`) is the phone-first parent view: one
+section per day that *has* sessions, headed by the Thai weekday and day number
+(`formatThaiDayHeading`), each session a card with time range, subject, teacher, duration and a
+modality badge (`:55-108`). With `todayKey` it badges today, dims past days (visual only — never
+dropped) and anchors `id="agenda-scroll-target"` on the first day at or after today (`:110-122`,
+`:133-135`, `:141-153`). It is a separate component rather than a third branch of the calendar
+because the calendar's class names are load-bearing for the print CSS (`:7-16`).
+
+**`modalityDisplay`** (`modality-display.ts:22-33`) maps `online` → video icon + "ออนไลน์" and
+`onsite` → pin icon + "ที่สถาบัน"; `unknown` returns `null` and callers render nothing — a parent
+document stays silent about what it cannot explain (`:6-9`).
+
+### How the surfaces differ
+
+| | Component | `todayKey` | Empty month |
 |---|---|---|---|
-| Workspace | `ScheduleMonthCalendar` | `todayKey={todayKey}` (`student-schedule-workspace.tsx:257`) | the calendar's own English empty state |
-| Print report | `ScheduleMonthCalendar` | *omitted* (`report/page.tsx:115`) | the calendar's own English empty state |
-| Parent page | `ParentScheduleAgenda` + `ScheduleMonthCalendar` (lg+ calendar view) + `ParentScheduleMiniCalendar` (sub-lg calendar view) | `todayKey={todayBangkok()}` on all three | the page's Thai/English `PUBLIC_PAGE_COPY.emptyMonth` in a card, no toggle |
+| Workspace | `ScheduleMonthCalendar` | passed (`workspace.tsx:257`) | calendar's English empty state |
+| Report | `ScheduleMonthCalendar` | **omitted** (`report/page.tsx:115`) | calendar's English empty state |
+| Parent page | agenda + grid + mini calendar | passed to all three (`[token]/page.tsx:115`, `:167-168`) | bilingual `PUBLIC_PAGE_COPY.emptyMonth` card, no toggle (`:117-146`) |
 
-- **`todayKey` draws the today marker** — a filled badge on the matching grid cell in the calendar
-  (`schedule-month-calendar.tsx:179`-`181`), the "วันนี้" badge + scroll anchor in the agenda. The
-  print report is the one surface that does not pass it, so whenever the viewed month contains
-  today the printed sheet carries no today marker and the preview does — the classes are identical,
-  the day highlight is not. (The code does not record *why* the report omits it; a printed month
-  outliving the day it was printed is the obvious reading, not a documented one.)
-- **A zero-session month diverges by design.** The workspace and the print report fall through to
-  the calendar's `No classes scheduled in {monthLabel}.` (`schedule-month-calendar.tsx:128`-`140`),
-  while the parent page short-circuits before rendering the agenda at all and shows its own
-  bilingual line in a card (copy at `src/lib/line/schedule-bot-copy.ts`).
-
-Print behaviour lives in `src/app/student-schedule.css` (imported by `globals.css`): a **named**
-`@page schedule-landscape` so this report prints landscape without flipping any other printable page
-in the app (`:10`-`19`), `break-inside: avoid` on day cells and session blocks (`:55`-`63`), and a
-print-time swap that forces the month grid on and the mobile list off (`:65`-`72`). One parent-page
-nuance: while in auto view, print output follows **paper** width, not screen width — portrait A4
-(≈794 CSS px) is below `lg`, so a desktop screen showing the grid still prints the agenda unless
-the paper is landscape. Forced views print what they show, and a forced calendar always prints the
-month grid (`print:block` on the grid wrapper, `print:hidden` on the mini calendar — it is
-navigation, not a document).
+One print nuance follows from the classes: in auto view, the parent page prints whatever **paper**
+width selects, not screen width — the agenda wrapper is `lg:hidden` and portrait A4 is below `lg`,
+so a desktop screen showing the grid still prints the agenda unless the paper is landscape. A forced
+calendar always prints the month grid (`print:block` on the grid wrapper, `print:hidden` on the mini
+calendar — `public-schedule-shell.tsx:155-166`).
 
 ## Data flow
 
 ```mermaid
 flowchart TD
-  W[Wise API] -->|credit-control cron| CC[credit_control_sessions<br/>active snapshot]
+  W[Wise API] -->|credit-control cron 20,50 * * * *| CC[(credit_control_* <br/>active snapshot)]
+  W -.->|live overlay, per read<br/>8s deadline, 60s cache| LV[fetchLiveMonthSessions]
+
   CC --> G["getStudentMonthlySchedule<br/>(data.ts)"]
+  LV -.->|ok → merge · fail → snapshot as-is| G
 
   subgraph Admin
-    A1["/student-schedule workspace"] -->|GET /api/student-schedule| G
+    A1["/student-schedule"] -->|GET /api/student-schedule| G
     A1 -->|Print| A2["/student-schedule/report"] --> G
     A1 -->|Copy parent link| L["POST /api/student-schedule/link"]
   end
 
   subgraph LINE
-    B["/schedule &lt;code&gt; [YYYY-MM] [send]<br/>allowlisted admin only<br/>no verb → back to the requester/chat"] --> BR[schedule-bot / schedule-bot-group]
-    BR --> G
+    B["/schedule &lt;code&gt; [YYYY-MM] [send]<br/>allowlisted admin only"] --> BR[schedule-bot · schedule-bot-group]
+    BR -->|liveSweep: rescue| G
     BR --> M
   end
 
@@ -284,196 +319,366 @@ flowchart TD
   R -->|null for every failure| E[one identical expired page]
   R -->|grant| G
   G -->|admin surfaces| C[ScheduleMonthCalendar]
-  G -->|parent page| P[ParentScheduleAgenda]
+  G -->|parent page| P[PublicScheduleShell]
 ```
 
-Two properties fall out of this shape:
+### The read path
 
-- **A link is re-read live on every visit.** The token stores a `(studentKey, monthKey)` grant, not a
-  rendered document, so a schedule that changes after the link was sent is correct the next time the
-  parent opens it — which is exactly what the Thai push message promises
-  (`src/lib/line/schedule-bot-copy.ts:87`). It also means a link can never widen its own scope.
-- **Minting resolves the student first.** `POST /api/student-schedule/link` loads the schedule
-  before it mints, and mints against `schedule.student.studentKey` rather than the raw input, so a
-  token can never be issued for an arbitrary key (`link/route.ts:47`-`63`).
+`getStudentMonthlySchedule(db, { studentKey, monthKey, liveSweep, preResolved })`
+(`data.ts:309-408`):
+
+1. Reject a malformed month key by throwing — never guess a month (`:318-320`).
+2. Resolve the active credit-control snapshot, then the student inside it; either missing returns
+   `null`, which every caller treats as "not found" with no name-search fallback (`:322-343`,
+   `:288-293`).
+3. Query the snapshot's session rows for the **Bangkok** month using a half-open instant window
+   `[start, end)` (`bangkokMonthInstantWindow`, `:156-160`, `:345-368`).
+4. Decide whether to sweep Wise: `"always"` (the default) sweeps every call; `"rescue"` sweeps
+   only when the snapshot month has no *visible* session — cancelled rows count as empty, so an
+   all-cancelled month still gets a live look; `"never"` skips (`:296`, `:372-379`).
+5. If the sweep succeeded, trim it to the same instant window and merge
+   (`mergeLiveSessionsIntoRows`, `:235-285`): a matched session takes the live time, end time,
+   status and duration but keeps the snapshot's subject, package and teacher; a live-only session is
+   synthesized with the session's own teacher; a snapshot-only session is **dropped**, because a
+   full successful sweep means Wise no longer has it this month (`:389-391`). If the sweep failed,
+   the snapshot rows render unchanged (`:391`).
+6. Shape the payload (`buildStudentSchedulePayload`, `:167-215`) and stamp `generatedAt` with now
+   when live data was used, otherwise the snapshot's own timestamp (`:406`).
+
+The parent page, the admin API and the report call this with the default `"always"`. Both bot
+routers pass `liveSweep: "rescue"` together with the snapshot and student the directory search
+already resolved, so a reply normally needs one sessions query and **no** Wise round trip: the
+message only needs a session count the snapshot already answers, and the minted link re-fetches live
+data when opened (`schedule-bot.ts:371-376`, `:445-450`; `schedule-bot-group.ts:529-534`). The
+exception is the empty-month path — when the snapshot month holds no visible session the rescue
+sweep *does* hit Wise (`data.ts:379`), so the one reply that costs a Wise round trip is the one that
+ends in a refusal.
+
+Two code comments disagree about how stale that snapshot can be: `schedule-bot-group.ts:527` calls
+it "≤30-min-old", while `live.ts:4-6` says it "can lag up to ~36 minutes" (a `20,50 * * * *` cron
+plus ~6.5 minutes to promote). Nothing in the repo settles which is right; the second is the more
+conservative reading.
+
+### Minting and resolving a link
+
+`mintStudentScheduleLink` generates 32 random bytes, stores only their SHA-256 hash with the
+`(studentKey, monthKey)` grant and an expiry (`ttlDays`, default 30), and returns the raw token —
+the only moment it exists in plaintext (`links.ts:54-112`). `POST /api/student-schedule/link` loads
+the schedule **before** minting and mints against `schedule.student.studentKey`, so a token can
+never be issued for an arbitrary key (`link/route.ts:45-63`).
+
+`resolveStudentScheduleLink` rejects anything not matching the 40–64-char base64url shape without
+touching the database, looks the hash up with expiry and revocation enforced in SQL, re-compares the
+stored digest in constant time, then bumps the view count best-effort (`links.ts:121-169`). Every
+failure returns `null`.
+
+### The two LINE paths
+
+The **DM path** (`schedule-bot.ts`) answers a bare `/schedule <code>` with the link, in English,
+to the admin who asked — no verified contact, no confirmation (`:332-338`, `:348-408`). Only the
+trailing `send` verb enters `startSend`: exactly one directory match, exactly one verified
+non-phantom contact, a non-empty month, then a 5-minute pending row and a confirm prompt; `YES`
+mints, pushes the Thai parent message with a deterministic retry key, clears the row and mirrors the
+message into `line_messages` (`:410-578`).
+
+The **group path** (`schedule-bot-group.ts`) posts into the chat the command came from — the
+`groupId` arrives on the webhook event, so no identity resolution is involved (`:4-8`). It requires
+an exact nickname-code match, a non-empty month, and either an already-seen student, instant mode or
+a `YES`; the first command in a chat asks FAMILY or STAFF and that answer doubles as the first
+confirmation (`:499-630`, `:639-685`). A trailing `send` here does **not** cross to a parent thread
+or demand a verified link — it only clears the already-seen shortcut so the chat must confirm again
+(`:445`, `:566`; header comment `:38-40`). Delivery mints with `sentToGroupId`, picks the template by
+audience, replies with the free `replyToken` and falls back to a push at the group id when the
+one-minute token window has closed, then records the send (`:696-777`, `:151-165`).
 
 ## Business rules & edge cases
 
-### The public page is the app's only unauthenticated student-data page
+### The public page is the app's only public page that renders student data
 
-`src/middleware.ts:15` allowlists the `/schedule/` prefix. Every other bypass in `isPublicRoute` is
-an API (`/api/auth`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`,
-two OA-resolver endpoints, all of `/api/internal/`); the only other public *page* is `/login`, which
-renders nothing about a student. The entry is written with a trailing slash so it matches tokenized
-URLs only and cannot widen to sibling paths; the admin page at `/student-schedule` is a different
-path and stays behind auth (`src/middleware.ts:11`-`15`).
+`isPublicRoute` allowlists `pathname.startsWith("/schedule/")` (`src/middleware.ts:21`). Every other
+entry in that function is an API path — `/api/auth`, `/api/search/assistant`,
+`/api/classrooms/floor-plan-map`, `/api/line/webhook`, the two OA-resolver endpoints, all of
+`/api/internal/` — except `/login`, which renders nothing about a student (`:10-26`). The entry
+carries a **deliberate trailing slash** so only tokenized URLs match: `/schedule` itself and any
+sibling path stay behind auth, and the admin page at `/student-schedule` is authenticated
+(`:17-20`). The maintenance-mode tests pin both sides: a parent link keeps rendering while
+`/student-schedule` is gated (`src/__tests__/middleware.test.ts:366-373`, `:397-408`).
 
-### The token is the credential, and it is a bad oracle
+### The token is the credential — and a useless oracle
 
-- 32 random bytes from `crypto.randomBytes`, base64url — not a UUID, not derived from the student key
-  (`src/lib/student-schedule/links.ts:24`, `:92`).
-- **Only the SHA-256 hash is persisted** (`:98`); the raw token exists in plaintext exactly once, at
-  mint time, on its way into the message or the admin's clipboard (`:54`-`60`).
-- Expiry and revocation are enforced in SQL, and the fetched digest is re-compared in constant time
-  (`:140`-`147`).
-- Every failure mode — malformed, unknown, expired, revoked — returns `null` (`:121`-`147`) and the
-  page renders **one identical message** for all of them, so the page cannot be used to probe which
-  tokens ever existed (`src/app/schedule/[token]/page.tsx:56`, copy at
-  `schedule-bot-copy.ts:106`-`116`). Do not branch that.
-- View accounting is best-effort: an accounting failure logs and still serves the parent
-  (`links.ts:149`-`159`).
-- Default TTL is 30 days, overridable by `STUDENT_SCHEDULE_LINK_TTL_DAYS` (`links.ts:27`,
-  `link/route.ts:55`). The link base is `APP_BASE_URL` or the request origin, so previews link to
-  themselves (`link/route.ts:18`-`20`).
+- 32 random bytes from `crypto.randomBytes`, base64url; not a UUID, not derived from anything an
+  attacker could guess (`links.ts:6-7`, `:24`, `:92`).
+- **Only the SHA-256 hash is persisted** (`:98`), the same discipline as `line_oa_resolver_runs`;
+  a database read cannot reconstruct a live link (`:8-9`).
+- A token is scoped to exactly one `(studentKey, monthKey)` and expires; re-reading the schedule at
+  view time keeps the link accurate as classes change but can never widen its scope
+  (`[token]/page.tsx:9-11`).
+- **Every resolution failure — malformed, unknown, expired, revoked — returns `null`** and the page
+  renders one identical `ExpiredNotice`, so the page cannot be probed for which tokens ever existed
+  (`links.ts:11-13`, `:114-126`, `:147`; `[token]/page.tsx:105-106`;
+  `src/lib/line/schedule-bot-copy.ts:148-158`). The page comment says it plainly: *do not branch
+  this.*
+- View accounting is best-effort; a failure there logs and still serves the parent
+  (`links.ts:149-159`).
+- TTL defaults to 30 days and is overridable by `STUDENT_SCHEDULE_LINK_TTL_DAYS`; the API route
+  falls back to `Number(...) || DEFAULT`, so `0` and non-numeric values also mean 30
+  (`links.ts:27`; `link/route.ts:55`; `src/lib/env.ts:24-25`). The bot paths do the same
+  (`schedule-bot.ts:137-138`; `schedule-bot-group.ts:136-137`).
+- The link base is `APP_BASE_URL` when set, but the two call sites differ in how they fall back and
+  it matters for a blank value. The API route uses `||`, so an unset *or* empty `APP_BASE_URL` falls
+  back to the request origin and a preview deployment links to itself (`link/route.ts:18-20`). Both
+  bots use `??`, which only catches *unset*: `process.env.APP_BASE_URL?.trim() ?? DEFAULT_BASE_URL`
+  means an empty or whitespace-only value trims to `""`, defeats the `??`, and puts a relative
+  `/schedule/<token>` into the LINE message instead of the production URL (`schedule-bot.ts:80`,
+  `:134-136`; `schedule-bot-group.ts:97`, `:133-135`; `env.ts:26-27`).
 
 ### Fail-closed rendering
 
 - **Cancelled sessions are omitted**, in both Wise spellings (`/^CANCELL?ED$/i`) — a parent-facing
-  calendar must not list a class that will not happen (`data.ts:39`, `:123`).
-- **A teacherless session is shown, not dropped**: it renders `TEACHER_TBC` and the teacher is never
-  inferred from the class or package name (`data.ts:138`). Rows written before migration `0063`
-  simply have no teacher; each credit-control sync writes a fresh snapshot carrying the new columns,
-  so the placeholder clears on its own.
-- **A student with two package rows for one session appears once** — dedupe is by `wiseSessionId`
-  (`data.ts:126`).
-- **Subject falls back** to the package name, then the literal `"Class"`, so a block is never blank
-  (`data.ts:136`).
-- **Unknown student or no active snapshot → `null`**, which callers must treat as "not found"; there
-  is no name-search fallback (`data.ts:161`-`194`).
-- **A malformed month throws** rather than guessing (`data.ts:169`-`171`,
-  `month-grid.ts:56`-`58`, `:80`-`82`).
+  schedule must not list a class that will not happen (`data.ts:10-13`, `:46`, `:182`).
+- **A teacherless session is shown, not dropped**, as "Teacher TBC"; the teacher is never inferred
+  from the class or package (`data.ts:14-16`, `:198`; `types.ts:9-10`). Live-only sessions take the
+  teacher from the Wise session via `creditSessionTeacher`, with the same `null` → TBC rule
+  (`data.ts:266`, `:280`; `wise.ts:131-144`).
+- **Unknown modality renders nothing.** `deriveSessionModality` reads the title prefix: `online` /
+  `live` → online, `in-person` / `on-site` → onsite, anything else → `unknown` (`data.ts:98-121`).
+  "Live" is BeGifted's other word for an online class, which is why it counts as online. The reason
+  given for trusting the prefix is a 2026-08-11 cross-join of the active snapshot against the tutor
+  snapshot's Wise fields, reported as putting every prefix on one side with >99.5% agreement. That
+  measurement exists **only as a code comment** (`:101-115`) — no script, test or fixture in the repo
+  reproduces it — so treat the figure as an author's note, not a verified property. The tutor
+  search/compare views still lack a reliable modality signal; this table has no `session_type` or
+  `location` column at all, so the title is the only signal here.
+- **The class label is the title with its modality prefix stripped**, fail-open to the full title
+  when the pattern does not match, then the legacy `subject` → `packageName` → `"Class"` chain for
+  rows that predate the column — a block is never blank (`data.ts:72-96`).
+- **A student holding two package rows for one session sees it once** — dedupe is by
+  `wiseSessionId` (`data.ts:183-186`).
+- **Unknown student or no active snapshot → `null`**, never a name search (`data.ts:288-293`).
+- **A malformed month throws** rather than guessing, at every layer (`data.ts:318-320`;
+  `links.ts:88-90`; `month-grid.ts:56-59`, `:79-82`).
+
+### The live overlay fails soft, and is the only thing that touches Wise
+
+- It **never throws into the render path**: any error, Zod failure or deadline overrun returns
+  `ok: false` with an empty list, and callers render the snapshot exactly as before
+  (`live.ts:11-14`, `:148-159`; `data.ts:389-391`).
+- The deadline is 8 s (`live.ts:27`), so a merely slow Wise day does not flap between live and
+  stale. The comment justifying that number cites a production measurement — 6 cold months, one
+  student, min 1178 ms / p50 1485 ms / p95 2783 ms, making 8 s roughly 3× p95 — which is recorded
+  nowhere but the comment itself and is not reproducible from the repo (`live.ts:22-26`).
+  No `AbortSignal` is threaded into the Wise client
+  on purpose: its retry loop retries aborted fetches too, which would burn backoff *after* the
+  deadline fired (`:79-82`).
+- The sweep pads the Bangkok month by one day at each end because Wise's day semantics at the
+  UTC+7 boundary are undocumented; the exact cutoff is applied once, in `data.ts`, to both the DB
+  query and the live trim (`live.ts:96-105`; `data.ts:383-387`).
+- Attribution matches the credit-control sync's own rule — `session.students.includes(wiseStudentId)`
+  — with no `studentKey` re-derivation (`live.ts:91-95`, `:114`).
+- `ENABLE_STUDENT_SCHEDULE_LIVE` is an **opt-out**: only the literal string `"false"` disables it
+  (`live.ts:61-68`; `env.ts:20-23`). This is the inverse polarity of `MAINTENANCE_MODE`, by design.
 
 ### Bangkok time is resolved server-side, once
 
-Every display string in the payload is precomputed in `Asia/Bangkok` — date key, `HH:mm` labels,
-month label — so no client re-derives a time from an instant (`types.ts:1`-`7`, `data.ts:41`-`46`).
-The month query uses a half-open **instant** window (`[start, end)`), not date strings, so a 23:00-UTC
-session that belongs to the next Bangkok day lands in the right month
-(`data.ts:91`-`101`). Months outside the credit-control window (past 120 / future 180 days) simply
-come back empty.
+Bangkok is UTC+7 with no DST, so a Bangkok month starts at 17:00 UTC on the last day of the previous
+month; the query compares **instants**, not date strings, so a 23:00-UTC session that belongs to the
+next Bangkok day lands in the right month (`data.ts:150-160`). Date keys, `HH:mm` labels and the
+month label are all formatted in `Asia/Bangkok` before they leave the server (`data.ts:48-53`,
+`:190-194`). Grid maths in `month-grid.ts` is deliberately clock-free UTC arithmetic on date-only
+keys; callers pass in a Bangkok "today" (`month-grid.ts:10-11`).
 
 ### The calendar never hides a class
 
 Unlike the compare view, the month grid has **no "+N more" overflow** — day cells grow instead,
 because a parent-facing document must not silently omit a class
-(`schedule-month-calendar.tsx:9`-`13`). The parent agenda holds the same line: every session
-renders as its own card, and past days are dimmed but never dropped. Subject colours are assigned
-by order of first appearance rather than hashed, after a content hash produced two
-indistinguishable blues in a real month (`:45`-`53`).
+(`schedule-month-calendar.tsx:12-13`, `:193-200`). The agenda renders every session as its own card
+and dims past days without dropping them (`parent-schedule-agenda.tsx:117`, `:152`). The only cap
+anywhere is the phone mini calendar's three chips per day, and that surface is navigation, not a
+document — the `+N` marker is explicit and a tap opens the full day
+(`parent-schedule-mini-calendar.tsx:12-13`, `:31`, `:166-170`). Subject colours are assigned by
+**order of first appearance** rather than hashed, so no two subjects in one document can collide
+until there are more subjects than colours (`schedule-month-calendar.tsx:46-54`). The comment adds
+that a content hash was tried first and produced two indistinguishable blues (Mathematics and
+English) in a real month (`:48-50`) — a historical note only: no earlier hash implementation remains
+in the tree, so the repo cannot corroborate it.
 
-### LINE delivery, in brief
+### LINE delivery rules that the schedule depends on
 
-The bot is a delivery channel for this feature; its gates are documented in
-[LINE Integration](./line-integration.md#schedule-bot-gates). The parts that matter when reasoning
-about the schedule itself:
+The gates are specified and cited on [LINE Integration § Schedule bot](./line-integration.md#schedule-bot);
+these are the ones that shape what a parent can receive.
 
-- **Fail-closed by env.** `LINE_SCHEDULE_BOT_ADMIN_IDS` unset or empty yields an empty allowlist,
-  which disables the bot entirely; a non-allowlisted sender gets `handled: false` and **no reply at
-  all**, so a parent messaging the OA sees no evidence it exists
-  (`src/lib/line/schedule-bot.ts:112`-`124`, `:226`; group equivalent
-  `schedule-bot-group.ts:275`-`278`). Onboarding a new admin operator onto the
-  allowlist is documented in
-  [`operations/runbook.md` §4.1](../operations/runbook.md#41-onboarding-a-new-schedule-bot-admin-operator).
-- **The default command does not message a parent.** A bare `/schedule <code>` replies to the
-  requester (DM) or into the originating chat (group); only the trailing `send` verb resolves and
-  messages a parent — see [Purpose](#purpose) for the citations.
-- **Trigger is the `/schedule` text prefix, or an `isSelf` mention.** Both are accepted
-  (`detectTrigger`, `schedule-bot-command.ts:72`-`84`; `mentionsSelf` at `mentions.ts:54`-`57`), and
-  the typed prefix is the primary one. *Why* is an operational finding about LINE's own clients,
-  recorded in the repo only as prose — the mention picker offers no bot on desktop and web, so the
-  mention gate was unsatisfiable there (JSDoc at `schedule-bot-command.ts:16`-`19`; commit
-  `339ccc0`). Not verifiable from this codebase.
-- **`/schedule` typed in LINE Official Account Manager can never work.** This is an operational
-  finding about LINE's webhook contract, not something this repo can prove: LINE emits no event for
-  a message the Official Account itself sends, so that text goes straight to the parent and the
-  server never sees it (asserted in commit `0438836`). What the code *does* show is that the ingest
-  only ever consumes an inbound `events[]` array and drops anything whose `source.type` is neither
-  `user` nor a group/room text message (`src/lib/line/data.ts:435`-`461`). Staff working in OA
-  Manager use `/student-schedule` → **Copy parent link** instead.
-- **Groups declare an audience once and confirm each new student.** The first command in a chat asks
-  FAMILY or STAFF, stored in `line_group_settings`; that reply doubles as the first student's
-  confirmation. Each new student in that chat then needs a `YES`, while a student the chat has
-  already received goes straight through via `line_group_schedule_sends`
-  (`schedule-bot-group.ts:490`-`504`). **Audience selects the message template only — Thai parent
-  copy vs the English admin format — it grants nothing and relaxes no gate**
-  (ternary at `:661`-`675`). A chat can opt out of the per-student confirm entirely:
-  `/schedule setup instant` sets `skip_confirm` on its settings row (GRP-BOT-07) and every later
-  command posts immediately; `/schedule setup confirm` restores the default. The toggle is
-  admin-only and refuses until the chat has declared an audience (`:222`-`237`, `:348`-`361`).
-- **Parent copy names the nickname, never the legal name**, states the expiry, and says the link
-  self-updates (`schedule-bot-copy.ts:66`-`96`).
+- **Fail-closed behind `LINE_SCHEDULE_BOT_ADMIN_IDS`.** Unset or empty yields an empty set and
+  `isScheduleBotAdmin` requires `size > 0`, so the bot is disabled entirely; a non-allowlisted
+  sender gets `handled: false` and **no reply at all**, so a parent messaging the OA sees no
+  evidence the bot exists and the normal classifier path runs untouched
+  (`schedule-bot.ts:9-13`, `:116-128`, `:247-248`; `schedule-bot-group.ts:18-21`, `:345-348`;
+  `env.ts:16-19`). Onboarding an operator starts by harvesting the LINE user id with `npm run line:find-user-ids`
+  ([runbook § 3.5](../operations/runbook.md#35-one-off-maintenance-scripts)); the variable itself is
+  catalogued in [env.md § 1.3](../reference/env.md#13-optional-9).
+- **Trigger is the `/schedule` text prefix, or an `isSelf` mention.** `detectTrigger` checks the
+  typed prefix first and the mention second (`schedule-bot-command.ts:107-122`); `mentionsSelf`
+  requires `isSelf: true` and a `type` of `user` **or absent** — the check is
+  `(mentionee.type ?? "user") === "user"` — so an explicit `type: "all"` (`@all`) never addresses the
+  bot while a mentionee that omits `type` still can (`mentions.ts:54-56`). The prefix is primary
+  because, per the code comment and commit `339ccc0`, the LINE desktop and web clients offer no bot
+  in their mention picker, leaving the mention available only in the mobile app
+  (`schedule-bot-command.ts:13-20`). That is an operational finding about LINE's clients recorded as
+  prose — the repo cannot verify it; the code merely accepts both triggers.
+- **A bare `YES`/`NO`/`FAMILY`/`STAFF` needs an allowlisted admin and a pending row.** The
+  prefix-free answer path opens only when a `line_schedule_bot_pending` row exists for that admin in
+  that conversation (`schedule-bot-command.ts:72-86`; `schedule-bot.ts:291-297`;
+  `schedule-bot-group.ts:322-341`). Both lookups test **row existence only, not expiry** — the DM's
+  `hasPendingDm` selects the id alone (`schedule-bot.ts:193-203`) and the group's
+  `hasPendingQuestion` selects `expiresAt` but returns `Boolean(row)`
+  (`schedule-bot-group.ts:167-181`). An expired-but-uncleared row therefore still unlocks the path,
+  which then replies "expired" and clears the row (`schedule-bot.ts:529-533`;
+  `schedule-bot-group.ts:656-660`). Nothing is sent either way, so this is a wording nuance rather
+  than a hole: the gate is "a pending row exists", not "a live question is outstanding".
+- **`/schedule` typed in LINE Official Account Manager can never work.** LINE's webhook event set
+  is user-initiated; there is no event for a message the OA itself sends, so that text goes straight
+  to the parent and the server never sees it. The claim is carried in commit `0438836`'s message,
+  not in code: the repo cannot prove the absence of such an event in LINE's contract. What the
+  ingest does show is the shape it consumes — an inbound `events[]` array, with anything whose
+  `source.type` is neither `user` nor a group/room text message falling to the ignore branch
+  (`src/lib/line/data.ts:435-466`). Staff working in OA Manager use `/student-schedule` → **Copy
+  parent link** instead.
+- **The default command does not message a parent — and `send` means different things per path.**
+  A bare `/schedule <code>` replies to the requester (DM) or into the originating chat (group).
+  - *DM.* The trailing `send` verb is what resolves a **parent's own thread** and requires a
+    verified, non-phantom contact link before anything is pushed (`schedule-bot.ts:332-339`,
+    `:434-438`). Comments on both files say that gate leaves the DM path reaching only about seven
+    students, almost no verified links having survived the OA-resolver namespace quarantine, and
+    that this is why the group path was built (`schedule-bot.ts:334`;
+    `schedule-bot-group.ts:9-12`). Those are production-data assertions the repo cannot check — see
+    [Open questions](#open-questions).
+  - *Group.* `send` resolves no parent thread and applies no verified-link gate — the header comment
+    says that gate is "deliberately NOT applied here", because the destination is the group everyone
+    is already in (`schedule-bot-group.ts:38-40`). Delivery still lands in the originating group.
+    What the verb does is narrower: it sets `pushToParent` (`:445`), whose only use is to **disable
+    the already-seen shortcut**, so a repeat student that would otherwise post straight through has
+    to be confirmed with a `YES` (`:566`). Instant mode outranks it — a chat with `skip_confirm`
+    delivers regardless (`:548-560`). The test suite pins this as `describe("GRP-BOT-04 send verb
+    still confirms")` (`src/lib/line/__tests__/schedule-bot-group.test.ts:448`), and the schema
+    comment agrees (`schema.ts:4705-4708`).
+- **Groups declare an audience once and confirm each new student.** The first command in a chat
+  asks FAMILY or STAFF; that reply registers `line_group_settings` and doubles as the first
+  student's confirmation (`schedule-bot-group.ts:608-618`, `:662-665`). Each *new* student in that
+  chat needs a `YES`. A student the chat has already received (`line_group_schedule_sends`) goes
+  straight through **only when the command carries no `send` verb** — the shortcut's condition is
+  `audience && !pushToParent && groupHasSeenStudent(...)` (`:562-576`); `/schedule <code> send` for
+  an already-seen student still writes a pending row and asks for `YES` (`:578-628`), unless
+  `skip_confirm` is on. **Audience selects the message template only — Thai parent copy
+  vs the English admin format; it grants nothing and relaxes no gate** (`:690-694`, `:734-748`;
+  `schema.ts:4688-4699`). The one setting that *does* relax a gate is `setup instant`
+  (GRP-BOT-07), which skips the per-student confirm for that chat, `send` verb included; it refuses
+  in a chat with no declared audience, and changing the audience never resets it (`:31-37`,
+  `:215-217`, `:227-241`, `:548-560`).
+- **Exact code or nothing** in a group (`exactCodeMatches`, `schedule-bot-command.ts:132-140`;
+  `schedule-bot-group.ts:514-522`), and **never a blank calendar** on either path
+  (`schedule-bot.ts:456-460`; `schedule-bot-group.ts:540-544`).
+- **Parent copy names the nickname, never the legal name**, gives the explicit expiry and promises
+  the link self-updates — which the live re-read at view time makes true
+  (`schedule-bot-copy.ts:9-13`, `:96-130`). Gregorian years are deliberate; the one place to switch
+  to พ.ศ. is `formatThaiMonth` (`:38-42`).
 
 ## Tests
 
-Run with `npm test`. Tests sit in sibling `__tests__/` directories.
+Run with `npm test` (the `unit` Vitest project). Tests sit in sibling `__tests__/` directories.
 
-- **`src/lib/student-schedule/__tests__/data.test.ts`** — the payload rules in isolation: Bangkok
-  formatting, both cancellation spellings, `TEACHER_TBC` instead of a dropped session, per-session
-  dedupe across packages, chronological sort, subject fallback, missing end time, empty month; plus
-  the Bangkok-vs-UTC month window (including a late-UTC session landing in the next Bangkok day) and
-  `parseStudentDisplay` casing/suffix behaviour.
-- **`src/lib/student-schedule/__tests__/links.test.ts`** — mint returns a raw token but persists only
-  its hash, tokens are distinct per call, TTL is applied in days, a malformed month mints nothing;
-  resolve rejects a malformed token *without querying*, returns null when the row is filtered out or
-  the stored hash does not match, and still serves the parent when view accounting fails.
-- **`src/app/api/student-schedule/__tests__/route.test.ts`** — both routes' 401/400/404/500 ladders,
-  and that the link route mints **against the resolved student, not the raw input key**.
-- **`src/components/student-schedule/__tests__/schedule-month-calendar.test.tsx`** — 42-cell
-  Monday-start grid, distinct-and-deterministic subject colours, every class on a busy day (never a
-  `+N more`), the TBC placeholder, both grid and mobile list present, empty state, and label
-  formatting including the missing-end-time case.
-- **`src/components/student-schedule/__tests__/parent-schedule-agenda.test.tsx`** — sections only
-  for days with sessions, Thai weekday headings, the today badge and past-day dimming (and their
-  absence without `todayKey`), the scroll anchor on today / the next upcoming day / absent when the
-  month is entirely past, the TBC placeholder, chronological order, and the same label formatting
-  cases as the calendar.
-- **`src/components/student-schedule/__tests__/schedule-view-preference.test.ts`** — the toggle's
-  zero-flash contract as exact class strings for auto/forced views, plus storage helpers failing
-  closed to auto on garbage or a throwing localStorage.
-- **`src/components/student-schedule/__tests__/parent-schedule-mini-calendar.test.tsx`** — 42
-  Monday-start cells, one subject chip per session in shared-map colours, the CHIP_CAP `+N` overflow, blank
-  out-of-month cells, today only with `todayKey`, buttons only on session days, Thai aria-labels,
-  and the first-appearance legend.
-- **`src/components/student-schedule/__tests__/public-schedule-shell.test.tsx`** — the SSR auto
-  contract (agenda `lg:hidden`, calendar `hidden lg:block lg:max-w-5xl`), the print-safe
-  grid/mini-calendar split, the Thai toggle with neither segment pressed before hydration, and every
-  slot mounted inside the scroll-owning shell.
-- **`src/lib/calendar/__tests__/month-grid.test.ts`** — grid construction, leap February, year
-  boundaries in both directions, throwing on a malformed key, Monday resolution, D/M formatting.
-- **LINE side** — `schedule-bot.test.ts`, `schedule-bot-group.test.ts`, `schedule-bot-copy.test.ts`
-  and `mentions.test.ts` under `src/lib/line/__tests__/`, organised one describe block per gate, with
-  the refusal cases asserting that **zero** messages were sent. Covered in
-  [LINE Integration](./line-integration.md#tests).
+- **`src/lib/student-schedule/__tests__/data.test.ts`** — `buildStudentSchedulePayload` (Bangkok
+  formatting, both cancellation spellings, TBC instead of a dropped session, cross-package dedupe,
+  chronological sort, title-over-subject and the fallback chain, missing end time, empty month);
+  `deriveDisplaySubject` and `deriveSessionModality` (every attested prefix, "Live" as online,
+  fail-closed `unknown`); `bangkokMonthInstantWindow` (Bangkok vs UTC month, late-UTC session);
+  `parseStudentDisplay`; `mergeLiveSessionsIntoRows` (matched / live-only / snapshot-only, live
+  title backfill, live CANCELLED propagation); and `getStudentMonthlySchedule`'s three live-sweep
+  modes including the all-cancelled rescue edge, fail-soft on a failed rescue, and the single-query
+  `preResolved` path.
+- **`src/lib/student-schedule/__tests__/links.test.ts`** — mint persists only the hash, distinct
+  tokens per call, TTL in days, malformed month mints nothing; resolve rejects a malformed token
+  without querying, returns `null` for a filtered-out row or a digest mismatch, and still serves the
+  parent when view accounting fails; URL joining.
+- **`src/lib/student-schedule/__tests__/live.test.ts`** — the kill switch's exact-`"false"`
+  polarity; the sweep filters to the requested student, pads one Bangkok day each side, returns
+  `ok: false` on a rejected fetch or a blown deadline, and memoizes for the TTL window.
+- **`src/lib/calendar/__tests__/month-grid.test.ts`** — 42-cell Monday-start grid, leap February,
+  year boundaries both ways, throwing on a malformed key, Monday resolution, D/M formatting.
+- **`src/app/api/student-schedule/__tests__/route.test.ts`** — both routes' 401 / 400 / 404 / 500
+  ladders, and that the link route mints against the **resolved** student, not the raw input key.
+- **`src/components/student-schedule/__tests__/`** (five files, `renderToStaticMarkup`) —
+  `schedule-month-calendar` (grid, distinct deterministic subject colours, every class on a busy day
+  with no overflow, TBC, both grid and list present, empty state, modality glyph and its absence for
+  `unknown`); `parent-schedule-agenda` (session-day sections only, Thai headings, today badge and
+  past dimming only with `todayKey`, scroll anchor on today / next day / absent for a past month,
+  modality tag, silence on `unknown`); `parent-schedule-mini-calendar` (42 cells, shared chip
+  colours, `CHIP_CAP` overflow, blank out-of-month cells, buttons only on session days, Thai aria
+  labels, no legend); `public-schedule-shell` (the SSR auto contract as exact classes, the print-safe
+  grid / screen-only mini-calendar split, Thai toggle with nothing pressed before hydration);
+  `schedule-view-preference` (valid views pass, garbage fails closed to auto, storage helpers swallow
+  a throwing `localStorage`).
+- **`src/lib/line/__tests__/`** — `schedule-bot.test.ts` and `schedule-bot-group.test.ts` are
+  organised one `describe` per gate (SCHED-BOT-01…04, GRP-BOT-01…07), with every refusal asserting
+  that **zero** messages were sent; `schedule-bot-copy.test.ts` pins the wording (nickname-only
+  parent copy, one message for every failure mode, Thai labels); `mentions.test.ts` covers
+  `isSelf`-only matching, `@all` rejection and UTF-16-safe stripping; `data-group-ingest.test.ts`
+  covers collecting group text as transient commands without persisting them. Detail on
+  [LINE Integration § Tests](./line-integration.md#tests).
+- **`src/__tests__/middleware.test.ts:366-373`, `:397-408`** — the parent link stays reachable and
+  the admin page stays gated under maintenance mode, which is exactly the trailing-slash boundary.
+
+No test renders `src/app/schedule/[token]/page.tsx` or the `(print)` report page directly; their
+behaviour is covered through the components and `links.ts`.
 
 ## Open questions
 
-- **`revokeStudentScheduleLink` has no caller and no test.** It is exported from
-  `src/lib/student-schedule/links.ts:172` and nothing in `src/` invokes it — there is no admin
-  "revoke link" UI or endpoint. Is a revoke surface planned, or should a wrongly-sent link be handled
-  some other way (and by whom)?
-- **The DM "multiple verified contacts" prompt is unanswerable.** `adminMultipleContacts` tells the
-  admin to "reply 1 or 2" (`schedule-bot-copy.ts:192`-`201`), but no numeric handler exists — a bare
-  `"1"` fails `COMMAND_PATTERN`'s 2-character minimum (`schedule-bot-command.ts:24`) and no pending
-  row was written, so the reply is ignored. Should the numbered choice be implemented, or the copy
-  changed to point at `/line-review`?
-- **No sweeper for expired rows.** Nothing deletes expired `student_schedule_links` or abandoned
-  `line_schedule_bot_pending` rows; expiry is enforced only at read time. Is unbounded growth
-  acceptable, or should a cron prune them?
-- **Links are pinned to a single month.** A parent's August link is inert in September and there is
-  no rolling "current month" link and no re-send job. Is monthly re-issue intended to stay a manual
+- **`revokeStudentScheduleLink` has no caller and no test.** It is exported
+  (`src/lib/student-schedule/links.ts:171-184`) and nothing in `src/` invokes it — there is no
+  "revoke" endpoint or UI, so a wrongly-sent parent link has no revoke path short of a DBA. Is a
+  revoke surface planned, and who should own it? (Also listed as dead-code in
+  [`OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md).)
+- **`getStudentMonthlyScheduleForRequest` also has no caller** (`data.ts:410-415`). Every Server
+  Component calls `getStudentMonthlySchedule(getDb(), …)` directly. Keep as a convenience, or remove?
+- **`view_count` / `last_viewed_at` are written but never read.** `resolveStudentScheduleLink` bumps
+  them (`links.ts:149-159`) and no query, page or script reads them back. Is a "did the parent open
+  it?" readout intended?
+- **The DM "multiple verified contacts" prompt is unanswerable.** `adminMultipleContacts` asks the
+  admin to "reply 1 or 2" (`schedule-bot-copy.ts:234-243`), but `startSend` returns before writing a
+  pending row (`schedule-bot.ts:441-444`), a bare `"1"` fails `COMMAND_PATTERN`'s two-character
+  minimum (`schedule-bot-command.ts:39`) and is not an `ANSWER_PATTERN` word, so the reply is
+  silently ignored. Implement the numbered choice, or change the copy to point at `/line-review`?
+- **No sweeper for expired rows.** Nothing deletes expired `student_schedule_links`; abandoned
+  `line_schedule_bot_pending` rows are cleared only when the same admin next confirms, cancels or
+  hits the expired-confirm branch in that conversation. Expiry is enforced only at read time. Is
+  unbounded growth acceptable, or should a cron prune them?
+- **Links are pinned to one month.** A parent's August link is inert in September; there is no
+  rolling "current month" link and no scheduled re-send. Is monthly re-issue meant to stay a manual
   staff action?
-- **The `data.ts` header says `credit_control_sessions` "is truncated and rebuilt on every
-  credit-control sync" (`:7`-`8`).** The sync actually writes a new snapshot's rows and flips
-  `active` (`src/lib/credit-control/sync.ts:660`-`701`); nothing deletes old snapshot rows (see
-  [Credit Control](./credit-control.md)). The self-healing conclusion holds, but the mechanism
-  described does not — worth correcting the comment.
-- **The middleware comment's rationale is imprecise.** `src/middleware.ts:13`-`14` says the trailing
+- **The report omits `todayKey` by design or by omission?** `report/page.tsx:115` renders the
+  calendar without it, so a printed month never carries a today marker while the preview does. A
+  printed sheet outliving the day it was printed is the obvious reading, but the code does not say
+  so.
+- **The `data.ts` header describes the wrong mechanism.** It says `credit_control_sessions` "is
+  truncated and rebuilt on every credit-control sync" (`data.ts:6-8`); the sync actually inserts a
+  new snapshot's rows and flips `active` with one `UPDATE`, leaving old snapshot rows in place
+  (`src/lib/credit-control/sync.ts:669-684`, `:714-719`). The self-healing conclusion holds; the
+  comment should be corrected.
+- **The middleware comment's rationale is imprecise.** `src/middleware.ts:19-20` says the trailing
   slash "keeps the authenticated `/student-schedule` admin page out of this allowlist", but
-  `"/student-schedule".startsWith("/schedule")` is false either way. Was a different sibling path
-  (e.g. a future `/schedule` index) the real concern?
-- **How many families can actually be reached today?** The group path was built because "almost no
-  verified contact links survive the OA-resolver namespace quarantine" (commit `2a17065`,
-  `schedule-bot-group.ts:9`-`13`). Whether the DM `send` path is still limited to a handful of
-  students is a production-data question, not a repo one.
+  `"/student-schedule".startsWith("/schedule")` is false with or without the slash. The slash does
+  keep `/schedule` itself and sibling paths authenticated — was a future bare `/schedule` index the
+  real concern?
+- **`OPEN-QUESTIONS.md` DEF-24 is stale.** It reports the print report's back link going to
+  Learning Plans; `PrintToolbar` now takes `backHref`/`backLabel` and the report passes
+  `/student-schedule` (`src/components/learning-plan/print-toolbar.tsx:8-13`;
+  `report/page.tsx:98`). It should be retired on the next pass of that file.
+- **Reference line anchors have drifted.** `erd-core.md` cites `studentScheduleLinks` at
+  `schema.ts:4627-4659` and `api/misc.md` cites the middleware allowlist at `middleware.ts:15`; at
+  this revision they are `schema.ts:4635-4656` and `middleware.ts:21`. A reference regen is due.
+- **How many families can the DM `send` path actually reach?** Two comments assert the number —
+  "~7 students" (`schedule-bot.ts:334`) and "the seven students the DM path can reach", blamed on
+  the OA-resolver having harvested chatIds from a different namespace, since quarantined
+  (`schedule-bot-group.ts:9-12`). Nothing in the repo derives either figure; it is a
+  `line_contact_student_links` row count in production. Worth confirming before anyone plans around
+  the DM path, and worth re-stating as a date-stamped measurement if it stays in the comments.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against main@0cd1e81 (clean tree) on 2026-09-02._

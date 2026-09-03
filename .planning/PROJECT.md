@@ -157,7 +157,7 @@ Deferred to v1.2:
 - **Deployment:** Vercel Hobby plan (daily cron, 300s function timeout). Upgrade to Pro for 30-min sync cadence.
 - **Data integrity:** Fail-closed safety rules are non-negotiable — unresolved identity/modality/qualification → Needs Review, never Available
 - **Visual:** Keep GCal-style calendar grid and sky blue color palette
-- **Regression:** All 669 existing tests must continue to pass
+- **Regression:** All existing test files (389 at 2026-09-02, 13 of them Testcontainers integration suites) must continue to pass
 
 ## Key Decisions
 

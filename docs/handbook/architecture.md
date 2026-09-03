@@ -4,18 +4,32 @@
 
 BGScheduler answers a deceptively simple question — *which tutors are free, qualified, and safe to book at a given time* — against a source of truth (the Wise scheduling platform) that is slow, paginated, and rate-limited. The entire system is organized around one architectural bet:
 
-> **Wise is never queried on the request path.** A scheduled background sync pulls everything out of Wise, normalizes it into canonical Postgres tables stamped with an immutable `snapshot_id`, and a process-global in-memory index serves reads from RAM.
+> **Wise is never queried on the tutor read path.** A scheduled background sync pulls everything out of Wise, normalizes it into canonical Postgres tables stamped with an immutable `snapshot_id`, and a process-global in-memory index serves reads from RAM.
 
 Two consequences fall out of that bet, and they shape every other decision in the codebase:
 
-1. **Reads are pinned to a version.** A request does not see "Wise now"; it sees exactly one snapshot. That makes results reproducible and makes a failed sync a non-event.
-2. **Correctness has to be decided at write time, not read time.** By the time a request arrives, the raw Wise payload is long gone. Anything ambiguous — an unmergeable teacher identity, an unparseable tag, a contradictory modality — must have been resolved or recorded as a defect during the sync. This is why the fail-closed rule (below) lives in the pipeline, not in the UI.
+1. **Reads are pinned to a version.** A request does not see "Wise now"; it sees exactly one snapshot — the one row in `snapshots` with `active = true`. That makes results reproducible and makes a failed sync a non-event for readers.
+2. **Correctness is decided at write time, not read time.** By the time a request arrives, the raw Wise payload is gone. Anything ambiguous — an unmergeable teacher identity, an unparseable tag, a contradictory modality, an unrecognized session status — must have been resolved or recorded as a `data_issues` row during the sync. The fail-closed rule (below) therefore lives in the pipeline, and the read path merely honours what the pipeline recorded.
 
-This document owns the *shape* and the *why*: the layers, the snapshot-versioned data model and atomic promotion, the in-memory `SearchIndex` singleton with its stale detection, the fail-closed rule, and a request-lifecycle walkthrough. It does **not** own mechanical detail — exact columns live in [`reference/database/`](../reference/database/index.md), exact endpoint signatures in [`reference/api/`](../reference/api/index.md), schedules in [`reference/crons.md`](../reference/crons.md), and variables in [`reference/env.md`](../reference/env.md). For the ETL narrated step-by-step with payload shapes, see [`data-flow.md`](./data-flow.md).
+This page owns the *shape* and the *why*: the layers, the snapshot-versioned data model and its atomic promotion, the in-memory `SearchIndex` singleton with its stale detection, the fail-closed rule, and a request-lifecycle walkthrough. It does **not** own mechanical detail — exact columns live in the per-domain ER diagrams under `docs/reference/database/` (the snapshot spine is [`erd-core.md`](../reference/database/erd-core.md), enum value sets are [`enums.md`](../reference/database/enums.md)), exact endpoint signatures in [`reference/api/`](../reference/api/index.md), schedules in [`reference/crons.md`](../reference/crons.md), variables in [`reference/env.md`](../reference/env.md), and the sign-in model in [`operations/auth-and-access.md`](../operations/auth-and-access.md). For the ETL narrated stage by stage with payload shapes, see [`data-flow.md`](./data-flow.md); for vocabulary, [`glossary.md`](./glossary.md).
 
 ### Scale at this revision
 
-The snapshot spine described here is the original core, but the application has grown a long way past it. Counted from the working tree: **178** route handlers (`src/app/api/**/route.ts`), **188** `pgTable` definitions and **61** `pgEnum` declarations in `src/lib/db/schema.ts`, **65** SQL migrations under `drizzle/`, **29** `page.tsx` files (25 inside the authenticated `(app)` group), **15** Vercel Cron entries in `vercel.json` against **21** internal cron-capable route handlers, and **369** Vitest files. Only a minority of those tables and routes belong to the tutor-search spine; the rest are sibling subsystems that reuse its *discipline* without reusing its snapshot machinery (see [Beyond the snapshot spine](#beyond-the-snapshot-spine)).
+The snapshot spine is the original core, but the application has grown a long way past it. Measured from the working tree at HEAD (the command is given so the number can be re-derived rather than trusted):
+
+| Measure | Count | How it was counted |
+|---|---:|---|
+| Drizzle tables | **189** | `grep -cE "^export const [a-zA-Z]+ = pgTable" src/lib/db/schema.ts` (4,772-line file) |
+| Postgres enums | **61** | `grep -cE "^export const [a-zA-Z]+ = pgEnum" src/lib/db/schema.ts` |
+| Route files | **180** | `find src/app/api -name route.ts` |
+| HTTP endpoints | **243** | 241 named `export async function GET\|POST\|PUT\|PATCH\|DELETE` handlers (99 GET, 95 POST, 34 PATCH, 12 DELETE, 1 PUT), plus the Auth.js catch-all's `export const { GET, POST } = handlers` (`src/app/api/auth/[...nextauth]/route.ts:3`); the 2 CORS `OPTIONS` handlers are excluded |
+| Vercel Cron entries | **17** | the `crons` array in `vercel.json`. The in-app registry declares **22** job keys (`CronJobKey`, `src/lib/data-health/cron-registry.ts:3-25`), 5 of them `manualOnly: true` (`:202`, `:217`, `:232`, `:379`, `:394`), so `SCHEDULED_CRON_JOBS` (`cron-registry.ts:401`) is also 17 |
+| Pages | **31** `page.tsx` | 26 under `src/app/(app)/`, 3 print surfaces under `src/app/(print)/`, `src/app/login/page.tsx`, and the public `src/app/schedule/[token]/page.tsx` |
+| Navigation tools | **22** in **6** sections | `NAV_TOOLS` / `NAV_SECTIONS` (`src/lib/navigation/tools.ts:93`, `:60`); 4 carry `shortcut: true`, 7 carry a `badgeKey` |
+| SQL migrations | **69** (`0000`–`0068`) | `ls drizzle/*.sql` |
+| Vitest files | **389** | `find src -name "*.test.ts" -o -name "*.test.tsx"` |
+
+Only a minority of those tables and routes belong to the tutor-search spine described here; the rest are sibling subsystems that reuse its *discipline* (single-flight sync runs, fail-closed normalization, cron audit) without reusing its snapshot/index machinery — see [Beyond the snapshot spine](#beyond-the-snapshot-spine).
 
 ---
 
@@ -23,56 +37,61 @@ The snapshot spine described here is the original core, but the application has 
 
 Data flows one way during a sync (Wise → normalization → Postgres → promotion) and the opposite way during a request (UI → API → in-memory index). The layers are physically separated into directories under `src/lib/`, and lower layers know nothing about upper ones.
 
-| Layer | Location | Responsibility | Depends on |
+| Layer | Location | Responsibility | Repo-internal imports (verified) |
 |---|---|---|---|
-| **Wise API client** | `src/lib/wise/` | Rate-limited, retrying HTTP client + domain fetchers | env vars only — no internal imports |
-| **Normalization** | `src/lib/normalization/` | Raw Wise payloads → canonical shapes: identity, qualifications, availability, leaves, sessions, modality, timezone | Wise types only |
-| **Sync orchestrator** | `src/lib/sync/` | The full ETL: fetch → normalize → persist → validate → promote, plus the single-flight runner | Wise client, normalization, DB |
-| **DB layer** | `src/lib/db/` | Neon Postgres connection singleton + Drizzle schema | `@neondatabase/serverless`, `drizzle-orm` |
-| **Snapshot tables** | (Postgres) | Versioned point-in-time normalized data keyed by `snapshot_id` | — |
-| **In-memory `SearchIndex`** | `src/lib/search/index.ts` | One denormalized aggregate per tutor, loaded from the active snapshot, held process-global | DB layer, schema |
-| **Search / compare engines** | `src/lib/search/engine.ts`, `compare.ts`, `range-search.ts`, `recommend.ts` | Pure functions computing availability, conflicts, free slots, rankings | the index |
-| **Server data helpers** | `src/lib/data/` | Cached (`"use cache"`) Server-Component reads, tagged for invalidation | DB layer |
-| **API routes** | `src/app/api/` | auth → parse → Zod validate → engine → JSON | auth, DB, index, engines |
-| **UI** | `src/app/(app)/`, `src/components/` | Server Components fetch via `src/lib/data/*`; client shells call the API routes | API routes, data helpers |
+| **Wise API client** | `src/lib/wise/client.ts`, `fetchers.ts`, `types.ts` | Retrying, concurrency-limited HTTP client; typed fetchers for teachers, availability, sessions, locations, analytics, receipts | **None.** `client.ts` has no import statements at all; `fetchers.ts` imports only `./client`, `./types`, `date-fns` (`fetchers.ts:1-22`) |
+| **Normalization** | `src/lib/normalization/` — `identity`, `qualifications`, `availability`, `leaves`, `sessions`, `modality`, `timezone` | Raw Wise payloads → canonical, fail-closed domain shapes | Only `@/lib/wise/types` and sibling normalization modules (e.g. `identity.ts:1-5`, `modality.ts:1-2`) |
+| **Sync orchestrator** | `src/lib/sync/` — `orchestrator.ts`, `run-wise-sync.ts`, `past-sessions-diff-hook.ts`, `snapshot-pruning.ts` | The full ETL: fetch → normalize → persist → validate → promote; the single-flight runner | Wise client + fetchers + types, all six normalization modules, `@/lib/db`, and one engine helper (`detectSessionModalityConflict`, `orchestrator.ts:18`) |
+| **DB layer** | `src/lib/db/index.ts`, `schema.ts` | Neon-HTTP Drizzle singleton + the whole schema | `@neondatabase/serverless`, `drizzle-orm/neon-http` (`db/index.ts:1-3`) |
+| **Snapshot tables** | Postgres | Versioned point-in-time normalized data keyed by `snapshot_id` | — |
+| **In-memory `SearchIndex`** | `src/lib/search/index.ts` | One denormalized aggregate per tutor, loaded from the active snapshot, held on `globalThis` | `@/lib/db`, `@/lib/db/schema`, `@/lib/tutor-business-profiles` (`index.ts:1-7`) |
+| **Search / compare engines** | `src/lib/search/engine.ts`, `compare.ts`, `range-search.ts`, `recommend.ts` | Pure functions over the index: availability, conflicts, shared free slots, rankings | `engine.ts` → `normalization/timezone`, `ops/stale` (`engine.ts:16-17`); `range-search.ts` additionally → `proposals/data` for hold overlays (`range-search.ts:3`) |
+| **Server data helpers** | `src/lib/data/` — `active-snapshot.ts`, `tutors.ts`, `filters.ts`, `past-sessions.ts` | Cached (`"use cache"`) Server-Component reads, tagged for invalidation | `@/lib/db`, schema |
+| **API routes** | `src/app/api/**/route.ts` | `auth()` → parse JSON → Zod `safeParse` → engine → JSON | auth, DB, index, engines, data helpers |
+| **UI** | `src/app/(app)/`, `src/components/`, `src/hooks/` | Async Server Components fetch via `src/lib/data/*` and pass props to client shells; client shells call the API routes | data helpers (server), `fetch("/api/...")` (client) |
 
-The separation is enforceable, not aspirational: `src/lib/wise/client.ts` imports nothing from the repo, the normalization modules import only Wise types, and route logic is kept in plain `src/lib/{domain}/*.ts` modules so the engines are unit-testable without the Next/auth route graph. `/api/search/range`, for instance, is a 57-line handler that does auth + Zod + delegation into `executeRangeSearch()` (`src/lib/search/range-search.ts:103`).
+Three observations about how the separation actually holds up in code:
 
-### Container / data-flow diagram
+- **The engines never touch the database.** `executeSearch` (`src/lib/search/engine.ts:22`) takes a `SearchIndex` and a request and returns a response; the only I/O in the whole read path is `ensureIndex()`'s freshness check (below).
+- **Route logic lives in plain modules.** `/api/search/range` is a 56-line handler that does auth + JSON + Zod and then delegates to `executeRangeSearch()` (`src/app/api/search/range/route.ts:6-56` → `src/lib/search/range-search.ts:103`). That is why the engines have unit tests that never import Next.
+- **One deliberate inversion.** The orchestrator reaches *up* into `src/lib/search/compare.ts` for `detectSessionModalityConflict` (`orchestrator.ts:18`, used at `:375-380`) so that the sync-time contradiction pass and the read-time `resolveSessionModality` (`compare.ts:97`) share one vocabulary of online/onsite session types. Note also that `src/lib/wise/operations.ts` — the Wise *write* helpers, which are not on the snapshot path — does import `@/lib/db`, so "the Wise layer has no internal imports" is true of the read client, not of the whole directory.
+
+### Container / flow diagram
 
 ```mermaid
 flowchart TB
     subgraph external["External"]
-        Wise["Wise API<br/>api.wiseapp.live<br/>namespace: begifted-education"]
-        Google["Google OAuth<br/>(Auth.js v5)"]
+        Wise["Wise API<br/>api.wiseapp.live<br/>Basic auth + x-api-key + x-wise-namespace"]
+        Google["Google OAuth<br/>Auth.js v5"]
     end
 
-    subgraph vercel["Vercel — Next.js 16 App Router, cacheComponents: true"]
-        Cron["Vercel Cron<br/>15 entries in vercel.json<br/>snapshot sync: */30"]
-        MW["src/middleware.ts<br/>edge session gate<br/>+ allowedPages check"]
+    subgraph vercel["Vercel (region sin1) — Next.js 16 App Router, cacheComponents: true"]
+        Cron["Vercel Cron<br/>17 entries in vercel.json<br/>snapshot sync: */30"]
+        MW["src/middleware.ts (edge)<br/>maintenance → public allowlist<br/>→ session → allowedPages"]
 
         subgraph sync["Write path — sync"]
             SyncRoute["GET/POST /api/internal/sync-wise<br/>maxDuration = 800<br/>constant-time CRON_SECRET"]
-            Runner["run-wise-sync.ts<br/>single-flight guard<br/>+ cron_invocations audit"]
-            Orch["orchestrator.runFullSync()"]
-            WiseClient["wise/client + fetchers<br/>retry 1s/2s/4s, concurrency 15"]
+            Runner["run-wise-sync.ts<br/>acquireSyncRun (single-flight)<br/>revalidateTag('snapshot')"]
+            Orch["orchestrator.runFullSync()<br/>one try/catch, 12 numbered steps"]
+            WiseClient["wise/client + fetchers<br/>retry 1s/2s/4s on 408/429/5xx<br/>concurrency 15 for sync"]
             Norm["normalization/*<br/>identity · qualifications · availability<br/>leaves · sessions · modality · timezone"]
         end
 
         subgraph read["Read path — request"]
+            UI["/search Server Component<br/>+ SearchWorkspace client shell"]
+            DataLayer["src/lib/data/*<br/>'use cache' + cacheTag('snapshot')"]
             ApiRead["/api/search · /api/search/range<br/>/api/compare · /api/compare/discover<br/>/api/proposals · /api/tutors · /api/filters"]
-            Index["SearchIndex singleton<br/>globalThis, in RAM"]
-            Engine["engine · compare · range-search<br/>pure functions, zero DB"]
-            DataLayer["src/lib/data/*<br/>use cache + cacheTag"]
-            UI["/search workspace<br/>Server Component + client shell"]
+            Index["SearchIndex singleton<br/>globalThis.__bgscheduler_searchIndex"]
+            Engine["engine · range-search · compare<br/>pure functions, zero DB"]
         end
     end
 
-    subgraph pg["Neon Postgres — ap-southeast-1<br/>(Vercel functions pinned sin1, co-located)"]
+    subgraph pg["Neon Postgres (neon-http driver)"]
         Snap["snapshots<br/>exactly one active = true"]
-        SyncRuns["sync_runs<br/>partial unique index on status='running'"]
-        Tables["snapshot-scoped tables<br/>tutor_identity_groups · members<br/>qualifications · availability · leaves<br/>future_session_blocks · data_issues · stats"]
-        Past["past_session_blocks<br/>cross-snapshot, keyed by canonical_key"]
+        SyncRuns["sync_runs<br/>partial unique index on status = 'running'"]
+        Tables["snapshot-scoped tables<br/>tutor_identity_groups · members · tutors<br/>raw_teacher_tags · subject_level_qualifications<br/>recurring_availability_windows · dated_leaves<br/>future_session_blocks · data_issues · snapshot_stats"]
+        Past["past_session_blocks<br/>cross-snapshot, keyed by group_canonical_key"]
+        Durable["snapshot-independent<br/>tutor_aliases · tutor_business_profiles<br/>admin_users · cron_invocations"]
     end
 
     Cron --> SyncRoute --> Runner --> Orch
@@ -81,16 +100,17 @@ flowchart TB
     Orch -->|insert candidate rows| Tables
     Orch -->|PAST-01 diff hook, before promote| Past
     Orch -->|single atomic UPDATE| Snap
-    Orch --> SyncRuns
+    Runner --> SyncRuns
+    Orch -->|read aliases| Durable
 
     Google --> MW
     UI --> MW --> ApiRead
-    ApiRead -->|ensureIndex| Index
-    Index -.->|build / rebuild when snapshot or profile changes| Snap
-    Index -.-> Tables
-    ApiRead --> Engine
-    Engine --> Index
     UI --> DataLayer --> Tables
+    ApiRead -->|ensureIndex| Index
+    Index -.->|rebuild when snapshot id or profile version changes| Snap
+    Index -.-> Tables
+    Index -.->|join business profiles| Durable
+    ApiRead --> Engine --> Index
     Runner -.->|revalidateTag snapshot| DataLayer
 ```
 
@@ -100,245 +120,294 @@ Solid arrows are steady state; dashed arrows fire only on a snapshot change (ind
 
 ## The snapshot-versioned data model
 
-Every piece of tutor data the search path serves belongs to exactly one **snapshot**. The `snapshots` table is deliberately tiny — an id, a boolean `active` defaulting to `false`, and `created_at` (`src/lib/db/schema.ts:456`–`460`). All the substance lives in snapshot-scoped tables carrying a non-null `snapshot_id` FK; `tutor_identity_groups` is representative (`schema.ts:1516`–`1525`), and its siblings are members, qualifications, availability windows, leaves, future session blocks, data issues, and stats.
+Every piece of tutor data the search path serves belongs to exactly one **snapshot**. The `snapshots` table is deliberately tiny — `id`, a boolean `active` defaulting to `false`, and `created_at` (`src/lib/db/schema.ts:456-460`). All the substance lives in tables that carry a non-null `snapshot_id` FK and are rewritten wholesale on every run:
 
-**The invariant: at most one snapshot has `active = true`, and that snapshot is what every read is scoped to.** Two properties follow:
+| Table | Grain | Declared at |
+|---|---|---|
+| `tutor_identity_groups` | one logical tutor per snapshot; carries the stable `canonical_key` and the derived `supported_modality` | `schema.ts:1519` |
+| `tutor_identity_group_members` | one raw Wise teacher record per group (the online/offline pair members) | `schema.ts:1530` |
+| `tutors` | display row per group with `supported_modes` | `schema.ts:1552` |
+| `raw_teacher_tags` / `subject_level_qualifications` | raw Wise tags and their parsed subject/curriculum/level | `schema.ts:1565`, `:1576` |
+| `recurring_availability_windows` | weekday + minute-of-day windows, Asia/Bangkok | `schema.ts:1592` |
+| `dated_leaves` | absolute leave intervals | `schema.ts:1606` |
+| `future_session_blocks` | every Wise FUTURE session, with `is_blocking` already decided | `schema.ts:1618` |
+| `data_issues` | every defect the pipeline could not resolve | `schema.ts:2688-2702` |
+| `snapshot_stats` | one summary row per snapshot | `schema.ts:2706` |
 
-1. **A failed sync cannot corrupt live data.** A sync builds an entirely new *inactive* snapshot alongside the live one. If anything throws, the candidate is simply never promoted and the previously active snapshot keeps serving, untouched.
+Column-level detail is the schema file's job, indexed by [`reference/database/erd-core.md`](../reference/database/erd-core.md); this page stops at grain.
+
+**The invariant: exactly one snapshot has `active = true`, and every read is scoped to it.** Two properties follow:
+
+1. **A failed sync cannot corrupt live data.** A sync builds an entirely new *inactive* snapshot alongside the live one (`orchestrator.ts:71-75` inserts with `active: false`). If anything throws, the candidate is simply never promoted and the previously active snapshot keeps serving, untouched.
 2. **Going live is one boolean flip**, not a destructive in-place rewrite.
 
-`sync_runs` records each attempt: `status` (`running`/`success`/`failed`), `started_at`/`finished_at`, the candidate `snapshot_id`, a `promoted_snapshot_id` set only when that run actually promoted, a `teacher_count`, an `error_summary`, and a `metadata` JSONB blob (`schema.ts:462`–`477`). `promoted_snapshot_id` is load-bearing beyond bookkeeping: the index reads it to derive the `syncedAt` timestamp that drives staleness (`src/lib/search/index.ts:155`–`166`).
+Note that the invariant is enforced by the promotion *statement*, not by a constraint: `snapshots` has no unique index on `active` (`schema.ts:456-460`).
 
-One table deliberately escapes the snapshot: `past_session_blocks` (`schema.ts:2255`). Wise's FUTURE-session API cannot return past sessions, so a session that has already happened would vanish from the next snapshot entirely. The PAST-01 diff hook captures those before they are lost, keyed by the tutor's stable `canonical_key` rather than a snapshot-scoped UUID.
+`sync_runs` records each attempt — `status`, `started_at`/`finished_at`, the candidate `snapshot_id`, a `promoted_snapshot_id` set only when the run actually promoted, `teacher_count`, `error_summary`, and a `metadata` JSONB blob (`schema.ts:462-477`). `promoted_snapshot_id` is load-bearing beyond bookkeeping: the index derives its `syncedAt` — the timestamp every staleness decision hangs off — from the newest `success` run whose `promoted_snapshot_id` is the active snapshot (`src/lib/search/index.ts:155-166`).
 
 ### Two id spaces, and why `canonicalKey` exists
 
-Snapshot-scoped rows get fresh UUIDs on every sync — a tutor's `tutor_identity_groups.id` changes every 30 minutes. `canonical_key` is the stable per-tutor anchor that survives rotation, which is why it is denormalized onto the in-memory group (`src/lib/search/index.ts:65`–`71`, `:258`–`263`) instead of being re-queried. Two consumers depend on that:
+Snapshot-scoped rows get fresh UUIDs on every sync — a tutor's `tutor_identity_groups.id` changes every 30 minutes. `canonical_key` is the stable per-tutor anchor that survives rotation, which is why it is denormalized onto the in-memory group (`index.ts:65-71`, `:260-263`) rather than re-queried. Three things depend on it:
 
-- **`/api/compare` heals stale ids.** A browser tab open across a sync will send tutor group ids from a retired snapshot. `resolveTutorGroupsForActiveSnapshot()` looks each id up in the active index, and on a miss reads the retired row's `canonical_key` from Postgres and re-resolves it against the active snapshot, appending a `"Tutor selection was refreshed after the latest Wise sync"` warning instead of 404-ing (`src/app/api/compare/route.ts:62`–`110`, `:158`). Only ids that look like UUIDs are used for that lookup (`compare/route.ts:60`, `:82`).
-- **Cross-snapshot past sessions** are fetched by `canonicalKey` without a second DB round-trip (`src/lib/data/past-sessions.ts:33`–`48`).
+- **`/api/compare` heals stale ids.** A browser tab open across a sync sends group ids from a retired snapshot. `resolveTutorGroupsForActiveSnapshot()` looks each id up in the active index by `canonicalKey` and, on a miss, reads the retired row's `canonical_key` from Postgres and re-resolves it against the active snapshot, appending a `"Tutor selection was refreshed after the latest Wise sync"` warning instead of failing (`src/app/api/compare/route.ts:61-110`, `:155-159`). Only ids that look like UUIDs are used for that lookup (`compare/route.ts:59`, `:82`).
+- **Cross-snapshot past sessions** are keyed by `group_canonical_key`, never by a snapshot UUID (`schema.ts:2258-2297`).
+- **Durable, human-owned data** — `tutor_business_profiles`, joined into the index by canonical key (`index.ts:317`), `tutor_aliases` (`schema.ts:1543`), proposal holds — likewise survives rotation because it never references a snapshot UUID.
 
-Anything durable and human-owned — tutor business profiles, aliases, proposal holds — is likewise keyed by `canonicalKey`, never by a snapshot UUID.
+### The one table that escapes the snapshot
 
-### The sync pipeline, step by step
-
-`runFullSync()` (`src/lib/sync/orchestrator.ts:50`) runs the whole ETL inside one try/catch. Its numbered comments map to ETL phases:
-
-1. **Acquire a sync run** — reuse the guard row the caller already inserted, or insert a fresh `running` row (`orchestrator.ts:62`–`68`).
-2. **Create the candidate snapshot** with `active: false`, and stamp its id on the sync run (`orchestrator.ts:71`–`81`).
-3. **Fetch all teachers** from Wise (`orchestrator.ts:84`).
-4. **Load aliases** from `tutor_aliases`, which feed identity resolution (`orchestrator.ts:87`–`91`).
-5. **Resolve identities** — merge raw Wise teacher records into logical people; anything unresolved becomes a `critical` `alias` data issue (`orchestrator.ts:94`–`105`).
-6. **Persist identity groups and members** (`orchestrator.ts:111`–`139`).
-7. **Per-teacher availability, leaves, tags, qualifications** — fetch full availability per teacher, normalize working hours into recurring windows, normalize leaves (UTC → Asia/Bangkok), store raw tags, parse tags into qualifications. A missing Wise user id or a failed fetch produces a `completeness` issue and the loop continues; **one bad teacher never aborts the sync** (`orchestrator.ts:156`–`260`).
-8. **Fetch and normalize future sessions** into blocking windows, mapping each session back to its teacher's group via a `wiseUserId → teacherId` map (`orchestrator.ts:263`–`305`).
-9. **Derive modality per group** — `online`/`onsite`/`both`/`unresolved` — write it onto the group, set each window's modality, and create the tutor display row (`orchestrator.ts:315`–`362`). A second pass then detects per-session modality contradictions and emits `conflict_model` issues, reading the group modality from an in-memory map hoisted specifically to avoid a per-session `SELECT` (`orchestrator.ts:367`–`398`).
-10. **(9.5) PAST-01 diff hook** — capture sessions that dropped out of Wise's FUTURE feed and started in the past into `past_session_blocks`. This **must** run before promotion, while the prior snapshot is still `active = true` (`orchestrator.ts:400`–`418`). It is idempotent through `UNIQUE(wise_session_id)` + `ON CONFLICT DO NOTHING`, which matters because the Neon HTTP driver offers no transaction to wrap it in (`src/lib/sync/past-sessions-diff-hook.ts:6`–`26`, `:59`–`61`).
-11. **Bulk-insert** availability, leaves, raw tags, qualifications, session blocks, and tutor rows in parallel, chunked at 250 rows per statement (`orchestrator.ts:38`, `:420`–`443`).
-12. **Store data issues and snapshot stats**, including an `issuesByType` histogram (`orchestrator.ts:446`–`470`).
-13. **Validate and promote** (next section), then mark the run `success` and prune (`orchestrator.ts:472`–`548`).
-
-Error handling is deliberately two-tier. Per-teacher, per-session, and per-group failures are *isolated* into `data_issues` and the run continues. Only a top-level throw reaches the outer catch, which marks the run `failed` with an `error_summary` and leaves the previously active snapshot serving; if even that cleanup `UPDATE` fails it is logged (REL-06) rather than masking the original error (`orchestrator.ts:561`–`599`).
+`past_session_blocks` (`schema.ts:2258-2297`) exists because Wise's FUTURE-session API cannot return past sessions: a session that has already happened would vanish from the next snapshot entirely. The PAST-01 diff hook (`src/lib/sync/past-sessions-diff-hook.ts:66+`) runs inside the sync **before** promotion, while the prior snapshot is still `active = true` (`orchestrator.ts:400-407`). It reads the prior snapshot's `future_session_blocks`, computes the set that is absent from the freshly fetched Wise FUTURE list *and* already started (`diff-hook.ts:110-153`), and inserts them chunked with `onConflictDoNothing` targeting the `UNIQUE(wise_session_id)` index (`diff-hook.ts:155-165`; index `psb_wise_session_id_idx` at `schema.ts:2292`). The table deliberately has **no FK to `snapshots`** — `captured_in_snapshot_id` is plain provenance — so snapshots can be pruned without cascading, and first observation wins (comment block, `schema.ts:2246-2257`). Per-group anomalies emit `completeness` issues and never abort the run (`diff-hook.ts:120-132`). The idempotent-insert design is what stands in for a transaction, because the Neon HTTP driver has none (`diff-hook.ts:58-61`).
 
 ### Atomic promotion
 
-Promotion is gated on completeness: the run computes `unresolvedRatio = identityIssues.length / max(groups.length, 1)` and **promotes only if fewer than 50% of groups are unresolved** (`orchestrator.ts:472`–`476`). A catastrophically broken fetch — the case where most tutors could not be identity-resolved — therefore physically cannot go live.
+Promotion is gated: the run computes `unresolvedRatio = identityIssues.length / max(groups.length, 1)` and **promotes only if fewer than 50% of identity groups are unresolved** (`orchestrator.ts:473-476`). A catastrophically broken fetch — most tutors failing identity resolution — therefore cannot go live; the run still completes as `success` with `promoted_snapshot_id = null`, and the previous snapshot keeps serving.
 
-When it does promote, it is one statement, not two (REL-01, `orchestrator.ts:480`–`498`):
+When it does promote, it is one statement, not two (REL-01, `orchestrator.ts:480-501`):
 
 ```sql
--- conceptually, from orchestrator.ts:488–498
+-- conceptually, from orchestrator.ts:488-498
 UPDATE snapshots
    SET active = (snapshots.id = $candidateId)
  WHERE active = true OR snapshots.id = $candidateId;
 ```
 
-The in-code comment spells out why: PostgreSQL MVCC plus the row-level lock held for the duration of a single statement guarantees a concurrent reader sees *either* the old active row *or* the new one — there is never an instant with zero rows matching `active = true`. Assigning `active` the boolean expression `(id = candidateId)` demotes the incumbent and promotes the candidate in the same pass, and the bounded `WHERE` keeps the rewrite to the previous-active row(s) plus the candidate instead of the whole table. This replaced an earlier, racier two-`UPDATE` sequence.
+PostgreSQL MVCC plus the row-level lock held for the duration of one statement guarantee that a concurrent reader sees *either* the old active row *or* the new one — never an instant with zero rows matching `active = true`. Assigning `active` the boolean expression `(id = candidateId)` demotes the incumbent and promotes the candidate in the same pass, and the bounded `WHERE` restricts the rewrite to the previous-active row(s) plus the candidate. The in-code comment records that this replaced an earlier two-`UPDATE` sequence (`orchestrator.ts:481-487`).
 
-Note what promotion does **not** do: it does not push to the in-memory index. Readers discover the new snapshot lazily (see [stale detection](#stale-detection-and-rebuild)).
+```mermaid
+sequenceDiagram
+    participant C as Vercel Cron
+    participant R as run-wise-sync.ts
+    participant O as orchestrator.runFullSync
+    participant W as Wise API
+    participant P as Postgres
+    participant N as Next cache
+
+    C->>R: GET /api/internal/sync-wise (Bearer CRON_SECRET)
+    R->>P: fail stale 'running' rows > 20 min
+    R->>P: INSERT sync_runs(status='running')
+    Note over R,P: partial unique index → 23505 if another run is live → HTTP 202 skipped
+    R->>O: runFullSync(syncRunId)
+    O->>P: INSERT snapshots(active=false) → candidate id
+    O->>W: teachers · per-teacher availability (26×7-day windows) · FUTURE sessions (1000/page)
+    O->>O: resolveIdentities · normalize* · deriveModality · MOD-01 contradictions
+    O->>P: PAST-01 diff hook (prior snapshot still active) → past_session_blocks
+    O->>P: chunked INSERTs (250/stmt) into 6 snapshot tables + data_issues + snapshot_stats
+    alt unresolvedRatio < 0.5
+        O->>P: UPDATE snapshots SET active = (id = candidate) WHERE active OR id = candidate
+        O->>P: UPDATE sync_runs status='success', promoted_snapshot_id
+        O->>P: pruneOldSnapshots (keep 30 + active)
+        R->>N: revalidateTag("snapshot", { expire: 0 })
+    else gate fails
+        O->>P: UPDATE sync_runs status='success', promoted_snapshot_id = NULL
+    end
+    Note over P: web instances notice the new active id lazily via ensureIndex()
+```
+
+What promotion does **not** do: it does not push anything to the in-memory index. Every Node process discovers the new snapshot lazily on its next `ensureIndex()` call (see [Stale detection](#stale-detection-and-build-coalescing)).
+
+### The failure model in one paragraph
+
+`runFullSync()` is a single try/catch (`orchestrator.ts:60`, `:568`). Failures are handled at two tiers. **Isolated** failures — a teacher with no Wise user id (`orchestrator.ts:162-173`), a per-teacher availability fetch that throws (`:249-259`), a diff-hook group that cannot be resolved — become `data_issues` rows and the run continues. **Fatal** failures — anything else that throws — reach the outer catch, which marks the run `failed` with an `error_summary` and a duration/Wise-call-count metadata blob, and returns `success: false`; the previously active snapshot is never touched (`orchestrator.ts:568-610`). If even that cleanup `UPDATE` fails, the cleanup error is logged (REL-06) rather than allowed to mask the original (`:584-596`). Successful runs persist how long they took and how many Wise calls they made, bucketed by normalized path (EFF-00, `orchestrator.ts:506-513`; tally in `src/lib/wise/client.ts:22-25`, `:85-101`).
 
 ### Retention
 
-After a successful promotion the orchestrator calls `pruneOldSnapshots()` (`src/lib/sync/snapshot-pruning.ts:49`). It keeps the newest `SNAPSHOT_RETENTION_COUNT = 30` snapshots plus, unconditionally, any snapshot flagged `active` (`snapshot-pruning.ts:5`, `:64`–`75`), nullifies `sync_runs` references to pruned snapshots, then deletes the snapshot-scoped children in FK-safe order and finally the snapshots themselves. Pruning is best-effort: a failure is logged and folded into the run's `metadata` as `{ attempted: true, failed: true, error }` but never fails the sync (`orchestrator.ts:520`–`548`).
+After a promotion the orchestrator calls `pruneOldSnapshots()` (`orchestrator.ts:527-555` → `src/lib/sync/snapshot-pruning.ts:49`). It protects the newest `SNAPSHOT_RETENTION_COUNT = 30` snapshots plus, unconditionally, any snapshot flagged `active` (`snapshot-pruning.ts:5`, `:63-70`), nullifies `sync_runs` references to the rest, then deletes the snapshot-scoped children in FK-safe order and finally the snapshots themselves. Pruning is best-effort: a failure is logged and folded into the run's `metadata` as `{ attempted: true, failed: true, error }` but never fails the sync (`orchestrator.ts:532-541`).
 
 ### Single-flight guard around sync
 
-The sync endpoint serves both Vercel cron (`GET`) and manual triggers (`POST`), and both funnel into `runWiseSyncRequest()` (`src/lib/sync/run-wise-sync.ts:142`). Before any work it calls `acquireSyncRun()`, which applies three layers of overlap protection:
+Both entry points — the cron `GET` / manual `POST` at `/api/internal/sync-wise` and the admin `POST /api/admin/sync-wise` — funnel into `runWiseSyncRequest()` (`src/lib/sync/run-wise-sync.ts:142-167`; callers at `src/app/api/internal/sync-wise/route.ts:41`, `:56` and `src/app/api/admin/sync-wise/route.ts:22`). Before any work it calls `acquireSyncRun()` (`run-wise-sync.ts:88-118`), which layers three protections:
 
-- **Stale-running cleanup.** Any `sync_runs` row stuck in `running` past `STALE_RUNNING_SYNC_MS` (20 minutes, `run-wise-sync.ts:10`) is force-failed with an explanatory `error_summary`, recovering from a function that timed out or was aborted mid-run (`run-wise-sync.ts:51`–`72`).
-- **Overlap skip.** If a genuinely-running sync exists, the request returns HTTP **202** with a skip body — not a second concurrent sync (`run-wise-sync.ts:93`–`97`, `:120`–`140`, `:148`–`150`).
-- **Database backstop.** Even if two requests race past the in-app check, the partial unique index `sync_runs_single_running_idx` — `unique(status) WHERE status = 'running'` (`schema.ts:473`–`475`) — makes the second `running` insert fail with `23505`, which the runner catches and converts into the same skip result (`run-wise-sync.ts:99`–`118`).
+- **Stale-running cleanup.** Any `sync_runs` row stuck in `running` longer than `STALE_RUNNING_SYNC_MS` (20 minutes, `run-wise-sync.ts:10`) is force-failed with an explanatory `error_summary`, recovering from a function that timed out or was aborted mid-run (`:51-72`).
+- **Overlap skip.** If a genuinely running sync exists, the request returns HTTP **202** with a skip body — not a second concurrent sync (`:93-97`, `:120-140`, `:148-150`).
+- **Database backstop.** Even if two requests race past the in-app check, the partial unique index `sync_runs_single_running_idx` — `unique(status) WHERE status = 'running'` (`schema.ts:473-475`) — makes the second `running` insert fail with Postgres error `23505`, which the runner catches and converts into the same skip result (`:42-49`, `:106-117`).
 
-On success the runner calls `revalidateTag("snapshot", { expire: 0 })` (`run-wise-sync.ts:161`), sweeping the Next.js `"use cache"` entries that the tutor list and filter facets tag with `cacheTag("snapshot")` (`src/lib/data/tutors.ts:79`–`86`, `src/lib/data/filters.ts:53`–`55`). The past-sessions helper deliberately uses a *separate* `"past-sessions"` tag (`src/lib/data/past-sessions.ts:9`–`15`, `:87`) so a promotion does not sweep cross-snapshot history that is immutable once captured.
+On success the runner calls `revalidateTag("snapshot", { expire: 0 })` (`run-wise-sync.ts:160-162`), sweeping the `"use cache"` entries the tutor list and filter facets register with `cacheTag("snapshot")` (`src/lib/data/tutors.ts:80-86`, `src/lib/data/filters.ts:52-58`). The past-sessions helper deliberately uses a *separate* `"past-sessions"` tag with `cacheLife("days")` (`src/lib/data/past-sessions.ts:82-91`) so a promotion does not sweep cross-snapshot history that is immutable once captured (`past-sessions.ts:10-19`).
 
 ### Cron authentication and the invocation audit
 
-`/api/internal/sync-wise` carries `maxDuration = 800` (Pro-plan headroom) and authenticates with a **constant-time** `CRON_SECRET` comparison — `timingSafeEqual` guarded by a length pre-check, which both avoids the `RangeError` that `timingSafeEqual` throws on mismatched buffer lengths and is itself O(1) (REL-07, `src/app/api/internal/sync-wise/route.ts:7`, `:11`–`29`). `GET` accepts only the cron secret; `POST` additionally falls back to an Auth.js session so an admin can trigger a sync manually (`sync-wise/route.ts:32`–`76`). The same comparison is packaged for reuse by the other internal routes in `src/lib/internal/cron-auth.ts:6`–`26`, which additionally distinguishes a *missing* secret (500 "Server misconfigured") from an *invalid* one (401).
+`/api/internal/sync-wise` carries `maxDuration = 800` (`sync-wise/route.ts:7`) and authenticates with a **constant-time** `CRON_SECRET` comparison — `timingSafeEqual` behind a length pre-check, which both avoids the `RangeError` `timingSafeEqual` throws on mismatched buffer lengths and is itself O(1) (REL-07, `sync-wise/route.ts:11-29`). `GET` accepts only the cron secret; `POST` additionally falls back to an Auth.js session so an admin can trigger a sync manually (`:32-66`, `:69-76`). The same comparison is packaged for the other internal routes as `getCronSecretStatus` / `rejectInvalidCronSecret` in `src/lib/internal/cron-auth.ts:6-26`, which distinguishes a *missing* secret (500 "Server misconfigured") from an *invalid* one (401). The middleware waves `/api/internal/*` through without a session precisely because each handler carries this check (`src/middleware.ts:24`).
 
-Every invocation — cron or admin — is wrapped in `withCronInvocationAudit()` (`src/lib/data-health/cron-audit.ts:144`), which writes a `cron_invocations` row recording job key, path, schedule, trigger source, actor email, duration, response status, outcome, and linked run ids (`schema.ts:479`–`499`). That table is what makes "did the cron actually fire?" answerable, and it backs the `cron-watchdog` job.
-
-The set of jobs is declared once, in code: `CRON_JOBS` (`src/lib/data-health/cron-registry.ts:45`) lists 21 entries with `path`, `schedule`, cadence, lateness threshold, `maxDurationSeconds`, and a `manualOnly` flag. `SCHEDULED_CRON_JOBS` filters out the manual-only ones (`cron-registry.ts:375`), and a unit test asserts that this filtered list is *exactly* `vercel.json`'s `crons` array, path-and-schedule (`src/lib/data-health/__tests__/cron-registry.test.ts:7`–`20`). Six jobs are `manualOnly: true` with `schedule: null` by design — the four post-class-feedback sub-jobs, room utilization, and LINE backlog recovery — which is why 21 handlers map to 15 cron entries.
+Every invocation — cron or admin — is wrapped in `withCronInvocationAudit()` (`src/lib/data-health/cron-audit.ts:191`), which writes a `cron_invocations` row recording job key, path, trigger source, actor email, duration, response status, and outcome (`schema.ts:479-499`). That table is what makes "did the cron actually fire?" answerable, and it backs the `cron-watchdog` job and the `/data-health` page.
 
 ---
 
 ## The in-memory `SearchIndex` singleton
 
-All availability logic runs against one denormalized structure in process memory. `buildIndex()` (`src/lib/search/index.ts:142`) does the heavy lifting once per snapshot:
+### Shape
 
-1. Find the active snapshot; throw `"No active snapshot found"` if there is none (`index.ts:144`–`152`).
-2. Derive `syncedAt` from the most recent successful sync whose `promotedSnapshotId` equals this snapshot, falling back to the snapshot's `createdAt` (`index.ts:155`–`166`).
-3. Load every snapshot-scoped table **in parallel** with one `Promise.all` — members, qualifications, availability windows, leaves, session blocks, data issues, business profiles, and a profile-version fingerprint (`index.ts:175`–`222`).
-4. Group each result set by `groupId` and assemble one `IndexedTutorGroup` per tutor, carrying `canonicalKey`, display name, derived `supportedModes`, qualifications, Wise member records, availability windows, leaves, session blocks, data issues, and the optional editorial business profile (`index.ts:250`–`319`).
-5. Build `byWeekday: Map<number, IndexedTutorGroup[]>` so a search for one weekday touches only tutors with availability that day, instead of scanning the full roster (`index.ts:322`–`331`).
+`SearchIndex` (`src/lib/search/index.ts:83-90`) is a snapshot id, a `profileVersion` string, `builtAt`, `syncedAt`, the flat `tutorGroups` array, and `byWeekday: Map<number, IndexedTutorGroup[]>` — the O(1) entry point the engine uses to pull only tutors who have *any* availability window on the requested weekday (`engine.ts:74`). Each `IndexedTutorGroup` (`index.ts:65-81`) is a fully denormalized read aggregate: canonical key, display name, `supportedModes`, qualifications, the underlying Wise records with their online/offline flag, availability windows, leaves, session blocks (with `isBlocking` already decided), the group's `dataIssues`, and an optional editorial `businessProfile`. Nothing on the request path ever joins across these; the join happened once at build time.
 
-The finished `SearchIndex` carries `snapshotId`, `profileVersion`, `builtAt`, `syncedAt`, the groups, and the weekday map (`index.ts:83`–`90`).
+### `globalThis` anchoring
 
-Note step 4's `supportedModes` mapping: `"both"` becomes `["online","onsite"]`, `"unresolved"` becomes the **empty array**, and anything else becomes a single-element array (`index.ts:265`–`270`). The empty array is not an absence of data — it is the signal the engine later reads as "unresolved modality → Needs Review".
+The index and its in-flight build promise are stored as `globalThis.__bgscheduler_searchIndex` and `globalThis.__bgscheduler_searchIndexBuildPromise` (`index.ts:94-97`), read and written only through four tiny accessors (`:99-113`). The DB handle follows the same pattern — `globalThis.__bgscheduler_db` (`src/lib/db/index.ts:16-27`). Anchoring on `globalThis` rather than a module-level `let` is what lets the singletons survive Next.js hot-module reloads in development, where a module can be re-evaluated while the process keeps running. In production the practical consequence is that **each Node process (each warm Vercel function instance) holds its own copy**; nothing broadcasts to them, and they converge on a new snapshot independently.
 
-### `globalThis` anchoring, not module scope
+### Build
 
-The index is not a module-level `let`. It lives on `globalThis.__bgscheduler_searchIndex`, with the in-flight build promise on `globalThis.__bgscheduler_searchIndexBuildPromise` (`index.ts:94`–`113`). The DB handle follows the same pattern at `globalThis.__bgscheduler_db` (`src/lib/db/index.ts:16`–`27`). The reason, noted in both files, is Next.js hot-module reload: HMR swaps module instances, so a module-scoped singleton would be discarded on every edit, while a `globalThis`-anchored one survives. In production each serverless instance keeps its own copy until recycled — so "the index" is really *one index per warm instance*, not a shared cache.
+`buildIndex()` (`index.ts:142-344`) does the following, in order:
 
-### Stale detection and rebuild
+1. Selects the one `active = true` snapshot and throws `"No active snapshot found"` if there is none — sync-before-serve is a hard precondition (`:144-152`).
+2. Derives `syncedAt` from the newest `success` sync run that promoted this snapshot, falling back to the snapshot's `created_at` (`:155-166`).
+3. Loads groups, then members, qualifications, windows, leaves, session blocks, data issues, the business-profile map, and the profile version **in parallel**, every query filtered by `snapshotId` (`:169-222`).
+4. Matches `data_issues` to groups by `entityId === canonicalKey`, `entityId === group.id`, or `entityName === displayName` (`:231-247`) — a deliberately loose match so that issues recorded against a teacher's display name still surface on the merged group.
+5. Assembles each `IndexedTutorGroup`, mapping `supportedModality` to `supportedModes` (`both → [online, onsite]`, `unresolved → []`) (`:250-319`), builds `byWeekday` from availability windows (`:322-331`), and publishes the result to the singleton (`:342`).
 
-Callers never invoke `buildIndex()` directly; they call `ensureIndex(db)` (`index.ts:354`), which decides whether the cached index is still valid:
+### Stale detection and build coalescing
 
-- No cached index → build.
-- Cached index → check **two** things in one `Promise.all`: that the active snapshot id still equals `cached.snapshotId`, **and** that the tutor-business-profile fingerprint still equals `cached.profileVersion`. A change in either triggers a full rebuild (`index.ts:365`–`388`). The fingerprint is `count(*)` + `max(updated_at)` over `tutor_business_profiles` (`index.ts:128`–`137`) — profiles are human-edited and can change without a new Wise snapshot, so snapshot id alone would go stale.
-- Defensive edge case: if the DB momentarily reports *no* active snapshot but a cached index exists, `ensureIndex` returns the cached index rather than throwing (`index.ts:384`–`386`).
+`ensureIndex()` (`index.ts:354-401`) is what every consumer calls, and it is the only place the read path touches Postgres:
 
-This is how a freshly promoted snapshot reaches readers: the first request after promotion observes `activeSnapshot.id !== cached.snapshotId` and rebuilds. **Pull on next request — there is no push from the sync side.**
+- **Fast path — a build is already in flight.** Return that promise immediately (`:358-359`). This is the REL-02 race-coalescing guarantee: the promise is assigned to the singleton *synchronously, before any `await`* (`:391-400`), so concurrent first-time callers — a cold Vercel instance receiving several requests at once — share one build instead of each issuing the full set of snapshot queries.
+- **Cached path.** If an index exists, run two cheap queries in parallel — the active snapshot id and the tutor-profile version (a `count(*)` plus `max(updated_at)` over `tutor_business_profiles`, `:128-137`) — and return the cached index when **both** match (`:368-383`). Either changing triggers a full `buildIndex()` (`:388`). The profile-version check is why editing a tutor's business profile shows up in search without waiting for a sync.
+- **Degraded path.** If the cached index exists but no snapshot is active — which can only happen if someone has manipulated `snapshots` by hand — serve the cached index rather than fail (`:384-386`).
 
-### Race coalescing (REL-02)
+So the honest statement of the read-path cost is: **zero database reads inside the engines, and two single-row queries per request in `ensureIndex()`** to prove the cached index is still the active one. `clearSearchIndex()` (`:123-126`) exists for tests.
 
-If N requests hit a cold instance simultaneously, a naive implementation kicks off N parallel rebuilds. `ensureIndex` prevents that with a singleton-promise pattern (`index.ts:346`–`401`):
+### Two different notions of "stale"
 
-- The very first thing it does is check for an in-flight promise and return it (`index.ts:358`–`359`).
-- The work closure is *created but not awaited* until after its resulting promise has been written to the `globalThis` slot — assignment and kickoff happen in the same synchronous tick, before any `await` yields to the microtask queue (`index.ts:391`–`400`).
-- A `.finally()` clears the slot once the build settles (`index.ts:396`–`398`).
+They are easy to conflate and are enforced in different places:
 
-A concurrent caller arriving mid-build therefore short-circuits onto the same promise instead of starting a competing rebuild.
+| Notion | Question | Threshold | Where |
+|---|---|---|---|
+| **Index freshness** | Is my in-memory index built from the currently active snapshot and current profiles? | exact id / version equality | `ensureIndex()` (`index.ts:368-383`) |
+| **Data staleness** | Is the active snapshot itself old? | `syncedAt` older than `API_STALE_THRESHOLD_MS` = 90 min → `snapshotMeta.stale = true` plus a warning string in every search/compare response (`src/lib/ops/stale.ts:2`, `:4-5`; `engine.ts:30-38`; `compare/route.ts:141-149`) | engine |
+| **UI banner** | Should we tell the admin the data may be outdated? | a looser 2-hour `APP_STALE_BANNER_THRESHOLD_MS` (`stale.ts:3`, `:15-17`) fed by `/api/data-health`'s `staleAgeMs` (`src/lib/data-health/dashboard.ts:966-976`; `src/components/layout/stale-snapshot-banner.tsx:65-66`) | client banner |
 
-### Consumers of the index
+Data staleness is **a warning, never a refusal**: a stale snapshot is still served, with `stale: true` on the response so the client can say so.
 
-`ensureIndex` is not search-only. Confirmed callers outside tests: `/api/search` (`src/app/api/search/route.ts:54`), the range search used by the main UI (`src/lib/search/range-search.ts:115`), `/api/compare` (`src/app/api/compare/route.ts:138`), `/api/compare/discover` (`discover/route.ts:57`), `/api/proposals` (`proposals/route.ts:64`), the room-capacity saturation forecast (`src/lib/room-capacity/data.ts:409`), the AI scheduler service (`src/lib/ai/scheduler-service.ts:60`), and the LINE operational planner — which notably calls `ensureIndex(input.db).catch(() => null)` so an index failure degrades that path instead of breaking it (`src/lib/line/operational.ts:527`).
+### Who consumes the index
 
-### Staleness is a warning, never a withholding
+`ensureIndex()` has exactly eight non-test call sites (`grep -rn "ensureIndex(" src --include=*.ts --include=*.tsx`): `src/app/api/search/route.ts:54`, `src/lib/search/range-search.ts:115` (behind `/api/search/range`), `src/app/api/compare/route.ts:138`, `src/app/api/compare/discover/route.ts:57`, `src/app/api/proposals/route.ts:64`, `src/lib/room-capacity/data.ts:409`, `src/lib/line/operational.ts:527`, and `src/lib/ai/scheduler-service.ts:60`. Two of those are worth naming:
 
-*Index* staleness (wrong snapshot → rebuild) is distinct from *data* staleness (the active snapshot is simply old). The engine computes `stale = now − syncedAt > API_STALE_THRESHOLD_MS` where the threshold is **90 minutes** (`src/lib/ops/stale.ts:2`), and on staleness sets `snapshotMeta.stale` and pushes a human-readable warning into the response `warnings` array (`src/lib/search/engine.ts:30`–`38`); `/api/compare` applies the identical check (`compare/route.ts:141`–`149`). The 90-minute window absorbs the 30-minute cron cadence plus recovery headroom. A separate **2-hour** threshold drives a dismissible app-wide banner (`stale.ts:3`, `:15`–`16`, rendered by `src/components/layout/stale-snapshot-banner.tsx:66`). Stale data is served *with a caveat* — the system would rather show slightly-old availability than nothing.
+- **The AI scheduler proves availability with the same engine an admin uses** (`scheduler-service.ts:60`), which is the design reason the model never decides availability itself.
+- **The LINE operational planner degrades rather than fails** — it calls `ensureIndex(input.db).catch(() => null)` (`operational.ts:527`), so an unavailable index downgrades the plan instead of erroring a webhook.
+
+### The client-side mirror
+
+The compare workspace keeps its own cache: a `Map<"tutorGroupId:weekStart:CACHE_VERSION", CompareTutor>` in a React ref (`src/hooks/use-compare.ts:107`, `:169-172`), with `CACHE_VERSION = "v3"` bumped whenever the server shape changes so long-lived tabs cannot mix shapes (`src/lib/search/cache-version.ts:24`; migration history at `:9-20`). It honours the snapshot model too: if a response's `snapshotMeta.snapshotId` differs from the last one seen, the whole cache is cleared and the request is retried once without `fetchOnly`, and a second divergence surfaces an error rather than recursing (`use-compare.ts:152-166`).
 
 ---
 
 ## The fail-closed rule
 
-The product's non-negotiable safety rule: **never present a tutor as "Available" unless availability can be proven from normalized Wise data.** Anything the pipeline could not resolve cleanly is routed to a "Needs Review" bucket — never silently dropped, never optimistically shown as free. It is enforced at both ends of the pipeline.
+> **Never return a tutor as available unless the system can prove availability from normalized Wise data. Unresolved identity, modality, or qualification → "Needs Review", never "Available". Cancelled sessions must not block. Unknown anything → the safe side.**
 
-**At sync time**, ambiguity becomes a recorded defect rather than a guess:
+The rule is not a flag and not a UI concern; it is a set of concrete decisions, most of them made at sync time and recorded as `data_issues`, with the read path honouring the record. The table is the rule:
 
-- Unresolved identity → `alias` issue, `critical` severity (`orchestrator.ts:94`–`105`).
-- Missing Wise user id or a failed availability fetch → `completeness` issue, and that teacher's data is simply absent rather than assumed empty-and-free (`orchestrator.ts:162`–`172`, `:249`–`259`).
-- Unmapped tags → `tag` issues (`orchestrator.ts:238`–`248`).
-- Modality is *derived* through an explicit precedence — member pair structure → session-type evidence → location evidence → `unresolved` (`src/lib/normalization/modality.ts:14`–`22`) — and a lone non-online record with no corroborating session evidence resolves to `unresolved`, not to an assumed `onsite` (`modality.ts:64`–`70`). Contradictions emit `conflict_model` issues instead of picking a winner (`orchestrator.ts:339`–`349`, `:367`–`398`).
-- Session blocking is classified once, at normalization: an explicit non-blocking set (`CANCELLED`, `CANCELED`, `COMPLETED`, `MISSED`, `NO_SHOW`) is non-blocking; a **missing or unrecognized status is blocking** (`src/lib/normalization/sessions.ts:33`–`51`). The unknown case defaulting to *blocking* is the fail-closed direction — a mystery session costs a false "busy", never a false "free".
+| Ambiguity | Decision | Enforced at |
+|---|---|---|
+| Session with an unknown or missing `meetingStatus` | **Blocks.** Only `CANCELLED`, `CANCELED`, `COMPLETED`, `MISSED`, `NO_SHOW` are non-blocking; everything else, including `undefined`, is blocking | `isBlockingStatus`, `src/lib/normalization/sessions.ts:33-51`; the stored status defaults to `"UNKNOWN"` (`:80`) |
+| Cancelled session | **Does not block** — it is kept in the snapshot with `is_blocking = false` so it can still be displayed, but every blocking check filters on `isBlocking` first | `engine.ts:163`, `:183`, `:211`; `compare.ts:243`, `:276`, `:376` |
+| Teacher whose display name yields no nickname and no alias | Kept as a **solo group** so the person stays visible, plus a `critical`-severity `alias` issue that routes them to Needs Review | `resolveIdentities`, `src/lib/normalization/identity.ts:177-204`; severity assigned at `orchestrator.ts:97-105` |
+| Nickname matching more than a clean online/offline pair | Group kept, `identity_collision` `alias` issue emitted for manual disambiguation (REL-03) | `identity.ts:148-170` |
+| Wise tag that does not match `Subject (Curriculum) Level` | Dropped from qualifications; a `tag` issue `Unmapped Wise tag` is recorded | `src/lib/normalization/qualifications.ts:31`, `:85-93` |
+| Group whose modality cannot be proven from pair structure, session type, or location | `supported_modality = unresolved` plus a `modality` issue. A single offline-only record with no session evidence is **not** assumed onsite | `deriveModality`, `src/lib/normalization/modality.ts:23-92` (unresolved branches at `:65-91`) |
+| Session whose `sessionType` contradicts its teacher record or group modality | `conflict_model` issue at sync (MOD-01) and `modality: "unknown"` with low confidence at read | `detectSessionModalityConflict`, `compare.ts:185`, called from `orchestrator.ts:367-398`; `resolveSessionModality`, `compare.ts:97` |
+| Teacher missing a Wise user id, or whose availability fetch fails | `completeness` issue; the run continues and the teacher is not silently marked free | `orchestrator.ts:162-173`, `:249-259` |
+| Session that dropped out of Wise FUTURE before promotion | Captured into `past_session_blocks`, first observation wins | `past-sessions-diff-hook.ts:115-165` |
+| More than 50% of identity groups unresolved | Candidate snapshot is **not promoted** | `orchestrator.ts:473-476` |
 
-**At query time**, `searchSlot()` applies the rule per tutor (`src/lib/search/engine.ts:60`–`150`):
+At read time the engine turns that record into routing. For every candidate group on the requested weekday, `searchSlot` (`engine.ts:60-150`) collects `reviewReasons` from the group's `dataIssues` (`:85-88`) and from an empty `supportedModes` (`"Unresolved modality"`, `:90-92`); then applies the hard filters — a modality mismatch skips the tutor outright (`:93-97`), the availability window must fully cover the slot (`:100-108`), qualification filters must match (`:110-111`), no blocking session (`:113-118`), no leave (`:120-125`). Only a group that clears every filter *and* has zero review reasons lands in `available`; one that clears the filters but carries reasons lands in `needsReview` with the reasons attached (`:142-146`). There is no third bucket and no way to reach `available` with an open issue. Multi-slot searches intersect the `available` sets only (`computeIntersection`, `:323`), so a tutor under review for one slot never appears as available across the set.
 
-- A tutor group carrying any data issue accumulates `reviewReasons` from those issues (`engine.ts:86`–`88`).
-- `supportedModes.length === 0` (unresolved modality) adds `"Unresolved modality"` (`engine.ts:91`–`92`). Note the asymmetry with an explicit modality *mismatch*, which `continue`s the tutor out of the results entirely (`engine.ts:93`–`97`) — a known-wrong modality is an exclusion, an unknown one is a review.
-- A tutor reaches `available` only after clearing modality, having an availability window that fully covers the slot, passing qualification filters, not overlapping a blocking session, and not overlapping a leave — **and** carrying zero review reasons. Otherwise it lands in `needsReview` with its reasons attached (`engine.ts:99`–`147`).
-- Multi-slot searches intersect on `available` only; a needs-review tutor never sneaks into the intersection (`engine.ts:323`–`342`).
+Leaves are treated conservatively too: a leave spanning more than 24 hours blocks **every** weekday it touches in full, with no minute-of-day math, because using either bound's HH:MM for a middle day would understate coverage (REL-04, `engine.ts:243-289`).
 
-Leaves block in both search modes. Multi-day leaves carry a documented assumption (REL-04): a leave spanning more than 24 hours blocks *every* weekday it touches in full, deliberately declining minute-of-day math on interior days rather than under-blocking (`engine.ts:240`–`289`).
-
-The same posture governs authentication: `resolveUserAccess()` returns `null` for an email that matches no admin, counselor, teacher, or admissions-case membership, and sign-in is denied — "fail-closed, the same posture as the original admin-only allowlist" (`src/lib/auth-access.ts:1`–`20`, `:56`).
+The same posture extends beyond tutor data. Sign-in is denied unless the email resolves to a role — `resolveUserAccess` returns `null` and the `signIn` callback returns `false` (`src/lib/auth-access.ts:56-85`, `src/lib/auth.ts:25-29`). Maintenance bypass with an unset allowlist means *nobody* bypasses (`src/lib/maintenance.ts:95-101`). A missing `CRON_SECRET` is a 500, not an open door (`cron-auth.ts:10`, `:22-25`). Where a design decision carries an identifier — `REL-01` … `REL-08`, `MOD-01`, `PAST-01`/`PAST-05`, `MAINT-01` … `MAINT-05`, `EFF-00`, `D-03` … `D-18` — the identifier is load-bearing and is preserved in the code comments; grep for it before changing nearby behaviour.
 
 ---
 
 ## Request lifecycle
 
+### Every request: the edge gate
+
+`src/middleware.ts` runs on every path except `_next/static`, `_next/image`, and `favicon.ico` (`middleware.ts:111-113`), using the **edge** Auth.js instance (`edgeAuth`, `src/lib/auth-edge.ts:4`). The order of checks is load-bearing:
+
+1. **Maintenance mode** (`middleware.ts:76-82`). Engages only when `MAINTENANCE_MODE` is exactly `"true"` (MAINT-01, `maintenance.ts:59-61`); exempts `/api/internal/`, `/schedule/`, `/api/auth/`, `/login` so crons, parent links, and sign-in keep working (MAINT-02, `:43-48`); lets through only emails in `MAINTENANCE_BYPASS_EMAILS`; answers 503 with `Retry-After` — JSON under `/api/`, an inline-styled HTML page elsewhere (MAINT-05, `:120-134`). It sits *above* the public allowlist on purpose, because that allowlist includes `/api/line/webhook` (MAINT-04, `middleware.ts:72-75`).
+2. **Public allowlist** (`middleware.ts:10-26`): `/login`, `/api/auth/*`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/schedule/*` (the trailing slash keeps the authenticated `/student-schedule` admin page out), the two OA-resolver routes, and all of `/api/internal/*`. Each public route that touches data enforces its own in-handler check — LINE signature, opaque bearer, capability token, or cron secret.
+3. **Session** (`:89-93`): no session → redirect to `/login?callbackUrl=…`.
+4. **Page scoping** (`:96-106`): a restricted user's `allowedPages` claim is matched against the path both as a page (`/x`, `/x/…`) and as its API namespace (`/api/x`, `/api/x/…`) (`isPathAllowed`, `:36-67`). API misses get `403`; page misses redirect to the user's first allowed page, guarded against a loop (`:102-105`). Post-Class Feedback and Learning Plans are coarse-passed here because they re-check a fresh Postgres grant on every request (`:39-57`) — and the Learning Plans exception deliberately passes only the page namespace while its API namespace is explicitly denied (`:50-57`).
+
+The two Auth.js configs are intentionally split. The Node config (`src/lib/auth.ts:32-73`) does the database work once per login — `signIn` (`:49-57`) → `resolveUserAccess` (`auth-access.ts:56-85`: `admin_users` → counselor → teacher → admissions case member, first match wins) → `role` and `allowedPages` written onto the JWT (`:58-68`). The edge config (`auth-edge.ts:21-32`) only *reads* those claims; its `jwt` callback is an explicit pass-through with a comment saying the edge runtime has no DB access (`auth-edge.ts:22-26`). The two even request different Google scopes — `spreadsheets.readonly` on the edge (`auth-edge.ts:11`) versus `spreadsheets` + `drive.file` in Node (`auth.ts:38`) — because only the Node sign-in path stores the Sheets/Drive token (`auth.ts:51-55`). Full detail: [`operations/auth-and-access.md`](../operations/auth-and-access.md).
+
+### Page load: `/search`
+
+`src/app/(app)/search/page.tsx:8-22` is an async Server Component. It awaits `connection()` (`:9`) so the page renders per request under `cacheComponents: true` (`next.config.ts:3-5`, the only custom Next setting), then awaits two cached server helpers — `getFilterOptions()` and `getTutorList()` — each declared with `"use cache"`, `cacheTag("snapshot")`, `cacheLife("hours")` (`src/lib/data/filters.ts:52-58`, `src/lib/data/tutors.ts:80-86`). Both resolve the active snapshot id through `getActiveSnapshotIdOrThrow` (`src/lib/data/active-snapshot.ts:5-17`) and read the snapshot-scoped tables directly — the data layer does **not** go through the in-memory index. The results are passed as props to the `<SearchWorkspace>` client shell inside a `<Suspense>` with a skeleton (`page.tsx:15-20`).
+
+The `(app)` layout (`src/app/(app)/layout.tsx:30-42`) wraps every page in a nav whose access-dependent half is isolated in its own async component under `<Suspense fallback={<AppNavSkeleton />}>` (`:13-35`) — required because the uncached `auth()` call must not block the static shell under `cacheComponents` (`:8-12`) — and mounts the client-side `StaleSnapshotBanner` (`:36-38`). `/` is a summary hub, not a redirect, except that a user with exactly one allowed page is sent straight there (`src/app/(app)/page.tsx:8-19`). `/compare` is a client-side redirect into `/search?tutors=…`; the compare *engine* and both `/api/compare*` endpoints are fully live inside the search workspace, so the Tutor Compare feature's **legacy-redirect** badge describes the standalone page only.
+
+### Search request
+
 ```mermaid
 sequenceDiagram
-    autonumber
-    participant B as Browser
-    participant MW as middleware.ts (edge)
-    participant R as API route handler
-    participant IX as ensureIndex
-    participant PG as Neon Postgres
-    participant E as search/compare engine
+    participant B as Browser (search-form.tsx)
+    participant M as middleware (edge)
+    participant R as POST /api/search/range
+    participant X as ensureIndex()
+    participant P as Postgres
+    participant E as executeSearch (pure)
 
-    B->>MW: POST /api/search/range
-    MW->>MW: public-route allowlist? no
-    MW->>MW: req.auth present? allowedPages check
-    MW-->>B: 302 /login or 403 (if gate fails)
-    MW->>R: forward
-    R->>R: auth() → 401 if no session
-    R->>R: request.json() → 400 on bad JSON
-    R->>R: schema.safeParse() → 400 with flattened errors
-    R->>IX: ensureIndex(getDb())
-    alt cached index, same snapshot + profile version
-        IX->>PG: 2 cheap SELECTs (active snapshot id, profile fingerprint)
-        IX-->>R: cached index
-    else snapshot or profile changed / cold instance
-        IX->>PG: parallel SELECTs across all snapshot tables
-        IX->>IX: build IndexedTutorGroup[] + byWeekday map
-        IX-->>R: fresh index
+    B->>M: POST /api/search/range {searchMode, day/date, start, end, duration, mode, filters}
+    M->>M: maintenance? public? session? allowedPages?
+    M->>R: next()
+    R->>R: auth() → 401 · request.json() → 400 · rangeRequestSchema.safeParse → 400
+    R->>R: generateSubSlots(start, end, duration) → 400 if empty
+    R->>X: executeRangeSearch → ensureIndex(db)
+    alt build in flight
+        X-->>R: shared promise
+    else cached
+        X->>P: SELECT active snapshot id ‖ SELECT count(*), max(updated_at) FROM tutor_business_profiles
+        X-->>R: cached index (or rebuild if either changed)
     end
-    R->>E: executeSearch(index, request)
-    E->>E: byWeekday narrowing → modality → window → filters → sessions → leaves
-    E-->>R: available[] + needsReview[] + snapshotMeta + warnings
-    R-->>B: 200 JSON (or 500 with error message)
+    R->>P: listActiveProposalHolds (local admin holds)
+    R->>E: executeSearch(index, {slots…}) — byWeekday → filters → available / needsReview
+    E-->>R: per-slot results + intersection + snapshotMeta{snapshotId, syncedAt, stale}
+    R->>R: overlay proposal holds, attach blocking-session detail, sort grid
+    R-->>B: 200 RangeSearchResponse (or 500 {error})
 ```
 
-Walking the same path in prose:
+Step by step, with the code:
 
-1. **Edge auth gate.** Every request except `_next/static`, `_next/image`, and `favicon.ico` hits `src/middleware.ts` (matcher at `middleware.ts:93`–`95`). A public allowlist passes through untouched: `/login`, `/api/auth/*`, the public search assistant, the floor-plan map, the LINE webhook, the token-bearing parent schedule links under `/schedule/` (note the trailing slash, which keeps the authenticated `/student-schedule` admin page *out* of the allowlist), two OA-resolver worklist endpoints, and everything under `/api/internal/*` (`middleware.ts:4`–`20`). Internal routes are public at the edge precisely because they carry their own constant-time `CRON_SECRET` check. Anything else without a session is redirected to `/login` with a `callbackUrl` (`middleware.ts:71`–`75`).
+1. The client form posts to `/api/search/range`.
+2. The route follows the uniform mutating-route contract: `auth()` → 401; `request.json()` in try/catch → 400 `"Invalid JSON"`; `rangeRequestSchema.safeParse` → 400 with `error.flatten()`; then business logic in try/catch → 500 with the error message (`src/app/api/search/range/route.ts:6-56`; schema at `range-search.ts:16-38`). `/api/search` and `/api/compare` follow the identical four-step shape (`search/route.ts:30-61`, `compare/route.ts:112-131`).
+3. `generateSubSlots` slices the window into class-duration sub-slots (`range-search.ts:41`); an empty result is a 400 before any I/O (`range/route.ts:30-36`).
+4. `executeRangeSearch` (`range-search.ts:103`) calls `ensureIndex` (`:115`) — the only Postgres round-trips on the path — then `listActiveProposalHolds` (`:116`) for the local, never-written-to-Wise admin holds, then the pure `executeSearch` (`:127`).
+5. `executeSearch` stamps `snapshotMeta` (`engine.ts:30-38`), evaluates each slot via `searchSlot`, and intersects (`:41-56`).
+6. The range layer reshapes per-slot results into a grid, overlays proposal holds as a distinct blocking kind (`range-search.ts:70-101`), fills in the blocking Wise sessions for cells that are not free via `getBlockingSessions` (`engine.ts:200`), applies the optional `tutorGroupIds` narrowing, and sorts.
 
-2. **Page-level access control.** Beyond "signed in or not", the middleware enforces a per-user page allowlist. `req.auth.user.allowedPages` is `null` for full-access admins (short-circuit to full access) or a list of route prefixes for restricted roles; `isPathAllowed()` matches a pathname both as a page (`/x`, `/x/...`) and as its API namespace (`/api/x`, `/api/x/...`), with explicit carve-outs for surfaces that re-derive access from the database on every request (`middleware.ts:30`–`61`). A restricted user hitting a forbidden API gets `403`; a forbidden page redirects them to their landing page with a loop guard (`middleware.ts:79`–`88`). The claim itself is resolved once at sign-in by `resolveUserAccess()` and persisted on the JWT, because the edge runtime has no DB access — the edge config only reads token claims (`src/lib/auth.ts:58`–`70`, `src/lib/auth-edge.ts:22`–`31`, `src/lib/auth-access.ts:18`–`19`). Five roles exist: `admin`, `counselor`, `teacher`, `student`, `parent` (`auth-access.ts:31`).
+The compare request is the same skeleton with three extra moves (`compare/route.ts:112-254`): stale-id healing through `canonical_key` (`:155-159`), a **historical-range trigger** — if the requested week starts before today in Bangkok, captured `past_session_blocks` are fetched through the `"past-sessions"`-tagged cache and merged into both the per-tutor build and the shared-free-slot computation so a tutor is never shown free during a session that actually happened (`:192-227`) — and `fetchOnly`, which computes conflicts and free slots over the full selection but serializes only the newly requested tutors so the client cache can fill incrementally (`:229-236`).
 
-3. **Route-level auth.** Handlers re-check the session server-side and return `401` — the middleware gate is defense in depth, not the only check (`src/app/api/search/route.ts:30`–`33`).
+### Sync request
 
-4. **Parse + validate.** `request.json()` inside a try/catch → `400` on malformed JSON; a module-scope Zod schema `.safeParse()` → `400` with `.error.flatten()` details (`search/route.ts:8`–`48`). `.parse()` is never used.
+Covered above under [Single-flight guard](#single-flight-guard-around-sync) and [Cron authentication](#cron-authentication-and-the-invocation-audit): `GET /api/internal/sync-wise` → constant-time secret → `withCronInvocationAudit` → `runWiseSyncRequest` → `acquireSyncRun` → `runFullSync` → `revalidateTag("snapshot")`. The response is 200 with the `SyncResult`, 202 when skipped, 500 when the run failed (`run-wise-sync.ts:148-166`).
 
-5. **Index load — the only DB touch on the hot path.** `getDb()` returns the `globalThis` Neon-HTTP singleton (`src/lib/db/index.ts:22`–`27`) and `ensureIndex(db)` returns the warm index after two cheap `SELECT`s when nothing changed; only a snapshot or profile-version change pays for a rebuild.
+---
 
-6. **Pure in-memory computation.** The engine runs with zero further queries: `byWeekday` narrows candidates, then modality/window/filter/session/leave checks partition tutors into `available` vs `needsReview` (`engine.ts:60`–`150`). Range search wraps this by generating fixed-duration sub-slots across a time window (`range-search.ts:41`–`67`) and assembling an availability grid, overlaying locally held proposal slots fetched from Postgres (`range-search.ts:103`–`130`, `:217`). Compare assembles week-scoped per-tutor schedules, detects same-student conflicts, and intersects free intervals — see [`features/tutor-compare.md`](../features/tutor-compare.md).
+## Configuration and runtime notes
 
-7. **Response.** A typed JSON body including `snapshotMeta` (`snapshotId`, `syncedAt`, `stale`) and `warnings`; business logic sits in a try/catch returning `500` with the error message (`engine.ts:30`–`57`, `search/route.ts:52`–`59`).
-
-8. **UI.** Pages are async Server Components that fetch through the cached `src/lib/data/*` helpers and hand props to a client shell inside `<Suspense>` — `/search` calls `connection()` then loads filter options and the tutor list this way (`src/app/(app)/search/page.tsx:8`–`22`). The compare client additionally keeps its own `Map<"tutorGroupId:weekStart:CACHE_VERSION", CompareTutor>` cache so adding a tutor fetches only that tutor (`fetchOnly`) and removing one recomputes from cache; the version string is bumped whenever the cached shape changes, currently `"v3"` (`src/lib/search/cache-version.ts:24`, `src/hooks/use-compare.ts:107`, `:170`, `:295`).
-
-The sync lifecycle is the mirror image, out of band: Vercel cron `GET /api/internal/sync-wise` every 30 minutes → constant-time `CRON_SECRET` → `cron_invocations` audit wrapper → single-flight guard → `runFullSync()` → fetch/normalize/persist into a fresh inactive snapshot → PAST-01 diff hook → promote if healthy → `revalidateTag("snapshot")` → prune. The next read request rebuilds the in-memory index on demand.
+- **Environment.** `src/lib/env.ts:3-36` declares the Zod contract — seven hard-required (`DATABASE_URL`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_SECRET`, `WISE_USER_ID`, `WISE_API_KEY`, `CRON_SECRET`), two defaulted (`WISE_NAMESPACE`, `WISE_INSTITUTE_ID`), nine optional — and `getEnv()` throws on an invalid set while logging only `fieldErrors`, never values (`:40-47`). Two facts about it are architecturally important. First, **the spine reads `process.env` directly rather than importing `env`**: `db/index.ts:6`, `wise/client.ts:216-218`, `run-wise-sync.ts:145`, `sync-wise/route.ts:17`, `cron-auth.ts:8`, `maintenance.ts:59`, `:97` — so `env.ts` functions as a declared inventory plus a fail-fast check for whoever imports it, not as the runtime read path. Second, the file's own comment explains why the middleware cannot use it: middleware runs on the edge and this module throws on a partial env (`env.ts:28-31`). The reconciled inventory — declared vs. documented vs. actually read — is [`reference/env.md`](../reference/env.md).
+- **Database driver.** `getDb()` returns a Drizzle instance over `@neondatabase/serverless`'s HTTP driver (`db/index.ts:5-12`), which has **no transaction support**. The snapshot spine never needs one — idempotent inserts and the single-statement promotion stand in. Subsystems that do need atomicity try `db.transaction()` first and, on the driver's unsupported-transaction error, fall back to a single pooled `pg` connection with explicit `BEGIN`/`COMMIT`/`ROLLBACK` (`src/lib/post-class-feedback/transaction.ts:27-50`).
+- **Wise client behaviour.** Base URL `https://api.wiseapp.live`; Basic auth from `userId:apiKey` plus `x-api-key`, `x-wise-namespace`, and a `VendorIntegrations/{namespace}` user agent (`client.ts:64`, `:69-78`). Retries are an explicit allowlist — 408, 429, 500, 502, 503, 504 — with 1s/2s/4s backoff up to three attempts; any other status fails immediately (REL-05, `:37-44`, `:158-177`), and network-level failures retry on the same ladder (`:148-156`). A simple FIFO limiter caps in-flight requests at 5 by default and at 15 for the sync client (`:65`, `:179-199`, `:214-221`). Per-teacher availability is one 7-day window for working hours plus the remaining windows for leaves — a 180-day horizon in 26 windows (`fetchers.ts:60-105`); FUTURE sessions page at `PAGE_LIMIT = 1000` per request (`fetchers.ts:24`, `:110-147`).
+- **Timezone.** Every normalized time is Asia/Bangkok (`src/lib/normalization/timezone.ts`), and `vitest.config.ts:4` pins `process.env.TZ` so date assertions are deterministic. Vercel functions are pinned to `sin1` (`vercel.json:2`).
+- **Tests.** Two Vitest projects — `unit` (the default `npm test`) and `integration` (`*.integration.test.ts`, serial forks) backed by ephemeral Postgres through `testcontainers`.
 
 ---
 
 ## Beyond the snapshot spine
 
-The tutor-search spine is now a minority of the codebase. Sibling subsystems — sales dashboard, credit control, payroll, Wise activity audit, classroom assignments, room capacity, LINE integration, leave requests, progress tests, post-class feedback, student promotions, competitor intelligence, learning plans, student schedule, admissions case management, US universities — each own their own tables, routes, and (where they ingest external data) their own sync lineage. What they replicate is the *discipline*, not the machinery:
+The snapshot/index machinery serves tutor search and compare. The other feature areas reuse its *discipline* rather than its tables:
 
-- **Their own `*_sync_runs` table with a single-running partial unique index.** Eight such tables exist alongside the core `sync_runs`: `wise_activity_sync_runs`, `competitor_sync_runs`, `credit_control_sync_runs`, `payroll_sync_runs`, `leave_request_sync_runs`, `line_backlog_recovery_sync_runs`, `progress_test_sync_runs`, `post_class_sync_runs` (`schema.ts:553`, `:844`, `:1162`, `:1760`, `:2093`, `:2663`, `:2975`, `:3223`).
-- **Their own cron route under `/api/internal/`**, registered in `CRON_JOBS`, with `maxDuration` set per route (800s for heavy syncs, 300s for lighter jobs) and the same constant-time secret check.
-- **Their own cache tag**, swept by their own writer, rather than piggybacking on `"snapshot"`.
-
-They do **not** get a snapshot lineage or the in-memory index (credit control keeps its own snapshot-style lineage; the rest are read-mostly against current tables). One notable driver divergence: the primary `getDb()` handle is Neon-HTTP, which has **no transaction support**, so the subsystems that genuinely need atomic multi-statement writes lazily construct a separate `node-postgres` `Pool` (`max: 1`, module-cached) and drive explicit `BEGIN`/`COMMIT`/`ROLLBACK` — payroll sync (`src/lib/payroll/sync.ts:2`–`3`, `:93`–`112`), post-class feedback (`src/lib/post-class-feedback/transaction.ts:3`–`20`), and the admissions audit wrapper, which first *tries* `db.transaction()` and only falls back when it sees the driver's "No transactions support in neon-http driver" error (`src/lib/admissions/audit.ts:75`–`105`).
-
-### Cross-cutting concerns
-
-- **Wise client resilience.** Basic auth plus `x-api-key`, `x-wise-namespace`, and a `VendorIntegrations/{namespace}` user agent (`src/lib/wise/client.ts:52`–`61`); exponential backoff at 1s/2s/4s for network errors and a closed set of retryable statuses — 408, 429, 500, 502, 503, 504 — so permanent 4xx fail fast instead of burning the retry budget (REL-05, `client.ts:23`–`30`, `:91`–`133`); an in-process FIFO concurrency limiter defaulting to 5 and raised to **15** for the sync client built by `createWiseClient()` (`client.ts:48`, `:136`–`166`).
-- **Timezone.** Everything is normalized to `Asia/Bangkok` at the normalization boundary, and "now in Bangkok" is computed canonically via `date-fns-tz` `toZonedTime` (REL-08, `src/app/api/compare/route.ts:33`–`41`).
-- **Caching.** `next.config.ts` sets exactly one option — `cacheComponents: true` — so Server Components use `"use cache"` + `cacheTag`/`cacheLife`, and uncached `auth()` calls must sit inside a `<Suspense>` boundary; the `(app)` layout isolates its access-resolving nav in one for exactly this reason (`src/app/(app)/layout.tsx:8`–`28`).
-- **Entry points.** `/` is a Home hub Server Component that redirects single-page-restricted users straight to their one allowed page (`src/app/(app)/page.tsx:8`–`19`); `/compare` is a client-side redirect into `/search` preserving `?tutors=` (`src/app/(app)/compare/page.tsx:10`–`17`).
-- **Environment.** `src/lib/env.ts` declares a Zod schema over 15 keys (9 required, 6 optional) and throws at module load on invalid input. See the open question below about whether it actually runs.
+- **Single-flight sync runs.** Thirteen run-ledger tables carry the same partial unique index `unique(status) WHERE status = 'running'` — `sync_runs`, `wise_activity_sync_runs`, the two sales-dashboard import-run tables, `competitor_sync_runs`, credit-control, payroll, leave-request, LINE backlog-recovery, progress-test, IPEDS, post-class-feedback, and admissions-notification runs (`grep -nE "uniqueIndex\(\"[a-z_]+_single_running" src/lib/db/schema.ts` → 13 hits: `:473`, `:567`, `:666`, `:758`, `:864`, `:1177`, `:1776`, `:2110`, `:2680`, `:2995`, `:3019`, `:3246`, `:4568`). The guard lives in Postgres, not in application memory, so it holds across function instances.
+- **One `WiseClient`, many pipelines.** `createWiseClient()` (`client.ts:214`) is shared by credit control, progress tests, room utilization, Wise activity, classroom assignments, post-class feedback, payroll, student promotions, and the live student-schedule overlay, as well as the snapshot sync. They share the retry/limiter/tally, not the snapshot tables.
+- **Cron audit for everything.** All 17 scheduled entries and the 5 manual-only handlers are declared once in `src/lib/data-health/cron-registry.ts`, mirrored to `vercel.json`, and wrapped in `withCronInvocationAudit`; `/data-health` and the `cron-watchdog` job read the resulting `cron_invocations` rows. Schedules and lateness budgets: [`reference/crons.md`](../reference/crons.md).
+- **Per-feature cache tags.** Beyond `"snapshot"` and `"past-sessions"`, other subsystems declare their own tag constants and sweep them from their own syncs, so one feature's refresh never invalidates another's cache.
+- **Fail-closed by default.** Unresolvable teachers in progress tests, unmatched identities in leave requests, `TEACHER_TBC` in student schedules, dry-run-only Wise writes in LINE and leave requests, capability grants re-read per request in post-class feedback — each is the same posture the tutor pipeline established, applied to a different domain. The feature pages under [`features/`](../features/) own those rules.
 
 ---
 
-## Open questions
+## Invariants to preserve when editing
 
-- **`src/lib/env.ts` appears to be dead code.** It exports `env = getEnv()`, which validates at module-evaluation time (`env.ts:28`–`37`) — but a repo-wide search for `@/lib/env` / `lib/env` finds **zero importers** outside the file itself. Nothing evaluates the module, so the "validated at startup" guarantee does not currently hold; each consumer reads `process.env.*` directly and fails at its own call site (e.g. `getDb()` throwing `"DATABASE_URL is not set"`, `src/lib/db/index.ts:6`–`9`). There are **57** distinct `process.env.*` keys referenced across `src/`, versus 15 declared in the schema. Should `env.ts` be wired into a startup path, or deleted in favor of the per-call-site pattern actually in use?
-- **Cron registry vs. route `maxDuration` drift.** Exactly one of the 21 registered jobs disagrees with its handler: `credit_control` declares `maxDurationSeconds: 300` in `src/lib/data-health/cron-registry.ts` while `src/app/api/internal/sync-credit-control/route.ts:14` sets `maxDuration = 800`. The registry number is what the Data Health UI shows and what lateness math is calibrated against, so one of the two is misleading. Which is authoritative? (The `vercel.json` ↔ registry *schedule* parity is test-enforced; `maxDurationSeconds` is not.)
-- **Index lifetime and cold-build cost on Vercel.** The `SearchIndex` is per serverless instance. A cold instance pays a full `buildIndex()` — one snapshot's worth of parallel `SELECT`s plus aggregation — on its first request. I did not measure instance recycle frequency or cold-build latency against the "< 400ms warm" target; worth confirming whether cold starts are noticeable after a deploy or scale-out.
-- **No active snapshot at first boot.** `buildIndex()` throws `"No active snapshot found"` (`index.ts:150`–`152`) and `ensureIndex` only swallows the no-active case when a cached index already exists (`index.ts:384`–`386`). In a brand-new environment that has never completed a sync, every index-backed route surfaces that error until the first promotion. Do the deployment runbooks guarantee a promoted snapshot before traffic?
-- **Profile-fingerprint cost on the warm path.** `getTutorProfileVersion()` runs a `count(*) + max(updated_at)` aggregate on `tutor_business_profiles` on *every* `ensureIndex` call (`index.ts:128`–`137`, `:365`–`375`). Negligible for a small table, but it means the "zero DB queries on the hot path" framing is really "two cheap queries". Confirm the table stays small, or consider a cheaper invalidation signal.
-- **Stale-running cutoff versus the function ceiling.** The guard force-fails `running` rows after 20 minutes (`run-wise-sync.ts:10`) while `maxDuration` is 800s ≈ 13.3 minutes (`sync-wise/route.ts:7`). A sync cannot legitimately outlive the ceiling, so the 20-minute cutoff is purely a safety net — but a wedged row still blocks roughly the next 1.5 cron cycles before cleanup. Acceptable as designed; flagged in case the cadence tightens.
-- **`isPathAllowed` carve-outs are accumulating.** Several surfaces now bypass the coarse prefix match because they re-derive access from the database — `/api/home/summary`, post-class feedback, and learning plans as a page-allowed-but-API-denied split (`middleware.ts:30`–`51`). This is correct today but is a growing special-case list in a security-critical function; worth deciding whether the JWT `allowedPages` claim should be replaced by a uniform per-request capability lookup.
+1. **Exactly one active snapshot, flipped by one statement.** Never split the promotion into demote-then-promote (`orchestrator.ts:480-501`).
+2. **Anything that must read the prior snapshot runs before promotion.** The PAST-01 hook is the current example (`orchestrator.ts:400-407`).
+3. **Writes to snapshot tables always carry the candidate `snapshotId`; reads always filter by the active one.** The index (`index.ts:169-222`) and the data helpers (`src/lib/data/*.ts`) are the two read entry points.
+4. **`ensureIndex()` must assign its build promise synchronously.** Introducing an `await` before `setBuildingPromise(p)` breaks REL-02 coalescing (`index.ts:391-400`).
+5. **`data_issues` are the only channel for ambiguity.** New normalization edge cases emit an issue and continue; they never guess and never abort the run.
+6. **Cache tags stay separate.** `"snapshot"` is swept on promotion; `"past-sessions"` deliberately is not (`data/past-sessions.ts:10-19`).
+7. **Route handlers stay thin.** Auth → JSON → Zod → delegate; logic lives in `src/lib/{domain}/*.ts` so it can be tested without Next.
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against main@0cd1e81 (clean tree) on 2026-09-02._

@@ -1,192 +1,195 @@
 # Environment Variables
 
-**Authoritative sources:** the Zod object in [`src/lib/env.ts`](../../src/lib/env.ts) for the *declared* contract, and the `process.env` reads inventoried below for the *effective* one. [`.env.example`](../../.env.example) is a partial template, not a contract.
+**Authoritative sources:** the Zod object in [`src/lib/env.ts`](../../src/lib/env.ts) for the *declared* contract, and the `process.env` reads inventoried below for the *effective* one. [`.env.example`](../../.env.example) is a partial operator template, not a contract.
 
-This page is the canonical home for the **mechanics** of configuration: exact Zod modifier, the literal default, every consumption site with `file:line`, and what actually happens when a variable is absent. Feature docs under [`features/`](../features/) explain *why* a flag exists and link here instead of restating variable lists.
+This page is the canonical home for the **mechanics** of configuration: the exact Zod modifier, the literal default, every consumption site with `file:line`, and what actually happens when a variable is absent. Feature docs under [`features/`](../features/) explain *why* a flag exists and link here rather than restating variable lists.
 
-Three inventories are reconciled here, and none of them agree:
+Four inventories are reconciled here, and none of them agree:
 
 | Inventory | Count | Source |
 |---|---|---|
-| Declared in the Zod schema | **15** keys | [`src/lib/env.ts:3`–`24`](../../src/lib/env.ts) |
-| Documented in `.env.example` | **37** keys | [`.env.example`](../../.env.example) |
-| Actually read from `process.env` by non-test code | **71** named keys, plus 1 dynamically-named family | `src/**`, `scripts/**`, `drizzle.config.ts`, `vitest.config.ts` |
+| Declared in the Zod schema | **18** keys | [`src/lib/env.ts:3`–`36`](../../src/lib/env.ts) |
+| Documented in `.env.example` | **40** keys | [`.env.example`](../../.env.example) — `grep -cE '^[A-Z_][A-Z0-9_]*=' .env.example` |
+| Read by non-test `src/` at runtime | **69** named keys + 1 dynamically-named family | 58 via literal `process.env.NAME`, 11 via a helper or computed property (§2.4, §2.5, §2.9) |
+| Read anywhere in the repo (`src/`, `scripts/`, root config) | **74** named keys | the 69 above + 5 test/script-only keys (§2.10). `TZ` is *written*, not read |
+
+> **Counting method.** `grep -rnoE 'process\.env\.[A-Z_][A-Z0-9_]*' src --include='*.ts' --include='*.tsx' | grep -v __tests__` yields 59 distinct names, one of which (`TEST_DATABASE_URL`, [`src/tests/integration/db-helper.ts:24`](../../src/tests/integration/db-helper.ts)) is integration-test infrastructure — leaving 58 runtime names. Eleven more never appear as `process.env.NAME`: nine `POST_CLASS_PAYOUT_*` keys read through `value(env, "NAME")` plus `env.POST_CLASS_PAYOUT_WRITES_ENABLED` ([`payout-config.ts:11`–`50`](../../src/lib/post-class-feedback/payout-config.ts)), `VERCEL_ENV` through the same helper ([`payout-config.ts:116`](../../src/lib/post-class-feedback/payout-config.ts)), and `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` through computed access on a `const` ([`student-promotions/data.ts:201`, `:450`](../../src/lib/student-promotions/data.ts)). Four untracked report scripts present in the working tree at verification time (`scripts/price-student-credits.ts`, `report-online-by-year.ts`, `report-student-classes.ts`, `report-tutor-feedback-submissions.ts`) are excluded from the counts; they read only `DATABASE_URL` and `WISE_INSTITUTE_ID`, both already inventoried.
 
 ---
 
 ## TL;DR — the precise Zod truth vs. the "9 required" claim
 
-`AGENTS.md:287` heads its table "Environment Variables (9 required)", and `CLAUDE.md:104` / `CLAUDE.md:120` repeat "9 required env vars at startup (+ 3 optional LINE vars)". Neither matches the literal schema.
-
-`src/lib/env.ts:3`–`35` declares **18** keys in three buckets:
+[`src/lib/env.ts:3`–`36`](../../src/lib/env.ts) declares **18** keys in three buckets:
 
 | Bucket | Zod modifier | Count | Variables |
 |---|---|---|---|
-| **Hard-required** — `safeParse` fails when unset or empty | `.url()` ×1, `.min(1)` ×6 | **7** | `DATABASE_URL`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_SECRET`, `WISE_USER_ID`, `WISE_API_KEY`, `CRON_SECRET` |
-| **Defaulted** — parse succeeds when unset; a source literal is substituted | `.default(…)` | **2** | `WISE_NAMESPACE` → `"begifted-education"`, `WISE_INSTITUTE_ID` → `"696e1f4d90102225641cc413"` |
-| **Optional** — may be absent entirely | `.optional()` | **9** | `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER`, `LINE_SCHEDULE_BOT_ADMIN_IDS`, `ENABLE_STUDENT_SCHEDULE_LIVE`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`, `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS` |
+| **Hard-required** — `safeParse` fails when unset *or* empty | `.url()` ×1 (`DATABASE_URL`, L4); `.min(1)` ×6 (L5–L9, L12) | **7** | `DATABASE_URL`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_SECRET`, `WISE_USER_ID`, `WISE_API_KEY`, `CRON_SECRET` |
+| **Defaulted** — parse succeeds when unset; a source literal is substituted | `.default(…)` (L10–L11) | **2** | `WISE_NAMESPACE` → `"begifted-education"`, `WISE_INSTITUTE_ID` → `"696e1f4d90102225641cc413"` |
+| **Optional** — may be absent entirely | `.optional()` (L13–L15, L19, L23, L25, L27, L32, L35) | **9** | `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER`, `LINE_SCHEDULE_BOT_ADMIN_IDS`, `ENABLE_STUDENT_SCHEDULE_LIVE`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`, `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS` |
 | **Total declared** | | **18** | |
 
-**The strict Zod truth is 7 hard-required keys, not 9.** The prose "9" is the 7 hard-required keys *plus* the 2 `WISE_*` keys carrying `.default(…)` literals (`src/lib/env.ts:10`–`11`). Those two are operationally expected in production, but the schema parses without them.
+**The strict Zod truth is 7 hard-required keys, not 9.** The prose "9" is the 7 hard-required keys *plus* the 2 `WISE_*` keys carrying `.default(…)` literals — that is, the nine keys with no `.optional()` modifier. Those two are operationally expected in production, but the schema parses without them.
 
-The prose also undercounts the optional tail. It says "3 optional LINE vars"; the schema declares **9** optional keys (`src/lib/env.ts:13`–`34`). The six omitted — `LINE_SCHEDULE_BOT_ADMIN_IDS`, `ENABLE_STUDENT_SCHEDULE_LIVE`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`, `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS` — belong to the student-schedule / LINE schedule-bot features and to maintenance mode.
+The shorthand "required means `.min(1)`" is slightly loose in one place: `DATABASE_URL` is required through `.url()` rather than `.min(1)` (L4), and rejects both `undefined` and `""`. The two `LINE_CHANNEL_*` keys combine `.min(1).optional()` (L13–L14), which accepts `undefined` but **rejects an empty string** — see [§4](#4-envexample-reconciliation) for why that matters.
 
-Accurate phrasing: **7 hard-required + 2 defaulted + 9 optional = 18 declared; 71 named keys read at runtime.**
+Where the repo's prose stands against this table:
 
-`README.md:172`–`179` already carries the corrected 7/2/6 breakdown, but states that `src/lib/env.ts` "throws at startup if they don't parse". That is the one claim in the repo that the next section contradicts.
+| Source | Claim | Zod truth |
+|---|---|---|
+| [`AGENTS.md:291`](../../AGENTS.md) | heading "Environment Variables (9 required)" over a 12-row table that includes the three `LEAVE_REQUESTS_*` vars | 7 hard-required + 2 defaulted; the `LEAVE_REQUESTS_*` vars are **not** in the schema — they are read at [`src/lib/leave-requests/config.ts:1`–`5`](../../src/lib/leave-requests/config.ts) |
+| [`AGENTS.md:307`](../../AGENTS.md) | "`src/lib/env.ts` validates 9 required vars plus 9 optional ones … roughly 50 environment variables are read across the codebase" | 7 + 2 + 9 = 18 declared; **69** runtime names read; and "validates" never executes (next section) |
+| [`README.md:180`–`187`](../../README.md) | "declares 15 variables and throws at startup … 7 required … 2 with defaults … 6 optional" | 18 declared / 9 optional — the list omits `ENABLE_STUDENT_SCHEDULE_LIVE`, `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS`; and nothing throws at startup |
+| [`CLAUDE.md:104`, `:120`](../../CLAUDE.md) | "declares 18 env vars — 7 hard-required, 2 defaulted, 9 optional … throws on invalid" | counts correct; "throws on invalid" describes unreachable code |
+| [`docs/OPEN-QUESTIONS.md:48`–`57`](../OPEN-QUESTIONS.md) (DEF-2), [`:987`–`1002`](../OPEN-QUESTIONS.md) (ENV-2, ENV-3) | "The schema declares 15 keys; roughly 56–58 distinct env keys are read" | 18 declared; 69 runtime names |
+
+Accurate phrasing: **7 hard-required + 2 defaulted + 9 optional = 18 declared; 69 named keys (+ 1 dynamic family) read at runtime by `src/`.**
 
 ---
 
-## Critical caveat: the validated `env` object is never imported
+## Critical caveat: the validated `env` object has no importers
 
-`src/lib/env.ts:37` runs validation eagerly at module-evaluation time:
+[`src/lib/env.ts:49`](../../src/lib/env.ts) runs validation eagerly at module-evaluation time:
 
 ```ts
 export const env = getEnv();
 ```
 
-`getEnv()` (`src/lib/env.ts:28`–`35`) `safeParse`s `process.env`, logs `parsed.error.flatten().fieldErrors` on failure, then throws `Invalid environment variables`. That is the documented "validated at startup" behaviour.
+`getEnv()` ([`env.ts:40`–`47`](../../src/lib/env.ts)) `safeParse`s `process.env`, logs `parsed.error.flatten().fieldErrors` — key names only, never values — on failure, then throws `Invalid environment variables`. That is the "environment validated at startup" behaviour several docs describe.
 
 **It never executes.** No file in the repository imports the module:
 
 ```
-$ grep -rn '"@/lib/env"|/lib/env"|/lib/env'"'"'|require\(.*lib/env' \
-    --include=*.ts --include=*.tsx --include=*.mjs src scripts
+$ grep -rnE "lib/env['\"]" src scripts --include='*.ts' --include='*.tsx' --include='*.mjs'
 (no matches — exit status 1)
 ```
 
-There is no `instrumentation.ts` anywhere in the repo, and `next.config.ts` contains only `cacheComponents: true`, so nothing pulls the module in as a side effect either. `src/lib/env.ts:29` is the *only* line in the file that mentions `process.env`, and it is unreachable. Every real consumer reads `process.env.<NAME>` directly.
+There is no `instrumentation.ts` outside `node_modules/`, and [`next.config.ts:3`–`5`](../../next.config.ts) contains only `cacheComponents: true`, so nothing pulls the module in as a side effect. [`env.ts:41`](../../src/lib/env.ts) is the one line in the file that touches `process.env`, and it is unreachable. The file's own header explains why at least one consumer *cannot* use it: `src/middleware.ts` runs on the edge and "this module throws on a partial env" ([`env.ts:28`–`31`](../../src/lib/env.ts)), so `MAINTENANCE_MODE` is declared "for inventory parity only".
+
+Every real consumer therefore reads `process.env.<NAME>` at its own call site, and the failure mode is whatever that call site chose. The diagram below is the effective contract:
 
 ```mermaid
 flowchart LR
-  subgraph Declared["Declared contract — never executed"]
-    ENV["envSchema, 15 keys<br/>src/lib/env.ts:3-24"]
-    GET["getEnv(): safeParse + throw<br/>src/lib/env.ts:28-35"]
-    EXP["export const env<br/>src/lib/env.ts:37"]
-    ENV --> GET --> EXP
-    EXP -. "0 importers" .-> DEAD(["unreachable"])
+  subgraph Declared["Declared contract — src/lib/env.ts"]
+    Z["envSchema.safeParse(process.env)<br/>getEnv() · env.ts:40-47"] -->|"zero importers<br/>never evaluated"| X["(unreachable)"]
   end
-  subgraph Actual["Effective contract"]
-    PE[("process.env")]
-    PE --> DB["getDb() throws on first query<br/>src/lib/db/index.ts:6-9"]
-    PE --> WISE["createWiseClient() non-null asserts<br/>src/lib/wise/client.ts:161-163"]
-    PE --> CRON["cron auth returns HTTP 500<br/>src/lib/internal/cron-auth.ts:8-24"]
-    PE --> FLAG["feature flags fall back silently<br/>src/lib/line/client.ts:19-23"]
+  subgraph Actual["Effective contract — point-of-use reads"]
+    P["process.env.NAME"] --> T{"absent?"}
+    T -->|"throw on first use"| A["DATABASE_URL · db/index.ts:7-9<br/>WISE_INSTITUTE_ID · utilization.ts:434 · pcf sync.ts:1054<br/>RESEND_API_KEY · notifications.ts:300<br/>LINE_CHANNEL_ACCESS_TOKEN · line/client.ts:31"]
+    T -->|"HTTP 500 Server misconfigured"| D["CRON_SECRET · cron-auth.ts:22-24"]
+    T -->|"401 from Wise at request time"| E["WISE_USER_ID / WISE_API_KEY<br/>createWiseClient() · wise/client.ts:216-217"]
+    T -->|"feature off (fail-closed)"| B["LINE_CHANNEL_* · lineSchedulerEnabled()<br/>LINE_SCHEDULE_BOT_ADMIN_IDS · empty Set<br/>MAINTENANCE_BYPASS_EMAILS · empty Set<br/>WISE_SESSION_*_VERIFIED · === 'true'<br/>POST_CLASS_*_ENABLED · === 'true'"]
+    T -->|"literal fallback"| C["WISE_NAMESPACE · WISE_INSTITUTE_ID<br/>OPENAI_*_MODEL → gpt-5.4-mini<br/>base-URL cascades → bgscheduler.vercel.app"]
   end
 ```
 
-Operational consequences:
-
-1. **No fail-fast.** A deployment missing `DATABASE_URL` boots successfully and fails on the first query (`src/lib/db/index.ts:7`–`9`), not at startup.
-2. **The `WISE_*` defaults come from call sites, not the schema.** Each consumer repeats its own literal: `?? "begifted-education"` (`src/lib/wise/client.ts:163`) and `?? "696e1f4d90102225641cc413"` (`src/lib/sync/run-wise-sync.ts:145` and ~10 other sites). Editing the schema default changes nothing.
-3. **`z.coerce` and range constraints never apply.** `STUDENT_SCHEDULE_LINK_TTL_DAYS` is declared `z.coerce.number().int().positive().optional()` (`src/lib/env.ts:21`), but the three real consumers each do their own `Number(...) || DEFAULT` (`src/app/api/student-schedule/link/route.ts:55`).
-
-Treat the **"If unset"** column in the tables below — not the schema — as the operative contract.
-
 ---
 
-## 1. Schema-declared variables (15)
+## 1. Schema-declared variables (18)
 
-Ordered as declared.
+Ordered as declared. "Consumed at" lists non-test `src/` sites, plus root config and committed scripts where relevant.
 
 ### 1.1 Hard-required (7)
 
 | Variable | Zod (`src/lib/env.ts`) | Purpose | Consumed at | If unset |
 |---|---|---|---|---|
-| `DATABASE_URL` | `.url()` — L4 | Neon Postgres connection string (ap-southeast-1) | `src/lib/db/index.ts:6`; `src/lib/db/seed.ts:6`; `drizzle.config.ts:8`; three `node-postgres` transaction pools that neon-http cannot serve — `src/lib/payroll/sync.ts:94`, `src/lib/post-class-feedback/transaction.ts:16`, `src/lib/admissions/audit.ts:44` | Throws `DATABASE_URL is not set` on the first `getDb()` call (`src/lib/db/index.ts:7`–`9`) |
-| `AUTH_GOOGLE_ID` | `.min(1)` — L5 | Google OAuth client ID | `src/lib/auth.ts:35`; `src/lib/auth-edge.ts:7`; Sheets token refresh `src/lib/sales-dashboard/google-oauth.ts:150` | Auth.js provider misconfigured, sign-in fails. The refresh path coerces to `""` (`?? ""`), so token refresh returns a Google error rather than a config error |
-| `AUTH_GOOGLE_SECRET` | `.min(1)` — L6 | Google OAuth client secret | `src/lib/auth.ts:36`; `src/lib/auth-edge.ts:8`; `src/lib/sales-dashboard/google-oauth.ts:151` | as above |
-| `AUTH_SECRET` | `.min(1)` — L7 | Auth.js session/JWT key; also the KDF input for at-rest Google-token encryption | Read implicitly by Auth.js — neither `src/lib/auth.ts` nor `src/lib/auth-edge.ts` passes a `secret:` option. Read explicitly at `src/lib/sales-dashboard/google-oauth.ts:42`–`44`, where it is SHA-256'd into an AES-256-GCM key | Auth.js cannot issue sessions; `encryptToken`/`decryptToken` throw `AUTH_SECRET is required to encrypt Google tokens`. **Rotating it invalidates every stored `google_oauth_tokens` row** |
-| `WISE_USER_ID` | `.min(1)` — L8 | Wise API user ID (Basic-auth username half) | `src/lib/wise/client.ts:161` (non-null assertion `!`); guarded reads at `src/lib/classrooms/data.ts:1151`, `src/lib/student-promotions/data.ts:299`, `src/lib/wise-activity/reconciliation.ts:770,797` | `createWiseClient()` builds a client with `undefined` credentials and every Wise call 401s. The guarded sites throw a named error instead — see [drift flag 5](#5-drift-flags-and-open-questions) |
-| `WISE_API_KEY` | `.min(1)` — L9 | Wise API key (Basic-auth password half + `x-api-key` header) | `src/lib/wise/client.ts:162`; same guarded sites | as above |
-| `CRON_SECRET` | `.min(1)` — L12 | Bearer token protecting all 21 internal handlers under `src/app/api/internal/` | Shared helper `src/lib/internal/cron-auth.ts:8`, imported by 15 route files; 6 internal routes inline an equivalent check — `sync-wise/route.ts:17`, `sync-credit-control/route.ts:20`, `sync-sales-dashboard/route.ts:17`, `sync-room-utilization/route.ts:14`, `sync-competitor-intelligence/route.ts:13`, `student-promotions/july-1/route.ts:11` | **Fail-closed:** the helper returns `missing-secret` → HTTP 500 `Server misconfigured` (`src/lib/internal/cron-auth.ts:22`–`24`). No cron can run. Comparison is constant-time (`timingSafeEqual` with a length pre-check, REL-07 — `cron-auth.ts:12`–`14`) |
+| `DATABASE_URL` | `.url()` — L4 | Neon Postgres connection string (ap-southeast-1) | [`src/lib/db/index.ts:6`](../../src/lib/db/index.ts) (neon-http singleton); [`src/lib/db/seed.ts:6`](../../src/lib/db/seed.ts); [`drizzle.config.ts:8`](../../drizzle.config.ts) (`!` assertion); three `node-postgres` transaction pools that neon-http cannot serve — [`payroll/sync.ts:94`](../../src/lib/payroll/sync.ts), [`post-class-feedback/transaction.ts:16`](../../src/lib/post-class-feedback/transaction.ts), [`admissions/audit.ts:44`](../../src/lib/admissions/audit.ts); [`scripts/ipeds-import.ts:21`](../../scripts/ipeds-import.ts) (triggers its `.env.local` shim) | Throws `DATABASE_URL is not set` on the first `getDb()` call ([`db/index.ts:7`–`9`](../../src/lib/db/index.ts)); each `pg` pool throws the same message at its first use |
+| `AUTH_GOOGLE_ID` | `.min(1)` — L5 | Google OAuth client ID | [`src/lib/auth.ts:35`](../../src/lib/auth.ts); [`src/lib/auth-edge.ts:7`](../../src/lib/auth-edge.ts); Sheets token refresh [`sales-dashboard/google-oauth.ts:150`](../../src/lib/sales-dashboard/google-oauth.ts) | The Auth.js provider is constructed with `undefined` and sign-in fails. The refresh path coerces to `""` (`?? ""`), so a token refresh returns a Google error rather than a config error |
+| `AUTH_GOOGLE_SECRET` | `.min(1)` — L6 | Google OAuth client secret | [`auth.ts:36`](../../src/lib/auth.ts); [`auth-edge.ts:8`](../../src/lib/auth-edge.ts); [`google-oauth.ts:151`](../../src/lib/sales-dashboard/google-oauth.ts) | as above |
+| `AUTH_SECRET` | `.min(1)` — L7 | Auth.js session/JWT key; also the KDF input for at-rest Google-token encryption | Read implicitly by Auth.js — neither `auth.ts` nor `auth-edge.ts` passes a `secret:` option. Read explicitly at [`google-oauth.ts:42`–`44`](../../src/lib/sales-dashboard/google-oauth.ts), where it is SHA-256'd into an AES key | Auth.js cannot issue sessions; `encryptionKey()` throws `AUTH_SECRET is required to encrypt Google tokens` ([`google-oauth.ts:43`](../../src/lib/sales-dashboard/google-oauth.ts)). **Rotating it invalidates every stored Google OAuth token row** |
+| `WISE_USER_ID` | `.min(1)` — L8 | Wise API user ID — the Basic-auth username half | [`wise/client.ts:216`](../../src/lib/wise/client.ts) (non-null assertion `!`); guarded reads at [`classrooms/data.ts:1152`](../../src/lib/classrooms/data.ts), [`student-promotions/data.ts:299`](../../src/lib/student-promotions/data.ts), [`wise-activity/reconciliation.ts:770`, `:797`](../../src/lib/wise-activity/reconciliation.ts) | `createWiseClient()` builds `Authorization: Basic` from the string `"undefined:undefined"` ([`client.ts:70`–`71`](../../src/lib/wise/client.ts)) and every Wise call 401s at request time. `classrooms/data.ts:1155`–`1157` and `student-promotions/data.ts:302`–`304` throw a named error instead; `reconciliation.ts:770`, `:797` return a typed error result — see [drift flag 5](#5-drift-flags-and-open-questions) |
+| `WISE_API_KEY` | `.min(1)` — L9 | Wise API key — Basic-auth password half **and** the `x-api-key` header ([`client.ts:73`](../../src/lib/wise/client.ts)) | [`wise/client.ts:217`](../../src/lib/wise/client.ts); the same guarded sites | as above |
+| `CRON_SECRET` | `.min(1)` — L12 | Bearer token protecting all **22** route files under `src/app/api/internal/` | Shared helper [`src/lib/internal/cron-auth.ts:8`](../../src/lib/internal/cron-auth.ts), imported by **16** internal routes; **6** routes inline an equivalent constant-time check — [`sync-wise/route.ts:17`](../../src/app/api/internal/sync-wise/route.ts), [`sync-credit-control/route.ts:20`](../../src/app/api/internal/sync-credit-control/route.ts), [`sync-sales-dashboard/route.ts:17`](../../src/app/api/internal/sync-sales-dashboard/route.ts), [`sync-room-utilization/route.ts:14`](../../src/app/api/internal/sync-room-utilization/route.ts), [`sync-competitor-intelligence/route.ts:13`](../../src/app/api/internal/sync-competitor-intelligence/route.ts), [`student-promotions/july-1/route.ts:11`](../../src/app/api/internal/student-promotions/july-1/route.ts) | **Fail-closed:** the helper returns `missing-secret` → HTTP 500 `Server misconfigured` ([`cron-auth.ts:22`–`24`](../../src/lib/internal/cron-auth.ts)). No cron can run. Comparison is `timingSafeEqual` behind a length pre-check ([`cron-auth.ts:12`–`14`](../../src/lib/internal/cron-auth.ts)) |
 
 ### 1.2 Defaulted (2)
 
 | Variable | Zod (`src/lib/env.ts`) | Schema default | Effective default | Consumed at |
 |---|---|---|---|---|
-| `WISE_NAMESPACE` | `.default(…)` — L10 | `begifted-education` | `?? "begifted-education"` repeated per call site | `src/lib/wise/client.ts:163`; `src/lib/classrooms/data.ts:1154`; `src/lib/student-promotions/data.ts:301` |
-| `WISE_INSTITUTE_ID` | `.default(…)` — L11 | `696e1f4d90102225641cc413` | mixed — see note | 40 reads across `src/`. Inline literal fallback at `src/lib/sync/run-wise-sync.ts:145`, `src/lib/classrooms/data.ts:887,992,1469,1834`, `src/lib/classrooms/morning-automation.ts:191`, `src/lib/credit-control/run-sync-request.ts:141`, `src/lib/progress-tests/booking.ts:102`, `src/lib/progress-tests/run-sync-request.ts:142`, `src/lib/student-promotions/data.ts:309`. Via a module `DEFAULT_INSTITUTE_ID` const at `src/lib/wise-activity/reconciliation.ts:17`, `src/lib/data-health/run-job.ts:26`, `src/app/api/payroll/sync/route.ts:11`, `src/app/api/wise-activity/sync/route.ts:9`, `src/app/api/wise-activity/reconciliation/backfill/route.ts:10`, `src/app/api/internal/sync-wise-activity/route.ts:10` |
+| `WISE_NAMESPACE` | `.default(…)` — L10 | `begifted-education` | `?? "begifted-education"` repeated at every call site | [`wise/client.ts:218`](../../src/lib/wise/client.ts); [`classrooms/data.ts:1154`](../../src/lib/classrooms/data.ts); [`student-promotions/data.ts:301`](../../src/lib/student-promotions/data.ts) |
+| `WISE_INSTITUTE_ID` | `.default(…)` — L11 | `696e1f4d90102225641cc413` | mixed — see the note below | **20** read sites in `src/`. Inline literal fallback (11): [`sync/run-wise-sync.ts:145`](../../src/lib/sync/run-wise-sync.ts), [`classrooms/data.ts:887`, `:992`, `:1469`, `:1834`](../../src/lib/classrooms/data.ts), [`classrooms/morning-automation.ts:191`](../../src/lib/classrooms/morning-automation.ts), [`credit-control/run-sync-request.ts:141`](../../src/lib/credit-control/run-sync-request.ts), [`progress-tests/booking.ts:102`](../../src/lib/progress-tests/booking.ts), [`progress-tests/run-sync-request.ts:142`](../../src/lib/progress-tests/run-sync-request.ts), [`student-promotions/data.ts:309`](../../src/lib/student-promotions/data.ts), [`student-schedule/live.ts:111`](../../src/lib/student-schedule/live.ts). Via a module-level `DEFAULT_INSTITUTE_ID` const (7 reads across 6 definitions): [`wise-activity/reconciliation.ts:17`](../../src/lib/wise-activity/reconciliation.ts) → `:781`, `:808`; [`data-health/run-job.ts:27`](../../src/lib/data-health/run-job.ts) → `:52`; [`api/payroll/sync/route.ts:11`](../../src/app/api/payroll/sync/route.ts) → `:37`; [`api/wise-activity/sync/route.ts:9`](../../src/app/api/wise-activity/sync/route.ts) → `:42`; [`api/wise-activity/reconciliation/backfill/route.ts:10`](../../src/app/api/wise-activity/reconciliation/backfill/route.ts) → `:41`; [`api/internal/sync-wise-activity/route.ts:10`](../../src/app/api/internal/sync-wise-activity/route.ts) → `:23`. Plus [`scripts/probe-wise-availability-range.ts:159`](../../scripts/probe-wise-availability-range.ts) |
 
-> **Two `WISE_INSTITUTE_ID` consumers deliberately have no fallback and throw:** `src/lib/room-capacity/utilization.ts:433`–`434` (`WISE_INSTITUTE_ID is required to sync room utilization`) and `src/lib/post-class-feedback/sync.ts:1053`–`1054` (`WISE_INSTITUTE_ID is not configured`). Every other consumer silently assumes the BeGifted tenant, so the institute id is effectively hard-coded in ~38 places rather than configured in one.
+> **Two `WISE_INSTITUTE_ID` consumers deliberately have no fallback and throw:** [`room-capacity/utilization.ts:433`–`434`](../../src/lib/room-capacity/utilization.ts) (`WISE_INSTITUTE_ID is required to sync room utilization`) and [`post-class-feedback/sync.ts:1053`–`1054`](../../src/lib/post-class-feedback/sync.ts) (`WISE_INSTITUTE_ID is not configured`). Every other consumer silently assumes the BeGifted tenant: the literal `696e1f4d90102225641cc413` appears **18** times in non-test `src/`, so the institute id is effectively hard-coded rather than configured, and the schema's `.default()` on L11 is never the source of that value.
 
-### 1.3 Optional (6)
+### 1.3 Optional (9)
 
 | Variable | Zod (`src/lib/env.ts`) | Purpose | Consumed at | If unset |
 |---|---|---|---|---|
-| `LINE_CHANNEL_SECRET` | `.min(1).optional()` — L13 | LINE Messaging API channel secret; verifies inbound webhook signatures | `src/lib/line/client.ts:21,26` | `lineSchedulerEnabled()` returns `false` (`src/lib/line/client.ts:19`–`23`); the LINE integration is off |
-| `LINE_CHANNEL_ACCESS_TOKEN` | `.min(1).optional()` — L14 | LINE channel access token for profile fetch and push/reply | `src/lib/line/client.ts:22,30`–`32` | Same gate. If a push is attempted regardless, `lineAccessToken()` throws `LINE_CHANNEL_ACCESS_TOKEN is not configured` |
-| `ENABLE_LINE_SCHEDULER` | `.optional()` — L15 | Kill switch for the LINE integration | `src/lib/line/client.ts:20` | **Enabled by default.** The test is `!== "false"`, so only the literal string `false` disables it — provided both LINE credentials are present |
-| `LINE_SCHEDULE_BOT_ADMIN_IDS` | `.optional()` — L19 | Comma-separated LINE user IDs allowed to drive the student schedule bot | `src/lib/line/schedule-bot.ts:112`–`124` | **Fail-closed (SCHED-BOT-01):** unset or empty yields an empty `Set`, and `isScheduleBotAdmin` requires `ids.size > 0` (`schedule-bot.ts:121`–`124`), so a parent messaging the OA can never reach the bot. Documented at `src/lib/env.ts:16`–`18`. To onboard a new admin operator, see [runbook §4.1](../operations/runbook.md#41-onboarding-a-new-schedule-bot-admin-operator) |
-| `STUDENT_SCHEDULE_LINK_TTL_DAYS` | `z.coerce.number().int().positive().optional()` — L21 | Days a parent schedule link stays live | `src/app/api/student-schedule/link/route.ts:55`; `src/lib/line/schedule-bot.ts:134`; `src/lib/line/schedule-bot-group.ts:124` | `DEFAULT_LINK_TTL_DAYS = 30` (`src/lib/student-schedule/links.ts:27`). All three consumers use `Number(...) || DEFAULT`, so `0` and non-numeric values also land on 30 — the `.int().positive()` guard never runs |
-| `APP_BASE_URL` | `.url().optional()` — L23 | Absolute origin used to build parent-facing schedule links | `src/app/api/student-schedule/link/route.ts:19`; `src/lib/line/schedule-bot.ts:131`; `src/lib/line/schedule-bot-group.ts:121` | The API route falls back to `request.nextUrl.origin`, so previews link to themselves (`src/lib/env.ts:22`). The two bot paths fall back to `DEFAULT_BASE_URL = "https://bgscheduler.vercel.app"` (`src/lib/line/schedule-bot.ts:78`, `src/lib/line/schedule-bot-group.ts:87`) |
-| `MAINTENANCE_MODE` | `.optional()` — L31 | Takes the staff UI offline while all 15 crons keep running | `src/lib/maintenance.ts` → `src/middleware.ts` | **Fail-open (MAINT-01):** the test is `=== "true"`, so unset, empty, `"TRUE"`, or a typo all leave the site serving. Deliberately the inverse polarity of `ENABLE_STUDENT_SCHEDULE_LIVE` — that flag defaults on, this one defaults off, because a bad env value must never black out production. Middleware reads `process.env` directly (edge runtime); the declaration here is inventory parity only. Changing it needs a redeploy. See [runbook §4.2](../operations/runbook.md#42-taking-the-site-offline-maintenance-mode) |
-| `MAINTENANCE_BYPASS_EMAILS` | `.optional()` — L34 | Comma-separated emails admitted through the maintenance gate | `src/lib/maintenance.ts` → `src/middleware.ts` | **Fail-closed (MAINT-03):** unset or empty yields an empty `Set`, so nobody bypasses. Mirrors `LINE_SCHEDULE_BOT_ADMIN_IDS`. Matched case-insensitively against `req.auth.user.email` after trimming |
+| `LINE_CHANNEL_SECRET` | `.min(1).optional()` — L13 | LINE Messaging API channel secret; verifies inbound webhook signatures | [`line/client.ts:21`, `:26`](../../src/lib/line/client.ts) | `lineSchedulerEnabled()` returns `false` ([`client.ts:19`–`23`](../../src/lib/line/client.ts)) and the LINE integration is off. Note `.min(1).optional()` rejects `""` |
+| `LINE_CHANNEL_ACCESS_TOKEN` | `.min(1).optional()` — L14 | LINE channel access token for profile fetch and push/reply | [`line/client.ts:22`, `:30`–`31`](../../src/lib/line/client.ts) | The same gate. If a push is attempted anyway, `lineAccessToken()` throws `LINE_CHANNEL_ACCESS_TOKEN is not configured` ([`:31`](../../src/lib/line/client.ts)) |
+| `ENABLE_LINE_SCHEDULER` | `.optional()` — L15 | Kill switch for LINE webhook **ingest** (not for sending) | [`line/client.ts:20`](../../src/lib/line/client.ts) | **Enabled by default.** The test is `!== "false"`, so only the literal lowercase `false` disables it — and only when both LINE credentials are present. LINE integration is *stable (scheduler write-path flag-gated)*; see [`features/line-integration.md`](../features/line-integration.md) |
+| `LINE_SCHEDULE_BOT_ADMIN_IDS` | `.optional()` — L19 | Comma-separated LINE user IDs allowed to drive the admin schedule bot | [`line/schedule-bot.ts:116`–`122`](../../src/lib/line/schedule-bot.ts) | **Fail-closed (SCHED-BOT-01):** unset or empty yields an empty `Set`, and `isScheduleBotAdmin` requires `ids.size > 0` ([`schedule-bot.ts:125`–`128`](../../src/lib/line/schedule-bot.ts)), so a parent messaging the OA can never reach the bot. Rationale at [`env.ts:16`–`18`](../../src/lib/env.ts) |
+| `ENABLE_STUDENT_SCHEDULE_LIVE` | `.optional()` — L23 | Opt-out kill switch for the live Wise overlay on `/schedule/{token}` | [`student-schedule/live.ts:66`–`68`](../../src/lib/student-schedule/live.ts) | **Enabled by default** — `!== "false"`. Off means the parent page renders the snapshot unchanged; the LINE schedule-bot paths sweep only in "rescue" mode ([`env.ts:20`–`22`](../../src/lib/env.ts)). Pinned by [`live.test.ts:32`–`45`](../../src/lib/student-schedule/__tests__/live.test.ts), which asserts `"0"` is *still on* |
+| `STUDENT_SCHEDULE_LINK_TTL_DAYS` | `z.coerce.number().int().positive().optional()` — L25 | Days a parent schedule link stays live | [`api/student-schedule/link/route.ts:55`](../../src/app/api/student-schedule/link/route.ts); [`line/schedule-bot.ts:138`](../../src/lib/line/schedule-bot.ts); [`line/schedule-bot-group.ts:137`](../../src/lib/line/schedule-bot-group.ts) | `DEFAULT_LINK_TTL_DAYS = 30` ([`student-schedule/links.ts:27`](../../src/lib/student-schedule/links.ts)). All three consumers use `Number(x) \|\| DEFAULT`, so `0`, `""`, and non-numeric values also land on 30 — the declared `.int().positive()` guard never runs |
+| `APP_BASE_URL` | `.url().optional()` — L27 | Absolute origin used to build parent-facing schedule links and the credit-digest report link | [`api/student-schedule/link/route.ts:19`](../../src/app/api/student-schedule/link/route.ts); [`line/schedule-bot.ts:135`](../../src/lib/line/schedule-bot.ts); [`line/schedule-bot-group.ts:134`](../../src/lib/line/schedule-bot-group.ts); [`line/credit-digest.ts:354`](../../src/lib/line/credit-digest.ts) | The API route falls back to `request.nextUrl.origin`, so previews link to themselves ([`env.ts:26`](../../src/lib/env.ts)). The three LINE paths fall back to a `DEFAULT_BASE_URL` const of `https://bgscheduler.vercel.app`. Note `.url().optional()` rejects `""` |
+| `MAINTENANCE_MODE` | `.optional()` — L32 | Takes the staff UI offline while every `vercel.json` cron keeps running | [`maintenance.ts:59`–`61`](../../src/lib/maintenance.ts) → [`middleware.ts:77`–`81`](../../src/middleware.ts) | **Fail-open (MAINT-01):** the test is `=== "true"`, so unset, empty, `"TRUE"`, or a typo all leave the site serving. Deliberately the inverse polarity of `ENABLE_STUDENT_SCHEDULE_LIVE` ([`maintenance.ts:9`–`14`](../../src/lib/maintenance.ts)). Middleware reads `process.env` directly because it runs on the edge; the declaration is inventory parity only ([`env.ts:28`–`31`](../../src/lib/env.ts)). Changing it needs a redeploy. Procedure: [runbook §4.6](../operations/runbook.md#46-kill-switches) |
+| `MAINTENANCE_BYPASS_EMAILS` | `.optional()` — L35 | Comma-separated emails admitted through the maintenance gate | [`maintenance.ts:79`–`88`, `:95`–`101`](../../src/lib/maintenance.ts) → [`middleware.ts:79`](../../src/middleware.ts) | **Fail-closed (MAINT-03):** unset or empty yields an empty `Set`, so nobody bypasses. Matched case-insensitively against `req.auth.user.email` after trimming. Mirrors `LINE_SCHEDULE_BOT_ADMIN_IDS` ([`maintenance.ts:19`–`21`](../../src/lib/maintenance.ts)) |
 
 ---
 
-## 2. Undeclared variables read at runtime (56 named + 1 dynamic family)
+## 2. Undeclared variables read at runtime (51 named + 1 dynamic family)
 
-None of the following appear in `src/lib/env.ts`. Grouped by owning subsystem.
+None of the following appear in `src/lib/env.ts`. Grouped by owning subsystem; 18 declared + 51 undeclared = the 69 runtime names.
 
 ### 2.1 OpenAI and AI features (9)
 
 | Variable | Purpose | Consumed at | If unset |
 |---|---|---|---|
-| `OPENAI_API_KEY` | Bearer token for OpenAI's Responses API (called over bare `fetch`; no vendor SDK) | `src/lib/ai/scheduler.ts:479,539`; `src/lib/ai/scheduler-conversation.ts:2341`; `src/lib/line/classifier.ts:93`; `src/lib/line/contact-aliases.ts:363`; `src/lib/post-class-feedback/ai.ts:59`; `src/lib/progress-tests/ai-summary.ts:78,164`; `src/lib/competitor-intelligence/ai.ts:158,297` | Every `is*AiConfigured()` gate returns `false`; features degrade to deterministic paths rather than erroring |
-| `ENABLE_AI_SCHEDULER` | Kill switch for the AI scheduler **and** the progress-test AI summary | `src/lib/ai/scheduler.ts:478,540`; `src/lib/progress-tests/ai-summary.ts:77` | **Enabled by default** — `!== "false"` |
-| `OPENAI_SCHEDULER_MODEL` | Primary model id; also the second-choice model for competitor intel | `src/lib/ai/scheduler.ts:462`; `src/lib/competitor-intelligence/ai.ts:66` | `DEFAULT_AI_SCHEDULER_MODEL = "gpt-5.4-mini"` (`src/lib/ai/scheduler.ts:8`) |
-| `OPENAI_SCHEDULER_SHADOW_MODEL` | Optional second model run in shadow for comparison | `src/lib/ai/scheduler.ts:466` | `undefined` — no shadow run |
-| `OPENAI_SCHEDULER_REASONING_EFFORT` | One of `none｜low｜medium｜high｜xhigh` | `src/lib/ai/scheduler.ts:470`–`474` | `DEFAULT_AI_SCHEDULER_REASONING_EFFORT = "low"` (`src/lib/ai/scheduler.ts:9`). Unrecognised values fall back silently |
-| `OPENAI_PROGRESS_TEST_MODEL` | Model for progress-test summaries | `src/lib/progress-tests/ai-summary.ts:88` | `DEFAULT_AI_SCHEDULER_MODEL` |
-| `OPENAI_POST_CLASS_FEEDBACK_MODEL` | Model for post-class feedback analysis | `src/lib/post-class-feedback/ai.ts:297` | inline literal `"gpt-5.4-mini"` |
-| `OPENAI_COMPETITOR_INTEL_MODEL` | Model for the competitor brief | `src/lib/competitor-intelligence/ai.ts:65` | `OPENAI_SCHEDULER_MODEL`, then `DEFAULT_COMPETITOR_AI_MODEL = "gpt-5.4-mini"` (`src/lib/competitor-intelligence/ai.ts:5`) |
-| `ENABLE_COMPETITOR_AI` | Kill switch for the competitor-intelligence brief | `src/lib/competitor-intelligence/ai.ts:71` | **Enabled by default** — `!== "false"` |
+| `OPENAI_API_KEY` | Bearer token for OpenAI's Responses API, called over bare `fetch` — there is no vendor SDK | 11 read sites: [`ai/scheduler.ts:479`, `:539`](../../src/lib/ai/scheduler.ts); [`ai/scheduler-conversation.ts:2341`](../../src/lib/ai/scheduler-conversation.ts); [`line/classifier.ts:93`](../../src/lib/line/classifier.ts); [`line/contact-aliases.ts:363`](../../src/lib/line/contact-aliases.ts); [`post-class-feedback/ai.ts:59`](../../src/lib/post-class-feedback/ai.ts); [`progress-tests/ai-summary.ts:78`, `:164`](../../src/lib/progress-tests/ai-summary.ts); [`competitor-intelligence/ai.ts:71`, `:158`, `:297`](../../src/lib/competitor-intelligence/ai.ts) | Every `is*AiConfigured()` gate returns `false`. Scheduler/classifier/alias paths throw; progress-test summaries skip; competitor briefs fall back to deterministic output; post-class AI throws `OPENAI_API_KEY is not configured` ([`ai.ts:60`](../../src/lib/post-class-feedback/ai.ts)) |
+| `ENABLE_AI_SCHEDULER` | Kill switch for the AI scheduler **and** the progress-test AI summary | [`ai/scheduler.ts:478`](../../src/lib/ai/scheduler.ts); [`progress-tests/ai-summary.ts:77`](../../src/lib/progress-tests/ai-summary.ts) | **Enabled by default** — `!== "false"`. The AI scheduler itself is *experimental* ([`features/ai-scheduler.md`](../features/ai-scheduler.md)) |
+| `OPENAI_SCHEDULER_MODEL` | Primary model id; also the second-choice model for competitor intel | [`ai/scheduler.ts:462`](../../src/lib/ai/scheduler.ts); [`competitor-intelligence/ai.ts:66`](../../src/lib/competitor-intelligence/ai.ts); [`scripts/compare-ai-scheduler-models.ts:42`](../../scripts/compare-ai-scheduler-models.ts). Two eval scripts *set* it: [`evaluate-ai-scheduler-2026-05-21.ts:813`](../../scripts/evaluate-ai-scheduler-2026-05-21.ts), [`replay-ai-scheduler-runs.ts:549`](../../scripts/replay-ai-scheduler-runs.ts) | `DEFAULT_AI_SCHEDULER_MODEL = "gpt-5.4-mini"` ([`scheduler.ts:8`](../../src/lib/ai/scheduler.ts)) |
+| `OPENAI_SCHEDULER_SHADOW_MODEL` | Optional second model run in shadow for comparison | [`ai/scheduler.ts:466`](../../src/lib/ai/scheduler.ts) | `undefined` — no shadow run |
+| `OPENAI_SCHEDULER_REASONING_EFFORT` | One of `none`, `low`, `medium`, `high`, `xhigh` | [`ai/scheduler.ts:469`–`475`](../../src/lib/ai/scheduler.ts) | `DEFAULT_AI_SCHEDULER_REASONING_EFFORT = "low"` ([`scheduler.ts:9`](../../src/lib/ai/scheduler.ts)). Unrecognised values fall back silently |
+| `OPENAI_PROGRESS_TEST_MODEL` | Model for progress-test feedback summaries | [`progress-tests/ai-summary.ts:88`](../../src/lib/progress-tests/ai-summary.ts) | `DEFAULT_AI_SCHEDULER_MODEL` |
+| `OPENAI_POST_CLASS_FEEDBACK_MODEL` | Model for post-class feedback authorship analysis | [`post-class-feedback/ai.ts:297`](../../src/lib/post-class-feedback/ai.ts) | inline literal `"gpt-5.4-mini"` |
+| `OPENAI_COMPETITOR_INTEL_MODEL` | Model for the competitor brief and war-room insights | [`competitor-intelligence/ai.ts:65`](../../src/lib/competitor-intelligence/ai.ts) | `OPENAI_SCHEDULER_MODEL`, then `DEFAULT_COMPETITOR_AI_MODEL = "gpt-5.4-mini"` ([`ai.ts:5`](../../src/lib/competitor-intelligence/ai.ts)) |
+| `ENABLE_COMPETITOR_AI` | Kill switch for the competitor-intelligence AI read-outs | [`competitor-intelligence/ai.ts:71`](../../src/lib/competitor-intelligence/ai.ts) | **Enabled by default** — `!== "false"`; a deterministic brief still ships |
 
 ### 2.2 Competitor intelligence — external providers (8 named + 1 dynamic)
 
 | Variable | Purpose | Consumed at | If unset |
 |---|---|---|---|
-| `APIFY_API_TOKEN` | Apify actor-run token (Instagram / Facebook scrapes) | `src/lib/competitor-intelligence/providers.ts:70,93` | Social collection is skipped |
-| `APIFY_INSTAGRAM_ACTOR` | Actor slug override | `src/lib/competitor-intelligence/providers.ts:17` | `"apify/instagram-scraper"` |
-| `APIFY_FACEBOOK_ACTOR` | Actor slug override | `src/lib/competitor-intelligence/providers.ts:18` | `"apify/facebook-posts-scraper"` |
-| `DATAFORSEO_LOGIN` | DataForSEO basic-auth login | `src/lib/competitor-intelligence/providers.ts:130` | SERP collection is skipped |
-| `DATAFORSEO_PASSWORD` | DataForSEO basic-auth password | `src/lib/competitor-intelligence/providers.ts:131` | as above |
-| `COMPETITOR_APIFY_COST_PER_ITEM_USD` | Cost model for spend estimation | `src/lib/competitor-intelligence/providers.ts:124`; `src/lib/competitor-intelligence/sync.ts:129` | `0.01` |
-| `COMPETITOR_DATAFORSEO_COST_PER_QUERY_USD` | Cost model for spend estimation | `src/lib/competitor-intelligence/providers.ts:179`; `src/lib/competitor-intelligence/sync.ts:136` | `0.002` |
-| `COMPETITOR_INTEL_MONTHLY_CAP_USD` | Global monthly hard spend cap | `src/lib/competitor-intelligence/budget.ts:20` | `250` for paid source types, `0` for `website` / `manual` (`budget.ts:23`–`24`) |
-| **`COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD`** *(dynamic name)* | Per-provider cap; the key is computed from the provider slug — upper-cased, non-alphanumerics → `_` | `src/lib/competitor-intelligence/budget.ts:19` | Falls through to the global cap. **Invisible to a literal grep**; concrete members include `COMPETITOR_APIFY_MONTHLY_CAP_USD` and `COMPETITOR_DATAFORSEO_MONTHLY_CAP_USD` |
+| `APIFY_API_TOKEN` | Apify actor-run token (Instagram / Facebook scrapes) | [`providers.ts:70`, `:93`](../../src/lib/competitor-intelligence/providers.ts) | Social collection returns an empty result with zero items fetched |
+| `APIFY_INSTAGRAM_ACTOR` | Actor slug override | [`providers.ts:17`](../../src/lib/competitor-intelligence/providers.ts) — module const, captured at import | `"apify/instagram-scraper"` |
+| `APIFY_FACEBOOK_ACTOR` | Actor slug override | [`providers.ts:18`](../../src/lib/competitor-intelligence/providers.ts) — module const | `"apify/facebook-posts-scraper"` |
+| `DATAFORSEO_LOGIN` | DataForSEO basic-auth login | [`providers.ts:130`](../../src/lib/competitor-intelligence/providers.ts) | SERP collection returns an empty result |
+| `DATAFORSEO_PASSWORD` | DataForSEO basic-auth password | [`providers.ts:131`](../../src/lib/competitor-intelligence/providers.ts) | as above |
+| `COMPETITOR_APIFY_COST_PER_ITEM_USD` | Cost model for spend estimation | [`providers.ts:124`](../../src/lib/competitor-intelligence/providers.ts) via `envNumber()` ([`:21`–`24`](../../src/lib/competitor-intelligence/providers.ts), computed access); [`sync.ts:129`](../../src/lib/competitor-intelligence/sync.ts) | `0.01`; negative or non-numeric values also fall back |
+| `COMPETITOR_DATAFORSEO_COST_PER_QUERY_USD` | Cost model for spend estimation | [`providers.ts:179`](../../src/lib/competitor-intelligence/providers.ts) via `envNumber()`; [`sync.ts:136`](../../src/lib/competitor-intelligence/sync.ts) | `0.002` |
+| `COMPETITOR_INTEL_MONTHLY_CAP_USD` | Global monthly hard spend cap | [`budget.ts:20`](../../src/lib/competitor-intelligence/budget.ts) | `250` for paid source types, `0` for `website` / `manual` ([`budget.ts:22`–`24`](../../src/lib/competitor-intelligence/budget.ts)) |
+| **`COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD`** *(dynamic name)* | Per-provider cap; the key is computed from the provider slug — upper-cased, non-alphanumerics → `_` | [`budget.ts:19`](../../src/lib/competitor-intelligence/budget.ts) | Falls through to the global cap. **Invisible to a literal grep.** Concrete members include `COMPETITOR_APIFY_MONTHLY_CAP_USD` and `COMPETITOR_DATAFORSEO_MONTHLY_CAP_USD` |
 
 ### 2.3 Classroom schedule email (7)
 
 | Variable | Purpose | Consumed at | If unset |
 |---|---|---|---|
-| `SCHEDULE_EMAIL_APPS_SCRIPT_URL` | Google Apps Script webhook that sends tutor schedule emails (primary sender) | `src/lib/classrooms/schedule-email.ts:299` | Sender config resolves to `undefined`; the send path surfaces the missing env-var name it carries alongside the value (`urlEnvName`, `schedule-email.ts:301`) |
-| `SCHEDULE_EMAIL_APPS_SCRIPT_SECRET` | Shared secret for that webhook | `src/lib/classrooms/schedule-email.ts:300` | as above |
-| `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_URL` | Backup sender webhook | `src/lib/classrooms/schedule-email.ts:291` | Backup sender unavailable |
-| `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET` | Backup shared secret | `src/lib/classrooms/schedule-email.ts:292` | as above |
-| `SCHEDULE_EMAIL_SENDER_NAME` | Display name on outgoing schedule mail | `src/lib/classrooms/schedule-email.ts:606` | `"BeGifted"` |
-| `SCHEDULE_EMAIL_REPLY_TO` | Reply-to address | `src/lib/classrooms/schedule-email.ts:607` | a personal gmail address hard-coded in source |
-| `SCHEDULE_EMAIL_PUBLIC_BASE_URL` | Absolute origin for the floor-plan-map image embedded in the email | `src/lib/classrooms/schedule-email.ts:266`; also a base-URL fallback for leave requests (`src/lib/leave-requests/config.ts:19`) | Falls through `VERCEL_PROJECT_PRODUCTION_URL` → `VERCEL_URL` → `DEFAULT_PUBLIC_BASE_URL = "https://bgscheduler.vercel.app"` (`schedule-email.ts:265`–`275`, `schedule-email.ts:13`) |
+| `SCHEDULE_EMAIL_APPS_SCRIPT_URL` | Google Apps Script webhook that sends tutor schedule emails (primary sender) | [`classrooms/schedule-email.ts:299`](../../src/lib/classrooms/schedule-email.ts) | The sender config resolves to `undefined` and the send path throws naming the variable ([`schedule-email.ts:603`–`604`](../../src/lib/classrooms/schedule-email.ts); the env names ride alongside the values at [`:293`–`294`, `:301`–`302`](../../src/lib/classrooms/schedule-email.ts)) |
+| `SCHEDULE_EMAIL_APPS_SCRIPT_SECRET` | Shared secret for that webhook | [`schedule-email.ts:300`](../../src/lib/classrooms/schedule-email.ts) | as above |
+| `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_URL` | Backup sender webhook | [`schedule-email.ts:291`](../../src/lib/classrooms/schedule-email.ts) | Backup sender unavailable |
+| `SCHEDULE_EMAIL_BACKUP_APPS_SCRIPT_SECRET` | Backup shared secret | [`schedule-email.ts:292`](../../src/lib/classrooms/schedule-email.ts) | as above |
+| `SCHEDULE_EMAIL_SENDER_NAME` | Display name on outgoing schedule mail | [`schedule-email.ts:606`](../../src/lib/classrooms/schedule-email.ts) | `"BeGifted"` |
+| `SCHEDULE_EMAIL_REPLY_TO` | Reply-to address | [`schedule-email.ts:607`](../../src/lib/classrooms/schedule-email.ts) | a personal Gmail address hard-coded in source |
+| `SCHEDULE_EMAIL_PUBLIC_BASE_URL` | Absolute origin for the floor-plan-map image embedded in the email | [`schedule-email.ts:266`](../../src/lib/classrooms/schedule-email.ts); also a base-URL fallback for leave requests ([`leave-requests/config.ts:19`](../../src/lib/leave-requests/config.ts)) | Falls through `VERCEL_PROJECT_PRODUCTION_URL` → `VERCEL_URL` → `DEFAULT_PUBLIC_BASE_URL = "https://bgscheduler.vercel.app"` ([`schedule-email.ts:265`–`276`](../../src/lib/classrooms/schedule-email.ts), const at [`:13`](../../src/lib/classrooms/schedule-email.ts)) |
 
-### 2.4 Post-class feedback payouts (10)
+### 2.4 Post-class feedback payouts and unattended charging (11)
 
-Nine `POST_CLASS_PAYOUT_*` keys plus one grace-period knob. Eight are read through a helper (`value(env, "NAME")`, `src/lib/post-class-feedback/payout-config.ts:11`–`13`) and one through a property access on an env record, so **none of them appear in a `process.env.NAME` grep**.
+Nine `POST_CLASS_PAYOUT_*` keys plus the two unattended-charging knobs. The nine are read through a helper (`value(env, "NAME")`, [`payout-config.ts:11`–`13`](../../src/lib/post-class-feedback/payout-config.ts)) or a property access on an env record ([`:50`](../../src/lib/post-class-feedback/payout-config.ts)), so **none appears in a `process.env.NAME` grep**. Validation happens at the operation boundary, not at module load, so the dashboard can report an incomplete setup without crashing ([`payout-config.ts:65`–`71`](../../src/lib/post-class-feedback/payout-config.ts)).
+
+The payout path is *stable, with writes flag-gated by `POST_CLASS_PAYOUT_WRITES_ENABLED` / `POST_CLASS_AUTO_APPROVE_ENABLED`* — see [`features/post-class-feedback.md`](../features/post-class-feedback.md).
 
 | Variable | Purpose | Consumed at | If unset |
 |---|---|---|---|
-| `POST_CLASS_PAYOUT_TARGET` | `scratch` or `production` — which Google workspace payouts touch | `payout-config.ts:44,79` | `requirePayoutGoogleTarget()` throws `POST_CLASS_PAYOUT_TARGET must be scratch or production` (`payout-config.ts:112`) |
-| `POST_CLASS_PAYOUT_CONNECTED_EMAIL` | Google account whose stored OAuth token performs Sheets/Drive calls | `payout-config.ts:38,80` | Named in the `Payout Google target is incomplete: …` error (`payout-config.ts:103`–`108`) |
-| `POST_CLASS_PAYOUT_DRIVE_FOLDER_ID` | Drive folder for generated payout artefacts | `payout-config.ts:16,81` | as above |
-| `POST_CLASS_PAYOUT_WORKBOOKS_FOLDER_ID` | Folder recursively inventoried for tutor-facing payout workbooks | `payout-config.ts:20,82` | as above |
-| `POST_CLASS_PAYOUT_MASTER_SPREADSHEET_ID` | The Begifted Payouts master workbook | `payout-config.ts:23,86` | as above |
-| `POST_CLASS_PAYOUT_SOURCE_SHEET_NAME` | Externally refreshed source tab; never written by the app | `payout-config.ts:27,90` | as above |
-| `POST_CLASS_PAYOUT_DEDUCTIONS_SHEET_NAME` | App-owned append-only `A:H` tab | `payout-config.ts:31,94` | as above |
-| `POST_CLASS_PAYOUT_COMPOSITE_SHEET_NAME` | Formula-backed union tab imported by tutor workbooks | `payout-config.ts:35,98` | as above |
-| `POST_CLASS_PAYOUT_WRITES_ENABLED` | Master write gate — **only the exact string `true`** enables app-originated payout writes | `payout-config.ts:50` | Writes disabled; `requirePayoutGoogleTarget({ forWrite: true })` throws (`payout-config.ts:126`–`130`) |
-| `POST_CLASS_AUTO_APPROVE_GRACE_HOURS` | Hours a `pending_review` deduction waits before auto-approval | `src/lib/post-class-feedback/auto-approval.ts:31` | `24` |
+| `POST_CLASS_PAYOUT_TARGET` | `scratch` or `production` — which Google workspace payouts touch | [`payout-config.ts:44`, `:79`](../../src/lib/post-class-feedback/payout-config.ts) | `requirePayoutGoogleTarget()` lists it as missing ([`:102`–`108`](../../src/lib/post-class-feedback/payout-config.ts)), then throws `POST_CLASS_PAYOUT_TARGET must be scratch or production.` ([`:112`](../../src/lib/post-class-feedback/payout-config.ts)) |
+| `POST_CLASS_PAYOUT_CONNECTED_EMAIL` | Google account whose stored OAuth token performs Sheets/Drive calls (lower-cased) | [`payout-config.ts:38`, `:80`](../../src/lib/post-class-feedback/payout-config.ts); indirectly via `payoutConnectedEmail()` at [`scripts/verify-drive-upload.ts:58`](../../scripts/verify-drive-upload.ts) | Named in the `Payout Google target is incomplete: …` error ([`:102`–`108`](../../src/lib/post-class-feedback/payout-config.ts)) |
+| `POST_CLASS_PAYOUT_DRIVE_FOLDER_ID` | Drive folder for generated payout artefacts | [`payout-config.ts:16`](../../src/lib/post-class-feedback/payout-config.ts) (module const), `:81` | as above |
+| `POST_CLASS_PAYOUT_WORKBOOKS_FOLDER_ID` | Folder recursively inventoried for tutor-facing payout workbooks | [`payout-config.ts:20`](../../src/lib/post-class-feedback/payout-config.ts), `:82` | as above |
+| `POST_CLASS_PAYOUT_MASTER_SPREADSHEET_ID` | The Begifted Payouts master workbook | [`payout-config.ts:23`](../../src/lib/post-class-feedback/payout-config.ts), `:86` | as above |
+| `POST_CLASS_PAYOUT_SOURCE_SHEET_NAME` | Externally refreshed source tab; never written by the app | [`payout-config.ts:27`](../../src/lib/post-class-feedback/payout-config.ts), `:90` | as above |
+| `POST_CLASS_PAYOUT_DEDUCTIONS_SHEET_NAME` | App-owned append-only `A:H` tab | [`payout-config.ts:31`](../../src/lib/post-class-feedback/payout-config.ts), `:94` | as above |
+| `POST_CLASS_PAYOUT_COMPOSITE_SHEET_NAME` | Formula-backed union tab imported by tutor workbooks | [`payout-config.ts:35`](../../src/lib/post-class-feedback/payout-config.ts), `:98` | as above |
+| `POST_CLASS_PAYOUT_WRITES_ENABLED` | Master write gate — **only the exact string `true`** enables app-originated payout writes | [`payout-config.ts:49`–`51`](../../src/lib/post-class-feedback/payout-config.ts) | Writes disabled; `requirePayoutGoogleTarget({ forWrite: true })` throws ([`:126`–`130`](../../src/lib/post-class-feedback/payout-config.ts)). Does **not** gate the read-only sheet verify |
+| `POST_CLASS_AUTO_APPROVE_ENABLED` | Single opt-in for unattended charging (INC-260829): the approve sweep, the payout-candidate carve-out for the `system:post-class-auto-approve` actor, and the ledger-retirement pass all key on it | [`payout-config.ts:164`–`168`](../../src/lib/post-class-feedback/payout-config.ts) — `raw?.trim() === "true"` | **Off** — approvals are human-only. The *reopen* sweep is deliberately not behind this flag ([`:157`–`163`](../../src/lib/post-class-feedback/payout-config.ts)) |
+| `POST_CLASS_AUTO_APPROVE_GRACE_HOURS` | Hours a `pending_review` deduction waits past its deadline before the sweep approves it | [`payout-config.ts:183`–`190`](../../src/lib/post-class-feedback/payout-config.ts) | `24` ([`:170`](../../src/lib/post-class-feedback/payout-config.ts)). Blank, non-numeric, or negative → 24; an explicit `"0"` is the deliberate charge-at-deadline mode ([`:172`–`181`](../../src/lib/post-class-feedback/payout-config.ts)) |
 
-> **Deployment cross-check.** `requirePayoutGoogleTarget` compares `POST_CLASS_PAYOUT_TARGET` against Vercel's injected `VERCEL_ENV` (`payout-config.ts:115`–`123`): a `production` deployment must target `production`, a `preview` deployment must target `scratch`. Both mismatches throw. There are deliberately no live spreadsheet, folder, tab, or account fallbacks in source — the module says so in its header comment (`payout-config.ts:1`–`5`).
+> **Deployment cross-check.** `requirePayoutGoogleTarget` compares `POST_CLASS_PAYOUT_TARGET` against Vercel's injected `VERCEL_ENV` ([`payout-config.ts:115`–`123`](../../src/lib/post-class-feedback/payout-config.ts)): a `production` deployment must target `production`, a `preview` deployment must target `scratch`. Both mismatches throw. Because `value()` returns `""` rather than `undefined`, an unset `VERCEL_ENV` (local dev) resolves to `""` and neither check fires. There are deliberately no live spreadsheet, folder, tab, or account fallbacks in source ([`payout-config.ts:1`–`5`](../../src/lib/post-class-feedback/payout-config.ts)).
 
 ### 2.5 Wise writeback verification gates (3)
 
@@ -194,58 +197,59 @@ Three independent gates, each requiring the exact string `"true"`. They exist so
 
 | Variable | Gate | Consumed at | If unset |
 |---|---|---|---|
-| `WISE_SESSION_OPERATIONS_VERIFIED` | LINE-originated session operations (cancel / reschedule writeback) | `src/lib/wise/operations.ts:11` (function); `src/lib/line/operational.ts:21` (**module-level `const`**, captured once at import) | Writeback stays dry-run |
-| `WISE_SESSION_CREATE_VERIFIED` | Real Wise session creation for progress-test bookings | `src/lib/progress-tests/config.ts:50` | Bookings record locally and require a manual Wise booking (`src/lib/progress-tests/config.ts:40`–`47`) |
-| `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` | Future-session subject rewrite during the student-promotion run. The name lives in a `const` (`src/lib/student-promotions/data.ts:201`) and is read via computed access, so a literal grep misses it | `src/lib/student-promotions/data.ts:450` | Course-action eligibility gate stays closed |
+| `WISE_SESSION_OPERATIONS_VERIFIED` | LINE-originated session operations (cancel / reschedule writeback) | [`wise/operations.ts:10`–`12`](../../src/lib/wise/operations.ts) (function); [`line/operational.ts:21`](../../src/lib/line/operational.ts) — a **module-level `const`**, captured once at import | Writeback stays dry-run |
+| `WISE_SESSION_CREATE_VERIFIED` | Real Wise session creation for progress-test bookings | [`progress-tests/config.ts:49`–`51`](../../src/lib/progress-tests/config.ts) | Bookings record locally and require a manual Wise booking ([`config.ts:40`–`47`](../../src/lib/progress-tests/config.ts)) |
+| `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` | Future-session subject rewrite during the student-promotion run. The name lives in a `const` ([`student-promotions/data.ts:201`](../../src/lib/student-promotions/data.ts)) and is read via computed access ([`:450`](../../src/lib/student-promotions/data.ts)), so a literal grep finds the `const`, not the read | [`data.ts:449`–`451`](../../src/lib/student-promotions/data.ts); enforced at [`:2412`](../../src/lib/student-promotions/data.ts) | Throws `WISE_SESSION_SUBJECT_UPDATE_VERIFIED=true is required before Wise session subject writes` |
 
 ### 2.6 Leave requests (4)
 
-All read at module scope in `src/lib/leave-requests/config.ts`, so values are frozen at first import.
+All read at module scope in [`src/lib/leave-requests/config.ts`](../../src/lib/leave-requests/config.ts), so the values are frozen at first import.
 
 | Variable | Purpose | Consumed at | If unset |
 |---|---|---|---|
-| `LEAVE_REQUESTS_SPREADSHEET_ID` | Source Google Sheet | `src/lib/leave-requests/config.ts:1`–`2` | literal `109o2vbmxlJ-l2U18Rs_WrjD7TMF5b6h__GiNkkQIfS8` |
-| `LEAVE_REQUESTS_SHEET_NAME` | Source tab | `src/lib/leave-requests/config.ts:4`–`5` | `"Form Responses 1"` |
-| `LEAVE_REQUESTS_CONNECTED_EMAIL` | Google OAuth token owner used for cron reads and status writeback; needs full Sheets scope, not `readonly` | `src/lib/leave-requests/config.ts:12`–`13` | Falls back to `SALES_DASHBOARD_CONNECTED_EMAIL`, then `""` — an empty owner, so the token lookup finds nothing |
-| `NEXT_PUBLIC_APP_URL` | Absolute app origin used in leave-request notifications | `src/lib/leave-requests/config.ts:18` | Falls through `SCHEDULE_EMAIL_PUBLIC_BASE_URL` → `VERCEL_URL` (protocol-prefixed) → `"https://bgscheduler.vercel.app"` (`config.ts:15`–`21`). The only `NEXT_PUBLIC_*` variable in the codebase, and it is read server-side only |
+| `LEAVE_REQUESTS_SPREADSHEET_ID` | Source Google Sheet | [`config.ts:1`–`2`](../../src/lib/leave-requests/config.ts) | literal `109o2vbmxlJ-l2U18Rs_WrjD7TMF5b6h__GiNkkQIfS8` |
+| `LEAVE_REQUESTS_SHEET_NAME` | Source tab | [`config.ts:4`–`5`](../../src/lib/leave-requests/config.ts) | `"Form Responses 1"` |
+| `LEAVE_REQUESTS_CONNECTED_EMAIL` | Google OAuth token owner used for cron reads and status writeback; needs full Sheets scope, not `readonly` | [`config.ts:12`–`13`](../../src/lib/leave-requests/config.ts) | Falls back to `SALES_DASHBOARD_CONNECTED_EMAIL`, then `""` — an empty owner, so the token lookup finds nothing |
+| `NEXT_PUBLIC_APP_URL` | Absolute app origin used in leave-request notifications | [`config.ts:18`](../../src/lib/leave-requests/config.ts) | Falls through `SCHEDULE_EMAIL_PUBLIC_BASE_URL` → `VERCEL_URL` (protocol-prefixed) → `"https://bgscheduler.vercel.app"` ([`config.ts:15`–`21`](../../src/lib/leave-requests/config.ts)). The only `NEXT_PUBLIC_*` variable in the codebase, and it is read server-side only |
 
 ### 2.7 Admissions notifications (3)
 
 | Variable | Purpose | Consumed at | If unset |
 |---|---|---|---|
-| `RESEND_API_KEY` | Resend API key for admissions email | `src/lib/admissions/notifications.ts:299`–`300` | Throws `RESEND_API_KEY is not configured` at send time |
-| `ADMISSIONS_EMAIL_FROM` | From header | `src/lib/admissions/notifications.ts:301` | `DEFAULT_FROM` at `notifications.ts:46` — the Resend sandbox sender (`onboarding@resend.dev`) |
-| `ADMISSIONS_EMAIL_REPLY_TO` | Reply-to header | `src/lib/admissions/notifications.ts:302` | `DEFAULT_REPLY_TO` at `notifications.ts:49` — a personal gmail address |
+| `RESEND_API_KEY` | Resend API key for admissions email (`RESEND_ENDPOINT`, [`admissions/notifications.ts:43`](../../src/lib/admissions/notifications.ts)) | [`notifications.ts:299`–`300`](../../src/lib/admissions/notifications.ts) | Throws `RESEND_API_KEY is not configured` at send time |
+| `ADMISSIONS_EMAIL_FROM` | From header | [`notifications.ts:301`](../../src/lib/admissions/notifications.ts) | `DEFAULT_FROM` at [`:46`](../../src/lib/admissions/notifications.ts) — `BeGifted Admissions <onboarding@resend.dev>`, the Resend sandbox sender |
+| `ADMISSIONS_EMAIL_REPLY_TO` | Reply-to header | [`notifications.ts:302`](../../src/lib/admissions/notifications.ts) | `DEFAULT_REPLY_TO` at [`:49`](../../src/lib/admissions/notifications.ts) — a personal Gmail address |
 
 ### 2.8 LINE operations, seeding, and one-offs (3)
 
 | Variable | Purpose | Consumed at | If unset |
 |---|---|---|---|
-| `LINE_VALIDATION_LEAD_EMAILS` | Comma-separated admins allowed to act as LINE link-validation leads | `src/lib/line/link-validation.ts:221`–`228` | Falls back to `DEFAULT_LINE_VALIDATION_LEAD_EMAILS`, a hard-coded allowlist at `src/lib/line/link-validation.ts:122` |
-| `SEED_ADMIN_EMAILS` | Comma-separated emails inserted into `admin_users` by the seed script | `src/lib/db/seed.ts:31` | Empty list — no admins seeded |
-| `SALES_DASHBOARD_CONNECTED_EMAIL` | **Vestigial.** Its only reader is the leave-requests fallback chain; the sales dashboard stores `connectedEmail` per source row in Postgres instead (`src/lib/sales-dashboard/data.ts:195,210`) | `src/lib/leave-requests/config.ts:13` | No effect unless `LEAVE_REQUESTS_CONNECTED_EMAIL` is also unset |
+| `LINE_VALIDATION_LEAD_EMAILS` | Comma-separated admins allowed to act as LINE link-validation leads | [`line/link-validation.ts:220`–`228`](../../src/lib/line/link-validation.ts) | Falls back to `DEFAULT_LINE_VALIDATION_LEAD_EMAILS`, a two-address hard-coded allowlist at [`:122`–`125`](../../src/lib/line/link-validation.ts) |
+| `SEED_ADMIN_EMAILS` | Comma-separated emails inserted into `admin_users` by the seed script | [`db/seed.ts:31`](../../src/lib/db/seed.ts) | Empty list — no admins seeded. Seed-time only; at runtime the allowlist is the `admin_users` table |
+| `SALES_DASHBOARD_CONNECTED_EMAIL` | **Vestigial.** Its only reader is the leave-requests fallback chain; the sales dashboard stores `connectedEmail` per source row in Postgres instead ([`sales-dashboard/data.ts:195`](../../src/lib/sales-dashboard/data.ts)) | [`leave-requests/config.ts:13`](../../src/lib/leave-requests/config.ts) | No effect unless `LEAVE_REQUESTS_CONNECTED_EMAIL` is also unset |
 
-### 2.9 Platform-injected (4) — set by Vercel or the shell, never by you
+### 2.9 Platform-injected (3) — set by Vercel, never by you
 
 | Variable | Read at | Notes |
 |---|---|---|
-| `VERCEL_ENV` | `src/lib/post-class-feedback/payout-config.ts:116` | `production` / `preview` / `development`; drives the payout-target cross-check |
-| `VERCEL_URL` | `src/lib/classrooms/schedule-email.ts:272`; `src/lib/leave-requests/config.ts:15` | Per-deployment hostname without protocol — both readers prepend `https://` |
-| `VERCEL_PROJECT_PRODUCTION_URL` | `src/lib/classrooms/schedule-email.ts:269` | Stable production hostname; preferred over `VERCEL_URL` |
-| `USER` | `scripts/import-room-capacity-model.ts:303` | Local shell user, recorded as `createdBy` on imported model runs |
+| `VERCEL_ENV` | [`post-class-feedback/payout-config.ts:116`](../../src/lib/post-class-feedback/payout-config.ts) via `value()`, so a literal grep misses it | `production` / `preview` / `development`; drives the payout-target cross-check in §2.4 |
+| `VERCEL_URL` | [`classrooms/schedule-email.ts:272`](../../src/lib/classrooms/schedule-email.ts); [`leave-requests/config.ts:15`](../../src/lib/leave-requests/config.ts) | Per-deployment hostname without protocol — both readers prepend `https://` |
+| `VERCEL_PROJECT_PRODUCTION_URL` | [`classrooms/schedule-email.ts:269`](../../src/lib/classrooms/schedule-email.ts) | Stable production hostname; preferred over `VERCEL_URL` |
 
-### 2.10 Test and script-only (6)
+### 2.10 Test and script-only (5 named, plus `TZ`)
 
 Not part of the deployed contract.
 
 | Variable | Read at | Purpose |
 |---|---|---|
-| `TEST_DATABASE_URL` | `src/tests/integration/db-helper.ts:24` | Points integration tests at an existing Postgres instead of starting a Testcontainer |
-| `TZ` | `vitest.config.ts:4` | **Written**, not read — pins the test process to `Asia/Bangkok` |
-| `CONFIRM_DELETE_LINE_TEST_DATA` | `scripts/delete-line-test-data.ts:34` | Destructive-script confirmation guard |
-| `PRODUCTION_BRANCH` | `scripts/assert-production-deploy-ready.mjs:5` | Branch the guarded deploy refuses to deviate from; defaults to `main` |
-| `GITHUB_ACTOR` | `scripts/check-sales-dashboard-scope.mjs:14` | CI actor identity for the Sheets-scope check |
-| *(dotenv loaders)* | `scripts/lib/payout-script.ts:9`–`10` and 6 sibling scripts | Several scripts hand-parse `.env.local` into `process.env` before running, because they execute outside the Next runtime. Not distinct variables — a mini dotenv shim |
+| `TEST_DATABASE_URL` | [`src/tests/integration/db-helper.ts:24`](../../src/tests/integration/db-helper.ts) | Points integration tests at an existing scratch Postgres instead of starting a Testcontainer |
+| `TZ` | [`vitest.config.ts:4`](../../vitest.config.ts) | **Written**, not read — pins the test process to `Asia/Bangkok` |
+| `CONFIRM_DELETE_LINE_TEST_DATA` | [`scripts/delete-line-test-data.ts:34`](../../scripts/delete-line-test-data.ts) | Destructive-script confirmation guard |
+| `PRODUCTION_BRANCH` | [`scripts/assert-production-deploy-ready.mjs:5`](../../scripts/assert-production-deploy-ready.mjs) | Branch the guarded `deploy:prod` refuses to deviate from; defaults to `main` |
+| `GITHUB_ACTOR` | [`scripts/check-sales-dashboard-scope.mjs:14`](../../scripts/check-sales-dashboard-scope.mjs) | CI actor identity for the sales-dashboard scope guard |
+| `USER` | [`scripts/import-room-capacity-model.ts:303`](../../scripts/import-room-capacity-model.ts) | Local shell user, recorded as `createdBy` on imported capacity-model runs |
+
+Several `scripts/*.ts` additionally hand-parse `.env.local` into `process.env` before running, because they execute outside the Next runtime — e.g. [`ipeds-import.ts:19`–`24`](../../scripts/ipeds-import.ts) and [`verify-drive-upload.ts:56`](../../scripts/verify-drive-upload.ts); others use `@next/env`'s `loadEnvConfig` ([`find-line-user-ids.ts:1`](../../scripts/find-line-user-ids.ts)). That is a dotenv shim, not a distinct variable.
 
 ---
 
@@ -253,22 +257,25 @@ Not part of the deployed contract.
 
 | Idiom | Variables | Semantics |
 |---|---|---|
-| `X !== "false"` | `ENABLE_LINE_SCHEDULER` (`src/lib/line/client.ts:20`), `ENABLE_AI_SCHEDULER` (`src/lib/ai/scheduler.ts:478`), `ENABLE_COMPETITOR_AI` (`src/lib/competitor-intelligence/ai.ts:71`) | **Opt-out.** Unset means enabled. Only the literal lowercase `false` disables. `0`, `no`, and `FALSE` do not |
-| `X === "true"` | `WISE_SESSION_OPERATIONS_VERIFIED` (`src/lib/wise/operations.ts:11`), `WISE_SESSION_CREATE_VERIFIED` (`src/lib/progress-tests/config.ts:50`), `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` (`src/lib/student-promotions/data.ts:450`), `POST_CLASS_PAYOUT_WRITES_ENABLED` (`src/lib/post-class-feedback/payout-config.ts:50`) | **Opt-in, fail-closed.** Unset means disabled. Every one of these guards a write to an external system |
-| Non-empty comma list | `LINE_SCHEDULE_BOT_ADMIN_IDS`, `LINE_VALIDATION_LEAD_EMAILS`, `SEED_ADMIN_EMAILS` | Split on `,`, trimmed, blanks dropped. `LINE_SCHEDULE_BOT_ADMIN_IDS` is fail-closed on empty (`src/lib/line/schedule-bot.ts:121`–`124`); the other two fall back to a hard-coded list or a no-op |
+| `X !== "false"` | `ENABLE_LINE_SCHEDULER` ([`line/client.ts:20`](../../src/lib/line/client.ts)), `ENABLE_AI_SCHEDULER` ([`ai/scheduler.ts:478`](../../src/lib/ai/scheduler.ts)), `ENABLE_COMPETITOR_AI` ([`competitor-intelligence/ai.ts:71`](../../src/lib/competitor-intelligence/ai.ts)), `ENABLE_STUDENT_SCHEDULE_LIVE` ([`student-schedule/live.ts:67`](../../src/lib/student-schedule/live.ts)) | **Opt-out.** Unset means enabled. Only the literal lowercase `false` disables — `0`, `no`, and `FALSE` do not; [`live.test.ts:37`–`40`](../../src/lib/student-schedule/__tests__/live.test.ts) pins `"0"` as *still on* |
+| `X === "true"` | `WISE_SESSION_OPERATIONS_VERIFIED` ([`wise/operations.ts:11`](../../src/lib/wise/operations.ts)), `WISE_SESSION_CREATE_VERIFIED` ([`progress-tests/config.ts:50`](../../src/lib/progress-tests/config.ts)), `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` ([`student-promotions/data.ts:450`](../../src/lib/student-promotions/data.ts)), `POST_CLASS_PAYOUT_WRITES_ENABLED` ([`payout-config.ts:50`](../../src/lib/post-class-feedback/payout-config.ts)), `POST_CLASS_AUTO_APPROVE_ENABLED` ([`payout-config.ts:167`](../../src/lib/post-class-feedback/payout-config.ts) — the only one that `.trim()`s first), `MAINTENANCE_MODE` ([`maintenance.ts:60`](../../src/lib/maintenance.ts)) | **Opt-in.** Unset means off. For the five write gates that is fail-*closed*: no external write can happen by accident. For `MAINTENANCE_MODE` the identical idiom is fail-*open* — the site stays up by accident. Same polarity, inverted safety reading, and [`maintenance.ts:9`–`14`](../../src/lib/maintenance.ts) explains why |
+| Non-empty comma list | `LINE_SCHEDULE_BOT_ADMIN_IDS` ([`schedule-bot.ts:116`–`122`](../../src/lib/line/schedule-bot.ts)), `MAINTENANCE_BYPASS_EMAILS` ([`maintenance.ts:79`–`88`](../../src/lib/maintenance.ts)), `LINE_VALIDATION_LEAD_EMAILS` ([`link-validation.ts:220`–`228`](../../src/lib/line/link-validation.ts)), `SEED_ADMIN_EMAILS` ([`seed.ts:31`](../../src/lib/db/seed.ts)) | Split on `,`, trimmed, blanks dropped. The first two are fail-closed on empty (nobody qualifies); the last two fall back to a hard-coded list or a no-op |
 
-Base-URL resolution is a fourth pattern — three independent cascades that can disagree within one deployment:
+Base-URL resolution is a fourth pattern — four independent cascades that can disagree inside one deployment:
 
 ```mermaid
 flowchart TD
-  subgraph SL["Parent schedule links"]
-    A1["APP_BASE_URL"] --> A2["request.nextUrl.origin<br/>(API route only)"] --> A3["https://bgscheduler.vercel.app"]
+  subgraph SL["Parent schedule link · POST /api/student-schedule/link"]
+    A1["APP_BASE_URL"] --> A2["request.nextUrl.origin<br/>link/route.ts:19"]
   end
-  subgraph SE["Schedule emails"]
-    B1["SCHEDULE_EMAIL_PUBLIC_BASE_URL"] --> B2["VERCEL_PROJECT_PRODUCTION_URL"] --> B3["VERCEL_URL"] --> B4["https://bgscheduler.vercel.app"]
+  subgraph LB["LINE schedule bots + credit digest"]
+    L1["APP_BASE_URL"] --> L2["https://bgscheduler.vercel.app<br/>schedule-bot.ts:135 · schedule-bot-group.ts:134 · credit-digest.ts:354"]
+  end
+  subgraph SE["Schedule emails · floor-plan image"]
+    B1["SCHEDULE_EMAIL_PUBLIC_BASE_URL"] --> B2["VERCEL_PROJECT_PRODUCTION_URL"] --> B3["VERCEL_URL"] --> B4["https://bgscheduler.vercel.app<br/>schedule-email.ts:265-276"]
   end
   subgraph LR2["Leave-request notifications"]
-    C1["NEXT_PUBLIC_APP_URL"] --> C2["SCHEDULE_EMAIL_PUBLIC_BASE_URL"] --> C3["VERCEL_URL"] --> C4["https://bgscheduler.vercel.app"]
+    C1["NEXT_PUBLIC_APP_URL"] --> C2["SCHEDULE_EMAIL_PUBLIC_BASE_URL"] --> C3["VERCEL_URL"] --> C4["https://bgscheduler.vercel.app<br/>leave-requests/config.ts:15-21"]
   end
 ```
 
@@ -276,36 +283,40 @@ flowchart TD
 
 ## 4. `.env.example` reconciliation
 
-`.env.example` lists **37** keys. Every one is genuinely read somewhere — there are no dead entries. But **34** keys read by non-test code are missing from it:
+`.env.example` lists **40** keys across 85 lines. Every one is genuinely read somewhere — there are no dead entries, and all 18 schema-declared keys are present. But **29** keys read by non-test runtime code are missing from it:
 
 - **AI models and flags (6):** `OPENAI_SCHEDULER_SHADOW_MODEL`, `OPENAI_SCHEDULER_REASONING_EFFORT`, `OPENAI_PROGRESS_TEST_MODEL`, `OPENAI_POST_CLASS_FEEDBACK_MODEL`, `OPENAI_COMPETITOR_INTEL_MODEL`, `ENABLE_COMPETITOR_AI`
 - **Competitor providers (8):** `APIFY_API_TOKEN`, `APIFY_INSTAGRAM_ACTOR`, `APIFY_FACEBOOK_ACTOR`, `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD`, `COMPETITOR_APIFY_COST_PER_ITEM_USD`, `COMPETITOR_DATAFORSEO_COST_PER_QUERY_USD`, `COMPETITOR_INTEL_MONTHLY_CAP_USD`
 - **Wise writeback gates (3):** `WISE_SESSION_OPERATIONS_VERIFIED`, `WISE_SESSION_CREATE_VERIFIED`, `WISE_SESSION_SUBJECT_UPDATE_VERIFIED`
 - **Admissions email (3):** `RESEND_API_KEY`, `ADMISSIONS_EMAIL_FROM`, `ADMISSIONS_EMAIL_REPLY_TO`
-- **Ops and misc (5):** `SCHEDULE_EMAIL_PUBLIC_BASE_URL`, `LINE_VALIDATION_LEAD_EMAILS`, `POST_CLASS_AUTO_APPROVE_GRACE_HOURS`, `SEED_ADMIN_EMAILS`, `SALES_DASHBOARD_CONNECTED_EMAIL`
-- **Platform-injected (4), correctly omitted:** `VERCEL_ENV`, `VERCEL_URL`, `VERCEL_PROJECT_PRODUCTION_URL`, `USER`
-- **Test / script-only (5), reasonably omitted:** `TEST_DATABASE_URL`, `TZ`, `CONFIRM_DELETE_LINE_TEST_DATA`, `PRODUCTION_BRANCH`, `GITHUB_ACTOR`
+- **Unattended charging (2):** `POST_CLASS_AUTO_APPROVE_ENABLED`, `POST_CLASS_AUTO_APPROVE_GRACE_HOURS` — the two knobs that decide whether money moves without a human
+- **Ops and misc (4):** `SCHEDULE_EMAIL_PUBLIC_BASE_URL`, `LINE_VALIDATION_LEAD_EMAILS`, `SEED_ADMIN_EMAILS`, `SALES_DASHBOARD_CONNECTED_EMAIL`
+- **Platform-injected (3), correctly omitted:** `VERCEL_ENV`, `VERCEL_URL`, `VERCEL_PROJECT_PRODUCTION_URL`
 
-The actionable gap is the first five groups — **25 keys** that change production behaviour and are discoverable only by reading source.
+The actionable gap is the first six groups — **26 keys** that change production behaviour and are discoverable only by reading source. The 5 test/script-only keys (§2.10) are reasonably omitted. The `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family cannot be listed at all, because the key name is computed at call time ([`budget.ts:19`](../../src/lib/competitor-intelligence/budget.ts)).
 
-The `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family cannot be listed in `.env.example` at all, because the key name is computed at call time (`src/lib/competitor-intelligence/budget.ts:19`).
+**Three blank placeholders would fail the declared schema.** `.env.example:24`–`25` ship `LINE_CHANNEL_SECRET=` and `LINE_CHANNEL_ACCESS_TOKEN=`, and `.env.example:45` ships `APP_BASE_URL=`. A dotenv loader sets those to `""`, not `undefined`, and `z.string().min(1).optional()` / `z.string().url().optional()` reject `""`. Today this is harmless because the schema never runs and every consumer `.trim()`s and treats `""` as unset ([`line/client.ts:21`–`22`](../../src/lib/line/client.ts), [`link/route.ts:19`](../../src/app/api/student-schedule/link/route.ts)). If `src/lib/env.ts` is ever wired into a boot path, a `.env.local` copied verbatim from the template will throw on those three lines. `MAINTENANCE_MODE=`, `MAINTENANCE_BYPASS_EMAILS=`, and `LINE_SCHEDULE_BOT_ADMIN_IDS=` are plain `.optional()` strings and parse fine when blank.
+
+Two comments in the repo carried a stale cron count until 2026-09-02: [`.env.example:48`](../../.env.example) and [`src/lib/maintenance.ts:5`](../../src/lib/maintenance.ts) said "15 Vercel Crons". Both now read **17**, matching `vercel.json` — see [`crons.md`](./crons.md).
 
 ---
 
 ## 5. Drift flags and open questions
 
-1. **The schema is dead code.** Nothing imports `src/lib/env.ts`, so its validation never runs and its `.default()` values never apply. Either wire it into a startup path (root layout or a new `instrumentation.ts`) or relabel it as advisory. `README.md:172`–`179` currently claims it "throws at startup".
-2. **Prose counts are wrong in two places.** `AGENTS.md:287` ("9 required") and `CLAUDE.md:104` / `CLAUDE.md:120` ("9 required + 3 optional LINE vars") should read 7 hard-required + 2 defaulted + 6 optional. `AGENTS.md:303` also says "roughly 50 environment variables are read across the codebase"; the measured figure is 71 named keys.
-3. **The schema covers 15 of 71 live keys.** Is direct `process.env` access with per-call-site guards the intended pattern, or should the schema become the inventory? Every `OPENAI_*`, `POST_CLASS_PAYOUT_*`, `SCHEDULE_EMAIL_*`, `LEAVE_REQUESTS_*`, `WISE_SESSION_*_VERIFIED`, `APIFY_*`, `DATAFORSEO_*`, `COMPETITOR_*`, `RESEND_API_KEY`, and `ADMISSIONS_EMAIL_*` key sits outside it.
-4. **`WISE_INSTITUTE_ID` is effectively hard-coded 38 times.** The literal `696e1f4d90102225641cc413` appears as an inline fallback or module const at ~14 distinct sites. Only `src/lib/room-capacity/utilization.ts:433` and `src/lib/post-class-feedback/sync.ts:1053` refuse to guess.
-5. **Three different failure modes for the same Wise credentials.** `createWiseClient()` (`src/lib/wise/client.ts:159`–`166`) asserts `WISE_USER_ID!` / `WISE_API_KEY!` and builds a client with `undefined` credentials that 401s at request time; `createWiseClientFromEnv()` (`src/lib/classrooms/data.ts:1150`–`1158`) and `createPromotionWiseClient()` (`src/lib/student-promotions/data.ts:298`–`306`) throw immediately with named errors.
-6. **`CRON_SECRET` checking is duplicated six times.** `src/lib/internal/cron-auth.ts` is the shared helper (15 importers), yet six internal routes reimplement the identical constant-time comparison inline. A change to the algorithm would need seven edits.
-7. **Personal gmail addresses as production fallbacks.** `SCHEDULE_EMAIL_REPLY_TO` (`src/lib/classrooms/schedule-email.ts:607`), `ADMISSIONS_EMAIL_REPLY_TO` (`src/lib/admissions/notifications.ts:49`), and `LINE_VALIDATION_LEAD_EMAILS` (`src/lib/line/link-validation.ts:122`) all default to individual addresses baked into source. Intentional, or should these be required?
-8. **`ADMISSIONS_EMAIL_FROM` defaults to the Resend sandbox sender** (`onboarding@resend.dev`, `src/lib/admissions/notifications.ts:46`). If it is unset in production, admissions mail ships from a sandbox domain rather than failing loudly.
-9. **`WISE_SESSION_OPERATIONS_VERIFIED` is captured at module load** in `src/lib/line/operational.ts:21`, unlike the function-based readers elsewhere. Toggling it requires a redeploy on that code path but not on `src/lib/wise/operations.ts:11`.
-10. **`APP_BASE_URL` naming collision.** `src/lib/leave-requests/config.ts:17` exports a constant literally named `APP_BASE_URL` that is sourced from a different cascade than the `APP_BASE_URL` env var. Two things with one name.
-11. **`SALES_DASHBOARD_CONNECTED_EMAIL` has no owner.** Its only reader is the leave-requests fallback (`src/lib/leave-requests/config.ts:13`); the sales dashboard itself resolves `connectedEmail` from Postgres. Should it be renamed or removed?
-12. **`STUDENT_SCHEDULE_LINK_TTL_DAYS` loses its declared validation.** All three consumers use `Number(x) || 30`, so `0` and non-numeric strings silently become 30 — the `.int().positive()` constraint at `src/lib/env.ts:21` would have rejected them, but it never runs.
+1. **The schema is dead code.** Nothing imports `src/lib/env.ts`, so its validation never runs and its `.default()` values never apply. Either wire it into a startup path (root layout, or a new `instrumentation.ts`) or relabel it as advisory. Tracked as DEF-2 / DEAD-1 / ENV-1 in [`OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md).
+2. **Prose counts are stale in several places.** [`AGENTS.md:291`](../../AGENTS.md) ("9 required") and [`:307`](../../AGENTS.md) ("9 required plus 9 optional … roughly 50 variables"), and [`README.md:180`–`187`](../../README.md) ("15 declared … 6 optional"), should all read 7 hard-required + 2 defaulted + 9 optional = 18 declared, 69 read at runtime. [`OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md) ENV-2 / ENV-3 still say 15 declared and 56–58 read. `CLAUDE.md:104`, `:120` has the 7/2/9 split right.
+3. **The schema covers 18 of 69 live keys.** Is direct `process.env` access with per-call-site guards the intended pattern, or should the schema become the inventory? Every `OPENAI_*`, `POST_CLASS_*`, `SCHEDULE_EMAIL_*`, `LEAVE_REQUESTS_*`, `WISE_SESSION_*_VERIFIED`, `APIFY_*`, `DATAFORSEO_*`, `COMPETITOR_*`, `RESEND_API_KEY`, and `ADMISSIONS_EMAIL_*` key sits outside it. The `POST_CLASS_*` module argues for operation-boundary validation explicitly ([`payout-config.ts:65`–`71`](../../src/lib/post-class-feedback/payout-config.ts)); the others are silent.
+4. **`WISE_INSTITUTE_ID` is effectively hard-coded.** The literal `696e1f4d90102225641cc413` appears 18 times in non-test `src/` — 11 inline fallbacks plus 6 `DEFAULT_INSTITUTE_ID` consts. Only [`room-capacity/utilization.ts:433`](../../src/lib/room-capacity/utilization.ts) and [`post-class-feedback/sync.ts:1053`](../../src/lib/post-class-feedback/sync.ts) refuse to guess.
+5. **Three different failure modes for the same Wise credentials.** `createWiseClient()` ([`wise/client.ts:215`–`221`](../../src/lib/wise/client.ts)) asserts `WISE_USER_ID!` / `WISE_API_KEY!` and builds a client whose Basic header encodes `"undefined:undefined"` ([`:70`](../../src/lib/wise/client.ts)), 401ing at request time; `createWiseClientFromEnv()` ([`classrooms/data.ts:1151`–`1159`](../../src/lib/classrooms/data.ts)) and `createPromotionWiseClient()` ([`student-promotions/data.ts:298`–`306`](../../src/lib/student-promotions/data.ts)) throw immediately with named errors; [`wise-activity/reconciliation.ts:770`, `:797`](../../src/lib/wise-activity/reconciliation.ts) return a typed error result.
+6. **`CRON_SECRET` checking is duplicated six times.** [`cron-auth.ts`](../../src/lib/internal/cron-auth.ts) is the shared helper with 16 route importers, yet six internal routes reimplement the identical constant-time comparison inline. A change to the algorithm needs seven edits.
+7. **Personal Gmail addresses as production fallbacks.** `SCHEDULE_EMAIL_REPLY_TO` ([`schedule-email.ts:607`](../../src/lib/classrooms/schedule-email.ts)), `ADMISSIONS_EMAIL_REPLY_TO` ([`notifications.ts:49`](../../src/lib/admissions/notifications.ts)), and `LINE_VALIDATION_LEAD_EMAILS` ([`link-validation.ts:122`–`125`](../../src/lib/line/link-validation.ts)) all default to individual addresses baked into source. Intentional, or should these be required?
+8. **`ADMISSIONS_EMAIL_FROM` defaults to the Resend sandbox sender** (`onboarding@resend.dev`, [`notifications.ts:46`](../../src/lib/admissions/notifications.ts)). Unset in production, admissions mail ships from a sandbox domain rather than failing loudly.
+9. **Several flags are captured at module load, not per call.** `WISE_SESSION_OPERATIONS_VERIFIED` in [`line/operational.ts:21`](../../src/lib/line/operational.ts) (unlike the function reader at [`wise/operations.ts:11`](../../src/lib/wise/operations.ts)); the six `POST_CLASS_PAYOUT_*` module consts at [`payout-config.ts:15`–`35`](../../src/lib/post-class-feedback/payout-config.ts) (unlike `requirePayoutGoogleTarget`, which re-reads); the `APIFY_*_ACTOR` slugs ([`providers.ts:17`–`18`](../../src/lib/competitor-intelligence/providers.ts)); and all four `LEAVE_REQUESTS_*` values ([`config.ts:1`–`21`](../../src/lib/leave-requests/config.ts)). Toggling any of these needs a redeploy on that code path.
+10. **`APP_BASE_URL` naming collision.** [`leave-requests/config.ts:17`](../../src/lib/leave-requests/config.ts) exports a constant literally named `APP_BASE_URL` sourced from `NEXT_PUBLIC_APP_URL` — a different cascade from the `APP_BASE_URL` env var (§3 diagram). Two things, one name.
+11. **`SALES_DASHBOARD_CONNECTED_EMAIL` has no owner.** Its only reader is the leave-requests fallback ([`config.ts:13`](../../src/lib/leave-requests/config.ts)); the sales dashboard resolves `connectedEmail` from Postgres. Rename or remove?
+12. **`STUDENT_SCHEDULE_LINK_TTL_DAYS` loses its declared validation.** All three consumers use `Number(x) || 30`, so `0`, `""`, and non-numeric strings silently become 30 — the `.int().positive()` constraint at [`env.ts:25`](../../src/lib/env.ts) would have rejected them, but it never runs.
+13. **`.env.example` blanks contradict the schema** for `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, and `APP_BASE_URL` (§4). Either the template should omit those keys rather than ship them blank, or the schema should tolerate `""` — but only once it actually executes.
+14. **Whether `POST_CLASS_AUTO_APPROVE_ENABLED` and `POST_CLASS_PAYOUT_WRITES_ENABLED` are set in production is a runtime fact** the repository cannot attest. Both default off in code; [`features/post-class-feedback.md`](../features/post-class-feedback.md) carries the same caveat.
 
 ---
 
@@ -313,23 +324,25 @@ The `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family cannot be listed in `.env.exa
 
 | Surface | How to set | Notes |
 |---|---|---|
-| Vercel (preview + production) | Project → Settings → Environment Variables | `VERCEL_ENV`, `VERCEL_URL`, and `VERCEL_PROJECT_PRODUCTION_URL` are injected automatically. `POST_CLASS_PAYOUT_TARGET` **must** differ per environment (`production` vs `scratch`) or `requirePayoutGoogleTarget` throws |
-| Local dev | `.env.local` (git-ignored) | Next.js loads it automatically. Several `scripts/*.ts` hand-parse it themselves because they run outside the Next runtime (`scripts/lib/payout-script.ts:9`–`10`) |
-| Cron invocations | `Authorization: Bearer $CRON_SECRET` | Vercel injects the header from the project's `CRON_SECRET`. See [`crons.md`](./crons.md) |
-| Tests | `vitest.config.ts:4` pins `TZ`; `TEST_DATABASE_URL` optionally replaces Testcontainers | |
+| Vercel (preview + production) | Project → Settings → Environment Variables | `VERCEL_ENV`, `VERCEL_URL`, and `VERCEL_PROJECT_PRODUCTION_URL` are injected automatically. `POST_CLASS_PAYOUT_TARGET` **must** differ per environment (`production` vs `scratch`) or `requirePayoutGoogleTarget` throws ([`payout-config.ts:118`–`123`](../../src/lib/post-class-feedback/payout-config.ts)). Module-load captures (drift flag 9) need a redeploy to pick up a change |
+| Local dev | `.env.local` (git-ignored) | Next.js loads it automatically. Several `scripts/*.ts` hand-parse it themselves because they run outside the Next runtime (§2.10) |
+| Cron invocations | `Authorization: Bearer $CRON_SECRET` | Vercel injects the header from the project's `CRON_SECRET`. See [runbook §4.1](../operations/runbook.md#41-how-the-auth-check-works) and [`crons.md`](./crons.md) |
+| Tests | [`vitest.config.ts:4`](../../vitest.config.ts) pins `TZ`; `TEST_DATABASE_URL` optionally replaces Testcontainers; unit tests set or stub individual keys directly on `process.env` | |
 
-Never log values. `src/lib/env.ts:31` logs only `fieldErrors` (key names), and the project convention keeps bodies, secrets, and env values out of `console.*` entirely.
+Never log values. [`env.ts:43`](../../src/lib/env.ts) logs only `fieldErrors` (key names), and the project convention keeps bodies, secrets, and env values out of `console.*` entirely.
 
 ---
 
 ## Related references
 
-- [`crons.md`](./crons.md) — the cron entries `CRON_SECRET` protects and the internal handlers behind them
+- [`crons.md`](./crons.md) — the cron entries `CRON_SECRET` protects, and the internal handlers behind them
 - [`api/index.md`](./api/index.md) — which endpoints gate on `CRON_SECRET` vs. an admin session
 - [`wise-api.md`](./wise-api.md) — what the `WISE_*` credentials authenticate against
+- [`../operations/runbook.md`](../operations/runbook.md) — cron auth (§4.1) and the kill-switch table (§4.6)
 - [`../operations/auth-and-access.md`](../operations/auth-and-access.md) — how `AUTH_*` feeds the Auth.js allowlist
-- [`../OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md) — unresolved configuration questions
+- [`../features/post-class-feedback.md`](../features/post-class-feedback.md) — why the `POST_CLASS_*` gates exist
+- [`../OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md) — unresolved configuration questions (DEF-2, DEAD-1, ENV-1 … ENV-10)
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against main@0cd1e81 (clean tree) on 2026-09-02._

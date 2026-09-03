@@ -2,7 +2,7 @@
 // Maintenance mode — the in-app off switch for the staff UI.
 //
 // Vercel's Pause Project cannot serve this purpose: pausing blocks the
-// production deployment, and the 15 Vercel Crons target that same deployment,
+// production deployment, and the 17 Vercel Crons target that same deployment,
 // so pausing stops the syncs too. This gate lives above the auth check instead,
 // which lets the human-facing surface go dark while the data keeps flowing.
 //

@@ -1,15 +1,15 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-05-31
+**Analysis Date:** 2026-09-02
 
 ## Test Framework
 
 ### Runner
 
-- **Vitest ^4.1.2** — devDependency (`package.json:75`)
-- Coverage provider **`@vitest/coverage-v8` ^4.1.5** (`package.json:67`)
-- Container harness: **`testcontainers` ^11.14.0** + **`@testcontainers/postgresql` ^11.14.0** (`package.json:73`, `:61`)
-- Config: `vitest.config.ts` (project root, 53 lines — the whole test configuration)
+- **Vitest ^4.1.2** — devDependency (`package.json:79`)
+- Coverage provider **`@vitest/coverage-v8` ^4.1.5** (`package.json:71`)
+- Container harness: **`testcontainers` ^11.14.0** + **`@testcontainers/postgresql` ^11.14.0** (`package.json:77`, `:65`)
+- Config: `vitest.config.ts` (project root, 53 lines — the whole test configuration; there is no second config file, no `jest.config`, no Playwright/Cypress config)
 
 ```typescript
 // vitest.config.ts (abridged)
@@ -39,9 +39,9 @@ Key config decisions:
 
 - **`process.env.TZ = "Asia/Bangkok"` is set at config load** (`vitest.config.ts:4`), before any project spins up. This is load-bearing: the product normalizes every timestamp to Asia/Bangkok, and dozens of date-boundary tests assume the runner's local zone is Bangkok rather than the CI host's zone.
 - **No top-level `environment`/`globals`** — both are set per project (`vitest.config.ts:30-31`, `:40-41`). Both projects use `environment: "node"` and `globals: true`.
-- **There are no DOM tests.** No `jsdom`, no `happy-dom`, no `@testing-library/*` anywhere in `package.json` or `src/`. The 65 `*.test.tsx` files render React to a string with `renderToStaticMarkup` from `react-dom/server` and assert on the markup.
+- **There are no DOM tests.** No `jsdom`, no `happy-dom`, no `@testing-library/*` anywhere in `package.json` or `src/` (verified by grep against `package.json`). The 69 `*.test.tsx` files render React to a string with `renderToStaticMarkup` from `react-dom/server` and assert on the markup.
 - `@` alias mirrors `tsconfig.json` so the same `@/lib/...` imports resolve in tests (`vitest.config.ts:7-11`).
-- **No `setupFiles`, no `globalSetup`, no `__mocks__` directory** — there is no global bootstrap; every file wires its own mocks and fixtures.
+- **No `setupFiles`, no `globalSetup`, no `__mocks__` directory, no `.snap` files** — there is no global bootstrap and no snapshot testing; every file wires its own mocks and fixtures.
 
 ### Vitest Projects (unit vs integration)
 
@@ -77,7 +77,7 @@ npm run test:coverage     # Unit + v8 coverage — `vitest run --project unit --
                    && git diff --check && npm run guard:production-route-surface"
 ```
 
-(`package.json:34`) — and `deploy:prod` runs `verify:release` before `assert-production-deploy-ready.mjs` (`package.json:35`). So the **unit** project gates every guarded production deploy; the integration project does not.
+(`package.json:38`) — and `deploy:prod` runs `verify:release` before `assert-production-deploy-ready.mjs` (`package.json:39`). So the **unit** project gates every guarded production deploy; the integration project does not.
 
 Coverage is **not gated** anywhere — no threshold, no CI enforcement. It is produced on demand.
 
@@ -86,49 +86,50 @@ Coverage is **not gated** anywhere — no threshold, no CI enforcement. It is pr
 ### Location
 
 - **Sibling `__tests__/` directories**, co-located with the module under test. The source under test is one level up (`../module-name`) or reached through the `@/` alias.
-- **All 369 test files live inside a `__tests__/` directory** — verified: `find src \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -path "*__tests__*"` returns nothing.
+- **All 389 test files live inside a `__tests__/` directory** — verified: `find src \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -path "*__tests__*"` returns nothing.
 - Shared integration infrastructure lives in **`src/tests/integration/`** (`db-helper.ts`, `README.md`) — the only test directory that is not a `__tests__/`.
 
-The suite is **369 test files** (357 unit + 12 integration), holding **985 `describe` blocks** and **4,061 `it` blocks** (unit: 3,923 `it` / 960 `describe`; integration: 138 `it` / 25 `describe`).
+The suite is **389 test files** (376 unit + 13 integration), holding roughly **1,057 `describe` blocks** and **4,445 `it` blocks** (unit: 4,282 `it` / 1,030 `describe`; integration: 163 `it` / 27 `describe`; grep-counted).
 
 Distribution by layer:
 
 | Layer | Files |
 |---|---|
-| `src/lib/**/__tests__/` | 206 |
-| `src/app/api/**/__tests__/` | 81 |
-| `src/components/**/__tests__/` | 79 |
+| `src/lib/**/__tests__/` | 220 |
+| `src/components/**/__tests__/` | 84 |
+| `src/app/api/**/__tests__/` | 82 |
 | `src/__tests__/` (app-level invariants: `middleware.test.ts`, `vercel-crons.test.ts`) | 2 |
 | `src/app/(app)/**/__tests__/` (page-level) | 1 |
-| **Total** | **369** |
+| **Total** | **389** |
 
-Test files per `src/lib` module — the tree has 35 entries and every one except `db` has a `__tests__/`:
+Test files per `src/lib` module — the tree has 36 entries and every one except `db` has a `__tests__/`:
 
 ```
-post-class-feedback 35   line              21   admissions        21
+post-class-feedback 38   line              24   admissions        21
 us-universities     13   sales-dashboard   13   progress-tests    11
 classrooms          11   normalization      7   credit-control     7
 competitor-intelligence 6  search           5   room-capacity      5
-payroll              5   sync               4   leave-requests     4
-learning-plans       4   ai                 4   wise-activity      3
-wise                 3   data-health        3   data               3
-__tests__ (root)     3   syllabus           2   student-schedule   2
-student-promotions   2   ui 1  scheduler 1  proposals 1  ops 1
-navigation 1  internal 1  home 1  calendar 1  auth 1
+payroll              5   data-health        5   sync               4
+student-report       4   leave-requests     4   learning-plans     4
+ai                   4   __tests__ (root)   4   wise-activity      3
+wise                 3   student-schedule   3   data               3
+syllabus             2   student-promotions 2
+ui 1  scheduler 1  proposals 1  ops 1  navigation 1  internal 1
+home 1  calendar 1  auth 1
 db                   0   ← only lib module with no tests
 ```
 
-API-route tests by group (81 files): `admissions` 22, `line` 15, `internal` 7, `us-universities` 5, `search` 3, `sales-dashboard` 3, `data-health` 3, `ai-scheduler` 3, `post-class-feedback` 2, `competitor-intelligence` 2, `compare` 2, and one each for `wise-activity`, `tutors`, `student-schedule`, `student-promotions`, `room-capacity`, `proposals`, `progress-tests`, `payroll`, `leave-requests`, `home`, `filters`, `classrooms`, `class-assignments`, `admin`.
+API-route tests by group (82 files): `admissions` 22, `line` 15, `internal` 7, `us-universities` 5, `search` 3, `sales-dashboard` 3, `data-health` 3, `ai-scheduler` 3, `post-class-feedback` 2, `competitor-intelligence` 2, `compare` 2, and one each for `wise-activity`, `tutors`, `student-schedule`, `student-report`, `student-promotions`, `room-capacity`, `proposals`, `progress-tests`, `payroll`, `leave-requests`, `home`, `filters`, `classrooms`, `class-assignments`, `admin`.
 
-Component tests by feature (79 files): `admissions` 24, `us-universities` 23, `sales-dashboard` 7, `post-class-feedback` 6, `compare` 3, `line-review` 2, `class-assignments` 2, and one each for `wise-activity`, `student-schedule`, `student-promotions`, `scheduler`, `room-capacity`, `progress-tests`, `leave-requests`, `learning-plan`, `layout`, `home`, `data-health`, `credit-control`. Six component directories have no tests at all: `competitor-intelligence`, `payroll`, `search`, `skeletons`, `tutor-profiles`, `ui`.
+Component tests by feature (84 files): `admissions` 24, `us-universities` 23, `sales-dashboard` 7, `post-class-feedback` 6, `student-schedule` 5, `compare` 3, `line-review` 2, `class-assignments` 2, and one each for `wise-activity`, `student-report`, `student-promotions`, `scheduler`, `room-capacity`, `progress-tests`, `leave-requests`, `learning-plan`, `layout`, `home`, `data-health`, `credit-control`. Six component directories have no tests at all: `competitor-intelligence`, `payroll`, `search`, `skeletons`, `tutor-profiles`, `ui`.
 
 One page-level test sits under `src/app/(app)/`: `src/app/(app)/us-universities/[unitId]/__tests__/page-params.test.ts`.
 
-For calibration against the app surface: 81 route-test files cover a surface of **241 endpoints**, and 1 page-level test plus a handful of source-grep page guards cover **25 pages**. Route and page coverage is therefore selective, not exhaustive — the depth is in `src/lib`, where the decisions live.
+For calibration against the app surface: 82 route-test files cover a surface of **243 endpoints** across **180 `route.ts` files**, and 1 page-level test plus a handful of source-grep page guards cover **31 pages**. Route and page coverage is therefore selective, not exhaustive — the depth is in `src/lib`, where the decisions live.
 
 ### Integration Tests
 
-Twelve `*.integration.test.ts` files, in exactly two modules:
+Thirteen `*.integration.test.ts` files, in exactly two modules:
 
 ```
 src/lib/post-class-feedback/__tests__/auto-approval.integration.test.ts
@@ -136,6 +137,7 @@ src/lib/post-class-feedback/__tests__/backfill-window.integration.test.ts
 src/lib/post-class-feedback/__tests__/deleted-session-retirement.integration.test.ts
 src/lib/post-class-feedback/__tests__/payout-accrual.integration.test.ts
 src/lib/post-class-feedback/__tests__/payout-repository.integration.test.ts
+src/lib/post-class-feedback/__tests__/payout-retirement.integration.test.ts
 src/lib/post-class-feedback/__tests__/payout-run.integration.test.ts
 src/lib/post-class-feedback/__tests__/recent-readiness.integration.test.ts
 src/lib/post-class-feedback/__tests__/recheck-queue.integration.test.ts
@@ -145,7 +147,9 @@ src/lib/sync/__tests__/past-sessions-diff-hook.integration.test.ts
 src/lib/sync/__tests__/snapshot-pruning.integration.test.ts
 ```
 
-The choice of what earns an integration test is deliberate and narrow: **money and snapshot promotion.** The three `sync` files pin `runFullSync`, the atomic snapshot flip, the past-session diff hook, and snapshot pruning. The nine `post-class-feedback` files pin the payout ledger — accrual, finalize, run-candidate selection, lease acquisition, publish idempotency, source-status demotion/restore, recheck-queue ordering, and deleted-session retirement — all against real Postgres with real FK and transaction semantics, because a Drizzle mock cannot prove "pressing Publish twice must not pay a tutor twice" (`src/lib/post-class-feedback/__tests__/payout-run.integration.test.ts:1-10`).
+The choice of what earns an integration test is deliberate and narrow: **money and snapshot promotion.** The three `sync` files pin `runFullSync`, the atomic snapshot flip, the past-session diff hook, and snapshot pruning. The ten `post-class-feedback` files pin the payout ledger — accrual, finalize, run-candidate selection, lease acquisition, publish idempotency, source-status demotion/restore, recheck-queue ordering, deleted-session retirement, and (newest) unattended ledger retirement — all against real Postgres with real FK and transaction semantics, because a Drizzle mock cannot prove "pressing Publish twice must not pay a tutor twice" (`src/lib/post-class-feedback/__tests__/payout-run.integration.test.ts:1-10`).
+
+`payout-retirement.integration.test.ts` is the newest of these and is the clearest example of the genre: its header states exactly which live written lines the auto-un-charge pass takes off the ledger, that "deletion is proven by readback before any line is retired", that a pending correction on a retired line is superseded, and that the pass stands down rather than fight a live publish lease (`:1-14`). It sets `POST_CLASS_AUTO_APPROVE_ENABLED` in `beforeAll` and deletes it in `afterAll` (`:37-43`) — the unattended-charging kill switch is exercised, not assumed.
 
 Note that `past-sessions-diff-hook` and several post-class concerns exist in **both** unit and integration variants: the unit variant pins the decision logic, the integration variant pins the persistence.
 
@@ -154,18 +158,19 @@ Note that `past-sessions-diff-hook` and several post-class concerns exist in **b
 - `{module}.test.ts` / `{module}.test.tsx` for unit tests — matches the source file's base name.
 - `{module}.integration.test.ts` for DB-backed tests — the `.integration` infix is the only thing routing a file to the integration project.
 - `{module}.eval.test.ts` for fixture-corpus quality gates — one file: `src/lib/line/__tests__/name-matcher.eval.test.ts`, whose header documents fixture provenance and states that production-labeled calibration is still a follow-up (`:1-12`).
-- Cross-cutting guards name themselves by what they protect rather than by one source file: `migration.test.ts`, `page-guards.test.ts`, `cron-registry.test.ts`, `workspace-contract.test.ts`, `view-transitions-source.test.ts`, `empty-state-source.test.ts`, `vercel-crons.test.ts`.
+- Cross-cutting guards name themselves by what they protect rather than by one source file: `migration.test.ts`, `page-guards.test.ts`, `cron-registry.test.ts`, `cron-audit.test.ts`, `cron-retention.test.ts`, `workspace-contract.test.ts`, `view-transitions-source.test.ts`, `empty-state-source.test.ts`, `vercel-crons.test.ts`, `parent-access-matrix.test.ts`.
 
 ### Coverage Surface
 
 Tests reach every `src/lib` module except `db`, both app-level invariant surfaces, and a large share of API routes and components. **Still untested:**
 
-- `src/lib/db/` — `index.ts` (the Neon singleton), `schema.ts`, and `seed.ts` have no tests.
-- The 20+ `scripts/*.ts` runners (payout workbook operations, IPEDS import, AI-scheduler eval/replay/compare, room-capacity import, seeds). `scripts/` has its own `tsconfig.json` and a `scripts/stubs/` shim directory, but zero test files.
-- The `.mjs` guard scripts (`check-production-route-surface.mjs`, `check-sales-dashboard-scope.mjs`, `assert-production-deploy-ready.mjs`) are themselves guards and are not tested.
+- `src/lib/db/` — `index.ts` (the Neon singleton), `schema.ts` (189 `pgTable` declarations, 4,772 lines), and `seed.ts` have no tests.
+- `src/hooks/` — all five hooks (`use-compare.ts`, `use-keyboard-shortcuts.ts`, `use-resizable-split.ts`, `use-sales-dimensions.ts`, `use-theme.ts`) are untested, because there is no DOM environment to run them in.
+- The 32 `scripts/*.ts` runners (payout workbook operations, IPEDS/room-capacity import, AI-scheduler eval/replay/compare, LINE tooling, seeds). `scripts/` has its own `tsconfig.json` and a `scripts/stubs/` shim directory, but zero test files.
+- The three `.mjs` guard scripts (`check-production-route-surface.mjs`, `check-sales-dashboard-scope.mjs`, `assert-production-deploy-ready.mjs`) are themselves guards and are not tested.
 - Six component directories (`competitor-intelligence`, `payroll`, `search`, `skeletons`, `tutor-profiles`, `ui`) have no component tests — though `search`, `payroll`, and `competitor-intelligence` all have deep `src/lib` coverage behind them.
 - **Interactive** component behavior. Component tests assert SSR markup, exported pure helpers, or grep source; there is no click/keyboard/state-transition coverage anywhere.
-- Auth internals beyond `src/lib/auth/__tests__/signin-callback.test.ts` and `src/lib/__tests__/auth-access.test.ts`. `src/lib/auth.ts` itself is mocked in 77 files and unit-tested in none.
+- Auth internals beyond `src/lib/auth/__tests__/signin-callback.test.ts` and `src/lib/__tests__/auth-access.test.ts`. `src/lib/auth.ts` itself is mocked in 78 files and unit-tested in none.
 
 ## Test Structure
 
@@ -196,16 +201,16 @@ describe("extractNickname", () => {
 
 ### Conventions
 
-- One `describe` block **per exported function or scenario**; the `describe` name usually matches the exported symbol verbatim (`describe("runPayoutAccrualPass", ...)`, `describe("publishPayoutRun", ...)`, `describe("acquirePayoutRunLease", ...)`, `describe("selectPayoutRunCandidates", ...)`, `describe("retireDeletedWiseSessions", ...)`).
-- `it` descriptions read as present-tense English sentences that state the rule, not the mechanics: `it("anchors the deadline to the Bangkok scheduled-end date plus two calendar days", ...)` (`src/lib/post-class-feedback/__tests__/policy.test.ts:44`).
-- Scenario suites carry an explicit coverage-tag prefix tying the file to a planning artifact — `TCOV-01`, `TCOV-02`, `TCOV-04`, `TCOV-06`, `TCOV-07` for test-coverage plans, `REC-01`…`REC-04` for post-class recovery decisions, and `OPS-01` for the pruning job. Examples: `describe("runFullSync — TCOV-02 integration (real Postgres)", ...)` (`src/lib/sync/__tests__/orchestrator.integration.test.ts:196`), `describe("pruneOldSnapshots — OPS-01 integration (real Postgres)", ...)` (`src/lib/sync/__tests__/snapshot-pruning.integration.test.ts:104`), `describe("REC-01 run-wide source demotion and restore", ...)` (`src/lib/post-class-feedback/__tests__/source-status-restore.integration.test.ts:207`), `describe("REC-04 non-ready-first recheck ordering", ...)` (`src/lib/post-class-feedback/__tests__/recheck-queue.integration.test.ts:205`), `describe("middleware — TCOV-06 part 2 (bypass paths)", ...)` (`src/__tests__/middleware.test.ts:19`).
-- Design/decision IDs appear in test names and comments where load-bearing — most heavily `REL-05` (Wise status-code-aware retry policy, 6 occurrences in `src/lib/wise/__tests__/client.test.ts:45-150`), plus `MOD-01`/`MOD-02`/`MOD-03`/`MOD-05`, `D-01`…`D-22`, `PAST-01`, and `REL-02`/`REL-03`/`REL-04`/`REL-08`.
-- **Nothing is skipped.** There are zero `it.skip` / `describe.skip` / `it.todo` / `.only(` occurrences in the suite.
+- One `describe` block **per exported function or scenario**; the `describe` name usually matches the exported symbol verbatim (`describe("WiseClient", ...)`, `describe("runPayoutAccrualPass", ...)`, `describe("publishPayoutRun", ...)`, `describe("acquirePayoutRunLease", ...)`, `describe("retireDeletedWiseSessions", ...)`).
+- `it` descriptions read as present-tense English sentences that state the rule, not the mechanics: `it("anchors the deadline to the Bangkok scheduled-end date plus two calendar days", ...)` (`src/lib/post-class-feedback/__tests__/policy.test.ts:44`), `it("registers exactly the 17 known crons, each on its pinned schedule", ...)` (`src/__tests__/vercel-crons.test.ts:100`).
+- Scenario suites carry an explicit coverage-tag prefix tying the file to a planning artifact — `TCOV-01`, `TCOV-02`, `TCOV-04`, `TCOV-06`, `TCOV-07` for test-coverage plans, `REC-01`…`REC-04` for post-class recovery decisions, `OPS-01` for the pruning job, and `MAINT-01` for maintenance-mode polarity (`src/lib/__tests__/maintenance.test.ts:12`). Examples: `describe("runFullSync — TCOV-02 integration (real Postgres)", ...)`, `describe("pruneOldSnapshots — OPS-01 integration (real Postgres)", ...)`, `describe("REC-01 run-wide source demotion and restore", ...)`, `describe("REC-04 non-ready-first recheck ordering", ...)`, `describe("middleware — TCOV-06 part 2 (bypass paths)", ...)`.
+- Design/decision IDs appear in test names and comments where load-bearing — grep-counted across the suite: `REL-05` (Wise status-code-aware retry policy) 6, `MOD-01` 5, `D-08` 5, `REC-01` 4, plus `TCOV-01`, `REL-04`, `REC-03`, `D-03` at 3 each, and singletons down to `OPS-01`, `PAST-01`, `MOD-05`, `D-22`.
+- **Nothing is skipped.** There are zero `it.skip` / `describe.skip` / `it.todo` / `.only(` occurrences in the suite (grep across all 389 files returns 0).
 
 ### Setup & Teardown
 
 - `beforeEach`/`afterEach` for mock reset and fake-timer cleanup.
-- API-route suites reset all mocks per test and re-stub the auth guard, then drive the mocked data layer per case.
+- API-route suites reset all mocks per test and re-stub the auth guard, then drive the mocked data layer per case (`src/app/api/admissions/cases/__tests__/route.test.ts:71-75`).
 - Integration suites use `beforeAll`/`afterAll` to start/stop the database handle and `beforeEach` to truncate:
   ```typescript
   beforeAll(async () => { handle = await startTestDb(); }, 60_000);
@@ -244,9 +249,9 @@ function makeTutor(overrides: Partial<IndexedTutorGroup> = {}): IndexedTutorGrou
 
 (`src/lib/search/__tests__/engine.test.ts:6-26`)
 
-The `overrides: Partial<T> = {}` idiom is pervasive across every domain — `version(...)` in `src/lib/post-class-feedback/__tests__/policy.test.ts:21-41`, `modelParsed(...)` in `src/lib/ai/__tests__/scheduler.test.ts:31-62`, row factories in the dashboard component tests. Where a factory would over-specify a wide DB row, tests instead cast a partial literal with a commented `as unknown as T` and say which columns are deliberately unexercised (`src/components/us-universities/__tests__/institution-card.test.tsx:6-20`).
+The `overrides: Partial<T> = {}` idiom is pervasive across every domain — `version(...)` in `src/lib/post-class-feedback/__tests__/policy.test.ts:22-41`, `modelParsed(...)` in `src/lib/ai/__tests__/scheduler.test.ts:31-62`, row factories in the dashboard component tests. Where a factory would over-specify a wide DB row, tests instead cast a partial literal with a commented `as unknown as T` and say which columns are deliberately unexercised (`src/components/us-universities/__tests__/institution-card.test.tsx:6-19`).
 
-Integration files add scenario builders that return a fake `WiseClient` or a fake `MasterLedgerGateway` holding a real in-memory ledger, so the "publish twice" property is observable (`src/lib/post-class-feedback/__tests__/payout-run.integration.test.ts:32`, `:76+`).
+Integration files add scenario builders that return a fake `WiseClient`, a fake `MasterLedgerGateway` holding a real in-memory ledger, or a `PayoutRetirementSheetOps` double, so properties like "publish twice" and "prove the delete by readback" are observable (`src/lib/post-class-feedback/__tests__/payout-run.integration.test.ts:32`, `payout-retirement.integration.test.ts:26-29`).
 
 ### Assertion Style
 
@@ -262,17 +267,17 @@ Integration files add scenario builders that return a fake `WiseClient` or a fak
     }),
   );
   ```
-  (`src/lib/wise/__tests__/client.test.ts:29-40`)
+  (`src/lib/wise/__tests__/client.test.ts:29-41`)
 - SSR component tests assert on substrings of the rendered HTML, including accessible labels: `expect(html).toContain("Add Example University to compare")` (`src/components/us-universities/__tests__/institution-card.test.tsx:43`).
 - Ordering assertions for source-inspection tests compare `indexOf` positions — e.g. the access guard must appear before the feature content in a page file (`src/lib/learning-plans/__tests__/page-guards.test.ts:11-18`).
-- `it.each` / `describe.each` table-driven cases appear in 9 files: `src/__tests__/middleware.test.ts`, `src/app/api/progress-tests/__tests__/route.test.ts`, `src/components/admissions/__tests__/section-form.test.tsx`, `src/lib/__tests__/auth-access.test.ts`, `src/lib/admissions/__tests__/{notes,recommenders}.test.ts`, `src/lib/classrooms/__tests__/assignment-engine.test.ts`, `src/lib/post-class-feedback/__tests__/{payout-tutor-mapping,shadow-review}.test.ts`.
+- `it.each` / `describe.each` table-driven cases appear in 13 files: `src/__tests__/middleware.test.ts`, `src/app/api/progress-tests/__tests__/route.test.ts`, `src/components/admissions/__tests__/section-form.test.tsx`, `src/lib/__tests__/{auth-access,maintenance}.test.ts`, `src/lib/admissions/__tests__/{notes,recommenders}.test.ts`, `src/lib/classrooms/__tests__/assignment-engine.test.ts`, `src/lib/line/__tests__/{credit-bot,report-bot}.test.ts`, `src/lib/post-class-feedback/__tests__/{payout-tutor-mapping,shadow-review}.test.ts`, `src/lib/student-report/__tests__/window.test.ts`.
 
 ## Mocking
 
 ### Framework
 
-- **Vitest's built-in `vi`** — `vi.fn()`, `vi.mock()`, `vi.mocked()`, `vi.spyOn()`, `vi.useFakeTimers()`, `vi.setSystemTime()`, `vi.resetAllMocks()`, `vi.restoreAllMocks()`, `vi.unstubAllGlobals()`, and `importOriginal` for partial mocks (31 files).
-- No external mocking libraries (no `jest`, `sinon`, `nock`, `msw`). `vi.hoisted` is used in only 3 files.
+- **Vitest's built-in `vi`** — `vi.fn()`, `vi.mock()`, `vi.mocked()`, `vi.spyOn()`, `vi.useFakeTimers()`, `vi.setSystemTime()`, `vi.resetAllMocks()`, `vi.restoreAllMocks()`, `vi.unstubAllGlobals()`, and `importOriginal` for partial mocks (35 files).
+- No external mocking libraries (no `jest`, `sinon`, `nock`, `msw` — verified absent from `package.json`). `vi.hoisted` is used in only 3 files.
 
 ### Module Mocking with `vi.mock()` (dominant pattern)
 
@@ -280,13 +285,14 @@ Integration files add scenario builders that return a fake `WiseClient` or a fak
 
 | Mock target | Files | Why |
 |---|---|---|
-| `@/lib/db` | 91 | importing it constructs the Neon driver |
-| `@/lib/auth` | 77 | importing it executes NextAuth at module load |
+| `@/lib/db` | 93 | importing it constructs the Neon driver |
+| `@/lib/auth` | 78 | importing it executes NextAuth at module load |
+| `server-only` | 28 | server-only modules throw when imported outside a server graph |
 | `next/navigation` | 25 | client components call `useRouter`/`useSearchParams` |
-| `server-only` | 23 | server-only modules throw when imported outside a server graph |
 | `@/lib/admissions/access` | 23 | partially mocked — see below |
 | `@/lib/wise/client` | 9 | keeps the Wise API out of every test run |
 | `next/cache` | 5 | `"use cache"` helpers (`cacheTag`/`cacheLife`) are no-ops under Vitest |
+| `@/lib/post-class-feedback/access` | 3 | payout/finance capability guard |
 | `@/lib/auth-edge` | 1 | middleware test flattens `edgeAuth` to identity |
 
 Two shapes matter.
@@ -375,11 +381,11 @@ vi.mock("@/lib/db", () => ({ getDb: () => mockDb }));
 
 (`src/lib/data/__tests__/past-sessions.test.ts:6-20`, with a comment naming the exact chain being emulated) — mutable fixture state is reset in `beforeEach`.
 
-This scales poorly past a couple of chained calls. **The rule the codebase now follows: if the assertion depends on FK behavior, transactions, ordering, uniqueness, or `ON CONFLICT`, write an integration test instead of deepening the Drizzle mock.** That is precisely the boundary the 12 integration files sit on.
+This scales poorly past a couple of chained calls. **The rule the codebase now follows: if the assertion depends on FK behavior, transactions, ordering, uniqueness, or `ON CONFLICT`, write an integration test instead of deepening the Drizzle mock.** That is precisely the boundary the 13 integration files sit on.
 
 ### Container-Backed Integration (testcontainers)
 
-`src/tests/integration/db-helper.ts` is the single shared harness. It boots a `postgres:16-alpine` container, connects with `pg.Pool` + `drizzle-orm/node-postgres`, runs the real `drizzle/` migrations, and exposes `truncateAll`:
+`src/tests/integration/db-helper.ts` is the single shared harness (96 lines). It boots a `postgres:16-alpine` container, connects with `pg.Pool` + `drizzle-orm/node-postgres`, runs the real `drizzle/` migrations (69 SQL files), and exposes `truncateAll`:
 
 ```typescript
 export async function startTestDb(): Promise<Handle> {
@@ -398,17 +404,17 @@ export async function startTestDb(): Promise<Handle> {
 
 (`src/tests/integration/db-helper.ts:18-41`)
 
-**`TEST_DATABASE_URL` escape hatch** (`db-helper.ts:19-24`, `:14`): setting it points the suite at an already-running Postgres instead of a container, for machines without a Docker daemon. The comment is emphatic and should be respected — the target gets migrated and truncated like any container, so **it must be a scratch database, never one holding data anyone wants to keep.**
+**`TEST_DATABASE_URL` escape hatch** (`db-helper.ts:19-24`): setting it points the suite at an already-running Postgres instead of a container, for machines without a Docker daemon. The comment is emphatic and should be respected — the target gets migrated and truncated like any container, so **it must be a scratch database, never one holding data anyone wants to keep.**
 
-`truncateAll` issues one `TRUNCATE ... RESTART IDENTITY CASCADE`; FK chains are followed by `CASCADE`, so ordering is irrelevant (`db-helper.ts:52-96`).
+`truncateAll` issues one `TRUNCATE ... RESTART IDENTITY CASCADE`; FK chains are followed by `CASCADE`, so ordering is irrelevant (`db-helper.ts:52-95`).
 
-> **Known drift:** the truncate list is hand-maintained and currently names 39 tables — the core snapshot/tutor/classroom set (19) plus the `post_class_*` family (20). Against **188 tables** in `src/lib/db/schema.ts`, that is a small minority. It works today because only `sync` and `post-class-feedback` have integration tests, but it is a trap for the next feature that adds one: nothing fails loudly when a table is missing from the list, the next test just inherits dirty rows. **Extending the truncate set is part of adding an integration test, not an afterthought.**
+> **Known drift:** the truncate list is hand-maintained and currently names **39 tables** — the core snapshot/tutor/classroom set (19) plus 20 of the `post_class_*` family (`db-helper.ts:55-93`). Against **189 tables** in `src/lib/db/schema.ts`, that is a small minority. Even within Post-Class Feedback it is incomplete: the schema declares **32** `post_class_*` tables, so twelve are never truncated — `post_class_settings`, `post_class_enforcement_windows`, `post_class_field_mappings`, `post_class_access_grants`, `post_class_digest_recipients`, `post_class_ai_runs`, `post_class_ai_reviews`, `post_class_ai_concerns`, and the four `post_class_notification_*` tables. It works today because the current integration files do not seed those tables, but nothing fails loudly when a table is missing from the list — the next test just inherits dirty rows. **Extending the truncate set is part of adding an integration test, not an afterthought.**
 >
-> A second, smaller drift: `src/tests/integration/README.md:3-4` still says the harness is used by suites "in the `src/lib/sync/__tests__/` directory" — nine of the twelve consumers now live in `src/lib/post-class-feedback/__tests__/`.
+> A second, smaller drift: `src/tests/integration/README.md:3-4` still says the harness is used by suites "in the `src/lib/sync/__tests__/` directory" — ten of the thirteen consumers now live in `src/lib/post-class-feedback/__tests__/`.
 
-**Why two drivers:** production uses `drizzle-orm/neon-http`, which cannot speak to a generic Postgres TCP port; integration tests use `drizzle-orm/node-postgres`. Both consume the same `drizzle/` migrations and present the same Drizzle query API, so there is no migration drift (`src/tests/integration/README.md:24-31`). Docker must be running; `postgres:16-alpine` (~80MB) is pulled on first run.
+**Why two drivers:** production uses `drizzle-orm/neon-http`, which cannot speak to a generic Postgres TCP port; integration tests use `drizzle-orm/node-postgres`. Both consume the same `drizzle/` migrations and present the same Drizzle query API, so there is no migration drift (`src/tests/integration/README.md:24-30`). Docker must be running; `postgres:16-alpine` (~80MB) is pulled on first run (`README.md:8-10`).
 
-Integration tests still inject **fakes at the outer boundary** — a fake `WiseClient` whose `get<T>(path, params)` pattern-matches the path, and a fake `MasterLedgerGateway` for the payout sheet — so only the DB is real; Wise and Google Sheets are never contacted. Some sync tests go further and install a temporary plpgsql trigger to simulate a mid-transaction failure, dropping it in a `finally`.
+Integration tests still inject **fakes at the outer boundary** — a fake `WiseClient` whose `get<T>(path, params)` pattern-matches the path, a fake `MasterLedgerGateway` for the payout sheet, a `PayoutRetirementSheetOps` double for the un-charge pass — so only the DB is real; Wise and Google Sheets are never contacted. Some sync tests go further and install a temporary plpgsql trigger to simulate a mid-transaction failure, dropping it in a `finally`.
 
 ### Fake Timers
 
@@ -426,7 +432,7 @@ Files: `src/lib/search/__tests__/{compare,engine}.test.ts`, `src/lib/room-capaci
 
 ### Environment-Variable Gating
 
-Domains guarded by feature flags or API keys (AI scheduler, LINE, competitor intelligence) snapshot the relevant `process.env` keys at file scope, set them per test, and restore them in `afterEach` so both flag-off and flag-on paths are covered without leaking state:
+Domains guarded by feature flags or API keys (AI scheduler, LINE, competitor intelligence, post-class unattended charging) snapshot the relevant `process.env` keys at file scope, set them per test, and restore them in `afterEach` so both flag-off and flag-on paths are covered without leaking state:
 
 ```typescript
 const originalEnv = {
@@ -445,15 +451,17 @@ afterEach(() => {
 });
 ```
 
-(`src/lib/ai/__tests__/scheduler.test.ts:24-29`, `:65-74`) — restoring by delete-vs-assign matters, because assigning `undefined` would leave the literal string `"undefined"` in `process.env`.
+(`src/lib/ai/__tests__/scheduler.test.ts:24-29`, `:65-73`) — restoring by delete-vs-assign matters, because assigning `undefined` would leave the literal string `"undefined"` in `process.env`.
+
+Integration files use the same discipline at suite scope: `payout-retirement.integration.test.ts:37-43` sets `POST_CLASS_AUTO_APPROVE_ENABLED = "true"` in `beforeAll` and `delete`s it in `afterAll`, so the kill switch is a tested input rather than an ambient assumption. `src/lib/__tests__/maintenance.test.ts:12-20` pins the opposite polarity for `MAINTENANCE_MODE` (MAINT-01): the flag engages only on the exact string `"true"`, with unset/empty/`"false"` all table-driven through `it.each`.
 
 ### Source Code Inspection (Grep Assertions)
 
 For invariants that are easier to read off the source than to drive behaviorally, tests read files with `node:fs.readFileSync` and assert on their contents. **21 files** use this technique, in three distinct flavors:
 
-1. **Config-vs-code registries.** `src/lib/data-health/__tests__/cron-registry.test.ts:6-20` parses `vercel.json` and asserts the deployed cron list is exactly equal to the in-app `SCHEDULED_CRON_JOBS` registry (sorted by path, compared with `toEqual`) — so a cron added to one and not the other fails the build. It also asserts the room-utilization sync is deliberately *absent* from the registry (manual-only, `:35-38`). `src/__tests__/vercel-crons.test.ts:13-40` adds semantic checks on top: the staggered `*/30`, `5,35`, `10,40`, `20,50` schedules, and a test asserting the daily admissions-notification minute (`12`) collides with no other cron's minute field across all **15 crons**.
-2. **Migration SQL guards.** The three `migration.test.ts` files (`post-class-feedback`, `learning-plans`, `data-health`) read the specific `drizzle/00NN_*.sql` files plus `drizzle/meta/_journal.json` and assert the required tables/columns are created and the journal entries exist — the post-class one alone pins seven migrations, `0055` through `0062` (`src/lib/post-class-feedback/__tests__/migration.test.ts:1-40`). This catches a schema edit that never got a migration.
-3. **Page/UI ordering invariants.** `src/lib/learning-plans/__tests__/page-guards.test.ts:11-18` asserts `await requireLearningPlansAccess()` appears *before* `<LearningPlanForm` in the page source, and `:22-40` asserts the same guard precedes `await searchParams` in both the print-route metadata and body — an access-control ordering rule that no SSR assertion could catch. Similar shells: `src/components/{compare,sales-dashboard,scheduler,wise-activity,post-class-feedback,class-assignments}/__tests__/*`, plus `src/lib/classrooms/__tests__/{publish-eligibility,rooms}.test.ts`, `src/lib/ops/__tests__/stale.test.ts`, `src/lib/data/__tests__/past-sessions.test.ts` (cache-tag drift guard), `src/lib/us-universities/__tests__/dot-map.test.ts`, and `src/app/api/sales-dashboard/__tests__/dimensions-route.test.ts:76-81` (asserts the data layer still carries the sales-dashboard cache tag).
+1. **Config-vs-code registries.** `src/lib/data-health/__tests__/cron-registry.test.ts:19-32` parses `vercel.json` and asserts the deployed cron list is exactly equal to the in-app `SCHEDULED_CRON_JOBS` registry (sorted by path, compared with `toEqual`) — so a cron added to one and not the other fails the build. It also asserts the room-utilization sync is deliberately *absent* from the registry (manual-only, `:45-48`) and that every registry entry points at a real `route.ts` on disk (`:50-56`). `src/__tests__/vercel-crons.test.ts:17-35` pins every schedule string literally, then `:100-200` adds semantic checks: exactly **17** crons, every cron gets a UTC minute no other cron can fire in, the Wise Activity mirror runs every 15 minutes on free stagger minutes, the payout accrual is armed hourly (`33 * * * *`) "for unattended charging", and the admissions-notification (`12 1 * * *`) and LINE credit-digest (`3 2 * * *`) daily minutes collide with nothing.
+2. **Migration SQL guards.** The three `migration.test.ts` files (`post-class-feedback`, `learning-plans`, `data-health`) read specific `drizzle/00NN_*.sql` files plus `drizzle/meta/_journal.json` and assert the required tables/columns are created and the journal entries exist — the post-class one alone pins seven migrations, `0055`, `0057`–`0062` (`src/lib/post-class-feedback/__tests__/migration.test.ts:4-34`). This catches a schema edit that never got a migration.
+3. **Page/UI ordering invariants.** `src/lib/learning-plans/__tests__/page-guards.test.ts:11-18` asserts `await requireLearningPlansAccess()` appears *before* `<LearningPlanForm` in the page source, and `:20-40` asserts the same guard precedes `await searchParams` in both the print-route metadata and body — an access-control ordering rule that no SSR assertion could catch. Similar shells: `src/components/{compare,sales-dashboard,scheduler,wise-activity,post-class-feedback,class-assignments}/__tests__/*`, plus `src/lib/classrooms/__tests__/{publish-eligibility,rooms}.test.ts`, `src/lib/ops/__tests__/stale.test.ts`, `src/lib/data/__tests__/past-sessions.test.ts` (cache-tag drift guard), `src/lib/us-universities/__tests__/dot-map.test.ts`, and `src/app/api/sales-dashboard/__tests__/dimensions-route.test.ts` (asserts the data layer still carries the sales-dashboard cache tag).
 
 Use sparingly — only when the invariant guards a regression that behavior tests structurally cannot catch. A grep assertion is brittle against harmless refactors, so each one should carry a comment saying what it is protecting.
 
@@ -467,7 +475,7 @@ Use sparingly — only when the invariant guards a regression that behavior test
 
 ### What NOT to Mock
 
-- Pure normalization, parsing, policy, and math — identity extraction, Bangkok date math, feedback policy, payout window math, sales/payroll/room-capacity calculators. Deterministic, tested with literal inputs.
+- Pure normalization, parsing, policy, and math — identity extraction, Bangkok date math, feedback policy, payout window math, sales/payroll/room-capacity calculators, student-report windows. Deterministic, tested with literal inputs.
 - Internal helpers within the module under test.
 - The database, when the assertion depends on real Postgres semantics — use a container instead of a deeper Drizzle mock.
 - Static JSON data that ships with the product: `src/lib/syllabus/__tests__/data-integrity.test.ts:3-16` imports the real `year-01.json` … `year-13.json` and `topics-index.json` and validates them directly. That is a data-integrity gate on shipped content, not a fixture.
@@ -479,8 +487,8 @@ Use sparingly — only when the invariant guards a regression that behavior test
 
 - **Inline factory functions** remain the dominant pattern, now numbering in the hundreds across domains. Defaults cover the happy path; tests pass `Partial<T>` overrides.
 - **No external fixture files, no `fixtures/` / `__fixtures__/` / `__mocks__/` directories anywhere in `src/`.** All test data is constructed inline; the only shared test helper in the repo is `src/tests/integration/db-helper.ts`.
-- The one large hand-built corpus is the LINE name-matcher eval directory, which is still inline in `name-matcher.eval.test.ts` and carries a provenance header explaining that the names are synthetic-but-realistic, that no row maps to a real production record, and that the distractor set was constructed by hand — with production-labeled calibration named as an explicit follow-up before the matcher is relied on at scale (`:1-20`).
-- Date literals use ISO strings or `new Date(Date.UTC(...))`; Bangkok-sensitive tests pin the offset explicitly (`+07:00`). Spreadsheet-facing payout tests convert through explicit `dateSerial`/`timeSerial` helpers rather than trusting a library (`src/lib/post-class-feedback/__tests__/payout-run.integration.test.ts:63-68`).
+- The one large hand-built corpus is the LINE name-matcher eval directory, inline in `name-matcher.eval.test.ts`, carrying a provenance header explaining that the names are synthetic-but-realistic, that no row maps to a real production record, and that the distractor set was constructed by hand — with production-labeled calibration named as an explicit follow-up before the matcher is relied on at scale (`:1-21`).
+- Date literals use ISO strings or `new Date(Date.UTC(...))`; Bangkok-sensitive tests pin the offset explicitly (`+07:00`). Payout integration tests derive their window from a relative anchor (`Date.now() + 400 days`) rather than a hard-coded month, so the suite does not rot past a fixed date (`payout-retirement.integration.test.ts:54-58`).
 
 ### Common Factory Conventions
 
@@ -507,8 +515,8 @@ Positional args for two- or three-field shapes; `Partial<T>` override objects fo
 ### Requirements
 
 - **None enforced** — no threshold, no CI coverage gate. Coverage is opt-in via `npm run test:coverage` (unit project, v8 provider, `text` + `html` reporters). Page/server components (`src/app/**/*.tsx`), `src/tests/**`, and all test files are excluded from the coverage scope (`vitest.config.ts:13-24`).
-- What *is* enforced is that the whole unit project passes: `npm test` runs inside `verify:release`, which `deploy:prod` requires (`package.json:34-35`).
-- Total: **369 test files**, **4,061 `it` blocks** (3,923 unit + 138 integration) across **985 `describe` blocks**. Any legacy doc citing "82 tests" or "132 test files" predates most of the current feature set.
+- What *is* enforced is that the whole unit project passes: `npm test` runs inside `verify:release`, which `deploy:prod` requires (`package.json:38-39`).
+- Total: **389 test files**, roughly **4,445 `it` blocks** (4,282 unit + 163 integration) across **~1,057 `describe` blocks**. Any legacy doc citing "369 test files", "14 tables", or a midnight-UTC cron predates the current feature set.
 
 ### View Coverage
 
@@ -521,11 +529,11 @@ npm run test:all -- --coverage     # include integration (requires Docker or TES
 
 | Domain | Representative Test Files | Areas Covered |
 |--------|--------------------------|---------------|
-| Post-class feedback / payout | `src/lib/post-class-feedback/__tests__/*` (35: 26 unit + 9 integration), `src/components/post-class-feedback/__tests__/*` (6), 2 API | Feedback policy + deadline anchoring, content assessment, similarity, AI review, shadow review, sync, backfill + reminder jobs, access/capabilities, settings, notifications, metrics, events, detail, actions, deductions, migration SQL; payout config/plan/window/window-health/sheet/master/writer/tutor-mapping/workbook-ops; and on real Postgres: accrual, finalize, run-candidate selection, lease acquisition, publish idempotency, compensation + post-close exceptions, strict close fencing, CSV retry fencing, audited date rolls, source-anchor fingerprint quarantine, source-status demotion/restore (REC-01), recheck-queue ordering (REC-02/REC-04), backfill window (REC-03), auto-approval/auto-reopen sweeps, recent-readiness, deleted-session retirement |
-| Admissions | `src/lib/admissions/__tests__/*` (21), `src/components/admissions/**` (24), `src/app/api/admissions/**` (22) | Role/case access wall, parent projection whitelist, audit diffs, cases, sections, checklists, colleges, essays, activities, testing release, recommenders, meetings, notes sharing, members, announcements, resources, calendar, cohorts, counselors, notifications, student home |
-| US universities (IPEDS) | `src/lib/us-universities/__tests__/*` (13), `src/components/us-universities/__tests__/*` (23), 5 API, 1 page | Query/transform/parser, CSV export, active + chart filters, compare set, constants, trend + dossier sections, dot-map projection, nav, formatting; research-console shell, cards/table, charts, price ladder, demographics, shortlist, combobox, compare panel/sheet |
-| LINE | `src/lib/line/__tests__/*` (21), `src/components/line-review/__tests__/*` (2), 15 API | Webhook + signature, client, classifier confidence, contact aliases, data-group ingest, mentions, name matcher (+ eval corpus), backlog matcher/recovery, link validation, student links, OA resolver (+ extension candidates), review service, operational planner, schedule bot (core/group/copy), test-data cleanup |
-| Sales dashboard | `src/lib/sales-dashboard/__tests__/*` (13), `src/components/sales-dashboard/**` (7), 3 API | Parser, analytics, cohorts, CSV, dates, dimensions, GM insights, import guard, lifecycle, package hours, projection, Sheets access, student journey; tab views + export + empty-state ordering |
+| Post-class feedback / payout | `src/lib/post-class-feedback/__tests__/*` (38: 28 unit + 10 integration), `src/components/post-class-feedback/__tests__/*` (6), 2 API | Feedback policy + deadline anchoring, content assessment, similarity, reassess, AI review, shadow review, sync, backfill + reminder jobs, access/capabilities, settings, notifications, metrics, events, detail, actions, auto-approval, migration SQL; payout config/plan/window/window-health/sheet/master/writer/tutor-mapping/workbook-ops; and on real Postgres: accrual, publish idempotency, run lease + candidate selection, close readiness, source-status demotion/restore (REC-01), recheck-queue ordering (REC-02/REC-04), backfill window (REC-03), auto-approval sweeps, recent-readiness, deleted-session retirement, and unattended ledger retirement (auto-un-charge, readback-proven deletion, correction supersession, lease stand-down) |
+| Admissions | `src/lib/admissions/__tests__/*` (21), `src/components/admissions/**` (24), `src/app/api/admissions/**` (22, incl. a `parent-access-matrix` suite) | Role/case access wall, parent projection whitelist, audit diffs, cases, sections, checklists, colleges + decision events, essays, activities, testing release, recommenders, meetings, notes sharing, members, announcements, resources, calendar, cohorts + templates, counselors, tasks, notifications, student home |
+| US universities (IPEDS) | `src/lib/us-universities/__tests__/*` (13), `src/components/us-universities/__tests__/*` (23), 5 API, 1 page | Query/transform/parser, CSV export, active + chart filters, compare set/colors, constants, trend + dossier sections, dot-map projection, nav, formatting; research-console shell, cards/table toggle, KPI hero, overview charts, price ladder, demographics, shortlist, combobox, compare panel/sheet, count banner, supply map |
+| LINE | `src/lib/line/__tests__/*` (24), `src/components/line-review/__tests__/*` (2), 15 API | Webhook + signature, client, classifier confidence, contact aliases, data-group ingest, mentions, name matcher (+ eval corpus), backlog matcher/recovery, link validation, student links, OA resolver (+ extension candidates), review service, operational planner, schedule bot (core/group/copy), **credit bot, report bot, credit digest**, test-data cleanup |
+| Sales dashboard | `src/lib/sales-dashboard/__tests__/*` (13), `src/components/sales-dashboard/**` (7), 3 API | Parser, analytics, cohorts, CSV, dates, dimensions, GM insights, import guard, lifecycle, package hours, projection, Sheets access, student journey; packages/programs/reps/students tabs, student detail, export + empty-state ordering |
 | Progress tests | `src/lib/progress-tests/__tests__/*` (11), 1 component, 1 API | Engine, recommend, booking, sync + run-sync-request, DB layer, API layer, teacher access, teacher heads-up, admin digest, AI summary |
 | Classrooms / assignments | `src/lib/classrooms/__tests__/*` (11), `src/components/class-assignments/__tests__/*` (2), 2 API | Assignment engine, publish eligibility, floor-plan map, room catalog, reconciliation, schedule + admin email, morning automation, tutor contacts, visualization, data timezone |
 | Normalization | `src/lib/normalization/__tests__/*` (7) | Identity cascade, timezone (UTC→Bangkok), availability merge, leaves, session blocking, modality fail-closed, qualification tag parsing |
@@ -534,32 +542,33 @@ npm run test:all -- --coverage     # include integration (requires Docker or TES
 | Competitor intelligence | `src/lib/competitor-intelligence/__tests__/*` (6), 2 API | Access, AI extraction, budget guard, normalization, sync guard, war room |
 | Room capacity | `src/lib/room-capacity/__tests__/*` (5), 1 component, 1 API | Utilization analysis, date math, forecast, package mix; dashboard SSR |
 | Payroll | `src/lib/payroll/__tests__/*` (5), 1 API | Domain rules, rate card, data layer, sync, May reconciliation scenario |
+| Data health / ops | `src/lib/data-health/__tests__/*` (5), `src/lib/internal/__tests__/cron-watchdog.test.ts`, `src/lib/ops/__tests__/stale.test.ts`, 3 API, 1 component | Sync status, cron registry ↔ `vercel.json` equality, cron audit + retention, migration guard, cron watchdog, staleness thresholds, modality counter |
 | Sync | `src/lib/sync/__tests__/*` (1 unit + 3 integration) | Modality-conflict handling; and on real Postgres: `runFullSync` persistence + atomic promotion + unresolved-ratio gate (TCOV-02), past-session diff hook (TCOV-04/PAST-01), snapshot pruning + pruning-metadata-failure resilience (OPS-01) |
 | Wise client | `src/lib/wise/__tests__/{client,fetchers,post-class-feedback-fetchers}.test.ts` | Auth header construction, base URL, REL-05 status-code-aware retry/backoff (4xx fail fast, 5xx/429/network retry), teacher/availability parsing, COUNT pagination, post-class session/feedback fetchers |
 | Wise activity | `src/lib/wise-activity/__tests__/{format,reconciliation,sync}.test.ts`, 1 API, 1 component | Event normalization, reconciliation, sync dedupe/stop conditions, formatters, reconciliation UI |
-| Leave requests | `src/lib/leave-requests/__tests__/*` (4), 1 component, 1 API | Sheet parsing, tutor/session matching, sync, contact context; view model |
+| Student report | `src/lib/student-report/__tests__/*` (4), 1 component, 1 API | Report window resolution (`it.each` day/date-range args), build, CSV, params; report document SSR |
+| Student schedule / promotions | `src/lib/student-schedule/__tests__/*` (3) + `src/lib/student-promotions/__tests__/*` (2), 6 components, 2 API | Month data, share links, live gating; promotion rules + data; month calendar, parent agenda + mini calendar, public shell, view preference, target-grade filter |
+| Leave requests | `src/lib/leave-requests/__tests__/*` (4), 1 component, 1 API | Sheet parsing, tutor/session matching, sync, contact context; view model, Wise cancel-preview route |
 | Learning plans | `src/lib/learning-plans/__tests__/*` (4), 1 component | Access + access policy, migration SQL guard, page + print-route access-ordering guards; digit-safe rendering |
 | AI scheduler | `src/lib/ai/__tests__/*` (4), 3 API, 1 component | Parse normalization, filter/tutor resolution, redaction, conversation flow, academic levels, correction telemetry (env-flag-gated); compare focus |
-| Data health / ops | `src/lib/data-health/__tests__/*` (3), `src/lib/internal/__tests__/cron-watchdog.test.ts`, `src/lib/ops/__tests__/stale.test.ts`, 3 API, 1 component | Sync status, cron registry ↔ `vercel.json` equality, migration guard, cron watchdog, 90-minute API + 2-hour banner staleness thresholds |
-| Student schedule / promotions | `src/lib/{student-schedule,student-promotions}/__tests__/*` (4), 2 components, 2 API | Month data + share links; promotion rules + data; month calendar, target-grade filter |
 | Syllabus | `src/lib/syllabus/__tests__/*` (2) | Year-01…Year-13 JSON data integrity, report params |
 | Home / navigation / layout | `src/lib/{home,navigation}/__tests__/*`, `src/components/{home,layout}/__tests__/*`, 1 API | Home summary, tool registry, hub SSR, nav shell |
-| Cross-cutting | `src/lib/__tests__/{auth-access,bangkok-time,tutor-profile-import}.test.ts`, `src/lib/{calendar,proposals,scheduler,ui}/__tests__/*` | Access helpers, Bangkok time helpers, tutor-profile import, month grid, proposal overlap, admin colors, view transitions |
-| API routes (all) | `src/app/api/**/__tests__/*` (81) | Auth gating → JSON parse → Zod validation → handler behavior, across every route group; 6 of the 7 internal-cron route tests additionally assert the `CRON_SECRET` check (all but `post-class-feedback-backfill`) |
-| App invariants | `src/__tests__/{middleware,vercel-crons}.test.ts` | Middleware bypass/redirect rules and per-page allowlist gating (`TCOV-06`); `vercel.json` cron paths, schedules, and minute-collision staggering across all 15 crons |
+| Cross-cutting | `src/lib/__tests__/{auth-access,bangkok-time,maintenance,tutor-profile-import}.test.ts`, `src/lib/{calendar,proposals,scheduler,ui,auth}/__tests__/*` | Access helpers, Bangkok time helpers, MAINT-01 maintenance-mode polarity + bypass emails + exempt prefixes, tutor-profile import, month grid, proposal overlap, admin colors, view transitions, sign-in callback |
+| API routes (all) | `src/app/api/**/__tests__/*` (82) | Auth gating → JSON parse → Zod validation → handler behavior, across every route group; 6 of the 7 internal-cron route tests additionally assert the `CRON_SECRET` check (all but `post-class-feedback-backfill`) |
+| App invariants | `src/__tests__/{middleware,vercel-crons}.test.ts` | Middleware bypass/redirect rules and per-page allowlist gating (`TCOV-06`); `vercel.json` cron paths, schedules, and minute-collision staggering across all 17 crons |
 
 ## Test Types
 
 ### Unit Tests
 
-- 357 of 369 files are unit-scope (the `unit` Vitest project). Pure functions are tested with literal inputs; orchestrators and route handlers use `vi.mock()` plus hand-built `NextRequest` / fake-client mocks.
-- Component tests are unit-scope: 61 of the 65 `.test.tsx` files call `renderToStaticMarkup` and assert on the returned HTML string (one `.test.ts` file, `src/components/post-class-feedback/__tests__/operations-filter.test.ts`, does the same — 62 SSR files total). The remaining 4 `.tsx` files (`compare-panel`, `us-universities-shell-nav`, `institution-search-combobox`, `apply-chart-filter`) skip rendering entirely and unit-test pure helpers that happen to be exported from a `.tsx`. Another 21 files (any extension) assert by reading source text. **None of it exercises interaction.**
+- 376 of 389 files are unit-scope (the `unit` Vitest project). Pure functions are tested with literal inputs; orchestrators and route handlers use `vi.mock()` plus hand-built `NextRequest` / fake-client mocks.
+- Component tests are unit-scope: 65 of the 69 `.test.tsx` files call `renderToStaticMarkup` and assert on the returned HTML string (one `.test.ts` file, `src/components/post-class-feedback/__tests__/operations-filter.test.ts`, does the same — 66 SSR files total). The remaining 4 `.tsx` files (`compare-panel`, `us-universities-shell-nav`, `institution-search-combobox`, `apply-chart-filter`) skip rendering entirely and unit-test pure helpers that happen to be exported from a `.tsx`. Another 21 files (any extension) assert by reading source text. **None of it exercises interaction.**
 
 ### Integration / E2E
 
-- **Integration** — 12 container-backed files in the `integration` Vitest project, driven through `src/tests/integration/db-helper.ts` (testcontainers + node-postgres against `postgres:16-alpine`, or an external scratch DB via `TEST_DATABASE_URL`). They require Docker and are excluded from the default `npm test` and from `verify:release`.
-- **No browser E2E** — no Playwright, Cypress, or Puppeteer in `package.json`, and no Vitest browser mode. End-to-end production validation relies on the 15 Vercel crons, the `/data-health` dashboard, and admin spot-checks.
-- **Adjacent, non-Vitest harnesses** exist as `scripts/` runners rather than tests: `ai-scheduler:evaluate` / `ai-scheduler:compare-models` (`scripts/evaluate-ai-scheduler.ts`, `scripts/compare-ai-scheduler-models.ts`, plus `scripts/replay-ai-scheduler-runs.ts` and a dated `evaluate-ai-scheduler-2026-05-21.ts`) score the AI scheduler against a case file; `scripts/backlog-recovery-dry-run.ts` and `scripts/verify-drive-upload.ts` are manual verification runners; and the `guard:*` scripts diff the app's route surface and sales-dashboard scope against committed manifests. They are run manually or by `verify:release`, not by Vitest.
+- **Integration** — 13 container-backed files in the `integration` Vitest project, driven through `src/tests/integration/db-helper.ts` (testcontainers + node-postgres against `postgres:16-alpine`, or an external scratch DB via `TEST_DATABASE_URL`). They require Docker and are excluded from the default `npm test` and from `verify:release`.
+- **No browser E2E** — no Playwright, Cypress, or Puppeteer in `package.json`, and no Vitest browser mode. End-to-end production validation relies on the 17 Vercel crons, the `/data-health` dashboard, and admin spot-checks.
+- **Adjacent, non-Vitest harnesses** exist as `scripts/` runners rather than tests (32 `.ts` runners in total): `ai-scheduler:evaluate` / `ai-scheduler:compare-models` score the AI scheduler against a case file; the eleven `payout:*` runners (`inventory`, `setup-master-tabs`, `repoint-workbooks`, `restore-workbooks`, `derive-tutor-names`, `roll-workbooks`, `backfill-submitted`, `remove-netted`, `reconcile-sheet`) operate on the live payout workbooks under `scripts/tsconfig.json`; and the three `.mjs` `guard:*` scripts diff the app's route surface and sales-dashboard scope against committed manifests. They are run manually or by `verify:release`, not by Vitest.
 
 ## Common Patterns
 
@@ -575,21 +584,21 @@ it("persists a happy-path sync and promotes exactly one active snapshot", async 
 });
 ```
 
-(`src/lib/sync/__tests__/orchestrator.integration.test.ts:197+`)
+(`src/lib/sync/__tests__/orchestrator.integration.test.ts`)
 
-The `handle.db as unknown as Database` cast is the standard bridge between the node-postgres test handle and the app's neon-http `Database` type; post-class integration files wrap it in a local `appDb()` helper (`src/lib/post-class-feedback/__tests__/payout-run.integration.test.ts:52-54`).
+The `handle.db as unknown as Database` cast is the standard bridge between the node-postgres test handle and the app's neon-http `Database` type; post-class integration files wrap it in a local `appDb()` helper (`src/lib/post-class-feedback/__tests__/payout-run.integration.test.ts:52-54`, `payout-retirement.integration.test.ts:49-51`).
 
 ### API Route Handler Testing
 
-The standard recipe for the 81 route-test files:
+The standard recipe for the 82 route-test files:
 
-1. `vi.mock("@/lib/db", () => ({ getDb: vi.fn() }))` and `vi.mock("@/lib/auth", () => ({ auth: vi.fn() }))` — both must be mocked because importing either executes real driver/NextAuth setup.
+1. `vi.mock("@/lib/db", () => ({ getDb: vi.fn() }))` and `vi.mock("@/lib/auth", () => ({ auth: vi.fn() }))` — both must be mocked because importing either executes real driver/NextAuth setup (the comment at `src/app/api/admissions/cases/__tests__/route.test.ts:4-7` says so explicitly).
 2. `vi.mock(...)` every data-layer dependency (full stub), and `importOriginal`-partial-mock any access module whose error mapping you want under test.
 3. Import the real symbols and the handler (`GET`/`POST`/`PATCH`/`DELETE`) from `../route` *after* the mocks — Vitest hoists `vi.mock` above imports.
 4. In `beforeEach`, `vi.resetAllMocks()` then stub the session guard to the role under test and stub each data fn.
 5. Build a `NextRequest` (and, for dynamic routes, `{ params: Promise.resolve({...}) }`) and assert `res.status` + parsed JSON, plus that the mocked data fns received the expected args.
 
-Role-based routes define the personas once at file scope (`COUNSELOR`, `ADMIN`, `STUDENT`, `PARENT`) and loop the same request through each to prove the access wall (`src/app/api/admissions/cases/__tests__/route.test.ts:30-36`).
+Role-based routes define the personas once at file scope (`COUNSELOR`, `ADMIN`, `STUDENT`, `PARENT`) and loop the same request through each to prove the access wall (`src/app/api/admissions/cases/__tests__/route.test.ts:30-36`); `src/app/api/admissions/__tests__/parent-access-matrix.test.ts` generalizes that into a route-group-wide matrix.
 
 ### Component SSR Testing
 
@@ -601,9 +610,9 @@ expect(html).toContain("$18,200");            // currency formatted
 expect(html).toContain("Add Example University to compare");  // aria label
 ```
 
-(`src/components/us-universities/__tests__/institution-card.test.tsx:23-43`)
+(`src/components/us-universities/__tests__/institution-card.test.tsx:22-43`)
 
-What this is good for: label/format/derivation correctness and the presence of accessible names. What it cannot see: hooks after first render, event handlers, focus, or anything conditional on client state. Handlers are passed as no-op `() => {}`. When the interesting logic is a pure transform or a request builder, export it from the `.tsx` and test it directly instead of rendering (`applyChartFilter` in `src/components/us-universities/__tests__/apply-chart-filter.test.tsx`; `buildCohortPayload` / `requestCohortCreate` in `src/components/admissions/__tests__/cohorts-manager.test.tsx:10-22`).
+What this is good for: label/format/derivation correctness and the presence of accessible names. What it cannot see: hooks after first render, event handlers, focus, or anything conditional on client state. Handlers are passed as no-op `() => {}`. When the interesting logic is a pure transform or a request builder, export it from the `.tsx` and test it directly instead of rendering (`applyChartFilter` in `src/components/us-universities/__tests__/apply-chart-filter.test.tsx`; `buildCohortPayload` / `requestCohortCreate` in `src/components/admissions/__tests__/cohorts-manager.test.tsx`).
 
 ### Error / Validation Testing
 
@@ -613,18 +622,18 @@ What this is good for: label/format/derivation correctness and the presence of a
 
 ### Comprehensive Matrix Tests
 
-Long-running invariants are encoded as case-numbered rows with an aggregate `it` looping over them (the modality matrix in `src/lib/search/__tests__/compare.test.ts`; `it.each` tables in 9 files). When the underlying logic changes, the matrix breaks first — by design.
+Long-running invariants are encoded as case-numbered rows with an aggregate `it` looping over them — the canonical example is `describe("resolveSessionModality matrix (MOD-05 / D-21)", ...)` in `src/lib/search/__tests__/compare.test.ts:105`, whose header comment says a merge-gate regression breaks this matrix and blocks the merge (`:106-112`), running through numbered cases to `case 17: unresolved group (supportedModes=[]) + any signal → unknown/low (fail-closed, MOD-02)` (`:345`) and an aggregate "never emits `medium` confidence tier in MOD-01 (D-03)" (`:358`). `it.each` tables in 13 files serve the same purpose at smaller scale. When the underlying logic changes, the matrix breaks first — by design.
 
 ### Backward-Compat Tests
 
-Explicit "old signature still works" tests accompany signature changes — e.g. `it("backward-compat: calling without pastBlocks behaves identically to pre-Phase-7", ...)` pins the 3-arg `buildCompareTutor` call against the 4-arg form (`src/lib/search/__tests__/compare.test.ts:655`, `:676`). Keep them until the old call sites are gone.
+Explicit "old signature still works" tests accompany signature changes — e.g. `it("backward-compat: calling without pastBlocks behaves identically to pre-Phase-7", ...)` pins the 3-arg `buildCompareTutor` call against the 4-arg form (`src/lib/search/__tests__/compare.test.ts:655`). Keep them until the old call sites are gone.
 
 ### Coverage-Tag & Decision-ID Comments
 
-Test files reference the planning artifact they satisfy in the `describe` name or a header comment (`TCOV-01`/`-02`/`-04`/`-06`/`-07`, `REC-01`…`REC-04`, `OPS-01`) and annotate non-obvious business rules with decision IDs (`REL-02`…`REL-05`/`REL-08`, `MOD-01`…`MOD-05`, `D-01`…`D-22`, `PAST-01`) plus a short rationale. Integration files go further with a multi-line header stating what property is being pinned, what is explicitly out of scope, and how to run the file (`src/lib/sync/__tests__/orchestrator.integration.test.ts:1-9`). These are load-bearing: they tell the next engineer **why** a case exists and **which plan to read** before changing it. Preserve them when editing nearby code.
+Test files reference the planning artifact they satisfy in the `describe` name or a header comment (`TCOV-01`/`-02`/`-04`/`-06`/`-07`, `REC-01`…`REC-04`, `OPS-01`, `MAINT-01`) and annotate non-obvious business rules with decision IDs (`REL-01`…`REL-05`/`REL-08`, `MOD-01`…`MOD-05`, `D-01`…`D-22`, `PAST-01`) plus a short rationale. Integration files go further with a multi-line header stating what property is being pinned, what is explicitly out of scope, and how to run the file (`src/lib/post-class-feedback/__tests__/payout-retirement.integration.test.ts:1-14`). These are load-bearing: they tell the next engineer **why** a case exists and **which plan to read** before changing it. Preserve them when editing nearby code.
 
 ---
 
-*Testing analysis: 2026-05-31*
+*Testing analysis: 2026-09-02*
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against main@0cd1e81 (clean tree) on 2026-09-02._

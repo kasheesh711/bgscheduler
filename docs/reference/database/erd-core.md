@@ -1,506 +1,282 @@
-# Database Reference — Core (Snapshots, Sync, Tutors, Normalization)
+# Database Reference — Core (Snapshots, Sync, Tutor Identity, Normalization)
 
-This page is the **core allocation** of the database reference: **124 tables**. It covers the
-snapshot/sync control plane and cron observability, the Wise activity audit log, auth and access
-tables, the snapshot-scoped tutor + normalization tables the ETL pipeline produces, and the newer
-domains that hang off that spine — competitor intelligence, student promotion, progress tests, the
-IPEDS university dataset, post-class feedback (including its finance and payout machinery),
-university admissions case management, and the parent-facing student schedule links.
+Scope: the **22 tables** that remain in the `core` allocation after every self-contained subsystem
+was given its own page. What is left is the original ETL spine and the things that have no other
+home: the snapshot/sync control plane and cron observability, the sign-in allowlist and the Google
+token store, the snapshot-scoped tutor + normalization tables `runFullSync()` writes, the two
+cross-snapshot exceptions (`tutor_aliases`, `past_session_blocks`), the room-utilization mirror, the
+two ETL self-report tables (`data_issues`, `snapshot_stats`), and the read-only IPEDS dataset.
 
-Every table below is declared in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) and
-migrated under [`drizzle/`](../../../drizzle). **Full column-by-column detail — types, defaults,
-indexes, check constraints — is the schema file itself, indexed by the
-[database reference index](./index.md)**; this page documents grain, key columns, and relationships
-only. Enum value sets live in [`enums.md`](./enums.md). Feature meaning, rules, and flows live under
-[`docs/features/`](../../features/). Every line range cited below was read at HEAD.
+Every table below is declared in [`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) and migrated
+under [`drizzle/`](../../../drizzle). **Column-by-column detail — types, defaults, indexes, check
+constraints — is the schema file itself, indexed by the [master table index](./index.md)**; this page
+documents grain, key columns, and relationships only. Enum value sets live in
+[`enums.md`](./enums.md). Feature meaning, rules, and flows live under
+[`docs/features/`](../../features/) — principally [tutor-search.md](../../features/tutor-search.md),
+[tutor-compare.md](../../features/tutor-compare.md),
+[data-health.md](../../features/data-health.md), and
+[us-universities.md](../../features/us-universities.md).
 
-## Snapshot model in one paragraph
+## Moved
 
-The tutor and normalization tables each carry a `snapshotId` FK to `snapshots`, and most also carry
-a `groupId` FK to `tutor_identity_groups`. The ETL orchestrator inserts a fresh candidate snapshot
-with `active = false` (`src/lib/sync/orchestrator.ts:73`), writes a complete row set under it, and
-then — only if fewer than 50% of identity groups are unresolved — promotes it with a **single**
-`UPDATE` that sets `active = (id = candidate)` across a bounded `WHERE` covering just the
-previously-active row(s) and the candidate (`src/lib/sync/orchestrator.ts:472-501`, REL-01).
-Readers therefore always see exactly one active snapshot, and a failed sync leaves the prior one
-untouched. Note that this invariant is enforced by that statement, not by a database constraint:
-`snapshots` has no unique index on `active` (`schema.ts:456-461`). Tables outside the ETL lineage
-are deliberately **snapshot-independent** — `admin_users`, `google_oauth_tokens`,
-`learning_plan_access_grants`, `tutor_aliases`, `cron_invocations`, `cron_alert_state`,
-`wise_activity_events`, `wise_activity_sync_runs`, `room_utilization_sessions`,
-`past_session_blocks`, and every non-tutor domain on this page.
+Eight domains that this page used to enumerate now have their own reference pages. They are **no
+longer documented here** — follow the link instead. The counts are the number of tables each page
+took with it.
 
-Because 124 tables do not fit in one legible diagram, the ER diagrams below are split by cluster,
-and large clusters are split again. A table expanded in one diagram appears as a bare **stub node**
-(name and primary key only) when another cluster references it.
+| Domain | Tables | Now documented in |
+|---|---:|---|
+| `post_class_*` — post-class feedback, finance, payout | 32 | [erd-post-class-feedback.md](./erd-post-class-feedback.md) |
+| `admissions_*` — university admissions case management | 36 | [erd-university-admissions.md](./erd-university-admissions.md) |
+| `competitor_*` — competitor intelligence | 16 | [erd-competitor-intelligence.md](./erd-competitor-intelligence.md) |
+| `progress_test_*` — progress tests | 8 | [erd-progress-tests.md](./erd-progress-tests.md) |
+| `student_promotion_*` — July 1 student promotions | 6 | [erd-student-promotions.md](./erd-student-promotions.md) |
+| `wise_activity_*` — Wise activity audit mirror | 2 | [erd-wise-activity.md](./erd-wise-activity.md) |
+| `student_schedule_links` — parent schedule capability tokens | 1 | [erd-student-schedule.md](./erd-student-schedule.md) |
+| `learning_plan_access_grants` — Learning Plans access | 1 | [erd-learning-plans.md](./erd-learning-plans.md) |
+
+Those eight took 102 tables with them; the 22 below are what is left. **None of the eight holds a
+foreign key into core** — every `.references(...)` pointing at a table on this page comes from
+Classrooms or Leave Requests instead (listed in [§3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables)).
+The moved domains reach core by durable string: `tutor_identity_groups.canonical_key`
+resolved at read or sync time, and `admissions_college_list_items.unit_id`, a soft reference into
+`ipeds_institutions` that is deliberately never an FK (`schema.ts:4128`; see
+[§4](#4-us-universities--ipeds-3-tables)).
+
+## Scope
+
+Exactly 22 tables (Drizzle export — Postgres table — `src/lib/db/schema.ts` line range). With the
+102 moved above and the 65 owned by the nine other domain pages (AI & Proposals, Classrooms, Credit
+Control, LINE, Leave Requests, Payroll, Room Capacity, Sales Dashboard, Tutor Profiles), that
+accounts for all 189 `pgTable` declarations in the schema:
+
+| Table (varName) | Postgres table | Lines | § | Grain |
+|---|---|---|---|---|
+| `snapshots` | `snapshots` | 456–461 | [1](#1-snapshot--sync-control-plane-and-cron-observability-4-tables) | one row per ETL snapshot |
+| `syncRuns` | `sync_runs` | 462–478 | [1](#1-snapshot--sync-control-plane-and-cron-observability-4-tables) | one row per full-sync attempt |
+| `cronInvocations` | `cron_invocations` | 479–504 | [1](#1-snapshot--sync-control-plane-and-cron-observability-4-tables) | one row per cron/manual invocation |
+| `cronAlertState` | `cron_alert_state` | 505–517 | [1](#1-snapshot--sync-control-plane-and-cron-observability-4-tables) | current state, one row per alerted job |
+| `adminUsers` | `admin_users` | 575–586 | [2](#2-auth--access-2-tables) | one row per allowlisted admin |
+| `googleOAuthTokens` | `google_oauth_tokens` | 587–600 | [2](#2-auth--access-2-tables) | one row per connected Google account |
+| `tutorIdentityGroups` | `tutor_identity_groups` | 1519–1529 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | snapshot-scoped |
+| `tutorIdentityGroupMembers` | `tutor_identity_group_members` | 1530–1542 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | snapshot-scoped |
+| `tutorAliases` | `tutor_aliases` | 1543–1551 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | snapshot-independent (curated input) |
+| `tutors` | `tutors` | 1552–1564 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | snapshot-scoped |
+| `rawTeacherTags` | `raw_teacher_tags` | 1565–1575 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | snapshot-scoped |
+| `subjectLevelQualifications` | `subject_level_qualifications` | 1576–1591 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | snapshot-scoped |
+| `recurringAvailabilityWindows` | `recurring_availability_windows` | 1592–1605 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | snapshot-scoped |
+| `datedLeaves` | `dated_leaves` | 1606–1617 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | snapshot-scoped |
+| `futureSessionBlocks` | `future_session_blocks` | 1618–1648 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | snapshot-scoped |
+| `roomUtilizationSessions` | `room_utilization_sessions` | 1739–1762 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | snapshot-independent, unique on session |
+| `pastSessionBlocks` | `past_session_blocks` | 2258–2302 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | snapshot-independent, unique on session |
+| `dataIssues` | `data_issues` | 2688–2705 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | snapshot-scoped |
+| `snapshotStats` | `snapshot_stats` | 2706–2728 | [3](#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | exactly one row per snapshot |
+| `ipedsImportRuns` | `ipeds_import_runs` | 3007–3023 | [4](#4-us-universities--ipeds-3-tables) | one row per import attempt per data year |
+| `ipedsInstitutions` | `ipeds_institutions` | 3024–3117 | [4](#4-us-universities--ipeds-3-tables) | one row per (dataYear, unitId) |
+| `ipedsCompletions` | `ipeds_completions` | 3118–3140 | [4](#4-us-universities--ipeds-3-tables) | one row per (dataYear, unitId, cipCode, awardLevel) |
+
+## The snapshot model in one paragraph
+
+The tutor and normalization tables each carry a `snapshot_id` FK to `snapshots`, and most also carry
+a `group_id` FK to `tutor_identity_groups`. `runFullSync()` inserts a fresh candidate snapshot with
+`active: false` (`src/lib/sync/orchestrator.ts:72-73`), writes a complete row set under it, then
+computes `unresolvedRatio = identityIssues.length / max(groups.length, 1)` and promotes only if that
+is below `0.5` (`orchestrator.ts:472-476`). Promotion is a **single** `UPDATE` that sets
+`active = (id = candidate)` under a bounded `WHERE` covering the previously-active row(s) plus the
+candidate (`orchestrator.ts:488-498`), so a concurrent reader sees either the old active row or the
+new one and never a moment with zero matches (comment at `orchestrator.ts:481-487`, labelled
+REL-01). The invariant is upheld by that statement, not by a constraint: `snapshots` carries no
+unique index on `active` (`schema.ts:456-461`).
+
+After a successful promotion the orchestrator calls `pruneOldSnapshots(db)`
+(`orchestrator.ts:527-541`), which keeps the newest `SNAPSHOT_RETENTION_COUNT = 30` snapshots plus
+the active one whatever its age (`src/lib/sync/snapshot-pruning.ts:5`, `:64-70`), then deletes
+children in reverse-FK order — `snapshot_stats`,
+`data_issues`, `future_session_blocks`, `dated_leaves`, `recurring_availability_windows`,
+`raw_teacher_tags`, `subject_level_qualifications`, `tutors`, `tutor_identity_group_members`,
+`tutor_identity_groups`, and finally `snapshots` (`src/lib/sync/snapshot-pruning.ts:104-179`).
+`sync_runs` is not deleted; its two snapshot columns are **nulled** instead
+(`snapshot-pruning.ts:88-103`), which is why both are nullable FKs. Pruning runs inside its own
+try/catch and records success or failure in `sync_runs.metadata` rather than failing the sync
+(`orchestrator.ts:532-541`).
+
+Tables deliberately outside that lineage are **snapshot-independent** and survive rotation:
+`admin_users`, `google_oauth_tokens`, `tutor_aliases`, `cron_invocations`, `cron_alert_state`,
+`room_utilization_sessions`, `past_session_blocks`, and all three `ipeds_*` tables.
+
+Three grain patterns recur and are worth naming once:
+
+- **Snapshot-scoped** — carries `snapshot_id`, rewritten wholesale per ETL run; readers filter to
+  `snapshots.active = true`.
+- **Snapshot-independent** — keyed by a durable natural key (email, `wise_session_id`,
+  `group_canonical_key`, `(dataYear, unitId)`) and deliberately surviving rotation.
+- **Single-flight ledger** — a run table whose partial `uniqueIndex(...).where(status = 'running')`
+  puts the concurrency guard in Postgres rather than application code. `sync_runs` and
+  `ipeds_import_runs` are the two on this page, and they guard on different columns (see
+  [Open questions](#open-questions)).
 
 ---
 
-## 1. Snapshot & sync control plane, activity audit, auth & access (9 tables)
+## 1. Snapshot & sync control plane and cron observability (4 tables)
+
+| Table (varName) | SQL name | schema.ts lines |
+|---|---|---|
+| `snapshots` | `snapshots` | 456–461 |
+| `syncRuns` | `sync_runs` | 462–478 |
+| `cronInvocations` | `cron_invocations` | 479–504 |
+| `cronAlertState` | `cron_alert_state` | 505–517 |
 
 ```mermaid
 erDiagram
     snapshots {
         uuid id PK
-        bool active
+        bool active "no unique index; upheld by the promotion UPDATE"
         ts created_at
     }
     sync_runs {
         uuid id PK
-        uuid snapshot_id FK
-        uuid promoted_snapshot_id FK
-        text status
+        sync_status status "partial-unique single-running guard"
+        uuid snapshot_id FK "nullable; nulled on prune"
+        uuid promoted_snapshot_id FK "nullable; null when the gate blocked"
+        int teacher_count
+        jsonb metadata "duration, Wise stats, pruning result"
     }
     cron_invocations {
         uuid id PK
-        text job_key
+        text job_key "no unique constraint - repeats are the signal"
+        text trigger_source "cron or manual"
+        text actor_email "set on a manual run"
         text outcome
+        jsonb linked_run_ids "back-pointers to domain sync runs"
     }
     cron_alert_state {
         text job_key PK
         text episode_key
-        text last_alert_outcome
-    }
-    wise_activity_events {
-        uuid id PK
-        text event_id UK
-        text event_name
-    }
-    wise_activity_sync_runs {
-        uuid id PK
-        text status
-        int inserted_count
-    }
-    admin_users {
-        uuid id PK
-        text email UK
-        jsonb allowed_pages
-    }
-    google_oauth_tokens {
-        text email PK
-        text refresh_token_ciphertext
-        ts expires_at
-    }
-    learning_plan_access_grants {
-        text email PK
-        text granted_by_email
+        text last_alert_outcome "flips to recovered, re-arming the next alert"
+        ts last_alerted_at
     }
 
-    snapshots ||--o{ sync_runs : "candidate of"
-    snapshots ||--o{ sync_runs : "promoted by"
+    snapshots ||--o{ sync_runs : "written by / promoted by"
 ```
 
-`cron_invocations`, `cron_alert_state`, `wise_activity_events`, `wise_activity_sync_runs`,
-`admin_users`, `google_oauth_tokens`, and `learning_plan_access_grants` carry no foreign keys — they
-are independent control-plane and access tables, correlated by job key or email rather than by
-referential integrity.
+`sync_runs` holds the only foreign keys in this cluster — both to `snapshots`, both nullable. The
+other two tables are independent ledgers that share the cluster because they are control-plane
+rather than domain data: neither references anything and nothing references them.
 
 ### `snapshots` — `snapshots` (schema.ts:456-461)
 
-One row per candidate snapshot created by a Wise ETL attempt. Three columns only: `id`, `active`,
-`createdAt`. Every snapshot-scoped table in §4 points at it. Promotion flips `active` (see above);
-pruning of superseded snapshots happens in the sync layer, not by cascade.
+One row per Wise ETL snapshot; three columns only (`id`, `active`, `createdAt`). `active = true`
+marks the single promoted snapshot every read path filters on — `ensureIndex()` resolves it with a
+plain `WHERE active = true` before loading anything else (`src/lib/search/index.ts:145-148`). Parent
+of every snapshot-scoped table in §3 and of both `sync_runs` FK columns.
 
-### `sync_runs` — `syncRuns` (schema.ts:462-478)
+### `syncRuns` — `sync_runs` (schema.ts:462-478)
 
-One row per Wise snapshot sync attempt. `status` is `sync_status`; `snapshotId` is the candidate
-this run wrote and `promotedSnapshotId` the one it promoted (both FKs to `snapshots`, both nullable
-— a failed run promotes nothing). `teacherCount`, `errorSummary`, and a free-form `metadata` jsonb
-carry the run report. The partial unique index `sync_runs_single_running_idx` on
-`status WHERE status = 'running'` is the **database-level single-flight guard**: a second concurrent
-sync cannot insert its running row.
+One row per full-sync attempt. `status` is [`sync_status`](./enums.md#sync_status); `snapshotId` is
+the candidate the run wrote and `promotedSnapshotId` the one it promoted — null when the run errored
+or the >50% unresolved-identity gate blocked it. `teacherCount`, `errorSummary`, and a free-form
+`metadata` jsonb carry the outcome; the orchestrator writes run duration, Wise client stats, and the
+pruning result into that jsonb (`orchestrator.ts:507-546`). The partial
+`uniqueIndex("sync_runs_single_running_idx").where(status = 'running')` (`schema.ts:473-475`) is the
+single-flight guard: a second concurrent sync cannot insert its `running` row.
 
-### `cron_invocations` — `cronInvocations` (schema.ts:479-504)
+### `cronInvocations` — `cron_invocations` (schema.ts:479-504)
 
-One row per invocation of an internal cron route, whether fired by the scheduler or by hand.
-`jobKey` + `path` identify the job; `triggerSource` (default `"cron"`) and `actorEmail` distinguish
-scheduled from manual runs; `outcome` (default `"running"`) plus
-`responseStatus`/`durationMs`/`errorSummary` record the result. `linkedRunIds` jsonb correlates the
-invocation with the domain-specific `*_sync_runs` row it created. No FKs; indexed by
-(`jobKey`, `receivedAt`), (`outcome`, `receivedAt`), and (`triggerSource`, `receivedAt`).
+One row per invocation of an internal cron or manual job. `jobKey` has **no** unique constraint —
+repeat rows are the observability signal, not a defect. `triggerSource` separates `cron` from manual
+runs and `actorEmail` names the human on a manual one; `outcome`, `responseStatus`, and `durationMs`
+record the result; `linkedRunIds` jsonb points back at whatever domain `*_sync_runs` row the
+invocation created (`extractLinkedRunIds`, `src/lib/data-health/cron-audit.ts:180`). Rows are
+retained for `CRON_INVOCATION_RETENTION_DAYS = 90` and then deleted
+(`src/lib/data-health/cron-retention.ts:16-54`). Backs the Data Health cron table; the schedule
+inventory is [`../crons.md`](../crons.md).
 
-### `cron_alert_state` — `cronAlertState` (schema.ts:505-517)
+### `cronAlertState` — `cron_alert_state` (schema.ts:505-517)
 
-One row per cron job the watchdog has alerted on, keyed by `jobKey` as the primary key.
-`episodeKey` names the failure episode that was alerted, so a continuing outage does not re-alert;
-`lastAlertOutcome` flips to `"recovered"` when the recovery notice goes out, which re-arms the next
-alert for that job (comment at `schema.ts:501-504`).
-
-### `wise_activity_events` — `wiseActivityEvents` (schema.ts:518-552)
-
-One row per Wise audit event, deduped by `uniqueIndex` on `eventId`. Wise's payload is both
-flattened into query columns (actor, classroom, session, transaction) and preserved whole in
-`payload` and `raw` jsonb. Snapshot-independent and append-mostly; eight indexes back the audit
-UI's filters. Referenced by `post_class_feedback_event_links` (§7b).
-
-### `wise_activity_sync_runs` — `wiseActivitySyncRuns` (schema.ts:553-574)
-
-One row per activity-audit ingest run. Counters for `pagesFetched`, `eventsFetched`, and
-`insertedCount`, plus the `oldestEventTimestamp`/`newestEventTimestamp` covered. Carries the same
-partial unique `WHERE status = 'running'` single-flight guard as `sync_runs`.
-
-### `admin_users` — `adminUsers` (schema.ts:575-586)
-
-One row per allowlisted admin, unique on `email`. `allowedPages` is `string[] | null`: **null means
-full access** (the historical behaviour for every existing admin), non-null restricts the user to
-those route prefixes (comment at `schema.ts:579-580`). Snapshot-independent.
-
-### `google_oauth_tokens` — `googleOAuthTokens` (schema.ts:587-600)
-
-One row per connected Google account, keyed by `email` as the primary key. Access and refresh
-tokens are stored as ciphertext columns only; `expiresAt`, `scope`, `tokenType`, and `lastError`
-support silent refresh and surfacing a broken connection.
-
-### `learning_plan_access_grants` — `learningPlanAccessGrants` (schema.ts:601-617)
-
-One row per email granted learning-plan access, keyed by `email`. Two check constraints make the key
-trustworthy rather than merely conventional: `learning_plan_access_email_normalized_check` requires
-`email = lower(btrim(email))` and non-empty, and `learning_plan_access_granted_by_nonblank_check`
-requires a non-blank grantor. Read by `src/lib/learning-plans/access.ts`.
+One row per cron job the watchdog has ever alerted on — `jobKey` is the primary key, so this is
+current state, not history. `episodeKey` identifies the failure episode already alerted; when the
+recovery notice goes out `lastAlertOutcome` flips to `"recovered"`, which re-arms the next alert for
+that job (comment at `schema.ts:501-504`). Written only by
+[`src/lib/internal/cron-watchdog.ts`](../../../src/lib/internal/cron-watchdog.ts), the handler behind
+the `/api/internal/cron-watchdog` cron (`7,37 * * * *`, `vercel.json:60-63`).
 
 ---
 
-## 2. Competitor intelligence (16 tables)
+## 2. Auth & access (2 tables)
+
+| Table (varName) | SQL name | schema.ts lines |
+|---|---|---|
+| `adminUsers` | `admin_users` | 575–586 |
+| `googleOAuthTokens` | `google_oauth_tokens` | 587–600 |
 
 ```mermaid
 erDiagram
-    competitor_entities {
+    admin_users {
         uuid id PK
-        text slug UK
-        text display_name
+        text email UK "lowercased at lookup"
+        text name
+        jsonb allowed_pages "null = full access; array = restricted prefixes"
+        ts created_at
     }
-    competitor_sources {
-        uuid id PK
-        uuid entity_id FK
-        text url
+    google_oauth_tokens {
+        text email PK
+        text access_token_ciphertext
+        text refresh_token_ciphertext
+        text scope
+        ts expires_at
+        text last_error
     }
-    competitor_sync_runs {
-        uuid id PK
-        text status
-        text trigger_type
-    }
-    competitor_source_runs {
-        uuid id PK
-        uuid sync_run_id FK
-        uuid source_id FK
-        uuid entity_id FK
-    }
-    competitor_evidence_items {
-        uuid id PK
-        text item_key UK
-        uuid entity_id FK
-        uuid source_id FK
-        uuid source_run_id FK
-    }
-    competitor_assets {
-        uuid id PK
-        uuid item_id FK
-        text storage_key UK
-    }
-    competitor_serp_keywords {
-        uuid id PK
-        text keyword
-        text device
-    }
-    competitor_serp_observations {
-        uuid id PK
-        text observation_key UK
-        uuid keyword_id FK
-        uuid entity_id FK
-        uuid source_run_id FK
-    }
-    competitor_ai_runs {
-        uuid id PK
-        uuid sync_run_id FK
-        text run_type
-    }
-    competitor_briefs {
-        uuid id PK
-        date brief_date UK
-        uuid sync_run_id FK
-        uuid ai_run_id FK
-    }
-    competitor_war_room_snapshots {
-        uuid id PK
-        date week_start UK
-        uuid sync_run_id FK
-        uuid ai_run_id FK
-    }
-    competitor_task_suggestions {
-        uuid id PK
-        uuid brief_id FK
-        uuid item_id FK
-        uuid ai_run_id FK
-        uuid accepted_task_id
-    }
-    competitor_tasks {
-        uuid id PK
-        uuid item_id FK
-        uuid brief_id FK
-        uuid suggestion_id FK
-        text status
-    }
-    competitor_task_comments {
-        uuid id PK
-        uuid task_id FK
-        uuid attachment_asset_id FK
-    }
-    competitor_task_events {
-        uuid id PK
-        uuid task_id FK
-        text event_type
-    }
-    competitor_vendor_usage {
-        uuid id PK
-        date usage_month
-        text provider
-        bool capped
-    }
-
-    competitor_entities ||--o{ competitor_sources : "monitored via"
-    competitor_entities ||--o{ competitor_evidence_items : "evidence about"
-    competitor_entities ||--o{ competitor_source_runs : "fetched for"
-    competitor_entities ||--o{ competitor_serp_observations : "ranked as"
-    competitor_sync_runs ||--o{ competitor_source_runs : "contains"
-    competitor_sync_runs ||--o{ competitor_ai_runs : "triggers"
-    competitor_sync_runs ||--o{ competitor_briefs : "produces"
-    competitor_sync_runs ||--o{ competitor_war_room_snapshots : "produces"
-    competitor_sources ||--o{ competitor_source_runs : "run of"
-    competitor_sources ||--o{ competitor_evidence_items : "captured from"
-    competitor_source_runs ||--o{ competitor_evidence_items : "captured in"
-    competitor_source_runs ||--o{ competitor_serp_observations : "captured in"
-    competitor_evidence_items ||--o{ competitor_assets : "stores"
-    competitor_evidence_items ||--o{ competitor_task_suggestions : "suggests"
-    competitor_evidence_items ||--o{ competitor_tasks : "motivates"
-    competitor_serp_keywords ||--o{ competitor_serp_observations : "observed for"
-    competitor_ai_runs ||--o{ competitor_task_suggestions : "generated"
-    competitor_briefs ||--o{ competitor_task_suggestions : "proposes"
-    competitor_briefs ||--o{ competitor_tasks : "sources"
-    competitor_task_suggestions ||--o| competitor_tasks : "accepted into"
-    competitor_tasks ||--o{ competitor_task_comments : "discussed in"
-    competitor_tasks ||--o{ competitor_task_events : "audited by"
-    competitor_assets ||--o{ competitor_task_comments : "attached to"
 ```
 
-### `competitor_entities` — `competitorEntities` (schema.ts:795-815)
+Neither table is an FK target and neither declares an FK. They are joined to nothing: both are keyed
+by email and looked up by an already-normalized string.
 
-One row per tracked organisation. `slug` is unique; `kind` (`competitor_entity_kind`, default
-`competitor`) separates true competitors from adjacent entities. `discoveredBy` (default `"seed"`)
-plus `confidence` and `discoveryMetadata` record whether a human or a discovery pass added it.
-Retirement is soft: `active` + `archivedAt`.
+### `adminUsers` — `admin_users` (schema.ts:575-586)
 
-### `competitor_sources` — `competitorSources` (schema.ts:816-843)
+One row per allowlisted admin, unique on `email` (`schema.ts:584`). `allowedPages` is the
+page-scoping mechanism: `null` means full access (the original admins, unchanged), a non-null string
+array restricts the user to those route prefixes (comment at `schema.ts:579-580`). It is **step 1 of
+a four-step sign-in cascade** — an `admin_users` hit wins outright, ahead of the admissions-counselor
+registry, tutor contacts, and per-case admissions membership, so an admin who is also a tutor contact
+keeps the admin view (`resolveUserAccess`, `src/lib/auth-access.ts:56-84`). The resolved
+`allowedPages` then rides on the session and is enforced per request in `isPathAllowed`
+(`src/middleware.ts:36-67`), which matches each prefix both as a page (`/x`, `/x/…`) and as its API
+namespace (`/api/x`, `/api/x/…`). The `allowedPages IS NULL` predicate is also how the cron watchdog
+picks its alert recipients — only full-access admins are mailed
+(`src/lib/internal/cron-watchdog.ts:264-267`).
 
-One row per monitored source URL for an entity, unique on (`entityId`, `sourceType`, `url`).
-`provider` (default `"internal"`) names the vendor that fetches it, `priority` orders the sweep,
-`status` gates it, and `reliability`/`bestEffort` mark sources whose failure must not fail the run.
-`lastRunAt`/`lastSuccessAt`/`lastError` are the source-health readout.
+### `googleOAuthTokens` — `google_oauth_tokens` (schema.ts:587-600)
 
-### `competitor_sync_runs` — `competitorSyncRuns` (schema.ts:844-870)
-
-One row per competitor sweep. Partial unique `WHERE status = 'running'` gives the same single-flight
-guarantee as the Wise sync. Counters cover sources (total/success/failed/skipped), items, new items,
-assets, AI runs, task suggestions, and `budgetSkippedCount` — the sweep degrades rather than
-overspending.
-
-### `competitor_source_runs` — `competitorSourceRuns` (schema.ts:871-895)
-
-One row per source per sweep; FKs to `competitorSyncRuns`, `competitorSources`, and
-`competitorEntities`. Alongside per-source counters it carries `usageUnits` and `estimatedCostUsd`,
-which is what makes the vendor-budget accounting in `competitor_vendor_usage` derivable.
-
-### `competitor_evidence_items` — `competitorEvidenceItems` (schema.ts:896-928)
-
-One row per captured piece of evidence, deduped by unique `itemKey`. FK to the entity; `sourceId`
-and `sourceRunId` are nullable so manually-entered evidence is representable. Carries editorial
-state (`evidenceStatus`, `reviewStatus`, `taskSuggestionStatus`), scoring (`impactScore`,
-`confidence`), a `pricingSignal` flag, and `metrics`/`raw` jsonb.
-
-### `competitor_assets` — `competitorAssets` (schema.ts:929-946)
-
-One row per stored media asset belonging to an evidence item. `storageKey` is unique;
-`storageProvider` defaults to `"vercel_blob"`. Also referenced by task comments as an attachment.
-
-### `competitor_serp_keywords` — `competitorSerpKeywords` (schema.ts:947-967)
-
-One row per tracked search query, unique on (`keyword`, `language`, `location`, `device`) — the same
-phrase on mobile and desktop are different rows. Defaults are Bangkok / mobile / English.
-`autoTracked` plus `approvedByEmail`/`approvedAt` distinguish machine-proposed keywords from
-human-approved ones.
-
-### `competitor_serp_observations` — `competitorSerpObservations` (schema.ts:968-995)
-
-One row per SERP result observed for a keyword, deduped by unique `observationKey`. FK to the
-keyword; `entityId` and `sourceRunId` are nullable (a result may not map to a tracked entity).
-Stores `rankAbsolute`/`rankGroup`, the result text, and an `isBeGifted` flag so own-brand visibility
-is a query rather than a string match.
-
-### `competitor_ai_runs` — `competitorAiRuns` (schema.ts:996-1014)
-
-One row per LLM call in the competitor pipeline. `runType` names the job, `promptVersion` is
-required (so output is attributable to a prompt), `model` and `latencyMs` are observability, and
-`output` jsonb holds the parsed result. `syncRunId` is nullable — ad-hoc runs exist.
-
-### `competitor_briefs` — `competitorBriefs` (schema.ts:1015-1037)
-
-One row per brief date (`briefDate` unique). Narrative fields (`executiveSummary` plus the
-`whatChanged`/`whyItMatters`/`recommendedResponses` string arrays) sit beside scalar readouts —
-`coverageScore`, `seoVisibilityScore`, `openTaskCount`, `budgetUsageRatio` — and `sourceHealth`
-jsonb. Nullable FKs record which sweep and which AI run produced it.
-
-### `competitor_war_room_snapshots` — `competitorWarRoomSnapshots` (schema.ts:1038-1062)
-
-One row per week (`weekStart` unique), with an explicit `lookbackStart`/`lookbackEnd` window that
-may be wider than the week itself. `matrix`, `contentAngles`, and `scoreDrilldowns` are jsonb
-payloads rendered directly by the war-room view.
-
-### `competitor_task_suggestions` — `competitorTaskSuggestions` (schema.ts:1063-1085)
-
-One row per AI-proposed action, with nullable FKs to the brief, evidence item, and AI run that
-motivated it. `status` defaults to `"suggested"`. `acceptedTaskId` is a **plain uuid, not an FK** —
-it is set to the created task's id on acceptance
-(`src/lib/competitor-intelligence/data.ts:627`), avoiding a circular FK with
-`competitor_tasks.suggestionId`.
-
-### `competitor_tasks` — `competitorTasks` (schema.ts:1086-1109)
-
-One row per human-owned task. `status` is `competitor_task_status` (default `todo`); `ownerEmail`,
-`dueDate`, `labels`, and `createdByEmail`/`updatedByEmail` are the work-tracking surface. All three
-provenance FKs (`itemId`, `briefId`, `suggestionId`) are nullable so a task can be created from
-scratch.
-
-### `competitor_task_comments` — `competitorTaskComments` (schema.ts:1110-1120)
-
-One row per comment on a task. `attachmentAssetId` optionally points at a `competitor_assets` row,
-so a comment can cite the captured screenshot rather than re-uploading it.
-
-### `competitor_task_events` — `competitorTaskEvents` (schema.ts:1121-1131)
-
-Append-only task audit: one row per state change, with `eventType`, `actorEmail`, and a `payload`
-jsonb. No `updatedAt` — rows are written, never edited.
-
-### `competitor_vendor_usage` — `competitorVendorUsage` (schema.ts:1132-1149)
-
-One row per (`usageMonth`, `provider`, `sourceType`) — unique. Accumulates `usageUnits` and
-`estimatedCostUsd` against `hardCapUsd`, with a `capped` boolean the sweep reads to skip
-budget-exhausted providers (which is what `competitor_sync_runs.budgetSkippedCount` counts).
+One row per connected Google account, `email` as the primary key. Access and refresh tokens are
+stored only as ciphertext (`accessTokenCiphertext`, `refreshTokenCiphertext`); `scope`, `tokenType`,
+`expiresAt`, and `lastError` carry the connection's health. Owned by the Sales Dashboard's shared
+Google layer (`src/lib/sales-dashboard/google-oauth.ts:106-293`, the only writer) and read by Leave
+Requests (`src/lib/leave-requests/sync.ts:132-135`) and the post-class Drive/payout path
+(`src/lib/post-class-feedback/drive.ts`, `payout-run.ts`) — three domains sharing one token store.
 
 ---
 
-## 3. Student promotion (6 tables)
+## 3. Tutor identity, normalization, session blocks & data health (13 tables)
 
-The promotion workflow's own framing lives in
-[erd-student-promotions.md](./erd-student-promotions.md); the mechanics are below.
+The original ETL output: what `runFullSync()` writes under a candidate snapshot, plus the two
+cross-snapshot exceptions (`tutor_aliases` as curated input, `past_session_blocks` as durable
+history), the independent room-utilization mirror, and the two tables in which a run reports on
+itself.
 
-```mermaid
-erDiagram
-    credit_control_snapshots {
-        uuid id PK
-    }
-    payroll_rate_rules {
-        uuid id PK
-    }
-    student_promotion_runs {
-        uuid id PK
-        date target_date
-        text status
-        uuid source_snapshot_id FK
-    }
-    student_promotion_grade_actions {
-        uuid id PK
-        uuid run_id FK
-        text wise_student_id
-        text status
-    }
-    student_promotion_course_actions {
-        uuid id PK
-        uuid run_id FK
-        text wise_class_id
-        text transition_type
-    }
-    student_promotion_future_session_actions {
-        uuid id PK
-        uuid run_id FK
-        uuid course_action_id FK
-        text wise_session_id
-    }
-    student_promotion_graduation_actions {
-        uuid id PK
-        uuid run_id FK
-        text wise_student_id
-        text disposition
-    }
-    student_promotion_pay_rate_impacts {
-        uuid id PK
-        uuid run_id FK
-        uuid course_action_id FK
-        uuid before_rate_rule_id FK
-        uuid after_rate_rule_id FK
-        text review_status
-    }
-
-    credit_control_snapshots ||--o{ student_promotion_runs : "sources"
-    student_promotion_runs ||--o{ student_promotion_grade_actions : "plans"
-    student_promotion_runs ||--o{ student_promotion_course_actions : "plans"
-    student_promotion_runs ||--o{ student_promotion_future_session_actions : "plans"
-    student_promotion_runs ||--o{ student_promotion_graduation_actions : "plans"
-    student_promotion_runs ||--o{ student_promotion_pay_rate_impacts : "surfaces"
-    student_promotion_course_actions ||--o{ student_promotion_future_session_actions : "rewrites"
-    student_promotion_course_actions ||--o{ student_promotion_pay_rate_impacts : "causes"
-    payroll_rate_rules ||--o{ student_promotion_pay_rate_impacts : "rated before"
-    payroll_rate_rules ||--o{ student_promotion_pay_rate_impacts : "rated after"
-```
-
-### `student_promotion_runs` — `studentPromotionRuns` (schema.ts:1343-1375)
-
-One row per promotion planning run for a `targetDate`. `status` is `student_promotion_run_status`
-(default `draft`); `sourceSnapshotId` FKs to `credit_control_snapshots`, pinning the plan to the
-student population it was computed against. Counters break the plan down (grade-only, Year 8 /
-Year 11 course moves, skipped, pending). Three distinct lifecycle stamps exist: verification
-(`verifiedAt`/`verifiedByEmail`/`endpointVerificationNote`), apply
-(`applyStartedAt`/`applyFinishedAt`/`appliedByEmail`), and creation.
-
-### `student_promotion_grade_actions` — `studentPromotionGradeActions` (schema.ts:1376-1399)
-
-One row per student per run — unique on (`runId`, `wiseStudentId`). Holds the parsed current year,
-the `targetGrade`, an `actionType`, and a `student_promotion_action_status`. `requestPayload` and
-`responsePayload` jsonb preserve exactly what was sent to and returned by Wise; `skipReason`
-explains a non-action.
-
-### `student_promotion_course_actions` — `studentPromotionCourseActions` (schema.ts:1400-1422)
-
-One row per class per run — unique on (`runId`, `wiseClassId`). `currentSubject` → `targetSubject`
-under a `transitionType`, with `studentIds` and `qualifyingStudentIds` arrays recording who is in
-the class versus who actually qualifies for the move.
-
-### `student_promotion_future_session_actions` — `studentPromotionFutureSessionActions` (schema.ts:1423-1449)
-
-One row per future session to be rewritten — unique on (`runId`, `wiseSessionId`), with an optional
-FK to the course action that caused it. Stores `scheduledStartTime` and both the raw subjects and
-the `current`/`target` normalized course keys, so the rewrite is checkable after the fact.
-
-### `student_promotion_graduation_actions` — `studentPromotionGraduationActions` (schema.ts:1450-1472)
-
-One row per graduating student per run — unique on (`runId`, `wiseStudentId`). Unlike the other
-action tables its `status` is a plain text column defaulting to `"pending_review"`: graduation is a
-human decision, captured as `disposition` plus `reviewedByEmail`/`reviewedAt`.
-
-### `student_promotion_pay_rate_impacts` — `studentPromotionPayRateImpacts` (schema.ts:1473-1515)
-
-One row per pay-rate consequence of a course move — unique on (`runId`, `impactKey`).
-`beforeRateRuleId`/`afterRateRuleId` FK into `payroll_rate_rules`, and the resolved
-`before`/`afterExpectedHourlyRate` plus `rateDelta` quantify the change. Blast radius is recorded as
-`futureSessionCount`, first/last session times, and the affected student id/name arrays.
-`reviewStatus` (default `"pending_review"`) and `blockerReason` make an unreviewed rate change a
-blocker rather than a silent side effect.
-
----
-
-## 4. Tutor identity, normalization, session blocks, data health (13 tables)
-
-This is the original ETL output: everything here except `tutor_aliases`,
-`room_utilization_sessions`, and `past_session_blocks` is snapshot-scoped and rewritten wholesale
-each sync.
+| Table (varName) | SQL name | schema.ts lines |
+|---|---|---|
+| `tutorIdentityGroups` | `tutor_identity_groups` | 1519–1529 |
+| `tutorIdentityGroupMembers` | `tutor_identity_group_members` | 1530–1542 |
+| `tutorAliases` | `tutor_aliases` | 1543–1551 |
+| `tutors` | `tutors` | 1552–1564 |
+| `rawTeacherTags` | `raw_teacher_tags` | 1565–1575 |
+| `subjectLevelQualifications` | `subject_level_qualifications` | 1576–1591 |
+| `recurringAvailabilityWindows` | `recurring_availability_windows` | 1592–1605 |
+| `datedLeaves` | `dated_leaves` | 1606–1617 |
+| `futureSessionBlocks` | `future_session_blocks` | 1618–1648 |
+| `roomUtilizationSessions` | `room_utilization_sessions` | 1739–1762 |
+| `pastSessionBlocks` | `past_session_blocks` | 2258–2302 |
+| `dataIssues` | `data_issues` | 2688–2705 |
+| `snapshotStats` | `snapshot_stats` | 2706–2728 |
 
 ```mermaid
 erDiagram
@@ -510,32 +286,31 @@ erDiagram
     tutor_identity_groups {
         uuid id PK
         uuid snapshot_id FK
-        text canonical_key
+        text canonical_key "durable cross-domain handle"
         text display_name
+        modality supported_modality "defaults to unresolved"
     }
     tutor_identity_group_members {
         uuid id PK
         uuid group_id FK
         uuid snapshot_id FK
         text wise_teacher_id
+        text wise_user_id
         bool is_online_variant
-    }
-    tutor_aliases {
-        uuid id PK
-        text from_key UK
-        text to_key
     }
     tutors {
         uuid id PK
         uuid snapshot_id FK
         uuid group_id FK
         text display_name
+        jsonb supported_modes
     }
     raw_teacher_tags {
         uuid id PK
         uuid snapshot_id FK
         uuid group_id FK
         text tag_value
+        jsonb tag_raw
     }
     subject_level_qualifications {
         uuid id PK
@@ -543,1303 +318,366 @@ erDiagram
         uuid group_id FK
         text subject
         text level
+        text source_tag
     }
     recurring_availability_windows {
         uuid id PK
         uuid snapshot_id FK
         uuid group_id FK
-        int weekday
-        int start_minute
+        int weekday "0=Sunday..6=Saturday"
+        int start_minute "minutes since midnight Asia/Bangkok"
+        modality modality
     }
     dated_leaves {
         uuid id PK
         uuid snapshot_id FK
         uuid group_id FK
         ts start_time
+        ts end_time
     }
     future_session_blocks {
         uuid id PK
         uuid snapshot_id FK
         uuid group_id FK
         text wise_session_id
-        bool is_blocking
+        text wise_status
+        bool is_blocking "fail-closed default true"
+        text recurrence_id
+    }
+    data_issues {
+        uuid id PK
+        uuid snapshot_id FK
+        data_issue_type type
+        data_issue_severity severity
+        text entity_id "loose text, not an FK"
+    }
+    snapshot_stats {
+        uuid id PK
+        uuid snapshot_id UK "exactly one row per snapshot"
+        int total_identity_groups
+        int unresolved_groups
+        jsonb issues_by_type
+    }
+    tutor_aliases {
+        uuid id PK
+        text from_key UK
+        text to_key
     }
     past_session_blocks {
         uuid id PK
-        text group_canonical_key
-        text wise_session_id UK
-        uuid captured_in_snapshot_id
+        text group_canonical_key "resolved at read time"
+        text wise_session_id UK "one row per session, ever"
+        uuid captured_in_snapshot_id "provenance only, deliberately not an FK"
+        ts captured_at
     }
     room_utilization_sessions {
         uuid id PK
         text wise_session_id UK
         date utilization_date
+        text raw_location
         text normalized_room_label
     }
-    data_issues {
-        uuid id PK
-        uuid snapshot_id FK
-        text type
-        text severity
-    }
-    snapshot_stats {
-        uuid id PK
-        uuid snapshot_id FK
-        int unresolved_groups
-    }
 
-    snapshots ||--o{ tutor_identity_groups : "scopes"
-    snapshots ||--o{ tutor_identity_group_members : "scopes"
-    snapshots ||--o{ tutors : "scopes"
-    snapshots ||--o{ raw_teacher_tags : "scopes"
-    snapshots ||--o{ subject_level_qualifications : "scopes"
-    snapshots ||--o{ recurring_availability_windows : "scopes"
-    snapshots ||--o{ dated_leaves : "scopes"
-    snapshots ||--o{ future_session_blocks : "scopes"
-    snapshots ||--o{ data_issues : "scopes"
-    snapshots ||--|| snapshot_stats : "summarized by"
-    tutor_identity_groups ||--o{ tutor_identity_group_members : "merges"
-    tutor_identity_groups ||--o{ tutors : "presents as"
+    snapshots ||--o{ tutor_identity_groups : scopes
+    snapshots ||--o{ tutor_identity_group_members : scopes
+    snapshots ||--o{ tutors : scopes
+    snapshots ||--o{ raw_teacher_tags : scopes
+    snapshots ||--o{ subject_level_qualifications : scopes
+    snapshots ||--o{ recurring_availability_windows : scopes
+    snapshots ||--o{ dated_leaves : scopes
+    snapshots ||--o{ future_session_blocks : scopes
+    snapshots ||--o{ data_issues : scopes
+    snapshots ||--|| snapshot_stats : summarizes
+    tutor_identity_groups ||--o{ tutor_identity_group_members : merges
+    tutor_identity_groups ||--o{ tutors : "read aggregate for"
     tutor_identity_groups ||--o{ raw_teacher_tags : "tagged with"
-    tutor_identity_groups ||--o{ subject_level_qualifications : "qualified for"
+    tutor_identity_groups ||--o{ subject_level_qualifications : qualifies
     tutor_identity_groups ||--o{ recurring_availability_windows : "available in"
     tutor_identity_groups ||--o{ dated_leaves : "on leave in"
-    tutor_identity_groups ||--o{ future_session_blocks : "booked in"
-    tutor_identity_groups }o..o{ past_session_blocks : "resolved by canonical_key"
+    tutor_identity_groups ||--o{ future_session_blocks : "busy in"
+    tutor_identity_groups |o..o{ past_session_blocks : "resolved by canonical_key"
+    tutor_aliases }o..o{ tutor_identity_groups : "curated input to the cascade"
 ```
 
-### `tutor_identity_groups` — `tutorIdentityGroups` (schema.ts:1516-1526)
+Both dotted edges are deliberate non-FKs. `past_session_blocks` joins by the `group_canonical_key`
+string so its rows outlive the snapshot that captured them; `tutor_aliases` is *input* to the
+identity cascade rather than output of it — the orchestrator reads the whole table before resolving
+(`orchestrator.ts:86-94`) — so it must not be rewritten per sync. `room_utilization_sessions` has no
+edge at all: it is keyed on `wise_session_id` and carries no group or snapshot column.
 
-One row per resolved tutor identity within a snapshot. `canonicalKey` is the stable cross-snapshot
-identity string (what `past_session_blocks`, tutor profiles, and post-class sessions join on);
-`displayName` is the human label; `supportedModality` is `modality`, defaulting to `unresolved`
-rather than guessing (fail-closed). `snapshotId` FK; indexed by snapshot.
+**Inbound cross-domain FKs.** Five tables outside this page reference core, and this is the complete
+list: `classroomAssignmentRuns.snapshotId` (`schema.ts:1667`),
+`classroomAssignmentRows.snapshotId` + `.groupId` (`:1693-1694`),
+`classroomScheduleEmailRecipients.groupId` (`:2041`) — all in
+[erd-classrooms.md](./erd-classrooms.md) — plus `leaveRequests.tutorGroupId` (`:2153`) and
+`leaveRequestAffectedSessions.snapshotId` + `.groupId` (`:2177-2178`) in
+[erd-leave-requests.md](./erd-leave-requests.md). Every other domain that needs a tutor stores
+`tutor_identity_groups.canonical_key` as a plain string resolved at read or sync time — payroll
+(`src/lib/payroll/sync.ts:139-159`), progress tests, and post-class feedback all do this. Nothing
+anywhere references `admin_users`, `google_oauth_tokens`, or the `ipeds_*` tables by FK.
 
-### `tutor_identity_group_members` — `tutorIdentityGroupMembers` (schema.ts:1527-1539)
+### `tutorIdentityGroups` — `tutor_identity_groups` (schema.ts:1519-1529)
 
-One row per underlying Wise teacher record folded into a group. Carries `wiseTeacherId`,
-`wiseUserId`, the raw `wiseDisplayName`, and `isOnlineVariant` — the flag that records the
-online/offline pair-detection step of the identity cascade. FKs to both the group and the snapshot.
+One row per resolved tutor identity within one snapshot. `canonicalKey` is the durable
+cross-snapshot handle other domains store as a plain string; `displayName` is the human label; and
+`supportedModality` is [`modality`](./enums.md#modality) defaulting to `"unresolved"` — the
+fail-closed default. Parent of every other snapshot-scoped tutor table and the only core table that
+other domains reference by FK.
 
-### `tutor_aliases` — `tutorAliases` (schema.ts:1540-1548)
+### `tutorIdentityGroupMembers` — `tutor_identity_group_members` (schema.ts:1530-1542)
 
-One row per manual alias mapping, unique on `fromKey`. **Snapshot-independent** — it is
-human-curated *input* to the identity cascade, not output of it, so it survives snapshot rotation.
+One row per Wise teacher record folded into a group, so the 5-step identity cascade's merge decision
+stays inspectable after the fact. Carries `wiseTeacherId`, an optional `wiseUserId`, the raw
+`wiseDisplayName`, and `isOnlineVariant` — the flag the online/offline pair-detection step sets.
+Loaded by the search index (`src/lib/search/index.ts:176-180`) and re-read at sync time by domains
+that need to stamp a canonical key onto their own rows.
 
-### `tutors` — `tutors` (schema.ts:1549-1561)
+### `tutorAliases` — `tutor_aliases` (schema.ts:1543-1551)
 
-One row per presentable tutor per snapshot, FK to both `snapshots` and `tutor_identity_groups`.
-Thin by design: `displayName` and a `supportedModes` string array; availability, qualification, and
-session detail hang off the identity group rather than this row.
+One row per manual alias mapping, unique on `fromKey` (`schema.ts:1549`). Snapshot-independent and
+human-curated: it is read whole into the identity cascade (`orchestrator.ts:86-94`), seeded by
+`src/lib/db/seed.ts:24-26`, and also consulted outside the ETL by tutor business profiles
+(`src/lib/tutor-business-profiles.ts:317-320`), leave-request matching
+(`src/lib/leave-requests/matching.ts:81`), and classroom schedule email
+(`src/lib/classrooms/schedule-email.ts:165-168`).
 
-### `raw_teacher_tags` — `rawTeacherTags` (schema.ts:1562-1572)
+### `tutors` — `tutors` (schema.ts:1552-1564)
 
-One row per raw Wise tag observed on a teacher record, preserved verbatim (`tagValue` plus `tagRaw`
-jsonb) alongside the `wiseTeacherId` it came from. This is the audit trail behind qualification
-parsing: an unmapped tag becomes a `data_issue` and stays inspectable here.
+One row per identity group per snapshot — a flattened read aggregate with `displayName` and a
+`supportedModes` jsonb string array. Both `snapshotId` and `groupId` are FKs; the row carries no Wise
+identifier of its own, since membership lives in `tutor_identity_group_members`. At this revision it
+is **write-only**: inserted by `orchestrator.ts:441`, deleted by `snapshot-pruning.ts:155-157`, and
+read by nothing outside tests — the in-memory index builds from `tutor_identity_groups` instead
+(`src/lib/search/index.ts:171-172`). See [Open questions](#open-questions).
 
-### `subject_level_qualifications` — `subjectLevelQualifications` (schema.ts:1573-1588)
+### `rawTeacherTags` — `raw_teacher_tags` (schema.ts:1565-1575)
 
-One row per parsed (subject, curriculum, level) qualification for an identity group, with optional
-`examPrep` and the `sourceTag` it was parsed from — every qualification is traceable to the raw tag
-that produced it. Indexed by snapshot and by group.
+One row per raw Wise tag observed on a teacher, kept verbatim (`tagValue` plus the untouched
+`tagRaw` jsonb) alongside the parsed output in `subject_level_qualifications`. Retaining the input is
+what would make an unmapped tag diagnosable rather than merely lost — but like `tutors`, it is
+currently written (`orchestrator.ts:432`) and pruned (`snapshot-pruning.ts:141-143`) with no runtime
+reader.
 
-### `recurring_availability_windows` — `recurringAvailabilityWindows` (schema.ts:1589-1602)
+### `subjectLevelQualifications` — `subject_level_qualifications` (schema.ts:1576-1591)
 
-One row per weekly availability window. `weekday` is 0=Sunday..6=Saturday and
-`startMinute`/`endMinute` are minutes since midnight **Asia/Bangkok** (comments at
-`schema.ts:1594-1595`), so there is no timezone maths at read time. `modality` defaults to
-`unresolved`. `wiseTeacherId` is retained so a group's windows stay attributable to a specific Wise
-record. Indexed by (`snapshotId`, `weekday`) for the search grid.
+One row per parsed qualification for a group: `subject`, `curriculum`, `level`, optional `examPrep`,
+and the `sourceTag` it was derived from. Drives qualification filtering in search
+(`src/lib/search/index.ts:181-183`) and the cached tutor list (`src/lib/data/tutors.ts:69-73`). A tag
+that cannot be parsed produces a `data_issues` row instead of a guess.
 
-### `dated_leaves` — `datedLeaves` (schema.ts:1603-1614)
+### `recurringAvailabilityWindows` — `recurring_availability_windows` (schema.ts:1592-1605)
 
-One row per merged leave interval, as absolute `startTime`/`endTime` timestamps (UTC→Bangkok
-conversion and overlap merging happen in normalization, before the write). Leaves block availability
-in both recurring and one-time search modes.
+One row per weekly availability window after overlap-merge and de-duplication. Stored as `weekday`
+(0=Sunday..6=Saturday) plus `startMinute`/`endMinute` as minutes since midnight **Asia/Bangkok**
+(inline comments at `schema.ts:1597-1598`), which is what keeps the in-memory availability grid
+integer-only. `modality` defaults to `"unresolved"`. A composite `(snapshotId, weekday)` index backs
+the per-weekday read (`schema.ts:1603`).
 
-### `future_session_blocks` — `futureSessionBlocks` (schema.ts:1615-1645)
+### `datedLeaves` — `dated_leaves` (schema.ts:1606-1617)
 
-One row per future Wise session attributed to an identity group. Stores both absolute times and the
-derived (`weekday`, `startMinute`, `endMinute`) triple the availability grid uses. `wiseStatus` is
-the raw status and `isBlocking` its classification, defaulting to **true** — an unknown status
-blocks (fail-closed). Display and grouping fields (`title`, `sessionType`, `location`,
-`studentName`, `studentCount`, `subject`, `classType`, `recurrenceId`) support the compare calendar;
-`recurrenceId` is what the past-day fallback dedupes on.
+One row per dated leave interval for a group, as absolute `startTime`/`endTime` timestamptz values
+(UTC storage, Bangkok semantics). Leaves block availability in both the recurring and one-time search
+modes — the non-negotiable rule stated in [AGENTS.md](../../../AGENTS.md).
 
-### `past_session_blocks` — `pastSessionBlocks` (schema.ts:2255-2299)
+### `futureSessionBlocks` — `future_session_blocks` (schema.ts:1618-1648)
 
-One row per past Wise session, **ever** — `uniqueIndex` on `wiseSessionId` makes capture idempotent
-(PAST-05 / D-03). This is the only cross-snapshot data table in the tutor lineage: it identifies its
-tutor by `groupCanonicalKey` (D-04) rather than a `groupId` FK, and `capturedInSnapshotId` is
-deliberately **not** a foreign key so snapshots can be pruned independently (comment at
-`schema.ts:2262-2264`). Columns otherwise mirror `future_session_blocks` minus the snapshot-scoped
-ones; `capturedAt` records first observation. Indexed by (`groupCanonicalKey`, `startTime`) for the
-compare read path.
+One row per future Wise session for a group in this snapshot. Carries both the absolute times and the
+derived `weekday`/`startMinute`/`endMinute` triple, the raw `wiseStatus`, and the classification
+`isBlocking` — which defaults to `true` (`schema.ts:1632`), the fail-closed posture that makes an
+unrecognized status block rather than free a slot. The descriptive columns (`title`, `sessionType`,
+`location`, `studentName`, `studentCount`, `subject`, `classType`, `recurrenceId`) are what the
+compare calendar renders and what the past-day fallback dedupes on. Indexed on `(snapshotId,
+weekday)` and on `groupId` (`schema.ts:1642-1644`).
 
-### `room_utilization_sessions` — `roomUtilizationSessions` (schema.ts:1736-1759)
+### `roomUtilizationSessions` — `room_utilization_sessions` (schema.ts:1739-1762)
 
-One row per Wise session for room-utilization analysis, unique on `wiseSessionId` and
-**snapshot-independent** (it accumulates across syncs). Carries `utilizationDate` plus the same
-weekday/minute triple, the `rawLocation` and its `normalizedRoomLabel`, and `studentCount`. Owned by
-the Room Capacity feature ([erd-room-capacity.md](./erd-room-capacity.md)) but stored on the core
-spine.
+One row per Wise session observed for room utilization, unique on `wiseSessionId`
+(`schema.ts:1756`) — an independent mirror, upserted by its own sync rather than scoped to a
+snapshot. `rawLocation` is preserved next to `normalizedRoomLabel`, and `utilizationDate` + `weekday`
++ minute bounds support the per-room-per-day rollups. It sits here rather than in
+[erd-room-capacity.md](./erd-room-capacity.md) because that page explicitly disclaims it: the four
+`room_capacity_*` forecast tables are a separate lineage. Its sync is registry-only — `schedule:
+null`, `cadenceLabel: "Manual only"`, `manualOnly: true`, with no `vercel.json` entry
+(`src/lib/data-health/cron-registry.ts:369-383`).
 
-### `data_issues` — `dataIssues` (schema.ts:2685-2702)
+### `pastSessionBlocks` — `past_session_blocks` (schema.ts:2258-2302)
 
-One row per normalization problem found during a sync. `type` is `data_issue_type` and `severity`
-`data_issue_severity` (default `high`). The entity is described loosely — `entityType`, `entityId`,
-`entityName` are free text, not FKs — precisely because issues are raised about things that failed
-to resolve into entities. Indexed by (`snapshotId`, `type`).
+One row per Wise session ever observed, unique on `wiseSessionId` (`schema.ts:2292`) — **the one
+cross-snapshot tutor data table**. Identity is anchored by the `groupCanonicalKey` string, resolved
+at read time against the active snapshot's `tutor_identity_groups` (D-04, comment at
+`schema.ts:2261-2262`), and `capturedInSnapshotId` is provenance only — deliberately nullable and
+deliberately **not** a foreign key, so snapshots can be pruned independently
+(`schema.ts:2265-2266`). Columns otherwise mirror `future_session_blocks` minus the snapshot-scoped
+keys, populated first-observation-wins: a session later observed as retroactively cancelled keeps its
+original row, with no drift detection in v1.1 (D-03, comment at `schema.ts:2255-2257`). Written by
+`src/lib/sync/past-sessions-diff-hook.ts`, read by `src/lib/data/past-sessions.ts`, and indexed for
+the compare read path on `(groupCanonicalKey, startTime)` (`schema.ts:2294`).
 
-### `snapshot_stats` — `snapshotStats` (schema.ts:2703-2725)
+### `dataIssues` — `data_issues` (schema.ts:2688-2705)
 
-Exactly one row per snapshot (`uniqueIndex` on `snapshotId`) holding the promotion-gate arithmetic:
-teacher and identity-group totals, `resolvedGroups`/`unresolvedGroups`, and counts of
-qualifications, availability windows, leaves, future sessions, and data issues, plus an
-`issuesByType` jsonb map. Written immediately before the promote decision
-(`src/lib/sync/orchestrator.ts:458-476`).
+One row per normalization problem found during a sync, scoped to the snapshot that found it.
+`type` and `severity` are [`data_issue_type`](./enums.md#data_issue_type) and
+[`data_issue_severity`](./enums.md#data_issue_severity), the latter defaulting to `"high"`.
+`entityType` / `entityId` / `entityName` locate the subject loosely as text rather than by FK,
+because the subject may be a Wise record that never became a row. A per-teacher failure lands here
+instead of aborting the run — fail-isolated ingest — and the identity subset of these rows is the
+numerator of the promotion gate.
+
+### `snapshotStats` — `snapshot_stats` (schema.ts:2706-2728)
+
+Exactly one row per snapshot — `uniqueIndex` on `snapshotId` (`schema.ts:2721`) — holding the run's
+counts: Wise teachers, identity groups resolved vs unresolved, qualifications, availability windows,
+leaves, future sessions, total data issues, and an `issuesByType` jsonb histogram. Written once at
+`orchestrator.ts:458` and read by the Data Health dashboard for the active snapshot only
+(`src/lib/data-health/dashboard.ts:933-934`). The unresolved/total ratio here is the same quantity
+the promotion gate blocks on, recorded after the fact.
 
 ---
 
-## 5. Progress tests (8 tables)
+## 4. US universities / IPEDS (3 tables)
 
-```mermaid
-erDiagram
-    progress_test_attendance_ledger {
-        uuid id PK
-        text enrollment_key
-        text wise_session_id
-        text wise_student_id
-        bool counts_toward_cycle
-    }
-    progress_test_cycle_state {
-        text enrollment_key PK
-        int current_count
-        text status
-        text booked_test_wise_session_id
-    }
-    progress_test_bookings {
-        uuid id PK
-        text enrollment_key
-        int cycle_index
-        text status
-        bool dry_run
-    }
-    progress_test_email_runs {
-        uuid id PK
-        text enrollment_key
-        text idempotency_key UK
-        text status
-    }
-    progress_test_notifications {
-        uuid id PK
-        uuid email_run_id FK
-        text recipient_email
-        text idempotency_key UK
-    }
-    progress_test_admin_digest_runs {
-        uuid id PK
-        date digest_date UK
-        text idempotency_key UK
-    }
-    progress_test_admin_digest_recipients {
-        uuid id PK
-        uuid digest_run_id FK
-        text recipient_email
-        text status
-    }
-    progress_test_sync_runs {
-        uuid id PK
-        text status
-        int enrollment_count
-    }
+A curated slice of the IPEDS 2024-25 Provisional release, loaded once by a local script and
+thereafter read-only at runtime. The schema comment states the contract directly: rows are keyed by
+`(dataYear, unitId)` so a future IPEDS year drops in without a migration, and "the runtime only ever
+reads these tables, never the source .accdb/CSV" (`schema.ts:3001-3005`). Meaning and UI live in
+[us-universities.md](../../features/us-universities.md).
 
-    progress_test_cycle_state }o..o{ progress_test_attendance_ledger : "counted from (enrollment_key)"
-    progress_test_cycle_state }o..o{ progress_test_bookings : "booked via (enrollment_key)"
-    progress_test_cycle_state }o..o{ progress_test_email_runs : "notified by (enrollment_key)"
-    progress_test_email_runs ||--o{ progress_test_notifications : "delivers"
-    progress_test_admin_digest_runs ||--o{ progress_test_admin_digest_recipients : "delivers"
-```
-
-Only two of these relationships are foreign keys; the rest join on the natural `enrollmentKey`
-string (student × class), which is also the primary key of the cycle-state table.
-
-### `progress_test_attendance_ledger` — `progressTestAttendanceLedger` (schema.ts:2812-2837)
-
-One row per attended session per student — unique on (`wiseSessionId`, `wiseStudentId`).
-Denormalizes class, student, subject, tutor (`tutorCanonicalKey`/`tutorDisplayName`),
-`creditApplied`, and `meetingStatus`. Two booleans drive the every-8-classes rule: `isProgressTest`
-marks the test session itself and `countsTowardCycle` marks what accumulates.
-`firstObservedSnapshotId` is a plain uuid, not an FK.
-
-### `progress_test_cycle_state` — `progressTestCycleState` (schema.ts:2838-2873)
-
-One row per enrollment, keyed by `enrollmentKey` as the primary key — the running state machine.
-`currentCount`/`cycleIndex`/`status` (`progress_test_status`, default `accumulating`) track the
-cycle; the `bookedTest*` columns and `scheduleMethod` (`after_class` | `parent_pick` | `at_home`,
-comment at `schema.ts:2852`) record how a due test was scheduled. `atHomeSelectedAt` →
-`atHomeSubmittedAt` is the at-home lifecycle that rolls the cycle (comment at `schema.ts:2856`).
-`teacherNotifiedForCycle` prevents re-notifying within one cycle; `lastAiSummary` caches the
-generated blurb.
-
-### `progress_test_bookings` — `progressTestBookings` (schema.ts:2874-2896)
-
-One row per booking attempt for an enrollment's cycle. `status` is `progress_test_booking_status`
-(default `recorded`) and `dryRun` defaults to **true**, so a booking is an audit record unless
-explicitly executed. `requestPayload`/`responsePayload` preserve the Wise exchange.
-
-### `progress_test_email_runs` — `progressTestEmailRuns` (schema.ts:2897-2917)
-
-One row per teacher heads-up email send for an enrollment/cycle, deduped by unique `idempotencyKey`.
-`triggerKind` defaults to `"approaching"`; attempted/success/failed counters and `lastError`
-summarize delivery.
-
-### `progress_test_notifications` — `progressTestNotifications` (schema.ts:2918-2936)
-
-One row per recipient per email run, deduped by unique `idempotencyKey`. The `emailRunId` FK is
-`onDelete: "set null"` so the delivery record outlives its run. `providerMessageId` links to the
-mail provider.
-
-### `progress_test_admin_digest_runs` — `progressTestAdminDigestRuns` (schema.ts:2937-2958)
-
-One row per admin digest, with **two** unique indexes — on `idempotencyKey` and on `digestDate` — so
-a given day's digest exists at most once regardless of trigger path. Counters split
-`approachingCount` from `dueCount`.
-
-### `progress_test_admin_digest_recipients` — `progressTestAdminDigestRecipients` (schema.ts:2959-2974)
-
-One row per recipient of a digest run (FK `digestRunId`), with per-recipient `status`,
-`providerMessageId`, and `error`. `digestDate` is denormalized for direct date queries.
-
-### `progress_test_sync_runs` — `progressTestSyncRuns` (schema.ts:2975-3003)
-
-One row per progress-test sync. Same partial-unique `WHERE status = 'running'` single-flight guard;
-counters for ledger rows, enrollments, approaching/due, and notifications.
-
----
-
-## 6. US universities — IPEDS (3 tables)
+| Table (varName) | SQL name | schema.ts lines |
+|---|---|---|
+| `ipedsImportRuns` | `ipeds_import_runs` | 3007–3023 |
+| `ipedsInstitutions` | `ipeds_institutions` | 3024–3117 |
+| `ipedsCompletions` | `ipeds_completions` | 3118–3140 |
 
 ```mermaid
 erDiagram
     ipeds_import_runs {
         uuid id PK
         text data_year
-        text status
+        sync_status status "partial-unique guard on data_year"
         int institution_count
+        int completion_count
+        text triggered_by_email
     }
     ipeds_institutions {
         uuid id PK
         text data_year
         int unit_id
-        uuid import_run_id FK
+        uuid import_run_id FK "nullable"
         text inst_name
+        float acceptance_rate
+        jsonb raw
     }
     ipeds_completions {
         uuid id PK
         text data_year
         int unit_id
-        uuid import_run_id FK
+        uuid import_run_id FK "nullable"
         text cip_code
+        text cip2
+        int award_level
         int count
-    }
-
-    ipeds_import_runs ||--o{ ipeds_institutions : "loads"
-    ipeds_import_runs ||--o{ ipeds_completions : "loads"
-```
-
-All three are keyed by (`dataYear`, `unitId`) as a natural key so a future IPEDS year drops in
-without a migration; the runtime only ever reads them (comment at `schema.ts:2997-3003`).
-
-### `ipeds_import_runs` — `ipedsImportRuns` (schema.ts:3004-3020)
-
-One row per import of an IPEDS data year. The single-running guard is **per year**: partial unique
-on `dataYear WHERE status = 'running'`, not on `status` alone — two different years can import
-concurrently.
-
-### `ipeds_institutions` — `ipedsInstitutions` (schema.ts:3021-3114)
-
-One row per institution per data year — unique on (`dataYear`, `unitId`). By far the widest table on
-this page: directory, admissions and test-score bands, enrollment and demographics, retention and
-outcomes, cost, and degree mix, each block sourced from a named IPEDS survey file (see the section
-comments in the schema). `raw` jsonb retains the source record. Indexed for state, control, and
-acceptance-rate filtering, plus (`unitId`, `dataYear`) for per-institution trends.
-
-### `ipeds_completions` — `ipedsCompletions` (schema.ts:3115-3137)
-
-One row per (data year, institution, CIP code, award level) completions count. `cip2` is the
-2-digit rollup stored alongside the full `cipCode`, so broad-field queries need no substring work.
-No unique index — the grain is whatever the import writes.
-
----
-
-## 7. Post-class feedback (32 tables)
-
-Wise stays read-only for this feature. Source evidence, compliance state, and financial workflow
-state live in separate columns and tables **so a provider outage or an AI opinion can never create a
-financial decision** (comment at `schema.ts:3133-3137`).
-
-### 7a. Configuration, access, and ingest
-
-```mermaid
-erDiagram
-    post_class_enforcement_windows {
-        uuid id PK
-        text mode
-        ts starts_at
-        ts ends_at
-    }
-    post_class_settings {
-        text id PK
-        text enforcement_mode
-        uuid current_window_id FK
-        int policy_version
-    }
-    post_class_field_mappings {
-        uuid id PK
-        int mapping_version
-        text field_key
-        bool active
-    }
-    post_class_access_grants {
-        uuid id PK
-        text email
-        text capability
-    }
-    post_class_config_audit_log {
-        uuid id PK
-        text entity_type
-        text entity_key
-        text action
-    }
-    post_class_digest_recipients {
-        uuid id PK
-        text email UK
-        bool enabled
-    }
-    post_class_sync_runs {
-        uuid id PK
-        text status
-        date window_start
-        date window_end
-    }
-
-    post_class_enforcement_windows ||--o| post_class_settings : "current window of"
-```
-
-**`post_class_enforcement_windows`** — `postClassEnforcementWindows` (schema.ts:3138-3151). One row
-per enforcement-mode period. `mode` is `post_class_enforcement_mode`; an open window has
-`endsAt IS NULL` (there is an index on `endsAt` for exactly that lookup). `actorEmail` is required
-and `reason` optional — a mode change always has an owner.
-
-**`post_class_settings`** — `postClassSettings` (schema.ts:3152-3167). The **singleton**: `id` is a
-text primary key defaulting to `"default"`. Holds current `enforcementMode`, an FK to the current
-window, `policyVersion`, `formMappingVersion`/`formMappingValid`, and the go-live readiness stamps
-`emailDeliveryVerifiedAt` and `shadowReviewedAt`. `version` is the optimistic-concurrency counter.
-
-**`post_class_field_mappings`** — `postClassFieldMappings` (schema.ts:3168-3183). One row per
-feedback field per mapping version — unique on (`mappingVersion`, `fieldKey`). Maps a Wise question
-(raw and normalized text) to a compliance field, with `requiredForCompliance` and `active`.
-Versioning is what lets an assessment be replayed under the mapping it was made with.
-
-**`post_class_access_grants`** — `postClassAccessGrants` (schema.ts:3184-3195). One row per
-(`email`, `capability`) — unique. `capability` is `post_class_capability`; this is a per-capability
-grant table, not a role column.
-
-**`post_class_config_audit_log`** — `postClassConfigAuditLog` (schema.ts:3196-3210). Append-only
-config audit: `entityType`/`entityKey`/`action`, `actorEmail`, and `beforeValue`/`afterValue` jsonb
-diffs. No `updatedAt`.
-
-**`post_class_digest_recipients`** — `postClassDigestRecipients` (schema.ts:3211-3222). One row per
-digest recipient email (unique), with an `enabled` toggle rather than deletion.
-
-**`post_class_sync_runs`** — `postClassSyncRuns` (schema.ts:3223-3249). One row per ingest run over a
-`windowStart`..`windowEnd` date range. Partial unique `WHERE status = 'running'`. `detailCap`
-(default 50) bounds per-run detail fetches and `cursor` jsonb resumes across runs; counters cover
-discovered, sessions, detail fetches, version inserts, assessments, and source issues.
-
-### 7b. Sessions, feedback evidence, and assessment
-
-```mermaid
-erDiagram
-    wise_activity_events {
-        uuid id PK
-    }
-    post_class_sync_runs {
-        uuid id PK
-    }
-    post_class_sessions {
-        uuid id PK
-        text wise_session_id UK
-        text canonical_tutor_key
-        ts deadline_at
-        text source_status
-        text source_status_before
-        ts wise_deleted_at
-    }
-    post_class_session_participants {
-        uuid id PK
-        uuid session_id FK
-        text participant_key
-        bool billable
-    }
-    post_class_feedback_versions {
-        uuid id PK
-        uuid session_id FK
-        text version_key
-        text content_hash
-        bool compliant
-    }
-    post_class_feedback_event_links {
-        uuid id PK
-        uuid session_id FK
-        uuid feedback_version_id FK
-        uuid wise_activity_event_id FK
-        text wise_event_id
-    }
-    post_class_assessments {
-        uuid id PK
-        uuid session_id FK
-        uuid feedback_version_id FK
-        text assessment_key UK
-        bool adjusted_compliant
-    }
-    post_class_source_issues {
-        uuid id PK
-        uuid sync_run_id FK
-        uuid session_id FK
-        text fingerprint UK
-        bool blocks_enforcement
-    }
-
-    post_class_sessions ||--o{ post_class_session_participants : "attended by"
-    post_class_sessions ||--o{ post_class_feedback_versions : "has versions"
-    post_class_sessions ||--o{ post_class_feedback_event_links : "evidenced by"
-    post_class_sessions ||--o{ post_class_assessments : "assessed as"
-    post_class_sessions ||--o{ post_class_source_issues : "flagged by"
-    post_class_feedback_versions ||--o{ post_class_assessments : "judged"
-    post_class_feedback_versions ||--o{ post_class_feedback_event_links : "timed by"
-    wise_activity_events ||--o{ post_class_feedback_event_links : "proves"
-    post_class_sync_runs ||--o{ post_class_source_issues : "raised in"
-```
-
-**`post_class_sessions`** — `postClassSessions` (schema.ts:3250-3306). One row per Wise session
-(unique `wiseSessionId`); the spine of the feature. Identity is carried as `canonicalTutorKey` (a
-soft reference to `tutor_identity_groups.canonicalKey`, not an FK) plus `wiseTeacherUserId`.
-Compliance is decomposed into four independent enums — `sourceStatus`, `contentStatus`,
-`timingStatus`, `deductionStatus` — so "we could not prove it" is never confused with "it failed".
-Two columns deserve special note:
-
-- `sourceStatusBefore` is set only by the run-wide fail-closed demotion (REC-01) and holds the
-  status the row carried before source health became unprovable, so a later healthy sync restores it
-  in one statement; null means `sourceStatus` is the row's own observation (comment at
-  `schema.ts:3268-3271`).
-- `wiseDeletedAt` records deletion proven by a `SessionDeletedEvent` in the activity mirror
-  (REC-03). It is deliberately a fact of its own rather than a `sourceStatus` value, because every
-  `sourceStatus <> 'ready'` reader treats its subject as blocking — which would otherwise keep a
-  deleted session in the payout coverage denominator forever (comment at `schema.ts:3273-3278`).
-
-`latestFeedbackVersionId` and `firstOnTimeCompliantVersionId` are plain uuids, **not** FKs.
-`enforcementMode` and `policyVersion` are stamped per session so history replays under the policy
-in force.
-
-**`post_class_session_participants`** — `postClassSessionParticipants` (schema.ts:3307-3322). One row
-per participant per session — unique on (`sessionId`, `participantKey`), `onDelete: "cascade"`.
-`creditsConsumed` and `billable` are what make a session payout-relevant.
-
-**`post_class_feedback_versions`** — `postClassFeedbackVersions` (schema.ts:3323-3353). One row per
-observed version of a session's feedback — unique on (`sessionId`, `versionKey`), with `contentHash`
-for change detection. The four graded fields (`topics`, `performance`, `improvement`, `homework`)
-sit beside the raw `answers` jsonb. Timing trust is explicit: `sourceCreatedAt` +
-`sourceTimestampTrustworthy` (default **false**) + `sourceTimestampKind` versus the always-known
-`observedAt`. `substantive`, `compliant`, and `fieldFailures` are the per-version verdict.
-
-**`post_class_feedback_event_links`** — `postClassFeedbackEventLinks` (schema.ts:3354-3368). One row
-per Wise activity event linked to a session — unique on (`sessionId`, `wiseEventId`). Both
-`feedbackVersionId` and `wiseActivityEventId` FKs are `onDelete: "set null"` so the link survives
-either side being pruned; the text `wiseEventId` is the durable identity. `autoSubmitted` and
-`linkConfidence` qualify how strongly the event proves submission timing.
-
-**`post_class_assessments`** — `postClassAssessments` (schema.ts:3369-3399). One row per assessment
-of a session, deduped by unique `assessmentKey`. Snapshots the `policyVersion` **and**
-`mappingVersion` used, all four status enums, and the reasoning: `requiredFieldsPassed`,
-`combinedRawCharCount`, `fieldFailures`, `objectiveViolation`, `rawOnTime`, `adjustedCompliant`,
-`remediatedLate`, `timingUnknown`, `timingEvidence`, `sourceReady`. An assessment is therefore
-re-derivable and arguable without re-reading Wise.
-
-**`post_class_source_issues`** — `postClassSourceIssues` (schema.ts:3400-3421). One row per distinct
-source problem, deduped by unique `fingerprint` with `firstSeenAt`/`lastSeenAt` instead of duplicate
-rows. `scope` separates global from per-session issues (`sessionId` is nullable, cascade);
-`blocksEnforcement` defaults to **true** — an unexplained source problem stops enforcement rather
-than being logged past.
-
-### 7c. Notifications
-
-```mermaid
-erDiagram
-    post_class_sessions {
-        uuid id PK
-    }
-    post_class_notification_runs {
-        uuid id PK
-        text kind
-        text status
-        text idempotency_key UK
-    }
-    post_class_notification_deliveries {
-        uuid id PK
-        uuid run_id FK
-        text recipient_email
-        text idempotency_key UK
-        int attempt_count
-    }
-    post_class_notification_items {
-        uuid id PK
-        uuid delivery_id FK
-        uuid session_id FK
-        ts deadline_at
-    }
-    post_class_notification_attempts {
-        uuid id PK
-        uuid delivery_id FK
-        int attempt_number
-        text status
-    }
-
-    post_class_notification_runs ||--o{ post_class_notification_deliveries : "fans out to"
-    post_class_notification_deliveries ||--o{ post_class_notification_items : "lists"
-    post_class_notification_deliveries ||--o{ post_class_notification_attempts : "tried as"
-    post_class_sessions ||--o{ post_class_notification_items : "reported in"
-```
-
-**`post_class_notification_runs`** — `postClassNotificationRuns` (schema.ts:3422-3446). One row per
-scheduled notification batch, deduped by unique `idempotencyKey`. `kind` and `status` are
-`post_class_notification_kind`/`_status`; counters split eligible, delivery, sent, failed, and
-cancelled.
-
-**`post_class_notification_deliveries`** — `postClassNotificationDeliveries` (schema.ts:3447-3470).
-One row per recipient per run (unique `idempotencyKey`; run FK cascades). `nextAttemptAt` +
-`attemptCount` + `status` form the retry queue (there is a dedicated (`status`, `nextAttemptAt`)
-index); `cancelledAt` records a delivery withdrawn before send.
-
-**`post_class_notification_items`** — `postClassNotificationItems` (schema.ts:3471-3483). One row per
-session included in a delivery — unique on (`deliveryId`, `sessionId`). Freezes the
-`failureReasons`, `rawCharCount`, and `deadlineAt` as of send time, so the email's content stays
-explainable after the session changes.
-
-**`post_class_notification_attempts`** — `postClassNotificationAttempts` (schema.ts:3484-3499). One
-row per send attempt — unique on (`deliveryId`, `attemptNumber`), with provider, status, error code
-and message, and start/finish timestamps.
-
-### 7d. AI concern review
-
-```mermaid
-erDiagram
-    post_class_ai_runs {
-        uuid id PK
-        uuid session_id FK
-        uuid feedback_version_id FK
-        text request_hash UK
-        text status
-    }
-    post_class_ai_concerns {
-        uuid id PK
-        uuid run_id FK
-        text dimension
-        text decision
-        int version
-    }
-    post_class_ai_reviews {
-        uuid id PK
-        uuid concern_id FK
-        text decision
-        text actor_email
-        int expected_version
-    }
-
-    post_class_ai_runs ||--o{ post_class_ai_concerns : "raises"
-    post_class_ai_concerns ||--o{ post_class_ai_reviews : "decided by"
-```
-
-**`post_class_ai_runs`** — `postClassAiRuns` (schema.ts:3500-3520). One row per LLM evaluation of a
-specific feedback version (both FKs required, both cascade), deduped by unique `requestHash` so an
-identical request is never paid for twice. `triggerReasons` records why the run was worth making;
-`redactionVersion` records which redaction rules produced the prompt.
-
-**`post_class_ai_concerns`** — `postClassAiConcerns` (schema.ts:3521-3535). One row per concern
-dimension per run — unique on (`runId`, `dimension`). `decision` is `post_class_concern_decision`
-(default `pending`) and `version` is the optimistic-concurrency counter reviews check against.
-
-**`post_class_ai_reviews`** — `postClassAiReviews` (schema.ts:3536-3548). One row per human decision
-on a concern. `note` and `actorEmail` are **not null** — a decision without a written reason is not
-representable — and `expectedVersion` is the CAS token matched against the concern's `version`.
-
-### 7e. Finance periods, deductions, and payout runs
-
-```mermaid
-erDiagram
-    post_class_sessions {
-        uuid id PK
-    }
-    post_class_finance_periods {
-        uuid id PK
-        date month UK
-        text status
-    }
-    post_class_deductions {
-        uuid id PK
-        uuid session_id FK
-        uuid finance_period_id FK
-        text status
-        int amount_minor
-    }
-    post_class_deduction_actions {
-        uuid id PK
-        uuid deduction_id FK
-        uuid finance_period_id FK
-        text action
-        text idempotency_key UK
-    }
-    post_class_deduction_offsets {
-        uuid id PK
-        uuid deduction_id FK
-        uuid finance_period_id FK
-        int amount_minor
-    }
-    post_class_payout_runs {
-        uuid id PK
-        date anchor_month UK
-        date window_start
-        date window_end
-        text status
-        uuid lease_token
-    }
-    post_class_payout_run_lines {
-        uuid id PK
-        uuid run_id FK
-        uuid deduction_id FK
-        uuid session_id FK
-        text source_identity UK
-        text write_status
-    }
-    post_class_payout_adjustments {
-        uuid id PK
-        uuid deduction_id FK
-        uuid source_line_id FK
-        uuid run_id FK
-        text kind
-        text status
-    }
-    post_class_payout_exceptions {
-        uuid id PK
-        uuid run_id FK
-        uuid deduction_id FK
-        uuid adjustment_id FK
-        text kind
-        text status
-    }
-    post_class_payout_tutor_names {
-        uuid id PK
-        text canonical_key UK
-        text primary_ledger_name UK
-    }
-    post_class_tutor_payout_sheets {
-        uuid id PK
-        text canonical_key UK
-        text spreadsheet_id
-    }
-    post_class_payout_roll_runs {
-        uuid id PK
-        uuid payout_run_id FK
-        date target_anchor_month
-        text status
-    }
-    post_class_payout_roll_outcomes {
-        uuid id PK
-        uuid roll_run_id FK
-        text workbook_id
-        text status
-    }
-
-    post_class_sessions ||--o| post_class_deductions : "incurs"
-    post_class_finance_periods ||--o{ post_class_deductions : "books into"
-    post_class_finance_periods ||--o{ post_class_deduction_actions : "books into"
-    post_class_finance_periods ||--o{ post_class_deduction_offsets : "books into"
-    post_class_deductions ||--o{ post_class_deduction_actions : "audited by"
-    post_class_deductions ||--o| post_class_deduction_offsets : "offset by"
-    post_class_deductions ||--o{ post_class_payout_run_lines : "exported as"
-    post_class_deductions ||--o{ post_class_payout_adjustments : "corrected by"
-    post_class_sessions ||--o{ post_class_payout_run_lines : "described by"
-    post_class_payout_runs ||--o{ post_class_payout_run_lines : "contains"
-    post_class_payout_runs ||--o{ post_class_payout_adjustments : "carries"
-    post_class_payout_runs ||--o{ post_class_payout_exceptions : "blocked by"
-    post_class_payout_run_lines ||--o{ post_class_payout_adjustments : "reversed by"
-    post_class_payout_adjustments ||--o{ post_class_payout_exceptions : "blocked by"
-    post_class_payout_runs ||--o| post_class_payout_roll_runs : "rolled by"
-    post_class_payout_roll_runs ||--o{ post_class_payout_roll_outcomes : "per workbook"
-```
-
-**`post_class_finance_periods`** — `postClassFinancePeriods` (schema.ts:3549-3566). One row per
-calendar month (unique `month`). `status` is `post_class_finance_period_status` (default `open`);
-open/close/reopen each record actor, timestamp, and reason. `version` guards concurrent close.
-
-**`post_class_deductions`** — `postClassDeductions` (schema.ts:3567-3590). One row per session
-(unique `sessionId`; FK `onDelete: "restrict"` — a session with money attached cannot be deleted).
-`amountMinor` defaults to 10 000 THB minor units. `defaultFinanceMonth` is the month it belongs to
-by policy while `financePeriodId` is the period it was actually booked into. Waiver
-(`waiverCategory`/`waiverNote`), decision, and processing stamps are separate columns so "approved"
-and "paid out" never collapse into one flag.
-
-**`post_class_deduction_actions`** — `postClassDeductionActions` (schema.ts:3591-3611). Append-only
-transition log: one row per action, deduped by unique `idempotencyKey`, recording
-`fromStatus` → `toStatus`, amount, period, actor, and `occurredAt`.
-
-**`post_class_deduction_offsets`** — `postClassDeductionOffsets` (schema.ts:3612-3635). At most one
-offset per deduction (unique `deductionId`) plus unique `idempotencyKey`. `amountMinor` defaults to
-**−10 000** — an offset is the negative counterpart booked into a named period, with mandatory
-`reason` and `reference`.
-
-**`post_class_payout_runs`** — `postClassPayoutRuns` (schema.ts:3636-3718). One row per 26th→25th
-payout window: unique on `anchorMonth` and on (`windowStart`, `windowEnd`). The window is a
-*selection and export* window only — finance periods stay calendar-month and keep gating approval
-and month close, so one run legitimately spans two finance months (comment at
-`schema.ts:3629-3634`). Concurrency is a lease: `leaseToken` + `leaseExpiresAt` (15 minutes) owned
-by `publishingByEmail`. `publishAcknowledgements` is a strongly-typed jsonb record of the exact
-coverage numbers an operator confirmed when publishing over pending-review deductions or non-ready
-sessions. CSV export state (`csvStatus`, checked to `pending|uploaded|failed`) and date-roll state
-(`dateRollStatus`, checked to `not_started|running|partial|completed`) are separate lifecycles.
-
-**`post_class_payout_tutor_names`** — `postClassPayoutTutorNames` (schema.ts:3719-3741). One row per
-tutor `canonicalKey` (unique), mapping to the **exact** identity strings the master payout ledger
-uses. `primaryLedgerName` is unique and `alternateLedgerName` is unique where non-null. These are
-copied from the ledger, never constructed: a tutor's workbook is a `QUERY(IMPORTRANGE(...))` view
-filtered on these strings, so an approximation produces a row that belongs to nobody (comment at
-`schema.ts:3711-3718`).
-
-**`post_class_tutor_payout_sheets`** — `postClassTutorPayoutSheets` (schema.ts:3742-3762). One row
-per tutor workbook (unique `canonicalKey`), with `spreadsheetId`, `sheetName`, and the numeric
-`sheetGid` the `insertDimension` batch request needs. The doc comment marks it superseded by
-`post_class_payout_tutor_names` and retained only because migration 0057 created it. That is true of
-the runtime write path, but the table is **not entirely unread**:
-`loadActivePayoutWorkbookRegistry` (`src/lib/post-class-feedback/payout-repository.ts:1932-1944`)
-selects its active rows and is called by `scripts/roll-payout-workbook-dates.ts:387`.
-
-**`post_class_payout_run_lines`** — `postClassPayoutRunLines` (schema.ts:3763-3823). One line per
-deduction per run. Three separate unique indexes (`idempotencyKey`, `sourceIdentity`,
-`rowSignature`) plus `writeStatus` are what make re-pressing Publish safe: a line already `written`
-is skipped rather than inserted into the tutor's sheet a second time (comment at
-`schema.ts:3758-3762`). `sourceAnchorFingerprint` is a durable hash of the source anchor's A:H
-cells, so a line survives Finance re-pasting the export and moving every row number, giving an O(1)
-claim lookup instead of a re-match search (comment at `schema.ts:3792-3797`). Two check constraints
-hold the shape: `lineKind = 'deduction'` and `amountMinor < 0`. `retiredAt`/`retiredReason` keep a
-no-longer-approved line for audit without blocking close.
-
-**`post_class_payout_adjustments`** — `postClassPayoutAdjustments` (schema.ts:3824-3859).
-Append-only positive corrections created when finance waives or reverses a deduction whose negative
-row already landed. `kind` is checked to `waiver|reversal`, `status` to
-`pending|written|failed|exception`, and `amountMinor > 0`. Same triple-unique identity discipline as
-run lines; `sourceLineId` points at the negative row being compensated.
-
-**`post_class_payout_exceptions`** — `postClassPayoutExceptions` (schema.ts:3860-3886). One durable
-finance-owned blocker per `sourceIdentity` (unique) and per `idempotencyKey` (unique), attached to a
-run and optionally to a deduction or adjustment. `status` is checked to `open|resolved`; resolution
-requires note, reference, and actor.
-
-**`post_class_payout_roll_runs`** — `postClassPayoutRollRuns` (schema.ts:3887-3918). One audited
-attempt to roll every tutor workbook to the next 26→25 window, unique on `payoutRunId`.
-`manifestHash`, a required `leaseToken`/`leaseExpiresAt`, and succeeded/failed workbook counters make
-a partial roll resumable; `status` is checked to `running|partial|completed|failed`.
-
-**`post_class_payout_roll_outcomes`** — `postClassPayoutRollOutcomes` (schema.ts:3919-3956). One
-CAS-fenced workbook outcome per roll attempt — unique on (`rollRunId`, `workbookId`). Stores the
-before/after date serials and the previous/applied window dates, so "already at target" is
-distinguishable from "we changed it" (`status` checked to `pending|already_target|verified|failed`).
-
----
-
-## 8. University admissions case management (36 tables)
-
-All 36 carry the `admissions_` prefix. `wiseStudentKey` and `unitId` are plain soft-reference
-columns — **never** FKs to Wise/snapshot or `ipeds_*` tables. User-facing tables carry a soft-delete
-`deletedAt`; `admissions_audit_log` is append-only (comment at `schema.ts:3951-3955`). The workflow
-framing lives in [erd-university-admissions.md](./erd-university-admissions.md) and
-[docs/casemanagementsystem_design.md](../../casemanagementsystem_design.md).
-
-### 8a. Cohorts, cases, membership, checklist
-
-```mermaid
-erDiagram
-    admissions_cohorts {
-        uuid id PK
-        text name UK
-        int graduation_year
-    }
-    admissions_students {
-        uuid id PK
-        uuid cohort_id FK
-        text student_email
-        text wise_student_key
-    }
-    admissions_cases {
-        uuid id PK
-        uuid student_id FK
-        uuid cohort_id FK
-        text status
-        uuid committed_list_item_id
-    }
-    admissions_case_members {
-        uuid id PK
-        uuid case_id FK
-        text email
-        text role
-    }
-    admissions_counselors {
-        uuid id PK
-        text email UK
-        bool active
-    }
-    admissions_checklist_templates {
-        uuid id PK
-        uuid cohort_id FK
-        int version
-    }
-    admissions_template_items {
-        uuid id PK
-        uuid template_id FK
-        text item_key
-        text phase
-    }
-    admissions_case_tasks {
-        uuid id PK
-        uuid case_id FK
-        uuid template_id
-        text item_key
-        text status
-    }
-    admissions_case_meetings {
-        uuid id PK
-        uuid case_id FK
-        date meeting_date
-    }
-
-    admissions_cohorts ||--o{ admissions_students : "groups"
-    admissions_cohorts ||--o{ admissions_cases : "groups"
-    admissions_cohorts ||--o{ admissions_checklist_templates : "defines"
-    admissions_students ||--o| admissions_cases : "has live case"
-    admissions_cases ||--o{ admissions_case_members : "grants access to"
-    admissions_cases ||--o{ admissions_case_tasks : "tracks"
-    admissions_cases ||--o{ admissions_case_meetings : "logs"
-    admissions_checklist_templates ||--o{ admissions_template_items : "contains"
-    admissions_template_items }o..o{ admissions_case_tasks : "instantiated as (item_key)"
-```
-
-**`admissions_cohorts`** — `admissionsCohorts` (schema.ts:3957-3967). One row per cohort, unique on
-`name`, indexed by `graduationYear`.
-
-**`admissions_students`** — `admissionsStudents` (schema.ts:3968-3986). One row per student. FK to
-cohort; `wiseStudentKey` is a nullable soft reference to the tutoring side. `externalLinks` jsonb
-holds portal/drive URLs. Soft-deletable.
-
-**`admissions_cases`** — `admissionsCases` (schema.ts:3987-4011). One row per case. The **partial
-unique index** `admissions_cases_live_student_idx` on `studentId`
-`WHERE status IN ('active','committed')` enforces one live case per student while allowing archived
-history. `committedListItemId` is a plain uuid soft reference to the college list item the student
-committed to. Family access is opt-in and audited in place: `familyPortalOpen` plus
-`familyPortalOpenedAt`/`familyPortalOpenedByEmail` (comment at `schema.ts:3995-3996`).
-
-**`admissions_case_members`** — `admissionsCaseMembers` (schema.ts:4012-4037). One row per email per
-case — unique on (`caseId`, `email`); this is the table every request's access check resolves
-against. `role` and `status` are enums with invited/activated/revoked timestamps.
-`notificationPrefs` jsonb allows per-category downgrades to `digest`/`off`; deadline reminders have
-no key because they are never downgradable (CM-112, comment at `schema.ts:4022-4024`).
-
-**`admissions_counselors`** — `admissionsCounselors` (schema.ts:4038-4048). One row per counselor,
-unique on `email`, with an `active` flag.
-
-**`admissions_checklist_templates`** — `admissionsChecklistTemplates` (schema.ts:4049-4060). One row
-per (cohort, version) — unique. A null `publishedAt` means draft.
-
-**`admissions_template_items`** — `admissionsTemplateItems` (schema.ts:4061-4076). One row per
-checklist item in a template. `itemKey` is the stable identity carried onto instantiated case tasks;
-`phase`, `defaultOwner`, and `sortOrder` shape the 10-phase checklist.
-
-**`admissions_case_tasks`** — `admissionsCaseTasks` (schema.ts:4077-4100). One row per task on a
-case. `templateId`/`templateVersion`/`itemKey` are **plain columns, not FKs**, so a task keeps its
-provenance even if the template is revised or removed; ad-hoc tasks leave them null. `owner` and
-`status` are enums, with `verifiedByEmail`/`verifiedAt` for staff sign-off and `recurrence` jsonb.
-
-**`admissions_case_meetings`** — `admissionsCaseMeetings` (schema.ts:4101-4115). One row per meeting
-on a case, with an `attendees` array, free-text `notes`, and `nextMeetingDate`.
-
-### 8b. College list and everything hanging off it
-
-```mermaid
-erDiagram
-    admissions_cases {
-        uuid id PK
     }
     admissions_college_list_items {
         uuid id PK
-        uuid case_id FK
-        int unit_id
-        text inst_name
-        text round
-        text app_status
-    }
-    admissions_college_research {
-        uuid id PK
-        uuid list_item_id FK
-        int fit_rating
-    }
-    admissions_interest_events {
-        uuid id PK
-        uuid list_item_id FK
-        text type
-        date event_date
-    }
-    admissions_college_requirements {
-        uuid id PK
-        uuid list_item_id FK
-        text kind
-        text status
-    }
-    admissions_financial_aid_offers {
-        uuid id PK
-        uuid list_item_id FK
-        int award_year
-    }
-    admissions_scholarships {
-        uuid id PK
-        uuid case_id FK
-        uuid list_item_id FK
-        date deadline
-    }
-    admissions_application_events {
-        uuid id PK
-        uuid list_item_id FK
-        text event
-        date event_date
-    }
-    admissions_recommenders {
-        uuid id PK
-        uuid case_id FK
-        text ask_status
-    }
-    admissions_recommender_colleges {
-        uuid id PK
-        uuid recommender_id FK
-        uuid list_item_id FK
-        bool submitted
-    }
-    admissions_college_docs {
-        uuid id PK
-        uuid list_item_id FK
-        text doc_type
-        uuid test_sitting_id
+        int unit_id "soft ref, never an FK"
     }
 
-    admissions_cases ||--o{ admissions_college_list_items : "lists"
-    admissions_cases ||--o{ admissions_scholarships : "pursues"
-    admissions_cases ||--o{ admissions_recommenders : "asks"
-    admissions_college_list_items ||--o| admissions_college_research : "researched in"
-    admissions_college_list_items ||--o{ admissions_interest_events : "demonstrated by"
-    admissions_college_list_items ||--o{ admissions_college_requirements : "requires"
-    admissions_college_list_items ||--o| admissions_financial_aid_offers : "offers aid via"
-    admissions_college_list_items ||--o{ admissions_scholarships : "scoped to"
-    admissions_college_list_items ||--o{ admissions_application_events : "decided by"
-    admissions_college_list_items ||--o{ admissions_recommender_colleges : "targeted by"
-    admissions_college_list_items ||--o{ admissions_college_docs : "sends"
-    admissions_recommenders ||--o{ admissions_recommender_colleges : "writes for"
+    ipeds_import_runs ||--o{ ipeds_institutions : "loaded by"
+    ipeds_import_runs ||--o{ ipeds_completions : "loaded by"
+    ipeds_institutions |o..o{ admissions_college_list_items : "soft ref on unit_id"
 ```
 
-**`admissions_college_list_items`** — `admissionsCollegeListItems` (schema.ts:4116-4144). One row per
-college on a case's list; the hub of this cluster. `unitId` is a soft reference into
-`ipeds_institutions` (`dataYear`, `unitId`) and is **never an FK** (comment at `schema.ts:4119`);
-`isManual` marks an entry with no IPEDS match. `round`, `appStatus`, and `category` are enums;
-`deadline`, major choices, portal URLs, and `aidOffered`/`aidNotes` complete the row.
+`admissions_college_list_items` is a **stub node** owned by
+[erd-university-admissions.md](./erd-university-admissions.md); it appears only to anchor the dotted
+edge. That edge is the reason the IPEDS tables stayed on this page rather than moving with the
+admissions domain: the admissions page documents `unit_id` as a soft reference and does not describe
+these three tables.
 
-**`admissions_college_research`** — `admissionsCollegeResearch` (schema.ts:4145-4165). At most one
-research record per list item (unique `listItemId`). `fitRating` is checked to null or 1..5;
-`sources` is a jsonb array, alongside campus-visit and narrative note fields.
+Note that `ipeds_institutions` and `ipeds_completions` do **not** reference each other. Both hang off
+`ipeds_import_runs` by a nullable `importRunId`, and every join between them is on the
+`(dataYear, unitId)` pair at query time (`src/lib/us-universities/data.ts:308-350`).
 
-**`admissions_interest_events`** — `admissionsInterestEvents` (schema.ts:4166-4179). One row per
-demonstrated-interest event on a list item (`type`, `eventDate`, `actorEmail`), soft-deletable.
+### `ipedsImportRuns` — `ipeds_import_runs` (schema.ts:3007-3023)
 
-**`admissions_college_requirements`** — `admissionsCollegeRequirements` (schema.ts:4180-4201). One row
-per requirement on a list item, reusing the task `status`/`owner` enums so the college checklist and
-the case checklist read alike. `required`, `sourceUrl`, and `verifiedByEmail`/`verifiedAt` separate
-"we believe" from "we checked".
+One row per import attempt for one data year. `status` is [`sync_status`](./enums.md#sync_status);
+`institutionCount` and `completionCount` record what landed; `triggeredByEmail` names the operator.
+The single-flight guard is `uniqueIndex("ipeds_runs_single_running_idx").on(dataYear).where(status =
+'running')` (`schema.ts:3019-3021`) — keyed on the **data year**, not on `status`, unlike every other
+run ledger in the schema. Read at runtime only to surface the last successful import
+(`src/lib/us-universities/data.ts:277-282`).
 
-**`admissions_financial_aid_offers`** — `admissionsFinancialAidOffers` (schema.ts:4202-4219). At most
-one offer per list item (unique `listItemId`) for a given `awardYear`. Cost, gift-aid, and loan
-breakdowns are jsonb maps; `workStudyAmount`, `netCost`, and `remainingBalance` are numeric.
+### `ipedsInstitutions` — `ipeds_institutions` (schema.ts:3024-3117)
 
-**`admissions_scholarships`** — `admissionsScholarships` (schema.ts:4220-4240). One row per
-scholarship pursued on a case. `listItemId` is nullable — external scholarships are not tied to a
-college. Soft-deletable.
+One row per institution per data year, unique on `(dataYear, unitId)` (`schema.ts:3110`). The widest
+table on this page at 68 columns, grouped by IPEDS source survey — directory (HD2024),
+admissions and test scores (ADM2024 + DRVADM2024), enrollment and demographics (DRVEF2024), retention
+and outcomes (EF2024D + DRVGR2024 + DRVOM2024), cost (DRVCOST2024 and the Cost1/Cost2 files), and
+degree mix (DRVC2024) — plus a `raw` jsonb keeping the untouched source record. Populated by
+`scripts/ipeds-import.ts`, which filters the directory to four-year degree-granting active Title IV
+institutions before writing (`scripts/ipeds-import.ts:4-5`, `:168-169`). Four secondary indexes cover
+the console's filter axes plus a `(unitId, dataYear)` index for the cross-year admissions trend
+(`schema.ts:3111-3115`).
 
-**`admissions_application_events`** — `admissionsApplicationEvents` (schema.ts:4241-4252). One row per
-application/decision event on a list item; `event` is `admissions_decision_event`, dated by
-`eventDate`. This is the decision *history*, not a status column.
+### `ipedsCompletions` — `ipeds_completions` (schema.ts:3118-3140)
 
-**`admissions_recommenders`** — `admissionsRecommenders` (schema.ts:4253-4266). One row per
-recommender on a case, with `askStatus` (`admissions_rec_status`, default `planned`).
-
-**`admissions_recommender_colleges`** — `admissionsRecommenderColleges` (schema.ts:4267-4279). The
-join: one row per (recommender, list item) — unique — with `submitted`/`submittedAt`.
-
-**`admissions_college_docs`** — `admissionsCollegeDocs` (schema.ts:4280-4292). One row per document
-type sent to a college. `testSittingId` is a plain uuid soft reference to
-`admissions_test_sittings` (score sends), keeping the two tables independently deletable.
-
-### 8c. Student-facing content: essays, activities, awards, testing, records
-
-```mermaid
-erDiagram
-    admissions_cases {
-        uuid id PK
-    }
-    admissions_essays {
-        uuid id PK
-        uuid case_id FK
-        uuid list_item_id
-        text status
-        bool shared_with_family
-    }
-    admissions_essay_prompt_catalog {
-        uuid id PK
-        int unit_id
-        text institution
-        text cycle
-        text prompt_key
-    }
-    admissions_activities {
-        uuid id PK
-        uuid case_id FK
-        int common_app_rank
-    }
-    admissions_awards {
-        uuid id PK
-        uuid case_id FK
-        int common_app_rank
-    }
-    admissions_test_sittings {
-        uuid id PK
-        uuid case_id FK
-        text test_type
-        bool score_released_to_parent
-    }
-    admissions_academic_records {
-        uuid id PK
-        uuid case_id FK
-        text system
-        date effective_date
-    }
-    admissions_notes {
-        uuid id PK
-        uuid case_id FK
-        text visibility
-    }
-    admissions_announcements {
-        uuid id PK
-        uuid cohort_id
-        uuid case_id
-        text title
-    }
-    admissions_resources {
-        uuid id PK
-        text topic
-        text url
-    }
-    admissions_self_report_sections {
-        uuid id PK
-        uuid case_id FK
-        text section_key
-        text state
-    }
-
-    admissions_cases ||--o{ admissions_essays : "drafts"
-    admissions_cases ||--o{ admissions_activities : "lists"
-    admissions_cases ||--o{ admissions_awards : "lists"
-    admissions_cases ||--o{ admissions_test_sittings : "sits"
-    admissions_cases ||--o{ admissions_academic_records : "records"
-    admissions_cases ||--o{ admissions_notes : "annotated by"
-    admissions_cases ||--o{ admissions_self_report_sections : "self-reports"
-    admissions_essay_prompt_catalog }o..o{ admissions_essays : "prompt source (soft)"
-```
-
-**`admissions_essays`** — `admissionsEssays` (schema.ts:4293-4310). One row per essay on a case.
-`listItemId` is a plain uuid (supplemental essays point at a college; personal statements do not).
-`status` and `counselorStage` share the `admissions_essay_status` enum so student-visible progress
-and internal stage can differ. `sharedWithFamily` and `lastStudentUpdateAt` drive the family view.
-
-**`admissions_essay_prompt_catalog`** — `admissionsEssayPromptCatalog` (schema.ts:4311-4336). One row
-per (institution, program, cycle, promptKey) — unique. `unitId` soft-links to IPEDS. `wordLimit` is
-checked to null-or-positive, and `verifiedAt`/`verifiedByEmail` record that a human confirmed the
-prompt against `sourceUrl`.
-
-**`admissions_activities`** — `admissionsActivities` (schema.ts:4337-4352). One row per activity, with
-platform-specific payloads in `commonApp` and `uc` jsonb plus `commonAppRank` and `sortOrder`.
-
-**`admissions_awards`** — `admissionsAwards` (schema.ts:4353-4386). One row per award. The platform
-limits are enforced in the database: `commonAppRank` checked to 1..5 and **unique per case among
-non-deleted rows**, `ucEligibilityNarrative` ≤ 250 characters, `ucAchievementNarrative` ≤ 350.
-`gradeLevels` and `recognitionLevels` are arrays.
-
-**`admissions_test_sittings`** — `admissionsTestSittings` (schema.ts:4387-4407). One row per test
-sitting. `testType` and `status` are enums; registration and late-registration deadlines are
-separate columns. `scoreReleasedToParent` defaults to **false** — raw scores are parent-visible only
-after explicit release — and `scoreDetails` jsonb holds the section breakdown.
-
-**`admissions_academic_records`** — `admissionsAcademicRecords` (schema.ts:4408-4423). One row per
-(case, `system`, `effectiveDate`) — unique among non-deleted rows — with the transcript payload in
-jsonb, so multiple grading systems coexist without schema churn.
-
-**`admissions_notes`** — `admissionsNotes` (schema.ts:4424-4438). One row per note. `visibility` is
-`admissions_note_visibility`, **not null with no default**, so the UI must force an explicit
-visibility choice (comment at `schema.ts:4429`).
-
-**`admissions_announcements`** — `admissionsAnnouncements` (schema.ts:4439-4458). One row per
-announcement. `cohortId` and `caseId` are plain uuids governed by the
-`admissions_announcements_target_check` XOR constraint: exactly one target, cohort broadcast or
-case-scoped.
-
-**`admissions_resources`** — `admissionsResources` (schema.ts:4459-4471). One row per shared resource
-link, grouped by `topic` and ordered by `sortOrder`. Global, not case-scoped.
-
-**`admissions_self_report_sections`** — `admissionsSelfReportSections` (schema.ts:4472-4487). One row
-per (`caseId`, `sectionKey`) — unique, which is what autosave upserts against (comment at
-`schema.ts:4484`). `payload` jsonb, `state` (`admissions_submission_state`, default `draft`),
-`sharedWithFamily`, and `reviewedByEmail`.
-
-### 8d. Audit, notifications, and spreadsheet import
-
-```mermaid
-erDiagram
-    admissions_cases {
-        uuid id PK
-    }
-    admissions_case_members {
-        uuid id PK
-    }
-    admissions_audit_log {
-        uuid id PK
-        uuid case_id FK
-        text entity_type
-        text action
-    }
-    admissions_notification_log {
-        uuid id PK
-        uuid case_id FK
-        text recipient_email
-        text dedupe_key
-    }
-    admissions_notification_outbox {
-        uuid id PK
-        uuid case_id FK
-        uuid member_id FK
-        text dedupe_key UK
-        text status
-    }
-    admissions_notification_runs {
-        uuid id PK
-        text status
-        text run_type
-    }
-    admissions_import_runs {
-        uuid id PK
-        uuid case_id FK
-        text spreadsheet_id
-        text source_fingerprint
-    }
-    admissions_import_issues {
-        uuid id PK
-        uuid run_id FK
-        text severity
-        text code
-    }
-    admissions_import_mappings {
-        uuid id PK
-        uuid run_id FK
-        text source_key
-        text target_id
-    }
-
-    admissions_cases ||--o{ admissions_audit_log : "audited by"
-    admissions_cases ||--o{ admissions_notification_log : "notified by"
-    admissions_cases ||--o{ admissions_notification_outbox : "queues"
-    admissions_cases ||--o{ admissions_import_runs : "imported into"
-    admissions_case_members ||--o{ admissions_notification_outbox : "addressed to"
-    admissions_import_runs ||--o{ admissions_import_issues : "reports"
-    admissions_import_runs ||--o{ admissions_import_mappings : "maps"
-```
-
-`admissions_notification_runs` carries no FK — it is the digest-cron control row, correlated to
-outbox rows by time rather than by reference.
-
-**`admissions_audit_log`** — `admissionsAuditLog` (schema.ts:4488-4503). One row per audited
-mutation. `caseId` is nullable (case-independent actions exist); `diff` is a typed jsonb map of
-`{ old, new }` per field. Append-only: `createdAt` only, no `updatedAt`, no UPDATE/DELETE path
-(comment at `schema.ts:4497`).
-
-**`admissions_notification_log`** — `admissionsNotificationLog` (schema.ts:4504-4524). One row per
-email actually sent. `category` and `tier` are documented text values (comments at
-`schema.ts:4508-4511`). The **partial** unique index on `dedupeKey WHERE dedupeKey IS NOT NULL`
-means keyed sends happen exactly once while keyless ones stay unconstrained.
-
-**`admissions_notification_outbox`** — `admissionsNotificationOutbox` (schema.ts:4525-4548). One
-queued email per `dedupeKey` (unique, and non-nullable here). Delivery state is `status` +
-`attemptCount` + `nextAttemptAt` (indexed together as the claim query), with `providerMessageId` and
-`lastError` on completion. Optional FK to the case member it addresses.
-
-**`admissions_notification_runs`** — `admissionsNotificationRuns` (schema.ts:4549-4565). One row per
-digest run (`runType` = daily | weekly), with the same partial-unique `WHERE status = 'running'`
-single-flight guard used across the codebase, plus sent/skipped counters.
-
-**`admissions_import_runs`** — `admissionsImportRuns` (schema.ts:4566-4587). One row per SummitEd
-spreadsheet import for a case, unique on (`caseId`, `spreadsheetId`, `sourceFingerprint`) — the same
-sheet content cannot be imported twice. `status` defaults to `"preview"` and only `committedAt`
-marks it applied; `conflictPolicy`, `sourceMetadata`, and `summary` jsonb hold the plan.
-
-**`admissions_import_issues`** — `admissionsImportIssues` (schema.ts:4588-4603). One row per problem
-found in an import, with `severity`/`code`, the originating `sheetName`/`sourceRef`, `details`
-jsonb, and a `resolution`.
-
-**`admissions_import_mappings`** — `admissionsImportMappings` (schema.ts:4604-4626). One row per
-source entity mapped to a created record — unique on (`runId`, `sourceType`, `sourceKey`).
-`targetType`/`targetId` are plain text because targets span many tables, and
-`sourceValueFingerprint` supports change detection on re-import.
+One row per completions record: `(dataYear, unitId, cipCode, awardLevel)` with a `count`. `cip2` is
+the denormalized two-digit CIP family the program filter groups on, indexed as `(dataYear, cip2)`
+alongside `(dataYear, unitId)` and `(dataYear, unitId, count)` (`schema.ts:3130-3132`). No unique
+constraint — an institution legitimately has many rows per year.
 
 ---
 
-## 9. Student monthly schedule — parent-facing (1 table)
+## Read and write paths
 
-```mermaid
-erDiagram
-    student_schedule_links {
-        uuid id PK
-        text token_hash UK
-        text student_key
-        text month_key
-        ts expires_at
-        ts revoked_at
-        int view_count
-    }
-```
-
-### `student_schedule_links` — `studentScheduleLinks` (schema.ts:4627-4659)
-
-One row per capability token issued for the public `/schedule/{token}` parent view — unique on
-`tokenHash`. Only the SHA-256 hash is stored (the same discipline as `line_oa_resolver_runs`), so a
-database read cannot reconstruct a live link; a row grants read access to exactly one
-(`studentKey`, `monthKey`) pair and is both expiring (`expiresAt`) and revocable (`revokedAt`)
-(comment at `schema.ts:4621-4626`). Provenance covers both issuance paths — `createdByEmail` for the
-admin UI, `createdByLineUserId` for the LINE bot — and delivery is recorded as either
-`sentToLineUserId` (1:1) or `sentToGroupId` (group chat, comment at `schema.ts:4637-4638`).
-`viewCount`/`lastViewedAt` are the usage trail. No foreign keys: `studentKey`/`wiseStudentId` are
-soft references to Wise.
+| Table | Written by | Read by |
+|---|---|---|
+| `snapshots`, `syncRuns` | `runFullSync()` (`src/lib/sync/orchestrator.ts`), `pruneOldSnapshots()` | `ensureIndex()` (`src/lib/search/index.ts:145-148`), Data Health |
+| `cronInvocations` | `src/lib/data-health/cron-audit.ts` | Data Health dashboard; swept by `cron-retention.ts` |
+| `cronAlertState` | `src/lib/internal/cron-watchdog.ts` — sole writer and reader | — |
+| `adminUsers` | `src/lib/db/seed.ts` | `resolveUserAccess` (`src/lib/auth-access.ts`), watchdog + digest recipients, LINE link validation |
+| `googleOAuthTokens` | `src/lib/sales-dashboard/google-oauth.ts` | Leave Requests sync, post-class Drive/payout |
+| The 8 snapshot-scoped tutor tables | `runFullSync()`; deleted by `pruneOldSnapshots()` | `ensureIndex()` and `src/lib/data/tutors.ts` (`tutors` and `raw_teacher_tags` excepted — no reader) |
+| `tutorAliases` | `src/lib/db/seed.ts` | identity cascade, tutor profiles, leave matching, schedule email |
+| `pastSessionBlocks` | `src/lib/sync/past-sessions-diff-hook.ts` | `src/lib/data/past-sessions.ts` (compare weekday fallback) |
+| `roomUtilizationSessions` | `/api/internal/sync-room-utilization` (manual-only) | room utilization dashboard |
+| `dataIssues`, `snapshotStats` | `runFullSync()` | Data Health dashboard |
+| `ipeds*` | `scripts/ipeds-import.ts` — **no runtime writer** | `src/lib/us-universities/{data,query}.ts`, `src/lib/admissions/colleges.ts` |
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+## Open questions
+
+1. **`tutors` and `raw_teacher_tags` have no runtime reader.** Both are inserted every sync
+   (`orchestrator.ts:432`, `:441`) and deleted every prune (`snapshot-pruning.ts:141-158`), but a
+   repo-wide search finds no non-test read of either. The in-memory index builds from
+   `tutor_identity_groups` + `tutor_identity_group_members` instead (`src/lib/search/index.ts:171-180`).
+   Whether they are retained as a diagnostic record or are simply vestigial is not stated anywhere in
+   code.
+2. **Snapshot pruning can be blocked by cross-domain FKs, silently.** `classroomAssignmentRuns.snapshotId`
+   and `classroomAssignmentRows.snapshotId` are `notNull` FKs to `snapshots` (`schema.ts:1667`,
+   `:1693`), and `pruneOldSnapshots()` deletes only the tables it enumerates — no classroom or
+   leave-request table is in that list (`snapshot-pruning.ts:13-27`). A prune of a snapshot still
+   referenced by a classroom assignment run would raise an FK violation, which the orchestrator
+   catches and records in `sync_runs.metadata` without failing the sync
+   (`orchestrator.ts:532-541`). Whether retention is expected to outrun classroom-assignment history
+   in practice is a runtime fact the repo cannot attest.
+3. **Snapshot single-activeness has no database constraint.** It is upheld only by the orchestrator's
+   bounded promotion `UPDATE` (`orchestrator.ts:488-498`). Any future writer touching
+   `snapshots.active` outside that path could break the invariant silently.
+4. **`ipeds_import_runs` guards single-flight per data year, not globally.** Its partial unique index
+   is `.on(dataYear).where(status = 'running')` (`schema.ts:3019-3021`), unlike every other run
+   ledger in the schema, which guards `.on(status)`. Whether concurrent imports of two different
+   years are intended or merely permitted is not stated in code.
+5. **`erd-university-admissions.md` enumerates fewer tables than the schema declares.** That page
+   opens with "25 tables … `schema.ts:2983-3396`", while `admissions_*` is 36 tables at
+   `schema.ts:3965-4634` at this revision — the schema's own section comment (`schema.ts:3960`) says
+   25 too, so both appear to predate later phases. This page hands the whole `admissions_*` family
+   over regardless; the destination page needs reconciling before its count is quoted.
+6. **`./index.md` still points at the pre-split section anchors.** Its per-row links `[c3]`–`[c9]`
+   target `erd-core.md#3-competitor-intelligence-16-tables` and siblings
+   (`docs/reference/database/index.md:322-330`), and its group table still credits `core` with 124
+   tables (`index.md:24`). Those anchors no longer exist here and need repointing to the new pages.
+
+---
+
+_Verified against main@0cd1e81 (clean tree) on 2026-09-02._

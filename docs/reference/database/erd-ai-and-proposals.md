@@ -1,25 +1,44 @@
-# Database Reference — AI Scheduler & Proposals
+# Database Reference — AI Scheduler & Proposals (ER Diagram)
 
-Scope: the six tables behind two related admin features — **admin proposal holds** (`proposalBundles`, `proposalItems`: local-only tentative tutor/time holds offered to a parent) and the **AI scheduler** (`aiSchedulerConversations`, `aiSchedulerMessages`, `aiSchedulerRuns`, `aiSchedulerFeedback`: the chat workspace plus its run-audit and human-feedback trail). They share a page because the scheduler produces the suggestions an admin turns into holds, and because both are non-authoritative relative to Wise — the proposal block carries the schema comment that these rows "intentionally do not write to Wise; Wise remains the source of truth for actual bookings" (`src/lib/db/schema.ts:2296-2299`).
+Scope: the 6 tables backing two related admin features — **Proposals / Admin Holds** (**experimental**) and the **AI Scheduler** (**experimental**).
 
-| Table (varName) | SQL name | schema.ts lines |
+They share a page because they sit on the same side of the same line: neither writes to Wise. The proposal block carries that rule as a schema comment — these rows "intentionally do not write to Wise; Wise remains the source of truth for actual bookings" (`src/lib/db/schema.ts:2299-2302`) — and the AI scheduler's own tables are a conversation store plus an audit trail, never a booking ledger. The model proposes; deterministic search proves; a human decides.
+
+Full column-by-column detail (types, defaults, every index) lives in [`./index.md`](./index.md); enum value sets live in [`./enums.md`](./enums.md). This page covers grain, keys, and relationships only. For purpose, business rules, and flows see [`../../features/proposals.md`](../../features/proposals.md) and [`../../features/ai-scheduler.md`](../../features/ai-scheduler.md).
+
+## Scope
+
+Exactly 6 tables (Drizzle export — Postgres table — `src/lib/db/schema.ts` line range):
+
+| Table (varName) | Postgres table | Lines | Grain scope |
+|---|---|---|---|
+| `proposalBundles` | `proposal_bundles` | 2303–2314 | one row per parent offer (a set of holds) |
+| `proposalItems` | `proposal_items` | 2315–2346 | one row per held tutor + weekday + time window |
+| `aiSchedulerConversations` | `ai_scheduler_conversations` | 2347–2367 | one row per scheduler chat workspace |
+| `aiSchedulerMessages` | `ai_scheduler_messages` | 2368–2385 | one row per message turn in a conversation |
+| `aiSchedulerRuns` | `ai_scheduler_runs` | 2386–2409 | one row per parse+solve execution (audit) |
+| `aiSchedulerFeedback` | `ai_scheduler_feedback` | 2410–2436 | one row per human verdict on a run/message |
+
+**None of the six carries a `snapshotId` column**, so none is scoped to a Wise snapshot and none is rewritten by the ETL — they survive snapshot rotation intact. Where the domain does need snapshot data (proposal auto-resolution), it joins the *active* snapshot at query time rather than holding an FK; see [Soft references](#soft-references-no-fk).
+
+Four enums are used here, all declared together at `src/lib/db/schema.ts:85-108`:
+
+| Enum | Values | Used by |
 |---|---|---|
-| `proposalBundles` | `proposal_bundles` | 2300–2310 |
-| `proposalItems` | `proposal_items` | 2312–2340 |
-| `aiSchedulerConversations` | `ai_scheduler_conversations` | 2344–2363 |
-| `aiSchedulerMessages` | `ai_scheduler_messages` | 2365–2381 |
-| `aiSchedulerRuns` | `ai_scheduler_runs` | 2383–2405 |
-| `aiSchedulerFeedback` | `ai_scheduler_feedback` | 2407–2430 |
+| `proposal_scope` | `recurring`, `one_time` | `proposalItems.scope` |
+| `proposal_status` | `pending`, `confirmed`, `released`, `expired`, `auto_resolved` | `proposalItems.status` |
+| `ai_scheduler_conversation_status` | `active`, `archived` | `aiSchedulerConversations.status` |
+| `ai_scheduler_message_role` | `admin`, `parent`, `assistant`, `system` | `aiSchedulerMessages.role` |
 
-Full column lists (types, defaults, every index) live in [docs/reference/database/index.md](./index.md); enum value sets live in [enums.md](./enums.md). This page covers grain, key columns, and relationships only. Feature meaning and rules live in [features/proposals.md](../../features/proposals.md) and [features/ai-scheduler.md](../../features/ai-scheduler.md).
-
-The four enums used here are declared at `src/lib/db/schema.ts:85-108`: `proposal_scope` (`recurring`, `one_time`), `proposal_status` (`pending`, `confirmed`, `released`, `expired`, `auto_resolved`), `ai_scheduler_conversation_status` (`active`, `archived`), and `ai_scheduler_message_role` (`admin`, `parent`, `assistant`, `system`).
-
-None of the six tables carries a `snapshotId` column, so none is scoped to a Wise snapshot; they survive snapshot rotation intact.
+Two status-like columns here are **plain `text`, not enums**: `aiSchedulerRuns.status` (`schema.ts:2391`) and `aiSchedulerFeedback.action` (`schema.ts:2415`). Their value sets are constrained only in TypeScript — `"solved" | "needs_clarification" | "failed"` for a run (`src/lib/ai/scheduler-data.ts:495`) and `"accept" | "edit" | "reject" | "dismiss"` for feedback (`src/lib/ai/scheduler-data.ts:71`).
 
 ## ER Diagram
 
-Two things the diagram makes explicit. First, **no table in this domain declares a foreign key to core snapshot data**: `proposalItems.tutorGroupId` is a bare `uuid("tutor_group_id")` with no `.references(...)` (`src/lib/db/schema.ts:2315`), and the tutor is otherwise denormalized as text (`tutor_canonical_key`, `tutor_display_name`). Core tables are therefore drawn as one stub node joined softly. Second, the LINE domain and the AI scheduler are **mutually** linked: `aiSchedulerFeedback.lineReviewId` points at `lineSchedulerReviews` (`src/lib/db/schema.ts:2418`), and `lineSchedulerReviews` points back at all three scheduler tables (`src/lib/db/schema.ts:2551-2556`), as does `lineThreads.aiSchedulerConversationId` (`src/lib/db/schema.ts:2456-2457`). Both LINE tables are owned by the LINE domain ([erd-line.md](./erd-line.md)) and appear here as stubs.
+Two things the diagram makes explicit.
+
+First, the proposal side has exactly **one** enforced foreign key (`proposalItems.bundleId`). The tutor a hold is placed on is denormalized as text (`tutor_canonical_key`, `tutor_display_name`), and `tutorGroupId` is a bare `uuid("tutor_group_id")` with no `.references(...)` (`schema.ts:2318`) — so core snapshot tables appear as one stub node joined softly, never as an FK target.
+
+Second, the AI scheduler and the LINE domain are **mutually** linked. `aiSchedulerFeedback.lineReviewId` points at `lineSchedulerReviews` (`schema.ts:2421`), and `lineSchedulerReviews` points back at all three scheduler tables (`schema.ts:2554-2559`), as does `lineThreads.aiSchedulerConversationId` (`schema.ts:2459-2460`). Both LINE tables are owned by the LINE domain ([`./erd-line.md`](./erd-line.md)) and appear here as stubs.
 
 ```mermaid
 erDiagram
@@ -32,7 +51,7 @@ erDiagram
     proposalItems {
         uuid id PK
         uuid bundle_id FK "-> proposalBundles.id"
-        uuid tutor_group_id "no FK (soft)"
+        uuid tutor_group_id "soft, no FK"
         text tutor_canonical_key "soft join key"
         enum scope "proposal_scope"
         enum status "proposal_status"
@@ -40,194 +59,145 @@ erDiagram
 
     aiSchedulerConversations {
         uuid id PK
-        text title
         enum status "ai_scheduler_conversation_status"
-        timestamptz last_message_at "list ordering"
+        timestamptz last_message_at
     }
 
     aiSchedulerMessages {
         uuid id PK
-        uuid conversation_id FK "-> aiSchedulerConversations.id"
+        uuid conversation_id FK "-> conversations (cascade)"
         enum role "ai_scheduler_message_role"
+        text content
     }
 
     aiSchedulerRuns {
         uuid id PK
-        uuid conversation_id FK "nullable"
-        uuid message_id FK "nullable"
-        text status "free text; app writes solved/needs_clarification/failed"
+        uuid conversation_id FK "-> conversations (set null)"
+        uuid message_id FK "-> messages (set null)"
+        text status "text, not enum"
+        text input_preview_redacted
     }
 
     aiSchedulerFeedback {
         uuid id PK
-        uuid conversation_id FK "nullable"
-        uuid message_id FK "nullable"
-        uuid scheduler_run_id FK "nullable"
-        uuid line_review_id FK "cross-domain, nullable"
-        text action "free text; app writes accept/edit/reject/dismiss"
+        uuid conversation_id FK "-> conversations (set null)"
+        uuid message_id FK "-> messages (set null)"
+        uuid scheduler_run_id FK "-> runs (set null)"
+        uuid line_review_id FK "-> lineSchedulerReviews"
+        text action "text, not enum"
     }
 
-    LINE_DOMAIN {
-        uuid id "line_scheduler_reviews / line_threads"
-        uuid conversation_id "points back into this domain"
+    lineSchedulerReviews {
+        uuid id PK
+        uuid conversation_id FK "back-ref into this domain"
     }
 
-    CORE_SNAPSHOT_DATA {
-        uuid snapshot_id "snapshots / future_session_blocks"
-        text canonical_key "tutor_identity_groups.canonical_key"
+    lineThreads {
+        uuid id PK
+        uuid ai_scheduler_conversation_id FK "back-ref into this domain"
     }
 
-    proposalBundles ||--o{ proposalItems : "bundle_id (ON DELETE no action)"
-    proposalItems }o..o| CORE_SNAPSHOT_DATA : "tutor_canonical_key / tutor_group_id (soft, no FK)"
+    CORE_SNAPSHOT_TABLES {
+        uuid id PK "snapshots / tutorIdentityGroups / futureSessionBlocks"
+    }
 
-    aiSchedulerConversations ||--o{ aiSchedulerMessages : "conversation_id (cascade)"
+    proposalBundles ||--o{ proposalItems : "bundle_id (only enforced FK here)"
+    proposalItems }o..o| CORE_SNAPSHOT_TABLES : "soft: canonical_key + active snapshot"
+
+    aiSchedulerConversations ||--o{ aiSchedulerMessages : "conversation_id (cascade delete)"
     aiSchedulerConversations |o--o{ aiSchedulerRuns : "conversation_id (set null)"
     aiSchedulerMessages |o--o{ aiSchedulerRuns : "message_id (set null)"
     aiSchedulerConversations |o--o{ aiSchedulerFeedback : "conversation_id (set null)"
     aiSchedulerMessages |o--o{ aiSchedulerFeedback : "message_id (set null)"
     aiSchedulerRuns |o--o{ aiSchedulerFeedback : "scheduler_run_id (set null)"
 
-    LINE_DOMAIN |o--o{ aiSchedulerFeedback : "line_review_id (set null)"
-    aiSchedulerConversations |o--o{ LINE_DOMAIN : "line_threads / line_scheduler_reviews (set null)"
-    aiSchedulerMessages |o--o{ LINE_DOMAIN : "scheduler_message_id (set null)"
-    aiSchedulerRuns |o--o{ LINE_DOMAIN : "scheduler_run_id (set null)"
+    lineSchedulerReviews |o--o{ aiSchedulerFeedback : "line_review_id"
+    aiSchedulerConversations |o--o{ lineSchedulerReviews : "conversation_id (LINE-owned)"
+    aiSchedulerConversations |o--o{ lineThreads : "ai_scheduler_conversation_id (LINE-owned)"
 ```
+
+## Relationship model
+
+**Enforced foreign keys inside the domain.** Every `.references(...)` declared in the six line ranges:
+
+| From | Column | To | On delete |
+|---|---|---|---|
+| `proposalItems` | `bundle_id` | `proposalBundles.id` | *(unspecified — default)* |
+| `aiSchedulerMessages` | `conversation_id` | `aiSchedulerConversations.id` | `cascade` |
+| `aiSchedulerRuns` | `conversation_id` | `aiSchedulerConversations.id` | `set null` |
+| `aiSchedulerRuns` | `message_id` | `aiSchedulerMessages.id` | `set null` |
+| `aiSchedulerFeedback` | `conversation_id` | `aiSchedulerConversations.id` | `set null` |
+| `aiSchedulerFeedback` | `message_id` | `aiSchedulerMessages.id` | `set null` |
+| `aiSchedulerFeedback` | `scheduler_run_id` | `aiSchedulerRuns.id` | `set null` |
+| `aiSchedulerFeedback` | `line_review_id` | `lineSchedulerReviews.id` (LINE domain) | `set null` |
+
+The delete policy encodes an intent worth naming: **the transcript is disposable, the audit is not**. Deleting a conversation cascades away its messages (`schema.ts:2370-2372`) but only nulls the parent pointers on runs and feedback (`schema.ts:2388-2389`, `2412-2414`) — an accept/reject verdict and its latency/version metadata outlive the chat it came from.
+
+**Inbound foreign keys from other domains.** Three, all LINE-owned and all `set null` — `lineThreads.aiSchedulerConversationId` (`schema.ts:2459-2460`) plus `lineSchedulerReviews.conversationId` / `.schedulerMessageId` / `.schedulerRunId` (`schema.ts:2554-2559`). The link is bidirectional: `aiSchedulerFeedback.lineReviewId` closes the loop back (`schema.ts:2421`).
+
+### Soft references (no FK)
+
+- `proposalItems.tutorGroupId` — bare `uuid` (`schema.ts:2318`); the durable join key is `tutorCanonicalKey` (text), matching the codebase-wide preference for `canonical_key` over snapshot-scoped ids.
+- `proposalBundles.studentLabel` — free text (`schema.ts:2305`). There is no student entity to point at; a bundle is labelled, not linked.
+- Auto-resolution reads core snapshot data at query time rather than holding a reference: `autoResolveConfirmedProposalItems` selects the row where `snapshots.active = true`, then joins `futureSessionBlocks` to `tutorIdentityGroups` and matches on `canonicalKey` + weekday + minute window (`src/lib/proposals/data.ts:188-251`).
 
 ## Tables
 
-### `proposalBundles` — `proposal_bundles`
+### `proposalBundles` — `proposal_bundles` (2303–2314)
 
-Source: `src/lib/db/schema.ts:2300-2310`.
+One row per **parent offer**: the set of tentative holds an admin puts together for one student before anything is booked in Wise. Grain is the offer, not the slot.
 
-**Grain**: one row per proposal bundle — the set of tentative slots offered to a single student in one admin action. A bundle is inserted once per `createProposalBundle` call (`src/lib/proposals/data.ts:318-328`); there is no upsert path and no uniqueness constraint beyond the surrogate `id`.
+Key columns: `id` (uuid PK, `defaultRandom()`), `studentLabel` (required free text — the only identification of who the offer is for), `notes`, and the `createdByEmail` / `createdByName` actor pair. One index, on `createdAt` — the list view is chronological.
 
-**Key columns**:
-- `id` — `uuid` primary key, `defaultRandom()` (line 2301).
-- `studentLabel` — `text`, `notNull` (line 2302). Free text, trimmed and required non-empty by `validateCreateInput` (`src/lib/proposals/data.ts:272-274`); it is **not** a foreign key to any student record.
-- `notes` — nullable `text` (line 2303).
-- `createdByEmail` / `createdByName` — nullable `text` (lines 2304-2305). The creator block lives here, not on the item: hold listings read the actor off the joined bundle row (`src/lib/proposals/data.ts:152-153`).
-- `createdAt` / `updatedAt` — timezone-aware `timestamp`, `notNull`, `defaultNow()` (lines 2306-2307). `updatedAt` is bumped on the parent bundle whenever any child item is patched (`src/lib/proposals/data.ts:468-471`).
+Relationships: parent of `proposalItems` via `bundleId`; nothing references a bundle from outside the domain. The bundle also acts as a **transaction boundary for the items**: confirming one item releases every other *pending* item in the same bundle (`src/lib/proposals/data.ts:429-442`), which is the schema's way of saying an offer is a menu and the parent picks one.
 
-**Indexes**: `proposal_bundles_created_at_idx` on `createdAt` (line 2309) — the only index, supporting recency listing.
+### `proposalItems` — `proposal_items` (2315–2346)
 
-**Relationships**: parent of `proposalItems` via `proposalItems.bundleId`. Deletes are effectively blocked by the child FK (see below); the single delete in the codebase is a compensating rollback when the item insert fails immediately after the bundle insert (`src/lib/proposals/data.ts:361-364`) — a hand-rolled substitute for a transaction, since the Neon HTTP driver does not provide one.
+One row per **held slot**: a tutor, a weekday, and a start/end minute window inside one bundle. This is the only table in the domain with a real lifecycle.
 
-### `proposalItems` — `proposal_items`
+Key columns: `bundleId` (FK); the denormalized tutor triple `tutorGroupId` (soft) / `tutorCanonicalKey` / `tutorDisplayName`; `scope` (`proposal_scope`) paired with `weekday` + `proposalDate` — a `one_time` hold stores the date, a `recurring` hold stores `null` (`data.ts:342`); the minute-of-day window `startMinute` / `endMinute`; the teaching triple `subject` / `curriculum` / `level`; `status` (`proposal_status`, defaults `pending`); and one timestamp per terminal transition — `expiresAt`, `confirmedAt`, `releasedAt`, `autoResolvedAt` — plus the `lastActionBy*` / `lastActionAt` actor trail.
 
-Source: `src/lib/db/schema.ts:2312-2340`.
+Three indexes: `bundle_id`; the active-hold lookup `(tutor_canonical_key, status, weekday)`, which is the shape the search page uses to overlay existing holds on a tutor's grid; and `proposal_date`.
 
-**Grain**: one row per proposed tutor/time hold inside a bundle — the unit an admin confirms, releases, or extends. Items are written as one multi-row insert, one row per requested slot (`src/lib/proposals/data.ts:332-357`).
+Lifecycle, all driven from `src/lib/proposals/data.ts`: a hold is created `pending` with `expiresAt = now + 48h` (`PENDING_HOLD_MS`, `data.ts:21`, `data.ts:317`). `confirm` clears `expiresAt` and stamps `confirmedAt`; `release` stamps `releasedAt`; `extend` pushes `expiresAt` out another 48h and is legal only from `pending` (`data.ts:386-465`). Two sweeps run on read via `reconcileProposalState`: stale `pending` rows past `expiresAt` flip to `expired` (`data.ts:170-186`), and `confirmed` rows whose slot now has a real blocking session in the active snapshot flip to `auto_resolved` (`data.ts:188-251`) — the hold retires itself once Wise catches up.
 
-**Key columns**:
-- `id` — `uuid` primary key, `defaultRandom()` (line 2313).
-- `bundleId` — `uuid`, `notNull`, `references(() => proposalBundles.id)` (line 2314). No `onDelete` is declared, so the migration emits `ON DELETE no action` (`drizzle/0006_admin_proposal_holds.sql:40`) — a bundle cannot be deleted while items reference it.
-- `tutorGroupId` — nullable `uuid` with **no** `.references(...)` (line 2315). A denormalized identifier only; nothing constrains it to a live snapshot, which is why the row survives snapshot rotation.
-- `tutorCanonicalKey` / `tutorDisplayName` — `text`, `notNull` (lines 2316-2317). `tutorCanonicalKey` is the real join key used for overlap exclusion and auto-resolution against Wise sessions; it corresponds to `tutorIdentityGroups.canonicalKey` (`src/lib/db/schema.ts:1519`).
-- `scope` — `proposalScopeEnum`, `notNull` (line 2318): `recurring` (weekly) or `one_time` (a specific `proposalDate`). `one_time` items are validated to require a date (`src/lib/proposals/data.ts:286-288`), and only then is `proposalDate` populated (`src/lib/proposals/data.ts:342`).
-- `weekday` / `startMinute` / `endMinute` — `integer`, `notNull` (lines 2319, 2321-2322); minute-of-day offsets, Bangkok-local.
-- `proposalDate` — nullable `date` in `{ mode: "string" }` (line 2320); set only for `one_time` scope.
-- `subject` / `curriculum` / `level` — nullable `text` (lines 2323-2325).
-- `status` — `proposalStatusEnum`, `notNull`, default `pending` (line 2326).
-- Lifecycle timestamps `expiresAt`, `confirmedAt`, `releasedAt`, `autoResolvedAt` (lines 2327-2330), the audit block `lastActionByEmail` / `lastActionByName` / `lastActionAt` (lines 2331-2333), and `createdAt` / `updatedAt` (lines 2334-2335).
+### `aiSchedulerConversations` — `ai_scheduler_conversations` (2347–2367)
 
-**Indexes**: `proposal_items_bundle_idx` on `bundleId`; the composite `proposal_items_active_lookup_idx` on `(tutorCanonicalKey, status, weekday)` for "does this tutor already hold this weekday"; `proposal_items_date_idx` on `proposalDate` (lines 2337-2339).
+One row per **scheduler chat workspace** — an admin's working session against one parent enquiry.
 
-**Constraints that exist in Postgres but not in the Drizzle schema.** `drizzle/0006_admin_proposal_holds.sql` adds three CHECKs — `proposal_items_time_order_chk` (`end_minute > start_minute`), `proposal_items_weekday_chk` (`0..6`), and `proposal_items_pending_expiry_chk` (`status <> 'pending' OR expires_at IS NOT NULL`) at lines 41-43 — plus two `EXCLUDE USING gist` constraints that make overlapping *active* holds impossible at the database level:
+Key columns: `title` (defaults `"Untitled scheduler chat"`), `status` (`active` / `archived`), the customer triple `customerParentName` / `customerStudentName` / `customerContact` (all free text, none an FK), `notes`, and `extractedState` — a `jsonb` `Record<string, unknown>` defaulting `{}` that holds the requirements parsed out of the conversation so far. `lastMessageAt` is maintained as a denormalized sort key and backs all three indexes: `(status, last_message_at)`, `(created_by_email, last_message_at)`, and `last_message_at` alone.
 
-- `proposal_items_no_recurring_overlap` on `(tutor_canonical_key WITH =, weekday WITH =, int4range(start_minute, end_minute, '[)') WITH &&)` where `status IN ('pending','confirmed') AND scope = 'recurring'` (lines 48-52);
-- `proposal_items_no_one_time_overlap`, the same shape keyed on `proposal_date` instead of `weekday`, for `scope = 'one_time'` (lines 53-57).
+Relationships: parent of `aiSchedulerMessages` (cascade), and a nullable parent of runs and feedback. It is also the join point to LINE — a `lineThread` and a `lineSchedulerReview` can each adopt a conversation.
 
-Both depend on `CREATE EXTENSION IF NOT EXISTS "btree_gist"` at line 1 of that migration. Because `schema.ts` does not model any of these, they are invisible to `drizzle-kit`; application code recognises a violation by SQLSTATE `23P01` or by constraint name and re-raises it as a `ProposalConflictError` (`src/lib/proposals/data.ts:68-83`, `366-373`).
+### `aiSchedulerMessages` — `ai_scheduler_messages` (2368–2385)
 
-**Lifecycle**, as implemented in `src/lib/proposals/data.ts`: items are inserted `pending` with `expiresAt = now + 48h` (`PENDING_HOLD_MS`, lines 21, 85-87, 317, 348-349). `expireStaleProposalItems` flips `pending` rows past `expiresAt` to `expired` (lines 171-188). `autoResolveConfirmedProposalItems` compares `confirmed` holds against blocking `futureSessionBlocks` of the **active snapshot**, joined through `tutorIdentityGroups.canonicalKey`, and flips matches to `auto_resolved` (lines 198-251) — the only place this domain reads core snapshot tables. Confirming one item releases every other still-`pending` item in the same bundle (lines 429-442). Only `pending` and `confirmed` count as active (`ACTIVE_PROPOSAL_STATUSES`, `src/lib/proposals/overlap.ts:9`).
+One row per **turn** in a conversation. Append-only in practice: the table has `createdAt` but no `updatedAt`.
 
-**Write/read paths**: `POST /api/proposals` creates a bundle plus items (`src/app/api/proposals/route.ts:96`); `PATCH /api/proposals/items/[itemId]` applies confirm/release/extend (`src/app/api/proposals/items/[itemId]/route.ts:42`); `GET /api/proposals/active` lists active holds (`src/app/api/proposals/active/route.ts:13`). Active holds also block slots in range search alongside real Wise sessions (`src/lib/search/range-search.ts:116`, `144-167`) and are loaded by the AI scheduler service (`src/lib/ai/scheduler-service.ts:63`).
+Key columns: `conversationId` (FK, cascade), `role` (`admin` / `parent` / `assistant` / `system`), `content` (required text), `structuredPayload` (nullable `jsonb` — the machine-readable form of an assistant turn), plus the per-turn model observations `model` and `latencyMs` and the `createdBy*` actor pair. Two indexes: `(conversation_id, created_at)` for transcript replay and `created_at` for global recency.
 
-**Relationships**: child of `proposalBundles` (enforced FK). Correlated to core tutor/snapshot data only through `tutorCanonicalKey` (and the unconstrained `tutorGroupId`), resolved in application code — never by a database foreign key.
+Relationships: child of a conversation; referenced (nullably) by `aiSchedulerRuns.messageId`, `aiSchedulerFeedback.messageId`, and LINE's `lineSchedulerReviews.schedulerMessageId`.
 
-### `aiSchedulerConversations` — `ai_scheduler_conversations`
+### `aiSchedulerRuns` — `ai_scheduler_runs` (2386–2409)
 
-Source: `src/lib/db/schema.ts:2344-2363`.
+One row per **execution** of the parse-then-solve pipeline — the audit record for a single model call plus the deterministic availability solve that follows it. Written by `recordSchedulerRun` (`src/lib/ai/scheduler-data.ts:510-527`).
 
-**Grain**: one row per AI scheduler chat — a single customer request thread an admin is working. Created explicitly by `createSchedulerConversation` (`src/lib/ai/scheduler-data.ts:348-359`); there is no per-customer uniqueness constraint, so one parent can have several conversations.
+Key columns: nullable `conversationId` and `messageId` (both `set null`, so a run survives the chat); `status` as plain text carrying `solved` / `needs_clarification` / `failed` (`scheduler-data.ts:495`); `inputPreviewRedacted` — a **required** column whose name is the policy, the raw parent text is never stored here; `model`, `latencyMs`, and `latencyBreakdown` (`jsonb`); the reproducibility pair `schedulerVersion` + `promptVersion`, which the metrics page groups on and defaults to `"unknown"` when absent (`src/lib/ai/scheduler-metrics.ts:93-98`); the two payload snapshots `parsedPayload` (what the model extracted) and `solverPayload` (what deterministic search returned); `warnings` (`jsonb` string array, defaults `[]`); and `errorMessage`. Four indexes: `conversation_id`, `message_id`, `created_at`, `status`.
 
-**Key columns**:
-- `id` — `uuid` primary key, `defaultRandom()` (line 2345).
-- `title` — `text`, `notNull`, default `"Untitled scheduler chat"` (line 2346); the same fallback is re-applied on write when the trimmed input is empty (`src/lib/ai/scheduler-data.ts:351`, `412`).
-- `status` — `aiSchedulerConversationStatusEnum`, `notNull`, default `active` (line 2347).
-- `customerParentName` / `customerStudentName` / `customerContact` — nullable `text` (lines 2348-2350); the customer context, and part of what the free-text list filter searches (`src/lib/ai/scheduler-data.ts:280-286`).
-- `notes` — `text`, `notNull`, default `""` (line 2351).
-- `extractedState` — `jsonb` typed `Record<string, unknown>`, `notNull`, default `{}` (line 2352). The accumulated structured understanding of the request; read back as `SchedulerExtractedState` (`src/lib/ai/scheduler-data.ts:136`) and also read directly by the LINE review service (`src/lib/line/review-service.ts:158-160`).
-- `createdByEmail` / `createdByName` — nullable `text` (lines 2353-2354). The email is trimmed and lower-cased before write (`src/lib/ai/scheduler-data.ts:186-191`) and drives both the "mine only" filter and the per-admin facet counts (lines 288-307).
-- `archivedAt` — nullable timestamp (line 2355); set to now when `status` moves to `archived`, reset to `null` otherwise (`src/lib/ai/scheduler-data.ts:418-421`).
-- `lastMessageAt` — `notNull`, `defaultNow()` (line 2356); bumped by `touchSchedulerConversationAfterMessage` (`src/lib/ai/scheduler-data.ts:442-445`) and used as the list sort key under a hard `limit(200)` (lines 204-215).
-- `createdAt` / `updatedAt` (lines 2357-2358).
+That `parsedPayload` / `solverPayload` split is the feature's core invariant made durable — the model's reading of the request and the system's proof of availability are stored as two separate columns, so a wrong suggestion can always be attributed to one side or the other.
 
-**Indexes**: `(status, lastMessageAt)`, `(createdByEmail, lastMessageAt)`, and `lastMessageAt` alone (lines 2360-2362) — all three shaped for the same recency-ordered list.
+### `aiSchedulerFeedback` — `ai_scheduler_feedback` (2410–2436)
 
-**Relationships**: parent of `aiSchedulerMessages` with `onDelete: "cascade"`; soft parent (`set null`) of `aiSchedulerRuns` and `aiSchedulerFeedback`. It is also the target of `lineThreads.aiSchedulerConversationId` (`src/lib/db/schema.ts:2456-2457`) and `lineSchedulerReviews.conversationId` (`src/lib/db/schema.ts:2551-2552`); the existence of review rows for a conversation is what marks it as LINE-sourced rather than manual in the list payload (`src/lib/ai/scheduler-data.ts:218-231`, `248-253`).
+One row per **human verdict** on a suggestion. This is the training/QA signal, and it is deliberately the most loosely-coupled table in the domain: all four of its parents are nullable `set null` references.
 
-### `aiSchedulerMessages` — `ai_scheduler_messages`
+Key columns: `conversationId`, `messageId`, `schedulerRunId`, and `lineReviewId` (the cross-domain link to `lineSchedulerReviews`); `action` as plain text carrying `accept` / `edit` / `reject` / `dismiss` (`scheduler-data.ts:71`); the outcome detail `selectedTutorIds` and `rejectedTutorIds` (`jsonb` string arrays, default `[]`), `editedParentDraft`, `rejectionReason`, and `staffCorrection`; and two measurement columns — `classifierConfidence` (`double precision`, carried over from the LINE classifier) and `timeToReviewMs`. Five indexes: `message_id`, `scheduler_run_id`, `created_at`, `action`, `line_review_id`.
 
-Source: `src/lib/db/schema.ts:2365-2381`.
+Consumers: `getSchedulerFeedback` for the accept/edit/reject metrics readout (`scheduler-data.ts:555-560` writes, `:167` reads), and the correction-telemetry query that pairs `action` with `classifierConfidence` and `timeToReviewMs` (`src/lib/ai/correction-telemetry.ts:50-55`).
 
-**Grain**: one row per message in a scheduler conversation, in either direction. Written by `createSchedulerMessage` (`src/lib/ai/scheduler-data.ts:473-485`) and read back ordered by `createdAt` ascending (lines 383-387).
+## Open questions
 
-**Key columns**:
-- `id` — `uuid` primary key, `defaultRandom()` (line 2366).
-- `conversationId` — `uuid`, `notNull`, `references(() => aiSchedulerConversations.id, { onDelete: "cascade" })` (lines 2367-2369). The only cascading delete in this domain.
-- `role` — `aiSchedulerMessageRoleEnum`, `notNull` (line 2370): `admin` | `parent` | `assistant` | `system`.
-- `content` — `text`, `notNull` (line 2371); the rendered message text.
-- `structuredPayload` — nullable `jsonb` (line 2372); machine-readable assistant output when there is any.
-- `model` / `latencyMs` — nullable `text` / `integer` (lines 2373-2374); per-message provenance for assistant turns.
-- `createdByEmail` / `createdByName` — nullable `text` (lines 2375-2376); `createdAt` (line 2377).
+- **No FK enforces the proposal → tutor link.** `tutorCanonicalKey` is a text column with no constraint, so a hold can outlive (or typo past) any tutor identity group. This is consistent with the codebase's cross-snapshot pattern, but nothing in the schema prevents an orphan hold; whether that has occurred in production is a data question this repo cannot answer.
+- **`proposalItems.bundleId` declares no `onDelete`** (`schema.ts:2317`), unlike every other FK in the domain. Deleting a bundle with items would therefore be restricted by Postgres' default rather than cascading — but no code path in `src/lib/proposals/data.ts` deletes a bundle, so the behaviour is untested in practice.
+- **`aiSchedulerRuns.status` and `aiSchedulerFeedback.action` are `text`, not `pgEnum`**, while four neighbouring columns in the same 130-line block do use enums. The value sets exist only as TypeScript unions, so a bad write from outside those helpers would be accepted by the database. Whether this is deliberate (churn-prone experimental vocabularies) or drift is not recorded in the schema.
+- **Proposal reconciliation has no scheduled driver.** `reconcileProposalState` runs on read (`data.ts:253-256`) — `listActiveProposalHolds` calls it unless the caller passes `reconcile: false` (`data.ts:263-265`), so `expired` / `auto_resolved` transitions only happen when someone opens the view. There is no `proposal_*` cron entry; see [`../crons.md`](../crons.md).
 
-**Indexes**: `(conversationId, createdAt)` and `createdAt` (lines 2379-2380).
-
-**Relationships**: child of `aiSchedulerConversations` (cascade). Referenced with `set null` by `aiSchedulerRuns.messageId` and `aiSchedulerFeedback.messageId`, and cross-domain by `lineSchedulerReviews.schedulerMessageId` (`src/lib/db/schema.ts:2553-2554`). Because those references are `set null` while the parent link cascades, deleting a conversation deletes its messages but leaves run and feedback rows in place with null links. The LINE review UI replays a review's conversation by reading these rows directly (`src/lib/line/data.ts:1094-1103`).
-
-### `aiSchedulerRuns` — `ai_scheduler_runs`
-
-Source: `src/lib/db/schema.ts:2383-2405`.
-
-**Grain**: one row per AI scheduler inference attempt — the observability record for a single parse/solve pass. Writes are **best effort**: `logSchedulerRun` wraps the insert in try/catch, logs failure with `console.error`, and returns the sentinel string `"unlogged"` rather than throwing (`src/lib/ai/scheduler-data.ts:508-532`), so a message can exist with no corresponding run row.
-
-**Key columns**:
-- `id` — `uuid` primary key, `defaultRandom()` (line 2384).
-- `conversationId` / `messageId` — both nullable, both `onDelete: "set null"` (lines 2385-2386). Nullable by design: the public search-assistant route logs runs with no conversation at all (`src/app/api/search/assistant/route.ts:176`, `191`).
-- `createdByEmail` — nullable `text` (line 2387).
-- `status` — `text`, `notNull` (line 2388). Free text in SQL, **not** an enum; the writer's type union is `"solved" | "needs_clarification" | "failed"` (`src/lib/ai/scheduler-data.ts:495`) and the metrics reader counts exactly those three values (`src/lib/ai/scheduler-metrics.ts:105-107`).
-- `inputPreviewRedacted` — `text`, `notNull` (line 2389). A redacted preview of the inbound text — the only inbound content this table retains — surfaced verbatim in the failure list on the metrics page (`src/lib/ai/scheduler-metrics.ts:121-128`).
-- `model` / `latencyMs` / `schedulerVersion` / `promptVersion` (lines 2390-2393). The two version columns were added later by `drizzle/0021_ai_scheduler_observability.sql` and are grouped into `(schedulerVersion, promptVersion)` counts that fall back to the literal `"unknown"` when null (`src/lib/ai/scheduler-metrics.ts:93-101`).
-- `latencyBreakdown` — nullable `jsonb` (line 2394, also added in migration 0021). Written from a `{ totalMs, dbMs, modelMs, searchMs }` shape (`src/lib/ai/scheduler-data.ts:64-69`, `521`) and read back for the per-stage averages.
-- `parsedPayload` / `solverPayload` — nullable `jsonb` (lines 2395-2396). `solverPayload.constraintLedger` is inspected to count solved runs that still carry a `needs_clarification` constraint (`src/lib/ai/scheduler-metrics.ts:50-59`, `108-111`).
-- `warnings` — `jsonb` typed `string[]`, `notNull`, default `[]` (line 2397); `errorMessage` — nullable `text` (line 2398); `createdAt` (line 2399).
-
-**Indexes**: `conversationId`, `messageId`, `createdAt`, and `status` (lines 2401-2404). The metrics query reads only the most recent 500 rows by `createdAt` (`src/lib/ai/scheduler-metrics.ts:66-81`), so `/scheduler/metrics` is a rolling window, not a lifetime aggregate.
-
-**Relationships**: nullable child of both `aiSchedulerConversations` and `aiSchedulerMessages`; referenced with `set null` by `aiSchedulerFeedback.schedulerRunId` and cross-domain by `lineSchedulerReviews.schedulerRunId` (`src/lib/db/schema.ts:2555-2556`), which the LINE payload uses to look up run latency (`src/lib/line/data.ts:1192-1194`).
-
-### `aiSchedulerFeedback` — `ai_scheduler_feedback`
-
-Source: `src/lib/db/schema.ts:2407-2430`.
-
-**Grain**: one row per human review action on a scheduler suggestion — the labelled-outcome trail used to evaluate the assistant. Inserted by `createSchedulerFeedback` (`src/lib/ai/scheduler-data.ts:554-572`); nothing enforces one feedback row per message, so repeated actions append.
-
-**Key columns**:
-- `id` — `uuid` primary key, `defaultRandom()` (line 2408).
-- `conversationId` / `messageId` / `schedulerRunId` — all nullable, all `onDelete: "set null"` (lines 2409-2411).
-- `action` — `text`, `notNull` (line 2412). Free text in SQL; the writer's union is `"accept" | "edit" | "reject" | "dismiss"` (`src/lib/ai/scheduler-data.ts:71`), and the telemetry reader buckets exactly those four while counting anything else only in `total` (`src/lib/ai/correction-telemetry.ts:33-38`).
-- `selectedTutorIds` / `rejectedTutorIds` — `jsonb` typed `string[]`, `notNull`, default `[]` (lines 2413-2414).
-- `editedParentDraft` / `rejectionReason` / `staffCorrection` — nullable `text` (lines 2415-2417); each is trimmed and coerced to `null` when empty on write (`src/lib/ai/scheduler-data.ts:563-565`).
-- `lineReviewId` — nullable `uuid` referencing `lineSchedulerReviews.id` with `onDelete: "set null"` (line 2418). The only foreign key that leaves this domain; added together with the two telemetry columns below by `drizzle/0030_scheduler_feedback_telemetry.sql`.
-- `classifierConfidence` — nullable `doublePrecision` (line 2419); bucketed into high/medium/low/unknown bands for the correction report (`src/lib/ai/correction-telemetry.ts:64`).
-- `timeToReviewMs` — nullable `integer` (line 2420); feeds mean and p50 review latency (`src/lib/ai/correction-telemetry.ts:68`, `86-87`).
-- `createdByEmail` / `createdByName` (lines 2421-2422), `createdAt` (line 2423).
-
-**Indexes**: `messageId`, `schedulerRunId`, `createdAt`, `action`, and `lineReviewId` (lines 2425-2429). There is **no** index on `conversationId` even though the column carries an FK. The telemetry query reads the most recent 5000 rows by `createdAt` (`src/lib/ai/correction-telemetry.ts:48-56`) — again a rolling window.
-
-**Write paths**: `POST /api/ai-scheduler/messages/[messageId]/feedback` for admin actions in the scheduler workspace (`src/app/api/ai-scheduler/messages/[messageId]/feedback/route.ts:64`), and four call sites in the LINE review service covering send/edit/reject/dismiss outcomes (`src/lib/line/review-service.ts:517`, `548`, `592`, `627`).
-
-**Relationships**: nullable child of `aiSchedulerConversations`, `aiSchedulerMessages`, and `aiSchedulerRuns`, plus the cross-domain link to `lineSchedulerReviews`. Nothing references this table. Because every inbound link is nullable, cleanup routines must delete in dependency order explicitly — the LINE test-data cleanup removes feedback first, then runs, then conversations, and relies on the cascade for messages (`src/lib/line/test-data-cleanup.ts:232-259`).
-
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against main@0cd1e81 (clean tree) on 2026-09-02._

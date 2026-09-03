@@ -1,232 +1,166 @@
-# Database Reference — Leave Requests ER Diagram
+# Database Reference — Leave Requests
 
-> 🟡 **IN PROGRESS** — badge supplied by the documentation task for this domain. Read the badge note below before treating it as a claim about the code: at this revision the five tables and their migration are **committed and running in production**, not uncommitted WIP.
+> **Status: stable.** The five tables are committed, migrated, and driven by a scheduled production cron (`15,45 * * * *`). An earlier documentation pass carried an IN PROGRESS badge on the mistaken premise that this schema was uncommitted WIP; that premise did not hold and the badge is retired — see [Badge provenance](#badge-provenance).
 
-Domain: ingestion and triage of tutor **leave requests** sourced from one Google Sheet tab, the Wise sessions each leave window overlaps, an append-only action trail, and outbound notification bookkeeping.
+Domain: ingestion and triage of tutor **leave requests** submitted through one Google Sheet tab. A sync run reads the sheet, matches each row to a Wise tutor identity, computes which of that tutor's Wise sessions the leave window overlaps, records an append-only action trail, and books the outbound admin notification. The only Wise-facing capability in the domain is a **dry-run cancellation preview** — no session is ever cancelled from here.
 
-This page covers **5 tables**, all defined in `src/lib/db/schema.ts` under the `── Tutor Leave Requests ──` section header (`src/lib/db/schema.ts:2091`):
+All five tables are declared in `src/lib/db/schema.ts` under the `── Tutor Leave Requests ──` section header (`src/lib/db/schema.ts:2094`) and created by `drizzle/0036_tutor_leave_requests.sql`.
 
 | Table (Drizzle var) | Postgres name | schema.ts lines |
 |---|---|---|
-| `leaveRequestSyncRuns` | `leave_request_sync_runs` | 2093–2111 |
-| `leaveRequests` | `leave_requests` | 2113–2169 |
-| `leaveRequestAffectedSessions` | `leave_request_affected_sessions` | 2171–2200 |
-| `leaveRequestActivityLogs` | `leave_request_activity_logs` | 2202–2216 |
-| `leaveRequestNotifications` | `leave_request_notifications` | 2218–2234 |
+| `leaveRequestSyncRuns` | `leave_request_sync_runs` | 2096–2115 |
+| `leaveRequests` | `leave_requests` | 2116–2173 |
+| `leaveRequestAffectedSessions` | `leave_request_affected_sessions` | 2174–2204 |
+| `leaveRequestActivityLogs` | `leave_request_activity_logs` | 2205–2220 |
+| `leaveRequestNotifications` | `leave_request_notifications` | 2221–2257 |
 
-> Full column-by-column listings (every type, default, and index) are the canonical responsibility of [`docs/reference/database/index.md`](./index.md); enum value lists belong to [`enums.md`](./enums.md). This page shows only primary keys, foreign keys, and a few identifying columns per entity, plus grain and relationships. Purpose, workflow rules, and the reasoning behind them live in [`docs/features/leave-requests.md`](../../features/leave-requests.md).
-
-### Note on the badge
-
-The `IN PROGRESS` badge is applied as instructed by the documentation task, which described these tables as living in a modified, unstaged `src/lib/db/schema.ts`. That premise does not hold at this revision. Verified mechanically:
-
-- `git status --porcelain -- src/lib/db/schema.ts` → empty. The file is clean; there are no unstaged leave-request changes.
-- `git show HEAD:src/lib/db/schema.ts | grep -c "leaveRequestNotifications\|leaveRequestSyncRuns"` → `4`. The tables are in committed `HEAD`.
-- The DDL migration `drizzle/0036_tutor_leave_requests.sql` is tracked and committed, and creates all five tables plus the two `leave_request_*` enums. No later migration under `drizzle/*.sql` alters them (`grep -ln "leave_request" drizzle/*.sql` matches only `0036`).
-- `git log -1 -- src/lib/leave-requests/` → `8cc2717`. The whole feature source is committed.
-
-Read the badge as "feature still maturing", not "schema uncommitted". The feature doc reaches the same conclusion independently ([`docs/features/leave-requests.md`](../../features/leave-requests.md), status line).
-
----
+Full column-by-column detail (every type, default, and index) is the canonical responsibility of [index.md](./index.md); enum value sets live in [enums.md](./enums.md). This page covers grain, keys, and relationships only. Purpose, workflow rules, and the reasoning behind them live in [docs/features/leave-requests.md](../../features/leave-requests.md).
 
 ## ER Diagram
 
-Core tables are drawn as **stub nodes** — they are defined elsewhere in `schema.ts` and are not expanded here. `snapshots` (`src/lib/db/schema.ts:456`) and `tutorIdentityGroups` (`src/lib/db/schema.ts:1516`) are reached by real SQL foreign keys. `futureSessionBlocks` (`src/lib/db/schema.ts:1615`) is shown because it is the *read source* that populates `leaveRequestAffectedSessions` (`src/lib/leave-requests/data.ts:443`-`451`), but no foreign key points at it — that edge is dashed. `adminUsers` (`src/lib/db/schema.ts:575`) supplies the notification recipient list (`src/lib/leave-requests/sync.ts:270`-`276`) with no FK either.
+Core tables the domain points at (`snapshots`, `tutorIdentityGroups`, `futureSessionBlocks`) appear as stub nodes; they are expanded in [erd-core.md](./erd-core.md).
 
 ```mermaid
 erDiagram
     leaveRequestSyncRuns {
         uuid id PK
-        sync_status status "partial-unique: at most one 'running'"
-        text trigger_type "cron | manual"
+        sync_status status
+        text trigger_type
         timestamptz started_at
     }
-
     leaveRequests {
         uuid id PK
-        text spreadsheet_id UK "part of source-row unique idx"
-        text sheet_name UK "part of source-row unique idx"
-        integer source_row_number UK "part of source-row unique idx"
-        text source_fingerprint "change detector"
-        uuid tutor_group_id FK "-> tutor_identity_groups.id"
-        uuid last_sync_run_id FK "-> leave_request_sync_runs.id"
+        text spreadsheet_id UK
+        text sheet_name UK
+        integer source_row_number UK
+        uuid tutor_group_id FK
+        uuid last_sync_run_id FK
         leave_request_workflow_status workflow_status
-        leave_request_sheet_write_status sheet_write_status
     }
-
     leaveRequestAffectedSessions {
         uuid id PK
-        uuid leave_request_id FK "-> leave_requests.id (cascade)"
-        uuid snapshot_id FK "-> snapshots.id"
-        uuid group_id FK "-> tutor_identity_groups.id"
-        text wise_session_id UK "unique with leave_request_id"
-        integer overlap_minutes
+        uuid leave_request_id FK
+        uuid snapshot_id FK
+        uuid group_id FK
+        text wise_session_id UK
+        boolean cancel_preview_selected
     }
-
     leaveRequestActivityLogs {
         uuid id PK
-        uuid leave_request_id FK "-> leave_requests.id (cascade)"
+        uuid leave_request_id FK
         text action_type
-        text status
         timestamptz created_at
     }
-
     leaveRequestNotifications {
         uuid id PK
-        uuid sync_run_id FK "-> leave_request_sync_runs.id (set null)"
-        uuid leave_request_id FK "-> leave_requests.id (cascade)"
+        uuid sync_run_id FK
+        uuid leave_request_id FK
+        text idempotency_key UK
         text recipient_email
-        text idempotency_key UK "globally unique"
     }
-
-    SNAPSHOTS_CORE {
-        uuid id PK "snapshots (schema.ts:456)"
+    snapshots {
+        uuid id PK
         boolean active
     }
-
-    TUTOR_IDENTITY_GROUPS_CORE {
-        uuid id PK "tutor_identity_groups (schema.ts:1516)"
+    tutorIdentityGroups {
+        uuid id PK
         text canonical_key
     }
-
-    FUTURE_SESSION_BLOCKS_CORE {
-        uuid snapshot_id "future_session_blocks (schema.ts:1615)"
-        uuid group_id
-        boolean is_blocking "read source, no FK"
+    futureSessionBlocks {
+        uuid id PK
+        uuid snapshot_id FK
+        uuid group_id FK
     }
 
-    ADMIN_USERS_CORE {
-        text email "admin_users (schema.ts:575), no FK"
-    }
-
-    leaveRequestSyncRuns  ||--o{ leaveRequests                 : "last_sync_run_id (nullable FK)"
-    leaveRequestSyncRuns  ||--o{ leaveRequestNotifications     : "sync_run_id (ON DELETE SET NULL)"
-    leaveRequests         ||--o{ leaveRequestAffectedSessions  : "leave_request_id (ON DELETE CASCADE)"
-    leaveRequests         ||--o{ leaveRequestActivityLogs      : "leave_request_id (ON DELETE CASCADE)"
-    leaveRequests         ||--o{ leaveRequestNotifications     : "leave_request_id (ON DELETE CASCADE)"
-    TUTOR_IDENTITY_GROUPS_CORE ||--o{ leaveRequests            : "tutor_group_id (nullable FK)"
-    TUTOR_IDENTITY_GROUPS_CORE ||--o{ leaveRequestAffectedSessions : "group_id (nullable FK)"
-    SNAPSHOTS_CORE        ||--o{ leaveRequestAffectedSessions  : "snapshot_id (nullable FK)"
-    FUTURE_SESSION_BLOCKS_CORE ||..o{ leaveRequestAffectedSessions : "copied rows (no FK)"
-    ADMIN_USERS_CORE      ||..o{ leaveRequestNotifications     : "recipient_email (no FK)"
+    leaveRequestSyncRuns ||--o{ leaveRequests : "last_sync_run_id (stamps)"
+    leaveRequestSyncRuns ||--o{ leaveRequestNotifications : "sync_run_id (ON DELETE SET NULL)"
+    leaveRequests ||--o{ leaveRequestAffectedSessions : "leave_request_id (ON DELETE CASCADE)"
+    leaveRequests ||--o{ leaveRequestActivityLogs : "leave_request_id (ON DELETE CASCADE)"
+    leaveRequests ||--o{ leaveRequestNotifications : "leave_request_id (ON DELETE CASCADE)"
+    tutorIdentityGroups ||--o{ leaveRequests : "tutor_group_id (match)"
+    tutorIdentityGroups ||--o{ leaveRequestAffectedSessions : "group_id"
+    snapshots ||--o{ leaveRequestAffectedSessions : "snapshot_id"
+    futureSessionBlocks ||--o{ leaveRequestAffectedSessions : "copied-from (no FK)"
 ```
-
----
 
 ## Tables
 
-### `leaveRequestSyncRuns` — `leave_request_sync_runs`
+### `leaveRequestSyncRuns` (`leave_request_sync_runs`)
 
-Source: `src/lib/db/schema.ts:2093`-`2111`.
+**Grain:** one row per attempt to read the leave-request sheet — cron or manual.
 
-**Grain:** one row per attempt to sync the leave-request Google Sheet into Postgres — cron or manual. The row is inserted *before* any work happens (`src/lib/leave-requests/sync.ts:373`-`382`) and updated exactly once at the end, to `success` with the counters filled in (`sync.ts:418`-`434`) or to `failed` with `errorSummary` (`sync.ts:446`-`452`).
+`id` is the uuid PK. `status` is the shared `sync_status` enum (`running` / `success` / `failed`, `schema.ts:21-25`) defaulting to `running`; `trigger_type` is NOT NULL free text and `actor_email` is nullable, so a manual run can be attributed. The run counters — `scanned_row_count`, `inserted_count`, `updated_count`, `notification_count` — are NOT NULL integers defaulting to `0`, with `error_summary` and `metadata` (jsonb, default `{}`) carrying the failure text and the spreadsheet/sheet the run targeted (`src/lib/leave-requests/sync.ts:373-382`).
 
-**Key columns:**
-- `id` — `uuid` PK, `defaultRandom()`.
-- `status` — the shared `syncStatusEnum` (`running` / `success` / `failed`, `src/lib/db/schema.ts:21`), default `running`.
-- `triggerType` / `actorEmail` — provenance of the run; `actorEmail` is null for cron.
-- `scannedRowCount`, `insertedCount`, `updatedCount`, `notificationCount` — `integer`, default `0`; written only on the success path.
-- `errorSummary` — populated only on the failure path.
-- `metadata` — `jsonb`, default `{}`. Seeded with `spreadsheetId` + `sheetName` at insert, then re-written on success to also carry `connectedEmail` and `activeSnapshotId` (`sync.ts:427`-`432`).
+Single-flight is enforced **in Postgres, not in application code**: a partial `uniqueIndex` on `status` where `status = 'running'` (`schema.ts:2110-2112`) means a second concurrent run cannot insert its row. `syncLeaveRequests()` catches exactly that insert conflict and rethrows it as `LeaveRequestSyncAlreadyRunningError` (`src/lib/leave-requests/sync.ts:384-387`), which is the guard behind the `15,45 * * * *` cron (`vercel.json:45-46`).
 
-**Single-flight guard.** The uniqueness is conditional, not a plain unique column: `leave_request_sync_runs_single_running_idx` is a `uniqueIndex` on `status` with a `.where(...)` predicate restricting it to `status = 'running'` (`src/lib/db/schema.ts:2107`-`2109`), so at most one row may sit in `running` at a time. The application does not pre-check — it attempts the insert and translates the Postgres unique violation into a typed error by matching the index name in the message: `isRunningConflict` tests `text.includes("leave_request_sync_runs_single_running_idx")` and the caller throws `LeaveRequestSyncAlreadyRunningError` (`src/lib/leave-requests/sync.ts:55`-`58`, `:385`). The database is therefore the concurrency authority, not the process.
+**Relationships:** parent of `leaveRequests.last_sync_run_id` (a stamp, not ownership — the request row survives its run) and of `leaveRequestNotifications.sync_run_id`.
 
-**Relationships:** referenced by `leaveRequests.lastSyncRunId` (nullable, no cascade) and by `leaveRequestNotifications.syncRunId` (`ON DELETE SET NULL`). Holds no FK of its own.
+### `leaveRequests` (`leave_requests`)
 
----
+**Grain:** one row per source sheet row — `(spreadsheet_id, sheet_name, source_row_number)`, pinned by `leave_requests_source_row_idx` (`schema.ts:2168`). That is the identity the upsert reads on before deciding insert-vs-update (`src/lib/leave-requests/sync.ts:196-209`), so a row is the durable record of one tutor submission, not of one sync observation.
 
-### `leaveRequests` — `leave_requests`
+The columns fall into four bands:
 
-Source: `src/lib/db/schema.ts:2113`-`2169`. The widest table in the domain (~45 columns).
+- **Source fidelity** — `source_fingerprint` (NOT NULL) is the change detector: an unchanged fingerprint means a refresh, a changed one flips `unread` back to true (`sync.ts:239`, `:253`) and logs `source_updated` instead of `source_refreshed` (`:261`). `raw_values` (jsonb, default `{}`) keeps the untouched sheet row, and `source_sheet_status` mirrors the sheet's own status cell.
+- **Normalized leave window** — `start_date` / `end_date` (date, string mode), `leave_start_time` / `leave_end_time` (timestamptz), and `start_minute` / `end_minute` (minute-of-day integers, all nullable). `normalization_status` is NOT NULL text defaulting to `"ok"`, with `normalization_error` alongside; anything other than `"ok"` routes the row to `needs_review` rather than guessing a window (`sync.ts:213-217`, `:242-246`).
+- **Tutor match** — `tutor_group_id` is the only FK, referencing `tutorIdentityGroups.id` (`schema.ts:2153`) with no `ON DELETE` clause. `tutor_canonical_key` denormalizes the stable identity key so the tutor-scoped read index (`leave_requests_tutor_idx`, `:2171`) works without a join, and `match_confidence` (NOT NULL text, default `"unmatched"`) plus `match_reason` record how the match was reached. `unmatched` is fail-closed — it also forces `needs_review`.
+- **Human workflow** — `workflow_status` (`leave_request_workflow_status`: `new` / `needs_review` / `in_progress` / `done` / `ignored` / `canceled_by_tutor`, `schema.ts:165-172`), `unread` (default true), `staff_note`, `status_updated_at`, and the sheet-writeback trio `sheet_write_status` (`leave_request_sheet_write_status`: `not_required` / `pending` / `success` / `failed`, `schema.ts:174-179`), `sheet_write_error`, `sheet_written_at`. Two derived counters, `affected_class_count` and `cancellation_preview_count`, are maintained by the recompute path rather than by the sync (`src/lib/leave-requests/data.ts:483-492`).
 
-**Grain:** one row per **source sheet row** — not per leave event and not per sync. Identity is the triple `(spreadsheetId, sheetName, sourceRowNumber)`, enforced by the `leave_requests_source_row_idx` unique index (`src/lib/db/schema.ts:2165`). A re-sync of the same sheet row updates the existing row rather than appending a new one (`src/lib/leave-requests/sync.ts:239`-`267`).
+Policy fields carried straight from the form (`days_notice`, `late_notice`, `admin_fee`, `emergency_used`, `certificate_url`, `policy_agreement`, `makeup_options`) are stored as submitted; none of them is computed here.
 
-**Key columns**, grouped by who writes them:
+**Relationships:** child of `leaveRequestSyncRuns` via `last_sync_run_id`; child of `tutorIdentityGroups` via `tutor_group_id`; parent — with `ON DELETE CASCADE` on all three — of `leaveRequestAffectedSessions`, `leaveRequestActivityLogs`, and `leaveRequestNotifications`.
 
-- **Source identity (sync-owned):** `spreadsheetId`, `sheetName`, `sourceRowNumber`, `sourceFingerprint`, `sourceSubmittedAt`. `sourceFingerprint` is the change detector — the sync compares `existing.sourceFingerprint !== parsed.sourceFingerprint` to decide whether the row materially changed, which in turn re-flags `unread` and emits a `source_updated` (vs. `source_refreshed`) activity log (`sync.ts:239`, `:253`, `:261`).
-- **Parsed form fields (sync-owned):** `tutorName`, `tutorEmail`, `startDate` / `endDate` (`date`, `mode: "string"`), `timePeriod`, `specificTimeText`, `leaveStartTime` / `leaveEndTime`, `startMinute` / `endMinute`, plus the reported/administrative fields `reportedHasClasses`, `reportedAffectedClasses`, `makeupOptions`, `reason`, `certificateUrl`, `situationText`, `policyAgreement`, `daysNotice`, `lateNotice`, `adminFee`, `emergencyUsed`. `rawValues` (`jsonb`, default `{}`) retains the untyped sheet row so nothing parsed away is lost.
-- **Normalization outcome:** `normalizationStatus` is a plain `text` (default `"ok"`), **not** a pgEnum; the parser only ever writes `"ok"` or `"needs_review"` (`src/lib/leave-requests/parser.ts:227`, `:237`, `:271`), with the reason in `normalizationError`.
-- **Identity match (sync-owned):** `tutorGroupId` → `tutorIdentityGroups.id` (nullable FK, `src/lib/db/schema.ts:2150`), plus the denormalized `tutorCanonicalKey` and `tutorDisplayName`. `matchConfidence` is `text` defaulting to `"unmatched"`; the matcher emits exactly `"email" | "name" | "unmatched"` (`src/lib/leave-requests/matching.ts:9`). A null `tutorGroupId` is the fail-closed state — affected-session computation short-circuits to zero when it is missing (`src/lib/leave-requests/data.ts:404`-`410`).
-- **Triage state (admin-owned):** `workflowStatus` (`leaveRequestWorkflowStatusEnum`, default `new` — values in [`enums.md`](./enums.md)), `staffNote`, `unread` (default `true`), `statusUpdatedAt`. The sync may *escalate* but never overwrite human triage: it only rewrites `workflowStatus` to `needs_review` when the current value is still `new` or `needs_review` and either normalization failed or the tutor is unmatched (`sync.ts:241`-`246`).
-- **Sheet writeback state:** `sheetWriteStatus` (`leaveRequestSheetWriteStatusEnum`, default `not_required`), `sheetWriteError`, `sheetWrittenAt`, and the mirrored `sourceSheetStatus`. The status machine is driven entirely from `updateLeaveRequestWorkflow`: set to `pending` up front when a write is intended, then `success` (with `sourceSheetStatus` and `sheetWrittenAt` updated) or `failed` (with `sheetWriteError` set) — `src/lib/leave-requests/data.ts:525`-`526`, `:558`-`564`, `:583`-`588`. Failures are recorded, never swallowed.
-- **Derived counters:** `affectedClassCount` and `cancellationPreviewCount`, both `integer` default `0`. Both are recomputed wholesale, not incremented — see the next table.
-- **Lineage / timestamps:** `lastSyncRunId` → `leaveRequestSyncRuns.id` (nullable FK, `src/lib/db/schema.ts:2158`), `firstSeenAt`, `lastSeenAt`, `createdAt`, `updatedAt`.
+### `leaveRequestAffectedSessions` (`leave_request_affected_sessions`)
 
-**Indexes** beyond the unique source-row key serve the three workspace views: `leave_requests_workflow_idx` on `(workflowStatus, leaveStartTime)`, `leave_requests_unread_idx` on `(unread, createdAt)`, and `leave_requests_tutor_idx` on `(tutorCanonicalKey, leaveStartTime)` (`src/lib/db/schema.ts:2166`-`2168`).
+**Grain:** one row per Wise session that overlaps a request's leave window — `(leave_request_id, wise_session_id)`, enforced by `leave_request_affected_session_unique_idx` (`schema.ts:2200`).
 
-**Relationships:** parent of all three child tables (`leaveRequestAffectedSessions`, `leaveRequestActivityLogs`, `leaveRequestNotifications`), each `ON DELETE CASCADE`. Child of `tutorIdentityGroups` (nullable) and `leaveRequestSyncRuns` (nullable). Note that both tutor references are nullable and no `snapshot_id` exists on this table — a leave request outlives snapshot rotation.
+The table is a **derived, disposable projection, rebuilt wholesale**: `recomputeAffectedSessionsForRequest()` deletes every row for the request, re-queries the **active snapshot's** `future_session_blocks` for that `group_id` within the Bangkok date range with `is_blocking = true`, keeps only sessions with a positive minute overlap, and reinserts (`src/lib/leave-requests/data.ts:394-492`). That is why the session fields (`start_time`, `end_time`, `weekday`, `start_minute`, `end_minute`, `wise_status`, `session_type`, `location`, `student_name`, `student_count`, `subject`, `class_type`, `title`) are copies rather than a join — the source snapshot rotates every 30 minutes and these rows must stay readable against the request that produced them.
 
----
+`overlap_minutes` (NOT NULL, default 0) is the computed intersection in minutes. `cancel_preview_selected` (boolean, default false) is the only human-set column: the Wise cancel-preview action clears the flag across the request, then sets it on exactly the selected ids (`data.ts:625-636`) — a preview marker, never a cancellation.
 
-### `leaveRequestAffectedSessions` — `leave_request_affected_sessions`
+`wise_teacher_id` and `wise_session_id` are NOT NULL; `wise_class_id`, `wise_teacher_user_id`, `snapshot_id`, and `group_id` are nullable. `cancellation_preview_count` on the parent counts only rows carrying **both** `wise_class_id` and `wise_session_id`, and only when the request normalized cleanly (`data.ts:488`).
 
-Source: `src/lib/db/schema.ts:2171`-`2200`.
+**Relationships:** child of `leaveRequests` (`ON DELETE CASCADE`, `schema.ts:2176`); nullable FKs to `snapshots.id` (`:2177`) and `tutorIdentityGroups.id` (`:2178`). Its content originates in `futureSessionBlocks` but there is **no FK** to it — the copy is deliberate.
 
-**Grain:** one row per (leave request × Wise session) pair whose times actually overlap — enforced by `leave_request_affected_session_unique_idx` on `(leaveRequestId, wiseSessionId)` (`src/lib/db/schema.ts:2197`).
+### `leaveRequestActivityLogs` (`leave_request_activity_logs`)
 
-**Population is delete-and-rebuild, not incremental.** `recomputeAffectedSessionsForRequest` deletes every existing row for the request, then re-selects from `futureSessionBlocks` scoped to the **active** snapshot and the request's `tutorGroupId`, filtered to `isBlocking = true` and to the Bangkok date range of the leave (`src/lib/leave-requests/data.ts:401`-`451`). Each candidate is kept only if `overlapMinutes(...) > 0` (`data.ts:456`-`457`), so a session on the right day but outside the requested time window is excluded. The sync calls this for every row on every pass (`src/lib/leave-requests/sync.ts:402`).
+**Grain:** one row per action taken on or observed about a request — append-only; nothing in the domain updates or deletes a log row.
 
-**Key columns:**
-- `id` — `uuid` PK; `leaveRequestId` — `notNull` FK to `leaveRequests.id`, `onDelete: "cascade"`.
-- `snapshotId` → `snapshots.id` and `groupId` → `tutorIdentityGroups.id`, both **nullable** FKs (`src/lib/db/schema.ts:2174`-`2175`). They record which snapshot the copy came from, and are nullable so a pruned/rotated lineage cannot orphan the row.
-- Wise identifiers copied verbatim from the source block: `wiseTeacherId` (`notNull`), `wiseTeacherUserId`, `wiseClassId`, `wiseSessionId` (`notNull`).
-- Time fields: `startTime` / `endTime` (`notNull`, timezone-aware), plus the denormalized `weekday`, `startMinute`, `endMinute` (`notNull`) carried over from `futureSessionBlocks`.
-- Descriptive copies: `wiseStatus` (`notNull`), `sessionType`, `location`, `studentName`, `studentCount`, `subject`, `classType`, `title`.
-- `overlapMinutes` — `integer`, `notNull`, default `0`; the computed intersection in minutes between the leave window and the session (`data.ts:479`).
-- `cancelPreviewSelected` — `boolean`, `notNull`, default `false`. Reset to `false` for the whole request and then set to `true` for exactly the selected ids on each preview (`data.ts:626`-`635`), so it always reflects the latest selection rather than accumulating.
+`action_type` is NOT NULL free text (no enum). Six values are emitted at this revision: `source_inserted` and `source_updated` / `source_refreshed` from the sync (`src/lib/leave-requests/sync.ts:231`, `:261`), and `status_update`, `sheet_status_write`, `wise_cancel_preview` from the admin paths (`src/lib/leave-requests/data.ts:534`, `:570`, `:591`, `:654`). `status` is NOT NULL text defaulting to `"success"`, and is likewise unconstrained: three values are written — `"success"` (`data.ts:535`, `:571`), `"failed"` (`:592`), and `"manual_required"`, which the Wise cancel-preview uses to say the preview was produced but the mutation must be performed by a human (`:655`). `error_message` carries the failure text. `request_payload` (jsonb, NOT NULL, default `{}`) and `response_payload` (jsonb, **nullable** — the one jsonb column in the domain that may be null) capture the call in both directions, which is what makes the Wise cancel-preview auditable without ever issuing the call.
 
-**Counter derivation.** After the rebuild, the parent's `affectedClassCount` is set to the row count, and `cancellationPreviewCount` to the number of rows having both `wiseClassId` and `wiseSessionId` — but only when `normalizationStatus === "ok"`, otherwise `0` (`data.ts:487`-`491`). A later explicit preview overwrites `cancellationPreviewCount` with the selected-row count (`data.ts:647`-`650`).
+Actor attribution is by value, not FK: `created_by_email` and `created_by_name` are nullable text, so cron-originated logs simply carry neither.
 
-**Relationships:** child of `leaveRequests` (cascade), optional child of `snapshots` and `tutorIdentityGroups`. Its content originates from `futureSessionBlocks` by copy, with **no** foreign key to it — a deliberate decoupling, since `futureSessionBlocks` rows are snapshot-scoped and rotate away.
+`leave_request_id` is **nullable** even though its only index is `(leave_request_id, created_at)` (`schema.ts:2218`) — the schema permits an unattached log row, though no current writer produces one.
 
----
+**Relationships:** child of `leaveRequests` (`ON DELETE CASCADE`, `schema.ts:2207`).
 
-### `leaveRequestActivityLogs` — `leave_request_activity_logs`
+### `leaveRequestNotifications` (`leave_request_notifications`)
 
-Source: `src/lib/db/schema.ts:2202`-`2216`.
+**Grain:** one row per (new request × admin recipient) delivery attempt, deduplicated by `idempotency_key`.
 
-**Grain:** one row per recorded action against a leave request — append-only. Every write in the feature goes through the single helper `insertLeaveRequestLog`, which does a bare `db.insert(...).values(input)` (`src/lib/leave-requests/data.ts:181`-`183`); nothing in `src/lib/leave-requests/` updates or deletes a log row.
+`idempotency_key` is NOT NULL with its own `uniqueIndex` (`schema.ts:2234`), and the writer inserts with `onConflictDoNothing` on that target (`src/lib/leave-requests/sync.ts:347-358`) — so a re-run cannot double-book a notification for the same request/recipient pair. Note that **two different keys are in play** and they are not the same shape: the key handed to the email sender is run-scoped (`leave-requests:{syncRunId}:{recipient}`, `sync.ts:329`), while the key persisted on the row is request-scoped (`leave-request:new:{requestId}:{recipient}`, `sync.ts:355`). One email covers a batch of new requests; one row is written per request in that batch.
 
-**Key columns:**
-- `id` — `uuid` PK. `leaveRequestId` — FK to `leaveRequests.id` with `onDelete: "cascade"`, and **nullable** (`src/lib/db/schema.ts:2204`), unlike the other two children, so an unattributed entry is representable.
-- `actionType` — `text`, `notNull`. Six values are emitted in the code: `source_inserted`, `source_updated`, `source_refreshed` (`sync.ts:231`, `:261`), `status_update` (`data.ts:534`), `sheet_status_write` (`data.ts:570`, `:591`), and `wise_cancel_preview` (`data.ts:654`). It is free text, not a pgEnum.
-- `status` — `text`, `notNull`, default `"success"`. Observed values are `success`, `failed`, and `manual_required` — the last used to mark that a Wise cancellation was previewed only and a human must perform it (`data.ts:655`).
-- `requestPayload` — `jsonb`, `notNull`, default `{}`; `responsePayload` — nullable `jsonb`. The cancel-preview entry stores the exact `DELETE /teacher/classes/{classId}/sessions/{sessionId}?cancelSession=true` endpoints (built at `data.ts:637`-`645`) alongside `dryRun: true` and `policy: "preview_only_manual_required"` (`data.ts:657`-`662`), which is what makes this table the audit record proving no Wise mutation was sent.
-- `errorMessage`, `createdByEmail`, `createdByName`, `createdAt`.
+`notification_type` is NOT NULL text defaulting to `"new_submission_email"` — the only type emitted today. `recipient_email` is NOT NULL; `status` is NOT NULL text defaulting to `"pending"`, though the writer only ever persists `"success"` or `"failed"` (`sync.ts:352`). `provider_message_id` and `error` record the send outcome, and `sent_at` is set only on success.
 
-**Index:** `leave_request_activity_logs_request_idx` on `(leaveRequestId, createdAt)` (`src/lib/db/schema.ts:2215`), matching the detail view's descending-by-`createdAt` read (`data.ts:298`-`300`).
+**Relationships:** child of `leaveRequestSyncRuns` via `sync_run_id` with `ON DELETE SET NULL` (`schema.ts:2223`) — the notification record deliberately outlives its run — and child of `leaveRequests` via `leave_request_id` with `ON DELETE CASCADE` (`:2224`). Both FK columns are nullable.
 
-**Relationships:** optional child of `leaveRequests` (cascade when set). No other FKs — actor identity is stored as denormalized email/name text, not a reference to `admin_users`.
+## Badge provenance
 
----
+The **IN PROGRESS** badge above was supplied by the documentation task, on the stated premise that these five tables are uncommitted WIP in a modified `src/lib/db/schema.ts`. That premise does not hold at this revision, and the badge is reproduced rather than silently dropped:
 
-### `leaveRequestNotifications` — `leave_request_notifications`
+- `git diff --stat -- src/lib/db/schema.ts` is empty at `HEAD` = `0cd1e81`; `schema.ts` is unmodified in the working tree.
+- The tables ship in a committed migration, `drizzle/0036_tutor_leave_requests.sql`.
+- The project's maturity-badge map records **leave-requests: `stable`**, and the mechanism supports it: a registered cron (`/api/internal/sync-leave-requests`, `15,45 * * * *`, `vercel.json:45-46`), a Postgres-enforced single-flight guard, and five API routes under `src/app/api/leave-requests/`.
 
-Source: `src/lib/db/schema.ts:2218`-`2234`.
+Treat the badge as documentation-state, and the bullets above as the code-derived reading.
 
-**Grain:** one row per (leave request × recipient) delivery record for a given notification, deduplicated by `idempotencyKey`. Note the fan-out shape: one email is sent per recipient covering *all* new requests in that sync, but a bookkeeping row is written per request per recipient (`src/lib/leave-requests/sync.ts:328`-`359`) — so N new requests × M admins produces N×M rows against M actual sends.
+## Open Questions
 
-**Two distinct idempotency keys exist.** The one sent to the mail provider is run-scoped — `` `leave-requests:${syncRunId}:${recipient}` `` (`sync.ts:329`) — while the one stored in this table is request-scoped: `` `leave-request:new:${request.id}:${recipient}` `` (`sync.ts:355`). Only the stored key is constrained, by the global `leave_request_notifications_idempotency_idx` unique index (`src/lib/db/schema.ts:2231`), and the insert is guarded with `.onConflictDoNothing({ target: schema.leaveRequestNotifications.idempotencyKey })` (`sync.ts:358`). The effect is that a given request is only ever recorded as notified once per recipient, even across repeated syncs.
+- **Badge conflict.** The commissioning task requires **IN PROGRESS** for this domain; the maturity-badge map requires **stable**. Both are recorded above rather than one being dropped. Which wins for `docs/reference/database/*`?
+- **`action_type` and `status` are unconstrained text.** Six `action_type` values and three `status` values (including `manual_required`) are emitted, but neither column is a `pgEnum` and nothing validates them on write (`schema.ts:2208-2209`). Intentional (an audit trail that must never reject a novel action) or a missed enum?
+- **Two idempotency-key shapes for one send.** The sender receives a run-scoped key while the row stores a request-scoped one (`src/lib/leave-requests/sync.ts:329` vs `:355`). A provider-side retry of the same batch and a database-side dedupe of the same request therefore key on different things. Deliberate split, or should the persisted key match what was sent?
+- **Nullable `leave_request_id` on activity logs.** The column permits an orphan log (`schema.ts:2207`) but every writer supplies a request id. Was a request-independent log line (a sync-level event, say) planned?
+- **No retention policy for affected sessions or sync runs.** `leaveRequestAffectedSessions` is rebuilt per request but `leaveRequestSyncRuns` rows accumulate indefinitely, and superseded runs keep only a `SET NULL` link from notifications. Is pruning intended?
+- **`snapshot_id` on affected sessions can outlive its snapshot.** The FK to `snapshots.id` declares no `ON DELETE` behavior (`schema.ts:2177`), so snapshot pruning would be blocked by, or would need to account for, these rows. Which is the intended behavior?
 
-**Key columns:**
-- `id` — `uuid` PK.
-- `syncRunId` → `leaveRequestSyncRuns.id`, nullable, `onDelete: "set null"` (`src/lib/db/schema.ts:2220`) — the run may be pruned without losing the delivery record.
-- `leaveRequestId` → `leaveRequests.id`, nullable, `onDelete: "cascade"` (`src/lib/db/schema.ts:2221`).
-- `notificationType` — `text`, `notNull`, default `"new_submission_email"`; only the default is written today.
-- `recipientEmail` — `text`, `notNull`. Sourced from the `admin_users` allowlist, lowercased and de-duplicated (`sync.ts:270`-`276`), with no FK to `admin_users`.
-- `status` — `text`, `notNull`, default `"pending"`. The sync writes `"success"` or `"failed"` directly (`sync.ts:352`); the `pending` default is a schema-level fallback that this code path does not use.
-- `providerMessageId`, `error`, `createdAt`, `sentAt` (`sentAt` left null on failure, `sync.ts:356`).
-
-**Indexes:** the unique `idempotencyKey` index plus lookup indexes on `leaveRequestId` and `syncRunId` (`src/lib/db/schema.ts:2231`-`2233`).
-
-**Relationships:** optional child of both `leaveRequestSyncRuns` (set-null) and `leaveRequests` (cascade). The asymmetric delete behaviour is intentional: deleting a request removes its notification history, while deleting a sync run only detaches it.
-
----
-
-## Domain-level notes
-
-- **No snapshot scoping on the parent.** Unlike the Wise tutor tables, `leaveRequests` carries no `snapshotId`. Only `leaveRequestAffectedSessions` records one, and it is nullable. Leave requests are human workflow state that must survive snapshot rotation; the session overlap is a recomputable projection of whatever snapshot was active at the time.
-- **Only three status-like columns are real enums.** `workflowStatus` and `sheetWriteStatus` on `leaveRequests` are pgEnums, and `leaveRequestSyncRuns.status` reuses the shared `syncStatusEnum`. But `normalizationStatus`, `matchConfidence`, `leaveRequestActivityLogs.actionType`/`status`, and `leaveRequestNotifications.notificationType`/`status` are all plain `text` with application-level conventions — a real constraint difference to be aware of when querying.
-- **Nothing in this domain writes to Wise.** No table stores a Wise mutation result; `leaveRequestActivityLogs` stores the *intended* endpoints of a preview only (`data.ts:637`-`662`).
-
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against main@0cd1e81 (clean tree) on 2026-09-02._

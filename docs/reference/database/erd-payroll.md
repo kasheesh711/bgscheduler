@@ -1,192 +1,215 @@
-# Database Reference — Payroll
+# Database Reference — Payroll (ER Diagram)
 
-Schema for monthly tutor pay reconciliation. Every operational table in this domain is keyed by `payroll_month` — a `date` column holding the **first day of the Bangkok month** (`payrollMonthRange()` builds it as `${YYYY-MM}-01` and returns it as `payrollMonth`, `src/lib/payroll/domain.ts:91-107`). A **sync run** pulls a month's Wise data and rewrites three observation tables for that month (teacher tiers, payout invoices, session observations) inside one transaction; a single **review** row per month carries approval state; **adjustments** are human-entered corrections; and a versioned **rate card** (versions + rules) supplies the expected hourly rates the reconciliation is measured against.
+Scope: the 8 tables backing the Payroll feature (**stable**). The domain reconciles what a tutor *taught* against what Wise *paid out* for one Bangkok calendar month, measured against a versioned rate card.
 
-The rate-card pair is the odd couple here: it is the only part of the domain not scoped to a payroll month, and it is read-only from application code (see [Open Questions](#open-questions)).
+Every operational table is keyed by `payroll_month` — a `date` column holding the **first day of the Bangkok month**. `payrollMonthRange()` derives it as `` `${YYYY-MM}-01` `` and exposes it as `payrollMonth`, alongside a Wise query window padded one day either side to absorb timezone edges (`src/lib/payroll/domain.ts:91-107`).
 
-All eight tables are defined in `src/lib/db/schema.ts`:
+A **sync run** (`runPayrollSync`, `src/lib/payroll/sync.ts:243`) pulls one month of Wise data and rewrites three observation tables for that month; a single **review** row per month carries approval state; **adjustments** are human-entered corrections; and a **rate card** (versions + rules) supplies the expected hourly revenue the reconciliation is measured against.
 
-| Table (varName) | SQL name | schema.ts lines |
-|---|---|---|
-| `payrollSyncRuns` | `payroll_sync_runs` | 1760–1779 |
-| `payrollReviews` | `payroll_reviews` | 1780–1795 |
-| `payrollTeacherTiers` | `payroll_teacher_tiers` | 1796–1811 |
-| `payrollPayoutInvoices` | `payroll_payout_invoices` | 1812–1839 |
-| `payrollSessionObservations` | `payroll_session_observations` | 1840–1866 |
-| `payrollAdjustments` | `payroll_adjustments` | 1867–1884 |
-| `payrollRateCardVersions` | `payroll_rate_card_versions` | 1885–1901 |
-| `payrollRateRules` | `payroll_rate_rules` | 1902–1920 |
+Full column-by-column detail (types, defaults, every index) lives in [`./index.md`](./index.md); enum value sets live in [`./enums.md`](./enums.md). This page covers grain, keys, and relationships only. For purpose, business rules, and flows see [`../../features/payroll.md`](../../features/payroll.md).
 
-Full column lists live in [docs/reference/database/index.md](./index.md); enum values live in [enums.md](./enums.md). This page covers grain, keys, and relationships only.
+## Scope
 
-## ER Diagram
+Exactly 8 tables (Drizzle export — Postgres table — `src/lib/db/schema.ts` line range):
+
+| Table (varName) | Postgres table | Lines | Grain scope |
+|---|---|---|---|
+| `payrollSyncRuns` | `payroll_sync_runs` | 1763–1782 | run ledger (lineage root) |
+| `payrollReviews` | `payroll_reviews` | 1783–1798 | one row per month |
+| `payrollTeacherTiers` | `payroll_teacher_tiers` | 1799–1814 | rewritten per month per run |
+| `payrollPayoutInvoices` | `payroll_payout_invoices` | 1815–1842 | rewritten per month per run |
+| `payrollSessionObservations` | `payroll_session_observations` | 1843–1869 | rewritten per month per run |
+| `payrollAdjustments` | `payroll_adjustments` | 1870–1887 | human-entered, survives sync |
+| `payrollRateCardVersions` | `payroll_rate_card_versions` | 1888–1904 | month-independent |
+| `payrollRateRules` | `payroll_rate_rules` | 1905–1923 | month-independent |
+
+The rate-card pair is the odd couple: it is the only part of the domain **not** scoped to a payroll month, and it carries no application write path (see [Open questions](#open-questions)).
+
+## Relationship model
+
+**Enforced foreign keys.** Only two payroll tables are FK targets, and every `.references(...)` pointing at a payroll table in the whole schema is listed here:
+
+- `payrollReviews.lastSyncRunId` → `payrollSyncRuns.id`, **nullable** (`schema.ts:1791`)
+- `payrollTeacherTiers.syncRunId`, `payrollPayoutInvoices.syncRunId`, `payrollSessionObservations.syncRunId` → `payrollSyncRuns.id`, all `notNull` (`schema.ts:1802`, `1818`, `1846`)
+- `payrollRateRules.versionId` → `payrollRateCardVersions.id`, `notNull` (`schema.ts:1907`)
+- `studentPromotionPayRateImpacts.beforeRateRuleId` / `.afterRateRuleId` → `payrollRateRules.id`, both nullable — the domain's only **inbound cross-domain** FKs, pinning a promotion's before/after pay band to the exact rate rule that produced it (`schema.ts:1492-1493`; see [`./erd-student-promotions.md`](./erd-student-promotions.md))
+
+`payrollAdjustments` declares no FK at all and is referenced by nothing.
+
+**Soft keys, no FK.** Everything else joins on strings resolved at read time in `buildPayrollPayload` (`src/lib/payroll/data.ts:265-420`):
+
+- **Session ↔ invoice** on `wise_session_id`. Sessions are indexed by id and invoices grouped by session id; a session with no invoice and an invoice with no session are both surfaced as reconciliation issues rather than dropped (`data.ts:272-278`, `324-337`).
+- **Session/invoice ↔ tier** on `wise_teacher_user_id` (`data.ts:286`, `336`).
+- **Session ↔ tutor identity** on `tutor_group_canonical_key`. That value is stamped **at sync time**, not join time: `loadActiveIdentityEntries` reads `tutorIdentityGroupMembers ⋈ tutorIdentityGroups ⋈ snapshots WHERE snapshots.active` and the row copies `identity.canonicalKey ?? null` (`sync.ts:139-159`, `sync.ts:326`). A null canonical key becomes an `unresolved:` / `unresolved-session:` pseudo-key downstream so the tutor still appears rather than silently vanishing (`data.ts:144-146`).
+- **Session ↔ rate rule** on the composite `(studentBand, normalizedCourseKey, tierKey)`, all three derived rather than stored on the session: band from `student_count` (3+ / 2 / else 1, `rate-card.ts:83-88`), course key by normalizing `subject ?? class_name`, tier from the matched tier row (`data.ts:410-414`).
+- `payrollAdjustments.tutorCanonicalKey` is carried through to the DTO but is **not** joined to anything — adjustments roll up as month-level `hours` / `amount` sums (`data.ts:483-484`, `data.ts:113-128`).
+
+There are no FKs from this domain to the core scheduling tables. `snapshots` / `tutorIdentityGroups` are touched only by the sync-time identity read above, and Wise ids (`wise_teacher_id`, `wise_user_id`, `wise_class_id`, `wise_session_id`, `event_id`, `transaction_id`) are loose strings — both shown below as single stub nodes.
+
+## ER diagram
 
 ```mermaid
 erDiagram
     payrollSyncRuns {
         uuid id PK
         date payroll_month
-        sync_status status
+        sync_status status "partial-unique single-running guard"
         timestamptz started_at
     }
     payrollReviews {
         uuid id PK
-        date payroll_month UK
-        uuid last_sync_run_id FK
-        payroll_review_status status
+        date payroll_month UK "one row per month"
+        uuid last_sync_run_id FK "nullable"
+        payroll_review_status status "draft or approved"
     }
     payrollTeacherTiers {
         uuid id PK
         uuid sync_run_id FK
         date payroll_month
-        text wise_teacher_id
-        text normalized_tier
+        text wise_teacher_id "unique with month"
+        text normalized_tier "BG0..BG3 or Unassigned"
     }
     payrollPayoutInvoices {
         uuid id PK
         uuid sync_run_id FK
         date payroll_month
-        text event_id UK
-        text wise_session_id
+        text event_id UK "globally unique"
+        text wise_session_id "soft join to observation"
     }
     payrollSessionObservations {
         uuid id PK
         uuid sync_run_id FK
         date payroll_month
-        text wise_session_id
-        text tutor_group_canonical_key
+        text wise_session_id "unique with month"
+        text tutor_group_canonical_key "soft, stamped at sync"
     }
     payrollAdjustments {
         uuid id PK
         date payroll_month
-        text tutor_canonical_key
+        text tutor_canonical_key "informational, unjoined"
         double amount
     }
     payrollRateCardVersions {
         uuid id PK
         text version_name
         date effective_month
-        boolean active
+        boolean active "partial-unique, at most one true"
     }
     payrollRateRules {
         uuid id PK
         uuid version_id FK
+        text student_band "1 / 2 / 3_plus"
         text normalized_course_key
         text tier_key
+        double expected_revenue_per_hour
     }
-    tutorIdentityGroups {
-        uuid id PK
-        text canonical_key
+    CORE_IDENTITY {
+        text canonicalKey "snapshots + tutorIdentityGroups(+Members)"
     }
-    studentPromotionPayRateImpacts {
-        uuid id PK
-        uuid before_rate_rule_id FK
-        uuid after_rate_rule_id FK
+    WISE_ENTITIES {
+        text ids "teacher / user / class / session / payout event"
+    }
+    STUDENT_PROMOTIONS {
+        uuid studentPromotionPayRateImpacts "before/after rate rule"
     }
 
-    payrollSyncRuns ||--o{ payrollTeacherTiers : "sync_run_id"
-    payrollSyncRuns ||--o{ payrollPayoutInvoices : "sync_run_id"
-    payrollSyncRuns ||--o{ payrollSessionObservations : "sync_run_id"
-    payrollSyncRuns ||--o| payrollReviews : "last_sync_run_id"
+    payrollSyncRuns ||--o| payrollReviews : "last_sync_run_id (nullable)"
+    payrollSyncRuns ||--o{ payrollTeacherTiers : "writes"
+    payrollSyncRuns ||--o{ payrollPayoutInvoices : "writes"
+    payrollSyncRuns ||--o{ payrollSessionObservations : "writes"
     payrollRateCardVersions ||--o{ payrollRateRules : "version_id"
-    payrollRateRules ||--o{ studentPromotionPayRateImpacts : "before/after_rate_rule_id"
-    tutorIdentityGroups ||..o{ payrollSessionObservations : "canonical_key (soft)"
-    tutorIdentityGroups ||..o{ payrollAdjustments : "canonical_key (soft)"
+    payrollRateRules ||--o{ STUDENT_PROMOTIONS : "before/after FK (inbound)"
+    payrollSessionObservations |o..o{ payrollPayoutInvoices : "soft: wise_session_id"
+    payrollTeacherTiers |o..o{ payrollSessionObservations : "soft: wise_teacher_user_id"
+    payrollTeacherTiers |o..o{ payrollPayoutInvoices : "soft: wise_teacher_user_id"
+    payrollSessionObservations }o..|| payrollRateRules : "soft: band + course + tier"
+    CORE_IDENTITY |o..o{ payrollSessionObservations : "soft: canonical key"
+    CORE_IDENTITY |o..o{ payrollAdjustments : "soft, unjoined"
+    WISE_ENTITIES |o..o{ payrollSessionObservations : "loose ids"
+    WISE_ENTITIES |o..o{ payrollPayoutInvoices : "loose ids"
+    WISE_ENTITIES |o..o{ payrollTeacherTiers : "loose ids"
 ```
-
-`tutorIdentityGroups` and `studentPromotionPayRateImpacts` are stub nodes — they belong to [erd-core.md](./erd-core.md) and [erd-student-promotions.md](./erd-student-promotions.md) respectively, and appear here only to anchor the edges. Dotted edges are **soft** references: `tutor_group_canonical_key` / `tutor_canonical_key` are plain `text` with no database foreign key. `payrollAdjustments` has no FK at all; it joins to the rest of the domain only through `payroll_month`.
 
 ## Tables
 
-### `payrollSyncRuns` (`payroll_sync_runs`)
+### `payrollSyncRuns` (`payroll_sync_runs`, lines 1763–1782)
 
-**Grain:** one row per payroll sync attempt for a month.
+**Grain:** one row per attempted payroll sync for one month. This is the lineage root — every observation row points back at the run that wrote it.
 
-The lineage root. `id` is a uuid PK (`defaultRandom()`); `payroll_month` (date, string mode) scopes the run. `status` uses the shared `sync_status` enum — `running` / `success` / `failed` (`schema.ts:21-25`) — defaulting to `running`, alongside `trigger_type` (text, default `"manual"`). Timing is `started_at` (timestamptz, `defaultNow()`) plus nullable `finished_at`; the counters `teacher_count`, `session_count`, `invoice_count` (integers, default 0), `error_summary`, and a non-null `metadata` jsonb (default `{}`) record the outcome. The sync writes fetch/page statistics into `metadata` before opening the write transaction (`src/lib/payroll/sync.ts:366-383`).
+Carries `payrollMonth`, `status` (`sync_status`: `running` / `success` / `failed`), `triggerType` (default `"manual"`), the `startedAt` / `finishedAt` pair, three counters (`teacherCount`, `sessionCount`, `invoiceCount`), an `errorSummary`, and a free-form `metadata` jsonb the sync fills with the query window and prepared-row counts (`sync.ts:265-266`, `sync.ts:373-383`).
 
-Single-flight is enforced in the database, not in application code: `payroll_sync_runs_single_running_idx` is a **partial unique index on `status` where `status = 'running'`** (`schema.ts:1773-1775`), so at most one run may be in flight across the whole table (not per month) — the insert's `23505` violation is translated into `PayrollSyncAlreadyRunningError` (`src/lib/payroll/sync.ts:54-59`, `:270-273`). Abandoned runs are swept to `failed` after 20 minutes by `markAbandonedRuns()` (`src/lib/payroll/sync.ts:24`, `:125-137`). Two supporting indexes cover `(payroll_month, started_at)` and `(status, started_at)` (`schema.ts:1776-1777`).
+**Single-flight lives in Postgres, not application code:** `payroll_sync_runs_single_running_idx` is a unique index on `status` filtered to `status = 'running'` (`schema.ts:1776-1778`), so a second concurrent run fails its INSERT and is translated into `PayrollSyncAlreadyRunningError` (`sync.ts:268-271`). A separate `markAbandonedRuns` sweep flips `running` rows older than the stale threshold to `failed` before each attempt, stamping the reason "still running after 20 minutes" into `errorSummary` (`sync.ts:125-137`, called at `sync.ts:255`).
 
-**Relationships:** parent of `payrollTeacherTiers`, `payrollPayoutInvoices`, and `payrollSessionObservations` (all NOT NULL `sync_run_id`); optionally referenced by `payrollReviews.last_sync_run_id`.
+### `payrollReviews` (`payroll_reviews`, lines 1783–1798)
 
-### `payrollReviews` (`payroll_reviews`)
+**Grain:** exactly one row per payroll month, enforced by `payroll_reviews_month_idx` unique on `payrollMonth`.
 
-**Grain:** one row per payroll month — the human approval record.
+Holds the human approval state: `status` (`payroll_review_status`: `draft` / `approved` — the enum's only two values, `schema.ts:160-163`), `notes`, the `approvedByEmail` / `approvedByName` / `approvedAt` triple, and `lastSyncRunId` pointing at the run whose data the review reflects.
 
-`payroll_month` carries a `uniqueIndex` (`payroll_reviews_month_idx`, `schema.ts:1793`), which is what pins the grain to exactly one row per month; the sync upserts on that target rather than inserting duplicates (`src/lib/payroll/sync.ts:394-412`). `status` uses the `payroll_review_status` enum — `draft` / `approved` (`schema.ts:160-163`) — defaulting to `draft`. Sign-off is captured by `approved_by_email`, `approved_by_name`, and `approved_at` (all nullable); `notes` is non-null text defaulting to `""`. `last_sync_run_id` (nullable uuid) references `payrollSyncRuns.id` (`schema.ts:1788`) and records which run last refreshed the month's data. `metadata` jsonb defaults to `{}`; `created_at` / `updated_at` are timestamptz with `defaultNow()`.
+**A successful sync resets approval.** The end-of-transaction upsert targets `payrollMonth` and, on conflict, forces `status: "draft"` and nulls all three approval fields (`sync.ts:394-412`). Re-syncing an approved month therefore withdraws the approval by design. Manual review edits go through the same conflict target from `savePayrollReview` (`data.ts:589-606`).
 
-A re-sync **resets approval**: the sync's upsert sets `status: "draft"` and nulls `approved_by_email` / `approved_by_name` / `approved_at` (`src/lib/payroll/sync.ts:402-412`), so refreshed data can never inherit a stale sign-off. Admin edits go through `updatePayrollReview()`, which stamps the actor and timestamp on approval and clears them on any other status (`src/lib/payroll/data.ts:577-619`).
+### `payrollTeacherTiers` (`payroll_teacher_tiers`, lines 1799–1814)
 
-**Relationships:** child of `payrollSyncRuns` via `last_sync_run_id`; logically the header row for all other month-scoped tables.
+**Grain:** one row per Wise teacher per payroll month — unique on `(payrollMonth, wiseTeacherId)`.
 
-### `payrollTeacherTiers` (`payroll_teacher_tiers`)
+Snapshots each teacher's pay tier as of the sync: `rawTier` is the matched Wise tag, `normalizedTier` is the mapped `BG0` / `BG1` / `BG2` / `BG3` value defaulting to `"Unassigned"` when no `Tier N` tag matches (`domain.ts:109-117`), and `tags` keeps the full tag array. `wiseUserId` is nullable and is the key everything else joins on, so it carries its own `payroll_teacher_tiers_month_user_idx`.
 
-**Grain:** one row per (payroll month, Wise teacher) — the teacher's pay tier as observed during that month's sync.
+### `payrollPayoutInvoices` (`payroll_payout_invoices`, lines 1815–1842)
 
-`sync_run_id` (uuid, NOT NULL) references `payrollSyncRuns.id` (`schema.ts:1799`). The row is keyed on `(payroll_month, wise_teacher_id)` by `payroll_teacher_tiers_month_teacher_idx` (`schema.ts:1808`), with a secondary index on `(payroll_month, wise_user_id)` (`:1809`) because sessions and invoices join on the Wise **user** id rather than the teacher id. `wise_display_name` is NOT NULL. `raw_tier` is the tier tag as found on the Wise teacher record; `normalized_tier` is the parsed value, NOT NULL and defaulting to `"Unassigned"` — the fail-closed default `normalizeTierLabel()` returns for a blank or unrecognized tag, versus `BG0`–`BG3` for a matched `Tier N` label (`src/lib/payroll/domain.ts:109-117`). `tags` is a `jsonb` string array (default `[]`) holding the teacher's full Wise tag list. Rows are built from Wise teacher records in `src/lib/payroll/sync.ts:291-311`.
+**Grain:** one row per Wise payout **event** — `payroll_payout_invoices_event_idx` is unique on `eventId` alone, globally rather than per month.
 
-Rows are **replaced, not accumulated**: each sync deletes the month's tier rows and reinserts them in a single transaction (`src/lib/payroll/sync.ts:385-392`).
+This is the "what Wise actually paid" side of the reconciliation: `transactionId`, `eventTimestamp`, `wiseTeacherUserId`, `actorWiseUserId`, the session linkage (`wiseClassId`, `wiseSessionId`, `sessionStartTime`), the money (`sessionCredits`, nullable `amountMinor`, `amount`, `currency` default `"THB"`), `transactionStatus`, `note`, and the untouched `raw` event.
 
-**Relationships:** child of `payrollSyncRuns`.
+Rows are filtered into the month by the **session** start time, not the event timestamp (`sync.ts:342-346`).
 
-### `payrollPayoutInvoices` (`payroll_payout_invoices`)
+It is also the one payroll table read from **outside** the domain: Post-Class Feedback's `resolvePostClassPayoutEligibility` asks whether a payable invoice exists for a session — `wiseSessionId` match with `sessionCredits > 0 OR amount > 0` — to decide deduction eligibility (`src/lib/post-class-feedback/repository.ts:2162-2179`). That is a soft read on `wise_session_id`, no FK.
 
-**Grain:** one row per Wise payout event (`event_id`) attributable to the payroll month — what the tutor was actually paid.
+### `payrollSessionObservations` (`payroll_session_observations`, lines 1843–1869)
 
-`sync_run_id` (uuid, NOT NULL) references `payrollSyncRuns.id` (`schema.ts:1815`). `event_id` carries a table-wide `uniqueIndex` (`payroll_payout_invoices_event_idx`, `:1833`) — the dedupe key — and `transaction_id`, `payroll_month`, `(payroll_month, wise_teacher_user_id)`, and `wise_session_id` are each indexed (`:1834-1837`). Money columns are `amount_minor` (nullable integer), `amount` (`doublePrecision`, default 0), and `currency` (text, default `"THB"`), alongside `session_credits` (`doublePrecision`, default 0) and nullable `transaction_status` / `note`. The linkage columns — `wise_teacher_user_id`, `actor_wise_user_id`, `wise_class_id`, `wise_session_id`, `session_start_time` — are all nullable, so an invoice can exist without a matched session. The full Wise event is preserved in `raw` (jsonb, default `{}`).
+**Grain:** one row per Wise session per payroll month — unique on `(payrollMonth, wiseSessionId)`.
 
-Month membership is decided by the **session** start time, not the event timestamp: invoices are filtered with `dateIsInPayrollMonth(event.sessionStartTime, range)` (`src/lib/payroll/sync.ts:345`). Like the other observation tables, the month's rows are deleted and reinserted on every sync (`:385-392`).
+The "what was taught" side: teacher identifiers (`wiseTeacherUserId`, `wiseTeacherId`), the sync-time-resolved `tutorGroupCanonicalKey` + `tutorDisplayName`, class context (`wiseClassId`, `className`, `subject`, `classType`), timing (`startTime`, nullable `endTime`, `durationMinutes`), `meetingStatus`, `sessionType`, nullable `studentCount`, and `raw`.
 
-Read outside payroll: post-class feedback treats a matching invoice row with `session_credits > 0` **or** `amount > 0` as evidence a session was payable (`src/lib/post-class-feedback/repository.ts:2154-2167`).
+`studentCount` and `subject`/`className` are load-bearing beyond display — they are the inputs to the rate-rule lookup's student band and course key (`data.ts:411-412`). Only sessions whose `startTime` falls inside the Bangkok month survive the padded Wise query window (`sync.ts:316`).
 
-**Relationships:** child of `payrollSyncRuns`; joins to `payrollSessionObservations` on `wise_session_id` (no FK).
+### `payrollAdjustments` (`payroll_adjustments`, lines 1870–1887)
 
-### `payrollSessionObservations` (`payroll_session_observations`)
+**Grain:** one row per manual correction for a month. No unique constraint — the same tutor may have many.
 
-**Grain:** one row per (payroll month, Wise session) — what was actually taught.
+Holds `adjustmentType` (default `"manual"`), the informational `tutorCanonicalKey` / `tutorDisplayName`, the `hours` and `amount` deltas, a `description`, a `source` provenance string (schema default `"manual"`; the insert path hardcodes `"manual"` regardless of input, `data.ts:646`), and `createdByEmail` / `createdByName` attribution.
 
-`sync_run_id` (uuid, NOT NULL) references `payrollSyncRuns.id` (`schema.ts:1843`). Uniqueness is `(payroll_month, wise_session_id)` (`payroll_session_observations_month_session_idx`, `:1862`), with lookup indexes on `(payroll_month, wise_teacher_user_id)` and `(payroll_month, tutor_group_canonical_key)` (`:1863-1864`). Required columns are `start_time` (timestamptz), `meeting_status` (text), and `duration_minutes` (integer, default 0); `end_time`, `session_type`, `student_count`, `wise_class_id`, `class_name`, `subject`, and `class_type` are nullable. The raw Wise session is kept in `raw` (jsonb, default `{}`).
+This is the only payroll table with a genuine CRUD path — insert and hard `DELETE` by id (`data.ts:637`, `data.ts:656-658`) — and the only one a sync leaves untouched: the rewrite transaction deletes tiers, invoices, and observations but never adjustments (`sync.ts:386-388`). They aggregate as month totals rather than per-tutor lines (`data.ts:483-484`).
 
-`tutor_group_canonical_key` and `tutor_display_name` are the bridge back to the tutor domain: the sync resolves each session's Wise user/teacher id against identity-group members joined to the **active snapshot** (`loadActiveIdentityEntries()`, `src/lib/payroll/sync.ts:139-159`) and denormalizes the resulting `canonicalKey` onto the row (`:326`). Both are nullable and carry no FK, so an unmatched session persists with a null key rather than being dropped.
+### `payrollRateCardVersions` (`payroll_rate_card_versions`, lines 1888–1904)
 
-Rows are replaced per month on each sync (`src/lib/payroll/sync.ts:385-392`), and only sessions whose start time falls inside the Bangkok month are kept (`:316`) — even though the Wise fetch deliberately widens the query window by a day on each side to absorb the UTC/Bangkok offset (`src/lib/payroll/domain.ts:95-98`).
+**Grain:** one row per published rate-card version. Not scoped to a payroll month.
 
-**Relationships:** child of `payrollSyncRuns`; soft reference to core `tutor_identity_groups.canonical_key`; joins to `payrollPayoutInvoices` on `wise_session_id`.
+Carries `versionName`, `effectiveMonth`, a `sourceLabel` describing where the card came from, `createdByEmail`, and `metadata`.
 
-### `payrollAdjustments` (`payroll_adjustments`)
+**At most one version is active at a time**, enforced the same way the sync guard is: `payroll_rate_card_versions_active_idx` is a unique index on `active` filtered to `active = true` (`schema.ts:1899-1901`). Readers always take the active row — `getPayrollPayload` selects `WHERE active = true ORDER BY createdAt DESC LIMIT 1` (`data.ts:553-558`), and Student Promotions resolves its pay bands the same way (`src/lib/student-promotions/data.ts:1582-1584`).
 
-**Grain:** one row per manual pay correction within a payroll month.
+### `payrollRateRules` (`payroll_rate_rules`, lines 1905–1923)
 
-The only operational payroll table with **no foreign key** — it is not tied to a sync run, so adjustments survive re-syncs of the same month. Scoping is `payroll_month` plus the `(payroll_month, created_at)` index (`payroll_adjustments_month_idx`, `schema.ts:1882`). `adjustment_type` (text, default `"manual"`) and `source` (text, default `"manual"`) classify the entry; `hours` and `amount` are `doublePrecision` defaulting to 0, and `description` is non-null text defaulting to `""`. `tutor_canonical_key` / `tutor_display_name` are nullable soft references to the tutor identity group. Provenance is `created_by_email` / `created_by_name` (nullable), with `created_at` / `updated_at` timestamptz `defaultNow()`.
+**Grain:** one rate cell per version — unique on `(versionId, studentBand, normalizedCourseKey, tierKey)`, with a matching three-column lookup index dropping `tierKey`.
 
-Writes go through `addPayrollAdjustment()`, which trims inputs, forces `source: "manual"`, and coerces non-finite `hours`/`amount` to 0 (`src/lib/payroll/data.ts:621-652`); deletion is by `id` (`:654-660`). The month payload sums `hours` and `amount` across all adjustments for the month (`src/lib/payroll/data.ts:483-484`).
+Each row pairs the human-readable `curriculum` / `course` with the machine key `normalizedCourseKey`, the `tierKey` (a `PayrollTier`) with the `sourceTierKey` it was widened from (a spreadsheet column like `"Tier 0-1"` fans out into one row per covered tier, `rate-card.ts:23-28`), and the money: nullable `pricePerHour` (the student list price), `expectedRevenuePerHour` (`notNull`, the reconciliation input), nullable `revenueShare`, plus the `rawSourceRow` the parser read.
 
-**Relationships:** none enforced; associated to a month by `payroll_month` and (optionally, softly) to a tutor by `tutor_canonical_key`.
+The whole card is loaded once per payload request and matched in memory (`data.ts:560-561`), which is why the composite key is denormalized rather than joined.
 
-### `payrollRateCardVersions` (`payroll_rate_card_versions`)
+## Cross-domain notes
 
-**Grain:** one row per rate-card version — a labeled, dated snapshot of the pay-rate table.
+- **Post-Class Feedback → `payrollPayoutInvoices`** — read-only eligibility probe on `wise_session_id`, described above. Post-Class Feedback maintains its own payout-adjustment tables and never writes Payroll.
+- **Student Promotions → `payrollRateCardVersions` / `payrollRateRules`** — reads the active card to compute pay-band impacts, and stores hard FKs to the specific before/after rules on `studentPromotionPayRateImpacts` (`schema.ts:1492-1493`).
+- **Core identity tables** — read at sync time only (`sync.ts:139-159`); the payroll row keeps a copied string, so a later snapshot rotation does not retroactively change a stored observation.
 
-Not month-scoped. `version_name`, `source_label`, and `effective_month` (date, string mode) are NOT NULL, and `effective_month` is indexed (`payroll_rate_card_versions_effective_idx`, `schema.ts:1899`). `active` (boolean, default `false`) carries a **partial unique index where `active = true`** (`payroll_rate_card_versions_active_idx`, `:1896-1898`), so at most one version can be active at a time — the database, not the application, enforces that invariant. `created_by_email` is nullable; `created_at` / `updated_at` are timestamptz `defaultNow()`; `metadata` jsonb (default `{}`) records the source spreadsheet.
+## Write-path note
 
-Both the payroll payload (`src/lib/payroll/data.ts:552-561`) and student promotions (`src/lib/student-promotions/data.ts:1579-1594`) resolve the rate card the same way: select `active = true`, order by `created_at` desc, take the first row, then load that version's rules.
+The month rewrite is genuinely transactional, which forces a driver switch. `runPayrollWriteTransaction` first tries `db.transaction(...)` and, when the Neon HTTP driver reports transactions unsupported, falls back to a `pg` (node-postgres) pool client running explicit `BEGIN` / `COMMIT` / `ROLLBACK` (`sync.ts:100-123`). Inside that one transaction the sync deletes and re-inserts all three observation tables for the month, upserts the review, and flips the run row to `success` (`sync.ts:385-425`) — so a month is never observed half-rewritten. A throw anywhere marks the run `failed` with a short error summary and leaves the previous month data in place (`sync.ts:437-446`).
 
-**Relationships:** parent (one-to-many) of `payrollRateRules` via `version_id`.
+## Open questions
 
-### `payrollRateRules` (`payroll_rate_rules`)
+- **No application write path for the rate card.** `payrollRateCardVersions` and `payrollRateRules` are only ever `SELECT`ed in `src/` (`src/lib/payroll/data.ts:553-561`, `src/lib/student-promotions/data.ts:1582-1592`, plus the ad-hoc `scripts/price-student-credits.ts:119-132`). Their sole populating write in the repo is the seed embedded in migration `drizzle/0037_payroll_rate_cards.sql:40`, `:181`. The parser in `src/lib/payroll/rate-card.ts` produces `ParsedPayRateRule[]` but nothing in `src/` persists that output. How a *new* rate-card version is meant to be published — another migration, a manual SQL load, or an unbuilt UI — is not answerable from the code.
+- **`payrollAdjustments.tutorCanonicalKey` is captured but unused.** It is validated and stored (`data.ts:641`) and echoed in the DTO (`data.ts:118`), but no aggregation joins on it; adjustments only ever land as month-level totals. Whether per-tutor attribution is intended but unbuilt, or the column is deliberately advisory, is not determinable from the code.
+- **Cron coverage.** `runPayrollSync` defaults `triggerType` to `"manual"` (`sync.ts:264`) and the column's own default is `"manual"` (`schema.ts:1767`); no caller in `src/` passes another value. Whether payroll sync is ever driven on a schedule is a `vercel.json` / cron-registry question, not a schema one — see [`../crons.md`](../crons.md).
 
-**Grain:** one row per (version, student band, normalized course, tier) — a single expected-rate cell of the rate card.
-
-`version_id` (uuid, NOT NULL) references `payrollRateCardVersions.id` (`schema.ts:1904`). The composite `uniqueIndex` on `(version_id, student_band, normalized_course_key, tier_key)` (`payroll_rate_rules_unique_idx`, `:1917`) defines the grain; a matching lookup index drops `tier_key` (`:1918`) for the common "all tiers for this band + course" read. `student_band`, `curriculum`, `course`, `normalized_course_key`, `tier_key`, and `source_tier_key` are all NOT NULL text — `course` is the human label from the source sheet and `normalized_course_key` its canonical form (produced by `normalizePayrollRateCourse()`, `src/lib/payroll/rate-card.ts:52-81`), while `source_tier_key` preserves the original spreadsheet column header (e.g. `"Tier 0-2"`) that one or more `tier_key` rows were expanded from (`src/lib/payroll/rate-card.ts:22-28`). `expected_revenue_per_hour` (`doublePrecision`) is NOT NULL; `price_per_hour` and `revenue_share` are nullable. `raw_source_row` (jsonb, default `{}`) keeps the originating sheet row.
-
-At read time the rules are folded into a `Map` keyed exactly as the unique index implies — `${studentBand}|${normalizedCourseKey}|${tierKey}` (`buildRateRuleLookup()` / `rateRuleKey()`, `src/lib/payroll/rate-card.ts:162-176`).
-
-**Relationships:** child of `payrollRateCardVersions`; referenced from outside the domain by `studentPromotionPayRateImpacts.before_rate_rule_id` and `.after_rate_rule_id` (`schema.ts:1489-1490`), which price a promotion's before/after hourly rate.
-
-## Open Questions
-
-- **No application write path for the rate card.** A repo-wide search finds no `insert` into `payroll_rate_card_versions` or `payroll_rate_rules` outside the data-carrying migration `drizzle/0037_payroll_rate_cards.sql`, which seeds one active version (`'PayRate May 2026'`, effective `2026-05-01`, sourced from a Google Sheet) plus its rules (`drizzle/0037_payroll_rate_cards.sql:39-48`). Application code only reads them, even though a full sheet parser (`parsePayRateRows()`, `src/lib/payroll/rate-card.ts:98-160`) exists. Is a new rate card meant to arrive via another migration, or is an admin import path still to be built?
-- **`payroll_sync_runs` single-flight is global, not per month.** The partial unique index is on `status` alone (`schema.ts:1773-1775`), so a sync for one month blocks a concurrent sync for another. Intentional (one Wise pull at a time) or an unintended coupling?
-- **Orphaned observation lineage.** Each sync deletes and reinserts the month's tier/invoice/observation rows, but superseded `payroll_sync_runs` rows remain, leaving historical runs with zero children and no `ON DELETE` behavior declared on the FKs. Is any retention or pruning intended for old payroll sync runs?
-- **`tutor_canonical_key` on adjustments is unvalidated.** `addPayrollAdjustment()` only trims the string (`src/lib/payroll/data.ts:641`); a mistyped key silently yields an adjustment that never joins to a tutor. Should it be validated against the active snapshot's identity groups?
-
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+_Verified against main@0cd1e81 (clean tree) on 2026-09-02._

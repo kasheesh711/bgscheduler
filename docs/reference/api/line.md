@@ -1,542 +1,533 @@
 # LINE API Reference
 
-**Status:** stable read/review paths; the **Wise** write-path is dry-run only (see [§ Wise actions](#wise-actions)), while the **LINE reply** write-path is a real outbound push (see [`PATCH /api/line/scheduler-reviews/[reviewId]`](#patch-apilineschedulerreviewsreviewid)). **Scope:** 29 endpoints across the 25 route files under [`src/app/api/line/`](../../../src/app/api/line/).
+**Authoritative source:** the 25 route handlers under [`src/app/api/line/`](../../../src/app/api/line/). **Status:** stable (scheduler write-path flag-gated) — see [Flags that change behaviour](#flags-that-change-behaviour) for the exact mechanisms.
 
-This page is the mechanical reference — method, path, auth, request/response shapes, side effects, and status codes per endpoint. Feature meaning, lifecycles, and the "why" behind the identity rules live in [`features/line-integration.md`](../../features/line-integration.md); that doc links here for signatures rather than restating them. The backing tables are documented in [`reference/database/index.md`](../database/index.md).
+This page is the mechanical reference for the LINE HTTP surface: method, path, auth, request shape, response shape, side effects, and status codes. Feature meaning — why identity resolution is fail-closed, what the review lifecycle is *for*, how the OA-resolver browser extension fits the workflow — lives in [`docs/features/line-integration.md`](../../features/line-integration.md). Table columns live in [`docs/reference/database/index.md`](../database/index.md).
+
+**29 endpoints across 25 route files.** Two `OPTIONS` preflight handlers ([`worklist/route.ts:17-19`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts), [`rows/route.ts:48-50`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/rows/route.ts)) are excluded from that count — they carry no business surface, returning a bare `204` with CORS headers. A naive grep for exported handlers therefore yields 31.
 
 ## Endpoints at a glance
 
-| Method | Path | Auth | Purpose |
-|---|---|---|---|
-| `POST` | `/api/line/webhook` | LINE signature | Ingest a LINE Messaging API webhook batch. |
-| `GET` | `/api/line/scheduler-reviews` | session | List scheduler reviews, optionally with analytics. |
-| `GET` | `/api/line/scheduler-reviews/false-negatives` | session | List messages the classifier probably under-called. |
-| `GET` | `/api/line/scheduler-reviews/[reviewId]/context` | session | Read the merged LINE + website chat timeline. |
-| `PATCH` | `/api/line/scheduler-reviews/[reviewId]` | session | Approve+send, accept without sending, reject, or dismiss. |
-| `POST` | `/api/line/scheduler-reviews/[reviewId]/operational-plan` | session | Rebuild intent, candidate sessions, and proposed Wise actions. |
-| `GET` | `/api/line/scheduler-reviews/[reviewId]/wise-actions` | session | List Wise-action audit rows for a review. |
-| `POST` | `/api/line/scheduler-reviews/[reviewId]/wise-actions` | session | Confirm a proposed Wise action (dry-run only). |
-| `POST` | `/api/line/messages/[messageId]/promote` | session | Promote a missed message into a pending review. |
-| `PATCH` | `/api/line/messages/[messageId]/classification-feedback` | session | Record the human-reviewed classifier category. |
-| `GET` | `/api/line/students` | session | Typeahead search over the current student directory. |
-| `PATCH` | `/api/line/contacts/[contactId]` | session | Rewrite a contact's labels and re-derive link suggestions. |
-| `GET` | `/api/line/contacts/[contactId]/student-links` | session | List a contact's links, recomputing suggestions first. |
-| `POST` | `/api/line/contacts/[contactId]/student-links` | session | Create a verified link to one student by `studentKey`. |
-| `PATCH` | `/api/line/contacts/[contactId]/student-links` | session | Verify or reject one existing link. |
-| `GET` | `/api/line/contacts/link-validation` | session | Page the link-validation worklist for a scope. |
-| `GET` | `/api/line/contacts/link-validation/summary` | session (lead) | Read the validation progress tracker. |
-| `POST` | `/api/line/contacts/link-validation/assign` | session | Round-robin assign validation tasks to reviewers. |
-| `PATCH` | `/api/line/contacts/link-validation/[linkId]` | session | Verify or reject one validation task. |
-| `POST` | `/api/line/contacts/alias-import/preview` | session | Parse pasted chat-list text or a screenshot into aliases. |
-| `POST` | `/api/line/contacts/alias-import/commit` | session | Apply reviewed alias rows to contacts. |
-| `POST` | `/api/line/contacts/refresh-profiles` | session | Re-fetch the LINE profile for every stored contact. |
-| `POST` | `/api/line/contacts/followers-reanchor` | session | Re-anchor from the follower roster + backlog identity recovery. |
-| `GET` | `/api/line/contacts/oa-resolver/worklist` | resolver token | Browser-extension worklist for the token's run. |
-| `GET` | `/api/line/contacts/oa-resolver/runs` | session | List resolver runs, or fetch the latest one. |
-| `POST` | `/api/line/contacts/oa-resolver/runs` | session | Create a resolver run and mint its one-time token. |
-| `GET` | `/api/line/contacts/oa-resolver/runs/[runId]` | session | Read one resolver run with all its rows. |
-| `POST` | `/api/line/contacts/oa-resolver/runs/[runId]/rows` | resolver token | Browser-extension callback that writes captured rows. |
-| `POST` | `/api/line/contacts/oa-resolver/runs/[runId]/commit` | session | Commit matched/ambiguous rows into contacts + suggested links. |
-
-## Authentication model
-
-Three in-handler auth mechanisms guard these routes, plus one middleware-level gate. Each endpoint section states which applies.
-
-1. **Session (Auth.js)** — the default for 26 of the 29 endpoints. Handlers call `await auth()` and return **401 `{ "error": "Unauthorized" }`** when there is no session ([`scheduler-reviews/route.ts:25-28`](../../../src/app/api/line/scheduler-reviews/route.ts) is the canonical pattern). Sign-in itself is not admin-only any more: `resolveUserAccess` admits admins (`admin_users`), admissions counselors, teachers, and admissions case members ([`auth-access.ts:56-85`](../../../src/lib/auth-access.ts)). What keeps non-admins out of these routes is the middleware gate below — the in-handler `auth()` check only proves *some* principal is signed in. No LINE handler checks a role.
-2. **Middleware page-scope gate** — `src/middleware.ts` resolves `req.auth.user.allowedPages`; `null` means full access, and any non-null list is matched against the pathname both as a page (`/x`, `/x/…`) and as its API namespace (`/api/x`, `/api/x/…`). An API request outside that list gets **403 `{ "error": "Forbidden" }`** before the handler runs ([`middleware.ts:30-61`, `:78-88`](../../../src/middleware.ts)). Counselors/teachers/students/parents are scoped to `/admissions` or `/progress-tests` ([`auth-access.ts:70-82`](../../../src/lib/auth-access.ts)), so they are 403'd on every `/api/line/**` path. **Note the namespace mismatch:** these APIs live under `/api/line/**` while the pages that consume them are `/line-review` and `/scheduler`, so a *restricted admin* whose `allowedPages` lists those pages is also 403'd here — only full-access admins (`allowedPages === null`) can call this surface.
-3. **LINE HMAC signature** — the webhook only. The raw body is verified against the `x-line-signature` header with base64 `HMAC-SHA256(channelSecret, rawBody)`, compared using `timingSafeEqual` after a length pre-check ([`signature.ts:12-19`](../../../src/lib/line/signature.ts)). No session.
-4. **Per-run resolver bearer token** — the two browser-extension endpoints (`oa-resolver/worklist`, `oa-resolver/runs/[runId]/rows`). A `Bearer <token>` is read from the `Authorization` header and matched against a SHA-hashed, 8-hour-TTL run token in Postgres ([`oa-resolver.ts:111`, `:592-606`](../../../src/lib/line/oa-resolver.ts)). No session.
-
-**Public-route note:** [`middleware.ts:4-19`](../../../src/middleware.ts) exempts exactly three LINE paths from the session redirect — `/api/line/webhook`, `/api/line/contacts/oa-resolver/worklist`, and the regex `^/api/line/contacts/oa-resolver/runs/[^/]+/rows$`. Those are precisely the three machine-facing endpoints; they self-authenticate via signature or token. Every other LINE route sits behind the session gate.
-
-**Route config:** only two handlers override defaults — `POST /api/line/webhook` (`maxDuration = 60`, [`webhook/route.ts:8`](../../../src/app/api/line/webhook/route.ts)) and `POST /api/line/contacts/followers-reanchor` (`maxDuration = 300`, [`followers-reanchor/route.ts:13`](../../../src/app/api/line/contacts/followers-reanchor/route.ts)).
-
-Standard error envelopes shared by the session-guarded routes:
-
-- Malformed JSON body → **400 `{ "error": "Invalid JSON" }`**.
-- Zod `.safeParse()` failure → **400 `{ "error": "Invalid request", "details": <flattened> }`** (where a body schema exists). Every object schema is `.strict()`, so unknown keys are rejected rather than ignored.
-- Missing entity → **404** with a route-specific message.
-
-Only six handlers wrap their business logic in `try/catch` (`alias-import/preview`, `followers-reanchor`, `link-validation/assign`, `scheduler-reviews/[reviewId]`, the `wise-actions` POST, and the webhook's own envelope). Everywhere else an unexpected throw propagates to the framework as an unshaped 500.
-
-**Environment gates.**
-
-| Variable | Effect | Source |
+| Method | Path | Auth |
 |---|---|---|
-| `ENABLE_LINE_SCHEDULER`, `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN` | All three must be satisfied or the webhook returns 503. | [`client.ts:19-23`](../../../src/lib/line/client.ts) |
-| `OPENAI_API_KEY` (+ AI-scheduler config) | Required only for the *image* branch of alias-import preview. | [`contact-aliases.ts:363-366`](../../../src/lib/line/contact-aliases.ts) |
-| `LINE_VALIDATION_LEAD_EMAILS` | Comma-separated allowlist for the validation tracker, with a two-address built-in fallback. Not declared in [`env.ts`](../../../src/lib/env.ts) — read straight from `process.env`. | [`link-validation.ts:110-113`, `:220-232`](../../../src/lib/line/link-validation.ts) |
-| `WISE_SESSION_OPERATIONS_VERIFIED` | `"true"` switches the Wise-action log from `manual_required` to `dry_run`. Neither value sends a Wise mutation. | [`operations.ts:10-12`](../../../src/lib/wise/operations.ts) |
-
-**Student directory dependency.** Everything that resolves a "student" here reads the **active credit-control snapshot**, not the Wise tutor snapshot: `listCurrentLineStudents` joins `credit_control_students` / `_packages` / `_sessions` for the active credit-control snapshot id ([`student-links.ts:184-254`](../../../src/lib/line/student-links.ts)). With no active credit-control snapshot the directory is empty, and student lookups return `[]` / 404.
+| POST | `/api/line/webhook` | public + LINE channel signature |
+| GET | `/api/line/scheduler-reviews` | session |
+| GET | `/api/line/scheduler-reviews/false-negatives` | session |
+| PATCH | `/api/line/scheduler-reviews/[reviewId]` | session |
+| GET | `/api/line/scheduler-reviews/[reviewId]/context` | session |
+| POST | `/api/line/scheduler-reviews/[reviewId]/operational-plan` | session |
+| GET | `/api/line/scheduler-reviews/[reviewId]/wise-actions` | session |
+| POST | `/api/line/scheduler-reviews/[reviewId]/wise-actions` | session |
+| POST | `/api/line/messages/[messageId]/promote` | session |
+| PATCH | `/api/line/messages/[messageId]/classification-feedback` | session |
+| PATCH | `/api/line/contacts/[contactId]` | session |
+| GET | `/api/line/contacts/[contactId]/student-links` | session |
+| POST | `/api/line/contacts/[contactId]/student-links` | session |
+| PATCH | `/api/line/contacts/[contactId]/student-links` | session |
+| GET | `/api/line/students` | session |
+| POST | `/api/line/contacts/alias-import/preview` | session |
+| POST | `/api/line/contacts/alias-import/commit` | session |
+| POST | `/api/line/contacts/refresh-profiles` | session |
+| POST | `/api/line/contacts/followers-reanchor` | session |
+| GET | `/api/line/contacts/link-validation` | session |
+| GET | `/api/line/contacts/link-validation/summary` | session (lead-gated payload) |
+| POST | `/api/line/contacts/link-validation/assign` | session |
+| PATCH | `/api/line/contacts/link-validation/[linkId]` | session |
+| GET | `/api/line/contacts/oa-resolver/runs` | session |
+| POST | `/api/line/contacts/oa-resolver/runs` | session |
+| GET | `/api/line/contacts/oa-resolver/runs/[runId]` | session |
+| POST | `/api/line/contacts/oa-resolver/runs/[runId]/commit` | session |
+| POST | `/api/line/contacts/oa-resolver/runs/[runId]/rows` | public + opaque bearer token |
+| GET | `/api/line/contacts/oa-resolver/worklist` | public + opaque bearer token |
 
 ---
 
-## Webhook
+## Conventions shared across the endpoints
+
+**Three auth tiers.** Twenty-six endpoints call `auth()` from [`@/lib/auth`](../../../src/lib/auth.ts) and return `401 {"error":"Unauthorized"}` on failure. Three are in the middleware public allowlist ([`middleware.ts:10-26`](../../../src/middleware.ts)) and enforce their own in-handler check instead: `/api/line/webhook` (HMAC channel signature), `/api/line/contacts/oa-resolver/worklist` and `/api/line/contacts/oa-resolver/runs/{runId}/rows` (opaque `Bearer` token hashed against `line_oa_resolver_runs.tokenHash`). The `rows` allowlist entry is a regex over one path segment, so it matches every `runId` ([`middleware.ts:23`](../../../src/middleware.ts)).
+
+**Restricted-user gating.** For the 26 session endpoints, a restricted admin (non-null `allowedPages` not containing `/line-review`) is stopped in middleware before the handler runs, because `isPathAllowed` matches each allowed page both as `/x` and as `/api/x` ([`middleware.ts:36-67`](../../../src/middleware.ts)). No LINE handler does its own role check; the only per-actor authorization inside the group is the validation-lead gate on the link-validation summary.
+
+**Maintenance mode.** `MAINTENANCE_MODE=true` closes every LINE path, `/api/line/webhook` included — the maintenance gate is deliberately placed *above* the public allowlist so the webhook cannot slip through ([`middleware.ts:76-86`](../../../src/middleware.ts)); the exempt prefixes are only `/api/internal/`, `/schedule/`, `/api/auth/`, `/login` ([`maintenance.ts:43-48`](../../../src/lib/maintenance.ts)).
+
+**The four-step mutation shape.** Handlers with a JSON body follow the project pattern: `auth()` → 401; `request.json()` in try/catch → `400 {"error":"Invalid JSON"}`; `schema.safeParse()` → `400 {"error":"Invalid request", details: <flatten()>}`; then business logic. Every body schema in this group is `.strict()`, so an unknown key is a 400, not a silent drop. Two handlers deviate: the OA-resolver commit swallows a JSON parse failure and falls back to `{}` ([`commit/route.ts:23-28`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/commit/route.ts)), and the alias-import preview reads `multipart/form-data` rather than JSON.
+
+**Actor stamping.** Nine route files derive `{ email, name }` from the session with a locally-defined `actorFromSession` helper (each declares its own copy — there is no shared helper) and pass it into the lib layer, which lower-cases the email and trims the name before writing it to `reviewedBy*` / `createdBy*` / `validationAssignedTo*` columns.
+
+**No caching.** No LINE route declares `"use cache"`, `revalidate`, or `dynamic`; every request reads Postgres directly. Only two declare a `maxDuration`: the webhook (`60`) and followers-reanchor (`300`).
+
+**Route tests.** 15 of the 25 route files have a sibling `__tests__/route.test.ts`. The ten without one are `contacts/[contactId]`, `contacts/[contactId]/student-links`, `contacts/alias-import/preview`, `contacts/oa-resolver/runs/[runId]`, `scheduler-reviews`, `scheduler-reviews/[reviewId]`, `scheduler-reviews/[reviewId]/operational-plan`, `scheduler-reviews/[reviewId]/wise-actions`, `students`, and `webhook` — so the two endpoints with the widest blast radius, the review PATCH (which sends to a parent) and the webhook, have no route-level test. The webhook's logic is covered instead at the lib layer ([`src/lib/line/__tests__/`](../../../src/lib/line/__tests__/)).
+
+### Flags that change behaviour
+
+| Env var | Read at | Effect |
+|---|---|---|
+| `ENABLE_LINE_SCHEDULER` | [`client.ts:19-23`](../../../src/lib/line/client.ts) | `lineSchedulerEnabled()` is false when this is exactly `"false"`, **or** when `LINE_CHANNEL_SECRET` / `LINE_CHANNEL_ACCESS_TOKEN` is blank. Only `POST /api/line/webhook` consults it, and only to return **503** — it gates *ingest*, never sending. |
+| `LINE_CHANNEL_SECRET` | [`client.ts:25-27`](../../../src/lib/line/client.ts) | HMAC key for `x-line-signature` verification. |
+| `LINE_CHANNEL_ACCESS_TOKEN` | [`client.ts:30-31`](../../../src/lib/line/client.ts) | Bearer token for the outbound push. `pushLineTextMessage` throws if unset. |
+| `WISE_SESSION_OPERATIONS_VERIFIED` | [`wise/operations.ts:10-12`](../../../src/lib/wise/operations.ts) | Selects which **dry-run** branch `POST .../wise-actions` records. Even when `"true"`, no Wise mutation is sent — see [`POST /api/line/scheduler-reviews/[reviewId]/wise-actions`](#post-apilinescheduler-reviewsreviewidwise-actions). |
+| `LINE_VALIDATION_LEAD_EMAILS` | [`link-validation.ts:220-229`](../../../src/lib/line/link-validation.ts) | Comma-separated allowlist deciding who sees the link-validation tracker payload. Falls back to two hard-coded emails when unset. Read straight from `process.env` — it is **not** declared in [`src/lib/env.ts`](../../../src/lib/env.ts). |
+
+The "write-path flag-gated" half of the status badge refers to the **Wise** write path, which is dry-run in both branches. The **LINE reply** write path is not flag-gated: `PATCH /api/line/scheduler-reviews/[reviewId]` with `action: "approve_send"` performs a real outbound push to the parent.
+
+---
+
+## Webhook ingest
 
 ### `POST /api/line/webhook`
 
-Inbound LINE event ingestion. **Auth: LINE HMAC signature** (no session; public in middleware). Handler: [`webhook/route.ts:10-43`](../../../src/app/api/line/webhook/route.ts).
+Ingests a LINE Messaging API webhook batch. Handler: [`webhook/route.ts:8-47`](../../../src/app/api/line/webhook/route.ts). `export const maxDuration = 60`.
 
-**Feature gate:** if `lineSchedulerEnabled()` is false the handler returns **503 `{ ok: false, error: "LINE scheduler is not configured" }`** before touching the body ([`webhook/route.ts:11-13`](../../../src/app/api/line/webhook/route.ts)) — checked *before* the signature. The flag is true only when `ENABLE_LINE_SCHEDULER !== "false"` **and** both `LINE_CHANNEL_SECRET` and `LINE_CHANNEL_ACCESS_TOKEN` are set ([`client.ts:19-23`](../../../src/lib/line/client.ts)).
+**Auth:** public in middleware; the handler verifies `x-line-signature` as base64 HMAC-SHA256 of the raw body under the channel secret, compared with `timingSafeEqual` after a length pre-check ([`signature.ts:3-20`](../../../src/lib/line/signature.ts)). A missing secret or missing signature returns false — fail-closed.
 
-**Request:** raw LINE webhook JSON, read via `request.text()` so the exact bytes can be signed ([`webhook/route.ts:16`](../../../src/app/api/line/webhook/route.ts)). The `x-line-signature` header is required. No Zod schema — the body is LINE's event envelope, walked defensively inside `recordLineWebhookPayload`.
+**Request:** the raw LINE webhook JSON, read with `request.text()` so the bytes signed are the bytes verified. There is no Zod schema; `recordLineWebhookPayload` reads the payload defensively field by field ([`data.ts:422-521`](../../../src/lib/line/data.ts)).
 
-**Side effects** (`handleLineWebhookPost`, [`webhook.ts:18-67`](../../../src/lib/line/webhook.ts) → `recordLineWebhookPayload`, [`data.ts:422-524`](../../../src/lib/line/data.ts)):
+**Per-event handling** ([`data.ts:434-518`](../../../src/lib/line/data.ts)):
 
-| Event shape | Effect |
+| Event | Outcome |
 |---|---|
-| `source.type` = `group`/`room`, `type` = `message`, text present | Collected as a `LineGroupCommand` and **never persisted as a `line_messages` row**; handed to the schedule-bot router ([`data.ts:441-461`](../../../src/lib/line/data.ts)). |
-| `source.type` ≠ `user`, or missing `userId` | `ignoredEvents += 1` ([`data.ts:463-466`](../../../src/lib/line/data.ts)). |
-| `type` = `unsend` | Flags the matching `line_messages` row `isRetracted`; counts into `retractedMessages` ([`data.ts:468-482`](../../../src/lib/line/data.ts)). |
-| `type` = `message`, text | Upserts the contact + thread and inserts an inbound message with `onConflictDoNothing` on `webhookEventId`; a conflict counts as `duplicateEvents` instead of `createdMessageIds` ([`data.ts:497-520`](../../../src/lib/line/data.ts)). |
-| anything else (non-message event, non-text message) | `ignoredEvents += 1` ([`data.ts:484-495`](../../../src/lib/line/data.ts)). |
+| `message` from a `group`/`room` source, type `text` | Collected as a `LineGroupCommand` and handed to the schedule-bot router. **Never persisted as a `line_messages` row** — the conversation model is 1:1 per LINE user, so groups are a command channel, not a conversation ([`data.ts:37-53`](../../../src/lib/line/data.ts)). |
+| `message` from a `user` source, type `text` | Upserts the contact, gets-or-creates the thread, inserts an inbound `line_messages` row with `onConflictDoNothing` on `webhookEventId`. A returned id → `createdMessageIds`; no row → `duplicateEvents += 1`. |
+| `unsend` from a `user` source | Sets `isRetracted` + `retractedAt` on the matching `lineMessageId`; counts into `retractedMessages`. |
+| anything else — non-user source, non-text message, missing sender, other event types | `ignoredEvents += 1`. |
 
-Two background jobs are queued with `after(...)` so they run off the response path, each wrapped in try/catch that only `console.error`s ([`webhook/route.ts:22-39`](../../../src/app/api/line/webhook/route.ts)):
+**Deferred work.** Both callbacks run inside Next's `after()`, so the 200 goes back to LINE first ([`webhook/route.ts:20-43`](../../../src/app/api/line/webhook/route.ts)). Each created message id is passed to `processLineMessageForScheduler`, and each group command to `handleScheduleBotGroupCommand`; both modules are `await import()`ed lazily specifically to keep the AI-scheduler and search subtrees out of the pre-response cold start. Failures are caught and `console.error`'d — they never affect the response.
 
-- per created message id → `processLineMessageForScheduler` (schedule-bot command interception, profile refresh, link suggestions, classification, review creation — [`review-service.ts:129-189`](../../../src/lib/line/review-service.ts));
-- per group command → `handleScheduleBotGroupCommand` ([`schedule-bot-group.ts:229`](../../../src/lib/line/schedule-bot-group.ts)).
+**Response 200:**
 
-**Responses** ([`webhook.ts:5-16`, `:56-66`](../../../src/lib/line/webhook.ts)):
+```json
+{ "ok": true, "createdMessageIds": ["…"], "duplicateEvents": 0,
+  "ignoredEvents": 0, "retractedMessages": 0, "groupCommands": 0 }
+```
 
-| Status | Body |
-|---|---|
-| 200 | `{ ok: true, createdMessageIds: string[], duplicateEvents: number, ignoredEvents: number, retractedMessages: number, groupCommands: number }` |
-| 400 | `{ ok: false, error: "Invalid JSON" }` ([`webhook.ts:38-46`](../../../src/lib/line/webhook.ts)) |
-| 401 | `{ ok: false, error: "Invalid LINE signature" }` ([`webhook.ts:27-36`](../../../src/lib/line/webhook.ts)) |
-| 503 | `{ ok: false, error: "LINE scheduler is not configured" }` |
+**Status codes:** 200 accepted · 400 `{"ok":false,"error":"Invalid JSON"}` (signature valid, body unparseable) · 401 `{"ok":false,"error":"Invalid LINE signature"}` · 503 `{"ok":false,"error":"LINE scheduler is not configured"}` when `lineSchedulerEnabled()` is false. Shapes at [`webhook.ts:5-16,27-66`](../../../src/lib/line/webhook.ts).
 
 ---
 
 ## Scheduler reviews
 
-The human-review queue for inbound scheduling messages. **All five endpoints require a session** (plus the middleware page gate).
+All six review endpoints operate on `line_scheduler_reviews`. The row DTO returned throughout is `LineSchedulerReviewDto` ([`data.ts:94-133`](../../../src/lib/line/data.ts)) — 38 fields covering identity (`threadId`, `contactId`, `lineUserId`, `contactDisplayName`), classifier output, the operational plan (`intentType`, `intentPayload`, `candidateSessions`, `proposedWiseActions`, `adminSelectedSessionIds`, `writebackStatus`), the draft/final text pair, reviewer stamps, and send outcome (`sendLineMessageId`, `sendResponse`, `sendError`).
+
+Two enums recur: `status` ∈ `pending_review | approved_sent | accepted_no_send | rejected | dismissed` and `intentType` ∈ `new_request | cancel_one_off | pause_until | resume | reschedule | unclear_change` ([`data.ts:10-23`](../../../src/lib/line/data.ts)). `writebackStatus` ∈ `not_applicable | dry_run | manual_required | ready | confirmed | failed` ([`data.ts:25-31`](../../../src/lib/line/data.ts)).
 
 ### `GET /api/line/scheduler-reviews`
 
-List reviews, optionally with analytics. Handler: [`scheduler-reviews/route.ts:24-54`](../../../src/app/api/line/scheduler-reviews/route.ts).
+Lists reviews, optionally with dashboard analytics. Handler: [`scheduler-reviews/route.ts:24-53`](../../../src/app/api/line/scheduler-reviews/route.ts).
 
-**Query params** (all optional, each validated individually — there is no single schema):
+**Query parameters:**
 
-| Param | Rule | On failure |
+| Param | Validation | Notes |
 |---|---|---|
-| `status` | enum `pending_review \| approved_sent \| accepted_no_send \| rejected \| dismissed` ([`:7-13`](../../../src/app/api/line/scheduler-reviews/route.ts)) | 400 `{ "error": "Invalid status" }` |
-| `intentType` | enum `new_request \| cancel_one_off \| pause_until \| resume \| reschedule \| unclear_change` ([`:15-22`](../../../src/app/api/line/scheduler-reviews/route.ts)) | 400 `{ "error": "Invalid intentType" }` |
-| `conversationId` | free-form string equality filter ([`:41`](../../../src/app/api/line/scheduler-reviews/route.ts)) | — |
-| `analytics` | `"true"` additionally computes `getLineSchedulerAnalytics(db)` ([`:42`, `:50`](../../../src/app/api/line/scheduler-reviews/route.ts)) | — |
+| `status` | `statusSchema` ([`route.ts:7-13`](../../../src/app/api/line/scheduler-reviews/route.ts)) | Omit for all statuses. An invalid value is 400. |
+| `intentType` | `intentSchema` ([`route.ts:15-22`](../../../src/app/api/line/scheduler-reviews/route.ts)) | Omit for all intents. An invalid value is 400. |
+| `conversationId` | none | Passed through verbatim as an equality filter. |
+| `analytics` | `=== "true"` | Any other value (including `1`) leaves `analytics: null`. |
 
-**Response 200** — `{ reviews, analytics }`. `reviews` is `LineSchedulerReviewDto[]`, joined to `line_contacts`, ordered by `createdAt` descending and **hard-capped at 200 rows** with no pagination ([`data.ts:857-863`](../../../src/lib/line/data.ts)); the DTO's fields are defined at [`data.ts:94-133`](../../../src/lib/line/data.ts). `analytics` is `null` unless `analytics=true`, in which case it is the `LineSchedulerAnalytics` object (classification counts, review-outcome counts, `rejectionRate`, `averageEditDistance`, `averageModelLatencyMs`, `classificationAccuracy` / coverage / false-positive / false-negative counts, `unverifiedLinkBacklog`, and the rejection-reason/category/feedback-label breakdowns — [`data.ts:173-195`](../../../src/lib/line/data.ts)).
+**Response 200:** `{ reviews: LineSchedulerReviewDto[], analytics: LineSchedulerAnalytics | null }`. The list is joined to `line_contacts`, ordered `createdAt DESC`, and **hard-capped at 200 rows** with no pagination parameter ([`data.ts:861`](../../../src/lib/line/data.ts)). `LineSchedulerAnalytics` ([`data.ts:173-195`](../../../src/lib/line/data.ts)) carries classification counts, review-outcome counts, `rejectionRate`, `averageEditDistance`, `averageModelLatencyMs`, classification accuracy/coverage plus false-positive and false-negative counts, `unverifiedLinkBacklog`, and three grouped arrays (`commonRejectionReasons`, `commonRejectionCategories`, `feedbackLabels`).
+
+**Status codes:** 200 · 400 `Invalid status` / `Invalid intentType` · 401.
 
 ### `GET /api/line/scheduler-reviews/false-negatives`
 
-Surface inbound messages the classifier probably under-called, so an admin can promote them. Handler: [`false-negatives/route.ts:9-27`](../../../src/app/api/line/scheduler-reviews/false-negatives/route.ts).
+Lists inbound messages the classifier probably under-called, so an admin can promote them. Handler: [`false-negatives/route.ts:9-26`](../../../src/app/api/line/scheduler-reviews/false-negatives/route.ts).
 
-**Query param:** `threshold` — optional, `z.coerce.number().min(0).max(1)` ([`:7`](../../../src/app/api/line/scheduler-reviews/false-negatives/route.ts)); invalid → **400 `{ "error": "Invalid threshold" }`**. Omitted → `LINE_FALSE_NEGATIVE_CONFIDENCE_THRESHOLD = 0.75` ([`classifier.ts:24`](../../../src/lib/line/classifier.ts)).
+**Query:** `threshold` — `z.coerce.number().min(0).max(1)`, optional. Default `LINE_FALSE_NEGATIVE_CONFIDENCE_THRESHOLD = 0.75` ([`classifier.ts:24`](../../../src/lib/line/classifier.ts)).
 
-**Selection rule** ([`data.ts:597-617`](../../../src/lib/line/data.ts)): inbound messages with **no** `classificationReviewedAt` and **no** existing scheduler review, whose category is `unclear`, **or** `non_scheduling` with confidence below the threshold — a NULL confidence counts as "show" (fail-open). Ordered by `classifiedAt` desc, limit 100.
+**Selection rule** ([`data.ts:568-635`](../../../src/lib/line/data.ts)): inbound messages with no `classificationReviewedAt` and no promoted review, whose classifier category is `unclear`, **or** `non_scheduling` with confidence below the threshold. NULL confidence is treated as "show" — fail-open toward surfacing. Ordered `classifiedAt DESC`, limit 100 (not overridable from the route). Rows with empty text are filtered out.
 
-**Response 200** — `{ candidates }`, each a `LineFalseNegativeCandidateDto` ([`data.ts:79-92`](../../../src/lib/line/data.ts)).
+**Response 200:** `{ candidates: LineFalseNegativeCandidateDto[] }` ([`data.ts:79-92`](../../../src/lib/line/data.ts)) — id, thread/contact ids, `lineUserId`, display name, text, the four classifier fields, `classifiedAt`, `conversationId`.
 
-### `GET /api/line/scheduler-reviews/[reviewId]/context`
-
-Fetch the surrounding chat context for one review. Handler: [`context/route.ts:8-21`](../../../src/app/api/line/scheduler-reviews/[reviewId]/context/route.ts).
-
-**Request:** path param `reviewId`; no query, no body.
-
-**Response 200** — `{ context }`, a `LineReviewChatContextDto` = `{ reviewId, threadId, conversationId, lineMessages, websiteMessages, combinedTimeline }`, where each message is a `LineReviewContextMessageDto` ([`data.ts:150-171`](../../../src/lib/line/data.ts)). The LINE side is the most recent 30 thread messages, re-reversed into chronological order (`lineLimit` default, [`data.ts:1045`, `:1057-1075`](../../../src/lib/line/data.ts)). **404 `{ "error": "Review not found" }`** when the review id is unknown.
+**Status codes:** 200 · 400 `Invalid threshold` · 401.
 
 ### `PATCH /api/line/scheduler-reviews/[reviewId]`
 
-The primary review-decision endpoint. Handler: [`[reviewId]/route.ts:60-133`](../../../src/app/api/line/scheduler-reviews/[reviewId]/route.ts).
+The one endpoint that can send a message to a parent. Handler: [`[reviewId]/route.ts:60-133`](../../../src/app/api/line/scheduler-reviews/[reviewId]/route.ts).
 
-**Body:** a Zod **discriminated union on `action`**, every member `.strict()` ([`:12-44`](../../../src/app/api/line/scheduler-reviews/[reviewId]/route.ts)):
+**Body:** a Zod **discriminated union on `action`**, each arm `.strict()` ([`route.ts:12-44`](../../../src/app/api/line/scheduler-reviews/[reviewId]/route.ts)):
 
 | `action` | Required | Optional |
 |---|---|---|
-| `approve_send` | `finalText` (trimmed, 1–5000) | `selectedTutorIds` (≤12 non-empty strings), `studentLinkOverride` (bool) |
+| `approve_send` | `finalText` (1–5000, trimmed) | `selectedTutorIds` (≤12), `studentLinkOverride` |
 | `accept_no_send` | — | `finalText` (≤5000), `selectedTutorIds` (≤12), `studentLinkOverride` |
-| `reject` | `reasonCategory` (enum `wrong_student_link \| wrong_extracted_request \| wrong_tutor_fit \| wrong_availability \| unsafe_draft \| unclear \| other`), `rejectionReason` (1–500), `staffCorrection` (1–5000) | `rejectedTutorIds` (≤12) |
+| `reject` | `reasonCategory` (one of `wrong_student_link`, `wrong_extracted_request`, `wrong_tutor_fit`, `wrong_availability`, `unsafe_draft`, `unclear`, `other`), `rejectionReason` (1–500), `staffCorrection` (1–5000) | `rejectedTutorIds` (≤12) |
 | `dismiss` | — | `rejectionReason` (≤500) |
 
-The handler dispatches to `approveLineSchedulerReview` / `acceptLineSchedulerReviewNoSend` / `rejectLineSchedulerReview` / `dismissLineSchedulerReview` ([`:88-122`](../../../src/app/api/line/scheduler-reviews/[reviewId]/route.ts)), passing the session email + name as the audit `actor` ([`:48-53`](../../../src/app/api/line/scheduler-reviews/[reviewId]/route.ts)).
+**Side effects by action** ([`review-service.ts:465-644`](../../../src/lib/line/review-service.ts)). All four are no-ops that return the row unchanged when `status !== "pending_review"`.
 
-**Side effects per action** ([`review-service.ts:465-644`](../../../src/lib/line/review-service.ts)) — all four are no-ops that return the review unchanged (HTTP 200) when `status !== "pending_review"`:
+- **`approve_send`** — refuses unless the contact has at least one verified student link *or* `studentLinkOverride` is set, throwing `Verify a LINE student link or mark this contact as unmatched before sending` (this is the fail-closed identity gate). Then: real outbound `pushLineTextMessage` to `review.lineUserId` with an idempotency `X-Line-Retry-Key` ([`client.ts:112-142`](../../../src/lib/line/client.ts)); patch to `approved_sent` with the send response; insert an outbound `line_messages` row; write an AI-scheduler feedback row labelled `accept` or `edit` depending on whether `finalText` matches the proposed draft.
+- **`accept_no_send`** — same feedback row (`accept`/`edit`), status `accepted_no_send`, **no** LINE push, and no verified-link gate.
+- **`reject`** — feedback row `reject`; status `rejected` with category, reason, and staff correction persisted for the correction-telemetry loop.
+- **`dismiss`** — feedback row `dismiss`; status `dismissed`.
 
-- **`approve_send`** is the only real outbound write in the whole LINE surface. It refuses unless the contact has ≥1 verified student link or `studentLinkOverride` is true ("Verify a LINE student link or mark this contact as unmatched before sending", [`:477-480`](../../../src/lib/line/review-service.ts)); rejects an empty final text; then calls `pushLineTextMessage` against `https://api.line.me/v2/bot/message/push` with an idempotency `X-Line-Retry-Key` ([`client.ts:112-149`](../../../src/lib/line/client.ts)). A LINE **409** is treated as success and annotated `retryAccepted: true` rather than thrown ([`client.ts:132-141`](../../../src/lib/line/client.ts)). It is **not** gated by `lineSchedulerEnabled()` — only `LINE_CHANNEL_ACCESS_TOKEN` must be set, or the push throws. Afterwards it stores the send result on the review, inserts an outbound `line_messages` row, and records scheduler feedback (`accept` when the text is unchanged, `edit` otherwise).
-- **`accept_no_send`** records feedback (`accept`/`edit`) and sets `accepted_no_send`. No LINE call.
-- **`reject`** requires non-empty category + reason + correction (throws otherwise), records `reject` feedback with the rejected tutor ids, and sets `rejected`.
-- **`dismiss`** records `dismiss` feedback and sets `dismissed`.
+**Response 200:** `{ review: LineSchedulerReviewDto }`.
 
-**Status codes:** **200** `{ review }`; **404 `{ "error": "Review not found" }`** when the service returns null; **400 `{ "error": <message> }`** for *any* thrown service error — the catch maps every exception to 400 ([`:129-132`](../../../src/app/api/line/scheduler-reviews/[reviewId]/route.ts)), so a failed LINE push surfaces as a 400; plus the shared 401 / Invalid JSON / Invalid request envelopes.
+**Status codes:** 200 · 400 invalid JSON, Zod failure, **or any thrown business error** — the whole dispatch is wrapped and every `Error` maps to 400 with its message, including a LINE push failure ([`route.ts:129-132`](../../../src/app/api/line/scheduler-reviews/[reviewId]/route.ts)) · 401 · 404 `Review not found`.
+
+### `GET /api/line/scheduler-reviews/[reviewId]/context`
+
+Returns the merged conversation behind a review. Handler: [`context/route.ts:8-21`](../../../src/app/api/line/scheduler-reviews/[reviewId]/context/route.ts). Read-only.
+
+**Response 200:** `{ context: LineReviewChatContextDto }` ([`data.ts:164-171`](../../../src/lib/line/data.ts)) — `reviewId`, `threadId`, `conversationId`, and three arrays of `LineReviewContextMessageDto` ([`data.ts:150-162`](../../../src/lib/line/data.ts)): `lineMessages`, `websiteMessages`, and a `combinedTimeline`. Each entry carries `source: "line" | "website"`, `roleLabel`, text, timestamp, `direction`, `role`, `messageType`, `isRetracted`, and creator stamps. The LINE side defaults to the 30 most recent messages ([`data.ts:1040-1045`](../../../src/lib/line/data.ts)).
+
+**Status codes:** 200 · 401 · 404 `Review not found`.
 
 ### `POST /api/line/scheduler-reviews/[reviewId]/operational-plan`
 
-Rebuild the deterministic operational plan (intent, draft, matched students, candidate sessions, proposed Wise actions) for a pending review. Handler: [`operational-plan/route.ts:13-52`](../../../src/app/api/line/scheduler-reviews/[reviewId]/operational-plan/route.ts).
+Recomputes the operational plan for a pending review — used after an identity or session change makes the stored plan stale. Handler: [`operational-plan/route.ts:13-52`](../../../src/app/api/line/scheduler-reviews/[reviewId]/operational-plan/route.ts).
 
-**Request:** path param `reviewId`; **no body is read at all**.
+**Request:** no body; the request object is ignored.
 
-**Preconditions and side effects, in order:**
+**Flow:** load the review → 404 if missing; reject a non-pending review with **400** `Only pending reviews can be rebuilt`; load the inbound message → 404 `Inbound LINE message not found`; run `buildLineOperationalReviewPlan` over `{ contactId, messageText, classifierCategory }` ([`operational.ts:584-589`](../../../src/lib/line/operational.ts)); persist the result.
 
-1. Load the review → **404 `{ "error": "Review not found" }`** ([`:21-24`](../../../src/app/api/line/scheduler-reviews/[reviewId]/operational-plan/route.ts)).
-2. **400 `{ "error": "Only pending reviews can be rebuilt" }`** unless `status === "pending_review"` ([`:25-27`](../../../src/app/api/line/scheduler-reviews/[reviewId]/operational-plan/route.ts)).
-3. Load the inbound message → **404 `{ "error": "Inbound LINE message not found" }`** ([`:29-32`](../../../src/app/api/line/scheduler-reviews/[reviewId]/operational-plan/route.ts)).
-4. `buildLineOperationalReviewPlan` re-infers the intent, re-resolves verified links, reloads future sessions, and rebuilds the candidate/action lists ([`operational.ts:584-640`](../../../src/lib/line/operational.ts)); `intentType: "new_request"` short-circuits to an empty plan with `writebackStatus: "not_applicable"` ([`operational.ts:591-602`](../../../src/lib/line/operational.ts)). `patchLineSchedulerOperationalPlan` then persists `intentType`, `intentPayload`, `proposedDraft` (falling back to the existing draft when the new one is empty, [`:44`](../../../src/app/api/line/scheduler-reviews/[reviewId]/operational-plan/route.ts)), `matchedStudentKeys`, `candidateSessions`, `proposedWiseActions`, `adminSelectedSessionIds`, and `writebackStatus` ([`data.ts:938-967`](../../../src/lib/line/data.ts)).
+The rebuild reads only **verified** contact→student links and derives candidate sessions from them ([`operational.ts:604-610`](../../../src/lib/line/operational.ts)); a `new_request` intent short-circuits to an empty plan with `writebackStatus: "not_applicable"`. The persisted `proposedDraft` falls back to the review's existing draft when the new plan produces an empty one ([`route.ts:43`](../../../src/app/api/line/scheduler-reviews/[reviewId]/operational-plan/route.ts)). No Wise call is made — actions are only *proposed*.
 
-**Response 200** — `{ review }`, the reloaded review DTO.
+**Response 200:** `{ review: LineSchedulerReviewDto | null }` (re-read after the update).
 
----
-
-## Wise actions
-
-Append-only audit and confirmation of operational actions against Wise sessions, scoped to one review. **Session required.** Confirmation **never mutates Wise** in this build.
+**Status codes:** 200 · 400 non-pending review · 401 · 404 review or inbound message missing. Note there is no try/catch: a thrown lib error surfaces as an unhandled 500.
 
 ### `GET /api/line/scheduler-reviews/[reviewId]/wise-actions`
 
-List the audit log for a review. Handler: [`wise-actions/route.ts:22-31`](../../../src/app/api/line/scheduler-reviews/[reviewId]/wise-actions/route.ts).
+Lists the Wise-action audit trail for a review. Handler: [`wise-actions/route.ts:22-31`](../../../src/app/api/line/scheduler-reviews/[reviewId]/wise-actions/route.ts).
 
-**Response 200** — `{ logs }`, `LineWiseActionLogDto[]` newest-first ([`data.ts:1028-1038`](../../../src/lib/line/data.ts)); each entry carries `actionType`, `status`, `dryRun`, `wiseSessionIds`, `requestPayload`, `responsePayload`, `errorMessage`, and the creating actor ([`data.ts:135-148`](../../../src/lib/line/data.ts)). No 404 — an unknown `reviewId` yields an empty array.
+**Response 200:** `{ logs: LineWiseActionLogDto[] }` ([`data.ts:135-148`](../../../src/lib/line/data.ts)) — `actionType`, `status`, `dryRun`, `wiseSessionIds`, `requestPayload`, `responsePayload`, `errorMessage`, creator stamps — ordered `createdAt DESC`. An unknown `reviewId` yields an empty array, not a 404.
+
+**Status codes:** 200 · 401.
 
 ### `POST /api/line/scheduler-reviews/[reviewId]/wise-actions`
 
-Confirm one proposed Wise action. Handler: [`wise-actions/route.ts:33-68`](../../../src/app/api/line/scheduler-reviews/[reviewId]/wise-actions/route.ts).
+Confirms one proposed Wise action. **Records an audit row; never mutates Wise.** Handler: [`wise-actions/route.ts:33-67`](../../../src/app/api/line/scheduler-reviews/[reviewId]/wise-actions/route.ts).
 
-**Body** (`.strict()`, [`:8-11`](../../../src/app/api/line/scheduler-reviews/[reviewId]/wise-actions/route.ts)):
+**Body** (`.strict()`, [`route.ts:8-11`](../../../src/app/api/line/scheduler-reviews/[reviewId]/wise-actions/route.ts)): `actionId` (1–160), optional `selectedSessionIds` (each 1–240, ≤80 entries). When omitted or empty, the action's own `wiseSessionIds` are used.
 
-| Field | Type | Required | Rule |
-|---|---|---|---|
-| `actionId` | string | yes | trimmed, 1–160; must match an `id` inside the review's `proposedWiseActions`. |
-| `selectedSessionIds` | string[] | no | each trimmed 1–240, ≤80 entries; defaults to the action's own `wiseSessionIds` when omitted or empty ([`operations.ts:42-47`](../../../src/lib/wise/operations.ts)). |
+**Behaviour** ([`wise/operations.ts:26-95`](../../../src/lib/wise/operations.ts)) — both branches write a log row and patch the review's operational state:
 
-**Side effects** — `confirmLineWiseAction` ([`operations.ts:26-95`](../../../src/lib/wise/operations.ts)) writes an audit row and updates the review's writeback state, and nothing else:
+| `WISE_SESSION_OPERATIONS_VERIFIED` | Log `status` | `dryRun` | Review `writebackStatus` | Response `endpointVerified` |
+|---|---|---|---|---|
+| not `"true"` | `manual_required` (with the message `Wise cancel/reschedule endpoint contract is not verified in this environment.`) | `true` | `manual_required` | `false` |
+| `"true"` | `dry_run` (response payload `Dry run recorded; no Wise mutation was sent.`) | `true` | `dry_run` | `true` |
 
-| `WISE_SESSION_OPERATIONS_VERIFIED` | Log written | Review `writebackStatus` |
-|---|---|---|
-| not `"true"` ([`operations.ts:10-12`](../../../src/lib/wise/operations.ts)) | `status: "manual_required"`, `dryRun: true`, `errorMessage: "Wise cancel/reschedule endpoint contract is not verified in this environment."` | `manual_required` |
-| `"true"` | `status: "dry_run"`, `dryRun: true`, response `"Dry run recorded; no Wise mutation was sent."` | `dry_run` |
+The comment at [`operations.ts:71-72`](../../../src/lib/wise/operations.ts) states the endpoint contract stays dry-run until the Wise cancel/move request shape is verified — so setting the flag changes the audit label, not the effect.
 
-Either way `adminSelectedSessionIds` is persisted on the review.
+**Response 200:** `{ log: LineWiseActionLogDto, endpointVerified: boolean }`.
 
-**Responses:** **200** `{ log, endpointVerified }`; **400 `{ "error": <message> }`** for every thrown error — "LINE review not found", "Only pending reviews can confirm Wise actions", "Wise action not found", "Select at least one Wise session before confirming" ([`operations.ts:34-47`](../../../src/lib/wise/operations.ts)) — the route catch maps all exceptions to 400 ([`:64-67`](../../../src/app/api/line/scheduler-reviews/[reviewId]/wise-actions/route.ts)), so even a missing review surfaces as 400 rather than 404; plus shared 401 / Invalid JSON / Invalid request.
+**Status codes:** 200 · 400 invalid JSON, Zod failure, or any thrown error — `LINE review not found`, `Only pending reviews can confirm Wise actions`, `Wise action not found`, `Select at least one Wise session before confirming` all surface as **400**, including the not-found cases · 401.
 
 ---
 
 ## Messages
 
-Per-inbound-message operations. **Session required.**
-
 ### `POST /api/line/messages/[messageId]/promote`
 
-Manually escalate a message the classifier did not queue into a pending review. Handler: [`promote/route.ts:15-32`](../../../src/app/api/line/messages/[messageId]/promote/route.ts).
+Promotes a message the classifier missed into a pending review. Handler: [`promote/route.ts:15-32`](../../../src/app/api/line/messages/[messageId]/promote/route.ts). No body.
 
-**Request:** path param `messageId`; no body is read.
+**Side effects** ([`review-service.ts:423-462`](../../../src/lib/line/review-service.ts)): if a review already exists for that inbound message, it is returned with `alreadyExisted: true` and nothing is written. Otherwise the message's classification feedback is stamped `scheduling_request` (which also removes it from the false-negative queue), and a review is created with an empty `proposedDraft`, no selected suggestion, and a synthesized classification whose summary/rationale default to `Promoted from the missed-message queue` / `Manually promoted by an admin from the missed-message queue.`
 
-**Side effects** (`promoteLineMessageToReview`, [`review-service.ts:423-463`](../../../src/lib/line/review-service.ts)): if a review already exists for the message it is returned as-is with `alreadyExisted: true` and nothing is written. Otherwise it records classification feedback (`reviewedCategory: "scheduling_request"`, actor-attributed) and creates a `pending_review` row with an **empty** `proposedDraft`, no selected tutors, and the message's stored classifier confidence/summary (defaulting to "Promoted from the missed-message queue") — the same shape as the no-AI webhook path. It **never** calls the AI and **never** sends a LINE message.
+**Response 200:** `{ review: LineSchedulerReviewDto, alreadyExisted: boolean }`.
 
-**Responses:** **200** `{ review, alreadyExisted }`; **404 `{ "error": "LINE message not found" }`** when the id is unknown *or* the message has no non-blank text ([`:27-29`](../../../src/app/api/line/messages/[messageId]/promote/route.ts), [`review-service.ts:428-431`](../../../src/lib/line/review-service.ts)).
+**Status codes:** 200 · 401 · 404 `LINE message not found` — also returned when the message exists but its text is blank ([`review-service.ts:428-431`](../../../src/lib/line/review-service.ts)).
 
 ### `PATCH /api/line/messages/[messageId]/classification-feedback`
 
-Record a human correction of the classifier verdict — the accuracy signal behind the analytics block. Handler: [`classification-feedback/route.ts:20-52`](../../../src/app/api/line/messages/[messageId]/classification-feedback/route.ts).
+Records the human-reviewed classifier category, feeding classification accuracy in the analytics payload. Handler: [`classification-feedback/route.ts:20-51`](../../../src/app/api/line/messages/[messageId]/classification-feedback/route.ts).
 
-**Body** (`.strict()`, [`:7-9`](../../../src/app/api/line/messages/[messageId]/classification-feedback/route.ts)): `reviewedCategory` — required enum `scheduling_request | scheduling_change | non_scheduling | unclear`.
+**Body** (`.strict()`): `reviewedCategory` ∈ `scheduling_request | scheduling_change | non_scheduling | unclear`.
 
-**Side effects:** stamps `classificationReviewedCategory`, `classificationReviewedCorrect` (computed by strict comparison against the stored `classifierCategory`), the reviewer email/name, and `classificationReviewedAt` ([`data.ts:682-729`](../../../src/lib/line/data.ts)). Setting `classificationReviewedAt` also removes the message from the false-negative queue.
+**Side effects** ([`data.ts:682-729`](../../../src/lib/line/data.ts)): reads the existing `classifierCategory`, computes `classificationReviewedCorrect` by equality, then writes the reviewed category, the correctness flag, the actor, and `classificationReviewedAt`. Stamping `classificationReviewedAt` is what drops the message out of the false-negative queue.
 
-**Responses:** **200** `{ feedback }` = `{ id, classifierCategory, classificationReviewedCategory, classificationReviewedCorrect }`; **404 `{ "error": "LINE message not found" }`**; plus shared 401 / Invalid JSON / Invalid request.
+**Response 200:** `{ feedback: { id, classifierCategory, classificationReviewedCategory, classificationReviewedCorrect } }`.
 
----
-
-## Students
-
-### `GET /api/line/students`
-
-Typeahead search over current credit-control students, used when linking a contact to a student. **Session required.** Handler: [`students/route.ts:6-19`](../../../src/app/api/line/students/route.ts).
-
-**Query param:** `q`. A trimmed query **shorter than 2 characters** short-circuits to **200 `{ students: [] }`** without querying ([`:12-15`](../../../src/app/api/line/students/route.ts)).
-
-**Response 200** — `{ students }`, up to 20 `LineStudentSearchRow`s (`wiseStudentId`, `studentKey`, `studentName`, `parentName`, `activated`, `hasFutureSessions`, `hasLivePackage`, plus `matchType` ∈ `exact_code | nickname_code | student_key | student_name | parent_name`) ([`student-links.ts:45-65`, `:603-639`](../../../src/lib/line/student-links.ts)). Ranking is match-quality first, then activated / future-sessions / live-package, then name.
+**Status codes:** 200 · 400 invalid JSON / Zod failure · 401 · 404 `LINE message not found`.
 
 ---
 
-## Contacts — labels and student links
+## Contacts and student links
 
-Per-contact label edits and the contact↔student link lifecycle. **Session required.** The shared response DTO is `LineContactStudentLinkDto` ([`student-links.ts:20-43`](../../../src/lib/line/student-links.ts)) — link + student identity, `status` (`suggested | verified | rejected`), `confidence`, free-form `evidence`, reviewer/assignment attribution, and three `currentStudent*` liveness flags.
+A **contact→student link** (`line_contact_student_links`, unique on `(contactId, studentKey)`) is the identity join between a LINE user and a credit-control student. Its `status` is `suggested | verified | rejected` ([`student-links.ts:7`](../../../src/lib/line/student-links.ts)). The invariant (IDENT-02, [`student-links.ts:529`](../../../src/lib/line/student-links.ts)) is that machine-derived links are **always** inserted as `suggested`, never `verified`; only an explicit human action promotes one.
+
+The DTO returned by these endpoints is `LineContactStudentLinkDto` ([`student-links.ts:20-43`](../../../src/lib/line/student-links.ts)): link id, contact id, Wise/student identifiers, status, confidence, evidence blob, reviewer stamps, validation-assignment fields, and three live-student flags resolved against the current credit-control snapshot (`currentStudentActivated`, `currentStudentHasFutureSessions`, `currentStudentHasLivePackage`) — `null` when the student is no longer in the snapshot.
 
 ### `PATCH /api/line/contacts/[contactId]`
 
-Edit the staff-applied parent/student labels on a contact and re-derive link suggestions. Handler: [`[contactId]/route.ts:15-42`](../../../src/app/api/line/contacts/[contactId]/route.ts).
+Updates the free-text labels on a contact and re-derives suggestions from the new student label. Handler: [`[contactId]/route.ts:15-42`](../../../src/app/api/line/contacts/[contactId]/route.ts).
 
-**Body** (`.strict()`, [`:8-11`](../../../src/app/api/line/contacts/[contactId]/route.ts)):
+**Body** (`.strict()`, [`route.ts:8-11`](../../../src/app/api/line/contacts/[contactId]/route.ts)): `linkedParentLabel` (≤200, nullable, optional), `linkedStudentLabel` (≤500, nullable, optional).
 
-| Field | Type | Rule |
-|---|---|---|
-| `linkedParentLabel` | string \| null | optional, trimmed, ≤200 |
-| `linkedStudentLabel` | string \| null | optional, trimmed, ≤500 |
+**Write semantics matter here:** `updateLineContactLabels` sets **both** columns using `input.x ?? null` ([`data.ts:366-382`](../../../src/lib/line/data.ts)), so omitting a field **clears** it rather than leaving it alone. This is a full replace, not a partial merge.
 
-> **Not a partial update.** `updateLineContactLabels` writes `input.X ?? null` for *both* columns ([`data.ts:374-381`](../../../src/lib/line/data.ts)), so omitting one field **clears** it. Callers must send both labels on every request.
+The handler then runs `ensureLineContactStudentLinkSuggestions` with the new student label ([`student-links.ts:478-545`](../../../src/lib/line/student-links.ts)), which parses dotted student codes out of the label, matches them against the current student directory, and inserts `status: "suggested"`, `confidence: 0.95` rows with `onConflictDoNothing`. Existing links are never downgraded or deleted.
 
-**Side effects:** writes the labels, then `ensureLineContactStudentLinkSuggestions` re-parses the new student label for dotted student codes and inserts `status: "suggested"` links with `confidence: 0.95` (`onConflictDoNothing` on `(contactId, studentKey)`) — never `verified`, and existing rows are never downgraded ([`student-links.ts:468-537`](../../../src/lib/line/student-links.ts)).
+**Response 200:** `{ links: LineContactStudentLinkDto[] }` (all links for the contact, ordered by status then student name).
 
-**Response 200** — `{ links }`, the contact's full `LineContactStudentLinkDto[]` after the update. **No 404** — an unknown `contactId` updates zero rows and returns `{ "links": [] }`.
+**Status codes:** 200 · 400 invalid JSON / Zod failure · 401. There is no 404 — an unknown `contactId` updates zero rows and returns an empty `links` array.
 
 ### `GET /api/line/contacts/[contactId]/student-links`
 
-List a contact's student links. Handler: [`student-links/route.ts:30-40`](../../../src/app/api/line/contacts/[contactId]/student-links/route.ts).
+Lists links for a contact. Handler: [`student-links/route.ts:30-40`](../../../src/app/api/line/contacts/[contactId]/student-links/route.ts).
 
-**Side effect (a read that writes):** the handler calls `ensureLineContactStudentLinkSuggestions` with no label override, so a plain `GET` can insert new `suggested` link rows derived from the contact's display name + stored student label before returning ([`student-links.ts:468-537`](../../../src/lib/line/student-links.ts)).
+**Not purely a read.** It calls `ensureLineContactStudentLinkSuggestions` with no label override, so the contact's stored label is re-parsed and any newly matching suggestions are **inserted** before the list is returned.
 
-**Response 200** — `{ links }`.
+**Response 200:** `{ links: LineContactStudentLinkDto[] }`. **Status codes:** 200 · 401.
 
 ### `POST /api/line/contacts/[contactId]/student-links`
 
-Create (or upgrade) a **verified** link from this contact to a specific current student. Handler: [`student-links/route.ts:42-76`](../../../src/app/api/line/contacts/[contactId]/student-links/route.ts).
+Creates (or upgrades) a **verified** link from an admin's explicit student pick. Handler: [`student-links/route.ts:42-76`](../../../src/app/api/line/contacts/[contactId]/student-links/route.ts).
 
-**Body** (`.strict()`, [`:12-14`](../../../src/app/api/line/contacts/[contactId]/student-links/route.ts)): `studentKey` — required string, trimmed, 1–240.
+**Body** (`.strict()`): `studentKey` (1–240, trimmed).
 
-**Side effects:** `createVerifiedLineContactStudentLink` upserts on `(contactId, studentKey)` with `status: "verified"`, `confidence: 1`, `evidence.source: "admin_search"`, and the reviewer email/name/timestamp — on conflict it **overwrites** an existing `suggested` or `rejected` row ([`student-links.ts:643-691`](../../../src/lib/line/student-links.ts)).
+**Side effects** ([`student-links.ts:674-722`](../../../src/lib/line/student-links.ts)): resolves the student in the current credit-control snapshot — a miss is a 404. Inserts with `status: "verified"`, `confidence: 1`, `evidence.source = "admin_search"` and the reviewer stamps, using `onConflictDoUpdate` on `(contactId, studentKey)`; an existing `suggested` or `rejected` row for the same pair is therefore promoted to `verified` in place.
 
-**Responses:** **201** `{ link, links }`; **404 `{ "error": "Current credit-control student not found" }`** when the key is absent from the active credit-control snapshot ([`:70-72`](../../../src/app/api/line/contacts/[contactId]/student-links/route.ts)); plus shared 401 / Invalid JSON / Invalid request.
+**Response 201:** `{ link: LineContactStudentLinkDto, links: LineContactStudentLinkDto[] }`.
+
+**Status codes:** 201 · 400 invalid JSON / Zod failure · 401 · 404 `Current credit-control student not found`.
 
 ### `PATCH /api/line/contacts/[contactId]/student-links`
 
-Verify or reject an existing link by id. Handler: [`student-links/route.ts:78-113`](../../../src/app/api/line/contacts/[contactId]/student-links/route.ts).
+Verifies or rejects one existing link from the review workspace. Handler: [`student-links/route.ts:78-113`](../../../src/app/api/line/contacts/[contactId]/student-links/route.ts).
 
-**Body** (`.strict()`, [`:16-19`](../../../src/app/api/line/contacts/[contactId]/student-links/route.ts)):
+**Body** (`.strict()`): `action` ∈ `verify | reject`, `linkId` (uuid). The action maps to `status: "verified" | "rejected"`.
 
-| Field | Type | Rule |
-|---|---|---|
-| `action` | `"verify"` \| `"reject"` | required; mapped to status `verified` / `rejected` ([`:104`](../../../src/app/api/line/contacts/[contactId]/student-links/route.ts)) |
-| `linkId` | string (UUID) | required |
+**Side effects** ([`student-links.ts:724-753`](../../../src/lib/line/student-links.ts)): a single update scoped by **both** `linkId` and `contactId`, stamping status, reviewer, `reviewedAt`, and clearing `validationNote` (the route passes no note). Unlike the link-validation variant below, this path does **not** re-run the operational-plan recompute.
 
-**Side effects:** the update is scoped to `(linkId, contactId)` — a link belonging to another contact is not touched — and stamps status, reviewer, `reviewedAt`, and `validationNote: null` (this schema has no note field, so any existing note is cleared) ([`student-links.ts:693-722`](../../../src/lib/line/student-links.ts)). Note this is the *contact-scoped* mutator; the queue-scoped one at [`PATCH /api/line/contacts/link-validation/[linkId]`](#patch-apilinecontactslink-validationlinkid) additionally excludes phantoms and triggers a review recompute.
+**Response 200:** `{ link: LineContactStudentLinkDto, links: LineContactStudentLinkDto[] }`.
 
-**Responses:** **200** `{ link, links }`; **404 `{ "error": "Student link not found" }`**; plus shared 401 / Invalid JSON / Invalid request.
+**Status codes:** 200 · 400 invalid JSON / Zod failure · 401 · 404 `Student link not found` (also when the link exists under a different contact).
 
----
+### `GET /api/line/students`
 
-## Contacts — link validation
+Typeahead over the current credit-control student directory, backing the student picker in the LINE review, student-schedule, and student-report workspaces. Handler: [`students/route.ts:6-19`](../../../src/app/api/line/students/route.ts).
 
-The human round-robin tracker that turns `suggested` links into `verified` / `rejected` ones. **Session required.** The *summary* endpoint additionally applies a validation-lead sub-gate (it degrades, it does not 403).
+**Query:** `q`, trimmed. **Fewer than 2 characters returns `{ students: [] }` with a 200** — no error, no query.
 
-### `GET /api/line/contacts/link-validation`
+**Response 200:** `{ students: LineStudentSearchRow[] }` — the directory row (`wiseStudentId`, `studentKey`, `studentName`, `parentName`, `activated`, `hasFutureSessions`, `hasLivePackage`) plus `matchType` ∈ `exact_code | nickname_code | student_key | student_name | parent_name` ([`student-links.ts:45-65`](../../../src/lib/line/student-links.ts)). Default limit 20, not overridable from the route. The search runs against the **active credit-control snapshot**; when there is no active snapshot, the result is empty ([`student-links.ts:653-670`](../../../src/lib/line/student-links.ts)).
 
-List validation tasks for a scope. Handler: [`link-validation/route.ts:23-59`](../../../src/app/api/line/contacts/link-validation/route.ts).
-
-**Query params:**
-
-| Param | Rule | On failure |
-|---|---|---|
-| `scope` | default `"my"`; enum `my \| all \| unassigned \| verified \| rejected \| phantom` ([`link-validation.ts:12`](../../../src/lib/line/link-validation.ts)) | 400 `{ "error": "Invalid scope" }` |
-| `runId` | optional UUID ([`:12`](../../../src/app/api/line/contacts/link-validation/route.ts)) | 400 `{ "error": "Invalid runId" }` |
-| `page` | `z.coerce.number().int().min(1).default(1)` ([`:13`](../../../src/app/api/line/contacts/link-validation/route.ts)) | 400 `{ "error": "Invalid page" }` |
-| `pageSize` | `z.coerce.number().int().min(1).max(100).default(100)` ([`:14`](../../../src/app/api/line/contacts/link-validation/route.ts)); re-clamped to 1–100 in the service ([`link-validation.ts:170-173`](../../../src/lib/line/link-validation.ts)) | 400 `{ "error": "Invalid pageSize" }` |
-
-**Scope semantics** ([`link-validation.ts:420-451`](../../../src/lib/line/link-validation.ts)) — `phantom` is the archive filter and returns **only** quarantined rows (`isPhantom = true`) regardless of status; every other scope excludes phantoms (`realContactCondition()`, [`:246-249`](../../../src/lib/line/link-validation.ts)). `my` = suggested links assigned to the caller's lowercased email (an actor with no email returns an empty task list); `unassigned` = suggested with no assignee; `verified` / `rejected` = by status; `all` = suggested. Rows are ordered parent name → student name → student key → contact display name.
-
-**Response 200** — `{ tasks, reviewers, pagination }` (not wrapped in an envelope key): `tasks` is `LineLinkValidationTaskDto[]` ([`link-validation.ts:20-54`](../../../src/lib/line/link-validation.ts) — link fields plus contact `lineUserId`/`displayName`, OA-resolver provenance, assignment fields, and current-student flags); `reviewers` is every `admin_users` row with its open-assignment count ([`:365-401`](../../../src/lib/line/link-validation.ts)); `pagination` is `{ page, pageSize, total, pageCount }`.
-
-### `GET /api/line/contacts/link-validation/summary`
-
-Validation-lead dashboard counts. Handler: [`summary/route.ts:16-33`](../../../src/app/api/line/contacts/link-validation/summary/route.ts).
-
-**Query param:** `runId` — optional UUID; invalid → **400 `{ "error": "Invalid runId" }`**.
-
-**Auth nuance:** when the caller's email is not a validation lead, the service returns an **empty summary with `canViewTracker: false`** rather than an error ([`link-validation.ts:494-496`, `:143-159`](../../../src/lib/line/link-validation.ts)). The lead list comes from `LINE_VALIDATION_LEAD_EMAILS` (comma-separated) and falls back to a two-address built-in default ([`:220-234`](../../../src/lib/line/link-validation.ts)).
-
-**Response 200** — `{ summary }` = `{ canViewTracker, runId, totals, reviewers, recentActivity }`, where `totals` is `{ assigned, unassigned, verified, rejected, remaining, total, completionRate }` (all phantom-excluded, per IDENT-05) and `reviewers` carries per-reviewer `assigned/verified/rejected/remaining/completionRate` ([`link-validation.ts:62-93`](../../../src/lib/line/link-validation.ts)).
-
-### `POST /api/line/contacts/link-validation/assign`
-
-Distribute suggested links across reviewers round-robin. Handler: [`assign/route.ts:16-46`](../../../src/app/api/line/contacts/link-validation/assign/route.ts).
-
-**Body** (`.strict()`, [`:10-14`](../../../src/app/api/line/contacts/link-validation/assign/route.ts)):
-
-| Field | Type | Required | Rule |
-|---|---|---|---|
-| `runId` | string (UUID) | yes | scopes candidates to one OA-resolver run |
-| `reviewerEmails` | string[] | yes | valid emails, 1–50 |
-| `linkIds` | string[] | no | UUIDs, 1–500; **omit to assign the run's currently unassigned suggested links** ([`link-validation.ts:672-676`](../../../src/lib/line/link-validation.ts)) |
-
-**Side effects:** every reviewer email must exist in `admin_users` or the call throws; candidates are sorted deterministically and handed to `planRoundRobinValidationAssignments`, which balances against each reviewer's existing open-assignment count; each winning row gets `validationAssignedToEmail/Name`, `validationAssignedRunId`, and `validationAssignedAt` ([`link-validation.ts:625-713`](../../../src/lib/line/link-validation.ts)). Phantom rows are excluded from the candidate set. Writes are one `UPDATE` per link and are **not** transactional.
-
-**Response 200** — `{ assigned, tasks, reviewers, pagination }`: the count written plus a fresh `scope: "all"` listing for the run ([`link-validation.ts:705-712`](../../../src/lib/line/link-validation.ts)).
-
-**Errors:** a thrown `LineLinkValidationError` is returned with its own `status` (default 400) and message — "Select at least one reviewer." or "Unknown reviewer email: …" ([`assign/route.ts:40-45`](../../../src/app/api/line/contacts/link-validation/assign/route.ts), [`link-validation.ts:95-103`](../../../src/lib/line/link-validation.ts)). Other exceptions are re-thrown (framework 500). Plus shared 401 / Invalid JSON / Invalid request.
-
-### `PATCH /api/line/contacts/link-validation/[linkId]`
-
-Verify or reject one link from the queue. Handler: [`[linkId]/route.ts:21-54`](../../../src/app/api/line/contacts/link-validation/[linkId]/route.ts).
-
-**Body** (`.strict()`, [`:7-10`](../../../src/app/api/line/contacts/link-validation/[linkId]/route.ts)):
-
-| Field | Type | Rule |
-|---|---|---|
-| `status` | `"verified"` \| `"rejected"` | required |
-| `note` | string \| null | optional, trimmed, ≤1000 → stored as `validationNote` |
-
-**Side effects** ([`link-validation.ts:715-801`](../../../src/lib/line/link-validation.ts)):
-
-- The update is guarded by `isPhantom = false` ([`:737`](../../../src/lib/line/link-validation.ts)) — a quarantined row cannot be resolved and returns 404.
-- **On `verified` only (IDENT-06):** every `pending_review` scheduler row for the same contact is recomputed inline — the operational plan is rebuilt from the inbound message text and re-persisted so `matchedStudentKeys` / `writebackStatus` reflect the new identity, with `adminSelectedSessionIds` reset to `[]`. Per-row failures are swallowed and never abort the status change ([`:749-796`](../../../src/lib/line/link-validation.ts)).
-
-**Responses:** **200** `{ task }` (a `LineLinkValidationTaskDto`); **404 `{ "error": "Student link not found" }`** when the link is missing, phantom, or its contact row is gone; plus shared 401 / Invalid JSON / Invalid request.
+**Status codes:** 200 · 401.
 
 ---
 
-## Contacts — alias import
+## Alias import and profile refresh
 
-Bulk-attach student labels to contacts from a pasted LINE chat list or a screenshot. **Session required.**
+These three back the "import chat list" dialog in the LINE review workspace ([`alias-import-dialog.tsx`](../../../src/components/line-review/alias-import-dialog.tsx)).
 
 ### `POST /api/line/contacts/alias-import/preview`
 
-Parse text and/or an image into proposed alias rows without committing. Handler: [`alias-import/preview/route.ts:30-70`](../../../src/app/api/line/contacts/alias-import/preview/route.ts).
+Turns pasted chat-list text — or a screenshot — into proposed `(contact, aliasLabel)` rows. Writes nothing. Handler: [`preview/route.ts:30-69`](../../../src/app/api/line/contacts/alias-import/preview/route.ts).
 
-**Request: `multipart/form-data`** (the only non-JSON body in this API). A body that is not multipart → **400 `{ "error": "Expected multipart form data" }`** ([`:36-41`](../../../src/app/api/line/contacts/alias-import/preview/route.ts)). Fields:
+**Request:** `multipart/form-data`, **not JSON** — a body that is not form data is a 400 `Expected multipart form data`. Fields:
 
-| Field | Type | Rule |
-|---|---|---|
-| `image` | File | optional; MIME must be `image/png`, `image/jpeg`, or `image/webp`, size ≤ 5 MB ([`:7-8`, `:18-23`](../../../src/app/api/line/contacts/alias-import/preview/route.ts)) |
-| `text` | string | optional; pasted chat-list text |
-| `preferredContactId` | string | optional; biases contact matching |
+| Field | Constraint |
+|---|---|
+| `text` | Optional string; blank counts as absent. |
+| `image` | Optional `File`; ≤ **5 MB** and MIME ∈ `image/png`, `image/jpeg`, `image/webp` ([`route.ts:7-8,15-28`](../../../src/app/api/line/contacts/alias-import/preview/route.ts)). |
+| `preferredContactId` | Optional string; biases auto-selection toward one contact. |
 
-Violations return **400** with the thrown message — "Image must be 5MB or smaller" / "Image must be PNG, JPEG, or WebP". Supplying neither `image` nor `text` → **400 `{ "error": "Paste chat-list text or upload a screenshot" }`** ([`:53-56`](../../../src/app/api/line/contacts/alias-import/preview/route.ts)). When **both** are supplied the image wins — the text branch is never reached ([`contact-aliases.ts:471-474`](../../../src/lib/line/contact-aliases.ts)).
+At least one of `text` / `image` is required, else 400 `Paste chat-list text or upload a screenshot`. When an image is present the route takes the image path (`source: "image"`) and text is ignored.
 
-**Side effects:** none persisted — `previewLineAliasImport` only computes ([`contact-aliases.ts:465-488`](../../../src/lib/line/contact-aliases.ts)). The image path calls OpenAI for extraction.
+**Response 200:** `{ preview: { source: "text" | "image", rows: LineAliasImportPreviewRow[] } }` ([`contact-aliases.ts:59-69`](../../../src/lib/line/contact-aliases.ts)). Each row carries the extracted `aliasLabel` and raw text, `parsedCodes`, `suggestedStudents` (with `matchedCode`/`matchedField` and the three live-student flags), scored `contactCandidates`, and `autoSelectedContactId`.
 
-**Responses:** **200** `{ preview }` = `{ source: "text" | "image", rows }`, each row carrying `aliasLabel`, `latestMessagePreview`, `timeLabel`, `rawText`, `parsedCodes`, `suggestedStudents`, `contactCandidates` (with `score` + `reasons`), and `autoSelectedContactId` ([`contact-aliases.ts:17-69`](../../../src/lib/line/contact-aliases.ts)). On a thrown error: **503** when the message contains `"configured"` — i.e. `OPENAI_API_KEY` / the AI scheduler is unconfigured ([`contact-aliases.ts:363-365`](../../../src/lib/line/contact-aliases.ts)) — otherwise **500** ([`:66-69`](../../../src/app/api/line/contacts/alias-import/preview/route.ts)).
+**Status codes:** 200 · 400 non-form body, oversized/unsupported image, or neither input · 401 · **503** when the thrown message contains `configured` — the image path throws `AI scheduler is not configured` ([`contact-aliases.ts:365`](../../../src/lib/line/contact-aliases.ts)) because screenshot extraction goes through the OpenAI-backed extractor · 500 for any other failure ([`route.ts:66-69`](../../../src/app/api/line/contacts/alias-import/preview/route.ts)).
 
 ### `POST /api/line/contacts/alias-import/commit`
 
-Persist the reviewed alias rows. Handler: [`alias-import/commit/route.ts:14-40`](../../../src/app/api/line/contacts/alias-import/commit/route.ts).
+Applies chosen alias labels. Handler: [`commit/route.ts:14-40`](../../../src/app/api/line/contacts/alias-import/commit/route.ts).
 
-**Body** (JSON, `.strict()`, [`:7-12`](../../../src/app/api/line/contacts/alias-import/commit/route.ts)): `rows` — required array of 1–100 objects `{ contactId: UUID, aliasLabel: string trimmed 1–500 }`.
+**Body** (`.strict()`): `rows` — 1 to **100** entries of `{ contactId: uuid, aliasLabel: string 1–500 }`.
 
-**Side effects:** per row, sets the contact's `linkedStudentLabel` (which, per the `updateLineContactLabels` semantics above, also **clears `linkedParentLabel`**) and then regenerates suggested links from the new label; blank labels are skipped silently ([`contact-aliases.ts:490-507`](../../../src/lib/line/contact-aliases.ts)). Rows are applied sequentially and non-transactionally — a mid-list failure leaves earlier rows applied.
+**Side effects** ([`contact-aliases.ts:490-507`](../../../src/lib/line/contact-aliases.ts)): per row, sets `linkedStudentLabel` to the alias and re-derives suggestions. Because it routes through `updateLineContactLabels`, committing an alias also **clears `linkedParentLabel`** on that contact. Rows are applied sequentially with no transaction — a mid-list failure leaves earlier rows applied. Blank labels are skipped silently.
 
-**Response 200** — `{ result }` = `{ applied: [{ contactId, aliasLabel, suggestedLinkCount }] }` ([`contact-aliases.ts:71-77`](../../../src/lib/line/contact-aliases.ts)); plus shared 401 / Invalid JSON / Invalid request.
+**Response 200:** `{ result: { applied: Array<{ contactId, aliasLabel, suggestedLinkCount }> } }`, where `suggestedLinkCount` counts the contact's links still in `suggested` status after the write.
 
----
-
-## Contacts — bulk identity maintenance
-
-Long-running jobs that reconcile the contact table against the LINE Official Account. **Session required.**
+**Status codes:** 200 · 400 invalid JSON / Zod failure · 401. No 404 for an unknown `contactId`.
 
 ### `POST /api/line/contacts/refresh-profiles`
 
-Re-fetch display name / picture / status for **every** contact from the LINE profile API. Handler: [`refresh-profiles/route.ts:6-14`](../../../src/app/api/line/contacts/refresh-profiles/route.ts).
+Re-fetches the LINE display name and picture for **every** stored contact. Handler: [`refresh-profiles/route.ts:6-14`](../../../src/app/api/line/contacts/refresh-profiles/route.ts). No body, no parameters, no scoping — the full table, ordered by `lastSeenAt DESC`, one sequential LINE profile call each ([`contact-aliases.ts:509-543`](../../../src/lib/line/contact-aliases.ts)).
 
-**Request:** no body, no params — the handler signature is `POST()`. Note this route has **no `maxDuration` override**: it runs one sequential LINE call per contact ([`contact-aliases.ts:509-543`](../../../src/lib/line/contact-aliases.ts)) under the platform default.
+**Response 200:** `{ result: { total, refreshed, missing, failed: Array<{ lineUserId, error }> } }`. A profile the LINE API does not return counts as `missing`; a thrown error is captured per contact into `failed` and never aborts the run.
 
-**Side effects:** updates each contact's cached profile, ordered by `lastSeenAt` desc. A missing profile counts as `missing` (no write); a thrown error is captured per contact and does not abort the run.
+**Status codes:** 200 · 401. The handler has no try/catch and declares **no `maxDuration`**, so it runs at the platform default despite being an unbounded fan-out.
 
-**Response 200** — `{ result }` = `{ total, refreshed, missing, failed: [{ lineUserId, error }] }` ([`contact-aliases.ts:79-84`](../../../src/lib/line/contact-aliases.ts)).
+---
+
+## Followers re-anchor and backlog recovery
 
 ### `POST /api/line/contacts/followers-reanchor`
 
-Combined followers re-anchor **plus** backlog identity recovery. Handler: [`followers-reanchor/route.ts:15-41`](../../../src/app/api/line/contacts/followers-reanchor/route.ts). `maxDuration = 300` ([`:13`](../../../src/app/api/line/contacts/followers-reanchor/route.ts)) — the re-anchor pass makes one sequential LINE call per follower.
+Seeds contacts from the OA's real followers list and recovers backlog identity. Handler: [`followers-reanchor/route.ts:15-41`](../../../src/app/api/line/contacts/followers-reanchor/route.ts). `export const maxDuration = 300`.
 
-**Query param:** `dryRun` — exactly `"true"` skips the re-anchor pass entirely (writes nothing) and runs backlog recovery read-only ([`:25`, `:31-32`](../../../src/app/api/line/contacts/followers-reanchor/route.ts)). No body is read; there is no Zod schema.
+**Query:** `dryRun=true` — anything else is treated as a live run.
 
-**Side effects:**
+**Behaviour:**
 
-- `runLineFollowersReanchor` (skipped on `dryRun`) paginates the follower-ids endpoint, fetches each profile, upserts a `line_contacts` row keyed on `lineUserId` (`onConflictDoNothing`, idempotent), and runs the display-name suggestion path per follower ([`student-links.ts:764-812`](../../../src/lib/line/student-links.ts)).
-- `runLineBacklogRecovery` re-fetches the full follower roster (batched, concurrency 10), matches fresh display names against human-verified OA-resolver targets, and inserts links **always as `suggested`, never `verified`** (IDENT-02/IDENT-07) ([`backlog-recovery.ts:40-100`](../../../src/lib/line/backlog-recovery.ts)). The route comment flags that this combined path double-fetches the roster; the single-fetch production vehicle is the internal cron `/api/internal/line-backlog-recovery` ([`followers-reanchor/route.ts:7-12`](../../../src/app/api/line/contacts/followers-reanchor/route.ts), see [`reference/api/internal-crons.md`](./internal-crons.md)).
+| Mode | `runLineFollowersReanchor` | `runLineBacklogRecovery` |
+|---|---|---|
+| live (default) | runs; paginates the follower list, fetches each profile, upserts contacts with `onConflictDoNothing`, then runs the display-name suggestion path per follower ([`student-links.ts:795-852`](../../../src/lib/line/student-links.ts)) | runs with `dryRun: false`; writes `suggested` links |
+| `?dryRun=true` | **skipped entirely**; `reanchor` is `null` | runs read-only, returning `dryRunMatches` |
 
-**Responses:** **200** `{ reanchor, backlog }` — `reanchor` is `{ followerCount, upsertedContacts, suggestionsCreated, errors[] }` or `null` on `dryRun`; `backlog` is `{ contactsScanned, targetsCount, matchedCount, insertedCount, dryRun, dryRunMatches? }` (`dryRunMatches` only when `dryRun=true`). **500 `{ "error": <message> }`** on any thrown error, falling back to "Failed to run followers re-anchor / backlog recovery" ([`:34-40`](../../../src/app/api/line/contacts/followers-reanchor/route.ts)).
+`runLineBacklogRecovery` ([`backlog-recovery.ts:74-110`](../../../src/lib/line/backlog-recovery.ts)) fetches the full follower roster itself, batch-fetches profiles at concurrency 10, loads human-verified OA-resolver targets, and matches display names against them. It **always** inserts `status: "suggested"` — never `verified` (IDENT-02) — with ambiguous matches at `confidence: 0.60` and `evidence.ambiguous = true`, guarded by `onConflictDoNothing`.
+
+**Known inefficiency, documented in the route itself** ([`route.ts:7-13`](../../../src/app/api/line/contacts/followers-reanchor/route.ts)): on a live run the roster is fetched twice — once sequentially by the re-anchor (~1,962 LINE calls) and once batched by the recovery. The comment names `POST /api/internal/line-backlog-recovery` as the clean production vehicle; that route is registered `manualOnly: true` with `schedule: null` in the cron registry ([`cron-registry.ts:384-396`](../../../src/lib/data-health/cron-registry.ts)) and has no `vercel.json` entry.
+
+**Response 200:** `{ reanchor: LineFollowersReanchorResult | null, backlog: LineBacklogRecoveryResult }` — `{ followerCount, upsertedContacts, suggestionsCreated, errors[] }` ([`student-links.ts:777-782`](../../../src/lib/line/student-links.ts)) and `{ contactsScanned, targetsCount, matchedCount, insertedCount, dryRun, dryRunMatches? }` ([`backlog-recovery.ts:40-48`](../../../src/lib/line/backlog-recovery.ts)).
+
+**Status codes:** 200 · 401 · 500 `{ error: <message> }`.
 
 ---
 
-## Contacts — OA resolver
+## Link validation
 
-A browser-extension-driven bulk pipeline that maps LINE OA chats to students. Two endpoints are **token-authenticated** (the extension) and export `OPTIONS` with permissive CORS (`Access-Control-Allow-Origin: *`, sent on every response including errors); the other four require a **session**.
+The validation worklist is a review queue over `suggested` links produced by the OA resolver, distributed round-robin to reviewers. Backing UI: [`link-validation-panel.tsx`](../../../src/components/line-review/link-validation-panel.tsx) and [`mapping-validation-workspace.tsx`](../../../src/components/line-review/mapping-validation-workspace.tsx).
 
-### `GET /api/line/contacts/oa-resolver/worklist`
+`LineLinkValidationTaskDto` ([`link-validation.ts:20-54`](../../../src/lib/line/link-validation.ts)) is the link DTO plus contact context (`lineUserId`, display name, `linkedStudentLabel`), OA-resolver provenance (`lineChatUrl`, `lineOaAccountId`, `chatTitle`, `adminNoteRaw`, `relationshipRole`, `sourceRunId`, `sourceRowId`, `matchedCode`, `matchedField`), the assignment fields, and the three live-student flags.
 
-The extension pulls its work items. **Auth: per-run bearer token.** Handler: [`worklist/route.ts:21-34`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts).
+**Phantom quarantine (D-03/IDENT-05).** Every scope except `phantom` filters out quarantined rows via `realContactCondition()`; `phantom` is the archive view and returns only quarantined rows, at any status ([`link-validation.ts:420-428`](../../../src/lib/line/link-validation.ts)).
 
-**Request:** `Authorization: Bearer <token>`; no query, no body — the token identifies the run. `OPTIONS` returns **204** with the CORS headers ([`:17-19`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts)).
+### `GET /api/line/contacts/link-validation`
 
-**Responses:** **200** `{ worklist }` = `{ runId, expiresAt, rows }`, where `rows` are only the run's `pending` rows that have a `searchCode` — so the list shrinks as the extension reports progress ([`oa-resolver.ts:608-633`](../../../src/lib/line/oa-resolver.ts)) — each `{ rowId, studentKey, studentName, parentName, searchCode, searchCodes[] }`. **401 `{ "error": "Invalid or expired resolver token" }`** when the header is absent, the hash does not match, or `expiresAt` has passed ([`oa-resolver.ts:592-606`](../../../src/lib/line/oa-resolver.ts)) — all with CORS headers attached.
+Lists tasks for a scope. Handler: [`link-validation/route.ts:23-58`](../../../src/app/api/line/contacts/link-validation/route.ts).
+
+**Query parameters:**
+
+| Param | Validation | Default | Notes |
+|---|---|---|---|
+| `scope` | `z.enum(LINE_LINK_VALIDATION_SCOPES)` = `my \| all \| unassigned \| verified \| rejected \| phantom` ([`link-validation.ts:12`](../../../src/lib/line/link-validation.ts)) | `my` | Invalid → 400 `Invalid scope`. |
+| `runId` | uuid, optional | — | Restricts to links sourced from one OA-resolver run. Invalid → 400 `Invalid runId`. |
+| `page` | `z.coerce.number().int().min(1)` | 1 | Invalid → 400 `Invalid page`. |
+| `pageSize` | `z.coerce.number().int().min(1).max(100)` | 100 | Invalid → 400 `Invalid pageSize`. |
+
+Scope semantics ([`link-validation.ts:430-451`](../../../src/lib/line/link-validation.ts)): `my` = `suggested` assigned to the caller's email (an actor with no email gets an empty task list, not an error); `unassigned` = `suggested` with no assignee; `all` = `suggested`; `verified` / `rejected` = that status; `phantom` = the archive. Ordering is parent name → student name → student key → contact display name.
+
+**Response 200:** `{ tasks, reviewers, pagination }` where `reviewers` is `{ email, name, openAssignments }[]` and `pagination` is `{ page, pageSize, total, pageCount }` ([`link-validation.ts:56-77`](../../../src/lib/line/link-validation.ts)).
+
+**Status codes:** 200 · 400 (four distinct messages above) · 401.
+
+### `GET /api/line/contacts/link-validation/summary`
+
+Progress tracker for validation leads. Handler: [`summary/route.ts:16-33`](../../../src/app/api/line/contacts/link-validation/summary/route.ts).
+
+**Query:** `runId` (uuid, optional) → 400 `Invalid runId`.
+
+**Authorization inside the payload.** This is the only per-actor gate in the LINE group: a caller whose email is not in `lineValidationLeadEmails()` gets **200** with an empty summary carrying `canViewTracker: false` ([`link-validation.ts:494-496`](../../../src/lib/line/link-validation.ts)) — not a 403.
+
+**Response 200:** `{ summary: LineLinkValidationSummaryDto }` ([`link-validation.ts:79-93`](../../../src/lib/line/link-validation.ts)) — `canViewTracker`, `runId`, `totals` (`assigned`, `unassigned`, `verified`, `rejected`, `remaining`, `total`, `completionRate`), per-reviewer `reviewers[]`, and `recentActivity` as task DTOs. All aggregates exclude phantom rows.
+
+**Status codes:** 200 · 400 `Invalid runId` · 401.
+
+### `POST /api/line/contacts/link-validation/assign`
+
+Distributes suggested links across reviewers round-robin. Handler: [`assign/route.ts:16-46`](../../../src/app/api/line/contacts/link-validation/assign/route.ts).
+
+**Body** (`.strict()`, [`route.ts:10-14`](../../../src/app/api/line/contacts/link-validation/assign/route.ts)): `runId` (uuid, required), `reviewerEmails` (1–50 valid emails), `linkIds` (1–500 uuids, optional).
+
+**Candidate selection** ([`link-validation.ts:667-681`](../../../src/lib/line/link-validation.ts)): non-phantom `suggested` links from that run; with `linkIds`, exactly those (de-duplicated, and **including already-assigned ones**, so this is how a reassignment happens); without `linkIds`, only currently unassigned links. `planRoundRobinValidationAssignments` seeds from each reviewer's existing open-assignment count so the distribution levels out. Writes are per-row updates in a loop — no transaction.
+
+**Reviewer validation:** every email must exist in `admin_users`; an unknown one throws `LineLinkValidationError` → **400** `Unknown reviewer email: …`. An empty normalized list → 400 `Select at least one reviewer.`
+
+**Response 200:** `{ assigned, tasks, reviewers, pagination }` — the count plus a fresh `scope: "all"` listing for the run.
+
+**Status codes:** 200 · 400 invalid JSON, Zod failure, or `LineLinkValidationError` (which carries its own `status`, default 400) · 401. Any non-`LineLinkValidationError` is rethrown and surfaces as 500 ([`route.ts:40-44`](../../../src/app/api/line/contacts/link-validation/assign/route.ts)).
+
+### `PATCH /api/line/contacts/link-validation/[linkId]`
+
+Records a reviewer's verify/reject decision. Handler: [`[linkId]/route.ts:21-53`](../../../src/app/api/line/contacts/link-validation/[linkId]/route.ts).
+
+**Body** (`.strict()`): `status` ∈ `verified | rejected`; `note` (≤1000, nullable, optional).
+
+**Side effects** ([`link-validation.ts:715-801`](../../../src/lib/line/link-validation.ts)): the update is scoped by `isPhantom = false`, so a quarantined link can never be decided — it returns 404. On success it stamps status, reviewer, `reviewedAt`, and `validationNote`.
+
+**On `verified` it also triggers an inline recompute (IDENT-06):** every `pending_review` scheduler review for that contact has its operational plan rebuilt so `matchedStudentKeys` and `writebackStatus` reflect the newly verified identity without a manual step. This is fail-isolated — per-review errors are swallowed by `.catch()` and never fail the status patch ([`link-validation.ts:749-796`](../../../src/lib/line/link-validation.ts)). It is also unbounded: a contact with many pending reviews does that many plan rebuilds inside the request.
+
+**Response 200:** `{ task: LineLinkValidationTaskDto }`.
+
+**Status codes:** 200 · 400 invalid JSON / Zod failure · 401 · 404 `Student link not found` (missing, phantom, or its contact row missing).
+
+---
+
+## OA resolver
+
+The OA resolver pairs a server-side **run** with a browser extension that walks the LINE Official Account console. A run is created with a one-time opaque token; the extension polls the worklist and posts rows back with that token; an admin then commits the matched rows into `suggested` links. `LineOaResolverRunDto` ([`oa-resolver.ts:64-84`](../../../src/lib/line/oa-resolver.ts)) carries the run's status, `tokenPrefix`, seven per-status row counters, creator stamps, `expiresAt`, and the full `rows: LineOaResolverRowDto[]` ([`oa-resolver.ts:41-62`](../../../src/lib/line/oa-resolver.ts)).
+
+**Token model** ([`oa-resolver.ts:540-587`](../../../src/lib/line/oa-resolver.ts)): the token is `<runId>.<32 random bytes base64url>`, returned **once** at creation and stored only as a hash; a display-safe `tokenPrefix` is persisted for the UI. TTL is **8 hours** (`TOKEN_TTL_MS`, [`oa-resolver.ts:111`](../../../src/lib/line/oa-resolver.ts)); authentication requires both a hash match and `expiresAt > now()` ([`oa-resolver.ts:592-606`](../../../src/lib/line/oa-resolver.ts)).
+
+Row status ∈ `pending | matched | ambiguous | no_match | error | needs_manual_code | committed`; run status ∈ `active | committed | expired` ([`oa-resolver.ts:12-20`](../../../src/lib/line/oa-resolver.ts)).
 
 ### `GET /api/line/contacts/oa-resolver/runs`
 
-List runs, or fetch the caller's latest run. **Session required.** Handler: [`runs/route.ts:17-33`](../../../src/app/api/line/contacts/oa-resolver/runs/route.ts).
+Lists runs, or fetches the caller's most recent one. Handler: [`runs/route.ts:17-33`](../../../src/app/api/line/contacts/oa-resolver/runs/route.ts).
 
-**Query params:**
+**Query:** `latest=true` switches modes. Otherwise `limit` is parsed with `Number(... ?? "20")`, falls back to 20 when not finite, and is then clamped to **1–50** ([`oa-resolver.ts:526-539`](../../../src/lib/line/oa-resolver.ts)).
 
-| Param | Behaviour |
-|---|---|
-| `latest=true` | Returns `{ run }` from `getLatestLineOaResolverRun` — the newest run created by the caller's email, falling back to the newest run overall when the session has no email ([`oa-resolver.ts:505-524`](../../../src/lib/line/oa-resolver.ts)). `run` is `null` when none exist. |
-| otherwise | Returns `{ runs }` from `listLineOaResolverRuns`. `limit` is `Number(param ?? "20")`, falling back to 20 when non-finite ([`runs/route.ts:25-27`](../../../src/app/api/line/contacts/oa-resolver/runs/route.ts)), then clamped by the service to 1–50 ([`oa-resolver.ts:530`](../../../src/lib/line/oa-resolver.ts)). |
+**Response 200:** `{ runs: LineOaResolverRunDto[] }` (newest first) — or, with `latest=true`, `{ run: LineOaResolverRunDto | null }`, resolved as the newest run created by the caller's email, falling back to the newest run overall when the session has no email ([`oa-resolver.ts:505-524`](../../../src/lib/line/oa-resolver.ts)). Every run is returned with its full row set.
 
-Each `LineOaResolverRunDto` carries the run status (`active | committed | expired`), `tokenPrefix` (never the token), the seven per-status row counters, creator, `expiresAt`, and its full `rows` array ([`oa-resolver.ts:41-84`](../../../src/lib/line/oa-resolver.ts)).
+**Status codes:** 200 · 401.
 
 ### `POST /api/line/contacts/oa-resolver/runs`
 
-Create a run and mint the extension token. **Session required.** Handler: [`runs/route.ts:35-43`](../../../src/app/api/line/contacts/oa-resolver/runs/route.ts).
+Creates a run and returns its one-time token. Handler: [`runs/route.ts:35-43`](../../../src/app/api/line/contacts/oa-resolver/runs/route.ts). No body.
 
-**Request:** no body, no params.
+**Side effects:** mints the token, inserts the run with the hash, prefix, initial counters and `expiresAt = now + 8h`, then materializes one row per student from `buildLineOaResolverWorklist(listCurrentLineStudents(db))` — students whose search code cannot be derived land as `needs_manual_code` rather than `pending`.
 
-**Side effects** (`createLineOaResolverRun`, [`oa-resolver.ts:540-590`](../../../src/lib/line/oa-resolver.ts)): generates `token = "<runId>.<32 random bytes base64url>"`, stores only its SHA hash plus a display `tokenPrefix`, sets `expiresAt` to **now + 8 hours** (`TOKEN_TTL_MS`, [`:111`](../../../src/lib/line/oa-resolver.ts)), then materializes one `line_oa_resolver_rows` row per student in the active credit-control snapshot — status `pending` when a search code could be derived, else `needs_manual_code` ([`oa-resolver.ts:312-342`](../../../src/lib/line/oa-resolver.ts)).
+**Response 201:** `{ run: LineOaResolverRunDto, token: string }`. **The `token` is never retrievable again** — only `tokenPrefix` is stored in a readable form.
 
-**Response 201** — `{ run, token }`. **The plaintext `token` is returned exactly once**; it cannot be recovered afterwards.
+**Status codes:** 201 · 401.
 
 ### `GET /api/line/contacts/oa-resolver/runs/[runId]`
 
-Fetch one run with its rows (ordered by `lineUserId`, then `studentName`). **Session required.** Handler: [`runs/[runId]/route.ts:8-21`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/route.ts).
+Fetches one run with its rows. Handler: [`[runId]/route.ts:8-21`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/route.ts). Read-only.
 
-**Responses:** **200** `{ run }`; **404 `{ "error": "Resolver run not found" }`**.
+**Response 200:** `{ run: LineOaResolverRunDto }`. **Status codes:** 200 · 401 · 404 `Resolver run not found`.
+
+### `GET /api/line/contacts/oa-resolver/worklist`
+
+The extension's polling endpoint. Handler: [`worklist/route.ts:21-34`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts).
+
+**Auth:** public in middleware; `Authorization: Bearer <token>` parsed by a case-insensitive regex ([`route.ts:11-15`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts)). The run id is derived from the token, so the URL carries no identifier. CORS is `Access-Control-Allow-Origin: *` with a companion `OPTIONS` returning 204.
+
+**Response 200:** `{ worklist: { runId, expiresAt, rows } }` where each row is `{ rowId, studentKey, studentName, parentName, searchCode, searchCodes }` ([`oa-resolver.ts:91-98`](../../../src/lib/line/oa-resolver.ts)). Only rows still `pending` **and** carrying a `searchCode` are returned, ordered by student name ([`oa-resolver.ts:620-633`](../../../src/lib/line/oa-resolver.ts)); `searchCodes` adds sibling codes sharing the same parent.
+
+**Status codes:** 200 · 401 `Invalid or expired resolver token` — the single response for a missing, malformed, unknown, or expired token.
 
 ### `POST /api/line/contacts/oa-resolver/runs/[runId]/rows`
 
-The extension posts back resolved / ambiguous / failed rows. **Auth: per-run bearer token.** Handler: [`rows/route.ts:52-90`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/rows/route.ts).
+The extension's write-back endpoint. Handler: [`rows/route.ts:52-89`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/rows/route.ts).
 
-**Request:** `Authorization: Bearer <token>` — absent → **401 `{ "error": "Missing resolver token" }`** ([`:54-59`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/rows/route.ts)). `OPTIONS` returns **204** + CORS ([`:48-50`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/rows/route.ts)).
+**Auth:** bearer token only — **no session**. The token must authenticate *and* its run id must equal the `[runId]` path segment, else 401 ([`oa-resolver.ts:741`](../../../src/lib/line/oa-resolver.ts)). Same `*` CORS + `OPTIONS` 204 as the worklist.
 
-**Body** (`.strict()`, [`:36-38`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/rows/route.ts)): `rows` — array of **1–50** row objects ([`:24-34`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/rows/route.ts)):
+**Body** (`.strict()` at all three levels, [`rows/route.ts:12-38`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/rows/route.ts)): `rows` — 1 to **50** entries of
 
-| Field | Type | Required | Rule |
-|---|---|---|---|
-| `rowId` | string (UUID) | yes | must belong to `runId`, else the row is silently skipped ([`oa-resolver.ts:744-752`](../../../src/lib/line/oa-resolver.ts)) |
-| `status` | enum | yes | `matched \| ambiguous \| no_match \| error` |
-| `lineChatUrl`, `chatTitle` | string \| null | no | ≤500 |
-| `matchMode`, `captureMode` | string \| null | no | ≤80 |
-| `errorMessage` | string \| null | no | ≤1000 |
-| `candidates` | array | no | ≤25 candidate objects |
-| `evidence` | record | no | free-form |
+- `rowId` (uuid) and `status` ∈ `matched | ambiguous | no_match | error` (required);
+- `lineChatUrl` / `chatTitle` (≤500), `matchMode` / `captureMode` (≤80), `errorMessage` (≤1000), `evidence` (free-form record) — all optional;
+- `candidates` — up to 25 objects of `{ lineChatUrl ≤500, chatTitle?, adminNoteRaw? ≤1000, relationshipRole? ∈ mom|dad|secretary|other|unknown, candidateRank? 1–100, captureMode?, matchMode?, searchCode? ≤120, siblingFanout? }`.
 
-Each candidate (`.strict()`, [`:12-22`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/rows/route.ts)): `lineChatUrl` (required, ≤500), plus optional `chatTitle`, `adminNoteRaw` (≤1000), `relationshipRole` (`mom | dad | secretary | other | unknown`), `candidateRank` (int 1–100), `captureMode`, `matchMode`, `searchCode` (≤120), `siblingFanout` (bool).
+**Side effects** ([`oa-resolver.ts:722-865`](../../../src/lib/line/oa-resolver.ts)): each row is looked up scoped to the run and silently skipped if absent. Candidates are normalized (chat URLs parsed into `lineOaAccountId` + `lineUserId`), the first becomes the row's primary, and the full candidate list is stored in `evidence.candidateContacts`. A matched/ambiguous row also **fans out to sibling rows** sharing a normalized parent name — those rows are updated with the same candidates flagged `siblingFanout: true` and `matchMode: "sibling_fanout"`, skipping any row already `committed` ([`oa-resolver.ts:670-720`](../../../src/lib/line/oa-resolver.ts)). No contacts or links are written here; that is the commit step.
 
-**Side effects** (`updateLineOaResolverRowsFromExtension`, [`oa-resolver.ts:722-…`](../../../src/lib/line/oa-resolver.ts)) — the guards demote rather than reject:
+**Response 200:** `{ run: LineOaResolverRunDto }` (the refreshed run with all rows).
 
-- `matched`/`ambiguous` with **zero parseable candidate URLs** → the row is written as `status: "error"` with an explanatory `errorMessage`, and the response is still 200 ([`oa-resolver.ts:762-777`](../../../src/lib/line/oa-resolver.ts)).
-- `no_match` whose evidence still shows the extension parked on a LINE OA chat URL → `status: "error"`, `matchMode: "extension_context_guard"` ([`oa-resolver.ts:779-803`](../../../src/lib/line/oa-resolver.ts)).
-- A valid multi-candidate result is stored as `ambiguous`; single-candidate as `matched`, with candidates preserved in `evidence.candidateContacts` ([`oa-resolver.ts:805-817`](../../../src/lib/line/oa-resolver.ts)).
-- Candidates can **fan out to sibling rows** sharing a normalized parent name, marked `matchMode: "sibling_fanout"` and `siblingFanout: true` ([`oa-resolver.ts:670-720`](../../../src/lib/line/oa-resolver.ts)).
-
-**Responses:** **200** `{ run }` (the refreshed run DTO, CORS headers attached); **400** `{ "error": "Invalid JSON" }` or the Invalid-request envelope, both with CORS; **401 `{ "error": "Invalid or expired resolver token" }`** when the token is invalid, expired, or belongs to a different run ([`:82-87`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/rows/route.ts), [`oa-resolver.ts:740-741`](../../../src/lib/line/oa-resolver.ts)).
+**Status codes:** 200 · 400 `Invalid JSON` / Zod failure · 401 `Missing resolver token` (no header) or `Invalid or expired resolver token` (bad token, or run-id mismatch). All responses carry the CORS headers.
 
 ### `POST /api/line/contacts/oa-resolver/runs/[runId]/commit`
 
-Materialize resolved rows into contacts + student links. **Session required.** Handler: [`commit/route.ts:17-49`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/commit/route.ts).
+Turns resolved rows into contacts and suggested links. Handler: [`commit/route.ts:17-49`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/commit/route.ts).
 
-**Body** (`.strict()`, [`:7-13`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/commit/route.ts)) — both fields optional, and **a missing or malformed JSON body is tolerated as `{}`** rather than 400 ([`:23-28`](../../../src/app/api/line/contacts/oa-resolver/runs/[runId]/commit/route.ts)):
+**Body** (`.strict()`, optional — a missing or unparseable body is treated as `{}`): `rowIds` (1–1000 uuids) and/or `selectedCandidates` (≤5000 entries of `{ rowId: uuid, lineUserId: /^U[a-fA-F0-9]{32}$/ }`).
 
-| Field | Type | Rule |
-|---|---|---|
-| `rowIds` | string[] (UUID) | 1–1000; restricts the commit to those rows |
-| `selectedCandidates` | array | ≤5000 of `{ rowId: UUID, lineUserId: /^U[a-fA-F0-9]{32}$/ }`; picks which candidates of an ambiguous row to commit, and derives `rowIds` when `rowIds` is absent |
+**Selection** ([`oa-resolver.ts:948-1000`](../../../src/lib/line/oa-resolver.ts)): only rows in `matched` or `ambiguous` are eligible. `rowIds` narrows the set; if absent, the rowIds implied by `selectedCandidates` are used; if both are absent, **every eligible row in the run is committed**. `selectedCandidates` additionally filters *which* candidate contacts within a row are committed — the mechanism for disambiguating an `ambiguous` row.
 
-With neither field the commit covers every `matched` + `ambiguous` row in the run ([`oa-resolver.ts:963-985`](../../../src/lib/line/oa-resolver.ts)).
+**Per row:** if the student is gone from the current snapshot, or no candidate survives filtering, the row is set to `status: "error"` with a message (`Student no longer exists in current snapshot.` / `No selected valid LINE OA chat URL candidates at commit.`) and counted as `skipped`. Otherwise each surviving candidate gets a contact (get-or-create by `lineUserId`) and a **`suggested`** link carrying full provenance evidence — resolver source, chat URL, matched code/field, relationship role, candidate rank, sibling-fanout flag, run/row ids, and the live-student flags. `committed` counts **candidates**, not rows, so a two-candidate row adds 2.
 
-**Side effects** (`commitLineOaResolverRun`, [`oa-resolver.ts:948-1099`](../../../src/lib/line/oa-resolver.ts)):
+Afterwards the run's counters are recomputed and the run flips to `committed` (with `committedAt`) only when no `matched` or `ambiguous` rows remain; otherwise it stays `active` and can be committed again ([`oa-resolver.ts:1083-1096`](../../../src/lib/line/oa-resolver.ts)). No transaction wraps the loop.
 
-- Per selected candidate: get-or-create a `line_contacts` row for the `lineUserId`, then upsert a **`suggested`** contact↔student link carrying full resolver evidence (OA account id, original URL, search code, relationship role, sibling-fanout flag, run/row ids) with `sourceKind: "line_oa_resolver"`. Commit **never produces a `verified` link** — verification is the job of the link-validation queue.
-- A row whose student vanished from the current snapshot, or that has no selected valid candidate, is set to `status: "error"` with a reason and counted as `skipped`.
-- Committed rows get `status: "committed"` plus `committedContactId` / `committedLinkId`; run counters are recomputed; the run flips to `status: "committed"` (with `committedAt`) only when no `matched` or `ambiguous` rows remain, otherwise it stays `active` ([`oa-resolver.ts:1083-1093`](../../../src/lib/line/oa-resolver.ts)).
+**Response 200:** `{ result: { committed, skipped, run: LineOaResolverRunDto } }`.
 
-**Responses:** **200** `{ result }` = `{ committed, skipped, run }` ([`oa-resolver.ts:100-104`](../../../src/lib/line/oa-resolver.ts)); **404 `{ "error": "Resolver run not found" }`**; **400** on Zod failure only.
+**Status codes:** 200 · 400 Zod failure (note: a malformed JSON body is *not* a 400 here — it degrades to `{}` and commits the whole run) · 401 · 404 `Resolver run not found`.
 
 ---
 
-_Verified against HEAD + uncommitted WIP on 2026-05-31._
+## Cross-references
+
+- Feature meaning, identity rules, and the review lifecycle: [`docs/features/line-integration.md`](../../features/line-integration.md)
+- Table columns for the 13 `line_*` tables declared in [`schema.ts`](../../../src/lib/db/schema.ts): [`docs/reference/database/index.md`](../database/index.md)
+- The full endpoint inventory across all groups: [`docs/reference/api/index.md`](index.md)
+- Cron schedules, including `/api/internal/line-credit-digest` and the manual-only `/api/internal/line-backlog-recovery`: [`docs/reference/crons.md`](../crons.md)
+- Environment variables: [`docs/reference/env.md`](../env.md)
+
+_Verified against main@0cd1e81 (clean tree) on 2026-09-02._
