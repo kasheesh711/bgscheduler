@@ -44,6 +44,14 @@ function isPathAllowed(pathname: string, allowedPages: string[] | null): boolean
     pathname === "/api/post-class-feedback" ||
     pathname.startsWith("/api/post-class-feedback/")
   ) return true;
+  // Unearned Revenue resolves dedicated viewer/access_manager grants freshly
+  // from Postgres on every page and API request.
+  if (
+    pathname === "/unearned-revenue" ||
+    pathname.startsWith("/unearned-revenue/") ||
+    pathname === "/api/unearned-revenue" ||
+    pathname.startsWith("/api/unearned-revenue/")
+  ) return true;
   // Learning Plans uses a fresh database grant in its Server Components.
   // Coarse-pass only the authenticated page namespace here; do not broaden
   // this exception to similarly named pages or an API namespace.

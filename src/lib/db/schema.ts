@@ -4809,3 +4809,242 @@ export const lineGroupScheduleSends = pgTable("line_group_schedule_sends", {
   index("line_group_schedule_sends_group_student_idx").on(table.groupId, table.studentKey),
   index("line_group_schedule_sends_created_idx").on(table.createdAt),
 ]);
+
+// ── Unearned Revenue ─────────────────────────────────────────────────
+
+/** Fresh, feature-local capabilities. These grants supersede legacy page scope only here. */
+export const unearnedRevenueAccessGrants = pgTable("unearned_revenue_access_grants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull(),
+  capability: text("capability").notNull(),
+  grantedByEmail: text("granted_by_email").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("ur_access_email_capability_idx").on(table.email, table.capability),
+  index("ur_access_capability_idx").on(table.capability, table.email),
+  check("ur_access_capability_check", sql`${table.capability} in ('viewer', 'access_manager')`),
+]);
+
+/** Immutable access-matrix history, including optimistic-lock versions. */
+export const unearnedRevenueAccessAuditLog = pgTable("unearned_revenue_access_audit_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  targetEmail: text("target_email").notNull(),
+  action: text("action").notNull(),
+  actorEmail: text("actor_email").notNull(),
+  beforeValue: jsonb("before_value").$type<Record<string, unknown> | null>(),
+  afterValue: jsonb("after_value").$type<Record<string, unknown> | null>(),
+  version: integer("version").notNull(),
+  note: text("note"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("ur_access_audit_target_idx").on(table.targetEmail, table.createdAt),
+  index("ur_access_audit_actor_idx").on(table.actorEmail, table.createdAt),
+]);
+
+/** Import attempts. The partial unique index is the Postgres single-flight guard. */
+export const unearnedRevenueSyncRuns = pgTable("unearned_revenue_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  triggerType: text("trigger_type").notNull().default("cron"),
+  actorEmail: text("actor_email"),
+  spreadsheetId: text("spreadsheet_id").notNull(),
+  sourceRunId: text("source_run_id"),
+  sourceFingerprint: text("source_fingerprint"),
+  sourceRevision: text("source_revision"),
+  cutoff: date("cutoff", { mode: "string" }),
+  importedSnapshotId: uuid("imported_snapshot_id"),
+  periodCount: integer("period_count").notNull().default(0),
+  studentRowCount: integer("student_row_count").notNull().default(0),
+  accountRowCount: integer("account_row_count").notNull().default(0),
+  lotRowCount: integer("lot_row_count").notNull().default(0),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  errorSummary: text("error_summary"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("ur_sync_single_running_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'running'`),
+  index("ur_sync_status_started_idx").on(table.status, table.startedAt),
+]);
+
+/** Immutable imported workbook header. At most one snapshot is active. */
+export const unearnedRevenueSnapshots = pgTable("unearned_revenue_snapshots", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  syncRunId: uuid("sync_run_id").notNull().references(() => unearnedRevenueSyncRuns.id),
+  active: boolean("active").notNull().default(false),
+  spreadsheetId: text("spreadsheet_id").notNull(),
+  sourceRunId: text("source_run_id").notNull(),
+  sourceFingerprint: text("source_fingerprint").notNull(),
+  sourceRevision: text("source_revision").notNull(),
+  cutoff: date("cutoff", { mode: "string" }).notNull(),
+  generatedAtBangkok: timestamp("generated_at_bangkok", { withTimezone: true }).notNull(),
+  importedAt: timestamp("imported_at", { withTimezone: true }).notNull().defaultNow(),
+  workbookSchemaVersion: integer("workbook_schema_version").notNull(),
+  canonicalModel: text("canonical_model").notNull(),
+  modelVersion: text("model_version").notNull(),
+  modelMode: text("model_mode").notNull(),
+  reviewConditions: text("review_conditions").array().notNull().default(sql`'{}'::text[]`),
+  sheetIds: jsonb("sheet_ids").$type<Record<string, number>>().notNull().default({}),
+  rowCounts: jsonb("row_counts").$type<Record<string, number>>().notNull().default({}),
+}, (table) => [
+  uniqueIndex("ur_snapshot_source_contract_idx").on(
+    table.sourceRunId,
+    table.sourceFingerprint,
+    table.sourceRevision,
+    table.cutoff,
+  ),
+  uniqueIndex("ur_snapshot_one_active_idx")
+    .on(table.active)
+    .where(sql`${table.active} = true`),
+  index("ur_snapshot_cutoff_idx").on(table.cutoff, table.importedAt),
+]);
+
+/** One formula-backed finance total per reporting period. */
+export const unearnedRevenuePeriods = pgTable("unearned_revenue_periods", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  snapshotId: uuid("snapshot_id").notNull().references(() => unearnedRevenueSnapshots.id, { onDelete: "cascade" }),
+  periodEnd: date("period_end", { mode: "string" }).notNull(),
+  periodKind: text("period_kind").notNull(),
+  isLatest: boolean("is_latest").notNull().default(false),
+  openingLiabilityThb: numeric("opening_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  deferredNewLiabilityThb: numeric("deferred_new_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  recognizedRevenueThb: numeric("recognized_revenue_thb", { precision: 20, scale: 8 }).notNull(),
+  closingLiabilityThb: numeric("closing_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  legacyClosingLiabilityThb: numeric("legacy_closing_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  fifoClosingLiabilityThb: numeric("fifo_closing_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  fifoVsLegacyDifferenceThb: numeric("fifo_vs_legacy_difference_thb", { precision: 20, scale: 8 }).notNull(),
+  remainingPaidCredits: numeric("remaining_paid_credits", { precision: 20, scale: 8 }).notNull(),
+  attributedLiabilityThb: numeric("attributed_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  residualLiabilityThb: numeric("residual_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  attributionPercent: numeric("attribution_percent", { precision: 20, scale: 8 }).notNull(),
+  studentCount: integer("student_count").notNull(),
+  accountCount: integer("account_count").notNull(),
+  ambiguousCount: integer("ambiguous_count").notNull().default(0),
+  unattributedCount: integer("unattributed_count").notNull().default(0),
+  fallbackValuedCount: integer("fallback_valued_count").notNull().default(0),
+  negativeBalanceCount: integer("negative_balance_count").notNull().default(0),
+  apiVarianceCount: integer("api_variance_count").notNull().default(0),
+  traceSpreadsheetId: text("trace_spreadsheet_id").notNull(),
+  traceSheetId: integer("trace_sheet_id").notNull(),
+  traceRow: integer("trace_row").notNull(),
+  traceA1: text("trace_a1").notNull(),
+}, (table) => [
+  uniqueIndex("ur_period_snapshot_end_idx").on(table.snapshotId, table.periodEnd),
+  index("ur_period_latest_idx").on(table.snapshotId, table.isLatest),
+]);
+
+/** Student totals aggregate every class account by stable WISE student ID. */
+export const unearnedRevenueStudentPeriods = pgTable("unearned_revenue_student_periods", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  snapshotId: uuid("snapshot_id").notNull().references(() => unearnedRevenueSnapshots.id, { onDelete: "cascade" }),
+  periodEnd: date("period_end", { mode: "string" }).notNull(),
+  periodKind: text("period_kind").notNull(),
+  isLatest: boolean("is_latest").notNull().default(false),
+  studentId: text("student_id").notNull(),
+  studentName: text("student_name").notNull(),
+  parentName: text("parent_name").notNull().default(""),
+  accountCount: integer("account_count").notNull(),
+  ledgerRemainingCredits: numeric("ledger_remaining_credits", { precision: 20, scale: 8 }).notNull(),
+  remainingPaidCredits: numeric("remaining_paid_credits", { precision: 20, scale: 8 }).notNull(),
+  legacyClosingLiabilityThb: numeric("legacy_closing_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  fifoOpeningLiabilityThb: numeric("fifo_opening_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  fifoDeferredNewLiabilityThb: numeric("fifo_deferred_new_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  fifoRecognizedRevenueThb: numeric("fifo_recognized_revenue_thb", { precision: 20, scale: 8 }).notNull(),
+  fifoClosingLiabilityThb: numeric("fifo_closing_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  canonicalClosingLiabilityThb: numeric("canonical_closing_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  attributedLiabilityThb: numeric("attributed_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  residualLiabilityThb: numeric("residual_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  attributionPercent: numeric("attribution_percent", { precision: 20, scale: 8 }).notNull(),
+  reviewState: text("review_state").notNull(),
+  traceSpreadsheetId: text("trace_spreadsheet_id").notNull(),
+  traceSheetId: integer("trace_sheet_id").notNull(),
+  traceRow: integer("trace_row").notNull(),
+  traceA1: text("trace_a1").notNull(),
+}, (table) => [
+  uniqueIndex("ur_student_snapshot_period_idx").on(table.snapshotId, table.periodEnd, table.studentId),
+  index("ur_student_period_liability_idx").on(table.snapshotId, table.periodEnd, table.canonicalClosingLiabilityThb),
+  index("ur_student_name_idx").on(table.snapshotId, table.studentName),
+]);
+
+/** Student/class reconciliation rows. */
+export const unearnedRevenueAccountPeriods = pgTable("unearned_revenue_account_periods", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  snapshotId: uuid("snapshot_id").notNull().references(() => unearnedRevenueSnapshots.id, { onDelete: "cascade" }),
+  periodEnd: date("period_end", { mode: "string" }).notNull(),
+  accountId: text("account_id").notNull(),
+  studentId: text("student_id").notNull(),
+  classId: text("class_id").notNull(),
+  studentName: text("student_name").notNull(),
+  className: text("class_name").notNull(),
+  classSubject: text("class_subject").notNull().default(""),
+  ledgerRemainingCredits: numeric("ledger_remaining_credits", { precision: 20, scale: 8 }).notNull(),
+  openingPaidCredits: numeric("opening_paid_credits", { precision: 20, scale: 8 }).notNull(),
+  deferredPaidCredits: numeric("deferred_paid_credits", { precision: 20, scale: 8 }).notNull(),
+  recognizedPaidCredits: numeric("recognized_paid_credits", { precision: 20, scale: 8 }).notNull(),
+  closingPaidCredits: numeric("closing_paid_credits", { precision: 20, scale: 8 }).notNull(),
+  legacyClosingLiabilityThb: numeric("legacy_closing_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  fifoOpeningLiabilityThb: numeric("fifo_opening_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  fifoDeferredNewLiabilityThb: numeric("fifo_deferred_new_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  fifoRecognizedRevenueThb: numeric("fifo_recognized_revenue_thb", { precision: 20, scale: 8 }).notNull(),
+  fifoClosingLiabilityThb: numeric("fifo_closing_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  canonicalClosingLiabilityThb: numeric("canonical_closing_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  attributedLiabilityThb: numeric("attributed_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  residualLiabilityThb: numeric("residual_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  reviewState: text("review_state").notNull(),
+  traceSpreadsheetId: text("trace_spreadsheet_id").notNull(),
+  traceSheetId: integer("trace_sheet_id").notNull(),
+  traceRow: integer("trace_row").notNull(),
+  traceA1: text("trace_a1").notNull(),
+}, (table) => [
+  uniqueIndex("ur_account_snapshot_period_idx").on(table.snapshotId, table.periodEnd, table.accountId),
+  index("ur_account_student_period_idx").on(table.snapshotId, table.periodEnd, table.studentId),
+]);
+
+/** Package-lot detail. Formula and source anchors are kept separately. */
+export const unearnedRevenueLotPeriods = pgTable("unearned_revenue_lot_periods", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  snapshotId: uuid("snapshot_id").notNull().references(() => unearnedRevenueSnapshots.id, { onDelete: "cascade" }),
+  periodEnd: date("period_end", { mode: "string" }).notNull(),
+  lotId: text("lot_id").notNull(),
+  accountId: text("account_id").notNull(),
+  studentId: text("student_id").notNull(),
+  classId: text("class_id").notNull(),
+  studentName: text("student_name").notNull(),
+  className: text("class_name").notNull(),
+  lotKind: text("lot_kind").notNull(),
+  matchStatus: text("match_status").notNull(),
+  reviewState: text("review_state").notNull(),
+  packageName: text("package_name").notNull(),
+  transactionNumber: text("transaction_number").notNull().default(""),
+  salesKey: text("sales_key").notNull().default(""),
+  transactionDate: date("transaction_date", { mode: "string" }),
+  creditEventKey: text("credit_event_key").notNull().default(""),
+  originalCredits: numeric("original_credits", { precision: 20, scale: 8 }).notNull(),
+  packageCredits: numeric("package_credits", { precision: 20, scale: 8 }).notNull(),
+  negativeRecoveryCredits: numeric("negative_recovery_credits", { precision: 20, scale: 8 }).notNull(),
+  openingCredits: numeric("opening_credits", { precision: 20, scale: 8 }).notNull(),
+  deferredCredits: numeric("deferred_credits", { precision: 20, scale: 8 }).notNull(),
+  recognizedCredits: numeric("recognized_credits", { precision: 20, scale: 8 }).notNull(),
+  remainingCredits: numeric("remaining_credits", { precision: 20, scale: 8 }).notNull(),
+  unitRateThb: numeric("unit_rate_thb", { precision: 20, scale: 8 }).notNull(),
+  netPaymentThb: numeric("net_payment_thb", { precision: 20, scale: 8 }).notNull(),
+  openingLiabilityThb: numeric("opening_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  deferredNewLiabilityThb: numeric("deferred_new_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  recognizedRevenueThb: numeric("recognized_revenue_thb", { precision: 20, scale: 8 }).notNull(),
+  closingLiabilityThb: numeric("closing_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  candidateSalesKeys: text("candidate_sales_keys").notNull().default(""),
+  formulaSpreadsheetId: text("formula_spreadsheet_id").notNull(),
+  formulaSheetId: integer("formula_sheet_id").notNull(),
+  formulaRow: integer("formula_row").notNull(),
+  formulaA1: text("formula_a1").notNull(),
+  sourceSpreadsheetId: text("source_spreadsheet_id"),
+  sourceSheetId: integer("source_sheet_id"),
+  sourceRow: integer("source_row"),
+  sourceA1: text("source_a1"),
+}, (table) => [
+  uniqueIndex("ur_lot_snapshot_period_idx").on(table.snapshotId, table.periodEnd, table.lotId),
+  index("ur_lot_student_period_idx").on(table.snapshotId, table.periodEnd, table.studentId),
+  index("ur_lot_account_period_idx").on(table.snapshotId, table.periodEnd, table.accountId),
+]);

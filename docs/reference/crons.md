@@ -2,9 +2,9 @@
 
 **Status:** Stable. **Authoritative source:** [`vercel.json`](../../vercel.json).
 
-Every scheduled job in BGScheduler is a Vercel Cron entry. Vercel reads `vercel.json` at deploy time and, on each tick, issues an HTTP request to the configured `path` carrying `Authorization: Bearer $CRON_SECRET`. The code models that request as a `GET` — every scheduled route exports `GET`, the registry records `routeMethod: "GET"` for all 17 scheduled jobs, and the Wise sync route annotates its handler "Vercel cron triggers via GET" ([`sync-wise/route.ts:68`](../../src/app/api/internal/sync-wise/route.ts)). There is no in-process scheduler anywhere in the codebase — **if a handler is not listed in `vercel.json`, nothing fires it automatically.**
+Every scheduled job in BGScheduler is a Vercel Cron entry. Vercel reads `vercel.json` at deploy time and, on each tick, issues an HTTP request to the configured `path` carrying `Authorization: Bearer $CRON_SECRET`. The code models that request as a `GET` — every scheduled route exports `GET`, and the registry records `routeMethod: "GET"` for all 18 scheduled jobs. There is no in-process scheduler anywhere in the codebase — **if a handler is not listed in `vercel.json`, nothing fires it automatically.**
 
-There are **17 cron entries** in `vercel.json` ([`vercel.json:3-72`](../../vercel.json)) and **22 route handlers** under `src/app/api/internal/`. The 5 handlers with no entry are listed in [Internal handlers without a cron schedule](#internal-handlers-without-a-cron-schedule). The in-app registry mirrors that shape exactly: **22 entries, of which 5 carry `manualOnly: true`**, so 17 + 5 = 22 in both directions ([`cron-registry.ts:47-399`](../../src/lib/data-health/cron-registry.ts)).
+There are **18 cron entries** in `vercel.json` and **23 route handlers** under `src/app/api/internal/`. The 5 handlers with no entry are listed in [Internal handlers without a cron schedule](#internal-handlers-without-a-cron-schedule). The in-app registry mirrors that shape exactly: **23 entries, of which 5 carry `manualOnly: true`**, so 18 + 5 = 23 in both directions.
 
 `vercel.json` is 73 lines and carries exactly two keys — `regions` and `crons`. All deployments run in the `sin1` region ([`vercel.json:2`](../../vercel.json)), and there is **no `functions` block**: every timeout on this page is the route file's own `export const maxDuration`, not platform config.
 
@@ -14,9 +14,9 @@ This page is the mechanical reference — schedule, endpoint, auth, timeout, gua
 
 - `SCHEDULED_CRON_JOBS` (registry rows with `manualOnly: false`, [`cron-registry.ts:401`](../../src/lib/data-health/cron-registry.ts)) must equal `vercel.json`'s `crons` array by path and schedule ([`cron-registry.test.ts:19-32`](../../src/lib/data-health/__tests__/cron-registry.test.ts)).
 - Every registry `path` must resolve to a real `route.ts`, and every registry `maxDurationSeconds` must equal the route's exported `maxDuration` ([`cron-registry.test.ts:50-73`](../../src/lib/data-health/__tests__/cron-registry.test.ts)).
-- `vercel.json` must contain exactly the 17 known paths on their pinned schedules, and no two schedules may ever fire in the same UTC minute ([`vercel-crons.test.ts:17-35`](../../src/__tests__/vercel-crons.test.ts), [`:100-127`](../../src/__tests__/vercel-crons.test.ts)).
+- `vercel.json` must contain exactly the 18 known paths on their pinned schedules. The collision test permits only the explicitly approved 01:30 Bangkok overlap between the read-only finance import and the Wise snapshot ([`vercel-crons.test.ts`](../../src/__tests__/vercel-crons.test.ts)).
 
-Adding a cron therefore means editing both files and, if it can collide, moving it to a free minute.
+Adding a cron therefore means editing both files and documenting any deliberate overlap.
 
 ---
 
@@ -28,29 +28,30 @@ Rows are in `vercel.json` order. Schedules are **UTC**; the business timezone is
 |---|---|---|---|---|---|---|
 | 1 | `/api/internal/sync-wise` | `*/30 * * * *` | :00 / :30 hourly | `wise_snapshot` | 800s | Full Wise ETL → new snapshot → atomic promote |
 | 2 | `/api/internal/sync-sales-dashboard` | `10,40 * * * *` | :10 / :40 hourly | `sales_dashboard` | 800s | Re-import refreshable sales sheets + active projection |
-| 3 | `/api/internal/sync-competitor-intelligence` | `28 18 * * 0` | Mon 01:28 weekly | `competitor_intelligence` | 800s | Crawl competitor sources under a budget cap, normalize, AI-summarize |
-| 4 | `/api/internal/sync-credit-control` | `20,50 * * * *` | :20 / :50 hourly | `credit_control` | 800s | Rebuild the prepaid-credit depletion snapshot |
-| 5 | `/api/internal/sync-progress-tests` | `25,55 * * * *` | :25 / :55 hourly | `progress_tests` | 300s | Recompute every-8-classes progress-test cycle state |
-| 6 | `/api/internal/progress-tests/admin-digest` | `35 0 * * *` | 07:35 daily | `progress_tests_digest` | 300s | Email admins the approaching/due progress-test digest |
-| 7 | `/api/internal/sync-wise-activity` | `2,17,32,47 * * * *` | :02/:17/:32/:47 hourly | `wise_activity` | 800s | Mirror Wise audit events into the persisted event store |
-| 8 | `/api/internal/sync-post-class-feedback` | `13,43 * * * *` | :13 / :43 hourly | `post_class_feedback` | 800s | Rolling 4-day feedback collection + AI review + retries + hygiene |
-| 9 | `/api/internal/post-class-feedback-backfill` | `23,53 * * * *` | :23 / :53 hourly | `post_class_feedback_backfill` | 800s | Drain the oldest unreconciled feedback history window |
-| 10 | `/api/internal/post-class-feedback/payout-accrual` | `33 * * * *` | :33 hourly | `post_class_feedback_payout_accrual` | 800s | Unattended charging: sweep → retire → accrue → finalize |
-| 11 | `/api/internal/sync-leave-requests` | `15,45 * * * *` | :15 / :45 hourly | `leave_requests` | 800s | Pull leave-form rows from Sheets, match tutors, notify admins |
-| 12 | `/api/internal/class-assignments/morning` | `41 23 * * *` | 06:41 daily | `classroom_morning` | 800s | Assign rooms for a 7-day horizon, publish, email tutors |
-| 13 | `/api/internal/class-assignments/admin-email` | `4,14,24,36 0 * * *` | 07:04–07:36 daily | `classroom_admin_email` | 300s | Send (or retry) the daily admin classroom summary |
-| 14 | `/api/internal/student-promotions/july-1` | `5 17 30 6 *` | 1 Jul 00:05 (annual) | `student_promotions_july_1` | 800s | One-shot Wise grade/course promotion writeback |
-| 15 | `/api/internal/cron-watchdog` | `7,37 * * * *` | :07 / :37 hourly | `cron_watchdog` | 300s | Sweep every cron's health, email admins on new failures, prune audit rows |
-| 16 | `/api/internal/admissions-notifications` | `12 1 * * *` | 08:12 daily | `admissions_notifications` | 300s | Deadline reminders daily; weekly digest on Bangkok Sundays |
-| 17 | `/api/internal/line-credit-digest` | `3 2 * * *` | 09:03 daily | `line_credit_digest` | 300s | Push the 7-day credit-runout digest to registered LINE staff groups |
+| 3 | `/api/internal/sync-unearned-revenue` | `30 18 * * *` | 01:30 daily | `unearned_revenue` | 800s | Import a stable, published, hard-QA-passed finance workbook snapshot |
+| 4 | `/api/internal/sync-competitor-intelligence` | `28 18 * * 0` | Mon 01:28 weekly | `competitor_intelligence` | 800s | Crawl competitor sources under a budget cap, normalize, AI-summarize |
+| 5 | `/api/internal/sync-credit-control` | `20,50 * * * *` | :20 / :50 hourly | `credit_control` | 800s | Rebuild the prepaid-credit depletion snapshot |
+| 6 | `/api/internal/sync-progress-tests` | `25,55 * * * *` | :25 / :55 hourly | `progress_tests` | 300s | Recompute every-8-classes progress-test cycle state |
+| 7 | `/api/internal/progress-tests/admin-digest` | `35 0 * * *` | 07:35 daily | `progress_tests_digest` | 300s | Email admins the approaching/due progress-test digest |
+| 8 | `/api/internal/sync-wise-activity` | `2,17,32,47 * * * *` | :02/:17/:32/:47 hourly | `wise_activity` | 800s | Mirror Wise audit events into the persisted event store |
+| 9 | `/api/internal/sync-post-class-feedback` | `13,43 * * * *` | :13 / :43 hourly | `post_class_feedback` | 800s | Rolling 4-day feedback collection + AI review + retries + hygiene |
+| 10 | `/api/internal/post-class-feedback-backfill` | `23,53 * * * *` | :23 / :53 hourly | `post_class_feedback_backfill` | 800s | Drain the oldest unreconciled feedback history window |
+| 11 | `/api/internal/post-class-feedback/payout-accrual` | `33 * * * *` | :33 hourly | `post_class_feedback_payout_accrual` | 800s | Unattended charging: sweep → retire → accrue → finalize |
+| 12 | `/api/internal/sync-leave-requests` | `15,45 * * * *` | :15 / :45 hourly | `leave_requests` | 800s | Pull leave-form rows from Sheets, match tutors, notify admins |
+| 13 | `/api/internal/class-assignments/morning` | `41 23 * * *` | 06:41 daily | `classroom_morning` | 800s | Assign rooms for a 7-day horizon, publish, email tutors |
+| 14 | `/api/internal/class-assignments/admin-email` | `4,14,24,36 0 * * *` | 07:04–07:36 daily | `classroom_admin_email` | 300s | Send (or retry) the daily admin classroom summary |
+| 15 | `/api/internal/student-promotions/july-1` | `5 17 30 6 *` | 1 Jul 00:05 (annual) | `student_promotions_july_1` | 800s | One-shot Wise grade/course promotion writeback |
+| 16 | `/api/internal/cron-watchdog` | `7,37 * * * *` | :07 / :37 hourly | `cron_watchdog` | 300s | Sweep every cron's health, email admins on new failures, prune audit rows |
+| 17 | `/api/internal/admissions-notifications` | `12 1 * * *` | 08:12 daily | `admissions_notifications` | 300s | Deadline reminders daily; weekly digest on Bangkok Sundays |
+| 18 | `/api/internal/line-credit-digest` | `3 2 * * *` | 09:03 daily | `line_credit_digest` | 300s | Push the 7-day credit-runout digest to registered LINE staff groups |
 
 Schedule rows: [`vercel.json`](../../vercel.json). Registry rows with labels, cadence, and lateness budgets: [`cron-registry.ts:47-399`](../../src/lib/data-health/cron-registry.ts). `maxDuration` values are read from each route file and asserted equal to the registry by test.
 
-Cadence breakdown: **8** half-hourly, **1** every 15 minutes (Wise activity), **1** hourly (payout accrual), **5** daily, **1** weekly, **1** dated one-shot.
+Cadence breakdown: **8** half-hourly, **1** every 15 minutes (Wise activity), **1** hourly (payout accrual), **6** daily, **1** weekly, **1** dated one-shot.
 
 ### Stagger
 
-Two crons firing in the same UTC minute contend for the same Wise rate limit and Neon connection pool. The Wise client's concurrency limiter is per-invocation, not global, so keeping every job on its own minute is the only lever that prevents contention. A regression test expands every schedule field and fails on any pairwise collision ([`vercel-crons.test.ts:107-127`](../../src/__tests__/vercel-crons.test.ts)); the comment records that six such collisions existed before daily calendar jobs were moved off minutes the half-hourly syncs already owned.
+Two crons firing in the same UTC minute can contend for shared resources. A regression test expands every schedule field and fails on any unapproved pairwise collision. The sole exception is the specified 01:30 Bangkok finance import overlapping the half-hour Wise snapshot: the importer reads Google Sheets and its own Postgres tables and never calls or mutates Wise.
 
 ```mermaid
 gantt
@@ -87,7 +88,7 @@ Firing order within each half hour: `00` Wise snapshot → `02` Wise activity �
 
 **Why Wise activity runs every 15 minutes, not 30.** The activity mirror is the only source of feedback-submission timestamps, so an event written minutes before a `23:59:59.999` Bangkok deadline is mirrored the same evening instead of after midnight. This is a freshness change only — the verdict always reads the event's own immutable timestamp ([`vercel-crons.test.ts:137-146`](../../src/__tests__/vercel-crons.test.ts)). Minutes `2, 17, 32, 47` are asserted free of every other cron ([`:148-161`](../../src/__tests__/vercel-crons.test.ts)).
 
-The five daily jobs **chain** rather than stagger. They all land in the Bangkok morning, and the classroom pair encodes an explicit dependency:
+The six daily jobs include the isolated 01:30 unearned-revenue import and five daytime jobs that **chain** rather than stagger. The classroom pair encodes an explicit dependency:
 
 ```mermaid
 flowchart LR
@@ -173,6 +174,7 @@ Which run table each job's inferred evidence comes from ([`dashboard.ts:752-806`
 | `wise_snapshot` | `sync_runs` |
 | `wise_activity` | `wise_activity_sync_runs` |
 | `sales_dashboard` | `sales_dashboard_import_runs` ∪ `sales_dashboard_projection_import_runs`, merged by `startedAt` ([`:179-187`](../../src/lib/data-health/dashboard.ts)) |
+| `unearned_revenue` | `unearned_revenue_sync_runs` |
 | `competitor_intelligence` | `competitor_sync_runs` |
 | `credit_control` | `credit_control_sync_runs` |
 | `leave_requests` | `leave_request_sync_runs` |
@@ -556,11 +558,28 @@ Computes, per package on the active credit-control snapshot, which students **ru
 
 Expected states never throw — they return `skipped` so the route stays `200` and the audit trail explains itself ([`:235-240`](../../src/lib/line/credit-digest.ts)): LINE disabled (`ENABLE_LINE_SCHEDULER === "false"` or missing channel credentials, [`line/client.ts:19-23`](../../src/lib/line/client.ts)); a terminal run row already exists for today; no active credit-control snapshot (no terminal row is written, so a later manual re-run can still send); no staff group enabled (a terminal `skipped` row is written) ([`:261-338`](../../src/lib/line/credit-digest.ts)). Group targeting is re-checked at send time — `audience = "staff"` and `creditDigestEnabled = true` — so a chat later flipped to a family audience drops off the list (**CRED-BOT-G1**, [`:306-314`](../../src/lib/line/credit-digest.ts)). The per-(date, group) deterministic push retry key makes a webhook-level retry a no-op even without the run row ([`:23-26`](../../src/lib/line/credit-digest.ts)). `result.status === "failed"` → `500` ([`route.ts:17-18`](../../src/app/api/internal/line-credit-digest/route.ts)).
 
+### 18. Unearned revenue import — `/api/internal/sync-unearned-revenue`
+
+| | |
+|---|---|
+| Schedule | `30 18 * * *` UTC = **01:30 Bangkok** daily |
+| `maxDuration` | 800s ([`route.ts`](../../src/app/api/internal/sync-unearned-revenue/route.ts)) |
+| Job body | `runUnearnedRevenueSync({ triggerType: "cron" })` |
+| Run table | `unearned_revenue_sync_runs` |
+| Feature | [Unearned Revenue](../features/unearned-revenue.md) — **stable; FIFO shadow until Finance approval** |
+
+The job reads a bounded set of generated Google workbook tabs, verifies `PUBLISHED` at both the start
+and end of the read, verifies that numeric tab IDs did not rotate mid-read, and rejects any hard QA,
+formula, lineage, size, period, or cross-level accounting failure. It then stages all rows and promotes
+one active snapshot in a database transaction. Source run/fingerprint/revision/cutoff make repeated
+imports idempotent; a failure preserves the previous active snapshot. The job never reads from or
+writes to WISE and never writes to Google Sheets.
+
 ---
 
 ## Internal handlers without a cron schedule
 
-Five of the 22 handlers under `src/app/api/internal/**` are **not** in `vercel.json` and therefore never fire on a timer. All five are still registered in `cron-registry.ts` with `schedule: null` and `manualOnly: true`, which makes `/data-health` render them as `manual-only` — a terminal, non-alertable status the watchdog skips ([`status.ts:199-216`](../../src/lib/data-health/status.ts), [`cron-watchdog.ts:167`](../../src/lib/internal/cron-watchdog.ts)). A manual-only job is therefore never alerted on, even when its last run failed.
+Five of the 23 handlers under `src/app/api/internal/**` are **not** in `vercel.json` and therefore never fire on a timer. All five are still registered in `cron-registry.ts` with `schedule: null` and `manualOnly: true`, which makes `/data-health` render them as `manual-only` — a terminal, non-alertable status the watchdog skips ([`status.ts:199-216`](../../src/lib/data-health/status.ts), [`cron-watchdog.ts:167`](../../src/lib/internal/cron-watchdog.ts)). A manual-only job is therefore never alerted on, even when its last run failed.
 
 | Endpoint | Registry key | Verb | `maxDuration` | Classification |
 |---|---|---|---|---|

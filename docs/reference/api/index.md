@@ -6,14 +6,14 @@ The canonical lookup of every HTTP endpoint in BGScheduler. This page carries **
 
 ## What this counts
 
-All handlers live under `src/app/api/**/route.ts`. At `main@0cd1e81` the tree holds **180 `route.ts` files exporting 243 method+path business endpoints**.
+All handlers live under `src/app/api/**/route.ts`. The tree holds **185 `route.ts` files exporting 249 method+path business endpoints**.
 
 Two counting notes, because a naive `grep -c 'export async function'` disagrees:
 
 - **+2 for Auth.js.** [`src/app/api/auth/[...nextauth]/route.ts`](../../../src/app/api/auth/%5B...nextauth%5D/route.ts) is three lines long and exports its two methods by destructuring — `export const { GET, POST } = handlers` — so it matches no `export function` pattern.
-- **−2 for CORS preflight.** The `OPTIONS` handlers on the two public OA-resolver routes ([`worklist/route.ts:17`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts) and [`runs/[runId]/rows/route.ts:48`](../../../src/app/api/line/contacts/oa-resolver/runs/%5BrunId%5D/rows/route.ts)) return bare CORS headers and carry no business surface, so they are **excluded** from the 243. Counting the `line` group therefore yields 29, not 31.
+- **−2 for CORS preflight.** The `OPTIONS` handlers on the two public OA-resolver routes ([`worklist/route.ts:17`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts) and [`runs/[runId]/rows/route.ts:48`](../../../src/app/api/line/contacts/oa-resolver/runs/%5BrunId%5D/rows/route.ts)) return bare CORS headers and carry no business surface, so they are **excluded** from the 249. Counting the `line` group therefore yields 29, not 31.
 
-The named-handler total across all 180 files is 241; 241 + 2 destructured = 243 business endpoints, and 243 + 2 preflight = 245 exported handlers in total.
+The named-handler total across all 185 files is 247; 247 + 2 destructured = 249 business endpoints, and 249 + 2 preflight = 251 exported handlers in total.
 
 ## How to read the Auth column
 
@@ -24,7 +24,7 @@ Every tier below is verified against [`src/middleware.ts`](../../../src/middlewa
 | `public` | Reachable without an Auth.js session. The allowlist is exactly `isPublicRoute` ([`middleware.ts:10-26`](../../../src/middleware.ts)): `/login`, `/api/auth/*`, `/api/search/assistant`, `/api/classrooms/floor-plan-map`, `/api/line/webhook`, `/schedule/*`, `/api/line/contacts/oa-resolver/worklist`, `/api/line/contacts/oa-resolver/runs/{runId}/rows`, and all of `/api/internal/*`. Every public route that touches data enforces its own in-handler check — a LINE channel signature, or an opaque `Bearer` resolver token. |
 | `admin` | Authenticated Auth.js session. Unauthenticated page requests are redirected to `/login` ([`middleware.ts:92`](../../../src/middleware.ts)); an API path outside a restricted user's `allowedPages` gets `403 {"error":"Forbidden"}` ([`middleware.ts:96-99`](../../../src/middleware.ts)). The handler then calls `auth()` — or a domain guard such as `requireCreditControlSession` ([`credit-control/api.ts:5`](../../../src/lib/credit-control/api.ts)), `requireProgressTestsSession` ([`progress-tests/api.ts:35`](../../../src/lib/progress-tests/api.ts)), `requireCompetitorIntelligenceSession` ([`competitor-intelligence/access.ts:19`](../../../src/lib/competitor-intelligence/access.ts)), or `requireStudentPromotionSession` ([`student-promotions/api.ts:9`](../../../src/lib/student-promotions/api.ts)) — and returns `401` with no session. |
 | `admin (admin session)` | Progress Tests only. `requireProgressTestsAdminSession` ([`progress-tests/api.ts:66`](../../../src/lib/progress-tests/api.ts)) rejects the teacher-scoped sessions that `GET /api/progress-tests` accepts, so every write on that surface is admin-only. |
-| ``admin + cap:`X` `` | Admin session **plus** a fresh Postgres capability grant, re-read on every request and never cached in the JWT (`requirePostClassCapability`, [`post-class-feedback/access.ts:153`](../../../src/lib/post-class-feedback/access.ts)). Post-Class Feedback only. The four capabilities are `viewer`, `reviewer`, `finance`, and `access_manager` ([`access.ts:12-15`](../../../src/lib/post-class-feedback/access.ts)); the payout write capability is checked separately inside `payout-runs`. Middleware deliberately passes `/api/post-class-feedback/**` through `isPathAllowed` so these fresh grants — not stale JWT page prefixes — decide ([`middleware.ts:40-46`](../../../src/middleware.ts)). |
+| ``admin + cap:`X` `` | Admin session **plus** a fresh Postgres capability grant, re-read on every request and never cached in the JWT. Post-Class Feedback uses `viewer`, `reviewer`, `finance`, and `access_manager`; Unearned Revenue uses `viewer` and `access_manager`. Middleware deliberately passes both API families through legacy page scoping so their fresh feature grants decide. |
 | `session (role: X)` | **University Admissions only** — the one route family that is not admin-only. `requireAdmissionsSession` establishes the session ([`admissions/access.ts:76`](../../../src/lib/admissions/access.ts)); per-case rights are then re-resolved from Postgres by `requireCaseAccess` ([`access.ts:117`](../../../src/lib/admissions/access.ts)), `requireCounselorOrAdmin` ([`access.ts:196`](../../../src/lib/admissions/access.ts)), or `requireAdmissionsAdmin` ([`access.ts:234`](../../../src/lib/admissions/access.ts)) under the ordering `parent < student < counselor < admin` (`roleAtLeast`, [`admissions/config.ts:28`](../../../src/lib/admissions/config.ts)). The column shows the **minimum** role the handler passes to its guard. |
 | `cron` | `CRON_SECRET`-protected. [`middleware.ts:24`](../../../src/middleware.ts) exempts `/api/internal/*` from the session gate; the handler then runs a length-prechecked `timingSafeEqual` against `Bearer ${CRON_SECRET}` — `rejectInvalidCronSecret` / `getCronSecretStatus` ([`internal/cron-auth.ts:6-26`](../../../src/lib/internal/cron-auth.ts)), or an inline copy of the same comparison in `student-promotions/july-1` and `sync-room-utilization`. A missing `CRON_SECRET` returns `500`; a wrong one `401`. |
 | `cron \| admin` | The same secret check with a session fallback, used for manual reruns of the sync pipelines. On every one of these routes the paired `GET` stays cron-only. |
@@ -39,7 +39,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 
 ## Group directory
 
-29 path prefixes, 243 endpoints. Every link below resolves to a page that documents that prefix.
+30 path prefixes, 249 endpoints. Every link below resolves to a page that documents that prefix.
 
 | Group | Path prefix | Endpoints | Detail page |
 |---|---|---:|---|
@@ -55,7 +55,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | data-health | `/api/data-health` | 2 | [data-health.md](./data-health.md) |
 | filters | `/api/filters` | 1 | [misc.md](./misc.md#tutors-and-filters) |
 | home | `/api/home` | 1 | [misc.md](./misc.md#home-summary) |
-| internal | `/api/internal` | 31 | [internal-crons.md](./internal-crons.md) (25) + six on their owning pages — see below |
+| internal | `/api/internal` | 32 | [internal-crons.md](./internal-crons.md) (25) + seven on their owning pages — see below |
 | leave-requests | `/api/leave-requests` | 5 | [leave-requests.md](./leave-requests.md) |
 | line | `/api/line` | 29 | [line.md](./line.md) |
 | payroll | `/api/payroll` | 5 | [payroll.md](./payroll.md) |
@@ -70,13 +70,14 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | student-schedule | `/api/student-schedule` | 2 | [student-schedule-and-report.md](./student-schedule-and-report.md#student-monthly-schedule) |
 | tutor-profiles | `/api/tutor-profiles` | 4 | [tutor-profiles.md](./tutor-profiles.md) |
 | tutors | `/api/tutors` | 1 | [misc.md](./misc.md#tutors-and-filters) |
+| unearned-revenue | `/api/unearned-revenue` | 5 | [unearned-revenue.md](./unearned-revenue.md) |
 | us-universities | `/api/us-universities` | 5 | [us-universities.md](./us-universities.md) |
 | wise-activity | `/api/wise-activity` | 5 | [wise-activity.md](./wise-activity.md) |
-| **Total** | | **243** | |
+| **Total** | | **249** | |
 
-### The same 243, counted by detail page
+### The same 249, counted by detail page
 
-`docs/reference/api/` holds **22 files: this index plus 21 detail pages.** Every one of the 21 appears below, and the column sums to 243 — no endpoint is documented nowhere, and none is counted twice.
+`docs/reference/api/` holds **23 files: this index plus 22 detail pages.** Every detail page appears below, and the column sums to 249 — no endpoint is documented nowhere, and none is counted twice.
 
 | Detail page | Prefixes it owns | Endpoints |
 |---|---|---:|
@@ -85,7 +86,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | [competitor-intelligence.md](./competitor-intelligence.md) | `/api/competitor-intelligence` | 9 |
 | [credit-control.md](./credit-control.md) | `/api/credit-control` | 8 |
 | [data-health.md](./data-health.md) | `/api/data-health` | 2 |
-| [internal-crons.md](./internal-crons.md) | `/api/internal` (25 of 31) | 25 |
+| [internal-crons.md](./internal-crons.md) | `/api/internal` (25 of 32) | 25 |
 | [leave-requests.md](./leave-requests.md) | `/api/leave-requests` | 5 |
 | [line.md](./line.md) | `/api/line` | 29 |
 | [misc.md](./misc.md) | `/api/search`, `/api/compare`, `/api/tutors`, `/api/filters`, `/api/home`, `/api/admin`, `/api/auth` | 11 |
@@ -98,14 +99,15 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | [student-promotions.md](./student-promotions.md) | `/api/student-promotions` | 9 |
 | [student-schedule-and-report.md](./student-schedule-and-report.md) | `/api/student-schedule`, `/api/student-report` | 3 |
 | [tutor-profiles.md](./tutor-profiles.md) | `/api/tutor-profiles` | 4 |
+| [unearned-revenue.md](./unearned-revenue.md) | `/api/unearned-revenue`, 1 internal cron | 6 |
 | [university-admissions.md](./university-admissions.md) | `/api/admissions` | 61 |
 | [us-universities.md](./us-universities.md) | `/api/us-universities` | 5 |
 | [wise-activity.md](./wise-activity.md) | `/api/wise-activity`, 1 internal cron | 5 |
-| **Total** | | **243** |
+| **Total** | | **249** |
 
 Three notes on how the two tables reconcile:
 
-- **The `internal` prefix is split across five pages.** [internal-crons.md](./internal-crons.md) indexes 25 of the 31 `/api/internal` endpoints. The other six are documented alongside the subsystem they drive: `sync-sales-dashboard` GET+POST in [sales-dashboard.md](./sales-dashboard.md#cron-sync), `sync-wise-activity` in [wise-activity.md](./wise-activity.md), `sync-room-utilization` in [room-capacity.md](./room-capacity.md), and the two `class-assignments/*` jobs in [classrooms-and-assignments.md](./classrooms-and-assignments.md#internal-cron-endpoints). The per-endpoint table below links each of the six to its owning page, so the Group column is always the page that actually documents that row.
+- **The `internal` prefix is split across six pages.** [internal-crons.md](./internal-crons.md) indexes 25 of the 32 `/api/internal` endpoints. The other seven are documented alongside the subsystem they drive: `sync-sales-dashboard` GET+POST, `sync-wise-activity`, `sync-room-utilization`, the two `class-assignments/*` jobs, and `sync-unearned-revenue`. The per-endpoint table below links each endpoint to the page that owns its signature.
 - **Counted-by-page rows attribute each internal cron once**, to the page carrying its signature. A cron may still be *discussed* on a second page — `cron-watchdog` appears in both [internal-crons.md](./internal-crons.md) and [data-health.md](./data-health.md), and the six post-class and admissions crons are discussed in their feature references — but it is counted only where it is indexed.
 - **A detail page's own `Endpoint index (N)` heading may exceed its row here**, because several pages index the internal crons they discuss on top of their own prefix. [post-class-feedback.md](./post-class-feedback.md) says 19 (13 workspace + 6 crons) and [university-admissions.md](./university-admissions.md) says 63 (61 + 2 cron halves); this index counts only the 13 and the 61.
 
@@ -113,7 +115,7 @@ Three notes on how the two tables reconcile:
 
 ## Crons
 
-The 31 `internal` endpoints sit on **22 distinct paths**, one per route file. `vercel.json` schedules **17** of them; the in-app registry [`cron-registry.ts`](../../../src/lib/data-health/cron-registry.ts) declares all 22, marking the remaining five `manualOnly: true` — reachable with the cron secret, but nothing fires them on a schedule:
+The 32 `internal` endpoints sit on **23 distinct paths**, one per route file. `vercel.json` schedules **18** of them; the in-app registry [`cron-registry.ts`](../../../src/lib/data-health/cron-registry.ts) declares all 23, marking the remaining five `manualOnly: true` — reachable with the cron secret, but nothing fires them on a schedule:
 
 `line-backlog-recovery` · `post-class-feedback/admin-digest` · `post-class-feedback/reminder-day-after` · `post-class-feedback/reminder-deadline` · `sync-room-utilization`
 
@@ -258,6 +260,7 @@ Sorted by group, then path, then method. `[bracketed]` segments are Next.js dyna
 | `POST` | `/api/internal/sync-room-utilization` | [internal](./room-capacity.md) | cron \| admin | Room-utilization ingest. POST-only, registered `manualOnly` with no `vercel.json` entry; the session branch requires a signed-in admin. |
 | `GET` | `/api/internal/sync-sales-dashboard` | [internal](./sales-dashboard.md#cron-sync) | cron | Sales-sheet ingest. Scheduled `10,40 * * * *`. |
 | `POST` | `/api/internal/sync-sales-dashboard` | [internal](./sales-dashboard.md#cron-sync) | cron \| admin | Manual rerun; a session, when present, supplies the `actorEmail`. |
+| `GET` | `/api/internal/sync-unearned-revenue` | [unearned revenue](./unearned-revenue.md) | cron | Imports only a stable, `PUBLISHED`, hard-QA-passed accounting workbook snapshot. Scheduled `30 18 * * *` (01:30 Bangkok); `maxDuration = 800`. |
 | `GET` | `/api/internal/sync-wise` | [internal](./internal-crons.md) | cron | The Wise snapshot ETL — fetch, normalize, persist, validate, promote. Scheduled `*/30 * * * *`; `maxDuration = 800`; single-flight guarded. |
 | `POST` | `/api/internal/sync-wise` | [internal](./internal-crons.md) | cron \| admin | Manual trigger via Auth.js session or `curl -X POST` (kept backward compatible). |
 | `GET` | `/api/internal/sync-wise-activity` | [internal](./wise-activity.md) | cron | Wise audit-event ingest. Scheduled `2,17,32,47 * * * *` — the only quarter-hourly job. |
@@ -358,6 +361,11 @@ Sorted by group, then path, then method. `[bracketed]` segments are Next.js dyna
 | `POST` | `/api/tutor-profiles/import-commit` | [tutor-profiles](./tutor-profiles.md) | admin | Commit a previewed bulk import, then clear the search index. |
 | `POST` | `/api/tutor-profiles/import-preview` | [tutor-profiles](./tutor-profiles.md) | admin | Parse uploaded workbooks and compute a bulk-import preview against existing profiles, aliases, and identities — no writes. |
 | `GET` | `/api/tutors` | [tutors](./misc.md#tutors-and-filters) | admin | Tutor list for the searchable combobox. |
+| `GET` | `/api/unearned-revenue` | [unearned revenue](./unearned-revenue.md) | admin + cap:`viewer` | Active snapshot metadata, periods, selected-period totals and quality, and filtered/paginated student aggregates. |
+| `GET` | `/api/unearned-revenue/access` | [unearned revenue](./unearned-revenue.md) | admin + cap:`access_manager` | Current feature access matrix for allowlisted admins. |
+| `PATCH` | `/api/unearned-revenue/access` | [unearned revenue](./unearned-revenue.md) | admin + cap:`access_manager` | Version-checked capability replacement with self-removal and final-manager protections. |
+| `GET` | `/api/unearned-revenue/students/[studentId]` | [unearned revenue](./unearned-revenue.md) | admin + cap:`viewer` | Student aggregate, class-account reconciliations, and package lots for one reporting period. |
+| `POST` | `/api/unearned-revenue/sync` | [unearned revenue](./unearned-revenue.md) | admin + cap:`access_manager` | Manual retry of the bounded, QA-gated, atomic Google workbook import. |
 | `GET` | `/api/us-universities` | [us-universities](./us-universities.md) | admin | Research-console overview counters. |
 | `GET` | `/api/us-universities/compare` | [us-universities](./us-universities.md) | admin | Side-by-side institution comparison for a set of `unitId`s. |
 | `GET` | `/api/us-universities/export` | [us-universities](./us-universities.md) | admin | The current filtered institution set as CSV. |
@@ -381,4 +389,4 @@ Sorted by group, then path, then method. `[bracketed]` segments are Next.js dyna
 
 ---
 
-_Verified against main@0cd1e81 (clean tree) on 2026-09-02._
+_Verified mechanically against the working tree on 2026-09-04._

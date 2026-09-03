@@ -1,0 +1,71 @@
+# Unearned Revenue Database
+
+Eight tables own the dashboard's access policy, import lineage, immutable headers, and retained
+reporting detail. Monetary, rate, and credit columns are `numeric(20,8)`.
+
+```mermaid
+erDiagram
+  unearned_revenue_sync_runs ||--o| unearned_revenue_snapshots : imports
+  unearned_revenue_snapshots ||--o{ unearned_revenue_periods : contains
+  unearned_revenue_snapshots ||--o{ unearned_revenue_student_periods : contains
+  unearned_revenue_snapshots ||--o{ unearned_revenue_account_periods : contains
+  unearned_revenue_snapshots ||--o{ unearned_revenue_lot_periods : contains
+  unearned_revenue_access_grants ||--o{ unearned_revenue_access_audit_log : changes
+```
+
+## Access and audit
+
+### `unearned_revenue_access_grants`
+
+`schema.ts:4816–4827`. One row per normalized email and capability. The unique key is
+`(email, capability)`; a check allows only `viewer` and `access_manager`. `granted_by_email` and the
+timestamps record current provenance.
+
+### `unearned_revenue_access_audit_log`
+
+`schema.ts:4830–4843`. Immutable history for one target-email access replacement. It records actor,
+before/after JSON, action, note, and monotonically increasing optimistic-lock `version`.
+
+## Import lineage
+
+### `unearned_revenue_sync_runs`
+
+`schema.ts:4846–4870`. One row per cron or manual attempt. It records status, trigger/actor, workbook
+identity, run/fingerprint/revision/cutoff, imported snapshot, counts, metadata, error, and timestamps.
+The partial unique index on `status = 'running'` is the single-flight guard.
+
+### `unearned_revenue_snapshots`
+
+`schema.ts:4873–4902`. One immutable QA-passed workbook header. Its source contract is unique on
+`(source_run_id, source_fingerprint, source_revision, cutoff)` and a partial unique index permits only
+one `active` row. It retains the exact numeric generated-tab IDs and imported row counts.
+
+## Reporting rows
+
+### `unearned_revenue_periods`
+
+`schema.ts:4905–4936`. One finance total per snapshot and reporting date. It carries period semantics,
+canonical/legacy/FIFO balances, roll-forward components, paid credits, attribution, population and
+quality counts, plus the exact formula anchor.
+
+### `unearned_revenue_student_periods`
+
+`schema.ts:4939–4969`. One stable WISE student ID per snapshot and reporting date, aggregated across
+class accounts. It stores both model values, canonical balance, attribution/residual amounts, review
+state, and formula anchor. Liability and name indexes back dashboard sorting/search.
+
+### `unearned_revenue_account_periods`
+
+`schema.ts:4972–5003`. One WISE student/class account per snapshot and reporting date. It holds the
+credit and THB roll-forward, both model closings, attribution/residual values, review state, and
+formula anchor.
+
+### `unearned_revenue_lot_periods`
+
+`schema.ts:5006–5050`. One package lot per snapshot and reporting date. It records lot/match/review
+classification, package and credit-event lineage, purchase metadata, negative recovery, FIFO credit
+and THB roll-forward, candidate sales keys, a required formula anchor, and an optional original sales
+row anchor. The latter is absent for synthetic opening and unresolved lots.
+
+All detail rows cascade from their snapshot. Operational retention keeps detail for the active and
+immediately preceding successful snapshots while preserving every sync and snapshot header.

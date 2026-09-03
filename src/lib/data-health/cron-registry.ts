@@ -4,6 +4,7 @@ export type CronJobKey =
   | "wise_snapshot"
   | "wise_activity"
   | "sales_dashboard"
+  | "unearned_revenue"
   | "credit_control"
   | "progress_tests"
   | "progress_tests_digest"
@@ -88,6 +89,22 @@ export const CRON_JOBS = [
     manualOnly: false,
     dangerous: false,
     confirmationLabel: null,
+    routeMethod: "GET",
+  },
+  {
+    key: "unearned_revenue",
+    label: "Unearned Revenue",
+    feature: "Unearned Revenue",
+    path: "/api/internal/sync-unearned-revenue",
+    schedule: "30 18 * * *",
+    cadenceLabel: "Daily 01:30 Bangkok",
+    cadenceMinutes: 24 * 60,
+    lateAfterMinutes: 90,
+    maxDurationSeconds: 800,
+    manualOnly: false,
+    dangerous: false,
+    confirmationLabel: null,
+    expectedBangkokMinute: 1 * 60 + 30,
     routeMethod: "GET",
   },
   {

@@ -23,6 +23,7 @@ export type NavToolId =
   | "student-promotions"
   | "admissions"
   | "sales-dashboard"
+  | "unearned-revenue"
   | "credit-control"
   | "payroll"
   | "competitor-intelligence"
@@ -71,7 +72,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     id: "finance-revenue",
     label: "Finance & Revenue",
-    description: "Sales, prepaid credit follow-up, and payroll reconciliation.",
+    description: "Sales, deferred revenue, prepaid credit follow-up, and payroll reconciliation.",
   },
   {
     id: "market-intelligence",
@@ -216,6 +217,13 @@ export const NAV_TOOLS: NavTool[] = [
     description: "Prioritize prepaid-credit follow-up and at-risk students.",
     section: "finance-revenue",
     badgeKey: "creditControl",
+  },
+  {
+    id: "unearned-revenue",
+    href: "/unearned-revenue",
+    label: "Unearned Revenue",
+    description: "Trace deferred revenue from finance totals to students and package rows.",
+    section: "finance-revenue",
   },
   {
     id: "payroll",

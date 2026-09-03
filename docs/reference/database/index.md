@@ -1,9 +1,9 @@
 # Database Reference — Master Table Index
 
-The canonical lookup for every table in the BGScheduler Postgres database: **189 tables**, declared in
-[`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) (4,772 lines, Drizzle ORM) and migrated under
-[`drizzle/`](../../../drizzle) (69 `.sql` files, latest `0068_payout_adjustment_superseded.sql`). The
-count is mechanical: `grep -c '^export const [a-zA-Z]* = pgTable' src/lib/db/schema.ts` → **189**.
+The canonical lookup for every table in the BGScheduler Postgres database: **198 tables**, declared in
+[`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) (5,050 lines, Drizzle ORM) and migrated under
+[`drizzle/`](../../../drizzle) (71 `.sql` files, latest `0070_unearned_revenue_dashboard.sql`). The
+count is mechanical: `grep -c '= pgTable(' src/lib/db/schema.ts` → **198**.
 The 61 Postgres enum types those tables bind live in [`enums.md`](./enums.md).
 
 This page answers one question per row: **what is this table, what is exactly one row of it, and who
@@ -14,17 +14,18 @@ and flows live under [`docs/features/`](../../features/).
 
 ## Domains
 
-Eighteen domains, one per `erd-*.md` page, so the last column of the big table is never ambiguous:
+Nineteen domains, one per `erd-*.md` page, so the last column of the big table is never ambiguous:
 each table is documented on exactly one diagram page.
 
 | Domain | Tables | ERD page |
 |---|---:|---|
-| `core` | 22 | [erd-core.md](./erd-core.md) — four numbered sections, linked per row below |
+| `core` | 23 | [erd-core.md](./erd-core.md) — four numbered sections, linked per row below |
 | `university-admissions` | 36 | [erd-university-admissions.md](./erd-university-admissions.md) — four numbered sections |
 | `post-class-feedback` | 32 | [erd-post-class-feedback.md](./erd-post-class-feedback.md) — six named sections |
 | `competitor-intelligence` | 16 | [erd-competitor-intelligence.md](./erd-competitor-intelligence.md) |
 | `line` | 13 | [erd-line.md](./erd-line.md) |
 | `credit-control` | 11 | [erd-credit-control.md](./erd-credit-control.md) |
+| `unearned-revenue` | 8 | [erd-unearned-revenue.md](./erd-unearned-revenue.md) |
 | `classrooms` | 9 | [erd-classrooms.md](./erd-classrooms.md) |
 | `payroll` | 8 | [erd-payroll.md](./erd-payroll.md) |
 | `progress-tests` | 8 | [erd-progress-tests.md](./erd-progress-tests.md) |
@@ -37,9 +38,9 @@ each table is documented on exactly one diagram page.
 | `wise-activity` | 2 | [erd-wise-activity.md](./erd-wise-activity.md) |
 | `learning-plans` | 1 | [erd-learning-plans.md](./erd-learning-plans.md) |
 | `student-schedule` | 1 | [erd-student-schedule.md](./erd-student-schedule.md) |
-| **Total** | **189** | |
+| **Total** | **198** | |
 
-> **`core` now means 22 tables, not 124.** Earlier revisions of this index used ten domain labels and
+> **`core` now means 23 tables, not 124.** Earlier revisions of this index used ten domain labels and
 > credited `core` with everything that had no page of its own. Eight of those sub-areas — post-class
 > feedback, university admissions, competitor intelligence, progress tests, student promotions, Wise
 > activity, student schedule, learning plans — were split onto their own diagram pages, taking 102
@@ -56,9 +57,9 @@ Sectioned exactly as [`erd-core.md`](./erd-core.md) is:
 |---|---|---:|
 | [1](./erd-core.md#1-snapshot--sync-control-plane-and-cron-observability-4-tables) | Snapshot & sync control plane and cron observability | 4 |
 | [2](./erd-core.md#2-auth--access-2-tables) | Auth & access | 2 |
-| [3](./erd-core.md#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | Tutor identity, normalization, session blocks & data health | 13 |
+| [3](./erd-core.md#3-tutor-identity-normalization-session-blocks--data-health-13-tables) | Tutor identity, normalization, session blocks, availability cache & data health | 14 |
 | [4](./erd-core.md#4-us-universities--ipeds-3-tables) | US universities / IPEDS | 3 |
-| | **Total** | **22** |
+| | **Total** | **23** |
 
 ## How to read this table
 
@@ -115,6 +116,7 @@ that feature. The feature doc carries the rules and the why.
 | Room Capacity | `src/lib/room-capacity/` | [room-capacity.md](../../features/room-capacity.md) |
 | Sales Dashboard | `src/lib/sales-dashboard/` | [sales-dashboard.md](../../features/sales-dashboard.md) |
 | Credit Control | `src/lib/credit-control/` | [credit-control.md](../../features/credit-control.md) |
+| Unearned Revenue | `src/lib/unearned-revenue/` | [unearned-revenue.md](../../features/unearned-revenue.md) |
 | Payroll | `src/lib/payroll/` | [payroll.md](../../features/payroll.md) |
 | Wise Activity Audit | `src/lib/wise-activity/` | [wise-activity-audit.md](../../features/wise-activity-audit.md) |
 | Post-Class Feedback | `src/lib/post-class-feedback/` | [post-class-feedback.md](../../features/post-class-feedback.md) |
@@ -134,7 +136,7 @@ that feature. The feature doc carries the rules and the why.
 | US Universities | `src/lib/us-universities/` | [us-universities.md](../../features/us-universities.md) |
 | Platform auth | `src/lib/auth.ts`, `src/lib/auth-access.ts`, `src/lib/db/seed.ts` | cross-cutting — [handbook/architecture.md](../../handbook/architecture.md) |
 
-## All 189 tables
+## All 198 tables
 
 Ordered by domain (the [Domains](#domains) order, `core` first), then by declaration order in
 `src/lib/db/schema.ts`.
@@ -148,6 +150,7 @@ Ordered by domain (the [Domains](#domains) order, `core` first), then by declara
 | `admin_users`<br><sub>575–585</sub> | `adminUsers` | core | Allowlisted sign-in email (unique `admin_users_email_idx`). `allowed_pages` null = full access; non-null restricts to those route prefixes. | Platform auth | [core §2][c2] |
 | `google_oauth_tokens`<br><sub>587–597</sub> | `googleOAuthTokens` | core | Connected Google account — PK `email`. Holds the encrypted access/refresh pair, scope, and last token error; shared by every Sheets-backed subsystem. | Platform auth | [core §2][c2] |
 | `tutor_identity_groups`<br><sub>1519–1528</sub> | `tutorIdentityGroups` | core | Resolved tutor identity inside one snapshot (`snapshot_id` + `canonical_key`). Conventional — the declaration adds no unique index. | Tutor Search | [core §3][c3] |
+| `wise_teacher_availability_cache`<br><sub>1558–1567</sub> | `wiseTeacherAvailabilityCache` | core | Cross-snapshot cache of the expensive far-leave window, keyed by Wise teacher user ID. A cache miss/error always falls back to a live fetch. | Tutor Search | [core §3][c3] |
 | `tutor_identity_group_members`<br><sub>1530–1541</sub> | `tutorIdentityGroupMembers` | core | Wise teacher record attached to an identity group in one snapshot; `is_online_variant` marks the online twin. Conventional. | Tutor Search | [core §3][c3] |
 | `tutor_aliases`<br><sub>1543–1550</sub> | `tutorAliases` | core | Alias redirect `from_key` → `to_key` (unique `from_key`). Snapshot-independent curated input — step 2 of the identity cascade. | Tutor Search | [core §3][c3] |
 | `tutors`<br><sub>1552–1561</sub> | `tutors` | core | Denormalized tutor row per identity group per snapshot, carrying `supported_modes`. Conventional. | Tutor Search | [core §3][c3] |
@@ -271,6 +274,14 @@ Ordered by domain (the [Domains](#domains) order, `core` first), then by declara
 | `credit_control_inactive_students`<br><sub>1310–1320</sub> | `creditControlInactiveStudents` | credit-control | Student marked inactive — PK `student_key`, recording who marked it and the balance at removal. | Credit Control | [credit-control][cc] |
 | `credit_control_zero_balance_tracking`<br><sub>1325–1332</sub> | `creditControlZeroBalanceTracking` | credit-control | Student's current zero-or-below credit streak — PK `student_key`, holding `zero_since` and `last_remaining`. | Credit Control | [credit-control][cc] |
 | `credit_control_admin_ownership`<br><sub>1334–1342</sub> | `creditControlAdminOwnership` | credit-control | Student's owning admin — PK `student_key`. | Credit Control | [credit-control][cc] |
+| `unearned_revenue_access_grants`<br><sub>4816–4827</sub> | `unearnedRevenueAccessGrants` | unearned-revenue | Normalized admin email × `viewer` or `access_manager` capability (unique). | Unearned Revenue | [unearned-revenue][ur] |
+| `unearned_revenue_access_audit_log`<br><sub>4830–4843</sub> | `unearnedRevenueAccessAuditLog` | unearned-revenue | Immutable capability-matrix replacement with actor, before/after state, and optimistic-lock version. | Unearned Revenue | [unearned-revenue][ur] |
+| `unearned_revenue_sync_runs`<br><sub>4846–4870</sub> | `unearnedRevenueSyncRuns` | unearned-revenue | Workbook import attempt; partial unique on `running` enforces single-flight. | Unearned Revenue | [unearned-revenue][ur] |
+| `unearned_revenue_snapshots`<br><sub>4873–4902</sub> | `unearnedRevenueSnapshots` | unearned-revenue | Immutable QA-passed workbook header; source contract is unique and a partial index permits one active snapshot. | Unearned Revenue | [unearned-revenue][ur] |
+| `unearned_revenue_periods`<br><sub>4905–4936</sub> | `unearnedRevenuePeriods` | unearned-revenue | Finance total per imported snapshot and reporting date, including model comparison, QA counts, and formula anchor. | Unearned Revenue | [unearned-revenue][ur] |
+| `unearned_revenue_student_periods`<br><sub>4939–4969</sub> | `unearnedRevenueStudentPeriods` | unearned-revenue | Stable WISE student aggregate per snapshot and reporting date, across all class accounts. | Unearned Revenue | [unearned-revenue][ur] |
+| `unearned_revenue_account_periods`<br><sub>4972–5003</sub> | `unearnedRevenueAccountPeriods` | unearned-revenue | Student/class account reconciliation per snapshot and reporting date. | Unearned Revenue | [unearned-revenue][ur] |
+| `unearned_revenue_lot_periods`<br><sub>5006–5050</sub> | `unearnedRevenueLotPeriods` | unearned-revenue | Package-lot credit and THB roll-forward per snapshot/date, with separate formula and optional source-row anchors. | Unearned Revenue | [unearned-revenue][ur] |
 | `classroom_rooms`<br><sub>1649–1662</sub> | `classroomRooms` | classrooms | Physical room (unique `name`), with capacity, TV flag, category and sort order. | Classroom Assignments | [classrooms][cr] |
 | `classroom_assignment_runs`<br><sub>1664–1688</sub> | `classroomAssignmentRuns` | classrooms | Assignment run for one Bangkok date, pinned to the snapshot it read. Append-only and conventional — runs accumulate per date and the newest wins on read. | Classroom Assignments | [classrooms][cr] |
 | `classroom_assignment_rows`<br><sub>1690–1735</sub> | `classroomAssignmentRows` | classrooms | Wise session inside a run (unique `run_id` + `wise_session_id`), with assigned room, rule trace, `assignment_fingerprint` and publish status. | Classroom Assignments | [classrooms][cr] |
@@ -348,6 +359,7 @@ Ordered by domain (the [Domains](#domains) order, `core` first), then by declara
 [ci]: ./erd-competitor-intelligence.md
 [ln]: ./erd-line.md
 [cc]: ./erd-credit-control.md
+[ur]: ./erd-unearned-revenue.md
 [cr]: ./erd-classrooms.md
 [pr]: ./erd-payroll.md
 [pt]: ./erd-progress-tests.md
@@ -430,4 +442,4 @@ adding a table means a new `drizzle/` migration and a new row here.
   schema — active rate card, active projection source, live admissions case, one live sales source
   per month — is enforced by a partial unique index.
 
-_Verified against main@0cd1e81 (clean tree) on 2026-09-02._
+_Verified mechanically against the working tree on 2026-09-04._

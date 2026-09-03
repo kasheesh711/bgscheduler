@@ -10,6 +10,10 @@
       "schedule": "10,40 * * * *"
     },
     {
+      "path": "/api/internal/sync-unearned-revenue",
+      "schedule": "30 18 * * *"
+    },
+    {
       "path": "/api/internal/sync-competitor-intelligence",
       "schedule": "28 18 * * 0"
     },

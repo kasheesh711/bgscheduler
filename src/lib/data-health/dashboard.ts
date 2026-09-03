@@ -21,6 +21,7 @@ type CronInvocation = typeof schema.cronInvocations.$inferSelect;
 type WiseActivityRun = typeof schema.wiseActivitySyncRuns.$inferSelect;
 type SalesImportRun = typeof schema.salesDashboardImportRuns.$inferSelect;
 type SalesProjectionRun = typeof schema.salesDashboardProjectionImportRuns.$inferSelect;
+type UnearnedRevenueRun = typeof schema.unearnedRevenueSyncRuns.$inferSelect;
 type CompetitorRun = typeof schema.competitorSyncRuns.$inferSelect;
 type CreditRun = typeof schema.creditControlSyncRuns.$inferSelect;
 type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
@@ -146,6 +147,7 @@ function pickJobRuns(
     activity: WiseActivityRun[];
     salesImports: SalesImportRun[];
     salesProjection: SalesProjectionRun[];
+    unearnedRevenue: UnearnedRevenueRun[];
     competitor: CompetitorRun[];
     credit: CreditRun[];
     leave: LeaveRun[];
@@ -183,6 +185,15 @@ function pickJobRuns(
       latestSuccessfulRun: runEvidence(latestSuccessful(rows, (run) => run.finishedAt)),
       latestFailedRun: runEvidence(latestFailed(rows, (run) => run.finishedAt)),
       runningRun: runEvidence(latestRunning(rows, (run) => run.startedAt)),
+    };
+  }
+
+  if (job.key === "unearned_revenue") {
+    return {
+      latestRun: runEvidence(allRuns.unearnedRevenue[0] ?? null),
+      latestSuccessfulRun: runEvidence(latestSuccessful(allRuns.unearnedRevenue, (run) => run.finishedAt)),
+      latestFailedRun: runEvidence(latestFailed(allRuns.unearnedRevenue, (run) => run.finishedAt)),
+      runningRun: runEvidence(latestRunning(allRuns.unearnedRevenue, (run) => run.startedAt)),
     };
   }
 
@@ -688,6 +699,17 @@ function buildRecentRuns(allRuns: Parameters<typeof pickJobRuns>[1]): RunHistory
       countLabel: `${run.monthRowCount} months`,
       errorSummary: run.errorSummary,
     })),
+    ...allRuns.unearnedRevenue.map((run) => runHistoryItem({
+      id: run.id,
+      jobKey: "unearned_revenue",
+      label: "Unearned Revenue",
+      status: run.status,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      triggerType: run.triggerType,
+      countLabel: `${run.studentRowCount} students / ${run.lotRowCount} lots`,
+      errorSummary: run.errorSummary,
+    })),
     ...allRuns.competitor.map((run) => runHistoryItem({
       id: run.id,
       jobKey: "competitor_intelligence",
@@ -755,6 +777,7 @@ async function fetchAllRuns(db: Database) {
     activity,
     salesImports,
     salesProjection,
+    unearnedRevenue,
     competitor,
     credit,
     leave,
@@ -770,6 +793,7 @@ async function fetchAllRuns(db: Database) {
     db.select().from(schema.wiseActivitySyncRuns).orderBy(desc(schema.wiseActivitySyncRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.salesDashboardImportRuns).orderBy(desc(schema.salesDashboardImportRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.salesDashboardProjectionImportRuns).orderBy(desc(schema.salesDashboardProjectionImportRuns.startedAt)).limit(RECENT_LIMIT),
+    db.select().from(schema.unearnedRevenueSyncRuns).orderBy(desc(schema.unearnedRevenueSyncRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.competitorSyncRuns).orderBy(desc(schema.competitorSyncRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.creditControlSyncRuns).orderBy(desc(schema.creditControlSyncRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.leaveRequestSyncRuns).orderBy(desc(schema.leaveRequestSyncRuns.startedAt)).limit(RECENT_LIMIT),
@@ -792,6 +816,7 @@ async function fetchAllRuns(db: Database) {
     activity,
     salesImports,
     salesProjection,
+    unearnedRevenue,
     competitor,
     credit,
     leave,

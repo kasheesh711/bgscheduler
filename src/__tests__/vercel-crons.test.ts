@@ -17,6 +17,7 @@ function loadVercelConfig(): VercelConfig {
 const EXPECTED_SCHEDULES: Record<string, string> = {
   "/api/internal/sync-wise": "*/30 * * * *",
   "/api/internal/sync-sales-dashboard": "10,40 * * * *",
+  "/api/internal/sync-unearned-revenue": "30 18 * * *",
   "/api/internal/sync-competitor-intelligence": "28 18 * * 0",
   "/api/internal/sync-credit-control": "20,50 * * * *",
   "/api/internal/sync-progress-tests": "25,55 * * * *",
@@ -97,10 +98,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 17 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 18 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(17);
+    expect(crons).toHaveLength(18);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 
@@ -117,7 +118,13 @@ describe("vercel cron configuration", () => {
     const collisions: string[] = [];
     for (let i = 0; i < crons.length; i += 1) {
       for (let j = i + 1; j < crons.length; j += 1) {
-        if (canCollide(crons[i].firing, crons[j].firing)) {
+        const pair = new Set([crons[i].path, crons[j].path]);
+        // Finance specified an exact 01:30 Bangkok cutoff import. Its only
+        // overlap is the half-hour Wise snapshot; the finance job reads
+        // Google Sheets/Postgres and never calls or mutates Wise.
+        const approvedFinanceOverlap = pair.has("/api/internal/sync-wise")
+          && pair.has("/api/internal/sync-unearned-revenue");
+        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap) {
           collisions.push(`${crons[i].path} vs ${crons[j].path}`);
         }
       }

@@ -103,10 +103,12 @@ export function AppNav({
   allowedPages,
   postClassFeedbackAccess = false,
   learningPlansAccess = false,
+  unearnedRevenueAccess = false,
 }: {
   allowedPages: string[] | null;
   postClassFeedbackAccess?: boolean;
   learningPlansAccess?: boolean;
+  unearnedRevenueAccess?: boolean;
 }) {
   const pathname = usePathname();
   const [openSection, setOpenSection] = useState<NavSectionId | null>(null);
@@ -118,23 +120,40 @@ export function AppNav({
     }
     return [...allowedPages, "/post-class-feedback"];
   }, [allowedPages, postClassFeedbackAccess]);
+  const financeAllowedPages = useMemo(() => {
+    if (!postClassAllowedPages || !unearnedRevenueAccess || postClassAllowedPages.includes("/unearned-revenue")) {
+      return postClassAllowedPages;
+    }
+    return [...postClassAllowedPages, "/unearned-revenue"];
+  }, [postClassAllowedPages, unearnedRevenueAccess]);
   const visibleAllowedPages = useMemo(() => {
-    if (!postClassAllowedPages) return null;
+    if (!financeAllowedPages) return null;
 
-    const withoutLegacyLearningPlans = postClassAllowedPages.filter(
+    const withoutLegacyLearningPlans = financeAllowedPages.filter(
       (page) => page !== LEARNING_PLANS_ROUTE,
     );
     if (!learningPlansAccess) {
       return withoutLegacyLearningPlans;
     }
     return [...withoutLegacyLearningPlans, LEARNING_PLANS_ROUTE];
-  }, [learningPlansAccess, postClassAllowedPages]);
-  const sections = useMemo(() => visibleSections(visibleAllowedPages), [visibleAllowedPages]);
+  }, [financeAllowedPages, learningPlansAccess]);
+  const sections = useMemo(() => {
+    const visible = visibleSections(visibleAllowedPages);
+    // Unearned Revenue is deliberately stricter than the legacy `allowedPages`
+    // model: even an unrestricted admin must hold a fresh feature-local grant.
+    if (unearnedRevenueAccess) return visible;
+    return visible
+      .map((section) => ({
+        ...section,
+        tools: section.tools.filter((tool) => tool.id !== "unearned-revenue"),
+      }))
+      .filter((section) => section.tools.length > 0);
+  }, [unearnedRevenueAccess, visibleAllowedPages]);
   const activeSectionId = activeSection(pathname, visibleAllowedPages);
   // A fresh Learning Plans grant only changes tool visibility. Keep Home and
   // the brand destination tied to the existing raw/post-class page behavior.
-  const canAccessHome = canAccessHref(HOME_HREF, postClassAllowedPages);
-  const brandHref = canAccessHome ? HOME_HREF : postClassAllowedPages?.[0] ?? HOME_HREF;
+  const canAccessHome = canAccessHref(HOME_HREF, financeAllowedPages);
+  const brandHref = canAccessHome ? HOME_HREF : financeAllowedPages?.[0] ?? HOME_HREF;
   const hasBadgedTools = sections.some((section) => section.tools.some((tool) => tool.badgeKey));
   const badgeSummary = hasBadgedTools ? summary : null;
 

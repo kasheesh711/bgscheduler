@@ -18,8 +18,8 @@ assumptions this codebase will break.
 The docs are organized into five trees plus two loose sets, each with a distinct job:
 
 - **[`handbook/`](#handbook)** — the cross-cutting mental model: architecture, data flow, conventions, vocabulary. **6 pages.**
-- **[`features/`](#features)** — one page per product feature; owns *meaning* (purpose, rules, flows, why). **25 pages.**
-- **[`reference/`](#reference)** — mechanical lookup: every endpoint, every table, every enum, crons, env vars, the Wise REST contract and its webhook catalogue. **46 pages** (22 API, 20 database, 4 top-level).
+- **[`features/`](#features)** — one page per product feature; owns *meaning* (purpose, rules, flows, why). **26 pages.**
+- **[`reference/`](#reference)** — mechanical lookup: every endpoint, every table, every enum, crons, env vars, the Wise REST contract and its webhook catalogue. **48 pages** (23 API, 21 database, 4 top-level).
 - **[`operations/`](#operations)** — runbook, auth/access model, observability, the maintenance kill switch, and one historical release checkpoint. **5 pages.**
 - **[`OPEN-QUESTIONS.md`](#open-questions--gaps)** — the running list of things only a human can settle.
 - **[`proposals/`](#proposals)** — dated design proposals that are *not* system documentation.
@@ -31,16 +31,16 @@ Every number below is mechanical, taken from the tree rather than from prose:
 
 | Thing | Count | How it is counted |
 |---|---:|---|
-| Database tables | **189** | `grep -c "= pgTable(" src/lib/db/schema.ts` (the file is 4,772 lines) |
+| Database tables | **198** | `grep -c "= pgTable(" src/lib/db/schema.ts` (the file is 5,050 lines) |
 | Postgres enum types | **61** | `grep -c "= pgEnum(" src/lib/db/schema.ts` |
-| Drizzle migrations | **69** | `ls drizzle/*.sql`, latest `drizzle/0068_payout_adjustment_superseded.sql` |
-| Route files | **180** | `find src/app/api -name route.ts` |
-| HTTP endpoints | **243** | 241 named `export async function GET\|POST\|PUT\|PATCH\|DELETE` handlers, **+2** for the Auth.js catch-all (`src/app/api/auth/[...nextauth]/route.ts:3` exports by destructuring, so it matches no `function` grep), **−2** for the two CORS `OPTIONS` preflights on the public OA-resolver routes |
-| Vercel Cron entries | **17** | the `crons` array in `vercel.json` |
-| Internal cron route handlers | **22** | `find src/app/api/internal -name route.ts`; the 5 unscheduled ones are `manualOnly: true` in `src/lib/data-health/cron-registry.ts` |
-| Pages in the `(app)` group | **26** | plus 3 print surfaces under `src/app/(print)/`, `src/app/login/page.tsx`, and the public `src/app/schedule/[token]/page.tsx` — **31** `page.tsx` files in total |
-| Navigation tools | **22** | in 6 sections, 7 with live count badges, 4 pinned as shortcuts (`src/lib/navigation/tools.ts`) |
-| Vitest test files | **389** | `*.test.ts(x)` under `src/`, of which **13** are `*.integration.test.ts` |
+| Drizzle migrations | **71** | `ls drizzle/*.sql`, latest `drizzle/0070_unearned_revenue_dashboard.sql` |
+| Route files | **185** | `find src/app/api -name route.ts` |
+| HTTP endpoints | **249** | 247 named `export async function GET\|POST\|PUT\|PATCH\|DELETE` handlers, **+2** for the Auth.js catch-all (`src/app/api/auth/[...nextauth]/route.ts:3` exports by destructuring, so it matches no `function` grep), **−2** for the two CORS `OPTIONS` preflights on the public OA-resolver routes |
+| Vercel Cron entries | **18** | the `crons` array in `vercel.json` |
+| Internal cron route handlers | **23** | `find src/app/api/internal -name route.ts`; the 5 unscheduled ones are `manualOnly: true` in `src/lib/data-health/cron-registry.ts` |
+| Pages in the `(app)` group | **27** | plus 3 print surfaces under `src/app/(print)/`, `src/app/login/page.tsx`, and the public `src/app/schedule/[token]/page.tsx` — **32** `page.tsx` files in total |
+| Navigation tools | **23** | in 6 sections, 7 with live count badges, 4 pinned as shortcuts (`src/lib/navigation/tools.ts`) |
+| Vitest test files | **399** | `*.test.ts(x)` under `src/`, of which **13** are `*.integration.test.ts` |
 
 The mechanical inventories behind the first six rows live in
 [`reference/database/index.md`](./reference/database/index.md),
@@ -162,9 +162,9 @@ The cross-cutting mental model — read these to understand the system as a whol
 
 ### Features
 
-One page per product feature; owns purpose, rules, flows, and the *why*. **Twenty-five pages** —
-`ls docs/features/*.md | wc -l` → 25. The first four groups follow the tool navigation
-(`src/lib/navigation/tools.ts`, 22 tools in 6 sections); the last group holds the two pages whose
+One page per product feature; owns purpose, rules, flows, and the *why*. **Twenty-six pages** —
+`ls docs/features/*.md | wc -l` → 26. The first four groups follow the tool navigation
+(`src/lib/navigation/tools.ts`, 23 tools in 6 sections); the last group holds the two pages whose
 surface has no nav entry of its own.
 
 #### Scheduling & Tutors
@@ -199,6 +199,7 @@ surface has no nav entry of its own.
 |---|---|---|
 | [Sales Dashboard](./features/sales-dashboard.md) | stable | Turns the sales team's monthly Google Sheets into a governed Postgres dataset and a GM-facing revenue-pace / pipeline / scenario readout. Owns the shared Sheets access layer. |
 | [Credit Control](./features/credit-control.md) | stable | Projects when each student's prepaid credits cross the alert threshold and hit zero, ranks an at-risk worklist, and logs the outreach. Its snapshot tables are read by eleven other modules. |
+| [Unearned Revenue](./features/unearned-revenue.md) | stable (FIFO shadow until Finance approval) | Mirrors only QA-passed, formula-backed workbook outputs into an immutable Postgres snapshot, then drills from finance totals to students, class accounts, package lots, and exact Google rows. |
 | [Payroll](./features/payroll.md) | stable | Reconciles a Bangkok month of Wise sessions and payout invoices against a versioned rate card; emits integrity issues, manual adjustments, and an approval step. |
 
 #### Market Intelligence · Research & Reference · Data & Audit
@@ -232,7 +233,7 @@ Mechanical lookup. Owns exact signatures, columns, schedules, and variables — 
 
 #### API — [`reference/api/`](./reference/api/index.md)
 
-Start at the index; it carries the master method + path + auth + purpose table for all **243**
+Start at the index; it carries the master method + path + auth + purpose table for all **249**
 endpoints and routes you to a detail page per group.
 
 | Doc | Covers |
@@ -248,6 +249,7 @@ endpoints and routes you to a detail page per group.
 | [competitor-intelligence.md](./reference/api/competitor-intelligence.md) | `/api/competitor-intelligence/*` plus the weekly sync cron. |
 | [ai-scheduler.md](./reference/api/ai-scheduler.md) | `/api/ai-scheduler/*` — conversations, message turns, feedback, metrics. |
 | [credit-control.md](./reference/api/credit-control.md) | `/api/credit-control/*`. |
+| [unearned-revenue.md](./reference/api/unearned-revenue.md) | `/api/unearned-revenue/*` plus its daily workbook-import cron. Six capability- or secret-gated endpoints. |
 | [progress-tests.md](./reference/api/progress-tests.md) | `/api/progress-tests/*` plus the sync and admin-digest cron routes. |
 | [payroll.md](./reference/api/payroll.md) | `/api/payroll/*`. |
 | [leave-requests.md](./reference/api/leave-requests.md) | `/api/leave-requests/*` plus the sheet-sync cron route. |
@@ -264,7 +266,7 @@ endpoints and routes you to a detail page per group.
 
 | Doc | Covers |
 |---|---|
-| [index.md](./reference/database/index.md) | **Master table index**: all 189 tables, each with its grain, owning domain, and the `schema.ts` line range that is authoritative for its columns. **Eighteen** domain groupings, one per `erd-*.md` page, so every table is diagrammed in exactly one place. |
+| [index.md](./reference/database/index.md) | **Master table index**: all 198 tables, each with its grain, owning domain, and the `schema.ts` line range that is authoritative for its columns. **Nineteen** domain groupings, one per `erd-*.md` page, so every table is diagrammed in exactly one place. |
 | [enums.md](./reference/database/enums.md) | All 61 native Postgres enum types: values, declaration site, and the columns bound to each. |
 | [erd-core.md](./reference/database/erd-core.md) | The snapshot/ETL spine and what still hangs directly off it: sync control plane and cron observability, auth & access, tutor identity/normalization/session blocks/data health, and the read-only IPEDS dataset. **22 tables** — it opens with a *Moved* table naming the eight domains that took 102 tables onto their own pages. |
 | [erd-university-admissions.md](./reference/database/erd-university-admissions.md) | University Admissions tables (36) — the largest single domain, in four numbered sections. |
@@ -272,6 +274,7 @@ endpoints and routes you to a detail page per group.
 | [erd-competitor-intelligence.md](./reference/database/erd-competitor-intelligence.md) | Competitor Intelligence tables (16). |
 | [erd-line.md](./reference/database/erd-line.md) | LINE tables (13). |
 | [erd-credit-control.md](./reference/database/erd-credit-control.md) | Credit Control tables (11) — the de-facto institute-wide student/session store. |
+| [erd-unearned-revenue.md](./reference/database/erd-unearned-revenue.md) | Unearned Revenue tables (8) — access/audit, import lineage, immutable snapshot headers, and formula-backed finance/student/account/lot rows. |
 | [erd-classrooms.md](./reference/database/erd-classrooms.md) | Classroom assignment + email tables (9). |
 | [erd-payroll.md](./reference/database/erd-payroll.md) | Payroll tables (8). |
 | [erd-progress-tests.md](./reference/database/erd-progress-tests.md) | Progress Tests tables (8). |
