@@ -40,7 +40,7 @@ Every number below is mechanical, taken from the tree rather than from prose:
 | Internal cron route handlers | **23** | `find src/app/api/internal -name route.ts`; the 5 unscheduled ones are `manualOnly: true` in `src/lib/data-health/cron-registry.ts` |
 | Pages in the `(app)` group | **27** | plus 3 print surfaces under `src/app/(print)/`, `src/app/login/page.tsx`, and the public `src/app/schedule/[token]/page.tsx` — **32** `page.tsx` files in total |
 | Navigation tools | **23** | in 6 sections, 7 with live count badges, 4 pinned as shortcuts (`src/lib/navigation/tools.ts`) |
-| Vitest test files | **399** | `*.test.ts(x)` under `src/`, of which **13** are `*.integration.test.ts` |
+| Vitest test files | **400** | `*.test.ts(x)` under `src/`, of which **13** are `*.integration.test.ts` |
 
 The mechanical inventories behind the first six rows live in
 [`reference/database/index.md`](./reference/database/index.md),

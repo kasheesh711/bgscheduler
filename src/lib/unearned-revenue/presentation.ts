@@ -24,6 +24,19 @@ export function completedMonthEndPeriods(
   return periods.filter((period) => period.periodKind === "MONTH_END");
 }
 
+export function unearnedRevenueDashboardHref(
+  pathname: string,
+  currentQuery: string | { toString(): string },
+  values: Record<string, string | null>,
+): string {
+  const next = new URLSearchParams(currentQuery.toString());
+  for (const [key, value] of Object.entries(values)) {
+    if (!value) next.delete(key);
+    else next.set(key, value);
+  }
+  return `${pathname}${next.size ? `?${next.toString()}` : ""}`;
+}
+
 export function unearnedRevenueWaterfall(input: {
   opening: number;
   deferred: number;

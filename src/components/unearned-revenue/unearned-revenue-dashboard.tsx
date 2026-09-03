@@ -37,6 +37,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   completedMonthEndPeriods,
+  unearnedRevenueDashboardHref,
   unearnedRevenueLotLabel,
   unearnedRevenueModelPresentation,
   unearnedRevenuePeriodSuffix,
@@ -171,6 +172,19 @@ function confidenceLabel(lot: UnearnedRevenueLotDetail): string {
   return "Estimated residual";
 }
 
+export function UnearnedRevenueLotTraceLinks({ lot }: { lot: UnearnedRevenueLotDetail }) {
+  return (
+    <div className="mt-4 flex flex-wrap gap-4 border-t pt-3">
+      <TraceLink href={lot.formulaTrace.url}>Open formula</TraceLink>
+      {lot.sourceTrace ? (
+        <TraceLink href={lot.sourceTrace.url}>Open source row</TraceLink>
+      ) : (
+        <span className="text-xs text-muted-foreground">No source row for this synthetic lot</span>
+      )}
+    </div>
+  );
+}
+
 function StudentDetailDrawer({
   studentId,
   period,
@@ -303,14 +317,7 @@ function StudentDetailDrawer({
                           </div>
                         ))}
                       </div>
-                      <div className="mt-4 flex flex-wrap gap-4 border-t pt-3">
-                        <TraceLink href={lot.formulaTrace.url}>Open formula</TraceLink>
-                        {lot.sourceTrace ? (
-                          <TraceLink href={lot.sourceTrace.url}>Open source row</TraceLink>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">No source row for this synthetic lot</span>
-                        )}
-                      </div>
+                      <UnearnedRevenueLotTraceLinks lot={lot} />
                     </CardContent>
                   </Card>
                 ))}
@@ -397,12 +404,16 @@ function AccessDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (op
   );
 }
 
-export function UnearnedRevenueDashboard() {
+export function UnearnedRevenueDashboard({
+  initialPayload = null,
+}: {
+  initialPayload?: UnearnedRevenueDashboardPayload | null;
+} = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const [payload, setPayload] = useState<UnearnedRevenueDashboardPayload | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [payload, setPayload] = useState<UnearnedRevenueDashboardPayload | null>(initialPayload);
+  const [loading, setLoading] = useState(initialPayload === null);
   const [error, setError] = useState<string | null>(null);
   const [searchDraft, setSearchDraft] = useState(searchParams.get("search") ?? "");
   const [refreshing, setRefreshing] = useState(false);
@@ -428,12 +439,7 @@ export function UnearnedRevenueDashboard() {
   useEffect(() => setSearchDraft(searchParams.get("search") ?? ""), [searchParams]);
 
   function updateQuery(values: Record<string, string | null>, mode: "replace" | "push" = "replace") {
-    const next = new URLSearchParams(searchParams.toString());
-    for (const [key, value] of Object.entries(values)) {
-      if (!value) next.delete(key);
-      else next.set(key, value);
-    }
-    const href = `${pathname}${next.size ? `?${next.toString()}` : ""}`;
+    const href = unearnedRevenueDashboardHref(pathname, searchParams, values);
     if (mode === "push") router.push(href);
     else router.replace(href);
   }
@@ -531,7 +537,7 @@ export function UnearnedRevenueDashboard() {
   const warning = payload.metadata.stale || payload.metadata.lastSyncStatus === "failed";
 
   return (
-    <div className="-mx-4 -my-3 min-h-0 flex-1 overflow-y-auto bg-muted/20 px-4 py-5 lg:-mx-6 lg:px-6">
+    <div data-selected-student={selectedStudent || undefined} className="-mx-4 -my-3 min-h-0 flex-1 overflow-y-auto bg-muted/20 px-4 py-5 lg:-mx-6 lg:px-6">
       <div className="mx-auto max-w-[1600px] space-y-5">
         <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
           <div>
@@ -662,7 +668,7 @@ export function UnearnedRevenueDashboard() {
                 <TableHeader><TableRow><TableHead>Student</TableHead><TableHead className="text-right">Accounts</TableHead><TableHead className="text-right">Paid credits</TableHead><TableHead className="text-right">Closing liability</TableHead><TableHead className="text-right">Attributed</TableHead><TableHead className="text-right">Residual</TableHead><TableHead>Review</TableHead><TableHead>Trace</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {payload.students.map((row) => (
-                    <TableRow key={row.studentId} className="cursor-pointer" tabIndex={0} onClick={() => updateQuery({ student: row.studentId }, "push")} onKeyDown={(event) => { if (event.key === "Enter") updateQuery({ student: row.studentId }, "push"); }}>
+                    <TableRow key={row.studentId} data-detail-href={unearnedRevenueDashboardHref(pathname, searchParams, { student: row.studentId })} className="cursor-pointer" tabIndex={0} onClick={() => updateQuery({ student: row.studentId }, "push")} onKeyDown={(event) => { if (event.key === "Enter") updateQuery({ student: row.studentId }, "push"); }}>
                       <TableCell><div className="font-medium">{row.studentName || "Unnamed student"}</div><div className="font-mono text-xs text-muted-foreground">{row.studentId}</div></TableCell>
                       <TableCell className="text-right font-mono">{row.accountCount}</TableCell>
                       <TableCell className="text-right font-mono">{quantity.format(row.remainingPaidCredits)}</TableCell>
@@ -678,7 +684,7 @@ export function UnearnedRevenueDashboard() {
             </div>
             <div className="divide-y md:hidden">
               {payload.students.map((row) => (
-                <button key={row.studentId} type="button" className="w-full p-4 text-left hover:bg-muted/50" onClick={() => updateQuery({ student: row.studentId }, "push")}>
+                <button key={row.studentId} data-detail-href={unearnedRevenueDashboardHref(pathname, searchParams, { student: row.studentId })} type="button" className="w-full p-4 text-left hover:bg-muted/50" onClick={() => updateQuery({ student: row.studentId }, "push")}>
                   <div className="flex items-start justify-between gap-3"><div><div className="font-medium">{row.studentName || "Unnamed student"}</div><div className="font-mono text-xs text-muted-foreground">{row.studentId}</div></div><StudentLiability row={row} shadow={shadow} /></div>
                   <div className="mt-3 grid grid-cols-3 gap-2 text-xs"><div><span className="text-muted-foreground">Accounts</span><div className="font-mono">{row.accountCount}</div></div><div><span className="text-muted-foreground">Paid credits</span><div className="font-mono">{quantity.format(row.remainingPaidCredits)}</div></div><div><span className="text-muted-foreground">Attributed</span><div className="font-mono">{percent.format(row.attributionPercent)}%</div></div></div>
                 </button>
