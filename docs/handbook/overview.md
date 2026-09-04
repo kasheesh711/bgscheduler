@@ -48,7 +48,7 @@ The LINE Official Account inbox: signature-verified webhook ingest, contact reso
 
 Room utilization is wired end to end and is the only part users can reach: the dashboard fetches `/api/room-capacity/utilization` and nothing else ([`src/components/room-capacity/room-capacity-dashboard.tsx:354`](../../src/components/room-capacity/room-capacity-dashboard.tsx)). The `month` and `forecast` engines are implemented, tested, and authenticated, but their routes have no frontend consumer anywhere in `src/`. The feeding sync is registered `manualOnly: true` with no `vercel.json` entry, so it runs only when someone triggers it from the Data Health job list ([`src/lib/data-health/cron-registry.ts:370-382`](../../src/lib/data-health/cron-registry.ts)). 3 endpoints, 5 tables. See [room-capacity](../features/room-capacity.md).
 
-### Onsite Foot Traffic — `stable in code; rollout-gated`
+### Onsite Foot Traffic — `stable`
 
 An internal attendance proxy for how many students onsite classes bring into the centre. A visit requires an ended offline session, an active physical room, a non-teacher participant, and positive consumed credit; stable Wise student IDs are HMAC-fingerprinted so unique-student counts work without storing or exporting identity. The default research window is March–September 2026, with September labelled MTD until the month closes. The page includes exact tables beneath every chart, five CSV grains, and immutable self-contained HTML/PDF analytics packs. Its daily 01:18 Bangkok PAST-session reconciliation replaces the previous 35 completed days so late attendance and cancellations correct history. 6 endpoints including the cron, 4 tables. See [onsite-foot-traffic](../features/onsite-foot-traffic.md).
 

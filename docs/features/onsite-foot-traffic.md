@@ -1,6 +1,6 @@
 # Onsite Foot Traffic
 
-**Status: stable in code; production rollout requires migration `0073` and an immutable pseudonym secret.** The dashboard, sync, exports, report snapshots, and HTML/PDF renderers are implemented and tested. Until `FOOT_TRAFFIC_PSEUDONYM_SECRET` is configured and the first backfill succeeds, the page correctly shows no coverage rather than inventing actuals.
+**Status: stable; production active since 4 September 2026.** Migration `0073`, the immutable Vercel pseudonym secret, the dashboard, sync, exports, report snapshots, and HTML/PDF renderers are live. The first corrected backfill covers 1 March–3 September 2026; later daily runs extend and reconcile that history.
 
 ## Purpose
 
@@ -80,4 +80,4 @@ The HTML embeds the BeGifted logo, fonts, CSS, data, and labelled SVG charts wit
 
 Unit and component coverage pins classification, participant parsing, HMAC stability, Bangkok boundaries, Monday weeks, partial periods, repeated-student uniqueness, quality exclusions, CSV escaping/PII removal, filters, accessibility, and MTD labels. Postgres integration coverage pins idempotent replacement, cancellation removal, failed-fetch preservation, single-flight, and immutable reports. The report integration test uses real Chrome plus `pdfinfo`, `pdftotext`, and rendered page images to check portrait A4 geometry, selectable text, complete sections, nonblank pages, and the response limit.
 
-Production activation remains an operator step: configure the immutable secret, apply migration `0073_funny_ego.sql`, deploy, run the full backfill, grant the research teammate access if restricted, reconcile representative March and August weeks against Wise, and watch the first scheduled runs in Data Health.
+Production activation completed on 4 September 2026: migration `0073_funny_ego.sql` was applied, `FOOT_TRAFFIC_PSEUDONYM_SECRET` was stored as a non-exportable Vercel sensitive value, and production deployment `dpl_HDqaTMpe5CiHkpkRGA8xdPez3CwD` was promoted. Backfill run `90e3d601-20c6-481f-b21a-91b1f0e59cfc` stored 17,392 canonical sessions and 7,841 visits through 3 September. Direct Wise checks for 2–8 March and 3–9 August matched production session IDs and per-session visit counts exactly. The first scheduled 01:18 Bangkok run remains the next operational checkpoint; restricted-user access still requires the teammate's exact admin identity.

@@ -585,7 +585,7 @@ writes to WISE and never writes to Google Sheets.
 | `maxDuration` | 800s ([`route.ts`](../../src/app/api/internal/sync-onsite-foot-traffic/route.ts)) |
 | Job body | `runOnsiteFootTrafficSync({ triggerType: "cron" })` |
 | Run table | `onsite_foot_traffic_sync_runs` |
-| Feature | [Onsite Foot Traffic](../features/onsite-foot-traffic.md) — **stable in code; rollout-gated** |
+| Feature | [Onsite Foot Traffic](../features/onsite-foot-traffic.md) — **stable** |
 
 The first successful run backfills `2026-03-01` through the latest completed Bangkok day. Later runs reconcile the previous 35 completed days. Wise pages are fetched before a transaction replaces that window, so a source failure preserves prior rows; late attendance edits and cancellations are removed on the next successful pass. The database partial unique index permits one `running` row, and a stale row older than 20 minutes is failed before a new claim. `FOOT_TRAFFIC_PSEUDONYM_SECRET` is required and must remain immutable. Direct cron audit and the feature's own run ledger both feed Data Health.
 
