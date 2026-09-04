@@ -1,7 +1,6 @@
 import "server-only";
 
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { join } from "node:path";
 
 import { formatFootTrafficDate } from "./dates";
@@ -12,14 +11,28 @@ import type {
   FootTrafficReportSnapshot,
 } from "./types";
 
-const localRequire = createRequire(import.meta.url);
+const REPORT_ASSET_PATHS = {
+  logo: join(process.cwd(), "public/brand/logo-horizontal.png"),
+  sarabun400: join(
+    process.cwd(),
+    "node_modules/@fontsource/sarabun/files/sarabun-latin-400-normal.woff2",
+  ),
+  sarabun600: join(
+    process.cwd(),
+    "node_modules/@fontsource/sarabun/files/sarabun-latin-600-normal.woff2",
+  ),
+  sarabunThai400: join(
+    process.cwd(),
+    "node_modules/@fontsource/sarabun/files/sarabun-thai-400-normal.woff2",
+  ),
+  cormorant600: join(
+    process.cwd(),
+    "node_modules/@fontsource/cormorant-garamond/files/cormorant-garamond-latin-600-normal.woff2",
+  ),
+} as const;
 
 function embeddedFile(path: string, mimeType: string): string {
   return `data:${mimeType};base64,${readFileSync(path).toString("base64")}`;
-}
-
-function fontData(packagePath: string): string {
-  return embeddedFile(localRequire.resolve(packagePath), "font/woff2");
 }
 
 function esc(value: unknown): string {
@@ -177,11 +190,11 @@ export function footTrafficReportFilename(snapshot: FootTrafficReportSnapshot, e
 
 export function renderFootTrafficReportHtml(snapshot: FootTrafficReportSnapshot): string {
   const payload = snapshot.payload;
-  const logo = embeddedFile(join(process.cwd(), "public/brand/logo-horizontal.png"), "image/png");
-  const sarabun400 = fontData("@fontsource/sarabun/files/sarabun-latin-400-normal.woff2");
-  const sarabun600 = fontData("@fontsource/sarabun/files/sarabun-latin-600-normal.woff2");
-  const sarabunThai400 = fontData("@fontsource/sarabun/files/sarabun-thai-400-normal.woff2");
-  const cormorant600 = fontData("@fontsource/cormorant-garamond/files/cormorant-garamond-latin-600-normal.woff2");
+  const logo = embeddedFile(REPORT_ASSET_PATHS.logo, "image/png");
+  const sarabun400 = embeddedFile(REPORT_ASSET_PATHS.sarabun400, "font/woff2");
+  const sarabun600 = embeddedFile(REPORT_ASSET_PATHS.sarabun600, "font/woff2");
+  const sarabunThai400 = embeddedFile(REPORT_ASSET_PATHS.sarabunThai400, "font/woff2");
+  const cormorant600 = embeddedFile(REPORT_ASSET_PATHS.cormorant600, "font/woff2");
   const generated = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Bangkok",
     dateStyle: "medium",
