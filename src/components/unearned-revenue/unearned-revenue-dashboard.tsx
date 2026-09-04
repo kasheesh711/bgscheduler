@@ -44,7 +44,6 @@ import {
   unearnedRevenueWaterfall,
 } from "@/lib/unearned-revenue/presentation";
 import {
-  FIFO_PACKAGE_MODEL,
   type UnearnedRevenueAccessRow,
   type UnearnedRevenueCapability,
   type UnearnedRevenueDashboardPayload,
@@ -122,11 +121,12 @@ function TraceLink({ href, children = "Open formula" }: { href: string; children
   );
 }
 
-function ModelBadge({ canonicalModel }: { canonicalModel: string }) {
-  const fifo = canonicalModel === FIFO_PACKAGE_MODEL;
-  const presentation = unearnedRevenueModelPresentation(
-    fifo ? FIFO_PACKAGE_MODEL : "LEGACY_ACCOUNT_RATE",
-  );
+function ModelBadge({ canonicalModel, modelVersion }: {
+  canonicalModel: UnearnedRevenueDashboardPayload["metadata"]["canonicalModel"];
+  modelVersion: string;
+}) {
+  const presentation = unearnedRevenueModelPresentation(canonicalModel, modelVersion);
+  const fifo = presentation.fifoCanonical;
   return (
     <Badge variant={fifo ? "default" : "outline"} className={fifo ? "bg-emerald-600 text-white" : "border-amber-300 bg-amber-50 text-amber-900"}>
       {presentation.badgeLabel}
@@ -582,7 +582,12 @@ export function UnearnedRevenueDashboard({
   }
 
   const selected = payload.selectedPeriod;
-  const shadow = payload.metadata.canonicalModel !== FIFO_PACKAGE_MODEL;
+  const shadow = payload.metadata.modelMode === "SHADOW";
+  const modelPresentation = unearnedRevenueModelPresentation(
+    payload.metadata.canonicalModel,
+    payload.metadata.modelVersion,
+  );
+  const exact = payload.exactPackageOverview;
   const canManage = payload.metadata.capabilities.includes("access_manager");
   const warning = payload.metadata.stale || payload.metadata.lastSyncStatus === "failed";
 
@@ -593,7 +598,10 @@ export function UnearnedRevenueDashboard({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-2xl font-semibold tracking-tight">Unearned Revenue</h1>
-              <ModelBadge canonicalModel={payload.metadata.canonicalModel} />
+              <ModelBadge
+                canonicalModel={payload.metadata.canonicalModel}
+                modelVersion={payload.metadata.modelVersion}
+              />
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
               Data through {formatDate(payload.metadata.cutoff)} · imported {formatDateTime(payload.metadata.importedAt)} · revision {payload.metadata.sourceRevision}
@@ -631,7 +639,7 @@ export function UnearnedRevenueDashboard({
           <div className="rounded-lg border border-sky-200 bg-sky-50/70 p-3 text-sm text-sky-950">
             <div className="font-medium">Legacy is still the official number</div>
             <div className="mt-1 text-xs leading-relaxed">
-              FIFO V2 is a review copy that links a sales row, Wise receipt, and credit event. Finance must approve this exact workbook run before it can replace the legacy value.
+              {modelPresentation.runtimeLabel} is a review copy that links a sales row, Wise receipt, and credit event. Finance must approve this exact workbook run before it can replace the legacy value.
             </div>
           </div>
         )}
@@ -659,8 +667,14 @@ export function UnearnedRevenueDashboard({
           <MetricCard label="Newly deferred" value={money.format(selected.deferredNewLiabilityThb)} />
           <MetricCard label="Recognized revenue" value={money.format(selected.recognizedRevenueThb)} />
           <MetricCard label="Remaining paid credits" value={quantity.format(selected.remainingPaidCredits)} />
-          <MetricCard label="Liability tied to exact packages" value={`${percent.format(selected.attributionPercent)}%`} note={`${money.format(selected.residualLiabilityThb)} still residual`} />
-          <MetricCard label="FIFO V2 candidate" value={money.format(selected.fifoClosingLiabilityThb)} note={shadow ? `Delta ${money.format(selected.fifoVsLegacyDifferenceThb)}` : "Canonical package-lot model"} />
+          <MetricCard
+            label="Liability tied to exact packages"
+            value={exact.available ? money.format(exact.totalLiabilityThb) : "Not available"}
+            note={exact.available
+              ? `${percent.format(exact.attributionPercent)}% of FIFO liability · ${money.format(exact.residualLiabilityThb)} residual`
+              : "Appears after the first schema-4 workbook import"}
+          />
+          <MetricCard label={`${modelPresentation.runtimeLabel} candidate`} value={money.format(selected.fifoClosingLiabilityThb)} note={shadow ? `Delta ${money.format(selected.fifoVsLegacyDifferenceThb)}` : "Canonical package-lot model"} />
           <MetricCard label="Legacy comparator" value={money.format(selected.legacyClosingLiabilityThb)} note={!shadow ? `Delta ${money.format(-selected.fifoVsLegacyDifferenceThb)} vs FIFO` : "Canonical until Finance approval"} />
         </section>
 
@@ -674,6 +688,73 @@ export function UnearnedRevenueDashboard({
             <CardContent><ChartCanvas className="h-72" config={waterfallConfig} ariaLabel="Waterfall chart showing opening plus deferred minus recognized equals closing liability" /></CardContent>
           </Card>
         </section>
+
+        <Card>
+          <CardHeader className="space-y-1 pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle className="text-base">Liability tied to exact packages</CardTitle>
+              {exact.available && (
+                <Badge variant={shadow ? "outline" : "default"}>
+                  {shadow ? `${modelPresentation.runtimeLabel} shadow` : "Canonical"}
+                </Badge>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Automatic exact matches and documented Finance overrides only. Opening and unresolved lots are excluded.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4 p-0 pb-4">
+            {exact.available ? (
+              <>
+                <div className="grid gap-2 px-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <MetricCard label="Automatic exact" value={money.format(exact.automaticLiabilityThb)} />
+                  <MetricCard label="Finance reviewed" value={money.format(exact.financeReviewedLiabilityThb)} />
+                  <MetricCard label="Remaining exact credits" value={quantity.format(exact.remainingCredits)} />
+                  <MetricCard label="Active exact lots" value={exact.activeLotCount.toLocaleString()} note={`${exact.packageCount.toLocaleString()} packages with liability`} />
+                </div>
+                <div className="overflow-x-auto border-y">
+                  <Table className="min-w-[980px]">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Package</TableHead>
+                        <TableHead className="text-right">Exact liability</TableHead>
+                        <TableHead className="text-right">Automatic</TableHead>
+                        <TableHead className="text-right">Finance reviewed</TableHead>
+                        <TableHead className="text-right">Remaining credits</TableHead>
+                        <TableHead className="text-right">Students</TableHead>
+                        <TableHead className="text-right">Active lots</TableHead>
+                        <TableHead className="text-right">Share</TableHead>
+                        <TableHead>Trace</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {exact.packages.map((row) => (
+                        <TableRow key={row.packageName}>
+                          <TableCell className="font-medium">{row.packageName}</TableCell>
+                          <TableCell className="text-right font-mono font-semibold">{money.format(row.closingExactLiabilityThb)}</TableCell>
+                          <TableCell className="text-right font-mono">{money.format(row.automaticExactLiabilityThb)}</TableCell>
+                          <TableCell className="text-right font-mono">{money.format(row.financeReviewedLiabilityThb)}</TableCell>
+                          <TableCell className="text-right font-mono">{quantity.format(row.remainingCredits)}</TableCell>
+                          <TableCell className="text-right font-mono">{row.studentCount.toLocaleString()}</TableCell>
+                          <TableCell className="text-right font-mono">{row.activeLotCount.toLocaleString()}</TableCell>
+                          <TableCell className="text-right font-mono">{percent.format(row.shareOfExactLiability)}%</TableCell>
+                          <TableCell><TraceLink href={row.trace.url} /></TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                {exact.packages.length === 0 && (
+                  <div className="px-4 text-sm text-muted-foreground">No exact-package liability remains in this period.</div>
+                )}
+              </>
+            ) : (
+              <div className="px-4 text-sm text-muted-foreground">
+                This snapshot predates schema 4. Student and FIFO totals remain available; the package overview will appear after the first successful V3 import.
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-base">Data quality and review conditions</CardTitle></CardHeader>

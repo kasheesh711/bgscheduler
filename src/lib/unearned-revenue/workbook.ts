@@ -1,6 +1,7 @@
 import {
   FIFO_PACKAGE_MODEL,
   FIFO_PACKAGE_MODEL_V1,
+  FIFO_PACKAGE_MODEL_V2,
   LEGACY_ACCOUNT_MODEL,
   type UnearnedRevenueCanonicalModel,
   type UnearnedRevenueLotKind,
@@ -14,6 +15,7 @@ export const WORKBOOK_LIMITS = {
   status: 200,
   qa: 200,
   periods: 500,
+  exactPackages: 500,
   students: 20_000,
   accounts: 20_000,
   receipts: 10_000,
@@ -45,6 +47,8 @@ export interface ParsedWorkbookStatus {
   receiptCandidateCount?: number;
   reversalConflictCount?: number;
   missingReceiptEvidenceCount?: number;
+  automaticExactLiabilityThb?: string;
+  financeReviewedLiabilityThb?: string;
 }
 
 export interface ParsedWorkbookPeriod {
@@ -178,12 +182,32 @@ export interface ParsedWorkbookLot {
   formulaRow: number;
 }
 
+export interface ParsedWorkbookExactPackage {
+  periodEnd: string;
+  periodKind: UnearnedRevenuePeriodKind;
+  isLatest: boolean;
+  packageName: string;
+  openingLiabilityThb: string;
+  deferredNewLiabilityThb: string;
+  recognizedRevenueThb: string;
+  automaticExactLiabilityThb: string;
+  financeReviewedLiabilityThb: string;
+  closingExactLiabilityThb: string;
+  remainingCredits: string;
+  studentCount: number;
+  accountCount: number;
+  activeLotCount: number;
+  shareOfExactLiability: string;
+  sourceRow: number;
+}
+
 export interface ParsedWorkbookContract {
   status: ParsedWorkbookStatus;
   periods: ParsedWorkbookPeriod[];
   students: ParsedWorkbookStudent[];
   accounts: ParsedWorkbookAccount[];
   lots: ParsedWorkbookLot[];
+  exactPackages: ParsedWorkbookExactPackage[];
   rowCounts: Record<string, number>;
 }
 
@@ -200,6 +224,8 @@ interface WorkbookParseInput {
   lots: unknown[][];
   lotFormulas: unknown[][];
   receipts?: unknown[][];
+  exactPackages?: unknown[][];
+  exactPackageFormulas?: unknown[][];
 }
 
 function text(value: unknown): string {
@@ -333,6 +359,12 @@ function requiredStatus(status: Map<string, string>, field: string): string {
 function parseStatus(startRows: unknown[][], endRows: unknown[][]): ParsedWorkbookStatus {
   const start = statusMap(startRows);
   const end = statusMap(endRows);
+  const observedFields = new Set([...start.keys(), ...end.keys()]);
+  for (const field of observedFields) {
+    if ((start.get(field) ?? "") !== (end.get(field) ?? "")) {
+      throw new UnearnedRevenueWorkbookError(`Model Status changed during import (${field})`);
+    }
+  }
   for (const field of STATUS_CONSISTENCY_FIELDS) {
     if (requiredStatus(start, field) !== requiredStatus(end, field)) {
       throw new UnearnedRevenueWorkbookError(`Model Status changed during import (${field})`);
@@ -344,12 +376,13 @@ function parseStatus(startRows: unknown[][], endRows: unknown[][]): ParsedWorkbo
     throw new UnearnedRevenueWorkbookError("Workbook is not in a QA-passed PUBLISHED state");
   }
   const schemaVersion = integer(requiredStatus(start, "workbook_schema_version"), "workbook_schema_version");
-  if (schemaVersion !== 2 && schemaVersion !== 3) {
+  if (![2, 3, 4].includes(schemaVersion)) {
     throw new UnearnedRevenueWorkbookError(`Unsupported workbook schema version ${schemaVersion}`);
   }
   const canonicalRaw = requiredStatus(start, "canonical_model");
   if (canonicalRaw !== LEGACY_ACCOUNT_MODEL
     && canonicalRaw !== FIFO_PACKAGE_MODEL_V1
+    && canonicalRaw !== FIFO_PACKAGE_MODEL_V2
     && canonicalRaw !== FIFO_PACKAGE_MODEL) {
     throw new UnearnedRevenueWorkbookError(`Unsupported canonical model ${canonicalRaw}`);
   }
@@ -358,9 +391,14 @@ function parseStatus(startRows: unknown[][], endRows: unknown[][]): ParsedWorkbo
     throw new UnearnedRevenueWorkbookError(`Unsupported model mode ${modelMode}`);
   }
   const modelVersion = requiredStatus(start, "candidate_model_version");
-  if (schemaVersion >= 3 && modelVersion !== FIFO_PACKAGE_MODEL) {
+  if (schemaVersion === 3 && modelVersion !== FIFO_PACKAGE_MODEL_V2) {
     throw new UnearnedRevenueWorkbookError(
-      `Workbook schema V3 must use candidate model ${FIFO_PACKAGE_MODEL}`,
+      `Workbook schema V3 must use candidate model ${FIFO_PACKAGE_MODEL_V2}`,
+    );
+  }
+  if (schemaVersion === 4 && modelVersion !== FIFO_PACKAGE_MODEL) {
+    throw new UnearnedRevenueWorkbookError(
+      `Workbook schema V4 must use candidate model ${FIFO_PACKAGE_MODEL}`,
     );
   }
   if (canonicalRaw !== LEGACY_ACCOUNT_MODEL && modelVersion !== canonicalRaw) {
@@ -382,6 +420,14 @@ function parseStatus(startRows: unknown[][], endRows: unknown[][]): ParsedWorkbo
     receiptCandidateCount: Number(start.get("receipt_candidate_event_count") ?? 0) || 0,
     reversalConflictCount: Number(start.get("reversal_conflict_count") ?? 0) || 0,
     missingReceiptEvidenceCount: Number(start.get("missing_receipt_evidence_count") ?? 0) || 0,
+    automaticExactLiabilityThb: numeric(
+      start.get("automatic_exact_liability_thb") ?? 0,
+      "automatic_exact_liability_thb",
+    ),
+    financeReviewedLiabilityThb: numeric(
+      start.get("finance_reviewed_liability_thb") ?? 0,
+      "finance_reviewed_liability_thb",
+    ),
   };
 }
 
@@ -454,6 +500,16 @@ function matchConfidence(value: unknown, label: string): UnearnedRevenueMatchCon
   return result as UnearnedRevenueMatchConfidence;
 }
 
+const AUTOMATIC_EXACT_MATCH_STATUSES = new Set<UnearnedRevenueMatchStatus>([
+  "EXACT_TRANSACTION",
+  "RECEIPT_IDENTIFIER_CHAIN",
+  "COMPOSITE_VERIFIED",
+]);
+const EXACT_MATCH_STATUSES = new Set<UnearnedRevenueMatchStatus>([
+  ...AUTOMATIC_EXACT_MATCH_STATUSES,
+  "OVERRIDE",
+]);
+
 function difference(left: string, right: string): number {
   return Math.abs(Number(left) - Number(right));
 }
@@ -484,7 +540,7 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
   assertQa(input.qa);
 
   if (status.workbookSchemaVersion >= 3 && !input.receipts) {
-    throw new UnearnedRevenueWorkbookError("Workbook schema V3 is missing SRC_Wise_Receipt data");
+    throw new UnearnedRevenueWorkbookError("Workbook schema V3/V4 is missing SRC_Wise_Receipt data");
   }
   const receiptRows = input.receipts ?? [[
     "receipt_id", "receipt_type", "receipt_status", "charged_at", "receipt_date",
@@ -713,6 +769,12 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
       "receipt_class_id", "receipt_source_row",
     );
   }
+  if (status.workbookSchemaVersion >= 4) {
+    lotRequired.push(
+      "formula_rule_ids", "payment_date", "matching_date", "matching_date_source",
+      "sales_nickname_key", "wise_nickname_key", "nickname_match_state",
+    );
+  }
   const lotTable = table(input.lots, "CALC_Package_Lot_Period", WORKBOOK_LIMITS.lots, lotRequired);
   const lots: ParsedWorkbookLot[] = lotTable.records.map(({ row, sourceRow }) => {
     for (let column = 22; column <= 27; column += 1) {
@@ -735,6 +797,44 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
     if (receiptChargedAtRaw && Number.isNaN(new Date(receiptChargedAtRaw).getTime())) {
       throw new UnearnedRevenueWorkbookError(`Lot row ${sourceRow} receipt_charged_at is invalid`);
     }
+    const parsedMatchStatus = matchStatus(
+      lotTable.get(row, "match_status"),
+      `Lot row ${sourceRow}`,
+    );
+    const parsedMatchEvidence = jsonObject(
+      lotTable.get(row, "match_evidence"),
+      `Lot row ${sourceRow} match_evidence`,
+    );
+    const salesKey = text(lotTable.get(row, "sales_key"));
+    const packageName = text(lotTable.get(row, "package_name"));
+    const rawNicknameState = text(lotTable.get(row, "nickname_match_state"));
+    const rawSalesNickname = text(lotTable.get(row, "sales_nickname_key"));
+    const rawWiseNickname = text(lotTable.get(row, "wise_nickname_key"));
+    if (status.workbookSchemaVersion >= 4 && EXACT_MATCH_STATUSES.has(parsedMatchStatus)) {
+      if (!packageName || !salesKey || !sourceSpreadsheet || sourceSheetRaw === ""
+        || sourceRowRaw === "" || !text(lotTable.get(row, "formula_rule_ids"))) {
+        throw new UnearnedRevenueWorkbookError(
+          `Exact-package lot row ${sourceRow} is missing its package, sales, or formula trace`,
+        );
+      }
+      if (AUTOMATIC_EXACT_MATCH_STATUSES.has(parsedMatchStatus)) {
+        if (rawNicknameState !== "MATCH"
+          || parsedMatchEvidence.nickname_match_state !== "MATCH"
+          || rawSalesNickname !== text(parsedMatchEvidence.sales_nickname_key)
+          || rawWiseNickname !== text(parsedMatchEvidence.wise_nickname_key)
+          || !text(parsedMatchEvidence.sales_nickname_key)
+          || !text(parsedMatchEvidence.wise_nickname_key)) {
+          throw new UnearnedRevenueWorkbookError(
+            `Automatic exact-package lot row ${sourceRow} lacks required identity evidence`,
+          );
+        }
+      } else if (!text(parsedMatchEvidence.decision_id)
+        || !text(parsedMatchEvidence.reviewer_email)) {
+        throw new UnearnedRevenueWorkbookError(
+          `Finance-reviewed exact-package lot row ${sourceRow} lacks override evidence`,
+        );
+      }
+    }
     return {
       periodEnd: googleSheetDate(lotTable.get(row, "period_end"), `Lot row ${sourceRow} period_end`),
       lotId: text(lotTable.get(row, "lot_id")),
@@ -744,7 +844,7 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
       studentName: text(lotTable.get(row, "student_name")),
       className: text(lotTable.get(row, "class_name")),
       lotKind: lotKind(lotTable.get(row, "lot_kind"), `Lot row ${sourceRow}`),
-      matchStatus: matchStatus(lotTable.get(row, "match_status"), `Lot row ${sourceRow}`),
+      matchStatus: parsedMatchStatus,
       matchConfidence: matchConfidence(
         text(lotTable.get(row, "match_confidence")) || (
           text(lotTable.get(row, "match_status")) === "OVERRIDE" ? "FINANCE_REVIEWED"
@@ -755,11 +855,11 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
         `Lot row ${sourceRow}`,
       ),
       matchRuleId: text(lotTable.get(row, "match_rule_id")),
-      matchEvidence: jsonObject(lotTable.get(row, "match_evidence"), `Lot row ${sourceRow} match_evidence`),
+      matchEvidence: parsedMatchEvidence,
       reviewState: reviewState(lotTable.get(row, "review_state"), `Lot row ${sourceRow}`),
-      packageName: text(lotTable.get(row, "package_name")),
+      packageName,
       transactionNumber: text(lotTable.get(row, "transaction_number")),
-      salesKey: text(lotTable.get(row, "sales_key")),
+      salesKey,
       transactionDate: optionalDate(lotTable.get(row, "transaction_date"), `Lot row ${sourceRow} transaction_date`),
       creditEventKey: text(lotTable.get(row, "credit_event_key")),
       originalCredits: numeric(lotTable.get(row, "original_credits"), "original_credits"),
@@ -797,6 +897,119 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
     };
   });
 
+  let exactPackages: ParsedWorkbookExactPackage[] = [];
+  if (status.workbookSchemaVersion >= 4) {
+    if (!input.exactPackages || !input.exactPackageFormulas) {
+      throw new UnearnedRevenueWorkbookError(
+        "Workbook schema V4 is missing CALC_Exact_Package_Overview data",
+      );
+    }
+    const exactPackageTable = table(
+      input.exactPackages,
+      "CALC_Exact_Package_Overview",
+      WORKBOOK_LIMITS.exactPackages,
+      [
+        "period_end", "period_kind", "is_latest", "package_name",
+        "opening_liability_thb", "deferred_new_liability_thb",
+        "recognized_revenue_thb", "automatic_exact_liability_thb",
+        "finance_reviewed_liability_thb", "closing_exact_liability_thb",
+        "remaining_credits", "student_count", "account_count", "active_lot_count",
+        "share_of_exact_liability", "identity_difference_thb", "formula_rule_ids",
+        "output_run_id", "source_fingerprint",
+      ],
+    );
+    exactPackages = exactPackageTable.records.map(({ row, sourceRow }) => {
+      for (let column = 4; column <= 15; column += 1) {
+        formulaCell(
+          input.exactPackageFormulas!,
+          sourceRow,
+          column,
+          "CALC_Exact_Package_Overview",
+        );
+      }
+      assertLineage(
+        exactPackageTable.get(row, "output_run_id"),
+        exactPackageTable.get(row, "source_fingerprint"),
+        status,
+        "CALC_Exact_Package_Overview",
+        sourceRow,
+      );
+      const packageName = text(exactPackageTable.get(row, "package_name"));
+      if (!packageName || !text(exactPackageTable.get(row, "formula_rule_ids"))) {
+        throw new UnearnedRevenueWorkbookError(
+          `Exact package row ${sourceRow} is missing its literal package name or formula rule`,
+        );
+      }
+      const opening = numeric(
+        exactPackageTable.get(row, "opening_liability_thb"),
+        "opening_liability_thb",
+      );
+      const deferred = numeric(
+        exactPackageTable.get(row, "deferred_new_liability_thb"),
+        "deferred_new_liability_thb",
+      );
+      const recognized = numeric(
+        exactPackageTable.get(row, "recognized_revenue_thb"),
+        "recognized_revenue_thb",
+      );
+      const automatic = numeric(
+        exactPackageTable.get(row, "automatic_exact_liability_thb"),
+        "automatic_exact_liability_thb",
+      );
+      const reviewed = numeric(
+        exactPackageTable.get(row, "finance_reviewed_liability_thb"),
+        "finance_reviewed_liability_thb",
+      );
+      const closing = numeric(
+        exactPackageTable.get(row, "closing_exact_liability_thb"),
+        "closing_exact_liability_thb",
+      );
+      if (difference(
+        (Number(opening) + Number(deferred) - Number(recognized)).toFixed(8),
+        closing,
+      ) > 1) {
+        throw new UnearnedRevenueWorkbookError(
+          `Exact package row ${sourceRow} does not roll forward`,
+        );
+      }
+      if (difference((Number(automatic) + Number(reviewed)).toFixed(8), closing) > 1) {
+        throw new UnearnedRevenueWorkbookError(
+          `Exact package row ${sourceRow} evidence classes do not equal closing liability`,
+        );
+      }
+      return {
+        periodEnd: googleSheetDate(
+          exactPackageTable.get(row, "period_end"),
+          `Exact package row ${sourceRow} period_end`,
+        ),
+        periodKind: periodKind(
+          exactPackageTable.get(row, "period_kind"),
+          `Exact package row ${sourceRow}`,
+        ),
+        isLatest: booleanValue(exactPackageTable.get(row, "is_latest")),
+        packageName,
+        openingLiabilityThb: opening,
+        deferredNewLiabilityThb: deferred,
+        recognizedRevenueThb: recognized,
+        automaticExactLiabilityThb: automatic,
+        financeReviewedLiabilityThb: reviewed,
+        closingExactLiabilityThb: closing,
+        remainingCredits: numeric(
+          exactPackageTable.get(row, "remaining_credits"),
+          "remaining_credits",
+        ),
+        studentCount: integer(exactPackageTable.get(row, "student_count"), "student_count"),
+        accountCount: integer(exactPackageTable.get(row, "account_count"), "account_count"),
+        activeLotCount: integer(exactPackageTable.get(row, "active_lot_count"), "active_lot_count"),
+        shareOfExactLiability: numeric(
+          exactPackageTable.get(row, "share_of_exact_liability"),
+          "share_of_exact_liability",
+        ),
+        sourceRow,
+      };
+    });
+  }
+
   const latestPeriods = periods.filter((period) => period.isLatest);
   if (latestPeriods.length !== 1 || latestPeriods[0].periodEnd !== status.cutoff) {
     throw new UnearnedRevenueWorkbookError("Exactly one latest period must equal the published cutoff");
@@ -821,6 +1034,10 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
   assertUnique(students.map((row) => `${row.periodEnd}\u0000${row.studentId}`), "CALC_Student_Period");
   assertUnique(accounts.map((row) => `${row.periodEnd}\u0000${row.accountId}`), "CALC_Account_Period");
   assertUnique(lots.map((row) => `${row.periodEnd}\u0000${row.lotId}`), "CALC_Package_Lot_Period");
+  assertUnique(
+    exactPackages.map((row) => `${row.periodEnd}\u0000${row.packageName}`),
+    "CALC_Exact_Package_Overview",
+  );
 
   const periodByDate = new Map(periods.map((period) => [period.periodEnd, period]));
   for (const student of students) {
@@ -871,6 +1088,15 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
       throw new UnearnedRevenueWorkbookError(`Lot ${lot.lotId} has a receipt trace row without a receipt ID`);
     }
   }
+  for (const packageRow of exactPackages) {
+    const period = periodByDate.get(packageRow.periodEnd);
+    if (!period || packageRow.periodKind !== period.periodKind
+      || packageRow.isLatest !== period.isLatest) {
+      throw new UnearnedRevenueWorkbookError(
+        `Package ${packageRow.packageName} references an inconsistent reporting period`,
+      );
+    }
+  }
 
   for (const period of periods) {
     const periodStudents = students.filter((row) => row.periodEnd === period.periodEnd);
@@ -889,6 +1115,31 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
     assertClose(sum(periodAccounts, (row) => row.legacyClosingLiabilityThb), Number(period.legacyClosingLiabilityThb), "account/legacy total");
     assertClose(sum(periodAccounts, (row) => row.fifoClosingLiabilityThb), Number(period.fifoClosingLiabilityThb), "account/FIFO total");
     assertClose(sum(periodLots, (row) => row.closingLiabilityThb), Number(period.fifoClosingLiabilityThb), "lot/FIFO total");
+    const periodPackages = exactPackages.filter((row) => row.periodEnd === period.periodEnd);
+    if (status.workbookSchemaVersion >= 4) {
+      const exactPackageTotal = sum(periodPackages, (row) => row.closingExactLiabilityThb);
+      const automaticTotal = sum(periodPackages, (row) => row.automaticExactLiabilityThb);
+      const reviewedTotal = sum(periodPackages, (row) => row.financeReviewedLiabilityThb);
+      assertClose(exactPackageTotal, Number(period.attributedLiabilityThb), "package/exact total");
+      assertClose(automaticTotal + reviewedTotal, exactPackageTotal, "package evidence-class total");
+      assertClose(
+        exactPackageTotal + Number(period.residualLiabilityThb),
+        Number(period.fifoClosingLiabilityThb),
+        "exact plus residual/FIFO total",
+      );
+      if (period.isLatest) {
+        assertClose(
+          automaticTotal,
+          Number(status.automaticExactLiabilityThb ?? 0),
+          "package/status automatic exact total",
+        );
+        assertClose(
+          reviewedTotal,
+          Number(status.financeReviewedLiabilityThb ?? 0),
+          "package/status Finance-reviewed total",
+        );
+      }
+    }
     assertClose(Number(period.openingLiabilityThb) + Number(period.deferredNewLiabilityThb) - Number(period.recognizedRevenueThb), Number(period.closingLiabilityThb), "finance roll-forward");
     period.ambiguousCount = periodLots.filter((row) => row.matchStatus === "AMBIGUOUS" && Number(row.closingLiabilityThb) > 0).length;
     period.unattributedCount = periodLots.filter((row) => row.matchStatus === "UNATTRIBUTED" && Number(row.closingLiabilityThb) > 0).length;
@@ -910,6 +1161,7 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
     students,
     accounts,
     lots,
+    exactPackages,
     rowCounts: {
       periods: periods.length,
       students: students.length,
@@ -918,6 +1170,9 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
         ? { receipts: receiptTable.records.length }
         : {}),
       lots: lots.length,
+      ...(status.workbookSchemaVersion >= 4
+        ? { exactPackages: exactPackages.length }
+        : {}),
     },
   };
 }

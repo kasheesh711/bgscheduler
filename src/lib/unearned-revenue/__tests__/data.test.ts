@@ -61,6 +61,19 @@ function studentRow() {
   };
 }
 
+function packageRow() {
+  return {
+    id: "package-row", snapshotId: "snapshot-1", periodEnd: "2026-09-03",
+    periodKind: "LATEST", isLatest: true, packageName: "40-hr (free extra 1 hr)",
+    openingLiabilityThb: "60.00000000", deferredNewLiabilityThb: "30.00000000",
+    recognizedRevenueThb: "10.00000000", automaticExactLiabilityThb: "70.00000000",
+    financeReviewedLiabilityThb: "10.00000000", closingExactLiabilityThb: "80.00000000",
+    remainingCredits: "0.80000000", studentCount: 1, accountCount: 1, activeLotCount: 2,
+    shareOfExactLiability: "100.00000000", traceSpreadsheetId: "workbook-1",
+    traceSheetId: 108, traceRow: 12, traceA1: "J12",
+  };
+}
+
 function queueDb(
   rowsByTable: Map<unknown, unknown[][]>,
   countByTable: Map<unknown, number> = new Map(),
@@ -92,13 +105,18 @@ function queueDb(
 describe("unearned revenue dashboard queries", () => {
   it("paginates the selected period and returns exact formula trace URLs", async () => {
     const { db, calls } = queueDb(new Map<unknown, unknown[][]>([
-      [schema.unearnedRevenueSnapshots, [[baseSnapshot()]]],
+      [schema.unearnedRevenueSnapshots, [[{
+        ...baseSnapshot(),
+        workbookSchemaVersion: 4,
+        modelVersion: "FIFO_PACKAGE_LOT_V3",
+      }]]],
       [schema.unearnedRevenuePeriods, [[periodRow()]]],
       [schema.unearnedRevenueSyncRuns, [[{
         status: "success", startedAt: new Date("2026-09-04T00:19:00+07:00"),
         finishedAt: new Date("2026-09-04T00:20:00+07:00"), errorSummary: null,
       }]]],
       [schema.unearnedRevenueStudentPeriods, [[studentRow()]]],
+      [schema.unearnedRevenuePackagePeriods, [[packageRow()]]],
     ]), new Map<unknown, number>([[schema.unearnedRevenueStudentPeriods, 51]]));
 
     const payload = await getUnearnedRevenueDashboard({
@@ -114,6 +132,18 @@ describe("unearned revenue dashboard queries", () => {
       trace: { sheetId: 102, a1: "O8" },
     });
     expect(payload.students[0].trace.url).toContain("#gid=102&range=O8");
+    expect(payload.exactPackageOverview).toMatchObject({
+      available: true,
+      totalLiabilityThb: 80,
+      automaticLiabilityThb: 70,
+      financeReviewedLiabilityThb: 10,
+      residualLiabilityThb: 25,
+      packageCount: 1,
+    });
+    expect(payload.exactPackageOverview.packages[0]).toMatchObject({
+      packageName: "40-hr (free extra 1 hr)",
+      trace: { sheetId: 108, a1: "J12" },
+    });
     expect(calls.find((call) => call.table === schema.unearnedRevenueStudentPeriods && call.offset === 25))
       .toMatchObject({ limit: 25, offset: 25 });
   });

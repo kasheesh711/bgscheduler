@@ -1,9 +1,9 @@
 # Database Reference — Master Table Index
 
-The canonical lookup for every table in the BGScheduler Postgres database: **198 tables**, declared in
-[`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) (5,050 lines, Drizzle ORM) and migrated under
-[`drizzle/`](../../../drizzle) (71 `.sql` files, latest `0070_unearned_revenue_dashboard.sql`). The
-count is mechanical: `grep -c '= pgTable(' src/lib/db/schema.ts` → **198**.
+The canonical lookup for every table in the BGScheduler Postgres database: **199 tables**, declared in
+[`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) (5,111 lines, Drizzle ORM) and migrated under
+[`drizzle/`](../../../drizzle) (73 `.sql` files, latest `0072_unearned_revenue_exact_package_overview.sql`). The
+count is mechanical: `grep -c '= pgTable(' src/lib/db/schema.ts` → **199**.
 The 61 Postgres enum types those tables bind live in [`enums.md`](./enums.md).
 
 This page answers one question per row: **what is this table, what is exactly one row of it, and who
@@ -25,7 +25,7 @@ each table is documented on exactly one diagram page.
 | `competitor-intelligence` | 16 | [erd-competitor-intelligence.md](./erd-competitor-intelligence.md) |
 | `line` | 13 | [erd-line.md](./erd-line.md) |
 | `credit-control` | 11 | [erd-credit-control.md](./erd-credit-control.md) |
-| `unearned-revenue` | 8 | [erd-unearned-revenue.md](./erd-unearned-revenue.md) |
+| `unearned-revenue` | 9 | [erd-unearned-revenue.md](./erd-unearned-revenue.md) |
 | `classrooms` | 9 | [erd-classrooms.md](./erd-classrooms.md) |
 | `payroll` | 8 | [erd-payroll.md](./erd-payroll.md) |
 | `progress-tests` | 8 | [erd-progress-tests.md](./erd-progress-tests.md) |
@@ -38,7 +38,7 @@ each table is documented on exactly one diagram page.
 | `wise-activity` | 2 | [erd-wise-activity.md](./erd-wise-activity.md) |
 | `learning-plans` | 1 | [erd-learning-plans.md](./erd-learning-plans.md) |
 | `student-schedule` | 1 | [erd-student-schedule.md](./erd-student-schedule.md) |
-| **Total** | **198** | |
+| **Total** | **199** | |
 
 > **`core` now means 23 tables, not 124.** Earlier revisions of this index used ten domain labels and
 > credited `core` with everything that had no page of its own. Eight of those sub-areas — post-class
@@ -136,7 +136,7 @@ that feature. The feature doc carries the rules and the why.
 | US Universities | `src/lib/us-universities/` | [us-universities.md](../../features/us-universities.md) |
 | Platform auth | `src/lib/auth.ts`, `src/lib/auth-access.ts`, `src/lib/db/seed.ts` | cross-cutting — [handbook/architecture.md](../../handbook/architecture.md) |
 
-## All 198 tables
+## All 199 tables
 
 Ordered by domain (the [Domains](#domains) order, `core` first), then by declaration order in
 `src/lib/db/schema.ts`.
@@ -279,9 +279,10 @@ Ordered by domain (the [Domains](#domains) order, `core` first), then by declara
 | `unearned_revenue_sync_runs`<br><sub>4846–4870</sub> | `unearnedRevenueSyncRuns` | unearned-revenue | Workbook import attempt; partial unique on `running` enforces single-flight. | Unearned Revenue | [unearned-revenue][ur] |
 | `unearned_revenue_snapshots`<br><sub>4873–4902</sub> | `unearnedRevenueSnapshots` | unearned-revenue | Immutable QA-passed workbook header; source contract is unique and a partial index permits one active snapshot. | Unearned Revenue | [unearned-revenue][ur] |
 | `unearned_revenue_periods`<br><sub>4905–4936</sub> | `unearnedRevenuePeriods` | unearned-revenue | Finance total per imported snapshot and reporting date, including model comparison, QA counts, and formula anchor. | Unearned Revenue | [unearned-revenue][ur] |
-| `unearned_revenue_student_periods`<br><sub>4939–4969</sub> | `unearnedRevenueStudentPeriods` | unearned-revenue | Stable WISE student aggregate per snapshot and reporting date, across all class accounts. | Unearned Revenue | [unearned-revenue][ur] |
-| `unearned_revenue_account_periods`<br><sub>4972–5003</sub> | `unearnedRevenueAccountPeriods` | unearned-revenue | Student/class account reconciliation per snapshot and reporting date. | Unearned Revenue | [unearned-revenue][ur] |
-| `unearned_revenue_lot_periods`<br><sub>5006–5050</sub> | `unearnedRevenueLotPeriods` | unearned-revenue | Package-lot credit and THB roll-forward per snapshot/date, with separate formula and optional source-row anchors. | Unearned Revenue | [unearned-revenue][ur] |
+| `unearned_revenue_package_periods`<br><sub>4943–4976</sub> | `unearnedRevenuePackagePeriods` | unearned-revenue | Exact-package liability per snapshot/date and literal sales package, split by automatic and Finance-reviewed evidence. | Unearned Revenue | [unearned-revenue][ur] |
+| `unearned_revenue_student_periods`<br><sub>4979–5009</sub> | `unearnedRevenueStudentPeriods` | unearned-revenue | Stable WISE student aggregate per snapshot and reporting date, across all class accounts. | Unearned Revenue | [unearned-revenue][ur] |
+| `unearned_revenue_account_periods`<br><sub>5012–5043</sub> | `unearnedRevenueAccountPeriods` | unearned-revenue | Student/class account reconciliation per snapshot and reporting date. | Unearned Revenue | [unearned-revenue][ur] |
+| `unearned_revenue_lot_periods`<br><sub>5046–5111</sub> | `unearnedRevenueLotPeriods` | unearned-revenue | Package-lot credit and THB roll-forward per snapshot/date, with V3 matching evidence and separate formula/source anchors. | Unearned Revenue | [unearned-revenue][ur] |
 | `classroom_rooms`<br><sub>1649–1662</sub> | `classroomRooms` | classrooms | Physical room (unique `name`), with capacity, TV flag, category and sort order. | Classroom Assignments | [classrooms][cr] |
 | `classroom_assignment_runs`<br><sub>1664–1688</sub> | `classroomAssignmentRuns` | classrooms | Assignment run for one Bangkok date, pinned to the snapshot it read. Append-only and conventional — runs accumulate per date and the newest wins on read. | Classroom Assignments | [classrooms][cr] |
 | `classroom_assignment_rows`<br><sub>1690–1735</sub> | `classroomAssignmentRows` | classrooms | Wise session inside a run (unique `run_id` + `wise_session_id`), with assigned room, rule trace, `assignment_fingerprint` and publish status. | Classroom Assignments | [classrooms][cr] |

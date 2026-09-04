@@ -110,6 +110,32 @@ function payload(
     },
     periods: [monthEnd, latest],
     selectedPeriod: latest,
+    exactPackageOverview: {
+      available: true,
+      totalLiabilityThb: 400,
+      attributionPercent: 36.36363636,
+      automaticLiabilityThb: 300,
+      financeReviewedLiabilityThb: 100,
+      residualLiabilityThb: 700,
+      remainingCredits: 4,
+      packageCount: 1,
+      activeLotCount: 2,
+      packages: [{
+        packageName: "40-hr (free extra 1 hr)",
+        openingLiabilityThb: 200,
+        deferredNewLiabilityThb: 300,
+        recognizedRevenueThb: 100,
+        automaticExactLiabilityThb: 300,
+        financeReviewedLiabilityThb: 100,
+        closingExactLiabilityThb: 400,
+        remainingCredits: 4,
+        studentCount: 1,
+        accountCount: 1,
+        activeLotCount: 2,
+        shareOfExactLiability: 100,
+        trace: trace(111, "J12"),
+      }],
+    },
     quality: {
       ambiguousCount: 2,
       unattributedCount: 3,
@@ -256,14 +282,17 @@ describe("UnearnedRevenueDashboard", () => {
   it("renders shadow values, actual-cutoff semantics, charts, residuals, and both responsive student layouts", () => {
     const html = renderToStaticMarkup(<UnearnedRevenueDashboard initialPayload={payload()} />);
 
-    expect(html).toContain("FIFO V2 shadow · legacy canonical");
+    expect(html).toContain("FIFO V3 shadow · legacy canonical");
     expect(html).toContain("Legacy is still the official number");
     expect(html).toContain("Liability tied to exact packages");
+    expect(html).toContain("40-hr (free extra 1 hr)");
+    expect(html).toContain("Automatic exact");
+    expect(html).toContain("Finance reviewed");
     expect(html).toContain("03 Sept 2026 (latest completed day)");
     expect(html).not.toContain("30 Sept 2026");
     expect(html).toContain("Column chart of completed month-end closing unearned revenue");
     expect(html).toContain("Waterfall chart showing opening plus deferred minus recognized equals closing liability");
-    expect(html).toContain("THB 1,100.00 still residual");
+    expect(html).toContain("THB 700.00 residual");
     expect(html).toContain('class="hidden md:block"');
     expect(html).toContain('class="divide-y md:hidden"');
     expect(html.match(/Ada Student/g)).toHaveLength(2);
@@ -281,9 +310,9 @@ describe("UnearnedRevenueDashboard", () => {
       })} />,
     );
 
-    expect(html).toContain("FIFO V2 canonical");
+    expect(html).toContain("FIFO V3 canonical");
     expect(html).toContain("Canonical package-lot model");
-    expect(html).not.toContain("FIFO V2 shadow · legacy canonical");
+    expect(html).not.toContain("FIFO V3 shadow · legacy canonical");
   });
 
   it("opens the URL-selected student drawer state", () => {

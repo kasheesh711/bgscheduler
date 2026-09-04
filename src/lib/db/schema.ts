@@ -4939,6 +4939,42 @@ export const unearnedRevenuePeriods = pgTable("unearned_revenue_periods", {
   index("ur_period_latest_idx").on(table.snapshotId, table.isLatest),
 ]);
 
+/** Formula-backed exact-package liability by reporting period and literal sales package name. */
+export const unearnedRevenuePackagePeriods = pgTable("unearned_revenue_package_periods", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  snapshotId: uuid("snapshot_id").notNull().references(() => unearnedRevenueSnapshots.id, { onDelete: "cascade" }),
+  periodEnd: date("period_end", { mode: "string" }).notNull(),
+  periodKind: text("period_kind").notNull(),
+  isLatest: boolean("is_latest").notNull().default(false),
+  packageName: text("package_name").notNull(),
+  openingLiabilityThb: numeric("opening_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  deferredNewLiabilityThb: numeric("deferred_new_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  recognizedRevenueThb: numeric("recognized_revenue_thb", { precision: 20, scale: 8 }).notNull(),
+  automaticExactLiabilityThb: numeric("automatic_exact_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  financeReviewedLiabilityThb: numeric("finance_reviewed_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  closingExactLiabilityThb: numeric("closing_exact_liability_thb", { precision: 20, scale: 8 }).notNull(),
+  remainingCredits: numeric("remaining_credits", { precision: 20, scale: 8 }).notNull(),
+  studentCount: integer("student_count").notNull(),
+  accountCount: integer("account_count").notNull(),
+  activeLotCount: integer("active_lot_count").notNull(),
+  shareOfExactLiability: numeric("share_of_exact_liability", { precision: 20, scale: 8 }).notNull(),
+  traceSpreadsheetId: text("trace_spreadsheet_id").notNull(),
+  traceSheetId: integer("trace_sheet_id").notNull(),
+  traceRow: integer("trace_row").notNull(),
+  traceA1: text("trace_a1").notNull(),
+}, (table) => [
+  uniqueIndex("ur_package_snapshot_period_name_idx").on(
+    table.snapshotId,
+    table.periodEnd,
+    table.packageName,
+  ),
+  index("ur_package_period_liability_idx").on(
+    table.snapshotId,
+    table.periodEnd,
+    table.closingExactLiabilityThb,
+  ),
+]);
+
 /** Student totals aggregate every class account by stable WISE student ID. */
 export const unearnedRevenueStudentPeriods = pgTable("unearned_revenue_student_periods", {
   id: uuid("id").primaryKey().defaultRandom(),

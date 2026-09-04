@@ -157,6 +157,84 @@ function v3Fixture() {
   };
 }
 
+function v4Fixture() {
+  const input = v3Fixture();
+  for (const statusRows of [input.statusStart, input.statusEnd]) {
+    statusRows.find((row) => row[0] === "workbook_schema_version")![1] = 4;
+    statusRows.find((row) => row[0] === "candidate_model_version")![1] = "FIFO_PACKAGE_LOT_V3";
+    statusRows.push(["automatic_exact_liability_thb", 90, ""]);
+    statusRows.push(["finance_reviewed_liability_thb", 0, ""]);
+  }
+  input.periods[1][7] = 90;
+  input.periods[1][8] = 0;
+  input.periods[1][9] = 100;
+  input.periods[1][11] = "FIFO_PACKAGE_LOT_V3";
+  input.students[1][15] = 90;
+  input.students[1][16] = 0;
+  input.students[1][17] = 100;
+  input.students[1][22] = "FIFO_PACKAGE_LOT_V3";
+  input.accounts[1][20] = 90;
+  input.accounts[1][21] = 0;
+
+  const setLot = (header: string, value: unknown) => {
+    const column = input.lots[0].indexOf(header);
+    input.lots[1][column] = value;
+    input.lotFormulas[1][column] = value;
+  };
+  setLot("lot_kind", "PAID_PACKAGE");
+  setLot("match_status", "EXACT_TRANSACTION");
+  setLot("review_state", "NO_REVIEW");
+  setLot("package_name", "40-hr (free extra 1 hr)");
+  setLot("sales_key", "AA2605-117");
+  setLot("transaction_date", "2026-03-10");
+  setLot("credit_event_key", "event-1");
+  setLot("source_file_id", "sales-workbook");
+  setLot("source_sheet_id", 701);
+  setLot("source_row", 117);
+  setLot("transaction_number", "AA2605-117");
+  setLot("match_confidence", "EXACT");
+  setLot("match_rule_id", "MATCH-DIRECT-TRANSACTION-ID-V3");
+  setLot("match_evidence", JSON.stringify({
+    nickname_match_state: "MATCH",
+    sales_nickname_key: "zeiyach",
+    wise_nickname_key: "zeiyach",
+    matching_date_source: "PAYMENT_DATE",
+  }));
+  setLot("sales_source_file_id", "sales-workbook");
+  setLot("sales_source_sheet_id", 701);
+  setLot("sales_source_row", 117);
+  for (const [header, value] of [
+    ["payment_date", "2026-03-10"],
+    ["matching_date", "2026-03-10"],
+    ["matching_date_source", "PAYMENT_DATE"],
+    ["sales_nickname_key", "zeiyach"],
+    ["wise_nickname_key", "zeiyach"],
+    ["nickname_match_state", "MATCH"],
+  ] as const) {
+    input.lots[0].push(header);
+    input.lots[1].push(value);
+    input.lotFormulas[1].push(value);
+  }
+
+  const exact = formulaTable([
+    "period_end", "period_kind", "is_latest", "package_name",
+    "opening_liability_thb", "deferred_new_liability_thb", "recognized_revenue_thb",
+    "automatic_exact_liability_thb", "finance_reviewed_liability_thb",
+    "closing_exact_liability_thb", "remaining_credits", "student_count",
+    "account_count", "active_lot_count", "share_of_exact_liability",
+    "identity_difference_thb", "formula_rule_ids", "output_run_id", "source_fingerprint",
+  ], [[
+    "2026-03-31", "MONTH_END", true, "40-hr (free extra 1 hr)",
+    90, 0, 0, 90, 0, 90, 1, 1, 1, 1, 100, 0,
+    "EXACT-PACKAGE-001", runId, fingerprint,
+  ]], Array.from({ length: 12 }, (_, index) => index + 4));
+  return {
+    ...input,
+    exactPackages: exact.values,
+    exactPackageFormulas: exact.formulas,
+  };
+}
+
 describe("unearned revenue workbook contract", () => {
   it("accepts a published, formula-backed, cross-level reconciled snapshot", () => {
     const result = parseUnearnedRevenueWorkbook(fixture());
@@ -189,6 +267,15 @@ describe("unearned revenue workbook contract", () => {
     input.statusEnd.find((row) => row[0] === "run_id")![1] = "rotated-run";
 
     expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/changed during import.*run_id/i);
+  });
+
+  it("rejects a change to any published status value during a schema-V4 read", () => {
+    const input = v4Fixture();
+    input.statusEnd.find((row) => row[0] === "automatic_exact_liability_thb")![1] = 89;
+
+    expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(
+      /changed during import.*automatic_exact_liability_thb/i,
+    );
   });
 
   it("rejects oversized table contracts before importing any rows", () => {
@@ -231,6 +318,40 @@ describe("unearned revenue workbook contract", () => {
     expect(result.rowCounts).toMatchObject({ receipts: 1 });
   });
 
+  it("accepts a V4 exact-package overview backed by V3 identity evidence", () => {
+    const result = parseUnearnedRevenueWorkbook(v4Fixture());
+
+    expect(result.status).toMatchObject({
+      workbookSchemaVersion: 4,
+      modelVersion: "FIFO_PACKAGE_LOT_V3",
+      automaticExactLiabilityThb: "90.00000000",
+    });
+    expect(result.rowCounts).toMatchObject({ receipts: 1, exactPackages: 1 });
+    expect(result.exactPackages[0]).toMatchObject({
+      packageName: "40-hr (free extra 1 hr)",
+      closingExactLiabilityThb: "90.00000000",
+    });
+  });
+
+  it("rejects a V4 automatic package lot without matching nickname evidence", () => {
+    const input = v4Fixture();
+    const matchEvidenceColumn = input.lots[0].indexOf("match_evidence");
+    input.lots[1][matchEvidenceColumn] = JSON.stringify({
+      nickname_match_state: "MISMATCH",
+      sales_nickname_key: "baikaona",
+      wise_nickname_key: "zeiyach",
+    });
+
+    expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/lacks required identity evidence/i);
+  });
+
+  it("rejects a V4 exact-package amount that is no longer formula-backed", () => {
+    const input = v4Fixture();
+    input.exactPackageFormulas[1][9] = 90;
+
+    expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/not backed by a formula/i);
+  });
+
   it("rejects a V3 lot whose receipt trace does not resolve to the receipt evidence tab", () => {
     const input = v3Fixture();
     const receiptIdColumn = input.lots[0].indexOf("receipt_id");
@@ -255,5 +376,14 @@ describe("unearned revenue workbook contract", () => {
     }
 
     expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/must use candidate model FIFO_PACKAGE_LOT_V2/i);
+  });
+
+  it("rejects V4 when the workbook advertises the stale V2 algorithm", () => {
+    const input = v4Fixture();
+    for (const statusRows of [input.statusStart, input.statusEnd]) {
+      statusRows.find((row) => row[0] === "candidate_model_version")![1] = "FIFO_PACKAGE_LOT_V2";
+    }
+
+    expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/must use candidate model FIFO_PACKAGE_LOT_V3/i);
   });
 });

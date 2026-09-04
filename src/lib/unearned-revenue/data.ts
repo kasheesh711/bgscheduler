@@ -9,6 +9,7 @@ import { getUnearnedRevenueConnectedEmail } from "./sync";
 import {
   FIFO_PACKAGE_MODEL,
   FIFO_PACKAGE_MODEL_V1,
+  FIFO_PACKAGE_MODEL_V2,
   LEGACY_ACCOUNT_MODEL,
   type UnearnedRevenueCapability,
   type UnearnedRevenueCanonicalModel,
@@ -44,6 +45,7 @@ function numberFromDb(value: string | number): number {
 
 function canonicalModel(value: string): UnearnedRevenueCanonicalModel {
   if (value === FIFO_PACKAGE_MODEL) return FIFO_PACKAGE_MODEL;
+  if (value === FIFO_PACKAGE_MODEL_V2) return FIFO_PACKAGE_MODEL_V2;
   if (value === FIFO_PACKAGE_MODEL_V1) return FIFO_PACKAGE_MODEL_V1;
   return LEGACY_ACCOUNT_MODEL;
 }
@@ -208,14 +210,33 @@ export async function getUnearnedRevenueDashboard(
       : query.sort === "credits_desc"
         ? [desc(schema.unearnedRevenueStudentPeriods.remainingPaidCredits), asc(schema.unearnedRevenueStudentPeriods.studentName)]
         : [desc(schema.unearnedRevenueStudentPeriods.canonicalClosingLiabilityThb), asc(schema.unearnedRevenueStudentPeriods.studentName)];
-  const [studentRows, total] = await Promise.all([
+  const [studentRows, total, packageRows] = await Promise.all([
     db.select().from(schema.unearnedRevenueStudentPeriods)
       .where(and(...filters)).orderBy(...orderBy)
       .limit(query.pageSize).offset((query.page - 1) * query.pageSize),
     db.select({ value: count() }).from(schema.unearnedRevenueStudentPeriods)
       .where(and(...filters)).then((rows) => Number(rows[0]?.value ?? 0)),
+    db.select().from(schema.unearnedRevenuePackagePeriods).where(and(
+      eq(schema.unearnedRevenuePackagePeriods.snapshotId, snapshot.id),
+      eq(schema.unearnedRevenuePackagePeriods.periodEnd, selectedRow.periodEnd),
+    )).orderBy(
+      desc(schema.unearnedRevenuePackagePeriods.closingExactLiabilityThb),
+      asc(schema.unearnedRevenuePackagePeriods.packageName),
+    ),
   ]);
   const selected = periodPayload(selectedRow);
+  const exactTotal = packageRows.reduce(
+    (totalValue, row) => totalValue + numberFromDb(row.closingExactLiabilityThb),
+    0,
+  );
+  const automaticTotal = packageRows.reduce(
+    (totalValue, row) => totalValue + numberFromDb(row.automaticExactLiabilityThb),
+    0,
+  );
+  const reviewedTotal = packageRows.reduce(
+    (totalValue, row) => totalValue + numberFromDb(row.financeReviewedLiabilityThb),
+    0,
+  );
   return {
     metadata: {
       snapshotId: snapshot.id,
@@ -238,6 +259,44 @@ export async function getUnearnedRevenueDashboard(
     },
     periods: periodRows.map(periodPayload),
     selectedPeriod: selected,
+    exactPackageOverview: {
+      available: snapshot.workbookSchemaVersion >= 4,
+      totalLiabilityThb: exactTotal,
+      attributionPercent: selected.fifoClosingLiabilityThb > 0
+        ? exactTotal / selected.fifoClosingLiabilityThb * 100
+        : 100,
+      automaticLiabilityThb: automaticTotal,
+      financeReviewedLiabilityThb: reviewedTotal,
+      residualLiabilityThb: selected.fifoClosingLiabilityThb - exactTotal,
+      remainingCredits: packageRows.reduce(
+        (totalValue, row) => totalValue + numberFromDb(row.remainingCredits),
+        0,
+      ),
+      packageCount: packageRows.filter(
+        (row) => numberFromDb(row.closingExactLiabilityThb) > 0,
+      ).length,
+      activeLotCount: packageRows.reduce((totalValue, row) => totalValue + row.activeLotCount, 0),
+      packages: packageRows.map((row) => ({
+        packageName: row.packageName,
+        openingLiabilityThb: numberFromDb(row.openingLiabilityThb),
+        deferredNewLiabilityThb: numberFromDb(row.deferredNewLiabilityThb),
+        recognizedRevenueThb: numberFromDb(row.recognizedRevenueThb),
+        automaticExactLiabilityThb: numberFromDb(row.automaticExactLiabilityThb),
+        financeReviewedLiabilityThb: numberFromDb(row.financeReviewedLiabilityThb),
+        closingExactLiabilityThb: numberFromDb(row.closingExactLiabilityThb),
+        remainingCredits: numberFromDb(row.remainingCredits),
+        studentCount: row.studentCount,
+        accountCount: row.accountCount,
+        activeLotCount: row.activeLotCount,
+        shareOfExactLiability: numberFromDb(row.shareOfExactLiability),
+        trace: makeTraceAnchor({
+          spreadsheetId: row.traceSpreadsheetId,
+          sheetId: row.traceSheetId,
+          row: row.traceRow,
+          a1: row.traceA1,
+        }),
+      })),
+    },
     quality: {
       ambiguousCount: selectedRow.ambiguousCount,
       unattributedCount: selectedRow.unattributedCount,

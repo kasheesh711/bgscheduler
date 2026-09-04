@@ -505,6 +505,13 @@
       "when": 1788475589915,
       "tag": "0071_unearned_revenue_receipt_bridge",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1788492291321,
+      "tag": "0072_unearned_revenue_exact_package_overview",
+      "breakpoints": true
     }
   ]
 }

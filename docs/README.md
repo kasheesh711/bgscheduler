@@ -33,7 +33,7 @@ Every number below is mechanical, taken from the tree rather than from prose:
 |---|---:|---|
 | Database tables | **198** | `grep -c "= pgTable(" src/lib/db/schema.ts` (the file is 5,050 lines) |
 | Postgres enum types | **61** | `grep -c "= pgEnum(" src/lib/db/schema.ts` |
-| Drizzle migrations | **71** | `ls drizzle/*.sql`, latest `drizzle/0070_unearned_revenue_dashboard.sql` |
+| Drizzle migrations | **73** | `ls drizzle/*.sql`, latest `drizzle/0072_unearned_revenue_exact_package_overview.sql` |
 | Route files | **185** | `find src/app/api -name route.ts` |
 | HTTP endpoints | **249** | 247 named `export async function GET\|POST\|PUT\|PATCH\|DELETE` handlers, **+2** for the Auth.js catch-all (`src/app/api/auth/[...nextauth]/route.ts:3` exports by destructuring, so it matches no `function` grep), **−2** for the two CORS `OPTIONS` preflights on the public OA-resolver routes |
 | Vercel Cron entries | **18** | the `crons` array in `vercel.json` |
@@ -199,7 +199,7 @@ surface has no nav entry of its own.
 |---|---|---|
 | [Sales Dashboard](./features/sales-dashboard.md) | stable | Turns the sales team's monthly Google Sheets into a governed Postgres dataset and a GM-facing revenue-pace / pipeline / scenario readout. Owns the shared Sheets access layer. |
 | [Credit Control](./features/credit-control.md) | stable | Projects when each student's prepaid credits cross the alert threshold and hit zero, ranks an at-risk worklist, and logs the outreach. Its snapshot tables are read by eleven other modules. |
-| [Unearned Revenue](./features/unearned-revenue.md) | stable (FIFO shadow until Finance approval) | Mirrors only QA-passed, formula-backed workbook outputs into an immutable Postgres snapshot, then drills from finance totals to students, class accounts, package lots, and exact Google rows. |
+| [Unearned Revenue](./features/unearned-revenue.md) | stable (FIFO V3 shadow until Finance approval) | Mirrors only QA-passed, formula-backed workbook outputs into an immutable Postgres snapshot, including exact-package liability by package/evidence class, then drills to students, class accounts, package lots, and exact Google rows. |
 | [Payroll](./features/payroll.md) | stable | Reconciles a Bangkok month of Wise sessions and payout invoices against a versioned rate card; emits integrity issues, manual adjustments, and an approval step. |
 
 #### Market Intelligence · Research & Reference · Data & Audit
@@ -266,7 +266,7 @@ endpoints and routes you to a detail page per group.
 
 | Doc | Covers |
 |---|---|
-| [index.md](./reference/database/index.md) | **Master table index**: all 198 tables, each with its grain, owning domain, and the `schema.ts` line range that is authoritative for its columns. **Nineteen** domain groupings, one per `erd-*.md` page, so every table is diagrammed in exactly one place. |
+| [index.md](./reference/database/index.md) | **Master table index**: all 199 tables, each with its grain, owning domain, and the `schema.ts` line range that is authoritative for its columns. **Nineteen** domain groupings, one per `erd-*.md` page, so every table is diagrammed in exactly one place. |
 | [enums.md](./reference/database/enums.md) | All 61 native Postgres enum types: values, declaration site, and the columns bound to each. |
 | [erd-core.md](./reference/database/erd-core.md) | The snapshot/ETL spine and what still hangs directly off it: sync control plane and cron observability, auth & access, tutor identity/normalization/session blocks/data health, and the read-only IPEDS dataset. **22 tables** — it opens with a *Moved* table naming the eight domains that took 102 tables onto their own pages. |
 | [erd-university-admissions.md](./reference/database/erd-university-admissions.md) | University Admissions tables (36) — the largest single domain, in four numbered sections. |
@@ -274,7 +274,7 @@ endpoints and routes you to a detail page per group.
 | [erd-competitor-intelligence.md](./reference/database/erd-competitor-intelligence.md) | Competitor Intelligence tables (16). |
 | [erd-line.md](./reference/database/erd-line.md) | LINE tables (13). |
 | [erd-credit-control.md](./reference/database/erd-credit-control.md) | Credit Control tables (11) — the de-facto institute-wide student/session store. |
-| [erd-unearned-revenue.md](./reference/database/erd-unearned-revenue.md) | Unearned Revenue tables (8) — access/audit, import lineage, immutable snapshot headers, and formula-backed finance/student/account/lot rows. |
+| [erd-unearned-revenue.md](./reference/database/erd-unearned-revenue.md) | Unearned Revenue tables (9) — access/audit, import lineage, immutable snapshot headers, and formula-backed finance/package/student/account/lot rows. |
 | [erd-classrooms.md](./reference/database/erd-classrooms.md) | Classroom assignment + email tables (9). |
 | [erd-payroll.md](./reference/database/erd-payroll.md) | Payroll tables (8). |
 | [erd-progress-tests.md](./reference/database/erd-progress-tests.md) | Progress Tests tables (8). |

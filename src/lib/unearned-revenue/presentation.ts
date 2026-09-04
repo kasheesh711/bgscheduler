@@ -6,11 +6,20 @@ import {
   type UnearnedRevenuePeriodSummary,
 } from "./types";
 
-export function unearnedRevenueModelPresentation(model: UnearnedRevenueCanonicalModel) {
-  const fifoCanonical = model === FIFO_PACKAGE_MODEL;
+export function unearnedRevenueModelPresentation(
+  model: UnearnedRevenueCanonicalModel,
+  runtimeVersion: string = FIFO_PACKAGE_MODEL,
+) {
+  const runtimeLabel = runtimeVersion.match(/_V(\d+)$/)?.[1]
+    ? `FIFO V${runtimeVersion.match(/_V(\d+)$/)?.[1]}`
+    : "FIFO";
+  const fifoCanonical = model === runtimeVersion;
   return {
     fifoCanonical,
-    badgeLabel: fifoCanonical ? "FIFO V2 canonical" : "FIFO V2 shadow · legacy canonical",
+    runtimeLabel,
+    badgeLabel: fifoCanonical
+      ? `${runtimeLabel} canonical`
+      : `${runtimeLabel} shadow · legacy canonical`,
   } as const;
 }
 

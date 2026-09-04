@@ -1,12 +1,13 @@
 # Unearned Revenue Database
 
-Eight tables own the dashboard's access policy, import lineage, immutable headers, and retained
+Nine tables own the dashboard's access policy, import lineage, immutable headers, and retained
 reporting detail. Monetary, rate, and credit columns are `numeric(20,8)`.
 
 ```mermaid
 erDiagram
   unearned_revenue_sync_runs ||--o| unearned_revenue_snapshots : imports
   unearned_revenue_snapshots ||--o{ unearned_revenue_periods : contains
+  unearned_revenue_snapshots ||--o{ unearned_revenue_package_periods : contains
   unearned_revenue_snapshots ||--o{ unearned_revenue_student_periods : contains
   unearned_revenue_snapshots ||--o{ unearned_revenue_account_periods : contains
   unearned_revenue_snapshots ||--o{ unearned_revenue_lot_periods : contains
@@ -49,22 +50,30 @@ balances, roll-forward components, paid credits, attribution, population and qua
 composite-verified, receipt-candidate, reversal-conflict, and missing-receipt-evidence counts—plus the
 exact formula anchor.
 
+### `unearned_revenue_package_periods`
+
+`schema.ts:4943–4976`. One formula-backed literal sales package per snapshot and reporting date. It
+stores opening, deferred, recognized, and closing exact-package liability; splits closing value between
+automatic and Finance-reviewed evidence; retains credits and population counts; and links directly to
+the exact Google formula row.
+
 ### `unearned_revenue_student_periods`
 
-`schema.ts:4939–4969`. One stable WISE student ID per snapshot and reporting date, aggregated across
+`schema.ts:4979–5009`. One stable WISE student ID per snapshot and reporting date, aggregated across
 class accounts. It stores both model values, canonical balance, attribution/residual amounts, review
 state, and formula anchor. Liability and name indexes back dashboard sorting/search.
 
 ### `unearned_revenue_account_periods`
 
-`schema.ts:4972–5003`. One WISE student/class account per snapshot and reporting date. It holds the
+`schema.ts:5012–5043`. One WISE student/class account per snapshot and reporting date. It holds the
 credit and THB roll-forward, both model closings, attribution/residual values, review state, and
 formula anchor.
 
 ### `unearned_revenue_lot_periods`
 
-One package lot per snapshot and reporting date. It records lot/match/review classification, V2 match
-confidence/rule/JSON evidence, package and credit-event lineage, candidate sales and receipt IDs,
+`schema.ts:5046–5111`. One package lot per snapshot and reporting date. It records lot/match/review
+classification, V3 match confidence/rule/JSON evidence (including normalized nickname and matching-date
+source), package and credit-event lineage, candidate sales and receipt IDs,
 receipt identity/amount/status, negative recovery, and the FIFO credit and THB roll-forward. Formula,
 original sales-row, original credit-event, and normalized receipt-row anchors are stored independently;
 synthetic or unresolved lots leave evidence anchors absent rather than inventing provenance.

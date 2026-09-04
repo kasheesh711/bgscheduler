@@ -74,6 +74,7 @@ function contract(): ParsedWorkbookContract {
       closingLiabilityThb: "105.00000000", candidateSalesKeys: "", sourceSpreadsheetId: null,
       sourceSheetId: null, sourceRow: null, formulaRow: 2,
     }],
+    exactPackages: [],
     rowCounts: { periods: 1, students: 1, accounts: 1, lots: 1 },
   };
 }
@@ -111,6 +112,8 @@ function fakeDb(options: { existingSnapshotId?: string; lotCount?: number } = {}
           : options.existingSnapshotId ? [{ id: options.existingSnapshotId }] : [];
       } else if (table === schema.unearnedRevenueLotPeriods && options.lotCount !== undefined) {
         rows = [{ value: options.lotCount }];
+      } else if (table === schema.unearnedRevenuePackagePeriods) {
+        rows = [{ value: insertedCounts.get(table) ?? 0 }];
       } else if (insertedCounts.has(table)) {
         rows = [{ value: insertedCounts.get(table) }];
       }
@@ -163,6 +166,7 @@ describe("unearned revenue atomic snapshot import", () => {
       schema.unearnedRevenueStudentPeriods,
       schema.unearnedRevenueAccountPeriods,
       schema.unearnedRevenueLotPeriods,
+      schema.unearnedRevenuePackagePeriods,
     ];
     const lastDetailInsert = Math.max(...detailTables.map((table) => events.findIndex((event) => event.type === "insert" && event.table === table)));
     const activation = events.findIndex((event) => (
@@ -244,6 +248,52 @@ describe("unearned revenue atomic snapshot import", () => {
         receiptSheetId: 77,
         receiptA1: "A31:V31",
         receiptId: "receipt-1",
+      }),
+    ]));
+  });
+
+  it("persists schema-V4 exact-package totals with a stable formula anchor", async () => {
+    const input = contract();
+    input.status.workbookSchemaVersion = 4;
+    input.status.modelVersion = "FIFO_PACKAGE_LOT_V3";
+    input.exactPackages = [{
+      periodEnd: "2026-09-03",
+      periodKind: "LATEST",
+      isLatest: true,
+      packageName: "40-hr (free extra 1 hr)",
+      openingLiabilityThb: "60.00000000",
+      deferredNewLiabilityThb: "30.00000000",
+      recognizedRevenueThb: "10.00000000",
+      automaticExactLiabilityThb: "70.00000000",
+      financeReviewedLiabilityThb: "10.00000000",
+      closingExactLiabilityThb: "80.00000000",
+      remainingCredits: "0.80000000",
+      studentCount: 1,
+      accountCount: 1,
+      activeLotCount: 2,
+      shareOfExactLiability: "100.00000000",
+      sourceRow: 12,
+    }];
+    const { db, events } = fakeDb();
+
+    await importUnearnedRevenueContract({
+      db,
+      syncRunId: "sync-v4",
+      spreadsheetId: "workbook",
+      contract: input,
+      sheetIds: { ...sheetIds, "CALC_Exact_Package_Overview": 99 },
+    });
+
+    const packageInsert = events.find((event) => (
+      event.type === "insert" && event.table === schema.unearnedRevenuePackagePeriods
+    ));
+    expect(packageInsert?.value).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        packageName: "40-hr (free extra 1 hr)",
+        closingExactLiabilityThb: "80.00000000",
+        traceSheetId: 99,
+        traceRow: 12,
+        traceA1: "J12",
       }),
     ]));
   });

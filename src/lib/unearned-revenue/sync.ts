@@ -26,7 +26,7 @@ const REQUIRED_TABS = [
   "CALC_Account_Period",
   "CALC_Package_Lot_Period",
 ] as const;
-const V3_TRACE_TABS = ["SRC_Wise_Receipt"] as const;
+const OPTIONAL_CONTRACT_TABS = ["SRC_Wise_Receipt", "CALC_Exact_Package_Overview"] as const;
 
 export interface UnearnedRevenueSyncResult {
   ok: boolean;
@@ -35,7 +35,13 @@ export interface UnearnedRevenueSyncResult {
   syncRunId: string | null;
   snapshotId: string | null;
   cutoff: string | null;
-  counts: { periods: number; students: number; accounts: number; lots: number } | null;
+  counts: {
+    periods: number;
+    students: number;
+    accounts: number;
+    lots: number;
+    exactPackages: number;
+  } | null;
   errorSummary?: string;
 }
 
@@ -79,7 +85,7 @@ export function assertStableSheetIds(
       throw new Error(`Workbook tab changed during import: ${title}`);
     }
   }
-  for (const title of V3_TRACE_TABS) {
+  for (const title of OPTIONAL_CONTRACT_TABS) {
     if (before.has(title) !== after.has(title)
       || (before.has(title) && before.get(title)?.sheetId !== after.get(title)?.sheetId)) {
       throw new Error(`Workbook tab changed during import: ${title}`);
@@ -101,6 +107,21 @@ export async function readUnearnedRevenueWorkbook(
       rangesForLimit("SRC_Wise_Receipt", "V", WORKBOOK_LIMITS.receipts),
     )
     : Promise.resolve(undefined);
+  const exactPackageRowsPromise: Promise<unknown[][] | undefined> = startProperties.has("CALC_Exact_Package_Overview")
+    ? fetchGoogleSheetRange(
+      email,
+      spreadsheetId,
+      rangesForLimit("CALC_Exact_Package_Overview", "S", WORKBOOK_LIMITS.exactPackages),
+    )
+    : Promise.resolve(undefined);
+  const exactPackageFormulasPromise: Promise<unknown[][] | undefined> = startProperties.has("CALC_Exact_Package_Overview")
+    ? fetchGoogleSheetRange(
+      email,
+      spreadsheetId,
+      rangesForLimit("CALC_Exact_Package_Overview", "S", WORKBOOK_LIMITS.exactPackages),
+      { valueRenderOption: "FORMULA" },
+    )
+    : Promise.resolve(undefined);
   const [
     qa,
     periods,
@@ -112,6 +133,8 @@ export async function readUnearnedRevenueWorkbook(
     lots,
     lotFormulas,
     receipts,
+    exactPackages,
+    exactPackageFormulas,
   ] = await Promise.all([
     fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("QA Checks", "H", WORKBOOK_LIMITS.qa)),
     fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("Model Comparison", "V", WORKBOOK_LIMITS.periods)),
@@ -120,9 +143,11 @@ export async function readUnearnedRevenueWorkbook(
     fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Student_Period", "Y", WORKBOOK_LIMITS.students), { valueRenderOption: "FORMULA" }),
     fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Account_Period", "AC", WORKBOOK_LIMITS.accounts)),
     fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Account_Period", "AC", WORKBOOK_LIMITS.accounts), { valueRenderOption: "FORMULA" }),
-    fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Package_Lot_Period", "BJ", WORKBOOK_LIMITS.lots)),
-    fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Package_Lot_Period", "BJ", WORKBOOK_LIMITS.lots), { valueRenderOption: "FORMULA" }),
+    fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Package_Lot_Period", "BP", WORKBOOK_LIMITS.lots)),
+    fetchGoogleSheetRange(email, spreadsheetId, rangesForLimit("CALC_Package_Lot_Period", "BP", WORKBOOK_LIMITS.lots), { valueRenderOption: "FORMULA" }),
     receiptRowsPromise,
+    exactPackageRowsPromise,
+    exactPackageFormulasPromise,
   ]);
   const statusEnd = await fetchGoogleSheetRange(email, spreadsheetId, statusRange);
   const endProperties = assertRequiredTabs(await listGoogleSheetProperties(email, spreadsheetId));
@@ -140,14 +165,22 @@ export async function readUnearnedRevenueWorkbook(
     lots,
     lotFormulas,
     receipts,
+    exactPackages,
+    exactPackageFormulas,
   });
   if (contract.status.workbookSchemaVersion >= 3 && !startProperties.has("SRC_Wise_Receipt")) {
     throw new Error("Workbook schema V3 is missing required tab: SRC_Wise_Receipt");
   }
+  if (contract.status.workbookSchemaVersion >= 4
+    && !startProperties.has("CALC_Exact_Package_Overview")) {
+    throw new Error(
+      "Workbook schema V4 is missing required tab: CALC_Exact_Package_Overview",
+    );
+  }
   return {
     contract,
     sheetIds: Object.fromEntries(
-      [...REQUIRED_TABS, ...V3_TRACE_TABS]
+      [...REQUIRED_TABS, ...OPTIONAL_CONTRACT_TABS]
         .filter((title) => startProperties.has(title))
         .map((title) => [title, startProperties.get(title)!.sheetId]),
     ),
@@ -208,7 +241,7 @@ export async function importUnearnedRevenueContract(input: {
         studentRowCount: contract.students.length,
         accountRowCount: contract.accounts.length,
         lotRowCount: contract.lots.length,
-        metadata: { idempotent: true },
+        metadata: { idempotent: true, exactPackageRowCount: contract.exactPackages.length },
         finishedAt: new Date(),
       }).where(eq(schema.unearnedRevenueSyncRuns.id, syncRunId));
       return { snapshotId: existing.id, idempotent: true };
@@ -264,6 +297,31 @@ export async function importUnearnedRevenueContract(input: {
       traceRow: row.sourceRow,
       traceA1: `F${row.sourceRow}`,
     }))));
+
+    await insertChunks(contract.exactPackages, 500, (chunk) => tx
+      .insert(schema.unearnedRevenuePackagePeriods)
+      .values(chunk.map((row) => ({
+        snapshotId: snapshot.id,
+        periodEnd: row.periodEnd,
+        periodKind: row.periodKind,
+        isLatest: row.isLatest,
+        packageName: row.packageName,
+        openingLiabilityThb: row.openingLiabilityThb,
+        deferredNewLiabilityThb: row.deferredNewLiabilityThb,
+        recognizedRevenueThb: row.recognizedRevenueThb,
+        automaticExactLiabilityThb: row.automaticExactLiabilityThb,
+        financeReviewedLiabilityThb: row.financeReviewedLiabilityThb,
+        closingExactLiabilityThb: row.closingExactLiabilityThb,
+        remainingCredits: row.remainingCredits,
+        studentCount: row.studentCount,
+        accountCount: row.accountCount,
+        activeLotCount: row.activeLotCount,
+        shareOfExactLiability: row.shareOfExactLiability,
+        traceSpreadsheetId: spreadsheetId,
+        traceSheetId: sheetIds["CALC_Exact_Package_Overview"],
+        traceRow: row.sourceRow,
+        traceA1: `J${row.sourceRow}`,
+      }))));
 
     await insertChunks(contract.students, 700, (chunk) => tx.insert(schema.unearnedRevenueStudentPeriods).values(chunk.map((row) => ({
       snapshotId: snapshot.id,
@@ -393,8 +451,23 @@ export async function importUnearnedRevenueContract(input: {
       .where(eq(schema.unearnedRevenueAccountPeriods.snapshotId, snapshot.id));
     const lotCount = await tx.select({ value: count() }).from(schema.unearnedRevenueLotPeriods)
       .where(eq(schema.unearnedRevenueLotPeriods.snapshotId, snapshot.id));
-    const actualCounts = [periodCount[0]?.value, studentCount[0]?.value, accountCount[0]?.value, lotCount[0]?.value].map(Number);
-    const expectedCounts = [contract.periods.length, contract.students.length, contract.accounts.length, contract.lots.length];
+    const exactPackageCount = await tx.select({ value: count() })
+      .from(schema.unearnedRevenuePackagePeriods)
+      .where(eq(schema.unearnedRevenuePackagePeriods.snapshotId, snapshot.id));
+    const actualCounts = [
+      periodCount[0]?.value,
+      studentCount[0]?.value,
+      accountCount[0]?.value,
+      lotCount[0]?.value,
+      exactPackageCount[0]?.value,
+    ].map(Number);
+    const expectedCounts = [
+      contract.periods.length,
+      contract.students.length,
+      contract.accounts.length,
+      contract.lots.length,
+      contract.exactPackages.length,
+    ];
     if (actualCounts.some((value, index) => value !== expectedCounts[index])) {
       throw new Error(`Staged snapshot row counts do not reconcile: ${actualCounts.join("/")} vs ${expectedCounts.join("/")}`);
     }
@@ -418,6 +491,8 @@ export async function importUnearnedRevenueContract(input: {
         .where(notInArray(schema.unearnedRevenueAccountPeriods.snapshotId, retainedIds));
       await tx.delete(schema.unearnedRevenueLotPeriods)
         .where(notInArray(schema.unearnedRevenueLotPeriods.snapshotId, retainedIds));
+      await tx.delete(schema.unearnedRevenuePackagePeriods)
+        .where(notInArray(schema.unearnedRevenuePackagePeriods.snapshotId, retainedIds));
     }
 
     await tx.update(schema.unearnedRevenueSyncRuns).set({
@@ -431,7 +506,11 @@ export async function importUnearnedRevenueContract(input: {
       studentRowCount: contract.students.length,
       accountRowCount: contract.accounts.length,
       lotRowCount: contract.lots.length,
-      metadata: { canonicalModel: contract.status.canonicalModel, modelVersion: contract.status.modelVersion },
+      metadata: {
+        canonicalModel: contract.status.canonicalModel,
+        modelVersion: contract.status.modelVersion,
+        exactPackageRowCount: contract.exactPackages.length,
+      },
       finishedAt: new Date(),
     }).where(eq(schema.unearnedRevenueSyncRuns.id, syncRunId));
     return { snapshotId: snapshot.id, idempotent: false };
@@ -475,6 +554,7 @@ export async function runUnearnedRevenueSync(options: SyncOptions): Promise<Unea
         students: contract.students.length,
         accounts: contract.accounts.length,
         lots: contract.lots.length,
+        exactPackages: contract.exactPackages.length,
       },
     };
   } catch (error) {
