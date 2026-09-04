@@ -1,11 +1,12 @@
 import "server-only";
 
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 const MAX_PDF_RESPONSE_BYTES = 4_400_000;
+
+export function serverlessChromiumArgs(args: readonly string[]): string[] {
+  return args.filter((arg) => !arg.startsWith("--user-data-dir"));
+}
 
 function localChromePath(): string {
   const explicit = process.env.CHROME_EXECUTABLE_PATH?.trim();
@@ -26,7 +27,6 @@ export async function renderFootTrafficPdf(html: string): Promise<Buffer> {
   const { chromium: playwrightChromium } = await import("playwright-core");
   const serverless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
   let browser: Awaited<ReturnType<typeof playwrightChromium.launch>> | null = null;
-  let userDataDir: string | null = null;
   try {
     let executablePath: string;
     let args: string[] = [];
@@ -34,8 +34,7 @@ export async function renderFootTrafficPdf(html: string): Promise<Buffer> {
       const { default: chromium } = await import("@sparticuz/chromium");
       chromium.setGraphicsMode = false;
       executablePath = await chromium.executablePath();
-      userDataDir = await mkdtemp(join(tmpdir(), "begifted-foot-traffic-"));
-      args = [...chromium.args, `--user-data-dir=${userDataDir}`];
+      args = serverlessChromiumArgs(chromium.args);
     } else {
       executablePath = localChromePath();
     }
@@ -56,6 +55,5 @@ export async function renderFootTrafficPdf(html: string): Promise<Buffer> {
     return bytes;
   } finally {
     await browser?.close().catch(() => undefined);
-    if (userDataDir) await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
