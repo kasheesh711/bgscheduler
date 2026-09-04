@@ -7,15 +7,53 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 
 import { aggregateFootTraffic } from "./aggregate";
-import { defaultFootTrafficRange, latestCompletedBangkokDate, validateFootTrafficRange } from "./dates";
+import {
+  bangkokTimeLabel,
+  bangkokWeekday,
+  defaultFootTrafficRange,
+  latestCompletedBangkokDate,
+  mondayWeekStart,
+  validateFootTrafficRange,
+} from "./dates";
 import type {
-  FootTrafficDashboardResult,
+  FootTrafficDashboardPayload,
   FootTrafficExclusionReason,
   FootTrafficFilters,
+  FootTrafficMeta,
   FootTrafficReportSnapshot,
+  FootTrafficVisitDetail,
 } from "./types";
 
 const REPORT_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
+const SLOW_READ_WARNING_MS = 2_000;
+
+export interface FootTrafficDashboardReadTimings {
+  metadataMs: number;
+  databaseMs: number;
+  aggregationMs: number;
+  totalMs: number;
+  sessionRows: number;
+  visitRows: number;
+}
+
+export interface FootTrafficDashboardRead {
+  payload: FootTrafficDashboardPayload;
+  timings: FootTrafficDashboardReadTimings;
+}
+
+export interface FootTrafficVisitDetailRead {
+  visits: FootTrafficVisitDetail[];
+  timings: {
+    databaseMs: number;
+    transformMs: number;
+    totalMs: number;
+    visitRows: number;
+  };
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.round((performance.now() - startedAt) * 10) / 10;
+}
 
 function splitTokens(values: string[]): string[] {
   return [...new Set(values.flatMap((value) => value.split(",")).map((value) => value.trim()).filter(Boolean))];
@@ -89,17 +127,21 @@ async function coverage(db: Database): Promise<{
   finishedAt: Date | string | null;
   runId: string | null;
 }> {
-  const [range] = await db.select({
-    startDate: sql<string | null>`min(${schema.onsiteFootTrafficSyncRuns.requestedStartDate})`,
-    endDate: sql<string | null>`max(${schema.onsiteFootTrafficSyncRuns.requestedEndDate})`,
-    finishedAt: sql<Date | null>`max(${schema.onsiteFootTrafficSyncRuns.finishedAt})`,
-  }).from(schema.onsiteFootTrafficSyncRuns)
-    .where(eq(schema.onsiteFootTrafficSyncRuns.status, "success"));
-  const [latest] = await db.select({ id: schema.onsiteFootTrafficSyncRuns.id })
-    .from(schema.onsiteFootTrafficSyncRuns)
-    .where(eq(schema.onsiteFootTrafficSyncRuns.status, "success"))
-    .orderBy(desc(schema.onsiteFootTrafficSyncRuns.finishedAt))
-    .limit(1);
+  const [rangeRows, latestRows] = await Promise.all([
+    db.select({
+      startDate: sql<string | null>`min(${schema.onsiteFootTrafficSyncRuns.requestedStartDate})`,
+      endDate: sql<string | null>`max(${schema.onsiteFootTrafficSyncRuns.requestedEndDate})`,
+      finishedAt: sql<Date | null>`max(${schema.onsiteFootTrafficSyncRuns.finishedAt})`,
+    }).from(schema.onsiteFootTrafficSyncRuns)
+      .where(eq(schema.onsiteFootTrafficSyncRuns.status, "success")),
+    db.select({ id: schema.onsiteFootTrafficSyncRuns.id })
+      .from(schema.onsiteFootTrafficSyncRuns)
+      .where(eq(schema.onsiteFootTrafficSyncRuns.status, "success"))
+      .orderBy(desc(schema.onsiteFootTrafficSyncRuns.finishedAt))
+      .limit(1),
+  ]);
+  const [range] = rangeRows;
+  const [latest] = latestRows;
   return {
     startDate: range?.startDate ?? null,
     endDate: range?.endDate ?? null,
@@ -108,34 +150,71 @@ async function coverage(db: Database): Promise<{
   };
 }
 
-export async function getFootTrafficDashboard(
+function logDashboardRead(
+  filters: FootTrafficFilters,
+  timings: FootTrafficDashboardReadTimings,
+): void {
+  if (process.env.NODE_ENV === "test") return;
+  const log = {
+    level: timings.totalMs > SLOW_READ_WARNING_MS ? "warn" : "info",
+    event: "onsite_foot_traffic_dashboard_read",
+    startDate: filters.startDate,
+    endDate: filters.endDate,
+    roomFilterCount: filters.rooms?.length ?? 0,
+    weekdayFilterCount: filters.weekdays?.length ?? 0,
+    ...timings,
+  };
+  const serialized = JSON.stringify(log);
+  if (timings.totalMs > SLOW_READ_WARNING_MS) {
+    console.warn(serialized);
+  } else {
+    console.info(serialized);
+  }
+}
+
+export async function readFootTrafficDashboard(
   db: Database,
   rawFilters: FootTrafficFilters,
   now = new Date(),
-): Promise<FootTrafficDashboardResult> {
+): Promise<FootTrafficDashboardRead> {
+  const totalStartedAt = performance.now();
   const filters = normalizeFootTrafficFilters(rawFilters, now);
-  const [sessionRows, visitRows, roomNames, sourceCoverage] = await Promise.all([
-    db.select().from(schema.onsiteFootTrafficSessions).where(and(
+
+  const metadataStartedAt = performance.now();
+  const [roomNames, sourceCoverage] = await Promise.all([
+    availableRooms(db),
+    coverage(db),
+  ]);
+  const metadataMs = elapsedMs(metadataStartedAt);
+  const invalidRooms = (filters.rooms ?? []).filter((room) => !roomNames.includes(room));
+  if (invalidRooms.length > 0) throw new Error(`Invalid rooms: ${invalidRooms.join(", ")}`);
+
+  const databaseStartedAt = performance.now();
+  const [sessionRows, visitRows] = await Promise.all([
+    db.select({
+      wiseSessionId: schema.onsiteFootTrafficSessions.wiseSessionId,
+      attendanceDate: schema.onsiteFootTrafficSessions.attendanceDate,
+      roomName: schema.onsiteFootTrafficSessions.roomName,
+      missingAttendanceEvidenceCount: schema.onsiteFootTrafficSessions.missingAttendanceEvidenceCount,
+      isCountedOnsite: schema.onsiteFootTrafficSessions.isCountedOnsite,
+      exclusionReason: schema.onsiteFootTrafficSessions.exclusionReason,
+    }).from(schema.onsiteFootTrafficSessions).where(and(
       gte(schema.onsiteFootTrafficSessions.attendanceDate, filters.startDate),
       lte(schema.onsiteFootTrafficSessions.attendanceDate, filters.endDate),
     )),
     db.select({
       wiseSessionId: schema.onsiteFootTrafficVisits.wiseSessionId,
-      participantKey: schema.onsiteFootTrafficVisits.participantKey,
       studentFingerprint: schema.onsiteFootTrafficVisits.studentFingerprint,
       attendanceDate: schema.onsiteFootTrafficVisits.attendanceDate,
-      consumedCredits: schema.onsiteFootTrafficVisits.consumedCredits,
     }).from(schema.onsiteFootTrafficVisits).where(and(
       gte(schema.onsiteFootTrafficVisits.attendanceDate, filters.startDate),
       lte(schema.onsiteFootTrafficVisits.attendanceDate, filters.endDate),
     )),
-    availableRooms(db),
-    coverage(db),
   ]);
-  const invalidRooms = (filters.rooms ?? []).filter((room) => !roomNames.includes(room));
-  if (invalidRooms.length > 0) throw new Error(`Invalid rooms: ${invalidRooms.join(", ")}`);
+  const databaseMs = elapsedMs(databaseStartedAt);
 
-  return aggregateFootTraffic({
+  const aggregationStartedAt = performance.now();
+  const payload = aggregateFootTraffic({
     sessions: sessionRows.map((row) => ({
       ...row,
       exclusionReason: row.exclusionReason as FootTrafficExclusionReason | null,
@@ -152,6 +231,117 @@ export async function getFootTrafficDashboard(
     sourceSyncRunId: sourceCoverage.runId,
     availableRooms: roomNames,
   });
+  const aggregationMs = elapsedMs(aggregationStartedAt);
+  const timings = {
+    metadataMs,
+    databaseMs,
+    aggregationMs,
+    totalMs: elapsedMs(totalStartedAt),
+    sessionRows: sessionRows.length,
+    visitRows: visitRows.length,
+  };
+  logDashboardRead(filters, timings);
+  return { payload, timings };
+}
+
+export async function getFootTrafficDashboard(
+  db: Database,
+  rawFilters: FootTrafficFilters,
+  now = new Date(),
+): Promise<FootTrafficDashboardPayload> {
+  return (await readFootTrafficDashboard(db, rawFilters, now)).payload;
+}
+
+export async function readFootTrafficVisitDetails(
+  db: Database,
+  meta: FootTrafficMeta,
+): Promise<FootTrafficVisitDetailRead> {
+  const totalStartedAt = performance.now();
+  if (!meta.coverageStartDate || !meta.coverageEndDate || meta.effectiveStartDate > meta.effectiveEndDate) {
+    return {
+      visits: [],
+      timings: { databaseMs: 0, transformMs: 0, totalMs: elapsedMs(totalStartedAt), visitRows: 0 },
+    };
+  }
+
+  const databaseStartedAt = performance.now();
+  const rows = await db.select({
+    attendanceDate: schema.onsiteFootTrafficVisits.attendanceDate,
+    scheduledStartAt: schema.onsiteFootTrafficSessions.scheduledStartAt,
+    studentFingerprint: schema.onsiteFootTrafficVisits.studentFingerprint,
+    wiseSessionId: schema.onsiteFootTrafficVisits.wiseSessionId,
+    roomName: schema.onsiteFootTrafficSessions.roomName,
+    subject: schema.onsiteFootTrafficSessions.subject,
+    tutorName: schema.onsiteFootTrafficSessions.tutorName,
+    consumedCredits: schema.onsiteFootTrafficVisits.consumedCredits,
+  }).from(schema.onsiteFootTrafficVisits)
+    .innerJoin(
+      schema.onsiteFootTrafficSessions,
+      eq(schema.onsiteFootTrafficVisits.wiseSessionId, schema.onsiteFootTrafficSessions.wiseSessionId),
+    )
+    .where(and(
+      gte(schema.onsiteFootTrafficVisits.attendanceDate, meta.effectiveStartDate),
+      lte(schema.onsiteFootTrafficVisits.attendanceDate, meta.effectiveEndDate),
+      gte(schema.onsiteFootTrafficSessions.attendanceDate, meta.effectiveStartDate),
+      lte(schema.onsiteFootTrafficSessions.attendanceDate, meta.effectiveEndDate),
+    ));
+  const databaseMs = elapsedMs(databaseStartedAt);
+
+  const transformStartedAt = performance.now();
+  const selectedRooms = new Set(meta.rooms);
+  const selectedWeekdays = new Set(meta.weekdays);
+  const weekdayByDate = new Map<string, number>();
+  const weekStartByDate = new Map<string, string>();
+  const visits: FootTrafficVisitDetail[] = [];
+  for (const row of rows) {
+    if (selectedRooms.size > 0 && (!row.roomName || !selectedRooms.has(row.roomName))) continue;
+    let weekday = weekdayByDate.get(row.attendanceDate);
+    if (weekday === undefined) {
+      weekday = bangkokWeekday(row.attendanceDate);
+      weekdayByDate.set(row.attendanceDate, weekday);
+    }
+    if (selectedWeekdays.size > 0 && !selectedWeekdays.has(weekday)) continue;
+    let weekStart = weekStartByDate.get(row.attendanceDate);
+    if (!weekStart) {
+      weekStart = mondayWeekStart(row.attendanceDate);
+      weekStartByDate.set(row.attendanceDate, weekStart);
+    }
+    visits.push({
+      attendanceDate: row.attendanceDate,
+      startTime: bangkokTimeLabel(row.scheduledStartAt),
+      weekStart,
+      month: row.attendanceDate.slice(0, 7),
+      studentFingerprint: row.studentFingerprint,
+      wiseSessionId: row.wiseSessionId,
+      room: row.roomName ?? "Unknown",
+      subject: row.subject,
+      tutor: row.tutorName,
+      consumedCredits: row.consumedCredits,
+    });
+  }
+  visits.sort((left, right) =>
+    left.attendanceDate.localeCompare(right.attendanceDate) ||
+    left.startTime.localeCompare(right.startTime) ||
+    left.wiseSessionId.localeCompare(right.wiseSessionId));
+  const transformMs = elapsedMs(transformStartedAt);
+  const timings = {
+    databaseMs,
+    transformMs,
+    totalMs: elapsedMs(totalStartedAt),
+    visitRows: visits.length,
+  };
+  if (process.env.NODE_ENV !== "test") {
+    console.info(JSON.stringify({
+      level: "info",
+      event: "onsite_foot_traffic_visit_export_read",
+      startDate: meta.effectiveStartDate,
+      endDate: meta.effectiveEndDate,
+      roomFilterCount: meta.rooms.length,
+      weekdayFilterCount: meta.weekdays.length,
+      ...timings,
+    }));
+  }
+  return { visits, timings };
 }
 
 export async function createFootTrafficReportSnapshot(input: {
@@ -161,16 +351,7 @@ export async function createFootTrafficReportSnapshot(input: {
   now?: Date;
 }): Promise<FootTrafficReportSnapshot> {
   const now = input.now ?? new Date();
-  const result = await getFootTrafficDashboard(input.db, input.filters, now);
-  const payload = {
-    meta: result.meta,
-    summary: result.summary,
-    weekly: result.weekly,
-    monthly: result.monthly,
-    byWeekday: result.byWeekday,
-    byRoom: result.byRoom,
-    dataQuality: result.dataQuality,
-  };
+  const payload = await getFootTrafficDashboard(input.db, input.filters, now);
   const expiresAt = new Date(now.getTime() + REPORT_TTL_MS);
   const [row] = await input.db.insert(schema.onsiteFootTrafficReportSnapshots).values({
     createdByEmail: input.createdByEmail,

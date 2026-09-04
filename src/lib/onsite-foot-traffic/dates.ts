@@ -14,6 +14,12 @@ import {
 } from "./types";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const BANGKOK_TIME_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Bangkok",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
 
 export function assertFootTrafficDate(value: string, label = "date"): string {
   if (!ISO_DATE_RE.test(value)) {
@@ -94,12 +100,7 @@ export function monthBounds(date: string): { start: string; end: string } {
 
 export function bangkokTimeLabel(value: Date | string): string {
   const date = value instanceof Date ? value : new Date(value);
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Bangkok",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
+  return BANGKOK_TIME_FORMATTER.format(date);
 }
 
 export { addBangkokDays, bangkokDateKey, bangkokWeekday, endOfBangkokMonth, monthStart };

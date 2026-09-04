@@ -59,7 +59,11 @@ The authenticated `/onsite-foot-traffic` page is registered as **Foot Traffic** 
 
 Date, room, and weekday selections are URL-backed. The response is capped at successful source coverage and includes a freshness timestamp, requested-versus-effective dates, partial week/month flags, and a September MTD flag. The page presents four KPIs, directly labelled weekly and monthly charts, weekday and room patterns, accessible text descriptions, and exact tables below every chart.
 
+The initial filtered payload is rendered on the server inside the page's existing Suspense boundary, so the browser does not wait for hydration before starting a second dashboard request. Filter changes update the URL with `router.replace()` and refresh the Server Component. Aggregate reads select only the session and visit columns needed by the single-pass aggregator; Bangkok weekday, week-start, and month dimensions are computed once per distinct attendance date. Reads remain uncached so a completed reconciliation is visible immediately.
+
 Five CSV exports reproduce the current filters. Aggregate files contain boundaries, partial-period state, visits, unique students, classes, averages, and source freshness. The visit file is de-identified and never includes student names or raw IDs. All CSVs are UTF-8 with a BOM, quote every field, and use CRLF rows for spreadsheet compatibility.
+
+Visit-detail materialization is isolated to the `grain=visits` export loader. Dashboard reads, report snapshots, and aggregate CSV exports never select or construct detailed rows. Feature-scoped structured logs contain only dates, filter counts, row counts, and timings; authenticated API and CSV responses also expose `metadata`, `database`, `aggregate`, and `total` phases through `Server-Timing` without identities or other PII.
 
 The feature-scoped visual layer follows the BeGifted design system: orange data marks, blue supporting UI, Cormorant Garamond display headings, Sarabun body/numerals, cream surfaces, and responsive layouts. Those tokens are scoped beneath `.begifted`, so the rest of BGScheduler remains unchanged.
 
@@ -79,5 +83,7 @@ The HTML embeds the BeGifted logo, fonts, CSS, data, and labelled SVG charts wit
 ## Verification and rollout
 
 Unit and component coverage pins classification, participant parsing, HMAC stability, Bangkok boundaries, Monday weeks, partial periods, repeated-student uniqueness, quality exclusions, CSV escaping/PII removal, filters, accessibility, and MTD labels. Postgres integration coverage pins idempotent replacement, cancellation removal, failed-fetch preservation, single-flight, and immutable reports. The report integration test uses real Chrome plus `pdfinfo`, `pdftotext`, and rendered page images to check portrait A4 geometry, selectable text, complete sections, nonblank pages, and the response limit.
+
+Run `npm run foot-traffic:benchmark` for the production-sized aggregate benchmark (17,500 sessions and 8,000 visits). It enforces a 100 ms local aggregation budget but is intentionally separate from timing-sensitive CI gates.
 
 Production activation completed on 4 September 2026: migration `0073_funny_ego.sql` was applied, `FOOT_TRAFFIC_PSEUDONYM_SECRET` was stored as a non-exportable Vercel sensitive value, and production deployment `dpl_HDqaTMpe5CiHkpkRGA8xdPez3CwD` was promoted. Backfill run `90e3d601-20c6-481f-b21a-91b1f0e59cfc` stored 17,392 canonical sessions and 7,841 visits through 3 September. Direct Wise checks for 2–8 March and 3–9 August matched production session IDs and per-session visit counts exactly. The first scheduled 01:18 Bangkok run remains the next operational checkpoint; restricted-user access still requires the teammate's exact admin identity.

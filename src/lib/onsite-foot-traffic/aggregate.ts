@@ -2,30 +2,42 @@ import { weekdayName } from "@/lib/room-capacity/dates";
 
 import {
   addBangkokDays,
-  bangkokTimeLabel,
   bangkokWeekday,
   endOfBangkokMonth,
   formatFootTrafficDate,
   mondayWeekStart,
   monthLabel,
   monthStart,
-  weekEnd,
 } from "./dates";
 import type {
   FootTrafficBreakdownRow,
-  FootTrafficDashboardResult,
+  FootTrafficDashboardPayload,
   FootTrafficDataQuality,
   FootTrafficFilters,
   FootTrafficPeriodRow,
   FootTrafficSessionRecord,
   FootTrafficSummary,
-  FootTrafficVisitDetail,
   FootTrafficVisitRecord,
 } from "./types";
 
+type AggregateSessionRecord = Pick<
+  FootTrafficSessionRecord,
+  | "wiseSessionId"
+  | "attendanceDate"
+  | "roomName"
+  | "missingAttendanceEvidenceCount"
+  | "isCountedOnsite"
+  | "exclusionReason"
+>;
+
+type AggregateVisitRecord = Pick<
+  FootTrafficVisitRecord,
+  "wiseSessionId" | "studentFingerprint" | "attendanceDate"
+>;
+
 interface AggregateInput {
-  sessions: FootTrafficSessionRecord[];
-  visits: FootTrafficVisitRecord[];
+  sessions: AggregateSessionRecord[];
+  visits: AggregateVisitRecord[];
   filters: FootTrafficFilters;
   latestCompletedDate: string;
   coverageStartDate: string | null;
@@ -36,62 +48,165 @@ interface AggregateInput {
   availableRooms: string[];
 }
 
-const EMPTY_SUMMARY: FootTrafficSummary = {
-  studentVisits: 0,
-  uniqueStudents: 0,
-  onsiteClasses: 0,
-  averageVisitsPerClass: 0,
-  unidentifiedVisits: 0,
-};
+interface DateDimensions {
+  weekday: number;
+  weekStart: string;
+  month: string;
+}
+
+interface SessionDimensions extends DateDimensions {
+  roomName: string | null;
+}
+
+interface MutableSummary {
+  studentVisits: number;
+  onsiteClasses: number;
+  unidentifiedVisits: number;
+  studentFingerprints: Set<string>;
+}
+
+function createSummary(): MutableSummary {
+  return {
+    studentVisits: 0,
+    onsiteClasses: 0,
+    unidentifiedVisits: 0,
+    studentFingerprints: new Set<string>(),
+  };
+}
 
 function roundAverage(visits: number, classes: number): number {
   return classes > 0 ? Math.round((visits / classes) * 100) / 100 : 0;
 }
 
-function summarize(
-  sessions: readonly FootTrafficSessionRecord[],
-  visits: readonly FootTrafficVisitRecord[],
-): FootTrafficSummary {
-  const onsiteClasses = sessions.filter((session) => session.isCountedOnsite).length;
-  const uniqueStudents = new Set(
-    visits.map((visit) => visit.studentFingerprint).filter((value): value is string => Boolean(value)),
-  ).size;
-  const unidentifiedVisits = visits.filter((visit) => !visit.studentFingerprint).length;
+function materializeSummary(summary?: MutableSummary): FootTrafficSummary {
+  if (!summary) {
+    return {
+      studentVisits: 0,
+      uniqueStudents: 0,
+      onsiteClasses: 0,
+      averageVisitsPerClass: 0,
+      unidentifiedVisits: 0,
+    };
+  }
   return {
-    studentVisits: visits.length,
-    uniqueStudents,
-    onsiteClasses,
-    averageVisitsPerClass: roundAverage(visits.length, onsiteClasses),
-    unidentifiedVisits,
+    studentVisits: summary.studentVisits,
+    uniqueStudents: summary.studentFingerprints.size,
+    onsiteClasses: summary.onsiteClasses,
+    averageVisitsPerClass: roundAverage(summary.studentVisits, summary.onsiteClasses),
+    unidentifiedVisits: summary.unidentifiedVisits,
   };
+}
+
+function accumulatorFor(map: Map<string, MutableSummary>, key: string): MutableSummary {
+  const existing = map.get(key);
+  if (existing) return existing;
+  const created = createSummary();
+  map.set(key, created);
+  return created;
+}
+
+function addSession(summary: MutableSummary, isCountedOnsite: boolean): void {
+  if (isCountedOnsite) summary.onsiteClasses += 1;
+}
+
+function addVisit(summary: MutableSummary, studentFingerprint: string | null): void {
+  summary.studentVisits += 1;
+  if (studentFingerprint) {
+    summary.studentFingerprints.add(studentFingerprint);
+  } else {
+    summary.unidentifiedVisits += 1;
+  }
+}
+
+function createDataQuality(): FootTrafficDataQuality {
+  return {
+    totalPastSessions: 0,
+    countedOnsiteSessions: 0,
+    excludedSessions: 0,
+    cancelledSessions: 0,
+    missedSessions: 0,
+    notEndedSessions: 0,
+    nonOnsiteSessions: 0,
+    missingLocationSessions: 0,
+    unknownRoomSessions: 0,
+    onlineOnlyRoomSessions: 0,
+    sessionsWithoutAttendanceEvidence: 0,
+    participantsWithoutAttendanceEvidence: 0,
+    unidentifiedVisits: 0,
+  };
+}
+
+function addSessionQuality(
+  quality: FootTrafficDataQuality,
+  session: AggregateSessionRecord,
+): void {
+  quality.totalPastSessions += 1;
+  quality.participantsWithoutAttendanceEvidence += session.missingAttendanceEvidenceCount;
+  if (session.isCountedOnsite) {
+    quality.countedOnsiteSessions += 1;
+  } else {
+    quality.excludedSessions += 1;
+  }
+
+  switch (session.exclusionReason) {
+    case "cancelled":
+      quality.cancelledSessions += 1;
+      break;
+    case "missed":
+      quality.missedSessions += 1;
+      break;
+    case "not_ended":
+      quality.notEndedSessions += 1;
+      break;
+    case "not_onsite":
+      quality.nonOnsiteSessions += 1;
+      break;
+    case "missing_location":
+      quality.missingLocationSessions += 1;
+      break;
+    case "unknown_room":
+      quality.unknownRoomSessions += 1;
+      break;
+    case "online_only_room":
+      quality.onlineOnlyRoomSessions += 1;
+      break;
+    case "no_attendance_evidence":
+      quality.sessionsWithoutAttendanceEvidence += 1;
+      break;
+    default:
+      break;
+  }
+}
+
+function dimensionsFor(
+  date: string,
+  cache: Map<string, DateDimensions>,
+): DateDimensions {
+  const existing = cache.get(date);
+  if (existing) return existing;
+  const weekday = bangkokWeekday(date);
+  const dimensions = {
+    weekday,
+    weekStart: addBangkokDays(date, weekday === 0 ? -6 : 1 - weekday),
+    month: date.slice(0, 7),
+  };
+  cache.set(date, dimensions);
+  return dimensions;
 }
 
 function overlap(startA: string, endA: string, startB: string, endB: string): boolean {
   return startA <= endB && startB <= endA;
 }
 
-function groupPeriod(
-  sessions: readonly FootTrafficSessionRecord[],
-  visits: readonly FootTrafficVisitRecord[],
-  start: string,
-  end: string,
-): FootTrafficSummary {
-  return summarize(
-    sessions.filter((row) => row.attendanceDate >= start && row.attendanceDate <= end),
-    visits.filter((row) => row.attendanceDate >= start && row.attendanceDate <= end),
-  );
-}
-
 function buildWeekly(
-  sessions: readonly FootTrafficSessionRecord[],
-  visits: readonly FootTrafficVisitRecord[],
+  summaries: ReadonlyMap<string, MutableSummary>,
   effectiveStart: string,
   effectiveEnd: string,
 ): FootTrafficPeriodRow[] {
   if (effectiveStart > effectiveEnd) return [];
   const rows: FootTrafficPeriodRow[] = [];
   for (let start = mondayWeekStart(effectiveStart); start <= effectiveEnd; start = addBangkokDays(start, 7)) {
-    const end = weekEnd(start);
+    const end = addBangkokDays(start, 6);
     if (!overlap(start, end, effectiveStart, effectiveEnd)) continue;
     rows.push({
       key: start,
@@ -99,7 +214,7 @@ function buildWeekly(
       periodStart: start,
       periodEnd: end,
       isPartial: start < effectiveStart || end > effectiveEnd,
-      ...groupPeriod(sessions, visits, start, end),
+      ...materializeSummary(summaries.get(start)),
     });
   }
   return rows;
@@ -111,8 +226,7 @@ function nextMonth(date: string): string {
 }
 
 function buildMonthly(
-  sessions: readonly FootTrafficSessionRecord[],
-  visits: readonly FootTrafficVisitRecord[],
+  summaries: ReadonlyMap<string, MutableSummary>,
   effectiveStart: string,
   effectiveEnd: string,
 ): FootTrafficPeriodRow[] {
@@ -120,55 +234,20 @@ function buildMonthly(
   const rows: FootTrafficPeriodRow[] = [];
   for (let start = monthStart(effectiveStart); start <= effectiveEnd; start = nextMonth(start)) {
     const end = endOfBangkokMonth(start);
+    const key = start.slice(0, 7);
     rows.push({
-      key: start.slice(0, 7),
+      key,
       label: monthLabel(start),
       periodStart: start,
       periodEnd: end,
       isPartial: start < effectiveStart || end > effectiveEnd,
-      ...groupPeriod(sessions, visits, start, end),
+      ...materializeSummary(summaries.get(key)),
     });
   }
   return rows;
 }
 
-function breakdown(
-  sessions: readonly FootTrafficSessionRecord[],
-  visits: readonly FootTrafficVisitRecord[],
-  definitions: Array<{ key: string; label: string; matchesSession: (row: FootTrafficSessionRecord) => boolean }>,
-): FootTrafficBreakdownRow[] {
-  return definitions.map((definition) => {
-    const groupSessions = sessions.filter(definition.matchesSession);
-    const sessionIds = new Set(groupSessions.map((row) => row.wiseSessionId));
-    const groupVisits = visits.filter((row) => sessionIds.has(row.wiseSessionId));
-    return { key: definition.key, label: definition.label, ...summarize(groupSessions, groupVisits) };
-  });
-}
-
-function qualityFor(sessions: readonly FootTrafficSessionRecord[], visits: readonly FootTrafficVisitRecord[]): FootTrafficDataQuality {
-  const reasonCount = (reason: FootTrafficSessionRecord["exclusionReason"]) =>
-    sessions.filter((session) => session.exclusionReason === reason).length;
-  return {
-    totalPastSessions: sessions.length,
-    countedOnsiteSessions: sessions.filter((session) => session.isCountedOnsite).length,
-    excludedSessions: sessions.filter((session) => !session.isCountedOnsite).length,
-    cancelledSessions: reasonCount("cancelled"),
-    missedSessions: reasonCount("missed"),
-    notEndedSessions: reasonCount("not_ended"),
-    nonOnsiteSessions: reasonCount("not_onsite"),
-    missingLocationSessions: reasonCount("missing_location"),
-    unknownRoomSessions: reasonCount("unknown_room"),
-    onlineOnlyRoomSessions: reasonCount("online_only_room"),
-    sessionsWithoutAttendanceEvidence: reasonCount("no_attendance_evidence"),
-    participantsWithoutAttendanceEvidence: sessions.reduce(
-      (sum, session) => sum + session.missingAttendanceEvidenceCount,
-      0,
-    ),
-    unidentifiedVisits: visits.filter((visit) => !visit.studentFingerprint).length,
-  };
-}
-
-export function aggregateFootTraffic(input: AggregateInput): FootTrafficDashboardResult {
+export function aggregateFootTraffic(input: AggregateInput): FootTrafficDashboardPayload {
   const selectedRooms = new Set(input.filters.rooms ?? []);
   const selectedWeekdays = new Set(input.filters.weekdays ?? []);
   const coverageEnd = input.coverageEndDate ?? input.filters.endDate;
@@ -176,41 +255,55 @@ export function aggregateFootTraffic(input: AggregateInput): FootTrafficDashboar
   const coverageStart = input.coverageStartDate ?? input.filters.startDate;
   const effectiveStart = input.filters.startDate < coverageStart ? coverageStart : input.filters.startDate;
   const hasCoverage = Boolean(input.coverageStartDate && input.coverageEndDate && effectiveStart <= effectiveEnd);
-
-  const filteredSessions = hasCoverage
-    ? input.sessions.filter((session) => {
-      if (session.attendanceDate < effectiveStart || session.attendanceDate > effectiveEnd) return false;
-      if (selectedRooms.size > 0 && (!session.roomName || !selectedRooms.has(session.roomName))) return false;
-      if (selectedWeekdays.size > 0 && !selectedWeekdays.has(bangkokWeekday(session.attendanceDate))) return false;
-      return true;
-    })
-    : [];
-  const sessionIds = new Set(filteredSessions.map((session) => session.wiseSessionId));
-  const filteredVisits = input.visits.filter((visit) => sessionIds.has(visit.wiseSessionId));
-  const sessionsById = new Map(filteredSessions.map((session) => [session.wiseSessionId, session]));
-  const detail: FootTrafficVisitDetail[] = filteredVisits.map((visit) => {
-    const session = sessionsById.get(visit.wiseSessionId)!;
-    return {
-      attendanceDate: visit.attendanceDate,
-      startTime: bangkokTimeLabel(session.scheduledStartAt),
-      weekStart: mondayWeekStart(visit.attendanceDate),
-      month: visit.attendanceDate.slice(0, 7),
-      studentFingerprint: visit.studentFingerprint,
-      wiseSessionId: visit.wiseSessionId,
-      room: session.roomName ?? "Unknown",
-      subject: session.subject,
-      tutor: session.tutorName,
-      consumedCredits: visit.consumedCredits,
-    };
-  }).sort((left, right) =>
-    left.attendanceDate.localeCompare(right.attendanceDate) ||
-    left.startTime.localeCompare(right.startTime) ||
-    left.wiseSessionId.localeCompare(right.wiseSessionId));
-
   const roomNames = [...new Set(
     selectedRooms.size > 0 ? [...selectedRooms] : input.availableRooms,
   )].sort((left, right) => left.localeCompare(right));
+  const includedRooms = new Set(roomNames);
   const weekdays = [1, 2, 3, 4, 5, 6, 0];
+
+  const overall = createSummary();
+  const weekly = new Map<string, MutableSummary>();
+  const monthly = new Map<string, MutableSummary>();
+  const byWeekday = new Map<string, MutableSummary>();
+  const byRoom = new Map<string, MutableSummary>();
+  const dataQuality = createDataQuality();
+  const dateDimensions = new Map<string, DateDimensions>();
+  const sessionsById = new Map<string, SessionDimensions>();
+
+  if (hasCoverage) {
+    for (const session of input.sessions) {
+      if (session.attendanceDate < effectiveStart || session.attendanceDate > effectiveEnd) continue;
+      if (selectedRooms.size > 0 && (!session.roomName || !selectedRooms.has(session.roomName))) continue;
+      const dimensions = dimensionsFor(session.attendanceDate, dateDimensions);
+      if (selectedWeekdays.size > 0 && !selectedWeekdays.has(dimensions.weekday)) continue;
+
+      const sessionDimensions = { ...dimensions, roomName: session.roomName };
+      sessionsById.set(session.wiseSessionId, sessionDimensions);
+      addSessionQuality(dataQuality, session);
+      addSession(overall, session.isCountedOnsite);
+      addSession(accumulatorFor(weekly, dimensions.weekStart), session.isCountedOnsite);
+      addSession(accumulatorFor(monthly, dimensions.month), session.isCountedOnsite);
+      addSession(accumulatorFor(byWeekday, String(dimensions.weekday)), session.isCountedOnsite);
+      if (session.roomName && includedRooms.has(session.roomName)) {
+        addSession(accumulatorFor(byRoom, session.roomName), session.isCountedOnsite);
+      }
+    }
+
+    for (const visit of input.visits) {
+      const session = sessionsById.get(visit.wiseSessionId);
+      if (!session) continue;
+      const visitDimensions = dimensionsFor(visit.attendanceDate, dateDimensions);
+      addVisit(overall, visit.studentFingerprint);
+      addVisit(accumulatorFor(weekly, visitDimensions.weekStart), visit.studentFingerprint);
+      addVisit(accumulatorFor(monthly, visitDimensions.month), visit.studentFingerprint);
+      addVisit(accumulatorFor(byWeekday, String(session.weekday)), visit.studentFingerprint);
+      if (session.roomName && includedRooms.has(session.roomName)) {
+        addVisit(accumulatorFor(byRoom, session.roomName), visit.studentFingerprint);
+      }
+      if (!visit.studentFingerprint) dataQuality.unidentifiedVisits += 1;
+    }
+  }
+
   const emptyEffectiveStart = hasCoverage ? effectiveStart : input.filters.startDate;
   const emptyEffectiveEnd = hasCoverage ? effectiveEnd : input.filters.endDate;
 
@@ -235,28 +328,19 @@ export function aggregateFootTraffic(input: AggregateInput): FootTrafficDashboar
       weekdays: [...selectedWeekdays],
       availableRooms: [...input.availableRooms].sort((left, right) => left.localeCompare(right)),
     },
-    summary: hasCoverage ? summarize(filteredSessions, filteredVisits) : { ...EMPTY_SUMMARY },
-    weekly: hasCoverage ? buildWeekly(filteredSessions, filteredVisits, effectiveStart, effectiveEnd) : [],
-    monthly: hasCoverage ? buildMonthly(filteredSessions, filteredVisits, effectiveStart, effectiveEnd) : [],
-    byWeekday: breakdown(
-      filteredSessions,
-      filteredVisits,
-      weekdays.map((weekday) => ({
-        key: String(weekday),
-        label: weekdayName(weekday),
-        matchesSession: (row) => bangkokWeekday(row.attendanceDate) === weekday,
-      })),
-    ),
-    byRoom: breakdown(
-      filteredSessions,
-      filteredVisits,
-      roomNames.map((roomName) => ({
-        key: roomName,
-        label: roomName,
-        matchesSession: (row) => row.roomName === roomName,
-      })),
-    ).sort((left, right) => right.studentVisits - left.studentVisits || left.label.localeCompare(right.label)),
-    dataQuality: qualityFor(filteredSessions, filteredVisits),
-    visits: detail,
+    summary: materializeSummary(overall),
+    weekly: hasCoverage ? buildWeekly(weekly, effectiveStart, effectiveEnd) : [],
+    monthly: hasCoverage ? buildMonthly(monthly, effectiveStart, effectiveEnd) : [],
+    byWeekday: weekdays.map((weekday): FootTrafficBreakdownRow => ({
+      key: String(weekday),
+      label: weekdayName(weekday),
+      ...materializeSummary(byWeekday.get(String(weekday))),
+    })),
+    byRoom: roomNames.map((roomName): FootTrafficBreakdownRow => ({
+      key: roomName,
+      label: roomName,
+      ...materializeSummary(byRoom.get(roomName)),
+    })).sort((left, right) => right.studentVisits - left.studentVisits || left.label.localeCompare(right.label)),
+    dataQuality,
   };
 }

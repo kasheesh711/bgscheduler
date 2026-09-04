@@ -70,6 +70,7 @@ describe("onsite foot-traffic aggregation", () => {
     expect(data.meta.effectiveEndDate).toBe("2026-09-03");
     expect(data.meta.isEndDateCapped).toBe(true);
     expect(data.meta.isSeptemberMonthToDate).toBe(true);
+    expect(data).not.toHaveProperty("visits");
   });
 
   it("fills zero weeks/months and marks only boundary periods partial", () => {

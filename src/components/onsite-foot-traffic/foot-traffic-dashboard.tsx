@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
@@ -221,7 +221,12 @@ export function DashboardErrorState({ error, onRetry }: { error: string; onRetry
   return <div className="begifted rounded-xl border border-red-200 bg-white p-8"><h1 className="begifted-display text-3xl">Foot traffic unavailable</h1><p className="mt-3 text-sm text-red-700">{error}</p><Button className="mt-5" onClick={onRetry}>Retry</Button></div>;
 }
 
-export function FootTrafficDashboard() {
+export function FootTrafficDashboardLoadError({ error }: { error: string }) {
+  const router = useRouter();
+  return <DashboardErrorState error={error} onRetry={() => router.refresh()} />;
+}
+
+export function FootTrafficDashboard({ data }: { data: FootTrafficDashboardPayload }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -231,11 +236,10 @@ export function FootTrafficDashboard() {
   const [endDate, setEndDate] = useState(currentFilters.endDate);
   const [room, setRoom] = useState(currentFilters.rooms[0] ?? "");
   const [weekdays, setWeekdays] = useState(currentFilters.weekdays);
-  const [data, setData] = useState<FootTrafficDashboardPayload | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reporting, setReporting] = useState(false);
   const [reportLinks, setReportLinks] = useState<ReportLinks | null>(null);
+  const [isPending, startTransition] = useTransition();
 
   useEffect(() => {
     setStartDate(currentFilters.startDate);
@@ -244,22 +248,11 @@ export function FootTrafficDashboard() {
     setWeekdays(currentFilters.weekdays);
   }, [currentFilters]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  function refresh() {
     setError(null);
-    try {
-      const response = await fetch(`/api/onsite-foot-traffic${query ? `?${query}` : ""}`, { cache: "no-store" });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
-      setData(body as FootTrafficDashboardPayload);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load foot traffic");
-    } finally {
-      setLoading(false);
-    }
-  }, [query]);
-
-  useEffect(() => { void load(); }, [load]);
+    setReportLinks(null);
+    startTransition(() => router.refresh());
+  }
 
   function applyFilters() {
     const params = new URLSearchParams();
@@ -267,8 +260,9 @@ export function FootTrafficDashboard() {
     params.set("endDate", endDate);
     if (room) params.set("rooms", room);
     if (weekdays.length) params.set("weekdays", [...weekdays].sort((a, b) => a - b).join(","));
-    router.replace(`${pathname}?${params.toString()}`);
     setReportLinks(null);
+    setError(null);
+    startTransition(() => router.replace(`${pathname}?${params.toString()}`, { scroll: false }));
   }
 
   function toggleWeekday(value: number) {
@@ -285,10 +279,10 @@ export function FootTrafficDashboard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          startDate: data?.meta.requestedStartDate ?? currentFilters.startDate,
-          endDate: data?.meta.requestedEndDate ?? currentFilters.endDate,
-          rooms: data?.meta.rooms ?? currentFilters.rooms,
-          weekdays: data?.meta.weekdays ?? currentFilters.weekdays,
+          startDate: data.meta.requestedStartDate,
+          endDate: data.meta.requestedEndDate,
+          rooms: data.meta.rooms,
+          weekdays: data.meta.weekdays,
         }),
       });
       const body = await response.json();
@@ -302,17 +296,8 @@ export function FootTrafficDashboard() {
   }
 
   const exports = ["weekly", "monthly", "weekday", "room", "visits"];
-  const qualityTotal = data ? data.dataQuality.unknownRoomSessions + data.dataQuality.missingLocationSessions + data.dataQuality.participantsWithoutAttendanceEvidence + data.dataQuality.unidentifiedVisits : 0;
-  const stale = isStale(data?.meta.lastSuccessfulSyncAt ?? null);
-
-  if (loading && !data) {
-    return <div className="begifted flex flex-1 flex-col gap-4 overflow-hidden rounded-xl bg-white p-4"><div className="h-28 animate-pulse rounded-xl bg-begifted-neutral-100" /><div className="grid gap-3 md:grid-cols-4">{Array.from({ length: 4 }, (_, i) => <div key={i} className="h-28 animate-pulse rounded-xl bg-begifted-neutral-100" />)}</div><div className="h-80 animate-pulse rounded-xl bg-begifted-neutral-100" /></div>;
-  }
-
-  if (!data && error) {
-    return <DashboardErrorState error={error} onRetry={() => void load()} />;
-  }
-  if (!data) return null;
+  const qualityTotal = data.dataQuality.unknownRoomSessions + data.dataQuality.missingLocationSessions + data.dataQuality.participantsWithoutAttendanceEvidence + data.dataQuality.unidentifiedVisits;
+  const stale = isStale(data.meta.lastSuccessfulSyncAt);
 
   return (
     <div className="begifted flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl bg-begifted-neutral-50">
@@ -321,14 +306,14 @@ export function FootTrafficDashboard() {
           <header className="rounded-xl border border-begifted-neutral-200 bg-white px-5 py-5 shadow-begifted-sm">
             <div className="flex flex-wrap items-start justify-between gap-5">
               <div><div className="eyebrow">Onsite research · Wise actuals</div><h1 className="begifted-display mt-1 text-4xl md:text-5xl">Foot Traffic</h1><p className="mt-2 max-w-3xl text-sm text-begifted-neutral-600">A de-identified class-attendance proxy: one qualifying attended onsite class per student equals one student-visit.</p></div>
-              <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" onClick={() => void load()} disabled={loading}><RefreshCw className={`mr-2 size-4 ${loading ? "animate-spin" : ""}`} />Refresh</Button><Button type="button" onClick={() => void generateReport()} disabled={reporting}><FileChartColumn className="mr-2 size-4" />{reporting ? "Building…" : "Create analytics pack"}</Button></div>
+              <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" onClick={refresh} disabled={isPending}><RefreshCw className={`mr-2 size-4 ${isPending ? "animate-spin" : ""}`} />Refresh</Button><Button type="button" onClick={() => void generateReport()} disabled={reporting}><FileChartColumn className="mr-2 size-4" />{reporting ? "Building…" : "Create analytics pack"}</Button></div>
             </div>
             <div className="mt-5 grid gap-3 rounded-lg border border-begifted-neutral-200 bg-begifted-neutral-50 p-3 lg:grid-cols-[1fr_1fr_1.4fr_1.25fr_auto]">
               <label className="text-xs font-semibold text-begifted-neutral-600">Start date<input className="digits mt-1 block h-9 w-full rounded-md border border-begifted-neutral-300 bg-white px-2 text-sm" type="date" value={startDate} min={RESEARCH_START} onChange={(event) => setStartDate(event.target.value)} /></label>
               <label className="text-xs font-semibold text-begifted-neutral-600">End date<input className="digits mt-1 block h-9 w-full rounded-md border border-begifted-neutral-300 bg-white px-2 text-sm" type="date" value={endDate} min={RESEARCH_START} onChange={(event) => setEndDate(event.target.value)} /></label>
               <label className="text-xs font-semibold text-begifted-neutral-600">Room<select className="mt-1 block h-9 w-full rounded-md border border-begifted-neutral-300 bg-white px-2 text-sm" value={room} onChange={(event) => setRoom(event.target.value)}><option value="">All physical rooms</option>{data.meta.availableRooms.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
               <div><div className="text-xs font-semibold text-begifted-neutral-600">Weekdays</div><div className="mt-1 flex flex-wrap gap-1"><button type="button" onClick={() => setWeekdays([])} className={`rounded-md border px-2 py-1 text-xs font-semibold ${weekdays.length === 0 ? "border-[#126DCE] bg-[#EEF6FF] text-[#0B4685]" : "border-begifted-neutral-300 bg-white"}`}>All</button>{WEEKDAYS.map((day) => <button key={day.value} type="button" aria-pressed={weekdays.includes(day.value)} onClick={() => toggleWeekday(day.value)} className={`rounded-md border px-2 py-1 text-xs font-semibold ${weekdays.includes(day.value) ? "border-begifted-orange-500 bg-begifted-orange-50 text-begifted-orange-600" : "border-begifted-neutral-300 bg-white"}`}>{day.short}</button>)}</div></div>
-              <Button type="button" className="self-end" onClick={applyFilters}>Apply</Button>
+              <Button type="button" className="self-end" onClick={applyFilters} disabled={isPending}>Apply</Button>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-begifted-neutral-500"><span className="flex items-center gap-1.5"><CalendarDays className="size-4 text-[#126DCE]" />Effective {formatDate(data.meta.effectiveStartDate)} – {formatDate(data.meta.effectiveEndDate)}</span><span className="flex items-center gap-1.5">{stale ? <AlertTriangle className="size-4 text-begifted-orange-500" /> : <CheckCircle2 className="size-4 text-emerald-600" />} Last successful sync {formatDateTime(data.meta.lastSuccessfulSyncAt)}</span></div>
           </header>

@@ -129,10 +129,6 @@ export interface FootTrafficDashboardPayload {
   dataQuality: FootTrafficDataQuality;
 }
 
-export interface FootTrafficDashboardResult extends FootTrafficDashboardPayload {
-  visits: FootTrafficVisitDetail[];
-}
-
 export type FootTrafficExportGrain = "weekly" | "monthly" | "weekday" | "room" | "visits";
 
 export interface FootTrafficReportSnapshot {

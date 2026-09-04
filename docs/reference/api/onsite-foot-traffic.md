@@ -44,12 +44,16 @@ Returns `FootTrafficDashboardPayload`:
 
 `MetricSummary` is `{ studentVisits, uniqueStudents, onsiteClasses, averageVisitsPerClass, unidentifiedVisits }`. A `PeriodRow` adds `key`, `label`, `periodStart`, `periodEnd`, and `isPartial`; a `BreakdownRow` adds `key` and `label`. The quality object exposes total/countable/excluded PAST sessions and each documented exclusion category. Successful responses are `200`; unexpected database failures are `500 { error }`.
 
+The response remains uncached and includes a `Server-Timing` header with `auth`, `metadata`, `database`, `aggregate`, and `total` durations. The initial dashboard page uses the same aggregate reader during server rendering, while this endpoint remains available for authenticated API consumers.
+
 ## `GET /api/onsite-foot-traffic/export`
 
 Adds required query parameter `grain=weekly|monthly|weekday|room|visits` to the shared filters. Missing or unknown grain returns 400. Success is `200 text/csv;charset=utf-8` with `Content-Disposition: attachment`, a UTF-8 BOM, every field quoted, and CRLF rows.
 
 - aggregate grains contain period or grouping keys, boundaries where applicable, partial flags, visits, unique students, onsite classes, visits/class, `data_as_of`, and `last_successful_sync_at`;
 - `visits` contains attendance date/time, week start, month, pseudonymous fingerprint, Wise session ID, room, subject, tutor, and consumed credit. The fingerprint is blank for unidentified visits. No student name or raw student ID is emitted.
+
+Aggregate grains use only the aggregate reader. The detail join and CSV-row transformation run exclusively for `grain=visits`. Successful export responses include the aggregate timing phases in `Server-Timing`; visit exports additionally include `visit-database` and `visit-transform`.
 
 ## `POST /api/onsite-foot-traffic/reports`
 

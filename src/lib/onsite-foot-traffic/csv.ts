@@ -2,11 +2,14 @@ import { sanitizeCsvFilename, serializeCsv, type CsvColumn } from "@/lib/sales-d
 
 import type {
   FootTrafficBreakdownRow,
-  FootTrafficDashboardResult,
+  FootTrafficDashboardPayload,
   FootTrafficExportGrain,
+  FootTrafficMeta,
   FootTrafficPeriodRow,
   FootTrafficVisitDetail,
 } from "./types";
+
+export type FootTrafficAggregateExportGrain = Exclude<FootTrafficExportGrain, "visits">;
 
 interface AggregateExportRow {
   key: string;
@@ -53,8 +56,12 @@ const VISIT_COLUMNS: CsvColumn<FootTrafficVisitDetail>[] = [
   { key: "consumedCredits", header: "Consumed credit", value: (row) => row.consumedCredits },
 ];
 
+function exportStem(meta: FootTrafficMeta, grain: FootTrafficExportGrain): string {
+  return `begifted-foot-traffic-${meta.requestedStartDate}-to-${meta.requestedEndDate}-${grain}`;
+}
+
 function aggregateRows(
-  payload: FootTrafficDashboardResult,
+  payload: FootTrafficDashboardPayload,
   rows: Array<FootTrafficPeriodRow | FootTrafficBreakdownRow>,
 ): AggregateExportRow[] {
   return rows.map((row) => ({
@@ -68,17 +75,10 @@ function aggregateRows(
   }));
 }
 
-export function buildFootTrafficCsv(
-  payload: FootTrafficDashboardResult,
-  grain: FootTrafficExportGrain,
+export function buildFootTrafficAggregateCsv(
+  payload: FootTrafficDashboardPayload,
+  grain: FootTrafficAggregateExportGrain,
 ): { csv: string; filename: string } {
-  const stem = `begifted-foot-traffic-${payload.meta.requestedStartDate}-to-${payload.meta.requestedEndDate}-${grain}`;
-  if (grain === "visits") {
-    return {
-      csv: serializeCsv(payload.visits, VISIT_COLUMNS),
-      filename: sanitizeCsvFilename(stem),
-    };
-  }
   const source = grain === "weekly"
     ? payload.weekly
     : grain === "monthly"
@@ -88,6 +88,16 @@ export function buildFootTrafficCsv(
         : payload.byRoom;
   return {
     csv: serializeCsv(aggregateRows(payload, source), AGGREGATE_COLUMNS),
-    filename: sanitizeCsvFilename(stem),
+    filename: sanitizeCsvFilename(exportStem(payload.meta, grain)),
+  };
+}
+
+export function buildFootTrafficVisitCsv(
+  meta: FootTrafficMeta,
+  visits: FootTrafficVisitDetail[],
+): { csv: string; filename: string } {
+  return {
+    csv: serializeCsv(visits, VISIT_COLUMNS),
+    filename: sanitizeCsvFilename(exportStem(meta, "visits")),
   };
 }
