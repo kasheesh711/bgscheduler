@@ -72,7 +72,7 @@ formula anchor.
 ### `unearned_revenue_lot_periods`
 
 `schema.ts:5046–5111`. One package lot per snapshot and reporting date. It records lot/match/review
-classification, V3 match confidence/rule/JSON evidence (including normalized nickname and matching-date
+classification, versioned match confidence/rule/JSON evidence (including normalized nickname and matching-date
 source), package and credit-event lineage, candidate sales and receipt IDs,
 receipt identity/amount/status, negative recovery, and the FIFO credit and THB roll-forward. Formula,
 original sales-row, original credit-event, and normalized receipt-row anchors are stored independently;

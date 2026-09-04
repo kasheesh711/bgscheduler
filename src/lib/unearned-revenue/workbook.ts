@@ -2,6 +2,7 @@ import {
   FIFO_PACKAGE_MODEL,
   FIFO_PACKAGE_MODEL_V1,
   FIFO_PACKAGE_MODEL_V2,
+  FIFO_PACKAGE_MODEL_V3,
   LEGACY_ACCOUNT_MODEL,
   type UnearnedRevenueCanonicalModel,
   type UnearnedRevenueLotKind,
@@ -383,6 +384,7 @@ function parseStatus(startRows: unknown[][], endRows: unknown[][]): ParsedWorkbo
   if (canonicalRaw !== LEGACY_ACCOUNT_MODEL
     && canonicalRaw !== FIFO_PACKAGE_MODEL_V1
     && canonicalRaw !== FIFO_PACKAGE_MODEL_V2
+    && canonicalRaw !== FIFO_PACKAGE_MODEL_V3
     && canonicalRaw !== FIFO_PACKAGE_MODEL) {
     throw new UnearnedRevenueWorkbookError(`Unsupported canonical model ${canonicalRaw}`);
   }
@@ -396,9 +398,11 @@ function parseStatus(startRows: unknown[][], endRows: unknown[][]): ParsedWorkbo
       `Workbook schema V3 must use candidate model ${FIFO_PACKAGE_MODEL_V2}`,
     );
   }
-  if (schemaVersion === 4 && modelVersion !== FIFO_PACKAGE_MODEL) {
+  if (schemaVersion === 4
+    && modelVersion !== FIFO_PACKAGE_MODEL_V3
+    && modelVersion !== FIFO_PACKAGE_MODEL) {
     throw new UnearnedRevenueWorkbookError(
-      `Workbook schema V4 must use candidate model ${FIFO_PACKAGE_MODEL}`,
+      `Workbook schema V4 must use candidate model ${FIFO_PACKAGE_MODEL_V3} or ${FIFO_PACKAGE_MODEL}`,
     );
   }
   if (canonicalRaw !== LEGACY_ACCOUNT_MODEL && modelVersion !== canonicalRaw) {
@@ -512,6 +516,18 @@ const EXACT_MATCH_STATUSES = new Set<UnearnedRevenueMatchStatus>([
 
 function difference(left: string, right: string): number {
   return Math.abs(Number(left) - Number(right));
+}
+
+function evidenceNumber(
+  evidence: Record<string, unknown>,
+  key: string,
+  label: string,
+): number {
+  const value = Number(evidence[key]);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new UnearnedRevenueWorkbookError(`${label} has invalid ${key} evidence`);
+  }
+  return value;
 }
 
 function monthEnd(value: string): string {
@@ -827,6 +843,104 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
           throw new UnearnedRevenueWorkbookError(
             `Automatic exact-package lot row ${sourceRow} lacks required identity evidence`,
           );
+        }
+        if (status.modelVersion === FIFO_PACKAGE_MODEL) {
+          const recordedInWise = parsedMatchEvidence.recorded_in_wise;
+          if (typeof recordedInWise !== "boolean") {
+            throw new UnearnedRevenueWorkbookError(
+              `Automatic V4 exact-package lot row ${sourceRow} lacks its Recorded-in-WISE evidence`,
+            );
+          }
+          if (!recordedInWise) {
+            const receiptId = text(lotTable.get(row, "receipt_id"));
+            const receiptType = text(lotTable.get(row, "receipt_type")).toUpperCase();
+            const receiptStatus = text(lotTable.get(row, "receipt_status")).toUpperCase();
+            const receiptCurrency = text(lotTable.get(row, "receipt_currency")).toUpperCase();
+            const receiptAmount = numberValue(
+              lotTable.get(row, "receipt_amount_thb"),
+              `Lot row ${sourceRow} receipt_amount_thb`,
+            );
+            const receiptSourceRow = optionalInteger(
+              lotTable.get(row, "receipt_source_row"),
+              `Lot row ${sourceRow} receipt_source_row`,
+            );
+            const lotStudentId = text(lotTable.get(row, "student_id"));
+            const lotClassId = text(lotTable.get(row, "class_id"));
+            const receiptStudentId = text(lotTable.get(row, "receipt_student_id"));
+            const receiptClassId = text(lotTable.get(row, "receipt_class_id"));
+            const creditDifference = evidenceNumber(
+              parsedMatchEvidence,
+              "credit_difference",
+              `Lot row ${sourceRow}`,
+            );
+            const amountDifference = evidenceNumber(
+              parsedMatchEvidence,
+              "amount_difference_thb",
+              `Lot row ${sourceRow}`,
+            );
+            const salesReceiptDays = evidenceNumber(
+              parsedMatchEvidence,
+              "sales_receipt_date_difference_days",
+              `Lot row ${sourceRow}`,
+            );
+            const receiptEventDays = evidenceNumber(
+              parsedMatchEvidence,
+              "receipt_event_date_difference_days",
+              `Lot row ${sourceRow}`,
+            );
+            const eventEdgeCount = evidenceNumber(
+              parsedMatchEvidence,
+              "eligible_event_edge_count",
+              `Lot row ${sourceRow}`,
+            );
+            const saleEdgeCount = evidenceNumber(
+              parsedMatchEvidence,
+              "eligible_sale_edge_count",
+              `Lot row ${sourceRow}`,
+            );
+            const receiptEdgeCount = evidenceNumber(
+              parsedMatchEvidence,
+              "eligible_receipt_edge_count",
+              `Lot row ${sourceRow}`,
+            );
+            const rawCreditDifference = Math.abs(
+              numberValue(lotTable.get(row, "package_credits"), `Lot row ${sourceRow} package_credits`)
+              - numberValue(lotTable.get(row, "original_credits"), `Lot row ${sourceRow} original_credits`),
+            );
+            const rawAmountDifference = Math.abs(
+              numberValue(lotTable.get(row, "net_payment_thb"), `Lot row ${sourceRow} net_payment_thb`)
+              - receiptAmount,
+            );
+            if (parsedMatchStatus !== "COMPOSITE_VERIFIED"
+              || text(lotTable.get(row, "match_rule_id")) !== "MATCH-COMPOSITE-VERIFIED-V4"
+              || parsedMatchEvidence.independent_wise_proof !== true
+              || text(parsedMatchEvidence.recorded_in_wise_policy) !== "ADVISORY_WISE_PROVEN"
+              || parsedMatchEvidence.student_id_match !== true
+              || parsedMatchEvidence.class_id_match !== true
+              || parsedMatchEvidence.program_match !== true
+              || !receiptId
+              || receiptSourceRow === null
+              || !receiptChargedAtRaw
+              || !["PAYMENT", "OFFLINE_PAYMENT"].includes(receiptType)
+              || receiptStatus !== "CHARGED"
+              || receiptCurrency !== "THB"
+              || receiptAmount <= 0
+              || receiptStudentId !== lotStudentId
+              || receiptClassId !== lotClassId
+              || creditDifference > 0.001000001
+              || amountDifference > 0.010000001
+              || salesReceiptDays > 3
+              || receiptEventDays > 21
+              || eventEdgeCount !== 1
+              || saleEdgeCount !== 1
+              || receiptEdgeCount !== 1
+              || Math.abs(creditDifference - rawCreditDifference) > 0.00000001
+              || Math.abs(amountDifference - rawAmountDifference) > 0.00000001) {
+              throw new UnearnedRevenueWorkbookError(
+                `Unchecked V4 exact-package lot row ${sourceRow} lacks complete independent WISE proof`,
+              );
+            }
+          }
         }
       } else if (!text(parsedMatchEvidence.decision_id)
         || !text(parsedMatchEvidence.reviewer_email)) {

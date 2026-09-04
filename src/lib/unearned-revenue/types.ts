@@ -1,6 +1,7 @@
 export const UNEARNED_REVENUE_ROUTE = "/unearned-revenue";
 export const UNEARNED_REVENUE_WORKBOOK_ID = "1AY6sAjw3rwAhdJCzMWR6qW0utBU91sv-JZWH1223mZc";
-export const FIFO_PACKAGE_MODEL = "FIFO_PACKAGE_LOT_V3" as const;
+export const FIFO_PACKAGE_MODEL = "FIFO_PACKAGE_LOT_V4" as const;
+export const FIFO_PACKAGE_MODEL_V3 = "FIFO_PACKAGE_LOT_V3" as const;
 export const FIFO_PACKAGE_MODEL_V2 = "FIFO_PACKAGE_LOT_V2" as const;
 export const FIFO_PACKAGE_MODEL_V1 = "FIFO_PACKAGE_LOT_V1" as const;
 export const LEGACY_ACCOUNT_MODEL = "LEGACY_ACCOUNT_RATE" as const;
@@ -9,6 +10,7 @@ export type UnearnedRevenueCanonicalModel =
   | typeof LEGACY_ACCOUNT_MODEL
   | typeof FIFO_PACKAGE_MODEL_V1
   | typeof FIFO_PACKAGE_MODEL_V2
+  | typeof FIFO_PACKAGE_MODEL_V3
   | typeof FIFO_PACKAGE_MODEL;
 
 export type UnearnedRevenuePeriodKind = "MONTH_END" | "LATEST";

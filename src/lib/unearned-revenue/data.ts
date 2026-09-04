@@ -10,6 +10,7 @@ import {
   FIFO_PACKAGE_MODEL,
   FIFO_PACKAGE_MODEL_V1,
   FIFO_PACKAGE_MODEL_V2,
+  FIFO_PACKAGE_MODEL_V3,
   LEGACY_ACCOUNT_MODEL,
   type UnearnedRevenueCapability,
   type UnearnedRevenueCanonicalModel,
@@ -45,6 +46,7 @@ function numberFromDb(value: string | number): number {
 
 function canonicalModel(value: string): UnearnedRevenueCanonicalModel {
   if (value === FIFO_PACKAGE_MODEL) return FIFO_PACKAGE_MODEL;
+  if (value === FIFO_PACKAGE_MODEL_V3) return FIFO_PACKAGE_MODEL_V3;
   if (value === FIFO_PACKAGE_MODEL_V2) return FIFO_PACKAGE_MODEL_V2;
   if (value === FIFO_PACKAGE_MODEL_V1) return FIFO_PACKAGE_MODEL_V1;
   return LEGACY_ACCOUNT_MODEL;

@@ -235,6 +235,69 @@ function v4Fixture() {
   };
 }
 
+function fifoV4Fixture({ unchecked = false }: { unchecked?: boolean } = {}) {
+  const input = v4Fixture();
+  for (const statusRows of [input.statusStart, input.statusEnd]) {
+    statusRows.find((row) => row[0] === "candidate_model_version")![1] = "FIFO_PACKAGE_LOT_V4";
+  }
+  input.periods[1][11] = "FIFO_PACKAGE_LOT_V4";
+  input.students[1][22] = "FIFO_PACKAGE_LOT_V4";
+
+  const setLot = (header: string, value: unknown) => {
+    const column = input.lots[0].indexOf(header);
+    input.lots[1][column] = value;
+    input.lotFormulas[1][column] = value;
+  };
+  if (!unchecked) {
+    setLot("match_rule_id", "MATCH-DIRECT-TRANSACTION-ID-V4");
+    setLot("match_evidence", JSON.stringify({
+      nickname_match_state: "MATCH",
+      sales_nickname_key: "zeiyach",
+      wise_nickname_key: "zeiyach",
+      matching_date_source: "PAYMENT_DATE",
+      recorded_in_wise: true,
+    }));
+    return input;
+  }
+
+  input.receipts[1][6] = 9_000;
+  input.receipts[1][7] = 90;
+  input.receipts[1][8] = "THB";
+  setLot("match_status", "COMPOSITE_VERIFIED");
+  setLot("match_confidence", "COMPOSITE_VERIFIED");
+  setLot("match_rule_id", "MATCH-COMPOSITE-VERIFIED-V4");
+  setLot("match_evidence", JSON.stringify({
+    amount_difference_thb: 0,
+    class_id_match: true,
+    credit_difference: 0,
+    eligible_event_edge_count: 1,
+    eligible_receipt_edge_count: 1,
+    eligible_sale_edge_count: 1,
+    independent_wise_proof: true,
+    matching_date_source: "PAYMENT_DATE",
+    nickname_match_state: "MATCH",
+    program_match: true,
+    receipt_event_date_difference_days: 0,
+    recorded_in_wise: false,
+    recorded_in_wise_policy: "ADVISORY_WISE_PROVEN",
+    sales_nickname_key: "zeiyach",
+    sales_receipt_date_difference_days: 0,
+    student_id_match: true,
+    wise_nickname_key: "zeiyach",
+  }));
+  setLot("receipt_id", "receipt-1");
+  setLot("receipt_type", "PAYMENT");
+  setLot("receipt_status", "CHARGED");
+  setLot("receipt_charged_at", "2026-03-10T10:00:00+07:00");
+  setLot("receipt_amount_thb", 90);
+  setLot("receipt_currency", "THB");
+  setLot("receipt_note", "");
+  setLot("receipt_student_id", "student-1");
+  setLot("receipt_class_id", "class-1");
+  setLot("receipt_source_row", 2);
+  return input;
+}
+
 describe("unearned revenue workbook contract", () => {
   it("accepts a published, formula-backed, cross-level reconciled snapshot", () => {
     const result = parseUnearnedRevenueWorkbook(fixture());
@@ -333,6 +396,65 @@ describe("unearned revenue workbook contract", () => {
     });
   });
 
+  it("accepts schema V4 with the current FIFO V4 runtime", () => {
+    const result = parseUnearnedRevenueWorkbook(fifoV4Fixture());
+
+    expect(result.status.modelVersion).toBe("FIFO_PACKAGE_LOT_V4");
+  });
+
+  it("accepts an unchecked V4 lot only with complete composite WISE proof", () => {
+    const result = parseUnearnedRevenueWorkbook(fifoV4Fixture({ unchecked: true }));
+
+    expect(result.lots[0]).toMatchObject({
+      matchStatus: "COMPOSITE_VERIFIED",
+      matchRuleId: "MATCH-COMPOSITE-VERIFIED-V4",
+      receiptId: "receipt-1",
+      matchEvidence: {
+        independent_wise_proof: true,
+        recorded_in_wise: false,
+        recorded_in_wise_policy: "ADVISORY_WISE_PROVEN",
+      },
+    });
+  });
+
+  it("rejects malformed unchecked V4 exact-package evidence", () => {
+    const cases: Array<[string, (input: ReturnType<typeof fifoV4Fixture>) => void]> = [
+      ["policy", (input) => {
+        const column = input.lots[0].indexOf("match_evidence");
+        const evidence = JSON.parse(String(input.lots[1][column]));
+        delete evidence.recorded_in_wise_policy;
+        input.lots[1][column] = JSON.stringify(evidence);
+      }],
+      ["rule", (input) => {
+        input.lots[1][input.lots[0].indexOf("match_rule_id")] = "MATCH-DIRECT-TRANSACTION-ID-V4";
+      }],
+      ["graph uniqueness", (input) => {
+        const column = input.lots[0].indexOf("match_evidence");
+        const evidence = JSON.parse(String(input.lots[1][column]));
+        evidence.eligible_receipt_edge_count = 2;
+        input.lots[1][column] = JSON.stringify(evidence);
+      }],
+      ["receipt status", (input) => {
+        input.lots[1][input.lots[0].indexOf("receipt_status")] = "REFUNDED";
+      }],
+      ["amount", (input) => {
+        input.lots[1][input.lots[0].indexOf("receipt_amount_thb")] = 80;
+      }],
+      ["student", (input) => {
+        input.lots[1][input.lots[0].indexOf("receipt_student_id")] = "other-student";
+      }],
+    ];
+
+    for (const [label, mutate] of cases) {
+      const input = fifoV4Fixture({ unchecked: true });
+      mutate(input);
+      expect(
+        () => parseUnearnedRevenueWorkbook(input),
+        label,
+      ).toThrow(/lacks complete independent WISE proof/i);
+    }
+  });
+
   it("rejects a V4 automatic package lot without matching nickname evidence", () => {
     const input = v4Fixture();
     const matchEvidenceColumn = input.lots[0].indexOf("match_evidence");
@@ -384,6 +506,6 @@ describe("unearned revenue workbook contract", () => {
       statusRows.find((row) => row[0] === "candidate_model_version")![1] = "FIFO_PACKAGE_LOT_V2";
     }
 
-    expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/must use candidate model FIFO_PACKAGE_LOT_V3/i);
+    expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/must use candidate model FIFO_PACKAGE_LOT_V3 or FIFO_PACKAGE_LOT_V4/i);
   });
 });

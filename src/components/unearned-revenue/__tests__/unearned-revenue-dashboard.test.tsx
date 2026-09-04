@@ -282,7 +282,7 @@ describe("UnearnedRevenueDashboard", () => {
   it("renders shadow values, actual-cutoff semantics, charts, residuals, and both responsive student layouts", () => {
     const html = renderToStaticMarkup(<UnearnedRevenueDashboard initialPayload={payload()} />);
 
-    expect(html).toContain("FIFO V3 shadow · legacy canonical");
+    expect(html).toContain("FIFO V4 shadow · legacy canonical");
     expect(html).toContain("Legacy is still the official number");
     expect(html).toContain("Liability tied to exact packages");
     expect(html).toContain("40-hr (free extra 1 hr)");
@@ -310,9 +310,9 @@ describe("UnearnedRevenueDashboard", () => {
       })} />,
     );
 
-    expect(html).toContain("FIFO V3 canonical");
+    expect(html).toContain("FIFO V4 canonical");
     expect(html).toContain("Canonical package-lot model");
-    expect(html).not.toContain("FIFO V3 shadow · legacy canonical");
+    expect(html).not.toContain("FIFO V4 shadow · legacy canonical");
   });
 
   it("opens the URL-selected student drawer state", () => {

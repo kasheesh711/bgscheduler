@@ -566,7 +566,7 @@ Expected states never throw — they return `skipped` so the route stays `200` a
 | `maxDuration` | 800s ([`route.ts`](../../src/app/api/internal/sync-unearned-revenue/route.ts)) |
 | Job body | `runUnearnedRevenueSync({ triggerType: "cron" })` |
 | Run table | `unearned_revenue_sync_runs` |
-| Feature | [Unearned Revenue](../features/unearned-revenue.md) — **stable; FIFO V3 shadow until Finance approval** |
+| Feature | [Unearned Revenue](../features/unearned-revenue.md) — **stable; FIFO V4 shadow until Finance approval** |
 
 The job reads a bounded set of generated Google workbook tabs, verifies `PUBLISHED` at both the start
 and end of the read, verifies that numeric tab IDs did not rotate mid-read, and rejects any hard QA,

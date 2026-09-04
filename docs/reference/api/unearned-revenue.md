@@ -34,7 +34,7 @@ Query parameters:
 
 Optional query: `period=YYYY-MM-DD`; otherwise the snapshot's `LATEST` period is used. Returns the
 student aggregate, all student/class account reconciliation rows, and all package lots for that
-student and period. Each lot carries its V3 match rule/confidence/evidence and independent formula,
+student and period. Each lot carries its versioned match rule/confidence/evidence and independent formula,
 sales-row, credit-event, and WISE-receipt trace anchors when that evidence exists. `404` means the
 student or period does not exist in the active snapshot.
 

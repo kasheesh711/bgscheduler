@@ -199,7 +199,7 @@ surface has no nav entry of its own.
 |---|---|---|
 | [Sales Dashboard](./features/sales-dashboard.md) | stable | Turns the sales team's monthly Google Sheets into a governed Postgres dataset and a GM-facing revenue-pace / pipeline / scenario readout. Owns the shared Sheets access layer. |
 | [Credit Control](./features/credit-control.md) | stable | Projects when each student's prepaid credits cross the alert threshold and hit zero, ranks an at-risk worklist, and logs the outreach. Its snapshot tables are read by eleven other modules. |
-| [Unearned Revenue](./features/unearned-revenue.md) | stable (FIFO V3 shadow until Finance approval) | Mirrors only QA-passed, formula-backed workbook outputs into an immutable Postgres snapshot, including exact-package liability by package/evidence class, then drills to students, class accounts, package lots, and exact Google rows. |
+| [Unearned Revenue](./features/unearned-revenue.md) | stable (FIFO V4 shadow until Finance approval) | Mirrors only QA-passed, formula-backed workbook outputs into an immutable Postgres snapshot, including exact-package liability by package/evidence class, then drills to students, class accounts, package lots, and exact Google rows. |
 | [Payroll](./features/payroll.md) | stable | Reconciles a Bangkok month of Wise sessions and payout invoices against a versioned rate card; emits integrity issues, manual adjustments, and an approval step. |
 
 #### Market Intelligence · Research & Reference · Data & Audit

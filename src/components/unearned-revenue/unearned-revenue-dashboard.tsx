@@ -750,7 +750,7 @@ export function UnearnedRevenueDashboard({
               </>
             ) : (
               <div className="px-4 text-sm text-muted-foreground">
-                This snapshot predates schema 4. Student and FIFO totals remain available; the package overview will appear after the first successful V3 import.
+                This snapshot predates schema 4. Student and FIFO totals remain available; the package overview will appear after a successful schema-4 import.
               </div>
             )}
           </CardContent>

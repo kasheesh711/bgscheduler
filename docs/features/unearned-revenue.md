@@ -1,6 +1,6 @@
 # Unearned Revenue
 
-**Status: stable (read-only; FIFO V3 shadow until Finance approval).** The dashboard is registered under
+**Status: stable (read-only; FIFO V4 shadow until Finance approval).** The dashboard is registered under
 **Finance & Revenue** at `/unearned-revenue`. A daily importer runs at 01:30 Bangkok and only promotes
 a workbook run after the workbook declares itself `PUBLISHED` and every hard accounting check passes.
 
@@ -22,15 +22,15 @@ The workbook calculates two models on every refresh:
 
 - `LEGACY_ACCOUNT_RATE` values each student/class account using the existing program rate. It remains
   canonical until Finance approves the exact live FIFO version and run in `Package Control`.
-- `FIFO_PACKAGE_LOT_V3` uses a three-way evidence bridge — sales row ↔ WISE fee receipt ↔ WISE credit
+- `FIFO_PACKAGE_LOT_V4` uses a three-way evidence bridge — sales row ↔ WISE fee receipt ↔ WISE credit
   event — and consumes paid lots oldest-first before complimentary credits. Receipts prove package
   identity and price but never replace the credit ledger as the balance authority. A protected 1 March
   2026 opening lot freezes the opening paid credits and liability. Purchases repair a negative balance
   before creating deferred liability.
 
-An approval is version- and run-specific. The first V3 cutover must name the exact currently published,
-QA-passed shadow run; after that cutover, later refreshes stay canonical while V3 is unchanged. Any V1
-or V2 approval is stale automatically. Finance can also select the legacy model in `Package Control`. The
+An approval is version- and run-specific. The first V4 cutover must name the exact currently published,
+QA-passed shadow run; after that cutover, later refreshes stay canonical while V4 is unchanged. Any V1,
+V2, or V3 approval is stale automatically. Finance can also select the legacy model in `Package Control`. The
 dashboard uses the workbook's published canonical fields and labels the other result and its delta as
 audit evidence.
 
@@ -39,12 +39,14 @@ audit evidence.
 The workbook tries, in order, an active Finance override, a unique direct transaction-ID match, a unique
 receipt/invoice-identifier chain, and then a strict three-way composite match. Every automatic path first
 requires the normalized sales nickname to equal the normalized WISE nickname. A populated mismatch is
-rejected rather than offered as a candidate; a missing nickname remains review-only. A composite is automatic
-only when the paid sales row says `Recorded in WISE? = TRUE`, the WISE receipt is a positive THB
-`CHARGED` payment, receipt student/class IDs equal the ledger event, credits agree within 0.001, money
+rejected rather than offered as a candidate; a missing nickname remains review-only. Direct transaction and
+receipt-identifier shortcuts still require `Recorded in WISE? = TRUE`. For the full composite path that checkbox
+is advisory: an unchecked sale can be automatic only when the WISE receipt is a positive THB `CHARGED`
+payment, receipt student/class IDs equal the ledger event, credits agree within 0.001, money
 agrees within THB 0.01, sales **Payment Date** to receipt dates are within three Bangkok days, receipt-to-event dates are
 within 21 days, recognized program buckets agree, and all three nodes have exactly one qualifying
-counterpart globally. Transaction Date is used only when Payment Date is missing. Free text and notes are
+counterpart globally. Such rows retain `recorded_in_wise: false` alongside the explicit
+`ADVISORY_WISE_PROVEN` policy marker. Transaction Date is used only when Payment Date is missing. Free text and notes are
 supporting evidence only.
 
 Near matches are `COMPOSITE_CANDIDATE`; conflicting matches are `AMBIGUOUS`; events with no candidate
@@ -85,8 +87,10 @@ windows with complete pagination and a 10,000-row global safety limit. A failed/
 or conflicting duplicate receipt ID blocks workbook publication. The website importer uses bounded
 reads: 200 status/QA rows, 500 period/comparison rows, 10,000 receipt rows, 20,000 student and account
 rows, 100,000 lot rows, and 500 exact-package summary rows. It reads model formulas separately and rejects
-missing or malformed formula rows. Schema V4 validates receipt IDs, checksums, run lineage, embedded row
-numbers, automatic nickname evidence, every lot-to-receipt trace, and exact-package roll-forwards. It also
+missing or malformed formula rows. Schema V4 accepts both the historical FIFO V3 and current FIFO V4 runtime
+during rollout. It validates receipt IDs, checksums, run lineage, embedded row numbers, automatic nickname
+evidence, every lot-to-receipt trace, and exact-package roll-forwards. An unchecked V4 exact lot is rejected
+unless it carries the full composite rule, receipt, identity, amount, credit, date, program, and policy evidence. It also
 rereads `Model Status` and sheet properties after all
 model tabs; a status change or generated-tab ID rotation aborts the run.
 
