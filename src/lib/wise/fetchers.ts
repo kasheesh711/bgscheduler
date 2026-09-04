@@ -311,8 +311,9 @@ export async function fetchAllInstituteSessions(
 }
 
 /**
- * Fetch Wise PAST sessions for an inclusive pair of Bangkok calendar dates.
- * Wise's date-window endpoint expects YYYY-MM-DD rather than UTC instants.
+ * Fetch Wise PAST sessions using Bangkok calendar boundaries. Wise expects
+ * YYYY-MM-DD rather than UTC instants and treats endDate as exclusive; callers
+ * that model an inclusive range must pass the following Bangkok date.
  */
 export async function fetchWisePastSessionsByBangkokDate(
   client: WiseClient,

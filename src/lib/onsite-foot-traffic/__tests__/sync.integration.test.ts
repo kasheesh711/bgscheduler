@@ -82,6 +82,33 @@ const runInput = {
 };
 
 describe("onsite foot-traffic sync against real Postgres", () => {
+  it("advances Wise's exclusive source end without gaps between fetch chunks", async () => {
+    const client = fakeClient([]);
+    await runOnsiteFootTrafficSync(appDb(), {
+      mode: "backfill",
+      startDate: "2026-03-01",
+      endDate: "2026-09-03",
+      triggerType: "manual",
+      actorEmail: "analyst@example.com",
+      now: runInput.now,
+      client,
+    });
+
+    expect(client.get).toHaveBeenCalledTimes(3);
+    expect(client.get).toHaveBeenNthCalledWith(1, expect.any(String), expect.objectContaining({
+      startDate: "2026-03-01",
+      endDate: "2026-05-25",
+    }));
+    expect(client.get).toHaveBeenNthCalledWith(2, expect.any(String), expect.objectContaining({
+      startDate: "2026-05-25",
+      endDate: "2026-08-18",
+    }));
+    expect(client.get).toHaveBeenNthCalledWith(3, expect.any(String), expect.objectContaining({
+      startDate: "2026-08-18",
+      endDate: "2026-09-04",
+    }));
+  });
+
   it("does not mistake a partial manual window for the required initial backfill", async () => {
     await runOnsiteFootTrafficSync(appDb(), { ...runInput, client: fakeClient([pastSession()]) });
 

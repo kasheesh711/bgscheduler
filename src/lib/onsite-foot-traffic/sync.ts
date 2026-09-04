@@ -108,7 +108,17 @@ async function fetchRange(
   for (let windowStart = startDate; windowStart <= endDate; windowStart = addBangkokDays(windowStart, FETCH_WINDOW_DAYS)) {
     const candidateEnd = addBangkokDays(windowStart, FETCH_WINDOW_DAYS - 1);
     const windowEnd = candidateEnd < endDate ? candidateEnd : endDate;
-    const rows = await fetchWisePastSessionsByBangkokDate(client, instituteId, windowStart, windowEnd, 50);
+    // Wise's DATE-mode endpoint treats endDate as an exclusive boundary. Keep
+    // the feature's public range inclusive by advancing only the source bound;
+    // adjacent chunks then meet exactly, with no skipped boundary day.
+    const sourceEndExclusive = addBangkokDays(windowEnd, 1);
+    const rows = await fetchWisePastSessionsByBangkokDate(
+      client,
+      instituteId,
+      windowStart,
+      sourceEndExclusive,
+      50,
+    );
     for (const row of rows) {
       if (row._id) byId.set(row._id, row);
     }

@@ -404,9 +404,9 @@ classroom publish job ([`classrooms/data.ts:1496`](../../src/lib/classrooms/data
 separate from the snapshot sync's FUTURE fetch.
 
 - **Endpoint:** `GET /institutes/{instituteId}/sessions`
-- **Params:** `status=PAST`, `paginateBy=DATE`, inclusive `startDate`/`endDate` in `YYYY-MM-DD` **Bangkok calendar** form (Wise's date-window mode expects calendar dates, not UTC instants), 1-based `page_number`, `page_size` (default `100`).
+- **Params:** `status=PAST`, `paginateBy=DATE`, `startDate` (inclusive) / `endDate` (exclusive) in `YYYY-MM-DD` **Bangkok calendar** form (Wise's date-window mode expects calendar dates, not UTC instants), 1-based `page_number`, `page_size` (default `100`). Callers that expose an inclusive end date must advance the Wise request boundary by one Bangkok day.
 - **Pagination:** follows `data.page_count` when it is a number; otherwise stops on a short page ([`fetchers.ts:176`](../../src/lib/wise/fetchers.ts)).
-- **Returns:** every `WiseSession` across the inclusive window.
+- **Returns:** every `WiseSession` in Wise's half-open `[startDate, endDate)` window.
 
 Normal collection supplies a rolling **4**-Bangkok-date window
 (`ROLLING_WINDOW_DAYS = 4`, [`post-class-feedback/sync.ts:49`](../../src/lib/post-class-feedback/sync.ts), [`:142`](../../src/lib/post-class-feedback/sync.ts)); manual

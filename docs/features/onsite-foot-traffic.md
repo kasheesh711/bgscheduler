@@ -39,7 +39,7 @@ These signals may overlap at participant and session level, so the dashboard pre
 
 ## Collection and correction model
 
-`runOnsiteFootTrafficSync` (`src/lib/onsite-foot-traffic/sync.ts`) reads Wise PAST sessions in bounded windows. With no successful run, it backfills from `2026-03-01` through the latest completed Bangkok day. Later scheduled runs replace the previous 35 completed days, so delayed attendance edits and cancellations remove or replace prior rows.
+`runOnsiteFootTrafficSync` (`src/lib/onsite-foot-traffic/sync.ts`) reads Wise PAST sessions in bounded windows. Wise treats the source request's `endDate` as exclusive, so each internal request advances that boundary by one Bangkok day while the dashboard range remains inclusive; adjacent chunks meet exactly without dropping their boundary dates. With no successful run, it backfills from `2026-03-01` through the latest completed Bangkok day. Later scheduled runs replace the previous 35 completed days, so delayed attendance edits and cancellations remove or replace prior rows.
 
 All Wise fetches finish before the database replacement starts. The requested window is then deleted and rebuilt transactionally; if a fetch or classification fails, existing canonical data remains untouched. A partial unique index permits one `running` ledger row, and stale runs older than 20 minutes are failed before the next claim. The scheduled route is `GET /api/internal/sync-onsite-foot-traffic`, daily at 01:18 Bangkok (`18 18 * * *` UTC), with an 800-second ceiling and direct `cron_invocations` audit. Data Health also reads `onsite_foot_traffic_sync_runs` as inferred evidence.
 
