@@ -51,6 +51,8 @@ npm run foot-traffic:backfill -- --start-date=2026-03-01 --end-date=2026-09-03
 
 Omit `--end-date` to use the latest completed Bangkok date. The script requires `DATABASE_URL`, Wise credentials, `WISE_INSTITUTE_ID`, and `FOOT_TRAFFIC_PSEUDONYM_SECRET`. The secret is an identity boundary: generate it once, store it in the deployment secret manager, and never rotate it. Rotation would split one student's historical fingerprint into two identities until all affected history was rebuilt with the same key.
 
+When the production pseudonym key is stored as a non-exportable Vercel sensitive value, operators can run the same repair inside the deployed function with `GET /api/internal/sync-onsite-foot-traffic?mode=backfill&startDate=2026-03-01&endDate=YYYY-MM-DD` and the normal `CRON_SECRET` bearer header. Date overrides are rejected unless `mode=backfill`; an unparameterized scheduled request retains rolling behavior.
+
 ## Dashboard and exports
 
 The authenticated `/onsite-foot-traffic` page is registered as **Foot Traffic** under Scheduling & Tutors. Full admins see it automatically. Middleware's normal page-to-API prefix rule means restricted admins need `/onsite-foot-traffic` in `allowedPages`; that grant also admits `/api/onsite-foot-traffic/**` and does not grant any other feature.

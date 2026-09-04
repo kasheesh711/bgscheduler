@@ -1,17 +1,25 @@
+import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn(() => ({ test: true })) }));
+vi.mock("@/lib/internal/cron-auth", () => ({ rejectInvalidCronSecret: vi.fn(() => null) }));
+vi.mock("@/lib/data-health/cron-audit", () => ({
+  withCronInvocationAudit: vi.fn((_input, handler: () => Promise<Response>) => handler()),
+}));
 vi.mock("@/lib/onsite-foot-traffic/data", () => ({
   parseFootTrafficFilters: vi.fn(() => ({ startDate: "2026-03-01", endDate: "2026-09-30" })),
   normalizeFootTrafficFilters: vi.fn((value) => value),
   getFootTrafficDashboard: vi.fn(),
   createFootTrafficReportSnapshot: vi.fn(),
 }));
+vi.mock("@/lib/onsite-foot-traffic/sync", () => ({ runOnsiteFootTrafficSync: vi.fn() }));
 
 import { auth } from "@/lib/auth";
 import { createFootTrafficReportSnapshot, getFootTrafficDashboard } from "@/lib/onsite-foot-traffic/data";
+import { runOnsiteFootTrafficSync } from "@/lib/onsite-foot-traffic/sync";
+import { GET as syncFootTraffic } from "../../internal/sync-onsite-foot-traffic/route";
 import { GET as getDashboard } from "../route";
 import { GET as getExport } from "../export/route";
 import { POST as createReport } from "../reports/route";
@@ -35,6 +43,20 @@ beforeEach(() => {
     id: "report-1", createdByEmail: "admin@example.com", createdAt: "2026-09-04T02:00:00Z",
     expiresAt: "2026-10-04T02:00:00Z", payload,
   } as never);
+  vi.mocked(runOnsiteFootTrafficSync).mockResolvedValue({
+    ok: true,
+    skipped: false,
+    runId: "run-1",
+    mode: "rolling",
+    startDate: "2026-08-01",
+    endDate: "2026-09-03",
+    fetchedSessionCount: 1,
+    storedSessionCount: 1,
+    visitCount: 1,
+    unknownRoomCount: 0,
+    missingAttendanceEvidenceCount: 0,
+    missingStableIdCount: 0,
+  });
 });
 
 describe("onsite foot-traffic API", () => {
@@ -76,5 +98,36 @@ describe("onsite foot-traffic API", () => {
       htmlUrl: "/api/onsite-foot-traffic/reports/report-1/html",
       pdfUrl: "/api/onsite-foot-traffic/reports/report-1/pdf",
     });
+  });
+
+  it("keeps scheduled syncs rolling and allows a secret-authenticated full backfill", async () => {
+    const scheduled = await syncFootTraffic(new NextRequest("https://app.test/api/internal/sync-onsite-foot-traffic"));
+    expect(scheduled.status).toBe(200);
+    expect(runOnsiteFootTrafficSync).toHaveBeenLastCalledWith(
+      { test: true },
+      { triggerType: "cron" },
+    );
+
+    const backfill = await syncFootTraffic(new NextRequest(
+      "https://app.test/api/internal/sync-onsite-foot-traffic?mode=backfill&startDate=2026-03-01&endDate=2026-09-03",
+    ));
+    expect(backfill.status).toBe(200);
+    expect(runOnsiteFootTrafficSync).toHaveBeenLastCalledWith(
+      { test: true },
+      {
+        mode: "backfill",
+        startDate: "2026-03-01",
+        endDate: "2026-09-03",
+        triggerType: "manual",
+      },
+    );
+  });
+
+  it("rejects date overrides on the scheduled sync mode", async () => {
+    const response = await syncFootTraffic(new NextRequest(
+      "https://app.test/api/internal/sync-onsite-foot-traffic?startDate=2026-03-01",
+    ));
+    expect(response.status).toBe(400);
+    expect(runOnsiteFootTrafficSync).not.toHaveBeenCalled();
   });
 });

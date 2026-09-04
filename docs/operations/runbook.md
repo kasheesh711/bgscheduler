@@ -400,6 +400,11 @@ curl -i "$BASE/api/internal/sync-credit-control"       -H "Authorization: Bearer
 curl -i "$BASE/api/internal/sync-progress-tests"       -H "Authorization: Bearer $CRON_SECRET"
 curl -i "$BASE/api/internal/cron-watchdog"             -H "Authorization: Bearer $CRON_SECRET"
 
+# Foot traffic — no query runs the rolling collector; mode=backfill is the bounded repair path.
+curl -i "$BASE/api/internal/sync-onsite-foot-traffic" -H "Authorization: Bearer $CRON_SECRET"
+curl -i "$BASE/api/internal/sync-onsite-foot-traffic?mode=backfill&startDate=2026-03-01&endDate=2026-09-03" \
+  -H "Authorization: Bearer $CRON_SECRET"
+
 # Post-class backfill. With no parameters it takes the oldest unreconciled window and drains
 # one 50-detail batch; explicit dates/caps are the manual recovery path — detailCap ≤ 400,
 # maxBatches ≤ 50, startDate/endDate must be supplied together

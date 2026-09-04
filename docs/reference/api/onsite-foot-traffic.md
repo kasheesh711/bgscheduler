@@ -79,7 +79,7 @@ Renders the same stored HTML snapshot as portrait A4 and returns `application/pd
 
 Middleware-public like all `/api/internal/*` routes, but the handler requires the constant-time `Authorization: Bearer $CRON_SECRET` check. Missing server secret returns 500, bad credentials 401. The route declares `maxDuration = 800` and wraps every authorized call in `cron_invocations` audit under job key `onsite_foot_traffic`.
 
-No body or query parameters are accepted. It calls `runOnsiteFootTrafficSync({ triggerType: "cron" })`:
+With no query parameters it calls `runOnsiteFootTrafficSync({ triggerType: "cron" })`:
 
 - first successful history load: `2026-03-01` through the latest completed Bangkok day;
 - subsequent loads: the previous 35 completed days;
@@ -87,4 +87,4 @@ No body or query parameters are accepted. It calls `runOnsiteFootTrafficSync({ t
 - success: `200` with window, fetched/stored session counts, visit count, and quality counts;
 - failure: `500 { error }`, with prior canonical rows preserved.
 
-Manual arbitrary-window backfills are deliberately a CLI surface rather than an authenticated HTTP mutation: `npm run foot-traffic:backfill -- --start-date=YYYY-MM-DD --end-date=YYYY-MM-DD`.
+An operator holding `CRON_SECRET` may force a repair inside the production function with `mode=backfill` and optional `startDate` / `endDate` query parameters. Date bounds without `mode=backfill` return `400`; an unknown mode also returns `400`. These calls are audited with `triggerSource: "system"` and run with the deployment's non-exportable pseudonym key. The equivalent local CLI is `npm run foot-traffic:backfill -- --start-date=YYYY-MM-DD --end-date=YYYY-MM-DD`.
