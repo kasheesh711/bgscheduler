@@ -15,7 +15,7 @@ This page is the mechanical reference for the four Room Capacity HTTP endpoints:
 
 Only two of the four have an in-repo caller. The dashboard fetches the utilization read at [`room-capacity-dashboard.tsx:354`](../../../src/components/room-capacity/room-capacity-dashboard.tsx) and the sync `POST` at [`:375`](../../../src/components/room-capacity/room-capacity-dashboard.tsx); the page itself is a one-line wrapper around that component ([`(app)/room-capacity/page.tsx:3-5`](<../../../src/app/(app)/room-capacity/page.tsx>)). `month` and `forecast` are authenticated, implemented, and unit-tested ([`__tests__/route.test.ts`](../../../src/app/api/room-capacity/__tests__/route.test.ts)) but nothing in `src/` fetches either.
 
-**There is no scheduled cron for this feature.** `vercel.json` declares 17 cron paths and none of them contains `room`. The sync is registered in the in-app registry as `schedule: null`, `cadenceLabel: "Manual only"`, `manualOnly: true`, `maxDurationSeconds: 800`, `routeMethod: "POST"` ([`cron-registry.ts:369-383`](../../../src/lib/data-health/cron-registry.ts)), so the only way it runs is an explicit `POST` — from the dashboard button, or from an external caller holding `CRON_SECRET`.
+**There is no scheduled cron for this feature.** `vercel.json` declares 19 cron paths and none of them contains `room`. The sync is registered in the in-app registry as `schedule: null`, `cadenceLabel: "Manual only"`, `manualOnly: true`, `maxDurationSeconds: 800`, `routeMethod: "POST"` ([`cron-registry.ts`](../../../src/lib/data-health/cron-registry.ts)), so the only way it runs is an explicit `POST` — from the dashboard button, or from an external caller holding `CRON_SECRET`.
 
 ## Conventions shared across the endpoints
 

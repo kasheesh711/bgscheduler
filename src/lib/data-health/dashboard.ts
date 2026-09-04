@@ -32,6 +32,7 @@ type ProgressTestDigestRun = typeof schema.progressTestAdminDigestRuns.$inferSel
 type RoomUtilizationSession = typeof schema.roomUtilizationSessions.$inferSelect;
 type PostClassFeedbackRun = typeof schema.postClassSyncRuns.$inferSelect;
 type PostClassNotificationRun = typeof schema.postClassNotificationRuns.$inferSelect;
+type OnsiteFootTrafficRun = typeof schema.onsiteFootTrafficSyncRuns.$inferSelect;
 
 function iso(value: Date | string | null | undefined): string | null {
   if (!value) return null;
@@ -155,6 +156,7 @@ function pickJobRuns(
     progressTestDigest: ProgressTestDigestRun[];
     postClassFeedback: PostClassFeedbackRun[];
     postClassNotifications: PostClassNotificationRun[];
+    onsiteFootTraffic: OnsiteFootTrafficRun[];
     classroom: ClassroomRun[];
     adminEmail: ClassroomAdminEmailRun[];
     roomUtilization: RoomUtilizationSession[];
@@ -212,6 +214,15 @@ function pickJobRuns(
       latestSuccessfulRun: runEvidence(latestSuccessful(allRuns.credit, (run) => run.finishedAt)),
       latestFailedRun: runEvidence(latestFailed(allRuns.credit, (run) => run.finishedAt)),
       runningRun: runEvidence(latestRunning(allRuns.credit, (run) => run.startedAt)),
+    };
+  }
+
+  if (job.key === "onsite_foot_traffic") {
+    return {
+      latestRun: runEvidence(allRuns.onsiteFootTraffic[0] ?? null),
+      latestSuccessfulRun: runEvidence(latestSuccessful(allRuns.onsiteFootTraffic, (run) => run.finishedAt)),
+      latestFailedRun: runEvidence(latestFailed(allRuns.onsiteFootTraffic, (run) => run.finishedAt)),
+      runningRun: runEvidence(latestRunning(allRuns.onsiteFootTraffic, (run) => run.startedAt)),
     };
   }
 
@@ -600,6 +611,17 @@ function buildDomains(
       issueCount: 0,
       detail: "Manual-only utilization sync; not scheduled in vercel.json.",
     },
+    {
+      key: "onsite_foot_traffic",
+      label: "Onsite Foot Traffic",
+      status: domainStatusFor(jobByKey.get("onsite_foot_traffic")),
+      freshnessLabel: freshnessLabel(iso(allRuns.onsiteFootTraffic.find((run) => run.status === "success")?.finishedAt), now),
+      lastSuccessAt: iso(allRuns.onsiteFootTraffic.find((run) => run.status === "success")?.finishedAt),
+      lastRunAt: iso(allRuns.onsiteFootTraffic[0]?.startedAt),
+      recordCountLabel: `${allRuns.onsiteFootTraffic[0]?.visitCount ?? 0} visits reconciled`,
+      issueCount: (allRuns.onsiteFootTraffic[0]?.unknownRoomCount ?? 0) + (allRuns.onsiteFootTraffic[0]?.missingAttendanceEvidenceCount ?? 0),
+      detail: "Daily Wise PAST-session reconciliation for de-identified onsite attendance.",
+    },
   ];
 }
 
@@ -742,6 +764,17 @@ function buildRecentRuns(allRuns: Parameters<typeof pickJobRuns>[1]): RunHistory
       countLabel: `${run.scannedRowCount} rows`,
       errorSummary: run.errorSummary,
     })),
+    ...allRuns.onsiteFootTraffic.map((run) => runHistoryItem({
+      id: run.id,
+      jobKey: "onsite_foot_traffic",
+      label: "Onsite Foot Traffic",
+      status: run.status,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      triggerType: run.triggerType,
+      countLabel: `${run.visitCount} visits / ${run.storedSessionCount} sessions`,
+      errorSummary: run.errorSummary,
+    })),
     ...allRuns.classroom.map((run) => runHistoryItem({
       id: run.id,
       jobKey: "classroom_morning",
@@ -785,6 +818,7 @@ async function fetchAllRuns(db: Database) {
     progressTestDigest,
     postClassFeedback,
     postClassNotifications,
+    onsiteFootTraffic,
     classroom,
     adminEmail,
     roomUtilization,
@@ -801,6 +835,7 @@ async function fetchAllRuns(db: Database) {
     db.select().from(schema.progressTestAdminDigestRuns).orderBy(desc(schema.progressTestAdminDigestRuns.createdAt)).limit(RECENT_LIMIT),
     db.select().from(schema.postClassSyncRuns).orderBy(desc(schema.postClassSyncRuns.startedAt)).limit(RECENT_LIMIT),
     db.select().from(schema.postClassNotificationRuns).orderBy(desc(schema.postClassNotificationRuns.createdAt)).limit(RECENT_LIMIT * 4),
+    db.select().from(schema.onsiteFootTrafficSyncRuns).orderBy(desc(schema.onsiteFootTrafficSyncRuns.startedAt)).limit(RECENT_LIMIT),
     db
       .select()
       .from(schema.classroomAssignmentRuns)
@@ -824,6 +859,7 @@ async function fetchAllRuns(db: Database) {
     progressTestDigest,
     postClassFeedback,
     postClassNotifications,
+    onsiteFootTraffic,
     classroom,
     adminEmail,
     roomUtilization,

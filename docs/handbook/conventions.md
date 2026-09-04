@@ -17,7 +17,7 @@ This page does **not** fork that document. It records the load-bearing rules, ve
 | Rule | What it means | Verified at |
 |---|---|---|
 | **kebab-case files** | Every `.ts` / `.tsx` / `.css` basename under `src/**` is kebab-case (`cron-auth.ts`, `payout-window-health.ts`, `case-detail-shell.tsx`). `.tsx` for components, `.ts` for logic and types. Dynamic route segments are bracket *directories* (`[caseId]`, `[...nextauth]`), never bracketed files. | zero basenames fail `^[a-z0-9]+(-[a-z0-9]+)*(\.[a-z0-9]+)*\.(ts\|tsx\|css)$` |
-| **Tests in a sibling `__tests__/`** | `{module}.test.ts(x)` inside a `__tests__/` directory, never colocated. All 389 test files obey this; 13 carry the `.integration.test.ts` suffix and run in the separate serial `integration` Vitest project. | `vitest.config.ts:25-51`; zero `*.test.ts*` outside a `__tests__/` dir |
+| **Tests in a sibling `__tests__/`** | `{module}.test.ts(x)` inside a `__tests__/` directory, never colocated. All 409 test files obey this; 15 carry the `.integration.test.ts` suffix and run in the separate serial `integration` Vitest project. | `vitest.config.ts:25-51`; zero `*.test.ts*` outside a `__tests__/` dir |
 | **Named exports only** | No `export default` anywhere in `src/lib`, `src/components`, or `src/hooks`. Defaults appear *only* where the framework demands them: `page.tsx` / `layout.tsx` / `loading.tsx` under `src/app`, `src/middleware.ts:69`, and the root config files. No barrel files — the only two `index.ts` in `src/lib` (`db/`, `search/`) are real modules. | `grep -rl "^export default" src/lib src/components src/hooks` → empty |
 | **Zod at route boundaries** | A module-scope Zod schema validates the request body before business logic runs; `.safeParse()` is the default (111 non-test call sites). External payloads — Wise envelopes, OpenAI responses — go through a schema too. | `src/app/api/compare/route.ts:24-31,125-131`; `src/lib/credit-control/wise.ts:157,184,245` |
 | **Fail-closed defaults** | Unknown session status → blocking. Unresolved identity / modality / qualification → "Needs Review", never "Available". Never guess. | `src/lib/normalization/sessions.ts:46-50`; `src/lib/search/engine.ts:83-92,142-146` |
@@ -35,7 +35,7 @@ Schemas are declared as `const` at module scope, above the handler (`src/app/api
 
 ### Dialect A — classic four-step (auth → JSON → `safeParse` → try/catch)
 
-The original pattern, used by routes that call `await auth()` directly (95 of 180 `route.ts` files):
+The original pattern, used by routes that call `await auth()` directly (95 of 191 `route.ts` files):
 
 ```typescript
 // src/app/api/compare/route.ts:112-131
@@ -121,9 +121,9 @@ Six feature families ship such a mapper:
 
 ### Environment variables — read the caveat
 
-`src/lib/env.ts` declares an 18-key Zod schema and eagerly validates at module load, throwing `"Invalid environment variables"` and logging **only** `fieldErrors`, never values (`src/lib/env.ts:40-49`).
+`src/lib/env.ts` declares a 20-key Zod schema and eagerly validates at module load, throwing `"Invalid environment variables"` and logging **only** `fieldErrors`, never values (`src/lib/env.ts:40-49`).
 
-**It is dead code.** A search across `src/` and `scripts/` returns **zero importers of `@/lib/env`**, so that schema never runs. Do not cite it as the boot-time guard — it isn't one; even `src/middleware.ts` reads `process.env` directly, and the file says why (`src/lib/env.ts:28-31`). What is actually live: **61 distinct `process.env.X` names** read at their point of use, each with an explicit fallback or feature gate.
+**It is dead code.** A search across `src/` and `scripts/` returns **zero importers of `@/lib/env`**, so that schema never runs. Do not cite it as the boot-time guard — it isn't one; even `src/middleware.ts` reads `process.env` directly, and the file says why (`src/lib/env.ts:28-31`). What is actually live: **79 named runtime keys plus one dynamically named family**, read at their point of use with an explicit fallback or feature gate; the canonical inventory is [`reference/env.md`](../reference/env.md).
 
 The conventions that do bind:
 

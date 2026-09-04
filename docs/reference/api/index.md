@@ -6,14 +6,14 @@ The canonical lookup of every HTTP endpoint in BGScheduler. This page carries **
 
 ## What this counts
 
-All handlers live under `src/app/api/**/route.ts`. The tree holds **185 `route.ts` files exporting 249 method+path business endpoints**.
+All handlers live under `src/app/api/**/route.ts`. The tree holds **191 `route.ts` files exporting 255 method+path business endpoints**.
 
 Two counting notes, because a naive `grep -c 'export async function'` disagrees:
 
 - **+2 for Auth.js.** [`src/app/api/auth/[...nextauth]/route.ts`](../../../src/app/api/auth/%5B...nextauth%5D/route.ts) is three lines long and exports its two methods by destructuring — `export const { GET, POST } = handlers` — so it matches no `export function` pattern.
-- **−2 for CORS preflight.** The `OPTIONS` handlers on the two public OA-resolver routes ([`worklist/route.ts:17`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts) and [`runs/[runId]/rows/route.ts:48`](../../../src/app/api/line/contacts/oa-resolver/runs/%5BrunId%5D/rows/route.ts)) return bare CORS headers and carry no business surface, so they are **excluded** from the 249. Counting the `line` group therefore yields 29, not 31.
+- **−2 for CORS preflight.** The `OPTIONS` handlers on the two public OA-resolver routes ([`worklist/route.ts:17`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts) and [`runs/[runId]/rows/route.ts:48`](../../../src/app/api/line/contacts/oa-resolver/runs/%5BrunId%5D/rows/route.ts)) return bare CORS headers and carry no business surface, so they are **excluded** from the 255. Counting the `line` group therefore yields 29, not 31.
 
-The named-handler total across all 185 files is 247; 247 + 2 destructured = 249 business endpoints, and 249 + 2 preflight = 251 exported handlers in total.
+The named-handler total across all 191 files is 253; 253 + 2 destructured = 255 business endpoints, and 255 + 2 preflight = 257 exported handlers in total.
 
 ## How to read the Auth column
 
@@ -39,7 +39,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 
 ## Group directory
 
-30 path prefixes, 249 endpoints. Every link below resolves to a page that documents that prefix.
+31 path prefixes, 255 endpoints. Every link below resolves to a page that documents that prefix.
 
 | Group | Path prefix | Endpoints | Detail page |
 |---|---|---:|---|
@@ -55,9 +55,10 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | data-health | `/api/data-health` | 2 | [data-health.md](./data-health.md) |
 | filters | `/api/filters` | 1 | [misc.md](./misc.md#tutors-and-filters) |
 | home | `/api/home` | 1 | [misc.md](./misc.md#home-summary) |
-| internal | `/api/internal` | 32 | [internal-crons.md](./internal-crons.md) (25) + seven on their owning pages — see below |
+| internal | `/api/internal` | 33 | [internal-crons.md](./internal-crons.md) (25) + eight on their owning pages — see below |
 | leave-requests | `/api/leave-requests` | 5 | [leave-requests.md](./leave-requests.md) |
 | line | `/api/line` | 29 | [line.md](./line.md) |
+| onsite-foot-traffic | `/api/onsite-foot-traffic` | 5 | [onsite-foot-traffic.md](./onsite-foot-traffic.md) |
 | payroll | `/api/payroll` | 5 | [payroll.md](./payroll.md) |
 | post-class-feedback | `/api/post-class-feedback` | 13 | [post-class-feedback.md](./post-class-feedback.md) |
 | progress-tests | `/api/progress-tests` | 6 | [progress-tests.md](./progress-tests.md) |
@@ -73,11 +74,11 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | unearned-revenue | `/api/unearned-revenue` | 5 | [unearned-revenue.md](./unearned-revenue.md) |
 | us-universities | `/api/us-universities` | 5 | [us-universities.md](./us-universities.md) |
 | wise-activity | `/api/wise-activity` | 5 | [wise-activity.md](./wise-activity.md) |
-| **Total** | | **249** | |
+| **Total** | | **255** | |
 
-### The same 249, counted by detail page
+### The same 255, counted by detail page
 
-`docs/reference/api/` holds **23 files: this index plus 22 detail pages.** Every detail page appears below, and the column sums to 249 — no endpoint is documented nowhere, and none is counted twice.
+`docs/reference/api/` holds **24 files: this index plus 23 detail pages.** Every detail page appears below, and the column sums to 255 — no endpoint is documented nowhere, and none is counted twice.
 
 | Detail page | Prefixes it owns | Endpoints |
 |---|---|---:|
@@ -86,10 +87,11 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | [competitor-intelligence.md](./competitor-intelligence.md) | `/api/competitor-intelligence` | 9 |
 | [credit-control.md](./credit-control.md) | `/api/credit-control` | 8 |
 | [data-health.md](./data-health.md) | `/api/data-health` | 2 |
-| [internal-crons.md](./internal-crons.md) | `/api/internal` (25 of 32) | 25 |
+| [internal-crons.md](./internal-crons.md) | `/api/internal` (25 of 33) | 25 |
 | [leave-requests.md](./leave-requests.md) | `/api/leave-requests` | 5 |
 | [line.md](./line.md) | `/api/line` | 29 |
 | [misc.md](./misc.md) | `/api/search`, `/api/compare`, `/api/tutors`, `/api/filters`, `/api/home`, `/api/admin`, `/api/auth` | 11 |
+| [onsite-foot-traffic.md](./onsite-foot-traffic.md) | `/api/onsite-foot-traffic`, 1 internal cron | 6 |
 | [payroll.md](./payroll.md) | `/api/payroll` | 5 |
 | [post-class-feedback.md](./post-class-feedback.md) | `/api/post-class-feedback` | 13 |
 | [progress-tests.md](./progress-tests.md) | `/api/progress-tests` | 6 |
@@ -103,11 +105,11 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | [university-admissions.md](./university-admissions.md) | `/api/admissions` | 61 |
 | [us-universities.md](./us-universities.md) | `/api/us-universities` | 5 |
 | [wise-activity.md](./wise-activity.md) | `/api/wise-activity`, 1 internal cron | 5 |
-| **Total** | | **249** |
+| **Total** | | **255** |
 
 Three notes on how the two tables reconcile:
 
-- **The `internal` prefix is split across six pages.** [internal-crons.md](./internal-crons.md) indexes 25 of the 32 `/api/internal` endpoints. The other seven are documented alongside the subsystem they drive: `sync-sales-dashboard` GET+POST, `sync-wise-activity`, `sync-room-utilization`, the two `class-assignments/*` jobs, and `sync-unearned-revenue`. The per-endpoint table below links each endpoint to the page that owns its signature.
+- **The `internal` prefix is split across seven pages.** [internal-crons.md](./internal-crons.md) indexes 25 of the 33 `/api/internal` endpoints. The other eight are documented alongside the subsystem they drive: `sync-sales-dashboard` GET+POST, `sync-wise-activity`, `sync-room-utilization`, `sync-onsite-foot-traffic`, the two `class-assignments/*` jobs, and `sync-unearned-revenue`. The per-endpoint table below links each endpoint to the page that owns its signature.
 - **Counted-by-page rows attribute each internal cron once**, to the page carrying its signature. A cron may still be *discussed* on a second page — `cron-watchdog` appears in both [internal-crons.md](./internal-crons.md) and [data-health.md](./data-health.md), and the six post-class and admissions crons are discussed in their feature references — but it is counted only where it is indexed.
 - **A detail page's own `Endpoint index (N)` heading may exceed its row here**, because several pages index the internal crons they discuss on top of their own prefix. [post-class-feedback.md](./post-class-feedback.md) says 19 (13 workspace + 6 crons) and [university-admissions.md](./university-admissions.md) says 63 (61 + 2 cron halves); this index counts only the 13 and the 61.
 
@@ -115,7 +117,7 @@ Three notes on how the two tables reconcile:
 
 ## Crons
 
-The 32 `internal` endpoints sit on **23 distinct paths**, one per route file. `vercel.json` schedules **18** of them; the in-app registry [`cron-registry.ts`](../../../src/lib/data-health/cron-registry.ts) declares all 23, marking the remaining five `manualOnly: true` — reachable with the cron secret, but nothing fires them on a schedule:
+The 33 `internal` endpoints sit on **24 distinct paths**, one per route file. `vercel.json` schedules **19** of them; the in-app registry [`cron-registry.ts`](../../../src/lib/data-health/cron-registry.ts) declares all 24, marking the remaining five `manualOnly: true` — reachable with the cron secret, but nothing fires them on a schedule:
 
 `line-backlog-recovery` · `post-class-feedback/admin-digest` · `post-class-feedback/reminder-day-after` · `post-class-feedback/reminder-deadline` · `sync-room-utilization`
 
@@ -254,6 +256,7 @@ Sorted by group, then path, then method. `[bracketed]` segments are Next.js dyna
 | `POST` | `/api/internal/sync-credit-control` | [internal](./internal-crons.md) | cron \| admin | Manual rerun with an Auth.js session fallback; the actor email is stamped on the run. |
 | `GET` | `/api/internal/sync-leave-requests` | [internal](./internal-crons.md) | cron | Pulls leave-form rows from the Google Sheet, matches identities, computes affected sessions. Scheduled `15,45 * * * *`. A concurrent run returns 409. |
 | `POST` | `/api/internal/sync-leave-requests` | [internal](./internal-crons.md) | cron | Same `handle(request)` as the GET — cron-secret only on both halves. |
+| `GET` | `/api/internal/sync-onsite-foot-traffic` | [onsite foot traffic](./onsite-foot-traffic.md) | cron | Reconciles Wise PAST sessions into de-identified student-visits. First run backfills from 2026-03-01; later runs replace the previous 35 completed Bangkok days. Scheduled `18 18 * * *`; `maxDuration = 800`. |
 | `GET` | `/api/internal/sync-post-class-feedback` | [internal](./internal-crons.md) | cron | Rolling evidence collection plus AI reviews, due notification retries, and deduction hygiene — which reopens unproven approvals and waives deductions on sessions the sync just found ineligible, releasing claims but never approving. Scheduled `13,43 * * * *`. |
 | `GET` | `/api/internal/sync-progress-tests` | [internal](./internal-crons.md) | cron | Progress-test counting/lifecycle sync. Scheduled `25,55 * * * *`. |
 | `POST` | `/api/internal/sync-progress-tests` | [internal](./internal-crons.md) | cron \| admin | Manual rerun with a session fallback (`triggerType: "admin"`). |
@@ -298,6 +301,11 @@ Sorted by group, then path, then method. `[bracketed]` segments are Next.js dyna
 | `GET` | `/api/line/scheduler-reviews/false-negatives` | [line](./line.md) | admin | Candidate messages the classifier likely missed. |
 | `GET` | `/api/line/students` | [line](./line.md) | admin | Student search for contact linking. |
 | `POST` | `/api/line/webhook` | [line](./line.md) | public | LINE Messaging API webhook. Middleware-public; the handler verifies the channel signature. Routes to scheduler ingest (gated by `ENABLE_LINE_SCHEDULER`) and to the admin-only group schedule bot. |
+| `GET` | `/api/onsite-foot-traffic` | [onsite foot traffic](./onsite-foot-traffic.md) | admin | Filtered aggregate payload: metadata, four KPIs, weekly/monthly series, weekday/room breakdowns, and data-quality counts. |
+| `GET` | `/api/onsite-foot-traffic/export` | [onsite foot traffic](./onsite-foot-traffic.md) | admin | Download the filtered `weekly`, `monthly`, `weekday`, `room`, or de-identified `visits` CSV. |
+| `POST` | `/api/onsite-foot-traffic/reports` | [onsite foot traffic](./onsite-foot-traffic.md) | admin with `user.email` | Capture the current aggregate payload as an immutable 30-day snapshot and return HTML/PDF download URLs. |
+| `GET` | `/api/onsite-foot-traffic/reports/[reportId]/html` | [onsite foot traffic](./onsite-foot-traffic.md) | admin | Download a self-contained BeGifted-branded HTML analytics pack from the immutable snapshot. |
+| `GET` | `/api/onsite-foot-traffic/reports/[reportId]/pdf` | [onsite foot traffic](./onsite-foot-traffic.md) | admin | Render that same snapshot as portrait A4 PDF using dynamically imported serverless Chromium; `maxDuration = 120`. |
 | `GET` | `/api/payroll` | [payroll](./payroll.md) | admin | The month payload for a Bangkok `YYYY-MM`: rate card, review state, last sync, summary roll-ups, per-tutor rows, issues, adjustments. |
 | `POST` | `/api/payroll/adjustments` | [payroll](./payroll.md) | admin with `user.email` | Insert a manual adjustment (the actor email is stamped on the row) and echo the refreshed month payload. |
 | `DELETE` | `/api/payroll/adjustments/[adjustmentId]` | [payroll](./payroll.md) | admin | Delete one adjustment. The one payroll write that does **not** echo the payload — 404 when no row matched. |

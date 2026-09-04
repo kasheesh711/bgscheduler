@@ -23,6 +23,7 @@ describe("navigation tool registry", () => {
     ]);
     expect(sections[0].tools.map((tool) => tool.href)).toContain("/leave-requests");
     expect(sections[0].tools.map((tool) => tool.href)).toContain("/post-class-feedback");
+    expect(sections[0].tools.map((tool) => tool.href)).toContain("/onsite-foot-traffic");
     expect(sections[1].tools.map((tool) => tool.href)).toEqual([
       "/progress-tests",
       "/student-schedule",
@@ -44,6 +45,14 @@ describe("navigation tool registry", () => {
     expect(tools.map((tool) => tool.href)).not.toContain("/learning-plans");
     expect(canAccessHref("/", ["/progress-tests"])).toBe(false);
     expect(canAccessHref("/api/home/summary", ["/progress-tests"])).toBe(false);
+  });
+
+  it("shows Foot Traffic only to full admins or users with its explicit page grant", () => {
+    expect(filterToolsByAccess(NAV_TOOLS, null).map((tool) => tool.href)).toContain("/onsite-foot-traffic");
+    expect(filterToolsByAccess(NAV_TOOLS, ["/onsite-foot-traffic"]).map((tool) => tool.href))
+      .toEqual(["/onsite-foot-traffic"]);
+    expect(filterToolsByAccess(NAV_TOOLS, ["/room-capacity"]).map((tool) => tool.href))
+      .not.toContain("/onsite-foot-traffic");
   });
 
   it("keeps only Admissions visible for /admissions-restricted counselors, students, and parents", () => {

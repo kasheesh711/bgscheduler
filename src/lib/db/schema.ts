@@ -5109,3 +5109,90 @@ export const unearnedRevenueLotPeriods = pgTable("unearned_revenue_lot_periods",
   index("ur_lot_student_period_idx").on(table.snapshotId, table.periodEnd, table.studentId),
   index("ur_lot_account_period_idx").on(table.snapshotId, table.periodEnd, table.accountId),
 ]);
+
+// ── Onsite foot traffic ───────────────────────────────────────────────
+
+/** Wise PAST-session reconciliation attempts. The partial unique index is the single-flight guard. */
+export const onsiteFootTrafficSyncRuns = pgTable("onsite_foot_traffic_sync_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  status: syncStatusEnum("status").notNull().default("running"),
+  triggerType: text("trigger_type").notNull().default("cron"),
+  actorEmail: text("actor_email"),
+  mode: text("mode").notNull().default("rolling"),
+  requestedStartDate: date("requested_start_date", { mode: "string" }).notNull(),
+  requestedEndDate: date("requested_end_date", { mode: "string" }).notNull(),
+  fetchedSessionCount: integer("fetched_session_count").notNull().default(0),
+  storedSessionCount: integer("stored_session_count").notNull().default(0),
+  visitCount: integer("visit_count").notNull().default(0),
+  unknownRoomCount: integer("unknown_room_count").notNull().default(0),
+  missingAttendanceEvidenceCount: integer("missing_attendance_evidence_count").notNull().default(0),
+  missingStableIdCount: integer("missing_stable_id_count").notNull().default(0),
+  errorSummary: text("error_summary"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, (table) => [
+  uniqueIndex("oft_sync_single_running_idx")
+    .on(table.status)
+    .where(sql`${table.status} = 'running'`),
+  index("oft_sync_status_started_idx").on(table.status, table.startedAt),
+  index("oft_sync_range_idx").on(table.requestedStartDate, table.requestedEndDate),
+]);
+
+/** Current canonical representation of every PAST session seen in a reconciled date window. */
+export const onsiteFootTrafficSessions = pgTable("onsite_foot_traffic_sessions", {
+  wiseSessionId: text("wise_session_id").primaryKey(),
+  attendanceDate: date("attendance_date", { mode: "string" }).notNull(),
+  scheduledStartAt: timestamp("scheduled_start_at", { withTimezone: true }).notNull(),
+  scheduledEndAt: timestamp("scheduled_end_at", { withTimezone: true }).notNull(),
+  wiseStatus: text("wise_status").notNull(),
+  sessionType: text("session_type"),
+  normalizedLocation: text("normalized_location"),
+  roomName: text("room_name"),
+  roomCategory: text("room_category"),
+  subject: text("subject"),
+  tutorName: text("tutor_name"),
+  scheduledStudentCount: integer("scheduled_student_count"),
+  participantCount: integer("participant_count").notNull().default(0),
+  countedVisitCount: integer("counted_visit_count").notNull().default(0),
+  missingAttendanceEvidenceCount: integer("missing_attendance_evidence_count").notNull().default(0),
+  missingStableIdCount: integer("missing_stable_id_count").notNull().default(0),
+  isCountedOnsite: boolean("is_counted_onsite").notNull().default(false),
+  exclusionReason: text("exclusion_reason"),
+  lastSyncRunId: uuid("last_sync_run_id").notNull().references(() => onsiteFootTrafficSyncRuns.id),
+  syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("oft_session_date_idx").on(table.attendanceDate),
+  index("oft_session_room_date_idx").on(table.roomName, table.attendanceDate),
+  index("oft_session_counted_date_idx").on(table.isCountedOnsite, table.attendanceDate),
+]);
+
+/** One qualifying attended onsite class occurrence per student. No raw student identity is stored. */
+export const onsiteFootTrafficVisits = pgTable("onsite_foot_traffic_visits", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  wiseSessionId: text("wise_session_id").notNull().references(() => onsiteFootTrafficSessions.wiseSessionId, { onDelete: "cascade" }),
+  participantKey: text("participant_key").notNull(),
+  studentFingerprint: text("student_fingerprint"),
+  attendanceDate: date("attendance_date", { mode: "string" }).notNull(),
+  consumedCredits: doublePrecision("consumed_credits").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("oft_visit_session_participant_idx").on(table.wiseSessionId, table.participantKey),
+  index("oft_visit_date_idx").on(table.attendanceDate),
+  index("oft_visit_student_date_idx").on(table.studentFingerprint, table.attendanceDate),
+]);
+
+/** Immutable aggregate payload shared by the standalone HTML and PDF downloads. */
+export const onsiteFootTrafficReportSnapshots = pgTable("onsite_foot_traffic_report_snapshots", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  createdByEmail: text("created_by_email").notNull(),
+  startDate: date("start_date", { mode: "string" }).notNull(),
+  endDate: date("end_date", { mode: "string" }).notNull(),
+  filters: jsonb("filters").$type<Record<string, unknown>>().notNull().default({}),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  sourceSyncRunId: uuid("source_sync_run_id").references(() => onsiteFootTrafficSyncRuns.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  index("oft_report_expiry_idx").on(table.expiresAt),
+  index("oft_report_creator_idx").on(table.createdByEmail, table.createdAt),
+]);

@@ -502,7 +502,7 @@ first. What the file does, in order (`src/middleware.ts:69-113`):
 - **`maxDuration` is per-route**, not in `vercel.json`. Both Wise sync routes set
   `export const maxDuration = 800` (`src/app/api/internal/sync-wise/route.ts:7`,
   `src/app/api/admin/sync-wise/route.ts:6`). `vercel.json` holds only `regions` and the cron entries
-  — **17** at HEAD (`vercel.json:1-73`), pinned by
+  — **19** at HEAD, pinned by
   `src/__tests__/vercel-crons.test.ts:100`, `:103`. See [`../reference/crons.md`](../reference/crons.md).
 - **No route exports `runtime`** — a grep for `export const runtime` in `src/` is empty, so every
   handler runs on the default Node runtime.

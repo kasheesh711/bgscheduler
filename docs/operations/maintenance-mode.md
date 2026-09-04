@@ -2,7 +2,7 @@
 
 The in-app off switch for the staff UI. Setting one Vercel environment variable to the exact
 string `"true"` and redeploying makes every human-facing page and API answer `503` — while all
-**17** scheduled jobs keep running, so there is no data gap to backfill when the window closes.
+**19** scheduled jobs keep running, so there is no data gap to backfill when the window closes.
 
 This page owns the *procedure*: what the switch does, what it deliberately does **not** cover,
 how to turn it on and off, and how to prove it worked. The access-control *model* it sits inside
@@ -14,7 +14,7 @@ how to turn it on and off, and how to prove it worked. The access-control *model
 |---|---|
 | Where maintenance sits among the four middleware checks | [`auth-and-access.md` → Order of checks](./auth-and-access.md#order-of-checks) |
 | The full public-route allowlist and each path's own credential | [`auth-and-access.md` → What bypasses auth entirely](./auth-and-access.md#what-bypasses-auth-entirely) |
-| The two variables in the reconciled env inventory | [`../reference/env.md` → Optional (9)](../reference/env.md#13-optional-9) |
+| The two variables in the reconciled env inventory | [`../reference/env.md` → Optional](../reference/env.md#13-optional-11) |
 | Other kill switches (`POST_CLASS_*`) | [`runbook.md` → §4.6](./runbook.md#46-kill-switches) |
 | Cron schedules and `CRON_SECRET` mechanics | [`../reference/crons.md`](../reference/crons.md) |
 | How a deploy reaches production at all | [`runbook.md` → §2.1](./runbook.md#21-two-ways-to-reach-production) |
@@ -33,8 +33,8 @@ credit-control, post-class and progress-test data to backfill.
 Maintenance mode instead installs a gate **inside** the edge middleware, above the auth check, and
 exempts the cron namespace. The human surface goes dark; the data plane keeps flowing.
 
-All **17** `vercel.json` cron entries are paths under `/api/internal/` — verified by extracting
-every `"path"` from [`vercel.json`](../../vercel.json): 17 entries, 0 outside that prefix. The
+All **19** `vercel.json` cron entries are paths under `/api/internal/` — verified by extracting
+every `"path"` from [`vercel.json`](../../vercel.json): 19 entries, 0 outside that prefix. The
 `/api/internal/` exemption therefore covers 100 % of scheduled jobs, with no per-job allowlist to
 maintain.
 
@@ -150,7 +150,7 @@ equality assertion so adding a fifth prefix breaks a test
 
 | Prefix | Keeps working | Why it must |
 |---|---|---|
-| `/api/internal/` | All **17** `vercel.json` crons and the 5 `manualOnly` registry jobs fired by curl | The whole reason this exists instead of Pause Project ([`maintenance.ts:15-16`](../../src/lib/maintenance.ts)); each route still enforces `CRON_SECRET` itself ([`cron-auth.ts:19-26`](../../src/lib/internal/cron-auth.ts)) |
+| `/api/internal/` | All **19** `vercel.json` crons and the 5 `manualOnly` registry jobs fired by curl | The whole reason this exists instead of Pause Project ([`maintenance.ts:15-16`](../../src/lib/maintenance.ts)); each route still enforces `CRON_SECRET` itself ([`cron-auth.ts:19-26`](../../src/lib/internal/cron-auth.ts)) |
 | `/schedule/` | Public parent schedule links opened from a LINE message | Parents are not staff and did not ask for the window; the link is capability-token gated, so nothing widens ([`schedule/[token]/page.tsx:1-23`](../../src/app/schedule/%5Btoken%5D/page.tsx)) |
 | `/api/auth/` | The Google OAuth handshake | A bypass admin who is not already signed in must be able to complete a login |
 | `/login` | The sign-in screen | Same reason; gating it would strand every bypass admin outside |
@@ -187,7 +187,7 @@ Everything not on the four prefixes, including four paths that are normally **pu
 | `/api/search/assistant` | public in middleware, session-checked in handler | `503` | AI scheduler unavailable |
 | `/api/classrooms/floor-plan-map` | public, no credential | `503` | Floor-plan SVGs stop rendering |
 | `/api/line/contacts/oa-resolver/worklist` and `…/runs/{runId}/rows` | public, bearer-token | `503` | The browser extension cannot pull or post work |
-| All 26 `(app)` pages and every non-internal API | session-gated | `503` | The staff UI, as intended |
+| All 28 `(app)` pages and every non-internal API | session-gated | `503` | The staff UI, as intended |
 | `POST /api/data-health/jobs/{jobKey}/run` | session-gated | `503` | **In-app job triggering is unavailable.** Fire jobs by curl against `/api/internal/*` instead ([`runbook.md` §4.5](./runbook.md#45-triggering-by-hand-with-curl)) |
 | `POST /api/admin/sync-wise` | session-gated | `503` | Same — only `/api/internal/` is exempt |
 
@@ -417,9 +417,9 @@ npx vitest run --project unit src/lib/__tests__/maintenance.test.ts src/__tests_
 
 ## 8. Open questions
 
-- **Stale cron count in two comments — RESOLVED 2026-09-02.** [`maintenance.ts:5`](../../src/lib/maintenance.ts)
-  and [`.env.example:48`](../../.env.example) said the gate keeps "15 Vercel Crons" running while
-  `vercel.json` declared **17**; both comments now read 17. Behavior was never affected — the
+- **Stale cron count in two comments — RESOLVED 2026-09-02; inventory refreshed 2026-09-04.** [`maintenance.ts:5`](../../src/lib/maintenance.ts)
+  and [`.env.example:48`](../../.env.example) originally said the gate keeps "15 Vercel Crons" running while
+  `vercel.json` then declared **17**; both comments now follow the current **19**-entry inventory. Behavior was never affected — the
   exemption is a prefix, not a list. Previously cross-flagged
   in [`auth-and-access.md`](./auth-and-access.md#open-questions) and
   [`runbook.md`](./runbook.md#9-open-questions-surfaced-by-this-pass).

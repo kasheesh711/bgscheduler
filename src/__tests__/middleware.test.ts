@@ -122,6 +122,26 @@ describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
     expect(res.headers.get("location")).toBeNull();
   });
 
+  it.each(["/onsite-foot-traffic", "/api/onsite-foot-traffic", "/api/onsite-foot-traffic/export"])(
+    "%s passes through for a restricted user with Foot Traffic access",
+    async (pathname) => {
+      const res = await middleware(
+        makeReq(pathname, true, "", ["/onsite-foot-traffic"]) as never,
+        {} as never,
+      ) as Response;
+      expect(res.headers.get("location")).toBeNull();
+    },
+  );
+
+  it("denies the Foot Traffic API to a restricted user without the page grant", async () => {
+    const res = await middleware(
+      makeReq("/api/onsite-foot-traffic", true, "", ["/progress-tests"]) as never,
+      {} as never,
+    ) as Response;
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual({ error: "Forbidden" });
+  });
+
   it.each(["/learning-plans", "/learning-plans/report"])(
     "%s passes through for full-access admins",
     async (pathname) => {

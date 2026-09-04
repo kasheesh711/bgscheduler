@@ -21,6 +21,7 @@ export type CronJobKey =
   | "admissions_notifications"
   | "cron_watchdog"
   | "room_utilization"
+  | "onsite_foot_traffic"
   | "line_backlog_recovery"
   | "line_credit_digest"
   | "competitor_intelligence";
@@ -105,6 +106,22 @@ export const CRON_JOBS = [
     dangerous: false,
     confirmationLabel: null,
     expectedBangkokMinute: 1 * 60 + 30,
+    routeMethod: "GET",
+  },
+  {
+    key: "onsite_foot_traffic",
+    label: "Onsite Foot Traffic",
+    feature: "Foot Traffic",
+    path: "/api/internal/sync-onsite-foot-traffic",
+    schedule: "18 18 * * *",
+    cadenceLabel: "Daily 01:18 Bangkok",
+    cadenceMinutes: 24 * 60,
+    lateAfterMinutes: 90,
+    maxDurationSeconds: 800,
+    manualOnly: false,
+    dangerous: false,
+    confirmationLabel: null,
+    expectedBangkokMinute: 1 * 60 + 18,
     routeMethod: "GET",
   },
   {

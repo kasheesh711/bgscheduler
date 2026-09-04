@@ -10,8 +10,8 @@ declaration). Both counts are mechanical:
 - enum-typed column declarations (`someEnum("column_name")` outside the declaration block) → `102`
 
 Every one of the 61 also exists as a `CREATE TYPE "public"."…" AS ENUM (…)` statement in
-[`drizzle/`](../../../drizzle) (69 `.sql` migrations at this revision, latest
-`0068_payout_adjustment_superseded.sql`); `grep -rho 'CREATE TYPE "public"\."[a-z_]*"' drizzle/*.sql
+[`drizzle/`](../../../drizzle) (74 `.sql` migrations at this revision, latest
+`0073_funny_ego.sql`); `grep -rho 'CREATE TYPE "public"\."[a-z_]*"' drizzle/*.sql
 | sort -u | wc -l` → `61`, and the two name sets match exactly.
 
 This page owns the **mechanical** detail — SQL type name, Drizzle constant, declaration site,

@@ -14,7 +14,7 @@ checks agree:
 | `grep -rn "WISE_WEBHOOK" src/ vercel.json` | no matches; no such env var is declared in [`src/lib/env.ts`](../../src/lib/env.ts) |
 | Middleware public allowlist ([`middleware.ts:10`-`26`](../../src/middleware.ts)) and `MAINTENANCE_EXEMPT_PREFIXES` ([`maintenance.ts:43`-`48`](../../src/lib/maintenance.ts)) | neither lists any Wise webhook path |
 
-Every byte of Wise data in the system today arrives by **polling** — the 17 Vercel Cron entries in
+Every byte of Wise data in the system today arrives by **polling** — the 19 Vercel Cron entries in
 [`crons.md`](./crons.md) calling the fetchers in [`wise-api.md`](./wise-api.md). Nothing below is
 running code.
 
@@ -365,7 +365,7 @@ dispatcher design that satisfies it:
   architecture, and rollout gates.
 - [`docs/reference/wise-api.md`](./wise-api.md) — the polling contract that exists today: transport
   client, every fetcher, the writeback allowlist, and the `WISE_*` environment variables.
-- [`docs/reference/crons.md`](./crons.md) — the 17 scheduled jobs that do the polling.
+- [`docs/reference/crons.md`](./crons.md) — the 19 scheduled jobs that do the polling.
 - [`docs/features/wise-activity-audit.md`](../features/wise-activity-audit.md) — how the *polled*
   event feed is stored and read.
 - [`docs/features/post-class-feedback.md`](../features/post-class-feedback.md) — the subsystem most

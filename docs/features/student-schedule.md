@@ -142,7 +142,7 @@ verified recipient (`src/lib/line/schedule-bot.ts:143-174`) and **writes** a mir
 message into `line_messages` on a best-effort basis (`:584-616`).
 
 There is no snapshot lineage, no `*_sync_runs` ledger and no `vercel.json` entry for this feature
-(all 17 cron paths in `vercel.json` belong to other subsystems). Baseline freshness is inherited
+(all 19 cron paths in `vercel.json` belong to other subsystems). Baseline freshness is inherited
 from the credit-control sync; the live overlay corrects it at read time.
 
 ## API surface

@@ -797,7 +797,7 @@ subsystem plus trigger that drives it. Cron expressions are UTC, from
 
 - [`docs/reference/wise-webhooks.md`](./wise-webhooks.md) — the push-side event catalogue (not received by this codebase today).
 - [`docs/proposals/2026-09-02-cron-efficiency-and-wise-webhooks.md`](../proposals/2026-09-02-cron-efficiency-and-wise-webhooks.md) — measured cron/Wise cost model, the EFF-09 probe result, and the proposed webhook receiver.
-- [`docs/reference/crons.md`](./crons.md) — the 17 schedules that drive nearly all of this traffic, and why stagger is load-bearing.
+- [`docs/reference/crons.md`](./crons.md) — the 19 schedules that drive nearly all of this traffic, and why stagger is load-bearing.
 - [`docs/reference/env.md`](./env.md) — full env-var reference and the dormant-Zod caveat.
 - [`docs/handbook/data-flow.md`](../handbook/data-flow.md) — where these fetchers sit in the sync ETL pipeline and how client errors propagate.
 - Feature meaning: [`post-class-feedback`](../features/post-class-feedback.md), [`credit-control`](../features/credit-control.md), [`student-promotions`](../features/student-promotions.md), [`classroom-assignments`](../features/classroom-assignments.md), [`progress-tests`](../features/progress-tests.md), [`wise-activity-audit`](../features/wise-activity-audit.md), [`student-schedule`](../features/student-schedule.md), [`payroll`](../features/payroll.md).

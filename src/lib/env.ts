@@ -9,6 +9,10 @@ const envSchema = z.object({
   WISE_API_KEY: z.string().min(1),
   WISE_NAMESPACE: z.string().default("begifted-education"),
   WISE_INSTITUTE_ID: z.string().default("696e1f4d90102225641cc413"),
+  // Optional at app boot so pre-migration environments still render. The
+  // foot-traffic sync itself requires at least 32 characters and fails before
+  // fetching or writing when absent. This value must never be rotated.
+  FOOT_TRAFFIC_PSEUDONYM_SECRET: z.string().min(32).optional(),
   CRON_SECRET: z.string().min(1),
   LINE_CHANNEL_SECRET: z.string().min(1).optional(),
   LINE_CHANNEL_ACCESS_TOKEN: z.string().min(1).optional(),

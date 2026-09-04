@@ -22,8 +22,8 @@ manual procedure derived from the code path it mirrors.
 | Repository | `https://github.com/kasheesh711/bgscheduler` |
 | Database | Neon Postgres over the serverless HTTP driver; `getDb()` is a `globalThis` singleton and throws when `DATABASE_URL` is unset ([`src/lib/db/index.ts:5-27`](../../src/lib/db/index.ts)) |
 | Wise API | `https://api.wiseapp.live`, namespace `begifted-education`, institute `696e1f4d90102225641cc413` ([`src/lib/wise/client.ts:64`](../../src/lib/wise/client.ts), [`src/lib/env.ts:10-11`](../../src/lib/env.ts)) |
-| Scheduled jobs | **17** entries in [`vercel.json:3-72`](../../vercel.json), pinned by [`src/__tests__/vercel-crons.test.ts:100-104`](../../src/__tests__/vercel-crons.test.ts) |
-| Job registry | **22** definitions — 17 scheduled + 5 `manualOnly` — in [`src/lib/data-health/cron-registry.ts:47-399`](../../src/lib/data-health/cron-registry.ts) |
+| Scheduled jobs | **19** entries in [`vercel.json`](../../vercel.json), pinned by [`src/__tests__/vercel-crons.test.ts`](../../src/__tests__/vercel-crons.test.ts) |
+| Job registry | **24** definitions — 19 scheduled + 5 `manualOnly` — in [`src/lib/data-health/cron-registry.ts`](../../src/lib/data-health/cron-registry.ts) |
 | Health dashboard | `/data-health`; JSON at `GET /api/data-health` ([`src/app/api/data-health/route.ts:14-26`](../../src/app/api/data-health/route.ts)) |
 | Alerting | cron watchdog every 30 min, emails full-access admins ([`src/lib/internal/cron-watchdog.ts`](../../src/lib/internal/cron-watchdog.ts)) |
 | Deploy | push to `main` (Vercel Git integration), or `npm run deploy:prod` from the Vercel-linked worktree ([`package.json:39`](../../package.json)) |
@@ -94,8 +94,8 @@ walks `src/app` for every `page.tsx` / `route.ts`, derives the URL path (droppin
 `@slot` segments) ([`:9-45`](../../scripts/check-production-route-surface.mjs)), and compares the
 result against [`docs/reference/production-route-surface.json`](../reference/production-route-surface.json):
 
-- the discovered route count may not drop below `minSourceRouteCount` — currently **211**, matching
-  the 211 entries in `sourceRoutes`;
+- the discovered route count may not drop below `minSourceRouteCount` — currently **224**, matching
+  the 224 entries in `sourceRoutes`;
 - every entry in `sourceRoutes` and every `criticalRoutes` entry (**9**: `/leave-requests`,
   `/line-review`, `/payroll`, `/student-promotions`, `/api/data-health/jobs/[jobKey]/run`,
   `/api/internal/post-class-feedback-backfill`, `/api/internal/sync-leave-requests`,
@@ -146,8 +146,8 @@ spamming when `cron_alert_state` is absent ([`cron-watchdog.ts:403-417`](../../s
 and Data Health falls back to run-table proof when `cron_invocations` is absent
 ([`dashboard.ts:846-853`](../../src/lib/data-health/dashboard.ts)) — but most routes do not.
 
-`drizzle/` holds **69** forward-only SQL files (`0000_tidy_black_bolt.sql` …
-`0068_payout_adjustment_superseded.sql`), tracked in `drizzle/meta/_journal.json`. There are no down
+`drizzle/` holds **74** forward-only SQL files (`0000_tidy_black_bolt.sql` …
+`0073_funny_ego.sql`), tracked in `drizzle/meta/_journal.json`. There are no down
 migrations; reverting a schema change means writing a new forward migration.
 
 ### 2.8 Rolling back a deploy
@@ -203,7 +203,7 @@ machine's zone. Two projects:
 | `unit` | `src/**/*.test.ts(x)`, excluding `*.integration.test.ts` ([`:26-35`](../../vitest.config.ts)) | node env, default parallelism |
 | `integration` | `src/**/*.integration.test.ts` ([`:36-50`](../../vitest.config.ts)) | `pool: "forks"`, `fileParallelism: false`, `maxWorkers: 1`, 60 s test + hook timeouts |
 
-At this revision there are **389** test files, **13** of them integration suites. The integration
+At this revision there are **409** test files, **15** of them integration suites. The integration
 project starts an ephemeral Postgres via `testcontainers` / `@testcontainers/postgresql`
 ([`package.json:65, :77`](../../package.json)), so **Docker must be running locally** — a missing
 daemon fails every integration file at setup. Coverage uses the v8 provider and excludes
@@ -339,13 +339,15 @@ proceeds ([`:156, :187`](../../src/lib/data-health/cron-audit.ts)). `triggerSour
 Bangkok is UTC+7. `maxDuration` is the per-route Vercel function timeout (`export const
 maxDuration`). "Manual auth" is what a hand-triggered call may present.
 
-**Scheduled — 17, one row per `vercel.json` entry:**
+**Scheduled — 19, one row per `vercel.json` entry:**
 
 | Path | Schedule (UTC) | Bangkok | `jobKey` | `maxDuration` | Verbs | Manual auth |
 |---|---|---|---|---|---|---|
 | `/api/internal/sync-wise` | `*/30 * * * *` | :00 / :30 | `wise_snapshot` | 800 ([`:7`](../../src/app/api/internal/sync-wise/route.ts)) | GET, POST | bearer; **POST also accepts any session** ([`:45-59`](../../src/app/api/internal/sync-wise/route.ts)) |
 | `/api/internal/sync-wise-activity` | `2,17,32,47 * * * *` | every 15 min | `wise_activity` | 800 ([`:8`](../../src/app/api/internal/sync-wise-activity/route.ts)) | GET | bearer |
 | `/api/internal/sync-sales-dashboard` | `10,40 * * * *` | :10 / :40 | `sales_dashboard` | 800 ([`:11`](../../src/app/api/internal/sync-sales-dashboard/route.ts)) | GET, POST | bearer; POST also accepts a session carrying an email ([`:28-36`](../../src/app/api/internal/sync-sales-dashboard/route.ts)) |
+| `/api/internal/sync-onsite-foot-traffic` | `18 18 * * *` | 01:18 daily | `onsite_foot_traffic` | 800 | GET | bearer; reconciles the rolling 35 completed Bangkok days after the initial backfill |
+| `/api/internal/sync-unearned-revenue` | `30 18 * * *` | 01:30 daily | `unearned_revenue` | 800 | GET | bearer; imports a stable published accounting snapshot |
 | `/api/internal/sync-post-class-feedback` | `13,43 * * * *` | :13 / :43 | `post_class_feedback` | 800 ([`:13`](../../src/app/api/internal/sync-post-class-feedback/route.ts)) | GET | bearer |
 | `/api/internal/sync-leave-requests` | `15,45 * * * *` | :15 / :45 | `leave_requests` | 800 ([`:7`](../../src/app/api/internal/sync-leave-requests/route.ts)) | GET, POST | bearer on **both** verbs — no session fallback ([`:9-11, :30-36`](../../src/app/api/internal/sync-leave-requests/route.ts)) |
 | `/api/internal/sync-credit-control` | `20,50 * * * *` | :20 / :50 | `credit_control` | 800 ([`:14`](../../src/app/api/internal/sync-credit-control/route.ts)) | GET, POST | bearer; POST also accepts any session ([`:43-56`](../../src/app/api/internal/sync-credit-control/route.ts)) |
@@ -372,7 +374,7 @@ automatically:**
 | `/api/internal/sync-room-utilization` | `room_utilization` | 800 ([`:8`](../../src/app/api/internal/sync-room-utilization/route.ts)) | **POST only** | bearer or any session ([`:26-40`](../../src/app/api/internal/sync-room-utilization/route.ts)). POST-only is why it cannot be a Vercel cron |
 | `/api/internal/line-backlog-recovery` | `line_backlog_recovery` | 300 ([`:9`](../../src/app/api/internal/line-backlog-recovery/route.ts)) | GET | bearer; runs `runLineBacklogRecovery({ dryRun: false })` ([`:19`](../../src/app/api/internal/line-backlog-recovery/route.ts)) |
 
-The registry-vs-`vercel.json` agreement (exactly 17 entries on their pinned schedules) and the rule
+The registry-vs-`vercel.json` agreement (exactly 19 entries on their pinned schedules) and the rule
 that **no two crons may fire in the same UTC minute** are both enforced by
 [`src/__tests__/vercel-crons.test.ts:100-126`](../../src/__tests__/vercel-crons.test.ts). If you
 change a schedule, change it in **both** `vercel.json` and `cron-registry.ts`, then run `npm test`.
@@ -453,8 +455,8 @@ Two in-app paths exist, both behind an Auth.js session and both audited with
   [`run-job.ts:29-210`](../../src/lib/data-health/run-job.ts); `maxDuration` is 800
   ([`:11`](../../src/app/api/data-health/jobs/%5BjobKey%5D/run/route.ts)).
 
-  **Gap worth knowing:** `runDataHealthJob` implements only **15** of the 22 registry keys. The
-  seven with no branch — `progress_tests`, `progress_tests_digest`, `post_class_feedback_backfill`,
+  **Gap worth knowing:** `runDataHealthJob` implements only **16** of the 24 registry keys. The
+  eight with no branch — `unearned_revenue`, `progress_tests`, `progress_tests_digest`, `post_class_feedback_backfill`,
   `student_promotions_july_1`, `admissions_notifications`, `line_credit_digest`,
   `line_backlog_recovery` — fall through to `404 {"error":"Unknown job"}`
   ([`run-job.ts:207`](../../src/lib/data-health/run-job.ts)). Those must be fired with curl (§4.5).
@@ -897,8 +899,8 @@ for syncs runs 15 concurrent requests ([`:214-221`](../../src/lib/wise/client.ts
   operator runs the SQL in §7.3. Every other cron-driven ledger sweeps at 20 or 30 minutes. Adding a
   `markAbandonedRuns` mirror is a one-function change in `src/lib/leave-requests/sync.ts` — a path
   this documentation pass is not permitted to edit.
-- **Data Health cannot run 7 of its own 22 registered jobs.** `runDataHealthJob` has no branch for
-  `progress_tests`, `progress_tests_digest`, `post_class_feedback_backfill`,
+- **Data Health cannot run 8 of its own 24 registered jobs.** `runDataHealthJob` has no branch for
+  `unearned_revenue`, `progress_tests`, `progress_tests_digest`, `post_class_feedback_backfill`,
   `student_promotions_july_1`, `admissions_notifications`, `line_credit_digest` or
   `line_backlog_recovery`; they return `404 Unknown job`
   ([`run-job.ts:207`](../../src/lib/data-health/run-job.ts)). Two of those are the only manual
@@ -911,10 +913,10 @@ for syncs runs 15 concurrent requests ([`:214-221`](../../src/lib/wise/client.ts
 - **Stranded `cron_invocations` rows are never closed.** Only retention removes them (90 days *and*
   outside the newest 8); until then a killed function's `running` row stays visible.
 - **Registry `maxDurationSeconds` is a hand-kept mirror of each route's `maxDuration`.** They agree
-  at this revision across all 22 entries, but nothing tests the pairing — and Data Health's stuck
-  detection uses the registry value, so a drift would misreport a legitimate long run as `failing`.
-- **Cron-count drift — RESOLVED 2026-09-02.** `README.md` and `AGENTS.md` were regenerated against
-  code and now describe all 17 `vercel.json` entries with their current minutes, including
+  at this revision across all 24 entries, and a regression test checks the pairing because Data Health's stuck
+  detection uses the registry value; a drift would otherwise misreport a legitimate long run as `failing`.
+- **Cron-count drift — RESOLVED 2026-09-02; inventory refreshed 2026-09-04.** The canonical handbook was regenerated against
+  code and now describes all 19 `vercel.json` entries with their current minutes, including
   `post-class-feedback/payout-accrual` and `line-credit-digest`. The matching stale "15 Vercel Crons"
   comment at [`maintenance.ts:5`](../../src/lib/maintenance.ts) and in `.env.example` was corrected
   in the same pass. `vercel.json` and `cron-registry.ts` remain the source of truth.

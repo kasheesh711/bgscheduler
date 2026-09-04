@@ -14,6 +14,10 @@
       "schedule": "30 18 * * *"
     },
     {
+      "path": "/api/internal/sync-onsite-foot-traffic",
+      "schedule": "18 18 * * *"
+    },
+    {
       "path": "/api/internal/sync-competitor-intelligence",
       "schedule": "28 18 * * 0"
     },

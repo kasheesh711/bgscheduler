@@ -18,8 +18,8 @@ assumptions this codebase will break.
 The docs are organized into five trees plus two loose sets, each with a distinct job:
 
 - **[`handbook/`](#handbook)** — the cross-cutting mental model: architecture, data flow, conventions, vocabulary. **6 pages.**
-- **[`features/`](#features)** — one page per product feature; owns *meaning* (purpose, rules, flows, why). **26 pages.**
-- **[`reference/`](#reference)** — mechanical lookup: every endpoint, every table, every enum, crons, env vars, the Wise REST contract and its webhook catalogue. **48 pages** (23 API, 21 database, 4 top-level).
+- **[`features/`](#features)** — one page per product feature; owns *meaning* (purpose, rules, flows, why). **27 pages.**
+- **[`reference/`](#reference)** — mechanical lookup: every endpoint, every table, every enum, crons, env vars, the Wise REST contract and its webhook catalogue. **50 pages** (24 API, 22 database, 4 top-level).
 - **[`operations/`](#operations)** — runbook, auth/access model, observability, the maintenance kill switch, and one historical release checkpoint. **5 pages.**
 - **[`OPEN-QUESTIONS.md`](#open-questions--gaps)** — the running list of things only a human can settle.
 - **[`proposals/`](#proposals)** — dated design proposals that are *not* system documentation.
@@ -31,16 +31,16 @@ Every number below is mechanical, taken from the tree rather than from prose:
 
 | Thing | Count | How it is counted |
 |---|---:|---|
-| Database tables | **198** | `grep -c "= pgTable(" src/lib/db/schema.ts` (the file is 5,050 lines) |
+| Database tables | **203** | `grep -c "= pgTable(" src/lib/db/schema.ts` (the file is 5,198 lines) |
 | Postgres enum types | **61** | `grep -c "= pgEnum(" src/lib/db/schema.ts` |
-| Drizzle migrations | **73** | `ls drizzle/*.sql`, latest `drizzle/0072_unearned_revenue_exact_package_overview.sql` |
-| Route files | **185** | `find src/app/api -name route.ts` |
-| HTTP endpoints | **249** | 247 named `export async function GET\|POST\|PUT\|PATCH\|DELETE` handlers, **+2** for the Auth.js catch-all (`src/app/api/auth/[...nextauth]/route.ts:3` exports by destructuring, so it matches no `function` grep), **−2** for the two CORS `OPTIONS` preflights on the public OA-resolver routes |
-| Vercel Cron entries | **18** | the `crons` array in `vercel.json` |
-| Internal cron route handlers | **23** | `find src/app/api/internal -name route.ts`; the 5 unscheduled ones are `manualOnly: true` in `src/lib/data-health/cron-registry.ts` |
-| Pages in the `(app)` group | **27** | plus 3 print surfaces under `src/app/(print)/`, `src/app/login/page.tsx`, and the public `src/app/schedule/[token]/page.tsx` — **32** `page.tsx` files in total |
-| Navigation tools | **23** | in 6 sections, 7 with live count badges, 4 pinned as shortcuts (`src/lib/navigation/tools.ts`) |
-| Vitest test files | **400** | `*.test.ts(x)` under `src/`, of which **13** are `*.integration.test.ts` |
+| Drizzle migrations | **74** | `ls drizzle/*.sql`, latest `drizzle/0073_funny_ego.sql` |
+| Route files | **191** | `find src/app/api -name route.ts` |
+| HTTP endpoints | **255** | 253 named `export async function GET\|POST\|PUT\|PATCH\|DELETE` business handlers, **+2** for the Auth.js catch-all (`src/app/api/auth/[...nextauth]/route.ts:3` exports by destructuring); the two CORS `OPTIONS` preflights on the public OA-resolver routes are excluded |
+| Vercel Cron entries | **19** | the `crons` array in `vercel.json` |
+| Internal cron route handlers | **24** | `find src/app/api/internal -name route.ts`; the 5 unscheduled ones are `manualOnly: true` in `src/lib/data-health/cron-registry.ts` |
+| Pages in the `(app)` group | **28** | plus 3 print surfaces under `src/app/(print)/`, `src/app/login/page.tsx`, and the public `src/app/schedule/[token]/page.tsx` — **33** `page.tsx` files in total |
+| Navigation tools | **24** | in 6 sections, 7 with live count badges, 4 pinned as shortcuts (`src/lib/navigation/tools.ts`) |
+| Vitest test files | **409** | `*.test.ts(x)` under `src/`, of which **15** are `*.integration.test.ts` |
 
 The mechanical inventories behind the first six rows live in
 [`reference/database/index.md`](./reference/database/index.md),
@@ -67,7 +67,7 @@ that is on demand.
    the request lifecycle.
 4. **[`handbook/data-flow.md`](./handbook/data-flow.md)** — the Wise → Postgres → in-memory ETL
    stage by stage: `runFullSync()`, the promotion gate, and the failure model. Scoped to the tutor
-   snapshot sync; the other 16 cron lineages keep their own `*_sync_runs` ledgers.
+   snapshot sync; the other scheduled and manual cron lineages keep their own run ledgers.
 5. **[`handbook/glossary.md`](./handbook/glossary.md)** — domain vocabulary (snapshot, identity
    group, modality, canonical key, fail-closed), one line each, cited to the code that enforces it.
 6. **[`handbook/conventions.md`](./handbook/conventions.md)** — the load-bearing Zod-at-the-boundary,
@@ -162,9 +162,9 @@ The cross-cutting mental model — read these to understand the system as a whol
 
 ### Features
 
-One page per product feature; owns purpose, rules, flows, and the *why*. **Twenty-six pages** —
-`ls docs/features/*.md | wc -l` → 26. The first four groups follow the tool navigation
-(`src/lib/navigation/tools.ts`, 23 tools in 6 sections); the last group holds the two pages whose
+One page per product feature; owns purpose, rules, flows, and the *why*. **Twenty-seven pages** —
+`ls docs/features/*.md | wc -l` → 27. The first four groups follow the tool navigation
+(`src/lib/navigation/tools.ts`, 24 tools in 6 sections); the last group holds the two pages whose
 surface has no nav entry of its own.
 
 #### Scheduling & Tutors
@@ -176,6 +176,7 @@ surface has no nav entry of its own.
 | [Tutor Profiles](./features/tutor-profiles.md) | stable | The editorial layer for what Wise does not carry — how a tutor teaches, who they suit, what is parent-safe, and any do-not-offer guidance. Keyed on `canonicalKey` so it survives snapshot rotation. |
 | [Classroom Assignments](./features/classroom-assignments.md) | stable | Turns a Bangkok day's Wise sessions into a physical room plan; writes the room back to Wise only on an explicit opt-in publish of eligible OFFLINE sessions. The one routine Wise write path. |
 | [Room Capacity](./features/room-capacity.md) | stable (utilization) — see [legend](#maturity-legend) | Room utilization (wired end to end) plus month-pressure and saturation forecasting (implemented and tested, no caller outside tests). |
+| [Onsite Foot Traffic](./features/onsite-foot-traffic.md) | stable in code; rollout-gated | De-identified Wise PAST-session attendance: student-visits, unique students, classes, weekly/monthly and room/weekday patterns, CSVs, and a standalone HTML/PDF analytics pack. |
 | [Post-Class Feedback](./features/post-class-feedback.md) | stable (payout writes flag-gated) | Preserves every Wise teacher-feedback version as immutable evidence, scores an objective deadline/content policy, and carries reviewed deductions through a capability-gated finance handoff into the payout ledger. |
 | [LINE Integration](./features/line-integration.md) | stable (scheduler write-path flag-gated) | The bridge between BeGifted's LINE Official Account and the app: webhook ingest, classification, drafted replies behind a human review queue, contact/student linking, and the admin schedule bot. |
 | [Leave Requests](./features/leave-requests.md) | stable | Pulls tutor time-off rows from a Google Sheet, matches them to a Wise identity, computes affected sessions, and gives admins a triage queue. Wise cancellation is preview-only. |
@@ -233,14 +234,14 @@ Mechanical lookup. Owns exact signatures, columns, schedules, and variables — 
 
 #### API — [`reference/api/`](./reference/api/index.md)
 
-Start at the index; it carries the master method + path + auth + purpose table for all **249**
+Start at the index; it carries the master method + path + auth + purpose table for all **255**
 endpoints and routes you to a detail page per group.
 
 | Doc | Covers |
 |---|---|
 | [index.md](./reference/api/index.md) | **Master index** of every endpoint under `src/app/api/**/route.ts`: method, path, group, auth tier, one-line purpose — plus how to read the auth column (`public` / `admin` / ``admin + cap:`X` `` / `session (role: X)` / `cron` / `cron \| admin`) and the three places where middleware and handler disagree. |
 | [university-admissions.md](./reference/api/university-admissions.md) | `/api/admissions/**` plus the admissions-notifications cron route. The largest group at 61 endpoints (63 with the two cron halves). |
-| [internal-crons.md](./reference/api/internal-crons.md) | `/api/internal/*` — 25 of the 31 internal endpoints; the other six are indexed on the page of the subsystem they drive. |
+| [internal-crons.md](./reference/api/internal-crons.md) | `/api/internal/*` — 25 of the 33 internal endpoints; the other eight are indexed on the page of the subsystem they drive. |
 | [line.md](./reference/api/line.md) | `/api/line/*` — webhook, contacts, OA resolver, scheduler reviews. 29 endpoints. |
 | [post-class-feedback.md](./reference/api/post-class-feedback.md) | `/api/post-class-feedback/*` — the 13 capability-gated workspace endpoints plus the six internal cron routes that feed them. |
 | [sales-dashboard.md](./reference/api/sales-dashboard.md) | `/api/sales-dashboard/*` plus its two internal cron halves. |
@@ -258,6 +259,7 @@ endpoints and routes you to a detail page per group.
 | [tutor-profiles.md](./reference/api/tutor-profiles.md) | `/api/tutor-profiles/*` — roster read, single-profile patch, and the bulk import preview/commit pair. |
 | [student-schedule-and-report.md](./reference/api/student-schedule-and-report.md) | `/api/student-schedule/*` and `/api/student-report` — the admin calendar read, the parent capability-link mint, and the Parent Report statement. |
 | [room-capacity.md](./reference/api/room-capacity.md) | `/api/room-capacity/*` plus the manual-only utilization sync. |
+| [onsite-foot-traffic.md](./reference/api/onsite-foot-traffic.md) | `/api/onsite-foot-traffic/*` plus the daily Wise PAST-session reconciliation cron. |
 | [proposals.md](./reference/api/proposals.md) | `/api/proposals/*`. |
 | [data-health.md](./reference/api/data-health.md) | `/api/data-health/*` — the dashboard read, the manual job runner, and the watchdog sweep. |
 | [misc.md](./reference/api/misc.md) | A real detail page, not a placeholder: the 11 endpoints with no group page of their own — search, compare, tutors/filters, home summary, the session-authed Wise-sync trigger, and the Auth.js catch-all. It opens with a **Where the other families moved** table pointing at the ten families split out into the pages above. |
@@ -266,7 +268,7 @@ endpoints and routes you to a detail page per group.
 
 | Doc | Covers |
 |---|---|
-| [index.md](./reference/database/index.md) | **Master table index**: all 199 tables, each with its grain, owning domain, and the `schema.ts` line range that is authoritative for its columns. **Nineteen** domain groupings, one per `erd-*.md` page, so every table is diagrammed in exactly one place. |
+| [index.md](./reference/database/index.md) | **Master table index**: all 203 tables, each with its grain, owning domain, and the `schema.ts` line range that is authoritative for its columns. **Twenty** domain groupings, one per `erd-*.md` page, so every table is diagrammed in exactly one place. |
 | [enums.md](./reference/database/enums.md) | All 61 native Postgres enum types: values, declaration site, and the columns bound to each. |
 | [erd-core.md](./reference/database/erd-core.md) | The snapshot/ETL spine and what still hangs directly off it: sync control plane and cron observability, auth & access, tutor identity/normalization/session blocks/data health, and the read-only IPEDS dataset. **22 tables** — it opens with a *Moved* table naming the eight domains that took 102 tables onto their own pages. |
 | [erd-university-admissions.md](./reference/database/erd-university-admissions.md) | University Admissions tables (36) — the largest single domain, in four numbered sections. |
@@ -283,6 +285,7 @@ endpoints and routes you to a detail page per group.
 | [erd-student-promotions.md](./reference/database/erd-student-promotions.md) | Student Promotions tables (6). |
 | [erd-leave-requests.md](./reference/database/erd-leave-requests.md) | Leave Requests tables (5). |
 | [erd-room-capacity.md](./reference/database/erd-room-capacity.md) | Room Capacity tables (4). |
+| [erd-onsite-foot-traffic.md](./reference/database/erd-onsite-foot-traffic.md) | Onsite Foot Traffic tables (4): sync ledger, canonical PAST sessions, de-identified visits, and immutable report snapshots. |
 | [erd-tutor-profiles.md](./reference/database/erd-tutor-profiles.md) | Tutor Profiles tables (2). |
 | [erd-wise-activity.md](./reference/database/erd-wise-activity.md) | Wise Activity Audit tables (2) — the event mirror and its ingest ledger. |
 | [erd-learning-plans.md](./reference/database/erd-learning-plans.md) | Learning Plans access grants (1) — the only table the otherwise stateless plan builder owns. |
@@ -292,7 +295,7 @@ endpoints and routes you to a detail page per group.
 
 | Doc | Covers |
 |---|---|
-| [crons.md](./reference/crons.md) | Every Vercel Cron entry in the repo-root `vercel.json` (**17** at this revision): schedule, Bangkok time, registry key, `maxDuration`, single-flight guard — plus the 5 internal handlers with **no** schedule. There is no in-process scheduler anywhere in the repo. |
+| [crons.md](./reference/crons.md) | Every Vercel Cron entry in the repo-root `vercel.json` (**19** at this revision): schedule, Bangkok time, registry key, `maxDuration`, single-flight guard — plus the 5 internal handlers with **no** schedule. There is no in-process scheduler anywhere in the repo. |
 | [env.md](./reference/env.md) | Every environment variable actually read by `src/` and `scripts/`, reconciled against the declared Zod schema in `src/lib/env.ts` (the two inventories do not agree; the page says how). |
 | [wise-api.md](./reference/wise-api.md) | The external Wise REST contract: transport client, retry/backoff, concurrency limiter, every domain fetcher, the read-only helpers, the writeback operations, and the `WISE_*` variables. |
 | [wise-webhooks.md](./reference/wise-webhooks.md) | The Wise **webhook** side: the event catalogue and payload fields, read against the polling fleet BGScheduler runs today. Companion to the [cron-efficiency proposal](./proposals/2026-09-02-cron-efficiency-and-wise-webhooks.md); nothing in the repo subscribes to a webhook at this revision. |

@@ -8,25 +8,25 @@ Four inventories are reconciled here, and none of them agree:
 
 | Inventory | Count | Source |
 |---|---|---|
-| Declared in the Zod schema | **18** keys | [`src/lib/env.ts:3`–`36`](../../src/lib/env.ts) |
-| Documented in `.env.example` | **42** keys | [`.env.example`](../../.env.example) — `grep -cE '^[A-Z_][A-Z0-9_]*=' .env.example` |
-| Read by non-test `src/` at runtime | **71** named keys + 1 dynamically-named family | includes the two Unearned Revenue keys in §2.6a |
-| Read anywhere in the repo (`src/`, `scripts/`, root config) | **76** named keys | the 71 above + 5 test/script-only keys (§2.10). `TZ` is *written*, not read |
+| Declared in the Zod schema | **20** keys | [`src/lib/env.ts:3`–`46`](../../src/lib/env.ts) |
+| Documented in `.env.example` | **43** keys | [`.env.example`](../../.env.example) — `grep -cE '^[A-Z_][A-Z0-9_]*=' .env.example` |
+| Read by non-test `src/` at runtime | **79** named keys + 1 dynamically-named family | includes the Onsite Foot Traffic HMAC and PDF-runtime keys |
+| Read anywhere in the repo (`src/`, `scripts/`, root config) | **85** named keys | the 79 above + 6 test/script-only keys (§2.10). `TZ` is *written*, not read |
 
-> **Counting method.** `grep -rnoE 'process\.env\.[A-Z_][A-Z0-9_]*' src --include='*.ts' --include='*.tsx' | grep -v __tests__` yields 59 distinct names, one of which (`TEST_DATABASE_URL`, [`src/tests/integration/db-helper.ts:24`](../../src/tests/integration/db-helper.ts)) is integration-test infrastructure — leaving 58 runtime names. Eleven more never appear as `process.env.NAME`: nine `POST_CLASS_PAYOUT_*` keys read through `value(env, "NAME")` plus `env.POST_CLASS_PAYOUT_WRITES_ENABLED` ([`payout-config.ts:11`–`50`](../../src/lib/post-class-feedback/payout-config.ts)), `VERCEL_ENV` through the same helper ([`payout-config.ts:116`](../../src/lib/post-class-feedback/payout-config.ts)), and `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` through computed access on a `const` ([`student-promotions/data.ts:201`, `:450`](../../src/lib/student-promotions/data.ts)). Four untracked report scripts present in the working tree at verification time (`scripts/price-student-credits.ts`, `report-online-by-year.ts`, `report-student-classes.ts`, `report-tutor-feedback-submissions.ts`) are excluded from the counts; they read only `DATABASE_URL` and `WISE_INSTITUTE_ID`, both already inventoried.
+> **Counting method.** A literal `process.env.NAME` scan of non-test `src/` yields 68 runtime names after excluding `TEST_DATABASE_URL`. Eleven more never appear in that form: nine `POST_CLASS_PAYOUT_*` keys read through `value(env, "NAME")` or `env.POST_CLASS_PAYOUT_WRITES_ENABLED`, `VERCEL_ENV` through the same helper, and `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` through computed access on a constant. That produces 79 named runtime keys; the computed `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family is listed separately rather than guessed.
 
 ---
 
 ## TL;DR — the precise Zod truth vs. the "9 required" claim
 
-[`src/lib/env.ts:3`–`36`](../../src/lib/env.ts) declares **18** keys in three buckets:
+[`src/lib/env.ts:3`–`46`](../../src/lib/env.ts) declares **20** keys in three buckets:
 
 | Bucket | Zod modifier | Count | Variables |
 |---|---|---|---|
 | **Hard-required** — `safeParse` fails when unset *or* empty | `.url()` ×1 (`DATABASE_URL`, L4); `.min(1)` ×6 (L5–L9, L12) | **7** | `DATABASE_URL`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_SECRET`, `WISE_USER_ID`, `WISE_API_KEY`, `CRON_SECRET` |
 | **Defaulted** — parse succeeds when unset; a source literal is substituted | `.default(…)` (L10–L11) | **2** | `WISE_NAMESPACE` → `"begifted-education"`, `WISE_INSTITUTE_ID` → `"696e1f4d90102225641cc413"` |
-| **Optional** — may be absent entirely | `.optional()` (L13–L15, L19, L23, L25, L27, L32, L35, L42) | **10** | `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER`, `LINE_SCHEDULE_BOT_ADMIN_IDS`, `ENABLE_STUDENT_SCHEDULE_LIVE`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`, `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS`, `CREDIT_REFRESH_MAX_AGE_MINUTES` |
-| **Total declared** | | **19** | |
+| **Optional** — may be absent entirely | `.optional()` | **11** | `FOOT_TRAFFIC_PSEUDONYM_SECRET`, `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`, `ENABLE_LINE_SCHEDULER`, `LINE_SCHEDULE_BOT_ADMIN_IDS`, `ENABLE_STUDENT_SCHEDULE_LIVE`, `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`, `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS`, `CREDIT_REFRESH_MAX_AGE_MINUTES` |
+| **Total declared** | | **20** | |
 
 ### Wise traffic controls (AVAIL-01 / CRED-01, added 2026-09-04)
 
@@ -52,12 +52,12 @@ Where the repo's prose stands against this table:
 | Source | Claim | Zod truth |
 |---|---|---|
 | [`AGENTS.md:291`](../../AGENTS.md) | heading "Environment Variables (9 required)" over a 12-row table that includes the three `LEAVE_REQUESTS_*` vars | 7 hard-required + 2 defaulted; the `LEAVE_REQUESTS_*` vars are **not** in the schema — they are read at [`src/lib/leave-requests/config.ts:1`–`5`](../../src/lib/leave-requests/config.ts) |
-| [`AGENTS.md:307`](../../AGENTS.md) | "`src/lib/env.ts` validates 9 required vars plus 9 optional ones … roughly 50 environment variables are read across the codebase" | 7 + 2 + 9 = 18 declared; **71** runtime names read; and "validates" never executes (next section) |
-| [`README.md:180`–`187`](../../README.md) | "declares 15 variables and throws at startup … 7 required … 2 with defaults … 6 optional" | 18 declared / 9 optional — the list omits `ENABLE_STUDENT_SCHEDULE_LIVE`, `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS`; and nothing throws at startup |
-| [`CLAUDE.md:104`, `:120`](../../CLAUDE.md) | "declares 18 env vars — 7 hard-required, 2 defaulted, 9 optional … throws on invalid" | counts correct; "throws on invalid" describes unreachable code |
-| [`docs/OPEN-QUESTIONS.md:48`–`57`](../OPEN-QUESTIONS.md) (DEF-2), [`:987`–`1002`](../OPEN-QUESTIONS.md) (ENV-2, ENV-3) | "The schema declares 15 keys; roughly 56–58 distinct env keys are read" | 18 declared; 71 runtime names |
+| [`AGENTS.md`](../../AGENTS.md) | Historical environment inventory | 7 required + 2 defaulted + 11 optional = 20 declared; **79** runtime names read; and schema validation never executes (next section) |
+| [`README.md`](../../README.md) | Historical environment inventory | This page is canonical; the root README is not the effective contract |
+| [`CLAUDE.md`](../../CLAUDE.md) | Historical environment inventory | This page is canonical; counts can drift whenever a point-of-use read is added |
+| [`docs/OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md) (DEF-2 / ENV items) | Earlier counts retained in dated questions | 20 declared; 79 runtime names |
 
-Accurate phrasing: **7 hard-required + 2 defaulted + 9 optional = 18 declared; 71 named keys (+ 1 dynamic family) read at runtime by `src/`.**
+Accurate phrasing: **7 hard-required + 2 defaulted + 11 optional = 20 declared; 79 named keys (+ 1 dynamic family) read at runtime by `src/`.**
 
 ---
 
@@ -99,7 +99,7 @@ flowchart LR
 
 ---
 
-## 1. Schema-declared variables (18)
+## 1. Schema-declared variables (20)
 
 Ordered as declared. "Consumed at" lists non-test `src/` sites, plus root config and committed scripts where relevant.
 
@@ -113,7 +113,7 @@ Ordered as declared. "Consumed at" lists non-test `src/` sites, plus root config
 | `AUTH_SECRET` | `.min(1)` — L7 | Auth.js session/JWT key; also the KDF input for at-rest Google-token encryption | Read implicitly by Auth.js — neither `auth.ts` nor `auth-edge.ts` passes a `secret:` option. Read explicitly at [`google-oauth.ts:42`–`44`](../../src/lib/sales-dashboard/google-oauth.ts), where it is SHA-256'd into an AES key | Auth.js cannot issue sessions; `encryptionKey()` throws `AUTH_SECRET is required to encrypt Google tokens` ([`google-oauth.ts:43`](../../src/lib/sales-dashboard/google-oauth.ts)). **Rotating it invalidates every stored Google OAuth token row** |
 | `WISE_USER_ID` | `.min(1)` — L8 | Wise API user ID — the Basic-auth username half | [`wise/client.ts:216`](../../src/lib/wise/client.ts) (non-null assertion `!`); guarded reads at [`classrooms/data.ts:1152`](../../src/lib/classrooms/data.ts), [`student-promotions/data.ts:299`](../../src/lib/student-promotions/data.ts), [`wise-activity/reconciliation.ts:770`, `:797`](../../src/lib/wise-activity/reconciliation.ts) | `createWiseClient()` builds `Authorization: Basic` from the string `"undefined:undefined"` ([`client.ts:70`–`71`](../../src/lib/wise/client.ts)) and every Wise call 401s at request time. `classrooms/data.ts:1155`–`1157` and `student-promotions/data.ts:302`–`304` throw a named error instead; `reconciliation.ts:770`, `:797` return a typed error result — see [drift flag 5](#5-drift-flags-and-open-questions) |
 | `WISE_API_KEY` | `.min(1)` — L9 | Wise API key — Basic-auth password half **and** the `x-api-key` header ([`client.ts:73`](../../src/lib/wise/client.ts)) | [`wise/client.ts:217`](../../src/lib/wise/client.ts); the same guarded sites | as above |
-| `CRON_SECRET` | `.min(1)` — L12 | Bearer token protecting all **22** route files under `src/app/api/internal/` | Shared helper [`src/lib/internal/cron-auth.ts:8`](../../src/lib/internal/cron-auth.ts), imported by **16** internal routes; **6** routes inline an equivalent constant-time check — [`sync-wise/route.ts:17`](../../src/app/api/internal/sync-wise/route.ts), [`sync-credit-control/route.ts:20`](../../src/app/api/internal/sync-credit-control/route.ts), [`sync-sales-dashboard/route.ts:17`](../../src/app/api/internal/sync-sales-dashboard/route.ts), [`sync-room-utilization/route.ts:14`](../../src/app/api/internal/sync-room-utilization/route.ts), [`sync-competitor-intelligence/route.ts:13`](../../src/app/api/internal/sync-competitor-intelligence/route.ts), [`student-promotions/july-1/route.ts:11`](../../src/app/api/internal/student-promotions/july-1/route.ts) | **Fail-closed:** the helper returns `missing-secret` → HTTP 500 `Server misconfigured` ([`cron-auth.ts:22`–`24`](../../src/lib/internal/cron-auth.ts)). No cron can run. Comparison is `timingSafeEqual` behind a length pre-check ([`cron-auth.ts:12`–`14`](../../src/lib/internal/cron-auth.ts)) |
+| `CRON_SECRET` | `.min(1)` — L12 | Bearer token protecting all **24** route files under `src/app/api/internal/` | Most routes use [`src/lib/internal/cron-auth.ts`](../../src/lib/internal/cron-auth.ts); older routes retain behaviourally equivalent local checks. The complete route inventory is in [`crons.md`](./crons.md). | **Fail-closed:** a missing secret produces HTTP 500 `Server misconfigured`, while a mismatch produces 401. Comparisons use `timingSafeEqual` behind a length pre-check. |
 
 ### 1.2 Defaulted (2)
 
@@ -124,10 +124,11 @@ Ordered as declared. "Consumed at" lists non-test `src/` sites, plus root config
 
 > **Two `WISE_INSTITUTE_ID` consumers deliberately have no fallback and throw:** [`room-capacity/utilization.ts:433`–`434`](../../src/lib/room-capacity/utilization.ts) (`WISE_INSTITUTE_ID is required to sync room utilization`) and [`post-class-feedback/sync.ts:1053`–`1054`](../../src/lib/post-class-feedback/sync.ts) (`WISE_INSTITUTE_ID is not configured`). Every other consumer silently assumes the BeGifted tenant: the literal `696e1f4d90102225641cc413` appears **18** times in non-test `src/`, so the institute id is effectively hard-coded rather than configured, and the schema's `.default()` on L11 is never the source of that value.
 
-### 1.3 Optional (9)
+### 1.3 Optional (11)
 
 | Variable | Zod (`src/lib/env.ts`) | Purpose | Consumed at | If unset |
 |---|---|---|---|---|
+| `FOOT_TRAFFIC_PSEUDONYM_SECRET` | `.min(32).optional()` — L15 | HMAC key for stable, non-reversible student fingerprints in Onsite Foot Traffic | [`onsite-foot-traffic/sync.ts:187`–`189`](../../src/lib/onsite-foot-traffic/sync.ts) | **Fail-closed at the operation boundary:** the dashboard can render existing data, but every sync/backfill records a failed run before any Wise fetch or canonical-data replacement. Generate once and never rotate; rotation splits one student's identity across historical windows. See [`features/onsite-foot-traffic.md`](../features/onsite-foot-traffic.md) |
 | `LINE_CHANNEL_SECRET` | `.min(1).optional()` — L13 | LINE Messaging API channel secret; verifies inbound webhook signatures | [`line/client.ts:21`, `:26`](../../src/lib/line/client.ts) | `lineSchedulerEnabled()` returns `false` ([`client.ts:19`–`23`](../../src/lib/line/client.ts)) and the LINE integration is off. Note `.min(1).optional()` rejects `""` |
 | `LINE_CHANNEL_ACCESS_TOKEN` | `.min(1).optional()` — L14 | LINE channel access token for profile fetch and push/reply | [`line/client.ts:22`, `:30`–`31`](../../src/lib/line/client.ts) | The same gate. If a push is attempted anyway, `lineAccessToken()` throws `LINE_CHANNEL_ACCESS_TOKEN is not configured` ([`:31`](../../src/lib/line/client.ts)) |
 | `ENABLE_LINE_SCHEDULER` | `.optional()` — L15 | Kill switch for LINE webhook **ingest** (not for sending) | [`line/client.ts:20`](../../src/lib/line/client.ts) | **Enabled by default.** The test is `!== "false"`, so only the literal lowercase `false` disables it — and only when both LINE credentials are present. LINE integration is *stable (scheduler write-path flag-gated)*; see [`features/line-integration.md`](../features/line-integration.md) |
@@ -140,9 +141,9 @@ Ordered as declared. "Consumed at" lists non-test `src/` sites, plus root config
 
 ---
 
-## 2. Undeclared variables read at runtime (53 named + 1 dynamic family)
+## 2. Undeclared variables read at runtime or by committed scripts (65 named + 1 dynamic family)
 
-None of the following appear in `src/lib/env.ts`. Grouped by owning subsystem; 18 declared + 53 undeclared = the 71 runtime names.
+None of the following appear in `src/lib/env.ts`. Grouped by owning subsystem; 20 declared + 65 undeclared = 85 named runtime/script variables.
 
 ### 2.1 OpenAI and AI features (9)
 
@@ -252,15 +253,18 @@ Both variables are resolved at call time by [`src/lib/unearned-revenue/sync.ts`]
 | `SEED_ADMIN_EMAILS` | Comma-separated emails inserted into `admin_users` by the seed script | [`db/seed.ts:31`](../../src/lib/db/seed.ts) | Empty list — no admins seeded. Seed-time only; at runtime the allowlist is the `admin_users` table |
 | `SALES_DASHBOARD_CONNECTED_EMAIL` | **Vestigial.** Its only reader is the leave-requests fallback chain; the sales dashboard stores `connectedEmail` per source row in Postgres instead ([`sales-dashboard/data.ts:195`](../../src/lib/sales-dashboard/data.ts)) | [`leave-requests/config.ts:13`](../../src/lib/leave-requests/config.ts) | No effect unless `LEAVE_REQUESTS_CONNECTED_EMAIL` is also unset |
 
-### 2.9 Platform-injected (3) — set by Vercel, never by you
+### 2.9 PDF runtime and platform-injected values (6)
 
 | Variable | Read at | Notes |
 |---|---|---|
+| `CHROME_EXECUTABLE_PATH` | [`onsite-foot-traffic/pdf.ts`](../../src/lib/onsite-foot-traffic/pdf.ts) | Optional local-development override. Production uses the traced `@sparticuz/chromium` executable instead. |
+| `VERCEL` | [`onsite-foot-traffic/pdf.ts`](../../src/lib/onsite-foot-traffic/pdf.ts) | Vercel platform marker used to select serverless Chromium. |
+| `AWS_LAMBDA_FUNCTION_NAME` | [`onsite-foot-traffic/pdf.ts`](../../src/lib/onsite-foot-traffic/pdf.ts) | Secondary Lambda marker outside Vercel Fluid Compute; `VERCEL` is the production discriminator on Vercel. |
 | `VERCEL_ENV` | [`post-class-feedback/payout-config.ts:116`](../../src/lib/post-class-feedback/payout-config.ts) via `value()`, so a literal grep misses it | `production` / `preview` / `development`; drives the payout-target cross-check in §2.4 |
 | `VERCEL_URL` | [`classrooms/schedule-email.ts:272`](../../src/lib/classrooms/schedule-email.ts); [`leave-requests/config.ts:15`](../../src/lib/leave-requests/config.ts) | Per-deployment hostname without protocol — both readers prepend `https://` |
 | `VERCEL_PROJECT_PRODUCTION_URL` | [`classrooms/schedule-email.ts:269`](../../src/lib/classrooms/schedule-email.ts) | Stable production hostname; preferred over `VERCEL_URL` |
 
-### 2.10 Test and script-only (5 named, plus `TZ`)
+### 2.10 Test and script-only (6 named, plus `TZ`)
 
 Not part of the deployed contract.
 
@@ -272,6 +276,7 @@ Not part of the deployed contract.
 | `PRODUCTION_BRANCH` | [`scripts/assert-production-deploy-ready.mjs:5`](../../scripts/assert-production-deploy-ready.mjs) | Branch the guarded `deploy:prod` refuses to deviate from; defaults to `main` |
 | `GITHUB_ACTOR` | [`scripts/check-sales-dashboard-scope.mjs:14`](../../scripts/check-sales-dashboard-scope.mjs) | CI actor identity for the sales-dashboard scope guard |
 | `USER` | [`scripts/import-room-capacity-model.ts:303`](../../scripts/import-room-capacity-model.ts) | Local shell user, recorded as `createdBy` on imported capacity-model runs |
+| `FOOT_TRAFFIC_BACKFILL_ACTOR_EMAIL` | [`scripts/sync-onsite-foot-traffic.ts:26`](../../scripts/sync-onsite-foot-traffic.ts) | Optional audit actor stored on a manual foot-traffic backfill run |
 
 Several `scripts/*.ts` additionally hand-parse `.env.local` into `process.env` before running, because they execute outside the Next runtime — e.g. [`ipeds-import.ts:19`–`24`](../../scripts/ipeds-import.ts) and [`verify-drive-upload.ts:56`](../../scripts/verify-drive-upload.ts); others use `@next/env`'s `loadEnvConfig` ([`find-line-user-ids.ts:1`](../../scripts/find-line-user-ids.ts)). That is a dotenv shim, not a distinct variable.
 
@@ -307,7 +312,7 @@ flowchart TD
 
 ## 4. `.env.example` reconciliation
 
-`.env.example` lists **40** keys across 85 lines. Every one is genuinely read somewhere — there are no dead entries, and all 18 schema-declared keys are present. But **29** keys read by non-test runtime code are missing from it:
+`.env.example` lists **43** keys. Every one is genuinely read somewhere — there are no dead entries. It carries 19 of the 20 schema-declared keys; `CREDIT_REFRESH_MAX_AGE_MINUTES` is the declared omission. **Thirty-six** named keys read by non-test runtime code are missing from it:
 
 - **AI models and flags (6):** `OPENAI_SCHEDULER_SHADOW_MODEL`, `OPENAI_SCHEDULER_REASONING_EFFORT`, `OPENAI_PROGRESS_TEST_MODEL`, `OPENAI_POST_CLASS_FEEDBACK_MODEL`, `OPENAI_COMPETITOR_INTEL_MODEL`, `ENABLE_COMPETITOR_AI`
 - **Competitor providers (8):** `APIFY_API_TOKEN`, `APIFY_INSTAGRAM_ACTOR`, `APIFY_FACEBOOK_ACTOR`, `DATAFORSEO_LOGIN`, `DATAFORSEO_PASSWORD`, `COMPETITOR_APIFY_COST_PER_ITEM_USD`, `COMPETITOR_DATAFORSEO_COST_PER_QUERY_USD`, `COMPETITOR_INTEL_MONTHLY_CAP_USD`
@@ -315,21 +320,23 @@ flowchart TD
 - **Admissions email (3):** `RESEND_API_KEY`, `ADMISSIONS_EMAIL_FROM`, `ADMISSIONS_EMAIL_REPLY_TO`
 - **Unattended charging (2):** `POST_CLASS_AUTO_APPROVE_ENABLED`, `POST_CLASS_AUTO_APPROVE_GRACE_HOURS` — the two knobs that decide whether money moves without a human
 - **Ops and misc (4):** `SCHEDULE_EMAIL_PUBLIC_BASE_URL`, `LINE_VALIDATION_LEAD_EMAILS`, `SEED_ADMIN_EMAILS`, `SALES_DASHBOARD_CONNECTED_EMAIL`
-- **Platform-injected (3), correctly omitted:** `VERCEL_ENV`, `VERCEL_URL`, `VERCEL_PROJECT_PRODUCTION_URL`
+- **Wise traffic controls (4):** `WISE_FAR_HORIZON_MAX_AGE_MINUTES`, `WISE_AVAILABILITY_HORIZON_DAYS`, `WISE_MAX_CONCURRENCY`, `CREDIT_REFRESH_MAX_AGE_MINUTES`
+- **Local PDF runtime (1):** `CHROME_EXECUTABLE_PATH`
+- **Platform-injected (5), correctly omitted:** `VERCEL`, `VERCEL_ENV`, `VERCEL_URL`, `VERCEL_PROJECT_PRODUCTION_URL`, `AWS_LAMBDA_FUNCTION_NAME`
 
-The actionable gap is the first six groups — **26 keys** that change production behaviour and are discoverable only by reading source. The 5 test/script-only keys (§2.10) are reasonably omitted. The `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family cannot be listed at all, because the key name is computed at call time ([`budget.ts:19`](../../src/lib/competitor-intelligence/budget.ts)).
+The actionable production gap is the first seven groups — **30 keys** that change application behaviour and are discoverable only by reading source. The local Chrome override, platform-injected keys, and 6 test/script-only keys (§2.10) are reasonably omitted. The `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family cannot be listed at all, because the key name is computed at call time ([`budget.ts:19`](../../src/lib/competitor-intelligence/budget.ts)).
 
 **Three blank placeholders would fail the declared schema.** `.env.example:24`–`25` ship `LINE_CHANNEL_SECRET=` and `LINE_CHANNEL_ACCESS_TOKEN=`, and `.env.example:45` ships `APP_BASE_URL=`. A dotenv loader sets those to `""`, not `undefined`, and `z.string().min(1).optional()` / `z.string().url().optional()` reject `""`. Today this is harmless because the schema never runs and every consumer `.trim()`s and treats `""` as unset ([`line/client.ts:21`–`22`](../../src/lib/line/client.ts), [`link/route.ts:19`](../../src/app/api/student-schedule/link/route.ts)). If `src/lib/env.ts` is ever wired into a boot path, a `.env.local` copied verbatim from the template will throw on those three lines. `MAINTENANCE_MODE=`, `MAINTENANCE_BYPASS_EMAILS=`, and `LINE_SCHEDULE_BOT_ADMIN_IDS=` are plain `.optional()` strings and parse fine when blank.
 
-Two comments in the repo carried a stale cron count until 2026-09-02: [`.env.example:48`](../../.env.example) and [`src/lib/maintenance.ts:5`](../../src/lib/maintenance.ts) said "15 Vercel Crons". Both now read **17**, matching `vercel.json` — see [`crons.md`](./crons.md).
+Two comments in the repo historically carried stale cron counts. The current source of truth is **19** entries in `vercel.json` — see [`crons.md`](./crons.md).
 
 ---
 
 ## 5. Drift flags and open questions
 
 1. **The schema is dead code.** Nothing imports `src/lib/env.ts`, so its validation never runs and its `.default()` values never apply. Either wire it into a startup path (root layout, or a new `instrumentation.ts`) or relabel it as advisory. Tracked as DEF-2 / DEAD-1 / ENV-1 in [`OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md).
-2. **Prose counts are stale in several places.** [`AGENTS.md:291`](../../AGENTS.md) ("9 required") and [`:307`](../../AGENTS.md) ("9 required plus 9 optional … roughly 50 variables"), and [`README.md:180`–`187`](../../README.md) ("15 declared … 6 optional"), should all read 7 hard-required + 2 defaulted + 9 optional = 18 declared, 71 read at runtime. [`OPEN-QUESTIONS.md`](../OPEN-QUESTIONS.md) ENV-2 / ENV-3 still say 15 declared and 56–58 read. `CLAUDE.md:104`, `:120` has the 7/2/9 split right.
-3. **The schema covers 18 of 71 live keys.** Is direct `process.env` access with per-call-site guards the intended pattern, or should the schema become the inventory? Every `OPENAI_*`, `POST_CLASS_*`, `SCHEDULE_EMAIL_*`, `LEAVE_REQUESTS_*`, `UNEARNED_REVENUE_*`, `WISE_SESSION_*_VERIFIED`, `APIFY_*`, `DATAFORSEO_*`, `COMPETITOR_*`, `RESEND_API_KEY`, and `ADMISSIONS_EMAIL_*` key sits outside it. The `POST_CLASS_*` module argues for operation-boundary validation explicitly ([`payout-config.ts:65`–`71`](../../src/lib/post-class-feedback/payout-config.ts)); the others are silent.
+2. **Secondary prose inventories drift.** This page and [`docs/README.md`](../README.md) carry the mechanical counts. Older orientation files and open questions still contain historical totals and should not be used as an environment contract.
+3. **The schema covers 20 of 79 live keys.** Is direct `process.env` access with per-call-site guards the intended pattern, or should the schema become the inventory? Every `OPENAI_*`, `POST_CLASS_*`, `SCHEDULE_EMAIL_*`, `LEAVE_REQUESTS_*`, `UNEARNED_REVENUE_*`, `WISE_SESSION_*_VERIFIED`, `APIFY_*`, `DATAFORSEO_*`, `COMPETITOR_*`, `RESEND_API_KEY`, and `ADMISSIONS_EMAIL_*` key sits outside it. The `POST_CLASS_*` module argues for operation-boundary validation explicitly ([`payout-config.ts:65`–`71`](../../src/lib/post-class-feedback/payout-config.ts)); the others are silent.
 4. **`WISE_INSTITUTE_ID` is effectively hard-coded.** The literal `696e1f4d90102225641cc413` appears 18 times in non-test `src/` — 11 inline fallbacks plus 6 `DEFAULT_INSTITUTE_ID` consts. Only [`room-capacity/utilization.ts:433`](../../src/lib/room-capacity/utilization.ts) and [`post-class-feedback/sync.ts:1053`](../../src/lib/post-class-feedback/sync.ts) refuse to guess.
 5. **Three different failure modes for the same Wise credentials.** `createWiseClient()` ([`wise/client.ts:215`–`221`](../../src/lib/wise/client.ts)) asserts `WISE_USER_ID!` / `WISE_API_KEY!` and builds a client whose Basic header encodes `"undefined:undefined"` ([`:70`](../../src/lib/wise/client.ts)), 401ing at request time; `createWiseClientFromEnv()` ([`classrooms/data.ts:1151`–`1159`](../../src/lib/classrooms/data.ts)) and `createPromotionWiseClient()` ([`student-promotions/data.ts:298`–`306`](../../src/lib/student-promotions/data.ts)) throw immediately with named errors; [`wise-activity/reconciliation.ts:770`, `:797`](../../src/lib/wise-activity/reconciliation.ts) return a typed error result.
 6. **`CRON_SECRET` checking is duplicated six times.** [`cron-auth.ts`](../../src/lib/internal/cron-auth.ts) is the shared helper with 16 route importers, yet six internal routes reimplement the identical constant-time comparison inline. A change to the algorithm needs seven edits.

@@ -51,13 +51,13 @@ Returns the whole ops payload in one object. Read-only: no writes, no Wise calls
 |-----|------|-------|
 | `checkedAt` | ISO string | `now.toISOString()` — when the payload was assembled. |
 | `overall` | object | `status`, `headline`, `detail`, and six counts (`healthyCount`, `lateCount`, `failingCount`, `runningCount`, `unknownCount`, `manualOnlyCount`). Roll-up rule at [`dashboard.ts:856-886`](../../../src/lib/data-health/dashboard.ts): the worst status among **non-manual-only** jobs wins by `statusRank` ([`cron-registry.ts:407-414`](../../../src/lib/data-health/cron-registry.ts)), and an all-`unknown` sweep with at least one healthy job reports `healthy`. |
-| `cronJobs` | `CronJobHealth[]` | One entry per registry job, in registry order — **22** at this revision ([`cron-registry.ts:47-399`](../../../src/lib/data-health/cron-registry.ts)). Shape at [`types.ts:28-54`](../../../src/lib/data-health/types.ts). |
-| `dataDomains` | `DataDomainHealth[]` | **9** freshness cards, hard-coded in order: `wise_snapshot`, `wise_activity`, `post_class_feedback`, `sales_dashboard`, `competitor_intelligence`, `credit_control`, `leave_requests`, `class_assignments`, `room_utilization` ([`dashboard.ts:483-593`](../../../src/lib/data-health/dashboard.ts)). |
+| `cronJobs` | `CronJobHealth[]` | One entry per registry job, in registry order — **24** at this revision ([`cron-registry.ts`](../../../src/lib/data-health/cron-registry.ts)). Shape at [`types.ts:28-54`](../../../src/lib/data-health/types.ts). |
+| `dataDomains` | `DataDomainHealth[]` | **10** freshness cards, hard-coded in order: `wise_snapshot`, `wise_activity`, `post_class_feedback`, `sales_dashboard`, `competitor_intelligence`, `credit_control`, `leave_requests`, `class_assignments`, `room_utilization`, `onsite_foot_traffic` ([`dashboard.ts`](../../../src/lib/data-health/dashboard.ts)). |
 | `wiseSnapshot` | object | `activeSnapshotId`, `lastSuccessfulSync`, `lastFailedSync`, `lastFailureError`, `staleAgeMs`, `staleMinutes`, `stats` (nine snapshot counters, or `null` when no `snapshot_stats` row exists). |
 | `issueSummary` | `Record<string, number>` | `snapshot_stats.issuesByType` for the active snapshot, `{}` when absent. |
 | `issueDetails` | object | `unresolvedAliases`, `unresolvedModality`, `unmappedTags` — every `data_issues` row for the active snapshot, partitioned by `type` ([`dashboard.ts:413-430`](../../../src/lib/data-health/dashboard.ts)). Not paginated or capped. |
-| `recentRuns` | `RunHistoryItem[]` | Eleven domain run tables flattened into one list, sorted by `startedAt` desc and **sliced to 30** ([`dashboard.ts:620-750`](../../../src/lib/data-health/dashboard.ts)). |
-| `manualActions` | array | `{ key, label, dangerous, confirmationLabel }` for all 22 registry jobs ([`dashboard.ts:989-994`](../../../src/lib/data-health/dashboard.ts)) — the client uses this to decide whether to prompt before calling the job runner. |
+| `recentRuns` | `RunHistoryItem[]` | Thirteen domain run sources flattened into one list, sorted by `startedAt` desc and **sliced to 30** ([`dashboard.ts`](../../../src/lib/data-health/dashboard.ts)). |
+| `manualActions` | array | `{ key, label, dangerous, confirmationLabel }` for all 24 registry jobs ([`dashboard.ts`](../../../src/lib/data-health/dashboard.ts)) — the client uses this to decide whether to prompt before calling the job runner. |
 | *compatibility block* | — | `lastSuccessfulSync`, `lastFailedSync`, `lastFailureError`, `staleAgeMs`, `staleMinutes`, `activeSnapshotId`, `stats`, `issuesByType`, `unresolvedAliases`, `unresolvedModality`, `unmappedTags`, `recentSyncs` are duplicated at the top level for the stale banner and older callers ([`types.ts:132-151`](../../../src/lib/data-health/types.ts)). `recentSyncs` is the last 8 `sync_runs` rows. |
 
 **`unresolvedModality` includes two issue types.** Both the payload builder and the route's re-exported helper filter `type === "modality" || type === "conflict_model"` — group-level modality issues from `deriveModality` plus session-level conflicts from `detectSessionModalityConflict`, surfaced as one admin-facing number (MOD-03 / D-10, [`modality-counter.ts:1-31`](../../../src/app/api/data-health/modality-counter.ts)). The helper lives in its own module so Vitest can import it without pulling the Next/`next-auth` route graph; `route.ts:6-12` re-exports it as `selectModalityIssues`.
@@ -76,7 +76,7 @@ Returns the whole ops payload in one object. Read-only: no writes, no Wise calls
 
 `proof` is `direct` when a `triggerSource: "cron"` invocation row exists, `inferred` when only the job's own run table has evidence, `none` otherwise ([`status.ts:218-220`](../../../src/lib/data-health/status.ts)). Note `latestCronInvocation` filters on `triggerSource === "cron"` ([`dashboard.ts:439`](../../../src/lib/data-health/dashboard.ts)) — a manual run from this page is **not** direct proof that the schedule fired, though it does appear in `latestInvocation` and `recentInvocations`.
 
-**Query volume.** One read each for the latest successful sync run, the latest failed sync run, and the active snapshot; then conditionally `snapshot_stats` and all `data_issues` for that snapshot; then the invocation window; then 14 parallel run-table reads ([`dashboard.ts:752-806`](../../../src/lib/data-health/dashboard.ts)), each `LIMIT 8` except `postClassNotifications` (32) and `roomUtilization` (1). The invocation read is a `row_number()` window partitioned by `job_key`, capped at `INVOCATIONS_PER_JOB = 8` per job over a 45-day lookback ([`dashboard.ts:828-854`](../../../src/lib/data-health/dashboard.ts)) — per-job, not global, so a 30-minute job cannot push a daily job's only proof out of the window.
+**Query volume.** One read each for the latest successful sync run, the latest failed sync run, and the active snapshot; then conditionally `snapshot_stats` and all `data_issues` for that snapshot; then the invocation window; then 16 parallel run-table reads ([`dashboard.ts`](../../../src/lib/data-health/dashboard.ts)), each `LIMIT 8` except `postClassNotifications` (32) and `roomUtilization` (1). The invocation read is a `row_number()` window partitioned by `job_key`, capped at `INVOCATIONS_PER_JOB = 8` per job over a 45-day lookback — per-job, not global, so a 30-minute job cannot push a daily job's only proof out of the window.
 
 **Degradation, not failure.** If `cron_invocations` does not exist, `fetchCronInvocations` catches the error, logs `console.info`, and returns `[]`, so the dashboard falls back to run-table inference instead of 500-ing ([`dashboard.ts:846-851`](../../../src/lib/data-health/dashboard.ts)). Any other error propagates to the route's catch.
 
@@ -97,7 +97,7 @@ Returns the whole ops payload in one object. Read-only: no writes, no Wise calls
 
 Runs one registered job now, **in-process** — it calls the job's lib function directly rather than issuing an HTTP request to that job's cron route ([`run-job.ts:29-209`](../../../src/lib/data-health/run-job.ts)). Handler [`run/route.ts:13-44`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts). `export const maxDuration = 800` ([`:11`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)).
 
-**Path parameter:** `jobKey` — one of the 22 `CronJobKey` values ([`cron-registry.ts:3-25`](../../../src/lib/data-health/cron-registry.ts)), resolved via `getCronJobDefinition` ([`:403-405`](../../../src/lib/data-health/cron-registry.ts)). `context.params` is a `Promise` and is awaited ([`run/route.ts:19`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)).
+**Path parameter:** `jobKey` — one of the 24 `CronJobKey` values ([`cron-registry.ts`](../../../src/lib/data-health/cron-registry.ts)), resolved via `getCronJobDefinition`. `context.params` is a `Promise` and is awaited ([`run/route.ts:19`](../../../src/app/api/data-health/jobs/[jobKey]/run/route.ts)).
 
 **Body** (JSON; a missing or unparseable body degrades to `{}`):
 
@@ -117,13 +117,14 @@ No other field is read. The client always sends `{ confirmed: action.dangerous }
 
 Because the capability gate precedes the confirmation gate, a non-manager asking for a dangerous post-class job sees 403, never 409.
 
-**The registry, and which keys the runner actually implements.** All 22 keys pass gate 2 and reach `runDataHealthJob`, but the dispatcher implements **15**; the other **7** fall through to a terminal `404 {"error":"Unknown job"}` ([`run-job.ts:207`](../../../src/lib/data-health/run-job.ts)) — *inside* the audit wrapper, so those attempts do leave a failed `cron_invocations` row. For those seven, a direct `CRON_SECRET` call to the cron route is the only manual path.
+**The registry, and which keys the runner actually implements.** All 24 keys pass gate 2 and reach `runDataHealthJob`, but the dispatcher implements **16**; the other **8** fall through to a terminal `404 {"error":"Unknown job"}` ([`run-job.ts`](../../../src/lib/data-health/run-job.ts)) — *inside* the audit wrapper, so those attempts do leave a failed `cron_invocations` row. For those eight, a direct `CRON_SECRET` call or a feature-specific manual route is required.
 
 | Job key | Schedule | `dangerous` | Runner branch | Success body |
 |---|---|:---:|:---:|---|
 | `wise_snapshot` | `*/30 * * * *` | — | yes | full sync result + `staleRunningSyncsFailed`; `202` when a run is already in flight ([`run-wise-sync.ts:142-167`](../../../src/lib/sync/run-wise-sync.ts)) |
 | `wise_activity` | `2,17,32,47 * * * *` | — | yes | `{ok:true, result}`; `409` on `WiseActivitySyncAlreadyRunningError` ([`run-job.ts:47-63`](../../../src/lib/data-health/run-job.ts)) |
 | `sales_dashboard` | `10,40 * * * *` | — | yes | `{ok:true, results, projectionResult}` — refreshable sources **and** the active projection source ([`run-job.ts:65-80`](../../../src/lib/data-health/run-job.ts)) |
+| `unearned_revenue` | `30 18 * * *` | — | **no → 404** | — |
 | `competitor_intelligence` | `28 18 * * 0` | — | yes | `{ok, result}`; status `200`/`500` from `result.status`, `409` when the message contains `already running` ([`run-job.ts:82-98`](../../../src/lib/data-health/run-job.ts)) |
 | `credit_control` | `20,50 * * * *` | — | yes | sync result + `syncRunId` + `staleRunningSyncsFailed`; `202` when already running ([`run-sync-request.ts:138-160`](../../../src/lib/credit-control/run-sync-request.ts)) |
 | `progress_tests` | `25,55 * * * *` | — | **no → 404** | — |
@@ -135,6 +136,7 @@ Because the capability gate precedes the confirmation gate, a non-manager asking
 | `post_class_feedback_deadline` | manual-only | yes | yes | same as above |
 | `post_class_feedback_payout_accrual` | `33 * * * *` | yes | yes | `{ok:true, accrual, finalize}` — accrual pass then finalize pass ([`run-job.ts:141-150`](../../../src/lib/data-health/run-job.ts)) |
 | `leave_requests` | `15,45 * * * *` | — | yes | `{ok:true, result}` ([`run-job.ts:152-163`](../../../src/lib/data-health/run-job.ts)) |
+| `onsite_foot_traffic` | `18 18 * * *` | — | yes | Sync result; `202` when a single-flight run is already active. |
 | `classroom_morning` | `41 23 * * *` | yes | yes | the automation result verbatim; `500 {ok:false, error}` on throw ([`run-job.ts:165-173`](../../../src/lib/data-health/run-job.ts)) |
 | `classroom_admin_email` | `4,14,24,36 0 * * *` | yes | yes | the email-run result verbatim, status `500` when `result.status === "failed"` ([`run-job.ts:175-184`](../../../src/lib/data-health/run-job.ts)) |
 | `student_promotions_july_1` | `5 17 30 6 *` | yes | **no → 404** | — |
@@ -144,7 +146,7 @@ Because the capability gate precedes the confirmation gate, a non-manager asking
 | `room_utilization` | manual-only | — | yes | `{ok:true, ...result}` ([`run-job.ts:197-205`](../../../src/lib/data-health/run-job.ts)) |
 | `line_backlog_recovery` | manual-only | — | **no → 404** | — |
 
-Three of the seven unimplemented keys are `dangerous`, so a caller must still send `confirmed: true` to receive the 404 — gate 4 runs before dispatch.
+Three of the eight unimplemented keys are `dangerous`, so a caller must still send `confirmed: true` to receive the 404 — gate 4 runs before dispatch.
 
 **Response shape is not uniform.** Each branch returns whatever its lib function produced; there is no envelope contract across jobs. Where a Data Health branch exists it can also differ from the cron route's own response — for example the post-class digest branch returns `{ok, result}` where the route returns `{ok, digest}`.
 
@@ -216,7 +218,7 @@ The push half of Data Health: it re-runs the dashboard's own health derivation o
 * **`unknown` is alertable, and that is deliberate.** `student_promotions_july_1` is pinned to *no* run evidence rather than borrowing the fallback, because its run table mixes admin drafts with the cron apply; a dangerous write-path cron reporting `healthy` without ever firing would be worse than a false `unknown` ([`dashboard.ts:274-286`](../../../src/lib/data-health/dashboard.ts)).
 * **Six registry keys reach the run-evidence fallback, not one.** The fallback at [`dashboard.ts:317-341`](../../../src/lib/data-health/dashboard.ts) synthesizes a `success` run from the newest `room_utilization_sessions` row, and its comment states that only `room_utilization` gets there. Enumerating `job.key ===` branches against the registry shows six keys with no branch: `post_class_feedback_backfill`, `post_class_feedback_payout_accrual`, `admissions_notifications`, `line_credit_digest`, `room_utilization`, `line_backlog_recovery`. For the four scheduled ones this only matters when direct `cron_invocations` proof is absent (all four routes are audit-wrapped, so normally it is present) — but with an empty or missing invocation table, a fresh room-utilization row can stand in as their inferred success evidence. Comment and reachability have drifted; the comment is the stale half.
 * **Registry `maxDurationSeconds` — not the route's `export const maxDuration` — drives stuck detection.** A lower registry number reports a legitimate long run as `failing`. The credit-control pair was the documented instance of this drift and is now reconciled at 800 on both sides ([`cron-registry.ts:119-122`](../../../src/lib/data-health/cron-registry.ts)); a regression test reads each route file as text and asserts every registry entry mirrors its route's declared `maxDuration`, so the two can no longer diverge silently ([`cron-registry.test.ts:57-73`](../../../src/lib/data-health/__tests__/cron-registry.test.ts)).
-* **17 scheduled, 22 registered.** `vercel.json` carries 17 `crons` entries; the registry declares 22, the extra five being `manualOnly: true` with no schedule — the three parked post-class notification jobs, `room_utilization`, and `line_backlog_recovery`. Nine entries are `dangerous: true`.
+* **19 scheduled, 24 registered.** `vercel.json` carries 19 `crons` entries; the registry declares 24, the extra five being `manualOnly: true` with no schedule — the three parked post-class notification jobs, `room_utilization`, and `line_backlog_recovery`. Nine entries are `dangerous: true`.
 * **`GET /api/data-health` is not cheap.** ~20 Postgres round trips per call and an uncapped `data_issues` read for the active snapshot. The stale banner fetches it once per workspace-path mount, and the dashboard re-fetches it after every manual run.
 
 ## Tests

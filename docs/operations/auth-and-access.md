@@ -438,16 +438,16 @@ middleware's `allowedPages` filter for lane enforcement.
 
 ### How guards are distributed across the API
 
-Of the 180 `route.ts` files under `src/app/api/`:
+Of the 191 `route.ts` files under `src/app/api/`:
 
 | Bucket | Files | Credential |
 |---|---:|---|
-| `/api/internal/*` | 22 | `CRON_SECRET` (5 also accept a session fallback — see below) |
+| `/api/internal/*` | 24 | `CRON_SECRET` (5 also accept a session fallback — see below) |
 | Auth.js catch-all | 1 | Auth.js internals |
-| Direct `auth()` from `@/lib/auth` | 90 | Auth.js session |
-| Domain guard in `src/lib/*` | 63 | admissions 21, post-class-feedback 13, competitor-intelligence 8, student-promotions 8, credit-control 7, progress-tests 6 |
+| Direct `auth()` from `@/lib/auth` | 95 | Auth.js session |
+| Domain guard in `src/lib/*` | 67 | admissions 21, post-class-feedback 13, competitor-intelligence 8, student-promotions 8, credit-control 7, progress-tests 6, unearned-revenue 4 |
 | Session-less public handlers | 4 | `floor-plan-map` (none), `line/webhook` (HMAC), two OA-resolver token endpoints |
-| **Total** | **180** | |
+| **Total** | **191** | |
 
 Per-endpoint tiers: [`../reference/api/index.md`](../reference/api/index.md).
 

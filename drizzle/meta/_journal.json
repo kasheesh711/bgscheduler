@@ -512,6 +512,13 @@
       "when": 1788492291321,
       "tag": "0072_unearned_revenue_exact_package_overview",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1788505032192,
+      "tag": "0073_funny_ego",
+      "breakpoints": true
     }
   ]
 }

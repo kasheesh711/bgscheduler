@@ -1,9 +1,9 @@
 # Database Reference — Master Table Index
 
-The canonical lookup for every table in the BGScheduler Postgres database: **199 tables**, declared in
-[`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) (5,111 lines, Drizzle ORM) and migrated under
-[`drizzle/`](../../../drizzle) (73 `.sql` files, latest `0072_unearned_revenue_exact_package_overview.sql`). The
-count is mechanical: `grep -c '= pgTable(' src/lib/db/schema.ts` → **199**.
+The canonical lookup for every table in the BGScheduler Postgres database: **203 tables**, declared in
+[`src/lib/db/schema.ts`](../../../src/lib/db/schema.ts) (5,198 lines, Drizzle ORM) and migrated under
+[`drizzle/`](../../../drizzle) (74 `.sql` files, latest `0073_funny_ego.sql`). The
+count is mechanical: `grep -c '= pgTable(' src/lib/db/schema.ts` → **203**.
 The 61 Postgres enum types those tables bind live in [`enums.md`](./enums.md).
 
 This page answers one question per row: **what is this table, what is exactly one row of it, and who
@@ -14,7 +14,7 @@ and flows live under [`docs/features/`](../../features/).
 
 ## Domains
 
-Nineteen domains, one per `erd-*.md` page, so the last column of the big table is never ambiguous:
+Twenty domains, one per `erd-*.md` page, so the last column of the big table is never ambiguous:
 each table is documented on exactly one diagram page.
 
 | Domain | Tables | ERD page |
@@ -34,11 +34,12 @@ each table is documented on exactly one diagram page.
 | `student-promotions` | 6 | [erd-student-promotions.md](./erd-student-promotions.md) |
 | `leave-requests` | 5 | [erd-leave-requests.md](./erd-leave-requests.md) |
 | `room-capacity` | 4 | [erd-room-capacity.md](./erd-room-capacity.md) |
+| `onsite-foot-traffic` | 4 | [erd-onsite-foot-traffic.md](./erd-onsite-foot-traffic.md) |
 | `tutor-profiles` | 2 | [erd-tutor-profiles.md](./erd-tutor-profiles.md) |
 | `wise-activity` | 2 | [erd-wise-activity.md](./erd-wise-activity.md) |
 | `learning-plans` | 1 | [erd-learning-plans.md](./erd-learning-plans.md) |
 | `student-schedule` | 1 | [erd-student-schedule.md](./erd-student-schedule.md) |
-| **Total** | **199** | |
+| **Total** | **203** | |
 
 > **`core` now means 23 tables, not 124.** Earlier revisions of this index used ten domain labels and
 > credited `core` with everything that had no page of its own. Eight of those sub-areas — post-class
@@ -96,11 +97,11 @@ Three structural patterns recur often enough to state once, so the grain cells n
   purpose. `past_session_blocks` carries that intent in the schema comment: it is the one
   cross-snapshot tutor data table, and first-observation-wins — a later retroactive cancellation does
   not rewrite a captured row (`schema.ts:2239-2257`).
-- **Single-flight in Postgres.** Thirteen run ledgers enforce concurrency with a partial
+- **Single-flight in Postgres.** Fourteen run ledgers enforce concurrency with a partial
   `uniqueIndex(...).where(status = 'running')`, so the guard lives in the database rather than in
-  application code. Ten are globally single-flight; three are scoped — `sales_dashboard_import_runs`
+  application code. Eleven are globally single-flight; three are scoped — `sales_dashboard_import_runs`
   and `sales_dashboard_projection_import_runs` allow one running run *per source*, and
-  `ipeds_import_runs` one *per data year* (`schema.ts:475,569,668,760,866,1179,1778,2112,2682,2997,3021,3248,4570`).
+  `ipeds_import_runs` one *per data year* (`schema.ts:475,569,668,760,866,1179,1778,2112,2682,2997,3021,3248,4570,5134`).
 
 ## Owning-feature legend
 
@@ -114,6 +115,7 @@ that feature. The feature doc carries the rules and the why.
 | Tutor Profiles | `src/lib/tutor-business-profiles.ts`, `src/lib/tutor-profile-import.ts` | [tutor-profiles.md](../../features/tutor-profiles.md) |
 | Classroom Assignments | `src/lib/classrooms/` | [classroom-assignments.md](../../features/classroom-assignments.md) |
 | Room Capacity | `src/lib/room-capacity/` | [room-capacity.md](../../features/room-capacity.md) |
+| Onsite Foot Traffic | `src/lib/onsite-foot-traffic/` | [onsite-foot-traffic.md](../../features/onsite-foot-traffic.md) |
 | Sales Dashboard | `src/lib/sales-dashboard/` | [sales-dashboard.md](../../features/sales-dashboard.md) |
 | Credit Control | `src/lib/credit-control/` | [credit-control.md](../../features/credit-control.md) |
 | Unearned Revenue | `src/lib/unearned-revenue/` | [unearned-revenue.md](../../features/unearned-revenue.md) |
@@ -136,7 +138,7 @@ that feature. The feature doc carries the rules and the why.
 | US Universities | `src/lib/us-universities/` | [us-universities.md](../../features/us-universities.md) |
 | Platform auth | `src/lib/auth.ts`, `src/lib/auth-access.ts`, `src/lib/db/seed.ts` | cross-cutting — [handbook/architecture.md](../../handbook/architecture.md) |
 
-## All 199 tables
+## All 203 tables
 
 Ordered by domain (the [Domains](#domains) order, `core` first), then by declaration order in
 `src/lib/db/schema.ts`.
@@ -336,6 +338,10 @@ Ordered by domain (the [Domains](#domains) order, `core` first), then by declara
 | `room_capacity_forecast_drivers`<br><sub>2743–2764</sub> | `roomCapacityForecastDrivers` | room-capacity | Scenario × month driver row inside a model run: leads, conversion, revenue, capacity utilization. Conventional. | Room Capacity | [room-capacity][rc] |
 | `room_capacity_demand_mix`<br><sub>2766–2782</sub> | `roomCapacityDemandMix` | room-capacity | Demand-mix bucket (weekday × start × duration × mode × subject) inside a model run, with its share. Conventional. | Room Capacity | [room-capacity][rc] |
 | `room_capacity_package_mix`<br><sub>2784–2798</sub> | `roomCapacityPackageMix` | room-capacity | Package-hour bucket inside a model run, with average revenue and share. Conventional. | Room Capacity | [room-capacity][rc] |
+| `onsite_foot_traffic_sync_runs`<br><sub>5116–5139</sub> | `onsiteFootTrafficSyncRuns` | onsite-foot-traffic | PAST-session reconciliation attempt; partial unique on `status = 'running'` enforces global single-flight. | Onsite Foot Traffic | [onsite-foot-traffic][oft] |
+| `onsite_foot_traffic_sessions`<br><sub>5142–5167</sub> | `onsiteFootTrafficSessions` | onsite-foot-traffic | Current canonical Wise PAST session, keyed by `wise_session_id`, including fail-closed classification and quality counts but no student/class-title PII. | Onsite Foot Traffic | [onsite-foot-traffic][oft] |
+| `onsite_foot_traffic_visits`<br><sub>5170–5182</sub> | `onsiteFootTrafficVisits` | onsite-foot-traffic | Qualifying participant × Wise session student-visit; unique per `(wise_session_id, participant_key)`, with only an HMAC fingerprint for stable identities. | Onsite Foot Traffic | [onsite-foot-traffic][oft] |
+| `onsite_foot_traffic_report_snapshots`<br><sub>5185–5197</sub> | `onsiteFootTrafficReportSnapshots` | onsite-foot-traffic | Immutable de-identified aggregate payload used by both HTML and PDF downloads; expires after 30 days. | Onsite Foot Traffic | [onsite-foot-traffic][oft] |
 | `tutor_contacts`<br><sub>1965–1983</sub> | `tutorContacts` | tutor-profiles | Tutor's contact and delivery record (unique `canonical_key`); onsite and online addresses are kept in separate columns. | Tutor Profiles | [tutor-profiles][tp] |
 | `tutor_business_profiles`<br><sub>1985–2019</sub> | `tutorBusinessProfiles` | tutor-profiles | Editorial business profile — PK `canonical_key`: parent-safe summary, fit signals, and internal notes Wise does not store. | Tutor Profiles | [tutor-profiles][tp] |
 | `wise_activity_events`<br><sub>518–551</sub> | `wiseActivityEvents` | wise-activity | Wise audit event, deduped on `event_id` (unique). A read-only mirror — the app never writes back to Wise. | Wise Activity Audit | [wise-activity][wa] |
@@ -369,6 +375,7 @@ Ordered by domain (the [Domains](#domains) order, `core` first), then by declara
 [sp]: ./erd-student-promotions.md
 [lr]: ./erd-leave-requests.md
 [rc]: ./erd-room-capacity.md
+[oft]: ./erd-onsite-foot-traffic.md
 [tp]: ./erd-tutor-profiles.md
 [wa]: ./erd-wise-activity.md
 [lp]: ./erd-learning-plans.md

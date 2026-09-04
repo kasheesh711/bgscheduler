@@ -524,9 +524,9 @@ The pieces behind those branches:
 - **`skipped` counts as success** when computing `latestSuccessAt` (`:227-230`) — the single-flight
   case again.
 
-The registry holds **22 jobs**, of which **17 are scheduled** and 5 are `manualOnly`
-(`src/lib/data-health/cron-registry.ts:47-399`); the 17 match `vercel.json` one-for-one, and
-`src/__tests__/vercel-crons.test.ts:17-35` pins every schedule string so a stagger regression fails
+The registry holds **24 jobs**, of which **19 are scheduled** and 5 are `manualOnly`
+(`src/lib/data-health/cron-registry.ts`); the 19 match `vercel.json` one-for-one, and
+`src/__tests__/vercel-crons.test.ts` pins every schedule string so a stagger regression fails
 the build.
 
 The overall verdict takes the **worst non-manual status by rank** (failing 5, late 4, running 3,
@@ -537,8 +537,12 @@ overall `unknown` is displayed as `healthy` when at least one job is healthy
 
 ### 5.1 Where run evidence comes from, per job
 
-`pickJobRuns` (`src/lib/data-health/dashboard.ts:142-341`) maps a registry key to the ledger that
+`pickJobRuns` (`src/lib/data-health/dashboard.ts`) maps a registry key to the ledger that
 proves it. Three cases deserve attention:
+
+- **`onsite_foot_traffic` reads only its own reconciliation ledger.** It does not borrow the stale
+  `room_utilization_sessions` fallback, so Data Health cannot report a healthy foot-traffic sync
+  merely because Room Capacity was refreshed at some earlier time.
 
 - **`student_promotions_july_1` deliberately gets no run evidence** (`:274-286`). Its route is not
   audit-wrapped and its run table mixes admin drafts with the cron apply, so borrowing any fallback

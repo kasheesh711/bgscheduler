@@ -1,6 +1,6 @@
 # Overview
 
-BGScheduler is the internal admin platform BeGifted Education runs on top of [Wise](https://api.wiseapp.live), the third-party scheduling system that holds the tenant's teachers, students, sessions, and billing. Wise is the source of truth but is slow and rate-limited, so BGScheduler never queries it on the request path: background jobs pull data, normalize it through dedicated domain modules, persist it to Postgres under an immutable snapshot id, and serve reads from an in-memory index rebuilt only when the snapshot changes ([`src/lib/sync/orchestrator.ts:50`](../../src/lib/sync/orchestrator.ts), [`src/lib/search/index.ts:95-112`](../../src/lib/search/index.ts)). What began as a tutor-availability search tool now carries 22 feature areas covering scheduling, student lifecycle, finance, market intelligence, and data operations — all behind Google OAuth with a Postgres allowlist, except for one deliberately public parent-facing page.
+BGScheduler is the internal admin platform BeGifted Education runs on top of [Wise](https://api.wiseapp.live), the third-party scheduling system that holds the tenant's teachers, students, sessions, and billing. Wise is the source of truth but is slow and rate-limited, so BGScheduler keeps it off normal dashboard read paths: background jobs pull data, normalize it through dedicated domain modules, and persist it to Postgres; tutor availability alone additionally serves from an in-memory index rebuilt on snapshot change ([`src/lib/sync/orchestrator.ts:50`](../../src/lib/sync/orchestrator.ts), [`src/lib/search/index.ts:95-112`](../../src/lib/search/index.ts)). What began as a tutor-availability search tool now carries 27 documented feature areas covering scheduling, student lifecycle, finance, market intelligence, and data operations — all behind Google OAuth with a Postgres allowlist, except for one deliberately public parent-facing page.
 
 Two rules shape almost every feature below. **Fail-closed**: an unresolved identity, modality, or qualification routes to "Needs review" and is never reported as available ([`src/lib/search/engine.ts:143`](../../src/lib/search/engine.ts)). **Read-mostly toward Wise**: writeback is opt-in, narrow, and usually flag-gated — a failed sync preserves the previous snapshot rather than promoting a partial one, and promotion is blocked outright when more than half of identity groups are unresolved ([`orchestrator.ts:476`](../../src/lib/sync/orchestrator.ts)).
 
@@ -48,9 +48,13 @@ The LINE Official Account inbox: signature-verified webhook ingest, contact reso
 
 Room utilization is wired end to end and is the only part users can reach: the dashboard fetches `/api/room-capacity/utilization` and nothing else ([`src/components/room-capacity/room-capacity-dashboard.tsx:354`](../../src/components/room-capacity/room-capacity-dashboard.tsx)). The `month` and `forecast` engines are implemented, tested, and authenticated, but their routes have no frontend consumer anywhere in `src/`. The feeding sync is registered `manualOnly: true` with no `vercel.json` entry, so it runs only when someone triggers it from the Data Health job list ([`src/lib/data-health/cron-registry.ts:370-382`](../../src/lib/data-health/cron-registry.ts)). 3 endpoints, 5 tables. See [room-capacity](../features/room-capacity.md).
 
+### Onsite Foot Traffic — `stable in code; rollout-gated`
+
+An internal attendance proxy for how many students onsite classes bring into the centre. A visit requires an ended offline session, an active physical room, a non-teacher participant, and positive consumed credit; stable Wise student IDs are HMAC-fingerprinted so unique-student counts work without storing or exporting identity. The default research window is March–September 2026, with September labelled MTD until the month closes. The page includes exact tables beneath every chart, five CSV grains, and immutable self-contained HTML/PDF analytics packs. Its daily 01:18 Bangkok PAST-session reconciliation replaces the previous 35 completed days so late attendance and cancellations correct history. 6 endpoints including the cron, 4 tables. See [onsite-foot-traffic](../features/onsite-foot-traffic.md).
+
 ### Data Health — `stable`
 
-The operations command center for everything above: cron firing history, data freshness, snapshot fidelity, and unresolved normalization issues. Its registry declares 22 jobs — the 17 scheduled in `vercel.json` plus 5 registered `manualOnly` — and each entry carries its own cadence, lateness threshold, and a confirmation label for the ones marked dangerous ([`src/lib/data-health/cron-registry.ts`](../../src/lib/data-health/cron-registry.ts)). The `cron-watchdog` job at `7,37 * * * *` supervises the rest. 2 endpoints. See [data-health](../features/data-health.md).
+The operations command center for everything above: cron firing history, data freshness, snapshot fidelity, and unresolved normalization issues. Its registry declares 24 jobs — the 19 scheduled in `vercel.json` plus 5 registered `manualOnly` — and each entry carries its own cadence, lateness threshold, and a confirmation label for the ones marked dangerous ([`src/lib/data-health/cron-registry.ts`](../../src/lib/data-health/cron-registry.ts)). The `cron-watchdog` job at `7,37 * * * *` supervises the rest. 2 endpoints. See [data-health](../features/data-health.md).
 
 ### Tutor Profiles — `stable`
 
@@ -118,15 +122,15 @@ A read-only research console over a curated IPEDS slice: filterable institution 
 
 | Dimension | Count |
 |---|---:|
-| Database tables | **189** |
-| HTTP endpoints (method + path) | **243** |
-| Pages (`page.tsx`) | **31** |
-| Route files (`route.ts`) | 180 |
-| Scheduled crons (`vercel.json`) | 17 |
-| Registered jobs (Data Health registry) | 22 |
-| Feature areas | 22 |
+| Database tables | **203** |
+| HTTP endpoints (method + path) | **255** |
+| Pages (`page.tsx`) | **33** |
+| Route files (`route.ts`) | 191 |
+| Scheduled crons (`vercel.json`) | 19 |
+| Registered jobs (Data Health registry) | 24 |
+| Feature areas | 27 |
 
-Tables are counted as `pgTable(...)` declarations in `src/lib/db/schema.ts`. Endpoints are 241 named `export async function GET|POST|PUT|PATCH|DELETE` handlers plus 2 from the Auth.js catch-all, which exports its methods by destructuring (`export const { GET, POST } = handlers` in [`src/app/api/auth/[...nextauth]/route.ts:3`](../../src/app/api/auth/\[...nextauth\]/route.ts)) and so matches no `function` grep; the 2 CORS preflight `OPTIONS` handlers on the public OA-resolver routes are excluded as they carry no business surface. Pages are all 31 `page.tsx` files — 26 in the `(app)` group, 3 print surfaces, `/login`, and the public `/schedule/[token]` parent page.
+Tables are counted as `pgTable(...)` declarations in `src/lib/db/schema.ts`. Endpoints are 253 named `export async function GET|POST|PUT|PATCH|DELETE` handlers plus 2 from the Auth.js catch-all, which exports its methods by destructuring (`export const { GET, POST } = handlers` in [`src/app/api/auth/[...nextauth]/route.ts:3`](../../src/app/api/auth/\[...nextauth\]/route.ts)) and so matches no `function` grep; the 2 CORS preflight `OPTIONS` handlers on the public OA-resolver routes are excluded as they carry no business surface. Pages are all 33 `page.tsx` files — 28 in the `(app)` group, 3 print surfaces, `/login`, and the public `/schedule/[token]` parent page.
 
 Mechanical detail lives in the reference section, not here: [database](../reference/database/index.md) for tables and columns, [api](../reference/api/index.md) for endpoint signatures, [crons](../reference/crons.md) for the full schedule, and [env](../reference/env.md) for environment variables. For how the pieces fit together, see [architecture](architecture.md) and [data flow](data-flow.md).
 

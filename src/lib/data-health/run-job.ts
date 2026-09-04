@@ -6,6 +6,7 @@ import { runCompetitorIntelligenceSync } from "@/lib/competitor-intelligence/syn
 import { runCreditControlSyncRequest } from "@/lib/credit-control/run-sync-request";
 import { syncLeaveRequests } from "@/lib/leave-requests/sync";
 import { syncRoomUtilizationSessions } from "@/lib/room-capacity/utilization";
+import { runOnsiteFootTrafficSync } from "@/lib/onsite-foot-traffic/sync";
 import {
   importActiveSalesDashboardProjectionSource,
   importRefreshableSalesSources,
@@ -200,6 +201,19 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
           return NextResponse.json({ ok: true, ...result });
         } catch (error) {
           const message = error instanceof Error ? error.message : "Failed to sync room utilization";
+          return NextResponse.json({ error: message }, { status: 500 });
+        }
+      }
+
+      if (jobKey === "onsite_foot_traffic") {
+        try {
+          const result = await runOnsiteFootTrafficSync(getDb(), {
+            triggerType: "manual",
+            actorEmail,
+          });
+          return NextResponse.json(result, { status: result.skipped ? 202 : 200 });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to sync onsite foot traffic";
           return NextResponse.json({ error: message }, { status: 500 });
         }
       }
