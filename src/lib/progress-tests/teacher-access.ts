@@ -52,6 +52,7 @@ export async function resolveTeacherCanonicalKeys(
       onsiteEmail: schema.tutorContacts.onsiteEmail,
       onlineEmail: schema.tutorContacts.onlineEmail,
       sourceNames: schema.tutorContacts.sourceNames,
+      wiseEmailState: schema.tutorContacts.wiseEmailState,
     })
     .from(schema.tutorContacts)
     .where(eq(schema.tutorContacts.active, true));
@@ -62,11 +63,14 @@ export async function resolveTeacherCanonicalKeys(
       normalizeEmail(contact.onlineEmail) === normalizedEmail,
   );
   if (matched.length === 0) return [];
+  // One login address must never grant two unrelated imported identities.
+  if (new Set(matched.map(c => c.canonicalKey)).size > 1 && matched.some(c => Object.keys(c.wiseEmailState ?? {}).length > 0)) return [];
 
   const keys = new Set<string>();
   const targetNames = new Set<string>();
   for (const contact of matched) {
     if (contact.canonicalKey) keys.add(contact.canonicalKey);
+    if (contact.wiseEmailState?.identityBound) continue;
     for (const name of [contact.displayName, ...(contact.sourceNames ?? [])]) {
       const normalized = normalizeTutorLookupKey(name);
       if (normalized) targetNames.add(normalized);
@@ -101,6 +105,7 @@ export async function resolveTeacherCanonicalKeys(
 
     for (const row of groupRows) {
       if (!row.canonicalKey || keys.has(row.canonicalKey)) continue;
+      if (contacts.some(c => c.canonicalKey === row.canonicalKey && c.wiseEmailState?.identityBound)) continue;
       if (
         targetNames.has(normalizeTutorLookupKey(row.groupDisplayName)) ||
         targetNames.has(normalizeTutorLookupKey(row.memberDisplayName))

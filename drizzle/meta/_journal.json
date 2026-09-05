@@ -519,6 +519,13 @@
       "when": 1788505032192,
       "tag": "0073_funny_ego",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1788587012653,
+      "tag": "0074_wise_teacher_onboarding",
+      "breakpoints": true
     }
   ]
 }

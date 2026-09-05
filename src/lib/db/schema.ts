@@ -2013,6 +2013,11 @@ export const tutorContacts = pgTable("tutor_contacts", {
   onsitePhone: text("onsite_phone"),
   onlinePhone: text("online_phone"),
   sourceNames: jsonb("source_names").$type<string[]>().notNull().default([]),
+  wiseEmailState: jsonb("wise_email_state").$type<Partial<Record<"onsiteEmail" | "onlineEmail", {
+    mode: "wise" | "manual";
+    lastValue: string | null;
+    accountIds: string[];
+  }>> & { identityBound?: boolean }>().notNull().default({}),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -2020,6 +2025,30 @@ export const tutorContacts = pgTable("tutor_contacts", {
   uniqueIndex("tutor_contacts_canonical_key_idx").on(table.canonicalKey),
   index("tutor_contacts_active_idx").on(table.active),
 ]);
+
+// Durable account ownership survives snapshot pruning and display-name changes.
+export const tutorWiseAccounts = pgTable("tutor_wise_accounts", {
+  wiseTeacherId: text("wise_teacher_id").primaryKey(),
+  wiseUserId: text("wise_user_id"),
+  canonicalKey: text("canonical_key").notNull(),
+  displayName: text("display_name").notNull(),
+  isOnlineVariant: boolean("is_online_variant").notNull(),
+  email: text("email"),
+  status: text("status").notNull(),
+  lastSnapshotId: uuid("last_snapshot_id").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [index("tutor_wise_accounts_key_idx").on(table.canonicalKey)]);
+
+export const tutorContactSyncEvents = pgTable("tutor_contact_sync_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  snapshotId: uuid("snapshot_id").notNull(),
+  canonicalKey: text("canonical_key").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id").notNull(),
+  beforeValue: jsonb("before_value").$type<Record<string, unknown>>(),
+  afterValue: jsonb("after_value").$type<Record<string, unknown>>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [index("tutor_contact_sync_events_key_idx").on(table.canonicalKey)]);
 
 export const tutorBusinessProfiles = pgTable("tutor_business_profiles", {
   canonicalKey: text("canonical_key").primaryKey(),

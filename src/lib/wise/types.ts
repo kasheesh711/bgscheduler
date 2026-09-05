@@ -3,6 +3,7 @@
 export interface WiseUserReference {
   _id: string;
   name?: string;
+  email?: string;
   [key: string]: unknown;
 }
 

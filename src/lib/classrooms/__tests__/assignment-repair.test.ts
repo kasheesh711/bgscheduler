@@ -102,6 +102,22 @@ describe("classroom incident regressions", () => {
     assertNoOverlap(result);
   });
 
+  it("moves an online center assignment away from an unresolved onsite class's retained room", () => {
+    const result = repairClassroomAssignmentRows([
+      row("online-center", "A", { sessionType: "SCHEDULED" }),
+      row("onsite-unresolved", NO_ROOM_AVAILABLE, { currentWiseLocation: "A", minCapacity: 99 }),
+    ], rooms);
+    expect(result.find(r => r.wiseSessionId === "online-center")?.assignedRoom).toBe("B");
+    expect(result.find(r => r.wiseSessionId === "onsite-unresolved")?.status).toBe("no_room");
+  });
+
+  it("reconsiders online center assignments against new external occupancy", () => {
+    const result = repairClassroomAssignmentRows([row("online-center", "A", { sessionType: "SCHEDULED" })], rooms, {
+      externalRoomBlocks: [{ wiseSessionId: "external", className: null, location: "A", startMinute: 720, endMinute: 780 }],
+    });
+    expect(result[0].assignedRoom).toBe("B");
+  });
+
   it("protects retained Wise occupancy even when both saved rows previously had rooms", () => {
     const saved = [previous(row("fixed", "B", { currentWiseLocation: "A", wiseClassId: null })),
       previous(row("other", "A", { minCapacity: 3, studentCount: 3 }))];

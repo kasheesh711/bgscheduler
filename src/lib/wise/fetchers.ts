@@ -33,7 +33,10 @@ export async function fetchAllTeachers(
   instituteId: string
 ): Promise<WiseTeacher[]> {
   const res = await client.get<WiseTeachersResponse>(`/institutes/${instituteId}/teachers`);
-  return res.data?.teachers ?? [];
+  if (!Array.isArray(res.data?.teachers) || res.data.teachers.some(t => !t || typeof t._id !== "string" || !t._id.trim())) {
+    throw new Error("Wise returned an invalid teacher roster; preserve the previous snapshot and contacts");
+  }
+  return res.data.teachers;
 }
 
 /**

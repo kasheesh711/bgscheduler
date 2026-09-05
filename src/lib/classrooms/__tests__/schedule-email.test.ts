@@ -61,9 +61,7 @@ function makePreviewDb(input: {
     select: vi.fn(() => {
       const call = selectCall;
       selectCall += 1;
-      if (call === 0) return { from: vi.fn().mockResolvedValue([]) };
-      if (call === 1) return { from: vi.fn().mockResolvedValue([]) };
-      if (call === 2) {
+      if (call === 0) {
         return {
           from: vi.fn(() => ({
             where: vi.fn(() => ({
@@ -72,7 +70,7 @@ function makePreviewDb(input: {
           })),
         };
       }
-      if (call === 3) {
+      if (call === 1) {
         return {
           from: vi.fn(() => ({
             innerJoin: vi.fn(() => ({
@@ -81,7 +79,7 @@ function makePreviewDb(input: {
           })),
         };
       }
-      if (call === 4) {
+      if (call === 2) {
         return {
           from: vi.fn(() => ({
             where: vi.fn().mockResolvedValue(input.contacts),
@@ -226,10 +224,19 @@ describe("schedule email preview", () => {
     expect(messages.join(" ")).not.toContain("SCHEDULE_EMAIL_FROM");
   });
 
-  it("blocks sending when the non-online email is missing", async () => {
+  it("uses a valid Online email when the onsite address is absent or malformed", async () => {
+    for (const onsiteEmail of [null, "invalid"]) {
+      const db = makePreviewDb({ rows: [row()], contacts: [{ canonicalKey: "Kevin", onsiteEmail, onlineEmail: "online@example.com", active: true }] });
+      const preview = await getScheduleEmailPreview(db as never, "run-1");
+      expect(preview.recipients[0]).toMatchObject({ email: "online@example.com", status: "ready" });
+      expect(db.insert).not.toHaveBeenCalled();
+    }
+  });
+
+  it("blocks sending when both email addresses are missing", async () => {
     const db = makePreviewDb({
       rows: [row({ canonicalKey: "Pearcha", tutorDisplayName: "Pearcha" })],
-      contacts: [{ canonicalKey: "Pearcha", onsiteEmail: null, onlineEmail: "online@example.com", active: true }],
+      contacts: [{ canonicalKey: "Pearcha", onsiteEmail: null, onlineEmail: null, active: true }],
     });
 
     const preview = await getScheduleEmailPreview(db as never, "run-1");
@@ -247,7 +254,7 @@ describe("schedule email preview", () => {
       ],
       contacts: [
         { canonicalKey: "Kevin", onsiteEmail: "kevhsh7@gmail.com", active: true },
-        { canonicalKey: "Pearcha", onsiteEmail: null, onlineEmail: "online@example.com", active: true },
+        { canonicalKey: "Pearcha", onsiteEmail: null, onlineEmail: null, active: true },
       ],
     });
 
@@ -267,7 +274,7 @@ describe("schedule email preview", () => {
       ],
       contacts: [
         { canonicalKey: "Kevin", onsiteEmail: "kevhsh7@gmail.com", active: true },
-        { canonicalKey: "Pearcha", onsiteEmail: null, onlineEmail: "online@example.com", active: true },
+        { canonicalKey: "Pearcha", onsiteEmail: null, onlineEmail: null, active: true },
       ],
     });
     const sender = { sendEmail: vi.fn().mockResolvedValue({ id: "email-1" }) };

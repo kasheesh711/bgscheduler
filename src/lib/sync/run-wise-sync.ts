@@ -157,7 +157,7 @@ export async function runWiseSyncRequest() {
     staleRunningSyncsFailed: guard.staleRunningSyncsFailed,
   };
 
-  if (result.success) {
+  if (result.success || result.promotedSnapshotId) {
     revalidateTag("snapshot", { expire: 0 });
   }
 

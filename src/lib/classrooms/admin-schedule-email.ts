@@ -286,6 +286,7 @@ function buildBlockers(detail: ClassroomAssignmentDetail, publishJobs: Classroom
   if (noRoomCount > 0) blockers.push(`${noRoomCount} row(s) have no room.`);
   if (needsReviewCount > 0) blockers.push(`${needsReviewCount} row(s) need review.`);
   if (failedPublishCount > 0) blockers.push(`${failedPublishCount} row(s) failed Wise publish.`);
+  if (detail.run?.changeSummary?.syncErrorSummary) blockers.push(`Wise teacher sync: ${detail.run.changeSummary.syncErrorSummary}`);
   const unmanagedCount = Number(detail.run?.changeSummary?.unmanagedWiseSessionCount ?? 0);
   if (unmanagedCount > 0) blockers.push(`${unmanagedCount} live session(s) are missing from the assignment snapshot; sync/tutor identity review required.`);
   return blockers;

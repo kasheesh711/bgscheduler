@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull, or } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { getDb } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -32,6 +32,7 @@ interface LatestSync {
   status: "running" | "success" | "failed";
   startedAt: Date;
   finishedAt: Date | null;
+  errorSummary?: string | null;
 }
 
 export interface MorningAutomationDateResult {
@@ -66,20 +67,22 @@ export interface MorningAutomationResult {
     syncRunId: string | null;
     finishedAt: string | null;
     snapshotId?: string | null;
+    errorSummary?: string;
   };
   dates: MorningAutomationDateResult[];
 }
 
-async function latestSuccessfulSync(db: Database): Promise<LatestSync | null> {
+async function latestPromotedSync(db: Database): Promise<LatestSync | null> {
   const [sync] = await db
     .select({
       id: schema.syncRuns.id,
       status: schema.syncRuns.status,
       startedAt: schema.syncRuns.startedAt,
       finishedAt: schema.syncRuns.finishedAt,
+      errorSummary: schema.syncRuns.errorSummary,
     })
     .from(schema.syncRuns)
-    .where(eq(schema.syncRuns.status, "success"))
+    .where(and(isNotNull(schema.syncRuns.promotedSnapshotId), or(eq(schema.syncRuns.status, "success"), eq(schema.syncRuns.status, "failed"))))
     .orderBy(desc(schema.syncRuns.finishedAt))
     .limit(1);
   return sync ?? null;
@@ -114,12 +117,13 @@ export async function ensureFreshWiseSyncForClassroomAutomation(
   options: { maxWaitMs?: number; now?: Date } = {},
 ): Promise<MorningAutomationResult["sync"]> {
   const now = options.now ?? new Date();
-  const initialSuccess = await latestSuccessfulSync(db);
+  const initialSuccess = await latestPromotedSync(db);
   if (isFresh(initialSuccess, now)) {
     return {
       mode: "reused",
       syncRunId: initialSuccess?.id ?? null,
       finishedAt: initialSuccess?.finishedAt?.toISOString() ?? null,
+      ...(initialSuccess?.errorSummary ? { errorSummary: initialSuccess.errorSummary } : {}),
     };
   }
 
@@ -128,12 +132,13 @@ export async function ensureFreshWiseSyncForClassroomAutomation(
   if (await latestRunningSync(db)) {
     while (Date.now() - waitStarted < maxWaitMs) {
       await sleep(Math.min(SYNC_POLL_MS, maxWaitMs));
-      const latest = await latestSuccessfulSync(db);
+      const latest = await latestPromotedSync(db);
       if (isFresh(latest)) {
         return {
           mode: "waited",
           syncRunId: latest?.id ?? null,
           finishedAt: latest?.finishedAt?.toISOString() ?? null,
+          ...(latest?.errorSummary ? { errorSummary: latest.errorSummary } : {}),
         };
       }
       if (!await latestRunningSync(db)) break;
@@ -141,8 +146,8 @@ export async function ensureFreshWiseSyncForClassroomAutomation(
   }
 
   const response = await runWiseSyncRequest();
-  const body = await response.json().catch(() => null) as { syncRunId?: string; success?: boolean; skipped?: boolean } | null;
-  if (!response.ok && response.status !== 202) {
+  const body = await response.json().catch(() => null) as { syncRunId?: string; success?: boolean; skipped?: boolean; promotedSnapshotId?: string | null } | null;
+  if (!response.ok && response.status !== 202 && !body?.promotedSnapshotId) {
     throw new Error(`Wise sync failed before classroom automation: HTTP ${response.status}`);
   }
 
@@ -150,19 +155,20 @@ export async function ensureFreshWiseSyncForClassroomAutomation(
     const skippedWaitStarted = Date.now();
     while (Date.now() - skippedWaitStarted < maxWaitMs) {
       await sleep(Math.min(SYNC_POLL_MS, maxWaitMs));
-      const latest = await latestSuccessfulSync(db);
+      const latest = await latestPromotedSync(db);
       if (isFresh(latest)) {
         return {
           mode: "waited",
           syncRunId: latest?.id ?? null,
           finishedAt: latest?.finishedAt?.toISOString() ?? null,
+          ...(latest?.errorSummary ? { errorSummary: latest.errorSummary } : {}),
         };
       }
     }
     throw new Error("Wise sync was still running after the classroom automation wait window.");
   }
 
-  const latest = await latestSuccessfulSync(db);
+  const latest = await latestPromotedSync(db);
   if (!isFresh(latest)) {
     throw new Error("Wise sync completed but did not produce a fresh promoted snapshot.");
   }
@@ -171,6 +177,7 @@ export async function ensureFreshWiseSyncForClassroomAutomation(
     mode: "triggered",
     syncRunId: body?.syncRunId ?? latest?.id ?? null,
     finishedAt: latest?.finishedAt?.toISOString() ?? null,
+    ...(latest?.errorSummary ? { errorSummary: latest.errorSummary } : {}),
   };
 }
 
@@ -258,10 +265,10 @@ export async function runClassroomMorningAutomation(
   const failedEmailCount = results.reduce((sum, result) => sum + (result.scheduleEmail?.summary.failed ?? 0) + (result.scheduleEmailError ? 1 : 0), 0);
   const blockedEmailCount = results.reduce((sum, result) => sum + (result.scheduleEmail?.summary.blocked ?? 0), 0);
   const unmanagedWiseSessionCount = results.reduce((sum, result) => sum + Number(result.detail.run?.changeSummary?.unmanagedWiseSessionCount ?? 0), 0);
-  const ok = noRoomCount + needsReviewCount + failedPublishCount + failedEmailCount + blockedEmailCount + unmanagedWiseSessionCount === 0;
+  const ok = !sync.errorSummary && noRoomCount + needsReviewCount + failedPublishCount + failedEmailCount + blockedEmailCount + unmanagedWiseSessionCount === 0;
   return {
     ok, noRoomCount, needsReviewCount, failedPublishCount, failedEmailCount, blockedEmailCount, unmanagedWiseSessionCount,
-    ...(!ok ? { errorSummary: `Classroom automation incomplete: ${noRoomCount} without rooms, ${needsReviewCount} need review, ${failedPublishCount} publish failures, ${failedEmailCount} email failures, ${blockedEmailCount} blocked emails, ${unmanagedWiseSessionCount} live sessions missing from the assignment snapshot (sync/tutor identity review required).` } : {}),
+    ...(!ok ? { errorSummary: `Classroom automation incomplete: ${noRoomCount} without rooms, ${needsReviewCount} need review, ${failedPublishCount} publish failures, ${failedEmailCount} email failures, ${blockedEmailCount} blocked emails, ${unmanagedWiseSessionCount} live sessions missing from the assignment snapshot (sync/tutor identity review required).${sync.errorSummary ? ` Wise sync: ${sync.errorSummary}` : ""}` } : {}),
     automationBatchId,
     startDate,
     endDate: dates[dates.length - 1],

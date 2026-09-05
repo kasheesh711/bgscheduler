@@ -399,3 +399,9 @@ describe("runFullSync — AVAIL-01 near/far leave tiering", () => {
     ).toBe(true);
   });
 });
+
+// These regressions exercise the pre-onboarding pipeline; the new pipeline has its own integration suite.
+vi.mock("@/lib/tutor-onboarding/planner", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/tutor-onboarding/planner")>(),
+  onboardingEnabled: () => false,
+}));

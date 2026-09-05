@@ -2,10 +2,7 @@ import { createHash } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import {
-  DEFAULT_CONTACT_ALIASES,
-  buildDefaultTutorContacts,
-} from "./tutor-contacts";
+import { scheduleRecipientEmail } from "@/lib/tutor-onboarding/planner";
 import { REMOTE_NO_ROOM_NEEDED } from "./assignment-engine";
 import { sessionModeLabel } from "./session-mode";
 
@@ -150,45 +147,6 @@ interface AppsScriptSenderConfig {
   secret: string | undefined;
   urlEnvName: string;
   secretEnvName: string;
-}
-
-function aliasMapFromRows(rows: Array<{ fromKey: string; toKey: string }>): Map<string, string> {
-  const aliases = new Map(DEFAULT_CONTACT_ALIASES);
-  for (const row of rows) {
-    aliases.set(row.fromKey.toLowerCase(), row.toKey);
-  }
-  return aliases;
-}
-
-export async function ensureDefaultTutorContacts(db: Database): Promise<void> {
-  const aliases = await db
-    .select({
-      fromKey: schema.tutorAliases.fromKey,
-      toKey: schema.tutorAliases.toKey,
-    })
-    .from(schema.tutorAliases);
-  const defaults = buildDefaultTutorContacts(undefined, aliasMapFromRows(aliases));
-  if (defaults.length === 0) return;
-
-  const existing = await db
-    .select({ canonicalKey: schema.tutorContacts.canonicalKey })
-    .from(schema.tutorContacts);
-  const existingKeys = new Set(existing.map((row) => row.canonicalKey));
-  const missing = defaults.filter((contact) => !existingKeys.has(contact.canonicalKey));
-  if (missing.length === 0) return;
-
-  await db
-    .insert(schema.tutorContacts)
-    .values(missing.map((contact) => ({
-      canonicalKey: contact.canonicalKey,
-      displayName: contact.displayName,
-      onsiteEmail: contact.onsiteEmail,
-      onlineEmail: contact.onlineEmail,
-      onsitePhone: contact.onsitePhone,
-      onlinePhone: contact.onlinePhone,
-      sourceNames: contact.sourceNames,
-    })))
-    .onConflictDoNothing({ target: schema.tutorContacts.canonicalKey });
 }
 
 function formatRunDate(date: string): string {
@@ -482,7 +440,6 @@ export async function getScheduleEmailPreview(
   runId: string,
   options: ScheduleEmailPreviewOptions = {},
 ): Promise<ScheduleEmailPreview> {
-  await ensureDefaultTutorContacts(db);
   const run = await loadRun(db, runId);
   const rows = await loadRows(db, runId);
   const subject = `BeGifted schedule for ${formatRunDate(run.assignmentDate)}`;
@@ -512,7 +469,7 @@ export async function getScheduleEmailPreview(
   for (const [groupId, groupRows] of rowsByGroup) {
     const first = groupRows[0];
     const contact = contacts.get(first.canonicalKey);
-    const email = contact?.onsiteEmail?.trim() || null;
+    const email = scheduleRecipientEmail(contact);
     const missingEmail = !email;
     const groupUnfinalizedRows = groupRows.filter((row) => row.status === "needs_review" || row.status === "no_room" || row.publishStatus === "failed");
     const rowBlockReason = groupUnfinalizedRows.length > 0
@@ -523,7 +480,7 @@ export async function getScheduleEmailPreview(
         type: "missing_recipient_email",
         groupId,
         tutorDisplayName: first.tutorDisplayName,
-        message: `${first.tutorDisplayName} has no non-online email address configured.`,
+        message: `${first.tutorDisplayName} has no valid email address configured.`,
       });
     }
     if (rowBlockReason) {
@@ -537,7 +494,7 @@ export async function getScheduleEmailPreview(
     }
 
     const blockReason = missingEmail
-      ? "Missing non-online email address"
+      ? "Missing valid email address"
       : rowBlockReason;
 
     const recipient: ScheduleEmailRecipient = {

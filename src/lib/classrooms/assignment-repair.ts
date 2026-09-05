@@ -46,7 +46,7 @@ export function repairClassroomAssignments(input: RepairInput): AssignmentResult
   let positions = new Map(baseline);
   for (const row of active) {
     const target = positions.get(row.wiseSessionId);
-    if (target && canPublish(row) && !(candidates.get(row.wiseSessionId) ?? []).some(room => physical(room.name) === physical(target))) {
+    if (target && !(retainedLocation(row) && !canPublish(row)) && !(candidates.get(row.wiseSessionId) ?? []).some(room => physical(room.name) === physical(target))) {
       positions.delete(row.wiseSessionId);
     }
   }
@@ -74,7 +74,7 @@ export function repairClassroomAssignments(input: RepairInput): AssignmentResult
       changed = false;
       for (const row of active) {
         const target = plan.get(row.wiseSessionId);
-        if (!target || !canPublish(row)) continue;
+        if (!target || (retainedLocation(row) && !canPublish(row))) continue;
         if ((peers.get(row.wiseSessionId) ?? []).some(other => (!plan.has(other.wiseSessionId) || !canPublish(other))
           && physical(retainedLocation(other) ?? "") === physical(target))) {
           plan.delete(row.wiseSessionId);

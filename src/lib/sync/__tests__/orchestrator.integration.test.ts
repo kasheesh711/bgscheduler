@@ -29,7 +29,7 @@
 //       -> { data: { sessions: WiseSession[], page_count: number } }
 // === End discovery ===
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { addDays } from "date-fns";
 import { startTestDb, stopTestDb, truncateAll } from "@/tests/integration/db-helper";
@@ -526,3 +526,9 @@ describe("runFullSync — TCOV-02 integration (real Postgres)", () => {
     );
   });
 });
+
+// These regressions exercise the pre-onboarding pipeline; the new pipeline has its own integration suite.
+vi.mock("@/lib/tutor-onboarding/planner", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/tutor-onboarding/planner")>(),
+  onboardingEnabled: () => false,
+}));

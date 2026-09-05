@@ -265,6 +265,14 @@ already-unwrapped data — the `data?` envelope and inner arrays are defaulted t
 - **Params:** none. **Pagination:** none — the full roster returns in one call.
 - **Returns:** `WiseTeacher[]` from `res.data.teachers` (default `[]`)
 
+The live roster also returns `userId.email` (verified read-only on September 5,
+2026: 158 of 160 accounts). Teacher onboarding consumes this field only from
+roster records, never from student/session participants. Contact reconciliation
+and snapshot promotion are atomic, with activation floored at September 6 Bangkok.
+Configured addresses are preserved; only explicitly tracked Wise-managed fields
+are refreshed. Missing roster accounts and invalid/conflicting emails produce
+actionable data issues instead of inferred identities or recipients.
+
 A `WiseTeacher` ([`types.ts:9-15`](../../src/lib/wise/types.ts)) carries `_id`, an optional `userId` (string **or**
 nested `{ _id, name }`), `name`, and `tags` (each tag a string **or** `{ _id, name }`).
 Resolve the real user id with `getWiseTeacherUserId()` and the display name with

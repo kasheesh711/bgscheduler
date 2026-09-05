@@ -35,7 +35,12 @@ import { detectSessionModalityConflict } from "@/lib/search/compare";
 import { runPastSessionsDiffHook } from "@/lib/sync/past-sessions-diff-hook";
 import { pruneOldSnapshots } from "@/lib/sync/snapshot-pruning";
 
+import { onboardingEnabled, resolveOnboardingIdentities, unmanagedTeacherSessions } from "@/lib/tutor-onboarding/planner";
+import { loadAccountMappings, promoteWithTutorContacts } from "@/lib/tutor-onboarding/sync";
+
 export interface SyncResult {
+  contactSync?: { created: number; updated: number; blocked: number; sourceIssues?: number };
+  unmanagedTeacherSessionCount?: number;
   success: boolean;
   syncRunId: string;
   snapshotId: string | null;
@@ -49,6 +54,7 @@ export interface SyncResult {
 
 export interface RunFullSyncOptions {
   syncRunId?: string;
+  now?: Date;
 }
 
 const INSERT_CHUNK_SIZE = 250;
@@ -72,6 +78,7 @@ export async function runFullSync(
   const startTime = Date.now();
   let syncRunId = options.syncRunId ?? "";
   let snapshotId = "";
+  let committedSnapshotId: string | null = null;
 
   try {
     // 1. Create sync run unless the caller already acquired a guard row.
@@ -98,6 +105,8 @@ export async function runFullSync(
 
     // 3. Fetch all teachers
     const wiseTeachers = await fetchAllTeachers(client, instituteId);
+    const importContacts = onboardingEnabled(options.now);
+    if (importContacts && wiseTeachers.length === 0) throw new Error("Wise returned an empty teacher roster; preserving the previous snapshot and contacts");
 
     // 4. Load aliases
     const aliasRows = await db.select().from(schema.tutorAliases);
@@ -107,7 +116,10 @@ export async function runFullSync(
     }));
 
     // 5. Resolve identities
-    const { groups, issues: identityIssues } = resolveIdentities(wiseTeachers, aliases);
+    const identities = importContacts
+      ? resolveOnboardingIdentities(wiseTeachers, aliases, await loadAccountMappings(db))
+      : { ...resolveIdentities(wiseTeachers, aliases), blocked: new Set<string>() };
+    const { groups, issues: identityIssues } = identities;
 
     // Store identity issues
     const allIssues: typeof schema.dataIssues.$inferInsert[] = identityIssues.map((i) => ({
@@ -389,8 +401,13 @@ export async function runFullSync(
 
     const sessionBlocks = normalizeSessions(wiseSessions, (session) => {
       const wiseUserId = getWiseSessionTeacherUserId(session);
-      return wiseUserId ? (wiseUserIdToTeacherId.get(wiseUserId) ?? null) : null;
+      const teacherId = wiseUserId ? (wiseUserIdToTeacherId.get(wiseUserId) ?? null) : null;
+      if (importContacts && groups.some(g => identities.blocked.has(g.canonicalKey) && g.members.some(m => m.wiseTeacherId === teacherId))) return null;
+      return teacherId;
     });
+
+    const unmanagedSessions = unmanagedTeacherSessions(wiseTeachers, wiseSessions);
+    for (const missing of unmanagedSessions) allIssues.push({ snapshotId, type: "completeness", severity: "high", entityType: "wise_session", entityId: missing.sessionId, entityName: missing.teacherUserId, message: missing.message });
 
     const futureSessionBlockRows: typeof schema.futureSessionBlocks.$inferInsert[] = [];
     for (const block of sessionBlocks) {
@@ -601,7 +618,13 @@ export async function runFullSync(
 
     let promotedSnapshotId: string | null = null;
 
-    if (shouldPromote) {
+    let contactSync: { created: number; updated: number; blocked: number; sourceIssues?: number } | undefined;
+    if (shouldPromote && importContacts) {
+      const plan = await promoteWithTutorContacts(db, { snapshotId, syncRunId, teachers: wiseTeachers, groups,
+        blocked: identities.blocked });
+      contactSync = { ...plan.counts, sourceIssues: plan.issues.length };
+      promotedSnapshotId = snapshotId;
+    } else if (shouldPromote) {
       // Atomic promotion via a single UPDATE: PostgreSQL MVCC + the row-level
       // lock held for the duration of one statement guarantee that concurrent
       // readers see either the prior-active row or the new-active row — never
@@ -624,11 +647,19 @@ export async function runFullSync(
       promotedSnapshotId = snapshotId;
     }
 
+    committedSnapshotId = promotedSnapshotId;
+
     // EFF-00: persist how long the run took and how much of it was Wise. The
     // duration was previously only ever returned to the caller, so a finished
     // run left no record of its own cost.
     const wiseStats = client.getStats();
+    const onboardingError = [
+      importContacts && !shouldPromote ? "Wise snapshot rejected because teacher identities are ambiguous; correct the roster and retry sync" : null,
+      contactSync?.blocked ? `${contactSync.blocked} Wise teacher contact accounts need review` : null,
+      importContacts && unmanagedSessions.length ? `${unmanagedSessions.length} sessions reference teachers absent from the Wise roster; correct the roster and retry sync` : null,
+    ].filter(Boolean).join("; ") || null;
     const successMetadata = {
+      contactSync, unmanagedTeacherSessions: unmanagedSessions,
       diffHookDurationMs: diffHookResult.durationMs,
       pastSessionsCapturedCount: diffHookResult.capturedCount,
       durationMs: Date.now() - startTime,
@@ -647,7 +678,8 @@ export async function runFullSync(
     await db
       .update(schema.syncRuns)
       .set({
-        status: "success",
+        status: onboardingError ? "failed" : "success",
+        errorSummary: onboardingError,
         finishedAt: new Date(),
         promotedSnapshotId,
         teacherCount: wiseTeachers.length,
@@ -686,14 +718,16 @@ export async function runFullSync(
     }
 
     return {
-      success: true,
+      success: !onboardingError,
+      contactSync,
+      unmanagedTeacherSessionCount: unmanagedSessions.length,
       syncRunId,
       snapshotId,
       promotedSnapshotId,
       teacherCount: wiseTeachers.length,
       groupCount: groups.length,
-      issueCount: allIssues.length,
-      errorSummary: null,
+      issueCount: allIssues.length + (contactSync?.sourceIssues ?? 0),
+      errorSummary: onboardingError,
       durationMs: Date.now() - startTime,
     };
   } catch (err) {
@@ -731,7 +765,7 @@ export async function runFullSync(
       success: false,
       syncRunId,
       snapshotId: snapshotId || null,
-      promotedSnapshotId: null,
+      promotedSnapshotId: committedSnapshotId,
       teacherCount: 0,
       groupCount: 0,
       issueCount: 0,

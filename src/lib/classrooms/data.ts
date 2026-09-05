@@ -52,6 +52,7 @@ export interface ClassroomAssignmentDetail {
 }
 
 export interface ClassroomSnapshotMeta {
+  syncErrorSummary?: string;
   snapshotId: string | null;
   latestSyncFinishedAt: string | null;
   staleAgeMs: number | null;
@@ -546,13 +547,13 @@ async function loadSnapshotById(db: Database, snapshotId: string): Promise<{ id:
 async function loadLatestSuccessfulSyncForSnapshot(
   db: Database,
   snapshotId: string,
-): Promise<{ finishedAt: Date | null } | null> {
+): Promise<{ finishedAt: Date | null; errorSummary?: string | null } | null> {
   const [syncRun] = await db
-    .select({ finishedAt: schema.syncRuns.finishedAt })
+    .select({ finishedAt: schema.syncRuns.finishedAt, errorSummary: schema.syncRuns.errorSummary })
     .from(schema.syncRuns)
     .where(
       and(
-        eq(schema.syncRuns.status, "success"),
+        inArray(schema.syncRuns.status, ["success", "failed"]),
         eq(schema.syncRuns.promotedSnapshotId, snapshotId),
       ),
     )
@@ -582,6 +583,7 @@ async function loadClassroomSnapshotMeta(
   return {
     snapshotId: snapshot.id,
     latestSyncFinishedAt: finishedAt?.toISOString() ?? null,
+    ...(latestSync?.errorSummary ? { syncErrorSummary: latestSync.errorSummary } : {}),
     staleAgeMs,
     fresh: staleAgeMs !== null && staleAgeMs <= CLASSROOM_ASSIGNMENT_FRESHNESS_MS,
   };
@@ -922,7 +924,7 @@ export async function runClassroomAssignment(
     input.forceReassign,
     input.createdBy ?? null,
     result.rows,
-    { changeSummary: { unmanagedWiseSessionCount: unmanagedWiseSessionIds.length, unmanagedWiseSessionIds } },
+    { changeSummary: { ...(snapshotMeta.syncErrorSummary ? { syncErrorSummary: snapshotMeta.syncErrorSummary } : {}), unmanagedWiseSessionCount: unmanagedWiseSessionIds.length, unmanagedWiseSessionIds } },
   );
 
   const rows = await loadRowsForRun(db, run.id);
@@ -1031,7 +1033,7 @@ export async function runIncrementalClassroomAssignment(
       sourceRunId: previousRun?.id ?? null,
       automationBatchId: input.automationBatchId,
       reconciliationMode: "minimal_moves",
-      changeSummary: { ...reconciliation.summary, unmanagedWiseSessionCount: unmanagedWiseSessionIds.length, unmanagedWiseSessionIds },
+      changeSummary: { ...reconciliation.summary, ...(snapshotMeta.syncErrorSummary ? { syncErrorSummary: snapshotMeta.syncErrorSummary } : {}), unmanagedWiseSessionCount: unmanagedWiseSessionIds.length, unmanagedWiseSessionIds },
     },
   );
 

@@ -45,6 +45,7 @@ function syncRow(overrides: Record<string, unknown> = {}) {
     status: overrides.status ?? "success",
     startedAt: overrides.startedAt ?? new Date("2026-05-25T23:30:00.000Z"),
     finishedAt: overrides.finishedAt ?? new Date("2026-05-25T23:40:00.000Z"),
+    ...(overrides.errorSummary ? { errorSummary: overrides.errorSummary } : {}),
   };
 }
 
@@ -82,6 +83,13 @@ describe("ensureFreshWiseSyncForClassroomAutomation", () => {
       syncRunId: "fresh-sync",
       finishedAt: "2026-05-25T23:43:00.000Z",
     });
+    expect(runWiseSyncRequest).not.toHaveBeenCalled();
+  });
+
+  it("reuses a promoted incomplete sync and carries its diagnostic forward", async () => {
+    const db = makeDbSelect([[syncRow({ status: "failed", errorSummary: "Teacher roster mismatch", finishedAt: new Date("2026-05-25T23:43:00Z") })]]);
+    const result = await ensureFreshWiseSyncForClassroomAutomation(db as never, { now: new Date("2026-05-25T23:45:00Z"), maxWaitMs: 0 });
+    expect(result).toMatchObject({ mode: "reused", errorSummary: "Teacher roster mismatch" });
     expect(runWiseSyncRequest).not.toHaveBeenCalled();
   });
 
