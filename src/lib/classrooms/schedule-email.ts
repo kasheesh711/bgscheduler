@@ -23,6 +23,7 @@ interface AssignmentEmailRow {
   sessionType: string | null;
   assignedRoom: string;
   status: "assigned" | "needs_review" | "no_room" | "remote";
+  publishStatus?: string;
   studentName: string | null;
   subject: string | null;
   classType: string | null;
@@ -426,6 +427,7 @@ async function loadRows(db: Database, runId: string): Promise<AssignmentEmailRow
       sessionType: schema.classroomAssignmentRows.sessionType,
       assignedRoom: schema.classroomAssignmentRows.assignedRoom,
       status: schema.classroomAssignmentRows.status,
+      publishStatus: schema.classroomAssignmentRows.publishStatus,
       studentName: schema.classroomAssignmentRows.studentName,
       subject: schema.classroomAssignmentRows.subject,
       classType: schema.classroomAssignmentRows.classType,
@@ -512,9 +514,9 @@ export async function getScheduleEmailPreview(
     const contact = contacts.get(first.canonicalKey);
     const email = contact?.onsiteEmail?.trim() || null;
     const missingEmail = !email;
-    const groupUnfinalizedRows = groupRows.filter((row) => row.status === "needs_review" || row.status === "no_room");
+    const groupUnfinalizedRows = groupRows.filter((row) => row.status === "needs_review" || row.status === "no_room" || row.publishStatus === "failed");
     const rowBlockReason = groupUnfinalizedRows.length > 0
-      ? `${groupUnfinalizedRows.length} schedule row${groupUnfinalizedRows.length === 1 ? "" : "s"} still need assignment review`
+      ? `${groupUnfinalizedRows.length} schedule row${groupUnfinalizedRows.length === 1 ? "" : "s"} still need assignment review or successful Wise publishing`
       : null;
     if (missingEmail) {
       blockers.push({
@@ -607,6 +609,7 @@ export function createAppsScriptScheduleEmailSender(
       const replyTo = process.env.SCHEDULE_EMAIL_REPLY_TO?.trim() || "kevhsh7@gmail.com";
       const response = await fetch(config.url, {
         method: "POST",
+        signal: AbortSignal.timeout(20_000),
         headers: {
           "Content-Type": "application/json",
         },
@@ -1045,7 +1048,7 @@ export async function sendScheduleEmailsForRun(
   if (mode === "failed_only") {
     const sentGroupIds = await loadSentRecipientGroupIds(db, runId);
     previewItems = previewItems.filter((item) =>
-      item.recipient.status === "ready" && !sentGroupIds.has(item.recipient.groupId)
+      !sentGroupIds.has(item.recipient.groupId)
     );
   }
 

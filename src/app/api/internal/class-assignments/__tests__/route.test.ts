@@ -59,6 +59,15 @@ describe("internal classroom assignment automation routes", () => {
     await expect(res.json()).resolves.toEqual(expect.objectContaining({ ok: true, automationBatchId: "batch-1" }));
   });
 
+  it("reports incomplete morning work and partial admin delivery as failures", async () => {
+    vi.mocked(runClassroomMorningAutomation).mockResolvedValueOnce({ ok: false, dates: [], errorSummary: "2 classes without rooms" } as never);
+    const morning = await morningGET(cronRequest("/api/internal/class-assignments/morning", "test-secret"));
+    expect(morning.status).toBe(500);
+    expect(await morning.json()).toMatchObject({ errorSummary: "2 classes without rooms" });
+    vi.mocked(sendAdminClassroomScheduleEmail).mockResolvedValueOnce({ status: "partial", success: 1, failed: 1 } as never);
+    expect((await adminEmailGET(cronRequest("/api/internal/class-assignments/admin-email", "test-secret"))).status).toBe(500);
+  });
+
   it("rejects admin email without the cron secret", async () => {
     const res = await adminEmailGET(cronRequest("/api/internal/class-assignments/admin-email", "bad-secret"));
 

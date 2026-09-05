@@ -7,9 +7,11 @@ import {
   estimatePublishRemainingMs,
   expandAutomationPublishTargetRowIds,
   findExternalRoomBlocker,
+  findPlannedRoomBlocker,
   findPublishRoomBlockers,
   findTemporaryPublishLocation,
   liveRoomBlocksForDate,
+  unmanagedWiseSessionIdsForDate,
   isCurrentWisePublishLocation,
   isClassroomPublishEligible,
   orderTemporaryPublishCandidates,
@@ -18,6 +20,20 @@ import {
   updateWiseLocationOnly,
   wisePublishLocationName,
 } from "../data";
+
+it("reports missing live session identities without counting known, canceled or other-date sessions", () => {
+  const session = { _id: "missing", scheduledStartTime: "2026-09-09T03:00:00Z", scheduledEndTime: "2026-09-09T04:00:00Z", type: "OFFLINE" };
+  expect(unmanagedWiseSessionIdsForDate([session, session, { ...session, _id: "known" },
+    { ...session, _id: "canceled", meetingStatus: "CANCELLED" },
+    { ...session, _id: "tomorrow", scheduledStartTime: "2026-09-10T03:00:00Z" }], "2026-09-09", new Set(["known"]))).toEqual(["missing"]);
+});
+
+it("rejects conflicting proposed moves before publishing, including physical room aliases", () => {
+  const row = { wiseSessionId: "one", assignedRoom: "Iconic (TV)", startMinute: 720, endMinute: 780 };
+  const blocker = { ...row, wiseSessionId: "two", assignedRoom: "Iconic", status: "assigned" as const, tutorDisplayName: "Other" };
+  expect(findPlannedRoomBlocker(row, [blocker])).toBe(blocker);
+  expect(findPlannedRoomBlocker(row, [{ ...blocker, startMinute: 780, endMinute: 840 }])).toBeUndefined();
+});
 import { REMOTE_NO_ROOM_NEEDED } from "../assignment-engine";
 import { DEFAULT_CLASSROOM_ROOMS } from "../rooms";
 

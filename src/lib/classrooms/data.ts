@@ -237,6 +237,13 @@ export function liveRoomBlocksForDate(sessions: WiseSession[], date: string): Li
     .map(wiseSessionToLiveRoomBlock);
 }
 
+/** Surface live sessions omitted from the normalized snapshot instead of reporting a clean run. */
+export function unmanagedWiseSessionIdsForDate(sessions: WiseSession[], date: string, localIds: Set<string>): string[] {
+  return [...new Set(sessions.filter(session => !localIds.has(session._id)
+    && bangkokDateKey(new Date(session.scheduledStartTime)) === date && isBlockingStatus(session.meetingStatus))
+    .map(session => session._id))].sort();
+}
+
 function externalLiveRoomBlocks(
   liveBlocks: LiveRoomBlock[],
   localWiseSessionIds: Set<string>,
@@ -254,6 +261,17 @@ export function findExternalRoomBlocker(
     normalizedPhysicalLocation(block.location) === target &&
     intervalsOverlap(row, block)
   )) ?? null;
+}
+
+/** Validate the final room plan as a set before issuing any location updates. */
+export function findPlannedRoomBlocker(
+  row: Pick<ClassroomRow, "wiseSessionId" | "assignedRoom" | "startMinute" | "endMinute">,
+  rows: Array<Pick<ClassroomRow, "wiseSessionId" | "assignedRoom" | "startMinute" | "endMinute" | "status" | "tutorDisplayName">>,
+) {
+  return rows.find(other => other.wiseSessionId !== row.wiseSessionId
+    && (other.status === "assigned" || other.status === "needs_review")
+    && normalizedPhysicalLocation(other.assignedRoom) === normalizedPhysicalLocation(row.assignedRoom)
+    && intervalsOverlap(row, other));
 }
 
 export function buildRoomConflictWarnings(
@@ -885,14 +903,13 @@ export async function runClassroomAssignment(
   const overrideBySessionId = await loadPreviousOverrides(db, date, input.forceReassign);
   const sessions = await loadAssignmentSessions(db, activeSnapshot.id, date);
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
-  const liveBlocks = liveRoomBlocksForDate(
-    await fetchAllFutureSessions(createWiseClientFromEnv(), instituteId),
-    date,
-  );
+  const liveSessions = await fetchAllFutureSessions(createWiseClientFromEnv(), instituteId);
+  const liveBlocks = liveRoomBlocksForDate(liveSessions, date);
   const localWiseSessionIds = new Set(sessions.map((session) => session.wiseSessionId));
+  const unmanagedWiseSessionIds = unmanagedWiseSessionIdsForDate(liveSessions, date, localWiseSessionIds);
   const externalBlocks = externalLiveRoomBlocks(liveBlocks, localWiseSessionIds);
   const result = assignClassrooms(
-    sessions,
+    sessions.map(session => ({ ...session, currentWiseLocation: liveBlocks.find(block => block.wiseSessionId === session.wiseSessionId)?.location ?? null })),
     rooms.map(toEngineRoom),
     overrideBySessionId,
     { externalRoomBlocks: externalBlocks },
@@ -905,6 +922,7 @@ export async function runClassroomAssignment(
     input.forceReassign,
     input.createdBy ?? null,
     result.rows,
+    { changeSummary: { unmanagedWiseSessionCount: unmanagedWiseSessionIds.length, unmanagedWiseSessionIds } },
   );
 
   const rows = await loadRowsForRun(db, run.id);
@@ -993,9 +1011,10 @@ export async function runIncrementalClassroomAssignment(
   const liveSessions = input.liveSessions ?? await fetchAllFutureSessions(createWiseClientFromEnv(), instituteId);
   const liveBlocks = liveRoomBlocksForDate(liveSessions, date);
   const localWiseSessionIds = new Set(sessions.map((session) => session.wiseSessionId));
+  const unmanagedWiseSessionIds = unmanagedWiseSessionIdsForDate(liveSessions, date, localWiseSessionIds);
   const externalBlocks = externalLiveRoomBlocks(liveBlocks, localWiseSessionIds);
   const reconciliation = reconcileClassroomAssignments({
-    sessions,
+    sessions: sessions.map(session => ({ ...session, currentWiseLocation: liveBlocks.find(block => block.wiseSessionId === session.wiseSessionId)?.location ?? null })),
     previousRows: previousRows.map(classroomRowToPrevious),
     rooms: rooms.map(toEngineRoom),
     externalRoomBlocks: externalBlocks,
@@ -1012,7 +1031,7 @@ export async function runIncrementalClassroomAssignment(
       sourceRunId: previousRun?.id ?? null,
       automationBatchId: input.automationBatchId,
       reconciliationMode: "minimal_moves",
-      changeSummary: reconciliation.summary,
+      changeSummary: { ...reconciliation.summary, unmanagedWiseSessionCount: unmanagedWiseSessionIds.length, unmanagedWiseSessionIds },
     },
   );
 
@@ -1546,6 +1565,25 @@ export async function runClassroomPublishJob(
     const failedRows = new Map<string, ClassroomRow>();
     const publishLocationByRowId = new Map<string, string>();
     for (const row of eligibleRows) {
+      const plannedBlocker = findPlannedRoomBlocker(row, allRows);
+      const live = liveBySessionId.get(row.wiseSessionId);
+      const staleSession = live && (
+        bangkokDateKey(new Date(live.scheduledStartTime)) !== run.assignmentDate
+        || getLocalMinuteOfDay(live.scheduledStartTime) !== row.startMinute
+        || getLocalMinuteOfDay(live.scheduledEndTime) !== row.endMinute
+        || !isOfflineSession(live.type) || !isBlockingStatus(live.meetingStatus)
+      );
+      if (plannedBlocker || staleSession) {
+        const result = await publishRowResult(db, jobId, row, {
+          status: "failed",
+          error: plannedBlocker ? `Invalid room plan: overlaps ${plannedBlocker.tutorDisplayName} in ${row.assignedRoom}`
+            : "Live Wise session changed time, date, status or modality; regenerate the assignment before publishing",
+        });
+        summary.attempted += result.attempted;
+        summary.failed += result.failed;
+        failedRows.set(row.id, row);
+        continue;
+      }
       if (catalogError) {
         const result = await publishRowResult(db, jobId, row, {
           status: "failed",

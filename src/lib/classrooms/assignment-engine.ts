@@ -14,6 +14,7 @@ import {
   isOnlineSessionType,
   isOnsiteSessionType,
 } from "./session-mode";
+import { repairClassroomAssignments, ROOM_REPAIR_MAX_NODES, type RoomRepairBudget } from "./assignment-repair";
 
 export const REMOTE_NO_ROOM_NEEDED = "REMOTE_NO_ROOM_NEEDED";
 export const ONLINE_CENTER_CONNECTION_GAP_MINUTES = 60;
@@ -108,6 +109,7 @@ export interface ContextSession {
 }
 
 export interface AssignmentOptions {
+  repairBudget?: RoomRepairBudget;
   externalRoomBlocks?: ExternalRoomBlock[];
   fixedTutorAssignments?: FixedTutorAssignment[];
   /** Same-day sessions to fold into the center-room chain walk only; see ContextSession. */
@@ -467,7 +469,7 @@ export function assignClassrooms(
     preferredRoomClaimBySessionId.add(session.wiseSessionId);
   }
 
-  const rows: AssignmentResultRow[] = [];
+  let rows: AssignmentResultRow[] = [];
 
   for (const session of sortedSessions) {
     const tutorNorm = normalizeTutorName(session.tutorDisplayName);
@@ -672,6 +674,12 @@ export function assignClassrooms(
           ? "needs_review"
           : "assigned";
 
+    // Provisional claims protect sessions which have not been placed yet. Continuity may have
+    // placed this session elsewhere; its abandoned claim must not become ghost occupancy.
+    for (const [room, claims] of protectedClaims) {
+      protectedClaims.set(room, claims.filter(claim => claim.sessionId !== session.wiseSessionId));
+    }
+
     rows.push({
       ...session,
       minCapacity,
@@ -684,6 +692,8 @@ export function assignClassrooms(
       ruleTrace,
     });
   }
+
+  rows = repairClassroomAssignmentRows(rows, activeRooms, options);
 
   rows.sort((a, b) => {
     if (a.startMinute !== b.startMinute) return a.startMinute - b.startMinute;
@@ -700,4 +710,21 @@ export function assignClassrooms(
       remoteCount: rows.filter((row) => row.status === "remote").length,
     },
   };
+}
+
+export function repairClassroomAssignmentRows(
+  rows: AssignmentResultRow[], rooms: ClassroomRoomDefinition[], options: AssignmentOptions = {},
+): AssignmentResultRow[] {
+  const locked = (row: AssignmentResultRow) => Boolean(row.overrideRoom) || isGiftTutor(row.tutorDisplayName)
+    || Boolean(getPriorityPreferredRoom(row.tutorDisplayName));
+  return repairClassroomAssignments({
+    rows, rooms: rooms.filter(room => room.active), externalBlocks: options.externalRoomBlocks ?? [],
+    budget: options.repairBudget ?? { remaining: ROOM_REPAIR_MAX_NODES },
+    compatible: (row, room) => roomPassesConstraints(room, row, row.minCapacity, row.needsTv)
+      && (!locked(row) || room.name === (row.status !== "no_room" ? row.assignedRoom
+        : row.overrideRoom || getPriorityPreferredRoom(row.tutorDisplayName) || ROOM_JOY)),
+    locked,
+    preferenceCost: (row, room) => (room.name === row.preferredRoom ? 0 : 10_000)
+      + roomPriorityScore(room, row.minCapacity) * 10 + room.sortOrder,
+  });
 }

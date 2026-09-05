@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { ROOM_REPAIR_MAX_NODES } from "./assignment-repair";
 import {
   assignClassrooms,
+  repairClassroomAssignmentRows,
   REMOTE_NO_ROOM_NEEDED,
   type AssignmentResultRow,
   type AssignmentSession,
@@ -10,6 +12,7 @@ import {
 } from "./assignment-engine";
 import {
   NO_ROOM_AVAILABLE,
+  normalizeTutorName,
   type ClassroomRoomDefinition,
 } from "./rooms";
 
@@ -63,10 +66,11 @@ interface ReconcileInput {
   previousRows: PreviousAssignmentRow[];
   rooms: ClassroomRoomDefinition[];
   externalRoomBlocks?: ExternalRoomBlock[];
+  contextSessions?: ContextSession[];
 }
 
 const FINGERPRINT_FIELDS: Array<keyof AssignmentSession> = [
-  "groupId",
+  "tutorDisplayName",
   "wiseTeacherId",
   "wiseTeacherUserId",
   "wiseSessionId",
@@ -92,19 +96,13 @@ function stableValue(value: unknown): unknown {
 
 export function assignmentFingerprint(session: AssignmentSession): string {
   const payload = Object.fromEntries(
-    FINGERPRINT_FIELDS.map((field) => [field, stableValue(session[field])]),
+    FINGERPRINT_FIELDS.map((field) => [field, field === "tutorDisplayName"
+      ? normalizeTutorName(session.tutorDisplayName) : stableValue(session[field])]),
   );
   return createHash("sha256")
     .update(JSON.stringify(payload))
     .digest("hex")
     .slice(0, 24);
-}
-
-function rowsOverlap(
-  left: Pick<AssignmentSession, "startMinute" | "endMinute">,
-  right: Pick<AssignmentSession, "startMinute" | "endMinute">,
-): boolean {
-  return left.startMinute < right.endMinute && right.startMinute < left.endMinute;
 }
 
 /**
@@ -176,7 +174,8 @@ function previousRowToSession(row: PreviousAssignmentRow): AssignmentSession {
 
 function classifyChange(session: AssignmentSession, previous: PreviousAssignmentRow | undefined): AssignmentChangeType {
   if (!previous) return "added";
-  const previousFingerprint = previous.assignmentFingerprint ?? assignmentFingerprint(previousRowToSession(previous));
+  // Recompute with the current contract: stored hashes may include a snapshot-scoped group UUID.
+  const previousFingerprint = assignmentFingerprint(previousRowToSession(previous));
   const nextFingerprint = assignmentFingerprint(session);
   if (previousFingerprint === nextFingerprint) return "carried";
   const sameTime =
@@ -194,7 +193,7 @@ function carryRow(
 ): ReconciledAssignmentRow {
   return {
     ...session,
-    currentWiseLocation: previous.currentWiseLocation,
+    currentWiseLocation: session.currentWiseLocation,
     minCapacity: previous.minCapacity,
     needsTv: previous.needsTv,
     preferredRoom: previous.preferredRoom,
@@ -305,12 +304,15 @@ export function reconcileClassroomAssignments(input: ReconcileInput): Reconcilia
     const changeType = classifyChange(session, previous);
     const fingerprint = assignmentFingerprint(session);
 
-    if (changeType === "carried" && previous) {
+    if (changeType === "carried" && previous && previous.status !== "no_room") {
       carriedRows.push(carryRow(session, previous, fingerprint));
       continue;
     }
 
     pendingSessions.push(session);
+    // Retry unresolved rows even when the Wise session did not change. Final comparison below
+    // records an actual recovery as moved, rather than inventing a change to the Wise session.
+    if (changeType === "carried") continue;
     changeTypeBySessionId.set(session.wiseSessionId, changeType);
     events.push({
       type: changeType as AutomationEventType,
@@ -342,6 +344,7 @@ export function reconcileClassroomAssignments(input: ReconcileInput): Reconcilia
   }
 
   const overrides = makeOverrideMap(input.previousRows);
+  const repairBudget = { remaining: ROOM_REPAIR_MAX_NODES };
   const assignPending = (
     sessions: AssignmentSession[],
     fixedRows: ReconciledAssignmentRow[],
@@ -350,50 +353,26 @@ export function reconcileClassroomAssignments(input: ReconcileInput): Reconcilia
     input.rooms,
     overrides,
     {
+      repairBudget: fixedRows.length ? { remaining: 0 } : repairBudget,
       externalRoomBlocks: fixedBlocks(fixedRows, externalRoomBlocks),
       fixedTutorAssignments: fixedTutorAssignmentsFrom(fixedRows),
       // fixedRows is exactly today's still-carried rows (any status) at this point in the
       // reconcile. A full run would see all of them when walking the online<->onsite center-room
       // chain, so pass them as context -- without re-assigning, re-occupying, or re-seeding
       // continuity for them (that is already handled by externalRoomBlocks / fixedTutorAssignments
-      // above). On the unlock-retry call, previously-unlocked rows have already moved out of
-      // fixedRows and into the `sessions` argument itself, so nothing is ever double-counted.
-      contextSessions: fixedRows.map(rowToContextSession),
+      // above). The repair pass works on the combined plan without repeating this allocation.
+      contextSessions: [...fixedRows.map(rowToContextSession), ...(input.contextSessions ?? [])],
     },
   ).rows;
 
-  let finalCarriedRows = carriedRows;
-  let assignedDynamicRows = assignPending(pendingSessions, finalCarriedRows);
-  const failedDynamicRows = assignedDynamicRows.filter((row) => row.status === "no_room");
+  // Validate retained Wise occupancy even when the first pass found rooms for every pending row.
+  // Search starts from the existing plan, measuring moves against rooms already promised to tutors.
+  const assignedDynamicRows = repairClassroomAssignmentRows(
+    [...carriedRows, ...assignPending(pendingSessions, carriedRows)], input.rooms,
+    { externalRoomBlocks, repairBudget },
+  );
 
-  if (failedDynamicRows.length > 0) {
-    // A carried needs_review row genuinely holds a room (see holdsRoom above), so it is just as
-    // displaceable as an assigned row when it is the only thing blocking a pending session that
-    // otherwise has nowhere to go.
-    const unlockSessionIds = new Set(
-      finalCarriedRows
-        .filter((row) =>
-          !row.overrideRoom &&
-          holdsRoom(row) &&
-          failedDynamicRows.some((failed) => rowsOverlap(row, failed))
-        )
-        .map((row) => row.wiseSessionId),
-    );
-
-    if (unlockSessionIds.size > 0) {
-      const unlockedRows = finalCarriedRows.filter((row) => unlockSessionIds.has(row.wiseSessionId));
-      finalCarriedRows = finalCarriedRows.filter((row) => !unlockSessionIds.has(row.wiseSessionId));
-      assignedDynamicRows = assignPending(
-        [
-          ...pendingSessions,
-          ...unlockedRows.map((row) => sessionById.get(row.wiseSessionId)).filter((session): session is AssignmentSession => Boolean(session)),
-        ],
-        finalCarriedRows,
-      );
-    }
-  }
-
-  const finalRows: ReconciledAssignmentRow[] = [...finalCarriedRows];
+  const finalRows: ReconciledAssignmentRow[] = [];
   for (const row of assignedDynamicRows) {
     const previous = previousBySessionId.get(row.wiseSessionId);
     const fingerprint = assignmentFingerprint(row);

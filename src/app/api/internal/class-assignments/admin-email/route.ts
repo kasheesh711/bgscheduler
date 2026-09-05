@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
     async () => {
       try {
         const result = await sendAdminClassroomScheduleEmail();
-        const status = result.status === "failed" ? 500 : 200;
+        const status = result.status === "failed" || result.status === "partial" ? 500 : 200;
         return NextResponse.json(result, { status });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Admin classroom schedule email failed";

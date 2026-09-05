@@ -13,9 +13,9 @@ import {
   createAppsScriptScheduleEmailSender,
   type ScheduleEmailSender,
 } from "./schedule-email";
+import { claimAdminEmailRun, adminEmailClaimPredicate, assertAdminEmailClaim, sentAdminRecipients } from "./admin-email-claim";
 import { REMOTE_NO_ROOM_NEEDED } from "./assignment-engine";
 
-const ADMIN_EMAIL_ACTOR = "cron@classroom-admin-email";
 /**
  * Bangkok minute of the cron's LAST tick (`4,14,24,36 0 * * *` UTC =
  * 07:04-07:36 Bangkok). At or past this minute the run stops waiting for a
@@ -32,6 +32,7 @@ export interface AdminScheduleEmailResult {
   success: number;
   failed: number;
   message: string;
+  errorSummary?: string;
 }
 
 interface AdminEmailContext {
@@ -261,7 +262,7 @@ async function hasTerminalAdminEmailForDate(db: Database, assignmentDate: string
     .from(schema.classroomAdminEmailRuns)
     .where(and(
       eq(schema.classroomAdminEmailRuns.assignmentDate, assignmentDate),
-      inArray(schema.classroomAdminEmailRuns.status, ["sent", "partial", "failed"]),
+      inArray(schema.classroomAdminEmailRuns.status, ["sent"]),
     ))
     .limit(1);
   return rows.length > 0;
@@ -285,44 +286,17 @@ function buildBlockers(detail: ClassroomAssignmentDetail, publishJobs: Classroom
   if (noRoomCount > 0) blockers.push(`${noRoomCount} row(s) have no room.`);
   if (needsReviewCount > 0) blockers.push(`${needsReviewCount} row(s) need review.`);
   if (failedPublishCount > 0) blockers.push(`${failedPublishCount} row(s) failed Wise publish.`);
+  const unmanagedCount = Number(detail.run?.changeSummary?.unmanagedWiseSessionCount ?? 0);
+  if (unmanagedCount > 0) blockers.push(`${unmanagedCount} live session(s) are missing from the assignment snapshot; sync/tutor identity review required.`);
   return blockers;
-}
-
-async function createEmailRun(
-  db: Database,
-  input: {
-    assignmentDate: string;
-    assignmentRunId: string | null;
-    subject: string;
-    triggerKind: "ready" | "failure";
-  },
-): Promise<typeof schema.classroomAdminEmailRuns.$inferSelect | null> {
-  const idempotencyKey = `classroom-admin:${input.assignmentDate}`;
-  try {
-    const [run] = await db
-      .insert(schema.classroomAdminEmailRuns)
-      .values({
-        assignmentDate: input.assignmentDate,
-        assignmentRunId: input.assignmentRunId,
-        subject: input.subject,
-        idempotencyKey,
-        triggerKind: input.triggerKind,
-        createdBy: ADMIN_EMAIL_ACTOR,
-      })
-      .returning();
-    return run;
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "23505") {
-      return null;
-    }
-    throw error;
-  }
 }
 
 async function finalizeEmailRun(
   db: Database,
   emailRunId: string,
   counts: { attempted: number; success: number; failed: number },
+  claimedAt: Date,
+  lastError: string | null,
 ): Promise<void> {
   const status = counts.failed > 0
     ? counts.success > 0
@@ -336,10 +310,11 @@ async function finalizeEmailRun(
       attemptedCount: counts.attempted,
       successCount: counts.success,
       failedCount: counts.failed,
+      lastError,
       sentAt: counts.success > 0 ? new Date() : null,
       updatedAt: new Date(),
     })
-    .where(eq(schema.classroomAdminEmailRuns.id, emailRunId));
+    .where(adminEmailClaimPredicate(emailRunId, claimedAt));
 }
 
 export async function sendAdminClassroomScheduleEmail(
@@ -350,7 +325,9 @@ export async function sendAdminClassroomScheduleEmail(
     sender?: ScheduleEmailSender;
   } = {},
 ): Promise<AdminScheduleEmailResult> {
+  const wallStart = Date.now();
   const now = options.now ?? new Date();
+  const clock = () => new Date(now.getTime() + Date.now() - wallStart);
   const assignmentDate = options.assignmentDate ?? todayBangkok(now);
   if (await hasTerminalAdminEmailForDate(db, assignmentDate)) {
     return {
@@ -371,6 +348,9 @@ export async function sendAdminClassroomScheduleEmail(
     ? await loadTeacherScheduleEmailSummary(db, detail.run.id)
     : null;
   const blockers = buildBlockers(detail, publishJobs);
+  if (!teacherScheduleEmailSummary || ["failed", "partial", "blocked", "pending"].includes(teacherScheduleEmailSummary.latestStatus)) {
+    blockers.push("Tutor schedule email delivery is incomplete.");
+  }
   const finalRetry = bangkokMinuteOfDay(now) >= FINAL_RETRY_MINUTE;
   const stillPreparing = !detail.run || publishPending(publishJobs);
   if (stillPreparing && !finalRetry) {
@@ -386,15 +366,16 @@ export async function sendAdminClassroomScheduleEmail(
     };
   }
 
-  const triggerKind = stillPreparing ? "failure" : "ready";
+  const triggerKind = stillPreparing || blockers.length > 0 ? "failure" : "ready";
   const subject = triggerKind === "ready"
     ? `BeGifted classroom assignments - ${assignmentDate}`
-    : `ACTION REQUIRED: classroom assignments not ready - ${assignmentDate}`;
-  const emailRun = await createEmailRun(db, {
+    : `ACTION REQUIRED: classroom assignments need attention - ${assignmentDate}`;
+  const emailRun = await claimAdminEmailRun(db, {
     assignmentDate,
     assignmentRunId: detail.run?.id ?? null,
     subject,
     triggerKind,
+    now,
   });
   if (!emailRun) {
     return {
@@ -410,6 +391,8 @@ export async function sendAdminClassroomScheduleEmail(
   }
 
   const recipients = await loadAdminEmails(db);
+  const alreadySent = await sentAdminRecipients(db, emailRun.id);
+  let lastError: string | null = null;
   const context: AdminEmailContext = {
     assignmentDate,
     detail,
@@ -421,7 +404,7 @@ export async function sendAdminClassroomScheduleEmail(
   const sender = options.sender ?? createAppsScriptScheduleEmailSender();
   const html = renderHtml(context);
   const text = renderText(context);
-  const counts = { attempted: 0, success: 0, failed: 0 };
+  const counts = { attempted: 0, success: recipients.filter(email => alreadySent.has(email.toLowerCase())).length, failed: 0 };
 
   if (recipients.length === 0) {
     counts.failed = 1;
@@ -433,7 +416,7 @@ export async function sendAdminClassroomScheduleEmail(
         lastError: "No admin_users email recipients are configured.",
         updatedAt: new Date(),
       })
-      .where(eq(schema.classroomAdminEmailRuns.id, emailRun.id));
+      .where(adminEmailClaimPredicate(emailRun.id, now));
     return {
       status: "failed",
       assignmentDate,
@@ -447,6 +430,8 @@ export async function sendAdminClassroomScheduleEmail(
   }
 
   for (const email of recipients) {
+    if (alreadySent.has(email.toLowerCase())) continue;
+    await assertAdminEmailClaim(db, emailRun.id, now, clock());
     counts.attempted += 1;
     try {
       const sent = await sender.sendEmail({
@@ -456,7 +441,6 @@ export async function sendAdminClassroomScheduleEmail(
         text,
         idempotencyKey: `classroom-admin:${assignmentDate}:${email}`,
       });
-      counts.success += 1;
       await db.insert(schema.classroomAdminEmailRecipients).values({
         emailRunId: emailRun.id,
         assignmentDate,
@@ -464,8 +448,10 @@ export async function sendAdminClassroomScheduleEmail(
         status: "sent",
         providerMessageId: sent.id,
       });
+      counts.success += 1;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Admin classroom email failed";
+      lastError = message;
       counts.failed += 1;
       await db.insert(schema.classroomAdminEmailRecipients).values({
         emailRunId: emailRun.id,
@@ -477,7 +463,7 @@ export async function sendAdminClassroomScheduleEmail(
     }
   }
 
-  await finalizeEmailRun(db, emailRun.id, counts);
+  await finalizeEmailRun(db, emailRun.id, counts, now, lastError);
   const status = counts.failed > 0 ? (counts.success > 0 ? "partial" : "failed") : "sent";
   return {
     status,
@@ -488,5 +474,6 @@ export async function sendAdminClassroomScheduleEmail(
     success: counts.success,
     failed: counts.failed,
     message: `Admin classroom schedule email ${status}.`,
+    ...(lastError ? { errorSummary: lastError } : {}),
   };
 }

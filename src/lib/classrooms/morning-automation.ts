@@ -51,6 +51,13 @@ export interface MorningAutomationDateResult {
 
 export interface MorningAutomationResult {
   ok: boolean;
+  noRoomCount?: number;
+  needsReviewCount?: number;
+  failedPublishCount?: number;
+  failedEmailCount?: number;
+  blockedEmailCount?: number;
+  unmanagedWiseSessionCount?: number;
+  errorSummary?: string;
   automationBatchId: string;
   startDate: string;
   endDate: string;
@@ -245,8 +252,16 @@ export async function runClassroomMorningAutomation(
     });
   }
 
+  const noRoomCount = results.reduce((sum, result) => sum + result.detail.rows.filter(row => row.status === "no_room").length, 0);
+  const needsReviewCount = results.reduce((sum, result) => sum + result.detail.rows.filter(row => row.status === "needs_review").length, 0);
+  const failedPublishCount = results.reduce((sum, result) => sum + result.publishSummary.failed, 0);
+  const failedEmailCount = results.reduce((sum, result) => sum + (result.scheduleEmail?.summary.failed ?? 0) + (result.scheduleEmailError ? 1 : 0), 0);
+  const blockedEmailCount = results.reduce((sum, result) => sum + (result.scheduleEmail?.summary.blocked ?? 0), 0);
+  const unmanagedWiseSessionCount = results.reduce((sum, result) => sum + Number(result.detail.run?.changeSummary?.unmanagedWiseSessionCount ?? 0), 0);
+  const ok = noRoomCount + needsReviewCount + failedPublishCount + failedEmailCount + blockedEmailCount + unmanagedWiseSessionCount === 0;
   return {
-    ok: true,
+    ok, noRoomCount, needsReviewCount, failedPublishCount, failedEmailCount, blockedEmailCount, unmanagedWiseSessionCount,
+    ...(!ok ? { errorSummary: `Classroom automation incomplete: ${noRoomCount} without rooms, ${needsReviewCount} need review, ${failedPublishCount} publish failures, ${failedEmailCount} email failures, ${blockedEmailCount} blocked emails, ${unmanagedWiseSessionCount} live sessions missing from the assignment snapshot (sync/tutor identity review required).` } : {}),
     automationBatchId,
     startDate,
     endDate: dates[dates.length - 1],

@@ -31,7 +31,7 @@ The feature owns the nine `classroom_*` tables in the **classrooms** domain and 
 - **Publish job** — `classroom_publish_jobs`: one background Wise-writeback attempt against a run, with an optional `target_row_ids` subset (used by automation) and running counters the UI polls.
 - **Automation events** — `classroom_automation_events`: the reconciliation trace for one cron batch — `added` / `changed` / `rescheduled` / `moved` / `canceled` per Wise session (`src/lib/classrooms/reconciliation.ts:16-17`).
 - **Tutor schedule emails** — `classroom_schedule_email_runs` + `classroom_schedule_email_recipients`: one send attempt per run per sender, with a per-tutor outcome row (`sent` / `failed` / `blocked`) so retries can skip tutors who already received mail.
-- **Admin digest emails** — `classroom_admin_email_runs` + `classroom_admin_email_recipients`: at most one terminal digest per date, enforced by the unique `idempotency_key = classroom-admin:<date>` (`src/lib/classrooms/admin-schedule-email.ts:300-320`).
+- **Admin digest emails** — `classroom_admin_email_runs` + `classroom_admin_email_recipients`: one reusable date-keyed run (`idempotency_key = classroom-admin:<date>`). Failed/partial runs retry; recipient attempt rows remain append-only and successful recipients are skipped (`admin-email-claim.ts`).
 
 **Read only:**
 
@@ -114,7 +114,7 @@ flowchart TD
   end
   subgraph Digest["Cron 4,14,24,36 0 * * * UTC (07:04–07:36 Bangkok)"]
     D1["sendAdminClassroomScheduleEmail"] --> D2{"run exists & no publish pending?"}
-    D2 -- "yes" --> D3["'ready' digest to all admin_users"]
+    D2 -- "yes" --> D3["digest to unsent admin recipients<br/>ACTION REQUIRED if blockers remain"]
     D2 -- "no, before 07:36" --> D4["pending — retry next tick"]
     D2 -- "no, at/after 07:36" --> D5["'ACTION REQUIRED' failure digest"]
   end
@@ -128,7 +128,7 @@ flowchart TD
 
 **Morning automation** (`src/lib/classrooms/morning-automation.ts:174-259`). Freshness is ensured once: reuse a sync finished ≤ 15 min ago; else if a sync is `running` poll every 5 s for up to 90 s; else trigger `runWiseSyncRequest()` and, if it reports `skipped`, poll the same window; any path that does not end in a fresh promoted snapshot throws (`:25-26, 105-168`). One live `fetchAllFutureSessions` is shared across the horizon (`:190-192`). For each of the 7 Bangkok dates starting today (`:170-172`), `runIncrementalClassroomAssignment` reconciles against the previous run for that date, persists a new run with `reconciliationMode: "minimal_moves"`, writes the automation events, then `selectAutomationPublishTargetRowIds` picks what to publish and `publishClassroomAssignmentRun` publishes just those rows. Tutor schedule emails are sent only for the first date and only in `failed_only` mode; an email failure is captured as `scheduleEmailError` and never aborts the remaining dates (`:215-233`).
 
-**Admin digest** (`admin-schedule-email.ts:345-492`). Skips immediately when a terminal (`sent`/`partial`/`failed`) digest already exists for the date. Otherwise it loads today's newest run, its publish jobs and its schedule-email summary; if there is no run or a publish job is still `pending`/`running` and the Bangkok clock is before 07:36 it returns `pending` and lets the next cron tick retry; at or after 07:36 it sends whatever it has as a `failure` digest with subject `ACTION REQUIRED: classroom assignments not ready - <date>` (`:24, 374-392`).
+**Admin digest** (`admin-schedule-email.ts:345-492`). Skips immediately when a terminal (`sent`/`partial`/`failed`) digest already exists for the date. Otherwise it loads today's newest run, its publish jobs and its schedule-email summary; if there is no run or a publish job is still `pending`/`running` and the Bangkok clock is before 07:36 it returns `pending` and lets the next cron tick retry; at or after 07:36 it sends whatever it has as a `failure` digest with subject `ACTION REQUIRED: classroom assignments need attention - <date>` (`:24, 374-392`).
 
 ## Business rules & edge cases
 
@@ -153,14 +153,15 @@ flowchart TD
 3. Per session, the first rule that yields an available, constraint-passing room wins, in this order (`:521-656`): valid override → priority preferred room → online continuity (same room as the tutor's previous session when the gap is `< 60` min) → Gift's Joy → general continuity (gap `≤ 15` min) → preferred room → sticky room (any non-negative gap, but not a room demoted for this session) → `online_only` room for online sessions → priority-scored `standard` room (core-room rank list `rooms.ts:15-33`; `Relax (TV)` is pushed behind everything for ≤ 3 seats, `:205-214, 490-497`) → any `standard` room → Joy fallback → `overflow_only` → `NO_ROOM_AVAILABLE` with the `no_room_available` warning.
 4. Overrides that name an unknown/inactive room or fail capacity/TV/type add `invalid_override_room`; ones that overlap another session add `override_room_unavailable`; the cascade then continues (`:521-535`).
 5. Room identity is **physical**: `(TV)` is stripped before occupancy lookups, so `Iconic` and `Iconic (TV)` are the same room (`:168-170`).
-6. Every decision is appended to `ruleTrace` in plain English (`"assigned by continuity: Do It"`) and persisted with the row (`data.ts:823`), but no client component renders it: the client-side `ClassroomRow` type omits the field (`src/components/class-assignments/types.ts:27-57`) and `grep ruleTrace src/components/class-assignments/` is empty. Today it is a database-only audit trail, readable via SQL or the reconciliation carry-forward (`reconciliation.ts:190-213`).
+6. After a session is assigned, all of its provisional claims are released; only its actual assignment occupies a room. The shared repair pass then considers unresolved sessions. A session that cannot be moved or published retains its actual Wise occupancy, which also protects against conflicting carried assignments.
+7. Every decision is appended to `ruleTrace` in plain English (`"assigned by continuity: Do It"`) and persisted with the row (`data.ts:823`), but no client component renders it: the client-side `ClassroomRow` type omits the field (`src/components/class-assignments/types.ts:27-57`) and `grep ruleTrace src/components/class-assignments/` is empty. Today it is a database-only audit trail, readable via SQL or the reconciliation carry-forward (`reconciliation.ts:190-213`).
 
 ### Reconciliation for unattended runs (`src/lib/classrooms/reconciliation.ts`)
 
-- A session's **fingerprint** is a 24-hex SHA-256 over its identity, times, status, type, student and class fields — not over the room decision (`:68-101`).
-- Same fingerprint as the previous run → `carried`: the previous room, status, warnings, trace **and publish state** are copied verbatim (`:190-213`). Otherwise the change is `added`, `changed` (same times) or `rescheduled` (`:177-188`), and the row is re-assigned with publish state reset (`:215-229`). Sessions missing from the snapshot produce a `canceled` event and drop out of the new run (`:329-342`).
+- A session's **fingerprint** is a 24-hex SHA-256 over stable Wise identities, normalized tutor display name, times, status, type, student and class fields. Snapshot-specific group IDs and room decisions are excluded. Previous fingerprints are recomputed from stored session facts under the current contract, so legacy hashes do not trigger wholesale reassignment.
+- Same fingerprint as the previous run → `carried` for successful/remote/review rows; unchanged `no_room` rows are retried. For carried rows, the previous room, status, warnings, trace **and publish state** are copied verbatim (`:190-213`). Otherwise the change is `added`, `changed` (same times) or `rescheduled` (`:177-188`), and the row is re-assigned with publish state reset (`:215-229`). Sessions missing from the snapshot produce a `canceled` event and drop out of the new run (`:329-342`).
 - Carried rows are fed to the engine as external room blocks and fixed tutor assignments, so new sessions route around them and continuity is seeded from them (`:255-271, 345-363`). A carried `needs_review` row still holds its room for this purpose (`holdsRoom`, `:110-124`, decision IDs HI-01 / MD-02).
-- **Minimal displacement**: if any pending session ends `no_room`, the carried rows that overlap it, hold a room and have *no override* are unlocked and the engine re-runs with them as pending too (`:369-394`). Overridden rows are never displaced.
+- **Bounded repair** (`assignment-repair.ts`): manual and incremental allocation share deterministic displacement search, capped at four displacement levels and 20,000 expansions per date. Candidates rank by fewer unassigned sessions, fewer existing assignments moved, then room preferences. Continuity/preferences may relax; capacity, TV, modality, overrides, fixed assignments and external occupancy remain constraints. Failed branches never replace the best complete candidate. Warnings distinguish `no_compatible_room`, `room_repair_search_exhausted` and `room_repair_unresolved`; hitting a search limit does not prove infeasibility.
 - A re-assigned row that lands in the same room with the same status and warnings keeps its publish state; one that moves rooms becomes `moved` with publish reset and a `moved` event (`:402-427`).
 
 ### Freshness and Wise coupling (`src/lib/classrooms/data.ts`)
@@ -173,6 +174,7 @@ flowchart TD
 
 - **Eligibility** (`data.ts:1213-1234`): status must be `assigned`; not `remote`; a real room (not `NO_ROOM_AVAILABLE`); Wise `type` must be onsite ("V1 publishes Wise locations for OFFLINE sessions only"); both `wiseClassId` and `wiseSessionId` present; and no `needs_review_missing_capacity` warning. Everything else is recorded `skipped` with the reason.
 - **Location names are verified against Wise before any write.** The catalog maps each active, non-`online_only` room to its expected Wise name — the room name with a `(TV)` suffix when `hasTv` (`:294-298`) — and only names that exactly exist in `fetchInstituteLocations` are publishable; a missing name fails the row with `Verified Wise location … is missing` (`:300-349`). An empty Wise catalog is treated as a catalog load failure: the throw at `:1414-1416` is caught into `catalogError` (`:1533-1540`), every eligible row is marked `failed` with that message (`:1548-1557`), and the job still finishes with a terminal `failed`/`partial` status (`:1715-1729`) — the job does not abort.
+- **Plan validation before writes.** Every affected destination is checked against the complete proposed plan before updates begin. Live Wise date, time, blocking status and onsite modality must still match. Existing location-only writes, live occupancy checks and temporary-room swap handling remain in place.
 - **No stale writes.** A row whose live Wise session is gone fails (`:1573-1582`); a row whose target room overlaps a live external Wise class fails with the conflicting class named (`:1584-1594`); when a subset is targeted, a room still occupied by an *unchanged* local row fails (`:1596-1609`).
 - **Idempotent success.** If Wise already holds the desired location the row is marked `success` without a PUT (`:1611-1617`).
 - **The Wise write is `location` only** — `PUT /teacher/classes/{classId}/sessions/{sessionId}?updateType=SINGLE` with `{ location }` (`src/lib/wise/fetchers.ts:410-420`); no availability preflight is used (`publish-eligibility.test.ts:503`). It is not gated by `WISE_SESSION_OPERATIONS_VERIFIED` (that flag governs LINE/operations paths, `src/lib/wise/operations.ts:11`).
@@ -183,19 +185,25 @@ flowchart TD
 ### Tutor schedule emails (`src/lib/classrooms/schedule-email.ts`)
 
 - **Recipient = `tutor_contacts.onsite_email`**, never the online address; a tutor without one is `blocked` with `Missing non-online email address` (`:513, 537-539`). Contacts are keyed by the identity group's `canonical_key`, derived from the nickname in parentheses (or the base name) after `tutor_aliases` + `DEFAULT_CONTACT_ALIASES` are applied; `… Online` twins fold into one contact (`tutor-contacts.ts:171-229`).
-- A tutor with any `needs_review` or `no_room` row that day is `blocked` (`unfinalized_rows`, `:515-535`); a run is `sendable` only with no hard blockers (Apps Script env config present, at least one row) and ≥ 1 ready tutor (`:460-497, 584`).
+- A tutor with any `needs_review`, `no_room`, or failed Wise-publish row that day is `blocked` (`unfinalized_rows`, `:515-535`); a run is `sendable` only with no hard blockers (Apps Script env config present, at least one row) and ≥ 1 ready tutor (`:460-497, 584`).
 - Each email carries a numbered **room route** (physical rooms in time order, `:247-259`) and a map `<img>` pointing at the public floor-plan SVG with those rooms pipe-joined plus a cache-busting `v=2026-05-18-corridor`; the base URL is `SCHEDULE_EMAIL_PUBLIC_BASE_URL` → `VERCEL_PROJECT_PRODUCTION_URL` → `VERCEL_URL` → `https://bgscheduler.vercel.app` (`:13-14, 261-286`). The SVG route is on the middleware public allowlist (`src/middleware.ts:15`) and cached for an hour (`floor-plan-map/route.ts:13`).
 - **Transport is a Google Apps Script relay** (`POST` JSON with a shared secret; `:597-635`), configured by `SCHEDULE_EMAIL_APPS_SCRIPT_URL/_SECRET` with a `SCHEDULE_EMAIL_BACKUP_*` pair (`:288-304`). Sender name defaults to `BeGifted`; reply-to defaults to a hard-coded personal address (`:606-607`). Per-recipient idempotency key: `classroom-schedule:<runId>:<canonicalKey>:<16-hex content hash>` (`:637-650`).
 - **Quota failover.** A send error matching "quota … exhaust" stops the primary loop; when the primary sender was used it automatically continues the remaining *unsent ready* tutors through the backup sender in a second email run, skipping anyone who already has a `sent` row (`:652-656, 898-1024, 1141-1168`). An explicit backup send that exhausts quota does not recurse (`:1169-1179`).
-- `mode: failed_only` keeps only ready tutors with no `sent` record for this run (`:1045-1050`) — this is what the morning cron uses so a manual send earlier does not double-mail.
+- `mode: failed_only` skips tutors with a `sent` record for this run and retains blocked recipients in the delivery ledger. The morning cron therefore records tutors such as Shop even when an unresolved room prevents sending.
 - The send route answers `409` when `summary.attempted === 0` (`send/route.ts:78`).
 
 ### Admin digest (`src/lib/classrooms/admin-schedule-email.ts`)
 
 - Recipients are **all** `admin_users` rows; zero recipients is recorded as a `failed` run (`:206-211, 426-447`).
-- Blockers listed in the mail: no run, publish still pending/running, `no_room` count, `needs_review` count, failed-publish count (`:274-289`). The mail also summarises tutor schedule email runs for the day (`:221-256`).
-- Exactly-once per date is enforced by the unique `idempotency_key`; a concurrent insert (`23505`) is reported as `skipped` (`:300-320, 399-410`).
+- Blockers listed in the mail: no run, publish still pending/running, `no_room` count, `needs_review` count, failed-publish count, and incomplete tutor delivery. Any blocker selects an `ACTION REQUIRED` subject. The mail also summarises tutor schedule email runs for the day.
+- The unique date key and atomic conditional UPSERT claim one sending attempt. Only `sent` is terminal. Failed/partial runs retry on the same run; live claims prevent concurrent sends and abandoned claims become recoverable after ten minutes. The claim timestamp fences stale workers; each recipient uses a stable relay idempotency key and existing successful recipient records are skipped. No schema migration is needed (`admin-email-claim.ts`).
 - `FINAL_RETRY_MINUTE = 07:36 Bangkok` deliberately equals the cron's last tick (`4,14,24,36 0 * * *`, `vercel.json:52-55`), so the "not ready" summary always goes out on the final attempt (`:19-24`).
+
+### Recovery preview and failure reporting
+
+`morning-automation.ts` returns compact `noRoomCount`, `needsReviewCount`, `failedPublishCount`, `failedEmailCount`, `blockedEmailCount`, `unmanagedWiseSessionCount` and `errorSummary` fields. Incomplete runs return `ok: false`/HTTP 500 while retaining completed assignments, publish results and delivery history. Live sessions missing from the normalized snapshot are persisted by ID/count in run metadata and select an actionable sync/identity-review alert. Partial admin delivery also returns HTTP 500. Routes and cron schedules are unchanged.
+
+Run `npx tsx --tsconfig scripts/tsconfig.json scripts/preview-classroom-recovery.ts --date=YYYY-MM-DD --output=/private/tmp/classroom-recovery` for a read-only recovery preview. It reads Postgres in a read-only transaction and uses live Wise GETs, freezing started classes and sessions absent from the live read. It creates Markdown/JSON reports without student/contact data and exits 2 for unresolved planning issues. Regenerate immediately before applying any location changes; never apply the historical regression fixture. See the [September 5 repair record](../operations/classroom-repair-2026-09-05.md).
 
 ### Cron registry and Data Health evidence
 
@@ -209,11 +217,15 @@ The classroom library is a shared dependency. The **room catalog** (`listClassro
 
 ## Tests
 
-16 Vitest files, all unit-project (no Postgres container); DB access is mocked per suite. The coverage column is summarised from each suite's `describe`/`it` titles; only two assertions were read in the body for this revision — the 60-minute online-chain boundary (`assignment-engine.test.ts:191`) and the PUT-only Wise write (`publish-eligibility.test.ts:503`).
+Unit suites mock database access. The admin delivery-claim integration suite uses real Postgres to
+exercise concurrent retries and stale-worker fencing. The September 5 fixture checks every proposed
+placement and all five Shop classes against the existing room constraints.
 
 | Location | Files | Coverage |
 |---|---|---|
 | `src/lib/classrooms/__tests__/assignment-engine.test.ts` | 1 (1,015 lines) | Capacity inference, TV requirement, live external blocks (incl. plain-TV-name normalization), online/remote chain rules at the 60-minute boundary, Gift/Joy, Mek/Ras/Kevin priority claims vs earlier generic sessions, valid/invalid overrides, continuity (15 min) vs sticky (30/90 min), Relax demotion, overflow fallback, `no_room`, `contextSessions` invariance, and that a priority claim never lands on an externally blocked room. |
+| `assignment-repair.test.ts`, `recovery-preview.test.ts` | 2 | Sanitized September 5 replay (all five Shop classes), abandoned claims, snapshot rotation and legacy fingerprints, retrying `no_room`, retained/fresh Wise occupancy, four-level displacement, exhaustion, frozen recovery preview. |
+| `admin-email-claim.integration.test.ts` | 1 | Real Postgres concurrent claims, failed/partial retries, successful-recipient preservation, ten-minute abandoned claim recovery and stale-worker fencing. |
 | `reconciliation.test.ts` | 1 | Carried rows keep publish state, canceled events, new sessions route around carried blocks, reschedule resets publish, minimal unlock set, override rows never displaced, remote carried rows stay remote, continuity seeded from carried (including `needs_review`) rows, no double-booking of a `needs_review` room, online chain across carried onsite neighbours. |
 | `publish-eligibility.test.ts` | 1 | `isClassroomPublishEligible` matrix, progress/ETA maths, Wise location catalog resolution and fail-closed behaviour, live conflict helpers, `findPublishRoomBlockers`, `expandAutomationPublishTargetRowIds`, temporary-location swap selection, `updateWiseLocationOnly` (PUT only, no availability preflight). |
 | `schedule-email.test.ts` | 1 | Preview composition (onsite + remote rows per tutor, Bangkok minute formatting), blockers (missing Apps Script config, missing onsite email, unfinalized rows), selected/failed-only sends, automatic backup failover on quota exhaustion (and non-recursion, non-quota errors), Apps Script relay payloads for primary and backup. |

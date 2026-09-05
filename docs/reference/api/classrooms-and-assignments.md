@@ -386,7 +386,9 @@ The daily automation: refresh Wise, re-assign the next 7 days, publish what chan
 
 | Key | Type | Notes |
 |-----|------|-------|
-| `ok` | `true` | Always `true` on the success path ([`morning-automation.ts:249`](../../../src/lib/classrooms/morning-automation.ts)). |
+| `ok` | boolean | False when rooms, review, publishing or tutor delivery remain unresolved. |
+| `noRoomCount`, `needsReviewCount`, `failedPublishCount`, `failedEmailCount`, `blockedEmailCount`, `unmanagedWiseSessionCount` | number | Compact failure counts retained by cron auditing. |
+| `errorSummary` | string? | Present for incomplete automation; completed work remains in `dates`. |
 | `automationBatchId` | uuid | Ties the horizon's runs and `classroom_automation_events` together. |
 | `startDate`, `endDate` | string | The 7-day Bangkok horizon. |
 | `sync` | object | `{ mode: "reused" \| "waited" \| "triggered", syncRunId, finishedAt, snapshotId }`. |
@@ -396,9 +398,9 @@ The daily automation: refresh Wise, re-assign the next 7 days, publish what chan
 
 | Status | When |
 |--------|------|
-| 200 | Automation completed. |
+| 200 | Automation completed without unresolved rooms, review, publishing or tutor delivery. |
 | 401 | Bad or missing `CRON_SECRET`. |
-| 500 | `{ ok: false, error }` on a thrown automation error ([`morning/route.ts:18-21`](../../../src/app/api/internal/class-assignments/morning/route.ts)); or `{"error":"Server misconfigured"}` when `CRON_SECRET` is unset ([`cron-auth.ts:22-24`](../../../src/lib/internal/cron-auth.ts)). |
+| 500 | The full result with `ok: false`, failure counts and `errorSummary` for incomplete automation; `{ ok: false, error }` on a thrown automation error ([`morning/route.ts:18-21`](../../../src/app/api/internal/class-assignments/morning/route.ts)); or `{"error":"Server misconfigured"}` when `CRON_SECRET` is unset ([`cron-auth.ts:22-24`](../../../src/lib/internal/cron-auth.ts)). |
 
 ---
 
@@ -410,19 +412,19 @@ Sends the daily admin summary of today's classroom assignments — or an "ACTION
 
 **Behavior** (`sendAdminClassroomScheduleEmail`, [`admin-schedule-email.ts:345-491`](../../../src/lib/classrooms/admin-schedule-email.ts)) — the date is today in Bangkok and the primary Apps Script sender is used, since the route passes no options:
 
-- Returns `status: "skipped"` **without sending** when a terminal admin-email run already exists for the date, or when a concurrent invocation won the insert race ([`admin-schedule-email.ts:355-366,399-410`](../../../src/lib/classrooms/admin-schedule-email.ts)).
+- Returns `status: "skipped"` **without sending** when a successfully sent admin-email run already exists for the date, or when another invocation holds the delivery claim ([`admin-schedule-email.ts:355-366,399-410`](../../../src/lib/classrooms/admin-schedule-email.ts)).
 - Returns `status: "pending"` **without writing** when there is no assignment run yet or a publish job is still pending **and** the Bangkok clock is before 07:36 (`FINAL_RETRY_MINUTE`, [`admin-schedule-email.ts:24`](../../../src/lib/classrooms/admin-schedule-email.ts)) — this is how the four staggered attempts back off ([`admin-schedule-email.ts:374-387`](../../../src/lib/classrooms/admin-schedule-email.ts)).
-- Otherwise inserts a `classroom_admin_email_runs` row (subject flips from `BeGifted classroom assignments - <date>` to `ACTION REQUIRED: classroom assignments not ready - <date>` when still unprepared, [`admin-schedule-email.ts:389-397`](../../../src/lib/classrooms/admin-schedule-email.ts)) and **sends one email per `admin_users` address**, writing a `classroom_admin_email_recipients` row per address ([`admin-schedule-email.ts:206-211,448-478`](../../../src/lib/classrooms/admin-schedule-email.ts)). No recipients configured → `status: "failed"` with `No admin_users email recipients are configured.` ([`admin-schedule-email.ts:426-447`](../../../src/lib/classrooms/admin-schedule-email.ts)). Otherwise the final status is `sent`, or `partial`/`failed` depending on how many sends threw ([`admin-schedule-email.ts:479-491`](../../../src/lib/classrooms/admin-schedule-email.ts)).
+- Otherwise atomically claims the existing date-keyed `classroom_admin_email_runs` row (creating it if absent); failed/partial runs retry, successful recipients are skipped, and abandoned claims are recoverable after ten minutes. Recipient attempt history is retained. The claim timestamp fences stale workers. The subject flips from `BeGifted classroom assignments - <date>` to `ACTION REQUIRED: classroom assignments need attention - <date>` whenever rooms, publishing or tutor delivery remain unresolved, [`admin-schedule-email.ts:389-397`](../../../src/lib/classrooms/admin-schedule-email.ts). The sender **sends one email per unsent `admin_users` address**, writing a `classroom_admin_email_recipients` row per address ([`admin-schedule-email.ts:206-211,448-478`](../../../src/lib/classrooms/admin-schedule-email.ts)). No recipients configured → `status: "failed"` with `No admin_users email recipients are configured.` ([`admin-schedule-email.ts:426-447`](../../../src/lib/classrooms/admin-schedule-email.ts)). Otherwise the final status is `sent`, or `partial`/`failed` depending on how many sends threw ([`admin-schedule-email.ts:479-491`](../../../src/lib/classrooms/admin-schedule-email.ts)).
 
-**Response body** — `AdminScheduleEmailResult` ([`admin-schedule-email.ts:26-35`](../../../src/lib/classrooms/admin-schedule-email.ts)): `{ status: "sent" | "partial" | "failed" | "pending" | "skipped", assignmentDate, assignmentRunId, emailRunId, attempted, success, failed, message }`. Returned as the body for both the 200 and the result-driven 500.
+**Response body** — `AdminScheduleEmailResult` ([`admin-schedule-email.ts:26-35`](../../../src/lib/classrooms/admin-schedule-email.ts)): `{ status: "sent" | "partial" | "failed" | "pending" | "skipped", assignmentDate, assignmentRunId, emailRunId, attempted, success, failed, message, errorSummary? }`. Returned as the body for both the 200 and the result-driven 500.
 
 **Status codes:**
 
 | Status | When |
 |--------|------|
-| 200 | `result.status` is anything other than `failed` — including `pending`, `skipped` and `partial` ([`admin-email/route.ts:17`](../../../src/app/api/internal/class-assignments/admin-email/route.ts)). |
+| 200 | `result.status` is `sent`, `pending` or `skipped` ([`admin-email/route.ts:17`](../../../src/app/api/internal/class-assignments/admin-email/route.ts)). |
 | 401 | Bad or missing `CRON_SECRET`. |
-| 500 | `result.status === "failed"` (the `AdminScheduleEmailResult` is still the body), or a thrown error (`{ error }`, [`admin-email/route.ts:19-22`](../../../src/app/api/internal/class-assignments/admin-email/route.ts)); or `{"error":"Server misconfigured"}` when `CRON_SECRET` is unset. |
+| 500 | `result.status` is `failed` or `partial` (the `AdminScheduleEmailResult` is still the body), or a thrown error (`{ error }`, [`admin-email/route.ts:19-22`](../../../src/app/api/internal/class-assignments/admin-email/route.ts)); or `{"error":"Server misconfigured"}` when `CRON_SECRET` is unset. |
 
 ---
 

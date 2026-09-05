@@ -37,6 +37,7 @@ function row(overrides: Record<string, unknown> = {}) {
     sessionType: overrides.sessionType ?? "OFFLINE",
     assignedRoom: overrides.assignedRoom ?? "Focus",
     status: overrides.status ?? "assigned",
+    publishStatus: overrides.publishStatus ?? "not_published",
     studentName: overrides.studentName ?? "Student One",
     subject: overrides.subject ?? "Math",
     classType: overrides.classType ?? "ONE_TO_ONE",
@@ -130,6 +131,14 @@ describe("schedule email preview", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("blocks tutors whose proposed room failed Wise publishing", async () => {
+    const db = makePreviewDb({ rows: [row({ publishStatus: "failed" })],
+      contacts: [{ canonicalKey: "Kevin", onsiteEmail: "kevhsh7@gmail.com", active: true }] });
+    const preview = await getScheduleEmailPreview(db as never, "run-1");
+    expect(preview.blockedCount).toBe(1);
+    expect(preview.sendable).toBe(false);
   });
 
   it("combines onsite and remote online rows for one tutor", async () => {
@@ -296,7 +305,7 @@ describe("schedule email preview", () => {
     expect(result.recipients.map((recipient) => recipient.tutorDisplayName)).toEqual(["Samantha"]);
   });
 
-  it("failed-only retry sends ready tutors without sent records and skips blocked tutors", async () => {
+  it("failed-only retry skips sent tutors and records blocked tutors", async () => {
     const db = makePreviewDb({
       rows: [
         row({ id: "sent-row", groupId: "sent-group", canonicalKey: "Kevin", tutorDisplayName: "Kevin" }),
@@ -321,8 +330,8 @@ describe("schedule email preview", () => {
     expect(sender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
       to: "nsinghsachthep@gmail.com",
     }));
-    expect(result.summary).toEqual({ attempted: 1, success: 1, failed: 0, blocked: 0 });
-    expect(result.recipients.map((recipient) => recipient.tutorDisplayName)).toEqual(["Nithit"]);
+    expect(result.summary).toEqual({ attempted: 1, success: 1, failed: 0, blocked: 1 });
+    expect(result.recipients.map((recipient) => recipient.tutorDisplayName)).toEqual(["Nithit", "Sand"]);
   });
 
   it("automatically fails over remaining unsent ready tutors when primary quota is exhausted", async () => {

@@ -156,6 +156,18 @@ describe("runClassroomMorningAutomation", () => {
     mockMorningDependencies();
   });
 
+  it("reports live sessions omitted from the snapshot as an actionable failure", async () => {
+    vi.mocked(runIncrementalClassroomAssignment).mockImplementation(async (_db, input) => {
+      const detail = assignmentDetail(input.date);
+      return { ...detail, run: { ...detail.run, changeSummary: { unmanagedWiseSessionCount: input.date === "2026-05-26" ? 1 : 0 } } } as never;
+    });
+    const db = makeDbSelect([[syncRow({ finishedAt: new Date() })]]);
+    const result = await runClassroomMorningAutomation(db as never, { startDate: "2026-05-26", liveSessions: [] });
+    expect(result).toMatchObject({ ok: false, unmanagedWiseSessionCount: 1 });
+    expect(result.errorSummary).toContain("sync/tutor identity review required");
+    expect(result.dates).toHaveLength(7);
+  });
+
   it("sends tutor schedule emails for today only after publishing today's assignments", async () => {
     const db = makeDbSelect([
       [syncRow({ id: "fresh-sync", finishedAt: new Date() })],
@@ -209,7 +221,7 @@ describe("runClassroomMorningAutomation", () => {
     }
   });
 
-  it("captures tutor schedule email errors without failing assignment automation", async () => {
+  it("reports email failures while preserving all seven assignment results", async () => {
     const db = makeDbSelect([
       [syncRow({ id: "fresh-sync", finishedAt: new Date() })],
     ]);
@@ -221,7 +233,9 @@ describe("runClassroomMorningAutomation", () => {
       liveSessions: [],
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.failedEmailCount).toBe(1);
+    expect(result.errorSummary).toContain("1 email failures");
     expect(result.dates).toHaveLength(7);
     expect(result.dates[0].scheduleEmail).toBeUndefined();
     expect(result.dates[0].scheduleEmailError).toBe("Apps Script unavailable");
