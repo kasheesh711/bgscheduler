@@ -7,8 +7,8 @@
 +    # Immutable event allocations reused by the daily report projection.
 +    recognitions: pd.DataFrame = field(default_factory=pd.DataFrame)
 +    lot_creation_dates: dict[str, date] = field(default_factory=dict)
- 
- 
+
+
  def _text(value: Any) -> str:
 @@ -2205,4 +2208,6 @@
          quality=quality,

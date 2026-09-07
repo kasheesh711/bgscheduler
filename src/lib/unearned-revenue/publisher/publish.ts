@@ -240,5 +240,12 @@ export async function publishBundle(input: { google: PublicationGoogle; bundle: 
   parseValuesPublication({ manifest, contractBytes, statusStart: finalRows, statusEnd: await google.values(spreadsheetId, statusRange) });
   const finalMetadata = await google.metadata(spreadsheetId);
   if (finalMetadata.sheets.filter(s => !s.properties.hidden).length !== 3) throw new Error("Finance workbook does not have exactly three visible tabs");
-  return { status: "published", runId: manifest.runId, cutoff, reports: months.length, ...capacity, reviewChanged: String(bundle.status.review_conditions) !== (initial.review_conditions || "NONE") && bundle.status.review_conditions !== "NONE" };
+  const reviews = (value: unknown) => String(value ?? "").split(";").map(item => item.trim()).filter(item => item && item !== "NONE").sort();
+  const previousReviews = reviews(initial.review_conditions);
+  const reviewConditions = reviews(bundle.status.review_conditions);
+  return { status: "published", runId: manifest.runId, cutoff, sourceFingerprint: manifest.sourceFingerprint,
+    reports: months.length, ...capacity, reviewConditions,
+    changedReviewConditions: reviewConditions.filter(item => !previousReviews.includes(item)),
+    resolvedReviewConditions: previousReviews.filter(item => !reviewConditions.includes(item)),
+    reviewChanged: JSON.stringify(reviewConditions) !== JSON.stringify(previousReviews) };
 }

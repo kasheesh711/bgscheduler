@@ -5,6 +5,9 @@ import { readFileSync, mkdirSync, openSync, closeSync, unlinkSync, writeFileSync
 import { resolve, dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { parseArgs, promisify } from "node:util";
+import { createHash } from "node:crypto";
+
+const failureContext: Record<string, unknown> = { cutoff: new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() - 86_400_000)) };
 
 async function main() {
   const { values } = parseArgs({ options: {
@@ -28,6 +31,7 @@ async function main() {
   catch { throw new Error(`Publisher already running or interrupted. Check the PID in ${lockPath} before removing a stale lock.`); }
   try {
     const id = values["spreadsheet-id"] ?? getUnearnedRevenueSpreadsheetId();
+    failureContext.targetSpreadsheetId = id;
     const credentials = values["google-credentials"] ?? join(root, "..", "BeGifted_Consulting_Materials", "begifted-sheets-ab2b8e47aa86.json");
     let bundlePath = values.bundle && resolve(values.bundle);
     if (!bundlePath) {
@@ -40,6 +44,7 @@ async function main() {
     }
     const bytes = readFileSync(bundlePath);
     const bundle = JSON.parse(gunzipSync(bytes, { maxOutputLength: 500_000_000 }).toString()) as import("../src/lib/unearned-revenue/publisher/layout").ReportBundle;
+    Object.assign(failureContext, { cutoff: bundle.status.published_cutoff, runId: bundle.status.run_id, sourceFingerprint: bundle.status.source_fingerprint });
     validateDailyBundle(bundle);
     const contract = gzipSync(JSON.stringify({ tables: bundle.tables, traces: {} }));
     const fakeFile = { fileId: "preflight-placeholder", bytes: contract.length, sha256: sha256(contract) };
@@ -60,4 +65,11 @@ async function main() {
     process.exitCode = result.reviewChanged ? 2 : 0;
   } finally { closeSync(lock); unlinkSync(lockPath); }
 }
-main().catch(error => { process.stderr.write(`${error instanceof Error ? error.stack : error}\n`); process.stdout.write(JSON.stringify({ status: "failed", publicationOutcome: "Read Model Status run_id to resolve any transport failure after atomic commit", error: error instanceof Error ? error.message : String(error) }) + "\n"); process.exitCode = 1; });
+main().catch(error => {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`${error instanceof Error ? error.stack : message}\n`);
+  process.stdout.write(JSON.stringify({ ...failureContext, status: "failed", publicationStatus: "FAILED_RUN_VERIFY_MARKER",
+    errorFingerprint: createHash("sha256").update(message).digest("hex").slice(0, 16),
+    publicationOutcome: "Read Model Status run_id to resolve any transport failure after atomic commit", error: message }) + "\n");
+  process.exitCode = 1;
+});
