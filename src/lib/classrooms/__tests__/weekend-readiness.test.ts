@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assignmentReadinessFindings, notificationForReport, readinessForFindings, type ReadinessRow, type WeekendReport } from "../weekend-readiness";
+import { assignmentReadinessFindings, notificationForReport, readinessForFindings, resolveReadinessRoom, type ReadinessRow, type WeekendReport } from "../weekend-readiness";
 import { buildWeekendEmail } from "../weekend-email";
 import { isWeekendCheckDue, weekendDates, weekendAlertRecipient } from "../weekend-config";
 
@@ -30,6 +30,28 @@ describe("weekend classroom readiness", () => {
     }
     const result = assignmentReadinessFindings({ date: "2026-09-12", rows: [row("class")], rooms: rooms.map(r => ({ ...r, active: false })) });
     expect(readinessForFindings(result)).toBe("attention");
+  });
+  it("never lets an inactive legacy room shadow its active TV room, in either catalog order", () => {
+    const old = { ...rooms[0], name: "Keep Going", active: false };
+    const current = { ...rooms[1], name: "Keep Going (TV)" };
+    for (const catalog of [[old, current], [current, old]]) {
+      for (const location of ["Keep Going (TV)", " Keep Going "]) {
+        expect(assignmentReadinessFindings({ date: "2026-09-12", rooms: catalog,
+          rows: [row("valid", { currentWiseLocation: location, assignedRoom: location, needsTv: true })] })).toEqual([]);
+      }
+    }
+  });
+  it("prefers the exact active room and refuses ambiguous, inactive-only or missing aliases", () => {
+    const plain = { ...rooms[0], name: "Iconic" };
+    const tv = { ...rooms[1], name: "Iconic (TV)" };
+    expect(resolveReadinessRoom([plain, tv], " ICONIC (TV) ")).toBe(tv);
+    expect(resolveReadinessRoom([tv, plain], "Iconic")).toBe(plain);
+    expect(resolveReadinessRoom([tv, { ...tv, name: " ICONIC (TV) " }], "Iconic")).toBeUndefined();
+    expect(resolveReadinessRoom([{ ...tv, active: false }], "Iconic (TV)")).toBeUndefined();
+    expect(resolveReadinessRoom([tv], "Other")).toBeUndefined();
+    const result = assignmentReadinessFindings({ date: "2026-09-12", rooms: [plain, tv],
+      rows: [row("invalid", { currentWiseLocation: "Iconic", assignedRoom: "Iconic", needsTv: true })] });
+    expect(result.filter(finding => finding.kind === "review")).toHaveLength(2);
   });
   it("checks center-based online classes while excluding genuinely remote sessions", () => {
     expect(findings([row("remote", { status: "remote", sessionType: "SCHEDULED", assignedRoom: "REMOTE_NO_ROOM_NEEDED" })])).toEqual([]);

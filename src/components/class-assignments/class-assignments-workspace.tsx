@@ -1,6 +1,7 @@
 "use client";
 
-import { AssignmentReadinessNotice, WeekendReadinessPanel } from "./readiness-notice";
+import { ClassroomReadiness } from "./readiness-notice";
+import { summarizeAssignmentReadiness } from "./readiness-summary";
 
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,14 +39,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatBangkokShortDateTime } from "@/lib/bangkok-time";
 import { buildRoomChurnSummary, buildTimelineBounds, minuteToTimeLabel, snapTimelinePlaybackMinute } from "@/lib/classrooms/visualization";
 import { AssignmentTimelineControls } from "./assignment-timeline-controls";
 import { FloorPlanOccupancy } from "./floor-plan-occupancy";
 import { RoomCalendarView } from "./room-calendar-view";
 import { RoomOccupancyHeatmap } from "./room-occupancy-heatmap";
 import { readAssignmentDetailResponse, syncWiseBeforeAssignment } from "./sync-flow";
-import { SyncReviewNotice } from "./sync-review-notice";
 import type { AssignmentDetail, ClassroomRow } from "./types";
 
 const NO_ROOM_AVAILABLE = "NO_ROOM_AVAILABLE";
@@ -188,14 +187,6 @@ function formatDuration(ms: number | null | undefined): string {
   return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
 }
 
-function formatAge(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined) return "unknown";
-  const minutes = Math.max(0, Math.round(ms / 60000));
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
-}
-
 function isPublishEligible(row: ClassroomRow): boolean {
   return (
     row.status === "assigned" &&
@@ -276,6 +267,7 @@ export function ClassAssignmentsWorkspace() {
   const rooms = useMemo(() => (detail?.rooms ?? []).filter((room) => room.active), [detail?.rooms]);
   const rows = useMemo(() => detail?.rows ?? [], [detail?.rows]);
   const run = detail?.run ?? null;
+  const readiness = useMemo(() => summarizeAssignmentReadiness(detail, date, loading), [detail, date, loading]);
   const projected = useMemo(() => buildTeacherSchedule(rows, date, run?.changeSummary ?? {}), [rows, date, run]);
   const [preparingPrint, setPreparingPrint] = useState(false);
   async function printSevenDays() {
@@ -639,9 +631,6 @@ export function ClassAssignmentsWorkspace() {
       : runStep === "assigning"
         ? "Generating"
         : "Sync Wise, then run";
-  const snapshotMeta = detail?.activeSnapshotMeta ?? detail?.snapshotMeta ?? null;
-  const liveRoomBlocks = detail?.liveRoomBlocks ?? [];
-  const roomConflictWarnings = detail?.roomConflictWarnings ?? [];
 
   function handleTimelineMinuteChange(minute: number) {
     const nextMinute = Math.min(timelineBounds.endMinute, Math.max(timelineBounds.startMinute, minute));
@@ -729,49 +718,7 @@ export function ClassAssignmentsWorkspace() {
         </div>
       )}
 
-      <SyncReviewNotice detail={detail} />
-
-      {snapshotMeta && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">
-          <Badge variant={snapshotMeta.fresh ? "default" : "destructive"}>
-            {snapshotMeta.fresh ? "Fresh Wise data" : "Stale Wise data"}
-          </Badge>
-          <span className="text-muted-foreground">
-            Last sync{" "}
-            {snapshotMeta.latestSyncFinishedAt
-              ? `${formatBangkokShortDateTime(snapshotMeta.latestSyncFinishedAt)} (${formatAge(snapshotMeta.staleAgeMs)} ago)`
-              : "unknown"}
-          </span>
-          {snapshotMeta.snapshotId && (
-            <span className="font-mono text-xs text-muted-foreground">
-              {snapshotMeta.snapshotId.slice(0, 8)}
-            </span>
-          )}
-        </div>
-      )}
-
-      {(liveRoomBlocks.length > 0 || roomConflictWarnings.length > 0) && (
-        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
-          <div className="font-medium">
-            {liveRoomBlocks.length} live Wise room blockers detected
-            {roomConflictWarnings.length > 0 ? `, ${roomConflictWarnings.length} conflicts still visible` : ""}
-          </div>
-          <div className="mt-1 grid gap-1 text-xs">
-            {liveRoomBlocks.slice(0, 4).map((block) => (
-              <div key={block.wiseSessionId}>
-                {minuteToTimeLabel(block.startMinute)}-{minuteToTimeLabel(block.endMinute)} · {block.location} ·{" "}
-                {block.className || block.wiseSessionId}
-              </div>
-            ))}
-            {liveRoomBlocks.length > 4 && (
-              <div>{liveRoomBlocks.length - 4} more live blockers reserved during assignment.</div>
-            )}
-          </div>
-        </div>
-      )}
-
-      <AssignmentReadinessNotice detail={detail} />
-      <WeekendReadinessPanel refreshKey={`${date}:${run?.id ?? ""}:${run?.updatedAt ?? ""}`} />
+      <ClassroomReadiness detail={detail} date={date} day={readiness} loading={loading} />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-8">
         <div className="rounded-lg border bg-card p-3">
@@ -787,8 +734,8 @@ export function ClassAssignmentsWorkspace() {
           <div className="mt-1 text-lg font-semibold">{run?.assignedCount ?? 0}</div>
         </div>
         <div className="rounded-lg border bg-card p-3">
-          <div className="text-xs text-muted-foreground">Needs review</div>
-          <div className="mt-1 text-lg font-semibold">{run?.needsReviewCount ?? 0}</div>
+          <div className="text-xs text-muted-foreground">Classroom issues</div>
+          <div className="mt-1 text-lg font-semibold">{loading ? "…" : !run ? "—" : readiness.affectedClasses || (readiness.groups.length ? "Review" : 0)}</div>
         </div>
         <div className="rounded-lg border bg-card p-3">
           <div className="text-xs text-muted-foreground">No room</div>

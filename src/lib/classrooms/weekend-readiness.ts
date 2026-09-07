@@ -33,6 +33,16 @@ const overlaps = (a: { startMinute: number; endMinute: number }, b: { startMinut
 export type ReadinessRow = Pick<AssignmentResultRow, "status" | "wiseSessionId" | "tutorDisplayName" | "studentName" | "title" | "subject"
   | "startMinute" | "endMinute" | "currentWiseLocation" | "assignedRoom" | "minCapacity" | "needsTv" | "warnings" | "sessionType">;
 
+/** Legacy non-TV aliases remain in the catalog as inactive rows. Never let them
+ * shadow a current room, and never guess between multiple active aliases. */
+export function resolveReadinessRoom(rooms: ClassroomRoomDefinition[], name: string) {
+  const active = rooms.filter(room => room.active);
+  const exact = active.filter(room => room.name.trim().toLowerCase() === name.trim().toLowerCase());
+  if (exact.length) return exact.length === 1 ? exact[0] : undefined;
+  const aliases = active.filter(room => physicalRoom(room.name) === physicalRoom(name));
+  return aliases.length === 1 ? aliases[0] : undefined;
+}
+
 /** Findings describe classes affected, never mislabel an allocator limit as a proven room deficit. */
 export function assignmentReadinessFindings(input: {
   date: string;
@@ -42,6 +52,11 @@ export function assignmentReadinessFindings(input: {
   liveRoomBlocks?: ExternalRoomBlock[];
 }): WeekendFinding[] {
   const findings: WeekendFinding[] = [];
+  const roomByLocation = new Map([...new Set(input.rows.flatMap(row => [row.assignedRoom, row.currentWiseLocation ?? ""]))]
+    .map(location => [location, resolveReadinessRoom(input.rooms, location)]));
+  const planned = input.rows.filter(row => row.status !== "remote" && row.status !== "no_room")
+    .map(row => ({ ...row, location: row.assignedRoom }));
+  const reservations = [...planned, ...(input.externalRoomBlocks ?? [])];
   for (const row of input.rows) {
     const context = { date: input.date, wiseSessionId: row.wiseSessionId, tutor: row.tutorDisplayName,
       className: row.studentName || row.title || row.subject || undefined, startMinute: row.startMinute,
@@ -51,7 +66,7 @@ export function assignmentReadinessFindings(input: {
       message: "Class modality is unknown; classroom coverage cannot be confirmed." });
     if (row.status === "remote") continue;
     if (isOnsiteSessionType(row.sessionType) && row.currentWiseLocation) {
-      const bookedRoom = input.rooms.find(room => physicalRoom(room.name) === physicalRoom(row.currentWiseLocation!));
+      const bookedRoom = roomByLocation.get(row.currentWiseLocation);
       if (!bookedRoom?.active || bookedRoom.category === "online_only" || bookedRoom.capacity < row.minCapacity || (row.needsTv && !bookedRoom.hasTv)) {
         findings.push({ ...context, kind: "review", message: `The existing Wise booking in ${row.currentWiseLocation} does not satisfy the class requirements. Any proposed correction still needs to be applied.` });
       }
@@ -65,15 +80,13 @@ export function assignmentReadinessFindings(input: {
         ? "Class size is unknown; the required room capacity must be confirmed."
         : "The room assignment or its requirements could not be confirmed and need staff review." });
     } else {
-      const room = input.rooms.find(room => physicalRoom(room.name) === physicalRoom(row.assignedRoom));
+      const room = roomByLocation.get(row.assignedRoom);
       if (!room?.active || room.capacity < row.minCapacity || (row.needsTv && !room.hasTv)
         || (isOnsiteSessionType(row.sessionType) && room.category === "online_only")) {
         findings.push({ ...context, kind: "review", message: "Assigned classroom does not satisfy the class requirements." });
       }
     }
-    const planned = input.rows.filter(other => other.status !== "remote" && other.status !== "no_room")
-      .map(other => ({ ...other, location: other.assignedRoom }));
-    if (row.status !== "no_room" && [...planned, ...(input.externalRoomBlocks ?? [])].some(other =>
+    if (row.status !== "no_room" && reservations.some(other =>
       other.wiseSessionId !== row.wiseSessionId && physicalRoom(other.location) === physicalRoom(row.assignedRoom) && overlaps(row, other))) {
       findings.push({ ...context, kind: "conflict", message: `The proposed room ${row.assignedRoom} is occupied by another class at this time.` });
     }
