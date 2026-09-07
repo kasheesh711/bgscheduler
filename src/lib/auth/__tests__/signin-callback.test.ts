@@ -6,21 +6,26 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // order and failure isolation are observable without a database.
 vi.mock("@/lib/auth-access", () => ({ resolveUserAccess: vi.fn() }));
 vi.mock("@/lib/admissions/members", () => ({ activateMembershipsForEmail: vi.fn() }));
+vi.mock("@/lib/auth-session", () => ({ validateSessionAccess: vi.fn() }));
+vi.mock("@/lib/sales-dashboard/google-oauth", () => ({ storeGoogleOAuthTokenForUser: vi.fn() }));
+const { rawAuth } = vi.hoisted(() => ({ rawAuth: vi.fn() }));
 vi.mock("next-auth", () => ({
   default: () => ({
     handlers: {},
     signIn: vi.fn(),
     signOut: vi.fn(),
-    auth: vi.fn(),
+    auth: rawAuth,
   }),
 }));
 vi.mock("next-auth/providers/google", () => ({
   default: () => ({ id: "google", name: "Google", type: "oauth" }),
 }));
 
-import { signInCallback } from "@/lib/auth";
+import { auth, authConfig, signInCallback } from "@/lib/auth";
 import { resolveUserAccess } from "@/lib/auth-access";
 import { activateMembershipsForEmail } from "@/lib/admissions/members";
+import { validateSessionAccess } from "@/lib/auth-session";
+import { storeGoogleOAuthTokenForUser } from "@/lib/sales-dashboard/google-oauth";
 
 describe("signInCallback — TCOV-06 (admin allowlist + teacher access)", () => {
   beforeEach(() => {
@@ -60,6 +65,46 @@ describe("signInCallback — TCOV-06 (admin allowlist + teacher access)", () => 
 
     expect(ok).toBe(false);
     expect(activateMembershipsForEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe("Auth.js revocation and preview callbacks", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.unstubAllEnvs();
+    vi.mocked(activateMembershipsForEmail).mockResolvedValue([]);
+  });
+
+  it("sets an admin version only at fresh sign-in and preserves stale/unversioned tokens", async () => {
+    vi.mocked(resolveUserAccess).mockResolvedValue({ role: "admin", allowedPages: null, adminAccessVersion: 4 });
+    const signedIn = await authConfig.callbacks.jwt({ token: {}, user: { email: "owner@example.com" } } as never);
+    expect(signedIn.adminAccessVersion).toBe(4);
+    vi.mocked(resolveUserAccess).mockClear();
+    const old = { role: "admin", adminAccessVersion: 0 };
+    expect(await authConfig.callbacks.jwt({ token: old } as never)).toEqual(old);
+    expect(await authConfig.callbacks.jwt({ token: { role: "admin" } } as never)).not.toHaveProperty("adminAccessVersion");
+    expect(resolveUserAccess).not.toHaveBeenCalled();
+  });
+
+  it("passes the immutable access version into the session", async () => {
+    const result = await authConfig.callbacks.session({ session: { user: {} }, token: { role: "admin", adminAccessVersion: 7 } } as never);
+    expect(result.user).toMatchObject({ role: "admin", adminAccessVersion: 7 });
+  });
+
+  it("independently applies the fresh guard to every server auth call", async () => {
+    const stale = { user: { email: "aoeng@example.com", role: "admin", adminAccessVersion: 0 } };
+    rawAuth.mockResolvedValue(stale);
+    vi.mocked(validateSessionAccess).mockResolvedValue(null);
+    expect(await auth()).toBeNull();
+    expect(validateSessionAccess).toHaveBeenCalledWith(stale);
+  });
+
+  it("never stores Google integration tokens in preview", async () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.mocked(resolveUserAccess).mockResolvedValue({ role: "admin", allowedPages: null, adminAccessVersion: 0 });
+    expect(await authConfig.callbacks.signIn({ user: { email: "aoeng@example.com" }, account: { access_token: "preview-identity-token" } } as never)).toBe(true);
+    expect(storeGoogleOAuthTokenForUser).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
   });
 });
 

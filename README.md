@@ -17,6 +17,8 @@ audit tools the ops team runs the school on.
 > reference, and the operations runbook.
 > **This README is the orientation layer; the handbook owns the depth.**
 
+**Aoeng:** start with the [Windows + Claude Code setup guide](docs/operations/aoeng-windows-setup.md). It covers the protected browser preview and publishing from `codex/aoeng-preview`. Kevin's [owner access runbook](docs/operations/owner-access-runbook.md) covers permissions and revocation.
+
 | Tree | What's there |
 |---|---|
 | [`docs/handbook/`](docs/handbook/overview.md) | Cross-cutting mental model — read [not-the-nextjs-you-know.md](docs/handbook/not-the-nextjs-you-know.md) first, then [overview](docs/handbook/overview.md), [architecture](docs/handbook/architecture.md), [data-flow](docs/handbook/data-flow.md), [conventions](docs/handbook/conventions.md), [glossary](docs/handbook/glossary.md) |
@@ -206,6 +208,8 @@ Full registry (timeouts, guards, behavior) in [`docs/reference/crons.md`](docs/r
 
 ## Local development
 
+Aoeng's browser-preview workflow is in the [Windows guide](docs/operations/aoeng-windows-setup.md); skip the local server and environment setup below for that workflow. Engineers who need a local app use Node.js 24 and their own approved development environment.
+
 ```bash
 npm install
 npm run dev          # next dev → http://localhost:3000
@@ -220,7 +224,7 @@ and **9 optional** (`LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`,
 `STUDENT_SCHEDULE_LINK_TTL_DAYS`, `APP_BASE_URL`, `MAINTENANCE_MODE`,
 `MAINTENANCE_BYPASS_EMAILS`). Everything else — AI scheduler, schedule emails, the
 leave-request sheet, post-class payout targets — is read from `process.env` where used, and
-`MAINTENANCE_MODE` is declared here for inventory parity only because the edge middleware
+`MAINTENANCE_MODE` is declared here for inventory parity only because the Node Proxy
 reads it directly. The reconciled list with sources and consumers is in
 [`docs/reference/env.md`](docs/reference/env.md).
 
@@ -249,7 +253,6 @@ npm run db:migrate                   # apply migrations (needs DATABASE_URL)
 npm run db:seed                      # seed admin users + aliases (DATABASE_URL, SEED_ADMIN_EMAILS)
 
 # Guards & release
-npm run guard:sales-dashboard-scope  # scripts/check-sales-dashboard-scope.mjs
 npm run guard:production-route-surface
 npm run verify:release               # typecheck → test → build → typecheck → git diff --check → route-surface guard
 npm run deploy:prod                  # verify:release → assert-production-deploy-ready.mjs → vercel --prod
@@ -278,7 +281,7 @@ npm run payout:reconcile-sheet
 
 ### Deploying
 
-Push to `main` — the Vercel Git integration auto-deploys production.
+Merge a pull request into `main` after the five required checks pass — the Vercel Git integration auto-deploys production. Ordinary feature changes need no blanket approval; protected files in [CODEOWNERS](.github/CODEOWNERS) require Kevin's review. Keep `codex/aoeng-preview` after merging and use a merge commit.
 `npm run deploy:prod` is the guarded manual path and only works from the Vercel-linked
 worktree: [`scripts/assert-production-deploy-ready.mjs`](scripts/assert-production-deploy-ready.mjs)
 refuses a non-`main` branch, a dirty tree, or a `HEAD` that isn't `origin/main`. Do **not**

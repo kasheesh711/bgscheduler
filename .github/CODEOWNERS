@@ -1,1 +1,71 @@
-* @kasheesh711
+# Everyday feature changes can ship after the required checks pass.
+# With required code-owner review enabled on main, Kevin must approve changes
+# to the controls below. This file is itself protected by /.github/.
+
+# Publishing, dependencies, migrations, and agent instructions.
+/.github/ @kasheesh711
+/scripts/ @kasheesh711
+/docs/reference/production-route-surface.json @kasheesh711
+/package.json @kasheesh711
+/package-lock.json @kasheesh711
+/*.config.* @kasheesh711
+/tsconfig*.json @kasheesh711
+/.npmrc @kasheesh711
+/.nvmrc @kasheesh711
+/.node-version @kasheesh711
+/.env* @kasheesh711
+/.gitignore @kasheesh711
+/vercel.json @kasheesh711
+/.vercel/ @kasheesh711
+/drizzle/ @kasheesh711
+/src/lib/db/ @kasheesh711
+/.claude/ @kasheesh711
+/.agents/ @kasheesh711
+/.codex/ @kasheesh711
+AGENTS.md @kasheesh711
+CLAUDE.md @kasheesh711
+SKILL.md @kasheesh711
+
+# Authentication, current-session checks, owner controls, and page gates.
+/src/lib/auth*.ts @kasheesh711
+/src/lib/auth/ @kasheesh711
+/src/lib/__tests__/auth*.test.ts @kasheesh711
+/src/types/next-auth.d.ts @kasheesh711
+/src/middleware.ts @kasheesh711
+/src/proxy.ts @kasheesh711
+/src/__tests__/middleware.test.ts @kasheesh711
+/src/__tests__/proxy.test.ts @kasheesh711
+/src/app/api/auth/ @kasheesh711
+/src/app/api/admin/ @kasheesh711
+/src/app/(app)/admin/ @kasheesh711
+/src/lib/admin-users/ @kasheesh711
+/src/components/admin-users/ @kasheesh711
+/src/app/(app)/layout.tsx @kasheesh711
+/src/components/layout/app-nav.tsx @kasheesh711
+/src/lib/navigation/ @kasheesh711
+/src/lib/maintenance.ts @kasheesh711
+
+# Feature authorization and the handlers that grant or revoke capabilities.
+/src/**/access*.ts @kasheesh711
+/src/**/*-access.ts @kasheesh711
+/src/**/permissions*.ts @kasheesh711
+/src/**/roles*.ts @kasheesh711
+/src/**/capabilit*.ts @kasheesh711
+/src/lib/**/api.ts @kasheesh711
+/src/lib/student-schedule/links.ts @kasheesh711
+/src/lib/line/signature.ts @kasheesh711
+/src/app/api/**/access/ @kasheesh711
+/src/app/api/**/members/ @kasheesh711
+/src/app/api/**/memberships/ @kasheesh711
+
+# Preview isolation, credentials, cron authentication, and external-write flags.
+/src/lib/preview*.ts @kasheesh711
+/src/lib/__tests__/preview*.test.ts @kasheesh711
+/src/components/layout/preview-banner.tsx @kasheesh711
+/src/lib/env.ts @kasheesh711
+/src/lib/**/google-oauth.ts @kasheesh711
+/src/lib/internal/ @kasheesh711
+/src/app/api/internal/ @kasheesh711
+/src/lib/data-health/cron-registry.ts @kasheesh711
+/src/lib/post-class-feedback/payout-config.ts @kasheesh711
+/src/lib/post-class-feedback/notification-config.ts @kasheesh711

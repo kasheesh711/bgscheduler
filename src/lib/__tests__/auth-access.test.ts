@@ -29,17 +29,25 @@ describe("resolveUserAccess", () => {
   });
 
   it("returns admin (full access) for an admin_users row with null allowedPages", async () => {
-    const access = await resolveUserAccess("kevhsh7@gmail.com", fakeDb([{ allowedPages: null }]));
+    const access = await resolveUserAccess("kevhsh7@gmail.com", fakeDb([{ allowedPages: null, disabled: false, accessVersion: 0 }]));
 
-    expect(access).toEqual({ role: "admin", allowedPages: null });
+    expect(access).toEqual({ role: "admin", allowedPages: null, adminAccessVersion: 0 });
     expect(resolveAdmissionsRole).not.toHaveBeenCalled();
     expect(resolveTeacherCanonicalKeys).not.toHaveBeenCalled();
   });
 
   it("returns admin restricted to its allowedPages (e.g. m.giftwan)", async () => {
-    const access = await resolveUserAccess("m.giftwan@gmail.com", fakeDb([{ allowedPages: ["/progress-tests"] }]));
+    const access = await resolveUserAccess("m.giftwan@gmail.com", fakeDb([{ allowedPages: ["/progress-tests"], disabled: false, accessVersion: 2 }]));
 
-    expect(access).toEqual({ role: "admin", allowedPages: ["/progress-tests"] });
+    expect(access).toEqual({ role: "admin", allowedPages: ["/progress-tests"], adminAccessVersion: 2 });
+  });
+
+  it("denies disabled admins before lower-role lookups, even if they are teachers or admissions members", async () => {
+    vi.mocked(resolveAdmissionsRole).mockResolvedValue("counselor");
+    vi.mocked(resolveTeacherCanonicalKeys).mockResolvedValue(["teacher-key"]);
+    expect(await resolveUserAccess("disabled@example.com", fakeDb([{ disabled: true, accessVersion: 1, allowedPages: null }]))).toBeNull();
+    expect(resolveAdmissionsRole).not.toHaveBeenCalled();
+    expect(resolveTeacherCanonicalKeys).not.toHaveBeenCalled();
   });
 
   it("returns a counselor restricted to /admissions, without consulting the teacher lookup", async () => {

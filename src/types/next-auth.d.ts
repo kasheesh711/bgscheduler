@@ -27,6 +27,7 @@ declare module "next-auth" {
     user: {
       allowedPages?: string[] | null;
       role?: UserRole | null;
+      adminAccessVersion?: number;
     } & DefaultSession["user"];
   }
 }
@@ -35,5 +36,6 @@ declare module "next-auth/jwt" {
   interface JWT {
     allowedPages?: string[] | null;
     role?: UserRole | null;
+    adminAccessVersion?: number;
   }
 }

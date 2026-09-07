@@ -18,7 +18,7 @@
 // Node-only (does DB work): imported by src/lib/auth.ts (sign-in + jwt). The edge
 // auth config never imports this — it only reads the resulting token claims.
 
-import { eq } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { resolveAdmissionsRole } from "@/lib/admissions/access";
 import { ADMISSIONS_ROUTE } from "@/lib/admissions/config";
 import { getDb, type Database } from "@/lib/db";
@@ -34,6 +34,8 @@ export interface UserAccess {
   role: UserRole;
   /** null = full access (admins); a list = restricted to those route prefixes. */
   allowedPages: string[] | null;
+  /** Present only for admins; fixed in the JWT at each fresh sign-in. */
+  adminAccessVersion?: number;
 }
 
 /**
@@ -61,11 +63,15 @@ export async function resolveUserAccess(
   if (!normalized) return null;
 
   const [admin] = await db
-    .select({ allowedPages: adminUsers.allowedPages })
+    .select({ allowedPages: adminUsers.allowedPages, disabled: adminUsers.disabled, accessVersion: adminUsers.accessVersion })
     .from(adminUsers)
-    .where(eq(adminUsers.email, normalized))
+    .where(sql`lower(btrim(${adminUsers.email})) = ${normalized}`)
     .limit(1);
-  if (admin) return { role: "admin", allowedPages: admin.allowedPages ?? null };
+  if (admin) {
+    // A disabled admin must not regain access through a tutor or admissions role.
+    if (admin.disabled) return null;
+    return { role: "admin", allowedPages: admin.allowedPages ?? null, adminAccessVersion: admin.accessVersion };
+  }
 
   const admissionsRole = await resolveAdmissionsRole(normalized, db);
   if (admissionsRole === "counselor") {
