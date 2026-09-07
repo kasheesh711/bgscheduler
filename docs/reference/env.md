@@ -6,6 +6,8 @@ This page is the canonical home for the **mechanics** of configuration: the exac
 
 Four inventories are reconciled here, and none of them agree:
 
+The count inventory below predates the collaborator-access release. The additional owner/preview variables are listed explicitly in [Owner controls and collaborator preview](#owner-controls-and-collaborator-preview).
+
 | Inventory | Count | Source |
 |---|---|---|
 | Declared in the Zod schema | **20** keys | [`src/lib/env.ts:3`–`46`](../../src/lib/env.ts) |
@@ -16,6 +18,20 @@ Four inventories are reconciled here, and none of them agree:
 > **Counting method.** A literal `process.env.NAME` scan of non-test `src/` yields 68 runtime names after excluding `TEST_DATABASE_URL`. Eleven more never appear in that form: nine `POST_CLASS_PAYOUT_*` keys read through `value(env, "NAME")` or `env.POST_CLASS_PAYOUT_WRITES_ENABLED`, `VERCEL_ENV` through the same helper, and `WISE_SESSION_SUBJECT_UPDATE_VERIFIED` through computed access on a constant. That produces 79 named runtime keys; the computed `COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD` family is listed separately rather than guessed.
 
 ---
+
+## Owner controls and collaborator preview
+
+| Variable | Effect and owner default | Source |
+|---|---|---|
+| `SUPER_ADMIN_EMAILS` | Comma-separated emails, trimmed/lowercased. Configure `kevhsh7@gmail.com` for this deployment. An empty list grants no owner access; an email must also have an active admin account. This does not enroll a user or grant Unearned Revenue capabilities. | `src/lib/admin-users/policy.ts`, `src/lib/admin-users/access.ts` |
+| `PREVIEW_SANDBOX_ENABLED` | Exactly `true` activates the preview policy even outside a Vercel Preview deployment. Set `true` on Aoeng's preview. It cannot turn preview policy off when `VERCEL_ENV=preview`. | `src/lib/preview-policy.ts` |
+| `VERCEL_ENV` | Vercel-provided environment name. `preview` always activates identity-only OAuth, skipped Google-token persistence, and the preview banner. | `src/lib/preview-policy.ts` |
+| `DATABASE_URL` | Preview must use a separate database, login, and password with no production access; never inherit the production URL. | `src/lib/db/index.ts` |
+| `AUTH_SECRET` | Distinct secret per production/preview environment. Never reuse a production cookie or Google-token encryption key in preview. | Auth.js and `src/lib/sales-dashboard/google-oauth.ts` |
+| `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET` | A separate Google OAuth web client for preview. Register the verified stable preview origin plus `/api/auth/callback/google`. Preview requests only `openid email profile`; production retains its Sheets/Drive integration scopes. | `src/lib/auth.ts`, `src/lib/auth-edge.ts` |
+| `CRON_SECRET` | Distinct preview secret. Preview endpoints must not accept production cron credentials. | `src/lib/internal/cron-auth.ts` |
+
+Configure these on the existing Vercel project's Preview environment for `codex/aoeng-preview`. Any configured auth/base URLs must use the verified stable preview origin. Remove production integration secrets, including inherited Preview values, and scrub database-stored tokens/capability links before sharing the preview. Set external-write/messaging flags off as part of provisioning; OAuth scope reduction alone does not isolate a deployment. The [owner runbook](../operations/owner-access-runbook.md#maintain-the-isolated-preview) covers the complete procedure. No production environment download is part of [Aoeng's Windows setup](../operations/aoeng-windows-setup.md).
 
 ## TL;DR — the precise Zod truth vs. the "9 required" claim
 
@@ -268,7 +284,7 @@ Both variables are resolved at call time by [`src/lib/unearned-revenue/sync.ts`]
 | `VERCEL_URL` | [`classrooms/schedule-email.ts:272`](../../src/lib/classrooms/schedule-email.ts); [`leave-requests/config.ts:15`](../../src/lib/leave-requests/config.ts) | Per-deployment hostname without protocol — both readers prepend `https://` |
 | `VERCEL_PROJECT_PRODUCTION_URL` | [`classrooms/schedule-email.ts:269`](../../src/lib/classrooms/schedule-email.ts) | Stable production hostname; preferred over `VERCEL_URL` |
 
-### 2.10 Test and script-only (6 named, plus `TZ`)
+### 2.10 Test and script-only (5 named, plus `TZ`)
 
 Not part of the deployed contract.
 
@@ -278,7 +294,6 @@ Not part of the deployed contract.
 | `TZ` | [`vitest.config.ts:4`](../../vitest.config.ts) | **Written**, not read — pins the test process to `Asia/Bangkok` |
 | `CONFIRM_DELETE_LINE_TEST_DATA` | [`scripts/delete-line-test-data.ts:34`](../../scripts/delete-line-test-data.ts) | Destructive-script confirmation guard |
 | `PRODUCTION_BRANCH` | [`scripts/assert-production-deploy-ready.mjs:5`](../../scripts/assert-production-deploy-ready.mjs) | Branch the guarded `deploy:prod` refuses to deviate from; defaults to `main` |
-| `GITHUB_ACTOR` | [`scripts/check-sales-dashboard-scope.mjs:14`](../../scripts/check-sales-dashboard-scope.mjs) | CI actor identity for the sales-dashboard scope guard |
 | `USER` | [`scripts/import-room-capacity-model.ts:303`](../../scripts/import-room-capacity-model.ts) | Local shell user, recorded as `createdBy` on imported capacity-model runs |
 | `FOOT_TRAFFIC_BACKFILL_ACTOR_EMAIL` | [`scripts/sync-onsite-foot-traffic.ts:26`](../../scripts/sync-onsite-foot-traffic.ts) | Optional audit actor stored on a manual foot-traffic backfill run |
 

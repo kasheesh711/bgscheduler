@@ -57,7 +57,7 @@ const FEATURES = [
   { key: 'sales-dashboard', title: 'Sales Dashboard', maturity: 'stable',
     file: 'docs/features/sales-dashboard.md',
     paths: ['src/lib/sales-dashboard', 'src/app/api/sales-dashboard', 'src/app/(app)/sales-dashboard', 'src/components/sales-dashboard'],
-    notes: 'Google Sheets import + projection model. Note the sales-dashboard scope guard (.github + .claude/hooks).' },
+    notes: 'Google Sheets import + projection model. Cross-feature publishing uses required CI checks and protected CODEOWNERS paths; see the owner access runbook.' },
   { key: 'credit-control', title: 'Credit Control', maturity: 'stable',
     file: 'docs/features/credit-control.md',
     paths: ['src/lib/credit-control', 'src/app/api/credit-control', 'src/app/(app)/credit-control', 'src/components/credit-control'],

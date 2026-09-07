@@ -15,6 +15,10 @@ import { usePathname } from "next/navigation";
 import { AppNav } from "@/components/layout/app-nav";
 
 describe("AppNav", () => {
+  it("shows Manage Access only for a freshly authorized owner", () => {
+    expect(renderToStaticMarkup(<AppNav allowedPages={null} />)).not.toContain("Manage Access");
+    expect(renderToStaticMarkup(<AppNav allowedPages={null} ownerAccess />)).toContain("Manage Access");
+  });
   beforeEach(() => {
     vi.mocked(usePathname).mockReturnValue("/");
   });

@@ -1,6 +1,8 @@
-import NextAuth from "next-auth";
+import NextAuth, { type NextAuthConfig } from "next-auth";
 import Google from "next-auth/providers/google";
 import { resolveUserAccess } from "@/lib/auth-access";
+import { validateSessionAccess } from "@/lib/auth-session";
+import { googleAuthorizationParams, shouldStoreGoogleIntegrationTokens } from "@/lib/preview-policy";
 
 export async function signInCallback({
   user,
@@ -29,16 +31,13 @@ export async function signInCallback({
   return access !== null;
 }
 
-export const { handlers, signIn, signOut, auth } = NextAuth({
+export const authConfig = {
   providers: [
     Google({
       clientId: process.env.AUTH_GOOGLE_ID,
       clientSecret: process.env.AUTH_GOOGLE_SECRET,
       authorization: {
-        params: {
-          scope: "openid email profile https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file",
-          access_type: "offline",
-        },
+        params: googleAuthorizationParams(),
       },
     }),
   ],
@@ -49,26 +48,36 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   callbacks: {
     async signIn({ user, account }) {
       const allowed = await signInCallback({ user });
-      if (allowed && user.email) {
+      if (allowed && user.email && shouldStoreGoogleIntegrationTokens()) {
         const { storeGoogleOAuthTokenForUser } = await import("@/lib/sales-dashboard/google-oauth");
         await storeGoogleOAuthTokenForUser(user.email, account);
       }
       return allowed;
     },
     async jwt({ token, user }) {
-      // `user` is only present at sign-in; resolve role + allowedPages once and
-      // persist them on the token so subsequent requests need no DB call.
+      // Only sign-in sets the version. A normal JWT refresh must never revive
+      // stale or legacy access by copying a newer database version.
       if (user) {
         const access = await resolveUserAccess(user.email);
         token.allowedPages = access?.allowedPages ?? null;
         token.role = access?.role ?? null;
+        token.adminAccessVersion = access?.adminAccessVersion;
       }
       return token;
     },
     async session({ session, token }) {
       session.user.allowedPages = token.allowedPages ?? null;
       session.user.role = token.role ?? null;
+      session.user.adminAccessVersion = token.adminAccessVersion;
       return session;
     },
   },
-});
+} satisfies NextAuthConfig;
+
+const nextAuth = NextAuth(authConfig);
+export const { handlers, signIn, signOut } = nextAuth;
+
+/** Independent server guard, including manual cron handlers that bypass Proxy. */
+export async function auth() {
+  return validateSessionAccess(await nextAuth.auth());
+}

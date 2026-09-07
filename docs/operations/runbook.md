@@ -45,17 +45,17 @@ The three tables you will read most often when something is wrong:
 
 ```mermaid
 flowchart LR
-  subgraph A["Path A — push to main (normal)"]
-    a1["git push origin branch:main"] --> a2["GitHub Actions CI<br/>lint · typecheck · unit-tests · build · release-guards"]
-    a1 --> a3["Vercel Git integration<br/>builds and promotes production"]
+  subgraph A["Path A — merge a pull request (normal)"]
+    a1["Push feature branch and open PR"] --> a2["GitHub Actions CI<br/>lint · typecheck · unit-tests · build · release-guards"]
+    a2 --> a4["Required checks and any code-owner approval<br/>Merge commit into main"]
+    a4 --> a3["Vercel Git integration<br/>builds and promotes production"]
   end
   subgraph B["Path B — guarded manual (npm run deploy:prod)"]
     b1["npm run verify:release"] --> b2["assert-production-deploy-ready.mjs"] --> b3["npx vercel --prod"]
   end
 ```
 
-**Path A** is the default: the Vercel Git integration deploys whatever lands on `main`. CI runs in
-parallel and does **not** gate the Vercel build — the two are independent consumers of the same push.
+**Path A** is the default: required checks and any required code-owner review gate the PR merge, then Vercel deploys what lands on `main`. The post-merge CI run and Vercel deployment still run independently. Aoeng uses the persistent `codex/aoeng-preview` branch, merges with a merge commit, and keeps the branch. See the [Windows guide](./aoeng-windows-setup.md) and [owner publishing rules](./owner-access-runbook.md#keep-the-publishing-rules-intact).
 
 **Path B** is `npm run deploy:prod`, defined as
 `npm run verify:release && node scripts/assert-production-deploy-ready.mjs && npx vercel --prod`
@@ -73,8 +73,7 @@ release gate or ship an unpushed commit.
 5. `git diff --check` — whitespace errors
 6. `npm run guard:production-route-surface` ([`:37`](../../package.json))
 
-It does **not** run the integration tests (they need Docker — [§3.2](#32-tests)), `npm run lint`, or
-`guard:sales-dashboard-scope`. CI covers `lint` in its own job.
+It does **not** run the integration tests (they need Docker — [§3.2](#32-tests)) or `npm run lint`. CI covers `lint` in its own job.
 
 ### 2.3 The preflight — `assert-production-deploy-ready.mjs`
 
@@ -111,7 +110,7 @@ node scripts/check-production-route-surface.mjs --update
 ### 2.5 What CI runs
 
 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) fires on pull requests to `main` and
-pushes to `main`, on Node 20, with placeholder env values (`DATABASE_URL`, `AUTH_*`, `WISE_*`,
+pushes to `main`, on Node 24, with placeholder env values (`DATABASE_URL`, `AUTH_*`, `WISE_*`,
 `CRON_SECRET`, `ENABLE_AI_SCHEDULER=false`, `ENABLE_LINE_SCHEDULER=false`, `TZ=Asia/Bangkok`;
 [`:14-26`](../../.github/workflows/ci.yml)). Five jobs:
 
@@ -123,9 +122,7 @@ pushes to `main`, on Node 20, with placeholder env values (`DATABASE_URL`, `AUTH
 | `build` | `npm run build`, then `npm run typecheck` ([`:65-76`](../../.github/workflows/ci.yml)) |
 | `release-guards` | `guard:production-route-surface`, then `git diff --check` over the changed range ([`:78-98`](../../.github/workflows/ci.yml)) |
 
-A second workflow, [`sales-dashboard-scope.yml`](../../.github/workflows/sales-dashboard-scope.yml),
-runs [`scripts/check-sales-dashboard-scope.mjs`](../../scripts/check-sales-dashboard-scope.mjs) on
-PRs. CI never runs integration tests, migrations, or seeds.
+The former Sales Dashboard-only workflow and script have been removed. All features use these five checks; protected files also require Kevin's CODEOWNERS approval. CI never runs integration tests, migrations, or seeds.
 
 ### 2.6 Worktree caveat for `vercel --prod`
 
@@ -242,7 +239,6 @@ the seed **overwrites** any manual change to that user's page scope.
 
 ```bash
 npm run guard:production-route-surface   # §2.4
-npm run guard:sales-dashboard-scope      # §2.5
 npm run verify:release                   # §2.2
 npm run deploy:prod                      # §2.1 Path B
 ```

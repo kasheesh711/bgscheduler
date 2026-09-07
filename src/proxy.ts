@@ -1,4 +1,5 @@
 import { edgeAuth } from "@/lib/auth-edge";
+import { validateSessionAccess } from "@/lib/auth-session";
 import {
   isMaintenanceBypassEmail,
   isMaintenanceExempt,
@@ -35,6 +36,8 @@ function isPublicRoute(pathname: string) {
  */
 function isPathAllowed(pathname: string, allowedPages: string[] | null): boolean {
   if (!allowedPages) return true;
+  // The owner guard checks current designation and admin status independently.
+  if (pathname === "/admin/users" || pathname === "/api/admin/users") return true;
   if (pathname === "/api/home/summary") return true;
   // Post-class feedback uses fresh database capabilities on every page/API
   // request, so legacy JWT page prefixes must not override those grants.
@@ -74,7 +77,7 @@ function isPathAllowed(pathname: string, allowedPages: string[] | null): boolean
   });
 }
 
-export default edgeAuth((req) => {
+export default edgeAuth(async (req) => {
   const { pathname, search } = req.nextUrl;
 
   // MAINT-04 — see src/lib/maintenance.ts. This MUST stay above isPublicRoute:
@@ -93,15 +96,22 @@ export default edgeAuth((req) => {
     return NextResponse.next();
   }
 
+  // The wrapper decodes cookies only. Skip all DB work for public routes and
+  // absent sessions; protected requests share server auth()'s fresh check.
+  const session = await validateSessionAccess(req.auth);
+
   // Require auth for everything else
-  if (!req.auth) {
+  if (!session) {
+    if (req.auth && pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const loginUrl = new URL("/login", req.url);
     loginUrl.searchParams.set("callbackUrl", `${pathname}${search}`);
     return NextResponse.redirect(loginUrl);
   }
 
   // Page-level access control for restricted users (null = full access).
-  const allowedPages = req.auth.user?.allowedPages ?? null;
+  const allowedPages = session.user?.allowedPages ?? null;
   if (allowedPages && !isPathAllowed(pathname, allowedPages)) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });

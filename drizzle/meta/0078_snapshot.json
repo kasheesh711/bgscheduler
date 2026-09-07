@@ -1,6 +1,6 @@
 {
-  "id": "047e842b-ba37-41e4-9381-e1cc0518c800",
-  "prevId": "4c26ceb2-524c-4226-9b6f-69bcc82adee5",
+  "id": "4c26ceb2-524c-4226-9b6f-69bcc82adee5",
+  "prevId": "55857de1-8d60-477c-b6a3-c48ab5cd6032",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -33417,12 +33417,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'{}'::jsonb"
-        },
-        "publication_manifest": {
-          "name": "publication_manifest",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
         }
       },
       "indexes": {

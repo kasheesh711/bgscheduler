@@ -104,11 +104,13 @@ export function AppNav({
   postClassFeedbackAccess = false,
   learningPlansAccess = false,
   unearnedRevenueAccess = false,
+  ownerAccess = false,
 }: {
   allowedPages: string[] | null;
   postClassFeedbackAccess?: boolean;
   learningPlansAccess?: boolean;
   unearnedRevenueAccess?: boolean;
+  ownerAccess?: boolean;
 }) {
   const pathname = usePathname();
   const [openSection, setOpenSection] = useState<NavSectionId | null>(null);
@@ -181,6 +183,7 @@ export function AppNav({
           BeGifted Ops
         </Link>
         <div className="hidden items-center gap-1 md:flex">
+          {ownerAccess && <Link href="/admin/users" className={navLinkClass(isActivePath(pathname, "/admin/users"))}>Manage Access</Link>}
           {canAccessHome && (
             <Link href={HOME_HREF} className={navLinkClass(pathname === HOME_HREF)}>
               Home
@@ -250,6 +253,7 @@ export function AppNav({
             />
             <PopoverContent className="max-h-[80vh] w-[calc(100vw-2rem)] overflow-auto p-3" align="start">
               <div className="space-y-3">
+                {ownerAccess && <Link href="/admin/users" onClick={() => setMobileOpen(false)} className={navLinkClass(isActivePath(pathname, "/admin/users"))}>Manage Access</Link>}
                 {canAccessHome && (
                   <Link
                     href={HOME_HREF}

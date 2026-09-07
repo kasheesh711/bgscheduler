@@ -1,11 +1,18 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { NextResponse } from "next/server";
 
 vi.mock("@/lib/auth-edge", () => ({
   edgeAuth: <T>(handler: T) => handler,
 }));
 
-import middleware from "@/middleware";
+vi.mock("@/lib/auth-session", () => ({ validateSessionAccess: vi.fn() }));
+
+import middleware from "@/proxy";
+import { validateSessionAccess } from "@/lib/auth-session";
+
+beforeEach(() => {
+  vi.mocked(validateSessionAccess).mockReset().mockImplementation(async (session) => session);
+});
 
 function makeReq(pathname: string, isAuth = false, search = "", allowedPages?: string[] | null) {
   const prefixedSearch = search ? `?${search}` : "";
@@ -17,6 +24,29 @@ function makeReq(pathname: string, isAuth = false, search = "", allowedPages?: s
 }
 
 describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
+  it.each(["/api/line/webhook", "/api/internal/sync-wise", "/api/auth/session", "/schedule/token"])("does not read account access on public route %s even with a cookie", async (pathname) => {
+    await middleware(makeReq(pathname, true) as never, {} as never);
+    expect(validateSessionAccess).not.toHaveBeenCalled();
+  });
+
+  it.each(["/api/payroll", "/api/admin/users"])("rejects a revoked session at %s", async (pathname) => {
+    vi.mocked(validateSessionAccess).mockResolvedValue(null);
+    const response = await middleware(makeReq(pathname, true) as never, {} as never) as Response;
+    expect(response.status).toBe(401);
+  });
+
+  it("redirects a revoked page session to a fresh login", async () => {
+    vi.mocked(validateSessionAccess).mockResolvedValue(null);
+    const response = await middleware(makeReq("/search", true) as never, {} as never) as Response;
+    expect(response.headers.get("location")).toContain("/login");
+  });
+
+  it("uses current database page restrictions instead of the old cookie", async () => {
+    vi.mocked(validateSessionAccess).mockResolvedValue({ user: { role: "admin", allowedPages: ["/search"] } } as never);
+    const response = await middleware(makeReq("/api/payroll", true) as never, {} as never) as Response;
+    expect(response.status).toBe(403);
+  });
+
   it("/login bypasses auth", async () => {
     const res = await middleware(makeReq("/login") as never, {} as never) as Response;
 

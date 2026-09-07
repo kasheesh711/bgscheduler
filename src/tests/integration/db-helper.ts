@@ -72,6 +72,7 @@ export async function truncateAll(db: TestDb): Promise<void> {
       tutor_wise_accounts,
       tutor_contact_sync_events,
       wise_teacher_availability_cache,
+      admin_user_access_audit_log,
       admin_users,
       sync_runs,
       snapshots,
