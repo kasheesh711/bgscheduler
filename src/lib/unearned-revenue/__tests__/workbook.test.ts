@@ -602,7 +602,7 @@ function publicationHarness() {
     batch: vi.fn(async (_id: string, requests: Array<{ copyPaste?: unknown; updateCells?: { range?: { sheetId: number }; rows: Array<{ values: Array<{ userEnteredValue?: Record<string, unknown> }> }> } }>) => {
       if (!requests.some(r => r.copyPaste)) return;
       if (beforeCommitFailure) throw new Error("Atomic commit rejected before mutation");
-      const marker = requests.find(r => r.updateCells?.range?.sheetId === 2000001001)!.updateCells;
+      const marker = requests.find(r => r.updateCells?.range?.sheetId === 2000001001)!.updateCells!;
       liveRows = marker.rows.map((row: { values: Array<{ userEnteredValue?: Record<string, unknown> }> }) => row.values.map(cell => Object.values(cell.userEnteredValue ?? {})[0] ?? ""));
       committed = true;
       if (afterCommitTimeout) throw new Error("Network timeout after committed batch");

@@ -44,7 +44,7 @@ describe("compact Finance publisher", () => {
     const requests = buildCommitRequests(metadata, tabs(), [101, 102, 103], [["field", "value"], ["run_id", "revision-2"]], [["", "", "", "", "", "", "", "", "", "", "account_id"]], [], "owner@example.com") as Array<{ updateCells?: { range?: { sheetId: number } }; copyPaste?: unknown; deleteSheet?: { sheetId: number } }>;
     expect(requests.some(r => r.updateCells?.range?.sheetId === 2000001001)).toBe(true);
     expect(requests.filter(r => r.copyPaste)).toHaveLength(3);
-    expect(requests.filter(r => r.deleteSheet).map(r => r.deleteSheet.sheetId)).toEqual([9, 101, 102, 103]);
+    expect(requests.filter(r => r.deleteSheet).map(r => r.deleteSheet!.sheetId)).toEqual([9, 101, 102, 103]);
     expect(requests.some(r => r.deleteSheet?.sheetId === 797927364)).toBe(false);
   });
   it("preserves source text rather than evaluating spreadsheet injection", () => {
