@@ -94,4 +94,10 @@ describe("unearned revenue capability policy", () => {
     await expect(requireUnearnedRevenueCapability("viewer", selectOnlyDb([[{ capability: "viewer" }]])))
       .rejects.toMatchObject({ status: 403 });
   });
+
+  it.each(["aoengnatchasmith@gmail.com", "k.waritpariya@gmail.com"])("a viewer grant lets %s read without granting access management", async (email) => {
+    vi.mocked(auth).mockResolvedValue({ user: { email, role: "admin" }, expires: "2099-01-01" } as never);
+    await expect(requireUnearnedRevenueCapability("viewer", selectOnlyDb([[{ capability: "viewer" }]]))).resolves.toMatchObject({ email, capabilities: ["viewer"] });
+    await expect(requireUnearnedRevenueCapability("access_manager", selectOnlyDb([[{ capability: "viewer" }]]))).rejects.toMatchObject({ status: 403 });
+  });
 });

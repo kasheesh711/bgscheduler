@@ -580,9 +580,28 @@ export const adminUsers = pgTable("admin_users", {
   // null = full access (all existing admins unchanged); non-null = restricted
   // to those route prefixes (page-level access control for restricted users).
   allowedPages: jsonb("allowed_pages").$type<string[] | null>(),
+  disabled: boolean("disabled").notNull().default(false),
+  accessVersion: integer("access_version").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("admin_users_email_idx").on(table.email),
+  check("admin_users_access_version_nonnegative_check", sql`${table.accessVersion} >= 0`),
+]);
+
+// Append-only account access history. Migration 0078 also rejects UPDATE/DELETE.
+export const adminUserAccessAuditLog = pgTable("admin_user_access_audit_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  targetEmail: text("target_email").notNull(),
+  actorEmail: text("actor_email").notNull(),
+  beforeValue: jsonb("before_value").$type<{ disabled: boolean; accessVersion: number }>().notNull(),
+  afterValue: jsonb("after_value").$type<{ disabled: boolean; accessVersion: number }>().notNull(),
+  version: integer("version").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("admin_user_access_audit_target_version_idx").on(table.targetEmail, table.version),
+  check("admin_user_access_audit_version_positive_check", sql`${table.version} > 0`),
+  check("admin_user_access_audit_target_normalized_check", sql`${table.targetEmail} = lower(btrim(${table.targetEmail})) AND ${table.targetEmail} <> ''`),
+  check("admin_user_access_audit_actor_normalized_check", sql`${table.actorEmail} = lower(btrim(${table.actorEmail})) AND ${table.actorEmail} <> ''`),
 ]);
 
 export const googleOAuthTokens = pgTable("google_oauth_tokens", {

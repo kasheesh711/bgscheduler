@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
+import { googleAuthorizationParams } from "@/lib/preview-policy";
 
 export const { auth: edgeAuth } = NextAuth({
   providers: [
@@ -7,10 +8,7 @@ export const { auth: edgeAuth } = NextAuth({
       clientId: process.env.AUTH_GOOGLE_ID,
       clientSecret: process.env.AUTH_GOOGLE_SECRET,
       authorization: {
-        params: {
-          scope: "openid email profile https://www.googleapis.com/auth/spreadsheets.readonly",
-          access_type: "offline",
-        },
+        params: googleAuthorizationParams(),
       },
     }),
   ],
@@ -27,6 +25,7 @@ export const { auth: edgeAuth } = NextAuth({
     async session({ session, token }) {
       session.user.allowedPages = token.allowedPages ?? null;
       session.user.role = token.role ?? null;
+      session.user.adminAccessVersion = token.adminAccessVersion;
       return session;
     },
   },

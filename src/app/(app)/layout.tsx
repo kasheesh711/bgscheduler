@@ -1,7 +1,9 @@
 import { Suspense } from "react";
 import { AppNav, AppNavSkeleton } from "@/components/layout/app-nav";
 import { StaleSnapshotBanner } from "@/components/layout/stale-snapshot-banner";
+import { PreviewBanner } from "@/components/layout/preview-banner";
 import { auth } from "@/lib/auth";
+import { isSuperAdminEmail } from "@/lib/admin-users/policy";
 import { getLearningPlansAccess } from "@/lib/learning-plans/access";
 import { getPostClassCapabilities } from "@/lib/post-class-feedback/access";
 import { getUnearnedRevenueCapabilities } from "@/lib/unearned-revenue/access";
@@ -28,6 +30,7 @@ async function AppNavWithAccess() {
       learningPlansAccess={learningPlansAccess}
       postClassFeedbackAccess={capabilities.includes("viewer")}
       unearnedRevenueAccess={unearnedRevenueCapabilities.includes("viewer")}
+      ownerAccess={session?.user?.role === "admin" && isSuperAdminEmail(session.user.email)}
     />
   );
 }
@@ -35,6 +38,7 @@ async function AppNavWithAccess() {
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
+      <PreviewBanner />
       <Suspense fallback={<AppNavSkeleton />}>
         <AppNavWithAccess />
       </Suspense>
