@@ -4,7 +4,7 @@ import { randomInt } from "node:crypto";
 import { parseValuesPublication, publicationManifestSchema, sha256, statusFields, verifiedFile, type PublicationManifest } from "../publication";
 import type { TraceAnchor } from "../types";
 import { PublicationGoogle, enteredCell, formatRequests, type SheetMetadata } from "./google";
-import { allocatedCells, buildReportTabs, filterId, HEAD_ROWS, MAIN_CELL_BUDGET, MAIN_IDS, MONTH_IDS, monthDigest, reportUrl, splitMonth, type MonthData, type ReportBundle, type ReportTab } from "./layout";
+import { allocatedCells, buildReportTabs, filterId, HEAD_ROWS, MAIN_CELL_BUDGET, MAIN_IDS, MAINTENANCE_GUIDE_URL, MONTH_IDS, monthDigest, reportUrl, splitMonth, type MonthData, type ReportBundle, type ReportTab } from "./layout";
 
 const CONTROL_ID = 797927364;
 const STATUS_ID = 2000001001;
@@ -214,7 +214,7 @@ export async function publishBundle(input: { google: PublicationGoogle; bundle: 
   if (!input.commit) return { status: "prepared", runId: manifest.runId, cutoff: manifest.cutoff, reports: months.length, reviewChanged: false, manifestFileId: state.manifestFileId, pendingAudience: [...new Set(google.pendingAudience)] };
   const cutoff = manifest.cutoff;
   const latestMonth = bundle.reports.months[cutoff.slice(0, 7)];
-  const main = buildReportTabs({ data: { finance: bundle.reports.finance, students: latestMonth.students.filter(row => row.date === cutoff), packages: latestMonth.packages.filter(row => row.date === cutoff) }, spreadsheetId, ids: MAIN_IDS, generatedAt: manifest.generatedAtBangkok, auditUrl: driveUrl(manifest.audit.fileId), historyLinks: months, controlUrl: reportUrl(spreadsheetId, CONTROL_ID), mainUrl: reportUrl(spreadsheetId, MAIN_IDS[0]) });
+  const main = buildReportTabs({ data: { finance: bundle.reports.finance, students: latestMonth.students.filter(row => row.date === cutoff), packages: latestMonth.packages.filter(row => row.date === cutoff) }, spreadsheetId, ids: MAIN_IDS, generatedAt: manifest.generatedAtBangkok, auditUrl: driveUrl(manifest.audit.fileId), historyLinks: months, controlUrl: MAINTENANCE_GUIDE_URL, mainUrl: reportUrl(spreadsheetId, MAIN_IDS[0]) });
   // Any abandoned stage belongs to a failed run; it is never referenced by the
   // current publication. Remove only our own generated temporary tabs.
   let metadata = await google.metadata(spreadsheetId);

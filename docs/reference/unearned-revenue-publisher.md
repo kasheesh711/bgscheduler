@@ -36,7 +36,7 @@ Exit 0 means published, unchanged, prepared, or validated as requested. Exit 2 m
 
 The live URL remains unchanged. Exactly three tabs are visible: `ภาพรวม`, `รายนักเรียน`, and `รายละเอียดแพ็กเกจ`. Main student/package rows show the latest completed Bangkok day; the overview contains every daily total beginning 1 March 2026. Each daily link opens a saved student/package date filter in a monthly workbook. Each student links to its corresponding package rows. Zero-balance students remain present. Opening lots, unresolved attribution and signed valuation adjustments are separate labelled rows.
 
-The original `Package Control` sheet ID is preserved and hidden, with a maintenance link. Its settings, override history and frozen opening baselines survive publication. `Model Status` is also hidden. Everything else needed for calculation and audit is stored outside the main workbook.
+The original `Package Control` sheet ID is preserved and hidden, with a maintenance link. Google redirects direct links to hidden tabs, so this link opens a short guide: open the original workbook, choose View → Hidden sheets → Package Control, then hide it again after maintenance. Its settings, override history and frozen opening baselines survive publication. `Model Status` is also hidden. Everything else needed for calculation and audit is stored outside the main workbook.
 
 The main workbook must allocate fewer than 1,000,000 cells, including retained controls. Monthly reports may allocate at most 2,000,000 cells. Oversized months split at complete day boundaries. The first cutover additionally checks the legacy grids plus compact staging and destination grids against Google's 10,000,000-cell limit. Subsequent refreshes use only compact staging.
 

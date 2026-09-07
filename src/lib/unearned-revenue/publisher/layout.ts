@@ -24,6 +24,7 @@ export const MAIN_IDS = [2000011001, 2000011002, 2000011003] as const;
 export const MONTH_IDS = [1, 2, 3] as const;
 export const MONTH_CELL_BUDGET = 2_000_000;
 export const MAIN_CELL_BUDGET = 1_000_000;
+export const MAINTENANCE_GUIDE_URL = "https://docs.google.com/spreadsheets/d/1hlKYJy7GTACnYk-UNFspghLt3T19oljfqvHmqie4q74/edit#gid=0";
 export const link = (url: string, label: string): LinkCell => ({ link: url, label });
 export function reportUrl(id: string, sheetId: number, row?: number, endRow?: number): string {
   return `https://docs.google.com/spreadsheets/d/${id}/edit#gid=${sheetId}${row ? `&range=A${row}:L${endRow ?? row}` : ""}`;
