@@ -13,7 +13,7 @@ Your computer needs the code and development tools. The preview runs on Vercel w
 | Live website | [bgscheduler.vercel.app](https://bgscheduler.vercel.app) |
 | Code and pull requests | [kasheesh711/bgscheduler](https://github.com/kasheesh711/bgscheduler) |
 | Your working branch | `codex/aoeng-preview` |
-| Your browser preview | Open the **View deployment / Visit Preview** link on your branch's latest pull request; bookmark the stable branch link Kevin shares with you |
+| Your browser preview | [Open Aoeng's preview](https://bgscheduler-git-codex-aoeng-preview-kevins-projects-6ebb4efc.vercel.app) — bookmark this link |
 | Claude Code | Sign in with your own Claude account and plan that includes Claude Code |
 
 Your Unearned Revenue permission is **viewer**. Editing the website's code is a separate GitHub permission. Kevin owns the repository and hosting, manages website access, and approves changes to security, database structure, and publishing controls.
@@ -54,7 +54,7 @@ Each command should print a version. Node must start with **`v24.`**. The `.cmd`
 
 ### Claude Code
 
-If Claude Code already works on your computer, keep your existing installation. Otherwise, run the native installer from the [official Claude Code Windows guide](https://code.claude.com/docs/en/terminal-guide):
+If Claude Code already works on your computer, keep your existing installation. Otherwise, run the native installer from the [official Claude Code Windows setup guide](https://code.claude.com/docs/en/installation):
 
 ```powershell
 irm https://claude.ai/install.ps1 | iex
@@ -172,7 +172,7 @@ For a larger idea, describe it and ask Claude to help plan it through GSD first.
 Prepare my preview for this change. Review the diff, run the relevant local checks without real service credentials, commit only this work, and push codex/aoeng-preview. Create or update its PR to main with a clear explanation and test results. Show me the latest Vercel preview link and the five required GitHub checks. Tell me whether any files need Kevin's approval. Wait for me to test the preview before merging.
 ```
 
-Open the PR's **View deployment / Visit Preview** link after Vercel reports the deployment is ready. Confirm the **preview banner** is visible. If it is missing, stop and check the URL with Claude. Check the page you changed, try the main buttons, and check a nearby page still works.
+After the PR reports that its latest Vercel deployment is ready, open [your stable preview](https://bgscheduler-git-codex-aoeng-preview-kevins-projects-6ebb4efc.vercel.app). Use this bookmarked address for Google sign-in; temporary deployment addresses on the PR do not have their own Google callback. Confirm the **preview banner** is visible. If it is missing, stop and check the URL with Claude. Check the page you changed, try the main buttons, and check a nearby page still works.
 
 Preview data is a separate copy and may be older than live data. Sending messages, writing to Wise/Google Sheets, and other external actions are disabled there. Ask Kevin to coordinate tests of those integrations.
 
