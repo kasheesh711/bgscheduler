@@ -6,7 +6,7 @@ export type Cell = string | number | boolean | null | LinkCell;
 export interface DailyTotal { date: string; liability_thb: number; student_count: number }
 export interface DailyStudent { date: string; student_id: string; student_name: string; liability_thb: number }
 export interface DailyPackage extends DailyStudent {
-  account_id: string; class_name: string; lot_id: string; package_name: string; kind: string;
+  account_id: string; class_name: string; class_subject?: string; lot_id: string; package_name: string; kind: string;
   purchase_date: string | null; transaction_number: string; remaining_credits: number | null;
   source_url: string; credit_url: string;
 }
@@ -72,8 +72,10 @@ export function buildReportTabs(input: {
     traces[`lot:${row.date}:${row.lot_id}`] = { ...trace(ids[2], sheetRow), url: reportUrl(spreadsheetId, ids[2], sheetRow) + (input.historyLinks ? "" : `&fvid=${filterId(row.date, true)}`) };
   });
   function base(title: string): Cell[][] {
+    const stamp = input.generatedAt;
+    const readableTime = stamp.length >= 16 ? `${stamp.slice(8, 10)}/${stamp.slice(5, 7)}/${stamp.slice(0, 4)} ${stamp.slice(11, 16)}` : stamp;
     return [[title], ["ข้อมูลถึงวันที่", latest.date, "ยอดรวม (บาท)", latest.liability_thb],
-      ["ปรับปรุงเมื่อ", input.generatedAt, "ข้อมูลย้อนหลังคำนวณจากหลักฐานที่มี ณ รอบปรับปรุงนี้"],
+      ["ปรับปรุงสำเร็จ", readableTime, "ข้อมูลย้อนหลังคำนวณจากหลักฐานที่มี ณ รอบปรับปรุงนี้"],
       [link(input.mainUrl, "กลับภาพรวม"), link(input.auditUrl, "หลักฐานการคำนวณ"), input.controlUrl ? link(input.controlUrl, "ตั้งค่าสำหรับผู้ดูแล") : null]];
   }
   const overview = [...base(TITLES[0]), ["วันที่", "ยอดรวม unearned revenue (บาท)", "จำนวนนักเรียน", "รายนักเรียน", "รายละเอียดแพ็กเกจ", "หมายเหตุ"] as Cell[]];
@@ -93,17 +95,17 @@ export function buildReportTabs(input: {
       range ? link(reportUrl(spreadsheetId, ids[2], range.start, range.end) + (input.historyLinks ? "" : `&fvid=${filterId(student.date, true)}`), "ดูแพ็กเกจ") : "ไม่มียอดคงเหลือ", student.student_id]);
     traces[`student:${student.date}:${student.student_id}`] = { ...trace(ids[1], studentRows.length), url: reportUrl(spreadsheetId, ids[1], studentRows.length) + (input.historyLinks ? "" : `&fvid=${filterId(student.date)}`) };
   }
-  const packages = [...base(TITLES[2]), ["วันที่", "นักเรียน", "วิชา / คลาส", "แพ็กเกจ / รายการ", "วันที่ซื้อ", "เลขที่รายการ", "เครดิตคงเหลือ", "ยอดคงเหลือ (บาท)", "หลักฐานซื้อ", "ประวัติเครดิต", "หมายเหตุ", "รหัสนักเรียน"] as Cell[]];
+  const packages = [...base(TITLES[2]), ["วันที่", "นักเรียน", "วิชา", "แพ็กเกจ / รายการ", "ยอดคงเหลือ (บาท)", "เครดิตคงเหลือ", "วันที่ซื้อ", "เลขที่รายการ", "หลักฐานซื้อ", "ประวัติเครดิต", "หมายเหตุ", "รหัสนักเรียน"] as Cell[]];
   for (const row of data.packages) packages.push([
-    row.date, row.student_name, row.class_name, row.package_name, row.purchase_date, row.transaction_number,
-    row.remaining_credits, row.liability_thb, row.source_url ? link(row.source_url, "เปิดรายการซื้อ") : null,
+    row.date, row.student_name, row.class_subject || "ยังไม่ระบุวิชา", row.package_name, row.liability_thb, row.remaining_credits,
+    row.purchase_date, row.transaction_number, row.source_url ? link(row.source_url, "เปิดรายการซื้อ") : null,
     row.credit_url ? link(row.credit_url, "เปิดเครดิต") : null,
     row.kind === "VALUATION_ADJUSTMENT" ? "ส่วนต่างระหว่างมูลค่าแพ็กกับวิธีประเมินที่อนุมัติ ไม่ใช่การซื้อใหม่" : row.kind === "OPENING" ? "ยอดก่อน 1 มี.ค. 2026" : row.kind !== "PAID_PACKAGE" ? "ยังไม่มีหลักฐานระบุแพ็กที่แน่นอน" : "", row.student_id,
   ]);
   return { traces, tabs: [
     { title: TITLES[0], sheetId: ids[0], rows: overview, moneyColumns: [1], widths: [115, 270, 140, 140, 150, 140] },
     { title: TITLES[1], sheetId: ids[1], rows: studentRows, moneyColumns: [2], widths: [115, 330, 170, 140, 220] },
-    { title: TITLES[2], sheetId: ids[2], rows: packages, moneyColumns: [7], widths: [115, 285, 220, 210, 115, 165, 125, 170, 145, 145, 310, 220] },
+    { title: TITLES[2], sheetId: ids[2], rows: packages, moneyColumns: [4], widths: [115, 260, 150, 210, 170, 125, 115, 165, 145, 145, 310, 220] },
   ] };
 }
 

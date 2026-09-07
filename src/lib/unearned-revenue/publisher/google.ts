@@ -126,6 +126,10 @@ export class PublicationGoogle {
     // Only called for this run's unpublished drafts. Published revisions are
     // immutable and are never sent through this path.
     for (const tab of tabs) {
+      await this.batch(id, [
+        { updateCells: { start: { sheetId: tab.sheetId, rowIndex: 0, columnIndex: 0 }, rows: tab.rows.slice(0, 4).map(row => ({ values: row.map(enteredCell) })), fields: "userEnteredValue" } },
+        ...headerPresentationRequests(tab),
+      ]);
       if (tab.sheetId !== 2) continue;
       for (let start = HEAD_ROWS; start < tab.rows.length; start += 1_000) {
         await this.batch(id, [{ updateCells: { start: { sheetId: tab.sheetId, rowIndex: start, columnIndex: 3 }, rows: tab.rows.slice(start, start + 1_000).map(row => ({ values: [enteredCell(row[3])] })), fields: "userEnteredValue" } }]);
@@ -163,5 +167,18 @@ export function formatRequests(tab: ReportTab, owner: string): unknown[] {
   for (const col of tab.moneyColumns) requests.push({ repeatCell: { range: { ...range, startRowIndex: HEAD_ROWS, startColumnIndex: col, endColumnIndex: col + 1 }, cell: { userEnteredFormat: { numberFormat: { type: "NUMBER", pattern: "#,##0.00;[Red](#,##0.00)" } } }, fields: "userEnteredFormat.numberFormat" } });
   requests.push({ repeatCell: { range: { ...range, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 3, endColumnIndex: 4 }, cell: { userEnteredFormat: { numberFormat: { type: "NUMBER", pattern: "#,##0.00" }, textFormat: { bold: true } } }, fields: "userEnteredFormat.numberFormat,userEnteredFormat.textFormat.bold" } });
   if (tab.title !== "ภาพรวม") requests.push({ updateDimensionProperties: { range: { sheetId: tab.sheetId, dimension: "COLUMNS", startIndex: tab.widths.length - 1, endIndex: tab.widths.length }, properties: { hiddenByUser: true }, fields: "hiddenByUser" } });
+  requests.push(...headerPresentationRequests(tab));
   return requests;
+}
+
+function headerPresentationRequests(tab: ReportTab): unknown[] {
+  const endColumnIndex = tab.widths.length - (tab.title === "ภาพรวม" || tab.widths.length === 6 ? 0 : 1);
+  const title = { sheetId: tab.sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex };
+  const note = { sheetId: tab.sheetId, startRowIndex: 2, endRowIndex: 3, startColumnIndex: 2, endColumnIndex };
+  return [
+    { unmergeCells: { range: title } }, { mergeCells: { range: title, mergeType: "MERGE_ALL" } },
+    { unmergeCells: { range: note } }, { mergeCells: { range: note, mergeType: "MERGE_ALL" } },
+    { repeatCell: { range: note, cell: { userEnteredFormat: { wrapStrategy: "WRAP", textFormat: { fontSize: 10 } } }, fields: "userEnteredFormat(wrapStrategy,textFormat.fontSize)" } },
+    { updateDimensionProperties: { range: { sheetId: tab.sheetId, dimension: "ROWS", startIndex: 2, endIndex: 3 }, properties: { pixelSize: 42 }, fields: "pixelSize" } },
+  ];
 }

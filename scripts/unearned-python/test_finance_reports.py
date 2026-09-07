@@ -48,3 +48,37 @@ class DailyReportsTest(unittest.TestCase):
         model.package_lots.recognitions.loc[0, "recognized_paid_credits"] = 10
         with self.assertRaisesRegex(ValueError, "over-consumption"):
             daily_reports(model, date(2026, 3, 1), date(2026, 3, 6))
+
+    def test_multiple_package_allocations_remain_separate(self):
+        model = self.model()
+        second = dict(model.package_lots.lots.iloc[0])
+        second.update(lot_id="second", package_name="Second package", deferred_paid_credits=1)
+        model.package_lots.lots.loc[0, "deferred_paid_credits"] = 2
+        model.package_lots.lots = pd.concat([model.package_lots.lots, pd.DataFrame([second])], ignore_index=True)
+        model.package_lots.lot_creation_dates["second"] = date(2026, 3, 2)
+        report = daily_reports(model, date(2026, 3, 1), date(2026, 3, 6))
+        rows = [r for r in report["months"]["2026-03"]["packages"] if r["date"] == "2026-03-02" and r["kind"] == "PAID_PACKAGE"]
+        self.assertEqual({r["lot_id"] for r in rows}, {"paid", "second"})
+        self.assertEqual(sum(r["liability_thb"] for r in rows), 270)
+        self.assertTrue(all(r["class_subject"] == "Math" for r in rows))
+
+    def test_source_correction_revises_daily_values_and_keeps_original_result(self):
+        original = daily_reports(self.model(), date(2026, 3, 1), date(2026, 3, 6))
+        corrected = self.model()
+        corrected.accounts.loc[0, "selected_rate_thb"] = 120
+        corrected.events.loc[:, "account_rate_thb"] = 120
+        revised = daily_reports(corrected, date(2026, 3, 1), date(2026, 3, 6))
+        self.assertEqual(original["finance"][1]["liability_thb"], 300)
+        self.assertEqual(revised["finance"][1]["liability_thb"], 360)
+        self.assertNotEqual(original, revised)
+        self.assertEqual(sum(r["liability_thb"] for r in revised["months"]["2026-03"]["packages"] if r["date"] == "2026-03-02"), 360)
+
+    def test_unresolved_attribution_is_explicit_and_can_have_negative_adjustment(self):
+        model = self.model()
+        model.package_lots.lots.loc[0, "lot_kind"] = "UNATTRIBUTED"
+        model.package_lots.lots.loc[0, "unit_rate_thb"] = 110
+        report = daily_reports(model, date(2026, 3, 1), date(2026, 3, 6))
+        rows = [r for r in report["months"]["2026-03"]["packages"] if r["date"] == "2026-03-02"]
+        self.assertEqual([r["package_name"] for r in rows if r["kind"] == "UNATTRIBUTED"], ["ยังระบุแพ็กไม่ได้"])
+        self.assertEqual([r["liability_thb"] for r in rows if r["kind"] == "VALUATION_ADJUSTMENT"], [-30])
+        self.assertEqual(sum(r["liability_thb"] for r in rows), 300)

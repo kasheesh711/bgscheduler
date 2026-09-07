@@ -1,6 +1,12 @@
-import { gzipSync } from "node:zlib";
+import { gzipSync, gunzipSync } from "node:zlib";
 import { parseValuesPublication, sha256 } from "../publication";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+vi.mock("@/lib/sales-dashboard/google-oauth", () => ({}));
+import { publishBundle } from "../publisher/publish";
+import type { ReportBundle } from "../publisher/layout";
 
 import {
   parseUnearnedRevenueWorkbook,
@@ -568,5 +574,68 @@ describe("V5 validated values publication", () => {
     input.statusStart.find(row => row[0] === "workbook_schema_version")![1] = 5;
     input.statusEnd.find(row => row[0] === "workbook_schema_version")![1] = 5;
     expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/verified|validated/i);
+  });
+});
+
+function publicationHarness() {
+  const fixture = valuesFixture();
+  const tables = JSON.parse(gunzipSync(fixture.contractBytes).toString()).tables;
+  const status = Object.fromEntries(tables["Model Status"].slice(1).map((row: unknown[]) => [row[0], row[1]]));
+  const previousStatus = { run_id: "last-good", published_cutoff: "2026-03-01", publication_revision: "1", source_fingerprint: "c".repeat(64) };
+  const finance = Array.from({ length: 31 }, (_, i) => ({ date: `2026-03-${String(i + 1).padStart(2, "0")}`, liability_thb: 100, student_count: 1 }));
+  const students = finance.map(row => ({ ...row, student_id: "student-1", student_name: "Ada" }));
+  const packages = finance.flatMap(row => [90, 10].map((amount, i) => ({ ...row, liability_thb: amount, student_id: "student-1", student_name: "Ada", account_id: "account-1", class_name: "Math", lot_id: i ? "valuation-1" : "lot-1", package_name: i ? "ส่วนต่างวิธีประเมิน" : "ยอดยกมา", kind: i ? "VALUATION_ADJUSTMENT" : "OPENING", purchase_date: null, transaction_number: "", remaining_credits: i ? null : 1, source_url: "", credit_url: "" })));
+  const bundle: ReportBundle = { schemaVersion: 5, status, tables, reports: { finance, months: { "2026-03": { finance, students, packages } }, qa: [] }, audit: { sources: { manifest: [] }, opening_baselines_to_write: [] }, controlValuesHash: sha256("[]"), previousStatus };
+  let liveRows: unknown[][] = [["field", "value"], ...Object.entries(previousStatus)];
+  let committed = false;
+  let afterCommitTimeout = false;
+  let beforeCommitFailure = false;
+  const files = new Map<string, Buffer>();
+  const legacy = [{ properties: { sheetId: 797927364, title: "Package Control", hidden: false, gridProperties: { rowCount: 20_000, columnCount: 19 } } }, { properties: { sheetId: 2000001001, title: "Model Status", hidden: true, gridProperties: { rowCount: 200, columnCount: 3 } } }];
+  const google = {
+    email: "owner@example.com", pendingAudience: [], share: vi.fn().mockResolvedValue(undefined), ensureFolder: vi.fn().mockResolvedValue("folder-id-123"),
+    values: vi.fn(async (_id: string, range: string) => range.includes("Package Control") ? [] : liveRows),
+    metadata: vi.fn(async (id: string) => ({ spreadsheetId: id, sheets: committed ? [...legacy.map(s => ({ properties: { ...s.properties, hidden: true } })), ...[2000011001, 2000011002, 2000011003].map(sheetId => ({ properties: { sheetId, hidden: false, gridProperties: { rowCount: 100, columnCount: 12 } } }))] : legacy })),
+    createWorkbook: vi.fn().mockResolvedValue("monthly-report-123"), writeTabs: vi.fn().mockResolvedValue(undefined), verifyTabs: vi.fn().mockResolvedValue(undefined),
+    upload: vi.fn(async (_folder: string, _name: string, bytes: Buffer) => { const id = `file-id-${files.size}-123`; files.set(id, bytes); return { id }; }),
+    bytes: vi.fn(async (id: string) => { const result = files.get(id); if (!result) throw new Error("Archive inaccessible"); return result; }),
+    batch: vi.fn(async (_id: string, requests: Array<Record<string, any>>) => {
+      if (!requests.some(r => r.copyPaste)) return;
+      if (beforeCommitFailure) throw new Error("Atomic commit rejected before mutation");
+      const marker = requests.find(r => r.updateCells?.range?.sheetId === 2000001001)!.updateCells;
+      liveRows = marker.rows.map((row: { values: Array<{ userEnteredValue?: Record<string, unknown> }> }) => row.values.map(cell => Object.values(cell.userEnteredValue ?? {})[0] ?? ""));
+      committed = true;
+      if (afterCommitTimeout) throw new Error("Network timeout after committed batch");
+    }),
+  };
+  return { bundle, google, files, setBeforeFailure: () => { beforeCommitFailure = true; }, setAfterTimeout: () => { afterCommitTimeout = true; } };
+}
+
+describe("V5 publication retry and failure boundaries", () => {
+  it("recognizes an uncertain successful commit and deduplicates the next run", async () => {
+    const h = publicationHarness(); h.setAfterTimeout();
+    const dir = mkdtempSync(join(tmpdir(), "unearned-test-"));
+    try {
+      const input = { google: h.google as never, bundle: h.bundle, bundleHash: "bundle", spreadsheetId: "main-report-123", rollbackId: "rollback-id-123", statePath: join(dir, "state.json"), commit: true };
+      expect((await publishBundle(input)).status).toBe("published");
+      expect((await publishBundle(input)).status).toBe("unchanged");
+      expect(h.google.batch.mock.calls.filter(([, requests]) => requests.some(r => r.copyPaste))).toHaveLength(1);
+    } finally { rmSync(dir, { recursive: true }); }
+  });
+  it("retains the previous publication if the atomic request is rejected", async () => {
+    const h = publicationHarness(); h.setBeforeFailure();
+    const dir = mkdtempSync(join(tmpdir(), "unearned-test-"));
+    try {
+      await expect(publishBundle({ google: h.google as never, bundle: h.bundle, bundleHash: "bundle", spreadsheetId: "main-report-123", rollbackId: "rollback-id-123", statePath: join(dir, "state.json"), commit: true })).rejects.toThrow(/rejected/);
+      expect(await h.google.values("main-report-123", "Model Status")).toContainEqual(["run_id", "last-good"]);
+    } finally { rmSync(dir, { recursive: true }); }
+  });
+  it("blocks publication when an uploaded archive cannot be read back", async () => {
+    const h = publicationHarness(); h.google.bytes.mockRejectedValue(new Error("Archive inaccessible"));
+    const dir = mkdtempSync(join(tmpdir(), "unearned-test-"));
+    try {
+      await expect(publishBundle({ google: h.google as never, bundle: h.bundle, bundleHash: "bundle", spreadsheetId: "main-report-123", rollbackId: "rollback-id-123", statePath: join(dir, "state.json"), commit: true })).rejects.toThrow(/inaccessible/);
+      expect(h.google.batch).not.toHaveBeenCalled();
+    } finally { rmSync(dir, { recursive: true }); }
   });
 });

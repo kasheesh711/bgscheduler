@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /** Local V5 publisher. All Google data writes are explicitly requested by --publish. */
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import { readFileSync, mkdirSync, openSync, closeSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 
 async function main() {
   const { values } = parseArgs({ options: {
@@ -28,10 +28,12 @@ async function main() {
   catch { throw new Error(`Publisher already running or interrupted. Check the PID in ${lockPath} before removing a stale lock.`); }
   try {
     const id = values["spreadsheet-id"] ?? getUnearnedRevenueSpreadsheetId();
+    const credentials = values["google-credentials"] ?? join(root, "..", "BeGifted_Consulting_Materials", "begifted-sheets-ab2b8e47aa86.json");
     let bundlePath = values.bundle && resolve(values.bundle);
     if (!bundlePath) {
       bundlePath = join(output, `bundle-${new Date().toISOString().replaceAll(":", "-")}.json.gz`);
-      const credentials = values["google-credentials"] ?? join(root, "..", "BeGifted_Consulting_Materials", "begifted-sheets-ab2b8e47aa86.json");
+      const runtime: Record<string, string> = JSON.parse(readFileSync(join(root, "scripts", "unearned-python", "runtime-files.json"), "utf8"));
+      for (const [file, digest] of Object.entries(runtime)) if (sha256(readFileSync(join(datasets, file))) !== digest) throw new Error(`Accounting runtime changed; review/install the matching V5 extension: ${file}`);
       const args = [join(datasets, "scripts", "build_unearned_report_bundle.py"), "--cutoff", "previous-day", "--target-spreadsheet-id", id, "--wise-env-file", envFile, "--google-credentials", credentials, "--output", bundlePath];
       const code = await new Promise<number | null>((resolveCode, reject) => { const child = spawn(join(datasets, ".venv", "bin", "python"), args, { cwd: datasets, stdio: "inherit" }); child.on("exit", resolveCode); child.on("error", reject); });
       if (code !== 0) throw new Error("Accounting engine failed; previous publication retained");
@@ -49,13 +51,8 @@ async function main() {
     };
     parseValuesPublication({ manifest, contractBytes: contract, statusStart: bundle.tables["Model Status"], statusEnd: bundle.tables["Model Status"] });
     if (values.validate) { process.stdout.write(JSON.stringify({ status: "validated", cutoff: bundle.status.published_cutoff, days: bundle.reports.finance.length, reports: months.length, cells: months.map(m => ({ month: m.month, cells: m.cells })) }) + "\n"); return; }
-    const google = new PublicationGoogle(getUnearnedRevenueConnectedEmail(), [
-      { type: "user", emailAddress: "nui@absoluteboutiquefitness.com", role: "reader" },
-      { type: "user", emailAddress: "chittima.karoon@gmail.com", role: "reader" },
-      { type: "user", emailAddress: "aoengnatchasmith@gmail.com", role: "writer" },
-      { type: "user", emailAddress: "k.waritpariya@gmail.com", role: "writer" },
-      { type: "user", emailAddress: "begifted-bot@begifted-sheets.iam.gserviceaccount.com", role: "writer" },
-    ]);
+    const { stdout } = await promisify(execFile)(join(datasets, ".venv", "bin", "python"), [join(root, "scripts", "unearned-python", "read_finance_audience.py"), datasets, credentials, id], { maxBuffer: 64_000 });
+    const google = new PublicationGoogle(getUnearnedRevenueConnectedEmail(), JSON.parse(stdout));
     await google.connect();
     const result = await publishBundle({ google, bundle, bundleHash: sha256(bytes), spreadsheetId: id,
       rollbackId: values["rollback-id"] ?? "133Upo9wrHY5NKKxXyZnZStqW7bnyODu18nDNok9Z82U", statePath: bundlePath + ".prepared.json", folderId: values["folder-id"], commit: values.publish });

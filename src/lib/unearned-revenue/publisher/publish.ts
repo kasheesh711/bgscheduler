@@ -11,6 +11,7 @@ const STATUS_ID = 2000001001;
 const baselineColumns = ["account_id", "opening_date", "opening_credit_balance", "opening_paid_credits", "opening_rate_thb", "opening_liability_thb", "bootstrap_run_id", "source_fingerprint", "created_at_bangkok"];
 interface PreparedState {
   bundleHash: string; folderId: string; months: PublicationManifest["months"];
+  presentationVersion?: number;
   audit?: PublicationManifest["audit"]; contract?: PublicationManifest["contract"];
   manifest?: PublicationManifest; manifestFileId?: string; manifestHash?: string;
 }
@@ -178,13 +179,14 @@ export async function publishBundle(input: { google: PublicationGoogle; bundle: 
         // A previously published immutable report retains its original revision
         // header/evidence links. Its data digest was bound to that manifest.
         if (!prior?.months.some(item => item.spreadsheetId === record!.spreadsheetId)) {
-          await google.refreshPreparedLinks(record.spreadsheetId, build(record.spreadsheetId).tabs);
+          if (state.presentationVersion !== 2) await google.refreshPreparedLinks(record.spreadsheetId, build(record.spreadsheetId).tabs);
           await google.verifyTabs(record.spreadsheetId, build(record.spreadsheetId).tabs);
         }
       }
       Object.assign(logical, build(record.spreadsheetId).traces); months.push(record);
     }
   }
+  state.presentationVersion = 2; save();
   const traces = keyedTraces(bundle.tables, logical, state.audit.fileId);
   const expectedContract = gzipSync(JSON.stringify({ tables: bundle.tables, traces }), { level: 9 });
   if (!state.contract || state.contract.sha256 !== sha256(expectedContract)) {

@@ -112,7 +112,7 @@ def daily_reports(model: ModelTables, model_start: date, cutoff: date) -> dict[s
             package_rows.append({
                 "date": day.isoformat(), "student_id": str(lot["student_id"]),
                 "student_name": lot["student_name"], "account_id": key,
-                "class_name": lot["class_name"], "lot_id": str(lot["lot_id"]),
+                "class_name": lot["class_name"], "class_subject": account_by_id[key].get("class_subject", ""), "lot_id": str(lot["lot_id"]),
                 "package_name": label, "kind": lot["lot_kind"],
                 "purchase_date": clean(lot.get("payment_date") or lot.get("transaction_date")) if not residual else None,
                 "transaction_number": lot.get("transaction_number", "") if not residual else "",
@@ -132,7 +132,7 @@ def daily_reports(model: ModelTables, model_start: date, cutoff: date) -> dict[s
             if abs(adjustment) > 1e-8:
                 package_rows.append({
                     "date": day.isoformat(), "student_id": str(account["student_id"]), "student_name": account["student_name"],
-                    "account_id": key, "class_name": account["class_name"], "lot_id": "VALUATION:" + key,
+                    "account_id": key, "class_name": account["class_name"], "class_subject": account.get("class_subject", ""), "lot_id": "VALUATION:" + key,
                     "package_name": "ส่วนต่างวิธีประเมิน", "kind": "VALUATION_ADJUSTMENT",
                     "purchase_date": None, "transaction_number": "", "remaining_credits": None,
                     "liability_thb": adjustment, "source_url": "", "credit_url": "",
