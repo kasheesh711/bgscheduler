@@ -599,7 +599,7 @@ function publicationHarness() {
     createWorkbook: vi.fn().mockResolvedValue("monthly-report-123"), writeTabs: vi.fn().mockResolvedValue(undefined), verifyTabs: vi.fn().mockResolvedValue(undefined),
     upload: vi.fn(async (_folder: string, _name: string, bytes: Buffer) => { const id = `file-id-${files.size}-123`; files.set(id, bytes); return { id }; }),
     bytes: vi.fn(async (id: string) => { const result = files.get(id); if (!result) throw new Error("Archive inaccessible"); return result; }),
-    batch: vi.fn(async (_id: string, requests: Array<Record<string, any>>) => {
+    batch: vi.fn(async (_id: string, requests: Array<{ copyPaste?: unknown; updateCells?: { range?: { sheetId: number }; rows: Array<{ values: Array<{ userEnteredValue?: Record<string, unknown> }> }> } }>) => {
       if (!requests.some(r => r.copyPaste)) return;
       if (beforeCommitFailure) throw new Error("Atomic commit rejected before mutation");
       const marker = requests.find(r => r.updateCells?.range?.sheetId === 2000001001)!.updateCells;

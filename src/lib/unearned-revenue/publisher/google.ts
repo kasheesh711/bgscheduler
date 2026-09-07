@@ -110,10 +110,10 @@ export class PublicationGoogle {
       await this.batch(id, formatRequests(tab, this.email));
     }
   }
-  async verifyTabs(id: string, tabs: ReportTab[]) {
+  async verifyTabs(id: string, tabs: ReportTab[], preserveOriginalRevisionHeader = false) {
     for (const tab of tabs) {
       const actual = await this.values(id, `'${tab.title.replaceAll("'", "''")}'!A1:${columnName(tab.widths.length)}${tab.rows.length}`);
-      for (let row = 0; row < tab.rows.length; row++) for (let col = 0; col < tab.widths.length; col++) {
+      for (let row = preserveOriginalRevisionHeader ? HEAD_ROWS - 1 : 0; row < tab.rows.length; row++) for (let col = 0; col < tab.widths.length; col++) {
         const expected = displayed(tab.rows[row][col]);
         const observed = actual[row]?.[col] ?? null;
         if (typeof expected === "number" ? typeof observed !== "number" || Math.abs(expected - observed) > 0.000001 : String(expected ?? "") !== String(observed ?? "")) {

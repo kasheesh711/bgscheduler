@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Local V5 publisher. All Google data writes are explicitly requested by --publish. */
+/** Build and verify draft reports; --publish commits the main Finance workbook. */
 import { spawn, execFile } from "node:child_process";
 import { readFileSync, mkdirSync, openSync, closeSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";

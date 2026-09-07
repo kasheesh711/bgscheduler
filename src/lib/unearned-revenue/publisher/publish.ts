@@ -143,7 +143,7 @@ export async function publishBundle(input: { google: PublicationGoogle; bundle: 
     const currentCounts = new Map(bundle.audit.sources.manifest.map(row => [`${row.drive_file_id}:${row.source_sheet}`, Number(row.extracted_row_count)]));
     for (const row of priorAudit.sources.manifest) if (["accounting_credit_event_ledger", "accounting_credit_balance_control", "rate_support"].includes(row.source_role) && (currentCounts.get(`${row.drive_file_id}:${row.source_sheet}`) ?? -1) < Number(row.extracted_row_count)) throw new Error("Source rows disappeared since the last immutable revision");
   }
-  let state: PreparedState = existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : { bundleHash: input.bundleHash, folderId: input.folderId ?? await google.ensureFolder(), months: [] };
+  const state: PreparedState = existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : { bundleHash: input.bundleHash, folderId: input.folderId ?? await google.ensureFolder(), months: [] };
   if (state.bundleHash !== input.bundleHash) throw new Error("Prepared state belongs to a different bundle");
   await google.share(state.folderId, !input.commit);
   const save = () => { writeFileSync(statePath + ".tmp", JSON.stringify(state), { mode: 0o600 }); renameSync(statePath + ".tmp", statePath); };
@@ -181,7 +181,7 @@ export async function publishBundle(input: { google: PublicationGoogle; bundle: 
         if (!prior?.months.some(item => item.spreadsheetId === record!.spreadsheetId)) {
           if (state.presentationVersion !== 2) await google.refreshPreparedLinks(record.spreadsheetId, build(record.spreadsheetId).tabs);
           await google.verifyTabs(record.spreadsheetId, build(record.spreadsheetId).tabs);
-        }
+        } else await google.verifyTabs(record.spreadsheetId, build(record.spreadsheetId).tabs, true);
       }
       Object.assign(logical, build(record.spreadsheetId).traces); months.push(record);
     }
