@@ -267,3 +267,10 @@ Two entry points write this domain, both documented in the [feature doc](../../f
 - **Footer commit could not be confirmed.** The footer below is reproduced exactly as specified, but `git log -1 origin/main` in this worktree resolves to `fed828d`, not `0cd1e81`, and the tree carries untracked files under `scripts/`. The line ranges above were read from the working tree at that state.
 
 _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
+
+## Weekend readiness ledger (migration 0077)
+
+- `classroom_weekend_checks` / `classroomWeekendChecks`: one row per Bangkok `check_date` (unique), with `weekend_date`, execution `status`, fenced `claimed_at`, typed JSON `report`, `last_error`, creation/finish timestamps. `running → completed | retry_pending | failed`; unverified reports may be reassessed on retry, failed delivery reuses its payload. Snapshot IDs inside the report are evidence without a pruning-blocking FK.
+- `classroom_weekend_notifications` / `classroomWeekendNotifications`: at most one notification per check (unique `check_id`, FK to the check), with weekend, kind (`warning | resolved`), private recipient, unique relay idempotency key, persisted subject/text/HTML, delivery status, attempt count, provider receipt, error and timestamps. Latest sent notification per weekend/recipient determines whether a later clear checkpoint should send a resolved notice.
+
+These tables are separate from operational classroom assignment and daily admin-email runs.

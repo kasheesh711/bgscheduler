@@ -276,21 +276,25 @@ export async function fetchTeacherFullAvailability(
  */
 export async function fetchAllFutureSessions(
   client: WiseClient,
-  instituteId: string
+  instituteId: string,
+  options: { strict?: boolean; deadlineAt?: number } = {},
 ): Promise<WiseSession[]> {
-  return fetchAllInstituteSessions(client, instituteId, { status: "FUTURE" });
+  return fetchAllInstituteSessions(client, instituteId, { status: "FUTURE" }, options);
 }
 
 export async function fetchAllInstituteSessions(
   client: WiseClient,
   instituteId: string,
   params: { status?: string } = {},
+  options: { strict?: boolean; deadlineAt?: number } = {},
 ): Promise<WiseSession[]> {
   const all: WiseSession[] = [];
   let page = 1;
   let pageCount = 1;
+  const seen = new Set<string>();
 
   while (page <= pageCount) {
+    if (options.deadlineAt && Date.now() >= options.deadlineAt) throw new Error("Wise session read exceeded its time budget");
     const requestParams: Record<string, string> = {
       paginateBy: "COUNT",
       page_number: String(page),
@@ -301,9 +305,25 @@ export async function fetchAllInstituteSessions(
     const res = await client.get<WiseSessionsResponse>(
       `/institutes/${instituteId}/sessions`,
       requestParams,
+      options.deadlineAt ? { signal: AbortSignal.timeout(Math.max(1, options.deadlineAt - Date.now())) } : undefined,
     );
 
+    if (options.strict && (!Array.isArray(res.data?.sessions) || !Number.isInteger(res.data?.page_count)
+      || res.data!.page_count! < 0 || (page > 1 && res.data!.page_count !== pageCount))) {
+      throw new Error(`Unable to verify complete Wise session pagination at page ${page}`);
+    }
     const sessions = res.data?.sessions ?? [];
+    if (options.strict) {
+      if (sessions.length === 0 && (page > 1 || (res.data?.page_count ?? 0) > 1)) throw new Error("Wise returned an empty advertised session page");
+      if (sessions.length > 0 && res.data?.page_count === 0) throw new Error("Wise session page count contradicts its contents");
+      for (const session of sessions) {
+        if (!session._id || seen.has(session._id) || !Number.isFinite(Date.parse(session.scheduledStartTime))
+          || !Number.isFinite(Date.parse(session.scheduledEndTime)) || Date.parse(session.scheduledEndTime) <= Date.parse(session.scheduledStartTime)) {
+          throw new Error("Wise session read contains duplicate, missing, or invalid session data");
+        }
+        seen.add(session._id);
+      }
+    }
     all.push(...sessions);
     pageCount = res.data?.page_count ?? page;
     if (sessions.length === 0) break;
@@ -356,6 +376,7 @@ export async function fetchWiseSessionDetail(
   client: WiseClient,
   classId: string,
   sessionId: string,
+  options: { deadlineAt?: number } = {},
 ): Promise<WiseSessionDetail> {
   const res = await client.get<WiseSessionDetailResponse>(
     `/user/classes/${classId}/sessions/${sessionId}`,
@@ -364,6 +385,7 @@ export async function fetchWiseSessionDetail(
       showFeedbackConfig: "true",
       showFeedbackSubmission: "true",
     },
+    options.deadlineAt ? { signal: AbortSignal.timeout(Math.max(1, options.deadlineAt - Date.now())) } : undefined,
   );
   if (!res.data || typeof res.data !== "object") {
     throw new Error(`Wise session detail response was missing data for session ${sessionId}`);

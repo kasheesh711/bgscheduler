@@ -7,8 +7,6 @@ import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Client } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
-import * as schema from "../src/lib/db/schema";
 import { createWiseClient } from "../src/lib/wise/client";
 import { fetchAllFutureSessions, fetchWiseSessionDetail } from "../src/lib/wise/fetchers";
 import { getWiseSessionTeacherUserId, getWiseUserName } from "../src/lib/wise/types";
@@ -19,8 +17,7 @@ import { liveRoomBlocksForDate } from "../src/lib/classrooms/data";
 import { previewClassroomRecovery } from "../src/lib/classrooms/recovery-preview";
 import type { AssignmentSession } from "../src/lib/classrooms/assignment-engine";
 import { isOnsiteSessionType } from "../src/lib/classrooms/session-mode";
-import { proposeRoomProfiles } from "../src/lib/classrooms/room-profile-planner";
-import { listTutorRoomProfiles, toRoomPolicies } from "../src/lib/classrooms/room-profiles";
+import { loadClassroomRecoveryContext, recoveryRoomPolicies } from "../src/lib/classrooms/recovery-data";
 import { preferenceFrozenSessionIds } from "../src/lib/classrooms/notification-state";
 import { roomQualityMetrics, type RoomQualityMetrics } from "../src/lib/classrooms/room-policy";
 import type { Database } from "../src/lib/db";
@@ -44,51 +41,12 @@ async function main() {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
   const db = drizzle(client);
-  const snapshotData = await (async () => {
-    try {
-      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-      const [snapshot] = await db.select().from(schema.snapshots).where(eq(schema.snapshots.active, true)).limit(1);
-      if (!snapshot) throw new Error("No active snapshot");
-      const members = await db.select({ groupId: schema.tutorIdentityGroupMembers.groupId,
-        wiseTeacherId: schema.tutorIdentityGroupMembers.wiseTeacherId, wiseUserId: schema.tutorIdentityGroupMembers.wiseUserId,
-        name: schema.tutorIdentityGroups.displayName, canonicalKey: schema.tutorIdentityGroups.canonicalKey }).from(schema.tutorIdentityGroupMembers)
-        .innerJoin(schema.tutorIdentityGroups, eq(schema.tutorIdentityGroupMembers.groupId, schema.tutorIdentityGroups.id))
-        .where(eq(schema.tutorIdentityGroupMembers.snapshotId, snapshot.id));
-      const runs = await db.select().from(schema.classroomAssignmentRuns)
-        .where(inArray(schema.classroomAssignmentRuns.assignmentDate, dates)).orderBy(desc(schema.classroomAssignmentRuns.createdAt));
-      const latestRuns = dates.flatMap(date => runs.find(run => run.assignmentDate === date) ?? []);
-      const previousRows = latestRuns.length ? await db.select().from(schema.classroomAssignmentRows)
-        .where(inArray(schema.classroomAssignmentRows.runId, latestRuns.map(run => run.id))) : [];
-      const rooms = await db.select().from(schema.classroomRooms).where(eq(schema.classroomRooms.active, true));
-      const profiles = await listTutorRoomProfiles(db as unknown as Database);
-      const latestHistory = db.selectDistinctOn([schema.classroomAssignmentRuns.assignmentDate], { id: schema.classroomAssignmentRuns.id }).from(schema.classroomAssignmentRuns)
-        .where(and(gte(schema.classroomAssignmentRuns.assignmentDate, addBangkokDays(startDate, -28)), lt(schema.classroomAssignmentRuns.assignmentDate, startDate)))
-        .orderBy(schema.classroomAssignmentRuns.assignmentDate, desc(schema.classroomAssignmentRuns.createdAt));
-      const history = await db.select({ canonicalKey: schema.classroomAssignmentRows.canonicalKey, room: schema.classroomAssignmentRows.assignedRoom,
-        minutes: sql<number>`${schema.classroomAssignmentRows.endMinute} - ${schema.classroomAssignmentRows.startMinute}` }).from(schema.classroomAssignmentRows)
-        .where(and(inArray(schema.classroomAssignmentRows.runId, latestHistory), eq(schema.classroomAssignmentRows.status, "assigned")));
-      const notified = await db.select({ canonicalKey: schema.classroomScheduleEmailRecipients.canonicalKey, date: schema.classroomAssignmentRuns.assignmentDate })
-        .from(schema.classroomScheduleEmailRecipients).innerJoin(schema.classroomAssignmentRuns, eq(schema.classroomScheduleEmailRecipients.assignmentRunId, schema.classroomAssignmentRuns.id))
-        .where(and(inArray(schema.classroomAssignmentRuns.assignmentDate, dates), eq(schema.classroomScheduleEmailRecipients.status, "sent")));
-      await client.query("COMMIT");
-      return { snapshot, members, latestRuns, previousRows, rooms, profiles, history, notified };
-    } finally { await client.end(); }
-  })();
+  const snapshotData = await loadClassroomRecoveryContext(db as unknown as Database, dates)
+    .finally(() => client.end());
   const liveReadStartedAt = new Date().toISOString();
   const wise = createWiseClient();
   const live = await fetchAllFutureSessions(wise, process.env.WISE_INSTITUTE_ID);
-  const members = new Map(snapshotData.members.flatMap(member => [member.wiseTeacherId, member.wiseUserId].filter(Boolean).map(id => [id!, member] as const)));
-  const upcoming = live.flatMap(session => {
-    const member = members.get(getWiseSessionTeacherUserId(session) ?? "");
-    const date = bangkokDateKey(new Date(session.scheduledStartTime));
-    if (!member || !isBlockingStatus(session.meetingStatus) || date < startDate || date >= addBangkokDays(startDate, 28)) return [];
-    return normalizeSessions([session], () => member.wiseTeacherId).map(block => ({ ...block, canonicalKey: member.canonicalKey, groupId: member.groupId, tutorDisplayName: member.name }));
-  });
-  const roomPolicies = toRoomPolicies(snapshotData.profiles.profiles);
-  const proposedProfiles = proposeRoomProfiles({ sessions: upcoming, rooms: snapshotData.rooms, existing: [...roomPolicies.values()],
-    history: snapshotData.history.flatMap(row => row.canonicalKey ? [{ ...row, canonicalKey: row.canonicalKey }] : []) });
-  for (const profile of proposedProfiles) roomPolicies.set(profile.canonicalKey, { canonicalKey: profile.canonicalKey, revision: 1,
-    rooms: profile.roomIds.map(id => snapshotData.rooms.find(room => room.id === id)!.name) });
+  const { policies: roomPolicies, proposed: proposedProfiles } = recoveryRoomPolicies(snapshotData, live, startDate);
   for (const date of dates) {
     const run = snapshotData.latestRuns.find(run => run.assignmentDate === date);
     const saved = { ...snapshotData, run, previousRows: snapshotData.previousRows.filter(row => row.runId === run?.id) };

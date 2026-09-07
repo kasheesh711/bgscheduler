@@ -1,3 +1,4 @@
+import type { WeekendReport } from "@/lib/classrooms/weekend-readiness";
 import {
   pgTable,
   uuid,
@@ -2175,6 +2176,38 @@ export const classroomAdminEmailRecipients = pgTable("classroom_admin_email_reci
 ]);
 
 // ── Tutor Leave Requests ───────────────────────────────────────────────
+
+// Separate from operational assignment/email runs: one assessment per Bangkok check date.
+export const classroomWeekendChecks = pgTable("classroom_weekend_checks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  checkDate: date("check_date", { mode: "string" }).notNull(),
+  weekendDate: date("weekend_date", { mode: "string" }).notNull(),
+  status: text("status").notNull().default("running"),
+  claimedAt: timestamp("claimed_at", { withTimezone: true }).notNull(),
+  report: jsonb("report").$type<WeekendReport>(),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, table => [uniqueIndex("cwc_check_date_idx").on(table.checkDate), index("cwc_weekend_idx").on(table.weekendDate)]);
+
+export const classroomWeekendNotifications = pgTable("classroom_weekend_notifications", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  checkId: uuid("check_id").notNull().references(() => classroomWeekendChecks.id),
+  weekendDate: date("weekend_date", { mode: "string" }).notNull(),
+  kind: text("kind").notNull(),
+  recipient: text("recipient").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  subject: text("subject").notNull(),
+  text: text("text").notNull(),
+  html: text("html").notNull(),
+  status: text("status").notNull().default("pending"),
+  attempts: integer("attempts").notNull().default(0),
+  providerMessageId: text("provider_message_id"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+}, table => [uniqueIndex("cwn_check_idx").on(table.checkId), uniqueIndex("cwn_idempotency_idx").on(table.idempotencyKey),
+  index("cwn_weekend_sent_idx").on(table.weekendDate, table.sentAt)]);
 
 export const leaveRequestSyncRuns = pgTable("leave_request_sync_runs", {
   id: uuid("id").primaryKey().defaultRandom(),

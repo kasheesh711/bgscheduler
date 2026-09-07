@@ -1,6 +1,7 @@
 import type { CronJobStatus } from "./types";
 
 export type CronJobKey =
+  | "classroom_weekend_check"
   | "wise_snapshot"
   | "wise_activity"
   | "sales_dashboard"
@@ -41,12 +42,33 @@ export interface CronJobDefinition {
   confirmationLabel: string | null;
   expectedBangkokMinute?: number;
   expectedBangkokWeekday?: number;
+  expectedBangkokWeekdays?: number[];
+  enabledAtEnv?: string;
   expectedBangkokWindowStartMinute?: number;
   expectedBangkokWindowEndMinute?: number;
   routeMethod: "GET" | "POST";
 }
 
 export const CRON_JOBS = [
+  {
+    key: "classroom_weekend_check",
+    label: "Weekend Classroom Check",
+    feature: "Class Assignments",
+    path: "/api/internal/class-assignments/weekend-check",
+    schedule: "0,16,31 2 * * 3-5",
+    cadenceLabel: "Wed–Fri 09:00 Bangkok; retries 09:16 / 09:31",
+    cadenceMinutes: null,
+    lateAfterMinutes: 15,
+    maxDurationSeconds: 800,
+    manualOnly: false,
+    dangerous: true,
+    confirmationLabel: "Checks this weekend and may email the configured private recipient. Does not publish rooms or email tutors.",
+    expectedBangkokWeekdays: [3, 4, 5],
+    expectedBangkokWindowStartMinute: 9 * 60,
+    expectedBangkokWindowEndMinute: 9 * 60 + 31,
+    enabledAtEnv: "CLASSROOM_WEEKEND_ALERTS_ENABLED_AT",
+    routeMethod: "GET",
+  },
   {
     key: "wise_snapshot",
     label: "Wise Snapshot",

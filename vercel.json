@@ -2,6 +2,10 @@
   "regions": ["sin1"],
   "crons": [
     {
+      "path": "/api/internal/class-assignments/weekend-check",
+      "schedule": "0,16,31 2 * * 3-5"
+    },
+    {
       "path": "/api/internal/sync-wise",
       "schedule": "*/30 * * * *"
     },

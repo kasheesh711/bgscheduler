@@ -1,5 +1,7 @@
 "use client";
 
+import { AssignmentReadinessNotice, WeekendReadinessPanel } from "./readiness-notice";
+
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -262,7 +264,10 @@ export function ClassAssignmentsWorkspace() {
 
   useEffect(() => {
     if (!date) {
-      setDate(todayBangkok());
+      const requestedDate = new URLSearchParams(window.location.search).get("date");
+      const valid = requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate)
+        && Number.isFinite(Date.parse(`${requestedDate}T00:00:00Z`)) && new Date(`${requestedDate}T00:00:00Z`).toISOString().slice(0, 10) === requestedDate;
+      setDate(valid ? requestedDate : todayBangkok());
       return;
     }
     void loadAssignments(date, true);
@@ -764,6 +769,9 @@ export function ClassAssignmentsWorkspace() {
           </div>
         </div>
       )}
+
+      <AssignmentReadinessNotice detail={detail} />
+      <WeekendReadinessPanel refreshKey={`${date}:${run?.id ?? ""}:${run?.updatedAt ?? ""}`} />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-8">
         <div className="rounded-lg border bg-card p-3">

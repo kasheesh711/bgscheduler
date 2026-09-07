@@ -275,3 +275,9 @@ Outside the feature, `src/__tests__/vercel-crons.test.ts:29-30` pins both cron s
 - **Publish-job background execution.** The route relies on `after()` and a `void task()` fallback (`publish/route.ts:12-26`); the 6-minute stale-job sweep is the only recovery if the function is frozen before the job finishes. Is that acceptable for a job with up to 10 concurrent Wise writes, or should publish move to a cron-driven worker?
 
 _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
+
+## Weekend readiness warnings
+
+A separate private checkpoint checks Saturday and Sunday on Wednesday, Thursday and Friday at 09:00 Bangkok, with retries at 09:16 and 09:31. It uses the recovery planner and fresh live Wise data without generating operational runs or publishing rooms. The configured recipient receives actionable warnings, daily reminders while problems remain, and one verified recovery notice; ordinary clear weekends remain quiet.
+
+Class Assignments presents readiness separately from execution status: a completed run with missing rooms or conflicts displays a persistent warning. The weekend panel shows saved findings, observation time and date-specific review links. Unverified data is never rendered as clear. See [the weekend alert runbook](../operations/weekend-classroom-alerts.md) for delivery, failure recovery, configuration and rollout.

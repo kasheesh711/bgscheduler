@@ -381,3 +381,12 @@ Never log values. [`env.ts:43`](../../src/lib/env.ts) logs only `fieldErrors` (k
 ---
 
 _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
+
+## Private weekend classroom alerts
+
+| Variable | Behavior |
+|---|---|
+| `CLASSROOM_WEEKEND_ALERT_EMAIL` | Exactly one validated recipient for weekend classroom warnings and this job's watchdog alerts; production choice `kevhsh7@gmail.com`. No admin-list fallback. |
+| `CLASSROOM_WEEKEND_ALERTS_ENABLED_AT` | ISO timestamp with offset; missing disables scheduled evaluation. Prevents retroactive missing-run alerts before activation. |
+
+These are read by the weekend checker and shared health calendar; existing Apps Script relay configuration provides delivery. [Runbook](../operations/weekend-classroom-alerts.md).

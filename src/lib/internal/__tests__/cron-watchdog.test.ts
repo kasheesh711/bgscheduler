@@ -734,3 +734,34 @@ describe("runCronWatchdog", () => {
     }
   });
 });
+
+
+describe("private weekend watchdog routing", () => {
+  it("excludes weekend details from shared mail, even when another job is failing", async () => {
+    vi.stubEnv("CLASSROOM_WEEKEND_ALERT_EMAIL", "kevhsh7@gmail.com");
+    try {
+      const state = freshState();
+      const sender = makeSender();
+      await runCronWatchdog(makeFakeDb(state), { sender, loadPayoutWindow: loadPayoutWindow(null),
+        loadJobs: loadJobs([jobHealth({ key: "wise_snapshot", label: "Wise Snapshot", status: "failing" }),
+          jobHealth({ key: "classroom_weekend_check", label: "Weekend Classroom Check", status: "failing", errorSummary: "PRIVATE-WEEKEND-DETAIL" })]) });
+      const messages = vi.mocked(sender.sendEmail).mock.calls.map(call => call[0]);
+      expect(messages.filter(message => message.to !== "kevhsh7@gmail.com")).toHaveLength(2);
+      for (const message of messages.filter(message => message.to !== "kevhsh7@gmail.com")) {
+        expect(message.text).not.toContain("PRIVATE-WEEKEND-DETAIL");
+        expect(message.text).not.toContain("Weekend Classroom");
+      }
+      expect(messages.find(message => message.to === "kevhsh7@gmail.com")?.text).toContain("PRIVATE-WEEKEND-DETAIL");
+    } finally { vi.unstubAllEnvs(); }
+  });
+  it("never falls back to admin recipients for a missing private address", async () => {
+    vi.stubEnv("CLASSROOM_WEEKEND_ALERT_EMAIL", "");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const sender = makeSender();
+      await runCronWatchdog(makeFakeDb(freshState()), { sender, loadPayoutWindow: loadPayoutWindow(null),
+        loadJobs: loadJobs([jobHealth({ key: "classroom_weekend_check", status: "failing" })]) });
+      expect(sender.sendEmail).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); error.mockRestore(); }
+  });
+});

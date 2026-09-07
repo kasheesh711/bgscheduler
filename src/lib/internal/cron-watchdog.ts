@@ -17,6 +17,7 @@
 // one digest that their colleagues received.
 
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { weekendAlertRecipient, WEEKEND_CHECK_JOB_KEY } from "@/lib/classrooms/weekend-config";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import {
@@ -441,6 +442,21 @@ async function runLockedSweep(
   jobs: CronJobHealth[],
   options: RunCronWatchdogOptions,
 ): Promise<CronWatchdogSweepSummary> {
+  const privateJobs = jobs.filter(job => job.key === WEEKEND_CHECK_JOB_KEY);
+  if (!privateJobs.length) return runRecipientSweep(db, now, jobs, options);
+  const shared = await runRecipientSweep(db, now, jobs.filter(job => job.key !== WEEKEND_CHECK_JOB_KEY), options);
+  let recipients: string[] = [];
+  try { recipients = [weekendAlertRecipient()]; }
+  catch { console.error("Weekend watchdog recipient is not configured; private findings will not enter shared admin mail."); }
+  const privateResult = await runRecipientSweep(db, now, privateJobs, options, recipients);
+  return { checked: shared.checked + privateResult.checked, unhealthy: shared.unhealthy + privateResult.unhealthy,
+    alertsSent: shared.alertsSent + privateResult.alertsSent, recoveries: shared.recoveries + privateResult.recoveries,
+    emailRecipients: shared.emailRecipients + privateResult.emailRecipients,
+    skippedReason: [shared.skippedReason, privateResult.skippedReason].filter(Boolean).join("; ") || null };
+}
+
+async function runRecipientSweep(db: Database, now: Date, jobs: CronJobHealth[], options: RunCronWatchdogOptions,
+  privateRecipients?: string[]): Promise<CronWatchdogSweepSummary> {
   const allStates = await db.select().from(schema.cronAlertState);
   const states = allStates.filter((state) => state.jobKey !== SWEEP_LOCK_KEY);
 
@@ -451,7 +467,7 @@ async function runLockedSweep(
     return { ...base, alertsSent: 0, recoveries: 0, emailRecipients: 0, skippedReason: null };
   }
 
-  const recipients = await loadAdminEmails(db);
+  const recipients = privateRecipients ?? await loadAdminEmails(db);
   if (recipients.length === 0) {
     console.error("Cron watchdog found no admin recipients; episode state left unmarked for retry.");
     return { ...base, alertsSent: 0, recoveries: 0, emailRecipients: 0, skippedReason: "no admin recipients" };

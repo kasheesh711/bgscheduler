@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { runWeekendClassroomCheck } from "@/lib/classrooms/weekend-check";
 import { getDb } from "@/lib/db";
 import { runClassroomMorningAutomation } from "@/lib/classrooms/morning-automation";
 import { sendAdminClassroomScheduleEmail } from "@/lib/classrooms/admin-schedule-email";
@@ -41,6 +42,14 @@ export async function runDataHealthJob(jobKey: CronJobKey, actorEmail: string | 
       requestMethod: "POST",
     },
     async () => {
+      if (jobKey === "classroom_weekend_check") {
+        try {
+          const result = await runWeekendClassroomCheck();
+          return NextResponse.json(result, { status: result.ok ? 200 : 500 });
+        } catch (error) {
+          return NextResponse.json({ ok: false, errorSummary: error instanceof Error ? error.message : "Weekend check failed" }, { status: 500 });
+        }
+      }
       if (jobKey === "wise_snapshot") {
         return runWiseSyncRequest();
       }

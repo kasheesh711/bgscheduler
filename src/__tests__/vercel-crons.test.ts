@@ -15,6 +15,7 @@ function loadVercelConfig(): VercelConfig {
  * timing, so the only place a stagger regression can be caught is here.
  */
 const EXPECTED_SCHEDULES: Record<string, string> = {
+  "/api/internal/class-assignments/weekend-check": "0,16,31 2 * * 3-5",
   "/api/internal/sync-wise": "*/30 * * * *",
   "/api/internal/sync-sales-dashboard": "10,40 * * * *",
   "/api/internal/sync-unearned-revenue": "30 18 * * *",
@@ -99,10 +100,10 @@ function canCollide(left: FiringSet, right: FiringSet): boolean {
 }
 
 describe("vercel cron configuration", () => {
-  it("registers exactly the 19 known crons, each on its pinned schedule", () => {
+  it("registers exactly the 20 known crons, each on its pinned schedule", () => {
     const crons = loadVercelConfig().crons;
 
-    expect(crons).toHaveLength(19);
+    expect(crons).toHaveLength(20);
     expect(Object.fromEntries(crons.map((cron) => [cron.path, cron.schedule]))).toEqual(EXPECTED_SCHEDULES);
   });
 
@@ -125,7 +126,10 @@ describe("vercel cron configuration", () => {
         // Google Sheets/Postgres and never calls or mutates Wise.
         const approvedFinanceOverlap = pair.has("/api/internal/sync-wise")
           && pair.has("/api/internal/sync-unearned-revenue");
-        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap) {
+        // The private 09:00 assessment waits for a fresh snapshot, sharing the scheduled sync;
+        // it never starts another sync. Its retry ticks occupy free minutes.
+        const coordinatedWeekendCheck = pair.has("/api/internal/sync-wise") && pair.has("/api/internal/class-assignments/weekend-check");
+        if (canCollide(crons[i].firing, crons[j].firing) && !approvedFinanceOverlap && !coordinatedWeekendCheck) {
           collisions.push(`${crons[i].path} vs ${crons[j].path}`);
         }
       }

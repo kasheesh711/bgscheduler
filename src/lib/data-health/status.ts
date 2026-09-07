@@ -135,30 +135,23 @@ function dailyExpectation(job: CronJobDefinition, now: Date) {
 }
 
 function weeklyExpectation(job: CronJobDefinition, now: Date) {
-  const targetWeekday = job.expectedBangkokWeekday;
+  const weekdays = job.expectedBangkokWeekdays ?? (job.expectedBangkokWeekday === undefined ? [] : [job.expectedBangkokWeekday]);
   const parts = bangkokParts(now);
   const startMinute = job.expectedBangkokWindowStartMinute ?? job.expectedBangkokMinute;
   const endMinute = job.expectedBangkokWindowEndMinute ?? job.expectedBangkokMinute;
-  if (targetWeekday === undefined || startMinute === undefined || endMinute === undefined) {
+  if (!weekdays.length || startMinute === undefined || endMinute === undefined) {
     return { lastExpectedAt: null, nextExpectedAt: null, lateAfterAt: null };
   }
 
   const todayStart = bangkokLocalInstant(parts.year, parts.month, parts.day, startMinute);
   const todayEnd = bangkokLocalInstant(parts.year, parts.month, parts.day, endMinute);
-  const daysSinceTarget = (parts.weekday - targetWeekday + 7) % 7;
-  const currentWeekStart = new Date(todayStart.getTime() - daysSinceTarget * DAY_MS);
-  const currentWeekEnd = new Date(todayEnd.getTime() - daysSinceTarget * DAY_MS);
-  const hasCurrentWeekWindowStarted = now.getTime() >= currentWeekStart.getTime();
-
-  const lastExpectedAt = hasCurrentWeekWindowStarted
-    ? currentWeekStart
-    : new Date(currentWeekStart.getTime() - 7 * DAY_MS);
-  const windowEnd = hasCurrentWeekWindowStarted
-    ? currentWeekEnd
-    : new Date(currentWeekEnd.getTime() - 7 * DAY_MS);
-  const nextExpectedAt = hasCurrentWeekWindowStarted
-    ? new Date(currentWeekStart.getTime() + 7 * DAY_MS)
-    : currentWeekStart;
+  const windows = Array.from({ length: 15 }, (_, i) => i - 7)
+    .filter(offset => weekdays.includes((parts.weekday + offset + 7) % 7))
+    .map(offset => ({ start: new Date(todayStart.getTime() + offset * DAY_MS), end: new Date(todayEnd.getTime() + offset * DAY_MS) }));
+  const last = windows.filter(window => window.start <= now).at(-1)!;
+  const lastExpectedAt = last.start;
+  const windowEnd = last.end;
+  const nextExpectedAt = windows.find(window => window.start > now)!.start;
   const lateAfterAt = new Date(windowEnd.getTime() + job.lateAfterMinutes * 60 * 1000);
 
   return { lastExpectedAt, nextExpectedAt, lateAfterAt };
@@ -166,8 +159,13 @@ function weeklyExpectation(job: CronJobDefinition, now: Date) {
 
 export function expectedWindowForJob(job: CronJobDefinition, now: Date) {
   if (job.manualOnly) return { lastExpectedAt: null, nextExpectedAt: null, lateAfterAt: null };
-  if (job.expectedBangkokWeekday !== undefined) {
-    return weeklyExpectation(job, now);
+  if (job.expectedBangkokWeekday !== undefined || job.expectedBangkokWeekdays?.length) {
+    const window = weeklyExpectation(job, now);
+    const enabledAt = job.enabledAtEnv ? Date.parse(process.env[job.enabledAtEnv] ?? "") : NaN;
+    if (Number.isFinite(enabledAt) && window.lastExpectedAt && window.lastExpectedAt.getTime() < enabledAt) {
+      return { ...window, lastExpectedAt: null, lateAfterAt: null };
+    }
+    return window;
   }
   if (job.expectedBangkokMinute !== undefined || job.expectedBangkokWindowStartMinute !== undefined) {
     return dailyExpectation(job, now);
@@ -196,7 +194,8 @@ export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult 
   const { job, now } = input;
   const { lastExpectedAt, nextExpectedAt, lateAfterAt } = expectedWindowForJob(job, now);
 
-  if (job.manualOnly) {
+  const disabled = Boolean(job.enabledAtEnv && !process.env[job.enabledAtEnv]?.trim());
+  if (job.manualOnly || disabled) {
     const lastSeenAt = input.latestRun?.startedAt ?? input.latestInvocation?.receivedAt ?? null;
     return {
       status: "manual-only",
@@ -211,7 +210,7 @@ export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult 
       durationMs: input.latestInvocation?.durationMs ?? null,
       responseStatus: input.latestInvocation?.responseStatus ?? null,
       errorSummary: input.latestRun?.errorSummary ?? input.latestInvocation?.errorSummary ?? null,
-      healthDetail: "Not listed in vercel.json; runs only from manual controls.",
+      healthDetail: disabled ? "Weekend alerts have not been activated." : "Not listed in vercel.json; runs only from manual controls.",
     };
   }
 
@@ -277,7 +276,7 @@ export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult 
 
   if (proof === "none") {
     return {
-      status: "unknown",
+      status: job.enabledAtEnv && (lateAfterAt === null || now <= lateAfterAt) ? "healthy" : "unknown",
       proof,
       proofLabel: "No run evidence",
       lastSeenAt: null,
@@ -289,7 +288,8 @@ export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult 
       durationMs: null,
       responseStatus: null,
       errorSummary: null,
-      healthDetail: "No invocation or run-table evidence found.",
+      healthDetail: job.enabledAtEnv && (lateAfterAt === null || now <= lateAfterAt)
+        ? "Awaiting the first scheduled check after activation." : "No invocation or run-table evidence found.",
     };
   }
 
@@ -314,7 +314,7 @@ export function evaluateCronJobStatus(input: CronStatusInput): CronStatusResult 
   const isDailyWindow =
     job.expectedBangkokMinute !== undefined ||
     job.expectedBangkokWindowStartMinute !== undefined;
-  const usesCalendarWindow = isDailyWindow || job.expectedBangkokWeekday !== undefined;
+  const usesCalendarWindow = isDailyWindow || job.expectedBangkokWeekday !== undefined || Boolean(job.expectedBangkokWeekdays?.length);
   const intervalEvidenceTooOld =
     !usesCalendarWindow &&
     lastSeenAt !== null &&
