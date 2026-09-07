@@ -110,7 +110,7 @@ Unparseable JSON → `400 {"error":"Invalid JSON"}`; a schema failure → `400 {
 2. Seeds/repairs the room catalog (the same `ensureDefaultClassroomRooms` write as above).
 3. Loads that Bangkok day's blocking `future_session_blocks` rows from the snapshot, joined to `tutor_identity_groups` for the display name ([`data.ts:736-783`](../../../src/lib/classrooms/data.ts)).
 4. **Calls Wise** (`fetchAllFutureSessions`) and derives live room blocks for the date that are not covered by local rows ([`data.ts:887-893`](../../../src/lib/classrooms/data.ts)).
-5. Runs `assignClassrooms`, then **inserts** one `classroom_assignment_runs` row (`status: "completed"`, `forceReassign`, the assigned / needs-review / no-room / remote counts, `createdBy = session.user.email`) plus one `classroom_assignment_rows` row per session ([`data.ts:830-875`](../../../src/lib/classrooms/data.ts)).
+5. Initializes missing usual-room profiles, reconciles the previous plan using `runIncrementalClassroomAssignment`, then atomically **inserts** one `classroom_assignment_runs` row (`status: "completed"`, `forceReassign`, the assigned / needs-review / no-room / remote counts, `createdBy = session.user.email`) plus one `classroom_assignment_rows` row per session ([`data.ts:830-875`](../../../src/lib/classrooms/data.ts)).
 
 Nothing is written back to Wise here — publishing is a separate, explicit call.
 
@@ -427,6 +427,21 @@ Sends the daily admin summary of today's classroom assignments — or an "ACTION
 | 500 | `result.status` is `failed` or `partial` (the `AdminScheduleEmailResult` is still the body), or a thrown error (`{ error }`, [`admin-email/route.ts:19-22`](../../../src/app/api/internal/class-assignments/admin-email/route.ts)); or `{"error":"Server misconfigured"}` when `CRON_SECRET` is unset. |
 
 ---
+
+## Stable room profiles and print contracts (September 2026)
+
+All routes below use the existing authenticated `/class-assignments` page scope in middleware.
+
+| Route | Contract |
+|---|---|
+| `GET /api/class-assignments/room-profiles` | Read-only `{ rooms, profiles }`; each profile includes canonical identity, ordered `roomIds`, expanded room records, preferred primary room, source, provenance, revision and update information. 401 without session; 500 on load failure. |
+| `PATCH /api/class-assignments/room-profiles/[canonicalKey]` | `{ roomIds: UUID[1..3], revision: positive integer }`. Requires distinct active standard rooms, TV compatibility, existing preferred primary and Gift's fixed room. Actor comes from the authenticated email. Returns the updated record; 400 invalid choices/body, 401 unauthenticated, 404 unknown teacher, 409 stale revision, 500 storage failure. |
+| `GET /api/class-assignments/print-runs?date=YYYY-MM-DD` | Read-only `{ runs: [{ id, date }], missingDates }` for seven dates. Latest saved run per date, ascending date. 400 invalid/impossible dates, 401 unauthenticated, 500 load failure. |
+| `/class-assignments/report?runIds=UUID,...&missingDates=YYYY-MM-DD,...` | Authenticated page, 1–7 distinct saved run IDs and at most one per date. Displays a visible error card for missing/invalid/conflicting runs. A4 landscape, client font-measured pagination and browser Print/Save PDF. No generation, seeding, Wise writes or email sends. |
+
+Assignment rows now carry the resolved `canonicalKey`, independent of snapshot group UUIDs. Run `changeSummary` adds `algorithmVersion`, applied `roomPolicies` and `quality` metrics. The teacher-schedule response uses one canonical grouping and includes `usualRooms`, `unavailableRooms`, per-teacher room changes, and block `roomChange`, `shortGapChange`, `outsideUsualRooms`, `exceptionReasons`, and `publication` fields. Email previews include usual rooms and the same projected exception labels. Noticeboard payloads explicitly omit student/subject/class/contact fields.
+
+Manual and incremental runs share reconciliation; in-place overrides preserve unchanged rows' publishing outcomes. Successful teacher deliveries are checked date-wide. The email relay idempotency prefix uses assignment date and canonical identity, not run UUID.
 
 ## Test coverage
 

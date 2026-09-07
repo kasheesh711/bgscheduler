@@ -16,6 +16,9 @@ import {
 } from "./session-mode";
 import { repairClassroomAssignments, ROOM_REPAIR_MAX_NODES, type RoomRepairBudget } from "./assignment-repair";
 
+import { optimizeClassroomContinuity, usualRoomPreferenceCost } from "./continuity-optimizer";
+import { assignmentTutorKey, classroomContinuityEnabled, type RoomQualityMetrics, type TutorRoomPolicies } from "./room-policy";
+
 export const REMOTE_NO_ROOM_NEEDED = "REMOTE_NO_ROOM_NEEDED";
 export const ONLINE_CENTER_CONNECTION_GAP_MINUTES = 60;
 export const GENERAL_CONTINUITY_GAP_MINUTES = 15;
@@ -26,6 +29,7 @@ const DEMOTED_ROOM_SCORE = 2_000;
 export type AssignmentRowStatus = "assigned" | "needs_review" | "no_room" | "remote";
 
 export interface AssignmentSession {
+  canonicalKey?: string | null;
   groupId: string;
   tutorDisplayName: string;
   wiseTeacherId: string;
@@ -86,6 +90,8 @@ export interface ExternalRoomBlock {
 }
 
 export interface FixedTutorAssignment {
+  canonicalKey?: string | null;
+  groupId?: string;
   tutorDisplayName: string;
   startMinute: number;
   endMinute: number;
@@ -100,6 +106,7 @@ export interface FixedTutorAssignment {
  * on this type at all, by design).
  */
 export interface ContextSession {
+  canonicalKey?: string | null;
   wiseSessionId: string;
   tutorDisplayName: string;
   groupId: string;
@@ -109,6 +116,12 @@ export interface ContextSession {
 }
 
 export interface AssignmentOptions {
+  roomPolicies?: TutorRoomPolicies;
+  optimizeContinuity?: boolean;
+  continuityMaxNodes?: number;
+  savedRooms?: ReadonlyMap<string, string>;
+  frozenSessionIds?: ReadonlySet<string>;
+  diagnostics?: { quality?: RoomQualityMetrics };
   repairBudget?: RoomRepairBudget;
   externalRoomBlocks?: ExternalRoomBlock[];
   fixedTutorAssignments?: FixedTutorAssignment[];
@@ -236,7 +249,7 @@ function sessionPriority(session: AssignmentSession): number {
 }
 
 function tutorKey(session: ContextSession): string {
-  return session.groupId || normalizeTutorName(session.tutorDisplayName);
+  return assignmentTutorKey(session);
 }
 
 function sortedTutorSessions(sessions: ContextSession[]): ContextSession[] {
@@ -285,7 +298,7 @@ function onlineSessionRequiresCenterRoom(
 /**
  * Builds the online-session center-room requirement map.
  *
- * 1. Buckets pending sessions by tutor (groupId, falling back to normalized display name).
+ * 1. Buckets pending sessions by canonical tutor identity (falling back to normalized display name).
  * 2. Folds contextSessions (e.g. this day's carried rows) into the same tutor buckets, skipping any
  *    id already present in `sessions` -- this lets a pending online session see a carried onsite
  *    neighbor (or vice versa) when walking the adjacency chain, matching what a full, non-reconciled
@@ -369,7 +382,7 @@ export function assignClassrooms(
 
   const fixedByTutor = new Map<string, FixedTutorAssignment[]>();
   for (const fixed of options.fixedTutorAssignments ?? []) {
-    const tutorNorm = normalizeTutorName(fixed.tutorDisplayName);
+    const tutorNorm = assignmentTutorKey(fixed);
     const list = fixedByTutor.get(tutorNorm) ?? [];
     list.push(fixed);
     fixedByTutor.set(tutorNorm, list);
@@ -472,7 +485,7 @@ export function assignClassrooms(
   let rows: AssignmentResultRow[] = [];
 
   for (const session of sortedSessions) {
-    const tutorNorm = normalizeTutorName(session.tutorDisplayName);
+    const tutorNorm = assignmentTutorKey(session);
     const facts = factsBySessionId.get(session.wiseSessionId)!;
     const minCapacity = facts.minCapacity;
     const warnings = [...facts.capacityWarnings];
@@ -717,14 +730,23 @@ export function repairClassroomAssignmentRows(
 ): AssignmentResultRow[] {
   const locked = (row: AssignmentResultRow) => Boolean(row.overrideRoom) || isGiftTutor(row.tutorDisplayName)
     || Boolean(getPriorityPreferredRoom(row.tutorDisplayName));
-  return repairClassroomAssignments({
+  const repairInput = {
     rows, rooms: rooms.filter(room => room.active), externalBlocks: options.externalRoomBlocks ?? [],
     budget: options.repairBudget ?? { remaining: ROOM_REPAIR_MAX_NODES },
-    compatible: (row, room) => roomPassesConstraints(room, row, row.minCapacity, row.needsTv)
+    compatible: (row: AssignmentResultRow, room: ClassroomRoomDefinition) => roomPassesConstraints(room, row, row.minCapacity, row.needsTv)
       && (!locked(row) || room.name === (row.status !== "no_room" ? row.assignedRoom
         : row.overrideRoom || getPriorityPreferredRoom(row.tutorDisplayName) || ROOM_JOY)),
     locked,
-    preferenceCost: (row, room) => (room.name === row.preferredRoom ? 0 : 10_000)
+    preferenceCost: (row: AssignmentResultRow, room: ClassroomRoomDefinition) => (room.name === row.preferredRoom ? 0 : 10_000)
       + roomPriorityScore(room, row.minCapacity) * 10 + room.sortOrder,
+  };
+  const repaired = repairClassroomAssignments(repairInput);
+  if (!(options.optimizeContinuity ?? classroomContinuityEnabled())) return repaired;
+  const optimized = optimizeClassroomContinuity({ ...repairInput, rows: repaired,
+    preferenceCost: (row, room) => usualRoomPreferenceCost(row, room, options.roomPolicies) * 100_000 + repairInput.preferenceCost(row, room),
+    policies: options.roomPolicies, savedRooms: options.savedRooms ?? new Map(rows.map(row => [row.wiseSessionId, row.assignedRoom])), frozenSessionIds: options.frozenSessionIds,
+    maxNodes: options.continuityMaxNodes,
   });
+  if (options.diagnostics) options.diagnostics.quality = optimized.metrics;
+  return optimized.rows;
 }

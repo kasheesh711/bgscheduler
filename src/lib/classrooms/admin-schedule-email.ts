@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { getDb } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -221,7 +221,7 @@ async function loadPublishJobs(db: Database, runId: string): Promise<ClassroomPu
 
 async function loadTeacherScheduleEmailSummary(
   db: Database,
-  runId: string,
+  assignmentDate: string,
 ): Promise<TeacherScheduleEmailSummary | null> {
   const rows = await db
     .select({
@@ -233,7 +233,7 @@ async function loadTeacherScheduleEmailSummary(
       updatedAt: schema.classroomScheduleEmailRuns.updatedAt,
     })
     .from(schema.classroomScheduleEmailRuns)
-    .where(eq(schema.classroomScheduleEmailRuns.assignmentRunId, runId))
+    .where(inArray(schema.classroomScheduleEmailRuns.assignmentRunId, sql`(select id from classroom_assignment_runs where assignment_date = ${assignmentDate})`))
     .orderBy(desc(schema.classroomScheduleEmailRuns.updatedAt));
 
   if (rows.length === 0) return null;
@@ -346,7 +346,7 @@ export async function sendAdminClassroomScheduleEmail(
   const detail = await getClassroomAssignmentForDate(db, assignmentDate);
   const publishJobs = detail.run ? await loadPublishJobs(db, detail.run.id) : [];
   const teacherScheduleEmailSummary = detail.run
-    ? await loadTeacherScheduleEmailSummary(db, detail.run.id)
+    ? await loadTeacherScheduleEmailSummary(db, assignmentDate)
     : null;
   const blockers = buildBlockers(detail, publishJobs);
   if (!teacherScheduleEmailSummary || ["failed", "partial", "blocked", "pending"].includes(teacherScheduleEmailSummary.latestStatus)) {

@@ -1,11 +1,11 @@
 import { bangkokDateKey } from "@/lib/room-capacity/dates";
 import { getLocalMinuteOfDay } from "@/lib/normalization/timezone";
-import type { AssignmentSession, ExternalRoomBlock } from "./assignment-engine";
+import type { AssignmentSession, ExternalRoomBlock, AssignmentOptions } from "./assignment-engine";
 import { reconcileClassroomAssignments, type PreviousAssignmentRow } from "./reconciliation";
 import { normalizeTutorName, type ClassroomRoomDefinition } from "./rooms";
 
 /** Pure, read-only recovery planning. A missing live session is never assumed safe to move. */
-export function previewClassroomRecovery(input: {
+export function previewClassroomRecovery(input: AssignmentOptions & {
   assignmentDate: string;
   now: Date;
   liveSessions: AssignmentSession[];
@@ -30,7 +30,7 @@ export function previewClassroomRecovery(input: {
       location: row.currentWiseLocation, startMinute: row.startMinute, endMinute: row.endMinute }] : [])];
   const ids = new Set(movable.map(row => row.wiseSessionId));
   const currentGroupByTutor = new Map(input.liveSessions.map(row => [normalizeTutorName(row.tutorDisplayName), row.groupId]));
-  const result = reconcileClassroomAssignments({ sessions: movable,
+  const result = reconcileClassroomAssignments({ ...input, sessions: movable,
     previousRows: input.previousRows.filter(row => ids.has(row.wiseSessionId)),
     rooms: input.rooms, externalRoomBlocks,
     contextSessions: frozen.map(row => ({ ...row,

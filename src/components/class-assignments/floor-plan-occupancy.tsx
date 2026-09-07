@@ -114,6 +114,7 @@ export function FloorPlanOccupancy({
 
             return (
               <AssignmentDetailPopover
+                nativeButton={false}
                 key={geometry.roomName}
                 rows={detailRows}
                 rooms={rooms}

@@ -11,6 +11,7 @@ export interface RoomCapacityRoom {
 }
 
 export interface RoomCapacitySession {
+  canonicalKey?: string | null;
   id: string;
   groupId: string;
   tutorDisplayName: string;

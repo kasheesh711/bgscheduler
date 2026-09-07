@@ -7,7 +7,7 @@ import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Client } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import * as schema from "../src/lib/db/schema";
 import { createWiseClient } from "../src/lib/wise/client";
 import { fetchAllFutureSessions, fetchWiseSessionDetail } from "../src/lib/wise/fetchers";
@@ -19,6 +19,11 @@ import { liveRoomBlocksForDate } from "../src/lib/classrooms/data";
 import { previewClassroomRecovery } from "../src/lib/classrooms/recovery-preview";
 import type { AssignmentSession } from "../src/lib/classrooms/assignment-engine";
 import { isOnsiteSessionType } from "../src/lib/classrooms/session-mode";
+import { proposeRoomProfiles } from "../src/lib/classrooms/room-profile-planner";
+import { listTutorRoomProfiles, toRoomPolicies } from "../src/lib/classrooms/room-profiles";
+import { preferenceFrozenSessionIds } from "../src/lib/classrooms/notification-state";
+import { roomQualityMetrics, type RoomQualityMetrics } from "../src/lib/classrooms/room-policy";
+import type { Database } from "../src/lib/db";
 
 async function main() {
   loadEnvConfig(process.cwd(), true);
@@ -46,7 +51,7 @@ async function main() {
       if (!snapshot) throw new Error("No active snapshot");
       const members = await db.select({ groupId: schema.tutorIdentityGroupMembers.groupId,
         wiseTeacherId: schema.tutorIdentityGroupMembers.wiseTeacherId, wiseUserId: schema.tutorIdentityGroupMembers.wiseUserId,
-        name: schema.tutorIdentityGroups.displayName }).from(schema.tutorIdentityGroupMembers)
+        name: schema.tutorIdentityGroups.displayName, canonicalKey: schema.tutorIdentityGroups.canonicalKey }).from(schema.tutorIdentityGroupMembers)
         .innerJoin(schema.tutorIdentityGroups, eq(schema.tutorIdentityGroupMembers.groupId, schema.tutorIdentityGroups.id))
         .where(eq(schema.tutorIdentityGroupMembers.snapshotId, snapshot.id));
       const runs = await db.select().from(schema.classroomAssignmentRuns)
@@ -55,13 +60,35 @@ async function main() {
       const previousRows = latestRuns.length ? await db.select().from(schema.classroomAssignmentRows)
         .where(inArray(schema.classroomAssignmentRows.runId, latestRuns.map(run => run.id))) : [];
       const rooms = await db.select().from(schema.classroomRooms).where(eq(schema.classroomRooms.active, true));
+      const profiles = await listTutorRoomProfiles(db as unknown as Database);
+      const latestHistory = db.selectDistinctOn([schema.classroomAssignmentRuns.assignmentDate], { id: schema.classroomAssignmentRuns.id }).from(schema.classroomAssignmentRuns)
+        .where(and(gte(schema.classroomAssignmentRuns.assignmentDate, addBangkokDays(startDate, -28)), lt(schema.classroomAssignmentRuns.assignmentDate, startDate)))
+        .orderBy(schema.classroomAssignmentRuns.assignmentDate, desc(schema.classroomAssignmentRuns.createdAt));
+      const history = await db.select({ canonicalKey: schema.classroomAssignmentRows.canonicalKey, room: schema.classroomAssignmentRows.assignedRoom,
+        minutes: sql<number>`${schema.classroomAssignmentRows.endMinute} - ${schema.classroomAssignmentRows.startMinute}` }).from(schema.classroomAssignmentRows)
+        .where(and(inArray(schema.classroomAssignmentRows.runId, latestHistory), eq(schema.classroomAssignmentRows.status, "assigned")));
+      const notified = await db.select({ canonicalKey: schema.classroomScheduleEmailRecipients.canonicalKey, date: schema.classroomAssignmentRuns.assignmentDate })
+        .from(schema.classroomScheduleEmailRecipients).innerJoin(schema.classroomAssignmentRuns, eq(schema.classroomScheduleEmailRecipients.assignmentRunId, schema.classroomAssignmentRuns.id))
+        .where(and(inArray(schema.classroomAssignmentRuns.assignmentDate, dates), eq(schema.classroomScheduleEmailRecipients.status, "sent")));
       await client.query("COMMIT");
-      return { snapshot, members, latestRuns, previousRows, rooms };
+      return { snapshot, members, latestRuns, previousRows, rooms, profiles, history, notified };
     } finally { await client.end(); }
   })();
   const liveReadStartedAt = new Date().toISOString();
   const wise = createWiseClient();
   const live = await fetchAllFutureSessions(wise, process.env.WISE_INSTITUTE_ID);
+  const members = new Map(snapshotData.members.flatMap(member => [member.wiseTeacherId, member.wiseUserId].filter(Boolean).map(id => [id!, member] as const)));
+  const upcoming = live.flatMap(session => {
+    const member = members.get(getWiseSessionTeacherUserId(session) ?? "");
+    const date = bangkokDateKey(new Date(session.scheduledStartTime));
+    if (!member || !isBlockingStatus(session.meetingStatus) || date < startDate || date >= addBangkokDays(startDate, 28)) return [];
+    return normalizeSessions([session], () => member.wiseTeacherId).map(block => ({ ...block, canonicalKey: member.canonicalKey, groupId: member.groupId, tutorDisplayName: member.name }));
+  });
+  const roomPolicies = toRoomPolicies(snapshotData.profiles.profiles);
+  const proposedProfiles = proposeRoomProfiles({ sessions: upcoming, rooms: snapshotData.rooms, existing: [...roomPolicies.values()],
+    history: snapshotData.history.flatMap(row => row.canonicalKey ? [{ ...row, canonicalKey: row.canonicalKey }] : []) });
+  for (const profile of proposedProfiles) roomPolicies.set(profile.canonicalKey, { canonicalKey: profile.canonicalKey, revision: 1,
+    rooms: profile.roomIds.map(id => snapshotData.rooms.find(room => room.id === id)!.name) });
   for (const date of dates) {
     const run = snapshotData.latestRuns.find(run => run.assignmentDate === date);
     const saved = { ...snapshotData, run, previousRows: snapshotData.previousRows.filter(row => row.runId === run?.id) };
@@ -74,7 +101,7 @@ async function main() {
       const member = memberById.get(getWiseSessionTeacherUserId(session) ?? "");
       if (!member) { unmatched.push(session._id); continue; }
       const [block] = normalizeSessions([session], () => member.wiseTeacherId);
-      sessions.push({ ...block, groupId: member.groupId, tutorDisplayName: member.name, currentWiseLocation: block.location });
+      sessions.push({ ...block, canonicalKey: member.canonicalKey, groupId: member.groupId, tutorDisplayName: member.name, currentWiseLocation: block.location });
     }
     const known = new Set(sessions.map(row => row.wiseSessionId));
     const externalRoomBlocks = liveRoomBlocksForDate(day, date).filter(block => !known.has(block.wiseSessionId));
@@ -92,8 +119,11 @@ async function main() {
         missingSessionChecks.push({ wiseSessionId: row.wiseSessionId, status: "UNVERIFIED", confirmedInactive: false });
       }
     }
-    const preview = previewClassroomRecovery({ assignmentDate: date, now: new Date(),
-      liveSessions: sessions, previousRows: saved.previousRows, rooms: saved.rooms, externalRoomBlocks, confirmedInactiveSessionIds });
+    const common = { assignmentDate: date, now: new Date(), liveSessions: sessions, previousRows: saved.previousRows, rooms: saved.rooms, externalRoomBlocks, confirmedInactiveSessionIds,
+      frozenSessionIds: preferenceFrozenSessionIds(sessions, date, new Set(saved.notified.filter(row => row.date === date).map(row => row.canonicalKey.toLowerCase()))) };
+    const baseline = previewClassroomRecovery({ ...common, optimizeContinuity: false });
+    const diagnostics: { quality?: RoomQualityMetrics } = {};
+    const preview = previewClassroomRecovery({ ...common, roomPolicies, diagnostics, optimizeContinuity: true });
     const physical = (name: string) => name.trim().toLowerCase().replace(/\s+\(tv\)$/, "");
     const occupied = [...preview.rows.filter(row => ["assigned", "needs_review"].includes(row.status)).map(row => ({
       wiseSessionId: row.wiseSessionId, location: row.assignedRoom, startMinute: row.startMinute, endMinute: row.endMinute,
@@ -102,6 +132,8 @@ async function main() {
       startMinute: row.startMinute, endMinute: row.endMinute,
     }] : []), ...preview.externalRoomBlocks];
     const validationErrors: string[] = [];
+    if (preview.rows.filter(row => row.status === "no_room").length > baseline.rows.filter(row => row.status === "no_room").length) validationErrors.push("More unassigned classes than the previous algorithm");
+    if (roomQualityMetrics(preview.rows).roomChanges > roomQualityMetrics(baseline.rows).roomChanges) validationErrors.push("More consecutive room changes than the previous algorithm");
     for (const row of preview.rows.filter(row => row.status === "assigned")) {
       const room = saved.rooms.find(room => room.name === row.assignedRoom);
       if (!room || room.capacity < row.minCapacity || (row.needsTv && !room.hasTv)
@@ -121,6 +153,8 @@ async function main() {
     const report = { assignmentDate: date, generatedAt: preview.generatedAt, liveReadStartedAt,
       snapshotId: saved.snapshot.id, snapshotCreatedAt: saved.snapshot.createdAt, previousRunId: saved.run?.id ?? null,
       applied: false, requiresFreshValidationBeforeApply: true,
+      comparison: { baseline: roomQualityMetrics(baseline.rows, roomPolicies), improved: diagnostics.quality ?? roomQualityMetrics(preview.rows, roomPolicies),
+        proposedProfileCount: proposedProfiles.length, storedProfileCount: saved.profiles.profiles.length },
       counts: { liveSessions: day.length, frozen: preview.frozen.length, planned: proposals.length,
         unassigned: proposals.filter(row => row.status === "no_room").length,
         needsReview: proposals.filter(row => row.status === "needs_review").length,
@@ -147,12 +181,13 @@ async function main() {
     const markdown = [`# Classroom recovery preview — ${date}`, "", `Generated ${preview.generatedAt}. Read-only; no assignments, Wise locations, or messages were changed.`, "",
       `${report.counts.frozen} classes frozen; ${report.counts.planned} upcoming classes planned; ${report.counts.proposedWiseMoves} proposed Wise room changes; ${report.counts.unassigned} without rooms; ${report.counts.needsReview} need review.`, "",
       `Validation errors: ${validationErrors.length}. Unmatched live sessions: ${unmatched.length}. Their known Wise rooms remain reserved.`, "",
+      `Consecutive room changes: ${report.comparison.baseline.roomChanges} → ${report.comparison.improved.roomChanges}. Usual-room coverage: ${Math.round((report.comparison.improved.usualRoomCoverage ?? 0) * 100)}%. Bounded search limited: ${report.comparison.improved.continuitySearchExhausted ?? false}.`, "",
       "Completed/in-progress classes and sessions absent from the live read are frozen. This preview expires as classes start or Wise changes; regenerate immediately before approval/application. Only the existing location-only publisher may apply eligible moves after live validation.", "",
       "| Tutor | Time | Current Wise room | Proposed room | Status |", "|---|---|---|---|---|",
       ...attention.map(row => `| ${escape(row.tutor)} | ${row.time} | ${escape(row.currentRoom)} | ${escape(row.proposedRoom)} | ${row.status}${row.publishEligible ? "" : " (not publishable)"} |`), "",
       ...validationErrors.map(error => `- ${error}`), ""].join("\n");
     await writeFile(`${output}.md`, markdown);
-    console.log(JSON.stringify({ output, ...report.counts, validationErrors: validationErrors.length }));
+    console.log(JSON.stringify({ output, ...report.counts, comparison: report.comparison, validationErrors: validationErrors.length }));
     if (validationErrors.length || unmatched.length || report.counts.unassigned || report.counts.needsReview) process.exitCode = 2;
   }
 }

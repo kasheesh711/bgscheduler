@@ -1,5 +1,6 @@
 import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
+import { withDatabaseTransaction } from "@/lib/db/transaction";
 import * as schema from "@/lib/db/schema";
 import { WiseClient } from "@/lib/wise/client";
 import {
@@ -16,7 +17,6 @@ import { bangkokDateKey } from "@/lib/room-capacity/dates";
 import { getLocalMinuteOfDay } from "@/lib/normalization/timezone";
 import { isBlockingStatus } from "@/lib/normalization/sessions";
 import {
-  assignClassrooms,
   type ExternalRoomBlock,
   type AssignmentResultRow,
   type AssignmentSession,
@@ -37,8 +37,13 @@ import {
   type ReconciledAssignmentRow,
 } from "./reconciliation";
 
+import { buildTeacherSchedule, type ProjectedTeacherSchedule } from "./schedule-projection";
+import { ensureTutorRoomProfiles } from "./room-profiles";
+import { notifiedTutorKeys, preferenceFrozenSessionIds } from "./notification-state";
+import { CLASSROOM_ALGORITHM_VERSION, classroomContinuityEnabled, roomPolicySnapshot, roomQualityMetrics, type RoomQualityMetrics } from "./room-policy";
+
 export type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
-export type ClassroomRow = typeof schema.classroomAssignmentRows.$inferSelect;
+export type ClassroomRow = Omit<typeof schema.classroomAssignmentRows.$inferSelect, "canonicalKey"> & { canonicalKey?: string | null };
 export type ClassroomRoom = typeof schema.classroomRooms.$inferSelect;
 export type ClassroomPublishJob = typeof schema.classroomPublishJobs.$inferSelect;
 
@@ -90,12 +95,7 @@ export interface TeacherScheduleBlock {
   sessionType: string | null;
 }
 
-export interface TeacherSchedule {
-  tutors: Array<{
-    tutorDisplayName: string;
-    blocks: TeacherScheduleBlock[];
-  }>;
-}
+export type TeacherSchedule = ProjectedTeacherSchedule;
 
 export interface PublishSummary {
   attempted: number;
@@ -178,12 +178,6 @@ function formatMinute(minute: number): string {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
-function classroomRoomLabel(row: Pick<ClassroomRow, "status" | "assignedRoom">): string {
-  if (row.status === "remote" || row.assignedRoom === REMOTE_NO_ROOM_NEEDED) {
-    return "Remote / no room needed";
-  }
-  return row.assignedRoom;
-}
 
 function normalizedLocation(value: string | null): string {
   return (value ?? "").trim().toLowerCase();
@@ -479,7 +473,6 @@ export async function ensureDefaultClassroomRooms(db: Database): Promise<void> {
       existing.hasTv !== room.hasTv ||
       existing.capacity !== room.capacity ||
       existing.category !== room.category ||
-      existing.active !== room.active ||
       existing.sortOrder !== room.sortOrder
     ) {
       await db
@@ -488,7 +481,6 @@ export async function ensureDefaultClassroomRooms(db: Database): Promise<void> {
           hasTv: room.hasTv,
           capacity: room.capacity,
           category: room.category,
-          active: room.active,
           sortOrder: room.sortOrder,
           updatedAt: now,
         })
@@ -728,31 +720,6 @@ export async function getClassroomAssignmentForDate(
   return { run, rows, rooms, snapshotMeta, liveRoomBlocks: [], roomConflictWarnings: [] };
 }
 
-async function loadPreviousOverrides(
-  db: Database,
-  date: string,
-  forceReassign: boolean,
-): Promise<Map<string, string>> {
-  const overrides = new Map<string, string>();
-  if (forceReassign) return overrides;
-
-  const previousRun = await loadLatestRunForDate(db, date);
-  if (!previousRun) return overrides;
-
-  const rows = await db
-    .select({
-      wiseSessionId: schema.classroomAssignmentRows.wiseSessionId,
-      overrideRoom: schema.classroomAssignmentRows.overrideRoom,
-    })
-    .from(schema.classroomAssignmentRows)
-    .where(eq(schema.classroomAssignmentRows.runId, previousRun.id));
-
-  for (const row of rows) {
-    if (row.overrideRoom) overrides.set(row.wiseSessionId, row.overrideRoom);
-  }
-  return overrides;
-}
-
 async function loadAssignmentSessions(
   db: Database,
   snapshotId: string,
@@ -761,6 +728,7 @@ async function loadAssignmentSessions(
   const { start, end } = dateRangeForBangkokDate(date);
   const rows = await db
     .select({
+      canonicalKey: schema.tutorIdentityGroups.canonicalKey,
       groupId: schema.futureSessionBlocks.groupId,
       tutorDisplayName: schema.tutorIdentityGroups.displayName,
       wiseTeacherId: schema.futureSessionBlocks.wiseTeacherId,
@@ -811,6 +779,7 @@ function toInsertRow(
   return {
     runId,
     snapshotId,
+    canonicalKey: row.canonicalKey ?? null,
     groupId: row.groupId,
     tutorDisplayName: row.tutorDisplayName,
     wiseTeacherId: row.wiseTeacherId,
@@ -867,75 +836,42 @@ async function persistAssignmentRun(
     needsReviewCount: assignmentRows.filter((row) => row.status === "needs_review").length,
     noRoomCount: assignmentRows.filter((row) => row.status === "no_room").length,
     remoteCount: assignmentRows.filter((row) => row.status === "remote").length,
+    publishedCount: assignmentRows.filter(row => "publishStatus" in row && row.publishStatus === "success").length,
+    failedPublishCount: assignmentRows.filter(row => "publishStatus" in row && row.publishStatus === "failed").length,
   };
 
-  const [run] = await db
-    .insert(schema.classroomAssignmentRuns)
-    .values({
-      assignmentDate: date,
-      snapshotId,
-      status: "completed",
-      forceReassign,
-      sourceRunId: metadata.sourceRunId ?? null,
-      automationBatchId: metadata.automationBatchId ?? null,
-      reconciliationMode: metadata.reconciliationMode ?? null,
-      changeSummary: metadata.changeSummary ?? {},
-      ...counts,
-      createdBy,
-    })
-    .returning();
+  return withDatabaseTransaction(db, async tx => {
+    const [run] = await tx
+      .insert(schema.classroomAssignmentRuns)
+      .values({
+        assignmentDate: date,
+        snapshotId,
+        status: "completed",
+        forceReassign,
+        sourceRunId: metadata.sourceRunId ?? null,
+        automationBatchId: metadata.automationBatchId ?? null,
+        reconciliationMode: metadata.reconciliationMode ?? null,
+        changeSummary: metadata.changeSummary ?? {},
+        ...counts,
+        createdBy,
+      })
+      .returning();
 
-  if (assignmentRows.length) {
-    await db
-      .insert(schema.classroomAssignmentRows)
-      .values(assignmentRows.map((row) => toInsertRow(run.id, snapshotId, row)));
-  }
+    if (assignmentRows.length) {
+      await tx
+        .insert(schema.classroomAssignmentRows)
+        .values(assignmentRows.map((row) => toInsertRow(run.id, snapshotId, row)));
+    }
 
-  return run;
+    return run;
+  });
 }
 
 export async function runClassroomAssignment(
   db: Database,
   input: { date: string; forceReassign: boolean; createdBy?: string | null },
 ): Promise<ClassroomAssignmentDetail> {
-  const date = assertIsoDate(input.date);
-  const activeSnapshot = await getActiveSnapshot(db);
-  const snapshotMeta = await assertFreshClassroomSnapshot(db, activeSnapshot.id);
-  const rooms = await listClassroomRooms(db);
-  const overrideBySessionId = await loadPreviousOverrides(db, date, input.forceReassign);
-  const sessions = await loadAssignmentSessions(db, activeSnapshot.id, date);
-  const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
-  const liveSessions = await fetchAllFutureSessions(createWiseClientFromEnv(), instituteId);
-  const liveBlocks = liveRoomBlocksForDate(liveSessions, date);
-  const localWiseSessionIds = new Set(sessions.map((session) => session.wiseSessionId));
-  const unmanagedWiseSessionIds = unmanagedWiseSessionIdsForDate(liveSessions, date, localWiseSessionIds);
-  const externalBlocks = externalLiveRoomBlocks(liveBlocks, localWiseSessionIds);
-  const result = assignClassrooms(
-    sessions.map(session => ({ ...session, currentWiseLocation: liveBlocks.find(block => block.wiseSessionId === session.wiseSessionId)?.location ?? null })),
-    rooms.map(toEngineRoom),
-    overrideBySessionId,
-    { externalRoomBlocks: externalBlocks },
-  );
-
-  const run = await persistAssignmentRun(
-    db,
-    date,
-    activeSnapshot.id,
-    input.forceReassign,
-    input.createdBy ?? null,
-    result.rows,
-    { changeSummary: { ...(snapshotMeta.syncErrorSummary ? { syncErrorSummary: snapshotMeta.syncErrorSummary } : {}), unmanagedWiseSessionCount: unmanagedWiseSessionIds.length, unmanagedWiseSessionIds } },
-  );
-
-  const rows = await loadRowsForRun(db, run.id);
-  return {
-    run,
-    rows,
-    rooms,
-    snapshotMeta,
-    liveRoomBlocks: externalBlocks,
-    roomConflictWarnings: buildRoomConflictWarnings(rows, externalBlocks, (assignedRoom) => assignedRoom),
-  };
+  return runIncrementalClassroomAssignment(db, input);
 }
 
 function classroomRowToPrevious(row: ClassroomRow): PreviousAssignmentRow {
@@ -988,7 +924,8 @@ export async function runIncrementalClassroomAssignment(
   db: Database,
   input: {
     date: string;
-    automationBatchId: string;
+    automationBatchId?: string;
+    forceReassign?: boolean;
     createdBy?: string | null;
     liveSessions?: WiseSession[];
     snapshotId?: string;
@@ -1008,16 +945,27 @@ export async function runIncrementalClassroomAssignment(
   const rooms = await listClassroomRooms(db);
   const previousRun = await loadLatestRunForDate(db, date);
   const previousRows = previousRun ? await loadRowsForRun(db, previousRun.id) : [];
-  const sessions = await loadAssignmentSessions(db, snapshot.id, date);
+  const snapshotSessions = await loadAssignmentSessions(db, snapshot.id, date);
+  const currentIds = new Set(snapshotSessions.map(row => row.wiseSessionId));
+  const startedIds = preferenceFrozenSessionIds(previousRows.map(rowToSession), date, new Set());
+  // Wise's FUTURE list stops returning classes as they finish; retain today's started rows.
+  const sessions = [...snapshotSessions, ...previousRows.filter(row => startedIds.has(row.wiseSessionId) && !currentIds.has(row.wiseSessionId)).map(rowToSession)];
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const liveSessions = input.liveSessions ?? await fetchAllFutureSessions(createWiseClientFromEnv(), instituteId);
   const liveBlocks = liveRoomBlocksForDate(liveSessions, date);
   const localWiseSessionIds = new Set(sessions.map((session) => session.wiseSessionId));
   const unmanagedWiseSessionIds = unmanagedWiseSessionIdsForDate(liveSessions, date, localWiseSessionIds);
   const externalBlocks = externalLiveRoomBlocks(liveBlocks, localWiseSessionIds);
+  const enabled = classroomContinuityEnabled();
+  const roomPolicies = enabled ? await ensureTutorRoomProfiles(db, snapshot.id, date, rooms) : new Map();
+  const notified = await notifiedTutorKeys(db, date);
+  const frozenSessionIds = preferenceFrozenSessionIds(sessions, date, notified);
+  const diagnostics: { quality?: RoomQualityMetrics } = {};
   const reconciliation = reconcileClassroomAssignments({
-    sessions: sessions.map(session => ({ ...session, currentWiseLocation: liveBlocks.find(block => block.wiseSessionId === session.wiseSessionId)?.location ?? null })),
-    previousRows: previousRows.map(classroomRowToPrevious),
+    roomPolicies, frozenSessionIds, diagnostics, optimizeContinuity: enabled,
+    sessions: sessions.map(session => ({ ...session, currentWiseLocation: liveBlocks.find(block => block.wiseSessionId === session.wiseSessionId)?.location
+      ?? (startedIds.has(session.wiseSessionId) ? session.currentWiseLocation : null) })),
+    previousRows: previousRows.map(row => classroomRowToPrevious(input.forceReassign ? { ...row, overrideRoom: null } : row)),
     rooms: rooms.map(toEngineRoom),
     externalRoomBlocks: externalBlocks,
   });
@@ -1026,19 +974,22 @@ export async function runIncrementalClassroomAssignment(
     db,
     date,
     snapshot.id,
-    false,
+    input.forceReassign ?? false,
     input.createdBy ?? null,
     reconciliation.rows,
     {
       sourceRunId: previousRun?.id ?? null,
-      automationBatchId: input.automationBatchId,
-      reconciliationMode: "minimal_moves",
-      changeSummary: { ...reconciliation.summary, ...(snapshotMeta.syncErrorSummary ? { syncErrorSummary: snapshotMeta.syncErrorSummary } : {}), unmanagedWiseSessionCount: unmanagedWiseSessionIds.length, unmanagedWiseSessionIds },
+      automationBatchId: input.automationBatchId ?? null,
+      reconciliationMode: enabled ? "continuity" : "minimal_moves",
+      changeSummary: { ...reconciliation.summary,
+        algorithmVersion: enabled ? CLASSROOM_ALGORITHM_VERSION : "legacy",
+        roomPolicies: roomPolicySnapshot(roomPolicies),
+        quality: diagnostics.quality ?? roomQualityMetrics(reconciliation.rows, roomPolicies), ...(snapshotMeta.syncErrorSummary ? { syncErrorSummary: snapshotMeta.syncErrorSummary } : {}), unmanagedWiseSessionCount: unmanagedWiseSessionIds.length, unmanagedWiseSessionIds },
     },
   );
 
   const rows = await loadRowsForRun(db, run.id);
-  await persistAutomationEvents(db, {
+  if (input.automationBatchId) await persistAutomationEvents(db, {
     automationBatchId: input.automationBatchId,
     assignmentRunId: run.id,
     assignmentDate: date,
@@ -1060,6 +1011,7 @@ export async function runIncrementalClassroomAssignment(
 
 function rowToSession(row: ClassroomRow): AssignmentSession {
   return {
+    canonicalKey: row.canonicalKey ?? null,
     groupId: row.groupId,
     tutorDisplayName: row.tutorDisplayName,
     wiseTeacherId: row.wiseTeacherId,
@@ -1089,49 +1041,64 @@ async function updateRunRowsFromAssignment(
   overrideBySessionId: Map<string, string | null>,
 ): Promise<void> {
   const rooms = await listClassroomRooms(db);
-  const result = assignClassrooms(
-    sourceRows.map(rowToSession),
-    rooms.map(toEngineRoom),
+  const enabled = classroomContinuityEnabled();
+  const roomPolicies = enabled ? await ensureTutorRoomProfiles(db, run.snapshotId, run.assignmentDate, rooms) : new Map();
+  const live = await fetchAllFutureSessions(createWiseClientFromEnv(), process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413");
+  const blocks = liveRoomBlocksForDate(live, run.assignmentDate);
+  const localIds = new Set(sourceRows.map(row => row.wiseSessionId));
+  const diagnostics: { quality?: RoomQualityMetrics } = {};
+  const result = reconcileClassroomAssignments({
+    sessions: sourceRows.map(row => ({ ...rowToSession(row), currentWiseLocation: blocks.find(block => block.wiseSessionId === row.wiseSessionId)?.location ?? row.currentWiseLocation })), rooms: rooms.map(toEngineRoom), roomPolicies, diagnostics,
+    optimizeContinuity: enabled,
     overrideBySessionId,
-  );
+    previousRows: sourceRows.map(classroomRowToPrevious),
+    externalRoomBlocks: externalLiveRoomBlocks(blocks, localIds),
+    frozenSessionIds: preferenceFrozenSessionIds(sourceRows.map(rowToSession), run.assignmentDate, await notifiedTutorKeys(db, run.assignmentDate)),
+  });
 
-  for (const row of result.rows) {
-    const sourceRow = sourceRows.find((candidate) => candidate.wiseSessionId === row.wiseSessionId);
-    if (!sourceRow) continue;
+  await withDatabaseTransaction(db, async tx => {
+    const [lockedRun] = await tx.select().from(schema.classroomAssignmentRuns).where(eq(schema.classroomAssignmentRuns.id, run.id)).for("update");
+    if (lockedRun.updatedAt.getTime() !== run.updatedAt.getTime()) throw new Error("Assignments changed. Reload before changing a room.");
+    for (const row of result.rows) {
+      const sourceRow = sourceRows.find((candidate) => candidate.wiseSessionId === row.wiseSessionId);
+      if (!sourceRow) continue;
 
-    await db
-      .update(schema.classroomAssignmentRows)
+      await tx
+        .update(schema.classroomAssignmentRows)
+        .set({
+          minCapacity: row.minCapacity,
+          needsTv: row.needsTv,
+          preferredRoom: row.preferredRoom,
+          overrideRoom: row.overrideRoom,
+          assignedRoom: row.assignedRoom,
+          status: row.status,
+          warnings: row.warnings,
+          ruleTrace: row.ruleTrace,
+          publishStatus: row.publishStatus,
+          publishError: row.publishError,
+          publishedAt: row.publishedAt,
+          changeType: row.changeType,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.classroomAssignmentRows.id, sourceRow.id));
+    }
+
+    await tx
+      .update(schema.classroomAssignmentRuns)
       .set({
-        minCapacity: row.minCapacity,
-        needsTv: row.needsTv,
-        preferredRoom: row.preferredRoom,
-        overrideRoom: row.overrideRoom,
-        assignedRoom: row.assignedRoom,
-        status: row.status,
-        warnings: row.warnings,
-        ruleTrace: row.ruleTrace,
-        publishStatus: "not_published",
-        publishError: null,
-        publishedAt: null,
+        totalSessions: result.rows.length,
+        assignedCount: result.rows.filter(row => row.status === "assigned").length,
+        needsReviewCount: result.rows.filter(row => row.status === "needs_review").length,
+        noRoomCount: result.rows.filter(row => row.status === "no_room").length,
+        remoteCount: result.rows.filter(row => row.status === "remote").length,
+        publishedCount: result.rows.filter(row => row.publishStatus === "success").length,
+        failedPublishCount: result.rows.filter(row => row.publishStatus === "failed").length,
+        changeSummary: { ...run.changeSummary, algorithmVersion: enabled ? CLASSROOM_ALGORITHM_VERSION : "legacy", roomPolicies: roomPolicySnapshot(roomPolicies), quality: diagnostics.quality ?? roomQualityMetrics(result.rows, roomPolicies) },
+        status: "completed",
         updatedAt: new Date(),
       })
-      .where(eq(schema.classroomAssignmentRows.id, sourceRow.id));
-  }
-
-  await db
-    .update(schema.classroomAssignmentRuns)
-    .set({
-      totalSessions: result.counts.totalSessions,
-      assignedCount: result.counts.assignedCount,
-      needsReviewCount: result.counts.needsReviewCount,
-      noRoomCount: result.counts.noRoomCount,
-      remoteCount: result.counts.remoteCount,
-      publishedCount: 0,
-      failedPublishCount: 0,
-      status: "completed",
-      updatedAt: new Date(),
-    })
-    .where(eq(schema.classroomAssignmentRuns.id, run.id));
+      .where(eq(schema.classroomAssignmentRuns.id, run.id));
+  });
 }
 
 export async function updateClassroomAssignmentOverride(
@@ -1921,42 +1888,9 @@ export async function getTeacherScheduleForRun(
   db: Database,
   runId: string,
 ): Promise<TeacherSchedule> {
-  const [run] = await db
-    .select({ assignmentDate: schema.classroomAssignmentRuns.assignmentDate })
-    .from(schema.classroomAssignmentRuns)
-    .where(eq(schema.classroomAssignmentRuns.id, runId))
-    .limit(1);
+  const [run] = await db.select().from(schema.classroomAssignmentRuns).where(eq(schema.classroomAssignmentRuns.id, runId)).limit(1);
   if (!run) throw new Error("Assignment run not found");
-
-  const rows = await loadRowsForRun(db, runId);
-  const byTutor = new Map<string, TeacherScheduleBlock[]>();
-  for (const row of rows) {
-    const blocks = byTutor.get(row.tutorDisplayName) ?? [];
-    blocks.push({
-      rowId: row.id,
-      date: run.assignmentDate,
-      startTime: formatMinute(row.startMinute),
-      endTime: formatMinute(row.endMinute),
-      room: classroomRoomLabel(row),
-      studentName: row.studentName,
-      subject: row.subject,
-      classType: row.classType,
-      sessionType: row.sessionType,
-    });
-    byTutor.set(row.tutorDisplayName, blocks);
-  }
-
-  return {
-    tutors: [...byTutor.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([tutorDisplayName, blocks]) => ({
-        tutorDisplayName,
-        blocks: blocks.sort((a, b) => {
-          if (a.startTime !== b.startTime) return a.startTime.localeCompare(b.startTime);
-          return a.rowId.localeCompare(b.rowId);
-        }),
-      })),
-  };
+  return buildTeacherSchedule(await loadRowsForRun(db, runId), run.assignmentDate, run.changeSummary);
 }
 
 export async function deleteClassroomRowsForRun(db: Database, runId: string): Promise<void> {

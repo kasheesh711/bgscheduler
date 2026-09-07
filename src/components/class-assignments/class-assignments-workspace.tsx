@@ -15,6 +15,8 @@ import {
   Users,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { UsualRoomsPanel } from "./usual-rooms-panel";
+import { buildTeacherSchedule } from "@/lib/classrooms/schedule-projection";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -270,6 +272,22 @@ export function ClassAssignmentsWorkspace() {
   const rooms = useMemo(() => (detail?.rooms ?? []).filter((room) => room.active), [detail?.rooms]);
   const rows = useMemo(() => detail?.rows ?? [], [detail?.rows]);
   const run = detail?.run ?? null;
+  const projected = useMemo(() => buildTeacherSchedule(rows, date, run?.changeSummary ?? {}), [rows, date, run]);
+  const [preparingPrint, setPreparingPrint] = useState(false);
+  async function printSevenDays() {
+    const tab = window.open("about:blank", "_blank");
+    setPreparingPrint(true);
+    try {
+      const response = await fetch(`/api/class-assignments/print-runs?date=${encodeURIComponent(date)}`);
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? "Unable to load printable assignments");
+      if (!body.runs.length) throw new Error("No saved assignment runs in these seven days. Generate assignments first.");
+      const query = new URLSearchParams({ runIds: body.runs.map((run: { id: string }) => run.id).join(","), missingDates: body.missingDates.join(",") });
+      const url = `/class-assignments/report?${query}`;
+      if (tab) tab.location.href = url; else window.location.href = url;
+    } catch (cause) { tab?.close(); setError(cause instanceof Error ? cause.message : "Unable to prepare printing"); }
+    finally { setPreparingPrint(false); }
+  }
   const timelineBounds = useMemo(() => buildTimelineBounds(rows), [rows]);
   const timelineResetKey = `${run?.id ?? "no-run"}:${timelineBounds.initialMinute}:${timelineBounds.endMinute}`;
 
@@ -344,17 +362,15 @@ export function ClassAssignmentsWorkspace() {
     };
   }, [rows]);
 
-  const tutors = useMemo(() => {
-    return [...new Set(rows.map((row) => row.tutorDisplayName))].sort((a, b) => a.localeCompare(b));
-  }, [rows]);
+  const tutors = projected.tutors;
 
   const churnSummary = useMemo(() => buildRoomChurnSummary(rows), [rows]);
 
   useEffect(() => {
     setSelectedTutors((current) => {
-      const next = new Set([...current].filter((name) => tutors.includes(name)));
+      const next = new Set([...current].filter(key => tutors.some(tutor => tutor.canonicalKey === key)));
       if (next.size === 0 && tutors.length > 0) {
-        for (const tutor of tutors.slice(0, 4)) next.add(tutor);
+        for (const tutor of tutors.slice(0, 4)) next.add(tutor.canonicalKey);
       }
       return next;
     });
@@ -583,7 +599,6 @@ export function ClassAssignmentsWorkspace() {
     });
   }
 
-  const selectedTutorRows = rows.filter((row) => selectedTutors.has(row.tutorDisplayName));
   const hasRows = rows.length > 0;
   const publishPercent = publishProgress?.totalCount
     ? Math.round((publishProgress.completedCount / publishProgress.totalCount) * 100)
@@ -688,8 +703,16 @@ export function ClassAssignmentsWorkspace() {
             <Mail />
             {loadingSchedulePreview ? "Loading email" : "Email schedules"}
           </Button>
+          <Button variant="outline" disabled={!run || !rows.length} onClick={() => window.open(`/class-assignments/report?runIds=${run!.id}`, "_blank", "noopener,noreferrer")}>Print day</Button>
+          <Button variant="outline" disabled={!date || preparingPrint} onClick={printSevenDays}>{preparingPrint ? "Preparing…" : "Print seven days"}</Button>
         </div>
       </div>
+      {run && <div className="flex flex-wrap gap-4 rounded-lg border bg-card px-4 py-3 text-sm">
+        <span><strong>{projected.quality.roomChanges}</strong> consecutive-class room changes</span>
+        <span>Usual-room coverage: <strong>{projected.quality.usualRoomCoverage === null ? "Sets not established" : `${Math.round(projected.quality.usualRoomCoverage * 100)}%`}</strong></span>
+        <span><strong>{projected.quality.outsideUsualRooms}</strong> classes outside usual rooms</span>
+        {(run.changeSummary?.quality as { continuitySearchExhausted?: boolean } | undefined)?.continuitySearchExhausted && <span className="text-muted-foreground">Optimization limit reached; remaining moves may still be improvable.</span>}
+      </div>}
 
       {(error || message) && (
         <div
@@ -768,7 +791,7 @@ export function ClassAssignmentsWorkspace() {
           <div className="mt-1 text-lg font-semibold">{run?.remoteCount ?? 0}</div>
         </div>
         <div className="rounded-lg border bg-card p-3">
-          <div className="text-xs text-muted-foreground">Room switches</div>
+          <div className="text-xs text-muted-foreground">All-day room switches</div>
           <div className="mt-1 text-lg font-semibold">{churnSummary.totalSwitches}</div>
         </div>
         <div className="rounded-lg border bg-card p-3">
@@ -779,9 +802,9 @@ export function ClassAssignmentsWorkspace() {
         </div>
       </div>
 
-      <Tabs defaultValue="floor-plan" className="min-h-0 flex-1 overflow-hidden">
+      <Tabs defaultValue="floor-plan" className="min-h-[480px] flex-1 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <TabsList>
+          <TabsList className="max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto">
             <TabsTrigger value="floor-plan">
               <MapIcon />
               Floor Plan
@@ -798,6 +821,7 @@ export function ClassAssignmentsWorkspace() {
               <Users />
               Tutor Schedule
             </TabsTrigger>
+            <TabsTrigger value="usual-rooms">Usual rooms</TabsTrigger>
           </TabsList>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Grid3X3 className="size-4" />
@@ -805,6 +829,7 @@ export function ClassAssignmentsWorkspace() {
           </div>
         </div>
 
+        <TabsContent value="usual-rooms" className="min-h-0 overflow-hidden"><UsualRoomsPanel /></TabsContent>
         <TabsContent value="floor-plan" className="min-h-0 overflow-hidden">
           <div className="flex h-full min-h-0 flex-col gap-3">
             <AssignmentTimelineControls
@@ -942,52 +967,48 @@ export function ClassAssignmentsWorkspace() {
 
         <TabsContent value="tutors" className="min-h-0 overflow-hidden">
           {rows.length > 0 && (
-            <div className="grid h-full min-h-0 grid-cols-[280px_1fr] gap-3">
-              <div className="rounded-lg border bg-card p-3">
+            <div className="grid h-full min-h-0 grid-cols-1 gap-3 overflow-auto lg:grid-cols-[280px_1fr]">
+              <div className="max-h-48 overflow-auto rounded-lg border bg-card p-3 lg:max-h-none">
                 <div className="mb-2 text-sm font-medium">Teacher schedule</div>
                 <div className="max-h-[56vh] space-y-1 overflow-auto pr-1">
                   {tutors.map((tutor) => (
-                    <label key={tutor} className="flex items-center gap-2 text-sm">
+                    <label key={tutor.canonicalKey} className="flex items-center gap-2 text-sm">
                       <input
                         type="checkbox"
-                        checked={selectedTutors.has(tutor)}
-                        onChange={(event) => toggleTutor(tutor, event.target.checked)}
+                        checked={selectedTutors.has(tutor.canonicalKey)}
+                        onChange={(event) => toggleTutor(tutor.canonicalKey, event.target.checked)}
                       />
-                      <span className="truncate">{tutor}</span>
+                      <span className="truncate">{tutor.tutorDisplayName}</span>
                     </label>
                   ))}
                 </div>
               </div>
               <div className="min-h-0 overflow-auto rounded-lg border bg-card p-3">
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  {[...selectedTutors].sort((a, b) => a.localeCompare(b)).map((tutor) => {
-                    const tutorRows = selectedTutorRows
-                      .filter((row) => row.tutorDisplayName === tutor)
-                      .sort((a, b) => {
-                        if (a.startMinute !== b.startMinute) return a.startMinute - b.startMinute;
-                        if (a.endMinute !== b.endMinute) return a.endMinute - b.endMinute;
-                        return a.id.localeCompare(b.id);
-                      });
-                    const tutorSwitchCount = churnSummary.switchesByTutor.get(tutor) ?? 0;
+                  {tutors.filter(tutor => selectedTutors.has(tutor.canonicalKey)).map((tutor) => {
+                    const tutorRows = tutor.blocks;
+                    const tutorSwitchCount = tutor.roomChanges;
                     return (
-                      <div key={tutor} className="rounded-lg border p-3">
+                      <div key={tutor.canonicalKey} className="rounded-lg border p-3">
                         <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                          <span>{tutor}</span>
+                          <span>{tutor.tutorDisplayName}</span>
                           {tutorSwitchCount > 0 && (
                             <Badge variant="outline">
                               {tutorSwitchCount} room switch{tutorSwitchCount === 1 ? "" : "es"}
                             </Badge>
                           )}
                         </div>
+                        <p className="mb-2 text-xs text-muted-foreground">Usual rooms: {tutor.usualRooms.join(" · ") || "Not yet established"}</p>
                         <div className="space-y-2">
                           {tutorRows.map((row) => (
-                            <div key={row.id} className="rounded-md border-l-4 border-primary bg-muted/40 p-2 text-xs">
+                            <div key={row.rowId} className="rounded-md border-l-4 border-primary bg-muted/40 p-2 text-xs">
                               <div className="font-mono">
-                                {formatRowTime(row)} - {roomLabel(row)}
+                                {row.startTime}–{row.endTime} - {row.room}
                               </div>
+                              {row.exceptionReasons.map(reason => <p key={reason} className="mt-1 text-amber-800">{reason}</p>)}
                               <div className="mt-1 font-medium">{row.studentName || row.title || "Untitled class"}</div>
                               <div className="text-muted-foreground">
-                                {[classLabel(row), row.sessionType].filter(Boolean).join(" - ")}
+                                {[row.subject || row.classType, row.sessionType].filter(Boolean).join(" - ")}
                               </div>
                             </div>
                           ))}

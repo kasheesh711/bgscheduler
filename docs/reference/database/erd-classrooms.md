@@ -2,12 +2,13 @@
 
 Feature status: **stable** — see [docs/features/classroom-assignments.md](../../features/classroom-assignments.md) for rules, flows, and the reason each rule exists.
 
-Scope: the nine tables behind the daily room-assignment pipeline — a **room catalog**, a per-Bangkok-date **assignment run** holding one denormalized row per Wise session, a **publish job** that writes eligible rooms back to Wise, an append-only **automation event log**, and two independent **email lineages** (per-tutor schedule emails, and a single admin notification per date).
+Scope: the ten tables behind the daily room-assignment pipeline — a **room catalog**, a per-Bangkok-date **assignment run** holding one denormalized row per Wise session, a **publish job** that writes eligible rooms back to Wise, an append-only **automation event log**, and two independent **email lineages** (per-tutor schedule emails, and a single admin notification per date).
 
 None of these tables is snapshot-scoped in the tutor sense — the Wise sync never rewrites them. An assignment run is *pinned* to the snapshot it read (`snapshotId`, a real FK) and then accumulates forever; new runs are appended per date and the newest one wins on read (`loadLatestRunForDate` orders by `createdAt desc limit 1`, `src/lib/classrooms/data.ts:588-596`). That append-only history is what makes the snapshot-pruning interaction in [Open Questions](#open-questions) worth flagging.
 
 | Table (varName) | SQL name | schema.ts lines |
 |---|---|---|
+| `classroomTutorRoomProfiles` | `classroom_tutor_room_profiles` | see schema export |
 | `classroomRooms` | `classroom_rooms` | 1649–1663 |
 | `classroomAssignmentRuns` | `classroom_assignment_runs` | 1664–1689 |
 | `classroomAssignmentRows` | `classroom_assignment_rows` | 1690–1738 |
@@ -19,6 +20,12 @@ None of these tables is snapshot-scoped in the tutor sense — the Wise sync nev
 | `classroomAdminEmailRecipients` | `classroom_admin_email_recipients` | 2078–2095 |
 
 Full column lists live in [index.md](./index.md); enum value sets live in [enums.md](./enums.md). This page covers grain, keys, relationships, and the write paths that create each row.
+
+## Stable teacher room profiles
+
+Migration `0075_classroom_tutor_room_profiles` adds a snapshot-independent record keyed by lowercase `canonical_key`. `primary_room_id` is required; `secondary_room_id` and `third_room_id` are nullable. All three reference `classroom_rooms.id`. The record stores ordered preferences, automatic/admin source, provenance JSON, revision, updater and timestamps. No tutor-group FK is used, so snapshot rotation cannot replace the profile. Generation inserts missing records with conflict-ignore; admin edits compare revisions atomically.
+
+Migration `0076_classroom_stable_identity` adds `classroom_assignment_rows.canonical_key` and backfills it from the referenced identity group. New runs always persist it. Applied room profiles and quality metrics live in run `change_summary`; print content revisions hash the saved schedule projection. Run+row insertion and override edits use database transactions.
 
 ## ER Diagram
 

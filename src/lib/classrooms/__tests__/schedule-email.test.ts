@@ -49,6 +49,8 @@ function makePreviewDb(input: {
   rows: ReturnType<typeof row>[];
   contacts: Array<Record<string, unknown>>;
   sentGroupIds?: string[];
+  sentCanonicalKeys?: string[];
+  metadata?: Record<string, unknown>;
 }) {
   let selectCall = 0;
   const insertedRecipients: unknown[] = [];
@@ -65,7 +67,7 @@ function makePreviewDb(input: {
         return {
           from: vi.fn(() => ({
             where: vi.fn(() => ({
-              limit: vi.fn().mockResolvedValue([run]),
+              limit: vi.fn().mockResolvedValue([{ ...run, changeSummary: input.metadata ?? {} }]),
             })),
           })),
         };
@@ -89,6 +91,9 @@ function makePreviewDb(input: {
       return {
         from: vi.fn(() => ({
           where: vi.fn().mockResolvedValue((input.sentGroupIds ?? []).map((groupId) => ({ groupId }))),
+          innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue(input.sentCanonicalKeys
+            ? input.sentCanonicalKeys.map(canonicalKey => ({ canonicalKey }))
+            : (input.sentGroupIds ?? []).map(groupId => ({ canonicalKey: input.rows.find(row => row.groupId === groupId)?.canonicalKey ?? groupId }))) })),
         })),
       };
     }),
@@ -129,6 +134,25 @@ describe("schedule email preview", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("includes the applied usual rooms and marked exceptions in the existing email", async () => {
+    const db = makePreviewDb({ rows: [row({ publishStatus: "success" })], contacts: [{ canonicalKey: "Kevin", onsiteEmail: "teacher@example.com", active: true }],
+      metadata: { roomPolicies: [{ canonicalKey: "kevin", revision: 2, rooms: ["Think Outside the Box", "Cool", "Do It"] }] } });
+    const preview = await getScheduleEmailPreview(db as never, "run-1");
+    expect(preview.previews[0].usualRooms).toEqual(["Think Outside the Box", "Cool", "Do It"]);
+    expect(preview.previews[0].text).toContain("Usual rooms: Think Outside the Box · Cool · Do It");
+    expect(preview.previews[0].html).toContain("outside usual rooms");
+  });
+
+  it("does not resend or create a blocked attempt after a different run and snapshot already delivered", async () => {
+    const db = makePreviewDb({ rows: [row({ groupId: "rotated-group", publishStatus: "success" })],
+      contacts: [{ canonicalKey: "Kevin", onsiteEmail: "teacher@example.com", active: true }], sentCanonicalKeys: ["kevin"] });
+    const sender = { sendEmail: vi.fn() };
+    const result = await sendScheduleEmailsForRun(db as never, "new-run", "admin", sender, { mode: "failed_only" });
+    expect(result.summary.attempted).toBe(0);
+    expect(sender.sendEmail).not.toHaveBeenCalled();
+    expect(db.insertedEmailRuns).toEqual([]);
   });
 
   it("blocks tutors whose proposed room failed Wise publishing", async () => {
@@ -306,7 +330,7 @@ describe("schedule email preview", () => {
     expect(sender.sendEmail).toHaveBeenCalledTimes(1);
     expect(sender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
       to: "sam@example.com",
-      idempotencyKey: expect.stringMatching(/^classroom-schedule:run-1:Samantha:[a-f0-9]{16}$/),
+      idempotencyKey: expect.stringMatching(/^classroom-schedule:2026-05-15:Samantha:[a-f0-9]{16}$/),
     }));
     expect(result.summary).toEqual({ attempted: 1, success: 1, failed: 0, blocked: 0 });
     expect(result.recipients.map((recipient) => recipient.tutorDisplayName)).toEqual(["Samantha"]);

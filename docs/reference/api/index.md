@@ -6,14 +6,14 @@ The canonical lookup of every HTTP endpoint in BGScheduler. This page carries **
 
 ## What this counts
 
-All handlers live under `src/app/api/**/route.ts`. The tree holds **191 `route.ts` files exporting 255 method+path business endpoints**.
+All handlers live under `src/app/api/**/route.ts`. The tree holds **194 `route.ts` files exporting 258 method+path business endpoints**.
 
 Two counting notes, because a naive `grep -c 'export async function'` disagrees:
 
 - **+2 for Auth.js.** [`src/app/api/auth/[...nextauth]/route.ts`](../../../src/app/api/auth/%5B...nextauth%5D/route.ts) is three lines long and exports its two methods by destructuring — `export const { GET, POST } = handlers` — so it matches no `export function` pattern.
-- **−2 for CORS preflight.** The `OPTIONS` handlers on the two public OA-resolver routes ([`worklist/route.ts:17`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts) and [`runs/[runId]/rows/route.ts:48`](../../../src/app/api/line/contacts/oa-resolver/runs/%5BrunId%5D/rows/route.ts)) return bare CORS headers and carry no business surface, so they are **excluded** from the 255. Counting the `line` group therefore yields 29, not 31.
+- **−2 for CORS preflight.** The `OPTIONS` handlers on the two public OA-resolver routes ([`worklist/route.ts:17`](../../../src/app/api/line/contacts/oa-resolver/worklist/route.ts) and [`runs/[runId]/rows/route.ts:48`](../../../src/app/api/line/contacts/oa-resolver/runs/%5BrunId%5D/rows/route.ts)) return bare CORS headers and carry no business surface, so they are **excluded** from the 258. Counting the `line` group therefore yields 29, not 31.
 
-The named-handler total across all 191 files is 253; 253 + 2 destructured = 255 business endpoints, and 255 + 2 preflight = 257 exported handlers in total.
+The named-handler total across all 194 files is 256; 256 + 2 destructured = 258 business endpoints, and 258 + 2 preflight = 260 exported handlers in total.
 
 ## How to read the Auth column
 
@@ -47,7 +47,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | admissions | `/api/admissions` | 61 | [university-admissions.md](./university-admissions.md) |
 | ai-scheduler | `/api/ai-scheduler` | 8 | [ai-scheduler.md](./ai-scheduler.md) |
 | auth | `/api/auth` | 2 | [misc.md](./misc.md#auth) |
-| class-assignments | `/api/class-assignments` | 8 | [classrooms-and-assignments.md](./classrooms-and-assignments.md) |
+| class-assignments | `/api/class-assignments` | 11 | [classrooms-and-assignments.md](./classrooms-and-assignments.md) |
 | classrooms | `/api/classrooms` | 2 | [classrooms-and-assignments.md](./classrooms-and-assignments.md#room-catalog-and-floor-plan) |
 | compare | `/api/compare` | 2 | [misc.md](./misc.md#compare) |
 | competitor-intelligence | `/api/competitor-intelligence` | 9 | [competitor-intelligence.md](./competitor-intelligence.md) |
@@ -83,7 +83,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | Detail page | Prefixes it owns | Endpoints |
 |---|---|---:|
 | [ai-scheduler.md](./ai-scheduler.md) | `/api/ai-scheduler` | 8 |
-| [classrooms-and-assignments.md](./classrooms-and-assignments.md) | `/api/class-assignments`, `/api/classrooms`, 2 internal crons | 10 |
+| [classrooms-and-assignments.md](./classrooms-and-assignments.md) | `/api/class-assignments`, `/api/classrooms`, 2 internal crons | 13 |
 | [competitor-intelligence.md](./competitor-intelligence.md) | `/api/competitor-intelligence` | 9 |
 | [credit-control.md](./credit-control.md) | `/api/credit-control` | 8 |
 | [data-health.md](./data-health.md) | `/api/data-health` | 2 |
@@ -201,6 +201,9 @@ Sorted by group, then path, then method. `[bracketed]` segments are Next.js dyna
 | `GET` | `/api/ai-scheduler/metrics` | [ai-scheduler](./ai-scheduler.md) | admin | Read-only roll-up joining scheduler metrics, correction telemetry, and the LINE scheduler analytics. |
 | `GET` | `/api/auth/[...nextauth]` | [auth](./misc.md#auth) | public | Auth.js catch-all (sign-in, callback, session, CSRF). Exported by destructuring `export const { GET, POST } = handlers`, so it matches no `export function` grep — this is the `+2` in the count. |
 | `POST` | `/api/auth/[...nextauth]` | [auth](./misc.md#auth) | public | Auth.js catch-all POST half (sign-in/sign-out callbacks). Same destructured export. |
+| `GET` | `/api/class-assignments/room-profiles` | [classrooms-and-assignments](./classrooms-and-assignments.md) | admin | Read stable usual-room profiles. |
+| `PATCH` | `/api/class-assignments/room-profiles/[canonicalKey]` | [classrooms-and-assignments](./classrooms-and-assignments.md) | admin | Revise a teacher's ordered usual rooms. |
+| `GET` | `/api/class-assignments/print-runs` | [classrooms-and-assignments](./classrooms-and-assignments.md) | admin | Resolve seven days of explicitly saved runs for printing. |
 | `GET` | `/api/class-assignments` | [class-assignments](./classrooms-and-assignments.md) | admin | The assignment detail envelope for one ISO date (`assertIsoDate` rejects anything else). |
 | `POST` | `/api/class-assignments/run` | [class-assignments](./classrooms-and-assignments.md) | admin | Generate a room-assignment run for a date. Local generation only — nothing is written to Wise here. |
 | `POST` | `/api/class-assignments/runs/[runId]/publish` | [class-assignments](./classrooms-and-assignments.md) | admin | Create a publish job and schedule it; only eligible OFFLINE sessions have their Wise `location` written, after explicit admin confirmation. |

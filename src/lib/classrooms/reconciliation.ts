@@ -5,6 +5,7 @@ import {
   repairClassroomAssignmentRows,
   REMOTE_NO_ROOM_NEEDED,
   type AssignmentResultRow,
+  type AssignmentOptions,
   type AssignmentSession,
   type ContextSession,
   type ExternalRoomBlock,
@@ -15,6 +16,7 @@ import {
   normalizeTutorName,
   type ClassroomRoomDefinition,
 } from "./rooms";
+import { assignmentTutorKey } from "./room-policy";
 
 export type AssignmentChangeType = "manual" | "carried" | "added" | "changed" | "rescheduled" | "moved";
 export type AutomationEventType = "added" | "changed" | "rescheduled" | "canceled" | "moved";
@@ -61,7 +63,8 @@ export interface ReconciliationResult {
   summary: Record<string, number>;
 }
 
-interface ReconcileInput {
+interface ReconcileInput extends AssignmentOptions {
+  overrideBySessionId?: ReadonlyMap<string, string | null>;
   sessions: AssignmentSession[];
   previousRows: PreviousAssignmentRow[];
   rooms: ClassroomRoomDefinition[];
@@ -141,6 +144,7 @@ function rowToContextSession(row: ReconciledAssignmentRow): ContextSession {
   return {
     wiseSessionId: row.wiseSessionId,
     tutorDisplayName: row.tutorDisplayName,
+    canonicalKey: row.canonicalKey,
     groupId: row.groupId,
     startMinute: row.startMinute,
     endMinute: row.endMinute,
@@ -150,6 +154,7 @@ function rowToContextSession(row: ReconciledAssignmentRow): ContextSession {
 
 function previousRowToSession(row: PreviousAssignmentRow): AssignmentSession {
   return {
+    canonicalKey: row.canonicalKey,
     groupId: row.groupId,
     tutorDisplayName: row.tutorDisplayName,
     wiseTeacherId: row.wiseTeacherId,
@@ -262,6 +267,8 @@ function fixedTutorAssignmentsFrom(rows: ReconciledAssignmentRow[]): FixedTutorA
   return rows
     .filter((row) => holdsRoom(row))
     .map((row) => ({
+      canonicalKey: row.canonicalKey,
+      groupId: row.groupId,
       tutorDisplayName: row.tutorDisplayName,
       startMinute: row.startMinute,
       endMinute: row.endMinute,
@@ -304,7 +311,14 @@ export function reconcileClassroomAssignments(input: ReconcileInput): Reconcilia
     const changeType = classifyChange(session, previous);
     const fingerprint = assignmentFingerprint(session);
 
-    if (changeType === "carried" && previous && previous.status !== "no_room") {
+    const overrideChanged = input.overrideBySessionId?.has(session.wiseSessionId)
+      && input.overrideBySessionId.get(session.wiseSessionId) !== previous?.overrideRoom;
+    const protectedPreference = previous && input.frozenSessionIds?.has(session.wiseSessionId)
+      && assignmentTutorKey(session) === assignmentTutorKey(previous)
+      && session.startMinute === previous.startMinute && session.endMinute === previous.endMinute
+      && session.sessionType === previous.sessionType && session.studentCount === previous.studentCount
+      && session.classType === previous.classType;
+    if ((changeType === "carried" || protectedPreference) && previous && previous.status !== "no_room" && !overrideChanged) {
       carriedRows.push(carryRow(session, previous, fingerprint));
       continue;
     }
@@ -344,6 +358,7 @@ export function reconcileClassroomAssignments(input: ReconcileInput): Reconcilia
   }
 
   const overrides = makeOverrideMap(input.previousRows);
+  for (const [id, room] of input.overrideBySessionId ?? []) overrides.set(id, room);
   const repairBudget = { remaining: ROOM_REPAIR_MAX_NODES };
   const assignPending = (
     sessions: AssignmentSession[],
@@ -353,6 +368,8 @@ export function reconcileClassroomAssignments(input: ReconcileInput): Reconcilia
     input.rooms,
     overrides,
     {
+      ...input,
+      optimizeContinuity: false,
       repairBudget: fixedRows.length ? { remaining: 0 } : repairBudget,
       externalRoomBlocks: fixedBlocks(fixedRows, externalRoomBlocks),
       fixedTutorAssignments: fixedTutorAssignmentsFrom(fixedRows),
@@ -369,7 +386,7 @@ export function reconcileClassroomAssignments(input: ReconcileInput): Reconcilia
   // Search starts from the existing plan, measuring moves against rooms already promised to tutors.
   const assignedDynamicRows = repairClassroomAssignmentRows(
     [...carriedRows, ...assignPending(pendingSessions, carriedRows)], input.rooms,
-    { externalRoomBlocks, repairBudget },
+    { ...input, externalRoomBlocks, repairBudget, savedRooms: new Map(input.previousRows.map(row => [row.wiseSessionId, row.assignedRoom])) },
   );
 
   const finalRows: ReconciledAssignmentRow[] = [];
@@ -382,6 +399,7 @@ export function reconcileClassroomAssignments(input: ReconcileInput): Reconcilia
       const sameAssignment =
         previous.assignedRoom === row.assignedRoom &&
         previous.status === row.status &&
+        previous.overrideRoom === row.overrideRoom &&
         JSON.stringify(previous.warnings) === JSON.stringify(row.warnings);
       if (sameAssignment) {
         finalRows.push(preservePublish(row, previous, fingerprint));

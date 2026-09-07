@@ -173,6 +173,10 @@ None of the following appear in `src/lib/env.ts`. Grouped by owning subsystem; 2
 | `COMPETITOR_INTEL_MONTHLY_CAP_USD` | Global monthly hard spend cap | [`budget.ts:20`](../../src/lib/competitor-intelligence/budget.ts) | `250` for paid source types, `0` for `website` / `manual` ([`budget.ts:22`–`24`](../../src/lib/competitor-intelligence/budget.ts)) |
 | **`COMPETITOR_<PROVIDER>_MONTHLY_CAP_USD`** *(dynamic name)* | Per-provider cap; the key is computed from the provider slug — upper-cased, non-alphanumerics → `_` | [`budget.ts:19`](../../src/lib/competitor-intelligence/budget.ts) | Falls through to the global cap. **Invisible to a literal grep.** Concrete members include `COMPETITOR_APIFY_MONTHLY_CAP_USD` and `COMPETITOR_DATAFORSEO_MONTHLY_CAP_USD` |
 
+### Classroom continuity rollback
+
+`CLASSROOM_CONTINUITY_ENABLED` defaults to enabled. Set it to the literal `false` and redeploy to disable the additional continuity optimizer and automatic room-profile initialization. The previous feasibility repair remains active, stored profiles are retained, and saved print reports continue to work. Read at runtime in `src/lib/classrooms/room-policy.ts`.
+
 ### 2.3 Classroom schedule email (7)
 
 | Variable | Purpose | Consumed at | If unset |

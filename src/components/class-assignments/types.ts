@@ -1,4 +1,5 @@
 export interface ClassroomRun {
+  changeSummary?: Record<string, unknown>;
   id: string;
   assignmentDate: string;
   status: "completed" | "published" | "partial" | "failed";
@@ -25,6 +26,7 @@ export interface ClassroomRoom {
 }
 
 export interface ClassroomRow {
+  canonicalKey?: string | null;
   id: string;
   runId: string;
   tutorDisplayName: string;

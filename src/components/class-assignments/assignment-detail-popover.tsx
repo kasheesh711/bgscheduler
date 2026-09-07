@@ -17,6 +17,7 @@ interface AssignmentDetailPopoverProps {
   trigger: (props: Record<string, unknown>) => ReactElement;
   onUpdateOverride: (row: ClassroomRow, overrideRoom: string) => void;
   children?: ReactNode;
+  nativeButton?: boolean;
 }
 
 function classLabel(row: ClassroomRow): string {
@@ -37,10 +38,11 @@ export function AssignmentDetailPopover({
   trigger,
   onUpdateOverride,
   children,
+  nativeButton = true,
 }: AssignmentDetailPopoverProps) {
   return (
     <Popover>
-      <PopoverTrigger render={(props) => trigger(props as Record<string, unknown>)} />
+      <PopoverTrigger nativeButton={nativeButton} render={(props) => trigger(props as Record<string, unknown>)} />
       <PopoverContent side="top" className="max-h-[420px] w-80 overflow-auto p-3">
         <div className="space-y-3">
           <div>

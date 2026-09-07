@@ -4,6 +4,8 @@ import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { scheduleRecipientEmail } from "@/lib/tutor-onboarding/planner";
 import { REMOTE_NO_ROOM_NEEDED } from "./assignment-engine";
+import { buildTeacherSchedule } from "./schedule-projection";
+import { notifiedTutorKeys } from "./notification-state";
 import { sessionModeLabel } from "./session-mode";
 
 type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
@@ -59,6 +61,7 @@ export interface ScheduleEmailPreviewItem {
   blocks: ScheduleEmailBlock[];
   roomSteps: ScheduleEmailRoomStep[];
   mapImageUrl: string;
+  usualRooms?: string[];
 }
 
 export interface ScheduleEmailBlocker {
@@ -268,6 +271,7 @@ function renderHtmlEmail(input: {
   blocks: ScheduleEmailBlock[];
   roomSteps: ScheduleEmailRoomStep[];
   mapImageUrl: string;
+  usualRooms?: string[];
 }): string {
   const roomRows = input.roomSteps.length > 0
     ? input.roomSteps.map((step) => `
@@ -321,6 +325,7 @@ function renderHtmlEmail(input: {
         </table>
       </div>
 
+      ${input.usualRooms?.length ? `<p style="font-size:14px;color:#16203a;padding:12px;background:#fff4ec;">Usual rooms: <strong>${input.usualRooms.map(escapeHtml).join(" · ")}</strong></p>` : ""}
       <table style="width:100%;border-collapse:collapse;background:#ffffff;border:1px solid #bfdbfe;border-top:0;border-radius:0 0 18px 18px;overflow:hidden;">
         <thead>
           <tr style="background:#f97316;text-align:left;color:#ffffff;">
@@ -345,10 +350,12 @@ function renderTextEmail(input: {
   blocks: ScheduleEmailBlock[];
   roomSteps: ScheduleEmailRoomStep[];
   mapImageUrl: string;
+  usualRooms?: string[];
 }): string {
   const lines = [
     `BeGifted schedule for ${input.tutorDisplayName} - ${input.dateLabel}`,
     "",
+    ...(input.usualRooms?.length ? [`Usual rooms: ${input.usualRooms.join(" · ")}`, ""] : []),
     "Room route:",
     ...(input.roomSteps.length > 0
       ? input.roomSteps.map((step) => `${step.order}. ${step.time} - ${step.room}`)
@@ -457,7 +464,7 @@ export async function getScheduleEmailPreview(
 
   const rowsByGroup = new Map<string, AssignmentEmailRow[]>();
   for (const row of rows) {
-    rowsByGroup.set(row.groupId, [...(rowsByGroup.get(row.groupId) ?? []), row]);
+    rowsByGroup.set(row.canonicalKey.toLowerCase(), [...(rowsByGroup.get(row.canonicalKey.toLowerCase()) ?? []), row]);
   }
 
   const canonicalKeys = [...new Set(rows.map((row) => row.canonicalKey))];
@@ -466,8 +473,12 @@ export async function getScheduleEmailPreview(
   const previews: ScheduleEmailPreviewItem[] = [];
   const dateLabel = formatRunDate(run.assignmentDate);
 
-  for (const [groupId, groupRows] of rowsByGroup) {
+  const schedule = buildTeacherSchedule(rows, run.assignmentDate, run.changeSummary ?? {});
+  for (const [canonicalKey, groupRows] of rowsByGroup) {
     const first = groupRows[0];
+    const groupId = first.groupId;
+    const projected = schedule.tutors.find(tutor => tutor.canonicalKey === canonicalKey);
+    const usualRooms = projected?.usualRooms ?? [];
     const contact = contacts.get(first.canonicalKey);
     const email = scheduleRecipientEmail(contact);
     const missingEmail = !email;
@@ -506,11 +517,16 @@ export async function getScheduleEmailPreview(
       blockReason,
     };
     const sortedGroupRows = groupRows.sort((a, b) => a.startMinute - b.startMinute);
-    const blocks = sortedGroupRows.map(toBlock);
+    const blocks = sortedGroupRows.map(row => {
+      const block = toBlock(row);
+      const projectedBlock = projected?.blocks.find(item => item.rowId === row.id);
+      return { ...block, room: projectedBlock ? `${projectedBlock.room}${projectedBlock.outsideUsualRooms ? " (outside usual rooms)" : ""}${projectedBlock.shortGapChange ? " — room change" : ""}` : block.room };
+    });
     const roomSteps = toRoomSteps(sortedGroupRows);
     const mapImageUrl = floorPlanMapUrl(roomSteps);
     previews.push({
       recipient,
+      usualRooms,
       subject,
       html: renderHtmlEmail({
         tutorDisplayName: first.tutorDisplayName,
@@ -518,6 +534,7 @@ export async function getScheduleEmailPreview(
         blocks,
         roomSteps,
         mapImageUrl,
+        usualRooms,
       }),
       text: renderTextEmail({
         tutorDisplayName: first.tutorDisplayName,
@@ -525,6 +542,7 @@ export async function getScheduleEmailPreview(
         blocks,
         roomSteps,
         mapImageUrl,
+        usualRooms,
       }),
       blocks,
       roomSteps,
@@ -605,8 +623,8 @@ function contentHash(item: ScheduleEmailPreviewItem): string {
     .slice(0, 16);
 }
 
-function idempotencyKey(assignmentRunId: string, item: ScheduleEmailPreviewItem): string {
-  return `classroom-schedule:${assignmentRunId}:${item.recipient.canonicalKey}:${contentHash(item)}`.slice(0, 256);
+function idempotencyKey(assignmentDate: string, item: ScheduleEmailPreviewItem): string {
+  return `classroom-schedule:${assignmentDate}:${item.recipient.canonicalKey}:${contentHash(item)}`.slice(0, 256);
 }
 
 function isQuotaExhaustionError(message: string): boolean {
@@ -856,6 +874,7 @@ async function recordStoppedRecipients(
 }
 
 async function sendBackupFailoverEmails(input: {
+  assignmentDate: string;
   db: Database;
   runId: string;
   createdBy: string | null;
@@ -930,7 +949,7 @@ async function sendBackupFailoverEmails(input: {
         subject: item.subject,
         html: item.html,
         text: item.text,
-        idempotencyKey: idempotencyKey(input.runId, item),
+        idempotencyKey: idempotencyKey(input.assignmentDate, item),
       });
       sentGroupIds.add(item.recipient.groupId);
       await recordRecipientOutcome(input.db, {
@@ -1003,10 +1022,10 @@ export async function sendScheduleEmailsForRun(
     : preview.previews;
 
   if (mode === "failed_only") {
-    const sentGroupIds = await loadSentRecipientGroupIds(db, runId);
-    previewItems = previewItems.filter((item) =>
-      !sentGroupIds.has(item.recipient.groupId)
-    );
+    const sentKeys = await notifiedTutorKeys(db, preview.assignmentDate);
+    previewItems = previewItems.filter(item => !sentKeys.has(item.recipient.canonicalKey.toLowerCase()));
+    // A rerun after all deliveries succeeded is a no-op, not a new blocked email attempt.
+    if (previewItems.length === 0 && preview.previews.length > 0) return { summary: sendSummaryFromRecipients([]), recipients: [], preview };
   }
 
   const selectedReadyCount = previewItems.filter((item) => item.recipient.status === "ready" && item.recipient.email).length;
@@ -1073,7 +1092,7 @@ export async function sendScheduleEmailsForRun(
         subject: item.subject,
         html: item.html,
         text: item.text,
-        idempotencyKey: idempotencyKey(runId, item),
+        idempotencyKey: idempotencyKey(preview.assignmentDate, item),
       });
       await recordRecipientOutcome(db, {
         assignmentRunId: runId,
@@ -1116,6 +1135,7 @@ export async function sendScheduleEmailsForRun(
           }
           await finalizeScheduleEmailRun(db, emailRun.id, counts);
           failover = await sendBackupFailoverEmails({
+            assignmentDate: preview.assignmentDate,
             db,
             runId,
             createdBy,

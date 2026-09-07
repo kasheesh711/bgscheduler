@@ -78,6 +78,7 @@ async function loadSessionsForRange(
   const rows = await db
     .select({
       id: schema.futureSessionBlocks.id,
+      canonicalKey: schema.tutorIdentityGroups.canonicalKey,
       groupId: schema.futureSessionBlocks.groupId,
       tutorDisplayName: schema.tutorIdentityGroups.displayName,
       wiseTeacherId: schema.futureSessionBlocks.wiseTeacherId,
@@ -168,6 +169,7 @@ async function loadLatestOverridesByDate(
 
 function toAssignmentSession(row: RoomCapacitySession): AssignmentSession {
   return {
+    canonicalKey: row.canonicalKey,
     groupId: row.groupId,
     tutorDisplayName: row.tutorDisplayName,
     wiseTeacherId: row.wiseTeacherId,
@@ -204,6 +206,8 @@ function buildProjectedSessions(
       dayRows.map(toAssignmentSession),
       rooms.map(toEngineRoom),
       overridesByDate.get(date) ?? new Map(),
+      // Capacity simulation measures feasibility; the operational planner optimizes teachers' rooms.
+      { optimizeContinuity: false },
     );
     for (const row of result.rows) {
       projected.push({

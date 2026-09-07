@@ -1700,6 +1700,20 @@ export const classroomRooms = pgTable("classroom_rooms", {
   index("classroom_rooms_active_idx").on(table.active),
 ]);
 
+export const classroomTutorRoomProfiles = pgTable("classroom_tutor_room_profiles", {
+  canonicalKey: text("canonical_key").primaryKey(),
+  tutorDisplayName: text("tutor_display_name").notNull(),
+  primaryRoomId: uuid("primary_room_id").notNull().references(() => classroomRooms.id),
+  secondaryRoomId: uuid("secondary_room_id").references(() => classroomRooms.id),
+  thirdRoomId: uuid("third_room_id").references(() => classroomRooms.id),
+  revision: integer("revision").notNull().default(1),
+  source: text("source").notNull().default("automatic"),
+  provenance: jsonb("provenance").$type<Record<string, unknown>>().notNull().default({}),
+  updatedBy: text("updated_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const classroomAssignmentRuns = pgTable("classroom_assignment_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
   assignmentDate: date("assignment_date", { mode: "string" }).notNull(),
@@ -1728,6 +1742,7 @@ export const classroomAssignmentRuns = pgTable("classroom_assignment_runs", {
 
 export const classroomAssignmentRows = pgTable("classroom_assignment_rows", {
   id: uuid("id").primaryKey().defaultRandom(),
+  canonicalKey: text("canonical_key"),
   runId: uuid("run_id").notNull().references(() => classroomAssignmentRuns.id),
   snapshotId: uuid("snapshot_id").notNull().references(() => snapshots.id),
   groupId: uuid("group_id").notNull().references(() => tutorIdentityGroups.id),
