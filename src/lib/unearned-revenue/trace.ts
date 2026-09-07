@@ -19,3 +19,16 @@ export function makeTraceAnchor(input: {
     url: buildGoogleSheetTraceUrl(input.spreadsheetId, input.sheetId, input.a1),
   };
 }
+
+export function resolvePublicationTrace(
+  manifest: import("./publication").PublicationMetadata | null | undefined,
+  key: string,
+  legacy: TraceAnchor,
+): TraceAnchor {
+  if (!manifest) return legacy;
+  return manifest.traces[key] ?? {
+    kind: "audit",
+    label: `Published audit evidence (${key})`,
+    url: `https://drive.google.com/file/d/${encodeURIComponent(manifest.audit.fileId)}/view`,
+  };
+}

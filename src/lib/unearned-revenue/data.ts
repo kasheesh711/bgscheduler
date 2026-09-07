@@ -1,10 +1,11 @@
 import "server-only";
+import type { PublicationMetadata } from "./publication";
 
 import { and, asc, count, desc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
-import { makeTraceAnchor } from "./trace";
+import { makeTraceAnchor, resolvePublicationTrace } from "./trace";
 import { getUnearnedRevenueConnectedEmail } from "./sync";
 import {
   FIFO_PACKAGE_MODEL,
@@ -63,7 +64,7 @@ function reviewState(value: string): UnearnedRevenueReviewState {
   return "NO_REVIEW";
 }
 
-function periodPayload(row: typeof schema.unearnedRevenuePeriods.$inferSelect): UnearnedRevenuePeriodSummary {
+function periodPayload(row: typeof schema.unearnedRevenuePeriods.$inferSelect, publication?: PublicationMetadata | null): UnearnedRevenuePeriodSummary {
   return {
     periodEnd: row.periodEnd,
     periodKind: periodKind(row.periodKind),
@@ -81,17 +82,18 @@ function periodPayload(row: typeof schema.unearnedRevenuePeriods.$inferSelect): 
     attributionPercent: numberFromDb(row.attributionPercent),
     studentCount: row.studentCount,
     accountCount: row.accountCount,
-    trace: makeTraceAnchor({
+    trace: resolvePublicationTrace(publication, `Model Comparison:${row.traceRow}`, makeTraceAnchor({
       spreadsheetId: row.traceSpreadsheetId,
       sheetId: row.traceSheetId,
       row: row.traceRow,
       a1: row.traceA1,
-    }),
+    })),
   };
 }
 
 function studentPayload(
   row: typeof schema.unearnedRevenueStudentPeriods.$inferSelect,
+  publication?: PublicationMetadata | null,
 ): UnearnedRevenueStudentRow {
   const legacy = numberFromDb(row.legacyClosingLiabilityThb);
   const fifo = numberFromDb(row.fifoClosingLiabilityThb);
@@ -110,12 +112,12 @@ function studentPayload(
     residualLiabilityThb: numberFromDb(row.residualLiabilityThb),
     attributionPercent: numberFromDb(row.attributionPercent),
     reviewState: reviewState(row.reviewState),
-    trace: makeTraceAnchor({
+    trace: resolvePublicationTrace(publication, `CALC_Student_Period:${row.traceRow}`, makeTraceAnchor({
       spreadsheetId: row.traceSpreadsheetId,
       sheetId: row.traceSheetId,
       row: row.traceRow,
       a1: row.traceA1,
-    }),
+    })),
   };
 }
 
@@ -226,7 +228,7 @@ export async function getUnearnedRevenueDashboard(
       asc(schema.unearnedRevenuePackagePeriods.packageName),
     ),
   ]);
-  const selected = periodPayload(selectedRow);
+  const selected = periodPayload(selectedRow, snapshot.publicationManifest);
   const exactTotal = packageRows.reduce(
     (totalValue, row) => totalValue + numberFromDb(row.closingExactLiabilityThb),
     0,
@@ -259,7 +261,7 @@ export async function getUnearnedRevenueDashboard(
       stale: snapshot.cutoff < latestCompletedBangkokDay(),
       capabilities,
     },
-    periods: periodRows.map(periodPayload),
+    periods: periodRows.map(row => periodPayload(row, snapshot.publicationManifest)),
     selectedPeriod: selected,
     exactPackageOverview: {
       available: snapshot.workbookSchemaVersion >= 4,
@@ -291,12 +293,12 @@ export async function getUnearnedRevenueDashboard(
         accountCount: row.accountCount,
         activeLotCount: row.activeLotCount,
         shareOfExactLiability: numberFromDb(row.shareOfExactLiability),
-        trace: makeTraceAnchor({
+        trace: resolvePublicationTrace(snapshot.publicationManifest, `CALC_Exact_Package_Overview:${row.traceRow}`, makeTraceAnchor({
           spreadsheetId: row.traceSpreadsheetId,
           sheetId: row.traceSheetId,
           row: row.traceRow,
           a1: row.traceA1,
-        }),
+        })),
       })),
     },
     quality: {
@@ -311,7 +313,7 @@ export async function getUnearnedRevenueDashboard(
       missingReceiptEvidenceCount: selectedRow.missingReceiptEvidenceCount,
       reviewConditions: snapshot.reviewConditions,
     },
-    students: studentRows.map(studentPayload),
+    students: studentRows.map(row => studentPayload(row, snapshot.publicationManifest)),
     pagination: {
       page: query.page,
       pageSize: query.pageSize,
@@ -368,7 +370,7 @@ export async function getUnearnedRevenueStudentDetail(
     periodEnd,
     canonicalModel: canonicalModel(snapshot.canonicalModel),
     modelVersion: snapshot.modelVersion,
-    student: studentPayload(student),
+    student: studentPayload(student, snapshot.publicationManifest),
     accounts: accounts.map((row) => ({
       accountId: row.accountId,
       classId: row.classId,
@@ -388,12 +390,12 @@ export async function getUnearnedRevenueStudentDetail(
       attributedLiabilityThb: numberFromDb(row.attributedLiabilityThb),
       residualLiabilityThb: numberFromDb(row.residualLiabilityThb),
       reviewState: reviewState(row.reviewState),
-      trace: makeTraceAnchor({
+      trace: resolvePublicationTrace(snapshot.publicationManifest, `CALC_Account_Period:${row.traceRow}`, makeTraceAnchor({
         spreadsheetId: row.traceSpreadsheetId,
         sheetId: row.traceSheetId,
         row: row.traceRow,
         a1: row.traceA1,
-      }),
+      })),
     })),
     lots: lots.map((row) => ({
       lotId: row.lotId,
@@ -426,12 +428,12 @@ export async function getUnearnedRevenueStudentDetail(
       closingLiabilityThb: numberFromDb(row.closingLiabilityThb),
       candidateSalesKeys: row.candidateSalesKeys.split(";").map((item) => item.trim()).filter(Boolean),
       candidateReceiptIds: (row.candidateReceiptIds ?? "").split(";").map((item) => item.trim()).filter(Boolean),
-      formulaTrace: makeTraceAnchor({
+      formulaTrace: resolvePublicationTrace(snapshot.publicationManifest, `CALC_Package_Lot_Period:${row.formulaRow}`, makeTraceAnchor({
         spreadsheetId: row.formulaSpreadsheetId,
         sheetId: row.formulaSheetId,
         row: row.formulaRow,
         a1: row.formulaA1,
-      }),
+      })),
       salesTrace: row.sourceSpreadsheetId && row.sourceSheetId !== null && row.sourceRow !== null && row.sourceA1
         ? makeTraceAnchor({
             spreadsheetId: row.sourceSpreadsheetId,
@@ -449,7 +451,9 @@ export async function getUnearnedRevenueStudentDetail(
             a1: row.creditEventA1,
           })
         : null,
-      receiptTrace: row.receiptSpreadsheetId && Number.isInteger(row.receiptSheetId)
+      receiptTrace: snapshot.publicationManifest && row.receiptId
+        ? resolvePublicationTrace(snapshot.publicationManifest, `SRC_Wise_Receipt:${row.receiptRow}`, { url: "" })
+        : row.receiptSpreadsheetId && Number.isInteger(row.receiptSheetId)
         && Number.isInteger(row.receiptRow) && row.receiptA1
         ? makeTraceAnchor({
             spreadsheetId: row.receiptSpreadsheetId,

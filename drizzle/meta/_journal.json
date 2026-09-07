@@ -547,6 +547,13 @@
       "when": 1788762121169,
       "tag": "0077_classroom_weekend_checks",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1788783538007,
+      "tag": "0079_unearned_revenue_publication",
+      "breakpoints": true
     }
   ]
 }

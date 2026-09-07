@@ -106,7 +106,7 @@ function MetricCard({ label, value, note, primary = false }: {
   );
 }
 
-function TraceLink({ href, children = "Open formula" }: { href: string; children?: React.ReactNode }) {
+function TraceLink({ href, children, kind }: { href: string; children?: React.ReactNode; kind?: "published" | "audit" }) {
   return (
     <a
       href={href}
@@ -115,7 +115,7 @@ function TraceLink({ href, children = "Open formula" }: { href: string; children
       className="inline-flex items-center gap-1 text-xs font-medium text-primary underline-offset-4 hover:underline"
       onClick={(event) => event.stopPropagation()}
     >
-      {children}
+      {children ?? (kind ? "Open published evidence" : "Open formula")}
       <ExternalLink className="size-3" aria-hidden="true" />
     </a>
   );
@@ -175,7 +175,7 @@ function confidenceLabel(lot: UnearnedRevenueLotDetail): string {
 export function UnearnedRevenueLotTraceLinks({ lot }: { lot: UnearnedRevenueLotDetail }) {
   return (
     <div className="mt-4 flex flex-wrap gap-4 border-t pt-3">
-      <TraceLink href={lot.formulaTrace.url}>Open formula</TraceLink>
+      <TraceLink href={lot.formulaTrace.url}>{lot.formulaTrace.kind ? "Open published evidence" : "Open formula"}</TraceLink>
       {lot.salesTrace && <TraceLink href={lot.salesTrace.url}>Open sales row</TraceLink>}
       {lot.creditEventTrace && <TraceLink href={lot.creditEventTrace.url}>Open credit event</TraceLink>}
       {lot.receiptTrace && <TraceLink href={lot.receiptTrace.url}>Open receipt evidence</TraceLink>}
@@ -218,7 +218,7 @@ export function UnearnedRevenueStudentDetailContent({
             <h3 className="font-semibold">Class-account reconciliation</h3>
             <p className="text-xs text-muted-foreground">Each WISE student/class account rolls into the student total.</p>
           </div>
-          <TraceLink href={detail.student.trace.url} />
+          <TraceLink href={detail.student.trace.url} kind={detail.student.trace.kind} />
         </div>
         <div className={UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT.accountFrame}>
           <Table className={UNEARNED_REVENUE_STUDENT_DRAWER_LAYOUT.accountTable}>
@@ -247,7 +247,7 @@ export function UnearnedRevenueStudentDetailContent({
                   <TableCell className="text-right font-mono">{money.format(account.fifoClosingLiabilityThb)}</TableCell>
                   <TableCell className="text-right font-mono font-semibold">{money.format(account.canonicalClosingLiabilityThb)}</TableCell>
                   <TableCell><Badge variant="outline">{account.reviewState.replaceAll("_", " ")}</Badge></TableCell>
-                  <TableCell><TraceLink href={account.trace.url} /></TableCell>
+                  <TableCell><TraceLink href={account.trace.url} kind={account.trace.kind} /></TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -364,7 +364,7 @@ function StudentDetailDrawer({
         <DialogHeader className="shrink-0 border-b bg-background/95 px-5 py-4 pr-14 backdrop-blur">
           <DialogTitle className="break-words">{detail?.student.studentName || "Student liability detail"}</DialogTitle>
           <DialogDescription className="break-words">
-            {detail ? `${detail.student.studentId} · data through ${formatDate(detail.periodEnd)}` : "Loading formula-backed account and package rows…"}
+            {detail ? `${detail.student.studentId} · data through ${formatDate(detail.periodEnd)}` : "Loading account and package evidence…"}
           </DialogDescription>
         </DialogHeader>
         <div
@@ -658,7 +658,7 @@ export function UnearnedRevenueDashboard({
               </option>
             ))}
           </select>
-          <TraceLink href={selected.trace.url}>Open total formula</TraceLink>
+          <TraceLink href={selected.trace.url}>{selected.trace.kind ? "Open published total" : "Open total formula"}</TraceLink>
         </div>
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -738,7 +738,7 @@ export function UnearnedRevenueDashboard({
                           <TableCell className="text-right font-mono">{row.studentCount.toLocaleString()}</TableCell>
                           <TableCell className="text-right font-mono">{row.activeLotCount.toLocaleString()}</TableCell>
                           <TableCell className="text-right font-mono">{percent.format(row.shareOfExactLiability)}%</TableCell>
-                          <TableCell><TraceLink href={row.trace.url} /></TableCell>
+                          <TableCell><TraceLink href={row.trace.url} kind={row.trace.kind} /></TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -820,7 +820,7 @@ export function UnearnedRevenueDashboard({
                       <TableCell className="text-right font-mono">{percent.format(row.attributionPercent)}%</TableCell>
                       <TableCell className="text-right font-mono">{money.format(row.residualLiabilityThb)}</TableCell>
                       <TableCell><Badge variant="outline" className={row.reviewState === "NEEDS_REVIEW" ? "border-amber-300 bg-amber-50" : ""}>{row.reviewState.replaceAll("_", " ")}</Badge></TableCell>
-                      <TableCell><TraceLink href={row.trace.url} /></TableCell>
+                      <TableCell><TraceLink href={row.trace.url} kind={row.trace.kind} /></TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

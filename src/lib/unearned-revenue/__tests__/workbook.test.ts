@@ -1,3 +1,5 @@
+import { gzipSync } from "node:zlib";
+import { parseValuesPublication, sha256 } from "../publication";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -507,5 +509,64 @@ describe("unearned revenue workbook contract", () => {
     }
 
     expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/must use candidate model FIFO_PACKAGE_LOT_V3 or FIFO_PACKAGE_LOT_V4/i);
+  });
+});
+
+// V5 uses the same accounting/evidence contract while authenticating computed
+// values with an immutable manifest instead of requiring live Sheets formulas.
+function valuesFixture() {
+  const input = fifoV4Fixture();
+  const tables = JSON.parse(JSON.stringify({
+    "Model Status": input.statusStart, "QA Checks": input.qa, "Model Comparison": input.periods,
+    "CALC_Student_Period": input.students, "CALC_Account_Period": input.accounts,
+    "CALC_Package_Lot_Period": input.lots, "CALC_Exact_Package_Overview": input.exactPackages,
+    "SRC_Wise_Receipt": input.receipts,
+  }).replaceAll(fingerprint, "a".repeat(64))) as Record<string, unknown[][]>;
+  tables["Model Status"].find(row => row[0] === "workbook_schema_version")![1] = 5;
+  tables["Model Status"].push(["evidence_format", "VALIDATED_VALUES", ""]);
+  const checks = ["QA-MODEL-001", "QA-MODEL-002", "QA-LOT-001", "QA-LOT-002", "QA-LOT-003", "QA-LOT-004", "QA-LOT-005", "QA-LOT-006", "QA-DAILY-CREDITS", "QA-DAILY-PERIODS", "QA-DAILY-STUDENTS"];
+  tables["QA Checks"].push(...checks.map(id => [id, "HARD", 0, 0, 0, 1, "PASS", "fixture"]));
+  const bytes = gzipSync(JSON.stringify({ tables, traces: { "Model Comparison:2": { kind: "published", url: "https://docs.google.com/spreadsheets/d/report-id-123/edit#gid=1&range=A6" } } }));
+  const file = { fileId: "values-file-123", sha256: sha256(bytes), bytes: bytes.length };
+  const manifest = {
+    schemaVersion: 5 as const, runId, cutoff: "2026-03-31", sourceFingerprint: "a".repeat(64), revision: "7",
+    generatedAtBangkok: "2026-04-01T00:15:00+07:00", canonicalModel: "LEGACY_ACCOUNT_RATE", modelVersion: "FIFO_PACKAGE_LOT_V4" as const,
+    contract: file, audit: file, folderId: "folder-id-123", rollbackSpreadsheetId: "rollback-id-123",
+    rowCounts: Object.fromEntries(Object.entries(tables).map(([key, rows]) => [key, rows.length - 1])),
+    qa: { hardStatus: "PASS" as const, dailyCount: 31, creditTolerance: 0.001 as const, moneyTolerance: 1 as const, checks },
+    months: [{ month: "2026-03", from: "2026-03-01", to: "2026-03-31", spreadsheetId: "report-id-123", cells: 1000, sha256: "b".repeat(64), overviewSheetId: 1, studentSheetId: 2, packageSheetId: 3 }],
+  };
+  return { manifest, contractBytes: bytes, statusStart: tables["Model Status"], statusEnd: structuredClone(tables["Model Status"]) };
+}
+
+describe("V5 validated values publication", () => {
+  it("imports values without formula tabs and keeps published evidence links", () => {
+    const result = parseValuesPublication(valuesFixture());
+    expect(Number(result.contract.periods[0].closingLiabilityThb)).toBe(100);
+    expect(result.metadata.traces["Model Comparison:2"].kind).toBe("published");
+  });
+  it("rejects altered checksums", () => {
+    const input = valuesFixture(); input.contractBytes[10] ^= 1;
+    expect(() => parseValuesPublication(input)).toThrow(/checksum/);
+  });
+  it("rejects changed publication markers during import", () => {
+    const input = valuesFixture(); input.statusEnd.find(row => row[0] === "run_id")![1] = "other-run";
+    expect(() => parseValuesPublication(input)).toThrow(/mismatch/);
+  });
+  it("rejects incomplete daily archive coverage", () => {
+    const input = valuesFixture(); input.manifest.months[0].from = "2026-03-02";
+    expect(() => parseValuesPublication(input)).toThrow(/coverage/);
+  });
+  it("rejects inconsistent row counts and missing mandatory QA", () => {
+    const input = valuesFixture(); input.manifest.rowCounts["CALC_Student_Period"]++;
+    expect(() => parseValuesPublication(input)).toThrow(/row count/);
+    const missing = valuesFixture(); missing.manifest.qa.checks = [];
+    expect(() => parseValuesPublication(missing)).toThrow();
+  });
+  it("rejects values in the legacy parser without verified manifest provenance", () => {
+    const input = fifoV4Fixture();
+    input.statusStart.find(row => row[0] === "workbook_schema_version")![1] = 5;
+    input.statusEnd.find(row => row[0] === "workbook_schema_version")![1] = 5;
+    expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/verified|validated/i);
   });
 });
