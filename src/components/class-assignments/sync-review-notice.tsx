@@ -1,18 +1,15 @@
 import Link from "next/link";
 import type { AssignmentDetail } from "./types";
+import { getSyncReview } from "./readiness-summary";
 
 export function SyncReviewNotice({ detail }: { detail: AssignmentDetail | null }) {
   if (!detail) return null;
-  const activeSummary = detail.activeSnapshotMeta?.syncErrorSummary;
-  const savedSummary = detail.run?.changeSummary?.syncErrorSummary;
-  const runSummary = typeof savedSummary === "string" ? savedSummary : detail.snapshotMeta.syncErrorSummary;
-  const rawCount = detail.run?.changeSummary?.unmanagedWiseSessionCount;
-  const excludedCount = typeof rawCount === "number" && Number.isInteger(rawCount) && rawCount >= 0 ? rawCount : null;
-  if (!activeSummary && !runSummary && !excludedCount) return null;
+  const { activeSummary, runSummary, excludedCount, needsReview } = getSyncReview(detail);
+  if (!needsReview) return null;
 
   return (
-    <section role="status" aria-label="Wise sync review" className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
-      <h2 className="font-semibold">Wise data refreshed with issues</h2>
+    <div className="space-y-2 text-sm text-muted-foreground">
+      <p className="font-medium text-foreground">Wise data refreshed with issues</p>
       {activeSummary && <p><span className="font-medium">Latest refresh · whole upcoming schedule: </span>{activeSummary}</p>}
       {runSummary && runSummary !== activeSummary && (
         <p><span className="font-medium">Issues recorded with this day’s assignments: </span>{runSummary}</p>
@@ -29,6 +26,6 @@ export function SyncReviewNotice({ detail }: { detail: AssignmentDetail | null }
         <Link href="/data-health" className="underline underline-offset-2">Review in Data Health</Link>
         <Link href="/tutor-profiles" className="underline underline-offset-2">Review Tutor Profiles</Link>
       </div>
-    </section>
+    </div>
   );
 }
