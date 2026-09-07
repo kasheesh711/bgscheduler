@@ -21,30 +21,5 @@
       "Bash(npx shadcn:*)"
     ],
     "disableBypassPermissionsMode": "disable"
-  },
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/sales-dashboard-guard.mjs\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash|Read|Edit|MultiEdit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/sales-dashboard-guard.mjs\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
   }
 }

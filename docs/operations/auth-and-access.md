@@ -6,7 +6,7 @@ Identity comes from **Auth.js v5 (NextAuth)** with a single **Google** OAuth pro
 (`next-auth: 5.0.0-beta.30`, `package.json:53`). There is no password login, no second
 provider, and no database session adapter — the session is a JWT cookie.
 
-This page owns the *model*: the sign-in gate, the JWT claims, the middleware, the fresh
+This page owns the *model*: the sign-in gate, the JWT claims, the Node Proxy, the fresh
 per-feature guards, the `admin_users` allowlist, and the non-session credentials that cron,
 LINE, the parent schedule link, and the OA-resolver extension use instead. Mechanical detail
 lives elsewhere and is linked, not restated:
@@ -23,180 +23,55 @@ lives elsewhere and is linked, not restated:
 
 ## The big picture
 
-Access is decided in four layers, in this order:
+Access has four layers:
 
-1. **Sign-in gate** — the Auth.js `signIn` callback (`src/lib/auth.ts:50-57`) delegates to
-   `resolveUserAccess` (`src/lib/auth-access.ts:56-85`). Node runtime, reads Postgres, runs
-   **once per login**. Returns a role + `allowedPages`, or denies the login outright.
-2. **JWT claims** — the resolved `role` and `allowedPages` are written onto the token
-   (`src/lib/auth.ts:58-67`) and copied onto the session (`src/lib/auth.ts:68-72`). They stay
-   frozen until the user signs out and back in.
-3. **Middleware gate** — `src/middleware.ts` runs for every non-static request: maintenance
-   gate → public-route allowlist → "is there a session?" → page-prefix check against
-   `allowedPages`.
-4. **Per-feature fresh guards** — several features re-resolve authorization from Postgres on
-   **every** request, deliberately not trusting the (possibly stale) JWT claim. See
-   [Layer 4](#layer-4--per-feature-fresh-guards).
+1. **Sign-in** resolves the Google email against current admin, counselor, tutor, and admissions membership records. An existing disabled admin row denies access instead of falling through to another role.
+2. **JWT claims** store the role, page scope, and an admin's `adminAccessVersion` at login. A stale or versionless admin token is never silently upgraded.
+3. **Node Proxy and server authentication** freshly validate the admin row and version for protected requests. A disabled/deleted admin, mismatched version, or database failure denies access. Proxy preserves the maintenance, public-route, and page-scope rules; server `auth()` independently validates callers, including session-based manual-sync fallbacks.
+4. **Per-feature guards** still check their own grants and case memberships from Postgres. Website enable/disable does not replace these checks.
 
 ```mermaid
 flowchart TD
-    A[Incoming request] --> M{"MAINTENANCE_MODE === 'true'<br/>and path not exempt<br/>and email not on bypass list?"}
-    M -- yes --> M503["503 + Retry-After<br/>(JSON under /api, HTML elsewhere)"]
-    M -- no --> B{isPublicRoute?}
-    B -- yes --> Z[NextResponse.next — handler enforces its own credential]
-    B -- no --> C{req.auth present?}
-    C -- no --> D["307 to /login?callbackUrl=path+query"]
-    C -- yes --> P{"isPathAllowed(pathname, allowedPages)"}
-    P -- "no, /api/* path" --> F403["403 {error: Forbidden}"]
-    P -- "no, page path" --> RL["307 to allowedPages[0]"]
-    P -- yes --> E[Route handler / Server Component]
-    E --> G["await auth() — 401 without a session"]
-    G --> H{Feature has a fresh guard?}
-    H -- yes --> I["Re-read grant from Postgres<br/>401 / 403 / notFound"]
-    H -- no --> J[Serve]
-
-    D --> L[/login page/]
-    L --> N["signIn('google') → Google consent"]
-    N --> O["signIn callback (Node)"]
-    O --> Q[activateMembershipsForEmail]
-    Q --> R{"resolveUserAccess(email) !== null?"}
-    R -- no --> S["return false → /login?error=AccessDenied"]
-    R -- yes --> T["store Google OAuth tokens;<br/>mint JWT with role + allowedPages"]
-    T --> E
+    A[Incoming request] --> M{Maintenance gate}
+    M -- blocked --> M503[503]
+    M -- allowed --> P{Public route?}
+    P -- yes --> H[Handler checks its own credential]
+    P -- no --> S{Session present?}
+    S -- no --> L[Login redirect]
+    S -- yes --> V{Current admin status and version valid?}
+    V -- no --> D[Access denied]
+    V -- yes --> R{Page scope permits request?}
+    R -- no --> F[403 or permitted-page redirect]
+    R -- yes --> E[Page or route]
+    E --> C[Server auth independently checks current session]
+    C --> G[Feature-specific grants and role checks]
 ```
 
-Three different questions, answered in three different places:
-
-| Question | Answered by | When | Runtime |
-|---|---|---|---|
-| "May this Google identity exist here at all?" | `resolveUserAccess` inside the `signIn` callback | once, at login | Node |
-| "Is there a valid session, and is this path in your lane?" | `src/middleware.ts` | every request | Edge (see [the split](#the-auth-vs-auth-edge-split)) |
-| "Do you still hold this feature's grant right now?" | per-feature guard (Postgres read) | every request | Node |
-
----
+A website disable takes effect on the **next protected request**. Re-enabling increments the version again and requires a fresh login. It cannot cancel an already-running request or recall downloaded content.
 
 ## Layer 1 — Auth.js configuration
 
-Two NextAuth instances exist, split by runtime. Only the Node one is described here; the edge
-one is covered in [The auth vs auth-edge split](#the-auth-vs-auth-edge-split).
+### Server configuration — `src/lib/auth.ts`
 
-### Node instance — `src/lib/auth.ts`
+Auth.js v5 uses Google with `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, and JWT cookies signed/encrypted through `AUTH_SECRET`. Both sign-in and error pages use `/login`. The Auth.js catch-all at `src/app/api/auth/[...nextauth]/route.ts` exports the configured `GET` and `POST` handlers.
 
-`NextAuth({...})` at `src/lib/auth.ts:32-74` exports `handlers`, `signIn`, `signOut`, `auth`.
+At sign-in, `resolveUserAccess` supplies role, page scope, and the current admin access version. The JWT stores that version once; session projection exposes it as `session.user.adminAccessVersion`. `src/lib/auth-session.ts` validates it against a fresh admin lookup for server `auth()` and Proxy. Existing admin JWTs without the claim are denied, so **all admins need one fresh login after this release**.
 
-- **Provider**: Google, keyed by `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`
-  (`src/lib/auth.ts:34-43`).
-- **Scope**: `openid email profile https://www.googleapis.com/auth/spreadsheets
-  https://www.googleapis.com/auth/drive.file`, with `access_type: "offline"` so Google issues
-  a refresh token (`src/lib/auth.ts:39-40`). The Sheets **write** scope and the per-file
-  Drive scope are requested because the same Google grant is reused for the Sheets/Drive
-  integrations, not merely to identify the user.
-- **Pages**: both `signIn` and `error` point at `/login` (`src/lib/auth.ts:45-48`), so OAuth
-  failures land back on the app's own login screen.
-- **`signIn` callback** (`src/lib/auth.ts:50-57`): runs `signInCallback({ user })`; when it
-  returns `true` **and** the user has an email, it persists the Google OAuth tokens via a
-  lazily imported `storeGoogleOAuthTokenForUser`, then returns the boolean. Returning `false`
-  makes Auth.js abort the login and redirect to `/login?error=AccessDenied`.
-- **`jwt` callback** (`src/lib/auth.ts:58-67`): `user` is only present at sign-in, so
-  `resolveUserAccess` runs once more there and its `allowedPages` + `role` are frozen onto the
-  token. The comment is explicit: "subsequent requests need no DB call". That is the design
-  reason Layer 4 exists.
-- **`session` callback** (`src/lib/auth.ts:68-72`): copies both claims onto `session.user`.
+The claims are declared in `src/types/next-auth.d.ts`. The application still uses JWT cookies rather than a database session adapter; immediate revocation comes from the current-row/version comparison, not token expiration.
 
-The claim shape is declared by module augmentation in `src/types/next-auth.d.ts:25-39`. It
-imports the `UserRole` union from `src/lib/auth-access.ts` so the claim type cannot drift from
-the resolver (`src/types/next-auth.d.ts:10-11, 21`). The file's `JWT` import/re-export is
-load-bearing and documented as such (`src/types/next-auth.d.ts:13-17`).
+### Google integration tokens and preview OAuth
 
-### Session strategy and lifetime
+In production, the provider retains its existing identity, Sheets-write, and per-file Drive scopes, with offline access for the integrations. Successful production sign-in can store encrypted Google credentials through `src/lib/sales-dashboard/google-oauth.ts`.
 
-Neither config sets `session.strategy`, `session.maxAge`, or an `adapter` — neither
-`src/lib/auth.ts` nor `src/lib/auth-edge.ts` contains any of those keys. Auth.js therefore
-applies its defaults: the strategy is `"jwt"` whenever no adapter is configured, and the
-session is idle-expiring rather than server-tracked. Neither file passes a `secret:` option
-either, so Auth.js reads `AUTH_SECRET` from the environment implicitly.
-
-Consequences:
-
-- The middleware can validate a session without a Postgres round-trip, which is what lets it
-  run on the Edge runtime.
-- `role` and `allowedPages` are **sticky**: a promotion, a demotion, or a deleted `admin_users`
-  row takes effect only after sign-out and sign-in. Only the Layer-4 guards read live state.
-
-### NextAuth route handler — `src/app/api/auth/[...nextauth]/route.ts`
-
-The whole file is three lines: `import { handlers } from "@/lib/auth"; export const { GET,
-POST } = handlers;` (`route.ts:1-3`). All of `/api/auth/*` — provider redirect, callback,
-CSRF, session, sign-out — is served by the **Node** instance. The middleware must let
-`/api/auth/*` through unauthenticated because the OAuth handshake happens before any session
-exists.
-
-### Side effect: Google tokens are stored at sign-in
-
-`storeGoogleOAuthTokenForUser` (`src/lib/sales-dashboard/google-oauth.ts:95-139`) upserts a
-`google_oauth_tokens` row keyed by lowercased email. The encryption key is
-`sha256(AUTH_SECRET)` (`google-oauth.ts:41-45`); values are AES-256-GCM with a random 12-byte
-IV and the auth tag stored alongside (`google-oauth.ts:47-58`). A refresh token is never
-overwritten with `null` — when Google omits one on re-consent, the previously stored ciphertext
-is kept (`google-oauth.ts:115-117, 128-130`).
-
-So `AUTH_SECRET` protects **both** the session cookie and every stored refresh token. Rotating
-it signs everyone out *and* invalidates every stored Google token.
-
-Several workspaces call `signIn("google", { callbackUrl: … })` again from inside the app to
-reconnect Google (sales dashboard, leave requests, post-class feedback). That re-runs the same
-`signIn` callback, so the token row is refreshed through the same path.
-
----
+When `VERCEL_ENV=preview` or `PREVIEW_SANDBOX_ENABLED=true`, both Google configurations request only `openid email profile`. Preview sign-in never calls `storeGoogleOAuthTokenForUser`. A separate preview Google client, database, and secrets are still required; scope reduction alone is not isolation. See [the owner preview procedure](./owner-access-runbook.md#maintain-the-isolated-preview).
 
 ## The auth vs auth-edge split
 
-The middleware runs on the Edge runtime, which has no Postgres driver. But the sign-in decision
-and the token write **need** the database. Hence two NextAuth configs that share one cookie.
+The legacy-named `src/lib/auth-edge.ts` remains the lightweight cookie decoder used by the request gate. Public URLs can pass through without querying Postgres. The actual request interception file is now **`src/proxy.ts`**, using the Next.js 16 **Node.js runtime**. It invokes current-session validation for protected requests before authorizing them.
 
-```mermaid
-flowchart LR
-    subgraph Edge["Edge runtime"]
-      MW["src/middleware.ts"] --> EA["src/lib/auth-edge.ts<br/>edgeAuth — pass-through jwt, no DB"]
-    end
-    subgraph Node["Node.js runtime"]
-      RT["route handlers + Server Components"] --> NA["src/lib/auth.ts<br/>auth / handlers / signIn / signOut"]
-      NX["/api/auth/[...nextauth]"] --> NA
-      NA --> AA["src/lib/auth-access.ts<br/>resolveUserAccess"]
-      AA --> DB[("Postgres:<br/>admin_users, admissions_counselors,<br/>admissions_case_members, tutor_contacts")]
-      NA --> GT[("google_oauth_tokens")]
-    end
-    NA -. "mints the JWT cookie (AUTH_SECRET)" .-> EA
-    EA -. "decrypts the same cookie,<br/>exposes req.auth" .-> MW
-```
+Server Components and route handlers use `auth()` from `src/lib/auth.ts`, which applies the same current-session validation independently. A route cannot retain access merely by bypassing the Proxy's page gate. Both configurations share their environment's `AUTH_SECRET`; preview and production must use different secrets.
 
-| | `src/lib/auth-edge.ts` (`edgeAuth`) | `src/lib/auth.ts` (`auth`, `handlers`, `signIn`, `signOut`) |
-|---|---|---|
-| Runtime | Edge | Node.js |
-| Exports | only `auth`, aliased `edgeAuth` (`auth-edge.ts:4`) | `handlers`, `signIn`, `signOut`, `auth` (`auth.ts:32`) |
-| `signIn` callback | **none** — no allowlist lookup | present (`auth.ts:50-57`) |
-| `jwt` callback | pass-through, commented "Edge runtime: no DB access" (`auth-edge.ts:22-26`) | resolves role + allowedPages once at sign-in (`auth.ts:58-67`) |
-| `session` callback | maps token claims onto `session.user` (`auth-edge.ts:27-31`) | same mapping (`auth.ts:68-72`) |
-| Google scope | `…/spreadsheets.readonly` (`auth-edge.ts:11`) | `…/spreadsheets` + `…/drive.file` (`auth.ts:39`) |
-| Imports `auth-access` | never (`src/lib/auth-access.ts:18-19`) | yes (`auth.ts:3`) |
-| Imported by | `src/middleware.ts:1` and its test — **nothing else** in `src/` | 90 of the 158 non-internal `route.ts` files directly, 5 internal sync routes, the Auth.js catch-all, 22 `page.tsx` files plus `(app)/layout.tsx`, and the domain guard modules in `src/lib/*/access.ts` / `api.ts` |
-
-The edge instance is a **stripped-down validator**. It never runs a consent flow and never
-writes anything; it exists so the middleware can decrypt the cookie the Node instance minted
-and read `allowedPages` / `role` off it. Both instances read the same `AUTH_SECRET`, which is
-what makes one cookie readable on both sides.
-
-The **scope divergence** is real in the source. Because only `/api/auth/*` (Node) ever runs the
-consent flow, the narrower edge scope is inert today. Flagged in
-[Open questions](#open-questions).
-
-> **Next.js 16 note.** The repo uses the `middleware.ts` file convention (`src/middleware.ts`,
-> default export at `:69`). Next 16 documents that convention as deprecated and renamed to
-> `proxy.ts` (`node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/proxy.md:11`).
-> The same doc records why the runtime split exists: "Middleware defaults to run at the Edge
-> Runtime" (`proxy.md:743`) whereas "Proxy defaults to using the Node.js runtime"
-> (`proxy.md:219`). A migration to `proxy.ts` would change the runtime this file runs on and
-> would therefore reopen the question of whether `auth-edge.ts` is still needed.
+This replaces the former Edge-only middleware design. The bundled Next.js guide is `node_modules/next/dist/docs/01-app/01-getting-started/16-proxy.md`.
 
 ---
 
@@ -221,14 +96,14 @@ pinned at `:72-88`.
 
 ### `resolveUserAccess` — `src/lib/auth-access.ts:56-85`
 
-Node-only: it does DB work, and the header states the edge config never imports it
-(`src/lib/auth-access.ts:18-19`). The email is trimmed and lowercased first; an empty email
-returns `null` with no lookup (`:60-61`).
+Node-only: it reads current records. The email is trimmed and lowercased first; an empty email returns `null` without a lookup. An admin result includes `adminAccessVersion`; a disabled admin returns `null` before any other role is considered.
 
 ```mermaid
 flowchart TD
     S[normalized email] --> A{admin_users row?}
-    A -- yes --> A1["role: admin<br/>allowedPages = row.allowed_pages<br/>(null = full access)"]
+    A -- yes --> AD{disabled?}
+    AD -- yes --> DENY[Access denied]
+    AD -- no --> A1["role: admin<br/>allowedPages = row.allowed_pages<br/>adminAccessVersion = row.access_version"]
     A -- no --> B{active admissions_counselors row?}
     B -- yes --> B1["role: counselor<br/>allowedPages: ['/admissions']"]
     B -- no --> C{email matches an active tutor_contacts row?}
@@ -271,43 +146,27 @@ An unknown email returns `[]`, which the caller treats as "not a teacher".
 
 ---
 
-## Layer 3 — The middleware gate
+## Layer 3 — The Node Proxy gate
 
-`src/middleware.ts` wraps the edge auth instance (`export default edgeAuth((req) => …)`,
-`:69`) and runs for every request the matcher admits.
-
-### The matcher
+`src/proxy.ts` retains the matcher:
 
 ```ts
-// src/middleware.ts:111-113
 export const config = {
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
 ```
 
-Everything except Next.js static assets and the favicon passes through — pages **and** API
-routes alike.
+Pages and API routes pass through; Next.js static assets and the favicon are excluded. Maintenance keeps its existing order and exemptions. Public routes still delegate their credential checks to their own handlers without a database lookup just to decode a cookie.
 
-### Order of checks
+For a protected route, Proxy requires a session, freshly validates admin state/version, then applies the existing `allowedPages` prefix policy. Invalid admin sessions are denied before they can reach the page/API handler. Session-based manual-sync fallbacks run the independent current-state check through server `auth()`, even though the `/api/internal/*` namespace is public to Proxy for cron authentication.
 
-The handler body (`src/middleware.ts:69-109`) evaluates four things in a fixed order. The
-order is load-bearing and commented in the source.
+Maintenance still gates `/api/line/webhook` intentionally (MAINT-04); the public route allowlist must not bypass that gate.
 
-| # | Check | Outcome | Lines |
-|---|---|---|---|
-| 1 | **Maintenance gate** — `MAINTENANCE_MODE === "true"`, path not exempt, signed-in email not on `MAINTENANCE_BYPASS_EMAILS` | `503` with `Retry-After: 3600`; JSON under `/api/`, an inline-styled HTML page elsewhere | `:76-82`, `src/lib/maintenance.ts:120-134` |
-| 2 | **Public route** — `isPublicRoute(pathname)` | `NextResponse.next()`; no session check, no `allowedPages` check | `:84-86` |
-| 3 | **No session** — `!req.auth` | `307` to `/login` with `callbackUrl=<pathname><search>` | `:89-93` |
-| 4 | **Restricted user off-lane** — `allowedPages` non-null and `!isPathAllowed(...)` | `/api/*` → `403 {"error":"Forbidden"}`; page → `307` to `allowedPages[0]` (guarded against a self-redirect loop) | `:96-106` |
 
-Check 1 sits **above** the public allowlist on purpose (MAINT-04): the allowlist passes
-`/api/line/webhook`, so a gate placed after it would wave the one path maintenance mode is meant
-to close straight through (`src/middleware.ts:72-75`, `src/lib/maintenance.ts:22-27`). The test
-at `src/__tests__/middleware.test.ts:386-395` proves it.
 
 ### What bypasses auth entirely
 
-`isPublicRoute` (`src/middleware.ts:10-26`) matches **nine** patterns. A match returns
+`isPublicRoute` (`src/proxy.ts:10-26`) matches **nine** patterns. A match returns
 `NextResponse.next()` immediately. `/login`, `/api/auth/*`, and `/api/internal/*` are the three
 most often cited, but they are a subset — the full list matters, because six other paths also
 skip the session check.
@@ -327,26 +186,17 @@ skip the session check.
 The OA-resolver regex is anchored (`^…$`), so `…/runs` and `…/runs/{id}/commit` still require
 a session (`src/__tests__/middleware.test.ts:69-87`).
 
-### Unauthenticated, non-public request
+### Unauthenticated or invalid protected request
 
-```ts
-// src/middleware.ts:89-93
-if (!req.auth) {
-  const loginUrl = new URL("/login", req.url);
-  loginUrl.searchParams.set("callbackUrl", `${pathname}${search}`);
-  return NextResponse.redirect(loginUrl);
-}
-```
+A missing session redirects pages to `/login`, retaining the destination in `callbackUrl`. Invalid current-admin state/version denies the protected request rather than refreshing the token. Route handlers using server `auth()` receive no valid session and enforce their existing unauthenticated response.
 
-A `307` to `/login` carrying the full destination — query string included — as `callbackUrl`
-(`src/__tests__/middleware.test.ts:110-117`). This applies to API paths too: an unauthenticated
-`POST /api/admissions/cases` gets the redirect, not a `401` (`middleware.test.ts:276-284`).
-Handlers that want a JSON `401` for unauthenticated callers must therefore sit on the public
-allowlist — which is exactly why `/api/search/assistant` is there.
+An internal route's valid cron secret remains independent of website account state. Its session-based fallback, if offered, must pass fresh server authentication.
+
+
 
 ### Authenticated: the page-prefix check
 
-`isPathAllowed(pathname, allowedPages)` (`src/middleware.ts:36-67`) applies these rules in
+`isPathAllowed(pathname, allowedPages)` (`src/proxy.ts:36-67`) applies these rules in
 source order:
 
 | # | Rule | Result | Line |
@@ -399,9 +249,7 @@ inventory parity only; the middleware reads `process.env` directly. Operating pr
 
 ## Layer 4 — Per-feature fresh guards
 
-Because `role` and `allowedPages` are frozen in the JWT at sign-in, any feature that needs
-**live** grant or revocation re-reads Postgres per request. Where such a guard exists it is
-the authority; the middleware is only a coarse first pass.
+Server authentication now validates current admin state/version and uses the current admin page scope. Features still re-read their own capability grants and memberships per request. Those guards remain the authority for feature-specific rights; Proxy supplies the coarse page gate.
 
 | Feature | Guard | Source of truth per request | Failure mode |
 |---|---|---|---|
@@ -409,7 +257,7 @@ the authority; the middleware is only a coarse first pass.
 | University Admissions | `requireAdmissionsSession` (`src/lib/admissions/access.ts:76-97`) then `requireCaseAccess` (`:117-172`), `requireCounselorOrAdmin` (`:196-219`), or `requireAdmissionsAdmin` (`:234-248`) | `admin_users`, `admissions_cases`, `admissions_case_members`, `admissions_counselors` — "the JWT role claim shapes nav only, never rights" (`:222-226`) | non-admins get `Forbidden`, never `NotFound`, so case existence does not leak (`:141-146`); a deactivated counselor is denied even with an active membership (`:160-167`) |
 | Learning Plans | `requireLearningPlansAccess` (`src/lib/learning-plans/access.ts:149-157`), called by the page and both print-report entry points | `learning_plan_access_grants` (`access.ts:99`) and, for teachers, an active `tutor_contacts` row (`:102-104`); any DB failure returns `false` (`:110-112`) | unauthenticated → `redirect("/login")`; unauthorized → `notFound()` |
 | Post-Class Feedback | `requirePostClassCapability(capability)` (`src/lib/post-class-feedback/access.ts:153-176`) | `post_class_access_grants` joined to `admin_users` on lowercased, trimmed email (`access.ts:136-145`) | `PostClassAccessError` `401` / `403` |
-| Competitor Intelligence | `requireCompetitorIntelligenceSession` (`src/lib/competitor-intelligence/access.ts:19-30`) | JWT only — `hasCompetitorIntelligenceAccess` (`access-policy.ts:3-13`) | any explicit non-admin role fails closed (`access-policy.ts:7`); **not** a fresh DB read |
+| Competitor Intelligence | `requireCompetitorIntelligenceSession` (`src/lib/competitor-intelligence/access.ts:19-30`) | Server-validated session plus `hasCompetitorIntelligenceAccess`; there is no separate feature-grant lookup | any explicit non-admin role fails closed (`access-policy.ts:7`) |
 
 Shared traits:
 
@@ -470,15 +318,14 @@ and a single-lane restricted user straight to their one page.
 
 `admin_users` is defined at `src/lib/db/schema.ts:575-585`: `id` (uuid PK), `email` (text,
 not null), `name` (text, nullable), `allowedPages` (`jsonb`, typed `string[] | null`),
-`createdAt`. A unique index `admin_users_email_idx` enforces one row per email
+`createdAt`, `disabled` (boolean, default `false`), and `accessVersion` (integer, default `0`). A unique index `admin_users_email_idx` enforces one row per email
 (`schema.ts:584`). It was created in the first migration
 (`drizzle/0000_tidy_black_bolt.sql:5, 171`); `allowed_pages` was added by
 `drizzle/0038_cynical_karma.sql:151`. Column-level detail:
 [`../reference/database/index.md`](../reference/database/index.md).
 
 `null` `allowed_pages` = full access. A non-null array = a page-restricted admin
-(`schema.ts:579-581`). There is **no** `active` / `disabled` column — deactivation means
-deleting the row.
+(`schema.ts:579-581`). Disable users through the owner controls; do not delete the row to revoke website access. Each actual toggle increments `access_version` and appends an `admin_user_access_audit_log` row in the same transaction.
 
 ### How rows get there — there is no hardcoded list of full admins
 
@@ -592,24 +439,31 @@ or parent sees the same admin-centric wording. Noted in [Open questions](#open-q
 
 ---
 
+## Owner-only management
+
+`/admin/users` is the **Manage Access** page. Its API accepts only an active admin whose normalized email is in `SUPER_ADMIN_EMAILS`; configure `kevhsh7@gmail.com` as the sole owner. Ordinary admin status or a feature access-manager grant alone is insufficient.
+
+- `GET /api/admin/users` returns `{rows:[{email,name,disabled,accessVersion,isOwner}]}`.
+- `PATCH /api/admin/users` accepts `{email,disabled,expectedVersion}` and returns `{row}`.
+- Configured owner rows cannot be changed through this API. Other targets use a transactional expected-version update and append-only audit; concurrent/stale edits return `409` without a partial update.
+- The actor email comes from the validated session. Feature grants and page scopes are preserved.
+
+The [owner runbook](./owner-access-runbook.md) covers the controls, audit, break-glass recovery, and the **separate** GitHub and Vercel revocation steps. The Unearned Revenue grants remain independent: Aoeng and Waritpariya are viewers; Kevin retains its sole access-manager grant.
+
 ## Environment variables
 
-Validated at startup by `src/lib/env.ts` (Zod `safeParse`; throws and logs only `fieldErrors`).
-Full inventory: [`../reference/env.md`](../reference/env.md).
+See [the environment reference](../reference/env.md#owner-controls-and-collaborator-preview) for the current owner and preview contract. Runtime modules read their required configuration directly; `src/lib/env.ts` is an inventory, not a guaranteed global startup-validation gate.
 
-| Variable | Role in auth | Declared in `env.ts`? | In `.env.example`? |
-|---|---|---|---|
-| `AUTH_GOOGLE_ID` | Google OAuth client ID (`auth.ts:35`, `auth-edge.ts:7`) | required (`env.ts:5`) | yes (`:5`) |
-| `AUTH_GOOGLE_SECRET` | Google OAuth client secret (`auth.ts:36`, `auth-edge.ts:8`) | required (`env.ts:6`) | yes (`:6`) |
-| `AUTH_SECRET` | Read implicitly by Auth.js for the session cookie; also `sha256`'d into the AES-256-GCM key for stored Google tokens (`google-oauth.ts:41-45`) | required (`env.ts:7`) | yes (`:7`) |
-| `CRON_SECRET` | Bearer secret for `/api/internal/*` (`cron-auth.ts:8`) | required (`env.ts:12`) | yes (`:16`) |
-| `LINE_CHANNEL_SECRET` | HMAC key for webhook signature verification | optional (`env.ts:13`) | yes (`:24`) |
-| `MAINTENANCE_MODE` | Engages the maintenance gate on exactly `"true"` | optional, parity only (`env.ts:32`) | yes (`:55`) |
-| `MAINTENANCE_BYPASS_EMAILS` | Comma-separated bypass allowlist, fail-closed | optional, parity only (`env.ts:35`) | yes (`:58`) |
-| `SEED_ADMIN_EMAILS` | Comma-separated full-admin allowlist, read **only** by the seed script (`seed.ts:31`) | **no** | **no** |
-
-`SEED_ADMIN_EMAILS` is seed-time only. At runtime the allowlist source of truth is the
-`admin_users` **table**, never the variable.
+| Variable | Role |
+|---|---|
+| `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET` | Google OAuth client; preview uses a separate identity-only client |
+| `AUTH_SECRET` | Environment-specific JWT cookie and stored-Google-token encryption secret |
+| `SUPER_ADMIN_EMAILS` | Normalized owner list, effective only with an enabled admin row |
+| `PREVIEW_SANDBOX_ENABLED`, `VERCEL_ENV` | Preview policy, identity-only OAuth, skipped token persistence, and preview banner |
+| `CRON_SECRET` | Independent bearer authentication for internal handlers |
+| `LINE_CHANNEL_SECRET` | LINE webhook signature verification |
+| `MAINTENANCE_MODE`, `MAINTENANCE_BYPASS_EMAILS` | Existing maintenance behavior and bypass allowlist |
+| `SEED_ADMIN_EMAILS` | Seed-time admin enrollment only; not the live source of truth |
 
 ---
 
@@ -617,9 +471,12 @@ Full inventory: [`../reference/env.md`](../reference/env.md).
 
 | Area | File | Notes |
 |---|---|---|
-| Sign-in delegation, invite activation ordering, failure isolation, fail-closed denial | `src/lib/auth/__tests__/signin-callback.test.ts` | 7 cases; NextAuth is stubbed, so this tests the callback contract only |
-| Role resolution for all five roles, admin-first and teacher-before-student precedence, empty-email short-circuit | `src/lib/__tests__/auth-access.test.ts` | 9 cases against a chainable fake `db` |
-| Public-route bypass, login redirect + `callbackUrl`, `allowedPages` 403/redirect, learning-plans page-vs-API asymmetry, prefix-not-substring, home-hub rules, admissions lane, maintenance gate on/off/bypass/exempt | `src/__tests__/middleware.test.ts` | 34 `it` / `it.each` blocks (the parameterized ones expand to more executed cases); `edgeAuth` is mocked to a pass-through so `req.auth` is supplied by the test |
+| Sign-in delegation, invite activation, disabled admin denial, preview scopes/token persistence | `src/lib/auth/__tests__/signin-callback.test.ts` | Mocked Auth.js boundary |
+| Role resolution, disabled admin precedence, version claims | `src/lib/__tests__/auth-access.test.ts` | Current admin lookup behavior |
+| Proxy public/maintenance/page rules and current-session denial | `src/__tests__/middleware.test.ts` | The existing test filename is retained after the Proxy migration |
+| Owner authorization, concurrent changes and atomic audit | `src/lib/admin-users/__tests__/` | Includes Postgres integration tests |
+| Owner GET/PATCH validation and denial | `src/app/api/admin/users/__tests__/route.test.ts` | HTTP contract |
+| Preview detection and OAuth policy | `src/lib/__tests__/preview-policy.test.ts` | Production/preview environment matrix |
 | Per-case admissions access and role precedence | `src/lib/admissions/__tests__/access.test.ts` | |
 | Teacher canonical-key bridging | `src/lib/progress-tests/__tests__/teacher-access.test.ts` | |
 | Learning Plans policy + fresh guard | `src/lib/learning-plans/__tests__/` | |
@@ -641,14 +498,8 @@ There is no test for the `src/app/api/auth/[...nextauth]` handler itself (nothin
   that populates full admins. A fresh deployment without it seeds an empty full-admin list; the
   one restricted seed row (`m.giftwan@gmail.com`, `/progress-tests` only) would be the sole
   account able to sign in. Add it to `.env.example`?
-- **`middleware.ts` is a deprecated convention in Next 16.** The shipped docs rename it to
-  `proxy.ts`, which defaults to the Node.js runtime rather than Edge. Migrating would let the
-  gate use the Node auth instance directly and retire `src/lib/auth-edge.ts` — or it would break
-  the Edge assumptions in the middleware. Which is intended?
-- **Scope divergence between the two NextAuth configs.** Node requests `spreadsheets` +
-  `drive.file` (`src/lib/auth.ts:39`); edge requests `spreadsheets.readonly`
-  (`src/lib/auth-edge.ts:11`). Only the Node instance runs the consent flow, so the edge scope is
-  inert. Intentional, or drift?
+
+
 - **`/api/classrooms/floor-plan-map` has no credential at all** — it renders an SVG from a
   user-supplied `rooms` list with a public cache header. Intended, or does it warrant a review?
   Likewise the two OA-resolver token endpoints serve `Access-Control-Allow-Origin: *`.
@@ -659,14 +510,8 @@ There is no test for the `src/app/api/auth/[...nextauth]` handler itself (nothin
   `sync-competitor-intelligence`) and `POST /api/admin/sync-wise` check only that a session
   exists — no role, no `allowedPages`, and the middleware exempts `/api/internal/*` entirely.
   Confirm the intended blast radius for jobs that promote snapshots.
-- **JWT claims are frozen until re-login.** Neither config sets `session.maxAge`, so the Auth.js
-  default idle window applies. Promoting a teacher to admin, or deleting an `admin_users` row,
-  takes effect only at the next sign-in except where a Layer-4 guard reads live state. Is a
-  shorter `maxAge` or a claim-refresh path wanted?
-- **`admin_users` has no `active` flag.** Unlike `admissions_counselors` and `tutor_contacts`,
-  deactivation means deleting the row — which also silently removes the person from watchdog
-  alerts, schedule emails, LINE reviewer pools, and the post-class roles matrix. Soft-disable
-  column?
+
+
 - **Login denial copy is admin-centric.** "Your email is not on the admin allowlist"
   (`src/app/login/page.tsx:27`) is wrong for four of the five roles. Reword?
 - **Cron count drift in comments — RESOLVED 2026-09-02.** `src/lib/maintenance.ts:5` and
@@ -674,4 +519,4 @@ There is no test for the `src/app/api/auth/[...nextauth]` handler itself (nothin
   declared 17; both comments now read 17. The gate exempts all of `/api/internal/` by prefix, so
   behavior was never affected. See [`../reference/crons.md`](../reference/crons.md).
 
-_Verified against main@0cd1e81 (clean tree) on 2026-09-02._
+_Baseline feature inventory: main@0cd1e81, 2026-09-02. Owner/session/preview sections updated for the Aoeng access-controls release on 2026-09-07; live rollout evidence is recorded separately._
