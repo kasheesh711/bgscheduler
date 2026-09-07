@@ -1,0 +1,19 @@
+--- a/begifted_dashboard/package_lots.py
++++ b/begifted_dashboard/package_lots.py
+@@ -95,6 +95,9 @@
+     checks: list[dict[str, Any]]
+     canonical_model: str
+     model_version: str = PACKAGE_MODEL_VERSION
++    # Immutable event allocations reused by the daily report projection.
++    recognitions: pd.DataFrame = field(default_factory=pd.DataFrame)
++    lot_creation_dates: dict[str, date] = field(default_factory=dict)
+
+
+ def _text(value: Any) -> str:
+@@ -2205,4 +2208,6 @@
+         quality=quality,
+         checks=checks,
+         canonical_model=canonical,
++        recognitions=pd.DataFrame(recognitions),
++        lot_creation_dates={str(lot["lot_id"]): lot["created_date"] for lot in lots},
+     )

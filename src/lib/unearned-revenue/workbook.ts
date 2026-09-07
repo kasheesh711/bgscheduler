@@ -212,7 +212,9 @@ export interface ParsedWorkbookContract {
   rowCounts: Record<string, number>;
 }
 
-interface WorkbookParseInput {
+export interface WorkbookParseInput {
+  /** Only the checksum-verified V5 loader may enable values-only parsing. */
+  verifiedValues?: boolean;
   statusStart: unknown[][];
   statusEnd: unknown[][];
   qa: unknown[][];
@@ -377,7 +379,7 @@ function parseStatus(startRows: unknown[][], endRows: unknown[][]): ParsedWorkbo
     throw new UnearnedRevenueWorkbookError("Workbook is not in a QA-passed PUBLISHED state");
   }
   const schemaVersion = integer(requiredStatus(start, "workbook_schema_version"), "workbook_schema_version");
-  if (![2, 3, 4].includes(schemaVersion)) {
+  if (![2, 3, 4, 5].includes(schemaVersion)) {
     throw new UnearnedRevenueWorkbookError(`Unsupported workbook schema version ${schemaVersion}`);
   }
   const canonicalRaw = requiredStatus(start, "canonical_model");
@@ -398,7 +400,7 @@ function parseStatus(startRows: unknown[][], endRows: unknown[][]): ParsedWorkbo
       `Workbook schema V3 must use candidate model ${FIFO_PACKAGE_MODEL_V2}`,
     );
   }
-  if (schemaVersion === 4
+  if (schemaVersion >= 4
     && modelVersion !== FIFO_PACKAGE_MODEL_V3
     && modelVersion !== FIFO_PACKAGE_MODEL) {
     throw new UnearnedRevenueWorkbookError(
@@ -553,6 +555,10 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
     if (Array.isArray(rows)) assertNoFormulaError(rows, label);
   }
   const status = parseStatus(input.statusStart, input.statusEnd);
+  if (status.workbookSchemaVersion === 5 && !input.verifiedValues) {
+    throw new UnearnedRevenueWorkbookError("V5 values require a verified publication manifest");
+  }
+  const requireFormula = status.workbookSchemaVersion < 5;
   assertQa(input.qa);
 
   if (status.workbookSchemaVersion >= 3 && !input.receipts) {
@@ -633,7 +639,7 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
   ]);
   const periods: ParsedWorkbookPeriod[] = periodTable.records.map(({ row, sourceRow }) => {
     for (const column of [3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 18]) {
-      formulaCell(input.periodFormulas, sourceRow, column, "Model Comparison");
+      if (requireFormula) formulaCell(input.periodFormulas, sourceRow, column, "Model Comparison");
     }
     assertLineage(periodTable.get(row, "output_run_id"), periodTable.get(row, "source_fingerprint"), status, "Model Comparison", sourceRow);
     if (text(periodTable.get(row, "canonical_model")) !== status.canonicalModel
@@ -683,7 +689,7 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
   ]);
   const students: ParsedWorkbookStudent[] = studentTable.records.map(({ row, sourceRow }) => {
     for (let column = 7; column <= 17; column += 1) {
-      formulaCell(input.studentFormulas, sourceRow, column, "CALC_Student_Period");
+      if (requireFormula) formulaCell(input.studentFormulas, sourceRow, column, "CALC_Student_Period");
     }
     assertLineage(studentTable.get(row, "output_run_id"), studentTable.get(row, "source_fingerprint"), status, "CALC_Student_Period", sourceRow);
     if (text(studentTable.get(row, "canonical_model")) !== status.canonicalModel
@@ -725,7 +731,7 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
   ]);
   const accounts: ParsedWorkbookAccount[] = accountTable.records.map(({ row, sourceRow }) => {
     for (const column of [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 24, 28]) {
-      formulaCell(input.accountFormulas, sourceRow, column, "CALC_Account_Period");
+      if (requireFormula) formulaCell(input.accountFormulas, sourceRow, column, "CALC_Account_Period");
     }
     assertLineage(accountTable.get(row, "output_run_id"), accountTable.get(row, "source_fingerprint"), status, "CALC_Account_Period", sourceRow);
     if (!text(accountTable.get(row, "account_id")) || !text(accountTable.get(row, "student_id"))) {
@@ -794,7 +800,7 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
   const lotTable = table(input.lots, "CALC_Package_Lot_Period", WORKBOOK_LIMITS.lots, lotRequired);
   const lots: ParsedWorkbookLot[] = lotTable.records.map(({ row, sourceRow }) => {
     for (let column = 22; column <= 27; column += 1) {
-      formulaCell(input.lotFormulas, sourceRow, column, "CALC_Package_Lot_Period");
+      if (requireFormula) formulaCell(input.lotFormulas, sourceRow, column, "CALC_Package_Lot_Period");
     }
     assertLineage(lotTable.get(row, "output_run_id"), lotTable.get(row, "source_fingerprint"), status, "CALC_Package_Lot_Period", sourceRow);
     if (!text(lotTable.get(row, "lot_id"))
@@ -1034,7 +1040,7 @@ export function parseUnearnedRevenueWorkbook(input: WorkbookParseInput): ParsedW
     );
     exactPackages = exactPackageTable.records.map(({ row, sourceRow }) => {
       for (let column = 4; column <= 15; column += 1) {
-        formulaCell(
+        if (requireFormula) formulaCell(
           input.exactPackageFormulas!,
           sourceRow,
           column,

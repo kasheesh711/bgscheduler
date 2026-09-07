@@ -47,10 +47,12 @@ export type UnearnedRevenueMatchConfidence =
   | "COMPLIMENTARY";
 
 export interface TraceAnchor {
-  spreadsheetId: string;
-  sheetId: number;
-  row: number;
-  a1: string;
+  kind?: "published" | "audit";
+  label?: string;
+  spreadsheetId?: string;
+  sheetId?: number;
+  row?: number;
+  a1?: string;
   url: string;
 }
 

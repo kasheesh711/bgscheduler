@@ -1,4 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { gzipSync, gunzipSync } from "node:zlib";
+import { parseValuesPublication, sha256 } from "../publication";
+import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+vi.mock("@/lib/sales-dashboard/google-oauth", () => ({}));
+import { publishBundle } from "../publisher/publish";
+import type { ReportBundle } from "../publisher/layout";
 
 import {
   parseUnearnedRevenueWorkbook,
@@ -507,5 +515,127 @@ describe("unearned revenue workbook contract", () => {
     }
 
     expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/must use candidate model FIFO_PACKAGE_LOT_V3 or FIFO_PACKAGE_LOT_V4/i);
+  });
+});
+
+// V5 uses the same accounting/evidence contract while authenticating computed
+// values with an immutable manifest instead of requiring live Sheets formulas.
+function valuesFixture() {
+  const input = fifoV4Fixture();
+  const tables = JSON.parse(JSON.stringify({
+    "Model Status": input.statusStart, "QA Checks": input.qa, "Model Comparison": input.periods,
+    "CALC_Student_Period": input.students, "CALC_Account_Period": input.accounts,
+    "CALC_Package_Lot_Period": input.lots, "CALC_Exact_Package_Overview": input.exactPackages,
+    "SRC_Wise_Receipt": input.receipts,
+  }).replaceAll(fingerprint, "a".repeat(64))) as Record<string, unknown[][]>;
+  tables["Model Status"].find(row => row[0] === "workbook_schema_version")![1] = 5;
+  tables["Model Status"].push(["evidence_format", "VALIDATED_VALUES", ""]);
+  const checks = ["QA-MODEL-001", "QA-MODEL-002", "QA-LOT-001", "QA-LOT-002", "QA-LOT-003", "QA-LOT-004", "QA-LOT-005", "QA-LOT-006", "QA-DAILY-CREDITS", "QA-DAILY-PERIODS", "QA-DAILY-STUDENTS"];
+  tables["QA Checks"].push(...checks.map(id => [id, "HARD", 0, 0, 0, 1, "PASS", "fixture"]));
+  const bytes = gzipSync(JSON.stringify({ tables, traces: { "Model Comparison:2": { kind: "published", url: "https://docs.google.com/spreadsheets/d/report-id-123/edit#gid=1&range=A6" } } }));
+  const file = { fileId: "values-file-123", sha256: sha256(bytes), bytes: bytes.length };
+  const manifest = {
+    schemaVersion: 5 as const, runId, cutoff: "2026-03-31", sourceFingerprint: "a".repeat(64), revision: "7",
+    generatedAtBangkok: "2026-04-01T00:15:00+07:00", canonicalModel: "LEGACY_ACCOUNT_RATE", modelVersion: "FIFO_PACKAGE_LOT_V4" as const,
+    contract: file, audit: file, folderId: "folder-id-123", rollbackSpreadsheetId: "rollback-id-123",
+    rowCounts: Object.fromEntries(Object.entries(tables).map(([key, rows]) => [key, rows.length - 1])),
+    qa: { hardStatus: "PASS" as const, dailyCount: 31, creditTolerance: 0.001 as const, moneyTolerance: 1 as const, checks },
+    months: [{ month: "2026-03", from: "2026-03-01", to: "2026-03-31", spreadsheetId: "report-id-123", cells: 1000, sha256: "b".repeat(64), overviewSheetId: 1, studentSheetId: 2, packageSheetId: 3 }],
+  };
+  return { manifest, contractBytes: bytes, statusStart: tables["Model Status"], statusEnd: structuredClone(tables["Model Status"]) };
+}
+
+describe("V5 validated values publication", () => {
+  it("imports values without formula tabs and keeps published evidence links", () => {
+    const result = parseValuesPublication(valuesFixture());
+    expect(Number(result.contract.periods[0].closingLiabilityThb)).toBe(100);
+    expect(result.metadata.traces["Model Comparison:2"].kind).toBe("published");
+  });
+  it("rejects altered checksums", () => {
+    const input = valuesFixture(); input.contractBytes[10] ^= 1;
+    expect(() => parseValuesPublication(input)).toThrow(/checksum/);
+  });
+  it("rejects changed publication markers during import", () => {
+    const input = valuesFixture(); input.statusEnd.find(row => row[0] === "run_id")![1] = "other-run";
+    expect(() => parseValuesPublication(input)).toThrow(/mismatch/);
+  });
+  it("rejects incomplete daily archive coverage", () => {
+    const input = valuesFixture(); input.manifest.months[0].from = "2026-03-02";
+    expect(() => parseValuesPublication(input)).toThrow(/coverage/);
+  });
+  it("rejects inconsistent row counts and missing mandatory QA", () => {
+    const input = valuesFixture(); input.manifest.rowCounts["CALC_Student_Period"]++;
+    expect(() => parseValuesPublication(input)).toThrow(/row count/);
+    const missing = valuesFixture(); missing.manifest.qa.checks = [];
+    expect(() => parseValuesPublication(missing)).toThrow();
+  });
+  it("rejects values in the legacy parser without verified manifest provenance", () => {
+    const input = fifoV4Fixture();
+    input.statusStart.find(row => row[0] === "workbook_schema_version")![1] = 5;
+    input.statusEnd.find(row => row[0] === "workbook_schema_version")![1] = 5;
+    expect(() => parseUnearnedRevenueWorkbook(input)).toThrow(/verified|validated/i);
+  });
+});
+
+function publicationHarness() {
+  const fixture = valuesFixture();
+  const tables = JSON.parse(gunzipSync(fixture.contractBytes).toString()).tables;
+  const status = Object.fromEntries(tables["Model Status"].slice(1).map((row: unknown[]) => [row[0], row[1]]));
+  const previousStatus = { run_id: "last-good", published_cutoff: "2026-03-01", publication_revision: "1", source_fingerprint: "c".repeat(64) };
+  const finance = Array.from({ length: 31 }, (_, i) => ({ date: `2026-03-${String(i + 1).padStart(2, "0")}`, liability_thb: 100, student_count: 1 }));
+  const students = finance.map(row => ({ ...row, student_id: "student-1", student_name: "Ada" }));
+  const packages = finance.flatMap(row => [90, 10].map((amount, i) => ({ ...row, liability_thb: amount, student_id: "student-1", student_name: "Ada", account_id: "account-1", class_name: "Math", lot_id: i ? "valuation-1" : "lot-1", package_name: i ? "ส่วนต่างวิธีประเมิน" : "ยอดยกมา", kind: i ? "VALUATION_ADJUSTMENT" : "OPENING", purchase_date: null, transaction_number: "", remaining_credits: i ? null : 1, source_url: "", credit_url: "" })));
+  const bundle: ReportBundle = { schemaVersion: 5, status, tables, reports: { finance, months: { "2026-03": { finance, students, packages } }, qa: [] }, audit: { sources: { manifest: [] }, opening_baselines_to_write: [] }, controlValuesHash: sha256("[]"), previousStatus };
+  let liveRows: unknown[][] = [["field", "value"], ...Object.entries(previousStatus)];
+  let committed = false;
+  let afterCommitTimeout = false;
+  let beforeCommitFailure = false;
+  const files = new Map<string, Buffer>();
+  const legacy = [{ properties: { sheetId: 797927364, title: "Package Control", hidden: false, gridProperties: { rowCount: 20_000, columnCount: 19 } } }, { properties: { sheetId: 2000001001, title: "Model Status", hidden: true, gridProperties: { rowCount: 200, columnCount: 3 } } }];
+  const google = {
+    email: "owner@example.com", pendingAudience: [], share: vi.fn().mockResolvedValue(undefined), ensureFolder: vi.fn().mockResolvedValue("folder-id-123"),
+    values: vi.fn(async (_id: string, range: string) => range.includes("Package Control") ? [] : liveRows),
+    metadata: vi.fn(async (id: string) => ({ spreadsheetId: id, sheets: committed ? [...legacy.map(s => ({ properties: { ...s.properties, hidden: true } })), ...[2000011001, 2000011002, 2000011003].map(sheetId => ({ properties: { sheetId, hidden: false, gridProperties: { rowCount: 100, columnCount: 12 } } }))] : legacy })),
+    createWorkbook: vi.fn().mockResolvedValue("monthly-report-123"), writeTabs: vi.fn().mockResolvedValue(undefined), verifyTabs: vi.fn().mockResolvedValue(undefined),
+    upload: vi.fn(async (_folder: string, _name: string, bytes: Buffer) => { const id = `file-id-${files.size}-123`; files.set(id, bytes); return { id }; }),
+    bytes: vi.fn(async (id: string) => { const result = files.get(id); if (!result) throw new Error("Archive inaccessible"); return result; }),
+    batch: vi.fn(async (_id: string, requests: Array<{ copyPaste?: unknown; updateCells?: { range?: { sheetId: number }; rows: Array<{ values: Array<{ userEnteredValue?: Record<string, unknown> }> }> } }>) => {
+      if (!requests.some(r => r.copyPaste)) return;
+      if (beforeCommitFailure) throw new Error("Atomic commit rejected before mutation");
+      const marker = requests.find(r => r.updateCells?.range?.sheetId === 2000001001)!.updateCells!;
+      liveRows = marker.rows.map((row: { values: Array<{ userEnteredValue?: Record<string, unknown> }> }) => row.values.map(cell => Object.values(cell.userEnteredValue ?? {})[0] ?? ""));
+      committed = true;
+      if (afterCommitTimeout) throw new Error("Network timeout after committed batch");
+    }),
+  };
+  return { bundle, google, files, setBeforeFailure: () => { beforeCommitFailure = true; }, setAfterTimeout: () => { afterCommitTimeout = true; } };
+}
+
+describe("V5 publication retry and failure boundaries", () => {
+  it("recognizes an uncertain successful commit and deduplicates the next run", async () => {
+    const h = publicationHarness(); h.setAfterTimeout();
+    const dir = mkdtempSync(join(tmpdir(), "unearned-test-"));
+    try {
+      const input = { google: h.google as never, bundle: h.bundle, bundleHash: "bundle", spreadsheetId: "main-report-123", rollbackId: "rollback-id-123", statePath: join(dir, "state.json"), commit: true };
+      expect((await publishBundle(input)).status).toBe("published");
+      expect((await publishBundle(input)).status).toBe("unchanged");
+      expect(h.google.batch.mock.calls.filter(([, requests]) => requests.some(r => r.copyPaste))).toHaveLength(1);
+    } finally { rmSync(dir, { recursive: true }); }
+  });
+  it("retains the previous publication if the atomic request is rejected", async () => {
+    const h = publicationHarness(); h.setBeforeFailure();
+    const dir = mkdtempSync(join(tmpdir(), "unearned-test-"));
+    try {
+      await expect(publishBundle({ google: h.google as never, bundle: h.bundle, bundleHash: "bundle", spreadsheetId: "main-report-123", rollbackId: "rollback-id-123", statePath: join(dir, "state.json"), commit: true })).rejects.toThrow(/rejected/);
+      expect(await h.google.values("main-report-123", "Model Status")).toContainEqual(["run_id", "last-good"]);
+    } finally { rmSync(dir, { recursive: true }); }
+  });
+  it("blocks publication when an uploaded archive cannot be read back", async () => {
+    const h = publicationHarness(); h.google.bytes.mockRejectedValue(new Error("Archive inaccessible"));
+    const dir = mkdtempSync(join(tmpdir(), "unearned-test-"));
+    try {
+      await expect(publishBundle({ google: h.google as never, bundle: h.bundle, bundleHash: "bundle", spreadsheetId: "main-report-123", rollbackId: "rollback-id-123", statePath: join(dir, "state.json"), commit: true })).rejects.toThrow(/inaccessible/);
+      expect(h.google.batch).not.toHaveBeenCalled();
+    } finally { rmSync(dir, { recursive: true }); }
   });
 });
