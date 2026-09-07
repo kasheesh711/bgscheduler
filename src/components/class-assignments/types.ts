@@ -59,6 +59,7 @@ export interface ClassroomRow {
 }
 
 export interface AssignmentSnapshotMeta {
+  syncErrorSummary?: string;
   snapshotId: string | null;
   latestSyncFinishedAt: string | null;
   staleAgeMs: number | null;
@@ -89,6 +90,7 @@ export interface AssignmentDetail {
   rows: ClassroomRow[];
   rooms: ClassroomRoom[];
   snapshotMeta: AssignmentSnapshotMeta;
+  activeSnapshotMeta: AssignmentSnapshotMeta;
   liveRoomBlocks: AssignmentLiveRoomBlock[];
   roomConflictWarnings: AssignmentRoomConflictWarning[];
 }

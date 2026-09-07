@@ -20,6 +20,7 @@ interface SyncGuardResult {
 }
 
 interface SkippedSyncResult {
+  outcome: "running";
   success: true;
   skipped: true;
   alreadyRunning: true;
@@ -122,6 +123,7 @@ function skippedSyncResult(
   staleRunningSyncsFailed: number,
 ): SkippedSyncResult {
   return {
+    outcome: "running",
     success: true,
     skipped: true,
     alreadyRunning: true,
@@ -139,7 +141,7 @@ function skippedSyncResult(
   };
 }
 
-export async function runWiseSyncRequest() {
+async function performWiseSyncRequest() {
   const db = getDb();
   const client = createWiseClient();
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
@@ -154,14 +156,29 @@ export async function runWiseSyncRequest() {
   });
   const body = {
     ...result,
+    // Promotion proves that usable data was committed. `success` retains its
+    // stricter meaning so review issues still reach the existing audit alerts.
+    outcome: !result.promotedSnapshotId ? "failed" : result.success && !result.errorSummary ? "success" : "partial",
     staleRunningSyncsFailed: guard.staleRunningSyncsFailed,
   };
 
-  if (result.success || result.promotedSnapshotId) {
+  if (result.promotedSnapshotId) {
     revalidateTag("snapshot", { expire: 0 });
   }
 
   return NextResponse.json(body, {
-    status: result.success ? 200 : 500,
+    status: result.promotedSnapshotId ? 200 : 500,
   });
+}
+
+export async function runWiseSyncRequest() {
+  try {
+    return await performWiseSyncRequest();
+  } catch (error) {
+    return NextResponse.json({
+      outcome: "failed",
+      success: false,
+      error: error instanceof Error ? error.message : "Wise sync failed before a usable snapshot was confirmed.",
+    }, { status: 500 });
+  }
 }

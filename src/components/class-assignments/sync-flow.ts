@@ -4,6 +4,7 @@ export const ASSIGNMENT_SYNC_POLL_INTERVAL_MS = 5_000;
 export const ASSIGNMENT_SYNC_POLL_TIMEOUT_MS = 12 * 60 * 1000;
 
 export interface WiseSyncResult {
+  outcome?: "success" | "partial" | "failed" | "running";
   success?: boolean;
   skipped?: boolean;
   alreadyRunning?: boolean;
@@ -34,17 +35,28 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 }
 
-async function parseJsonResponse<T>(response: Response): Promise<T> {
-  const text = await response.text();
-  return (text ? JSON.parse(text) : {}) as T;
+async function parseJsonResponse(response: Response): Promise<Record<string, unknown>> {
+  try {
+    const body: unknown = await response.json();
+    return body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function responseError(body: WiseSyncResult, fallback: string): Error {
+  for (const message of [body.errorSummary, body.error]) {
+    if (typeof message === "string" && message.trim()) return new Error(message);
+  }
+  return new Error(fallback);
 }
 
 function syncError(syncBody: WiseSyncResult, response: Response): Error {
-  return new Error(syncBody.error || `Wise sync failed with HTTP ${response.status}`);
+  return responseError(syncBody, `Wise sync failed with HTTP ${response.status}`);
 }
 
 function noPromotionError(syncBody: WiseSyncResult): Error {
-  return new Error(syncBody.errorSummary || "Wise sync did not promote a fresh snapshot.");
+  return responseError(syncBody, "Wise sync did not promote a fresh snapshot.");
 }
 
 function parseRequiredTimestamp(value: string | undefined): number {
@@ -56,8 +68,9 @@ function parseRequiredTimestamp(value: string | undefined): number {
 }
 
 function isFreshSnapshotAfterRunningSync(detail: AssignmentDetail, runningStartedAtMs: number): boolean {
-  const finishedAt = Date.parse(detail.snapshotMeta.latestSyncFinishedAt ?? "");
-  return detail.snapshotMeta.fresh && Number.isFinite(finishedAt) && finishedAt >= runningStartedAtMs;
+  const meta = detail.activeSnapshotMeta;
+  const finishedAt = Date.parse(meta.latestSyncFinishedAt ?? "");
+  return Boolean(meta.snapshotId) && meta.fresh && Number.isFinite(finishedAt) && finishedAt >= runningStartedAtMs;
 }
 
 export async function fetchAssignmentDetail(
@@ -65,11 +78,24 @@ export async function fetchAssignmentDetail(
   fetcher: typeof fetch = fetch,
 ): Promise<AssignmentDetail> {
   const response = await fetcher(`/api/class-assignments?date=${encodeURIComponent(date)}`);
-  const body = await parseJsonResponse<AssignmentDetail | { error?: string }>(response);
+  return readAssignmentDetailResponse(response);
+}
+
+export async function readAssignmentDetailResponse(response: Response): Promise<AssignmentDetail> {
+  const body = await parseJsonResponse(response);
   if (!response.ok) {
-    throw new Error("error" in body ? body.error : `HTTP ${response.status}`);
+    throw responseError(body, `Unable to load classroom assignments (HTTP ${response.status}).`);
   }
-  return body as AssignmentDetail;
+  const meta = body.activeSnapshotMeta;
+  if (!meta || typeof meta !== "object" || !("fresh" in meta) || typeof meta.fresh !== "boolean"
+    || !("snapshotId" in meta) || (meta.snapshotId !== null && typeof meta.snapshotId !== "string")
+    || !("latestSyncFinishedAt" in meta) || (meta.latestSyncFinishedAt !== null && typeof meta.latestSyncFinishedAt !== "string")
+    || !Array.isArray(body.rows) || !Array.isArray(body.rooms) || !Array.isArray(body.liveRoomBlocks)
+    || !Array.isArray(body.roomConflictWarnings) || !body.snapshotMeta
+    || (body.run !== null && (!body.run || typeof body.run !== "object"))) {
+    throw new Error("Unable to read the current Wise snapshot. Refresh the page and try again.");
+  }
+  return body as unknown as AssignmentDetail;
 }
 
 export async function waitForFreshAssignmentSnapshot(input: {
@@ -108,7 +134,7 @@ export async function syncWiseBeforeAssignment(
 ): Promise<SyncWiseBeforeAssignmentResult> {
   const fetcher = input.fetcher ?? fetch;
   const syncResponse = await fetcher("/api/admin/sync-wise", { method: "POST" });
-  const syncBody = await parseJsonResponse<WiseSyncResult>(syncResponse);
+  const syncBody = await parseJsonResponse(syncResponse) as WiseSyncResult;
 
   if (!syncResponse.ok) {
     throw syncError(syncBody, syncResponse);
@@ -129,7 +155,7 @@ export async function syncWiseBeforeAssignment(
     return { sync: syncBody, waitedForRunningSync: true, latestDetail };
   }
 
-  if (!syncBody.success || !syncBody.promotedSnapshotId) {
+  if (syncBody.outcome === "failed" || typeof syncBody.promotedSnapshotId !== "string" || !syncBody.promotedSnapshotId.trim()) {
     throw noPromotionError(syncBody);
   }
 

@@ -112,13 +112,14 @@ The full Wise ETL: fetch → normalize → persist → validate → atomically p
 1. Fails any `sync_runs` row still `running` after 20 minutes (`STALE_RUNNING_SYNC_MS`, [`:10`](../../../src/lib/sync/run-wise-sync.ts)), stamping a fixed `errorSummary` ([`:39-40`](../../../src/lib/sync/run-wise-sync.ts)).
 2. Single-flight guard: if a `running` row survives, returns the skip payload instead of starting ([`:88-118`](../../../src/lib/sync/run-wise-sync.ts)). A `23505` unique violation on insert is treated as the same condition.
 3. Otherwise inserts a `running` row and calls `runFullSync` ([`orchestrator.ts`](../../../src/lib/sync/orchestrator.ts)), which rewrites the snapshot-scoped tutor tables and promotes the candidate snapshot.
-4. On success only, calls `revalidateTag("snapshot", { expire: 0 })` ([`run-wise-sync.ts:160-162`](../../../src/lib/sync/run-wise-sync.ts)) so the cached data layer re-reads.
+4. After promotion, including a partial refresh with review issues, calls `revalidateTag("snapshot", { expire: 0 })` so the cached data layer re-reads.
 
-**Response `200` / `500`** — the `SyncResult` ([`orchestrator.ts:22-32`](../../../src/lib/sync/orchestrator.ts)) plus one added field:
+**Response `200` / `500`** — the `SyncResult` plus the request outcome and stale-run cleanup count. This contract is also used by authenticated `POST /api/admin/sync-wise`:
 
 | Key | Type |
 |---|---|
 | `success` | `boolean` |
+| `outcome` | `"success" \| "partial" \| "failed"`; `"running"` on the 202 skip response |
 | `syncRunId` | `string` |
 | `snapshotId` | `string \| null` |
 | `promotedSnapshotId` | `string \| null` |
@@ -129,7 +130,9 @@ The full Wise ETL: fetch → normalize → persist → validate → atomically p
 
 **Response `202`** — the skip payload ([`:120-140`](../../../src/lib/sync/run-wise-sync.ts)): the same key set with `skipped: true`, `alreadyRunning: true`, zeroed counts, plus `message` and `runningStartedAt` (ISO). The audit records this as `skipped`.
 
-**Status codes:** `200` success · `202` already running · `401` bad/missing secret and (on `POST`) no session · `500` `CRON_SECRET` unset, or `result.success === false` ([`:164-166`](../../../src/lib/sync/run-wise-sync.ts)).
+**Status codes:** `200` usable promoted snapshot (`success` or `partial` outcome) · `202` already running · `401` bad/missing secret and (on `POST`) no session · `500` no promoted snapshot, setup/worker exception, or `CRON_SECRET` unset. A rejected promotion returns 500 even if the worker's legacy `success` field is true. Setup/worker exceptions return `{ outcome: "failed", success: false, error }`; the existing authentication/configuration guards retain their own error shape.
+
+`success` retains its existing strict meaning. A partial result may therefore return HTTP 200 with `success: false`, a non-null `promotedSnapshotId`, and an `errorSummary` explaining review issues. Consumers may continue from the promoted data while preserving that warning. The sync ledger and invocation audit still flag review issues, so Data Health/watchdog alerts are not cleared by the HTTP status change.
 
 ---
 

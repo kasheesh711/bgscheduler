@@ -109,7 +109,7 @@ function determineOutcome(status: number, body: unknown): CronInvocationOutcome 
   if (isRecord(body)) {
     const message = `${stringValue(body.error) ?? ""} ${stringValue(body.message) ?? ""}`.toLowerCase();
     if (body.skipped === true || message.includes("already running")) return "skipped";
-    if (body.ok === false || body.success === false) return "failed";
+    if (body.ok === false || body.success === false || body.outcome === "partial" || body.outcome === "failed") return "failed";
   }
   if (status === 202) return "skipped";
   if (status >= 400) return "failed";

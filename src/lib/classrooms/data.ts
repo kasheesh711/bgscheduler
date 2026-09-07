@@ -52,6 +52,7 @@ export interface ClassroomAssignmentDetail {
   rows: ClassroomRow[];
   rooms: ClassroomRoom[];
   snapshotMeta: ClassroomSnapshotMeta;
+  activeSnapshotMeta: ClassroomSnapshotMeta;
   liveRoomBlocks: LiveRoomBlock[];
   roomConflictWarnings: RoomConflictWarning[];
 }
@@ -559,7 +560,10 @@ async function loadClassroomSnapshotMeta(
   snapshotId?: string,
   now = new Date(),
 ): Promise<ClassroomSnapshotMeta> {
-  const snapshot = snapshotId ? await loadSnapshotById(db, snapshotId) : await getActiveSnapshot(db);
+  const snapshot = snapshotId
+    ? await loadSnapshotById(db, snapshotId)
+    : (await db.select({ id: schema.snapshots.id, createdAt: schema.snapshots.createdAt })
+      .from(schema.snapshots).where(eq(schema.snapshots.active, true)).limit(1))[0];
   if (!snapshot) {
     return {
       snapshotId: snapshotId ?? null,
@@ -579,6 +583,17 @@ async function loadClassroomSnapshotMeta(
     staleAgeMs,
     fresh: staleAgeMs !== null && staleAgeMs <= CLASSROOM_ASSIGNMENT_FRESHNESS_MS,
   };
+}
+
+async function loadClassroomSnapshotMetas(
+  db: Database,
+  savedSnapshotId?: string,
+): Promise<Pick<ClassroomAssignmentDetail, "snapshotMeta" | "activeSnapshotMeta">> {
+  const activeSnapshotMeta = await loadClassroomSnapshotMeta(db);
+  const snapshotMeta = savedSnapshotId && savedSnapshotId !== activeSnapshotMeta.snapshotId
+    ? await loadClassroomSnapshotMeta(db, savedSnapshotId)
+    : activeSnapshotMeta;
+  return { snapshotMeta, activeSnapshotMeta };
 }
 
 async function assertFreshClassroomSnapshot(db: Database, snapshotId: string): Promise<ClassroomSnapshotMeta> {
@@ -711,13 +726,12 @@ export async function getClassroomAssignmentForDate(
   assertIsoDate(date);
   const rooms = await listClassroomRooms(db);
   const run = await loadLatestRunForDate(db, date);
+  const metas = await loadClassroomSnapshotMetas(db, run?.snapshotId);
   if (!run) {
-    const snapshotMeta = await loadClassroomSnapshotMeta(db);
-    return { run: null, rows: [], rooms, snapshotMeta, liveRoomBlocks: [], roomConflictWarnings: [] };
+    return { run: null, rows: [], rooms, ...metas, liveRoomBlocks: [], roomConflictWarnings: [] };
   }
   const rows = await loadRowsForRun(db, run.id);
-  const snapshotMeta = await loadClassroomSnapshotMeta(db, run.snapshotId);
-  return { run, rows, rooms, snapshotMeta, liveRoomBlocks: [], roomConflictWarnings: [] };
+  return { run, rows, rooms, ...metas, liveRoomBlocks: [], roomConflictWarnings: [] };
 }
 
 async function loadAssignmentSessions(
@@ -1002,6 +1016,7 @@ export async function runIncrementalClassroomAssignment(
     rows,
     rooms,
     snapshotMeta,
+    activeSnapshotMeta: await loadClassroomSnapshotMeta(db),
     liveRoomBlocks: externalBlocks,
     roomConflictWarnings: buildRoomConflictWarnings(rows, externalBlocks, (assignedRoom) => assignedRoom),
     events: reconciliation.events,
@@ -1132,8 +1147,8 @@ export async function updateClassroomAssignmentOverride(
     .limit(1);
   const rows = await loadRowsForRun(db, input.runId);
   const nextRun = freshRun ?? run;
-  const snapshotMeta = await loadClassroomSnapshotMeta(db, nextRun.snapshotId);
-  return { run: nextRun, rows, rooms, snapshotMeta, liveRoomBlocks: [], roomConflictWarnings: [] };
+  const metas = await loadClassroomSnapshotMetas(db, nextRun.snapshotId);
+  return { run: nextRun, rows, rooms, ...metas, liveRoomBlocks: [], roomConflictWarnings: [] };
 }
 
 function createWiseClientFromEnv(): WiseClient {
@@ -1880,8 +1895,8 @@ export async function getClassroomAssignmentByRunId(
     .limit(1);
   if (!run) throw new Error("Assignment run not found");
   const rows = await loadRowsForRun(db, runId);
-  const snapshotMeta = await loadClassroomSnapshotMeta(db, run.snapshotId);
-  return { run, rows, rooms, snapshotMeta, liveRoomBlocks: [], roomConflictWarnings: [] };
+  const metas = await loadClassroomSnapshotMetas(db, run.snapshotId);
+  return { run, rows, rooms, ...metas, liveRoomBlocks: [], roomConflictWarnings: [] };
 }
 
 export async function getTeacherScheduleForRun(

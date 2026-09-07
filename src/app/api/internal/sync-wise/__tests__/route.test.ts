@@ -233,6 +233,14 @@ describe("GET/POST /api/internal/sync-wise", () => {
     expect(revalidateTag).not.toHaveBeenCalled();
   });
 
+  it("allows a promoted snapshot with review warnings through the same cron response contract", async () => {
+    vi.mocked(runFullSync).mockResolvedValue({ ...successResult, success: false, errorSummary: "Teacher contact needs review" });
+    const res = await GET(makeRequest("test-secret", "GET"));
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ outcome: "partial", success: false, promotedSnapshotId: "snap-1", errorSummary: "Teacher contact needs review" });
+    expect(revalidateTag).toHaveBeenCalledWith("snapshot", { expire: 0 });
+  });
+
   it("applies the same CRON_SECRET gate to GET", async () => {
     const res = await GET(makeRequest("test-secret", "GET"));
 

@@ -290,11 +290,13 @@ The session-authenticated twin of the `CRON_SECRET`-guarded `GET/POST /api/inter
 
 | Code | Body |
 |---|---|
-| 200 | The full `runFullSync` result plus `staleRunningSyncsFailed`, after `revalidateTag("snapshot", { expire: 0 })`. |
+| 200 | A promoted snapshot: the full `runFullSync` result plus `outcome: "success" | "partial"` and `staleRunningSyncsFailed`, after cache revalidation. Partial refreshes retain `success: false` and `errorSummary` for operational review while allowing assignment generation. |
 | 202 | The single-flight skip payload — `{ success: true, skipped: true, alreadyRunning: true, syncRunId, runningStartedAt, message: "Wise sync is already running. Data will refresh when that run finishes.", … }` ([`run-wise-sync.ts:120-140`](../../../src/lib/sync/run-wise-sync.ts)). The caller in `sync-flow.ts` depends on this exact shape: it reads `runningStartedAt` and polls for a fresh snapshot instead of erroring. |
 | 401 | No session ([`route.ts:11-13`](../../../src/app/api/admin/sync-wise/route.ts)). |
-| 500 | The same result body when `result.success` is false — the previously active snapshot is preserved, and the cache tag is **not** swept. |
-| 500 | `{"error": <message>}` if the handler throws outright; the audit wrapper converts the throw into a response rather than letting it escape ([`cron-audit.ts:200-205`](../../../src/lib/data-health/cron-audit.ts)). |
+| 500 | The result with `outcome: "failed"` when no snapshot was promoted; the cache tag is not swept. |
+| 500 | `{ outcome: "failed", success: false, error }` for a setup/worker exception. |
+
+The 202 response also includes `outcome: "running"`. The full shared contract is documented in [Wise snapshot sync](./internal-crons.md#wise-snapshot-sync). Partial outcomes remain flagged in the invocation audit and Data Health. The classroom client polls `activeSnapshotMeta`, displays the review summary persistently, and distinguishes the whole upcoming schedule from exclusions on the selected day.
 
 Before claiming the guard, `acquireSyncRun` reaps any `running` sync run older than `STALE_RUNNING_SYNC_MS` (20 minutes) and reports how many it failed as `staleRunningSyncsFailed` ([`run-wise-sync.ts:10,55-61`](../../../src/lib/sync/run-wise-sync.ts)).
 

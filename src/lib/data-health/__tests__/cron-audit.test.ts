@@ -1,8 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
+vi.mock("@/lib/db", () => ({ getDb: vi.fn() }));
 
-import { buildResponseDigest } from "../cron-audit";
+import { getDb } from "@/lib/db";
+import { buildResponseDigest, withCronInvocationAudit } from "../cron-audit";
+
+it.each([true, false])("keeps partial syncs visible to alerts despite HTTP 200 (success=%s)", async success => {
+  const updates: Record<string, unknown>[] = [];
+  vi.mocked(getDb).mockReturnValue({
+    insert: () => ({ values: () => ({ returning: async () => [{ id: "invocation-1" }] }) }),
+    update: () => ({ set: (value: Record<string, unknown>) => { updates.push(value); return { where: async () => [] }; } }),
+  } as never);
+  const response = await withCronInvocationAudit({ jobKey: "wise_snapshot", triggerSource: "admin" }, async () => Response.json({
+    success, outcome: "partial", promotedSnapshotId: "snapshot-1", errorSummary: "Teacher contact needs review",
+  }));
+  expect(response.status).toBe(200);
+  expect(updates).toEqual([expect.objectContaining({ outcome: "failed", responseStatus: 200, errorSummary: "Teacher contact needs review" })]);
+});
 
 describe("buildResponseDigest", () => {
   it("keeps top-level scalars verbatim", () => {

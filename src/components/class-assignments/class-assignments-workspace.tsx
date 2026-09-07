@@ -42,7 +42,8 @@ import { AssignmentTimelineControls } from "./assignment-timeline-controls";
 import { FloorPlanOccupancy } from "./floor-plan-occupancy";
 import { RoomCalendarView } from "./room-calendar-view";
 import { RoomOccupancyHeatmap } from "./room-occupancy-heatmap";
-import { syncWiseBeforeAssignment } from "./sync-flow";
+import { readAssignmentDetailResponse, syncWiseBeforeAssignment } from "./sync-flow";
+import { SyncReviewNotice } from "./sync-review-notice";
 import type { AssignmentDetail, ClassroomRow } from "./types";
 
 const NO_ROOM_AVAILABLE = "NO_ROOM_AVAILABLE";
@@ -251,9 +252,7 @@ export function ClassAssignmentsWorkspace() {
     setError(null);
     try {
       const response = await fetch(`/api/class-assignments?date=${encodeURIComponent(targetDate)}`);
-      const body = (await response.json()) as AssignmentDetail | { error?: string };
-      if (!response.ok) throw new Error("error" in body ? body.error : `HTTP ${response.status}`);
-      setDetail(body as AssignmentDetail);
+      setDetail(await readAssignmentDetailResponse(response));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load assignments");
     } finally {
@@ -397,10 +396,9 @@ export function ClassAssignmentsWorkspace() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ date, forceReassign }),
       });
-      const body = (await response.json()) as AssignmentDetail | { error?: string };
-      if (!response.ok) throw new Error("error" in body ? body.error : `HTTP ${response.status}`);
-      setDetail(body as AssignmentDetail);
-      const liveBlockCount = (body as AssignmentDetail).liveRoomBlocks.length;
+      const body = await readAssignmentDetailResponse(response);
+      setDetail(body);
+      const liveBlockCount = body.liveRoomBlocks.length;
       setMessage(
         liveBlockCount > 0
           ? `Assignments generated from fresh Wise data. ${liveBlockCount} live Wise room blockers were reserved.`
@@ -636,7 +634,7 @@ export function ClassAssignmentsWorkspace() {
       : runStep === "assigning"
         ? "Generating"
         : "Sync Wise, then run";
-  const snapshotMeta = detail?.snapshotMeta ?? null;
+  const snapshotMeta = detail?.activeSnapshotMeta ?? detail?.snapshotMeta ?? null;
   const liveRoomBlocks = detail?.liveRoomBlocks ?? [];
   const roomConflictWarnings = detail?.roomConflictWarnings ?? [];
 
@@ -725,6 +723,8 @@ export function ClassAssignmentsWorkspace() {
           {error || message}
         </div>
       )}
+
+      <SyncReviewNotice detail={detail} />
 
       {snapshotMeta && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm">

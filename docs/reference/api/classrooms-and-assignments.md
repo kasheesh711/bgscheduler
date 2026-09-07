@@ -45,7 +45,8 @@ Four responses return the same `ClassroomAssignmentDetail` object ([`data.ts:45-
 | `run` | `classroom_assignment_runs` row \| `null` | The run in question; `null` only on the date read when no run exists yet ([`data.ts:702-705`](../../../src/lib/classrooms/data.ts)). |
 | `rows` | `classroom_assignment_rows[]` | Rows for that run, ordered by `startTime` then `tutorDisplayName` ([`data.ts:598-607`](../../../src/lib/classrooms/data.ts)). |
 | `rooms` | `classroom_rooms[]` | The full room catalog, ordered by `sortOrder` then `name` ([`data.ts:490-496`](../../../src/lib/classrooms/data.ts)). |
-| `snapshotMeta` | object | `{ snapshotId, latestSyncFinishedAt, staleAgeMs, fresh }` ([`data.ts:54-59`](../../../src/lib/classrooms/data.ts)). `fresh` is `staleAgeMs !== null && staleAgeMs <= 15 min` (`CLASSROOM_ASSIGNMENT_FRESHNESS_MS`, [`data.ts:134`](../../../src/lib/classrooms/data.ts)), measured from the newest `sync_runs` row with `status = "success"` whose `promotedSnapshotId` is this snapshot ([`data.ts:528-570`](../../../src/lib/classrooms/data.ts)). |
+| `snapshotMeta` | object | `{ snapshotId, latestSyncFinishedAt, staleAgeMs, fresh, syncErrorSummary? }` for the saved run's snapshot (or the active snapshot when no run exists). Freshness is at most 15 minutes from a completed `success` **or `failed`** sync that actually promoted this snapshot. `syncErrorSummary` preserves review issues after a partial refresh. |
+| `activeSnapshotMeta` | object | Same shape, always describing the current active Wise snapshot. Used by concurrent-sync polling and the current freshness strip; an older saved run never substitutes for it. With no active snapshot, `snapshotId` and timestamps are null and `fresh` is false. |
 | `liveRoomBlocks` | `LiveRoomBlock[]` | Blocking live Wise sessions for the date that are **not** part of this run: an external room block plus `{ wiseClassId, sessionType, wiseStatus }` ([`data.ts:66-70`](../../../src/lib/classrooms/data.ts)). Hard-coded `[]` on every path except `POST /api/class-assignments/run` ([`data.ts:704,708,1148,1877`](../../../src/lib/classrooms/data.ts)). |
 | `roomConflictWarnings` | `RoomConflictWarning[]` | `{ wiseSessionId, assignedRoom, desiredLocation, message, blocker }` ([`data.ts:72-78`](../../../src/lib/classrooms/data.ts)); likewise `[]` except on the run endpoint. |
 
@@ -78,7 +79,7 @@ Reads the latest assignment run for one Bangkok date. Handler: [`route.ts:9-28`]
 | 200 | Detail returned, including the empty-run shape. |
 | 400 | `date` missing, or a thrown message starting with `Invalid date` ([`route.ts:25`](../../../src/app/api/class-assignments/route.ts)). |
 | 401 | No session. |
-| 500 | Any other throw — notably `No active Wise snapshot found` when the date has no run and no snapshot is active ([`data.ts:509-517`](../../../src/lib/classrooms/data.ts)). |
+| 500 | Database/read failure. A missing active snapshot is represented by non-fresh metadata; saved assignments remain readable. |
 
 ---
 

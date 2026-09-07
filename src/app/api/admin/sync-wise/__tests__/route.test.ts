@@ -105,6 +105,7 @@ describe("POST /api/admin/sync-wise", () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
       success: true,
+      outcome: "success",
       syncRunId: "run-1",
       promotedSnapshotId: "snap-1",
     });
@@ -122,9 +123,35 @@ describe("POST /api/admin/sync-wise", () => {
     expect(res.status).toBe(500);
     await expect(res.json()).resolves.toMatchObject({
       success: false,
+      outcome: "failed",
       errorSummary: "Wise failed",
     });
     expect(revalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("returns partial success after promotion while retaining the detailed review issues", async () => {
+    const errorSummary = "1 teacher contact needs review; 10 sessions reference an absent teacher";
+    vi.mocked(runFullSync).mockResolvedValue({ ...successResult, success: false, errorSummary });
+    const res = await POST();
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ outcome: "partial", success: false, promotedSnapshotId: "snap-1", errorSummary });
+    expect(revalidateTag).toHaveBeenCalledWith("snapshot", { expire: 0 });
+  });
+
+  it("fails closed when a nominally successful sync did not promote", async () => {
+    vi.mocked(runFullSync).mockResolvedValue({ ...successResult, promotedSnapshotId: null });
+    const res = await POST();
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toMatchObject({ outcome: "failed", promotedSnapshotId: null });
+    expect(revalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("returns a failed outcome for a thrown setup or worker error", async () => {
+    vi.mocked(createWiseClient).mockImplementation(() => { throw new Error("Wise credentials are missing"); });
+    const res = await POST();
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toMatchObject({ outcome: "failed", success: false, error: "Wise credentials are missing" });
+    expect(runFullSync).not.toHaveBeenCalled();
   });
 
   it("returns 202 when a sync is already running", async () => {
@@ -137,6 +164,7 @@ describe("POST /api/admin/sync-wise", () => {
     expect(res.status).toBe(202);
     await expect(res.json()).resolves.toMatchObject({
       skipped: true,
+      outcome: "running",
       alreadyRunning: true,
       syncRunId: "running-1",
     });
