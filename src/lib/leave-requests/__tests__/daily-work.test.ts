@@ -88,6 +88,9 @@ describe("automatic interpretation", () => {
     expect(validateInterpretation({ ...value, disposition: "duplicate", completion: [] }, source).disposition).toBe("duplicate");
     expect(() => validateInterpretation({ ...value, windows: [{ ...value.windows[0], startDate: "2026-02-31" }] }, source)).toThrow();
     expect(() => validateInterpretation({ ...value, completion: [{ ...value.completion[0], evidence: "Made up" }] }, source)).toThrow();
+    const wrapped = validateInterpretation({ ...value, completion: [{ ...value.completion[0], evidence: `“${value.completion[0].evidence}”` }] }, source);
+    expect(wrapped.completion[0].evidence).toBe(value.completion[0].evidence);
+    expect(() => validateInterpretation({ ...value, completion: [{ ...value.completion[0], evidence: '"Made up"' }] }, source)).toThrow();
   });
 });
 
