@@ -25,7 +25,7 @@ The client refreshes every 30 seconds while visible and on window focus. One mai
 
 The source sheet defaults to `109o2vbmxlJ-l2U18Rs_WrjD7TMF5b6h__GiNkkQIfS8`, tab `Form Responses 1`; the roster defaults to `1dacHgICN6YgH-guVV1maN5H3KtMSheKyCsmy708jwOs`.
 
-New and meaningfully changed submissions enter persistent normalization revisions. The Responses API uses **`gpt-6-astra`**, `reasoning.effort: "medium"`, strict structured output, and `store: false`. Leave Requests owns its model configuration; the scheduler's configuration is unaffected. Input includes relevant form fields, canonical sheet dates, and human-written Status notes. Interpretation supports Thai/English, multiple daily time intervals, full-day corrections, duplicate/withdrawn submissions, and date-specific completion evidence. Valid results apply automatically. There is no approval or review stage. Invalid output becomes a visible processing error with automatic exponential retries; it cannot supply guessed teacher identities or invalid dates.
+New and meaningfully changed submissions enter persistent normalization revisions. The Responses API uses **`gpt-5.6-luna`**, `reasoning.effort: "low"`, strict structured output, and `store: false`. Leave Requests owns its model configuration; the scheduler's configuration is unaffected. Input includes relevant form fields, canonical sheet dates, and human-written Status notes. Interpretation supports Thai/English, multiple daily time intervals, full-day corrections, duplicate/withdrawn submissions, and date-specific completion evidence. Valid results apply automatically. There is no approval or review stage. Invalid output becomes a visible processing error with automatic exponential retries; it cannot supply guessed teacher identities or invalid dates.
 
 The cache key includes meaningful input, model, effort, and prompt version. Only this application's bracketed `[BGScheduler: ...]` summaries are excluded from the human Status text. Human corrections continue to invalidate the cache. Original source fields, normalization inputs/results, and the explanation are preserved. Teacher matching uses verified email and unique normalized identity aliases; colliding names fail closed.
 
@@ -64,10 +64,10 @@ Existing `LEAVE_REQUESTS_SPREADSHEET_ID`, `LEAVE_REQUESTS_SHEET_NAME`, and `LEAV
 | Variable | Default / purpose |
 |---|---|
 | `LEAVE_ROSTER_SPREADSHEET_ID` | Supplied admin roster spreadsheet |
-| `LEAVE_NORMALIZATION_MODEL` | `gpt-6-astra` |
+| `LEAVE_NORMALIZATION_MODEL` | `gpt-5.6-luna` |
 | `LEAVE_NORMALIZATION_API_KEY` | Optional separate key; falls back to `OPENAI_API_KEY` |
 
-Reasoning effort is fixed to medium and the prompt version is in `config.ts`. Google Sheets and OpenAI are called only from the server.
+Reasoning effort is fixed to low and the prompt version is in `config.ts`. Google Sheets and OpenAI are called only from the server.
 
 ## Validation and rollout
 

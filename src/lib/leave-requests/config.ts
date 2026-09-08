@@ -13,9 +13,9 @@ export const LEAVE_REQUESTS_CONNECTED_EMAIL =
   process.env.LEAVE_REQUESTS_CONNECTED_EMAIL ?? process.env.SALES_DASHBOARD_CONNECTED_EMAIL ?? "";
 
 export const LEAVE_ROSTER_SPREADSHEET_ID = process.env.LEAVE_ROSTER_SPREADSHEET_ID ?? "1dacHgICN6YgH-guVV1maN5H3KtMSheKyCsmy708jwOs";
-export const LEAVE_NORMALIZATION_MODEL = process.env.LEAVE_NORMALIZATION_MODEL ?? "gpt-6-astra";
-export const LEAVE_NORMALIZATION_PROMPT_VERSION = "leave-work-v1";
-export const LEAVE_NORMALIZATION_EFFORT = "medium" as const;
+export const LEAVE_NORMALIZATION_MODEL = process.env.LEAVE_NORMALIZATION_MODEL ?? "gpt-5.6-luna";
+export const LEAVE_NORMALIZATION_PROMPT_VERSION = "leave-work-v2";
+export const LEAVE_NORMALIZATION_EFFORT = "low" as const;
 export const LEAVE_SYNC_ABANDONED_MS = 20 * 60 * 1000;
 // Leave enough time for reconciliation and source writeback inside the 800s route.
 export const LEAVE_NORMALIZATION_BUDGET_MS = 5 * 60 * 1000;
