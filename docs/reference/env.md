@@ -411,7 +411,7 @@ These are read by the weekend checker and shared health calendar; existing Apps 
 | Variable | Default | Purpose |
 |---|---|---|
 | `LEAVE_ROSTER_SPREADSHEET_ID` | `1dacHgICN6YgH-guVV1maN5H3KtMSheKyCsmy708jwOs` | Monthly admin roster, including colours and shift legend |
-| `LEAVE_NORMALIZATION_MODEL` | `gpt-6-astra` | Leave-only Responses model; medium reasoning is fixed in code |
+| `LEAVE_NORMALIZATION_MODEL` | `gpt-5.6-luna` | Leave-only Responses model; low reasoning is fixed in code |
 | `LEAVE_NORMALIZATION_API_KEY` | falls back to `OPENAI_API_KEY` | Optional dedicated key with model access and API credits |
 
 No model failure falls back to an unverified leave window. The queue retains existing work, exposes the processing issue and retries automatically. `LEAVE_REQUESTS_CONNECTED_EMAIL` should identify the established Sheets integration account; other healthy candidates are considered by most recent token refresh.

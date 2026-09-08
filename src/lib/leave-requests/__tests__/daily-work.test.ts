@@ -66,7 +66,7 @@ describe("automatic interpretation", () => {
     expect(normalizationKey(before)).not.toBe(normalizationKey(before, "another-model"));
     expect(normalizationKey(before)).not.toBe(normalizationKey(before, undefined, "new-prompt"));
   });
-  it("calls Astra medium via Responses and automatically accepts a full-day correction", async () => {
+  it("calls Luna low via Responses and automatically accepts a full-day correction", async () => {
     const value: LeaveInterpretation = { disposition: "active", windows: [{ startDate: "2026-10-03", endDate: "2026-10-03", startMinute: 0, endMinute: 1440 }], completion: [], explanation: "The human Status corrects the leave to a full day.", errors: [] };
     vi.stubEnv("OPENAI_API_KEY", "test-key");
     const request = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ output_text: JSON.stringify(value) }) });
@@ -74,8 +74,8 @@ describe("automatic interpretation", () => {
     const result = await normalizeLeave({ ...input(), startDate: "2026-10-03", endDate: "2026-10-03", humanStatus: "เต็มวันแทน" });
     expect(result).toEqual(value);
     const body = JSON.parse(request.mock.calls[0][1].body);
-    expect(body.model).toBe("gpt-6-astra");
-    expect(body.reasoning).toEqual({ effort: "medium" });
+    expect(body.model).toBe("gpt-5.6-luna");
+    expect(body.reasoning).toEqual({ effort: "low" });
     expect(body.store).toBe(false);
     expect(body.text.format.strict).toBe(true);
     expect(body.input[1].content).toContain("เต็มวันแทน");
