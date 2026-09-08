@@ -1,0 +1,8 @@
+{
+  "begifted_dashboard/finance_reports.py": "333a9f43ae668baee97a8bd9c70bb64ecaa2e53d3525d1fba1ab753802666010",
+  "scripts/build_unearned_report_bundle.py": "7b330298d1b52cd06a80a102123ba1e1848fdf06e47b996557a47de560093e3d",
+  "scripts/verify_unearned_v4_frozen.py": "0a71fcba6129529def6dec1fbe59bc48603f3caddd13b6b6b9ab354e52310a1c",
+  "tests/test_finance_reports.py": "0fdd2095f396233169ce9538b2489f4307b4ea370990ac17ad9bc3d35091f997",
+  "begifted_dashboard/package_lots.py": "07b4eb9c8ec48aeb68fcf252e6753171757858c6d8aca72fa1af6a7f8d285a10",
+  "begifted_dashboard/unearned_google_sheet.py": "222de02dc48cb0a98b41d38d0d1284a938e4c6bff3b88cf9e2280654def79a4f"
+}

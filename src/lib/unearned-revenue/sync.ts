@@ -1,5 +1,8 @@
 import "server-only";
 
+import { readValuesPublication } from "./publication-reader";
+import { statusFields, type PublicationMetadata } from "./publication";
+
 import { count, desc, eq, notInArray, sql } from "drizzle-orm";
 
 import { getDb, type Database } from "@/lib/db";
@@ -96,10 +99,16 @@ export function assertStableSheetIds(
 export async function readUnearnedRevenueWorkbook(
   email = getUnearnedRevenueConnectedEmail(),
   spreadsheetId = getUnearnedRevenueSpreadsheetId(),
-): Promise<{ contract: ParsedWorkbookContract; sheetIds: Record<string, number> }> {
-  const startProperties = assertRequiredTabs(await listGoogleSheetProperties(email, spreadsheetId));
+): Promise<{ contract: ParsedWorkbookContract; sheetIds: Record<string, number>; publicationManifest?: PublicationMetadata }> {
+  const initialProperties = await listGoogleSheetProperties(email, spreadsheetId);
+  const statusSheet = initialProperties.find(sheet => sheet.title === "Model Status");
+  if (!statusSheet) throw new Error("Workbook is missing Model Status");
   const statusRange = rangesForLimit("Model Status", "C", WORKBOOK_LIMITS.status);
   const statusStart = await fetchGoogleSheetRange(email, spreadsheetId, statusRange);
+  if (statusFields(statusStart).workbook_schema_version === "5") {
+    return readValuesPublication(email, spreadsheetId, statusStart, statusSheet.sheetId);
+  }
+  const startProperties = assertRequiredTabs(initialProperties);
   const receiptRowsPromise: Promise<unknown[][] | undefined> = startProperties.has("SRC_Wise_Receipt")
     ? fetchGoogleSheetRange(
       email,
@@ -218,6 +227,7 @@ export async function importUnearnedRevenueContract(input: {
   spreadsheetId: string;
   contract: ParsedWorkbookContract;
   sheetIds: Record<string, number>;
+  publicationManifest?: PublicationMetadata;
 }): Promise<{ snapshotId: string; idempotent: boolean }> {
   const { db, syncRunId, spreadsheetId, contract, sheetIds } = input;
   return withUnearnedRevenueTransaction(db, async (tx) => {
@@ -263,6 +273,7 @@ export async function importUnearnedRevenueContract(input: {
       reviewConditions: contract.status.reviewConditions,
       sheetIds,
       rowCounts: contract.rowCounts,
+      publicationManifest: input.publicationManifest ?? null,
     }).returning({ id: schema.unearnedRevenueSnapshots.id });
 
     await insertChunks(contract.periods, 500, (chunk) => tx.insert(schema.unearnedRevenuePeriods).values(chunk.map((row) => ({
@@ -537,11 +548,11 @@ export async function runUnearnedRevenueSync(options: SyncOptions): Promise<Unea
   }
 
   try {
-    const { contract, sheetIds } = await readUnearnedRevenueWorkbook(
+    const { contract, sheetIds, publicationManifest } = await readUnearnedRevenueWorkbook(
       getUnearnedRevenueConnectedEmail(),
       spreadsheetId,
     );
-    const imported = await importUnearnedRevenueContract({ db, syncRunId, spreadsheetId, contract, sheetIds });
+    const imported = await importUnearnedRevenueContract({ db, syncRunId, spreadsheetId, contract, sheetIds, publicationManifest });
     return {
       ok: true,
       skipped: false,

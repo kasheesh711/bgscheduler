@@ -5079,6 +5079,7 @@ export const unearnedRevenueSyncRuns = pgTable("unearned_revenue_sync_runs", {
 
 /** Immutable imported workbook header. At most one snapshot is active. */
 export const unearnedRevenueSnapshots = pgTable("unearned_revenue_snapshots", {
+  publicationManifest: jsonb("publication_manifest").$type<import("../unearned-revenue/publication").PublicationMetadata>(),
   id: uuid("id").primaryKey().defaultRandom(),
   syncRunId: uuid("sync_run_id").notNull().references(() => unearnedRevenueSyncRuns.id),
   active: boolean("active").notNull().default(false),

@@ -1,6 +1,6 @@
 # Leave Requests
 
-**Status: stable; daily work queue implementation in migration 0079.**
+**Status: stable; daily work queue implementation in migration 0080.**
 
 The admin screen answers who owns a cancellation, when to process it, which classes are affected, and which families have been informed. Teachers submit the existing Google Form; its `Form Responses 1` tab remains the source of leave submissions. The application never cancels classes in Wise or sends messages to parents. Admins do those actions manually, then check them off.
 
@@ -71,7 +71,7 @@ Reasoning effort is fixed to medium and the prompt version is in `config.ts`. Go
 
 ## Validation and rollout
 
-Apply `0079_leave_daily_work_queue` before deploying routes that read the new tables. Run the catch-up sync with notifications suppressed until the source backlog and upcoming class bundles have been processed. Re-running it resumes progress without clearing owners or evidence. Verify row counts, source freshness, unresolved errors and the September roster before treating the new queue as complete.
+Apply `0080_leave_daily_work_queue` before deploying routes that read the new tables. Run the catch-up sync with notifications suppressed until the source backlog and upcoming class bundles have been processed. Re-running it resumes progress without clearing owners or evidence. Verify row counts, source freshness, unresolved errors and the September roster before treating the new queue as complete.
 
 `daily-work.test.ts` covers due dates/month boundaries, real September colours/off/sick/swap cells, normalization caching/API configuration, full-day/partial/duplicate interpretations, families, and accessible inline checkboxes. `daily-work.integration.test.ts` uses ephemeral Postgres to cover shared cancellations, allocation/takeover, version conflicts, idempotency, undo, resync/snapshot preservation, changed/missing/explicitly cancelled sessions, imported evidence, the July abandoned run, and resumable batches of 78 submissions. Existing parser/contact/legacy detail tests remain in place.
 

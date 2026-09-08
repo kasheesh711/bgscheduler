@@ -1,6 +1,6 @@
 # Leave Requests database
 
-The feature owns 13 tables: five original source/legacy tables from migration 0036 and eight durable work tables from migration 0079. They are declared in `src/lib/db/schema.ts`.
+The feature owns 13 tables: five original source/legacy tables from migration 0036 and eight durable work tables from migration 0080. They are declared in `src/lib/db/schema.ts`.
 
 ```mermaid
 erDiagram
@@ -36,7 +36,7 @@ Family coverage consists of session ID plus a revision of the class information 
 ## Existing tables
 
 - `leave_request_sync_runs`: the original running/success/failed ledger and partial unique running-row index remain. New sync reclaims abandoned rows older than 20 minutes and records bounded processing progress.
-- `leave_requests`: original row identity, form fields, raw values, source timestamps/status, matched tutor identity and legacy workflow metadata remain. Migration 0079 adds `current_normalization_key`; only the matching successful revision may generate current work. `sheet_write_status` is the checklist-summary outbox state.
+- `leave_requests`: original row identity, form fields, raw values, source timestamps/status, matched tutor identity and legacy workflow metadata remain. Migration 0080 adds `current_normalization_key`; only the matching successful revision may generate current work. `sheet_write_status` is the checklist-summary outbox state.
 - `leave_request_affected_sessions`: retained legacy request detail/preview data; no longer authoritative for the daily work queue.
 - `leave_request_activity_logs`: retained source import and metadata history.
 - `leave_request_notifications`: existing submission-email ledger. Initial migration suppresses catch-up email sends.
@@ -47,4 +47,4 @@ The new queue reads the active Credit Control snapshot's **original** `scheduled
 
 Checklist and ownership changes run in a transaction with an assignment row lock, entity version check, and audit insert. Exact mutation retries are idempotent even after PostgreSQL JSONB key reordering. Allocation uses a transaction advisory lock plus the same assignment locks and never changes an existing ownership decision. Per-bundle fingerprints avoid unnecessary work on unchanged syncs.
 
-Apply the additive 0079 migration before the new code. No existing requests, owners, sheet notes, statuses, or completion evidence are deleted by the migration.
+Apply the additive 0080 migration before the new code. No existing requests, owners, sheet notes, statuses, or completion evidence are deleted by the migration.
