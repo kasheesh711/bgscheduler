@@ -52,7 +52,16 @@ export function validateInterpretation(value: unknown, input: ReturnType<typeof 
   if (result.disposition === "active" && result.windows.some((window) => window.startDate < input.startDate! || window.endDate > input.endDate!)) throw new Error("Interpretation extends beyond the submitted dates. Correct the form dates to confirm this change.");
   if (result.disposition === "unresolved") throw new Error(result.errors.join("; ") || result.explanation || "Leave dates could not be resolved.");
   for (const completion of result.completion) {
-    if (!humanStatus(input.humanStatus).includes(completion.evidence.trim())) throw new Error("Completion evidence is not a quote from the source Status notes.");
+    const quote = completion.evidence.trim();
+    const candidates = [quote];
+    // Models sometimes wrap an otherwise exact excerpt in quotation marks.
+    // Strip only a paired wrapper; the resulting text must still occur verbatim.
+    for (const [open, close] of [["\"", "\""], ["“", "”"], ["'", "'"], ["‘", "’"]]) {
+      if (quote.startsWith(open) && quote.endsWith(close)) candidates.push(quote.slice(1, -1).trim());
+    }
+    const evidence = candidates.find((text) => text.length > 0 && humanStatus(input.humanStatus).includes(text));
+    if (!evidence) throw new Error("Completion evidence is not a quote from the source Status notes.");
+    completion.evidence = evidence;
     if (completion.dates.some((date) => !validDate(date) || !result.windows.some((w) => date >= w.startDate && date <= w.endDate))) throw new Error("Completion evidence names a date outside this request.");
   }
   return result;
