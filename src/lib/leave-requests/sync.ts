@@ -253,7 +253,7 @@ function notificationText(requests: Array<typeof schema.leaveRequests.$inferSele
     const date = request.startDate && request.endDate && request.startDate !== request.endDate
       ? `${request.startDate} to ${request.endDate}`
       : request.startDate ?? "date needs review";
-    return `- ${request.tutorName} (${date}) - ${request.affectedClassCount} Wise class(es) affected`;
+    return `- ${request.tutorName} (${date})`;
   });
   const dashboardUrl = `${APP_BASE_URL.replace(/\/$/, "")}/leave-requests`;
   const text = [
@@ -268,9 +268,9 @@ function notificationText(requests: Array<typeof schema.leaveRequests.$inferSele
     <div style="font-family:Inter,Arial,sans-serif;color:#0f172a">
       <h2 style="margin:0 0 12px">New tutor leave requests</h2>
       <ul>
-        ${requests.map((request) => `<li><strong>${escapeHtml(request.tutorName)}</strong> ${escapeHtml(request.startDate ?? "date needs review")} - ${request.affectedClassCount} Wise class(es) affected</li>`).join("")}
+        ${requests.map((request) => `<li><strong>${escapeHtml(request.tutorName)}</strong> ${escapeHtml(request.startDate ?? "date unresolved")}</li>`).join("")}
       </ul>
-      <p><a href="${dashboardUrl}">Open Leave Requests dashboard</a></p>
+      <p><a href="${dashboardUrl}">Open the daily Leave Requests queue</a></p>
       <p style="color:#64748b;font-size:12px">Source: Form Responses 1 only. Leave Analytics and Emergency Tracker are ignored.</p>
     </div>
   `;
