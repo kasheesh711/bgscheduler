@@ -1,4 +1,5 @@
 import type { WeekendReport } from "@/lib/classrooms/weekend-readiness";
+import type { CompletionEvidence, CoverageRevision, LeaveInterpretation, WorkStudent } from "@/lib/leave-requests/work-types";
 import {
   pgTable,
   uuid,
@@ -2254,6 +2255,7 @@ export const leaveRequests = pgTable("leave_requests", {
   sheetName: text("sheet_name").notNull(),
   sourceRowNumber: integer("source_row_number").notNull(),
   sourceFingerprint: text("source_fingerprint").notNull(),
+  currentNormalizationKey: text("current_normalization_key"),
   sourceSubmittedAt: timestamp("source_submitted_at", { withTimezone: true }),
   tutorName: text("tutor_name").notNull(),
   tutorEmail: text("tutor_email"),
@@ -2370,6 +2372,116 @@ export const leaveRequestNotifications = pgTable("leave_request_notifications", 
   index("leave_request_notifications_request_idx").on(table.leaveRequestId),
   index("leave_request_notifications_sync_idx").on(table.syncRunId),
 ]);
+
+// ── Leave daily work (durable; deliberately independent of snapshots) ──
+
+export const leaveRosterPeople = pgTable("leave_roster_people", {
+  key: text("key").primaryKey(),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  aliases: jsonb("aliases").$type<string[]>().notNull().default([]),
+}, (t) => [uniqueIndex("leave_roster_people_email_idx").on(t.email)]);
+
+export const leaveRosterShifts = pgTable("leave_roster_shifts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  personKey: text("person_key").notNull().references(() => leaveRosterPeople.key),
+  date: date("date", { mode: "string" }).notNull(),
+  status: text("status").notNull(),
+  shift: text("shift"),
+  startMinute: integer("start_minute"),
+  endMinute: integer("end_minute"),
+  sourceTab: text("source_tab").notNull(),
+  sourceCell: text("source_cell").notNull(),
+  color: text("color"),
+  note: text("note"),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("leave_roster_shifts_person_date_idx").on(t.personKey, t.date), index("leave_roster_shifts_date_idx").on(t.date)]);
+
+export const leaveNormalizations = pgTable("leave_normalizations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  requestId: uuid("request_id").notNull().references(() => leaveRequests.id),
+  inputKey: text("input_key").notNull(),
+  model: text("model").notNull(),
+  promptVersion: text("prompt_version").notNull(),
+  input: jsonb("input").$type<Record<string, unknown>>().notNull(),
+  status: text("status").notNull().default("pending"),
+  result: jsonb("result").$type<LeaveInterpretation | null>(),
+  error: text("error"),
+  attempts: integer("attempts").notNull().default(0),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+  evidenceAppliedAt: timestamp("evidence_applied_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+}, (t) => [uniqueIndex("leave_normalizations_request_key_idx").on(t.requestId, t.inputKey), index("leave_normalizations_retry_idx").on(t.status, t.nextAttemptAt)]);
+
+export const leaveAssignments = pgTable("leave_assignments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  teacherKey: text("teacher_key").notNull(),
+  teacherName: text("teacher_name").notNull(),
+  classDate: date("class_date", { mode: "string" }).notNull(),
+  dueDate: date("due_date", { mode: "string" }).notNull(),
+  ownerEmail: text("owner_email"),
+  ownerName: text("owner_name"),
+  assignedDate: date("assigned_date", { mode: "string" }),
+  sourceRequestIds: jsonb("source_request_ids").$type<string[]>().notNull().default([]),
+  issue: text("issue"),
+  done: boolean("done").notNull().default(false),
+  version: integer("version").notNull().default(1),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("leave_assignments_teacher_date_idx").on(t.teacherKey, t.classDate), index("leave_assignments_due_idx").on(t.done, t.dueDate, t.classDate)]);
+
+export const leaveClassTasks = pgTable("leave_class_tasks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  assignmentId: uuid("assignment_id").notNull().references(() => leaveAssignments.id),
+  wiseSessionId: text("wise_session_id").notNull(),
+  wiseClassId: text("wise_class_id").notNull(),
+  startTime: timestamp("start_time", { withTimezone: true }).notNull(),
+  endTime: timestamp("end_time", { withTimezone: true }).notNull(),
+  subject: text("subject").notNull(),
+  title: text("title").notNull(),
+  students: jsonb("students").$type<WorkStudent[]>().notNull().default([]),
+  revision: text("revision").notNull(),
+  sourceRequestIds: jsonb("source_request_ids").$type<string[]>().notNull().default([]),
+  wiseStatus: text("wise_status").notNull(),
+  issue: text("issue"),
+  active: boolean("active").notNull().default(true),
+  cancelled: jsonb("cancelled").$type<CompletionEvidence | null>(),
+  importedNormalizationIds: jsonb("imported_normalization_ids").$type<string[]>().notNull().default([]),
+  version: integer("version").notNull().default(1),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("leave_class_tasks_session_idx").on(t.wiseSessionId), index("leave_class_tasks_assignment_idx").on(t.assignmentId)]);
+
+export const leaveFamilyTasks = pgTable("leave_family_tasks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  assignmentId: uuid("assignment_id").notNull().references(() => leaveAssignments.id),
+  familyKey: text("family_key").notNull(),
+  label: text("label").notNull(),
+  students: jsonb("students").$type<WorkStudent[]>().notNull().default([]),
+  coverage: jsonb("coverage").$type<CoverageRevision[]>().notNull().default([]),
+  informedCoverage: jsonb("informed_coverage").$type<CoverageRevision[]>().notNull().default([]),
+  informed: jsonb("informed").$type<CompletionEvidence | null>(),
+  importedNormalizationIds: jsonb("imported_normalization_ids").$type<string[]>().notNull().default([]),
+  active: boolean("active").notNull().default(true),
+  version: integer("version").notNull().default(1),
+}, (t) => [uniqueIndex("leave_family_tasks_bundle_family_idx").on(t.assignmentId, t.familyKey)]);
+
+export const leaveWorkEvents = pgTable("leave_work_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  assignmentId: uuid("assignment_id").notNull().references(() => leaveAssignments.id),
+  mutationKey: text("mutation_key").notNull(),
+  actorEmail: text("actor_email"),
+  actorName: text("actor_name"),
+  action: text("action").notNull(),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex("leave_work_events_mutation_idx").on(t.mutationKey), index("leave_work_events_assignment_idx").on(t.assignmentId, t.createdAt)]);
+
+export const leaveWorkState = pgTable("leave_work_state", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").$type<Record<string, unknown>>().notNull().default({}),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 // ── Past Sessions (cross-snapshot capture) ──────────────────────────────
 //
