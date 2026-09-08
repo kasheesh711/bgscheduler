@@ -56,7 +56,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | filters | `/api/filters` | 1 | [misc.md](./misc.md#tutors-and-filters) |
 | home | `/api/home` | 1 | [misc.md](./misc.md#home-summary) |
 | internal | `/api/internal` | 33 | [internal-crons.md](./internal-crons.md) (25) + eight on their owning pages — see below |
-| leave-requests | `/api/leave-requests` | 5 | [leave-requests.md](./leave-requests.md) |
+| leave-requests | `/api/leave-requests` | 8 | [leave-requests.md](./leave-requests.md) |
 | line | `/api/line` | 29 | [line.md](./line.md) |
 | onsite-foot-traffic | `/api/onsite-foot-traffic` | 5 | [onsite-foot-traffic.md](./onsite-foot-traffic.md) |
 | payroll | `/api/payroll` | 5 | [payroll.md](./payroll.md) |
@@ -88,7 +88,7 @@ Each disagreement resolves in the safe direction — the handler is stricter, ne
 | [credit-control.md](./credit-control.md) | `/api/credit-control` | 8 |
 | [data-health.md](./data-health.md) | `/api/data-health` | 2 |
 | [internal-crons.md](./internal-crons.md) | `/api/internal` (25 of 33) | 25 |
-| [leave-requests.md](./leave-requests.md) | `/api/leave-requests` | 5 |
+| [leave-requests.md](./leave-requests.md) | `/api/leave-requests` | 8 |
 | [line.md](./line.md) | `/api/line` | 29 |
 | [misc.md](./misc.md) | `/api/search`, `/api/compare`, `/api/tutors`, `/api/filters`, `/api/home`, `/api/admin`, `/api/auth` | 11 |
 | [onsite-foot-traffic.md](./onsite-foot-traffic.md) | `/api/onsite-foot-traffic`, 1 internal cron | 6 |
@@ -270,9 +270,12 @@ Sorted by group, then path, then method. `[bracketed]` segments are Next.js dyna
 | `GET` | `/api/internal/sync-wise` | [internal](./internal-crons.md) | cron | The Wise snapshot ETL — fetch, normalize, persist, validate, promote. Scheduled `*/30 * * * *`; `maxDuration = 800`; single-flight guarded. |
 | `POST` | `/api/internal/sync-wise` | [internal](./internal-crons.md) | cron \| admin | Manual trigger via Auth.js session or `curl -X POST` (kept backward compatible). |
 | `GET` | `/api/internal/sync-wise-activity` | [internal](./wise-activity.md) | cron | Wise audit-event ingest. Scheduled `2,17,32,47 * * * *` — the only quarter-hourly job. |
+| `GET` | `/api/leave-requests/board` | [leave-requests](./leave-requests.md) | admin | Daily work, roster, ownership, checklists and actual source freshness. |
+| `GET` | `/api/leave-requests/assignments/[assignmentId]` | [leave-requests](./leave-requests.md) | admin | Source submissions, automatic interpretation and assignment audit. |
+| `PATCH` | `/api/leave-requests/assignments/[assignmentId]` | [leave-requests](./leave-requests.md) | admin | Versioned ownership, family or class checkoff; conflicts return 409. |
 | `GET` | `/api/leave-requests` | [leave-requests](./leave-requests.md) | admin | Leave-request worklist plus the Google OAuth token status for the connected sheet account. |
 | `GET` | `/api/leave-requests/[requestId]` | [leave-requests](./leave-requests.md) | admin | One request with its affected sessions. |
-| `PATCH` | `/api/leave-requests/[requestId]` | [leave-requests](./leave-requests.md) | admin | Advance the review workflow and write status back to the source sheet, using the resolved connected email. |
+| `PATCH` | `/api/leave-requests/[requestId]` | [leave-requests](./leave-requests.md) | admin | Retained source metadata; normalized requests derive their progress from daily checklists. |
 | `POST` | `/api/leave-requests/[requestId]/wise-cancel-preview` | [leave-requests](./leave-requests.md) | admin | **Dry run only** — builds the Wise cancellation preview for the affected sessions. Nothing is cancelled in Wise. |
 | `POST` | `/api/leave-requests/sync` | [leave-requests](./leave-requests.md) | admin | Admin-session trigger for the same `syncLeaveRequests` the `15,45` cron runs. |
 | `PATCH` | `/api/line/contacts/[contactId]` | [line](./line.md) | admin | Update a contact's labels and refresh its student-link suggestions. |

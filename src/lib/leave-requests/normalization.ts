@@ -6,6 +6,8 @@ import type { ParsedLeaveRequestRow } from "./parser";
 import { validDate } from "./work-model";
 import type { LeaveInterpretation } from "./work-types";
 
+export class LeaveNormalizationUnavailable extends Error {}
+
 export function digest(value: unknown): string {
   const canonical = JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
     ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, item[key]])) : item);
@@ -58,7 +60,7 @@ export function validateInterpretation(value: unknown, input: ReturnType<typeof 
 
 export async function normalizeLeave(input: ReturnType<typeof normalizationInput>): Promise<LeaveInterpretation> {
   const key = process.env.LEAVE_NORMALIZATION_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim();
-  if (!key) throw new Error("Leave normalization API key is not configured.");
+  if (!key) throw new LeaveNormalizationUnavailable("Leave normalization API key is not configured.");
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST", signal: AbortSignal.timeout(75_000),
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
@@ -71,7 +73,14 @@ export async function normalizeLeave(input: ReturnType<typeof normalizationInput
       text: { verbosity: "low", format: { type: "json_schema", name: "leave_interpretation", strict: true, schema: z.toJSONSchema(interpretationSchema, { target: "draft-7" }) } },
     }),
   });
-  if (!response.ok) throw new Error(`Leave normalization API returned HTTP ${response.status}.`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
+    const message = body?.error?.code === "credit_balance_exhausted" || body?.error?.code === "insufficient_quota"
+      ? "OpenAI API credits are exhausted. Restore API credits; queued leave interpretations will retry automatically."
+      : `Leave normalization API returned HTTP ${response.status}${body?.error?.code ? ` (${body.error.code})` : ""}.`;
+    if ([401, 403, 429, 500, 502, 503].includes(response.status)) throw new LeaveNormalizationUnavailable(message);
+    throw new Error(message);
+  }
   const payload = await response.json();
   return validateInterpretation(JSON.parse(extractOutputText(payload)), input);
 }

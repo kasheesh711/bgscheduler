@@ -111,6 +111,7 @@ export interface LeaveBoard {
   admins: Array<{ email: string; name: string }>;
   assignments: WorkAssignment[];
   history: Array<{ id: string; teacher: string; startDate: string | null; endDate: string | null; status: string | null; error: string | null }>;
+  processingRequests: Array<{ id: string; teacher: string; startDate: string | null; endDate: string | null; status: string; error: string | null }>;
   freshness: {
     sourceReadAt: string | null;
     classesReadAt: string | null;

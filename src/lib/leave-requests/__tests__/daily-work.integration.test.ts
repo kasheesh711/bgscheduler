@@ -12,6 +12,7 @@ import { importLeaveSourceRows, recoverAbandonedLeaveRuns } from "../sync";
 import { processLeaveNormalizations } from "../processing";
 import { parseLeaveRequestSheetRows } from "../parser";
 import type { LeaveInterpretation } from "../work-types";
+import { LeaveNormalizationUnavailable } from "../normalization";
 import september from "./fixtures/september-roster.json";
 
 let handle: Awaited<ReturnType<typeof startTestDb>>;
@@ -123,6 +124,22 @@ describe("durable daily leave work", () => {
     [a] = await board(); expect(a.classes[0].active).toBe(true); expect(a.classes[0].cancelled).toBeNull(); expect(a.issue).toContain("missing");
   });
 
+  it("moves a class between dates without leaving duplicate family work or losing its owner", async () => {
+    await source(2); await session("moving"); await session("staying", "2026-09-15", [{ key: "s2", parent: "Parent B" }]);
+    await reconcileLeaveWork(db, today); await allocateDueLeaveWork(db, today);
+    const [before] = await board();
+    await db.update(s.creditControlSessions).set({ scheduledStartTime: new Date("2026-09-16T03:00Z"), scheduledEndTime: new Date("2026-09-16T04:00Z") }).where(eq(s.creditControlSessions.wiseSessionId, "moving"));
+    await reconcileLeaveWork(db, today); await reconcileLeaveWork(db, today);
+    const rows = await board();
+    const oldDate = rows.find((r) => r.classDate === "2026-09-15")!;
+    const newDate = rows.find((r) => r.classDate === "2026-09-16")!;
+    expect(newDate.ownerEmail).toBe(before.ownerEmail);
+    expect(newDate.classes.map((c) => c.wiseSessionId)).toEqual(["moving"]);
+    expect(oldDate.classes.map((c) => c.wiseSessionId)).toEqual(["staying"]);
+    expect(oldDate.families.filter((f) => f.active).map((f) => f.label)).toEqual(["Parent B"]);
+    expect(newDate.families.filter((f) => f.active).map((f) => f.label)).toEqual(["Parent A"]);
+  });
+
   it("imports date-specific completion without invented timestamps and never applies it to later added classes", async () => {
     await source(2, { ...baseInterpretation, completion: [{ dates: ["2026-09-11"], parentsInformed: true, classesCancelled: true, actorLabel: "Care", evidence: "11 Sep done // Care" }] });
     await session("done", "2026-09-11"); await session("open", "2026-09-12"); await reconcileLeaveWork(db, today);
@@ -139,6 +156,20 @@ describe("durable daily leave work", () => {
     const [a] = await board(); expect(a.ownerEmail).toBeNull();
     await db.insert(s.adminUsers).values({ email: "restricted@example.com", allowedPages: ["/progress-tests"] });
     await expect(assertLeaveAdmin(db, "restricted@example.com")).rejects.toThrow("access");
+  });
+
+  it("preserves undone imported checkoffs and frozen evidence when catch-up resumes halfway", async () => {
+    await source(2, { ...baseInterpretation, completion: [{ dates: [], parentsInformed: true, classesCancelled: true, actorLabel: "Care", evidence: "Done // Care" }] });
+    await session("original"); await reconcileLeaveWork(db, today);
+    await check("family", care, false); await check("class", care, false);
+    // Simulate a kill before the normalization's final evidence checkpoint.
+    await db.update(s.leaveNormalizations).set({ evidenceAppliedAt: null });
+    await db.execute(sql`delete from leave_work_state where key like 'bundle:%'`);
+    await session("new-after-checkpoint", "2026-09-15", [{ key: "new", parent: "New family" }]);
+    await reconcileLeaveWork(db, today);
+    const [a] = await board();
+    expect(a.classes.every((c) => c.cancelled === null)).toBe(true);
+    expect(a.families.every((f) => f.informed === null)).toBe(true);
   });
 });
 
@@ -161,5 +192,14 @@ describe("sync recovery and resumable normalization", () => {
     expect(await processLeaveNormalizations(db, { budgetMs: 0, normalize })).toMatchObject({ processed: 0, remaining: 78 });
     expect(await processLeaveNormalizations(db, { budgetMs: 30_000, normalize })).toMatchObject({ processed: 78, remaining: 0 });
     expect(await processLeaveNormalizations(db, { normalize: async () => { throw new Error("must use cache"); } })).toMatchObject({ processed: 0, failed: 0 });
+  });
+
+  it("stops on a service outage, preserves pending work, and retries failures after restoration", async () => {
+    const [run] = await db.insert(s.leaveRequestSyncRuns).values({ triggerType: "manual" }).returning();
+    const parsed = parseLeaveRequestSheetRows([[], ...Array.from({ length: 6 }, (_, i) => [46273 + i / 86400, "Buzz", "buzz@example.com", 46280, 46280, "Full Day"])]);
+    const matcher = { snapshotId: null, match: () => ({ tutorGroupId: null, tutorCanonicalKey: "buzz", tutorDisplayName: "Buzz", matchConfidence: "name" as const, matchReason: "fixture" }) };
+    await importLeaveSourceRows(db, parsed, matcher, run.id);
+    expect(await processLeaveNormalizations(db, { normalize: async () => { throw new LeaveNormalizationUnavailable("API credits exhausted"); } })).toMatchObject({ failed: 3, remaining: 3, serviceError: "API credits exhausted" });
+    expect(await processLeaveNormalizations(db, { normalize: async () => baseInterpretation, retryFailures: true })).toMatchObject({ processed: 6, failed: 0, remaining: 0 });
   });
 });

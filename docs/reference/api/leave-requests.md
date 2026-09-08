@@ -20,7 +20,7 @@ All in-app routes require an authenticated admin with Leave Requests page access
 
 `date` is a valid ISO Bangkok processing date, default today. `view` is `daily`, `upcoming`, or `history`. `q` searches teacher, owner, class date, family and student names. Invalid dates/views return 400. The client filters owners locally so all authorized admins can inspect and cover each other's work.
 
-The response follows `LeaveBoard` in `src/lib/leave-requests/work-types.ts`: `date`, `today`, `viewerEmail`, `defaultOwner`, `roster`, `admins`, `assignments`, `history`, and `freshness`. Every assignment includes its stable teacher identity, class/due dates, owner, version, classes, families, linked source requests, completion state, and issues. Class tasks include original UTC times, Wise session ID, relevant students, cancellation evidence and version. Family tasks include student/contact details, current and informed session coverage, evidence and version.
+The response follows `LeaveBoard` in `src/lib/leave-requests/work-types.ts`: `date`, `today`, `viewerEmail`, `defaultOwner`, `roster`, `admins`, `assignments`, `history`, `processingRequests`, and `freshness`. Every assignment includes its stable teacher identity, class/due dates, owner, version, classes, families, linked source requests, completion state, and issues. Class tasks include original UTC times, Wise session ID, relevant students, cancellation evidence and version. Family tasks include student/contact details, current and informed session coverage, evidence and version.
 
 `freshness` distinguishes source read, class snapshot and roster read timestamps; running syncs; stale data; pending/failed normalizations; and pending writebacks. Outages retain the last usable work.
 
@@ -42,4 +42,4 @@ No endpoint sends parent messages or performs a Wise cancellation. All completin
 
 ## Sync
 
-Both manual and cron handlers retain `maxDuration = 800`. Running rows abandoned for more than 20 minutes are recovered before the existing database single-flight insert. A concurrent active run returns 409. Results include source counts and normalization processed/failed/remaining counts. Bounded model and reconciliation work checkpoints resume on later runs. Writeback failure does not undo work and retries separately.
+Both manual and cron handlers retain `maxDuration = 800`. Running rows abandoned for more than 20 minutes are recovered before the existing database single-flight insert. A concurrent active run returns 409. Results include source counts, normalization processed/failed/remaining counts, and reconciliation changed/matched/remaining counts. Bounded model and reconciliation work checkpoints resume on later runs. Writeback failure does not undo work and retries separately.

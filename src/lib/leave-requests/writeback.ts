@@ -23,7 +23,8 @@ export async function flushLeaveWritebacks(db: Database, email: string) {
       if (!live || normalizationKey(normalizationInput(live)) !== request.currentNormalizationKey) continue;
       const tasks = classes.filter((c) => c.active && c.sourceRequestIds.includes(request.id));
       const sessionIds = new Set(tasks.map((c) => c.wiseSessionId));
-      const familyTasks = families.filter((f) => f.active && f.coverage.some((c) => sessionIds.has(c.sessionId)));
+      const assignmentIds = new Set(tasks.map((c) => c.assignmentId));
+      const familyTasks = families.filter((f) => f.active && assignmentIds.has(f.assignmentId) && f.coverage.some((c) => sessionIds.has(c.sessionId)));
       const byDate = new Map<string, typeof tasks>();
       for (const task of tasks) {
         const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit" }).format(task.startTime);

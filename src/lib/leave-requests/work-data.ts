@@ -93,6 +93,8 @@ export async function getLeaveBoard(db: Database, input: { email: string; date: 
     roster, admins,
     assignments: sortAssignments(term ? assignments.filter((a) => JSON.stringify([a.teacherName, a.ownerName, a.classDate, a.families.map((f) => [f.label, f.students.map((st) => st.name)])]).toLowerCase().includes(term)) : assignments, date),
     history: view === "history" ? requests.filter((r) => r.endDate && r.endDate < today && (!term || JSON.stringify([r.tutorName, r.sourceSheetStatus, r.startDate, r.endDate]).toLowerCase().includes(term))).map((r) => ({ id: r.id, teacher: r.tutorDisplayName || r.tutorName, startDate: r.startDate, endDate: r.endDate, status: r.sourceSheetStatus || r.workflowStatus, error: r.normalizationError })) : [],
+    processingRequests: requests.filter((r) => (!r.endDate || r.endDate >= today) && (r.normalizationStatus !== "ok" || r.matchConfidence === "unmatched") && (!term || JSON.stringify([r.tutorName, r.startDate, r.endDate]).toLowerCase().includes(term)))
+      .map((r) => ({ id: r.id, teacher: r.tutorDisplayName || r.tutorName, startDate: r.startDate, endDate: r.endDate, status: r.matchConfidence === "unmatched" ? "Teacher identity unresolved" : r.normalizationStatus === "failed" ? "Retrying interpretation" : "Interpreting submission", error: r.normalizationError || r.matchReason })),
     freshness: {
       sourceReadAt: sourceReadAt ?? null, classesReadAt: classesReadAt ?? null, rosterReadAt: rosterReadAt ?? null,
       running: running.length > 0, stale: !sourceReadAt || Date.now() - Date.parse(sourceReadAt) > 60 * 60_000 || !classesReadAt || Date.now() - Date.parse(classesReadAt) > 90 * 60_000,
@@ -112,6 +114,7 @@ export interface LeaveMutation {
 }
 
 export async function mutateLeaveWork(db: Database, assignmentId: string, mutation: LeaveMutation, actor: { email: string; name: string | null }) {
+  if (mutation.kind === "owner" && mutation.entityId !== assignmentId) throw new LeaveWorkNotFound("Assignment does not match this update.");
   await assertLeaveAdmin(db, actor.email);
   const nextOwner = mutation.kind === "owner" && mutation.ownerEmail ? await assertLeaveAdmin(db, mutation.ownerEmail) : null;
   return withDatabaseTransaction(db, async (tx) => {

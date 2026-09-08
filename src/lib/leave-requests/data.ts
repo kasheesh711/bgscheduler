@@ -506,6 +506,10 @@ export async function updateLeaveRequestWorkflow(
     .limit(1);
   if (!current) return null;
 
+  if (current.currentNormalizationKey && (input.workflowStatus !== undefined || input.sheetStatusText !== undefined || input.retrySheetWrite)) {
+    throw new Error("This request uses the daily checklist. Update its family and class tasks; source progress is derived automatically.");
+  }
+
   const workflowStatus = input.workflowStatus ?? current.workflowStatus;
   if (!LEAVE_WORKFLOW_STATUSES.includes(workflowStatus)) {
     throw new Error("Invalid leave request status.");

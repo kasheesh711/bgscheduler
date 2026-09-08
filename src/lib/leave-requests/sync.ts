@@ -1,4 +1,4 @@
-import { and, asc, eq, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { fetchGoogleSheetRows } from "@/lib/sales-dashboard/sheets";
@@ -49,7 +49,8 @@ export interface SyncLeaveRequestsResult {
   insertedCount: number;
   updatedCount: number;
   notificationCount: number;
-  processing?: { processed: number; failed: number; remaining: number };
+  reconciliation?: { changed: number; matchedClasses: number; remaining: number };
+  processing?: { processed: number; failed: number; remaining: number; serviceError?: string | null };
 }
 
 interface GoogleSheetsTokenCandidate {
@@ -148,7 +149,7 @@ export async function resolveLeaveRequestsConnectedEmail(
       lastError: schema.googleOAuthTokens.lastError,
     })
     .from(schema.googleOAuthTokens)
-    .orderBy(asc(schema.googleOAuthTokens.updatedAt));
+    .orderBy(desc(schema.googleOAuthTokens.updatedAt));
   const selected = selectLeaveRequestsConnectedEmail({
     configuredEmail: LEAVE_REQUESTS_CONNECTED_EMAIL,
     actorEmail,
@@ -372,9 +373,10 @@ export async function syncLeaveRequests(db: Database, options: SyncLeaveRequests
       const [prior] = await db.select().from(schema.leaveWorkState).where(eq(schema.leaveWorkState.key, "roster"));
       await setWorkState(db, "roster", { ...prior?.value, error: error instanceof Error ? error.message : "Roster read failed." });
     }
-    const processing = await processLeaveNormalizations(db, { budgetMs: options.normalizationBudgetMs });
-    await setWorkState(db, "processing", { ...processing, error: null });
-    try { await reconcileLeaveWork(db, today); }
+    const processing = await processLeaveNormalizations(db, { budgetMs: options.normalizationBudgetMs, retryFailures: options.triggerType === "manual" });
+    await setWorkState(db, "processing", { ...processing, error: processing.serviceError });
+    let reconciliation: SyncLeaveRequestsResult["reconciliation"];
+    try { reconciliation = await reconcileLeaveWork(db, today); }
     catch (error) {
       const [prior] = await db.select().from(schema.leaveWorkState).where(eq(schema.leaveWorkState.key, "classes"));
       await setWorkState(db, "classes", { ...prior?.value, error: error instanceof Error ? error.message : "Class reconciliation failed." });
@@ -385,8 +387,8 @@ export async function syncLeaveRequests(db: Database, options: SyncLeaveRequests
     const writer = await resolveLeaveRequestsConnectedEmail(db, options.actorEmail, true).catch(() => null);
     if (writer) await flushLeaveWritebacks(db, writer);
     const notificationCount = imported.migrating || options.suppressNotifications ? 0 : await sendNewRequestNotifications(db, syncRunId, imported.inserted, options.sender ?? createAppsScriptScheduleEmailSender());
-    const result = { syncRunId, scannedRowCount: parsedRows.length, insertedCount: imported.inserted.length, updatedCount: imported.updated.length, notificationCount, processing };
-    await db.update(schema.leaveRequestSyncRuns).set({ status: "success", finishedAt: new Date(), notificationCount, metadata: { connectedEmail, processing, catchUpEmailsSuppressed: imported.migrating || !!options.suppressNotifications } }).where(eq(schema.leaveRequestSyncRuns.id, syncRunId));
+    const result = { syncRunId, scannedRowCount: parsedRows.length, insertedCount: imported.inserted.length, updatedCount: imported.updated.length, notificationCount, processing, reconciliation };
+    await db.update(schema.leaveRequestSyncRuns).set({ status: "success", finishedAt: new Date(), notificationCount, metadata: { connectedEmail, processing, reconciliation, catchUpEmailsSuppressed: imported.migrating || !!options.suppressNotifications } }).where(eq(schema.leaveRequestSyncRuns.id, syncRunId));
     return result;
   } catch (error) {
     await db.update(schema.leaveRequestSyncRuns).set({ status: "failed", finishedAt: new Date(), errorSummary: error instanceof Error ? error.message : "Leave request sync failed." }).where(eq(schema.leaveRequestSyncRuns.id, syncRunId));

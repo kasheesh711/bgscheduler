@@ -9,7 +9,7 @@ import { assignmentComplete, familyComplete, processingDate, sessionOverlapsLeav
 import { eligibleLeaveAdmins, hydrateAssignments, recordSystemEvent, serializeClass, setWorkState } from "./work-data";
 import type { ClassWork, CompletionEvidence, CoverageRevision, WorkStudent } from "./work-types";
 
-type Source = { request: typeof s.leaveRequests.$inferSelect; normalization: typeof s.leaveNormalizations.$inferSelect };
+type Source = { request: typeof s.leaveRequests.$inferSelect; normalization: typeof s.leaveNormalizations.$inferSelect; evidenceScope?: Record<string, string> };
 export interface MatchedClass {
   wiseSessionId: string; wiseClassId: string; teacherKey: string; teacherName: string;
   start: Date; end: Date; subject: string; title: string; status: string; students: WorkStudent[];
@@ -50,9 +50,10 @@ export function buildFamilyWork(classes: ClassWork[]) {
   });
 }
 
-export function importedEvidence(sources: Source[], date: string, action: "parentsInformed" | "classesCancelled", now: Date, consumed: string[] = []): CompletionEvidence | null {
+export function importedEvidence(sources: Source[], date: string, action: "parentsInformed" | "classesCancelled", now: Date, sessionId: string, revision: string, consumed: string[] = []): CompletionEvidence | null {
   for (const source of sources) {
     if (source.normalization.evidenceAppliedAt || consumed.includes(source.normalization.id)) continue;
+    if (source.evidenceScope?.[sessionId] !== revision) continue;
     const proof = source.normalization.result?.completion.find((c) => c[action] && (!c.dates.length || c.dates.includes(date)));
     if (proof) return { source: "sheet", actorEmail: null, actorName: proof.actorLabel, completedAt: null, recordedAt: now.toISOString(), note: proof.evidence, normalizationId: source.normalization.id };
   }
@@ -106,7 +107,7 @@ export async function reconcileLeaveWork(db: Database, today = todayBangkok(), o
     db.select({ request: s.leaveRequests, normalization: s.leaveNormalizations }).from(s.leaveRequests).innerJoin(s.leaveNormalizations, and(eq(s.leaveRequests.id, s.leaveNormalizations.requestId), eq(s.leaveRequests.currentNormalizationKey, s.leaveNormalizations.inputKey), eq(s.leaveNormalizations.status, "ok"))),
     db.select().from(s.leaveRequests), db.select().from(s.leaveAssignments), db.select().from(s.leaveClassTasks), db.select().from(s.leaveWorkState),
   ]);
-  const ready = new Map(sources.filter((s) => s.request.tutorCanonicalKey).map((s) => [s.request.id, s]));
+  const ready = new Map<string, Source>(sources.filter((s) => s.request.tutorCanonicalKey).map((s) => [s.request.id, s]));
   const pending = new Set(allRequests.filter((r) => !ready.has(r.id)).map((r) => r.id));
   const byTeacher = new Map<string, Source[]>();
   for (const source of ready.values()) {
@@ -119,6 +120,19 @@ export async function reconcileLeaveWork(db: Database, today = todayBangkok(), o
     const matching = (byTeacher.get(item.teacherKey) ?? []).filter((source) => sessionOverlapsLeave(item.start, item.end, source.normalization.result!.windows));
     if (matching.length) wanted.set(item.wiseSessionId, { item, sources: matching });
   }
+  // Freeze exactly what a source note could cover before any bounded bundle work.
+  // A later snapshot must not let a half-finished catch-up apply old Done notes to
+  // newly added classes, even if the final revision checkpoint was never reached.
+  const evidenceStates = new Map(stateRows.map((row) => [row.key, row.value]));
+  const evidenceSeeds: Array<typeof s.leaveWorkState.$inferInsert> = [];
+  for (const source of ready.values()) {
+    if (source.normalization.evidenceAppliedAt || !source.normalization.result?.completion.length) continue;
+    const stateKey = `evidence:${source.normalization.id}`;
+    const recorded = evidenceStates.get(stateKey)?.sessions as Record<string, string> | undefined;
+    source.evidenceScope = recorded ?? Object.fromEntries([...wanted].filter(([, value]) => value.sources.some((match) => match.normalization.id === source.normalization.id)).map(([id, value]) => [id, classRevision(value.item)]));
+    if (!recorded) evidenceSeeds.push({ key: stateKey, value: { sessions: source.evidenceScope } });
+  }
+  if (evidenceSeeds.length) await db.insert(s.leaveWorkState).values(evidenceSeeds).onConflictDoNothing();
   const existingSessions = new Set(current.classes.map((c) => c.wiseSessionId));
   // Keep a disappeared session and its evidence; absence is not cancellation.
   const grouped = new Map<string, Array<{ item: MatchedClass; sources: Source[] }>>();
@@ -147,26 +161,30 @@ export async function reconcileLeaveWork(db: Database, today = todayBangkok(), o
     await withDatabaseTransaction(db, async (tx) => {
       // Same lock order as checkoffs/takeovers; the normalizer never holds this lock.
       await tx.insert(s.leaveAssignments).values({ teacherKey, teacherName: items[0]?.item.teacherName || priorAssignments.find((a) => a.teacherKey === teacherKey)?.teacherName || teacherKey, classDate, dueDate: processingDate(classDate) }).onConflictDoNothing();
-      const [assignment] = await tx.select().from(s.leaveAssignments).where(and(eq(s.leaveAssignments.teacherKey, teacherKey), eq(s.leaveAssignments.classDate, classDate))).for("update");
+      const [target] = await tx.select().from(s.leaveAssignments).where(and(eq(s.leaveAssignments.teacherKey, teacherKey), eq(s.leaveAssignments.classDate, classDate)));
+      const movedFromIds = [...new Set(items.map(({ item }) => priorBySession.get(item.wiseSessionId)?.assignmentId).filter((id): id is string => !!id && id !== target.id))];
+      // Lock both sides of a moved class before reading evidence or ownership.
+      const locked = await tx.select().from(s.leaveAssignments).where(inArray(s.leaveAssignments.id, [target.id, ...movedFromIds])).orderBy(s.leaveAssignments.id).for("update");
+      const assignment = locked.find((row) => row.id === target.id)!;
       let modified = false;
       for (const { item, sources: matches } of items) {
         const old = priorBySession.get(item.wiseSessionId);
         // Existing owner stays with a moved class; never silently assign its replacement.
         if (old && old.assignmentId !== assignment.id && !assignment.ownerEmail) {
-          const priorOwner = priorAssignments.find((a) => a.id === old.assignmentId);
+          const priorOwner = locked.find((a) => a.id === old.assignmentId);
           if (priorOwner?.ownerEmail) await tx.update(s.leaveAssignments).set({ ownerEmail: priorOwner.ownerEmail, ownerName: priorOwner.ownerName, assignedDate: priorOwner.assignedDate }).where(eq(s.leaveAssignments.id, assignment.id));
         }
         const revision = classRevision(item);
         const requestIds = matches.map((s) => s.request.id).sort();
         // Re-read inside the lock so a just-completed checkbox is never overwritten.
-        const [task] = await tx.select().from(s.leaveClassTasks).where(eq(s.leaveClassTasks.wiseSessionId, item.wiseSessionId));
+        const [task] = await tx.select().from(s.leaveClassTasks).where(eq(s.leaveClassTasks.wiseSessionId, item.wiseSessionId)).for("update");
         const cancelledInWise = /^(CANCELLED|CANCELED)$/i.test(item.status);
         const now = new Date();
         let cancelled = task?.cancelled ?? null;
         if (task && task.revision !== revision) cancelled = null;
         if (cancelledInWise) cancelled = cancelled ?? { source: "wise", actorEmail: null, actorName: null, completedAt: null, recordedAt: now.toISOString(), note: "Explicit cancelled status in Wise." };
         else if (cancelled?.source === "wise") cancelled = null;
-        cancelled ??= importedEvidence(matches, classDate, "classesCancelled", now, task?.importedNormalizationIds);
+        cancelled ??= importedEvidence(matches, classDate, "classesCancelled", now, item.wiseSessionId, revision, task?.importedNormalizationIds);
         const importedNormalizationIds = [...new Set([...(task?.importedNormalizationIds ?? []), ...(cancelled?.normalizationId ? [cancelled.normalizationId] : [])])];
         const values = { assignmentId: assignment.id, wiseSessionId: item.wiseSessionId, wiseClassId: item.wiseClassId, startTime: item.start, endTime: item.end, subject: item.subject, title: item.title, students: item.students.sort((a, b) => a.studentKey.localeCompare(b.studentKey)), revision, sourceRequestIds: requestIds, wiseStatus: item.status, issue: item.status === "CONFLICTING_WISE_STATUS" ? "Wise participant records disagree about this class's status." : null, active: true, cancelled, importedNormalizationIds };
         if (!task) { await tx.insert(s.leaveClassTasks).values(values); modified = true; }
@@ -174,6 +192,25 @@ export async function reconcileLeaveWork(db: Database, today = todayBangkok(), o
           await tx.update(s.leaveClassTasks).set({ ...values, version: task.version + 1, lastSeenAt: now }).where(eq(s.leaveClassTasks.id, task.id));
           modified = true;
         }
+      }
+      for (const oldId of movedFromIds) {
+        const oldBundle = locked.find((row) => row.id === oldId)!;
+        const remainingClasses = await tx.select().from(s.leaveClassTasks).where(and(eq(s.leaveClassTasks.assignmentId, oldId), eq(s.leaveClassTasks.active, true)));
+        const remainingIds = new Set(remainingClasses.map((row) => row.wiseSessionId));
+        const oldFamilyRows = await tx.select().from(s.leaveFamilyTasks).where(eq(s.leaveFamilyTasks.assignmentId, oldId));
+        for (const family of oldFamilyRows.filter((row) => row.active)) {
+          const coverage = family.coverage.filter((row) => remainingIds.has(row.sessionId));
+          if (coverage.length === family.coverage.length) continue;
+          const studentKeys = new Set(remainingClasses.flatMap((row) => row.students.map((student) => student.studentKey)));
+          await tx.update(s.leaveFamilyTasks).set({ coverage, informedCoverage: family.informedCoverage.filter((row) => remainingIds.has(row.sessionId)), students: family.students.filter((student) => studentKeys.has(student.studentKey)), active: coverage.length > 0, version: family.version + 1 }).where(eq(s.leaveFamilyTasks.id, family.id));
+        }
+        const oldSourceIds = [...new Set(remainingClasses.flatMap((row) => row.sourceRequestIds))];
+        const oldIssue = remainingClasses.map((row) => row.issue).filter(Boolean).join(" ") || null;
+        const [oldHydrated] = await hydrateAssignments(tx, [{ ...oldBundle, issue: oldIssue }]);
+        await tx.update(s.leaveAssignments).set({ sourceRequestIds: oldSourceIds, issue: oldIssue, done: assignmentComplete(oldHydrated), version: oldBundle.version + 1, updatedAt: new Date() }).where(eq(s.leaveAssignments.id, oldId));
+        await tx.delete(s.leaveWorkState).where(eq(s.leaveWorkState.key, `bundle:${oldBundle.teacherKey}|${oldBundle.classDate}`));
+        await recordSystemEvent(tx, oldId, "classes_moved", { toAssignmentId: assignment.id });
+        if (oldBundle.sourceRequestIds.length) await tx.update(s.leaveRequests).set({ sheetWriteStatus: "pending", updatedAt: new Date() }).where(inArray(s.leaveRequests.id, oldBundle.sourceRequestIds));
       }
       const tasks = await tx.select().from(s.leaveClassTasks).where(eq(s.leaveClassTasks.assignmentId, assignment.id));
       for (const task of tasks) {
@@ -201,7 +238,10 @@ export async function reconcileLeaveWork(db: Database, today = todayBangkok(), o
         }
         if (!informed) {
           // Every affected class must have explicit notification evidence.
-          const proofs = family.coverage.map((c) => importedEvidence(wanted.get(c.sessionId)?.sources ?? [], classDate, "parentsInformed", new Date(), old?.importedNormalizationIds));
+          const proofs = family.coverage.map((c) => {
+            const match = wanted.get(c.sessionId);
+            return importedEvidence(match?.sources ?? [], classDate, "parentsInformed", new Date(), c.sessionId, match ? classRevision(match.item) : "", old?.importedNormalizationIds);
+          });
           if (proofs.length && proofs.every(Boolean)) { informed = proofs[0]; informedCoverage = family.coverage; }
         }
         const importedNormalizationIds = [...new Set([...(old?.importedNormalizationIds ?? []), ...(informed?.normalizationId ? [informed.normalizationId] : [])])];
