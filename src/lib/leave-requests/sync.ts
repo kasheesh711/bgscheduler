@@ -206,8 +206,12 @@ function valuesForParsedRow(
 }
 
 export async function importLeaveSourceRows(db: Database, parsedRows: ParsedLeaveRequestRow[], matcher: Awaited<ReturnType<typeof buildTutorMatcher>>, syncRunId: string) {
-  const existing = await db.select().from(schema.leaveRequests).where(and(eq(schema.leaveRequests.spreadsheetId, LEAVE_REQUESTS_SPREADSHEET_ID), eq(schema.leaveRequests.sheetName, LEAVE_REQUESTS_SHEET_NAME)));
+  const [existing, cachedRevisions] = await Promise.all([
+    db.select().from(schema.leaveRequests).where(and(eq(schema.leaveRequests.spreadsheetId, LEAVE_REQUESTS_SPREADSHEET_ID), eq(schema.leaveRequests.sheetName, LEAVE_REQUESTS_SHEET_NAME))),
+    db.select({ requestId: schema.leaveNormalizations.requestId, inputKey: schema.leaveNormalizations.inputKey, status: schema.leaveNormalizations.status, error: schema.leaveNormalizations.error }).from(schema.leaveNormalizations),
+  ]);
   const byRow = new Map(existing.map((row) => [row.sourceRowNumber, row]));
+  const cached = new Map(cachedRevisions.map((row) => [`${row.requestId}:${row.inputKey}`, row]));
   const changes: Array<typeof schema.leaveRequests.$inferInsert> = [];
   for (const parsed of parsedRows) {
     const old = byRow.get(parsed.sourceRowNumber);
@@ -215,8 +219,10 @@ export async function importLeaveSourceRows(db: Database, parsedRows: ParsedLeav
     const inputKey = normalizationKey(normalizationInput(parsed));
     if (old?.sourceFingerprint === parsed.sourceFingerprint && old.currentNormalizationKey === inputKey && old.tutorCanonicalKey === match.tutorCanonicalKey) continue;
     const changed = old?.currentNormalizationKey !== inputKey;
+    const previousInterpretation = old ? cached.get(`${old.id}:${inputKey}`) : undefined;
     changes.push({ ...valuesForParsedRow(parsed, match, syncRunId), spreadsheetId: LEAVE_REQUESTS_SPREADSHEET_ID, sheetName: LEAVE_REQUESTS_SHEET_NAME, currentNormalizationKey: inputKey,
-      normalizationStatus: changed ? "pending" : old.normalizationStatus, normalizationError: changed ? null : old.normalizationError,
+      normalizationStatus: changed ? previousInterpretation?.status === "ok" ? "ok" : previousInterpretation?.status === "failed" ? "failed" : "pending" : old.normalizationStatus,
+      normalizationError: changed ? previousInterpretation?.error ?? null : old.normalizationError,
       workflowStatus: old?.workflowStatus ?? initialWorkflowStatus({ ...parsed, matchConfidence: match.matchConfidence }),
       unread: old?.unread ?? true });
   }

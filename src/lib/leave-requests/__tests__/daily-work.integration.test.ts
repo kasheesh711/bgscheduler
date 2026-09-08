@@ -192,6 +192,12 @@ describe("sync recovery and resumable normalization", () => {
     expect(await processLeaveNormalizations(db, { budgetMs: 0, normalize })).toMatchObject({ processed: 0, remaining: 78 });
     expect(await processLeaveNormalizations(db, { budgetMs: 30_000, normalize })).toMatchObject({ processed: 78, remaining: 0 });
     expect(await processLeaveNormalizations(db, { normalize: async () => { throw new Error("must use cache"); } })).toMatchObject({ processed: 0, failed: 0 });
+    const corrected = parsed.map((row, index) => index === 0 ? { ...row, sourceSheetStatus: "Full day instead" } : row);
+    await importLeaveSourceRows(db, corrected, matcher, run.id);
+    expect(await processLeaveNormalizations(db, { normalize })).toMatchObject({ processed: 1 });
+    await importLeaveSourceRows(db, parsed, matcher, run.id);
+    expect((await db.select().from(s.leaveRequests)).every((r) => r.normalizationStatus === "ok")).toBe(true);
+    expect(await processLeaveNormalizations(db, { normalize: async () => { throw new Error("must reuse reverted interpretation"); } })).toMatchObject({ processed: 0, failed: 0 });
   });
 
   it("stops on a service outage, preserves pending work, and retries failures after restoration", async () => {
