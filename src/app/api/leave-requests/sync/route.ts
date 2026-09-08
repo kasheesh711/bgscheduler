@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { LeaveRequestSyncAlreadyRunningError, syncLeaveRequests } from "@/lib/leave-requests/sync";
+import { assertLeaveAdmin } from "@/lib/leave-requests/work-data";
 
 export const maxDuration = 800;
 
@@ -10,6 +11,8 @@ export async function POST(request: NextRequest) {
   if (!session?.user?.email) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  try { await assertLeaveAdmin(getDb(), session.user.email); }
+  catch { return NextResponse.json({ error: "Leave Requests access is required." }, { status: 403 }); }
 
   let body: unknown = {};
   try {

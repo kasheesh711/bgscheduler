@@ -2,14 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/credit-control/service", () => ({ getCreditControlPayload: vi.fn() }));
 vi.mock("@/lib/data-health/dashboard", () => ({ getDataHealthDashboardPayload: vi.fn() }));
-vi.mock("@/lib/leave-requests/data", () => ({ listLeaveRequests: vi.fn() }));
+vi.mock("@/lib/leave-requests/work-data", () => ({ countDueLeaveAssignments: vi.fn() }));
 vi.mock("@/lib/sales-dashboard/google-oauth", () => ({ getGoogleTokenStatus: vi.fn() }));
 vi.mock("@/lib/payroll/data", () => ({ getPayrollPayload: vi.fn() }));
 vi.mock("@/lib/wise-activity/reconciliation", () => ({ getWiseReconciliationActionSummary: vi.fn() }));
 
 import { getCreditControlPayload } from "@/lib/credit-control/service";
 import { getDataHealthDashboardPayload } from "@/lib/data-health/dashboard";
-import { listLeaveRequests } from "@/lib/leave-requests/data";
+import { countDueLeaveAssignments } from "@/lib/leave-requests/work-data";
 import { getPayrollPayload } from "@/lib/payroll/data";
 import { getGoogleTokenStatus } from "@/lib/sales-dashboard/google-oauth";
 import { getWiseReconciliationActionSummary } from "@/lib/wise-activity/reconciliation";
@@ -64,11 +64,8 @@ function fakeDb() {
 describe("getHomeSummaryPayload", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(listLeaveRequests).mockResolvedValue({
-      cards: { total: 10, new: 6, needsReview: 1, sheetWriteFailed: 0, affectedClasses: 20 },
-      unreadActionCount: 7,
-      timeline: [],
-      requests: [],
+    vi.mocked(countDueLeaveAssignments).mockResolvedValue({
+      total: 7, overdue: 3,
     } as never);
     vi.mocked(getCreditControlPayload).mockResolvedValue({
       summary: { queue: { students: 11 }, packages: { notify: 4 } },

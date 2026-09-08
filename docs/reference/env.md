@@ -405,3 +405,13 @@ _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
 | `CLASSROOM_WEEKEND_ALERTS_ENABLED_AT` | ISO timestamp with offset; missing disables scheduled evaluation. Prevents retroactive missing-run alerts before activation. |
 
 These are read by the weekend checker and shared health calendar; existing Apps Script relay configuration provides delivery. [Runbook](../operations/weekend-classroom-alerts.md).
+
+### Leave daily queue additions (migration 0080)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LEAVE_ROSTER_SPREADSHEET_ID` | `1dacHgICN6YgH-guVV1maN5H3KtMSheKyCsmy708jwOs` | Monthly admin roster, including colours and shift legend |
+| `LEAVE_NORMALIZATION_MODEL` | `gpt-6-astra` | Leave-only Responses model; medium reasoning is fixed in code |
+| `LEAVE_NORMALIZATION_API_KEY` | falls back to `OPENAI_API_KEY` | Optional dedicated key with model access and API credits |
+
+No model failure falls back to an unverified leave window. The queue retains existing work, exposes the processing issue and retries automatically. `LEAVE_REQUESTS_CONNECTED_EMAIL` should identify the established Sheets integration account; other healthy candidates are considered by most recent token refresh.

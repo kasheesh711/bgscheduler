@@ -32,7 +32,7 @@ each table is documented on exactly one diagram page.
 | `sales-dashboard` | 7 | [erd-sales-dashboard.md](./erd-sales-dashboard.md) |
 | `ai-and-proposals` | 6 | [erd-ai-and-proposals.md](./erd-ai-and-proposals.md) |
 | `student-promotions` | 6 | [erd-student-promotions.md](./erd-student-promotions.md) |
-| `leave-requests` | 5 | [erd-leave-requests.md](./erd-leave-requests.md) |
+| `leave-requests` | 13 | [erd-leave-requests.md](./erd-leave-requests.md) |
 | `room-capacity` | 4 | [erd-room-capacity.md](./erd-room-capacity.md) |
 | `onsite-foot-traffic` | 4 | [erd-onsite-foot-traffic.md](./erd-onsite-foot-traffic.md) |
 | `tutor-profiles` | 2 | [erd-tutor-profiles.md](./erd-tutor-profiles.md) |
@@ -451,3 +451,18 @@ adding a table means a new `drizzle/` migration and a new row here.
   per month — is enforced by a partial unique index.
 
 _Verified mechanically against the working tree on 2026-09-04._
+
+## Leave daily work additions — migration 0080
+
+The Leave Requests domain now owns 13 tables. The original five above remain for source/legacy compatibility; these eight snapshot-independent tables power the daily workflow. See [the current Leave Requests ERD](./erd-leave-requests.md) for keys and invariants.
+
+| SQL table | Drizzle export | Grain |
+|---|---|---|
+| `leave_roster_people` | `leaveRosterPeople` | Existing admin account and roster aliases |
+| `leave_roster_shifts` | `leaveRosterShifts` | One admin on one Bangkok date |
+| `leave_normalizations` | `leaveNormalizations` | Source request + meaningful input/model/prompt revision |
+| `leave_assignments` | `leaveAssignments` | Stable teacher identity + class date |
+| `leave_class_tasks` | `leaveClassTasks` | One shared cancellation per Wise session ID |
+| `leave_family_tasks` | `leaveFamilyTasks` | Assignment + established family/student identity |
+| `leave_work_events` | `leaveWorkEvents` | Audited, idempotent workflow mutation |
+| `leave_work_state` | `leaveWorkState` | Source/roster/class freshness and resumable bundle checkpoint |

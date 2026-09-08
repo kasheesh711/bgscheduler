@@ -5,7 +5,7 @@ import * as schema from "@/lib/db/schema";
 import { getCreditControlPayload } from "@/lib/credit-control/service";
 import { getDataHealthDashboardPayload } from "@/lib/data-health/dashboard";
 import type { CronJobStatus } from "@/lib/data-health/types";
-import { listLeaveRequests } from "@/lib/leave-requests/data";
+import { countDueLeaveAssignments } from "@/lib/leave-requests/work-data";
 import { canAccessHref, NAV_TOOLS, type NavBadgeKey, type NavToolId } from "@/lib/navigation/tools";
 import { todayBangkok } from "@/lib/room-capacity/dates";
 import { getGoogleTokenStatus } from "@/lib/sales-dashboard/google-oauth";
@@ -167,7 +167,7 @@ export async function getHomeSummaryPayload(
     googleSheets,
   ] = await Promise.all([
     canAccess("leaveRequests")
-      ? loadSource(() => listLeaveRequests(db, { summaryOnly: true }))
+      ? loadSource(() => countDueLeaveAssignments(db))
       : Promise.resolve({ data: null, error: null }),
     canAccess("lineReviews")
       ? loadSource(() => countLinePendingReviews(db))
@@ -194,8 +194,8 @@ export async function getHomeSummaryPayload(
     canAccess("leaveRequests")
       ? actionItem(
         "leaveRequests",
-        leaveRequests.data?.unreadActionCount ?? 0,
-        `${leaveRequests.data?.cards.new ?? 0} new, ${leaveRequests.data?.cards.needsReview ?? 0} needs review`,
+        leaveRequests.data?.total ?? 0,
+        `${leaveRequests.data?.overdue ?? 0} overdue assignments; cancellations and families to inform`,
         leaveRequests.error,
       )
       : null,

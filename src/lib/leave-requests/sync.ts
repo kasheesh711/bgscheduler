@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { fetchGoogleSheetRows } from "@/lib/sales-dashboard/sheets";
@@ -13,10 +13,18 @@ import {
   LEAVE_REQUESTS_SHEET_NAME,
   LEAVE_REQUESTS_SPREADSHEET_ID,
   LEAVE_REQUESTS_SPREADSHEET_URL,
+  LEAVE_NORMALIZATION_MODEL, LEAVE_NORMALIZATION_PROMPT_VERSION, LEAVE_SYNC_ABANDONED_MS,
 } from "./config";
-import { initialWorkflowStatus, insertLeaveRequestLog, recomputeAffectedSessionsForRequest } from "./data";
+import { initialWorkflowStatus } from "./data";
 import { buildTutorMatcher, type TutorMatch } from "./matching";
 import { parseLeaveRequestSheetRows, type ParsedLeaveRequestRow } from "./parser";
+import { normalizationInput, normalizationKey } from "./normalization";
+import { processLeaveNormalizations } from "./processing";
+import { syncLeaveRoster } from "./roster";
+import { allocateDueLeaveWork, reconcileLeaveWork } from "./work-reconcile";
+import { setWorkState } from "./work-data";
+import { flushLeaveWritebacks } from "./writeback";
+import { todayBangkok } from "@/lib/room-capacity/dates";
 
 export class LeaveRequestSyncAlreadyRunningError extends Error {
   constructor() {
@@ -31,6 +39,8 @@ export interface SyncLeaveRequestsOptions {
   actorName?: string | null;
   connectedEmail?: string | null;
   sender?: ScheduleEmailSender;
+  suppressNotifications?: boolean;
+  normalizationBudgetMs?: number;
 }
 
 export interface SyncLeaveRequestsResult {
@@ -39,6 +49,8 @@ export interface SyncLeaveRequestsResult {
   insertedCount: number;
   updatedCount: number;
   notificationCount: number;
+  reconciliation?: { changed: number; matchedClasses: number; remaining: number };
+  processing?: { processed: number; failed: number; remaining: number; serviceError?: string | null };
 }
 
 interface GoogleSheetsTokenCandidate {
@@ -137,7 +149,7 @@ export async function resolveLeaveRequestsConnectedEmail(
       lastError: schema.googleOAuthTokens.lastError,
     })
     .from(schema.googleOAuthTokens)
-    .orderBy(asc(schema.googleOAuthTokens.updatedAt));
+    .orderBy(desc(schema.googleOAuthTokens.updatedAt));
   const selected = selectLeaveRequestsConnectedEmail({
     configuredEmail: LEAVE_REQUESTS_CONNECTED_EMAIL,
     actorEmail,
@@ -193,78 +205,44 @@ function valuesForParsedRow(
   };
 }
 
-async function upsertLeaveRequestRow(
-  db: Database,
-  parsed: ParsedLeaveRequestRow,
-  match: TutorMatch,
-  syncRunId: string,
-) {
-  const [existing] = await db
-    .select()
-    .from(schema.leaveRequests)
-    .where(and(
-      eq(schema.leaveRequests.spreadsheetId, LEAVE_REQUESTS_SPREADSHEET_ID),
-      eq(schema.leaveRequests.sheetName, LEAVE_REQUESTS_SHEET_NAME),
-      eq(schema.leaveRequests.sourceRowNumber, parsed.sourceRowNumber),
-    ))
-    .limit(1);
-  const values = valuesForParsedRow(parsed, match, syncRunId);
-
-  if (!existing || existing.spreadsheetId !== LEAVE_REQUESTS_SPREADSHEET_ID || existing.sheetName !== LEAVE_REQUESTS_SHEET_NAME) {
-    const workflowStatus = initialWorkflowStatus({
-      normalizationStatus: parsed.normalizationStatus,
-      matchConfidence: match.matchConfidence,
-      sourceSheetStatus: parsed.sourceSheetStatus,
-    });
-    const [inserted] = await db
-      .insert(schema.leaveRequests)
-      .values({
-        spreadsheetId: LEAVE_REQUESTS_SPREADSHEET_ID,
-        sheetName: LEAVE_REQUESTS_SHEET_NAME,
-        ...values,
-        workflowStatus,
-        unread: true,
-      })
-      .returning();
-    await insertLeaveRequestLog(db, {
-      leaveRequestId: inserted.id,
-      actionType: "source_inserted",
-      status: "success",
-      message: `Synced new Form Responses 1 row ${parsed.sourceRowNumber}.`,
-      requestPayload: { sourceRowNumber: parsed.sourceRowNumber },
-    });
-    return { row: inserted, inserted: true, updated: false };
+export async function importLeaveSourceRows(db: Database, parsedRows: ParsedLeaveRequestRow[], matcher: Awaited<ReturnType<typeof buildTutorMatcher>>, syncRunId: string) {
+  const [existing, cachedRevisions] = await Promise.all([
+    db.select().from(schema.leaveRequests).where(and(eq(schema.leaveRequests.spreadsheetId, LEAVE_REQUESTS_SPREADSHEET_ID), eq(schema.leaveRequests.sheetName, LEAVE_REQUESTS_SHEET_NAME))),
+    db.select({ requestId: schema.leaveNormalizations.requestId, inputKey: schema.leaveNormalizations.inputKey, status: schema.leaveNormalizations.status, error: schema.leaveNormalizations.error }).from(schema.leaveNormalizations),
+  ]);
+  const byRow = new Map(existing.map((row) => [row.sourceRowNumber, row]));
+  const cached = new Map(cachedRevisions.map((row) => [`${row.requestId}:${row.inputKey}`, row]));
+  const changes: Array<typeof schema.leaveRequests.$inferInsert> = [];
+  for (const parsed of parsedRows) {
+    const old = byRow.get(parsed.sourceRowNumber);
+    const match = matcher.match({ tutorName: parsed.tutorName, tutorEmail: parsed.tutorEmail });
+    const inputKey = normalizationKey(normalizationInput(parsed));
+    if (old?.sourceFingerprint === parsed.sourceFingerprint && old.currentNormalizationKey === inputKey && old.tutorCanonicalKey === match.tutorCanonicalKey) continue;
+    const changed = old?.currentNormalizationKey !== inputKey;
+    const previousInterpretation = old ? cached.get(`${old.id}:${inputKey}`) : undefined;
+    changes.push({ ...valuesForParsedRow(parsed, match, syncRunId), spreadsheetId: LEAVE_REQUESTS_SPREADSHEET_ID, sheetName: LEAVE_REQUESTS_SHEET_NAME, currentNormalizationKey: inputKey,
+      normalizationStatus: changed ? previousInterpretation?.status === "ok" ? "ok" : previousInterpretation?.status === "failed" ? "failed" : "pending" : old.normalizationStatus,
+      normalizationError: changed ? previousInterpretation?.error ?? null : old.normalizationError,
+      workflowStatus: old?.workflowStatus ?? initialWorkflowStatus({ ...parsed, matchConfidence: match.matchConfidence }),
+      unread: old?.unread ?? true });
   }
-
-  const fingerprintChanged = existing.sourceFingerprint !== parsed.sourceFingerprint;
-  const matchChanged = existing.tutorGroupId !== match.tutorGroupId || existing.matchConfidence !== match.matchConfidence;
-  const statusChanged = existing.sourceSheetStatus !== parsed.sourceSheetStatus;
-  const workflowStatus =
-    (existing.workflowStatus === "new" || existing.workflowStatus === "needs_review") &&
-    (parsed.normalizationStatus !== "ok" || match.matchConfidence === "unmatched")
-      ? "needs_review"
-      : existing.workflowStatus;
-
-  const [updated] = await db
-    .update(schema.leaveRequests)
-    .set({
-      ...values,
-      workflowStatus,
-      unread: existing.unread || fingerprintChanged,
-    })
-    .where(eq(schema.leaveRequests.id, existing.id))
-    .returning();
-
-  if (fingerprintChanged || matchChanged || statusChanged) {
-    await insertLeaveRequestLog(db, {
-      leaveRequestId: updated.id,
-      actionType: fingerprintChanged ? "source_updated" : "source_refreshed",
-      status: "success",
-      message: `Refreshed Form Responses 1 row ${parsed.sourceRowNumber}.`,
-      requestPayload: { sourceRowNumber: parsed.sourceRowNumber, fingerprintChanged, matchChanged, statusChanged },
-    });
+  const saved: Array<typeof schema.leaveRequests.$inferSelect> = [];
+  for (let offset = 0; offset < changes.length; offset += 50) {
+    const values = changes.slice(offset, offset + 50);
+    const fields = Object.keys(values[0]).filter((key) => !["workflowStatus", "unread", "spreadsheetId", "sheetName", "sourceRowNumber"].includes(key));
+    const columns = schema.leaveRequests;
+    const set = Object.fromEntries(fields.map((key) => [key, sql.raw(`excluded."${(columns[key as keyof typeof columns] as { name: string }).name}"`)]));
+    const rows = await db.insert(schema.leaveRequests).values(values).onConflictDoUpdate({ target: [schema.leaveRequests.spreadsheetId, schema.leaveRequests.sheetName, schema.leaveRequests.sourceRowNumber], set }).returning();
+    saved.push(...rows);
+    await db.insert(schema.leaveRequestActivityLogs).values(rows.map((row) => ({ leaveRequestId: row.id, actionType: byRow.has(row.sourceRowNumber) ? "source_updated" : "source_inserted", message: `Imported source row ${row.sourceRowNumber}.`, requestPayload: { sourceRowNumber: row.sourceRowNumber, sourceFingerprint: row.sourceFingerprint } })));
   }
-  return { row: updated, inserted: false, updated: fingerprintChanged || matchChanged || statusChanged };
+  // A prior kill between source upsert and revision insert is repaired on the next run.
+  const all = new Map(existing.map((r) => [r.sourceRowNumber, r]));
+  saved.forEach((r) => all.set(r.sourceRowNumber, r));
+  const parsedByRow = new Map(parsedRows.map((r) => [r.sourceRowNumber, r]));
+  const revisions = [...all.values()].filter((r) => parsedByRow.has(r.sourceRowNumber)).map((row) => ({ requestId: row.id, inputKey: row.currentNormalizationKey!, model: LEAVE_NORMALIZATION_MODEL, promptVersion: LEAVE_NORMALIZATION_PROMPT_VERSION, input: normalizationInput(parsedByRow.get(row.sourceRowNumber)!) }));
+  for (let offset = 0; offset < revisions.length; offset += 100) await db.insert(schema.leaveNormalizations).values(revisions.slice(offset, offset + 100)).onConflictDoNothing();
+  return { inserted: saved.filter((r) => !byRow.has(r.sourceRowNumber)), updated: saved.filter((r) => byRow.has(r.sourceRowNumber)), migrating: existing.some((r) => !r.currentNormalizationKey) || existing.length === 0 };
 }
 
 async function loadAdminEmails(db: Database): Promise<string[]> {
@@ -281,7 +259,7 @@ function notificationText(requests: Array<typeof schema.leaveRequests.$inferSele
     const date = request.startDate && request.endDate && request.startDate !== request.endDate
       ? `${request.startDate} to ${request.endDate}`
       : request.startDate ?? "date needs review";
-    return `- ${request.tutorName} (${date}) - ${request.affectedClassCount} Wise class(es) affected`;
+    return `- ${request.tutorName} (${date})`;
   });
   const dashboardUrl = `${APP_BASE_URL.replace(/\/$/, "")}/leave-requests`;
   const text = [
@@ -296,9 +274,9 @@ function notificationText(requests: Array<typeof schema.leaveRequests.$inferSele
     <div style="font-family:Inter,Arial,sans-serif;color:#0f172a">
       <h2 style="margin:0 0 12px">New tutor leave requests</h2>
       <ul>
-        ${requests.map((request) => `<li><strong>${escapeHtml(request.tutorName)}</strong> ${escapeHtml(request.startDate ?? "date needs review")} - ${request.affectedClassCount} Wise class(es) affected</li>`).join("")}
+        ${requests.map((request) => `<li><strong>${escapeHtml(request.tutorName)}</strong> ${escapeHtml(request.startDate ?? "date unresolved")}</li>`).join("")}
       </ul>
-      <p><a href="${dashboardUrl}">Open Leave Requests dashboard</a></p>
+      <p><a href="${dashboardUrl}">Open the daily Leave Requests queue</a></p>
       <p style="color:#64748b;font-size:12px">Source: Form Responses 1 only. Leave Analytics and Emergency Tracker are ignored.</p>
     </div>
   `;
@@ -363,93 +341,63 @@ async function sendNewRequestNotifications(
   return successRows;
 }
 
-export async function syncLeaveRequests(
-  db: Database,
-  options: SyncLeaveRequestsOptions,
-): Promise<SyncLeaveRequestsResult> {
+export async function recoverAbandonedLeaveRuns(db: Database, now = new Date()) {
+  return db.update(schema.leaveRequestSyncRuns).set({ status: "failed", finishedAt: now, errorSummary: "Recovered abandoned Leave Requests sync after 20 minutes." })
+    .where(and(eq(schema.leaveRequestSyncRuns.status, "running"), lt(schema.leaveRequestSyncRuns.startedAt, new Date(now.getTime() - LEAVE_SYNC_ABANDONED_MS)))).returning({ id: schema.leaveRequestSyncRuns.id });
+}
+
+export async function syncLeaveRequests(db: Database, options: SyncLeaveRequestsOptions): Promise<SyncLeaveRequestsResult> {
+  await recoverAbandonedLeaveRuns(db);
   let syncRunId = "";
   try {
-    const [run] = await db
-      .insert(schema.leaveRequestSyncRuns)
-      .values({
-        triggerType: options.triggerType,
-        actorEmail: options.actorEmail ?? null,
-        metadata: {
-          spreadsheetId: LEAVE_REQUESTS_SPREADSHEET_ID,
-          sheetName: LEAVE_REQUESTS_SHEET_NAME,
-        },
-      })
-      .returning({ id: schema.leaveRequestSyncRuns.id });
+    const [run] = await db.insert(schema.leaveRequestSyncRuns).values({ triggerType: options.triggerType, actorEmail: options.actorEmail ?? null, metadata: { spreadsheetId: LEAVE_REQUESTS_SPREADSHEET_ID, sheetName: LEAVE_REQUESTS_SHEET_NAME } }).returning({ id: schema.leaveRequestSyncRuns.id });
     syncRunId = run.id;
   } catch (error) {
-    if (isRunningConflict(error)) throw new LeaveRequestSyncAlreadyRunningError();
+    if (isRunningConflict(error) || (error instanceof Error && String(error.cause).includes("leave_request_sync_runs_single_running_idx"))) throw new LeaveRequestSyncAlreadyRunningError();
     throw error;
   }
-
   try {
-    const connectedEmail = options.connectedEmail?.trim().toLowerCase()
-      || await resolveLeaveRequestsConnectedEmail(db, options.actorEmail);
-    const rows = await fetchGoogleSheetRows(connectedEmail, LEAVE_REQUESTS_SPREADSHEET_ID, LEAVE_REQUESTS_SHEET_NAME);
-    const parsedRows = parseLeaveRequestSheetRows(rows);
-    const matcher = await buildTutorMatcher(db);
-    const newRequests: Array<typeof schema.leaveRequests.$inferSelect> = [];
-    let insertedCount = 0;
-    let updatedCount = 0;
-
-    for (const parsed of parsedRows) {
-      const match = matcher.match({ tutorName: parsed.tutorName, tutorEmail: parsed.tutorEmail });
-      const result = await upsertLeaveRequestRow(db, parsed, match, syncRunId);
-      const affectedCount = await recomputeAffectedSessionsForRequest(db, result.row);
-      result.row.affectedClassCount = affectedCount;
-      if (result.inserted) {
-        insertedCount += 1;
-        newRequests.push(result.row);
-      }
-      if (result.updated) updatedCount += 1;
+    const today = todayBangkok();
+    const connectedEmail = options.connectedEmail?.trim().toLowerCase() || await resolveLeaveRequestsConnectedEmail(db, options.actorEmail);
+    let parsedRows: ParsedLeaveRequestRow[];
+    try {
+      parsedRows = parseLeaveRequestSheetRows(await fetchGoogleSheetRows(connectedEmail, LEAVE_REQUESTS_SPREADSHEET_ID, LEAVE_REQUESTS_SHEET_NAME));
+      if (!parsedRows.length) throw new Error("Leave source returned no submissions; existing work has been retained.");
+    } catch (error) {
+      const [prior] = await db.select().from(schema.leaveWorkState).where(eq(schema.leaveWorkState.key, "source"));
+      await setWorkState(db, "source", { ...prior?.value, error: error instanceof Error ? error.message : "Source read failed." });
+      throw error;
     }
-
-    const notificationCount = await sendNewRequestNotifications(
-      db,
-      syncRunId,
-      newRequests,
-      options.sender ?? createAppsScriptScheduleEmailSender(),
-    );
-
-    await db
-      .update(schema.leaveRequestSyncRuns)
-      .set({
-        status: "success",
-        finishedAt: new Date(),
-        scannedRowCount: parsedRows.length,
-        insertedCount,
-        updatedCount,
-        notificationCount,
-        metadata: {
-          spreadsheetId: LEAVE_REQUESTS_SPREADSHEET_ID,
-          sheetName: LEAVE_REQUESTS_SHEET_NAME,
-          connectedEmail,
-          activeSnapshotId: matcher.snapshotId,
-        },
-      })
-      .where(eq(schema.leaveRequestSyncRuns.id, syncRunId));
-
-    return {
-      syncRunId,
-      scannedRowCount: parsedRows.length,
-      insertedCount,
-      updatedCount,
-      notificationCount,
-    };
+    const matcher = await buildTutorMatcher(db);
+    const imported = await importLeaveSourceRows(db, parsedRows, matcher, syncRunId);
+    await setWorkState(db, "source", { readAt: new Date().toISOString(), rowCount: parsedRows.length, error: null });
+    await db.update(schema.leaveRequestSyncRuns).set({ scannedRowCount: parsedRows.length, insertedCount: imported.inserted.length, updatedCount: imported.updated.length }).where(eq(schema.leaveRequestSyncRuns.id, syncRunId));
+    try {
+      const roster = await syncLeaveRoster(db, connectedEmail, today);
+      await setWorkState(db, "roster", { readAt: roster.fetchedAt, missingMonths: roster.missingMonths, error: roster.missingMonths.includes(today.slice(0, 7)) ? "This month's admin roster is missing. Due work remains unassigned." : null });
+    } catch (error) {
+      const [prior] = await db.select().from(schema.leaveWorkState).where(eq(schema.leaveWorkState.key, "roster"));
+      await setWorkState(db, "roster", { ...prior?.value, error: error instanceof Error ? error.message : "Roster read failed." });
+    }
+    const processing = await processLeaveNormalizations(db, { budgetMs: options.normalizationBudgetMs, retryFailures: options.triggerType === "manual" });
+    await setWorkState(db, "processing", { ...processing, error: processing.serviceError });
+    let reconciliation: SyncLeaveRequestsResult["reconciliation"];
+    try { reconciliation = await reconcileLeaveWork(db, today); }
+    catch (error) {
+      const [prior] = await db.select().from(schema.leaveWorkState).where(eq(schema.leaveWorkState.key, "classes"));
+      await setWorkState(db, "classes", { ...prior?.value, error: error instanceof Error ? error.message : "Class reconciliation failed." });
+      throw error;
+    }
+    await allocateDueLeaveWork(db, today);
+    // Writeback failures retry independently; checkoffs and source imports remain durable.
+    const writer = await resolveLeaveRequestsConnectedEmail(db, options.actorEmail, true).catch(() => null);
+    if (writer) await flushLeaveWritebacks(db, writer);
+    const notificationCount = imported.migrating || options.suppressNotifications ? 0 : await sendNewRequestNotifications(db, syncRunId, imported.inserted, options.sender ?? createAppsScriptScheduleEmailSender());
+    const result = { syncRunId, scannedRowCount: parsedRows.length, insertedCount: imported.inserted.length, updatedCount: imported.updated.length, notificationCount, processing, reconciliation };
+    await db.update(schema.leaveRequestSyncRuns).set({ status: "success", finishedAt: new Date(), notificationCount, metadata: { connectedEmail, processing, reconciliation, catchUpEmailsSuppressed: imported.migrating || !!options.suppressNotifications } }).where(eq(schema.leaveRequestSyncRuns.id, syncRunId));
+    return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Leave request sync failed";
-    await db
-      .update(schema.leaveRequestSyncRuns)
-      .set({
-        status: "failed",
-        finishedAt: new Date(),
-        errorSummary: message,
-      })
-      .where(eq(schema.leaveRequestSyncRuns.id, syncRunId));
+    await db.update(schema.leaveRequestSyncRuns).set({ status: "failed", finishedAt: new Date(), errorSummary: error instanceof Error ? error.message : "Leave request sync failed." }).where(eq(schema.leaveRequestSyncRuns.id, syncRunId));
     throw error;
   }
 }

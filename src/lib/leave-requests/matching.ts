@@ -82,32 +82,37 @@ export async function buildTutorMatcher(db: Database): Promise<TutorMatcher> {
   ]);
 
   const byCanonicalKey = new Map(groups.map((group) => [group.canonicalKey, group]));
-  const byName = new Map<string, typeof groups[number]>();
-  const byEmail = new Map<string, typeof groups[number]>();
+  const byName = new Map<string, typeof groups[number] | null>();
+  const byEmail = new Map<string, typeof groups[number] | null>();
+  const byId = new Map(groups.map((group) => [group.id, group]));
+  const addUnique = (map: typeof byName, key: string, group: typeof groups[number]) => {
+    if (!map.has(key)) map.set(key, group);
+    else if (map.get(key)?.canonicalKey !== group.canonicalKey) map.set(key, null);
+  };
 
   for (const group of groups) {
-    for (const alias of tutorNameAliases(group.displayName)) byName.set(alias, group);
-    for (const alias of tutorNameAliases(group.canonicalKey)) byName.set(alias, group);
+    for (const alias of tutorNameAliases(group.displayName)) addUnique(byName, alias, group);
+    for (const alias of tutorNameAliases(group.canonicalKey)) addUnique(byName, alias, group);
   }
   for (const member of members) {
-    const group = byCanonicalKey.get(groups.find((item) => item.id === member.groupId)?.canonicalKey ?? "");
+    const group = byId.get(member.groupId);
     if (!group) continue;
-    for (const alias of tutorNameAliases(member.wiseDisplayName)) byName.set(alias, group);
+    for (const alias of tutorNameAliases(member.wiseDisplayName)) addUnique(byName, alias, group);
   }
   for (const contact of contacts) {
     const group = byCanonicalKey.get(contact.canonicalKey);
     if (!group) continue;
-    for (const email of [contact.onsiteEmail, contact.onlineEmail].map(normalizeEmail).filter(Boolean)) {
-      byEmail.set(email, group);
+    for (const email of [contact.primaryEmail, contact.onsiteEmail, contact.onlineEmail].map(normalizeEmail).filter(Boolean)) {
+      addUnique(byEmail, email, group);
     }
-    for (const alias of tutorNameAliases(contact.displayName)) byName.set(alias, group);
+    for (const alias of tutorNameAliases(contact.displayName)) addUnique(byName, alias, group);
     for (const sourceName of contact.sourceNames ?? []) {
-      for (const alias of tutorNameAliases(sourceName)) byName.set(alias, group);
+      for (const alias of tutorNameAliases(sourceName)) addUnique(byName, alias, group);
     }
   }
   for (const alias of aliases) {
     const target = byName.get(normalizeTutorLookupKey(alias.toKey)) ?? byCanonicalKey.get(alias.toKey);
-    if (target) byName.set(normalizeTutorLookupKey(alias.fromKey), target);
+    if (target) addUnique(byName, normalizeTutorLookupKey(alias.fromKey), target);
   }
 
   return {
