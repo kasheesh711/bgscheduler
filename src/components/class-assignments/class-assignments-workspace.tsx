@@ -613,9 +613,6 @@ export function ClassAssignmentsWorkspace() {
       ? operationTick - new Date(publishProgress.startedAt).getTime()
       : publishProgress.elapsedMs
     : publishProgress?.elapsedMs ?? null;
-  const publishEtaMs = publishProgress && !isPublishJobTerminal(publishProgress.status)
-    ? publishProgress.estimatedRemainingMs
-    : null;
   const scheduleSendElapsedMs = sendingScheduleEmails && scheduleSendStartedAt
     ? operationTick - scheduleSendStartedAt
     : null;
@@ -766,7 +763,8 @@ export function ClassAssignmentsWorkspace() {
           <div className="text-xs text-muted-foreground">Wise publish</div>
           <div className="mt-1 text-sm font-medium">
             {publishProgress?.status === "pending" ? "Waiting for Wise"
-              : run ? `${run.publishedCount} verified / ${run.failedPublishCount} failed` : "No run"}
+              : publishProgress ? `${publishProgress.successCount}/${publishProgress.eligibleCount} verified · ${publishProgress.remainingCount} remaining`
+                : run ? `${run.publishedCount} verified / ${run.failedPublishCount} failed` : "No run"}
           </div>
         </div>
       </div>
@@ -1023,9 +1021,9 @@ export function ClassAssignmentsWorkspace() {
                     )}
                   </div>
                   <div className="text-right">
-                    <div className="text-xs text-muted-foreground">Elapsed / ETA</div>
+                    <div className="text-xs text-muted-foreground">Elapsed</div>
                     <div className="font-medium">
-                      {formatDuration(publishElapsedMs)} / {formatDuration(publishEtaMs)}
+                      {formatDuration(publishElapsedMs)}
                     </div>
                   </div>
                 </div>
