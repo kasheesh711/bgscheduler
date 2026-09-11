@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { teacherEmailLogoUrl } from "@/lib/teacher-emails/brand";
+import { teacherEmailPublicBaseUrl as publicBaseUrl } from "@/lib/teacher-emails/config";
+import { buildTeachingScheduleEmail, formatTeacherEmailDate, teachingScheduleSubject } from "@/lib/teacher-emails/templates";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -9,7 +12,6 @@ import { notifiedTutorKeys } from "./notification-state";
 import { isOnsiteSessionType, sessionModeLabel } from "./session-mode";
 
 type ClassroomRun = typeof schema.classroomAssignmentRuns.$inferSelect;
-const DEFAULT_PUBLIC_BASE_URL = "https://bgscheduler.vercel.app";
 const FLOOR_PLAN_MAP_VERSION = "2026-05-18-corridor";
 
 interface AssignmentEmailRow {
@@ -153,26 +155,11 @@ interface AppsScriptSenderConfig {
   secretEnvName: string;
 }
 
-function formatRunDate(date: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  if (!year || !month || !day) return date;
-  return `${day}/${month}/${year}`;
-}
-
 function formatMinute(minute: number): string {
   const normalized = Math.max(0, minute);
   const hours = Math.floor(normalized / 60);
   const minutes = normalized % 60;
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 function classLabel(row: Pick<AssignmentEmailRow, "subject" | "classType" | "title">): string {
@@ -221,23 +208,6 @@ function toRoomSteps(rows: AssignmentEmailRow[]): ScheduleEmailRoomStep[] {
     }));
 }
 
-function withProtocol(value: string): string {
-  return /^https?:\/\//i.test(value) ? value : `https://${value}`;
-}
-
-function publicBaseUrl(): string {
-  const configured = process.env.SCHEDULE_EMAIL_PUBLIC_BASE_URL?.trim();
-  if (configured) return withProtocol(configured).replace(/\/+$/, "");
-
-  const production = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
-  if (production) return withProtocol(production).replace(/\/+$/, "");
-
-  const deployment = process.env.VERCEL_URL?.trim();
-  if (deployment) return withProtocol(deployment).replace(/\/+$/, "");
-
-  return DEFAULT_PUBLIC_BASE_URL;
-}
-
 function floorPlanMapUrl(roomSteps: ScheduleEmailRoomStep[]): string {
   const rooms = [...new Set(roomSteps.map((step) => step.room))];
   const url = new URL("/api/classrooms/floor-plan-map", publicBaseUrl());
@@ -264,111 +234,6 @@ function appsScriptSenderConfig(senderKey: ScheduleEmailSenderKey): AppsScriptSe
     urlEnvName: "SCHEDULE_EMAIL_APPS_SCRIPT_URL",
     secretEnvName: "SCHEDULE_EMAIL_APPS_SCRIPT_SECRET",
   };
-}
-
-function renderHtmlEmail(input: {
-  tutorDisplayName: string;
-  dateLabel: string;
-  blocks: ScheduleEmailBlock[];
-  roomSteps: ScheduleEmailRoomStep[];
-  mapImageUrl: string;
-  usualRooms?: string[];
-}): string {
-  const roomRows = input.roomSteps.length > 0
-    ? input.roomSteps.map((step) => `
-      <tr>
-        <td style="width:48px;padding:8px 8px 8px 0;vertical-align:top;">
-          <div style="width:30px;height:30px;border-radius:999px;background:#2563eb;color:#ffffff;text-align:center;line-height:30px;font-weight:700;">${step.order}</div>
-        </td>
-        <td style="padding:8px 0;vertical-align:top;">
-          <div style="font-family:Arial,sans-serif;font-size:14px;color:#0f172a;font-weight:700;">${escapeHtml(step.room)}</div>
-          <div style="font-family:Arial,sans-serif;font-size:13px;color:#475569;">${escapeHtml(step.time)}</div>
-        </td>
-      </tr>
-    `).join("")
-    : `
-      <tr>
-        <td style="padding:10px 0;color:#475569;font-size:14px;">No physical room needed for this schedule.</td>
-      </tr>
-    `;
-  const rows = input.blocks.map((block) => `
-    <tr>
-      <td style="padding:10px 12px;border-bottom:1px solid #dbeafe;font-family:Menlo,Consolas,monospace;white-space:nowrap;color:#1e40af;font-weight:700;">${escapeHtml(block.time)}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #dbeafe;">${escapeHtml(block.studentOrClass)}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #dbeafe;">${escapeHtml(block.subject)}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #dbeafe;">${escapeHtml(block.mode)}</td>
-      <td style="padding:10px 12px;border-bottom:1px solid #dbeafe;font-weight:700;color:#f97316;">${escapeHtml(block.room)}</td>
-    </tr>
-  `).join("");
-
-  return `<!doctype html>
-<html>
-  <body style="margin:0;background:#eff6ff;color:#0f172a;font-family:Arial,sans-serif;">
-    <div style="max-width:780px;margin:0 auto;padding:24px;">
-      <div style="background:#2563eb;border-radius:18px 18px 0 0;padding:24px 26px;border-bottom:6px solid #f97316;">
-        <div style="font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#ffedd5;">BeGifted</div>
-        <h1 style="font-size:26px;line-height:1.2;margin:6px 0 4px;color:#ffffff;">Teaching schedule</h1>
-        <p style="margin:0;color:#dbeafe;font-size:15px;">${escapeHtml(input.tutorDisplayName)} - ${escapeHtml(input.dateLabel)}</p>
-      </div>
-
-      <div style="background:#ffffff;border:1px solid #bfdbfe;border-top:0;padding:20px 24px;">
-        <table role="presentation" style="width:100%;border-collapse:collapse;">
-          <tr>
-            <td style="vertical-align:top;padding-right:18px;width:38%;">
-              <div style="font-size:15px;font-weight:800;color:#1e40af;margin-bottom:8px;">Room route</div>
-              <table role="presentation" style="width:100%;border-collapse:collapse;">${roomRows}</table>
-            </td>
-            <td style="vertical-align:top;width:62%;">
-              <div style="font-size:15px;font-weight:800;color:#1e40af;margin-bottom:8px;">School map</div>
-              <img src="${escapeHtml(input.mapImageUrl)}" width="440" alt="BeGifted floor plan with assigned rooms highlighted" style="display:block;width:100%;max-width:440px;border:1px solid #bfdbfe;border-radius:12px;background:#ffffff;" />
-            </td>
-          </tr>
-        </table>
-      </div>
-
-      ${input.usualRooms?.length ? `<p style="font-size:14px;color:#16203a;padding:12px;background:#fff4ec;">Usual rooms: <strong>${input.usualRooms.map(escapeHtml).join(" · ")}</strong></p>` : ""}
-      <table style="width:100%;border-collapse:collapse;background:#ffffff;border:1px solid #bfdbfe;border-top:0;border-radius:0 0 18px 18px;overflow:hidden;">
-        <thead>
-          <tr style="background:#f97316;text-align:left;color:#ffffff;">
-            <th style="padding:11px 12px;border-bottom:1px solid #ea580c;">Time</th>
-            <th style="padding:11px 12px;border-bottom:1px solid #ea580c;">Student/Class</th>
-            <th style="padding:11px 12px;border-bottom:1px solid #ea580c;">Subject</th>
-            <th style="padding:11px 12px;border-bottom:1px solid #ea580c;">Mode</th>
-            <th style="padding:11px 12px;border-bottom:1px solid #ea580c;">Room</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <div style="font-size:12px;color:#64748b;margin-top:12px;text-align:center;">Room numbers on the map match the room route order above.</div>
-    </div>
-  </body>
-</html>`;
-}
-
-function renderTextEmail(input: {
-  tutorDisplayName: string;
-  dateLabel: string;
-  blocks: ScheduleEmailBlock[];
-  roomSteps: ScheduleEmailRoomStep[];
-  mapImageUrl: string;
-  usualRooms?: string[];
-}): string {
-  const lines = [
-    `BeGifted schedule for ${input.tutorDisplayName} - ${input.dateLabel}`,
-    "",
-    ...(input.usualRooms?.length ? [`Usual rooms: ${input.usualRooms.join(" · ")}`, ""] : []),
-    "Room route:",
-    ...(input.roomSteps.length > 0
-      ? input.roomSteps.map((step) => `${step.order}. ${step.time} - ${step.room}`)
-      : ["No physical room needed for this schedule."]),
-    `Map: ${input.mapImageUrl}`,
-    "",
-    "Time | Student/Class | Subject | Mode | Room",
-    ...input.blocks.map((block) =>
-      `${block.time} | ${block.studentOrClass} | ${block.subject} | ${block.mode} | ${block.room}`,
-    ),
-  ];
-  return lines.join("\n");
 }
 
 async function loadRun(db: Database, runId: string): Promise<ClassroomRun> {
@@ -452,7 +317,7 @@ export async function getScheduleEmailPreview(
 ): Promise<ScheduleEmailPreview> {
   const run = await loadRun(db, runId);
   const rows = await loadRows(db, runId);
-  const subject = `BeGifted schedule for ${formatRunDate(run.assignmentDate)}`;
+  const subject = teachingScheduleSubject(formatTeacherEmailDate(run.assignmentDate));
   const hardBlockers: ScheduleEmailBlocker[] = [...emailConfigBlockers(options.senderKey ?? "primary")];
   const blockers: ScheduleEmailBlocker[] = [...hardBlockers];
 
@@ -474,7 +339,7 @@ export async function getScheduleEmailPreview(
   const contacts = await loadContactByCanonicalKey(db, canonicalKeys);
   const recipients: ScheduleEmailRecipient[] = [];
   const previews: ScheduleEmailPreviewItem[] = [];
-  const dateLabel = formatRunDate(run.assignmentDate);
+  const dateLabel = formatTeacherEmailDate(run.assignmentDate);
 
   const schedule = buildTeacherSchedule(rows, run.assignmentDate, run.changeSummary ?? {});
   for (const [canonicalKey, groupRows] of rowsByGroup) {
@@ -531,22 +396,13 @@ export async function getScheduleEmailPreview(
     previews.push({
       recipient,
       usualRooms,
-      subject,
-      html: renderHtmlEmail({
+      ...buildTeachingScheduleEmail({
         tutorDisplayName: first.tutorDisplayName,
         dateLabel,
         blocks,
-        roomSteps,
-        mapImageUrl,
         usualRooms,
-      }),
-      text: renderTextEmail({
-        tutorDisplayName: first.tutorDisplayName,
-        dateLabel,
-        blocks,
-        roomSteps,
-        mapImageUrl,
-        usualRooms,
+        mapUrl: roomSteps.length ? mapImageUrl : null,
+        logoUrl: teacherEmailLogoUrl(publicBaseUrl()),
       }),
       blocks,
       roomSteps,

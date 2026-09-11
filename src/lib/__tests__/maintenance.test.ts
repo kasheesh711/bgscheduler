@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { TEACHER_EMAIL_LOGO_PATH } from "@/lib/teacher-emails/brand";
 
 import {
   MAINTENANCE_EXEMPT_PREFIXES,
@@ -37,6 +38,13 @@ describe("isMaintenanceMode — MAINT-01 fail-open polarity", () => {
 });
 
 describe("isMaintenanceExempt — MAINT-02 exempt prefixes", () => {
+  it("exempts only the released email logo, not the surrounding asset directory", () => {
+    expect(isMaintenanceExempt(TEACHER_EMAIL_LOGO_PATH)).toBe(true);
+    expect(isMaintenanceExempt(`${TEACHER_EMAIL_LOGO_PATH}/extra`)).toBe(false);
+    expect(isMaintenanceExempt("/brand/email/v3/private.png")).toBe(false);
+    expect(isMaintenanceExempt("/brand/logo-horizontal.png")).toBe(false);
+  });
+
   it.each([
     "/api/internal/sync-wise",
     "/api/internal/cron-watchdog",

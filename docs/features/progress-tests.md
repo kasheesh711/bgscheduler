@@ -20,6 +20,8 @@ and covered by 13 test files. Its one Wise **write** capability is opt-in and of
 `WISE_SESSION_CREATE_VERIFIED` ([`config.ts:49`-`51`](../../src/lib/progress-tests/config.ts));
 everything else it does toward Wise is read-only.
 
+The teacher heads-up uses the shared BeGifted v3 email templates in `src/lib/teacher-emails/`: student and subject first, explicit cycle progress and next action, then a labelled AI-generated summary (strengths, focus areas and recommendation) or the insufficient-feedback fallback. HTML and plain text share content. The existing Progress Tests link, recipient resolution, per-cycle notification stamps and relay idempotency are preserved. Admin digests retain their existing design. Preview synthetic examples with `npm run emails:preview`.
+
 ## Purpose
 
 BeGifted's teaching contract is that a student sits a **progress test every eight attended

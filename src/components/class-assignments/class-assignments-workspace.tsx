@@ -4,7 +4,7 @@ import { AdminRoomReservations, useAdminRoomReservations, reservationDisplayRows
 import { ClassroomReadiness } from "./readiness-notice";
 import { summarizeAssignmentReadiness } from "./readiness-summary";
 
-import Image from "next/image";
+import { TeacherEmailPreview } from "./teacher-email-preview";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
@@ -78,6 +78,7 @@ interface ScheduleEmailPreview {
       blockReason: string | null;
     };
     subject: string;
+    html: string;
     text: string;
     roomSteps: Array<{
       order: number;
@@ -1232,60 +1233,7 @@ export function ClassAssignmentsWorkspace() {
                           </Button>
                         </div>
                       </div>
-                      <div className="mt-3 grid gap-3 md:grid-cols-[220px_1fr]">
-                        <div className="rounded-md border bg-muted/20 p-2">
-                          <div className="text-xs font-medium text-muted-foreground">Room route</div>
-                          <div className="mt-2 space-y-1">
-                            {preview.roomSteps.length > 0 ? (
-                              preview.roomSteps.map((step) => (
-                                <div key={`${step.order}-${step.room}-${step.time}`} className="flex items-center gap-2 text-xs">
-                                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
-                                    {step.order}
-                                  </span>
-                                  <span>
-                                    <span className="font-medium">{step.room}</span>
-                                    <span className="text-muted-foreground"> · {step.time}</span>
-                                  </span>
-                                </div>
-                              ))
-                            ) : (
-                              <div className="text-xs text-muted-foreground">No physical room needed.</div>
-                            )}
-                          </div>
-                        </div>
-                        <Image
-                          src={preview.mapImageUrl}
-                          alt={`BeGifted floor plan for ${preview.recipient.tutorDisplayName}`}
-                          width={640}
-                          height={360}
-                          unoptimized
-                          className="w-full rounded-md border bg-white"
-                        />
-                      </div>
-                      <div className="mt-3 overflow-auto rounded-md border">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Time</TableHead>
-                              <TableHead>Student/Class</TableHead>
-                              <TableHead>Subject</TableHead>
-                              <TableHead>Mode</TableHead>
-                              <TableHead>Room</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {preview.blocks.map((block) => (
-                              <TableRow key={block.rowId}>
-                                <TableCell className="font-mono text-xs">{block.time}</TableCell>
-                                <TableCell>{block.studentOrClass}</TableCell>
-                                <TableCell>{block.subject}</TableCell>
-                                <TableCell>{block.mode}</TableCell>
-                                <TableCell className="font-medium">{block.room}</TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
+                      <TeacherEmailPreview subject={preview.subject} html={preview.html} text={preview.text} />
                     </div>
                   ))}
                 </div>

@@ -9,6 +9,7 @@ vi.mock("@/lib/auth-session", () => ({ validateSessionAccess: vi.fn() }));
 
 import middleware from "@/proxy";
 import { validateSessionAccess } from "@/lib/auth-session";
+import { TEACHER_EMAIL_LOGO_PATH } from "@/lib/teacher-emails/brand";
 
 beforeEach(() => {
   vi.mocked(validateSessionAccess).mockReset().mockImplementation(async (session) => session);
@@ -24,6 +25,24 @@ function makeReq(pathname: string, isAuth = false, search = "", allowedPages?: s
 }
 
 describe("middleware — TCOV-06 part 2 (bypass paths)", () => {
+  it.each(["false", "true"])("serves the exact teacher-email logo without a session during maintenance=%s", async (maintenance) => {
+    vi.stubEnv("MAINTENANCE_MODE", maintenance);
+    try {
+      const response = await middleware(makeReq(TEACHER_EMAIL_LOGO_PATH) as never, {} as never) as Response;
+      expect(response.status).toBe(200);
+      expect(response.headers.get("location")).toBeNull();
+      expect(validateSessionAccess).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(["/brand/email/v3/private.png", `${TEACHER_EMAIL_LOGO_PATH}/extra`, "/brand/logo-horizontal.png"])("does not expose neighboring brand paths: %s", async (pathname) => {
+    const response = await middleware(makeReq(pathname) as never, {} as never) as Response;
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toContain("/login");
+  });
+
   it.each(["/api/line/webhook", "/api/internal/sync-wise", "/api/auth/session", "/schedule/token"])("does not read account access on public route %s even with a cookie", async (pathname) => {
     await middleware(makeReq(pathname, true) as never, {} as never);
     expect(validateSessionAccess).not.toHaveBeenCalled();

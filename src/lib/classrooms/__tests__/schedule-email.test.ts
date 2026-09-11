@@ -141,7 +141,7 @@ describe("schedule email preview", () => {
       metadata: { roomPolicies: [{ canonicalKey: "kevin", revision: 2, rooms: ["Think Outside the Box", "Cool", "Do It"] }] } });
     const preview = await getScheduleEmailPreview(db as never, "run-1");
     expect(preview.previews[0].usualRooms).toEqual(["Think Outside the Box", "Cool", "Do It"]);
-    expect(preview.previews[0].text).toContain("Usual rooms: Think Outside the Box · Cool · Do It");
+    expect(preview.previews[0].text).toContain("Your usual rooms\nThink Outside the Box · Cool · Do It");
     expect(preview.previews[0].html).toContain("outside usual rooms");
   });
 
@@ -205,10 +205,10 @@ describe("schedule email preview", () => {
       { order: 1, time: "16:00-17:00", room: "Focus" },
     ]);
     expect(preview.previews[0].mapImageUrl).toBe("https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&v=2026-05-18-corridor");
-    expect(preview.previews[0].html).toContain("School map");
+    expect(preview.previews[0].html).toContain("View school map");
     expect(preview.previews[0].html).toContain("https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&amp;v=2026-05-18-corridor");
-    expect(preview.previews[0].text).toContain("Room route:");
-    expect(preview.previews[0].text).toContain("Map: https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&v=2026-05-18-corridor");
+    expect(preview.previews[0].text).toContain("Here is your teaching schedule.");
+    expect(preview.previews[0].text).toContain("View school map: https://schedule.example.com/api/classrooms/floor-plan-map?rooms=Focus&v=2026-05-18-corridor");
   });
 
   it("formats schedule blocks from Bangkok minute columns", async () => {
