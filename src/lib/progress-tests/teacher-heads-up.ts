@@ -19,6 +19,9 @@
 // summary, recipient PII, or any feedback text — only counts + error messages.
 
 import { eq, sql } from "drizzle-orm";
+import { teacherEmailLogoUrl } from "@/lib/teacher-emails/brand";
+import { teacherEmailPublicBaseUrl } from "@/lib/teacher-emails/config";
+import { buildProgressTestEmail } from "@/lib/teacher-emails/templates";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { APP_BASE_URL } from "@/lib/leave-requests/config";
@@ -68,16 +71,6 @@ export interface TeacherHeadsUpResult {
   outcomes: TeacherHeadsUpOutcome[];
 }
 
-/** Escapes the five HTML-significant characters in interpolated email fields. */
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
 /** Builds the per-cycle idempotency key shared by the email run + notification. */
 function idempotencyKeyFor(enrollmentKey: string, cycleIndex: number): string {
   return `progress-test:teacher:${enrollmentKey}:${cycleIndex}`;
@@ -114,97 +107,6 @@ async function resolveTeacherEmail(
 
   if (!contact || !contact.active) return null;
   return contact.onsiteEmail?.trim() || contact.onlineEmail?.trim() || null;
-}
-
-/** Renders the AI summary block (plain text), or a graceful fallback line. */
-function renderSummaryText(summary: ProgressTestAiSummary | null): string[] {
-  if (!summary) {
-    return [
-      "AI summary: not enough recent feedback — please review recent classes before the test.",
-    ];
-  }
-  const lines = [`AI summary: ${summary.headline}`];
-  if (summary.strengths.length > 0) {
-    lines.push("Strengths:", ...summary.strengths.map((item) => `- ${item}`));
-  }
-  if (summary.focusAreas.length > 0) {
-    lines.push("Focus areas:", ...summary.focusAreas.map((item) => `- ${item}`));
-  }
-  if (summary.recommendation.trim()) {
-    lines.push(`Recommendation: ${summary.recommendation}`);
-  }
-  return lines;
-}
-
-/** Renders the AI summary block (HTML), or a graceful fallback paragraph. */
-function renderSummaryHtml(summary: ProgressTestAiSummary | null): string {
-  if (!summary) {
-    return `<p style="margin:0 0 16px;color:#475569;">We do not have enough recent feedback to summarize automatically — please review the student's recent classes before the test.</p>`;
-  }
-  const blocks = [
-    `<p style="margin:0 0 12px;"><strong>${escapeHtml(summary.headline)}</strong></p>`,
-  ];
-  if (summary.strengths.length > 0) {
-    blocks.push(
-      `<p style="margin:0 0 4px;color:#475569;">Strengths</p><ul style="margin:0 0 12px;">${summary.strengths
-        .map((item) => `<li>${escapeHtml(item)}</li>`)
-        .join("")}</ul>`,
-    );
-  }
-  if (summary.focusAreas.length > 0) {
-    blocks.push(
-      `<p style="margin:0 0 4px;color:#475569;">Focus areas</p><ul style="margin:0 0 12px;">${summary.focusAreas
-        .map((item) => `<li>${escapeHtml(item)}</li>`)
-        .join("")}</ul>`,
-    );
-  }
-  if (summary.recommendation.trim()) {
-    blocks.push(
-      `<p style="margin:0 0 12px;color:#475569;">Recommendation: ${escapeHtml(summary.recommendation)}</p>`,
-    );
-  }
-  return blocks.join("");
-}
-
-/** Builds the heads-up email subject for an enrollment. */
-function buildSubject(enrollment: TeacherHeadsUpEnrollment): string {
-  return `[BeGifted] Progress test coming up for ${enrollment.studentName} (${enrollment.subject || "class"})`;
-}
-
-/** Builds the plain-text heads-up email body. */
-function buildText(enrollment: TeacherHeadsUpEnrollment): string {
-  const cyclePosition = `${enrollment.currentCount} of ${PROGRESS_TEST_THRESHOLD}`;
-  return [
-    `Hi ${enrollment.mostFrequentTutorDisplayName ?? "there"},`,
-    "",
-    `${enrollment.studentName} is approaching a progress test in ${enrollment.subject || "their class"} (class ${cyclePosition} this cycle). Please let the student know a progress test is coming up after the next class so they can prepare.`,
-    "",
-    ...renderSummaryText(enrollment.aiSummary),
-    "",
-    `Student: ${enrollment.studentName}`,
-    `Subject: ${enrollment.subject || "class"}`,
-    `Cycle progress: ${cyclePosition}`,
-    "",
-    `Open Progress Tests: ${dashboardUrl()}`,
-  ].join("\n");
-}
-
-/** Builds the HTML heads-up email body. */
-function buildHtml(enrollment: TeacherHeadsUpEnrollment): string {
-  const cyclePosition = `${enrollment.currentCount} of ${PROGRESS_TEST_THRESHOLD}`;
-  return `
-    <div style="font-family:Inter,Arial,sans-serif;color:#0f172a;max-width:640px">
-      <h2 style="margin:0 0 12px">Progress test coming up</h2>
-      <p style="margin:0 0 16px;color:#475569;">Hi ${escapeHtml(enrollment.mostFrequentTutorDisplayName ?? "there")}, <strong>${escapeHtml(enrollment.studentName)}</strong> is approaching a progress test in <strong>${escapeHtml(enrollment.subject || "their class")}</strong> (class ${escapeHtml(cyclePosition)} this cycle). Please let the student know a progress test is coming up after the next class so they can prepare.</p>
-      ${renderSummaryHtml(enrollment.aiSummary)}
-      <ul style="margin:0 0 16px;color:#0f172a;">
-        <li>Student: ${escapeHtml(enrollment.studentName)}</li>
-        <li>Subject: ${escapeHtml(enrollment.subject || "class")}</li>
-        <li>Cycle progress: ${escapeHtml(cyclePosition)}</li>
-      </ul>
-      <p><a href="${dashboardUrl()}">Open Progress Tests dashboard</a></p>
-    </div>
-  `;
 }
 
 /**
@@ -316,15 +218,20 @@ async function notifyEnrollment(
     };
   }
 
-  const subject = buildSubject(enrollment);
+  const content = buildProgressTestEmail({
+    ...enrollment,
+    tutorDisplayName: enrollment.mostFrequentTutorDisplayName,
+    threshold: PROGRESS_TEST_THRESHOLD,
+    dashboardUrl: dashboardUrl(),
+    logoUrl: teacherEmailLogoUrl(teacherEmailPublicBaseUrl()),
+  });
+  const { subject } = content;
   let providerMessageId: string | null = null;
   let error: string | null = null;
   try {
     const sent = await sender.sendEmail({
       to: email,
-      subject,
-      html: buildHtml(enrollment),
-      text: buildText(enrollment),
+      ...content,
       idempotencyKey,
     });
     providerMessageId = sent.id;

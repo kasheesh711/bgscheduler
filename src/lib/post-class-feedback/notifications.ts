@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { teacherEmailLogoUrl } from "@/lib/teacher-emails/brand";
+import { teacherEmailPublicBaseUrl } from "@/lib/teacher-emails/config";
+import { buildFeedbackReminderEmail, buildFeedbackTestEmail, feedbackReminderSubject } from "@/lib/teacher-emails/templates";
 
 import {
   and,
@@ -508,7 +511,7 @@ async function createReminderRun(
         runId,
         canonicalTutorKey: tutorKey,
         recipientEmail: recipient.email,
-        subject: `Post-class feedback due — ${items.length} ${items.length === 1 ? "class" : "classes"}`,
+        subject: feedbackReminderSubject,
         status: "pending",
         idempotencyKey,
         provider: recipient.source,
@@ -624,7 +627,7 @@ async function reminderContent(db: Database, deliveryId: string, now: Date) {
   const lines = activeRows.map(({ session }) => {
     const assessment = assessments.get(session.id)!;
     const students = names.get(session.id)?.join(", ") || "Student name unavailable";
-    const reasons = safeStringArray(assessment.fieldFailures).join("; ") || "Required feedback is incomplete";
+    const reasons = safeStringArray(assessment.fieldFailures);
     const metadata = safeMetadata(session.sourceMetadata);
     const wiseUrl = safePostClassWiseSessionUrl({
       configuredUrl: metadata.wiseUrl,
@@ -641,34 +644,16 @@ async function reminderContent(db: Database, deliveryId: string, now: Date) {
       wiseUrl,
     };
   });
-  const text = [
-    "Please complete the required post-class feedback in Wise.",
-    "",
-    ...lines.flatMap((line, index) => [
-      `${index + 1}. ${line.className} — ${line.students}`,
-      `Session: ${line.sessionDate}`,
-      `Needs attention: ${line.reasons}`,
-      `Current combined character count: ${line.characters}`,
-      `Deadline: ${line.deadline}`,
-      `Wise session: ${line.wiseUrl}`,
-      "",
-    ]),
-    "Feedback text is intentionally not included in this email.",
-  ].join("\n");
-  const htmlItems = lines.map((line) => `
-    <li style="margin:0 0 16px">
-      <strong>${escapeHtml(line.className)} — ${escapeHtml(line.students)}</strong><br>
-      Session: ${escapeHtml(line.sessionDate)}<br>
-      Needs attention: ${escapeHtml(line.reasons)}<br>
-      Current combined character count: ${line.characters}<br>
-      Deadline: ${escapeHtml(line.deadline)}<br>
-      <a href="${escapeHtml(line.wiseUrl)}">Open Wise session</a>
-    </li>`).join("");
+  const content = buildFeedbackReminderEmail({
+    tutorDisplayName: activeRows[0]?.session.canonicalTutorName ?? null,
+    items: lines,
+    logoUrl: teacherEmailLogoUrl(teacherEmailPublicBaseUrl()),
+  });
   return {
     disposition: "send" as const,
     activeCount: lines.length,
-    text,
-    html: `<p>Please complete the required post-class feedback in Wise.</p><ol>${htmlItems}</ol><p><small>Feedback text is intentionally not included in this email.</small></p>`,
+    text: content.text,
+    html: content.html,
   };
 }
 
@@ -1228,9 +1213,10 @@ export async function sendPostClassTestEmail(
   const nonce = createHash("sha256").update(`${actorEmail}:${recipient}:${Date.now()}`).digest("hex").slice(0, 20);
   const sent = await sender.sendEmail({
     to: recipient,
-    subject: "Post-class feedback email test",
-    text: `Email delivery for the post-class feedback workspace is working.\n\n${WORKSPACE_URL}`,
-    html: `<p>Email delivery for the post-class feedback workspace is working.</p><p><a href="${WORKSPACE_URL}">Open the workspace</a></p>`,
+    ...buildFeedbackTestEmail({
+      workspaceUrl: WORKSPACE_URL,
+      logoUrl: teacherEmailLogoUrl(teacherEmailPublicBaseUrl()),
+    }),
     idempotencyKey: buildPostClassNotificationKey(["test", nonce]),
   });
   const now = new Date();

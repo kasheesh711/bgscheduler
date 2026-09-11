@@ -11,6 +11,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "emails:preview": "node scripts/preview-teacher-emails.mjs",
     "test": "vitest run --project unit",
     "test:watch": "vitest --project unit",
     "test:integration": "vitest run --project integration",

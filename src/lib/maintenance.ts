@@ -32,6 +32,7 @@
 // ----------------------------------------------------------------------------
 
 import { NextResponse } from "next/server";
+import { isTeacherEmailAsset } from "@/lib/teacher-emails/brand";
 
 /**
  * Paths that stay reachable while maintenance mode is on (MAINT-02).
@@ -67,7 +68,7 @@ export function isMaintenanceMode(raw = process.env.MAINTENANCE_MODE): boolean {
  * without a trailing slash.
  */
 export function isMaintenanceExempt(pathname: string): boolean {
-  return MAINTENANCE_EXEMPT_PREFIXES.some(
+  return isTeacherEmailAsset(pathname) || MAINTENANCE_EXEMPT_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(prefix),
   );
 }

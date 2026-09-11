@@ -302,7 +302,7 @@ describe("runTeacherHeadsUpNotifications", () => {
     });
 
     const sent = (sender.sendEmail as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(sent.text).toContain("please review recent classes");
+    expect(sent.text).toContain("Please review the student");
     expect(sent.html).toContain("review the student");
     // No fabricated summary fields when the summary is absent.
     expect(sent.text).not.toContain("Strengths:");
