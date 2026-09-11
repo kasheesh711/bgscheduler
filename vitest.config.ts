@@ -2,6 +2,8 @@ import { defineConfig } from "vitest/config";
 import path from "path";
 
 process.env.TZ = "Asia/Bangkok";
+// Existing suites exercise active feature behavior; retirement suites override explicitly.
+process.env.CREDIT_CONTROL_MODE = "active";
 
 export default defineConfig({
   resolve: {

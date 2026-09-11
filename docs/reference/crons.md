@@ -1,5 +1,7 @@
 # Cron Schedule
 
+**Credit Control retirement:** physical cron expressions are retained for easy restoration. In default `CREDIT_CONTROL_MODE=retired`, shared student-data work runs at 06:20 Bangkok, with recovery at 06:50 / 07:20. Progress Tests runs daily at 07:25, recovering at 07:55 / 08:25 in both modes. Other ticks are audited skips and never count as data freshness. LINE credit digests are paused; Progress Tests digests require today’s successful refresh. See [operating procedure](../operations/credit-control-retirement.md).
+
 **Status:** Stable. **Authoritative source:** [`vercel.json`](../../vercel.json).
 
 Every scheduled job in BGScheduler is a Vercel Cron entry. Vercel reads `vercel.json` at deploy time and, on each tick, issues an HTTP request to the configured `path` carrying `Authorization: Bearer $CRON_SECRET`. The code models that request as a `GET` — every scheduled route exports `GET`, and the registry records `routeMethod: "GET"` for all 19 scheduled jobs. There is no in-process scheduler anywhere in the codebase — **if a handler is not listed in `vercel.json`, nothing fires it automatically.**

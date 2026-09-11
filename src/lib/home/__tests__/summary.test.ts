@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/credit-control/service", () => ({ getCreditControlPayload: vi.fn() }));
 vi.mock("@/lib/data-health/dashboard", () => ({ getDataHealthDashboardPayload: vi.fn() }));
@@ -61,7 +61,16 @@ function fakeDb() {
   };
 }
 
+afterEach(() => vi.unstubAllEnvs());
 describe("getHomeSummaryPayload", () => {
+  it("omits the retired queue without loading its dashboard or altering page grants", async () => {
+    vi.stubEnv("CREDIT_CONTROL_MODE", "retired");
+    const allowedPages = ["/credit-control", "/payroll"];
+    const payload = await getHomeSummaryPayload({ allowedPages, email: "admin@example.com" }, fakeDb() as never);
+    expect(payload.actions.map(action => action.id)).toEqual(["payroll"]);
+    expect(getCreditControlPayload).not.toHaveBeenCalled();
+    expect(allowedPages).toEqual(["/credit-control", "/payroll"]);
+  });
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(countDueLeaveAssignments).mockResolvedValue({

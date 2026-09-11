@@ -1,3 +1,4 @@
+import { creditControlActive, CREDIT_CONTROL_RETIRED, CREDIT_CONTROL_RETIRED_MESSAGE } from "./mode";
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import type { AppSessionUser } from "@/types/credit-control";
@@ -11,6 +12,7 @@ export async function requireCreditControlSession(): Promise<AppSessionUser> {
     throw new Error("Unauthorized");
   }
 
+  if (!creditControlActive()) throw new Error(CREDIT_CONTROL_RETIRED);
   return { email, name };
 }
 
@@ -28,6 +30,9 @@ export function creditControlErrorResponse(route: string, error: unknown, fallba
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  if (error instanceof Error && error.message === CREDIT_CONTROL_RETIRED) {
+    return NextResponse.json({ error: CREDIT_CONTROL_RETIRED_MESSAGE, code: CREDIT_CONTROL_RETIRED }, { status: 503 });
+  }
   console.error(route, error);
   return NextResponse.json(
     { error: error instanceof Error ? error.message : fallbackMessage },

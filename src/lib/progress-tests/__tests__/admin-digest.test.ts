@@ -1,3 +1,5 @@
+import { hasTodayRefresh } from "@/lib/credit-control/daily-refresh";
+vi.mock("@/lib/credit-control/daily-refresh", () => ({ hasTodayRefresh: vi.fn().mockResolvedValue(true) }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
@@ -313,4 +315,13 @@ describe("sendProgressTestAdminDigest", () => {
     expect(result.status).toBe("skipped");
     expect(sender.sendEmail).not.toHaveBeenCalled();
   });
+});
+
+
+it("sends nothing and records no terminal digest when today's refresh is missing", async () => {
+  vi.mocked(hasTodayRefresh).mockResolvedValueOnce(false);
+  const state = freshState(); const sender = makeSender();
+  const result = await sendProgressTestAdminDigest(makeFakeDb(state), NOW, { sender });
+  expect(result.status).toBe("skipped"); expect(result.digestRunId).toBeNull();
+  expect(sender.sendEmail).not.toHaveBeenCalled(); expect(state.digestRunUpdates).toHaveLength(0);
 });

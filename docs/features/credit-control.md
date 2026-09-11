@@ -1,5 +1,7 @@
 # Credit Control
 
+**Current mode: temporarily retired by default.** `CREDIT_CONTROL_MODE=active` restores the workspace and half-hourly sync after redeployment. While retired, the shared snapshot refreshes daily, feature APIs return `503 CREDIT_CONTROL_RETIRED`, and automatic credit alerts, follow-up clearing and churn maintenance are paused. All tables, ownership, history and permissions remain. The active-mode behavior below is preserved for restoration. See [retirement and restoration](../operations/credit-control-retirement.md).
+
 **Status: stable** — cron-scheduled (`vercel.json:16-19`, `20,50 * * * *`), page → API → sync path fully wired, nine test files, registry and route agree on `maxDuration = 800`. The badge is applied from the documentation program's maturity map; there is no maturity marker in code.
 
 ## Purpose

@@ -210,6 +210,7 @@ export async function fetchInstituteSessionsForDays(
   instituteId: string,
   days: string[],
   todayKey: string,
+  options: { signal?: AbortSignal } = {},
 ): Promise<WiseCreditSession[]> {
   const requests: { date: string; status: "PAST" | "FUTURE" }[] = [];
   for (const date of days) {
@@ -223,7 +224,7 @@ export async function fetchInstituteSessionsForDays(
   }
 
   const pages = await Promise.all(
-    requests.map((request) => fetchSessionsForOneDay(client, instituteId, request.date, request.status)),
+    requests.map((request) => fetchSessionsForOneDay(client, instituteId, request.date, request.status, options.signal)),
   );
   return pages.flat();
 }
@@ -233,9 +234,11 @@ async function fetchSessionsForOneDay(
   instituteId: string,
   date: string,
   status: "PAST" | "FUTURE",
+  signal?: AbortSignal,
 ): Promise<WiseCreditSession[]> {
   const all: WiseCreditSession[] = [];
   for (let page = 1; ; page += 1) {
+    signal?.throwIfAborted();
     const response = await client.get<unknown>(`/institutes/${instituteId}/sessions`, {
       status,
       paginateBy: "DATE",
@@ -243,8 +246,8 @@ async function fetchSessionsForOneDay(
       endDate: nextDateKey(date),
       page_number: String(page),
       page_size: String(PAGE_SIZE),
-    });
-    const parsed = WiseSessionsEnvelopeSchema.parse(response);
+    }, ...(signal ? [{ signal }] : []));
+    const parsed = z.object({ data: z.object({ sessions: z.array(WiseCreditSessionSchema) }) }).parse(response);
     const sessions = parsed.data.sessions;
     all.push(...sessions);
     if (sessions.length < PAGE_SIZE) break;

@@ -1,5 +1,7 @@
 # Credit Control API
 
+**Retired-mode contract:** all feature endpoints under `/api/credit-control` retain their authentication and then return HTTP 503 with `code: "CREDIT_CONTROL_RETIRED"`. Shared data reads outside this namespace remain available. Internal authenticated sync and Data Health manual recovery remain enabled. Set `CREDIT_CONTROL_MODE=active` and redeploy to restore the contracts below.
+
 **Authoritative source:** the seven route files under [`src/app/api/credit-control/`](../../../src/app/api/credit-control/), which export the **eight** handlers documented on this page (`inactive/route.ts` exports two: `POST` and `DELETE`).
 
 **Status: stable.** Feature meaning — what the worklist is for, how depletion projection and the at-risk ranking work, when a student is auto-churned — lives in [docs/features/credit-control.md](../../features/credit-control.md); this page does not restate it. Column definitions for the `credit_control_*` tables live in [docs/reference/database/erd-credit-control.md](../database/erd-credit-control.md). The scheduled sync that feeds all of this is a *different* endpoint, `/api/internal/sync-credit-control`, documented in [internal-crons.md](./internal-crons.md).

@@ -1,3 +1,4 @@
+import { ScheduleFreshness } from "@/components/student-schedule/schedule-freshness";
 // ----------------------------------------------------------------------------
 // Printable student monthly schedule (admin → PDF).
 //
@@ -112,6 +113,7 @@ async function StudentScheduleReportBody({
               <div>{formatBangkokDateTime(payload.generatedAt)}</div>
             </div>
           </header>
+          <ScheduleFreshness payload={payload} />
           <ScheduleMonthCalendar payload={payload} />
         </div>
       </div>

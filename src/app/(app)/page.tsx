@@ -1,3 +1,4 @@
+import { creditControlActive } from "@/lib/credit-control/mode";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { HomeHub } from "@/components/home/home-hub";
@@ -16,7 +17,7 @@ async function HomeBody() {
     email: session.user.email,
   }, getDb());
 
-  return <HomeHub summary={summary} allowedPages={allowedPages} />;
+  return <HomeHub summary={summary} allowedPages={allowedPages} creditControlEnabled={creditControlActive()} />;
 }
 
 function HomeSkeleton() {

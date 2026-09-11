@@ -2,7 +2,7 @@ import { desc, eq, getTableColumns, gte, lte, sql } from "drizzle-orm";
 import { getDb, type Database } from "@/lib/db";
 import * as schema from "@/lib/db/schema";
 import { isApiSnapshotStale } from "@/lib/ops/stale";
-import { CRON_JOBS, statusRank, type CronJobDefinition } from "./cron-registry";
+import { effectiveCronJob, CRON_JOBS, statusRank, type CronJobDefinition } from "./cron-registry";
 import { evaluateCronJobStatus, type InvocationEvidence, type RunEvidence } from "./status";
 import type {
   CronInvocationSummary,
@@ -455,7 +455,8 @@ function buildCronJobs(
   allRuns: Parameters<typeof pickJobRuns>[1],
   now: Date,
 ): CronJobHealth[] {
-  return CRON_JOBS.map((job) => {
+  return CRON_JOBS.map((definition) => {
+    const job = effectiveCronJob(definition);
     const jobInvocations = invocations.filter((invocation) => invocation.jobKey === job.key);
     const latestInvocation = jobInvocations[0] ?? null;
     const latestCronInvocation = jobInvocations.find((invocation) => invocation.triggerSource === "cron") ?? null;
@@ -493,7 +494,7 @@ function buildCronJobs(
       healthDetail: status.healthDetail,
       latestInvocation: latestInvocation ? invocationSummary(latestInvocation) : null,
       recentInvocations: jobInvocations.slice(0, 4).map(invocationSummary),
-      canRunManually: true,
+      canRunManually: !job.paused,
     };
   });
 }
@@ -569,7 +570,7 @@ function buildDomains(
     },
     {
       key: "credit_control",
-      label: "Credit Control",
+      label: "Shared Student Data",
       status: domainStatusFor(jobByKey.get("credit_control")),
       freshnessLabel: freshnessLabel(iso(allRuns.credit.find((run) => run.status === "success")?.finishedAt), now),
       lastSuccessAt: iso(allRuns.credit.find((run) => run.status === "success")?.finishedAt),
@@ -746,7 +747,7 @@ function buildRecentRuns(allRuns: Parameters<typeof pickJobRuns>[1]): RunHistory
     ...allRuns.credit.map((run) => runHistoryItem({
       id: run.id,
       jobKey: "credit_control",
-      label: "Credit Control",
+      label: "Shared Student Data",
       status: run.status,
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
@@ -924,7 +925,7 @@ function overallFromJobs(jobs: CronJobHealth[]): DataHealthDashboardPayload["ove
     manualOnlyCount: jobs.filter((job) => job.status === "manual-only").length,
   };
   const worst = jobs
-    .filter((job) => !job.manualOnly)
+    .filter((job) => !job.manualOnly && job.status !== "paused")
     .sort((a, b) => statusRank(b.status) - statusRank(a.status))[0]?.status ?? "unknown";
   const status = worst === "unknown" && counts.healthyCount > 0 ? "healthy" : worst;
   const headline =
@@ -941,7 +942,7 @@ function overallFromJobs(jobs: CronJobHealth[]): DataHealthDashboardPayload["ove
   return {
     status,
     headline,
-    detail: `${counts.healthyCount} healthy, ${counts.lateCount} late, ${counts.failingCount} failing, ${counts.runningCount} running, ${counts.manualOnlyCount} manual-only.`,
+    detail: `${counts.healthyCount} healthy, ${counts.lateCount} late, ${counts.failingCount} failing, ${counts.runningCount} running, ${counts.manualOnlyCount} manual-only, ${jobs.filter(job => job.status === "paused").length} paused.`,
     ...counts,
   };
 }
@@ -1047,7 +1048,7 @@ export async function getDataHealthDashboardPayload(now = new Date()): Promise<D
     issueSummary: issuesByType,
     issueDetails,
     recentRuns: buildRecentRuns(allRuns),
-    manualActions: CRON_JOBS.map((job) => ({
+    manualActions: CRON_JOBS.map(effectiveCronJob).filter(job => !job.paused).map((job) => ({
       key: job.key,
       label: job.label,
       dangerous: job.dangerous,

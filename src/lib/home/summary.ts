@@ -1,3 +1,4 @@
+import { creditControlActive } from "@/lib/credit-control/mode";
 import { eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { getDb } from "@/lib/db";
@@ -155,7 +156,7 @@ export async function getHomeSummaryPayload(
   },
   db: Database = getDb(),
 ): Promise<HomeSummaryPayload> {
-  const canAccess = (badgeKey: NavBadgeKey) => canAccessHref(toolForBadge(badgeKey).href, input.allowedPages);
+  const canAccess = (badgeKey: NavBadgeKey) => (badgeKey !== "creditControl" || creditControlActive()) && canAccessHref(toolForBadge(badgeKey).href, input.allowedPages);
   const [
     leaveRequests,
     lineReviews,

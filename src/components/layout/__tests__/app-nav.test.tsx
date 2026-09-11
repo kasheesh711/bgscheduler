@@ -24,7 +24,7 @@ describe("AppNav", () => {
   });
 
   it("renders Home and four business-function menus for full admins", () => {
-    const html = renderToStaticMarkup(<AppNav allowedPages={null} />);
+    const html = renderToStaticMarkup(<AppNav allowedPages={null} creditControlEnabled />);
 
     expect(html).toContain("BeGifted Ops");
     expect(html).toContain("Home");
@@ -35,6 +35,13 @@ describe("AppNav", () => {
     expect(html).toContain("Data &amp; Audit");
     expect(html).toContain("tutor time-off requests");
     expect(html).toContain("prepaid-credit follow-up");
+  });
+
+  it("hides retired Credit Control without revoking access to the other tools", () => {
+    const html = renderToStaticMarkup(<AppNav allowedPages={null} creditControlEnabled={false} />);
+    expect(html).not.toContain("Credit Control");
+    expect(html).toContain("Student Schedule");
+    expect(html).toContain("Parent Report");
   });
 
   it("filters menu content for single-page restricted users", () => {

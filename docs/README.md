@@ -379,3 +379,5 @@ Two other sets of files under `docs/` are likewise outside the handbook:
   documentation.
 
 _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
+
+Credit Control is temporarily retired by default; see [retirement, daily refresh and restoration](operations/credit-control-retirement.md).

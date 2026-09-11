@@ -118,12 +118,15 @@ function FreshnessStrip({ freshness }: { freshness: HomeFreshnessSummary }) {
 export function HomeHub({
   summary,
   allowedPages,
+  creditControlEnabled = false,
 }: {
   summary: HomeSummaryPayload;
   allowedPages: string[] | null;
+  creditControlEnabled?: boolean;
 }) {
-  const shortcuts = shortcutTools(allowedPages);
-  const hasAction = summary.actions.some((action) => action.status === "error" || (action.value ?? 0) > 0);
+  const shortcuts = shortcutTools(allowedPages).filter(tool => creditControlEnabled || tool.id !== "credit-control");
+  const actions = summary.actions.filter(action => creditControlEnabled || action.id !== "creditControl");
+  const hasAction = actions.some((action) => action.status === "error" || (action.value ?? 0) > 0);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto pb-6">
@@ -146,9 +149,9 @@ export function HomeHub({
             </p>
           </div>
         </div>
-        {summary.actions.length > 0 ? (
+        {actions.length > 0 ? (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-            {summary.actions.map((action) => <ActionCard key={action.id} action={action} />)}
+            {actions.map((action) => <ActionCard key={action.id} action={action} />)}
           </div>
         ) : (
           <Card>

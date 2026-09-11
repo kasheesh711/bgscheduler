@@ -1,3 +1,4 @@
+import { hasTodayRefresh } from "@/lib/credit-control/daily-refresh";
 // Progress Tests — once-daily admin digest to all admin_users.
 //
 // Lists students newly approaching a progress test, students that are due but
@@ -312,6 +313,12 @@ export async function sendProgressTestAdminDigest(
   options: { sender?: ScheduleEmailSender } = {},
 ): Promise<ProgressTestAdminDigestResult> {
   const digestDate = todayBangkok(now);
+
+  if (!await hasTodayRefresh(db, "progress", now)) return {
+    status: "skipped", digestDate, digestRunId: null, approachingCount: 0, dueCount: 0,
+    unresolvedCount: 0, attempted: 0, success: 0, failed: 0,
+    message: "Waiting for today's completed Progress Tests refresh; digest not sent.",
+  };
 
   if (await hasTerminalDigestForDate(db, digestDate)) {
     return {

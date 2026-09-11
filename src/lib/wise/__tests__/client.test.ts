@@ -288,3 +288,36 @@ describe("topWisePaths", () => {
     expect(Object.keys(topWisePaths(stats))).toHaveLength(10);
   });
 });
+
+describe("WiseClient pacing and cancellation", () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+  const client = (extra: Partial<import("../client").WiseClientConfig> = {}) => new WiseClient({ userId: "test", apiKey: "test", namespace: "test", ...extra });
+  it("paces every HTTP attempt, including retries, at two per second", async () => {
+    vi.useFakeTimers(); const times: number[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => { times.push(Date.now()); return Response.json({}, { status: times.length === 1 ? 503 : 200 }); }));
+    const c = client({ requestsPerSecond: 2 });
+    const pending = Promise.all([c.get("/a"), c.get("/b"), c.get("/c")]);
+    await vi.runAllTimersAsync(); await pending;
+    expect(times).toHaveLength(4);
+    for (let i = 1; i < times.length; i++) expect(times[i] - times[i - 1]).toBeGreaterThanOrEqual(500);
+    expect(c.getStats().requests).toBe(4);
+  });
+  it("honors Retry-After and cancels the retry when the caller expires", async () => {
+    vi.useFakeTimers(); const abort = new AbortController();
+    const fetcher = vi.fn().mockResolvedValue(Response.json({}, { status: 429, headers: { "Retry-After": "60" } }));
+    vi.stubGlobal("fetch", fetcher);
+    const c = client(); const pending = c.get("/a", undefined, { signal: abort.signal });
+    const rejection = expect(pending).rejects.toThrow("stop");
+    await vi.advanceTimersByTimeAsync(7_000); expect(fetcher).toHaveBeenCalledTimes(1);
+    abort.abort(new Error("stop")); await rejection;
+    await vi.advanceTimersByTimeAsync(60_000); expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("removes aborted queued requests without ever sending them", async () => {
+    const abort = new AbortController(); let release!: (value: Response) => void;
+    const fetcher = vi.fn(() => new Promise<Response>(resolve => { release = resolve; }));
+    vi.stubGlobal("fetch", fetcher); const c = client({ maxConcurrency: 1 });
+    const first = c.get("/first"); const queued = c.get("/queued", undefined, { signal: abort.signal });
+    const rejection = expect(queued).rejects.toThrow("stop"); abort.abort(new Error("stop")); await rejection;
+    release(Response.json({})); await first; expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});

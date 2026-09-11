@@ -1,6 +1,8 @@
+// CREDIT_CONTROL_MODE defaults to retired; see credit-control/mode.ts.
 import { z } from "zod";
 
 const envSchema = z.object({
+  CREDIT_CONTROL_MODE: z.enum(["retired", "active"]).default("retired"),
   DATABASE_URL: z.string().url(),
   AUTH_GOOGLE_ID: z.string().min(1),
   AUTH_GOOGLE_SECRET: z.string().min(1),

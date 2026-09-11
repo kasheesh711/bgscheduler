@@ -1,3 +1,4 @@
+import { bangkokDailyWindow, claimDailyRefresh, hasTodayRefresh, dailySkip } from "@/lib/credit-control/daily-refresh";
 import { NextResponse } from "next/server";
 import { and, desc, eq, lt } from "drizzle-orm";
 import { getDb } from "@/lib/db";
@@ -117,8 +118,14 @@ async function acquireSyncRun(
     const [syncRun] = await db
       .insert(schema.progressTestSyncRuns)
       .values({ status: "running", startedAt: now, triggerType, actorEmail })
+      .onConflictDoNothing()
       .returning({ id: schema.progressTestSyncRuns.id });
 
+    if (!syncRun) {
+      const running = await findRunningSyncRun(db);
+      if (!running) throw new Error("Concurrent sync finished before its run could be read; retry the request.");
+      return skippedSyncResult(running, staleRunningSyncsFailed);
+    }
     return { syncRunId: syncRun.id, staleRunningSyncsFailed };
   } catch (err) {
     if (!isUniqueViolation(err)) {
@@ -138,21 +145,24 @@ export async function runProgressTestSyncRequest(
   options: { triggerType?: string; actorEmail?: string | null } = {},
 ) {
   const db = getDb();
-  const client = createWiseClient();
   const instituteId = process.env.WISE_INSTITUTE_ID ?? "696e1f4d90102225641cc413";
   const now = new Date();
-  const guard = await acquireSyncRun(db, now, options.triggerType ?? "manual", options.actorEmail ?? null);
+  if (!await hasTodayRefresh(db, "shared", now)) return NextResponse.json(dailySkip("waiting_for_today_shared_snapshot"));
+  const claim = (tx: Database) => acquireSyncRun(tx, now, options.triggerType ?? "manual", options.actorEmail ?? null);
+  const guard = options.triggerType === "cron" ? await claimDailyRefresh(db, "progress", now, claim) : await claim(db);
 
   if ("skipped" in guard) {
     return NextResponse.json(guard, { status: 202 });
   }
 
+  const client = createWiseClient();
   const result = await runProgressTestSync({
     db,
     client,
     instituteId,
     now,
     syncRunId: guard.syncRunId,
+    runMetadata: options.triggerType === "cron" ? { dailyDate: bangkokDailyWindow(now, "progress").day, dailySlot: bangkokDailyWindow(now, "progress").slot, dailyTrigger: "cron" } : {},
   });
 
   return NextResponse.json({

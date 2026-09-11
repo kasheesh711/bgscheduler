@@ -255,7 +255,7 @@ describe("parseStudentDisplay", () => {
 });
 
 describe("mergeLiveSessionsIntoRows", () => {
-  it("takes the live time/status/duration on a matched session, keeps the snapshot subject/package/teacher", () => {
+  it("uses live time, status, subject and teacher while preserving package attribution", () => {
     const merged = mergeLiveSessionsIntoRows({
       snapshotRows: [row({ wiseSessionId: "ses_1" })],
       liveSessions: [liveSession({
@@ -264,6 +264,7 @@ describe("mergeLiveSessionsIntoRows", () => {
         scheduledEndTime: new Date("2026-08-04T10:30:00Z"),
         meetingStatus: "RESCHEDULED",
         duration: 5_400_000,
+        userId: { _id: "new-teacher", name: "New teacher" },
       })],
       student: STUDENT,
     });
@@ -275,13 +276,13 @@ describe("mergeLiveSessionsIntoRows", () => {
       scheduledEndTime: new Date("2026-08-04T10:30:00Z"),
       meetingStatus: "RESCHEDULED",
       durationMinutes: 90,
-      subject: "Mathematics",
+      subject: "Math",
       packageName: "Maths 20-pack",
-      teacherName: "Kru Nok",
+      teacherName: "New teacher",
     });
   });
 
-  it("fills a blank snapshot title from the live session, but never overwrites one", () => {
+  it("uses the latest live title so modality changes are visible", () => {
     const merged = mergeLiveSessionsIntoRows({
       snapshotRows: [
         row({ wiseSessionId: "ses_1", title: "" }),
@@ -296,7 +297,7 @@ describe("mergeLiveSessionsIntoRows", () => {
 
     expect(merged.map((m) => m.title)).toEqual([
       "Online Session - Math",
-      "In-Person Session-Biology HL",
+      "Some Other Title",
     ]);
   });
 

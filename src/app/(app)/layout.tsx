@@ -1,3 +1,4 @@
+import { creditControlActive } from "@/lib/credit-control/mode";
 import { Suspense } from "react";
 import { AppNav, AppNavSkeleton } from "@/components/layout/app-nav";
 import { StaleSnapshotBanner } from "@/components/layout/stale-snapshot-banner";
@@ -27,6 +28,7 @@ async function AppNavWithAccess() {
   return (
     <AppNav
       allowedPages={session?.user?.allowedPages ?? null}
+      creditControlEnabled={creditControlActive()}
       learningPlansAccess={learningPlansAccess}
       postClassFeedbackAccess={capabilities.includes("viewer")}
       unearnedRevenueAccess={unearnedRevenueCapabilities.includes("viewer")}

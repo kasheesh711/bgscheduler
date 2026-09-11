@@ -253,7 +253,9 @@ export function mergeLiveSessionsIntoRows({
       ...row,
       // A snapshot row from before the title column backfilled still gets the
       // live title; a populated snapshot title is kept as-is.
-      title: row.title.trim() || live.title?.trim() || "",
+      title: live.title?.trim() || "",
+      teacherName: creditSessionTeacher(live).teacherName,
+      subject: live.classId.subject?.trim() || live.classId.name?.trim() || row.subject,
       scheduledStartTime: live.scheduledStartTime,
       scheduledEndTime: live.scheduledEndTime ?? null,
       durationMinutes: durationMsToMinutes(live.duration),
@@ -308,10 +310,12 @@ export interface PreResolvedScheduleContext {
 
 export async function getStudentMonthlySchedule(
   db: Database,
-  { studentKey, monthKey, liveSweep = "always", preResolved }: {
+  { studentKey, monthKey, liveSweep = "always", forceRefresh = false, signal, preResolved }: {
     studentKey: string;
     monthKey: string;
     liveSweep?: StudentScheduleLiveSweepMode;
+    forceRefresh?: boolean;
+    signal?: AbortSignal;
     preResolved?: PreResolvedScheduleContext;
   },
 ): Promise<StudentSchedulePayload | null> {
@@ -376,9 +380,9 @@ export async function getStudentMonthlySchedule(
   const snapshotHasVisibleSessions = snapshotRows.some(
     (row) => !CANCELLED_PATTERN.test(row.meetingStatus.trim()),
   );
-  const runSweep = liveSweep === "always" || (liveSweep === "rescue" && !snapshotHasVisibleSessions);
-  const live = runSweep
-    ? await fetchLiveMonthSessions({ wiseStudentId: studentRow.wiseStudentId, monthKey })
+  const runSweep = forceRefresh || liveSweep === "always" || (liveSweep === "rescue" && !snapshotHasVisibleSessions);
+  const live: import("./live").LiveMonthResult = runSweep
+    ? await fetchLiveMonthSessions({ wiseStudentId: studentRow.wiseStudentId, monthKey, forceRefresh, ...(signal ? { signal } : {}) })
     : { sessions: [], ok: false as const };
   const liveSessionsInMonth = live.ok
     ? live.sessions.filter((session) => (
@@ -392,7 +396,7 @@ export async function getStudentMonthlySchedule(
 
   const display = parseStudentDisplay(studentRow.studentName);
 
-  return buildStudentSchedulePayload({
+  const payload = buildStudentSchedulePayload({
     rows: finalRows,
     student: {
       studentKey: studentRow.studentKey,
@@ -403,8 +407,9 @@ export async function getStudentMonthlySchedule(
       shortName: display.shortName,
     },
     monthKey,
-    generatedAt: live.ok ? new Date() : snapshot.generatedAt,
+    generatedAt: live.sourceAt ?? snapshot.generatedAt,
   });
+  return { ...payload, source: live.ok ? live.source ?? "wise" : "snapshot", sourceAt: payload.generatedAt, stale: !live.ok || live.stale === true };
 }
 
 /** Convenience wrapper for Server Components that have no `db` in hand. */

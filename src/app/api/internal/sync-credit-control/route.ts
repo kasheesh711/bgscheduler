@@ -36,7 +36,7 @@ async function handleSync(request: NextRequest, options: { allowSessionAuth: boo
   if (cronSecretStatus === "valid") {
     return withCronInvocationAudit(
       { jobKey: "credit_control", triggerSource: "cron", requestMethod: request.method },
-      () => runCreditControlSyncRequest(),
+      () => runCreditControlSyncRequest({ triggerSource: "cron" }),
     );
   }
 
@@ -50,7 +50,7 @@ async function handleSync(request: NextRequest, options: { allowSessionAuth: boo
           actorEmail: session.user?.email ?? null,
           requestMethod: request.method,
         },
-        () => runCreditControlSyncRequest(),
+        () => runCreditControlSyncRequest({ triggerSource: "admin" }),
       );
     }
   }

@@ -1,3 +1,4 @@
+import { creditControlActive } from "@/lib/credit-control/mode";
 // ----------------------------------------------------------------------------
 // LINE credit-runout digest — once daily, pushed into every staff group that
 // opted in via `/credit setup` (credit-bot.ts).
@@ -257,6 +258,8 @@ export async function sendLineCreditDigest(
     message: "",
     ...counts,
   });
+
+  if (!creditControlActive()) return base({ message: "Credit Control is retired; automatic credit alerts are paused." });
 
   if (!lineSchedulerEnabled()) {
     return base({ message: "LINE scheduler is disabled; credit digest not sent." });

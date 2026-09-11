@@ -5471,3 +5471,14 @@ export const roomNotifications = pgTable("room_notifications", {
   lineUserId: text("line_user_id").notNull(), text: text("text").notNull(),
   sentAt: timestamp("sent_at", { withTimezone: true }), attempts: integer("attempts").notNull().default(0), lastError: text("last_error"),
 }, t => [uniqueIndex("room_notification_reservation_idx").on(t.reservationId)]);
+
+// Cross-instance schedule reads; nullable sessions distinguish missing data from a verified empty month.
+export const studentScheduleLiveCache = pgTable("student_schedule_live_cache", {
+  cacheKey: text("cache_key").primaryKey(),
+  sessions: jsonb("sessions"),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+  leaseToken: uuid("lease_token"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  retryAfter: timestamp("retry_after", { withTimezone: true }),
+});

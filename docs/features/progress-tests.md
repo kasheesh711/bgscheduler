@@ -1,5 +1,7 @@
 # Progress Tests
 
+**Cadence update:** the cron still wakes every half-hour, but scheduled work is daily at 07:25 Bangkok with recovery slots at 07:55 and 08:25. It requires a successfully promoted shared snapshot from 06:20 onward that morning. The 07:35 digest is suppressed until the daily Progress Tests refresh completes. Manual recovery remains available.
+
 **Status: stable**
 
 What the badge rests on: the feature has been committed and functionally unchanged since its
