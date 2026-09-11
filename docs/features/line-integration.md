@@ -229,3 +229,7 @@ All LINE tests are Vitest unit tests (none use the `*.integration.test.ts` suffi
 10. **Untested routes.** The webhook route, all five `scheduler-reviews` mutation/list routes, the contact label/student-link routes, `students`, alias-import preview, and both internal LINE cron routes have no route-level tests. Acceptable given lib-layer coverage, or a gap to close?
 
 _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
+
+## Tutor room self-service
+
+The `/room` command, private mobile timetable, tutor identity approval, and standalone reservations are documented in [Tutor room booking](tutor-room-booking.md). Room reservations participate in classroom occupancy and publish checks.

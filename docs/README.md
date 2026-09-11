@@ -51,6 +51,8 @@ The mechanical inventories behind the first six rows live in
 
 ---
 
+See also the new [Tutor room booking](features/tutor-room-booking.md) feature and its [enablement runbook](operations/tutor-room-booking.md).
+
 ## Reading order
 
 New to the codebase? Read in this order. The first two pages give you the model; everything after

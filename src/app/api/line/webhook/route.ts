@@ -17,6 +17,12 @@ export async function POST(request: NextRequest) {
     rawBody,
     signature: request.headers.get("x-line-signature"),
     channelSecret: lineChannelSecret(),
+    scheduleRoomCommand: (eventId) => {
+      after(async () => {
+        const { processRoomEvent } = await import("@/lib/room-booking/bot");
+        await processRoomEvent(db, eventId);
+      });
+    },
     scheduleProcessing: (lineMessageId) => {
       after(async () => {
         try {

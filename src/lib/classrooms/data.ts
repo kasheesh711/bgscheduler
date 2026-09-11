@@ -1,3 +1,5 @@
+import { withRoomDayOperation } from "@/lib/room-booking/locking";
+import { reservationRoomBlocks } from "@/lib/room-booking/service";
 import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "@/lib/db";
 import { withDatabaseTransaction } from "@/lib/db/transaction";
@@ -934,7 +936,11 @@ async function persistAutomationEvents(
   })));
 }
 
-export async function runIncrementalClassroomAssignment(
+export async function runIncrementalClassroomAssignment(...args: Parameters<typeof runIncrementalClassroomAssignmentUnlocked>) {
+  return withRoomDayOperation(args[0], assertIsoDate(args[1].date), () => runIncrementalClassroomAssignmentUnlocked(...args));
+}
+
+async function runIncrementalClassroomAssignmentUnlocked(
   db: Database,
   input: {
     date: string;
@@ -981,7 +987,7 @@ export async function runIncrementalClassroomAssignment(
       ?? (startedIds.has(session.wiseSessionId) ? session.currentWiseLocation : null) })),
     previousRows: previousRows.map(row => classroomRowToPrevious(input.forceReassign ? { ...row, overrideRoom: null } : row)),
     rooms: rooms.map(toEngineRoom),
-    externalRoomBlocks: externalBlocks,
+    externalRoomBlocks: [...externalBlocks, ...await reservationRoomBlocks(db, date)],
   });
 
   const run = await persistAssignmentRun(
@@ -1067,7 +1073,7 @@ async function updateRunRowsFromAssignment(
     optimizeContinuity: enabled,
     overrideBySessionId,
     previousRows: sourceRows.map(classroomRowToPrevious),
-    externalRoomBlocks: externalLiveRoomBlocks(blocks, localIds),
+    externalRoomBlocks: [...externalLiveRoomBlocks(blocks, localIds), ...await reservationRoomBlocks(db, run.assignmentDate)],
     frozenSessionIds: preferenceFrozenSessionIds(sourceRows.map(rowToSession), run.assignmentDate, await notifiedTutorKeys(db, run.assignmentDate)),
   });
 
@@ -1116,7 +1122,13 @@ async function updateRunRowsFromAssignment(
   });
 }
 
-export async function updateClassroomAssignmentOverride(
+export async function updateClassroomAssignmentOverride(...args: Parameters<typeof updateClassroomAssignmentOverrideUnlocked>) {
+  const [run] = await args[0].select().from(schema.classroomAssignmentRuns).where(eq(schema.classroomAssignmentRuns.id, args[1].runId)).limit(1);
+  if (!run) throw new Error("Assignment run not found");
+  return withRoomDayOperation(args[0], run.assignmentDate, () => updateClassroomAssignmentOverrideUnlocked(...args));
+}
+
+async function updateClassroomAssignmentOverrideUnlocked(
   db: Database,
   input: { runId: string; rowId: string; overrideRoom: string | null },
 ): Promise<ClassroomAssignmentDetail> {
@@ -1427,13 +1439,15 @@ async function moveCycleRowToTemporaryLocation(
   allRows: ClassroomRow[],
   temporaryLocations: string[],
   temporaryMovedRowIds: Set<string>,
+  externalBlocks: LiveRoomBlock[],
 ): Promise<{ moved: true } | { moved: false; error: string }> {
   const attemptedErrors: string[] = [];
   const moveCandidates = orderTemporaryPublishCandidates(rows).filter((row) => !temporaryMovedRowIds.has(row.id));
   for (const row of moveCandidates) {
     const candidates = temporaryLocations.filter((location) => (
       normalizedPhysicalLocation(location) !== normalizedPhysicalLocation(row.currentWiseLocation) &&
-      normalizedPhysicalLocation(location) !== normalizedPhysicalLocation(row.assignedRoom)
+      normalizedPhysicalLocation(location) !== normalizedPhysicalLocation(row.assignedRoom) &&
+      !findExternalRoomBlocker(row, location, externalBlocks)
     ));
     const temporaryLocation = findTemporaryPublishLocation(row, allRows, candidates);
     if (!temporaryLocation) {
@@ -1463,7 +1477,15 @@ async function moveCycleRowToTemporaryLocation(
   };
 }
 
-export async function runClassroomPublishJob(
+export async function runClassroomPublishJob(...args: Parameters<typeof runClassroomPublishJobUnlocked>) {
+  const job = await loadPublishJob(args[0], args[1]);
+  if (isPublishJobTerminal(job.status)) return getClassroomPublishJobProgress(args[0], job.runId, args[1]);
+  const [run] = await args[0].select().from(schema.classroomAssignmentRuns).where(eq(schema.classroomAssignmentRuns.id, job.runId)).limit(1);
+  if (!run) throw new Error("Assignment run not found");
+  return withRoomDayOperation(args[0], run.assignmentDate, () => runClassroomPublishJobUnlocked(...args));
+}
+
+async function runClassroomPublishJobUnlocked(
   db: Database,
   jobId: string,
   client = createWiseClientFromEnv(),
@@ -1505,6 +1527,9 @@ export async function runClassroomPublishJob(
       liveRoomBlocksForDate(liveSessions, run.assignmentDate),
       localWiseSessionIds,
     );
+    externalBlocks.push(...(await reservationRoomBlocks(db, run.assignmentDate)).map(block => ({
+      ...block, wiseClassId: null, className: "Tutor room reservation", sessionType: null, wiseStatus: null,
+    })));
 
     const skippedRows: Array<{ row: ClassroomRow; reason: string }> = [];
     const eligibleRows: ClassroomRow[] = [];
@@ -1671,6 +1696,7 @@ export async function runClassroomPublishJob(
           allRows,
           temporaryLocations,
           temporaryMovedRowIds,
+          externalBlocks,
         );
         if (temporaryMove.moved) continue;
 

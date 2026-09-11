@@ -696,3 +696,7 @@ _Verified against main@0cd1e81 (clean tree) on 2026-09-02._
 `classroom_weekend_check` → `/api/internal/class-assignments/weekend-check`, schedule `0,16,31 2 * * 3-5`, `maxDuration = 800`: Wednesday, Thursday and Friday at 09:00 Bangkok, retries 09:16 and 09:31. A unique Bangkok check-date row and a 15-minute fenced lease prevent concurrent sends; relay keys deduplicate retries. The 09:00 overlap with Wise snapshot sync is coordinated by waiting for its fresh snapshot rather than starting another sync.
 
 `CLASSROOM_WEEKEND_ALERTS_ENABLED_AT` sets the first monitored activation instant. Multi-weekday health expectations avoid false alerts on Saturday–Tuesday and before activation. Watchdog mail for this job goes only to `CLASSROOM_WEEKEND_ALERT_EMAIL`, never the shared admin digest. [Operational details](../operations/weekend-classroom-alerts.md).
+
+## Tutor room availability
+
+`GET /api/internal/room-booking` runs at `4-59/5 * * * *` UTC with a 300-second limit and the normal cron-secret and invocation audit gates. It refreshes Wise room evidence during 06:55–21:05 Bangkok when `ROOM_BOOKING_COLLECTOR_ENABLED=true`, reconciles reservations, and retries durable room messages. See [the room booking runbook](../operations/tutor-room-booking.md).

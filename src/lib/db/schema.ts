@@ -1,4 +1,5 @@
 import type { WeekendReport } from "@/lib/classrooms/weekend-readiness";
+import type { RoomBotEvent, RoomEvidence } from "@/lib/room-booking/model";
 import type { CompletionEvidence, CoverageRevision, LeaveInterpretation, WorkStudent } from "@/lib/leave-requests/work-types";
 import {
   pgTable,
@@ -5405,3 +5406,68 @@ export const onsiteFootTrafficReportSnapshots = pgTable("onsite_foot_traffic_rep
   index("oft_report_expiry_idx").on(table.expiresAt),
   index("oft_report_creator_idx").on(table.createdByEmail, table.createdAt),
 ]);
+
+// Tutor self-service room bookings are independent of Wise snapshot rotation.
+export const roomTutorLinks = pgTable("room_tutor_links", {
+  lineUserId: text("line_user_id").primaryKey(),
+  canonicalKey: text("canonical_key"),
+  displayName: text("display_name").notNull(),
+  status: text("status").$type<"pending" | "approved" | "rejected" | "revoked">().notNull().default("pending"),
+  reviewedBy: text("reviewed_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("room_tutor_active_key_idx").on(t.canonicalKey).where(sql`${t.status} = 'approved'`),
+  check("room_tutor_approved_key", sql`${t.status} <> 'approved' or ${t.canonicalKey} is not null`)]);
+
+export const roomBookingGroups = pgTable("room_booking_groups", {
+  groupId: text("group_id").primaryKey(), enabled: boolean("enabled").notNull().default(false),
+  updatedBy: text("updated_by").notNull(), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const roomDayStates = pgTable("room_day_states", {
+  date: date("date", { mode: "string" }).primaryKey(), revision: integer("revision").notNull().default(0),
+  refreshOwner: text("refresh_owner"), refreshUntil: timestamp("refresh_until", { withTimezone: true }),
+  leaseOwner: text("lease_owner"), leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  checkedAt: timestamp("checked_at", { withTimezone: true }),
+  evidence: jsonb("evidence").$type<RoomEvidence>().notNull().default({ blocks: [], uncertain: [] }),
+  lastError: text("last_error"),
+});
+
+export const roomReservations = pgTable("room_reservations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  date: date("date", { mode: "string" }).notNull(),
+  roomId: uuid("room_id").notNull().references(() => classroomRooms.id),
+  lineUserId: text("line_user_id").notNull().references(() => roomTutorLinks.lineUserId),
+  canonicalKey: text("canonical_key").notNull(),
+  startMinute: integer("start_minute").notNull(), endMinute: integer("end_minute").notNull(),
+  status: text("status").$type<"confirmed" | "cancelled" | "preempted">().notNull().default("confirmed"),
+  idempotencyKey: text("idempotency_key").notNull(), source: text("source").notNull(),
+  reason: text("reason"), changedBy: text("changed_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex("room_reservation_request_idx").on(t.lineUserId, t.idempotencyKey),
+  index("room_reservation_day_idx").on(t.date, t.status),
+  check("room_reservation_interval", sql`${t.startMinute} >= 420 and ${t.endMinute} <= 1260 and ${t.endMinute} - ${t.startMinute} >= 15`)]);
+
+export const roomAccessGrants = pgTable("room_access_grants", {
+  tokenHash: text("token_hash").primaryKey(), lineUserId: text("line_user_id").notNull().references(() => roomTutorLinks.lineUserId),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export const roomActions = pgTable("room_actions", {
+  id: uuid("id").primaryKey().defaultRandom(), lineUserId: text("line_user_id").notNull(),
+  scope: text("scope").notNull(), command: text("command").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+});
+export const roomCommandEvents = pgTable("room_command_events", {
+  eventId: text("event_id").primaryKey(), payload: jsonb("payload").$type<RoomBotEvent>().notNull(),
+  status: text("status").$type<"pending" | "processing" | "done">().notNull().default("pending"),
+  claimedUntil: timestamp("claimed_until", { withTimezone: true }),
+  attempts: integer("attempts").notNull().default(0), lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, t => [index("room_event_pending_idx").on(t.status, t.claimedUntil)]);
+export const roomNotifications = pgTable("room_notifications", {
+  id: uuid("id").primaryKey().defaultRandom(), reservationId: uuid("reservation_id").notNull().references(() => roomReservations.id),
+  lineUserId: text("line_user_id").notNull(), text: text("text").notNull(),
+  sentAt: timestamp("sent_at", { withTimezone: true }), attempts: integer("attempts").notNull().default(0), lastError: text("last_error"),
+}, t => [uniqueIndex("room_notification_reservation_idx").on(t.reservationId)]);

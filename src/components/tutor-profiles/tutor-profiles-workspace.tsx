@@ -1,4 +1,5 @@
 "use client";
+import { TutorRoomLinksPanel } from "@/components/room-booking/tutor-links-panel";
 
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Check, Plus, Save, Search, Upload, X } from "lucide-react";
@@ -339,6 +340,7 @@ export function TutorProfilesWorkspace() {
           <h1 className="text-sm font-semibold text-foreground">Tutor Profiles</h1>
           <p className="text-[11px] text-muted-foreground">Local business context for scheduler AI</p>
         </div>
+        <TutorRoomLinksPanel />
         <section className="mb-2 rounded-md border border-border bg-card/70 p-2">
           <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-foreground">
             <Upload className="h-3.5 w-3.5" aria-hidden />
